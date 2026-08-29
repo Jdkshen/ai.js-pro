@@ -1,0 +1,21 @@
+apply plugin: 'com.android.library'
+
+android {
+    compileSdkVersion versions.compile
+    buildToolsVersion versions.buildTool
+
+    defaultConfig {
+        minSdkVersion versions.mini
+        targetSdkVersion versions.target
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+}

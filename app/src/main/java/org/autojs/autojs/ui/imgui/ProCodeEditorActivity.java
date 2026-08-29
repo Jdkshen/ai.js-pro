@@ -1,0 +1,1719 @@
+package org.autojs.autojs.ui.imgui;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.Dialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Bundle;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.Layout;
+import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.util.Log;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.core.view.GravityCompat;
+import androidx.drawerlayout.widget.DrawerLayout;
+
+import com.afollestad.materialdialogs.MaterialDialog;
+import com.stardust.autojs.core.console.ConsoleImpl;
+import com.stardust.autojs.core.console.ConsoleView;
+import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
+import com.stardust.autojs.core.ui.inflater.ResourceParser;
+import com.stardust.autojs.execution.ScriptExecution;
+import com.stardust.autojs.rhino.debug.DebugCallback;
+import com.stardust.autojs.rhino.debug.Debugger;
+import com.stardust.autojs.rhino.debug.Dim;
+import com.stardust.util.ClipboardUtil;
+
+import org.apache.commons.io.FileUtils;
+import org.autojs.autojs.Pref;
+import org.autojs.autojs.R;
+import org.autojs.autojs.autojs.AutoJs;
+import org.autojs.autojs.model.indices.ClassSearchingItem;
+import org.autojs.autojs.model.script.ScriptFile;
+import org.autojs.autojs.model.script.Scripts;
+import org.autojs.autojs.external.fileprovider.AppFileProvider;
+import org.autojs.autojs.ui.edit.ClassSearchDialogBuilder;
+import org.autojs.autojs.ui.edit.debug.DebuggerSingleton;
+import org.autojs.autojs.ui.edit.editor.CodeEditor;
+import org.autojs.autojs.ui.edit.theme.Theme;
+import org.autojs.autojs.ui.floating.FloatyWindowManger;
+import org.autojs.autojs.ui.project.BuildActivity;
+import org.autojs.autojs.ui.project.BuildActivity_;
+import org.autojs.autojs.ui.project.ProjectConfigActivity;
+import org.autojs.autojs.ui.project.ProjectConfigActivity_;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+/** Pro-style multi-file workspace used by the ImGui home page. */
+public final class ProCodeEditorActivity extends Activity implements DebugCallback {
+
+    private static final String EXTRA_PATH = "path";
+    private static final String EXTRA_SAMPLE_ASSET_PATH = "sample_asset_path";
+    private static final int COLOR_TOOLBAR = Color.rgb(24, 26, 26);
+    private static final int COLOR_ACTIVE = Color.rgb(48, 50, 50);
+
+    private final List<EditorTab> mTabs = new ArrayList<>();
+    private final Set<String> mExpandedDirectories = new HashSet<>();
+
+    private DrawerLayout mDrawerLayout;
+    private LinearLayout mTabBar;
+    private LinearLayout mTreeContainer;
+    private TextView mTreeRootLabel;
+    private FrameLayout mEditorContainer;
+    private LinearLayout mShortcutBar;
+    private LinearLayout mLogPanel;
+    private LinearLayout mDebugBar;
+    private View mLogTool;
+    private ConsoleImpl mConsole;
+    private ConsoleView mConsoleView;
+    private TextView mLogLevelView;
+    private EditorTab mActiveTab;
+    private File mWorkspaceRoot;
+    private File mProjectRoot;
+    private String mSampleAssetDirectory;
+    private boolean mLogExpanded;
+    private boolean mDebugInterrupted;
+    private int mLogLevel = Log.VERBOSE;
+    private int mFoldSequence;
+
+    private Debugger mDebugger;
+    private ScriptExecution mExecution;
+
+    private final BroadcastReceiver mExecutionFinishedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!Scripts.ACTION_ON_EXECUTION_FINISHED.equals(intent.getAction())) return;
+            int line = intent.getIntExtra(Scripts.EXTRA_EXCEPTION_LINE_NUMBER, -1);
+            int column = intent.getIntExtra(Scripts.EXTRA_EXCEPTION_COLUMN_NUMBER, 0);
+            String message = intent.getStringExtra(Scripts.EXTRA_EXCEPTION_MESSAGE);
+            if (line > 0 && activeEditor() != null) activeEditor().jumpTo(line - 1, Math.max(0, column));
+            if (message != null) {
+                showLogPanel();
+                Toast.makeText(ProCodeEditorActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+            finishDebugSession(false);
+        }
+    };
+
+    public static Intent intent(Context context, File file) {
+        return new Intent(context, ProCodeEditorActivity.class)
+                .putExtra(EXTRA_PATH, file.getAbsolutePath());
+    }
+
+    public static Intent sampleIntent(Context context, File file, String sampleAssetPath) {
+        return intent(context, file).putExtra(EXTRA_SAMPLE_ASSET_PATH, sampleAssetPath);
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(Color.rgb(8, 10, 10));
+        getWindow().setNavigationBarColor(Color.rgb(8, 10, 10));
+        String path = getIntent().getStringExtra(EXTRA_PATH);
+        String sampleAssetPath = getIntent().getStringExtra(EXTRA_SAMPLE_ASSET_PATH);
+        if (!TextUtils.isEmpty(sampleAssetPath)) {
+            int slash = sampleAssetPath.lastIndexOf('/');
+            mSampleAssetDirectory = slash > 0 ? sampleAssetPath.substring(0, slash) : "sample";
+        }
+        File initial = canonical(path == null ? null : new File(path));
+        if (initial == null || !initial.isFile()) {
+            Toast.makeText(this, "脚本文件不存在", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+        resolveWorkspace(initial);
+        buildWorkspaceUi();
+        registerReceiver(mExecutionFinishedReceiver,
+                new IntentFilter(Scripts.ACTION_ON_EXECUTION_FINISHED));
+        openFile(initial);
+    }
+
+    private void resolveWorkspace(File initial) {
+        File scriptRoot = canonical(new File(Pref.getScriptDirPath()));
+        mWorkspaceRoot = scriptRoot != null && isWithin(initial, scriptRoot)
+                ? scriptRoot : initial.getParentFile();
+        mProjectRoot = findProjectRoot(initial.getParentFile());
+        if (mWorkspaceRoot == null) mWorkspaceRoot = initial.getParentFile();
+        if (mWorkspaceRoot != null) mExpandedDirectories.add(mWorkspaceRoot.getAbsolutePath());
+    }
+
+    private File findProjectRoot(File start) {
+        File scriptRoot = canonical(new File(Pref.getScriptDirPath()));
+        File current = canonical(start);
+        while (current != null) {
+            if (new File(current, "project.json").isFile()) return current;
+            if (scriptRoot != null && current.equals(scriptRoot)) break;
+            current = current.getParentFile();
+        }
+        return null;
+    }
+
+    private void buildWorkspaceUi() {
+        mDrawerLayout = new DrawerLayout(this);
+        mDrawerLayout.setBackgroundColor(Color.rgb(30, 30, 30));
+
+        LinearLayout main = new LinearLayout(this);
+        main.setOrientation(LinearLayout.VERTICAL);
+        main.setBackgroundColor(Color.rgb(30, 30, 30));
+        mDrawerLayout.addView(main, new DrawerLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        main.addView(buildToolRow(), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        main.addView(buildTabRow(), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+
+        mDebugBar = buildDebugBar();
+        mDebugBar.setVisibility(View.GONE);
+        main.addView(mDebugBar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+
+        mEditorContainer = new FrameLayout(this);
+        main.addView(mEditorContainer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        mLogPanel = buildLogPanel();
+        mLogPanel.setVisibility(View.GONE);
+        main.addView(mLogPanel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(300)));
+
+        mShortcutBar = buildShortcutBar();
+        main.addView(mShortcutBar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+
+        addWorkspaceDrawer();
+        setContentView(mDrawerLayout);
+    }
+
+    private View buildToolRow() {
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setBackgroundColor(COLOR_TOOLBAR);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(tool("▤", "文件", 40, v -> openWorkspaceDrawer()));
+        row.addView(tool("✎", "编辑", 40, v -> showEditMenu()));
+        row.addView(tool("⚙", "调试", 40, v -> showDebugMenu()));
+        row.addView(tool(">_", "终端", 40, v -> openTerminal()));
+        row.addView(tool("…", "其他", 40, v -> showOtherMenu()));
+        row.addView(tool("▣", "保存", 40, v -> saveActive(true)));
+        if (!TextUtils.isEmpty(mSampleAssetDirectory))
+            row.addView(tool("↺", "重置", 40, v -> confirmResetSample()));
+        View spacer = new View(this);
+        row.addView(spacer, new LinearLayout.LayoutParams(dp(24), dp(44)));
+        mLogTool = tool("▣", "日志", 32, v -> toggleLogPanel());
+        row.addView(mLogTool);
+        row.addView(tool("▶", "运行", 32, v -> runCurrent()));
+        row.addView(tool("↶", "撤销", 32, v -> { if (activeEditor() != null) activeEditor().undo(); }));
+        row.addView(tool("↷", "重做", 32, v -> { if (activeEditor() != null) activeEditor().redo(); }));
+        scroll.addView(row, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return scroll;
+    }
+
+    private View buildTabRow() {
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setBackgroundColor(Color.rgb(17, 19, 19));
+        mTabBar = new LinearLayout(this);
+        mTabBar.setGravity(Gravity.CENTER_VERTICAL);
+        scroll.addView(mTabBar, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return scroll;
+    }
+
+    private void addWorkspaceDrawer() {
+        LinearLayout drawer = new LinearLayout(this);
+        drawer.setOrientation(LinearLayout.VERTICAL);
+        drawer.setBackgroundColor(Color.rgb(27, 29, 29));
+        drawer.setPadding(dp(8), dp(8), dp(6), dp(8));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text("工作区", 21f, Color.WHITE);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setPadding(dp(8), 0, 0, 0);
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        header.addView(action("⇥", 50, v -> mDrawerLayout.closeDrawer(GravityCompat.START)));
+        drawer.addView(header);
+
+        mTreeRootLabel = text("▾  " + (mWorkspaceRoot == null ? "脚本" : mWorkspaceRoot.getName()), 16f,
+                Color.rgb(230, 230, 230));
+        mTreeRootLabel.setPadding(dp(12), dp(8), dp(8), dp(8));
+        LinearLayout rootRow = new LinearLayout(this);
+        rootRow.setGravity(Gravity.CENTER_VERTICAL);
+        rootRow.addView(mTreeRootLabel, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        rootRow.addView(smallAction("⋮", v -> showWorkspaceItemMenu(mWorkspaceRoot)),
+                new LinearLayout.LayoutParams(dp(40), dp(44)));
+        drawer.addView(rootRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+
+        ScrollView treeScroll = new ScrollView(this);
+        treeScroll.setFillViewport(true);
+        treeScroll.setVerticalScrollBarEnabled(false);
+        mTreeContainer = new LinearLayout(this);
+        mTreeContainer.setOrientation(LinearLayout.VERTICAL);
+        treeScroll.addView(mTreeContainer, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        drawer.addView(treeScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        DrawerLayout.LayoutParams params = new DrawerLayout.LayoutParams(
+                dp(330), ViewGroup.LayoutParams.MATCH_PARENT);
+        params.gravity = GravityCompat.START;
+        mDrawerLayout.addView(drawer, params);
+        refreshFileTree();
+    }
+
+    private LinearLayout buildDebugBar() {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), 0, dp(8), 0);
+        row.setBackgroundColor(Color.rgb(39, 42, 42));
+        TextView state = text("调试", 13f, Color.rgb(110, 220, 190));
+        state.setTag("debug_state");
+        row.addView(state, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        row.addView(smallAction("步过", v -> debugStep(0)));
+        row.addView(smallAction("步入", v -> debugStep(1)));
+        row.addView(smallAction("步出", v -> debugStep(2)));
+        row.addView(smallAction("继续", v -> debugStep(3)));
+        row.addView(smallAction("停止", v -> stopCurrentExecution()));
+        return row;
+    }
+
+    private LinearLayout buildLogPanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(Color.rgb(25, 27, 27));
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(10), 0, dp(6), 0);
+        mLogLevelView = text("Verbose ▾", 14f, Color.rgb(200, 225, 205));
+        mLogLevelView.setGravity(Gravity.CENTER_VERTICAL);
+        mLogLevelView.setOnClickListener(v -> showLogLevelMenu());
+        header.addView(mLogLevelView, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        header.addView(smallAction("■", v -> stopCurrentExecution()),
+                new LinearLayout.LayoutParams(dp(42), dp(42)));
+        header.addView(smallAction("⌫", v -> mConsole.clear()),
+                new LinearLayout.LayoutParams(dp(42), dp(42)));
+        header.addView(smallAction("−", v -> hideLogPanel()),
+                new LinearLayout.LayoutParams(dp(42), dp(42)));
+        header.addView(smallAction("⤢", v -> toggleLogExpanded()),
+                new LinearLayout.LayoutParams(dp(42), dp(42)));
+        panel.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+        mConsole = AutoJs.getInstance().getGlobalConsole();
+        mConsoleView = new ConsoleView(this);
+        mConsoleView.setConsole(mConsole);
+        mConsoleView.setMinimumLogLevel(mLogLevel);
+        View input = mConsoleView.findViewById(R.id.input_container);
+        if (input != null) input.setVisibility(View.GONE);
+        panel.addView(mConsoleView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        return panel;
+    }
+
+    private void showLogLevelMenu() {
+        String[] names = {"Verbose", "Debug", "Info", "Warn", "Error", "Assert"};
+        int[] levels = {Log.VERBOSE, Log.DEBUG, Log.INFO, Log.WARN, Log.ERROR, Log.ASSERT};
+        darkDialog().setTitle("日志级别").setSingleChoiceItems(names,
+                Math.max(0, mLogLevel - Log.VERBOSE), (dialog, which) -> {
+                    mLogLevel = levels[which];
+                    mLogLevelView.setText(names[which] + " ▾");
+                    mConsoleView.setMinimumLogLevel(mLogLevel);
+                    dialog.dismiss();
+                }).show();
+    }
+
+    private LinearLayout buildShortcutBar() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.HORIZONTAL);
+        root.setBackgroundColor(Color.rgb(28, 30, 30));
+        LinearLayout fixed = new LinearLayout(this);
+        fixed.setOrientation(LinearLayout.VERTICAL);
+        fixed.addView(shortcutRowContent(new String[]{"ƒx", "ESC", "↑", "TAB"}),
+                new LinearLayout.LayoutParams(dp(160), 0, 1f));
+        fixed.addView(shortcutRowContent(new String[]{"群", "←", "↓", "→"}),
+                new LinearLayout.LayoutParams(dp(160), 0, 1f));
+        root.addView(fixed, new LinearLayout.LayoutParams(dp(160), ViewGroup.LayoutParams.MATCH_PARENT));
+
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout symbols = new LinearLayout(this);
+        symbols.setOrientation(LinearLayout.VERTICAL);
+        symbols.addView(shortcutRowContent(new String[]{"(", ")", "/", "=", ",", ";", "\""}),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
+        symbols.addView(shortcutRowContent(new String[]{"'", "{", "}", "[", "]", "`", "<", ">",
+                        "-", "+", "|", ":", "_", "*"}),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
+        scroll.addView(symbols, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(scroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        return root;
+    }
+
+    private View shortcutRowContent(String[] labels) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        for (String label : labels) row.addView(shortcut(label));
+        return row;
+    }
+
+    private View tool(String icon, String label, int widthDp, View.OnClickListener listener) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setClickable(true);
+        box.setFocusable(true);
+        TextView iconView = text(icon, 15f, Color.rgb(235, 235, 235));
+        iconView.setGravity(Gravity.CENTER);
+        TextView labelView = text(label, 8.5f, Color.rgb(215, 215, 215));
+        labelView.setGravity(Gravity.CENTER);
+        box.addView(iconView, new LinearLayout.LayoutParams(dp(widthDp), 0, 1.15f));
+        box.addView(labelView, new LinearLayout.LayoutParams(dp(widthDp), 0, .85f));
+        box.setOnClickListener(listener);
+        box.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(44)));
+        return box;
+    }
+
+    private TextView shortcut(String label) {
+        TextView view = text(label, label.length() > 2 ? 10f : 14f, Color.WHITE);
+        view.setGravity(Gravity.CENTER);
+        view.setMinWidth(dp(40));
+        view.setOnClickListener(v -> onShortcut(label));
+        view.setLayoutParams(new LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.MATCH_PARENT));
+        return view;
+    }
+
+    private TextView smallAction(String label, View.OnClickListener listener) {
+        TextView view = text(label, 12f, Color.rgb(230, 230, 230));
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(8), 0, dp(8), 0);
+        view.setOnClickListener(listener);
+        return view;
+    }
+
+    private void refreshFileTree() {
+        if (mTreeContainer == null || mWorkspaceRoot == null) return;
+        mTreeContainer.removeAllViews();
+        addDirectoryChildren(mWorkspaceRoot, 0);
+    }
+
+    private void addDirectoryChildren(File directory, int depth) {
+        File[] children = directory.listFiles();
+        if (children == null) return;
+        List<File> list = new ArrayList<>(Arrays.asList(children));
+        Collections.sort(list, (left, right) -> {
+            if (left.isDirectory() != right.isDirectory()) return left.isDirectory() ? -1 : 1;
+            return left.getName().compareToIgnoreCase(right.getName());
+        });
+        for (File child : list) {
+            if (child.isHidden()) continue;
+            if (!child.isDirectory() && !isEditableFile(child)) continue;
+            boolean expanded = child.isDirectory() && mExpandedDirectories.contains(child.getAbsolutePath());
+            LinearLayout item = new LinearLayout(this);
+            item.setGravity(Gravity.CENTER_VERTICAL);
+            TextView row = text((child.isDirectory() ? (expanded ? "▾  " : "›  ") : "<>  ")
+                    + child.getName(), 14f, child.isDirectory()
+                    ? Color.rgb(225, 225, 225) : Color.rgb(195, 215, 225));
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(28 + depth * 18), 0, dp(8), 0);
+            row.setOnClickListener(v -> {
+                if (child.isDirectory()) {
+                    if (!mExpandedDirectories.add(child.getAbsolutePath()))
+                        mExpandedDirectories.remove(child.getAbsolutePath());
+                    refreshFileTree();
+                } else {
+                    openFile(child);
+                    mDrawerLayout.closeDrawer(GravityCompat.START);
+                }
+            });
+            item.addView(row, new LinearLayout.LayoutParams(0, dp(40), 1f));
+            TextView more = smallAction("⋮", v -> showWorkspaceItemMenu(child));
+            more.setTextSize(20f);
+            item.addView(more, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            mTreeContainer.addView(item, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+            if (expanded) addDirectoryChildren(child, depth + 1);
+        }
+    }
+
+    private void showWorkspaceItemMenu(File item) {
+        if (item == null) return;
+        if (item.isFile()) {
+            String[] actions = {"打开", "重命名", "发送", "删除", "用其他应用打开", "终端"};
+            darkDialog().setTitle(item.getName()).setItems(actions, (dialog, which) -> {
+                if (which == 0) { openFile(item); mDrawerLayout.closeDrawer(GravityCompat.START); }
+                else if (which == 1) renameWorkspaceItem(item);
+                else if (which == 2) shareWorkspaceItem(item);
+                else if (which == 3) confirmDeleteWorkspaceItem(item);
+                else if (which == 4) Scripts.INSTANCE.openByOtherApps(item);
+                else openTerminalAt(item.getParentFile(), null);
+            }).show();
+            return;
+        }
+        boolean workspaceRoot = canonical(item).equals(canonical(mWorkspaceRoot));
+        List<String> actions = new ArrayList<>();
+        if (!workspaceRoot) actions.add("重命名");
+        actions.add("发送");
+        if (!workspaceRoot) actions.add("删除");
+        actions.add("新建");
+        actions.add("项目");
+        actions.add("打开工作区");
+        actions.add("终端");
+        actions.add("npm");
+        darkDialog().setTitle(item.getName()).setItems(actions.toArray(new String[0]),
+                (dialog, which) -> {
+                    String action = actions.get(which);
+                    if ("重命名".equals(action)) renameWorkspaceItem(item);
+                    else if ("发送".equals(action)) shareWorkspaceItem(item);
+                    else if ("删除".equals(action)) confirmDeleteWorkspaceItem(item);
+                    else if ("新建".equals(action)) showCreateWorkspaceMenu(item);
+                    else if ("项目".equals(action)) openProjectConfig(item);
+                    else if ("打开工作区".equals(action)) switchWorkspace(item);
+                    else if ("终端".equals(action)) openTerminalAt(item, null);
+                    else openTerminalAt(item, "npm --help");
+                }).show();
+    }
+
+    private void showCreateWorkspaceMenu(File directory) {
+        darkDialog().setTitle("新建").setItems(new String[]{"文件", "文件夹"},
+                (dialog, which) -> showNameInput(which == 0 ? "新建文件" : "新建文件夹", "",
+                        name -> createWorkspaceItem(directory, name, which == 1))).show();
+    }
+
+    private void createWorkspaceItem(File directory, String rawName, boolean folder) {
+        String name = validEntryName(rawName);
+        if (name == null) return;
+        if (!folder && !name.contains(".")) name += ".js";
+        File target = canonical(new File(directory, name));
+        if (!canonical(target.getParentFile()).equals(canonical(directory)) || target.exists()) {
+            toast("名称无效或文件已存在");
+            return;
+        }
+        try {
+            boolean created = folder ? target.mkdir() : target.createNewFile();
+            if (!created) throw new IOException("无法创建");
+            if (folder) mExpandedDirectories.add(directory.getAbsolutePath());
+            refreshFileTree();
+            if (!folder) openFile(target);
+        } catch (IOException error) {
+            toast("创建失败：" + error.getMessage());
+        }
+    }
+
+    private void renameWorkspaceItem(File item) {
+        showNameInput("重命名", item.getName(), rawName -> {
+            String name = validEntryName(rawName);
+            if (name == null || name.equals(item.getName())) return;
+            File destination = canonical(new File(item.getParentFile(), name));
+            if (destination.exists() || !canonical(destination.getParentFile())
+                    .equals(canonical(item.getParentFile()))) {
+                toast("名称无效或文件已存在");
+                return;
+            }
+            File old = canonical(item);
+            if (!item.renameTo(destination)) {
+                toast("重命名失败");
+                return;
+            }
+            remapOpenTabs(old, destination);
+            if (mExpandedDirectories.remove(old.getAbsolutePath()))
+                mExpandedDirectories.add(destination.getAbsolutePath());
+            mProjectRoot = mActiveTab == null ? null : findProjectRoot(mActiveTab.file.getParentFile());
+            refreshFileTree();
+            refreshTabs();
+        });
+    }
+
+    private void confirmDeleteWorkspaceItem(File item) {
+        darkDialog().setTitle("删除" + (item.isDirectory() ? "文件夹" : "文件"))
+                .setMessage("确定删除“" + item.getName() + "”？"
+                        + (item.isDirectory() ? "\n文件夹中的全部内容也会被删除。" : ""))
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (dialog, which) -> {
+                    File target = canonical(item);
+                    if (!FileUtils.deleteQuietly(target)) {
+                        toast("删除失败");
+                        return;
+                    }
+                    removeDeletedTabs(target);
+                    refreshFileTree();
+                }).show();
+    }
+
+    private void removeDeletedTabs(File deleted) {
+        List<EditorTab> removed = new ArrayList<>();
+        for (EditorTab tab : mTabs) if (isWithin(tab.file, deleted)) removed.add(tab);
+        for (EditorTab tab : removed) {
+            tab.editor.destroy();
+            mTabs.remove(tab);
+        }
+        if (mTabs.isEmpty()) finish();
+        else selectTab(mTabs.get(Math.max(0, mTabs.size() - 1)));
+    }
+
+    private void remapOpenTabs(File oldPath, File newPath) {
+        for (EditorTab tab : mTabs) {
+            if (!isWithin(tab.file, oldPath)) continue;
+            String relative = oldPath.equals(tab.file) ? ""
+                    : tab.file.getAbsolutePath().substring(oldPath.getAbsolutePath().length() + 1);
+            tab.file = canonical(relative.isEmpty() ? newPath : new File(newPath, relative));
+        }
+    }
+
+    private void shareWorkspaceItem(File item) {
+        if (item.isFile()) {
+            Scripts.INSTANCE.send(new ScriptFile(item));
+            return;
+        }
+        new Thread(() -> {
+            File archive = new File(getCacheDir(), "share-" + item.getName() + ".zip");
+            try (ZipOutputStream output = new ZipOutputStream(new FileOutputStream(archive))) {
+                zipDirectory(item, item.getName(), output);
+                runOnUiThread(() -> {
+                    Uri uri = AppFileProvider.getUriForFile(this, archive);
+                    Intent share = new Intent(Intent.ACTION_SEND)
+                            .setType("application/zip")
+                            .putExtra(Intent.EXTRA_STREAM, uri)
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(share, "发送项目"));
+                });
+            } catch (IOException error) {
+                runOnUiThread(() -> toast("打包发送失败：" + error.getMessage()));
+            }
+        }, "pro-editor-share").start();
+    }
+
+    private void zipDirectory(File file, String entryName, ZipOutputStream output) throws IOException {
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children == null || children.length == 0) {
+                output.putNextEntry(new ZipEntry(entryName + "/"));
+                output.closeEntry();
+                return;
+            }
+            for (File child : children) zipDirectory(child, entryName + "/" + child.getName(), output);
+            return;
+        }
+        output.putNextEntry(new ZipEntry(entryName));
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int length;
+            while ((length = input.read(buffer)) >= 0) output.write(buffer, 0, length);
+        }
+        output.closeEntry();
+    }
+
+    private void switchWorkspace(File directory) {
+        mWorkspaceRoot = canonical(directory);
+        mExpandedDirectories.clear();
+        mExpandedDirectories.add(mWorkspaceRoot.getAbsolutePath());
+        if (mTreeRootLabel != null) mTreeRootLabel.setText("▾  " + mWorkspaceRoot.getName());
+        refreshFileTree();
+    }
+
+    private void openProjectConfig(File directory) {
+        File project = findProjectRoot(directory);
+        if (project == null || !isWithin(directory, project)) {
+            toast("该目录不是 Auto.js 项目");
+            return;
+        }
+        ProjectConfigActivity_.intent(this)
+                .extra(ProjectConfigActivity.EXTRA_DIRECTORY, project.getAbsolutePath()).start();
+    }
+
+    private void showNameInput(String title, String initial, NameCallback callback) {
+        EditText input = dialogInput("名称");
+        input.setText(initial);
+        input.setSelectAllOnFocus(true);
+        darkDialog().setTitle(title).setView(input).setNegativeButton("取消", null)
+                .setPositiveButton("确定", (dialog, which) ->
+                        callback.onName(input.getText().toString())).show();
+    }
+
+    private String validEntryName(String rawName) {
+        String name = rawName == null ? "" : rawName.trim();
+        if (name.isEmpty() || ".".equals(name) || "..".equals(name)
+                || name.contains("/") || name.contains("\\")) {
+            toast("请输入有效名称");
+            return null;
+        }
+        return name;
+    }
+
+    private boolean isEditableFile(File file) {
+        String name = file.getName().toLowerCase(Locale.ROOT);
+        return name.endsWith(".js") || name.endsWith(".auto") || name.endsWith(".json")
+                || name.endsWith(".xml") || name.endsWith(".txt") || name.endsWith(".md")
+                || name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".css")
+                || name.endsWith(".html");
+    }
+
+    private void openFile(File requested) {
+        File file = canonical(requested);
+        if (file == null || !file.isFile()) {
+            toast("文件不存在");
+            return;
+        }
+        for (EditorTab tab : mTabs) {
+            if (tab.file.equals(file)) {
+                selectTab(tab);
+                return;
+            }
+        }
+        try {
+            String source = FileUtils.readFileToString(file, "UTF-8");
+            CodeEditor editor = new CodeEditor(this);
+            Theme theme = Theme.fromAssetsJson(this, "editor/theme/dark_plus.json");
+            if (theme != null) editor.setTheme(theme);
+            editor.setInitialText(source);
+            EditorTab tab = new EditorTab(file, editor, source);
+            editor.getCodeEditText().addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+                @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+                @Override public void afterTextChanged(Editable s) {
+                    if (tab == mActiveTab && !tab.dirtyMarkerShown) {
+                        tab.dirtyMarkerShown = true;
+                        updateActiveTabLabel();
+                    }
+                }
+            });
+            mTabs.add(tab);
+            selectTab(tab);
+        } catch (IOException error) {
+            Toast.makeText(this, "读取失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void selectTab(EditorTab tab) {
+        mActiveTab = tab;
+        mEditorContainer.removeAllViews();
+        if (tab.editor.getParent() instanceof ViewGroup)
+            ((ViewGroup) tab.editor.getParent()).removeView(tab.editor);
+        mEditorContainer.addView(tab.editor, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        applyBreakpointListener(tab);
+        refreshTabs();
+    }
+
+    private void refreshTabs() {
+        mTabBar.removeAllViews();
+        for (EditorTab tab : mTabs) {
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            TextView view = text(tab.file.getName() + (hasUnsavedChanges(tab) ? " •" : ""), 14f,
+                    tab == mActiveTab ? Color.WHITE : Color.rgb(170, 170, 170));
+            view.setGravity(Gravity.CENTER);
+            view.setPadding(dp(16), 0, dp(16), 0);
+            view.setOnClickListener(v -> selectTab(tab));
+            view.setOnLongClickListener(v -> {
+                requestCloseTab(tab);
+                return true;
+            });
+            cell.addView(view, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
+            View indicator = new View(this);
+            indicator.setBackgroundColor(tab == mActiveTab
+                    ? Color.rgb(42, 190, 165) : Color.TRANSPARENT);
+            cell.addView(indicator, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+            mTabBar.addView(cell, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
+        }
+    }
+
+    private void updateActiveTabLabel() {
+        if (mTabBar != null && mActiveTab != null) refreshTabs();
+    }
+
+    private void requestCloseTab(EditorTab tab) {
+        if (!hasUnsavedChanges(tab)) {
+            closeTab(tab);
+            return;
+        }
+        darkDialog().setTitle("保存修改？")
+                .setMessage(tab.file.getName())
+                .setNegativeButton("不保存", (dialog, which) -> closeTab(tab))
+                .setNeutralButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    if (saveTab(tab, false)) closeTab(tab);
+                }).show();
+    }
+
+    private void closeTab(EditorTab tab) {
+        int index = mTabs.indexOf(tab);
+        tab.editor.destroy();
+        mTabs.remove(tab);
+        if (mTabs.isEmpty()) {
+            finish();
+            return;
+        }
+        selectTab(mTabs.get(Math.max(0, Math.min(index, mTabs.size() - 1))));
+    }
+
+    private void openWorkspaceDrawer() {
+        refreshFileTree();
+        mDrawerLayout.openDrawer(GravityCompat.START);
+    }
+
+    private void showEditMenu() {
+        String[] items = {"查找/替换", "跳转", "复制", "删除", "移动", "折叠", "格式化代码"};
+        darkDialog().setTitle("编辑").setItems(items, (dialog, which) -> {
+            CodeEditor editor = activeEditor();
+            if (editor == null) return;
+            switch (which) {
+                case 0: showFindReplace(); break;
+                case 1: showJumpMenu(); break;
+                case 2: showCopyMenu(); break;
+                case 3: showDeleteMenu(); break;
+                case 4: showMoveLineMenu(); break;
+                case 5: showFoldMenu(); break;
+                case 6:
+                    expandAllFolds(mActiveTab);
+                    editor.beautifyCode();
+                    break;
+            }
+        }).show();
+    }
+
+    private void showCopyMenu() {
+        darkDialog().setTitle("复制").setItems(new String[]{"复制", "复制全部", "复制行"},
+                (dialog, which) -> {
+                    if (which == 0) copySelection();
+                    else if (which == 1) {
+                        ClipboardUtil.setClip(this, activeEditor().getText());
+                        toast("已复制全部");
+                    } else activeEditor().copyLine();
+                }).show();
+    }
+
+    private void copySelection() {
+        EditText edit = activeEditor().getCodeEditText();
+        int start = Math.min(edit.getSelectionStart(), edit.getSelectionEnd());
+        int end = Math.max(edit.getSelectionStart(), edit.getSelectionEnd());
+        if (start == end) {
+            toast("请先选中内容");
+            return;
+        }
+        ClipboardUtil.setClip(this, edit.getText().subSequence(start, end));
+        toast("已复制");
+    }
+
+    private void showDeleteMenu() {
+        darkDialog().setTitle("删除").setItems(new String[]{"删除", "删除行", "清空"},
+                (dialog, which) -> {
+                    if (which == 0) deleteSelectionOrCharacter();
+                    else if (which == 1) activeEditor().deleteLine();
+                    else darkDialog().setTitle("清空编辑器？")
+                            .setMessage("此操作可以在保存前撤销。")
+                            .setNegativeButton("取消", null)
+                            .setPositiveButton("清空", (d, w) -> activeEditor().setText(""))
+                            .show();
+                }).show();
+    }
+
+    private void deleteSelectionOrCharacter() {
+        EditText edit = activeEditor().getCodeEditText();
+        int start = Math.min(edit.getSelectionStart(), edit.getSelectionEnd());
+        int end = Math.max(edit.getSelectionStart(), edit.getSelectionEnd());
+        if (start == end && end < edit.length()) end++;
+        if (start != end) edit.getText().delete(start, end);
+    }
+
+    private void showFoldMenu() {
+        darkDialog().setTitle("折叠").setItems(new String[]{"折叠", "全部折叠", "全部展开"},
+                (dialog, which) -> {
+                    if (which == 0) toggleFold();
+                    else if (which == 1) foldAllTopLevelBlocks();
+                    else expandAllFolds(mActiveTab);
+                }).show();
+    }
+
+    private void showFindReplace() {
+        if (activeEditor() == null) return;
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(18), dp(8), dp(18), dp(8));
+        EditText query = dialogInput("查找");
+        EditText replacement = dialogInput("替换");
+        CheckBox regex = new CheckBox(this);
+        regex.setText("正则表达式");
+        regex.setTextColor(Color.WHITE);
+        CheckBox replaceMode = new CheckBox(this);
+        replaceMode.setText("替换");
+        replaceMode.setTextColor(Color.WHITE);
+        CheckBox replaceAllMode = new CheckBox(this);
+        replaceAllMode.setText("全部替换");
+        replaceAllMode.setTextColor(Color.WHITE);
+        replaceMode.setOnCheckedChangeListener((button, checked) -> {
+            if (checked) replaceAllMode.setChecked(false);
+        });
+        replaceAllMode.setOnCheckedChangeListener((button, checked) -> {
+            if (checked) replaceMode.setChecked(false);
+        });
+        body.addView(query);
+        body.addView(regex);
+        body.addView(replacement);
+        body.addView(replaceMode);
+        body.addView(replaceAllMode);
+        TextView note = text("正则语法与JavaScript中相同, 可使用$1~9代替被捕获的匹配",
+                11f, Color.rgb(155, 165, 165));
+        note.setPadding(0, dp(6), 0, dp(4));
+        body.addView(note);
+        AlertDialog dialog = darkDialog().setTitle("查找/替换")
+                .setView(body).setNegativeButton("取消", null)
+                .setPositiveButton("确定", (ignored, which) -> {
+                    String value = query.getText().toString();
+                    if (replaceAllMode.isChecked()) replaceAll(value,
+                            replacement.getText().toString(), regex.isChecked());
+                    else if (replaceMode.isChecked()) replaceOne(value,
+                            replacement.getText().toString(), regex.isChecked());
+                    else find(value, regex.isChecked(), 1);
+                }).create();
+        dialog.setOnShowListener(ignored -> query.requestFocus());
+        dialog.show();
+    }
+
+    private void find(String query, boolean regex, int direction) {
+        if (TextUtils.isEmpty(query) || activeEditor() == null) return;
+        try {
+            activeEditor().find(query, regex);
+            if (direction < 0) activeEditor().findPrev();
+        } catch (CodeEditor.CheckedPatternSyntaxException error) {
+            toast("正则表达式错误");
+        }
+    }
+
+    private void replaceOne(String query, String replacement, boolean regex) {
+        if (TextUtils.isEmpty(query) || activeEditor() == null) return;
+        try {
+            activeEditor().replace(query, replacement, regex);
+            activeEditor().replaceSelection();
+        } catch (CodeEditor.CheckedPatternSyntaxException error) {
+            toast("正则表达式错误");
+        }
+    }
+
+    private void replaceAll(String query, String replacement, boolean regex) {
+        if (TextUtils.isEmpty(query) || activeEditor() == null) return;
+        try {
+            activeEditor().replaceAll(query, replacement, regex);
+        } catch (CodeEditor.CheckedPatternSyntaxException error) {
+            toast("正则表达式错误");
+        }
+    }
+
+    private void showJumpMenu() {
+        String[] items = {"跳转到行", "转到文件开始", "转到文件末尾", "转到行首", "转到行尾"};
+        darkDialog().setTitle("跳转").setItems(items, (dialog, which) -> {
+            CodeEditor editor = activeEditor();
+            if (editor == null) return;
+            if (which == 0) showJumpLineDialog();
+            else if (which == 1) editor.jumpToStart();
+            else if (which == 2) editor.jumpToEnd();
+            else if (which == 3) editor.jumpToLineStart();
+            else editor.jumpToLineEnd();
+        }).show();
+    }
+
+    private void showJumpLineDialog() {
+        final EditText input = dialogInput("行号");
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        int lines = countLines(activeEditor().getText());
+        darkDialog().setTitle("跳转到行（1 - " + lines + "）")
+                .setView(input)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("跳转", (dialog, which) -> {
+                    try {
+                        int line = Integer.parseInt(input.getText().toString());
+                        activeEditor().jumpTo(Math.max(0, Math.min(lines - 1, line - 1)), 0);
+                    } catch (Exception ignored) { }
+                }).show();
+    }
+
+    private void showMoveLineMenu() {
+        darkDialog().setTitle("移动").setItems(new String[]{"上移行", "下移行"},
+                (dialog, which) -> moveCurrentLine(which == 0 ? -1 : 1)).show();
+    }
+
+    private void moveCurrentLine(int direction) {
+        if (activeEditor() == null) return;
+        EditText edit = activeEditor().getCodeEditText();
+        Layout layout = edit.getLayout();
+        if (layout == null) return;
+        int line = layout.getLineForOffset(edit.getSelectionStart());
+        int target = line + direction;
+        if (target < 0 || target >= layout.getLineCount()) return;
+        String[] lines = activeEditor().getText().split("\\n", -1);
+        String swap = lines[line]; lines[line] = lines[target]; lines[target] = swap;
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) result.append('\n');
+            result.append(lines[i]);
+        }
+        activeEditor().setText(result.toString());
+        activeEditor().jumpTo(target, 0);
+    }
+
+    private void toggleFold() {
+        if (mActiveTab == null) return;
+        CodeEditor editor = mActiveTab.editor;
+        int cursor = editor.getCodeEditText().getSelectionStart();
+        String text = editor.getText();
+        for (FoldRegion fold : new ArrayList<>(mActiveTab.folds)) {
+            int start = text.indexOf(fold.marker);
+            if (start >= 0 && cursor >= start && cursor <= start + fold.marker.length()) {
+                editor.getCodeEditText().getText().replace(start, start + fold.marker.length(), fold.body);
+                mActiveTab.folds.remove(fold);
+                return;
+            }
+        }
+        int open = findOpeningBrace(text, cursor);
+        int close = open < 0 ? -1 : findClosingBrace(text, open);
+        if (open < 0 || close <= open + 1) {
+            toast("当前光标不在可折叠代码块中");
+            return;
+        }
+        String body = text.substring(open + 1, close);
+        int lines = countLines(body);
+        if (lines < 2) {
+            toast("代码块过短");
+            return;
+        }
+        String marker = "\n    /* … folded " + lines + " lines #" + (++mFoldSequence) + " … */\n";
+        editor.getCodeEditText().getText().replace(open + 1, close, marker);
+        mActiveTab.folds.add(new FoldRegion(marker, body));
+    }
+
+    private int findOpeningBrace(String text, int cursor) {
+        int depth = 0;
+        for (int i = Math.min(cursor - 1, text.length() - 1); i >= 0; i--) {
+            char c = text.charAt(i);
+            if (c == '}') depth++;
+            else if (c == '{') {
+                if (depth == 0) return i;
+                depth--;
+            }
+        }
+        return -1;
+    }
+
+    private int findClosingBrace(String text, int open) {
+        int depth = 0;
+        for (int i = open; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    private void expandAllFolds(EditorTab tab) {
+        if (tab == null || tab.folds.isEmpty()) return;
+        String text = tab.editor.getText();
+        for (FoldRegion fold : tab.folds) text = text.replace(fold.marker, fold.body);
+        tab.folds.clear();
+        tab.editor.setText(text);
+    }
+
+    private void foldAllTopLevelBlocks() {
+        if (mActiveTab == null) return;
+        expandAllFolds(mActiveTab);
+        String source = mActiveTab.editor.getText();
+        List<int[]> blocks = new ArrayList<>();
+        int depth = 0;
+        int opening = -1;
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '{') {
+                if (depth == 0) opening = i;
+                depth++;
+            } else if (c == '}' && depth > 0) {
+                depth--;
+                if (depth == 0 && opening >= 0) {
+                    String body = source.substring(opening + 1, i);
+                    if (countLines(body) > 1) blocks.add(new int[]{opening, i});
+                    opening = -1;
+                }
+            }
+        }
+        if (blocks.isEmpty()) {
+            toast("没有可折叠的代码块");
+            return;
+        }
+        Editable editable = mActiveTab.editor.getCodeEditText().getText();
+        for (int i = blocks.size() - 1; i >= 0; i--) {
+            int[] block = blocks.get(i);
+            String body = source.substring(block[0] + 1, block[1]);
+            String marker = "\n    /* … folded " + countLines(body) + " lines #"
+                    + (++mFoldSequence) + " … */\n";
+            editable.replace(block[0] + 1, block[1], marker);
+            mActiveTab.folds.add(new FoldRegion(marker, body));
+        }
+    }
+
+    private String expandedText(EditorTab tab) {
+        String text = tab.editor.getText();
+        for (FoldRegion fold : tab.folds) text = text.replace(fold.marker, fold.body);
+        return text;
+    }
+
+    private void showDebugMenu() {
+        String[] items = {"强制停止", "强制停止所有脚本", "断点", "启动调试",
+                "删除所有断点", "悬浮运行"};
+        darkDialog().setTitle("调试").setItems(items, (dialog, which) -> {
+            if (activeEditor() == null) return;
+            if (which == 0) stopCurrentExecution();
+            else if (which == 1) AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
+            else if (which == 2) activeEditor().addOrRemoveBreakpointAtCurrentLine();
+            else if (which == 3) startDebugger();
+            else if (which == 4) {
+                for (EditorTab tab : mTabs) tab.editor.removeAllBreakpoints();
+                if (mDebugger != null) mDebugger.clearAllBreakpoints();
+            } else floatingRun();
+        }).show();
+    }
+
+    private void startDebugger() {
+        if (mActiveTab == null || !saveActive(false)) return;
+        finishDebugSession(false);
+        try {
+            mDebugger = DebuggerSingleton.get();
+            mDebugger.setWeakDebugCallback(new WeakReference<>(this));
+            applyBreakpointListener(mActiveTab);
+            mActiveTab.editor.setRedoUndoEnabled(false);
+            mExecution = Scripts.INSTANCE.runWithBroadcastSender(mActiveTab.file);
+            if (mExecution == null) {
+                toast("调试器启动失败");
+                return;
+            }
+            mDebugger.attach(mExecution);
+            mDebugBar.setVisibility(View.VISIBLE);
+            setDebugState("调试已启动 · 等待断点");
+            showLogPanel();
+        } catch (Exception error) {
+            finishDebugSession(false);
+            Toast.makeText(this, "调试失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void applyBreakpointListener(EditorTab tab) {
+        tab.editor.setBreakpointChangeListener(new CodeEditor.BreakpointChangeListener() {
+            @Override public void onBreakpointChange(int line, boolean enabled) {
+                if (mDebugger != null && mDebugger.isAttached() && tab == mActiveTab)
+                    mDebugger.breakpoint(line + 1, enabled);
+            }
+            @Override public void onAllBreakpointRemoved(int count) {
+                if (mDebugger != null && mDebugger.isAttached()) mDebugger.clearAllBreakpoints();
+            }
+        });
+    }
+
+    private void debugStep(int type) {
+        if (mDebugger == null || !mDebugger.isAttached() || !mDebugInterrupted) {
+            toast("脚本尚未停在断点");
+            return;
+        }
+        mDebugInterrupted = false;
+        setDebugState("调试运行中");
+        if (type == 0) mDebugger.stepOver();
+        else if (type == 1) mDebugger.stepInto();
+        else if (type == 2) mDebugger.stepOut();
+        else mDebugger.resume();
+    }
+
+    private void stopCurrentExecution() {
+        if (mExecution != null && mExecution.getEngine() != null) mExecution.getEngine().forceStop();
+        else toast("当前没有由编辑器启动的脚本");
+        finishDebugSession(false);
+    }
+
+    private void finishDebugSession(boolean detachOnly) {
+        if (mDebugger != null && mDebugger.isAttached()) mDebugger.detach();
+        if (mDebugger != null) mDebugger.setWeakDebugCallback(null);
+        for (EditorTab tab : mTabs) {
+            tab.editor.setDebuggingLine(-1);
+            tab.editor.setRedoUndoEnabled(true);
+        }
+        mDebugInterrupted = false;
+        if (mDebugBar != null) mDebugBar.setVisibility(View.GONE);
+        if (!detachOnly) mExecution = null;
+    }
+
+    private void setDebugState(String value) {
+        View state = mDebugBar.findViewWithTag("debug_state");
+        if (state instanceof TextView) ((TextView) state).setText(value);
+    }
+
+    @Override
+    public void updateSourceText(Dim.SourceInfo sourceInfo) {
+        if (mActiveTab == null) return;
+        sourceInfo.removeAllBreakpoints();
+        for (CodeEditor.Breakpoint breakpoint : mActiveTab.editor.getBreakpoints().values()) {
+            int line = breakpoint.line + 1;
+            if (sourceInfo.breakableLine(line)) sourceInfo.breakpoint(line, breakpoint.enabled);
+        }
+    }
+
+    @Override
+    public void enterInterrupt(Dim.StackFrame frame, String threadName, String message) {
+        runOnUiThread(() -> {
+            File sourceFile = fileFromDebuggerUrl(frame.getUrl());
+            if (sourceFile != null && sourceFile.isFile()) openFile(sourceFile);
+            if (activeEditor() != null) {
+                int line = Math.max(0, frame.getLineNumber() - 1);
+                activeEditor().setDebuggingLine(line);
+                activeEditor().jumpTo(line, 0);
+            }
+            mDebugInterrupted = true;
+            mDebugBar.setVisibility(View.VISIBLE);
+            setDebugState("断点 · " + (sourceFile == null ? threadName : sourceFile.getName())
+                    + ":" + frame.getLineNumber());
+            if (message != null) toast(message);
+        });
+    }
+
+    private File fileFromDebuggerUrl(String url) {
+        if (TextUtils.isEmpty(url)) return null;
+        try {
+            if (url.startsWith("file:")) return canonical(new File(Uri.parse(url).getPath()));
+            return canonical(new File(url));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void floatingRun() {
+        if (!saveActive(false)) return;
+        boolean shown = FloatyWindowManger.showCircularMenu();
+        runCurrent();
+        if (shown) moveTaskToBack(true);
+        else toast("悬浮窗权限未开启，脚本已在当前界面运行");
+    }
+
+    private void openTerminal() {
+        File directory = mActiveTab == null ? mWorkspaceRoot : mActiveTab.file.getParentFile();
+        openTerminalAt(directory, null);
+    }
+
+    private void openTerminalAt(File directory, String initialCommand) {
+        Intent intent = new Intent(this, EmbeddedTerminalActivity.class)
+                .putExtra(EmbeddedTerminalActivity.EXTRA_WORKING_DIRECTORY,
+                        directory == null ? null : directory.getAbsolutePath());
+        if (!TextUtils.isEmpty(initialCommand))
+            intent.putExtra(EmbeddedTerminalActivity.EXTRA_INITIAL_COMMAND, initialCommand);
+        startActivity(intent);
+    }
+
+    private void showOtherMenu() {
+        String[] items = {"项目", "打包单文件", "搜索Java包/类", "信息", "字体大小",
+                "编辑器主题", "用其他应用打开", "设计"};
+        darkDialog().setTitle("其他").setItems(items, (dialog, which) -> {
+            if (mActiveTab == null) return;
+            if (which == 0) openProjectConfig();
+            else if (which == 1) buildApk();
+            else if (which == 2) searchJavaClass();
+            else if (which == 3) showEditorInfo();
+            else if (which == 4) selectTextSize();
+            else if (which == 5) selectTheme();
+            else if (which == 6) Scripts.INSTANCE.openByOtherApps(mActiveTab.file);
+            else showDesigner();
+        }).show();
+    }
+
+    private void openProjectConfig() {
+        if (mProjectRoot == null) {
+            toast("当前文件不属于 Auto.js 项目");
+            return;
+        }
+        ProjectConfigActivity_.intent(this)
+                .extra(ProjectConfigActivity.EXTRA_DIRECTORY, mProjectRoot.getAbsolutePath()).start();
+    }
+
+    private void buildApk() {
+        if (!saveActive(false)) return;
+        File source = mProjectRoot == null ? mActiveTab.file : mProjectRoot;
+        BuildActivity_.intent(this)
+                .extra(BuildActivity.EXTRA_SOURCE, source.getAbsolutePath()).start();
+    }
+
+    private void searchJavaClass() {
+        new ClassSearchDialogBuilder(this)
+                .setQuery("")
+                .itemClick((dialog, item, position) -> showJavaClassAction(dialog, item))
+                .title("搜索Java包/类")
+                .show();
+    }
+
+    private void showJavaClassAction(MaterialDialog searchDialog, ClassSearchingItem item) {
+        darkDialog().setTitle(item.getLabel()).setItems(new String[]{"导入", "复制", "打开文档"},
+                (dialog, which) -> {
+                    if (which == 0) {
+                        activeEditor().insert(0, item.getImportText() + ";\n");
+                        searchDialog.dismiss();
+                    } else if (which == 1) {
+                        ClipboardUtil.setClip(this, item.getImportText());
+                        toast("已复制");
+                    } else {
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(item.getUrl())));
+                    }
+                }).show();
+    }
+
+    private void showEditorInfo() {
+        String source = expandedText(mActiveTab);
+        String message = "文件：" + mActiveTab.file.getAbsolutePath()
+                + "\n行数：" + countLines(source)
+                + "\n字符：" + source.length()
+                + "\n已打开标签：" + mTabs.size()
+                + "\n工作区：" + (mWorkspaceRoot == null ? "" : mWorkspaceRoot.getAbsolutePath());
+        darkDialog().setTitle("信息").setMessage(message).setPositiveButton("确定", null).show();
+    }
+
+    private void confirmResetSample() {
+        if (mActiveTab == null || TextUtils.isEmpty(mSampleAssetDirectory)) return;
+        String assetPath = sampleAssetPathFor(mActiveTab.file);
+        if (assetPath == null) {
+            toast("当前文件不是内置示例");
+            return;
+        }
+        darkDialog().setTitle("重置当前示例？")
+                .setMessage("将用 APK 内置版本覆盖“" + mActiveTab.file.getName()
+                        + "”的已保存和未保存修改。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("重置", (dialog, which) -> resetActiveSample(assetPath))
+                .show();
+    }
+
+    private String sampleAssetPathFor(File file) {
+        File canonicalFile = canonical(file);
+        File canonicalRoot = canonical(mWorkspaceRoot);
+        if (canonicalFile == null || canonicalRoot == null || !isWithin(canonicalFile, canonicalRoot))
+            return null;
+        String rootPath = canonicalRoot.getAbsolutePath();
+        String filePath = canonicalFile.getAbsolutePath();
+        if (filePath.length() <= rootPath.length()) return null;
+        String relative = filePath.substring(rootPath.length() + 1)
+                .replace(File.separatorChar, '/');
+        return mSampleAssetDirectory + "/" + relative;
+    }
+
+    private void resetActiveSample(String assetPath) {
+        EditorTab tab = mActiveTab;
+        if (tab == null) return;
+        expandAllFolds(tab);
+        try (InputStream input = getAssets().open(assetPath);
+             FileOutputStream output = new FileOutputStream(tab.file, false)) {
+            byte[] buffer = new byte[32 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            output.getFD().sync();
+            String source = FileUtils.readFileToString(tab.file, "UTF-8");
+            tab.editor.setInitialText(source);
+            tab.savedText = source;
+            tab.dirtyMarkerShown = false;
+            tab.editor.markTextAsSaved();
+            refreshTabs();
+            toast("已恢复内置示例");
+        } catch (IOException error) {
+            Toast.makeText(this, "重置失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void selectTextSize() {
+        String[] sizes = {"12", "14", "15", "16", "18", "20", "22"};
+        darkDialog().setTitle("字体大小").setItems(sizes, (dialog, which) -> {
+            float size = Float.parseFloat(sizes[which]);
+            for (EditorTab tab : mTabs) tab.editor.getCodeEditText().setTextSize(size);
+        }).show();
+    }
+
+    private void selectTheme() {
+        darkDialog().setTitle("编辑器主题").setItems(new String[]{"Dark+", "Light+"},
+                (dialog, which) -> {
+                    Theme theme = Theme.fromAssetsJson(this,
+                            which == 0 ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
+                    if (theme != null) for (EditorTab tab : mTabs) tab.editor.setTheme(theme);
+                }).show();
+    }
+
+    private void showDesigner() {
+        if (mActiveTab == null) return;
+        String xml = extractUiLayout(expandedText(mActiveTab));
+        if (xml == null) {
+            toast("没有找到 ui.layout(...) 或 setViewFromXml(...) 布局");
+            return;
+        }
+        try {
+            DynamicLayoutInflater inflater = new DynamicLayoutInflater(
+                    new ResourceParser(new com.stardust.autojs.core.ui.inflater.util.Drawables()));
+            inflater.setContext(this);
+            View preview = inflater.inflate(xml);
+            LinearLayout root = new LinearLayout(this);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setBackgroundColor(Color.rgb(245, 245, 245));
+            LinearLayout bar = new LinearLayout(this);
+            bar.setGravity(Gravity.CENTER_VERTICAL);
+            bar.setPadding(dp(12), 0, dp(6), 0);
+            bar.setBackgroundColor(COLOR_TOOLBAR);
+            TextView title = text("设计预览 · " + mActiveTab.file.getName() + "（点此关闭）", 15f, Color.WHITE);
+            bar.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1f));
+            root.addView(bar);
+            FrameLayout stage = new FrameLayout(this);
+            stage.setPadding(dp(8), dp(8), dp(8), dp(8));
+            stage.addView(preview, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            root.addView(stage, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            Dialog dialog = new Dialog(this, android.R.style.Theme_DeviceDefault_NoActionBar);
+            dialog.setContentView(root);
+            title.setOnClickListener(v -> dialog.dismiss());
+            dialog.show();
+            Window window = dialog.getWindow();
+            if (window != null) window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        } catch (Exception error) {
+            darkDialog().setTitle("设计预览失败")
+                    .setMessage(error.getMessage()).setPositiveButton("确定", null).show();
+        }
+    }
+
+    private String extractUiLayout(String source) {
+        int uiLayoutCall = source.indexOf("ui.layout");
+        int xmlViewCall = source.indexOf("setViewFromXml");
+        int call;
+        if (uiLayoutCall < 0) call = xmlViewCall;
+        else if (xmlViewCall < 0) call = uiLayoutCall;
+        else call = Math.min(uiLayoutCall, xmlViewCall);
+        if (call < 0) return null;
+        int start = source.indexOf('<', call);
+        if (start < 0) return null;
+        int closeCall = source.indexOf(");", start);
+        if (closeCall < 0) closeCall = source.length();
+        int end = source.lastIndexOf('>', closeCall);
+        return end <= start ? null : source.substring(start, end + 1);
+    }
+
+    private void toggleLogPanel() {
+        if (mLogPanel.getVisibility() == View.VISIBLE) hideLogPanel(); else showLogPanel();
+    }
+
+    private void showLogPanel() {
+        if (mLogPanel.getVisibility() == View.VISIBLE) return;
+        mLogExpanded = false;
+        LinearLayout.LayoutParams editorParams = (LinearLayout.LayoutParams) mEditorContainer.getLayoutParams();
+        editorParams.height = dp(135);
+        editorParams.weight = 0f;
+        mEditorContainer.setLayoutParams(editorParams);
+        LinearLayout.LayoutParams logParams = (LinearLayout.LayoutParams) mLogPanel.getLayoutParams();
+        logParams.height = 0;
+        logParams.weight = 1f;
+        mLogPanel.setLayoutParams(logParams);
+        mShortcutBar.setVisibility(View.GONE);
+        setToolSelected(mLogTool, true);
+        mLogPanel.setVisibility(View.VISIBLE);
+    }
+
+    private void hideLogPanel() {
+        mLogExpanded = false;
+        mLogPanel.setVisibility(View.GONE);
+        LinearLayout.LayoutParams editorParams = (LinearLayout.LayoutParams) mEditorContainer.getLayoutParams();
+        editorParams.height = 0;
+        editorParams.weight = 1f;
+        mEditorContainer.setLayoutParams(editorParams);
+        mEditorContainer.setVisibility(View.VISIBLE);
+        mShortcutBar.setVisibility(View.VISIBLE);
+        setToolSelected(mLogTool, false);
+    }
+
+    private void setToolSelected(View tool, boolean selected) {
+        if (tool == null) return;
+        if (!selected) {
+            tool.setBackgroundColor(Color.TRANSPARENT);
+            return;
+        }
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(35, 37, 37));
+        background.setCornerRadius(dp(22));
+        tool.setBackground(background);
+    }
+
+    private void toggleLogExpanded() {
+        mLogExpanded = !mLogExpanded;
+        mEditorContainer.setVisibility(mLogExpanded ? View.GONE : View.VISIBLE);
+        if (!mLogExpanded) {
+            LinearLayout.LayoutParams editorParams =
+                    (LinearLayout.LayoutParams) mEditorContainer.getLayoutParams();
+            editorParams.height = dp(135);
+            editorParams.weight = 0f;
+            mEditorContainer.setLayoutParams(editorParams);
+        }
+    }
+
+    private void runCurrent() {
+        if (mActiveTab == null || !saveActive(false)) return;
+        try {
+            mExecution = Scripts.INSTANCE.runWithBroadcastSender(mActiveTab.file);
+            if (mExecution != null) {
+                toast("脚本已启动");
+                showLogPanel();
+            }
+        } catch (Exception error) {
+            Toast.makeText(this, "运行失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private boolean saveActive(boolean showToast) {
+        return mActiveTab != null && saveTab(mActiveTab, showToast);
+    }
+
+    private boolean saveTab(EditorTab tab, boolean showToast) {
+        try {
+            String source = expandedText(tab);
+            FileUtils.writeStringToFile(tab.file, source, "UTF-8");
+            tab.savedText = source;
+            tab.dirtyMarkerShown = false;
+            tab.editor.markTextAsSaved();
+            refreshTabs();
+            if (showToast) toast("已保存");
+            return true;
+        } catch (IOException error) {
+            Toast.makeText(this, "保存失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+            return false;
+        }
+    }
+
+    private void saveAllAndFinish() {
+        for (EditorTab tab : mTabs) if (hasUnsavedChanges(tab) && !saveTab(tab, false)) return;
+        finish();
+    }
+
+    private boolean hasUnsavedChanges(EditorTab tab) {
+        return !tab.savedText.equals(expandedText(tab));
+    }
+
+    private boolean hasAnyUnsavedChanges() {
+        for (EditorTab tab : mTabs) if (hasUnsavedChanges(tab)) return true;
+        return false;
+    }
+
+    private CodeEditor activeEditor() {
+        return mActiveTab == null ? null : mActiveTab.editor;
+    }
+
+    private void onShortcut(String label) {
+        CodeEditor editor = activeEditor();
+        if (editor == null) return;
+        if ("ƒx".equals(label) || "群".equals(label)) {
+            showSnippetMenu();
+        } else if ("ESC".equals(label)) {
+            View focus = getCurrentFocus();
+            if (focus != null) ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(focus.getWindowToken(), 0);
+        } else if ("TAB".equals(label)) {
+            editor.insert("    ");
+        } else if ("←".equals(label)) {
+            moveCursorHorizontal(-1);
+        } else if ("→".equals(label)) {
+            moveCursorHorizontal(1);
+        } else if ("↑".equals(label)) {
+            moveCursorVertical(-1);
+        } else if ("↓".equals(label)) {
+            moveCursorVertical(1);
+        } else if ("Home".equals(label)) {
+            editor.jumpToLineStart();
+        } else if ("End".equals(label)) {
+            editor.jumpToLineEnd();
+        } else {
+            editor.insert(label);
+        }
+    }
+
+    private void moveCursorHorizontal(int delta) {
+        EditText edit = activeEditor().getCodeEditText();
+        int target = Math.max(0, Math.min(edit.length(), edit.getSelectionStart() + delta));
+        edit.setSelection(target);
+    }
+
+    private void moveCursorVertical(int delta) {
+        EditText edit = activeEditor().getCodeEditText();
+        Layout layout = edit.getLayout();
+        if (layout == null) return;
+        int current = layout.getLineForOffset(edit.getSelectionStart());
+        int targetLine = Math.max(0, Math.min(layout.getLineCount() - 1, current + delta));
+        int column = edit.getSelectionStart() - layout.getLineStart(current);
+        int end = Math.max(layout.getLineStart(targetLine), layout.getLineEnd(targetLine) - 1);
+        edit.setSelection(Math.min(layout.getLineStart(targetLine) + column, end));
+    }
+
+    private void showSnippetMenu() {
+        String[] names = {"function", "if", "for", "while", "try/catch", "console.log"};
+        String[] snippets = {"function name() {\n    \n}", "if (condition) {\n    \n}",
+                "for (let i = 0; i < length; i++) {\n    \n}", "while (condition) {\n    \n}",
+                "try {\n    \n} catch (error) {\n    console.error(error);\n}", "console.log();"};
+        darkDialog().setTitle("代码片段").setItems(names,
+                (dialog, which) -> activeEditor().insert(snippets[which])).show();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (mDrawerLayout != null && mDrawerLayout.isDrawerOpen(GravityCompat.START)) {
+            mDrawerLayout.closeDrawer(GravityCompat.START);
+            return;
+        }
+        if (mLogPanel != null && mLogPanel.getVisibility() == View.VISIBLE) {
+            hideLogPanel();
+            return;
+        }
+        if (!hasAnyUnsavedChanges()) {
+            super.onBackPressed();
+            return;
+        }
+        darkDialog().setTitle("保存工作区修改？")
+                .setMessage("有文件尚未保存")
+                .setNegativeButton("不保存", (dialog, which) -> finish())
+                .setNeutralButton("取消", null)
+                .setPositiveButton("全部保存", (dialog, which) -> saveAllAndFinish())
+                .show();
+    }
+
+    @Override
+    protected void onDestroy() {
+        try { unregisterReceiver(mExecutionFinishedReceiver); } catch (Exception ignored) { }
+        finishDebugSession(true);
+        for (EditorTab tab : mTabs) tab.editor.destroy();
+        super.onDestroy();
+    }
+
+    private AlertDialog.Builder darkDialog() {
+        return new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK);
+    }
+
+    private EditText dialogInput(String hint) {
+        EditText input = new EditText(this);
+        input.setHint(hint);
+        input.setSingleLine(true);
+        input.setTextColor(Color.WHITE);
+        input.setHintTextColor(Color.GRAY);
+        return input;
+    }
+
+    private Button dialogButton(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(11f);
+        button.setTextColor(Color.WHITE);
+        button.setAllCaps(false);
+        button.setLayoutParams(new LinearLayout.LayoutParams(0, dp(44), 1f));
+        return button;
+    }
+
+    private TextView action(String label, int widthDp, View.OnClickListener listener) {
+        TextView view = text(label, 26f, Color.WHITE);
+        view.setGravity(Gravity.CENTER);
+        view.setOnClickListener(listener);
+        view.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(56)));
+        return view;
+    }
+
+    private TextView text(String value, float size, int color) {
+        TextView view = new TextView(this);
+        view.setText(value == null ? "" : value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        return view;
+    }
+
+    private void toast(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private int countLines(String text) {
+        int lines = 1;
+        for (int i = 0; i < text.length(); i++) if (text.charAt(i) == '\n') lines++;
+        return lines;
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private File canonical(File file) {
+        if (file == null) return null;
+        try { return file.getCanonicalFile(); }
+        catch (IOException ignored) { return file.getAbsoluteFile(); }
+    }
+
+    private boolean isWithin(File file, File root) {
+        if (file == null || root == null) return false;
+        String path = canonical(file).getAbsolutePath();
+        String rootPath = canonical(root).getAbsolutePath();
+        return path.equals(rootPath) || path.startsWith(rootPath + File.separator);
+    }
+
+    private interface NameCallback {
+        void onName(String name);
+    }
+
+    private static final class EditorTab {
+        File file;
+        final CodeEditor editor;
+        final List<FoldRegion> folds = new ArrayList<>();
+        String savedText;
+        boolean dirtyMarkerShown;
+
+        EditorTab(File file, CodeEditor editor, String savedText) {
+            this.file = file;
+            this.editor = editor;
+            this.savedText = savedText;
+        }
+    }
+
+    private static final class FoldRegion {
+        final String marker;
+        final String body;
+
+        FoldRegion(String marker, String body) {
+            this.marker = marker;
+            this.body = body;
+        }
+    }
+}

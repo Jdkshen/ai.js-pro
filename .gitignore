@@ -1,0 +1,30 @@
+*.iml
+.gradle
+/tools
+/local.properties
+/.idea/workspace.xml
+/.idea/libraries
+/.idea/caches
+/.idea/
+.DS_Store
+/build
+/release
+/captures
+.externalNativeBuild
+.cxx
+**/build/
+**/.gradle/
+**/.externalNativeBuild/
+**/.cxx/
+*.apk
+*.exe
+.idea/caches/build_file_checksums.ser
+
+# Local analysis, logs, and verification artifacts
+.codegraph/
+*.log
+/*-final.png
+/build-final-screen.png
+
+# Required by the in-app APK builder; all other APK outputs remain ignored.
+!app/src/main/assets/template.apk

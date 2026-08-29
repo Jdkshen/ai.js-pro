@@ -1,0 +1,16 @@
+include ':app', ':automator', ':common', ':autojs', ':inrt'
+include ':enhancedfloaty'
+include ':mutabletheme'
+include ':multilevellistview'
+include ':settingscompat'
+include ':rootshell'
+include ':colorpicker'
+include ':apkbuilder'
+
+project(':enhancedfloaty').projectDir = new File(rootProject.projectDir, 'libs/EnhancedFloaty/lib')
+project(':mutabletheme').projectDir = new File(rootProject.projectDir, 'libs/MutableTheme/mutable-theme')
+project(':multilevellistview').projectDir = new File(rootProject.projectDir, 'libs/multi-level-listview/multi-level-listview')
+project(':settingscompat').projectDir = new File(rootProject.projectDir, 'libs/settingscompat/library')
+project(':rootshell').projectDir = new File(rootProject.projectDir, 'libs/RootShell')
+project(':colorpicker').projectDir = new File(rootProject.projectDir, 'libs/ColorPicker/library')
+project(':apkbuilder').projectDir = new File(rootProject.projectDir, 'libs/ApkBuilder/apkbuilder')

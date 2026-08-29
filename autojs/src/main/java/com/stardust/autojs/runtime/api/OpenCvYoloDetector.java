@@ -1,0 +1,204 @@
+package com.stardust.autojs.runtime.api;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.os.SystemClock;
+
+import com.stardust.autojs.core.image.ImageWrapper;
+import com.stardust.autojs.core.opencv.OpenCVHelper;
+
+import org.opencv.android.Utils;
+import org.opencv.core.Core;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.Rect;
+import org.opencv.core.Scalar;
+import org.opencv.core.Size;
+import org.opencv.dnn.Dnn;
+import org.opencv.dnn.Net;
+import org.opencv.imgproc.Imgproc;
+
+import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+/** Fixed-shape YOLO26 ONNX detector backed by the bundled OpenCV 5.0 DNN engine. */
+public final class OpenCvYoloDetector implements AutoCloseable {
+
+    private final Yolo mOwner;
+    private final int mInputSize;
+    private final Mat mSource = new Mat();
+    private final Mat mResizedRgba = new Mat();
+    private final Mat mResizedRgb = new Mat();
+    private final Mat mLetterbox = new Mat();
+    private Net mNet;
+    private boolean mClosed;
+
+    OpenCvYoloDetector(Yolo owner, Context context, String modelPath, int inputSize, int threads) {
+        if (inputSize < 32) throw new IllegalArgumentException("inputSize 不能小于 32");
+        mOwner = owner;
+        mInputSize = inputSize;
+        ensureOpenCv(context);
+        try {
+            Core.setNumThreads(Math.max(1, Math.min(threads, 8)));
+            mNet = Dnn.readNetFromONNX(modelPath);
+            if (mNet == null || mNet.empty()) {
+                throw new IllegalStateException("OpenCV 无法读取 ONNX 模型");
+            }
+            mNet.setPreferableBackend(Dnn.DNN_BACKEND_OPENCV);
+            mNet.setPreferableTarget(Dnn.DNN_TARGET_CPU);
+        } catch (Throwable error) {
+            close();
+            throw new IllegalStateException("OpenCV DNN 模型初始化失败：" + error.getMessage(), error);
+        }
+    }
+
+    public static boolean isRuntimeAvailable() {
+        try {
+            Class.forName("org.opencv.dnn.Dnn");
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    public static String getUnavailableReason() {
+        return isRuntimeAvailable() ? "" : "APK 未包含 OpenCV DNN";
+    }
+
+    public static String getRuntimeVersion() {
+        return isRuntimeAvailable() ? Core.VERSION : "unavailable";
+    }
+
+    private static void ensureOpenCv(Context context) {
+        if (OpenCVHelper.isInitialized()) return;
+        CountDownLatch latch = new CountDownLatch(1);
+        OpenCVHelper.initIfNeeded(context, latch::countDown);
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("OpenCV 初始化超时");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("OpenCV 初始化被中断", error);
+        }
+        if (!OpenCVHelper.isInitialized()) {
+            throw new IllegalStateException("OpenCV 5.0 初始化失败");
+        }
+    }
+
+    public synchronized float[] detect(ImageWrapper image, float confidence, float nmsThreshold) {
+        if (mClosed || mNet == null) throw new IllegalStateException("YOLO detector 已关闭");
+        if (image == null) throw new IllegalArgumentException("image == null");
+        validateThresholds(confidence, nmsThreshold);
+
+        Bitmap bitmap = image.getBitmap();
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        if (width < 2 || height < 2) throw new IllegalArgumentException("图片尺寸无效");
+
+        Mat blob = null;
+        Mat output = null;
+        Mat rows = null;
+        try {
+            long preprocessStarted = SystemClock.elapsedRealtimeNanos();
+            float scale = Math.min(mInputSize / (float) width, mInputSize / (float) height);
+            int resizedWidth = Math.max(1, Math.round(width * scale));
+            int resizedHeight = Math.max(1, Math.round(height * scale));
+            int padX = (mInputSize - resizedWidth) / 2;
+            int padY = (mInputSize - resizedHeight) / 2;
+
+            Utils.bitmapToMat(bitmap, mSource);
+            Imgproc.resize(mSource, mResizedRgba, new Size(resizedWidth, resizedHeight),
+                    0.0, 0.0, Imgproc.INTER_LINEAR);
+            Imgproc.cvtColor(mResizedRgba, mResizedRgb, Imgproc.COLOR_RGBA2RGB);
+            mLetterbox.create(mInputSize, mInputSize, CvType.CV_8UC3);
+            mLetterbox.setTo(new Scalar(114, 114, 114));
+            Mat region = mLetterbox.submat(new Rect(padX, padY, resizedWidth, resizedHeight));
+            try {
+                mResizedRgb.copyTo(region);
+            } finally {
+                region.release();
+            }
+            blob = Dnn.blobFromImage(mLetterbox, 1.0 / 255.0,
+                    new Size(mInputSize, mInputSize), new Scalar(0), false, false, CvType.CV_32F);
+            float preprocessMs = elapsedMs(preprocessStarted);
+
+            mNet.setInput(blob);
+            long inferenceStarted = SystemClock.elapsedRealtimeNanos();
+            output = mNet.forward();
+            float inferenceMs = elapsedMs(inferenceStarted);
+            int rowCount = (int) (output.total() / 6L);
+            rows = output.reshape(1, rowCount);
+            float[] raw = new float[rowCount * 6];
+            rows.get(0, 0, raw);
+            return decode(raw, rowCount, width, height, scale, padX, padY,
+                    confidence, preprocessMs, inferenceMs);
+        } catch (Throwable error) {
+            throw new IllegalStateException("OpenCV 5.0 DNN 推理失败：" + error.getMessage(), error);
+        } finally {
+            if (rows != null) rows.release();
+            if (output != null) output.release();
+            if (blob != null) blob.release();
+        }
+    }
+
+    private static float[] decode(float[] raw, int rowCount, int width, int height,
+                                  float scale, int padX, int padY, float confidence,
+                                  float preprocessMs, float inferenceMs) {
+        float[] packed = new float[2 + rowCount * 6];
+        packed[0] = preprocessMs;
+        packed[1] = inferenceMs;
+        int write = 2;
+        for (int row = 0; row < rowCount; row++) {
+            int base = row * 6;
+            float score = raw[base + 4];
+            if (score < confidence) continue;
+            float x1 = clamp((raw[base] - padX) / scale, 0f, width);
+            float y1 = clamp((raw[base + 1] - padY) / scale, 0f, height);
+            float x2 = clamp((raw[base + 2] - padX) / scale, 0f, width);
+            float y2 = clamp((raw[base + 3] - padY) / scale, 0f, height);
+            if (x2 <= x1 || y2 <= y1) continue;
+            packed[write++] = x1;
+            packed[write++] = y1;
+            packed[write++] = x2;
+            packed[write++] = y2;
+            packed[write++] = score;
+            packed[write++] = raw[base + 5];
+        }
+        return Arrays.copyOf(packed, write);
+    }
+
+    private static void validateThresholds(float confidence, float nmsThreshold) {
+        if (confidence < 0.0f || confidence > 1.0f) {
+            throw new IllegalArgumentException("confidence 必须在 0~1 之间");
+        }
+        if (nmsThreshold < 0.0f || nmsThreshold > 1.0f) {
+            throw new IllegalArgumentException("nms 必须在 0~1 之间");
+        }
+    }
+
+    private static float elapsedMs(long started) {
+        return (SystemClock.elapsedRealtimeNanos() - started) / 1_000_000.0f;
+    }
+
+    private static float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    public synchronized boolean isClosed() {
+        return mClosed;
+    }
+
+    @Override
+    public synchronized void close() {
+        if (mClosed) return;
+        mClosed = true;
+        mNet = null;
+        mSource.release();
+        mResizedRgba.release();
+        mResizedRgb.release();
+        mLetterbox.release();
+        mOwner.unregister(this);
+    }
+}
