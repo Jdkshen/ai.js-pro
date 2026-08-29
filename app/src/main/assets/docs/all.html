@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>综述 | Auto.js 4.1.0 文档</title>
+  <title>综述 | AI.js Pro 4.1.0 文档</title>
   <link rel="stylesheet" href="assets/fonts.css">
   <link rel="stylesheet" href="assets/style.css">
   <link rel="stylesheet" href="assets/sh.css">
@@ -13,7 +13,7 @@
     <div id="column2" class="interior">
       <div id="intro" class="interior">
         <a href="/" title="返回首页">
-          Auto.js
+          AI.js Pro
         </a>
       </div>
       <ul>
@@ -54,14 +54,14 @@
 
 <ul>
 <li><a class="nav-https-github-com-hyb1996-NoRootScriptDroid" href="https://github.com/hyb1996/NoRootScriptDroid">GitHub项目 &amp; Issue提交</a></li>
-<li><a class="nav-http-autojs-org" href="http://autojs.org">Auto.js交流社区</a></li>
+<li><a class="nav-http-autojs-org" href="http://autojs.org">AI.js Pro交流社区</a></li>
 </ul>
 
     </div>
 
     <div id="column1" data-id="all" class="interior">
       <header>
-        <h1>Auto.js 4.1.0 文档</h1>
+        <h1>AI.js Pro 4.1.0 文档</h1>
         <div id="gtoc">
           <p>
             <a href="index.html" name="toc">索引</a> |
@@ -80,7 +80,7 @@
 <li><span class="stability_undefined"><a href="#qa_1">定时任何如何获取外部参数</a></span></li>
 <li><span class="stability_undefined"><a href="#qa_2">如何把图片和脚本一起打包，或者打包多个脚本</a></span></li>
 <li><span class="stability_undefined"><a href="#qa_3">如何使打包的应用不显示主界面</a></span></li>
-<li><span class="stability_undefined"><a href="#qa_auto_js">Auto.js自带的模块和函数中没有的功能如何实现</a></span></li>
+<li><span class="stability_undefined"><a href="#qa_auto_js">AI.js Pro自带的模块和函数中没有的功能如何实现</a></span></li>
 </ul>
 </li>
 <li><span class="stability_undefined"><a href="#app_app">App</a></span><ul>
@@ -954,11 +954,11 @@
       <div id="apicontent">
         <!-- [start-include:overview.md] -->
 <h1>综述<span><a class="mark" href="#overview" id="overview">#</a></span></h1>
-<p>Auto.js使用<a href="https://developer.mozilla.org/zh-CN/docs/Web/JavaScript">JavaScript</a>作为脚本语言，目前使用<a href="https://developer.mozilla.org/zh-CN/docs/Mozilla/Projects/Rhino">Rhino 1.7.7.2</a>作为脚本引擎，支持ES5与部分ES6特性。</p>
+<p>AI.js Pro使用<a href="https://developer.mozilla.org/zh-CN/docs/Web/JavaScript">JavaScript</a>作为脚本语言，目前使用<a href="https://developer.mozilla.org/zh-CN/docs/Mozilla/Projects/Rhino">Rhino 1.7.7.2</a>作为脚本引擎，支持ES5与部分ES6特性。</p>
 <ul>
-<li>因为Auto.js是基于JavaScript的，学习Auto.js的API之前建议先学习JavaScript的基本语法和内置对象，可以使用教程前面的两个JavaScript教程链接来学习。</li>
-<li>如果您想要使用TypeScript来开发，目前已经有开发者公布了一个可以把使用TypeScript进行Auto.js开发的工具，参见<a href="https://github.com/pboymt/autojs-dev">Auto.js DevTools</a>。</li>
-<li>如果想要在电脑而不是手机上开发Auto.js，可以使用VS Code以及相应的Auto.js插件使得在电脑上编辑的脚本能推送到手机运行，参见<a href="https://github.com/hyb1996/Auto.js-VSCode-Extension">Auto.js-VSCode-Extension</a>。</li>
+<li>因为AI.js Pro是基于JavaScript的，学习AI.js Pro的API之前建议先学习JavaScript的基本语法和内置对象，可以使用教程前面的两个JavaScript教程链接来学习。</li>
+<li>如果您想要使用TypeScript来开发，目前已经有开发者公布了一个可以把使用TypeScript进行AI.js Pro开发的工具，参见<a href="https://github.com/pboymt/autojs-dev">AI.js Pro DevTools</a>。</li>
+<li>如果想要在电脑而不是手机上开发AI.js Pro，可以使用VS Code以及相应的AI.js Pro插件使得在电脑上编辑的脚本能推送到手机运行，参见<a href="https://github.com/hyb1996/Auto.js-VSCode-Extension">AI.js Pro-VSCode-Extension</a>。</li>
 </ul>
 <p>本文档的章节大致上是以模块来分的，总体上可以分成&quot;自动操作&quot;类模块(控件操作、触摸模拟、按键模拟等)和其他类模块(设备、应用、界面等)。</p>
 <p>&quot;自动操作&quot;的部分又可以大致分为基于控件和基于坐标的操作。基于坐标的操作是传统按键精灵、触摸精灵等脚本软件采用的方式，通过屏幕坐标来点击、长按指定位置模拟操作，从而到达目的。例如<code>click(100, 200)</code>, <code>press(100, 200, 500)</code>等。这种方式在游戏类脚本中比较有可行性，结合找图找色、坐标放缩功能也能达到较好的兼容性。但是，这种方式对一般软件脚本却难以达到想要的效果，而且这种方式需要安卓7.0版本以上或者root权限才能执行。所以对于一般软件脚本(例如批量添加联系人、自动提取短信验证码等等)，我们采用基于控件的模拟操作方式，结合通知事情、按键事情等达成更好的工作流。这些部分的文档参见<a href="widgets-based-automation.html">基于控件的操作</a>和<a href="coordinates-based-automation.html">基于坐标的操作</a>。</p>
@@ -978,18 +978,18 @@
 <li>threads: 多线程支持。</li>
 <li>ui: UI界面。用于显示自定义的UI界面，和用户交互。</li>
 </ul>
-<p>除此之外，Auto.js内置了对<a href="https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/Promise">Promise</a>。
+<p>除此之外，AI.js Pro内置了对<a href="https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/Promise">Promise</a>。
 <!-- [end-include:overview.md] --></p>
 <!-- [start-include:qa.md] -->
 <h1>Q &amp; A<span><a class="mark" href="#qa_q_a" id="qa_q_a">#</a></span></h1>
 <h2>如何定时运行脚本<span><a class="mark" href="#qa" id="qa">#</a></span></h2>
-<p>点击脚本右边的菜单按钮-&gt;更多-&gt;定时任务即可定时运行脚本，但是必须保持Auto.js后台运行(自启动白名单、电源管理白名单等)。同时，可以在脚本的开头使用<code>device.wakeUp()</code>来唤醒屏幕；但是，Auto.js没有解锁屏幕的功能，因此难以在有锁屏密码的设备上达到效果。</p>
+<p>点击脚本右边的菜单按钮-&gt;更多-&gt;定时任务即可定时运行脚本，但是必须保持AI.js Pro后台运行(自启动白名单、电源管理白名单等)。同时，可以在脚本的开头使用<code>device.wakeUp()</code>来唤醒屏幕；但是，AI.js Pro没有解锁屏幕的功能，因此难以在有锁屏密码的设备上达到效果。</p>
 <h2>定时任何如何获取外部参数<span><a class="mark" href="#qa_1" id="qa_1">#</a></span></h2>
 <p>如果一个脚本是用intent&quot;启动&quot;的，比如定时任务中的特定事件（网络状态变化等）触发而启动的，则可以通过<code>engines.myEngine().execArgv.intent</code>获取启动的intent，从而获取外部参数。</p>
 <h2>如何把图片和脚本一起打包，或者打包多个脚本<span><a class="mark" href="#qa_2" id="qa_2">#</a></span></h2>
 <p>如果除了单脚本以外还有其他脚本、图片、音乐等资源一起打包，则需要使用项目功能。</p>
-<p>点击Auto.js的&quot;+&quot;号，选择项目，填写项目名称、包名等信息以后，点击&quot;√&quot;即可新建一个项目。可以在项目中放多个脚本、模块、资源文件，点击项目工具栏的apk打包图标即可打包一个项目，点击工具栏可以重新配置项目。</p>
-<p>例如，主脚本要读取同一文件夹下的图片1.png，再执行找图，则可以通过<code>images.read(&quot;./1.png&quot;)</code>来读取，其中&quot;./1.png&quot;表示同一目录1.png图片；ui中的图片控件要引用同一文件夹的2.png图片则为<code>&lt;img src=&quot;file://2.png&quot;/&gt;</code>。Auto.js内置的函数和模块都支持相对路径，但是，其他情况则需要使用<code>files.path()</code>函数来把相对路径转换为绝对路径。</p>
+<p>点击AI.js Pro的&quot;+&quot;号，选择项目，填写项目名称、包名等信息以后，点击&quot;√&quot;即可新建一个项目。可以在项目中放多个脚本、模块、资源文件，点击项目工具栏的apk打包图标即可打包一个项目，点击工具栏可以重新配置项目。</p>
+<p>例如，主脚本要读取同一文件夹下的图片1.png，再执行找图，则可以通过<code>images.read(&quot;./1.png&quot;)</code>来读取，其中&quot;./1.png&quot;表示同一目录1.png图片；ui中的图片控件要引用同一文件夹的2.png图片则为<code>&lt;img src=&quot;file://2.png&quot;/&gt;</code>。AI.js Pro内置的函数和模块都支持相对路径，但是，其他情况则需要使用<code>files.path()</code>函数来把相对路径转换为绝对路径。</p>
 <h2>如何使打包的应用不显示主界面<span><a class="mark" href="#qa_3" id="qa_3">#</a></span></h2>
 <p>需要使用项目功能。新建项目后，修改项目下的<code>project.json</code>文件，增加以下条目：</p>
 <pre><code>&quot;launchConfig&quot;: {
@@ -1008,8 +1008,8 @@
 }
 </code></pre><p>&quot;launchConfig&quot;表示启动配置，&quot;hideLogs&quot;表示隐藏日志。</p>
 <p>参见项目与项目配置。</p>
-<h2>Auto.js自带的模块和函数中没有的功能如何实现<span><a class="mark" href="#qa_auto_js" id="qa_auto_js">#</a></span></h2>
-<p>由于Auto.js支持直接调用Android的API，对于Auto.js没有内置的函数，可以直接通过修改Android代码为JavaScript代码实现。例如旋转图片的Android代码为：</p>
+<h2>AI.js Pro自带的模块和函数中没有的功能如何实现<span><a class="mark" href="#qa_auto_js" id="qa_auto_js">#</a></span></h2>
+<p>由于AI.js Pro支持直接调用Android的API，对于AI.js Pro没有内置的函数，可以直接通过修改Android代码为JavaScript代码实现。例如旋转图片的Android代码为：</p>
 <pre><code>import android.graphics.Bitmap;
 import android.graphics.Matrix;
 
@@ -1045,32 +1045,32 @@ function rotate(src, degrees, px, py){
 <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type" class="type">&lt;number&gt;</a></li>
 </ul>
 </div><p>当前软件版本号，整数值。例如160, 256等。</p>
-<p>如果在Auto.js中运行则为Auto.js的版本号；在打包的软件中则为打包软件的版本号。</p>
+<p>如果在AI.js Pro中运行则为AI.js Pro的版本号；在打包的软件中则为打包软件的版本号。</p>
 <pre><code>toastLog(app.versionCode);
 </code></pre><h2>app.versionName<span><a class="mark" href="#app_app_versionname" id="app_app_versionname">#</a></span></h2>
 <div class="signature"><ul>
 <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a></li>
 </ul>
 </div><p>当前软件的版本名称，例如&quot;3.0.0 Beta&quot;。</p>
-<p>如果在Auto.js中运行则为Auto.js的版本名称；在打包的软件中则为打包软件的版本名称。</p>
+<p>如果在AI.js Pro中运行则为AI.js Pro的版本名称；在打包的软件中则为打包软件的版本名称。</p>
 <pre><code>toastLog(app.verionName);
 </code></pre><h2>app.autojs.versionCode<span><a class="mark" href="#app_app_autojs_versioncode" id="app_app_autojs_versioncode">#</a></span></h2>
 <div class="signature"><ul>
 <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type" class="type">&lt;number&gt;</a></li>
 </ul>
-</div><p>Auto.js版本号，整数值。例如160, 256等。</p>
+</div><p>AI.js Pro版本号，整数值。例如160, 256等。</p>
 <h2>app.autojs.versionName<span><a class="mark" href="#app_app_autojs_versionname" id="app_app_autojs_versionname">#</a></span></h2>
 <div class="signature"><ul>
 <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a></li>
 </ul>
-</div><p>Auto.js版本名称，例如&quot;3.0.0 Beta&quot;。</p>
+</div><p>AI.js Pro版本名称，例如&quot;3.0.0 Beta&quot;。</p>
 <h2>app.launchApp(appName)<span><a class="mark" href="#app_app_launchapp_appname" id="app_app_launchapp_appname">#</a></span></h2>
 <div class="signature"><ul>
 <li><code>appName</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 应用名称</li>
 </ul>
 </div><p>通过应用名称启动应用。如果该名称对应的应用不存在，则返回false; 否则返回true。如果该名称对应多个应用，则只启动其中某一个。</p>
 <p>该函数也可以作为全局函数使用。</p>
-<pre><code>launchApp(&quot;Auto.js&quot;);
+<pre><code>launchApp(&quot;AI.js Pro&quot;);
 </code></pre><h2>app.launch(packageName)<span><a class="mark" href="#app_app_launch_packagename" id="app_app_launch_packagename">#</a></span></h2>
 <div class="signature"><ul>
 <li><code>packageName</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 应用包名</li>
@@ -1161,7 +1161,7 @@ app.sendEmail({
 </ul>
 </li>
 </ul>
-</div><p>启动Auto.js的特定界面。该函数在Auto.js内运行则会打开Auto.js内的界面，在打包应用中运行则会打开打包应用的相应界面。</p>
+</div><p>启动AI.js Pro的特定界面。该函数在AI.js Pro内运行则会打开AI.js Pro内的界面，在打包应用中运行则会打开打包应用的相应界面。</p>
 <pre><code>app.startActivity(&quot;console&quot;);
 </code></pre><h1>进阶: 意图Intent<span><a class="mark" href="#app_intent" id="app_intent">#</a></span></h1>
 <p>Intent(意图) 是一个消息传递对象，您可以使用它从其他应用组件请求操作。尽管 Intent 可以通过多种方式促进组件之间的通信，但其基本用例主要包括以下三个：</p>
@@ -1221,7 +1221,7 @@ var i = app.intent({
 });
 context.startActivity(i);
 </code></pre><p>需要注意的是，除非应用专门暴露Activity出来，否则在没有root权限的情况下使用intent是无法跳转到特定Activity、应用的特定界面的。例如我们能通过Intent跳转到QQ的分享界面，是因为QQ对外暴露了分享的Activity；而在没有root权限的情况下，我们无法通过intent跳转到QQ的设置界面，因为QQ并没有暴露这个Activity。</p>
-<p>但如果有root权限，则在intent的参数加上<code>&quot;root&quot;: true</code>即可。例如使用root权限跳转到Auto.js的设置界面为：</p>
+<p>但如果有root权限，则在intent的参数加上<code>&quot;root&quot;: true</code>即可。例如使用root权限跳转到AI.js Pro的设置界面为：</p>
 <pre><code>app.startActivity({
     packageName: &quot;org.autojs.autojs&quot;,
     className: &quot;org.autojs.autojs.ui.settings.SettingsActivity_&quot;,
@@ -1258,7 +1258,7 @@ context.startActivity(i);
 </ul>
 </li>
 </ul>
-<p>发送以上特定名称的广播可以触发Auto.js的布局分析，方便脚本调试。这些广播在Auto.js发送才有效，在打包的脚本上运行将没有任何效果。</p>
+<p>发送以上特定名称的广播可以触发AI.js Pro的布局分析，方便脚本调试。这些广播在AI.js Pro发送才有效，在打包的脚本上运行将没有任何效果。</p>
 <pre><code>app.sendBroadcast(&quot;inspect_layout_bounds&quot;);
 </code></pre><h2>app.intentToShell(options)<span><a class="mark" href="#app_app_intenttoshell_options" id="app_app_intenttoshell_options">#</a></span></h2>
 <p><strong>[v4.1.0新增]</strong></p>
@@ -1855,7 +1855,7 @@ sleep(500);
 </ul>
 </div><p>保持屏幕常亮。</p>
 <p>此函数无法阻止用户使用锁屏键等正常关闭屏幕，只能使得设备在无人操作的情况下保持屏幕常亮；同时，如果此函数调用时屏幕没有点亮，则会唤醒屏幕。</p>
-<p>在某些设备上，如果不加参数timeout，只能在Auto.js的界面保持屏幕常亮，在其他界面会自动失效，这是因为设备的省电策略造成的。因此，建议使用比较长的时长来代替&quot;一直保持屏幕常亮&quot;的功能，例如<code>device.keepScreenOn(3600 * 1000)</code>。</p>
+<p>在某些设备上，如果不加参数timeout，只能在AI.js Pro的界面保持屏幕常亮，在其他界面会自动失效，这是因为设备的省电策略造成的。因此，建议使用比较长的时长来代替&quot;一直保持屏幕常亮&quot;的功能，例如<code>device.keepScreenOn(3600 * 1000)</code>。</p>
 <p>可以使用<code>device.cancelKeepingAwake()</code>来取消屏幕常亮。</p>
 <pre><code>//一直保持屏幕常亮
 device.keepScreenOn()
@@ -2676,7 +2676,7 @@ events.onNotification(function(notification){
 </ul>
 </li>
 </ul>
-</div><p>当有应用发出toast(气泡消息)时会触发该事件。但Auto.js软件本身的toast除外。</p>
+</div><p>当有应用发出toast(气泡消息)时会触发该事件。但AI.js Pro软件本身的toast除外。</p>
 <p>例如，要记录发出所有toast的应用：</p>
 <pre><code>events.observeToast();
 events.onToast(function(toast){
@@ -3347,7 +3347,7 @@ log(jsFiles);
 <li>exports</li>
 <li>module</li>
 <li>require()
-以下的对象是特定于 Auto.js 的。 有些内置对象是 JavaScript 语言本身的一部分，它们也是全局的。</li>
+以下的对象是特定于 AI.js Pro 的。 有些内置对象是 JavaScript 语言本身的一部分，它们也是全局的。</li>
 </ul>
 <p>一些模块中的函数为了使用方便也可以直接全局使用，这些函数在此不再赘述。例如timers模块的setInterval, setTimeout等函数。</p>
 <h2>sleep(n)<span><a class="mark" href="#globals_sleep_n" id="globals_sleep_n">#</a></span></h2>
@@ -3455,12 +3455,12 @@ for(var i = 0; i &lt; 100; i++){
 <p> Android 4.3：  18</p>
 <h2>requiresAutojsVersion(version)<span><a class="mark" href="#globals_requiresautojsversion_version" id="globals_requiresautojsversion_version">#</a></span></h2>
 <div class="signature"><ul>
-<li><code>version</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> | <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type" class="type">&lt;number&gt;</a> Auto.js的版本或版本号</li>
+<li><code>version</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> | <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type" class="type">&lt;number&gt;</a> AI.js Pro的版本或版本号</li>
 </ul>
-</div><p>表示此脚本需要Auto.js版本达到指定版本才能运行。例如<code>requiresAutojsVersion(&quot;3.0.0 Beta&quot;)</code>表示脚本需要在Auto.js 3.0.0 Beta以及以上运行。</p>
-<p>调用该函数时会判断运行脚本的Auto.js的版本号，如果没有达到要求则抛出异常。</p>
+</div><p>表示此脚本需要AI.js Pro版本达到指定版本才能运行。例如<code>requiresAutojsVersion(&quot;3.0.0 Beta&quot;)</code>表示脚本需要在AI.js Pro 3.0.0 Beta以及以上运行。</p>
+<p>调用该函数时会判断运行脚本的AI.js Pro的版本号，如果没有达到要求则抛出异常。</p>
 <p>version参数可以是整数表示版本号，例如<code>requiresAutojsVersion(250)</code>；也可以是字符串格式表示的版本，例如&quot;3.0.0 Beta&quot;, &quot;3.1.0 Alpha4&quot;, &quot;3.2.0&quot;等。</p>
-<p>可以通过<code>app.autojs.versionCode</code>和<code>app.autojs.versionName</code>获取当前的Auto.js版本号和版本。</p>
+<p>可以通过<code>app.autojs.versionCode</code>和<code>app.autojs.versionName</code>获取当前的AI.js Pro版本号和版本。</p>
 <h2>runtime.requestPermissions(permissions)<span><a class="mark" href="#globals_runtime_requestpermissions_permissions" id="globals_runtime_requestpermissions_permissions">#</a></span></h2>
 <div class="signature"><ul>
 <li><code>permissions</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array" class="type">&lt;Array&gt;</a> 权限的字符串数组</li>
@@ -3468,12 +3468,12 @@ for(var i = 0; i &lt; 100; i++){
 </div><p>动态申请安卓的权限。例如：</p>
 <pre><code>//请求GPS权限
 runtime.requestPermissions([&quot;access_fine_location&quot;]);
-</code></pre><p>尽管安卓有很多权限，但必须写入Manifest才能动态申请，为了防止权限的滥用，目前Auto.js只能额外申请两个权限：</p>
+</code></pre><p>尽管安卓有很多权限，但必须写入Manifest才能动态申请，为了防止权限的滥用，目前AI.js Pro只能额外申请两个权限：</p>
 <ul>
 <li><code>access_fine_location</code> GPS权限</li>
 <li><code>record_audio</code> 录音权限</li>
 </ul>
-<p>您可以通过APK编辑器来增加Auto.js以及Auto.js打包的应用的权限。</p>
+<p>您可以通过APK编辑器来增加AI.js Pro以及AI.js Pro打包的应用的权限。</p>
 <p>安卓所有的权限列表参见<a href="https://developer.android.com/guide/topics/permissions/overview">Permissions Overview</a>。（并没有用）</p>
 <h2>runtime.loadJar(path)<span><a class="mark" href="#globals_runtime_loadjar_path" id="globals_runtime_loadjar_path">#</a></span></h2>
 <div class="signature"><ul>
@@ -3697,7 +3697,7 @@ for(var headerName in res.headers){
 </div><!-- [end-include:http.md] -->
 <!-- [start-include:images.md] -->
 <h1>colors<span><a class="mark" href="#images_colors" id="images_colors">#</a></span></h1>
-<div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>在Auto.js有两种方式表示一个颜色。</p>
+<div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>在AI.js Pro有两种方式表示一个颜色。</p>
 <p>一种是使用一个字符串&quot;#AARRGGBB&quot;或&quot;#RRGGBB&quot;，其中 AA 是Alpha通道(透明度)的值，RR 是R通道(红色)的值，GG 是G通道(绿色)的值，BB是B通道(蓝色)的值。例如&quot;#ffffff&quot;表示白色, &quot;#7F000000&quot;表示半透明的黑色。</p>
 <p>另一种是使用一个16进制的&quot;32位整数&quot; 0xAARRGGBB 来表示一个颜色，例如 <code>0xFF112233</code>表示颜色&quot;#112233&quot;, <code>0x11223344</code>表示颜色&quot;#11223344&quot;。</p>
 <p>可以通过<code>colors.toString()</code>把颜色整数转换为字符串，通过<code>colors.parseColor()</code>把颜色字符串解析为颜色整数。</p>
@@ -3805,7 +3805,7 @@ log(colors.equals(0xFF112233, 0xFF223344));
 <h1>Images<span><a class="mark" href="#images_images" id="images_images">#</a></span></h1>
 <div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>images模块提供了一些手机设备中常见的图片处理函数，包括截图、读写图片、图片剪裁、旋转、二值化、找色找图等。</p>
 <p>该模块分为两个部分，找图找色部分和图片处理部分。</p>
-<p>需要注意的是，image对象创建后尽量在不使用时进行回收，同时避免循环创建大量图片。因为图片是一种占用内存比较大的资源，尽管Auto.js通过各种方式（比如图片缓存机制、垃圾回收时回收图片、脚本结束时回收所有图片）尽量降低图片资源的泄漏和内存占用，但是糟糕的代码仍然可以占用大量内存。</p>
+<p>需要注意的是，image对象创建后尽量在不使用时进行回收，同时避免循环创建大量图片。因为图片是一种占用内存比较大的资源，尽管AI.js Pro通过各种方式（比如图片缓存机制、垃圾回收时回收图片、脚本结束时回收所有图片）尽量降低图片资源的泄漏和内存占用，但是糟糕的代码仍然可以占用大量内存。</p>
 <p>Image对象通过调用<code>recycle()</code>函数来回收。例如：</p>
 <pre><code>// 读取图片
 var img = images.read(&quot;./1.png&quot;);
@@ -4705,7 +4705,7 @@ sleep(media.getMusicDuration() - 30 * 1000);
 <!-- [end-include:media.md] --></p>
 <!-- [start-include:modules.md] -->
 <h1>module (模块)<span><a class="mark" href="#modules_module" id="modules_module">#</a></span></h1>
-<div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>Auto.js 有一个简单的模块加载系统。 在 Auto.js 中，文件和模块是一一对应的（每个文件被视为一个独立的模块）。</p>
+<div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>AI.js Pro 有一个简单的模块加载系统。 在 AI.js Pro 中，文件和模块是一一对应的（每个文件被视为一个独立的模块）。</p>
 <p>例子，假设有一个名为 foo.js 的文件：</p>
 <pre><code>var circle = require(&#39;circle.js&#39;);
 console.log(&quot;半径为 4 的圆的面积是 %d&quot;, circle.area(4));
@@ -4820,7 +4820,7 @@ module.exports = function(width) {
     //不管是如何窗口，都返回true，表示在该窗口中搜索
     return true;
 });
-</code></pre><p>又例如，当前使用了分屏功能，屏幕上有Auto.js和QQ两个应用，但我们只想选择器对QQ界面进行搜索，则：</p>
+</code></pre><p>又例如，当前使用了分屏功能，屏幕上有AI.js Pro和QQ两个应用，但我们只想选择器对QQ界面进行搜索，则：</p>
 <pre><code>auto.setWindowFilter(function(window){
     // 对于应用窗口，他的title属性就是应用的名称，因此可以通过title属性来判断一个应用
     return window.title == &quot;QQ&quot;;
@@ -4906,7 +4906,7 @@ module.exports = function(width) {
 <pre><code>var sendButton = text(&quot;发送&quot;).findOne();
 sendButton.click();
 </code></pre><p>在这个例子中, <code>text(&quot;发送&quot;)</code>表示一个条件(文本属性为&quot;发送&quot;)，<code>findOne()</code>表示基于这个条件找到一个符合条件的控件，从而我们可以得到发送按钮sendButton，再执行<code>sendButton.click()</code>即可点击&quot;发送&quot;按钮。</p>
-<p>用文本属性来定位按钮控件、文本控件通常十分有效。但是，如果一个控件是图片控件，比如Auto.js主界面右上角的搜索图标，他没有文本属性，这时需要其他属性来定位他。我们如何查看他有什么属性呢？首先打开悬浮窗和无障碍服务，点击蓝色的图标(布局分析), 可以看到以下界面：</p>
+<p>用文本属性来定位按钮控件、文本控件通常十分有效。但是，如果一个控件是图片控件，比如AI.js Pro主界面右上角的搜索图标，他没有文本属性，这时需要其他属性来定位他。我们如何查看他有什么属性呢？首先打开悬浮窗和无障碍服务，点击蓝色的图标(布局分析), 可以看到以下界面：</p>
 <p>之后我们点击搜索图标，可以看到他有以下属性：</p>
 <p>我们注意到这个图标的desc(描述)属性为&quot;搜索&quot;，那么我们就可以通过desc属性来定位这个控件，得到点击搜索图标的代码为:</p>
 <pre><code>desc(&quot;搜索&quot;).findOne().click();
@@ -4998,7 +4998,7 @@ sendButton.click();
 <li><code>prefix</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 前缀</li>
 </ul>
 </div><p>为当前选择器附加控件&quot;text需要以prefix开头&quot;的筛选条件。</p>
-<p>这也是一个比较有用的条件，例如要找出Auto.js脚本列表中名称以&quot;QQ&quot;开头的脚本的代码为<code>textStartsWith(&quot;QQ&quot;).find()</code>。</p>
+<p>这也是一个比较有用的条件，例如要找出AI.js Pro脚本列表中名称以&quot;QQ&quot;开头的脚本的代码为<code>textStartsWith(&quot;QQ&quot;).find()</code>。</p>
 <h2>UiSelector.textEndsWith(suffix)<span><a class="mark" href="#widgets_based_automation_uiselector_textendswith_suffix" id="widgets_based_automation_uiselector_textendswith_suffix">#</a></span></h2>
 <div class="signature"><ul>
 <li>suffix <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 后缀</li>
@@ -5213,7 +5213,7 @@ w.click();
 <li><code>b</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Boolean_type" class="type">&lt;Boolean&gt;</a> 表示控件是否可滑动</li>
 </ul>
 </div><p>为当前选择器附加控件是否可滑动的条件。滑动包括上下滑动和左右滑动。</p>
-<p>可以用这个条件来寻找可滑动控件来滑动界面。例如滑动Auto.js的脚本列表的代码为:</p>
+<p>可以用这个条件来寻找可滑动控件来滑动界面。例如滑动AI.js Pro的脚本列表的代码为:</p>
 <pre><code>className(&quot;android.support.v7.widget.RecyclerView&quot;).scrollable().findOne().scrollForward();
 //或者classNameEndsWith(&quot;RecyclerView&quot;).scrollable().findOne().scrollForward();
 </code></pre><h2>UiSelector.editable([b = true])<span><a class="mark" href="#widgets_based_automation_uiselector_editable_b_true" id="widgets_based_automation_uiselector_editable_b_true">#</a></span></h2>
@@ -5242,8 +5242,8 @@ w.click();
 </div><p>根据当前的选择器所确定的筛选条件，对屏幕上的控件进行搜索，直到屏幕上出现满足条件的一个控件为止，并返回该控件；如果在timeout毫秒的时间内没有找到符合条件的控件，则终止搜索并返回<code>null</code>。</p>
 <p>该函数类似于不加参数的<code>findOne()</code>，只不过加上了时间限制。</p>
 <p>示例：</p>
-<pre><code>//启动Auto.js
-launchApp(&quot;Auto.js&quot;);
+<pre><code>//启动AI.js Pro
+launchApp(&quot;AI.js Pro&quot;);
 //在6秒内找出日志图标的控件
 var w = id(&quot;action_log&quot;).findOne(6000);
 //如果找到控件则点击
@@ -5436,7 +5436,7 @@ for(var i = 0; i &lt; list.childCount(); i++){
 </ul>
 </div><p>返回控件在屏幕上的范围，其值是一个<a href="https://hyb1996.github.io/AutoJs-Docs/widgets-based-automation.html#widgets_based_automation_rect">Rect</a>对象。</p>
 <p>示例：</p>
-<pre><code>var b = text(&quot;Auto.js&quot;).findOne().bounds();
+<pre><code>var b = text(&quot;AI.js Pro&quot;).findOne().bounds();
 toast(&quot;控件在屏幕上的范围为&quot; + b);
 </code></pre><p>如果一个控件本身无法通过<code>click()</code>点击，那么我们可以利用<code>bounds()</code>函数获取其坐标，再利用坐标点击。例如：</p>
 <pre><code>var b = desc(&quot;打开侧拉菜单&quot;).findOne().bounds();
@@ -5844,7 +5844,7 @@ setTimeout(()=&gt;{
 <!-- [start-include:shell.md] -->
 <p>shell即Unix Shell，在类Unix系统提供与操作系统交互的一系列命令。</p>
 <p>很多程序可以用来执行shell命令，例如终端模拟器。</p>
-<p>在Auto.js大致等同于用adb执行命令&quot;adb shell&quot;。其实现包括两种方式：</p>
+<p>在AI.js Pro大致等同于用adb执行命令&quot;adb shell&quot;。其实现包括两种方式：</p>
 <ul>
 <li>通过<code>java.lang.Runtime.exec</code>执行(shell, Tap, Home等函数)</li>
 <li>通过内嵌终端模拟器执行(RootAutomator, Shell等对象)</li>
@@ -6354,8 +6354,8 @@ thread.setTimeout(function(){
 <blockquote>
 <p>线程安全是编程中的术语，指某个函数、函数库在多线程环境中被调用时，能够正确地处理多个线程之间的共享变量，使程序功能正确完成。</p>
 </blockquote>
-<p>在Auto.js中，线程间变量在符合JavaScript变量作用域规则的前提下是共享的，例如全局变量在所有线程都能访问，并且保证他们在所有线程的可见性。但是，不保证任何操作的原子性。例如经典的自增&quot;i++&quot;将不是原子性操作。</p>
-<p>Rhino和Auto.js提供了一些简单的设施来解决简单的线程安全问题，如锁<code>threads.lock()</code>, 函数同步锁<code>sync()</code>, 整数原子变量<code>threads.atomic()</code>等。</p>
+<p>在AI.js Pro中，线程间变量在符合JavaScript变量作用域规则的前提下是共享的，例如全局变量在所有线程都能访问，并且保证他们在所有线程的可见性。但是，不保证任何操作的原子性。例如经典的自增&quot;i++&quot;将不是原子性操作。</p>
+<p>Rhino和AI.js Pro提供了一些简单的设施来解决简单的线程安全问题，如锁<code>threads.lock()</code>, 函数同步锁<code>sync()</code>, 整数原子变量<code>threads.atomic()</code>等。</p>
 <p>例如，对于多线程共享下的整数的自增操作(自增操作会导致问题，是因为自增操作实际上为<code>i = i + 1</code>，也就是先读取i的值, 把他加1, 再赋值给i, 如果两个线程同时进行自增操作，可能出现i的值只增加了1的情况)，应该使用<code>threads.atomic()</code>函数来新建一个整数原子变量，或者使用锁<code>threads.lock()</code>来保证操作的原子性，或者用<code>sync()</code>来增加同步锁。</p>
 <p>线程不安全的代码如下：</p>
 <pre><code>var i = 0;
@@ -6454,7 +6454,7 @@ var syncAdd = sync(add);
 syncAdd(10);
 toast(i);
 </code></pre><h1>线程通信<span><a class="mark" href="#threads_1" id="threads_1">#</a></span></h1>
-<p>Auto.js提供了一些简单的设施来支持简单的线程通信。<code>threads.disposable()</code>用于一个线程等待另一个线程的(一次性)结果，同时<code>Lock.newCondition()</code>提供了Condition对象用于一般的线程通信(await, signal)。另外，<code>events</code>模块也可以用于线程通信，通过指定<code>EventEmiiter</code>的回调执行的线程来实现。</p>
+<p>AI.js Pro提供了一些简单的设施来支持简单的线程通信。<code>threads.disposable()</code>用于一个线程等待另一个线程的(一次性)结果，同时<code>Lock.newCondition()</code>提供了Condition对象用于一般的线程通信(await, signal)。另外，<code>events</code>模块也可以用于线程通信，通过指定<code>EventEmiiter</code>的回调执行的线程来实现。</p>
 <p>使用<code>threads.disposable()</code>可以简单地等待和获取某个线程的执行结果。例如要等待某个线程计算&quot;1+.....+10000&quot;:</p>
 <pre><code>var sum = threads.disposable();
 //启动子线程计算
@@ -6511,7 +6511,7 @@ sum.on(&#39;result&#39;, function(s){
 <!-- [start-include:timers.md] -->
 <h1>Timers<span><a class="mark" href="#timers_timers" id="timers_timers">#</a></span></h1>
 <div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>timers 模块暴露了一个全局的 API，用于在某个未来时间段调用调度函数。 因为定时器函数是全局的，所以使用该 API 无需调用 timers.<em>*</em></p>
-<p>Auto.js 中的计时器函数实现了与 Web 浏览器提供的定时器类似的 API，除了它使用了一个不同的内部实现，它是基于 Android Looper-Handler消息循环机制构建的。其实现机制与Node.js比较相似。</p>
+<p>AI.js Pro 中的计时器函数实现了与 Web 浏览器提供的定时器类似的 API，除了它使用了一个不同的内部实现，它是基于 Android Looper-Handler消息循环机制构建的。其实现机制与Node.js比较相似。</p>
 <p>例如，要在5秒后发出消息&quot;hello&quot;:</p>
 <pre><code>setTimeout(function(){
     toast(&quot;hello&quot;)
@@ -6545,7 +6545,7 @@ while(true);
 <li><code>...args</code> <span class="type">&lt;any&gt;</span> 当调用 callback 时要传入的可选参数。</li>
 </ul>
 </div><p>预定在 delay 毫秒之后执行的单次 callback。 返回一个用于 clearTimeout() 的 id。</p>
-<p>callback 可能不会精确地在 delay 毫秒被调用。 Auto.js 不能保证回调被触发的确切时间，也不能保证它们的顺序。 回调会在尽可能接近所指定的时间上调用。</p>
+<p>callback 可能不会精确地在 delay 毫秒被调用。 AI.js Pro 不能保证回调被触发的确切时间，也不能保证它们的顺序。 回调会在尽可能接近所指定的时间上调用。</p>
 <p>当 delay 小于 0 时，delay 会被设为 0。</p>
 <h2>setImmediate(callback[, ...args])<span><a class="mark" href="#timers_setimmediate_callback_args" id="timers_setimmediate_callback_args">#</a></span></h2>
 <div class="signature"><ul>
@@ -6967,7 +6967,7 @@ ui.layout(
 <p>这里只介绍他的主要方法和属性，如果要查看他的所有方法和属性，阅读<a href="http://www.zhdoc.net/android/reference/android/widget/ImageView.html">ImageView</a>。</p>
 <h2>src<span><a class="mark" href="#ui_src" id="ui_src">#</a></span></h2>
 <p>使用一个Uri指定图片的来源。可以是图片的地址(<a href="http://....)，本地路径(file://....)或者base64数据(&quot;data:image/png;base64,...&quot;)。">http://....)，本地路径(file://....)或者base64数据(&quot;data:image/png;base64,...&quot;)。</a></p>
-<p>如果使用图片地址或本地路径，Auto.js会自动使用适当的缓存来储存这些图片，减少下次加载的时间。</p>
+<p>如果使用图片地址或本地路径，AI.js Pro会自动使用适当的缓存来储存这些图片，减少下次加载的时间。</p>
 <p>例如，显示百度的logo:</p>
 <pre><code>&quot;ui&quot;;
 ui.layout(
@@ -7001,7 +7001,7 @@ ui.layout(
 <p>默认的scaleType为<code>fitCenter</code>；除此之外最常用的是<code>fitXY</code>， 他能使图片放缩到控件一样的大小，但图片可能会变形。</p>
 <h2>radius<span><a class="mark" href="#ui_radius" id="ui_radius">#</a></span></h2>
 <p>图片控件的半径。如果设置为控件宽高的一半并且控件的宽高相同则图片将剪切为圆形显示；否则图片为圆角矩形显示，半径即为四个圆角的半径，也可以通过<code>radiusTopLeft</code>, <code>radiusTopRight</code>, <code>radiusBottomLeft</code>, <code>radiusBottomRight</code>等属性分别设置四个圆角的半径。</p>
-<p>例如，圆角矩形的Auto.js图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
+<p>例如，圆角矩形的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
 <p>有关该属性的单位，参见<a href="#ui_尺寸的单位_Dimension">尺寸的单位: Dimension</a>。</p>
 <h2>radiusTopLeft<span><a class="mark" href="#ui_radiustopleft" id="ui_radiustopleft">#</a></span></h2>
 <p>图片控件的左上角圆角的半径。有关该属性的单位，参见<a href="#ui_尺寸的单位_Dimension">尺寸的单位: Dimension</a>。</p>
@@ -7013,12 +7013,12 @@ ui.layout(
 <p>图片控件的右下角圆角的半径。有关该属性的单位，参见<a href="#ui_尺寸的单位_Dimension">尺寸的单位: Dimension</a>。</p>
 <h2>borderWidth<span><a class="mark" href="#ui_borderwidth" id="ui_borderwidth">#</a></span></h2>
 <p>图片控件的边框宽度。用于在图片外面显示一个边框，边框会随着图片控件的外形(圆角等)改变而相应变化。
-例如, 圆角矩形带灰色边框的Auto.js图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; borderWidth=&quot;5&quot; borderColor=&quot;gray&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
+例如, 圆角矩形带灰色边框的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; borderWidth=&quot;5&quot; borderColor=&quot;gray&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
 <h2>borderColor<span><a class="mark" href="#ui_bordercolor" id="ui_bordercolor">#</a></span></h2>
 <p>图片控件的边框颜色。</p>
 <h2>circle<span><a class="mark" href="#ui_circle" id="ui_circle">#</a></span></h2>
 <p>指定该图片控件的图片是否剪切为圆形显示。如果为<code>true</code>，则图片控件会使其宽高保持一致(如果宽高不一致，则保持高度等于宽度)并使圆形的半径为宽度的一半。</p>
-<p>例如，圆形的Auto.js图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; circle=&quot;true&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
+<p>例如，圆形的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; circle=&quot;true&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
 <h1>垂直布局: vertical<span><a class="mark" href="#ui_vertical" id="ui_vertical">#</a></span></h1>
 <p>垂直布局是一种比较简单的布局，会把在它里面的控件按照垂直方向依次摆放，如下图所示：</p>
 <p>垂直布局:</p>

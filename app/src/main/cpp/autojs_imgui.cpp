@@ -434,15 +434,15 @@ void drawTopBar(float visualSection) {
     ImGui::SameLine(0.0f, 18.0f*gUiScale);
     ImGui::SetCursorPosY(toolbarY + 2.0f * gUiScale);
     ImGui::SetWindowFontScale(1.55f);
-    ImGui::TextUnformatted("Auto.js Pro");
+    ImGui::TextUnformatted("AI.js Pro");
     ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(),ImGui::GetFontSize(),
                                         ImVec2(ImGui::GetItemRectMin().x+0.45f*gUiScale,
                                                ImGui::GetItemRectMin().y),
-                                        IM_COL32(245,245,245,245),"Auto.js Pro");
+                                        IM_COL32(245,245,245,245),"AI.js Pro");
     ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(),ImGui::GetFontSize(),
                                         ImVec2(ImGui::GetItemRectMin().x,
                                                ImGui::GetItemRectMin().y+0.45f*gUiScale),
-                                        IM_COL32(245,245,245,210),"Auto.js Pro");
+                                        IM_COL32(245,245,245,210),"AI.js Pro");
     ImGui::SetWindowFontScale(1.0f);
 
     const float buttonWidth = 40.0f * gUiScale;
@@ -1053,7 +1053,7 @@ void drawPlugins(bool applyScroll) {
     }
     if(gPluginEntries.empty()){
         ImGui::SetCursorPos(ImVec2(18*gUiScale,24*gUiScale));
-        ImGui::TextDisabled(u8"没有检测到 Auto.js 插件");
+        ImGui::TextDisabled(u8"没有检测到 AI.js Pro 插件");
     }
     ImGui::PopStyleVar();
     ImGui::EndChild();
@@ -1259,7 +1259,7 @@ void drawWorkspace(int width, int height) {
                                    ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoBringToFrontOnFocus;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("Auto.js ImGui Workspace", nullptr, flags);
+    ImGui::Begin("AI.js Pro ImGui Workspace", nullptr, flags);
     ImGui::PopStyleVar();
 
     const float pageWidth = static_cast<float>(width);

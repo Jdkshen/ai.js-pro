@@ -42,7 +42,7 @@
                 android:padding="8dp"
                 android:textColor="@android:color/black"
                 android:textSize="17sp"
-                tools:text="Hello, Auto.js"/>
+                tools:text="Hello, AI.js Pro"/>
 
         </LinearLayout>
 

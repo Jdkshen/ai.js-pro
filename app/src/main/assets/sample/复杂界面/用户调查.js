@@ -3,7 +3,7 @@
 ui.layout(
     <vertical>
         <text textSize="18sp" textColor="#000000" margin="20" textStyle="bold">
-            关于Auto.js的用户调查
+            关于AI.js Pro的用户调查
         </text>
         <ScrollView>
             <vertical>
@@ -16,7 +16,7 @@ ui.layout(
                     <radio text="用过，感觉不好用"/>
                     <radio text="没有Root权限无法使用"/>
                 </radiogroup>
-                <text textSize="16sp" margin="8">3. 您使用Auto.js通常用于做什么?(多选)</text>
+                <text textSize="16sp" margin="8">3. 您使用AI.js Pro通常用于做什么?(多选)</text>
                 <checkbox text="游戏辅助" marginLeft="16"/>
                 <checkbox text="点赞" marginLeft="16"/>
                 <checkbox text="日常生活工作辅助" marginLeft="16"/>
@@ -33,9 +33,9 @@ ui.layout(
                     <radio/>
                     <img w="100" h="100" margin="0 16" src="http://www.autojs.org/assets/uploads/files/1511945512596-autojs_logo.png"/>
                 </radiogroup>
-                <text textSize="16sp" margin="8">5. 您是什么时候开始使用Auto.js的呢?</text>
+                <text textSize="16sp" margin="8">5. 您是什么时候开始使用AI.js Pro的呢?</text>
                 <datepicker margin="4 16" datePickerMode="spinner"/>
-                <text textSize="16sp" margin="8">6. 您用过下面这个Auto.js的论坛吗?</text>
+                <text textSize="16sp" margin="8">6. 您用过下面这个AI.js Pro的论坛吗?</text>
                 <webview id="webview" h="300" margin="0 16"/>
                 <radiogroup marginLeft="16" marginTop="16">
                     <radio text="没有用过"/>

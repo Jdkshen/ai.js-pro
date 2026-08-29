@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>colors | Auto.js 4.1.0 文档</title>
+  <title>colors | AI.js Pro 4.1.0 文档</title>
   <link rel="stylesheet" href="assets/fonts.css">
   <link rel="stylesheet" href="assets/style.css">
   <link rel="stylesheet" href="assets/sh.css">
@@ -13,7 +13,7 @@
     <div id="column2" class="interior">
       <div id="intro" class="interior">
         <a href="/" title="返回首页">
-          Auto.js
+          AI.js Pro
         </a>
       </div>
       <ul>
@@ -54,14 +54,14 @@
 
 <ul>
 <li><a class="nav-https-github-com-hyb1996-NoRootScriptDroid" href="https://github.com/hyb1996/NoRootScriptDroid">GitHub项目 &amp; Issue提交</a></li>
-<li><a class="nav-http-autojs-org" href="http://autojs.org">Auto.js交流社区</a></li>
+<li><a class="nav-http-autojs-org" href="http://autojs.org">AI.js Pro交流社区</a></li>
 </ul>
 
     </div>
 
     <div id="column1" data-id="images" class="interior">
       <header>
-        <h1>Auto.js 4.1.0 文档</h1>
+        <h1>AI.js Pro 4.1.0 文档</h1>
         <div id="gtoc">
           <p>
             <a href="index.html" name="toc">索引</a> |
@@ -171,7 +171,7 @@
 
       <div id="apicontent">
         <h1>colors<span><a class="mark" href="#images_colors" id="images_colors">#</a></span></h1>
-<div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>在Auto.js有两种方式表示一个颜色。</p>
+<div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>在AI.js Pro有两种方式表示一个颜色。</p>
 <p>一种是使用一个字符串&quot;#AARRGGBB&quot;或&quot;#RRGGBB&quot;，其中 AA 是Alpha通道(透明度)的值，RR 是R通道(红色)的值，GG 是G通道(绿色)的值，BB是B通道(蓝色)的值。例如&quot;#ffffff&quot;表示白色, &quot;#7F000000&quot;表示半透明的黑色。</p>
 <p>另一种是使用一个16进制的&quot;32位整数&quot; 0xAARRGGBB 来表示一个颜色，例如 <code>0xFF112233</code>表示颜色&quot;#112233&quot;, <code>0x11223344</code>表示颜色&quot;#11223344&quot;。</p>
 <p>可以通过<code>colors.toString()</code>把颜色整数转换为字符串，通过<code>colors.parseColor()</code>把颜色字符串解析为颜色整数。</p>
@@ -279,7 +279,7 @@ log(colors.equals(0xFF112233, 0xFF223344));
 <h1>Images<span><a class="mark" href="#images_images" id="images_images">#</a></span></h1>
 <div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>images模块提供了一些手机设备中常见的图片处理函数，包括截图、读写图片、图片剪裁、旋转、二值化、找色找图等。</p>
 <p>该模块分为两个部分，找图找色部分和图片处理部分。</p>
-<p>需要注意的是，image对象创建后尽量在不使用时进行回收，同时避免循环创建大量图片。因为图片是一种占用内存比较大的资源，尽管Auto.js通过各种方式（比如图片缓存机制、垃圾回收时回收图片、脚本结束时回收所有图片）尽量降低图片资源的泄漏和内存占用，但是糟糕的代码仍然可以占用大量内存。</p>
+<p>需要注意的是，image对象创建后尽量在不使用时进行回收，同时避免循环创建大量图片。因为图片是一种占用内存比较大的资源，尽管AI.js Pro通过各种方式（比如图片缓存机制、垃圾回收时回收图片、脚本结束时回收所有图片）尽量降低图片资源的泄漏和内存占用，但是糟糕的代码仍然可以占用大量内存。</p>
 <p>Image对象通过调用<code>recycle()</code>函数来回收。例如：</p>
 <pre><code>// 读取图片
 var img = images.read(&quot;./1.png&quot;);

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Threads | Auto.js 4.1.0 文档</title>
+  <title>Threads | AI.js Pro 4.1.0 文档</title>
   <link rel="stylesheet" href="assets/fonts.css">
   <link rel="stylesheet" href="assets/style.css">
   <link rel="stylesheet" href="assets/sh.css">
@@ -13,7 +13,7 @@
     <div id="column2" class="interior">
       <div id="intro" class="interior">
         <a href="/" title="返回首页">
-          Auto.js
+          AI.js Pro
         </a>
       </div>
       <ul>
@@ -54,14 +54,14 @@
 
 <ul>
 <li><a class="nav-https-github-com-hyb1996-NoRootScriptDroid" href="https://github.com/hyb1996/NoRootScriptDroid">GitHub项目 &amp; Issue提交</a></li>
-<li><a class="nav-http-autojs-org" href="http://autojs.org">Auto.js交流社区</a></li>
+<li><a class="nav-http-autojs-org" href="http://autojs.org">AI.js Pro交流社区</a></li>
 </ul>
 
     </div>
 
     <div id="column1" data-id="threads" class="interior">
       <header>
-        <h1>Auto.js 4.1.0 文档</h1>
+        <h1>AI.js Pro 4.1.0 文档</h1>
         <div id="gtoc">
           <p>
             <a href="index.html" name="toc">索引</a> |
@@ -249,8 +249,8 @@ thread.setTimeout(function(){
 <blockquote>
 <p>线程安全是编程中的术语，指某个函数、函数库在多线程环境中被调用时，能够正确地处理多个线程之间的共享变量，使程序功能正确完成。</p>
 </blockquote>
-<p>在Auto.js中，线程间变量在符合JavaScript变量作用域规则的前提下是共享的，例如全局变量在所有线程都能访问，并且保证他们在所有线程的可见性。但是，不保证任何操作的原子性。例如经典的自增&quot;i++&quot;将不是原子性操作。</p>
-<p>Rhino和Auto.js提供了一些简单的设施来解决简单的线程安全问题，如锁<code>threads.lock()</code>, 函数同步锁<code>sync()</code>, 整数原子变量<code>threads.atomic()</code>等。</p>
+<p>在AI.js Pro中，线程间变量在符合JavaScript变量作用域规则的前提下是共享的，例如全局变量在所有线程都能访问，并且保证他们在所有线程的可见性。但是，不保证任何操作的原子性。例如经典的自增&quot;i++&quot;将不是原子性操作。</p>
+<p>Rhino和AI.js Pro提供了一些简单的设施来解决简单的线程安全问题，如锁<code>threads.lock()</code>, 函数同步锁<code>sync()</code>, 整数原子变量<code>threads.atomic()</code>等。</p>
 <p>例如，对于多线程共享下的整数的自增操作(自增操作会导致问题，是因为自增操作实际上为<code>i = i + 1</code>，也就是先读取i的值, 把他加1, 再赋值给i, 如果两个线程同时进行自增操作，可能出现i的值只增加了1的情况)，应该使用<code>threads.atomic()</code>函数来新建一个整数原子变量，或者使用锁<code>threads.lock()</code>来保证操作的原子性，或者用<code>sync()</code>来增加同步锁。</p>
 <p>线程不安全的代码如下：</p>
 <pre><code>var i = 0;
@@ -349,7 +349,7 @@ var syncAdd = sync(add);
 syncAdd(10);
 toast(i);
 </code></pre><h1>线程通信<span><a class="mark" href="#threads_1" id="threads_1">#</a></span></h1>
-<p>Auto.js提供了一些简单的设施来支持简单的线程通信。<code>threads.disposable()</code>用于一个线程等待另一个线程的(一次性)结果，同时<code>Lock.newCondition()</code>提供了Condition对象用于一般的线程通信(await, signal)。另外，<code>events</code>模块也可以用于线程通信，通过指定<code>EventEmiiter</code>的回调执行的线程来实现。</p>
+<p>AI.js Pro提供了一些简单的设施来支持简单的线程通信。<code>threads.disposable()</code>用于一个线程等待另一个线程的(一次性)结果，同时<code>Lock.newCondition()</code>提供了Condition对象用于一般的线程通信(await, signal)。另外，<code>events</code>模块也可以用于线程通信，通过指定<code>EventEmiiter</code>的回调执行的线程来实现。</p>
 <p>使用<code>threads.disposable()</code>可以简单地等待和获取某个线程的执行结果。例如要等待某个线程计算&quot;1+.....+10000&quot;:</p>
 <pre><code>var sum = threads.disposable();
 //启动子线程计算

@@ -82,7 +82,7 @@ public final class EmbeddedTerminalActivity extends Activity {
         root.addView(mCommand, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(root);
-        appendLine("Auto.js 终端");
+        appendLine("AI.js Pro 终端");
         appendPrompt();
         mCommand.requestFocus();
         String initialCommand = getIntent().getStringExtra(EXTRA_INITIAL_COMMAND);

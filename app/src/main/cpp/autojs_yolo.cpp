@@ -302,7 +302,7 @@ Java_com_stardust_autojs_runtime_api_Yolo_nativeCreate(
     detector->net.opt.use_bf16_storage = false;
     detector->net.opt.use_vulkan_compute = false;
 
-    // Do not call ncnn's process-wide CPU affinity/OpenMP setters here. Auto.js may already
+    // Do not call ncnn's process-wide CPU affinity/OpenMP setters here. AI.js Pro may already
     // have initialized another OpenMP consumer (notably OpenCV), and reinitializing affinity
     // from a second script can abort the whole Android process inside libomp. The per-Net
     // thread option above is sufficient and remains safe across repeated detector instances.

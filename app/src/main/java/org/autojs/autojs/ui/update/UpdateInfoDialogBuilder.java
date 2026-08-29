@@ -116,7 +116,7 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
 
     @SuppressLint("CheckResult")
     private void directlyDownload(String downloadUrl) {
-        final String path = new File(Pref.getScriptDirPath(), "AutoJs.apk").getPath();
+        final String path = new File(Pref.getScriptDirPath(), "AI-js-Pro.apk").getPath();
         DownloadManager.getInstance().downloadWithProgress(getContext(), downloadUrl, path)
                 .subscribeOn(AndroidSchedulers.mainThread())
                 .subscribe(file -> IntentUtil.installApkOrToast(getContext(), file.getPath(), AppFileProvider.AUTHORITY),

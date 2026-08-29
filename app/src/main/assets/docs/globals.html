@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>全局变量与函数 | Auto.js 4.1.0 文档</title>
+  <title>全局变量与函数 | AI.js Pro 4.1.0 文档</title>
   <link rel="stylesheet" href="assets/fonts.css">
   <link rel="stylesheet" href="assets/style.css">
   <link rel="stylesheet" href="assets/sh.css">
@@ -13,7 +13,7 @@
     <div id="column2" class="interior">
       <div id="intro" class="interior">
         <a href="/" title="返回首页">
-          Auto.js
+          AI.js Pro
         </a>
       </div>
       <ul>
@@ -54,14 +54,14 @@
 
 <ul>
 <li><a class="nav-https-github-com-hyb1996-NoRootScriptDroid" href="https://github.com/hyb1996/NoRootScriptDroid">GitHub项目 &amp; Issue提交</a></li>
-<li><a class="nav-http-autojs-org" href="http://autojs.org">Auto.js交流社区</a></li>
+<li><a class="nav-http-autojs-org" href="http://autojs.org">AI.js Pro交流社区</a></li>
 </ul>
 
     </div>
 
     <div id="column1" data-id="globals" class="interior">
       <header>
-        <h1>Auto.js 4.1.0 文档</h1>
+        <h1>AI.js Pro 4.1.0 文档</h1>
         <div id="gtoc">
           <p>
             <a href="index.html" name="toc">索引</a> |
@@ -106,7 +106,7 @@
 <li>exports</li>
 <li>module</li>
 <li>require()
-以下的对象是特定于 Auto.js 的。 有些内置对象是 JavaScript 语言本身的一部分，它们也是全局的。</li>
+以下的对象是特定于 AI.js Pro 的。 有些内置对象是 JavaScript 语言本身的一部分，它们也是全局的。</li>
 </ul>
 <p>一些模块中的函数为了使用方便也可以直接全局使用，这些函数在此不再赘述。例如timers模块的setInterval, setTimeout等函数。</p>
 <h2>sleep(n)<span><a class="mark" href="#globals_sleep_n" id="globals_sleep_n">#</a></span></h2>
@@ -214,12 +214,12 @@ for(var i = 0; i &lt; 100; i++){
 <p> Android 4.3：  18</p>
 <h2>requiresAutojsVersion(version)<span><a class="mark" href="#globals_requiresautojsversion_version" id="globals_requiresautojsversion_version">#</a></span></h2>
 <div class="signature"><ul>
-<li><code>version</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> | <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type" class="type">&lt;number&gt;</a> Auto.js的版本或版本号</li>
+<li><code>version</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> | <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type" class="type">&lt;number&gt;</a> AI.js Pro的版本或版本号</li>
 </ul>
-</div><p>表示此脚本需要Auto.js版本达到指定版本才能运行。例如<code>requiresAutojsVersion(&quot;3.0.0 Beta&quot;)</code>表示脚本需要在Auto.js 3.0.0 Beta以及以上运行。</p>
-<p>调用该函数时会判断运行脚本的Auto.js的版本号，如果没有达到要求则抛出异常。</p>
+</div><p>表示此脚本需要AI.js Pro版本达到指定版本才能运行。例如<code>requiresAutojsVersion(&quot;3.0.0 Beta&quot;)</code>表示脚本需要在AI.js Pro 3.0.0 Beta以及以上运行。</p>
+<p>调用该函数时会判断运行脚本的AI.js Pro的版本号，如果没有达到要求则抛出异常。</p>
 <p>version参数可以是整数表示版本号，例如<code>requiresAutojsVersion(250)</code>；也可以是字符串格式表示的版本，例如&quot;3.0.0 Beta&quot;, &quot;3.1.0 Alpha4&quot;, &quot;3.2.0&quot;等。</p>
-<p>可以通过<code>app.autojs.versionCode</code>和<code>app.autojs.versionName</code>获取当前的Auto.js版本号和版本。</p>
+<p>可以通过<code>app.autojs.versionCode</code>和<code>app.autojs.versionName</code>获取当前的AI.js Pro版本号和版本。</p>
 <h2>runtime.requestPermissions(permissions)<span><a class="mark" href="#globals_runtime_requestpermissions_permissions" id="globals_runtime_requestpermissions_permissions">#</a></span></h2>
 <div class="signature"><ul>
 <li><code>permissions</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array" class="type">&lt;Array&gt;</a> 权限的字符串数组</li>
@@ -227,12 +227,12 @@ for(var i = 0; i &lt; 100; i++){
 </div><p>动态申请安卓的权限。例如：</p>
 <pre><code>//请求GPS权限
 runtime.requestPermissions([&quot;access_fine_location&quot;]);
-</code></pre><p>尽管安卓有很多权限，但必须写入Manifest才能动态申请，为了防止权限的滥用，目前Auto.js只能额外申请两个权限：</p>
+</code></pre><p>尽管安卓有很多权限，但必须写入Manifest才能动态申请，为了防止权限的滥用，目前AI.js Pro只能额外申请两个权限：</p>
 <ul>
 <li><code>access_fine_location</code> GPS权限</li>
 <li><code>record_audio</code> 录音权限</li>
 </ul>
-<p>您可以通过APK编辑器来增加Auto.js以及Auto.js打包的应用的权限。</p>
+<p>您可以通过APK编辑器来增加AI.js Pro以及AI.js Pro打包的应用的权限。</p>
 <p>安卓所有的权限列表参见<a href="https://developer.android.com/guide/topics/permissions/overview">Permissions Overview</a>。（并没有用）</p>
 <h2>runtime.loadJar(path)<span><a class="mark" href="#globals_runtime_loadjar_path" id="globals_runtime_loadjar_path">#</a></span></h2>
 <div class="signature"><ul>

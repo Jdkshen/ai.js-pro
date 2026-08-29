@@ -1,4 +1,4 @@
-var storage = storages.create("Auto.js例子:简单数据");
+var storage = storages.create("AI.js Pro例子:简单数据");
 var a = 1234;
 var b = true;
 var str = "hello";

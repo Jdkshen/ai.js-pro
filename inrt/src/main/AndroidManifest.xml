@@ -14,7 +14,7 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
 
-    <!-- 非Auto.js运行必需，不会主动申请，某些脚本可以自行申请-->
+    <!-- 非AI.js Pro运行必需，不会主动申请，某些脚本可以自行申请-->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 

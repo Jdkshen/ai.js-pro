@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>基于控件的操作 | Auto.js 4.1.0 文档</title>
+  <title>基于控件的操作 | AI.js Pro 4.1.0 文档</title>
   <link rel="stylesheet" href="assets/fonts.css">
   <link rel="stylesheet" href="assets/style.css">
   <link rel="stylesheet" href="assets/sh.css">
@@ -13,7 +13,7 @@
     <div id="column2" class="interior">
       <div id="intro" class="interior">
         <a href="/" title="返回首页">
-          Auto.js
+          AI.js Pro
         </a>
       </div>
       <ul>
@@ -54,14 +54,14 @@
 
 <ul>
 <li><a class="nav-https-github-com-hyb1996-NoRootScriptDroid" href="https://github.com/hyb1996/NoRootScriptDroid">GitHub项目 &amp; Issue提交</a></li>
-<li><a class="nav-http-autojs-org" href="http://autojs.org">Auto.js交流社区</a></li>
+<li><a class="nav-http-autojs-org" href="http://autojs.org">AI.js Pro交流社区</a></li>
 </ul>
 
     </div>
 
     <div id="column1" data-id="widgets-based-automation" class="interior">
       <header>
-        <h1>Auto.js 4.1.0 文档</h1>
+        <h1>AI.js Pro 4.1.0 文档</h1>
         <div id="gtoc">
           <p>
             <a href="index.html" name="toc">索引</a> |
@@ -290,7 +290,7 @@
     //不管是如何窗口，都返回true，表示在该窗口中搜索
     return true;
 });
-</code></pre><p>又例如，当前使用了分屏功能，屏幕上有Auto.js和QQ两个应用，但我们只想选择器对QQ界面进行搜索，则：</p>
+</code></pre><p>又例如，当前使用了分屏功能，屏幕上有AI.js Pro和QQ两个应用，但我们只想选择器对QQ界面进行搜索，则：</p>
 <pre><code>auto.setWindowFilter(function(window){
     // 对于应用窗口，他的title属性就是应用的名称，因此可以通过title属性来判断一个应用
     return window.title == &quot;QQ&quot;;
@@ -376,7 +376,7 @@
 <pre><code>var sendButton = text(&quot;发送&quot;).findOne();
 sendButton.click();
 </code></pre><p>在这个例子中, <code>text(&quot;发送&quot;)</code>表示一个条件(文本属性为&quot;发送&quot;)，<code>findOne()</code>表示基于这个条件找到一个符合条件的控件，从而我们可以得到发送按钮sendButton，再执行<code>sendButton.click()</code>即可点击&quot;发送&quot;按钮。</p>
-<p>用文本属性来定位按钮控件、文本控件通常十分有效。但是，如果一个控件是图片控件，比如Auto.js主界面右上角的搜索图标，他没有文本属性，这时需要其他属性来定位他。我们如何查看他有什么属性呢？首先打开悬浮窗和无障碍服务，点击蓝色的图标(布局分析), 可以看到以下界面：</p>
+<p>用文本属性来定位按钮控件、文本控件通常十分有效。但是，如果一个控件是图片控件，比如AI.js Pro主界面右上角的搜索图标，他没有文本属性，这时需要其他属性来定位他。我们如何查看他有什么属性呢？首先打开悬浮窗和无障碍服务，点击蓝色的图标(布局分析), 可以看到以下界面：</p>
 <p>之后我们点击搜索图标，可以看到他有以下属性：</p>
 <p>我们注意到这个图标的desc(描述)属性为&quot;搜索&quot;，那么我们就可以通过desc属性来定位这个控件，得到点击搜索图标的代码为:</p>
 <pre><code>desc(&quot;搜索&quot;).findOne().click();
@@ -468,7 +468,7 @@ sendButton.click();
 <li><code>prefix</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 前缀</li>
 </ul>
 </div><p>为当前选择器附加控件&quot;text需要以prefix开头&quot;的筛选条件。</p>
-<p>这也是一个比较有用的条件，例如要找出Auto.js脚本列表中名称以&quot;QQ&quot;开头的脚本的代码为<code>textStartsWith(&quot;QQ&quot;).find()</code>。</p>
+<p>这也是一个比较有用的条件，例如要找出AI.js Pro脚本列表中名称以&quot;QQ&quot;开头的脚本的代码为<code>textStartsWith(&quot;QQ&quot;).find()</code>。</p>
 <h2>UiSelector.textEndsWith(suffix)<span><a class="mark" href="#widgets_based_automation_uiselector_textendswith_suffix" id="widgets_based_automation_uiselector_textendswith_suffix">#</a></span></h2>
 <div class="signature"><ul>
 <li>suffix <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 后缀</li>
@@ -683,7 +683,7 @@ w.click();
 <li><code>b</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Boolean_type" class="type">&lt;Boolean&gt;</a> 表示控件是否可滑动</li>
 </ul>
 </div><p>为当前选择器附加控件是否可滑动的条件。滑动包括上下滑动和左右滑动。</p>
-<p>可以用这个条件来寻找可滑动控件来滑动界面。例如滑动Auto.js的脚本列表的代码为:</p>
+<p>可以用这个条件来寻找可滑动控件来滑动界面。例如滑动AI.js Pro的脚本列表的代码为:</p>
 <pre><code>className(&quot;android.support.v7.widget.RecyclerView&quot;).scrollable().findOne().scrollForward();
 //或者classNameEndsWith(&quot;RecyclerView&quot;).scrollable().findOne().scrollForward();
 </code></pre><h2>UiSelector.editable([b = true])<span><a class="mark" href="#widgets_based_automation_uiselector_editable_b_true" id="widgets_based_automation_uiselector_editable_b_true">#</a></span></h2>
@@ -712,8 +712,8 @@ w.click();
 </div><p>根据当前的选择器所确定的筛选条件，对屏幕上的控件进行搜索，直到屏幕上出现满足条件的一个控件为止，并返回该控件；如果在timeout毫秒的时间内没有找到符合条件的控件，则终止搜索并返回<code>null</code>。</p>
 <p>该函数类似于不加参数的<code>findOne()</code>，只不过加上了时间限制。</p>
 <p>示例：</p>
-<pre><code>//启动Auto.js
-launchApp(&quot;Auto.js&quot;);
+<pre><code>//启动AI.js Pro
+launchApp(&quot;AI.js Pro&quot;);
 //在6秒内找出日志图标的控件
 var w = id(&quot;action_log&quot;).findOne(6000);
 //如果找到控件则点击
@@ -906,7 +906,7 @@ for(var i = 0; i &lt; list.childCount(); i++){
 </ul>
 </div><p>返回控件在屏幕上的范围，其值是一个<a href="https://hyb1996.github.io/AutoJs-Docs/widgets-based-automation.html#widgets_based_automation_rect">Rect</a>对象。</p>
 <p>示例：</p>
-<pre><code>var b = text(&quot;Auto.js&quot;).findOne().bounds();
+<pre><code>var b = text(&quot;AI.js Pro&quot;).findOne().bounds();
 toast(&quot;控件在屏幕上的范围为&quot; + b);
 </code></pre><p>如果一个控件本身无法通过<code>click()</code>点击，那么我们可以利用<code>bounds()</code>函数获取其坐标，再利用坐标点击。例如：</p>
 <pre><code>var b = desc(&quot;打开侧拉菜单&quot;).findOne().bounds();

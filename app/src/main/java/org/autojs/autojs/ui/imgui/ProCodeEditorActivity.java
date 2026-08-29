@@ -653,7 +653,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private void openProjectConfig(File directory) {
         File project = findProjectRoot(directory);
         if (project == null || !isWithin(directory, project)) {
-            toast("该目录不是 Auto.js 项目");
+            toast("该目录不是 AI.js Pro 项目");
             return;
         }
         ProjectConfigActivity_.intent(this)
@@ -1261,7 +1261,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private void openProjectConfig() {
         if (mProjectRoot == null) {
-            toast("当前文件不属于 Auto.js 项目");
+            toast("当前文件不属于 AI.js Pro 项目");
             return;
         }
         ProjectConfigActivity_.intent(this)

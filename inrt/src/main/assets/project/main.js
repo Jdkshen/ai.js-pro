@@ -1,1 +1,1 @@
-toast("Hello, Auto.js");
+toast("Hello, AI.js Pro");

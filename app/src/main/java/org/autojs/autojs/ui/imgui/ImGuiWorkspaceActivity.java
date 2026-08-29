@@ -216,7 +216,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
             return;
         }
         new AlertDialog.Builder(this)
-                .setTitle("退出 Auto.js Pro？")
+                .setTitle("退出 AI.js Pro？")
                 .setMessage("左右分页请从内容区域开始滑动。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("退出", (dialog, which) -> finish())
@@ -522,7 +522,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
     }
 
     private String scriptTypeLabel(File file) {
-        if (file.isDirectory()) return isAutoJsProject(file) ? "Auto.js 项目" : "普通文件夹";
+        if (file.isDirectory()) return isAutoJsProject(file) ? "AI.js Pro 项目" : "普通文件夹";
         String name = file.getName().toLowerCase(Locale.ROOT);
         if (name.endsWith(".auto")) return "录制文件";
         if (name.endsWith(".js")) return "JavaScript 脚本";
@@ -619,7 +619,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
     }
 
     private String sampleTypeLabel(String path) {
-        if (isSampleDirectory(path)) return isSampleProject(path) ? "Auto.js 项目" : "文件夹";
+        if (isSampleDirectory(path)) return isSampleProject(path) ? "AI.js Pro 项目" : "文件夹";
         if (path.toLowerCase(Locale.ROOT).endsWith(".auto")) return "录制文件";
         return isSampleCode(path) ? "JavaScript 示例" : "文件";
     }
@@ -712,7 +712,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                 connected ? "断开开发者调试" : "开发者调试", "终端", "主题", "官方博客",
                 "官方频道 / 论坛", "设置", "检查更新", "退出"};
         new AlertDialog.Builder(this)
-                .setTitle("Auto.js Pro")
+                .setTitle("AI.js Pro")
                 .setItems(items, (dialog, which) -> {
                     if (which == 0) startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                     else if (which == 1) toggleFloatingWindow();
@@ -813,7 +813,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
 
     private void confirmExitApplication() {
         new AlertDialog.Builder(this)
-                .setTitle("退出 Auto.js Pro？")
+                .setTitle("退出 AI.js Pro？")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("退出", (dialog, which) -> finishAffinity())
                 .show();
@@ -948,7 +948,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
     }
 
     /**
-     * The first YOLO preview shipped with an Auto.js accessibility bootstrap line. Preserve all
+     * The first YOLO preview shipped with an AI.js Pro accessibility bootstrap line. Preserve all
      * user edits while removing only that obsolete first line once from existing preview copies.
      */
     private void migrateLegacyYoloAutoLine(String assetPath, File target) throws IOException {
@@ -1180,7 +1180,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
         for (String asset : discovered) {
             if (!mResourceCategory.isEmpty() && !mResourceCategory.equals(resourceCategoryFor(asset))) continue;
             resources.add(new ResourceDescriptor(new File(asset).getName().replaceFirst("\\.js$", ""),
-                    "Auto.js 内置示例脚本", "内置|" + resourceCategoryFor(asset) + "|"
+                    "AI.js Pro 内置示例脚本", "内置|" + resourceCategoryFor(asset) + "|"
                     + readableAssetSize(asset), asset, resourceTargetFor(asset).isFile()));
         }
         if (mResourceCategory.isEmpty() || "我的资源".equals(mResourceCategory)) {
@@ -1425,7 +1425,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
 
     private void showPluginHelp() {
         new AlertDialog.Builder(this)
-                .setTitle("Auto.js 插件")
+                .setTitle("AI.js Pro 插件")
                 .setItems(new String[]{"本机插件管理 · 开源版无 Pro 在线市场接口",
                                 "安装本地插件 APK", "刷新插件状态", "打开插件开发说明"},
                         (dialog, which) -> {

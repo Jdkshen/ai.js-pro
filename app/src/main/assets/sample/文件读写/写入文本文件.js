@@ -1,7 +1,7 @@
 //文件路径
 var path = "/sdcard/1.txt";
 //要写入的文件内容
-var text = "Hello, AutoJs";
+var text = "Hello, AI.js Pro";
 //以写入模式打开文件
 var file = open(path, "w");
 //写入文件

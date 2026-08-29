@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Auto.js</string>
+    <string name="app_name">AI.js Pro</string>
     <string name="text_accessibility_service_description">Required by the script automatic operation (click, long press, slide, etc.).</string>
     <string name="text_new_file">New File</string>
     <string name="text_create_fail">Creation failed</string>
@@ -148,7 +148,7 @@
     <string name="text_do_not_ask_again_for_this_version">Do not ask again for this version</string>
     <string name="text_code_beautify">Beautify code</string>
     <string name="text_guard_mode">Protection mode</string>
-    <string name="summary_guard_mode">Prevent automation of scripts when Auto.js in the front</string>
+    <string name="summary_guard_mode">Prevent automation of scripts when AI.js Pro in the front</string>
     <string name="text_layout_inspector_is_dumping">Inspecting layout...</string>
     <string name="text_force_stop">Force stop</string>
     <string name="text_execution_finished">\\n------------\\n[%s]Finished，spent %f seconds.</string>

@@ -1,10 +1,10 @@
-# Auto.js ImGui hybrid workspace
+# AI.js Pro ImGui hybrid workspace
 
 This directory contains the first hybrid UI migration slice:
 
 - `autojs_imgui.cpp` owns the EGL/OpenGL ES 2 renderer and the ImGui workspace;
-- Java owns Android lifecycle, system screens and existing Auto.js services;
-- the script workspace reads the configured Auto.js directory and reuses the existing editor and
+- Java owns Android lifecycle, system screens and existing AI.js Pro services;
+- the script workspace reads the configured AI.js Pro directory and reuses the existing editor and
   script engine for edit, run and stop actions;
 - `third_party/imgui` is Dear ImGui 1.92.4 under its MIT license;
 - the bundled Noto Sans CJK font remains under the SIL Open Font License.

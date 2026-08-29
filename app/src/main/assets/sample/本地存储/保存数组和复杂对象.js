@@ -1,7 +1,7 @@
-var storage = storages.create("Auto.js例子:复杂数据");
+var storage = storages.create("AI.js Pro例子:复杂数据");
 var arr = [1, 4, 2, 5];
 var obj = {
-    name: "Auto.js",
+    name: "AI.js Pro",
     url: "www.autojs.org"
 };
 //保存

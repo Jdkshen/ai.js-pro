@@ -17,7 +17,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** YOLO runtime exposed to Auto.js scripts with ncnn, ONNX Runtime and OpenCV DNN backends. */
+/** YOLO runtime exposed to AI.js Pro scripts with ncnn, ONNX Runtime and OpenCV DNN backends. */
 public final class Yolo implements AutoCloseable {
 
     private static final String TAG = "AutoJsYolo";

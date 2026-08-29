@@ -1,3 +1,3 @@
 log("Hello world!!!");
-toast("Hello, AutoJs!");
+toast("Hello, AI.js Pro!");
 console.show();

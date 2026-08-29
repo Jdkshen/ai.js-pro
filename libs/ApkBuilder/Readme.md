@@ -1,6 +1,6 @@
-# Auto.js-ApkBuilder
+# AI.js Pro-ApkBuilder
 
-一个把Auto.js的js文件"打包"成apk文件的项目。
+一个把AI.js Pro的js文件"打包"成apk文件的项目。
 
 ## 原理
 
