@@ -1,15 +1,20 @@
 // @engine quickjs
 
-const backend = 'ncnn';
+const backend = 'ncnn'; // 可选：'ncnn' | 'onnx' | 'opencv'（别名 cpu/ort/onnxruntime/dnn/opencv5）
 if (!yolo.isAvailable(backend)) {
-    throw new Error('NCNN 不可用：' + yolo.getUnavailableReason(backend));
+    throw new Error(backend + ' 不可用：' + yolo.getUnavailableReason(backend));
 }
 
-const modelRoot = 'asset://sample/YOLO目标检测/NCNN版本/models/';
+// ncnn 使用 param/bin；onnx 与 opencv 使用 model（.onnx）
+const isNcnn = backend === 'ncnn' || backend === 'cpu';
+const modelRoot = isNcnn
+    ? 'asset://sample/YOLO目标检测/NCNN版本/models/'
+    : 'asset://sample/YOLO目标检测/ONNX Runtime版本/models/';
 const detector = yolo.load({
     backend: backend,
-    param: modelRoot + 'yolo26_320.param',
-    bin: modelRoot + 'yolo26_320.bin',
+    model: isNcnn ? '' : modelRoot + 'yolo26_320.onnx',
+    param: isNcnn ? modelRoot + 'yolo26_320.param' : '',
+    bin: isNcnn ? modelRoot + 'yolo26_320.bin' : '',
     labels: modelRoot + 'labels.txt',
     inputSize: 320,
     threads: 4
@@ -36,7 +41,7 @@ try {
     detections.forEach(function (item) {
         console.log(item.label, (item.score * 100).toFixed(1) + '%', item.bounds);
     });
-    toastLog('NativeFrame YOLO 完成：' + detections.length + ' 个目标');
+    toastLog(backend + ' YOLO 完成：' + detections.length + ' 个目标');
 } finally {
     if (frame) frame.recycle();
     detector.close();

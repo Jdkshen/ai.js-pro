@@ -802,46 +802,57 @@ JSValue nativeFindImage(JSContext *context, JSValueConst, int argc, JSValueConst
     return pointValue(context, point, true);
 }
 
-JSValue nativeYoloIsAvailable(JSContext *context, JSValueConst, int, JSValueConst *) {
+JSValue nativeYoloIsAvailable(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
+    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "ncnn";
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "isNcnnYoloAvailable", "()Z");
-    const jboolean result = env->CallBooleanMethod(state->host, method);
+    jmethodID method = env->GetMethodID(hostClass, "isYoloAvailable", "(Ljava/lang/String;)Z");
+    jstring javaBackend = toJavaString(env, backend);
+    const jboolean result = env->CallBooleanMethod(state->host, method, javaBackend);
+    env->DeleteLocalRef(javaBackend);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
 }
 
-JSValue nativeYoloVersion(JSContext *context, JSValueConst, int, JSValueConst *) {
-    return callStringHost(context, "getNcnnYoloVersion", nullptr);
+JSValue nativeYoloVersion(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "ncnn";
+    return callStringHost(context, "getYoloVersion", backend.c_str());
 }
 
-JSValue nativeYoloUnavailableReason(JSContext *context, JSValueConst, int, JSValueConst *) {
-    return callStringHost(context, "getNcnnYoloUnavailableReason", nullptr);
+JSValue nativeYoloUnavailableReason(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "ncnn";
+    return callStringHost(context, "getYoloUnavailableReason", backend.c_str());
 }
 
 JSValue nativeYoloLoad(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
-    if (argc < 4) {
-        return JS_ThrowTypeError(context, "yolo.load requires param, bin, inputSize, and threads");
+    if (argc < 6) {
+        return JS_ThrowTypeError(context, "yolo.load requires backend, model, param, bin, inputSize, and threads");
     }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
-    const std::string param = jsString(context, argv[0]);
-    const std::string bin = jsString(context, argv[1]);
+    const std::string backend = jsString(context, argv[0]);
+    const std::string model = jsString(context, argv[1]);
+    const std::string param = jsString(context, argv[2]);
+    const std::string bin = jsString(context, argv[3]);
     int32_t inputSize = 320;
     int32_t threads = 4;
-    if (JS_ToInt32(context, &inputSize, argv[2]) < 0 || JS_ToInt32(context, &threads, argv[3]) < 0) {
+    if (JS_ToInt32(context, &inputSize, argv[4]) < 0 || JS_ToInt32(context, &threads, argv[5]) < 0) {
         return JS_EXCEPTION;
     }
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "loadNcnnYolo",
-            "(Ljava/lang/String;Ljava/lang/String;II)J");
+    jmethodID method = env->GetMethodID(hostClass, "loadYolo",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)J");
+    jstring javaBackend = toJavaString(env, backend);
+    jstring javaModel = toJavaString(env, model);
     jstring javaParam = toJavaString(env, param);
     jstring javaBin = toJavaString(env, bin);
-    const jlong handle = env->CallLongMethod(state->host, method, javaParam, javaBin,
-                                             inputSize, threads);
+    const jlong handle = env->CallLongMethod(state->host, method, javaBackend, javaModel,
+            javaParam, javaBin, inputSize, threads);
     env->DeleteLocalRef(javaBin);
     env->DeleteLocalRef(javaParam);
+    env->DeleteLocalRef(javaModel);
+    env->DeleteLocalRef(javaBackend);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, handle);
 }
@@ -862,7 +873,7 @@ JSValue nativeYoloClose(JSContext *context, JSValueConst, int argc, JSValueConst
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "closeNcnnYolo", "(J)Z");
+    jmethodID method = env->GetMethodID(hostClass, "closeYolo", "(J)Z");
     const jboolean result = env->CallBooleanMethod(state->host, method, detectorHandle);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
@@ -889,7 +900,7 @@ JSValue nativeYoloDetect(JSContext *context, JSValueConst, int argc, JSValueCons
     const jlong capacity = static_cast<jlong>(frame->dataend - frame->data);
     jobject buffer = env->NewDirectByteBuffer(frame->data, capacity);
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "detectNcnnYolo",
+    jmethodID method = env->GetMethodID(hostClass, "detectYolo",
             "(JLjava/nio/ByteBuffer;IIIFF)[F");
     auto packed = static_cast<jfloatArray>(env->CallObjectMethod(state->host, method,
             detectorHandle, buffer, frame->cols, frame->rows,
@@ -1121,26 +1132,36 @@ const char kBootstrapScript[] = R"JS(
 
     const yolo = {
         isAvailable: function (backend) {
-            backend = String(backend || 'ncnn').toLowerCase();
-            return backend === 'ncnn' || backend === 'cpu' ? __aiNativeYoloIsAvailable() : false;
+            return __aiNativeYoloIsAvailable(String(backend || 'ncnn').toLowerCase());
         },
         getUnavailableReason: function (backend) {
-            return this.isAvailable(backend) ? '' : __aiNativeYoloUnavailableReason();
+            backend = String(backend || 'ncnn').toLowerCase();
+            return this.isAvailable(backend) ? '' : __aiNativeYoloUnavailableReason(backend);
         },
         getVersion: function (backend) {
-            return this.isAvailable(backend) ? __aiNativeYoloVersion() : 'unavailable';
+            backend = String(backend || 'ncnn').toLowerCase();
+            return this.isAvailable(backend) ? __aiNativeYoloVersion(backend) : 'unavailable';
         },
         load: function (options) {
             options = options || {};
             const backend = String(options.backend || 'ncnn').toLowerCase();
-            if (backend !== 'ncnn' && backend !== 'cpu') {
-                throw new Error('QuickJS NativeFrame YOLO currently supports only ncnn');
+            const supported = { ncnn: 1, cpu: 1, onnx: 1, ort: 1, onnxruntime: 1,
+                opencv: 1, dnn: 1, opencv5: 1, 'opencv-dnn': 1 };
+            if (!supported[backend]) {
+                throw new Error('QuickJS YOLO 不支持的 backend: ' + backend);
             }
-            if (!__aiNativeYoloIsAvailable()) {
-                throw new Error(__aiNativeYoloUnavailableReason());
+            if (!__aiNativeYoloIsAvailable(backend)) {
+                throw new Error(__aiNativeYoloUnavailableReason(backend));
             }
-            if (!options.param || !options.bin) {
-                throw new TypeError('yolo.load requires param and bin paths');
+            const ncnnLike = backend === 'ncnn' || backend === 'cpu';
+            const param = options.param ? String(options.param) : '';
+            const bin = options.bin ? String(options.bin) : '';
+            const model = options.model ? String(options.model) : '';
+            if (ncnnLike && (!param || !bin)) {
+                throw new TypeError('yolo.load ncnn 需要 param 和 bin 路径');
+            }
+            if (!ncnnLike && !model) {
+                throw new TypeError('yolo.load ' + backend + ' 需要 model 路径');
             }
             let labels = options.labels || [];
             if (typeof labels === 'string') {
@@ -1148,7 +1169,7 @@ const char kBootstrapScript[] = R"JS(
             }
             if (!Array.isArray(labels)) throw new TypeError('labels must be an array or path');
             const detector = Object.create(YoloDetector.prototype);
-            const id = __aiNativeYoloLoad(String(options.param), String(options.bin),
+            const id = __aiNativeYoloLoad(backend, model, param, bin,
                 options.inputSize === undefined ? 320 : Number(options.inputSize),
                 options.threads === undefined ? 4 : Number(options.threads));
             detectorState.set(detector, { id: id, labels: labels.slice(), closed: false });

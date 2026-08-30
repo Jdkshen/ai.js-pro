@@ -69,7 +69,7 @@ toast("这是 QuickJS 脚本");
 | `images.findColor` | 已接入 | C++ 直接扫描 RGBA，支持 `threshold` 和 `region` |
 | `images.read`、`images.findImage` | 已接入 | OpenCV C++ 解码与 `matchTemplate`，只返回坐标/相似度 |
 | `NativeFrame.recycle` | 已接入 | 显式释放；引擎销毁时自动回收遗留句柄 |
-| `yolo.load`、`detector.detect(NativeFrame)` | 已接入 | arm64 NCNN；`cv::Mat` 通过 DirectByteBuffer 同步直连推理，不创建 Bitmap |
+| `yolo.load`、`detector.detect(NativeFrame)` | 已接入 | ncnn / onnx / opencv 三后端 NativeFrame 直连；ncnn/onnx 仅 arm64，opencv 全 ABI |
 | `detector.close` | 已接入 | 显式释放 NCNN 模型；引擎销毁时自动清理遗留 detector |
 | `files` | 已接入 | 读写、追加、列表、存在性判断、复制/移动/重命名/删除等白名单方法 |
 | `http` | 已接入 | 同步 `get` / `post` / `postJson` / `request`，OkHttp 3.10 白名单桥 |
@@ -133,7 +133,7 @@ try {
 }
 ```
 
-可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中的单帧和 60 帧实时案例。当前这条 QuickJS 直连桥先开放 arm64 NCNN；ONNX Runtime 和 OpenCV DNN 的旧 Rhino API 保持不变。
+可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中的单帧和 60 帧实时案例。QuickJS 直连桥现在支持 ncnn / onnx / opencv 三种后端，`yolo.load({ backend: ..., model | param+bin, ... })` 按后端加载模型，三种后端对 JS 暴露同一个检测对象 API（`detect` / `close` / `isClosed`）。原生 ncnn/onnx 仅 arm64-v8a；opencv 后端使用 OpenCV 5.0 DNN，支持全部 ABI。
 
 ### files / http / timers 白名单 API
 

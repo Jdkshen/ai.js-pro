@@ -4,6 +4,8 @@ import android.graphics.Bitmap;
 
 import com.stardust.autojs.core.image.ImageWrapper;
 
+import java.nio.ByteBuffer;
+
 /** Fixed-shape YOLO26 detector backed by the native ONNX Runtime C/C++ API. */
 public final class OnnxYoloDetector implements AutoCloseable {
 
@@ -58,6 +60,25 @@ public final class OnnxYoloDetector implements AutoCloseable {
         return mHandle == 0;
     }
 
+    public synchronized float[] detectRgba(ByteBuffer rgba, int width, int height, int rowStride,
+                                           float confidence, float nmsThreshold) {
+        if (mHandle == 0) throw new IllegalStateException("YOLO detector 已关闭");
+        if (rgba == null || !rgba.isDirect()) {
+            throw new IllegalArgumentException("YOLO NativeFrame 必须使用 DirectByteBuffer");
+        }
+        if (width < 2 || height < 2 || rowStride < width * 4) {
+            throw new IllegalArgumentException("YOLO NativeFrame RGBA 布局无效");
+        }
+        if (confidence < 0.0f || confidence > 1.0f) {
+            throw new IllegalArgumentException("confidence 必须在 0~1 之间");
+        }
+        if (nmsThreshold < 0.0f || nmsThreshold > 1.0f) {
+            throw new IllegalArgumentException("nms 必须在 0~1 之间");
+        }
+        return nativeDetectRgba(mHandle, rgba, width, height, rowStride,
+                confidence, nmsThreshold);
+    }
+
     @Override
     public synchronized void close() {
         if (mHandle == 0) return;
@@ -70,5 +91,8 @@ public final class OnnxYoloDetector implements AutoCloseable {
     private static native long nativeCreate(String modelPath, int inputSize, int threads);
     private static native float[] nativeDetectBitmap(long handle, Bitmap bitmap,
                                                        float confidence, float nmsThreshold);
+    private static native float[] nativeDetectRgba(long handle, ByteBuffer rgba,
+                                                     int width, int height, int rowStride,
+                                                     float confidence, float nmsThreshold);
     private static native void nativeRelease(long handle);
 }

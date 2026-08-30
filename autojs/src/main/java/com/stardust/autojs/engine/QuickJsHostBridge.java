@@ -8,6 +8,8 @@ import android.util.Log;
 import com.stardust.autojs.core.http.MutableOkHttp;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
+import com.stardust.autojs.runtime.api.OnnxYoloDetector;
+import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
 import com.stardust.autojs.runtime.api.Yolo;
 import com.stardust.pio.UncheckedIOException;
 
@@ -42,9 +44,19 @@ final class QuickJsHostBridge implements AutoCloseable {
 
     private final ScriptRuntime mRuntime;
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
-    private final Map<Long, Yolo.Detector> mYoloDetectors = new ConcurrentHashMap<>();
+    private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
     private final MutableOkHttp mHttpClient = new MutableOkHttp();
     private volatile long mEngineHandle;
+
+    private static final class YoloSession {
+        final String backend;
+        final AutoCloseable detector;
+
+        YoloSession(String backend, AutoCloseable detector) {
+            this.backend = backend;
+            this.detector = detector;
+        }
+    }
 
     QuickJsHostBridge(ScriptRuntime runtime) {
         mRuntime = runtime;
@@ -163,49 +175,89 @@ final class QuickJsHostBridge implements AutoCloseable {
         return mRuntime.files.path(path);
     }
 
-    public boolean isNcnnYoloAvailable() {
-        return mRuntime.yolo.isAvailable("ncnn");
+    public boolean isYoloAvailable(String backend) {
+        return mRuntime.yolo.isAvailable(backend);
     }
 
-    public String getNcnnYoloVersion() {
-        return mRuntime.yolo.getVersion("ncnn");
+    public String getYoloVersion(String backend) {
+        return mRuntime.yolo.getVersion(backend);
     }
 
-    public String getNcnnYoloUnavailableReason() {
-        return mRuntime.yolo.getUnavailableReason("ncnn");
+    public String getYoloUnavailableReason(String backend) {
+        return mRuntime.yolo.getUnavailableReason(backend);
     }
 
-    public long loadNcnnYolo(String paramPath, String binPath, int inputSize, int threads) {
-        boolean paramAsset = isAssetPath(paramPath);
-        boolean binAsset = isAssetPath(binPath);
-        if (paramAsset != binAsset) {
-            throw new IllegalArgumentException("YOLO param 和 bin 必须同时使用 asset:// 或本地路径");
+    public long loadYolo(String backend, String modelPath, String paramPath, String binPath,
+                         int inputSize, int threads) {
+        String normalized = normalizeQuickJsBackend(backend);
+        AutoCloseable detector;
+        if ("ncnn".equals(normalized)) {
+            boolean paramAsset = isAssetPath(paramPath);
+            boolean binAsset = isAssetPath(binPath);
+            if (paramAsset != binAsset) {
+                throw new IllegalArgumentException("YOLO param 和 bin 必须同时使用 asset:// 或本地路径");
+            }
+            detector = paramAsset
+                    ? mRuntime.yolo.createFromAssets(stripAssetPrefix(paramPath),
+                    stripAssetPrefix(binPath), inputSize, threads)
+                    : mRuntime.yolo.create(mRuntime.files.path(paramPath),
+                    mRuntime.files.path(binPath), inputSize, threads);
+        } else if ("onnx".equals(normalized)) {
+            detector = isAssetPath(modelPath)
+                    ? mRuntime.yolo.createOnnxFromAssets(stripAssetPrefix(modelPath), inputSize, threads)
+                    : mRuntime.yolo.createOnnx(mRuntime.files.path(modelPath), inputSize, threads);
+        } else if ("opencv".equals(normalized)) {
+            detector = isAssetPath(modelPath)
+                    ? mRuntime.yolo.createOpenCvFromAssets(stripAssetPrefix(modelPath), inputSize, threads)
+                    : mRuntime.yolo.createOpenCv(mRuntime.files.path(modelPath), inputSize, threads);
+        } else {
+            throw new IllegalArgumentException("QuickJS YOLO 不支持的 backend: " + normalized);
         }
-        Yolo.Detector detector = paramAsset
-                ? mRuntime.yolo.createFromAssets(stripAssetPrefix(paramPath), stripAssetPrefix(binPath),
-                inputSize, threads)
-                : mRuntime.yolo.create(mRuntime.files.path(paramPath), mRuntime.files.path(binPath),
-                inputSize, threads);
         long handle = mNextYoloHandle.getAndIncrement();
-        mYoloDetectors.put(handle, detector);
+        mYoloSessions.put(handle, new YoloSession(normalized, detector));
         return handle;
     }
 
-    public float[] detectNcnnYolo(long detectorHandle, ByteBuffer rgba,
-                                  int width, int height, int rowStride,
-                                  float confidence, float nmsThreshold) {
-        Yolo.Detector detector = mYoloDetectors.get(detectorHandle);
-        if (detector == null) {
+    public float[] detectYolo(long sessionHandle, ByteBuffer rgba,
+                              int width, int height, int rowStride,
+                              float confidence, float nmsThreshold) {
+        YoloSession session = mYoloSessions.get(sessionHandle);
+        if (session == null) {
             throw new IllegalStateException("QuickJS YOLO detector 已关闭");
         }
-        return detector.detectRgba(rgba, width, height, rowStride, confidence, nmsThreshold);
+        AutoCloseable detector = session.detector;
+        if ("onnx".equals(session.backend)) {
+            return ((OnnxYoloDetector) detector).detectRgba(rgba, width, height, rowStride,
+                    confidence, nmsThreshold);
+        }
+        if ("opencv".equals(session.backend)) {
+            return ((OpenCvYoloDetector) detector).detectRgba(rgba, width, height, rowStride,
+                    confidence, nmsThreshold);
+        }
+        return ((Yolo.Detector) detector).detectRgba(rgba, width, height, rowStride,
+                confidence, nmsThreshold);
     }
 
-    public boolean closeNcnnYolo(long detectorHandle) {
-        Yolo.Detector detector = mYoloDetectors.remove(detectorHandle);
-        if (detector == null) return false;
-        detector.close();
+    public boolean closeYolo(long sessionHandle) {
+        YoloSession session = mYoloSessions.remove(sessionHandle);
+        if (session == null) return false;
+        try {
+            session.detector.close();
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot close YOLO detector", error);
+        }
         return true;
+    }
+
+    private static String normalizeQuickJsBackend(String backend) {
+        if (backend == null) return "ncnn";
+        String normalized = backend.trim().toLowerCase();
+        if (normalized.isEmpty() || "cpu".equals(normalized)) return "ncnn";
+        if ("ort".equals(normalized) || "onnxruntime".equals(normalized)
+                || "onnx-runtime".equals(normalized)) return "onnx";
+        if ("opencv-dnn".equals(normalized) || "opencv5".equals(normalized)
+                || "dnn".equals(normalized)) return "opencv";
+        return normalized;
     }
 
     public String readYoloLabels(String path) {
@@ -369,14 +421,14 @@ final class QuickJsHostBridge implements AutoCloseable {
 
     @Override
     public void close() {
-        for (Yolo.Detector detector : new ArrayList<>(mYoloDetectors.values())) {
+        for (YoloSession session : new ArrayList<>(mYoloSessions.values())) {
             try {
-                detector.close();
+                session.detector.close();
             } catch (Throwable error) {
                 Log.w("QuickJsHostBridge", "Cannot close YOLO detector", error);
             }
         }
-        mYoloDetectors.clear();
+        mYoloSessions.clear();
     }
 
     private static boolean isAssetPath(String path) {

@@ -1,18 +1,27 @@
-QuickJS NativeFrame + NCNN YOLO 示例
+QuickJS NativeFrame + YOLO 示例（ncnn / onnx / opencv 三后端）
 
 这组示例使用真正的原生图像链：
 
 ImageReader RGBA Plane
   -> NativeFrame / C++ cv::Mat
   -> DirectByteBuffer（不复制像素）
-  -> libautojs_yolo.so
-  -> NCNN YOLO26 320
+  -> 后端推理（ncnn / ONNX Runtime / OpenCV 5.0 DNN）
   -> QuickJS 检测框数组
 
 文件：
-- YOLO单帧直连测试.js：截取一帧，推理并打印检测框。
+- YOLO单帧直连测试.js：截取一帧，推理并打印检测框。把文件顶部
+  `const backend = 'ncnn'` 改成 'onnx' 或 'opencv' 即可切换后端。
 - YOLO实时直连测试.js：连续推理 60 帧，每 10 帧打印速度。
 
-当前 QuickJS NativeFrame YOLO 桥首先开放 NCNN 后端，仅支持 arm64-v8a。
-模型复用 NCNN版本/models 中的 yolo26_320.param 和 yolo26_320.bin，不重复打包。
+后端选择：
+- ncnn      模型：NCNN版本/models 的 yolo26_320.param + .bin
+- onnx      模型：ONNX Runtime版本/models 的 yolo26_320.onnx
+- opencv    模型：同上（OpenCV 5.0 DNN 引擎推理）
+
+yolo.load 参数（QuickJS 三后端统一）：
+- ncnn：backend: 'ncnn'（或 'cpu'），param + bin
+- onnx/opencv：backend: 'onnx'/'opencv'（或 ort/onnxruntime/dnn/opencv5），model
+- 通用：labels（数组或文本路径）、inputSize（默认 320）、threads（默认 4）
+
+原生 ncnn/onnx 仅支持 arm64-v8a；opencv 后端跟随 OpenCV 5.0 支持所有 ABI。
 测试时请保证前台画面中有 COCO 数据集可识别目标，例如人、汽车、猫或狗。

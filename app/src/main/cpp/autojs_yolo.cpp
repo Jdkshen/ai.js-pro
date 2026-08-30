@@ -252,6 +252,56 @@ bool prepareOrtInput(JNIEnv* env, jobject bitmap, int inputSize, std::vector<flo
     return true;
 }
 
+bool prepareOrtInputRgba(const unsigned char* rgba, int width, int height, int rowStride,
+                         int inputSize, std::vector<float>& buffer, PreparedInput& prepared) {
+    if (rgba == nullptr || width < 2 || height < 2 || rowStride < width * 4) {
+        return false;
+    }
+    prepared.sourceWidth = width;
+    prepared.sourceHeight = height;
+
+    std::vector<unsigned char> packedPixels;
+    if (rowStride != width * 4) {
+        packedPixels.resize(static_cast<size_t>(width) * height * 4);
+        for (int row = 0; row < height; ++row) {
+            std::memcpy(packedPixels.data() + static_cast<size_t>(row) * width * 4,
+                        rgba + static_cast<size_t>(row) * rowStride,
+                        static_cast<size_t>(width) * 4);
+        }
+        rgba = packedPixels.data();
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    prepared.scale = std::min(inputSize / static_cast<float>(width),
+                              inputSize / static_cast<float>(height));
+    const int resizedWidth = std::max(1, static_cast<int>(
+            std::round(width * prepared.scale)));
+    const int resizedHeight = std::max(1, static_cast<int>(
+            std::round(height * prepared.scale)));
+    const int padWidth = inputSize - resizedWidth;
+    const int padHeight = inputSize - resizedHeight;
+    prepared.padLeft = padWidth / 2;
+    prepared.padTop = padHeight / 2;
+
+    ncnn::Mat resized = ncnn::Mat::from_pixels_resize(rgba, ncnn::Mat::PIXEL_RGBA2RGB,
+            width, height, resizedWidth, resizedHeight);
+    ncnn::Mat padded;
+    ncnn::copy_make_border(resized, padded, prepared.padTop, padHeight - prepared.padTop,
+            prepared.padLeft, padWidth - prepared.padLeft, ncnn::BORDER_CONSTANT, 114.0f);
+    const float normalization[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
+    padded.substract_mean_normalize(nullptr, normalization);
+
+    const size_t planeSize = static_cast<size_t>(inputSize) * inputSize;
+    buffer.resize(planeSize * 3);
+    for (int channel = 0; channel < 3; ++channel) {
+        const float* source = padded.channel(channel);
+        std::copy(source, source + planeSize, buffer.begin() + planeSize * channel);
+    }
+    prepared.elapsedMs = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+    return true;
+}
+
 void decodeOrtRows(const float* rows, size_t rowCount, float confidence,
                    const PreparedInput& prepared, std::vector<Detection>& detections) {
     detections.reserve(std::min<size_t>(rowCount, 100));
@@ -508,25 +558,9 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeRelease(
     delete reinterpret_cast<OrtDetector*>(handle);
 }
 
-extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectBitmap(
-        JNIEnv* env, jclass, jlong handle, jobject bitmap, jfloat confidence, jfloat) {
-    OrtDetector* detector = reinterpret_cast<OrtDetector*>(handle);
-    if (detector == nullptr) {
-        throwException(env, "java/lang/IllegalStateException", "ONNX detector is closed");
-        return nullptr;
-    }
-    if (bitmap == nullptr) {
-        throwException(env, "java/lang/IllegalArgumentException", "Image bitmap is null");
-        return nullptr;
-    }
-
-    std::lock_guard<std::mutex> guard(detector->mutex);
+jfloatArray runOrtDetection(JNIEnv* env, OrtDetector* detector, PreparedInput& prepared,
+                            float confidence) {
     try {
-        PreparedInput prepared;
-        if (!prepareOrtInput(env, bitmap, detector->inputSize, detector->inputBuffer, prepared)) {
-            return nullptr;
-        }
         const std::array<int64_t, 4> inputShape = {
                 1, 3, detector->inputSize, detector->inputSize};
         Ort::Value inputTensor = Ort::Value::CreateTensor<float>(detector->memoryInfo,
@@ -574,4 +608,63 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectBitmap(
         throwException(env, "java/lang/IllegalStateException", message);
     }
     return nullptr;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectBitmap(
+        JNIEnv* env, jclass, jlong handle, jobject bitmap, jfloat confidence, jfloat) {
+    OrtDetector* detector = reinterpret_cast<OrtDetector*>(handle);
+    if (detector == nullptr) {
+        throwException(env, "java/lang/IllegalStateException", "ONNX detector is closed");
+        return nullptr;
+    }
+    if (bitmap == nullptr) {
+        throwException(env, "java/lang/IllegalArgumentException", "Image bitmap is null");
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> guard(detector->mutex);
+    PreparedInput prepared;
+    if (!prepareOrtInput(env, bitmap, detector->inputSize, detector->inputBuffer, prepared)) {
+        return nullptr;
+    }
+    return runOrtDetection(env, detector, prepared, confidence);
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectRgba(
+        JNIEnv* env, jclass, jlong handle, jobject rgbaBuffer,
+        jint width, jint height, jint rowStride, jfloat confidence, jfloat) {
+    OrtDetector* detector = reinterpret_cast<OrtDetector*>(handle);
+    if (detector == nullptr) {
+        throwException(env, "java/lang/IllegalStateException", "ONNX detector is closed");
+        return nullptr;
+    }
+    const auto* rgba = static_cast<const unsigned char*>(env->GetDirectBufferAddress(rgbaBuffer));
+    const jlong capacity = env->GetDirectBufferCapacity(rgbaBuffer);
+    if (rgba == nullptr || capacity < 0) {
+        throwException(env, "java/lang/IllegalArgumentException",
+                       "YOLO NativeFrame 必须使用 DirectByteBuffer");
+        return nullptr;
+    }
+    if (width < 2 || height < 2 || rowStride < width * 4) {
+        throwException(env, "java/lang/IllegalArgumentException", "Invalid NativeFrame RGBA layout");
+        return nullptr;
+    }
+    const int64_t requiredBytes = static_cast<int64_t>(height - 1) * rowStride +
+                                  static_cast<int64_t>(width - 1) * 4 + 4;
+    if (capacity < requiredBytes) {
+        throwException(env, "java/lang/IllegalArgumentException",
+                       "NativeFrame buffer is smaller than its declared layout");
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> guard(detector->mutex);
+    PreparedInput prepared;
+    if (!prepareOrtInputRgba(rgba, width, height, rowStride,
+                             detector->inputSize, detector->inputBuffer, prepared)) {
+        throwException(env, "java/lang/IllegalArgumentException", "Invalid NativeFrame RGBA layout");
+        return nullptr;
+    }
+    return runOrtDetection(env, detector, prepared, confidence);
 }

@@ -18,6 +18,7 @@ import org.opencv.dnn.Dnn;
 import org.opencv.dnn.Net;
 import org.opencv.imgproc.Imgproc;
 
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -96,7 +97,39 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         int width = bitmap.getWidth();
         int height = bitmap.getHeight();
         if (width < 2 || height < 2) throw new IllegalArgumentException("图片尺寸无效");
+        Utils.bitmapToMat(bitmap, mSource);
+        return detectFromSource(width, height, confidence, nmsThreshold);
+    }
 
+    public synchronized float[] detectRgba(ByteBuffer rgba, int width, int height, int rowStride,
+                                           float confidence, float nmsThreshold) {
+        if (mClosed || mNet == null) throw new IllegalStateException("YOLO detector 已关闭");
+        if (rgba == null || !rgba.isDirect()) {
+            throw new IllegalArgumentException("YOLO NativeFrame 必须使用 DirectByteBuffer");
+        }
+        if (width < 2 || height < 2 || rowStride < width * 4) {
+            throw new IllegalArgumentException("YOLO NativeFrame RGBA 布局无效");
+        }
+        validateThresholds(confidence, nmsThreshold);
+        mSource.create(height, width, CvType.CV_8UC4);
+        ByteBuffer duplicate = rgba.duplicate();
+        duplicate.rewind();
+        if (rowStride == width * 4) {
+            byte[] pixels = new byte[width * height * 4];
+            duplicate.get(pixels);
+            mSource.put(0, 0, pixels);
+        } else {
+            byte[] row = new byte[width * 4];
+            for (int y = 0; y < height; y++) {
+                duplicate.position(y * rowStride);
+                duplicate.get(row);
+                mSource.put(y, 0, row);
+            }
+        }
+        return detectFromSource(width, height, confidence, nmsThreshold);
+    }
+
+    private float[] detectFromSource(int width, int height, float confidence, float nmsThreshold) {
         Mat blob = null;
         Mat output = null;
         Mat rows = null;
@@ -108,7 +141,6 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             int padX = (mInputSize - resizedWidth) / 2;
             int padY = (mInputSize - resizedHeight) / 2;
 
-            Utils.bitmapToMat(bitmap, mSource);
             Imgproc.resize(mSource, mResizedRgba, new Size(resizedWidth, resizedHeight),
                     0.0, 0.0, Imgproc.INTER_LINEAR);
             Imgproc.cvtColor(mResizedRgba, mResizedRgb, Imgproc.COLOR_RGBA2RGB);

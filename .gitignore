@@ -31,3 +31,6 @@
 
 # build log artifact
 build-log.txt
+
+# gradle/native build logs
+*.log
