@@ -155,7 +155,8 @@ files.remove(file);
 
 // http：同步白名单桥，返回 { statusCode, statusMessage, url, method,
 //        headers, body: { string, contentType, json() } }
-const res = http.get('https://example.com/', { headers: { 'User-Agent': 'AI.jsPro-QuickJS' } });
+// 注意：example.com 等站点在国内不可达，OkHttp 30s 超时 + 3 次重试会拖很久，测试用 baidu 等可直达域名
+const res = http.get('https://www.baidu.com/', { headers: { 'User-Agent': 'AI.jsPro-QuickJS' } });
 console.log(res.statusCode, res.body.string.substring(0, 40));
 
 const json = http.postJson('https://httpbin.org/post', { hello: 'QuickJS' });

@@ -28,7 +28,7 @@ console.log("QUICKJS_REMOVE_OK", files.exists(file) === false);
 
 // ---- http ----
 try {
-    const response = http.get("https://example.com/", {
+    const response = http.get("https://www.baidu.com/", {
         headers: { "User-Agent": "AI.jsPro-QuickJS" }
     });
     console.log("QUICKJS_HTTP_OK", response.statusCode, response.body.contentType,
