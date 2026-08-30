@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "native_frame_store.h"
 
@@ -20,6 +23,21 @@ namespace {
 
 constexpr const char *kQuickJsExceptionClass = "com/stardust/autojs/engine/QuickJsException";
 
+int64_t nowMillis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+}
+
+struct TimerEntry {
+    int64_t id = 0;
+    JSValue callback = JS_UNDEFINED;
+    bool repeat = false;
+    int64_t intervalMs = 0;
+    int64_t deadlineMs = 0;
+    bool canceled = false;
+};
+
 struct EngineState {
     JavaVM *vm = nullptr;
     jobject host = nullptr;
@@ -27,7 +45,116 @@ struct EngineState {
     JSContext *context = nullptr;
     std::atomic<bool> interrupted{false};
     NativeFrameStore frames;
+    std::mutex timersMutex;
+    std::condition_variable timersCv;
+    std::unordered_map<int64_t, std::shared_ptr<TimerEntry>> timers;
+    std::atomic<int64_t> nextTimerId{1};
 };
+
+std::string jsString(JSContext *context, JSValueConst value);
+
+int64_t pendingTimerCount(EngineState *state) {
+    std::lock_guard<std::mutex> lock(state->timersMutex);
+    int64_t count = 0;
+    for (const auto &entry : state->timers) {
+        if (!entry.second->canceled) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+JSValue registerTimer(JSContext *context, EngineState *state, int argc, JSValueConst *argv,
+                      bool repeat) {
+    if (argc < 2 || !JS_IsFunction(context, argv[0])) {
+        return JS_ThrowTypeError(context, "setTimeout/setInterval requires a callback function");
+    }
+    int64_t millis = 0;
+    if (JS_ToInt64(context, &millis, argv[1]) < 0) {
+        return JS_EXCEPTION;
+    }
+    millis = std::max<int64_t>(0, millis);
+    auto timer = std::make_shared<TimerEntry>();
+    timer->id = state->nextTimerId.fetch_add(1);
+    timer->callback = JS_DupValue(context, argv[0]);
+    timer->repeat = repeat;
+    timer->intervalMs = millis;
+    timer->deadlineMs = nowMillis() + millis;
+    {
+        std::lock_guard<std::mutex> lock(state->timersMutex);
+        state->timers.emplace(timer->id, timer);
+    }
+    state->timersCv.notify_all();
+    return JS_NewInt64(context, timer->id);
+}
+
+// Dispatches all due timers on the current (JS) thread. Returns false when a
+// timer callback throws, filling *error with the exception text.
+bool dispatchDueTimers(JSContext *context, EngineState *state, std::string *error) {
+    std::vector<std::shared_ptr<TimerEntry>> due;
+    {
+        std::lock_guard<std::mutex> lock(state->timersMutex);
+        const int64_t now = nowMillis();
+        for (const auto &entry : state->timers) {
+            if (!entry.second->canceled && entry.second->deadlineMs <= now) {
+                due.push_back(entry.second);
+            }
+        }
+    }
+    std::sort(due.begin(), due.end(), [](const auto &a, const auto &b) { return a->id < b->id; });
+    for (const auto &timer : due) {
+        {
+            std::lock_guard<std::mutex> lock(state->timersMutex);
+            if (timer->canceled) {
+                continue;
+            }
+            if (timer->repeat) {
+                timer->deadlineMs = nowMillis() + timer->intervalMs;
+            } else {
+                timer->canceled = true;
+                state->timers.erase(timer->id);
+            }
+        }
+        JSValue result = JS_Call(context, timer->callback, JS_UNDEFINED, 0, nullptr);
+        if (JS_IsException(result)) {
+            JSValue exception = JS_GetException(context);
+            *error = jsString(context, exception);
+            JS_FreeValue(context, exception);
+            JS_FreeValue(context, result);
+            if (timer->repeat) {
+                std::lock_guard<std::mutex> lock(state->timersMutex);
+                timer->canceled = true;
+                state->timers.erase(timer->id);
+            }
+            JS_FreeValue(context, timer->callback);
+            return false;
+        }
+        JS_FreeValue(context, result);
+        if (!timer->repeat) {
+            JS_FreeValue(context, timer->callback);
+        }
+    }
+    return true;
+}
+
+// Blocks until at least one timer is due or the engine is interrupted.
+void waitForNextTimer(EngineState *state) {
+    std::unique_lock<std::mutex> lock(state->timersMutex);
+    while (!state->interrupted.load(std::memory_order_relaxed)) {
+        const int64_t now = nowMillis();
+        int64_t next = std::numeric_limits<int64_t>::max();
+        for (const auto &entry : state->timers) {
+            if (!entry.second->canceled) {
+                next = std::min(next, entry.second->deadlineMs - now);
+            }
+        }
+        if (next <= 0) {
+            return;
+        }
+        const int64_t slice = std::min<int64_t>(next, 25);
+        state->timersCv.wait_for(lock, std::chrono::milliseconds(slice));
+    }
+}
 
 std::mutex gEnginesMutex;
 std::unordered_map<jlong, std::shared_ptr<EngineState>> gEngines;
@@ -333,6 +460,192 @@ JSValue callStringHost(JSContext *context, const char *methodName, const char *a
 
 JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "getClip", nullptr);
+}
+
+JSValue callHostBooleanString(JSContext *context, const char *methodName, const std::string &argument) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(Ljava/lang/String;)Z");
+    jstring javaArgument = toJavaString(env, argument);
+    const jboolean result = env->CallBooleanMethod(state->host, method, javaArgument);
+    env->DeleteLocalRef(javaArgument);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue callHostBooleanStringString(JSContext *context, const char *methodName,
+                                    const std::string &first, const std::string &second) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName,
+                                        "(Ljava/lang/String;Ljava/lang/String;)Z");
+    jstring javaFirst = toJavaString(env, first);
+    jstring javaSecond = toJavaString(env, second);
+    const jboolean result = env->CallBooleanMethod(state->host, method, javaFirst, javaSecond);
+    env->DeleteLocalRef(javaSecond);
+    env->DeleteLocalRef(javaFirst);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue callHostVoidStringString(JSContext *context, const char *methodName,
+                                 const std::string &first, const std::string &second) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName,
+                                        "(Ljava/lang/String;Ljava/lang/String;)V");
+    jstring javaFirst = toJavaString(env, first);
+    jstring javaSecond = toJavaString(env, second);
+    env->CallVoidMethod(state->host, method, javaFirst, javaSecond);
+    env->DeleteLocalRef(javaSecond);
+    env->DeleteLocalRef(javaFirst);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+std::string requireStringArg(JSContext *context, int argc, JSValueConst *argv, int index) {
+    return index < argc ? jsString(context, argv[index]) : std::string();
+}
+
+JSValue nativeFilesExists(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesExists", requireStringArg(context, argc, argv, 0));
+}
+
+JSValue nativeFilesIsFile(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesIsFile", requireStringArg(context, argc, argv, 0));
+}
+
+JSValue nativeFilesIsDir(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesIsDir", requireStringArg(context, argc, argv, 0));
+}
+
+JSValue nativeFilesRead(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "filesRead", requireStringArg(context, argc, argv, 0).c_str());
+}
+
+JSValue nativeFilesWrite(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostVoidStringString(context, "filesWrite",
+                                    requireStringArg(context, argc, argv, 0),
+                                    requireStringArg(context, argc, argv, 1));
+}
+
+JSValue nativeFilesAppend(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostVoidStringString(context, "filesAppend",
+                                    requireStringArg(context, argc, argv, 0),
+                                    requireStringArg(context, argc, argv, 1));
+}
+
+JSValue nativeFilesCreate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesCreate", requireStringArg(context, argc, argv, 0));
+}
+
+JSValue nativeFilesEnsureDir(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesEnsureDir", requireStringArg(context, argc, argv, 0));
+}
+
+JSValue nativeFilesListDir(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "filesListDir", requireStringArg(context, argc, argv, 0).c_str());
+}
+
+JSValue nativeFilesRemove(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesRemove", requireStringArg(context, argc, argv, 0));
+}
+
+JSValue nativeFilesRename(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanStringString(context, "filesRename",
+                                       requireStringArg(context, argc, argv, 0),
+                                       requireStringArg(context, argc, argv, 1));
+}
+
+JSValue nativeFilesCopy(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanStringString(context, "filesCopy",
+                                       requireStringArg(context, argc, argv, 0),
+                                       requireStringArg(context, argc, argv, 1));
+}
+
+JSValue nativeFilesMove(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanStringString(context, "filesMove",
+                                       requireStringArg(context, argc, argv, 0),
+                                       requireStringArg(context, argc, argv, 1));
+}
+
+JSValue nativeFilesCwd(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "filesCwd", nullptr);
+}
+
+JSValue nativeFilesGetSdcardPath(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "filesGetSdcardPath", nullptr);
+}
+
+JSValue nativeFilesPath(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "resolvePath", requireStringArg(context, argc, argv, 0).c_str());
+}
+
+JSValue nativeSetTimeout(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    return registerTimer(context, state, argc, argv, false);
+}
+
+JSValue nativeSetInterval(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    return registerTimer(context, state, argc, argv, true);
+}
+
+JSValue nativeClearTimer(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t id = 0;
+    if (argc < 1 || JS_ToInt64(context, &id, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "clearTimeout/clearInterval requires a timer id");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::lock_guard<std::mutex> lock(state->timersMutex);
+    const auto it = state->timers.find(id);
+    if (it == state->timers.end() || it->second->canceled) {
+        return JS_NewBool(context, false);
+    }
+    it->second->canceled = true;
+    JSValue callback = it->second->callback;
+    state->timers.erase(it);
+    JS_FreeValue(context, callback);
+    return JS_NewBool(context, true);
+}
+
+JSValue nativeHttpRequest(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 2) {
+        return JS_ThrowTypeError(context, "http request requires method and url");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string method = jsString(context, argv[0]);
+    const std::string url = jsString(context, argv[1]);
+    const std::string headersJson = requireStringArg(context, argc, argv, 2);
+    const std::string body = requireStringArg(context, argc, argv, 3);
+    const std::string contentType = requireStringArg(context, argc, argv, 4);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "httpRequest",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)"
+            "Ljava/lang/String;");
+    jstring javaMethod = toJavaString(env, method);
+    jstring javaUrl = toJavaString(env, url);
+    jstring javaHeaders = toJavaString(env, headersJson);
+    jstring javaBody = toJavaString(env, body);
+    jstring javaContentType = toJavaString(env, contentType);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, methodId,
+            javaMethod, javaUrl, javaHeaders, javaBody, javaContentType));
+    env->DeleteLocalRef(javaContentType);
+    env->DeleteLocalRef(javaBody);
+    env->DeleteLocalRef(javaHeaders);
+    env->DeleteLocalRef(javaUrl);
+    env->DeleteLocalRef(javaMethod);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
 }
 
 JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -844,6 +1157,99 @@ const char kBootstrapScript[] = R"JS(
     };
     global.YoloDetector = YoloDetector;
     global.yolo = Object.freeze(yolo);
+
+    const timerIds = new Set();
+    function makeTimer(repeat, callback, millis) {
+        if (typeof callback !== 'function') {
+            throw new TypeError('Timer callback must be a function');
+        }
+        const delay = Math.max(0, Number(millis) || 0);
+        const id = repeat
+            ? __aiNativeSetInterval(callback, delay)
+            : __aiNativeSetTimeout(callback, delay);
+        timerIds.add(id);
+        return id;
+    }
+    global.setTimeout = function (callback, millis) { return makeTimer(false, callback, millis); };
+    global.setInterval = function (callback, millis) { return makeTimer(true, callback, millis); };
+    function clearTimer(id) {
+        id = Number(id);
+        if (!timerIds.has(id)) return false;
+        timerIds.delete(id);
+        return __aiNativeClearTimer(id);
+    }
+    global.clearTimeout = clearTimer;
+    global.clearInterval = clearTimer;
+
+    function filePath(path) { return String(path); }
+    const files = {
+        path: function (path) { return __aiNativeFilesPath(filePath(path)); },
+        cwd: function () { return __aiNativeFilesCwd(); },
+        getSdcardPath: function () { return __aiNativeFilesGetSdcardPath(); },
+        exists: function (path) { return __aiNativeFilesExists(filePath(path)); },
+        isFile: function (path) { return __aiNativeFilesIsFile(filePath(path)); },
+        isDir: function (path) { return __aiNativeFilesIsDir(filePath(path)); },
+        read: function (path) { return __aiNativeFilesRead(filePath(path)); },
+        write: function (path, text) { __aiNativeFilesWrite(filePath(path), String(text)); },
+        append: function (path, text) { __aiNativeFilesAppend(filePath(path), String(text)); },
+        create: function (path) { return __aiNativeFilesCreate(filePath(path)); },
+        createWithDirs: function (path) { return __aiNativeFilesCreate(filePath(path)); },
+        ensureDir: function (path) { return __aiNativeFilesEnsureDir(filePath(path)); },
+        listDir: function (path) { return JSON.parse(__aiNativeFilesListDir(filePath(path))); },
+        remove: function (path) { return __aiNativeFilesRemove(filePath(path)); },
+        rename: function (path, newName) { return __aiNativeFilesRename(filePath(path), String(newName)); },
+        copy: function (source, target) { return __aiNativeFilesCopy(filePath(source), filePath(target)); },
+        move: function (source, target) { return __aiNativeFilesMove(filePath(source), filePath(target)); }
+    };
+    global.files = Object.freeze(files);
+
+    function formEncode(data) {
+        if (data === null || data === undefined) return '';
+        if (typeof data !== 'object') return encodeURIComponent(String(data));
+        return Object.keys(data)
+            .map(function (key) {
+                return encodeURIComponent(key) + '=' + encodeURIComponent(String(data[key]));
+            })
+            .join('&');
+    }
+    function httpExecute(method, url, options, payload, asJson) {
+        options = options || {};
+        const headers = options.headers || {};
+        let body = payload === undefined || payload === null ? null : payload;
+        let contentType = options.contentType || '';
+        if (body !== null && typeof body === 'object') {
+            if (asJson) {
+                contentType = 'application/json';
+                body = JSON.stringify(body);
+            } else {
+                contentType = 'application/x-www-form-urlencoded';
+                body = formEncode(body);
+            }
+        } else {
+            body = body === null ? null : String(body);
+        }
+        const raw = __aiNativeHttpRequest(String(method), String(url),
+            JSON.stringify(headers), body || '', contentType);
+        const parsed = JSON.parse(raw);
+        const text = parsed.body;
+        parsed.body = {
+            string: text,
+            contentType: parsed.contentType,
+            json: function () { return JSON.parse(text); }
+        };
+        return parsed;
+    }
+    const http = {
+        get: function (url, options) { return httpExecute('GET', url, options); },
+        post: function (url, data, options) { return httpExecute('POST', url, options, data, false); },
+        postJson: function (url, data, options) { return httpExecute('POST', url, options, data, true); },
+        request: function (url, options) {
+            options = options || {};
+            return httpExecute(options.method || 'GET', url, options, options.body, options.json);
+        }
+    };
+    global.http = Object.freeze(http);
+
     global.__engine__ = Object.freeze({ name: 'QuickJS', version: '2026-06-04', native: true });
 })(globalThis);
 )JS";
@@ -941,6 +1347,26 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeYoloReadLabels", nativeYoloReadLabels, 1);
     installNativeFunction(state->context, global, "__aiNativeYoloDetect", nativeYoloDetect, 4);
     installNativeFunction(state->context, global, "__aiNativeYoloClose", nativeYoloClose, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesExists", nativeFilesExists, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesIsFile", nativeFilesIsFile, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesIsDir", nativeFilesIsDir, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesRead", nativeFilesRead, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesWrite", nativeFilesWrite, 2);
+    installNativeFunction(state->context, global, "__aiNativeFilesAppend", nativeFilesAppend, 2);
+    installNativeFunction(state->context, global, "__aiNativeFilesCreate", nativeFilesCreate, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesEnsureDir", nativeFilesEnsureDir, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesListDir", nativeFilesListDir, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesRemove", nativeFilesRemove, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesRename", nativeFilesRename, 2);
+    installNativeFunction(state->context, global, "__aiNativeFilesCopy", nativeFilesCopy, 2);
+    installNativeFunction(state->context, global, "__aiNativeFilesMove", nativeFilesMove, 2);
+    installNativeFunction(state->context, global, "__aiNativeFilesCwd", nativeFilesCwd, 0);
+    installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);
+    installNativeFunction(state->context, global, "__aiNativeFilesPath", nativeFilesPath, 1);
+    installNativeFunction(state->context, global, "__aiNativeSetTimeout", nativeSetTimeout, 2);
+    installNativeFunction(state->context, global, "__aiNativeSetInterval", nativeSetInterval, 2);
+    installNativeFunction(state->context, global, "__aiNativeClearTimer", nativeClearTimer, 1);
+    installNativeFunction(state->context, global, "__aiNativeHttpRequest", nativeHttpRequest, 5);
     JS_FreeValue(state->context, global);
 
     JSValue bootstrap = JS_Eval(state->context, kBootstrapScript, sizeof(kBootstrapScript) - 1,
@@ -1028,6 +1454,22 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
         return nullptr;
     }
 
+    // Native timer event loop: keeps the engine thread alive while timers are pending.
+    while (pendingTimerCount(state.get()) > 0) {
+        if (state->interrupted.load(std::memory_order_relaxed)) {
+            JS_FreeValue(state->context, result);
+            throwQuickJs(env, "Script execution interrupted");
+            return nullptr;
+        }
+        std::string timerError;
+        if (!dispatchDueTimers(state->context, state.get(), &timerError)) {
+            JS_FreeValue(state->context, result);
+            throwQuickJs(env, timerError.empty() ? "Timer callback failed" : timerError);
+            return nullptr;
+        }
+        waitForNextTimer(state.get());
+    }
+
     jobject javaResult = resultToJava(env, state->context, result);
     JS_FreeValue(state->context, result);
     return javaResult;
@@ -1071,6 +1513,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_requestInterrupt(
     const auto state = findEngine(handle);
     if (state != nullptr) {
         state->interrupted.store(true, std::memory_order_relaxed);
+        state->timersCv.notify_all();
     }
 }
 
@@ -1088,6 +1531,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_destroy(
         gEngines.erase(it);
     }
     state->interrupted.store(true, std::memory_order_relaxed);
+    state->timersCv.notify_all();
     state->frames.clear();
     JS_FreeContext(state->context);
     JS_FreeRuntime(state->runtime);

@@ -5,9 +5,15 @@ import android.media.Image;
 import android.os.Build;
 import android.util.Log;
 
+import com.stardust.autojs.core.http.MutableOkHttp;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.Yolo;
+import com.stardust.pio.UncheckedIOException;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
@@ -16,9 +22,17 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+
+import okhttp3.Headers;
+import okhttp3.MediaType;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 /**
  * Deliberately small Java/Native API boundary for QuickJS. New native APIs
@@ -29,6 +43,7 @@ final class QuickJsHostBridge implements AutoCloseable {
     private final ScriptRuntime mRuntime;
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
     private final Map<Long, Yolo.Detector> mYoloDetectors = new ConcurrentHashMap<>();
+    private final MutableOkHttp mHttpClient = new MutableOkHttp();
     private volatile long mEngineHandle;
 
     QuickJsHostBridge(ScriptRuntime runtime) {
@@ -206,6 +221,149 @@ final class QuickJsHostBridge implements AutoCloseable {
             return new String(output.toByteArray(), StandardCharsets.UTF_8);
         } catch (IOException error) {
             throw new IllegalArgumentException("无法读取 YOLO labels：" + path, error);
+        }
+    }
+
+    // ---- files whitelist ----
+
+    public boolean filesExists(String path) {
+        return mRuntime.files.exists(path);
+    }
+
+    public boolean filesIsFile(String path) {
+        return mRuntime.files.isFile(path);
+    }
+
+    public boolean filesIsDir(String path) {
+        return mRuntime.files.isDir(path);
+    }
+
+    public String filesRead(String path) {
+        return mRuntime.files.read(path);
+    }
+
+    public void filesWrite(String path, String text) {
+        mRuntime.files.write(path, text);
+    }
+
+    public void filesAppend(String path, String text) {
+        mRuntime.files.append(path, text);
+    }
+
+    public boolean filesCreate(String path) {
+        return mRuntime.files.createWithDirs(path);
+    }
+
+    public boolean filesEnsureDir(String path) {
+        return mRuntime.files.ensureDir(path);
+    }
+
+    public String filesListDir(String path) {
+        String[] children = mRuntime.files.listDir(path);
+        JSONArray array = new JSONArray();
+        if (children != null) {
+            for (String child : children) {
+                array.put(child);
+            }
+        }
+        return array.toString();
+    }
+
+    public boolean filesRemove(String path) {
+        return mRuntime.files.remove(path);
+    }
+
+    public boolean filesRename(String path, String newName) {
+        return mRuntime.files.rename(path, newName);
+    }
+
+    public boolean filesCopy(String source, String target) {
+        return mRuntime.files.copy(source, target);
+    }
+
+    public boolean filesMove(String source, String target) {
+        return mRuntime.files.move(source, target);
+    }
+
+    public String filesCwd() {
+        return mRuntime.files.cwd();
+    }
+
+    public String filesGetSdcardPath() {
+        return mRuntime.files.getSdcardPath();
+    }
+
+    // ---- http whitelist ----
+
+    public String httpRequest(String method, String url, String headersJson,
+                              String body, String contentType) {
+        if (url == null || url.isEmpty()) {
+            throw new IllegalArgumentException("http url is required");
+        }
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            url = "http://" + url;
+        }
+        String methodUpper = method == null || method.isEmpty()
+                ? "GET" : method.toUpperCase(Locale.US);
+        Request.Builder builder = new Request.Builder().url(url);
+        try {
+            JSONObject headers = new JSONObject(headersJson == null ? "{}" : headersJson);
+            JSONArray names = headers.names();
+            if (names != null) {
+                for (int i = 0; i < names.length(); i++) {
+                    String name = names.getString(i);
+                    Object value = headers.get(name);
+                    if (value instanceof JSONArray) {
+                        JSONArray values = (JSONArray) value;
+                        for (int j = 0; j < values.length(); j++) {
+                            builder.header(name, String.valueOf(values.get(j)));
+                        }
+                    } else {
+                        builder.header(name, String.valueOf(value));
+                    }
+                }
+            }
+        } catch (JSONException ignored) {
+            // invalid header payload: proceed without headers
+        }
+        RequestBody requestBody = null;
+        if (body != null && !body.isEmpty() && !"GET".equals(methodUpper) && !"HEAD".equals(methodUpper)) {
+            MediaType mediaType = contentType == null || contentType.isEmpty()
+                    ? null : MediaType.parse(contentType);
+            requestBody = RequestBody.create(mediaType, body);
+        }
+        builder.method(methodUpper, requestBody);
+        try (Response response = mHttpClient.client().newCall(builder.build()).execute()) {
+            JSONObject result = new JSONObject();
+            result.put("statusCode", response.code());
+            result.put("statusMessage", response.message() == null ? "" : response.message());
+            result.put("method", methodUpper);
+            result.put("url", response.request().url().toString());
+            JSONObject responseHeaders = new JSONObject();
+            Headers headers = response.headers();
+            for (int i = 0; i < headers.size(); i++) {
+                String name = headers.name(i);
+                String value = headers.value(i);
+                if (responseHeaders.has(name)) {
+                    Object existing = responseHeaders.get(name);
+                    JSONArray values = existing instanceof JSONArray
+                            ? (JSONArray) existing : new JSONArray().put(existing);
+                    responseHeaders.put(name, values.put(value));
+                } else {
+                    responseHeaders.put(name, value);
+                }
+            }
+            result.put("headers", responseHeaders);
+            ResponseBody responseBody = response.body();
+            result.put("body", responseBody == null ? "" : responseBody.string());
+            result.put("contentType", responseBody == null || responseBody.contentType() == null
+                    ? "" : responseBody.contentType().toString());
+            return result.toString();
+        } catch (IOException error) {
+            throw new UncheckedIOException(new IOException(
+                    "QuickJS http request failed: " + error.getMessage(), error));
+        } catch (JSONException error) {
+            throw new IllegalStateException("Unable to serialize http response", error);
         }
     }
 

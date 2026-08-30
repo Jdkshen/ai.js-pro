@@ -1,6 +1,6 @@
 # AI.js Pro 双 JavaScript 引擎架构
 
-> 状态：双引擎与 Native Frame + C++ OpenCV 第一批能力已落地。QuickJS 为显式选择的新引擎，Rhino 仍是默认兼容引擎。
+> 状态：双引擎与 Native Frame + C++ OpenCV 第一批能力已落地；第二批 `files` / `http` / `timers` 白名单 API 已落地。QuickJS 为显式选择的新引擎，Rhino 仍是默认兼容引擎。
 
 ## 1. 总体结构
 
@@ -71,11 +71,14 @@ toast("这是 QuickJS 脚本");
 | `NativeFrame.recycle` | 已接入 | 显式释放；引擎销毁时自动回收遗留句柄 |
 | `yolo.load`、`detector.detect(NativeFrame)` | 已接入 | arm64 NCNN；`cv::Mat` 通过 DirectByteBuffer 同步直连推理，不创建 Bitmap |
 | `detector.close` | 已接入 | 显式释放 NCNN 模型；引擎销毁时自动清理遗留 detector |
-| `files`、`http`、`shell`、`app` | 待接入 | 应通过白名单 Host API 分批增加 |
-| `timers`、`threads`、`events` | 待接入 | 需要 QuickJS Job Queue 与 Android Looper 的专用调度层 |
+| `files` | 已接入 | 读写、追加、列表、存在性判断、复制/移动/重命名/删除等白名单方法 |
+| `http` | 已接入 | 同步 `get` / `post` / `postJson` / `request`，OkHttp 3.10 白名单桥 |
+| `timers` | 已接入 | Native 定时器队列 + 引擎线程事件循环，可被停止信号打断 |
+| `shell`、`app` | 待接入 | 应通过白名单 Host API 继续增加 |
+| `threads`、`events` | 待接入 | 需要 Android Looper 的专用调度层 |
 | `ui`、E4X、Rhino Java 互操作 | 不兼容 | 继续使用 Rhino 执行这类旧脚本 |
 
-示例脚本位于 `app/src/main/assets/sample/脚本引擎/QuickJS运行环境测试.js` 和 `QuickJS Native Frame 回归测试.js`。
+示例脚本位于 `app/src/main/assets/sample/脚本引擎/QuickJS运行环境测试.js`、`QuickJS Native Frame 回归测试.js` 和 `QuickJS Files Http Timers 测试.js`。
 
 ### Native Frame 用法
 
@@ -131,6 +134,37 @@ try {
 ```
 
 可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中的单帧和 60 帧实时案例。当前这条 QuickJS 直连桥先开放 arm64 NCNN；ONNX Runtime 和 OpenCV DNN 的旧 Rhino API 保持不变。
+
+### files / http / timers 白名单 API
+
+```javascript
+// @engine quickjs
+
+// 定时器：脚本结束后引擎线程会留在原生事件循环里直到定时器清空
+let ticks = 0;
+const id = setInterval(() => console.info('tick', ++ticks), 250);
+setTimeout(() => { clearInterval(id); console.log('interval 已停止', ticks); }, 1100);
+
+// files：与 Rhino 同名 API，路径相对脚本目录解析
+const file = files.cwd() + '/quickjs_test.txt';
+files.write(file, '第一行\n');
+files.append(file, '第二行\n');
+console.log(files.read(file), files.exists(file), files.isFile(file));
+console.log(files.listDir('.'));
+files.remove(file);
+
+// http：同步白名单桥，返回 { statusCode, statusMessage, url, method,
+//        headers, body: { string, contentType, json() } }
+const res = http.get('https://example.com/', { headers: { 'User-Agent': 'AI.jsPro-QuickJS' } });
+console.log(res.statusCode, res.body.string.substring(0, 40));
+
+const json = http.postJson('https://httpbin.org/post', { hello: 'QuickJS' });
+console.log(json.statusCode, json.body.json().data);
+```
+
+- `files` 首批：`path`、`cwd`、`getSdcardPath`、`exists`、`isFile`、`isDir`、`read`、`write`、`append`、`create`（含父目录）、`ensureDir`、`listDir`、`remove`、`rename`、`copy`、`move`。
+- `timers` 首批：`setTimeout`、`setInterval`、`clearTimeout`、`clearInterval`。定时器由 C++ 端定时器表 + 引擎线程条件变量事件循环驱动，`stopAll()` 会立即唤醒并中止。
+- `http` 首批：`http.get(url, options)`、`http.post(url, data, options)`、`http.postJson(url, data, options)`、`http.request(url, options)`；同步执行于脚本线程，支持 `headers`、`contentType`、`body`，`post` 对对象数据自动做表单编码。暂不支持 `bytes()`、`postMultipart` 和异步回调。
 
 ## 4. 关键代码
 
