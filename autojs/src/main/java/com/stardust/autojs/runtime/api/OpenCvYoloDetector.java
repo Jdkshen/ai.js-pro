@@ -42,16 +42,24 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         ensureOpenCv(context);
         try {
             Core.setNumThreads(Math.max(1, Math.min(threads, 8)));
-            mNet = Dnn.readNetFromONNX(modelPath);
+            // 引擎选择（实测骁龙 870）：
+            //  - ENGINE_AUTO 默认走新图引擎（KleidiCV 优化 CPU 路径）≈ 106-111ms，最快
+            //  - ENGINE_CLASSIC 经典引擎 ≈ 134ms（旧卷积路径，慢）
+            //  - 新图引擎不支持 setPreferableTarget（仅 CPU）；OpenCL 在 Adreno 上为负优化
+            //    （OCL 仅针对 Intel GPU 优化，实测 FP32 686ms vs CPU 106ms），故不设 target。
+            mNet = Dnn.readNetFromONNX(modelPath, Dnn.ENGINE_AUTO);
             if (mNet == null || mNet.empty()) {
                 throw new IllegalStateException("OpenCV 无法读取 ONNX 模型");
             }
             mNet.setPreferableBackend(Dnn.DNN_BACKEND_OPENCV);
+            // 新图引擎忽略 setPreferableTarget（默认 CPU），无需也不应设置。
+            String targetName = "DNN_TARGET_CPU (new graph engine)";
             try {
-                // ARM NEON FP16 runs can be ~1.5x faster than FP32 on arm64.
-                mNet.setPreferableTarget(Dnn.DNN_TARGET_CPU_FP16);
+                android.util.Log.i("OpenCvYoloDetector", "DNN target=" + targetName
+                        + " | OpenCL built=" + isOpenClInBuild()
+                        + " | buildInfo=" + Core.getBuildInformation().replace("\n", " | "));
             } catch (Throwable ignored) {
-                mNet.setPreferableTarget(Dnn.DNN_TARGET_CPU);
+                // 日志失败不影响运行
             }
         } catch (Throwable error) {
             close();
@@ -75,6 +83,28 @@ public final class OpenCvYoloDetector implements AutoCloseable {
     public static String getRuntimeVersion() {
         return isRuntimeAvailable() ? Core.VERSION : "unavailable";
     }
+
+    private static String openClSegment() {
+        try {
+            String info = Core.getBuildInformation();
+            int idx = info.indexOf("OpenCL");
+            if (idx < 0) return "n/a";
+            int end = info.indexOf('\n', idx);
+            return end < 0 ? info.substring(idx) : info.substring(idx, end);
+        } catch (Throwable ignored) {
+            return "n/a";
+        }
+    }
+
+    private static boolean isOpenClInBuild() {
+        try {
+            String info = Core.getBuildInformation();
+            return info.contains("OpenCL") && !info.contains("OpenCL:        NO");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
 
     private static void ensureOpenCv(Context context) {
         if (OpenCVHelper.isInitialized()) return;
