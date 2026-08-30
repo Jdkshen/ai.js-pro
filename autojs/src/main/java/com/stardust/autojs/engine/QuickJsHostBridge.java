@@ -448,6 +448,7 @@ final class QuickJsHostBridge implements AutoCloseable {
 
     // ---- drawing overlay whitelist ----
 
+    private static int sImmersiveCount = 0;
     private volatile QuickJsOverlay mOverlay;
 
     public boolean drawCreate() {
@@ -509,8 +510,17 @@ final class QuickJsHostBridge implements AutoCloseable {
         if (activity == null) return;
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
-                View decor = activity.getWindow().getDecorView();
+                // Reference-counted: multiple script instances may hide the system
+                // bars at the same time. Only restore them when the last instance
+                // closes, otherwise the capture size changes and remaining overlay
+                // boxes misalign with the screen.
                 if (immersive) {
+                    sImmersiveCount++;
+                } else {
+                    sImmersiveCount = Math.max(0, sImmersiveCount - 1);
+                }
+                View decor = activity.getWindow().getDecorView();
+                if (sImmersiveCount > 0) {
                     decor.setSystemUiVisibility(
                             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                                     | View.SYSTEM_UI_FLAG_FULLSCREEN
@@ -592,6 +602,9 @@ final class QuickJsHostBridge implements AutoCloseable {
                         params.layoutInDisplayCutoutMode =
                                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
                     }
+                    // Anchor explicitly to the top-left so the overlay always starts
+                    // at (0,0) and spans the whole screen even with multiple overlays.
+                    params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
                     mWindowManager.addView(mView, params);
                     mShown = true;
                     Log.i(TAG, "Overlay window added");

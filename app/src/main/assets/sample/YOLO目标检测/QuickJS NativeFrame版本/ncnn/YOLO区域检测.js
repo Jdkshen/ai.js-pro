@@ -93,6 +93,11 @@ try {
 
         sleep(16);
     }
+} catch (error) {
+    // 主动停止（任务列表停止）会抛 “Script execution interrupted”，属正常中断，静默结束；其它错误照常上报。
+    if (!String(error && error.message ? error.message : error).match(/interrupt/i)) {
+        throw error;
+    }
 } finally {
     if (drawingShown) drawing.hide();
     detector.close();
