@@ -201,7 +201,7 @@ final class QuickJsHostBridge implements AutoCloseable {
     }
 
     public long loadYolo(String backend, String modelPath, String paramPath, String binPath,
-                         int inputSize, int threads) {
+                         int inputWidth, int inputHeight, int threads) {
         String normalized = normalizeQuickJsBackend(backend);
         AutoCloseable detector;
         if ("ncnn".equals(normalized)) {
@@ -212,17 +212,17 @@ final class QuickJsHostBridge implements AutoCloseable {
             }
             detector = paramAsset
                     ? mRuntime.yolo.createFromAssets(stripAssetPrefix(paramPath),
-                    stripAssetPrefix(binPath), inputSize, threads)
+                    stripAssetPrefix(binPath), inputWidth, inputHeight, threads)
                     : mRuntime.yolo.create(mRuntime.files.path(paramPath),
-                    mRuntime.files.path(binPath), inputSize, threads);
+                    mRuntime.files.path(binPath), inputWidth, inputHeight, threads);
         } else if ("onnx".equals(normalized)) {
             detector = isAssetPath(modelPath)
-                    ? mRuntime.yolo.createOnnxFromAssets(stripAssetPrefix(modelPath), inputSize, threads)
-                    : mRuntime.yolo.createOnnx(mRuntime.files.path(modelPath), inputSize, threads);
+                    ? mRuntime.yolo.createOnnxFromAssets(stripAssetPrefix(modelPath), inputWidth, inputHeight, threads)
+                    : mRuntime.yolo.createOnnx(mRuntime.files.path(modelPath), inputWidth, inputHeight, threads);
         } else if ("opencv".equals(normalized)) {
             detector = isAssetPath(modelPath)
-                    ? mRuntime.yolo.createOpenCvFromAssets(stripAssetPrefix(modelPath), inputSize, threads)
-                    : mRuntime.yolo.createOpenCv(mRuntime.files.path(modelPath), inputSize, threads);
+                    ? mRuntime.yolo.createOpenCvFromAssets(stripAssetPrefix(modelPath), inputWidth, inputHeight, threads)
+                    : mRuntime.yolo.createOpenCv(mRuntime.files.path(modelPath), inputWidth, inputHeight, threads);
         } else {
             throw new IllegalArgumentException("QuickJS YOLO 不支持的 backend: " + normalized);
         }

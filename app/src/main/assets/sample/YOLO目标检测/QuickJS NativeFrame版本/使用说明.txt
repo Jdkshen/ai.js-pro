@@ -41,6 +41,12 @@ detect 可选参数：
 - nms         非极大值抑制（默认 0.45）
 - region      [x, y, width, height] 只检测该区域（默认全屏）
 
+yolo.load 可选参数（输入尺寸，三后端通用）：
+- inputSize       正方形边长（默认 320），等价 inputWidth=inputHeight=该值
+- inputWidth     输入宽度（如 480）——矩形模型（如 480x640）使用，优先于 inputSize
+- inputHeight    输入高度（如 640）
+例：{ inputWidth: 480, inputHeight: 640 }（需模型输入 shape 匹配，如 [1,3,640,480]）
+
 实测基准（Redmi K40 / 骁龙870 / yolo26_320 @320，每后端测 5 帧平均）：
 - ncnn    ~184 ms（纯 CPU）
 - onnx    ~432 ms（ONNX Runtime XNNPACK）

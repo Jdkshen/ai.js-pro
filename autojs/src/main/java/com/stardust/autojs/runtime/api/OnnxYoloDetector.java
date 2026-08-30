@@ -13,12 +13,18 @@ public final class OnnxYoloDetector implements AutoCloseable {
     private long mHandle;
 
     OnnxYoloDetector(Yolo owner, String modelPath, int inputSize, int threads) {
+        this(owner, modelPath, inputSize, inputSize, threads);
+    }
+
+    OnnxYoloDetector(Yolo owner, String modelPath, int inputWidth, int inputHeight, int threads) {
         if (!isRuntimeAvailable()) {
             throw new UnsupportedOperationException(getUnavailableReason());
         }
-        if (inputSize < 32) throw new IllegalArgumentException("inputSize 不能小于 32");
+        if (inputWidth < 32 || inputHeight < 32) {
+            throw new IllegalArgumentException("inputWidth/inputHeight 不能小于 32");
+        }
         mOwner = owner;
-        mHandle = nativeCreate(modelPath, inputSize, Math.max(1, Math.min(threads, 8)));
+        mHandle = nativeCreate(modelPath, inputWidth, inputHeight, Math.max(1, Math.min(threads, 8)));
         if (mHandle == 0) throw new IllegalStateException("ONNX Runtime 模型初始化失败");
     }
 
@@ -91,7 +97,7 @@ public final class OnnxYoloDetector implements AutoCloseable {
     }
 
     private static native String nativeVersion();
-    private static native long nativeCreate(String modelPath, int inputSize, int threads);
+    private static native long nativeCreate(String modelPath, int inputWidth, int inputHeight, int threads);
     private static native float[] nativeDetectBitmap(long handle, Bitmap bitmap,
                                                        float confidence, float nmsThreshold);
     private static native float[] nativeDetectRgba(long handle, ByteBuffer rgba,

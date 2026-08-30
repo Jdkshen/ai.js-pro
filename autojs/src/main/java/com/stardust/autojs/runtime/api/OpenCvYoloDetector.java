@@ -27,7 +27,8 @@ import java.util.concurrent.TimeUnit;
 public final class OpenCvYoloDetector implements AutoCloseable {
 
     private final Yolo mOwner;
-    private final int mInputSize;
+    private final int mInputWidth;
+    private final int mInputHeight;
     private final Mat mSource = new Mat();
     private final Mat mResizedRgba = new Mat();
     private final Mat mResizedRgb = new Mat();
@@ -36,9 +37,14 @@ public final class OpenCvYoloDetector implements AutoCloseable {
     private boolean mClosed;
 
     OpenCvYoloDetector(Yolo owner, Context context, String modelPath, int inputSize, int threads) {
-        if (inputSize < 32) throw new IllegalArgumentException("inputSize 不能小于 32");
+        this(owner, context, modelPath, inputSize, inputSize, threads);
+    }
+
+    OpenCvYoloDetector(Yolo owner, Context context, String modelPath, int inputWidth, int inputHeight, int threads) {
+        if (inputWidth < 32 || inputHeight < 32) throw new IllegalArgumentException("inputWidth/inputHeight 不能小于 32");
         mOwner = owner;
-        mInputSize = inputSize;
+        mInputWidth = inputWidth;
+        mInputHeight = inputHeight;
         ensureOpenCv(context);
         try {
             Core.setNumThreads(Math.max(1, Math.min(threads, 8)));
@@ -177,16 +183,16 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         Mat rows = null;
         try {
             long preprocessStarted = SystemClock.elapsedRealtimeNanos();
-            float scale = Math.min(mInputSize / (float) width, mInputSize / (float) height);
+            float scale = Math.min(mInputWidth / (float) width, mInputHeight / (float) height);
             int resizedWidth = Math.max(1, Math.round(width * scale));
             int resizedHeight = Math.max(1, Math.round(height * scale));
-            int padX = (mInputSize - resizedWidth) / 2;
-            int padY = (mInputSize - resizedHeight) / 2;
+            int padX = (mInputWidth - resizedWidth) / 2;
+            int padY = (mInputHeight - resizedHeight) / 2;
 
             Imgproc.resize(mSource, mResizedRgba, new Size(resizedWidth, resizedHeight),
                     0.0, 0.0, Imgproc.INTER_LINEAR);
             Imgproc.cvtColor(mResizedRgba, mResizedRgb, Imgproc.COLOR_RGBA2RGB);
-            mLetterbox.create(mInputSize, mInputSize, CvType.CV_8UC3);
+            mLetterbox.create(mInputHeight, mInputWidth, CvType.CV_8UC3);
             mLetterbox.setTo(new Scalar(114, 114, 114));
             Mat region = mLetterbox.submat(new Rect(padX, padY, resizedWidth, resizedHeight));
             try {
@@ -195,7 +201,7 @@ public final class OpenCvYoloDetector implements AutoCloseable {
                 region.release();
             }
             blob = Dnn.blobFromImage(mLetterbox, 1.0 / 255.0,
-                    new Size(mInputSize, mInputSize), new Scalar(0), false, false, CvType.CV_32F);
+                    new Size(mInputWidth, mInputHeight), new Scalar(0), false, false, CvType.CV_32F);
             float preprocessMs = elapsedMs(preprocessStarted);
 
             mNet.setInput(blob);

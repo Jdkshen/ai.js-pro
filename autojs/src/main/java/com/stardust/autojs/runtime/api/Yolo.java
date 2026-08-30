@@ -89,14 +89,22 @@ public final class Yolo implements AutoCloseable {
     }
 
     public Detector create(String paramPath, String binPath, int inputSize, int threads) {
+        return create(paramPath, binPath, inputSize, inputSize, threads);
+    }
+
+    public Detector create(String paramPath, String binPath, int inputWidth, int inputHeight, int threads) {
         requireNative();
         File param = requireReadableFile(paramPath, "param");
         File bin = requireReadableFile(binPath, "bin");
         return register(new Detector(this, param.getAbsolutePath(), bin.getAbsolutePath(),
-                inputSize, threads));
+                inputWidth, inputHeight, threads));
     }
 
     public Detector createFromAssets(String paramAsset, String binAsset, int inputSize, int threads) {
+        return createFromAssets(paramAsset, binAsset, inputSize, inputSize, threads);
+    }
+
+    public Detector createFromAssets(String paramAsset, String binAsset, int inputWidth, int inputHeight, int threads) {
         requireNative();
         try {
             File modelDirectory = new File(mContext.getCacheDir(), "autojs-yolo-models");
@@ -109,28 +117,44 @@ public final class Yolo implements AutoCloseable {
             copyAsset(paramAsset, param);
             copyAsset(binAsset, bin);
             return register(new Detector(this, param.getAbsolutePath(), bin.getAbsolutePath(),
-                    inputSize, threads));
+                    inputWidth, inputHeight, threads));
         } catch (IOException error) {
             throw new IllegalStateException("准备 YOLO 模型失败：" + error.getMessage(), error);
         }
     }
 
     public OnnxYoloDetector createOnnx(String modelPath, int inputSize, int threads) {
+        return createOnnx(modelPath, inputSize, inputSize, threads);
+    }
+
+    public OnnxYoloDetector createOnnx(String modelPath, int inputWidth, int inputHeight, int threads) {
         File model = requireReadableFile(modelPath, "ONNX");
-        return register(new OnnxYoloDetector(this, model.getAbsolutePath(), inputSize, threads));
+        return register(new OnnxYoloDetector(this, model.getAbsolutePath(), inputWidth, inputHeight, threads));
     }
 
     public OnnxYoloDetector createOnnxFromAssets(String modelAsset, int inputSize, int threads) {
-        return register(new OnnxYoloDetector(this, prepareAssetModel(modelAsset), inputSize, threads));
+        return createOnnxFromAssets(modelAsset, inputSize, inputSize, threads);
+    }
+
+    public OnnxYoloDetector createOnnxFromAssets(String modelAsset, int inputWidth, int inputHeight, int threads) {
+        return register(new OnnxYoloDetector(this, prepareAssetModel(modelAsset), inputWidth, inputHeight, threads));
     }
 
     public OpenCvYoloDetector createOpenCv(String modelPath, int inputSize, int threads) {
+        return createOpenCv(modelPath, inputSize, inputSize, threads);
+    }
+
+    public OpenCvYoloDetector createOpenCv(String modelPath, int inputWidth, int inputHeight, int threads) {
         File model = requireReadableFile(modelPath, "ONNX");
-        return register(new OpenCvYoloDetector(this, mContext, model.getAbsolutePath(), inputSize, threads));
+        return register(new OpenCvYoloDetector(this, mContext, model.getAbsolutePath(), inputWidth, inputHeight, threads));
     }
 
     public OpenCvYoloDetector createOpenCvFromAssets(String modelAsset, int inputSize, int threads) {
-        return register(new OpenCvYoloDetector(this, mContext, prepareAssetModel(modelAsset), inputSize, threads));
+        return createOpenCvFromAssets(modelAsset, inputSize, inputSize, threads);
+    }
+
+    public OpenCvYoloDetector createOpenCvFromAssets(String modelAsset, int inputWidth, int inputHeight, int threads) {
+        return register(new OpenCvYoloDetector(this, mContext, prepareAssetModel(modelAsset), inputWidth, inputHeight, threads));
     }
 
     private String prepareAssetModel(String modelAsset) {
@@ -236,10 +260,10 @@ public final class Yolo implements AutoCloseable {
         private final Yolo mOwner;
         private long mHandle;
 
-        private Detector(Yolo owner, String paramPath, String binPath, int inputSize, int threads) {
-            if (inputSize < 32) throw new IllegalArgumentException("inputSize 不能小于 32");
+        private Detector(Yolo owner, String paramPath, String binPath, int inputWidth, int inputHeight, int threads) {
+            if (inputWidth < 32 || inputHeight < 32) throw new IllegalArgumentException("inputWidth/inputHeight 不能小于 32");
             mOwner = owner;
-            mHandle = nativeCreate(paramPath, binPath, inputSize, Math.max(1, Math.min(threads, 8)));
+            mHandle = nativeCreate(paramPath, binPath, inputWidth, inputHeight, Math.max(1, Math.min(threads, 8)));
             if (mHandle == 0) throw new IllegalStateException("YOLO 模型初始化失败");
         }
 
@@ -310,7 +334,7 @@ public final class Yolo implements AutoCloseable {
     }
 
     private static native String nativeVersion();
-    private static native long nativeCreate(String paramPath, String binPath, int inputSize, int threads);
+    private static native long nativeCreate(String paramPath, String binPath, int inputWidth, int inputHeight, int threads);
     private static native float[] nativeDetectBitmap(long handle, Bitmap bitmap,
                                                        float confidence, float nmsThreshold);
     private static native float[] nativeDetectRgba(long handle, ByteBuffer rgba,

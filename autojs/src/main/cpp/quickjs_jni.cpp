@@ -864,8 +864,8 @@ JSValue nativeYoloUnavailableReason(JSContext *context, JSValueConst, int argc, 
 }
 
 JSValue nativeYoloLoad(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
-    if (argc < 6) {
-        return JS_ThrowTypeError(context, "yolo.load requires backend, model, param, bin, inputSize, and threads");
+    if (argc < 7) {
+        return JS_ThrowTypeError(context, "yolo.load requires backend, model, param, bin, inputWidth, inputHeight, and threads");
     }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
@@ -873,20 +873,23 @@ JSValue nativeYoloLoad(JSContext *context, JSValueConst, int argc, JSValueConst 
     const std::string model = jsString(context, argv[1]);
     const std::string param = jsString(context, argv[2]);
     const std::string bin = jsString(context, argv[3]);
-    int32_t inputSize = 320;
+    int32_t inputWidth = 320;
+    int32_t inputHeight = 320;
     int32_t threads = 4;
-    if (JS_ToInt32(context, &inputSize, argv[4]) < 0 || JS_ToInt32(context, &threads, argv[5]) < 0) {
+    if (JS_ToInt32(context, &inputWidth, argv[4]) < 0 ||
+        JS_ToInt32(context, &inputHeight, argv[5]) < 0 ||
+        JS_ToInt32(context, &threads, argv[6]) < 0) {
         return JS_EXCEPTION;
     }
     jclass hostClass = env->GetObjectClass(state->host);
     jmethodID method = env->GetMethodID(hostClass, "loadYolo",
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)J");
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;III)J");
     jstring javaBackend = toJavaString(env, backend);
     jstring javaModel = toJavaString(env, model);
     jstring javaParam = toJavaString(env, param);
     jstring javaBin = toJavaString(env, bin);
     const jlong handle = env->CallLongMethod(state->host, method, javaBackend, javaModel,
-            javaParam, javaBin, inputSize, threads);
+            javaParam, javaBin, inputWidth, inputHeight, threads);
     env->DeleteLocalRef(javaBin);
     env->DeleteLocalRef(javaParam);
     env->DeleteLocalRef(javaModel);
@@ -1228,8 +1231,11 @@ const char kBootstrapScript[] = R"JS(
             }
             if (!Array.isArray(labels)) throw new TypeError('labels must be an array or path');
             const detector = Object.create(YoloDetector.prototype);
+            const inputSize = options.inputSize === undefined ? 320 : Number(options.inputSize);
+            const inputWidth = options.inputWidth === undefined ? inputSize : Number(options.inputWidth);
+            const inputHeight = options.inputHeight === undefined ? inputSize : Number(options.inputHeight);
             const id = __aiNativeYoloLoad(backend, model, param, bin,
-                options.inputSize === undefined ? 320 : Number(options.inputSize),
+                inputWidth, inputHeight,
                 options.threads === undefined ? 4 : Number(options.threads));
             detectorState.set(detector, { id: id, labels: labels.slice(), closed: false });
             return detector;

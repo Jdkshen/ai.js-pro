@@ -36,7 +36,8 @@ struct Detection {
 struct Detector {
     ncnn::Net net;
     std::mutex mutex;
-    int inputSize = 320;
+    int inputWidth = 320;
+    int inputHeight = 320;
     int threads = 4;
 };
 
@@ -48,7 +49,8 @@ struct OrtDetector {
     std::string inputName;
     std::string outputName;
     std::vector<float> inputBuffer;
-    int inputSize = 320;
+    int inputWidth = 320;
+    int inputHeight = 320;
     int threads = 4;
 };
 
@@ -197,8 +199,8 @@ struct PreparedInput {
     float elapsedMs = 0.0f;
 };
 
-bool prepareOrtInput(JNIEnv* env, jobject bitmap, int inputSize, std::vector<float>& buffer,
-                     PreparedInput& prepared) {
+bool prepareOrtInput(JNIEnv* env, jobject bitmap, int inputWidth, int inputHeight,
+                     std::vector<float>& buffer, PreparedInput& prepared) {
     BitmapPixels bitmapPixels(env, bitmap);
     if (!bitmapPixels.lock()) {
         throwException(env, "java/lang/IllegalArgumentException",
@@ -222,14 +224,14 @@ bool prepareOrtInput(JNIEnv* env, jobject bitmap, int inputSize, std::vector<flo
     }
 
     const auto started = std::chrono::steady_clock::now();
-    prepared.scale = std::min(inputSize / static_cast<float>(prepared.sourceWidth),
-                              inputSize / static_cast<float>(prepared.sourceHeight));
+    prepared.scale = std::min(inputWidth / static_cast<float>(prepared.sourceWidth),
+                              inputHeight / static_cast<float>(prepared.sourceHeight));
     const int resizedWidth = std::max(1, static_cast<int>(
             std::round(prepared.sourceWidth * prepared.scale)));
     const int resizedHeight = std::max(1, static_cast<int>(
             std::round(prepared.sourceHeight * prepared.scale)));
-    const int padWidth = inputSize - resizedWidth;
-    const int padHeight = inputSize - resizedHeight;
+    const int padWidth = inputWidth - resizedWidth;
+    const int padHeight = inputHeight - resizedHeight;
     prepared.padLeft = padWidth / 2;
     prepared.padTop = padHeight / 2;
 
@@ -241,7 +243,7 @@ bool prepareOrtInput(JNIEnv* env, jobject bitmap, int inputSize, std::vector<flo
     const float normalization[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
     padded.substract_mean_normalize(nullptr, normalization);
 
-    const size_t planeSize = static_cast<size_t>(inputSize) * inputSize;
+    const size_t planeSize = static_cast<size_t>(inputWidth) * inputHeight;
     buffer.resize(planeSize * 3);
     for (int channel = 0; channel < 3; ++channel) {
         const float* source = padded.channel(channel);
@@ -254,7 +256,8 @@ bool prepareOrtInput(JNIEnv* env, jobject bitmap, int inputSize, std::vector<flo
 
 bool prepareOrtInputRgba(const unsigned char* rgba, int width, int height, int rowStride,
                          int regionX, int regionY, int regionWidth, int regionHeight,
-                         int inputSize, std::vector<float>& buffer, PreparedInput& prepared) {
+                         int inputWidth, int inputHeight, std::vector<float>& buffer,
+                         PreparedInput& prepared) {
     if (rgba == nullptr || width < 2 || height < 2 || rowStride < width * 4) {
         return false;
     }
@@ -291,14 +294,14 @@ bool prepareOrtInputRgba(const unsigned char* rgba, int width, int height, int r
     }
 
     const auto started = std::chrono::steady_clock::now();
-    prepared.scale = std::min(inputSize / static_cast<float>(width),
-                              inputSize / static_cast<float>(height));
+    prepared.scale = std::min(inputWidth / static_cast<float>(width),
+                              inputHeight / static_cast<float>(height));
     const int resizedWidth = std::max(1, static_cast<int>(
             std::round(width * prepared.scale)));
     const int resizedHeight = std::max(1, static_cast<int>(
             std::round(height * prepared.scale)));
-    const int padWidth = inputSize - resizedWidth;
-    const int padHeight = inputSize - resizedHeight;
+    const int padWidth = inputWidth - resizedWidth;
+    const int padHeight = inputHeight - resizedHeight;
     prepared.padLeft = padWidth / 2;
     prepared.padTop = padHeight / 2;
 
@@ -310,7 +313,7 @@ bool prepareOrtInputRgba(const unsigned char* rgba, int width, int height, int r
     const float normalization[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
     padded.substract_mean_normalize(nullptr, normalization);
 
-    const size_t planeSize = static_cast<size_t>(inputSize) * inputSize;
+    const size_t planeSize = static_cast<size_t>(inputWidth) * inputHeight;
     buffer.resize(planeSize * 3);
     for (int channel = 0; channel < 3; ++channel) {
         const float* source = padded.channel(channel);
@@ -385,12 +388,14 @@ jfloatArray detectNcnnRgba(JNIEnv* env, Detector* detector, const unsigned char*
     }
 
     const auto prepareStarted = std::chrono::steady_clock::now();
-    const float scale = std::min(detector->inputSize / static_cast<float>(width),
-                                 detector->inputSize / static_cast<float>(height));
+    const int targetWidth = detector->inputWidth;
+    const int targetHeight = detector->inputHeight;
+    const float scale = std::min(targetWidth / static_cast<float>(width),
+                                 targetHeight / static_cast<float>(height));
     const int resizedWidth = std::max(1, static_cast<int>(std::round(width * scale)));
     const int resizedHeight = std::max(1, static_cast<int>(std::round(height * scale)));
-    const int padWidth = detector->inputSize - resizedWidth;
-    const int padHeight = detector->inputSize - resizedHeight;
+    const int padWidth = targetWidth - resizedWidth;
+    const int padHeight = targetHeight - resizedHeight;
     const int padLeft = padWidth / 2;
     const int padTop = padHeight / 2;
     ncnn::Mat input = ncnn::Mat::from_pixels_resize(rgba, ncnn::Mat::PIXEL_RGBA2RGB,
@@ -446,7 +451,8 @@ Java_com_stardust_autojs_runtime_api_Yolo_nativeVersion(JNIEnv* env, jclass) {
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_stardust_autojs_runtime_api_Yolo_nativeCreate(
-        JNIEnv* env, jclass, jstring paramPath, jstring binPath, jint inputSize, jint threads) {
+        JNIEnv* env, jclass, jstring paramPath, jstring binPath, jint inputWidth,
+        jint inputHeight, jint threads) {
     const std::string param = readString(env, paramPath);
     const std::string bin = readString(env, binPath);
     if (param.empty() || bin.empty()) {
@@ -455,7 +461,8 @@ Java_com_stardust_autojs_runtime_api_Yolo_nativeCreate(
     }
 
     std::unique_ptr<Detector> detector(new Detector());
-    detector->inputSize = std::max(32, static_cast<int>(inputSize));
+    detector->inputWidth = std::max(32, static_cast<int>(inputWidth));
+    detector->inputHeight = std::max(32, static_cast<int>(inputHeight));
     detector->threads = std::clamp(static_cast<int>(threads), 1, 8);
     detector->net.opt.num_threads = detector->threads;
     detector->net.opt.use_packing_layout = true;
@@ -482,8 +489,8 @@ Java_com_stardust_autojs_runtime_api_Yolo_nativeCreate(
     }
 
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "ncnn=%s backend=CPU(no-OpenMP) input=%d requestedThreads=%d", NCNN_VERSION_STRING,
-            detector->inputSize, detector->threads);
+            "ncnn=%s backend=CPU(no-OpenMP) input=%dx%d requestedThreads=%d", NCNN_VERSION_STRING,
+            detector->inputWidth, detector->inputHeight, detector->threads);
     return reinterpret_cast<jlong>(detector.release());
 }
 
@@ -550,7 +557,7 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeVersion(JNIEnv* env,
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeCreate(
-        JNIEnv* env, jclass, jstring modelPath, jint inputSize, jint threads) {
+        JNIEnv* env, jclass, jstring modelPath, jint inputWidth, jint inputHeight, jint threads) {
     const std::string model = readString(env, modelPath);
     if (model.empty()) {
         throwException(env, "java/lang/IllegalArgumentException", "ONNX model path is empty");
@@ -559,7 +566,8 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeCreate(
 
     try {
         std::unique_ptr<OrtDetector> detector(new OrtDetector());
-        detector->inputSize = std::max(32, static_cast<int>(inputSize));
+        detector->inputWidth = std::max(32, static_cast<int>(inputWidth));
+        detector->inputHeight = std::max(32, static_cast<int>(inputHeight));
         detector->threads = std::clamp(static_cast<int>(threads), 1, 8);
         detector->options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         detector->options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
@@ -613,13 +621,13 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeCreate(
         Ort::AllocatedStringPtr outputName = detector->session.GetOutputNameAllocated(0, allocator);
         detector->inputName = inputName.get();
         detector->outputName = outputName.get();
-        detector->inputBuffer.resize(static_cast<size_t>(detector->inputSize)
-                * detector->inputSize * 3);
+        detector->inputBuffer.resize(static_cast<size_t>(detector->inputWidth)
+                * detector->inputHeight * 3);
         __android_log_print(ANDROID_LOG_INFO, kLogTag,
-                "onnxruntime=%s backend=%s input=%d threads=%d nodes=%s->%s",
+                "onnxruntime=%s backend=%s input=%dx%d threads=%d nodes=%s->%s",
                 OrtGetApiBase()->GetVersionString(),
                 nnapiReady ? "NNAPI/XNNPACK" : "XNNPACK/CPU",
-                detector->inputSize, detector->threads,
+                detector->inputWidth, detector->inputHeight, detector->threads,
                 detector->inputName.c_str(), detector->outputName.c_str());
         return reinterpret_cast<jlong>(detector.release());
     } catch (const Ort::Exception& error) {
@@ -644,7 +652,7 @@ jfloatArray runOrtDetection(JNIEnv* env, OrtDetector* detector, PreparedInput& p
                             float confidence, float regionX, float regionY) {
     try {
         const std::array<int64_t, 4> inputShape = {
-                1, 3, detector->inputSize, detector->inputSize};
+                1, 3, detector->inputHeight, detector->inputWidth};
         Ort::Value inputTensor = Ort::Value::CreateTensor<float>(detector->memoryInfo,
                 detector->inputBuffer.data(), detector->inputBuffer.size(),
                 inputShape.data(), inputShape.size());
@@ -708,7 +716,8 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectBitmap(
 
     std::lock_guard<std::mutex> guard(detector->mutex);
     PreparedInput prepared;
-    if (!prepareOrtInput(env, bitmap, detector->inputSize, detector->inputBuffer, prepared)) {
+    if (!prepareOrtInput(env, bitmap, detector->inputWidth, detector->inputHeight,
+                         detector->inputBuffer, prepared)) {
         return nullptr;
     }
     return runOrtDetection(env, detector, prepared, confidence, 0.0f, 0.0f);
@@ -748,7 +757,8 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectRgba(
     PreparedInput prepared;
     if (!prepareOrtInputRgba(rgba, width, height, rowStride,
                              regionX, regionY, regionWidth, regionHeight,
-                             detector->inputSize, detector->inputBuffer, prepared)) {
+                             detector->inputWidth, detector->inputHeight,
+                             detector->inputBuffer, prepared)) {
         throwException(env, "java/lang/IllegalArgumentException", "Invalid region or RGBA layout");
         return nullptr;
     }
