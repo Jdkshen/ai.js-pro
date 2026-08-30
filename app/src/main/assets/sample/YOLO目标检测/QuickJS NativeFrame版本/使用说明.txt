@@ -1,4 +1,4 @@
-QuickJS NativeFrame + YOLO 示例（ncnn / onnx / opencv 三后端）
+QuickJS NativeFrame + YOLO 示例（ncnn / onnx / opencv 三套独立案例）
 
 这组示例使用真正的原生图像链：
 
@@ -8,22 +8,16 @@ ImageReader RGBA Plane
   -> 后端推理（ncnn / ONNX Runtime / OpenCV 5.0 DNN）
   -> QuickJS 检测框数组
 
-模板案例（三个，每个都支持三后端切换）：
-- YOLO运行环境测试.js：探测三后端可用性与版本，计时模型加载，无需截图授权。
+目录结构（每个后端一套，共三套）：
+- ncnn/   yolo26_320.param + .bin（NCNN）
+- onnx/   yolo26_320.onnx（ONNX Runtime / XNNPACK）
+- opencv/ yolo26_320.onnx（OpenCV 5.0 DNN）
+
+每套包含三个模板案例：
+- YOLO运行环境测试.js：后端可用性 / 版本 / 模型加载耗时，无需截图授权。
 - YOLO单帧直连测试.js：截取一帧，推理并打印检测框与耗时。
-- YOLO实时直连测试.js：连续推理 60 帧，每 10 帧打印进度，结束时输出平均/最大/最小耗时与 FPS。
-
-用法：把文件顶部的 `const backend = 'ncnn'` 改成 'onnx' 或 'opencv' 即可切换后端。
-
-后端选择：
-- ncnn      模型：NCNN版本/models 的 yolo26_320.param + .bin
-- onnx      模型：ONNX Runtime版本/models 的 yolo26_320.onnx
-- opencv    模型：同上（OpenCV 5.0 DNN 引擎推理）
-
-yolo.load 参数（QuickJS 三后端统一）：
-- ncnn：backend: 'ncnn'（或 'cpu'），param + bin
-- onnx/opencv：backend: 'onnx'/'opencv'（或 ort/onnxruntime/dnn/opencv5），model
-- 通用：labels（数组或文本路径）、inputSize（默认 320）、threads（默认 4）
+- YOLO实时直连测试.js：连续推理 60 帧，每 10 帧打印进度，结束时输出
+  平均/最大/最小耗时与 FPS。
 
 耗时字段（detector.detect 返回的数组对象）：
 - preprocessMs   预处理（缩放 + letterbox + 归一化）

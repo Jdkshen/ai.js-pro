@@ -1,19 +1,14 @@
 // @engine quickjs
 
-const backend = 'ncnn'; // 可选：'ncnn' | 'onnx' | 'opencv'（别名 cpu/ort/onnxruntime/dnn/opencv5）
+const backend = 'opencv';
 if (!yolo.isAvailable(backend)) {
     throw new Error(backend + ' 不可用：' + yolo.getUnavailableReason(backend));
 }
 
-const isNcnn = backend === 'ncnn' || backend === 'cpu';
-const modelRoot = isNcnn
-    ? 'asset://sample/YOLO目标检测/NCNN版本/models/'
-    : 'asset://sample/YOLO目标检测/ONNX Runtime版本/models/';
+const modelRoot = 'asset://sample/YOLO目标检测/ONNX Runtime版本/models/';
 const detector = yolo.load({
     backend: backend,
-    model: isNcnn ? '' : modelRoot + 'yolo26_320.onnx',
-    param: isNcnn ? modelRoot + 'yolo26_320.param' : '',
-    bin: isNcnn ? modelRoot + 'yolo26_320.bin' : '',
+    model: modelRoot + 'yolo26_320.onnx',
     labels: modelRoot + 'labels.txt',
     inputSize: 320,
     threads: 4
