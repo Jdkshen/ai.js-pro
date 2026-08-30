@@ -28,3 +28,6 @@
 
 # Required by the in-app APK builder; all other APK outputs remain ignored.
 !app/src/main/assets/template.apk
+
+# build log artifact
+build-log.txt
