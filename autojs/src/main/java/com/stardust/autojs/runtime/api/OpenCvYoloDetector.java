@@ -107,6 +107,7 @@ public final class OpenCvYoloDetector implements AutoCloseable {
     }
 
     public synchronized float[] detectRgba(ByteBuffer rgba, int width, int height, int rowStride,
+                                           int regionX, int regionY, int regionWidth, int regionHeight,
                                            float confidence, float nmsThreshold) {
         if (mClosed || mNet == null) throw new IllegalStateException("YOLO detector 已关闭");
         if (rgba == null || !rgba.isDirect()) {
@@ -115,23 +116,29 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         if (width < 2 || height < 2 || rowStride < width * 4) {
             throw new IllegalArgumentException("YOLO NativeFrame RGBA 布局无效");
         }
+        Yolo.validateRegion(width, height, regionX, regionY, regionWidth, regionHeight);
         validateThresholds(confidence, nmsThreshold);
-        mSource.create(height, width, CvType.CV_8UC4);
+        regionWidth = Math.min(regionWidth, width - regionX);
+        regionHeight = Math.min(regionHeight, height - regionY);
+        mSource.create(regionHeight, regionWidth, CvType.CV_8UC4);
         ByteBuffer duplicate = rgba.duplicate();
         duplicate.rewind();
-        if (rowStride == width * 4) {
-            byte[] pixels = new byte[width * height * 4];
-            duplicate.get(pixels);
-            mSource.put(0, 0, pixels);
-        } else {
-            byte[] row = new byte[width * 4];
-            for (int y = 0; y < height; y++) {
-                duplicate.position(y * rowStride);
-                duplicate.get(row);
-                mSource.put(y, 0, row);
+        byte[] row = new byte[regionWidth * 4];
+        for (int y = 0; y < regionHeight; y++) {
+            duplicate.position((regionY + y) * rowStride + regionX * 4);
+            duplicate.get(row);
+            mSource.put(y, 0, row);
+        }
+        float[] packed = detectFromSource(regionWidth, regionHeight, confidence, nmsThreshold);
+        if (regionX != 0 || regionY != 0) {
+            for (int i = 2; i + 5 < packed.length; i += 6) {
+                packed[i] += regionX;
+                packed[i + 1] += regionY;
+                packed[i + 2] += regionX;
+                packed[i + 3] += regionY;
             }
         }
-        return detectFromSource(width, height, confidence, nmsThreshold);
+        return packed;
     }
 
     private float[] detectFromSource(int width, int height, float confidence, float nmsThreshold) {

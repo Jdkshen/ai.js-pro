@@ -266,6 +266,7 @@ public final class Yolo implements AutoCloseable {
         }
 
         public synchronized float[] detectRgba(ByteBuffer rgba, int width, int height, int rowStride,
+                                               int regionX, int regionY, int regionWidth, int regionHeight,
                                                float confidence, float nmsThreshold) {
             if (mHandle == 0) throw new IllegalStateException("YOLO detector 已关闭");
             if (rgba == null || !rgba.isDirect()) {
@@ -274,6 +275,7 @@ public final class Yolo implements AutoCloseable {
             if (width < 2 || height < 2 || rowStride < width * 4) {
                 throw new IllegalArgumentException("YOLO NativeFrame RGBA 布局无效");
             }
+            validateRegion(width, height, regionX, regionY, regionWidth, regionHeight);
             if (confidence < 0.0f || confidence > 1.0f) {
                 throw new IllegalArgumentException("confidence 必须在 0~1 之间");
             }
@@ -281,6 +283,7 @@ public final class Yolo implements AutoCloseable {
                 throw new IllegalArgumentException("nms 必须在 0~1 之间");
             }
             return nativeDetectRgba(mHandle, rgba, width, height, rowStride,
+                    regionX, regionY, regionWidth, regionHeight,
                     confidence, nmsThreshold);
         }
 
@@ -312,6 +315,13 @@ public final class Yolo implements AutoCloseable {
                                                        float confidence, float nmsThreshold);
     private static native float[] nativeDetectRgba(long handle, ByteBuffer rgba,
                                                      int width, int height, int rowStride,
+                                                     int regionX, int regionY, int regionWidth, int regionHeight,
                                                      float confidence, float nmsThreshold);
     private static native void nativeRelease(long handle);
+
+    static void validateRegion(int width, int height, int rx, int ry, int rw, int rh) {
+        if (rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx + rw > width || ry + rh > height) {
+            throw new IllegalArgumentException("region [x,y,w,h] 超出画面范围");
+        }
+    }
 }

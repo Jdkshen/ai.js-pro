@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <android/log.h>
 
 #include <algorithm>
 #include <atomic>
@@ -921,10 +922,18 @@ JSValue nativeYoloDetect(JSContext *context, JSValueConst, int argc, JSValueCons
     int64_t frameHandle = 0;
     double confidence = 0.25;
     double nmsThreshold = 0.45;
-    if (argc < 4 || JS_ToInt64(context, &detectorHandle, argv[0]) < 0 ||
+    int32_t regionX = 0;
+    int32_t regionY = 0;
+    int32_t regionWidth = 0;
+    int32_t regionHeight = 0;
+    if (argc < 8 || JS_ToInt64(context, &detectorHandle, argv[0]) < 0 ||
         JS_ToInt64(context, &frameHandle, argv[1]) < 0 ||
         JS_ToFloat64(context, &confidence, argv[2]) < 0 ||
-        JS_ToFloat64(context, &nmsThreshold, argv[3]) < 0) {
+        JS_ToFloat64(context, &nmsThreshold, argv[3]) < 0 ||
+        JS_ToInt32(context, &regionX, argv[4]) < 0 ||
+        JS_ToInt32(context, &regionY, argv[5]) < 0 ||
+        JS_ToInt32(context, &regionWidth, argv[6]) < 0 ||
+        JS_ToInt32(context, &regionHeight, argv[7]) < 0) {
         return JS_ThrowTypeError(context, "Invalid YOLO detect arguments");
     }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
@@ -938,15 +947,20 @@ JSValue nativeYoloDetect(JSContext *context, JSValueConst, int argc, JSValueCons
     jobject buffer = env->NewDirectByteBuffer(frame->data, capacity);
     jclass hostClass = env->GetObjectClass(state->host);
     jmethodID method = env->GetMethodID(hostClass, "detectYolo",
-            "(JLjava/nio/ByteBuffer;IIIFF)[F");
+            "(JLjava/nio/ByteBuffer;IIIIIIIFF)[F");
     auto packed = static_cast<jfloatArray>(env->CallObjectMethod(state->host, method,
             detectorHandle, buffer, frame->cols, frame->rows,
             static_cast<jint>(frame->step[0]),
+            regionX, regionY, regionWidth, regionHeight,
             static_cast<jfloat>(confidence), static_cast<jfloat>(nmsThreshold)));
     env->DeleteLocalRef(hostClass);
     env->DeleteLocalRef(buffer);
     if (env->ExceptionCheck()) {
-        return throwJavaException(context, env);
+        std::string message = takeJavaException(env);
+        __android_log_print(ANDROID_LOG_ERROR, "QuickJsYolo", "detectYolo host exception: %s",
+                message.c_str());
+        return JS_ThrowInternalError(context, "%s",
+                message.empty() ? "Java API bridge failed" : message.c_str());
     }
     if (packed == nullptr) {
         return JS_ThrowInternalError(context, "YOLO inference returned no result");
@@ -1126,7 +1140,15 @@ const char kBootstrapScript[] = R"JS(
         options = options || {};
         const confidence = options.confidence === undefined ? 0.25 : Number(options.confidence);
         const nms = options.nms === undefined ? 0.45 : Number(options.nms);
-        const packed = __aiNativeYoloDetect(detector.id, nativeFrame.id, confidence, nms);
+        let region = [0, 0, frame.width, frame.height];
+        if (options.region !== undefined) {
+            if (!Array.isArray(options.region) || options.region.length !== 4) {
+                throw new TypeError('region must be [x, y, width, height]');
+            }
+            region = options.region.map(Number);
+        }
+        const packed = __aiNativeYoloDetect(detector.id, nativeFrame.id, confidence, nms,
+            region[0], region[1], region[2], region[3]);
         const detections = [];
         for (let i = 2; i + 5 < packed.length; i += 6) {
             const left = Number(packed[i]);

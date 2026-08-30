@@ -253,10 +253,29 @@ bool prepareOrtInput(JNIEnv* env, jobject bitmap, int inputSize, std::vector<flo
 }
 
 bool prepareOrtInputRgba(const unsigned char* rgba, int width, int height, int rowStride,
+                         int regionX, int regionY, int regionWidth, int regionHeight,
                          int inputSize, std::vector<float>& buffer, PreparedInput& prepared) {
     if (rgba == nullptr || width < 2 || height < 2 || rowStride < width * 4) {
         return false;
     }
+    if (regionX < 0 || regionY < 0 || regionWidth <= 0 || regionHeight <= 0 ||
+        regionX + regionWidth > width || regionY + regionHeight > height) {
+        return false;
+    }
+    std::vector<unsigned char> regionPixels;
+    if (regionWidth != width || regionHeight != height || rowStride != regionWidth * 4) {
+        regionPixels.resize(static_cast<size_t>(regionWidth) * regionHeight * 4);
+        for (int row = 0; row < regionHeight; ++row) {
+            std::memcpy(regionPixels.data() + static_cast<size_t>(row) * regionWidth * 4,
+                        rgba + static_cast<size_t>(regionY + row) * rowStride
+                        + static_cast<size_t>(regionX) * 4,
+                        static_cast<size_t>(regionWidth) * 4);
+        }
+        rgba = regionPixels.data();
+    }
+    width = regionWidth;
+    height = regionHeight;
+    rowStride = regionWidth * 4;
     prepared.sourceWidth = width;
     prepared.sourceHeight = height;
 
@@ -324,11 +343,34 @@ void decodeOrtRows(const float* rows, size_t rowCount, float confidence,
 
 jfloatArray detectNcnnRgba(JNIEnv* env, Detector* detector, const unsigned char* rgba,
                            int width, int height, int rowStride,
+                           int regionX, int regionY, int regionWidth, int regionHeight,
                            float confidence, float nmsThreshold) {
     if (rgba == nullptr || width < 2 || height < 2 || rowStride < width * 4) {
         throwException(env, "java/lang/IllegalArgumentException", "Invalid NativeFrame RGBA layout");
         return nullptr;
     }
+    if (regionX < 0 || regionY < 0 || regionWidth <= 0 || regionHeight <= 0 ||
+        regionX + regionWidth > width || regionY + regionHeight > height) {
+        throwException(env, "java/lang/IllegalArgumentException", "Invalid region");
+        return nullptr;
+    }
+
+    // Crop the region into a continuous RGBA buffer so the model only sees the
+    // interesting part of the frame; detections are shifted back afterwards.
+    std::vector<unsigned char> regionPixels;
+    if (regionWidth != width || regionHeight != height || rowStride != regionWidth * 4) {
+        regionPixels.resize(static_cast<size_t>(regionWidth) * regionHeight * 4);
+        for (int row = 0; row < regionHeight; ++row) {
+            std::memcpy(regionPixels.data() + static_cast<size_t>(row) * regionWidth * 4,
+                        rgba + static_cast<size_t>(regionY + row) * rowStride
+                        + static_cast<size_t>(regionX) * 4,
+                        static_cast<size_t>(regionWidth) * 4);
+        }
+        rgba = regionPixels.data();
+    }
+    width = regionWidth;
+    height = regionHeight;
+    rowStride = regionWidth * 4;
 
     std::lock_guard<std::mutex> guard(detector->mutex);
     std::vector<unsigned char> packedPixels;
@@ -383,7 +425,8 @@ jfloatArray detectNcnnRgba(JNIEnv* env, Detector* detector, const unsigned char*
     packed.push_back(prepareMs);
     packed.push_back(inferenceMs);
     for (const Detection& detection : detections) {
-        packed.insert(packed.end(), {detection.x1, detection.y1, detection.x2, detection.y2,
+        packed.insert(packed.end(), {detection.x1 + regionX, detection.y1 + regionY,
+                                    detection.x2 + regionX, detection.y2 + regionY,
                                     detection.score, static_cast<float>(detection.label)});
     }
 
@@ -470,13 +513,17 @@ Java_com_stardust_autojs_runtime_api_Yolo_nativeDetectBitmap(
     const AndroidBitmapInfo& info = bitmapPixels.info();
     return detectNcnnRgba(env, detector, bitmapPixels.data(),
             static_cast<int>(info.width), static_cast<int>(info.height),
-            static_cast<int>(info.stride), confidence, nmsThreshold);
+            static_cast<int>(info.stride),
+            0, 0, static_cast<int>(info.width), static_cast<int>(info.height),
+            confidence, nmsThreshold);
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_stardust_autojs_runtime_api_Yolo_nativeDetectRgba(
         JNIEnv* env, jclass, jlong handle, jobject rgbaBuffer,
-        jint width, jint height, jint rowStride, jfloat confidence, jfloat nmsThreshold) {
+        jint width, jint height, jint rowStride,
+        jint regionX, jint regionY, jint regionWidth, jint regionHeight,
+        jfloat confidence, jfloat nmsThreshold) {
     Detector* detector = reinterpret_cast<Detector*>(handle);
     if (detector == nullptr) {
         throwException(env, "java/lang/IllegalStateException", "YOLO detector is closed");
@@ -492,6 +539,7 @@ Java_com_stardust_autojs_runtime_api_Yolo_nativeDetectRgba(
         return nullptr;
     }
     return detectNcnnRgba(env, detector, rgba, width, height, rowStride,
+            regionX, regionY, regionWidth, regionHeight,
             confidence, nmsThreshold);
 }
 
@@ -593,7 +641,7 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeRelease(
 }
 
 jfloatArray runOrtDetection(JNIEnv* env, OrtDetector* detector, PreparedInput& prepared,
-                            float confidence) {
+                            float confidence, float regionX, float regionY) {
     try {
         const std::array<int64_t, 4> inputShape = {
                 1, 3, detector->inputSize, detector->inputSize};
@@ -624,7 +672,8 @@ jfloatArray runOrtDetection(JNIEnv* env, OrtDetector* detector, PreparedInput& p
         packed.push_back(prepared.elapsedMs);
         packed.push_back(inferenceMs);
         for (const Detection& detection : detections) {
-            packed.insert(packed.end(), {detection.x1, detection.y1, detection.x2, detection.y2,
+            packed.insert(packed.end(), {detection.x1 + regionX, detection.y1 + regionY,
+                                        detection.x2 + regionX, detection.y2 + regionY,
                                         detection.score, static_cast<float>(detection.label)});
         }
         jfloatArray result = env->NewFloatArray(static_cast<jsize>(packed.size()));
@@ -662,13 +711,15 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectBitmap(
     if (!prepareOrtInput(env, bitmap, detector->inputSize, detector->inputBuffer, prepared)) {
         return nullptr;
     }
-    return runOrtDetection(env, detector, prepared, confidence);
+    return runOrtDetection(env, detector, prepared, confidence, 0.0f, 0.0f);
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectRgba(
         JNIEnv* env, jclass, jlong handle, jobject rgbaBuffer,
-        jint width, jint height, jint rowStride, jfloat confidence, jfloat) {
+        jint width, jint height, jint rowStride,
+        jint regionX, jint regionY, jint regionWidth, jint regionHeight,
+        jfloat confidence, jfloat) {
     OrtDetector* detector = reinterpret_cast<OrtDetector*>(handle);
     if (detector == nullptr) {
         throwException(env, "java/lang/IllegalStateException", "ONNX detector is closed");
@@ -696,9 +747,11 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeDetectRgba(
     std::lock_guard<std::mutex> guard(detector->mutex);
     PreparedInput prepared;
     if (!prepareOrtInputRgba(rgba, width, height, rowStride,
+                             regionX, regionY, regionWidth, regionHeight,
                              detector->inputSize, detector->inputBuffer, prepared)) {
-        throwException(env, "java/lang/IllegalArgumentException", "Invalid NativeFrame RGBA layout");
+        throwException(env, "java/lang/IllegalArgumentException", "Invalid region or RGBA layout");
         return nullptr;
     }
-    return runOrtDetection(env, detector, prepared, confidence);
+    return runOrtDetection(env, detector, prepared, confidence,
+                           static_cast<float>(regionX), static_cast<float>(regionY));
 }

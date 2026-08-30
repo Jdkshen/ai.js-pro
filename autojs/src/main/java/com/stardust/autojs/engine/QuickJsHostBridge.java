@@ -233,6 +233,7 @@ final class QuickJsHostBridge implements AutoCloseable {
 
     public float[] detectYolo(long sessionHandle, ByteBuffer rgba,
                               int width, int height, int rowStride,
+                              int regionX, int regionY, int regionWidth, int regionHeight,
                               float confidence, float nmsThreshold) {
         YoloSession session = mYoloSessions.get(sessionHandle);
         if (session == null) {
@@ -241,14 +242,14 @@ final class QuickJsHostBridge implements AutoCloseable {
         AutoCloseable detector = session.detector;
         if ("onnx".equals(session.backend)) {
             return ((OnnxYoloDetector) detector).detectRgba(rgba, width, height, rowStride,
-                    confidence, nmsThreshold);
+                    regionX, regionY, regionWidth, regionHeight, confidence, nmsThreshold);
         }
         if ("opencv".equals(session.backend)) {
             return ((OpenCvYoloDetector) detector).detectRgba(rgba, width, height, rowStride,
-                    confidence, nmsThreshold);
+                    regionX, regionY, regionWidth, regionHeight, confidence, nmsThreshold);
         }
         return ((Yolo.Detector) detector).detectRgba(rgba, width, height, rowStride,
-                confidence, nmsThreshold);
+                regionX, regionY, regionWidth, regionHeight, confidence, nmsThreshold);
     }
 
     public boolean closeYolo(long sessionHandle) {
