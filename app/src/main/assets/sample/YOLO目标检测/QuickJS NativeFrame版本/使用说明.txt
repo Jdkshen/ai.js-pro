@@ -13,17 +13,22 @@ ImageReader RGBA Plane
 - onnx/   yolo26_320.onnx（ONNX Runtime / XNNPACK）
 - opencv/ yolo26_320.onnx（OpenCV 5.0 DNN）
 
-每套包含三个模板案例：
+每套包含四个模板案例：
 - YOLO运行环境测试.js：后端可用性 / 版本 / 模型加载耗时，无需截图授权。
 - YOLO单帧直连测试.js：截取一帧，推理并打印检测框与耗时。
 - YOLO实时直连测试.js：连续推理 60 帧，每 10 帧打印进度，结束时输出
   平均/最大/最小耗时与 FPS。
+- YOLO持续识别.js：无限循环截图 + 检测，每 5 秒输出一次汇总
+  （FPS / 平均耗时 / 命中数），检测到目标逐条打印。
+
+持续识别停止方式：在应用任务列表（“运行中任务”）点击停止单个脚本或
+“停止全部”。QuickJS interrupt 在 sleep 分片内及时响应，最迟约 100ms 中止。
 
 耗时字段（detector.detect 返回的数组对象）：
 - preprocessMs   预处理（缩放 + letterbox + 归一化）
 - inferenceMs    模型推理
 - totalMs        预处理 + 推理
-- 实时案例额外输出：averageModelMs / maxModelMs / minModelMs / fps
+- 实时/持续案例额外输出：averageModelMs / maxModelMs / minModelMs / fps
 
 原生 ncnn/onnx 仅支持 arm64-v8a；opencv 后端跟随 OpenCV 5.0 支持所有 ABI。
 测试时请保证前台画面中有 COCO 数据集可识别目标，例如人、汽车、猫或狗。

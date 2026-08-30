@@ -133,7 +133,7 @@ try {
 }
 ```
 
-可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中的单帧和 60 帧实时案例。QuickJS 直连桥现在支持 ncnn / onnx / opencv 三种后端，`yolo.load({ backend: ..., model | param+bin, ... })` 按后端加载模型，三种后端对 JS 暴露同一个检测对象 API（`detect` / `close` / `isClosed`）。原生 ncnn/onnx 仅 arm64-v8a；opencv 后端使用 OpenCV 5.0 DNN，支持全部 ABI。
+可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中 ncnn / onnx / opencv 三套案例（每套含环境测试、单帧、60 帧实时与持续识别模板）。QuickJS 直连桥支持 ncnn / onnx / opencv 三种后端，`yolo.load({ backend: ..., model | param+bin, ... })` 按后端加载模型，三种后端对 JS 暴露同一个检测对象 API（`detect` / `close` / `isClosed`）。原生 ncnn/onnx 仅 arm64-v8a；opencv 后端使用 OpenCV 5.0 DNN，支持全部 ABI。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟 ~100ms 中止。
 
 ### files / http / timers 白名单 API
 
