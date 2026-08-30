@@ -517,6 +517,17 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeCreate(
         detector->options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
         detector->options.SetIntraOpNumThreads(detector->threads);
         detector->options.SetInterOpNumThreads(1);
+        bool nnapiReady = false;
+        try {
+            detector->options.AppendExecutionProvider("NNAPI", {
+                    {"use_npu", "1"}, {"fp16", "1"}});
+            nnapiReady = true;
+            __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                    "ONNX Runtime NNAPI EP requested (npu, fp16)");
+        } catch (const Ort::Exception& error) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "NNAPI EP unavailable, using CPU: %s", error.what());
+        }
         try {
             detector->options.AppendExecutionProvider("XNNPACK", {
                     {"intra_op_num_threads", std::to_string(detector->threads)}});
@@ -524,7 +535,28 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeCreate(
             __android_log_print(ANDROID_LOG_WARN, kLogTag,
                     "XNNPACK unavailable, using ONNX Runtime CPU: %s", error.what());
         }
-        detector->session = Ort::Session(ortEnvironment(), model.c_str(), detector->options);
+        try {
+            detector->session = Ort::Session(ortEnvironment(), model.c_str(), detector->options);
+        } catch (const Ort::Exception& error) {
+            if (!nnapiReady) {
+                throw;
+            }
+            // NNAPI accepted the graph but session creation failed: rebuild the
+            // session options without NNAPI and fall back to the CPU path.
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "NNAPI session failed (%s), falling back to XNNPACK/CPU", error.what());
+            detector->options = Ort::SessionOptions();
+            detector->options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+            detector->options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+            detector->options.SetIntraOpNumThreads(detector->threads);
+            detector->options.SetInterOpNumThreads(1);
+            try {
+                detector->options.AppendExecutionProvider("XNNPACK", {
+                        {"intra_op_num_threads", std::to_string(detector->threads)}});
+            } catch (const Ort::Exception&) {
+            }
+            detector->session = Ort::Session(ortEnvironment(), model.c_str(), detector->options);
+        }
         Ort::AllocatorWithDefaultOptions allocator;
         if (detector->session.GetInputCount() != 1 || detector->session.GetOutputCount() < 1) {
             throw std::runtime_error("YOLO ONNX model must have one input and at least one output");
@@ -536,8 +568,10 @@ Java_com_stardust_autojs_runtime_api_OnnxYoloDetector_nativeCreate(
         detector->inputBuffer.resize(static_cast<size_t>(detector->inputSize)
                 * detector->inputSize * 3);
         __android_log_print(ANDROID_LOG_INFO, kLogTag,
-                "onnxruntime=%s backend=XNNPACK/CPU input=%d threads=%d nodes=%s->%s",
-                OrtGetApiBase()->GetVersionString(), detector->inputSize, detector->threads,
+                "onnxruntime=%s backend=%s input=%d threads=%d nodes=%s->%s",
+                OrtGetApiBase()->GetVersionString(),
+                nnapiReady ? "NNAPI/XNNPACK" : "XNNPACK/CPU",
+                detector->inputSize, detector->threads,
                 detector->inputName.c_str(), detector->outputName.c_str());
         return reinterpret_cast<jlong>(detector.release());
     } catch (const Ort::Exception& error) {

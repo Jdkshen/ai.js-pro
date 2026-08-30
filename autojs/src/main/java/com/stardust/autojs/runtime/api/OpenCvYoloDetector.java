@@ -47,7 +47,12 @@ public final class OpenCvYoloDetector implements AutoCloseable {
                 throw new IllegalStateException("OpenCV 无法读取 ONNX 模型");
             }
             mNet.setPreferableBackend(Dnn.DNN_BACKEND_OPENCV);
-            mNet.setPreferableTarget(Dnn.DNN_TARGET_CPU);
+            try {
+                // ARM NEON FP16 runs can be ~1.5x faster than FP32 on arm64.
+                mNet.setPreferableTarget(Dnn.DNN_TARGET_CPU_FP16);
+            } catch (Throwable ignored) {
+                mNet.setPreferableTarget(Dnn.DNN_TARGET_CPU);
+            }
         } catch (Throwable error) {
             close();
             throw new IllegalStateException("OpenCV DNN 模型初始化失败：" + error.getMessage(), error);

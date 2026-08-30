@@ -84,7 +84,7 @@ try {
     if (drawingShown) drawing.hide();
         }
 
-        sleep(100); // 可中断，控制帧率并让停止信号快速生效
+        sleep(16); // 帧间隔(ms)：越小帧率越高，发热越大；0 表示不额外等待
     }
 } finally {
     detector.close();
