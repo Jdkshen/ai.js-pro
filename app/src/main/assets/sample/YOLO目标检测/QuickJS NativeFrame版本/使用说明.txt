@@ -8,10 +8,12 @@ ImageReader RGBA Plane
   -> 后端推理（ncnn / ONNX Runtime / OpenCV 5.0 DNN）
   -> QuickJS 检测框数组
 
-文件：
-- YOLO单帧直连测试.js：截取一帧，推理并打印检测框。把文件顶部
-  `const backend = 'ncnn'` 改成 'onnx' 或 'opencv' 即可切换后端。
-- YOLO实时直连测试.js：连续推理 60 帧，每 10 帧打印速度。
+模板案例（三个，每个都支持三后端切换）：
+- YOLO运行环境测试.js：探测三后端可用性与版本，计时模型加载，无需截图授权。
+- YOLO单帧直连测试.js：截取一帧，推理并打印检测框与耗时。
+- YOLO实时直连测试.js：连续推理 60 帧，每 10 帧打印进度，结束时输出平均/最大/最小耗时与 FPS。
+
+用法：把文件顶部的 `const backend = 'ncnn'` 改成 'onnx' 或 'opencv' 即可切换后端。
 
 后端选择：
 - ncnn      模型：NCNN版本/models 的 yolo26_320.param + .bin
@@ -22,6 +24,12 @@ yolo.load 参数（QuickJS 三后端统一）：
 - ncnn：backend: 'ncnn'（或 'cpu'），param + bin
 - onnx/opencv：backend: 'onnx'/'opencv'（或 ort/onnxruntime/dnn/opencv5），model
 - 通用：labels（数组或文本路径）、inputSize（默认 320）、threads（默认 4）
+
+耗时字段（detector.detect 返回的数组对象）：
+- preprocessMs   预处理（缩放 + letterbox + 归一化）
+- inferenceMs    模型推理
+- totalMs        预处理 + 推理
+- 实时案例额外输出：averageModelMs / maxModelMs / minModelMs / fps
 
 原生 ncnn/onnx 仅支持 arm64-v8a；opencv 后端跟随 OpenCV 5.0 支持所有 ABI。
 测试时请保证前台画面中有 COCO 数据集可识别目标，例如人、汽车、猫或狗。
