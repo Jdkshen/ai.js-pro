@@ -449,11 +449,14 @@ final class QuickJsHostBridge implements AutoCloseable {
     public boolean drawCreate() {
         Context context = mRuntime.uiHandler.getContext();
         if (context == null) return false;
-        if (mOverlay != null) return true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
             return false;
         }
         try {
+            // Multiple engine runs can leave overlay windows behind when a script is
+            // force-stopped before the host bridge closes. Make the overlay unique:
+            // reap every previous overlay before creating the new one.
+            QuickJsOverlay.closeAll();
             mOverlay = new QuickJsOverlay(context);
             if (!mOverlay.show()) {
                 mOverlay = null;
@@ -512,12 +515,26 @@ final class QuickJsHostBridge implements AutoCloseable {
     }
 
     private static final class QuickJsOverlay {
+        private static final java.util.Set<QuickJsOverlay> sAllOverlays =
+                Collections.synchronizedSet(new java.util.HashSet<>());
+
         private final WindowManager mWindowManager;
         private final OverlayView mView;
 
         QuickJsOverlay(Context context) {
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
             mView = new OverlayView(context);
+            sAllOverlays.add(this);
+        }
+
+        static void closeAll() {
+            java.util.List<QuickJsOverlay> overlays;
+            synchronized (sAllOverlays) {
+                overlays = new ArrayList<>(sAllOverlays);
+            }
+            for (QuickJsOverlay overlay : overlays) {
+                overlay.close();
+            }
         }
 
         boolean show() {
@@ -540,8 +557,9 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
 
         void close() {
+            sAllOverlays.remove(this);
             try {
-                mWindowManager.removeView(mView);
+                mWindowManager.removeViewImmediate(mView);
             } catch (Throwable ignored) {
             }
         }

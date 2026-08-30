@@ -19,6 +19,7 @@ const detector = yolo.load({
 });
 
 const drawingShown = drawing.show();
+console.log('DRAWING_SHOW', drawingShown);
 if (!drawingShown) {
     toast('未获得悬浮窗权限，无法绘制检测框，请在系统设置里允许悬浮窗');
 }
