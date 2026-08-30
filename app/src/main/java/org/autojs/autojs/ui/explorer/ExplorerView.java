@@ -125,8 +125,20 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         }
     }
 
+    private void saveScrollPosition() {
+        if (mExplorerItemListView == null || mExplorerItemListView.getLayoutManager() == null) {
+            return;
+        }
+        int position = ((LinearLayoutManager) mExplorerItemListView.getLayoutManager())
+                .findFirstCompletelyVisibleItemPosition();
+        if (position >= 0) {
+            mCurrentPageState.scrollY = position;
+            Log.d(LOG_TAG, "saveScrollPosition=" + position + " page=" + mCurrentPageState.page.getPath());
+        }
+    }
+
     protected void enterDirectChildPage(ExplorerPage childItemGroup) {
-        mCurrentPageState.scrollY = ((LinearLayoutManager) mExplorerItemListView.getLayoutManager()).findLastCompletelyVisibleItemPosition();
+        saveScrollPosition();
         mPageStateHistory.push(mCurrentPageState);
         setCurrentPageState(new ExplorerPageState(childItemGroup));
         loadItemList();
@@ -163,6 +175,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     }
 
     public void enterChildPage(ExplorerPage childPage) {
+        saveScrollPosition();
         ScriptFile root = mCurrentPageState.page.toScriptFile();
         ScriptFile dir = childPage.toScriptFile();
         Stack<ScriptFile> dirs = new Stack<>();
@@ -207,6 +220,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     }
 
     public void reload() {
+        saveScrollPosition();
         loadItemList();
     }
 
@@ -221,6 +235,15 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
     private void initExplorerItemListView() {
         mExplorerItemListView.setAdapter(mExplorerAdapter);
+        // 滚动停止时实时记录当前位置，任何时刻重载/返回都能恢复（不再依赖“离开时保存”）。
+        mExplorerItemListView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(RecyclerView recyclerView, int newState) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    saveScrollPosition();
+                }
+            }
+        });
         WrapContentGridLayoutManger manager = new WrapContentGridLayoutManger(getContext(), 2);
         manager.setDebugInfo("ExplorerView");
         manager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
@@ -261,9 +284,13 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                     mExplorerItemList = list;
                     mExplorerAdapter.notifyDataSetChanged();
                     setRefreshing(false);
-                    post(() ->
-                            mExplorerItemListView.scrollToPosition(mCurrentPageState.scrollY)
-                    );
+                    int scrollY = mCurrentPageState.scrollY;
+                    Log.d(LOG_TAG, "loadItemList done, restore scrollY=" + scrollY);
+                    if (scrollY > 0) {
+                        // 立即恢复；再延迟一次兜底（等 RecyclerView 完成首次布局）
+                        post(() -> mExplorerItemListView.scrollToPosition(scrollY));
+                        postDelayed(() -> mExplorerItemListView.scrollToPosition(scrollY), 120);
+                    }
                 });
     }
 
@@ -271,7 +298,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     public void onExplorerChange(ExplorerChangeEvent event) {
         Log.d(LOG_TAG, "on explorer change: " + event);
         if ((event.getAction() == ExplorerChangeEvent.ALL)) {
-            loadItemList();
+            reload();
             return;
         }
         String currentDirPath = mCurrentPageState.page.getPath();
@@ -280,7 +307,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         String changedItemPath = item == null ? null : item.getPath();
         if (currentDirPath.equals(changedItemPath) || (currentDirPath.equals(changedDirPath) &&
                 event.getAction() == ExplorerChangeEvent.CHILDREN_CHANGE)) {
-            loadItemList();
+            reload();
             return;
         }
         if (currentDirPath.equals(changedDirPath)) {

@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -65,8 +66,16 @@ struct TaskEntry {
 };
 std::string gScriptDirectoryLabel;
 std::vector<ScriptEntry> gScriptEntries;
+// 脚本/示例目录滚动位置缓存：按目录标签保存，返回父目录时恢复，进入新目录时滚顶。
+// 版本号用于检测列表数据更新（setScriptEntries / setSampleEntries 回调）。
+std::unordered_map<std::string, float> gScriptScrollCache;
+int gScriptEntriesRevision = 0;
+int gAppliedScriptRevision = -1;
 std::string gSampleDirectoryLabel = u8"示例文件  >  中文";
 std::vector<SampleEntry> gSampleEntries;
+std::unordered_map<std::string, float> gSampleScrollCache;
+int gSampleEntriesRevision = 0;
+int gAppliedSampleRevision = -1;
 std::vector<ResourceEntry> gResourceEntries;
 std::vector<PluginEntry> gPluginEntries;
 std::vector<TaskEntry> gRunningTasks;
@@ -207,6 +216,11 @@ bool initEgl(ANativeWindow *window) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    // A Surface recreation creates a fresh ImGui window tree whose scroll position starts at
+    // zero. Force the first frame to restore the cached list positions before it is allowed to
+    // write the new context's zero value back into the cache.
+    gAppliedScriptRevision = -1;
+    gAppliedSampleRevision = -1;
     ImGui::StyleColorsDark();
     if (!ImGui_ImplOpenGL3_Init("#version 100")) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "ImGui OpenGL backend initialization failed");
@@ -809,11 +823,26 @@ void drawScripts(bool applyScroll) {
     if (applyScroll) {
         applyPendingVerticalScroll();
     }
+    const bool restoreScriptScroll = gScriptEntriesRevision != gAppliedScriptRevision;
+    float restoredScriptScroll = 0.0f;
+    if (restoreScriptScroll) {
+        auto cache = gScriptScrollCache.find(gScriptDirectoryLabel);
+        if (cache != gScriptScrollCache.end()) restoredScriptScroll = cache->second;
+    }
     if (gScriptEntries.empty()) {
         ImGui::SetCursorPos(ImVec2(18.0f*gUiScale, 24.0f*gUiScale));
         ImGui::TextDisabled(u8"当前目录没有脚本或子目录");
     } else {
         for (int i = 0; i < static_cast<int>(gScriptEntries.size()); ++i) drawScriptEntryRow(i);
+    }
+    // Restore only after all rows have established the child's content height. Calling
+    // SetScrollY before drawing the rows makes a fresh ImGui context clamp the target to zero.
+    if (restoreScriptScroll) {
+        gAppliedScriptRevision = gScriptEntriesRevision;
+        ImGui::SetScrollY(restoredScriptScroll);
+    } else if (!gScriptEntries.empty()) {
+        // Continuously retain the current directory position for editor/activity round trips.
+        gScriptScrollCache[gScriptDirectoryLabel] = ImGui::GetScrollY();
     }
     ImGui::EndChild();
 }
@@ -886,11 +915,23 @@ void drawSamples(bool applyScroll) {
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
     if(applyScroll) applyPendingVerticalScroll();
+    const bool restoreSampleScroll = gSampleEntriesRevision != gAppliedSampleRevision;
+    float restoredSampleScroll = 0.0f;
+    if (restoreSampleScroll) {
+        auto cache = gSampleScrollCache.find(gSampleDirectoryLabel);
+        if (cache != gSampleScrollCache.end()) restoredSampleScroll = cache->second;
+    }
     if (gSampleEntries.empty()) {
         ImGui::SetCursorPosX(16.0f*gUiScale);
         ImGui::TextDisabled(u8"暂无内置示例");
     } else {
         for (int i=0;i<static_cast<int>(gSampleEntries.size());++i) drawSampleRow(i);
+    }
+    if (restoreSampleScroll) {
+        gAppliedSampleRevision = gSampleEntriesRevision;
+        ImGui::SetScrollY(restoredSampleScroll);
+    } else if (!gSampleEntries.empty()) {
+        gSampleScrollCache[gSampleDirectoryLabel] = ImGui::GetScrollY();
     }
     ImGui::EndChild();
 }
@@ -1414,6 +1455,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setScriptEntries(
         }
         gScriptEntries.push_back(std::move(entry));
     }
+    gScriptEntriesRevision++;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1453,6 +1495,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setSampleEntries(
         if(!previousPath.empty()&&entry.path==previousPath) gSelectedSample=static_cast<int>(gSampleEntries.size());
         gSampleEntries.push_back(std::move(entry));
     }
+    gSampleEntriesRevision++;
 }
 
 extern "C" JNIEXPORT void JNICALL

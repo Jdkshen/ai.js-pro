@@ -56,6 +56,17 @@ public class TaskPrefEditActivity extends AbstractAppCompatPluginActivity {
     }
 
     @Override
+    public void onBackPressed() {
+        // 逐层返回目录，而不是直接退出页面
+        ExplorerView explorerView = (ExplorerView) findViewById(R.id.script_list);
+        if (explorerView != null && explorerView.canGoBack()) {
+            explorerView.goBack();
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == R.id.action_refresh) {
             Explorers.external().refreshAll();

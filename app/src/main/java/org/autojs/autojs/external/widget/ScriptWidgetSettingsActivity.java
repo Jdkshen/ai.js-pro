@@ -51,6 +51,17 @@ public class ScriptWidgetSettingsActivity extends BaseActivity {
         });
     }
 
+    @Override
+    public void onBackPressed() {
+        // 逐层返回目录，而不是直接退出页面
+        ExplorerView explorerView = findViewById(R.id.script_list);
+        if (explorerView != null && explorerView.canGoBack()) {
+            explorerView.goBack();
+            return;
+        }
+        super.onBackPressed();
+    }
+
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
