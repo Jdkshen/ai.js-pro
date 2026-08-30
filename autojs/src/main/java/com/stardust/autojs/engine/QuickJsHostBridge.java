@@ -1,5 +1,6 @@
 package com.stardust.autojs.engine;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
@@ -464,6 +465,10 @@ final class QuickJsHostBridge implements AutoCloseable {
                 mOverlay = null;
                 return false;
             }
+            // Hide status/navigation bars while drawing so capture coordinates and
+            // the overlay stay aligned, and the drawn boxes are not overlapped by
+            // system UI.
+            applySystemUi(mRuntime.app == null ? null : mRuntime.app.getCurrentActivity(), true);
             return true;
         } catch (Throwable error) {
             Log.w("QuickJsHostBridge", "Cannot create drawing overlay", error);
@@ -496,6 +501,29 @@ final class QuickJsHostBridge implements AutoCloseable {
         QuickJsOverlay overlay = mOverlay;
         mOverlay = null;
         if (overlay != null) overlay.close();
+        applySystemUi(mRuntime.app == null ? null : mRuntime.app.getCurrentActivity(), false);
+    }
+
+    private static void applySystemUi(Activity activity, boolean immersive) {
+        if (activity == null) return;
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                View decor = activity.getWindow().getDecorView();
+                if (immersive) {
+                    decor.setSystemUiVisibility(
+                            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                                    | View.SYSTEM_UI_FLAG_FULLSCREEN
+                                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+                } else {
+                    decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                }
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "Cannot update system UI visibility", error);
+            }
+        });
     }
 
     private static final class Detection {
@@ -553,8 +581,16 @@ final class QuickJsHostBridge implements AutoCloseable {
                                     : WindowManager.LayoutParams.TYPE_PHONE,
                             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                     | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                             android.graphics.PixelFormat.TRANSLUCENT);
+                    // Draw across the whole physical screen (status bar / cutout /
+                    // gesture bar) so overlay coordinates match MediaProjection
+                    // capture coordinates exactly.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        params.layoutInDisplayCutoutMode =
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                    }
                     mWindowManager.addView(mView, params);
                     mShown = true;
                     Log.i(TAG, "Overlay window added");
