@@ -1,9 +1,17 @@
 package com.stardust.autojs.engine;
 
+import android.content.Context;
 import android.content.res.Configuration;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.media.Image;
 import android.os.Build;
+import android.provider.Settings;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowManager;
 
 import com.stardust.autojs.core.http.MutableOkHttp;
 import com.stardust.autojs.runtime.api.Images;
@@ -24,6 +32,8 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -421,6 +431,7 @@ final class QuickJsHostBridge implements AutoCloseable {
 
     @Override
     public void close() {
+        drawClose();
         for (YoloSession session : new ArrayList<>(mYoloSessions.values())) {
             try {
                 session.detector.close();
@@ -429,6 +440,169 @@ final class QuickJsHostBridge implements AutoCloseable {
             }
         }
         mYoloSessions.clear();
+    }
+
+    // ---- drawing overlay whitelist ----
+
+    private volatile QuickJsOverlay mOverlay;
+
+    public boolean drawCreate() {
+        Context context = mRuntime.uiHandler.getContext();
+        if (context == null) return false;
+        if (mOverlay != null) return true;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+            return false;
+        }
+        try {
+            mOverlay = new QuickJsOverlay(context);
+            if (!mOverlay.show()) {
+                mOverlay = null;
+                return false;
+            }
+            return true;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot create drawing overlay", error);
+            mOverlay = null;
+            return false;
+        }
+    }
+
+    public void drawUpdate(String detectionsJson, String statsText) {
+        QuickJsOverlay overlay = mOverlay;
+        if (overlay == null) return;
+        try {
+            JSONArray array = new JSONArray(detectionsJson == null ? "[]" : detectionsJson);
+            List<Detection> detections = new ArrayList<>(array.length());
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject item = array.getJSONObject(i);
+                detections.add(new Detection(
+                        (float) item.optDouble("x1"), (float) item.optDouble("y1"),
+                        (float) item.optDouble("x2"), (float) item.optDouble("y2"),
+                        item.optString("label", ""),
+                        (float) item.optDouble("score")));
+            }
+            overlay.update(detections, statsText == null ? "" : statsText);
+        } catch (JSONException ignored) {
+            // malformed payload: keep the previous frame
+        }
+    }
+
+    public void drawClose() {
+        QuickJsOverlay overlay = mOverlay;
+        mOverlay = null;
+        if (overlay != null) overlay.close();
+    }
+
+    private static final class Detection {
+        final float x1;
+        final float y1;
+        final float x2;
+        final float y2;
+        final String label;
+        final float score;
+
+        Detection(float x1, float y1, float x2, float y2, String label, float score) {
+            this.x1 = x1;
+            this.y1 = y1;
+            this.x2 = x2;
+            this.y2 = y2;
+            this.label = label;
+            this.score = score;
+        }
+    }
+
+    private static final class QuickJsOverlay {
+        private final WindowManager mWindowManager;
+        private final OverlayView mView;
+
+        QuickJsOverlay(Context context) {
+            mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+            mView = new OverlayView(context);
+        }
+
+        boolean show() {
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                            ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                            : WindowManager.LayoutParams.TYPE_PHONE,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    android.graphics.PixelFormat.TRANSLUCENT);
+            mWindowManager.addView(mView, params);
+            return true;
+        }
+
+        void update(List<Detection> detections, String statsText) {
+            mView.setData(detections, statsText);
+        }
+
+        void close() {
+            try {
+                mWindowManager.removeView(mView);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static final class OverlayView extends View {
+        private final Paint mBoxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mLabelBgPaint = new Paint();
+        private final Paint mStatsPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mStatsBgPaint = new Paint();
+        private final Object mLock = new Object();
+        private List<Detection> mDetections = Collections.emptyList();
+        private String mStatsText = "";
+
+        OverlayView(Context context) {
+            super(context);
+            mBoxPaint.setStyle(Paint.Style.STROKE);
+            mBoxPaint.setStrokeWidth(4f);
+            mBoxPaint.setColor(Color.parseColor("#33FF66"));
+            mLabelPaint.setTextSize(30f);
+            mLabelPaint.setColor(Color.parseColor("#FFD54F"));
+            mLabelBgPaint.setColor(0xCC000000);
+            mStatsPaint.setTextSize(28f);
+            mStatsPaint.setColor(Color.WHITE);
+            mStatsBgPaint.setColor(0x99000000);
+        }
+
+        void setData(List<Detection> detections, String statsText) {
+            synchronized (mLock) {
+                mDetections = detections;
+                mStatsText = statsText;
+            }
+            postInvalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            List<Detection> detections;
+            String statsText;
+            synchronized (mLock) {
+                detections = mDetections;
+                statsText = mStatsText;
+            }
+            if (!statsText.isEmpty()) {
+                float textWidth = mStatsPaint.measureText(statsText);
+                canvas.drawRoundRect(new RectF(10, 10, 24 + textWidth, 54), 12, 12, mStatsBgPaint);
+                canvas.drawText(statsText, 24, 42, mStatsPaint);
+            }
+            for (Detection detection : detections) {
+                canvas.drawRect(new RectF(detection.x1, detection.y1,
+                        detection.x2, detection.y2), mBoxPaint);
+                String caption = detection.label + " " + Math.round(detection.score * 100) + "%";
+                float captionWidth = mLabelPaint.measureText(caption);
+                float top = Math.max(0f, detection.y1 - 40f);
+                canvas.drawRoundRect(new RectF(detection.x1, top,
+                        detection.x1 + captionWidth + 14, top + 36), 8, 8, mLabelBgPaint);
+                canvas.drawText(caption, detection.x1 + 7, top + 26, mLabelPaint);
+            }
+        }
     }
 
     private static boolean isAssetPath(String path) {

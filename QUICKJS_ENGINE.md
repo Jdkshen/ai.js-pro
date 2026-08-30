@@ -71,6 +71,7 @@ toast("这是 QuickJS 脚本");
 | `NativeFrame.recycle` | 已接入 | 显式释放；引擎销毁时自动回收遗留句柄 |
 | `yolo.load`、`detector.detect(NativeFrame)` | 已接入 | ncnn / onnx / opencv 三后端 NativeFrame 直连；ncnn/onnx 仅 arm64，opencv 全 ABI |
 | `detector.close` | 已接入 | 显式释放 NCNN 模型；引擎销毁时自动清理遗留 detector |
+| `drawing` | 已接入 | 全屏悬浮层绘制：`show()` / `update(detections, stats)` / `hide()`，用于检测框与耗时显示 |
 | `files` | 已接入 | 读写、追加、列表、存在性判断、复制/移动/重命名/删除等白名单方法 |
 | `http` | 已接入 | 同步 `get` / `post` / `postJson` / `request`，OkHttp 3.10 白名单桥 |
 | `timers` | 已接入 | Native 定时器队列 + 引擎线程事件循环，可被停止信号打断 |

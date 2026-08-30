@@ -18,6 +18,11 @@ const detector = yolo.load({
     threads: 4
 });
 
+const drawingShown = drawing.show();
+if (!drawingShown) {
+    toast('未获得悬浮窗权限，无法绘制检测框，请在系统设置里允许悬浮窗');
+}
+
 if (!requestScreenCapture('portrait')) {
     detector.close();
     throw new Error('用户取消了屏幕捕获授权');
@@ -54,6 +59,11 @@ try {
             });
         }
 
+        if (drawingShown) {
+            drawing.update(detections, backend + '  ' + frameIndex + ' 帧  '
+                + (totalModelMs / frameIndex).toFixed(0) + ' ms  命中 ' + hitTotal);
+        }
+
         const now = Date.now();
         const summaryElapsed = now - summaryStarted;
         if (summaryElapsed >= 5000) {
@@ -70,6 +80,7 @@ try {
             summaryFrames = 0;
             summaryHits = 0;
             summaryModelMs = 0;
+    if (drawingShown) drawing.hide();
         }
 
         sleep(100); // 可中断，控制帧率并让停止信号快速生效

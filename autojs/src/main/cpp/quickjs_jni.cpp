@@ -648,6 +648,43 @@ JSValue nativeHttpRequest(JSContext *context, JSValueConst, int argc, JSValueCon
     return JS_NewStringLen(context, text.data(), text.size());
 }
 
+JSValue nativeDrawCreate(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "drawCreate", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeDrawUpdate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string detections = argc > 0 ? jsString(context, argv[0]) : std::string();
+    const std::string stats = argc > 1 ? jsString(context, argv[1]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "drawUpdate",
+            "(Ljava/lang/String;Ljava/lang/String;)V");
+    jstring javaDetections = toJavaString(env, detections);
+    jstring javaStats = toJavaString(env, stats);
+    env->CallVoidMethod(state->host, method, javaDetections, javaStats);
+    env->DeleteLocalRef(javaStats);
+    env->DeleteLocalRef(javaDetections);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeDrawClose(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "drawClose", "()V");
+    env->CallVoidMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
 JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     const std::string kind = argc > 0 ? jsString(context, argv[0]) : "package";
     return callStringHost(context, "getForegroundInfo", kind == "activity" ? "activity" : "package");
@@ -1271,6 +1308,30 @@ const char kBootstrapScript[] = R"JS(
     };
     global.http = Object.freeze(http);
 
+    const drawing = {
+        show: function () { return __aiNativeDrawCreate(); },
+        hide: function () { __aiNativeDrawClose(); },
+        update: function (detections, stats) {
+            const packed = [];
+            if (Array.isArray(detections)) {
+                detections.forEach(function (item) {
+                    const bounds = item.bounds || item;
+                    packed.push({
+                        x1: Number(bounds.left !== undefined ? bounds.left : bounds.x1),
+                        y1: Number(bounds.top !== undefined ? bounds.top : bounds.y1),
+                        x2: Number(bounds.right !== undefined ? bounds.right : bounds.x2),
+                        y2: Number(bounds.bottom !== undefined ? bounds.bottom : bounds.y2),
+                        label: String(item.label === undefined ? '' : item.label),
+                        score: Number(item.score || 0)
+                    });
+                });
+            }
+            return __aiNativeDrawUpdate(JSON.stringify(packed),
+                stats === undefined || stats === null ? '' : String(stats));
+        }
+    };
+    global.drawing = Object.freeze(drawing);
+
     global.__engine__ = Object.freeze({ name: 'QuickJS', version: '2026-06-04', native: true });
 })(globalThis);
 )JS";
@@ -1388,6 +1449,9 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSetInterval", nativeSetInterval, 2);
     installNativeFunction(state->context, global, "__aiNativeClearTimer", nativeClearTimer, 1);
     installNativeFunction(state->context, global, "__aiNativeHttpRequest", nativeHttpRequest, 5);
+    installNativeFunction(state->context, global, "__aiNativeDrawCreate", nativeDrawCreate, 0);
+    installNativeFunction(state->context, global, "__aiNativeDrawUpdate", nativeDrawUpdate, 2);
+    installNativeFunction(state->context, global, "__aiNativeDrawClose", nativeDrawClose, 0);
     JS_FreeValue(state->context, global);
 
     JSValue bootstrap = JS_Eval(state->context, kBootstrapScript, sizeof(kBootstrapScript) - 1,
