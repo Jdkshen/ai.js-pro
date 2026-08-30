@@ -13,7 +13,8 @@ YOLO 目标检测示例
 - YOLO单张图片识别.js：只申请一次截图权限，识别当前屏幕并打印结果。
 - YOLO实时识别.js：连续识别屏幕，停止脚本即可释放模型。
 
-QuickJS NativeFrame版本包含单帧直连和 60 帧实时直连测试，详见其子目录的使用说明。
+QuickJS NativeFrame版本包含单帧直连 / 60 帧实时直连 / 持续识别 / ROI 区域检测 / 三后端基准对比，
+详见其子目录的使用说明。
 
 注意：
 - NCNN 和 ONNX Runtime 当前仅随 arm64-v8a APK 提供。

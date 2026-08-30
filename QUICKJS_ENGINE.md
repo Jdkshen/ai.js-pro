@@ -134,7 +134,14 @@ try {
 }
 ```
 
-可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中 ncnn / onnx / opencv 三套案例（每套含环境测试、单帧、60 帧实时与持续识别模板）。QuickJS 直连桥支持 ncnn / onnx / opencv 三种后端，`yolo.load({ backend: ..., model | param+bin, ... })` 按后端加载模型，三种后端对 JS 暴露同一个检测对象 API（`detect` / `close` / `isClosed`）。原生 ncnn/onnx 仅 arm64-v8a；opencv 后端使用 OpenCV 5.0 DNN，支持全部 ABI。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟 ~100ms 中止。
+可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中 ncnn / onnx / opencv 三套案例（每套含环境测试、单帧、60 帧实时、持续识别与 ROI 区域检测模板，另有三后端基准对比脚本）。QuickJS 直连桥支持 ncnn / onnx / opencv 三种后端，`yolo.load({ backend: ..., model | param+bin, ... })` 按后端加载模型，三种后端对 JS 暴露同一个检测对象 API（`detect` / `close` / `isClosed`）。原生 ncnn/onnx 仅 arm64-v8a；opencv 后端使用 OpenCV 5.0 DNN，支持全部 ABI。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟 ~100ms 中止。`detect` 支持 `region: [x, y, w, h]` 区域检测（坐标自动回移全屏）。
+
+**OpenCV 引擎实测结论（骁龙870 / yolo26_320@320）**：
+- 新图引擎（`ENGINE_AUTO` 默认，KleidiCV CPU 路径）：**~110ms，最快**，检测正常；不支持 `setPreferableTarget`（仅 CPU）。
+- 经典引擎（`ENGINE_CLASSIC`）：~134ms，旧卷积路径，较慢。
+- OpenCL（`DNN_TARGET_OPENCL_FP16` 等）：自编 `WITH_OPENCL=ON` 版实测 **686ms** —— OpenCV DNN 的 OCL 后端仅针对 Intel GPU 优化，在 Adreno 上是负优化，**不要启用**。
+- 因此 `OpenCvYoloDetector` 采用 `Dnn.readNetFromONNX(path, Dnn.ENGINE_AUTO)` 且不设 target（默认即最优）。
+- 三后端基准（每后端 5 帧平均）：ncnn ~184ms / onnx ~432ms / opencv ~110ms。
 
 ### files / http / timers 白名单 API
 
