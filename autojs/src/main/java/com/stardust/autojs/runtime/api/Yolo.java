@@ -11,6 +11,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -264,6 +265,25 @@ public final class Yolo implements AutoCloseable {
             }
         }
 
+        public synchronized float[] detectRgba(ByteBuffer rgba, int width, int height, int rowStride,
+                                               float confidence, float nmsThreshold) {
+            if (mHandle == 0) throw new IllegalStateException("YOLO detector 已关闭");
+            if (rgba == null || !rgba.isDirect()) {
+                throw new IllegalArgumentException("YOLO NativeFrame 必须使用 DirectByteBuffer");
+            }
+            if (width < 2 || height < 2 || rowStride < width * 4) {
+                throw new IllegalArgumentException("YOLO NativeFrame RGBA 布局无效");
+            }
+            if (confidence < 0.0f || confidence > 1.0f) {
+                throw new IllegalArgumentException("confidence 必须在 0~1 之间");
+            }
+            if (nmsThreshold < 0.0f || nmsThreshold > 1.0f) {
+                throw new IllegalArgumentException("nms 必须在 0~1 之间");
+            }
+            return nativeDetectRgba(mHandle, rgba, width, height, rowStride,
+                    confidence, nmsThreshold);
+        }
+
         public synchronized boolean isClosed() {
             return mHandle == 0;
         }
@@ -290,5 +310,8 @@ public final class Yolo implements AutoCloseable {
     private static native long nativeCreate(String paramPath, String binPath, int inputSize, int threads);
     private static native float[] nativeDetectBitmap(long handle, Bitmap bitmap,
                                                        float confidence, float nmsThreshold);
+    private static native float[] nativeDetectRgba(long handle, ByteBuffer rgba,
+                                                     int width, int height, int rowStride,
+                                                     float confidence, float nmsThreshold);
     private static native void nativeRelease(long handle);
 }

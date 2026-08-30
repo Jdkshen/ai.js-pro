@@ -272,6 +272,78 @@ void decodeOrtRows(const float* rows, size_t rowCount, float confidence,
     }
 }
 
+jfloatArray detectNcnnRgba(JNIEnv* env, Detector* detector, const unsigned char* rgba,
+                           int width, int height, int rowStride,
+                           float confidence, float nmsThreshold) {
+    if (rgba == nullptr || width < 2 || height < 2 || rowStride < width * 4) {
+        throwException(env, "java/lang/IllegalArgumentException", "Invalid NativeFrame RGBA layout");
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> guard(detector->mutex);
+    std::vector<unsigned char> packedPixels;
+    if (rowStride != width * 4) {
+        packedPixels.resize(static_cast<size_t>(width) * height * 4);
+        for (int row = 0; row < height; ++row) {
+            std::memcpy(packedPixels.data() + static_cast<size_t>(row) * width * 4,
+                    rgba + static_cast<size_t>(row) * rowStride,
+                    static_cast<size_t>(width) * 4);
+        }
+        rgba = packedPixels.data();
+    }
+
+    const auto prepareStarted = std::chrono::steady_clock::now();
+    const float scale = std::min(detector->inputSize / static_cast<float>(width),
+                                 detector->inputSize / static_cast<float>(height));
+    const int resizedWidth = std::max(1, static_cast<int>(std::round(width * scale)));
+    const int resizedHeight = std::max(1, static_cast<int>(std::round(height * scale)));
+    const int padWidth = detector->inputSize - resizedWidth;
+    const int padHeight = detector->inputSize - resizedHeight;
+    const int padLeft = padWidth / 2;
+    const int padTop = padHeight / 2;
+    ncnn::Mat input = ncnn::Mat::from_pixels_resize(rgba, ncnn::Mat::PIXEL_RGBA2RGB,
+            width, height, resizedWidth, resizedHeight);
+    ncnn::Mat padded;
+    ncnn::copy_make_border(input, padded, padTop, padHeight - padTop,
+            padLeft, padWidth - padLeft, ncnn::BORDER_CONSTANT, 114.0f);
+    const float normalization[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
+    padded.substract_mean_normalize(nullptr, normalization);
+    const float prepareMs = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - prepareStarted).count();
+
+    const auto inferenceStarted = std::chrono::steady_clock::now();
+    ncnn::Extractor extractor = detector->net.create_extractor();
+    extractor.set_light_mode(true);
+    if (extractor.input("in0", padded) != 0) {
+        throwException(env, "java/lang/IllegalStateException", "YOLO input node 'in0' was not found");
+        return nullptr;
+    }
+    ncnn::Mat output;
+    if (extractor.extract("out0", output) != 0) {
+        throwException(env, "java/lang/IllegalStateException", "YOLO output node 'out0' was not found");
+        return nullptr;
+    }
+    const float inferenceMs = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - inferenceStarted).count();
+
+    std::vector<Detection> detections;
+    decode(output, confidence, nmsThreshold, scale, padLeft, padTop, width, height, detections);
+    std::vector<float> packed;
+    packed.reserve(2 + detections.size() * 6);
+    packed.push_back(prepareMs);
+    packed.push_back(inferenceMs);
+    for (const Detection& detection : detections) {
+        packed.insert(packed.end(), {detection.x1, detection.y1, detection.x2, detection.y2,
+                                    detection.score, static_cast<float>(detection.label)});
+    }
+
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(packed.size()));
+    if (result != nullptr && !packed.empty()) {
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(packed.size()), packed.data());
+    }
+    return result;
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -340,78 +412,37 @@ Java_com_stardust_autojs_runtime_api_Yolo_nativeDetectBitmap(
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> guard(detector->mutex);
     BitmapPixels bitmapPixels(env, bitmap);
     if (!bitmapPixels.lock()) {
         throwException(env, "java/lang/IllegalArgumentException", "YOLO requires an ARGB_8888 image");
         return nullptr;
     }
     const AndroidBitmapInfo& info = bitmapPixels.info();
-    const int width = static_cast<int>(info.width);
-    const int height = static_cast<int>(info.height);
+    return detectNcnnRgba(env, detector, bitmapPixels.data(),
+            static_cast<int>(info.width), static_cast<int>(info.height),
+            static_cast<int>(info.stride), confidence, nmsThreshold);
+}
 
-    const unsigned char* rgba = bitmapPixels.data();
-    std::vector<unsigned char> packedPixels;
-    if (info.stride != info.width * 4) {
-        packedPixels.resize(static_cast<size_t>(width) * height * 4);
-        for (int row = 0; row < height; ++row) {
-            std::memcpy(packedPixels.data() + static_cast<size_t>(row) * width * 4,
-                    rgba + static_cast<size_t>(row) * info.stride,
-                    static_cast<size_t>(width) * 4);
-        }
-        rgba = packedPixels.data();
-    }
-
-    const auto prepareStarted = std::chrono::steady_clock::now();
-    const float scale = std::min(detector->inputSize / static_cast<float>(width),
-                                 detector->inputSize / static_cast<float>(height));
-    const int resizedWidth = std::max(1, static_cast<int>(std::round(width * scale)));
-    const int resizedHeight = std::max(1, static_cast<int>(std::round(height * scale)));
-    const int padWidth = detector->inputSize - resizedWidth;
-    const int padHeight = detector->inputSize - resizedHeight;
-    const int padLeft = padWidth / 2;
-    const int padTop = padHeight / 2;
-    ncnn::Mat input = ncnn::Mat::from_pixels_resize(rgba, ncnn::Mat::PIXEL_RGBA2RGB,
-            width, height, resizedWidth, resizedHeight);
-    ncnn::Mat padded;
-    ncnn::copy_make_border(input, padded, padTop, padHeight - padTop,
-            padLeft, padWidth - padLeft, ncnn::BORDER_CONSTANT, 114.0f);
-    const float normalization[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
-    padded.substract_mean_normalize(nullptr, normalization);
-    const float prepareMs = std::chrono::duration<float, std::milli>(
-            std::chrono::steady_clock::now() - prepareStarted).count();
-
-    const auto inferenceStarted = std::chrono::steady_clock::now();
-    ncnn::Extractor extractor = detector->net.create_extractor();
-    extractor.set_light_mode(true);
-    if (extractor.input("in0", padded) != 0) {
-        throwException(env, "java/lang/IllegalStateException", "YOLO input node 'in0' was not found");
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_stardust_autojs_runtime_api_Yolo_nativeDetectRgba(
+        JNIEnv* env, jclass, jlong handle, jobject rgbaBuffer,
+        jint width, jint height, jint rowStride, jfloat confidence, jfloat nmsThreshold) {
+    Detector* detector = reinterpret_cast<Detector*>(handle);
+    if (detector == nullptr) {
+        throwException(env, "java/lang/IllegalStateException", "YOLO detector is closed");
         return nullptr;
     }
-    ncnn::Mat output;
-    if (extractor.extract("out0", output) != 0) {
-        throwException(env, "java/lang/IllegalStateException", "YOLO output node 'out0' was not found");
+    auto* rgba = static_cast<const unsigned char*>(env->GetDirectBufferAddress(rgbaBuffer));
+    const jlong capacity = env->GetDirectBufferCapacity(rgbaBuffer);
+    const int64_t required = static_cast<int64_t>(height - 1) * rowStride
+            + static_cast<int64_t>(width) * 4;
+    if (rgba == nullptr || width < 2 || height < 2 || rowStride < width * 4
+            || capacity < required) {
+        throwException(env, "java/lang/IllegalArgumentException", "Invalid NativeFrame DirectByteBuffer");
         return nullptr;
     }
-    const float inferenceMs = std::chrono::duration<float, std::milli>(
-            std::chrono::steady_clock::now() - inferenceStarted).count();
-
-    std::vector<Detection> detections;
-    decode(output, confidence, nmsThreshold, scale, padLeft, padTop, width, height, detections);
-    std::vector<float> packed;
-    packed.reserve(2 + detections.size() * 6);
-    packed.push_back(prepareMs);
-    packed.push_back(inferenceMs);
-    for (const Detection& detection : detections) {
-        packed.insert(packed.end(), {detection.x1, detection.y1, detection.x2, detection.y2,
-                                    detection.score, static_cast<float>(detection.label)});
-    }
-
-    jfloatArray result = env->NewFloatArray(static_cast<jsize>(packed.size()));
-    if (result != nullptr && !packed.empty()) {
-        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(packed.size()), packed.data());
-    }
-    return result;
+    return detectNcnnRgba(env, detector, rgba, width, height, rowStride,
+            confidence, nmsThreshold);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

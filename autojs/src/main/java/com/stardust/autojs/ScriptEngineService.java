@@ -148,14 +148,16 @@ public class ScriptEngineService {
             task.setExecutionListener(mScriptExecutionObserver);
         }
         ScriptSource source = task.getSource();
-        if (source instanceof JavaScriptSource) {
+        boolean isQuickJs = source instanceof JavaScriptSource
+                && JavaScriptSource.ENGINE_QUICKJS.equals(source.getEngineName());
+        if (source instanceof JavaScriptSource && !isQuickJs) {
             int mode = ((JavaScriptSource) source).getExecutionMode();
             if ((mode & JavaScriptSource.EXECUTION_MODE_UI) != 0) {
                 return ScriptExecuteActivity.execute(mContext, mScriptEngineManager, task);
             }
         }
         RunnableScriptExecution r;
-        if (source instanceof JavaScriptSource) {
+        if (source instanceof JavaScriptSource && !isQuickJs) {
             r = new LoopedBasedJavaScriptExecution(mScriptEngineManager, task);
         } else {
             r = new RunnableScriptExecution(mScriptEngineManager, task);

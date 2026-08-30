@@ -19,6 +19,7 @@ import com.stardust.autojs.core.image.capture.ScreenCaptureRequester;
 import com.stardust.autojs.core.record.accessibility.AccessibilityActionRecorder;
 import com.stardust.autojs.core.util.Shell;
 import com.stardust.autojs.engine.LoopBasedJavaScriptEngine;
+import com.stardust.autojs.engine.QuickJsJavaScriptEngine;
 import com.stardust.autojs.engine.RootAutomatorEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
 import com.stardust.autojs.rhino.InterruptibleAndroidContextFactory;
@@ -121,6 +122,11 @@ public abstract class AutoJs {
         mScriptEngineManager = new ScriptEngineManager(mContext);
         mScriptEngineManager.registerEngine(JavaScriptSource.ENGINE, () -> {
             LoopBasedJavaScriptEngine engine = new LoopBasedJavaScriptEngine(mContext);
+            engine.setRuntime(createRuntime());
+            return engine;
+        });
+        mScriptEngineManager.registerEngine(JavaScriptSource.ENGINE_QUICKJS, () -> {
+            QuickJsJavaScriptEngine engine = new QuickJsJavaScriptEngine();
             engine.setRuntime(createRuntime());
             return engine;
         });

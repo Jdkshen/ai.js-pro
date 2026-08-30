@@ -1,0 +1,1103 @@
+#include <jni.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+
+#include "native_frame_store.h"
+
+extern "C" {
+#include "quickjs.h"
+}
+
+namespace {
+
+constexpr const char *kQuickJsExceptionClass = "com/stardust/autojs/engine/QuickJsException";
+
+struct EngineState {
+    JavaVM *vm = nullptr;
+    jobject host = nullptr;
+    JSRuntime *runtime = nullptr;
+    JSContext *context = nullptr;
+    std::atomic<bool> interrupted{false};
+    NativeFrameStore frames;
+};
+
+std::mutex gEnginesMutex;
+std::unordered_map<jlong, std::shared_ptr<EngineState>> gEngines;
+std::atomic<jlong> gNextHandle{1};
+
+std::shared_ptr<EngineState> findEngine(jlong handle) {
+    std::lock_guard<std::mutex> lock(gEnginesMutex);
+    const auto it = gEngines.find(handle);
+    return it == gEngines.end() ? nullptr : it->second;
+}
+
+std::string fromJavaString(JNIEnv *env, jstring value) {
+    if (value == nullptr) {
+        return {};
+    }
+    const jsize length = env->GetStringLength(value);
+    const jchar *chars = env->GetStringChars(value, nullptr);
+    if (chars == nullptr) {
+        return {};
+    }
+
+    std::string result;
+    result.reserve(static_cast<size_t>(length) * 3);
+    for (jsize i = 0; i < length; ++i) {
+        uint32_t codePoint = chars[i];
+        if (codePoint >= 0xD800 && codePoint <= 0xDBFF && i + 1 < length) {
+            const uint32_t low = chars[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                codePoint = 0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
+                ++i;
+            }
+        }
+        if (codePoint <= 0x7F) {
+            result.push_back(static_cast<char>(codePoint));
+        } else if (codePoint <= 0x7FF) {
+            result.push_back(static_cast<char>(0xC0 | (codePoint >> 6)));
+            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        } else if (codePoint <= 0xFFFF) {
+            result.push_back(static_cast<char>(0xE0 | (codePoint >> 12)));
+            result.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        } else {
+            result.push_back(static_cast<char>(0xF0 | (codePoint >> 18)));
+            result.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        }
+    }
+    env->ReleaseStringChars(value, chars);
+    return result;
+}
+
+jstring toJavaString(JNIEnv *env, const std::string &value) {
+    jbyteArray bytes = env->NewByteArray(static_cast<jsize>(value.size()));
+    if (bytes == nullptr) {
+        return nullptr;
+    }
+    if (!value.empty()) {
+        env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(value.size()),
+                                reinterpret_cast<const jbyte *>(value.data()));
+    }
+    jclass stringClass = env->FindClass("java/lang/String");
+    jmethodID constructor = env->GetMethodID(stringClass, "<init>", "([BLjava/lang/String;)V");
+    jstring utf8 = env->NewStringUTF("UTF-8");
+    auto result = static_cast<jstring>(env->NewObject(stringClass, constructor, bytes, utf8));
+    env->DeleteLocalRef(utf8);
+    env->DeleteLocalRef(bytes);
+    env->DeleteLocalRef(stringClass);
+    return result;
+}
+
+JNIEnv *currentEnv(EngineState *state) {
+    JNIEnv *env = nullptr;
+    if (state->vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        return nullptr;
+    }
+    return env;
+}
+
+std::string jsString(JSContext *context, JSValueConst value) {
+    const char *chars = JS_ToCString(context, value);
+    if (chars == nullptr) {
+        return {};
+    }
+    std::string result(chars);
+    JS_FreeCString(context, chars);
+    return result;
+}
+
+std::string takeJavaException(JNIEnv *env) {
+    jthrowable throwable = env->ExceptionOccurred();
+    if (throwable == nullptr) {
+        return {};
+    }
+    env->ExceptionClear();
+    jclass throwableClass = env->FindClass("java/lang/Throwable");
+    jmethodID toStringMethod = env->GetMethodID(throwableClass, "toString", "()Ljava/lang/String;");
+    auto message = static_cast<jstring>(env->CallObjectMethod(throwable, toStringMethod));
+    std::string result = fromJavaString(env, message);
+    env->DeleteLocalRef(message);
+    env->DeleteLocalRef(throwableClass);
+    env->DeleteLocalRef(throwable);
+    return result;
+}
+
+JSValue throwJavaException(JSContext *context, JNIEnv *env) {
+    const std::string message = takeJavaException(env);
+    return JS_ThrowInternalError(context, "%s", message.empty() ? "Java API bridge failed" : message.c_str());
+}
+
+std::string quickJsException(JSContext *context) {
+    JSValue exception = JS_GetException(context);
+    std::string message = jsString(context, exception);
+    JSValue stack = JS_GetPropertyStr(context, exception, "stack");
+    if (!JS_IsUndefined(stack) && !JS_IsNull(stack)) {
+        const std::string stackText = jsString(context, stack);
+        if (!stackText.empty() && stackText != message) {
+            message += "\n" + stackText;
+        }
+    }
+    JS_FreeValue(context, stack);
+    JS_FreeValue(context, exception);
+    return message.empty() ? "QuickJS execution failed" : message;
+}
+
+void throwQuickJs(JNIEnv *env, const std::string &message) {
+    jclass exceptionClass = env->FindClass(kQuickJsExceptionClass);
+    if (exceptionClass != nullptr) {
+        env->ThrowNew(exceptionClass, message.c_str());
+        env->DeleteLocalRef(exceptionClass);
+    }
+}
+
+int interruptHandler(JSRuntime *, void *opaque) {
+    auto *state = static_cast<EngineState *>(opaque);
+    return state->interrupted.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+JSValue nativeLog(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (env == nullptr) {
+        return JS_ThrowInternalError(context, "JNI environment is unavailable");
+    }
+    int32_t level = 3;
+    if (argc > 0) {
+        JS_ToInt32(context, &level, argv[0]);
+    }
+    const std::string message = argc > 1 ? jsString(context, argv[1]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "console", "(ILjava/lang/String;)V");
+    jstring javaMessage = toJavaString(env, message);
+    env->CallVoidMethod(state->host, method, static_cast<jint>(level), javaMessage);
+    env->DeleteLocalRef(javaMessage);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeToast(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string message = argc > 0 ? jsString(context, argv[0]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "toast", "(Ljava/lang/String;)V");
+    jstring javaMessage = toJavaString(env, message);
+    env->CallVoidMethod(state->host, method, javaMessage);
+    env->DeleteLocalRef(javaMessage);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeSleep(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    int64_t millis = 0;
+    if (argc > 0 && JS_ToInt64(context, &millis, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    millis = std::max<int64_t>(0, millis);
+    while (millis > 0 && !state->interrupted.load(std::memory_order_relaxed)) {
+        const int64_t slice = std::min<int64_t>(millis, 25);
+        std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+        millis -= slice;
+    }
+    if (state->interrupted.load(std::memory_order_relaxed)) {
+        return JS_ThrowInternalError(context, "Script execution interrupted");
+    }
+    return JS_UNDEFINED;
+}
+
+bool readInt(JSContext *context, int argc, JSValueConst *argv, int index, int32_t *value) {
+    return index < argc && JS_ToInt32(context, value, argv[index]) == 0;
+}
+
+JSValue callBooleanHost(JSContext *context, const char *methodName, const char *signature,
+                        const jint *values, int count) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, signature);
+    jboolean result = JNI_FALSE;
+    switch (count) {
+        case 2:
+            result = env->CallBooleanMethod(state->host, method, values[0], values[1]);
+            break;
+        case 3:
+            result = env->CallBooleanMethod(state->host, method, values[0], values[1], values[2]);
+            break;
+        case 5:
+            result = env->CallBooleanMethod(state->host, method, values[0], values[1], values[2], values[3], values[4]);
+            break;
+        default:
+            break;
+    }
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeClick(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int32_t values[2];
+    if (!readInt(context, argc, argv, 0, &values[0]) || !readInt(context, argc, argv, 1, &values[1])) {
+        return JS_ThrowTypeError(context, "click(x, y) requires two integers");
+    }
+    return callBooleanHost(context, "click", "(II)Z", values, 2);
+}
+
+JSValue nativePress(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int32_t values[3];
+    for (int i = 0; i < 3; ++i) {
+        if (!readInt(context, argc, argv, i, &values[i])) {
+            return JS_ThrowTypeError(context, "press(x, y, duration) requires three integers");
+        }
+    }
+    return callBooleanHost(context, "press", "(III)Z", values, 3);
+}
+
+JSValue nativeLongClick(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int32_t values[2];
+    if (!readInt(context, argc, argv, 0, &values[0]) || !readInt(context, argc, argv, 1, &values[1])) {
+        return JS_ThrowTypeError(context, "longClick(x, y) requires two integers");
+    }
+    return callBooleanHost(context, "longClick", "(II)Z", values, 2);
+}
+
+JSValue nativeSwipe(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int32_t values[5];
+    for (int i = 0; i < 5; ++i) {
+        if (!readInt(context, argc, argv, i, &values[i])) {
+            return JS_ThrowTypeError(context, "swipe(x1, y1, x2, y2, duration) requires five integers");
+        }
+    }
+    return callBooleanHost(context, "swipe", "(IIIII)Z", values, 5);
+}
+
+JSValue nativeGlobalAction(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string action = argc > 0 ? jsString(context, argv[0]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "globalAction", "(Ljava/lang/String;)Z");
+    jstring javaAction = toJavaString(env, action);
+    const jboolean result = env->CallBooleanMethod(state->host, method, javaAction);
+    env->DeleteLocalRef(javaAction);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeSetClip(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string text = argc > 0 ? jsString(context, argv[0]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "setClip", "(Ljava/lang/String;)V");
+    jstring javaText = toJavaString(env, text);
+    env->CallVoidMethod(state->host, method, javaText);
+    env->DeleteLocalRef(javaText);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue callStringHost(JSContext *context, const char *methodName, const char *argument) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method;
+    jstring result;
+    if (argument == nullptr) {
+        method = env->GetMethodID(hostClass, methodName, "()Ljava/lang/String;");
+        result = static_cast<jstring>(env->CallObjectMethod(state->host, method));
+    } else {
+        method = env->GetMethodID(hostClass, methodName, "(Ljava/lang/String;)Ljava/lang/String;");
+        jstring javaArgument = toJavaString(env, argument);
+        result = static_cast<jstring>(env->CallObjectMethod(state->host, method, javaArgument));
+        env->DeleteLocalRef(javaArgument);
+    }
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "getClip", nullptr);
+}
+
+JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string kind = argc > 0 ? jsString(context, argv[0]) : "package";
+    return callStringHost(context, "getForegroundInfo", kind == "activity" ? "activity" : "package");
+}
+
+JSValue frameInfo(JSContext *context, EngineState *state, int64_t handle) {
+    const auto frame = state->frames.get(handle);
+    if (frame == nullptr) {
+        return JS_ThrowInternalError(context, "NativeFrame is unavailable");
+    }
+    JSValue info = JS_NewObject(context);
+    JS_SetPropertyStr(context, info, "id", JS_NewInt64(context, handle));
+    JS_SetPropertyStr(context, info, "width", JS_NewInt32(context, frame->cols));
+    JS_SetPropertyStr(context, info, "height", JS_NewInt32(context, frame->rows));
+    return info;
+}
+
+JSValue pointValue(JSContext *context, const NativeFramePoint &point, bool includeSimilarity) {
+    JSValue value = JS_NewObject(context);
+    JS_SetPropertyStr(context, value, "x", JS_NewInt32(context, point.x));
+    JS_SetPropertyStr(context, value, "y", JS_NewInt32(context, point.y));
+    if (includeSimilarity) {
+        JS_SetPropertyStr(context, value, "similarity", JS_NewFloat64(context, point.similarity));
+    }
+    return value;
+}
+
+JSValue nativeRequestScreenCapture(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t orientation = 0;
+    if (argc > 0 && JS_ToInt32(context, &orientation, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "requestScreenCapture", "(I)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, orientation);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeCaptureFrame(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "captureScreenNative", "()J");
+    const jlong handle = env->CallLongMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return frameInfo(context, state, handle);
+}
+
+JSValue nativeReadFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(context, "images.read(path) requires a path");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string path = jsString(context, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "resolvePath", "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaPath = toJavaString(env, path);
+    auto resolvedPath = static_cast<jstring>(env->CallObjectMethod(state->host, method, javaPath));
+    env->DeleteLocalRef(javaPath);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string resolved = fromJavaString(env, resolvedPath);
+    env->DeleteLocalRef(resolvedPath);
+    std::string error;
+    const int64_t handle = state->frames.load(resolved, &error);
+    if (handle == 0) {
+        return JS_ThrowInternalError(context, "%s", error.c_str());
+    }
+    return frameInfo(context, state, handle);
+}
+
+JSValue nativeReleaseFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "NativeFrame handle is required");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    return JS_NewBool(context, state->frames.release(handle));
+}
+
+JSValue nativeFramePixel(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t x = 0;
+    int32_t y = 0;
+    if (argc < 3 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &x, argv[1]) < 0 || JS_ToInt32(context, &y, argv[2]) < 0) {
+        return JS_ThrowTypeError(context, "images.pixel(frame, x, y) requires integer coordinates");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    uint32_t color = 0;
+    if (!state->frames.pixel(handle, x, y, &color)) {
+        return JS_ThrowRangeError(context, "Pixel is outside the frame or the frame was recycled");
+    }
+    return JS_NewUint32(context, color);
+}
+
+JSValue nativeFindColor(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t color = 0;
+    int32_t threshold = 4;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    if (argc < 7 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &color, argv[1]) < 0 || JS_ToInt32(context, &threshold, argv[2]) < 0 ||
+        JS_ToInt32(context, &x, argv[3]) < 0 || JS_ToInt32(context, &y, argv[4]) < 0 ||
+        JS_ToInt32(context, &width, argv[5]) < 0 || JS_ToInt32(context, &height, argv[6]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid images.findColor arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    NativeFramePoint point;
+    if (!state->frames.findColor(handle, static_cast<uint32_t>(color), threshold,
+                                 x, y, width, height, &point)) {
+        return JS_NULL;
+    }
+    return pointValue(context, point, false);
+}
+
+JSValue nativeFindImage(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t source = 0;
+    int64_t templ = 0;
+    double threshold = 0.9;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    if (argc < 7 || JS_ToInt64(context, &source, argv[0]) < 0 ||
+        JS_ToInt64(context, &templ, argv[1]) < 0 || JS_ToFloat64(context, &threshold, argv[2]) < 0 ||
+        JS_ToInt32(context, &x, argv[3]) < 0 || JS_ToInt32(context, &y, argv[4]) < 0 ||
+        JS_ToInt32(context, &width, argv[5]) < 0 || JS_ToInt32(context, &height, argv[6]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid images.findImage arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    NativeFramePoint point;
+    std::string error;
+    if (!state->frames.findImage(source, templ, threshold, x, y, width, height, &point, &error)) {
+        if (!error.empty()) {
+            return JS_ThrowRangeError(context, "%s", error.c_str());
+        }
+        return JS_NULL;
+    }
+    return pointValue(context, point, true);
+}
+
+JSValue nativeYoloIsAvailable(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "isNcnnYoloAvailable", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeYoloVersion(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "getNcnnYoloVersion", nullptr);
+}
+
+JSValue nativeYoloUnavailableReason(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "getNcnnYoloUnavailableReason", nullptr);
+}
+
+JSValue nativeYoloLoad(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 4) {
+        return JS_ThrowTypeError(context, "yolo.load requires param, bin, inputSize, and threads");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string param = jsString(context, argv[0]);
+    const std::string bin = jsString(context, argv[1]);
+    int32_t inputSize = 320;
+    int32_t threads = 4;
+    if (JS_ToInt32(context, &inputSize, argv[2]) < 0 || JS_ToInt32(context, &threads, argv[3]) < 0) {
+        return JS_EXCEPTION;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "loadNcnnYolo",
+            "(Ljava/lang/String;Ljava/lang/String;II)J");
+    jstring javaParam = toJavaString(env, param);
+    jstring javaBin = toJavaString(env, bin);
+    const jlong handle = env->CallLongMethod(state->host, method, javaParam, javaBin,
+                                             inputSize, threads);
+    env->DeleteLocalRef(javaBin);
+    env->DeleteLocalRef(javaParam);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, handle);
+}
+
+JSValue nativeYoloReadLabels(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(context, "YOLO labels path is required");
+    }
+    const std::string path = jsString(context, argv[0]);
+    return callStringHost(context, "readYoloLabels", path.c_str());
+}
+
+JSValue nativeYoloClose(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t detectorHandle = 0;
+    if (argc < 1 || JS_ToInt64(context, &detectorHandle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "YOLO detector handle is required");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "closeNcnnYolo", "(J)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, detectorHandle);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeYoloDetect(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t detectorHandle = 0;
+    int64_t frameHandle = 0;
+    double confidence = 0.25;
+    double nmsThreshold = 0.45;
+    if (argc < 4 || JS_ToInt64(context, &detectorHandle, argv[0]) < 0 ||
+        JS_ToInt64(context, &frameHandle, argv[1]) < 0 ||
+        JS_ToFloat64(context, &confidence, argv[2]) < 0 ||
+        JS_ToFloat64(context, &nmsThreshold, argv[3]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid YOLO detect arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    const auto frame = state->frames.get(frameHandle);
+    if (frame == nullptr || frame->empty() || frame->type() != CV_8UC4) {
+        return JS_ThrowTypeError(context, "YOLO requires a live RGBA NativeFrame");
+    }
+
+    JNIEnv *env = currentEnv(state);
+    const jlong capacity = static_cast<jlong>(frame->dataend - frame->data);
+    jobject buffer = env->NewDirectByteBuffer(frame->data, capacity);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "detectNcnnYolo",
+            "(JLjava/nio/ByteBuffer;IIIFF)[F");
+    auto packed = static_cast<jfloatArray>(env->CallObjectMethod(state->host, method,
+            detectorHandle, buffer, frame->cols, frame->rows,
+            static_cast<jint>(frame->step[0]),
+            static_cast<jfloat>(confidence), static_cast<jfloat>(nmsThreshold)));
+    env->DeleteLocalRef(hostClass);
+    env->DeleteLocalRef(buffer);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (packed == nullptr) {
+        return JS_ThrowInternalError(context, "YOLO inference returned no result");
+    }
+    const jsize length = env->GetArrayLength(packed);
+    std::vector<jfloat> values(static_cast<size_t>(length));
+    if (length > 0) {
+        env->GetFloatArrayRegion(packed, 0, length, values.data());
+    }
+    env->DeleteLocalRef(packed);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    JSValue array = JS_NewArray(context);
+    for (jsize index = 0; index < length; ++index) {
+        JS_SetPropertyUint32(context, array, static_cast<uint32_t>(index),
+                             JS_NewFloat64(context, values[static_cast<size_t>(index)]));
+    }
+    return array;
+}
+
+void installNativeFunction(JSContext *context, JSValue global, const char *name,
+                           JSCFunction *function, int length) {
+    JS_SetPropertyStr(context, global, name, JS_NewCFunction(context, function, name, length));
+}
+
+const char kBootstrapScript[] = R"JS(
+(function (global) {
+    'use strict';
+    function format(value) {
+        if (typeof value === 'string') return value;
+        if (value instanceof Error) return value.stack || value.message;
+        try {
+            const json = JSON.stringify(value);
+            return json === undefined ? String(value) : json;
+        } catch (_) {
+            return String(value);
+        }
+    }
+    function write(level, args) {
+        __aiNativeLog(level, Array.prototype.map.call(args, format).join(' '));
+    }
+    global.console = Object.freeze({
+        verbose: function () { write(2, arguments); },
+        log: function () { write(3, arguments); },
+        info: function () { write(4, arguments); },
+        warn: function () { write(5, arguments); },
+        error: function () { write(6, arguments); }
+    });
+    global.log = global.console.log;
+    global.toast = function (value) { return __aiNativeToast(format(value)); };
+    global.toastLog = function (value) { global.toast(value); global.log(value); };
+    global.sleep = function (millis) { return __aiNativeSleep(Number(millis)); };
+    global.click = __aiNativeClick;
+    global.press = __aiNativePress;
+    global.longClick = __aiNativeLongClick;
+    global.swipe = __aiNativeSwipe;
+    global.back = function () { return __aiNativeGlobalAction('back'); };
+    global.home = function () { return __aiNativeGlobalAction('home'); };
+    global.recents = function () { return __aiNativeGlobalAction('recents'); };
+    global.notifications = function () { return __aiNativeGlobalAction('notifications'); };
+    global.quickSettings = function () { return __aiNativeGlobalAction('quickSettings'); };
+    global.setClip = function (value) { return __aiNativeSetClip(String(value)); };
+    global.getClip = __aiNativeGetClip;
+    global.currentPackage = function () { return __aiNativeForegroundInfo('package'); };
+    global.currentActivity = function () { return __aiNativeForegroundInfo('activity'); };
+
+    const frameState = new WeakMap();
+    function wrapFrame(info) {
+        const frame = Object.create(NativeFrame.prototype);
+        frameState.set(frame, { id: info.id, recycled: false });
+        Object.defineProperties(frame, {
+            width: { value: info.width, enumerable: true },
+            height: { value: info.height, enumerable: true }
+        });
+        return frame;
+    }
+    function requireFrame(frame) {
+        const state = frameState.get(frame);
+        if (!state) throw new TypeError('Expected a NativeFrame');
+        if (state.recycled) throw new Error('NativeFrame has been recycled');
+        return state;
+    }
+    function NativeFrame() {
+        throw new TypeError('NativeFrame objects are created by images.captureScreen() or images.read()');
+    }
+    NativeFrame.prototype.recycle = function () {
+        const state = frameState.get(this);
+        if (!state || state.recycled) return false;
+        state.recycled = true;
+        return __aiNativeReleaseFrame(state.id);
+    };
+    NativeFrame.prototype.pixel = function (x, y) {
+        return __aiNativeFramePixel(requireFrame(this).id, Number(x), Number(y));
+    };
+    NativeFrame.prototype.toString = function () {
+        const state = frameState.get(this);
+        return state && !state.recycled
+            ? '[NativeFrame ' + this.width + 'x' + this.height + ']'
+            : '[NativeFrame recycled]';
+    };
+    Object.defineProperty(NativeFrame.prototype, 'recycled', {
+        get: function () {
+            const state = frameState.get(this);
+            return !state || state.recycled;
+        }
+    });
+
+    function parseColor(value) {
+        if (typeof value === 'number') return value >>> 0;
+        let text = String(value).trim();
+        if (text.charAt(0) === '#') text = text.slice(1);
+        if (/^[0-9a-fA-F]{6}$/.test(text)) text = 'ff' + text;
+        if (!/^[0-9a-fA-F]{8}$/.test(text)) {
+            throw new TypeError('Color must be #RRGGBB, #AARRGGBB, or an integer');
+        }
+        return parseInt(text, 16) >>> 0;
+    }
+    function regionOf(frame, options) {
+        const region = options && options.region;
+        if (!region) return [0, 0, frame.width, frame.height];
+        if (!Array.isArray(region) || region.length !== 4) {
+            throw new TypeError('region must be [x, y, width, height]');
+        }
+        return region.map(Number);
+    }
+    function orientationOf(value) {
+        if (value === 'portrait') return 1;
+        if (value === 'landscape') return 2;
+        return Number(value) === 1 || Number(value) === 2 ? Number(value) : 0;
+    }
+
+    const images = {
+        requestScreenCapture: function (orientation) {
+            return __aiNativeRequestScreenCapture(orientationOf(orientation));
+        },
+        captureScreen: function () {
+            return wrapFrame(__aiNativeCaptureFrame());
+        },
+        read: function (path) {
+            return wrapFrame(__aiNativeReadFrame(String(path)));
+        },
+        pixel: function (frame, x, y) {
+            return __aiNativeFramePixel(requireFrame(frame).id, Number(x), Number(y));
+        },
+        findColor: function (frame, color, options) {
+            const region = regionOf(frame, options);
+            const threshold = options && options.threshold !== undefined ? Number(options.threshold) : 4;
+            return __aiNativeFindColor(requireFrame(frame).id, parseColor(color), threshold,
+                region[0], region[1], region[2], region[3]);
+        },
+        findImage: function (frame, template, options) {
+            const region = regionOf(frame, options);
+            const threshold = options && options.threshold !== undefined ? Number(options.threshold) : 0.9;
+            return __aiNativeFindImage(requireFrame(frame).id, requireFrame(template).id, threshold,
+                region[0], region[1], region[2], region[3]);
+        }
+    };
+    global.NativeFrame = NativeFrame;
+    global.images = Object.freeze(images);
+    global.requestScreenCapture = images.requestScreenCapture;
+    global.captureScreen = images.captureScreen;
+
+    const detectorState = new WeakMap();
+    function requireDetector(detector) {
+        const state = detectorState.get(detector);
+        if (!state) throw new TypeError('Expected a YOLO detector');
+        if (state.closed) throw new Error('YOLO detector has been closed');
+        return state;
+    }
+    function YoloDetector() {
+        throw new TypeError('YOLO detectors are created by yolo.load()');
+    }
+    YoloDetector.prototype.detect = function (frame, options) {
+        const detector = requireDetector(this);
+        const nativeFrame = requireFrame(frame);
+        options = options || {};
+        const confidence = options.confidence === undefined ? 0.25 : Number(options.confidence);
+        const nms = options.nms === undefined ? 0.45 : Number(options.nms);
+        const packed = __aiNativeYoloDetect(detector.id, nativeFrame.id, confidence, nms);
+        const detections = [];
+        for (let i = 2; i + 5 < packed.length; i += 6) {
+            const left = Number(packed[i]);
+            const top = Number(packed[i + 1]);
+            const right = Number(packed[i + 2]);
+            const bottom = Number(packed[i + 3]);
+            const classId = Math.round(Number(packed[i + 5]));
+            detections.push({
+                classId: classId,
+                label: detector.labels[classId] === undefined
+                    ? String(classId) : detector.labels[classId],
+                score: Number(packed[i + 4]),
+                bounds: {
+                    left: left,
+                    top: top,
+                    right: right,
+                    bottom: bottom,
+                    width: right - left,
+                    height: bottom - top,
+                    centerX: (left + right) / 2,
+                    centerY: (top + bottom) / 2
+                }
+            });
+        }
+        detections.preprocessMs = packed.length >= 2 ? Number(packed[0]) : 0;
+        detections.inferenceMs = packed.length >= 2 ? Number(packed[1]) : 0;
+        detections.totalMs = detections.preprocessMs + detections.inferenceMs;
+        return detections;
+    };
+    YoloDetector.prototype.close = function () {
+        const state = detectorState.get(this);
+        if (!state || state.closed) return false;
+        state.closed = true;
+        return __aiNativeYoloClose(state.id);
+    };
+    YoloDetector.prototype.isClosed = function () {
+        const state = detectorState.get(this);
+        return !state || state.closed;
+    };
+
+    const yolo = {
+        isAvailable: function (backend) {
+            backend = String(backend || 'ncnn').toLowerCase();
+            return backend === 'ncnn' || backend === 'cpu' ? __aiNativeYoloIsAvailable() : false;
+        },
+        getUnavailableReason: function (backend) {
+            return this.isAvailable(backend) ? '' : __aiNativeYoloUnavailableReason();
+        },
+        getVersion: function (backend) {
+            return this.isAvailable(backend) ? __aiNativeYoloVersion() : 'unavailable';
+        },
+        load: function (options) {
+            options = options || {};
+            const backend = String(options.backend || 'ncnn').toLowerCase();
+            if (backend !== 'ncnn' && backend !== 'cpu') {
+                throw new Error('QuickJS NativeFrame YOLO currently supports only ncnn');
+            }
+            if (!__aiNativeYoloIsAvailable()) {
+                throw new Error(__aiNativeYoloUnavailableReason());
+            }
+            if (!options.param || !options.bin) {
+                throw new TypeError('yolo.load requires param and bin paths');
+            }
+            let labels = options.labels || [];
+            if (typeof labels === 'string') {
+                labels = __aiNativeYoloReadLabels(labels).trim().split(/\r?\n/);
+            }
+            if (!Array.isArray(labels)) throw new TypeError('labels must be an array or path');
+            const detector = Object.create(YoloDetector.prototype);
+            const id = __aiNativeYoloLoad(String(options.param), String(options.bin),
+                options.inputSize === undefined ? 320 : Number(options.inputSize),
+                options.threads === undefined ? 4 : Number(options.threads));
+            detectorState.set(detector, { id: id, labels: labels.slice(), closed: false });
+            return detector;
+        }
+    };
+    global.YoloDetector = YoloDetector;
+    global.yolo = Object.freeze(yolo);
+    global.__engine__ = Object.freeze({ name: 'QuickJS', version: '2026-06-04', native: true });
+})(globalThis);
+)JS";
+
+jobject resultToJava(JNIEnv *env, JSContext *context, JSValueConst result) {
+    if (JS_IsUndefined(result) || JS_IsNull(result)) {
+        return nullptr;
+    }
+    if (JS_IsBool(result)) {
+        jclass booleanClass = env->FindClass("java/lang/Boolean");
+        jmethodID valueOf = env->GetStaticMethodID(booleanClass, "valueOf", "(Z)Ljava/lang/Boolean;");
+        jobject value = env->CallStaticObjectMethod(booleanClass, valueOf, JS_ToBool(context, result) ? JNI_TRUE : JNI_FALSE);
+        env->DeleteLocalRef(booleanClass);
+        return value;
+    }
+    if (JS_IsNumber(result)) {
+        double number = 0;
+        JS_ToFloat64(context, &number, result);
+        jclass doubleClass = env->FindClass("java/lang/Double");
+        jmethodID valueOf = env->GetStaticMethodID(doubleClass, "valueOf", "(D)Ljava/lang/Double;");
+        jobject value = env->CallStaticObjectMethod(doubleClass, valueOf, number);
+        env->DeleteLocalRef(doubleClass);
+        return value;
+    }
+
+    JSValue converted = JS_DupValue(context, result);
+    if (JS_IsObject(result)) {
+        JSValue json = JS_JSONStringify(context, result, JS_UNDEFINED, JS_UNDEFINED);
+        const bool jsonFailed = JS_IsException(json);
+        if (!jsonFailed && !JS_IsUndefined(json)) {
+            JS_FreeValue(context, converted);
+            converted = json;
+        } else {
+            JS_FreeValue(context, json);
+            if (jsonFailed) {
+                JSValue ignored = JS_GetException(context);
+                JS_FreeValue(context, ignored);
+            }
+        }
+    }
+    const std::string text = jsString(context, converted);
+    JS_FreeValue(context, converted);
+    return toJavaString(env, text);
+}
+
+}  // namespace
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
+        JNIEnv *env, jclass, jobject hostBridge, jlong memoryLimitBytes, jlong stackLimitBytes) {
+    auto state = std::make_shared<EngineState>();
+    env->GetJavaVM(&state->vm);
+    state->host = env->NewGlobalRef(hostBridge);
+    state->runtime = JS_NewRuntime();
+    if (state->runtime == nullptr) {
+        env->DeleteGlobalRef(state->host);
+        throwQuickJs(env, "Unable to allocate QuickJS runtime");
+        return 0;
+    }
+    JS_SetMemoryLimit(state->runtime, static_cast<size_t>(std::max<jlong>(memoryLimitBytes, 1024 * 1024)));
+    JS_SetMaxStackSize(state->runtime, static_cast<size_t>(std::max<jlong>(stackLimitBytes, 256 * 1024)));
+    JS_SetInterruptHandler(state->runtime, interruptHandler, state.get());
+    state->context = JS_NewContext(state->runtime);
+    if (state->context == nullptr) {
+        JS_FreeRuntime(state->runtime);
+        env->DeleteGlobalRef(state->host);
+        throwQuickJs(env, "Unable to allocate QuickJS context");
+        return 0;
+    }
+    JS_SetContextOpaque(state->context, state.get());
+
+    JSValue global = JS_GetGlobalObject(state->context);
+    installNativeFunction(state->context, global, "__aiNativeLog", nativeLog, 2);
+    installNativeFunction(state->context, global, "__aiNativeToast", nativeToast, 1);
+    installNativeFunction(state->context, global, "__aiNativeSleep", nativeSleep, 1);
+    installNativeFunction(state->context, global, "__aiNativeClick", nativeClick, 2);
+    installNativeFunction(state->context, global, "__aiNativePress", nativePress, 3);
+    installNativeFunction(state->context, global, "__aiNativeLongClick", nativeLongClick, 2);
+    installNativeFunction(state->context, global, "__aiNativeSwipe", nativeSwipe, 5);
+    installNativeFunction(state->context, global, "__aiNativeGlobalAction", nativeGlobalAction, 1);
+    installNativeFunction(state->context, global, "__aiNativeSetClip", nativeSetClip, 1);
+    installNativeFunction(state->context, global, "__aiNativeGetClip", nativeGetClip, 0);
+    installNativeFunction(state->context, global, "__aiNativeForegroundInfo", nativeForegroundInfo, 1);
+    installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
+    installNativeFunction(state->context, global, "__aiNativeCaptureFrame", nativeCaptureFrame, 0);
+    installNativeFunction(state->context, global, "__aiNativeReadFrame", nativeReadFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeReleaseFrame", nativeReleaseFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeFramePixel", nativeFramePixel, 3);
+    installNativeFunction(state->context, global, "__aiNativeFindColor", nativeFindColor, 7);
+    installNativeFunction(state->context, global, "__aiNativeFindImage", nativeFindImage, 7);
+    installNativeFunction(state->context, global, "__aiNativeYoloIsAvailable", nativeYoloIsAvailable, 0);
+    installNativeFunction(state->context, global, "__aiNativeYoloVersion", nativeYoloVersion, 0);
+    installNativeFunction(state->context, global, "__aiNativeYoloUnavailableReason", nativeYoloUnavailableReason, 0);
+    installNativeFunction(state->context, global, "__aiNativeYoloLoad", nativeYoloLoad, 4);
+    installNativeFunction(state->context, global, "__aiNativeYoloReadLabels", nativeYoloReadLabels, 1);
+    installNativeFunction(state->context, global, "__aiNativeYoloDetect", nativeYoloDetect, 4);
+    installNativeFunction(state->context, global, "__aiNativeYoloClose", nativeYoloClose, 1);
+    JS_FreeValue(state->context, global);
+
+    JSValue bootstrap = JS_Eval(state->context, kBootstrapScript, sizeof(kBootstrapScript) - 1,
+                                "<ai.js-pro-quickjs-init>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(bootstrap)) {
+        const std::string message = quickJsException(state->context);
+        JS_FreeValue(state->context, bootstrap);
+        JS_FreeContext(state->context);
+        JS_FreeRuntime(state->runtime);
+        env->DeleteGlobalRef(state->host);
+        throwQuickJs(env, message);
+        return 0;
+    }
+    JS_FreeValue(state->context, bootstrap);
+
+    const jlong handle = gNextHandle.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(gEnginesMutex);
+        gEngines.emplace(handle, state);
+    }
+    return handle;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_createNativeFrame(
+        JNIEnv *env, jclass, jlong engineHandle, jobject rgbaBuffer,
+        jint width, jint height, jint rowStride, jint pixelStride) {
+    const auto state = findEngine(engineHandle);
+    if (state == nullptr) {
+        throwQuickJs(env, "QuickJS runtime is not available");
+        return 0;
+    }
+    auto *data = static_cast<uint8_t *>(env->GetDirectBufferAddress(rgbaBuffer));
+    const jlong capacity = env->GetDirectBufferCapacity(rgbaBuffer);
+    if (data == nullptr || capacity < 0) {
+        throwQuickJs(env, "Screen capture plane is not a direct ByteBuffer");
+        return 0;
+    }
+    if (width <= 0 || height <= 0 || rowStride <= 0 || pixelStride != 4) {
+        throwQuickJs(env, "Unsupported RGBA screen capture plane layout");
+        return 0;
+    }
+    const int64_t requiredBytes = static_cast<int64_t>(height - 1) * rowStride +
+                                  static_cast<int64_t>(width - 1) * pixelStride + 4;
+    if (capacity < requiredBytes) {
+        throwQuickJs(env, "Screen capture plane buffer is smaller than its declared layout");
+        return 0;
+    }
+    const int64_t frameHandle = state->frames.createFromRgba(
+            data, width, height, rowStride, pixelStride);
+    if (frameHandle == 0) {
+        throwQuickJs(env, "Unable to copy screen capture into a NativeFrame");
+    }
+    return frameHandle;
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
+        JNIEnv *env, jclass, jlong handle, jstring source, jstring sourceName) {
+    const auto state = findEngine(handle);
+    if (state == nullptr) {
+        throwQuickJs(env, "QuickJS runtime is not available");
+        return nullptr;
+    }
+    state->interrupted.store(false, std::memory_order_relaxed);
+    const std::string script = fromJavaString(env, source);
+    const std::string filename = fromJavaString(env, sourceName);
+    JSValue result = JS_Eval(state->context, script.data(), script.size(),
+                             filename.empty() ? "<script>" : filename.c_str(), JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(result)) {
+        const std::string message = quickJsException(state->context);
+        JS_FreeValue(state->context, result);
+        throwQuickJs(env, message);
+        return nullptr;
+    }
+
+    JSContext *pendingContext = nullptr;
+    int pendingResult;
+    while ((pendingResult = JS_ExecutePendingJob(state->runtime, &pendingContext)) > 0) {
+    }
+    if (pendingResult < 0) {
+        const std::string message = quickJsException(pendingContext == nullptr ? state->context : pendingContext);
+        JS_FreeValue(state->context, result);
+        throwQuickJs(env, message);
+        return nullptr;
+    }
+
+    jobject javaResult = resultToJava(env, state->context, result);
+    JS_FreeValue(state->context, result);
+    return javaResult;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_setGlobal(
+        JNIEnv *env, jclass, jlong handle, jstring name, jobject value) {
+    const auto state = findEngine(handle);
+    if (state == nullptr) {
+        return;
+    }
+    const std::string propertyName = fromJavaString(env, name);
+    JSValue jsValue = JS_NULL;
+    if (value != nullptr) {
+        jclass stringClass = env->FindClass("java/lang/String");
+        jclass booleanClass = env->FindClass("java/lang/Boolean");
+        jclass numberClass = env->FindClass("java/lang/Number");
+        if (env->IsInstanceOf(value, stringClass)) {
+            const std::string text = fromJavaString(env, static_cast<jstring>(value));
+            jsValue = JS_NewStringLen(state->context, text.data(), text.size());
+        } else if (env->IsInstanceOf(value, booleanClass)) {
+            jmethodID booleanValue = env->GetMethodID(booleanClass, "booleanValue", "()Z");
+            jsValue = JS_NewBool(state->context, env->CallBooleanMethod(value, booleanValue) == JNI_TRUE);
+        } else if (env->IsInstanceOf(value, numberClass)) {
+            jmethodID doubleValue = env->GetMethodID(numberClass, "doubleValue", "()D");
+            jsValue = JS_NewFloat64(state->context, env->CallDoubleMethod(value, doubleValue));
+        }
+        env->DeleteLocalRef(numberClass);
+        env->DeleteLocalRef(booleanClass);
+        env->DeleteLocalRef(stringClass);
+    }
+    JSValue global = JS_GetGlobalObject(state->context);
+    JS_SetPropertyStr(state->context, global, propertyName.c_str(), jsValue);
+    JS_FreeValue(state->context, global);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_requestInterrupt(
+        JNIEnv *, jclass, jlong handle) {
+    const auto state = findEngine(handle);
+    if (state != nullptr) {
+        state->interrupted.store(true, std::memory_order_relaxed);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_destroy(
+        JNIEnv *env, jclass, jlong handle) {
+    std::shared_ptr<EngineState> state;
+    {
+        std::lock_guard<std::mutex> lock(gEnginesMutex);
+        const auto it = gEngines.find(handle);
+        if (it == gEngines.end()) {
+            return;
+        }
+        state = it->second;
+        gEngines.erase(it);
+    }
+    state->interrupted.store(true, std::memory_order_relaxed);
+    state->frames.clear();
+    JS_FreeContext(state->context);
+    JS_FreeRuntime(state->runtime);
+    env->DeleteGlobalRef(state->host);
+    state->context = nullptr;
+    state->runtime = nullptr;
+    state->host = nullptr;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_version(JNIEnv *env, jclass) {
+    return env->NewStringUTF(CONFIG_VERSION);
+}

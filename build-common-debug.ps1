@@ -13,6 +13,10 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "ImGui native build failed with exit code $LASTEXITCODE"
         }
+        & (Join-Path $projectRoot 'autojs\src\main\cpp\build-quickjs.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            throw "QuickJS native build failed with exit code $LASTEXITCODE"
+        }
     }
 
     $compilerPackages = @(

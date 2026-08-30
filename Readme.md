@@ -20,6 +20,9 @@
 7. 提供截取屏幕、保存截图、图片找色、找图等函数
 8. 可作为Tasker插件使用，结合Tasker可胜任日常工作流
 9. 带有界面分析工具，类似Android Studio的LayoutInspector，可以分析界面层次和范围、获取界面上的控件信息
+10. 双 JavaScript 引擎：旧脚本默认使用 Rhino，新脚本可通过 `// @engine quickjs` 选择 Native QuickJS 2026-06-04
+
+双引擎的架构、使用方式和当前 API 覆盖范围见 [QUICKJS_ENGINE.md](QUICKJS_ENGINE.md)。
 
 本软件与按键精灵等软件不同，主要区别是：
 1. AI.js Pro主要以自动化、工作流为目标，更多地是方便日常生活工作，例如启动游戏时自动屏蔽通知、一键与特定联系人微信视频（知乎上出现过该问题，老人难以进行复杂的操作和子女进行微信视频）等

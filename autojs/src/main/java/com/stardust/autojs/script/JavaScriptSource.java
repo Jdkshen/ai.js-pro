@@ -21,6 +21,14 @@ import java.util.Map;
 public abstract class JavaScriptSource extends ScriptSource {
 
     public static final String ENGINE = "com.stardust.autojs.script.JavaScriptSource.Engine";
+    public static final String ENGINE_QUICKJS = ENGINE + ".QuickJS";
+
+    /**
+     * QuickJS is opt-in so every existing Auto.js script keeps using Rhino.
+     * Put this directive on the first non-empty line of a script:
+     * {@code // @engine quickjs}
+     */
+    public static final String QUICKJS_ENGINE_DIRECTIVE = "// @engine quickjs";
 
     public static final String EXECUTION_MODE_UI_PREFIX = "\"ui\";";
 
@@ -111,7 +119,29 @@ public abstract class JavaScriptSource extends ScriptSource {
 
     @Override
     public String getEngineName() {
-        return ENGINE;
+        return requestsQuickJs(getScript()) ? ENGINE_QUICKJS : ENGINE;
+    }
+
+    public static boolean requestsQuickJs(String script) {
+        if (script == null || script.isEmpty()) {
+            return false;
+        }
+        int offset = 0;
+        if (script.charAt(0) == '\ufeff') {
+            offset = 1;
+        }
+        while (offset < script.length()) {
+            int lineEnd = script.indexOf('\n', offset);
+            if (lineEnd < 0) {
+                lineEnd = script.length();
+            }
+            String line = script.substring(offset, lineEnd).trim();
+            if (!line.isEmpty()) {
+                return QUICKJS_ENGINE_DIRECTIVE.equalsIgnoreCase(line);
+            }
+            offset = lineEnd + 1;
+        }
+        return false;
     }
 
 

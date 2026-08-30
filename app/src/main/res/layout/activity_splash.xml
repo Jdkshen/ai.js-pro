@@ -16,28 +16,30 @@
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="128dp"
+        android:layout_height="144dp"
         android:gravity="center"
         android:orientation="horizontal"
         android:padding="16dp">
 
         <ImageView
             android:id="@+id/logo"
-            android:layout_width="72dp"
-            android:layout_height="72dp"
+            android:layout_width="88dp"
+            android:layout_height="88dp"
             android:layout_gravity="center"
-            android:src="@drawable/autojs_material">
+            android:contentDescription="@string/app_name"
+            android:src="@drawable/ai_js_pro_logo">
 
         </ImageView>
 
-        <ImageView
-            android:layout_width="100dp"
-            android:layout_height="32dp"
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:layout_marginLeft="-4dp"
-            android:src="@drawable/autojs">
-
-        </ImageView>
+            android:layout_marginStart="14dp"
+            android:text="@string/app_name"
+            android:textColor="#202124"
+            android:textSize="28sp"
+            android:textStyle="bold"/>
     </LinearLayout>
 
 </LinearLayout>

@@ -30,7 +30,7 @@
         xmlns:tools="http://schemas.android.com/tools"
         android:name=".App"
         android:allowBackup="false"
-        android:icon="@drawable/autojs_material"
+        android:icon="@drawable/ai_js_pro_logo"
         android:label="@string/app_name"
         android:largeHeap="true"
         android:supportsRtl="true"
@@ -240,7 +240,7 @@
 
         <activity
             android:name=".external.open.EditIntentActivity"
-            android:icon="@drawable/autojs_material"
+            android:icon="@drawable/ai_js_pro_logo"
             android:label="@string/text_edit_script">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -257,7 +257,7 @@
         </activity>
         <activity
             android:name=".external.open.RunIntentActivity"
-            android:icon="@drawable/autojs_material"
+            android:icon="@drawable/ai_js_pro_logo"
             android:label="@string/text_run_script"
             android:taskAffinity="org.autojs.autojs.external.open.RunIntentActivity"
             android:theme="@android:style/Theme.NoDisplay">
@@ -276,7 +276,7 @@
         </activity>
         <activity
             android:name=".external.open.ImportIntentActivity"
-            android:icon="@drawable/autojs_material"
+            android:icon="@drawable/ai_js_pro_logo"
             android:label="@string/text_import_script"
             android:theme="@style/AppTheme.Transparent">
             <intent-filter>

@@ -1,0 +1,18 @@
+QuickJS NativeFrame + NCNN YOLO 示例
+
+这组示例使用真正的原生图像链：
+
+ImageReader RGBA Plane
+  -> NativeFrame / C++ cv::Mat
+  -> DirectByteBuffer（不复制像素）
+  -> libautojs_yolo.so
+  -> NCNN YOLO26 320
+  -> QuickJS 检测框数组
+
+文件：
+- YOLO单帧直连测试.js：截取一帧，推理并打印检测框。
+- YOLO实时直连测试.js：连续推理 60 帧，每 10 帧打印速度。
+
+当前 QuickJS NativeFrame YOLO 桥首先开放 NCNN 后端，仅支持 arm64-v8a。
+模型复用 NCNN版本/models 中的 yolo26_320.param 和 yolo26_320.bin，不重复打包。
+测试时请保证前台画面中有 COCO 数据集可识别目标，例如人、汽车、猫或狗。

@@ -98,6 +98,31 @@ public class Images {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public boolean requestScreenCaptureBlocking(int orientation) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            throw new IllegalStateException("Blocking screen capture permission cannot run on the main thread");
+        }
+        VolatileDispose<Boolean> result = new VolatileDispose<>();
+        requestScreenCapture(orientation)
+                .onResolve(value -> result.setAndNotify(Boolean.TRUE.equals(value)))
+                .onReject(error -> result.setAndNotify(false));
+        return result.blockedGet();
+    }
+
+    /**
+     * Returns the current ImageReader frame without creating a Bitmap or Java OpenCV Mat.
+     * The caller must copy its plane before requesting another frame.
+     */
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public synchronized Image captureScreenRaw() {
+        ScriptRuntime.requiresApi(21);
+        if (mScreenCapturer == null) {
+            throw new SecurityException("No screen capture permission");
+        }
+        return mScreenCapturer.capture();
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen() {
         ScriptRuntime.requiresApi(21);
         if (mScreenCapturer == null) {
