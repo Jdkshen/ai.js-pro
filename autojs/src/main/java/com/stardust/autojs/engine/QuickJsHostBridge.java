@@ -8,6 +8,8 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.media.Image;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.View;
@@ -515,11 +517,14 @@ final class QuickJsHostBridge implements AutoCloseable {
     }
 
     private static final class QuickJsOverlay {
+        private static final String TAG = "QuickJsOverlay";
         private static final java.util.Set<QuickJsOverlay> sAllOverlays =
                 Collections.synchronizedSet(new java.util.HashSet<>());
 
         private final WindowManager mWindowManager;
         private final OverlayView mView;
+        private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+        private volatile boolean mShown;
 
         QuickJsOverlay(Context context) {
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
@@ -538,17 +543,26 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
 
         boolean show() {
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                            ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                            : WindowManager.LayoutParams.TYPE_PHONE,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    android.graphics.PixelFormat.TRANSLUCENT);
-            mWindowManager.addView(mView, params);
+            mMainHandler.post(() -> {
+                try {
+                    WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                                    : WindowManager.LayoutParams.TYPE_PHONE,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                            android.graphics.PixelFormat.TRANSLUCENT);
+                    mWindowManager.addView(mView, params);
+                    mShown = true;
+                    Log.i(TAG, "Overlay window added");
+                } catch (Throwable error) {
+                    Log.e(TAG, "addView failed", error);
+                    mShown = false;
+                }
+            });
             return true;
         }
 
@@ -558,10 +572,20 @@ final class QuickJsHostBridge implements AutoCloseable {
 
         void close() {
             sAllOverlays.remove(this);
-            try {
-                mWindowManager.removeViewImmediate(mView);
-            } catch (Throwable ignored) {
-            }
+            mMainHandler.post(() -> {
+                try {
+                    if (mShown) {
+                        mWindowManager.removeViewImmediate(mView);
+                        mShown = false;
+                        Log.i(TAG, "Overlay window removed");
+                    } else {
+                        Log.w(TAG, "close called but overlay was not shown");
+                    }
+                } catch (Throwable error) {
+                    Log.e(TAG, "removeViewImmediate failed", error);
+                    mShown = false;
+                }
+            });
         }
     }
 
