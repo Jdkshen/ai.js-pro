@@ -1,6 +1,7 @@
 package com.stardust.autojs.engine;
 
 import android.util.Log;
+import android.os.Process;
 
 import com.stardust.autojs.core.looper.LooperHelper;
 import com.stardust.autojs.runtime.ScriptRuntime;
@@ -23,6 +24,8 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
     private volatile long mNativeHandle;
     private volatile Thread mThread;
     private volatile QuickJsHostBridge mHostBridge;
+    private int mOriginalThreadPriority = Process.THREAD_PRIORITY_DEFAULT;
+    private boolean mPriorityRaised;
 
     @Override
     public synchronized void put(String name, Object value) {
@@ -40,6 +43,13 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
     @Override
     public void init() {
         mThread = Thread.currentThread();
+        try {
+            mOriginalThreadPriority = Process.getThreadPriority(Process.myTid());
+            Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+            mPriorityRaised = true;
+        } catch (Throwable error) {
+            Log.w(TAG, "Cannot raise QuickJS thread priority", error);
+        }
         LooperHelper.prepare();
 
         ScriptRuntime runtime = getRuntime();
@@ -101,6 +111,14 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         Thread thread = mThread;
         if (thread != null) {
             LooperHelper.quitForThread(thread);
+        }
+        if (mPriorityRaised && Thread.currentThread() == thread) {
+            try {
+                Process.setThreadPriority(mOriginalThreadPriority);
+            } catch (Throwable error) {
+                Log.w(TAG, "Cannot restore QuickJS thread priority", error);
+            }
+            mPriorityRaised = false;
         }
         super.destroy();
     }

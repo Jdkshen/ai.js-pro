@@ -1,6 +1,6 @@
 # AI.js Pro 双 JavaScript 引擎架构
 
-> 状态：双引擎与 Native Frame + C++ OpenCV 第一批能力已落地；第二批 `files` / `http` / `timers` 白名单 API 已落地。QuickJS 为显式选择的新引擎，Rhino 仍是默认兼容引擎。
+> 状态：双引擎、Native Frame + C++ OpenCV 图色处理、YOLO 和三批白名单 API 已落地。QuickJS 为显式选择的新引擎，Rhino 仍是默认兼容引擎。
 
 ## 1. 总体结构
 
@@ -57,6 +57,7 @@ toast("这是 QuickJS 脚本");
 | API | 状态 | 说明 |
 | --- | --- | --- |
 | `console.log/info/warn/error/verbose`、`log` | 已接入 | 写入 AI.js Pro 脚本控制台与全局日志 |
+| `performance.now()` | 已接入 | C++ 单调高精度时钟，适合统计亚毫秒图色操作 |
 | `toast`、`toastLog` | 已接入 | 通过 Java UI Handler 显示 |
 | `sleep` | 已接入 | Native 分片等待，可被停止信号打断 |
 | `click`、`press`、`longClick`、`swipe` | 已接入 | 调用现有无障碍手势实现 |
@@ -64,22 +65,32 @@ toast("这是 QuickJS 脚本");
 | `notifications`、`quickSettings` | 已接入 | 调用现有全局无障碍动作 |
 | `setClip`、`getClip` | 已接入 | 复用现有剪贴板实现 |
 | `currentPackage`、`currentActivity` | 已接入 | 复用前台页面信息提供器 |
-| `requestScreenCapture`、`captureScreen` | 已接入 | `ImageReader` RGBA Plane 直接复制到 C++ `cv::Mat`，不创建 Bitmap |
+| `requestScreenCapture`、`captureScreen` | 已接入 | 支持全分辨率、640/720p 视觉加速、默认最新缓存帧和 `fresh + timeout` 新帧模式；`ImageReader` RGBA Plane 直接进入 C++ `cv::Mat`，不创建 Bitmap |
 | `images.pixel`、`NativeFrame.pixel` | 已接入 | 返回 ARGB 整数，像素不进入 JS 堆 |
-| `images.findColor` | 已接入 | C++ 直接扫描 RGBA，支持 `threshold` 和 `region` |
-| `images.read`、`images.findImage` | 已接入 | OpenCV C++ 解码与 `matchTemplate`，只返回坐标/相似度 |
+| `colors.*` | 已接入 | `rgb` / `argb` / `parseColor` / RGBA 通道 / `toString` / `isSimilar` |
+| `images.findColor`、`findColorInRegion`、`detectsColor` | 已接入 | C++ 直接扫描 RGBA，支持 `threshold` 和 `region` |
+| `images.findMultiColors` | 已接入 | Native 多点颜色路径扫描，JS 只传颜色和偏移数组 |
+| `images.read`、`findImage`、`matchTemplate` | 已接入 | OpenCV C++ 解码与单/多结果模板匹配 |
+| `images.copy`、`clip`、`resize`、`scale` | 已接入 | 操作 Native `cv::Mat`，返回新 `NativeFrame` 句柄 |
+| `images.grayscale/gray`、`cvtColor` | 已接入 | 内部保持 RGBA 句柄约束，支持灰度化和常用 RGB/BGR 转换 |
+| `images.save`、`compress` | 已接入 | PNG/JPEG/WebP Native 编码；`compress` 按需返回 `Uint8Array` |
 | `NativeFrame.recycle` | 已接入 | 显式释放；引擎销毁时自动回收遗留句柄 |
-| `yolo.load`、`detector.detect(NativeFrame)` | 已接入 | ncnn / onnx / opencv 三后端 NativeFrame 直连；ncnn/onnx 仅 arm64，opencv 全 ABI |
-| `detector.close` | 已接入 | 显式释放 NCNN 模型；引擎销毁时自动清理遗留 detector |
+| `yolo.load`、`detector.detect(NativeFrame)` | 已接入 | OpenCV 5.0 DNN 后端 NativeFrame 直连，支持应用现有 ABI |
+| `detector.close` | 已接入 | 显式释放 OpenCV 模型；引擎销毁时自动清理遗留 detector |
 | `drawing` | 已接入 | 全屏悬浮层绘制：`show()` / `update(detections, stats)` / `hide()`，用于检测框与耗时显示 |
 | `files` | 已接入 | 读写、追加、列表、存在性判断、复制/移动/重命名/删除等白名单方法 |
 | `http` | 已接入 | 同步 `get` / `post` / `postJson` / `request`，OkHttp 3.10 白名单桥 |
 | `timers` | 已接入 | Native 定时器队列 + 引擎线程事件循环，可被停止信号打断 |
-| `shell`、`app` | 待接入 | 应通过白名单 Host API 继续增加 |
-| `threads`、`events` | 待接入 | 需要 Android Looper 的专用调度层 |
+| `app` | 已接入 | `launch` / `openUrl` / `getInstalledApps` / `getAppInfo` 白名单桥 |
+| `storages` | 已接入 | `create` / `put` / `get` / `remove` / `contains` / `clear`，基于 SharedPreferences |
+| `device` | 已接入 | 设备信息（model/brand/sdkInt 等）、`isScreenOn` / `vibrate` / `getBattery` |
+| `shell` | 已接入 | 普通/Root 执行、Root 可用性检查、超时中止、输出限制和引擎关闭子进程回收 |
+| `dialogs` | 已接入 | `alert` / `confirm` / `prompt` / `select` / `singleChoice` / `multiChoice` |
+| `engines` | 已接入 | 启动脚本、枚举引擎、停止引擎；子脚本默认使用 QuickJS，可显式选择 Rhino |
+| `threads`、`events` | 基础实现 | 每个 worker 使用独立 QuickJS；事件总线当前仅限同一引擎，函数任务不捕获外层闭包 |
 | `ui`、E4X、Rhino Java 互操作 | 不兼容 | 继续使用 Rhino 执行这类旧脚本 |
 
-示例脚本位于 `app/src/main/assets/sample/脚本引擎/QuickJS运行环境测试.js`、`QuickJS Native Frame 回归测试.js` 和 `QuickJS Files Http Timers 测试.js`。
+全部 QuickJS 示例统一位于 `app/src/main/assets/sample/QuickJS 新引擎/`，YOLO 案例位于其 `YOLO目标检测/` 子目录。
 
 ### Native Frame 用法
 
@@ -87,8 +98,14 @@ toast("这是 QuickJS 脚本");
 // @engine quickjs
 if (!requestScreenCapture('portrait')) throw new Error('未获得截图权限');
 
-const frame = captureScreen();
+// 默认 captureScreen() 保持全分辨率；视觉任务建议用 720p 快速帧。
+const frame = captureScreen({ mode: 'fast', size: 720 });
+// 强制等待新帧；100ms 内没有新帧时自动回退到最近有效帧。
+const freshFrame = captureScreen({ mode: 'fast', size: 720, fresh: true, timeout: 100 });
+freshFrame.recycle();
 try {
+    console.log(frame.width, frame.height);           // 原屏幕逻辑尺寸
+    console.log(frame.pixelWidth, frame.pixelHeight); // Native 实际处理尺寸
     const color = frame.pixel(100, 200);
     const red = images.findColor(frame, '#ff0000', {
         threshold: 8,
@@ -105,24 +122,22 @@ try {
 }
 ```
 
-`NativeFrame` 在 JS 中只保存句柄、宽和高；完整像素始终留在 C++ 内存。长循环必须用 `try/finally` 调用 `recycle()`，防止在单个长时间脚本内积压截图。
+`NativeFrame` 在 JS 中只保存句柄和尺寸信息；完整像素始终留在 C++ 内存。默认截图立即采用当前最新缓存，不会在静止页面无限等待；`fresh: true` 用于等待新帧，`timeout` 默认 100ms，超时后回退最近有效帧。`captureScreen()` 或 `{ mode: 'full' }` 保持原分辨率和像素精度；`{ mode: 'fast', size: 720 }` 与 `size: 640` 在 Native 创建帧时直接缩放。快速帧的 `pixel`、找色、多点找色、模板匹配、YOLO 区域和检测框统一使用原屏幕坐标，桥接层自动完成双向映射。长循环必须用 `try/finally` 调用 `recycle()`，防止在单个长时间脚本内积压截图。可直接运行 `app/src/main/assets/sample/QuickJS 新引擎/图色处理/01-图色 API 自动回归.js`、`05-全分辨率与视觉加速对比.js` 与 `07-截图首帧与稳定耗时测试.js` 检查整条链路。
 
-### NativeFrame + NCNN YOLO
+### NativeFrame + OpenCV YOLO
 
 ```javascript
 // @engine quickjs
-const root = 'asset://sample/YOLO目标检测/NCNN版本/models/';
+const root = 'asset://sample/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
 const detector = yolo.load({
-    backend: 'ncnn',
-    param: root + 'yolo26_320.param',
-    bin: root + 'yolo26_320.bin',
+    backend: 'opencv',
+    model: root + 'yolo26_320.onnx',
     labels: root + 'labels.txt',
-    inputSize: 320,
-    threads: 4
+    inputSize: 320
 });
 try {
     if (!requestScreenCapture('portrait')) throw new Error('未获得截图权限');
-    const frame = captureScreen();
+    const frame = captureScreen({ mode: 'fast', size: 720 });
     try {
         const detections = detector.detect(frame, { confidence: 0.25, nms: 0.45 });
         console.log(detections, detections.preprocessMs, detections.inferenceMs);
@@ -134,14 +149,15 @@ try {
 }
 ```
 
-可直接运行 `app/src/main/assets/sample/YOLO目标检测/QuickJS NativeFrame版本/` 中 ncnn / onnx / opencv 三套案例（每套含环境测试、单帧、60 帧实时、持续识别与 ROI 区域检测模板，另有三后端基准对比脚本）。QuickJS 直连桥支持 ncnn / onnx / opencv 三种后端，`yolo.load({ backend: ..., model | param+bin, ... })` 按后端加载模型，三种后端对 JS 暴露同一个检测对象 API（`detect` / `close` / `isClosed`）。原生 ncnn/onnx 仅 arm64-v8a；opencv 后端使用 OpenCV 5.0 DNN，支持全部 ABI。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟 ~100ms 中止。`detect` 支持 `region: [x, y, w, h]` 区域检测（坐标自动回移全屏）。
+可直接运行 `app/src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/` 中的 OpenCV 5.0 DNN 案例，包括环境测试、单帧、实时、持续识别、ROI 区域检测与基准脚本。`yolo.load({ backend: "opencv", model: ..., ... })` 加载 ONNX 模型，对 JS 暴露 `detect` / `close` / `isClosed`。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟约 100ms 中止；`detect` 支持 `region: [x, y, w, h]` 区域检测，检测框坐标会自动回移到全屏坐标系。
 
 **OpenCV 引擎实测结论（骁龙870 / yolo26_320@320）**：
-- 新图引擎（`ENGINE_AUTO` 默认，KleidiCV CPU 路径）：**~110ms，最快**，检测正常；不支持 `setPreferableTarget`（仅 CPU）。
+- 新图引擎（`ENGINE_AUTO` 默认，KleidiCV CPU 路径）：当前 Release 零拷贝链路 100 帧实测推理 **p50 44.47ms / 平均 45.42ms**，检测正常；不支持 `setPreferableTarget`（仅 CPU）。
 - 经典引擎（`ENGINE_CLASSIC`）：~134ms，旧卷积路径，较慢。
 - OpenCL（`DNN_TARGET_OPENCL_FP16` 等）：自编 `WITH_OPENCL=ON` 版实测 **686ms** —— OpenCV DNN 的 OCL 后端仅针对 Intel GPU 优化，在 Adreno 上是负优化，**不要启用**。
 - 因此 `OpenCvYoloDetector` 采用 `Dnn.readNetFromONNX(path, Dnn.ENGINE_AUTO)` 且不设 target（默认即最优）。
-- 三后端基准（每后端 5 帧平均）：ncnn ~184ms / onnx ~432ms / opencv ~110ms。
+- OpenCV 后端当前实测（Release，100 帧）：预处理平均 **1.05ms**，推理平均 **45.42ms**，端到端 **18.5 FPS**；NCNN / ONNX Runtime 后端已移除（2026-08-30）。
+- MIUI 在工作区退到后台后会将纯脚本进程放入后台受限调度组。运行脚本期间现使用计数的前台服务租约，QuickJS 执行线程使用 `THREAD_PRIORITY_DISPLAY`；脚本结束后自动恢复线程优先级，且在用户未开启常驻服务时释放租约。K40 后台 150 帧同帧实测由约 **104–112ms** 恢复到平均 **44.37ms**（p50 **42.52ms** / p95 **54.48ms**）；完整截图 + YOLO 100 帧端到端为 **26.4 FPS**。
 
 ### files / http / timers 白名单 API
 
@@ -171,9 +187,43 @@ const json = http.postJson('https://httpbin.org/post', { hello: 'QuickJS' });
 console.log(json.statusCode, json.body.json().data);
 ```
 
+### app / storages / device 白名单 API
+
+```javascript
+// @engine quickjs
+
+// device：设备信息（静态属性缓存，只读一次）
+console.log('设备:', device.brand, device.model, 'Android', device.release);
+console.log('屏幕:', device.width, 'x', device.height, 'DPI:', device.sdkInt);
+console.log('电量:', device.getBattery().toFixed(1) + '%');
+console.log('屏幕亮:', device.isScreenOn());
+
+// storages：数据持久化（基于 SharedPreferences，值自动 JSON 序列化）
+const store = storages.create('test_quickjs');
+store.put('counter', 42);
+store.put('name', 'QuickJS 测试');
+console.log('counter:', store.get('counter'));
+console.log('name:', store.get('name'));
+console.log('contains counter:', store.contains('counter'));
+store.remove('counter');
+console.log('removed:', !store.contains('counter'));
+
+// app：应用管理
+console.log('当前包名:', app.launchPackage ? '支持' : '不支持');
+var info = app.getAppInfo('com.android.settings');
+console.log('设置:', info.label, 'v' + info.versionName);
+```
+
 - `files` 首批：`path`、`cwd`、`getSdcardPath`、`exists`、`isFile`、`isDir`、`read`、`write`、`append`、`create`（含父目录）、`ensureDir`、`listDir`、`remove`、`rename`、`copy`、`move`。
 - `timers` 首批：`setTimeout`、`setInterval`、`clearTimeout`、`clearInterval`。定时器由 C++ 端定时器表 + 引擎线程条件变量事件循环驱动，`stopAll()` 会立即唤醒并中止。
 - `http` 首批：`http.get(url, options)`、`http.post(url, data, options)`、`http.postJson(url, data, options)`、`http.request(url, options)`；同步执行于脚本线程，支持 `headers`、`contentType`、`body`，`post` 对对象数据自动做表单编码。暂不支持 `bytes()`、`postMultipart` 和异步回调。
+- `app` 首批：`app.launch(packageName)`、`app.openUrl(url)`、`app.getInstalledApps()`、`app.getAppInfo(packageName)`；已扩展 `launchPackage` / `getPackageName` / `getAppName` / `openAppSetting` / `viewFile` / `editFile` / `uninstall` / `startActivity(opts)`。
+- `storages` 首批：`storages.create(name)` 返回存储对象，支持 `put(key, value)` / `get(key, default)` / `remove(key)` / `contains(key)` / `clear()`，值自动 JSON 序列化。
+- `device` 首批：只读属性 `width`/`height`/`model`/`brand`/`board`/`hardware`/`sdkInt`/`release`/`buildId`/`display`/`product`/`manufacturer`；方法 `isScreenOn()` / `vibrate(ms)` / `getBattery()`；已扩展 `isCharging()` / `getBrightness()` / `getBrightnessMode()` / `cancelVibration()`。
+- `shell` 首批：`shell(cmd)`（普通应用 UID）、`shell(cmd, true)` / `shell(cmd, {root: true, timeout, maxOutput})`（Root）、`shell(cmd, {shizuku: true, timeout, maxOutput})` 或 `shizuku.shell(cmd, options)`（Shizuku/Sui），返回 `{ code, result, error }`；支持超时中止与最大输出限制。Shizuku 辅助 API：`shizuku.isAvailable()`、`shizuku.hasPermission()`、`shizuku.requestPermission(timeout)`。
+- `dialogs` 首批：`alert` / `confirm` / `prompt`（= `rawInput`） / `select` / `singleChoice` / `multiChoice`。
+- `engines` 首批：`execScript` / `execScriptFile` / `myEngine` / `all` / `stopAll` / `stopAllAndToast`。
+- `threads` / `events` 基础版：`threads.start(fn|src)` / `currentThread` / `shutDownAll`，每个 worker 独立 QuickJS 引擎；`events.on/once/emit/removeListener/removeAllListeners/listenerCount`（事件总线仅限同一引擎，函数任务不捕获外层闭包）。
 
 ## 4. 关键代码
 
@@ -229,4 +279,10 @@ autojs/src/main/cpp/
 
 ## 7. 下一阶段建议
 
-下一步可在同一句柄层增加裁剪、缩放、灰度化和多点找色，并把 NativeFrame 直连推理扩展到 ONNX Runtime、OpenCV DNN 和 YOLO 结果悬浮框。之后再增加 `files/http/shell/app` 白名单桥。
+当前 QuickJS 已具备第一批到第三批白名单桥（`console`/`toast`/`sleep`、`files`/`http`/`timers`、`app`/`storages`/`device`、`shell`/`dialogs`/`engines`、`threads`/`events` 基础版）、完整的 `images` 模块（clip/resize/scale/grayscale/cvtColor/save/compress/findColor/findMultiColors/findImage/matchTemplate）以及 `dialogs.build()` 和 `engines` 完整对象封装。后续建议按实际需求推进：
+
+1. `threads` 增强：worker 间共享事件事件总线（当前事件总线仅限同一引擎）、worker 返回值/Promise 传递、函数任务的闭包序列化限制说明；
+2. `images` 高级功能：旋转、阈值化、模糊、形态学、Base64 转换和 OCR 桥；
+3. Native Frame 可增加句柄数/占用字节调试统计，用于长时脚本泄漏诊断。
+
+注意：NCNN / ONNX Runtime YOLO 后端已于 2026-08-30 移除，相关示例与第三方库不再维护；YOLO 统一走 OpenCV 5.0 DNN 后端。

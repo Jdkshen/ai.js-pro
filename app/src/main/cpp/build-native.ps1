@@ -50,23 +50,8 @@ foreach ($abi in @('armeabi-v7a', 'arm64-v8a', 'x86')) {
     }
     Copy-Item -LiteralPath $libraryPath `
         -Destination (Join-Path $jniDirectory 'libautojs_imgui.so') -Force
-
-    if ($abi -eq 'arm64-v8a') {
-        $yoloLibraryPath = Join-Path $buildDirectory 'libautojs_yolo.so'
-        if (-not (Test-Path -LiteralPath $yoloLibraryPath -PathType Leaf)) {
-            throw "YOLO native library was not produced for $abi"
-        }
-        $yoloJniDirectory = Join-Path $autoJsDirectory 'src\main\jniLibs\arm64-v8a'
-        New-Item -ItemType Directory -Force -Path $yoloJniDirectory | Out-Null
-        Copy-Item -LiteralPath $yoloLibraryPath `
-            -Destination (Join-Path $yoloJniDirectory 'libautojs_yolo.so') -Force
-    }
 }
 
 Get-ChildItem -LiteralPath (Join-Path $appDirectory 'src\main\jniLibs') `
     -Recurse -File -Filter 'libautojs_imgui.so' |
-    Select-Object FullName, Length, LastWriteTime
-
-Get-ChildItem -LiteralPath (Join-Path $autoJsDirectory 'src\main\jniLibs') `
-    -Recurse -File -Filter 'libautojs_yolo.so' |
     Select-Object FullName, Length, LastWriteTime

@@ -1,0 +1,63 @@
+QuickJS NativeFrame + YOLO 示例（OpenCV 5.0 DNN）
+
+这组示例使用真正的原生图像链：
+
+ImageReader RGBA Plane
+  -> NativeFrame / C++ cv::Mat
+  -> DirectByteBuffer（不复制像素）
+  -> OpenCV 5.0 DNN 推理
+  -> QuickJS 检测框数组
+
+目录结构：
+- opencv/   yolo26_320.onnx（OpenCV 5.0 DNN，模型引用 OpenCV 5.0 DNN版本/models/）
+
+包含六个模板案例：
+- YOLO基准对比.js：预热后检测 5 张最新缓存帧，输出平均推理耗时。
+- YOLO运行环境测试.js：后端可用性 / 版本 / 模型加载耗时，无需截图授权。
+- YOLO单帧直连测试.js：截取一帧，推理并打印检测框与耗时。
+- YOLO实时直连测试.js：连续推理 100 帧，每 10 帧打印进度，结束时输出
+  平均/最大/最小耗时与 FPS。
+- YOLO持续识别.js：连续 1000 帧截图 + 检测，约每 3 秒输出一次汇总
+  （FPS / 平均耗时 / 命中数），检测到目标逐条打印；同时在全屏悬浮层
+  绘制绿色检测框 + 黄色标签和得分，左上角显示后端 / 帧数 / 平均耗时 / 命中数。
+  需要"显示在其他应用上层"悬浮窗权限（首次运行会 toast 提示）。
+- YOLO区域检测.js（ROI）：只识别指定区域，演示 region 参数
+  [x, y, width, height]（全屏像素坐标，越界会报错）；检测框坐标自动回移到
+  全屏坐标系；每 5 秒输出"全屏 vs 区域"性能/命中对比（YOLO_ROI_SUMMARY），
+  命中逐条打印（YOLO_ROI_HIT）。绘制层只显示区域命中的框。
+
+持续识别停止方式：在应用任务列表（"运行中任务"）点击停止单个脚本或
+"停止全部"。正在推理时会在当前帧结束后响应停止。
+
+耗时字段（detector.detect 返回的数组对象）：
+- preprocessMs   预处理（缩放 + letterbox + 归一化）
+- inferenceMs    模型推理
+- totalMs        预处理 + 推理
+- 实时/持续案例额外输出：averageModelMs / maxModelMs / minModelMs / fps
+
+截图策略（全部 YOLO 案例已统一）：
+- 基准、单帧、实时、持续和区域检测均使用
+  { mode: 'fast', size: 720, fresh: false }，每轮立即取 ImageReader 当前最新帧，
+  不因静止画面额外等待 50ms。
+- 需要识别细小目标时可把 mode 改为 full；更重视速度时可把 size 改为 640。
+- 视觉加速帧的检测框和 region 均自动映射到原屏幕坐标，不需要手动换算。
+
+detect 可选参数：
+- confidence  置信度阈值（默认 0.25）
+- nms         非极大值抑制（默认 0.45）
+- region      [x, y, width, height] 只检测该区域（默认全屏）
+
+yolo.load 可选参数（输入尺寸）：
+- inputSize       正方形边长（默认 320），等价 inputWidth=inputHeight=该值
+- inputWidth     输入宽度（如 480）——矩形模型（如 480x640）使用，优先于 inputSize
+- inputHeight    输入高度（如 640）
+例：{ inputWidth: 480, inputHeight: 640 }（需模型输入 shape 匹配，如 [1,3,640,480]）
+
+实测基准（Redmi K40 / 骁龙870 / yolo26_320 @320，Release，100 帧）：
+- 截图平均 7.06 ms，预处理平均 1.05 ms，推理平均 45.42 ms。
+- 模型总耗时平均 46.47 ms，端到端 18.5 FPS，100 帧 errors=0。
+注意：OpenCV 的 OpenCL target 在骁龙/Adreno 上为负优化（实测 686ms），案例默认
+不启用；OpenCV 5.0 新图引擎不支持手动指定 target，使用默认 CPU 即最优。
+
+opencv 后端跟随 OpenCV 5.0 支持应用已支持的 ABI。
+测试时请保证前台画面中有 COCO 数据集可识别目标，例如人、汽车、猫或狗。

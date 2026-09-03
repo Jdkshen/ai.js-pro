@@ -152,8 +152,12 @@ public class ImageWrapper {
 
     }
 
+    public boolean isRecycled() {
+        return mBitmap == null && mMat == null;
+    }
+
     public void ensureNotRecycled() {
-        if (mBitmap == null && mMat == null)
+        if (isRecycled())
             throw new IllegalStateException("image has been recycled");
     }
 

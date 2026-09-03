@@ -31,9 +31,14 @@
         <item name="windowActionBar">false</item>
     </style>
 
-    <style name="AppTheme.Splash" parent="@android:style/Theme.Light.NoTitleBar.Fullscreen">
+    <style name="AppTheme.Splash" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="windowNoTitle">true</item>
         <item name="windowActionBar">false</item>
+        <!-- The splash surface is white, so its status bar is part of that same surface. -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@android:color/white</item>
     </style>
 
     <style name="AppTheme.Settings" parent="AppTheme">

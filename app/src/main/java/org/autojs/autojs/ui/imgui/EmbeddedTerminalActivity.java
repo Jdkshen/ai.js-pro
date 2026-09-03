@@ -13,6 +13,9 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import org.autojs.autojs.theme.AppThemePalette;
+import org.autojs.autojs.theme.AppThemeRepository;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
@@ -31,12 +34,14 @@ public final class EmbeddedTerminalActivity extends Activity {
     private ScrollView mScrollView;
     private File mWorkingDirectory;
     private volatile Process mRunningProcess;
+    private AppThemePalette mPalette;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.BLACK);
-        getWindow().setNavigationBarColor(Color.BLACK);
+        mPalette = AppThemeRepository.get(this).getPalette();
+        getWindow().setStatusBarColor(mPalette.statusBar);
+        getWindow().setNavigationBarColor(mPalette.navigationBar);
 
         String requestedPath = getIntent().getStringExtra(EXTRA_WORKING_DIRECTORY);
         File requestedDirectory = requestedPath == null ? null : new File(requestedPath);
@@ -47,12 +52,12 @@ public final class EmbeddedTerminalActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(padding, padding, padding, padding);
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackgroundColor(mPalette.terminalBackground);
 
         mScrollView = new ScrollView(this);
         mScrollView.setFillViewport(true);
         mConsole = new TextView(this);
-        mConsole.setTextColor(Color.WHITE);
+        mConsole.setTextColor(mPalette.terminalForeground);
         mConsole.setTextSize(14f);
         mConsole.setTypeface(Typeface.MONOSPACE);
         mConsole.setTextIsSelectable(true);
@@ -64,12 +69,12 @@ public final class EmbeddedTerminalActivity extends Activity {
 
         mCommand = new EditText(this);
         mCommand.setSingleLine(true);
-        mCommand.setTextColor(Color.WHITE);
-        mCommand.setHintTextColor(Color.GRAY);
+        mCommand.setTextColor(mPalette.terminalForeground);
+        mCommand.setHintTextColor(mPalette.textSecondary);
         mCommand.setTypeface(Typeface.MONOSPACE);
         mCommand.setTextSize(15f);
         mCommand.setHint("输入命令…");
-        mCommand.setBackgroundColor(Color.rgb(32, 32, 32));
+        mCommand.setBackgroundColor(mPalette.surfaceSecondary);
         mCommand.setImeOptions(EditorInfo.IME_ACTION_SEND);
         mCommand.setOnEditorActionListener((view, actionId, event) -> {
             boolean enter = actionId == EditorInfo.IME_ACTION_SEND
@@ -82,6 +87,7 @@ public final class EmbeddedTerminalActivity extends Activity {
         root.addView(mCommand, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(root);
+        applyWindowSystemUi();
         appendLine("AI.js Pro 终端");
         appendPrompt();
         mCommand.requestFocus();
@@ -179,6 +185,21 @@ public final class EmbeddedTerminalActivity extends Activity {
             }
         }
         return value;
+    }
+
+    private void applyWindowSystemUi() {
+        int flags = getWindow().getDecorView().getSystemUiVisibility();
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            flags = mPalette.isDark
+                    ? flags & ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    : flags | android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            flags = mPalette.isDark
+                    ? flags & ~android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                    : flags | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        getWindow().getDecorView().setSystemUiVisibility(flags);
     }
 
     @Override

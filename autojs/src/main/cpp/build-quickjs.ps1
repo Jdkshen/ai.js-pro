@@ -26,7 +26,10 @@ foreach ($abi in @('armeabi-v7a', 'arm64-v8a', 'x86')) {
     $jniDirectory = Join-Path $autoJsDirectory "src\main\jniLibs\$abi"
     $openCvLinkDirectory = Join-Path $buildDirectory 'opencv-link'
     New-Item -ItemType Directory -Force -Path $buildDirectory, $jniDirectory, $openCvLinkDirectory | Out-Null
-    tar -xf $openCvAar -C $openCvLinkDirectory "jni/$abi/libopencv_java5.so"
+    # arm64 packages OpenCV as several shared libraries, while older ABIs use
+    # the monolithic libopencv_java5.so. Extract the complete ABI directory so
+    # CMake can link whichever layout the AAR actually provides.
+    tar -xf $openCvAar -C $openCvLinkDirectory "jni/$abi"
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to extract the OpenCV link library for $abi"
     }

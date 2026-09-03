@@ -19,7 +19,6 @@ import org.opencv.dnn.Net;
 import org.opencv.imgproc.Imgproc;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -32,7 +31,9 @@ public final class OpenCvYoloDetector implements AutoCloseable {
     private final Mat mSource = new Mat();
     private final Mat mResizedRgba = new Mat();
     private final Mat mResizedRgb = new Mat();
-    private final Mat mLetterbox = new Mat();
+    private final Mat mLetterbox;
+    // 预分配的 letterbox 填充色，避免每帧创建 Scalar 对象
+    private static final Scalar LETTERBOX_GRAY = new Scalar(114, 114, 114);
     private Net mNet;
     private boolean mClosed;
 
@@ -45,27 +46,24 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         mOwner = owner;
         mInputWidth = inputWidth;
         mInputHeight = inputHeight;
+        // 预分配 letterbox Mat，尺寸固定后不再重建
+        mLetterbox = new Mat(inputHeight, inputWidth, CvType.CV_8UC3);
+        mLetterbox.setTo(LETTERBOX_GRAY);
         ensureOpenCv(context);
         try {
             Core.setNumThreads(Math.max(1, Math.min(threads, 8)));
-            // 引擎选择（实测骁龙 870）：
-            //  - ENGINE_AUTO 默认走新图引擎（KleidiCV 优化 CPU 路径）≈ 106-111ms，最快
-            //  - ENGINE_CLASSIC 经典引擎 ≈ 134ms（旧卷积路径，慢）
-            //  - 新图引擎不支持 setPreferableTarget（仅 CPU）；OpenCL 在 Adreno 上为负优化
-            //    （OCL 仅针对 Intel GPU 优化，实测 FP32 686ms vs CPU 106ms），故不设 target。
             mNet = Dnn.readNetFromONNX(modelPath, Dnn.ENGINE_AUTO);
             if (mNet == null || mNet.empty()) {
                 throw new IllegalStateException("OpenCV 无法读取 ONNX 模型");
             }
             mNet.setPreferableBackend(Dnn.DNN_BACKEND_OPENCV);
-            // 新图引擎忽略 setPreferableTarget（默认 CPU），无需也不应设置。
             String targetName = "DNN_TARGET_CPU (new graph engine)";
             try {
-                android.util.Log.i("OpenCvYoloDetector", "DNN target=" + targetName
-                        + " | OpenCL built=" + isOpenClInBuild()
-                        + " | buildInfo=" + Core.getBuildInformation().replace("\n", " | "));
+                android.util.Log.i("OpenCvYoloDetector", "OpenCV=" + Core.VERSION
+                        + " | target=" + targetName
+                        + " | threads=" + Math.max(1, Math.min(threads, 8))
+                        + " | OpenCL built=" + isOpenClInBuild());
             } catch (Throwable ignored) {
-                // 日志失败不影响运行
             }
         } catch (Throwable error) {
             close();
@@ -139,7 +137,7 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         int height = bitmap.getHeight();
         if (width < 2 || height < 2) throw new IllegalArgumentException("图片尺寸无效");
         Utils.bitmapToMat(bitmap, mSource);
-        return detectFromSource(width, height, confidence, nmsThreshold);
+        return detectFromSource(mSource, width, height, confidence, nmsThreshold);
     }
 
     public synchronized float[] detectRgba(ByteBuffer rgba, int width, int height, int rowStride,
@@ -156,16 +154,27 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         validateThresholds(confidence, nmsThreshold);
         regionWidth = Math.min(regionWidth, width - regionX);
         regionHeight = Math.min(regionHeight, height - regionY);
-        mSource.create(regionHeight, regionWidth, CvType.CV_8UC4);
-        ByteBuffer duplicate = rgba.duplicate();
-        duplicate.rewind();
-        byte[] row = new byte[regionWidth * 4];
-        for (int y = 0; y < regionHeight; y++) {
-            duplicate.position((regionY + y) * rowStride + regionX * 4);
-            duplicate.get(row);
-            mSource.put(y, 0, row);
+        long byteOffset = (long) regionY * rowStride + (long) regionX * 4L;
+        long requiredBytes = (long) (regionHeight - 1) * rowStride + (long) regionWidth * 4L;
+        if (byteOffset < 0 || requiredBytes <= 0 || byteOffset + requiredBytes > rgba.capacity()) {
+            throw new IllegalArgumentException("YOLO NativeFrame RGBA 区域超出缓冲区");
         }
-        float[] packed = detectFromSource(regionWidth, regionHeight, confidence, nmsThreshold);
+
+        // OpenCV 5 can wrap a direct ByteBuffer without copying its pixels. A sliced buffer is
+        // required here because JNI's direct-buffer address is the slice base, not its position.
+        ByteBuffer window = rgba.duplicate();
+        window.position((int) byteOffset);
+        window.limit((int) (byteOffset + requiredBytes));
+        window = window.slice();
+        Mat sourceView = new Mat(regionHeight, regionWidth, CvType.CV_8UC4, window, rowStride);
+        float[] packed;
+        try {
+            packed = detectFromSource(sourceView, regionWidth, regionHeight,
+                    confidence, nmsThreshold);
+        } finally {
+            // Releases only the Mat header; NativeFrameStore still owns the external pixels.
+            sourceView.release();
+        }
         if (regionX != 0 || regionY != 0) {
             for (int i = 2; i + 5 < packed.length; i += 6) {
                 packed[i] += regionX;
@@ -177,7 +186,8 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         return packed;
     }
 
-    private float[] detectFromSource(int width, int height, float confidence, float nmsThreshold) {
+    private float[] detectFromSource(Mat source, int width, int height,
+                                     float confidence, float nmsThreshold) {
         Mat blob = null;
         Mat output = null;
         Mat rows = null;
@@ -189,11 +199,11 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             int padX = (mInputWidth - resizedWidth) / 2;
             int padY = (mInputHeight - resizedHeight) / 2;
 
-            Imgproc.resize(mSource, mResizedRgba, new Size(resizedWidth, resizedHeight),
+            Imgproc.resize(source, mResizedRgba, new Size(resizedWidth, resizedHeight),
                     0.0, 0.0, Imgproc.INTER_LINEAR);
             Imgproc.cvtColor(mResizedRgba, mResizedRgb, Imgproc.COLOR_RGBA2RGB);
-            mLetterbox.create(mInputHeight, mInputWidth, CvType.CV_8UC3);
-            mLetterbox.setTo(new Scalar(114, 114, 114));
+            // 复用预分配的 letterbox Mat，只需重置填充色
+            mLetterbox.setTo(LETTERBOX_GRAY);
             Mat region = mLetterbox.submat(new Rect(padX, padY, resizedWidth, resizedHeight));
             try {
                 mResizedRgb.copyTo(region);
@@ -223,9 +233,16 @@ public final class OpenCvYoloDetector implements AutoCloseable {
         }
     }
 
-    private static float[] decode(float[] raw, int rowCount, int width, int height,
-                                  float scale, int padX, int padY, float confidence,
-                                  float preprocessMs, float inferenceMs) {
+    /**
+     * 解码 YOLO26 ONNX 模型输出。
+     * 模型已内置 TopK 选择（输出形状 [1, 300, 6]），无 IoU-based NMS。
+     * 输出格式：每行 [x1, y1, x2, y2, score, classId]，坐标为像素值（相对于输入尺寸）。
+     * 坐标系：模型在 320×320 输入上推理，输出坐标已映射到输入尺寸。
+     */
+    private float[] decode(float[] raw, int rowCount, int width, int height,
+                           float scale, int padX, int padY, float confidence,
+                           float preprocessMs, float inferenceMs) {
+        // 预分配最大可能大小，避免 resize
         float[] packed = new float[2 + rowCount * 6];
         packed[0] = preprocessMs;
         packed[1] = inferenceMs;
@@ -234,6 +251,7 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             int base = row * 6;
             float score = raw[base + 4];
             if (score < confidence) continue;
+            // 模型直接输出角点坐标 [x1, y1, x2, y2]（像素值）
             float x1 = clamp((raw[base] - padX) / scale, 0f, width);
             float y1 = clamp((raw[base + 1] - padY) / scale, 0f, height);
             float x2 = clamp((raw[base + 2] - padX) / scale, 0f, width);
@@ -246,7 +264,13 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             packed[write++] = score;
             packed[write++] = raw[base + 5];
         }
-        return Arrays.copyOf(packed, write);
+        // 精确裁剪到实际有效长度
+        if (write < packed.length) {
+            float[] result = new float[write];
+            System.arraycopy(packed, 0, result, 0, write);
+            return result;
+        }
+        return packed;
     }
 
     private static void validateThresholds(float confidence, float nmsThreshold) {

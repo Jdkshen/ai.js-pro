@@ -9,8 +9,34 @@ if(NOT EXISTS "${OPENCV_JAVA_LIBRARY}")
     message(FATAL_ERROR "OPENCV_JAVA_LIBRARY must point to libopencv_java5.so for ${ANDROID_ABI}")
 endif()
 
-add_library(opencv_java5 SHARED IMPORTED)
-set_target_properties(opencv_java5 PROPERTIES IMPORTED_LOCATION "${OPENCV_JAVA_LIBRARY}")
+get_filename_component(OPENCV_JNI_DIR "${OPENCV_JAVA_LIBRARY}" DIRECTORY)
+get_filename_component(OPENCV_JAVA_FILENAME "${OPENCV_JAVA_LIBRARY}" NAME)
+
+# Copy all OpenCV .so files to a flat directory so the linker uses simple filenames
+# (avoids embedding absolute build paths into ELF NEEDED entries)
+set(OPENCV_FLAT_DIR "${CMAKE_BINARY_DIR}/opencv-flat")
+file(MAKE_DIRECTORY "${OPENCV_FLAT_DIR}")
+file(GLOB _opencv_sos "${OPENCV_JNI_DIR}/*.so")
+foreach(_so ${_opencv_sos})
+    get_filename_component(_so_name "${_so}" NAME)
+    configure_file("${_so}" "${OPENCV_FLAT_DIR}/${_so_name}" COPYONLY)
+endforeach()
+
+# Import the monolithic library on 32-bit ABIs and any split component
+# libraries present in the arm64 package.
+set(OPENCV_LIBS opencv_java5)
+set(OPENCV_OPTIONAL_LIBS opencv_imgproc opencv_core opencv_imgcodecs)
+foreach(_lib ${OPENCV_OPTIONAL_LIBS})
+    if(EXISTS "${OPENCV_FLAT_DIR}/lib${_lib}.so")
+        list(APPEND OPENCV_LIBS ${_lib})
+    endif()
+endforeach()
+foreach(_lib ${OPENCV_LIBS})
+    add_library(${_lib} SHARED IMPORTED)
+    set_target_properties(${_lib} PROPERTIES
+        IMPORTED_LOCATION "${OPENCV_FLAT_DIR}/lib${_lib}.so"
+        IMPORTED_NO_SONAME TRUE)
+endforeach()
 
 add_library(quickjs SHARED
         ${QUICKJS_DIR}/quickjs.c
@@ -46,4 +72,4 @@ target_compile_options(quickjs_jni PRIVATE -fPIC -Wall -Wextra)
 target_link_options(quickjs_jni PRIVATE
         "-Wl,-z,max-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
-target_link_libraries(quickjs_jni PRIVATE quickjs opencv_java5 log)
+target_link_libraries(quickjs_jni PRIVATE quickjs ${OPENCV_LIBS} log)

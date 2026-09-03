@@ -167,5 +167,6 @@ dependencies {
     implementation project(':automator')
     implementation project(':common')
     implementation project(':autojs')
+    implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')
 }

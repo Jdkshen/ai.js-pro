@@ -79,7 +79,10 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     }
 
     public void setColors(SparseArray<Integer> colors) {
-        mColors = colors;
+        mColors = colors == null ? COLORS.clone() : colors.clone();
+        if (mLogListRecyclerView != null && mLogListRecyclerView.getAdapter() != null) {
+            mLogListRecyclerView.getAdapter().notifyDataSetChanged();
+        }
     }
 
     private void init(AttributeSet attrs) {

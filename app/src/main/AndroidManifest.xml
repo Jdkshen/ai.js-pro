@@ -3,6 +3,11 @@
           xmlns:tools="http://schemas.android.com/tools"
           package="org.autojs.autojs">
 
+    <!-- Shizuku itself requires Android 6+, but its v11 provider only exchanges a Binder and is
+         safe to package while AI.js Pro keeps its existing Android 5.x minimum. The script bridge
+         returns unavailable below API 23. -->
+    <uses-sdk tools:overrideLibrary="rikka.shizuku.provider,rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl"/>
+
 
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
@@ -16,6 +21,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"/>
+    <!-- app.getInstalledApps / app-name and package-name lookup on Android 11+. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+    <!-- MIUI additionally gates the installed-app list behind this runtime permission. -->
+    <uses-permission android:name="com.android.permission.GET_INSTALLED_APPS"/>
 
 
     <!-- 非AI.js Pro运行必需，不会主动申请，某些脚本可以自行申请-->
@@ -97,6 +106,16 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/provider_paths"/>
         </provider>
+
+        <!-- Receives the Shizuku binder. The permission prevents ordinary apps from
+             calling this exported provider directly. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"/>
 
         <activity
             android:name=".ui.edit.EditActivity_"

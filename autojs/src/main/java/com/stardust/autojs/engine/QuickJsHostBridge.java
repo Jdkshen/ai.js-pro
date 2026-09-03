@@ -19,8 +19,8 @@ import android.view.WindowManager;
 import com.stardust.autojs.core.http.MutableOkHttp;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
-import com.stardust.autojs.runtime.api.OnnxYoloDetector;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
+import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.autojs.runtime.api.Yolo;
 import com.stardust.pio.UncheckedIOException;
 
@@ -29,6 +29,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -158,7 +160,7 @@ final class QuickJsHostBridge implements AutoCloseable {
         return images().requestScreenCaptureBlocking(normalizeOrientation(orientation));
     }
 
-    public long captureScreenNative() {
+    public long captureScreenNative(int targetShortEdge, boolean fresh, int timeoutMillis) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             throw new UnsupportedOperationException("Screen capture requires Android 5.0 or newer");
         }
@@ -166,7 +168,7 @@ final class QuickJsHostBridge implements AutoCloseable {
         if (engineHandle == 0) {
             throw new IllegalStateException("QuickJS engine is not attached");
         }
-        Image image = images().captureScreenRaw();
+        Image image = images().captureScreenRaw(fresh, timeoutMillis);
         Image.Plane[] planes = image.getPlanes();
         if (planes.length == 0) {
             throw new IllegalStateException("Screen capture returned no image planes");
@@ -180,7 +182,8 @@ final class QuickJsHostBridge implements AutoCloseable {
                 image.getWidth(),
                 image.getHeight(),
                 plane.getRowStride(),
-                plane.getPixelStride()
+                plane.getPixelStride(),
+                targetShortEdge
         );
     }
 
@@ -204,22 +207,7 @@ final class QuickJsHostBridge implements AutoCloseable {
                          int inputWidth, int inputHeight, int threads) {
         String normalized = normalizeQuickJsBackend(backend);
         AutoCloseable detector;
-        if ("ncnn".equals(normalized)) {
-            boolean paramAsset = isAssetPath(paramPath);
-            boolean binAsset = isAssetPath(binPath);
-            if (paramAsset != binAsset) {
-                throw new IllegalArgumentException("YOLO param 和 bin 必须同时使用 asset:// 或本地路径");
-            }
-            detector = paramAsset
-                    ? mRuntime.yolo.createFromAssets(stripAssetPrefix(paramPath),
-                    stripAssetPrefix(binPath), inputWidth, inputHeight, threads)
-                    : mRuntime.yolo.create(mRuntime.files.path(paramPath),
-                    mRuntime.files.path(binPath), inputWidth, inputHeight, threads);
-        } else if ("onnx".equals(normalized)) {
-            detector = isAssetPath(modelPath)
-                    ? mRuntime.yolo.createOnnxFromAssets(stripAssetPrefix(modelPath), inputWidth, inputHeight, threads)
-                    : mRuntime.yolo.createOnnx(mRuntime.files.path(modelPath), inputWidth, inputHeight, threads);
-        } else if ("opencv".equals(normalized)) {
+        if ("opencv".equals(normalized)) {
             detector = isAssetPath(modelPath)
                     ? mRuntime.yolo.createOpenCvFromAssets(stripAssetPrefix(modelPath), inputWidth, inputHeight, threads)
                     : mRuntime.yolo.createOpenCv(mRuntime.files.path(modelPath), inputWidth, inputHeight, threads);
@@ -240,16 +228,11 @@ final class QuickJsHostBridge implements AutoCloseable {
             throw new IllegalStateException("QuickJS YOLO detector 已关闭");
         }
         AutoCloseable detector = session.detector;
-        if ("onnx".equals(session.backend)) {
-            return ((OnnxYoloDetector) detector).detectRgba(rgba, width, height, rowStride,
-                    regionX, regionY, regionWidth, regionHeight, confidence, nmsThreshold);
-        }
         if ("opencv".equals(session.backend)) {
             return ((OpenCvYoloDetector) detector).detectRgba(rgba, width, height, rowStride,
                     regionX, regionY, regionWidth, regionHeight, confidence, nmsThreshold);
         }
-        return ((Yolo.Detector) detector).detectRgba(rgba, width, height, rowStride,
-                regionX, regionY, regionWidth, regionHeight, confidence, nmsThreshold);
+        throw new IllegalStateException("QuickJS YOLO 不支持的 backend: " + session.backend);
     }
 
     public boolean closeYolo(long sessionHandle) {
@@ -264,11 +247,9 @@ final class QuickJsHostBridge implements AutoCloseable {
     }
 
     private static String normalizeQuickJsBackend(String backend) {
-        if (backend == null) return "ncnn";
+        if (backend == null) return "opencv";
         String normalized = backend.trim().toLowerCase();
-        if (normalized.isEmpty() || "cpu".equals(normalized)) return "ncnn";
-        if ("ort".equals(normalized) || "onnxruntime".equals(normalized)
-                || "onnx-runtime".equals(normalized)) return "onnx";
+        if (normalized.isEmpty() || "cpu".equals(normalized)) return "opencv";
         if ("opencv-dnn".equals(normalized) || "opencv5".equals(normalized)
                 || "dnn".equals(normalized)) return "opencv";
         return normalized;
@@ -286,7 +267,7 @@ final class QuickJsHostBridge implements AutoCloseable {
             }
             return new String(output.toByteArray(), StandardCharsets.UTF_8);
         } catch (IOException error) {
-            throw new IllegalArgumentException("无法读取 YOLO labels：" + path, error);
+            throw new IllegalArgumentException("无法读取 YOLO labels: " + path, error);
         }
     }
 
@@ -433,9 +414,774 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
     }
 
+    // ---- app module: additional APIs ----
+
+    public String appGetPackageName(String appName) {
+        try {
+            String pkg = mRuntime.app.getPackageName(appName);
+            return pkg != null ? pkg : "";
+        } catch (Throwable e) { return ""; }
+    }
+
+    public String appGetAppName(String packageName) {
+        try {
+            String name = mRuntime.app.getAppName(packageName);
+            return name != null ? name : "";
+        } catch (Throwable e) { return ""; }
+    }
+
+    public boolean appOpenAppSetting(String packageName) {
+        try {
+            mRuntime.app.openAppSetting(packageName);
+            return true;
+        } catch (Throwable e) { return false; }
+    }
+
+    public boolean appViewFile(String path) {
+        try {
+            mRuntime.app.viewFile(path);
+            return true;
+        } catch (Throwable e) { return false; }
+    }
+
+    public boolean appEditFile(String path) {
+        try {
+            mRuntime.app.editFile(path);
+            return true;
+        } catch (Throwable e) { return false; }
+    }
+
+    public boolean appUninstall(String packageName) {
+        try {
+            mRuntime.app.uninstall(packageName);
+            return true;
+        } catch (Throwable e) { return false; }
+    }
+
+    public boolean appStartActivity(String action, String packageName, String className,
+                                     String data, String type, String extrasJson, int flags) {
+        try {
+            android.content.Intent intent = new android.content.Intent();
+            if (action != null && !action.isEmpty()) intent.setAction(action);
+            if (packageName != null && className != null && !className.isEmpty()) {
+                intent.setClassName(packageName, className);
+            } else if (packageName != null && !packageName.isEmpty()) {
+                intent.setPackage(packageName);
+            }
+            if (data != null && !data.isEmpty()) {
+                android.net.Uri uri = android.net.Uri.parse(data);
+                if (type != null && !type.isEmpty()) {
+                    intent.setDataAndType(uri, type);
+                } else {
+                    intent.setData(uri);
+                }
+            } else if (type != null && !type.isEmpty()) {
+                intent.setType(type);
+            }
+            if (flags != 0) intent.setFlags(flags);
+            if (extrasJson != null && !extrasJson.isEmpty()) {
+                JSONObject extras = new JSONObject(extrasJson);
+                java.util.Iterator<String> keys = extras.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    Object val = extras.get(key);
+                    if (val instanceof String) intent.putExtra(key, (String) val);
+                    else if (val instanceof Integer) intent.putExtra(key, (Integer) val);
+                    else if (val instanceof Boolean) intent.putExtra(key, (Boolean) val);
+                    else if (val instanceof Long) intent.putExtra(key, (Long) val);
+                    else if (val instanceof Double) intent.putExtra(key, (Double) val);
+                }
+            }
+            Context context = mRuntime.app.getCurrentActivity();
+            if (context == null) {
+                context = mRuntime.uiHandler.getContext().getApplicationContext();
+            }
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+            return true;
+        } catch (Throwable e) {
+            Log.w("QuickJsHostBridge", "appStartActivity failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    // ---- device module: additional APIs ----
+
+    public boolean deviceIsCharging() {
+        try {
+            android.content.IntentFilter filter = new android.content.IntentFilter(
+                    android.content.Intent.ACTION_BATTERY_CHANGED);
+            android.content.Intent battery = mRuntime.uiHandler.getContext()
+                    .registerReceiver(null, filter);
+            if (battery == null) return false;
+            int status = battery.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            return status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                    || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+        } catch (Throwable e) { return false; }
+    }
+
+    public int deviceGetBrightness() {
+        try {
+            return Settings.System.getInt(mRuntime.uiHandler.getContext().getContentResolver(),
+                    Settings.System.SCREEN_BRIGHTNESS);
+        } catch (Throwable e) { return -1; }
+    }
+
+    public int deviceGetBrightnessMode() {
+        try {
+            return Settings.System.getInt(mRuntime.uiHandler.getContext().getContentResolver(),
+                    Settings.System.SCREEN_BRIGHTNESS_MODE);
+        } catch (Throwable e) { return -1; }
+    }
+
+    public void deviceCancelVibration() {
+        try {
+            android.os.Vibrator v = (android.os.Vibrator)
+                    mRuntime.uiHandler.getContext().getSystemService(Context.VIBRATOR_SERVICE);
+            if (v != null) v.cancel();
+        } catch (Throwable ignored) {}
+    }
+
+    // ---- shell module ----
+
+    public String shellExecute(String command, boolean root, boolean shizuku,
+                               int timeoutMs, int maxOutput) {
+        timeoutMs = Math.max(1, timeoutMs);
+        maxOutput = Math.max(0, Math.min(maxOutput, 16 * 1024 * 1024));
+        if (root && shizuku) {
+            return shellResult(-1, "", "root 和 shizuku 不能同时启用");
+        }
+        if (shizuku) {
+            ShizukuShell.Result privilegedResult = ShizukuShell.execute(command, timeoutMs, maxOutput);
+            return shellResult(privilegedResult.code, privilegedResult.output, privilegedResult.error);
+        }
+        File pidFile = null;
+        try {
+            pidFile = File.createTempFile("quickjs-shell-", ".pid",
+                    mRuntime.uiHandler.getContext().getCacheDir());
+            String trackedCommand = "echo $$ > " + shellQuote(pidFile.getAbsolutePath())
+                    + "\n" + command;
+            ProcessBuilder pb = new ProcessBuilder();
+            if (root) {
+                pb.command("su", "-c", "setsid sh -c " + shellQuote(trackedCommand));
+            } else {
+                pb.command("setsid", "sh", "-c", trackedCommand);
+            }
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            mShellProcesses.add(process);
+            try {
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                final int outputLimit = maxOutput;
+                Thread outputReader = new Thread(() -> {
+                    try (java.io.InputStream input = process.getInputStream()) {
+                        byte[] buffer = new byte[4096];
+                        int read;
+                        while ((read = input.read(buffer)) != -1) {
+                            int remaining = outputLimit - baos.size();
+                            if (remaining > 0) {
+                                baos.write(buffer, 0, Math.min(read, remaining));
+                            }
+                            // Keep draining after the limit so the child process cannot block on a full pipe.
+                        }
+                    } catch (IOException ignored) {
+                        // Closing/destroying a timed-out process normally closes this stream.
+                    }
+                }, "QuickJS-shell-output");
+                outputReader.setDaemon(true);
+                outputReader.start();
+
+                boolean finished = process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                int code = -1;
+                if (finished) {
+                    code = process.exitValue();
+                } else {
+                    int shellPid = readPid(pidFile);
+                    terminateProcessGroup(process, shellPid, root);
+                }
+                outputReader.join(finished ? 1000 : 200);
+                String output = baos.toString("UTF-8");
+                JSONObject result = new JSONObject();
+                result.put("code", code);
+                result.put("result", output);
+                result.put("error", finished ? "" : "timeout");
+                return result.toString();
+            } finally {
+                mShellProcesses.remove(process);
+            }
+        } catch (Throwable e) {
+            try {
+                JSONObject err = new JSONObject();
+                err.put("code", -1);
+                err.put("result", "");
+                err.put("error", e.getMessage());
+                return err.toString();
+            } catch (JSONException je) { return "{\"code\":-1,\"result\":\"\",\"error\":\"unknown\"}"; }
+        } finally {
+            if (pidFile != null && pidFile.exists() && !pidFile.delete()) {
+                pidFile.deleteOnExit();
+            }
+        }
+    }
+
+    /**
+     * Stops the complete command tree, not only the outer {@code sh -c} process. Android's
+     * {@link Process#destroyForcibly()} targets one PID; a child such as {@code sleep} can survive
+     * it and keep the stdout pipe open until its natural exit. The shell writes its own PID before
+     * running the user's command, avoiding hidden Process APIs on newer Android releases. It runs
+     * the command in a dedicated session/process group, then terminates that group on timeout.
+     */
+    private static void terminateProcessGroup(Process process, int rootPid, boolean root) {
+        if (rootPid > 0) {
+            try {
+                if (root) {
+                    Process killer = new ProcessBuilder("su", "-c",
+                            "kill -9 -- -" + rootPid).start();
+                    killer.waitFor(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    killer.destroy();
+                } else {
+                    Process killer = new ProcessBuilder("kill", "-9", "--",
+                            "-" + rootPid).start();
+                    killer.waitFor(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    killer.destroy();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        try {
+            process.destroyForcibly();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static int readPid(File pidFile) {
+        try (BufferedReader reader = new BufferedReader(new java.io.FileReader(pidFile))) {
+            String value = reader.readLine();
+            return value == null ? -1 : Integer.parseInt(value.trim());
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private static String shellQuote(String value) {
+        return "'" + value.replace("'", "'\\''") + "'";
+    }
+
+    private String shellResult(int code, String output, String error) {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("code", code);
+            result.put("result", output == null ? "" : output);
+            result.put("error", error == null ? "" : error);
+            return result.toString();
+        } catch (JSONException ignored) {
+            return "{\"code\":-1,\"result\":\"\",\"error\":\"json error\"}";
+        }
+    }
+
+    public boolean shellIsRootAvailable() {
+        Process process = null;
+        try {
+            process = new ProcessBuilder("su", "-c", "id").start();
+            mShellProcesses.add(process);
+            boolean finished = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS);
+                return false;
+            }
+            return process.exitValue() == 0;
+        } catch (Throwable e) {
+            if (process != null) {
+                try {
+                    process.destroyForcibly();
+                } catch (Throwable ignored) {
+                }
+            }
+            return false;
+        } finally {
+            if (process != null) {
+                mShellProcesses.remove(process);
+            }
+        }
+    }
+
+    public boolean shellIsShizukuAvailable() {
+        return ShizukuShell.isAvailable();
+    }
+
+    public boolean shellHasShizukuPermission() {
+        return ShizukuShell.hasPermission();
+    }
+
+    public boolean shellRequestShizukuPermission(int timeoutMs) {
+        return ShizukuShell.requestPermission(Math.max(1000, Math.min(timeoutMs, 120000)));
+    }
+
+    private final java.util.Set<Process> mShellProcesses =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    // ---- dialogs module ----
+
+    public String dialogAlert(String title, String content) {
+        try {
+            android.app.Activity activity = mRuntime.app.getCurrentActivity();
+            if (activity == null) return "error:no_activity";
+            final Object[] result = new Object[1];
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    new com.afollestad.materialdialogs.MaterialDialog.Builder(activity)
+                            .title(title)
+                            .content(content)
+                            .positiveText(android.R.string.ok)
+                            .onPositive((d, w) -> { result[0] = "ok"; latch.countDown(); })
+                            .cancelListener(d -> { result[0] = "cancel"; latch.countDown(); })
+                            .show();
+                } catch (Throwable e) { result[0] = "error:" + e.getMessage(); latch.countDown(); }
+            });
+            latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
+            return String.valueOf(result[0]);
+        } catch (Throwable e) { return "error:" + e.getMessage(); }
+    }
+
+    public String dialogConfirm(String title, String content) {
+        try {
+            android.app.Activity activity = mRuntime.app.getCurrentActivity();
+            if (activity == null) return "error:no_activity";
+            final Object[] result = new Object[1];
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    new com.afollestad.materialdialogs.MaterialDialog.Builder(activity)
+                            .title(title)
+                            .content(content)
+                            .positiveText(android.R.string.ok)
+                            .negativeText(android.R.string.cancel)
+                            .onPositive((d, w) -> { result[0] = true; latch.countDown(); })
+                            .onNegative((d, w) -> { result[0] = false; latch.countDown(); })
+                            .cancelListener(d -> { result[0] = false; latch.countDown(); })
+                            .show();
+                } catch (Throwable e) { result[0] = false; latch.countDown(); }
+            });
+            latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
+            return String.valueOf(result[0]);
+        } catch (Throwable e) { return "false"; }
+    }
+
+    public String dialogPrompt(String title, String prefill) {
+        try {
+            android.app.Activity activity = mRuntime.app.getCurrentActivity();
+            if (activity == null) return "error:no_activity";
+            final String[] result = new String[1];
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    new com.afollestad.materialdialogs.MaterialDialog.Builder(activity)
+                            .title(title)
+                            .positiveText(android.R.string.ok)
+                            .negativeText(android.R.string.cancel)
+                            .input(prefill != null ? prefill : "", "", (d, input) -> {
+                                result[0] = input.toString();
+                                latch.countDown();
+                            })
+                            .onNegative((d, w) -> { result[0] = null; latch.countDown(); })
+                            .cancelListener(d -> { result[0] = null; latch.countDown(); })
+                            .show();
+                } catch (Throwable e) { result[0] = null; latch.countDown(); }
+            });
+            latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
+            return result[0] != null ? result[0] : "";
+        } catch (Throwable e) { return ""; }
+    }
+
+    public String dialogSelect(String title, String itemsJson) {
+        return dialogSingleChoice(title, itemsJson, -1);
+    }
+
+    public String dialogSingleChoice(String title, String itemsJson, int index) {
+        try {
+            android.app.Activity activity = mRuntime.app.getCurrentActivity();
+            if (activity == null) return "-1";
+            final int[] result = new int[]{-1};
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            JSONArray items = new JSONArray(itemsJson);
+            String[] itemsArr = new String[items.length()];
+            for (int i = 0; i < items.length(); i++) itemsArr[i] = items.getString(i);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    new com.afollestad.materialdialogs.MaterialDialog.Builder(activity)
+                            .title(title)
+                            .items(itemsArr)
+                            .itemsCallbackSingleChoice(index, (dialog, itemView, which, text) -> {
+                                result[0] = which;
+                                latch.countDown();
+                                return true;
+                            })
+                            .negativeText(android.R.string.cancel)
+                            .onNegative((d, w) -> latch.countDown())
+                            .cancelListener(d -> latch.countDown())
+                            .show();
+                } catch (Throwable e) { latch.countDown(); }
+            });
+            latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
+            return String.valueOf(result[0]);
+        } catch (Throwable e) { return "-1"; }
+    }
+
+    public String dialogMultiChoice(String title, String itemsJson, String indicesJson) {
+        try {
+            android.app.Activity activity = mRuntime.app.getCurrentActivity();
+            if (activity == null) return "[]";
+            final java.util.List<Integer> result = new ArrayList<>();
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            JSONArray items = new JSONArray(itemsJson);
+            String[] itemsArr = new String[items.length()];
+            for (int i = 0; i < items.length(); i++) itemsArr[i] = items.getString(i);
+            java.util.List<Integer> selectedIndices = new ArrayList<>();
+            if (indicesJson != null && !indicesJson.isEmpty()) {
+                JSONArray sel = new JSONArray(indicesJson);
+                for (int i = 0; i < sel.length(); i++) {
+                    int selectedIndex = sel.getInt(i);
+                    if (selectedIndex >= 0 && selectedIndex < itemsArr.length
+                            && !selectedIndices.contains(selectedIndex)) {
+                        selectedIndices.add(selectedIndex);
+                    }
+                }
+            }
+            Integer[] selected = selectedIndices.toArray(new Integer[0]);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    new com.afollestad.materialdialogs.MaterialDialog.Builder(activity)
+                            .title(title)
+                            .items(itemsArr)
+                            .positiveText(android.R.string.ok)
+                            .negativeText(android.R.string.cancel)
+                            .itemsCallbackMultiChoice(selected, (dialog, which, text) -> {
+                                result.clear();
+                                for (int i = 0; i < which.length; i++) result.add(which[i]);
+                                latch.countDown();
+                                return true;
+                            })
+                            .onNegative((d, w) -> latch.countDown())
+                            .cancelListener(d -> latch.countDown())
+                            .show();
+                } catch (Throwable e) { latch.countDown(); }
+            });
+            latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
+            JSONArray arr = new JSONArray();
+            for (int i : result) arr.put(i);
+            return arr.toString();
+        } catch (Throwable e) { return "[]"; }
+    }
+
+    /**
+     * Unified dialogs.build() bridge. Receives a JSON property bag, builds and
+     * shows a MaterialDialog on the main thread, and blocks the calling (script)
+     * thread until the user acts or the dialog is dismissed.
+     *
+     * Supported props: title, content, positiveText, negativeText, neutralText,
+     *                   inputHint, inputPrefill, inputAllowEmpty, cancelable
+     *
+     * Returns JSON: { "action": "positive"|"negative"|"neutral"|"cancel",
+     *                 "inputText": "..." }
+     */
+    public String dialogBuild(String propsJson) {
+        try {
+            android.app.Activity activity = mRuntime.app.getCurrentActivity();
+            JSONObject fallback = new JSONObject();
+            fallback.put("action", "cancel");
+            fallback.put("inputText", "");
+            if (activity == null || activity.isFinishing()) return fallback.toString();
+
+            final JSONObject[] holder = new JSONObject[]{ fallback };
+            final java.util.concurrent.CountDownLatch latch =
+                    new java.util.concurrent.CountDownLatch(1);
+
+            final JSONObject props = (propsJson != null && !propsJson.isEmpty())
+                    ? new JSONObject(propsJson) : new JSONObject();
+
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    com.afollestad.materialdialogs.MaterialDialog.Builder builder =
+                            new com.afollestad.materialdialogs.MaterialDialog.Builder(activity);
+
+                    if (props.has("title"))
+                        builder.title(props.getString("title"));
+                    if (props.has("content"))
+                        builder.content(props.getString("content"));
+
+                    boolean hasInput = props.has("inputHint") || props.has("inputPrefill");
+                    String inputHint = props.optString("inputHint", null);
+                    String inputPrefill = props.optString("inputPrefill", "");
+                    boolean allowEmpty = props.optBoolean("inputAllowEmpty", true);
+
+                    if (hasInput) {
+                        builder.input(inputHint, inputPrefill, allowEmpty,
+                                (d, input) -> {
+                                    try {
+                                        JSONObject r = new JSONObject();
+                                        r.put("action", "input");
+                                        r.put("inputText", input.toString());
+                                        holder[0] = r;
+                                    } catch (JSONException ignored) {}
+                                    latch.countDown();
+                                });
+                    }
+
+                    String posText = props.has("positiveText")
+                            ? props.getString("positiveText") : null;
+                    String negText = props.has("negativeText")
+                            ? props.getString("negativeText") : null;
+                    String neutText = props.has("neutralText")
+                            ? props.getString("neutralText") : null;
+
+                    // Add button texts only if provided; omit to hide button
+                    if (posText != null) builder.positiveText(posText);
+                    if (negText != null) builder.negativeText(neutText);
+                    if (neutText != null) builder.neutralText(neutText);
+
+                    if (posText != null && !hasInput) {
+                        builder.onPositive((d, w) -> {
+                            try { holder[0] = new JSONObject().put("action", "positive"); }
+                            catch (JSONException ignored) {}
+                            latch.countDown();
+                        });
+                    }
+                    if (negText != null) {
+                        builder.onNegative((d, w) -> {
+                            try { holder[0] = new JSONObject().put("action", "negative"); }
+                            catch (JSONException ignored) {}
+                            latch.countDown();
+                        });
+                    }
+                    if (neutText != null) {
+                        builder.onNeutral((d, w) -> {
+                            try { holder[0] = new JSONObject().put("action", "neutral"); }
+                            catch (JSONException ignored) {}
+                            latch.countDown();
+                        });
+                    }
+
+                    builder.cancelListener(d -> {
+                        try { holder[0] = new JSONObject().put("action", "cancel"); }
+                        catch (JSONException ignored) {}
+                        latch.countDown();
+                    });
+
+                    boolean cancelable = props.optBoolean("cancelable", true);
+                    builder.cancelable(cancelable);
+
+                    builder.show();
+                } catch (Throwable e) {
+                    try { holder[0] = new JSONObject().put("action", "error")
+                            .put("error", e.getMessage()); }
+                    catch (JSONException ignored) {}
+                    latch.countDown();
+                }
+            });
+            latch.await(120, java.util.concurrent.TimeUnit.SECONDS);
+            return holder[0].toString();
+        } catch (Throwable e) {
+            try { return new JSONObject().put("action", "error")
+                    .put("error", e.getMessage()).toString(); }
+            catch (JSONException je) { return "{\"action\":\"error\",\"error\":\"unknown\"}"; }
+        }
+    }
+
+    // ---- threads module ----
+
+    /**
+     * Execute a script in a new QuickJS engine thread with optional JSON args.
+     * The argsJson is passed to the child engine as `__args` global.
+     */
+    public String threadsExec(String name, String source, String argsJson) {
+        try {
+            // Prepend QuickJS directive if not already present
+            if (!com.stardust.autojs.script.JavaScriptSource.requestsQuickJs(source)) {
+                source = com.stardust.autojs.script.JavaScriptSource.QUICKJS_ENGINE_DIRECTIVE
+                        + "\n" + source;
+            }
+            // Inject args into source: __args = JSON.parse(argsJson)
+            String argsInit = "";
+            if (argsJson != null && !argsJson.isEmpty() && !"null".equals(argsJson)) {
+                // Escape single quotes in JSON for embedding
+                String escaped = argsJson.replace("\\", "\\\\").replace("'", "\\'");
+                argsInit = "var __args = JSON.parse('" + escaped + "');\n";
+            } else {
+                argsInit = "var __args = null;\n";
+            }
+            String fullSource = argsInit + source;
+            com.stardust.autojs.execution.ExecutionConfig config =
+                    new com.stardust.autojs.execution.ExecutionConfig();
+            com.stardust.autojs.execution.ScriptExecution execution =
+                    mRuntime.engines.execScript(name, fullSource, config);
+            long handle = mNextEngineHandle.getAndIncrement();
+            mEngineSessions.put(handle, execution);
+            return String.valueOf(handle);
+        } catch (Throwable e) { return "-1"; }
+    }
+
+    public int threadsStop(long handle) {
+        try {
+            com.stardust.autojs.execution.ScriptExecution execution =
+                    mEngineSessions.get(handle);
+            if (execution == null || execution.getEngine() == null) return -1;
+            execution.getEngine().forceStop();
+            return 0;
+        } catch (Throwable e) { return -1; }
+    }
+
+    // ---- engines module ----
+
+    public String enginesExecScript(String name, String source, String configJson) {
+        try {
+            com.stardust.autojs.execution.ExecutionConfig config = buildExecConfig(configJson);
+            if (!requestsRhino(configJson)
+                    && !com.stardust.autojs.script.JavaScriptSource.requestsQuickJs(source)) {
+                source = com.stardust.autojs.script.JavaScriptSource.QUICKJS_ENGINE_DIRECTIVE
+                        + "\n" + source;
+            }
+            com.stardust.autojs.execution.ScriptExecution execution =
+                    mRuntime.engines.execScript(name, source, config);
+            long handle = mNextEngineHandle.getAndIncrement();
+            mEngineSessions.put(handle, execution);
+            return String.valueOf(handle);
+        } catch (Throwable e) { return "-1"; }
+    }
+
+    public String enginesExecScriptFile(String path, String configJson) {
+        try {
+            com.stardust.autojs.execution.ExecutionConfig config = buildExecConfig(configJson);
+            com.stardust.autojs.execution.ScriptExecution execution =
+                    mRuntime.engines.execScriptFile(path, config);
+            long handle = mNextEngineHandle.getAndIncrement();
+            mEngineSessions.put(handle, execution);
+            return String.valueOf(handle);
+        } catch (Throwable e) { return "-1"; }
+    }
+
+    public String enginesMyEngineId() {
+        try {
+            com.stardust.autojs.engine.ScriptEngine engine = mRuntime.engines.myEngine();
+            JSONObject info = new JSONObject();
+            info.put("handle", 0);
+            info.put("id", engine == null ? -1 : engine.getId());
+            info.put("source", "QuickJS current engine");
+            info.put("engineName", engine == null ? "QuickJsJavaScriptEngine"
+                    : engine.getClass().getSimpleName());
+            info.put("destroyed", engine == null || engine.isDestroyed());
+            return info.toString();
+        } catch (Throwable e) {
+            return "{\"handle\":0,\"id\":-1,\"source\":\"QuickJS current engine\","
+                    + "\"engineName\":\"QuickJsJavaScriptEngine\",\"destroyed\":false}";
+        }
+    }
+
+    public String enginesAll() {
+        try {
+            JSONArray arr = new JSONArray();
+            arr.put(new JSONObject(enginesMyEngineId()));
+            for (Map.Entry<Long, com.stardust.autojs.execution.ScriptExecution> entry
+                    : mEngineSessions.entrySet()) {
+                com.stardust.autojs.execution.ScriptExecution execution = entry.getValue();
+                com.stardust.autojs.engine.ScriptEngine engine = execution.getEngine();
+                if (engine != null && engine.isDestroyed()) {
+                    mEngineSessions.remove(entry.getKey(), execution);
+                    continue;
+                }
+                JSONObject obj = new JSONObject();
+                obj.put("handle", entry.getKey());
+                obj.put("id", execution.getId());
+                obj.put("source", String.valueOf(execution.getSource()));
+                obj.put("engineName", engine.getClass().getSimpleName());
+                obj.put("destroyed", false);
+                arr.put(obj);
+            }
+            return arr.toString();
+        } catch (Throwable e) { return "[]"; }
+    }
+
+    public int enginesStopAll() {
+        try {
+            return mRuntime.engines.stopAll();
+        } catch (Throwable e) { return 0; }
+    }
+
+    public void enginesStopAllAndToast() {
+        try {
+            mRuntime.engines.stopAllAndToast();
+        } catch (Throwable ignored) {}
+    }
+
+    public boolean engineForceStop(long handle) {
+        try {
+            if (handle == 0) {
+                com.stardust.autojs.engine.ScriptEngine current = mRuntime.engines.myEngine();
+                if (current == null) return false;
+                current.forceStop();
+                return true;
+            }
+            com.stardust.autojs.execution.ScriptExecution execution = mEngineSessions.get(handle);
+            if (execution == null || execution.getEngine() == null) return false;
+            execution.getEngine().forceStop();
+            return true;
+        } catch (Throwable e) { return false; }
+    }
+
+    public boolean engineIsDestroyed(long handle) {
+        try {
+            if (handle == 0) {
+                com.stardust.autojs.engine.ScriptEngine current = mRuntime.engines.myEngine();
+                return current == null || current.isDestroyed();
+            }
+            com.stardust.autojs.execution.ScriptExecution execution = mEngineSessions.get(handle);
+            if (execution == null) return true;
+            com.stardust.autojs.engine.ScriptEngine engine = execution.getEngine();
+            boolean destroyed = engine != null && engine.isDestroyed();
+            if (destroyed) mEngineSessions.remove(handle, execution);
+            return destroyed;
+        } catch (Throwable e) { return true; }
+    }
+
+    private boolean requestsRhino(String configJson) {
+        if (configJson == null || configJson.isEmpty()) return false;
+        try {
+            return "rhino".equalsIgnoreCase(new JSONObject(configJson).optString("engine"));
+        } catch (JSONException ignored) {
+            return false;
+        }
+    }
+
+    private com.stardust.autojs.execution.ExecutionConfig buildExecConfig(String configJson) {
+        com.stardust.autojs.execution.ExecutionConfig config = new com.stardust.autojs.execution.ExecutionConfig();
+        if (configJson == null || configJson.isEmpty()) return config;
+        try {
+            JSONObject json = new JSONObject(configJson);
+            if (json.has("delay")) config.setDelay(json.optLong("delay", 0));
+            if (json.has("interval")) config.setInterval(json.optLong("interval", 0));
+            if (json.has("loopTimes")) config.setLoopTimes(json.optInt("loopTimes", 1));
+            if (json.has("path")) config.setWorkingDirectory(json.optString("path", ""));
+        } catch (JSONException ignored) {}
+        return config;
+    }
+
+    private final AtomicLong mNextEngineHandle = new AtomicLong(1);
+    private final Map<Long, com.stardust.autojs.execution.ScriptExecution> mEngineSessions =
+            new ConcurrentHashMap<>();
+
     @Override
     public void close() {
         drawClose();
+        // Kill any shell child processes still running so a stopped script cannot
+        // leak background commands.
+        for (Process process : new ArrayList<>(mShellProcesses)) {
+            try {
+                process.destroyForcibly();
+            } catch (Throwable ignored) {
+            }
+        }
+        mShellProcesses.clear();
         for (YoloSession session : new ArrayList<>(mYoloSessions.values())) {
             try {
                 session.detector.close();
@@ -720,6 +1466,186 @@ final class QuickJsHostBridge implements AutoCloseable {
                 return orientation;
             default:
                 return Configuration.ORIENTATION_UNDEFINED;
+        }
+    }
+
+    // ---- app module whitelist ----
+
+    public boolean appLaunch(String packageName) {
+        try {
+            mRuntime.app.launchPackage(packageName);
+            return true;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "appLaunch failed: " + error.getMessage());
+            return false;
+        }
+    }
+
+    public boolean appOpenUrl(String url) {
+        try {
+            mRuntime.app.openUrl(url);
+            return true;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "appOpenUrl failed: " + error.getMessage());
+            return false;
+        }
+    }
+
+    public String appGetInstalledApps() {
+        try {
+            Context context = mRuntime.uiHandler.getContext().getApplicationContext();
+            List<android.content.pm.ApplicationInfo> apps = context.getPackageManager()
+                    .getInstalledApplications(0);
+            JSONArray array = new JSONArray();
+            for (android.content.pm.ApplicationInfo info : apps) {
+                JSONObject obj = new JSONObject();
+                obj.put("packageName", info.packageName);
+                obj.put("label", mRuntime.app.getAppName(info.packageName));
+                array.put(obj);
+            }
+            return array.toString();
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "appGetInstalledApps failed: " + error.getMessage());
+            return "[]";
+        }
+    }
+
+    public String appGetAppInfo(String packageName) {
+        try {
+            android.content.pm.PackageInfo info = mRuntime.uiHandler.getContext()
+                    .getPackageManager().getPackageInfo(packageName, 0);
+            JSONObject obj = new JSONObject();
+            obj.put("packageName", packageName);
+            obj.put("label", mRuntime.app.getAppName(packageName));
+            obj.put("versionName", info.versionName == null ? "" : info.versionName);
+            obj.put("versionCode", info.versionCode);
+            return obj.toString();
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "appGetAppInfo failed: " + error.getMessage());
+            return "{}";
+        }
+    }
+
+    // ---- storages module whitelist ----
+
+    private final Map<Long, com.stardust.autojs.core.storage.LocalStorage> mStorages =
+            new ConcurrentHashMap<>();
+    private final AtomicLong mNextStorageHandle = new AtomicLong(1);
+
+    public long storageCreate(String name) {
+        long handle = mNextStorageHandle.getAndIncrement();
+        mStorages.put(handle, new com.stardust.autojs.core.storage.LocalStorage(
+                mRuntime.app.getCurrentActivity() != null
+                        ? mRuntime.app.getCurrentActivity()
+                        : mRuntime.uiHandler.getContext().getApplicationContext(),
+                name));
+        return handle;
+    }
+
+    public boolean storagePut(long handle, String key, String value) {
+        com.stardust.autojs.core.storage.LocalStorage storage = mStorages.get(handle);
+        if (storage == null) return false;
+        storage.put(key, value);
+        return true;
+    }
+
+    public String storageGet(long handle, String key, String defaultValue) {
+        com.stardust.autojs.core.storage.LocalStorage storage = mStorages.get(handle);
+        if (storage == null) return defaultValue;
+        String value = storage.getString(key, null);
+        return value != null ? value : defaultValue;
+    }
+
+    public boolean storageRemove(long handle, String key) {
+        com.stardust.autojs.core.storage.LocalStorage storage = mStorages.get(handle);
+        if (storage == null) return false;
+        storage.remove(key);
+        return true;
+    }
+
+    public boolean storageContains(long handle, String key) {
+        com.stardust.autojs.core.storage.LocalStorage storage = mStorages.get(handle);
+        return storage != null && storage.contains(key);
+    }
+
+    public boolean storageClear(long handle) {
+        com.stardust.autojs.core.storage.LocalStorage storage = mStorages.get(handle);
+        if (storage == null) return false;
+        storage.clear();
+        return true;
+    }
+
+    // ---- device module whitelist ----
+
+    public String deviceGetInfo(String kind) {
+        try {
+            switch (kind) {
+                case "width":
+                    return String.valueOf(mRuntime.device != null ? mRuntime.device.width : 0);
+                case "height":
+                    return String.valueOf(mRuntime.device != null ? mRuntime.device.height : 0);
+                case "model":
+                    return Build.MODEL;
+                case "brand":
+                    return Build.BRAND;
+                case "board":
+                    return Build.BOARD;
+                case "hardware":
+                    return Build.HARDWARE;
+                case "sdkInt":
+                    return String.valueOf(Build.VERSION.SDK_INT);
+                case "release":
+                    return Build.VERSION.RELEASE;
+                case "buildId":
+                    return Build.ID;
+                case "display":
+                    return Build.DISPLAY;
+                case "product":
+                    return Build.PRODUCT;
+                case "manufacturer":
+                    return Build.MANUFACTURER;
+                default:
+                    return "";
+            }
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "deviceGetInfo failed: " + error.getMessage());
+            return "";
+        }
+    }
+
+    public boolean deviceIsScreenOn() {
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    mRuntime.uiHandler.getContext().getApplicationContext()
+                            .getSystemService(Context.POWER_SERVICE);
+            return pm != null && pm.isScreenOn();
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    public void deviceVibrate(int millis) {
+        try {
+            android.os.Vibrator v = (android.os.Vibrator)
+                    mRuntime.uiHandler.getContext().getApplicationContext()
+                            .getSystemService(Context.VIBRATOR_SERVICE);
+            if (v != null) v.vibrate(millis);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public float deviceGetBattery() {
+        try {
+            android.content.IntentFilter filter = new android.content.IntentFilter(
+                    android.content.Intent.ACTION_BATTERY_CHANGED);
+            android.content.Intent battery = mRuntime.uiHandler.getContext().getApplicationContext()
+                    .registerReceiver(null, filter);
+            if (battery == null) return -1f;
+            int level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+            return scale > 0 ? (float) level / scale * 100f : -1f;
+        } catch (Throwable error) {
+            return -1f;
         }
     }
 }

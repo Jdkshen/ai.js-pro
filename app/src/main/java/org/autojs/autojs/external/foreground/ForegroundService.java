@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.util.Log;
+import java.util.concurrent.atomic.AtomicInteger;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
@@ -19,8 +21,10 @@ import org.autojs.autojs.ui.imgui.ImGuiWorkspaceActivity;
 public class ForegroundService extends Service {
 
 
+    private static final String TAG = "ForegroundService";
     private static final int NOTIFICATION_ID = 1;
     private static final String CHANEL_ID = ForegroundService.class.getName() + ".foreground";
+    private static final AtomicInteger sExecutionLeases = new AtomicInteger();
 
     public static void start(Context context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -31,7 +35,38 @@ public class ForegroundService extends Service {
     }
 
     public static void stop(Context context){
-        context.stopService(new Intent(context, ForegroundService.class));
+        if (sExecutionLeases.get() == 0) {
+            context.stopService(new Intent(context, ForegroundService.class));
+        }
+    }
+
+    /**
+     * Keeps script work in Android's foreground scheduling group while it is running. On MIUI,
+     * a script-only process otherwise becomes background-restricted as soon as the launcher or a
+     * target game covers the workspace, which can more than double OpenCV DNN latency.
+     */
+    public static boolean acquireExecutionLease(Context context) {
+        if (sExecutionLeases.getAndIncrement() == 0) {
+            try {
+                start(context.getApplicationContext());
+            } catch (RuntimeException error) {
+                sExecutionLeases.decrementAndGet();
+                // Android 12+ may reject a service start triggered by a background-only timed
+                // task. The script must still run; QuickJS's raised thread priority remains the
+                // safe fallback on such devices.
+                Log.w(TAG, "Cannot acquire script foreground lease", error);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static void releaseExecutionLease(Context context) {
+        int remaining = sExecutionLeases.updateAndGet(value -> Math.max(0, value - 1));
+        if (remaining == 0 && !org.autojs.autojs.Pref.isForegroundServiceEnabled()) {
+            context.getApplicationContext().stopService(
+                    new Intent(context, ForegroundService.class));
+        }
     }
 
     @Override

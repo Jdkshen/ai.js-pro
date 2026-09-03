@@ -23,6 +23,11 @@ final class ImGuiNativeBridge {
 
     static native void setWorkspaceState(boolean accessibilityEnabled, int runningScriptCount);
 
+    static native void setDrawerState(boolean accessibilityEnabled, boolean floatingShown,
+                                      boolean devConnected);
+
+    static native boolean closeWorkspaceDrawer();
+
     static native void setScriptEntries(String directoryLabel, String[] names, String[] paths,
                                         boolean[] directories, String[] types,
                                         String[] modifiedTimes, int[] iconKinds);
@@ -56,4 +61,26 @@ final class ImGuiNativeBridge {
     static native int getCurrentSection();
 
     static native int pollAction();
+
+    static native int getAccessibilityRevision();
+
+    static native String[] getAccessibilitySnapshot();
+
+    static native boolean performAccessibilityAction(int virtualViewId, int action);
+
+    /**
+     * Passes unified viewport metrics to the native layer.
+     * Used for rendering (glViewport, io.DisplaySize) and touch coordinate mapping.
+     */
+    static native void setViewportMetrics(int viewWidthPx, int viewHeightPx,
+                                          float density, float scaledDensity, float fontScale,
+                                          int safeInsetLeftPx, int safeInsetTopPx,
+                                          int safeInsetRightPx, int safeInsetBottomPx,
+                                          int orientation);
+
+    /**
+     * Passes the complete theme palette to the native layer.
+     * argbColors[0] = isDark ? 1 : 0, then all ARGB ints in AppThemePalette field order.
+     */
+    static native void setThemePalette(int[] argbColors);
 }

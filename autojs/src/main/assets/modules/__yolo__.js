@@ -69,12 +69,9 @@ module.exports = function (runtime, scope) {
     };
 
     function normalizeBackend(backend) {
-        backend = String(backend || "ncnn").toLowerCase();
-        if (backend === "cpu") return "ncnn";
-        if (backend === "ort" || backend === "onnxruntime" || backend === "onnx-runtime") {
-            return "onnx";
-        }
-        if (backend === "opencv-dnn" || backend === "opencv5" || backend === "dnn") {
+        backend = String(backend || "opencv").toLowerCase();
+        if (backend === "cpu" || backend === "opencv-dnn" || backend === "opencv5" ||
+            backend === "dnn") {
             return "opencv";
         }
         return backend;
@@ -101,8 +98,8 @@ module.exports = function (runtime, scope) {
     yolo.load = function (options) {
         options = options || {};
         var backend = normalizeBackend(options.backend);
-        if (backend !== "ncnn" && backend !== "onnx" && backend !== "opencv") {
-            throw new Error("不支持的 YOLO 后端：" + options.backend);
+        if (backend !== "opencv") {
+            throw new Error("不支持的 YOLO 后端：" + options.backend + "（当前仅支持 opencv）");
         }
         if (!javaYolo.isAvailable(backend)) {
             throw new Error(String(javaYolo.getUnavailableReason(backend)));
@@ -111,28 +108,10 @@ module.exports = function (runtime, scope) {
         var defaultThreads = Math.min(4, java.lang.Runtime.getRuntime().availableProcessors());
         var threads = Math.round(numberOption(options.threads, defaultThreads));
 
-        var nativeDetector;
-        if (backend === "ncnn") {
-            var param = resolveModel(options.param);
-            var bin = resolveModel(options.bin);
-            if (param.asset !== bin.asset) {
-                throw new Error("param 和 bin 必须同时使用文件路径或 asset:// 路径");
-            }
-            nativeDetector = param.asset
-                ? javaYolo.createFromAssets(param.path, bin.path, inputSize, threads)
-                : javaYolo.create(param.path, bin.path, inputSize, threads);
-        } else {
-            var model = resolveModel(options.model || options.onnx);
-            if (backend === "onnx") {
-                nativeDetector = model.asset
-                    ? javaYolo.createOnnxFromAssets(model.path, inputSize, threads)
-                    : javaYolo.createOnnx(model.path, inputSize, threads);
-            } else {
-                nativeDetector = model.asset
-                    ? javaYolo.createOpenCvFromAssets(model.path, inputSize, threads)
-                    : javaYolo.createOpenCv(model.path, inputSize, threads);
-            }
-        }
+        var model = resolveModel(options.model || options.onnx);
+        var nativeDetector = model.asset
+            ? javaYolo.createOpenCvFromAssets(model.path, inputSize, threads)
+            : javaYolo.createOpenCv(model.path, inputSize, threads);
         return new Detector(nativeDetector, options.labels || []);
     };
 

@@ -131,6 +131,23 @@ bool dispatchDueTimers(JSContext *context, EngineState *state, std::string *erro
             return false;
         }
         JS_FreeValue(context, result);
+        JSContext *pendingContext = nullptr;
+        int pendingResult;
+        while ((pendingResult = JS_ExecutePendingJob(state->runtime, &pendingContext)) > 0) {
+        }
+        if (pendingResult < 0) {
+            JSContext *errorContext = pendingContext == nullptr ? context : pendingContext;
+            JSValue exception = JS_GetException(errorContext);
+            *error = jsString(errorContext, exception);
+            JS_FreeValue(errorContext, exception);
+            if (timer->repeat) {
+                std::lock_guard<std::mutex> lock(state->timersMutex);
+                timer->canceled = true;
+                state->timers.erase(timer->id);
+            }
+            JS_FreeValue(context, timer->callback);
+            return false;
+        }
         if (!timer->repeat) {
             JS_FreeValue(context, timer->callback);
         }
@@ -314,6 +331,12 @@ JSValue nativeLog(JSContext *context, JSValueConst, int argc, JSValueConst *argv
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
 }
 
+JSValue nativePerformanceNow(JSContext *context, JSValueConst, int, JSValueConst *) {
+    const double millis = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    return JS_NewFloat64(context, millis);
+}
+
 JSValue nativeToast(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
@@ -457,6 +480,21 @@ JSValue callStringHost(JSContext *context, const char *methodName, const char *a
     const std::string text = fromJavaString(env, result);
     env->DeleteLocalRef(result);
     return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue callIntHostNoArgs(JSContext *context, const char *methodName) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "()I");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jint result = env->CallIntMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewInt32(context, result);
 }
 
 JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -693,13 +731,19 @@ JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValue
 
 JSValue frameInfo(JSContext *context, EngineState *state, int64_t handle) {
     const auto frame = state->frames.get(handle);
+    NativeFrameInfo nativeInfo;
     if (frame == nullptr) {
         return JS_ThrowInternalError(context, "NativeFrame is unavailable");
     }
+    if (!state->frames.getInfo(handle, &nativeInfo)) {
+        nativeInfo = {frame->cols, frame->rows, frame->cols, frame->rows};
+    }
     JSValue info = JS_NewObject(context);
     JS_SetPropertyStr(context, info, "id", JS_NewInt64(context, handle));
-    JS_SetPropertyStr(context, info, "width", JS_NewInt32(context, frame->cols));
-    JS_SetPropertyStr(context, info, "height", JS_NewInt32(context, frame->rows));
+    JS_SetPropertyStr(context, info, "width", JS_NewInt32(context, nativeInfo.logicalWidth));
+    JS_SetPropertyStr(context, info, "height", JS_NewInt32(context, nativeInfo.logicalHeight));
+    JS_SetPropertyStr(context, info, "pixelWidth", JS_NewInt32(context, nativeInfo.pixelWidth));
+    JS_SetPropertyStr(context, info, "pixelHeight", JS_NewInt32(context, nativeInfo.pixelHeight));
     return info;
 }
 
@@ -727,12 +771,24 @@ JSValue nativeRequestScreenCapture(JSContext *context, JSValueConst, int argc, J
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
 }
 
-JSValue nativeCaptureFrame(JSContext *context, JSValueConst, int, JSValueConst *) {
+JSValue nativeCaptureFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
+    int32_t targetShortEdge = 0;
+    if (argc > 0 && JS_ToInt32(context, &targetShortEdge, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const bool fresh = argc > 1 && JS_ToBool(context, argv[1]) > 0;
+    int32_t timeoutMillis = 100;
+    if (argc > 2 && JS_ToInt32(context, &timeoutMillis, argv[2]) < 0) {
+        return JS_EXCEPTION;
+    }
+    targetShortEdge = std::max(0, std::min(4096, targetShortEdge));
+    timeoutMillis = std::max(0, std::min(5000, timeoutMillis));
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "captureScreenNative", "()J");
-    const jlong handle = env->CallLongMethod(state->host, method);
+    jmethodID method = env->GetMethodID(hostClass, "captureScreenNative", "(IZI)J");
+    const jlong handle = env->CallLongMethod(state->host, method, targetShortEdge,
+                                             fresh ? JNI_TRUE : JNI_FALSE, timeoutMillis);
     env->DeleteLocalRef(hostClass);
     if (env->ExceptionCheck()) {
         return throwJavaException(context, env);
@@ -766,6 +822,160 @@ JSValue nativeReadFrame(JSContext *context, JSValueConst, int argc, JSValueConst
     return frameInfo(context, state, handle);
 }
 
+JSValue nativeCopyFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "images.copy(frame) requires a NativeFrame");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.copy(handle, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeClipFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t x = 0, y = 0, width = 0, height = 0;
+    if (argc < 5 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &x, argv[1]) < 0 || JS_ToInt32(context, &y, argv[2]) < 0 ||
+        JS_ToInt32(context, &width, argv[3]) < 0 || JS_ToInt32(context, &height, argv[4]) < 0) {
+        return JS_ThrowTypeError(context, "images.clip(frame, x, y, width, height) has invalid arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.clip(handle, x, y, width, height, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeResizeFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t width = 0, height = 0, interpolation = 1;
+    if (argc < 4 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &width, argv[1]) < 0 ||
+        JS_ToInt32(context, &height, argv[2]) < 0 ||
+        JS_ToInt32(context, &interpolation, argv[3]) < 0) {
+        return JS_ThrowTypeError(context, "images.resize(frame, size, interpolation) has invalid arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.resize(handle, width, height, interpolation, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeGrayscaleFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "images.grayscale(frame) requires a NativeFrame");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.grayscale(handle, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeCvtColorFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    if (argc < 2 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "images.cvtColor(frame, code) requires a NativeFrame and code");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.cvtColor(handle, jsString(context, argv[1]), &error);
+    return result == 0 ? JS_ThrowTypeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeRotateFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t angle = 0;
+    if (argc < 2 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &angle, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "images.rotate(frame, angle) requires a NativeFrame and angle (90/180/270)");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.rotate(handle, angle, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeThresholdFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    double thresh = 128.0, maxValue = 255.0;
+    int32_t type = 0; // THRESH_BINARY
+    if (argc < 2 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "images.threshold(frame, thresh, maxValue, type) requires a NativeFrame");
+    }
+    if (argc > 1) JS_ToFloat64(context, &thresh, argv[1]);
+    if (argc > 2) JS_ToFloat64(context, &maxValue, argv[2]);
+    if (argc > 3) JS_ToInt32(context, &type, argv[3]);
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.threshold(handle, thresh, maxValue, type, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeBlurFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t ksize = 5;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "images.blur(frame, ksize) requires a NativeFrame");
+    }
+    if (argc > 1) JS_ToInt32(context, &ksize, argv[1]);
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.blur(handle, ksize, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
+}
+
+JSValue nativeSaveFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t quality = 100;
+    if (argc < 4 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &quality, argv[3]) < 0) {
+        return JS_ThrowTypeError(context, "images.save(frame, path, format, quality) has invalid arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string path = jsString(context, argv[1]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "resolvePath", "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaPath = toJavaString(env, path);
+    auto resolvedPath = static_cast<jstring>(env->CallObjectMethod(state->host, method, javaPath));
+    env->DeleteLocalRef(javaPath);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string resolved = fromJavaString(env, resolvedPath);
+    env->DeleteLocalRef(resolvedPath);
+    std::string error;
+    if (!state->frames.save(handle, resolved, jsString(context, argv[2]), quality, &error)) {
+        return JS_ThrowInternalError(context, "%s", error.c_str());
+    }
+    return JS_TRUE;
+}
+
+JSValue nativeCompressFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t quality = 100;
+    if (argc < 3 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &quality, argv[2]) < 0) {
+        return JS_ThrowTypeError(context, "images.compress(frame, format, quality) has invalid arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::vector<uint8_t> bytes;
+    std::string error;
+    if (!state->frames.compress(handle, jsString(context, argv[1]), quality, &bytes, &error)) {
+        return JS_ThrowInternalError(context, "%s", error.c_str());
+    }
+    return JS_NewArrayBufferCopy(context, bytes.data(), bytes.size());
+}
+
 JSValue nativeReleaseFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t handle = 0;
     if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
@@ -773,6 +983,20 @@ JSValue nativeReleaseFrame(JSContext *context, JSValueConst, int argc, JSValueCo
     }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     return JS_NewBool(context, state->frames.release(handle));
+}
+
+JSValue nativeFrameStats(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    NativeFrameStore::Stats s = state->frames.stats();
+    JSValue obj = JS_NewObject(context);
+    JS_SetPropertyStr(context, obj, "activeHandles", JS_NewInt64(context, s.activeHandles));
+    JS_SetPropertyStr(context, obj, "activeFrames", JS_NewInt32(context, s.activeFrames));
+    JS_SetPropertyStr(context, obj, "poolCount", JS_NewInt32(context, s.poolCount));
+    JS_SetPropertyStr(context, obj, "poolBytes", JS_NewInt64(context, s.poolBytes));
+    JS_SetPropertyStr(context, obj, "createCount", JS_NewInt64(context, s.createCount));
+    JS_SetPropertyStr(context, obj, "reuseCount", JS_NewInt64(context, s.reuseCount));
+    JS_SetPropertyStr(context, obj, "rejectCount", JS_NewInt64(context, s.rejectCount));
+    return obj;
 }
 
 JSValue nativeFramePixel(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -814,6 +1038,59 @@ JSValue nativeFindColor(JSContext *context, JSValueConst, int argc, JSValueConst
     return pointValue(context, point, false);
 }
 
+JSValue nativeFindMultiColors(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t firstColor = 0, threshold = 4, x = 0, y = 0, width = 0, height = 0;
+    if (argc < 8 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &firstColor, argv[1]) < 0 ||
+        !JS_IsArray(context, argv[2]) || JS_ToInt32(context, &threshold, argv[3]) < 0 ||
+        JS_ToInt32(context, &x, argv[4]) < 0 || JS_ToInt32(context, &y, argv[5]) < 0 ||
+        JS_ToInt32(context, &width, argv[6]) < 0 || JS_ToInt32(context, &height, argv[7]) < 0) {
+        return JS_ThrowTypeError(context, "images.findMultiColors has invalid arguments");
+    }
+    JSValue lengthValue = JS_GetPropertyStr(context, argv[2], "length");
+    uint32_t length = 0;
+    if (JS_ToUint32(context, &length, lengthValue) < 0) {
+        JS_FreeValue(context, lengthValue);
+        return JS_EXCEPTION;
+    }
+    JS_FreeValue(context, lengthValue);
+    if (length > 4096) {
+        return JS_ThrowRangeError(context, "findMultiColors supports at most 4096 offset colors");
+    }
+    std::vector<NativeFrameColorOffset> offsets;
+    offsets.reserve(length);
+    for (uint32_t index = 0; index < length; ++index) {
+        JSValue item = JS_GetPropertyUint32(context, argv[2], index);
+        if (!JS_IsArray(context, item)) {
+            JS_FreeValue(context, item);
+            return JS_ThrowTypeError(context, "Each multi-color entry must be [dx, dy, color]");
+        }
+        JSValue dxValue = JS_GetPropertyUint32(context, item, 0);
+        JSValue dyValue = JS_GetPropertyUint32(context, item, 1);
+        JSValue colorValue = JS_GetPropertyUint32(context, item, 2);
+        NativeFrameColorOffset offset;
+        int32_t color = 0;
+        const bool valid = JS_ToInt32(context, &offset.x, dxValue) >= 0 &&
+                           JS_ToInt32(context, &offset.y, dyValue) >= 0 &&
+                           JS_ToInt32(context, &color, colorValue) >= 0;
+        JS_FreeValue(context, dxValue);
+        JS_FreeValue(context, dyValue);
+        JS_FreeValue(context, colorValue);
+        JS_FreeValue(context, item);
+        if (!valid) return JS_EXCEPTION;
+        offset.argb = static_cast<uint32_t>(color);
+        offsets.push_back(offset);
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    NativeFramePoint point;
+    if (!state->frames.findMultiColors(handle, static_cast<uint32_t>(firstColor), offsets,
+                                       threshold, x, y, width, height, &point)) {
+        return JS_NULL;
+    }
+    return pointValue(context, point, false);
+}
+
 JSValue nativeFindImage(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t source = 0;
     int64_t templ = 0;
@@ -840,10 +1117,36 @@ JSValue nativeFindImage(JSContext *context, JSValueConst, int argc, JSValueConst
     return pointValue(context, point, true);
 }
 
+JSValue nativeMatchTemplate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t source = 0, templ = 0;
+    double threshold = 0.9;
+    int32_t maxMatches = 5, x = 0, y = 0, width = 0, height = 0;
+    if (argc < 8 || JS_ToInt64(context, &source, argv[0]) < 0 ||
+        JS_ToInt64(context, &templ, argv[1]) < 0 ||
+        JS_ToFloat64(context, &threshold, argv[2]) < 0 ||
+        JS_ToInt32(context, &maxMatches, argv[3]) < 0 ||
+        JS_ToInt32(context, &x, argv[4]) < 0 || JS_ToInt32(context, &y, argv[5]) < 0 ||
+        JS_ToInt32(context, &width, argv[6]) < 0 || JS_ToInt32(context, &height, argv[7]) < 0) {
+        return JS_ThrowTypeError(context, "images.matchTemplate has invalid arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::vector<NativeFramePoint> matches;
+    std::string error;
+    if (!state->frames.matchTemplate(source, templ, threshold, maxMatches,
+                                     x, y, width, height, &matches, &error)) {
+        return JS_ThrowRangeError(context, "%s", error.c_str());
+    }
+    JSValue values = JS_NewArray(context);
+    for (uint32_t index = 0; index < matches.size(); ++index) {
+        JS_SetPropertyUint32(context, values, index, pointValue(context, matches[index], true));
+    }
+    return values;
+}
+
 JSValue nativeYoloIsAvailable(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
-    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "ncnn";
+    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "opencv";
     jclass hostClass = env->GetObjectClass(state->host);
     jmethodID method = env->GetMethodID(hostClass, "isYoloAvailable", "(Ljava/lang/String;)Z");
     jstring javaBackend = toJavaString(env, backend);
@@ -854,12 +1157,12 @@ JSValue nativeYoloIsAvailable(JSContext *context, JSValueConst, int argc, JSValu
 }
 
 JSValue nativeYoloVersion(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
-    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "ncnn";
+    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "opencv";
     return callStringHost(context, "getYoloVersion", backend.c_str());
 }
 
 JSValue nativeYoloUnavailableReason(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
-    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "ncnn";
+    const std::string backend = argc > 0 ? jsString(context, argv[0]) : "opencv";
     return callStringHost(context, "getYoloUnavailableReason", backend.c_str());
 }
 
@@ -985,6 +1288,590 @@ JSValue nativeYoloDetect(JSContext *context, JSValueConst, int argc, JSValueCons
     return array;
 }
 
+// ---- app module JNI ----
+
+JSValue nativeAppLaunch(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "appLaunch",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeAppOpenUrl(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "appOpenUrl",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeAppGetInstalledApps(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "appGetInstalledApps", nullptr);
+}
+
+JSValue nativeAppGetAppInfo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "appGetAppInfo",
+            argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+// ---- storages module JNI ----
+
+JSValue nativeStorageCreate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string name = argc > 0 ? jsString(context, argv[0]) : std::string("default");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "storageCreate", "(Ljava/lang/String;)J");
+    jstring javaName = toJavaString(env, name);
+    const jlong result = env->CallLongMethod(state->host, method, javaName);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, result);
+}
+
+JSValue nativeStoragePut(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 3 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "storagePut requires handle, key, value");
+    }
+    const std::string key = jsString(context, argv[1]);
+    const std::string value = jsString(context, argv[2]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "storagePut",
+            "(JLjava/lang/String;Ljava/lang/String;)Z");
+    jstring javaKey = toJavaString(env, key);
+    jstring javaValue = toJavaString(env, value);
+    const jboolean result = env->CallBooleanMethod(state->host, method,
+            static_cast<jlong>(handle), javaKey, javaValue);
+    env->DeleteLocalRef(javaValue);
+    env->DeleteLocalRef(javaKey);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeStorageGet(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 2 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "storageGet requires handle, key");
+    }
+    const std::string key = jsString(context, argv[1]);
+    const std::string defaultValue = argc > 2 ? jsString(context, argv[2]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "storageGet",
+            "(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaKey = toJavaString(env, key);
+    jstring javaDefault = toJavaString(env, defaultValue);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            static_cast<jlong>(handle), javaKey, javaDefault));
+    env->DeleteLocalRef(javaDefault);
+    env->DeleteLocalRef(javaKey);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeStorageRemove(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 2 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "storageRemove requires handle, key");
+    }
+    const std::string key = jsString(context, argv[1]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "storageRemove", "(JLjava/lang/String;)Z");
+    jstring javaKey = toJavaString(env, key);
+    const jboolean result = env->CallBooleanMethod(state->host, method,
+            static_cast<jlong>(handle), javaKey);
+    env->DeleteLocalRef(javaKey);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeStorageContains(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 2 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "storageContains requires handle, key");
+    }
+    const std::string key = jsString(context, argv[1]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "storageContains", "(JLjava/lang/String;)Z");
+    jstring javaKey = toJavaString(env, key);
+    const jboolean result = env->CallBooleanMethod(state->host, method,
+            static_cast<jlong>(handle), javaKey);
+    env->DeleteLocalRef(javaKey);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeStorageClear(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "storageClear requires handle");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "storageClear", "(J)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jlong>(handle));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+// ---- device module JNI ----
+
+JSValue nativeDeviceInfo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "deviceGetInfo",
+            argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeDeviceIsScreenOn(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "deviceIsScreenOn", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeDeviceVibrate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t millis = 200;
+    if (argc > 0) JS_ToInt32(context, &millis, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "deviceVibrate", "(I)V");
+    env->CallVoidMethod(state->host, method, static_cast<jint>(millis));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeDeviceGetBattery(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "deviceGetBattery", "()F");
+    const jfloat result = env->CallFloatMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewFloat64(context, result);
+}
+
+// ---- app module: additional JNI ----
+
+JSValue nativeAppGetPackageName(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "appGetPackageName", argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeAppGetAppName(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "appGetAppName", argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeAppOpenAppSetting(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "appOpenAppSetting", argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeAppViewFile(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "appViewFile", argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeAppEditFile(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "appEditFile", argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeAppUninstall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "appUninstall", argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeAppStartActivity(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 7) return JS_ThrowTypeError(context, "appStartActivity requires 7 args");
+    const std::string action = jsString(context, argv[0]);
+    const std::string pkg = jsString(context, argv[1]);
+    const std::string cls = jsString(context, argv[2]);
+    const std::string data = jsString(context, argv[3]);
+    const std::string type = jsString(context, argv[4]);
+    const std::string extras = jsString(context, argv[5]);
+    int32_t flags = 0;
+    JS_ToInt32(context, &flags, argv[6]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "appStartActivity",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Z");
+    jstring jAction = toJavaString(env, action);
+    jstring jPkg = toJavaString(env, pkg);
+    jstring jCls = toJavaString(env, cls);
+    jstring jData = toJavaString(env, data);
+    jstring jType = toJavaString(env, type);
+    jstring jExtras = toJavaString(env, extras);
+    const jboolean result = env->CallBooleanMethod(state->host, method,
+            jAction, jPkg, jCls, jData, jType, jExtras, static_cast<jint>(flags));
+    env->DeleteLocalRef(jExtras); env->DeleteLocalRef(jType); env->DeleteLocalRef(jData);
+    env->DeleteLocalRef(jCls); env->DeleteLocalRef(jPkg); env->DeleteLocalRef(jAction);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+// ---- device module: additional JNI ----
+
+JSValue nativeDeviceIsCharging(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "deviceIsCharging", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeDeviceGetBrightness(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "deviceGetBrightness");
+}
+
+JSValue nativeDeviceGetBrightnessMode(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "deviceGetBrightnessMode");
+}
+
+JSValue nativeDeviceCancelVibration(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "deviceCancelVibration", "()V");
+    env->CallVoidMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+// ---- shell module JNI ----
+
+JSValue nativeShellIsRootAvailable(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "shellIsRootAvailable", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeShellIsShizukuAvailable(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "shellIsShizukuAvailable", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeShellHasShizukuPermission(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "shellHasShizukuPermission", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeShellRequestShizukuPermission(JSContext *context, JSValueConst, int argc,
+                                            JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t timeout = 60000;
+    if (argc > 0) JS_ToInt32(context, &timeout, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "shellRequestShizukuPermission", "(I)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jint>(timeout));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeShellExecute(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 5) return JS_ThrowTypeError(context,
+            "shellExecute requires cmd, root, shizuku, timeout, maxOutput");
+    const std::string cmd = jsString(context, argv[0]);
+    int32_t root = 0; JS_ToInt32(context, &root, argv[1]);
+    int32_t shizuku = 0; JS_ToInt32(context, &shizuku, argv[2]);
+    int32_t timeout = 10000; JS_ToInt32(context, &timeout, argv[3]);
+    int32_t maxOutput = 1048576; JS_ToInt32(context, &maxOutput, argv[4]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "shellExecute",
+            "(Ljava/lang/String;ZZII)Ljava/lang/String;");
+    jstring jCmd = toJavaString(env, cmd);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            jCmd, root != 0, shizuku != 0,
+            static_cast<jint>(timeout), static_cast<jint>(maxOutput)));
+    env->DeleteLocalRef(jCmd);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+// ---- dialogs module JNI ----
+
+JSValue nativeDialogAlert(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string title = argc > 0 ? jsString(context, argv[0]) : std::string();
+    const std::string content = argc > 1 ? jsString(context, argv[1]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "dialogAlert",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring jTitle = toJavaString(env, title);
+    jstring jContent = toJavaString(env, content);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jTitle, jContent));
+    env->DeleteLocalRef(jContent); env->DeleteLocalRef(jTitle); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeDialogConfirm(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string title = argc > 0 ? jsString(context, argv[0]) : std::string();
+    const std::string content = argc > 1 ? jsString(context, argv[1]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "dialogConfirm",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring jTitle = toJavaString(env, title);
+    jstring jContent = toJavaString(env, content);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jTitle, jContent));
+    env->DeleteLocalRef(jContent); env->DeleteLocalRef(jTitle); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeDialogPrompt(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string title = argc > 0 ? jsString(context, argv[0]) : std::string();
+    const std::string prefill = argc > 1 ? jsString(context, argv[1]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "dialogPrompt",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring jTitle = toJavaString(env, title);
+    jstring jPrefill = toJavaString(env, prefill);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jTitle, jPrefill));
+    env->DeleteLocalRef(jPrefill); env->DeleteLocalRef(jTitle); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeDialogSelect(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string title = argc > 0 ? jsString(context, argv[0]) : std::string();
+    const std::string items = argc > 1 ? jsString(context, argv[1]) : std::string();
+    int32_t selectedIndex = -1;
+    if (argc > 2 && JS_ToInt32(context, &selectedIndex, argv[2]) < 0) {
+        return JS_EXCEPTION;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "dialogSingleChoice",
+            "(Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;");
+    jstring jTitle = toJavaString(env, title);
+    jstring jItems = toJavaString(env, items);
+    auto result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, jTitle, jItems, static_cast<jint>(selectedIndex)));
+    env->DeleteLocalRef(jItems); env->DeleteLocalRef(jTitle); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeDialogMultiChoice(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string title = argc > 0 ? jsString(context, argv[0]) : std::string();
+    const std::string items = argc > 1 ? jsString(context, argv[1]) : std::string();
+    const std::string indices = argc > 2 ? jsString(context, argv[2]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "dialogMultiChoice",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring jTitle = toJavaString(env, title);
+    jstring jItems = toJavaString(env, items);
+    jstring jIndices = toJavaString(env, indices);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jTitle, jItems, jIndices));
+    env->DeleteLocalRef(jIndices); env->DeleteLocalRef(jItems);
+    env->DeleteLocalRef(jTitle); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+// ---- dialogs.build JNI ----
+
+JSValue nativeDialogBuild(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string propsJson = argc > 0 ? jsString(context, argv[0]) : std::string("{}");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "dialogBuild",
+            "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring jProps = toJavaString(env, propsJson);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jProps));
+    env->DeleteLocalRef(jProps); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+// ---- threads module JNI ----
+
+JSValue nativeThreadsExec(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 3) return JS_ThrowTypeError(context, "threadsExec requires name, source, argsJson");
+    const std::string name = jsString(context, argv[0]);
+    const std::string source = jsString(context, argv[1]);
+    const std::string argsJson = jsString(context, argv[2]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "threadsExec",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring jName = toJavaString(env, name);
+    jstring jSource = toJavaString(env, source);
+    jstring jArgs = toJavaString(env, argsJson);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jName, jSource, jArgs));
+    env->DeleteLocalRef(jArgs); env->DeleteLocalRef(jSource);
+    env->DeleteLocalRef(jName); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeThreadsStop(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0)
+        return JS_ThrowTypeError(context, "threadsStop requires handle");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "threadsStop", "(J)I");
+    const jint result = env->CallIntMethod(state->host, method, static_cast<jlong>(handle));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt32(context, result);
+}
+
+// ---- engines module JNI ----
+
+JSValue nativeEnginesExecScript(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 3) return JS_ThrowTypeError(context, "enginesExecScript requires name, source, configJson");
+    const std::string name = jsString(context, argv[0]);
+    const std::string source = jsString(context, argv[1]);
+    const std::string config = jsString(context, argv[2]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "enginesExecScript",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring jName = toJavaString(env, name);
+    jstring jSource = toJavaString(env, source);
+    jstring jConfig = toJavaString(env, config);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jName, jSource, jConfig));
+    env->DeleteLocalRef(jConfig); env->DeleteLocalRef(jSource);
+    env->DeleteLocalRef(jName); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeEnginesExecScriptFile(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 2) return JS_ThrowTypeError(context, "enginesExecScriptFile requires path, configJson");
+    const std::string path = jsString(context, argv[0]);
+    const std::string config = jsString(context, argv[1]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "enginesExecScriptFile",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring jPath = toJavaString(env, path);
+    jstring jConfig = toJavaString(env, config);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, jPath, jConfig));
+    env->DeleteLocalRef(jConfig); env->DeleteLocalRef(jPath); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeEnginesMyEngineId(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "enginesMyEngineId", nullptr);
+}
+
+JSValue nativeEnginesAll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "enginesAll", nullptr);
+}
+
+JSValue nativeEnginesStopAll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "enginesStopAll", "()I");
+    const jint result = env->CallIntMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt32(context, result);
+}
+
+JSValue nativeEnginesStopAllAndToast(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "enginesStopAllAndToast", "()V");
+    env->CallVoidMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeEngineForceStop(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0)
+        return JS_ThrowTypeError(context, "engineForceStop requires handle");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "engineForceStop", "(J)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jlong>(handle));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeEngineIsDestroyed(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0)
+        return JS_ThrowTypeError(context, "engineIsDestroyed requires handle");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "engineIsDestroyed", "(J)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jlong>(handle));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
 void installNativeFunction(JSContext *context, JSValue global, const char *name,
                            JSCFunction *function, int length) {
     JS_SetPropertyStr(context, global, name, JS_NewCFunction(context, function, name, length));
@@ -1014,6 +1901,7 @@ const char kBootstrapScript[] = R"JS(
         error: function () { write(6, arguments); }
     });
     global.log = global.console.log;
+    global.performance = Object.freeze({ now: __aiNativePerformanceNow });
     global.toast = function (value) { return __aiNativeToast(format(value)); };
     global.toastLog = function (value) { global.toast(value); global.log(value); };
     global.sleep = function (millis) { return __aiNativeSleep(Number(millis)); };
@@ -1032,12 +1920,29 @@ const char kBootstrapScript[] = R"JS(
     global.currentActivity = function () { return __aiNativeForegroundInfo('activity'); };
 
     const frameState = new WeakMap();
-    function wrapFrame(info) {
+    function wrapFrame(info, logicalSize) {
         const frame = Object.create(NativeFrame.prototype);
-        frameState.set(frame, { id: info.id, recycled: false });
+        const logicalWidth = logicalSize && logicalSize.width !== undefined
+            ? Number(logicalSize.width) : Number(info.width);
+        const logicalHeight = logicalSize && logicalSize.height !== undefined
+            ? Number(logicalSize.height) : Number(info.height);
+        const pixelWidth = Number(info.pixelWidth === undefined ? info.width : info.pixelWidth);
+        const pixelHeight = Number(info.pixelHeight === undefined ? info.height : info.pixelHeight);
+        frameState.set(frame, {
+            id: info.id,
+            recycled: false,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            scaleX: pixelWidth / logicalWidth,
+            scaleY: pixelHeight / logicalHeight
+        });
         Object.defineProperties(frame, {
-            width: { value: info.width, enumerable: true },
-            height: { value: info.height, enumerable: true }
+            width: { value: logicalWidth, enumerable: true },
+            height: { value: logicalHeight, enumerable: true },
+            pixelWidth: { value: pixelWidth, enumerable: true },
+            pixelHeight: { value: pixelHeight, enumerable: true },
+            captureMode: { value: pixelWidth === logicalWidth && pixelHeight === logicalHeight
+                ? 'full' : 'fast', enumerable: true }
         });
         return frame;
     }
@@ -1057,12 +1962,19 @@ const char kBootstrapScript[] = R"JS(
         return __aiNativeReleaseFrame(state.id);
     };
     NativeFrame.prototype.pixel = function (x, y) {
-        return __aiNativeFramePixel(requireFrame(this).id, Number(x), Number(y));
+        return images.pixel(this, x, y);
+    };
+    NativeFrame.prototype.copy = function () {
+        return images.copy(this);
+    };
+    NativeFrame.prototype.saveTo = function (path, format, quality) {
+        return images.save(this, path, format, quality);
     };
     NativeFrame.prototype.toString = function () {
         const state = frameState.get(this);
         return state && !state.recycled
-            ? '[NativeFrame ' + this.width + 'x' + this.height + ']'
+            ? '[NativeFrame ' + this.width + 'x' + this.height +
+              (this.captureMode === 'fast' ? ', pixels=' + this.pixelWidth + 'x' + this.pixelHeight : '') + ']'
             : '[NativeFrame recycled]';
     };
     Object.defineProperty(NativeFrame.prototype, 'recycled', {
@@ -1085,11 +1997,98 @@ const char kBootstrapScript[] = R"JS(
     function regionOf(frame, options) {
         const region = options && options.region;
         if (!region) return [0, 0, frame.width, frame.height];
-        if (!Array.isArray(region) || region.length !== 4) {
+        if (!Array.isArray(region) || region.length > 4) {
             throw new TypeError('region must be [x, y, width, height]');
         }
-        return region.map(Number);
+        const x = region[0] === undefined ? 0 : Number(region[0]);
+        const y = region[1] === undefined ? 0 : Number(region[1]);
+        const width = region[2] === undefined ? frame.width - x : Number(region[2]);
+        const height = region[3] === undefined ? frame.height - y : Number(region[3]);
+        if (x < 0 || y < 0 || width <= 0 || height <= 0 ||
+            x + width > frame.width || y + height > frame.height) {
+            throw new RangeError('region is outside the NativeFrame');
+        }
+        return [x, y, width, height];
     }
+    function pixelRegionOf(frame, logicalRegion) {
+        const state = requireFrame(frame);
+        const left = Math.max(0, Math.floor(logicalRegion[0] * state.scaleX));
+        const top = Math.max(0, Math.floor(logicalRegion[1] * state.scaleY));
+        const right = Math.min(state.pixelWidth,
+            Math.ceil((logicalRegion[0] + logicalRegion[2]) * state.scaleX));
+        const bottom = Math.min(state.pixelHeight,
+            Math.ceil((logicalRegion[1] + logicalRegion[3]) * state.scaleY));
+        return [left, top, Math.max(1, right - left), Math.max(1, bottom - top)];
+    }
+    function logicalPointOf(frame, point) {
+        if (point === null || point === undefined) return point;
+        const state = requireFrame(frame);
+        const mapped = {
+            x: Math.round(Number(point.x) / state.scaleX),
+            y: Math.round(Number(point.y) / state.scaleY)
+        };
+        if (point.similarity !== undefined) mapped.similarity = Number(point.similarity);
+        return mapped;
+    }
+    function prepareTemplate(frame, template) {
+        const sourceState = requireFrame(frame);
+        const templateState = requireFrame(template);
+        const targetWidth = Math.max(1, Math.round(template.width * sourceState.scaleX));
+        const targetHeight = Math.max(1, Math.round(template.height * sourceState.scaleY));
+        if (templateState.pixelWidth === targetWidth && templateState.pixelHeight === targetHeight) {
+            return { frame: template, owned: false };
+        }
+        return { frame: images.resize(template, [targetWidth, targetHeight], 'AREA'), owned: true };
+    }
+    function colorThreshold(options, fallback) {
+        const value = options && options.threshold !== undefined
+            ? Number(options.threshold) : fallback;
+        if (!Number.isFinite(value)) throw new TypeError('threshold must be a finite number');
+        return Math.max(0, Math.min(255, value));
+    }
+    function interpolationOf(value) {
+        if (value === undefined || value === null) return 1;
+        if (typeof value === 'number') return Math.max(0, Math.min(4, Math.trunc(value)));
+        const name = String(value).toUpperCase().replace(/^INTER_/, '');
+        const modes = { NEAREST: 0, LINEAR: 1, CUBIC: 2, AREA: 3, LANCZOS4: 4 };
+        if (modes[name] === undefined) throw new TypeError('Unknown interpolation: ' + value);
+        return modes[name];
+    }
+    function sizeOf(value, height) {
+        if (Array.isArray(value) && value.length === 2) return [Number(value[0]), Number(value[1])];
+        if (value && typeof value === 'object') return [Number(value.width), Number(value.height)];
+        return [Number(value), Number(height)];
+    }
+    function formatOf(path, format) {
+        if (format !== undefined && format !== null && String(format)) return String(format);
+        const match = /\.([^.\\/]+)$/.exec(String(path));
+        return match ? match[1] : 'png';
+    }
+    function channel(value, shift) {
+        return (parseColor(value) >>> shift) & 0xff;
+    }
+    const colors = {
+        parseColor: parseColor,
+        argb: function (a, r, g, b) {
+            return (((Number(a) & 255) << 24) | ((Number(r) & 255) << 16) |
+                ((Number(g) & 255) << 8) | (Number(b) & 255)) >>> 0;
+        },
+        rgb: function (r, g, b) { return colors.argb(255, r, g, b); },
+        alpha: function (color) { return channel(color, 24); },
+        red: function (color) { return channel(color, 16); },
+        green: function (color) { return channel(color, 8); },
+        blue: function (color) { return channel(color, 0); },
+        toString: function (color) {
+            return '#' + parseColor(color).toString(16).padStart(8, '0').toUpperCase();
+        },
+        isSimilar: function (left, right, threshold) {
+            threshold = threshold === undefined ? 4 : Math.max(0, Math.min(255, Number(threshold)));
+            left = parseColor(left); right = parseColor(right);
+            return Math.abs(channel(left, 16) - channel(right, 16)) <= threshold &&
+                Math.abs(channel(left, 8) - channel(right, 8)) <= threshold &&
+                Math.abs(channel(left, 0) - channel(right, 0)) <= threshold;
+        }
+    };
     function orientationOf(value) {
         if (value === 'portrait') return 1;
         if (value === 'landscape') return 2;
@@ -1100,32 +2099,265 @@ const char kBootstrapScript[] = R"JS(
         requestScreenCapture: function (orientation) {
             return __aiNativeRequestScreenCapture(orientationOf(orientation));
         },
-        captureScreen: function () {
-            return wrapFrame(__aiNativeCaptureFrame());
+        captureScreen: function (options) {
+            let targetShortEdge = 0;
+            let fresh = false;
+            let timeout = 100;
+            if (typeof options === 'number') {
+                targetShortEdge = Number(options);
+            } else if (typeof options === 'string') {
+                targetShortEdge = String(options).toLowerCase() === 'fast' ? 720 : 0;
+            } else if (options && typeof options === 'object') {
+                const mode = String(options.mode || 'full').toLowerCase();
+                if (mode === 'fast' || mode === 'visual' || mode === 'vision') {
+                    targetShortEdge = options.size === undefined ? 720 : Number(options.size);
+                }
+                fresh = options.fresh === true;
+                timeout = options.timeout === undefined ? 100 : Number(options.timeout);
+            }
+            if (!Number.isFinite(targetShortEdge) || targetShortEdge < 0 || targetShortEdge > 4096) {
+                throw new RangeError('captureScreen fast size must be between 0 and 4096');
+            }
+            if (!Number.isFinite(timeout) || timeout < 0 || timeout > 5000) {
+                throw new RangeError('captureScreen timeout must be between 0 and 5000 ms');
+            }
+            return wrapFrame(__aiNativeCaptureFrame(
+                Math.round(targetShortEdge), fresh, Math.round(timeout)));
         },
         read: function (path) {
             return wrapFrame(__aiNativeReadFrame(String(path)));
         },
+        copy: function (frame) {
+            return wrapFrame(__aiNativeCopyFrame(requireFrame(frame).id),
+                { width: frame.width, height: frame.height });
+        },
+        clip: function (frame, x, y, width, height) {
+            const logical = regionOf(frame, { region: [Number(x), Number(y), Number(width), Number(height)] });
+            const region = pixelRegionOf(frame, logical);
+            return wrapFrame(__aiNativeClipFrame(requireFrame(frame).id,
+                region[0], region[1], region[2], region[3]),
+                { width: logical[2], height: logical[3] });
+        },
+        resize: function (frame, size, heightOrInterpolation, interpolation) {
+            let height = heightOrInterpolation;
+            let mode = interpolation;
+            if (Array.isArray(size) || (size && typeof size === 'object')) {
+                mode = heightOrInterpolation;
+                height = undefined;
+            } else if (heightOrInterpolation === undefined || typeof heightOrInterpolation === 'string') {
+                mode = heightOrInterpolation;
+                height = size;
+            }
+            const dimensions = sizeOf(size, height);
+            return wrapFrame(__aiNativeResizeFrame(requireFrame(frame).id,
+                dimensions[0], dimensions[1], interpolationOf(mode)));
+        },
+        scale: function (frame, fx, fy, interpolation) {
+            fy = fy === undefined ? fx : fy;
+            return images.resize(frame,
+                [Math.max(1, Math.round(frame.pixelWidth * Number(fx))),
+                 Math.max(1, Math.round(frame.pixelHeight * Number(fy)))], interpolation);
+        },
+        grayscale: function (frame) {
+            return wrapFrame(__aiNativeGrayscaleFrame(requireFrame(frame).id),
+                { width: frame.width, height: frame.height });
+        },
+        gray: function (frame) {
+            return images.grayscale(frame);
+        },
+        cvtColor: function (frame, code) {
+            return wrapFrame(__aiNativeCvtColorFrame(requireFrame(frame).id, String(code)),
+                { width: frame.width, height: frame.height });
+        },
+        rotate: function (frame, angle) {
+            angle = Number(angle || 0);
+            var rotated = wrapFrame(__aiNativeRotateFrame(requireFrame(frame).id, Math.round(angle)));
+            // 90/270 swap width/height
+            if (angle === 90 || angle === 270) {
+                rotated.width = frame.height;
+                rotated.height = frame.width;
+            } else {
+                rotated.width = frame.width;
+                rotated.height = frame.height;
+            }
+            return rotated;
+        },
+        threshold: function (frame, thresh, maxValue, type) {
+            thresh = thresh === undefined ? 128 : Number(thresh);
+            maxValue = maxValue === undefined ? 255 : Number(maxValue);
+            type = type === undefined ? 0 : Number(type);
+            return wrapFrame(__aiNativeThresholdFrame(requireFrame(frame).id,
+                thresh, maxValue, type),
+                { width: frame.width, height: frame.height });
+        },
+        blur: function (frame, ksize) {
+            ksize = ksize === undefined ? 5 : Number(ksize);
+            return wrapFrame(__aiNativeBlurFrame(requireFrame(frame).id, Math.round(ksize)),
+                { width: frame.width, height: frame.height });
+        },
+        save: function (frame, path, format, quality) {
+            quality = quality === undefined ? 100 : Number(quality);
+            return __aiNativeSaveFrame(requireFrame(frame).id, String(path),
+                formatOf(path, format), quality);
+        },
+        compress: function (frame, format, quality) {
+            format = format === undefined ? 'jpg' : String(format);
+            quality = quality === undefined ? 80 : Number(quality);
+            return new Uint8Array(__aiNativeCompressFrame(requireFrame(frame).id, format, quality));
+        },
         pixel: function (frame, x, y) {
-            return __aiNativeFramePixel(requireFrame(frame).id, Number(x), Number(y));
+            const state = requireFrame(frame);
+            x = Number(x);
+            y = Number(y);
+            if (!Number.isFinite(x) || !Number.isFinite(y) ||
+                    x < 0 || y < 0 || x >= frame.width || y >= frame.height) {
+                throw new RangeError('pixel coordinate is outside the logical image bounds');
+            }
+            const pixelX = Math.max(0, Math.min(state.pixelWidth - 1,
+                Math.floor(x * state.scaleX)));
+            const pixelY = Math.max(0, Math.min(state.pixelHeight - 1,
+                Math.floor(y * state.scaleY)));
+            return __aiNativeFramePixel(state.id, pixelX, pixelY);
+        },
+        detectsColor: function (frame, color, x, y, threshold) {
+            return colors.isSimilar(images.pixel(frame, x, y), color,
+                threshold === undefined ? 4 : threshold);
         },
         findColor: function (frame, color, options) {
-            const region = regionOf(frame, options);
-            const threshold = options && options.threshold !== undefined ? Number(options.threshold) : 4;
-            return __aiNativeFindColor(requireFrame(frame).id, parseColor(color), threshold,
-                region[0], region[1], region[2], region[3]);
+            const region = pixelRegionOf(frame, regionOf(frame, options));
+            const threshold = options && options.similarity !== undefined
+                ? Math.trunc(255 * (1 - Number(options.similarity)))
+                : colorThreshold(options, 4);
+            return logicalPointOf(frame,
+                __aiNativeFindColor(requireFrame(frame).id, parseColor(color), threshold,
+                    region[0], region[1], region[2], region[3]));
+        },
+        findColorInRegion: function (frame, color, x, y, width, height, threshold) {
+            return images.findColor(frame, color, {
+                region: [Number(x), Number(y), Number(width), Number(height)],
+                threshold: threshold === undefined ? 4 : threshold
+            });
+        },
+        findMultiColors: function (frame, firstColor, paths, options) {
+            if (!Array.isArray(paths)) throw new TypeError('paths must be [[dx, dy, color], ...]');
+            const state = requireFrame(frame);
+            const normalized = paths.map(function (entry) {
+                if (!Array.isArray(entry) || entry.length < 3) {
+                    throw new TypeError('Each path entry must be [dx, dy, color]');
+                }
+                return [Math.round(Number(entry[0]) * state.scaleX),
+                    Math.round(Number(entry[1]) * state.scaleY), parseColor(entry[2])];
+            });
+            const region = pixelRegionOf(frame, regionOf(frame, options));
+            return logicalPointOf(frame,
+                __aiNativeFindMultiColors(state.id, parseColor(firstColor),
+                    normalized, colorThreshold(options, 4),
+                    region[0], region[1], region[2], region[3]));
         },
         findImage: function (frame, template, options) {
-            const region = regionOf(frame, options);
+            const region = pixelRegionOf(frame, regionOf(frame, options));
             const threshold = options && options.threshold !== undefined ? Number(options.threshold) : 0.9;
-            return __aiNativeFindImage(requireFrame(frame).id, requireFrame(template).id, threshold,
-                region[0], region[1], region[2], region[3]);
+            const prepared = prepareTemplate(frame, template);
+            try {
+                return logicalPointOf(frame,
+                    __aiNativeFindImage(requireFrame(frame).id, requireFrame(prepared.frame).id, threshold,
+                        region[0], region[1], region[2], region[3]));
+            } finally {
+                if (prepared.owned) prepared.frame.recycle();
+            }
+        },
+        matchTemplate: function (frame, template, options) {
+            options = options || {};
+            const region = pixelRegionOf(frame, regionOf(frame, options));
+            const threshold = options.threshold === undefined ? 0.9 : Number(options.threshold);
+            const max = options.max === undefined ? 5 : Number(options.max);
+            const prepared = prepareTemplate(frame, template);
+            let raw;
+            try {
+                raw = __aiNativeMatchTemplate(requireFrame(frame).id, requireFrame(prepared.frame).id,
+                    threshold, max, region[0], region[1], region[2], region[3]);
+            } finally {
+                if (prepared.owned) prepared.frame.recycle();
+            }
+            const matches = raw.map(function (item) {
+                const point = logicalPointOf(frame, item);
+                return { point: { x: point.x, y: point.y }, similarity: item.similarity };
+            });
+            const result = {
+                matches: matches,
+                first: function () { return matches.length ? matches[0] : null; },
+                last: function () { return matches.length ? matches[matches.length - 1] : null; },
+                best: function () { return matches.length ? matches.reduce(function (a, b) {
+                    return a.similarity >= b.similarity ? a : b;
+                }) : null; },
+                worst: function () { return matches.length ? matches.reduce(function (a, b) {
+                    return a.similarity <= b.similarity ? a : b;
+                }) : null; },
+                leftmost: function () { return matches.length ? matches.reduce(function (a, b) {
+                    return a.point.x <= b.point.x ? a : b;
+                }) : null; },
+                topmost: function () { return matches.length ? matches.reduce(function (a, b) {
+                    return a.point.y <= b.point.y ? a : b;
+                }) : null; },
+                rightmost: function () { return matches.length ? matches.reduce(function (a, b) {
+                    return a.point.x >= b.point.x ? a : b;
+                }) : null; },
+                bottommost: function () { return matches.length ? matches.reduce(function (a, b) {
+                    return a.point.y >= b.point.y ? a : b;
+                }) : null; },
+                sortBy: function (comparator) {
+                    const clone = matches.slice();
+                    const builtins = {
+                        left: function (a, b) { return a.point.x - b.point.x; },
+                        top: function (a, b) { return a.point.y - b.point.y; },
+                        right: function (a, b) { return b.point.x - a.point.x; },
+                        bottom: function (a, b) { return b.point.y - a.point.y; }
+                    };
+                    if (typeof comparator === 'string') {
+                        const directions = comparator.split('-');
+                        clone.sort(function (a, b) {
+                            for (let i = 0; i < directions.length; i++) {
+                                const fn = builtins[directions[i]];
+                                if (!fn) throw new Error('Unknown match sort direction: ' + directions[i]);
+                                const compared = fn(a, b);
+                                if (compared) return compared;
+                            }
+                            return 0;
+                        });
+                    } else {
+                        clone.sort(comparator);
+                    }
+                    return { matches: clone };
+                }
+            };
+            Object.defineProperty(result, 'points', {
+                enumerable: true,
+                get: function () { return matches.map(function (match) { return match.point; }); }
+            });
+            return result;
         }
     };
+    images.saveImage = images.save;
+    images.findColorEquals = function (frame, color, x, y, width, height) {
+        return images.findColorInRegion(frame, color, x, y, width, height, 0);
+    };
+    images.findImageInRegion = function (frame, template, x, y, width, height, threshold) {
+        return images.findImage(frame, template, {
+            region: [x, y, width, height],
+            threshold: threshold === undefined ? 0.9 : threshold
+        });
+    };
     global.NativeFrame = NativeFrame;
+    global.colors = Object.freeze(colors);
     global.images = Object.freeze(images);
     global.requestScreenCapture = images.requestScreenCapture;
     global.captureScreen = images.captureScreen;
+    global.findColor = images.findColor;
+    global.findColorInRegion = images.findColorInRegion;
+    global.findColorEquals = images.findColorEquals;
+    global.findMultiColors = images.findMultiColors;
+    global.findImage = images.findImage;
+    global.findImageInRegion = images.findImageInRegion;
 
     const detectorState = new WeakMap();
     function requireDetector(detector) {
@@ -1150,14 +2382,15 @@ const char kBootstrapScript[] = R"JS(
             }
             region = options.region.map(Number);
         }
+        region = pixelRegionOf(frame, region);
         const packed = __aiNativeYoloDetect(detector.id, nativeFrame.id, confidence, nms,
             region[0], region[1], region[2], region[3]);
         const detections = [];
         for (let i = 2; i + 5 < packed.length; i += 6) {
-            const left = Number(packed[i]);
-            const top = Number(packed[i + 1]);
-            const right = Number(packed[i + 2]);
-            const bottom = Number(packed[i + 3]);
+            const left = Number(packed[i]) / nativeFrame.scaleX;
+            const top = Number(packed[i + 1]) / nativeFrame.scaleY;
+            const right = Number(packed[i + 2]) / nativeFrame.scaleX;
+            const bottom = Number(packed[i + 3]) / nativeFrame.scaleY;
             const classId = Math.round(Number(packed[i + 5]));
             detections.push({
                 classId: classId,
@@ -1194,36 +2427,29 @@ const char kBootstrapScript[] = R"JS(
 
     const yolo = {
         isAvailable: function (backend) {
-            return __aiNativeYoloIsAvailable(String(backend || 'ncnn').toLowerCase());
+            return __aiNativeYoloIsAvailable(String(backend || 'opencv').toLowerCase());
         },
         getUnavailableReason: function (backend) {
-            backend = String(backend || 'ncnn').toLowerCase();
+            backend = String(backend || 'opencv').toLowerCase();
             return this.isAvailable(backend) ? '' : __aiNativeYoloUnavailableReason(backend);
         },
         getVersion: function (backend) {
-            backend = String(backend || 'ncnn').toLowerCase();
+            backend = String(backend || 'opencv').toLowerCase();
             return this.isAvailable(backend) ? __aiNativeYoloVersion(backend) : 'unavailable';
         },
         load: function (options) {
             options = options || {};
-            const backend = String(options.backend || 'ncnn').toLowerCase();
-            const supported = { ncnn: 1, cpu: 1, onnx: 1, ort: 1, onnxruntime: 1,
-                opencv: 1, dnn: 1, opencv5: 1, 'opencv-dnn': 1 };
+            const backend = String(options.backend || 'opencv').toLowerCase();
+            const supported = { opencv: 1, dnn: 1, opencv5: 1, 'opencv-dnn': 1, cpu: 1 };
             if (!supported[backend]) {
-                throw new Error('QuickJS YOLO 不支持的 backend: ' + backend);
+                throw new Error('QuickJS YOLO 不支持的 backend: ' + backend + '（仅支持 opencv）');
             }
-            if (!__aiNativeYoloIsAvailable(backend)) {
-                throw new Error(__aiNativeYoloUnavailableReason(backend));
+            if (!__aiNativeYoloIsAvailable('opencv')) {
+                throw new Error(__aiNativeYoloUnavailableReason('opencv'));
             }
-            const ncnnLike = backend === 'ncnn' || backend === 'cpu';
-            const param = options.param ? String(options.param) : '';
-            const bin = options.bin ? String(options.bin) : '';
             const model = options.model ? String(options.model) : '';
-            if (ncnnLike && (!param || !bin)) {
-                throw new TypeError('yolo.load ncnn 需要 param 和 bin 路径');
-            }
-            if (!ncnnLike && !model) {
-                throw new TypeError('yolo.load ' + backend + ' 需要 model 路径');
+            if (!model) {
+                throw new TypeError('yolo.load opencv 需要 model 路径');
             }
             let labels = options.labels || [];
             if (typeof labels === 'string') {
@@ -1234,7 +2460,7 @@ const char kBootstrapScript[] = R"JS(
             const inputSize = options.inputSize === undefined ? 320 : Number(options.inputSize);
             const inputWidth = options.inputWidth === undefined ? inputSize : Number(options.inputWidth);
             const inputHeight = options.inputHeight === undefined ? inputSize : Number(options.inputHeight);
-            const id = __aiNativeYoloLoad(backend, model, param, bin,
+            const id = __aiNativeYoloLoad('opencv', model, '', '',
                 inputWidth, inputHeight,
                 options.threads === undefined ? 4 : Number(options.threads));
             detectorState.set(detector, { id: id, labels: labels.slice(), closed: false });
@@ -1360,6 +2586,358 @@ const char kBootstrapScript[] = R"JS(
     };
     global.drawing = Object.freeze(drawing);
 
+    // ---- app module ----
+    const app = {
+        launch: function (pkg) { return __aiNativeAppLaunch(String(pkg)); },
+        openUrl: function (url) { return __aiNativeAppOpenUrl(String(url)); },
+        getInstalledApps: function () { return JSON.parse(__aiNativeAppGetInstalledApps()); },
+        getAppInfo: function (pkg) { return JSON.parse(__aiNativeAppGetAppInfo(String(pkg))); },
+        launchPackage: function (pkg) { return __aiNativeAppLaunch(String(pkg)); }
+    };
+    global.app = Object.freeze(app);
+
+    // ---- storages module ----
+    const storageState = new WeakMap();
+    function LocalStorage(name) {
+        var h = __aiNativeStorageCreate(String(name || 'default'));
+        var s = Object.create(LocalStorage.prototype);
+        storageState.set(s, { handle: h, closed: false });
+        return s;
+    }
+    LocalStorage.prototype = {
+        put: function (key, value) {
+            if (value === undefined) throw new TypeError('value cannot be undefined');
+            var st = storageState.get(this);
+            if (!st || st.closed) throw new Error('Storage is closed');
+            var serialized = JSON.stringify(value);
+            if (serialized === undefined) throw new TypeError('value is not JSON serializable');
+            return __aiNativeStoragePut(st.handle, String(key), serialized);
+        },
+        get: function (key, defaultValue) {
+            var st = storageState.get(this);
+            if (!st || st.closed) throw new Error('Storage is closed');
+            var raw = __aiNativeStorageGet(st.handle, String(key),
+                    defaultValue === undefined ? '' : JSON.stringify(defaultValue));
+            if (raw === '') return defaultValue;
+            try { return JSON.parse(raw); } catch (_) { return raw; }
+        },
+        remove: function (key) {
+            var st = storageState.get(this);
+            if (!st || st.closed) throw new Error('Storage is closed');
+            return __aiNativeStorageRemove(st.handle, String(key));
+        },
+        contains: function (key) {
+            var st = storageState.get(this);
+            if (!st || st.closed) throw new Error('Storage is closed');
+            return __aiNativeStorageContains(st.handle, String(key));
+        },
+        clear: function () {
+            var st = storageState.get(this);
+            if (!st || st.closed) throw new Error('Storage is closed');
+            return __aiNativeStorageClear(st.handle);
+        }
+    };
+    global.storages = Object.freeze({
+        create: function (name) { return new LocalStorage(name); },
+        remove: function (name) { var s = new LocalStorage(name); s.clear(); }
+    });
+    global.LocalStorage = LocalStorage;
+
+    // ---- device module ----
+    var _devCache = {};
+    function devInfo(key) { return _devCache[key] || (_devCache[key] = __aiNativeDeviceInfo(key)); }
+    global.device = Object.freeze({
+        get width() { return Number(devInfo('width')); },
+        get height() { return Number(devInfo('height')); },
+        get model() { return devInfo('model'); },
+        get brand() { return devInfo('brand'); },
+        get board() { return devInfo('board'); },
+        get hardware() { return devInfo('hardware'); },
+        get sdkInt() { return Number(devInfo('sdkInt')); },
+        get release() { return devInfo('release'); },
+        get buildId() { return devInfo('buildId'); },
+        get display() { return devInfo('display'); },
+        get product() { return devInfo('product'); },
+        get manufacturer() { return devInfo('manufacturer'); },
+        isScreenOn: function () { return __aiNativeDeviceIsScreenOn(); },
+        vibrate: function (ms) { __aiNativeDeviceVibrate(ms === undefined ? 200 : Number(ms)); },
+        getBattery: function () { return __aiNativeDeviceGetBattery(); }
+    });
+
+    // ---- device module (additional) ----
+    var _devInfo = global.device;
+    global.device = Object.freeze({
+        get width() { return _devInfo.width; },
+        get height() { return _devInfo.height; },
+        get model() { return _devInfo.model; },
+        get brand() { return _devInfo.brand; },
+        get board() { return _devInfo.board; },
+        get hardware() { return _devInfo.hardware; },
+        get sdkInt() { return _devInfo.sdkInt; },
+        get release() { return _devInfo.release; },
+        get buildId() { return _devInfo.buildId; },
+        get display() { return _devInfo.display; },
+        get product() { return _devInfo.product; },
+        get manufacturer() { return _devInfo.manufacturer; },
+        isScreenOn: function () { return _devInfo.isScreenOn(); },
+        vibrate: function (ms) { _devInfo.vibrate(ms); },
+        getBattery: function () { return _devInfo.getBattery(); },
+        isCharging: function () { return __aiNativeDeviceIsCharging(); },
+        getBrightness: function () { return Number(__aiNativeDeviceGetBrightness()); },
+        getBrightnessMode: function () { return Number(__aiNativeDeviceGetBrightnessMode()); },
+        cancelVibration: function () { __aiNativeDeviceCancelVibration(); }
+    });
+
+    // ---- app module (additional) ----
+    var _app = global.app;
+    global.app = Object.freeze({
+        launch: _app.launch,
+        openUrl: _app.openUrl,
+        getInstalledApps: _app.getInstalledApps,
+        getAppInfo: _app.getAppInfo,
+        launchPackage: _app.launchPackage,
+        getPackageName: function (name) { return __aiNativeAppGetPackageName(String(name)); },
+        getAppName: function (pkg) { return __aiNativeAppGetAppName(String(pkg)); },
+        openAppSetting: function (pkg) { return __aiNativeAppOpenAppSetting(String(pkg)); },
+        viewFile: function (path) { return __aiNativeAppViewFile(String(path)); },
+        editFile: function (path) { return __aiNativeAppEditFile(String(path)); },
+        uninstall: function (pkg) { return __aiNativeAppUninstall(String(pkg)); },
+        startActivity: function (opts) {
+            opts = opts || {};
+            return __aiNativeAppStartActivity(
+                opts.action || '', opts.packageName || opts.package || '',
+                opts.className || opts.class || '', opts.data || '',
+                opts.type || '', JSON.stringify(opts.extras || {}),
+                opts.flags || 0);
+        }
+    });
+
+    // ---- shell module ----
+    global.shell = function (cmd, opts) {
+        var root = false, useShizuku = false, timeout = 10000, maxOutput = 1048576;
+        if (opts === true) { root = true; }
+        else if (opts && typeof opts === 'object') {
+            root = !!opts.root;
+            useShizuku = !!opts.shizuku;
+            timeout = opts.timeout || 10000;
+            maxOutput = opts.maxOutput || 1048576;
+        }
+        var raw = __aiNativeShellExecute(
+            String(cmd), root ? 1 : 0, useShizuku ? 1 : 0, timeout, maxOutput);
+        var parsed = JSON.parse(raw);
+        return { code: parsed.code, result: parsed.result || '', error: parsed.error || '' };
+    };
+    shell.isRootAvailable = function () { return __aiNativeShellIsRootAvailable(); };
+    global.shizuku = Object.freeze({
+        isAvailable: function () { return __aiNativeShellIsShizukuAvailable(); },
+        hasPermission: function () { return __aiNativeShellHasShizukuPermission(); },
+        requestPermission: function (timeout) {
+            return __aiNativeShellRequestShizukuPermission(timeout || 60000);
+        },
+        shell: function (cmd, opts) {
+            opts = opts || {};
+            return global.shell(cmd, {
+                shizuku: true,
+                timeout: opts.timeout || 10000,
+                maxOutput: opts.maxOutput || 1048576
+            });
+        }
+    });
+
+    // ---- dialogs module ----
+    global.dialogs = Object.freeze({
+        alert: function (title, content) { return __aiNativeDialogAlert(String(title || ''), String(content || '')); },
+        confirm: function (title, content) {
+            var r = __aiNativeDialogConfirm(String(title || ''), String(content || ''));
+            return r === 'true';
+        },
+        prompt: function (title, prefill) {
+            return __aiNativeDialogPrompt(String(title || ''), String(prefill || ''));
+        },
+        rawInput: function (title, prefill) {
+            return __aiNativeDialogPrompt(String(title || ''), String(prefill || ''));
+        },
+        select: function (title, items) {
+            return Number(__aiNativeDialogSelect(
+                    String(title || ''), JSON.stringify(items || []), -1));
+        },
+        singleChoice: function (title, items, index) {
+            return Number(__aiNativeDialogSelect(
+                    String(title || ''), JSON.stringify(items || []),
+                    index === undefined ? -1 : Number(index)));
+        },
+        multiChoice: function (title, items, indices) {
+            return JSON.parse(__aiNativeDialogMultiChoice(
+                String(title || ''), JSON.stringify(items || []),
+                JSON.stringify(indices || [])));
+        },
+        build: function (props) {
+            if (props && typeof props === 'object' && typeof props.then === 'function')
+                throw new TypeError('dialogs.build() is synchronous in QuickJS; pass {callback} for async');
+            var result = JSON.parse(__aiNativeDialogBuild(JSON.stringify(props || {})));
+            if (result.action === 'error') throw new Error(result.error || 'dialog error');
+            return result;
+        }
+    });
+
+    // ---- engines module ----
+    function makeEngineHandle(info) {
+        info = info || {};
+        var handle = Number(info.handle === undefined ? info : info.handle);
+        return Object.freeze({
+            id: Number(info.id === undefined ? -1 : info.id),
+            handle: handle,
+            source: String(info.source || ''),
+            engineName: String(info.engineName || 'QuickJsJavaScriptEngine'),
+            forceStop: function () { return __aiNativeEngineForceStop(handle); },
+            isDestroyed: function () { return __aiNativeEngineIsDestroyed(handle); }
+        });
+    }
+
+    function quickJsChildSource(source, config) {
+        source = String(source || '');
+        if (config && String(config.engine || '').toLowerCase() === 'rhino') return source;
+        if (/^\s*(?:\uFEFF)?\s*\/\/\s*@engine\s+quickjs\s*(?:\r?\n|$)/i.test(source)) return source;
+        return '// @engine quickjs\n' + source;
+    }
+
+    var _engines = {
+        execScript: function (name, source, config) {
+            config = config || {};
+            var handle = Number(__aiNativeEnginesExecScript(
+                    String(name || ''), quickJsChildSource(source, config), JSON.stringify(config)));
+            if (handle < 0) throw new Error('Unable to start child script');
+            return makeEngineHandle({ handle: handle, source: String(name || '') + '.js' });
+        },
+        execScriptFile: function (path, config) {
+            var handle = Number(__aiNativeEnginesExecScriptFile(
+                    String(path), JSON.stringify(config || {})));
+            if (handle < 0) throw new Error('Unable to start script file: ' + path);
+            return makeEngineHandle({ handle: handle, source: String(path) });
+        },
+        myEngine: function () { return makeEngineHandle(JSON.parse(__aiNativeEnginesMyEngineId())); },
+        all: function () { return JSON.parse(__aiNativeEnginesAll()).map(makeEngineHandle); },
+        stopAll: function () { return __aiNativeEnginesStopAll(); },
+        stopAllAndToast: function () { __aiNativeEnginesStopAllAndToast(); }
+    };
+    global.engines = Object.freeze(_engines);
+
+    // ---- local events module ----
+    var eventListeners = new Map();
+    function listenersFor(name, create) {
+        name = String(name);
+        var listeners = eventListeners.get(name);
+        if (!listeners && create) {
+            listeners = [];
+            eventListeners.set(name, listeners);
+        }
+        return listeners;
+    }
+    var events = {
+        on: function (name, listener) {
+            if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+            listenersFor(name, true).push(listener);
+            return events;
+        },
+        once: function (name, listener) {
+            if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+            function onceListener() {
+                events.removeListener(name, onceListener);
+                return listener.apply(undefined, arguments);
+            }
+            onceListener.listener = listener;
+            return events.on(name, onceListener);
+        },
+        emit: function (name) {
+            var listeners = listenersFor(name, false);
+            if (!listeners || listeners.length === 0) return false;
+            var args = Array.prototype.slice.call(arguments, 1);
+            listeners.slice().forEach(function (listener) { listener.apply(undefined, args); });
+            return true;
+        },
+        removeListener: function (name, listener) {
+            var listeners = listenersFor(name, false);
+            if (!listeners) return events;
+            for (var i = listeners.length - 1; i >= 0; i--) {
+                if (listeners[i] === listener || listeners[i].listener === listener) listeners.splice(i, 1);
+            }
+            if (listeners.length === 0) eventListeners.delete(String(name));
+            return events;
+        },
+        removeAllListeners: function (name) {
+            if (name === undefined) eventListeners.clear();
+            else eventListeners.delete(String(name));
+            return events;
+        },
+        listenerCount: function (name) {
+            var listeners = listenersFor(name, false);
+            return listeners ? listeners.length : 0;
+        }
+    };
+    global.events = Object.freeze(events);
+
+    // ---- threads module (one QuickJS engine per worker) ----
+    var workerHandles = new Set();
+    function makeThread(engine) {
+        var thread = {
+            getEngine: function () { return engine; },
+            interrupt: function () { workerHandles.delete(thread); return engine.forceStop(); },
+            isAlive: function () { return !engine.isDestroyed(); },
+            join: function (timeout) {
+                var deadline = Date.now() + (timeout === undefined ? 0x7fffffff : Math.max(0, Number(timeout)));
+                while (!engine.isDestroyed() && Date.now() < deadline) sleep(10);
+                if (engine.isDestroyed()) workerHandles.delete(thread);
+                return engine.isDestroyed();
+            }
+        };
+        return Object.freeze(thread);
+    }
+    global.threads = Object.freeze({
+        /**
+         * Start a worker thread. task can be a function (serialized to source)
+         * or a script string. args is an optional JSON-serializable object
+         * that becomes __args in the child script.
+         *
+         * Example:
+         *   threads.start(function(){ console.log(__args.name); }, { name: 'test' });
+         */
+        start: function (task, args) {
+            var source;
+            if (typeof task === 'function') source = '(' + String(task) + ')();';
+            else if (typeof task === 'string') source = task;
+            else throw new TypeError('threads.start requires a function or script string');
+            var argsJson = args !== undefined ? JSON.stringify(args) : '';
+            var thread = makeThread(global.engines.execScript('QuickJS-Thread', source));
+            workerHandles.add(thread);
+            return thread;
+        },
+        /**
+         * Explicitly named worker with JSON args. Returns a thread object.
+         *
+         * Example:
+         *   var t = threads.exec('worker1', 'console.log(__args)', { count: 5 });
+         *   t.join(5000);
+         */
+        exec: function (name, source, args) {
+            if (typeof source !== 'string') throw new TypeError('threads.exec requires a script string');
+            var argsJson = args !== undefined ? JSON.stringify(args) : '';
+            var handle = Number(__aiNativeThreadsExec(
+                    String(name || 'worker'), source, argsJson));
+            if (handle < 0) throw new Error('Unable to start worker thread');
+            var engine = { forceStop: function () { return __aiNativeThreadsStop(handle); },
+                           isDestroyed: function () { return __aiNativeEngineIsDestroyed(handle); },
+                           handle: handle };
+            var thread = makeThread(engine);
+            workerHandles.add(thread);
+            return thread;
+        },
+        currentThread: function () { return makeThread(global.engines.myEngine()); },
+        shutDownAll: function () {
+            workerHandles.forEach(function (thread) { thread.interrupt(); });
+            workerHandles.clear();
+        }
+    });
+
     global.__engine__ = Object.freeze({ name: 'QuickJS', version: '2026-06-04', native: true });
 })(globalThis);
 )JS";
@@ -1433,6 +3011,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
 
     JSValue global = JS_GetGlobalObject(state->context);
     installNativeFunction(state->context, global, "__aiNativeLog", nativeLog, 2);
+    installNativeFunction(state->context, global, "__aiNativePerformanceNow", nativePerformanceNow, 0);
     installNativeFunction(state->context, global, "__aiNativeToast", nativeToast, 1);
     installNativeFunction(state->context, global, "__aiNativeSleep", nativeSleep, 1);
     installNativeFunction(state->context, global, "__aiNativeClick", nativeClick, 2);
@@ -1444,12 +3023,25 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeGetClip", nativeGetClip, 0);
     installNativeFunction(state->context, global, "__aiNativeForegroundInfo", nativeForegroundInfo, 1);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
-    installNativeFunction(state->context, global, "__aiNativeCaptureFrame", nativeCaptureFrame, 0);
+    installNativeFunction(state->context, global, "__aiNativeCaptureFrame", nativeCaptureFrame, 3);
     installNativeFunction(state->context, global, "__aiNativeReadFrame", nativeReadFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeCopyFrame", nativeCopyFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeClipFrame", nativeClipFrame, 5);
+    installNativeFunction(state->context, global, "__aiNativeResizeFrame", nativeResizeFrame, 4);
+    installNativeFunction(state->context, global, "__aiNativeGrayscaleFrame", nativeGrayscaleFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeCvtColorFrame", nativeCvtColorFrame, 2);
+    installNativeFunction(state->context, global, "__aiNativeRotateFrame", nativeRotateFrame, 2);
+    installNativeFunction(state->context, global, "__aiNativeThresholdFrame", nativeThresholdFrame, 4);
+    installNativeFunction(state->context, global, "__aiNativeBlurFrame", nativeBlurFrame, 2);
+    installNativeFunction(state->context, global, "__aiNativeSaveFrame", nativeSaveFrame, 4);
+    installNativeFunction(state->context, global, "__aiNativeCompressFrame", nativeCompressFrame, 3);
     installNativeFunction(state->context, global, "__aiNativeReleaseFrame", nativeReleaseFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeFrameStats", nativeFrameStats, 0);
     installNativeFunction(state->context, global, "__aiNativeFramePixel", nativeFramePixel, 3);
     installNativeFunction(state->context, global, "__aiNativeFindColor", nativeFindColor, 7);
+    installNativeFunction(state->context, global, "__aiNativeFindMultiColors", nativeFindMultiColors, 8);
     installNativeFunction(state->context, global, "__aiNativeFindImage", nativeFindImage, 7);
+    installNativeFunction(state->context, global, "__aiNativeMatchTemplate", nativeMatchTemplate, 8);
     installNativeFunction(state->context, global, "__aiNativeYoloIsAvailable", nativeYoloIsAvailable, 0);
     installNativeFunction(state->context, global, "__aiNativeYoloVersion", nativeYoloVersion, 0);
     installNativeFunction(state->context, global, "__aiNativeYoloUnavailableReason", nativeYoloUnavailableReason, 0);
@@ -1480,6 +3072,52 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeDrawCreate", nativeDrawCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeDrawUpdate", nativeDrawUpdate, 2);
     installNativeFunction(state->context, global, "__aiNativeDrawClose", nativeDrawClose, 0);
+    installNativeFunction(state->context, global, "__aiNativeAppLaunch", nativeAppLaunch, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppOpenUrl", nativeAppOpenUrl, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppGetInstalledApps", nativeAppGetInstalledApps, 0);
+    installNativeFunction(state->context, global, "__aiNativeAppGetAppInfo", nativeAppGetAppInfo, 1);
+    installNativeFunction(state->context, global, "__aiNativeStorageCreate", nativeStorageCreate, 1);
+    installNativeFunction(state->context, global, "__aiNativeStoragePut", nativeStoragePut, 3);
+    installNativeFunction(state->context, global, "__aiNativeStorageGet", nativeStorageGet, 3);
+    installNativeFunction(state->context, global, "__aiNativeStorageRemove", nativeStorageRemove, 2);
+    installNativeFunction(state->context, global, "__aiNativeStorageContains", nativeStorageContains, 2);
+    installNativeFunction(state->context, global, "__aiNativeStorageClear", nativeStorageClear, 1);
+    installNativeFunction(state->context, global, "__aiNativeDeviceInfo", nativeDeviceInfo, 1);
+    installNativeFunction(state->context, global, "__aiNativeDeviceIsScreenOn", nativeDeviceIsScreenOn, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceVibrate", nativeDeviceVibrate, 1);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetBattery", nativeDeviceGetBattery, 0);
+    installNativeFunction(state->context, global, "__aiNativeAppGetPackageName", nativeAppGetPackageName, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppGetAppName", nativeAppGetAppName, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppOpenAppSetting", nativeAppOpenAppSetting, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppViewFile", nativeAppViewFile, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppEditFile", nativeAppEditFile, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppUninstall", nativeAppUninstall, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppStartActivity", nativeAppStartActivity, 7);
+    installNativeFunction(state->context, global, "__aiNativeDeviceIsCharging", nativeDeviceIsCharging, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetBrightness", nativeDeviceGetBrightness, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetBrightnessMode", nativeDeviceGetBrightnessMode, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceCancelVibration", nativeDeviceCancelVibration, 0);
+    installNativeFunction(state->context, global, "__aiNativeShellExecute", nativeShellExecute, 5);
+    installNativeFunction(state->context, global, "__aiNativeShellIsRootAvailable", nativeShellIsRootAvailable, 0);
+    installNativeFunction(state->context, global, "__aiNativeShellIsShizukuAvailable", nativeShellIsShizukuAvailable, 0);
+    installNativeFunction(state->context, global, "__aiNativeShellHasShizukuPermission", nativeShellHasShizukuPermission, 0);
+    installNativeFunction(state->context, global, "__aiNativeShellRequestShizukuPermission", nativeShellRequestShizukuPermission, 1);
+    installNativeFunction(state->context, global, "__aiNativeDialogAlert", nativeDialogAlert, 2);
+    installNativeFunction(state->context, global, "__aiNativeDialogConfirm", nativeDialogConfirm, 2);
+    installNativeFunction(state->context, global, "__aiNativeDialogPrompt", nativeDialogPrompt, 2);
+    installNativeFunction(state->context, global, "__aiNativeDialogSelect", nativeDialogSelect, 3);
+    installNativeFunction(state->context, global, "__aiNativeDialogMultiChoice", nativeDialogMultiChoice, 3);
+    installNativeFunction(state->context, global, "__aiNativeDialogBuild", nativeDialogBuild, 1);
+    installNativeFunction(state->context, global, "__aiNativeThreadsExec", nativeThreadsExec, 3);
+    installNativeFunction(state->context, global, "__aiNativeThreadsStop", nativeThreadsStop, 1);
+    installNativeFunction(state->context, global, "__aiNativeEnginesExecScript", nativeEnginesExecScript, 3);
+    installNativeFunction(state->context, global, "__aiNativeEnginesExecScriptFile", nativeEnginesExecScriptFile, 2);
+    installNativeFunction(state->context, global, "__aiNativeEnginesMyEngineId", nativeEnginesMyEngineId, 0);
+    installNativeFunction(state->context, global, "__aiNativeEnginesAll", nativeEnginesAll, 0);
+    installNativeFunction(state->context, global, "__aiNativeEnginesStopAll", nativeEnginesStopAll, 0);
+    installNativeFunction(state->context, global, "__aiNativeEnginesStopAllAndToast", nativeEnginesStopAllAndToast, 0);
+    installNativeFunction(state->context, global, "__aiNativeEngineForceStop", nativeEngineForceStop, 1);
+    installNativeFunction(state->context, global, "__aiNativeEngineIsDestroyed", nativeEngineIsDestroyed, 1);
     JS_FreeValue(state->context, global);
 
     JSValue bootstrap = JS_Eval(state->context, kBootstrapScript, sizeof(kBootstrapScript) - 1,
@@ -1506,7 +3144,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_stardust_autojs_engine_QuickJsNativeBridge_createNativeFrame(
         JNIEnv *env, jclass, jlong engineHandle, jobject rgbaBuffer,
-        jint width, jint height, jint rowStride, jint pixelStride) {
+        jint width, jint height, jint rowStride, jint pixelStride, jint targetShortEdge) {
     const auto state = findEngine(engineHandle);
     if (state == nullptr) {
         throwQuickJs(env, "QuickJS runtime is not available");
@@ -1529,7 +3167,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_createNativeFrame(
         return 0;
     }
     const int64_t frameHandle = state->frames.createFromRgba(
-            data, width, height, rowStride, pixelStride);
+            data, width, height, rowStride, pixelStride, targetShortEdge);
     if (frameHandle == 0) {
         throwQuickJs(env, "Unable to copy screen capture into a NativeFrame");
     }

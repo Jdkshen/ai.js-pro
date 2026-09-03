@@ -1,7 +1,10 @@
 package org.autojs.autojs.ui.splash;
 
+import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.view.View;
 import androidx.annotation.Nullable;
 
 import org.autojs.autojs.R;
@@ -22,10 +25,33 @@ public class SplashActivity extends BaseActivity {
     private Handler mHandler;
 
     @Override
+    protected boolean shouldApplyThemeColorToStatusBar() {
+        return false;
+    }
+
+    @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        syncStatusBarWithSplashSurface();
         init();
         mHandler.postDelayed(SplashActivity.this::enterNextActivity, INIT_TIMEOUT);
+    }
+
+    private void syncStatusBarWithSplashSurface() {
+        getWindow().setStatusBarColor(Color.WHITE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            View decorView = getWindow().getDecorView();
+            decorView.setSystemUiVisibility(
+                    decorView.getSystemUiVisibility() | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        }
+        // Older MIUI builds may ignore the standard Android flag during startup.
+        try {
+            getWindow().getClass()
+                    .getMethod("setExtraFlags", int.class, int.class)
+                    .invoke(getWindow(), 0x20, 0x20);
+        } catch (ReflectiveOperationException ignored) {
+            // The standard flag above remains authoritative on non-MIUI devices.
+        }
     }
 
     private void init() {

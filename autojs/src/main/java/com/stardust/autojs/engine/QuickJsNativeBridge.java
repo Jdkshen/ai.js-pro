@@ -15,7 +15,8 @@ final class QuickJsNativeBridge {
     static native long create(QuickJsHostBridge hostBridge, long memoryLimitBytes, long stackLimitBytes);
 
     static native long createNativeFrame(long engineHandle, ByteBuffer rgbaBuffer,
-                                         int width, int height, int rowStride, int pixelStride);
+                                         int width, int height, int rowStride, int pixelStride,
+                                         int targetShortEdge);
 
     static native Object evaluate(long handle, String source, String sourceName);
 

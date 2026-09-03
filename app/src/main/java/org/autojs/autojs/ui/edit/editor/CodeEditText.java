@@ -237,8 +237,23 @@ public class CodeEditText extends AppCompatEditText {
                 return;
             }
             int lineEnd = Math.min(layout.getLineVisibleEnd(line), highlightTokens.colors.length);
+            // Layout#getLineVisibleEnd normally excludes '\n', but some Android versions
+            // can still leave the '\r' of a CRLF line in the visible range. Never send a
+            // line separator to Canvas.drawText(): unsupported control characters are
+            // rendered as a tofu square, which is especially noticeable on empty lines.
+            while (lineEnd > lineStart) {
+                char last = text.charAt(lineEnd - 1);
+                if (last != '\r' && last != '\n') {
+                    break;
+                }
+                lineEnd--;
+            }
+            if (lineEnd <= lineStart) {
+                continue;
+            }
             int visibleCharStart = getVisibleCharIndex(paint, scrollX, lineStart, lineEnd);
-            int visibleCharEnd = getVisibleCharIndex(paint, scrollX + mParentScrollView.getWidth(), lineStart, lineEnd) + 1;
+            int visibleCharEnd = Math.min(lineEnd,
+                    getVisibleCharIndex(paint, scrollX + mParentScrollView.getWidth(), lineStart, lineEnd) + 1);
             int previousColorPos = visibleCharStart;
             int previousColor;
             if (previousColorPos == mUnmatchedBracket) {

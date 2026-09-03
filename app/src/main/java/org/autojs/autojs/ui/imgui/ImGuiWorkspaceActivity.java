@@ -156,6 +156,9 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
     private String mTaskSearchQuery = "";
     private final List<ScriptExecution> mRunningTaskEntries = new ArrayList<>();
     private final List<Object> mPendingTaskEntries = new ArrayList<>();
+    private ImGuiWorkspaceDrawer mWorkspaceDrawer;
+    private final org.autojs.autojs.theme.AppThemeRepository.ThemeListener mThemeListener =
+            palette -> applyTheme(palette);
     private final Handler mRuntimeRefreshHandler = new Handler(Looper.getMainLooper());
     private final Runnable mRuntimeRefresh = new Runnable() {
         @Override
@@ -169,42 +172,136 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Window window = getWindow();
-        window.setStatusBarColor(Color.rgb(9, 12, 18));
-        window.setNavigationBarColor(Color.rgb(9, 12, 18));
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         String fontPath = prepareBundledFont();
         ImGuiNativeBridge.setUiFontPath(fontPath == null ? "" : fontPath);
         mScriptRoot = canonicalFile(new File(Pref.getScriptDirPath()));
         mCurrentScriptDirectory = mScriptRoot;
+        migrateBundledQuickJsSamplesOnUpgrade();
 
-        FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(9, 12, 18));
         ImGuiSurfaceView surfaceView = new ImGuiSurfaceView(this, this);
-        root.addView(surfaceView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        setContentView(root);
+        mWorkspaceDrawer = new ImGuiWorkspaceDrawer(this, this::onImGuiAction);
+        mWorkspaceDrawer.setWorkspaceContent(surfaceView);
+        setContentView(mWorkspaceDrawer);
         surfaceView.requestFocus();
         checkPermission(Manifest.permission.READ_EXTERNAL_STORAGE,
                 Manifest.permission.WRITE_EXTERNAL_STORAGE);
+
+        // Theme integration
+        org.autojs.autojs.theme.AppThemeRepository.get(this).addListener(mThemeListener);
+        applyTheme(org.autojs.autojs.theme.AppThemeRepository.get(this).getPalette());
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        restoreFloatingWindowPreference();
         refreshWorkspaceState();
         mRuntimeRefreshHandler.removeCallbacks(mRuntimeRefresh);
         mRuntimeRefreshHandler.postDelayed(mRuntimeRefresh, 1000L);
+        // Re-sync theme (user may have changed it in settings while in background)
+        org.autojs.autojs.theme.AppThemeRepository repo =
+                org.autojs.autojs.theme.AppThemeRepository.get(this);
+        repo.addListener(mThemeListener);
+        repo.refreshFromLegacyTheme();
     }
 
     @Override
     protected void onPause() {
         mRuntimeRefreshHandler.removeCallbacks(mRuntimeRefresh);
         super.onPause();
+        org.autojs.autojs.theme.AppThemeRepository.get(this).removeListener(mThemeListener);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // System dark/light mode may have changed — refresh theme
+        org.autojs.autojs.theme.AppThemeRepository repo =
+                org.autojs.autojs.theme.AppThemeRepository.get(this);
+        repo.refreshSystemAppearance();
+        applyTheme(repo.getPalette());
+        // Font scale or orientation changed: re-dispatch viewport metrics
+        ImGuiSurfaceView surface = mWorkspaceDrawer != null ? findSurfaceView() : null;
+        if (surface != null) {
+            surface.dispatchViewportMetrics();
+        }
+    }
+
+    /** Walk the DrawerLayout's content tree to find the ImGuiSurfaceView. */
+    private ImGuiSurfaceView findSurfaceView() {
+        if (mWorkspaceDrawer == null) return null;
+        ViewGroup content = (ViewGroup) mWorkspaceDrawer.getChildAt(0);
+        if (content == null) return null;
+        for (int i = 0; i < content.getChildCount(); i++) {
+            View child = content.getChildAt(i);
+            if (child instanceof ImGuiSurfaceView) return (ImGuiSurfaceView) child;
+        }
+        return null;
+    }
+
+    /** Apply a complete theme palette to this Activity and all child components. */
+    private void applyTheme(org.autojs.autojs.theme.AppThemePalette palette) {
+        if (palette == null) return;
+        Window window = getWindow();
+        if (window != null) {
+            window.setStatusBarColor(palette.statusBar);
+            window.setNavigationBarColor(palette.navigationBar);
+            int flags = window.getDecorView().getSystemUiVisibility();
+            if (palette.isDark) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+            window.getDecorView().setSystemUiVisibility(flags);
+        }
+        if (mWorkspaceDrawer != null) {
+            mWorkspaceDrawer.setBackgroundColor(palette.windowBackground);
+            mWorkspaceDrawer.applyTheme(palette);
+        }
+        // Send palette to ImGui native layer
+        ImGuiNativeBridge.setThemePalette(palette.toIntArray());
+    }
+
+    private void showThemeDialog() {
+        org.autojs.autojs.theme.AppThemeRepository repo =
+                org.autojs.autojs.theme.AppThemeRepository.get(this);
+        final int[] selectedMode = {repo.getThemeMode()};
+        String[] modeItems = {"跟随系统", "浅色", "深色"};
+        String[] accentNames = {"青绿 (默认)", "红", "粉红", "紫", "靛蓝", "蓝", "绿", "琥珀", "橙"};
+        int[] accentColors = {
+                0xFF009688, 0xFFF44336, 0xFFE91E63, 0xFF9C27B0, 0xFF3F51B5,
+                0xFF2196F3, 0xFF4CAF50, 0xFFFFC107, 0xFFFF9800};
+
+        new AlertDialog.Builder(this)
+                .setTitle("主题设置")
+                .setItems(new String[]{
+                        "显示模式: " + modeItems[selectedMode[0]],
+                        "强调色"}, (dialog, which) -> {
+                    if (which == 0) {
+                        selectedMode[0] = (selectedMode[0] + 1) % 3;
+                        repo.setThemeMode(selectedMode[0]);
+                    } else if (which == 1) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("选择强调色")
+                                .setItems(accentNames, (d, i) -> repo.setAccentColor(accentColors[i]))
+                                .setNegativeButton("取消", null).show();
+                    }
+                })
+                .setNegativeButton("关闭", null).show();
     }
 
     @Override
     public void onBackPressed() {
+        if (mWorkspaceDrawer != null && mWorkspaceDrawer.closeIfOpen()) {
+            return;
+        }
+        if (ImGuiNativeBridge.closeWorkspaceDrawer()) {
+            return;
+        }
         int section = ImGuiNativeBridge.getCurrentSection();
         if (section == 0 && mCurrentScriptDirectory != null
                 && !mCurrentScriptDirectory.equals(mScriptRoot)) {
@@ -233,6 +330,14 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
 
     private void refreshRuntimeState() {
         boolean accessibilityEnabled = AccessibilityServiceTool.isAccessibilityServiceEnabled(this);
+        boolean floatingShown = FloatyWindowManger.isCircularMenuShowing();
+        boolean developerConnected = false;
+        try {
+            DevPluginService service = DevPluginService.getInstance();
+            developerConnected = service != null && service.isConnected();
+        } catch (RuntimeException ignored) {
+            // The developer service may not have finished initializing yet.
+        }
         int runningScripts = 0;
         try {
             runningScripts = AutoJs.getInstance().getScriptEngineService().getScriptExecutions().size();
@@ -240,6 +345,11 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
             // The workspace remains usable while the application runtime is still initializing.
         }
         ImGuiNativeBridge.setWorkspaceState(accessibilityEnabled, runningScripts);
+        ImGuiNativeBridge.setDrawerState(accessibilityEnabled, floatingShown, developerConnected);
+        if (mWorkspaceDrawer != null) {
+            mWorkspaceDrawer.updateServiceState(
+                    accessibilityEnabled, floatingShown, developerConnected);
+        }
         refreshTaskEntries();
     }
 
@@ -374,6 +484,37 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                 break;
             case ACTION_SEARCH_TASKS:
                 showTaskSearchDialog();
+                break;
+            // Drawer menu actions (from ImGuiWorkspaceDrawer native drawer)
+            case 60: // Accessibility
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                break;
+            case 61: // Toggle floating
+                toggleFloatingWindow();
+                break;
+            case 64: // Terminal
+                openTerminal(mCurrentScriptDirectory);
+                break;
+            case 65: // Theme
+                showThemeDialog();
+                break;
+            case 66: // Blog
+                openWebPage("https://hyb1996.github.io/AutoJs-Docs/");
+                break;
+            case 67: // Forum
+                openWebPage("https://www.autojs.org/");
+                break;
+            case 68: // Settings
+                startActivity(new Intent(this, SettingsActivity_.class));
+                break;
+            case 69: // Check update
+                new UpdateCheckDialog(this).show();
+                break;
+            case 70: // Exit
+                confirmExitApplication();
+                break;
+            case 71: // Open native drawer (ImGui fallback path)
+                if (mWorkspaceDrawer != null) mWorkspaceDrawer.open();
                 break;
             default:
                 Toast.makeText(this, "尚未实现的 ImGui 操作：" + action, Toast.LENGTH_SHORT).show();
@@ -719,7 +860,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                     else if (which == 2) showMoreServicesDialog();
                     else if (which == 3) toggleDeveloperConnection();
                     else if (which == 4) openTerminal(mCurrentScriptDirectory);
-                    else if (which == 5) SettingsActivity.selectThemeColor(this);
+                    else if (which == 5) showThemeDialog();
                     else if (which == 6) openWebPage("https://hyb1996.github.io/AutoJs-Docs/");
                     else if (which == 7) openWebPage("https://www.autojs.org/");
                     else if (which == 8) startActivity(new Intent(this, SettingsActivity_.class));
@@ -738,8 +879,13 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
         } else {
             boolean shown = FloatyWindowManger.showCircularMenu();
             Pref.setFloatingMenuShown(shown);
-            if (shown) Toast.makeText(this, "悬浮窗已开启", Toast.LENGTH_SHORT).show();
+            if (shown) {
+                Toast.makeText(this, "悬浮窗已开启", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "悬浮窗开启失败，请检查悬浮窗权限", Toast.LENGTH_LONG).show();
+            }
         }
+        refreshRuntimeState();
     }
 
     private void showMoreServicesDialog() {
@@ -2255,5 +2401,19 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
             Toast.makeText(this, "中文字体加载失败，将使用默认字体", Toast.LENGTH_LONG).show();
             return null;
         }
+    }
+
+    private void restoreFloatingWindowPreference() {
+        if (!Pref.isFloatingMenuShown() || FloatyWindowManger.isCircularMenuShowing()) {
+            return;
+        }
+        try {
+            FloatyWindowManger.showCircularMenu();
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void migrateBundledQuickJsSamplesOnUpgrade() {
+        // No-op for now; samples are served from assets directly.
     }
 }

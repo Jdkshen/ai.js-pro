@@ -1,5 +1,8 @@
 "ui";
 
+function __nowMs() { return Number(java.lang.System.nanoTime()) / 1000000; }
+function __formatMs(value) { return Number(value).toFixed(3); }
+
 var url = "https://www.autojs.org/assets/uploads/files/1540386817060-918021-20160416200702191-185324559.jpg";
 var logo = null;
 var currentImg = null;
@@ -53,13 +56,17 @@ var imgProcess = threads.start(function () {
 });
 
 //处理图片的函数，把任务交给图片处理线程处理
-function processImg(process) {
+function processImg(name, process) {
     imgProcess.setTimeout(() => {
         if (logo == null) {
+            var loadStartedAt = __nowMs();
             logo = images.load(url);
+            console.log("[Rhino耗时] 下载并解码原图: " + __formatMs(__nowMs() - loadStartedAt) + " ms");
         }
         //处理图片
+        var processStartedAt = __nowMs();
         var result = process(logo);
+        console.log("[Rhino耗时] " + name + ": " + __formatMs(__nowMs() - processStartedAt) + " ms");
         //把处理后的图片设置到图片控件中
         setImage(result);
     }, 0);
@@ -68,7 +75,7 @@ function processImg(process) {
 var degress = 0;
 
 ui.rotate.on("click", () => {
-    processImg(img => {
+    processImg("旋转", img => {
         degress += 90;
         //旋转degress角度
         return images.rotate(img, degress);
@@ -76,7 +83,7 @@ ui.rotate.on("click", () => {
 });
 
 ui.concat.on("click", () => {
-    processImg(img => {
+    processImg("拼接", img => {
         if(currentImg == null){
             toast("请先点击其他按钮，再点击本按钮");
             return img.clone();
@@ -87,14 +94,14 @@ ui.concat.on("click", () => {
 });
 
 ui.grayscale.on("click", () => {
-    processImg(img => {
+    processImg("灰度化", img => {
         //灰度化
         return images.grayscale(img);
     });
 });
 
 ui.binary.on("click", () => {
-    processImg(img => {
+    processImg("二值化", img => {
         var g = images.grayscale(img);
         //二值化，取灰度为30到200之间的图片
         var result = images.threshold(g, 100, 200);
@@ -104,7 +111,7 @@ ui.binary.on("click", () => {
 });
 
 ui.adaptiveBinary.on("click", () => {
-    processImg(img => {
+    processImg("自适应二值化", img => {
         var g = images.grayscale(img);
         //自适应二值化，最大值为200，块大小为25
         var result = images.adaptiveThreshold(g, 200, "MEAN_C", "BINARY", 25, 10);
@@ -114,28 +121,28 @@ ui.adaptiveBinary.on("click", () => {
 });
 
 ui.hsv.on("click", () => {
-    processImg(img => {
+    processImg("RGB转HSV", img => {
         //RGB转HSV
         return images.cvtColor(img, "BGR2HSV");
     });
 });
 
 ui.blur.on("click", () => {
-    processImg(img => {
+    processImg("模糊", img => {
         //模糊
         return images.blur(img, [10, 10]);
     });
 });
 
 ui.medianBlur.on("click", () => {
-    processImg(img => {
+    processImg("中值滤波", img => {
         //中值滤波
         return images.medianBlur(img, 5);
     });
 });
 
 ui.gaussianBlur.on("click", () => {
-    processImg(img => {
+    processImg("高斯模糊", img => {
         //高斯模糊
         return images.gaussianBlur(img, [5, 5]);
     });

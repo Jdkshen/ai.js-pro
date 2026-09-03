@@ -73,6 +73,11 @@ dependencies {
     api files('libs/rhino-1.7.7.2.jar')
     api project(path: ':common')
     api project(path: ':automator')
+    // Shizuku client API. shell(..., { shizuku: true }) uses the Shizuku
+    // process bridge to execute commands with ADB shell / Sui privileges.
+    // 11.0.3 preserves this app's Android 5.x installation compatibility while
+    // remaining compatible with current Shizuku servers.
+    api 'dev.rikka.shizuku:api:11.0.3'
     // ApkBuilder
     api project(path: ':apkbuilder')
 }

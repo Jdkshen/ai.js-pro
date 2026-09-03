@@ -64,10 +64,19 @@ public abstract class BaseActivity extends AppCompatActivity {
     @Override
     protected void onStart() {
         super.onStart();
-        if ((getWindow().getDecorView().getSystemUiVisibility() & View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) == 0) {
+        if (shouldApplyThemeColorToStatusBar()
+                && (getWindow().getDecorView().getSystemUiVisibility() & View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) == 0) {
             ThemeColorManager.addActivityStatusBar(this);
         }
 
+    }
+
+    /**
+     * Pages with a status bar that is part of their own surface can opt out of the
+     * global accent color and keep the system bar synchronized with that surface.
+     */
+    protected boolean shouldApplyThemeColorToStatusBar() {
+        return true;
     }
 
     @SuppressWarnings("unchecked")

@@ -115,21 +115,31 @@ public class Images {
      */
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized Image captureScreenRaw() {
+        return captureScreenRaw(false, ScreenCapturer.DEFAULT_CAPTURE_TIMEOUT_MILLIS);
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public synchronized Image captureScreenRaw(boolean fresh, long timeoutMillis) {
         ScriptRuntime.requiresApi(21);
         if (mScreenCapturer == null) {
             throw new SecurityException("No screen capture permission");
         }
-        return mScreenCapturer.capture();
+        return mScreenCapturer.capture(fresh, timeoutMillis);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen() {
+        return captureScreen(false, ScreenCapturer.DEFAULT_CAPTURE_TIMEOUT_MILLIS);
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public synchronized ImageWrapper captureScreen(boolean fresh, long timeoutMillis) {
         ScriptRuntime.requiresApi(21);
         if (mScreenCapturer == null) {
             throw new SecurityException("No screen capture permission");
         }
-        Image capture = mScreenCapturer.capture();
-        if (capture == mPreCapture && mPreCaptureImage != null) {
+        Image capture = mScreenCapturer.capture(fresh, timeoutMillis);
+        if (capture == mPreCapture && mPreCaptureImage != null && !mPreCaptureImage.isRecycled()) {
             return mPreCaptureImage;
         }
         mPreCapture = capture;

@@ -14,6 +14,7 @@ import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import android.util.Log;
@@ -25,12 +26,16 @@ import com.stardust.lang.ThreadCompat;
 import com.stardust.util.ScreenMetrics;
 
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Created by Stardust on 2017/5/17.
  */
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 public class ScreenCapturer {
+
+    public static final long DEFAULT_CAPTURE_TIMEOUT_MILLIS = 100L;
+    public static final long MAX_CAPTURE_TIMEOUT_MILLIS = 5000L;
 
     public static final int ORIENTATION_AUTO = Configuration.ORIENTATION_UNDEFINED;
     public static final int ORIENTATION_LANDSCAPE = Configuration.ORIENTATION_LANDSCAPE ;
@@ -45,6 +50,7 @@ public class ScreenCapturer {
     private volatile Looper mImageAcquireLooper;
     private volatile Image mUnderUsingImage;
     private volatile AtomicReference<Image> mCachedImage = new AtomicReference<>();
+    private final Object mImageAvailableLock = new Object();
     private volatile Exception mException;
     private final int mScreenDensity;
     private Handler mHandler;
@@ -172,8 +178,14 @@ public class ScreenCapturer {
                     oldCacheImage.close();
                 }
                 mCachedImage.set(reader.acquireLatestImage());
+                synchronized (mImageAvailableLock) {
+                    mImageAvailableLock.notifyAll();
+                }
             } catch (Exception e) {
                 mException = e;
+                synchronized (mImageAvailableLock) {
+                    mImageAvailableLock.notifyAll();
+                }
             }
 
         }, handler);
@@ -181,7 +193,20 @@ public class ScreenCapturer {
 
     @Nullable
     public Image capture() {
+        return capture(false, DEFAULT_CAPTURE_TIMEOUT_MILLIS);
+    }
+
+    /**
+     * Returns the newest already available frame immediately by default. When {@code fresh} is
+     * true, waits up to {@code timeoutMillis} for a frame newer than the one currently in use.
+     * If no new frame arrives before the deadline, the last valid frame is returned. This keeps
+     * static screens from blocking indefinitely while still allowing callers to request freshness.
+     */
+    @Nullable
+    public Image capture(boolean fresh, long timeoutMillis) {
         Thread thread = ThreadCompat.currentThread();
+        long boundedTimeout = Math.max(0L, Math.min(MAX_CAPTURE_TIMEOUT_MILLIS, timeoutMillis));
+        long deadlineNanos = SystemClock.elapsedRealtimeNanos() + boundedTimeout * 1_000_000L;
         while (!thread.isInterrupted()) {
             Exception e = mException;
             if (e != null) {
@@ -195,6 +220,36 @@ public class ScreenCapturer {
                 }
                 mUnderUsingImage = cachedImage;
                 return cachedImage;
+            }
+
+            Image latestImage = mUnderUsingImage;
+            if (!fresh && latestImage != null) {
+                return latestImage;
+            }
+            if (mReleased) {
+                throw new ScriptException(new IllegalStateException("Screen capture session has stopped"));
+            }
+
+            long remainingNanos = deadlineNanos - SystemClock.elapsedRealtimeNanos();
+            if (remainingNanos <= 0L) {
+                if (latestImage != null) {
+                    return latestImage;
+                }
+                throw new ScriptException(new TimeoutException(
+                        "Timed out waiting for the first screen capture frame after "
+                                + boundedTimeout + " ms"));
+            }
+            synchronized (mImageAvailableLock) {
+                if (mCachedImage.get() == null && mException == null && !mReleased) {
+                    try {
+                        long waitMillis = Math.max(1L,
+                                Math.min(50L, (remainingNanos + 999_999L) / 1_000_000L));
+                        mImageAvailableLock.wait(waitMillis);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new ScriptInterruptedException();
+                    }
+                }
             }
         }
         throw new ScriptInterruptedException();
@@ -210,6 +265,9 @@ public class ScreenCapturer {
             return;
         }
         mReleased = true;
+        synchronized (mImageAvailableLock) {
+            mImageAvailableLock.notifyAll();
+        }
         if (mOrientationEventListener != null) {
             mOrientationEventListener.disable();
         }
@@ -230,6 +288,9 @@ public class ScreenCapturer {
             return;
         }
         mReleased = true;
+        synchronized (mImageAvailableLock) {
+            mImageAvailableLock.notifyAll();
+        }
         mMediaProjection = null;
         mException = new SecurityException("Screen capture permission was revoked");
         if (mOrientationEventListener != null) {

@@ -64,6 +64,9 @@ import org.autojs.autojs.ui.project.BuildActivity;
 import org.autojs.autojs.ui.project.BuildActivity_;
 import org.autojs.autojs.ui.project.ProjectConfigActivity;
 import org.autojs.autojs.ui.project.ProjectConfigActivity_;
+import org.autojs.autojs.theme.AppThemePalette;
+import org.autojs.autojs.theme.AppThemeRepository;
+import org.autojs.autojs.theme.ConsoleThemeHelper;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -86,13 +89,15 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private static final String EXTRA_PATH = "path";
     private static final String EXTRA_SAMPLE_ASSET_PATH = "sample_asset_path";
-    private static final int COLOR_TOOLBAR = Color.rgb(24, 26, 26);
-    private static final int COLOR_ACTIVE = Color.rgb(48, 50, 50);
-
     private final List<EditorTab> mTabs = new ArrayList<>();
     private final Set<String> mExpandedDirectories = new HashSet<>();
 
     private DrawerLayout mDrawerLayout;
+    private LinearLayout mMainLayout;
+    private View mToolRow;
+    private View mTabRow;
+    private LinearLayout mWorkspaceDrawer;
+    private int mWorkspaceDrawerWidth;
     private LinearLayout mTabBar;
     private LinearLayout mTreeContainer;
     private TextView mTreeRootLabel;
@@ -112,6 +117,8 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private boolean mDebugInterrupted;
     private int mLogLevel = Log.VERBOSE;
     private int mFoldSequence;
+    private AppThemePalette mPalette;
+    private final AppThemeRepository.ThemeListener mThemeListener = this::applyThemePalette;
 
     private Debugger mDebugger;
     private ScriptExecution mExecution;
@@ -144,8 +151,9 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.rgb(8, 10, 10));
-        getWindow().setNavigationBarColor(Color.rgb(8, 10, 10));
+        mPalette = AppThemeRepository.get(this).getPalette();
+        getWindow().setStatusBarColor(mPalette.statusBar);
+        getWindow().setNavigationBarColor(mPalette.navigationBar);
         String path = getIntent().getStringExtra(EXTRA_PATH);
         String sampleAssetPath = getIntent().getStringExtra(EXTRA_SAMPLE_ASSET_PATH);
         if (!TextUtils.isEmpty(sampleAssetPath)) {
@@ -187,45 +195,58 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private void buildWorkspaceUi() {
         mDrawerLayout = new DrawerLayout(this);
-        mDrawerLayout.setBackgroundColor(Color.rgb(30, 30, 30));
+        mDrawerLayout.setBackgroundColor(mPalette.editorBackground);
+        mDrawerLayout.setDrawerElevation(dp(12));
+        mDrawerLayout.setScrimColor(mPalette.scrim);
 
-        LinearLayout main = new LinearLayout(this);
-        main.setOrientation(LinearLayout.VERTICAL);
-        main.setBackgroundColor(Color.rgb(30, 30, 30));
-        mDrawerLayout.addView(main, new DrawerLayout.LayoutParams(
+        mMainLayout = new LinearLayout(this);
+        mMainLayout.setOrientation(LinearLayout.VERTICAL);
+        mMainLayout.setBackgroundColor(mPalette.editorBackground);
+        mDrawerLayout.addView(mMainLayout, new DrawerLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        main.addView(buildToolRow(), new LinearLayout.LayoutParams(
+        mToolRow = buildToolRow();
+        mMainLayout.addView(mToolRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
-        main.addView(buildTabRow(), new LinearLayout.LayoutParams(
+        mTabRow = buildTabRow();
+        mMainLayout.addView(mTabRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
 
         mDebugBar = buildDebugBar();
         mDebugBar.setVisibility(View.GONE);
-        main.addView(mDebugBar, new LinearLayout.LayoutParams(
+        mMainLayout.addView(mDebugBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
 
         mEditorContainer = new FrameLayout(this);
-        main.addView(mEditorContainer, new LinearLayout.LayoutParams(
+        mMainLayout.addView(mEditorContainer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         mLogPanel = buildLogPanel();
         mLogPanel.setVisibility(View.GONE);
-        main.addView(mLogPanel, new LinearLayout.LayoutParams(
+        mMainLayout.addView(mLogPanel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(300)));
 
         mShortcutBar = buildShortcutBar();
-        main.addView(mShortcutBar, new LinearLayout.LayoutParams(
+        mMainLayout.addView(mShortcutBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
         addWorkspaceDrawer();
         setContentView(mDrawerLayout);
+        mDrawerLayout.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                                  oldLeft, oldTop, oldRight, oldBottom) -> {
+            int width = right - left;
+            int height = bottom - top;
+            if (width > 0 && (width != oldRight - oldLeft || height != oldBottom - oldTop)) {
+                updateWorkspaceDrawerSize(width, height);
+            }
+        });
+        applyWindowSystemUi(mPalette);
     }
 
     private View buildToolRow() {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
-        scroll.setBackgroundColor(COLOR_TOOLBAR);
+        scroll.setBackgroundColor(mPalette.editorToolbar);
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.addView(tool("▤", "文件", 40, v -> openWorkspaceDrawer()));
@@ -251,7 +272,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private View buildTabRow() {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
-        scroll.setBackgroundColor(Color.rgb(17, 19, 19));
+        scroll.setBackgroundColor(mPalette.editorTabInactive);
         mTabBar = new LinearLayout(this);
         mTabBar.setGravity(Gravity.CENTER_VERTICAL);
         scroll.addView(mTabBar, new HorizontalScrollView.LayoutParams(
@@ -260,30 +281,38 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     private void addWorkspaceDrawer() {
-        LinearLayout drawer = new LinearLayout(this);
-        drawer.setOrientation(LinearLayout.VERTICAL);
-        drawer.setBackgroundColor(Color.rgb(27, 29, 29));
-        drawer.setPadding(dp(8), dp(8), dp(6), dp(8));
+        mWorkspaceDrawer = new LinearLayout(this);
+        mWorkspaceDrawer.setOrientation(LinearLayout.VERTICAL);
+        mWorkspaceDrawer.setBackgroundColor(mPalette.surfacePrimary);
+        mWorkspaceDrawer.setPadding(dp(8), dp(8), dp(6), dp(8));
 
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("工作区", 21f, Color.WHITE);
+        TextView title = text("工作区", 21f, mPalette.textPrimary);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setPadding(dp(8), 0, 0, 0);
-        header.addView(title, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        header.addView(title, new LinearLayout.LayoutParams(0, workspaceHeaderHeight(), 1f));
         header.addView(action("⇥", 50, v -> mDrawerLayout.closeDrawer(GravityCompat.START)));
-        drawer.addView(header);
+        mWorkspaceDrawer.addView(header);
 
         mTreeRootLabel = text("▾  " + (mWorkspaceRoot == null ? "脚本" : mWorkspaceRoot.getName()), 16f,
-                Color.rgb(230, 230, 230));
+                mPalette.textPrimary);
         mTreeRootLabel.setPadding(dp(12), dp(8), dp(8), dp(8));
+        mTreeRootLabel.setSingleLine(true);
+        mTreeRootLabel.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        mTreeRootLabel.setContentDescription("工作区根目录 "
+                + (mWorkspaceRoot == null ? "脚本" : mWorkspaceRoot.getName()));
         LinearLayout rootRow = new LinearLayout(this);
         rootRow.setGravity(Gravity.CENTER_VERTICAL);
-        rootRow.addView(mTreeRootLabel, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        rootRow.addView(smallAction("⋮", v -> showWorkspaceItemMenu(mWorkspaceRoot)),
-                new LinearLayout.LayoutParams(dp(40), dp(44)));
-        drawer.addView(rootRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        int rootRowHeight = workspaceRowHeight();
+        rootRow.addView(mTreeRootLabel, new LinearLayout.LayoutParams(0, rootRowHeight, 1f));
+        TextView rootMore = smallAction("⋮", v -> showWorkspaceItemMenu(mWorkspaceRoot));
+        rootMore.setContentDescription("工作区更多操作");
+        rootRow.addView(rootMore, new LinearLayout.LayoutParams(dp(48), rootRowHeight));
+        mWorkspaceDrawer.addView(rootRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, rootRowHeight));
 
         ScrollView treeScroll = new ScrollView(this);
         treeScroll.setFillViewport(true);
@@ -292,13 +321,16 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         mTreeContainer.setOrientation(LinearLayout.VERTICAL);
         treeScroll.addView(mTreeContainer, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        drawer.addView(treeScroll, new LinearLayout.LayoutParams(
+        mWorkspaceDrawer.addView(treeScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        int displayWidth = getResources().getDisplayMetrics().widthPixels;
+        int displayHeight = getResources().getDisplayMetrics().heightPixels;
+        mWorkspaceDrawerWidth = workspaceDrawerWidth(displayWidth, displayHeight);
         DrawerLayout.LayoutParams params = new DrawerLayout.LayoutParams(
-                dp(330), ViewGroup.LayoutParams.MATCH_PARENT);
+                mWorkspaceDrawerWidth, ViewGroup.LayoutParams.MATCH_PARENT);
         params.gravity = GravityCompat.START;
-        mDrawerLayout.addView(drawer, params);
+        mDrawerLayout.addView(mWorkspaceDrawer, params);
         refreshFileTree();
     }
 
@@ -306,8 +338,8 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(8), 0, dp(8), 0);
-        row.setBackgroundColor(Color.rgb(39, 42, 42));
-        TextView state = text("调试", 13f, Color.rgb(110, 220, 190));
+        row.setBackgroundColor(mPalette.surfaceElevated);
+        TextView state = text("调试", 13f, mPalette.accent);
         state.setTag("debug_state");
         row.addView(state, new LinearLayout.LayoutParams(0, dp(42), 1f));
         row.addView(smallAction("步过", v -> debugStep(0)));
@@ -321,11 +353,11 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private LinearLayout buildLogPanel() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(Color.rgb(25, 27, 27));
+        panel.setBackgroundColor(mPalette.surfaceSecondary);
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(10), 0, dp(6), 0);
-        mLogLevelView = text("Verbose ▾", 14f, Color.rgb(200, 225, 205));
+        mLogLevelView = text("Verbose ▾", 14f, mPalette.textPrimary);
         mLogLevelView.setGravity(Gravity.CENTER_VERTICAL);
         mLogLevelView.setOnClickListener(v -> showLogLevelMenu());
         header.addView(mLogLevelView, new LinearLayout.LayoutParams(0, dp(42), 1f));
@@ -341,6 +373,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
         mConsole = AutoJs.getInstance().getGlobalConsole();
         mConsoleView = new ConsoleView(this);
+        ConsoleThemeHelper.apply(mConsoleView, mPalette);
         mConsoleView.setConsole(mConsole);
         mConsoleView.setMinimumLogLevel(mLogLevel);
         View input = mConsoleView.findViewById(R.id.input_container);
@@ -365,7 +398,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private LinearLayout buildShortcutBar() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.HORIZONTAL);
-        root.setBackgroundColor(Color.rgb(28, 30, 30));
+        root.setBackgroundColor(mPalette.editorToolbar);
         LinearLayout fixed = new LinearLayout(this);
         fixed.setOrientation(LinearLayout.VERTICAL);
         fixed.addView(shortcutRowContent(new String[]{"ƒx", "ESC", "↑", "TAB"}),
@@ -402,10 +435,13 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         box.setGravity(Gravity.CENTER);
         box.setClickable(true);
         box.setFocusable(true);
-        TextView iconView = text(icon, 15f, Color.rgb(235, 235, 235));
+        box.setContentDescription(label);
+        TextView iconView = text(icon, 15f, mPalette.iconPrimary);
         iconView.setGravity(Gravity.CENTER);
-        TextView labelView = text(label, 8.5f, Color.rgb(215, 215, 215));
+        iconView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        TextView labelView = text(label, 8.5f, mPalette.textSecondary);
         labelView.setGravity(Gravity.CENTER);
+        labelView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         box.addView(iconView, new LinearLayout.LayoutParams(dp(widthDp), 0, 1.15f));
         box.addView(labelView, new LinearLayout.LayoutParams(dp(widthDp), 0, .85f));
         box.setOnClickListener(listener);
@@ -414,7 +450,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     private TextView shortcut(String label) {
-        TextView view = text(label, label.length() > 2 ? 10f : 14f, Color.WHITE);
+        TextView view = text(label, label.length() > 2 ? 10f : 14f, mPalette.textPrimary);
         view.setGravity(Gravity.CENTER);
         view.setMinWidth(dp(40));
         view.setOnClickListener(v -> onShortcut(label));
@@ -423,7 +459,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     private TextView smallAction(String label, View.OnClickListener listener) {
-        TextView view = text(label, 12f, Color.rgb(230, 230, 230));
+        TextView view = text(label, 12f, mPalette.textPrimary);
         view.setGravity(Gravity.CENTER);
         view.setPadding(dp(8), 0, dp(8), 0);
         view.setOnClickListener(listener);
@@ -452,9 +488,14 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             item.setGravity(Gravity.CENTER_VERTICAL);
             TextView row = text((child.isDirectory() ? (expanded ? "▾  " : "›  ") : "<>  ")
                     + child.getName(), 14f, child.isDirectory()
-                    ? Color.rgb(225, 225, 225) : Color.rgb(195, 215, 225));
+                    ? mPalette.textPrimary : mPalette.textSecondary);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(28 + depth * 18), 0, dp(8), 0);
+            int maxIndent = Math.max(dp(28), mWorkspaceDrawerWidth - dp(168));
+            row.setPadding(Math.min(dp(28 + depth * 18), maxIndent), 0, dp(8), 0);
+            row.setSingleLine(true);
+            row.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            row.setContentDescription((child.isDirectory() ? "文件夹 " : "文件 ")
+                    + child.getName());
             row.setOnClickListener(v -> {
                 if (child.isDirectory()) {
                     if (!mExpandedDirectories.add(child.getAbsolutePath()))
@@ -465,12 +506,14 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                     mDrawerLayout.closeDrawer(GravityCompat.START);
                 }
             });
-            item.addView(row, new LinearLayout.LayoutParams(0, dp(40), 1f));
+            int rowHeight = workspaceRowHeight();
+            item.addView(row, new LinearLayout.LayoutParams(0, rowHeight, 1f));
             TextView more = smallAction("⋮", v -> showWorkspaceItemMenu(child));
             more.setTextSize(20f);
-            item.addView(more, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            more.setContentDescription(child.getName() + " 更多操作");
+            item.addView(more, new LinearLayout.LayoutParams(dp(48), rowHeight));
             mTreeContainer.addView(item, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+                    ViewGroup.LayoutParams.MATCH_PARENT, rowHeight));
             if (expanded) addDirectoryChildren(child, depth + 1);
         }
     }
@@ -702,7 +745,8 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         try {
             String source = FileUtils.readFileToString(file, "UTF-8");
             CodeEditor editor = new CodeEditor(this);
-            Theme theme = Theme.fromAssetsJson(this, "editor/theme/dark_plus.json");
+            Theme theme = Theme.fromAssetsJson(this, mPalette.isDark
+                    ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
             if (theme != null) editor.setTheme(theme);
             editor.setInitialText(source);
             EditorTab tab = new EditorTab(file, editor, source);
@@ -740,7 +784,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             LinearLayout cell = new LinearLayout(this);
             cell.setOrientation(LinearLayout.VERTICAL);
             TextView view = text(tab.file.getName() + (hasUnsavedChanges(tab) ? " •" : ""), 14f,
-                    tab == mActiveTab ? Color.WHITE : Color.rgb(170, 170, 170));
+                    tab == mActiveTab ? mPalette.textPrimary : mPalette.textSecondary);
             view.setGravity(Gravity.CENTER);
             view.setPadding(dp(16), 0, dp(16), 0);
             view.setOnClickListener(v -> selectTab(tab));
@@ -752,7 +796,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                     ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
             View indicator = new View(this);
             indicator.setBackgroundColor(tab == mActiveTab
-                    ? Color.rgb(42, 190, 165) : Color.TRANSPARENT);
+                    ? mPalette.accent : Color.TRANSPARENT);
             cell.addView(indicator, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
             mTabBar.addView(cell, new LinearLayout.LayoutParams(
@@ -876,13 +920,13 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         EditText replacement = dialogInput("替换");
         CheckBox regex = new CheckBox(this);
         regex.setText("正则表达式");
-        regex.setTextColor(Color.WHITE);
+        regex.setTextColor(mPalette.textPrimary);
         CheckBox replaceMode = new CheckBox(this);
         replaceMode.setText("替换");
-        replaceMode.setTextColor(Color.WHITE);
+        replaceMode.setTextColor(mPalette.textPrimary);
         CheckBox replaceAllMode = new CheckBox(this);
         replaceAllMode.setText("全部替换");
-        replaceAllMode.setTextColor(Color.WHITE);
+        replaceAllMode.setTextColor(mPalette.textPrimary);
         replaceMode.setOnCheckedChangeListener((button, checked) -> {
             if (checked) replaceAllMode.setChecked(false);
         });
@@ -895,7 +939,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         body.addView(replaceMode);
         body.addView(replaceAllMode);
         TextView note = text("正则语法与JavaScript中相同, 可使用$1~9代替被捕获的匹配",
-                11f, Color.rgb(155, 165, 165));
+                11f, mPalette.textSecondary);
         note.setPadding(0, dp(6), 0, dp(4));
         body.addView(note);
         AlertDialog dialog = darkDialog().setTitle("查找/替换")
@@ -1245,7 +1289,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private void showOtherMenu() {
         String[] items = {"项目", "打包单文件", "搜索Java包/类", "信息", "字体大小",
-                "编辑器主题", "用其他应用打开", "设计"};
+                "界面主题", "用其他应用打开", "设计"};
         darkDialog().setTitle("其他").setItems(items, (dialog, which) -> {
             if (mActiveTab == null) return;
             if (which == 0) openProjectConfig();
@@ -1367,11 +1411,12 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     private void selectTheme() {
-        darkDialog().setTitle("编辑器主题").setItems(new String[]{"Dark+", "Light+"},
-                (dialog, which) -> {
-                    Theme theme = Theme.fromAssetsJson(this,
-                            which == 0 ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
-                    if (theme != null) for (EditorTab tab : mTabs) tab.editor.setTheme(theme);
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        String[] modes = {"跟随系统", "浅色", "深色"};
+        darkDialog().setTitle("界面主题").setSingleChoiceItems(modes,
+                repository.getThemeMode(), (dialog, which) -> {
+                    repository.setThemeMode(which);
+                    dialog.dismiss();
                 }).show();
     }
 
@@ -1389,12 +1434,12 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             View preview = inflater.inflate(xml);
             LinearLayout root = new LinearLayout(this);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setBackgroundColor(Color.rgb(245, 245, 245));
+            root.setBackgroundColor(mPalette.windowBackground);
             LinearLayout bar = new LinearLayout(this);
             bar.setGravity(Gravity.CENTER_VERTICAL);
             bar.setPadding(dp(12), 0, dp(6), 0);
-            bar.setBackgroundColor(COLOR_TOOLBAR);
-            TextView title = text("设计预览 · " + mActiveTab.file.getName() + "（点此关闭）", 15f, Color.WHITE);
+            bar.setBackgroundColor(mPalette.editorToolbar);
+            TextView title = text("设计预览 · " + mActiveTab.file.getName() + "（点此关闭）", 15f, mPalette.textPrimary);
             bar.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1f));
             root.addView(bar);
             FrameLayout stage = new FrameLayout(this);
@@ -1471,7 +1516,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             return;
         }
         GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.rgb(35, 37, 37));
+        background.setColor(mPalette.editorTabActive);
         background.setCornerRadius(dp(22));
         tool.setBackground(background);
     }
@@ -1594,6 +1639,78 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        repository.addListener(mThemeListener);
+        applyThemePalette(repository.getPalette());
+    }
+
+    @Override
+    protected void onPause() {
+        AppThemeRepository.get(this).removeListener(mThemeListener);
+        super.onPause();
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        repository.refreshSystemAppearance();
+        applyThemePalette(repository.getPalette());
+    }
+
+    private void applyThemePalette(AppThemePalette palette) {
+        if (palette == null) return;
+        AppThemePalette previous = mPalette;
+        mPalette = palette;
+        applyWindowSystemUi(palette);
+        if (mDrawerLayout == null) return;
+
+        recolorTextTree(mDrawerLayout, previous, palette);
+        mDrawerLayout.setBackgroundColor(palette.editorBackground);
+        mDrawerLayout.setScrimColor(palette.scrim);
+        if (mMainLayout != null) mMainLayout.setBackgroundColor(palette.editorBackground);
+        if (mToolRow != null) mToolRow.setBackgroundColor(palette.editorToolbar);
+        if (mTabRow != null) mTabRow.setBackgroundColor(palette.editorTabInactive);
+        if (mWorkspaceDrawer != null) mWorkspaceDrawer.setBackgroundColor(palette.surfacePrimary);
+        if (mDebugBar != null) mDebugBar.setBackgroundColor(palette.surfaceElevated);
+        if (mLogPanel != null) mLogPanel.setBackgroundColor(palette.surfaceSecondary);
+        if (mShortcutBar != null) mShortcutBar.setBackgroundColor(palette.editorToolbar);
+        if (mConsoleView != null) ConsoleThemeHelper.apply(mConsoleView, palette);
+
+        Theme editorTheme = Theme.fromAssetsJson(this, palette.isDark
+                ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
+        if (editorTheme != null) {
+            for (EditorTab tab : mTabs) tab.editor.setTheme(editorTheme);
+        }
+        refreshTabs();
+        refreshFileTree();
+        if (mLogPanel != null && mLogPanel.getVisibility() == View.VISIBLE) {
+            setToolSelected(mLogTool, true);
+        }
+    }
+
+    private void recolorTextTree(View view, AppThemePalette previous, AppThemePalette current) {
+        if (view instanceof TextView && previous != null) {
+            TextView textView = (TextView) view;
+            int color = textView.getCurrentTextColor();
+            if (color == previous.textPrimary) textView.setTextColor(current.textPrimary);
+            else if (color == previous.textSecondary) textView.setTextColor(current.textSecondary);
+            else if (color == previous.textDisabled) textView.setTextColor(current.textDisabled);
+            else if (color == previous.iconPrimary) textView.setTextColor(current.iconPrimary);
+            else if (color == previous.accent) textView.setTextColor(current.accent);
+            else if (color == previous.danger) textView.setTextColor(current.danger);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                recolorTextTree(group.getChildAt(i), previous, current);
+            }
+        }
+    }
+
+    @Override
     public void onBackPressed() {
         if (mDrawerLayout != null && mDrawerLayout.isDrawerOpen(GravityCompat.START)) {
             mDrawerLayout.closeDrawer(GravityCompat.START);
@@ -1624,15 +1741,34 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     private AlertDialog.Builder darkDialog() {
-        return new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK);
+        return new AlertDialog.Builder(this, mPalette.isDark
+                ? AlertDialog.THEME_DEVICE_DEFAULT_DARK
+                : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
+    }
+
+    private void applyWindowSystemUi(AppThemePalette palette) {
+        getWindow().setStatusBarColor(palette.statusBar);
+        getWindow().setNavigationBarColor(palette.navigationBar);
+        int flags = getWindow().getDecorView().getSystemUiVisibility();
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            flags = palette.isDark
+                    ? flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    : flags | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            flags = palette.isDark
+                    ? flags & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                    : flags | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        getWindow().getDecorView().setSystemUiVisibility(flags);
     }
 
     private EditText dialogInput(String hint) {
         EditText input = new EditText(this);
         input.setHint(hint);
         input.setSingleLine(true);
-        input.setTextColor(Color.WHITE);
-        input.setHintTextColor(Color.GRAY);
+        input.setTextColor(mPalette.textPrimary);
+        input.setHintTextColor(mPalette.textSecondary);
         return input;
     }
 
@@ -1640,14 +1776,14 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         Button button = new Button(this);
         button.setText(label);
         button.setTextSize(11f);
-        button.setTextColor(Color.WHITE);
+        button.setTextColor(mPalette.textPrimary);
         button.setAllCaps(false);
         button.setLayoutParams(new LinearLayout.LayoutParams(0, dp(44), 1f));
         return button;
     }
 
     private TextView action(String label, int widthDp, View.OnClickListener listener) {
-        TextView view = text(label, 26f, Color.WHITE);
+        TextView view = text(label, 26f, mPalette.iconPrimary);
         view.setGravity(Gravity.CENTER);
         view.setOnClickListener(listener);
         view.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(56)));
@@ -1674,6 +1810,58 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private int workspaceDrawerWidth(int fullWidth, int fullHeight) {
+        if (fullWidth <= 0) return dp(330);
+        float density = Math.max(1f, getResources().getDisplayMetrics().density);
+        float widthDp = fullWidth / density;
+        float fontScale = Math.max(1f, getResources().getConfiguration().fontScale);
+        boolean landscape = getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+
+        float fraction;
+        if (landscape) {
+            fraction = widthDp >= 840f ? 0.48f : 0.62f;
+        } else if (widthDp >= 600f) {
+            fraction = 0.62f;
+        } else {
+            fraction = fontScale >= 1.30f ? 0.94f : 0.90f;
+        }
+
+        int maximum = dp(landscape ? 520 : 480);
+        int minimum = Math.min(dp(280), fullWidth);
+        int edgeSpace = Math.min(dp(56), Math.round(fullWidth * 0.16f));
+        int maximumAvailable = Math.max(1, fullWidth - edgeSpace);
+        int target = Math.min(Math.round(fullWidth * fraction), maximum);
+        return Math.max(Math.min(minimum, maximumAvailable), Math.min(target, maximumAvailable));
+    }
+
+    private int workspaceRowHeight() {
+        float fontScale = getResources().getConfiguration().fontScale;
+        if (fontScale >= 1.50f) return dp(60);
+        if (fontScale >= 1.20f) return dp(52);
+        return dp(44);
+    }
+
+    private int workspaceHeaderHeight() {
+        float fontScale = getResources().getConfiguration().fontScale;
+        if (fontScale >= 1.50f) return dp(72);
+        if (fontScale >= 1.20f) return dp(64);
+        return dp(56);
+    }
+
+    private void updateWorkspaceDrawerSize(int fullWidth, int fullHeight) {
+        if (mWorkspaceDrawer == null) return;
+        int targetWidth = workspaceDrawerWidth(fullWidth, fullHeight);
+        if (targetWidth == mWorkspaceDrawerWidth) return;
+        mWorkspaceDrawerWidth = targetWidth;
+        ViewGroup.LayoutParams rawParams = mWorkspaceDrawer.getLayoutParams();
+        if (rawParams instanceof DrawerLayout.LayoutParams) {
+            rawParams.width = targetWidth;
+            mWorkspaceDrawer.setLayoutParams(rawParams);
+            refreshFileTree();
+        }
     }
 
     private File canonical(File file) {
