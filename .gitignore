@@ -1,36 +1,41 @@
+# IDE and operating-system metadata
 *.iml
-.gradle
-/tools
-/local.properties
-/.idea/workspace.xml
-/.idea/libraries
-/.idea/caches
-/.idea/
 .DS_Store
-/build
-/release
-/captures
-.externalNativeBuild
-.cxx
-**/build/
+/.idea/
+**/.idea/
+
+# Local machine configuration
+/local.properties
+/tools/
+
+# Gradle and native build caches
+/.gradle/
+/build/
 **/.gradle/
 **/.externalNativeBuild/
 **/.cxx/
+# These are real source directories named "build" (Java packages), not build outputs.
+!apps/app/src/main/java/org/autojs/autojs/build/
+!apps/app/src/main/java/org/autojs/autojs/autojs/build/
+
+# Generated release and capture directories
+/release/
+/captures/
+
+# Local diagnostics and archived deliverables
+/.artifacts/
+/.codex-artifacts/
+/*.png
+/*.mp4
+/*.log
+/build-*.txt
+/_apk_so_check.so
+/f_back
+/f_scrim
+
+# Generated binaries
 *.apk
 *.exe
-.idea/caches/build_file_checksums.ser
 
-# Local analysis, logs, and verification artifacts
-.codegraph/
-*.log
-/*-final.png
-/build-final-screen.png
-
-# Required by the in-app APK builder; all other APK outputs remain ignored.
-!app/src/main/assets/template.apk
-
-# build log artifact
-build-log.txt
-
-# gradle/native build logs
-*.log
+# Required source input for the in-app APK builder.
+!apps/app/src/main/assets/template.apk

@@ -7,10 +7,15 @@ include ':rootshell'
 include ':colorpicker'
 include ':apkbuilder'
 
-project(':enhancedfloaty').projectDir = new File(rootProject.projectDir, 'libs/EnhancedFloaty/lib')
-project(':mutabletheme').projectDir = new File(rootProject.projectDir, 'libs/MutableTheme/mutable-theme')
-project(':multilevellistview').projectDir = new File(rootProject.projectDir, 'libs/multi-level-listview/multi-level-listview')
-project(':settingscompat').projectDir = new File(rootProject.projectDir, 'libs/settingscompat/library')
-project(':rootshell').projectDir = new File(rootProject.projectDir, 'libs/RootShell')
-project(':colorpicker').projectDir = new File(rootProject.projectDir, 'libs/ColorPicker/library')
-project(':apkbuilder').projectDir = new File(rootProject.projectDir, 'libs/ApkBuilder/apkbuilder')
+project(':app').projectDir = new File(rootProject.projectDir, 'apps/app')
+project(':inrt').projectDir = new File(rootProject.projectDir, 'apps/inrt')
+project(':autojs').projectDir = new File(rootProject.projectDir, 'modules/autojs')
+project(':automator').projectDir = new File(rootProject.projectDir, 'modules/automator')
+project(':common').projectDir = new File(rootProject.projectDir, 'modules/common')
+project(':enhancedfloaty').projectDir = new File(rootProject.projectDir, 'third-party/EnhancedFloaty/lib')
+project(':mutabletheme').projectDir = new File(rootProject.projectDir, 'third-party/MutableTheme/mutable-theme')
+project(':multilevellistview').projectDir = new File(rootProject.projectDir, 'third-party/multi-level-listview/multi-level-listview')
+project(':settingscompat').projectDir = new File(rootProject.projectDir, 'third-party/settingscompat/library')
+project(':rootshell').projectDir = new File(rootProject.projectDir, 'third-party/RootShell')
+project(':colorpicker').projectDir = new File(rootProject.projectDir, 'third-party/ColorPicker/library')
+project(':apkbuilder').projectDir = new File(rootProject.projectDir, 'third-party/ApkBuilder/apkbuilder')

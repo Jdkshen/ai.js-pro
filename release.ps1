@@ -17,32 +17,69 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $saved = $env:JAVA_TOOL_OPTIONS
 $t0 = Get-Date
 
+function Get-JavaMajorVersion {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'java'
+    $psi.Arguments = '-version'
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $process = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    $text = $stdout + $stderr
+    if ($text -match '"(\d+)\.(\d+)') {
+        $major = [int]$Matches[1]
+        $minor = [int]$Matches[2]
+        if ($major -eq 1) {
+            return $minor
+        }
+        return $major
+    }
+    return 0
+}
+
 Write-Host "`n=== Release Builder ===" -ForegroundColor Yellow
 
 try {
     if (-not $SkipNative) {
         Write-Host "`n[1/4] Native libs" -ForegroundColor Cyan
-        & (Join-Path $root 'app\src\main\cpp\build-native.ps1') 2>$null
+        & (Join-Path $root 'apps\app\src\main\cpp\build-native.ps1') 2>$null
         if ($LASTEXITCODE) { throw "ImGui failed" }
-        & (Join-Path $root 'autojs\src\main\cpp\build-quickjs.ps1') 2>$null
+        & (Join-Path $root 'modules\autojs\src\main\cpp\build-quickjs.ps1') 2>$null
         if ($LASTEXITCODE) { throw "QuickJS failed" }
         Write-Host "  Native OK" -ForegroundColor Green
     }
 
     Write-Host "`n[2/4] Gradle" -ForegroundColor Cyan
+    # Gradle 4.10.2 needs module access flags on JDK 9+ only; JDK 8 must not receive them.
     $cpkgs = @('api','code','comp','file','main','model','parser','processing','tree','util','jvm')
     $jx = ($cpkgs | ForEach-Object { "--add-exports=jdk.compiler/com.sun.tools.javac.$_=ALL-UNNAMED" })
-    $env:JAVA_TOOL_OPTIONS = @(
-        '--add-opens=java.base/java.util=ALL-UNNAMED',
-        '--add-opens=java.base/java.lang=ALL-UNNAMED',
-        '--add-opens=java.base/java.io=ALL-UNNAMED'
-    ) + $jx -join ' '
+    $javaMajor = Get-JavaMajorVersion
+    if ($javaMajor -ge 9) {
+        $toolOptions = @(
+            '--add-opens=java.base/java.util=ALL-UNNAMED',
+            '--add-opens=java.base/java.lang=ALL-UNNAMED',
+            '--add-opens=java.base/java.io=ALL-UNNAMED'
+        ) + $jx -join ' '
+        $env:JAVA_TOOL_OPTIONS = $toolOptions
+    } else {
+        $toolOptions = ''
+        $env:JAVA_TOOL_OPTIONS = $saved
+    }
 
     Push-Location $root
     try {
-        $gradle = "set JAVA_TOOL_OPTIONS=--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.jvm=ALL-UNNAMED && gradlew.bat :app:assembleCommonDebug --no-daemon --max-workers=1"
+        $gradle = "gradlew.bat :app:assembleCommonDebug --no-daemon --max-workers=1"
+        if ($toolOptions) {
+            $gradle = "set JAVA_TOOL_OPTIONS=$toolOptions && $gradle"
+        }
         if ($ForceClean) {
-            $cleanCmd = "set JAVA_TOOL_OPTIONS=--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.jvm=ALL-UNNAMED && gradlew.bat :app:clean --no-daemon --max-workers=1"
+            $cleanCmd = "gradlew.bat :app:clean --no-daemon --max-workers=1"
+            if ($toolOptions) {
+                $cleanCmd = "set JAVA_TOOL_OPTIONS=$toolOptions && $cleanCmd"
+            }
             cmd /c $cleanCmd 2>$null | Out-Null
         }
         cmd /c $gradle 2>$null | Out-Null
@@ -51,7 +88,7 @@ try {
     Write-Host "  Gradle OK" -ForegroundColor Green
 
     Write-Host "`n[3/4] APK" -ForegroundColor Cyan
-    $apkDir = Join-Path $root 'app\build\outputs\apk\common'
+    $apkDir = Join-Path $root 'apps\app\build\outputs\apk\common'
     $apk = Get-ChildItem $apkDir -Recurse -Filter '*arm64*.apk' |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     $mb = [math]::Round($apk.Length / 1MB, 1)

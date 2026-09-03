@@ -1,51 +1,63 @@
 # AI.js Pro
-## 简介
-一个支持无障碍服务的Android平台上的JavaScript IDE，其发展目标是JsBox和Workflow。
 
-兼容原有的 [VS Code 插件](https://github.com/hyb1996/Auto.js-VSCode-Extension)，可在桌面端编辑并推送脚本。
+AI.js Pro 是一个运行在 Android 上、支持无障碍自动化的 JavaScript IDE 和脚本运行时。项目兼容传统 Auto.js 脚本，并提供可显式选择的 Native QuickJS 引擎。
+
+## 主要能力
+
+- 基于无障碍服务的控件查找、点击、滑动和布局分析；
+- Rhino 兼容引擎与 QuickJS 现代 JavaScript 引擎；
+- 截图、找色、找图、OpenCV 图像处理与 YOLO 推理；
+- 悬浮窗、定时任务、通知与按键监听、Root/Shizuku Shell；
+- 内置编辑器、示例、离线文档、控制台和 APK 打包能力；
+- 兼容原有的 [Auto.js VS Code 插件](https://github.com/hyb1996/Auto.js-VSCode-Extension)。
+
+当前构建版本由 `project-versions.json` 定义，为 **4.1.1 Alpha2**；目录名不代表实际 APK 版本。
+
+## 仓库结构
+
+```text
+apps/
+├─ app/                 主应用（Gradle 模块 :app）
+└─ inrt/                独立脚本 APK 运行时（:inrt）
+modules/
+├─ autojs/              JavaScript 引擎与运行时 API（:autojs）
+├─ automator/           无障碍自动化核心（:automator）
+└─ common/              公共基础库（:common）
+third-party/            内嵌第三方 Android 模块
+docs/                   架构、编译指南、开发计划和历史报告
+gradle/                 Gradle Wrapper
+.artifacts/             本地构建与调试归档（不纳入 Git）
+```
+
+Gradle 逻辑模块名、Java/Kotlin 包名和脚本公开 API 均保持不变，物理目录映射统一定义在 `settings.gradle`。
+
+## 快速构建
+
+在 Windows PowerShell 中执行：
+
+```powershell
+# 已有预编译原生库，只组装主应用
+.\build-common-debug.ps1 -SkipNative
+
+# 重建 ImGui、QuickJS 原生库并组装主应用
+.\build-common-debug.ps1
+```
+
+Debug APK 输出到 `apps/app/build/outputs/apk/common/debug/`。完整环境要求和故障排查见[编译指南](docs/guides/编译指南.md)。
+
+## 文档
+
+- [文档索引](docs/README.md)
+- [源码项目说明](docs/architecture/项目说明.md)
+- [Rhino / QuickJS 双引擎架构](docs/architecture/QUICKJS_ENGINE.md)
+- [编译指南](docs/guides/编译指南.md)
+- [内置示例](apps/app/src/main/assets/sample/)
+- [Auto.js 兼容 API 在线文档](https://hyb1996.github.io/AutoJs-Docs/)
 
 项目仓库：[Jdkshen/ai.js-pro](https://github.com/Jdkshen/ai.js-pro)
 
 版本发布：[Releases](https://github.com/Jdkshen/ai.js-pro/releases)
 
-兼容 API 文档：https://hyb1996.github.io/AutoJs-Docs/
+## 许可证
 
-### 特性
-1. 由无障碍服务实现的简单易用的自动操作函数
-2. 悬浮窗录制和运行
-3. 更专业&强大的选择器API，提供对屏幕上的控件的寻找、遍历、获取信息、操作等。类似于Google的UI测试框架UiAutomator，您也可以把他当做移动版UI测试框架使用
-4. 采用JavaScript为脚本语言，并支持代码补全、变量重命名、代码格式化、查找替换等功能，可以作为一个JavaScript IDE使用
-5. 支持使用e4x编写界面，并可以将JavaScript打包为apk文件，您可以用它来开发小工具应用
-6. 支持使用Root权限以提供更强大的屏幕点击、滑动、录制功能和运行shell命令。录制录制可产生js文件或二进制文件，录制动作的回放比较流畅
-7. 提供截取屏幕、保存截图、图片找色、找图等函数
-8. 可作为Tasker插件使用，结合Tasker可胜任日常工作流
-9. 带有界面分析工具，类似Android Studio的LayoutInspector，可以分析界面层次和范围、获取界面上的控件信息
-10. 双 JavaScript 引擎：旧脚本默认使用 Rhino，新脚本可通过 `// @engine quickjs` 选择 Native QuickJS 2026-06-04
-
-双引擎的架构、使用方式和当前 API 覆盖范围见 [QUICKJS_ENGINE.md](QUICKJS_ENGINE.md)。
-
-本软件与按键精灵等软件不同，主要区别是：
-1. AI.js Pro主要以自动化、工作流为目标，更多地是方便日常生活工作，例如启动游戏时自动屏蔽通知、一键与特定联系人微信视频（知乎上出现过该问题，老人难以进行复杂的操作和子女进行微信视频）等
-2. AI.js Pro兼容性更好。以坐标为基础的按键精灵、脚本精灵很容易出现分辨率问题，而以控件为基础的AI.js Pro则没有这个问题
-3. AI.js Pro执行大部分任务不需要root权限。只有需要精确坐标点击、滑动的相关函数才需要root权限
-4. AI.js Pro可以提供界面编写等功能，不仅仅是作为一个脚本软件而存在
-
-
-### 信息
-* 上游社区：[autojs.org](http://www.autojs.org)
-* 文档：可在[这里](https://hyb1996.github.io/AutoJs-Docs/)查看兼容 API 在线文档。
-* 示例：可在[这里](https://github.com/Jdkshen/ai.js-pro/tree/main/app/src/main/assets/sample)查看，也可直接在应用内运行。
-
-### 截图
-
-![screen-capture2](https://raw.githubusercontent.com/hyb1996/NoRootScriptDroid/master/screen-captures/ss02.png)
-
-![screen-capture5](https://raw.githubusercontent.com/hyb1996/NoRootScriptDroid/master/screen-captures/ss05.png)
-
-![screen-capture5](https://raw.githubusercontent.com/hyb1996/NoRootScriptDroid/master/screen-captures/ss07.png)
-
-![screen-capture5](https://raw.githubusercontent.com/hyb1996/NoRootScriptDroid/master/screen-captures/ss08.png)
-
-## License
-基于 [Mozilla Public License Version 2.0](https://github.com/Jdkshen/ai.js-pro/blob/main/LICENSE.md) 并附加以下条款：
-* **非商业性使用** — 不得将此项目及其衍生的项目的源代码和二进制产品用于任何商业和盈利用途
+源码基于 [Mozilla Public License Version 2.0](LICENSE.md)，并附加非商业性使用条款。修改、分发或发布衍生版本前，请完整阅读 `LICENSE.md`。
