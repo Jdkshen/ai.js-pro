@@ -12,9 +12,12 @@ import android.view.TextureView;
 import android.view.accessibility.AccessibilityNodeProvider;
 
 import java.util.Collections;
+import java.util.concurrent.locks.LockSupport;
 
 final class ImGuiSurfaceView extends TextureView
         implements TextureView.SurfaceTextureListener, Runnable {
+
+    private static final long TARGET_FRAME_INTERVAL_NANOS = 1_000_000_000L / 60L;
 
     interface ActionListener {
         void onImGuiAction(int action);
@@ -22,7 +25,9 @@ final class ImGuiSurfaceView extends TextureView
 
     private final ActionListener mActionListener;
     private final ImGuiAccessibilityProvider mAccessibilityProvider;
+    private final Object mRenderStateLock = new Object();
     private volatile boolean mRunning;
+    private volatile boolean mPaused;
     private Thread mRenderThread;
     private Surface mNativeSurface;
     private int mNotifiedAccessibilityRevision = -1;
@@ -131,7 +136,11 @@ final class ImGuiSurfaceView extends TextureView
     @Override
     public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
         mRunning = false;
+        synchronized (mRenderStateLock) {
+            mRenderStateLock.notifyAll();
+        }
         if (mRenderThread != null) {
+            mRenderThread.interrupt();
             try {
                 mRenderThread.join(1500L);
             } catch (InterruptedException interrupted) {
@@ -155,6 +164,10 @@ final class ImGuiSurfaceView extends TextureView
     @Override
     public void run() {
         while (mRunning) {
+            if (!waitUntilResumed()) {
+                break;
+            }
+            long frameStartedAt = System.nanoTime();
             ImGuiNativeBridge.renderFrame(getWidth(), getHeight(),
                     getResources().getDisplayMetrics().density);
             int accessibilityRevision = ImGuiNativeBridge.getAccessibilityRevision();
@@ -170,6 +183,36 @@ final class ImGuiSurfaceView extends TextureView
                 final int dispatchedAction = action;
                 post(() -> mActionListener.onImGuiAction(dispatchedAction));
             }
+            long remainingNanos = TARGET_FRAME_INTERVAL_NANOS
+                    - (System.nanoTime() - frameStartedAt);
+            if (remainingNanos > 0L && mRunning && !mPaused) {
+                LockSupport.parkNanos(remainingNanos);
+                Thread.interrupted();
+            }
+        }
+    }
+
+    private boolean waitUntilResumed() {
+        synchronized (mRenderStateLock) {
+            while (mRunning && mPaused) {
+                try {
+                    mRenderStateLock.wait();
+                } catch (InterruptedException ignored) {
+                    // Surface destruction interrupts the thread so it can stop immediately.
+                }
+            }
+            return mRunning;
+        }
+    }
+
+    void pauseRendering() {
+        mPaused = true;
+    }
+
+    void resumeRendering() {
+        mPaused = false;
+        synchronized (mRenderStateLock) {
+            mRenderStateLock.notifyAll();
         }
     }
 

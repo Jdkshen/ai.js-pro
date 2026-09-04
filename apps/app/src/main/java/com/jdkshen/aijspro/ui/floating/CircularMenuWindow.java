@@ -124,7 +124,14 @@ public class CircularMenuWindow extends FloatyWindow {
         }
 
         mCircularActionMenu.addOnStateChangeListener(new CircularActionMenu.OnStateChangeListenerAdapter() {
+            @Override
+            public void onExpanding(CircularActionMenu menu) {
+                mDragGesture.setEnabled(false);
+                mCircularActionView.setAlpha(mActiveAlpha);
+            }
+
             public void onCollapsed(CircularActionMenu menu) {
+                mDragGesture.setEnabled(true);
                 mCircularActionView.setAlpha(mInactiveAlpha);
             }
 
@@ -143,7 +150,6 @@ public class CircularMenuWindow extends FloatyWindow {
     }
 
     public void expand() {
-        mDragGesture.setEnabled(false);
         setMenuPositionAtActionView();
         if (mActionViewWindowBridge.getX() > mActionViewWindowBridge.getScreenWidth() / 2) {
             mCircularActionMenu.expand(3);
@@ -170,10 +176,8 @@ public class CircularMenuWindow extends FloatyWindow {
     }
 
     public void collapse() {
-        mDragGesture.setEnabled(true);
         setMenuPositionAtActionView();
         mCircularActionMenu.collapse();
-        mCircularActionView.setAlpha(mDragGesture.getUnpressedAlpha());
     }
 
     public boolean isExpanded() {
@@ -211,6 +215,7 @@ public class CircularMenuWindow extends FloatyWindow {
                 .putInt(KEY_POSITION_Y, mActionViewWindowBridge.getY())
                 .apply();
         try {
+            mDragGesture.cancel();
             mOrientationEventListener.disable();
             getWindowManager().removeView(mCircularActionMenu);
             getWindowManager().removeView(mCircularActionView);

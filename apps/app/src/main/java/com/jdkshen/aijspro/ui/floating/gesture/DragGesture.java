@@ -1,7 +1,6 @@
 package com.jdkshen.aijspro.ui.floating.gesture;
 
 import androidx.core.view.GestureDetectorCompat;
-import android.util.Log;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
@@ -27,6 +26,7 @@ public class DragGesture extends GestureDetector.SimpleOnGestureListener {
     private float mPressedAlpha = 1.0f;
     private float mUnpressedAlpha = 0.4f;
     private boolean mEnabled = true;
+    private boolean mDragging;
 
     public DragGesture(WindowBridge windowBridge, View view) {
         mWindowBridge = windowBridge;
@@ -40,11 +40,13 @@ public class DragGesture extends GestureDetector.SimpleOnGestureListener {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 gestureDetector.onTouchEvent(event);
-                if (event.getAction() == MotionEvent.ACTION_UP) {
-                    mView.setAlpha(mUnpressedAlpha);
-                    if (!onTheEdge() && mAutoKeepToEdge) {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    if (mDragging && mEnabled && !onTheEdge() && mAutoKeepToEdge) {
                         keepToEdge();
                     }
+                    mView.setAlpha(mUnpressedAlpha);
+                    mDragging = false;
                 }
                 return true;
             }
@@ -103,7 +105,8 @@ public class DragGesture extends GestureDetector.SimpleOnGestureListener {
         mInitialY = mWindowBridge.getY();
         mInitialTouchX = event.getRawX();
         mInitialTouchY = event.getRawY();
-        return false;
+        mDragging = false;
+        return true;
     }
 
     @Override
@@ -111,11 +114,15 @@ public class DragGesture extends GestureDetector.SimpleOnGestureListener {
         if (!mEnabled) {
             return false;
         }
-        mWindowBridge.updatePosition(mInitialX + (int) ((e2.getRawX() - mInitialTouchX)),
-                mInitialY + (int) ((e2.getRawY() - mInitialTouchY)));
+        mDragging = true;
+        mWindowBridge.updatePosition(mInitialX + (int) (e2.getRawX() - mInitialTouchX),
+                mInitialY + (int) (e2.getRawY() - mInitialTouchY));
         mView.setAlpha(mPressedAlpha);
-        Log.d("DragGesture", "onScroll");
-        return false;
+        return true;
+    }
+
+    public void cancel() {
+        mDragging = false;
     }
 
 
@@ -129,10 +136,10 @@ public class DragGesture extends GestureDetector.SimpleOnGestureListener {
     }
 
     @Override
-    public boolean onSingleTapConfirmed(MotionEvent e) {
+    public boolean onSingleTapUp(MotionEvent e) {
         if (mOnClickListener != null)
             mOnClickListener.onClick(mView);
-        return super.onSingleTapConfirmed(e);
+        return true;
     }
 
     public void setOnDraggedViewClickListener(View.OnClickListener onClickListener) {

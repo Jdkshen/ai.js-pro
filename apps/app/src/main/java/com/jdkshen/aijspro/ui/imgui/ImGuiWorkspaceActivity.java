@@ -196,6 +196,10 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
     @Override
     protected void onResume() {
         super.onResume();
+        ImGuiSurfaceView surface = findSurfaceView();
+        if (surface != null) {
+            surface.resumeRendering();
+        }
         restoreFloatingWindowPreference();
         refreshWorkspaceState();
         mRuntimeRefreshHandler.removeCallbacks(mRuntimeRefresh);
@@ -209,6 +213,10 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
 
     @Override
     protected void onPause() {
+        ImGuiSurfaceView surface = findSurfaceView();
+        if (surface != null) {
+            surface.pauseRendering();
+        }
         mRuntimeRefreshHandler.removeCallbacks(mRuntimeRefresh);
         super.onPause();
         com.jdkshen.aijspro.theme.AppThemeRepository.get(this).removeListener(mThemeListener);

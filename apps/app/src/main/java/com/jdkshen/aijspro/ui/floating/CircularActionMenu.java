@@ -2,19 +2,19 @@ package com.jdkshen.aijspro.ui.floating;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.graphics.Canvas;
 import android.graphics.PointF;
 import androidx.annotation.AttrRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
 import android.util.AttributeSet;
 import android.view.Gravity;
 import android.view.View;
-import android.view.animation.Animation;
+import android.view.animation.DecelerateInterpolator;
 import android.view.animation.Interpolator;
-import android.view.animation.ScaleAnimation;
 import android.widget.FrameLayout;
 
 import com.jdkshen.aijspro.R;
@@ -74,10 +74,14 @@ public class CircularActionMenu extends FrameLayout {
     private boolean mCollapsing = false;
     private float mRadius = 200;
     private float mAngle = (float) Math.toRadians(90);
-    private long mDuration = 200;
+    private long mDuration = 180;
     private int mExpandedHeight = -1;
     private int mExpandedWidth = -1;
-    private final Interpolator mInterpolator = new FastOutSlowInInterpolator();
+    private final Interpolator mInterpolator = new DecelerateInterpolator(1.5f);
+    private int mExpansionDirection = 1;
+    private ValueAnimator mMenuAnimator;
+    private float mExpansionProgress;
+    private boolean mDrawingAnimation;
 
 
     public CircularActionMenu(@NonNull Context context) {
@@ -131,41 +135,124 @@ public class CircularActionMenu extends FrameLayout {
     }
 
     public void expand(int direction) {
-        setVisibility(VISIBLE);
-        mExpanding = true;
-        Animator.AnimatorListener listener = new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                mExpanding = false;
-                mExpanded = true;
-                for (OnStateChangeListener l : mOnStateChangeListeners) {
-                    l.onExpanded(CircularActionMenu.this);
-                }
-            }
-        };
-        ScaleAnimation scaleAnimation = createScaleAnimation(0, 1);
-        direction = (direction == Gravity.RIGHT ? 1 : -1);
-        for (int i = 0; i < getItemCount(); i++) {
-            View item = getItemAt(i);
-            item.animate()
-                    .translationXBy(direction * mItemExpandedPositionOffsets[i].x)
-                    .translationYBy(mItemExpandedPositionOffsets[i].y)
-                    .setListener(listener)
-                    .setDuration(mDuration)
-                    .start();
-            item.startAnimation(scaleAnimation);
+        if (mExpanding || (mExpanded && !mCollapsing)) {
+            return;
         }
+        float startProgress = mCollapsing ? getExpansionProgress() : 0f;
+        mExpansionDirection = direction == Gravity.RIGHT ? 1 : -1;
+        cancelItemAnimations();
+        mExpanding = true;
+        mCollapsing = false;
+        mExpanded = false;
+        prepareDrawingAnimation(startProgress);
+        setVisibility(VISIBLE);
+        setItemsEnabled(false);
         for (OnStateChangeListener l : mOnStateChangeListeners) {
             l.onExpanding(CircularActionMenu.this);
         }
+        animateTo(1f, startProgress);
     }
 
-    private ScaleAnimation createScaleAnimation(float fromScale, float toScale) {
-        ScaleAnimation scaleAnimation = new ScaleAnimation(fromScale, toScale, fromScale, toScale, Animation.RELATIVE_TO_SELF, 0f, Animation.RELATIVE_TO_SELF, 0.5f);
-        scaleAnimation.setDuration(mDuration);
-        scaleAnimation.setFillAfter(true);
-        scaleAnimation.setInterpolator(mInterpolator);
-        return scaleAnimation;
+    private void animateTo(float targetProgress, float startProgress) {
+        if (Math.abs(targetProgress - startProgress) < 0.001f) {
+            finishAnimation(targetProgress);
+            return;
+        }
+        long duration = Math.max(1L,
+                (long) (mDuration * Math.abs(targetProgress - startProgress)));
+        mMenuAnimator = ValueAnimator.ofFloat(startProgress, targetProgress);
+        mMenuAnimator.setDuration(duration);
+        mMenuAnimator.setInterpolator(mInterpolator);
+        mMenuAnimator.addUpdateListener(animation -> {
+            mExpansionProgress = (float) animation.getAnimatedValue();
+            postInvalidateOnAnimation();
+        });
+        mMenuAnimator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (animation == mMenuAnimator) {
+                    mMenuAnimator = null;
+                    finishAnimation(targetProgress);
+                }
+            }
+        });
+        mMenuAnimator.start();
+    }
+
+    private void finishAnimation(float targetProgress) {
+        mExpansionProgress = targetProgress;
+        mDrawingAnimation = false;
+        if (targetProgress >= 1f) {
+            applyExpandedItemTransforms();
+            mExpanding = false;
+            mCollapsing = false;
+            mExpanded = true;
+            setItemsEnabled(true);
+            for (OnStateChangeListener listener : mOnStateChangeListeners) {
+                listener.onExpanded(this);
+            }
+        } else {
+            resetItemTransforms();
+            mExpanding = false;
+            mCollapsing = false;
+            mExpanded = false;
+            setItemsEnabled(false);
+            setVisibility(GONE);
+            for (OnStateChangeListener listener : mOnStateChangeListeners) {
+                listener.onCollapsed(this);
+            }
+        }
+    }
+
+    private void applyExpandedItemTransforms() {
+        if (mItemExpandedPositionOffsets == null
+                || mItemExpandedPositionOffsets.length != getItemCount()) {
+            return;
+        }
+        for (int i = 0; i < getItemCount(); i++) {
+            View item = getItemAt(i);
+            PointF offset = mItemExpandedPositionOffsets[i];
+            item.setTranslationX(mExpansionDirection * offset.x);
+            item.setTranslationY(offset.y);
+            item.setScaleX(1f);
+            item.setScaleY(1f);
+        }
+    }
+
+    private void resetItemTransforms() {
+        for (int i = 0; i < getItemCount(); i++) {
+            View item = getItemAt(i);
+            item.setTranslationX(0f);
+            item.setTranslationY(0f);
+            item.setScaleX(1f);
+            item.setScaleY(1f);
+        }
+    }
+
+    private void prepareDrawingAnimation(float progress) {
+        mExpansionProgress = Math.max(0f, Math.min(1f, progress));
+        mDrawingAnimation = true;
+        resetItemTransforms();
+        postInvalidateOnAnimation();
+    }
+
+    private float getExpansionProgress() {
+        return mDrawingAnimation ? mExpansionProgress : (mExpanded ? 1f : 0f);
+    }
+
+    private void setItemsEnabled(boolean enabled) {
+        for (int i = 0; i < getItemCount(); i++) {
+            getItemAt(i).setEnabled(enabled);
+        }
+    }
+
+    private void cancelItemAnimations() {
+        if (mMenuAnimator != null) {
+            mMenuAnimator.removeAllListeners();
+            mMenuAnimator.removeAllUpdateListeners();
+            mMenuAnimator.cancel();
+            mMenuAnimator = null;
+        }
     }
 
     public View getItemAt(int i) {
@@ -173,33 +260,20 @@ public class CircularActionMenu extends FrameLayout {
     }
 
     public void collapse() {
-        Animator.AnimatorListener listener = new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                mCollapsing = false;
-                mExpanded = false;
-                setVisibility(GONE);
-                for (OnStateChangeListener l : mOnStateChangeListeners) {
-                    l.onCollapsed(CircularActionMenu.this);
-                }
-            }
-        };
-        mCollapsing = true;
-        ScaleAnimation scaleAnimation = createScaleAnimation(1, 0);
-        for (int i = 0; i < getItemCount(); i++) {
-            View item = getItemAt(i);
-            item.animate()
-                    .translationX(0)
-                    .translationY(0)
-                    .setListener(listener)
-                    .setDuration(mDuration)
-                    .setInterpolator(mInterpolator)
-                    .start();
-            item.startAnimation(scaleAnimation);
+        if (mCollapsing || (!mExpanded && !mExpanding)) {
+            return;
         }
+        float startProgress = getExpansionProgress();
+        cancelItemAnimations();
+        prepareDrawingAnimation(startProgress);
+        mCollapsing = true;
+        mExpanding = false;
+        mExpanded = false;
+        setItemsEnabled(false);
         for (OnStateChangeListener l : mOnStateChangeListeners) {
             l.onCollapsing(CircularActionMenu.this);
         }
+        animateTo(0f, startProgress);
     }
 
     public void addOnStateChangeListener(OnStateChangeListener onStateChangeListener) {
@@ -211,7 +285,7 @@ public class CircularActionMenu extends FrameLayout {
     }
 
     public boolean isExpanded() {
-        return mExpanded;
+        return mExpanded || mExpanding;
     }
 
     public boolean isExpanding() {
@@ -262,9 +336,44 @@ public class CircularActionMenu extends FrameLayout {
             calcExpandedSize();
         }
         setMeasuredDimension(2 * mExpandedWidth, mExpandedHeight);
+        if (mDrawingAnimation) {
+            resetItemTransforms();
+        } else if (mExpanded) {
+            applyExpandedItemTransforms();
+        } else {
+            resetItemTransforms();
+        }
         for (OnStateChangeListener listener : mOnStateChangeListeners) {
             listener.onMeasured(this);
         }
+    }
+
+    @Override
+    protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
+        if (!mDrawingAnimation || mItemExpandedPositionOffsets == null) {
+            return super.drawChild(canvas, child, drawingTime);
+        }
+        int index = indexOfChild(child);
+        if (index < 0 || index >= mItemExpandedPositionOffsets.length) {
+            return super.drawChild(canvas, child, drawingTime);
+        }
+        PointF offset = mItemExpandedPositionOffsets[index];
+        int saveCount = canvas.save();
+        canvas.translate(mExpansionDirection * offset.x * mExpansionProgress,
+                offset.y * mExpansionProgress);
+        float pivotX = child.getLeft() + child.getWidth() / 2f;
+        float pivotY = child.getTop() + child.getHeight() / 2f;
+        canvas.scale(mExpansionProgress, mExpansionProgress, pivotX, pivotY);
+        boolean drawn = super.drawChild(canvas, child, drawingTime);
+        canvas.restoreToCount(saveCount);
+        return drawn;
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        cancelItemAnimations();
+        mDrawingAnimation = false;
+        super.onDetachedFromWindow();
     }
 
     @Override
