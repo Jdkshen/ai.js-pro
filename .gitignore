@@ -11,12 +11,15 @@
 # Gradle and native build caches
 /.gradle/
 /build/
+**/build/
 **/.gradle/
 **/.externalNativeBuild/
 **/.cxx/
 # These are real source directories named "build" (Java packages), not build outputs.
 !apps/app/src/main/java/org/autojs/autojs/build/
+!apps/app/src/main/java/org/autojs/autojs/build/**
 !apps/app/src/main/java/org/autojs/autojs/autojs/build/
+!apps/app/src/main/java/org/autojs/autojs/autojs/build/**
 
 # Generated release and capture directories
 /release/
