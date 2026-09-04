@@ -7,7 +7,7 @@
 当前左上角三横线按钮并没有打开侧滑抽屉，调用链如下：
 
 1. `apps/app/src/main/cpp/autojs_imgui.cpp` 的 `drawTopBar()` 点击 `##navigation` 后执行 `queueAction(22)`。
-2. `apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiWorkspaceActivity.java` 收到 `ACTION_OPEN_WORKSPACE_MENU`。
+2. `apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiWorkspaceActivity.java` 收到 `ACTION_OPEN_WORKSPACE_MENU`。
 3. `showWorkspaceMenu()` 使用 `new AlertDialog.Builder(this).setItems(...)` 显示整页列表弹窗。
 
 原 Auto.js Pro 主界面使用 `DrawerLayout + ActionBarDrawerToggle`，因此用户看到的是从左侧滑出的导航抽屉。ImGui 工作台没有沿用该 `DrawerLayout`，而是用 `AlertDialog` 临时代替，所以交互不一致。
@@ -193,17 +193,17 @@ static native boolean closeWorkspaceDrawer();
    - 抽屉开启时拦截背景手势。
    - 新增 `closeWorkspaceDrawer()` JNI 实现。
 
-2. `apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiNativeBridge.java`
+2. `apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiNativeBridge.java`
    - 声明关闭抽屉的 Native 接口。
    - 如需动态状态，可新增 `setDrawerState(...)`，不要每帧从 C++ 反调 Java。
 
-3. `apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiWorkspaceActivity.java`
+3. `apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiWorkspaceActivity.java`
    - 删除/停用 `showWorkspaceMenu()` 根弹窗。
    - 增加各菜单项 action 常量和处理分支，复用现有业务方法。
    - 返回键优先关闭抽屉。
    - 在现有运行状态刷新流程中同步无障碍、悬浮窗和开发者连接状态。
 
-4. `apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiSurfaceView.java`
+4. `apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiSurfaceView.java`
    - 原则上继续转发原始 MotionEvent。
    - 只有确实需要处理系统手势冲突时才修改，不能破坏现有列表滚动和分页。
 

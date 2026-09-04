@@ -129,8 +129,8 @@ adb devices -l
 
 ```powershell
 adb -s SERIAL install -r "apps/app/build/outputs/apk/common/debug/app-common-arm64-v8a-debug.apk"
-adb -s SERIAL shell am force-stop org.autojs.autojs
-adb -s SERIAL shell monkey -p org.autojs.autojs -c android.intent.category.LAUNCHER 1
+adb -s SERIAL shell am force-stop com.jdkshen.aijspro
+adb -s SERIAL shell monkey -p com.jdkshen.aijspro -c android.intent.category.LAUNCHER 1
 ```
 
 必须检查目标手机返回 `Success`。不能因为它同时出现 USB 与无线 ADB 连接而重复安装，也不能在未确认设备身份时随意使用 `adb devices` 返回的第一条连接。
@@ -138,8 +138,8 @@ adb -s SERIAL shell monkey -p org.autojs.autojs -c android.intent.category.LAUNC
 安装后还必须验证：
 
 ```powershell
-adb -s SERIAL shell pm path org.autojs.autojs
-adb -s SERIAL shell dumpsys package org.autojs.autojs
+adb -s SERIAL shell pm path com.jdkshen.aijspro
+adb -s SERIAL shell dumpsys package com.jdkshen.aijspro
 ```
 
 记录 `versionName`、`versionCode` 和安装路径，并确认启动后进程存在。设备处于锁屏、离线、未授权或存储空间不足时应直接报错，不得继续生成通过报告。
@@ -175,7 +175,7 @@ adb -s SERIAL logcat -c
 通过运行入口直接启动脚本：
 
 ```powershell
-adb -s SERIAL shell am start -n org.autojs.autojs/.external.open.RunIntentActivity --es path "/sdcard/脚本/脚本引擎/Rhino 回归测试.js"
+adb -s SERIAL shell am start -n com.jdkshen.aijspro/com.jdkshen.aijspro.external.open.RunIntentActivity --es path "/sdcard/脚本/脚本引擎/Rhino 回归测试.js"
 ```
 
 最多等待 30 秒，主动轮询日志，查找：
@@ -202,7 +202,7 @@ FATAL EXCEPTION
 同样先清空日志，然后启动：
 
 ```powershell
-adb -s SERIAL shell am start -n org.autojs.autojs/.external.open.RunIntentActivity --es path "/sdcard/脚本/QuickJS 新引擎/QuickJS 全模块回归测试.js"
+adb -s SERIAL shell am start -n com.jdkshen.aijspro/com.jdkshen.aijspro.external.open.RunIntentActivity --es path "/sdcard/脚本/QuickJS 新引擎/QuickJS 全模块回归测试.js"
 ```
 
 通过条件：
@@ -265,7 +265,7 @@ adb -s SERIAL shell am start -n org.autojs.autojs/.external.open.RunIntentActivi
 3. `-Install` 应明确选择一台目标物理设备；同一手机的 USB 与无线 ADB 连接必须去重并优先使用 USB，不能无说明地取第一条连接。
 4. 必须检查目标设备的 `adb install` 返回码。
 5. 输出完整 SHA256，同时可以附加短摘要用于显示。
-6. 安装后应验证包 `org.autojs.autojs` 确实存在并能启动。
+6. 安装后应验证包 `com.jdkshen.aijspro` 确实存在并能启动。
 7. 建议增加 `-Serial` 参数用于显式选择目标手机；检测到多个不同物理设备且未指定时应停止并提示，而不是猜测。
 8. 构建、安装、启动或测试任一阶段失败时，脚本最终退出码必须为非 0。
 9. 不得用 `2>$null` 或 `Out-Null` 吞掉构建失败所需的诊断信息；可以同时输出到终端并保存日志文件。

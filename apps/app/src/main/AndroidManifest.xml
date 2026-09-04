@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools"
-          package="org.autojs.autojs">
+          package="com.jdkshen.aijspro">
 
     <!-- Shizuku itself requires Android 6+, but its v11 provider only exchanges a Binder and is
          safe to package while AI.js Pro keeps its existing Android 5.x minimum. The script bridge
@@ -88,7 +88,7 @@
             android:windowSoftInputMode="adjustResize"/>
         <activity
             android:name=".external.shortcut.ShortcutActivity"
-            android:taskAffinity="org.autojs.autojs.external.shortcut.ShortcutActivity"
+            android:taskAffinity="${applicationId}.external.shortcut.ShortcutActivity"
             android:theme="@android:style/Theme.NoDisplay">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -99,7 +99,7 @@
 
         <provider
             android:name=".external.fileprovider.AppFileProvider"
-            android:authorities="org.autojs.autojs.fileprovider"
+            android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
@@ -122,7 +122,7 @@
             android:configChanges="orientation|screenSize"
             android:launchMode="standard"
             android:multiprocess="true"
-            android:taskAffinity="org.autojs.autojs.edit"
+            android:taskAffinity="${applicationId}.edit"
             android:theme="@style/EditorTheme">
         </activity>
         <activity android:name=".ui.settings.AboutActivity_"/>
@@ -208,7 +208,7 @@
             </intent-filter>
         </activity-alias>
 
-        <receiver android:name="org.autojs.autojs.external.receiver.StaticBroadcastReceiver">
+        <receiver android:name="com.jdkshen.aijspro.external.receiver.StaticBroadcastReceiver">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
@@ -278,7 +278,7 @@
             android:name=".external.open.RunIntentActivity"
             android:icon="@drawable/ai_js_pro_logo"
             android:label="@string/text_run_script"
-            android:taskAffinity="org.autojs.autojs.external.open.RunIntentActivity"
+            android:taskAffinity="${applicationId}.external.open.RunIntentActivity"
             android:theme="@android:style/Theme.NoDisplay">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>

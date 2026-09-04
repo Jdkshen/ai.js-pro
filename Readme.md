@@ -11,7 +11,7 @@ AI.js Pro 是一个运行在 Android 上、支持无障碍自动化的 JavaScrip
 - 内置编辑器、示例、离线文档、控制台和 APK 打包能力；
 - 兼容原有的 [Auto.js VS Code 插件](https://github.com/hyb1996/Auto.js-VSCode-Extension)。
 
-当前构建版本由 `project-versions.json` 定义，为 **4.1.1 Alpha2**；目录名不代表实际 APK 版本。
+当前构建版本由 `project-versions.json` 定义，为 **4.4.1 Alpha1**；目录名不代表实际 APK 版本。
 
 ## 仓库结构
 

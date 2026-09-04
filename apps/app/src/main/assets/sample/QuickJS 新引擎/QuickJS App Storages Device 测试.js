@@ -73,7 +73,7 @@ console.log('【app 模块】');
 
 // 获取当前应用信息
 try {
-    var selfInfo = app.getAppInfo('org.autojs.autojs');
+    var selfInfo = app.getAppInfo('com.jdkshen.aijspro');
     console.log('当前应用:', selfInfo.label, 'v' + selfInfo.versionName);
 } catch (e) {
     console.log('getAppInfo 失败:', e.message || e);
@@ -92,6 +92,6 @@ try {
 }
 
 console.log('名称转包名:', app.getPackageName('AI.js Pro'));
-console.log('包名转名称:', app.getAppName('org.autojs.autojs'));
+console.log('包名转名称:', app.getAppName('com.jdkshen.aijspro'));
 
 console.log('\n=== 测试完成 ===');

@@ -156,8 +156,8 @@ module.exports = function (runtime, global) {
     app.versionName = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
 
     app.autojs = {
-        versionCode: org.autojs.autojs.BuildConfig.VERSION_CODE,
-        versionName: org.autojs.autojs.BuildConfig.VERSION_NAME
+        versionCode: com.jdkshen.aijspro.BuildConfig.VERSION_CODE,
+        versionName: com.jdkshen.aijspro.BuildConfig.VERSION_NAME
     };
 
     app.intentToShell = function(i) {

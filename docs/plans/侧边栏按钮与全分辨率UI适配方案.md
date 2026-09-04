@@ -11,10 +11,10 @@ C:\Users\18101\Documents\autojs4.4.1源码
 主要涉及文件：
 
 ```text
-apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiWorkspaceActivity.java
-apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiWorkspaceDrawer.java
-apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiSurfaceView.java
-apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiNativeBridge.java
+apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiWorkspaceActivity.java
+apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiWorkspaceDrawer.java
+apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiSurfaceView.java
+apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiNativeBridge.java
 apps/app/src/main/cpp/autojs_imgui.cpp
 apps/app/src/main/cpp/imgui_accessibility_bridge.cpp
 apps/app/src/main/cpp/imgui_accessibility_bridge.h

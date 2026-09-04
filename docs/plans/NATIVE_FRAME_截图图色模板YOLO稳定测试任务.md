@@ -3,7 +3,7 @@
 > 创建日期：2026-09-02  
 > 当前阶段：待实施  
 > 主验收设备：小米 K40（ADB 序列号 `cccc62c7`）  
-> 应用包名：`org.autojs.autojs`
+> 应用包名：`com.jdkshen.aijspro`
 
 ## 1. 本阶段唯一目标
 

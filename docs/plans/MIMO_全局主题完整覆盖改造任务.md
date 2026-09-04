@@ -43,7 +43,7 @@ SettingsActivity.selectThemeColor(this);
 
 建议新增：
 
-`apps/app/src/main/java/org/autojs/autojs/theme/AppThemePalette.java`
+`apps/app/src/main/java/com/jdkshen/aijspro/theme/AppThemePalette.java`
 
 调色板至少包含以下语义颜色，不允许业务界面自行推导或硬编码：
 
@@ -86,7 +86,7 @@ terminalForeground
 
 建议新增：
 
-`apps/app/src/main/java/org/autojs/autojs/theme/AppThemeRepository.java`
+`apps/app/src/main/java/com/jdkshen/aijspro/theme/AppThemeRepository.java`
 
 职责：
 
@@ -103,7 +103,7 @@ terminalForeground
 
 文件：
 
-`apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiWorkspaceActivity.java`
+`apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiWorkspaceActivity.java`
 
 当前 `ACTION_DRAWER_THEME` 只能打开旧强调色选择器。需要改为统一主题面板，至少包含：
 
@@ -138,7 +138,7 @@ mWorkspaceDrawer.setBackgroundColor(Color.rgb(9, 12, 18));
 
 文件：
 
-`apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiWorkspaceDrawer.java`
+`apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiWorkspaceDrawer.java`
 
 删除或停止直接使用以下静态颜色常量：
 
@@ -170,7 +170,7 @@ DANGER
 
 文件：
 
-- `apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiNativeBridge.java`
+- `apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiNativeBridge.java`
 - `apps/app/src/main/cpp/autojs_imgui.cpp`
 
 建议新增 JNI：
@@ -226,7 +226,7 @@ gTheme.scrim
 
 文件：
 
-`apps/app/src/main/java/org/autojs/autojs/ui/imgui/ProCodeEditorActivity.java`
+`apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ProCodeEditorActivity.java`
 
 当前主题选择主要只切换代码区 `dark_plus.json/light_plus.json`，周边 UI 仍有大量固定深灰。必须同步更新：
 

@@ -1918,7 +1918,7 @@ void drawWorkspace(int width, int height) {
 }  // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_attachSurface(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_attachSurface(
         JNIEnv *env, jclass, jobject javaSurface) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     shutdownEgl();
@@ -1934,13 +1934,13 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_attachSurface(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_detachSurface(JNIEnv *, jclass) {
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_detachSurface(JNIEnv *, jclass) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     shutdownEgl();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setUiFontPath(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setUiFontPath(
         JNIEnv *env, jclass, jstring path) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     if (!path) {
@@ -1955,14 +1955,14 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setUiFontPath(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setWorkspaceState(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setWorkspaceState(
         JNIEnv *, jclass, jboolean accessibilityEnabled, jint runningScriptCount) {
     gAccessibilityEnabled.store(accessibilityEnabled == JNI_TRUE);
     gRunningScriptCount.store(std::max(0, static_cast<int>(runningScriptCount)));
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setScriptEntries(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setScriptEntries(
         JNIEnv *env, jclass, jstring directoryLabel, jobjectArray names,
         jobjectArray paths, jbooleanArray directories, jobjectArray types,
         jobjectArray modifiedTimes, jintArray iconKinds) {
@@ -2051,7 +2051,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setScriptEntries(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setSampleEntries(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setSampleEntries(
         JNIEnv *env, jclass, jstring directoryLabel, jobjectArray names,
         jobjectArray paths, jbooleanArray directories, jobjectArray types,
         jobjectArray modifiedTimes) {
@@ -2091,7 +2091,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setSampleEntries(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setResourceEntries(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setResourceEntries(
         JNIEnv *env,jclass,jobjectArray names,jobjectArray descriptions,jobjectArray metadata,
         jobjectArray assetPaths,jbooleanArray imported){
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
@@ -2120,7 +2120,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setResourceEntries(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setPluginEntries(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setPluginEntries(
         JNIEnv *env,jclass,jobjectArray names,jobjectArray versions,jobjectArray packages,jbooleanArray installed){
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     gPluginEntries.clear(); gSelectedPlugin=-1;
@@ -2146,7 +2146,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setPluginEntries(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setTaskEntries(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setTaskEntries(
         JNIEnv *env,jclass,jobjectArray runningNames,jobjectArray runningDescriptions,
         jobjectArray pendingNames,jobjectArray pendingDescriptions){
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
@@ -2172,7 +2172,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setTaskEntries(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getSelectedScriptPath(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getSelectedScriptPath(
         JNIEnv *env, jclass) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     if (gSelectedScript < 0 || gSelectedScript >= static_cast<int>(gScriptEntries.size())) {
@@ -2182,46 +2182,46 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getSelectedScriptPath(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getSelectedSamplePath(JNIEnv *env,jclass){
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getSelectedSamplePath(JNIEnv *env,jclass){
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     if(gSelectedSample<0||gSelectedSample>=static_cast<int>(gSampleEntries.size())) return nullptr;
     return env->NewStringUTF(gSampleEntries[static_cast<size_t>(gSelectedSample)].path.c_str());
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getSelectedResourcePath(JNIEnv *env,jclass){
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getSelectedResourcePath(JNIEnv *env,jclass){
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     if(gSelectedResource<0||gSelectedResource>=static_cast<int>(gResourceEntries.size())) return nullptr;
     return env->NewStringUTF(gResourceEntries[static_cast<size_t>(gSelectedResource)].assetPath.c_str());
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getSelectedPluginPackage(JNIEnv *env,jclass){
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getSelectedPluginPackage(JNIEnv *env,jclass){
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     if(gSelectedPlugin<0||gSelectedPlugin>=static_cast<int>(gPluginEntries.size())) return nullptr;
     return env->NewStringUTF(gPluginEntries[static_cast<size_t>(gSelectedPlugin)].packageName.c_str());
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getSelectedTaskKey(JNIEnv *,jclass){
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getSelectedTaskKey(JNIEnv *,jclass){
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     if(gSelectedTaskGroup<0||gSelectedTaskIndex<0) return -1;
     return gSelectedTaskGroup*10000+gSelectedTaskIndex;
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getSelectedBreadcrumbDepth(JNIEnv *,jclass){
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getSelectedBreadcrumbDepth(JNIEnv *,jclass){
     return gSelectedBreadcrumbDepth.load();
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getCurrentSection(JNIEnv *, jclass) {
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getCurrentSection(JNIEnv *, jclass) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     return gSection;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_renderFrame(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_renderFrame(
         JNIEnv *, jclass, jint width, jint height, jfloat density) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     if (gDisplay == EGL_NO_DISPLAY || gSurface == EGL_NO_SURFACE ||
@@ -2476,7 +2476,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_renderFrame(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_touch(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_touch(
         JNIEnv *, jclass, jint action, jfloat x, jfloat y) {
     std::lock_guard<std::mutex> lock(gInputMutex);
     const auto now = std::chrono::steady_clock::now();
@@ -2682,7 +2682,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_touch(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setThemePalette(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setThemePalette(
         JNIEnv *env, jclass, jintArray jColors) {
     if (jColors == nullptr) return;
     jint len = env->GetArrayLength(jColors);
@@ -2734,12 +2734,12 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setThemePalette(
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_pollAction(JNIEnv *, jclass) {
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_pollAction(JNIEnv *, jclass) {
     return gPendingAction.exchange(0);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_closeWorkspaceDrawer(JNIEnv *, jclass) {
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_closeWorkspaceDrawer(JNIEnv *, jclass) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     const float progress = gDrawerProgress.load();
     if (progress <= 0.005f && gDrawerTarget < 0.5f) {
@@ -2763,7 +2763,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_closeWorkspaceDrawer(JNIEnv *,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setDrawerState(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setDrawerState(
         JNIEnv *, jclass, jboolean accessibilityEnabled, jboolean floatingShown,
         jboolean devConnected) {
     gDrawerAccessibilityEnabled.store(accessibilityEnabled == JNI_TRUE);
@@ -2772,14 +2772,14 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setDrawerState(
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getAccessibilityRevision(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getAccessibilityRevision(
         JNIEnv *, jclass) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     return gAccessibilityBridge.revision();
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getAccessibilitySnapshot(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_getAccessibilitySnapshot(
         JNIEnv *env, jclass) {
     std::lock_guard<std::recursive_mutex> lock(gRenderMutex);
     const auto &nodes = gAccessibilityBridge.nodes();
@@ -2808,7 +2808,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_getAccessibilitySnapshot(
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_performAccessibilityAction(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_performAccessibilityAction(
         JNIEnv *, jclass, jint virtualViewId, jint androidAction) {
     constexpr int kAndroidActionClick = 16;
     constexpr int kAndroidActionScrollForward = 4096;
@@ -2869,7 +2869,7 @@ Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_performAccessibilityAction(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_autojs_autojs_ui_imgui_ImGuiNativeBridge_setViewportMetrics(
+Java_com_jdkshen_aijspro_ui_imgui_ImGuiNativeBridge_setViewportMetrics(
         JNIEnv *, jclass, jint viewWidthPx, jint viewHeightPx,
         jfloat density, jfloat scaledDensity, jfloat fontScale,
         jint safeInsetLeftPx, jint safeInsetTopPx,

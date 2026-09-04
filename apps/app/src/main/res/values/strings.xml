@@ -34,7 +34,7 @@
     <string name="github">软件源代码</string>
     <string name="text_already_copy_to_clip">已复制到剪贴板</string>
     <string name="my_github">https://github.com/hyb1996/NoRootScriptDroid</string>
-    <string name="share_app">[AI.js Pro]下载地址：http://www.coolapk.com/apk/org.autojs.autojs </string>
+    <string name="share_app">[AI.js Pro]下载地址：http://www.coolapk.com/apk/com.jdkshen.aijspro </string>
     <string name="text_floating_window">悬浮窗</string>
     <string name="text_error_report">错误报告</string>
     <string name="text_press_again_to_exit">再按一次退出程序</string>

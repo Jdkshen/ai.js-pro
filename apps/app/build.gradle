@@ -9,13 +9,18 @@ android {
     compileSdkVersion versions.compile
     buildToolsVersion versions.buildTool
     defaultConfig {
-        applicationId "org.autojs.autojs"
+        applicationId "com.jdkshen.aijspro"
         minSdkVersion versions.mini
         targetSdkVersion versions.target
         versionCode versions.appVersionCode
         versionName versions.appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled true
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = [resourcePackageName: "com.jdkshen.aijspro"]
+            }
+        }
     }
     buildTypes {
         debug {

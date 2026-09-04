@@ -7,7 +7,7 @@ import android.util.AttributeSet;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.RelativeLayout;
 
-import org.autojs.autojs.R;
+import com.jdkshen.aijspro.R;
 
 /**
  * Simplified ExpandableRelativeLayout - replaces the original library.

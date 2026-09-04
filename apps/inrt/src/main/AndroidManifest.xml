@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools"
-          package="com.stardust.auojs.inrt">
+          package="com.jdkshen.aijspro.inrt">
 
     <!-- inrt inherits Shizuku through :autojs; keep its Android 5.x minimum while the
          Shizuku v11 library requires API 23. The bridge reports unavailable below 23. -->
@@ -59,7 +59,7 @@
         </service>
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="org.autojs.autojs.inrt.fileprovider"
+            android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

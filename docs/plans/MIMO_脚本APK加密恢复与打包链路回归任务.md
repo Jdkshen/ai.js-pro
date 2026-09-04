@@ -4,10 +4,10 @@
 
 ## 背景与当前问题
 
-目录重组时，`org.autojs.autojs.autojs.build`（`ApkBuilder`）与 `org.autojs.autojs.build`（`ApkBuilderPluginHelper`、`TinySign`）源码包曾误删，已从归档 APK 反编译恢复。恢复后的 `ApkBuilder.encrypt()` 目前是**占位实现**：
+目录重组时，`com.jdkshen.aijspro.autojs.build`（`ApkBuilder`）与 `com.jdkshen.aijspro.build`（`ApkBuilderPluginHelper`、`TinySign`）源码包曾误删，已从归档 APK 反编译恢复。恢复后的 `ApkBuilder.encrypt()` 目前是**占位实现**：
 
 ```java
-// apps/app/src/main/java/org/autojs/autojs/autojs/build/ApkBuilder.java:250
+// apps/app/src/main/java/com/jdkshen/aijspro/autojs/build/ApkBuilder.java:250
 private void encrypt(FileOutputStream outputStream, File file) throws IOException {
     // Compatibility placeholder: template projects are packaged as-is; the original
     // implementation performed AES encryption using mKey/mInitVector. ...
@@ -26,7 +26,7 @@ private void encrypt(FileOutputStream outputStream, File file) throws IOExceptio
   ① project.json 写入 buildInfo.buildId / name / packageName / versionName / main
   ② 脚本文件 = EncryptedScriptFileHeader.writeHeader(flags=0) + AES/CBC/PKCS5 加密内容
 
-运行时端（inrt，见 apps/inrt/src/main/java/com/stardust/auojs/inrt/launch/AssetsProjectLauncher.kt）
+运行时端（inrt，见 apps/inrt/src/main/java/com/jdkshen/aijspro/inrt/launch/AssetsProjectLauncher.kt）
   initKey(projectConfig)  第 101-107 行
     用同样的 MD5 派生 key/vec，反射设置 ScriptEncryption.mKey / mInitVector
   XJavaScriptEngine.kt  第 33-37 行
@@ -41,13 +41,13 @@ private void encrypt(FileOutputStream outputStream, File file) throws IOExceptio
 | `AdvancedEncryptionStandard`（AES/CBC/PKCS5Padding，encrypt/decrypt） | `modules/common/src/main/java/com/stardust/util/AdvancedEncryptionStandard.kt` |
 | `EncryptedScriptFileHeader`（`BLOCK_SIZE=8`，魔数 `77 01 17 7F 12 12` + 2 字节 flags） | `modules/autojs/src/main/java/com/stardust/autojs/script/EncryptedScriptFileHeader.kt` |
 | `BuildInfo`（`mBuildId` 等） | `modules/autojs/src/main/java/com/stardust/autojs/project/BuildInfo.java` |
-| `XJavaScriptEngine`（解密端） | `apps/inrt/src/main/java/com/stardust/auojs/inrt/autojs/XJavaScriptEngine.kt` |
+| `XJavaScriptEngine`（解密端） | `apps/inrt/src/main/java/com/jdkshen/aijspro/inrt/autojs/XJavaScriptEngine.kt` |
 
 ## 任务链
 
 ### 任务 1：补全 `ApkBuilder.encrypt()` 的 AES 加密
 
-**文件**：`apps/app/src/main/java/org/autojs/autojs/autojs/build/ApkBuilder.java`
+**文件**：`apps/app/src/main/java/com/jdkshen/aijspro/autojs/build/ApkBuilder.java`
 
 1. 删除占位实现，改为：
    - 输出 `EncryptedScriptFileHeader.writeHeader(outputStream, 0)`（复用 `EncryptedScriptFileHeader`，注意它是 Kotlin object，Java 调用用 `EncryptedScriptFileHeader.INSTANCE.writeHeader(...)` 或 `EncryptedScriptFileHeader.writeHeader(...)`——查看实际编译器产物，Kotlin `object` 在 Java 侧是 `EncryptedScriptFileHeader.INSTANCE`）

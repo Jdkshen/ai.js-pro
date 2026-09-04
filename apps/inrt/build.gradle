@@ -7,7 +7,7 @@ android {
     buildToolsVersion versions.buildTool
 
     defaultConfig {
-        applicationId "com.stardust.auojs.inrt"
+        applicationId "com.jdkshen.aijspro.inrt"
         minSdkVersion versions.mini
         targetSdkVersion versions.target
         versionCode versions.appVersionCode - 200

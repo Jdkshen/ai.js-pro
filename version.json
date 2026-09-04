@@ -1,15 +1,11 @@
 ﻿{
-  "versionCode": 163,
-  "versionName": "2.0.16 Beta2",
-  "releaseNotes": "* 优化root录制，录制脚本接近完美，可自行录制游戏脚本\n* 提高部分脚本的运行速度\n* 新增 按键事件、通知事件监听\n*修复 一些问题",
+  "versionCode": 462,
+  "versionName": "4.4.1 Alpha1",
+  "releaseNotes": "* 应用包名与源码命名空间迁移至 com.jdkshen.aijspro\n* 完成 apps、modules、third-party、docs 目录重组\n* 完善 QuickJS、ImGui 与脚本 APK 打包链路",
   "downloads" : [
 	{
-	  "name": "应用宝",
-	  "url": "http://a.app.qq.com/o/simple.jsp?pkgname=org.autojs.autojs"
-	},
-	{
-	  "name": "百度手机助手",
-	  "url": "http://shouji.baidu.com/software/22060055.html"
+	  "name": "GitHub Releases",
+	  "url": "https://github.com/Jdkshen/ai.js-pro/releases"
 	}
   ],
   "oldVersions": [

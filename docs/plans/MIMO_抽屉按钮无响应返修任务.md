@@ -10,7 +10,7 @@
 
 文件：
 
-`apps/app/src/main/java/org/autojs/autojs/ui/imgui/ImGuiWorkspaceDrawer.java`
+`apps/app/src/main/java/com/jdkshen/aijspro/ui/imgui/ImGuiWorkspaceDrawer.java`
 
 构造函数先执行：
 
@@ -202,7 +202,7 @@ if (navClicked && gAllowActivationThisFrame) {
 系统：Android 15 / API 35（LineageOS）
 物理分辨率：1080 × 2248
 物理密度：440 dpi，density=2.75
-应用：org.autojs.autojs 4.1.1 Alpha2
+应用：com.jdkshen.aijspro 4.4.1 Alpha1
 ```
 
 已核对手机安装包 SHA256，与本地 `app-common-arm64-v8a-debug.apk` 完全一致，排除装错 APK。
