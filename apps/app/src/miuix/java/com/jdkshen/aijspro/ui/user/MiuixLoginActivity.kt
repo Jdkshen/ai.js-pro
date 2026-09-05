@@ -37,6 +37,7 @@ import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.network.NodeBB
 import com.jdkshen.aijspro.network.UserService
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.schedulers.Schedulers
@@ -45,7 +46,7 @@ import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
@@ -118,9 +119,8 @@ class MiuixLoginActivity : ComponentActivity() {
     @Composable
     private fun LoginPage() {
         Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-            TopAppBar(title = getString(R.string.text_login), defaultWindowInsetsPadding = false,
-                navigationIcon = { TextButton(text = "返回", modifier = Modifier.padding(start = 12.dp),
-                    onClick = { finish() }) },
+            SmallTopAppBar(title = getString(R.string.text_login), defaultWindowInsetsPadding = false,
+                navigationIcon = { MiuixBackButton(onClick = { finish() }) },
                 actions = {
                     TextButton(text = getString(R.string.text_register), modifier = Modifier.padding(end = 12.dp),
                         colors = ButtonDefaults.textButtonColorsPrimary(),

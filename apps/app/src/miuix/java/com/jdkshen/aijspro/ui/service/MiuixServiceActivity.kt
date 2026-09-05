@@ -24,6 +24,7 @@ import com.jdkshen.aijspro.BuildConfig
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.external.foreground.ForegroundService
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.jdkshen.aijspro.tool.AccessibilityServiceTool
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger
@@ -91,9 +92,8 @@ class MiuixServiceActivity : ComponentActivity() {
             getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
         }
         Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-            TopAppBar(title = "核心服务", defaultWindowInsetsPadding = false,
-                navigationIcon = { TextButton(text = "返回", modifier = Modifier.padding(start = 12.dp),
-                    onClick = { finish() }) })
+            SmallTopAppBar(title = "核心服务", defaultWindowInsetsPadding = false,
+                navigationIcon = { MiuixBackButton(onClick = { finish() }) })
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("管理脚本运行所需的系统服务", fontSize = 14.sp,

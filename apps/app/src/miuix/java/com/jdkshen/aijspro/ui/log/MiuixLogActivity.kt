@@ -19,11 +19,12 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.autojs.AutoJs
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.stardust.autojs.core.console.ConsoleImpl
 import com.stardust.autojs.core.console.ConsoleView
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -60,9 +61,8 @@ class MiuixLogActivity : ComponentActivity() {
     @Composable
     private fun LogPage() {
         Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-            TopAppBar(title = getString(R.string.text_log), defaultWindowInsetsPadding = false,
-                navigationIcon = { TextButton(text = "返回", modifier = Modifier.padding(start = 12.dp),
-                    onClick = { finish() }) },
+            SmallTopAppBar(title = getString(R.string.text_log), defaultWindowInsetsPadding = false,
+                navigationIcon = { MiuixBackButton(onClick = { finish() }) },
                 actions = {
                     TextButton(text = "清空", modifier = Modifier.padding(end = 12.dp),
                         onClick = { consoleImpl?.clear() })

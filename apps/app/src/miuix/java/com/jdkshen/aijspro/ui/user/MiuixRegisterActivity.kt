@@ -37,6 +37,7 @@ import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.network.NodeBB
 import com.jdkshen.aijspro.network.UserService
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.schedulers.Schedulers
@@ -45,7 +46,7 @@ import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
@@ -132,9 +133,8 @@ class MiuixRegisterActivity : ComponentActivity() {
     @Composable
     private fun RegisterPage() {
         Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-            TopAppBar(title = getString(R.string.text_register), defaultWindowInsetsPadding = false,
-                navigationIcon = { TextButton(text = "返回", modifier = Modifier.padding(start = 12.dp),
-                    onClick = { finish() }) })
+            SmallTopAppBar(title = getString(R.string.text_register), defaultWindowInsetsPadding = false,
+                navigationIcon = { MiuixBackButton(onClick = { finish() }) })
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp),

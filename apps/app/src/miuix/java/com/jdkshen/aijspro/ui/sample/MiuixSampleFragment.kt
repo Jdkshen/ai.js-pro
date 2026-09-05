@@ -36,6 +36,7 @@ import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.model.sample.SampleFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.ui.common.ScriptOperations
 import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
@@ -77,9 +78,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1) {
                         Row(verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                             if (path != "sample") {
-                                Button(onClick = { path = path.substringBeforeLast('/', "sample") }) {
-                                    Text("返回")
-                                }
+                                MiuixBackButton(onClick = { path = path.substringBeforeLast('/', "sample") })
                             }
                             Text(path.removePrefix("sample/").ifEmpty { "示例代码" },
                                 fontSize = 18.sp, modifier = Modifier.padding(start = 10.dp))

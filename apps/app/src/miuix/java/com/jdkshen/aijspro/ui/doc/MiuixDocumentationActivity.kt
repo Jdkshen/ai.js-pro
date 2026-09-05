@@ -20,10 +20,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.jdkshen.aijspro.ui.widget.EWebView
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -58,9 +59,8 @@ class MiuixDocumentationActivity : ComponentActivity() {
     @Composable
     private fun DocPage() {
         Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-            TopAppBar(title = getString(R.string.text_tutorial), defaultWindowInsetsPadding = false,
-                navigationIcon = { TextButton(text = "返回", modifier = Modifier.padding(start = 12.dp),
-                    onClick = { finish() }) })
+            SmallTopAppBar(title = getString(R.string.text_tutorial), defaultWindowInsetsPadding = false,
+                navigationIcon = { MiuixBackButton(onClick = { finish() }) })
             AndroidView(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 factory = { context ->

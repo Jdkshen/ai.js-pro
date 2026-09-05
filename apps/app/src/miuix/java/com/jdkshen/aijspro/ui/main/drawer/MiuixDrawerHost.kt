@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,16 +64,30 @@ object MiuixDrawerHost {
     @Composable
     private fun DrawerContent(host: DrawerFragment, refresh: MutableIntState) {
         val rev = refresh.intValue
-        val userName = remember(rev) { host.drawerUserName ?: "" }
-        val accessibility = remember(rev) { host.isAccessibilityEnabled }
-        val stableMode = remember(rev) { host.isStableModeEnabled }
-        val notification = remember(rev) { host.isNotificationEnabled }
-        val foreground = remember(rev) { host.isForegroundServicePrefEnabled }
-        val usageStats = remember(rev) { host.isUsageStatsEnabled }
-        val floating = remember(rev) { host.isFloatingWindowShowing }
-        val volumeControl = remember(rev) { host.isVolumeDownControlEnabled }
-        val nightMode = remember(rev) { host.isNightModePrefEnabled }
-        val connected = remember(rev) { host.isRemoteConnected }
+        // Local optimistic state: tapping a switch flips it immediately, the real
+        // host state is re-read (and saved by host.setXxx) on every onResume/refresh.
+        val userName = remember { mutableStateOf(host.drawerUserName ?: "") }
+        val accessibility = remember { mutableStateOf(host.isAccessibilityEnabled) }
+        val stableMode = remember { mutableStateOf(host.isStableModeEnabled) }
+        val notification = remember { mutableStateOf(host.isNotificationEnabled) }
+        val foreground = remember { mutableStateOf(host.isForegroundServicePrefEnabled) }
+        val usageStats = remember { mutableStateOf(host.isUsageStatsEnabled) }
+        val floating = remember { mutableStateOf(host.isFloatingWindowShowing) }
+        val volumeControl = remember { mutableStateOf(host.isVolumeDownControlEnabled) }
+        val nightMode = remember { mutableStateOf(host.isNightModePrefEnabled) }
+        val connected = remember { mutableStateOf(host.isRemoteConnected) }
+        LaunchedEffect(rev) {
+            userName.value = host.drawerUserName ?: ""
+            accessibility.value = host.isAccessibilityEnabled
+            stableMode.value = host.isStableModeEnabled
+            notification.value = host.isNotificationEnabled
+            foreground.value = host.isForegroundServicePrefEnabled
+            usageStats.value = host.isUsageStatsEnabled
+            floating.value = host.isFloatingWindowShowing
+            volumeControl.value = host.isVolumeDownControlEnabled
+            nightMode.value = host.isNightModePrefEnabled
+            connected.value = host.isRemoteConnected
+        }
 
         Column(
             Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)
@@ -87,12 +103,12 @@ object MiuixDrawerHost {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            if (userName.isEmpty()) "未登录" else userName,
+                            if (userName.value.isEmpty()) "未登录" else userName.value,
                             fontSize = 17.sp,
                             color = MiuixTheme.colorScheme.onBackground,
                             modifier = Modifier.weight(1f).padding(start = 16.dp)
                         )
-                        TextButton(text = if (userName.isEmpty()) "登录" else "我的主页",
+                        TextButton(text = if (userName.value.isEmpty()) "登录" else "我的主页",
                             modifier = Modifier.padding(end = 8.dp),
                             onClick = { host.openUserArea() },
                             colors = ButtonDefaults.textButtonColorsPrimary())
@@ -104,44 +120,49 @@ object MiuixDrawerHost {
                     SuperArrow(title = "核心服务", summary = "管理脚本运行所需的系统服务",
                         onClick = { host.openServiceStatus() })
                     SuperSwitch(title = "无障碍服务", summary = "自动点击、查找控件和界面操作",
-                        checked = accessibility,
-                        onCheckedChange = { host.setAccessibilityEnabled(it); refresh.intValue++ })
+                        checked = accessibility.value,
+                        onCheckedChange = { accessibility.value = it; host.setAccessibilityEnabled(it) })
                     SuperSwitch(title = "稳定模式", summary = "布局分析更稳定，部分脚本可能受影响",
-                        checked = stableMode,
-                        onCheckedChange = { host.setStableModeEnabled(it); refresh.intValue++ })
+                        checked = stableMode.value,
+                        onCheckedChange = { stableMode.value = it; host.setStableModeEnabled(it) })
                     SuperSwitch(title = "通知读取权限", summary = "允许脚本监听系统通知",
-                        checked = notification,
-                        onCheckedChange = { host.openNotificationSettings(it); refresh.intValue++ })
+                        checked = notification.value,
+                        onCheckedChange = { notification.value = it; host.openNotificationSettings(it) })
                     SuperSwitch(title = "前台服务", summary = "通过常驻通知保持脚本运行",
-                        checked = foreground,
-                        onCheckedChange = { host.setForegroundServiceEnabled(it); refresh.intValue++ })
+                        checked = foreground.value,
+                        onCheckedChange = { foreground.value = it; host.setForegroundServiceEnabled(it) })
                     SuperSwitch(title = "查看使用统计权限", summary = "获取其他应用的使用情况",
-                        checked = usageStats,
-                        onCheckedChange = { host.openUsageStats(it); refresh.intValue++ })
+                        checked = usageStats.value,
+                        onCheckedChange = { usageStats.value = it; host.openUsageStats(it) })
                 }
 
                 SmallTitle("录制脚本")
                 Card(Modifier.fillMaxWidth()) {
                     SuperSwitch(title = "悬浮窗", summary = "显示脚本控制按钮",
-                        checked = floating,
-                        onCheckedChange = { host.setFloatingWindowEnabled(it); refresh.intValue++ })
+                        checked = floating.value,
+                        onCheckedChange = { floating.value = it; host.setFloatingWindowEnabled(it) })
                     SuperSwitch(title = "音量下键控制", summary = "音量下键开始或停止脚本录制",
-                        checked = volumeControl,
-                        onCheckedChange = { host.setVolumeDownControlEnabled(it); refresh.intValue++ })
+                        checked = volumeControl.value,
+                        onCheckedChange = { volumeControl.value = it; host.setVolumeDownControlEnabled(it) })
                 }
 
                 SmallTitle("其他")
                 Card(Modifier.fillMaxWidth()) {
                     SuperArrow(title = "连接远程", summary = "连接电脑上的开发者插件",
-                        rightText = if (connected) "已连接" else "未连接",
+                        rightText = if (connected.value) "已连接" else "未连接",
                         onClick = {
-                            if (connected) host.disconnectRemote() else host.openRemoteConnection()
+                            if (connected.value) host.disconnectRemote() else host.openRemoteConnection()
                         })
                     SuperArrow(title = "主题色",
                         onClick = { host.openThemeColorSettingsFromDrawer() })
                     SuperSwitch(title = "夜间模式", summary = "切换深色界面",
-                        checked = nightMode,
-                        onCheckedChange = { host.setNightModePrefEnabled(it); refresh.intValue++ })
+                        checked = nightMode.value,
+                        onCheckedChange = {
+                            nightMode.value = it
+                            // Persist FIRST so the theme state reads the new value.
+                            host.setNightModePrefEnabled(it)
+                            com.jdkshen.aijspro.theme.refreshMiuixDarkTheme()
+                        })
                     SuperArrow(title = "检查更新",
                         onClick = { host.checkForUpdatesFromDrawer() })
                 }

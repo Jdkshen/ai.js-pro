@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.theme
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import com.jdkshen.aijspro.Pref
 import top.yukonga.miuix.kmp.theme.Colors
@@ -26,8 +27,19 @@ private val TEAL_800 = Color(0xFF00695C)
 private val CYAN_300 = Color(0xFF4DD0E1)
 private val CYAN_900 = Color(0xFF006064)
 
-/** Matches BaseActivity: night mode switch on -> dark, off -> light. */
-fun isAijsDarkTheme(): Boolean = Pref.isNightModeEnabled()
+/**
+ * Observable dark-mode flag so every Miuix surface repaints immediately when the
+ * in-app night mode switch is toggled (Pref changes are not Compose state by themselves).
+ */
+object AijsMiuixThemeState {
+    val dark = mutableStateOf(Pref.isNightModeEnabled())
+}
+
+fun isAijsDarkTheme(): Boolean = AijsMiuixThemeState.dark.value
+
+fun refreshMiuixDarkTheme() {
+    AijsMiuixThemeState.dark.value = Pref.isNightModeEnabled()
+}
 
 @Composable
 fun AijsMiuixTheme(content: @Composable () -> Unit) {

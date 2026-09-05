@@ -147,6 +147,11 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
             View miuixView = tryCreateMiuixDrawerView();
             if (miuixView != null) {
                 mMiuixDrawerView = miuixView;
+                // setUpViews() is skipped in pilot mode, restore the floating
+                // window from the persisted preference like the legacy drawer did.
+                if (Pref.isFloatingMenuShown()) {
+                    FloatyWindowManger.showCircularMenuIfNeeded();
+                }
                 return miuixView;
             }
         }
@@ -308,7 +313,7 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     }
 
     public boolean isFloatingWindowShowing() {
-        return FloatyWindowManger.isCircularMenuShowing();
+        return FloatyWindowManger.isCircularMenuShowing() || Pref.isFloatingMenuShown();
     }
 
     public void setFloatingWindowEnabled(boolean checked) {
@@ -339,6 +344,11 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     }
 
     public void setNightModePrefEnabled(boolean enabled) {
+        // Persist so the choice survives restarts (setLocalNightMode alone is not sticky).
+        if (getContext() != null) {
+            PreferenceManager.getDefaultSharedPreferences(getContext())
+                    .edit().putBoolean(getString(R.string.key_night_mode), enabled).apply();
+        }
         if (getActivity() instanceof BaseActivity) {
             ((BaseActivity) getActivity()).setNightModeEnabled(enabled);
         }
@@ -590,6 +600,11 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     public void onResume() {
         super.onResume();
         if (mMiuixDrawerView != null) {
+            // Restore the floating window once the window/service are ready
+            // (attempting during onCreateView can silently fail).
+            if (Pref.isFloatingMenuShown() && !FloatyWindowManger.isCircularMenuShowing()) {
+                FloatyWindowManger.showCircularMenuIfNeeded();
+            }
             Object refresh = mMiuixDrawerView.getTag();
             if (refresh instanceof Runnable) {
                 ((Runnable) refresh).run();

@@ -281,7 +281,9 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
                     ? android.graphics.Color.BLACK
                     : android.graphics.Color.rgb(0xF7, 0xF7, 0xF7);
             int selected = android.graphics.Color.rgb(0, 150, 136);
-            int normal = android.graphics.Color.argb(130, 0, 0, 0);
+            int normal = Pref.isNightModeEnabled()
+                    ? android.graphics.Color.argb(170, 255, 255, 255)
+                    : android.graphics.Color.argb(130, 0, 0, 0);
             mTabLayout.setBackgroundColor(surface);
             getWindow().setStatusBarColor(surface);
             mTabLayout.setTabIconTint(new android.content.res.ColorStateList(

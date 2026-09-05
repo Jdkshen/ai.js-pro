@@ -39,6 +39,7 @@ import com.jdkshen.aijspro.BuildConfig
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.tool.IntentTool
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.stardust.util.IntentUtil
 import top.yukonga.miuix.kmp.basic.Button
@@ -46,7 +47,7 @@ import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.extra.SuperArrow
 import top.yukonga.miuix.kmp.extra.SuperDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -88,9 +89,8 @@ class MiuixAboutActivity : ComponentActivity() {
     @Composable
     private fun AboutPage() {
         Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-            TopAppBar(title = getString(R.string.text_about), defaultWindowInsetsPadding = false,
-                navigationIcon = { TextButton(text = "返回", modifier = Modifier.padding(start = 12.dp),
-                    onClick = { finish() }) })
+            SmallTopAppBar(title = getString(R.string.text_about), defaultWindowInsetsPadding = false,
+                navigationIcon = { MiuixBackButton(onClick = { finish() }) })
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp),
