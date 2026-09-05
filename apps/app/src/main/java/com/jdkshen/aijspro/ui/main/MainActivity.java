@@ -404,7 +404,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
                 .add(new MyScriptListFragment(), R.string.text_file)
                 .add(createTutorialFragment(), R.string.text_tutorial)
                 .add(new CommunityFragment(), R.string.text_community)
-                .add(new MarketFragment(), R.string.text_market)
+                .add(createMarketFragment(), R.string.text_market)
                 .add(new TaskManagerFragment(), R.string.text_manage)
                 .build();
         mViewPager.setAdapter(mPagerAdapter);
@@ -431,6 +431,19 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             }
         }
         return new DocsFragment();
+    }
+
+    private ViewPagerFragment createMarketFragment() {
+        if (BuildConfig.MIUIX_PILOT) {
+            try {
+                return (ViewPagerFragment) Class.forName(
+                        "com.jdkshen.aijspro.ui.market.MiuixMarketFragment")
+                        .getDeclaredConstructor().newInstance();
+            } catch (Throwable error) {
+                android.util.Log.e(LOG_TAG, "Unable to create Miuix market page", error);
+            }
+        }
+        return new MarketFragment();
     }
 
     public void showPage(int position) {
