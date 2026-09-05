@@ -60,6 +60,8 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     private LinearLayout mInputContainer;
     private boolean mShouldStopRefresh = false;
     private ArrayList<ConsoleImpl.LogEntry> mLogEntries = new ArrayList<>();
+    private ArrayList<ConsoleImpl.LogEntry> mFilteredEntries = new ArrayList<>();
+    private String mSearchQuery = "";
     private int mSeenLogCount = 0;
     private int mMinimumLogLevel = Log.VERBOSE;
 
@@ -146,11 +148,34 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
             mLogEntries.clear();
             mSeenLogCount = 0;
             appendNewLogs();
+            rebuildFiltered();
             mLogListRecyclerView.getAdapter().notifyDataSetChanged();
-            if (!mLogEntries.isEmpty()) {
-                mLogListRecyclerView.scrollToPosition(mLogEntries.size() - 1);
+            if (!mFilteredEntries.isEmpty()) {
+                mLogListRecyclerView.scrollToPosition(mFilteredEntries.size() - 1);
             }
         });
+    }
+
+    /** Filters the visible log entries by a plain-text keyword (display only). */
+    public void setSearchQuery(String query) {
+        mSearchQuery = query == null ? "" : query.trim().toLowerCase();
+        post(() -> {
+            rebuildFiltered();
+            mLogListRecyclerView.getAdapter().notifyDataSetChanged();
+            if (!mFilteredEntries.isEmpty()) {
+                mLogListRecyclerView.scrollToPosition(mFilteredEntries.size() - 1);
+            }
+        });
+    }
+
+    private void rebuildFiltered() {
+        mFilteredEntries.clear();
+        for (ConsoleImpl.LogEntry entry : mLogEntries) {
+            String content = entry.content == null ? "" : entry.content.toString();
+            if (mSearchQuery.isEmpty() || content.toLowerCase().contains(mSearchQuery)) {
+                mFilteredEntries.add(entry);
+            }
+        }
     }
 
     @Override
@@ -184,18 +209,20 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     public void onLogClear() {
         post(() -> {
             mLogEntries.clear();
+            mFilteredEntries.clear();
             mSeenLogCount = 0;
             mLogListRecyclerView.getAdapter().notifyDataSetChanged();
         });
     }
 
     private void refreshLog() {
-        int oldVisibleSize = mLogEntries.size();
+        int oldVisibleSize = mFilteredEntries.size();
         appendNewLogs();
-        int inserted = mLogEntries.size() - oldVisibleSize;
+        rebuildFiltered();
+        int inserted = mFilteredEntries.size() - oldVisibleSize;
         if (inserted > 0) {
-            mLogListRecyclerView.getAdapter().notifyItemRangeInserted(oldVisibleSize, inserted);
-            mLogListRecyclerView.scrollToPosition(mLogEntries.size() - 1);
+            mLogListRecyclerView.getAdapter().notifyDataSetChanged();
+            mLogListRecyclerView.scrollToPosition(mFilteredEntries.size() - 1);
         }
     }
 
@@ -245,14 +272,14 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
 
         @Override
         public void onBindViewHolder(ViewHolder holder, int position) {
-            ConsoleImpl.LogEntry logEntry = mLogEntries.get(position);
+            ConsoleImpl.LogEntry logEntry = mFilteredEntries.get(position);
             holder.textView.setText(logEntry.content);
             holder.textView.setTextColor(mColors.get(logEntry.level));
         }
 
         @Override
         public int getItemCount() {
-            return mLogEntries.size();
+            return mFilteredEntries.size();
         }
     }
 }
