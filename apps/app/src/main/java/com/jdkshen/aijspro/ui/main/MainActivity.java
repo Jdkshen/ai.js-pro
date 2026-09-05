@@ -403,7 +403,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         mPagerAdapter = new FragmentPagerAdapterBuilder(this)
                 .add(new MyScriptListFragment(), R.string.text_file)
                 .add(createTutorialFragment(), R.string.text_tutorial)
-                .add(new CommunityFragment(), R.string.text_community)
+                .add(createCommunityFragment(), R.string.text_community)
                 .add(createMarketFragment(), R.string.text_market)
                 .add(new TaskManagerFragment(), R.string.text_manage)
                 .build();
@@ -444,6 +444,19 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             }
         }
         return new MarketFragment();
+    }
+
+    private ViewPagerFragment createCommunityFragment() {
+        if (BuildConfig.MIUIX_PILOT) {
+            try {
+                return (ViewPagerFragment) Class.forName(
+                        "com.jdkshen.aijspro.ui.community.MiuixCommunityFragment")
+                        .getDeclaredConstructor().newInstance();
+            } catch (Throwable error) {
+                android.util.Log.e(LOG_TAG, "Unable to create Miuix community page", error);
+            }
+        }
+        return new CommunityFragment();
     }
 
     public void showPage(int position) {
