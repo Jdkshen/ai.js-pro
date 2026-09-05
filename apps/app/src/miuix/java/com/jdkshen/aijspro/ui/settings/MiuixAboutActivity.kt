@@ -1,7 +1,6 @@
 package com.jdkshen.aijspro.ui.settings
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -37,7 +36,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.BuildConfig
 import com.jdkshen.aijspro.R
-import com.jdkshen.aijspro.tool.IntentTool
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
@@ -55,9 +53,8 @@ import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
 
 /**
- * Miuix about page (pilot). Mirrors AboutActivity: logo + version, contact
- * rows (developer / QQ / email / GitHub), share and the hidden crash-test
- * easter egg on the logo.
+ * Miuix about page (pilot). Mirrors AboutActivity: logo + version, share
+ * and the hidden crash-test easter egg on the logo.
  */
 class MiuixAboutActivity : ComponentActivity() {
 
@@ -127,27 +124,6 @@ class MiuixAboutActivity : ComponentActivity() {
                             modifier = Modifier.padding(top = 2.dp)
                         )
                     }
-                }
-
-                Card(Modifier.fillMaxWidth()) {
-                    SuperArrow(title = getString(R.string.developer),
-                        onClick = {
-                            Toast.makeText(this@MiuixAboutActivity,
-                                getString(R.string.text_it_is_the_developer_of_app),
-                                Toast.LENGTH_LONG).show()
-                        })
-                    SuperArrow(title = getString(R.string.github),
-                        onClick = { IntentTool.browse(this@MiuixAboutActivity, getString(R.string.my_github)) })
-                    SuperArrow(title = getString(R.string.email),
-                        onClick = { IntentUtil.sendMailTo(this@MiuixAboutActivity, getString(R.string.email)) })
-                    SuperArrow(title = getString(R.string.qq),
-                        onClick = {
-                            if (!IntentUtil.chatWithQQ(this@MiuixAboutActivity, getString(R.string.qq))) {
-                                Toast.makeText(this@MiuixAboutActivity,
-                                    getString(R.string.text_mobile_qq_not_installed),
-                                    Toast.LENGTH_SHORT).show()
-                            }
-                        })
                 }
 
                 Card(Modifier.fillMaxWidth()) {
