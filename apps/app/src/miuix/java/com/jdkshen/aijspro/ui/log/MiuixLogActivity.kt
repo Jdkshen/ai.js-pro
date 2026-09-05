@@ -6,12 +6,14 @@ import android.util.SparseArray
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.ComposeView
@@ -40,8 +43,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.autojs.AutoJs
@@ -158,44 +159,6 @@ class MiuixLogActivity : ComponentActivity() {
                                         anchorSize = it.size
                                     },
                                 onClick = { levelsOpen = !levelsOpen })
-                            if (levelsOpen) {
-                                Popup(
-                                    alignment = Alignment.TopStart,
-                                    offset = IntOffset(anchorPos.x, anchorPos.y + anchorSize.height + 6),
-                                    onDismissRequest = { levelsOpen = false },
-                                    properties = PopupProperties(focusable = true)
-                                ) {
-                                    Column(
-                                        Modifier
-                                            .shadow(24.dp, RoundedCornerShape(16.dp))
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .background(MiuixTheme.colorScheme.surface)
-                                            .padding(vertical = 6.dp)
-                                    ) {
-                                        levels.forEachIndexed { i, (name, _) ->
-                                            Row(
-                                                Modifier.clickable {
-                                                    levelIndex = i
-                                                    consoleView?.setMinimumLogLevel(levels[i].second)
-                                                    levelsOpen = false
-                                                }.fillMaxWidth().padding(horizontal = 24.dp, vertical = 13.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(name,
-                                                    fontSize = 16.sp,
-                                                    color = if (i == levelIndex) MiuixTheme.colorScheme.primary
-                                                    else MiuixTheme.colorScheme.onBackground)
-                                                if (i == levelIndex) {
-                                                    Spacer(Modifier.weight(1f))
-                                                    Icon(MiuixIcons.Check, contentDescription = null,
-                                                        modifier = Modifier.size(18.dp),
-                                                        tint = MiuixTheme.colorScheme.primary)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                             IconButton(onClick = { searchShown = !searchShown }) {
                                 Icon(painter = painterResource(R.drawable.ic_search_white_24dp),
                                     contentDescription = "搜索",
@@ -233,6 +196,42 @@ class MiuixLogActivity : ComponentActivity() {
                         }
                     }
                 )
+            }
+            if (levelsOpen) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .pointerInput(Unit) { detectTapGestures { levelsOpen = false } }
+                )
+                Column(
+                    Modifier
+                        .offset { IntOffset(anchorPos.x, anchorPos.y + anchorSize.height + 6) }
+                        .shadow(24.dp, RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MiuixTheme.colorScheme.surface)
+                        .padding(vertical = 6.dp)
+                ) {
+                    levels.forEachIndexed { i, (name, _) ->
+                        Row(
+                            Modifier.clickable {
+                                levelIndex = i
+                                consoleView?.setMinimumLogLevel(levels[i].second)
+                                levelsOpen = false
+                            }.fillMaxWidth().padding(horizontal = 24.dp, vertical = 13.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(name,
+                                fontSize = 16.sp,
+                                color = if (i == levelIndex) MiuixTheme.colorScheme.primary
+                                else MiuixTheme.colorScheme.onBackground)
+                            if (i == levelIndex) {
+                                Spacer(Modifier.width(10.dp))
+                                Icon(MiuixIcons.Check, contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MiuixTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
             }
             FloatingActionButton(
                 onClick = { consoleImpl?.clear() },
