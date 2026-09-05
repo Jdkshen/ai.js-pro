@@ -113,6 +113,7 @@
 ## 6. 本轮验证结果
 
 - [x] 主界面第一阶段：Miuix 顶部导航外壳已接入，保留原生 ViewPager/RecyclerView 和脚本逻辑；非 miuix 变体仍使用原 Toolbar。
+- [x] **全局颜色统一**：Miuix 顶栏/状态栏/Tab 背景统一为 `AijsMiuixTheme` 背景色（浅 `#F7F7F7`、深色模式黑色），与 Miuix 页面（核心服务/设置/抽屉）完全一致；K40 像素采样确认（状态栏/顶栏均为 247,247,247）。「顶栏改 teal 实色 → 改回 Miuix 浅色」已按统一 Miuix 方向裁定，保留。
 - [x] 顶栏的抽屉、ImGui 工作台、日志和文档桥接已接入；K40 实机确认工作台与 Miuix 文档页可打开。
 - [x] 修复 Miuix 抽屉不创建旧 `DrawerMenuAdapter` 时，远程连接状态回调触发空指针崩溃的问题。
 - [x] commonDebug 与 miuixDebug 构建成功。
