@@ -171,4 +171,8 @@ public class Pref {
     public static boolean isForegroundServiceEnabled() {
         return def().getBoolean(getString(R.string.key_foreground_servie), false);
     }
+
+    public static void setForegroundServiceEnabled(boolean enabled) {
+        def().edit().putBoolean(getString(R.string.key_foreground_servie), enabled).apply();
+    }
 }

@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.ui.log;
 
+import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.PorterDuff;
 import android.os.Bundle;
@@ -12,10 +13,7 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.stardust.autojs.core.console.ConsoleView;
 import com.stardust.autojs.core.console.ConsoleImpl;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.Click;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
+import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.AutoJs;
 import com.jdkshen.aijspro.theme.AppThemePalette;
@@ -23,10 +21,8 @@ import com.jdkshen.aijspro.theme.AppThemeRepository;
 import com.jdkshen.aijspro.theme.ConsoleThemeHelper;
 import com.jdkshen.aijspro.ui.BaseActivity;
 
-@EActivity(R.layout.activity_log)
 public class LogActivity extends BaseActivity {
 
-    @ViewById(R.id.console)
     ConsoleView mConsoleView;
 
     private ConsoleImpl mConsoleImpl;
@@ -40,10 +36,19 @@ public class LogActivity extends BaseActivity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (BuildConfig.MIUIX_PILOT) {
+            startActivity(new Intent().setClassName(this,
+                    "com.jdkshen.aijspro.ui.log.MiuixLogActivity"));
+            finish();
+            return;
+        }
         applyDayNightMode();
+        setContentView(R.layout.activity_log);
+        mConsoleView = findViewById(R.id.console);
+        findViewById(R.id.fab).setOnClickListener(v -> clearConsole());
+        setupViews();
     }
 
-    @AfterViews
     void setupViews() {
         setToolbarAsBack(getString(R.string.text_log));
         mConsoleImpl = AutoJs.getInstance().getGlobalConsole();
@@ -106,7 +111,6 @@ public class LogActivity extends BaseActivity {
         }
     }
 
-    @Click(R.id.fab)
     void clearConsole() {
         mConsoleImpl.clear();
     }

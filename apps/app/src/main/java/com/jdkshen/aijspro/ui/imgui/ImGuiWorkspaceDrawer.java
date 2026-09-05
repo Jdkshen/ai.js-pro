@@ -187,7 +187,7 @@ final class ImGuiWorkspaceDrawer extends DrawerLayout {
         androidx.core.view.ViewCompat.requestApplyInsets(mHamburgerButton);
     }
 
-    void open() {
+    void openDrawerSurface() {
         setHamburgerVisible(false);
         openDrawer(GravityCompat.START, true);
     }

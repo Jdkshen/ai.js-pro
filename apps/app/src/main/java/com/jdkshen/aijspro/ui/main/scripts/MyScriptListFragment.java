@@ -1,17 +1,20 @@
 package com.jdkshen.aijspro.ui.main.scripts;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
+import android.os.Environment;
 import android.preference.PreferenceManager;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 
 import com.stardust.app.GlobalAppContext;
 import com.stardust.util.IntentUtil;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EFragment;
-import org.androidannotations.annotations.ViewById;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
@@ -25,17 +28,17 @@ import com.jdkshen.aijspro.ui.main.FloatingActionMenu;
 import com.jdkshen.aijspro.ui.main.QueryEvent;
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment;
 import com.jdkshen.aijspro.ui.project.ProjectConfigActivity;
-import com.jdkshen.aijspro.ui.project.ProjectConfigActivity_;
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerItemList;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
+
+import java.io.File;
 
 import io.reactivex.android.schedulers.AndroidSchedulers;
 
 /**
  * Created by Stardust on 2017/3/13.
  */
-@EFragment(R.layout.fragment_my_script_list)
 public class MyScriptListFragment extends ViewPagerFragment implements FloatingActionMenu.OnFloatingActionButtonClickListener {
 
     private static final String TAG = "MyScriptListFragment";
@@ -44,7 +47,6 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         super(0);
     }
 
-    @ViewById(R.id.script_file_list)
     ExplorerView mExplorerView;
 
     private FloatingActionMenu mFloatingActionMenu;
@@ -55,11 +57,22 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         EventBus.getDefault().register(this);
     }
 
-    @AfterViews
+    @NonNull
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_my_script_list, container, false);
+        mExplorerView = view.findViewById(R.id.script_file_list);
+        setUpViews();
+        return view;
+    }
+
     void setUpViews() {
         ExplorerItemList.SortConfig sortConfig = ExplorerItemList.SortConfig.from(PreferenceManager.getDefaultSharedPreferences(getContext()));
         mExplorerView.setSortConfig(sortConfig);
-        mExplorerView.setExplorer(Explorers.workspace(), ExplorerDirPage.createRoot(Pref.getScriptDirPath()));
+        File storageDirectory = Environment.getExternalStorageDirectory();
+        ExplorerDirPage storageRoot = ExplorerDirPage.createRoot(storageDirectory.getPath());
+        ExplorerDirPage scriptDirectory = new ExplorerDirPage(Pref.getScriptDirPath(), storageRoot);
+        mExplorerView.setExplorer(Explorers.workspace(), storageRoot, scriptDirectory);
         mExplorerView.setOnItemClickListener((view, item) -> {
             if (item.isEditable()) {
                 Scripts.INSTANCE.edit(getActivity(), item.toScriptFile());
@@ -89,9 +102,21 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
                 .subscribe(new SimpleObserver<Boolean>() {
                     @Override
                     public void onNext(@io.reactivex.annotations.NonNull Boolean expanding) {
+                        fab.animate().cancel();
                         fab.animate()
-                                .rotation(expanding ? 45 : 0)
-                                .setDuration(300)
+                                .scaleX(0.82f)
+                                .scaleY(0.82f)
+                                .setDuration(90)
+                                .withEndAction(() -> {
+                                    fab.setImageResource(expanding
+                                            ? R.drawable.ic_close_white_48dp
+                                            : R.drawable.ic_menu);
+                                    fab.animate()
+                                            .scaleX(1f)
+                                            .scaleY(1f)
+                                            .setDuration(120)
+                                            .start();
+                                })
                                 .start();
                     }
                 });
@@ -170,10 +195,11 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
                         .importFile();
                 break;
             case 3:
-                ProjectConfigActivity_.intent(getContext())
-                        .extra(ProjectConfigActivity.EXTRA_PARENT_DIRECTORY, mExplorerView.getCurrentPage().getPath())
-                        .extra(ProjectConfigActivity.EXTRA_NEW_PROJECT, true)
-                        .start();
+                Intent intent = new Intent(getContext(), ProjectConfigActivity.class);
+                intent.putExtra(ProjectConfigActivity.EXTRA_PARENT_DIRECTORY, mExplorerView.getCurrentPage().getPath());
+                intent.putExtra(ProjectConfigActivity.EXTRA_NEW_PROJECT, true);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(intent);
                 break;
 
         }

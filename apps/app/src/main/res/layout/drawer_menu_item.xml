@@ -3,30 +3,31 @@
                 xmlns:app="http://schemas.android.com/apk/res-auto"
                 xmlns:tools="http://schemas.android.com/tools"
                 android:layout_width="match_parent"
-                android:layout_height="48dp"
+                android:layout_height="52dp"
                 android:background="?selectableItemBackground"
                 android:orientation="horizontal">
 
     <FrameLayout
         android:id="@+id/icon_container"
-        android:layout_width="16dp"
-        android:layout_height="16dp"
-        android:layout_alignParentLeft="true"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:layout_alignParentStart="true"
         android:layout_centerVertical="true"
-        android:layout_margin="16dp">
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="4dp">
 
         <ImageView
             android:id="@+id/icon"
-            android:layout_width="16dp"
-            android:layout_height="16dp"
-            android:tint="#999999"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:tint="?attr/colorOnSurfaceVariant"
             tools:src="@drawable/ic_service_green"/>
 
         <me.zhanghai.android.materialprogressbar.MaterialProgressBar
             android:id="@+id/progress_bar"
-            android:layout_width="16dp"
-            android:layout_height="16dp"
-            android:backgroundTint="#999999"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:backgroundTint="?attr/colorPrimary"
             android:visibility="gone"/>
 
     </FrameLayout>
@@ -36,19 +37,19 @@
         android:layout_width="wrap_content"
         android:layout_height="match_parent"
         android:layout_centerVertical="true"
-        android:layout_toRightOf="@+id/icon_container"
+        android:layout_toEndOf="@+id/icon_container"
         android:gravity="center_vertical"
-        android:textColor="?drawer_item_text_color"
-        android:textSize="14sp"
+        android:textColor="?attr/colorOnSurface"
+        android:textSize="15sp"
         tools:text="@string/text_auto_operate_service"/>
 
     <TextView
         android:id="@+id/notifications"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentRight="true"
+        android:layout_alignParentEnd="true"
         android:layout_centerVertical="true"
-        android:layout_marginRight="16dp"
+        android:layout_marginEnd="16dp"
         android:background="@drawable/circle_red"
         android:padding="4dp"
         android:textColor="@android:color/white"
@@ -61,9 +62,9 @@
         android:id="@+id/sw"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentRight="true"
+        android:layout_alignParentEnd="true"
         android:layout_centerVertical="true"
-        android:layout_marginRight="16dp"
+        android:layout_marginEnd="16dp"
         android:visibility="gone"
         tools:visibility="visible"/>
 

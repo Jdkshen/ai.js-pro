@@ -21,19 +21,14 @@ import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.network.NodeBB;
 import com.jdkshen.aijspro.network.entity.user.User;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
-
 /**
  * Created by 婷 on 2017/9/29.
  */
 
 public class AvatarView extends FrameLayout {
 
-    @BindView(R.id.icon_text)
     TextView mIconText;
 
-    @BindView(R.id.icon)
     RoundedImageView mIcon;
 
     private GradientDrawable mIconTextBackground;
@@ -56,7 +51,8 @@ public class AvatarView extends FrameLayout {
 
     private void init() {
         inflate(getContext(), R.layout.avatar_view, this);
-        ButterKnife.bind(this);
+        mIconText = findViewById(R.id.icon_text);
+        mIcon = findViewById(R.id.icon);
         mIconTextBackground = (GradientDrawable) mIconText.getBackground();
     }
 

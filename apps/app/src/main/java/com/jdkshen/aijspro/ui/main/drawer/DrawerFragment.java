@@ -6,6 +6,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.preference.PreferenceManager;
 import android.provider.Settings;
 
 import androidx.annotation.NonNull;
@@ -14,7 +15,9 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import android.text.TextUtils;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -31,6 +34,7 @@ import com.stardust.notification.NotificationListenerService;
 
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
+import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.external.foreground.ForegroundService;
 import com.jdkshen.aijspro.network.UserService;
 import com.jdkshen.aijspro.tool.Observers;
@@ -46,11 +50,10 @@ import com.jdkshen.aijspro.network.entity.VersionInfo;
 import com.jdkshen.aijspro.tool.SimpleObserver;
 import com.jdkshen.aijspro.ui.main.MainActivity;
 import com.jdkshen.aijspro.ui.main.community.CommunityFragment;
-import com.jdkshen.aijspro.ui.user.LoginActivity_;
+import com.jdkshen.aijspro.ui.user.LoginActivity;
 import com.jdkshen.aijspro.ui.settings.SettingsActivity;
 import com.jdkshen.aijspro.ui.update.UpdateInfoDialogBuilder;
 import com.jdkshen.aijspro.ui.user.WebActivity;
-import com.jdkshen.aijspro.ui.user.WebActivity_;
 import com.jdkshen.aijspro.ui.widget.AvatarView;
 
 import com.stardust.theme.ThemeColorManager;
@@ -65,10 +68,6 @@ import com.jdkshen.aijspro.tool.WifiTool;
 
 import com.stardust.util.IntentUtil;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.Click;
-import org.androidannotations.annotations.EFragment;
-import org.androidannotations.annotations.ViewById;
 import com.jdkshen.aijspro.ui.widget.BackgroundTarget;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
@@ -87,22 +86,15 @@ import io.reactivex.schedulers.Schedulers;
  * Created by Stardust on 2017/1/30.
  * TODO these codes are so ugly!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
  */
-@EFragment(R.layout.fragment_drawer)
 public class DrawerFragment extends androidx.fragment.app.Fragment {
 
     private static final String URL_DEV_PLUGIN = "https://www.autojs.org/topic/968/";
 
-    @ViewById(R.id.header)
     View mHeaderView;
-    @ViewById(R.id.username)
     TextView mUserName;
-    @ViewById(R.id.avatar)
     AvatarView mAvatar;
-    @ViewById(R.id.shadow)
     View mShadow;
-    @ViewById(R.id.default_cover)
     View mDefaultCover;
-    @ViewById(R.id.drawer_menu)
     RecyclerView mDrawerMenu;
 
 
@@ -127,6 +119,7 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     private DrawerMenuAdapter mDrawerMenuAdapter;
     private Disposable mConnectionStateDisposable;
     private CommunityDrawerMenu mCommunityDrawerMenu = new CommunityDrawerMenu();
+    private View mMiuixDrawerView;
 
 
     @Override
@@ -147,7 +140,38 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
 
     }
 
-    @AfterViews
+    @NonNull
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        if (BuildConfig.MIUIX_PILOT) {
+            View miuixView = tryCreateMiuixDrawerView();
+            if (miuixView != null) {
+                mMiuixDrawerView = miuixView;
+                return miuixView;
+            }
+        }
+        View view = inflater.inflate(R.layout.fragment_drawer, container, false);
+        mHeaderView = view.findViewById(R.id.header);
+        mUserName = view.findViewById(R.id.username);
+        mAvatar = view.findViewById(R.id.avatar);
+        mShadow = view.findViewById(R.id.shadow);
+        mDefaultCover = view.findViewById(R.id.default_cover);
+        mDrawerMenu = view.findViewById(R.id.drawer_menu);
+        view.findViewById(R.id.avatar).setOnClickListener(v -> loginOrShowUserInfo());
+        setUpViews();
+        return view;
+    }
+
+    private View tryCreateMiuixDrawerView() {
+        try {
+            Class<?> clazz = Class.forName("com.jdkshen.aijspro.ui.main.drawer.MiuixDrawerHost");
+            java.lang.reflect.Method method = clazz.getMethod("createView", DrawerFragment.class);
+            return (View) method.invoke(null, this);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     void setUpViews() {
         ThemeColorManager.addViewBackground(mHeaderView);
         initMenuItems();
@@ -165,6 +189,8 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     private void initMenuItems() {
         mDrawerMenuAdapter = new DrawerMenuAdapter(new ArrayList<>(Arrays.asList(
                 new DrawerMenuGroup(R.string.text_service),
+                new DrawerMenuItem(R.drawable.ic_service_green, R.string.text_quick_service,
+                        holder -> openServiceStatus()),
                 mAccessibilityServiceItem,
                 mStableModeItem,
                 mNotificationPermissionItem,
@@ -185,9 +211,207 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
         mDrawerMenu.setLayoutManager(new LinearLayoutManager(getContext()));
     }
 
+    public void openServiceStatus() {
+        if (getContext() == null) {
+            return;
+        }
+        startActivity(new Intent(getContext(), com.jdkshen.aijspro.ui.service.ServiceStatusActivity.class));
+    }
 
-    @SuppressLint("CheckResult")
-    @Click(R.id.avatar)
+    // ---- Miuix drawer bridge (only called when BuildConfig.MIUIX_PILOT) ----
+
+    public String getDrawerUserName() {
+        return mUserName != null ? mUserName.getText().toString() : null;
+    }
+
+    public void openUserArea() {
+        loginOrShowUserInfo();
+    }
+
+    public boolean isAccessibilityEnabled() {
+        return AccessibilityServiceTool.isAccessibilityServiceEnabled(getActivity());
+    }
+
+    public void setAccessibilityEnabled(boolean checked) {
+        boolean enabled = isAccessibilityEnabled();
+        if (checked && !enabled) {
+            enableAccessibilityService();
+        } else if (!checked && enabled) {
+            if (!AccessibilityService.Companion.disable()) {
+                AccessibilityServiceTool.goToAccessibilitySetting();
+            }
+        }
+    }
+
+    public boolean isStableModeEnabled() {
+        return Pref.isStableModeEnabled();
+    }
+
+    public void setStableModeEnabled(boolean enabled) {
+        PreferenceManager.getDefaultSharedPreferences(getContext())
+                .edit().putBoolean(getString(R.string.key_stable_mode), enabled).apply();
+        if (enabled) {
+            showStableModePromptIfNeeded();
+        }
+    }
+
+    public boolean isNotificationEnabled() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2
+                && NotificationListenerService.Companion.getInstance() != null;
+    }
+
+    public void openNotificationSettings(boolean checked) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP_MR1) {
+            return;
+        }
+        boolean enabled = NotificationListenerService.Companion.getInstance() != null;
+        if ((checked && !enabled) || (!checked && enabled)) {
+            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+        }
+    }
+
+    public boolean isUsageStatsEnabled() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+                && AppOpsKt.isOpPermissionGranted(getContext(), AppOpsManager.OPSTR_GET_USAGE_STATS);
+    }
+
+    public void openUsageStats(boolean checked) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            return;
+        }
+        boolean enabled = isUsageStatsEnabled();
+        if (checked && !enabled) {
+            if (new NotAskAgainDialog.Builder(getContext(), "DrawerFragment.usage_stats")
+                    .title(R.string.text_usage_stats_permission)
+                    .content(R.string.description_usage_stats_permission)
+                    .positiveText(R.string.ok)
+                    .dismissListener(dialog -> IntentUtil.requestAppUsagePermission(getContext()))
+                    .show() == null) {
+                IntentUtil.requestAppUsagePermission(getContext());
+            }
+        }
+        if (!checked && enabled) {
+            IntentUtil.requestAppUsagePermission(getContext());
+        }
+    }
+
+    public boolean isForegroundServicePrefEnabled() {
+        return Pref.isForegroundServiceEnabled();
+    }
+
+    public void setForegroundServiceEnabled(boolean checked) {
+        if (checked) {
+            ForegroundService.start(GlobalAppContext.get());
+        } else {
+            ForegroundService.stop(GlobalAppContext.get());
+        }
+    }
+
+    public boolean isFloatingWindowShowing() {
+        return FloatyWindowManger.isCircularMenuShowing();
+    }
+
+    public void setFloatingWindowEnabled(boolean checked) {
+        boolean showing = FloatyWindowManger.isCircularMenuShowing();
+        if (getActivity() != null && !getActivity().isFinishing()) {
+            Pref.setFloatingMenuShown(checked);
+        }
+        if (checked && !showing) {
+            FloatyWindowManger.showCircularMenu();
+            enableAccessibilityServiceByRootIfNeeded();
+        } else if (!checked && showing) {
+            FloatyWindowManger.hideCircularMenu();
+        }
+    }
+
+    public boolean isVolumeDownControlEnabled() {
+        return PreferenceManager.getDefaultSharedPreferences(getContext())
+                .getBoolean(getString(R.string.key_use_volume_control_record), false);
+    }
+
+    public void setVolumeDownControlEnabled(boolean enabled) {
+        PreferenceManager.getDefaultSharedPreferences(getContext())
+                .edit().putBoolean(getString(R.string.key_use_volume_control_record), enabled).apply();
+    }
+
+    public boolean isNightModePrefEnabled() {
+        return Pref.isNightModeEnabled();
+    }
+
+    public void setNightModePrefEnabled(boolean enabled) {
+        if (getActivity() instanceof BaseActivity) {
+            ((BaseActivity) getActivity()).setNightModeEnabled(enabled);
+        }
+    }
+
+    public void openThemeColorSettingsFromDrawer() {
+        SettingsActivity.selectThemeColor(getActivity());
+    }
+
+    public boolean isRemoteConnected() {
+        return DevPluginService.getInstance().isConnected();
+    }
+
+    public void openRemoteConnection() {
+        inputRemoteHost();
+    }
+
+    public void disconnectRemote() {
+        DevPluginService.getInstance().disconnectIfNeeded();
+    }
+
+    public void checkForUpdatesFromDrawer() {
+        VersionService.getInstance().checkForUpdates()
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new SimpleObserver<VersionInfo>() {
+
+                    @Override
+                    public void onNext(@io.reactivex.annotations.NonNull VersionInfo versionInfo) {
+                        if (getActivity() == null) {
+                            return;
+                        }
+                        if (versionInfo.isNewer()) {
+                            new UpdateInfoDialogBuilder(getActivity(), versionInfo).show();
+                        } else {
+                            Toast.makeText(GlobalAppContext.get(), R.string.text_is_latest_version,
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    }
+
+                    @Override
+                    public void onError(@io.reactivex.annotations.NonNull Throwable e) {
+                        e.printStackTrace();
+                        Toast.makeText(GlobalAppContext.get(), R.string.text_check_update_error,
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+    }
+
+    public void openSettingsFromDrawer() {
+        if (getContext() != null) {
+            startActivity(new Intent(getContext(), SettingsActivity.class));
+        }
+    }
+
+    public void exitAppFromDrawer() {
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).exitCompletely();
+        }
+    }
+
+    private void openPage(int position) {
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).showPage(position);
+        }
+    }
+
+    private void openHome() {
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).showHome();
+        }
+    }
+
+
     void loginOrShowUserInfo() {
         UserService.getInstance()
                 .me()
@@ -196,15 +420,15 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
                 .subscribe(user -> {
                             if (getActivity() == null)
                                 return;
-                            WebActivity_.intent(this)
-                                    .extra(WebActivity.EXTRA_URL, NodeBB.url("user/" + user.getUserslug()))
-                                    .extra(Intent.EXTRA_TITLE, user.getUsername())
-                                    .start();
+                            Intent intent = new Intent(getContext(), WebActivity.class);
+                            intent.putExtra(WebActivity.EXTRA_URL, NodeBB.url("user/" + user.getUserslug()));
+                            intent.putExtra(Intent.EXTRA_TITLE, user.getUsername());
+                            startActivity(intent);
                         },
                         error -> {
                             if (getActivity() == null)
                                 return;
-                            LoginActivity_.intent(getActivity()).start();
+                            startActivity(new Intent(getActivity(), LoginActivity.class));
                         }
                 );
     }
@@ -365,6 +589,13 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     @Override
     public void onResume() {
         super.onResume();
+        if (mMiuixDrawerView != null) {
+            Object refresh = mMiuixDrawerView.getTag();
+            if (refresh instanceof Runnable) {
+                ((Runnable) refresh).run();
+            }
+            return;
+        }
         syncSwitchState();
         syncUserInfo();
     }

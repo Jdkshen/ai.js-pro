@@ -1,7 +1,9 @@
 package com.jdkshen.aijspro.ui.doc;
 
+import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.view.View;
@@ -11,23 +13,16 @@ import com.afollestad.materialdialogs.MaterialDialog;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.ui.widget.EWebView;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
-import butterknife.OnClick;
-
 /**
  * Created by Stardust on 2017/10/24.
  */
 
 public class ManualDialog {
 
-    @BindView(R.id.title)
     TextView mTitle;
 
-    @BindView(R.id.eweb_view)
     EWebView mEWebView;
 
-    @BindView(R.id.pin_to_left)
     View mPinToLeft;
 
     Dialog mDialog;
@@ -36,7 +31,11 @@ public class ManualDialog {
     public ManualDialog(Context context) {
         mContext = context;
         View view = View.inflate(context, R.layout.floating_manual_dialog, null);
-        ButterKnife.bind(this, view);
+        mTitle = view.findViewById(R.id.title);
+        mEWebView = view.findViewById(R.id.eweb_view);
+        mPinToLeft = view.findViewById(R.id.pin_to_left);
+        view.findViewById(R.id.close).setOnClickListener(v -> close());
+        view.findViewById(R.id.fullscreen).setOnClickListener(v -> viewInNewActivity());
         mDialog = new MaterialDialog.Builder(context)
                 .customView(view, false)
                 .build();
@@ -67,17 +66,18 @@ public class ManualDialog {
         return this;
     }
 
-    @OnClick(R.id.close)
     void close() {
         mDialog.dismiss();
     }
 
-    @OnClick(R.id.fullscreen)
     void viewInNewActivity() {
         mDialog.dismiss();
-        DocumentationActivity_.intent(mContext)
-                .extra(DocumentationActivity.EXTRA_URL, mEWebView.getWebView().getUrl())
-                .start();
+        Intent intent = new Intent(mContext, DocumentationActivity.class);
+        intent.putExtra(DocumentationActivity.EXTRA_URL, mEWebView.getWebView().getUrl());
+        if (!(mContext instanceof Activity)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        mContext.startActivity(intent);
     }
 
 }

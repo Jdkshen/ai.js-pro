@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.external.tasker;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
+import android.os.Bundle;
 import android.widget.Toast;
 
 import com.jdkshen.aijspro.R;
@@ -10,10 +11,6 @@ import com.jdkshen.aijspro.timing.TaskReceiver;
 import com.jdkshen.aijspro.tool.Observers;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.edit.EditorView;
-
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
 
 import io.reactivex.android.schedulers.AndroidSchedulers;
 
@@ -25,24 +22,29 @@ import static com.jdkshen.aijspro.ui.edit.EditorView.EXTRA_SAVE_ENABLED;
 /**
  * Created by Stardust on 2017/4/5.
  */
-@EActivity(R.layout.activity_tasker_script_edit)
 public class TaskerScriptEditActivity extends BaseActivity {
 
     public static final int REQUEST_CODE = 10016;
     public static final String EXTRA_TASK_ID = TaskReceiver.EXTRA_TASK_ID;
 
     public static void edit(Activity activity, String title, String summary, String content) {
-        activity.startActivityForResult(new Intent(activity, TaskerScriptEditActivity_.class)
+        activity.startActivityForResult(new Intent(activity, TaskerScriptEditActivity.class)
                 .putExtra(EXTRA_CONTENT, content)
                 .putExtra("summary", summary)
                 .putExtra(EXTRA_NAME, title), REQUEST_CODE);
     }
 
-    @ViewById(R.id.editor_view)
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_tasker_script_edit);
+        mEditorView = findViewById(R.id.editor_view);
+        setUpViews();
+    }
+
     EditorView mEditorView;
 
     @SuppressLint("CheckResult")
-    @AfterViews
     void setUpViews() {
         mEditorView.handleIntent(getIntent()
                 .putExtra(EXTRA_RUN_ENABLED, false)

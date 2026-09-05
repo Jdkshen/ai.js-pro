@@ -1,14 +1,15 @@
 apply plugin: 'com.android.library'
 
 android {
-  compileSdkVersion 28
-  buildToolsVersion "28.0.3"
+  namespace 'com.jaredrummler.android.colorpicker'
+  compileSdk 35
+  buildToolsVersion "34.0.0"
   resourcePrefix "cpv_"
   defaultConfig {
     minSdkVersion 14
     targetSdkVersion 28
   }
-  lintOptions {
+  lint {
     abortOnError false
   }
 }

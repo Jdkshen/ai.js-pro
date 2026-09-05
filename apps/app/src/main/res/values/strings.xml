@@ -168,6 +168,13 @@
     <string name="key_enable_observe_key">key_enable_observe_key</string>
     <string name="text_directory">文件夹</string>
     <string name="text_file">文件</string>
+    <string name="text_script_root">内部存储  ›  脚本</string>
+    <string name="text_internal_storage">内部存储</string>
+    <string name="text_script_subdirectory">脚本  ›  %1$s</string>
+    <string name="text_directory_modified">文件夹\n修改于 %1$s</string>
+    <string name="text_file_modified">%1$s\n修改于 %2$s</string>
+    <string name="text_home">首页</string>
+    <string name="text_navigation">导航</string>
     <string name="text_tutorial">教程</string>
     <string name="text_community">社区</string>
     <string name="text_manage">管理</string>
@@ -410,4 +417,19 @@
         <item quantity="other">描述至少要 %d 个字.</item>
     </plurals>
     <string name="text_imgui_workspace">ImGui 工作台</string>
+    <string name="text_quick_service">核心服务</string>
+    <string name="text_quick_service_subtitle">管理核心服务</string>
+    <string name="text_quick_service_status">无障碍:%1$s · 悬浮窗:%2$s · 前台:%3$s</string>
+    <string name="text_version_footer">AI.js Pro v%1$s</string>
+    <string name="text_quick_developer">开发工具</string>
+    <string name="text_quick_exit_app">退出 AI</string>
+    <string name="text_service_status_accessibility">无障碍服务</string>
+    <string name="text_service_status_floating">悬浮窗</string>
+    <string name="text_service_status_foreground">前台服务</string>
+    <string name="text_service_foreground">前台服务</string>
+    <string name="text_battery_optimization">电池优化</string>
+    <string name="text_service_floating_subtitle">点击卡片中的悬浮窗可快速切换</string>
+    <string name="text_service_battery_subtitle">允许后台持久运行任务</string>
+    <string name="text_on">开</string>
+    <string name="text_off">关</string>
 </resources>

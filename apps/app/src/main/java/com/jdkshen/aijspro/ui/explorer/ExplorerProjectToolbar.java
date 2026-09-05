@@ -1,6 +1,8 @@
 package com.jdkshen.aijspro.ui.explorer;
 
+import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import androidx.annotation.Nullable;
 import androidx.cardview.widget.CardView;
 import android.util.AttributeSet;
@@ -17,21 +19,14 @@ import com.jdkshen.aijspro.model.explorer.ExplorerChangeEvent;
 import com.jdkshen.aijspro.model.explorer.ExplorerItem;
 import com.jdkshen.aijspro.model.explorer.Explorers;
 import com.jdkshen.aijspro.ui.project.BuildActivity;
-import com.jdkshen.aijspro.ui.project.BuildActivity_;
 import com.jdkshen.aijspro.ui.project.ProjectConfigActivity;
-import com.jdkshen.aijspro.ui.project.ProjectConfigActivity_;
 import org.greenrobot.eventbus.Subscribe;
-
-import butterknife.BindView;
-import butterknife.ButterKnife;
-import butterknife.OnClick;
 
 public class ExplorerProjectToolbar extends CardView {
 
     private ProjectConfig mProjectConfig;
     private PFile mDirectory;
 
-    @BindView(R.id.project_name)
     TextView mProjectName;
 
     public ExplorerProjectToolbar(Context context) {
@@ -51,7 +46,10 @@ public class ExplorerProjectToolbar extends CardView {
 
     private void init() {
         inflate(getContext(), R.layout.explorer_project_toolbar, this);
-        ButterKnife.bind(this);
+        mProjectName = findViewById(R.id.project_name);
+        findViewById(R.id.run).setOnClickListener(v -> run());
+        findViewById(R.id.build).setOnClickListener(v -> build());
+        findViewById(R.id.sync).setOnClickListener(v -> sync());
         setOnClickListener(view -> edit());
     }
 
@@ -71,7 +69,6 @@ public class ExplorerProjectToolbar extends CardView {
         }
     }
 
-    @OnClick(R.id.run)
     void run() {
         try {
             new ProjectLauncher(mDirectory.getPath())
@@ -82,14 +79,15 @@ public class ExplorerProjectToolbar extends CardView {
         }
     }
 
-    @OnClick(R.id.build)
     void build() {
-        BuildActivity_.intent(getContext())
-                .extra(BuildActivity.EXTRA_SOURCE, mDirectory.getPath())
-                .start();
+        Intent intent = new Intent(getContext(), BuildActivity.class);
+        intent.putExtra(BuildActivity.EXTRA_SOURCE, mDirectory.getPath());
+        if (!(getContext() instanceof Activity)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        getContext().startActivity(intent);
     }
 
-    @OnClick(R.id.sync)
     void sync() {
 
     }
@@ -119,9 +117,12 @@ public class ExplorerProjectToolbar extends CardView {
     }
 
     void edit() {
-        ProjectConfigActivity_.intent(getContext())
-                .extra(ProjectConfigActivity.EXTRA_DIRECTORY, mDirectory.getPath())
-                .start();
+        Intent intent = new Intent(getContext(), ProjectConfigActivity.class);
+        intent.putExtra(ProjectConfigActivity.EXTRA_DIRECTORY, mDirectory.getPath());
+        if (!(getContext() instanceof Activity)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        getContext().startActivity(intent);
     }
 
 }

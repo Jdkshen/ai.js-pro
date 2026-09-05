@@ -29,9 +29,6 @@ import com.jdkshen.aijspro.tool.Observers;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
 import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity;
 
 import java.io.File;
@@ -49,13 +46,11 @@ import static com.jdkshen.aijspro.ui.edit.EditorView.EXTRA_READ_ONLY;
 /**
  * Created by Stardust on 2017/1/29.
  */
-@EActivity(R.layout.activity_edit)
 public class EditActivity extends BaseActivity implements OnActivityResultDelegate.DelegateHost, PermissionRequestProxyActivity {
 
     private OnActivityResultDelegate.Mediator mMediator = new OnActivityResultDelegate.Mediator();
     private static final String LOG_TAG = "EditActivity";
 
-    @ViewById(R.id.editor_view)
     EditorView mEditorView;
 
     private EditorMenu mEditorMenu;
@@ -85,7 +80,7 @@ public class EditActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private static Intent newIntent(Context context, boolean newTask) {
-        Intent intent = new Intent(context, EditActivity_.class);
+        Intent intent = new Intent(context, EditActivity.class);
         if (newTask || !(context instanceof Activity)) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         }
@@ -96,10 +91,12 @@ public class EditActivity extends BaseActivity implements OnActivityResultDelega
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mNewTask = (getIntent().getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
+        setContentView(R.layout.activity_edit);
+        mEditorView = findViewById(R.id.editor_view);
+        setUpViews();
     }
 
     @SuppressLint("CheckResult")
-    @AfterViews
     void setUpViews() {
         mEditorView.handleIntent(getIntent())
                 .observeOn(AndroidSchedulers.mainThread())

@@ -1,73 +1,78 @@
 <?xml version="1.0" encoding="utf-8"?>
-
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              xmlns:tools="http://schemas.android.com/tools"
-              android:id="@+id/item"
-              android:layout_width="match_parent"
-              android:layout_height="wrap_content"
-              android:background="@android:color/white"
-              android:clickable="true"
-              android:foreground="?selectableItemBackground"
-              android:orientation="horizontal"
-              android:padding="8dp">
-
-    <TextView
-        android:id="@+id/first_char"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:layout_gravity="center_vertical"
-        android:layout_marginLeft="8dp"
-        android:background="@drawable/circle_light_green"
-        android:gravity="center"
-        android:textColor="@android:color/white"
-        android:textSize="24sp"
-        tools:text="J"/>
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/item"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:clickable="true"
+    android:focusable="true"
+    android:orientation="vertical">
 
     <LinearLayout
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="center_vertical"
-        android:layout_marginLeft="16dp"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        android:gravity="center_vertical"
+        android:minHeight="66dp"
+        android:orientation="horizontal"
+        android:paddingStart="16dp">
 
         <TextView
-            android:id="@+id/name"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:gravity="center_vertical"
-            android:maxLines="1"
-            android:textColor="#484C4F"
-            android:textSize="14sp"
-            tools:text="正在运行的服务"/>
+            android:id="@+id/first_char"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/circle_light_green"
+            android:gravity="center"
+            android:textColor="@android:color/white"
+            android:textSize="22sp"
+            tools:text="J" />
 
-        <TextView
-            android:id="@+id/desc"
-            android:layout_width="match_parent"
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_gravity="center_vertical"
-            android:layout_marginTop="4dp"
-            android:ellipsize="end"
-            android:gravity="center_vertical"
-            android:maxLines="1"
-            android:textColor="#9DA0A2"
-            android:textSize="11sp"
-            tools:text="18 KB"/>
+            android:layout_marginStart="16dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:paddingTop="5dp"
+            android:paddingBottom="5dp">
 
+            <TextView
+                android:id="@+id/name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="14sp"
+                tools:text="正在运行的服务" />
+
+            <TextView
+                android:id="@+id/desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="11sp"
+                tools:text="18 KB · 修改于 2026-09-05 15:39:00" />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/stop"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:padding="12dp"
+            android:src="@drawable/ic_close_gray600_48dp"
+            android:tint="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 
-
-    <ImageView
-        android:id="@+id/stop"
-        android:layout_width="36dp"
-        android:layout_height="match_parent"
-        android:background="?selectableItemBackgroundBorderless"
-        android:clickable="true"
-        android:padding="6dp"
-        android:src="@drawable/ic_close_gray600_48dp"
-        android:tint="#A9AAAB"/>
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1px"
+        android:layout_marginStart="80dp"
+        android:background="@color/m3_list_divider" />
 
 </LinearLayout>
-
-

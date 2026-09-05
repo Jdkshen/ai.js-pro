@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:app="http://schemas.android.com/apk/res-auto"
               xmlns:tools="http://schemas.android.com/tools"
               android:layout_width="match_parent"
               android:layout_height="wrap_content"
@@ -24,11 +25,12 @@
         android:textColor="#f2f3f7"
         tools:text="文件夹"/>
 
-    <com.stardust.theme.widget.ThemeColorFloatingActionButton
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/floating_action_button"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:src="@drawable/ic_floating_action_menu_dir"
-        android:tint="@android:color/white"/>
+        app:backgroundTint="?attr/colorSecondary"
+        app:tint="?attr/colorOnSecondary"/>
 
 </LinearLayout>

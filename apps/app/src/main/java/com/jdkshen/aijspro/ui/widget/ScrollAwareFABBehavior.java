@@ -48,9 +48,13 @@ public class ScrollAwareFABBehavior extends FloatingActionButton.Behavior {
     }
 
     private void startShowingAnimation(CoordinatorLayout parent, FloatingActionButton button) {
+        button.animate().setListener(null);
+        button.animate().cancel();
+        mHidden = false;
         button.animate()
                 .translationY(0)
                 .setDuration(DURATION)
+                .setInterpolator(INTERPOLATOR)
                 .setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator animation) {
@@ -68,6 +72,9 @@ public class ScrollAwareFABBehavior extends FloatingActionButton.Behavior {
     }
 
     private void startHidingAnimation(CoordinatorLayout parent, FloatingActionButton button) {
+        button.animate().setListener(null);
+        button.animate().cancel();
+        mHidden = true;
         button.animate()
                 .translationY(parent.getY() + parent.getHeight() - button.getY())
                 .setDuration(DURATION)

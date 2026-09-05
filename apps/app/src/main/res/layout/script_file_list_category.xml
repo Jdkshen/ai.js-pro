@@ -1,27 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent"
-              android:layout_height="wrap_content"
+              android:layout_height="48dp"
+              android:background="@color/item_background"
+              android:gravity="center_vertical"
               android:orientation="horizontal">
 
     <LinearLayout
         android:id="@+id/title_container"
         android:layout_width="0dp"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:layout_weight="1"
         android:background="?selectableItemBackground"
         android:clickable="true"
+        android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingBottom="8dp"
-        android:paddingTop="8dp">
+        android:paddingStart="8dp">
 
         <ImageView
             android:id="@+id/collapse"
-            android:layout_width="16dp"
-            android:layout_height="16dp"
+            android:layout_width="40dp"
+            android:layout_height="48dp"
             android:layout_gravity="center_vertical"
-            android:layout_marginLeft="8dp"
-            android:layout_marginRight="8dp"
+            android:padding="12dp"
             android:src="@drawable/ic_expanded"
             android:tint="#828384"/>
 
@@ -31,41 +32,41 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center_vertical"
             android:text="@string/text_directory"
-            android:textColor="#828384"
-            android:textSize="12sp"/>
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="14sp"/>
     </LinearLayout>
 
 
     <ImageView
         android:id="@+id/back"
-        android:layout_width="32dp"
+        android:layout_width="48dp"
         android:layout_height="match_parent"
         android:layout_gravity="center_vertical"
         android:background="?selectableItemBackgroundBorderless"
         android:clickable="true"
-        android:padding="9dp"
+        android:padding="12dp"
         android:src="@drawable/ic_dir_up"
         android:tint="#828384"/>
 
     <ImageView
         android:id="@+id/order"
-        android:layout_width="32dp"
+        android:layout_width="48dp"
         android:layout_height="match_parent"
         android:layout_gravity="center_vertical"
         android:background="?selectableItemBackgroundBorderless"
         android:clickable="true"
-        android:padding="9dp"
-        android:src="@drawable/ic_descending_order"
+        android:padding="12dp"
+        android:src="@drawable/ic_sort_descending_24dp"
         android:tint="#828384"/>
 
     <ImageView
         android:id="@+id/sort"
-        android:layout_width="32dp"
+        android:layout_width="48dp"
         android:layout_height="match_parent"
         android:layout_gravity="center_vertical"
         android:background="?selectableItemBackgroundBorderless"
         android:clickable="true"
-        android:padding="9dp"
-        android:src="@drawable/ic_sort"
+        android:padding="12dp"
+        android:src="@drawable/ic_filter_funnel_24dp"
         android:tint="#828384"/>
 </LinearLayout>

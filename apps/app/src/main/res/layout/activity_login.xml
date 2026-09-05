@@ -74,7 +74,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/text_forgot_password"
-                android:textColor="#929397"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="12sp"/>
 
             <TextView

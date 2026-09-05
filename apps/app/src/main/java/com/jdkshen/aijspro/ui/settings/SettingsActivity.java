@@ -14,8 +14,7 @@ import com.stardust.theme.preference.ThemeColorPreferenceFragment;
 import com.stardust.theme.util.ListBuilder;
 import com.stardust.util.MapBuilder;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EActivity;
+import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.update.UpdateCheckDialog;
@@ -31,7 +30,6 @@ import de.psdev.licensesdialog.licenses.License;
 /**
  * Created by Stardust on 2017/2/2.
  */
-@EActivity(R.layout.activity_settings)
 public class SettingsActivity extends BaseActivity {
 
     private static final List<Pair<Integer, Integer>> COLOR_ITEMS = new ListBuilder<Pair<Integer, Integer>>()
@@ -65,7 +63,19 @@ public class SettingsActivity extends BaseActivity {
         ColorSelectActivity.startColorSelect(context, context.getString(R.string.mt_color_picker_title), colorItems);
     }
 
-    @AfterViews
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (BuildConfig.MIUIX_PILOT) {
+            startActivity(new Intent().setClassName(this,
+                    "com.jdkshen.aijspro.ui.settings.MiuixSettingsActivity"));
+            finish();
+            return;
+        }
+        setContentView(R.layout.activity_settings);
+        setUpUI();
+    }
+
     void setUpUI() {
         setUpToolbar();
         getFragmentManager().beginTransaction().replace(R.id.fragment_setting, new PreferenceFragment()).commit();
@@ -103,7 +113,7 @@ public class SettingsActivity extends BaseActivity {
                     .put(getString(R.string.text_theme_color), () -> selectThemeColor(getActivity()))
                     .put(getString(R.string.text_check_for_updates), () -> new UpdateCheckDialog(getActivity())
                             .show())
-                    .put(getString(R.string.text_about_me_and_repo), () -> startActivity(new Intent(getActivity(), AboutActivity_.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)))
+                    .put(getString(R.string.text_about_me_and_repo), () -> startActivity(new Intent(getActivity(), AboutActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)))
                     .put(getString(R.string.text_licenses), () -> showLicenseDialog())
                     .build();
         }

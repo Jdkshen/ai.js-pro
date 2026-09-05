@@ -61,9 +61,7 @@ import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
 import com.jdkshen.aijspro.ui.edit.theme.Theme;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 import com.jdkshen.aijspro.ui.project.BuildActivity;
-import com.jdkshen.aijspro.ui.project.BuildActivity_;
 import com.jdkshen.aijspro.ui.project.ProjectConfigActivity;
-import com.jdkshen.aijspro.ui.project.ProjectConfigActivity_;
 import com.jdkshen.aijspro.theme.AppThemePalette;
 import com.jdkshen.aijspro.theme.AppThemeRepository;
 import com.jdkshen.aijspro.theme.ConsoleThemeHelper;
@@ -699,8 +697,8 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             toast("该目录不是 AI.js Pro 项目");
             return;
         }
-        ProjectConfigActivity_.intent(this)
-                .extra(ProjectConfigActivity.EXTRA_DIRECTORY, project.getAbsolutePath()).start();
+        startActivity(new Intent(this, ProjectConfigActivity.class)
+                .putExtra(ProjectConfigActivity.EXTRA_DIRECTORY, project.getAbsolutePath()));
     }
 
     private void showNameInput(String title, String initial, NameCallback callback) {
@@ -1308,15 +1306,15 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             toast("当前文件不属于 AI.js Pro 项目");
             return;
         }
-        ProjectConfigActivity_.intent(this)
-                .extra(ProjectConfigActivity.EXTRA_DIRECTORY, mProjectRoot.getAbsolutePath()).start();
+        startActivity(new Intent(this, ProjectConfigActivity.class)
+                .putExtra(ProjectConfigActivity.EXTRA_DIRECTORY, mProjectRoot.getAbsolutePath()));
     }
 
     private void buildApk() {
         if (!saveActive(false)) return;
         File source = mProjectRoot == null ? mActiveTab.file : mProjectRoot;
-        BuildActivity_.intent(this)
-                .extra(BuildActivity.EXTRA_SOURCE, source.getAbsolutePath()).start();
+        startActivity(new Intent(this, BuildActivity.class)
+                .putExtra(BuildActivity.EXTRA_SOURCE, source.getAbsolutePath()));
     }
 
     private void searchJavaClass() {

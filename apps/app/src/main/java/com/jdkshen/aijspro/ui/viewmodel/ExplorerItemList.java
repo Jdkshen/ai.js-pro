@@ -69,10 +69,12 @@ public class ExplorerItemList {
 
         public static SortConfig from(SharedPreferences preferences) {
             SortConfig config = new SortConfig();
-            config.setDirSortedAscending(preferences.getBoolean(CLASS_NAME + "." + "dir_ascending", false));
-            config.setFileSortedAscending(preferences.getBoolean(CLASS_NAME + "." + "file_ascending", false));
-            config.setDirSortType(preferences.getInt(CLASS_NAME + "." + "dir_sort_type", SORT_TYPE_NAME));
-            config.setFileSortType(preferences.getInt(CLASS_NAME + "." + "file_sort_type", SORT_TYPE_NAME));
+            boolean ascending = preferences.getBoolean(CLASS_NAME + "." + "dir_ascending", false);
+            int sortType = preferences.getInt(CLASS_NAME + "." + "dir_sort_type", SORT_TYPE_NAME);
+            config.setDirSortedAscending(ascending);
+            config.setFileSortedAscending(ascending);
+            config.setDirSortType(sortType);
+            config.setFileSortType(sortType);
             return config;
         }
     }
@@ -207,6 +209,18 @@ public class ExplorerItemList {
     public void sortFile(int sortType) {
         mSortConfig.mFileSortType = sortType;
         ExplorerSorter.sort(mItems, getComparator(sortType), mSortConfig.mFileSortedAscending);
+    }
+
+    public void sortAll(int sortType) {
+        mSortConfig.mDirSortType = sortType;
+        mSortConfig.mFileSortType = sortType;
+        ExplorerSorter.sort(mItemGroups, getComparator(sortType), mSortConfig.mDirSortedAscending);
+        ExplorerSorter.sort(mItems, getComparator(sortType), mSortConfig.mFileSortedAscending);
+    }
+
+    public void setAllSortedAscending(boolean ascending) {
+        mSortConfig.mDirSortedAscending = ascending;
+        mSortConfig.mFileSortedAscending = ascending;
     }
 
     public void sort() {

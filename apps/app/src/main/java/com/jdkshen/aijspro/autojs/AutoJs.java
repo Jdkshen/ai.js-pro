@@ -25,8 +25,8 @@ import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 import com.jdkshen.aijspro.ui.floating.FullScreenFloatyWindow;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutBoundsFloatyWindow;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutHierarchyFloatyWindow;
-import com.jdkshen.aijspro.ui.log.LogActivity_;
-import com.jdkshen.aijspro.ui.settings.SettingsActivity_;
+import com.jdkshen.aijspro.ui.log.LogActivity;
+import com.jdkshen.aijspro.ui.settings.SettingsActivity;
 
 import com.stardust.view.accessibility.AccessibilityService;
 import com.stardust.view.accessibility.LayoutInspector;
@@ -180,8 +180,8 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
     @Override
     protected ScriptRuntime createRuntime() {
         ScriptRuntime runtime = super.createRuntime();
-        runtime.putProperty("class.settings", SettingsActivity_.class);
-        runtime.putProperty("class.console", LogActivity_.class);
+        runtime.putProperty("class.settings", SettingsActivity.class);
+        runtime.putProperty("class.console", LogActivity.class);
         runtime.putProperty("broadcast.inspect_layout_bounds", LayoutBoundsFloatyWindow.class.getName());
         runtime.putProperty("broadcast.inspect_layout_hierarchy", LayoutHierarchyFloatyWindow.class.getName());
         return runtime;

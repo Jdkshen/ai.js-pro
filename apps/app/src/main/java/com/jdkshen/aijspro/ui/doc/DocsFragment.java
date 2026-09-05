@@ -3,9 +3,13 @@ package com.jdkshen.aijspro.ui.doc;
 import android.app.Activity;
 import android.os.Bundle;
 import androidx.annotation.Nullable;
+import androidx.annotation.NonNull;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.WebView;
 
 import com.jdkshen.aijspro.Pref;
@@ -17,21 +21,16 @@ import com.stardust.util.BackPressedHandler;
 
 import com.jdkshen.aijspro.ui.widget.EWebView;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EFragment;
-import org.androidannotations.annotations.ViewById;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 
 /**
  * Created by Stardust on 2017/8/22.
  */
-@EFragment(R.layout.fragment_online_docs)
 public class DocsFragment extends ViewPagerFragment implements BackPressedHandler {
 
     public static final String ARGUMENT_URL = "url";
 
-    @ViewById(R.id.eweb_view)
     EWebView mEWebView;
     WebView mWebView;
 
@@ -50,7 +49,15 @@ public class DocsFragment extends ViewPagerFragment implements BackPressedHandle
         EventBus.getDefault().register(this);
     }
 
-    @AfterViews
+    @NonNull
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_online_docs, container, false);
+        mEWebView = view.findViewById(R.id.eweb_view);
+        setUpViews();
+        return view;
+    }
+
     void setUpViews() {
         mWebView = mEWebView.getWebView();
         mEWebView.getSwipeRefreshLayout().setOnRefreshListener(() -> {

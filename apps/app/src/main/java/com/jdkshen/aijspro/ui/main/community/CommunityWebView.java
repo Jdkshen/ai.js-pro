@@ -20,18 +20,17 @@ import com.jdkshen.aijspro.ui.common.OptionListView;
 import com.jdkshen.aijspro.ui.common.ScriptOperations;
 import com.jdkshen.aijspro.ui.filechooser.FileChooserDialogBuilder;
 import com.jdkshen.aijspro.ui.widget.EWebView;
+import com.stardust.app.OperationItemClickListener;
 
 import java.util.regex.Pattern;
 
-import butterknife.OnClick;
-import butterknife.Optional;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 
 /**
  * Created by Stardust on 2017/10/19.
  */
 
-public class CommunityWebView extends EWebView {
+public class CommunityWebView extends EWebView implements OperationItemClickListener {
 
     private String mUrl;
     private BottomSheetDialog mBottomSheetDialog;
@@ -64,9 +63,6 @@ public class CommunityWebView extends EWebView {
         mBottomSheetDialog.show();
     }
 
-    @SuppressLint("CheckResult")
-    @Optional
-    @OnClick(R.id.save)
     void save() {
         dismissBottomSheetDialog();
         new ScriptOperations(getContext(), CommunityWebView.this)
@@ -83,9 +79,6 @@ public class CommunityWebView extends EWebView {
                         });
     }
 
-    @SuppressLint("CheckResult")
-    @Optional
-    @OnClick(R.id.run)
     void run() {
         dismissBottomSheetDialog();
         new ScriptOperations(getContext(), CommunityWebView.this)
@@ -98,6 +91,15 @@ public class CommunityWebView extends EWebView {
                     error.printStackTrace();
                     Snackbar.make(CommunityWebView.this, R.string.text_download_failed, Toast.LENGTH_SHORT).show();
                 });
+    }
+
+    @Override
+    public void onOperationItemClick(int id) {
+        if (id == R.id.save) {
+            save();
+        } else if (id == R.id.run) {
+            run();
+        }
     }
 
     private void dismissBottomSheetDialog() {

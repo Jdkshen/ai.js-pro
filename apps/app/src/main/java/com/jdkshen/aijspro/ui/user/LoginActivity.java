@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.ui.user;
 
 import android.content.Intent;
+import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -8,16 +9,13 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.afollestad.materialdialogs.MaterialDialog;
+import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.network.NodeBB;
 import com.jdkshen.aijspro.network.UserService;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.stardust.theme.ThemeColorManager;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.Click;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
 import org.w3c.dom.Node;
 
 import io.reactivex.android.schedulers.AndroidSchedulers;
@@ -26,25 +24,37 @@ import io.reactivex.schedulers.Schedulers;
 /**
  * Created by Stardust on 2017/9/20.
  */
-@EActivity(R.layout.activity_login)
 public class LoginActivity extends BaseActivity {
 
-    @ViewById(R.id.username)
     TextView mUserName;
 
-    @ViewById(R.id.password)
     TextView mPassword;
 
-    @ViewById(R.id.login)
     View mLogin;
 
-    @AfterViews
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (BuildConfig.MIUIX_PILOT) {
+            startActivity(new Intent().setClassName(this,
+                    "com.jdkshen.aijspro.ui.user.MiuixLoginActivity"));
+            finish();
+            return;
+        }
+        setContentView(R.layout.activity_login);
+        mUserName = findViewById(R.id.username);
+        mPassword = findViewById(R.id.password);
+        mLogin = findViewById(R.id.login);
+        findViewById(R.id.login).setOnClickListener(v -> login());
+        findViewById(R.id.forgot_password).setOnClickListener(v -> forgotPassword());
+        setUpViews();
+    }
+
     void setUpViews() {
         setToolbarAsBack(getString(R.string.text_login));
         ThemeColorManager.addViewBackground(mLogin);
     }
 
-    @Click(R.id.login)
     void login() {
         String userName = mUserName.getText().toString();
         String password = mPassword.getText().toString();
@@ -71,12 +81,10 @@ public class LoginActivity extends BaseActivity {
 
     }
 
-    @Click(R.id.forgot_password)
     void forgotPassword() {
-        WebActivity_.intent(this)
-                .extra(WebActivity.EXTRA_URL, NodeBB.BASE_URL + "reset")
-                .extra(Intent.EXTRA_TITLE, getString(R.string.text_reset_password))
-                .start();
+        startActivity(new Intent(this, WebActivity.class)
+                .putExtra(WebActivity.EXTRA_URL, NodeBB.BASE_URL + "reset")
+                .putExtra(Intent.EXTRA_TITLE, getString(R.string.text_reset_password)));
     }
 
     private boolean checkNotEmpty(String userName, String password) {
@@ -101,7 +109,7 @@ public class LoginActivity extends BaseActivity {
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == R.id.action_register) {
-            RegisterActivity_.intent(this).start();
+            startActivity(new Intent(this, RegisterActivity.class));
             finish();
         }
         return super.onOptionsItemSelected(item);

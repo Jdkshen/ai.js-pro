@@ -1,17 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="window_background">#202020</color>
-    <color name="item_background">#333333</color>
-    <color name="item_background_dark">#252525</color>
-    <color name="drawer_menu_item_text_color">#9a9a9a</color>
-    <color name="drawer_menu_group_text_color">#808080</color>
-    <color name="divider">#111214</color>
-    <color name="text_color_secondary">#9a9a9a</color>
-    <color name="text_color_thirdly">#808080</color>
-    <color name="tab_indicator">#6D6D6E</color>
-    <color name="tab_text">#3A3A3C</color>
-    <color name="toolbar">#8D8D8E</color>
-    <color name="toolbar_disabled">#3A3A3C</color>
+    <!-- Material 3 dark palette (cyan/teal, Auto.js Pro style) -->
+    <color name="colorPrimary">#4DD0E1</color>
+    <color name="colorPrimaryDark">#006064</color>
+    <color name="colorAccent">#00ACC1</color>
+    <color name="m3_primary_container">#004C57</color>
+    <color name="m3_on_primary_container">#C0EAF5</color>
+    <color name="folder_icon_background">#64B5F6</color>
+    <color name="project_icon_background">#7986CB</color>
+    <color name="m3_list_divider">#33CAC4D0</color>
+
+    <color name="window_background">#1C1B1F</color>
+    <color name="item_background">#1C1B1F</color>
+    <color name="item_background_dark">#232227</color>
+    <color name="drawer_menu_item_text_color">#E6E1E5</color>
+    <color name="drawer_menu_group_text_color">#A5A0A5</color>
+    <color name="divider">#38363A</color>
+    <color name="text_color_secondary">#E6E1E5</color>
+    <color name="text_color_thirdly">#A5A0A5</color>
+    <color name="prefTextColorPrimary">#E6E1E5</color>
+    <color name="prefTextColorSecondary">#A5A0A5</color>
+    <color name="tab_indicator">#CCE8E0</color>
+    <color name="tab_text">#94BBB2</color>
+    <color name="toolbar">#FFFFFF</color>
+    <color name="toolbar_disabled">#8D8D8E</color>
     <color name="console_debug">#dfc0c0c0</color>
     <color name="console_verbose">#7F7F80</color>
 

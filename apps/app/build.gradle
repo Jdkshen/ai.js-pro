@@ -1,13 +1,15 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
-apply plugin: 'kotlin-android-extensions'
-apply plugin: 'com.jakewharton.butterknife'
-
-def AAVersion = '4.5.2'
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
 android {
+    namespace 'com.jdkshen.aijspro'
     compileSdkVersion versions.compile
     buildToolsVersion versions.buildTool
+    buildFeatures {
+        buildConfig true
+        compose true
+    }
     defaultConfig {
         applicationId "com.jdkshen.aijspro"
         minSdkVersion versions.mini
@@ -16,6 +18,7 @@ android {
         versionName versions.appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled true
+        buildConfigField 'boolean', 'MIUIX_PILOT', 'false'
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments = [resourcePackageName: "com.jdkshen.aijspro"]
@@ -39,7 +42,7 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
         encoding = 'utf-8'
     }
-    lintOptions {
+    lint {
         abortOnError false
         disable 'MissingTranslation'
         disable 'ExtraTranslation'
@@ -72,6 +75,11 @@ android {
         }
     }
     productFlavors {
+        miuix {
+            minSdkVersion 26
+            buildConfigField 'String', 'CHANNEL', '"common"'
+            buildConfigField 'boolean', 'MIUIX_PILOT', 'true'
+        }
         common {
             buildConfigField "String", "CHANNEL", '"common"'
         }
@@ -91,20 +99,17 @@ repositories {
 }
 
 dependencies {
+    // The app-wide Compose compiler also runs for the non-pilot variants.
+    implementation 'androidx.compose.runtime:runtime:1.7.6'
+    miuixImplementation 'top.yukonga.miuix.kmp:miuix-android:0.3.1'
+    miuixImplementation 'androidx.compose.foundation:foundation:1.7.6'
+    miuixImplementation 'androidx.compose.ui:ui:1.7.6'
     androidTestImplementation('androidx.test.espresso:espresso-core:3.1.1-alpha01', {
         exclude group: 'com.android.support', module: 'support-annotations'
     })
     testImplementation 'junit:junit:4.12'
     // Kotlin
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.0.1"
-    // Android Annotations
-    annotationProcessor "org.androidannotations:androidannotations:$AAVersion"
-    implementation "org.androidannotations:androidannotations-api:$AAVersion"
-    // ButterKnife
-    implementation('com.jakewharton:butterknife:9.0.0-rc2', {
-        exclude group: 'com.android.support'
-    })
-    annotationProcessor 'com.jakewharton:butterknife-compiler:9.0.0-rc2'
     // Android supports
     implementation 'androidx.appcompat:appcompat:1.0.2'
     implementation 'androidx.cardview:cardview:1.0.0'
@@ -150,7 +155,6 @@ dependencies {
     implementation('com.github.bumptech.glide:glide:4.8.0', {
         exclude group: 'com.android.support'
     })
-    kapt 'com.github.bumptech.glide:compiler:4.8.0'
     //joda time
     implementation 'joda-time:joda-time:2.9.9'
     // Tasker Plugin

@@ -1,8 +1,13 @@
 <resources>
 
 
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorPrimaryContainer">@color/m3_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/m3_on_primary_container</item>
+        <item name="colorSecondary">@color/colorAccent</item>
+        <item name="colorOnSecondary">@android:color/white</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorAccent">@color/colorAccent</item>
         <item name="android:textColorPrimary">@color/text_color_secondary</item>
@@ -15,7 +20,7 @@
         <item name="drawer_group_text_color">@color/drawer_menu_group_text_color</item>
     </style>
 
-    <style name="ToolBarStyle" parent="ThemeOverlay.AppCompat.ActionBar">
+    <style name="ToolBarStyle" parent="ThemeOverlay.Material3.Dark">
         <item name="android:textColorPrimary">@color/toolbar</item>
         <item name="android:textColorSecondary">@color/toolbar</item>
         <item name="actionMenuTextColor">@color/toolbar</item>
@@ -58,9 +63,43 @@
         <item name="android:backgroundDimEnabled">false</item>
     </style>
 
-    <style name="AppTheme.AppBarOverlay" parent="ThemeOverlay.AppCompat.ActionBar"/>
+    <style name="HomeQuickCard" parent="Widget.Material3.CardView.Filled">
+        <item name="cardCornerRadius">16dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="cardBackgroundColor">?attr/colorSurfaceContainerHigh</item>
+        <item name="rippleColor">?attr/colorPrimaryContainer</item>
+    </style>
 
-    <style name="AppTheme.PopupOverlay" parent="ThemeOverlay.AppCompat.ActionBar">
+    <style name="HomeItemCard" parent="Widget.Material3.CardView.Filled">
+        <item name="cardCornerRadius">14dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="cardBackgroundColor">?attr/colorSurfaceContainerHigh</item>
+        <item name="rippleColor">?attr/colorPrimaryContainer</item>
+    </style>
+
+    <style name="MainToolbarStyle" parent="ThemeOverlay.Material3.Dark">
+        <item name="android:textColorPrimary">?attr/colorOnPrimary</item>
+        <item name="android:textColorSecondary">?attr/colorOnPrimary</item>
+        <item name="actionMenuTextColor">?attr/colorOnPrimary</item>
+        <item name="titleTextColor">?attr/colorOnPrimary</item>
+        <item name="titleTextAppearance">@style/HomeToolbarTitle</item>
+    </style>
+
+    <style name="HomeToolbarTitle" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="android:textSize">22sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="HomeBigCard" parent="Widget.Material3.CardView.Filled">
+        <item name="cardCornerRadius">16dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="cardBackgroundColor">?attr/colorSurfaceContainerHigh</item>
+        <item name="rippleColor">?attr/colorPrimaryContainer</item>
+    </style>
+
+    <style name="AppTheme.AppBarOverlay" parent="ThemeOverlay.Material3.Dark"/>
+
+    <style name="AppTheme.PopupOverlay" parent="ThemeOverlay.Material3.Light">
         <item name="android:textColorPrimary">#212121</item>
         <item name="android:textColorSecondary">@color/colorAccent</item>
     </style>

@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="colorPrimary">#009688</color>
-    <color name="colorPrimaryDark">#009688</color>
-    <color name="colorAccent">#03a9f4</color>
+    <color name="colorPrimaryDark">#00796B</color>
+    <color name="colorAccent">#03A9F4</color>
+    <!-- Material 3 tonal palette (cyan/teal, Auto.js Pro style) -->
+    <color name="m3_primary_container">#C0EAF5</color>
+    <color name="m3_on_primary_container">#00363F</color>
+    <color name="folder_icon_background">#2196F3</color>
+    <color name="project_icon_background">#5C6BC0</color>
+    <color name="m3_list_divider">#1F1B1B1F</color>
     <color name="sliding_up_panel_shadow_color">#99444444</color>
     <color name="bubble_bg">#eef2f3f9</color>
     <color name="color_r">#FD999A</color>

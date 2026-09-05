@@ -2,8 +2,12 @@ package com.jdkshen.aijspro.ui.main.community;
 
 import android.app.Activity;
 import android.os.Bundle;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.WebView;
 
 import com.jdkshen.aijspro.R;
@@ -12,9 +16,6 @@ import com.jdkshen.aijspro.ui.main.QueryEvent;
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment;
 import com.stardust.util.BackPressedHandler;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EFragment;
-import org.androidannotations.annotations.ViewById;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 
@@ -23,7 +24,6 @@ import java.net.URLEncoder;
 /**
  * Created by Stardust on 2017/8/22.
  */
-@EFragment(R.layout.fragment_community)
 public class CommunityFragment extends ViewPagerFragment implements BackPressedHandler {
 
     public static class LoadUrl {
@@ -45,7 +45,6 @@ public class CommunityFragment extends ViewPagerFragment implements BackPressedH
 
     private static final String POSTS_PAGE_PATTERN = "[\\S\\s]+/topic/[0-9]+/[\\S\\s]+";
 
-    @ViewById(R.id.eweb_view)
     CommunityWebView mEWebView;
     WebView mWebView;
 
@@ -60,7 +59,15 @@ public class CommunityFragment extends ViewPagerFragment implements BackPressedH
         EventBus.getDefault().register(this);
     }
 
-    @AfterViews
+    @NonNull
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_community, container, false);
+        mEWebView = view.findViewById(R.id.eweb_view);
+        setUpViews();
+        return view;
+    }
+
     void setUpViews() {
         mWebView = mEWebView.getWebView();
         String url = "https://www.autojs.org/";

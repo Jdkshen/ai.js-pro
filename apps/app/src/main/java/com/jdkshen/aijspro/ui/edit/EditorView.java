@@ -39,9 +39,6 @@ import com.stardust.util.BackPressedHandler;
 import com.stardust.util.Callback;
 import com.stardust.util.ViewUtils;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EViewGroup;
-import org.androidannotations.annotations.ViewById;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.AutoJs;
@@ -62,13 +59,10 @@ import com.jdkshen.aijspro.ui.edit.keyboard.FunctionsKeyboardView;
 import com.jdkshen.aijspro.ui.edit.theme.Theme;
 import com.jdkshen.aijspro.ui.edit.theme.Themes;
 import com.jdkshen.aijspro.ui.edit.toolbar.DebugToolbarFragment;
-import com.jdkshen.aijspro.ui.edit.toolbar.DebugToolbarFragment_;
 import com.jdkshen.aijspro.ui.edit.toolbar.NormalToolbarFragment;
-import com.jdkshen.aijspro.ui.edit.toolbar.NormalToolbarFragment_;
 import com.jdkshen.aijspro.ui.edit.toolbar.SearchToolbarFragment;
-import com.jdkshen.aijspro.ui.edit.toolbar.SearchToolbarFragment_;
 import com.jdkshen.aijspro.ui.edit.toolbar.ToolbarFragment;
-import com.jdkshen.aijspro.ui.log.LogActivity_;
+import com.jdkshen.aijspro.ui.log.LogActivity;
 import com.jdkshen.aijspro.ui.widget.EWebView;
 import com.jdkshen.aijspro.ui.widget.SimpleTextWatcher;
 
@@ -87,7 +81,6 @@ import static com.jdkshen.aijspro.model.script.Scripts.EXTRA_EXCEPTION_MESSAGE;
 /**
  * Created by Stardust on 2017/9/28.
  */
-@EViewGroup(R.layout.editor_view)
 public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintClickListener, FunctionsKeyboardView.ClickCallback, ToolbarFragment.OnMenuItemClickListener {
 
     public static final String EXTRA_PATH = "path";
@@ -97,31 +90,22 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
     public static final String EXTRA_SAVE_ENABLED = "saveEnabled";
     public static final String EXTRA_RUN_ENABLED = "runEnabled";
 
-    @ViewById(R.id.editor)
     CodeEditor mEditor;
 
-    @ViewById(R.id.code_completion_bar)
     CodeCompletionBar mCodeCompletionBar;
 
-    @ViewById(R.id.input_method_enhance_bar)
     View mInputMethodEnhanceBar;
 
-    @ViewById(R.id.symbol_bar)
     CodeCompletionBar mSymbolBar;
 
-    @ViewById(R.id.functions)
     ImageView mShowFunctionsButton;
 
-    @ViewById(R.id.functions_keyboard)
     FunctionsKeyboardView mFunctionsKeyboard;
 
-    @ViewById(R.id.debug_bar)
     DebugBar mDebugBar;
 
-    @ViewById(R.id.docs)
     EWebView mDocsWebView;
 
-    @ViewById(R.id.drawer_layout)
     DrawerLayout mDrawerLayout;
 
     private String mName;
@@ -155,19 +139,34 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
 
     private SparseBooleanArray mMenuItemStatus = new SparseBooleanArray();
     private String mRestoredText;
-    private NormalToolbarFragment mNormalToolbar = new NormalToolbarFragment_();
+    private NormalToolbarFragment mNormalToolbar = new NormalToolbarFragment();
     private boolean mDebugging = false;
 
     public EditorView(Context context) {
-        super(context);
+        this(context, null);
     }
 
     public EditorView(Context context, @Nullable AttributeSet attrs) {
-        super(context, attrs);
+        this(context, attrs, 0);
     }
 
     public EditorView(Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
+        inflate(getContext(), R.layout.editor_view, this);
+        bindViews();
+        init();
+    }
+
+    private void bindViews() {
+        mEditor = findViewById(R.id.editor);
+        mCodeCompletionBar = findViewById(R.id.code_completion_bar);
+        mInputMethodEnhanceBar = findViewById(R.id.input_method_enhance_bar);
+        mSymbolBar = findViewById(R.id.symbol_bar);
+        mShowFunctionsButton = findViewById(R.id.functions);
+        mFunctionsKeyboard = findViewById(R.id.functions_keyboard);
+        mDebugBar = findViewById(R.id.debug_bar);
+        mDocsWebView = findViewById(R.id.docs);
+        mDrawerLayout = findViewById(R.id.drawer_layout);
     }
 
     @Override
@@ -277,7 +276,6 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
         return mMenuItemStatus.get(id, defValue);
     }
 
-    @AfterViews
     void init() {
         //setTheme(Theme.getDefault(getContext()));
         setUpEditor();
@@ -564,9 +562,10 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
     }
 
     private void showSearchToolbar(boolean showReplaceItem) {
-        SearchToolbarFragment searchToolbarFragment = SearchToolbarFragment_.builder()
-                .arg(SearchToolbarFragment.ARGUMENT_SHOW_REPLACE_ITEM, showReplaceItem)
-                .build();
+        SearchToolbarFragment searchToolbarFragment = new SearchToolbarFragment();
+        Bundle args = new Bundle();
+        args.putBoolean(SearchToolbarFragment.ARGUMENT_SHOW_REPLACE_ITEM, showReplaceItem);
+        searchToolbarFragment.setArguments(args);
         searchToolbarFragment.setOnMenuItemClickListener(this);
         getActivity().getSupportFragmentManager().beginTransaction()
                 .replace(R.id.toolbar_menu, searchToolbarFragment)
@@ -584,8 +583,7 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
 
 
     public void debug() {
-        DebugToolbarFragment debugToolbarFragment = DebugToolbarFragment_.builder()
-                .build();
+        DebugToolbarFragment debugToolbarFragment = new DebugToolbarFragment();
         getActivity().getSupportFragmentManager().beginTransaction()
                 .replace(R.id.toolbar_menu, debugToolbarFragment)
                 .commit();
@@ -609,7 +607,13 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
 
     private void showErrorMessage(String msg) {
         Snackbar.make(EditorView.this, getResources().getString(R.string.text_error) + ": " + msg, Snackbar.LENGTH_LONG)
-                .setAction(R.string.text_detail, v -> LogActivity_.intent(getContext()).start())
+                .setAction(R.string.text_detail, v -> {
+                    Intent intent = new Intent(getContext(), LogActivity.class);
+                    if (!(getContext() instanceof Activity)) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    }
+                    getContext().startActivity(intent);
+                })
                 .show();
     }
 

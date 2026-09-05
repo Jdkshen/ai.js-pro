@@ -9,6 +9,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -16,9 +17,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.tool.BitmapTool;
 import com.jdkshen.aijspro.ui.BaseActivity;
@@ -35,18 +33,23 @@ import io.reactivex.schedulers.Schedulers;
 /**
  * Created by Stardust on 2017/10/25.
  */
-@EActivity(R.layout.activity_shortcut_icon_select)
 public class ShortcutIconSelectActivity extends BaseActivity {
 
     public static final String EXTRA_PACKAGE_NAME = "extra_package_name";
 
-    @ViewById(R.id.apps)
     RecyclerView mApps;
 
     private PackageManager mPackageManager;
     private List<AppItem> mAppList = new ArrayList<>();
 
-    @AfterViews
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_shortcut_icon_select);
+        mApps = findViewById(R.id.apps);
+        setupViews();
+    }
+
     void setupViews() {
         mPackageManager = getPackageManager();
         setToolbarAsBack(getString(R.string.text_select_icon));

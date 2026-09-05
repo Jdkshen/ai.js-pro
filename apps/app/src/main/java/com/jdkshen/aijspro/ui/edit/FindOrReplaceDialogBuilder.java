@@ -13,11 +13,7 @@ import com.afollestad.materialdialogs.MaterialDialog;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
-
-import butterknife.BindView;
-import butterknife.ButterKnife;
-import butterknife.OnCheckedChanged;
-import butterknife.OnTextChanged;
+import com.jdkshen.aijspro.ui.widget.SimpleTextWatcher;
 
 /**
  * Created by Stardust on 2017/9/28.
@@ -27,19 +23,14 @@ public class FindOrReplaceDialogBuilder extends ThemeColorMaterialDialogBuilder 
 
     private static final String KEY_KEYWORDS = "...";
 
-    @BindView(R.id.checkbox_regex)
     CheckBox mRegexCheckBox;
 
-    @BindView(R.id.checkbox_replace)
     CheckBox mReplaceCheckBox;
 
-    @BindView(R.id.checkbox_replace_all)
     CheckBox mReplaceAllCheckBox;
 
-    @BindView(R.id.keywords)
     EditText mKeywordsEditText;
 
-    @BindView(R.id.replacement)
     EditText mReplacementEditText;
 
     private EditorView mEditorView;
@@ -59,7 +50,13 @@ public class FindOrReplaceDialogBuilder extends ThemeColorMaterialDialogBuilder 
 
     private void setupViews() {
         View view = View.inflate(context, R.layout.dialog_find_or_replace, null);
-        ButterKnife.bind(this, view);
+        mRegexCheckBox = view.findViewById(R.id.checkbox_regex);
+        mReplaceCheckBox = view.findViewById(R.id.checkbox_replace);
+        mReplaceAllCheckBox = view.findViewById(R.id.checkbox_replace_all);
+        mKeywordsEditText = view.findViewById(R.id.keywords);
+        mReplacementEditText = view.findViewById(R.id.replacement);
+        mReplaceAllCheckBox.setOnCheckedChangeListener((buttonView, isChecked) -> syncWithReplaceCheckBox());
+        mReplacementEditText.addTextChangedListener(new SimpleTextWatcher(s -> onTextChanged()));
         customView(view, true);
         positiveText(R.string.ok);
         negativeText(R.string.cancel);
@@ -79,14 +76,12 @@ public class FindOrReplaceDialogBuilder extends ThemeColorMaterialDialogBuilder 
                 .getString(KEY_KEYWORDS, ""));
     }
 
-    @OnCheckedChanged(R.id.checkbox_replace_all)
     void syncWithReplaceCheckBox() {
         if (mReplaceAllCheckBox.isChecked() && !mReplaceCheckBox.isChecked()) {
             mReplaceCheckBox.setChecked(true);
         }
     }
 
-    @OnTextChanged(R.id.replacement)
     void onTextChanged() {
         if (mReplacementEditText.getText().length() > 0) {
             mReplaceCheckBox.setChecked(true);

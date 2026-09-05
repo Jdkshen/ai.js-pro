@@ -44,16 +44,14 @@ import com.jdkshen.aijspro.pluginclient.DevPluginService;
 import com.jdkshen.aijspro.tool.AccessibilityServiceTool;
 import com.jdkshen.aijspro.tool.WifiTool;
 import com.jdkshen.aijspro.ui.BaseActivity;
-import com.jdkshen.aijspro.ui.doc.DocumentationActivity_;
+import com.jdkshen.aijspro.ui.doc.DocumentationActivity;
 import com.jdkshen.aijspro.ui.edit.ViewSampleActivity;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
-import com.jdkshen.aijspro.ui.log.LogActivity_;
+import com.jdkshen.aijspro.ui.log.LogActivity;
 import com.jdkshen.aijspro.ui.main.task.Task;
-import com.jdkshen.aijspro.ui.settings.SettingsActivity_;
 import com.jdkshen.aijspro.ui.settings.SettingsActivity;
 import com.jdkshen.aijspro.ui.update.UpdateCheckDialog;
 import com.jdkshen.aijspro.ui.timing.TimedTaskSettingActivity;
-import com.jdkshen.aijspro.ui.timing.TimedTaskSettingActivity_;
 import com.jdkshen.aijspro.timing.IntentTask;
 import com.jdkshen.aijspro.timing.TimedTask;
 import com.jdkshen.aijspro.timing.TimedTaskManager;
@@ -365,10 +363,10 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
     public void onImGuiAction(int action) {
         switch (action) {
             case ACTION_OPEN_SETTINGS:
-                startActivity(new Intent(this, SettingsActivity_.class));
+                startActivity(new Intent(this, SettingsActivity.class));
                 break;
             case ACTION_OPEN_LOG:
-                startActivity(new Intent(this, LogActivity_.class));
+                startActivity(new Intent(this, LogActivity.class));
                 break;
             case ACTION_OPEN_ACCESSIBILITY:
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
@@ -414,7 +412,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                 showScriptSortDialog();
                 break;
             case ACTION_OPEN_DOCUMENTATION:
-                startActivity(new Intent(this, DocumentationActivity_.class));
+                startActivity(new Intent(this, DocumentationActivity.class));
                 break;
             case ACTION_OPEN_WORKSPACE_MENU:
                 showWorkspaceMenu();
@@ -513,7 +511,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                 openWebPage("https://www.autojs.org/");
                 break;
             case 68: // Settings
-                startActivity(new Intent(this, SettingsActivity_.class));
+                startActivity(new Intent(this, SettingsActivity.class));
                 break;
             case 69: // Check update
                 new UpdateCheckDialog(this).show();
@@ -522,7 +520,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                 confirmExitApplication();
                 break;
             case 71: // Open native drawer (ImGui fallback path)
-                if (mWorkspaceDrawer != null) mWorkspaceDrawer.open();
+                if (mWorkspaceDrawer != null) mWorkspaceDrawer.openDrawerSurface();
                 break;
             default:
                 Toast.makeText(this, "尚未实现的 ImGui 操作：" + action, Toast.LENGTH_SHORT).show();
@@ -871,7 +869,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                     else if (which == 5) showThemeDialog();
                     else if (which == 6) openWebPage("https://hyb1996.github.io/AutoJs-Docs/");
                     else if (which == 7) openWebPage("https://www.autojs.org/");
-                    else if (which == 8) startActivity(new Intent(this, SettingsActivity_.class));
+                    else if (which == 8) startActivity(new Intent(this, SettingsActivity.class));
                     else if (which == 9) new UpdateCheckDialog(this).show();
                     else confirmExitApplication();
                 })
@@ -1718,7 +1716,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                     .setTitle(task.getName())
                     .setMessage(task.getDesc())
                     .setNeutralButton("运行日志", (dialog, which) ->
-                            startActivity(new Intent(this, LogActivity_.class)))
+                            startActivity(new Intent(this, LogActivity.class)))
                     .setNegativeButton("关闭", null)
                     .setPositiveButton("停止", (dialog, which) -> {
                         task.cancel();
@@ -1727,7 +1725,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
                     .show();
         } else if (group == 1 && index < mPendingTaskEntries.size()) {
             Object task = mPendingTaskEntries.get(index);
-            Intent intent = new Intent(this, TimedTaskSettingActivity_.class);
+            Intent intent = new Intent(this, TimedTaskSettingActivity.class);
             if (task instanceof TimedTask) {
                 intent.putExtra(TimedTaskSettingActivity.EXTRA_TASK_ID, ((TimedTask) task).getId());
             } else {
@@ -1787,7 +1785,7 @@ public final class ImGuiWorkspaceActivity extends BaseActivity implements ImGuiS
         new AlertDialog.Builder(this)
                 .setTitle(eventTask ? "选择事件触发的脚本" : "选择定时运行的脚本")
                 .setItems(labels, (dialog, which) -> startActivity(
-                        new Intent(this, TimedTaskSettingActivity_.class)
+                        new Intent(this, TimedTaskSettingActivity.class)
                                 .putExtra(ScriptIntents.EXTRA_KEY_PATH, scripts.get(which).getPath())
                                 .putExtra(TimedTaskSettingActivity.EXTRA_CREATE_MODE,
                                         eventTask ? TimedTaskSettingActivity.CREATE_MODE_EVENT

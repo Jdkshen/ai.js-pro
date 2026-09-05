@@ -9,7 +9,7 @@ import androidx.annotation.Nullable;
 
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.ui.BaseActivity;
-import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity;
+import com.jdkshen.aijspro.ui.main.MainActivity;
 
 /**
  * Created by Stardust on 2017/7/7.
@@ -81,7 +81,7 @@ public class SplashActivity extends BaseActivity {
             return;
         }
         mAlreadyEnterNextActivity = true;
-        startActivity(new android.content.Intent(this, ImGuiWorkspaceActivity.class));
+        startActivity(new android.content.Intent(this, MainActivity.class));
         finish();
     }
 

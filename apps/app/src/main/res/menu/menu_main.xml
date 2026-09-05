@@ -3,22 +3,33 @@
       xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <item
+        android:id="@+id/action_imgui_workspace"
+        android:icon="@drawable/ic_code_white_24dp"
+        android:title="@string/text_imgui_workspace"
+        app:iconTint="?attr/colorOnPrimary"
+        app:showAsAction="always"/>
+
+    <item
         android:id="@+id/action_log"
-        android:icon="@drawable/ic_ali_log"
+        android:icon="@drawable/ic_log_white_24dp"
         android:title="@string/text_log"
+        app:iconTint="?attr/colorOnPrimary"
+        app:showAsAction="always"/>
+
+    <item
+        android:id="@+id/action_documentation"
+        android:icon="@drawable/ic_bookmark_white_24dp"
+        android:title="@string/text_tutorial"
+        app:iconTint="?attr/colorOnPrimary"
         app:showAsAction="always"/>
 
     <item
         android:id="@+id/action_search"
-        android:icon="@drawable/ic_search_white_36dp"
+        android:icon="@drawable/ic_search_white_24dp"
         android:imeOptions="actionSearch"
         android:inputType="text"
         android:title="@string/text_search"
         app:actionViewClass="androidx.appcompat.widget.SearchView"
+        app:iconTint="?attr/colorOnPrimary"
         app:showAsAction="always|collapseActionView"/>
-
-    <item
-        android:id="@+id/action_imgui_workspace"
-        android:title="@string/text_imgui_workspace"
-        app:showAsAction="never"/>
 </menu>

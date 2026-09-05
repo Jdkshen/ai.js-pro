@@ -28,10 +28,6 @@ import com.stardust.view.accessibility.NodeInfo;
 import java.util.ArrayList;
 import java.util.List;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
-import butterknife.OnCheckedChanged;
-
 /**
  * Created by Stardust on 2017/11/6.
  */
@@ -56,7 +52,6 @@ public class CodeGenerateDialog extends ThemeColorMaterialDialogBuilder {
                     .addOption(R.string.text_scroll_backward))
             .list();
 
-    @BindView(R.id.options)
     RecyclerView mOptionsRecyclerView;
 
     private NodeInfo mRootNode;
@@ -134,7 +129,7 @@ public class CodeGenerateDialog extends ThemeColorMaterialDialogBuilder {
 
     private void setupViews() {
         View view = View.inflate(context, R.layout.dialog_code_generate, null);
-        ButterKnife.bind(this, view);
+        mOptionsRecyclerView = view.findViewById(R.id.options);
         customView(view, false);
         mOptionsRecyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
         mAdapter = new Adapter(mOptionGroups);
@@ -180,18 +175,17 @@ public class CodeGenerateDialog extends ThemeColorMaterialDialogBuilder {
 
     class OptionViewHolder extends ChildViewHolder<Option> {
 
-        @BindView(R.id.title)
         TextView title;
-        @BindView(R.id.checkbox)
         CheckBoxCompat checkBox;
 
         OptionViewHolder(@NonNull View itemView) {
             super(itemView);
-            ButterKnife.bind(this, itemView);
+            title = itemView.findViewById(R.id.title);
+            checkBox = itemView.findViewById(R.id.checkbox);
+            checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> onCheckedChanged());
             itemView.setOnClickListener(view -> checkBox.toggle());
         }
 
-        @OnCheckedChanged(R.id.checkbox)
         void onCheckedChanged() {
             getChild().checked = checkBox.isChecked();
             if (checkBox.isChecked() && getChild().group.titleRes != R.string.text_options)

@@ -31,15 +31,13 @@
             android:orientation="vertical">
 
 
-            <androidx.cardview.widget.CardView
+            <com.google.android.material.card.MaterialCardView
+                style="@style/HomeItemCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginLeft="6dp"
+                android:layout_marginLeft="10dp"
                 android:layout_marginTop="12dp"
-                android:layout_marginRight="6dp"
-                app:cardCornerRadius="2dp"
-                app:cardElevation="1dp"
-                app:cardUseCompatPadding="true">
+                android:layout_marginRight="10dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -432,7 +430,7 @@
                     </RadioGroup>
                 </LinearLayout>
 
-            </androidx.cardview.widget.CardView>
+            </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
     </ScrollView>
 

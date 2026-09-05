@@ -33,8 +33,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 
 /**
@@ -52,10 +50,8 @@ public class FunctionsKeyboardView extends FrameLayout {
     }
 
     private static final int SPAN_COUNT = 4;
-    @BindView(R.id.module_list)
     RecyclerView mModulesView;
 
-    @BindView(R.id.properties)
     RecyclerView mPropertiesView;
 
     private List<Module> mModules;
@@ -92,7 +88,8 @@ public class FunctionsKeyboardView extends FrameLayout {
 
     private void init() {
         inflate(getContext(), R.layout.functions_keyboard_view, this);
-        ButterKnife.bind(this);
+        mModulesView = findViewById(R.id.module_list);
+        mPropertiesView = findViewById(R.id.properties);
         initModulesView();
         initPropertiesView();
     }

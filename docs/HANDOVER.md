@@ -1,0 +1,159 @@
+# AI.js Pro — 交接文档 (HANDOVER)
+
+## Miuix 核心服务页试点（2026-09-05，最新）
+
+- 已实现并覆盖安装到 K40（cccc62c7），包名和数据目录不变。入口：左上角抽屉 → 首页 → 核心服务。启动页、原生文件列表及 ImGui 工作台仍保留，不是全应用迁移。
+- 新增 `miuix` channel flavor；页面与清单位于 `apps/app/src/miuix/`。`ServiceStatusActivity` 仅在 `BuildConfig.MIUIX_PILOT` 为 true 时跳转；common/coolapk 保留原 View 服务页。
+- 固定依赖 `top.yukonga.miuix.kmp:miuix-android:0.3.1`，Compose UI/Foundation 1.7.6。该 Miuix AAR 要求 minSdk 26，故仅 miuix flavor 提高到 26；普通版本仍为 21。根 Kotlin / Compose 编译插件升级到 2.1.0，影响全工程编译；app 公共依赖补充 Compose runtime 1.7.6，保证非试点变体也能编译。
+- 页面复用既有悬浮窗管理器、前台服务及 Pref；权限页返回通过 onResume 刷新。支持跟随系统深浅色（实机本轮仅验证浅色）。无障碍是系统设置入口，不伪装成可直接授权的开关。
+- 构建验证：`:app:assembleCommonDebug :app:assembleMiuixDebug` 成功；布局微调后再次构建 miuix 成功，arm64 APK 已重新安装。Gradle 8.9 / AGP 8.6.1 / JDK 17 保持不变。
+- K40 验证：页面显示、无障碍设置往返、ImGui 工作台往返、悬浮窗关闭并恢复开启通过；本轮 crash buffer 未发现本包匹配崩溃记录。未进行前台服务开关、所有系统权限、深色/大字体及性能基准全覆盖，不宣称已达到 Auto.js Pro 流畅度。
+- 实机截图：`.artifacts/miuix-service-pilot.png`；工作台跳转截图：`.artifacts/miuix-workspace.png`。APK：`apps/app/build/outputs/apk/miuix/debug/app-miuix-arm64-v8a-debug.apk`。
+- 回退 UI：构建并覆盖安装 commonDebug（同包名同签名，无需卸载）。不要为了试点删除旧页面或迁移全部应用外壳；下一步先验证服务页手感与兼容性，再决定是否迁移设置列表。
+
+## 最新实机对齐状态（2026-09-05，优先于下文历史记录）
+
+- 用户要求主动在 K40（cccc62c7）打开 Auto.js Pro 与 AI.js Pro 对照截图、交互及滑动，发现差异后完成修改、构建、安装和复核。
+- 延续混合架构：ImGui 工作台保留，普通文件列表为原生 View；ImGuiWorkspaceActivity 在 onPause 暂停渲染和定时刷新，在 onResume 恢复。
+- 启动直接进入脚本列表，顶部五个分页；原服务首页在抽屉中保留。主色已为 #009688，不再采用下文历史记录中的浅色菜单首页。
+- 文件夹优先、文件随后，统一排序规则及升降序，移除第二条文件分类排序栏。根目录额外的“示例代码”为应用虚拟示例入口，不能算成读取实际目录不一致。
+- JS 文件显示完整文件名（含 .js）、居中的黑底白色代码图标、大小与修改时间两行；行点击编辑，右侧运行和更多。文件行最小高度 66dp，K40 测得 183px（含分隔线）。
+- ScrollAwareFABBehavior 在动画开始时更新目标隐藏状态，方向变化时取消旧动画，避免每个滚动回调反复重启动画。
+- 最新截图：.artifacts/aijs-integrated.png；构建 :app:assembleCommonDebug 成功并已覆盖安装 K40。
+- 滑动性能比较尚未形成有效结论：参考 Pro 的 gfxinfo 仅返回极少帧，SurfaceFlinger --latency 未返回逐帧数据；不能据此宣布两者同样流畅，也不能据 0 帧推断渲染框架。需要有效的同场景帧轨迹或连续画面进一步验证。
+- 待继续对齐：普通非 JS 文件的参考图标、长文件名可见宽度、辅助文字层次、路径栏逐级导航、ImGui 工作台与原生页面的主题/入口一致性，以及滑动的有效对比。
+
+> 生成日期：2026-09-05
+> 交接对象：Codex / 后续开发者
+> 当前分支：`chore/upgrade-gradle-8`（基于 `chore/reorganize-project-layout`）
+
+---
+
+## 1. 项目是什么
+
+**AI.js Pro**（包名 `com.jdkshen.aijspro`，应用名「AI.js Pro」，当前版本 `1.0.0` / versionCode 463）：
+- 基于 **Auto.js 4.4.1（Stardust）** 源码的定制增强版
+- 双引擎：**Rhino + QuickJS**（JNI 桥接，`modules/autojs`）
+- 增强：ImGui 工作台（C++）、OpenCV 5.0 / YOLO、Native Frame、Shizuku、悬浮窗重构
+
+> ⚠️ K40 上另装有 **Auto.js Pro（`org.autojs.autojspro`，AutoX 商业版 9.3.11）**，与本项目同屏易混淆，勿改错包。本项目 UI 对标它的 Material 3 风格（但为原生 View 实现，非 Flutter）。
+
+### 模块结构
+```
+apps/app       主应用（UI/打包/悬浮窗/定时任务等）
+apps/inrt      运行时模板（打包成 assets/template.apk）
+modules/       autojs(引擎) / automator(无障碍) / common(工具)
+third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / ColorPicker / ApkBuilder / multi-level-listview
+```
+
+---
+
+## 2. 构建环境
+
+| 项 | 值 |
+|---|---|
+| JDK | 17（`JAVA_HOME=C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot`），也可用 21 |
+| Gradle Wrapper | **8.9**（bin 发行版，本地 `~/.gradle/wrapper/dists` 已有缓存） |
+| AGP | **8.6.1** |
+| Kotlin | **1.9.24** |
+| compileSdk / buildTools | **35 / 34.0.0**（已安装到 `C:/Android`：platforms;android-35、build-tools;34.0.0） |
+| minSdk / targetSdk | 21 / 28 |
+| SDK 路径 | `local.properties` → `sdk.dir=C:/Android`（NDK r26d、platform-tools 在此） |
+
+### 常用命令
+```powershell
+.\gradlew.bat :app:assembleCommonDebug --no-daemon   # 主应用（arm64/v7a/x86 三 ABI）
+.\gradlew.bat :inrt:assembleDebug --no-daemon          # inrt 运行时
+.\build-common-debug.ps1 -SkipNative                   # 一键构建（跳过 .so）
+```
+
+### 设备
+- K40（Redmi M2012K11AC / alioth）：`cccc62c7`
+- adb：`D:\VisualStudio\Shared\Android\android-sdk\platform-tools\adb.exe`
+- 安装：`& $adb -s cccc62c7 install -r apps\app\build\outputs\apk\common\debug\app-common-arm64-v8a-debug.apk`
+- 启动：`am start -n com.jdkshen.aijspro/.ui.splash.SplashActivity`（**MainActivity 未设 exported**，Android 12+ 禁止 shell 直接启动）
+
+---
+
+## 3. 本次大改动（Gradle 8 + M3，95 文件 / +967 -907）
+
+### 3.1 构建链升级（Gradle 4.10.2 → 8.9）
+- `gradle-wrapper.properties` 改 8.9-bin；根 `build.gradle`：AGP 8.6.1 + Kotlin 1.9.24，移除 ButterKnife 插件
+- `project-versions.json`：compile 35 / buildTools 34.0.0 / 版本名 1.0.0（从 4.4.1 Alpha1 变更）
+- `gradle.properties` 关键项（**不要轻易改**）：
+  - `android.useAndroidX=true`、`android.enableJetifier=true`（老库仍需转换）
+  - `android.overridePathCheck=true`（中文路径必需）
+  - **`android.nonTransitiveRClass=false`**：老代码通过模块 R 引用依赖资源（如 `R.style.Theme_AppCompat_Light`）
+  - **`android.nonFinalResIds=false`**：`switch (R.id.xxx)` 需要编译期常量（AGP 8 默认非 final 会报"需要常量表达式"）
+- 根 `build.gradle` 的 `configurations.all { resolutionStrategy.force ... }` 已升级为 M3 兼容集：
+  material **1.12.0**、appcompat **1.7.0**、core **1.13.1**、fragment 1.6.2、activity 1.8.2、recyclerview 1.3.2、preference 1.2.1 等
+  - ⚠️ `drawerlayout` 强制 **1.1.0**：1.2.0 的 `Openable.open()` 签名变了，与 `ImGuiWorkspaceDrawer.open()` 冲突（已改名 `openDrawerSurface()` 双保险）
+- 根 `build.gradle` 末尾 `subprojects { afterEvaluate { ... } }` 统一 **Java/Kotlin jvmTarget = 1.8**（否则 Kotlin 默认 17 与 Java 1.8 冲突）
+- 使用 `BuildConfig` 的模块（app/inrt/autojs/automator/common）都加了 `buildFeatures { buildConfig true }`
+- `settingscompat` 的 `android.getBootClasspath()` javadoc 任务已删除（AGP 8 移除此 API）
+
+### 3.2 注解框架迁移（AA + ButterKnife 已完全移除）
+- **AndroidAnnotations（~200 处 / 25 文件）** → 原生生命周期：
+  `@EActivity/@EFragment/@EViewGroup` → `onCreate/onCreateView` + `findViewById`；
+  `@AfterViews` → 手动调用；`@Click/@CheckedChange` → `setOnClickListener/setOnCheckedChangeListener`
+- **ButterKnife（~160 处 / 18 文件）** → `findViewById` 手动绑定
+- `bindItemClick(Object)` 反射机制 → **`com.stardust.app.OperationItemClickListener`** 接口
+  （`OperationDialogBuilder`/`OptionListView` 改用接口；`CircularMenu`、`CommunityWebView` 实现它）
+- Manifest 中 17 处 `XxxActivity_` → 真实类名
+- **⚠️ 布局文件陷阱**（已修复但需警惕）：`activity_main.xml` 的 `DrawerFragment_`、`activity_edit.xml` 的根 `<EditorView_>` 是迁移时漏网的生成类引用，会导致 `ClassNotFoundException` 崩溃——**搜索 `_` 后缀类引用时应包含 res/layout**
+- Kotlin synthetic 仅 2 文件（ImageText/MarketFragment）已迁 `findViewById`；`kotlin-android-extensions` 插件已全部移除
+- `@UiThread` 在 `JsDialog.java` 是 `androidx.annotation.UiThread`（非 AA，勿动）
+- 删除了无用的 Glide `kapt`（无 @GlideModule）；如需 Glide 注解需加 `apply plugin: 'kotlin-kapt'`
+
+### 3.3 M3 UI 改造（本轮重点）
+- 主题：`Theme.Material3.DayNight.NoActionBar`（styles.xml `AppTheme`），新增 M3 色板
+- **主色 = 青绿 `#00838F`**（对标 Auto.js Pro；`colors.xml` + `values-night/colors.xml`）
+- 新增 styles：`HomeQuickCard`/`HomeItemCard`/`HomeBigCard`（CardView.Filled 圆角 14-16dp）、`MainToolbarStyle`（浅色大标题 22sp 深色图标）、`HomeToolbarTitle`
+- **首页（MainActivity）**：
+  - 浅色 surface 大标题栏 + 顶部**图标**（menu 已加 `app:iconTint="?attr/colorOnSurfaceVariant"`，原来白图标浅色栏看不见）
+  - **TabLayout 已 `visibility=gone`**（首页=纯菜单规格；ViewPager 保留！页签切换入口在抽屉，`MainActivity.showPage(int)`）
+  - 菜单卡片：大卡「核心服务」(item_home_big_card)、两列小卡「无障碍/悬浮窗」(item_home_small_card)、列表「开发工具/退出 AI > 」(item_home_row)、底部版本号
+  - 图标：`ic_chevron_right.xml` 为新增 vector（`ic_keyboard_arrow_right_black_24dp` 不存在）
+- **核心服务页 `ui/service/ServiceStatusActivity`**（新，已注册 Manifest）：
+  M3 卡片列表：无障碍(跳设置)/悬浮窗(直接切换)/前台服务(开关,Pref 持久化)/通知权限/电池优化；`Pref` 新增 `setForegroundServiceEnabled`
+- **脚本列表卡片化**：`script_file_list_file.xml`、`script_file_list_directory.xml`、`file_choose_list_directory.xml` → MaterialCardView + HomeItemCard；分类/市场/打包/项目配置/定时任务页 CardView 全部升级
+- 抽屉：`drawer_menu_item.xml` M3（52dp、图标 20dp、`colorOnSurface` 系）；抽屉「其他」组新增 教程/社区/市场/管理（调 `showPage`）
+- 深色模式：`values-night/colors.xml` 完整 M3 深色色板（自动跟随，应用内切换兼容）
+- 状态栏：MainActivity 覆写 `shouldApplyThemeColorToStatusBar()=false` + `syncStatusBarWithAppBar()`（浅色+深图标）
+- 轻页面配色清理：about/login 硬编码色 → `?attr/colorOnSurface*`
+
+### 3.4 构建脚本
+- `build-common-debug.ps1` / `release.ps1`：移除 JDK 17 `--add-opens/--add-exports` hack 与 `--max-workers=1`（Gradle 8.9 不再需要）
+- 启动入口已改为 **Splash → MainActivity**（原来是 Splash → ImGuiWorkspaceActivity；ImGui 从首页「开发工具」进入）
+
+---
+
+## 4. 遗留问题 / 注意点
+
+1. **MainActivity 无 `android:exported`**：若需要 shell 直启，加 `android:exported="true"`（仅调试）
+2. `Preview`/编辑器相关布局仍有硬编码颜色（`editor_view`、`debug_bar`、`dialog_*` 等），深色模式下对比度可接受但未 M3 化
+3. 设置页 `SettingsActivity` 仍是老 `android.preference` 列表（M3 主题观感一般，未重排）
+4. 抽屉 header（fragment_drawer.xml 顶部）未 M3 化
+5. 图标：首页入口仍用成品彩色图标（`ic_service_green` 等），Auto.js Pro 为单色线稿；后续可换 M3 风格
+6. `org.autojs.autojspro`（Auto.js Pro 9.3.11）与本项目同装 K40，测试前先 `am force-stop` 它
+7. MCP：`bin.mt.plus`（MT 管理器）在 K40 提供 "MT APK MCP"（`http://192.168.10.9:8787/mcp`）——APK 需先放入 MT 的 apks 索引才能在 MCP 打开（`mt_apk_list_available_apks` 为空是正常的）
+
+## 5. 下一步候选（按优先级）
+
+1. SettingsActivity → M3 分组卡片菜单（替换老 Preference）
+2. 抽屉 header / 编辑器页 M3 化（硬编码色清理）
+3. 图标统一 M3 线稿（无障碍/悬浮窗/开发工具/退出）
+4. 版本号发布：`project-versions.json`（当前 1.0.0/463）
+5. 收尾：`git commit`（建议 message：`feat: upgrade to Gradle 8.9 + Material 3 UI`）
+
+## 6. 快速定位文件
+
+| 功能 | 文件 |
+|---|---|
+| 首页逻辑 | `apps/app/.../ui/main/MainActivity.java` |
+| 首页布局 | `apps/app/src/main/res/layout/activity_main.xml` |
+| 卡片 item | `item_home_big_card/small_card/row.xml` |
+| 核心服务页 | `.../ui/service/ServiceStatusActivity.java` + `activity_service_status.xml` |
+| 主题/色板 | `res/values/styles.xml`、`colors.xml`、`values-night/colors.xml` |
+| 依赖强制版本 | 根 `build.gradle` → `configurations.all` |
+| 版本号 | `project-versions.json` |

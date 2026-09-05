@@ -1,22 +1,20 @@
 package com.jdkshen.aijspro.ui.user;
 
+import android.content.Intent;
 import android.util.Log;
+import android.os.Bundle;
 import android.util.Patterns;
 import android.view.View;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import com.afollestad.materialdialogs.MaterialDialog;
+import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.network.NodeBB;
 import com.jdkshen.aijspro.network.UserService;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.stardust.theme.ThemeColorManager;
-
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.Click;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
 
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.schedulers.Schedulers;
@@ -24,29 +22,39 @@ import io.reactivex.schedulers.Schedulers;
 /**
  * Created by Stardust on 2017/10/26.
  */
-@EActivity(R.layout.activity_register)
 public class RegisterActivity extends BaseActivity {
 
-    @ViewById(R.id.email)
     TextView mEmail;
 
-    @ViewById(R.id.username)
     TextView mUserName;
 
-    @ViewById(R.id.password)
     TextView mPassword;
 
-    @ViewById(R.id.register)
     View mRegister;
 
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (BuildConfig.MIUIX_PILOT) {
+            startActivity(new Intent().setClassName(this,
+                    "com.jdkshen.aijspro.ui.user.MiuixRegisterActivity"));
+            finish();
+            return;
+        }
+        setContentView(R.layout.activity_register);
+        mEmail = findViewById(R.id.email);
+        mUserName = findViewById(R.id.username);
+        mPassword = findViewById(R.id.password);
+        mRegister = findViewById(R.id.register);
+        findViewById(R.id.register).setOnClickListener(v -> login());
+        setUpViews();
+    }
 
-    @AfterViews
     void setUpViews() {
         setToolbarAsBack(getString(R.string.text_register));
         ThemeColorManager.addViewBackground(mRegister);
     }
 
-    @Click(R.id.register)
     void login() {
         String email = mEmail.getText().toString();
         String userName = mUserName.getText().toString();

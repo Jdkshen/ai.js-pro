@@ -12,8 +12,6 @@ import com.jdkshen.aijspro.ui.widget.BindableViewHolder;
 import com.jdkshen.aijspro.ui.widget.PrefSwitch;
 import com.jdkshen.aijspro.ui.widget.SwitchCompat;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
 import me.zhanghai.android.materialprogressbar.MaterialProgressBar;
 
 import static android.view.View.GONE;
@@ -26,19 +24,14 @@ import static android.view.View.VISIBLE;
 public class DrawerMenuItemViewHolder extends BindableViewHolder<DrawerMenuItem> {
 
     private static final long CLICK_TIMEOUT = 1000;
-    @BindView(R.id.sw)
     PrefSwitch mSwitchCompat;
 
-    @BindView(R.id.progress_bar)
     MaterialProgressBar mProgressBar;
 
-    @BindView(R.id.icon)
     ImageView mIcon;
 
-    @BindView(R.id.title)
     TextView mTitle;
 
-    @BindView(R.id.notifications)
     TextView mNotifications;
 
     private boolean mAntiShake;
@@ -47,7 +40,11 @@ public class DrawerMenuItemViewHolder extends BindableViewHolder<DrawerMenuItem>
 
     public DrawerMenuItemViewHolder(View itemView) {
         super(itemView);
-        ButterKnife.bind(this, itemView);
+        mSwitchCompat = itemView.findViewById(R.id.sw);
+        mProgressBar = itemView.findViewById(R.id.progress_bar);
+        mIcon = itemView.findViewById(R.id.icon);
+        mTitle = itemView.findViewById(R.id.title);
+        mNotifications = itemView.findViewById(R.id.notifications);
         mSwitchCompat.setOnCheckedChangeListener((buttonView, isChecked) -> onClick());
         itemView.setOnClickListener(v -> {
             if (mSwitchCompat.getVisibility() == VISIBLE) {

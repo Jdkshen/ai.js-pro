@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.ui.common;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Environment;
@@ -37,7 +38,7 @@ import com.jdkshen.aijspro.model.script.Scripts;
 import com.jdkshen.aijspro.network.download.DownloadManager;
 import com.jdkshen.aijspro.ui.filechooser.FileChooserDialogBuilder;
 import com.jdkshen.aijspro.ui.shortcut.ShortcutCreateActivity;
-import com.jdkshen.aijspro.ui.timing.TimedTaskSettingActivity_;
+import com.jdkshen.aijspro.ui.timing.TimedTaskSettingActivity;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 
 import org.reactivestreams.Publisher;
@@ -367,9 +368,12 @@ public class ScriptOperations {
     }
 
     public void timedTask(ScriptFile scriptFile) {
-        TimedTaskSettingActivity_.intent(mContext)
-                .extra(ScriptIntents.EXTRA_KEY_PATH, scriptFile.getPath())
-                .start();
+        Intent intent = new Intent(mContext, TimedTaskSettingActivity.class);
+        intent.putExtra(ScriptIntents.EXTRA_KEY_PATH, scriptFile.getPath());
+        if (!(mContext instanceof Activity)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        mContext.startActivity(intent);
     }
 
 

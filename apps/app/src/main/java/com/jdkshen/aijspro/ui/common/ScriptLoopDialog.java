@@ -15,9 +15,6 @@ import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.model.script.ScriptFile;
 import com.jdkshen.aijspro.model.script.Scripts;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
-
 /**
  * Created by Stardust on 2017/7/8.
  */
@@ -27,13 +24,10 @@ public class ScriptLoopDialog {
     private ScriptFile mScriptFile;
     private MaterialDialog mDialog;
 
-    @BindView(R.id.loop_times)
     EditText mLoopTimes;
 
-    @BindView(R.id.loop_interval)
     EditText mLoopInterval;
 
-    @BindView(R.id.loop_delay)
     EditText mLoopDelay;
 
 
@@ -46,7 +40,9 @@ public class ScriptLoopDialog {
                 .positiveText(R.string.ok)
                 .onPositive((dialog, which) -> startScriptRunningLoop())
                 .build();
-        ButterKnife.bind(this, view);
+        mLoopTimes = view.findViewById(R.id.loop_times);
+        mLoopInterval = view.findViewById(R.id.loop_interval);
+        mLoopDelay = view.findViewById(R.id.loop_delay);
     }
 
     private void startScriptRunningLoop() {

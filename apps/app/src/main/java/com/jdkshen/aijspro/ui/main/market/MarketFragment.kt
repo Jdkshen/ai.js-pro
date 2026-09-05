@@ -8,9 +8,9 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.stardust.autojs.workground.WrapContentLinearLayoutManager
-import kotlinx.android.synthetic.main.fragment_market.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
@@ -26,6 +26,8 @@ import org.joda.time.format.DateTimeFormat
 class MarketFragment : ViewPagerFragment(0) {
 
     private val mTopics = ArrayList<Topic>()
+    private lateinit var topicsView: RecyclerView
+    private lateinit var swipeRefreshLayout: SwipeRefreshLayout
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         return inflater.inflate(R.layout.fragment_market, container, false)
@@ -33,6 +35,8 @@ class MarketFragment : ViewPagerFragment(0) {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        topicsView = view.findViewById(R.id.topicsView)
+        swipeRefreshLayout = view.findViewById(R.id.swipeRefreshLayout)
         topicsView.layoutManager = WrapContentLinearLayoutManager(context)
         topicsView.adapter = Adapter()
         swipeRefreshLayout.setOnRefreshListener {

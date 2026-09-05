@@ -1,7 +1,9 @@
 package com.jdkshen.aijspro.ui.edit;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import com.google.android.material.snackbar.Snackbar;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -16,10 +18,9 @@ import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.model.indices.AndroidClass;
 import com.jdkshen.aijspro.model.indices.ClassSearchingItem;
 import com.jdkshen.aijspro.ui.project.BuildActivity;
-import com.jdkshen.aijspro.ui.project.BuildActivity_;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
-import com.jdkshen.aijspro.ui.log.LogActivity_;
+import com.jdkshen.aijspro.ui.log.LogActivity;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 
 import com.stardust.util.ClipboardUtil;
@@ -189,9 +190,12 @@ public class EditorMenu {
     }
 
     private void startBuildApkActivity() {
-        BuildActivity_.intent(mContext)
-                .extra(BuildActivity.EXTRA_SOURCE, mEditorView.getUri().getPath())
-                .start();
+        Intent intent = new Intent(mContext, BuildActivity.class);
+        intent.putExtra(BuildActivity.EXTRA_SOURCE, mEditorView.getUri().getPath());
+        if (!(mContext instanceof Activity)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        mContext.startActivity(intent);
     }
 
 
@@ -292,7 +296,11 @@ public class EditorMenu {
 
 
     private void showLog() {
-        LogActivity_.intent(mContext).start();
+        Intent intent = new Intent(mContext, LogActivity.class);
+        if (!(mContext instanceof Activity)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        mContext.startActivity(intent);
     }
 
     private void showConsole() {

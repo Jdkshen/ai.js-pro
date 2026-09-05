@@ -4,11 +4,15 @@ import android.content.Context
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.View
+import android.widget.ImageView
 import android.widget.LinearLayout
-import kotlinx.android.synthetic.main.image_text.view.*
+import android.widget.TextView
 import com.jdkshen.aijspro.R
 
 class ImageText : LinearLayout {
+
+    private lateinit var textView: TextView
+    private lateinit var imageView: ImageView
 
     var text: CharSequence?
         get() = textView.text
@@ -30,6 +34,8 @@ class ImageText : LinearLayout {
 
     private fun init(attrs: AttributeSet?) {
         View.inflate(context, R.layout.image_text, this)
+        textView = findViewById(R.id.textView)
+        imageView = findViewById(R.id.imageView)
         gravity = Gravity.CENTER
         orientation = HORIZONTAL
         if (attrs == null) {

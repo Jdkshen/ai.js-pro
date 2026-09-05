@@ -15,9 +15,6 @@ import com.jdkshen.aijspro.R;
 
 import java.util.ArrayList;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
-
 /**
  * Created by Stardust on 2017/6/26.
  */
@@ -28,7 +25,7 @@ public class OperationDialogBuilder extends MaterialDialog.Builder {
     private ArrayList<Integer> mIds = new ArrayList<>();
     private ArrayList<Integer> mIcons = new ArrayList<>();
     private ArrayList<String> mTexts = new ArrayList<>();
-    private Object mOnItemClickTarget;
+    private OperationItemClickListener mOnItemClickTarget;
 
     public OperationDialogBuilder(@NonNull Context context) {
         super(context);
@@ -46,8 +43,8 @@ public class OperationDialogBuilder extends MaterialDialog.Builder {
                 holder.text.setText(mTexts.get(position));
                 holder.icon.setImageResource(mIcons.get(position));
                 if (mOnItemClickTarget != null) {
-                    //// TODO: 2017/6/26   效率
-                    ButterKnife.bind(mOnItemClickTarget, holder.itemView);
+                    holder.itemView.setOnClickListener(v ->
+                            mOnItemClickTarget.onOperationItemClick(holder.itemView.getId()));
                 }
             }
 
@@ -70,22 +67,20 @@ public class OperationDialogBuilder extends MaterialDialog.Builder {
         return this;
     }
 
-    public OperationDialogBuilder bindItemClick(Object target) {
-        mOnItemClickTarget = target;
+    public OperationDialogBuilder bindItemClick(OperationItemClickListener listener) {
+        mOnItemClickTarget = listener;
         return this;
     }
 
     class ViewHolder extends RecyclerView.ViewHolder {
 
-        @BindView(R.id.icon)
         ImageView icon;
-        @BindView(R.id.text)
         TextView text;
 
         public ViewHolder(View itemView) {
             super(itemView);
-            ButterKnife.bind(this, itemView);
-
+            icon = itemView.findViewById(R.id.icon);
+            text = itemView.findViewById(R.id.text);
         }
 
     }

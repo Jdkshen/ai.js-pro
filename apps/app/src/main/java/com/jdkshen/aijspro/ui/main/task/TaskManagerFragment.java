@@ -2,32 +2,29 @@ package com.jdkshen.aijspro.ui.main.task;
 
 import android.app.Activity;
 import android.os.Bundle;
+import androidx.annotation.NonNull;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.AutoJs;
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment;
 import com.jdkshen.aijspro.ui.widget.SimpleAdapterDataObserver;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.EFragment;
-import org.androidannotations.annotations.ViewById;
+import com.jdkshen.aijspro.ui.widget.SimpleAdapterDataObserver;
 
 /**
  * Created by Stardust on 2017/3/24.
  */
-@EFragment(R.layout.fragment_task_manager)
 public class TaskManagerFragment extends ViewPagerFragment {
 
-    @ViewById(R.id.task_list)
     TaskListRecyclerView mTaskListRecyclerView;
 
-    @ViewById(R.id.notice_no_running_script)
     View mNoRunningScriptNotice;
 
-    @ViewById(R.id.swipe_refresh_layout)
     SwipeRefreshLayout mSwipeRefreshLayout;
 
 
@@ -36,7 +33,17 @@ public class TaskManagerFragment extends ViewPagerFragment {
         setArguments(new Bundle());
     }
 
-    @AfterViews
+    @NonNull
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_task_manager, container, false);
+        mTaskListRecyclerView = view.findViewById(R.id.task_list);
+        mNoRunningScriptNotice = view.findViewById(R.id.notice_no_running_script);
+        mSwipeRefreshLayout = view.findViewById(R.id.swipe_refresh_layout);
+        setUpViews();
+        return view;
+    }
+
     void setUpViews() {
         init();
         final boolean noRunningScript = mTaskListRecyclerView.getAdapter().getItemCount() == 0;

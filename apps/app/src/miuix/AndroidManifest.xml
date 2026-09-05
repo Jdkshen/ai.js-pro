@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="com.jdkshen.aijspro.ui.service.MiuixServiceActivity"
+            android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.settings.MiuixSettingsActivity"
+            android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.settings.MiuixAboutActivity"
+            android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.user.MiuixLoginActivity"
+            android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.user.MiuixRegisterActivity"
+            android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.doc.MiuixDocumentationActivity"
+            android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.log.MiuixLogActivity"
+            android:exported="false" />
+    </application>
+</manifest>

@@ -33,8 +33,6 @@ import com.stardust.util.SparseArrayEntries;
 
 import com.jdkshen.aijspro.ui.widget.ToolbarMenuItem;
 
-import butterknife.ButterKnife;
-import butterknife.OnClick;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.annotations.NonNull;
 import io.reactivex.functions.Consumer;
@@ -93,7 +91,8 @@ public class ViewSampleActivity extends AppCompatActivity implements OnActivityR
         ThemeColorManager.addActivityStatusBar(this);
         setUpToolbar();
         initMenuItem();
-        ButterKnife.bind(this);
+        findViewById(R.id.run).setOnClickListener(v -> run());
+        findViewById(R.id.edit).setOnClickListener(v -> edit());
         mEditor = findViewById(R.id.editor);
         try {
             mEditor.setTheme(Theme.getDefault(this));
@@ -108,13 +107,11 @@ public class ViewSampleActivity extends AppCompatActivity implements OnActivityR
         BaseActivity.setToolbarAsBack(this, R.id.toolbar, mSample.getSimplifiedName());
     }
 
-    @OnClick(R.id.run)
     void run() {
         Snackbar.make(mView, R.string.text_start_running, Snackbar.LENGTH_SHORT).show();
         mScriptExecution = Scripts.INSTANCE.run(mSample.toSource());
     }
 
-    @OnClick(R.id.edit)
     void edit() {
         new ScriptOperations(this, mView)
                 .importSample(mSample)

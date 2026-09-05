@@ -1,61 +1,79 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
-                                    xmlns:app="http://schemas.android.com/apk/res-auto"
-                                    xmlns:tools="http://schemas.android.com/tools"
-                                    android:id="@+id/item"
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:layout_marginLeft="3dp"
-                                    android:layout_marginRight="3dp"
-                                    android:clickable="true"
-                                    android:focusable="true"
-                                    android:foreground="?selectableItemBackground"
-                                    app:cardBackgroundColor="?android:itemBackground"
-                                    app:cardElevation="0.618dp"
-                                    app:cardUseCompatPadding="true">
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/item"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:clickable="true"
+    android:focusable="true"
+    android:orientation="vertical">
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:minHeight="64dp"
         android:orientation="horizontal"
-        android:paddingTop="16dp"
-        android:paddingBottom="16dp">
+        android:paddingStart="16dp">
 
         <ImageView
             android:id="@+id/icon"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:layout_gravity="center_vertical"
-            android:layout_marginLeft="16dp"
-            android:layout_marginRight="16dp"/>
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/circle_m3_primary"
+            android:padding="11dp"
+            android:tint="?attr/colorOnPrimary"
+            tools:src="@drawable/ic_folder_outline_24dp" />
 
-        <TextView
-            android:id="@+id/name"
+        <LinearLayout
             android:layout_width="0dp"
-            android:layout_height="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
             android:layout_weight="1"
-            android:ellipsize="end"
-            android:gravity="center_vertical"
-            android:maxLines="1"
-            android:paddingRight="16dp"
-            android:textColor="?android:textColorPrimary"
-            android:textSize="14sp"
-            tools:text="正在运行的服务"/>
+            android:orientation="vertical"
+            android:paddingTop="5dp"
+            android:paddingBottom="5dp">
 
+            <TextView
+                android:id="@+id/name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="16sp"
+                tools:text="脚本工具箱" />
+
+            <TextView
+                android:id="@+id/desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="12sp"
+                tools:text="文件夹\n修改于 2026-09-05 15:39:00" />
+        </LinearLayout>
 
         <ImageView
             android:id="@+id/more"
-            android:layout_width="52dp"
-            android:layout_height="20dp"
-            android:layout_gravity="center_vertical"
-            android:background="?selectableItemBackgroundBorderless"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:focusable="true"
-            android:paddingLeft="16dp"
-            android:paddingRight="16dp"
+            android:padding="12dp"
             android:src="@drawable/ic_more_vert_black_24dp"
-            android:tint="#A9AAAB"/>
-
-
+            android:tint="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
-</androidx.cardview.widget.CardView>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1px"
+        android:layout_marginStart="80dp"
+        android:background="@color/m3_list_divider" />
+
+</LinearLayout>

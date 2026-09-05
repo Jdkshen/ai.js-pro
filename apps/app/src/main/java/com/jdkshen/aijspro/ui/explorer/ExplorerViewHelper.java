@@ -3,10 +3,7 @@ package com.jdkshen.aijspro.ui.explorer;
 import android.graphics.Color;
 
 import com.stardust.app.GlobalAppContext;
-import com.stardust.pio.PFiles;
-
 import com.jdkshen.aijspro.R;
-import com.jdkshen.aijspro.model.explorer.ExplorerFileItem;
 import com.jdkshen.aijspro.model.explorer.ExplorerItem;
 import com.jdkshen.aijspro.model.explorer.ExplorerPage;
 import com.jdkshen.aijspro.model.explorer.ExplorerProjectPage;
@@ -26,14 +23,11 @@ public class ExplorerViewHelper {
         if (item instanceof ExplorerPage) {
             return item.getName();
         }
-        String type = item.getType();
-        if (type.equals(TYPE_JAVASCRIPT) || type.equals(TYPE_AUTO_FILE)) {
-            if (item instanceof ExplorerFileItem) {
-                return ((ExplorerFileItem) item).getFile().getSimplifiedName();
-            }
-            return PFiles.getNameWithoutExtension(item.getName());
-        }
         return item.getName();
+    }
+
+    public static boolean isJavaScript(ExplorerItem item) {
+        return TYPE_JAVASCRIPT.equals(item.getType());
     }
 
     public static String getIconText(ExplorerItem item) {
@@ -44,6 +38,9 @@ public class ExplorerViewHelper {
         if (type.equals(TYPE_AUTO_FILE)) {
             return "R";
         }
+        if (type.equals(TYPE_JAVASCRIPT)) {
+            return "";
+        }
 
         return type.substring(0, 1).toUpperCase();
     }
@@ -51,7 +48,7 @@ public class ExplorerViewHelper {
     public static int getIconColor(ExplorerItem item) {
         switch (item.getType()) {
             case TYPE_JAVASCRIPT:
-                return getColor(GlobalAppContext.get(), R.color.color_j);
+                return Color.rgb(4, 9, 11);
             case TYPE_AUTO_FILE:
                 return getColor(GlobalAppContext.get(), R.color.color_r);
             default:

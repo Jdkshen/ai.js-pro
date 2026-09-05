@@ -14,31 +14,7 @@ param([switch]$SkipNative, [switch]$Install, [switch]$ForceClean)
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$saved = $env:JAVA_TOOL_OPTIONS
 $t0 = Get-Date
-
-function Get-JavaMajorVersion {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'java'
-    $psi.Arguments = '-version'
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $process = [System.Diagnostics.Process]::Start($psi)
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
-    $text = $stdout + $stderr
-    if ($text -match '"(\d+)\.(\d+)') {
-        $major = [int]$Matches[1]
-        $minor = [int]$Matches[2]
-        if ($major -eq 1) {
-            return $minor
-        }
-        return $major
-    }
-    return 0
-}
 
 Write-Host "`n=== Release Builder ===" -ForegroundColor Yellow
 
@@ -53,33 +29,12 @@ try {
     }
 
     Write-Host "`n[2/4] Gradle" -ForegroundColor Cyan
-    # Gradle 4.10.2 needs module access flags on JDK 9+ only; JDK 8 must not receive them.
-    $cpkgs = @('api','code','comp','file','main','model','parser','processing','tree','util','jvm')
-    $jx = ($cpkgs | ForEach-Object { "--add-exports=jdk.compiler/com.sun.tools.javac.$_=ALL-UNNAMED" })
-    $javaMajor = Get-JavaMajorVersion
-    if ($javaMajor -ge 9) {
-        $toolOptions = @(
-            '--add-opens=java.base/java.util=ALL-UNNAMED',
-            '--add-opens=java.base/java.lang=ALL-UNNAMED',
-            '--add-opens=java.base/java.io=ALL-UNNAMED'
-        ) + $jx -join ' '
-        $env:JAVA_TOOL_OPTIONS = $toolOptions
-    } else {
-        $toolOptions = ''
-        $env:JAVA_TOOL_OPTIONS = $saved
-    }
 
     Push-Location $root
     try {
-        $gradle = "gradlew.bat :app:assembleCommonDebug --no-daemon --max-workers=1"
-        if ($toolOptions) {
-            $gradle = "set JAVA_TOOL_OPTIONS=$toolOptions && $gradle"
-        }
+        $gradle = "gradlew.bat :app:assembleCommonDebug --no-daemon"
         if ($ForceClean) {
-            $cleanCmd = "gradlew.bat :app:clean --no-daemon --max-workers=1"
-            if ($toolOptions) {
-                $cleanCmd = "set JAVA_TOOL_OPTIONS=$toolOptions && $cleanCmd"
-            }
+            $cleanCmd = "gradlew.bat :app:clean --no-daemon"
             cmd /c $cleanCmd 2>$null | Out-Null
         }
         cmd /c $gradle 2>$null | Out-Null
@@ -121,6 +76,4 @@ try {
 } catch {
     Write-Host "`nFAILED: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
-} finally {
-    $env:JAVA_TOOL_OPTIONS = $saved
 }

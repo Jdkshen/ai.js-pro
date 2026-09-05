@@ -13,11 +13,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.jdkshen.aijspro.R;
+import com.stardust.app.OperationItemClickListener;
 
 import java.util.ArrayList;
-
-import butterknife.BindView;
-import butterknife.ButterKnife;
 
 /**
  * Created by Stardust on 2017/10/20.
@@ -47,8 +45,8 @@ public class OptionListView extends LinearLayout {
             return this;
         }
 
-        public Builder bindItemClick(Object target) {
-            mOptionListView.mOnItemClickTarget = target;
+        public Builder bindItemClick(OperationItemClickListener listener) {
+            mOptionListView.mOnItemClickTarget = listener;
             return this;
         }
 
@@ -71,7 +69,7 @@ public class OptionListView extends LinearLayout {
     private ArrayList<Integer> mIds = new ArrayList<>();
     private ArrayList<Integer> mIcons = new ArrayList<>();
     private ArrayList<String> mTexts = new ArrayList<>();
-    private Object mOnItemClickTarget;
+    private OperationItemClickListener mOnItemClickTarget;
     private RecyclerView mOptionList;
     private TextView mTitleView;
 
@@ -104,7 +102,8 @@ public class OptionListView extends LinearLayout {
             holder.text.setText(mTexts.get(position));
             holder.icon.setImageResource(mIcons.get(position));
             if (mOnItemClickTarget != null) {
-                ButterKnife.bind(mOnItemClickTarget, holder.itemView);
+                holder.itemView.setOnClickListener(v ->
+                        mOnItemClickTarget.onOperationItemClick(holder.itemView.getId()));
             }
         }
 
@@ -117,14 +116,13 @@ public class OptionListView extends LinearLayout {
 
     class ViewHolder extends RecyclerView.ViewHolder {
 
-        @BindView(R.id.icon)
         ImageView icon;
-        @BindView(R.id.text)
         TextView text;
 
         public ViewHolder(View itemView) {
             super(itemView);
-            ButterKnife.bind(this, itemView);
+            icon = itemView.findViewById(R.id.icon);
+            text = itemView.findViewById(R.id.text);
         }
 
     }

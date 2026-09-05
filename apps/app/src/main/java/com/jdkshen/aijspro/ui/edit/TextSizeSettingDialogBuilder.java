@@ -10,9 +10,6 @@ import com.afollestad.materialdialogs.MaterialDialog;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 
-import butterknife.BindView;
-import butterknife.ButterKnife;
-
 /**
  * Created by Stardust on 2018/2/24.
  */
@@ -27,10 +24,8 @@ public class TextSizeSettingDialogBuilder extends ThemeColorMaterialDialogBuilde
 
     private static final int MIN = 8;
 
-    @BindView(R.id.seekbar)
     SeekBar mSeekBar;
 
-    @BindView(R.id.preview_text)
     TextView mPreviewText;
 
     private int mTextSize;
@@ -43,7 +38,8 @@ public class TextSizeSettingDialogBuilder extends ThemeColorMaterialDialogBuilde
         title(R.string.text_text_size);
         positiveText(R.string.ok);
         negativeText(R.string.cancel);
-        ButterKnife.bind(this, view);
+        mSeekBar = view.findViewById(R.id.seekbar);
+        mPreviewText = view.findViewById(R.id.preview_text);
         mSeekBar.setOnSeekBarChangeListener(this);
     }
 

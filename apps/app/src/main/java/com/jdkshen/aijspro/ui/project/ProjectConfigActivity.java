@@ -17,10 +17,6 @@ import com.google.android.material.textfield.TextInputLayout;
 import com.stardust.autojs.project.ProjectConfig;
 import com.stardust.pio.PFiles;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.Click;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.model.explorer.ExplorerDirPage;
 import com.jdkshen.aijspro.model.explorer.ExplorerFileItem;
@@ -29,7 +25,6 @@ import com.jdkshen.aijspro.model.project.ProjectTemplate;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.shortcut.ShortcutIconSelectActivity;
-import com.jdkshen.aijspro.ui.shortcut.ShortcutIconSelectActivity_;
 import com.jdkshen.aijspro.ui.widget.SimpleTextWatcher;
 
 import java.io.File;
@@ -40,7 +35,6 @@ import io.reactivex.Observable;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.schedulers.Schedulers;
 
-@EActivity(R.layout.activity_project_config)
 public class ProjectConfigActivity extends BaseActivity {
 
     public static final String EXTRA_PARENT_DIRECTORY = "parent_directory";
@@ -53,25 +47,18 @@ public class ProjectConfigActivity extends BaseActivity {
     private static final Pattern REGEX_PACKAGE_NAME = Pattern.compile("^([A-Za-z][A-Za-z\\d_]*\\.)+([A-Za-z][A-Za-z\\d_]*)$");
 
 
-    @ViewById(R.id.project_location)
     EditText mProjectLocation;
 
-    @ViewById(R.id.app_name)
     EditText mAppName;
 
-    @ViewById(R.id.package_name)
     EditText mPackageName;
 
-    @ViewById(R.id.version_name)
     EditText mVersionName;
 
-    @ViewById(R.id.version_code)
     EditText mVersionCode;
 
-    @ViewById(R.id.main_file_name)
     EditText mMainFileName;
 
-    @ViewById(R.id.icon)
     ImageView mIcon;
 
     private File mDirectory;
@@ -83,6 +70,8 @@ public class ProjectConfigActivity extends BaseActivity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_project_config);
+        bindViews();
         mNewProject = getIntent().getBooleanExtra(EXTRA_NEW_PROJECT, false);
         String parentDirectory = getIntent().getStringExtra(EXTRA_PARENT_DIRECTORY);
         if (mNewProject) {
@@ -108,9 +97,21 @@ public class ProjectConfigActivity extends BaseActivity {
                         .show();
             }
         }
+        setupViews();
     }
 
-    @AfterViews
+    private void bindViews() {
+        mProjectLocation = findViewById(R.id.project_location);
+        mAppName = findViewById(R.id.app_name);
+        mPackageName = findViewById(R.id.package_name);
+        mVersionName = findViewById(R.id.version_name);
+        mVersionCode = findViewById(R.id.version_code);
+        mMainFileName = findViewById(R.id.main_file_name);
+        mIcon = findViewById(R.id.icon);
+        findViewById(R.id.fab).setOnClickListener(v -> commit());
+        findViewById(R.id.icon).setOnClickListener(v -> selectIcon());
+    }
+
     void setupViews() {
         if (mProjectConfig == null) {
             return;
@@ -136,8 +137,6 @@ public class ProjectConfigActivity extends BaseActivity {
         }
     }
 
-    @SuppressLint("CheckResult")
-    @Click(R.id.fab)
     void commit() {
         if (!checkInputs()) {
             return;
@@ -186,10 +185,8 @@ public class ProjectConfigActivity extends BaseActivity {
         }
     }
 
-    @Click(R.id.icon)
     void selectIcon() {
-        ShortcutIconSelectActivity_.intent(this)
-                .startForResult(REQUEST_CODE);
+        startActivityForResult(new Intent(this, ShortcutIconSelectActivity.class), REQUEST_CODE);
     }
 
     private void syncProjectConfig() {

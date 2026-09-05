@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.ui.main;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 
 import androidx.annotation.NonNull;
@@ -20,6 +21,8 @@ import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.ImageView;
+import android.widget.TextView;
 
 import com.google.android.material.tabs.TabLayout;
 import com.stardust.app.FragmentPagerAdapterBuilder;
@@ -29,15 +32,10 @@ import com.stardust.autojs.core.permission.PermissionRequestProxyActivity;
 import com.stardust.autojs.core.permission.RequestPermissionCallbacks;
 import com.stardust.enhancedfloaty.FloatyService;
 import com.stardust.pio.PFiles;
-import com.stardust.theme.ThemeColorManager;
 import com.stardust.util.BackPressedHandler;
 import com.stardust.util.DeveloperUtils;
 import com.stardust.util.DrawerAutoClose;
 
-import org.androidannotations.annotations.AfterViews;
-import org.androidannotations.annotations.Click;
-import org.androidannotations.annotations.EActivity;
-import org.androidannotations.annotations.ViewById;
 import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
@@ -47,16 +45,16 @@ import com.jdkshen.aijspro.model.explorer.Explorers;
 import com.jdkshen.aijspro.tool.AccessibilityServiceTool;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
-import com.jdkshen.aijspro.ui.doc.DocsFragment_;
+import com.jdkshen.aijspro.ui.doc.DocumentationActivity;
+import com.jdkshen.aijspro.ui.doc.DocsFragment;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity;
-import com.jdkshen.aijspro.ui.log.LogActivity_;
+import com.jdkshen.aijspro.ui.log.LogActivity;
 import com.jdkshen.aijspro.ui.main.community.CommunityFragment;
-import com.jdkshen.aijspro.ui.main.community.CommunityFragment_;
 import com.jdkshen.aijspro.ui.main.market.MarketFragment;
-import com.jdkshen.aijspro.ui.main.scripts.MyScriptListFragment_;
-import com.jdkshen.aijspro.ui.main.task.TaskManagerFragment_;
-import com.jdkshen.aijspro.ui.settings.SettingsActivity_;
+import com.jdkshen.aijspro.ui.main.scripts.MyScriptListFragment;
+import com.jdkshen.aijspro.ui.main.task.TaskManagerFragment;
+import com.jdkshen.aijspro.ui.settings.SettingsActivity;
 import com.jdkshen.aijspro.ui.update.VersionGuard;
 import com.jdkshen.aijspro.ui.widget.CommonMarkdownView;
 import com.jdkshen.aijspro.ui.widget.SearchViewItem;
@@ -65,7 +63,6 @@ import org.greenrobot.eventbus.Subscribe;
 
 import java.util.Arrays;
 
-@EActivity(R.layout.activity_main)
 public class MainActivity extends BaseActivity implements OnActivityResultDelegate.DelegateHost, BackPressedHandler.HostActivity, PermissionRequestProxyActivity {
 
     public static class DrawerOpenEvent {
@@ -74,14 +71,13 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
     private static final String LOG_TAG = "MainActivity";
 
-    @ViewById(R.id.drawer_layout)
     DrawerLayout mDrawerLayout;
 
-    @ViewById(R.id.viewpager)
     ViewPager mViewPager;
 
-    @ViewById(R.id.fab)
     FloatingActionButton mFab;
+
+    TabLayout mTabLayout;
 
     private FragmentPagerAdapterBuilder.StoredFragmentPagerAdapter mPagerAdapter;
     private OnActivityResultDelegate.Mediator mActivityResultMediator = new OnActivityResultDelegate.Mediator();
@@ -89,9 +85,32 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     private VersionGuard mVersionGuard;
     private BackPressedHandler.Observer mBackPressObserver = new BackPressedHandler.Observer();
     private SearchViewItem mSearchViewItem;
+    private MenuItem mSearchMenuItem;
     private MenuItem mLogMenuItem;
     private boolean mDocsSearchItemExpanded;
+    private boolean mShowingHome = true;
 
+    private static final int[] PAGE_TITLES = {
+            R.string.text_file,
+            R.string.text_tutorial,
+            R.string.text_community,
+            R.string.text_market,
+            R.string.text_manage
+    };
+
+    private static final int[] PAGE_ICONS = {
+            R.drawable.ic_nav_scripts,
+            R.drawable.ic_nav_tutorial,
+            R.drawable.ic_nav_community,
+            R.drawable.ic_nav_market,
+            R.drawable.ic_nav_manage
+    };
+
+
+    @Override
+    protected boolean shouldApplyThemeColorToStatusBar() {
+        return false;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -102,16 +121,124 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         showAnnunciationIfNeeded();
         EventBus.getDefault().register(this);
         applyDayNightMode();
+        setContentView(R.layout.activity_main);
+        bindViews();
+        setUpViews();
+        // Match the familiar Auto.js Pro startup flow: scripts are the primary
+        // workspace. The service dashboard remains available from the drawer.
+        showPage(0);
+        syncStatusBarWithAppBar();
     }
 
-    @AfterViews
+    private void syncStatusBarWithAppBar() {
+        getWindow().setStatusBarColor(getColor(R.color.colorPrimaryDark));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            View decorView = getWindow().getDecorView();
+            decorView.setSystemUiVisibility(
+                    decorView.getSystemUiVisibility() & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        }
+    }
+
+    private void bindViews() {
+        mDrawerLayout = findViewById(R.id.drawer_layout);
+        mViewPager = findViewById(R.id.viewpager);
+        mFab = findViewById(R.id.fab);
+        mTabLayout = findViewById(R.id.tab);
+        View setting = findViewById(R.id.setting);
+        if (setting != null) {
+            setting.setOnClickListener(v -> startSettingActivity());
+        }
+        View exit = findViewById(R.id.exit);
+        if (exit != null) {
+            exit.setOnClickListener(v -> exitCompletely());
+        }
+        setupQuickCards();
+    }
+
+    private void setupQuickCards() {
+        bindBigCard(R.id.home_core_service, R.string.text_quick_service,
+                R.string.text_quick_service_subtitle, this::openServiceStatus);
+        bindSmallCard(R.id.home_accessibility, R.drawable.ic_service_green,
+                R.string.text_accessibility_service, this::openAccessibilitySetting);
+        bindSmallCard(R.id.home_floating, R.drawable.ic_robot_64,
+                R.string.text_floating_window, this::toggleFloatingWindow);
+        bindRow(R.id.home_developer, R.drawable.ic_connect_to_pc,
+                R.string.text_quick_developer, this::openDeveloperTools);
+        bindRow(R.id.home_exit, R.drawable.ic_close_white_48dp,
+                R.string.text_quick_exit_app, this::exitCompletely);
+        TextView version = findViewById(R.id.home_version);
+        if (version != null) {
+            version.setText(getString(R.string.text_version_footer, BuildConfig.VERSION_NAME));
+        }
+        refreshServiceStatus();
+    }
+
+    private void bindBigCard(int cardId, int titleRes, int subtitleRes, Runnable action) {
+        View card = findViewById(cardId);
+        if (card == null) return;
+        ((TextView) card.findViewById(R.id.big_card_title)).setText(titleRes);
+        ((TextView) card.findViewById(R.id.big_card_subtitle)).setText(subtitleRes);
+        card.setOnClickListener(v -> action.run());
+    }
+
+    private void bindSmallCard(int cardId, int iconRes, int labelRes, Runnable action) {
+        View card = findViewById(cardId);
+        if (card == null) return;
+        ((ImageView) card.findViewById(R.id.small_card_icon)).setImageResource(iconRes);
+        ((TextView) card.findViewById(R.id.small_card_label)).setText(labelRes);
+        card.setOnClickListener(v -> action.run());
+    }
+
+    private void bindRow(int rowId, int iconRes, int labelRes, Runnable action) {
+        View row = findViewById(rowId);
+        if (row == null) return;
+        ((ImageView) row.findViewById(R.id.row_icon)).setImageResource(iconRes);
+        ((TextView) row.findViewById(R.id.row_label)).setText(labelRes);
+        row.setOnClickListener(v -> action.run());
+    }
+
+    private void refreshServiceStatus() {
+        View card = findViewById(R.id.home_core_service);
+        if (card == null) return;
+        String status = getString(R.string.text_quick_service_status,
+                AccessibilityServiceTool.isAccessibilityServiceEnabled(this)
+                        ? getString(R.string.text_on) : getString(R.string.text_off),
+                FloatyWindowManger.isCircularMenuShowing()
+                        ? getString(R.string.text_on) : getString(R.string.text_off),
+                Pref.isForegroundServiceEnabled()
+                        ? getString(R.string.text_on) : getString(R.string.text_off));
+        ((TextView) card.findViewById(R.id.big_card_status)).setText(status);
+    }
+
+    private void openServiceStatus() {
+        startActivity(new Intent(this,
+                com.jdkshen.aijspro.ui.service.ServiceStatusActivity.class));
+    }
+
+    private void openAccessibilitySetting() {
+        AccessibilityServiceTool.enableAccessibilityService();
+    }
+
+    private void toggleFloatingWindow() {
+        if (FloatyWindowManger.isCircularMenuShowing()) {
+            FloatyWindowManger.hideCircularMenu();
+            Pref.setFloatingMenuShown(false);
+        } else {
+            FloatyWindowManger.showCircularMenuIfNeeded();
+            Pref.setFloatingMenuShown(true);
+        }
+        refreshServiceStatus();
+    }
+
+    private void openDeveloperTools() {
+        startActivity(new Intent(this, ImGuiWorkspaceActivity.class));
+    }
+
     void setUpViews() {
         setUpToolbar();
         setUpTabViewPager();
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         registerBackPressHandlers();
-        ThemeColorManager.addViewBackground(findViewById(R.id.app_bar));
         mDrawerLayout.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
             @Override
             public void onDrawerOpened(View drawerView) {
@@ -168,17 +295,51 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private void setUpTabViewPager() {
-        TabLayout tabLayout = $(R.id.tab);
         mPagerAdapter = new FragmentPagerAdapterBuilder(this)
-                .add(new MyScriptListFragment_(), R.string.text_file)
-                .add(new DocsFragment_(), R.string.text_tutorial)
-                .add(new CommunityFragment_(), R.string.text_community)
+                .add(new MyScriptListFragment(), R.string.text_file)
+                .add(new DocsFragment(), R.string.text_tutorial)
+                .add(new CommunityFragment(), R.string.text_community)
                 .add(new MarketFragment(), R.string.text_market)
-                .add(new TaskManagerFragment_(), R.string.text_manage)
+                .add(new TaskManagerFragment(), R.string.text_manage)
                 .build();
         mViewPager.setAdapter(mPagerAdapter);
-        tabLayout.setupWithViewPager(mViewPager);
+        mTabLayout.setupWithViewPager(mViewPager);
+        for (int i = 0; i < PAGE_ICONS.length; i++) {
+            TabLayout.Tab tab = mTabLayout.getTabAt(i);
+            if (tab != null) {
+                tab.setIcon(PAGE_ICONS[i]);
+                tab.setText(null);
+                tab.setContentDescription(PAGE_TITLES[i]);
+            }
+        }
         setUpViewPagerFragmentBehaviors();
+    }
+
+    public void showPage(int position) {
+        if (mViewPager == null || position < 0 || position >= PAGE_TITLES.length) return;
+        mShowingHome = false;
+        findViewById(R.id.home_content).setVisibility(View.GONE);
+        mViewPager.setVisibility(View.VISIBLE);
+        mTabLayout.setVisibility(View.VISIBLE);
+        mFab.setVisibility(View.VISIBLE);
+        mViewPager.setCurrentItem(position);
+        Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(R.string.app_name);
+        updateHomeMenuState();
+        mDrawerLayout.closeDrawer(GravityCompat.START);
+    }
+
+    public void showHome() {
+        mShowingHome = true;
+        View home = findViewById(R.id.home_content);
+        if (home != null) home.setVisibility(View.VISIBLE);
+        if (mViewPager != null) mViewPager.setVisibility(View.GONE);
+        if (mTabLayout != null) mTabLayout.setVisibility(View.GONE);
+        if (mFab != null) mFab.setVisibility(View.GONE);
+        Toolbar toolbar = findViewById(R.id.toolbar);
+        if (toolbar != null) toolbar.setTitle(R.string.app_name);
+        updateHomeMenuState();
+        if (mDrawerLayout != null) mDrawerLayout.closeDrawer(GravityCompat.START);
     }
 
     private void setUpViewPagerFragmentBehaviors() {
@@ -206,12 +367,10 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
 
-    @Click(R.id.setting)
     void startSettingActivity() {
-        startActivity(new Intent(this, SettingsActivity_.class));
+        startActivity(new Intent(this, SettingsActivity.class));
     }
 
-    @Click(R.id.exit)
     public void exitCompletely() {
         finish();
         FloatyWindowManger.hideCircularMenu();
@@ -229,6 +388,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     protected void onResume() {
         super.onResume();
         mVersionGuard.checkForDeprecatesAndUpdates();
+        refreshServiceStatus();
     }
 
     @Override
@@ -272,9 +432,18 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
     @Override
     public void onBackPressed() {
-        Fragment fragment = mPagerAdapter.getStoredFragment(mViewPager.getCurrentItem());
-        if (fragment instanceof BackPressedHandler) {
-            if (((BackPressedHandler) fragment).onBackPressed(this)) {
+        if (mDrawerLayout.isDrawerOpen(GravityCompat.START)) {
+            mDrawerLayout.closeDrawer(GravityCompat.START);
+            return;
+        }
+        if (!mShowingHome) {
+            Fragment fragment = mPagerAdapter.getStoredFragment(mViewPager.getCurrentItem());
+            if (fragment instanceof BackPressedHandler
+                    && ((BackPressedHandler) fragment).onBackPressed(this)) {
+                return;
+            }
+            if (mViewPager.getCurrentItem() != 0) {
+                showPage(0);
                 return;
             }
         }
@@ -303,9 +472,17 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.menu_main, menu);
         MenuItem searchMenuItem = menu.findItem(R.id.action_search);
+        mSearchMenuItem = searchMenuItem;
         mLogMenuItem = menu.findItem(R.id.action_log);
         setUpSearchMenuItem(searchMenuItem);
+        updateHomeMenuState();
         return true;
+    }
+
+    private void updateHomeMenuState() {
+        if (mSearchMenuItem != null) {
+            mSearchMenuItem.setVisible(!mShowingHome);
+        }
     }
 
 
@@ -319,8 +496,12 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             if (mDocsSearchItemExpanded) {
                 submitForwardQuery();
             } else {
-                LogActivity_.intent(this).start();
+                startActivity(new Intent(this, LogActivity.class));
             }
+            return true;
+        }
+        if (item.getItemId() == R.id.action_documentation) {
+            startActivity(new Intent(this, DocumentationActivity.class));
             return true;
         }
         return super.onOptionsItemSelected(item);
