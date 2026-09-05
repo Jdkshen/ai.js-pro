@@ -203,14 +203,13 @@ class MiuixLogActivity : ComponentActivity() {
                         .shadow(24.dp, RoundedCornerShape(16.dp))
                         .clip(RoundedCornerShape(16.dp))
                         .background(MiuixTheme.colorScheme.surface)
-                        .padding(6.dp)
+                        .padding(4.dp)
                 ) {
                     levels.forEachIndexed { i, (name, _) ->
                         Text(name,
-                            fontSize = 16.sp,
+                            fontSize = 15.sp,
                             color = MiuixTheme.colorScheme.onBackground,
                             modifier = Modifier
-                                .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (i == levelIndex) MiuixTheme.colorScheme.surfaceVariant
                                 else Color.Transparent)
@@ -219,7 +218,7 @@ class MiuixLogActivity : ComponentActivity() {
                                     consoleView?.setMinimumLogLevel(levels[i].second)
                                     levelsOpen = false
                                 }
-                                .padding(horizontal = 16.dp, vertical = 12.dp))
+                                .padding(horizontal = 18.dp, vertical = 9.dp))
                     }
                 }
             }
