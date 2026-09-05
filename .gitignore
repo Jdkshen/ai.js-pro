@@ -12,6 +12,7 @@
 /.gradle/
 /build/
 **/build/
+/**/.kotlin/
 **/.gradle/
 **/.externalNativeBuild/
 **/.cxx/
