@@ -30,6 +30,11 @@ public class ExplorerViewHelper {
         return TYPE_JAVASCRIPT.equals(item.getType());
     }
 
+    public static boolean usesCodeIcon(ExplorerItem item) {
+        String name = item.getName().toLowerCase(java.util.Locale.ROOT);
+        return isJavaScript(item) || name.endsWith(".json");
+    }
+
     public static String getIconText(ExplorerItem item) {
         String type = item.getType();
         if (type.isEmpty()) {
@@ -48,10 +53,13 @@ public class ExplorerViewHelper {
     public static int getIconColor(ExplorerItem item) {
         switch (item.getType()) {
             case TYPE_JAVASCRIPT:
-                return Color.rgb(4, 9, 11);
+                return Color.rgb(76, 175, 80);
             case TYPE_AUTO_FILE:
                 return getColor(GlobalAppContext.get(), R.color.color_r);
             default:
+                if (item.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".json")) {
+                    return Color.rgb(4, 9, 11);
+                }
                 return Color.GRAY;
         }
     }

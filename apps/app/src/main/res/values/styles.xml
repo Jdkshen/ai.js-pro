@@ -20,10 +20,11 @@
         <item name="drawer_group_text_color">@color/drawer_menu_group_text_color</item>
     </style>
 
-    <style name="ToolBarStyle" parent="ThemeOverlay.Material3.Dark">
-        <item name="android:textColorPrimary">@color/toolbar</item>
-        <item name="android:textColorSecondary">@color/toolbar</item>
-        <item name="actionMenuTextColor">@color/toolbar</item>
+    <style name="ToolBarStyle" parent="ThemeOverlay.Material3.Light">
+        <item name="android:textColorPrimary">?attr/colorOnSurface</item>
+        <item name="android:textColorSecondary">?attr/colorOnSurfaceVariant</item>
+        <item name="actionMenuTextColor">?attr/colorOnSurface</item>
+        <item name="colorControlNormal">?attr/colorOnSurfaceVariant</item>
     </style>
 
     <style name="EditorTheme" parent="AppTheme">
@@ -82,6 +83,14 @@
         <item name="android:textColorSecondary">?attr/colorOnPrimary</item>
         <item name="actionMenuTextColor">?attr/colorOnPrimary</item>
         <item name="titleTextColor">?attr/colorOnPrimary</item>
+        <item name="titleTextAppearance">@style/HomeToolbarTitle</item>
+    </style>
+
+    <style name="MainToolbarStyleLight" parent="ThemeOverlay.Material3.Light">
+        <item name="android:textColorPrimary">?attr/colorOnSurface</item>
+        <item name="android:textColorSecondary">?attr/colorOnSurfaceVariant</item>
+        <item name="actionMenuTextColor">?attr/colorOnSurface</item>
+        <item name="titleTextColor">?attr/colorOnSurface</item>
         <item name="titleTextAppearance">@style/HomeToolbarTitle</item>
     </style>
 

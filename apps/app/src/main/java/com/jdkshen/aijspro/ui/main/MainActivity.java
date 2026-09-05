@@ -21,10 +21,12 @@ import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
 
 import com.google.android.material.tabs.TabLayout;
+import com.google.android.material.appbar.AppBarLayout;
 import com.stardust.app.FragmentPagerAdapterBuilder;
 import com.stardust.app.OnActivityResultDelegate;
 import com.stardust.autojs.core.permission.OnRequestPermissionsResultCallback;
@@ -76,6 +78,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     ViewPager mViewPager;
 
     FloatingActionButton mFab;
+    View mMiuixFab;
 
     TabLayout mTabLayout;
 
@@ -124,6 +127,8 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         setContentView(R.layout.activity_main);
         bindViews();
         setUpViews();
+        installMiuixNavigationIfNeeded();
+        installMiuixFabIfNeeded();
         // Match the familiar Auto.js Pro startup flow: scripts are the primary
         // workspace. The service dashboard remains available from the drawer.
         showPage(0);
@@ -131,11 +136,22 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private void syncStatusBarWithAppBar() {
-        getWindow().setStatusBarColor(getColor(R.color.colorPrimaryDark));
+        if (BuildConfig.MIUIX_PILOT) {
+            // Miuix navigation/status colors are installed by installMiuixNavigationIfNeeded.
+            return;
+        }
+        int surface = com.google.android.material.color.MaterialColors.getColor(
+                findViewById(R.id.app_bar), com.google.android.material.R.attr.colorSurface);
+        getWindow().setStatusBarColor(surface);
+        getWindow().setNavigationBarColor(surface);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             View decorView = getWindow().getDecorView();
-            decorView.setSystemUiVisibility(
-                    decorView.getSystemUiVisibility() & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+            int flags = decorView.getSystemUiVisibility();
+            if (Pref.isNightModeEnabled()) {
+                decorView.setSystemUiVisibility(flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+            } else {
+                decorView.setSystemUiVisibility(flags | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+            }
         }
     }
 
@@ -164,6 +180,9 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
                 R.string.text_floating_window, this::toggleFloatingWindow);
         bindRow(R.id.home_developer, R.drawable.ic_connect_to_pc,
                 R.string.text_quick_developer, this::openDeveloperTools);
+        if (BuildConfig.MIUIX_PILOT) {
+            findViewById(R.id.home_developer).setVisibility(View.GONE);
+        }
         bindRow(R.id.home_exit, R.drawable.ic_close_white_48dp,
                 R.string.text_quick_exit_app, this::exitCompletely);
         TextView version = findViewById(R.id.home_version);
@@ -247,6 +266,92 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         });
     }
 
+    /** Installs the flavor-isolated Compose/Miuix bar while keeping the native pager and lists. */
+    private void installMiuixNavigationIfNeeded() {
+        if (!BuildConfig.MIUIX_PILOT) return;
+        try {
+            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.main.MiuixMainNavigationHost");
+            View bar = (View) host.getMethod("createView", MainActivity.class).invoke(null, this);
+            AppBarLayout appBar = findViewById(R.id.app_bar);
+            Toolbar toolbar = findViewById(R.id.toolbar);
+            toolbar.setVisibility(View.GONE);
+            // Match AijsMiuixTheme backgrounds (light #F7F7F7 / dark black)
+            // so the status bar and tab strip blend with the Miuix navigation bar.
+            int surface = Pref.isNightModeEnabled()
+                    ? android.graphics.Color.BLACK
+                    : android.graphics.Color.rgb(0xF7, 0xF7, 0xF7);
+            int selected = android.graphics.Color.rgb(0, 150, 136);
+            int normal = android.graphics.Color.argb(130, 0, 0, 0);
+            mTabLayout.setBackgroundColor(surface);
+            getWindow().setStatusBarColor(surface);
+            mTabLayout.setTabIconTint(new android.content.res.ColorStateList(
+                    new int[][] { new int[] { android.R.attr.state_selected }, new int[] {} },
+                    new int[] { selected, normal }));
+            appBar.addView(bar, 0, new AppBarLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            // The Miuix shell stays fixed; only the file RecyclerView should scroll.
+            for (int i = 0; i < appBar.getChildCount(); i++) {
+                View child = appBar.getChildAt(i);
+                if (child.getLayoutParams() instanceof AppBarLayout.LayoutParams) {
+                    AppBarLayout.LayoutParams params = (AppBarLayout.LayoutParams) child.getLayoutParams();
+                    params.setScrollFlags(0);
+                    child.setLayoutParams(params);
+                }
+            }
+            appBar.setExpanded(true, false);
+        } catch (Throwable error) {
+            // A broken pilot must fall back to the proven toolbar, not break startup.
+            android.util.Log.e(LOG_TAG, "Unable to install Miuix main navigation", error);
+        }
+    }
+
+    private void installMiuixFabIfNeeded() {
+        if (!BuildConfig.MIUIX_PILOT) return;
+        try {
+            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.main.MiuixMainFabHost");
+            mMiuixFab = (View) host.getMethod("createView", MainActivity.class).invoke(null, this);
+            ViewGroup parent = (ViewGroup) mFab.getParent();
+            androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams params =
+                    new androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            params.gravity = Gravity.END | Gravity.BOTTOM;
+            int margin = (int) (16 * getResources().getDisplayMetrics().density);
+            params.setMargins(margin, margin, margin, margin);
+            parent.addView(mMiuixFab, params);
+            mFab.setAlpha(0f);
+        } catch (Throwable error) {
+            android.util.Log.e(LOG_TAG, "Unable to install Miuix FAB", error);
+        }
+    }
+
+    public void performMainFabClickFromMiuix() {
+        mFab.performClick();
+    }
+
+    public void performMainCreateActionFromMiuix(int position) {
+        Fragment fragment = mPagerAdapter == null ? null
+                : mPagerAdapter.getStoredFragment(mViewPager.getCurrentItem());
+        if (fragment instanceof MyScriptListFragment) {
+            ((MyScriptListFragment) fragment).onClick(null, position);
+        }
+    }
+
+    public void openMainDrawerFromMiuix() {
+        mDrawerLayout.openDrawer(GravityCompat.START);
+    }
+
+    public void openLogFromMiuix() {
+        startActivity(new Intent(this, LogActivity.class));
+    }
+
+    public void openDocumentationFromMiuix() {
+        startActivity(new Intent(this, DocumentationActivity.class));
+    }
+
+    public void submitSearchFromMiuix(String query) {
+        submitQuery(query == null || query.trim().isEmpty() ? null : query.trim());
+    }
+
     private void showAnnunciationIfNeeded() {
         if (!Pref.shouldShowAnnunciation()) {
             return;
@@ -297,7 +402,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     private void setUpTabViewPager() {
         mPagerAdapter = new FragmentPagerAdapterBuilder(this)
                 .add(new MyScriptListFragment(), R.string.text_file)
-                .add(new DocsFragment(), R.string.text_tutorial)
+                .add(createTutorialFragment(), R.string.text_tutorial)
                 .add(new CommunityFragment(), R.string.text_community)
                 .add(new MarketFragment(), R.string.text_market)
                 .add(new TaskManagerFragment(), R.string.text_manage)
@@ -315,6 +420,19 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         setUpViewPagerFragmentBehaviors();
     }
 
+    private ViewPagerFragment createTutorialFragment() {
+        if (BuildConfig.MIUIX_PILOT) {
+            try {
+                return (ViewPagerFragment) Class.forName(
+                        "com.jdkshen.aijspro.ui.sample.MiuixSampleFragment")
+                        .getDeclaredConstructor().newInstance();
+            } catch (Throwable error) {
+                android.util.Log.e(LOG_TAG, "Unable to create Miuix sample page", error);
+            }
+        }
+        return new DocsFragment();
+    }
+
     public void showPage(int position) {
         if (mViewPager == null || position < 0 || position >= PAGE_TITLES.length) return;
         mShowingHome = false;
@@ -322,6 +440,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         mViewPager.setVisibility(View.VISIBLE);
         mTabLayout.setVisibility(View.VISIBLE);
         mFab.setVisibility(View.VISIBLE);
+        if (mMiuixFab != null) mMiuixFab.setVisibility(position == 0 ? View.VISIBLE : View.GONE);
         mViewPager.setCurrentItem(position);
         Toolbar toolbar = findViewById(R.id.toolbar);
         toolbar.setTitle(R.string.app_name);
@@ -336,6 +455,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         if (mViewPager != null) mViewPager.setVisibility(View.GONE);
         if (mTabLayout != null) mTabLayout.setVisibility(View.GONE);
         if (mFab != null) mFab.setVisibility(View.GONE);
+        if (mMiuixFab != null) mMiuixFab.setVisibility(View.GONE);
         Toolbar toolbar = findViewById(R.id.toolbar);
         if (toolbar != null) toolbar.setTitle(R.string.app_name);
         updateHomeMenuState();
@@ -354,6 +474,9 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
             @Override
             public void onPageSelected(int position) {
+                if (mMiuixFab != null) {
+                    mMiuixFab.setVisibility(position == 0 ? View.VISIBLE : View.GONE);
+                }
                 Fragment fragment = mPagerAdapter.getStoredFragment(position);
                 if (fragment == null)
                     return;
@@ -471,6 +594,8 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.menu_main, menu);
+        MenuItem workspace = menu.findItem(R.id.action_imgui_workspace);
+        if (workspace != null && BuildConfig.MIUIX_PILOT) workspace.setVisible(false);
         MenuItem searchMenuItem = menu.findItem(R.id.action_search);
         mSearchMenuItem = searchMenuItem;
         mLogMenuItem = menu.findItem(R.id.action_log);

@@ -29,7 +29,7 @@ import com.jdkshen.aijspro.tool.Observers;
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 
-import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity;
+import com.jdkshen.aijspro.ui.main.MainActivity;
 
 import java.io.File;
 import java.io.IOException;
@@ -210,7 +210,7 @@ public class EditActivity extends BaseActivity implements OnActivityResultDelega
             super.finish();
         }
         if (mNewTask) {
-            startActivity(new Intent(this, ImGuiWorkspaceActivity.class));
+            startActivity(new Intent(this, MainActivity.class));
         }
     }
 

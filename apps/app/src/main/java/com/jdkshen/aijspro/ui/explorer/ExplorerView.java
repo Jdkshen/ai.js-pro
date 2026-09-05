@@ -86,11 +86,11 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     //category是类别，也即"文件", "文件夹"那两个
     protected static final int VIEW_TYPE_CATEGORY = 2;
 
-    private static final int positionOfCategoryDir = 0;
 
     private ExplorerItemList mExplorerItemList = new ExplorerItemList();
     private RecyclerView mExplorerItemListView;
     private ExplorerProjectToolbar mProjectToolbar;
+    private CategoryViewHolder mPinnedCategoryHolder;
     private ExplorerAdapter mExplorerAdapter = new ExplorerAdapter();
     protected OnItemClickListener mOnItemClickListener;
     private Function<ExplorerItem, Boolean> mFilter;
@@ -152,8 +152,9 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     private void setCurrentPageState(ExplorerPageState currentPageState) {
         mCurrentPageState = currentPageState;
         if (mCurrentPageState.page instanceof ExplorerProjectPage) {
-            mProjectToolbar.setVisibility(VISIBLE);
             mProjectToolbar.setProject(currentPageState.page.toScriptFile());
+            // Project actions are exposed from the fixed category bar in the Miuix layout.
+            mProjectToolbar.setVisibility(GONE);
         } else {
             mProjectToolbar.setVisibility(GONE);
         }
@@ -264,6 +265,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         inflate(getContext(), R.layout.explorer_view, this);
         mExplorerItemListView = findViewById(R.id.explorer_item_list);
         mProjectToolbar = findViewById(R.id.project_toolbar);
+        mPinnedCategoryHolder = new CategoryViewHolder(findViewById(R.id.pinned_category));
         initExplorerItemListView();
     }
 
@@ -284,8 +286,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             @Override
             public int getSpanSize(int position) {
                 //For directories
-                if (position > positionOfCategoryDir
-                        && position <= mExplorerItemList.groupCount()) {
+                if (position < mExplorerItemList.groupCount()) {
                     return mDirectorySpanSize;
                 }
                 //For files and category
@@ -312,6 +313,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                 .subscribe(list -> {
                     mExplorerItemList = list;
                     mExplorerAdapter.notifyDataSetChanged();
+                    mPinnedCategoryHolder.bind(true, 0);
                     setRefreshing(false);
                     int scrollY = mCurrentPageState.scrollY;
                     Log.d(LOG_TAG, "loadItemList done, restore scrollY=" + scrollY);
@@ -375,7 +377,16 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
     @Override
     public boolean onMenuItemClick(MenuItem item) {
-        switch (item.getItemId()) {
+        return performExplorerAction(item.getItemId());
+    }
+
+    /** Shared action bridge used by the Miuix menu and the legacy PopupMenu fallback. */
+    public boolean performExplorerActionFromMiuix(int itemId) {
+        return performExplorerAction(itemId);
+    }
+
+    private boolean performExplorerAction(int itemId) {
+        switch (itemId) {
             case R.id.rename:
                 new ScriptOperations(getContext(), this, getCurrentPage())
                         .rename((ExplorerFileItem) mSelectedItem)
@@ -441,6 +452,40 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         return true;
     }
 
+    private boolean showMiuixActionMenu(int[] ids, String[] labels, String title) {
+        try {
+            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.explorer.MiuixExplorerMenuHost");
+            host.getMethod("show", ExplorerView.class, int[].class, String[].class, String.class)
+                    .invoke(null, this, ids, labels, title);
+            return true;
+        } catch (ClassNotFoundException ignored) {
+            return false;
+        } catch (Exception e) {
+            Log.w(LOG_TAG, "Unable to show Miuix explorer menu", e);
+            return false;
+        }
+    }
+
+    private void showProjectActions() {
+        try {
+            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.explorer.MiuixProjectMenuHost");
+            host.getMethod("show", ExplorerView.class).invoke(null, this);
+        } catch (ClassNotFoundException ignored) {
+            mProjectToolbar.edit();
+        } catch (Exception e) {
+            Log.w(LOG_TAG, "Unable to show Miuix project menu", e);
+            mProjectToolbar.edit();
+        }
+    }
+
+    public void runCurrentProjectFromMiuix() { mProjectToolbar.run(); }
+    public void buildCurrentProjectFromMiuix() { mProjectToolbar.build(); }
+    public void syncCurrentProjectFromMiuix() {
+        onRefresh();
+        android.widget.Toast.makeText(getContext(), "项目已同步", android.widget.Toast.LENGTH_SHORT).show();
+    }
+    public void editCurrentProjectFromMiuix() { mProjectToolbar.edit(); }
+
     protected void notifyOperated() {
         if (mOnItemOperatedListener != null) {
             mOnItemOperatedListener.OnItemOperated(mSelectedItem);
@@ -505,23 +550,17 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         @Override
         public void onBindViewHolder(BindableViewHolder<?> holder, int position) {
             BindableViewHolder bindableViewHolder = (BindableViewHolder) holder;
-            if (position == positionOfCategoryDir) {
-                bindableViewHolder.bind(true, position);
-                return;
-            }
-            if (position <= mExplorerItemList.groupCount()) {
-                bindableViewHolder.bind(mExplorerItemList.getItemGroup(position - 1), position);
+            if (position < mExplorerItemList.groupCount()) {
+                bindableViewHolder.bind(mExplorerItemList.getItemGroup(position), position);
                 return;
             }
             bindableViewHolder.bind(mExplorerItemList.getItem(
-                    position - mExplorerItemList.groupCount() - 1), position);
+                    position - mExplorerItemList.groupCount()), position);
         }
 
         @Override
         public int getItemViewType(int position) {
-            if (position == positionOfCategoryDir) {
-                return VIEW_TYPE_CATEGORY;
-            } else if (position <= mExplorerItemList.groupCount()) {
+            if (position < mExplorerItemList.groupCount()) {
                 return VIEW_TYPE_PAGE;
             } else {
                 return VIEW_TYPE_ITEM;
@@ -530,9 +569,9 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
         int getItemPosition(ExplorerItem item, int i) {
             if (item instanceof ExplorerPage) {
-                return i + positionOfCategoryDir + 1;
+                return i;
             }
-            return i + mExplorerItemList.groupCount() + 1;
+            return i + mExplorerItemList.groupCount();
         }
 
         public void notifyItemChanged(ExplorerItem item, int i) {
@@ -549,7 +588,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
         @Override
         public int getItemCount() {
-            return mExplorerItemList.count() + 1;
+            return mExplorerItemList.count();
         }
     }
 
@@ -587,7 +626,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             mFirstChar.setText(ExplorerViewHelper.getIconText(item));
             mFirstCharBackground.setColor(ExplorerViewHelper.getIconColor(item));
             itemView.findViewById(R.id.file_code_icon).setVisibility(
-                    ExplorerViewHelper.isJavaScript(item) ? VISIBLE : GONE);
+                    ExplorerViewHelper.usesCodeIcon(item) ? VISIBLE : GONE);
             mRun.setVisibility(item.isExecutable() ? VISIBLE : GONE);
         }
 
@@ -605,6 +644,25 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
         void showOptionMenu() {
             mSelectedItem = mExplorerItem;
+            java.util.ArrayList<Integer> actionIds = new java.util.ArrayList<>();
+            java.util.ArrayList<String> labels = new java.util.ArrayList<>();
+            if (mExplorerItem.isExecutable()) {
+                addAction(actionIds, labels, R.id.run_repeatedly, R.string.text_run_repeatedly);
+                addAction(actionIds, labels, R.id.timed_task, R.string.text_timed_task);
+                addAction(actionIds, labels, R.id.create_shortcut, R.string.text_send_shortcut);
+                addAction(actionIds, labels, R.id.action_build_apk, R.string.text_build_apk);
+            }
+            if (mExplorerItem.canRename()) addAction(actionIds, labels, R.id.rename, R.string.text_rename);
+            if (mExplorerItem.canDelete()) addAction(actionIds, labels, R.id.delete, R.string.text_delete);
+            addAction(actionIds, labels, R.id.send, R.string.text_send);
+            addAction(actionIds, labels, R.id.open_by_other_apps, R.string.text_open_by_other_apps);
+            if (mExplorerItem instanceof ExplorerSampleItem) {
+                addAction(actionIds, labels, R.id.reset, R.string.text_reset_to_initial_content);
+            }
+            int[] ids = new int[actionIds.size()];
+            for (int i = 0; i < ids.length; i++) ids[i] = actionIds.get(i);
+            if (showMiuixActionMenu(ids, labels.toArray(new String[0]),
+                    ExplorerViewHelper.getDisplayName(mExplorerItem).toString())) return;
             PopupMenu popupMenu = new PopupMenu(getContext(), mOptions);
             popupMenu.inflate(R.menu.menu_script_options);
             Menu menu = popupMenu.getMenu();
@@ -623,6 +681,12 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             }
             popupMenu.setOnMenuItemClickListener(ExplorerView.this);
             popupMenu.show();
+        }
+
+        private void addAction(java.util.List<Integer> ids, java.util.List<String> labels,
+                               int id, int labelRes) {
+            ids.add(id);
+            labels.add(getResources().getString(labelRes));
         }
     }
 
@@ -672,6 +736,11 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
         void showOptionMenu() {
             mSelectedItem = mExplorerPage;
+            int[] ids = {R.id.rename, R.id.delete};
+            String[] labels = {getResources().getString(R.string.text_rename),
+                    getResources().getString(R.string.text_delete)};
+            if (showMiuixActionMenu(ids, labels,
+                    ExplorerViewHelper.getDisplayName(mExplorerPage).toString())) return;
             PopupMenu popupMenu = new PopupMenu(getContext(), mOptions);
             popupMenu.inflate(R.menu.menu_dir_options);
             popupMenu.setOnMenuItemClickListener(ExplorerView.this);
@@ -703,18 +772,23 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             mSortOrder.setOnClickListener(v -> changeSortOrder());
             mSort.setOnClickListener(v -> showSortOptions());
             mGoBack.setOnClickListener(v -> back());
+            mArrow.setOnClickListener(v -> openProjectSettings());
             itemView.findViewById(R.id.title_container).setOnClickListener(v -> collapseOrExpand());
         }
 
         @Override
         public void bind(Boolean isDirCategory, int position) {
-            if (isDirCategory) {
+            boolean projectPage = mCurrentPageState.page instanceof ExplorerProjectPage;
+            if (projectPage) {
+                mTitle.setText(mCurrentPageState.page.getName());
+            } else if (isDirCategory) {
                 mTitle.setText(buildBreadcrumbTitle());
             } else {
                 mTitle.setText(R.string.text_file);
             }
             mIsDir = isDirCategory;
-            mArrow.setVisibility(isDirCategory ? GONE : VISIBLE);
+            mArrow.setVisibility(projectPage ? VISIBLE : GONE);
+            if (projectPage) mArrow.setImageResource(R.drawable.ic_project_compass_24dp);
             mGoBack.setVisibility(isDirCategory ? VISIBLE : GONE);
             mGoBack.setEnabled(canGoBack());
             mGoBack.setAlpha(canGoBack() ? 1f : 0.38f);
@@ -753,7 +827,15 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         }
 
         void collapseOrExpand() {
-            // The Pro-style explorer uses a single combined list: directories first, then files.
+            if (mCurrentPageState.page instanceof ExplorerProjectPage) {
+                openProjectSettings();
+            }
+        }
+
+        void openProjectSettings() {
+            if (mCurrentPageState.page instanceof ExplorerProjectPage) {
+                showProjectActions();
+            }
         }
     }
 

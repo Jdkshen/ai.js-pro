@@ -18,14 +18,14 @@
             android:id="@+id/app_bar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="?attr/colorPrimary">
+            android:background="?attr/colorSurface">
 
             <com.google.android.material.appbar.MaterialToolbar
                 android:id="@+id/toolbar"
                 android:layout_width="match_parent"
                 android:layout_height="56dp"
-                android:background="?attr/colorPrimary"
-                android:theme="@style/MainToolbarStyle"
+                android:background="?attr/colorSurface"
+                android:theme="@style/MainToolbarStyleLight"
                 android:title="@string/app_name"
                 app:titleMarginStart="16dp"
                 app:layout_scrollFlags="scroll|enterAlways"
@@ -35,16 +35,16 @@
                 android:id="@+id/tab"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
-                android:background="?attr/colorPrimary"
+                android:background="?attr/colorSurface"
                 android:visibility="gone"
                 app:tabGravity="fill"
                 app:tabIconTint="@color/main_tab_icon"
-                app:tabIndicatorColor="?attr/colorOnPrimary"
+                app:tabIndicatorColor="?attr/colorPrimary"
                 app:tabIndicatorFullWidth="false"
                 app:tabIndicatorHeight="3dp"
                 app:tabMode="fixed"
                 app:tabRippleColor="@color/main_tab_ripple"
-                app:tabSelectedTextColor="?attr/colorOnPrimary"
+                app:tabSelectedTextColor="?attr/colorPrimary"
                 app:tabTextColor="@color/main_tab_icon"/>
 
         </com.google.android.material.appbar.AppBarLayout>

@@ -66,9 +66,20 @@ public abstract class BaseActivity extends AppCompatActivity {
         super.onStart();
         if (shouldApplyThemeColorToStatusBar()
                 && (getWindow().getDecorView().getSystemUiVisibility() & View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) == 0) {
-            ThemeColorManager.addActivityStatusBar(this);
+            // Miuix-style light status bar matching the surface-colored app bar.
+            int surface = com.google.android.material.color.MaterialColors.getColor(
+                    findViewById(android.R.id.content), com.google.android.material.R.attr.colorSurface);
+            getWindow().setStatusBarColor(surface);
+            getWindow().setNavigationBarColor(surface);
+            if (Build.VERSION.SDK_INT >= 23) {
+                int flags = getWindow().getDecorView().getSystemUiVisibility();
+                if (Pref.isNightModeEnabled()) {
+                    getWindow().getDecorView().setSystemUiVisibility(flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+                } else {
+                    getWindow().getDecorView().setSystemUiVisibility(flags | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+                }
+            }
         }
-
     }
 
     /**

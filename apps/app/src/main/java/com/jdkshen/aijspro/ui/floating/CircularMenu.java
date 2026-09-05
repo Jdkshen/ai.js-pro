@@ -28,7 +28,7 @@ import com.jdkshen.aijspro.tool.RootTool;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutBoundsFloatyWindow;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutHierarchyFloatyWindow;
-import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity;
+import com.jdkshen.aijspro.ui.main.MainActivity;
 import com.jdkshen.aijspro.ui.explorer.ExplorerView;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 
@@ -304,7 +304,7 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
 
     void openLauncher() {
         dismissSettingsDialog();
-        mContext.startActivity(new Intent(mContext, ImGuiWorkspaceActivity.class)
+        mContext.startActivity(new Intent(mContext, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     }
 

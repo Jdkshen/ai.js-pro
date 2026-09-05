@@ -16,7 +16,7 @@ import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
 
 import com.jdkshen.aijspro.R;
-import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity;
+import com.jdkshen.aijspro.ui.main.MainActivity;
 
 public class ForegroundService extends Service {
 
@@ -90,7 +90,7 @@ public class ForegroundService extends Service {
             createNotificationChannel();
         }
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
-                new Intent(this, ImGuiWorkspaceActivity.class), 0);
+                new Intent(this, MainActivity.class), 0);
         return new NotificationCompat.Builder(this, CHANEL_ID)
                 .setContentTitle(getString(R.string.foreground_notification_title))
                 .setContentText(getString(R.string.foreground_notification_text))

@@ -266,6 +266,27 @@ public class ScriptOperations {
         }
     }
 
+    /** Imports a bundled sample with a name supplied by a flavor-specific UI. */
+    public Observable<String> importSampleWithName(SampleFile sample, String name) {
+        try {
+            final InputStream inputStream = sample.openInputStream();
+            final String ext = sample.getExtension();
+            final String safeName = PFiles.getNameWithoutExtension(name);
+            return Observable.fromCallable(() -> {
+                        final String pathTo = getCurrentDirectoryPath() + safeName + "." + ext;
+                        if (!PFiles.copyStream(inputStream, pathTo)) {
+                            throw new IOException(getString(R.string.text_import_fail).toString());
+                        }
+                        notifyFileCreated(mCurrentDirectory, new ScriptFile(pathTo));
+                        return pathTo;
+                    })
+                    .subscribeOn(Schedulers.io())
+                    .observeOn(AndroidSchedulers.mainThread());
+        } catch (IOException e) {
+            return Observable.error(e);
+        }
+    }
+
     public Observable<ExplorerFileItem> rename(final ExplorerFileItem item) {
         String originalName = item.getName();
         return showNameInputDialog(originalName, new InputCallback(null, originalName))

@@ -17,20 +17,13 @@
         android:orientation="horizontal"
         android:paddingStart="8dp">
 
-        <ImageView
-            android:id="@+id/collapse"
-            android:layout_width="40dp"
-            android:layout_height="48dp"
-            android:layout_gravity="center_vertical"
-            android:padding="12dp"
-            android:src="@drawable/ic_expanded"
-            android:tint="#828384"/>
-
         <TextView
             android:id="@+id/title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_vertical"
+            android:ellipsize="end"
+            android:maxLines="1"
             android:text="@string/text_directory"
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="14sp"/>
@@ -46,6 +39,17 @@
         android:clickable="true"
         android:padding="12dp"
         android:src="@drawable/ic_dir_up"
+        android:tint="#828384"/>
+
+    <ImageView
+        android:id="@+id/collapse"
+        android:layout_width="48dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="center_vertical"
+        android:background="?selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:padding="12dp"
+        android:src="@drawable/ic_project_compass_24dp"
         android:tint="#828384"/>
 
     <ImageView

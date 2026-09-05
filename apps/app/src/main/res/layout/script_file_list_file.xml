@@ -13,17 +13,17 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
-        android:minHeight="66dp"
+        android:minHeight="60dp"
         android:orientation="horizontal"
         android:paddingStart="16dp">
 
         <FrameLayout
-            android:layout_width="48dp"
-            android:layout_height="48dp">
+            android:layout_width="44dp"
+            android:layout_height="44dp">
         <TextView
             android:id="@+id/first_char"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:background="@drawable/circle_light_green"
             android:gravity="center"
             android:textColor="@android:color/white"
@@ -31,8 +31,8 @@
             tools:text="J" />
         <ImageView
             android:id="@+id/file_code_icon"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
             android:layout_gravity="center"
             android:src="@drawable/ic_code_file_24dp"
             android:visibility="gone" />
@@ -41,7 +41,7 @@
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
+            android:layout_marginStart="14dp"
             android:layout_weight="1"
             android:orientation="vertical"
             android:paddingTop="5dp"
@@ -54,7 +54,7 @@
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textColor="?attr/colorOnSurface"
-                android:textSize="14sp"
+                android:textSize="15sp"
                 tools:text="main.js" />
 
             <TextView
@@ -93,7 +93,7 @@
     <View
         android:layout_width="match_parent"
         android:layout_height="1px"
-        android:layout_marginStart="80dp"
+        android:layout_marginStart="74dp"
         android:background="@color/m3_list_divider" />
 
 </LinearLayout>

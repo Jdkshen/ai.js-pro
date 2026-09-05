@@ -10,13 +10,13 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="?attr/colorSurface"
-        app:theme="@style/MainToolbarStyle">
+        app:theme="@style/MainToolbarStyleLight">
 
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            android:theme="@style/MainToolbarStyle"
+            android:theme="@style/MainToolbarStyleLight"
             app:title="@string/text_quick_service"/>
     </com.google.android.material.appbar.AppBarLayout>
 

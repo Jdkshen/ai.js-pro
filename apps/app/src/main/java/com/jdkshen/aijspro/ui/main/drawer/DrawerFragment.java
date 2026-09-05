@@ -703,6 +703,10 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onDrawerOpen(MainActivity.DrawerOpenEvent event) {
+        if (mMiuixDrawerView != null) {
+            refreshMiuixDrawer();
+            return;
+        }
         if (mCommunityDrawerMenu.isShown()) {
             mCommunityDrawerMenu.refreshNotificationCount(mDrawerMenuAdapter);
         }
@@ -734,12 +738,28 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
 
     private void setProgress(DrawerMenuItem item, boolean progress) {
         item.setProgress(progress);
-        mDrawerMenuAdapter.notifyItemChanged(item);
+        if (mDrawerMenuAdapter != null) {
+            mDrawerMenuAdapter.notifyItemChanged(item);
+        } else {
+            refreshMiuixDrawer();
+        }
     }
 
     private void setChecked(DrawerMenuItem item, boolean checked) {
         item.setChecked(checked);
-        mDrawerMenuAdapter.notifyItemChanged(item);
+        if (mDrawerMenuAdapter != null) {
+            mDrawerMenuAdapter.notifyItemChanged(item);
+        } else {
+            refreshMiuixDrawer();
+        }
+    }
+
+    private void refreshMiuixDrawer() {
+        if (mMiuixDrawerView == null) return;
+        Object refresh = mMiuixDrawerView.getTag();
+        if (refresh instanceof Runnable) {
+            ((Runnable) refresh).run();
+        }
     }
 
     private boolean isAccessibilityServiceEnabled() {

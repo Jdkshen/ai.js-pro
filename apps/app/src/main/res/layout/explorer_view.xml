@@ -18,8 +18,14 @@
         app:cardUseCompatPadding="true"
         android:layout_height="wrap_content"/>
 
+    <include
+        android:id="@+id/pinned_category"
+        layout="@layout/script_file_list_category" />
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/explorer_item_list"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"/>
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"/>
 </LinearLayout>

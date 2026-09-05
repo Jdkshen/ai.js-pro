@@ -27,7 +27,6 @@ import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.jdkshen.aijspro.tool.AccessibilityServiceTool
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger
-import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity
 import com.stardust.notification.NotificationListenerService
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.extra.SuperArrow
@@ -131,10 +130,6 @@ class MiuixServiceActivity : ComponentActivity() {
                     SuperArrow(title = "电池优化", summary = "减少后台运行受到的限制",
                         rightText = if (battery) "不受限制" else "系统管理",
                         onClick = { openSettings(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) })
-                }
-                Card(Modifier.fillMaxWidth()) {
-                    SuperArrow(title = "开发工作台", summary = "打开 ImGui 调试与图像工具",
-                        onClick = { startActivity(Intent(this@MiuixServiceActivity, ImGuiWorkspaceActivity::class.java)) })
                 }
                 Text("AI.js Pro · ${BuildConfig.VERSION_NAME}",
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
