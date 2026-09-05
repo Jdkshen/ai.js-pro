@@ -209,12 +209,6 @@ class MiuixSettingsActivity : ComponentActivity() {
                         onCheckedChange = { putBoolPref(R.string.key_stable_mode, it); revision++ })
                 }
 
-                SmallTitle(getString(R.string.text_appearance))
-                Card(Modifier.fillMaxWidth()) {
-                    SuperArrow(title = getString(R.string.text_theme_color),
-                        onClick = { SettingsActivity.selectThemeColor(this@MiuixSettingsActivity) })
-                }
-
                 SmallTitle(getString(R.string.text_others))
                 Card(Modifier.fillMaxWidth()) {
                     SuperDropdown(title = getString(R.string.text_documentation_source),

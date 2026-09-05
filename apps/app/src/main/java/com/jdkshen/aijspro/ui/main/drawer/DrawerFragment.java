@@ -354,10 +354,6 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
         }
     }
 
-    public void openThemeColorSettingsFromDrawer() {
-        SettingsActivity.selectThemeColor(getActivity());
-    }
-
     public boolean isRemoteConnected() {
         return DevPluginService.getInstance().isConnected();
     }

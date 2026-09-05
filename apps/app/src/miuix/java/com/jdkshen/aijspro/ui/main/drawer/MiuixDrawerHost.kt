@@ -153,8 +153,6 @@ object MiuixDrawerHost {
                         onClick = {
                             if (connected.value) host.disconnectRemote() else host.openRemoteConnection()
                         })
-                    SuperArrow(title = "主题色",
-                        onClick = { host.openThemeColorSettingsFromDrawer() })
                     SuperSwitch(title = "夜间模式", summary = "切换深色界面",
                         checked = nightMode.value,
                         onCheckedChange = {
