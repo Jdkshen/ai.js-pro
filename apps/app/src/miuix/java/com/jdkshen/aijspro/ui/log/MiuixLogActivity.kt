@@ -10,13 +10,10 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -59,8 +56,6 @@ import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.icons.Check
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -208,28 +203,23 @@ class MiuixLogActivity : ComponentActivity() {
                         .shadow(24.dp, RoundedCornerShape(16.dp))
                         .clip(RoundedCornerShape(16.dp))
                         .background(MiuixTheme.colorScheme.surface)
-                        .padding(vertical = 6.dp)
+                        .padding(6.dp)
                 ) {
                     levels.forEachIndexed { i, (name, _) ->
-                        Row(
-                            Modifier.clickable {
-                                levelIndex = i
-                                consoleView?.setMinimumLogLevel(levels[i].second)
-                                levelsOpen = false
-                            }.fillMaxWidth().padding(horizontal = 24.dp, vertical = 13.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(name,
-                                fontSize = 16.sp,
-                                color = if (i == levelIndex) MiuixTheme.colorScheme.primary
-                                else MiuixTheme.colorScheme.onBackground)
-                            if (i == levelIndex) {
-                                Spacer(Modifier.width(10.dp))
-                                Icon(MiuixIcons.Check, contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MiuixTheme.colorScheme.primary)
-                            }
-                        }
+                        Text(name,
+                            fontSize = 16.sp,
+                            color = MiuixTheme.colorScheme.onBackground,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (i == levelIndex) MiuixTheme.colorScheme.surfaceVariant
+                                else Color.Transparent)
+                                .clickable {
+                                    levelIndex = i
+                                    consoleView?.setMinimumLogLevel(levels[i].second)
+                                    levelsOpen = false
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp))
                     }
                 }
             }
