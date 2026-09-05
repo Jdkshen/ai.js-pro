@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.ui.main.drawer
 
 import android.view.View
 import android.view.ViewGroup
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -22,13 +24,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jdkshen.aijspro.R
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -39,6 +44,7 @@ import top.yukonga.miuix.kmp.extra.SuperArrow
 import top.yukonga.miuix.kmp.extra.SuperSwitch
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.icons.ArrowRight
+import top.yukonga.miuix.kmp.icon.icons.Settings
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -220,28 +226,50 @@ object MiuixDrawerHost {
                             })
                     }
                 }
-                Card(Modifier.fillMaxWidth()) {
-                    SuperArrow(title = "检查更新",
-                        onClick = { host.checkForUpdatesFromDrawer() })
-                }
+                BasicComponent(
+                    title = "设置",
+                    leftAction = {
+                        Icon(
+                            imageVector = MiuixIcons.Settings,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MiuixTheme.colorScheme.onBackgroundVariant
+                        )
+                        Spacer(Modifier.width(12.dp))
+                    },
+                    onClick = { host.openSettingsFromDrawer() }
+                )
+                BasicComponent(
+                    title = "检查更新",
+                    leftAction = {
+                        Image(
+                            painter = painterResource(R.drawable.ic_check_for_updates),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onBackgroundVariant)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                    },
+                    onClick = { host.checkForUpdatesFromDrawer() }
+                )
+                BasicComponent(
+                    title = "退出",
+                    leftAction = {
+                        Image(
+                            painter = painterResource(R.drawable.ic_ali_exit),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onBackgroundVariant)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                    },
+                    onClick = { host.exitAppFromDrawer() }
+                )
                 Text("AI.js Pro · ${com.jdkshen.aijspro.BuildConfig.VERSION_NAME}",
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     fontSize = 12.sp,
-                    modifier = Modifier.padding(start = 8.dp, bottom = 24.dp))
-            }
-
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Button(onClick = { host.openSettingsFromDrawer() }, modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColorsPrimary()) {
-                    Text("设置")
-                }
-                Button(onClick = { host.exitAppFromDrawer() }, modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColorsPrimary()) {
-                    Text("退出")
-                }
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
+                    textAlign = TextAlign.Center)
             }
         }
     }
