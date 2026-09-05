@@ -14,5 +14,7 @@
             android:exported="false" />
         <activity android:name="com.jdkshen.aijspro.ui.log.MiuixLogActivity"
             android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.main.MiuixSearchActivity"
+            android:exported="false" />
     </application>
 </manifest>

@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.ui.main
 
+import android.content.Intent
 import android.view.View
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -38,8 +39,6 @@ object MiuixMainNavigationHost {
 
     @Composable
     private fun MainBar(host: MainActivity) {
-        val searchShown = remember { mutableStateOf(false) }
-        val query = remember { mutableStateOf(TextFieldValue("")) }
         Row(
             Modifier.fillMaxWidth().height(56.dp)
                 .background(MiuixTheme.colorScheme.background)
@@ -47,27 +46,17 @@ object MiuixMainNavigationHost {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Action(R.drawable.ic_menu_hamburger, "菜单", host::openMainDrawerFromMiuix)
-            if (searchShown.value) {
-                TextField(value = query.value, onValueChange = {
-                    query.value = it
-                    host.submitSearchFromMiuix(it.text)
-                }, modifier = Modifier.weight(1f).padding(horizontal = 8.dp), singleLine = true)
-                Action(R.drawable.ic_close_white_48dp, "关闭搜索") {
-                    query.value = TextFieldValue("")
-                    host.submitSearchFromMiuix("")
-                    searchShown.value = false
-                }
-            } else {
-                Text(
-                    text = "AI.js Pro",
-                    fontSize = 22.sp,
-                    color = MiuixTheme.colorScheme.onBackground,
-                    modifier = Modifier.weight(1f).padding(start = 14.dp)
-                )
-                Action(R.drawable.ic_code_white_24dp, "工作台", host::openImguiFromMiuix)
-                Action(R.drawable.ic_log_white_24dp, "日志", host::openLogFromMiuix)
-                Action(R.drawable.ic_bookmark_white_24dp, "文档", host::openDocumentationFromMiuix)
-                Action(R.drawable.ic_search_white_24dp, "搜索") { searchShown.value = true }
+            Text(
+                text = "AI.js Pro",
+                fontSize = 22.sp,
+                color = MiuixTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f).padding(start = 14.dp)
+            )
+            Action(R.drawable.ic_code_white_24dp, "工作台", host::openImguiFromMiuix)
+            Action(R.drawable.ic_log_white_24dp, "日志", host::openLogFromMiuix)
+            Action(R.drawable.ic_bookmark_white_24dp, "文档", host::openDocumentationFromMiuix)
+            Action(R.drawable.ic_search_white_24dp, "搜索") {
+                host.startActivity(Intent(host, MiuixSearchActivity::class.java))
             }
         }
     }
