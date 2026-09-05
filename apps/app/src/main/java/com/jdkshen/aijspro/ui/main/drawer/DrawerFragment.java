@@ -42,6 +42,7 @@ import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.floating.CircularMenu;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
+import com.jdkshen.aijspro.ui.imgui.EmbeddedTerminalActivity;
 import com.jdkshen.aijspro.network.NodeBB;
 import com.jdkshen.aijspro.network.VersionService;
 import com.jdkshen.aijspro.network.api.UserApi;
@@ -341,6 +342,23 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
 
     public boolean isNightModePrefEnabled() {
         return Pref.isNightModeEnabled();
+    }
+
+    public boolean isFollowSystemEnabled() {
+        return Pref.isFollowSystemThemeEnabled();
+    }
+
+    public void setFollowSystemEnabled(boolean enabled) {
+        Pref.setFollowSystemThemeEnabled(enabled);
+    }
+
+    public void openTerminal() {
+        if (getContext() == null) {
+            return;
+        }
+        Intent intent = new Intent(getContext(), EmbeddedTerminalActivity.class)
+                .putExtra(EmbeddedTerminalActivity.EXTRA_WORKING_DIRECTORY, Pref.getScriptDirPath());
+        startActivity(intent);
     }
 
     public void setNightModePrefEnabled(boolean enabled) {

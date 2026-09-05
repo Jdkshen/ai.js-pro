@@ -59,6 +59,15 @@ public class Pref {
         return def().getBoolean(getString(R.string.key_night_mode), false);
     }
 
+    /** Dark theme follows the system appearance (key kept as plain string, no M3 resource). */
+    public static boolean isFollowSystemThemeEnabled() {
+        return def().getBoolean("follow_system_theme", false);
+    }
+
+    public static void setFollowSystemThemeEnabled(boolean enabled) {
+        def().edit().putBoolean("follow_system_theme", enabled).apply();
+    }
+
     public static boolean isFirstGoToAccessibilitySetting() {
         return getDisposableBoolean("isFirstGoToAccessibilitySetting", true);
     }

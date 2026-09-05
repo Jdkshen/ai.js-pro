@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
@@ -28,23 +29,36 @@ private val CYAN_300 = Color(0xFF4DD0E1)
 private val CYAN_900 = Color(0xFF006064)
 
 /**
- * Observable dark-mode flag so every Miuix surface repaints immediately when the
- * in-app night mode switch is toggled (Pref changes are not Compose state by themselves).
+ * Observable theme flags so every Miuix surface repaints immediately when the
+ * in-app night mode or follow-system switches change (Pref changes are not
+ * Compose state by themselves).
  */
 object AijsMiuixThemeState {
     val dark = mutableStateOf(Pref.isNightModeEnabled())
+    val followSystem = mutableStateOf(Pref.isFollowSystemThemeEnabled())
 }
 
 fun isAijsDarkTheme(): Boolean = AijsMiuixThemeState.dark.value
+
+fun isAijsFollowSystemTheme(): Boolean = AijsMiuixThemeState.followSystem.value
 
 fun refreshMiuixDarkTheme() {
     AijsMiuixThemeState.dark.value = Pref.isNightModeEnabled()
 }
 
+fun refreshMiuixFollowSystemTheme() {
+    AijsMiuixThemeState.followSystem.value = Pref.isFollowSystemThemeEnabled()
+}
+
 @Composable
 fun AijsMiuixTheme(content: @Composable () -> Unit) {
+    val dark = if (AijsMiuixThemeState.followSystem.value) {
+        isSystemInDarkTheme()
+    } else {
+        AijsMiuixThemeState.dark.value
+    }
     MiuixTheme(
-        colors = if (isAijsDarkTheme()) aijsDarkColors() else aijsLightColors(),
+        colors = if (dark) aijsDarkColors() else aijsLightColors(),
         content = content
     )
 }
