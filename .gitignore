@@ -8,6 +8,9 @@
 /local.properties
 /tools/
 
+# CodeGraph local index (regenerate with `codegraph init`)
+/.codegraph/
+
 # Gradle and native build caches
 /.gradle/
 /build/
