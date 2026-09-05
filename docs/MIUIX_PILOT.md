@@ -15,14 +15,16 @@
 | 文档 | `ui/doc/MiuixDocumentationActivity.kt` | `DocumentationActivity` 按 `BuildConfig.MIUIX_PILOT` 跳转（URL extra 透传） |
 | 日志 | `ui/log/MiuixLogActivity.kt` | `LogActivity` 按 `BuildConfig.MIUIX_PILOT` 跳转（复用 ConsoleView/ConsoleImpl + 清空按钮） |
 
-主题统一：新增 `theme/AijsMiuixTheme.kt` 作为所有 Miuix 页面的单一主题入口——深浅色跟随应用内夜间模式开关（`Pref.isNightModeEnabled()`，与 `BaseActivity` 一致，不跟随系统）；主色浅色 `#009688` / 深色 `#4DD0E1`（与 `colors.xml`/`values-night` 对齐）。所有 `Button`/`TextButton` 显式使用 `buttonColorsPrimary()`/`textButtonColorsPrimary()`（Miuix 默认按钮为灰色 `secondaryVariant`，不显式使用则与开关颜色不一致——已统一为主题主色）。
+| 日志 | `ui/log/MiuixLogActivity.kt` | `LogActivity` 按 `BuildConfig.MIUIX_PILOT` 跳转（复用 ConsoleView/ConsoleImpl；顶栏级别下拉/搜索/分享/清空 + 右下角清空 FAB，配色跟随 Miuix 主题） |
 
-抽屉说明：`DrawerFragment`（main 源集）增加 `BuildConfig.MIUIX_PILOT` 分支——通过反射调用 miuix 源集的 `MiuixDrawerHost.createView()` 返回 ComposeView（304dp），内容为 Miuix 用户卡 + 服务/录制/其他三组卡片 + 底部设置/退出按钮；`DrawerFragment` 暴露约 15 个 public 桥接方法复用原有全部逻辑（无障碍/稳定模式/通知/前台/统计/悬浮窗/音量键/夜间/主题色/连接/检查更新/设置/退出/用户区），`onResume` 经 View tag 的 Runnable 刷新 Compose 状态。同时 `MainActivity.bindViews()` 对 `setting`/`exit` 判空（Miuix 模式无这两个 id）。验证：抽屉打开、首屏各条目与 summary 渲染正常、无崩溃。截图 `.artifacts/miuix-drawer.png`。
+主题统一：新增 `theme/AijsMiuixTheme.kt` 作为所有 Miuix 页面的单一主题入口——深浅色支持「跟随系统」或应用内「暗色主题」开关（`Pref.isFollowSystemThemeEnabled()` / `Pref.isNightModeEnabled()`），主色浅色 `#009688` / 深色 `#4DD0E1`（与 `colors.xml`/`values-night` 对齐）。所有 `Button`/`TextButton` 显式使用 `buttonColorsPrimary()`/`textButtonColorsPrimary()`（Miuix 默认按钮为灰色 `secondaryVariant`，不显式使用则与开关颜色不一致——已统一为主题主色）。
+
+抽屉说明：`DrawerFragment`（main 源集）增加 `BuildConfig.MIUIX_PILOT` 分支——通过反射调用 miuix 源集的 `MiuixDrawerHost.createView()` 返回 ComposeView（304dp），按 Auto.js Pro 布局分三组：服务（无障碍/悬浮窗/更多…，更多展开核心服务/稳定模式/通知/前台/统计/音量键）、开发（开发者调试/终端）、其他（主题：跟随系统+暗色主题、检查更新），底部为带图标的「设置/检查更新/退出」菜单项 + 居中版本号；`DrawerFragment` 暴露约 17 个 public 桥接方法复用原有全部逻辑（无障碍/稳定模式/通知/前台/统计/悬浮窗/音量键/夜间/跟随系统/连接/终端/检查更新/设置/退出/用户区），`onResume` 经 View tag 的 Runnable 刷新 Compose 状态。同时 `MainActivity.bindViews()` 对 `setting`/`exit` 判空（Miuix 模式无这两个 id）。验证：抽屉打开、分组与展开/收起正常、深浅色切换生效、无崩溃。
 
 要点：
 
-- 设置页与旧 `preferences.xml` **共享同一个 Default SharedPreferences**（无 `Pref.java` 改动），护眼模式联动 `AccessibilityConfig`、音量键触发 `GlobalKeyObserver.init()` 等既有监听照常生效；覆盖 7 组 15 项：开关（SuperSwitch）、列表选择（SuperDropdown）、代码补全长度（SuperDialog + TextField）、主题色/检查更新/关于/许可/问题反馈（SuperArrow 复用原入口）、脚本目录（对话框 + 仅刷新/复制/移动，复用 `FileObservable`）。
-- 关于页：logo + 版本 + 开发者/QQ/邮箱/GitHub/分享 + 版权；logo 连点 5 次保留 Crash Test 彩蛋（SuperDialog 确认后 `CrashReport.testJavaCrash()`）。
+- 设置页与旧 `preferences.xml` **共享同一个 Default SharedPreferences**（无 `Pref.java` 改动），护眼模式联动 `AccessibilityConfig`、音量键触发 `GlobalKeyObserver.init()` 等既有监听照常生效；覆盖 7 组 15 项：开关（SuperSwitch）、列表选择（SuperDropdown）、代码补全长度（SuperDialog + TextField）、检查更新/关于/许可/问题反馈（SuperArrow 复用原入口）、脚本目录（对话框 + 仅刷新/复制/移动，复用 `FileObservable`）。
+- 关于页：logo + 版本 + 分享应用 + 版权（原作者信息条目已移除）；logo 连点 5 次保留 Crash Test 彩蛋（SuperDialog 确认后 `CrashReport.testJavaCrash()`）。
 - 登录/注册页：Miuix TextField（密码用 `PasswordVisualTransformation`）+ 提交按钮（loading 状态）+ 行内错误提示；复用 `UserService`/`NodeBB` 网络逻辑与校验规则（邮箱格式、密码 ≥6 位等），未改动网络层。
 - 每页均跟随系统深浅色，状态栏/导航栏与 Miuix 背景同步。
 - 本轮构建：`:app:assembleMiuixDebug :app:assembleCommonDebug` 成功；已覆盖安装 K40（miuix arm64 APK）。
