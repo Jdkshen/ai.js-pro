@@ -281,7 +281,7 @@
     <string name="text_documentation_source">文档源</string>
     <string name="text_send">发送</string>
     <string name="text_timed_task">定时任务</string>
-    <string name="text_running_task">运行中脚本</string>
+    <string name="text_running_task">运行中任务</string>
     <string name="text_done">完成</string>
     <string name="text_disposable_task">只运行一次</string>
     <string name="text_daily_task">每天运行</string>

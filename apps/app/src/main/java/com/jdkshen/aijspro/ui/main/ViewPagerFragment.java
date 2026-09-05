@@ -31,9 +31,20 @@ public abstract class ViewPagerFragment extends Fragment implements BackPressedH
 
     protected abstract void onFabClick(FloatingActionButton fab);
 
+    public boolean isFabRotationGone() {
+        return mFabRotation == ROTATION_GONE;
+    }
+
+    private void notifyMiuixFabVisibility() {
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).updateMiuixFabVisibility(this);
+        }
+    }
+
     @CallSuper
     public void onPageShow() {
         mShown = true;
+        notifyMiuixFabVisibility();
         if (mFabRotation == ROTATION_GONE) {
             if (mFab.getVisibility() == View.VISIBLE) {
                 mFab.hide();
@@ -58,6 +69,7 @@ public abstract class ViewPagerFragment extends Fragment implements BackPressedH
     @CallSuper
     public void onPageHide() {
         mShown = false;
+        notifyMiuixFabVisibility();
     }
 
     public boolean isShown() {

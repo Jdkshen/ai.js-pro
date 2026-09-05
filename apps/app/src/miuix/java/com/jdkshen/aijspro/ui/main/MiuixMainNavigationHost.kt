@@ -67,6 +67,7 @@ object MiuixMainNavigationHost {
                 Action(R.drawable.ic_search_white_24dp, "搜索") { searchShown.value = true }
                 Action(R.drawable.ic_log_white_24dp, "日志", host::openLogFromMiuix)
                 Action(R.drawable.ic_bookmark_white_24dp, "文档", host::openDocumentationFromMiuix)
+                Action(R.drawable.ic_code_white_24dp, "工作台", host::openImguiFromMiuix)
             }
         }
     }

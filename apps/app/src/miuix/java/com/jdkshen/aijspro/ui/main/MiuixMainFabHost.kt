@@ -27,6 +27,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.shape.CircleShape
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import top.yukonga.miuix.kmp.basic.FloatingActionButton
@@ -36,37 +37,54 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 /** Visible Miuix FAB; MainActivity's original FAB remains the business-action bridge. */
 object MiuixMainFabHost {
     @JvmStatic
-    fun createView(host: MainActivity): View = ComposeView(host).apply {
-        setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-        setContent {
-            AijsMiuixTheme {
-                var expanded by remember { mutableStateOf(false) }
-                Column(horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AnimatedVisibility(visible = expanded,
-                        enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
-                        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)) {
-                        Column(horizontalAlignment = Alignment.End,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Action(host, "项目", R.drawable.ic_project, 3) { expanded = false }
-                            Action(host, "导入", R.drawable.ic_floating_action_menu_open, 2) { expanded = false }
-                            Action(host, "文件", R.drawable.ic_floating_action_menu_file, 1) { expanded = false }
-                            Action(host, "文件夹", R.drawable.ic_floating_action_menu_dir, 0) { expanded = false }
+    fun createView(host: MainActivity): View {
+        val view = ComposeView(host).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                AijsMiuixTheme {
+                    var expanded by remember { mutableStateOf(false) }
+                    Column(horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AnimatedVisibility(visible = expanded,
+                            enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+                            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)) {
+                            Column(horizontalAlignment = Alignment.End,
+                                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Action(host, "项目", R.drawable.ic_project, 3) { expanded = false }
+                                Action(host, "导入", R.drawable.ic_floating_action_menu_open, 2) { expanded = false }
+                                Action(host, "文件", R.drawable.ic_floating_action_menu_file, 1) { expanded = false }
+                                Action(host, "文件夹", R.drawable.ic_floating_action_menu_dir, 0) { expanded = false }
+                            }
                         }
-                    }
-                    FloatingActionButton(
-                        onClick = { expanded = !expanded }, minWidth = 60.dp, minHeight = 60.dp,
-                        defaultWindowInsetsPadding = false
-                    ) {
-                        Image(
-                            painter = painterResource(if (expanded) R.drawable.ic_close_white_48dp else R.drawable.ic_menu),
-                            contentDescription = if (expanded) "关闭新建菜单" else "打开新建菜单",
-                            colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onPrimary)
-                        )
+                        FloatingActionButton(
+                            onClick = {
+                                // File page: open the create menu. Other pages keep the
+                                // original per-page FAB behaviour (stop all / reply, etc.).
+                                if (host.isCurrentPageCreateMenu) {
+                                    expanded = !expanded
+                                } else {
+                                    host.performMainFabClickFromMiuix()
+                                }
+                            },
+                            shape = CircleShape,
+                            minWidth = 56.dp, minHeight = 56.dp,
+                            containerColor = MiuixTheme.colorScheme.primary,
+                            shadowElevation = 10f,
+                            defaultWindowInsetsPadding = false
+                        ) {
+                            Image(
+                                painter = painterResource(if (expanded) R.drawable.ic_close_white_48dp else R.drawable.ic_menu),
+                                contentDescription = if (expanded) "关闭新建菜单" else "打开新建菜单",
+                                colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onPrimary)
+                            )
+                        }
                     }
                 }
             }
         }
+        // Keep the FAB composable above page content on every tab (CoordinatorLayout z-order).
+        view.elevation = 14f
+        return view
     }
 
     @androidx.compose.runtime.Composable
@@ -80,7 +98,10 @@ object MiuixMainFabHost {
             FloatingActionButton(onClick = {
                 host.performMainCreateActionFromMiuix(position)
                 close()
-            }, minWidth = 48.dp, minHeight = 48.dp, defaultWindowInsetsPadding = false) {
+            }, shape = CircleShape, minWidth = 48.dp, minHeight = 48.dp,
+                containerColor = MiuixTheme.colorScheme.primary,
+                shadowElevation = 8f,
+                defaultWindowInsetsPadding = false) {
                 Image(painterResource(icon), contentDescription = label,
                     colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onPrimary))
             }

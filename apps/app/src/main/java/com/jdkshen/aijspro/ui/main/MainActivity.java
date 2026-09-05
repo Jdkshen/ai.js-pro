@@ -318,6 +318,14 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             int margin = (int) (16 * getResources().getDisplayMetrics().density);
             params.setMargins(margin, margin, margin, margin);
             parent.addView(mMiuixFab, params);
+            // Remove the legacy FAB entirely in pilot mode: ViewPagerFragment.onPageShow
+            // calls mFab.show() on every page switch, which would bring the old blue FAB
+            // back on top of the Miuix one.
+            ViewGroup fabParent = (ViewGroup) mFab.getParent();
+            if (fabParent != null) {
+                fabParent.removeView(mFab);
+            }
+            mFab.setVisibility(View.GONE);
             mFab.setAlpha(0f);
         } catch (Throwable error) {
             android.util.Log.e(LOG_TAG, "Unable to install Miuix FAB", error);
@@ -326,6 +334,21 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
     public void performMainFabClickFromMiuix() {
         mFab.performClick();
+    }
+
+    /** True only on the file page: there the Miuix FAB opens the create menu. */
+    public boolean isCurrentPageCreateMenu() {
+        Fragment fragment = mPagerAdapter == null ? null
+                : mPagerAdapter.getStoredFragment(mViewPager.getCurrentItem());
+        return fragment instanceof MyScriptListFragment;
+    }
+
+    public void updateMiuixFabVisibility(ViewPagerFragment fragment) {
+        if (mMiuixFab == null) {
+            return;
+        }
+        boolean visible = fragment != null && fragment.isShown() && !fragment.isFabRotationGone();
+        mMiuixFab.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
     public void performMainCreateActionFromMiuix(int position) {
@@ -342,6 +365,10 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
     public void openLogFromMiuix() {
         startActivity(new Intent(this, LogActivity.class));
+    }
+
+    public void openImguiFromMiuix() {
+        startActivity(new Intent(this, ImGuiWorkspaceActivity.class));
     }
 
     public void openDocumentationFromMiuix() {
