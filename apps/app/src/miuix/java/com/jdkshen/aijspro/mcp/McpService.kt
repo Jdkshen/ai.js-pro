@@ -158,7 +158,6 @@ class McpService : Service() {
             private set
         @Volatile var autoStarted = false   // 本次启动是否为自动触发（App 回前台）
         @Volatile var autoStopped = false   // 本次停止是否为自动触发（退后台超时）
-        @Volatile var manualStopAt = 0L     // 手动停止时间，自动启停 1 分钟内不自动重启
         private val events = CopyOnWriteArrayList<String>()
 
         fun start(context: Context) {

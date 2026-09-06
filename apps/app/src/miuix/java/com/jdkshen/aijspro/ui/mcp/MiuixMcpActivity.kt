@@ -109,7 +109,7 @@ class MiuixMcpActivity : ComponentActivity() {
                     current.error?.let { Text("启动失败：$it", fontSize = 13.sp) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
-                            if (current.running) { McpService.manualStopAt = System.currentTimeMillis(); McpService.stop(this@MiuixMcpActivity) } else if (!pending) {
+                            if (current.running) McpService.stop(this@MiuixMcpActivity) else if (!pending) {
                                 pending = true
                                 runCatching { McpService.start(this@MiuixMcpActivity) }.onFailure { pending = false; Toast.makeText(this@MiuixMcpActivity, it.localizedMessage, Toast.LENGTH_LONG).show() }
                             }; revision++
@@ -132,7 +132,7 @@ class MiuixMcpActivity : ComponentActivity() {
 
                 SmallTitle("自动化")
                 Card(Modifier.fillMaxWidth()) {
-                    SuperSwitch(title = "跟随应用自动启停", summary = "打开 App 自动启动 MCP；退后台 60 秒自动停止（期间回前台取消）；手动停止后 1 分钟内不自动重启", checked = auto,
+                    SuperSwitch(title = "跟随应用自动启停", summary = "打开 App 自动启动 MCP；退后台 60 秒自动停止（期间回前台取消）；手动停止后重新打开 App 会再次自动启动", checked = auto,
                         onCheckedChange = { McpSettings.setAutoStart(this@MiuixMcpActivity, it); auto = it })
                 }
                 SmallTitle("近期事件")

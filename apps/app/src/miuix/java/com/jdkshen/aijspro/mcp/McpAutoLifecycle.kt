@@ -8,8 +8,9 @@ import android.os.Looper
 
 /**
  * 跟随应用前台自动启停 MCP 服务（需 McpSettings.autoStart 开启）：
- * - 应用回到前台：自动启动服务（手动停止后 1 分钟内不自动重启，启动失败后不再重试）
+ * - 应用回到前台：自动启动服务（启动失败后不再重试）
  * - 应用退到后台：60 秒后自动停止（期间回到前台则取消）
+ * 手动停止后只要重新打开 App（回到前台）就会再次自动启动；
  * 自动启停会像手动启停一样写入历史记录（标记「自动」）。
  */
 class McpAutoLifecycle(private val app: Application) : Application.ActivityLifecycleCallbacks {
@@ -27,9 +28,7 @@ class McpAutoLifecycle(private val app: Application) : Application.ActivityLifec
         started++
         if (started == 1) {
             handler.removeCallbacks(autoStop)
-            val now = System.currentTimeMillis()
-            if (McpSettings.autoStart(app) && !McpService.running && McpService.lastError == null &&
-                now - McpService.manualStopAt > RESTART_BLOCK_MS) {
+            if (McpSettings.autoStart(app) && !McpService.running && McpService.lastError == null) {
                 McpService.autoStarted = true
                 McpService.start(app)
             }
@@ -52,6 +51,5 @@ class McpAutoLifecycle(private val app: Application) : Application.ActivityLifec
 
     companion object {
         private const val BACKGROUND_STOP_MS = 60_000L
-        private const val RESTART_BLOCK_MS = 60_000L
     }
 }
