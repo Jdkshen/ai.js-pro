@@ -14,6 +14,7 @@ object McpSettings {
     private const val KEY_LOCAL_COMPAT = "local_compat"
     private const val KEY_WRITE_ALLOWED = "write_allowed"
     private const val KEY_EXEC_ALLOWED = "exec_allowed"
+    private const val KEY_AUTO_START = "auto_start"
     const val USB_HOST_PORT = 18790
 
     private fun prefs(context: Context) = context.applicationContext
@@ -45,6 +46,10 @@ object McpSettings {
     fun setWriteAllowed(context: Context, value: Boolean) = prefs(context).edit().putBoolean(KEY_WRITE_ALLOWED, value).apply()
     fun executionAllowed(context: Context): Boolean = prefs(context).getBoolean(KEY_EXEC_ALLOWED, false)
     fun setExecutionAllowed(context: Context, value: Boolean) = prefs(context).edit().putBoolean(KEY_EXEC_ALLOWED, value).apply()
+
+    // 跟随应用前台自动启动/后台自动停止（默认关闭，纯手动）
+    fun autoStart(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTO_START, false)
+    fun setAutoStart(context: Context, value: Boolean) = prefs(context).edit().putBoolean(KEY_AUTO_START, value).apply()
 
     @Synchronized fun token(context: Context): String {
         prefs(context).getString(KEY_TOKEN, null)?.takeIf { it.length >= 32 }?.let { return it }

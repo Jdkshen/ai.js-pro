@@ -82,11 +82,14 @@ class MiuixMcpActivity : ComponentActivity() {
         var revision by remember { mutableIntStateOf(0) }
         var addresses by remember { mutableStateOf(emptyList<String>()) }
         var pending by remember { mutableStateOf(false) }
+        var auto by remember { mutableStateOf(McpSettings.autoStart(this@MiuixMcpActivity)) }
+        var events by remember { mutableStateOf(McpService.recentEvents().take(10)) }
         LaunchedEffect(pageActive, revision) {
             if (pageActive) {
                 addresses = withContext(Dispatchers.IO) { McpService.lanAddresses(this@MiuixMcpActivity) }
                 while (pageActive) {
-                    current = status(); if (current.running || current.error != null) pending = false; delay(750)
+                    current = status(); if (current.running || current.error != null) pending = false
+                    events = McpService.recentEvents().take(10); delay(750)
                 }
             }
         }
@@ -106,7 +109,7 @@ class MiuixMcpActivity : ComponentActivity() {
                     current.error?.let { Text("启动失败：$it", fontSize = 13.sp) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
-                            if (current.running) McpService.stop(this@MiuixMcpActivity) else if (!pending) {
+                            if (current.running) { McpService.manualStopAt = System.currentTimeMillis(); McpService.stop(this@MiuixMcpActivity) } else if (!pending) {
                                 pending = true
                                 runCatching { McpService.start(this@MiuixMcpActivity) }.onFailure { pending = false; Toast.makeText(this@MiuixMcpActivity, it.localizedMessage, Toast.LENGTH_LONG).show() }
                             }; revision++
@@ -125,6 +128,17 @@ class MiuixMcpActivity : ComponentActivity() {
                     }
                     SuperArrow(title = "连接二维码", summary = "包含地址与 Bearer 访问令牌", rightText = "显示", onClick = { dialog = "qr" })
                     SuperArrow(title = "复制访问令牌", summary = "Authorization: Bearer <token>", onClick = { copy("访问令牌", McpSettings.token(this@MiuixMcpActivity)) })
+                }
+
+                SmallTitle("自动化")
+                Card(Modifier.fillMaxWidth()) {
+                    SuperSwitch(title = "跟随应用自动启停", summary = "打开 App 自动启动 MCP；退后台 60 秒自动停止（期间回前台取消）；手动停止后 1 分钟内不自动重启", checked = auto,
+                        onCheckedChange = { McpSettings.setAutoStart(this@MiuixMcpActivity, it); auto = it })
+                }
+                SmallTitle("近期事件")
+                Card(Modifier.fillMaxWidth()) {
+                    if (events.isEmpty()) BasicComponent(title = "暂无事件", summary = "启动、停止、请求记录会显示在这里，并写入调用历史")
+                    else events.forEach { event -> BasicComponent(title = event, summary = "自动记录 · 最近 50 条") }
                 }
 
                 SmallTitle("本次授权")

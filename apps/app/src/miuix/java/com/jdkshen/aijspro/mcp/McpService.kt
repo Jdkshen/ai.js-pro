@@ -48,7 +48,9 @@ class McpService : Service() {
             // 恢复持久化的授权（记住上次开启状态）
             allowWrite = McpSettings.writeAllowed(this)
             allowExecution = McpSettings.executionAllowed(this)
-            record("服务已启动 · ${if (McpSettings.lanEnabled(this)) "局域网" else "仅本机"}" + if (allowWrite || allowExecution) " · 已恢复授权" else "")
+            val auto = if (autoStarted) " · 自动" else ""
+            autoStarted = false
+            record("服务已启动 · ${if (McpSettings.lanEnabled(this)) "局域网" else "仅本机"}$auto" + if (allowWrite || allowExecution) " · 已恢复授权" else "")
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(localAddress(this)))
         } catch (error: Exception) {
             lastError = error.localizedMessage ?: "端口启动失败"
@@ -70,7 +72,8 @@ class McpService : Service() {
         tools = null
         server?.stop()
         server = null
-        record("服务已停止")
+        record(if (autoStopped) "服务已停止 · 自动" else "服务已停止")
+        autoStopped = false
         stopForeground(true)
         super.onDestroy()
     }
@@ -153,6 +156,9 @@ class McpService : Service() {
         @Volatile var allowExecution = false
         @Volatile var requestCount = 0
             private set
+        @Volatile var autoStarted = false   // 本次启动是否为自动触发（App 回前台）
+        @Volatile var autoStopped = false   // 本次停止是否为自动触发（退后台超时）
+        @Volatile var manualStopAt = 0L     // 手动停止时间，自动启停 1 分钟内不自动重启
         private val events = CopyOnWriteArrayList<String>()
 
         fun start(context: Context) {

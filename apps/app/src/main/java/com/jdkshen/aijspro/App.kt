@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -49,6 +50,14 @@ class App : MultiDexApplication() {
         setUpStaticsTool()
         setUpDebugEnvironment()
         init()
+        // MCP 自动启停：仅 miuix 变体通过反射注册（跟随前台启动因类仅存在于 miuix 源集）
+        if (BuildConfig.MIUIX_PILOT) {
+            runCatching {
+                val lifecycle = Class.forName("com.jdkshen.aijspro.mcp.McpAutoLifecycle")
+                    .getConstructor(Application::class.java).newInstance(this)
+                registerActivityLifecycleCallbacks(lifecycle as Application.ActivityLifecycleCallbacks)
+            }
+        }
     }
 
     private fun setUpStaticsTool() {
