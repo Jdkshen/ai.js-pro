@@ -33,10 +33,13 @@ public:
     int64_t createFromRgba(const uint8_t *data, int width, int height,
                            int rowStride, int pixelStride, int targetShortEdge = 0);
     int64_t load(const std::string &path, std::string *error);
+    int64_t fromEncoded(const std::vector<uint8_t> &encoded, std::string *error);
     int64_t copy(int64_t handle, std::string *error);
     int64_t clip(int64_t handle, int x, int y, int width, int height,
                  std::string *error);
     int64_t resize(int64_t handle, int width, int height, int interpolation,
+                   std::string *error);
+    int64_t concat(int64_t firstHandle, int64_t secondHandle, int direction,
                    std::string *error);
     int64_t grayscale(int64_t handle, std::string *error);
     int64_t cvtColor(int64_t handle, const std::string &code, std::string *error);

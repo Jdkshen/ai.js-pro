@@ -8,7 +8,9 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.util.Log;
 import java.util.concurrent.atomic.AtomicInteger;
 import androidx.annotation.Nullable;
@@ -34,9 +36,17 @@ public class ForegroundService extends Service {
         }
     }
 
-    public static void stop(Context context){
+    public static void stop(Context context) {
         if (sExecutionLeases.get() == 0) {
-            context.stopService(new Intent(context, ForegroundService.class));
+            // Delay so the service can reach startForeground() first. Stopping a
+            // service started with startForegroundService() before it calls
+            // startForeground() triggers ForegroundServiceDidNotStartInTimeException
+            // and kills the whole process 5 seconds later (very fast scripts).
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (sExecutionLeases.get() == 0) {
+                    context.stopService(new Intent(context, ForegroundService.class));
+                }
+            }, 2500);
         }
     }
 
@@ -64,15 +74,22 @@ public class ForegroundService extends Service {
     public static void releaseExecutionLease(Context context) {
         int remaining = sExecutionLeases.updateAndGet(value -> Math.max(0, value - 1));
         if (remaining == 0 && !com.jdkshen.aijspro.Pref.isForegroundServiceEnabled()) {
-            context.getApplicationContext().stopService(
-                    new Intent(context, ForegroundService.class));
+            stop(context);
         }
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
-        startForeground();
+        try {
+            startForeground();
+        } catch (Throwable error) {
+            // A failing startForeground() (e.g. notification permission on MIUI)
+            // triggers ForegroundServiceDidNotStartInTimeException and kills the
+            // process after 5s. Stop immediately instead so script work survives.
+            Log.w(TAG, "startForeground failed, stopping service", error);
+            stopSelf();
+        }
     }
 
     @Nullable

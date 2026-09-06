@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -1153,6 +1154,63 @@ JSValue nativeCaptureFrame(JSContext *context, JSValueConst, int argc, JSValueCo
         return throwJavaException(context, env);
     }
     return frameInfo(context, state, handle);
+}
+
+bool base64Decode(const std::string &input, std::vector<uint8_t> *output) {
+    static const char table[] =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<uint8_t> decoded;
+    decoded.reserve(input.size() * 3 / 4);
+    int value = 0;
+    int bits = 0;
+    for (char c : input) {
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+            continue;
+        }
+        const char *found = strchr(table, c);
+        if (found == nullptr) {
+            return false;
+        }
+        value = (value << 6) | static_cast<int>(found - table);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            decoded.push_back(static_cast<uint8_t>((value >> bits) & 0xFF));
+        }
+    }
+    *output = std::move(decoded);
+    return !output->empty();
+}
+
+JSValue nativeFrameFromBase64(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string encoded = requireStringArg(context, argc, argv, 0);
+    std::vector<uint8_t> bytes;
+    if (!base64Decode(encoded, &bytes)) {
+        return JS_ThrowInternalError(context, "Unable to decode base64 image data");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t handle = state->frames.fromEncoded(bytes, &error);
+    return handle == 0 ? JS_ThrowInternalError(context, "%s", error.c_str())
+                       : frameInfo(context, state, handle);
+}
+
+JSValue nativeFrameConcat(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t firstHandle = 0;
+    int64_t secondHandle = 0;
+    int32_t direction = 0;
+    if (argc < 2 || JS_ToInt64(context, &firstHandle, argv[0]) < 0 ||
+        JS_ToInt64(context, &secondHandle, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "images.concat(frame1, frame2, direction) has invalid arguments");
+    }
+    if (argc > 2) {
+        JS_ToInt32(context, &direction, argv[2]);
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::string error;
+    const int64_t result = state->frames.concat(firstHandle, secondHandle, direction, &error);
+    return result == 0 ? JS_ThrowRangeError(context, "%s", error.c_str())
+                       : frameInfo(context, state, result);
 }
 
 JSValue nativeReadFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -2697,6 +2755,37 @@ const char kBootstrapScript[] = R"JS(
         }
     };
     images.saveImage = images.save;
+    images.fromBase64 = function (data) {
+        return wrapFrame(__aiNativeFrameFromBase64(String(data)));
+    };
+    images.toBase64 = function (frame, format, quality) {
+        var bytes = images.compress(frame, format, quality);
+        var table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        var out = '';
+        for (var i = 0; i < bytes.length; i += 3) {
+            var b0 = bytes[i];
+            var b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+            var b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+            out += table[b0 >> 2];
+            out += table[((b0 & 3) << 4) | (b1 >> 4)];
+            out += i + 1 < bytes.length ? table[((b1 & 15) << 2) | (b2 >> 6)] : '=';
+            out += i + 2 < bytes.length ? table[b2 & 63] : '=';
+        }
+        return out;
+    };
+    images.concat = function (frame1, frame2, direction) {
+        var dir = String(direction || 'horizontal').toLowerCase() === 'vertical' ? 1 : 0;
+        return wrapFrame(__aiNativeFrameConcat(
+            requireFrame(frame1).id, requireFrame(frame2).id, dir));
+    };
+    images.load = function (src) {
+        src = String(src == null ? '' : src);
+        var match = /^data:image\/[a-z0-9.+-]+;base64,/i.exec(src);
+        if (match) {
+            return images.fromBase64(src.substring(match[0].length));
+        }
+        return images.read(src);
+    };
     images.findColorEquals = function (frame, color, x, y, width, height) {
         return images.findColorInRegion(frame, color, x, y, width, height, 0);
     };
@@ -3625,6 +3714,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
     installNativeFunction(state->context, global, "__aiNativeCaptureFrame", nativeCaptureFrame, 3);
     installNativeFunction(state->context, global, "__aiNativeReadFrame", nativeReadFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeFrameFromBase64", nativeFrameFromBase64, 1);
+    installNativeFunction(state->context, global, "__aiNativeFrameConcat", nativeFrameConcat, 3);
     installNativeFunction(state->context, global, "__aiNativeCopyFrame", nativeCopyFrame, 1);
     installNativeFunction(state->context, global, "__aiNativeClipFrame", nativeClipFrame, 5);
     installNativeFunction(state->context, global, "__aiNativeResizeFrame", nativeResizeFrame, 4);

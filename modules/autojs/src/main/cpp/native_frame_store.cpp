@@ -159,7 +159,28 @@ int64_t NativeFrameStore::load(const std::string &path, std::string *error) {
         }
         return 0;
     }
-    return insert(std::move(rgba));
+    return insert(std::move(rgba), decoded.cols, decoded.rows);
+}
+
+int64_t NativeFrameStore::fromEncoded(const std::vector<uint8_t> &encoded,
+                                      std::string *error) {
+    cv::Mat encodedMat(static_cast<int>(encoded.size()), 1, CV_8UC1,
+                       const_cast<uint8_t *>(encoded.data()));
+    cv::Mat decoded = cv::imdecode(encodedMat, cv::IMREAD_UNCHANGED);
+    if (decoded.empty()) {
+        if (error != nullptr) {
+            *error = "Unable to decode image from encoded data";
+        }
+        return 0;
+    }
+    cv::Mat rgba = toRgba(decoded);
+    if (rgba.empty()) {
+        if (error != nullptr) {
+            *error = "Unsupported image channel count: " + std::to_string(decoded.channels());
+        }
+        return 0;
+    }
+    return insert(std::move(rgba), decoded.cols, decoded.rows);
 }
 
 int64_t NativeFrameStore::copy(int64_t handle, std::string *error) {
@@ -207,6 +228,39 @@ int64_t NativeFrameStore::resize(int64_t handle, int width, int height, int inte
     cv::Mat resized;
     cv::resize(*frame, resized, cv::Size(width, height), 0.0, 0.0, mode);
     return insert(std::move(resized));
+}
+
+int64_t NativeFrameStore::concat(int64_t firstHandle, int64_t secondHandle, int direction,
+                                 std::string *error) {
+    const auto first = get(firstHandle);
+    if (first == nullptr) {
+        if (error != nullptr) *error = "First NativeFrame has been recycled";
+        return 0;
+    }
+    const auto second = get(secondHandle);
+    if (second == nullptr) {
+        if (error != nullptr) *error = "Second NativeFrame has been recycled";
+        return 0;
+    }
+    cv::Mat combined;
+    if (direction == 0) {
+        if (first->rows != second->rows) {
+            if (error != nullptr) *error = "Frames must have equal height for horizontal concat";
+            return 0;
+        }
+        cv::hconcat(*first, *second, combined);
+    } else {
+        if (first->cols != second->cols) {
+            if (error != nullptr) *error = "Frames must have equal width for vertical concat";
+            return 0;
+        }
+        cv::vconcat(*first, *second, combined);
+    }
+    if (combined.empty()) {
+        if (error != nullptr) *error = "Unable to concat frames";
+        return 0;
+    }
+    return insert(std::move(combined), combined.cols, combined.rows);
 }
 
 int64_t NativeFrameStore::grayscale(int64_t handle, std::string *error) {
