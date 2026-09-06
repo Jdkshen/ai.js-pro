@@ -893,6 +893,10 @@ JSValue nativeMediaGetVolume(JSContext *context, JSValueConst, int, JSValueConst
     return callIntHostNoArgs(context, "mediaGetVolume");
 }
 
+JSValue nativeMediaGetMaxVolume(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "mediaGetMaxVolume");
+}
+
 JSValue nativeMediaSetVolume(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t volume = 0;
     if (argc < 1 || JS_ToInt64(context, &volume, argv[0]) < 0) {
@@ -1081,6 +1085,17 @@ JSValue nativeUiSetClickListener(JSContext *context, JSValueConst, int argc, JSV
     }
     const std::string id = requireStringArg(context, argc, argv, 1);
     return callHostVoidIntString(context, "uiSetClickListener", static_cast<int32_t>(viewId), id);
+}
+
+JSValue nativeUiSetDataSource(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t viewId = 0;
+    if (argc < 3 || JS_ToInt64(context, &viewId, argv[0]) < 0) {
+        return JS_UNDEFINED;
+    }
+    const std::string id = requireStringArg(context, argc, argv, 1);
+    const std::string dataJson = requireStringArg(context, argc, argv, 2);
+    return callHostVoidIntStringString(context, "uiSetDataSource",
+            static_cast<int32_t>(viewId), id, dataJson);
 }
 
 JSValue nativeUiPollEvent(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -3395,6 +3410,7 @@ const char kBootstrapScript[] = R"JS(
 
     // ---- local events module ----
     var eventListeners = new Map();
+    var maxListeners = 10;
     function listenersFor(name, create) {
         name = String(name);
         var listeners = eventListeners.get(name);
@@ -3443,6 +3459,45 @@ const char kBootstrapScript[] = R"JS(
         listenerCount: function (name) {
             var listeners = listenersFor(name, false);
             return listeners ? listeners.length : 0;
+        },
+        eventNames: function () {
+            var names = [];
+            var it = eventListeners.keys();
+            for (;;) {
+                var next = it.next();
+                if (next.done) break;
+                names.push(next.value);
+            }
+            return names;
+        },
+        listeners: function (name) {
+            return (listenersFor(name, false) || []).slice();
+        },
+        addListener: function (name, listener) {
+            return events.on(name, listener);
+        },
+        prependListener: function (name, listener) {
+            if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+            listenersFor(name, true).unshift(listener);
+            return events;
+        },
+        prependOnceListener: function (name, listener) {
+            if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+            function onceListener() {
+                events.removeListener(name, onceListener);
+                return listener.apply(undefined, arguments);
+            }
+            onceListener.listener = listener;
+            listenersFor(name, true).unshift(onceListener);
+            return events;
+        },
+        setMaxListeners: function (n) {
+            maxListeners = Math.max(0, Number(n) || 0);
+            return events;
+        },
+        getMaxListeners: function () { return maxListeners; },
+        broadcast: function (name) {
+            return events.emit.apply(events, arguments);
         }
     };
     global.events = Object.freeze(events);
@@ -3450,6 +3505,7 @@ const char kBootstrapScript[] = R"JS(
     // ---- media module ----
     var media = {
         getVolume: function () { return Number(__aiNativeMediaGetVolume()); },
+        getMaxVolume: function () { return Number(__aiNativeMediaGetMaxVolume()); },
         setVolume: function (volume) {
             return Number(__aiNativeMediaSetVolume(Math.max(0, Math.floor(Number(volume) || 0))));
         },
@@ -3470,7 +3526,7 @@ const char kBootstrapScript[] = R"JS(
 
     // ---- sensors module (poll-based event emitter) ----
     function makeSensor(handle, delayMicros) {
-        var listeners = { change: [], accuracy: [] };
+        var listeners = { change: [], accuracy: [], accuracy_change: [] };
         var pollMs = delayMicros === 0 ? 10 : Math.max(10, Math.round(delayMicros / 1000));
         var pollTimerId = null;
         var sensor = {
@@ -3515,18 +3571,31 @@ const char kBootstrapScript[] = R"JS(
             (listeners.change || []).slice().forEach(function (listener) {
                 listener(data);
             });
-            (listeners.accuracy || []).slice().forEach(function (listener) {
+            var accuracyListeners = (listeners.accuracy || []).concat(listeners.accuracy_change || []);
+            accuracyListeners.slice().forEach(function (listener) {
                 listener(data.accuracy, data);
             });
         }, pollMs);
         return Object.freeze(sensor);
     }
+    var noopSensor = Object.freeze({
+        handle: -1,
+        read: function () { return null; },
+        on: function () { return noopSensor; },
+        once: function () { return noopSensor; },
+        off: function () { return noopSensor; },
+        unregister: function () { return false; }
+    });
     global.sensors = Object.freeze({
+        ignoresUnsupportedSensor: false,
         register: function (name, delay) {
             var micros = Number(delay);
             if (isNaN(micros)) micros = 200000;
             var handle = Number(__aiNativeSensorsRegister(String(name), Math.floor(micros)));
-            if (handle < 0) throw new Error('Unsupported sensor: ' + name);
+            if (handle < 0) {
+                if (global.sensors.ignoresUnsupportedSensor) return noopSensor;
+                return null;
+            }
             return makeSensor(handle, micros);
         },
         unregister: function (sensor) {
@@ -3602,6 +3671,7 @@ const char kBootstrapScript[] = R"JS(
             }
             var id = Number(__aiNativeFloatyCreate(JSON.stringify(cfg)));
             if (id < 0) throw new Error('Unable to create floaty window');
+            var onClose = null;
             var win = {
                 id: id,
                 setSize: function (width, height) {
@@ -3622,12 +3692,18 @@ const char kBootstrapScript[] = R"JS(
                 resize: function (width, height) {
                     win.setSize(width, height);
                 },
+                onClose: function (fn) {
+                    if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+                    onClose = fn;
+                    return win;
+                },
                 close: function () {
+                    if (onClose) onClose(win);
                     __aiNativeFloatyClose(id);
                 },
-                exitOnClose: function () { return false; }
+                exitOnClose: false
             };
-            return Object.freeze(win);
+            return win;
         },
         rawWindow: function (config) {
             return floaty.window(config);
@@ -3657,7 +3733,14 @@ const char kBootstrapScript[] = R"JS(
             var ev = JSON.parse(raw);
             var entry = uiEventListeners.get(String(ev.id));
             if (entry && entry[ev.event]) {
-                entry[ev.event].slice().forEach(function (fn) { fn(); });
+                var view = uiView(String(ev.id));
+                entry[ev.event].slice().forEach(function (fn) {
+                    if (ev.event === 'item_click' || ev.event === 'item_long_click') {
+                        fn(Number(ev.index), view);
+                    } else {
+                        fn(view);
+                    }
+                });
             }
         }
     }
@@ -3679,12 +3762,28 @@ const char kBootstrapScript[] = R"JS(
     function uiView(id) {
         id = String(id);
         return Object.freeze({
-            setText: function (text) { uiSet(id, { text: String(text == null ? '' : text) }); },
-            getText: function () { return uiReadText(id); },
-            setVisibility: function (visibility) { uiSet(id, { visibility: Number(visibility) || 0 }); },
-            setBackgroundColor: function (color) { uiSet(id, { backgroundColor: String(color) }); },
-            click: function (fn) { uiListen(id, 'click', fn); },
-            on: function (name, fn) { uiListen(id, name, fn); },
+            setText: function (text) {
+                uiSet(id, { text: String(text == null ? '' : text) });
+            },
+            getText: function () {
+                return uiReadText(id);
+            },
+            setVisibility: function (visibility) {
+                uiSet(id, { visibility: Number(visibility) || 0 });
+            },
+            setBackgroundColor: function (color) {
+                uiSet(id, { backgroundColor: String(color) });
+            },
+            setDataSource: function (data) {
+                if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
+                __aiNativeUiSetDataSource(uiViewId, id, JSON.stringify(Array.isArray(data) ? data : []));
+            },
+            click: function (fn) {
+                uiListen(id, 'click', fn);
+            },
+            on: function (name, fn) {
+                uiListen(id, name, fn);
+            },
             attr: function (name, value) {
                 if (value === undefined) {
                     if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
@@ -3978,6 +4077,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFilesMove", nativeFilesMove, 2);
     installNativeFunction(state->context, global, "__aiNativeFilesCwd", nativeFilesCwd, 0);
     installNativeFunction(state->context, global, "__aiNativeMediaGetVolume", nativeMediaGetVolume, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaGetMaxVolume", nativeMediaGetMaxVolume, 0);
     installNativeFunction(state->context, global, "__aiNativeMediaSetVolume", nativeMediaSetVolume, 1);
     installNativeFunction(state->context, global, "__aiNativeMediaPlayMusic", nativeMediaPlayMusic, 3);
     installNativeFunction(state->context, global, "__aiNativeMediaStopMusic", nativeMediaStopMusic, 0);
@@ -4004,6 +4104,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeUiSetConfig", nativeUiSetConfig, 3);
     installNativeFunction(state->context, global, "__aiNativeUiGetText", nativeUiGetText, 2);
     installNativeFunction(state->context, global, "__aiNativeUiSetClickListener", nativeUiSetClickListener, 2);
+    installNativeFunction(state->context, global, "__aiNativeUiSetDataSource", nativeUiSetDataSource, 3);
     installNativeFunction(state->context, global, "__aiNativeUiPollEvent", nativeUiPollEvent, 0);
     installNativeFunction(state->context, global, "__aiNativeUiGetAttr", nativeUiGetAttr, 3);
     installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);

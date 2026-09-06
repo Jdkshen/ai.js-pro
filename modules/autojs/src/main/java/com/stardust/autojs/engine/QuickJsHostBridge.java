@@ -1200,6 +1200,10 @@ final class QuickJsHostBridge implements AutoCloseable {
         return audio.getStreamVolume(AudioManager.STREAM_MUSIC);
     }
 
+    public int mediaGetMaxVolume() {
+        return audioManager().getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+    }
+
     public boolean mediaPlayMusic(String path, float volume, boolean looping) {
         try {
             stopMediaPlayer();
@@ -1850,6 +1854,11 @@ final class QuickJsHostBridge implements AutoCloseable {
                             new com.stardust.autojs.core.ui.inflater.util.Drawables());
             mUiInflater = new com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater(parser);
             mUiInflater.setContext(mRuntime.uiHandler.getContext());
+            // 列表支持（与 Rhino UI 相同注册方式）
+            mUiInflater.registerViewAttrSetter(com.stardust.autojs.core.ui.widget.JsListView.class.getName(),
+                    new com.stardust.autojs.core.ui.inflater.inflaters.JsListViewInflater(parser, mRuntime));
+            mUiInflater.registerViewAttrSetter(com.stardust.autojs.core.ui.widget.JsGridView.class.getName(),
+                    new com.stardust.autojs.core.ui.inflater.inflaters.JsGridViewInflater(parser, mRuntime));
         }
         return mUiInflater;
     }
@@ -1888,7 +1897,9 @@ final class QuickJsHostBridge implements AutoCloseable {
             }
         });
         try {
-            latch.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!latch.await(8, java.util.concurrent.TimeUnit.SECONDS)) {
+                return "-1";
+            }
         } catch (InterruptedException ignored) {
             return "-1";
         }
@@ -1968,6 +1979,24 @@ final class QuickJsHostBridge implements AutoCloseable {
             if (view == null) {
                 return;
             }
+            if (view instanceof com.stardust.autojs.core.ui.widget.JsListView) {
+                ((com.stardust.autojs.core.ui.widget.JsListView) view).setOnItemTouchListener(
+                        new com.stardust.autojs.core.ui.widget.JsListView.OnItemTouchListener() {
+                            @Override
+                            public void onItemClick(com.stardust.autojs.core.ui.widget.JsListView listView,
+                                                   View itemView, Object item, int pos) {
+                                emitUiEvent(id, "item_click", pos);
+                            }
+
+                            @Override
+                            public boolean onItemLongClick(com.stardust.autojs.core.ui.widget.JsListView listView,
+                                                           View itemView, Object item, int pos) {
+                                emitUiEvent(id, "item_long_click", pos);
+                                return true;
+                            }
+                        });
+                return;
+            }
             view.setClickable(true);
             view.setOnClickListener(v -> {
                 try {
@@ -1977,6 +2006,57 @@ final class QuickJsHostBridge implements AutoCloseable {
                 }
             });
         });
+    }
+
+    public void uiSetDataSource(int viewId, String id, String dataJson) {
+        mDialogHandler.post(() -> {
+            View view = uiFind(id);
+            if (!(view instanceof com.stardust.autojs.core.ui.widget.JsListView)) {
+                return;
+            }
+            try {
+                JSONArray arr = new JSONArray(dataJson);
+                java.util.List<Object> data = new java.util.ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    data.add(arr.get(i));
+                }
+                com.stardust.autojs.core.ui.widget.JsListView listView =
+                        (com.stardust.autojs.core.ui.widget.JsListView) view;
+                // 项目未配置默认 DataSourceAdapter，这里为 QuickJS 列表直接接入
+                listView.setDataSourceAdapter(new QuickJsListAdapter());
+                listView.setDataSource(data);
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    private static final class QuickJsListAdapter
+            implements com.stardust.autojs.core.ui.widget.JsListView.DataSourceAdapter {
+        @Override
+        public int getItemCount(Object dataSource) {
+            return dataSource instanceof java.util.List ? ((java.util.List<?>) dataSource).size() : 0;
+        }
+
+        @Override
+        public Object getItem(Object dataSource, int i) {
+            if (!(dataSource instanceof java.util.List)) {
+                return null;
+            }
+            java.util.List<?> list = (java.util.List<?>) dataSource;
+            return i >= 0 && i < list.size() ? list.get(i) : null;
+        }
+
+        @Override
+        public void setDataSource(Object dataSource) {
+        }
+    }
+
+    private void emitUiEvent(String id, String event, int index) {
+        try {
+            mUiEvents.add(new JSONObject()
+                    .put("id", id).put("event", event).put("index", index).toString());
+        } catch (JSONException ignored) {
+        }
     }
 
     public String uiPollEvent() {
