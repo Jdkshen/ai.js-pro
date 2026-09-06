@@ -701,6 +701,50 @@ JSValue callHostVoidIntString(JSContext *context, const char *methodName,
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
 }
 
+JSValue callHostVoidIntStringString(JSContext *context, const char *methodName,
+                                    int32_t id, const std::string &first, const std::string &second) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName,
+            "(ILjava/lang/String;Ljava/lang/String;)V");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring jFirst = toJavaString(env, first);
+    jstring jSecond = toJavaString(env, second);
+    env->CallVoidMethod(state->host, method, static_cast<jint>(id), jFirst, jSecond);
+    env->DeleteLocalRef(jSecond);
+    env->DeleteLocalRef(jFirst);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue callHostStringIntString(JSContext *context, const char *methodName,
+                                int32_t id, const std::string &name) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName,
+            "(ILjava/lang/String;)Ljava/lang/String;");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring jName = toJavaString(env, name);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            static_cast<jint>(id), jName));
+    env->DeleteLocalRef(jName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "getClip", nullptr);
 }
@@ -973,6 +1017,35 @@ JSValue nativeFloatyClose(JSContext *context, JSValueConst, int argc, JSValueCon
 
 JSValue nativeFloatyCloseAll(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callHostVoidNoArgs(context, "floatyCloseAll");
+}
+
+JSValue nativeUiInflate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string xml = requireStringArg(context, argc, argv, 0);
+    return callStringHost(context, "uiInflate", xml.c_str());
+}
+
+JSValue nativeUiClose(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "uiClose");
+}
+
+JSValue nativeUiSetConfig(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t viewId = 0;
+    if (argc < 3 || JS_ToInt64(context, &viewId, argv[0]) < 0) {
+        return JS_UNDEFINED;
+    }
+    const std::string id = requireStringArg(context, argc, argv, 1);
+    const std::string configJson = requireStringArg(context, argc, argv, 2);
+    return callHostVoidIntStringString(context, "uiSetConfig",
+            static_cast<int32_t>(viewId), id, configJson);
+}
+
+JSValue nativeUiGetText(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t viewId = 0;
+    if (argc < 2 || JS_ToInt64(context, &viewId, argv[0]) < 0) {
+        return JS_NewStringLen(context, "", 0);
+    }
+    const std::string id = requireStringArg(context, argc, argv, 1);
+    return callHostStringIntString(context, "uiGetText", static_cast<int32_t>(viewId), id);
 }
 
 JSValue nativeFilesGetSdcardPath(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -3506,6 +3579,48 @@ const char kBootstrapScript[] = R"JS(
     };
     global.floaty = Object.freeze(floaty);
 
+    // ---- ui module (minimal: DynamicLayoutInflater + fullscreen overlay) ----
+    var uiViewId = 0;
+    function uiSet(id, config) {
+        if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
+        __aiNativeUiSetConfig(uiViewId, String(id), JSON.stringify(config || {}));
+    }
+    function uiReadText(id) {
+        if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
+        return __aiNativeUiGetText(uiViewId, String(id));
+    }
+    function uiView(id) {
+        return Object.freeze({
+            setText: function (text) { uiSet(id, { text: String(text == null ? '' : text) }); },
+            getText: function () { return uiReadText(id); },
+            setVisibility: function (visibility) { uiSet(id, { visibility: Number(visibility) || 0 }); },
+            setBackgroundColor: function (color) { uiSet(id, { backgroundColor: String(color) }); }
+        });
+    }
+    var ui = {
+        layout: function (xml) {
+            var id = Number(__aiNativeUiInflate(String(xml)));
+            if (id < 0) throw new Error('Unable to inflate UI layout');
+            uiViewId = id;
+            return id;
+        },
+        close: function () {
+            __aiNativeUiClose();
+            uiViewId = 0;
+        },
+        setText: function (id, text) { uiSet(id, { text: String(text == null ? '' : text) }); },
+        getText: function (id) { return uiReadText(id); },
+        setVisibility: function (id, visibility) { uiSet(id, { visibility: Number(visibility) || 0 }); },
+        setBackgroundColor: function (id, color) { uiSet(id, { backgroundColor: String(color) }); }
+    };
+    global.ui = Object.freeze(ui);
+    global.$ui = new Proxy({}, {
+        get: function (target, name) {
+            if (name === 'layout') return ui.layout;
+            return uiView(String(name));
+        }
+    });
+
     // ---- threads module (one QuickJS engine per worker) ----
     var workerHandles = new Set();
     function makeThread(engine) {
@@ -3776,6 +3891,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyUpdate", nativeFloatyUpdate, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyClose", nativeFloatyClose, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyCloseAll", nativeFloatyCloseAll, 0);
+    installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
+    installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);
+    installNativeFunction(state->context, global, "__aiNativeUiSetConfig", nativeUiSetConfig, 3);
+    installNativeFunction(state->context, global, "__aiNativeUiGetText", nativeUiGetText, 2);
     installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesPath", nativeFilesPath, 1);
     installNativeFunction(state->context, global, "__aiNativeSetTimeout", nativeSetTimeout, 2);

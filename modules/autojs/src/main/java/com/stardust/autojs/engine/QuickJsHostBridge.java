@@ -50,6 +50,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.Headers;
@@ -1819,6 +1821,130 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
     }
 
+    // ---- ui (minimal: DynamicLayoutInflater + fullscreen overlay) ----
+    private com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater mUiInflater;
+    private volatile View mUiRoot;
+    private volatile boolean mUiShown;
+    private volatile int mUiWindowId;
+
+    private com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater uiInflater() {
+        if (mUiInflater == null) {
+            com.stardust.autojs.core.ui.inflater.ResourceParser parser =
+                    new com.stardust.autojs.core.ui.inflater.ResourceParser(
+                            new com.stardust.autojs.core.ui.inflater.util.Drawables());
+            mUiInflater = new com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater(parser);
+            mUiInflater.setContext(mRuntime.uiHandler.getContext());
+        }
+        return mUiInflater;
+    }
+
+    public String uiInflate(String xml) {
+        final CountDownLatch latch = new CountDownLatch(1);
+        final String[] result = new String[1];
+        mDialogHandler.post(() -> {
+            try {
+                View root = uiInflater().inflate(xml);
+                WindowManager windowManager =
+                        (WindowManager) mRuntime.uiHandler.getContext()
+                                .getSystemService(Context.WINDOW_SERVICE);
+                WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                                : WindowManager.LayoutParams.TYPE_PHONE,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        android.graphics.PixelFormat.OPAQUE);
+                params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+                params.x = 0;
+                params.y = 0;
+                windowManager.addView(root, params);
+                mUiRoot = root;
+                mUiShown = true;
+                mUiWindowId++;
+                result[0] = String.valueOf(mUiWindowId);
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "Cannot inflate UI layout", error);
+                result[0] = "-1";
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            latch.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+            return "-1";
+        }
+        return result[0];
+    }
+
+    private View uiFind(String id) {
+        View root = mUiRoot;
+        if (root == null) {
+            return null;
+        }
+        int rid = com.stardust.autojs.core.ui.inflater.util.Ids.parse(id);
+        return root.findViewById(rid);
+    }
+
+    public void uiClose() {
+        mDialogHandler.post(() -> {
+            try {
+                if (mUiRoot != null && mUiShown) {
+                    WindowManager windowManager =
+                            (WindowManager) mRuntime.uiHandler.getContext()
+                                    .getSystemService(Context.WINDOW_SERVICE);
+                    windowManager.removeViewImmediate(mUiRoot);
+                }
+            } catch (Throwable ignored) {
+            }
+            mUiRoot = null;
+            mUiShown = false;
+        });
+    }
+
+    public void uiSetConfig(int viewId, String id, String configJson) {
+        mDialogHandler.post(() -> {
+            View view = uiFind(id);
+            if (view == null) {
+                return;
+            }
+            try {
+                org.json.JSONObject config = new org.json.JSONObject(configJson);
+                if (config.has("text")) {
+                    ((android.widget.TextView) view).setText(config.optString("text"));
+                }
+                if (config.has("visibility")) {
+                    view.setVisibility(config.optInt("visibility", View.VISIBLE));
+                }
+                if (config.has("backgroundColor")) {
+                    view.setBackgroundColor(android.graphics.Color.parseColor(
+                            config.optString("backgroundColor")));
+                }
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "Cannot update UI view " + id, error);
+            }
+        });
+    }
+
+    public String uiGetText(int viewId, String id) {
+        final String[] result = new String[]{""};
+        final CountDownLatch latch = new CountDownLatch(1);
+        mDialogHandler.post(() -> {
+            View view = uiFind(id);
+            if (view instanceof android.widget.TextView) {
+                result[0] = ((android.widget.TextView) view).getText().toString();
+            }
+            latch.countDown();
+        });
+        try {
+            latch.await(2, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return result[0];
+    }
+
     private final AtomicLong mNextEngineHandle = new AtomicLong(1);
     private final Map<Long, com.stardust.autojs.execution.ScriptExecution> mEngineSessions =
             new ConcurrentHashMap<>();
@@ -1829,6 +1955,7 @@ final class QuickJsHostBridge implements AutoCloseable {
         mediaStopMusic();
         sensorsUnregisterAll();
         floatyCloseAll();
+        uiClose();
         for (android.app.AlertDialog dialog : new ArrayList<>(pendingDialogRegistry.values())) {
             try {
                 dialog.dismiss();
