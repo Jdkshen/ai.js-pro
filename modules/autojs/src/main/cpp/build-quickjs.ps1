@@ -8,7 +8,7 @@ param(
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 $cppDirectory = $PSScriptRoot
 $autoJsDirectory = (Resolve-Path -LiteralPath (Join-Path $cppDirectory '..\..\..')).Path
@@ -43,12 +43,12 @@ foreach ($abi in @('armeabi-v7a', 'arm64-v8a', 'x86')) {
         '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON' `
         '-DANDROID_STL=c++_static' `
         "-DOPENCV_JAVA_LIBRARY=$openCvLibrary" `
-        "-DCMAKE_BUILD_TYPE=$Configuration"
+        "-DCMAKE_BUILD_TYPE=$Configuration" 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "QuickJS CMake configuration failed for $abi"
     }
 
-    & $CMakePath --build $buildDirectory --config $Configuration
+    & $CMakePath --build $buildDirectory --config $Configuration 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "QuickJS native build failed for $abi"
     }

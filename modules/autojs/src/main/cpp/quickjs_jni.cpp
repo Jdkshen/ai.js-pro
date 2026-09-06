@@ -2938,7 +2938,66 @@ const char kBootstrapScript[] = R"JS(
         }
     });
 
-    global.__engine__ = Object.freeze({ name: 'QuickJS', version: '2026-06-04', native: true });
+    var engineInfo = { name: 'QuickJS', version: '2026-06-04', native: true };
+    global.__engine__ = Object.freeze(engineInfo);
+
+    // Node.js compatible global alias
+    global.global = global;
+
+    // ---- CommonJS module system (require) ----
+    var moduleCache = new Map();
+
+    function moduleFilename(request, fromDir) {
+        request = String(request);
+        if (request === '') throw new Error('Cannot require an empty module');
+        var p;
+        if (request.charAt(0) === '/') {
+            p = request;
+        } else if (fromDir && request.charAt(0) === '.') {
+            p = fromDir + '/' + request;
+        } else {
+            p = files.path(request);
+        }
+        if (!/\.js$/.test(p)) {
+            var alt = p + '.js';
+            if (files.exists(alt)) p = alt;
+        }
+        if (!files.isFile(p)) throw new Error('Cannot find module: ' + request + ' (resolved: ' + p + ')');
+        return p;
+    }
+
+    function loadModule(filename, fromDir) {
+        if (moduleCache.has(filename)) return moduleCache.get(filename).exports;
+        var source = files.read(filename);
+        var module = { id: filename, filename: filename, exports: {}, loaded: false };
+        var dirname = filename.lastIndexOf('/') >= 0
+            ? filename.substring(0, filename.lastIndexOf('/'))
+            : '.';
+        moduleCache.set(filename, module);
+        var localRequire = function (request) {
+            return loadModule(moduleFilename(request, dirname), dirname);
+        };
+        localRequire.resolve = function (request) { return moduleFilename(request, dirname); };
+        localRequire.cache = moduleCache;
+        var factory = new Function('module', 'exports', 'require', '__filename', '__dirname',
+            source + '\n//# sourceURL=' + filename);
+        factory(module, module.exports, localRequire, filename, dirname);
+        module.loaded = true;
+        return module.exports;
+    }
+
+    global.require = function (request) { return loadModule(moduleFilename(request, null), null); };
+    global.__moduleCache = moduleCache;
+
+    // ---- runtime info (Auto.js compatible surface) ----
+    global.runtime = Object.freeze({
+        global: globalThis,
+        engine: engineInfo,
+        engines: global.engines,
+        platform: 'android',
+        cwd: function () { return files.cwd(); },
+        sdcard: function () { return files.getSdcardPath(); }
+    });
 })(globalThis);
 )JS";
 
