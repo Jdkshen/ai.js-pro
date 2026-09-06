@@ -48,6 +48,28 @@ public class Database {
         writable().execSQL(sql, bindArgs);
     }
 
+    /** Auto.js compatible alias for {@link #executeSql(String)}.
+     *  Query statements (SELECT/PRAGMA/EXPLAIN/WITH) are routed to select(). */
+    public Object exec(String sql) {
+        String trimmed = sql == null ? "" : sql.trim().toLowerCase();
+        if (trimmed.startsWith("select") || trimmed.startsWith("pragma")
+                || trimmed.startsWith("explain") || trimmed.startsWith("with")) {
+            return select(sql);
+        }
+        executeSql(sql);
+        return null;
+    }
+
+    public Object exec(String sql, Object[] bindArgs) {
+        String trimmed = sql == null ? "" : sql.trim().toLowerCase();
+        if (trimmed.startsWith("select") || trimmed.startsWith("pragma")
+                || trimmed.startsWith("explain") || trimmed.startsWith("with")) {
+            return select(sql, bindArgs);
+        }
+        executeSql(sql, bindArgs);
+        return null;
+    }
+
     public DatabaseResultSet insert(String table, Map<String, Object> values) {
         long rowId = writable().insert(table, null, toContentValues(values));
         return new DatabaseResultSet(rowId, rowId > 0 ? 1 : 0, new DatabaseResultSet.RowList(new ArrayList<>()));

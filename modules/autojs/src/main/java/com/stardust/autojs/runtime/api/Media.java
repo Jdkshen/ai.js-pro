@@ -1,6 +1,7 @@
 package com.stardust.autojs.runtime.api;
 
 import android.content.Context;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
@@ -20,11 +21,36 @@ public class Media implements MediaScannerConnection.MediaScannerConnectionClien
     private MediaScannerConnection mScannerConnection;
     private MediaPlayerWrapper mMediaPlayer;
     private ScriptRuntime mRuntime;
+    private AudioManager mAudioManager;
 
     public Media(Context context, ScriptRuntime runtime) {
         mScannerConnection = new MediaScannerConnection(context, this);
         mRuntime = runtime;
         mScannerConnection.connect();
+    }
+
+    private AudioManager audioManager() {
+        if (mAudioManager == null) {
+            Context context = mRuntime.uiHandler.getContext();
+            mAudioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        }
+        return mAudioManager;
+    }
+
+    public int getVolume() {
+        return audioManager().getStreamVolume(AudioManager.STREAM_MUSIC);
+    }
+
+    public int getMaxVolume() {
+        return audioManager().getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+    }
+
+    public int setVolume(int volume) {
+        AudioManager audio = audioManager();
+        int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        int target = Math.max(0, Math.min(volume, max));
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0);
+        return audio.getStreamVolume(AudioManager.STREAM_MUSIC);
     }
 
     public void scanFile(String path) {

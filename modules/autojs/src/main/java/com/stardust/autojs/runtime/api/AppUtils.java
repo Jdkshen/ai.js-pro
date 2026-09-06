@@ -97,6 +97,27 @@ public class AppUtils {
         return mFileProviderAuthority;
     }
 
+    @ScriptInterface
+    public String getAppInfo(String packageName) {
+        org.json.JSONObject info = new org.json.JSONObject();
+        try {
+            info.put("packageName", packageName);
+            PackageManager pm = mContext.getPackageManager();
+            ApplicationInfo ai = pm.getApplicationInfo(packageName, 0);
+            info.put("label", pm.getApplicationLabel(ai).toString());
+            android.content.pm.PackageInfo packageInfo = pm.getPackageInfo(packageName, 0);
+            info.put("versionName", packageInfo.versionName == null ? "" : packageInfo.versionName);
+            info.put("versionCode", packageInfo.versionCode);
+        } catch (Exception e) {
+            try {
+                info.put("packageName", packageName);
+                info.put("label", "");
+            } catch (org.json.JSONException ignored) {
+            }
+        }
+        return info.toString();
+    }
+
     @Nullable
     public Activity getCurrentActivity() {
         Log.d("App", "getCurrentActivity: " + mCurrentActivity.get());
