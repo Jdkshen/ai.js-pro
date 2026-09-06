@@ -683,6 +683,23 @@ JSValue callHostStringLong(JSContext *context, const char *methodName, int64_t v
     return JS_NewStringLen(context, text.data(), text.size());
 }
 
+JSValue callHostVoidIntString(JSContext *context, const char *methodName,
+                              int32_t id, const std::string &configJson) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(ILjava/lang/String;)V");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring json = toJavaString(env, configJson);
+    env->CallVoidMethod(state->host, method, static_cast<jint>(id), json);
+    env->DeleteLocalRef(json);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
 JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "getClip", nullptr);
 }
@@ -929,6 +946,32 @@ JSValue nativeDialogsPoll(JSContext *context, JSValueConst, int argc, JSValueCon
         return JS_NewStringLen(context, "", 0);
     }
     return callHostStringLong(context, "dialogsPoll", id);
+}
+
+JSValue nativeFloatyCreate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string configJson = requireStringArg(context, argc, argv, 0);
+    return callStringHost(context, "floatyCreate", configJson.c_str());
+}
+
+JSValue nativeFloatyUpdate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t id = 0;
+    if (argc < 2 || JS_ToInt64(context, &id, argv[0]) < 0) {
+        return JS_UNDEFINED;
+    }
+    const std::string configJson = requireStringArg(context, argc, argv, 1);
+    return callHostVoidIntString(context, "floatyUpdate", static_cast<int32_t>(id), configJson);
+}
+
+JSValue nativeFloatyClose(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t id = 0;
+    if (argc < 1 || JS_ToInt64(context, &id, argv[0]) < 0) {
+        return JS_UNDEFINED;
+    }
+    return callHostVoidInt(context, "floatyClose", static_cast<int32_t>(id));
+}
+
+JSValue nativeFloatyCloseAll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "floatyCloseAll");
 }
 
 JSValue nativeFilesGetSdcardPath(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -3333,6 +3376,47 @@ const char kBootstrapScript[] = R"JS(
     };
     global.dialogs = Object.freeze(dialogs);
 
+    // ---- floaty module (minimal overlay windows) ----
+    var floaty = {
+        window: function (config) {
+            var id = Number(__aiNativeFloatyCreate(JSON.stringify(config || {})));
+            if (id < 0) throw new Error('Unable to create floaty window');
+            var win = {
+                id: id,
+                setSize: function (width, height) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ width: Math.max(0, Number(width) || 0), height: Math.max(0, Number(height) || 0) }));
+                },
+                setPosition: function (x, y) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ x: Math.round(Number(x) || 0), y: Math.round(Number(y) || 0) }));
+                },
+                setText: function (text) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ text: String(text == null ? '' : text) }));
+                },
+                setBackgroundColor: function (color) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ backgroundColor: String(color) }));
+                },
+                setTouchable: function (touchable) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ touchable: !!touchable }));
+                },
+                resize: function (width, height) {
+                    win.setSize(width, height);
+                },
+                close: function () {
+                    __aiNativeFloatyClose(id);
+                },
+                exitOnClose: function () { return false; }
+            };
+            return Object.freeze(win);
+        },
+        rawWindow: function (config) {
+            return floaty.window(config);
+        },
+        closeAll: function () {
+            __aiNativeFloatyCloseAll();
+        }
+    };
+    global.floaty = Object.freeze(floaty);
+
     // ---- threads module (one QuickJS engine per worker) ----
     var workerHandles = new Set();
     function makeThread(engine) {
@@ -3597,6 +3681,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSensorsList", nativeSensorsList, 0);
     installNativeFunction(state->context, global, "__aiNativeDialogsShow", nativeDialogsShow, 5);
     installNativeFunction(state->context, global, "__aiNativeDialogsPoll", nativeDialogsPoll, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyCreate", nativeFloatyCreate, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyUpdate", nativeFloatyUpdate, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyClose", nativeFloatyClose, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyCloseAll", nativeFloatyCloseAll, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesPath", nativeFilesPath, 1);
     installNativeFunction(state->context, global, "__aiNativeSetTimeout", nativeSetTimeout, 2);

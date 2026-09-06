@@ -1600,6 +1600,225 @@ final class QuickJsHostBridge implements AutoCloseable {
         return result;
     }
 
+    // ---- floaty (minimal overlay windows: text + drag + geometry) ----
+    private final java.util.concurrent.atomic.AtomicInteger mNextFloatyId =
+            new java.util.concurrent.atomic.AtomicInteger(1);
+    private final Map<Integer, QuickJsFloatyWindow> mFloatyWindows = new ConcurrentHashMap<>();
+
+    public String floatyCreate(String configJson) {
+        try {
+            JSONObject config = new JSONObject(configJson);
+            int id = mNextFloatyId.getAndIncrement();
+            Context context = mRuntime.uiHandler.getContext();
+            QuickJsFloatyWindow window = new QuickJsFloatyWindow(context, id, config);
+            mFloatyWindows.put(id, window);
+            if (!window.show()) {
+                mFloatyWindows.remove(id);
+                return "-1";
+            }
+            return String.valueOf(id);
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot create floaty window", error);
+            return "-1";
+        }
+    }
+
+    public void floatyUpdate(int id, String configJson) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(id);
+        if (window != null) {
+            window.update(configJson);
+        }
+    }
+
+    public void floatyClose(int id) {
+        QuickJsFloatyWindow window = mFloatyWindows.remove(id);
+        if (window != null) {
+            window.close();
+        }
+    }
+
+    public void floatyCloseAll() {
+        for (QuickJsFloatyWindow window : new ArrayList<>(mFloatyWindows.values())) {
+            window.close();
+        }
+        mFloatyWindows.clear();
+    }
+
+    private static final class QuickJsFloatyWindow {
+        private final Context mContext;
+        private final int mId;
+        private final WindowManager mWindowManager;
+        private final android.widget.FrameLayout mRoot;
+        private final android.widget.TextView mTextView;
+        private android.graphics.drawable.Drawable mBackground;
+        private WindowManager.LayoutParams mParams;
+        private final Handler mHandler = new Handler(Looper.getMainLooper());
+        private volatile boolean mShown;
+        private boolean mTouchable;
+        private float mTouchStartX;
+        private float mTouchStartY;
+        private int mStartX;
+        private int mStartY;
+
+        QuickJsFloatyWindow(Context context, int id, JSONObject config) {
+            mContext = context;
+            mId = id;
+            mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+            mRoot = new android.widget.FrameLayout(context);
+            mTextView = new android.widget.TextView(context);
+            applyConfig(config);
+            mRoot.setOnTouchListener((view, event) -> {
+                if (!mTouchable) {
+                    return false;
+                }
+                switch (event.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        mTouchStartX = event.getRawX();
+                        mTouchStartY = event.getRawY();
+                        mStartX = mParams.x;
+                        mStartY = mParams.y;
+                        return true;
+                    case android.view.MotionEvent.ACTION_MOVE:
+                        mParams.x = mStartX + (int) (event.getRawX() - mTouchStartX);
+                        mParams.y = mStartY + (int) (event.getRawY() - mTouchStartY);
+                        try {
+                            mWindowManager.updateViewLayout(mRoot, mParams);
+                        } catch (Throwable ignored) {
+                        }
+                        return true;
+                    default:
+                        return true;
+                }
+            });
+        }
+
+        private void applyConfig(JSONObject config) {
+            JSONObject c = config;
+            mTouchable = c.optBoolean("touchable", false);
+            mTextView.setText(c.optString("text", ""));
+            if (c.has("textSize")) {
+                mTextView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                        (float) c.optDouble("textSize", 14));
+            }
+            if (c.has("textColor")) {
+                try {
+                    mTextView.setTextColor(android.graphics.Color.parseColor(c.optString("textColor")));
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+            if (c.has("backgroundColor")) {
+                try {
+                    mBackground = new android.graphics.drawable.ColorDrawable(
+                            android.graphics.Color.parseColor(c.optString("backgroundColor")));
+                } catch (IllegalArgumentException ignored) {
+                    mBackground = null;
+                }
+            }
+            mRoot.removeAllViews();
+            mRoot.setBackground(mBackground);
+            mRoot.addView(mTextView, new android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.view.Gravity.CENTER));
+            int width = c.optInt("width", android.widget.FrameLayout.LayoutParams.WRAP_CONTENT);
+            int height = c.optInt("height", android.widget.FrameLayout.LayoutParams.WRAP_CONTENT);
+            int gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+            mParams = new WindowManager.LayoutParams(
+                    width < 0 ? WindowManager.LayoutParams.WRAP_CONTENT : width,
+                    height < 0 ? WindowManager.LayoutParams.WRAP_CONTENT : height,
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                            ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                            : WindowManager.LayoutParams.TYPE_PHONE,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    android.graphics.PixelFormat.TRANSLUCENT);
+            mParams.gravity = gravity;
+            mParams.x = c.optInt("x", 0);
+            mParams.y = c.optInt("y", 0);
+        }
+
+        boolean show() {
+            mHandler.post(() -> {
+                try {
+                    if (mShown) {
+                        return;
+                    }
+                    mWindowManager.addView(mRoot, mParams);
+                    mShown = true;
+                    Log.i("QuickJsFloatyWindow", "Floaty window " + mId + " shown");
+                } catch (Throwable error) {
+                    Log.e("QuickJsFloatyWindow", "addView failed", error);
+                    mShown = false;
+                }
+            });
+            return true;
+        }
+
+        void update(String configJson) {
+            mHandler.post(() -> {
+                try {
+                    JSONObject c = new JSONObject(configJson);
+                    if (c.has("text")) {
+                        mTextView.setText(c.optString("text"));
+                    }
+                    if (c.has("textColor")) {
+                        try {
+                            mTextView.setTextColor(android.graphics.Color.parseColor(c.optString("textColor")));
+                        } catch (IllegalArgumentException ignored) {
+                        }
+                    }
+                    if (c.has("backgroundColor")) {
+                        try {
+                            mRoot.setBackground(new android.graphics.drawable.ColorDrawable(
+                                    android.graphics.Color.parseColor(c.optString("backgroundColor"))));
+                        } catch (IllegalArgumentException ignored) {
+                        }
+                    }
+                    if (c.has("touchable")) {
+                        mTouchable = c.optBoolean("touchable", false);
+                    }
+                    boolean updated = false;
+                    if (c.has("width") || c.has("height")) {
+                        if (c.has("width")) {
+                            mParams.width = c.optInt("width", mParams.width);
+                        }
+                        if (c.has("height")) {
+                            mParams.height = c.optInt("height", mParams.height);
+                        }
+                        updated = true;
+                    }
+                    if (c.has("x") || c.has("y")) {
+                        if (c.has("x")) {
+                            mParams.x = c.optInt("x", mParams.x);
+                        }
+                        if (c.has("y")) {
+                            mParams.y = c.optInt("y", mParams.y);
+                        }
+                        updated = true;
+                    }
+                    if (updated && mShown) {
+                        mWindowManager.updateViewLayout(mRoot, mParams);
+                    }
+                } catch (Throwable error) {
+                    Log.w("QuickJsFloatyWindow", "update failed", error);
+                }
+            });
+        }
+
+        void close() {
+            mHandler.post(() -> {
+                try {
+                    if (mShown) {
+                        mWindowManager.removeViewImmediate(mRoot);
+                        mShown = false;
+                    }
+                } catch (Throwable ignored) {
+                    mShown = false;
+                }
+            });
+        }
+    }
+
     private final AtomicLong mNextEngineHandle = new AtomicLong(1);
     private final Map<Long, com.stardust.autojs.execution.ScriptExecution> mEngineSessions =
             new ConcurrentHashMap<>();
@@ -1609,6 +1828,7 @@ final class QuickJsHostBridge implements AutoCloseable {
         drawClose();
         mediaStopMusic();
         sensorsUnregisterAll();
+        floatyCloseAll();
         for (android.app.AlertDialog dialog : new ArrayList<>(pendingDialogRegistry.values())) {
             try {
                 dialog.dismiss();
