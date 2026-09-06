@@ -59,6 +59,7 @@ import com.jdkshen.aijspro.model.sample.SampleFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.common.ScriptOperations
+import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
 import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
@@ -408,12 +409,17 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun view(entry: SampleEntry) {
-        // Import into the script dir and open in the new Pro editor directly
-        // (replaces the legacy preview activity). importSample shows the name
-        // confirmation dialog and resolves the target path reliably.
+        // Directly open in the new Pro editor. If the sample was already
+        // imported into the script dir, reuse it; otherwise import silently
+        // (no name prompt) and open after the copy completes.
         val context = requireContext()
+        val existing = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
+        if (existing.isFile) {
+            startActivity(ProCodeEditorActivity.sampleIntent(context, existing, entry.path))
+            return
+        }
         imports.add(ScriptOperations(context, rootView)
-            .importSample(SampleFile(entry.path, context.assets))
+            .importSampleWithName(SampleFile(entry.path, context.assets), entry.name)
             .subscribe({ path ->
                 startActivity(ProCodeEditorActivity.sampleIntent(
                     context, java.io.File(path), entry.path))
