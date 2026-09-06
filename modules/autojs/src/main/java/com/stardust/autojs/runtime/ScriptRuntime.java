@@ -18,6 +18,7 @@ import com.stardust.autojs.rhino.continuation.Continuation;
 import com.stardust.autojs.runtime.api.AbstractShell;
 import com.stardust.autojs.runtime.api.AppUtils;
 import com.stardust.autojs.runtime.api.Console;
+import com.stardust.autojs.runtime.api.Crypto;
 import com.stardust.autojs.runtime.api.Device;
 import com.stardust.autojs.runtime.api.Engines;
 import com.stardust.autojs.runtime.api.Events;
@@ -31,6 +32,7 @@ import com.stardust.autojs.runtime.api.Sqlite;
 import com.stardust.autojs.runtime.api.Threads;
 import com.stardust.autojs.runtime.api.Timers;
 import com.stardust.autojs.runtime.api.Yolo;
+import com.stardust.autojs.runtime.api.Zips;
 import com.stardust.autojs.core.accessibility.UiSelector;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.core.image.capture.ScreenCaptureRequester;
@@ -205,6 +207,12 @@ public class ScriptRuntime {
     @ScriptVariable
     public final Sqlite sqlite;
 
+    @ScriptVariable
+    public final Crypto crypto;
+
+    @ScriptVariable
+    public final Zips zips;
+
     private Images images;
 
     private static WeakReference<Context> applicationContext;
@@ -240,6 +248,8 @@ public class ScriptRuntime {
         plugins = new Plugins(context, this);
         yolo = new Yolo(context);
         sqlite = new Sqlite(context);
+        crypto = new Crypto();
+        zips = new Zips(context);
     }
 
     public void init() {

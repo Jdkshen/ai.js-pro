@@ -56,6 +56,8 @@ runtime.init();
      global.util = require('__util__.js');
      global.device = runtime.device;
      global.sqlite = runtime.sqlite;
+     global.crypto = runtime.crypto;
+     global.zips = runtime.zips;
      global.Promise = require('promise.js');
  
      //设置JavaScriptBridges用于与Java层的交互和数据转换
