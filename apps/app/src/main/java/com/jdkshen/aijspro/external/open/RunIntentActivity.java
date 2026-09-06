@@ -78,6 +78,24 @@ public class RunIntentActivity extends Activity {
         };
         AutoJs.getInstance().getScriptEngineService()
                 .registerGlobalScriptExecutionListener(mWatcher);
+        // Poll engine state: the global-listener event can be missed when a
+        // script finishes before the listener is registered (very fast scripts).
+        getWindow().getDecorView().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing()) {
+                    return;
+                }
+                com.stardust.autojs.engine.ScriptEngine engine = execution.getEngine();
+                if (engine == null || engine.isDestroyed()) {
+                    AutoJs.getInstance().getScriptEngineService()
+                            .unregisterGlobalScriptExecutionListener(mWatcher);
+                    finish();
+                    return;
+                }
+                getWindow().getDecorView().postDelayed(this, 500);
+            }
+        }, 500);
         // Safety net: never keep the process foreground forever.
         getWindow().getDecorView().postDelayed(() -> {
             if (!isFinishing()) {
