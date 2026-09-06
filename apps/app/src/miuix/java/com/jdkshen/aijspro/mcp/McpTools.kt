@@ -119,6 +119,8 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
             add(tool("run_script", "运行脚本；需手机端开启运行授权；wait=true 时等待结束并返回结果、错误与运行日志", objSchema("path", "wait", "timeoutSeconds", required = arrayOf("path"))))
+            add(tool("list_engine_api", "枚举指定引擎（quickjs/rhino）当前可用的全局 API 名称列表", objSchema("engine")))
+            add(tool("probe_engine_api", "探测指定引擎中某个全局 API 的类型与成员（object/function 及 Object.keys）", objSchema("engine", "name", required = arrayOf("engine", "name"))))
             add(tool("stop_script", "停止本 MCP 发起的运行任务", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("workspace_open", "从真实脚本创建私有工作区快照", objSchema("path", required = arrayOf("path"))))
             add(tool("workspace_list", "列出工作区及待确认状态"))
@@ -157,6 +159,8 @@ internal class McpTools(private val context: Context, private val event: (String
             }
             "read_apk_logs" -> toolJson(readApkLogs(args.intOr("afterId", -1), args.intOr("limit", 100)))
             "run_script" -> runScript(args)
+            "list_engine_api" -> listEngineApi(args)
+            "probe_engine_api" -> probeEngineApi(args)
             "stop_script" -> stopScript(args)
             "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"))))
             "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
@@ -218,6 +222,62 @@ internal class McpTools(private val context: Context, private val event: (String
         }
         if (args.booleanOr("wait", false)) return toolJson(waitFor(record, args.intOr("timeoutSeconds", 60)))
         return toolJson(runJson(record))
+    }
+
+    private fun listEngineApi(args: JsonObject): JsonObject {
+        val engine = args.stringOr("engine", "quickjs").lowercase()
+        require(engine == "quickjs" || engine == "rhino") { "engine 必须是 quickjs 或 rhino" }
+        val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
+        val source = header +
+            "console.log('MCP_API_PROBE_RESULT=' + JSON.stringify(Object.keys(typeof globalThis !== 'undefined' ? globalThis : this)" +
+            ".filter(function(n){return !n.startsWith('__')}).sort()))"
+        val resultText = engineProbe(engine, source)
+        val items = com.google.gson.JsonParser().parse(resultText).asJsonArray
+        return JsonObject().apply { addProperty("engine", engine); addProperty("count", items.size()); add("items", items) }
+    }
+
+    private fun probeEngineApi(args: JsonObject): JsonObject {
+        val engine = args.string("engine").lowercase()
+        val name = args.string("name")
+        require(engine == "quickjs" || engine == "rhino") { "engine 必须是 quickjs 或 rhino" }
+        require(name.matches(Regex("[A-Za-z0-9_$.]{1,120}"))) { "name 只允许字母数字下划线 $ ." }
+        val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
+        val source = header + "var x=" + name + ";" +
+            "console.log('MCP_API_PROBE_RESULT=' + JSON.stringify({name:'" + name + "',type:typeof x," +
+            "keys:(x&&typeof x==='object')?Object.keys(x).slice(0,200):[]}))"
+        val resultText = engineProbe(engine, source)
+        val obj = com.google.gson.JsonParser().parse(resultText).asJsonObject
+        return JsonObject().apply {
+            addProperty("engine", engine)
+            addProperty("name", obj.get("name").asString)
+            addProperty("type", obj.get("type").asString)
+            add("keys", obj.getAsJsonArray("keys"))
+        }
+    }
+
+    private fun engineProbe(engine: String, source: String, timeout: Int = 30): String {
+        if (!McpService.allowExecution) throw ToolError("运行授权未开启")
+        val file = File(root, "mcp_api_probe_tmp.js")
+        file.writeText(source)
+        try {
+            val response = runScript(JsonObject().apply {
+                addProperty("path", file.name)
+                addProperty("wait", true)
+                addProperty("timeoutSeconds", timeout)
+            })
+            val text = response.getAsJsonArray("content").first().asJsonObject.get("text").asString
+            val run = com.google.gson.JsonParser().parse(text).asJsonObject
+            if (run.get("status")?.asString == "FAILED") {
+                val err = run.getAsJsonObject("error")
+                throw ToolError("探针执行失败：" + err.get("message")?.asString.orEmpty())
+            }
+            val logs = run.getAsJsonArray("logs") ?: com.google.gson.JsonArray()
+            val line = logs.firstOrNull { it.asJsonObject.get("content")?.asString.orEmpty().contains("MCP_API_PROBE_RESULT=") }
+                ?: throw ToolError("探针无输出（未捕获到结果日志）")
+            return line.asJsonObject.get("content").asString.substringAfter("MCP_API_PROBE_RESULT=")
+        } finally {
+            file.delete()
+        }
     }
 
     private fun stopScript(args: JsonObject): JsonObject {
