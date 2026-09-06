@@ -1,0 +1,13 @@
+Rhino 引擎（默认引擎）
+====================
+
+普通 .js 文件（首行没有 // @engine quickjs）默认由 Rhino 引擎执行。
+本目录存放 Rhino 引擎专属示例：
+
+- 回归测试.js          基础 API 断言回归
+- 全模块回归测试.js    全模块能力验证（files/device/app/events/media/sensors/sqlite/ui/
+                       threads/images/floaty/dialogs/shell/toast/require/runtime/engines）
+
+对比：
+- QuickJS 引擎示例见上级目录「QuickJS 新引擎/」
+- QuickJS 脚本首行必须写：// @engine quickjs

@@ -27,6 +27,7 @@ import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.common.ScriptOperations;
 import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
 import com.jdkshen.aijspro.ui.edit.theme.Theme;
+import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity;
 
 import com.stardust.theme.ThemeColorManager;
 import com.stardust.util.SparseArrayEntries;
@@ -117,7 +118,8 @@ public class ViewSampleActivity extends AppCompatActivity implements OnActivityR
                 .importSample(mSample)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(path -> {
-                    EditActivity.editFile(ViewSampleActivity.this, path, false);
+                    startActivity(ProCodeEditorActivity.intent(
+                            ViewSampleActivity.this, new java.io.File(path)));
                     finish();
                 });
     }
