@@ -7,7 +7,14 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.media.AudioManager;
 import android.media.Image;
+import android.media.MediaPlayer;
+import android.media.MediaScannerConnection;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -38,6 +45,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1166,6 +1174,245 @@ final class QuickJsHostBridge implements AutoCloseable {
         return config;
     }
 
+    // ---- media (audio volume / music player) ----
+    private AudioManager mAudioManager;
+    private MediaPlayer mMediaPlayer;
+
+    private AudioManager audioManager() {
+        if (mAudioManager == null) {
+            Context context = mRuntime.uiHandler.getContext();
+            mAudioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        }
+        return mAudioManager;
+    }
+
+    public int mediaGetVolume() {
+        return audioManager().getStreamVolume(AudioManager.STREAM_MUSIC);
+    }
+
+    public int mediaSetVolume(int volume) {
+        AudioManager audio = audioManager();
+        int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        int target = Math.max(0, Math.min(volume, max));
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0);
+        return audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+    }
+
+    public boolean mediaPlayMusic(String path, float volume, boolean looping) {
+        try {
+            stopMediaPlayer();
+            MediaPlayer player = new MediaPlayer();
+            player.setDataSource(path);
+            player.setVolume(volume, volume);
+            player.setLooping(looping);
+            player.prepare();
+            player.start();
+            mMediaPlayer = player;
+            return true;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot play music: " + path, error);
+            return false;
+        }
+    }
+
+    private void stopMediaPlayer() {
+        if (mMediaPlayer != null) {
+            try {
+                mMediaPlayer.stop();
+            } catch (Throwable ignored) {
+            }
+            mMediaPlayer.release();
+            mMediaPlayer = null;
+        }
+    }
+
+    public void mediaStopMusic() {
+        stopMediaPlayer();
+    }
+
+    public void mediaPauseMusic() {
+        if (mMediaPlayer != null) {
+            try {
+                mMediaPlayer.pause();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    public void mediaResumeMusic() {
+        if (mMediaPlayer != null) {
+            try {
+                mMediaPlayer.start();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    public boolean mediaIsMusicPlaying() {
+        return mMediaPlayer != null && mMediaPlayer.isPlaying();
+    }
+
+    public void mediaMusicSeekTo(int positionMs) {
+        if (mMediaPlayer != null) {
+            try {
+                mMediaPlayer.seekTo(Math.max(0, positionMs));
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    public int mediaGetMusicDuration() {
+        return mMediaPlayer != null ? mMediaPlayer.getDuration() : 0;
+    }
+
+    public int mediaGetMusicCurrentPosition() {
+        return mMediaPlayer != null ? mMediaPlayer.getCurrentPosition() : 0;
+    }
+
+    public void mediaScanFile(String path) {
+        try {
+            Context context = mRuntime.uiHandler.getContext();
+            MediaScannerConnection.scanFile(context, new String[]{path}, null, null);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ---- sensors (single-sample capture, polled from JS) ----
+    private SensorManager mSensorManager;
+    private final java.util.concurrent.atomic.AtomicInteger mNextSensorHandle =
+            new java.util.concurrent.atomic.AtomicInteger(1);
+    private final Map<Integer, SensorEventListener> mSensorListeners = new HashMap<>();
+    private final Map<Integer, SensorSample> mSensorSamples = new ConcurrentHashMap<>();
+
+    private static class SensorSample {
+        volatile float[] values = new float[0];
+        volatile int accuracy = 0;
+        volatile long timestamp = 0;
+    }
+
+    private SensorManager sensorManager() {
+        if (mSensorManager == null) {
+            Context context = mRuntime.uiHandler.getContext();
+            mSensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+        }
+        return mSensorManager;
+    }
+
+    private Sensor findSensor(String name) {
+        SensorManager manager = sensorManager();
+        List<Sensor> sensors = manager.getSensorList(Sensor.TYPE_ALL);
+        for (Sensor sensor : sensors) {
+            if (sensor.getName().equalsIgnoreCase(name)
+                    || sensor.getStringType().equalsIgnoreCase(name)
+                    || String.valueOf(sensor.getType()).equals(name)) {
+                return sensor;
+            }
+        }
+        if ("accelerometer".equalsIgnoreCase(name) || "acceleration".equalsIgnoreCase(name)) {
+            return manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        }
+        if ("gyroscope".equalsIgnoreCase(name) || "gyro".equalsIgnoreCase(name)) {
+            return manager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+        }
+        if ("light".equalsIgnoreCase(name)) {
+            return manager.getDefaultSensor(Sensor.TYPE_LIGHT);
+        }
+        if ("proximity".equalsIgnoreCase(name)) {
+            return manager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+        }
+        if ("magnetic".equalsIgnoreCase(name) || "magnetic_field".equalsIgnoreCase(name)) {
+            return manager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+        }
+        if ("orientation".equalsIgnoreCase(name)) {
+            return manager.getDefaultSensor(Sensor.TYPE_ORIENTATION);
+        }
+        if ("pressure".equalsIgnoreCase(name)) {
+            return manager.getDefaultSensor(Sensor.TYPE_PRESSURE);
+        }
+        return null;
+    }
+
+    public int sensorsRegister(String name, int delayMicros) {
+        Sensor sensor = findSensor(name);
+        if (sensor == null) {
+            return -1;
+        }
+        SensorManager manager = sensorManager();
+        int handle = mNextSensorHandle.getAndIncrement();
+        SensorSample sample = new SensorSample();
+        mSensorSamples.put(handle, sample);
+        SensorEventListener listener = new SensorEventListener() {
+            @Override
+            public void onSensorChanged(SensorEvent event) {
+                float[] values = new float[event.values.length];
+                System.arraycopy(event.values, 0, values, 0, values.length);
+                sample.values = values;
+                sample.accuracy = event.accuracy;
+                sample.timestamp = event.timestamp;
+            }
+
+            @Override
+            public void onAccuracyChanged(Sensor sensor, int accuracy) {
+                sample.accuracy = accuracy;
+            }
+        };
+        manager.registerListener(listener, sensor, Math.max(0, delayMicros),
+                new Handler(Looper.getMainLooper()));
+        mSensorListeners.put(handle, listener);
+        return handle;
+    }
+
+    public String sensorsRead(int handle) {
+        SensorSample sample = mSensorSamples.get(handle);
+        if (sample == null) {
+            return "";
+        }
+        try {
+            JSONObject object = new JSONObject();
+            JSONArray values = new JSONArray();
+            for (float value : sample.values) {
+                values.put(value);
+            }
+            object.put("values", values);
+            object.put("accuracy", sample.accuracy);
+            object.put("timestamp", sample.timestamp);
+            return object.toString();
+        } catch (JSONException e) {
+            return "";
+        }
+    }
+
+    public boolean sensorsUnregister(int handle) {
+        SensorEventListener listener = mSensorListeners.remove(handle);
+        if (listener == null) {
+            return false;
+        }
+        sensorManager().unregisterListener(listener);
+        mSensorSamples.remove(handle);
+        return true;
+    }
+
+    public void sensorsUnregisterAll() {
+        SensorManager manager = sensorManager();
+        for (SensorEventListener listener : new ArrayList<>(mSensorListeners.values())) {
+            manager.unregisterListener(listener);
+        }
+        mSensorListeners.clear();
+        mSensorSamples.clear();
+    }
+
+    public String sensorsList() {
+        try {
+            JSONArray array = new JSONArray();
+            for (Sensor sensor : sensorManager().getSensorList(Sensor.TYPE_ALL)) {
+                array.put(sensor.getName());
+            }
+            return array.toString();
+        } catch (Exception e) {
+            return "[]";
+        }
+    }
+
     private final AtomicLong mNextEngineHandle = new AtomicLong(1);
     private final Map<Long, com.stardust.autojs.execution.ScriptExecution> mEngineSessions =
             new ConcurrentHashMap<>();
@@ -1173,6 +1420,8 @@ final class QuickJsHostBridge implements AutoCloseable {
     @Override
     public void close() {
         drawClose();
+        mediaStopMusic();
+        sensorsUnregisterAll();
         // Kill any shell child processes still running so a stopped script cannot
         // leak background commands.
         for (Process process : new ArrayList<>(mShellProcesses)) {

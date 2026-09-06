@@ -358,7 +358,14 @@ JSValue nativeSleep(JSContext *context, JSValueConst, int argc, JSValueConst *ar
     }
     millis = std::max<int64_t>(0, millis);
     while (millis > 0 && !state->interrupted.load(std::memory_order_relaxed)) {
+        // Dispatch due timers while sleeping so setTimeout/setInterval (e.g. the
+        // sensors polling loop) keep firing during synchronous sleep() calls.
         const int64_t slice = std::min<int64_t>(millis, 25);
+        std::string timerError;
+        if (!dispatchDueTimers(context, state, &timerError)) {
+            const std::string message = timerError.empty() ? "Timer callback failed" : timerError;
+            return JS_ThrowInternalError(context, "%s", message.c_str());
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(slice));
         millis -= slice;
     }
@@ -497,6 +504,138 @@ JSValue callIntHostNoArgs(JSContext *context, const char *methodName) {
                                  : JS_NewInt32(context, result);
 }
 
+JSValue callHostVoidNoArgs(JSContext *context, const char *methodName) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "()V");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    env->CallVoidMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue callHostVoidInt(JSContext *context, const char *methodName, int32_t value) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(I)V");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    env->CallVoidMethod(state->host, method, static_cast<jint>(value));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue callHostIntInt(JSContext *context, const char *methodName, int32_t value) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(I)I");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jint result = env->CallIntMethod(state->host, method, static_cast<jint>(value));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewInt32(context, result);
+}
+
+JSValue callHostBoolNoArgs(JSContext *context, const char *methodName) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "()Z");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue callHostBoolInt(JSContext *context, const char *methodName, int32_t value) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(I)Z");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jint>(value));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue callHostStringInt(JSContext *context, const char *methodName, int32_t value) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(I)Ljava/lang/String;");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            static_cast<jint>(value)));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue callHostIntStringInt(JSContext *context, const char *methodName,
+                             const std::string &first, int32_t second) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(Ljava/lang/String;I)I");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring javaFirst = toJavaString(env, first);
+    const jint result = env->CallIntMethod(state->host, method, javaFirst,
+            static_cast<jint>(second));
+    env->DeleteLocalRef(javaFirst);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewInt32(context, result);
+}
+
+JSValue callHostBoolStringFloatBool(JSContext *context, const char *methodName,
+                                    const std::string &path, float volume, bool looping) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName,
+            "(Ljava/lang/String;FFZ)Z");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring javaPath = toJavaString(env, path);
+    const jboolean result = env->CallBooleanMethod(state->host, method, javaPath,
+            static_cast<jfloat>(volume), looping ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(javaPath);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
 JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "getClip", nullptr);
 }
@@ -613,6 +752,115 @@ JSValue nativeFilesMove(JSContext *context, JSValueConst, int argc, JSValueConst
 
 JSValue nativeFilesCwd(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "filesCwd", nullptr);
+}
+
+JSValue nativeMediaGetVolume(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "mediaGetVolume");
+}
+
+JSValue nativeMediaSetVolume(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t volume = 0;
+    if (argc < 1 || JS_ToInt64(context, &volume, argv[0]) < 0) {
+        volume = 0;
+    }
+    return callHostIntInt(context, "mediaSetVolume", static_cast<int32_t>(volume));
+}
+
+JSValue nativeMediaPlayMusic(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string path = requireStringArg(context, argc, argv, 0);
+    double volume = 1.0;
+    if (argc > 1) {
+        JS_ToFloat64(context, &volume, argv[1]);
+    }
+    bool looping = false;
+    if (argc > 2) {
+        looping = JS_ToBool(context, argv[2]) != 0;
+    }
+    return callHostBoolStringFloatBool(context, "mediaPlayMusic", path,
+            static_cast<float>(volume), looping);
+}
+
+JSValue nativeMediaStopMusic(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "mediaStopMusic");
+}
+
+JSValue nativeMediaPauseMusic(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "mediaPauseMusic");
+}
+
+JSValue nativeMediaResumeMusic(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "mediaResumeMusic");
+}
+
+JSValue nativeMediaIsMusicPlaying(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostBoolNoArgs(context, "mediaIsMusicPlaying");
+}
+
+JSValue nativeMediaMusicSeekTo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t position = 0;
+    if (argc < 1 || JS_ToInt64(context, &position, argv[0]) < 0) {
+        position = 0;
+    }
+    return callHostVoidInt(context, "mediaMusicSeekTo", static_cast<int32_t>(position));
+}
+
+JSValue nativeMediaGetMusicDuration(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "mediaGetMusicDuration");
+}
+
+JSValue nativeMediaGetMusicCurrentPosition(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "mediaGetMusicCurrentPosition");
+}
+
+JSValue nativeMediaScanFile(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string path = requireStringArg(context, argc, argv, 0);
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "mediaScanFile", "(Ljava/lang/String;)V");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring javaPath = toJavaString(env, path);
+    env->CallVoidMethod(state->host, method, javaPath);
+    env->DeleteLocalRef(javaPath);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeSensorsRegister(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string name = requireStringArg(context, argc, argv, 0);
+    int64_t delayMicros = 200000;
+    if (argc > 1) {
+        JS_ToInt64(context, &delayMicros, argv[1]);
+    }
+    return callHostIntStringInt(context, "sensorsRegister", name,
+            static_cast<int32_t>(delayMicros));
+}
+
+JSValue nativeSensorsRead(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_NewStringLen(context, "", 0);
+    }
+    return callHostStringInt(context, "sensorsRead", static_cast<int32_t>(handle));
+}
+
+JSValue nativeSensorsUnregister(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_NewBool(context, false);
+    }
+    return callHostBoolInt(context, "sensorsUnregister", static_cast<int32_t>(handle));
+}
+
+JSValue nativeSensorsUnregisterAll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "sensorsUnregisterAll");
+}
+
+JSValue nativeSensorsList(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "sensorsList", nullptr);
 }
 
 JSValue nativeFilesGetSdcardPath(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -2876,6 +3124,97 @@ const char kBootstrapScript[] = R"JS(
     };
     global.events = Object.freeze(events);
 
+    // ---- media module ----
+    var media = {
+        getVolume: function () { return Number(__aiNativeMediaGetVolume()); },
+        setVolume: function (volume) {
+            return Number(__aiNativeMediaSetVolume(Math.max(0, Math.floor(Number(volume) || 0))));
+        },
+        playMusic: function (path, volume, looping) {
+            return !!__aiNativeMediaPlayMusic(String(path),
+                volume === undefined ? 1 : Number(volume), !!looping);
+        },
+        stopMusic: function () { __aiNativeMediaStopMusic(); },
+        pauseMusic: function () { __aiNativeMediaPauseMusic(); },
+        resumeMusic: function () { __aiNativeMediaResumeMusic(); },
+        isMusicPlaying: function () { return !!__aiNativeMediaIsMusicPlaying(); },
+        musicSeekTo: function (positionMs) { __aiNativeMediaMusicSeekTo(Math.max(0, Number(positionMs) || 0)); },
+        getMusicDuration: function () { return Number(__aiNativeMediaGetMusicDuration()); },
+        getMusicCurrentPosition: function () { return Number(__aiNativeMediaGetMusicCurrentPosition()); },
+        scanFile: function (path) { __aiNativeMediaScanFile(String(path)); }
+    };
+    global.media = Object.freeze(media);
+
+    // ---- sensors module (poll-based event emitter) ----
+    function makeSensor(handle, delayMicros) {
+        var listeners = { change: [], accuracy: [] };
+        var pollMs = delayMicros === 0 ? 10 : Math.max(10, Math.round(delayMicros / 1000));
+        var pollTimerId = null;
+        var sensor = {
+            handle: handle,
+            read: function () {
+                var json = __aiNativeSensorsRead(handle);
+                return json ? JSON.parse(json) : null;
+            },
+            on: function (name, listener) {
+                if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+                (listeners[name] = listeners[name] || []).push(listener);
+                return sensor;
+            },
+            once: function (name, listener) {
+                if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+                function onceListener() {
+                    sensor.off(name, onceListener);
+                    return listener.apply(undefined, arguments);
+                }
+                onceListener.listener = listener;
+                return sensor.on(name, onceListener);
+            },
+            off: function (name, listener) {
+                var list = listeners[name];
+                if (!list) return sensor;
+                for (var i = list.length - 1; i >= 0; i--) {
+                    if (list[i] === listener || list[i].listener === listener) list.splice(i, 1);
+                }
+                return sensor;
+            },
+            unregister: function () {
+                if (pollTimerId !== null) {
+                    clearInterval(pollTimerId);
+                    pollTimerId = null;
+                }
+                return __aiNativeSensorsUnregister(handle);
+            }
+        };
+        pollTimerId = setInterval(function () {
+            var data = sensor.read();
+            if (!data) return;
+            (listeners.change || []).slice().forEach(function (listener) {
+                listener(data);
+            });
+            (listeners.accuracy || []).slice().forEach(function (listener) {
+                listener(data.accuracy, data);
+            });
+        }, pollMs);
+        return Object.freeze(sensor);
+    }
+    global.sensors = Object.freeze({
+        register: function (name, delay) {
+            var micros = Number(delay);
+            if (isNaN(micros)) micros = 200000;
+            var handle = Number(__aiNativeSensorsRegister(String(name), Math.floor(micros)));
+            if (handle < 0) throw new Error('Unsupported sensor: ' + name);
+            return makeSensor(handle, micros);
+        },
+        unregister: function (sensor) {
+            if (sensor && typeof sensor.unregister === 'function') return sensor.unregister();
+            return false;
+        },
+        unregisterAll: function () { __aiNativeSensorsUnregisterAll(); },
+        list: function () { return JSON.parse(__aiNativeSensorsList()); },
+        Delay: Object.freeze({ normal: 200000, ui: 60000, game: 20000, fastest: 0 })
+    });
+
     // ---- threads module (one QuickJS engine per worker) ----
     var workerHandles = new Set();
     function makeThread(engine) {
@@ -3122,6 +3461,22 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFilesCopy", nativeFilesCopy, 2);
     installNativeFunction(state->context, global, "__aiNativeFilesMove", nativeFilesMove, 2);
     installNativeFunction(state->context, global, "__aiNativeFilesCwd", nativeFilesCwd, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaGetVolume", nativeMediaGetVolume, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaSetVolume", nativeMediaSetVolume, 1);
+    installNativeFunction(state->context, global, "__aiNativeMediaPlayMusic", nativeMediaPlayMusic, 3);
+    installNativeFunction(state->context, global, "__aiNativeMediaStopMusic", nativeMediaStopMusic, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaPauseMusic", nativeMediaPauseMusic, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaResumeMusic", nativeMediaResumeMusic, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaIsMusicPlaying", nativeMediaIsMusicPlaying, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaMusicSeekTo", nativeMediaMusicSeekTo, 1);
+    installNativeFunction(state->context, global, "__aiNativeMediaGetMusicDuration", nativeMediaGetMusicDuration, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaGetMusicCurrentPosition", nativeMediaGetMusicCurrentPosition, 0);
+    installNativeFunction(state->context, global, "__aiNativeMediaScanFile", nativeMediaScanFile, 1);
+    installNativeFunction(state->context, global, "__aiNativeSensorsRegister", nativeSensorsRegister, 2);
+    installNativeFunction(state->context, global, "__aiNativeSensorsRead", nativeSensorsRead, 1);
+    installNativeFunction(state->context, global, "__aiNativeSensorsUnregister", nativeSensorsUnregister, 1);
+    installNativeFunction(state->context, global, "__aiNativeSensorsUnregisterAll", nativeSensorsUnregisterAll, 0);
+    installNativeFunction(state->context, global, "__aiNativeSensorsList", nativeSensorsList, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesPath", nativeFilesPath, 1);
     installNativeFunction(state->context, global, "__aiNativeSetTimeout", nativeSetTimeout, 2);
