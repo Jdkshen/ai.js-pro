@@ -1612,7 +1612,7 @@ final class QuickJsHostBridge implements AutoCloseable {
             JSONObject config = new JSONObject(configJson);
             int id = mNextFloatyId.getAndIncrement();
             Context context = mRuntime.uiHandler.getContext();
-            QuickJsFloatyWindow window = new QuickJsFloatyWindow(context, id, config);
+            QuickJsFloatyWindow window = new QuickJsFloatyWindow(context, id, config, uiInflater());
             mFloatyWindows.put(id, window);
             if (!window.show()) {
                 mFloatyWindows.remove(id);
@@ -1651,7 +1651,10 @@ final class QuickJsHostBridge implements AutoCloseable {
         private final int mId;
         private final WindowManager mWindowManager;
         private final android.widget.FrameLayout mRoot;
-        private final android.widget.TextView mTextView;
+        private final com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater mInflater;
+        private final org.json.JSONObject mConfig;
+        private android.widget.TextView mTextView;
+        private android.view.View mContent;
         private android.graphics.drawable.Drawable mBackground;
         private WindowManager.LayoutParams mParams;
         private final Handler mHandler = new Handler(Looper.getMainLooper());
@@ -1662,13 +1665,15 @@ final class QuickJsHostBridge implements AutoCloseable {
         private int mStartX;
         private int mStartY;
 
-        QuickJsFloatyWindow(Context context, int id, JSONObject config) {
+        QuickJsFloatyWindow(Context context, int id, JSONObject config,
+                            com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater) {
             mContext = context;
             mId = id;
+            mConfig = config;
+            mInflater = inflater;
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
             mRoot = new android.widget.FrameLayout(context);
-            mTextView = new android.widget.TextView(context);
-            applyConfig(config);
+            mTouchable = config.optBoolean("touchable", false);
             mRoot.setOnTouchListener((view, event) -> {
                 if (!mTouchable) {
                     return false;
@@ -1694,9 +1699,14 @@ final class QuickJsHostBridge implements AutoCloseable {
             });
         }
 
-        private void applyConfig(JSONObject config) {
-            JSONObject c = config;
-            mTouchable = c.optBoolean("touchable", false);
+        /** 在 main 线程执行：构建内容与窗口参数（XML 布局或文本）。 */
+        private void applyConfig() {
+            JSONObject c = mConfig;
+            if (c.has("xml")) {
+                // 带 parent(不挂载) 以生成 LayoutParams，支持 root 的 w/h/padding 等属性
+                mContent = mInflater.inflate(c.optString("xml"), mRoot, false);
+            }
+            mTextView = new android.widget.TextView(mContext);
             mTextView.setText(c.optString("text", ""));
             if (c.has("textSize")) {
                 mTextView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
@@ -1718,13 +1728,18 @@ final class QuickJsHostBridge implements AutoCloseable {
             }
             mRoot.removeAllViews();
             mRoot.setBackground(mBackground);
-            mRoot.addView(mTextView, new android.widget.FrameLayout.LayoutParams(
-                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
-                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
-                    android.view.Gravity.CENTER));
+            if (mContent != null) {
+                mRoot.addView(mContent, new android.widget.FrameLayout.LayoutParams(
+                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+            } else {
+                mRoot.addView(mTextView, new android.widget.FrameLayout.LayoutParams(
+                        android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                        android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                        android.view.Gravity.CENTER));
+            }
             int width = c.optInt("width", android.widget.FrameLayout.LayoutParams.WRAP_CONTENT);
             int height = c.optInt("height", android.widget.FrameLayout.LayoutParams.WRAP_CONTENT);
-            int gravity = android.view.Gravity.TOP | android.view.Gravity.START;
             mParams = new WindowManager.LayoutParams(
                     width < 0 ? WindowManager.LayoutParams.WRAP_CONTENT : width,
                     height < 0 ? WindowManager.LayoutParams.WRAP_CONTENT : height,
@@ -1734,7 +1749,7 @@ final class QuickJsHostBridge implements AutoCloseable {
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                     android.graphics.PixelFormat.TRANSLUCENT);
-            mParams.gravity = gravity;
+            mParams.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
             mParams.x = c.optInt("x", 0);
             mParams.y = c.optInt("y", 0);
         }
@@ -1745,6 +1760,7 @@ final class QuickJsHostBridge implements AutoCloseable {
                     if (mShown) {
                         return;
                     }
+                    applyConfig();
                     mWindowManager.addView(mRoot, mParams);
                     mShown = true;
                     Log.i("QuickJsFloatyWindow", "Floaty window " + mId + " shown");
@@ -1760,10 +1776,10 @@ final class QuickJsHostBridge implements AutoCloseable {
             mHandler.post(() -> {
                 try {
                     JSONObject c = new JSONObject(configJson);
-                    if (c.has("text")) {
+                    if (mTextView != null && c.has("text")) {
                         mTextView.setText(c.optString("text"));
                     }
-                    if (c.has("textColor")) {
+                    if (mTextView != null && c.has("textColor")) {
                         try {
                             mTextView.setTextColor(android.graphics.Color.parseColor(c.optString("textColor")));
                         } catch (IllegalArgumentException ignored) {

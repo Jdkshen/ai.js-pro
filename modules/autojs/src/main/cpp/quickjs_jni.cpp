@@ -3588,10 +3588,19 @@ const char kBootstrapScript[] = R"JS(
     };
     global.dialogs = Object.freeze(dialogs);
 
-    // ---- floaty module (minimal overlay windows) ----
+    // ---- floaty module (overlay windows: xml layout or text + drag + geometry) ----
     var floaty = {
-        window: function (config) {
-            var id = Number(__aiNativeFloatyCreate(JSON.stringify(config || {})));
+        window: function (xmlOrConfig, extra) {
+            var cfg = {};
+            if (typeof xmlOrConfig === 'string') {
+                cfg.xml = xmlOrConfig;
+            } else if (xmlOrConfig && typeof xmlOrConfig === 'object') {
+                for (var k in xmlOrConfig) cfg[k] = xmlOrConfig[k];
+            }
+            if (extra && typeof extra === 'object') {
+                for (var k in extra) cfg[k] = extra[k];
+            }
+            var id = Number(__aiNativeFloatyCreate(JSON.stringify(cfg)));
             if (id < 0) throw new Error('Unable to create floaty window');
             var win = {
                 id: id,
