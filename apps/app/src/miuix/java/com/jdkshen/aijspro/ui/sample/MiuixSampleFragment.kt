@@ -1,190 +1,500 @@
 package com.jdkshen.aijspro.ui.sample
 
-import android.os.Bundle
 import android.app.Activity
+import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.model.sample.SampleFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
-import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.ui.common.ScriptOperations
 import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
+import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
-import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.CompositeDisposable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.extra.SuperDialog
-import java.io.File
 
-/** Miuix tutorial/sample browser. Assets and execution/import services remain unchanged. */
-class MiuixSampleFragment : ViewPagerFragment(-1) {
+/** Auto.js Pro-like sample browser backed by the existing bundled assets and operations. */
+class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private lateinit var rootView: ComposeView
+    private var path by mutableStateOf("sample")
+    private var query by mutableStateOf(TextFieldValue(""))
+    private var filter by mutableStateOf(SampleFilter.ALL)
+    private var includeSubdirectories by mutableStateOf(true)
+    private var useRegex by mutableStateOf(false)
+    private var ascending by mutableStateOf(true)
+    private var showSearchDialog by mutableStateOf(false)
+    private var catalog: List<SampleEntry>? = null
+    private val imports = CompositeDisposable()
+
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
+        path = state?.getString("sample.path") ?: "sample"
+        query = TextFieldValue(state?.getString("sample.query").orEmpty())
+        filter = SampleFilter.values().firstOrNull { it.name == state?.getString("sample.filter") }
+            ?: SampleFilter.ALL
+        includeSubdirectories = state?.getBoolean("sample.subdirectories", true) ?: true
+        useRegex = state?.getBoolean("sample.regex", false) ?: false
+        ascending = state?.getBoolean("sample.ascending", true) ?: true
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("sample.path", path)
+        outState.putString("sample.query", query.text)
+        outState.putString("sample.filter", filter.name)
+        outState.putBoolean("sample.subdirectories", includeSubdirectories)
+        outState.putBoolean("sample.regex", useRegex)
+        outState.putBoolean("sample.ascending", ascending)
+    }
+
+    override fun openPageSearch() {
+        showSearchDialog = true
+    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
+        val assets = requireContext().assets
         rootView = ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 AijsMiuixTheme {
-                    var path by remember { mutableStateOf("sample") }
-                    var query by remember { mutableStateOf(TextFieldValue("")) }
-                    var filter by remember { mutableIntStateOf(0) }
-                    val importEntry = remember { mutableStateOf<Entry?>(null) }
-                    var importName by remember { mutableStateOf(TextFieldValue("")) }
-                    val entries = remember(path, query.text, filter) {
-                        loadEntries(path, query.text.trim(), filter)
-                    }
-                    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                        TextField(query, { query = it }, Modifier.fillMaxWidth().padding(top = 10.dp),
-                            singleLine = true, label = "搜索示例（包含子目录）")
-                        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterButton("全部", filter == 0) { filter = 0 }
-                            FilterButton("JavaScript", filter == 1) { filter = 1 }
-                            FilterButton("文件夹", filter == 2) { filter = 2 }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                            if (path != "sample") {
-                                MiuixBackButton(onClick = { path = path.substringBeforeLast('/', "sample") })
+                    var allEntries by remember { mutableStateOf(catalog) }
+                    var loadError by remember { mutableStateOf<String?>(null) }
+                    var retry by remember { mutableStateOf(0) }
+                    var importEntry by remember { mutableStateOf<SampleEntry?>(null) }
+                    var actionEntry by remember { mutableStateOf<SampleEntry?>(null) }
+                    val listState = rememberLazyListState()
+                    LaunchedEffect(retry) {
+                        if (allEntries == null) {
+                            loadError = null
+                            try {
+                                val loaded = withContext(Dispatchers.IO) {
+                                    MiuixSampleCatalog.load { assets.list(it).orEmpty() }
+                                }
+                                catalog = loaded
+                                allEntries = loaded
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                loadError = error.localizedMessage ?: "无法读取示例"
                             }
-                            Text(path.removePrefix("sample/").ifEmpty { "示例代码" },
-                                fontSize = 18.sp, modifier = Modifier.padding(start = 10.dp))
-                        }
-                        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(entries, key = { it.path }) { entry -> SampleRow(entry,
-                                enter = { path = it }, requestImport = {
-                                    importName = TextFieldValue(File(it.name).nameWithoutExtension)
-                                    importEntry.value = it
-                                }) }
                         }
                     }
-                    ImportDialog(importEntry, importName, { importName = it })
+                    val searchResult = remember(allEntries, path, query.text, filter,
+                        includeSubdirectories, useRegex) {
+                        MiuixSampleCatalog.search(allEntries.orEmpty(), path, query.text, filter,
+                            includeSubdirectories, useRegex)
+                    }
+                    val entries = if (ascending) searchResult.entries else searchResult.entries.asReversed()
+                    val childCounts = remember(allEntries) { directChildCounts(allEntries.orEmpty()) }
+                    LaunchedEffect(path, query.text, filter, includeSubdirectories, useRegex, ascending) {
+                        listState.scrollToItem(0)
+                    }
+
+                    Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
+                        BrowserToolbar(
+                            resultCount = entries.size,
+                            onUp = { if (path != "sample") navigateUp() },
+                            onSort = { ascending = !ascending },
+                            onSearch = { showSearchDialog = true }
+                        )
+                        LazyColumn(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            state = listState,
+                            contentPadding = PaddingValues(bottom = 18.dp)
+                        ) {
+                            when {
+                                loadError != null -> item {
+                                    MessagePanel("读取失败：$loadError", "重试") { retry++ }
+                                }
+                                allEntries == null -> item { MessagePanel("正在读取示例…") }
+                                searchResult.error != null -> item {
+                                    MessagePanel(searchResult.error, textColor = Color(0xFFD1495B))
+                                }
+                                entries.isEmpty() -> item {
+                                    MessagePanel("没有匹配的示例，请修改关键词或筛选条件。")
+                                }
+                            }
+                            items(entries, key = { it.path }, contentType = { it.directory }) { entry ->
+                                SampleRow(entry, childCounts[entry.path] ?: 0) { actionEntry = it }
+                            }
+                        }
+                    }
+
+                    if (showSearchDialog) SearchDialog { showSearchDialog = false }
+                    actionEntry?.let { entry ->
+                        EntryActionsDialog(entry, dismiss = { actionEntry = null },
+                            requestImport = { actionEntry = null; importEntry = entry })
+                    }
+                    importEntry?.let { entry -> ImportDialog(entry) { importEntry = null } }
                 }
             }
         }
         return rootView
     }
 
-    @androidx.compose.runtime.Composable
-    private fun FilterButton(label: String, selected: Boolean, click: () -> Unit) {
-        Button(onClick = click) {
-            Text(if (selected) "✓ $label" else label)
-        }
-    }
-
-    @androidx.compose.runtime.Composable
-    private fun SampleRow(entry: Entry, enter: (String) -> Unit, requestImport: (Entry) -> Unit) {
-        Card(Modifier.fillMaxWidth().clickable {
-            if (entry.directory) enter(entry.path)
-            else ViewSampleActivity.view(requireContext(), SampleFile(entry.path, requireContext().assets))
-        }) {
-            Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(if (entry.directory) R.drawable.ic_folder_outline_24dp
-                    else R.drawable.ic_floating_action_menu_file), entry.name,
-                    colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.primary))
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(entry.name, fontSize = 17.sp)
-                    Text(if (entry.directory) "示例分类" else "JavaScript 示例",
-                        fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                }
-                if (!entry.directory) {
-                    Button(onClick = { run(entry) }, modifier = Modifier.padding(end = 6.dp)) { Text("运行") }
-                    Button(onClick = { requestImport(entry) }) { Text("导入") }
+    @Composable
+    private fun BrowserToolbar(
+        resultCount: Int,
+        onUp: () -> Unit,
+        onSort: () -> Unit,
+        onSearch: () -> Unit
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(54.dp)
+                .background(MiuixTheme.colorScheme.surface)
+                .padding(start = 18.dp, end = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(sampleBreadcrumb(), fontSize = 18.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                if (query.text.isNotBlank() || filter != SampleFilter.ALL) {
+                    Text("$resultCount 项 · 搜索结果", fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
                 }
             }
+            ToolbarAction(R.drawable.ic_folder_enter_24dp, "上一级", onUp,
+                enabled = path != "sample")
+            SortRuleButton(ascending, onSort)
+            ToolbarAction(R.drawable.ic_filter_list_24dp, "搜索和筛选", onSearch)
         }
     }
 
-    private fun run(entry: Entry) {
-        Scripts.run(SampleFile(entry.path, requireContext().assets).toSource())
-        Toast.makeText(requireContext(), "已运行：${entry.name}", Toast.LENGTH_SHORT).show()
+    /** Auto.js Pro style sort entry: two-line label "排序规则 / 升序" instead of an icon. */
+    @Composable
+    private fun SortRuleButton(ascending: Boolean, onSort: () -> Unit) {
+        Column(
+            Modifier.height(48.dp).clickable(onClick = onSort)
+                .padding(horizontal = 8.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("排序规则", fontSize = 10.sp, maxLines = 1,
+                color = MiuixTheme.colorScheme.onSurfaceSecondary)
+            Text(if (ascending) "升序" else "降序", fontSize = 12.sp, maxLines = 1,
+                color = MiuixTheme.colorScheme.onSurface)
+        }
     }
 
-    @androidx.compose.runtime.Composable
-    private fun ImportDialog(selected: MutableState<Entry?>, name: TextFieldValue,
-                             onName: (TextFieldValue) -> Unit) {
-        val show = remember { mutableStateOf(false) }
-        show.value = selected.value != null
-        SuperDialog(show = show, title = "导入示例", summary = "复制到我的脚本",
-            onDismissRequest = { selected.value = null }) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                TextField(name, onName, Modifier.fillMaxWidth(), singleLine = true, label = "文件名")
-                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.End) {
-                    Button(onClick = { selected.value = null }, modifier = Modifier.padding(end = 8.dp)) {
-                        Text("取消")
+    @Composable
+    private fun ToolbarAction(icon: Int, description: String, onClick: () -> Unit, enabled: Boolean = true) {
+        Box(Modifier.size(48.dp).clickable(enabled = enabled, onClick = onClick)) {
+            Image(painterResource(icon), contentDescription = description,
+                colorFilter = ColorFilter.tint(if (enabled) MiuixTheme.colorScheme.onSurface
+                    else MiuixTheme.colorScheme.onSurfaceSecondary.copy(alpha = 0.35f)),
+                modifier = Modifier.size(27.dp).align(Alignment.Center))
+        }
+    }
+
+    @Composable
+    private fun SampleRow(entry: SampleEntry, childCount: Int, requestActions: (SampleEntry) -> Unit) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 74.dp).clickable {
+                    if (entry.directory) {
+                        path = entry.path
+                        query = TextFieldValue("")
+                        filter = SampleFilter.ALL
+                    } else {
+                        view(entry)
                     }
-                    Button(onClick = {
-                        selected.value?.let { import(it, name.text) }
-                        selected.value = null
-                    }) { Text("导入") }
+                }.padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.size(50.dp).clip(CircleShape).background(
+                    if (entry.directory) Color(0xFF2196F3) else Color(0xFF4CAF50))) {
+                    Image(
+                        painterResource(if (entry.directory) R.drawable.ic_folder_outline_24dp
+                            else R.drawable.ic_floating_action_menu_file),
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp).align(Alignment.Center),
+                        colorFilter = ColorFilter.tint(Color.White)
+                    )
+                }
+                Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                    Text(entry.name, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(when {
+                        entry.directory -> if (childCount > 0) "文件夹 · $childCount 项" else "文件夹"
+                        entry.runnable -> "JavaScript 示例"
+                        else -> "示例资源"
+                    }, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    if (query.text.isNotBlank() || filter != SampleFilter.ALL) {
+                        Text(entry.path.removePrefix("sample/"), fontSize = 12.sp, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    }
+                }
+                ToolbarAction(R.drawable.ic_more_vert_black_24dp, "更多",
+                    onClick = { requestActions(entry) })
+            }
+            Box(Modifier.fillMaxWidth().padding(start = 82.dp).height(1.dp)
+                .background(MiuixTheme.colorScheme.dividerLine))
+        }
+    }
+
+    @Composable
+    private fun SearchDialog(dismiss: () -> Unit) {
+        val focusRequester = remember { FocusRequester() }
+        val keyboard = LocalSoftwareKeyboardController.current
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+        Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Card(Modifier.fillMaxWidth(0.84f)) {
+                Column(Modifier.fillMaxWidth().padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TextField(query, { query = it }, Modifier.fillMaxWidth().focusRequester(focusRequester),
+                        singleLine = true, label = "搜索示例")
+                    Row(Modifier.fillMaxWidth().clickable {
+                        includeSubdirectories = !includeSubdirectories
+                    }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(includeSubdirectories, { includeSubdirectories = it })
+                        Text("搜索子目录", fontSize = 15.sp)
+                    }
+                    Row(Modifier.fillMaxWidth().clickable { useRegex = !useRegex },
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(useRegex, { useRegex = it })
+                        Text("正则表达式", fontSize = 15.sp)
+                    }
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SampleFilter.values().forEach { choice ->
+                            Button(onClick = { filter = choice }) {
+                                Text(if (filter == choice) "✓ ${choice.label}" else choice.label)
+                            }
+                        }
+                    }
+                    Text("当前匹配 ${MiuixSampleCatalog.search(catalog.orEmpty(), path, query.text,
+                        filter, includeSubdirectories, useRegex).entries.size} 项", fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        if (query.text.isNotBlank() || filter != SampleFilter.ALL || useRegex ||
+                            !includeSubdirectories) {
+                            Button(onClick = {
+                                query = TextFieldValue("")
+                                filter = SampleFilter.ALL
+                                includeSubdirectories = true
+                                useRegex = false
+                            }) { Text("重置") }
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Button(onClick = dismiss) { Text("完成") }
+                    }
                 }
             }
         }
     }
 
-    private fun import(entry: Entry, name: String) {
-        if (name.trim().isEmpty()) {
-            Toast.makeText(requireContext(), "请输入文件名", Toast.LENGTH_SHORT).show()
-            return
-        }
-        ScriptOperations(requireContext(), rootView)
-            .importSampleWithName(SampleFile(entry.path, requireContext().assets), name.trim())
-            .subscribe({ path -> Toast.makeText(requireContext(), "已导入：$path", Toast.LENGTH_LONG).show() },
-                { error -> Toast.makeText(requireContext(), "导入失败：${error.message}", Toast.LENGTH_LONG).show() })
-    }
-
-    private fun loadEntries(path: String, query: String, filter: Int): List<Entry> {
-        val result = mutableListOf<Entry>()
-        fun collect(dir: String, recursive: Boolean) {
-            requireContext().assets.list(dir).orEmpty().forEach { name ->
-                val child = "$dir/$name"
-                val directory = requireContext().assets.list(child)?.isNotEmpty() == true
-                if ((query.isEmpty() || name.contains(query, true)) &&
-                    (filter == 0 || filter == 1 && !directory && name.endsWith(".js", true) || filter == 2 && directory)) {
-                    result += Entry(name, child, directory)
+    @Composable
+    private fun EntryActionsDialog(
+        entry: SampleEntry,
+        dismiss: () -> Unit,
+        requestImport: () -> Unit
+    ) {
+        Dialog(onDismissRequest = dismiss) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth()
+                    .background(MiuixTheme.colorScheme.surface)
+                    .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(entry.name, fontSize = 21.sp, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis, color = MiuixTheme.colorScheme.onSurface)
+                    Text(when {
+                        entry.directory -> "示例文件夹"
+                        entry.runnable -> "JavaScript 示例"
+                        else -> "示例资源"
+                    },
+                        fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    ActionChoice(if (entry.directory) "打开" else "查看") {
+                        dismiss()
+                        if (entry.directory) {
+                            path = entry.path
+                            query = TextFieldValue("")
+                            filter = SampleFilter.ALL
+                        } else view(entry)
+                    }
+                    if (!entry.directory) {
+                        if (entry.runnable) ActionChoice("运行") { dismiss(); run(entry) }
+                        ActionChoice("导入", requestImport)
+                    }
+                    ActionChoice("取消", dismiss)
                 }
-                if (recursive && directory && result.size < 500) collect(child, true)
             }
         }
-        collect(path, query.isNotEmpty())
-        return result.distinctBy { it.path }.sortedWith(compareBy<Entry> { !it.directory }.thenBy { it.name.lowercase() })
+    }
+
+    @Composable
+    private fun ActionChoice(label: String, onClick: () -> Unit) {
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.14f))
+            .clickable(onClick = onClick).padding(vertical = 14.dp, horizontal = 16.dp)) {
+            Text(label, fontSize = 16.sp, color = MiuixTheme.colorScheme.onSurface,
+                modifier = Modifier.align(Alignment.CenterStart))
+        }
+    }
+
+    @Composable
+    private fun MessagePanel(text: String, action: String? = null,
+        textColor: Color = MiuixTheme.colorScheme.onSurface, onAction: () -> Unit = {}) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(text, color = textColor)
+            action?.let { Button(onClick = onAction) { Text(it) } }
+        }
+    }
+
+    private fun view(entry: SampleEntry) {
+        ViewSampleActivity.view(requireContext(), SampleFile(entry.path, requireContext().assets))
+    }
+
+    private fun run(entry: SampleEntry) {
+        if (!entry.runnable) return
+        val execution = Scripts.run(SampleFile(entry.path, requireContext().assets).toSource())
+        if (execution != null) Toast.makeText(requireContext(), "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+    }
+
+    @Composable
+    private fun ImportDialog(entry: SampleEntry, dismiss: () -> Unit) {
+        var name by remember(entry.path) { mutableStateOf(TextFieldValue(entry.name)) }
+        var busy by remember(entry.path) { mutableStateOf(false) }
+        var error by remember(entry.path) { mutableStateOf<String?>(null) }
+        Dialog(onDismissRequest = { if (!busy) dismiss() }, properties = DialogProperties(
+            dismissOnBackPress = !busy, dismissOnClickOutside = !busy)) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("导入示例", fontSize = 22.sp)
+                    Text("复制到我的脚本，已有文件不会被覆盖。", fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    TextField(name, { if (!busy) { name = it; error = null } },
+                        Modifier.fillMaxWidth(), singleLine = true, label = "文件名")
+                    error?.let { Text(it, fontSize = 14.sp) }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { if (!busy) dismiss() }, modifier = Modifier.weight(1f)) { Text("取消") }
+                        Button(onClick = {
+                            if (!busy) {
+                                busy = true
+                                error = null
+                                val context = requireContext().applicationContext
+                                imports.add(ScriptOperations(requireContext(), rootView)
+                                    .importSampleWithName(SampleFile(entry.path, context.assets), name.text)
+                                    .subscribe({ importedPath ->
+                                        busy = false
+                                        dismiss()
+                                        Toast.makeText(context, "已导入：$importedPath", Toast.LENGTH_LONG).show()
+                                    }, { failure ->
+                                        busy = false
+                                        error = failure.localizedMessage ?: "导入失败，请重试"
+                                    }))
+                            }
+                        }, modifier = Modifier.weight(1f)) { Text(if (busy) "导入中…" else "导入") }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun sampleBreadcrumb(): String {
+        val suffix = path.removePrefix("sample").trim('/')
+        return buildString {
+            append("示例文件  ›  中文")
+            if (suffix.isNotEmpty()) append("  ›  ").append(suffix.replace("/", "  ›  "))
+        }
+    }
+
+    private fun directChildCounts(entries: List<SampleEntry>): Map<String, Int> {
+        val counts = HashMap<String, Int>()
+        entries.forEach { entry ->
+            val parent = entry.path.substringBeforeLast('/', "")
+            if (parent.isNotEmpty()) counts[parent] = (counts[parent] ?: 0) + 1
+        }
+        return counts
+    }
+
+    private fun navigateUp() {
+        query = TextFieldValue("")
+        filter = SampleFilter.ALL
+        path = path.substringBeforeLast('/', "sample")
+    }
+
+    override fun onDestroyView() {
+        imports.clear()
+        super.onDestroyView()
     }
 
     override fun onFabClick(fab: FloatingActionButton?) = Unit
-    override fun onBackPressed(activity: Activity): Boolean = false
-    private data class Entry(val name: String, val path: String, val directory: Boolean)
+
+    override fun onBackPressed(activity: Activity): Boolean = when {
+        showSearchDialog -> { showSearchDialog = false; true }
+        query.text.isNotEmpty() || useRegex || !includeSubdirectories || filter != SampleFilter.ALL -> {
+            query = TextFieldValue("")
+            filter = SampleFilter.ALL
+            useRegex = false
+            includeSubdirectories = true
+            true
+        }
+        path != "sample" -> { navigateUp(); true }
+        else -> false
+    }
 }

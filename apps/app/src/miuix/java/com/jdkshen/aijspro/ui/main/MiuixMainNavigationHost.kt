@@ -1,6 +1,5 @@
 package com.jdkshen.aijspro.ui.main
 
-import android.content.Intent
 import android.view.View
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -13,20 +12,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** Miuix navigation shell; the existing ViewPager/RecyclerView remains the content owner. */
@@ -39,6 +39,7 @@ object MiuixMainNavigationHost {
 
     @Composable
     private fun MainBar(host: MainActivity) {
+        var showSearch by remember { mutableStateOf(false) }
         Row(
             Modifier.fillMaxWidth().height(56.dp)
                 .background(MiuixTheme.colorScheme.background)
@@ -56,7 +57,21 @@ object MiuixMainNavigationHost {
             Action(R.drawable.ic_log_white_24dp, "日志", host::openLogFromMiuix)
             Action(R.drawable.ic_bookmark_white_24dp, "文档", host::openDocumentationFromMiuix)
             Action(R.drawable.ic_search_white_24dp, "搜索") {
-                host.startActivity(Intent(host, MiuixSearchActivity::class.java))
+                if (!host.openCurrentPageSearchFromMiuix()) showSearch = true
+            }
+        }
+        if (showSearch) {
+            Dialog(
+                onDismissRequest = { showSearch = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                MiuixSearchOverlayContent(
+                    onDismiss = { showSearch = false },
+                    onItemSelected = { file ->
+                        showSearch = false
+                        host.revealScriptFileFromMiuix(file.absolutePath)
+                    }
+                )
             }
         }
     }

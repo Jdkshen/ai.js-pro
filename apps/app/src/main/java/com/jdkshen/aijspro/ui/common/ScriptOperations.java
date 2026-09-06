@@ -6,6 +6,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Environment;
 import android.os.Looper;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import com.google.android.material.snackbar.Snackbar;
@@ -44,6 +47,7 @@ import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
 import org.reactivestreams.Publisher;
 
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -266,25 +270,71 @@ public class ScriptOperations {
         }
     }
 
-    /** Imports a bundled sample with a name supplied by a flavor-specific UI. */
+    /**
+     * Imports a bundled sample into the current directory without replacing existing files.
+     * Each subscription opens its own streams on the IO scheduler. The name may include
+     * the sample's extension; other dots are preserved. Errors are delivered to the caller.
+     */
     public Observable<String> importSampleWithName(SampleFile sample, String name) {
-        try {
-            final InputStream inputStream = sample.openInputStream();
-            final String ext = sample.getExtension();
-            final String safeName = PFiles.getNameWithoutExtension(name);
-            return Observable.fromCallable(() -> {
-                        final String pathTo = getCurrentDirectoryPath() + safeName + "." + ext;
-                        if (!PFiles.copyStream(inputStream, pathTo)) {
-                            throw new IOException(getString(R.string.text_import_fail).toString());
+        return Observable.fromCallable(() -> {
+                    if (sample == null) {
+                        throw new IOException(getString(R.string.text_import_fail).toString());
+                    }
+                    final String suffix = "." + sample.getExtension();
+                    String baseName = name == null ? "" : name.trim();
+                    if (baseName.endsWith(suffix)) {
+                        baseName = baseName.substring(0, baseName.length() - suffix.length());
+                    }
+                    if (baseName.trim().isEmpty() || baseName.equals(".") || baseName.equals("..")
+                            || baseName.indexOf('/') >= 0 || baseName.indexOf('\\') >= 0) {
+                        throw new IllegalArgumentException(getString(R.string.text_please_input_name).toString());
+                    }
+                    for (int i = 0; i < baseName.length(); i++) {
+                        if (Character.isISOControl(baseName.charAt(i))) {
+                            throw new IllegalArgumentException(getString(R.string.text_please_input_name).toString());
                         }
-                        notifyFileCreated(mCurrentDirectory, new ScriptFile(pathTo));
-                        return pathTo;
-                    })
-                    .subscribeOn(Schedulers.io())
-                    .observeOn(AndroidSchedulers.mainThread());
-        } catch (IOException e) {
-            return Observable.error(e);
-        }
+                    }
+                    final File destination = new File(getCurrentDirectory().getCanonicalFile(), baseName + suffix);
+                    boolean created = false;
+                    boolean completed = false;
+                    try {
+                        // O_EXCL checks and creates atomically, including dangling symlinks.
+                        try (InputStream input = sample.openInputStream()) {
+                            final FileDescriptor output = Os.open(destination.getPath(),
+                                    OsConstants.O_WRONLY | OsConstants.O_CREAT | OsConstants.O_EXCL, 0600);
+                            created = true;
+                            try {
+                                byte[] buffer = new byte[8192];
+                                int count;
+                                while ((count = input.read(buffer)) != -1) {
+                                    int offset = 0;
+                                    while (offset < count) {
+                                        int written = Os.write(output, buffer, offset, count - offset);
+                                        if (written <= 0) {
+                                            throw new IOException(getString(R.string.text_import_fail).toString());
+                                        }
+                                        offset += written;
+                                    }
+                                }
+                            } finally {
+                                Os.close(output);
+                            }
+                        }
+                        completed = true;
+                    } catch (ErrnoException e) {
+                        throw new IOException(getString(e.errno == OsConstants.EEXIST
+                                ? R.string.text_file_exists : R.string.text_import_fail).toString(), e);
+                    } finally {
+                        // A failed import must not leave a partial script visible in the workspace.
+                        if (created && !completed && !destination.delete()) {
+                            BuglyLog.w(LOG_TAG, "Could not remove incomplete sample import: " + destination);
+                        }
+                    }
+                    return destination.getPath();
+                })
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .doOnNext(path -> notifyFileCreated(mCurrentDirectory, new ScriptFile(path)));
     }
 
     public Observable<ExplorerFileItem> rename(final ExplorerFileItem item) {

@@ -1,5 +1,16 @@
 # AI.js Pro — 交接文档 (HANDOVER)
 
+## Miuix 脚本 MCP 与示例页（2026-09-06，最新）
+
+- 抽屉“开发”分组新增“**MCP 服务**”。Miuix 页面提供启动/停止、连接地址、二维码、令牌、端口/局域网/操作目录设置、调用历史，以及编辑和执行授权。
+- 服务默认监听 `127.0.0.1:8788/mcp`。同一手机的 MT 客户端直接使用该地址；电脑端项目配置统一使用 USB Host 端口 `18790`（`adb forward tcp:18790 tcp:8788`）。本机兼容模式默认开启，loopback 可免令牌；错误令牌仍拒绝，局域网始终要求 Bearer 令牌。
+- 当前共 19 个工具：脚本/示例分页读取、递归搜索及游标续页、运行任务状态/异常/停止、APK 全局日志，以及私有工作区的打开/读取/编辑/删除/Diff/申请应用。客户端不能直接改真实脚本；必须在手机“工作区与修改历史”中审查 Diff 并确认，应用前校验原文件，应用后可安全回退。
+- 编辑和运行授权只在本次服务运行期间有效，停止服务自动撤销。路径、Host/Origin、正文/请求头、JSON 深度、文件大小、工作区总量和并发均有限制；支持有界 chunked 请求、宽松 `Accept` 以及 `2024-11-05`、`2025-03-26`、`2025-06-18` 客户端版本。
+- 教程/示例页已统一为 Miuix：后台建立资产索引，支持搜索、全部/JavaScript/文件夹/其他文件筛选、查看、运行和原子导入，保留原有示例数据与脚本执行逻辑。
+- 验证：Miuix Debug APK 构建成功；HTTP 传输与示例目录共 36 个 JVM 测试通过。K40 已验证无令牌 loopback 初始化、19 个工具发现、搜索续页、APK 日志、chunked 请求和工作区读取/Diff。
+- MT 报错 `IllegalArgumentException: name is empty` 是客户端自定义请求头中存在空白“名称”行，发生在 OkHttp 发包之前；删除整条空白请求头即可。本机兼容模式不需要为了占位而新增请求头。
+- 详细连接、工具和安全说明见 `docs/MCP_SCRIPT_SERVICE.md`。本功能只在 `miuix` flavor 存在，普通 flavor 不注册页面或服务。
+
 ## Miuix 核心服务页试点（2026-09-05，最新）
 
 - 已实现并覆盖安装到 K40（cccc62c7），包名和数据目录不变。入口：左上角抽屉 → 首页 → 核心服务。启动页、原生文件列表及 ImGui 工作台仍保留，不是全应用迁移。
@@ -125,6 +136,13 @@ third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / Colo
 ### 3.4 构建脚本
 - `build-common-debug.ps1` / `release.ps1`：移除 JDK 17 `--add-opens/--add-exports` hack 与 `--max-workers=1`（Gradle 8.9 不再需要）
 - 启动入口已改为 **Splash → MainActivity**（原来是 Splash → ImGuiWorkspaceActivity；ImGui 从首页「开发工具」进入）
+
+### 3.5 Miuix 第三页（资源）
+- 主导航第三页已从「社区 WebView」改为 `ui/resource/MiuixResourceFragment`，显示名同步改为「资源」。
+- 数据与 ImGui 资源页共用相同约定：内置数据读取 `assets/sample`，导入到脚本目录的「下载资源」，本机上传读写「我的资源」。
+- 显示层已对齐 Auto.js Pro：紧凑资源卡片、来源/分类/大小元数据、下载/已导入状态、底部「全部/上传/我的」和原页弹出详情。
+- 顶栏搜索现在进入当前资源页的内联搜索状态，不再跳转或叠加旧式搜索弹窗。
+- K40 真机滑动检查：206 帧，jank 2 帧（0.97%），50/90/95/99 分位为 11/15/16/17 ms。
 
 ---
 

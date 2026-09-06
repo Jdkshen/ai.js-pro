@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>当前项目 API 兼容说明 | AI.js Pro</title>
+  <link rel="stylesheet" href="assets/fonts.css">
+  <link rel="stylesheet" href="assets/style.css">
+  <style>
+    .compat-note { padding: 12px 16px; border-left: 4px solid #22a6b3; background: #eef8fa; }
+    .compat-table { width: 100%; border-collapse: collapse; }
+    .compat-table th, .compat-table td { padding: 8px; border: 1px solid #d8d8d8; text-align: left; }
+    .supported { color: #16833f; font-weight: 600; }
+    .excluded { color: #b3483e; font-weight: 600; }
+    code { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body class="alt apidoc">
+  <div id="content" class="clearfix">
+    <div id="column2" class="interior">
+      <div id="intro" class="interior"><a href="index.html">AI.js Pro</a></div>
+      <ul>
+        <li><a href="index.html">API 索引</a></li>
+        <li><a href="compatibility.html">当前项目 API 兼容说明</a></li>
+      </ul>
+    </div>
+    <div id="column1" class="interior">
+      <header>
+        <h1>当前项目 API 兼容说明</h1>
+        <div id="gtoc"><p><a href="index.html">返回索引</a></p></div>
+        <hr>
+      </header>
+      <div id="apicontent">
+        <p class="compat-note">
+          APK 的普通脚本以 Rhino/Auto.js 4.x 运行时为准。教程页只收录本项目能运行的示例，
+          不把第二代引擎、Node.js、npm 或 <code>node_modules</code> 内容打进示例目录。
+        </p>
+        <h2>脚本写法</h2>
+        <table class="compat-table">
+          <thead><tr><th>能力</th><th>当前写法</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td>界面</td><td><code>ui</code></td><td class="supported">支持</td></tr>
+            <tr><td>线程</td><td><code>threads.start(...)</code></td><td class="supported">支持</td></tr>
+            <tr><td>文件</td><td><code>files.read/write/listDir(...)</code></td><td class="supported">支持</td></tr>
+            <tr><td>脚本引擎</td><td><code>engines.execScriptFile(...)</code></td><td class="supported">支持</td></tr>
+            <tr><td>Root 多点触控</td><td><code>new RootAutomator()</code></td><td class="supported">需要 Root</td></tr>
+            <tr><td>新版美元前缀 API</td><td><code>$ui</code>、<code>$threads</code>、<code>$engines</code></td><td class="excluded">不要用于当前 Rhino 示例</td></tr>
+          </tbody>
+        </table>
+        <h2>暂不收录的新版模块</h2>
+        <p>
+          当前运行时尚未提供 <code>$work_manager</code>、<code>$zip</code>、<code>$crypto</code>、
+          <code>sqlite</code>、<code>RootAutomator2</code>、<code>$ocr</code>、新版特征匹配和新版
+          WebSocket API。对应教程需要先实现底层模块并通过测试，之后才能加入可运行示例。
+        </p>
+        <h2>教程来源</h2>
+        <p>
+          本次以本地“教程文档”中的第一代引擎官方例子为参考；同名文件优先保留仓库里已经修正过的版本。
+          教程标签页中的示例可直接查看、运行或导入到“我的脚本”。
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

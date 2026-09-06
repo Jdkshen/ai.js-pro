@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.ui.main.drawer
 
+import android.content.Intent
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.Image
@@ -33,6 +34,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jdkshen.aijspro.R
+import com.jdkshen.aijspro.mcp.McpService
+import com.jdkshen.aijspro.ui.mcp.MiuixMcpActivity
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -90,6 +93,7 @@ object MiuixDrawerHost {
         val nightMode = remember { mutableStateOf(host.isNightModePrefEnabled) }
         val followSystem = remember { mutableStateOf(host.isFollowSystemEnabled) }
         val connected = remember { mutableStateOf(host.isRemoteConnected) }
+        val mcpRunning = remember(rev) { McpService.running }
         val moreOpen = remember { mutableStateOf(false) }
         val themeOpen = remember { mutableStateOf(true) }
         LaunchedEffect(rev) {
@@ -185,6 +189,9 @@ object MiuixDrawerHost {
                         onClick = {
                             if (connected.value) host.disconnectRemote() else host.openRemoteConnection()
                         })
+                    SuperArrow(title = "MCP 服务", summary = "让 AI 连接脚本开发与调试工具",
+                        rightText = if (mcpRunning) "运行中" else "已停止",
+                        onClick = { host.startActivity(Intent(host.requireContext(), MiuixMcpActivity::class.java)) })
                     SuperArrow(title = "终端",
                         onClick = { host.openTerminal() })
                 }

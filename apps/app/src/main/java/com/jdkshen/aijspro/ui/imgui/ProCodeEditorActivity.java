@@ -7,8 +7,11 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -18,6 +21,7 @@ import android.text.Layout;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -28,7 +32,9 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -48,6 +54,7 @@ import com.stardust.autojs.rhino.debug.Dim;
 import com.stardust.util.ClipboardUtil;
 
 import org.apache.commons.io.FileUtils;
+import org.json.JSONArray;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.AutoJs;
@@ -75,6 +82,7 @@ import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.text.Collator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -87,6 +95,11 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private static final String EXTRA_PATH = "path";
     private static final String EXTRA_SAMPLE_ASSET_PATH = "sample_asset_path";
+    private static final String EDITOR_PREFS = "pro_code_editor";
+    private static final String PREF_OPEN_TABS = "open_tabs";
+    private static final String PREF_ACTIVE_TAB = "active_tab";
+    private static final String PREF_TEXT_SIZE = "text_size_sp";
+    private static final int MAX_RESTORED_TABS = 12;
     private final List<EditorTab> mTabs = new ArrayList<>();
     private final Set<String> mExpandedDirectories = new HashSet<>();
 
@@ -100,10 +113,14 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private LinearLayout mTreeContainer;
     private TextView mTreeRootLabel;
     private FrameLayout mEditorContainer;
+    private View mEditorShield;
     private LinearLayout mShortcutBar;
     private LinearLayout mLogPanel;
     private LinearLayout mDebugBar;
     private View mLogTool;
+    private View mUndoTool;
+    private View mRedoTool;
+    private View mSaveTool;
     private ConsoleImpl mConsole;
     private ConsoleView mConsoleView;
     private TextView mLogLevelView;
@@ -114,7 +131,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private boolean mLogExpanded;
     private boolean mDebugInterrupted;
     private int mLogLevel = Log.VERBOSE;
-    private int mFoldSequence;
+    private boolean mFileTreeDirty = true;
     private AppThemePalette mPalette;
     private final AppThemeRepository.ThemeListener mThemeListener = this::applyThemePalette;
 
@@ -149,7 +166,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        mPalette = AppThemeRepository.get(this).getPalette();
+        mPalette = resolvePalette();
         getWindow().setStatusBarColor(mPalette.statusBar);
         getWindow().setNavigationBarColor(mPalette.navigationBar);
         String path = getIntent().getStringExtra(EXTRA_PATH);
@@ -168,7 +185,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         buildWorkspaceUi();
         registerReceiver(mExecutionFinishedReceiver,
                 new IntentFilter(Scripts.ACTION_ON_EXECUTION_FINISHED));
-        openFile(initial);
+        restoreSessionAndOpen(initial);
     }
 
     private void resolveWorkspace(File initial) {
@@ -219,14 +236,26 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         mMainLayout.addView(mEditorContainer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // Invisible shield over the editor while the log console is open: it consumes
+        // all touches so the code above cannot be edited/scrolled, but stays transparent
+        // like Auto.js Pro (the editor strip above remains clearly visible).
+        mEditorShield = new View(this);
+        mEditorShield.setBackgroundColor(Color.TRANSPARENT);
+        mEditorShield.setClickable(true);
+        mEditorShield.setFocusable(true);
+        mEditorShield.setFocusableInTouchMode(true);
+        mEditorShield.setOnTouchListener((view, event) -> true);
+
         mLogPanel = buildLogPanel();
         mLogPanel.setVisibility(View.GONE);
+        // Auto.js Pro shows the log console in a large bottom panel (~45% of the screen).
+        int logPanelHeight = (int) (getResources().getDisplayMetrics().heightPixels * 0.45f);
         mMainLayout.addView(mLogPanel, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(300)));
+                ViewGroup.LayoutParams.MATCH_PARENT, logPanelHeight));
 
         mShortcutBar = buildShortcutBar();
         mMainLayout.addView(mShortcutBar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));
 
         addWorkspaceDrawer();
         setContentView(mDrawerLayout);
@@ -247,21 +276,30 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         scroll.setBackgroundColor(mPalette.editorToolbar);
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.addView(tool("▤", "文件", 40, v -> openWorkspaceDrawer()));
-        row.addView(tool("✎", "编辑", 40, v -> showEditMenu()));
-        row.addView(tool("⚙", "调试", 40, v -> showDebugMenu()));
-        row.addView(tool(">_", "终端", 40, v -> openTerminal()));
-        row.addView(tool("…", "其他", 40, v -> showOtherMenu()));
-        row.addView(tool("▣", "保存", 40, v -> saveActive(true)));
+        row.addView(tool(R.drawable.ic_pro_editor_file, "文件", 40, v -> openWorkspaceDrawer()));
+        row.addView(tool(R.drawable.ic_pro_editor_edit, "编辑", 40, v -> showEditMenu(v)));
+        row.addView(tool(R.drawable.ic_pro_editor_debug, "调试", 40, v -> showDebugMenu(v)));
+        row.addView(tool(R.drawable.ic_pro_editor_terminal, "终端", 40, v -> openTerminal()));
+        row.addView(tool(R.drawable.ic_pro_editor_more, "其他", 40, v -> showOtherMenu(v)));
         if (!TextUtils.isEmpty(mSampleAssetDirectory))
-            row.addView(tool("↺", "重置", 40, v -> confirmResetSample()));
+            row.addView(tool(R.drawable.ic_pro_editor_refresh, "重置", 40, v -> confirmResetSample()));
         View spacer = new View(this);
         row.addView(spacer, new LinearLayout.LayoutParams(dp(24), dp(44)));
-        mLogTool = tool("▣", "日志", 32, v -> toggleLogPanel());
+        mLogTool = tool(R.drawable.ic_pro_editor_log, "日志", 32, v -> toggleLogPanel());
         row.addView(mLogTool);
-        row.addView(tool("▶", "运行", 32, v -> runCurrent()));
-        row.addView(tool("↶", "撤销", 32, v -> { if (activeEditor() != null) activeEditor().undo(); }));
-        row.addView(tool("↷", "重做", 32, v -> { if (activeEditor() != null) activeEditor().redo(); }));
+        row.addView(tool(R.drawable.ic_pro_editor_play, "运行", 32, v -> runCurrent()));
+        mUndoTool = tool(R.drawable.ic_pro_editor_undo, "撤销", 32, v -> {
+            if (activeEditor() != null) activeEditor().undo();
+            updateToolbarState();
+        });
+        row.addView(mUndoTool);
+        mRedoTool = tool(R.drawable.ic_pro_editor_redo, "重做", 32, v -> {
+            if (activeEditor() != null) activeEditor().redo();
+            updateToolbarState();
+        });
+        row.addView(mRedoTool);
+        mSaveTool = tool(R.drawable.ic_pro_editor_save, "保存", 40, v -> saveActive(true));
+        row.addView(mSaveTool);
         scroll.addView(row, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         return scroll;
@@ -359,13 +397,13 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         mLogLevelView.setGravity(Gravity.CENTER_VERTICAL);
         mLogLevelView.setOnClickListener(v -> showLogLevelMenu());
         header.addView(mLogLevelView, new LinearLayout.LayoutParams(0, dp(42), 1f));
-        header.addView(smallAction("■", v -> stopCurrentExecution()),
+        header.addView(smallIconAction(R.drawable.ic_pro_editor_stop, "停止", v -> stopCurrentExecution()),
                 new LinearLayout.LayoutParams(dp(42), dp(42)));
-        header.addView(smallAction("⌫", v -> mConsole.clear()),
+        header.addView(smallIconAction(R.drawable.ic_pro_editor_delete, "清空日志", v -> mConsole.clear()),
                 new LinearLayout.LayoutParams(dp(42), dp(42)));
-        header.addView(smallAction("−", v -> hideLogPanel()),
+        header.addView(smallIconAction(R.drawable.ic_pro_editor_minimize, "收起日志", v -> hideLogPanel()),
                 new LinearLayout.LayoutParams(dp(42), dp(42)));
-        header.addView(smallAction("⤢", v -> toggleLogExpanded()),
+        header.addView(smallIconAction(R.drawable.ic_pro_editor_fullscreen, "展开日志", v -> toggleLogExpanded()),
                 new LinearLayout.LayoutParams(dp(42), dp(42)));
         panel.addView(header, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
@@ -384,13 +422,11 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private void showLogLevelMenu() {
         String[] names = {"Verbose", "Debug", "Info", "Warn", "Error", "Assert"};
         int[] levels = {Log.VERBOSE, Log.DEBUG, Log.INFO, Log.WARN, Log.ERROR, Log.ASSERT};
-        darkDialog().setTitle("日志级别").setSingleChoiceItems(names,
-                Math.max(0, mLogLevel - Log.VERBOSE), (dialog, which) -> {
+        showAnchoredMenu(mLogLevelView, names, null, which -> {
                     mLogLevel = levels[which];
                     mLogLevelView.setText(names[which] + " ▾");
                     mConsoleView.setMinimumLogLevel(mLogLevel);
-                    dialog.dismiss();
-                }).show();
+                });
     }
 
     private LinearLayout buildShortcutBar() {
@@ -447,6 +483,28 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         return box;
     }
 
+    private View tool(int iconRes, String label, int widthDp, View.OnClickListener listener) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setClickable(true);
+        box.setFocusable(true);
+        box.setContentDescription(label);
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(iconRes);
+        icon.setColorFilter(mPalette.iconPrimary);
+        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        icon.setPadding(dp(7), dp(3), dp(7), 0);
+        TextView labelView = text(label, 8.5f, mPalette.textSecondary);
+        labelView.setGravity(Gravity.CENTER);
+        labelView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        box.addView(icon, new LinearLayout.LayoutParams(dp(widthDp), 0, 1.15f));
+        box.addView(labelView, new LinearLayout.LayoutParams(dp(widthDp), 0, .85f));
+        box.setOnClickListener(listener);
+        box.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(44)));
+        return box;
+    }
+
     private TextView shortcut(String label) {
         TextView view = text(label, label.length() > 2 ? 10f : 14f, mPalette.textPrimary);
         view.setGravity(Gravity.CENTER);
@@ -464,22 +522,38 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         return view;
     }
 
+    private ImageView smallIconAction(int iconRes, String description, View.OnClickListener listener) {
+        ImageView view = new ImageView(this);
+        view.setImageResource(iconRes);
+        view.setColorFilter(mPalette.iconPrimary);
+        view.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        view.setPadding(dp(10), dp(10), dp(10), dp(10));
+        view.setContentDescription(description);
+        view.setOnClickListener(listener);
+        return view;
+    }
+
     private void refreshFileTree() {
         if (mTreeContainer == null || mWorkspaceRoot == null) return;
         mTreeContainer.removeAllViews();
         addDirectoryChildren(mWorkspaceRoot, 0);
+        mFileTreeDirty = false;
     }
 
     private void addDirectoryChildren(File directory, int depth) {
         File[] children = directory.listFiles();
         if (children == null) return;
         List<File> list = new ArrayList<>(Arrays.asList(children));
+        Collator collator = Collator.getInstance(Locale.CHINA);
+        collator.setStrength(Collator.PRIMARY);
         Collections.sort(list, (left, right) -> {
             if (left.isDirectory() != right.isDirectory()) return left.isDirectory() ? -1 : 1;
-            return left.getName().compareToIgnoreCase(right.getName());
+            int leftGroup = workspaceNameGroup(left.getName());
+            int rightGroup = workspaceNameGroup(right.getName());
+            if (leftGroup != rightGroup) return Integer.compare(leftGroup, rightGroup);
+            return collator.compare(left.getName(), right.getName());
         });
         for (File child : list) {
-            if (child.isHidden()) continue;
             if (!child.isDirectory() && !isEditableFile(child)) continue;
             boolean expanded = child.isDirectory() && mExpandedDirectories.contains(child.getAbsolutePath());
             LinearLayout item = new LinearLayout(this);
@@ -740,29 +814,139 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                 return;
             }
         }
-        try {
-            String source = FileUtils.readFileToString(file, "UTF-8");
-            CodeEditor editor = new CodeEditor(this);
-            Theme theme = Theme.fromAssetsJson(this, mPalette.isDark
-                    ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
-            if (theme != null) editor.setTheme(theme);
-            editor.setInitialText(source);
-            EditorTab tab = new EditorTab(file, editor, source);
-            editor.getCodeEditText().addTextChangedListener(new TextWatcher() {
-                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
-                @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
-                @Override public void afterTextChanged(Editable s) {
-                    if (tab == mActiveTab && !tab.dirtyMarkerShown) {
-                        tab.dirtyMarkerShown = true;
-                        updateActiveTabLabel();
+        // Read the file off the main thread so large files do not block the first frame;
+        // build the editor UI back on the main thread.
+        Thread worker = new Thread(() -> {
+            String source;
+            try {
+                source = FileUtils.readFileToString(file, "UTF-8");
+            } catch (IOException error) {
+                runOnUiThread(() -> Toast.makeText(this,
+                        "读取失败：" + error.getMessage(), Toast.LENGTH_LONG).show());
+                return;
+            }
+            String finalSource = source;
+            runOnUiThread(() -> attachFileTab(file, finalSource));
+        });
+        worker.start();
+    }
+
+    private void restoreSessionAndOpen(File initial) {
+        SharedPreferences prefs = editorPreferences();
+        List<File> files = new ArrayList<>();
+        String encoded = prefs.getString(PREF_OPEN_TABS, "");
+        if (!TextUtils.isEmpty(encoded)) {
+            try {
+                JSONArray array = new JSONArray(encoded);
+                for (int i = 0; i < array.length() && files.size() < MAX_RESTORED_TABS; i++) {
+                    File candidate = canonical(new File(array.optString(i, "")));
+                    if (candidate != null && candidate.isFile()
+                            && isWithin(candidate, mWorkspaceRoot) && !files.contains(candidate)) {
+                        files.add(candidate);
                     }
                 }
-            });
-            mTabs.add(tab);
-            selectTab(tab);
-        } catch (IOException error) {
-            Toast.makeText(this, "读取失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+            } catch (Exception ignored) { }
         }
+        if (!files.contains(initial)) files.add(initial);
+        // The path carried by the launch intent is an explicit user selection. Restore the
+        // previous tabs around it, but never let the previously active tab steal focus from
+        // the file that was just tapped in the file list or search results.
+        final String activePath = initial.getAbsolutePath();
+        Thread worker = new Thread(() -> {
+            List<File> loadedFiles = new ArrayList<>();
+            List<String> loadedSources = new ArrayList<>();
+            for (File file : files) {
+                try {
+                    loadedSources.add(FileUtils.readFileToString(file, "UTF-8"));
+                    loadedFiles.add(file);
+                } catch (IOException ignored) { }
+            }
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                EditorTab preferred = null;
+                for (int i = 0; i < loadedFiles.size(); i++) {
+                    attachFileTab(loadedFiles.get(i), loadedSources.get(i));
+                    if (loadedFiles.get(i).getAbsolutePath().equals(activePath)) preferred = mActiveTab;
+                }
+                if (preferred != null) selectTab(preferred);
+            });
+        }, "pro-editor-restore");
+        worker.start();
+    }
+
+    private SharedPreferences editorPreferences() {
+        return getSharedPreferences(EDITOR_PREFS, MODE_PRIVATE);
+    }
+
+    private String viewStateKey(String kind, File file) {
+        return kind + "_" + Integer.toHexString(file.getAbsolutePath().hashCode());
+    }
+
+    private void saveEditorSession() {
+        if (mTabs.isEmpty()) return;
+        JSONArray tabs = new JSONArray();
+        SharedPreferences.Editor preferences = editorPreferences().edit();
+        for (EditorTab tab : mTabs) {
+            if (tab.file.isFile()) tabs.put(tab.file.getAbsolutePath());
+            saveEditorViewState(tab, preferences);
+        }
+        preferences.putString(PREF_OPEN_TABS, tabs.toString());
+        if (mActiveTab != null) preferences.putString(PREF_ACTIVE_TAB,
+                mActiveTab.file.getAbsolutePath());
+        if (mActiveTab != null) {
+            float scaledDensity = getResources().getDisplayMetrics().scaledDensity;
+            preferences.putFloat(PREF_TEXT_SIZE,
+                    mActiveTab.editor.getCodeEditText().getTextSize() / Math.max(1f, scaledDensity));
+        }
+        preferences.apply();
+    }
+
+    private void saveEditorViewState(EditorTab tab, SharedPreferences.Editor preferences) {
+        if (tab == null || tab.editor == null) return;
+        EditText editText = tab.editor.getCodeEditText();
+        preferences.putInt(viewStateKey("cursor", tab.file),
+                Math.max(0, editText.getSelectionStart()));
+        preferences.putInt(viewStateKey("scroll_x", tab.file), tab.editor.getScrollX());
+        preferences.putInt(viewStateKey("scroll_y", tab.file), tab.editor.getScrollY());
+    }
+
+    private void restoreEditorViewState(EditorTab tab) {
+        if (tab == null || tab.viewStateRestored) return;
+        tab.viewStateRestored = true;
+        SharedPreferences prefs = editorPreferences();
+        int cursor = prefs.getInt(viewStateKey("cursor", tab.file), 0);
+        int scrollX = prefs.getInt(viewStateKey("scroll_x", tab.file), 0);
+        int scrollY = prefs.getInt(viewStateKey("scroll_y", tab.file), 0);
+        tab.editor.post(() -> {
+            if (!mTabs.contains(tab)) return;
+            EditText editText = tab.editor.getCodeEditText();
+            editText.setSelection(Math.max(0, Math.min(editText.length(), cursor)));
+            tab.editor.scrollTo(Math.max(0, scrollX), Math.max(0, scrollY));
+        });
+    }
+
+    private void attachFileTab(File file, String source) {
+        CodeEditor editor = new CodeEditor(this);
+        Theme theme = Theme.fromAssetsJson(this, mPalette.isDark
+                ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
+        if (theme != null) editor.setTheme(theme);
+        editor.getCodeEditText().setTextSize(TypedValue.COMPLEX_UNIT_SP,
+                editorPreferences().getFloat(PREF_TEXT_SIZE, 17f));
+        editor.setInitialText(source);
+        EditorTab tab = new EditorTab(file, editor, source);
+        editor.getCodeEditText().addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable s) {
+                if (tab == mActiveTab && !tab.dirtyMarkerShown) {
+                    tab.dirtyMarkerShown = true;
+                    updateActiveTabLabel();
+                }
+                updateToolbarState();
+            }
+        });
+        mTabs.add(tab);
+        selectTab(tab);
     }
 
     private void selectTab(EditorTab tab) {
@@ -774,6 +958,8 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         applyBreakpointListener(tab);
         refreshTabs();
+        restoreEditorViewState(tab);
+        updateToolbarState();
     }
 
     private void refreshTabs() {
@@ -806,6 +992,19 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         if (mTabBar != null && mActiveTab != null) refreshTabs();
     }
 
+    private void updateToolbarState() {
+        CodeEditor editor = activeEditor();
+        setToolEnabled(mUndoTool, editor != null && editor.canUndo());
+        setToolEnabled(mRedoTool, editor != null && editor.canRedo());
+        setToolEnabled(mSaveTool, mActiveTab != null && hasUnsavedChanges(mActiveTab));
+    }
+
+    private void setToolEnabled(View tool, boolean enabled) {
+        if (tool == null) return;
+        tool.setEnabled(enabled);
+        tool.setAlpha(enabled ? 1f : 0.38f);
+    }
+
     private void requestCloseTab(EditorTab tab) {
         if (!hasUnsavedChanges(tab)) {
             closeTab(tab);
@@ -832,39 +1031,50 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     private void openWorkspaceDrawer() {
-        refreshFileTree();
+        if (mFileTreeDirty) refreshFileTree();
         mDrawerLayout.openDrawer(GravityCompat.START);
     }
 
-    private void showEditMenu() {
+    private int workspaceNameGroup(String name) {
+        if (name.startsWith(".")) return 0;
+        for (int i = 0; i < name.length(); i++) {
+            Character.UnicodeBlock block = Character.UnicodeBlock.of(name.charAt(i));
+            if (block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                    || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS) return 1;
+        }
+        return 2;
+    }
+
+    private void showEditMenu(View anchor) {
         String[] items = {"查找/替换", "跳转", "复制", "删除", "移动", "折叠", "格式化代码"};
-        darkDialog().setTitle("编辑").setItems(items, (dialog, which) -> {
+        boolean[] submenus = {false, true, true, true, true, true, false};
+        showAnchoredMenu(anchor, items, submenus, which -> {
             CodeEditor editor = activeEditor();
             if (editor == null) return;
             switch (which) {
                 case 0: showFindReplace(); break;
-                case 1: showJumpMenu(); break;
-                case 2: showCopyMenu(); break;
-                case 3: showDeleteMenu(); break;
-                case 4: showMoveLineMenu(); break;
-                case 5: showFoldMenu(); break;
+                case 1: showJumpMenu(anchor); break;
+                case 2: showCopyMenu(anchor); break;
+                case 3: showDeleteMenu(anchor); break;
+                case 4: showMoveLineMenu(anchor); break;
+                case 5: showFoldMenu(anchor); break;
                 case 6:
-                    expandAllFolds(mActiveTab);
+                    editor.getCodeEditText().unfoldAll();
                     editor.beautifyCode();
                     break;
             }
-        }).show();
+        });
     }
 
-    private void showCopyMenu() {
-        darkDialog().setTitle("复制").setItems(new String[]{"复制", "复制全部", "复制行"},
-                (dialog, which) -> {
+    private void showCopyMenu(View anchor) {
+        showAnchoredMenu(anchor, new String[]{"复制", "复制全部", "复制行"}, null,
+                which -> {
                     if (which == 0) copySelection();
                     else if (which == 1) {
                         ClipboardUtil.setClip(this, activeEditor().getText());
                         toast("已复制全部");
                     } else activeEditor().copyLine();
-                }).show();
+                });
     }
 
     private void copySelection() {
@@ -879,9 +1089,9 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         toast("已复制");
     }
 
-    private void showDeleteMenu() {
-        darkDialog().setTitle("删除").setItems(new String[]{"删除", "删除行", "清空"},
-                (dialog, which) -> {
+    private void showDeleteMenu(View anchor) {
+        showAnchoredMenu(anchor, new String[]{"删除", "删除行", "清空"}, null,
+                which -> {
                     if (which == 0) deleteSelectionOrCharacter();
                     else if (which == 1) activeEditor().deleteLine();
                     else darkDialog().setTitle("清空编辑器？")
@@ -889,7 +1099,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                             .setNegativeButton("取消", null)
                             .setPositiveButton("清空", (d, w) -> activeEditor().setText(""))
                             .show();
-                }).show();
+                });
     }
 
     private void deleteSelectionOrCharacter() {
@@ -900,13 +1110,13 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         if (start != end) edit.getText().delete(start, end);
     }
 
-    private void showFoldMenu() {
-        darkDialog().setTitle("折叠").setItems(new String[]{"折叠", "全部折叠", "全部展开"},
-                (dialog, which) -> {
-                    if (which == 0) toggleFold();
-                    else if (which == 1) foldAllTopLevelBlocks();
-                    else expandAllFolds(mActiveTab);
-                }).show();
+    private void showFoldMenu(View anchor) {
+        showAnchoredMenu(anchor, new String[]{"折叠", "全部折叠", "全部展开"}, null,
+                which -> {
+                    if (which == 0) activeEditor().getCodeEditText().toggleFoldAtSelection();
+                    else if (which == 1) activeEditor().getCodeEditText().foldAllTopLevel();
+                    else activeEditor().getCodeEditText().unfoldAll();
+                });
     }
 
     private void showFindReplace() {
@@ -983,9 +1193,9 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         }
     }
 
-    private void showJumpMenu() {
+    private void showJumpMenu(View anchor) {
         String[] items = {"跳转到行", "转到文件开始", "转到文件末尾", "转到行首", "转到行尾"};
-        darkDialog().setTitle("跳转").setItems(items, (dialog, which) -> {
+        showAnchoredMenu(anchor, items, null, which -> {
             CodeEditor editor = activeEditor();
             if (editor == null) return;
             if (which == 0) showJumpLineDialog();
@@ -993,7 +1203,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             else if (which == 2) editor.jumpToEnd();
             else if (which == 3) editor.jumpToLineStart();
             else editor.jumpToLineEnd();
-        }).show();
+        });
     }
 
     private void showJumpLineDialog() {
@@ -1011,9 +1221,9 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                 }).show();
     }
 
-    private void showMoveLineMenu() {
-        darkDialog().setTitle("移动").setItems(new String[]{"上移行", "下移行"},
-                (dialog, which) -> moveCurrentLine(which == 0 ? -1 : 1)).show();
+    private void showMoveLineMenu(View anchor) {
+        showAnchoredMenu(anchor, new String[]{"上移行", "下移行"}, null,
+                which -> moveCurrentLine(which == 0 ? -1 : 1));
     }
 
     private void moveCurrentLine(int direction) {
@@ -1035,113 +1245,14 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         activeEditor().jumpTo(target, 0);
     }
 
-    private void toggleFold() {
-        if (mActiveTab == null) return;
-        CodeEditor editor = mActiveTab.editor;
-        int cursor = editor.getCodeEditText().getSelectionStart();
-        String text = editor.getText();
-        for (FoldRegion fold : new ArrayList<>(mActiveTab.folds)) {
-            int start = text.indexOf(fold.marker);
-            if (start >= 0 && cursor >= start && cursor <= start + fold.marker.length()) {
-                editor.getCodeEditText().getText().replace(start, start + fold.marker.length(), fold.body);
-                mActiveTab.folds.remove(fold);
-                return;
-            }
-        }
-        int open = findOpeningBrace(text, cursor);
-        int close = open < 0 ? -1 : findClosingBrace(text, open);
-        if (open < 0 || close <= open + 1) {
-            toast("当前光标不在可折叠代码块中");
-            return;
-        }
-        String body = text.substring(open + 1, close);
-        int lines = countLines(body);
-        if (lines < 2) {
-            toast("代码块过短");
-            return;
-        }
-        String marker = "\n    /* … folded " + lines + " lines #" + (++mFoldSequence) + " … */\n";
-        editor.getCodeEditText().getText().replace(open + 1, close, marker);
-        mActiveTab.folds.add(new FoldRegion(marker, body));
-    }
-
-    private int findOpeningBrace(String text, int cursor) {
-        int depth = 0;
-        for (int i = Math.min(cursor - 1, text.length() - 1); i >= 0; i--) {
-            char c = text.charAt(i);
-            if (c == '}') depth++;
-            else if (c == '{') {
-                if (depth == 0) return i;
-                depth--;
-            }
-        }
-        return -1;
-    }
-
-    private int findClosingBrace(String text, int open) {
-        int depth = 0;
-        for (int i = open; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c == '{') depth++;
-            else if (c == '}' && --depth == 0) return i;
-        }
-        return -1;
-    }
-
-    private void expandAllFolds(EditorTab tab) {
-        if (tab == null || tab.folds.isEmpty()) return;
-        String text = tab.editor.getText();
-        for (FoldRegion fold : tab.folds) text = text.replace(fold.marker, fold.body);
-        tab.folds.clear();
-        tab.editor.setText(text);
-    }
-
-    private void foldAllTopLevelBlocks() {
-        if (mActiveTab == null) return;
-        expandAllFolds(mActiveTab);
-        String source = mActiveTab.editor.getText();
-        List<int[]> blocks = new ArrayList<>();
-        int depth = 0;
-        int opening = -1;
-        for (int i = 0; i < source.length(); i++) {
-            char c = source.charAt(i);
-            if (c == '{') {
-                if (depth == 0) opening = i;
-                depth++;
-            } else if (c == '}' && depth > 0) {
-                depth--;
-                if (depth == 0 && opening >= 0) {
-                    String body = source.substring(opening + 1, i);
-                    if (countLines(body) > 1) blocks.add(new int[]{opening, i});
-                    opening = -1;
-                }
-            }
-        }
-        if (blocks.isEmpty()) {
-            toast("没有可折叠的代码块");
-            return;
-        }
-        Editable editable = mActiveTab.editor.getCodeEditText().getText();
-        for (int i = blocks.size() - 1; i >= 0; i--) {
-            int[] block = blocks.get(i);
-            String body = source.substring(block[0] + 1, block[1]);
-            String marker = "\n    /* … folded " + countLines(body) + " lines #"
-                    + (++mFoldSequence) + " … */\n";
-            editable.replace(block[0] + 1, block[1], marker);
-            mActiveTab.folds.add(new FoldRegion(marker, body));
-        }
-    }
-
     private String expandedText(EditorTab tab) {
-        String text = tab.editor.getText();
-        for (FoldRegion fold : tab.folds) text = text.replace(fold.marker, fold.body);
-        return text;
+        return tab.editor.getText();
     }
 
-    private void showDebugMenu() {
+    private void showDebugMenu(View anchor) {
         String[] items = {"强制停止", "强制停止所有脚本", "断点", "启动调试",
                 "删除所有断点", "悬浮运行"};
-        darkDialog().setTitle("调试").setItems(items, (dialog, which) -> {
+        showAnchoredMenu(anchor, items, null, which -> {
             if (activeEditor() == null) return;
             if (which == 0) stopCurrentExecution();
             else if (which == 1) AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
@@ -1151,7 +1262,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                 for (EditorTab tab : mTabs) tab.editor.removeAllBreakpoints();
                 if (mDebugger != null) mDebugger.clearAllBreakpoints();
             } else floatingRun();
-        }).show();
+        });
     }
 
     private void startDebugger() {
@@ -1285,10 +1396,10 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         startActivity(intent);
     }
 
-    private void showOtherMenu() {
+    private void showOtherMenu(View anchor) {
         String[] items = {"项目", "打包单文件", "搜索Java包/类", "信息", "字体大小",
                 "界面主题", "用其他应用打开", "设计"};
-        darkDialog().setTitle("其他").setItems(items, (dialog, which) -> {
+        showAnchoredMenu(anchor, items, null, which -> {
             if (mActiveTab == null) return;
             if (which == 0) openProjectConfig();
             else if (which == 1) buildApk();
@@ -1298,7 +1409,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             else if (which == 5) selectTheme();
             else if (which == 6) Scripts.INSTANCE.openByOtherApps(mActiveTab.file);
             else showDesigner();
-        }).show();
+        });
     }
 
     private void openProjectConfig() {
@@ -1381,7 +1492,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private void resetActiveSample(String assetPath) {
         EditorTab tab = mActiveTab;
         if (tab == null) return;
-        expandAllFolds(tab);
+        tab.editor.getCodeEditText().unfoldAll();
         try (InputStream input = getAssets().open(assetPath);
              FileOutputStream output = new FileOutputStream(tab.file, false)) {
             byte[] buffer = new byte[32 * 1024];
@@ -1405,6 +1516,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         darkDialog().setTitle("字体大小").setItems(sizes, (dialog, which) -> {
             float size = Float.parseFloat(sizes[which]);
             for (EditorTab tab : mTabs) tab.editor.getCodeEditText().setTextSize(size);
+            editorPreferences().edit().putFloat(PREF_TEXT_SIZE, size).apply();
         }).show();
     }
 
@@ -1479,6 +1591,16 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         if (mLogPanel.getVisibility() == View.VISIBLE) hideLogPanel(); else showLogPanel();
     }
 
+    private void setTabBarEnabled(boolean enabled) {
+        if (mTabBar == null) return;
+        for (int i = 0; i < mTabBar.getChildCount(); i++) {
+            View child = mTabBar.getChildAt(i);
+            child.setEnabled(enabled);
+            child.setClickable(enabled);
+            child.setFocusable(enabled);
+        }
+    }
+
     private void showLogPanel() {
         if (mLogPanel.getVisibility() == View.VISIBLE) return;
         mLogExpanded = false;
@@ -1493,10 +1615,21 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         mShortcutBar.setVisibility(View.GONE);
         setToolSelected(mLogTool, true);
         mLogPanel.setVisibility(View.VISIBLE);
+        // While the log console is open, block all interaction with the editor above
+        // (like Auto.js Pro): a translucent shield consumes touches over the editor area.
+        if (mEditorShield.getParent() == null && mEditorContainer != null) {
+            mEditorContainer.addView(mEditorShield, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        setTabBarEnabled(false);
     }
 
     private void hideLogPanel() {
         mLogExpanded = false;
+        if (mEditorShield.getParent() instanceof ViewGroup) {
+            ((ViewGroup) mEditorShield.getParent()).removeView(mEditorShield);
+        }
+        setTabBarEnabled(true);
         mLogPanel.setVisibility(View.GONE);
         LinearLayout.LayoutParams editorParams = (LinearLayout.LayoutParams) mEditorContainer.getLayoutParams();
         editorParams.height = 0;
@@ -1556,6 +1689,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             tab.dirtyMarkerShown = false;
             tab.editor.markTextAsSaved();
             refreshTabs();
+            updateToolbarState();
             if (showToast) toast("已保存");
             return true;
         } catch (IOException error) {
@@ -1639,13 +1773,33 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     @Override
     protected void onResume() {
         super.onResume();
+        mFileTreeDirty = true;
         AppThemeRepository repository = AppThemeRepository.get(this);
         repository.addListener(mThemeListener);
-        applyThemePalette(repository.getPalette());
+        applyThemePalette(resolvePalette());
+    }
+
+    /**
+     * Theme palette aligned with the rest of the app (Miuix/MainActivity surfaces).
+     * Those surfaces derive darkness from {@link Pref#isNightModeEnabled()}, while
+     * {@link AppThemeRepository} follows the system uiMode, which can be stale on some
+     * devices (e.g. MIUI leaves the app configuration in light mode). Trust the app's own
+     * night-mode switch first so the editor matches the main UI in both light and dark.
+     */
+    private AppThemePalette resolvePalette() {
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        AppThemePalette base = repository.getPalette();
+        boolean appDark = Pref.isNightModeEnabled();
+        if (base.isDark != appDark) {
+            return appDark ? AppThemePalette.dark(repository.getAccentColor())
+                    : AppThemePalette.light(repository.getAccentColor());
+        }
+        return base;
     }
 
     @Override
     protected void onPause() {
+        saveEditorSession();
         AppThemeRepository.get(this).removeListener(mThemeListener);
         super.onPause();
     }
@@ -1655,7 +1809,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         super.onConfigurationChanged(newConfig);
         AppThemeRepository repository = AppThemeRepository.get(this);
         repository.refreshSystemAppearance();
-        applyThemePalette(repository.getPalette());
+        applyThemePalette(resolvePalette());
     }
 
     private void applyThemePalette(AppThemePalette palette) {
@@ -1666,6 +1820,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         if (mDrawerLayout == null) return;
 
         recolorTextTree(mDrawerLayout, previous, palette);
+        tintImageTree(mDrawerLayout, palette.iconPrimary);
         mDrawerLayout.setBackgroundColor(palette.editorBackground);
         mDrawerLayout.setScrimColor(palette.scrim);
         if (mMainLayout != null) mMainLayout.setBackgroundColor(palette.editorBackground);
@@ -1708,6 +1863,16 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         }
     }
 
+    private void tintImageTree(View view, int color) {
+        if (view instanceof ImageView) ((ImageView) view).setColorFilter(color);
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                tintImageTree(group.getChildAt(i), color);
+            }
+        }
+    }
+
     @Override
     public void onBackPressed() {
         if (mDrawerLayout != null && mDrawerLayout.isDrawerOpen(GravityCompat.START)) {
@@ -1742,6 +1907,66 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         return new AlertDialog.Builder(this, mPalette.isDark
                 ? AlertDialog.THEME_DEVICE_DEFAULT_DARK
                 : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
+    }
+
+    private void showAnchoredMenu(View anchor, String[] items, boolean[] hasSubmenu,
+                                  MenuClickListener listener) {
+        if (anchor == null || items == null || items.length == 0) return;
+        hideKeyboardForMenu();
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(0, dp(4), 0, dp(4));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(mPalette.surfaceElevated);
+        background.setCornerRadius(dp(4));
+        content.setBackground(background);
+
+        PopupWindow popup = new PopupWindow(content, dp(196),
+                ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        popup.setElevation(dp(8));
+        popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+        popup.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+        for (int i = 0; i < items.length; i++) {
+            final int index = i;
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(16), 0, dp(10), 0);
+            row.setBackgroundColor(Color.TRANSPARENT);
+            TextView label = text(items[i], 16f, mPalette.textPrimary);
+            label.setGravity(Gravity.CENTER_VERTICAL);
+            label.setSingleLine(true);
+            row.addView(label, new LinearLayout.LayoutParams(0, dp(52), 1f));
+            if (hasSubmenu != null && index < hasSubmenu.length && hasSubmenu[index]) {
+                TextView arrow = text("›", 22f, mPalette.textSecondary);
+                arrow.setGravity(Gravity.CENTER);
+                row.addView(arrow, new LinearLayout.LayoutParams(dp(24), dp(52)));
+            }
+            row.setOnClickListener(v -> {
+                popup.dismiss();
+                listener.onClick(index);
+            });
+            content.addView(row, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+        }
+        boolean toolbarAnchor = anchor instanceof LinearLayout
+                && anchor.getContentDescription() != null;
+        if (toolbarAnchor) setToolSelected(anchor, true);
+        popup.setOnDismissListener(() -> {
+            if (toolbarAnchor && anchor != mLogTool) setToolSelected(anchor, false);
+        });
+        popup.showAsDropDown(anchor, -dp(8), 0);
+    }
+
+    private void hideKeyboardForMenu() {
+        View focus = getCurrentFocus();
+        if (focus != null) {
+            ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(focus.getWindowToken(), 0);
+            focus.clearFocus();
+        }
+        if (mDrawerLayout != null) mDrawerLayout.requestFocus();
     }
 
     private void applyWindowSystemUi(AppThemePalette palette) {
@@ -1824,7 +2049,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         } else if (widthDp >= 600f) {
             fraction = 0.62f;
         } else {
-            fraction = fontScale >= 1.30f ? 0.94f : 0.90f;
+            fraction = fontScale >= 1.30f ? 0.90f : 0.84f;
         }
 
         int maximum = dp(landscape ? 520 : 480);
@@ -1837,16 +2062,16 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private int workspaceRowHeight() {
         float fontScale = getResources().getConfiguration().fontScale;
-        if (fontScale >= 1.50f) return dp(60);
-        if (fontScale >= 1.20f) return dp(52);
-        return dp(44);
+        if (fontScale >= 1.50f) return dp(56);
+        if (fontScale >= 1.20f) return dp(48);
+        return dp(40);
     }
 
     private int workspaceHeaderHeight() {
         float fontScale = getResources().getConfiguration().fontScale;
-        if (fontScale >= 1.50f) return dp(72);
-        if (fontScale >= 1.20f) return dp(64);
-        return dp(56);
+        if (fontScale >= 1.50f) return dp(64);
+        if (fontScale >= 1.20f) return dp(56);
+        return dp(48);
     }
 
     private void updateWorkspaceDrawerSize(int fullWidth, int fullHeight) {
@@ -1879,12 +2104,16 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         void onName(String name);
     }
 
+    private interface MenuClickListener {
+        void onClick(int index);
+    }
+
     private static final class EditorTab {
         File file;
         final CodeEditor editor;
-        final List<FoldRegion> folds = new ArrayList<>();
         String savedText;
         boolean dirtyMarkerShown;
+        boolean viewStateRestored;
 
         EditorTab(File file, CodeEditor editor, String savedText) {
             this.file = file;
@@ -1893,13 +2122,4 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         }
     }
 
-    private static final class FoldRegion {
-        final String marker;
-        final String body;
-
-        FoldRegion(String marker, String body) {
-            this.marker = marker;
-            this.body = body;
-        }
-    }
 }

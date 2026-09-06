@@ -29,11 +29,16 @@ import androidx.annotation.RequiresApi;
 import androidx.appcompat.widget.AppCompatEditText;
 import android.text.Editable;
 import android.text.Layout;
+import android.text.Spanned;
+import android.text.TextWatcher;
+import android.text.style.LineHeightSpan;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.util.TimingLogger;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.widget.TextView;
 import android.widget.TextViewHelper;
 
@@ -44,7 +49,12 @@ import com.stardust.util.TextUtils;
 
 import org.mozilla.javascript.Token;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static com.jdkshen.aijspro.ui.edit.editor.BracketMatching.UNMATCHED_BRACKET;
@@ -67,12 +77,44 @@ public class CodeEditText extends AppCompatEditText {
     private Theme mTheme;
     private TimingLogger mLogger = new TimingLogger(LOG_TAG, "draw");
     private Paint mLineHighlightPaint = new Paint();
+    private Paint mGuidePaint = new Paint();
+    private Paint mBlockPaint = new Paint();
     private int mFirstLineForDraw = -1, mLastLineForDraw;
     private int[] mMatchingBrackets = {-1, -1};
     private int mUnmatchedBracket = -1;
+
+    // Code folding (Auto.js Pro style): foldable regions detected from bracket pairs,
+    // their collapsed state, and a dirty flag to rebuild after text changes.
+    private final List<FoldRegion> mFoldRegions = new ArrayList<>();
+    private final Set<Integer> mFoldedStarts = new HashSet<>();
+    private final List<CollapsedLineSpan> mFoldSpans = new ArrayList<>();
+    private boolean mFoldDirty = true;
+
+    private static final class FoldRegion {
+        final int startLine;
+        final int endLine;
+        FoldRegion(int startLine, int endLine) {
+            this.startLine = startLine;
+            this.endLine = endLine;
+        }
+    }
+
+    /** Keeps folded source in the Editable while removing its visual line height. */
+    private static final class CollapsedLineSpan implements LineHeightSpan {
+        @Override
+        public void chooseHeight(CharSequence text, int start, int end, int spanstartv, int v,
+                                 Paint.FontMetricsInt fm) {
+            fm.top = 0;
+            fm.ascent = 0;
+            fm.descent = 0;
+            fm.bottom = 0;
+            fm.leading = 0;
+        }
+    }
     private LinkedHashMap<Integer, CodeEditor.Breakpoint> mBreakpoints = new LinkedHashMap<>();
     private int mDebuggingLine = -1;
     private CodeEditor.BreakpointChangeListener mBreakpointChangeListener;
+    private ScaleGestureDetector mScaleDetector;
 
 
     public CodeEditText(Context context) {
@@ -96,6 +138,54 @@ public class CodeEditText extends AppCompatEditText {
         setHorizontallyScrolling(true);
         mTheme = Theme.getDefault(getContext());
         mLineHighlightPaint.setStyle(Paint.Style.FILL);
+        // VS Code-like editor hints: indent guides + row separators (stroke) and
+        // the current-line accent bar (fill).
+        float density = getResources().getDisplayMetrics().density;
+        mGuidePaint.setStyle(Paint.Style.STROKE);
+        mGuidePaint.setStrokeWidth(Math.max(1f, density));
+        mBlockPaint.setStyle(Paint.Style.FILL);
+        mScaleDetector = new ScaleGestureDetector(getContext(),
+                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    // Throttle: re-laying-out the whole code view on every MOVE is what
+                    // makes pinch-zoom janky. Accumulate the scale delta and only apply
+                    // a meaningful change (~6% of font size) to the text.
+                    private float pending = 1f;
+
+                    @Override
+                    public boolean onScale(ScaleGestureDetector detector) {
+                        pending *= detector.getScaleFactor();
+                        if (Math.abs(Math.log(pending)) < 0.06) {
+                            return true;
+                        }
+                        float scaled = getTextSize() * pending;
+                        float minPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 8f,
+                                getResources().getDisplayMetrics());
+                        float maxPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 48f,
+                                getResources().getDisplayMetrics());
+                        setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                                Math.max(minPx, Math.min(maxPx, scaled)));
+                        pending = 1f;
+                        return true;
+                    }
+
+                    @Override
+                    public void onScaleEnd(ScaleGestureDetector detector) {
+                        pending = 1f;
+                    }
+                });
+        addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                clearFoldSpans();
+            }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                mFoldDirty = true;
+                // Fold coordinates are line based.  Once the document changes, keeping the
+                // old line numbers can hide unrelated code or leave the caret inside an
+                // invisible region.  Rebuild from a clean state on the next draw.
+                mFoldedStarts.clear();
+            }
+            @Override public void afterTextChanged(Editable s) { }
+        });
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             setImportantForAutofill(IMPORTANT_FOR_AUTOFILL_NO);
         }
@@ -116,6 +206,146 @@ public class CodeEditText extends AppCompatEditText {
         invalidate();
     }
 
+    // ---------- code folding ----------
+
+    /** Rebuild foldable regions from balanced brackets ({}, [], ()). Called when dirty. */
+    private void ensureFoldRegions() {
+        if (!mFoldDirty) return;
+        Layout layout = getLayout();
+        if (layout == null) {
+            // Layout not ready yet (first draw pass); keep dirty and retry on the next draw.
+            return;
+        }
+        mFoldDirty = false;
+        mFoldRegions.clear();
+        CharSequence text = getText();
+        if (text.length() > 128 * 1024) {
+            // Very large files: skip the bracket scan (folding disabled) so typing
+            // and first layout stay smooth. Fold arrows simply do not appear.
+            return;
+        }
+        ArrayDeque<int[]> stack = new ArrayDeque<>();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '{' || c == '[' || c == '(') {
+                stack.push(new int[]{c, i});
+            } else if (c == '}' || c == ']' || c == ')') {
+                if (!stack.isEmpty()) {
+                    int[] open = stack.peek();
+                    if (matchesBracket((char) open[0], c)) {
+                        stack.pop();
+                        int startLine = layout.getLineForOffset(open[1]);
+                        int endLine = layout.getLineForOffset(i);
+                        if (endLine > startLine) {
+                            mFoldRegions.add(new FoldRegion(startLine, endLine));
+                        }
+                    }
+                }
+            }
+        }
+        mFoldRegions.sort((a, b) -> Integer.compare(a.startLine, b.startLine));
+    }
+
+    private static boolean matchesBracket(char open, char close) {
+        return (open == '{' && close == '}') || (open == '[' && close == ']')
+                || (open == '(' && close == ')');
+    }
+
+    private boolean isFoldStart(int line) {
+        for (FoldRegion region : mFoldRegions) {
+            if (region.startLine == line) return true;
+            if (region.startLine > line) break;
+        }
+        return false;
+    }
+
+    /** If line is hidden by a collapsed region on the same or an ancestor line, returns end line. */
+    private int foldedRegionEndAt(int line) {
+        for (FoldRegion region : mFoldRegions) {
+            if (mFoldedStarts.contains(region.startLine)
+                    && line > region.startLine && line <= region.endLine) {
+                return region.endLine;
+            }
+        }
+        return -1;
+    }
+
+    private boolean toggleFold(int line) {
+        ensureFoldRegions();
+        if (mFoldedStarts.contains(line)) {
+            mFoldedStarts.remove(line);
+        } else if (isFoldStart(line)) {
+            mFoldedStarts.add(line);
+        } else {
+            return false;
+        }
+        applyFoldSpans();
+        return true;
+    }
+
+    /** Toggle the fold whose opening bracket is on the caret line. */
+    public boolean toggleFoldAtSelection() {
+        Layout layout = getLayout();
+        if (layout == null) return false;
+        int selection = Math.max(0, Math.min(length(), getSelectionStart()));
+        return toggleFold(layout.getLineForOffset(selection));
+    }
+
+    /** Collapse the outermost blocks, matching the editor menu's "fold all" action. */
+    public void foldAllTopLevel() {
+        ensureFoldRegions();
+        mFoldedStarts.clear();
+        int coveredUntil = -1;
+        for (FoldRegion region : mFoldRegions) {
+            if (region.startLine > coveredUntil) {
+                mFoldedStarts.add(region.startLine);
+                coveredUntil = region.endLine;
+            }
+        }
+        applyFoldSpans();
+    }
+
+    /** Expand every collapsed block without changing the document text. */
+    public void unfoldAll() {
+        if (mFoldedStarts.isEmpty() && mFoldSpans.isEmpty()) return;
+        mFoldedStarts.clear();
+        clearFoldSpans();
+        requestLayout();
+        invalidate();
+    }
+
+    private void clearFoldSpans() {
+        Editable editable = getText();
+        for (CollapsedLineSpan span : mFoldSpans) editable.removeSpan(span);
+        mFoldSpans.clear();
+    }
+
+    /**
+     * Collapses the visual height of hidden lines with spans. The underlying source and all
+     * offsets remain intact, so saving, undo and syntax highlighting never see marker text.
+     */
+    private void applyFoldSpans() {
+        Layout layout = getLayout();
+        if (layout == null) {
+            post(this::applyFoldSpans);
+            return;
+        }
+        Editable editable = getText();
+        clearFoldSpans();
+        for (FoldRegion region : mFoldRegions) {
+            if (!mFoldedStarts.contains(region.startLine)) continue;
+            int firstHiddenLine = Math.min(region.startLine + 1, layout.getLineCount() - 1);
+            int start = layout.getLineStart(firstHiddenLine);
+            int end = Math.min(editable.length(), layout.getLineEnd(region.endLine));
+            if (end <= start) continue;
+            CollapsedLineSpan span = new CollapsedLineSpan();
+            editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            mFoldSpans.add(span);
+        }
+        requestLayout();
+        invalidate();
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         mLogger.reset();
@@ -129,6 +359,7 @@ public class CodeEditText extends AppCompatEditText {
         }
         updatePaddingForGutter();
         updateLineRangeForDraw(canvas);
+        ensureFoldRegions();
 
         //绘制行高亮需要在绘制光标之前
         drawLineHighlights(canvas);
@@ -162,13 +393,27 @@ public class CodeEditText extends AppCompatEditText {
         if (debugHighlightLine != currentLine) {
             //绘制当前行高亮
             mLineHighlightPaint.setColor(mTheme.getLineHighlightBackgroundColor());
-            drawLineHighlight(canvas, mLineHighlightPaint, getCurrentLine());
+            drawLineHighlight(canvas, mLineHighlightPaint, currentLine);
+            drawCurrentLineBar(canvas, currentLine);
         }
         if (debugHighlightLine != -1) {
             mLineHighlightPaint.setColor(mTheme.getDebuggingLineBackgroundColor());
             drawLineHighlight(canvas, mLineHighlightPaint, debugHighlightLine);
         }
 
+    }
+
+    /** Thin accent bar on the left edge of the cursor line (VS Code style). */
+    private void drawCurrentLineBar(Canvas canvas, int line) {
+        if (line < 0 || line > getLineCount() - 1) return;
+        Layout layout = getLayout();
+        if (layout == null) return;
+        int lineTop = layout.getLineTop(line);
+        int lineBottom = layout.getLineTop(line + 1);
+        mBlockPaint.setColor(mTheme.getLineNumberColor());
+        mBlockPaint.setAlpha(210);
+        float barWidth = 2.5f * getResources().getDisplayMetrics().density;
+        canvas.drawRect(0, lineTop, barWidth, lineBottom, mBlockPaint);
     }
 
     private void updateLineRangeForDraw(Canvas canvas) {
@@ -213,6 +458,14 @@ public class CodeEditText extends AppCompatEditText {
             Log.d(LOG_TAG, "draw line: " + (mLastLineForDraw - mFirstLineForDraw + 1));
         mLogger.addSplit("before draw line");
         for (int line = mFirstLineForDraw; line <= mLastLineForDraw && line < lineCount; line++) {
+            // Lines hidden by a collapsed region keep their source offsets but have zero height.
+            FoldRegion hidden = foldedRegionContaining(line);
+            if (hidden != null) {
+                continue;
+            }
+            if (isFoldStart(line)) {
+                drawFoldArrow(canvas, line, !mFoldedStarts.contains(line), paint);
+            }
             int lineBottom = layout.getLineTop(line + 1);
             int lineTop = layout.getLineTop(line);
             int lineBaseline = lineBottom - layout.getLineDescent(line);
@@ -227,6 +480,11 @@ public class CodeEditText extends AppCompatEditText {
             paint.setColor(lineNumberColor);
             canvas.drawText(lineNumberText, 0, lineNumberText.length(), 10,
                     lineBaseline, paint);
+
+            // VS Code-style indent guides and 1px row separators
+            int guidesLineStart = layout.getLineStart(line);
+            drawIndentGuidesAndRowSeparator(canvas, layout, text, line,
+                    guidesLineStart, lineTop, lineBottom, paint);
 
             if (highlightTokens == null)
                 continue;
@@ -290,10 +548,59 @@ public class CodeEditText extends AppCompatEditText {
                 return;
             }
             canvas.drawText(text, previousColorPos, visibleCharEnd, paddingLeft + offsetX, lineBaseline, paint);
+            if (mFoldedStarts.contains(line)) {
+                float markerX = paddingLeft + paint.measureText(text, lineStart, lineEnd)
+                        + 5f * getResources().getDisplayMetrics().density;
+                paint.setColor(mTheme.getLineNumberColor());
+                canvas.drawText(" …", markerX, lineBaseline, paint);
+            }
             if (DEBUG) {
                 mLogger.addSplit("draw line " + line + " (" + (visibleCharEnd - visibleCharStart) + ") ");
             }
         }
+    }
+
+    /** Returns the collapsed region hiding {code}line{/code}, or null. */
+    private FoldRegion foldedRegionContaining(int line) {
+        for (FoldRegion region : mFoldRegions) {
+            if (mFoldedStarts.contains(region.startLine)
+                    && line > region.startLine && line <= region.endLine) {
+                return region;
+            }
+        }
+        return null;
+    }
+
+    /** VS Code-like fold toggle arrow drawn on the right edge of the gutter. */
+    private void drawFoldArrow(Canvas canvas, int line, boolean expanded, Paint paint) {
+        Layout layout = getLayout();
+        if (layout == null) return;
+        int lineTop = layout.getLineTop(line);
+        int lineBottom = layout.getLineTop(line + 1);
+        float density = getResources().getDisplayMetrics().density;
+        float cx = getPaddingLeft() - 11f * density;
+        float cy = (lineTop + lineBottom) / 2f;
+        mBlockPaint.setColor(mTheme.getLineNumberColor());
+        mBlockPaint.setAlpha(255);
+        float r = 4f * density;
+        android.graphics.Path path = new android.graphics.Path();
+        if (expanded) {
+            // ▽ pointing down (collapse)
+            float w = r, h = r * 0.86f;
+            path.moveTo(cx - w, cy - h * 0.5f);
+            path.lineTo(cx + w, cy - h * 0.5f);
+            path.lineTo(cx, cy + h * 0.6f);
+            path.close();
+        } else {
+            // ▸ pointing right (expand)
+            float w = r * 0.86f, h = r;
+            path.moveTo(cx - w * 0.5f, cy - h);
+            path.lineTo(cx - w * 0.5f, cy + h);
+            path.lineTo(cx + w * 0.6f, cy);
+            path.close();
+        }
+        canvas.drawPath(path, mBlockPaint);
+        paint.setColor(mTheme.getLineNumberColor());
     }
 
     private void drawLineHighlight(Canvas canvas, Paint paint, int line) {
@@ -307,6 +614,46 @@ public class CodeEditText extends AppCompatEditText {
         int lineTop = layout.getLineTop(line);
         int lineBottom = layout.getLineTop(line + 1);
         canvas.drawRect(0, lineTop, canvas.getWidth(), lineBottom, paint);
+    }
+
+    /**
+     * VS Code-style indent guides (semi-transparent vertical lines at each indentation
+     * level) plus a 1px separator under every line, drawn in the gutter-right region.
+     */
+    private void drawIndentGuidesAndRowSeparator(Canvas canvas, Layout layout, Editable text,
+                                                 int line, int lineStart, int lineTop, int lineBottom,
+                                                 Paint paint) {
+        int paddingLeft = getPaddingLeft();
+        int lineEnd = Math.min(layout.getLineVisibleEnd(line), text.length());
+        int visibleStart = getVisibleCharIndex(paint,
+                Math.max(getRealScrollX() - paddingLeft, 0), lineStart, lineEnd);
+        float codeStart = paddingLeft + paint.measureText(text, lineStart, visibleStart);
+        float spaceWidth = paint.measureText(" ");
+        int indentCols = 0;
+        for (int i = lineStart; i < lineEnd; i++) {
+            char c = text.charAt(i);
+            if (c == ' ') indentCols++;
+            else if (c == '\t') indentCols += 4;
+            else break;
+        }
+        if (indentCols > 0) {
+            mGuidePaint.setColor(mTheme.getLineNumberColor());
+            mGuidePaint.setAlpha(64);
+            // Auto.js Pro (and VS Code) style: dotted indent guides.
+            float density = getResources().getDisplayMetrics().density;
+            mGuidePaint.setPathEffect(new android.graphics.DashPathEffect(
+                    new float[]{1.5f * density, 2.5f * density}, 0));
+            float levelWidth = spaceWidth * 4;
+            for (float col = levelWidth; col < indentCols * spaceWidth; col += levelWidth) {
+                float x = codeStart + col;
+                canvas.drawLine(x, lineTop, x, lineBottom, mGuidePaint);
+            }
+            mGuidePaint.setPathEffect(null);
+        }
+        // 1px separator between rows (dimmed line-number color)
+        mGuidePaint.setColor(mTheme.getLineNumberColor());
+        mGuidePaint.setAlpha(34);
+        canvas.drawLine(paddingLeft, lineBottom, canvas.getWidth(), lineBottom, mGuidePaint);
     }
 
     private int getCurrentLine() {
@@ -495,11 +842,39 @@ public class CodeEditText extends AppCompatEditText {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        // While two fingers are down, stop the parent HVScrollView from stealing the
+        // gesture for scrolling so pinch-to-zoom reaches the ScaleGestureDetector;
+        // restore interception once fewer than two pointers remain.
+        int actionMasked = event.getActionMasked();
+        if (actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+        } else if ((actionMasked == MotionEvent.ACTION_POINTER_UP
+                || actionMasked == MotionEvent.ACTION_UP
+                || actionMasked == MotionEvent.ACTION_CANCEL)
+                && event.getPointerCount() <= 1 && getParent() != null) {
+            getParent().requestDisallowInterceptTouchEvent(false);
+        }
+        if (mScaleDetector != null) {
+            mScaleDetector.onTouchEvent(event);
+            // While a two-finger pinch is in progress, do not forward to cursor/breakpoint logic.
+            if (mScaleDetector.isInProgress() && event.getPointerCount() >= 2) {
+                return true;
+            }
+        }
         //如果行号区域被按下
         if (event.getAction() == MotionEvent.ACTION_DOWN && event.getX() < getPaddingLeft()) {
             //则计算当前行，如果行号有效，记录起来
             int line = getLayout().getLineForVertical((int) event.getY());
             if (line >= 0) {
+                // Only the small fold-arrow itself toggles folding (tight hit zone);
+                // the rest of the gutter stays as the breakpoint toggle.
+                float density = getResources().getDisplayMetrics().density;
+                float arrowCenter = getPaddingLeft() - 11f * density;
+                float hitRadius = 9f * density;
+                if (isFoldStart(line) && Math.abs(event.getX() - arrowCenter) <= hitRadius) {
+                    toggleFold(line);
+                    return true;
+                }
                 mTouchedLine = line;
                 mTouchValid = true;
                 return true;

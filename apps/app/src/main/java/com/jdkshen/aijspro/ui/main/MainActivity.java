@@ -121,7 +121,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         checkPermissions();
         showAccessibilitySettingPromptIfDisabled();
         mVersionGuard = new VersionGuard(this);
-        showAnnunciationIfNeeded();
+        // 声明/公告弹窗已在用户要求下移除（showAnnunciationIfNeeded）
         EventBus.getDefault().register(this);
         applyDayNightMode();
         setContentView(R.layout.activity_main);
@@ -381,6 +381,42 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         submitQuery(query == null || query.trim().isEmpty() ? null : query.trim());
     }
 
+    /** Returns true when the visible page owns and has opened its own search UI. */
+    public boolean openCurrentPageSearchFromMiuix() {
+        if (mPagerAdapter == null || mViewPager == null) return false;
+        Fragment fragment = mPagerAdapter.getStoredFragment(mViewPager.getCurrentItem());
+        if (!(fragment instanceof MainPageSearchHandler)) return false;
+        ((MainPageSearchHandler) fragment).openPageSearch();
+        return true;
+    }
+
+    /** Return from search to the file page and reveal the selected file or directory. */
+    public void revealScriptFileFromMiuix(String path) {
+        if (path == null || path.trim().isEmpty()) return;
+        hideKeyboardFromMiuixSearch();
+        showPage(0);
+        revealScriptFileInCurrentFragment(path, true);
+    }
+
+    private void hideKeyboardFromMiuixSearch() {
+        android.view.inputmethod.InputMethodManager keyboard =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) {
+            keyboard.hideSoftInputFromWindow(getWindow().getDecorView().getWindowToken(), 0);
+        }
+    }
+
+    private void revealScriptFileInCurrentFragment(String path, boolean retry) {
+        Fragment fragment = mPagerAdapter == null ? null : mPagerAdapter.getStoredFragment(0);
+        if (fragment instanceof MyScriptListFragment
+                && ((MyScriptListFragment) fragment).revealFileFromSearch(path)) {
+            return;
+        }
+        if (retry && mViewPager != null) {
+            mViewPager.postDelayed(() -> revealScriptFileInCurrentFragment(path, false), 120);
+        }
+    }
+
     private void showAnnunciationIfNeeded() {
         if (!Pref.shouldShowAnnunciation()) {
             return;
@@ -428,13 +464,26 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         mDrawerLayout.addDrawerListener(drawerToggle);
     }
 
+    private ViewPagerFragment createManageFragment() {
+        if (BuildConfig.MIUIX_PILOT) {
+            try {
+                return (ViewPagerFragment) Class.forName(
+                        "com.jdkshen.aijspro.ui.task.MiuixTaskManagerFragment")
+                        .getDeclaredConstructor().newInstance();
+            } catch (Throwable error) {
+                android.util.Log.e(LOG_TAG, "Unable to create Miuix manage page", error);
+            }
+        }
+        return new TaskManagerFragment();
+    }
+
     private void setUpTabViewPager() {
         mPagerAdapter = new FragmentPagerAdapterBuilder(this)
                 .add(new MyScriptListFragment(), R.string.text_file)
                 .add(createTutorialFragment(), R.string.text_tutorial)
                 .add(createCommunityFragment(), R.string.text_community)
                 .add(createMarketFragment(), R.string.text_market)
-                .add(new TaskManagerFragment(), R.string.text_manage)
+                .add(createManageFragment(), R.string.text_manage)
                 .build();
         mViewPager.setAdapter(mPagerAdapter);
         mTabLayout.setupWithViewPager(mViewPager);
@@ -466,10 +515,10 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         if (BuildConfig.MIUIX_PILOT) {
             try {
                 return (ViewPagerFragment) Class.forName(
-                        "com.jdkshen.aijspro.ui.market.MiuixMarketFragment")
+                        "com.jdkshen.aijspro.ui.plugin.MiuixPluginFragment")
                         .getDeclaredConstructor().newInstance();
             } catch (Throwable error) {
-                android.util.Log.e(LOG_TAG, "Unable to create Miuix market page", error);
+                android.util.Log.e(LOG_TAG, "Unable to create Miuix plugin page", error);
             }
         }
         return new MarketFragment();
@@ -479,10 +528,10 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         if (BuildConfig.MIUIX_PILOT) {
             try {
                 return (ViewPagerFragment) Class.forName(
-                        "com.jdkshen.aijspro.ui.community.MiuixCommunityFragment")
+                        "com.jdkshen.aijspro.ui.resource.MiuixResourceFragment")
                         .getDeclaredConstructor().newInstance();
             } catch (Throwable error) {
-                android.util.Log.e(LOG_TAG, "Unable to create Miuix community page", error);
+                android.util.Log.e(LOG_TAG, "Unable to create Miuix resource page", error);
             }
         }
         return new CommunityFragment();

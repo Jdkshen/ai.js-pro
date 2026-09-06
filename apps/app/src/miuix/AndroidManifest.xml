@@ -1,5 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity android:name="com.jdkshen.aijspro.ui.mcp.MiuixMcpActivity"
+            android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.jdkshen.aijspro.ui.mcp.MiuixMcpHistoryActivity"
+            android:exported="false" />
+        <service android:name="com.jdkshen.aijspro.mcp.McpService"
+            android:exported="false" android:stopWithTask="true" />
         <activity android:name="com.jdkshen.aijspro.ui.service.MiuixServiceActivity"
             android:exported="false" />
         <activity android:name="com.jdkshen.aijspro.ui.settings.MiuixSettingsActivity"

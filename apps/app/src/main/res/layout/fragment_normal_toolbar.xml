@@ -7,6 +7,14 @@
               android:orientation="horizontal">
 
     <com.jdkshen.aijspro.ui.widget.ToolbarMenuItem
+        android:id="@+id/log"
+        android:layout_width="40dp"
+        android:layout_height="match_parent"
+        app:icon="@drawable/ic_log_white_24dp"
+        app:icon_color="@color/toolbar"
+        app:text="@string/text_log"/>
+
+    <com.jdkshen.aijspro.ui.widget.ToolbarMenuItem
         android:id="@+id/run"
         android:layout_width="40dp"
         android:layout_height="match_parent"

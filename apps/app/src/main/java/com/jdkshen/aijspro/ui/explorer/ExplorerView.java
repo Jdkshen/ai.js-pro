@@ -13,12 +13,14 @@ import androidx.annotation.Nullable;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.color.MaterialColors;
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.ColorUtils;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -97,6 +99,8 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     private OnItemOperatedListener mOnItemOperatedListener;
     protected ExplorerItem mSelectedItem;
     private Explorer mExplorer;
+    private ExplorerPage mRootPage;
+    private String mPendingHighlightPath;
     private Stack<ExplorerPageState> mPageStateHistory = new Stack<>();
     private ExplorerPageState mCurrentPageState = new ExplorerPageState();
     private int mDirectorySpanSize = 2;
@@ -195,6 +199,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         if (mExplorer != null)
             mExplorer.unregisterChangeListener(this);
         mExplorer = explorer;
+        mRootPage = rootPage;
         setRootPage(rootPage);
         mExplorer.registerChangeListener(this);
     }
@@ -203,10 +208,31 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         if (mExplorer != null)
             mExplorer.unregisterChangeListener(this);
         mExplorer = explorer;
+        mRootPage = rootPage;
         mPageStateHistory.clear();
         setCurrentPageState(new ExplorerPageState(rootPage));
         mExplorer.registerChangeListener(this);
         enterChildPage(currentPage);
+    }
+
+    /** Navigate to an item's parent directory, scroll it into view, then highlight it briefly. */
+    public boolean revealFile(String filePath) {
+        if (filePath == null || mExplorer == null || mRootPage == null) return false;
+        File target = new File(filePath).getAbsoluteFile();
+        File parent = target.getParentFile();
+        if (!target.exists() || parent == null) return false;
+        try {
+            String rootPath = new File(mRootPage.getPath()).getCanonicalPath();
+            String targetPath = target.getCanonicalPath();
+            if (!targetPath.startsWith(rootPath + File.separator)) return false;
+            mPendingHighlightPath = targetPath;
+        } catch (java.io.IOException | SecurityException error) {
+            return false;
+        }
+        mPageStateHistory.clear();
+        setCurrentPageState(new ExplorerPageState(mRootPage));
+        enterChildPage(new ExplorerDirPage(parent, mRootPage));
+        return true;
     }
 
     public void enterChildPage(ExplorerPage childPage) {
@@ -322,7 +348,60 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                         post(() -> mExplorerItemListView.scrollToPosition(scrollY));
                         postDelayed(() -> mExplorerItemListView.scrollToPosition(scrollY), 120);
                     }
+                    revealPendingItem();
                 });
+    }
+
+    private void revealPendingItem() {
+        if (mPendingHighlightPath == null) return;
+        int position = findAdapterPositionByPath(mPendingHighlightPath);
+        if (position < 0) return;
+        String highlightedPath = mPendingHighlightPath;
+        post(() -> mExplorerItemListView.scrollToPosition(position));
+        postDelayed(() -> mExplorerItemListView.scrollToPosition(position), 100);
+        mExplorerAdapter.notifyItemChanged(position);
+        postDelayed(() -> {
+            if (!highlightedPath.equals(mPendingHighlightPath)) return;
+            mPendingHighlightPath = null;
+            mExplorerAdapter.notifyItemChanged(position);
+        }, 2200);
+    }
+
+    private int findAdapterPositionByPath(String path) {
+        for (int i = 0; i < mExplorerItemList.groupCount(); i++) {
+            if (samePath(path, mExplorerItemList.getItemGroup(i).getPath())) return i;
+        }
+        for (int i = 0; i < mExplorerItemList.itemCount(); i++) {
+            if (samePath(path, mExplorerItemList.getItem(i).getPath())) {
+                return mExplorerItemList.groupCount() + i;
+            }
+        }
+        return -1;
+    }
+
+    private boolean samePath(String first, String second) {
+        try {
+            return new File(first).getCanonicalPath().equals(new File(second).getCanonicalPath());
+        } catch (java.io.IOException | SecurityException ignored) {
+            return first.equals(second);
+        }
+    }
+
+    private void applyPendingHighlight(View itemView, String path) {
+        if (mPendingHighlightPath != null && samePath(mPendingHighlightPath, path)) {
+            int primary = MaterialColors.getColor(this,
+                    com.google.android.material.R.attr.colorPrimary);
+            itemView.setBackgroundColor(ColorUtils.setAlphaComponent(primary, 62));
+            return;
+        }
+        TypedValue selectable = new TypedValue();
+        if (getContext().getTheme().resolveAttribute(
+                android.R.attr.selectableItemBackground, selectable, true)
+                && selectable.resourceId != 0) {
+            itemView.setBackgroundResource(selectable.resourceId);
+        } else {
+            itemView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        }
     }
 
     @Subscribe
@@ -628,6 +707,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             itemView.findViewById(R.id.file_code_icon).setVisibility(
                     ExplorerViewHelper.usesCodeIcon(item) ? VISIBLE : GONE);
             mRun.setVisibility(item.isExecutable() ? VISIBLE : GONE);
+            applyPendingHighlight(itemView, item.getPath());
         }
 
         void onItemClick() {
@@ -727,6 +807,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                     : R.drawable.ic_folder_outline_24dp);
             mOptions.setVisibility(data instanceof ExplorerSamplePage ? GONE : VISIBLE);
             mExplorerPage = data;
+            applyPendingHighlight(itemView, data.getPath());
 
         }
 

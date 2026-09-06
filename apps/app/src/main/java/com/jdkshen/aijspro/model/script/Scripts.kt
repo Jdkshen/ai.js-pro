@@ -22,7 +22,7 @@ import com.jdkshen.aijspro.external.ScriptIntents
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.external.shortcut.Shortcut
 import com.jdkshen.aijspro.external.shortcut.ShortcutActivity
-import com.jdkshen.aijspro.ui.edit.EditActivity
+import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity
 
 import org.mozilla.javascript.RhinoException
 
@@ -92,7 +92,9 @@ object Scripts {
 
 
     fun edit(context: Context, file: ScriptFile) {
-        EditActivity.editFile(context, file.simplifiedName, file.path, true)
+        // Unified editor entry: open the Auto.js Pro-style editor (file tree + tabs + log panel)
+        // for all "open script for editing" paths (file list, new-file, external edits).
+        context.startActivity(ProCodeEditorActivity.intent(context, File(file.path)))
     }
 
     fun edit(context: Context, path: String) {

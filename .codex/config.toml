@@ -1,0 +1,12 @@
+# Reuse this repository's existing CodeGraph index; do not rebuild on startup.
+[mcp_servers.codegraph]
+command = 'D:\npm-global\codegraph.cmd'
+args = ['serve', '--mcp', '--path', 'C:\Users\18101\Documents\autojs4.4.1源码']
+
+# MT 管理器 APK MCP (手机 8787 -> PC 18791, adb forward)
+[mcp_servers.mt_apk]
+url = "http://127.0.0.1:18791/mcp"
+
+# AI.js Pro 脚本 MCP (手机 8788 -> PC 18790, adb forward)
+[mcp_servers.aijs_script]
+url = "http://127.0.0.1:18790/mcp"

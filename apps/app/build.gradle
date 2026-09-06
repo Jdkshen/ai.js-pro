@@ -104,6 +104,7 @@ dependencies {
     miuixImplementation 'top.yukonga.miuix.kmp:miuix-android:0.3.1'
     miuixImplementation 'androidx.compose.foundation:foundation:1.7.6'
     miuixImplementation 'androidx.compose.ui:ui:1.7.6'
+    miuixImplementation 'com.google.zxing:core:3.5.4'
     androidTestImplementation('androidx.test.espresso:espresso-core:3.1.1-alpha01', {
         exclude group: 'com.android.support', module: 'support-annotations'
     })
@@ -178,4 +179,37 @@ dependencies {
     implementation project(':autojs')
     implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')
+}
+
+def bundledSampleDir = file('src/main/assets/sample')
+
+tasks.register('verifyBundledSamplesNoNode') {
+    group = 'verification'
+    description = 'Reject Node.js entry scripts and node_modules from bundled Auto.js samples.'
+    inputs.dir(bundledSampleDir)
+
+    doLast {
+        def forbiddenPaths = fileTree(bundledSampleDir).files.findAll { sample ->
+            bundledSampleDir.toPath().relativize(sample.toPath()).any { segment ->
+                segment.toString() ==~ /(?i)node_modules|nodejs.*|node\.js/
+            }
+        }
+        def nodeEntries = fileTree(bundledSampleDir) {
+            include '**/*.js'
+        }.files.findAll { sample ->
+            def source = sample.getText('UTF-8').replaceFirst(/^\uFEFF/, '').trim()
+            source ==~ /(?s)^["']nodejs["'];?\s*.*/
+        }
+        def offenders = (forbiddenPaths + nodeEntries).collect {
+            bundledSampleDir.toPath().relativize(it.toPath()).toString()
+        }.unique().sort()
+        if (!offenders.isEmpty()) {
+            throw new GradleException('Node.js content must not be bundled as Auto.js samples:\n' +
+                    offenders.collect { ' - ' + it }.join('\n'))
+        }
+    }
+}
+
+tasks.matching { it.name == 'preBuild' }.configureEach {
+    dependsOn tasks.named('verifyBundledSamplesNoNode')
 }

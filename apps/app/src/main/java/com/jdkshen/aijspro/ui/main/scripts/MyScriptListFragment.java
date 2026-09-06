@@ -144,6 +144,11 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         }
     }
 
+    /** Used by the Miuix search overlay to return to and reveal a selected file or directory. */
+    public boolean revealFileFromSearch(String path) {
+        return mExplorerView != null && mExplorerView.revealFile(path);
+    }
+
     @Subscribe
     public void onQuerySummit(QueryEvent event) {
         if (!isShown()) {

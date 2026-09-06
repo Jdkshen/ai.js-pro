@@ -368,6 +368,13 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
     @Override
     public void onToolbarMenuItemClick(int id) {
         switch (id) {
+            case R.id.log:
+                Intent logIntent = new Intent(getContext(), LogActivity.class);
+                if (!(getContext() instanceof Activity)) {
+                    logIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                }
+                getContext().startActivity(logIntent);
+                break;
             case R.id.run:
                 runAndSaveFileIfNeeded();
                 break;
