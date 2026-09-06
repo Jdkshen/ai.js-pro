@@ -33,6 +33,7 @@ class McpService : Service() {
                 McpSettings.port(this), McpSettings.token(this), McpSettings.localCompatibility(this),
                 handler = { request ->
                     requestCount++
+                    lastRequestAt = System.currentTimeMillis()
                     val method = request.get("method")?.asString.orEmpty()
                     if (method.isNotEmpty()) record("请求 · $method")
                     router.handle(request)
@@ -158,6 +159,7 @@ class McpService : Service() {
             private set
         @Volatile var autoStarted = false   // 本次启动是否为自动触发（App 回前台）
         @Volatile var autoStopped = false   // 本次停止是否为自动触发（退后台超时）
+        @Volatile var lastRequestAt = 0L    // 最近一次 MCP 请求时间（用于自动停止感知活跃连接）
         private val events = CopyOnWriteArrayList<String>()
 
         fun start(context: Context) {

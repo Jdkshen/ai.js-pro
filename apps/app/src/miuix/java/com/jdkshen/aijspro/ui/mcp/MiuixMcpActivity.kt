@@ -132,7 +132,7 @@ class MiuixMcpActivity : ComponentActivity() {
 
                 SmallTitle("自动化")
                 Card(Modifier.fillMaxWidth()) {
-                    SuperSwitch(title = "跟随应用自动启停", summary = "打开 App 自动启动 MCP；退后台 60 秒自动停止（期间回前台取消）；手动停止后重新打开 App 会再次自动启动", checked = auto,
+                    SuperSwitch(title = "打开 App 自动启动", summary = "打开 App 自动启动 MCP 并常驻运行（退后台不停）；手动停止后重开 App 会自动启动", checked = auto,
                         onCheckedChange = { McpSettings.setAutoStart(this@MiuixMcpActivity, it); auto = it })
                 }
                 SmallTitle("近期事件")
