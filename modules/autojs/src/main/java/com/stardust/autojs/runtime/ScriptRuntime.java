@@ -27,6 +27,7 @@ import com.stardust.autojs.core.looper.Loopers;
 import com.stardust.autojs.runtime.api.Media;
 import com.stardust.autojs.runtime.api.Plugins;
 import com.stardust.autojs.runtime.api.Sensors;
+import com.stardust.autojs.runtime.api.Sqlite;
 import com.stardust.autojs.runtime.api.Threads;
 import com.stardust.autojs.runtime.api.Timers;
 import com.stardust.autojs.runtime.api.Yolo;
@@ -146,6 +147,10 @@ public class ScriptRuntime {
     @ScriptVariable
     public final UI ui;
 
+    /** Auto.js Pro exposes the UI module also as {@code $ui}; mirror that alias. */
+    @ScriptVariable
+    public final UI $ui;
+
     @ScriptVariable
     public final Dialogs dialogs;
 
@@ -197,6 +202,9 @@ public class ScriptRuntime {
     @ScriptVariable
     public final Yolo yolo;
 
+    @ScriptVariable
+    public final Sqlite sqlite;
+
     private Images images;
 
     private static WeakReference<Context> applicationContext;
@@ -216,6 +224,7 @@ public class ScriptRuntime {
         accessibilityBridge = builder.mAccessibilityBridge;
         mShellSupplier = builder.mShellSupplier;
         ui = new UI(context, this);
+        $ui = ui;
         this.automator = new SimpleActionAutomator(accessibilityBridge, this);
         automator.setScreenMetrics(mScreenMetrics);
         this.info = accessibilityBridge.getInfoProvider();
@@ -230,6 +239,7 @@ public class ScriptRuntime {
         media = new Media(context, this);
         plugins = new Plugins(context, this);
         yolo = new Yolo(context);
+        sqlite = new Sqlite(context);
     }
 
     public void init() {

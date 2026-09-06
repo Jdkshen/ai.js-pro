@@ -47,14 +47,18 @@ public class DatabaseResultSet {
     private static Map<String, Object> readRowAsMap(Cursor cursor, int columnCount) {
         Map<String, Object> map = new HashMap<>();
         for (int i = 0; i < columnCount; i++) {
-            map.put(cursor.getColumnName(i), CursorHelper.getValue(cursor, columnCount));
+            map.put(cursor.getColumnName(i), CursorHelper.getValue(cursor, i));
         }
         return map;
     }
 
     public DatabaseResultSet(long insertId, RowList rowList) {
+        this(insertId, rowList.length, rowList);
+    }
+
+    public DatabaseResultSet(long insertId, long rowsAffected, RowList rowList) {
         this.insertId = insertId;
-        this.rowsAffected = rowList.length;
+        this.rowsAffected = rowsAffected;
         this.rows = rowList;
     }
 

@@ -55,6 +55,7 @@ runtime.init();
      global.JSON = require('__json2__.js');
      global.util = require('__util__.js');
      global.device = runtime.device;
+     global.sqlite = runtime.sqlite;
      global.Promise = require('promise.js');
  
      //设置JavaScriptBridges用于与Java层的交互和数据转换
@@ -72,6 +73,8 @@ runtime.init();
             var m = modules[i];
             scope[m] = require('__' + m + '__')(scope.runtime, scope);
         }
+        // Auto.js Pro exposes the UI module also as $ui; mirror that alias.
+        scope.$ui = scope.ui;
     })(global);
 
     importClass(android.view.KeyEvent);
