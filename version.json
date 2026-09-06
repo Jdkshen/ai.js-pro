@@ -1,7 +1,7 @@
 ﻿{
-  "versionCode": 462,
-  "versionName": "4.4.1 Alpha1",
-  "releaseNotes": "* 应用包名与源码命名空间迁移至 com.jdkshen.aijspro\n* 完成 apps、modules、third-party、docs 目录重组\n* 完善 QuickJS、ImGui 与脚本 APK 打包链路",
+  "versionCode": 464,
+  "versionName": "1.0.1",
+  "releaseNotes": "* MCP 新增 list_engine_api / probe_engine_api 引擎 API 工具\n* MCP 支持跟随应用自动启停，启停事件自动记录\n* 应用包名与源码命名空间迁移至 com.jdkshen.aijspro\n* 完善 QuickJS、ImGui 与脚本 APK 打包链路",
   "downloads" : [
 	{
 	  "name": "GitHub Releases",

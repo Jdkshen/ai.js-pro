@@ -42,7 +42,7 @@
 
 ## 1. 项目是什么
 
-**AI.js Pro**（包名 `com.jdkshen.aijspro`，应用名「AI.js Pro」，当前版本 `1.0.0` / versionCode 463）：
+**AI.js Pro**（包名 `com.jdkshen.aijspro`，应用名「AI.js Pro」，当前版本 `1.0.1` / versionCode 464）：
 - 基于 **Auto.js 4.4.1（Stardust）** 源码的定制增强版
 - 双引擎：**Rhino + QuickJS**（JNI 桥接，`modules/autojs`）
 - 增强：ImGui 工作台（C++）、OpenCV 5.0 / YOLO、Native Frame、Shizuku、悬浮窗重构
@@ -90,7 +90,7 @@ third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / Colo
 
 ### 3.1 构建链升级（Gradle 4.10.2 → 8.9）
 - `gradle-wrapper.properties` 改 8.9-bin；根 `build.gradle`：AGP 8.6.1 + Kotlin 1.9.24，移除 ButterKnife 插件
-- `project-versions.json`：compile 35 / buildTools 34.0.0 / 版本名 1.0.0（从 4.4.1 Alpha1 变更）
+- `project-versions.json`：compile 35 / buildTools 34.0.0 / 版本名 1.0.1（从 1.0.0 变更）
 - `gradle.properties` 关键项（**不要轻易改**）：
   - `android.useAndroidX=true`、`android.enableJetifier=true`（老库仍需转换）
   - `android.overridePathCheck=true`（中文路径必需）
@@ -161,7 +161,7 @@ third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / Colo
 1. SettingsActivity → M3 分组卡片菜单（替换老 Preference）
 2. 抽屉 header / 编辑器页 M3 化（硬编码色清理）
 3. 图标统一 M3 线稿（无障碍/悬浮窗/开发工具/退出）
-4. 版本号发布：`project-versions.json`（当前 1.0.0/463）
+4. 版本号发布：`project-versions.json`（当前 1.0.1/464）
 5. 收尾：`git commit`（建议 message：`feat: upgrade to Gradle 8.9 + Material 3 UI`）
 
 ## 6. 快速定位文件
