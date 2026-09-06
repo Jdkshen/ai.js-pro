@@ -60,9 +60,12 @@ import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.common.ScriptOperations
 import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
+import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
+import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.CompositeDisposable
+import io.reactivex.schedulers.Schedulers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -405,7 +408,19 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun view(entry: SampleEntry) {
-        ViewSampleActivity.view(requireContext(), SampleFile(entry.path, requireContext().assets))
+        // Import into the script dir and open in the new Pro editor directly
+        // (replaces the legacy preview activity). importSample shows the name
+        // confirmation dialog and resolves the target path reliably.
+        val context = requireContext()
+        imports.add(ScriptOperations(context, rootView)
+            .importSample(SampleFile(entry.path, context.assets))
+            .subscribe({ path ->
+                startActivity(ProCodeEditorActivity.sampleIntent(
+                    context, java.io.File(path), entry.path))
+            }, { failure ->
+                Toast.makeText(context,
+                    failure.localizedMessage ?: "打开示例失败", Toast.LENGTH_LONG).show()
+            }))
     }
 
     private fun run(entry: SampleEntry) {
