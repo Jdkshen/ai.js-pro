@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.os.Bundle;
 
 import com.stardust.autojs.execution.ExecutionConfig;
+import com.stardust.autojs.execution.ScriptExecution;
 import com.stardust.autojs.script.JavaScriptFileSource;
 import com.stardust.autojs.script.ScriptSource;
 import com.stardust.autojs.script.SequenceScriptSource;
@@ -33,6 +34,10 @@ public class ScriptIntents {
     }
 
     public static boolean handleIntent(Context context, Intent intent) {
+        return execute(context, intent) != null;
+    }
+
+    public static ScriptExecution execute(Context context, Intent intent) {
         String path = getPath(intent);
         String script = intent.getStringExtra(ScriptIntents.EXTRA_KEY_PRE_EXECUTE_SCRIPT);
         int loopTimes = intent.getIntExtra(EXTRA_KEY_LOOP_TIMES, 1);
@@ -58,10 +63,9 @@ public class ScriptIntents {
             config.setWorkingDirectory(Pref.getScriptDirPath());
         }
         if (source == null) {
-            return false;
+            return null;
         }
-        AutoJs.getInstance().getScriptEngineService().execute(source, config);
-        return true;
+        return AutoJs.getInstance().getScriptEngineService().execute(source, config);
     }
 
     private static String getPath(Intent intent) {

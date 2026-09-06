@@ -280,7 +280,7 @@
             android:icon="@drawable/ai_js_pro_logo"
             android:label="@string/text_run_script"
             android:taskAffinity="${applicationId}.external.open.RunIntentActivity"
-            android:theme="@android:style/Theme.NoDisplay">
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <action android:name="android.intent.action.EDIT"/>

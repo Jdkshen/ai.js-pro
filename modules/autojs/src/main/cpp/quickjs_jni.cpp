@@ -636,6 +636,53 @@ JSValue callHostBoolStringFloatBool(JSContext *context, const char *methodName,
                                  : JS_NewBool(context, result == JNI_TRUE);
 }
 
+JSValue callHostLongIntStringStringStringString(JSContext *context, const char *methodName,
+        int32_t type, const std::string &title, const std::string &content,
+        const std::string &itemsJson, const std::string &extrasJson) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName,
+            "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)J");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring jTitle = toJavaString(env, title);
+    jstring jContent = toJavaString(env, content);
+    jstring jItems = toJavaString(env, itemsJson);
+    jstring jExtras = toJavaString(env, extrasJson);
+    const jlong result = env->CallLongMethod(state->host, method, static_cast<jint>(type),
+            jTitle, jContent, jItems, jExtras);
+    env->DeleteLocalRef(jExtras);
+    env->DeleteLocalRef(jItems);
+    env->DeleteLocalRef(jContent);
+    env->DeleteLocalRef(jTitle);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewInt64(context, static_cast<int64_t>(result));
+}
+
+JSValue callHostStringLong(JSContext *context, const char *methodName, int64_t value) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(J)Ljava/lang/String;");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            static_cast<jlong>(value)));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "getClip", nullptr);
 }
@@ -861,6 +908,27 @@ JSValue nativeSensorsUnregisterAll(JSContext *context, JSValueConst, int, JSValu
 
 JSValue nativeSensorsList(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "sensorsList", nullptr);
+}
+
+JSValue nativeDialogsShow(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t type = 0;
+    if (argc < 1 || JS_ToInt64(context, &type, argv[0]) < 0) {
+        type = 0;
+    }
+    const std::string title = requireStringArg(context, argc, argv, 1);
+    const std::string content = requireStringArg(context, argc, argv, 2);
+    const std::string itemsJson = requireStringArg(context, argc, argv, 3);
+    const std::string extrasJson = requireStringArg(context, argc, argv, 4);
+    return callHostLongIntStringStringStringString(context, "dialogsShow",
+            static_cast<int32_t>(type), title, content, itemsJson, extrasJson);
+}
+
+JSValue nativeDialogsPoll(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t id = 0;
+    if (argc < 1 || JS_ToInt64(context, &id, argv[0]) < 0) {
+        return JS_NewStringLen(context, "", 0);
+    }
+    return callHostStringLong(context, "dialogsPoll", id);
 }
 
 JSValue nativeFilesGetSdcardPath(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -3215,6 +3283,56 @@ const char kBootstrapScript[] = R"JS(
         Delay: Object.freeze({ normal: 200000, ui: 60000, game: 20000, fastest: 0 })
     });
 
+    // ---- dialogs module (blocking; UI shown on the Java main looper) ----
+    function dialogWait(id) {
+        if (id < 0) throw new Error('Unable to show dialog');
+        for (;;) {
+            var json = __aiNativeDialogsPoll(id);
+            if (json) return JSON.parse(json);
+            sleep(60);
+        }
+    }
+    var dialogs = {
+        alert: function (title, content) {
+            dialogWait(Number(__aiNativeDialogsShow(0,
+                String(title == null ? '' : title), String(content == null ? '' : content), '', '')));
+        },
+        confirm: function (title, content) {
+            var r = dialogWait(Number(__aiNativeDialogsShow(1,
+                String(title == null ? '' : title), String(content == null ? '' : content), '', '')));
+            return r === true;
+        },
+        rawInput: function (title, prefill) {
+            var r = dialogWait(Number(__aiNativeDialogsShow(2,
+                String(title == null ? '' : title), String(prefill == null ? '' : prefill), '', '')));
+            return r === null ? null : (r && r.value !== undefined ? r.value : '');
+        },
+        prompt: function (title, prefill) {
+            return dialogs.rawInput(title, prefill);
+        },
+        select: function (title, items) {
+            var list = items || [];
+            var r = dialogWait(Number(__aiNativeDialogsShow(3,
+                String(title == null ? '' : title), '', JSON.stringify(list), '0')));
+            return r && r.index !== undefined ? r.index : -1;
+        },
+        singleChoice: function (title, selectedIndex, items) {
+            var list = items || [];
+            var idx = Number(selectedIndex) || 0;
+            var r = dialogWait(Number(__aiNativeDialogsShow(4,
+                String(title == null ? '' : title), '', JSON.stringify(list), String(idx))));
+            return r && r.index !== undefined ? r.index : -1;
+        },
+        multiChoice: function (title, selectedIndices, items) {
+            var list = items || [];
+            var def = JSON.stringify(selectedIndices || []);
+            var r = dialogWait(Number(__aiNativeDialogsShow(5,
+                String(title == null ? '' : title), '', JSON.stringify(list), def)));
+            return r && r.indices ? r.indices : [];
+        }
+    };
+    global.dialogs = Object.freeze(dialogs);
+
     // ---- threads module (one QuickJS engine per worker) ----
     var workerHandles = new Set();
     function makeThread(engine) {
@@ -3477,6 +3595,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSensorsUnregister", nativeSensorsUnregister, 1);
     installNativeFunction(state->context, global, "__aiNativeSensorsUnregisterAll", nativeSensorsUnregisterAll, 0);
     installNativeFunction(state->context, global, "__aiNativeSensorsList", nativeSensorsList, 0);
+    installNativeFunction(state->context, global, "__aiNativeDialogsShow", nativeDialogsShow, 5);
+    installNativeFunction(state->context, global, "__aiNativeDialogsPoll", nativeDialogsPoll, 1);
     installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesPath", nativeFilesPath, 1);
     installNativeFunction(state->context, global, "__aiNativeSetTimeout", nativeSetTimeout, 2);

@@ -1413,6 +1413,193 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
     }
 
+    // ---- dialogs (blocking dialogs driven by a JS poll loop) ----
+    private static class PendingDialog {
+        volatile String result = null;
+    }
+
+    private final Handler mDialogHandler = new Handler(Looper.getMainLooper());
+    private final AtomicLong mNextDialogId = new AtomicLong(1);
+    private final Map<Long, PendingDialog> mDialogs = new ConcurrentHashMap<>();
+    private final Map<Long, android.app.AlertDialog> pendingDialogRegistry = new ConcurrentHashMap<>();
+
+    public long dialogsShow(int type, String title, String content,
+                            String itemsJson, String extrasJson) {
+        PendingDialog pending = new PendingDialog();
+        final long id = mNextDialogId.getAndIncrement();
+        mDialogs.put(id, pending);
+        mDialogHandler.post(() -> {
+            try {
+                Context context = mRuntime.app.getCurrentActivity();
+                if (context == null) {
+                    context = mRuntime.uiHandler.getContext();
+                }
+                android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(context);
+                if (title != null && !title.isEmpty()) {
+                    builder.setTitle(title);
+                }
+                JSONArray items = null;
+                if (itemsJson != null && !itemsJson.isEmpty()) {
+                    items = new JSONArray(itemsJson);
+                }
+                switch (type) {
+                    case 0: // alert
+                        builder.setMessage(content == null ? "" : content);
+                        builder.setPositiveButton(android.R.string.ok,
+                                (d, w) -> pending.result = "{}");
+                        break;
+                    case 1: // confirm
+                        builder.setMessage(content == null ? "" : content);
+                        builder.setPositiveButton(android.R.string.ok,
+                                (d, w) -> pending.result = "true");
+                        builder.setNegativeButton(android.R.string.cancel,
+                                (d, w) -> pending.result = "false");
+                        break;
+                    case 2: { // rawInput (content = prefill)
+                        android.widget.EditText input = new android.widget.EditText(context);
+                        if (content != null) {
+                            input.setText(content);
+                        }
+                        builder.setView(input);
+                        builder.setPositiveButton(android.R.string.ok, (d, w) -> {
+                            String text = input.getText() == null ? "" : input.getText().toString();
+                            try {
+                                pending.result = new JSONObject().put("value", text).toString();
+                            } catch (JSONException ignored) {
+                                pending.result = "{}";
+                            }
+                        });
+                        builder.setNegativeButton(android.R.string.cancel,
+                                (d, w) -> pending.result = "null");
+                        break;
+                    }
+                    case 3: { // select (single-choice list), extras = default index
+                        if (items == null) {
+                            pending.result = "-1";
+                            break;
+                        }
+                        final String[] names = new String[items.length()];
+                        for (int i = 0; i < items.length(); i++) {
+                            names[i] = items.optString(i);
+                        }
+                        builder.setItems(names, (d, which) -> {
+                            try {
+                                pending.result = new JSONObject().put("index", which).toString();
+                            } catch (JSONException ignored) {
+                                pending.result = "{}";
+                            }
+                        });
+                        builder.setNegativeButton(android.R.string.cancel,
+                                (d, w) -> pending.result = "-1");
+                        break;
+                    }
+                    case 4: { // singleChoice radio, extras = default index
+                        if (items == null) {
+                            pending.result = "-1";
+                            break;
+                        }
+                        final String[] names = new String[items.length()];
+                        for (int i = 0; i < items.length(); i++) {
+                            names[i] = items.optString(i);
+                        }
+                        final int[] selected = {0};
+                        try {
+                            selected[0] = extrasJson == null ? 0 : Integer.parseInt(extrasJson);
+                        } catch (NumberFormatException ignored) {
+                        }
+                        builder.setSingleChoiceItems(names, selected[0], (d, which) -> selected[0] = which);
+                        builder.setPositiveButton(android.R.string.ok, (d, w) -> {
+                            try {
+                                pending.result = new JSONObject().put("index", selected[0]).toString();
+                            } catch (JSONException ignored) {
+                                pending.result = "{}";
+                            }
+                        });
+                        builder.setNegativeButton(android.R.string.cancel,
+                                (d, w) -> pending.result = "-1");
+                        break;
+                    }
+                    case 5: { // multiChoice, extras = default indices JSON
+                        if (items == null) {
+                            pending.result = "[]";
+                            break;
+                        }
+                        final String[] names = new String[items.length()];
+                        for (int i = 0; i < items.length(); i++) {
+                            names[i] = items.optString(i);
+                        }
+                        final boolean[] checked = new boolean[names.length];
+                        if (extrasJson != null && !extrasJson.isEmpty()) {
+                            try {
+                                JSONArray def = new JSONArray(extrasJson);
+                                for (int i = 0; i < def.length(); i++) {
+                                    int idx = def.optInt(i);
+                                    if (idx >= 0 && idx < checked.length) {
+                                        checked[idx] = true;
+                                    }
+                                }
+                            } catch (JSONException ignored) {
+                            }
+                        }
+                        builder.setMultiChoiceItems(names, checked, (d, which, isChecked) -> checked[which] = isChecked);
+                        builder.setPositiveButton(android.R.string.ok, (d, w) -> {
+                            try {
+                                JSONArray arr = new JSONArray();
+                                for (int i = 0; i < checked.length; i++) {
+                                    if (checked[i]) {
+                                        arr.put(i);
+                                    }
+                                }
+                                pending.result = new JSONObject().put("indices", arr).toString();
+                            } catch (JSONException ignored) {
+                                pending.result = "[]";
+                            }
+                        });
+                        builder.setNegativeButton(android.R.string.cancel,
+                                (d, w) -> pending.result = "[]");
+                        break;
+                    }
+                    default:
+                        pending.result = "{}";
+                        break;
+                }
+                android.app.AlertDialog dialog = builder.create();
+                dialog.setCanceledOnTouchOutside(false);
+                dialog.setOnCancelListener(d -> {
+                    if (pending.result == null) {
+                        pending.result = "null";
+                    }
+                });
+                dialog.show();
+                pendingDialogRegistry.put(id, dialog);
+            } catch (Throwable error) {
+                pending.result = "-1";
+                Log.w("QuickJsHostBridge", "Cannot show dialog", error);
+            }
+        });
+        return id;
+    }
+
+    public String dialogsPoll(long id) {
+        PendingDialog pending = mDialogs.get(id);
+        if (pending == null) {
+            return "";
+        }
+        String result = pending.result;
+        if (result == null) {
+            return "";
+        }
+        mDialogs.remove(id);
+        android.app.AlertDialog dialog = pendingDialogRegistry.remove(id);
+        if (dialog != null) {
+            try {
+                dialog.dismiss();
+            } catch (Throwable ignored) {
+            }
+        }
+        return result;
+    }
+
     private final AtomicLong mNextEngineHandle = new AtomicLong(1);
     private final Map<Long, com.stardust.autojs.execution.ScriptExecution> mEngineSessions =
             new ConcurrentHashMap<>();
@@ -1422,6 +1609,14 @@ final class QuickJsHostBridge implements AutoCloseable {
         drawClose();
         mediaStopMusic();
         sensorsUnregisterAll();
+        for (android.app.AlertDialog dialog : new ArrayList<>(pendingDialogRegistry.values())) {
+            try {
+                dialog.dismiss();
+            } catch (Throwable ignored) {
+            }
+        }
+        pendingDialogRegistry.clear();
+        mDialogs.clear();
         // Kill any shell child processes still running so a stopped script cannot
         // leak background commands.
         for (Process process : new ArrayList<>(mShellProcesses)) {
