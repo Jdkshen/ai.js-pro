@@ -745,6 +745,32 @@ JSValue callHostStringIntString(JSContext *context, const char *methodName,
     return JS_NewStringLen(context, text.data(), text.size());
 }
 
+JSValue callHostStringIntStringString(JSContext *context, const char *methodName,
+                                      int32_t id, const std::string &first, const std::string &second) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName,
+            "(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring jFirst = toJavaString(env, first);
+    jstring jSecond = toJavaString(env, second);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            static_cast<jint>(id), jFirst, jSecond));
+    env->DeleteLocalRef(jSecond);
+    env->DeleteLocalRef(jFirst);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 JSValue nativeGetClip(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callStringHost(context, "getClip", nullptr);
 }
@@ -1046,6 +1072,30 @@ JSValue nativeUiGetText(JSContext *context, JSValueConst, int argc, JSValueConst
     }
     const std::string id = requireStringArg(context, argc, argv, 1);
     return callHostStringIntString(context, "uiGetText", static_cast<int32_t>(viewId), id);
+}
+
+JSValue nativeUiSetClickListener(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t viewId = 0;
+    if (argc < 2 || JS_ToInt64(context, &viewId, argv[0]) < 0) {
+        return JS_UNDEFINED;
+    }
+    const std::string id = requireStringArg(context, argc, argv, 1);
+    return callHostVoidIntString(context, "uiSetClickListener", static_cast<int32_t>(viewId), id);
+}
+
+JSValue nativeUiPollEvent(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "uiPollEvent", nullptr);
+}
+
+JSValue nativeUiGetAttr(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t viewId = 0;
+    if (argc < 3 || JS_ToInt64(context, &viewId, argv[0]) < 0) {
+        return JS_NewStringLen(context, "", 0);
+    }
+    const std::string id = requireStringArg(context, argc, argv, 1);
+    const std::string name = requireStringArg(context, argc, argv, 2);
+    return callHostStringIntStringString(context, "uiGetAttr",
+            static_cast<int32_t>(viewId), id, name);
 }
 
 JSValue nativeFilesGetSdcardPath(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -3589,12 +3639,52 @@ const char kBootstrapScript[] = R"JS(
         if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
         return __aiNativeUiGetText(uiViewId, String(id));
     }
+    var uiEventListeners = new Map();
+    var uiPollTimer = null;
+    function uiDispatchEvents() {
+        for (;;) {
+            var raw = __aiNativeUiPollEvent();
+            if (!raw) break;
+            var ev = JSON.parse(raw);
+            var entry = uiEventListeners.get(String(ev.id));
+            if (entry && entry[ev.event]) {
+                entry[ev.event].slice().forEach(function (fn) { fn(); });
+            }
+        }
+    }
+    function uiListen(id, name, fn) {
+        if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+        id = String(id);
+        var entry = uiEventListeners.get(id);
+        if (!entry) {
+            entry = {};
+            uiEventListeners.set(id, entry);
+        }
+        (entry[name] = entry[name] || []).push(fn);
+        if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
+        __aiNativeUiSetClickListener(uiViewId, id);
+        if (uiPollTimer === null) {
+            uiPollTimer = setInterval(uiDispatchEvents, 60);
+        }
+    }
     function uiView(id) {
+        id = String(id);
         return Object.freeze({
             setText: function (text) { uiSet(id, { text: String(text == null ? '' : text) }); },
             getText: function () { return uiReadText(id); },
             setVisibility: function (visibility) { uiSet(id, { visibility: Number(visibility) || 0 }); },
-            setBackgroundColor: function (color) { uiSet(id, { backgroundColor: String(color) }); }
+            setBackgroundColor: function (color) { uiSet(id, { backgroundColor: String(color) }); },
+            click: function (fn) { uiListen(id, 'click', fn); },
+            on: function (name, fn) { uiListen(id, name, fn); },
+            attr: function (name, value) {
+                if (value === undefined) {
+                    if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
+                    return __aiNativeUiGetAttr(uiViewId, id, String(name));
+                }
+                var config = {};
+                config[String(name)] = value;
+                uiSet(id, config);
+            }
         });
     }
     var ui = {
@@ -3607,11 +3697,20 @@ const char kBootstrapScript[] = R"JS(
         close: function () {
             __aiNativeUiClose();
             uiViewId = 0;
+            uiEventListeners.clear();
+            if (uiPollTimer !== null) {
+                clearInterval(uiPollTimer);
+                uiPollTimer = null;
+            }
         },
         setText: function (id, text) { uiSet(id, { text: String(text == null ? '' : text) }); },
         getText: function (id) { return uiReadText(id); },
         setVisibility: function (id, visibility) { uiSet(id, { visibility: Number(visibility) || 0 }); },
-        setBackgroundColor: function (id, color) { uiSet(id, { backgroundColor: String(color) }); }
+        setBackgroundColor: function (id, color) { uiSet(id, { backgroundColor: String(color) }); },
+        getAttr: function (id, name) {
+            if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
+            return __aiNativeUiGetAttr(uiViewId, String(id), String(name));
+        }
     };
     global.ui = Object.freeze(ui);
     global.$ui = new Proxy({}, {
@@ -3895,6 +3994,9 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);
     installNativeFunction(state->context, global, "__aiNativeUiSetConfig", nativeUiSetConfig, 3);
     installNativeFunction(state->context, global, "__aiNativeUiGetText", nativeUiGetText, 2);
+    installNativeFunction(state->context, global, "__aiNativeUiSetClickListener", nativeUiSetClickListener, 2);
+    installNativeFunction(state->context, global, "__aiNativeUiPollEvent", nativeUiPollEvent, 0);
+    installNativeFunction(state->context, global, "__aiNativeUiGetAttr", nativeUiGetAttr, 3);
     installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesPath", nativeFilesPath, 1);
     installNativeFunction(state->context, global, "__aiNativeSetTimeout", nativeSetTimeout, 2);

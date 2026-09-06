@@ -1901,6 +1901,7 @@ final class QuickJsHostBridge implements AutoCloseable {
             }
             mUiRoot = null;
             mUiShown = false;
+            mUiEvents.clear();
         });
     }
 
@@ -1939,11 +1940,61 @@ final class QuickJsHostBridge implements AutoCloseable {
             latch.countDown();
         });
         try {
-            latch.await(2, java.util.concurrent.TimeUnit.SECONDS);
+            latch.await(2, TimeUnit.SECONDS);
         } catch (InterruptedException ignored) {
         }
         return result[0];
     }
+
+    public void uiSetClickListener(int viewId, String id) {
+        mDialogHandler.post(() -> {
+            View view = uiFind(id);
+            if (view == null) {
+                return;
+            }
+            view.setClickable(true);
+            view.setOnClickListener(v -> {
+                try {
+                    mUiEvents.add(new JSONObject()
+                            .put("id", id).put("event", "click").toString());
+                } catch (JSONException ignored) {
+                }
+            });
+        });
+    }
+
+    public String uiPollEvent() {
+        String event = mUiEvents.poll();
+        return event == null ? "" : event;
+    }
+
+    public String uiGetAttr(int viewId, String id, String name) {
+        final String[] result = new String[]{""};
+        final CountDownLatch latch = new CountDownLatch(1);
+        mDialogHandler.post(() -> {
+            View view = uiFind(id);
+            if (view != null) {
+                if ("visibility".equals(name)) {
+                    result[0] = String.valueOf(view.getVisibility());
+                } else if ("enabled".equals(name)) {
+                    result[0] = String.valueOf(view.isEnabled());
+                } else if ("alpha".equals(name)) {
+                    result[0] = String.valueOf(view.getAlpha());
+                } else if ("text".equals(name) && view instanceof android.widget.TextView) {
+                    result[0] = ((android.widget.TextView) view).getText().toString();
+                }
+            }
+            latch.countDown();
+        });
+        try {
+            latch.await(2, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return result[0];
+    }
+
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> mUiEvents =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     private final AtomicLong mNextEngineHandle = new AtomicLong(1);
     private final Map<Long, com.stardust.autojs.execution.ScriptExecution> mEngineSessions =
