@@ -4,6 +4,7 @@ import com.stardust.autojs.ScriptEngineService;
 import com.stardust.autojs.engine.JavaScriptEngine;
 import com.stardust.autojs.execution.ExecutionConfig;
 import com.stardust.autojs.execution.ScriptExecution;
+import com.stardust.autojs.execution.ScriptExecutionListener;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.script.AutoFileSource;
 import com.stardust.autojs.script.JavaScriptFileSource;
@@ -28,8 +29,19 @@ public class Engines {
         return mEngineService.execute(new StringScriptSource(name, script), config);
     }
 
+    public ScriptExecution execScript(String name, String script, ExecutionConfig config,
+                                      ScriptExecutionListener listener) {
+        return mEngineService.execute(new StringScriptSource(name, script), listener, config);
+    }
+
     public ScriptExecution execScriptFile(String path, ExecutionConfig config) {
         return mEngineService.execute(new JavaScriptFileSource(mScriptRuntime.files.path(path)), config);
+    }
+
+    public ScriptExecution execScriptFile(String path, ExecutionConfig config,
+                                          ScriptExecutionListener listener) {
+        return mEngineService.execute(
+                new JavaScriptFileSource(mScriptRuntime.files.path(path)), listener, config);
     }
 
     public ScriptExecution execAutoFile(String path, ExecutionConfig config) {

@@ -127,7 +127,9 @@ YOLO 当前仅支持 `backend: 'opencv'`（OpenCV 5.0 DNN，`ENGINE_AUTO` 新图
 | `threads.currentThread()` | 当前线程 |
 | `threads.shutDownAll()` | 停止所有 worker |
 | `thread.isAlive()` / `join(timeout)` / `interrupt()` | 线程控制 |
+| `thread.getResult()` / `waitForResult(timeout)` | 查询或等待 worker 返回值，异常会传回调用方 |
 | `events.on/once/emit/removeListener/removeAllListeners/listenerCount` | 事件总线 |
+| `events.observeKey/observeTouch/observeNotification/observeToast/observeGesture` | 系统事件观察；通过有界队列回到 QuickJS 引擎线程派发 |
 
 每个 worker 使用独立 QuickJS 引擎，函数任务不捕获外层闭包，事件总线当前仅限同一引擎。
 
@@ -217,10 +219,10 @@ RHINO_REGRESSION_OK
 
 32 个断言全部通过，覆盖：toast/sleep/log/console/click/setClip/getClip/currentPackage/currentActivity/shell/files（读写/存在/删除）/storages（create/put/get）/device（width/model）/images（captureScreen/read/findColor）/setTimeout/setInterval/yolo.isAvailable/dialogs.alert/dialogs.confirm/engines.execScript/java.lang.String（Rhino 特有验证）。
 
-#### QuickJS 回归
+#### QuickJS 回归（2026-09-07 K40 复测）
 
 ```
-=== 回归测试完成: 42 通过, 0 失败 ===
+=== 回归测试完成: 46 通过, 0 失败 ===
 === QUICKJS_REGRESSION_OK ===
 ```
 
@@ -271,7 +273,8 @@ RHINO_REGRESSION_OK
 | `QuickJS Files Http Timers 测试.js` | 文件读写/HTTP请求/定时器 |
 | `QuickJS Native Frame 回归测试.js` | 截图/像素/找色/模板匹配 |
 | `QuickJS Images Advanced 测试.js` | rotate/threshold/blur/scale/save/copy |
-| `QuickJS 全模块回归测试.js` | 一次覆盖所有模块（42项） |
+| `QuickJS 全模块回归测试.js` | 一次覆盖所有模块（46项，含 worker 参数与返回值） |
+| `QuickJS Worker参数与结果测试.js` | worker JSON 参数、状态、结果等待与结束 |
 | `图色处理/01～07` | 图色 API、模板、视觉加速、坐标回归和截图稳定性 |
 | `YOLO目标检测/opencv/*` | 单帧、区域、持续、实时和运行环境测试 |
 
@@ -279,12 +282,11 @@ RHINO_REGRESSION_OK
 
 | 限制 | 说明 |
 |------|------|
-| `ui`/E4X/Java 反射 | 不兼容，继续使用 Rhino |
-| `"ui";` 模式声明 | Rhino 专属，QuickJS 不支持 |
-| `require()` | 不支持 CommonJS 模块系统 |
+| E4X/JSX/Java 反射 | 不兼容，继续使用 Rhino；QuickJS 已有 `ui/$ui` XML 基础桥 |
+| `"ui";` 模式声明 | Rhino 专属；QuickJS 直接使用 `ui/$ui` 基础模块 |
 | `console.show()` | Rhino 悬浮控制台，QuickJS 未实现 |
 | YOLO 后端 | 仅支持 `opencv`，ncnn/onnx 已移除 |
-| `threads` 事件总线 | 当前仅限同一引擎，不支持跨 worker 通信 |
+| `threads` 事件总线 | 当前仅限同一引擎，不支持跨 worker 通信；系统按键/触摸/通知/Toast/手势观察已接入 |
 | `threads.start` 函数模式 | 闭包变量不自动捕获，需通过 `args` 传递 |
 | `dialogs.build()` | 同步版本，不含 `customView` 和链式回调 |
 | `images` 尚缺能力 | 形态学和 OCR 未实现；旋转、阈值化、模糊已经可用 |
@@ -312,7 +314,7 @@ apps/app/src/main/cpp/
 
 | 优先级 | 方向 | 复杂度 |
 |--------|------|--------|
-| P1 | `threads` 增强：跨 worker 事件总线 + Promise 传递 | 中 |
+| P1 | `threads` 增强：跨 worker 事件总线 + Promise 封装（同步结果/异常传递已完成） | 中 |
 | P2 | `images` 高级：腐蚀/膨胀/开闭运算等形态学 | 中 |
 | P3 | NativeFrame 调试统计（句柄数/占用字节） | 低 |
 | P4 | OCR 桥接 | 高 |

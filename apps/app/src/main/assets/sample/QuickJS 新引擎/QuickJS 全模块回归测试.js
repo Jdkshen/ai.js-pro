@@ -85,6 +85,13 @@ assert('engines.all() 返回数组', Array.isArray(engines.all()));
 // --- threads + events ---
 assert('threads.start', typeof threads.start === 'function');
 assert('threads.exec', typeof threads.exec === 'function');
+var worker = threads.start(function () {
+    return __args.left + __args.right;
+}, {left: 19, right: 23});
+assert('worker.getResult', typeof worker.getResult === 'function');
+assert('worker.waitForResult', typeof worker.waitForResult === 'function');
+assert('worker 参数与返回值', worker.waitForResult(5000) === 42);
+assert('worker 正常结束', worker.join(1000));
 assert('events.on', typeof events.on === 'function');
 assert('events.emit', typeof events.emit === 'function');
 assert('events.once', typeof events.once === 'function');

@@ -87,8 +87,8 @@ toast("这是 QuickJS 脚本");
 | `shell` | 已接入 | 普通/Root 执行、Root 可用性检查、超时中止、输出限制和引擎关闭子进程回收 |
 | `dialogs` | 已接入 | `alert` / `confirm` / `prompt` / `select` / `singleChoice` / `multiChoice` |
 | `engines` | 已接入 | 启动脚本、枚举引擎、停止引擎；子脚本默认使用 QuickJS，可显式选择 Rhino |
-| `threads`、`events` | 基础实现 | 每个 worker 使用独立 QuickJS；事件总线当前仅限同一引擎，函数任务不捕获外层闭包 |
-| `ui`、E4X、Rhino Java 互操作 | 不兼容 | 继续使用 Rhino 执行这类旧脚本 |
+| `threads`、`events` | 常用能力已接入 | 每个 worker 使用独立 QuickJS；支持 JSON 参数、返回值/异常查询与等待；支持按键、触摸、通知、Toast 和手势观察，系统回调通过有界队列回到所属引擎线程；worker 间事件总线仍未共享 |
+| `ui` / `$ui` | 基础实现 | 支持 XML 布局、常用控件、点击和列表事件；E4X/JSX、Java 反射与完整动态绑定仍需 Rhino |
 
 全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`，YOLO 案例位于其 `YOLO目标检测/` 子目录。
 
@@ -223,7 +223,7 @@ console.log('设置:', info.label, 'v' + info.versionName);
 - `shell` 首批：`shell(cmd)`（普通应用 UID）、`shell(cmd, true)` / `shell(cmd, {root: true, timeout, maxOutput})`（Root）、`shell(cmd, {shizuku: true, timeout, maxOutput})` 或 `shizuku.shell(cmd, options)`（Shizuku/Sui），返回 `{ code, result, error }`；支持超时中止与最大输出限制。Shizuku 辅助 API：`shizuku.isAvailable()`、`shizuku.hasPermission()`、`shizuku.requestPermission(timeout)`。
 - `dialogs` 首批：`alert` / `confirm` / `prompt`（= `rawInput`） / `select` / `singleChoice` / `multiChoice`。
 - `engines` 首批：`execScript` / `execScriptFile` / `myEngine` / `all` / `stopAll` / `stopAllAndToast`。
-- `threads` / `events` 基础版：`threads.start(fn|src)` / `currentThread` / `shutDownAll`，每个 worker 独立 QuickJS 引擎；`events.on/once/emit/removeListener/removeAllListeners/listenerCount`（事件总线仅限同一引擎，函数任务不捕获外层闭包）。
+- `threads` / `events`：`threads.start(fn|src, args)` / `exec` / `currentThread` / `shutDownAll`，每个 worker 独立 QuickJS 引擎；thread/engine 句柄支持 `getResult()` / `waitForResult(timeout)` / `join` / `interrupt`；`events.on/once/emit/removeListener/removeAllListeners/listenerCount`（事件总线仅限同一引擎，函数任务不捕获外层闭包）。
 
 ## 4. 关键代码
 
@@ -281,7 +281,7 @@ modules/autojs/src/main/cpp/
 
 当前 QuickJS 已具备第一批到第三批白名单桥（`console`/`toast`/`sleep`、`files`/`http`/`timers`、`app`/`storages`/`device`、`shell`/`dialogs`/`engines`、`threads`/`events` 基础版）、完整的 `images` 模块（clip/resize/scale/grayscale/cvtColor/save/compress/findColor/findMultiColors/findImage/matchTemplate）以及 `dialogs.build()` 和 `engines` 完整对象封装。后续建议按实际需求推进：
 
-1. `threads` 增强：worker 间共享事件事件总线（当前事件总线仅限同一引擎）、worker 返回值/Promise 传递、函数任务的闭包序列化限制说明；
+1. `threads` 增强：worker 间共享事件总线、异步 Promise 封装；同步返回值/异常等待和 JSON 参数传递已实现，函数任务仍不捕获外层闭包；
 2. `images` 高级功能：旋转、阈值化、模糊、形态学、Base64 转换和 OCR 桥；
 3. Native Frame 可增加句柄数/占用字节调试统计，用于长时脚本泄漏诊断。
 

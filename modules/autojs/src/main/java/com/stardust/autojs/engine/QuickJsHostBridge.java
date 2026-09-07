@@ -1,5 +1,6 @@
 package com.stardust.autojs.engine;
 
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.content.Context;
 import android.content.res.Configuration;
@@ -20,16 +21,23 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 
 import com.stardust.autojs.core.http.MutableOkHttp;
+import com.stardust.autojs.core.inputevent.InputEventObserver;
+import com.stardust.autojs.core.inputevent.TouchObserver;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
 import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.autojs.runtime.api.Yolo;
+import com.stardust.notification.Notification;
+import com.stardust.notification.NotificationListenerService;
 import com.stardust.pio.UncheckedIOException;
+import com.stardust.view.accessibility.AccessibilityNotificationObserver;
+import com.stardust.view.accessibility.OnKeyListener;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -49,6 +57,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -71,7 +80,84 @@ final class QuickJsHostBridge implements AutoCloseable {
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
     private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
     private final MutableOkHttp mHttpClient = new MutableOkHttp();
+    private final ArrayBlockingQueue<String> mSystemEventQueue = new ArrayBlockingQueue<>(256);
+    private final Object mSystemEventLock = new Object();
     private volatile long mEngineHandle;
+    private boolean mObservingKeys;
+    private boolean mObservingNotifications;
+    private boolean mObservingToasts;
+    private boolean mObservingGestures;
+    private TouchObserver mSystemTouchObserver;
+    private long mLastSystemTouchMillis;
+    private volatile long mSystemTouchTimeoutMillis = 10;
+
+    private final OnKeyListener mQuickJsKeyListener = new OnKeyListener() {
+        @Override
+        public void onKeyEvent(int keyCode, KeyEvent event) {
+            String keyName = KeyEvent.keyCodeToString(keyCode);
+            if (keyName.startsWith("KEYCODE_")) keyName = keyName.substring(8);
+            JSONObject payload = new JSONObject();
+            try {
+                payload.put("keyCode", keyCode);
+                payload.put("keyName", keyName.toLowerCase(Locale.ROOT));
+                payload.put("action", event.getAction());
+                payload.put("repeatCount", event.getRepeatCount());
+                payload.put("eventTime", event.getEventTime());
+                enqueueSystemEvent(event.getAction() == KeyEvent.ACTION_UP ? "key_up" : "key_down", payload);
+            } catch (JSONException error) {
+                Log.w("QuickJsHostBridge", "Cannot serialize key event", error);
+            }
+        }
+    };
+
+    private final com.stardust.view.accessibility.NotificationListener mQuickJsNotificationListener =
+            new com.stardust.view.accessibility.NotificationListener() {
+                @Override
+                public void onNotification(Notification notification) {
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("packageName", notification.getPackageName());
+                        payload.put("title", notification.getTitle());
+                        payload.put("text", notification.getText());
+                        payload.put("when", notification.when);
+                        payload.put("number", notification.number);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            payload.put("category", notification.category);
+                        }
+                        enqueueSystemEvent("notification", payload);
+                    } catch (JSONException error) {
+                        Log.w("QuickJsHostBridge", "Cannot serialize notification", error);
+                    }
+                }
+            };
+
+    private final AccessibilityNotificationObserver.ToastListener mQuickJsToastListener =
+            new AccessibilityNotificationObserver.ToastListener() {
+                @Override
+                public void onToast(AccessibilityNotificationObserver.Toast toast) {
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("packageName", toast.getPackageName());
+                        payload.put("text", toast.getText());
+                        payload.put("texts", new JSONArray(toast.getTexts()));
+                        enqueueSystemEvent("toast", payload);
+                    } catch (JSONException error) {
+                        Log.w("QuickJsHostBridge", "Cannot serialize toast", error);
+                    }
+                }
+            };
+
+    private final com.stardust.view.accessibility.AccessibilityService.GestureListener mQuickJsGestureListener =
+            gestureId -> {
+                JSONObject payload = new JSONObject();
+                try {
+                    payload.put("gestureId", gestureId);
+                    payload.put("gesture", gestureName(gestureId));
+                    enqueueSystemEvent("gesture", payload);
+                } catch (JSONException error) {
+                    Log.w("QuickJsHostBridge", "Cannot serialize gesture", error);
+                }
+            };
 
     private static final class YoloSession {
         final String backend;
@@ -108,6 +194,149 @@ final class QuickJsHostBridge implements AutoCloseable {
             default:
                 mRuntime.console.log(message);
                 break;
+        }
+    }
+
+    public boolean eventsObserve(String kind) {
+        if (kind == null) throw new IllegalArgumentException("event observation kind is required");
+        synchronized (mSystemEventLock) {
+            switch (kind.toLowerCase(Locale.ROOT)) {
+                case "key": {
+                    if (mObservingKeys) return true;
+                    com.stardust.view.accessibility.AccessibilityService service = requireAccessibilityService();
+                    AccessibilityServiceInfo info = service.getServiceInfo();
+                    if (info == null || (info.flags & AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS) == 0) {
+                        throw new IllegalStateException("Accessibility service key observation is not enabled");
+                    }
+                    service.getOnKeyObserver().addListener(mQuickJsKeyListener);
+                    mObservingKeys = true;
+                    return true;
+                }
+                case "notification": {
+                    if (mObservingNotifications) return true;
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR2) return false;
+                    NotificationListenerService service = NotificationListenerService.Companion.getInstance();
+                    if (service == null) {
+                        throw new IllegalStateException("Notification listener service is not enabled");
+                    }
+                    service.addListener(mQuickJsNotificationListener);
+                    mObservingNotifications = true;
+                    return true;
+                }
+                case "toast": {
+                    if (mObservingToasts) return true;
+                    requireAccessibilityService();
+                    mRuntime.accessibilityBridge.getNotificationObserver().addToastListener(mQuickJsToastListener);
+                    mObservingToasts = true;
+                    return true;
+                }
+                case "gesture": {
+                    if (mObservingGestures) return true;
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
+                    com.stardust.view.accessibility.AccessibilityService service = requireAccessibilityService();
+                    AccessibilityServiceInfo info = service.getServiceInfo();
+                    if (info == null || (info.flags & AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE) == 0) {
+                        throw new IllegalStateException("Accessibility service gesture observation is not enabled");
+                    }
+                    service.getGestureEventDispatcher().addListener(mQuickJsGestureListener);
+                    mObservingGestures = true;
+                    return true;
+                }
+                case "touch": {
+                    if (mSystemTouchObserver != null) return true;
+                    TouchObserver observer = new TouchObserver(
+                            InputEventObserver.getGlobal(ScriptRuntime.getApplicationContext()));
+                    observer.setOnTouchEventListener((x, y) -> {
+                        long now = System.currentTimeMillis();
+                        if (now - mLastSystemTouchMillis < mSystemTouchTimeoutMillis) return;
+                        mLastSystemTouchMillis = now;
+                        JSONObject payload = new JSONObject();
+                        try {
+                            payload.put("x", x);
+                            payload.put("y", y);
+                            enqueueSystemEvent("touch", payload);
+                        } catch (JSONException error) {
+                            Log.w("QuickJsHostBridge", "Cannot serialize touch event", error);
+                        }
+                    });
+                    observer.observe();
+                    mSystemTouchObserver = observer;
+                    return true;
+                }
+                default:
+                    throw new IllegalArgumentException("Unknown event observation kind: " + kind);
+            }
+        }
+    }
+
+    public String eventsPoll() {
+        String event = mSystemEventQueue.poll();
+        return event == null ? "" : event;
+    }
+
+    public void eventsSetTouchTimeout(int timeoutMillis) {
+        mSystemTouchTimeoutMillis = Math.max(0, timeoutMillis);
+    }
+
+    public void eventsStopAll() {
+        synchronized (mSystemEventLock) {
+            com.stardust.view.accessibility.AccessibilityService accessibilityService =
+                    mRuntime.accessibilityBridge.getService();
+            if (accessibilityService != null) {
+                if (mObservingKeys) {
+                    accessibilityService.getOnKeyObserver().removeListener(mQuickJsKeyListener);
+                }
+                if (mObservingGestures) {
+                    accessibilityService.getGestureEventDispatcher().removeListener(mQuickJsGestureListener);
+                }
+            }
+            NotificationListenerService notificationService = NotificationListenerService.Companion.getInstance();
+            if (notificationService != null && mObservingNotifications) {
+                notificationService.removeListener(mQuickJsNotificationListener);
+            }
+            if (mObservingToasts) {
+                mRuntime.accessibilityBridge.getNotificationObserver().removeToastListener(mQuickJsToastListener);
+            }
+            if (mSystemTouchObserver != null) {
+                mSystemTouchObserver.stop();
+                mSystemTouchObserver = null;
+            }
+            mObservingKeys = false;
+            mObservingNotifications = false;
+            mObservingToasts = false;
+            mObservingGestures = false;
+            mSystemEventQueue.clear();
+        }
+    }
+
+    private com.stardust.view.accessibility.AccessibilityService requireAccessibilityService() {
+        mRuntime.ensureAccessibilityServiceEnabled();
+        com.stardust.view.accessibility.AccessibilityService service =
+                mRuntime.accessibilityBridge.getService();
+        if (service == null) throw new IllegalStateException("Accessibility service is not running");
+        return service;
+    }
+
+    private void enqueueSystemEvent(String type, JSONObject payload) throws JSONException {
+        payload.put("type", type);
+        String serialized = payload.toString();
+        if (!mSystemEventQueue.offer(serialized)) {
+            mSystemEventQueue.poll();
+            mSystemEventQueue.offer(serialized);
+        }
+    }
+
+    private static String gestureName(int gestureId) {
+        switch (gestureId) {
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_UP: return "up";
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_DOWN: return "down";
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_LEFT: return "left";
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_RIGHT: return "right";
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_LEFT_AND_RIGHT: return "left_right";
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_RIGHT_AND_LEFT: return "right_left";
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_UP_AND_DOWN: return "up_down";
+            case com.stardust.view.accessibility.AccessibilityService.GESTURE_SWIPE_DOWN_AND_UP: return "down_up";
+            default: return "unknown";
         }
     }
 
@@ -948,7 +1177,7 @@ final class QuickJsHostBridge implements AutoCloseable {
 
                     // Add button texts only if provided; omit to hide button
                     if (posText != null) builder.positiveText(posText);
-                    if (negText != null) builder.negativeText(neutText);
+                    if (negText != null) builder.negativeText(negText);
                     if (neutText != null) builder.neutralText(neutText);
 
                     if (posText != null && !hasInput) {
@@ -1006,12 +1235,10 @@ final class QuickJsHostBridge implements AutoCloseable {
      * The argsJson is passed to the child engine as `__args` global.
      */
     public String threadsExec(String name, String source, String argsJson) {
+        long handle = mNextEngineHandle.getAndIncrement();
+        EngineResultState resultState = new EngineResultState();
+        mEngineResults.put(handle, resultState);
         try {
-            // Prepend QuickJS directive if not already present
-            if (!com.stardust.autojs.script.JavaScriptSource.requestsQuickJs(source)) {
-                source = com.stardust.autojs.script.JavaScriptSource.QUICKJS_ENGINE_DIRECTIVE
-                        + "\n" + source;
-            }
             // Inject args into source: __args = JSON.parse(argsJson)
             String argsInit = "";
             if (argsJson != null && !argsJson.isEmpty() && !"null".equals(argsJson)) {
@@ -1021,15 +1248,21 @@ final class QuickJsHostBridge implements AutoCloseable {
             } else {
                 argsInit = "var __args = null;\n";
             }
-            String fullSource = argsInit + source;
+            // The engine directive must remain the first non-empty line. Putting
+            // __args before it silently routed workers back to Rhino.
+            String fullSource = com.stardust.autojs.script.JavaScriptSource.QUICKJS_ENGINE_DIRECTIVE
+                    + "\n" + argsInit + source;
             com.stardust.autojs.execution.ExecutionConfig config =
                     new com.stardust.autojs.execution.ExecutionConfig();
             com.stardust.autojs.execution.ScriptExecution execution =
-                    mRuntime.engines.execScript(name, fullSource, config);
-            long handle = mNextEngineHandle.getAndIncrement();
+                    mRuntime.engines.execScript(name, fullSource, config,
+                            createEngineResultListener(resultState));
             mEngineSessions.put(handle, execution);
             return String.valueOf(handle);
-        } catch (Throwable e) { return "-1"; }
+        } catch (Throwable e) {
+            resultState.fail(e);
+            return "-1";
+        }
     }
 
     public int threadsStop(long handle) {
@@ -1045,6 +1278,9 @@ final class QuickJsHostBridge implements AutoCloseable {
     // ---- engines module ----
 
     public String enginesExecScript(String name, String source, String configJson) {
+        long handle = mNextEngineHandle.getAndIncrement();
+        EngineResultState resultState = new EngineResultState();
+        mEngineResults.put(handle, resultState);
         try {
             com.stardust.autojs.execution.ExecutionConfig config = buildExecConfig(configJson);
             if (!requestsRhino(configJson)
@@ -1053,22 +1289,61 @@ final class QuickJsHostBridge implements AutoCloseable {
                         + "\n" + source;
             }
             com.stardust.autojs.execution.ScriptExecution execution =
-                    mRuntime.engines.execScript(name, source, config);
-            long handle = mNextEngineHandle.getAndIncrement();
+                    mRuntime.engines.execScript(name, source, config,
+                            createEngineResultListener(resultState));
             mEngineSessions.put(handle, execution);
             return String.valueOf(handle);
-        } catch (Throwable e) { return "-1"; }
+        } catch (Throwable e) {
+            resultState.fail(e);
+            return "-1";
+        }
     }
 
     public String enginesExecScriptFile(String path, String configJson) {
+        long handle = mNextEngineHandle.getAndIncrement();
+        EngineResultState resultState = new EngineResultState();
+        mEngineResults.put(handle, resultState);
         try {
             com.stardust.autojs.execution.ExecutionConfig config = buildExecConfig(configJson);
             com.stardust.autojs.execution.ScriptExecution execution =
-                    mRuntime.engines.execScriptFile(path, config);
-            long handle = mNextEngineHandle.getAndIncrement();
+                    mRuntime.engines.execScriptFile(path, config,
+                            createEngineResultListener(resultState));
             mEngineSessions.put(handle, execution);
             return String.valueOf(handle);
-        } catch (Throwable e) { return "-1"; }
+        } catch (Throwable e) {
+            resultState.fail(e);
+            return "-1";
+        }
+    }
+
+    public String engineResult(long handle, int timeoutMillis) {
+        EngineResultState state = mEngineResults.get(handle);
+        if (state == null) return "{\"status\":\"missing\"}";
+        if (timeoutMillis > 0 && "running".equals(state.status)) {
+            try {
+                state.finished.await(timeoutMillis, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        return state.toJson();
+    }
+
+    private com.stardust.autojs.execution.ScriptExecutionListener createEngineResultListener(
+            EngineResultState state) {
+        return new com.stardust.autojs.execution.SimpleScriptExecutionListener() {
+            @Override
+            public void onSuccess(com.stardust.autojs.execution.ScriptExecution execution,
+                                  Object result) {
+                state.succeed(result);
+            }
+
+            @Override
+            public void onException(com.stardust.autojs.execution.ScriptExecution execution,
+                                    Throwable error) {
+                state.fail(error);
+            }
+        };
     }
 
     public String enginesMyEngineId() {
@@ -2095,9 +2370,51 @@ final class QuickJsHostBridge implements AutoCloseable {
     private final AtomicLong mNextEngineHandle = new AtomicLong(1);
     private final Map<Long, com.stardust.autojs.execution.ScriptExecution> mEngineSessions =
             new ConcurrentHashMap<>();
+    private final Map<Long, EngineResultState> mEngineResults = new ConcurrentHashMap<>();
+
+    private static final class EngineResultState {
+        final CountDownLatch finished = new CountDownLatch(1);
+        volatile String status = "running";
+        volatile Object value;
+        volatile String error = "";
+
+        void succeed(Object result) {
+            value = result;
+            status = "success";
+            finished.countDown();
+        }
+
+        void fail(Throwable failure) {
+            error = failure == null ? "Unknown script error" : Log.getStackTraceString(failure);
+            status = "error";
+            finished.countDown();
+        }
+
+        String toJson() {
+            try {
+                JSONObject json = new JSONObject().put("status", status);
+                if ("success".equals(status)) {
+                    Object encoded = value;
+                    if (encoded == null) encoded = JSONObject.NULL;
+                    else if (!(encoded instanceof String) && !(encoded instanceof Number)
+                            && !(encoded instanceof Boolean) && !(encoded instanceof JSONObject)
+                            && !(encoded instanceof JSONArray)) {
+                        encoded = String.valueOf(encoded);
+                    }
+                    json.put("value", encoded);
+                } else if ("error".equals(status)) {
+                    json.put("error", error);
+                }
+                return json.toString();
+            } catch (JSONException impossible) {
+                return "{\"status\":\"error\",\"error\":\"Cannot encode result\"}";
+            }
+        }
+    }
 
     @Override
     public void close() {
+        eventsStopAll();
         drawClose();
         mediaStopMusic();
         sensorsUnregisterAll();
@@ -2128,6 +2445,7 @@ final class QuickJsHostBridge implements AutoCloseable {
             }
         }
         mYoloSessions.clear();
+        mEngineResults.clear();
     }
 
     // ---- drawing overlay whitelist ----

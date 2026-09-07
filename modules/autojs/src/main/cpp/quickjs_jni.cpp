@@ -1002,6 +1002,25 @@ JSValue nativeSensorsList(JSContext *context, JSValueConst, int, JSValueConst *)
     return callStringHost(context, "sensorsList", nullptr);
 }
 
+JSValue nativeEventsObserve(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "eventsObserve",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeEventsPoll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "eventsPoll", nullptr);
+}
+
+JSValue nativeEventsSetTouchTimeout(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int32_t timeout = 10;
+    if (argc > 0) JS_ToInt32(context, &timeout, argv[0]);
+    return callHostVoidInt(context, "eventsSetTouchTimeout", timeout);
+}
+
+JSValue nativeEventsStopAll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "eventsStopAll");
+}
+
 JSValue nativeDialogsShow(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t type = 0;
     if (argc < 1 || JS_ToInt64(context, &type, argv[0]) < 0) {
@@ -2427,6 +2446,26 @@ JSValue nativeEngineIsDestroyed(JSContext *context, JSValueConst, int argc, JSVa
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
 }
 
+JSValue nativeEngineResult(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    int32_t timeout = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0)
+        return JS_ThrowTypeError(context, "engineResult requires handle");
+    if (argc > 1 && JS_ToInt32(context, &timeout, argv[1]) < 0)
+        return JS_ThrowTypeError(context, "engineResult timeout must be a number");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "engineResult", "(JI)Ljava/lang/String;");
+    auto result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, static_cast<jlong>(handle), static_cast<jint>(timeout)));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 void installNativeFunction(JSContext *context, JSValue global, const char *name,
                            JSCFunction *function, int length) {
     JS_SetPropertyStr(context, global, name, JS_NewCFunction(context, function, name, length));
@@ -3330,53 +3369,27 @@ const char kBootstrapScript[] = R"JS(
         }
     });
 
-    // ---- dialogs module ----
-    global.dialogs = Object.freeze({
-        alert: function (title, content) { return __aiNativeDialogAlert(String(title || ''), String(content || '')); },
-        confirm: function (title, content) {
-            var r = __aiNativeDialogConfirm(String(title || ''), String(content || ''));
-            return r === 'true';
-        },
-        prompt: function (title, prefill) {
-            return __aiNativeDialogPrompt(String(title || ''), String(prefill || ''));
-        },
-        rawInput: function (title, prefill) {
-            return __aiNativeDialogPrompt(String(title || ''), String(prefill || ''));
-        },
-        select: function (title, items) {
-            return Number(__aiNativeDialogSelect(
-                    String(title || ''), JSON.stringify(items || []), -1));
-        },
-        singleChoice: function (title, items, index) {
-            return Number(__aiNativeDialogSelect(
-                    String(title || ''), JSON.stringify(items || []),
-                    index === undefined ? -1 : Number(index)));
-        },
-        multiChoice: function (title, items, indices) {
-            return JSON.parse(__aiNativeDialogMultiChoice(
-                String(title || ''), JSON.stringify(items || []),
-                JSON.stringify(indices || [])));
-        },
-        build: function (props) {
-            if (props && typeof props === 'object' && typeof props.then === 'function')
-                throw new TypeError('dialogs.build() is synchronous in QuickJS; pass {callback} for async');
-            var result = JSON.parse(__aiNativeDialogBuild(JSON.stringify(props || {})));
-            if (result.action === 'error') throw new Error(result.error || 'dialog error');
-            return result;
-        }
-    });
-
     // ---- engines module ----
     function makeEngineHandle(info) {
         info = info || {};
         var handle = Number(info.handle === undefined ? info : info.handle);
+        function resultState(timeout) {
+            if (handle === 0) return { status: 'running' };
+            return JSON.parse(__aiNativeEngineResult(handle, Math.max(0, Number(timeout) || 0)));
+        }
         return Object.freeze({
             id: Number(info.id === undefined ? -1 : info.id),
             handle: handle,
             source: String(info.source || ''),
             engineName: String(info.engineName || 'QuickJsJavaScriptEngine'),
             forceStop: function () { return __aiNativeEngineForceStop(handle); },
-            isDestroyed: function () { return __aiNativeEngineIsDestroyed(handle); }
+            isDestroyed: function () { return __aiNativeEngineIsDestroyed(handle); },
+            getResult: function () { return resultState(0); },
+            waitForResult: function (timeout) {
+                var result = resultState(timeout === undefined ? 0x7fffffff : timeout);
+                if (result.status === 'error') throw new Error(result.error || 'Worker failed');
+                return result.status === 'success' ? result.value : undefined;
+            }
         });
     }
 
@@ -3411,6 +3424,33 @@ const char kBootstrapScript[] = R"JS(
     // ---- local events module ----
     var eventListeners = new Map();
     var maxListeners = 10;
+    var systemEventTimer = null;
+    function dispatchSystemEvents() {
+        for (;;) {
+            var raw = __aiNativeEventsPoll();
+            if (!raw) break;
+            var event = JSON.parse(raw);
+            if (event.type === 'key_down' || event.type === 'key_up') {
+                events.emit(event.type, event.keyCode, event);
+                events.emit(event.keyName, event);
+                events.emit('__' + event.type + '__#' + event.keyName, event);
+                events.emit('key', event.keyCode, event);
+            } else if (event.type === 'touch') {
+                events.emit('touch', event.x, event.y, event);
+            } else if (event.type === 'gesture') {
+                events.emit('gesture', event.gesture, event);
+            } else {
+                events.emit(event.type, event);
+            }
+        }
+    }
+    function observeSystemEvent(kind) {
+        var result = !!__aiNativeEventsObserve(String(kind));
+        if (result && systemEventTimer === null) {
+            systemEventTimer = setInterval(dispatchSystemEvents, 40);
+        }
+        return result;
+    }
     function listenersFor(name, create) {
         name = String(name);
         var listeners = eventListeners.get(name);
@@ -3496,6 +3536,44 @@ const char kBootstrapScript[] = R"JS(
             return events;
         },
         getMaxListeners: function () { return maxListeners; },
+        observeKey: function () { return observeSystemEvent('key'); },
+        observeTouch: function () { return observeSystemEvent('touch'); },
+        observeNotification: function () { return observeSystemEvent('notification'); },
+        observeToast: function () { return observeSystemEvent('toast'); },
+        observeGesture: function () { return observeSystemEvent('gesture'); },
+        onKeyDown: function (keyName, listener) {
+            return events.on('__key_down__#' + String(keyName).toLowerCase(), listener);
+        },
+        onceKeyDown: function (keyName, listener) {
+            return events.once('__key_down__#' + String(keyName).toLowerCase(), listener);
+        },
+        removeAllKeyDownListeners: function (keyName) {
+            return events.removeAllListeners('__key_down__#' + String(keyName).toLowerCase());
+        },
+        onKeyUp: function (keyName, listener) {
+            return events.on('__key_up__#' + String(keyName).toLowerCase(), listener);
+        },
+        onceKeyUp: function (keyName, listener) {
+            return events.once('__key_up__#' + String(keyName).toLowerCase(), listener);
+        },
+        removeAllKeyUpListeners: function (keyName) {
+            return events.removeAllListeners('__key_up__#' + String(keyName).toLowerCase());
+        },
+        onTouch: function (listener) { return events.on('touch', listener); },
+        onNotification: function (listener) { return events.on('notification', listener); },
+        onToast: function (listener) { return events.on('toast', listener); },
+        setTouchEventTimeout: function (timeout) {
+            __aiNativeEventsSetTouchTimeout(Math.max(0, Math.floor(Number(timeout) || 0)));
+            return events;
+        },
+        stopObserving: function () {
+            if (systemEventTimer !== null) {
+                clearInterval(systemEventTimer);
+                systemEventTimer = null;
+            }
+            __aiNativeEventsStopAll();
+            return events;
+        },
         broadcast: function (name) {
             return events.emit.apply(events, arguments);
         }
@@ -3653,6 +3731,11 @@ const char kBootstrapScript[] = R"JS(
             var r = dialogWait(Number(__aiNativeDialogsShow(5,
                 String(title == null ? '' : title), '', JSON.stringify(list), def)));
             return r && r.indices ? r.indices : [];
+        },
+        build: function (props) {
+            var result = JSON.parse(__aiNativeDialogBuild(JSON.stringify(props || {})));
+            if (result.action === 'error') throw new Error(result.error || 'dialog error');
+            return result;
         }
     };
     global.dialogs = Object.freeze(dialogs);
@@ -3840,7 +3923,9 @@ const char kBootstrapScript[] = R"JS(
                 while (!engine.isDestroyed() && Date.now() < deadline) sleep(10);
                 if (engine.isDestroyed()) workerHandles.delete(thread);
                 return engine.isDestroyed();
-            }
+            },
+            getResult: function () { return engine.getResult(); },
+            waitForResult: function (timeout) { return engine.waitForResult(timeout); }
         };
         return Object.freeze(thread);
     }
@@ -3859,7 +3944,10 @@ const char kBootstrapScript[] = R"JS(
             else if (typeof task === 'string') source = task;
             else throw new TypeError('threads.start requires a function or script string');
             var argsJson = args !== undefined ? JSON.stringify(args) : '';
-            var thread = makeThread(global.engines.execScript('QuickJS-Thread', source));
+            var handle = Number(__aiNativeThreadsExec('QuickJS-Thread', source, argsJson));
+            if (handle < 0) throw new Error('Unable to start worker thread');
+            var engine = makeEngineHandle({ handle: handle, source: 'QuickJS-Thread' });
+            var thread = makeThread(engine);
             workerHandles.add(thread);
             return thread;
         },
@@ -3876,9 +3964,7 @@ const char kBootstrapScript[] = R"JS(
             var handle = Number(__aiNativeThreadsExec(
                     String(name || 'worker'), source, argsJson));
             if (handle < 0) throw new Error('Unable to start worker thread');
-            var engine = { forceStop: function () { return __aiNativeThreadsStop(handle); },
-                           isDestroyed: function () { return __aiNativeEngineIsDestroyed(handle); },
-                           handle: handle };
+            var engine = makeEngineHandle({ handle: handle, source: String(name || 'worker') });
             var thread = makeThread(engine);
             workerHandles.add(thread);
             return thread;
@@ -4093,6 +4179,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSensorsUnregister", nativeSensorsUnregister, 1);
     installNativeFunction(state->context, global, "__aiNativeSensorsUnregisterAll", nativeSensorsUnregisterAll, 0);
     installNativeFunction(state->context, global, "__aiNativeSensorsList", nativeSensorsList, 0);
+    installNativeFunction(state->context, global, "__aiNativeEventsObserve", nativeEventsObserve, 1);
+    installNativeFunction(state->context, global, "__aiNativeEventsPoll", nativeEventsPoll, 0);
+    installNativeFunction(state->context, global, "__aiNativeEventsSetTouchTimeout", nativeEventsSetTouchTimeout, 1);
+    installNativeFunction(state->context, global, "__aiNativeEventsStopAll", nativeEventsStopAll, 0);
     installNativeFunction(state->context, global, "__aiNativeDialogsShow", nativeDialogsShow, 5);
     installNativeFunction(state->context, global, "__aiNativeDialogsPoll", nativeDialogsPoll, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyCreate", nativeFloatyCreate, 1);
@@ -4162,6 +4252,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeEnginesStopAllAndToast", nativeEnginesStopAllAndToast, 0);
     installNativeFunction(state->context, global, "__aiNativeEngineForceStop", nativeEngineForceStop, 1);
     installNativeFunction(state->context, global, "__aiNativeEngineIsDestroyed", nativeEngineIsDestroyed, 1);
+    installNativeFunction(state->context, global, "__aiNativeEngineResult", nativeEngineResult, 2);
     JS_FreeValue(state->context, global);
 
     JSValue bootstrap = JS_Eval(state->context, kBootstrapScript, sizeof(kBootstrapScript) - 1,
