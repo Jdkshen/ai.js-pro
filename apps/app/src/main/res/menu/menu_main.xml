@@ -3,13 +3,6 @@
       xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <item
-        android:id="@+id/action_imgui_workspace"
-        android:icon="@drawable/ic_code_white_24dp"
-        android:title="@string/text_imgui_workspace"
-        app:iconTint="?attr/colorOnSurfaceVariant"
-        app:showAsAction="always"/>
-
-    <item
         android:id="@+id/action_log"
         android:icon="@drawable/ic_log_white_24dp"
         android:title="@string/text_log"

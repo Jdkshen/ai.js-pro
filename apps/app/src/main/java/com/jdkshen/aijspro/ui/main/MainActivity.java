@@ -50,7 +50,6 @@ import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.doc.DocumentationActivity;
 import com.jdkshen.aijspro.ui.doc.DocsFragment;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
-import com.jdkshen.aijspro.ui.imgui.ImGuiWorkspaceActivity;
 import com.jdkshen.aijspro.ui.log.LogActivity;
 import com.jdkshen.aijspro.ui.main.community.CommunityFragment;
 import com.jdkshen.aijspro.ui.main.market.MarketFragment;
@@ -178,11 +177,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
                 R.string.text_accessibility_service, this::openAccessibilitySetting);
         bindSmallCard(R.id.home_floating, R.drawable.ic_robot_64,
                 R.string.text_floating_window, this::toggleFloatingWindow);
-        bindRow(R.id.home_developer, R.drawable.ic_connect_to_pc,
-                R.string.text_quick_developer, this::openDeveloperTools);
-        if (BuildConfig.MIUIX_PILOT) {
-            findViewById(R.id.home_developer).setVisibility(View.GONE);
-        }
         bindRow(R.id.home_exit, R.drawable.ic_close_white_48dp,
                 R.string.text_quick_exit_app, this::exitCompletely);
         TextView version = findViewById(R.id.home_version);
@@ -247,10 +241,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             Pref.setFloatingMenuShown(true);
         }
         refreshServiceStatus();
-    }
-
-    private void openDeveloperTools() {
-        startActivity(new Intent(this, ImGuiWorkspaceActivity.class));
     }
 
     void setUpViews() {
@@ -367,10 +357,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
     public void openLogFromMiuix() {
         startActivity(new Intent(this, LogActivity.class));
-    }
-
-    public void openImguiFromMiuix() {
-        startActivity(new Intent(this, ImGuiWorkspaceActivity.class));
     }
 
     public void openDocumentationFromMiuix() {
@@ -698,8 +684,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.menu_main, menu);
-        MenuItem workspace = menu.findItem(R.id.action_imgui_workspace);
-        if (workspace != null && BuildConfig.MIUIX_PILOT) workspace.setVisible(false);
         MenuItem searchMenuItem = menu.findItem(R.id.action_search);
         mSearchMenuItem = searchMenuItem;
         mLogMenuItem = menu.findItem(R.id.action_log);
@@ -717,10 +701,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == R.id.action_imgui_workspace) {
-            startActivity(new Intent(this, ImGuiWorkspaceActivity.class));
-            return true;
-        }
         if (item.getItemId() == R.id.action_log) {
             if (mDocsSearchItemExpanded) {
                 submitForwardQuery();

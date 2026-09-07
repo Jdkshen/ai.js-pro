@@ -102,10 +102,6 @@
                 </LinearLayout>
 
                 <include
-                    android:id="@+id/home_developer"
-                    layout="@layout/item_home_row"/>
-
-                <include
                     android:id="@+id/home_exit"
                     layout="@layout/item_home_row"/>
 
