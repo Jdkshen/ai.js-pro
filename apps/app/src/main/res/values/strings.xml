@@ -77,6 +77,8 @@
     <string name="text_auto_operate_service_enabled_but_not_running">无障碍服务已启用但并未运行，这可能是安卓的BUG，您可能需要重启手机或重启无障碍服务</string>
     <string name="key_enable_accessibility_service_by_root">key_enable_accessibility_service_by_root</string>
     <string name="text_enable_accessibility_service_by_root_timeout">使用Root权限启动无障碍服务超时</string>
+    <string name="text_enable_accessibility_service_fast_success">已快速开启无障碍服务</string>
+    <string name="text_enable_accessibility_service_fast_failed">快速开启失败，已转到系统设置</string>
     <string name="summary_enable_accessibility_service_by_root">开启后运行脚本会使用Root权限自动开启无障碍服务</string>
     <string name="text_appearance">外观</string>
     <string name="text_theme_color">主题色</string>

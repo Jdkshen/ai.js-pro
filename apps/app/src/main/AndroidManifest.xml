@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"/>
+    <!-- Granted once through Shizuku/ADB/root, then accessibility can be enabled immediately
+         without Xiaomi's restricted-settings countdown or a remote-shell startup on each use. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"/>
     <!-- app.getInstalledApps / app-name and package-name lookup on Android 11+. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
     <!-- MIUI additionally gates the installed-app list behind this runtime permission. -->

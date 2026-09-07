@@ -20,8 +20,10 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
 import com.jdkshen.aijspro.BuildConfig
 import com.jdkshen.aijspro.Pref
+import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.external.foreground.ForegroundService
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
@@ -33,10 +35,14 @@ import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.extra.SuperArrow
 import top.yukonga.miuix.kmp.extra.SuperSwitch
 import top.yukonga.miuix.kmp.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Isolated pilot: existing service owners remain responsible for actual state. */
 class MiuixServiceActivity : ComponentActivity() {
     private var revision by mutableIntStateOf(0)
+    private var enablingAccessibility by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,6 +81,43 @@ class MiuixServiceActivity : ComponentActivity() {
         }
     }
 
+    private fun openOrEnableAccessibility(alreadyEnabled: Boolean) {
+        if (alreadyEnabled) {
+            openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            return
+        }
+        if (!AccessibilityServiceTool.isFastEnableAvailable() &&
+            !Pref.shouldEnableAccessibilityServiceByRoot()) {
+            openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            return
+        }
+        if (enablingAccessibility) return
+        enablingAccessibility = true
+        lifecycleScope.launch {
+            val enabled = withContext(Dispatchers.IO) {
+                if (AccessibilityServiceTool.hasSecureSettingsPermission()) {
+                    AccessibilityServiceTool.enableAccessibilityServiceDirectlyAndWaitFor(4000)
+                } else if (AccessibilityServiceTool.isShizukuAvailable()) {
+                    AccessibilityServiceTool.enableAccessibilityServiceByShizukuAndWaitFor(4000, true)
+                } else {
+                    AccessibilityServiceTool.enableAccessibilityServiceByRootAndWaitFor(4000)
+                }
+            }
+            enablingAccessibility = false
+            revision++
+            if (enabled) {
+                Toast.makeText(this@MiuixServiceActivity,
+                    R.string.text_enable_accessibility_service_fast_success,
+                    Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this@MiuixServiceActivity,
+                    R.string.text_enable_accessibility_service_fast_failed,
+                    Toast.LENGTH_SHORT).show()
+                openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            }
+        }
+    }
+
     @Composable
     private fun ServicePage() {
         val stateRevision = revision
@@ -101,8 +144,14 @@ class MiuixServiceActivity : ComponentActivity() {
                     modifier = Modifier.padding(top = 8.dp, start = 8.dp))
                 Card(Modifier.fillMaxWidth()) {
                     SuperArrow(title = "无障碍服务", summary = "用于自动点击、查找控件和界面操作",
-                        rightText = if (accessibility) "已开启" else "未开启",
-                        onClick = { openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS) })
+                        rightText = when {
+                            accessibility -> "已开启"
+                            enablingAccessibility -> "正在开启"
+                            AccessibilityServiceTool.hasSecureSettingsPermission() -> "快速开启"
+                            AccessibilityServiceTool.isShizukuAvailable() -> "Shizuku 授权开启"
+                            else -> "未开启"
+                        },
+                        onClick = { openOrEnableAccessibility(accessibility) })
                     SuperSwitch(title = "悬浮窗", summary = "显示脚本控制按钮", checked = floating,
                         onCheckedChange = { enabled ->
                             if (enabled && !Settings.canDrawOverlays(this@MiuixServiceActivity)) {

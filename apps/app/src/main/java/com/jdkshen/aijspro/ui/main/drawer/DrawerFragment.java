@@ -684,11 +684,42 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     }
 
     private void enableAccessibilityService() {
+        if (AccessibilityServiceTool.isFastEnableAvailable()) {
+            enableAccessibilityServiceFast();
+            return;
+        }
         if (!Pref.shouldEnableAccessibilityServiceByRoot()) {
             AccessibilityServiceTool.goToAccessibilitySetting();
             return;
         }
         enableAccessibilityServiceByRoot();
+    }
+
+    private void enableAccessibilityServiceFast() {
+        setProgress(mAccessibilityServiceItem, true);
+        Observable.fromCallable(() ->
+                        AccessibilityServiceTool.enableAccessibilityServiceByShizukuAndWaitFor(4000, true))
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(succeed -> {
+                    if (getContext() == null) return;
+                    if (succeed) {
+                        Toast.makeText(getContext(), R.string.text_enable_accessibility_service_fast_success,
+                                Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(getContext(), R.string.text_enable_accessibility_service_fast_failed,
+                                Toast.LENGTH_SHORT).show();
+                        AccessibilityServiceTool.goToAccessibilitySetting();
+                    }
+                    setProgress(mAccessibilityServiceItem, false);
+                    syncSwitchState();
+                }, error -> {
+                    if (getContext() == null) return;
+                    Toast.makeText(getContext(), R.string.text_enable_accessibility_service_fast_failed,
+                            Toast.LENGTH_SHORT).show();
+                    setProgress(mAccessibilityServiceItem, false);
+                    AccessibilityServiceTool.goToAccessibilitySetting();
+                });
     }
 
     private void enableAccessibilityServiceByRoot() {
