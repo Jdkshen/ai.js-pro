@@ -47,6 +47,7 @@ Debug APK 输出到 `apps/app/build/outputs/apk/common/debug/`。完整环境要
 
 ## 文档
 
+- [当前项目状态与接手说明](docs/PROJECT_STATUS.md)
 - [文档索引](docs/README.md)
 - [源码项目说明](docs/architecture/项目说明.md)
 - [Rhino / QuickJS 双引擎架构](docs/architecture/QUICKJS_ENGINE.md)
