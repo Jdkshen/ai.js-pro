@@ -1,9 +1,13 @@
 # AI.js Pro 剩余细节审计与收尾清单
 
-> 审计日期：2026-09-08  
-> 基线分支：`chore/upgrade-gradle-8`  
-> 当前包名：`com.jdkshen.aijspro`  
-> 当前版本：`1.0.1 (464)`  
+> 审计日期：2026-09-08
+>
+> 基线分支：`chore/upgrade-gradle-8`
+>
+> 当前包名：`com.jdkshen.aijspro`
+>
+> 当前版本：`1.0.1 (464)`
+>
 > 主要验证设备：小米 K40，Android 13 / API 33
 
 ## 1. 结论
