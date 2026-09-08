@@ -4,13 +4,13 @@
 // 验证实时刷新与主动停止行为。
 // ============================================================
 
-var backend = 'opencv';
+var backend = 'dnn';
 var CAPTURE_OPTIONS = { mode: 'fast', size: 720, fresh: false };
 if (!yolo.isAvailable(backend)) {
     throw new Error(backend + ' 不可用：' + yolo.getUnavailableReason(backend));
 }
 
-var modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
+var modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
 var detector = yolo.load({
     backend: backend,
     model: modelRoot + 'yolo26_320.onnx',

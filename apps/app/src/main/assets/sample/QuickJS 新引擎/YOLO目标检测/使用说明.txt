@@ -9,10 +9,10 @@ ImageReader RGBA Plane
   -> QuickJS 检测框数组
 
 目录结构：
-- opencv/   yolo26_320.onnx（OpenCV 5.0 DNN，模型引用 OpenCV 5.0 DNN版本/models/）
+- DNN/   OpenCV 5.0 DNN 脚本与唯一的 yolo26_320.onnx 模型
 
 包含六个模板案例：
-- YOLO基准对比.js：预热后检测 5 张最新缓存帧，输出平均推理耗时。
+- YOLO基准测试.js：预热后检测 5 张最新缓存帧，输出平均推理耗时。
 - YOLO运行环境测试.js：后端可用性 / 版本 / 模型加载耗时，无需截图授权。
 - YOLO单帧直连测试.js：截取一帧，推理并打印检测框与耗时。
 - YOLO实时直连测试.js：连续推理 100 帧，每 10 帧打印进度，结束时输出
@@ -59,5 +59,5 @@ yolo.load 可选参数（输入尺寸）：
 注意：OpenCV 的 OpenCL target 在骁龙/Adreno 上为负优化（实测 686ms），案例默认
 不启用；OpenCV 5.0 新图引擎不支持手动指定 target，使用默认 CPU 即最优。
 
-opencv 后端跟随 OpenCV 5.0 支持应用已支持的 ABI。
+DNN 后端由 OpenCV 5.0 提供，支持应用当前打包的 ABI。
 测试时请保证前台画面中有 COCO 数据集可识别目标，例如人、汽车、猫或狗。

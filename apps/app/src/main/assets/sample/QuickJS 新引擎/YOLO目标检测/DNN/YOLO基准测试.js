@@ -7,15 +7,15 @@ const frameCount = 5;
 // 基准直接使用最新缓存帧，避免把等待屏幕刷新算入模型性能。
 // 改成 mode: 'full' 可测原尺寸输入；720p 通常是实时视觉的平衡档。
 const CAPTURE_OPTIONS = { mode: 'fast', size: 720, fresh: false };
-const modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
-const backend = 'opencv';
+const modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
+const backend = 'dnn';
 
 if (!requestScreenCapture('portrait')) {
     throw new Error('用户取消了屏幕捕获授权');
 }
 
 if (!yolo.isAvailable(backend)) {
-    throw new Error('OpenCV 后端不可用：' + yolo.getUnavailableReason(backend));
+    throw new Error('DNN 后端不可用：' + yolo.getUnavailableReason(backend));
 }
 
 let detector = null;
@@ -50,4 +50,4 @@ try {
     if (detector) detector.close();
 }
 
-toastLog('OpenCV 平均耗时 ' + averageMs.toFixed(0) + ' ms');
+toastLog('DNN 平均耗时 ' + averageMs.toFixed(0) + ' ms');

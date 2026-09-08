@@ -6,14 +6,14 @@
 // 通过标准：1000 帧无崩溃、无句柄泄漏、内存不单调增长。
 // ============================================================
 
-var backend = 'opencv';
+var backend = 'dnn';
 // 直接读取 ImageReader 最新缓存帧，避免静止画面每轮阻塞 50ms。
 var CAPTURE_OPTIONS = { mode: 'fast', size: 720, fresh: false };
 if (!yolo.isAvailable(backend)) {
     throw new Error(backend + ' 不可用：' + yolo.getUnavailableReason(backend));
 }
 
-var modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
+var modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
 var detector = yolo.load({
     backend: backend,
     model: modelRoot + 'yolo26_320.onnx',

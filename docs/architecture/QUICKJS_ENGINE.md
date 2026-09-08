@@ -128,9 +128,9 @@ try {
 
 ```javascript
 // @engine quickjs
-const root = 'asset://sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
+const root = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
 const detector = yolo.load({
-    backend: 'opencv',
+    backend: 'dnn',
     model: root + 'yolo26_320.onnx',
     labels: root + 'labels.txt',
     inputSize: 320
@@ -149,7 +149,7 @@ try {
 }
 ```
 
-可直接运行 `apps/app/src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/` 中的 OpenCV 5.0 DNN 案例，包括环境测试、单帧、实时、持续识别、ROI 区域检测与基准脚本。`yolo.load({ backend: "opencv", model: ..., ... })` 加载 ONNX 模型，对 JS 暴露 `detect` / `close` / `isClosed`。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟约 100ms 中止；`detect` 支持 `region: [x, y, w, h]` 区域检测，检测框坐标会自动回移到全屏坐标系。
+可直接运行 `apps/app/src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/` 中的 OpenCV 5.0 DNN 案例，包括环境测试、单帧、实时、持续识别、ROI 区域检测与基准脚本。`yolo.load({ backend: "dnn", model: ..., ... })` 加载 ONNX 模型，对 JS 暴露 `detect` / `close` / `isClosed`。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟约 100ms 中止；`detect` 支持 `region: [x, y, w, h]` 区域检测，检测框坐标会自动回移到全屏坐标系。
 
 **OpenCV 引擎实测结论（骁龙870 / yolo26_320@320）**：
 - 新图引擎（`ENGINE_AUTO` 默认，KleidiCV CPU 路径）：当前 Release 零拷贝链路 100 帧实测推理 **p50 44.47ms / 平均 45.42ms**，检测正常；不支持 `setPreferableTarget`（仅 CPU）。

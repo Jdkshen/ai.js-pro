@@ -244,8 +244,8 @@ tasks.register('verifyBundledYoloSamples') {
 
     doLast {
         def expectedAssets = [
-                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/yolo26_320.onnx'),
-                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/labels.txt')
+                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_320.onnx'),
+                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt')
         ]
         def missingAssets = expectedAssets.findAll { !it.isFile() }
         def staleReferences = fileTree(bundledYoloSampleDir) {
@@ -254,7 +254,9 @@ tasks.register('verifyBundledYoloSamples') {
             def source = sample.getText('UTF-8')
             source.contains('NCNN版本') || source.contains('ONNX Runtime版本') ||
                     source.contains('asset://sample/YOLO目标检测/') ||
-                    source.contains('"sample/YOLO目标检测/')
+                    source.contains('"sample/YOLO目标检测/') ||
+                    source.contains('/YOLO目标检测/YOLO目标检测/') ||
+                    (sample.name.endsWith('.js') && (source =~ /backend\s*=\s*['"]opencv['"]/).find())
         }
         if (!missingAssets.isEmpty() || !staleReferences.isEmpty()) {
             def details = []
