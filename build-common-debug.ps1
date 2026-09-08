@@ -7,10 +7,6 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not $SkipNative) {
-    & (Join-Path $projectRoot 'apps\app\src\main\cpp\build-native.ps1')
-    if ($LASTEXITCODE -ne 0) {
-        throw "ImGui native build failed with exit code $LASTEXITCODE"
-    }
     & (Join-Path $projectRoot 'modules\autojs\src\main\cpp\build-quickjs.ps1')
     if ($LASTEXITCODE -ne 0) {
         throw "QuickJS native build failed with exit code $LASTEXITCODE"

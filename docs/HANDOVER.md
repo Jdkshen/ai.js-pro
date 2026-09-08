@@ -4,16 +4,16 @@
 
 - 抽屉“开发”分组新增“**MCP 服务**”。Miuix 页面提供启动/停止、连接地址、二维码、令牌、端口/局域网/操作目录设置、调用历史，以及编辑和执行授权。
 - 服务默认监听 `127.0.0.1:8788/mcp`。同一手机的 MT 客户端直接使用该地址；电脑端项目配置统一使用 USB Host 端口 `18790`（`adb forward tcp:18790 tcp:8788`）。本机兼容模式默认开启，loopback 可免令牌；错误令牌仍拒绝，局域网始终要求 Bearer 令牌。
-- 当前共 19 个工具：脚本/示例分页读取、递归搜索及游标续页、运行任务状态/异常/停止、APK 全局日志，以及私有工作区的打开/读取/编辑/删除/Diff/申请应用。客户端不能直接改真实脚本；必须在手机“工作区与修改历史”中审查 Diff 并确认，应用前校验原文件，应用后可安全回退。
+- 当前共 22 个工具：脚本/示例分页读取、递归搜索及游标续页、运行任务状态/异常/停止、APK 全局日志、双引擎 API 枚举/探测，以及私有工作区的打开/读取/编辑/删除/Diff/应用。默认只读；手机端开启“允许编辑并应用”后，`workspace_request_apply` 会直接应用，应用前校验原文件并备份，历史页可查看和安全回退。
 - 编辑和运行授权只在本次服务运行期间有效，停止服务自动撤销。路径、Host/Origin、正文/请求头、JSON 深度、文件大小、工作区总量和并发均有限制；支持有界 chunked 请求、宽松 `Accept` 以及 `2024-11-05`、`2025-03-26`、`2025-06-18` 客户端版本。
 - 教程/示例页已统一为 Miuix：后台建立资产索引，支持搜索、全部/JavaScript/文件夹/其他文件筛选、查看、运行和原子导入，保留原有示例数据与脚本执行逻辑。
-- 验证：Miuix Debug APK 构建成功；HTTP 传输与示例目录共 36 个 JVM 测试通过。K40 已验证无令牌 loopback 初始化、19 个工具发现、搜索续页、APK 日志、chunked 请求和工作区读取/Diff。
+- 验证：Miuix Debug APK 构建成功；HTTP 传输与示例目录共 36 个 JVM 测试通过。K40 的历史快照已验证无令牌 loopback 初始化、当时的工具发现、搜索续页、APK 日志、chunked 请求和工作区读取/Diff；当前 22 个工具需随本次变更重新执行发现与工作区确认回归。
 - MT 报错 `IllegalArgumentException: name is empty` 是客户端自定义请求头中存在空白“名称”行，发生在 OkHttp 发包之前；删除整条空白请求头即可。本机兼容模式不需要为了占位而新增请求头。
 - 详细连接、工具和安全说明见 `docs/MCP_SCRIPT_SERVICE.md`。本功能只在 `miuix` flavor 存在，普通 flavor 不注册页面或服务。
 
 ## Miuix 核心服务页试点（2026-09-05，最新）
 
-- 已实现并覆盖安装到 K40（cccc62c7），包名和数据目录不变。入口：左上角抽屉 → 首页 → 核心服务。启动页、原生文件列表及 ImGui 工作台仍保留，不是全应用迁移。
+- 已实现并覆盖安装到 K40（cccc62c7），包名和数据目录不变。入口：左上角抽屉 → 首页 → 核心服务。当前由 Miuix/原生页面组成，ImGui 工作台已从源码和 APK 移除。
 - 新增 `miuix` channel flavor；页面与清单位于 `apps/app/src/miuix/`。`ServiceStatusActivity` 仅在 `BuildConfig.MIUIX_PILOT` 为 true 时跳转；common/coolapk 保留原 View 服务页。
 - 固定依赖 `top.yukonga.miuix.kmp:miuix-android:0.3.1`，Compose UI/Foundation 1.7.6。该 Miuix AAR 要求 minSdk 26，故仅 miuix flavor 提高到 26；普通版本仍为 21。根 Kotlin / Compose 编译插件升级到 2.1.0，影响全工程编译；app 公共依赖补充 Compose runtime 1.7.6，保证非试点变体也能编译。
 - 页面复用既有悬浮窗管理器、前台服务及 Pref；权限页返回通过 onResume 刷新。支持跟随系统深浅色（实机本轮仅验证浅色）。无障碍是系统设置入口，不伪装成可直接授权的开关。
@@ -25,7 +25,7 @@
 ## 最新实机对齐状态（2026-09-05，优先于下文历史记录）
 
 - 用户要求主动在 K40（cccc62c7）打开 Auto.js Pro 与 AI.js Pro 对照截图、交互及滑动，发现差异后完成修改、构建、安装和复核。
-- 延续混合架构：ImGui 工作台保留，普通文件列表为原生 View；ImGuiWorkspaceActivity 在 onPause 暂停渲染和定时刷新，在 onResume 恢复。
+- 延续 Miuix + 原生 View 混合架构：普通文件列表和成熟业务逻辑仍由原生 View 承载；ImGui 工作台已移除。
 - 启动直接进入脚本列表，顶部五个分页；原服务首页在抽屉中保留。主色已为 #009688，不再采用下文历史记录中的浅色菜单首页。
 - 文件夹优先、文件随后，统一排序规则及升降序，移除第二条文件分类排序栏。根目录额外的“示例代码”为应用虚拟示例入口，不能算成读取实际目录不一致。
 - JS 文件显示完整文件名（含 .js）、居中的黑底白色代码图标、大小与修改时间两行；行点击编辑，右侧运行和更多。文件行最小高度 66dp，K40 测得 183px（含分隔线）。
@@ -135,7 +135,7 @@ third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / Colo
 
 ### 3.4 构建脚本
 - `build-common-debug.ps1` / `release.ps1`：移除 JDK 17 `--add-opens/--add-exports` hack 与 `--max-workers=1`（Gradle 8.9 不再需要）
-- 启动入口已改为 **Splash → MainActivity**（原来是 Splash → ImGuiWorkspaceActivity；ImGui 从首页「开发工具」进入）
+- 启动入口为 **Splash → MainActivity**；旧 ImGui 工作台及入口均已移除。
 
 ### 3.5 Miuix 第三页（资源）
 - 主导航第三页已从「社区 WebView」改为 `ui/resource/MiuixResourceFragment`，显示名同步改为「资源」。

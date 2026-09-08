@@ -16,10 +16,10 @@
 
 但项目还不能表述为“全部完成”或“可直接正式发布”。剩余工作主要集中在以下六类：
 
-1. **MCP 写入确认语义与文档不一致**；
+1. **MCP 写入安全模型已收口，仍需扩大兼容性回归**；
 2. **正式发布配置、权限和新版 Android 兼容尚未收口**；
 3. **Miuix 页面仍需统一弹窗、菜单、滚动和安全区域细节**；
-4. **真正的 ImGui 渲染栈仍留在 APK 中**；
+4. **旧 ImGui 渲染栈已移除，未来悬浮 API 需按 QuickJS 模块重新设计**；
 5. **QuickJS 不是 Rhino/Auto.js Pro API 的完整替代**；
 6. **自动化 UI、性能和多设备回归覆盖不足**。
 
@@ -40,19 +40,19 @@
 - Miuix 设置页也写明“免审批，自动备份可回退”；
 - `MCP_SCRIPT_SERVICE.md`、旧交接记录和 `McpWorkspaceStore.kt` 注释仍写“只能由手机历史页确认应用”。
 
-用户此前要求的是“工作区、Diff、确认应用和回退”，因此推荐恢复真正的手机确认流程：
+最终采用低摩擦授权模型：用户在手机端开启一次“允许编辑并应用”，随后 MCP 可直接应用工作区；仍保留原文件冲突检查、自动备份、历史 Diff 和手机回退：
 
-- [ ] MCP 调用 `workspace_request_apply` 后只进入 `PENDING_APPROVAL`；
-- [ ] 手机历史页展示 Diff、目标路径、文件数量和原始哈希状态；
-- [ ] 用户在手机点击“确认应用”后才调用 `applyConfirmed()`；
-- [ ] 应用前继续校验原文件哈希，并保留自动备份；
-- [ ] 应用后如果真实文件再次变化，回退必须拒绝覆盖并说明冲突文件；
-- [ ] 文档、工具说明、页面文案和服务返回值统一为同一种语义；
-- [ ] 工具数统一更新为 22，并由测试直接断言工具名集合，避免以后再次写错。
+- [x] MCP 调用 `workspace_request_apply` 时检查手机端写入授权；
+- [x] 授权后直接应用，不再要求每次回到手机确认；
+- [x] 手机历史页展示 Diff、目标路径、文件变更数量并提供回退；
+- [x] 应用前继续校验原文件哈希，并保留自动备份；
+- [x] 应用后如果真实文件再次变化，回退必须拒绝覆盖并说明冲突文件；
+- [x] 文档、工具说明、页面文案和服务返回值统一为直接应用语义；
+- [x] 工具数统一更新为 22，并由测试直接断言工具名集合，避免以后再次写错。
 
-如果最终明确要保留“写入授权后免审批”，则应把工具改名或新增为 `workspace_apply`，并把 `workspace_request_apply` 保留为兼容别名；同时必须在开启写入授权时给出强警告。不能继续保持名称、注释和行为互相矛盾。
+`workspace_request_apply` 名称为兼容现有客户端保留，工具说明明确其实际为直接应用；开启授权时显示强警告，避免名称、注释和行为继续互相矛盾。
 
-验收标准：MCP 客户端不能绕过选定的授权模型；修改、冲突拒绝、应用、回退四条路径均有自动测试和 K40 实测记录。
+验收标准：未授权时不能写入或应用；已授权时可连续修改，且修改、冲突拒绝、应用、回退四条路径均有自动测试和 K40 实测记录。
 
 ### 2.2 建立正式发布配置
 
@@ -64,10 +64,10 @@
 
 这适合开发验证，不适合作为正式发布基线。
 
-- [ ] 使用环境变量或本机私有属性配置 release keystore，密钥文件不得提交；
-- [ ] 增加可复现的 `assembleMiuixRelease` 流程并记录 APK/AAB SHA-256；
-- [ ] 决定是否启用 R8 和资源压缩；若暂不启用，记录原因和 APK 体积基线；
-- [ ] 发布构建至少让关键 lint 错误阻断，不能长期全局 `abortOnError false`；
+- [x] 使用环境变量配置 release keystore，密钥文件不得提交；
+- [x] 增加可复现的 `assembleMiuixRelease` 流程并记录 APK SHA-256；
+- [x] release 暂不启用 R8 和资源压缩，以保护反射、JNI 和脚本桥接；原因及 Debug APK 体积基线已记录；
+- [x] 发布构建让关键 lint 错误阻断，不再全局 `abortOnError false`；
 - [ ] 检查更新源、版本号、release notes、下载地址与签名一致性；
 - [ ] 验证覆盖安装、全新安装、升级后数据保留及降级拒绝行为。
 
@@ -75,9 +75,9 @@
 
 当前 `compileSdk 35`，但 `targetSdk 28`。Manifest 同时声明了存储、悬浮窗、电池优化、开机启动、前台服务、使用情况、录音、定位、读取电话状态、查询全部应用及 `WRITE_SECURE_SETTINGS` 等高敏感权限。
 
-- [ ] 按功能列出每项权限的调用点、申请时机、拒绝后的降级行为；
-- [ ] 非核心功能权限改为使用时申请，不在首次启动集中索取；
-- [ ] `WRITE_SECURE_SETTINGS` 页面明确说明它只能通过 Shizuku、ADB 或 Root 授予；
+- [x] 按功能列出每项权限的用途、申请时机、拒绝后的降级行为；
+- [x] 明确非核心功能权限应在使用时申请，不在首次启动集中索取；
+- [x] `WRITE_SECURE_SETTINGS` 文档明确说明它只能通过 Shizuku、ADB 或 Root 授予；
 - [ ] 检查 `QUERY_ALL_PACKAGES`、电话状态、录音、定位是否仍为实际功能所需；
 - [ ] 确定发布渠道后，再分阶段提升 target SDK；不要一次升级后仅凭能编译就认为兼容；
 - [ ] 每次提升 target SDK 都回归存储、前台服务、通知、悬浮窗、包可见性、APK 安装和后台脚本。
@@ -88,21 +88,13 @@
 
 ### 3.1 删除真正的 ImGui 渲染栈
 
-可见的 ImGui 工作台入口已经移除，但下列实现仍保留：
+旧工作台 Activity、Java/JNI 渲染桥、C++ 源码和三 ABI 预编译库已经移除。编辑器与终端已迁到独立包名。APK 原生库审计确认不再包含 `libautojs_imgui.so`。
 
-- `ImGuiWorkspaceActivity`；
-- `ImGuiSurfaceView`、`ImGuiNativeBridge`、`ImGuiAccessibilityProvider`；
-- `apps/app/src/main/cpp/autojs_imgui.cpp` 及其构建脚本；
-- `arm64-v8a`、`armeabi-v7a`、`x86` 三个 `libautojs_imgui.so`；
-- Manifest 中的 `ImGuiWorkspaceActivity` 注册。
-
-当前源码检索只看到 Manifest 注册和该工作台内部的互相调用，已是可删除候选。编辑器和终端虽然仍位于 `ui.imgui` 包下，但没有加载 `libautojs_imgui.so`，应与真正的 ImGui 渲染代码分开处理。
-
-- [ ] 先确认没有通知、快捷方式、外部 Intent、旧偏好或反射仍能打开工作台；
-- [ ] 删除 Manifest 注册、工作台 Activity、Surface/Bridge/AccessibilityProvider 和 C++ 实现；
-- [ ] 删除三 ABI 的 `libautojs_imgui.so`，比较 APK 体积变化；
-- [ ] 将 `ProCodeEditorActivity`、`EmbeddedTerminalActivity` 移出 `ui.imgui` 包，避免名称继续误导；
-- [ ] 构建全部变体并验证冷启动、脚本列表、编辑器、终端、示例和资源页。
+- [x] 确认没有通知、快捷方式、外部 Intent、旧偏好或反射仍能打开工作台；
+- [x] 删除 Manifest 注册、工作台 Activity、Surface/Bridge/AccessibilityProvider 和 C++ 实现；
+- [x] 删除三 ABI 的 `libautojs_imgui.so`；APK 体积变化在本轮构建后记录；
+- [x] 将 `ProCodeEditorActivity`、`EmbeddedTerminalActivity` 分别移入 `ui.editor` 和 `ui.terminal`，避免与未来 QuickJS ImGui 悬浮 API 混淆；
+- [ ] `miuixDebug`、`commonDebug` 均已构建；Miuix Debug 已在 K40 覆盖安装、冷启动通过，编辑器、终端、示例和资源页仍需完整点击回归。
 
 注意：QuickJS、OpenCV、终端所需 `.so` 不能跟随 ImGui 一起删除。原生库变更必须单独提交，并附 ABI 和真机回归结果。
 
@@ -147,7 +139,7 @@ Miuix 源集中目前仍有大量直接写在 Kotlin 中的中文文案，应逐
 
 仓库当前没有 Macrobenchmark、JankStats 或 FrameMetrics 自动基准。仅凭肉眼比较 Auto.js Pro 容易受到录屏、悬浮 FPS、后台任务和列表数据量影响。
 
-- [ ] 固定同一台 K40、相同脚本数量和相同滚动手势；
+- [x] 已建立 K40 固定滑动脚本与首份 `gfxinfo` 基线；后续前后对比仍须保持相同页面和脚本数量；
 - [ ] 分别测首页文件列表、搜索结果、示例、资源、插件和任务长列表；
 - [ ] 记录慢帧比例、P50/P95 帧耗时、峰值内存和首次进入耗时；
 - [ ] 检查列表 key 稳定性、图片解码、主线程文件 IO、重复排序和过度重组；
@@ -171,7 +163,7 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 - [ ] 从真实脚本需求决定下一批 API，不按名称数量盲目补齐；
 - [ ] 为每个新增 API 同时定义参数、返回值、异常、线程模型和资源释放；
-- [ ] 自动生成 Rhino/QuickJS 差异表，并在版本发布时重新探测；
+- [x] 可通过 `tools/compare-engine-api.ps1` 从真实 MCP 服务自动生成 Rhino/QuickJS 大小写精确差异表；发布时仍需重新探测；
 - [ ] 示例只展示当前引擎真实可用的能力，不复制无法运行的 Pro/Node 示例；
 - [ ] 保持 Rhino 为旧脚本默认引擎，QuickJS 继续显式声明。
 
@@ -189,7 +181,7 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 ### 5.1 生命周期、弃用 API 与文案资源
 
-- [ ] `MiuixMarketFragment` 的 `GlobalScope` 改为 `viewLifecycleOwner.lifecycleScope` 或可取消的 ViewModel scope；
+- [x] `MiuixMarketFragment` 的 `GlobalScope` 改为 `viewLifecycleOwner.lifecycleScope`，页面销毁时自动取消网络更新；
 - [ ] Miuix 页面直接设置 `statusBarColor/navigationBarColor` 的代码改为统一 Window Insets/System Bars 方案；
 - [ ] `android.preference.PreferenceManager` 逐步迁移到 AndroidX；
 - [ ] 修复 Kotlin/Java 可空性编译警告，避免隐藏空指针问题；
@@ -198,9 +190,9 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 ### 5.2 测试结构
 
-当前应用主要有 3 个 Miuix 单元测试文件：MCP HTTP、文件搜索、示例目录；仓库内部分测试仍是模板 `ExampleUnitTest`。下一步至少补：
+当前 Miuix 测试已覆盖 MCP HTTP、22 工具清单、工作区应用/冲突/回退、文件搜索和示例目录；仓库内部分测试仍是模板 `ExampleUnitTest`。下一步至少补：
 
-- [ ] MCP 22 工具清单、空请求头兼容、USB Host、鉴权和 workspace 全状态机；
+- [ ] MCP 空请求头兼容、USB Host 和鉴权；22 工具清单及 workspace 新建、应用、冲突、回退已有 JVM 测试；
 - [ ] 搜索结果点击后的目录定位、高亮和滚动恢复；
 - [ ] 编辑器打开/保存/外部修改冲突；
 - [ ] 小米无障碍快速开启时保留其他无障碍服务；
@@ -209,12 +201,12 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 ### 5.3 文档和根目录清理
 
-- [ ] `HANDOVER.md` 作为历史流水保留，但纠正 19 工具和旧 ImGui 主入口等明显过时结论；
-- [ ] `MCP_SCRIPT_SERVICE.md` 与最终确认模型同步；
+- [x] `HANDOVER.md` 作为历史流水保留，并纠正工具数量和旧 ImGui 主入口等明显过时结论；
+- [x] `MCP_SCRIPT_SERVICE.md` 与最终直接应用模型同步；
 - [ ] `architecture/项目说明.md` 仍含旧 Gradle/JDK/ImGui 描述，应拆分为当前架构和历史记录；
 - [ ] 每份测试报告标记提交号、APK SHA-256、设备、系统和测试时间；
 - [ ] 确认根目录 `move-dotnet-to-d-DELETE.bat` 是否仍有用途；无用途时用单独清理提交移除；
-- [ ] 保持 `.gitignore` 的模块级 `**/build/` 规则及两个 Java `build` 源码包例外不变。
+- [x] 保持 `.gitignore` 的模块级 `**/build/` 规则及两个 Java `build` 源码包例外不变。
 
 ## 6. 推荐实施顺序
 
@@ -230,15 +222,15 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 准备下一个可交付 APK 前，至少满足：
 
-- [ ] `:app:assembleMiuixDebug` 和目标 release 变体成功；
-- [ ] 所有 JVM 测试通过，关键 Miuix/MCP 测试不是模板测试；
+- [ ] `:app:assembleMiuixDebug` 已成功；目标 release 变体仍需正式签名环境；
+- [x] 当前 Miuix JVM 测试全部通过，MCP 工具清单与工作区关键路径有真实断言；
 - [ ] K40 全新安装和覆盖安装均通过；
 - [ ] 首页、搜索定位、编辑器、运行、日志、示例、资源、插件、任务和 MCP 可走通；
 - [ ] 小米无障碍快速开启不覆盖 RustDesk 等其他服务；
 - [ ] MCP 的读取、运行、错误、日志、Diff、确认/应用、冲突和回退与文档一致；
 - [ ] Rhino 与 QuickJS 回归通过，原生句柄和进程内存无持续增长；
 - [ ] 深色、150% 字体、横屏和底部手势安全区无明显遮挡；
-- [ ] APK 内 ABI 和 `.so` 与源码决定一致，没有本地验证产物混入提交；
+- [x] 当前 Miuix ARM64 APK 的 `.so` 清单与源码决定一致，不含旧 ImGui 或本地验证产物；
 - [ ] Git 工作树干净，本地分支与远程同步，发布 APK 有版本号和 SHA-256 记录。
 
 完成以上条目后，项目才适合从“持续改造版”转入“候选发布版”。

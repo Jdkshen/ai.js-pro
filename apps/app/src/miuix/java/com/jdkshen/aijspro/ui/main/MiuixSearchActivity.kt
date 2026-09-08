@@ -1,8 +1,5 @@
 package com.jdkshen.aijspro.ui.main
 
-import android.content.Intent
-import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,25 +33,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
-import com.jdkshen.aijspro.theme.AijsMiuixTheme
-import com.jdkshen.aijspro.theme.isAijsDarkTheme
-import com.jdkshen.aijspro.ui.edit.EditActivity
-import com.jdkshen.aijspro.ui.edit.EditorView
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -69,44 +57,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-/** Miuix file search with the same options as the ImGui workspace, executed off the UI thread. */
-class MiuixSearchActivity : ComponentActivity() {
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(ComposeView(this).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                val dark = isAijsDarkTheme()
-                AijsMiuixTheme {
-                    val bg = MiuixTheme.colorScheme.background
-                    SideEffect {
-                        window.statusBarColor = bg.toArgb()
-                        window.navigationBarColor = bg.toArgb()
-                        WindowInsetsControllerCompat(window, window.decorView).apply {
-                            isAppearanceLightStatusBars = !dark
-                            isAppearanceLightNavigationBars = !dark
-                        }
-                    }
-                    MiuixSearchOverlayContent(
-                        onDismiss = { finish() },
-                        onItemSelected = { file ->
-                            if (file.isDirectory) finish()
-                            else openFile(File(Pref.getScriptDirPath()).absoluteFile, file)
-                        }
-                    )
-                }
-            }
-        })
-    }
-
-    private fun openFile(scriptRoot: File, file: File) {
-        if (file.isDirectory || !MiuixFileSearch.isWithinRoot(scriptRoot, file)) return
-        startActivity(Intent(this, EditActivity::class.java)
-            .putExtra(EditorView.EXTRA_PATH, file.absolutePath))
-    }
-}
 
 @Composable
 internal fun MiuixSearchOverlayContent(

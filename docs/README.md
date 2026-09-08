@@ -6,16 +6,19 @@
 
 - [项目现状与接手说明](PROJECT_STATUS.md)：当前主架构、功能边界、构建安装、K40 状态和后续整理顺序。接手项目应先读此文。
 - [剩余细节审计与收尾清单](REMAINING_WORK.md)：按 P0/P1/P2 列出尚需处理的 MCP、发布、Miuix、ImGui、引擎、测试和文档事项。
+- [权限与发布基线](PERMISSIONS_AND_RELEASE.md)：正式签名变量、release 构建、SDK 范围、权限用途和发布验收。
 - [详细交接记录](HANDOVER.md)：按时间累积的开发背景和历史验证；与当前状态冲突时，以项目现状说明和当前源码为准。
 
 ## 架构
 
 - [源码项目说明](architecture/项目说明.md)：模块职责、运行流程、开发入口和维护风险。
 - [Rhino / QuickJS 双引擎架构](architecture/QUICKJS_ENGINE.md)：引擎选择、API 覆盖、Native Frame 和构建方式。
+- [QuickJS ImGui 悬浮窗 API 边界](architecture/QUICKJS_IMGUI_FLOATY.md)：脚本调用的 ImGui 悬浮 UI，以及与 Miuix 应用界面的分工。
 
 ## 指南
 
 - [编译指南](guides/编译指南.md)：环境要求、原生构建、Gradle 组装、输出位置和常见问题。
+- [双引擎 API 与 UI 性能验证](guides/ENGINE_API_AND_PERFORMANCE.md)：可重复的 JVM 测试、API 差异生成和真机帧耗时流程。
 - [CodeGraph 使用说明](guides/CODEGRAPH.md)：代码知识图谱索引与查询，供开发者与 AI 助手快速定位源码和调用链。
 
 ## 开发计划

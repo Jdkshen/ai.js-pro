@@ -65,7 +65,7 @@ import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
-import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity
+import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
 import kotlinx.coroutines.CancellationException

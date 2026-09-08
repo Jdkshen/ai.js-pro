@@ -61,7 +61,7 @@ import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.common.ScriptOperations
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
-import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity
+import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
 import io.reactivex.android.schedulers.AndroidSchedulers

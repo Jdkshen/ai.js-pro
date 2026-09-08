@@ -8,12 +8,19 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /**
- * Private copy-on-write workspaces. MCP clients edit only [work]; applying to the real script
- * directory is deliberately available only to the local confirmation UI.
+ * Private copy-on-write workspaces. MCP clients edit only [work]. Applying to the real script
+ * directory requires the phone-side write authorization and always keeps conflict checks/backups.
  */
-class McpWorkspaceStore(context: Context, private val scriptRoot: File) {
-    private val appContext = context.applicationContext
-    private val root = File(appContext.filesDir, "mcp/workspaces")
+class McpWorkspaceStore private constructor(
+    private val root: File,
+    private val scriptRoot: File,
+    private val retentionDays: Int
+) {
+    constructor(context: Context, scriptRoot: File) : this(
+        File(context.applicationContext.filesDir, "mcp/workspaces"),
+        scriptRoot,
+        McpSettings.historyDays(context.applicationContext)
+    )
 
     data class Workspace(
         val id: String,
@@ -25,10 +32,17 @@ class McpWorkspaceStore(context: Context, private val scriptRoot: File) {
         val changedFiles: Int
     )
 
-    @Synchronized fun open(path: String): Workspace {
+    @Synchronized fun open(path: String, create: Boolean = false): Workspace {
         cleanup()
         val target = resolveScript(path)
-        if (!target.exists()) throw IllegalArgumentException("目标不存在")
+        if (!target.exists() && !create) throw IllegalArgumentException("目标不存在；新建文本文件请传 create=true")
+        if (create && target.exists()) throw IllegalArgumentException("新建目标已存在")
+        if (create) {
+            if (path.isBlank()) throw IllegalArgumentException("新建文件路径不能为空")
+            if (target.extension.lowercase() !in TEXT_EXTENSIONS) throw IllegalArgumentException("只能新建支持的文本文件")
+            if (target.parentFile?.isDirectory != true) throw IllegalArgumentException("新建文件的父目录不存在")
+        }
+        val targetIsFile = target.isFile || create
         val id = "ws-" + UUID.randomUUID().toString().substring(0, 8)
         val dir = File(root, id)
         val base = File(dir, "base")
@@ -53,11 +67,11 @@ class McpWorkspaceStore(context: Context, private val scriptRoot: File) {
                 if (!inside(target, canonical)) throw IllegalArgumentException("项目包含越界路径")
                 copyOne(canonical, canonical.relativeTo(target).invariantSeparatorsPath)
             }
-            if (count == 0) throw IllegalArgumentException("目标中没有可编辑文本文件")
+            if (count == 0 && !create) throw IllegalArgumentException("目标中没有可编辑文本文件")
             val now = System.currentTimeMillis()
             writeMeta(dir, JSONObject().apply {
                 put("id", id); put("targetPath", target.relativeTo(scriptRoot).invariantSeparatorsPath)
-                put("targetIsFile", target.isFile); put("createdAt", now); put("updatedAt", now)
+                put("targetIsFile", targetIsFile); put("createdAt", now); put("updatedAt", now)
                 put("state", STATE_OPEN); put("pendingApproval", false)
                 put("originalHashes", JSONObject(hashes as Map<*, *>)); put("appliedHashes", JSONObject())
             })
@@ -145,7 +159,13 @@ class McpWorkspaceStore(context: Context, private val scriptRoot: File) {
         return summary(dir)
     }
 
-    /** Local UI only. Checks every original hash before touching the script directory. */
+    /** Applies an authorized MCP request without a second prompt. */
+    @Synchronized fun applyAuthorized(id: String): Workspace {
+        requestApply(id)
+        return applyConfirmed(id)
+    }
+
+    /** Checks every original hash before touching the script directory. */
     @Synchronized fun applyConfirmed(id: String): Workspace {
         val dir = workspaceDir(id)
         val meta = readMeta(dir)
@@ -280,10 +300,14 @@ class McpWorkspaceStore(context: Context, private val scriptRoot: File) {
     }
     private fun cleanup() {
         root.mkdirs()
-        val cutoff = System.currentTimeMillis() - McpSettings.historyDays(appContext).toLong() * 86_400_000L
+        val cutoff = System.currentTimeMillis() - retentionDays.toLong() * 86_400_000L
         root.listFiles().orEmpty().filter { it.isDirectory && it.lastModified() < cutoff }.forEach { it.deleteRecursively() }
     }
     companion object {
+        /** JVM-test entry point; production callers must use the Context constructor. */
+        internal fun forTesting(storageRoot: File, scriptRoot: File) =
+            McpWorkspaceStore(storageRoot, scriptRoot, retentionDays = 30)
+
         private const val META = "workspace.json"
         private const val STATE_OPEN = "OPEN"
         private const val STATE_PENDING = "PENDING_APPROVAL"

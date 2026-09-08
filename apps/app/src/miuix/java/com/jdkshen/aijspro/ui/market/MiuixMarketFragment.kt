@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.network.TopicService
@@ -40,8 +41,9 @@ import com.jdkshen.aijspro.network.entity.topic.Topic
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.joda.time.format.DateTimeFormat
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
@@ -70,19 +72,16 @@ class MiuixMarketFragment : ViewPagerFragment(0) {
 
     private fun refresh() {
         loading = true
-        GlobalScope.launch(Dispatchers.IO) {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val list = TopicService.getScriptsTopics()
-                GlobalScope.launch(Dispatchers.Main) {
-                    topics = list
-                    loading = false
-                }
+                topics = withContext(Dispatchers.IO) { TopicService.getScriptsTopics() }
+                loading = false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 e.printStackTrace()
-                GlobalScope.launch(Dispatchers.Main) {
-                    loading = false
-                    Toast.makeText(requireContext(), "加载失败，请稍后重试", Toast.LENGTH_SHORT).show()
-                }
+                loading = false
+                Toast.makeText(requireContext(), "加载失败，请稍后重试", Toast.LENGTH_SHORT).show()
             }
         }
     }

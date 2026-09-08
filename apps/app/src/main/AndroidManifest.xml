@@ -73,19 +73,12 @@
             android:theme="@style/AppTheme.FullScreen">
         </activity>
         <activity
-            android:name=".ui.imgui.ImGuiWorkspaceActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize"
-            android:hardwareAccelerated="true"
-            android:label="@string/text_imgui_workspace"
-            android:screenOrientation="unspecified"
-            android:theme="@style/AppTheme.FullScreen"/>
-        <activity
-            android:name=".ui.imgui.EmbeddedTerminalActivity"
+            android:name=".ui.terminal.EmbeddedTerminalActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize"
             android:label="终端"
             android:windowSoftInputMode="adjustResize"/>
         <activity
-            android:name=".ui.imgui.ProCodeEditorActivity"
+            android:name=".ui.editor.ProCodeEditorActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:label="代码编辑器"
             android:windowSoftInputMode="adjustResize"/>

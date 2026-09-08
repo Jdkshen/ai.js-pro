@@ -22,7 +22,7 @@ import com.jdkshen.aijspro.external.ScriptIntents
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.external.shortcut.Shortcut
 import com.jdkshen.aijspro.external.shortcut.ShortcutActivity
-import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity
+import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 
 import org.mozilla.javascript.RhinoException
 

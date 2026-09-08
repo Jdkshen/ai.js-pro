@@ -102,7 +102,7 @@ internal class McpTools(private val context: Context, private val event: (String
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
         add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.2.0") })
-        addProperty("instructions", "默认只读。开启编辑授权后：创建/修改工作区，调用 workspace_request_apply 直接应用到真实脚本（免审批；会校验原文件未被外部改动并保留备份）。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
+        addProperty("instructions", "默认只读。用户在手机端开启编辑授权后，客户端可创建/修改私有工作区，并调用 workspace_request_apply 直接应用到真实脚本；工具名为兼容旧客户端保留。应用时会校验原文件未被外部改动并保留备份，可在手机历史页回退。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
     }
 
     private fun listTools() = JsonObject().apply {
@@ -122,13 +122,16 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("list_engine_api", "枚举指定引擎（quickjs/rhino）当前可用的全局 API 名称列表", objSchema("engine")))
             add(tool("probe_engine_api", "探测指定引擎中某个全局 API 的类型与成员（object/function 及 Object.keys）", objSchema("engine", "name", required = arrayOf("engine", "name"))))
             add(tool("stop_script", "停止本 MCP 发起的运行任务", objSchema("executionId", required = arrayOf("executionId"))))
-            add(tool("workspace_open", "从真实脚本创建私有工作区快照", objSchema("path", required = arrayOf("path"))))
+            add(tool("workspace_open", "从真实脚本创建私有工作区快照；目标不存在时可传 create=true 创建空的新文件工作区", objSchema("path", "create", required = arrayOf("path"))))
             add(tool("workspace_list", "列出工作区及待确认状态"))
             add(tool("workspace_read", "读取工作区文件", objSchema("workspaceId", "path", "offset", "maxBytes", required = arrayOf("workspaceId", "path"))))
             add(tool("workspace_write", "修改工作区，不会直接覆盖真实脚本；需写入授权", objSchema("workspaceId", "path", "content", required = arrayOf("workspaceId", "path", "content"))))
             add(tool("workspace_delete", "在工作区中标记删除文件；需写入授权", objSchema("workspaceId", "path", required = arrayOf("workspaceId", "path"))))
             add(tool("workspace_diff", "查看工作区与创建时快照的 Diff", objSchema("workspaceId", required = arrayOf("workspaceId"))))
-            add(tool("workspace_request_apply", "将工作区修改直接应用到真实脚本（免审批；原文件被外部改动时会拒绝，应用前自动备份）", objSchema("workspaceId", required = arrayOf("workspaceId"))))
+            add(tool("workspace_request_apply", "在手机已开启编辑授权时直接应用工作区；校验原文件、自动备份并支持历史回退（工具名为兼容保留）", objSchema("workspaceId", required = arrayOf("workspaceId"))))
+            check(map { it.asJsonObject.get("name").asString } == McpToolCatalog.names) {
+                "MCP 工具定义与公开目录不一致"
+            }
         })
     }
 
@@ -162,7 +165,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "list_engine_api" -> listEngineApi(args)
             "probe_engine_api" -> probeEngineApi(args)
             "stop_script" -> stopScript(args)
-            "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"))))
+            "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
             "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
             "workspace_read" -> toolJson(readBytes(workspaces.read(args.string("workspaceId"), args.string("path")), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
             "workspace_write" -> {
@@ -173,9 +176,10 @@ internal class McpTools(private val context: Context, private val event: (String
             "workspace_diff" -> toolResult(workspaces.diff(args.string("workspaceId")))
             "workspace_request_apply" -> {
                 requireWrite()
-                val ws = workspaces.requestApply(args.string("workspaceId"))
-                val applied = workspaces.applyConfirmed(ws.id)
-                toolJson(workspaceJson(applied).apply { addProperty("message", "已直接应用到真实脚本（免审批），修改前已备份，可在历史页回退") })
+                val applied = workspaces.applyAuthorized(args.string("workspaceId"))
+                toolJson(workspaceJson(applied).apply {
+                    addProperty("message", "已应用到真实脚本；修改前已校验并备份，可在手机历史页回退")
+                })
             }
             else -> throw ToolError("未知工具：$name")
         }
@@ -462,7 +466,11 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun tool(name: String, description: String, schema: JsonObject = objSchema()) = JsonObject().apply { addProperty("name", name); addProperty("description", description); add("inputSchema", schema) }
     private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) = JsonObject().apply {
         addProperty("type", "object"); add("properties", JsonObject().apply { names.forEach { n -> add(n, JsonObject().apply {
-            addProperty("type", if (n in INTEGER_PARAMS) "integer" else "string")
+            addProperty("type", when (n) {
+                in INTEGER_PARAMS -> "integer"
+                in BOOLEAN_PARAMS -> "boolean"
+                else -> "string"
+            })
         }) } }); if (required.isNotEmpty()) add("required", JsonArray().apply { required.forEach { add(it) } }); addProperty("additionalProperties", false)
     }
     private fun toolJson(json: JsonObject) = toolResult(json.toString())
@@ -484,6 +492,7 @@ internal class McpTools(private val context: Context, private val event: (String
         private val ACTIVE_STATES = setOf("QUEUED", "RUNNING")
         private val TEXT_EXTENSIONS = setOf("js", "json", "txt", "md", "xml", "css", "html")
         private val INTEGER_PARAMS = setOf("offset", "limit", "maxBytes", "afterId", "timeoutSeconds")
+        private val BOOLEAN_PARAMS = setOf("wait", "create")
         private const val MAX_READ_FILE_BYTES = 8L * 1024 * 1024
         private const val MAX_SEARCH_FILES = 2000
         private const val MAX_SEARCH_HITS = 2000

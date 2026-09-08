@@ -13,7 +13,7 @@ AI.js Pro 是从 Auto.js 4.4.1 演进而来的 Android JavaScript IDE 与自动�
 
 - **Miuix 是主要显示层**：`miuix` flavor 提供主导航、服务、设置、文档、日志、示例、资源、插件、任务和 MCP 页面。
 - **原生 View 继续承载成熟业务逻辑**：脚本目录、文件操作、运行服务及部分编辑能力继续复用原实现，避免一次性重写导致脚本行为变化。
-- **ImGui 不再有可见工作台入口**：相关 Java/C++ 源码和三 ABI 的 `libautojs_imgui.so` 暂时保留，作为尚未彻底拆除的历史实现；不能再把它描述为当前主页。
+- **ImGui 工作台已彻底移除**：工作台 Activity、Java/JNI 渲染桥、C++ 源码及三 ABI 的 `libautojs_imgui.so` 已删除。代码编辑器和终端已分别迁入 `ui.editor` 与 `ui.terminal`，继续作为独立原生功能。
 - **双引擎并存**：Rhino 负责旧 Auto.js 脚本兼容；首行声明 `// @engine quickjs` 时使用 QuickJS。
 - **MCP 已接入脚本开发与调试**：支持脚本/示例读取、搜索分页、任务状态、异常与 APK 日志、工作区 Diff、应用和回退。
 - **小米无障碍已改为快速开启**：首次通过 Shizuku、ADB 或 Root 授予 `WRITE_SECURE_SETTINGS`，以后直接写入安全设置；不可用时才回退系统设置。
@@ -58,7 +58,7 @@ AI.js Pro 是从 Auto.js 4.4.1 演进而来的 Android JavaScript IDE 与自动�
 
 ### ImGui 现状
 
-可见入口已移除，但 `apps/app/src/main/java/.../ui/imgui/`、`apps/app/src/main/cpp/` 和三个 `libautojs_imgui.so` 仍在仓库。彻底删除前必须先确认没有编辑器、终端、图像工具或 JNI 调用链依赖它，再同时删除源码、清单声明、Gradle/CMake 配置和预编译库。
+真正的 ImGui 工作台渲染栈已经删除，不再参与 APK 或原生构建。`ProCodeEditorActivity` 与 `EmbeddedTerminalActivity` 已分别迁入 `ui.editor` 与 `ui.terminal`，且不加载 ImGui 动态库。未来需要的 ImGui 是 QuickJS 可调用的独立悬浮窗 API，不恢复旧工作台入口。
 
 ## 4. JavaScript 引擎
 

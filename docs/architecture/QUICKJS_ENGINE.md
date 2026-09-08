@@ -285,4 +285,6 @@ modules/autojs/src/main/cpp/
 2. `images` 高级功能：旋转、阈值化、模糊、形态学、Base64 转换和 OCR 桥；
 3. Native Frame 可增加句柄数/占用字节调试统计，用于长时脚本泄漏诊断。
 
+QuickJS 后续的 ImGui 能力定位为脚本可调用的悬浮窗 API，不是 APK 主界面。具体线程、生命周期和 Native 边界见 [QuickJS ImGui 悬浮窗 API 边界](QUICKJS_IMGUI_FLOATY.md)。
+
 注意：NCNN / ONNX Runtime YOLO 后端已于 2026-08-30 移除，相关示例与第三方库不再维护；YOLO 统一走 OpenCV 5.0 DNN 后端。

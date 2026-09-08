@@ -27,7 +27,7 @@ import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.common.ScriptOperations;
 import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
 import com.jdkshen.aijspro.ui.edit.theme.Theme;
-import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity;
+import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity;
 
 import com.stardust.theme.ThemeColorManager;
 import com.stardust.util.SparseArrayEntries;

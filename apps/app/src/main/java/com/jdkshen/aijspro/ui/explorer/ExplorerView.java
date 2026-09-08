@@ -894,6 +894,20 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         }
 
         void showSortOptions() {
+            int[] ids = {
+                    R.id.action_sort_by_name,
+                    R.id.action_sort_by_date,
+                    R.id.action_sort_by_type,
+                    R.id.action_sort_by_size
+            };
+            String[] labels = {
+                    getResources().getString(R.string.text_name),
+                    getResources().getString(R.string.text_time),
+                    getResources().getString(R.string.text_type),
+                    getResources().getString(R.string.text_size)
+            };
+            if (showMiuixActionMenu(ids, labels,
+                    getResources().getString(R.string.text_sort))) return;
             PopupMenu popupMenu = new PopupMenu(getContext(), mSort);
             popupMenu.inflate(R.menu.menu_sort_options);
             popupMenu.setOnMenuItemClickListener(ExplorerView.this);

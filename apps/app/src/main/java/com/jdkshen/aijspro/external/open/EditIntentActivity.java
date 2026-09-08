@@ -15,7 +15,7 @@ import com.stardust.pio.PFiles;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.ui.edit.EditActivity;
-import com.jdkshen.aijspro.ui.imgui.ProCodeEditorActivity;
+import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity;
 import com.jdkshen.aijspro.R;
 
 import java.io.File;

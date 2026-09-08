@@ -144,7 +144,7 @@ class MiuixMcpActivity : ComponentActivity() {
                 SmallTitle("本次授权")
                 Card(Modifier.fillMaxWidth()) {
                     BasicComponent(title = "只读访问", summary = "脚本、示例、搜索、任务状态与 APK 日志")
-                    SuperSwitch(title = "允许编辑工作区", summary = "AI 修改后通过 workspace_request_apply 直接保存到真实脚本（免审批，自动备份可回退）；开启后重启服务也会记住", checked = current.writes, enabled = current.running,
+                    SuperSwitch(title = "允许编辑并应用", summary = "授权后 AI 可直接应用工作区；应用前校验原文件并自动备份，历史页可查看 Diff 和回退", checked = current.writes, enabled = current.running,
                         onCheckedChange = { if (it) dialog = "write" else { McpService.allowWrite = false; McpSettings.setWriteAllowed(this@MiuixMcpActivity, false); current = status() } })
                     SuperSwitch(title = "允许运行脚本", summary = "允许启动脚本并读取任务状态、异常与 APK 日志；开启后重启服务也会记住", checked = current.execution, enabled = current.running,
                         onCheckedChange = { if (it) dialog = "execute" else { McpService.allowExecution = false; McpSettings.setExecutionAllowed(this@MiuixMcpActivity, false); current = status() } })
@@ -161,11 +161,11 @@ class MiuixMcpActivity : ComponentActivity() {
         when (dialog) {
             "settings" -> SettingsDialog { dialog = null; revision++ }
             "qr" -> QrDialog(addresses.firstOrNull()) { dialog = null }
-            "help" -> MessageDialog("如何连接", "1. 启动服务，客户端选 Streamable HTTP。\n2. 同一手机的 MT 客户端填 http://127.0.0.1:${McpSettings.port(this)}/mcp，并删除空白请求头行；本机兼容开启时无需请求头。\n3. 电脑 USB 连接先执行 adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpSettings.port(this)}，客户端填 http://127.0.0.1:${McpSettings.USB_HOST_PORT}/mcp。\n4. 严格模式或局域网连接需填写 Authorization: Bearer <令牌>。\n5. 从 get_status / search_scripts 开始；编辑走工作区，workspace_request_apply 直接保存到真实脚本（免审批，自动备份，历史页可回退）。") { dialog = null }
+            "help" -> MessageDialog("如何连接", "1. 启动服务，客户端选 Streamable HTTP。\n2. 同一手机的 MT 客户端填 http://127.0.0.1:${McpSettings.port(this)}/mcp，并删除空白请求头行；本机兼容开启时无需请求头。\n3. 电脑 USB 连接先执行 adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpSettings.port(this)}，客户端填 http://127.0.0.1:${McpSettings.USB_HOST_PORT}/mcp。\n4. 严格模式或局域网连接需填写 Authorization: Bearer <令牌>。\n5. 从 get_status / search_scripts 开始；手机开启编辑授权后，workspace_request_apply 会直接应用工作区，并自动备份供历史页回退。") { dialog = null }
             "write", "execute" -> {
                 val write = dialog == "write"
-                ConfirmDialog(if (write) "允许 AI 编辑工作区？" else "允许 AI 执行脚本？",
-                    if (write) "开启后 AI 修改工作区将直接保存到真实脚本（免审批）；应用前会校验原文件并自动备份，可在历史页回退。授权会被记住。" else "脚本可使用 App 已授予的手机、网络和文件权限；授权会被记住，重启服务自动恢复。",
+                ConfirmDialog(if (write) "允许 AI 编辑并应用？" else "允许 AI 执行脚本？",
+                    if (write) "开启后 AI 可以直接把工作区应用到真实脚本，不再逐次弹出确认。每次应用前会校验原文件并自动备份，可在历史页查看 Diff 和回退。授权会被记住。" else "脚本可使用 App 已授予的手机、网络和文件权限；授权会被记住，重启服务自动恢复。",
                     confirm = { if (McpService.running) { if (write) { McpService.allowWrite = true; McpSettings.setWriteAllowed(this@MiuixMcpActivity, true) } else { McpService.allowExecution = true; McpSettings.setExecutionAllowed(this@MiuixMcpActivity, true) } }; current = status(); dialog = null }, dismiss = { dialog = null })
             }
         }

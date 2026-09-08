@@ -2,6 +2,14 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
+def releaseSigningValues = [
+        storeFile    : System.getenv('AIJSPRO_KEYSTORE'),
+        storePassword: System.getenv('AIJSPRO_STORE_PASSWORD'),
+        keyAlias     : System.getenv('AIJSPRO_KEY_ALIAS'),
+        keyPassword  : System.getenv('AIJSPRO_KEY_PASSWORD')
+]
+def releaseSigningReady = releaseSigningValues.values().every { it != null && !it.trim().isEmpty() }
+
 android {
     namespace 'com.jdkshen.aijspro'
     compileSdkVersion versions.compile
@@ -25,6 +33,18 @@ android {
             }
         }
     }
+    signingConfigs {
+        if (releaseSigningReady) {
+            release {
+                storeFile file(releaseSigningValues.storeFile)
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
     buildTypes {
         debug {
             shrinkResources false
@@ -32,6 +52,10 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
         release {
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            }
+            // Keep shrinking disabled until reflection/JNI entry points have release coverage.
             shrinkResources false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -43,7 +67,8 @@ android {
         encoding = 'utf-8'
     }
     lint {
-        abortOnError false
+        abortOnError true
+        checkReleaseBuilds true
         disable 'MissingTranslation'
         disable 'ExtraTranslation'
     }
@@ -108,7 +133,8 @@ dependencies {
     androidTestImplementation('androidx.test.espresso:espresso-core:3.1.1-alpha01', {
         exclude group: 'com.android.support', module: 'support-annotations'
     })
-    testImplementation 'junit:junit:4.12'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
     // Kotlin
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.0.1"
     // Android supports
@@ -212,4 +238,21 @@ tasks.register('verifyBundledSamplesNoNode') {
 
 tasks.matching { it.name == 'preBuild' }.configureEach {
     dependsOn tasks.named('verifyBundledSamplesNoNode')
+}
+
+tasks.register('verifyReleaseConfiguration') {
+    group = 'verification'
+    description = 'Require private signing inputs before building a distributable release.'
+    doLast {
+        if (!releaseSigningReady) {
+            throw new GradleException('Release signing is not configured. Set AIJSPRO_KEYSTORE, AIJSPRO_STORE_PASSWORD, AIJSPRO_KEY_ALIAS and AIJSPRO_KEY_PASSWORD.')
+        }
+        if (!file(releaseSigningValues.storeFile).isFile()) {
+            throw new GradleException('AIJSPRO_KEYSTORE does not point to a readable keystore file.')
+        }
+    }
+}
+
+tasks.matching { it.name == 'assembleMiuixRelease' }.configureEach {
+    dependsOn tasks.named('verifyReleaseConfiguration')
 }

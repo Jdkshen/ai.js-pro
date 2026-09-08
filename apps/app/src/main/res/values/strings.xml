@@ -4,6 +4,7 @@
     <string name="text_create_fail">创建失败</string>
     <string name="text_please_input_name">请输入名称</string>
     <string name="text_name">名称</string>
+    <string name="text_sort">排序方式</string>
     <string name="text_go_to_setting">去设置</string>
     <string name="explain_accessibility_permission">软件需要打开\"无障碍服务\"才能运行，请在随后的设置中选择\"AI.js Pro\"并开启服务。\n您也可以稍后在侧拉菜单中设置。</string>
     <string name="text_cancel">取消</string>
@@ -418,7 +419,6 @@
         <item quantity="one">描述至少要 %d 个字.</item>
         <item quantity="other">描述至少要 %d 个字.</item>
     </plurals>
-    <string name="text_imgui_workspace">ImGui 工作台</string>
     <string name="text_quick_service">核心服务</string>
     <string name="text_quick_service_subtitle">管理核心服务</string>
     <string name="text_quick_service_status">无障碍:%1$s · 悬浮窗:%2$s · 前台:%3$s</string>

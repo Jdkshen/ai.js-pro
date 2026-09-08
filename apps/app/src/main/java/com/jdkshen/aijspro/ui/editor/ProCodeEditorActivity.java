@@ -1,4 +1,4 @@
-package com.jdkshen.aijspro.ui.imgui;
+package com.jdkshen.aijspro.ui.editor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -67,6 +67,7 @@ import com.jdkshen.aijspro.ui.edit.debug.DebuggerSingleton;
 import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
 import com.jdkshen.aijspro.ui.edit.theme.Theme;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
+import com.jdkshen.aijspro.ui.terminal.EmbeddedTerminalActivity;
 import com.jdkshen.aijspro.ui.project.BuildActivity;
 import com.jdkshen.aijspro.ui.project.ProjectConfigActivity;
 import com.jdkshen.aijspro.theme.AppThemePalette;
@@ -90,7 +91,7 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-/** Pro-style multi-file workspace used by the ImGui home page. */
+/** Pro-style multi-file script workspace used by the Miuix application shell. */
 public final class ProCodeEditorActivity extends Activity implements DebugCallback {
 
     private static final String EXTRA_PATH = "path";

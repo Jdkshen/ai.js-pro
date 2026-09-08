@@ -46,10 +46,18 @@ adb forward tcp:18790 tcp:8788
 
 手机端开启“允许编辑工作区”后：
 
-- `workspace_open` / `workspace_list` / `workspace_read`：从真实脚本建立并查看 App 私有快照。
+- `workspace_open` / `workspace_list` / `workspace_read`：从真实脚本建立并查看 App 私有快照。新建文件时调用 `workspace_open` 并传 `path` 与 `create=true`，再用 `workspace_write` 写入内容；父目录必须已经存在。
 - `workspace_write` / `workspace_delete`：只改变私有副本，不直接覆盖真实脚本。
 - `workspace_diff`：查看基线与私有副本差异。
-- `workspace_request_apply`：提交待确认申请。真实写入只能由手机历史页调用；写入前校验原始哈希并建立备份，应用后可以回退。
+- `workspace_request_apply`：手机端开启“允许编辑并应用”后，直接把工作区写入真实脚本；工具名为兼容旧客户端保留。写入前校验原始哈希并建立备份，应用后可在手机历史页回退。
+
+新建文件示例：
+
+```json
+{"name":"workspace_open","arguments":{"path":"新脚本.js","create":true}}
+```
+
+取得 `workspaceId` 后调用 `workspace_write`，其中 `path` 仍为 `新脚本.js`；查看 Diff 后调用 `workspace_request_apply` 即可应用。MCP 不允许绕过工作区直接创建真实文件。
 
 单次读取或写入上限 256 KiB，列表单页最多 200 项。当前实现是无会话的单 JSON Streamable HTTP，兼容 `2024-11-05`、`2025-03-26` 和 `2025-06-18` 的单消息客户端，不支持 HTTP batch 或 SSE-only 响应。
 
@@ -59,6 +67,6 @@ adb forward tcp:18790 tcp:8788
 - 默认仅绑定 loopback。本机兼容开启时 loopback 可免令牌；提供错误令牌仍会拒绝。局域网请求始终验证随机 Bearer 令牌。
 - 浏览器 Origin 一律拒绝，Host 只接受绑定接口的 IP 字面量或 loopback，避免 DNS rebinding。
 - 编辑与执行授权仅保存在内存，停止服务立即撤销；令牌重置只能在停止状态进行。
-- MCP 客户端只能提交工作区应用申请；真实脚本的应用和回退只能在手机确认页面执行。
+- MCP 默认只读。手机端开启编辑授权后，客户端可直接应用工作区；回退仍在手机历史页执行。关闭授权会立即阻止后续写入和应用。
 - 工具不提供任意文件读取、任意 Shell 或任意任务停止。
 - 执行脚本会继承 AI.js Pro 已有的手机权限，开启执行前必须确认连接的是可信客户端。

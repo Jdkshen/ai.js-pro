@@ -1,4 +1,4 @@
-package com.jdkshen.aijspro.ui.imgui;
+package com.jdkshen.aijspro.ui.terminal;
 
 import android.app.Activity;
 import android.graphics.Color;
