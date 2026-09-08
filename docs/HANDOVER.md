@@ -1,5 +1,13 @@
 # AI.js Pro — 交接文档 (HANDOVER)
 
+## 当前权威状态（2026-09-08）
+
+- **Miuix 是主界面**；旧 ImGui 工作台、JNI/C++ 渲染桥和 `libautojs_imgui.so` 已删除。未来如果增加 ImGui，只作为 QuickJS 可调用的独立悬浮窗 API，不恢复旧主界面。
+- 编辑器和终端已独立到 `ui.editor` / `ui.terminal`；多标签可直接关闭。YOLO 示例只保留 OpenCV DNN 路线，不引入 NCNN 或 ONNX Runtime。
+- MCP 当前公开 22 个工具；手机开启一次写入授权后可直接应用，保留 Diff、冲突校验、自动备份和历史回退。
+- Windows 中文检出路径会使 JDK/Gradle 参数文件错误解码，表现为单测 `ClassNotFoundException`。统一使用 `powershell -ExecutionPolicy Bypass -File tools/test-miuix.ps1`；脚本会临时映射 ASCII 盘符并自动清理。
+- 本节与 `docs/REMAINING_WORK.md` 是当前结论；本文后续日期更早的内容仅作历史记录，冲突时以本节为准。
+
 ## Miuix 脚本 MCP 与示例页（2026-09-06，最新）
 
 - 抽屉“开发”分组新增“**MCP 服务**”。Miuix 页面提供启动/停止、连接地址、二维码、令牌、端口/局域网/操作目录设置、调用历史，以及编辑和执行授权。
@@ -7,7 +15,7 @@
 - 当前共 22 个工具：脚本/示例分页读取、递归搜索及游标续页、运行任务状态/异常/停止、APK 全局日志、双引擎 API 枚举/探测，以及私有工作区的打开/读取/编辑/删除/Diff/应用。默认只读；手机端开启“允许编辑并应用”后，`workspace_request_apply` 会直接应用，应用前校验原文件并备份，历史页可查看和安全回退。
 - 编辑和运行授权只在本次服务运行期间有效，停止服务自动撤销。路径、Host/Origin、正文/请求头、JSON 深度、文件大小、工作区总量和并发均有限制；支持有界 chunked 请求、宽松 `Accept` 以及 `2024-11-05`、`2025-03-26`、`2025-06-18` 客户端版本。
 - 教程/示例页已统一为 Miuix：后台建立资产索引，支持搜索、全部/JavaScript/文件夹/其他文件筛选、查看、运行和原子导入，保留原有示例数据与脚本执行逻辑。
-- 验证：Miuix Debug APK 构建成功；HTTP 传输与示例目录共 36 个 JVM 测试通过。K40 的历史快照已验证无令牌 loopback 初始化、当时的工具发现、搜索续页、APK 日志、chunked 请求和工作区读取/Diff；当前 22 个工具需随本次变更重新执行发现与工作区确认回归。
+- 验证：Miuix Debug APK 构建成功；当前 6 个测试类共 52 个 JVM 测试通过（含 HTTP 传输、22 工具清单、工作区和示例目录）。K40 的历史快照已验证无令牌 loopback 初始化、搜索续页、APK 日志、chunked 请求和工作区读取/Diff；当前工具集仍需在 K40 执行完整客户端回归。
 - MT 报错 `IllegalArgumentException: name is empty` 是客户端自定义请求头中存在空白“名称”行，发生在 OkHttp 发包之前；删除整条空白请求头即可。本机兼容模式不需要为了占位而新增请求头。
 - 详细连接、工具和安全说明见 `docs/MCP_SCRIPT_SERVICE.md`。本功能只在 `miuix` flavor 存在，普通 flavor 不注册页面或服务。
 
@@ -18,9 +26,9 @@
 - 固定依赖 `top.yukonga.miuix.kmp:miuix-android:0.3.1`，Compose UI/Foundation 1.7.6。该 Miuix AAR 要求 minSdk 26，故仅 miuix flavor 提高到 26；普通版本仍为 21。根 Kotlin / Compose 编译插件升级到 2.1.0，影响全工程编译；app 公共依赖补充 Compose runtime 1.7.6，保证非试点变体也能编译。
 - 页面复用既有悬浮窗管理器、前台服务及 Pref；权限页返回通过 onResume 刷新。支持跟随系统深浅色（实机本轮仅验证浅色）。无障碍是系统设置入口，不伪装成可直接授权的开关。
 - 构建验证：`:app:assembleCommonDebug :app:assembleMiuixDebug` 成功；布局微调后再次构建 miuix 成功，arm64 APK 已重新安装。Gradle 8.9 / AGP 8.6.1 / JDK 17 保持不变。
-- K40 验证：页面显示、无障碍设置往返、ImGui 工作台往返、悬浮窗关闭并恢复开启通过；本轮 crash buffer 未发现本包匹配崩溃记录。未进行前台服务开关、所有系统权限、深色/大字体及性能基准全覆盖，不宣称已达到 Auto.js Pro 流畅度。
+- K40 验证：页面显示、无障碍设置往返、悬浮窗关闭并恢复开启通过；本轮 crash buffer 未发现本包匹配崩溃记录。旧 ImGui 工作台回归结果只属历史快照，当前 APK 已无该入口。未进行前台服务开关、所有系统权限、深色/大字体及性能基准全覆盖，不宣称已达到 Auto.js Pro 流畅度。
 - 实机截图：`.artifacts/miuix-service-pilot.png`；工作台跳转截图：`.artifacts/miuix-workspace.png`。APK：`apps/app/build/outputs/apk/miuix/debug/app-miuix-arm64-v8a-debug.apk`。
-- 回退 UI：构建并覆盖安装 commonDebug（同包名同签名，无需卸载）。不要为了试点删除旧页面或迁移全部应用外壳；下一步先验证服务页手感与兼容性，再决定是否迁移设置列表。
+- 历史回退 UI：构建并覆盖安装 commonDebug（同包名同签名，无需卸载）。该试点结论已被“Miuix 为主界面”的现状取代。
 
 ## 最新实机对齐状态（2026-09-05，优先于下文历史记录）
 
@@ -32,7 +40,7 @@
 - ScrollAwareFABBehavior 在动画开始时更新目标隐藏状态，方向变化时取消旧动画，避免每个滚动回调反复重启动画。
 - 最新截图：.artifacts/aijs-integrated.png；构建 :app:assembleCommonDebug 成功并已覆盖安装 K40。
 - 滑动性能比较尚未形成有效结论：参考 Pro 的 gfxinfo 仅返回极少帧，SurfaceFlinger --latency 未返回逐帧数据；不能据此宣布两者同样流畅，也不能据 0 帧推断渲染框架。需要有效的同场景帧轨迹或连续画面进一步验证。
-- 待继续对齐：普通非 JS 文件的参考图标、长文件名可见宽度、辅助文字层次、路径栏逐级导航、ImGui 工作台与原生页面的主题/入口一致性，以及滑动的有效对比。
+- 待继续对齐：普通非 JS 文件的参考图标、长文件名可见宽度、辅助文字层次、路径栏逐级导航、Miuix 弹层/菜单一致性，以及滑动的有效对比。
 
 > 生成日期：2026-09-05
 > 交接对象：Codex / 后续开发者
@@ -45,7 +53,7 @@
 **AI.js Pro**（包名 `com.jdkshen.aijspro`，应用名「AI.js Pro」，当前版本 `1.0.1` / versionCode 464）：
 - 基于 **Auto.js 4.4.1（Stardust）** 源码的定制增强版
 - 双引擎：**Rhino + QuickJS**（JNI 桥接，`modules/autojs`）
-- 增强：ImGui 工作台（C++）、OpenCV 5.0 / YOLO、Native Frame、Shizuku、悬浮窗重构
+- 增强：Miuix 主界面、OpenCV 5.0 DNN / YOLO、Native Frame、Shizuku、悬浮窗重构（旧 ImGui 工作台已移除）
 
 > ⚠️ K40 上另装有 **Auto.js Pro（`org.autojs.autojspro`，AutoX 商业版 9.3.11）**，与本项目同屏易混淆，勿改错包。本项目 UI 对标它的 Material 3 风格（但为原生 View 实现，非 Flutter）。
 
