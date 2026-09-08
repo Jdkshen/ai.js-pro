@@ -884,7 +884,6 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     }
 
     private void saveEditorSession() {
-        if (mTabs.isEmpty()) return;
         JSONArray tabs = new JSONArray();
         SharedPreferences.Editor preferences = editorPreferences().edit();
         for (EditorTab tab : mTabs) {
@@ -892,8 +891,11 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             saveEditorViewState(tab, preferences);
         }
         preferences.putString(PREF_OPEN_TABS, tabs.toString());
-        if (mActiveTab != null) preferences.putString(PREF_ACTIVE_TAB,
-                mActiveTab.file.getAbsolutePath());
+        if (mActiveTab != null) {
+            preferences.putString(PREF_ACTIVE_TAB, mActiveTab.file.getAbsolutePath());
+        } else {
+            preferences.remove(PREF_ACTIVE_TAB);
+        }
         if (mActiveTab != null) {
             float scaledDensity = getResources().getDisplayMetrics().scaledDensity;
             preferences.putFloat(PREF_TEXT_SIZE,
@@ -968,16 +970,28 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         for (EditorTab tab : mTabs) {
             LinearLayout cell = new LinearLayout(this);
             cell.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout content = new LinearLayout(this);
+            content.setOrientation(LinearLayout.HORIZONTAL);
+            content.setGravity(Gravity.CENTER_VERTICAL);
             TextView view = text(tab.file.getName() + (hasUnsavedChanges(tab) ? " •" : ""), 14f,
                     tab == mActiveTab ? mPalette.textPrimary : mPalette.textSecondary);
             view.setGravity(Gravity.CENTER);
-            view.setPadding(dp(16), 0, dp(16), 0);
+            view.setPadding(dp(16), 0, dp(6), 0);
             view.setOnClickListener(v -> selectTab(tab));
             view.setOnLongClickListener(v -> {
                 requestCloseTab(tab);
                 return true;
             });
-            cell.addView(view, new LinearLayout.LayoutParams(
+            content.addView(view, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            TextView close = text("×", 18f, mPalette.textSecondary);
+            close.setContentDescription("关闭 " + tab.file.getName());
+            close.setGravity(Gravity.CENTER);
+            close.setPadding(dp(4), 0, dp(8), 0);
+            close.setOnClickListener(v -> requestCloseTab(tab));
+            content.addView(close, new LinearLayout.LayoutParams(
+                    dp(36), ViewGroup.LayoutParams.MATCH_PARENT));
+            cell.addView(content, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
             View indicator = new View(this);
             indicator.setBackgroundColor(tab == mActiveTab
@@ -1022,13 +1036,18 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private void closeTab(EditorTab tab) {
         int index = mTabs.indexOf(tab);
+        if (index < 0) return;
         tab.editor.destroy();
         mTabs.remove(tab);
         if (mTabs.isEmpty()) {
+            mActiveTab = null;
+            mEditorContainer.removeAllViews();
+            saveEditorSession();
             finish();
             return;
         }
         selectTab(mTabs.get(Math.max(0, Math.min(index, mTabs.size() - 1))));
+        saveEditorSession();
     }
 
     private void openWorkspaceDrawer() {
