@@ -1,23 +1,18 @@
 YOLO 目标检测示例
 
-本目录不再归入“图片与图色处理”，而是作为独立的顶层示例分类。
+当前 APK 只提供 OpenCV 5.0 DNN 后端，不包含 NCNN 或 ONNX Runtime。
+模型使用 ONNX 文件格式，但推理由项目内置的 OpenCV 5.0 DNN 执行。
 
-四个版本：
-1. NCNN版本：加载 .param + .bin，速度快、体积小，适合在手机上长期实时运行。
-2. ONNX Runtime版本：直接加载 .onnx，使用官方 ONNX Runtime 1.26.0（XNNPACK/CPU）。
-3. OpenCV 5.0 DNN版本：直接加载 .onnx，使用项目内置的 OpenCV 5.0 DNN。
-4. QuickJS NativeFrame版本：截图保留在 C++ `cv::Mat`，通过 DirectByteBuffer 直接送入 NCNN，不经过 Bitmap。
-
-前三个后端版本均包含：
+OpenCV 版本包含：
 - YOLO运行环境测试.js：不申请截图权限，先验证运行库和模型能否正常推理。
 - YOLO单张图片识别.js：只申请一次截图权限，识别当前屏幕并打印结果。
 - YOLO实时识别.js：连续识别屏幕，停止脚本即可释放模型。
 
-QuickJS NativeFrame版本包含单帧直连 / 60 帧实时直连 / 持续识别 / ROI 区域检测 / 三后端基准对比，
-详见其子目录的使用说明。
+QuickJS NativeFrame 示例使用 ImageReader RGBA、DirectByteBuffer 和 OpenCV `cv::Mat`
+直连 OpenCV 5.0 DNN，减少 Bitmap 中转；包含单帧、实时、持续识别、ROI
+区域检测和 OpenCV 基准测试。
 
 注意：
-- NCNN 和 ONNX Runtime 当前仅随 arm64-v8a APK 提供。
 - OpenCV 5.0 DNN 可使用应用已经支持的 ABI。
 - 编辑示例后可正常保存；需要恢复原始内容时，在示例页使用“重置示例”。
 - 模型固定输入尺寸为 320，示例中的 inputSize 请保持 320。

@@ -15,7 +15,7 @@ if (!available) {
     throw new Error(backend + ' 不可用：' + yolo.getUnavailableReason(backend));
 }
 
-const modelRoot = 'asset://sample/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
+const modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
 let detector = null;
 const loadStarted = performance.now();
 try {

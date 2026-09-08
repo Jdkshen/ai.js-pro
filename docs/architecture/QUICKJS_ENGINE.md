@@ -128,7 +128,7 @@ try {
 
 ```javascript
 // @engine quickjs
-const root = 'asset://sample/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
+const root = 'asset://sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
 const detector = yolo.load({
     backend: 'opencv',
     model: root + 'yolo26_320.onnx',

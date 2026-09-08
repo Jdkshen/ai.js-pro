@@ -7,7 +7,7 @@ const frameCount = 5;
 // 基准直接使用最新缓存帧，避免把等待屏幕刷新算入模型性能。
 // 改成 mode: 'full' 可测原尺寸输入；720p 通常是实时视觉的平衡档。
 const CAPTURE_OPTIONS = { mode: 'fast', size: 720, fresh: false };
-const modelRoot = 'asset://sample/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
+const modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
 const backend = 'opencv';
 
 if (!requestScreenCapture('portrait')) {

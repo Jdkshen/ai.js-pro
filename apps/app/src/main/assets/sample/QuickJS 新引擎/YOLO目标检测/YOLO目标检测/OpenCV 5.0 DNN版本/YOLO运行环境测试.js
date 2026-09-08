@@ -9,7 +9,7 @@ try {
     if (!yolo.isAvailable(backend)) {
         throw new Error(yolo.getUnavailableReason(backend));
     }
-    var assetRoot = "sample/YOLO目标检测/OpenCV 5.0 DNN版本/models/";
+    var assetRoot = "sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/";
     detector = yolo.load({
         backend: backend,
         model: "asset://" + assetRoot + "yolo26_320.onnx",

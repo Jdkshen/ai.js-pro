@@ -208,6 +208,7 @@ dependencies {
 }
 
 def bundledSampleDir = file('src/main/assets/sample')
+def bundledYoloSampleDir = file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测')
 
 tasks.register('verifyBundledSamplesNoNode') {
     group = 'verification'
@@ -236,8 +237,40 @@ tasks.register('verifyBundledSamplesNoNode') {
     }
 }
 
+tasks.register('verifyBundledYoloSamples') {
+    group = 'verification'
+    description = 'Ensure bundled YOLO samples match the OpenCV 5.0 DNN runtime and packaged model paths.'
+    inputs.dir(bundledYoloSampleDir)
+
+    doLast {
+        def expectedAssets = [
+                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/yolo26_320.onnx'),
+                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/YOLO目标检测/OpenCV 5.0 DNN版本/models/labels.txt')
+        ]
+        def missingAssets = expectedAssets.findAll { !it.isFile() }
+        def staleReferences = fileTree(bundledYoloSampleDir) {
+            include '**/*.js', '**/*.txt'
+        }.files.findAll { sample ->
+            def source = sample.getText('UTF-8')
+            source.contains('NCNN版本') || source.contains('ONNX Runtime版本') ||
+                    source.contains('asset://sample/YOLO目标检测/') ||
+                    source.contains('"sample/YOLO目标检测/')
+        }
+        if (!missingAssets.isEmpty() || !staleReferences.isEmpty()) {
+            def details = []
+            details.addAll(missingAssets.collect { 'missing: ' + it })
+            details.addAll(staleReferences.collect {
+                'stale: ' + bundledSampleDir.toPath().relativize(it.toPath()).toString()
+            })
+            throw new GradleException('Bundled YOLO samples do not match OpenCV 5.0 DNN:\n' +
+                    details.unique().sort().collect { ' - ' + it }.join('\n'))
+        }
+    }
+}
+
 tasks.matching { it.name == 'preBuild' }.configureEach {
     dependsOn tasks.named('verifyBundledSamplesNoNode')
+    dependsOn tasks.named('verifyBundledYoloSamples')
 }
 
 tasks.register('verifyReleaseConfiguration') {
