@@ -120,11 +120,14 @@ Windows PowerShell 常用命令：
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
 
-# 当前主界面版本
-.\gradlew.bat :app:assembleMiuixDebug --no-daemon
+# 当前主界面兼容版（QuickJS + Rhino）
+.\gradlew.bat :app:assembleMiuixCompatDebug --no-daemon
+
+# 精简执行版（仅注册 QuickJS；编辑器暂留 Rhino 语言解析库）
+.\gradlew.bat :app:assembleMiuixLiteDebug --no-daemon
 
 # 原生回退版本
-.\gradlew.bat :app:assembleCommonDebug --no-daemon
+.\gradlew.bat :app:assembleCommonCompatDebug --no-daemon
 
 # 独立脚本 APK 运行时
 .\gradlew.bat :inrt:assembleDebug --no-daemon
@@ -133,14 +136,14 @@ $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
 K40（arm64）安装文件：
 
 ```text
-apps/app/build/outputs/apk/miuix/debug/app-miuix-arm64-v8a-debug.apk
+apps/app/build/outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk
 ```
 
 安装命令：
 
 ```powershell
 adb -s cccc62c7 install -r -d `
-  apps/app/build/outputs/apk/miuix/debug/app-miuix-arm64-v8a-debug.apk
+  apps/app/build/outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk
 ```
 
 ## 8. Git 与生成物规则
@@ -154,7 +157,8 @@ adb -s cccc62c7 install -r -d `
 
 ## 9. 当前验证基线
 
-- `:app:assembleMiuixDebug` 构建成功；
+- `:app:assembleMiuixCompatDebug` 与 `:app:assembleMiuixLiteDebug` 构建成功；
+- 新建脚本/项目默认 QuickJS；旧无标记脚本保持 Rhino，项目级 `engine` 与文件指令均已支持；
 - K40：`com.jdkshen.aijspro` 版本 `1.0.1 (464)` 已覆盖安装；
 - K40：当前系统仅保留 RustDesk 无障碍，AI.js Pro 无障碍需由用户按需重新开启；
 - 快速开启路径已确认不再使用小米 10 秒手动倒计时；

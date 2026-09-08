@@ -24,6 +24,7 @@ import com.stardust.app.DialogUtils;
 import com.stardust.app.GlobalAppContext;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
+import com.stardust.autojs.script.JavaScriptSource;
 import com.tencent.bugly.crashreport.BuglyLog;
 
 import com.jdkshen.aijspro.Pref;
@@ -109,9 +110,13 @@ public class ScriptOperations {
 
     public void createScriptFile(String path, String script, boolean edit) {
         if (PFiles.createIfNotExists(path)) {
-            if (script != null) {
+            String initialScript = script;
+            if (initialScript == null && "js".equalsIgnoreCase(PFiles.getExtension(path))) {
+                initialScript = JavaScriptSource.QUICKJS_ENGINE_DIRECTIVE + "\n";
+            }
+            if (initialScript != null) {
                 try {
-                    PFiles.write(path, script);
+                    PFiles.write(path, initialScript);
                 } catch (UncheckedIOException e) {
                     showMessage(R.string.text_file_write_fail);
                     return;

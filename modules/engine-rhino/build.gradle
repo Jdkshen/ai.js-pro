@@ -1,0 +1,28 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'com.stardust.autojs.engine.rhino'
+    compileSdkVersion versions.compile
+    buildToolsVersion versions.buildTool
+
+    defaultConfig {
+        minSdkVersion versions.mini
+        targetSdkVersion versions.target
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+repositories {
+    flatDir {
+        dirs rootProject.file('modules/autojs/libs')
+    }
+}
+
+dependencies {
+    api project(':rhino-language')
+    implementation project(':autojs')
+}

@@ -1,6 +1,6 @@
 param(
     [string]$Drive = '',
-    [string[]]$GradleTasks = @(':app:testMiuixDebugUnitTest')
+    [string[]]$GradleTasks = @(':app:testMiuixCompatDebugUnitTest', ':app:testMiuixLiteDebugUnitTest')
 )
 
 $ErrorActionPreference = 'Stop'

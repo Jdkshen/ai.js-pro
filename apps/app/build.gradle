@@ -77,7 +77,7 @@ android {
         resolutionStrategy.force 'com.google.code.findbugs:jsr305:3.0.1'
     }
 
-    flavorDimensions "channel"
+    flavorDimensions "channel", "engine"
     splits {
 
         // Configures multiple APKs based on ABI.
@@ -101,15 +101,27 @@ android {
     }
     productFlavors {
         miuix {
+            dimension "channel"
             minSdkVersion 26
             buildConfigField 'String', 'CHANNEL', '"common"'
             buildConfigField 'boolean', 'MIUIX_PILOT', 'true'
         }
         common {
+            dimension "channel"
             buildConfigField "String", "CHANNEL", '"common"'
         }
         coolapk {
+            dimension "channel"
             buildConfigField "String", "CHANNEL", '"coolapk"'
+        }
+        compat {
+            dimension "engine"
+            buildConfigField 'boolean', 'RHINO_COMPAT', 'true'
+        }
+        lite {
+            dimension "engine"
+            buildConfigField 'boolean', 'RHINO_COMPAT', 'false'
+            versionNameSuffix '-lite'
         }
     }
 }
@@ -203,6 +215,9 @@ dependencies {
     implementation project(':automator')
     implementation project(':common')
     implementation project(':autojs')
+    compileOnly project(':rhino-language')
+    compatImplementation project(':engine-rhino')
+    liteImplementation project(':rhino-language')
     implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')
 }
@@ -288,6 +303,25 @@ tasks.register('verifyReleaseConfiguration') {
     }
 }
 
-tasks.matching { it.name == 'assembleMiuixRelease' }.configureEach {
+tasks.matching { it.name in ['assembleMiuixCompatRelease', 'assembleMiuixLiteRelease'] }.configureEach {
     dependsOn tasks.named('verifyReleaseConfiguration')
+}
+
+// Keep the pre-split developer task names as compat aliases so existing local
+// scripts do not silently break when the engine flavor dimension is added.
+tasks.register('assembleMiuixDebug') {
+    group = 'build'
+    dependsOn 'assembleMiuixCompatDebug'
+}
+tasks.register('assembleMiuixRelease') {
+    group = 'build'
+    dependsOn 'assembleMiuixCompatRelease'
+}
+tasks.register('assembleCommonDebug') {
+    group = 'build'
+    dependsOn 'assembleCommonCompatDebug'
+}
+tasks.register('testMiuixDebugUnitTest') {
+    group = 'verification'
+    dependsOn 'testMiuixCompatDebugUnitTest'
 }

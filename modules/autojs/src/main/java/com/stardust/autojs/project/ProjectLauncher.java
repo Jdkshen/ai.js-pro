@@ -21,8 +21,10 @@ public class ProjectLauncher {
     public void launch(ScriptEngineService service) {
         ExecutionConfig config = new ExecutionConfig();
         config.setWorkingDirectory(mProjectDir);
-        config.getScriptConfig().setFeatures(mProjectConfig.getFeatures());
-        service.execute(new JavaScriptFileSource(mMainScriptFile), config);
+        config.setScriptConfig(mProjectConfig.getScriptConfig(mProjectConfig.getMainScriptFile()));
+        JavaScriptFileSource source = new JavaScriptFileSource(mMainScriptFile);
+        source.setPreferredEngine(mProjectConfig.getEngine(mProjectConfig.getMainScriptFile()));
+        service.execute(source, config);
     }
 
 }

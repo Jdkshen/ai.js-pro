@@ -81,6 +81,7 @@ public class ProjectConfigActivity extends BaseActivity {
             }
             mParentDirectory = new File(parentDirectory);
             mProjectConfig = new ProjectConfig();
+            mProjectConfig.setEngine("quickjs");
         } else {
             String dir = getIntent().getStringExtra(EXTRA_DIRECTORY);
             if (dir == null) {

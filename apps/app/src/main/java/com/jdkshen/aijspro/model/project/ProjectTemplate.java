@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.model.project;
 import android.annotation.SuppressLint;
 
 import com.stardust.autojs.project.ProjectConfig;
+import com.stardust.autojs.script.JavaScriptSource;
 import com.stardust.pio.PFiles;
 
 import java.io.File;
@@ -26,8 +27,14 @@ public class ProjectTemplate {
     public Observable<File> newProject() {
         return Observable.fromCallable(() -> {
             mProjectDir.mkdirs();
+            if (mProjectConfig.getEngine() == null) {
+                mProjectConfig.setEngine("quickjs");
+            }
             PFiles.write(ProjectConfig.configFileOfDir(mProjectDir.getPath()), mProjectConfig.toJson());
-            new File(mProjectDir, mProjectConfig.getMainScriptFile()).createNewFile();
+            File mainScript = new File(mProjectDir, mProjectConfig.getMainScriptFile());
+            if (mainScript.createNewFile() && "quickjs".equalsIgnoreCase(mProjectConfig.getEngine())) {
+                PFiles.write(mainScript.getPath(), JavaScriptSource.QUICKJS_ENGINE_DIRECTIVE + "\n");
+            }
             return mProjectDir;
         })
                 .subscribeOn(Schedulers.io())

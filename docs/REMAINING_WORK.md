@@ -221,13 +221,13 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 准备下一个可交付 APK 前，至少满足：
 
-- [ ] `:app:assembleMiuixDebug` 已成功；目标 release 变体仍需正式签名环境；
+- [ ] `:app:assembleMiuixCompatDebug`、`:app:assembleMiuixLiteDebug` 已成功；目标 release 变体仍需正式签名环境；
 - [x] 当前 Miuix JVM 测试全部通过，MCP 工具清单与工作区关键路径有真实断言；Windows 中文路径请使用 `tools/test-miuix.ps1`；
 - [ ] K40 全新安装和覆盖安装均通过；
 - [ ] 首页、搜索定位、编辑器、运行、日志、示例、资源、插件、任务和 MCP 可走通；
 - [ ] 小米无障碍快速开启不覆盖 RustDesk 等其他服务；
 - [ ] MCP 的读取、运行、错误、日志、Diff、确认/应用、冲突和回退与文档一致；
-- [ ] Rhino 与 QuickJS 回归通过，原生句柄和进程内存无持续增长；
+- [ ] compat 的 Rhino 与 QuickJS 回归、lite 的 QuickJS 回归全部通过，原生句柄和进程内存无持续增长；
 - [ ] 深色、150% 字体、横屏和底部手势安全区无明显遮挡；
 - [x] 当前 Miuix ARM64 APK 的 `.so` 清单与源码决定一致，不含旧 ImGui 或本地验证产物；
 - [ ] Git 工作树干净，本地分支与远程同步，发布 APK 有版本号和 SHA-256 记录。

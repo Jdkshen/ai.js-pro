@@ -231,6 +231,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun listEngineApi(args: JsonObject): JsonObject {
         val engine = args.stringOr("engine", "quickjs").lowercase()
         require(engine == "quickjs" || engine == "rhino") { "engine 必须是 quickjs 或 rhino" }
+        requireRhinoCompat(engine)
         val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
         val source = header +
             "console.log('MCP_API_PROBE_RESULT=' + JSON.stringify(Object.keys(typeof globalThis !== 'undefined' ? globalThis : this)" +
@@ -244,6 +245,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val engine = args.string("engine").lowercase()
         val name = args.string("name")
         require(engine == "quickjs" || engine == "rhino") { "engine 必须是 quickjs 或 rhino" }
+        requireRhinoCompat(engine)
         require(name.matches(Regex("[A-Za-z0-9_$.]{1,120}"))) { "name 只允许字母数字下划线 $ ." }
         val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
         val source = header + "var x=" + name + ";" +
@@ -281,6 +283,12 @@ internal class McpTools(private val context: Context, private val event: (String
             return line.asJsonObject.get("content").asString.substringAfter("MCP_API_PROBE_RESULT=")
         } finally {
             file.delete()
+        }
+    }
+
+    private fun requireRhinoCompat(engine: String) {
+        if (engine == "rhino" && !com.jdkshen.aijspro.BuildConfig.RHINO_COMPAT) {
+            throw ToolError("当前为 lite 版本，未安装 Rhino 执行引擎；请使用 compat 版本")
         }
     }
 

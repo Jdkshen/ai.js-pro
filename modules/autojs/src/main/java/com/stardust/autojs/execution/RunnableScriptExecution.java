@@ -28,7 +28,14 @@ public class RunnableScriptExecution extends ScriptExecution.AbstractScriptExecu
     @Override
     public void run() {
         ThreadCompat.currentThread().setName("ScriptThread-" + getId() + "[" + getSource() + "]");
-        execute();
+        try {
+            execute();
+        } catch (Throwable error) {
+            // Engine selection/creation can fail before execute(engine) enters
+            // its guarded block (for example a Rhino script in a lite build).
+            // Report it through the normal listener instead of killing the app process.
+            onException(null, error);
+        }
     }
 
     public Object execute() {

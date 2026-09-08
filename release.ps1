@@ -2,7 +2,7 @@
 .SYNOPSIS
   Build, hash and optionally install an AI.js Pro Miuix APK.
 .PARAMETER Variant
-  MiuixRelease requires the four AIJSPRO signing environment variables.
+  MiuixCompatRelease and MiuixLiteRelease require the four AIJSPRO signing environment variables.
 .PARAMETER SkipNative
   Reuse checked-in QuickJS native libraries when only Java/Kotlin/resources changed.
 .PARAMETER Install
@@ -10,14 +10,14 @@
 .PARAMETER ForceClean
   Clean the app module before building.
 .EXAMPLE
-  .\release.ps1 -Variant MiuixDebug -SkipNative -Install
+  .\release.ps1 -Variant MiuixCompatDebug -SkipNative -Install
 .EXAMPLE
   $env:AIJSPRO_KEYSTORE='D:\private\aijspro.jks'
-  .\release.ps1 -Variant MiuixRelease -SkipNative
+  .\release.ps1 -Variant MiuixCompatRelease -SkipNative
 #>
 param(
-    [ValidateSet('MiuixRelease', 'MiuixDebug')]
-    [string]$Variant = 'MiuixRelease',
+    [ValidateSet('MiuixCompatRelease', 'MiuixCompatDebug', 'MiuixLiteRelease', 'MiuixLiteDebug')]
+    [string]$Variant = 'MiuixCompatRelease',
     [switch]$SkipNative,
     [switch]$Install,
     [switch]$ForceClean
@@ -75,7 +75,8 @@ try {
 
     Write-Host '[3/4] APK identity and SHA-256' -ForegroundColor Cyan
     $buildType = if ($releaseBuild) { 'release' } else { 'debug' }
-    $apkDirectory = Join-Path $projectRoot "apps\app\build\outputs\apk\miuix\$buildType"
+    $engineFlavor = if ($Variant.Contains('Lite')) { 'miuixLite' } else { 'miuixCompat' }
+    $apkDirectory = Join-Path $projectRoot "apps\app\build\outputs\apk\$engineFlavor\$buildType"
     $apk = Get-ChildItem -LiteralPath $apkDirectory -Filter "*arm64-v8a-$buildType.apk" -File |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1

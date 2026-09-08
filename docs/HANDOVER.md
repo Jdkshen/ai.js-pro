@@ -1,11 +1,13 @@
 # AI.js Pro — 交接文档 (HANDOVER)
 
-## 当前权威状态（2026-09-08）
+## 当前权威状态（2026-09-09）
 
 - **Miuix 是主界面**；旧 ImGui 工作台、JNI/C++ 渲染桥和 `libautojs_imgui.so` 已删除。未来如果增加 ImGui，只作为 QuickJS 可调用的独立悬浮窗 API，不恢复旧主界面。
 - 编辑器和终端已独立到 `ui.editor` / `ui.terminal`；多标签可直接关闭。YOLO 示例只保留 OpenCV DNN 路线，不引入 NCNN 或 ONNX Runtime。
 - MCP 当前公开 22 个工具；手机开启一次写入授权后可直接应用，保留 Diff、冲突校验、自动备份和历史回退。
 - Windows 中文检出路径会使 JDK/Gradle 参数文件错误解码，表现为单测 `ClassNotFoundException`。统一使用 `powershell -ExecutionPolicy Bypass -File tools/test-miuix.ps1`；脚本会临时映射 ASCII 盘符并自动清理。
+- 新建脚本和新建项目默认 QuickJS；已有无标记脚本继续 Rhino。支持文件首行 `// @engine quickjs|rhino`、项目顶层 `engine` 和 `scripts.<path>.engine`，文件指令优先。
+- 构建已拆为 `MiuixCompat*` 与 `MiuixLite*`。`:engine-rhino` 只进入 compat；lite 不注册 Rhino 执行引擎，但暂留 `:rhino-language` 供编辑器 Token/AST 使用。完整边界和命令见 `docs/architecture/ENGINE_FLAVORS.md`。
 - 本节与 `docs/REMAINING_WORK.md` 是当前结论；本文后续日期更早的内容仅作历史记录，冲突时以本节为准。
 
 ## Miuix 脚本 MCP 与示例页（2026-09-06，最新）

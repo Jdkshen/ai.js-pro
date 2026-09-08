@@ -6,6 +6,7 @@ import androidx.annotation.Nullable;
 
 import com.stardust.autojs.execution.ScriptExecution;
 import com.stardust.autojs.script.ScriptSource;
+import com.stardust.autojs.script.JavaScriptSource;
 import com.stardust.util.Supplier;
 
 import java.util.HashMap;
@@ -117,8 +118,15 @@ public class ScriptEngineManager {
     @NonNull
     public ScriptEngine createEngineOfSourceOrThrow(ScriptSource source, int id) {
         ScriptEngine engine = createEngineOfSource(source, id);
-        if (engine == null)
-            throw new ScriptEngineFactory.EngineNotFoundException("source: " + source.toString());
+        if (engine == null) {
+            if (JavaScriptSource.ENGINE_RHINO.equals(source.getEngineName())) {
+                throw new ScriptEngineFactory.EngineNotFoundException(
+                        "此脚本需要 Rhino 兼容引擎；请安装 compat 版本，或迁移后在首行添加 // @engine quickjs："
+                                + source.toString());
+            }
+            throw new ScriptEngineFactory.EngineNotFoundException(
+                    "找不到脚本引擎 " + source.getEngineName() + "：" + source.toString());
+        }
         return engine;
     }
 

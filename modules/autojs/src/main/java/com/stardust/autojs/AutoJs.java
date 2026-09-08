@@ -18,11 +18,10 @@ import com.stardust.autojs.core.image.capture.ScreenCaptureRequestActivity;
 import com.stardust.autojs.core.image.capture.ScreenCaptureRequester;
 import com.stardust.autojs.core.record.accessibility.AccessibilityActionRecorder;
 import com.stardust.autojs.core.util.Shell;
-import com.stardust.autojs.engine.LoopBasedJavaScriptEngine;
 import com.stardust.autojs.engine.QuickJsJavaScriptEngine;
+import com.stardust.autojs.engine.RhinoEngineLoader;
 import com.stardust.autojs.engine.RootAutomatorEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
-import com.stardust.autojs.rhino.InterruptibleAndroidContextFactory;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.accessibility.AccessibilityConfig;
 import com.stardust.autojs.runtime.api.AppUtils;
@@ -36,10 +35,6 @@ import com.stardust.view.accessibility.AccessibilityNotificationObserver;
 import com.stardust.view.accessibility.AccessibilityService;
 import com.stardust.view.accessibility.LayoutInspector;
 
-import org.mozilla.javascript.ContextFactory;
-import org.mozilla.javascript.WrappedException;
-
-import java.io.File;
 
 /**
  * Created by Stardust on 2017/11/29.
@@ -87,12 +82,8 @@ public abstract class AutoJs {
         addAccessibilityServiceDelegates();
         registerActivityLifecycleCallbacks();
         ResourceMonitor.setExceptionCreator(resource -> {
-            Exception exception;
-            if (org.mozilla.javascript.Context.getCurrentContext() != null) {
-                exception = new WrappedException(new ResourceMonitor.UnclosedResourceException(resource));
-            } else {
-                exception = new ResourceMonitor.UnclosedResourceException(resource);
-            }
+            Exception exception = RhinoEngineLoader.wrapExceptionIfNeeded(
+                    new ResourceMonitor.UnclosedResourceException(resource));
             exception.fillInStackTrace();
             return exception;
         });
@@ -120,22 +111,19 @@ public abstract class AutoJs {
 
     protected void initScriptEngineManager() {
         mScriptEngineManager = new ScriptEngineManager(mContext);
-        mScriptEngineManager.registerEngine(JavaScriptSource.ENGINE, () -> {
-            LoopBasedJavaScriptEngine engine = new LoopBasedJavaScriptEngine(mContext);
-            engine.setRuntime(createRuntime());
-            return engine;
-        });
+        if (RhinoEngineLoader.initialize(mContext)) {
+            mScriptEngineManager.registerEngine(JavaScriptSource.ENGINE_RHINO, () -> {
+                com.stardust.autojs.engine.JavaScriptEngine engine = RhinoEngineLoader.create(mContext);
+                engine.setRuntime(createRuntime());
+                return engine;
+            });
+        }
         mScriptEngineManager.registerEngine(JavaScriptSource.ENGINE_QUICKJS, () -> {
             QuickJsJavaScriptEngine engine = new QuickJsJavaScriptEngine();
             engine.setRuntime(createRuntime());
             return engine;
         });
-        initContextFactory();
         mScriptEngineManager.registerEngine(AutoFileSource.ENGINE, () -> new RootAutomatorEngine(mContext));
-    }
-
-    protected void initContextFactory() {
-        ContextFactory.initGlobal(new InterruptibleAndroidContextFactory(new File(mContext.getCacheDir(), "classes")));
     }
 
     protected ScriptRuntime createRuntime() {

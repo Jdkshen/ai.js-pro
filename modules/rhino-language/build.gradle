@@ -1,0 +1,18 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'com.stardust.autojs.rhino.language'
+    compileSdkVersion versions.compile
+    buildToolsVersion versions.buildTool
+
+    defaultConfig {
+        minSdkVersion versions.mini
+        targetSdkVersion versions.target
+    }
+}
+
+dependencies {
+    // Transitional parser/API dependency. Execution is enabled only when the
+    // separate :engine-rhino provider is packaged.
+    api files('libs/rhino-1.7.7.2.jar')
+}

@@ -4,9 +4,10 @@ import com.google.gson.annotations.SerializedName
 
 data class ScriptConfig(
         @SerializedName("useFeatures") var features: List<String>,
-        @SerializedName("uiMode") var uiMode: Boolean
+        @SerializedName("uiMode") var uiMode: Boolean,
+        @SerializedName("engine") var engine: String?
 ) {
-    constructor() : this(emptyList(), false)
+    constructor() : this(emptyList(), false, null)
 
     fun hasFeature(feature: String): Boolean {
         return features.contains(feature)

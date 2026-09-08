@@ -1,10 +1,9 @@
 package com.jdkshen.aijspro.autojs;
 
 import com.stardust.app.GlobalAppContext;
-import com.stardust.autojs.engine.JavaScriptEngine;
+import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.execution.ScriptExecution;
 import com.stardust.autojs.execution.ScriptExecutionListener;
-import com.jdkshen.aijspro.App;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.external.foreground.ForegroundService;
 
@@ -39,7 +38,13 @@ public class ScriptExecutionGlobalListener implements ScriptExecutionListener {
         if (mForegroundExecutions.remove(execution.getId())) {
             ForegroundService.releaseExecutionLease(GlobalAppContext.get());
         }
-        Long millis = (Long) execution.getEngine().getTag(ENGINE_TAG_START_TIME);
+        ScriptEngine engine = execution.getEngine();
+        // Engine selection may fail before an engine instance is created, such
+        // as when a Rhino-only script is started by the lite build.
+        if (engine == null) {
+            return;
+        }
+        Long millis = (Long) engine.getTag(ENGINE_TAG_START_TIME);
         if (millis == null)
             return;
         double seconds = (System.currentTimeMillis() - millis) / 1000.0;

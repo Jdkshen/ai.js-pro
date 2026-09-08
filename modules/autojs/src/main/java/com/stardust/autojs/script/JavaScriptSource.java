@@ -21,6 +21,7 @@ import java.util.Map;
 public abstract class JavaScriptSource extends ScriptSource {
 
     public static final String ENGINE = "com.stardust.autojs.script.JavaScriptSource.Engine";
+    public static final String ENGINE_RHINO = ENGINE;
     public static final String ENGINE_QUICKJS = ENGINE + ".QuickJS";
 
     /**
@@ -29,6 +30,7 @@ public abstract class JavaScriptSource extends ScriptSource {
      * {@code // @engine quickjs}
      */
     public static final String QUICKJS_ENGINE_DIRECTIVE = "// @engine quickjs";
+    public static final String RHINO_ENGINE_DIRECTIVE = "// @engine rhino";
 
     public static final String EXECUTION_MODE_UI_PREFIX = "\"ui\";";
 
@@ -45,6 +47,7 @@ public abstract class JavaScriptSource extends ScriptSource {
     private static final int PARSING_MAX_TOKEN = 300;
 
     private int mExecutionMode = -1;
+    private String mPreferredEngine;
 
     public JavaScriptSource(String name) {
         super(name);
@@ -119,12 +122,20 @@ public abstract class JavaScriptSource extends ScriptSource {
 
     @Override
     public String getEngineName() {
-        return requestsQuickJs(getScript()) ? ENGINE_QUICKJS : ENGINE;
+        String directiveEngine = engineFromDirective(getScript());
+        return directiveEngine != null
+                ? directiveEngine
+                : (mPreferredEngine == null ? ENGINE_RHINO : mPreferredEngine);
     }
 
     public static boolean requestsQuickJs(String script) {
+        return ENGINE_QUICKJS.equals(engineFromDirective(script));
+    }
+
+    @Nullable
+    public static String engineFromDirective(String script) {
         if (script == null || script.isEmpty()) {
-            return false;
+            return null;
         }
         int offset = 0;
         if (script.charAt(0) == '\ufeff') {
@@ -137,11 +148,32 @@ public abstract class JavaScriptSource extends ScriptSource {
             }
             String line = script.substring(offset, lineEnd).trim();
             if (!line.isEmpty()) {
-                return QUICKJS_ENGINE_DIRECTIVE.equalsIgnoreCase(line);
+                if (QUICKJS_ENGINE_DIRECTIVE.equalsIgnoreCase(line)) {
+                    return ENGINE_QUICKJS;
+                }
+                if (RHINO_ENGINE_DIRECTIVE.equalsIgnoreCase(line)) {
+                    return ENGINE_RHINO;
+                }
+                return null;
             }
             offset = lineEnd + 1;
         }
-        return false;
+        return null;
+    }
+
+    public void setPreferredEngine(@Nullable String engine) {
+        if (engine == null || engine.trim().isEmpty()) {
+            mPreferredEngine = null;
+            return;
+        }
+        String normalized = engine.trim();
+        if ("quickjs".equalsIgnoreCase(normalized) || ENGINE_QUICKJS.equals(normalized)) {
+            mPreferredEngine = ENGINE_QUICKJS;
+        } else if ("rhino".equalsIgnoreCase(normalized) || ENGINE_RHINO.equals(normalized)) {
+            mPreferredEngine = ENGINE_RHINO;
+        } else {
+            throw new IllegalArgumentException("Unsupported JavaScript engine: " + engine);
+        }
     }
 
 

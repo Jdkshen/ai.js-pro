@@ -58,6 +58,9 @@ public class ProjectConfig {
     @SerializedName("useFeatures")
     private List<String> mFeatures = new ArrayList<>();
 
+    @SerializedName("engine")
+    private String mEngine;
+
 
     public static ProjectConfig fromJson(String json) {
         if (json == null) {
@@ -169,6 +172,9 @@ public class ProjectConfig {
     }
 
     public Map<String, ScriptConfig> getScriptConfigs() {
+        if (mScriptConfigs == null) {
+            mScriptConfigs = new HashMap<>();
+        }
         return mScriptConfigs;
     }
 
@@ -224,6 +230,9 @@ public class ProjectConfig {
     }
 
     public List<String> getFeatures() {
+        if (mFeatures == null) {
+            mFeatures = new ArrayList<>();
+        }
         return mFeatures;
     }
 
@@ -231,16 +240,37 @@ public class ProjectConfig {
         mFeatures = features;
     }
 
+    public String getEngine() {
+        return mEngine;
+    }
+
+    public void setEngine(String engine) {
+        mEngine = engine;
+    }
+
+    public String getEngine(String path) {
+        ScriptConfig scriptConfig = mScriptConfigs == null ? null : mScriptConfigs.get(path);
+        if (scriptConfig != null && scriptConfig.getEngine() != null
+                && !scriptConfig.getEngine().trim().isEmpty()) {
+            return scriptConfig.getEngine();
+        }
+        return mEngine;
+    }
+
     public ScriptConfig getScriptConfig(String path) {
+        if (mScriptConfigs == null) {
+            mScriptConfigs = new HashMap<>();
+        }
         ScriptConfig config = mScriptConfigs.get(path);
         if (config == null) {
             config = new ScriptConfig();
         }
-        if(mFeatures.isEmpty()){
+        List<String> projectFeatures = getFeatures();
+        if(projectFeatures.isEmpty()){
             return config;
         }
         ArrayList<String> features = new ArrayList<>(config.getFeatures());
-        for (String feature : mFeatures) {
+        for (String feature : projectFeatures) {
             if (!features.contains(feature)) {
                 features.add(feature);
             }
