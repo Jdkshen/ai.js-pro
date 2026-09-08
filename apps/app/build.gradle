@@ -223,6 +223,7 @@ dependencies {
 }
 
 def bundledSampleDir = file('src/main/assets/sample')
+def bundledQuickJsSampleDir = file('src/main/assets/sample/QuickJS 新引擎')
 def bundledYoloSampleDir = file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测')
 
 tasks.register('verifyBundledSamplesNoNode') {
@@ -285,9 +286,32 @@ tasks.register('verifyBundledYoloSamples') {
     }
 }
 
+tasks.register('verifyQuickJsSamplesMarked') {
+    group = 'verification'
+    description = 'Require every script shown under QuickJS samples to select QuickJS explicitly.'
+    inputs.dir(bundledQuickJsSampleDir)
+
+    doLast {
+        def offenders = fileTree(bundledQuickJsSampleDir) {
+            include '**/*.js'
+        }.files.findAll { sample ->
+            def source = sample.getText('UTF-8').replaceFirst(/^\uFEFF/, '')
+            def firstLine = source.readLines().find { !it.trim().isEmpty() }
+            firstLine == null || !firstLine.trim().equalsIgnoreCase('// @engine quickjs')
+        }
+        if (!offenders.isEmpty()) {
+            throw new GradleException('QuickJS sample is missing the first-line engine marker:\n' +
+                    offenders.collect {
+                        ' - ' + bundledQuickJsSampleDir.toPath().relativize(it.toPath()).toString()
+                    }.sort().join('\n'))
+        }
+    }
+}
+
 tasks.matching { it.name == 'preBuild' }.configureEach {
     dependsOn tasks.named('verifyBundledSamplesNoNode')
     dependsOn tasks.named('verifyBundledYoloSamples')
+    dependsOn tasks.named('verifyQuickJsSamplesMarked')
 }
 
 tasks.register('verifyReleaseConfiguration') {

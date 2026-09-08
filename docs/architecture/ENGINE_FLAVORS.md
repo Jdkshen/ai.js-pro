@@ -50,8 +50,13 @@
 
 ```powershell
 .\tools\test-miuix.ps1
+.\tools\test-engine-flavors-device.ps1 -Serial cccc62c7
 .\release.ps1 -Variant MiuixCompatDebug -SkipNative
 .\release.ps1 -Variant MiuixLiteDebug -SkipNative
 ```
 
+设备矩阵脚本会依次验证 compat QuickJS、compat 无标记 Rhino、lite QuickJS 和 lite
+Rhino 可控拒绝路径，每次都检查 crash buffer，最后自动回装 compat。
+
 正式移除 Rhino 前必须覆盖 `ui`、`floaty`、`threads`、`events`、`web`、debugger、编辑器解析和 Java 桥接回归。
+当前通过项和硬阻塞见 `docs/architecture/QUICKJS_MIGRATION_MATRIX.md`。

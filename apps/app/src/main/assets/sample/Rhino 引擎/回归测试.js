@@ -1,5 +1,5 @@
 // Rhino 回归测试 — 验证 QuickJS 改动没有破坏 Rhino 引擎功能
-// 注意：此脚本使用 Rhino 引擎（默认），不需要 // @engine quickjs
+// 注意：此脚本故意不加标记，用于验证历史脚本继续使用 Rhino。
 
 var pass = 0, fail = 0;
 function assert(name, cond) {

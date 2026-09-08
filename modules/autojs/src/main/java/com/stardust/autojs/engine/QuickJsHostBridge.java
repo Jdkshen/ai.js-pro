@@ -2034,21 +2034,38 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
 
         boolean show() {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                return showNow();
+            }
+            CountDownLatch latch = new CountDownLatch(1);
+            boolean[] result = new boolean[1];
             mHandler.post(() -> {
-                try {
-                    if (mShown) {
-                        return;
-                    }
-                    applyConfig();
-                    mWindowManager.addView(mRoot, mParams);
-                    mShown = true;
-                    Log.i("QuickJsFloatyWindow", "Floaty window " + mId + " shown");
-                } catch (Throwable error) {
-                    Log.e("QuickJsFloatyWindow", "addView failed", error);
-                    mShown = false;
-                }
+                result[0] = showNow();
+                latch.countDown();
             });
-            return true;
+            try {
+                return latch.await(8, TimeUnit.SECONDS) && result[0];
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        private boolean showNow() {
+            try {
+                if (mShown) {
+                    return true;
+                }
+                applyConfig();
+                mWindowManager.addView(mRoot, mParams);
+                mShown = true;
+                Log.i("QuickJsFloatyWindow", "Floaty window " + mId + " shown");
+                return true;
+            } catch (Throwable error) {
+                Log.e("QuickJsFloatyWindow", "addView failed", error);
+                mShown = false;
+                return false;
+            }
         }
 
         void update(String configJson) {

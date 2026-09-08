@@ -1,5 +1,5 @@
-// Rhino 引擎（默认引擎）全模块回归测试
-// 普通 .js 默认走 Rhino 引擎；无需 // @engine quickjs
+// Rhino 兼容引擎全模块回归测试
+// 故意不加引擎标记，用于验证历史脚本仍会交给 Rhino。
 // 结果写入 /sdcard/脚本/zz_regress_rhino_result.json
 
 var out = {};

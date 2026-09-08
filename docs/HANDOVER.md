@@ -8,6 +8,7 @@
 - Windows 中文检出路径会使 JDK/Gradle 参数文件错误解码，表现为单测 `ClassNotFoundException`。统一使用 `powershell -ExecutionPolicy Bypass -File tools/test-miuix.ps1`；脚本会临时映射 ASCII 盘符并自动清理。
 - 新建脚本和新建项目默认 QuickJS；已有无标记脚本继续 Rhino。支持文件首行 `// @engine quickjs|rhino`、项目顶层 `engine` 和 `scripts.<path>.engine`，文件指令优先。
 - 构建已拆为 `MiuixCompat*` 与 `MiuixLite*`。`:engine-rhino` 只进入 compat；lite 不注册 Rhino 执行引擎，但暂留 `:rhino-language` 供编辑器 Token/AST 使用。完整边界和命令见 `docs/architecture/ENGINE_FLAVORS.md`。
+- `tools/test-engine-flavors-device.ps1` 已在 K40 通过 compat/lite 矩阵，覆盖 QuickJS 基础模块、threads/events、UI/floaty 真实创建、Rhino 23 项兼容及 lite 拒绝路径。剩余移除门禁见 `docs/architecture/QUICKJS_MIGRATION_MATRIX.md`。
 - 本节与 `docs/REMAINING_WORK.md` 是当前结论；本文后续日期更早的内容仅作历史记录，冲突时以本节为准。
 
 ## Miuix 脚本 MCP 与示例页（2026-09-06，最新）
