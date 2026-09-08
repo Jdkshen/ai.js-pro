@@ -25,5 +25,4 @@
 #-renamesourcefileattribute SourceFile
 
 -dontwarn org.mozilla.javascript.**
--dontwarn jackpal.androidterm.**
 -keep class org.mozilla.javascript.** { *; }

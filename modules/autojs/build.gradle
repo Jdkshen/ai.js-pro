@@ -69,10 +69,8 @@ dependencies {
     // log4j
     api group: 'de.mindpipe.android', name: 'android-logging-log4j', version: '1.0.3'
     api group: 'log4j', name: 'log4j', version: '1.2.17'
-    // Terminal emulator
-    api(name: 'libtermexec-release', ext: 'aar')
-    api(name: 'emulatorview-release', ext: 'aar')
-    api(name: 'term-debug', ext: 'aar')
+    // Background shells use ProcessBuilder. The legacy Jackpal terminal AARs
+    // only contain obsolete ABIs and must not be restored to arm64 builds.
     api files('libs/rhino-1.7.7.2.jar')
     api project(path: ':common')
     api project(path: ':automator')

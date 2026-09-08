@@ -21,7 +21,6 @@
 -dontwarn com.makeramen.**
 -dontwarn org.junit.**
 -dontwarn junit.**
--dontwarn jackpal.androidterm.**
 -dontwarn com.iwebpp.nodeandroid.**
 -dontwarn org.msgpack.core.**
 -dontwarn com.pushtorefresh.storio.**

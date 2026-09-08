@@ -149,14 +149,14 @@ adb -s cccc62c7 install -r -d `
 - 两个 Java 源码包名为 `build`，已在 `.gitignore` 中显式保留：
   - `apps/app/src/main/java/com/jdkshen/aijspro/build/`
   - `apps/app/src/main/java/com/jdkshen/aijspro/autojs/build/`
-- 仓库当前跟踪 QuickJS、ImGui 和终端所需的预编译 `.so`。只有确认重新生成结果属于正式运行时输入并完成 ABI 回归后才能更新；本地验证产物不能混入 UI 或目录整理提交。
+- 仓库当前只跟踪 QuickJS、OpenCV 等正式运行时需要的预编译 `.so`。旧 ImGui 与 Jackpal 终端原生库已移除；本地验证产物不能混入 UI 或目录整理提交。
 - `local.properties`、`.codegraph/` 和本机工具路径不提交。
 
 ## 9. 当前验证基线
 
 - `:app:assembleMiuixDebug` 构建成功；
 - K40：`com.jdkshen.aijspro` 版本 `1.0.1 (464)` 已覆盖安装；
-- K40：AI.js Pro 无障碍已启用并与 RustDesk 同时绑定；
+- K40：当前系统仅保留 RustDesk 无障碍，AI.js Pro 无障碍需由用户按需重新开启；
 - 快速开启路径已确认不再使用小米 10 秒手动倒计时；
 - 最近完整 QuickJS 回归记录为 46/46；
 - 当前分支已与 `origin/chore/upgrade-gradle-8` 同步。

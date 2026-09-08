@@ -61,16 +61,22 @@ class ActivityInfoProvider(private val context: Context) : AccessibilityDelegate
         get() = mUseShell
         set(value) {
             if (value) {
-                mShell.let {
-                    if (it == null) {
+                if (mShell == null) {
+                    try {
                         mShell = createShell(200)
+                        mUseShell = true
+                    } catch (error: RuntimeException) {
+                        Log.w(LOG_TAG, "Cannot enable stable-mode shell; using accessibility events", error)
+                        mShell?.exit()
+                        mShell = null
+                        mUseShell = false
                     }
                 }
             } else {
                 mShell?.exit()
                 mShell = null
+                mUseShell = false
             }
-            mUseShell = value
         }
 
     override val eventTypes: Set<Int>?

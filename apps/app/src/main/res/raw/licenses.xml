@@ -72,12 +72,6 @@
         <license>MIT License</license>
     </notice>
     <notice>
-        <name>Android Terminal Emulator</name>
-        <copyright/>
-        <url>https://github.com/jackpal/Android-Terminal-Emulator</url>
-        <license>Apache Software License 2.0</license>
-    </notice>
-    <notice>
         <name>RecyclerView-FlexibleDivider</name>
         <copyright>Copyright 2016 yqritc</copyright>
         <url>https://github.com/yqritc/RecyclerView-FlexibleDivider</url>

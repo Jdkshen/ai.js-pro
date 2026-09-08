@@ -94,9 +94,9 @@
 - [x] 删除 Manifest 注册、工作台 Activity、Surface/Bridge/AccessibilityProvider 和 C++ 实现；
 - [x] 删除三 ABI 的 `libautojs_imgui.so`；APK 体积变化在本轮构建后记录；
 - [x] 将 `ProCodeEditorActivity`、`EmbeddedTerminalActivity` 分别移入 `ui.editor` 和 `ui.terminal`，避免与未来 QuickJS ImGui 悬浮 API 混淆；
-- [ ] `miuixDebug`、`commonDebug` 均已构建；Miuix Debug 已在 K40 覆盖安装、冷启动通过，编辑器、终端、示例和资源页仍需完整点击回归。
+- [ ] `miuixDebug`、`commonDebug` 均已构建；Miuix Debug 已在 K40 覆盖安装，设置稳定模式和独立终端已点击通过，编辑器、示例和资源页仍需完整回归。
 
-注意：QuickJS、OpenCV、终端所需 `.so` 不能跟随 ImGui 一起删除。原生库变更必须单独提交，并附 ABI 和真机回归结果。
+注意：QuickJS 和 OpenCV 所需 `.so` 仍是正式运行时输入。后台 Shell 与独立终端已改用 `ProcessBuilder`，不再需要仅支持旧 ABI 的 Jackpal 终端 AAR/`.so`。
 
 ### 3.2 统一 Miuix 弹窗和菜单
 
