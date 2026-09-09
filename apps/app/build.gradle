@@ -327,8 +327,66 @@ tasks.register('verifyReleaseConfiguration') {
     }
 }
 
+def releaseManifestPolicyFile = file('src/release/AndroidManifest.xml')
+
+tasks.register('verifyReleaseManifestPolicy') {
+    group = 'verification'
+    description = 'Keep development-only privileged permissions out of distributable releases.'
+    inputs.file(releaseManifestPolicyFile)
+
+    doLast {
+        if (!releaseManifestPolicyFile.isFile()) {
+            throw new GradleException('Missing release manifest permission policy: ' + releaseManifestPolicyFile)
+        }
+        def policy = new XmlSlurper(false, false).parse(releaseManifestPolicyFile)
+        def androidNamespace = new groovy.xml.Namespace('http://schemas.android.com/apk/res/android', 'android')
+        def toolsNamespace = new groovy.xml.Namespace('http://schemas.android.com/tools', 'tools')
+        def secureSettingsRemoval = policy.'uses-permission'.find { permission ->
+            permission.attributes()[androidNamespace.name] == 'android.permission.WRITE_SECURE_SETTINGS' &&
+                    permission.attributes()[toolsNamespace.node] == 'remove'
+        }
+        if (secureSettingsRemoval == null) {
+            throw new GradleException('Release builds must remove android.permission.WRITE_SECURE_SETTINGS.')
+        }
+    }
+}
+
+def reviewedReleaseManifestTasks = [
+        'processMiuixCompatReleaseMainManifest',
+        'processMiuixLiteReleaseMainManifest'
+]
+
+tasks.matching { it.name in reviewedReleaseManifestTasks }.configureEach { manifestTask ->
+    doLast {
+        def mergedManifests = manifestTask.outputs.files.files.collectMany { output ->
+            if (output.isDirectory()) {
+                return fileTree(output) { include '**/AndroidManifest.xml' }.files as List
+            }
+            return output.isFile() && output.name == 'AndroidManifest.xml' ? [output] : []
+        }.unique()
+        if (mergedManifests.isEmpty()) {
+            throw new GradleException('Cannot locate merged release AndroidManifest.xml for ' + manifestTask.name)
+        }
+        def androidNamespace = new groovy.xml.Namespace('http://schemas.android.com/apk/res/android', 'android')
+        def forbiddenPermissions = ['android.permission.WRITE_SECURE_SETTINGS'] as Set
+        def violations = mergedManifests.collectMany { manifest ->
+            def merged = new XmlSlurper(false, false).parse(manifest)
+            merged.'uses-permission'.findAll { permission ->
+                forbiddenPermissions.contains(permission.attributes()[androidNamespace.name])
+            }.collect { permission ->
+                manifest.toString() + ': ' + permission.attributes()[androidNamespace.name]
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException('Forbidden privileged permission found in merged release manifest:\n' +
+                    violations.collect { ' - ' + it }.join('\n'))
+        }
+    }
+}
+
 tasks.matching { it.name in ['assembleMiuixCompatRelease', 'assembleMiuixLiteRelease'] }.configureEach {
     dependsOn tasks.named('verifyReleaseConfiguration')
+    dependsOn tasks.named('verifyReleaseManifestPolicy')
 }
 
 // Keep the pre-split developer task names as compat aliases so existing local

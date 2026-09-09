@@ -48,7 +48,7 @@ $env:AIJSPRO_KEY_PASSWORD='<key password>'
 | `RECEIVE_BOOT_COMPLETED` | 定时任务及用户开启的启动行为 | 普通权限 | 重启后不自动恢复 | 保留，受用户设置控制 |
 | `FOREGROUND_SERVICE` | 长任务、截图/引擎运行租约 | 普通权限 | 后台任务受限 | 提升 target SDK 时拆分服务类型 |
 | `PACKAGE_USAGE_STATS` | 获取前台包名和 Activity | 使用情况访问设置 | 返回空/降级 | 保留，调用前检查 |
-| `WRITE_SECURE_SETTINGS` | 小米无障碍快速开启并保留其他服务 | Shizuku、ADB 或 Root 一次授予 | 回退系统无障碍设置 | 保留，页面明确高权限含义 |
+| `WRITE_SECURE_SETTINGS` | 小米无障碍快速开启并保留其他服务 | Shizuku、ADB 或 Root 一次授予 | 回退系统无障碍设置 | 仅 debug 保留；release 通过 Manifest overlay 明确移除 |
 | `QUERY_ALL_PACKAGES` / MIUI `GET_INSTALLED_APPS` | 脚本 App API、包名与应用名查询 | Manifest/MIUI 运行时授权 | 只返回可见应用 | 发布渠道要求专项复核 |
 | `ACCESS_FINE_LOCATION` | 用户脚本可选能力 | 脚本按需申请 | 对应脚本失败 | 不由主界面主动申请 |
 | `RECORD_AUDIO` | 用户脚本录音能力 | 脚本按需申请 | 录音脚本失败 | 不由主界面主动申请 |
@@ -60,6 +60,7 @@ $env:AIJSPRO_KEY_PASSWORD='<key password>'
 - 全新安装首次启动不集中弹出定位、录音或电话权限；
 - 拒绝任意非核心权限时应用仍可进入脚本列表；
 - 未授予 `WRITE_SECURE_SETTINGS` 时无障碍入口回退系统设置，不循环报错；
+- release APK 不声明 `WRITE_SECURE_SETTINGS`；ADB/Shizuku 快速开启只作为开发设备能力；
 - 快速开启无障碍不会覆盖 RustDesk 等其他已启用服务；
 - 关闭悬浮窗、通知或电池优化授权后，页面显示真实状态；
 - MCP 默认只监听 loopback，局域网模式始终需要令牌；

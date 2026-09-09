@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      WRITE_SECURE_SETTINGS is useful on developer devices after an explicit
+      ADB/Shizuku/root grant, but ordinary users cannot grant it. Keep it in
+      debug builds and remove it from every distributable release variant.
+
+      Shizuku/root can still execute the secure-settings command under their
+      own identity; without either capability the app falls back to Android's
+      accessibility settings screen.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:node="remove"/>
+
+</manifest>
