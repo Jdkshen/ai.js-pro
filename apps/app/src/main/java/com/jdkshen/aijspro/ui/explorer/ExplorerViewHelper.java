@@ -47,7 +47,7 @@ public class ExplorerViewHelper {
             return "";
         }
 
-        return type.substring(0, 1).toUpperCase();
+        return type.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
     }
 
     public static int getIconColor(ExplorerItem item) {

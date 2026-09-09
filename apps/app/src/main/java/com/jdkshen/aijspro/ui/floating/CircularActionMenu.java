@@ -103,10 +103,14 @@ public class CircularActionMenu extends FrameLayout {
         if (attrs == null)
             return;
         TypedArray a = getContext().obtainStyledAttributes(attrs, R.styleable.CircularActionMenu);
-        mRadius = a.getDimensionPixelSize(R.styleable.CircularActionMenu_cam_radius, (int) mRadius);
-        int angleInDegree = a.getInt(R.styleable.CircularActionMenu_cam_angle, 0);
-        if (angleInDegree != 0) {
-            mAngle = (float) Math.toRadians(angleInDegree);
+        try {
+            mRadius = a.getDimensionPixelSize(R.styleable.CircularActionMenu_cam_radius, (int) mRadius);
+            int angleInDegree = a.getInt(R.styleable.CircularActionMenu_cam_angle, 0);
+            if (angleInDegree != 0) {
+                mAngle = (float) Math.toRadians(angleInDegree);
+            }
+        } finally {
+            a.recycle();
         }
         for (int i = 0; i < getItemCount(); i++) {
             View v = getItemAt(i);
@@ -303,6 +307,13 @@ public class CircularActionMenu extends FrameLayout {
 
     private void calcExpandedPositions() {
         mItemExpandedPositionOffsets = new PointF[getItemCount()];
+        if (getItemCount() == 0) {
+            return;
+        }
+        if (getItemCount() == 1) {
+            mItemExpandedPositionOffsets[0] = new PointF(mRadius, 0f);
+            return;
+        }
         double averageAngle = mAngle / (getItemCount() - 1);
         for (int i = 0; i < getItemCount(); i++) {
             double angle = -mAngle / 2 + i * averageAngle;
@@ -312,6 +323,11 @@ public class CircularActionMenu extends FrameLayout {
     }
 
     private void calcExpandedSize() {
+        if (getItemCount() == 0) {
+            mExpandedWidth = 0;
+            mExpandedHeight = 0;
+            return;
+        }
         int maxX = 0;
         int maxY = 0;
         int minY = Integer.MAX_VALUE;

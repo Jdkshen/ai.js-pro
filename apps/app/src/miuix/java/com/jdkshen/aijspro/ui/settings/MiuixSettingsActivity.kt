@@ -42,6 +42,7 @@ import de.psdev.licensesdialog.LicenseResolver
 import de.psdev.licensesdialog.LicensesDialog
 import de.psdev.licensesdialog.licenses.License
 import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.schedulers.Schedulers
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -70,6 +71,7 @@ class MiuixSettingsActivity : ComponentActivity() {
 
     private var revision by mutableIntStateOf(0)
     private val prefs by lazy { PreferenceManager.getDefaultSharedPreferences(this) }
+    private val disposables = CompositeDisposable()
 
     private val completionShow = mutableStateOf(false)
     private val completionText = mutableStateOf(TextFieldValue("2000"))
@@ -101,6 +103,11 @@ class MiuixSettingsActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         revision++
+    }
+
+    override fun onDestroy() {
+        disposables.clear()
+        super.onDestroy()
     }
 
     private fun getKey(id: Int): String = getString(id)
@@ -354,7 +361,7 @@ class MiuixSettingsActivity : ComponentActivity() {
         val observable = if (mode == 1) FileObservable.copy(oldDir.path, newDir.path)
         else FileObservable.move(oldDir.path, newDir.path)
         Toast.makeText(this, getString(R.string.text_on_progress), Toast.LENGTH_SHORT).show()
-        observable.subscribeOn(Schedulers.io())
+        disposables.add(observable.subscribeOn(Schedulers.io())
             .observeOn(AndroidSchedulers.mainThread())
             .subscribe({ }, { e ->
                 // Keep the old preference on any failure; copied files remain recoverable.
@@ -364,7 +371,7 @@ class MiuixSettingsActivity : ComponentActivity() {
                 com.jdkshen.aijspro.model.explorer.Explorers.workspace().refreshAll()
                 revision++
                 Toast.makeText(this, "完成", Toast.LENGTH_SHORT).show()
-            })
+            }))
     }
 
     private fun normalizeScriptDir(input: String): String? {

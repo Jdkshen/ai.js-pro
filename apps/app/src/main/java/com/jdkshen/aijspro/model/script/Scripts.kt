@@ -3,7 +3,6 @@ package com.jdkshen.aijspro.model.script
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.annotation.Nullable
 import android.widget.Toast
 
 import com.stardust.app.GlobalAppContext
@@ -45,10 +44,14 @@ object Scripts {
                 || file.name.endsWith(".auto")
     }
 
+    private fun executionFinishedIntent(): Intent =
+            Intent(ACTION_ON_EXECUTION_FINISHED)
+                    .setPackage(GlobalAppContext.get().packageName)
+
     private val BROADCAST_SENDER_SCRIPT_EXECUTION_LISTENER = object : SimpleScriptExecutionListener() {
 
         override fun onSuccess(execution: ScriptExecution, result: Any?) {
-            GlobalAppContext.get().sendBroadcast(Intent(ACTION_ON_EXECUTION_FINISHED))
+            GlobalAppContext.get().sendBroadcast(executionFinishedIntent())
         }
 
         override fun onException(execution: ScriptExecution, e: Throwable) {
@@ -60,11 +63,11 @@ object Scripts {
                 col = rhinoException.columnNumber()
             }
             if (ScriptInterruptedException.causedByInterrupted(e)) {
-                GlobalAppContext.get().sendBroadcast(Intent(ACTION_ON_EXECUTION_FINISHED)
+                GlobalAppContext.get().sendBroadcast(executionFinishedIntent()
                         .putExtra(EXTRA_EXCEPTION_LINE_NUMBER, line)
                         .putExtra(EXTRA_EXCEPTION_COLUMN_NUMBER, col))
             } else {
-                GlobalAppContext.get().sendBroadcast(Intent(ACTION_ON_EXECUTION_FINISHED)
+                GlobalAppContext.get().sendBroadcast(executionFinishedIntent()
                         .putExtra(EXTRA_EXCEPTION_MESSAGE, e.message)
                         .putExtra(EXTRA_EXCEPTION_LINE_NUMBER, line)
                         .putExtra(EXTRA_EXCEPTION_COLUMN_NUMBER, col))
@@ -141,7 +144,6 @@ object Scripts {
     private fun workingDirectory(file: File): String =
             file.absoluteFile.parent ?: Pref.getScriptDirPath()
 
-    @Nullable
     fun getRhinoException(throwable: Throwable?): RhinoException? {
         var e = throwable
         while (e != null) {

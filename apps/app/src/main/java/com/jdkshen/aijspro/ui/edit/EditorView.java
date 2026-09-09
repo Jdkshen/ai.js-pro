@@ -16,6 +16,7 @@ import androidx.annotation.Nullable;
 import com.google.android.material.snackbar.Snackbar;
 
 import androidx.core.view.GravityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
@@ -136,6 +137,7 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
             }
         }
     };
+    private boolean mRunFinishedReceiverRegistered;
 
     private SparseBooleanArray mMenuItemStatus = new SparseBooleanArray();
     private String mRestoredText;
@@ -172,7 +174,12 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        getContext().registerReceiver(mOnRunFinishedReceiver, new IntentFilter(ACTION_ON_EXECUTION_FINISHED));
+        if (!mRunFinishedReceiverRegistered) {
+            ContextCompat.registerReceiver(getContext(), mOnRunFinishedReceiver,
+                    new IntentFilter(ACTION_ON_EXECUTION_FINISHED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED);
+            mRunFinishedReceiverRegistered = true;
+        }
         if (getContext() instanceof BackPressedHandler.HostActivity) {
             ((BackPressedHandler.HostActivity) getContext()).getBackPressedObserver().registerHandler(mFunctionsKeyboardHelper);
         }
@@ -181,7 +188,10 @@ public class EditorView extends FrameLayout implements CodeCompletionBar.OnHintC
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        getContext().unregisterReceiver(mOnRunFinishedReceiver);
+        if (mRunFinishedReceiverRegistered) {
+            getContext().unregisterReceiver(mOnRunFinishedReceiver);
+            mRunFinishedReceiverRegistered = false;
+        }
         if (getContext() instanceof BackPressedHandler.HostActivity) {
             ((BackPressedHandler.HostActivity) getContext()).getBackPressedObserver().unregisterHandler(mFunctionsKeyboardHelper);
         }

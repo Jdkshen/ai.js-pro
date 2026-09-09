@@ -15,7 +15,6 @@ import androidx.appcompat.widget.Toolbar;
 import android.view.Menu;
 import android.view.View;
 
-import com.stardust.app.GlobalAppContext;
 import com.stardust.theme.ThemeColorManager;
 
 import com.jdkshen.aijspro.Pref;
@@ -43,21 +42,15 @@ public abstract class BaseActivity extends AppCompatActivity {
     }
 
     protected void applyDayNightMode() {
-        GlobalAppContext.post(() -> {
-            if (Pref.isNightModeEnabled()) {
-                setNightModeEnabled(Pref.isNightModeEnabled());
-            }
-        });
+        setNightModeEnabled(Pref.isNightModeEnabled());
     }
 
     public void setNightModeEnabled(boolean enabled) {
-        if (enabled) {
-            getDelegate().setLocalNightMode(AppCompatDelegate.MODE_NIGHT_YES);
-        } else {
-            getDelegate().setLocalNightMode(AppCompatDelegate.MODE_NIGHT_NO);
-        }
-        if (getDelegate().applyDayNight()) {
-            recreate();
+        int requestedMode = enabled
+                ? AppCompatDelegate.MODE_NIGHT_YES
+                : AppCompatDelegate.MODE_NIGHT_NO;
+        if (AppCompatDelegate.getDefaultNightMode() != requestedMode) {
+            AppCompatDelegate.setDefaultNightMode(requestedMode);
         }
     }
 

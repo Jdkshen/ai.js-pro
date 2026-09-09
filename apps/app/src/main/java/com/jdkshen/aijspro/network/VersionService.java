@@ -25,7 +25,6 @@ import io.reactivex.Observable;
 import io.reactivex.annotations.NonNull;
 import io.reactivex.schedulers.Schedulers;
 import retrofit2.Retrofit;
-import retrofit2.HttpException;
 import retrofit2.converter.gson.GsonConverterFactory;
 
 /**
@@ -71,12 +70,21 @@ public class VersionService {
                 .onErrorResumeNext(error -> {
                     // A repository without a published release returns 404. Treat that as
                     // "already latest" instead of surfacing a network failure to the user.
-                    if (error instanceof HttpException && ((HttpException) error).code() == 404) {
+                    if (isNotFound(error)) {
                         return Observable.just(VersionInfo.current());
                     }
                     return Observable.error(error);
                 })
                 .subscribeOn(Schedulers.io());
+    }
+
+    static boolean isNotFound(Throwable error) {
+        // This project still uses Jake Wharton's legacy RxJava2 adapter, whose HTTP
+        // exception is not retrofit2.HttpException even though both expose code().
+        return (error instanceof com.jakewharton.retrofit2.adapter.rxjava2.HttpException
+                && ((com.jakewharton.retrofit2.adapter.rxjava2.HttpException) error).code() == 404)
+                || (error instanceof retrofit2.HttpException
+                && ((retrofit2.HttpException) error).code() == 404);
     }
 
     static VersionInfo fromGitHubRelease(GitHubRelease release) {

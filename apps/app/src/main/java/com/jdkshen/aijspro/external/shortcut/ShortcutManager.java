@@ -26,8 +26,8 @@ public class ShortcutManager {
 
 
     public ShortcutManager(Context context) {
-        mContext = context;
-        mShortcutManager = (android.content.pm.ShortcutManager) context.getSystemService(Context.SHORTCUT_SERVICE);
+        mContext = context.getApplicationContext();
+        mShortcutManager = (android.content.pm.ShortcutManager) mContext.getSystemService(Context.SHORTCUT_SERVICE);
     }
 
     public static ShortcutManager getInstance(Context context) {
@@ -46,7 +46,7 @@ public class ShortcutManager {
         ShortcutInfo shortcut = buildShortcutInfo(label, id, icon, intent);
         int req = getRequestCode(id);
         PendingIntent successCallback = PendingIntent.getBroadcast(mContext, req,
-                mShortcutManager.createShortcutResultIntent(shortcut), 0);
+                mShortcutManager.createShortcutResultIntent(shortcut), PendingIntent.FLAG_IMMUTABLE);
         mShortcutManager.requestPinShortcut(shortcut, successCallback.getIntentSender());
     }
 

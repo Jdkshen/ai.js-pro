@@ -29,6 +29,7 @@ public class TimedTaskScheduler {
     private static final long SCHEDULE_TASK_MIN_TIME = TimeUnit.DAYS.toMillis(2);
 
     private static final String JOB_TAG_CHECK_TASKS = "checkTasks";
+    private static boolean sInitialized;
 
 
     @SuppressLint("CheckResult")
@@ -74,7 +75,11 @@ public class TimedTaskScheduler {
         Log.d(LOG_TAG, "cancel task: task = " + timedTask + ", cancel = " + cancelCount);
     }
 
-    public static void init(@NotNull Context context) {
+    public static synchronized void init(@NotNull Context context) {
+        if (sInitialized) {
+            return;
+        }
+        sInitialized = true;
         JobManager.create(context).addJobCreator(tag -> {
             if (tag.equals(JOB_TAG_CHECK_TASKS)) {
                 return new CheckTasksJob(context);
@@ -84,6 +89,9 @@ public class TimedTaskScheduler {
         });
         new JobRequest.Builder(JOB_TAG_CHECK_TASKS)
                 .setPeriodic(TimeUnit.MINUTES.toMillis(20))
+                // Application can be created in more than one process. Keep one checker instead
+                // of accumulating a new periodic job on every process/app restart.
+                .setUpdateCurrent(true)
                 .build()
                 .scheduleAsync();
         checkTasks(context, true);

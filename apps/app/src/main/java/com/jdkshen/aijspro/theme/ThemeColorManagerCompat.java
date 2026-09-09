@@ -37,15 +37,22 @@ public class ThemeColorManagerCompat {
     }
 
     public static void setNightModeEnabled(boolean enabled) {
+        int requestedMode = enabled
+                ? AppCompatDelegate.MODE_NIGHT_YES
+                : AppCompatDelegate.MODE_NIGHT_NO;
         if (enabled) {
-            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
+            if (AppCompatDelegate.getDefaultNightMode() != requestedMode) {
+                AppCompatDelegate.setDefaultNightMode(requestedMode);
+            }
             ThemeColor currentTheme = ThemeColor.fromPreferences(PreferenceManager.getDefaultSharedPreferences(sContext), null);
             if (currentTheme != null) {
                 currentTheme.saveIn(sSharedPreferences);
             }
             ThemeColorManager.setThemeColor(ContextCompat.getColor(sContext, R.color.theme_color_black));
         } else {
-            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
+            if (AppCompatDelegate.getDefaultNightMode() != requestedMode) {
+                AppCompatDelegate.setDefaultNightMode(requestedMode);
+            }
             ThemeColor previousTheme = ThemeColor.fromPreferences(sSharedPreferences, null);
             if (previousTheme != null) {
                 ThemeColorManager.setThemeColor(previousTheme.colorPrimary);
@@ -54,10 +61,14 @@ public class ThemeColorManagerCompat {
     }
 
     public static void init(Context context, ThemeColor defaultThemeColor) {
-        sContext = context;
-        sSharedPreferences = context.getSharedPreferences("theme_color", Context.MODE_PRIVATE);
+        sContext = context.getApplicationContext();
+        sSharedPreferences = sContext.getSharedPreferences("theme_color", Context.MODE_PRIVATE);
         ThemeColorManager.setDefaultThemeColor(defaultThemeColor);
-        ThemeColorManager.init(context);
-        PreferenceManager.getDefaultSharedPreferences(context).registerOnSharedPreferenceChangeListener(sPreferenceChangeListener);
+        ThemeColorManager.init(sContext);
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(sContext);
+        preferences.registerOnSharedPreferenceChangeListener(sPreferenceChangeListener);
+        // Apply before the first Activity is created. Applying it from MainActivity.onCreate
+        // caused AppCompat and MIUI to schedule several back-to-back relaunches on cold start.
+        setNightModeEnabled(preferences.getBoolean(sContext.getString(R.string.key_night_mode), false));
     }
 }

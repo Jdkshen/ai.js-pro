@@ -9,6 +9,7 @@ import android.os.Bundle;
 import com.google.android.material.snackbar.Snackbar;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 import android.util.SparseArray;
 import android.view.Menu;
@@ -74,6 +75,7 @@ public class ViewSampleActivity extends AppCompatActivity implements OnActivityR
             }
         }
     };
+    private boolean mRunFinishedReceiverRegistered;
 
     public void onCreate(Bundle b) {
         super.onCreate(b);
@@ -81,7 +83,10 @@ public class ViewSampleActivity extends AppCompatActivity implements OnActivityR
         setContentView(mView);
         handleIntent(getIntent());
         setUpUI();
-        registerReceiver(mOnRunFinishedReceiver, new IntentFilter(ACTION_ON_EXECUTION_FINISHED));
+        ContextCompat.registerReceiver(this, mOnRunFinishedReceiver,
+                new IntentFilter(ACTION_ON_EXECUTION_FINISHED),
+                ContextCompat.RECEIVER_NOT_EXPORTED);
+        mRunFinishedReceiverRegistered = true;
     }
 
     private void handleIntent(Intent intent) {
@@ -178,7 +183,10 @@ public class ViewSampleActivity extends AppCompatActivity implements OnActivityR
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        unregisterReceiver(mOnRunFinishedReceiver);
+        if (mRunFinishedReceiverRegistered) {
+            unregisterReceiver(mOnRunFinishedReceiver);
+            mRunFinishedReceiverRegistered = false;
+        }
     }
 
     @Override

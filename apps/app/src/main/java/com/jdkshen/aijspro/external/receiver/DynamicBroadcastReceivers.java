@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.IntentFilter;
 import android.os.Build;
+import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import android.util.Log;
 
@@ -33,10 +34,13 @@ public class DynamicBroadcastReceivers {
     public DynamicBroadcastReceivers(Context context) {
         mContext = context;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            mContext.registerReceiver(mDefaultActionReceiver, createIntentFilter(StaticBroadcastReceiver.ACTIONS));
+            ContextCompat.registerReceiver(mContext, mDefaultActionReceiver,
+                    createIntentFilter(StaticBroadcastReceiver.ACTIONS),
+                    ContextCompat.RECEIVER_EXPORTED);
             IntentFilter filter = createIntentFilter(StaticBroadcastReceiver.PACKAGE_ACTIONS);
             filter.addDataScheme("package");
-            mContext.registerReceiver(mPackageActionReceiver, filter);
+            ContextCompat.registerReceiver(mContext, mPackageActionReceiver, filter,
+                    ContextCompat.RECEIVER_EXPORTED);
         }
     }
 
@@ -128,7 +132,9 @@ public class DynamicBroadcastReceivers {
                 LocalBroadcastManager broadcastManager = LocalBroadcastManager.getInstance(mContext);
                 broadcastManager.registerReceiver(receiver, intentFilter);
             } else {
-                mContext.registerReceiver(receiver, intentFilter);
+                // Non-local intent tasks are deliberately callable by automation apps.
+                ContextCompat.registerReceiver(mContext, receiver, intentFilter,
+                        ContextCompat.RECEIVER_EXPORTED);
             }
             Log.d(LOG_TAG, "register: " + actions);
             return true;

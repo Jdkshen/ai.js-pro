@@ -40,6 +40,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.view.GravityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 
 import com.afollestad.materialdialogs.MaterialDialog;
@@ -138,6 +139,7 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     private Debugger mDebugger;
     private ScriptExecution mExecution;
+    private boolean mExecutionFinishedReceiverRegistered;
 
     private final BroadcastReceiver mExecutionFinishedReceiver = new BroadcastReceiver() {
         @Override
@@ -184,8 +186,10 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         }
         resolveWorkspace(initial);
         buildWorkspaceUi();
-        registerReceiver(mExecutionFinishedReceiver,
-                new IntentFilter(Scripts.ACTION_ON_EXECUTION_FINISHED));
+        ContextCompat.registerReceiver(this, mExecutionFinishedReceiver,
+                new IntentFilter(Scripts.ACTION_ON_EXECUTION_FINISHED),
+                ContextCompat.RECEIVER_NOT_EXPORTED);
+        mExecutionFinishedReceiverRegistered = true;
         restoreSessionAndOpen(initial);
     }
 
@@ -1945,7 +1949,10 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
 
     @Override
     protected void onDestroy() {
-        try { unregisterReceiver(mExecutionFinishedReceiver); } catch (Exception ignored) { }
+        if (mExecutionFinishedReceiverRegistered) {
+            unregisterReceiver(mExecutionFinishedReceiver);
+            mExecutionFinishedReceiverRegistered = false;
+        }
         finishDebugSession(true);
         for (EditorTab tab : mTabs) tab.editor.destroy();
         super.onDestroy();
