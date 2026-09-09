@@ -223,6 +223,18 @@ public class Images {
     }
 
     public ImageWrapper read(String path) {
+        if (path != null && path.startsWith("asset://")) {
+            String assetPath = path.substring("asset://".length());
+            try (InputStream input = mContext.getAssets().open(assetPath)) {
+                Bitmap bitmap = BitmapFactory.decodeStream(input);
+                if (bitmap == null) {
+                    throw new IllegalArgumentException("Unable to decode bundled image: " + path);
+                }
+                return ImageWrapper.ofBitmap(bitmap);
+            } catch (IOException error) {
+                throw new IllegalArgumentException("Unable to read bundled image: " + path, error);
+            }
+        }
         path = mScriptRuntime.files.path(path);
         Bitmap bitmap = BitmapFactory.decodeFile(path);
         return ImageWrapper.ofBitmap(bitmap);

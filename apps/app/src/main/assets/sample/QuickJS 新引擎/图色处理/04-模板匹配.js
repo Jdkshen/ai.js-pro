@@ -1,14 +1,9 @@
 // @engine quickjs
 
-// 复用 Rhino 兼容示例中的马里奥素材；素材本身不依赖 Rhino。
-// 从当前“QuickJS 新引擎/图色处理”返回 sample 根目录后再进入 Rhino 目录。
-var exampleRoot = '../../Rhino 引擎/图片与图色处理/找图/';
+// 直接读取 APK 内置素材，因此从示例页运行或只导入这一份脚本都可以使用。
+var exampleRoot = 'asset://sample/Rhino 引擎/图片与图色处理/找图/';
 var sourcePath = exampleRoot + 'super_mario.jpg';
 var templatePath = exampleRoot + 'block.png';
-
-if (!files.exists(sourcePath) || !files.exists(templatePath)) {
-    throw new Error('找不到原项目模板素材，请确认示例目录结构未被移动: ' + files.path(exampleRoot));
-}
 
 // ---- 统计工具 ----
 function percentile(sorted, ratio) {

@@ -1379,6 +1379,33 @@ JSValue nativeReadFrame(JSContext *context, JSValueConst, int argc, JSValueConst
     JNIEnv *env = currentEnv(state);
     const std::string path = jsString(context, argv[0]);
     jclass hostClass = env->GetObjectClass(state->host);
+    if (path.rfind("asset://", 0) == 0) {
+        jmethodID method = env->GetMethodID(hostClass, "readImageAsset", "(Ljava/lang/String;)[B");
+        jstring javaPath = toJavaString(env, path);
+        auto encodedArray = static_cast<jbyteArray>(
+                env->CallObjectMethod(state->host, method, javaPath));
+        env->DeleteLocalRef(javaPath);
+        env->DeleteLocalRef(hostClass);
+        if (env->ExceptionCheck()) {
+            return throwJavaException(context, env);
+        }
+        if (encodedArray == nullptr) {
+            return JS_ThrowInternalError(context, "Unable to read bundled image: %s", path.c_str());
+        }
+        const jsize length = env->GetArrayLength(encodedArray);
+        std::vector<uint8_t> encoded(static_cast<size_t>(length));
+        if (length > 0) {
+            env->GetByteArrayRegion(encodedArray, 0, length,
+                                    reinterpret_cast<jbyte *>(encoded.data()));
+        }
+        env->DeleteLocalRef(encodedArray);
+        std::string error;
+        const int64_t handle = state->frames.fromEncoded(encoded, &error);
+        if (handle == 0) {
+            return JS_ThrowInternalError(context, "%s: %s", error.c_str(), path.c_str());
+        }
+        return frameInfo(context, state, handle);
+    }
     jmethodID method = env->GetMethodID(hostClass, "resolvePath", "(Ljava/lang/String;)Ljava/lang/String;");
     jstring javaPath = toJavaString(env, path);
     auto resolvedPath = static_cast<jstring>(env->CallObjectMethod(state->host, method, javaPath));

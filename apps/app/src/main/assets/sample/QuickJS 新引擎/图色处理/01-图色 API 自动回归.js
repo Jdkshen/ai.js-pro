@@ -27,6 +27,14 @@ try {
     const screen = keep(measured('captureScreenMs', function () {
         return captureScreen({ mode: 'full', fresh: false });
     }));
+    const bundledSource = keep(measured('readBundledImageMs', function () {
+        return images.read('asset://sample/Rhino 引擎/图片与图色处理/找图/super_mario.jpg');
+    }));
+    const bundledTemplate = keep(images.read(
+        'asset://sample/Rhino 引擎/图片与图色处理/找图/block.png'));
+    const bundledPoint = images.findImage(bundledSource, bundledTemplate, { threshold: 0.8 });
+    assert(bundledPoint && bundledPoint.x === 221 && bundledPoint.y === 130,
+        '读取 APK 内置图片并找图');
     const x = Math.floor(screen.width / 2);
     const y = Math.floor(screen.height / 2);
     const sampled = measured('pixel3TotalMs', function () {

@@ -3,10 +3,10 @@ function __formatMs(value) { return Number(value).toFixed(3); }
 
 
 var sourceStartedAt = __nowMs();
-var superMario = images.read("./super_mario.jpg");
+var superMario = images.read("asset://sample/Rhino 引擎/图片与图色处理/找图/super_mario.jpg");
 console.log("[Rhino耗时] 读取原图: " + __formatMs(__nowMs() - sourceStartedAt) + " ms");
 var templateStartedAt = __nowMs();
-var mario = images.read("./mario.png");
+var mario = images.read("asset://sample/Rhino 引擎/图片与图色处理/找图/mario.png");
 console.log("[Rhino耗时] 读取模板: " + __formatMs(__nowMs() - templateStartedAt) + " ms");
 var findStartedAt = __nowMs();
 var point = findImage(superMario, mario);

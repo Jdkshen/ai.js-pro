@@ -430,6 +430,23 @@ final class QuickJsHostBridge implements AutoCloseable {
         return mRuntime.files.path(path);
     }
 
+    public byte[] readImageAsset(String path) {
+        if (!isAssetPath(path)) {
+            throw new IllegalArgumentException("Bundled image path must start with asset://");
+        }
+        try (InputStream input = mRuntime.uiHandler.getContext().getAssets().open(stripAssetPrefix(path));
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        } catch (IOException error) {
+            throw new IllegalArgumentException("Unable to read bundled image: " + path, error);
+        }
+    }
+
     public boolean isYoloAvailable(String backend) {
         return mRuntime.yolo.isAvailable(backend);
     }
