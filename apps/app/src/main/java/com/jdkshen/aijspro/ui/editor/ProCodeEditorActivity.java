@@ -1513,6 +1513,19 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         EditorTab tab = mActiveTab;
         if (tab == null) return;
         tab.editor.getCodeEditText().unfoldAll();
+        File backup = null;
+        try {
+            File backupDir = new File(Pref.getScriptDirPath(), ".aijspro-sample-backups");
+            if (!backupDir.isDirectory() && !backupDir.mkdirs()) {
+                throw new IOException("无法创建示例备份目录");
+            }
+            backup = new File(backupDir,
+                    tab.file.getName() + "." + System.currentTimeMillis() + ".bak");
+            FileUtils.copyFile(tab.file, backup);
+        } catch (IOException error) {
+            Toast.makeText(this, "备份失败，未覆盖原文件：" + error.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
         try (InputStream input = getAssets().open(assetPath);
              FileOutputStream output = new FileOutputStream(tab.file, false)) {
             byte[] buffer = new byte[32 * 1024];
@@ -1525,8 +1538,15 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             tab.dirtyMarkerShown = false;
             tab.editor.markTextAsSaved();
             refreshTabs();
-            toast("已恢复内置示例");
+            toast("已恢复最新版；原文件已备份");
         } catch (IOException error) {
+            if (backup != null && backup.isFile()) {
+                try {
+                    FileUtils.copyFile(backup, tab.file);
+                } catch (IOException restoreError) {
+                    error.addSuppressed(restoreError);
+                }
+            }
             Toast.makeText(this, "重置失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
         }
     }

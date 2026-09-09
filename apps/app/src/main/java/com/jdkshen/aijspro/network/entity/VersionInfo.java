@@ -8,6 +8,7 @@ import com.jdkshen.aijspro.BuildConfig;
 import org.json.JSONObject;
 
 import java.util.List;
+import java.util.Collections;
 
 /**
  * Created by Stardust on 2017/9/20.
@@ -29,6 +30,9 @@ public class VersionInfo {
     }
 
     public OldVersion getOldVersion(int versionCode) {
+        if (oldVersions == null) {
+            return null;
+        }
         for (OldVersion oldVersion : oldVersions) {
             if (oldVersion.versionCode == versionCode) {
                 return oldVersion;
@@ -39,6 +43,16 @@ public class VersionInfo {
 
     public boolean isNewer() {
         return versionCode > BuildConfig.VERSION_CODE;
+    }
+
+    public static VersionInfo current() {
+        VersionInfo info = new VersionInfo();
+        info.versionCode = BuildConfig.VERSION_CODE;
+        info.versionName = BuildConfig.VERSION_NAME;
+        info.releaseNotes = "当前暂无可用的新版本。";
+        info.downloads = Collections.emptyList();
+        info.oldVersions = Collections.emptyList();
+        return info;
     }
 
     @Override

@@ -217,6 +217,10 @@ dependencies {
     implementation project(':autojs')
     compileOnly project(':rhino-language')
     compatImplementation project(':engine-rhino')
+    // The lite runtime rejects Rhino script execution, but the shared editor highlighter and
+    // legacy UI API still link Rhino language types. Keep the language jar until those two
+    // consumers are moved behind flavor-specific adapters; removing it passes compilation but
+    // fails the first QuickJS run with NoClassDefFoundError (ProxyObject/NativeObject).
     liteImplementation project(':rhino-language')
     implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')

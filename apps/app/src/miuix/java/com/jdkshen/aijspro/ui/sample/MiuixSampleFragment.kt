@@ -382,6 +382,14 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     if (!entry.directory) {
                         if (entry.runnable) ActionChoice("运行") { dismiss(); run(entry) }
                         ActionChoice("导入", requestImport)
+                        val imported = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
+                        if (imported.isFile) {
+                            ActionChoice("打开已导入副本（可恢复最新版）") {
+                                dismiss()
+                                startActivity(ProCodeEditorActivity.sampleIntent(
+                                    requireContext(), imported, entry.path))
+                            }
+                        }
                     }
                     ActionChoice("取消", dismiss)
                 }
@@ -415,6 +423,9 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         val context = requireContext()
         val existing = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
         if (existing.isFile) {
+            Toast.makeText(context,
+                "已打开导入副本；如内容较旧，可点编辑器顶部“重置”并自动备份后恢复最新版",
+                Toast.LENGTH_LONG).show()
             startActivity(ProCodeEditorActivity.sampleIntent(context, existing, entry.path))
             return
         }
@@ -446,7 +457,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("导入示例", fontSize = 22.sp)
-                    Text("复制到我的脚本，已有文件不会被覆盖。", fontSize = 14.sp,
+                    Text("复制到我的脚本，已有文件不会被覆盖；旧副本可从详情进入编辑器后点“重置”升级。", fontSize = 14.sp,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary)
                     TextField(name, { if (!busy) { name = it; error = null } },
                         Modifier.fillMaxWidth(), singleLine = true, label = "文件名")

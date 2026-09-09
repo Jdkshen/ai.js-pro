@@ -2,25 +2,30 @@ package com.jdkshen.aijspro.network;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.preference.PreferenceManager;
-import android.widget.Toast;
+import android.text.TextUtils;
 
 import com.google.gson.GsonBuilder;
 import com.jakewharton.retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
-import com.jdkshen.aijspro.App;
 import com.jdkshen.aijspro.BuildConfig;
-import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.network.api.UpdateCheckApi;
+import com.jdkshen.aijspro.network.entity.GitHubRelease;
 import com.jdkshen.aijspro.network.entity.VersionInfo;
 import com.jdkshen.aijspro.tool.SimpleObserver;
-import com.jdkshen.aijspro.ui.update.UpdateInfoDialogBuilder;
 import com.stardust.util.NetworkUtils;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import io.reactivex.Observable;
-import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.annotations.NonNull;
 import io.reactivex.schedulers.Schedulers;
 import retrofit2.Retrofit;
+import retrofit2.HttpException;
 import retrofit2.converter.gson.GsonConverterFactory;
 
 /**
@@ -31,6 +36,10 @@ public class VersionService {
 
     private static final String KEY_DEPRECATED = "KEY_DEPRECATED";
     private static final String KEY_DEPRECATED_VERSION_CODE = "KEY_DEPRECATED_VERSION_CODE";
+    private static final Pattern VERSION_CODE_IN_BODY = Pattern.compile(
+            "(?im)^\\s*versionCode\\s*[:=]\\s*(\\d+)\\s*$");
+    private static final Pattern VERSION_CODE_IN_TAG = Pattern.compile(
+            "(?:\\+|[-_.]vc)(\\d+)$", Pattern.CASE_INSENSITIVE);
 
     private static VersionService sInstance = new VersionService();
     private boolean mDeprecated = false;
@@ -40,7 +49,7 @@ public class VersionService {
 
     public VersionService() {
         mRetrofit = new Retrofit.Builder()
-                .baseUrl("https://www.autojs.org/")
+                .baseUrl("https://api.github.com/")
                 .addConverterFactory(GsonConverterFactory.create(new GsonBuilder()
                         .setLenient()
                         .create()))
@@ -55,7 +64,113 @@ public class VersionService {
     public Observable<VersionInfo> checkForUpdates() {
         return mRetrofit.create(UpdateCheckApi.class)
                 .checkForUpdates()
+                .map(VersionService::fromGitHubRelease)
+                .onErrorResumeNext(error -> {
+                    // A repository without a published release returns 404. Treat that as
+                    // "already latest" instead of surfacing a network failure to the user.
+                    if (error instanceof HttpException && ((HttpException) error).code() == 404) {
+                        return Observable.just(VersionInfo.current());
+                    }
+                    return Observable.error(error);
+                })
                 .subscribeOn(Schedulers.io());
+    }
+
+    static VersionInfo fromGitHubRelease(GitHubRelease release) {
+        if (release == null || release.draft) {
+            return VersionInfo.current();
+        }
+        VersionInfo info = new VersionInfo();
+        info.versionName = releaseVersionName(release);
+        info.versionCode = releaseVersionCode(release, info.versionName);
+        info.releaseNotes = TextUtils.isEmpty(release.body)
+                ? "查看 GitHub Releases 获取本次更新说明。" : release.body;
+        info.deprecated = 0;
+        info.oldVersions = Collections.emptyList();
+        info.downloads = new ArrayList<>();
+
+        GitHubRelease.Asset preferred = null;
+        int preferredScore = Integer.MIN_VALUE;
+        if (release.assets != null) {
+            for (GitHubRelease.Asset asset : release.assets) {
+                if (asset == null || TextUtils.isEmpty(asset.name)
+                        || TextUtils.isEmpty(asset.browserDownloadUrl)
+                        || !asset.name.toLowerCase(Locale.ROOT).endsWith(".apk")) {
+                    continue;
+                }
+                VersionInfo.Download download = new VersionInfo.Download();
+                download.name = asset.name;
+                download.url = asset.browserDownloadUrl;
+                info.downloads.add(download);
+                int score = preferredAssetScore(asset.name);
+                if (score > preferredScore) {
+                    preferred = asset;
+                    preferredScore = score;
+                }
+            }
+        }
+        if (preferred != null) {
+            info.downloadUrl = preferred.browserDownloadUrl;
+        }
+        if (info.downloads.isEmpty() && !TextUtils.isEmpty(release.htmlUrl)) {
+            VersionInfo.Download page = new VersionInfo.Download();
+            page.name = "打开 GitHub Releases";
+            page.url = release.htmlUrl;
+            info.downloads.add(page);
+        }
+        return info;
+    }
+
+    private static int preferredAssetScore(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        int score = 0;
+        if (BuildConfig.RHINO_COMPAT) {
+            if (lower.contains("compat")) score += 8;
+            if (lower.contains("lite")) score -= 8;
+        } else {
+            if (lower.contains("lite")) score += 8;
+            if (lower.contains("compat")) score -= 8;
+        }
+        String abi = Build.SUPPORTED_ABIS.length == 0 ? "" : Build.SUPPORTED_ABIS[0].toLowerCase(Locale.ROOT);
+        if (!abi.isEmpty() && lower.contains(abi)) score += 4;
+        return score;
+    }
+
+    private static String releaseVersionName(GitHubRelease release) {
+        String value = !TextUtils.isEmpty(release.tagName) ? release.tagName : release.name;
+        if (TextUtils.isEmpty(value)) return BuildConfig.VERSION_NAME;
+        value = value.trim().replaceFirst("^[vV]", "");
+        value = VERSION_CODE_IN_TAG.matcher(value).replaceFirst("");
+        return value.isEmpty() ? BuildConfig.VERSION_NAME : value;
+    }
+
+    private static int releaseVersionCode(GitHubRelease release, String versionName) {
+        Matcher body = VERSION_CODE_IN_BODY.matcher(release.body == null ? "" : release.body);
+        if (body.find()) return parsePositiveInt(body.group(1), BuildConfig.VERSION_CODE);
+        Matcher tag = VERSION_CODE_IN_TAG.matcher(release.tagName == null ? "" : release.tagName);
+        if (tag.find()) return parsePositiveInt(tag.group(1), BuildConfig.VERSION_CODE);
+        return compareVersions(versionName, BuildConfig.VERSION_NAME) > 0
+                ? BuildConfig.VERSION_CODE + 1 : BuildConfig.VERSION_CODE;
+    }
+
+    private static int parsePositiveInt(String value, int fallback) {
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    static int compareVersions(String left, String right) {
+        String[] a = (left == null ? "" : left).replaceFirst("[-+].*$", "").split("\\.");
+        String[] b = (right == null ? "" : right).replaceFirst("[-+].*$", "").split("\\.");
+        for (int i = 0; i < Math.max(a.length, b.length); i++) {
+            int av = i < a.length ? parsePositiveInt(a[i].replaceAll("\\D.*$", ""), 0) : 0;
+            int bv = i < b.length ? parsePositiveInt(b[i].replaceAll("\\D.*$", ""), 0) : 0;
+            if (av != bv) return av < bv ? -1 : 1;
+        }
+        return 0;
     }
 
 
@@ -101,7 +216,9 @@ public class VersionService {
         if (!NetworkUtils.isWifiAvailable(context)) {
             return Observable.empty();
         }
-        Observable<VersionInfo> observable = checkForUpdates();
+        // This method both updates the deprecation cache and returns the result to its caller.
+        // Cache the cold Retrofit stream so those two subscribers share one HTTP request.
+        Observable<VersionInfo> observable = checkForUpdates().cache();
         observable.subscribe(new SimpleObserver<VersionInfo>() {
             @Override
             public void onNext(@NonNull VersionInfo versionInfo) {

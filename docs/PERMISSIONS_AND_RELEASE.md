@@ -4,14 +4,14 @@
 
 ## 1. 发布构建
 
-正式发布默认使用 Miuix 变体：
+正式发布默认使用 Miuix compat 变体：
 
 ```powershell
 $env:AIJSPRO_KEYSTORE='D:\private\aijspro.jks'
 $env:AIJSPRO_STORE_PASSWORD='<store password>'
 $env:AIJSPRO_KEY_ALIAS='<key alias>'
 $env:AIJSPRO_KEY_PASSWORD='<key password>'
-.\release.ps1 -Variant MiuixRelease -SkipNative
+.\release.ps1 -Variant MiuixCompatRelease -SkipNative
 ```
 
 四项签名变量缺少任意一项，或 keystore 路径无效时，release 构建会主动失败。密钥、口令和本机绝对路径不得写入 Git、Gradle 属性或日志。
@@ -19,12 +19,22 @@ $env:AIJSPRO_KEY_PASSWORD='<key password>'
 开发安装使用：
 
 ```powershell
-.\release.ps1 -Variant MiuixDebug -SkipNative -Install
+.\release.ps1 -Variant MiuixCompatDebug -SkipNative -Install
 ```
 
 脚本会构建 arm64 APK、输出完整 SHA-256，并且只在恰好连接一台设备时执行安装。未传 `-SkipNative` 时只重建 QuickJS/NativeFrame 原生库；已移除的 ImGui 库不再属于发布链路。
 
 当前为了保护反射、JNI 和脚本桥接，release 暂时保持 `minifyEnabled false`、`shrinkResources false`。只有补齐 release 回归和 keep rules 后才能开启 R8。
+
+### GitHub Releases 更新约定
+
+应用内更新已从失效的 `autojs.org` 切换到 GitHub Releases API：
+
+```text
+https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
+```
+
+发布标签推荐写成 `v1.0.2+465`，其中 `1.0.2` 是 `versionName`，`465` 是 Android `versionCode`。也可以在 release notes 中单独写一行 `versionCode: 465`。APK 文件名必须包含 `compat` 或 `lite` 以及 ABI（例如 `arm64-v8a`），应用会优先选择与当前版本和设备 ABI 一致的文件。仓库尚无公开 release 或 GitHub 返回 404 时，客户端按“当前已是最新版”处理，不再产生旧站证书异常。
 
 ## 2. 当前 SDK 范围
 

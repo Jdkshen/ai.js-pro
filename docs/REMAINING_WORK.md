@@ -68,7 +68,7 @@
 - [x] 增加可复现的 `assembleMiuixRelease` 流程并记录 APK SHA-256；
 - [x] release 暂不启用 R8 和资源压缩，以保护反射、JNI 和脚本桥接；原因及 Debug APK 体积基线已记录；
 - [x] 发布构建让关键 lint 错误阻断，不再全局 `abortOnError false`；
-- [ ] 检查更新源、版本号、release notes、下载地址与签名一致性；
+- [x] 更新检查已切换到 `Jdkshen/ai.js-pro` 的 GitHub Releases API，支持从标签或 release notes 读取 `versionCode`，并按 compat/lite 与 ABI 选择 APK；首次正式发布仍需核对实际资产名与签名；
 - [ ] 验证覆盖安装、全新安装、升级后数据保留及降级拒绝行为。
 
 ### 2.3 权限与目标 SDK 专项审计
@@ -161,10 +161,13 @@ Miuix 源集中目前仍有大量直接写在 Kotlin 中的中文文案，应逐
 
 Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入。
 
+`lite` 当前只移除了 Rhino **执行提供器**，尚未完全移除 Rhino language jar。编辑器语法高亮和共享 `UI -> ProxyObject` 仍有静态链接；实机证明直接删除该依赖会在第一次 QuickJS 运行时因 `ProxyObject/NativeObject` 缺失而失败。完成 flavor 适配层之前，不再把 lite 宣传为明显缩小体积的版本。
+
 - [ ] 从真实脚本需求决定下一批 API，不按名称数量盲目补齐；
 - [ ] 为每个新增 API 同时定义参数、返回值、异常、线程模型和资源释放；
 - [x] 可通过 `tools/compare-engine-api.ps1` 从真实 MCP 服务自动生成 Rhino/QuickJS 大小写精确差异表；发布时仍需重新探测；
 - [ ] 示例只展示当前引擎真实可用的能力，不复制无法运行的 Pro/Node 示例；
+- [ ] 将编辑器高亮和共享 UI 的 Rhino 类型引用移入 compat 适配层，再从 lite 安全移除 `rhino-language`；
 - [ ] 保持 Rhino 为旧脚本默认引擎，QuickJS 继续显式声明。
 
 ### 4.2 扩展引擎回归

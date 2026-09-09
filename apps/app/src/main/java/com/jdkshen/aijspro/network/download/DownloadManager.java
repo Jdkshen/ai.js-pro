@@ -10,7 +10,6 @@ import com.stardust.pio.PFiles;
 
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.model.script.ScriptFile;
-import com.jdkshen.aijspro.network.NodeBB;
 import com.jdkshen.aijspro.network.api.DownloadApi;
 import com.jdkshen.aijspro.tool.SimpleObserver;
 
@@ -48,7 +47,9 @@ public class DownloadManager {
 
     public DownloadManager() {
         mRetrofit = new Retrofit.Builder()
-                .baseUrl(NodeBB.BASE_URL)
+                // Downloads use absolute URLs. Keep the Retrofit base on a maintained HTTPS
+                // origin instead of constructing every download client with legacy autojs.org.
+                .baseUrl("https://api.github.com/")
                 .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
                 .client(new OkHttpClient.Builder()
                         .addInterceptor(chain -> {
