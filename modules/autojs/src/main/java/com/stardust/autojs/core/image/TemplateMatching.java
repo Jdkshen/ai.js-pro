@@ -200,11 +200,53 @@ public class TemplateMatching {
 
 
     private static Mat matchTemplate(Mat img, Mat temp, int match_method) {
+        if (img == null || img.empty()) {
+            throw new IllegalArgumentException("Source image is empty");
+        }
+        if (temp == null || temp.empty()) {
+            throw new IllegalArgumentException("Template image is empty");
+        }
+        if (temp.cols() > img.cols() || temp.rows() > img.rows()) {
+            throw new IllegalArgumentException("Template " + temp.cols() + "x" + temp.rows() +
+                    " is larger than source/search region " + img.cols() + "x" + img.rows());
+        }
+        Mat matchingImage = img;
+        Mat matchingTemplate = temp;
         int result_cols = img.cols() - temp.cols() + 1;
         int result_rows = img.rows() - temp.rows() + 1;
-        Mat result = new Mat(result_rows, result_cols, CvType.CV_32FC1);
-        Imgproc.matchTemplate(img, temp, result, match_method);
-        return result;
+        Mat result = null;
+        try {
+            if (img.channels() != temp.channels()) {
+                matchingImage = toGray(img, "source");
+                matchingTemplate = toGray(temp, "template");
+            }
+            result = new Mat(result_rows, result_cols, CvType.CV_32FC1);
+            Imgproc.matchTemplate(matchingImage, matchingTemplate, result, match_method);
+            return result;
+        } catch (org.opencv.core.CvException error) {
+            OpenCVHelper.release(result);
+            throw new IllegalArgumentException("Template matching failed: source=" +
+                    img.cols() + "x" + img.rows() + "x" + img.channels() +
+                    ", template=" + temp.cols() + "x" + temp.rows() + "x" + temp.channels() +
+                    "; " + error.getMessage(), error);
+        } finally {
+            if (matchingImage != img) OpenCVHelper.release(matchingImage);
+            if (matchingTemplate != temp) OpenCVHelper.release(matchingTemplate);
+        }
+    }
+
+    private static Mat toGray(Mat input, String role) {
+        if (input.channels() == 1) return input;
+        Mat gray = new Mat();
+        if (input.channels() == 3) {
+            Imgproc.cvtColor(input, gray, Imgproc.COLOR_BGR2GRAY);
+        } else if (input.channels() == 4) {
+            Imgproc.cvtColor(input, gray, Imgproc.COLOR_RGBA2GRAY);
+        } else {
+            OpenCVHelper.release(gray);
+            throw new IllegalArgumentException("Unsupported " + role + " image channel count: " + input.channels());
+        }
+        return gray;
     }
 
     private static void getBestMatched(Mat tmResult, Mat template, int matchMethod, float weakThreshold, List<Match> outResult, int limit, Rect rect) {

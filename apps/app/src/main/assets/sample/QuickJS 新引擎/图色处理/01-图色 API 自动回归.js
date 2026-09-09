@@ -141,6 +141,25 @@ try {
     });
     assert(matched.matches.length >= 1, 'matchTemplate');
 
+    let invalidThresholdRejected = false;
+    try {
+        images.findImage(screen, clipped, { threshold: NaN });
+    } catch (error) {
+        invalidThresholdRejected = String(error.message || error).indexOf('finite number') >= 0;
+    }
+    assert(invalidThresholdRejected, 'findImage 拒绝非数字阈值');
+
+    const oversized = keep(images.resize(clipped, [64, 64], 'NEAREST'));
+    let oversizedRejected = false;
+    try {
+        images.findImage(screen, oversized, {
+            region: [cropX, cropY, 32, 32], threshold: 0.8
+        });
+    } catch (error) {
+        oversizedRejected = String(error.message || error).indexOf('larger than') >= 0;
+    }
+    assert(oversizedRejected, 'findImage 报告模板大于搜索区域');
+
     console.log('QUICKJS_IMAGE_API_OK', {
         screen: screen.width + 'x' + screen.height,
         centerColor: colors.toString(center),

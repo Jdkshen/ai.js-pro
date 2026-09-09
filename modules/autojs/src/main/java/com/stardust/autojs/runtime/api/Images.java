@@ -322,24 +322,28 @@ public class Images {
             throw new NullPointerException("image = null");
         if (template == null)
             throw new NullPointerException("template = null");
-        Mat src = image.getMat();
-        if (rect != null) {
-            src = new Mat(src, rect);
-        }
-        org.opencv.core.Point point = TemplateMatching.fastTemplateMatching(src, template.getMat(), TemplateMatching.MATCHING_METHOD_DEFAULT,
-                weakThreshold, threshold, maxLevel);
-        if (point != null) {
+        Mat imageMat = image.getMat();
+        Mat src = imageMat;
+        try {
             if (rect != null) {
-                point.x += rect.x;
-                point.y += rect.y;
+                src = new Mat(imageMat, rect);
             }
-            point.x = mScreenMetrics.scaleX((int) point.x);
-            point.y = mScreenMetrics.scaleX((int) point.y);
+            org.opencv.core.Point point = TemplateMatching.fastTemplateMatching(src, template.getMat(), TemplateMatching.MATCHING_METHOD_DEFAULT,
+                    weakThreshold, threshold, maxLevel);
+            if (point != null) {
+                if (rect != null) {
+                    point.x += rect.x;
+                    point.y += rect.y;
+                }
+                point.x = mScreenMetrics.scaleX((int) point.x);
+                point.y = mScreenMetrics.scaleY((int) point.y);
+            }
+            return point;
+        } finally {
+            if (src != imageMat) {
+                OpenCVHelper.release(src);
+            }
         }
-        if (src != image.getMat()) {
-            OpenCVHelper.release(src);
-        }
-        return point;
     }
 
     public List<TemplateMatching.Match> matchTemplate(ImageWrapper image, ImageWrapper template, float weakThreshold, float threshold, Rect rect, int maxLevel, int limit) {
@@ -348,25 +352,29 @@ public class Images {
             throw new NullPointerException("image = null");
         if (template == null)
             throw new NullPointerException("template = null");
-        Mat src = image.getMat();
-        if (rect != null) {
-            src = new Mat(src, rect);
-        }
-        List<TemplateMatching.Match> result = TemplateMatching.fastTemplateMatching(src, template.getMat(), Imgproc.TM_CCOEFF_NORMED,
-                weakThreshold, threshold, maxLevel, limit);
-        for (TemplateMatching.Match match : result) {
-            Point point = match.point;
+        Mat imageMat = image.getMat();
+        Mat src = imageMat;
+        try {
             if (rect != null) {
-                point.x += rect.x;
-                point.y += rect.y;
+                src = new Mat(imageMat, rect);
             }
-            point.x = mScreenMetrics.scaleX((int) point.x);
-            point.y = mScreenMetrics.scaleX((int) point.y);
+            List<TemplateMatching.Match> result = TemplateMatching.fastTemplateMatching(src, template.getMat(), Imgproc.TM_CCOEFF_NORMED,
+                    weakThreshold, threshold, maxLevel, limit);
+            for (TemplateMatching.Match match : result) {
+                Point point = match.point;
+                if (rect != null) {
+                    point.x += rect.x;
+                    point.y += rect.y;
+                }
+                point.x = mScreenMetrics.scaleX((int) point.x);
+                point.y = mScreenMetrics.scaleY((int) point.y);
+            }
+            return result;
+        } finally {
+            if (src != imageMat) {
+                OpenCVHelper.release(src);
+            }
         }
-        if (src != image.getMat()) {
-            OpenCVHelper.release(src);
-        }
-        return result;
     }
 
     public Mat newMat() {

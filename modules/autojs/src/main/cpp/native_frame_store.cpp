@@ -593,19 +593,25 @@ bool NativeFrameStore::findImage(int64_t sourceHandle, int64_t templateHandle, d
         return false;
     }
 
-    cv::Mat sourceRgb;
-    cv::Mat templateRgb;
-    cv::cvtColor((*source)(cv::Rect(x, y, width, height)), sourceRgb, cv::COLOR_RGBA2RGB);
-    cv::cvtColor(*templ, templateRgb, cv::COLOR_RGBA2RGB);
-    cv::Mat scores;
-    cv::matchTemplate(sourceRgb, templateRgb, scores, cv::TM_CCOEFF_NORMED);
-    double maxScore = 0.0;
-    cv::Point maxLocation;
-    cv::minMaxLoc(scores, nullptr, &maxScore, nullptr, &maxLocation);
-    point->x = x + maxLocation.x;
-    point->y = y + maxLocation.y;
-    point->similarity = maxScore;
-    return maxScore >= std::max(0.0, std::min(1.0, threshold));
+    try {
+        cv::Mat sourceRgb;
+        cv::Mat templateRgb;
+        cv::cvtColor((*source)(cv::Rect(x, y, width, height)), sourceRgb, cv::COLOR_RGBA2RGB);
+        cv::cvtColor(*templ, templateRgb, cv::COLOR_RGBA2RGB);
+        cv::Mat scores;
+        cv::matchTemplate(sourceRgb, templateRgb, scores, cv::TM_CCOEFF_NORMED);
+        double maxScore = 0.0;
+        cv::Point maxLocation;
+        cv::minMaxLoc(scores, nullptr, &maxScore, nullptr, &maxLocation);
+        point->x = x + maxLocation.x;
+        point->y = y + maxLocation.y;
+        point->similarity = maxScore;
+        return std::isfinite(maxScore) &&
+               maxScore >= std::max(0.0, std::min(1.0, threshold));
+    } catch (const cv::Exception &exception) {
+        if (error != nullptr) *error = std::string("Template matching failed: ") + exception.what();
+        return false;
+    }
 }
 
 bool NativeFrameStore::matchTemplate(
@@ -626,26 +632,31 @@ bool NativeFrameStore::matchTemplate(
         if (error != nullptr) *error = "Template is larger than the search region";
         return false;
     }
-    threshold = std::max(0.0, std::min(1.0, threshold));
-    maxMatches = std::max(1, std::min(1000, maxMatches));
-    cv::Mat sourceRgb;
-    cv::Mat templateRgb;
-    cv::cvtColor((*source)(cv::Rect(x, y, width, height)), sourceRgb, cv::COLOR_RGBA2RGB);
-    cv::cvtColor(*templ, templateRgb, cv::COLOR_RGBA2RGB);
-    cv::Mat scores;
-    cv::matchTemplate(sourceRgb, templateRgb, scores, cv::TM_CCOEFF_NORMED);
-    for (int index = 0; index < maxMatches; ++index) {
-        double maxScore = 0.0;
-        cv::Point maxLocation;
-        cv::minMaxLoc(scores, nullptr, &maxScore, nullptr, &maxLocation);
-        if (!std::isfinite(maxScore) || maxScore < threshold) break;
-        matches->push_back({x + maxLocation.x, y + maxLocation.y, maxScore});
-        const int left = std::max(0, maxLocation.x - templ->cols / 2);
-        const int top = std::max(0, maxLocation.y - templ->rows / 2);
-        const int right = std::min(scores.cols, maxLocation.x + (templ->cols + 1) / 2);
-        const int bottom = std::min(scores.rows, maxLocation.y + (templ->rows + 1) / 2);
-        scores(cv::Rect(left, top, std::max(1, right - left),
-                        std::max(1, bottom - top))).setTo(-1.0f);
+    try {
+        threshold = std::max(0.0, std::min(1.0, threshold));
+        maxMatches = std::max(1, std::min(1000, maxMatches));
+        cv::Mat sourceRgb;
+        cv::Mat templateRgb;
+        cv::cvtColor((*source)(cv::Rect(x, y, width, height)), sourceRgb, cv::COLOR_RGBA2RGB);
+        cv::cvtColor(*templ, templateRgb, cv::COLOR_RGBA2RGB);
+        cv::Mat scores;
+        cv::matchTemplate(sourceRgb, templateRgb, scores, cv::TM_CCOEFF_NORMED);
+        for (int index = 0; index < maxMatches; ++index) {
+            double maxScore = 0.0;
+            cv::Point maxLocation;
+            cv::minMaxLoc(scores, nullptr, &maxScore, nullptr, &maxLocation);
+            if (!std::isfinite(maxScore) || maxScore < threshold) break;
+            matches->push_back({x + maxLocation.x, y + maxLocation.y, maxScore});
+            const int left = std::max(0, maxLocation.x - templ->cols / 2);
+            const int top = std::max(0, maxLocation.y - templ->rows / 2);
+            const int right = std::min(scores.cols, maxLocation.x + (templ->cols + 1) / 2);
+            const int bottom = std::min(scores.rows, maxLocation.y + (templ->rows + 1) / 2);
+            scores(cv::Rect(left, top, std::max(1, right - left),
+                            std::max(1, bottom - top))).setTo(-1.0f);
+        }
+    } catch (const cv::Exception &exception) {
+        if (error != nullptr) *error = std::string("Template matching failed: ") + exception.what();
+        return false;
     }
     return true;
 }

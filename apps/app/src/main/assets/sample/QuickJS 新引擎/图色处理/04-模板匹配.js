@@ -1,7 +1,8 @@
 // @engine quickjs
 
-// 直接复用原项目"图片与图色处理/找图"中的马里奥和问号方块素材。
-var exampleRoot = '../../图片与图色处理/找图/';
+// 复用 Rhino 兼容示例中的马里奥素材；素材本身不依赖 Rhino。
+// 从当前“QuickJS 新引擎/图色处理”返回 sample 根目录后再进入 Rhino 目录。
+var exampleRoot = '../../Rhino 引擎/图片与图色处理/找图/';
 var sourcePath = exampleRoot + 'super_mario.jpg';
 var templatePath = exampleRoot + 'block.png';
 

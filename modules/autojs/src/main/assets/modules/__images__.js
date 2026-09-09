@@ -400,12 +400,12 @@ module.exports = function (runtime, scope) {
         images.findImage = function (img, template, options) {
             initIfNeeded();
             options = options || {};
-            var threshold = options.threshold || 0.9;
+            var threshold = templateThreshold(options.threshold, 0.9, "threshold");
             var maxLevel = -1;
             if (typeof (options.level) == 'number') {
                 maxLevel = options.level;
             }
-            var weakThreshold = options.weakThreshold || 0.6;
+            var weakThreshold = templateThreshold(options.weakThreshold, 0.6, "weakThreshold");
             if (options.region) {
                 return javaImages.findImage(img, template, weakThreshold, threshold, buildRegion(options.region, img), maxLevel);
             } else {
@@ -416,13 +416,17 @@ module.exports = function (runtime, scope) {
         images.matchTemplate = function (img, template, options) {
             initIfNeeded();
             options = options || {};
-            var threshold = options.threshold || 0.9;
+            var threshold = templateThreshold(options.threshold, 0.9, "threshold");
             var maxLevel = -1;
             if (typeof (options.level) == 'number') {
                 maxLevel = options.level;
             }
-            var max = options.max || 5;
-            var weakThreshold = options.weakThreshold || 0.6;
+            var max = options.max === undefined ? 5 : Number(options.max);
+            if (!isFinite(max) || max < 1 || max > 1000) {
+                throw new RangeError("max must be between 1 and 1000");
+            }
+            max = Math.floor(max);
+            var weakThreshold = templateThreshold(options.weakThreshold, 0.6, "weakThreshold");
             var result;
             if (options.region) {
                 result = javaImages.matchTemplate(img, template, weakThreshold, threshold, buildRegion(options.region, img), maxLevel, max);
@@ -523,6 +527,17 @@ module.exports = function (runtime, scope) {
                 throw new Error("out of region: region = [" + [x, y, width, height] + "], image.size = [" + [img.width, img.height] + "]");
             }
             return r;
+        }
+
+        function templateThreshold(value, fallback, name) {
+            value = value === undefined ? fallback : Number(value);
+            if (!isFinite(value)) {
+                throw new TypeError(name + " must be a finite number");
+            }
+            if (value < 0 || value > 1) {
+                throw new RangeError(name + " must be between 0 and 1");
+            }
+            return value;
         }
 
         function parseColor(color) {

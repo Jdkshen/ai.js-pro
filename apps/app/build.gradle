@@ -308,10 +308,64 @@ tasks.register('verifyQuickJsSamplesMarked') {
     }
 }
 
+def bundledFindImageAssetDir = file('src/main/assets/sample/Rhino 引擎/图片与图色处理/找图')
+def bundledFindImageAssets = ['super_mario.jpg', 'block.png', 'mario.png'].collect {
+    new File(bundledFindImageAssetDir, it)
+}
+
+tasks.register('verifyBundledFindImageAssets') {
+    group = 'verification'
+    description = 'Keep the shared find-image assets required by the Rhino and QuickJS samples.'
+    inputs.files(bundledFindImageAssets)
+
+    doLast {
+        def missingAssets = bundledFindImageAssets.findAll { !it.isFile() }
+        if (!missingAssets.isEmpty()) {
+            throw new GradleException('Bundled find-image sample assets are missing:\n' +
+                    missingAssets.collect { ' - ' + it }.join('\n'))
+        }
+    }
+}
+
+def quickJsNativeSourceDir = rootProject.file('modules/autojs/src/main/cpp')
+def quickJsNativeSources = [
+        'CMakeLists.txt',
+        'quickjs_jni.cpp',
+        'native_frame_store.cpp',
+        'native_frame_store.h'
+].collect { new File(quickJsNativeSourceDir, it) }
+def quickJsNativeLibraries = ['armeabi-v7a', 'arm64-v8a', 'x86'].collect {
+    rootProject.file("modules/autojs/src/main/jniLibs/${it}/libquickjs_jni.so")
+}
+
+tasks.register('verifyQuickJsNativeLibrariesFresh') {
+    group = 'verification'
+    description = 'Prevent packaging stale QuickJS JNI libraries after native source changes.'
+    inputs.files(quickJsNativeSources)
+    inputs.files(quickJsNativeLibraries)
+
+    doLast {
+        def missing = quickJsNativeLibraries.findAll { !it.isFile() }
+        if (!missing.isEmpty()) {
+            throw new GradleException('QuickJS JNI libraries are missing:\n' +
+                    missing.collect { ' - ' + it }.join('\n'))
+        }
+        def newestSourceTime = quickJsNativeSources.collect { it.lastModified() }.max()
+        def stale = quickJsNativeLibraries.findAll { it.lastModified() < newestSourceTime }
+        if (!stale.isEmpty()) {
+            throw new GradleException('QuickJS JNI libraries are older than their native sources. Run ' +
+                    'modules/autojs/src/main/cpp/build-quickjs.ps1 before Gradle packaging:\n' +
+                    stale.collect { ' - ' + it }.join('\n'))
+        }
+    }
+}
+
 tasks.matching { it.name == 'preBuild' }.configureEach {
     dependsOn tasks.named('verifyBundledSamplesNoNode')
     dependsOn tasks.named('verifyBundledYoloSamples')
     dependsOn tasks.named('verifyQuickJsSamplesMarked')
+    dependsOn tasks.named('verifyBundledFindImageAssets')
+    dependsOn tasks.named('verifyQuickJsNativeLibrariesFresh')
 }
 
 tasks.register('verifyReleaseConfiguration') {

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -1679,6 +1680,12 @@ JSValue nativeFindImage(JSContext *context, JSValueConst, int argc, JSValueConst
         JS_ToInt32(context, &width, argv[5]) < 0 || JS_ToInt32(context, &height, argv[6]) < 0) {
         return JS_ThrowTypeError(context, "Invalid images.findImage arguments");
     }
+    if (!std::isfinite(threshold)) {
+        return JS_ThrowTypeError(context, "threshold must be a finite number");
+    }
+    if (threshold < 0.0 || threshold > 1.0) {
+        return JS_ThrowRangeError(context, "threshold must be between 0 and 1");
+    }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     NativeFramePoint point;
     std::string error;
@@ -1702,6 +1709,15 @@ JSValue nativeMatchTemplate(JSContext *context, JSValueConst, int argc, JSValueC
         JS_ToInt32(context, &x, argv[4]) < 0 || JS_ToInt32(context, &y, argv[5]) < 0 ||
         JS_ToInt32(context, &width, argv[6]) < 0 || JS_ToInt32(context, &height, argv[7]) < 0) {
         return JS_ThrowTypeError(context, "images.matchTemplate has invalid arguments");
+    }
+    if (!std::isfinite(threshold)) {
+        return JS_ThrowTypeError(context, "threshold must be a finite number");
+    }
+    if (threshold < 0.0 || threshold > 1.0) {
+        return JS_ThrowRangeError(context, "threshold must be between 0 and 1");
+    }
+    if (maxMatches < 1 || maxMatches > 1000) {
+        return JS_ThrowRangeError(context, "max must be between 1 and 1000");
     }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     std::vector<NativeFramePoint> matches;
@@ -2637,8 +2653,19 @@ const char kBootstrapScript[] = R"JS(
     function colorThreshold(options, fallback) {
         const value = options && options.threshold !== undefined
             ? Number(options.threshold) : fallback;
-        if (!Number.isFinite(value)) throw new TypeError('threshold must be a finite number');
+        if (value !== value || value === Infinity || value === -Infinity) {
+            throw new TypeError('threshold must be a finite number');
+        }
         return Math.max(0, Math.min(255, value));
+    }
+    function templateThreshold(options, fallback) {
+        const value = options && options.threshold !== undefined
+            ? Number(options.threshold) : fallback;
+        if (value !== value || value === Infinity || value === -Infinity) {
+            throw new TypeError('threshold must be a finite number');
+        }
+        if (value < 0 || value > 1) throw new RangeError('threshold must be between 0 and 1');
+        return value;
     }
     function interpolationOf(value) {
         if (value === undefined || value === null) return 1;
@@ -2850,7 +2877,7 @@ const char kBootstrapScript[] = R"JS(
         },
         findImage: function (frame, template, options) {
             const region = pixelRegionOf(frame, regionOf(frame, options));
-            const threshold = options && options.threshold !== undefined ? Number(options.threshold) : 0.9;
+            const threshold = templateThreshold(options, 0.9);
             const prepared = prepareTemplate(frame, template);
             try {
                 return logicalPointOf(frame,
@@ -2863,8 +2890,11 @@ const char kBootstrapScript[] = R"JS(
         matchTemplate: function (frame, template, options) {
             options = options || {};
             const region = pixelRegionOf(frame, regionOf(frame, options));
-            const threshold = options.threshold === undefined ? 0.9 : Number(options.threshold);
+            const threshold = templateThreshold(options, 0.9);
             const max = options.max === undefined ? 5 : Number(options.max);
+            if (max !== max || max === Infinity || max === -Infinity || max < 1 || max > 1000) {
+                throw new RangeError('max must be between 1 and 1000');
+            }
             const prepared = prepareTemplate(frame, template);
             let raw;
             try {
