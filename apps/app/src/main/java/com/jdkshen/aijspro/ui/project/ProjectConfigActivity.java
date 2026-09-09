@@ -1,6 +1,5 @@
 package com.jdkshen.aijspro.ui.project;
 
-import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Bundle;
@@ -33,6 +32,7 @@ import java.util.regex.Pattern;
 
 import io.reactivex.Observable;
 import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.CompositeDisposable;
 import io.reactivex.schedulers.Schedulers;
 
 public class ProjectConfigActivity extends BaseActivity {
@@ -66,6 +66,7 @@ public class ProjectConfigActivity extends BaseActivity {
     private ProjectConfig mProjectConfig;
     private boolean mNewProject;
     private Bitmap mIconBitmap;
+    private final CompositeDisposable mDisposables = new CompositeDisposable();
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -144,21 +145,20 @@ public class ProjectConfigActivity extends BaseActivity {
         }
         syncProjectConfig();
         if (mIconBitmap != null) {
-            saveIcon(mIconBitmap)
+            mDisposables.add(saveIcon(mIconBitmap)
                     .subscribe(ignored -> saveProjectConfig(), e -> {
                         e.printStackTrace();
                         Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
-                    });
+                    }));
         } else {
             saveProjectConfig();
         }
 
     }
 
-    @SuppressLint("CheckResult")
     private void saveProjectConfig() {
         if (mNewProject) {
-            new ProjectTemplate(mProjectConfig, mDirectory)
+            mDisposables.add(new ProjectTemplate(mProjectConfig, mDirectory)
                     .newProject()
                     .subscribe(ignored -> {
                         Explorers.workspace().notifyChildrenChanged(new ExplorerDirPage(mParentDirectory, null));
@@ -166,15 +166,15 @@ public class ProjectConfigActivity extends BaseActivity {
                     }, e -> {
                         e.printStackTrace();
                         Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
-                    });
+                    }));
         } else {
-            Observable.fromCallable(() -> {
+            mDisposables.add(Observable.fromCallable(() -> {
                 PFiles.write(ProjectConfig.configFileOfDir(mDirectory.getPath()),
                         mProjectConfig.toJson());
                 return Void.TYPE;
             })
-                    .observeOn(Schedulers.io())
-                    .subscribeOn(AndroidSchedulers.mainThread())
+                    .subscribeOn(Schedulers.io())
+                    .observeOn(AndroidSchedulers.mainThread())
                     .subscribe(ignored -> {
                         ExplorerFileItem item = new ExplorerFileItem(mDirectory, null);
                         Explorers.workspace().notifyItemChanged(item, item);
@@ -182,7 +182,7 @@ public class ProjectConfigActivity extends BaseActivity {
                     }, e -> {
                         e.printStackTrace();
                         Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
-                    });
+                    }));
         }
     }
 
@@ -237,24 +237,22 @@ public class ProjectConfigActivity extends BaseActivity {
     }
 
 
-    @SuppressLint("CheckResult")
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK) {
             return;
         }
-        ShortcutIconSelectActivity.getBitmapFromIntent(getApplicationContext(), data)
+        mDisposables.add(ShortcutIconSelectActivity.getBitmapFromIntent(getApplicationContext(), data)
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(bitmap -> {
                             mIcon.setImageBitmap(bitmap);
                             mIconBitmap = bitmap;
                         },
-                        Throwable::printStackTrace);
+                        Throwable::printStackTrace));
     }
 
-    @SuppressLint("CheckResult")
     private Observable<String> saveIcon(Bitmap b) {
         return Observable.just(b)
                 .map(bitmap -> {
@@ -273,6 +271,12 @@ public class ProjectConfigActivity extends BaseActivity {
                 .observeOn(AndroidSchedulers.mainThread())
                 .doOnNext(iconPath -> mProjectConfig.setIcon(iconPath));
 
+    }
+
+    @Override
+    protected void onDestroy() {
+        mDisposables.clear();
+        super.onDestroy();
     }
 
 }

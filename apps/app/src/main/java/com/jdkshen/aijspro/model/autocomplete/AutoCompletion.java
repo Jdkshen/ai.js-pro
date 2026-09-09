@@ -21,6 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.CompositeDisposable;
 import io.reactivex.schedulers.Schedulers;
 
 /**
@@ -46,6 +47,7 @@ public class AutoCompletion {
     private AtomicInteger mExecuteId = new AtomicInteger();
     private Handler mHandler = new Handler(Looper.getMainLooper());
     private final EditText mEditText;
+    private final CompositeDisposable mDisposables = new CompositeDisposable();
 
     public AutoCompletion(Context context, EditText editText) {
         buildDictionaryTree(context);
@@ -59,11 +61,12 @@ public class AutoCompletion {
     }
 
     private void buildDictionaryTree(Context context) {
-        Modules.getInstance().getModules(context)
+        mDisposables.add(Modules.getInstance().getModules(context)
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .doOnNext(this::buildDictionaryTree)
-                .subscribe(modules -> mModules = modules);
+                .subscribe(modules -> mModules = modules,
+                        error -> mModules = Collections.emptyList()));
     }
 
     private void buildDictionaryTree(List<Module> modules) {
@@ -164,6 +167,7 @@ public class AutoCompletion {
 
 
     public void shutdown(){
+        mDisposables.clear();
         mEditText.removeTextChangedListener(mAnyWordsCompletion);
         mExecutorService.shutdownNow();
     }

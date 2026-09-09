@@ -5,7 +5,6 @@ import android.util.Log;
 
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.jakewharton.retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
-import com.stardust.concurrent.VolatileBox;
 import com.stardust.pio.PFiles;
 
 import com.jdkshen.aijspro.R;
@@ -17,14 +16,18 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.SocketTimeoutException;
 import java.net.URLDecoder;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.reactivex.Observable;
 import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.Disposable;
 import io.reactivex.schedulers.Schedulers;
 import io.reactivex.subjects.PublishSubject;
+import io.reactivex.subjects.ReplaySubject;
+import io.reactivex.subjects.Subject;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -43,7 +46,7 @@ public class DownloadManager {
     private static final int RETRY_COUNT = 3;
     private Retrofit mRetrofit;
     private DownloadApi mDownloadApi;
-    private ConcurrentHashMap<String, VolatileBox<Boolean>> mDownloadStatuses = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, DownloadTask> mDownloadTasks = new ConcurrentHashMap<>();
 
     public DownloadManager() {
         mRetrofit = new Retrofit.Builder()
@@ -58,6 +61,7 @@ public class DownloadManager {
                             int tryCount = 0;
                             while (!response.isSuccessful() && tryCount < RETRY_COUNT) {
                                 tryCount++;
+                                response.close();
                                 response = chain.proceed(request);
                             }
                             return response;
@@ -87,9 +91,9 @@ public class DownloadManager {
 
     public Observable<Integer> download(String url, String path) {
         DownloadTask task = new DownloadTask(url, path);
-        mDownloadApi.download(url)
+        task.setRequest(mDownloadApi.download(url)
                 .subscribeOn(Schedulers.io())
-                .subscribe(task::start, error -> task.progress().onError(error));
+                .subscribe(task::start, task::fail));
         return task.progress();
     }
 
@@ -132,9 +136,9 @@ public class DownloadManager {
     }
 
     public void cancelDownload(String url) {
-        VolatileBox<Boolean> status = mDownloadStatuses.get(url);
-        if (status != null) {
-            status.set(false);
+        DownloadTask task = mDownloadTasks.get(url);
+        if (task != null) {
+            task.cancel();
         }
     }
 
@@ -142,30 +146,35 @@ public class DownloadManager {
 
         private String mUrl;
         private String mPath;
-        private VolatileBox<Boolean> mStatus;
+        private volatile boolean mActive = true;
+        private final AtomicBoolean mTerminated = new AtomicBoolean();
         private InputStream mInputStream;
         private FileOutputStream mFileOutputStream;
-        private PublishSubject<Integer> mProgress;
+        private volatile boolean mOutputCreated;
+        private final Subject<Integer> mProgress = ReplaySubject.<Integer>createWithSize(1).toSerialized();
+        private Disposable mRequest;
 
         public DownloadTask(String url, String path) {
             mUrl = url;
             mPath = path;
-            mStatus = new VolatileBox<>(true);
-            VolatileBox<Boolean> previous = mDownloadStatuses.put(mUrl, mStatus);
-            if (previous != null)
-                previous.set(false);
-            mProgress = PublishSubject.create();
+            DownloadTask previous = mDownloadTasks.put(mUrl, this);
+            if (previous != null) previous.cancel();
+        }
+
+        void setRequest(Disposable request) {
+            mRequest = request;
+            if (mTerminated.get()) request.dispose();
         }
 
         private void startImpl(ResponseBody body) throws IOException {
             byte[] buffer = new byte[4096];
             mFileOutputStream = new FileOutputStream(mPath);
+            mOutputCreated = true;
             mInputStream = body.byteStream();
             long total = body.contentLength();
             long read = 0;
             while (true) {
-                if (!mStatus.get()) {
-                    onCancel();
+                if (!mActive) {
                     return;
                 }
                 int len = mInputStream.read(buffer);
@@ -178,26 +187,56 @@ public class DownloadManager {
                     mProgress.onNext((int) (100 * read / total));
                 }
             }
-            mProgress.onComplete();
-            recycle();
+            complete();
         }
 
         public void start(ResponseBody body) {
+            if (!mActive) {
+                body.close();
+                return;
+            }
             try {
                 PFiles.ensureDir(mPath);
                 startImpl(body);
             } catch (Exception e) {
-                mProgress.onError(e);
+                fail(e);
             }
         }
 
-        private void onCancel() throws IOException {
+        private void complete() {
+            if (!mTerminated.compareAndSet(false, true)) return;
             recycle();
-            // TODO: 2017/12/6 notify?
+            mProgress.onComplete();
         }
 
-        public void recycle() {
-            mDownloadStatuses.remove(mUrl);
+        private void fail(Throwable error) {
+            if (!mTerminated.compareAndSet(false, true)) return;
+            mActive = false;
+            recycle();
+            deletePartialFile();
+            mProgress.onError(error);
+        }
+
+        private void cancel() {
+            if (!mTerminated.compareAndSet(false, true)) return;
+            mActive = false;
+            Disposable request = mRequest;
+            if (request != null) request.dispose();
+            recycle();
+            deletePartialFile();
+            mProgress.onError(new CancellationException("Download cancelled"));
+        }
+
+        private void deletePartialFile() {
+            if (!mOutputCreated) return;
+            File partial = new File(mPath);
+            if (partial.exists() && !partial.delete()) {
+                Log.w(LOG_TAG, "Could not remove incomplete download: " + mPath);
+            }
+        }
+
+        public synchronized void recycle() {
+            mDownloadTasks.remove(mUrl, this);
             if (mInputStream != null) {
                 try {
                     mInputStream.close();
@@ -211,10 +250,12 @@ public class DownloadManager {
                 } catch (IOException ignored) {
                 }
             }
+            mInputStream = null;
+            mFileOutputStream = null;
 
         }
 
-        public PublishSubject<Integer> progress() {
+        public Observable<Integer> progress() {
             return mProgress;
         }
 

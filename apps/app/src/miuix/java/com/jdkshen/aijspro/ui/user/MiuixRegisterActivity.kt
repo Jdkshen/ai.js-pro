@@ -5,7 +5,6 @@ import android.util.Patterns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -40,6 +39,7 @@ import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.schedulers.Schedulers
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -48,8 +48,6 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.theme.darkColorScheme
-import top.yukonga.miuix.kmp.theme.lightColorScheme
 
 /**
  * Miuix register page (pilot). Reuses UserService/NodeBB exactly like RegisterActivity.
@@ -61,6 +59,8 @@ class MiuixRegisterActivity : ComponentActivity() {
     private var password by mutableStateOf(TextFieldValue(""))
     private var errorText by mutableStateOf<String?>(null)
     private var loading by mutableStateOf(false)
+    private val disposables = CompositeDisposable()
+    private var activeDialog: MaterialDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +82,13 @@ class MiuixRegisterActivity : ComponentActivity() {
                 }
             }
         })
+    }
+
+    override fun onDestroy() {
+        disposables.clear()
+        activeDialog?.dismiss()
+        activeDialog = null
+        super.onDestroy()
     }
 
     private fun doRegister() {
@@ -115,19 +122,22 @@ class MiuixRegisterActivity : ComponentActivity() {
             .content(R.string.text_registering)
             .cancelable(false)
             .show()
-        UserService.getInstance().register(mail, name, pwd.toString())
+        activeDialog = dialog
+        disposables.add(UserService.getInstance().register(mail, name, pwd.toString())
             .subscribeOn(Schedulers.io())
             .observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ response ->
+            .subscribe({
                 dialog.dismiss()
+                activeDialog = null
                 loading = false
                 Toast.makeText(this, R.string.text_register_succeed, Toast.LENGTH_SHORT).show()
                 finish()
             }, { error ->
                 dialog.dismiss()
+                activeDialog = null
                 loading = false
                 errorText = NodeBB.getErrorMessage(error, this, R.string.text_register_fail)?.toString()
-            })
+            }))
     }
 
     @Composable

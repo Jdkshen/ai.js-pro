@@ -33,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -89,6 +90,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private var showSearchDialog by mutableStateOf(false)
     private var catalog: List<SampleEntry>? = null
     private val imports = CompositeDisposable()
+    private var contentInstalled = false
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -116,14 +118,22 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
-        val assets = requireContext().assets
         rootView = ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                AijsMiuixTheme {
+        }
+        if (isShown) installContentIfNeeded()
+        return rootView
+    }
+
+    private fun installContentIfNeeded() {
+        if (contentInstalled) return
+        contentInstalled = true
+        val assets = requireContext().assets
+        rootView.setContent {
+            AijsMiuixTheme {
                     var allEntries by remember { mutableStateOf(catalog) }
                     var loadError by remember { mutableStateOf<String?>(null) }
-                    var retry by remember { mutableStateOf(0) }
+                    var retry by remember { mutableIntStateOf(0) }
                     var importEntry by remember { mutableStateOf<SampleEntry?>(null) }
                     var actionEntry by remember { mutableStateOf<SampleEntry?>(null) }
                     val listState = rememberLazyListState()
@@ -190,10 +200,8 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                             requestImport = { actionEntry = null; importEntry = entry })
                     }
                     importEntry?.let { entry -> ImportDialog(entry) { importEntry = null } }
-                }
             }
         }
-        return rootView
     }
 
     @Composable
@@ -510,8 +518,14 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         path = path.substringBeforeLast('/', "sample")
     }
 
+    override fun onPageShow() {
+        super.onPageShow()
+        if (::rootView.isInitialized) installContentIfNeeded()
+    }
+
     override fun onDestroyView() {
         imports.clear()
+        contentInstalled = false
         super.onDestroyView()
     }
 
