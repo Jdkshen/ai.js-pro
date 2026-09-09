@@ -204,10 +204,14 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
     private fun checkUpdate(entry: PluginEntry) {
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=${entry.packageName}")))
-        } catch (_: ActivityNotFoundException) {
             startActivity(Intent(Intent.ACTION_VIEW,
-                Uri.parse("https://play.google.com/store/apps/details?id=${entry.packageName}")))
+                Uri.parse("market://details?id=${entry.packageName}"))
+                .setPackage("com.android.vending"))
+        } catch (_: ActivityNotFoundException) {
+            val web = Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://play.google.com/store/apps/details?id=${entry.packageName}"))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+            startActivity(Intent.createChooser(web, "打开应用页面"))
         }
     }
 

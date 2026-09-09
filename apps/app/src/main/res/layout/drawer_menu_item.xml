@@ -20,7 +20,7 @@
             android:id="@+id/icon"
             android:layout_width="20dp"
             android:layout_height="20dp"
-            android:tint="?attr/colorOnSurfaceVariant"
+            app:tint="?attr/colorOnSurfaceVariant"
             tools:src="@drawable/ic_service_green"/>
 
         <me.zhanghai.android.materialprogressbar.MaterialProgressBar

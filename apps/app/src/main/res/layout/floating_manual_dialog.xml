@@ -35,7 +35,7 @@
                 android:background="?selectableItemBackgroundBorderless"
                 android:padding="16dp"
                 android:src="@drawable/ic_ali_pin_to_left"
-                android:tint="#3c3c3c"/>
+                app:tint="#3c3c3c"/>
 
             <ImageView
                 android:id="@+id/fullscreen"
@@ -44,7 +44,7 @@
                 android:background="?selectableItemBackgroundBorderless"
                 android:padding="16dp"
                 android:src="@drawable/ic_ali_fullscreen"
-                android:tint="#3c3c3c"/>
+                app:tint="#3c3c3c"/>
 
             <ImageView
                 android:id="@+id/close"
@@ -54,7 +54,7 @@
                 android:background="?selectableItemBackgroundBorderless"
                 android:padding="16dp"
                 android:src="@drawable/ic_ali_close"
-                android:tint="#3c3c3c"/>
+                app:tint="#3c3c3c"/>
         </LinearLayout>
 
         <View

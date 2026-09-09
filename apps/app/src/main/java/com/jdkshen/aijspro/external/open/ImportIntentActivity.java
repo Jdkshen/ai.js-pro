@@ -29,6 +29,8 @@ public class ImportIntentActivity extends BaseActivity {
 
     @Override
     protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
         try {
             handleIntent(intent);
         } catch (Exception e) {

@@ -50,7 +50,7 @@
                         android:layout_height="24dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_service_green"
-                        android:tint="?attr/colorPrimary"/>
+                        app:tint="?attr/colorPrimary"/>
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -100,7 +100,7 @@
                         android:layout_height="24dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_robot_64"
-                        android:tint="?attr/colorPrimary"/>
+                        app:tint="?attr/colorPrimary"/>
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -150,7 +150,7 @@
                         android:layout_height="24dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_ali_log"
-                        android:tint="?attr/colorPrimary"/>
+                        app:tint="?attr/colorPrimary"/>
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -200,7 +200,7 @@
                         android:layout_height="24dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_ali_notification"
-                        android:tint="?attr/colorPrimary"/>
+                        app:tint="?attr/colorPrimary"/>
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -251,7 +251,7 @@
                         android:layout_height="24dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_ali_app"
-                        android:tint="?attr/colorPrimary"/>
+                        app:tint="?attr/colorPrimary"/>
 
                     <LinearLayout
                         android:layout_width="0dp"

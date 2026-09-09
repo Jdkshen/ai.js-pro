@@ -1466,7 +1466,13 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                         ClipboardUtil.setClip(this, item.getImportText());
                         toast("已复制");
                     } else {
-                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(item.getUrl())));
+                        try {
+                            Intent external = new Intent(Intent.ACTION_VIEW, Uri.parse(item.getUrl()))
+                                    .addCategory(Intent.CATEGORY_BROWSABLE);
+                            startActivity(Intent.createChooser(external, "打开文档链接"));
+                        } catch (android.content.ActivityNotFoundException error) {
+                            toast("没有可打开该链接的应用");
+                        }
                     }
                 }).show();
     }
@@ -1521,7 +1527,9 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
             }
             backup = new File(backupDir,
                     tab.file.getName() + "." + System.currentTimeMillis() + ".bak");
-            FileUtils.copyFile(tab.file, backup);
+            // Preserve what the user can currently see, including unsaved editor changes.
+            // Copying tab.file here silently lost those changes when the sample was reset.
+            FileUtils.writeStringToFile(backup, tab.editor.getText(), "UTF-8");
         } catch (IOException error) {
             Toast.makeText(this, "备份失败，未覆盖原文件：" + error.getMessage(), Toast.LENGTH_LONG).show();
             return;

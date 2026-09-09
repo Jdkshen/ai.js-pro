@@ -1,5 +1,7 @@
 package com.jdkshen.aijspro.ui.widget;
 
+import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
@@ -72,17 +74,28 @@ public class CommonMarkdownView extends WebView {
             @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                getContext().startActivity(new Intent(Intent.ACTION_VIEW).setData(request.getUrl()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                return true;
+                return openExternal(request.getUrl());
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                getContext().startActivity(new Intent(Intent.ACTION_VIEW).setData(Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                return true;
+                return openExternal(Uri.parse(url));
             }
 
         });
+    }
+
+    private boolean openExternal(Uri uri) {
+        if (uri == null) return false;
+        Intent view = new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE);
+        Intent chooser = Intent.createChooser(view, null);
+        if (!(getContext() instanceof Activity)) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getContext().startActivity(chooser);
+            return true;
+        } catch (ActivityNotFoundException ignored) {
+            return false;
+        }
     }
 
 

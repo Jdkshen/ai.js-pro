@@ -123,7 +123,8 @@ public class TaskPrefEditActivity extends AbstractAppCompatPluginActivity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (resultCode == RESULT_OK) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode == RESULT_OK && data != null) {
             mPreExecuteScript = data.getStringExtra(EXTRA_CONTENT);
         }
     }

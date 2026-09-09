@@ -58,7 +58,7 @@
             android:layout_gravity="center_vertical"
             android:contentDescription="@null"
             android:src="@drawable/ic_more_vert_black_24dp"
-            android:tint="?attr/colorOnSurfaceVariant"/>
+            app:tint="?attr/colorOnSurfaceVariant"/>
     </LinearLayout>
 
 </com.google.android.material.card.MaterialCardView>

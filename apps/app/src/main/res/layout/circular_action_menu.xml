@@ -16,7 +16,7 @@
         android:foreground="?selectableItemBackgroundBorderless"
         android:padding="8dp"
         android:src="@drawable/ic_menu"
-        android:tint="@android:color/white"/>
+        app:tint="@android:color/white"/>
 
     <ImageView
         android:id="@+id/record"

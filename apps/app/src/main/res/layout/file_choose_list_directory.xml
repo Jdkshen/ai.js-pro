@@ -36,7 +36,7 @@
             android:layout_marginLeft="8dp"
             android:layout_marginRight="16dp"
             android:src="@drawable/ic_folder_yellow_100px"
-            android:tint="#ffda93"/>
+            app:tint="#ffda93"/>
 
         <TextView
             android:id="@+id/name"

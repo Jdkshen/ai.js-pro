@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/item"
     android:layout_width="match_parent"
@@ -66,7 +67,7 @@
             android:clickable="true"
             android:padding="12dp"
             android:src="@drawable/ic_close_gray600_48dp"
-            android:tint="?attr/colorOnSurfaceVariant" />
+            app:tint="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 
     <View

@@ -54,7 +54,7 @@
                     android:padding="8dp"
                     android:scaleType="fitXY"
                     android:src="@drawable/ic_settings_ethernet_white_24dp"
-                    android:tint="@android:color/white"/>
+                    app:tint="@android:color/white"/>
 
                 <ImageView
                     android:id="@+id/close"
@@ -87,7 +87,7 @@
         android:padding="6dp"
         android:scaleType="fitXY"
         android:src="@drawable/ic_resizer"
-        android:tint="@android:color/white"
+        app:tint="@android:color/white"
         android:visibility="gone"/>
 
     <ImageView
@@ -100,7 +100,7 @@
         android:padding="5dp"
         android:scaleType="fitXY"
         android:src="@drawable/ic_move_cursor"
-        android:tint="@android:color/white"
+        app:tint="@android:color/white"
         android:visibility="gone"/>
 
 </RelativeLayout>

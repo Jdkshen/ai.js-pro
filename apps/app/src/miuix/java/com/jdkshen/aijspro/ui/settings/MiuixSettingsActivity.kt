@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.ui.settings
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Environment
 import android.preference.PreferenceManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -57,6 +58,8 @@ import top.yukonga.miuix.kmp.extra.SuperSwitch
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
+import java.io.File
+import java.io.IOException
 
 /**
  * Miuix settings page (pilot). Reads and writes the same default SharedPreferences
@@ -306,35 +309,80 @@ class MiuixSettingsActivity : ComponentActivity() {
     }
 
     private fun applyScriptDir(mode: Int) {
-        val oldPath = com.jdkshen.aijspro.Pref.getScriptDirPath()
-        val newRel = scriptDirText.value.text.trim()
-        if (newRel.isEmpty()) {
+        val oldDir = canonicalFile(File(com.jdkshen.aijspro.Pref.getScriptDirPath()))
+        val newRel = normalizeScriptDir(scriptDirText.value.text)
+        if (newRel == null) {
+            Toast.makeText(this, "请输入有效的相对路径，不能包含 .. 或冒号", Toast.LENGTH_LONG).show()
+            return
+        }
+        val storageRoot = canonicalFile(Environment.getExternalStorageDirectory())
+        val newDir = canonicalFile(File(storageRoot, newRel.trim('/')))
+        if (!isWithin(newDir, storageRoot)) {
+            Toast.makeText(this, "脚本目录必须位于内部存储中", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (newDir == oldDir) {
+            putStrPref(R.string.key_script_dir_path, newRel)
+            com.jdkshen.aijspro.model.explorer.Explorers.workspace().refreshAll()
+            revision++
             scriptDirShow.value = false
             return
         }
-        putStrPref(R.string.key_script_dir_path, newRel)
-        val newPath = com.jdkshen.aijspro.Pref.getScriptDirPath()
-        if (newPath == oldPath) {
+
+        if (mode == 0) {
+            if (!newDir.isDirectory && !newDir.mkdirs()) {
+                Toast.makeText(this, "无法创建目录：${newDir.path}", Toast.LENGTH_LONG).show()
+                return
+            }
+            putStrPref(R.string.key_script_dir_path, newRel)
             com.jdkshen.aijspro.model.explorer.Explorers.workspace().refreshAll()
+            revision++
             scriptDirShow.value = false
             return
         }
-        if (mode != 0) {
-            val observable = if (mode == 1) FileObservable.copy(oldPath, newPath)
-            else FileObservable.move(oldPath, newPath)
-            Toast.makeText(this, getString(R.string.text_on_progress), Toast.LENGTH_SHORT).show()
-            observable.subscribeOn(Schedulers.io())
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe({ }, { e ->
-                    Toast.makeText(this, "操作失败: ${e.message}", Toast.LENGTH_LONG).show()
-                }, {
-                    Toast.makeText(this, "完成", Toast.LENGTH_SHORT).show()
-                })
-        } else {
-            com.jdkshen.aijspro.model.explorer.Explorers.workspace().refreshAll()
+
+        if (!oldDir.isDirectory) {
+            Toast.makeText(this, "原脚本目录不存在，未修改设置", Toast.LENGTH_LONG).show()
+            return
         }
+        if (isWithin(newDir, oldDir) || isWithin(oldDir, newDir)) {
+            Toast.makeText(this, "新旧目录不能互相包含，以免循环复制", Toast.LENGTH_LONG).show()
+            return
+        }
+
         scriptDirShow.value = false
+        val observable = if (mode == 1) FileObservable.copy(oldDir.path, newDir.path)
+        else FileObservable.move(oldDir.path, newDir.path)
+        Toast.makeText(this, getString(R.string.text_on_progress), Toast.LENGTH_SHORT).show()
+        observable.subscribeOn(Schedulers.io())
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe({ }, { e ->
+                // Keep the old preference on any failure; copied files remain recoverable.
+                Toast.makeText(this, "操作失败，仍使用原目录: ${e.message}", Toast.LENGTH_LONG).show()
+            }, {
+                putStrPref(R.string.key_script_dir_path, newRel)
+                com.jdkshen.aijspro.model.explorer.Explorers.workspace().refreshAll()
+                revision++
+                Toast.makeText(this, "完成", Toast.LENGTH_SHORT).show()
+            })
     }
+
+    private fun normalizeScriptDir(input: String): String? {
+        val value = input.trim().replace('\\', '/')
+        if (value.isEmpty() || value.indexOf('\u0000') >= 0 || ':' in value) return null
+        val parts = value.split('/').filter { it.isNotEmpty() }
+        if (parts.isEmpty() || parts.any { it == "." || it == ".." }) return null
+        return "/${parts.joinToString("/")}/"
+    }
+
+    private fun canonicalFile(file: File): File = try {
+        file.canonicalFile
+    } catch (_: IOException) {
+        file.absoluteFile
+    }
+
+    private fun isWithin(file: File, root: File): Boolean =
+        file == root || file.path.startsWith(root.path + File.separator)
 
     @Composable
     private fun ScriptDirDialog(

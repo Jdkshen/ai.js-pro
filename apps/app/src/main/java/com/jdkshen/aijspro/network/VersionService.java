@@ -40,6 +40,9 @@ public class VersionService {
             "(?im)^\\s*versionCode\\s*[:=]\\s*(\\d+)\\s*$");
     private static final Pattern VERSION_CODE_IN_TAG = Pattern.compile(
             "(?:\\+|[-_.]vc)(\\d+)$", Pattern.CASE_INSENSITIVE);
+    private static final String[] KNOWN_ABIS = {
+            "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+    };
 
     private static VersionService sInstance = new VersionService();
     private boolean mDeprecated = false;
@@ -95,14 +98,16 @@ public class VersionService {
             for (GitHubRelease.Asset asset : release.assets) {
                 if (asset == null || TextUtils.isEmpty(asset.name)
                         || TextUtils.isEmpty(asset.browserDownloadUrl)
-                        || !asset.name.toLowerCase(Locale.ROOT).endsWith(".apk")) {
+                        || !isCompatibleApkAsset(asset.name, BuildConfig.RHINO_COMPAT,
+                        Build.SUPPORTED_ABIS)) {
                     continue;
                 }
                 VersionInfo.Download download = new VersionInfo.Download();
                 download.name = asset.name;
                 download.url = asset.browserDownloadUrl;
                 info.downloads.add(download);
-                int score = preferredAssetScore(asset.name);
+                int score = preferredAssetScore(asset.name, BuildConfig.RHINO_COMPAT,
+                        Build.SUPPORTED_ABIS);
                 if (score > preferredScore) {
                     preferred = asset;
                     preferredScore = score;
@@ -121,17 +126,38 @@ public class VersionService {
         return info;
     }
 
-    private static int preferredAssetScore(String name) {
+    static boolean isCompatibleApkAsset(String name, boolean compat, String[] supportedAbis) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (!lower.endsWith(".apk")) return false;
+        if (compat && lower.contains("lite")) return false;
+        if (!compat && lower.contains("compat")) return false;
+
+        String assetAbi = null;
+        for (String knownAbi : KNOWN_ABIS) {
+            if (lower.contains(knownAbi)) {
+                assetAbi = knownAbi;
+                break;
+            }
+        }
+        if (assetAbi == null) return true;
+        if (supportedAbis == null) return false;
+        for (String supportedAbi : supportedAbis) {
+            if (assetAbi.equalsIgnoreCase(supportedAbi)) return true;
+        }
+        return false;
+    }
+
+    private static int preferredAssetScore(String name, boolean compat, String[] supportedAbis) {
         String lower = name.toLowerCase(Locale.ROOT);
         int score = 0;
-        if (BuildConfig.RHINO_COMPAT) {
+        if (compat) {
             if (lower.contains("compat")) score += 8;
-            if (lower.contains("lite")) score -= 8;
         } else {
             if (lower.contains("lite")) score += 8;
-            if (lower.contains("compat")) score -= 8;
         }
-        String abi = Build.SUPPORTED_ABIS.length == 0 ? "" : Build.SUPPORTED_ABIS[0].toLowerCase(Locale.ROOT);
+        String abi = supportedAbis == null || supportedAbis.length == 0
+                ? "" : supportedAbis[0].toLowerCase(Locale.ROOT);
         if (!abi.isEmpty() && lower.contains(abi)) score += 4;
         return score;
     }

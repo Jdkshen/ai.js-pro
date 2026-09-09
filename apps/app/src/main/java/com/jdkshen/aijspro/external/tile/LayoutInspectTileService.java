@@ -46,10 +46,17 @@ public abstract class LayoutInspectTileService extends TileService implements La
     }
 
     @Override
+    @android.annotation.SuppressLint("MissingPermission")
     public void onClick() {
         super.onClick();
         Log.d(getClass().getName(), "onClick");
-        sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+        try {
+            // Android 12+ may reject this protected broadcast for ordinary apps. It is only a
+            // best-effort request to collapse the shade, so never let it abort layout capture.
+            sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+        } catch (SecurityException error) {
+            Log.w(getClass().getName(), "System did not allow collapsing quick settings", error);
+        }
         if (AccessibilityService.Companion.getInstance() == null) {
             Toast.makeText(this, R.string.text_no_accessibility_permission_to_capture, Toast.LENGTH_SHORT).show();
             AccessibilityServiceTool.goToAccessibilitySetting();

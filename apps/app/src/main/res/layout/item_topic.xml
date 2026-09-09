@@ -99,7 +99,7 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:background="?selectableItemBackgroundBorderless"
-                android:tint="#939393"
+                app:tint="#939393"
                 app:image_width="30dp"
                 app:src="@drawable/download"
                 app:text="@string/text_download"/>

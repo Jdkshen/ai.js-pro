@@ -704,6 +704,7 @@ public class CodeEditText extends AppCompatEditText {
     }
 
     @Override
+    @android.annotation.SuppressLint("MissingSuperCall")
     protected void onSelectionChanged(int selStart, int selEnd) {
         //调用父类的onSelectionChanged时会发送一个AccessibilityEvent，当文本过大时造成异常
         //super.onSelectionChanged(selStart, selEnd);

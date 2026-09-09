@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/item"
     android:layout_width="match_parent"
@@ -23,7 +24,7 @@
             android:layout_height="44dp"
             android:background="@drawable/circle_m3_primary"
             android:padding="10dp"
-            android:tint="?attr/colorOnPrimary"
+            app:tint="?attr/colorOnPrimary"
             tools:src="@drawable/ic_folder_outline_24dp" />
 
         <LinearLayout
@@ -67,7 +68,7 @@
             android:focusable="true"
             android:padding="12dp"
             android:src="@drawable/ic_more_vert_black_24dp"
-            android:tint="?attr/colorOnSurfaceVariant" />
+            app:tint="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 
     <View

@@ -18,7 +18,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.jdkshen.aijspro.R;
@@ -162,7 +161,7 @@ public class FunctionsKeyboardView extends FrameLayout {
     }
 
     private void initModulesView() {
-        mModulesView.setLayoutManager(new LinearLayoutManager(getContext(), LinearLayout.HORIZONTAL, false));
+        mModulesView.setLayoutManager(new LinearLayoutManager(getContext(), RecyclerView.HORIZONTAL, false));
         mModulesView.setAdapter(new ModulesAdapter());
     }
 

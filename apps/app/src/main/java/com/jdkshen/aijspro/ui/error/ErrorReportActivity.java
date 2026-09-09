@@ -122,6 +122,7 @@ public class ErrorReportActivity extends BaseActivity {
     }
 
     @Override
+    @android.annotation.SuppressLint("MissingSuperCall")
     public void onBackPressed() {
         exit();
     }
@@ -131,5 +132,4 @@ public class ErrorReportActivity extends BaseActivity {
     }
 
 }
-
 

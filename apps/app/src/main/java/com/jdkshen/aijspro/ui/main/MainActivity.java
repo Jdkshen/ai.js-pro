@@ -606,6 +606,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
         mActivityResultMediator.onActivityResult(requestCode, resultCode, data);
     }
 

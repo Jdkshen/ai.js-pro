@@ -36,7 +36,10 @@ public class FileObservable {
 
     private static void copyDir(File fromDir, File toDir, boolean deleteOld, Observer<? super File> progress) throws IOException {
         if (!fromDir.isDirectory()) {
-            return;
+            throw new IOException("源目录不存在: " + fromDir.getPath());
+        }
+        if (!toDir.isDirectory() && !toDir.mkdirs()) {
+            throw new IOException("无法创建目标目录: " + toDir.getPath());
         }
         File[] files = fromDir.listFiles();
         if (files == null || files.length == 0) {
@@ -56,7 +59,9 @@ public class FileObservable {
             FileUtils.copyFile(fromFile, toFile);
         }
         if (deleteOld) {
-            fromFile.delete();
+            if (!fromFile.delete() && fromFile.exists()) {
+                throw new IOException("无法删除原路径: " + fromFile.getPath());
+            }
         }
     }
 
