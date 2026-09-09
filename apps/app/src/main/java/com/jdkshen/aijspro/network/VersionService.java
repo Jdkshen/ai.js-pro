@@ -113,6 +113,7 @@ public class VersionService {
                 VersionInfo.Download download = new VersionInfo.Download();
                 download.name = asset.name;
                 download.url = asset.browserDownloadUrl;
+                download.digest = asset.digest;
                 info.downloads.add(download);
                 int score = preferredAssetScore(asset.name, BuildConfig.RHINO_COMPAT,
                         Build.SUPPORTED_ABIS);
@@ -124,6 +125,7 @@ public class VersionService {
         }
         if (preferred != null) {
             info.downloadUrl = preferred.browserDownloadUrl;
+            info.downloadDigest = preferred.digest;
         }
         if (info.downloads.isEmpty() && !TextUtils.isEmpty(release.htmlUrl)) {
             VersionInfo.Download page = new VersionInfo.Download();

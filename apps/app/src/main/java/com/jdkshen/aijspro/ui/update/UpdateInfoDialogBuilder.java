@@ -18,7 +18,6 @@ import com.afollestad.materialdialogs.MaterialDialog;
 import com.stardust.util.IntentUtil;
 
 import com.jdkshen.aijspro.BuildConfig;
-import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
 import com.jdkshen.aijspro.network.download.DownloadManager;
@@ -29,6 +28,8 @@ import com.jdkshen.aijspro.ui.widget.CommonMarkdownView;
 import java.io.File;
 
 import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.Observable;
+import io.reactivex.schedulers.Schedulers;
 
 /**
  * Created by Stardust on 2017/4/9.
@@ -110,19 +111,29 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
         }
         Button button = (Button) View.inflate(getContext(), R.layout.dialog_update_info_btn, null);
         button.setText(R.string.text_directly_download);
-        button.setOnClickListener(v -> directlyDownload(info.downloadUrl));
+        button.setOnClickListener(v -> directlyDownload(info));
         container.addView(button);
     }
 
     @SuppressLint("CheckResult")
-    private void directlyDownload(String downloadUrl) {
-        final String path = new File(Pref.getScriptDirPath(), "AI-js-Pro.apk").getPath();
-        DownloadManager.getInstance().downloadWithProgress(getContext(), downloadUrl, path)
+    private void directlyDownload(VersionInfo info) {
+        final File updateDirectory = new File(getContext().getCacheDir(), "updates");
+        final String path = new File(updateDirectory, "AI-js-Pro.apk").getPath();
+        DownloadManager.getInstance().downloadWithProgress(getContext(), info.downloadUrl, path)
                 .subscribeOn(AndroidSchedulers.mainThread())
+                .flatMap(file -> Observable.fromCallable(() -> UpdatePackageVerifier.verify(
+                                getContext().getApplicationContext(), file, info.versionCode,
+                                info.downloadDigest))
+                        .subscribeOn(Schedulers.io()))
+                .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(file -> IntentUtil.installApkOrToast(getContext(), file.getPath(), AppFileProvider.AUTHORITY),
                         error -> {
                             error.printStackTrace();
-                            Toast.makeText(getContext(), R.string.text_download_failed, Toast.LENGTH_SHORT).show();
+                            String detail = TextUtils.isEmpty(error.getMessage())
+                                    ? getContext().getString(R.string.text_download_failed)
+                                    : error.getMessage();
+                            Toast.makeText(getContext(), getContext().getString(
+                                    R.string.text_update_package_rejected, detail), Toast.LENGTH_LONG).show();
                         });
 
     }

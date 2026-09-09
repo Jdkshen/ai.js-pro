@@ -23,5 +23,6 @@ public class GitHubRelease {
         @SerializedName("browser_download_url")
         public String browserDownloadUrl;
         public long size;
+        public String digest;
     }
 }

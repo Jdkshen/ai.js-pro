@@ -115,9 +115,13 @@ public class IntentUtil {
     }
 
     public static void installApkOrToast(Context context, String path, String fileProviderAuthority) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ApkInstallActivity.start(context, path, fileProviderAuthority);
+            return;
+        }
         try {
             installApk(context, path, fileProviderAuthority);
-        } catch (ActivityNotFoundException e) {
+        } catch (ActivityNotFoundException | IllegalArgumentException e) {
             e.printStackTrace();
             Toast.makeText(context, R.string.error_activity_not_found_for_apk_installing, Toast.LENGTH_SHORT).show();
         }

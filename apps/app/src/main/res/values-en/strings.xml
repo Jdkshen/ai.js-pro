@@ -145,6 +145,7 @@
     <string name="text_download_url">Download</string>
     <string name="text_directly_download">Download now</string>
     <string name="text_download_failed">Download failed</string>
+    <string name="text_update_package_rejected">Update package rejected: %1$s</string>
     <string name="text_do_not_ask_again_for_this_version">Do not ask again for this version</string>
     <string name="text_code_beautify">Beautify code</string>
     <string name="text_guard_mode">Protection mode</string>

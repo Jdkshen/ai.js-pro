@@ -1,6 +1,6 @@
 # AI.js Pro 权限与发布基线
 
-> 更新日期：2026-09-08。本文描述当前 `com.jdkshen.aijspro` 的发布约束，不包含任何签名密钥。
+> 更新日期：2026-09-09。本文描述当前 `com.jdkshen.aijspro` 的发布约束，不包含任何签名密钥。
 
 ## 1. 发布构建
 
@@ -36,6 +36,10 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 发布标签推荐写成 `v1.0.2+465`，其中 `1.0.2` 是 `versionName`，`465` 是 Android `versionCode`。也可以在 release notes 中单独写一行 `versionCode: 465`。APK 文件名必须包含 `compat` 或 `lite` 以及 ABI（例如 `arm64-v8a`），应用会优先选择与当前版本和设备 ABI 一致的文件。仓库尚无公开 release 或 GitHub 返回 404 时，客户端按“当前已是最新版”处理，不再产生旧站证书异常。
 
+“直接下载”会把 APK 放进应用私有缓存 `cache/updates`，随后校验 GitHub 返回的 SHA-256（新 Release 有 digest 时）、APK 格式、包名、版本号及与已安装版本相同的签名。校验通过后才交给系统安装器；Android 8 及以上若尚未允许“安装未知应用”，应用会打开本应用的授权页，用户授权返回后自动继续安装。发布 APK 必须始终使用同一正式签名，否则客户端会在系统安装前拒绝更新包。
+
+推送与 `project-versions.json` 匹配的标签（当前为 `v1.0.2+465`）会触发 GitHub Actions 发布任务。仓库 Actions Secrets 必须配置 `AIJSPRO_KEYSTORE_BASE64`、`AIJSPRO_STORE_PASSWORD`、`AIJSPRO_KEY_ALIAS`、`AIJSPRO_KEY_PASSWORD`；前者是 keystore 文件的 Base64 内容，另外三项与本地发布变量含义一致。Secrets 缺失时发布任务会明确失败，不会生成无签名或 debug 签名的 Release。
+
 ## 2. 当前 SDK 范围
 
 | 项目 | 当前值 |
@@ -57,6 +61,7 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | 长脚本、定时任务、MCP 后台连接 | 系统特殊设置 | 后台可能被限制 | 不得首次启动强制申请 |
 | `RECEIVE_BOOT_COMPLETED` | 定时任务及用户开启的启动行为 | 普通权限 | 重启后不自动恢复 | 保留，受用户设置控制 |
 | `FOREGROUND_SERVICE` | 长任务、截图/引擎运行租约 | 普通权限 | 后台任务受限 | 提升 target SDK 时拆分服务类型 |
+| `REQUEST_INSTALL_PACKAGES` | 应用内下载更新及安装项目构建 APK | Android 8+“安装未知应用”单独授权 | 保留下载包并结束安装流程，可再次点击安装 | 保留；只在用户主动安装时引导 |
 | `PACKAGE_USAGE_STATS` | 获取前台包名和 Activity | 使用情况访问设置 | 返回空/降级 | 保留，调用前检查 |
 | `WRITE_SECURE_SETTINGS` | 小米无障碍快速开启并保留其他服务 | Shizuku、ADB 或 Root 一次授予 | 回退系统无障碍设置 | 仅 debug 保留；release 通过 Manifest overlay 明确移除 |
 | `QUERY_ALL_PACKAGES` / MIUI `GET_INSTALLED_APPS` | 脚本 App API、包名与应用名查询 | Manifest/MIUI 运行时授权 | 只返回可见应用 | 发布渠道要求专项复核 |

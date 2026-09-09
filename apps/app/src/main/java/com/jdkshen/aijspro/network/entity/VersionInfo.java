@@ -23,6 +23,7 @@ public class VersionInfo {
     public List<OldVersion> oldVersions;
     public int deprecated;
     public String downloadUrl;
+    public String downloadDigest;
 
     public boolean isValid() {
         return downloads != null && !downloads.isEmpty() && versionCode > 0
@@ -87,6 +88,7 @@ public class VersionInfo {
 
         public String name;
         public String url;
+        public String digest;
 
         @Override
         public String toString() {

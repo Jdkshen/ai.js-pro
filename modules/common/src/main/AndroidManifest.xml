@@ -8,6 +8,11 @@
                  android:supportsRtl="true"
     >
 
+        <activity
+            android:name=".util.ApkInstallActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
+
     </application>
 
 </manifest>
