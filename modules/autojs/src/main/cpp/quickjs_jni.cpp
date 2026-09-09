@@ -56,6 +56,68 @@ struct EngineState {
 
 std::string jsString(JSContext *context, JSValueConst value);
 
+std::string scriptDirectory(const std::string &filename) {
+    const size_t separator = filename.find_last_of("/\\");
+    if (separator == std::string::npos) {
+        return ".";
+    }
+    if (separator == 0) {
+        return filename.substr(0, 1);
+    }
+    return filename.substr(0, separator);
+}
+
+bool installMainModuleGlobals(JSContext *context, const std::string &filename) {
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue module = JS_NewObject(context);
+    JSValue exports = JS_NewObject(context);
+    if (JS_IsException(global) || JS_IsException(module) || JS_IsException(exports)) {
+        JS_FreeValue(context, global);
+        JS_FreeValue(context, module);
+        JS_FreeValue(context, exports);
+        return false;
+    }
+
+    int status = 0;
+    status |= JS_SetPropertyStr(context, module, "id", JS_NewString(context, filename.c_str()));
+    status |= JS_SetPropertyStr(context, module, "filename", JS_NewString(context, filename.c_str()));
+    status |= JS_SetPropertyStr(context, module, "loaded", JS_NewBool(context, false));
+    status |= JS_SetPropertyStr(context, module, "exports", JS_DupValue(context, exports));
+    if (status < 0) {
+        JS_FreeValue(context, global);
+        JS_FreeValue(context, module);
+        JS_FreeValue(context, exports);
+        return false;
+    }
+
+    JSValue require = JS_GetPropertyStr(context, global, "require");
+    if (JS_IsFunction(context, require)) {
+        status |= JS_SetPropertyStr(context, require, "main", JS_DupValue(context, module));
+        status |= JS_SetPropertyStr(context, module, "require", JS_DupValue(context, require));
+    }
+    JS_FreeValue(context, require);
+
+    status |= JS_SetPropertyStr(context, global, "module", module);
+    status |= JS_SetPropertyStr(context, global, "exports", exports);
+    status |= JS_SetPropertyStr(context, global, "__filename",
+                                JS_NewString(context, filename.c_str()));
+    const std::string dirname = scriptDirectory(filename);
+    status |= JS_SetPropertyStr(context, global, "__dirname",
+                                JS_NewString(context, dirname.c_str()));
+    JS_FreeValue(context, global);
+    return status >= 0;
+}
+
+void markMainModuleLoaded(JSContext *context) {
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue module = JS_GetPropertyStr(context, global, "module");
+    if (JS_IsObject(module)) {
+        JS_SetPropertyStr(context, module, "loaded", JS_NewBool(context, true));
+    }
+    JS_FreeValue(context, module);
+    JS_FreeValue(context, global);
+}
+
 int64_t pendingTimerCount(EngineState *state) {
     std::lock_guard<std::mutex> lock(state->timersMutex);
     int64_t count = 0;
@@ -4377,14 +4439,21 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
     state->interrupted.store(false, std::memory_order_relaxed);
     const std::string script = fromJavaString(env, source);
     const std::string filename = fromJavaString(env, sourceName);
+    const std::string displayName = filename.empty() ? "<script>" : filename;
+    if (!installMainModuleGlobals(state->context, displayName)) {
+        const std::string message = quickJsException(state->context);
+        throwQuickJs(env, message.empty() ? "Unable to create the main CommonJS module" : message);
+        return nullptr;
+    }
     JSValue result = JS_Eval(state->context, script.data(), script.size(),
-                             filename.empty() ? "<script>" : filename.c_str(), JS_EVAL_TYPE_GLOBAL);
+                             displayName.c_str(), JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(result)) {
         const std::string message = quickJsException(state->context);
         JS_FreeValue(state->context, result);
         throwQuickJs(env, message);
         return nullptr;
     }
+    markMainModuleLoaded(state->context);
 
     JSContext *pendingContext = nullptr;
     int pendingResult;
