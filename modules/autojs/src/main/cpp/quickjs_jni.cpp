@@ -47,6 +47,7 @@ struct EngineState {
     JSRuntime *runtime = nullptr;
     JSContext *context = nullptr;
     std::atomic<bool> interrupted{false};
+    std::atomic<bool> exitRequested{false};
     NativeFrameStore frames;
     std::mutex timersMutex;
     std::condition_variable timersCv;
@@ -1228,6 +1229,16 @@ JSValue nativeFloatyViewTouch(JSContext *context, JSValueConst, int argc, JSValu
             static_cast<int32_t>(windowId), id);
 }
 
+JSValue nativeFloatyViewKey(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewKey requires windowId, id");
+    }
+    const std::string id = jsString(context, argv[1]);
+    return callHostVoidIntString(context, "floatyViewKey",
+            static_cast<int32_t>(windowId), id);
+}
+
 JSValue nativeFloatySetWindowFocusable(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
@@ -1254,12 +1265,11 @@ JSValue nativeFloatyViewRequestFocus(JSContext *context, JSValueConst, int argc,
             static_cast<int32_t>(windowId), id);
 }
 
-// Rhino-style exit(): marks the engine as interrupted so the evaluation loop
-// unwinds at the next interrupt check. Unlike Rhino this ends the script as an
-// interruption rather than a normal completion.
+// Rhino-style exit(): records an exit request; the JS layer then throws a
+// sentinel error that evaluate() converts into a normal completion.
 JSValue nativeExitSelf(JSContext *context, JSValueConst, int, JSValueConst *) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
-    state->interrupted.store(true, std::memory_order_relaxed);
+    state->exitRequested.store(true, std::memory_order_relaxed);
     return JS_UNDEFINED;
 }
 
@@ -2271,6 +2281,26 @@ JSValue nativeDeviceGetBattery(JSContext *context, JSValueConst, int, JSValueCon
     const jfloat result = env->CallFloatMethod(state->host, method);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewFloat64(context, result);
+}
+
+JSValue nativeDeviceGetAvailMem(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "deviceGetAvailMem", "()J");
+    const jlong result = env->CallLongMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, result);
+}
+
+JSValue nativeDeviceGetTotalMem(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "deviceGetTotalMem", "()J");
+    const jlong result = env->CallLongMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, result);
 }
 
 // ---- app module: additional JNI ----
@@ -3613,7 +3643,9 @@ const char kBootstrapScript[] = R"JS(
         isCharging: function () { return __aiNativeDeviceIsCharging(); },
         getBrightness: function () { return Number(__aiNativeDeviceGetBrightness()); },
         getBrightnessMode: function () { return Number(__aiNativeDeviceGetBrightnessMode()); },
-        cancelVibration: function () { __aiNativeDeviceCancelVibration(); }
+        cancelVibration: function () { __aiNativeDeviceCancelVibration(); },
+        getAvailMem: function () { return Number(__aiNativeDeviceGetAvailMem()); },
+        getTotalMem: function () { return Number(__aiNativeDeviceGetTotalMem()); }
     });
 
     // ---- app module (additional) ----
@@ -4167,6 +4199,19 @@ const char kBootstrapScript[] = R"JS(
             getRawY: function () { return item.rawY; }
         };
     }
+    function makeFloatyKeyEvent(item) {
+        return {
+            action: item.action,
+            keyCode: item.keyCode,
+            keyName: item.keyName,
+            consumed: false,
+            ACTION_DOWN: 0,
+            ACTION_UP: 1,
+            getAction: function () { return item.action; },
+            getKeyCode: function () { return item.keyCode; },
+            getKeyName: function () { return item.keyName; }
+        };
+    }
     function dispatchFloatyEvents() {
         for (;;) {
             var raw = __aiNativeFloatyViewPoll();
@@ -4178,6 +4223,9 @@ const char kBootstrapScript[] = R"JS(
             if (item.event === 'touch') {
                 var touchEvent = makeFloatyTouchEvent(item);
                 handlers.slice().forEach(function (fn) { fn(touchEvent); });
+            } else if (item.event === 'key') {
+                var keyEvent = makeFloatyKeyEvent(item);
+                handlers.slice().forEach(function (fn) { fn(keyEvent.keyCode, keyEvent); });
             } else {
                 handlers.slice().forEach(function (fn) { fn(); });
             }
@@ -4199,6 +4247,8 @@ const char kBootstrapScript[] = R"JS(
         handlers.push(fn);
         if (mode === 'touch') {
             __aiNativeFloatyViewTouch(windowId, viewId);
+        } else if (mode === 'key') {
+            __aiNativeFloatyViewKey(windowId, viewId);
         } else {
             __aiNativeFloatyViewClick(windowId, viewId, mode);
         }
@@ -4218,7 +4268,12 @@ const char kBootstrapScript[] = R"JS(
                 event = String(event);
                 if (event === 'click') return view.click(fn);
                 if (event === 'long_click' || event === 'longClick') return view.longClick(fn);
+                if (event === 'key') return view.onKey(fn);
                 throw new Error('Unsupported floaty view event: ' + event);
+            },
+            onKey: function (fn) {
+                addFloatyHandler(windowId, viewId, 'key', fn);
+                return view;
             },
             getText: function () { return __aiNativeFloatyViewGetText(windowId, viewId); },
             setText: function (text) {
@@ -4333,6 +4388,18 @@ const char kBootstrapScript[] = R"JS(
         }
     };
     global.floaty = Object.freeze(floaty);
+
+    // Key codes for floaty on("key") listeners, mirroring Rhino's keys table.
+    global.keys = Object.freeze({
+        back: 4,
+        home: 3,
+        menu: 82,
+        enter: 66,
+        dpad_center: 23,
+        volume_up: 24,
+        volume_down: 25,
+        power: 26
+    });
 
     // ---- ui module (minimal: DynamicLayoutInflater + fullscreen overlay) ----
     var uiViewId = 0;
@@ -4546,10 +4613,11 @@ const char kBootstrapScript[] = R"JS(
     // Node.js compatible global alias
     global.global = global;
 
-    // Rhino-style exit(): marks the engine as interrupted so the evaluation loop
-    // unwinds and the script stops. Unlike Rhino it ends as an interruption
-    // rather than a normal completion.
-    global.exit = function () { __aiNativeExitSelf(); };
+    // Rhino-style exit(): ends the script as a normal completion.
+    global.exit = function () {
+        __aiNativeExitSelf();
+        throw new Error('__AIJS_EXIT__');
+    };
 
     // ---- CommonJS module system (require) ----
     var moduleCache = new Map();
@@ -4768,6 +4836,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyGetX", nativeFloatyGetX, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetY", nativeFloatyGetY, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewTouch", nativeFloatyViewTouch, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewKey", nativeFloatyViewKey, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatySetWindowFocusable", nativeFloatySetWindowFocusable, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewRequestFocus", nativeFloatyViewRequestFocus, 2);
     installNativeFunction(state->context, global, "__aiNativeExitSelf", nativeExitSelf, 0);
@@ -4802,6 +4871,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeDeviceIsScreenOn", nativeDeviceIsScreenOn, 0);
     installNativeFunction(state->context, global, "__aiNativeDeviceVibrate", nativeDeviceVibrate, 1);
     installNativeFunction(state->context, global, "__aiNativeDeviceGetBattery", nativeDeviceGetBattery, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetAvailMem", nativeDeviceGetAvailMem, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetTotalMem", nativeDeviceGetTotalMem, 0);
     installNativeFunction(state->context, global, "__aiNativeAppGetPackageName", nativeAppGetPackageName, 1);
     installNativeFunction(state->context, global, "__aiNativeAppGetAppName", nativeAppGetAppName, 1);
     installNativeFunction(state->context, global, "__aiNativeAppOpenAppSetting", nativeAppOpenAppSetting, 1);
@@ -4915,6 +4986,14 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
     JSValue result = JS_Eval(state->context, script.data(), script.size(),
                              displayName.c_str(), JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(result)) {
+        if (state->exitRequested.load(std::memory_order_relaxed)) {
+            // exit() was called: swallow the sentinel error and finish normally.
+            state->exitRequested.store(false, std::memory_order_relaxed);
+            JSValue ignored = JS_GetException(state->context);
+            JS_FreeValue(state->context, ignored);
+            JS_FreeValue(state->context, result);
+            return nullptr;
+        }
         const std::string message = quickJsException(state->context);
         JS_FreeValue(state->context, result);
         throwQuickJs(env, message);
@@ -4942,6 +5021,11 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
         }
         std::string timerError;
         if (!dispatchDueTimers(state->context, state.get(), &timerError)) {
+            if (state->exitRequested.load(std::memory_order_relaxed)) {
+                state->exitRequested.store(false, std::memory_order_relaxed);
+                JS_FreeValue(state->context, result);
+                return nullptr;
+            }
             JS_FreeValue(state->context, result);
             throwQuickJs(env, timerError.empty() ? "Timer callback failed" : timerError);
             return nullptr;

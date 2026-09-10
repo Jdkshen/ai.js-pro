@@ -83,14 +83,16 @@ toast("这是 QuickJS 脚本");
 | `timers` | 已接入 | Native 定时器队列 + 引擎线程事件循环，可被停止信号打断 |
 | `app` | 已接入 | `launch` / `openUrl` / `getInstalledApps` / `getAppInfo` 白名单桥 |
 | `storages` | 已接入 | `create` / `put` / `get` / `remove` / `contains` / `clear`，基于 SharedPreferences |
-| `device` | 已接入 | 设备信息（model/brand/sdkInt 等）、`isScreenOn` / `vibrate` / `getBattery` |
+| `device` | 已接入 | 设备信息（model/brand/sdkInt 等）、`isScreenOn` / `vibrate` / `getBattery` / `getAvailMem` / `getTotalMem` |
 | `shell` | 已接入 | 普通/Root 执行、Root 可用性检查、超时中止、输出限制和引擎关闭子进程回收 |
 | `dialogs` | 已接入 | `alert` / `confirm` / `prompt` / `select` / `singleChoice` / `multiChoice` |
 | `engines` | 已接入 | 启动脚本、枚举引擎、停止引擎；子脚本默认使用 QuickJS，可显式选择 Rhino |
 | `threads`、`events` | 常用能力已接入 | 每个 worker 使用独立 QuickJS；支持 JSON 参数、返回值/异常查询与等待（`waitForResult` / `promise()`）；支持按键、触摸、通知、Toast 和手势观察，系统回调通过有界队列回到所属引擎线程；`events.bus` 提供 worker 间共享事件总线（JSON 载荷） |
-| `ui` / `$ui` | 基础实现 | 支持 XML 布局、常用控件、点击和列表事件；E4X/JSX、Java 反射与完整动态绑定仍需 Rhino |
+| `floaty` | 已接入 | `window(xmlOrConfig)` / `rawWindow` / `closeAll`；`window.<id>` 控件代理：`click` / `longClick` / `on("click"/"long_click"/"key")` / `onKey` / `getText` / `setText` / `setVisibility` / `setOnTouchListener` / `requestFocus`；窗口级 `setAdjustEnabled` / `isAdjustEnabled` / `getX` / `getY` / `requestFocus` / `disableFocus` / `exitOnClose()`（close 时退出脚本，与 Rhino 一致）；触摸/按键事件经有界队列回到引擎线程；QuickJS 无 E4X，XML 使用字符串 |
+| `ui` / `$ui` | 基础实现 | 支持 XML 布局、常用控件、点击和列表事件；`ui.run(fn)` 保持 Rhino 写法兼容；E4X/JSX、Java 反射与完整动态绑定仍需 Rhino |
+| `exit()` / `keys` | 已接入 | `exit()` 以正常完成结束脚本（不再报中断错误）；`keys.back/home/menu/enter` 等常量用于 `on("key")` 监听 |
 
-全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`，YOLO 案例位于其 `YOLO目标检测/` 子目录。
+全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`，YOLO 案例位于其 `YOLO目标检测/` 子目录，悬浮窗对齐案例位于其 `悬浮窗/` 子目录（悬浮文字、动态悬浮文字、悬浮窗运行脚本按钮简单版/完整版、悬浮窗输入框）。
 
 ### Native Frame 用法
 

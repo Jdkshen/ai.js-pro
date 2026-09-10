@@ -807,6 +807,30 @@ final class QuickJsHostBridge implements AutoCloseable {
         } catch (Throwable ignored) {}
     }
 
+    public long deviceGetAvailMem() {
+        try {
+            android.app.ActivityManager manager = (android.app.ActivityManager)
+                    mRuntime.uiHandler.getContext().getSystemService(Context.ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
+            manager.getMemoryInfo(info);
+            return info.availMem;
+        } catch (Throwable error) {
+            return 0;
+        }
+    }
+
+    public long deviceGetTotalMem() {
+        try {
+            android.app.ActivityManager manager = (android.app.ActivityManager)
+                    mRuntime.uiHandler.getContext().getSystemService(Context.ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
+            manager.getMemoryInfo(info);
+            return info.totalMem;
+        } catch (Throwable error) {
+            return 0;
+        }
+    }
+
     // ---- shell module ----
 
     public String shellExecute(String command, boolean root, boolean shizuku,
@@ -2048,6 +2072,11 @@ final class QuickJsHostBridge implements AutoCloseable {
         if (window != null) window.registerViewTouch(id);
     }
 
+    public void floatyViewKey(int windowId, String id) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.registerViewKey(id);
+    }
+
     public void floatySetWindowFocusable(int windowId, boolean focusable) {
         QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
         if (window != null) window.setWindowFocusable(focusable);
@@ -2402,6 +2431,48 @@ final class QuickJsHostBridge implements AutoCloseable {
                     Log.w("QuickJsFloatyWindow", "registerViewTouch failed", error);
                 }
             });
+        }
+
+        void registerViewKey(String id) {
+            mHandler.post(() -> {
+                try {
+                    View view = findViewById(id);
+                    if (view == null) {
+                        return;
+                    }
+                    view.setFocusableInTouchMode(true);
+                    view.requestFocus();
+                    view.setOnKeyListener((v, keyCode, event) -> {
+                        if (mEventSink == null) {
+                            return false;
+                        }
+                        try {
+                            mEventSink.emit(new JSONObject()
+                                    .put("window", mId).put("id", id).put("event", "key")
+                                    .put("action", event.getAction())
+                                    .put("keyCode", keyCode)
+                                    .put("keyName", keyName(keyCode)).toString());
+                        } catch (JSONException ignored) {
+                        }
+                        return true;
+                    });
+                } catch (Throwable error) {
+                    Log.w("QuickJsFloatyWindow", "registerViewKey failed", error);
+                }
+            });
+        }
+
+        private static String keyName(int keyCode) {
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_BACK: return "back";
+                case KeyEvent.KEYCODE_HOME: return "home";
+                case KeyEvent.KEYCODE_MENU: return "menu";
+                case KeyEvent.KEYCODE_VOLUME_UP: return "volume_up";
+                case KeyEvent.KEYCODE_VOLUME_DOWN: return "volume_down";
+                case KeyEvent.KEYCODE_POWER: return "power";
+                case KeyEvent.KEYCODE_ENTER: return "enter";
+                default: return "key_" + keyCode;
+            }
         }
 
         void setWindowFocusable(boolean focusable) {

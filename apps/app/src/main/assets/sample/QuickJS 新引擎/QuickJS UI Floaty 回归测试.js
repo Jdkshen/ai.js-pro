@@ -67,6 +67,15 @@ try {
     }
     if (typeof ui.run !== 'function') throw new Error('ui.run missing');
     if (typeof exit !== 'function') throw new Error('exit missing');
+    if (!(device.getAvailMem() > 0)) throw new Error('device.getAvailMem failed');
+    if (!(device.getTotalMem() > 0)) throw new Error('device.getTotalMem failed');
+    if (keys.back !== 4) throw new Error('keys.back missing');
+    if (typeof win.action.onKey !== 'function') throw new Error('floaty view onKey missing');
+    win.action.onKey(function (keyCode, event) {
+        if (!event || typeof event.getAction !== 'function') {
+            throw new Error('key event object invalid');
+        }
+    });
     if (win.isAdjustEnabled()) throw new Error('adjust should default to false');
     win.setAdjustEnabled(true);
     if (!win.isAdjustEnabled()) throw new Error('setAdjustEnabled(true) failed');
@@ -76,7 +85,8 @@ try {
     if (win.getX() !== 30 || win.getY() !== 60) {
         throw new Error('floaty getX/getY failed: ' + win.getX() + ',' + win.getY());
     }
-    win.exitOnClose();
+    // 注意：exitOnClose() 会让 close() 结束时退出脚本（与 Rhino 一致），
+    // 因此这里不做该组合，exitOnClose 的行为由独立场景验证。
     win.close();
     win = null;
 
