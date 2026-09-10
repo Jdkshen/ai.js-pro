@@ -8,7 +8,7 @@
         android:layout_width="120dp"
         android:layout_height="120dp"
         android:layout_gravity="center"
-        android:contentDescription="@string/powered_by_autojs"
+        android:contentDescription="@string/powered_by"
         android:src="@drawable/ai_js_pro_logo"/>
 
     <TextView
@@ -17,7 +17,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="center_horizontal|bottom"
         android:layout_marginBottom="12dp"
-        android:text="@string/powered_by_autojs"
+        android:text="@string/powered_by"
         android:textColor="#dd000000"
         android:textSize="14sp"/>
 </FrameLayout>

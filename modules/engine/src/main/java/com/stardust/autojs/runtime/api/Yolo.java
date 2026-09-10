@@ -18,7 +18,7 @@ import java.util.Set;
 /** YOLO runtime exposed to AI.js Pro scripts, backed by the bundled OpenCV 5.0 DNN engine. */
 public final class Yolo implements AutoCloseable {
 
-    private static final String TAG = "AutoJsYolo";
+    private static final String TAG = "AijsYolo";
 
     private final Context mContext;
     private final Set<AutoCloseable> mDetectors = Collections.synchronizedSet(new HashSet<>());
@@ -79,7 +79,7 @@ public final class Yolo implements AutoCloseable {
             throw new IllegalArgumentException("YOLO ONNX 模型资源路径为空");
         }
         try {
-            File modelDirectory = new File(mContext.getCacheDir(), "autojs-yolo-models");
+            File modelDirectory = new File(mContext.getCacheDir(), "aijspro-yolo-models");
             if (!modelDirectory.isDirectory() && !modelDirectory.mkdirs()) {
                 throw new IOException("无法创建 YOLO 模型缓存目录");
             }

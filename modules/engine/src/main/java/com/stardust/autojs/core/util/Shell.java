@@ -85,7 +85,7 @@ public class Shell extends AbstractShell {
         // the main queue guarantees this class's fields are initialized first.
         new Handler(mContext.getMainLooper()).post(() -> {
             Thread thread = new Thread(() -> startProcess(initialCommand),
-                    "AutoJs-" + (isRoot() ? "RootShell" : "Shell"));
+                    "Aijs-" + (isRoot() ? "RootShell" : "Shell"));
             thread.setDaemon(true);
             thread.start();
         });

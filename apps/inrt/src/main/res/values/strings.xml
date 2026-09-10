@@ -19,7 +19,7 @@
     <string name="key_dont_show_main_activity">key_dont_show_main_activity</string>
     <string name="summary_dont_show_main_activity">打开应用后直接运行脚本</string>
     <string name="text_others">其他</string>
-    <string name="powered_by_autojs">Powered by AI.js Pro</string>
+    <string name="powered_by">Powered by AI.js Pro</string>
     <string name="text_execution_finished">\n------------\n[%1$s]运行结束，用时%2$.3f秒</string>
 
 </resources>
