@@ -121,7 +121,7 @@
 - [x] commonDebug 与 miuixDebug 构建成功。
 - [x] 最终布局微调后重新构建并安装 miuix arm64 APK。
 - [x] 顶栏搜索已改为 Miuix 行内搜索，直接复用原 QueryEvent 过滤逻辑。
-- [x] **五个 tab 全部 Miuix 化**：文件（View 列表 + Miuix 菜单/FAB）、教程（MiuixSampleFragment：搜索/分类/运行/导入）、社区（MiuixCommunityFragment：复用 CommunityWebView 全部行为）、市场（MiuixMarketFragment：卡片列表）、管理（View 任务列表，文案对齐 Auto.js Pro「运行中任务」）。
+- [x] **五个 tab 全部 Miuix 化**：文件（View 列表 + Miuix 菜单/FAB）、教程（MiuixSampleFragment：搜索/分类/运行/导入/打包）、社区（MiuixCommunityFragment：复用 CommunityWebView 全部行为）、市场（MiuixMarketFragment：卡片列表）、管理（View 任务列表，文案对齐 Auto.js Pro「运行中任务」）。
 - [x] **FAB 修复与功能对齐**：teal 圆形 56dp（对齐 Auto.js Pro 圆形）、移除旧蓝色 Material FAB（`onPageShow` 的 `mFab.show()` 会把旧件带回，已 `removeView`）、`elevation=14f` 防被页面内容遮挡、跟随 `ViewPagerFragment` 显隐（教程页隐藏）、文件页=新建菜单/管理页=停止全部/社区=回复发帖（复用 `performMainFabClickFromMiuix`）。
 - [x] 顶栏补齐 **ImGui 工作台** 入口（`<>`），与 Auto.js Pro 顶栏功能入口一致；验证顶栏 4 图标（搜索/日志/文档/工作台）+ 菜单。
 - [x] 打包页/项目配置/定时任务保持 View 实现（表单复杂、功能稳定优先），工具栏已统一 Miuix 浅色观感。

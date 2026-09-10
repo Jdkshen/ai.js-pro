@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.ui.sample
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -65,6 +66,8 @@ import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
 import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
+import com.jdkshen.aijspro.ui.project.BuildActivity
+import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.schedulers.Schedulers
@@ -387,8 +390,20 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                             filter = SampleFilter.ALL
                         } else view(entry)
                     }
-                    if (!entry.directory) {
-                        if (entry.runnable) ActionChoice("运行") { dismiss(); run(entry) }
+                    if (entry.directory) {
+                        // 项目型示例（目录里带 project.json）只有整份复制过去才能当项目打包，
+                        // 单文件打包会把同目录的模块/资源丢掉。
+                        if (isProjectSample(entry)) ActionChoice("打包（项目）") {
+                            dismiss()
+                            buildProject(entry)
+                        }
+                    } else {
+                        if (entry.runnable) {
+                            ActionChoice("运行") { dismiss(); run(entry) }
+                            // 示例本体在 APK 内置资源里，打包器要的是磁盘上的真实文件，
+                            // 所以先落到脚本目录，再进打包页。
+                            ActionChoice("打包") { dismiss(); build(entry) }
+                        }
                         ActionChoice("导入", requestImport)
                         val imported = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
                         if (imported.isFile) {
@@ -452,6 +467,62 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         if (!entry.runnable) return
         val execution = Scripts.run(SampleFile(entry.path, requireContext().assets).toSource())
         if (execution != null) Toast.makeText(requireContext(), "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 项目型示例：目录里直接带 `project.json`，打包时会按项目模式处理。 */
+    private fun isProjectSample(entry: SampleEntry): Boolean =
+        catalog.orEmpty().any { it.path == entry.path + "/project.json" }
+
+    /**
+     * 打包单文件示例：示例本体在 APK 内置资源里，而打包器要的是磁盘上的真实文件，
+     * 所以先落到脚本目录。已有导入副本就直接用它（与「查看」一致，不覆盖用户改过的内容）。
+     */
+    private fun build(entry: SampleEntry) {
+        val context = requireContext()
+        val existing = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
+        if (existing.isFile) {
+            Toast.makeText(context, "使用已导入的副本：${existing.name}", Toast.LENGTH_SHORT).show()
+            openBuildPage(existing)
+            return
+        }
+        imports.add(ScriptOperations(context, rootView)
+            .importSampleWithName(SampleFile(entry.path, context.assets), entry.name)
+            .subscribe({ path -> openBuildPage(java.io.File(path)) }, { failure ->
+                Toast.makeText(context,
+                    failure.localizedMessage ?: "打包示例失败", Toast.LENGTH_LONG).show()
+            }))
+    }
+
+    /**
+     * 打包项目型示例：把整棵示例目录复制到脚本目录（同名的文件保留用户已有的版本），
+     * 再以这个目录为源进打包页（打包页会读里面的 project.json，按项目模式打包）。
+     */
+    private fun buildProject(entry: SampleEntry) {
+        val context = requireContext()
+        val prefix = entry.path + "/"
+        val files = catalog.orEmpty().filter { !it.directory && it.path.startsWith(prefix) }
+        val target = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
+        imports.add(Observable.fromCallable {
+            files.forEach { file ->
+                val copy = java.io.File(target, file.path.removePrefix(prefix))
+                if (copy.isFile) return@forEach
+                copy.parentFile?.mkdirs()
+                context.assets.open(file.path).use { input ->
+                    copy.outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+            target
+        }.subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread())
+            .subscribe({ folder -> openBuildPage(folder) }, { failure ->
+                Toast.makeText(context,
+                    failure.localizedMessage ?: "打包示例失败", Toast.LENGTH_LONG).show()
+            }))
+    }
+
+    /** 打包页：MIUIX 司机会把这个 Intent 转给 MiuixBuildActivity（见 BuildActivity.onCreate）。 */
+    private fun openBuildPage(target: java.io.File) {
+        startActivity(Intent(requireContext(), BuildActivity::class.java)
+            .putExtra(BuildActivity.EXTRA_SOURCE, target.absolutePath))
     }
 
     @Composable

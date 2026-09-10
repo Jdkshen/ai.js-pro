@@ -20,7 +20,7 @@
 - `nodejs-modules`、`node_modules`、npm、CommonJS/ESM 服务端示例。
 - 当前运行时没有实现的 Auto.js Pro 专属模块：`$work_manager`、`$zip`、`$crypto`、`sqlite`、`RootAutomator2`、`$ocr`、特征匹配和新版 WebSocket API。
 - 依赖未随 APK 提供的 OCR/FFmpeg 等外部插件示例。
-- 依赖完整项目导入、Android Resources 或新版打包器字段的项目示例；当前示例页只支持单文件导入，直接放入会丢失资源目录。
+- 依赖 Android Resources 或新版打包器字段的项目示例；示例页的「打包（项目）」会把整目录复制到脚本目录按项目打包，但这些字段仍未支持。
 
 ## 同步原则
 
