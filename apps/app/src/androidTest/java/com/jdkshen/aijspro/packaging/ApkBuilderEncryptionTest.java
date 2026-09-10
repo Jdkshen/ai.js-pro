@@ -9,9 +9,11 @@ import android.graphics.Bitmap;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import com.jdkshen.aijspro.autojs.build.ApkBuilder;
+import com.jdkshen.aijspro.autojs.build.sign.ApkSignatureReader;
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner;
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreGenerator;
 import com.jdkshen.aijspro.autojs.build.sign.SigningKey;
+import com.jdkshen.aijspro.autojs.build.sign.SigningOptions;
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
 import com.stardust.autojs.engine.encryption.ScriptEncryption;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
@@ -292,6 +294,46 @@ public class ApkBuilderEncryptionTest {
         assertTrue("v2 block must carry the custom certificate",
                 indexOf(apk, generated.getCertificate().getEncoded(), blockStart,
                         centralDirOffset(apk)) >= 0);
+
+        // 4) 打包页要靠 ApkSignatureReader 把「产物到底是谁签的」写在成功提示里，
+        //    它读出来的指纹必须和真实证书一致，否则那个提示就是假的。
+        ApkSignatureReader.Signer artifactSigner = ApkSignatureReader.INSTANCE.read(outApk);
+        assertNotNull("signer must be readable from the built apk", artifactSigner);
+        assertEquals("artifact signer must be the generated certificate",
+                generated.getCertificateFingerprint().replace(":", "").toLowerCase(Locale.US),
+                artifactSigner.getSha256());
+    }
+
+    /**
+     * 回归：签名模式的判定。
+     *
+     * 之前这里只判断了「使用已有密钥库」，于是「新建签名」生成出来的密钥库压根没参与打包，
+     * 产物依旧是 tiny-sign 的内置公共证书 —— 用户以为换了身份，实际什么都没变，
+     * 再去谈“换了证书还报毒”就是无效结论。
+     */
+    @Test
+    public void signingModeDecidesWhetherTheCustomKeyIsUsed() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File workDir = new File(context.getCacheDir(), "apk-builder-signing-mode-test");
+        deleteRecursively(workDir);
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+
+        File keyStore = new File(workDir, "identity.p12");
+        String password = KeyStoreGenerator.randomPassword();
+        KeyStoreGenerator.save(KeyStoreGenerator.generate("ModeProbe", "AI.js Pro", "CN"),
+                keyStore, password.toCharArray(), "aijspro");
+        SigningKey key = SigningKey.load(keyStore, null, password.toCharArray(), null,
+                password.toCharArray());
+
+        assertNull("默认签名必须继续用内置公共证书，旧行为不能变",
+                SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_DEFAULT, key, "aijspro"));
+        assertNotNull("选择已有密钥库要生效",
+                SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_EXISTING, key, "aijspro"));
+        assertNotNull("新建密钥后也必须生效（回归点）",
+                SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_NEW, key, "aijspro"));
+        assertNull("密钥没验证通过时不得拿去签，否则会签出无法升级的产物",
+                SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_NEW, null, "aijspro"));
     }
 
     /** 中央目录偏移量（= 签名块结束位置）。 */

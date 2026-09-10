@@ -63,9 +63,10 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.autojs.build.ApkBuilder
-import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner
+import com.jdkshen.aijspro.autojs.build.sign.ApkSignatureReader
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreGenerator
 import com.jdkshen.aijspro.autojs.build.sign.SigningKey
+import com.jdkshen.aijspro.autojs.build.sign.SigningOptions
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
@@ -116,6 +117,16 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         private val IMAGE_EXTENSIONS = listOf("png", "jpg", "jpeg", "webp")
         private val KEYSTORE_EXTENSIONS = listOf("jks", "keystore", "p12", "pfx", "bks")
         private const val KEYSTORE_ALIAS = "aijspro"
+
+        /** 签名模式：0 = 内置公共证书；1 = 使用已有密钥库；2 = 新建密钥库 */
+        private const val SIGNING_MODE_DEFAULT = SigningOptions.MODE_DEFAULT
+        private const val SIGNING_MODE_EXISTING = SigningOptions.MODE_EXISTING
+        private const val SIGNING_MODE_NEW = SigningOptions.MODE_NEW
+        private const val PREF_SIGNING_MODE = "aijspro.build.signing.mode"
+        private const val PREF_SIGNING_KEYSTORE = "aijspro.build.signing.keystore"
+        private const val PREF_SIGNING_ALIAS = "aijspro.build.signing.alias"
+        private const val PREF_SIGNING_STORE_PASSWORD = "aijspro.build.signing.storePassword"
+        private const val PREF_SIGNING_KEY_PASSWORD = "aijspro.build.signing.keyPassword"
 
         private fun isImageFile(name: String): Boolean =
             IMAGE_EXTENSIONS.contains(name.substringAfterLast('.', "").lowercase())
@@ -175,6 +186,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var stage by mutableStateOf(R.string.apk_builder_prepare)
     private val successShow = mutableStateOf(false)
     private var successPath by mutableStateOf("")
+    /** 产物里实际读出来的签名者（不是用户选的那个），用于成功提示。 */
+    private var successSigner by mutableStateOf("")
     private val failureShow = mutableStateOf(false)
     private var failureMessage by mutableStateOf("")
 
@@ -226,6 +239,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         if (!initialSource.isNullOrEmpty()) {
             applySource(File(initialSource), fillDefaults = true)
         }
+        restoreSigningSettings()
     }
 
     override fun onDestroy() {
@@ -326,10 +340,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             }
             PICKER_KEYSTORE -> {
                 keyStorePath = file.path
+                // 选了密钥库文件就是要用它；停留在“默认签名”会让用户以为换了证书其实没换。
+                if (signingMode == SIGNING_MODE_DEFAULT) signingMode = SIGNING_MODE_EXISTING
                 // 换了密钥库就必须重新验证，否则会拿旧密钥的校验结果去打包。
                 signingKey = null
                 signingSummary = ""
                 signingError = null
+                persistSigningSettings()
             }
         }
         MiuixPopupUtil.dismissDialog(pickerShow)
@@ -367,7 +384,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 return false
             }
         }
-        if (signingMode == 1 && signingKey == null) {
+        if (signingMode != SIGNING_MODE_DEFAULT && signingKey == null) {
             errorText = getString(R.string.error_signing_key_required)
             return false
         }
@@ -417,8 +434,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             appConfig.setSplashIcon(splashIconPath)
         }
         // 没选自定义签名（或还没验证通过）时置空，保持 tiny-sign 的默认行为。
-        val key = signingKey
-        appConfig.setSigner(if (signingMode == 1 && key != null) KeyStoreApkSigner(key, keyStoreAlias.trim()) else null)
+        // 判定放在 SigningOptions 里：只认「使用已有密钥库」会让新建签名静默失效。
+        appConfig.setSigner(SigningOptions.signerFor(signingMode, signingKey, keyStoreAlias))
     }
 
     /**
@@ -458,6 +475,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     keyPassword = result.second
                     signingKey = result.first
                     signingSummary = getString(R.string.format_signing_generated, result.third.path)
+                    persistSigningSettings()
                     Log.d(TAG, "Generated signing key " + result.third.path)
                 }, { error ->
                     busy = false
@@ -497,6 +515,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     busy = false
                     signingKey = key
                     signingSummary = getString(R.string.format_signing_verified, key.subjectName)
+                    persistSigningSettings()
                     Log.d(TAG, "Signing key verified: " + key.certificateFingerprint)
                 }, { error ->
                     busy = false
@@ -505,6 +524,34 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     Log.e(TAG, "Failed to load signing key", error)
                 })
         )
+    }
+
+    /**
+     * 签名设置要跨页面、跨脚本保留：否则每进一次打包页就默默退回内置证书，
+     * 用户以为换了身份其实没换（报毒结果自然不会变）。
+     * 口令存在应用私有 SharedPreferences（同 AutoX.js 的做法），密钥库本身仍在外部存储。
+     */
+    private fun persistSigningSettings() {
+        Pref.setPrefInt(PREF_SIGNING_MODE, signingMode)
+        Pref.setPrefString(PREF_SIGNING_KEYSTORE, keyStorePath)
+        Pref.setPrefString(PREF_SIGNING_ALIAS, keyStoreAlias)
+        Pref.setPrefString(PREF_SIGNING_STORE_PASSWORD, keyStorePassword)
+        Pref.setPrefString(PREF_SIGNING_KEY_PASSWORD, keyPassword)
+    }
+
+    private fun restoreSigningSettings() {
+        val path = Pref.getPrefString(PREF_SIGNING_KEYSTORE, "")
+        val mode = Pref.getPrefInt(PREF_SIGNING_MODE, SIGNING_MODE_DEFAULT)
+        if (mode == SIGNING_MODE_DEFAULT || path.isBlank() || !File(path).isFile) return
+        // 密钥库已经存在，就按「选择签名」恢复：新建只在第一次需要。
+        signingMode = SIGNING_MODE_EXISTING
+        keyStorePath = path
+        keyStoreAlias = Pref.getPrefString(PREF_SIGNING_ALIAS, "")
+        keyStorePassword = Pref.getPrefString(PREF_SIGNING_STORE_PASSWORD, "")
+        keyPassword = Pref.getPrefString(PREF_SIGNING_KEY_PASSWORD, "")
+        if (keyStorePassword.isNotEmpty()) {
+            verifySigningKey()
+        }
     }
 
     private fun togglePermission(name: String) {
@@ -537,12 +584,17 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         busy = true
         stage = R.string.apk_builder_prepare
         disposables.add(
-            Observable.fromCallable { buildSync(tmpDir, outApk, appConfig) }
+            Observable.fromCallable {
+                buildSync(tmpDir, outApk, appConfig)
+                // 以产物为准自证签名身份：设置对了但没生效的情况必须一眼能看出来。
+                ApkSignatureReader.read(outApk)
+            }
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe({
+                .subscribe({ signer ->
                     busy = false
                     successPath = outApk.path
+                    successSigner = signer?.let { it.subject + " · " + it.shortFingerprint }.orEmpty()
                     successShow.value = true
                 }, { error ->
                     busy = false
@@ -919,6 +971,14 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     fontSize = 14.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant
                 )
+                if (successSigner.isNotEmpty()) {
+                    Text(
+                        getString(R.string.format_build_signer, successSigner),
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
                 Row(
                     Modifier.fillMaxWidth().padding(top = 12.dp),
                     horizontalArrangement = Arrangement.End
@@ -1149,35 +1209,57 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    EngineChip(getString(R.string.text_default_signing), signingMode == 0) {
-                        signingMode = 0
+                    EngineChip(getString(R.string.text_default_signing), signingMode == SIGNING_MODE_DEFAULT) {
+                        signingMode = SIGNING_MODE_DEFAULT
                         signingError = null
+                        persistSigningSettings()
                     }
-                    EngineChip(getString(R.string.text_custom_signing), signingMode == 1) {
-                        signingMode = 1
+                    EngineChip(getString(R.string.text_custom_signing), signingMode == SIGNING_MODE_EXISTING) {
+                        signingMode = SIGNING_MODE_EXISTING
+                        persistSigningSettings()
                     }
-                    EngineChip(getString(R.string.text_new_signing), signingMode == 2) {
-                        signingMode = 2
+                    EngineChip(getString(R.string.text_new_signing), signingMode == SIGNING_MODE_NEW) {
+                        signingMode = SIGNING_MODE_NEW
+                        persistSigningSettings()
                     }
                 }
                 Text(
                     getString(
                         when (signingMode) {
-                            0 -> R.string.summary_signing_default
-                            2 -> R.string.summary_signing_generate
+                            SIGNING_MODE_DEFAULT -> R.string.summary_signing_default
+                            SIGNING_MODE_NEW -> R.string.summary_signing_generate
                             else -> R.string.summary_signing_custom
                         }),
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant
                 )
+                // 把“即将用哪个身份”明写出来：只勾了选项但没生效过的情况太多了。
+                val signer = signingKey
+                Text(
+                    getString(
+                        R.string.format_signing_current,
+                        when {
+                            signingMode == SIGNING_MODE_DEFAULT ->
+                                getString(R.string.text_signing_builtin_identity)
+
+                            signer != null -> signer.subjectName
+                            else -> getString(R.string.text_signing_unverified)
+                        }),
+                    fontSize = 12.sp,
+                    color = if (signingMode != SIGNING_MODE_DEFAULT && signer != null) {
+                        MiuixTheme.colorScheme.primary
+                    } else {
+                        Color(0xFFD32F2F)
+                    }
+                )
             }
-            if (signingMode != 0) {
+            if (signingMode != SIGNING_MODE_DEFAULT) {
                 SuperArrow(
                     title = getString(R.string.text_key_store_file),
                     rightText = if (keyStorePath.isEmpty()) getString(R.string.text_select)
                     else File(keyStorePath).name,
                     onClick = { openPicker(PICKER_KEYSTORE) })
-                if (signingMode == 2) {
+                if (signingMode == SIGNING_MODE_NEW) {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.End,
@@ -1200,6 +1282,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                             keyStoreAlias = it
                             signingKey = null
                             signingSummary = ""
+                            persistSigningSettings()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         label = getString(R.string.text_key_store_alias),
@@ -1212,6 +1295,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                             keyStorePassword = it
                             signingKey = null
                             signingSummary = ""
+                            persistSigningSettings()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         label = getString(R.string.text_key_store_password),
@@ -1224,6 +1308,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                             keyPassword = it
                             signingKey = null
                             signingSummary = ""
+                            persistSigningSettings()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         label = getString(R.string.text_key_password),

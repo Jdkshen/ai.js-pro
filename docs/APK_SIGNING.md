@@ -30,8 +30,23 @@ Pro 的打包产物同样是 tiny-sign 签的，所以两边在这一项上并�
 | 选择签名 | 用你自己的密钥库（`.jks` / `.keystore` / `.p12` / `.bks`），产物换成你的身份 |
 | 新建签名 | 在本机生成一套 2048 位 RSA 自签名证书并存成 `<应用名>-signing.p12`，口令自动生成并回填 |
 
+卡片上始终有一行「**当前签名：…**」把即将使用的身份写出来：
+
+- `内置测试证书 CN=Test（全世界共用）` —— 最容易被忽略的选项，用红色标出
+- `<你的证书主题>` —— 验证通过后显示为强调色
+- `尚未验证，打包仍会退回内置证书` —— 填了口令但没点「验证密钥」时会走到这里
+
+选择、密钥库路径、别名、口令都会写进应用私有 SharedPreferences，**下次进页面不会默默退回默认签名**
+（与 AutoX.js 存 keystore 口令的做法一致）。打包成功后弹框还会多一行「签名：…」，
+它读的是**产物文件里真实的证书**（`ApkSignatureReader`），而不是界面上的配置项。
+
 换证书后**旧证书签的包无法覆盖安装**（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），需先卸载；
 这是 Android 的机制，不是 bug。
+
+> 踩过的坑：签名模式判定曾经写成「只认『选择签名』」，导致「新建签名」生成出来的密钥库
+> 根本没参与打包，产物依旧是内置的 `CN=Test`。现在这段判断被抽到 `SigningOptions.signerFor()`，
+> 由 `ApkBuilderEncryptionTest.signingModeDecidesWhetherTheCustomKeyIsUsed` 盯住。
+> 验证是否真的生效，永远以产物为准：`apksigner verify --print-certs <apk>`。
 
 ## 实现
 
@@ -46,6 +61,8 @@ Pro 的打包产物同样是 tiny-sign 签的，所以两边在这一项上并�
 | `ApkSignerV1` | `META-INF/MANIFEST.MF`、`CERT.SF`、`CERT.RSA`（PKCS#7 SignedData） |
 | `ApkSignerV2` | APK Signature Scheme v2：内容摘要 + 签名块 |
 | `KeyStoreApkSigner` | 编排：按工作区重新打 zip → 写 v1 文件 → 原地插入 v2 签名块 |
+| `SigningOptions` | 打包页的选择逻辑（哪个模式用哪个签名器）；带回归测试 |
+| `ApkSignatureReader` | 从**已打包的 APK** 里读回真实签名者，用于打包成功提示 |
 
 接入点是一个很小的接口 `com.stardust.autojs.apkbuilder.Signer`，`ApkPackager.setSigner()` 设了就用它，
 没设就退回 tiny-sign，因此默认行为完全不变。

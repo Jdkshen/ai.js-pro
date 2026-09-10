@@ -179,4 +179,24 @@ public class Pref {
     public static void setForegroundServiceEnabled(boolean enabled) {
         def().edit().putBoolean(getString(R.string.key_foreground_servie), enabled).apply();
     }
+
+    // ------------------------------------------------------------------
+    // 通用键值（打包页的签名设置需要在多份脚本之间复用，不能每次回到默认）
+    // ------------------------------------------------------------------
+
+    public static String getPrefString(String key, String defValue) {
+        return def().getString(key, defValue);
+    }
+
+    public static void setPrefString(String key, String value) {
+        def().edit().putString(key, value).apply();
+    }
+
+    public static int getPrefInt(String key, int defValue) {
+        return def().getInt(key, defValue);
+    }
+
+    public static void setPrefInt(String key, int value) {
+        def().edit().putInt(key, value).apply();
+    }
 }

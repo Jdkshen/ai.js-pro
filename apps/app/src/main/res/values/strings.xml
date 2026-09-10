@@ -383,7 +383,7 @@
     <string name="text_generate_signing_key">生成密钥库</string>
     <string name="format_signing_generated">已生成：%1$s</string>
     <string name="format_signing_key_exists">已存在同名密钥库，请先删除或改名：%1$s</string>
-    <string name="summary_signing_default">沿用内置测试证书，所有打包应用共用同一身份；旧包可以覆盖安装</string>
+    <string name="summary_signing_default">⚠ 沿用内置测试证书（CN=Test）：所有用它的产物共用同一身份，安全软件可能据此判定为“同一家族”。要换身份请选「选择签名」或「新建签名」；换后旧包需先卸载</string>
     <string name="summary_signing_custom">使用自己的密钥库，产物身份唯一，不再和其他应用共用证书</string>
     <string name="text_key_store_file">密钥库文件</string>
     <string name="text_key_store_alias">别名（留空自动选第一个）</string>
@@ -393,6 +393,10 @@
     <string name="error_signing_key_required">请先选择密钥库并验证通过</string>
     <string name="format_signing_verified">已验证：%1$s</string>
     <string name="format_signing_fingerprint">证书 SHA-256：%1$s</string>
+    <string name="format_signing_current">当前签名：%1$s</string>
+    <string name="text_signing_builtin_identity">内置测试证书 CN=Test（全世界共用）</string>
+    <string name="text_signing_unverified">尚未验证，打包仍会退回内置证书</string>
+    <string name="format_build_signer">签名：%1$s</string>
     <string name="summary_signing_switch_hint">注意：换成新证书后无法覆盖安装旧证书签名的包，需先卸载</string>
     <string name="text_permissions">权限</string>
     <string name="format_permission_count">%1$d 个权限</string>
