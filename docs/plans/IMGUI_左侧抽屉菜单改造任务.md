@@ -1,5 +1,7 @@
 # AI.js Pro ImGui 左侧抽屉菜单改造任务
 
+> **已作废（2026-09-10）：** 任务针对的 ImGui 主工作台（`ImGuiWorkspaceDrawer`、`autojs_imgui.cpp` 等）已整体删除（见 [项目现状与接手说明](../PROJECT_STATUS.md)），不再执行，仅作历史记录保留。
+
 > 用途：把本文件直接交给开发代理执行。目标是将工作台左上角菜单从 Android 列表弹窗改为与 Auto.js Pro 使用习惯一致的左侧滑入抽屉，同时保留现有菜单功能和工作台状态。
 
 ## 1. 问题现状

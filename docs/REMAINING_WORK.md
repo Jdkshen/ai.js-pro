@@ -206,9 +206,10 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 - [x] `HANDOVER.md` 作为历史流水保留，并纠正工具数量和旧 ImGui 主入口等明显过时结论；
 - [x] `MCP_SCRIPT_SERVICE.md` 与最终直接应用模型同步；
-- [ ] `architecture/项目说明.md` 仍含旧 Gradle/JDK/ImGui 描述，应拆分为当前架构和历史记录；
+- [x] `architecture/项目说明.md` 已改为“历史架构记录（已归档）”并在头部标明当前替代文档；旧 Gradle/JDK/ImGui 描述保留在正文作为历史快照，当前架构以 PROJECT_STATUS.md 为准；
+- [x] 已作废的 ImGui 方案文档（`plans/侧边栏按钮与全分辨率UI适配方案.md`、`plans/IMGUI_左侧抽屉菜单改造任务.md`、`plans/MIMO_抽屉按钮无响应返修任务.md`）已加“已作废”批注，`plans/悬浮窗流畅度优化方案.md` 标注部分失效；`docs/README.md` 索引同步；
 - [ ] 每份测试报告标记提交号、APK SHA-256、设备、系统和测试时间；
-- [ ] 确认根目录 `move-dotnet-to-d-DELETE.bat` 是否仍有用途；无用途时用单独清理提交移除；
+- [x] 根目录 `move-dotnet-to-d-DELETE.bat` 已确认完成使命（`dotnet` 已迁至 `D:\dotnet`，配套脚本与旧 junction 已清理），随 2026-09-10 清理提交移除；同时移除全仓库无引用的旧 logo `autojs.png`、`autojs_material.png` ×2；
 - [x] 保持 `.gitignore` 的模块级 `**/build/` 规则及两个 Java `build` 源码包例外不变。
 
 ## 6. 推荐实施顺序

@@ -1,7 +1,7 @@
 # Reuse this repository's existing CodeGraph index; do not rebuild on startup.
 [mcp_servers.codegraph]
 command = 'D:\npm-global\codegraph.cmd'
-args = ['serve', '--mcp', '--path', 'C:\Users\18101\Documents\autojs4.4.1源码']
+args = ['serve', '--mcp', '--path', 'C:\Users\18101\Documents\ai-js-pro']
 
 # MT 管理器 APK MCP (手机 8787 -> PC 18791, adb forward)
 [mcp_servers.mt_apk]
