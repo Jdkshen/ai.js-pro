@@ -43,6 +43,8 @@ import com.stardust.autojs.runtime.api.Yolo;
 import com.stardust.automator.UiGlobalSelector;
 import com.stardust.automator.UiObject;
 import com.stardust.automator.UiObjectCollection;
+import com.stardust.automator.filter.BooleanFilter;
+import com.stardust.automator.filter.Filter;
 import com.stardust.notification.Notification;
 import com.stardust.notification.NotificationListenerService;
 import com.stardust.pio.UncheckedIOException;
@@ -3233,10 +3235,84 @@ final class QuickJsHostBridge implements AutoCloseable {
                 return encodeAutomatorResult(invokeAutomator(selector, "findOneOf",
                         new Class<?>[]{ UiObject.class },
                         new Object[]{ requireAutomatorObject(args.getLong(0)) }));
+            case "findAndReturnList": {
+                UiObject root = requireAutomatorObject(args.getLong(0));
+                int max = args.length() > 1 && !args.isNull(1) && args.getInt(1) >= 0
+                        ? args.getInt(1) : Integer.MAX_VALUE;
+                return encodeAutomatorResult(invokeAutomator(selector, "findAndReturnList",
+                        new Class<?>[]{ UiObject.class, int.class }, new Object[]{ root, max }));
+            }
+            // Rhino 的 __selector__.js 还把 filter/addFilter 挂到全局：谓词是脚本函数，
+            // 遍历控件时通过 invokeJsCallback 同步回调脚本（同一引擎线程）。
+            // Rhino 的 addFilter 需要 Java Filter 实例，脚本通常只会传函数，这里同样按谓词处理。
+            case "filter":
+                invokeAutomator(selector, "filter", new Class<?>[]{ BooleanFilter.BooleanSupplier.class },
+                        new Object[]{ new JsNodePredicate(args.getLong(0)) });
+                return AUTOMATOR_VOID_RESULT;
+            case "addFilter":
+                invokeAutomator(selector, "addFilter", new Class<?>[]{ Filter.class },
+                        new Object[]{ new JsNodeFilter(args.getLong(0)) });
+                return AUTOMATOR_VOID_RESULT;
             case "toString":
                 return encodeAutomatorResult(selector.toString());
             default:
                 throw new IllegalArgumentException("不支持的选择器方法：" + method);
+        }
+    }
+
+    /**
+     * Java → JS 同步回调：脚本函数登记在 JS 侧的表里，这里只持有 id。
+     * 返回脚本编码后的 JSON（`{"value":...}` 或 `{"error":"..."}`）。
+     */
+    String invokeJsCallback(long callbackId, String argsJson) {
+        long engineHandle = mEngineHandle;
+        if (engineHandle == 0) {
+            throw new IllegalStateException("QuickJS 引擎尚未就绪，无法回调脚本函数");
+        }
+        String result = QuickJsNativeBridge.invokeJsCallback(engineHandle, callbackId, argsJson);
+        return result == null ? "{}" : result;
+    }
+
+    /** 脚本谓词：UiGlobalSelector.filter(BooleanSupplier) 用。 */
+    private final class JsNodePredicate implements BooleanFilter.BooleanSupplier {
+        private final long mCallbackId;
+
+        JsNodePredicate(long callbackId) {
+            mCallbackId = callbackId;
+        }
+
+        @Override
+        public boolean get(UiObject node) {
+            return evaluateJsNodePredicate(mCallbackId, node);
+        }
+    }
+
+    /** 脚本谓词：UiGlobalSelector.addFilter(Filter) 用，语义与上面一致。 */
+    private final class JsNodeFilter implements Filter {
+        private final long mCallbackId;
+
+        JsNodeFilter(long callbackId) {
+            mCallbackId = callbackId;
+        }
+
+        @Override
+        public boolean filter(UiObject node) {
+            return evaluateJsNodePredicate(mCallbackId, node);
+        }
+    }
+
+    private boolean evaluateJsNodePredicate(long callbackId, UiObject node) {
+        try {
+            JSONObject argument = new JSONObject();
+            argument.put("__node", putAutomatorHandle(node));
+            JSONObject result = new JSONObject(invokeJsCallback(
+                    callbackId, new JSONArray().put(argument).toString()));
+            if (result.has("error")) {
+                throw new IllegalStateException("脚本谓词执行失败：" + result.optString("error"));
+            }
+            return result.optBoolean("value", false);
+        } catch (JSONException e) {
+            throw new IllegalStateException("脚本谓词返回了非法结果", e);
         }
     }
 
@@ -3333,6 +3409,14 @@ final class QuickJsHostBridge implements AutoCloseable {
             json.put("t", "r").put("v", bounds);
         } else if (value instanceof UiObjectCollection) {
             json.put("t", "h").put("k", "c").put("v", putAutomatorHandle(value));
+        } else if (value instanceof java.util.List) {
+            JSONArray items = new JSONArray();
+            for (Object item : (java.util.List<?>) value) {
+                if (item instanceof UiObject) {
+                    items.put(new JSONObject().put("k", "o").put("v", putAutomatorHandle(item)));
+                }
+            }
+            json.put("t", "a").put("v", items);
         } else if (value instanceof UiObject) {
             json.put("t", "h").put("k", "o").put("v", putAutomatorHandle(value));
         } else {

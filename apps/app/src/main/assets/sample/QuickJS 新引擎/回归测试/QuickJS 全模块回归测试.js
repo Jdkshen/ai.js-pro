@@ -175,6 +175,55 @@ if (clickableNodes.size() > 0) {
     assert('findOne(timeout) 能拿到控件', blocking !== null && blocking !== undefined);
 }
 
+// --- 选择器 JS 谓词（Java → JS 同步回调）/ findAndReturnList / io 模块 ---
+assert('filter/addFilter/findAndReturnList 全局', typeof filter === 'function' && typeof addFilter === 'function'
+    && typeof findAndReturnList === 'function');
+var predicateCalls = 0;
+var predicateNodes = selector().filter(function (node) {
+    predicateCalls++;
+    return node !== null && typeof node.className === 'function';
+}).find();
+assert('选择器 filter 谓词被回调', predicateCalls > 0 || predicateNodes.size() === 0);
+assert('filter 谓词返回 false 时结果为空',
+    selector().filter(function () { return false; }).find().size() === 0);
+assert('addFilter 谓词可用',
+    typeof selector().addFilter(function () { return true; }).find().size === 'function');
+var predicateRoot = auto.rootInActiveWindow;
+if (predicateRoot !== null && predicateRoot !== undefined) {
+    var returnedList = findAndReturnList(predicateRoot, 5);
+    assert('findAndReturnList 返回带 size() 的列表',
+        Array.isArray(returnedList) && typeof returnedList.size === 'function' && returnedList.size() <= 5);
+} else {
+    assert('findAndReturnList（无根节点时跳过）', true);
+}
+assert('io 模块', typeof io === 'object' && typeof io.open === 'function' && io.files === files);
+assert('require("io") 命中内置模块', require('io') === io);
+var openTestPath = files.join(files.getSdcardPath(), 'engine-matrix', '__quickjs_open_test.txt');
+assert('files.open 写入', (function () {
+    var writer = files.open(openTestPath, 'w');
+    writer.write('第一行\n');
+    writer.writeline('第二行');
+    writer.close();
+    return files.read(openTestPath) === '第一行\n第二行\n';
+})());
+assert('files.open 读取', (function () {
+    var reader = files.open(openTestPath, 'r');
+    var first = reader.readline();
+    var rest = reader.read();
+    var lines = files.open(openTestPath, 'r').readlines();
+    reader.close();
+    return first === '第一行' && rest === '第二行\n' && lines.length === 2;
+})());
+assert('files.open 追加模式', (function () {
+    var writer = files.open(openTestPath, 'a');
+    writer.writeline('第三行');
+    writer.close();
+    return files.open(openTestPath, 'r').readlines().length === 3;
+})());
+assert('open() 与 files.open 一致', typeof open(openTestPath, 'r').read === 'function');
+assert('files.open 未知模式返回 null', files.open(openTestPath, 'x') === null);
+files.remove(openTestPath);
+
 // --- 顶层兼容别名 / random / sync / auto ---
 assert('print/err', typeof print === 'function' && typeof err === 'function');
 assert('alert/confirm/prompt/select', typeof alert === 'function' && typeof confirm === 'function'

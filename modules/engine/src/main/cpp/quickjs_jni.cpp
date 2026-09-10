@@ -3844,6 +3844,97 @@ const char kBootstrapScript[] = R"JS(
         copy: function (source, target) { return __aiNativeFilesCopy(filePath(source), filePath(target)); },
         move: function (source, target) { return __aiNativeFilesMove(filePath(source), filePath(target)); }
     };
+    /**
+     * Rhino 的 `files.open(path[, mode[, encoding[, bufferSize]]])` 返回文本文件对象。
+     * QuickJS 用无缓冲的文本包装实现同样的读写语义：'r' 可 read/read(size)/readline/readlines，
+     * 'w' 打开即清空（与 PFiles.open 一致）后 write/writeline/writelines，'a' 追加；
+     * 其它 mode 与 Rhino 一样返回 null。
+     */
+    function openTextFile(path, mode, encoding, bufferSize) {
+        var resolved = files.path(path);
+        var textMode = mode === undefined || mode === null ? 'r' : String(mode);
+        if (textMode !== 'r' && textMode !== 'w' && textMode !== 'a') return null;
+        var closed = false;
+        var file = {
+            path: resolved,
+            mode: textMode,
+            encoding: encoding === undefined || encoding === null ? '' : String(encoding),
+            bufferSize: bufferSize === undefined || bufferSize === null ? 0 : Number(bufferSize),
+            getPath: function () { return resolved; },
+            isClosed: function () { return closed; },
+            close: function () { closed = true; }
+        };
+        if (textMode === 'r') {
+            var content = files.exists(resolved) ? files.read(resolved) : '';
+            var offset = 0;
+            // read 与 readline 共用同一游标：readline 读进来的半个缓冲区记在 pendingLine 里，
+            // 之后 read() 会先吐出这部分，混用两种读法也不会丢内容（与文本流一致）。
+            var pendingLine = '';
+            file.read = function (size) {
+                if (size === undefined) {
+                    var rest = pendingLine + content.slice(offset);
+                    pendingLine = '';
+                    offset = content.length;
+                    return rest;
+                }
+                var wanted = Math.max(0, Number(size) || 0);
+                var chunk = pendingLine.slice(0, wanted);
+                pendingLine = pendingLine.slice(chunk.length);
+                if (chunk.length < wanted) {
+                    var extra = content.substr(offset, wanted - chunk.length);
+                    offset += extra.length;
+                    chunk += extra;
+                }
+                return chunk;
+            };
+            file.readline = function () {
+                if (pendingLine.indexOf('\n') < 0) {
+                    var breakIndex = content.indexOf('\n', offset);
+                    if (breakIndex < 0) {
+                        pendingLine += content.slice(offset);
+                        offset = content.length;
+                    } else {
+                        pendingLine += content.slice(offset, breakIndex + 1);
+                        offset = breakIndex + 1;
+                    }
+                }
+                var index = pendingLine.indexOf('\n');
+                if (index < 0) {
+                    var tail = pendingLine;
+                    pendingLine = '';
+                    return tail === '' ? null : tail;
+                }
+                var line = pendingLine.slice(0, index);
+                pendingLine = pendingLine.slice(index + 1);
+                return line.replace(/\r$/, '');
+            };
+            file.readlines = function () {
+                var result = [];
+                for (var line = file.readline(); line !== null; line = file.readline()) result.push(line);
+                return result;
+            };
+            return file;
+        }
+        if (textMode === 'w') {
+            // 与 Rhino 的 PFiles.open 一致：打开时就把文件清空。
+            files.write(resolved, '');
+        }
+        file.write = function (text) { files.append(resolved, text === undefined ? '' : String(text)); };
+        file.writeline = function (line) {
+            files.append(resolved, (line === undefined ? '' : String(line)) + '\n');
+        };
+        file.writelines = function (lines) {
+            if (lines === null || lines === undefined) return;
+            var count = Number(lines.length) || 0;
+            for (var i = 0; i < count; i++) file.writeline(lines[i]);
+        };
+        file.flush = function () { /* 每次写入直接落盘，无需缓冲 */ };
+        return file;
+    }
+    files.open = function (path, mode, encoding, bufferSize) {
+        return openTextFile(path, mode, encoding, bufferSize);
+    };
+
     global.files = Object.freeze(files);
 
     function formEncode(data) {
@@ -4985,6 +5076,52 @@ const char kBootstrapScript[] = R"JS(
         }
     });
 
+    // ---- JS 回调：Java 侧（选择器谓词等）可以同步调用脚本里的函数 ----
+    // 脚本函数登记在 jsCallbacks 里，Java 侧只传 id；回调参数里形如 {"__node":handle}
+    // 的描述符会在这里换回控件对象，返回值统一编码成 JSON 交给 Java。
+    var jsCallbacks = Object.create(null);
+    var jsCallbackSeq = 0;
+
+    function decodeCallbackArg(value) {
+        if (value === null || typeof value !== 'object') return value;
+        if (value.__node !== undefined) return wrapAutomatorObject(Number(value.__node));
+        if (value.__selector !== undefined) return wrapAutomatorSelector(Number(value.__selector));
+        if (Array.isArray(value)) return value.map(decodeCallbackArg);
+        return value;
+    }
+
+    function encodeCallbackValue(value) {
+        var type = typeof value;
+        if (value === undefined) return { type: 'undefined', value: null };
+        if (value === null || type === 'string' || type === 'number' || type === 'boolean') {
+            return { type: type, value: value };
+        }
+        // 对象/函数返回给 Java 谓词时按真值处理（与 JS 布尔上下文一致）。
+        return { type: type, value: true };
+    }
+
+    global.__aiRegisterCallback = function (callback) {
+        if (typeof callback !== 'function') throw new TypeError('回调必须是函数');
+        var id = ++jsCallbackSeq;
+        jsCallbacks[id] = callback;
+        return id;
+    };
+    global.__aiReleaseCallback = function (id) { delete jsCallbacks[Number(id)]; };
+    global.__aiInvokeCallback = function (id, argsJson) {
+        var callback = jsCallbacks[Number(id)];
+        if (typeof callback !== 'function') {
+            return JSON.stringify({ error: '回调 #' + id + ' 不存在（可能已被回收）' });
+        }
+        try {
+            var raw = JSON.parse(argsJson === undefined || argsJson === null ? '[]' : String(argsJson));
+            var args = Array.isArray(raw) ? raw.map(decodeCallbackArg) : [decodeCallbackArg(raw)];
+            return JSON.stringify(encodeCallbackValue(callback.apply(null, args)));
+        } catch (e) {
+            var message = e === null || e === undefined ? '回调执行失败' : String(e.message === undefined ? e : e.message);
+            return JSON.stringify({ error: message });
+        }
+    };
+
     // ---- Selector / UiObject (Auto.js 4.x compatible, backed by the Java UiSelector) ----
     // Everything below is a thin wrapper over __aiNativeAutomatorCall: the Java side owns the
     // selector/UiObject/UiObjectCollection instances behind long handles and only exposes the
@@ -5020,10 +5157,22 @@ const char kBootstrapScript[] = R"JS(
             case 's': return result.v;
             case 'n': return null;
             case 'r': return wrapAutomatorRect(result.v);
+            case 'a': return result.v.map(function (item) {
+                return item.k === 'c' ? wrapAutomatorCollection(item.v) : wrapAutomatorObject(item.v);
+            });
             case 'h':
                 return result.k === 'c' ? wrapAutomatorCollection(result.v) : wrapAutomatorObject(result.v);
             default: return undefined;
         }
+    }
+
+    /** Rhino 的 findAndReturnList 返回 java.util.List，脚本常用 size()/get()，这里补上同名方法。 */
+    function decorateAutomatorList(items) {
+        if (!Array.isArray(items)) return items;
+        items.size = function () { return items.length; };
+        items.get = function (index) { return items[index]; };
+        items.isEmpty = function () { return items.length === 0; };
+        return items;
     }
 
     var AUTOMATOR_STRING_FILTERS = ['text', 'textContains', 'textStartsWith', 'textEndsWith', 'textMatches',
@@ -5115,6 +5264,25 @@ const char kBootstrapScript[] = R"JS(
             var target = automatorHandleOf(node);
             if (target === null) throw new TypeError('findOneOf(node) expects a UiObject');
             return decodeAutomatorResult(automatorCall(handle, 'findOneOf', [target]));
+        };
+        // Rhino 的 __selector__.js 把 UiGlobalSelector.filter / addFilter 也挂到全局：
+        // 谓词是脚本函数，Java 遍历控件时通过 __aiInvokeCallback 同步回调。
+        selector.filter = function (predicate) {
+            if (typeof predicate !== 'function') throw new TypeError('filter(predicate) 需要一个判断函数');
+            automatorCall(handle, 'filter', [global.__aiRegisterCallback(predicate)]);
+            return selector;
+        };
+        selector.addFilter = function (predicate) {
+            if (typeof predicate !== 'function') throw new TypeError('addFilter(predicate) 需要一个判断函数');
+            automatorCall(handle, 'addFilter', [global.__aiRegisterCallback(predicate)]);
+            return selector;
+        };
+        selector.findAndReturnList = function (node, max) {
+            var target = automatorHandleOf(node);
+            if (target === null) throw new TypeError('findAndReturnList(node, max) expects a UiObject');
+            var found = decodeAutomatorResult(automatorCall(handle, 'findAndReturnList',
+                max === undefined ? [target, -1] : [target, max]));
+            return decorateAutomatorList(found);
         };
         selector.toString = function () {
             var text = decodeAutomatorResult(automatorCall(handle, 'toString'));
@@ -5237,12 +5405,17 @@ const char kBootstrapScript[] = R"JS(
         'findOneOf', 'accessibilityFocus', 'clearAccessibilityFocus', 'focus', 'clearFocus', 'copy',
         'cut', 'paste', 'collapse', 'expand', 'dismiss', 'show', 'contextClick', 'scrollForward',
         'scrollBackward', 'scrollUp', 'scrollDown', 'scrollLeft', 'scrollRight', 'scrollTo',
-        'setText', 'setSelection', 'setProgress'].forEach(function (name) {
+        'setText', 'setSelection', 'setProgress', 'filter', 'addFilter'].forEach(function (name) {
         global[name] = function () {
             var selector = global.selector();
             return selector[name].apply(selector, arguments);
         };
     });
+    // findAndReturnList(node, max)：Rhino 的全局形式基于一个空选择器，返回 node 下符合条件的控件列表。
+    global.findAndReturnList = function (node, max) {
+        var selector = global.selector();
+        return selector.findAndReturnList.apply(selector, arguments);
+    };
 
     // ---- 多指手势 / 文本输入 / RootShell 按键助手 ----
     global.gesture = function (duration) {
@@ -5305,7 +5478,18 @@ const char kBootstrapScript[] = R"JS(
             if (typeof global.app[name] !== 'function') return;
             global[name] = function () { return global.app[name].apply(global.app, arguments); };
         });
-    global.open = function (path) { return global.app.viewFile(path); };
+    // Rhino 的 `__io__.js` 把 `files.open` 提升为全局 `open`（多参数按 mode/encoding/bufferSize 透传）。
+    global.open = function (path, mode, encoding, bufferSize) {
+        return global.files.open.apply(global.files, arguments);
+    };
+
+    // ---- io 模块（Rhino 的 __io__.js：把 files.open 提升为全局 open）----
+    global.io = Object.freeze({
+        open: function (path, mode, encoding, bufferSize) {
+            return global.open.apply(null, arguments);
+        },
+        files: global.files
+    });
 
     // ---- Top level Auto.js 4.x aliases ----
     global.print = global.console.log;
@@ -5712,7 +5896,8 @@ const char kBootstrapScript[] = R"JS(
         automator: global.automator,
         context: global.context,
         rawInput: global.rawInput,
-        sqlite: global.sqlite
+        sqlite: global.sqlite,
+        io: global.io
     };
 
     // ---- CommonJS module system (require) ----
@@ -6192,6 +6377,47 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_setGlobal(
     JSValue global = JS_GetGlobalObject(state->context);
     JS_SetPropertyStr(state->context, global, propertyName.c_str(), jsValue);
     JS_FreeValue(state->context, global);
+}
+
+/**
+ * Java -> JS 同步回调。宿主在脚本执行期间（同一引擎线程）需要把控制权交回脚本时使用，
+ * 例如选择器谓词 `filter(fn)`：Java 遍历控件时逐个调用脚本里的判断函数。
+ *
+ * 只调用脚本注册表里的分发函数 `__aiInvokeCallback(id, argsJson)`，不重新安装主模块、
+ * 不跑定时器循环，避免污染脚本的 module/exports 与事件循环。
+ */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_invokeJsCallback(
+        JNIEnv *env, jclass, jlong handle, jlong callbackId, jstring argsJson) {
+    const auto state = findEngine(handle);
+    if (state == nullptr) {
+        return nullptr;
+    }
+    JSContext *context = state->context;
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue dispatcher = JS_GetPropertyStr(context, global, "__aiInvokeCallback");
+    JS_FreeValue(context, global);
+    if (!JS_IsFunction(context, dispatcher)) {
+        JS_FreeValue(context, dispatcher);
+        return nullptr;
+    }
+    const std::string args = argsJson == nullptr ? std::string("[]") : fromJavaString(env, argsJson);
+    JSValue argv[2];
+    argv[0] = JS_NewInt64(context, callbackId);
+    argv[1] = JS_NewStringLen(context, args.data(), args.size());
+    JSValue result = JS_Call(context, dispatcher, JS_UNDEFINED, 2, argv);
+    JS_FreeValue(context, argv[0]);
+    JS_FreeValue(context, argv[1]);
+    JS_FreeValue(context, dispatcher);
+    if (JS_IsException(result)) {
+        const std::string message = quickJsException(context);
+        JS_FreeValue(context, result);
+        throwQuickJs(env, message.empty() ? "脚本回调执行失败" : message);
+        return nullptr;
+    }
+    const std::string text = jsString(context, result);
+    JS_FreeValue(context, result);
+    return toJavaString(env, text);
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -15,6 +15,8 @@
 | 内置模块 | `crypto`（md5/sha256/hmac/base64 固定向量）、`zips`（真实压缩/列表/解压往返）、`sqlite`（建表/增删改查 + 事务提交与回滚）、`util`、`automator`、`context`、`rawInput` 与 `require('crypto')` 全部通过 | Mi8（回归测试 121 项全绿） |
 | 运行时状态 | `isRunning`/`isStopped`/`notStopped`/`stop`/`isShuttingDown`/`loop`/`requiresApi`/`requiresAutojsVersion` 语义与异常路径通过 | Mi8（回归测试 121 项全绿） |
 | 控制台浮窗 | `openConsole()`/`clearConsole()` 与 `console.show/hide/clear/setTitle/setSize/setPosition` 调用通过，`dumpsys window` 实测浮窗 700×600、`SYSTEM_ALERT_WINDOW` 存在 | Mi8（回归测试 121 项全绿） |
+| 选择器 JS 谓词（Java → JS 回调） | `filter(fn)`/`addFilter(fn)` 的回调计数、`false` 谓词返回空集合、`findAndReturnList(node, 5)` 返回带 `size()` 的列表均通过 | Mi8（回归测试 133 项全绿） |
+| io / 文本文件 | `files.open` 写入/读取/追加/未知模式 null + 全局 `open` 与 `io` 模块均通过 | Mi8（回归测试 133 项全绿） |
 | UI | 布局创建、文本更新/回读、关闭通过 | compat/lite K40 通过 |
 | floaty | 真实创建、位置/尺寸/文本更新、关闭通过 | compat/lite K40 通过 |
 | Rhino 兼容 | 23 项基础回归通过；lite 可控拒绝且不崩溃 | K40 通过 |
@@ -30,7 +32,7 @@
 | 领域 | 硬阻塞 |
 | --- | --- |
 | 手势与输入 | `gesture*`/`input`/根助手已对齐；仅剩 `rawInput`、`Input`/`KeyEvent` 类注入与 `automator` 模块未迁移，依赖这些的旧脚本需改写法 |
-| 模块 | `web`/`io`/`plugins`/`continuation` 尚未迁移；`crypto`/`zips`/`util`/`automator`/`context`/`rawInput`/`sqlite` 已对齐，控制台浮窗（`openConsole`/`clearConsole`）已对齐 |
+| 模块 | `web`/`plugins`/`continuation` 尚未迁移；`crypto`/`zips`/`util`/`automator`/`context`/`rawInput`/`sqlite`/`io` 已对齐，控制台浮窗（`openConsole`/`clearConsole`）与选择器 JS 谓词（`filter`/`addFilter`/`findAndReturnList`）也已对齐 |
 | UI | QuickJS 是最小化 overlay 实现，还未覆盖 Activity 模式、完整控件属性和复杂列表交互 |
 | floaty | 基础窗口已可用，但与 Rhino XML 窗口对象、控件代理和事件 API 尚未完全等价 |
 | web | `http` 已可用；InjectableWebView/WebSocket 等页面级能力未迁移 |
