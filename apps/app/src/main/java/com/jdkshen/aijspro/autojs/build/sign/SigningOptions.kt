@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.autojs.build.sign
 
 import com.stardust.autojs.apkbuilder.Signer
+import java.io.File
 
 /**
  * 打包页的签名选择逻辑。
@@ -12,8 +13,9 @@ import com.stardust.autojs.apkbuilder.Signer
 object SigningOptions {
 
     /**
-     * 自动：不显式指定签名器，交给 [com.jdkshen.aijspro.autojs.build.ApkBuilder] 为本应用
-     * 生成/复用一份专属身份。**不再**退回 tiny-sign 那份全世界共用的测试证书。
+     * 自动：不显式指定签名器，交给 [com.jdkshen.aijspro.autojs.build.ApkBuilder] 用
+     * `.keyStore/` 里那份**本机身份**（没有就生成一份）。**不再**退回 tiny-sign 那份
+     * 全世界共用的测试证书，也不会每个应用单独生成一份（那样产物目录会越来越乱）。
      */
     const val MODE_AUTO = 0
 
@@ -38,11 +40,28 @@ object SigningOptions {
      */
     fun passwordPrefKey(keyStorePath: String): String = PASSWORD_PREFIX + keyStorePath
 
+    /** 密钥库统一放在脚本目录下的这个隐藏目录里（对齐 AutoX.js 的 `.keyStore/`）。 */
+    const val KEYSTORE_DIR_NAME = ".keyStore"
+
     /**
-     * 密钥库文件名的基础部分。
-     *
-     * 纯中文应用名 ASCII 化后会剩下一串下划线，不同应用会撞成同一个文件，
-     * 所以退化成用名字的哈希兜底，保证不同应用拿到不同身份。
+     * 本机身份的固定文件名：一份身份服务所有打包应用。
+     * 不按应用名生成，是为了让产物目录保持干净、改应用名也还能覆盖升级。
+     */
+    const val DEFAULT_KEYSTORE_NAME = "aijspro.keystore"
+
+    private val KEYSTORE_EXTENSIONS = setOf("jks", "keystore", "p12", "pfx", "bks")
+
+    fun keyStoreDir(scriptDirPath: String): File = File(scriptDirPath, KEYSTORE_DIR_NAME)
+
+    /** 打包页「选择签名」列出来的候选：`.keyStore/` 里所有的密钥库文件。 */
+    fun listKeyStores(dir: File): List<File> =
+        dir.listFiles()
+            ?.filter { it.isFile && it.extension.lowercase() in KEYSTORE_EXTENSIONS }
+            ?.sortedBy { it.name.lowercase() }
+            ?: emptyList()
+
+    /**
+     * 密钥库文件名的基础部分（只用于兼容、迁移旧版本的按应用命名）。
      */
     fun keystoreBaseName(appName: String?): String {
         val raw = appName.orEmpty().trim()

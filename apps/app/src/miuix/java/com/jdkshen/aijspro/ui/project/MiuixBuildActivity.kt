@@ -451,9 +451,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
      * 用户不需要自备密钥库也能避开 tiny-sign 那份全世界共用的测试证书。
      */
     private fun generateSigningKey() {
-        val directory = output.ifEmpty { Pref.getScriptDirPath() }
-        val baseName = SigningOptions.keystoreBaseName(signingDisplayName())
-        val target = File(directory, "$baseName-signing.p12")
+        val target = AutoSigningIdentity.identityFile()
         if (target.exists()) {
             signingKey = null
             signingSummary = ""
@@ -464,7 +462,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         signingSummary = ""
         busy = true
         val commonName = ((if (projectMode) projectConfig?.name else null) ?: appName)
-            .orEmpty().ifBlank { baseName }
+            .orEmpty().ifBlank { "AI.js Pro" }
         disposables.add(
             Observable.fromCallable {
                 val password = KeyStoreGenerator.randomPassword()
@@ -565,26 +563,15 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         }
     }
 
-    /** 密钥库文件名/证书主题都跟着应用名走，界面与打包器要用同一套命名。 */
-    private fun signingDisplayName(): String =
-        ((if (projectMode) projectConfig?.name else null) ?: appName).orEmpty().ifBlank { "app" }
-
     /**
-     * 「自动」用的是本机为该应用生成的身份（文件就在产物旁边）。
+     * 「自动」用的是 `.keyStore/` 里那份**本机身份**（一份身份服务所有应用，对齐 AutoX.js）。
      * 已经生成过就把证书主题显示出来，用户一眼能确认这次不再是全世界共用的测试证书。
      */
     private fun refreshAutoIdentity() {
-        // 还没选源时应用名/输出目录都是空的，先把提示留在笼统说法上。
-        if (appName.isBlank() && !projectMode) {
-            autoIdentitySummary = getString(R.string.text_signing_builtin_identity)
-            return
-        }
-        val directory = File(output.ifEmpty { Pref.getScriptDirPath() })
-        val name = signingDisplayName()
-        autoIdentitySummary = getString(
-            R.string.format_signing_auto_pending, AutoSigningIdentity.identityFile(directory, name).name)
+        val file = AutoSigningIdentity.identityFile()
+        autoIdentitySummary = getString(R.string.format_signing_auto_pending, file.name)
         disposables.add(
-            Observable.fromCallable { AutoSigningIdentity.existingSubject(directory, name) }
+            Observable.fromCallable { AutoSigningIdentity.existingSubject() }
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe({ subject ->

@@ -505,7 +505,7 @@ public class ApkBuilder {
             if (outputDir == null) {
                 throw new IOException("无法确定产物目录：" + mOutApkFile);
             }
-            signer = AutoSigningIdentity.INSTANCE.forApp(outputDir,
+            signer = AutoSigningIdentity.INSTANCE.signer(outputDir,
                     mAppConfig != null ? mAppConfig.getAppName() : null);
         }
         mApkPackager.setSigner(signer);

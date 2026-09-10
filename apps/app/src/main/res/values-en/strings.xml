@@ -201,7 +201,7 @@
     <string name="text_generate_signing_key">Create keystore</string>
     <string name="format_signing_generated">Created: %1$s</string>
     <string name="format_signing_key_exists">A keystore with that name already exists, remove or rename it first: %1$s</string>
-    <string name="summary_signing_default">Mints a private certificate for this app on the first build (stored next to the APK) and reuses it afterwards; the shared test certificate is no longer used. Packages signed with the old certificate must be uninstalled first</string>
+    <string name="summary_signing_default">Keystores live in .keyStore under the script folder and one identity serves every packaged app (same as AutoX.js); created automatically on the first build, then reused. The shared test certificate is no longer used</string>
     <string name="summary_signing_custom">Sign with your own keystore so the app has a unique identity instead of a shared certificate</string>
     <string name="text_key_store_file">Keystore file</string>
     <string name="text_key_store_alias">Alias (empty picks the first key)</string>
