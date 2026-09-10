@@ -20,5 +20,7 @@
             android:exported="false" />
         <activity android:name="com.jdkshen.aijspro.ui.log.MiuixLogActivity"
             android:exported="false" />
+        <activity android:name="com.jdkshen.aijspro.ui.project.MiuixBuildActivity"
+            android:exported="false" android:configChanges="orientation|screenSize" />
     </application>
 </manifest>

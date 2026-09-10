@@ -20,6 +20,7 @@ import com.google.android.material.textfield.TextInputLayout;
 import com.stardust.autojs.project.ProjectConfig;
 import com.stardust.util.IntentUtil;
 
+import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.build.ApkBuilder;
@@ -81,6 +82,13 @@ public class BuildActivity extends BaseActivity implements ApkBuilder.ProgressCa
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (BuildConfig.MIUIX_PILOT) {
+            startActivity(new Intent().setClassName(this,
+                            "com.jdkshen.aijspro.ui.project.MiuixBuildActivity")
+                    .putExtra(EXTRA_SOURCE, getIntent().getStringExtra(EXTRA_SOURCE)));
+            finish();
+            return;
+        }
         setContentView(R.layout.activity_build);
         bindViews();
         setupViews();

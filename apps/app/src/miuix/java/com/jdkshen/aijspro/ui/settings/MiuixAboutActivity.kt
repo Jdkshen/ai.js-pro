@@ -49,6 +49,7 @@ import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.extra.SuperArrow
 import top.yukonga.miuix.kmp.extra.SuperDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.MiuixPopupUtil
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
 
@@ -77,7 +78,12 @@ class MiuixAboutActivity : ComponentActivity() {
                             isAppearanceLightNavigationBars = !dark
                         }
                     }
-                    AboutPage()
+                    Box(Modifier.fillMaxSize()) {
+                        AboutPage()
+                        // Miuix never mounts its popup host itself; SuperDialog stays
+                        // invisible until the host is present exactly once.
+                        MiuixPopupUtil.MiuixPopupHost()
+                    }
                 }
             }
         })
@@ -139,8 +145,8 @@ class MiuixAboutActivity : ComponentActivity() {
             }
         }
         CrashDialog(show = crashShow,
-            onConfirm = { crashShow.value = false; crashTest() },
-            onDismiss = { crashShow.value = false })
+            onConfirm = { MiuixPopupUtil.dismissDialog(crashShow); crashTest() },
+            onDismiss = { if (crashShow.value) MiuixPopupUtil.dismissDialog(crashShow) })
     }
 
     @Composable

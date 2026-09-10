@@ -11,6 +11,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -59,6 +60,7 @@ import top.yukonga.miuix.kmp.extra.SuperSwitch
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
+import top.yukonga.miuix.kmp.utils.MiuixPopupUtil
 import java.io.File
 import java.io.IOException
 
@@ -94,7 +96,12 @@ class MiuixSettingsActivity : ComponentActivity() {
                             isAppearanceLightNavigationBars = !dark
                         }
                     }
-                    SettingsPage()
+                    Box(Modifier.fillMaxSize()) {
+                        SettingsPage()
+                        // Miuix never mounts its popup host itself; SuperDialog /
+                        // SuperDropdown stay invisible until it is present exactly once.
+                        MiuixPopupUtil.MiuixPopupHost()
+                    }
                 }
             }
         })
@@ -244,13 +251,13 @@ class MiuixSettingsActivity : ComponentActivity() {
             text = completionText.value,
             onText = { completionText.value = it },
             onConfirm = { confirmCompletion() },
-            onDismiss = { completionShow.value = false }
+            onDismiss = { if (completionShow.value) MiuixPopupUtil.dismissDialog(completionShow) }
         )
         ScriptDirDialog(
             show = scriptDirShow,
             text = scriptDirText.value,
             onText = { scriptDirText.value = it },
-            onDismiss = { scriptDirShow.value = false },
+            onDismiss = { if (scriptDirShow.value) MiuixPopupUtil.dismissDialog(scriptDirShow) },
             onApply = { mode -> applyScriptDir(mode) }
         )
     }
@@ -291,7 +298,7 @@ class MiuixSettingsActivity : ComponentActivity() {
         } else {
             putStrPref(R.string.key_max_length_for_code_completion, value.toString())
             revision++
-            completionShow.value = false
+            MiuixPopupUtil.dismissDialog(completionShow)
         }
     }
 
@@ -318,7 +325,7 @@ class MiuixSettingsActivity : ComponentActivity() {
             putStrPref(R.string.key_script_dir_path, newRel)
             com.jdkshen.aijspro.model.explorer.Explorers.workspace().refreshAll()
             revision++
-            scriptDirShow.value = false
+            MiuixPopupUtil.dismissDialog(scriptDirShow)
             return
         }
 
@@ -330,7 +337,7 @@ class MiuixSettingsActivity : ComponentActivity() {
             putStrPref(R.string.key_script_dir_path, newRel)
             com.jdkshen.aijspro.model.explorer.Explorers.workspace().refreshAll()
             revision++
-            scriptDirShow.value = false
+            MiuixPopupUtil.dismissDialog(scriptDirShow)
             return
         }
 
@@ -343,7 +350,7 @@ class MiuixSettingsActivity : ComponentActivity() {
             return
         }
 
-        scriptDirShow.value = false
+        MiuixPopupUtil.dismissDialog(scriptDirShow)
         val observable = if (mode == 1) FileObservable.copy(oldDir.path, newDir.path)
         else FileObservable.move(oldDir.path, newDir.path)
         Toast.makeText(this, getString(R.string.text_on_progress), Toast.LENGTH_SHORT).show()
