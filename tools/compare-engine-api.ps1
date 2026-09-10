@@ -11,8 +11,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$headers = @{ Accept = 'application/json' }
-if (-not [string]::IsNullOrWhiteSpace($Token)) { $headers.Authorization = "Bearer $Token" }
 
 if (-not $SkipAdbForward) {
     if (-not (Test-Path -LiteralPath $Adb -PathType Leaf)) { throw "adb not found: $Adb" }
@@ -29,6 +27,35 @@ if (-not $SkipAdbForward) {
     if ($LASTEXITCODE -ne 0) { throw "Unable to forward host port $HostPort to device port $DevicePort" }
 }
 
+function Invoke-McpRequest([string]$Body) {
+    # 不用 Invoke-RestMethod / HttpWebRequest：PowerShell 5.1 的 .NET 栈会给请求带上
+    # "Expect: 100-continue"，而应用的 MCP 服务收到该头按协议直接回 417 Expectation Failed
+    # （见 McpHttpServer.serve）。curl 的 -H "Expect:" 能把这个头精确去掉。
+    # SystemRoot 在部分终端/CI 环境里可能为空，为空时直接回退到 PATH 上的 curl.exe。
+    $systemRoot = [Environment]::GetEnvironmentVariable('SystemRoot')
+    $curl = if ([string]::IsNullOrWhiteSpace($systemRoot)) { 'curl.exe' }
+        else { Join-Path $systemRoot 'System32\curl.exe' }
+    if (-not (Test-Path -LiteralPath $curl -PathType Leaf)) { $curl = 'curl.exe' }
+    $bodyFile = Join-Path ([System.IO.Path]::GetTempPath()) ('engine-api-' + [guid]::NewGuid().ToString('N') + '.json')
+    [System.IO.File]::WriteAllText($bodyFile, $Body, (New-Object System.Text.UTF8Encoding($false)))
+    try {
+        $curlArguments = @('--fail-with-body', '-sS', '-X', 'POST', $Url,
+            '-H', 'Content-Type: application/json',
+            '-H', 'Accept: application/json',
+            '-H', 'Expect:',
+            '--data-binary', "@$bodyFile")
+        if (-not [string]::IsNullOrWhiteSpace($Token)) {
+            $curlArguments += @('-H', "Authorization: Bearer $Token")
+        }
+        $text = & $curl @curlArguments
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($exitCode -ne 0) { throw "MCP request failed (curl $exitCode): $text" }
+    return ($text | ConvertFrom-Json)
+}
+
 function Invoke-McpTool([int]$Id, [string]$Name, [hashtable]$Arguments) {
     $body = @{
         jsonrpc = '2.0'
@@ -36,7 +63,7 @@ function Invoke-McpTool([int]$Id, [string]$Name, [hashtable]$Arguments) {
         method = 'tools/call'
         params = @{ name = $Name; arguments = $Arguments }
     } | ConvertTo-Json -Depth 8 -Compress
-    $response = Invoke-RestMethod -Uri $Url -Method Post -Headers $headers -ContentType 'application/json' -Body $body
+    $response = Invoke-McpRequest -Body $body
     if ($null -ne $response.error) { throw $response.error.message }
     $hasContent = $null -ne $response.result -and
         $response.result.PSObject.Properties.Name -contains 'content'

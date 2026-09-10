@@ -1,6 +1,6 @@
 # QuickJS 迁移与 Rhino 移除门禁
 
-更新日期：2026-09-09
+更新日期：2026-09-11
 
 ## 已自动验证
 
@@ -24,6 +24,7 @@
 
 | 领域 | 硬阻塞 |
 | --- | --- |
+| 控件选择器 | QuickJS 没有 `text/id/desc/className/bounds` 选择器与 `UiObject`（`find/waitFor/untilFind` 全缺），这是无障碍自动化脚本的主体；移除 Rhino 前必须先补齐或明确不支持 |
 | UI | QuickJS 是最小化 overlay 实现，还未覆盖 Activity 模式、完整控件属性和复杂列表交互 |
 | floaty | 基础窗口已可用，但与 Rhino XML 窗口对象、控件代理和事件 API 尚未完全等价 |
 | web | `http` 已可用；InjectableWebView/WebSocket 等页面级能力未迁移 |
