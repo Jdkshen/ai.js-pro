@@ -21,6 +21,7 @@ public class ApkPackager {
 
     private InputStream mApkInputStream;
     private String mWorkspacePath;
+    private Signer mSigner;
 
     public ApkPackager(InputStream apkInputStream, String workspacePath) {
         mApkInputStream = apkInputStream;
@@ -30,6 +31,19 @@ public class ApkPackager {
     public ApkPackager(String apkPath, String workspacePath) throws FileNotFoundException {
         mApkInputStream = new FileInputStream(apkPath);
         mWorkspacePath = workspacePath;
+    }
+
+    /**
+     * Replaces the default tiny-sign certificate. When no signer is set the packager keeps
+     * signing with tiny-sign's built-in test key, which every packaged APK shares.
+     */
+    public ApkPackager setSigner(Signer signer) {
+        mSigner = signer;
+        return this;
+    }
+
+    public Signer getSigner() {
+        return mSigner;
     }
 
     public void unzip() throws IOException {
@@ -49,6 +63,10 @@ public class ApkPackager {
     }
 
     public void repackage(String newApkPath) throws Exception {
+        if (mSigner != null) {
+            mSigner.sign(new File(mWorkspacePath), new File(newApkPath));
+            return;
+        }
         FileOutputStream fos = new FileOutputStream(newApkPath);
         TinySign.sign(new File(mWorkspacePath), fos);
         fos.close();

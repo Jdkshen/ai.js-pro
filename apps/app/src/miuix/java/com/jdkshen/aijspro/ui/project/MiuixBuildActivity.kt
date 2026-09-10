@@ -63,6 +63,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.autojs.build.ApkBuilder
+import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner
+import com.jdkshen.aijspro.autojs.build.sign.KeyStoreGenerator
+import com.jdkshen.aijspro.autojs.build.sign.SigningKey
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
@@ -107,12 +110,18 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         private const val PICKER_SOURCE = 0
         private const val PICKER_OUTPUT = 1
         private const val PICKER_SPLASH = 2
+        private const val PICKER_KEYSTORE = 3
         private val REGEX_PACKAGE_NAME =
             Pattern.compile("^([A-Za-z][A-Za-z\\d_]*\\.)+([A-Za-z][A-Za-z\\d_]*)$")
         private val IMAGE_EXTENSIONS = listOf("png", "jpg", "jpeg", "webp")
+        private val KEYSTORE_EXTENSIONS = listOf("jks", "keystore", "p12", "pfx", "bks")
+        private const val KEYSTORE_ALIAS = "aijspro"
 
         private fun isImageFile(name: String): Boolean =
             IMAGE_EXTENSIONS.contains(name.substringAfterLast('.', "").lowercase())
+
+        private fun isKeyStoreFile(name: String): Boolean =
+            KEYSTORE_EXTENSIONS.contains(name.substringAfterLast('.', "").lowercase())
     }
 
     // ---- form state ----
@@ -148,6 +157,18 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var engine by mutableStateOf("")
     private var includeAccessibility by mutableStateOf(true)
     private var includeImageModule by mutableStateOf(true)
+
+    // ---- signing (Pro 的“签名”组) ----
+    /** 0 = 默认签名（tiny-sign 内嵌测试证书）, 1 = 使用已有的密钥库, 2 = 新建密钥 */
+    private var signingMode by mutableStateOf(0)
+    private var keyStorePath by mutableStateOf("")
+    private var keyStoreAlias by mutableStateOf("")
+    private var keyStorePassword by mutableStateOf("")
+    private var keyPassword by mutableStateOf("")
+    /** 只有验证通过的密钥才会真正参与打包，避免用错口令生成无法升级的产物 */
+    private var signingKey by mutableStateOf<SigningKey?>(null)
+    private var signingSummary by mutableStateOf("")
+    private var signingError by mutableStateOf<String?>(null)
 
     // ---- build state ----
     private var busy by mutableStateOf(false)
@@ -275,6 +296,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             PICKER_OUTPUT -> output.ifEmpty { Pref.getScriptDirPath() }
             PICKER_SPLASH -> splashIconPath.takeIf { it.isNotEmpty() }?.let { File(it).parent }
                 ?: Pref.getScriptDirPath()
+            PICKER_KEYSTORE -> keyStorePath.takeIf { it.isNotEmpty() }?.let { File(it).parent }
+                ?: Environment.getExternalStorageDirectory().path
             else -> source.takeIf { it.isNotEmpty() }?.let { File(it).parent }
                 ?: Pref.getScriptDirPath()
         }
@@ -300,6 +323,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     splashIconPath = file.path
                     splashIcon = bitmap
                 }
+            }
+            PICKER_KEYSTORE -> {
+                keyStorePath = file.path
+                // 换了密钥库就必须重新验证，否则会拿旧密钥的校验结果去打包。
+                signingKey = null
+                signingSummary = ""
+                signingError = null
             }
         }
         MiuixPopupUtil.dismissDialog(pickerShow)
@@ -336,6 +366,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 errorText = getString(R.string.text_invalid_package_name)
                 return false
             }
+        }
+        if (signingMode == 1 && signingKey == null) {
+            errorText = getString(R.string.error_signing_key_required)
+            return false
         }
         return true
     }
@@ -382,6 +416,95 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         if (showSplash && splashIconPath.isNotEmpty()) {
             appConfig.setSplashIcon(splashIconPath)
         }
+        // 没选自定义签名（或还没验证通过）时置空，保持 tiny-sign 的默认行为。
+        val key = signingKey
+        appConfig.setSigner(if (signingMode == 1 && key != null) KeyStoreApkSigner(key, keyStoreAlias.trim()) else null)
+    }
+
+    /**
+     * 生成本机独有的签名身份（2048 位 RSA 自签名证书）并存成 PKCS#12，
+     * 用户不需要自备密钥库也能避开 tiny-sign 那份全世界共用的测试证书。
+     */
+    private fun generateSigningKey() {
+        val directory = output.ifEmpty { Pref.getScriptDirPath() }
+        val baseName = ((if (projectMode) projectConfig?.name else null) ?: appName)
+            .orEmpty().ifBlank { "app" }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
+        val target = File(directory, "$baseName-signing.p12")
+        if (target.exists()) {
+            signingKey = null
+            signingSummary = ""
+            signingError = getString(R.string.format_signing_key_exists, target.path)
+            return
+        }
+        signingError = null
+        signingSummary = ""
+        busy = true
+        val commonName = ((if (projectMode) projectConfig?.name else null) ?: appName)
+            .orEmpty().ifBlank { baseName }
+        disposables.add(
+            Observable.fromCallable {
+                val password = KeyStoreGenerator.randomPassword()
+                val generated = KeyStoreGenerator.generate(commonName, "AI.js Pro", "CN")
+                KeyStoreGenerator.save(generated, target, password.toCharArray(), KEYSTORE_ALIAS)
+                Triple(generated, password, target)
+            }
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe({ result ->
+                    busy = false
+                    keyStorePath = result.third.path
+                    keyStoreAlias = KEYSTORE_ALIAS
+                    keyStorePassword = result.second
+                    keyPassword = result.second
+                    signingKey = result.first
+                    signingSummary = getString(R.string.format_signing_generated, result.third.path)
+                    Log.d(TAG, "Generated signing key " + result.third.path)
+                }, { error ->
+                    busy = false
+                    signingKey = null
+                    signingError = error.message ?: error.toString()
+                    Log.e(TAG, "Failed to generate signing key", error)
+                })
+        )
+    }
+
+    /**
+     * Reads the keystore on a worker thread: JKS/PKCS12 parsing and the private key check are
+     * slow enough to jank the dialog, and a wrong password has to surface as a message.
+     */
+    private fun verifySigningKey() {
+        val path = keyStorePath
+        if (path.isBlank()) {
+            signingKey = null
+            signingSummary = ""
+            signingError = getString(R.string.error_signing_key_required)
+            return
+        }
+        signingError = null
+        signingSummary = ""
+        busy = true
+        val storePassword = keyStorePassword.toCharArray()
+        // 与 keytool 一致：密钥口令留空时沿用密钥库口令。
+        val entryPassword = keyPassword.ifEmpty { keyStorePassword }.toCharArray()
+        val alias = keyStoreAlias.trim()
+        disposables.add(
+            Observable.fromCallable {
+                SigningKey.load(File(path), null, storePassword, alias, entryPassword)
+            }
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe({ key ->
+                    busy = false
+                    signingKey = key
+                    signingSummary = getString(R.string.format_signing_verified, key.subjectName)
+                    Log.d(TAG, "Signing key verified: " + key.certificateFingerprint)
+                }, { error ->
+                    busy = false
+                    signingKey = null
+                    signingError = error.message ?: error.toString()
+                    Log.e(TAG, "Failed to load signing key", error)
+                })
+        )
     }
 
     private fun togglePermission(name: String) {
@@ -482,6 +605,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     }
                     LaunchConfigCard()
                     FeaturesCard()
+                    SigningCard()
                     errorText?.let {
                         Text(it, fontSize = 13.sp, color = Color(0xFFD32F2F),
                             modifier = Modifier.padding(start = 4.dp))
@@ -703,12 +827,14 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private fun FilePickerDialog() {
         val outputMode = pickerTarget == PICKER_OUTPUT
         val splashMode = pickerTarget == PICKER_SPLASH
+        val keyStoreMode = pickerTarget == PICKER_KEYSTORE
         SuperDialog(
             show = pickerShow,
             title = getString(
                 when (pickerTarget) {
                     PICKER_OUTPUT -> R.string.text_output_apk_path
                     PICKER_SPLASH -> R.string.text_splash_icon
+                    PICKER_KEYSTORE -> R.string.text_key_store_file
                     else -> R.string.text_source_file_path
                 }),
             // SuperDialog invokes onDismissRequest even while show == false; calling
@@ -732,7 +858,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     if (parent != null) {
                         item { PickerRow(".. ${parent.name}") { pickerDir = parent } }
                     }
-                    if (!splashMode) {
+                    if (!splashMode && !keyStoreMode) {
                         item {
                             PickerRow("使用此文件夹：${pickerDir.name}", highlight = true) {
                                 applyPicked(pickerDir)
@@ -742,6 +868,9 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     items(children) { child ->
                         when {
                             child.isDirectory -> PickerRow("${child.name}/") { pickerDir = child }
+                            keyStoreMode -> if (isKeyStoreFile(child.name)) {
+                                PickerRow(child.name) { applyPicked(child) }
+                            }
                             splashMode -> if (isImageFile(child.name)) {
                                 PickerRow(child.name) { applyPicked(child) }
                             }
@@ -1004,6 +1133,139 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 fontSize = 13.sp,
                 color = if (selected) Color.White else MiuixTheme.colorScheme.onSurface
             )
+        }
+    }
+
+    /**
+     * 签名：默认沿用 tiny-sign 内嵌的公共测试证书（所有打包应用共用同一身份），
+     * 选择签名后产物换成开发者自己的密钥身份，可与自己的其他版本互相覆盖安装。
+     */
+    @Composable
+    private fun SigningCard() {
+        SmallTitle(getString(R.string.text_signing))
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EngineChip(getString(R.string.text_default_signing), signingMode == 0) {
+                        signingMode = 0
+                        signingError = null
+                    }
+                    EngineChip(getString(R.string.text_custom_signing), signingMode == 1) {
+                        signingMode = 1
+                    }
+                    EngineChip(getString(R.string.text_new_signing), signingMode == 2) {
+                        signingMode = 2
+                    }
+                }
+                Text(
+                    getString(
+                        when (signingMode) {
+                            0 -> R.string.summary_signing_default
+                            2 -> R.string.summary_signing_generate
+                            else -> R.string.summary_signing_custom
+                        }),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                )
+            }
+            if (signingMode != 0) {
+                SuperArrow(
+                    title = getString(R.string.text_key_store_file),
+                    rightText = if (keyStorePath.isEmpty()) getString(R.string.text_select)
+                    else File(keyStorePath).name,
+                    onClick = { openPicker(PICKER_KEYSTORE) })
+                if (signingMode == 2) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            text = getString(R.string.text_generate_signing_key),
+                            onClick = { generateSigningKey() },
+                            colors = ButtonDefaults.textButtonColorsPrimary()
+                        )
+                    }
+                }
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextField(
+                        value = keyStoreAlias,
+                        onValueChange = {
+                            keyStoreAlias = it
+                            signingKey = null
+                            signingSummary = ""
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = getString(R.string.text_key_store_alias),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
+                    )
+                    TextField(
+                        value = keyStorePassword,
+                        onValueChange = {
+                            keyStorePassword = it
+                            signingKey = null
+                            signingSummary = ""
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = getString(R.string.text_key_store_password),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    )
+                    TextField(
+                        value = keyPassword,
+                        onValueChange = {
+                            keyPassword = it
+                            signingKey = null
+                            signingSummary = ""
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = getString(R.string.text_key_password),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            text = getString(R.string.text_signing_verify),
+                            onClick = { verifySigningKey() },
+                            colors = ButtonDefaults.textButtonColorsPrimary()
+                        )
+                    }
+                    if (signingSummary.isNotEmpty()) {
+                        Text(
+                            signingSummary,
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.primary
+                        )
+                        signingKey?.let {
+                            Text(
+                                getString(
+                                    R.string.format_signing_fingerprint,
+                                    it.certificateFingerprint),
+                                fontSize = 10.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant
+                            )
+                        }
+                    }
+                    signingError?.let {
+                        Text(it, fontSize = 12.sp, color = Color(0xFFD32F2F))
+                    }
+                    Text(
+                        getString(R.string.summary_signing_switch_hint),
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                }
+            }
         }
     }
 

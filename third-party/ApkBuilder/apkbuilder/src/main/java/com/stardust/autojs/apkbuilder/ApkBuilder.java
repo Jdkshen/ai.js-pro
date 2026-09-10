@@ -58,6 +58,12 @@ public class ApkBuilder {
         return this;
     }
 
+    /** Overrides the default tiny-sign certificate used by {@link #sign()}. */
+    public ApkBuilder setSigner(Signer signer) {
+        mApkPackager.setSigner(signer);
+        return this;
+    }
+
     public ApkBuilder sign() throws Exception {
         mApkPackager.repackage(mOutApkFile.getPath());
         return this;

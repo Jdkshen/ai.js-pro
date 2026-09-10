@@ -9,6 +9,9 @@ import android.graphics.Bitmap;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import com.jdkshen.aijspro.autojs.build.ApkBuilder;
+import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner;
+import com.jdkshen.aijspro.autojs.build.sign.KeyStoreGenerator;
+import com.jdkshen.aijspro.autojs.build.sign.SigningKey;
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
 import com.stardust.autojs.engine.encryption.ScriptEncryption;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
@@ -22,10 +25,15 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.security.MessageDigest;
+import java.security.cert.Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Locale;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -188,6 +196,184 @@ public class ApkBuilderEncryptionTest {
                 readZipEntry(outApk, "libopencv_", ".so"));
         assertNotNull("quickjs libraries must stay",
                 readZipEntry(outApk, "libquickjs", ".so"));
+    }
+
+    /**
+     * 自定义签名：默认产物用的是 tiny-sign 内嵌的公共测试证书（全世界共用一份身份），
+     * 选了签名后必须换成开发者自己的证书，而且平台要能验通 v1 + v2 两套签名。
+     */
+    @Test
+    public void packagedApkUsesTheProvidedSigningKey() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-signing-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "signed.apk");
+        File script = new File(workDir, "probe.js");
+        File keyStore = new File(workDir, "identity.p12");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        writeText(script, "console.log('signing probe');\n");
+
+        // 生成密钥 → 存成 PKCS#12 → 再按 UI 的路径读回来，把整条链路都跑一遍。
+        String password = KeyStoreGenerator.randomPassword();
+        SigningKey generated = KeyStoreGenerator.generate("SigningProbe", "AI.js Pro", "CN");
+        KeyStoreGenerator.save(generated, keyStore, password.toCharArray(), "aijspro");
+        assertTrue("keystore must be written", keyStore.length() > 0);
+        SigningKey key = SigningKey.load(keyStore, null, password.toCharArray(), null,
+                password.toCharArray());
+        assertEquals("reloaded key must be the generated one",
+                generated.getCertificateFingerprint(), key.getCertificateFingerprint());
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("SigningProbe")
+                .setPackageName("com.example.signingprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("rhino")
+                .setIncludeAccessibility(false)
+                .setIncludeImageModule(false)
+                .setSigner(new KeyStoreApkSigner(key, "aijspro"));
+
+        new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), outApk, workspace.getPath())
+                .prepare()
+                .withConfig(config)
+                .build()
+                .sign();
+
+        // 1) 平台自己的校验器必须接受这个包，而且报出来的签名者就是我们的证书。
+        PackageInfo info = context.getPackageManager()
+                .getPackageArchiveInfo(outApk.getPath(), PackageManager.GET_SIGNING_CERTIFICATES);
+        assertNotNull("platform must accept the custom signed apk", info);
+        android.content.pm.Signature[] signers = signersOf(info);
+        assertNotNull("signature info should be available", signers);
+        assertEquals("exactly one signer expected", 1, signers.length);
+        assertEquals("signer certificate must be the provided one",
+                generated.getCertificateFingerprint(), sha256Fingerprint(signers[0].toByteArray()));
+
+        // 2) v1（JAR）签名：JarFile 在 verify 模式会校验 MANIFEST.MF / CERT.SF / CERT.RSA
+        //    的一致性；读完条目才能拿到证书，缺签名或摘要对不上都会在这里露出来。
+        JarFile jar = new JarFile(outApk, true);
+        try {
+            Enumeration<? extends ZipEntry> entries = jar.entries();
+            byte[] buffer = new byte[1 << 16];
+            int checked = 0;
+            while (entries.hasMoreElements()) {
+                JarEntry entry = (JarEntry) entries.nextElement();
+                String name = entry.getName();
+                if (entry.isDirectory() || name.startsWith("META-INF/")) {
+                    continue;
+                }
+                InputStream in = jar.getInputStream(entry);
+                try {
+                    while (in.read(buffer) != -1) {
+                        // 读取全部内容以完成条目校验
+                    }
+                } finally {
+                    in.close();
+                }
+                Certificate[] certificates = entry.getCertificates();
+                assertNotNull("entry " + name + " must be signed", certificates);
+                assertEquals("entry " + name + " must carry our certificate",
+                        generated.getCertificate(), certificates[0]);
+                checked++;
+            }
+            assertTrue("expected a fully signed apk, checked " + checked, checked > 100);
+        } finally {
+            jar.close();
+        }
+
+        // 3) v2 签名块必须插在「中央目录」前面，并携带同一份证书。
+        byte[] apk = readBytes(outApk);
+        int blockStart = findSigningBlockStart(apk);
+        assertTrue("APK Signing Block must sit in front of the central directory", blockStart > 0);
+        assertTrue("v2 block must carry the custom certificate",
+                indexOf(apk, generated.getCertificate().getEncoded(), blockStart,
+                        centralDirOffset(apk)) >= 0);
+    }
+
+    /** 中央目录偏移量（= 签名块结束位置）。 */
+    private static int centralDirOffset(byte[] apk) {
+        return readInt(apk, eocdOffset(apk) + 16);
+    }
+
+    private static int eocdOffset(byte[] apk) {
+        for (int i = apk.length - 22; i >= 0 && i >= apk.length - 22 - 0xFFFF; i--) {
+            if (apk[i] == 'P' && apk[i + 1] == 'K' && apk[i + 2] == 0x05 && apk[i + 3] == 0x06) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 通过“中央目录前的 "APK Sig Block 42" 魔术 + 尾部长度字段”定位签名块，
+     * 与校验方找块的方式一致；找不到返回 -1。
+     */
+    private static int findSigningBlockStart(byte[] apk) throws Exception {
+        int centralDir = centralDirOffset(apk);
+        if (centralDir < 32) {
+            return -1;
+        }
+        int magic = centralDir - 16;
+        byte[] expected = "APK Sig Block 42".getBytes("US-ASCII");
+        for (int i = 0; i < expected.length; i++) {
+            if (apk[magic + i] != expected[i]) {
+                return -1;
+            }
+        }
+        long sizeField = readLong(apk, magic - 8);
+        return (int) (magic - 8 - sizeField);
+    }
+
+    private static android.content.pm.Signature[] signersOf(PackageInfo info) {
+        // GET_SIGNING_CERTIFICATES 需要 API 28+，更低版本回落到旧的 signatures 字段。
+        if (info.signingInfo != null) {
+            return info.signingInfo.getApkContentsSigners();
+        }
+        return info.signatures;
+    }
+
+    private static String sha256Fingerprint(byte[] data) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(data);
+        StringBuilder builder = new StringBuilder();
+        for (byte b : digest) {
+            if (builder.length() > 0) {
+                builder.append(':');
+            }
+            builder.append(String.format(Locale.US, "%02X", b));
+        }
+        return builder.toString();
+    }
+
+    private static int indexOf(byte[] data, byte[] needle, int from, int to) {
+        outer:
+        for (int i = from; i + needle.length <= to; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (data[i + j] != needle[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    private static int readInt(byte[] data, int offset) {
+        return (data[offset] & 0xFF)
+                | ((data[offset + 1] & 0xFF) << 8)
+                | ((data[offset + 2] & 0xFF) << 16)
+                | ((data[offset + 3] & 0xFF) << 24);
+    }
+
+    private static long readLong(byte[] data, int offset) {
+        long value = 0;
+        for (int i = 7; i >= 0; i--) {
+            value = (value << 8) | (data[offset + i] & 0xFFL);
+        }
+        return value;
     }
 
     private static boolean hasService(PackageInfo info, String name) {

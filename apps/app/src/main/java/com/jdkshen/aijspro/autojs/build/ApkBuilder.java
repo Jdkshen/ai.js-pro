@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory;
 
 import com.stardust.autojs.apkbuilder.ApkPackager;
 import com.stardust.autojs.apkbuilder.ManifestEditor;
+import com.stardust.autojs.apkbuilder.Signer;
 import com.stardust.autojs.project.BuildInfo;
 import com.stardust.autojs.project.LaunchConfig;
 import com.stardust.autojs.project.ProjectConfig;
@@ -494,6 +495,9 @@ public class ApkBuilder {
 
     public ApkBuilder sign() throws Exception {
         notifySign();
+        if (mAppConfig != null) {
+            mApkPackager.setSigner(mAppConfig.getSigner());
+        }
         mApkPackager.repackage(mOutApkFile.getPath());
         return this;
     }
@@ -535,7 +539,21 @@ public class ApkBuilder {
         private String engine;
         private boolean includeAccessibility = true;
         private boolean includeImageModule = true;
+        private Signer signer;
         private final ArrayList<String> ignoredDirs = new ArrayList<>();
+
+        /**
+         * Signer used in place of tiny-sign's built-in certificate. Left null the packaged APK
+         * keeps the shared test certificate, which is what makes old packages upgradeable.
+         */
+        public AppConfig setSigner(Signer signer) {
+            this.signer = signer;
+            return this;
+        }
+
+        public Signer getSigner() {
+            return signer;
+        }
 
         public static AppConfig fromProjectConfig(String source, ProjectConfig projectConfig) {
             AppConfig config = new AppConfig();

@@ -192,4 +192,24 @@
     <string name="summary_include_accessibility">When off the package does not declare the accessibility service</string>
     <string name="text_image_module">Image / color module</string>
     <string name="summary_include_image_module">When off the package drops ~70MB per ABI and loses find-image / OpenCV features</string>
+
+    <string name="text_signing">Signing</string>
+    <string name="text_default_signing">Default key</string>
+    <string name="text_custom_signing">Custom key</string>
+    <string name="text_new_signing">New key</string>
+    <string name="summary_signing_generate">Mints a fresh self-signed certificate on this device so the app has a unique identity; the password is generated for you, keep the keystore safe</string>
+    <string name="text_generate_signing_key">Create keystore</string>
+    <string name="format_signing_generated">Created: %1$s</string>
+    <string name="format_signing_key_exists">A keystore with that name already exists, remove or rename it first: %1$s</string>
+    <string name="summary_signing_default">Keeps the built-in test certificate shared by every packaged app; existing packages stay upgradeable</string>
+    <string name="summary_signing_custom">Sign with your own keystore so the app has a unique identity instead of a shared certificate</string>
+    <string name="text_key_store_file">Keystore file</string>
+    <string name="text_key_store_alias">Alias (empty picks the first key)</string>
+    <string name="text_key_store_password">Keystore password</string>
+    <string name="text_key_password">Key password (empty reuses the above)</string>
+    <string name="text_signing_verify">Verify key</string>
+    <string name="error_signing_key_required">Pick a keystore and verify it first</string>
+    <string name="format_signing_verified">Verified: %1$s</string>
+    <string name="format_signing_fingerprint">Certificate SHA-256: %1$s</string>
+    <string name="summary_signing_switch_hint">Note: packages signed with the old certificate can no longer be upgraded in place, uninstall them first</string>
 </resources>
