@@ -35,73 +35,13 @@ object PermissionCatalog {
     )
 
     /**
-     * Auto.js Pro 9.3.11 权限页里的“推荐勾选集”（实机采集 59 条），
-     * 仅作为一键预设提供，**不做默认值**：它包含短信/联系人/相机等敏感权限，
-     * 写进产物后容易被安全软件标记为风险（MIUI 安装器实测会报 RiskWare）。
+     * 打开页面时的初始勾选：保持模板自带的权限集（= Auto.js Pro 产物的 17 条）不变。
+     *
+     * 历史的教训：曾在这里提供过“Pro 推荐（ 59 条）”一键预设，结果用户一点就产出 61 条
+     * 权限的包（含短信/联系人/通话/相机），被 MIUI 安装器报 RiskWare。Pro 界面上确实勾了
+     * 59 条，但**它自己产出的包只有 17 条**——界面选择不等于落盘结果。
+     * 因此现在只保留“模板默认”，需要更多权限就逐条勾。
      */
-    val PRO_DEFAULT_DECLARED: List<String> = listOf(
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_LOCATION_EXTRA_COMMANDS",
-        "android.permission.ACCESS_NETWORK_STATE",
-        "android.permission.ACCESS_WIFI_STATE",
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BROADCAST_STICKY",
-        "android.permission.CALL_PHONE",
-        "android.permission.CAMERA",
-        "android.permission.CHANGE_NETWORK_STATE",
-        "android.permission.CHANGE_WIFI_MULTICAST_STATE",
-        "android.permission.CHANGE_WIFI_STATE",
-        "android.permission.DISABLE_KEYGUARD",
-        "android.permission.EXPAND_STATUS_BAR",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.GET_ACCOUNTS",
-        "android.permission.GET_PACKAGE_SIZE",
-        "android.permission.GET_TASKS",
-        "android.permission.INTERNET",
-        "android.permission.KILL_BACKGROUND_PROCESSES",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.NFC",
-        "android.permission.PERSISTENT_ACTIVITY",
-        "android.permission.PROCESS_OUTGOING_CALLS",
-        "android.permission.READ_CALENDAR",
-        "android.permission.READ_CONTACTS",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.READ_PHONE_STATE",
-        "android.permission.READ_SMS",
-        "android.permission.READ_SYNC_SETTINGS",
-        "android.permission.READ_SYNC_STATS",
-        "android.permission.RECEIVE_BOOT_COMPLETED",
-        "android.permission.RECEIVE_MMS",
-        "android.permission.RECEIVE_SMS",
-        "android.permission.RECEIVE_WAP_PUSH",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.REORDER_TASKS",
-        "android.permission.REQUEST_DELETE_PACKAGES",
-        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
-        "android.permission.REQUEST_INSTALL_PACKAGES",
-        "android.permission.RESTART_PACKAGES",
-        "android.permission.SEND_SMS",
-        "android.permission.SET_TIME_ZONE",
-        "android.permission.SET_WALLPAPER",
-        "android.permission.SET_WALLPAPER_HINTS",
-        "android.permission.SYSTEM_ALERT_WINDOW",
-        "android.permission.USE_SIP",
-        "android.permission.VIBRATE",
-        "android.permission.WAKE_LOCK",
-        "android.permission.WRITE_CALENDAR",
-        "android.permission.WRITE_CONTACTS",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.WRITE_SETTINGS",
-        "android.permission.WRITE_SYNC_SETTINGS",
-        "com.android.alarm.permission.SET_ALARM",
-        "com.android.launcher.permission.INSTALL_SHORTCUT",
-        "com.android.launcher.permission.UNINSTALL_SHORTCUT",
-        "moe.shizuku.manager.permission.API_V23"
-    )
-
-    /** 打开页面时的初始勾选：保持模板自带的权限集（= Auto.js Pro 产物的 17 条）不变。 */
     val DEFAULT_DECLARED: List<String> = TEMPLATE_DEFAULTS
 
     /**

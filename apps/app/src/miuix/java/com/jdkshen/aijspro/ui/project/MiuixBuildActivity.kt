@@ -1061,15 +1061,6 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 ) {
                     if (declaring) {
                         TextButton(
-                            text = getString(R.string.text_preset_pro),
-                            onClick = {
-                                permissions = (PermissionCatalog.PRO_DEFAULT_DECLARED
-                                        + PermissionCatalog.TEMPLATE_DEFAULTS).distinct()
-                                selectAllArmed = false
-                            },
-                            colors = ButtonDefaults.textButtonColorsPrimary()
-                        )
-                        TextButton(
                             text = getString(R.string.text_restore_default),
                             onClick = {
                                 permissions = PermissionCatalog.DEFAULT_DECLARED
