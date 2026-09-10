@@ -1,7 +1,7 @@
 ﻿{
-  "versionCode": 464,
-  "versionName": "1.0.1",
-  "releaseNotes": "* MCP 新增 list_engine_api / probe_engine_api 引擎 API 工具\n* MCP 支持跟随应用自动启停，启停事件自动记录\n* 应用包名与源码命名空间迁移至 com.jdkshen.aijspro\n* 完善 QuickJS、ImGui 与脚本 APK 打包链路",
+  "versionCode": 465,
+  "versionName": "1.0.2",
+  "releaseNotes": "* QuickJS 主脚本支持 CommonJS 全局（module/exports/require.main/__filename/__dirname）\n* QuickJS threads 增强：worker 间共享事件总线（events.bus）与异步 Promise（thread.promise()）\n* 应用包名与源码命名空间迁移至 com.jdkshen.aijspro\n* 完善 QuickJS、Miuix 与脚本 APK 打包链路",
   "downloads" : [
 	{
 	  "name": "GitHub Releases",

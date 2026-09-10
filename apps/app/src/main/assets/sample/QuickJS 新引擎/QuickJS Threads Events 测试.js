@@ -76,6 +76,36 @@ assert('start thread.isAlive', t2.isAlive() === true);
 sleep(300);
 assert('start thread 完成', t2.isAlive() === false);
 
+// === 共享事件总线测试(跨 worker) ===
+var busReceived = [];
+var busWorker = threads.exec('bus-worker',
+    'events.bus.emit("bus-test", {from: "worker", n: 1});\n' +
+    'events.bus.emit("bus-test", {from: "worker", n: 2});');
+events.bus.on('bus-test', function (payload) { busReceived.push(payload); });
+busWorker.join(5000);
+sleep(300);
+assert('共享总线收到 worker 事件(2条)', busReceived.length === 2);
+assert('共享总线 payload 正确',
+    busReceived.length === 2 && busReceived[0].from === 'worker' && busReceived[1].n === 2);
+
+// 主线程 emit 也投递给自己
+var selfBus = [];
+events.bus.on('bus-self', function (v) { selfBus.push(v); });
+events.bus.emit('bus-self', 7);
+sleep(100);
+assert('共享总线本地 emit 也收到', selfBus.length === 1 && selfBus[0] === 7);
+events.bus.removeAllListeners();
+assert('bus.removeAllListeners 清空', events.bus.listenerCount('bus-test') === 0);
+
+// === thread.promise 测试 ===
+var t4 = threads.exec('promise-worker', '({value: 42, name: __args && __args.name})', { name: 'p1' });
+t4.join(5000);
+var pResult = null, pError = null;
+t4.promise(5000).then(function (v) { pResult = v; }, function (e) { pError = e; });
+sleep(200);
+assert('thread.promise 成功解析返回值', pResult !== null && pResult.value === 42);
+assert('thread.promise 传入 __args', pResult !== null && pResult.name === 'p1');
+
 // shutDownAll
 threads.shutDownAll();
 assert('shutDownAll 无异常', true);

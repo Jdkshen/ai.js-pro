@@ -57,8 +57,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -81,6 +83,13 @@ final class QuickJsHostBridge implements AutoCloseable {
     private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
     private final MutableOkHttp mHttpClient = new MutableOkHttp();
     private final ArrayBlockingQueue<String> mSystemEventQueue = new ArrayBlockingQueue<>(256);
+    // Shared event bus across all QuickJS engines (parent + workers). Each engine
+    // subscribes its own queue; emit() fans out one pre-serialized JSON item to
+    // every subscriber. Subscriptions are cancelled in close().
+    private static final Map<String, List<ArrayBlockingQueue<String>>> sSharedBus =
+            new ConcurrentHashMap<>();
+    private final ArrayBlockingQueue<String> mSharedBusQueue = new ArrayBlockingQueue<>(256);
+    private final Set<String> mSharedBusSubscriptions = ConcurrentHashMap.newKeySet();
     private final Object mSystemEventLock = new Object();
     private volatile long mEngineHandle;
     private boolean mObservingKeys;
@@ -1292,6 +1301,45 @@ final class QuickJsHostBridge implements AutoCloseable {
         } catch (Throwable e) { return -1; }
     }
 
+    // ---- shared event bus (cross-engine, incl. workers) ----
+
+    public boolean sharedBusOn(String name) {
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException("event name is required");
+        }
+        if (!mSharedBusSubscriptions.add(name)) return true;
+        sSharedBus.computeIfAbsent(name, key -> new CopyOnWriteArrayList<>())
+                .add(mSharedBusQueue);
+        return true;
+    }
+
+    public boolean sharedBusOff(String name) {
+        if (!mSharedBusSubscriptions.remove(name)) return false;
+        List<ArrayBlockingQueue<String>> subscribers = sSharedBus.get(name);
+        if (subscribers != null) subscribers.remove(mSharedBusQueue);
+        return true;
+    }
+
+    public boolean sharedBusEmit(String name, String itemJson) {
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException("event name is required");
+        }
+        List<ArrayBlockingQueue<String>> subscribers = sSharedBus.get(name);
+        if (subscribers == null || subscribers.isEmpty()) return false;
+        for (ArrayBlockingQueue<String> queue : subscribers) {
+            if (!queue.offer(itemJson)) {
+                queue.poll();
+                queue.offer(itemJson);
+            }
+        }
+        return true;
+    }
+
+    public String sharedBusPoll() {
+        String item = mSharedBusQueue.poll();
+        return item == null ? "" : item;
+    }
+
     // ---- engines module ----
 
     public String enginesExecScript(String name, String source, String configJson) {
@@ -2448,6 +2496,9 @@ final class QuickJsHostBridge implements AutoCloseable {
 
     @Override
     public void close() {
+        for (String name : new ArrayList<>(mSharedBusSubscriptions)) {
+            sharedBusOff(name);
+        }
         eventsStopAll();
         drawClose();
         mediaStopMusic();

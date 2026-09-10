@@ -2454,6 +2454,58 @@ JSValue nativeThreadsStop(JSContext *context, JSValueConst, int argc, JSValueCon
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt32(context, result);
 }
 
+// ---- shared event bus JNI (cross-engine, incl. workers) ----
+
+JSValue nativeSharedBusOn(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 1) return JS_ThrowTypeError(context, "sharedBusOn requires event name");
+    const std::string name = jsString(context, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "sharedBusOn", "(Ljava/lang/String;)Z");
+    jstring jName = toJavaString(env, name);
+    const jboolean result = env->CallBooleanMethod(state->host, method, jName);
+    env->DeleteLocalRef(jName);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeSharedBusOff(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 1) return JS_ThrowTypeError(context, "sharedBusOff requires event name");
+    const std::string name = jsString(context, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "sharedBusOff", "(Ljava/lang/String;)Z");
+    jstring jName = toJavaString(env, name);
+    const jboolean result = env->CallBooleanMethod(state->host, method, jName);
+    env->DeleteLocalRef(jName);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeSharedBusEmit(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 2) return JS_ThrowTypeError(context, "sharedBusEmit requires name, itemJson");
+    const std::string name = jsString(context, argv[0]);
+    const std::string item = jsString(context, argv[1]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "sharedBusEmit",
+            "(Ljava/lang/String;Ljava/lang/String;)Z");
+    jstring jName = toJavaString(env, name);
+    jstring jItem = toJavaString(env, item);
+    const jboolean result = env->CallBooleanMethod(state->host, method, jName, jItem);
+    env->DeleteLocalRef(jItem);
+    env->DeleteLocalRef(jName);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeSharedBusPoll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "sharedBusPoll", nullptr);
+}
+
 // ---- engines module JNI ----
 
 JSValue nativeEnginesExecScript(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -3697,6 +3749,97 @@ const char kBootstrapScript[] = R"JS(
             return events.emit.apply(events, arguments);
         }
     };
+
+    // ---- shared event bus (cross-engine, incl. workers) ----
+    // Payloads travel as JSON strings through the Java bridge; listeners receive
+    // the emitted arguments on their own engine thread via a 40ms poll.
+    var busListeners = new Map();
+    var sharedBusTimer = null;
+    function busListenersFor(name, create) {
+        name = String(name);
+        var listeners = busListeners.get(name);
+        if (!listeners && create) {
+            listeners = [];
+            busListeners.set(name, listeners);
+        }
+        return listeners;
+    }
+    function dispatchSharedBus() {
+        for (;;) {
+            var raw = __aiNativeSharedBusPoll();
+            if (!raw) break;
+            var item = JSON.parse(raw);
+            var listeners = busListenersFor(item.name, false);
+            if (listeners && listeners.length) {
+                var args = item.args || [];
+                listeners.slice().forEach(function (listener) { listener.apply(undefined, args); });
+            }
+        }
+    }
+    function ensureSharedBusPolling() {
+        if (sharedBusTimer === null) {
+            sharedBusTimer = setInterval(dispatchSharedBus, 40);
+        }
+    }
+    var bus = {
+        on: function (name, listener) {
+            if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+            var listeners = busListenersFor(name, true);
+            listeners.push(listener);
+            if (listeners.length === 1) __aiNativeSharedBusOn(String(name));
+            ensureSharedBusPolling();
+            return bus;
+        },
+        once: function (name, listener) {
+            function onceListener() {
+                bus.off(name, onceListener);
+                return listener.apply(undefined, arguments);
+            }
+            onceListener.listener = listener;
+            return bus.on(name, onceListener);
+        },
+        off: function (name, listener) {
+            var listeners = busListenersFor(name, false);
+            if (!listeners) return bus;
+            for (var i = listeners.length - 1; i >= 0; i--) {
+                if (listeners[i] === listener || listeners[i].listener === listener) {
+                    listeners.splice(i, 1);
+                }
+            }
+            if (listeners.length === 0) {
+                busListeners.delete(String(name));
+                __aiNativeSharedBusOff(String(name));
+            }
+            return bus;
+        },
+        removeListener: function (name, listener) { return bus.off(name, listener); },
+        removeAllListeners: function (name) {
+            if (name === undefined) {
+                busListeners.forEach(function (_, n) { __aiNativeSharedBusOff(String(n)); });
+                busListeners.clear();
+            } else {
+                busListeners.delete(String(name));
+                __aiNativeSharedBusOff(String(name));
+            }
+            return bus;
+        },
+        emit: function (name) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            var item;
+            try {
+                item = JSON.stringify({ name: String(name), args: args });
+            } catch (error) {
+                throw new TypeError('Shared bus payload must be JSON-serializable: ' + error.message);
+            }
+            return __aiNativeSharedBusEmit(String(name), item);
+        },
+        listenerCount: function (name) {
+            var listeners = busListenersFor(name, false);
+            return listeners ? listeners.length : 0;
+        }
+    };
+    events.bus = Object.freeze(bus);
+
     global.events = Object.freeze(events);
 
     // ---- media module ----
@@ -4044,7 +4187,29 @@ const char kBootstrapScript[] = R"JS(
                 return engine.isDestroyed();
             },
             getResult: function () { return engine.getResult(); },
-            waitForResult: function (timeout) { return engine.waitForResult(timeout); }
+            waitForResult: function (timeout) { return engine.waitForResult(timeout); },
+            /**
+             * Asynchronous result promise. Resolves with the worker's return
+             * value (or undefined), rejects on worker error or timeout.
+             */
+            promise: function (timeout) {
+                var deadline = Date.now()
+                    + (timeout === undefined ? 0x7fffffff : Math.max(0, Number(timeout)));
+                return new Promise(function (resolve, reject) {
+                    function poll() {
+                        var result;
+                        try { result = engine.getResult(); } catch (error) { reject(error); return; }
+                        if (result.status === 'success') { resolve(result.value); return; }
+                        if (result.status === 'error') { reject(new Error(result.error || 'Worker failed')); return; }
+                        if (Date.now() >= deadline) { reject(new Error('Worker result timeout')); return; }
+                        setTimeout(poll, 20);
+                    }
+                    poll();
+                });
+            },
+            then: function (onFulfilled, onRejected) {
+                return this.promise().then(onFulfilled, onRejected);
+            }
         };
         return Object.freeze(thread);
     }
@@ -4363,6 +4528,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeDialogBuild", nativeDialogBuild, 1);
     installNativeFunction(state->context, global, "__aiNativeThreadsExec", nativeThreadsExec, 3);
     installNativeFunction(state->context, global, "__aiNativeThreadsStop", nativeThreadsStop, 1);
+    installNativeFunction(state->context, global, "__aiNativeSharedBusOn", nativeSharedBusOn, 1);
+    installNativeFunction(state->context, global, "__aiNativeSharedBusOff", nativeSharedBusOff, 1);
+    installNativeFunction(state->context, global, "__aiNativeSharedBusEmit", nativeSharedBusEmit, 2);
+    installNativeFunction(state->context, global, "__aiNativeSharedBusPoll", nativeSharedBusPoll, 0);
     installNativeFunction(state->context, global, "__aiNativeEnginesExecScript", nativeEnginesExecScript, 3);
     installNativeFunction(state->context, global, "__aiNativeEnginesExecScriptFile", nativeEnginesExecScriptFile, 2);
     installNativeFunction(state->context, global, "__aiNativeEnginesMyEngineId", nativeEnginesMyEngineId, 0);

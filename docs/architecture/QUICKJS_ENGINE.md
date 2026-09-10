@@ -87,7 +87,7 @@ toast("这是 QuickJS 脚本");
 | `shell` | 已接入 | 普通/Root 执行、Root 可用性检查、超时中止、输出限制和引擎关闭子进程回收 |
 | `dialogs` | 已接入 | `alert` / `confirm` / `prompt` / `select` / `singleChoice` / `multiChoice` |
 | `engines` | 已接入 | 启动脚本、枚举引擎、停止引擎；子脚本默认使用 QuickJS，可显式选择 Rhino |
-| `threads`、`events` | 常用能力已接入 | 每个 worker 使用独立 QuickJS；支持 JSON 参数、返回值/异常查询与等待；支持按键、触摸、通知、Toast 和手势观察，系统回调通过有界队列回到所属引擎线程；worker 间事件总线仍未共享 |
+| `threads`、`events` | 常用能力已接入 | 每个 worker 使用独立 QuickJS；支持 JSON 参数、返回值/异常查询与等待（`waitForResult` / `promise()`）；支持按键、触摸、通知、Toast 和手势观察，系统回调通过有界队列回到所属引擎线程；`events.bus` 提供 worker 间共享事件总线（JSON 载荷） |
 | `ui` / `$ui` | 基础实现 | 支持 XML 布局、常用控件、点击和列表事件；E4X/JSX、Java 反射与完整动态绑定仍需 Rhino |
 
 全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`，YOLO 案例位于其 `YOLO目标检测/` 子目录。
@@ -281,7 +281,7 @@ modules/autojs/src/main/cpp/
 
 当前 QuickJS 已具备第一批到第三批白名单桥（`console`/`toast`/`sleep`、`files`/`http`/`timers`、`app`/`storages`/`device`、`shell`/`dialogs`/`engines`、`threads`/`events` 基础版）、完整的 `images` 模块（clip/resize/scale/grayscale/cvtColor/save/compress/findColor/findMultiColors/findImage/matchTemplate）以及 `dialogs.build()` 和 `engines` 完整对象封装。后续建议按实际需求推进：
 
-1. `threads` 增强：worker 间共享事件总线、异步 Promise 封装；同步返回值/异常等待和 JSON 参数传递已实现，函数任务仍不捕获外层闭包；
+1. `threads` 增强：已完成 worker 间共享事件总线（`events.bus.on/once/off/emit/removeAllListeners`，载荷 JSON 序列化，各自引擎线程轮询派发）与异步 Promise 封装（`thread.promise()`，thread 对象可直接 `await`）；同步返回值/异常等待和 JSON 参数传递已实现；函数任务仍不捕获外层闭包（`threads.start(function)` 会序列化源码，数据需经 `args` 传入）；
 2. `images` 高级功能：旋转、阈值化、模糊、形态学、Base64 转换和 OCR 桥；
 3. Native Frame 可增加句柄数/占用字节调试统计，用于长时脚本泄漏诊断。
 
