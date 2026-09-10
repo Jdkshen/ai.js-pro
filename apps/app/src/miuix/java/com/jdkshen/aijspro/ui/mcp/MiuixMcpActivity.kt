@@ -161,7 +161,7 @@ class MiuixMcpActivity : ComponentActivity() {
         when (dialog) {
             "settings" -> SettingsDialog { dialog = null; revision++ }
             "qr" -> QrDialog(addresses.firstOrNull()) { dialog = null }
-            "help" -> MessageDialog("如何连接", "1. 启动服务，客户端选 Streamable HTTP。\n2. 同一手机的 MT 客户端填 http://127.0.0.1:${McpSettings.port(this)}/mcp，并删除空白请求头行；本机兼容开启时无需请求头。\n3. 电脑 USB 连接先执行 adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpSettings.port(this)}，客户端填 http://127.0.0.1:${McpSettings.USB_HOST_PORT}/mcp。\n4. 严格模式或局域网连接需填写 Authorization: Bearer <令牌>。\n5. 从 get_status / search_scripts 开始；手机开启编辑授权后，workspace_request_apply 会直接应用工作区，并自动备份供历史页回退。") { dialog = null }
+            "help" -> MessageDialog("如何连接", "1. 启动服务，客户端选 Streamable HTTP。\n2. 同一手机的 MT 客户端填 http://127.0.0.1:${McpSettings.port(this)}/mcp，并删除空白请求头行；本机兼容开启时无需请求头。\n3. 电脑 USB 连接先执行 adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpSettings.port(this)}，客户端填 http://127.0.0.1:${McpSettings.USB_HOST_PORT}/mcp。\n4. 严格模式或局域网连接需填写 Authorization: Bearer <令牌>（已开启“局域网免令牌”时除外）。\n5. 从 get_status / search_scripts 开始；手机开启编辑授权后，workspace_request_apply 会直接应用工作区，并自动备份供历史页回退。") { dialog = null }
             "write", "execute" -> {
                 val write = dialog == "write"
                 ConfirmDialog(if (write) "允许 AI 编辑并应用？" else "允许 AI 执行脚本？",
@@ -179,6 +179,7 @@ class MiuixMcpActivity : ComponentActivity() {
         var days by remember { mutableStateOf(TextFieldValue(McpSettings.historyDays(this).toString())) }
         var lan by remember { mutableStateOf(McpSettings.lanEnabled(this)) }
         var localCompat by remember { mutableStateOf(McpSettings.localCompatibility(this)) }
+        var lanNoToken by remember { mutableStateOf(McpSettings.allowLanWithoutToken(this)) }
         var error by remember { mutableStateOf<String?>(null) }
         var reset by remember { mutableStateOf(false) }
         Dialog(onDismissRequest = onClose) { Card(Modifier.fillMaxWidth()) { Column(Modifier.verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -188,6 +189,7 @@ class MiuixMcpActivity : ComponentActivity() {
             TextField(days, { days = it; error = null }, Modifier.fillMaxWidth(), singleLine = true, label = "历史保留天数（1–365）")
             SuperSwitch(title = "允许局域网连接", summary = "监听所有网卡；仅在可信网络中开启", checked = lan, onCheckedChange = { lan = it })
             SuperSwitch(title = "本机客户端兼容", summary = "127.0.0.1 和 USB 转发免令牌；局域网仍强制 Bearer 令牌", checked = localCompat, onCheckedChange = { localCompat = it })
+            SuperSwitch(title = "局域网免令牌（危险）", summary = "开启后局域网访问不再校验 Bearer 令牌；仅限纯私网临时使用，同网设备可读写/运行脚本", checked = lanNoToken, onCheckedChange = { lanNoToken = it })
             TextButton(text = "重置访问令牌", onClick = { if (McpService.running) error = "请先停止服务" else reset = true })
             error?.let { Text(it, fontSize = 13.sp) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -202,7 +204,7 @@ class MiuixMcpActivity : ComponentActivity() {
                         retention == null || retention !in 1..365 -> error = "历史天数无效"
                         clean.split('/').any { it == "." || it == ".." } || target == null || (target != scripts && !target.path.startsWith(scripts.path + File.separator)) -> error = "操作目录必须在脚本根目录内"
                         !target.isDirectory -> error = "操作目录不存在"
-                        else -> { McpSettings.setPort(this@MiuixMcpActivity, number); McpSettings.setLanEnabled(this@MiuixMcpActivity, lan); McpSettings.setLocalCompatibility(this@MiuixMcpActivity, localCompat); McpSettings.setOperationPath(this@MiuixMcpActivity, clean); McpSettings.setHistoryDays(this@MiuixMcpActivity, retention); onClose() }
+                        else -> { McpSettings.setPort(this@MiuixMcpActivity, number); McpSettings.setLanEnabled(this@MiuixMcpActivity, lan); McpSettings.setLocalCompatibility(this@MiuixMcpActivity, localCompat); McpSettings.setAllowLanWithoutToken(this@MiuixMcpActivity, lanNoToken); McpSettings.setOperationPath(this@MiuixMcpActivity, clean); McpSettings.setHistoryDays(this@MiuixMcpActivity, retention); onClose() }
                     }
                 }, modifier = Modifier.weight(1f)) { Text("保存") }
             }

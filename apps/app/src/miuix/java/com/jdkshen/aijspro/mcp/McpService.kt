@@ -31,6 +31,7 @@ class McpService : Service() {
             val router = McpTools(applicationContext, ::record)
             val endpoint = McpHttpServer(if (McpSettings.lanEnabled(this)) "0.0.0.0" else "127.0.0.1",
                 McpSettings.port(this), McpSettings.token(this), McpSettings.localCompatibility(this),
+                allowUnauthenticatedLan = McpSettings.allowLanWithoutToken(this),
                 handler = { request ->
                     requestCount++
                     lastRequestAt = System.currentTimeMillis()

@@ -35,6 +35,8 @@ class McpHttpServer(
     val token: String,
     val allowUnauthenticatedLoopback: Boolean = false,
     val pageProvider: (() -> String)? = null,
+    /** 危险选项：局域网(非 loopback)请求也不校验令牌。 */
+    val allowUnauthenticatedLan: Boolean = false,
     val handler: (JsonObject) -> JsonObject?
 ) {
     private val tokenDigest = sha256(token)
@@ -142,7 +144,8 @@ class McpHttpServer(
             val candidate = if (authorization.startsWith("Bearer ", ignoreCase = true)) authorization.substring(7) else ""
             val authenticated = MessageDigest.isEqual(tokenDigest, sha256(candidate))
             val localCompatibility = allowUnauthenticatedLoopback && authorization.isEmpty() && socket.inetAddress.isLoopbackAddress
-            if (!authenticated && !localCompatibility) throw HttpError(401, "Unauthorized")
+            val lanCompatibility = allowUnauthenticatedLan && authorization.isEmpty() && !socket.inetAddress.isLoopbackAddress
+            if (!authenticated && !localCompatibility && !lanCompatibility) throw HttpError(401, "Unauthorized")
             val path = requestLine[1].substringBefore('?')
             if (path != "/mcp" && path != "/") throw HttpError(404, "Not Found")
             if (requestLine[0] == "GET") {

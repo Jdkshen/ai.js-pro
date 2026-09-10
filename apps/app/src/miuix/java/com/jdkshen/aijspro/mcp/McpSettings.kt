@@ -8,6 +8,7 @@ object McpSettings {
     private const val NAME = "aijs_mcp"
     private const val KEY_PORT = "port"
     private const val KEY_LAN = "lan"
+    private const val KEY_LAN_NO_TOKEN = "lan_no_token"
     private const val KEY_TOKEN = "token"
     private const val KEY_OPERATION_PATH = "operation_path"
     private const val KEY_HISTORY_DAYS = "history_days"
@@ -27,6 +28,10 @@ object McpSettings {
     }
     fun lanEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_LAN, false)
     fun setLanEnabled(context: Context, value: Boolean) = prefs(context).edit().putBoolean(KEY_LAN, value).apply()
+
+    /** 危险选项：开启后局域网请求不再校验 Bearer 令牌（仅建议纯私网临时使用）。 */
+    fun allowLanWithoutToken(context: Context): Boolean = prefs(context).getBoolean(KEY_LAN_NO_TOKEN, false)
+    fun setAllowLanWithoutToken(context: Context, value: Boolean) = prefs(context).edit().putBoolean(KEY_LAN_NO_TOKEN, value).apply()
     fun operationPath(context: Context): String = prefs(context).getString(KEY_OPERATION_PATH, "").orEmpty()
     fun setOperationPath(context: Context, value: String) {
         val clean = value.replace('\\', '/').trim('/')
