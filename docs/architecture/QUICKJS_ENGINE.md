@@ -92,7 +92,7 @@ toast("这是 QuickJS 脚本");
 | `ui` / `$ui` | 基础实现 | 支持 XML 布局、常用控件、点击和列表事件；`ui.run(fn)` 保持 Rhino 写法兼容；E4X/JSX、Java 反射与完整动态绑定仍需 Rhino |
 | `exit()` / `keys` | 已接入 | `exit()` 以正常完成结束脚本（不再报中断错误）；`keys.back/home/menu/enter` 等常量用于 `on("key")` 监听 |
 
-全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`，YOLO 案例位于其 `YOLO目标检测/` 子目录，悬浮窗对齐案例位于其 `悬浮窗/` 子目录（悬浮文字、动态悬浮文字、悬浮窗运行脚本按钮简单版/完整版、悬浮窗输入框）。
+全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`：根目录保留入口脚本（`新模块快速上手.js`、`QuickJS 模块示例.js`、`QuickJS运行环境测试.js`），其余按分类存放——`悬浮窗/`、`图色处理/`、`YOLO目标检测/`、`引擎与线程/`、`界面与交互/`、`系统与设备/`、`文件与网络/`、`图像与视觉/`、`回归测试/`。
 
 ### Native Frame 用法
 

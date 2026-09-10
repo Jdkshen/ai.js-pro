@@ -17,7 +17,7 @@
 ## 2. 相关文件
 
 - Rhino 回归：`apps/app/src/main/assets/sample/脚本引擎/Rhino 回归测试.js`
-- QuickJS 回归：`apps/app/src/main/assets/sample/QuickJS 新引擎/QuickJS 全模块回归测试.js`
+- QuickJS 回归：`apps/app/src/main/assets/sample/QuickJS 新引擎/回归测试/QuickJS 全模块回归测试.js`
 - QuickJS 报告：[QuickJS 完成报告](../reports/QUICKJS_完成报告.md)
 - 一键发布：`release.ps1`
 - APK：`apps/app/build/outputs/apk/common/debug/app-common-arm64-v8a-debug.apk`
@@ -78,7 +78,7 @@ QUICKJS_REGRESSION_OK
 
 ```powershell
 node --check "apps/app/src/main/assets/sample/脚本引擎/Rhino 回归测试.js"
-node --check "apps/app/src/main/assets/sample/QuickJS 新引擎/QuickJS 全模块回归测试.js"
+node --check "apps/app/src/main/assets/sample/QuickJS 新引擎/回归测试/QuickJS 全模块回归测试.js"
 ```
 
 同时统计两个脚本中的断言数量，避免测试项被意外删除。当前基线为 Rhino 32 项、QuickJS 42 项；修改后数量不得低于基线。若合理新增断言，报告和验收条件必须同步更新，不能继续硬编码旧数字。
@@ -157,7 +157,7 @@ adb -s SERIAL shell dumpsys package com.jdkshen.aijspro
 
 ```powershell
 adb -s SERIAL push "apps/app/src/main/assets/sample/脚本引擎/Rhino 回归测试.js" "/sdcard/脚本/脚本引擎/Rhino 回归测试.js"
-adb -s SERIAL push "apps/app/src/main/assets/sample/QuickJS 新引擎/QuickJS 全模块回归测试.js" "/sdcard/脚本/QuickJS 新引擎/QuickJS 全模块回归测试.js"
+adb -s SERIAL push "apps/app/src/main/assets/sample/QuickJS 新引擎/回归测试/QuickJS 全模块回归测试.js" "/sdcard/脚本/QuickJS 新引擎/回归测试/QuickJS 全模块回归测试.js"
 ```
 
 注意：推送目录时 ADB 可能把目录内容展开到目标根目录。本任务只推送两个明确文件，避免再次出现文件位置错误。
@@ -202,7 +202,7 @@ FATAL EXCEPTION
 同样先清空日志，然后启动：
 
 ```powershell
-adb -s SERIAL shell am start -n com.jdkshen.aijspro/com.jdkshen.aijspro.external.open.RunIntentActivity --es path "/sdcard/脚本/QuickJS 新引擎/QuickJS 全模块回归测试.js"
+adb -s SERIAL shell am start -n com.jdkshen.aijspro/com.jdkshen.aijspro.external.open.RunIntentActivity --es path "/sdcard/脚本/QuickJS 新引擎/回归测试/QuickJS 全模块回归测试.js"
 ```
 
 通过条件：
