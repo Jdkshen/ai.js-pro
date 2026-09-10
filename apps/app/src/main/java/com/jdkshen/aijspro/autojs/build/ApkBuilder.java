@@ -28,9 +28,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-import pxb.android.StringItem;
-import pxb.android.axml.AxmlWriter;
-
 /**
  * Builds a standalone APK from the bundled inrt runtime template and a user script.
  *
@@ -129,12 +126,15 @@ public class ApkBuilder {
 
     public ApkBuilder build() throws Exception {
         notifyBuild();
+        // Config patches (package name / label / version / icon) must reach the manifest
+        // editor BEFORE commit() serializes it, otherwise they are silently dropped and
+        // the packaged APK keeps the template identity (com.jdkshen.aijspro.inrt).
+        if (mAppConfig != null) {
+            updateProjectConfig(mAppConfig);
+        }
         if (mManifestEditor != null) {
             mManifestEditor.commit();
             mManifestEditor.writeTo(new FileOutputStream(getManifestFile()));
-        }
-        if (mAppConfig != null) {
-            updateProjectConfig(mAppConfig);
         }
         if (mArscPackageName != null) {
             buildArsc();
@@ -468,32 +468,6 @@ public class ApkBuilder {
 
         public int getVersionCode() {
             return versionCode;
-        }
-    }
-
-    /**
-     * Manifest editor that also rewrites provider authorities for the generated app.
-     * The original implementation patched the FileProvider authority on the manifest;
-     * the bundled template already ships with the correct authorities.
-     */
-    public static class ManifestEditorWithAuthorities extends ManifestEditor {
-        private final ApkBuilder mOwner;
-
-        public ManifestEditorWithAuthorities(ApkBuilder owner, InputStream manifestInputStream) {
-            super(manifestInputStream);
-            mOwner = owner;
-        }
-
-        @Override
-        public void onAttr(AxmlWriter.Attr attr) {
-            if (mOwner.mAppConfig != null && attr.ns == null
-                    && "package".equals(attr.name.data) && mOwner.mAppConfig.packageName != null) {
-                attr.value = new StringItem(mOwner.mAppConfig.packageName);
-                attr.type = AxmlWriter.TYPE_STRING;
-                attr.raw = new StringItem(mOwner.mAppConfig.packageName);
-                return;
-            }
-            super.onAttr(attr);
         }
     }
 

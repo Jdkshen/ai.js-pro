@@ -29,6 +29,7 @@ public class ManifestEditor {
     private String mVersionName;
     private String mAppName;
     private String mPackageName;
+    private String mOriginalPackageName;
     private byte[] mManifestData;
 
 
@@ -74,11 +75,17 @@ public class ManifestEditor {
     public void onAttr(AxmlWriter.Attr attr) {
         // Handle the "package" attribute on <manifest> element (no namespace)
         if (attr.ns == null) {
-            if ("package".equals(attr.name.data) && mPackageName != null) {
-                attr.value = new StringItem(mPackageName);
-                attr.type = TYPE_STRING;
-                attr.raw = new StringItem(mPackageName);
-                return;
+            if ("package".equals(attr.name.data)) {
+                if (attr.value instanceof StringItem) {
+                    // Keep the template identity: provider authorities and the AGP
+                    // runtime permission are derived from it and must be renamed too.
+                    mOriginalPackageName = ((StringItem) attr.value).data;
+                }
+                if (mPackageName != null) {
+                    attr.value = new StringItem(mPackageName);
+                    attr.type = TYPE_STRING;
+                    attr.raw = new StringItem(mPackageName);
+                }
             }
             return;
         }
@@ -102,6 +109,46 @@ public class ManifestEditor {
             attr.raw = new StringItem(mAppName);
             return;
         }
+        // Provider authorities (FileProvider / androidx-startup) have to be unique per
+        // app, otherwise installing two packaged apps fails with
+        // INSTALL_FAILED_CONFLICTING_PROVIDER.
+        if ("authorities".equals(attr.name.data)) {
+            renamePackagePrefix(attr);
+            return;
+        }
+        // The AGP-generated DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION is per
+        // applicationId; keeping the template's name would leave the renamed app
+        // without the permission it needs at runtime.
+        if ("name".equals(attr.name.data) && isPackageDerivedPermission(attr)) {
+            renamePackagePrefix(attr);
+        }
+    }
+
+    private boolean isPackageDerivedPermission(AxmlWriter.Attr attr) {
+        if (!(attr.value instanceof StringItem)) {
+            return false;
+        }
+        String value = ((StringItem) attr.value).data;
+        return value != null && value.endsWith(".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION");
+    }
+
+    private void renamePackagePrefix(AxmlWriter.Attr attr) {
+        if (mPackageName == null || mOriginalPackageName == null
+                || !(attr.value instanceof StringItem)) {
+            return;
+        }
+        String value = ((StringItem) attr.value).data;
+        if (value == null || !value.startsWith(mOriginalPackageName)) {
+            return;
+        }
+        if (value.length() > mOriginalPackageName.length()
+                && value.charAt(mOriginalPackageName.length()) != '.') {
+            return;
+        }
+        String renamed = mPackageName + value.substring(mOriginalPackageName.length());
+        attr.value = new StringItem(renamed);
+        attr.type = TYPE_STRING;
+        attr.raw = new StringItem(renamed);
     }
 
 

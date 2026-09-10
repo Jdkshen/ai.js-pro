@@ -1,6 +1,9 @@
 package com.jdkshen.aijspro.packaging;
 
 import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
 
 import androidx.test.platform.app.InstrumentationRegistry;
 
@@ -19,6 +22,7 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -49,10 +53,28 @@ public class ApkBuilderEncryptionTest {
                 .setVersionName("1.0.0")
                 .setVersionCode(1)
                 .setSourcePath(script.getAbsolutePath());
+        // sign() repackages the workspace into out.apk, so it has to run before the
+        // packaged artifact can be parsed below.
         new ApkBuilder(template, outApk, workspace.getPath())
                 .prepare()
                 .withConfig(config)
-                .build();
+                .build()
+                .sign();
+
+        // 0) APK 身份（包名/版本/authorities）必须来自 AppConfig，不能保留模板身份。
+        PackageInfo archiveInfo = context.getPackageManager()
+                .getPackageArchiveInfo(outApk.getPath(), PackageManager.GET_PROVIDERS);
+        assertNotNull("packaged apk should be parseable", archiveInfo);
+        assertEquals("com.example.encryptionprobe", archiveInfo.packageName);
+        assertEquals("1.0.0", archiveInfo.versionName);
+        assertEquals(1L, archiveInfo.getLongVersionCode());
+        assertNotNull(archiveInfo.providers);
+        for (ProviderInfo provider : archiveInfo.providers) {
+            assertNotNull(provider.authority);
+            assertFalse("provider authority must follow the packaged package name, got "
+                            + provider.authority,
+                    provider.authority.contains("com.jdkshen.aijspro.inrt"));
+        }
 
         // 1) project.json 应与打包身份同步，并带新的 buildInfo。
         File jsonFile = new File(workspace, "assets/project/project.json");
