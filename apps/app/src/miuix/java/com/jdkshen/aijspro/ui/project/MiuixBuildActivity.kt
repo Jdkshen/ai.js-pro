@@ -936,16 +936,17 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     label = getString(R.string.text_permission_search),
                     singleLine = true
                 )
+                Text(
+                    getString(R.string.summary_permission_template_hint),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
                 Row(
-                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        getString(R.string.summary_permission_template_hint),
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        modifier = Modifier.weight(1f)
-                    )
                     TextButton(
                         text = getString(R.string.text_select_all),
                         onClick = { permissions = PermissionCatalog.ALL.map { it.name } },

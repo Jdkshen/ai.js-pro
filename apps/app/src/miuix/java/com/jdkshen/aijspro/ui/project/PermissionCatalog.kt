@@ -36,6 +36,23 @@ object PermissionCatalog {
 
     private fun entry(name: String, label: String, summary: String) = Entry(name, label, summary)
 
+    /**
+     * 平台补充权限（见 [PlatformPermissions]）按授权级别成组展示：标签取权限名
+     * （去掉 `x.permission.` 前缀）以便与官方文档对照，摘要说明能否被普通应用拿到。
+     * 必须声明在 [GROUPS] 之前，否则 object 初始化顺序会让它还是 null。
+     */
+    private fun tail(title: String, summary: String, names: List<String>) =
+        Group(title, names.map { Entry(it, it.substringAfterLast("permission."), summary) })
+
+    private val PLATFORM_GROUPS: List<Group> = listOf(
+        tail("更多危险权限（需用户授权）", "危险权限 · 安装后需在系统弹窗中授权",
+            PlatformPermissions.DANGEROUS),
+        tail("更多普通权限（安装即授予）", "普通权限 · 安装时自动授予",
+            PlatformPermissions.NORMAL),
+        tail("高级权限（需 root / adb / 系统签名）", "签名权限 · 需 root、adb 或系统签名才能获得",
+            PlatformPermissions.SIGNATURE)
+    )
+
     val GROUPS: List<Group> = listOf(
         Group("存储与文件", listOf(
             entry("android.permission.READ_EXTERNAL_STORAGE", "读取存储", "读取手机中的文件"),
@@ -118,7 +135,7 @@ object PermissionCatalog {
             entry("com.android.launcher.permission.INSTALL_SHORTCUT", "创建快捷方式", "在桌面添加脚本快捷方式"),
             entry("com.android.launcher.permission.UNINSTALL_SHORTCUT", "删除快捷方式", "移除桌面快捷方式")
         ))
-    )
+    ) + PLATFORM_GROUPS
 
     val ALL: List<Entry> = GROUPS.flatMap { it.entries }
 
