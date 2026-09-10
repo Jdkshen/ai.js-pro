@@ -171,6 +171,8 @@
     <string name="text_permission_level_privileged">Privileged</string>
     <string name="text_permission_level_signature">Signature</string>
     <string name="text_select_all">Select all</string>
+    <string name="text_select_all_confirm">Confirm all 208?</string>
+    <string name="text_restore_default">Restore default</string>
     <string name="text_preset_pro">Pro preset</string>
     <string name="format_dangerous_permission_warning">%1$d dangerous permissions selected; security software may flag the app, keep only what the script needs</string>
     <string name="text_clear_selection">Clear</string>

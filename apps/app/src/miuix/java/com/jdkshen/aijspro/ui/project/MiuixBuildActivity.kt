@@ -134,6 +134,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var permissionTab by mutableStateOf(0)
     private var permissionQuery by mutableStateOf("")
     private val permissionShow = mutableStateOf(false)
+    /** 「全选」需二次确认（避免一键声明 208 条含敏感权限）。 */
+    private var selectAllArmed by mutableStateOf(false)
     private lateinit var permissionDetails: PermissionDetails
     private var hideLogs by mutableStateOf(false)
     private var showSplash by mutableStateOf(true)
@@ -860,6 +862,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 onClick = {
                     permissionQuery = ""
                     permissionTab = 0
+                    selectAllArmed = false
                     permissionShow.value = true
                 },
                 colors = ButtonDefaults.textButtonColorsPrimary()
@@ -1032,9 +1035,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                 )
-                // 选到危险权限时提醒：安全软件（含 MIUI 安装器）会对这类权限画像报风险。
+                // 选到（模板之外的）危险权限时提醒：安全软件（含 MIUI 安装器）会对这类权限画像报风险。
+                // 模板自带的 5 条危险权限是产物必需，不在此提醒，否则一打开就跑红字。
                 val dangerousCount = if (declaring) {
-                    selected.count { permissionDetails.of(it)?.level == PermissionDetails.Level.DANGEROUS }
+                    selected.count {
+                        !PermissionCatalog.TEMPLATE_DEFAULTS.contains(it) &&
+                            permissionDetails.of(it)?.level == PermissionDetails.Level.DANGEROUS
+                    }
                 } else {
                     0
                 }
@@ -1046,33 +1053,63 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
                     )
                 }
+                // 分成两行：四个按钮挤一行会被裁掉（真机实测「清空」出屏）。
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(
-                        text = getString(R.string.text_select_all),
-                        onClick = {
-                            val all = PermissionCatalog.ALL.map { it.name }
-                            if (declaring) permissions = all else requestPermissions = all
-                        },
-                        colors = ButtonDefaults.textButtonColorsPrimary()
-                    )
                     if (declaring) {
                         TextButton(
                             text = getString(R.string.text_preset_pro),
                             onClick = {
                                 permissions = (PermissionCatalog.PRO_DEFAULT_DECLARED
                                         + PermissionCatalog.TEMPLATE_DEFAULTS).distinct()
+                                selectAllArmed = false
+                            },
+                            colors = ButtonDefaults.textButtonColorsPrimary()
+                        )
+                        TextButton(
+                            text = getString(R.string.text_restore_default),
+                            onClick = {
+                                permissions = PermissionCatalog.DEFAULT_DECLARED
+                                selectAllArmed = false
                             },
                             colors = ButtonDefaults.textButtonColorsPrimary()
                         )
                     }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // “全选”会把目录里 208 条全部声明（含短信/联系人/通话等敏感权限），
+                    // 产物很容易被安全软件标记为风险，所以要点两次才生效。
+                    TextButton(
+                        text = getString(
+                            if (selectAllArmed && declaring) R.string.text_select_all_confirm
+                            else R.string.text_select_all),
+                        onClick = {
+                            val all = PermissionCatalog.ALL.map { it.name }
+                            if (declaring) {
+                                if (selectAllArmed) {
+                                    permissions = all
+                                    selectAllArmed = false
+                                } else {
+                                    selectAllArmed = true
+                                }
+                            } else {
+                                requestPermissions = all
+                            }
+                        },
+                        colors = ButtonDefaults.textButtonColorsPrimary()
+                    )
                     TextButton(
                         text = getString(R.string.text_clear_selection),
                         onClick = {
                             if (declaring) permissions = emptyList() else requestPermissions = emptyList()
+                            selectAllArmed = false
                         },
                         colors = ButtonDefaults.textButtonColorsPrimary()
                     )
