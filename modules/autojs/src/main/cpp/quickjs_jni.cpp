@@ -3544,9 +3544,21 @@ const char kBootstrapScript[] = R"JS(
     function makeEngineHandle(info) {
         info = info || {};
         var handle = Number(info.handle === undefined ? info : info.handle);
+        function restoreResultValue(value) {
+            // Object/array results cross the JNI boundary as JSON text; restore
+            // them so waitForResult()/promise() hand back real objects.
+            if (typeof value !== 'string' || value.length === 0) return value;
+            var first = value.charAt(0);
+            if (first !== '{' && first !== '[') return value;
+            try { return JSON.parse(value); } catch (error) { return value; }
+        }
         function resultState(timeout) {
             if (handle === 0) return { status: 'running' };
-            return JSON.parse(__aiNativeEngineResult(handle, Math.max(0, Number(timeout) || 0)));
+            var state = JSON.parse(__aiNativeEngineResult(handle, Math.max(0, Number(timeout) || 0)));
+            if (state && state.status === 'success') {
+                state.value = restoreResultValue(state.value);
+            }
+            return state;
         }
         return Object.freeze({
             id: Number(info.id === undefined ? -1 : info.id),
