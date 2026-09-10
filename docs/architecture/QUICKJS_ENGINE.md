@@ -100,6 +100,9 @@ toast("这是 QuickJS 脚本");
 | 控制台浮窗 | 已接入 | `openConsole()` / `clearConsole()` 与 `console.show/hide/clear/setTitle/setSize/setPosition`；复用 `runtime.console`，浮窗实现类上的 `setSize/setPosition` 由宿主内部反射调用 |
 | 选择器 JS 谓词 | 已接入 | `filter(fn)` / `addFilter(fn)`：Java 遍历控件时通过 `__aiInvokeCallback` 同步回调脚本函数（同一引擎线程，谓词参数是真正的 UiObject 代理）；`findAndReturnList(node, max)` 返回带 `size()/get()` 的列表（对齐 Rhino 的 `java.util.List`） |
 | io / 文本文件 | 已接入 | `files.open(path[, mode[, encoding[, bufferSize]]])` 与全局 `open`（Rhino 的 `__io__.js` 把 `files.open` 提升为全局）：`r` 可 `read/read(size)/readline/readlines`（共用同一游标），`w` 打开即清空后 `write/writeline/writelines`，`a` 追加，未知模式返回 null；`io` 对象暴露 `open` 与 `files` |
+| web / 可注入 WebView | 已接入 | `newInjectableWebView()` / `newInjectableWebClient()`：`inject(script[, callback])`、`loadUrl` / `loadData` / `reload` / `stopLoading` / `getUrl`；页面里的 `rhino.call(name, ...args)` / `rhino.eval(code)` 由 WebView 线程入队、脚本引擎线程执行（异常会写到脚本控制台）；`injectAndWait` 需要跨线程同步求值，明确报错 |
+| 跨线程 JS 回调 | 已接入 | Java 线程把任务放进 `ConcurrentLinkedQueue`，native 事件循环（定时器循环与 `sleep` 切片）在引擎线程上取出并调 `__aiRunJsTask`，避免多线程同时进 QuickJS 上下文；选择器谓词用同一套回调表（同步路径） |
+| continuation | 部分接入 | `delay(millis)` = 阻塞 `sleep`；`enabled` 恒为 `false`，`await/create` 与 `Promise.prototype.await` 明确报错引导到 `await` 语法 |
 
 全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`：根目录保留入口脚本（`新模块快速上手.js`、`QuickJS 模块示例.js`、`QuickJS运行环境测试.js`），其余按分类存放——`悬浮窗/`、`图色处理/`、`YOLO目标检测/`、`引擎与线程/`、`界面与交互/`、`系统与设备/`、`文件与网络/`、`图像与视觉/`、`回归测试/`。
 

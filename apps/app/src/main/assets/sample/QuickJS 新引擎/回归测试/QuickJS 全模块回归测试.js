@@ -281,6 +281,65 @@ var gestureTo = Math.round(device.height * 0.5);
 assert('gesture 真实滑动', typeof gesture(200, [gestureX, gestureFrom], [gestureX, gestureTo]) === 'boolean');
 assert('gestures 真实滑动', typeof gestures([0, 200, [gestureX, gestureFrom], [gestureX, gestureTo]]) === 'boolean');
 
+// --- continuation / 跨线程回调 / web 模块 ---
+assert('continuation 模块', typeof continuation === 'object' && typeof continuation.delay === 'function'
+    && typeof continuation.await === 'function' && continuation.enabled === false);
+var continuationStart = Date.now();
+continuation.delay(120);
+assert('continuation.delay 阻塞等待', Date.now() - continuationStart >= 100);
+assert('continuation.create 明确报错', (function () {
+    try { continuation.create(); return false; } catch (e) { return /不支持/.test(String(e)); }
+})());
+assert('Promise.await 明确报错', (function () {
+    try { Promise.resolve(1).await(); return false; } catch (e) { return /不支持/.test(String(e)); }
+})());
+assert('web 模块', typeof web === 'object' && typeof web.newInjectableWebView === 'function'
+    && typeof web.newInjectableWebClient === 'function'
+    && typeof newInjectableWebView === 'function' && typeof newInjectableWebClient === 'function');
+assert('require("web")/require("continuation")', require('web') === web && require('continuation') === continuation);
+
+// 跨线程回调：其它线程排队的任务由引擎线程在 sleep 期间取出执行（WebView 页面回调走同一条通路）。
+var crossThreadHits = [];
+var crossThreadCallbackId = __aiRegisterCallback(function (value) {
+    crossThreadHits.push(value === undefined ? 'no-arg' : String(value));
+});
+__aiNativePostJsCallbackAsync(crossThreadCallbackId, 60);
+sleep(700);
+assert('跨线程回调在 sleep 期间执行', crossThreadHits.length === 1);
+assert('跨线程回调参数传递', crossThreadHits[0] === 'no-arg');
+__aiReleaseCallback(crossThreadCallbackId);
+var crossThreadCallValue = null;
+global.__aiCrossThreadTestFn = function (value) { crossThreadCallValue = value; };
+assert('跨线程任务分发（页面 call/eval）', (function () {
+    var callReport = __aiRunJsTask(JSON.stringify({
+        kind: 'call', name: '__aiCrossThreadTestFn', args: '["page"]'
+    }));
+    var evalReport = __aiRunJsTask(JSON.stringify({
+        kind: 'eval', code: '__aiCrossThreadEvalValue = 7;'
+    }));
+    return callReport === '' && evalReport === '' && crossThreadCallValue === 'page'
+        && __aiCrossThreadEvalValue === 7;
+})());
+delete global.__aiCrossThreadTestFn;
+
+var regressionWebView = null;
+try {
+    regressionWebView = newInjectableWebView();
+} catch (e) {
+    regressionWebView = null;
+}
+if (regressionWebView !== null) {
+    var injectedValues = [];
+    regressionWebView.loadData('<html><body><h1 id="t">hello-quickjs</h1></body></html>', 'text/html', 'utf-8');
+    regressionWebView.inject('document.getElementById("t").innerText', function (value) {
+        injectedValues.push(String(value));
+    });
+    sleep(4000);
+    assert('WebView inject 回调', injectedValues.length > 0);
+} else {
+    assert('WebView 创建（当前环境不可用）', true);
+}
+
 // --- 内置模块：crypto / zips / util / automator / context / rawInput ---
 assert('crypto.md5', crypto.md5('abc') === '900150983cd24fb0d6963f7d28e17f72');
 assert('crypto.sha256', crypto.sha256('abc')

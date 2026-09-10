@@ -44,6 +44,7 @@ struct TimerEntry {
 struct EngineState {
     JavaVM *vm = nullptr;
     jobject host = nullptr;
+    jlong handle = 0;
     JSRuntime *runtime = nullptr;
     JSContext *context = nullptr;
     std::atomic<bool> interrupted{false};
@@ -396,10 +397,150 @@ JSValue nativeLog(JSContext *context, JSValueConst, int argc, JSValueConst *argv
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
 }
 
+/**
+ * 执行 Java 侧排队的 JS 任务（跨线程回调：WebView 页面回调、注入结果回调等）。
+ *
+ * Java 线程只把任务放进队列，真正的 JS 调用都在引擎线程上通过
+ * `__aiRunJsTask(taskJson)` 执行，避免多线程同时进 QuickJS 上下文。
+ * 在定时器循环与 sleep 的切片里调用，所以脚本跑在事件循环或 sleep 时都能收到回调。
+ */
+void pumpJavaJsTasks(const std::shared_ptr<EngineState> &state, JSContext *context) {
+    if (state == nullptr || state->host == nullptr || context == nullptr) {
+        return;
+    }
+    JNIEnv *env = currentEnv(state.get());
+    if (env == nullptr) {
+        return;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID countMethod = env->GetMethodID(hostClass, "pendingJsTaskCount", "()I");
+    jmethodID takeMethod = env->GetMethodID(hostClass, "takePendingJsTask", "()Ljava/lang/String;");
+    jmethodID reportMethod = env->GetMethodID(hostClass, "reportJsTaskResult", "(Ljava/lang/String;)V");
+    env->DeleteLocalRef(hostClass);
+    if (countMethod == nullptr || takeMethod == nullptr) {
+        env->ExceptionClear();
+        return;
+    }
+    for (int processed = 0; processed < 64; ++processed) {
+        if (env->CallIntMethod(state->host, countMethod) <= 0) {
+            break;
+        }
+        jstring task = static_cast<jstring>(env->CallObjectMethod(state->host, takeMethod));
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            break;
+        }
+        if (task == nullptr) {
+            break;
+        }
+        const std::string taskJson = fromJavaString(env, task);
+        env->DeleteLocalRef(task);
+        std::string report;
+        JSValue global = JS_GetGlobalObject(context);
+        JSValue runner = JS_GetPropertyStr(context, global, "__aiRunJsTask");
+        JS_FreeValue(context, global);
+        if (JS_IsFunction(context, runner)) {
+            JSValue argument = JS_NewStringLen(context, taskJson.data(), taskJson.size());
+            JSValue result = JS_Call(context, runner, JS_UNDEFINED, 1, &argument);
+            JS_FreeValue(context, argument);
+            if (JS_IsException(result)) {
+                report = quickJsException(context);
+            } else if (!JS_IsUndefined(result) && !JS_IsNull(result)) {
+                report = jsString(context, result);
+            }
+            JS_FreeValue(context, result);
+        } else {
+            report = "QuickJS 未安装任务分发函数 __aiRunJsTask";
+        }
+        JS_FreeValue(context, runner);
+        if (!report.empty() && reportMethod != nullptr) {
+            jstring javaReport = toJavaString(env, report);
+            env->CallVoidMethod(state->host, reportMethod, javaReport);
+            env->DeleteLocalRef(javaReport);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            break;
+        }
+        JSContext *pendingContext = nullptr;
+        while (JS_ExecutePendingJob(state->runtime, &pendingContext) > 0) {
+        }
+    }
+}
+
 JSValue nativePerformanceNow(JSContext *context, JSValueConst, int, JSValueConst *) {
     const double millis = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
     return JS_NewFloat64(context, millis);
+}
+
+/** web 模块：在 UI 线程创建 InjectableWebView / InjectableWebClient，返回句柄。 */
+JSValue nativeWebCreate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const bool withView = argc > 0 && JS_ToBool(context, argv[0]) > 0;
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "webCreate", "(Z)J");
+    jlong handle = env->CallLongMethod(state->host, method, withView ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewInt64(context, static_cast<int64_t>(handle));
+}
+
+/** web 模块：WebView / WebViewClient 上的方法（loadUrl/loadData/reload/inject/...）。 */
+JSValue nativeWebCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const std::string method = argc > 1 ? jsString(context, argv[1]) : std::string();
+    const std::string args = argc > 2 ? jsString(context, argv[2]) : std::string("[]");
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID call = env->GetMethodID(hostClass, "webCall",
+                                      "(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaMethod = toJavaString(env, method);
+    jstring javaArgs = toJavaString(env, args);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, call, static_cast<jlong>(handle), javaMethod, javaArgs));
+    env->DeleteLocalRef(javaMethod);
+    env->DeleteLocalRef(javaArgs);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (result == nullptr) {
+        return JS_UNDEFINED;
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** 从非引擎线程安排一次脚本回调（Web 桥与回归测试使用，验证跨线程回调通路）。 */
+JSValue nativePostJsCallbackAsync(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    int64_t callbackId = 0;
+    int64_t delayMillis = 0;
+    if (argc < 1 || JS_ToInt64(context, &callbackId, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc > 1 && JS_ToInt64(context, &delayMillis, argv[1]) < 0) {
+        return JS_EXCEPTION;
+    }
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "postJsCallbackDelayed", "(JJ)V");
+    env->CallVoidMethod(state->host, method, static_cast<jlong>(callbackId),
+                        static_cast<jlong>(std::max<int64_t>(0, delayMillis)));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_UNDEFINED;
 }
 
 JSValue nativeToast(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -431,6 +572,8 @@ JSValue nativeSleep(JSContext *context, JSValueConst, int argc, JSValueConst *ar
             const std::string message = timerError.empty() ? "Timer callback failed" : timerError;
             return JS_ThrowInternalError(context, "%s", message.c_str());
         }
+        // 跨线程回调（如 WebView 注入完成）也在 sleep 期间落地。
+        pumpJavaJsTasks(findEngine(state->handle), context);
         std::this_thread::sleep_for(std::chrono::milliseconds(slice));
         millis -= slice;
     }
@@ -5108,6 +5251,10 @@ const char kBootstrapScript[] = R"JS(
     };
     global.__aiReleaseCallback = function (id) { delete jsCallbacks[Number(id)]; };
     global.__aiInvokeCallback = function (id, argsJson) {
+        return runJsCallback(id, argsJson);
+    };
+    /** 真正的分发实现：Java → JS 同步回调（选择器谓词）与引擎线程上的异步任务共用。 */
+    function runJsCallback(id, argsJson) {
         var callback = jsCallbacks[Number(id)];
         if (typeof callback !== 'function') {
             return JSON.stringify({ error: '回调 #' + id + ' 不存在（可能已被回收）' });
@@ -5119,6 +5266,43 @@ const char kBootstrapScript[] = R"JS(
         } catch (e) {
             var message = e === null || e === undefined ? '回调执行失败' : String(e.message === undefined ? e : e.message);
             return JSON.stringify({ error: message });
+        }
+    }
+
+    /**
+     * 跨线程任务的统一入口：native 事件循环在引擎线程上调用它。
+     * 目前三种任务：callback（回调结果）、call（页面调脚本全局函数）、eval（页面请求求值）。
+     */
+    global.__aiRunJsTask = function (taskJson) {
+        var task = JSON.parse(taskJson);
+        switch (task.kind) {
+            case 'callback': {
+                var result = JSON.parse(runJsCallback(task.id, task.args));
+                return result.error === undefined ? '' : String(result.error);
+            }
+            case 'call': {
+                var fn = global[String(task.name)];
+                if (typeof fn !== 'function') {
+                    return '页面调用了不存在的脚本函数：' + task.name;
+                }
+                var callArgs = JSON.parse(task.args === undefined ? '[]' : String(task.args))
+                    .map(decodeCallbackArg);
+                try {
+                    fn.apply(null, callArgs);
+                } catch (e) {
+                    return e === null || e === undefined ? '脚本函数执行失败' : String(e.message || e);
+                }
+                return '';
+            }
+            case 'eval':
+                try {
+                    (0, eval)(String(task.code));
+                } catch (e) {
+                    return e === null || e === undefined ? '脚本求值失败' : String(e.message || e);
+                }
+                return '';
+            default:
+                return '未知的跨线程任务类型：' + task.kind;
         }
     };
 
@@ -5490,6 +5674,78 @@ const char kBootstrapScript[] = R"JS(
         },
         files: global.files
     });
+
+    // ---- web 模块（QuickJS 版 InjectableWebView / InjectableWebClient）----
+    // 页面里的 `rhino.call(...)` / `rhino.eval(...)` 由 WebView 线程入队，脚本引擎线程执行。
+    function wrapWebInjector(handle) {
+        var injector = { __handle: handle };
+        injector.inject = function (script, callback) {
+            var callbackId = typeof callback === 'function'
+                ? global.__aiRegisterCallback(callback) : 0;
+            __aiNativeWebCall(handle, 'inject', JSON.stringify([String(script), callbackId]));
+        };
+        injector.injectAndWait = function () {
+            throw new Error('QuickJS 不支持 injectAndWait（跨线程同步求值）；请用 inject(script, callback)');
+        };
+        injector.loadUrl = function (url) {
+            __aiNativeWebCall(handle, 'loadUrl', JSON.stringify([String(url)]));
+        };
+        injector.loadData = function (data, mimeType, encoding) {
+            __aiNativeWebCall(handle, 'loadData', JSON.stringify([
+                String(data), String(mimeType === undefined ? 'text/html' : mimeType),
+                String(encoding === undefined ? 'utf-8' : encoding)
+            ]));
+        };
+        injector.reload = function () { __aiNativeWebCall(handle, 'reload', '[]'); };
+        injector.stopLoading = function () { __aiNativeWebCall(handle, 'stopLoading', '[]'); };
+        injector.getUrl = function () {
+            var text = __aiNativeWebCall(handle, 'getUrl', '[]');
+            if (typeof text !== 'string' || text === '') return null;
+            var result = JSON.parse(text);
+            return result.t === 's' ? result.v : null;
+        };
+        return injector;
+    }
+    function createWebInjector(withView) {
+        var handle = Number(__aiNativeWebCreate(withView));
+        if (!handle) throw new Error('无法创建 WebView（当前环境没有可用的 Activity/上下文）');
+        return wrapWebInjector(handle);
+    }
+    global.newInjectableWebView = function () { return createWebInjector(true); };
+    global.newInjectableWebClient = function () { return createWebInjector(false); };
+    global.web = Object.freeze({
+        newInjectableWebView: global.newInjectableWebView,
+        newInjectableWebClient: global.newInjectableWebClient
+    });
+
+    // ---- continuation 模块 ----
+    // Rhino 用 Continuation 实现阻塞式等待；QuickJS 是单线程执行模型，没有可挂起的 continuation，
+    // 所以 delay 退化为阻塞 sleep，await/create 明确报错引导到 await 语法，enabled 报告 false。
+    var continuation = {
+        delay: function (millis) { sleep(Number(millis) || 0); },
+        await: function () {
+            throw new Error('QuickJS 不支持 continuation.await（无 continuation 特性）；请使用 await 语法或 .then() 回调');
+        },
+        create: function () {
+            throw new Error('QuickJS 不支持 continuation.create（无 continuation 特性）；请使用 await 语法或 .then() 回调');
+        }
+    };
+    Object.defineProperty(continuation, 'enabled', {
+        get: function () { return false; },
+        enumerable: true,
+        configurable: false
+    });
+    global.continuation = Object.freeze(continuation);
+    if (global.Promise && global.Promise.prototype.await === undefined) {
+        Object.defineProperty(global.Promise.prototype, 'await', {
+            value: function () {
+                throw new Error('QuickJS 不支持 Promise.await；请使用 await 语法');
+            },
+            enumerable: false,
+            configurable: true,
+            writable: true
+        });
+    }
 
     // ---- Top level Auto.js 4.x aliases ----
     global.print = global.console.log;
@@ -5897,7 +6153,9 @@ const char kBootstrapScript[] = R"JS(
         context: global.context,
         rawInput: global.rawInput,
         sqlite: global.sqlite,
-        io: global.io
+        io: global.io,
+        web: global.web,
+        continuation: global.continuation
     };
 
     // ---- CommonJS module system (require) ----
@@ -6063,6 +6321,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSqliteOpen", nativeSqliteOpen, 2);
     installNativeFunction(state->context, global, "__aiNativeSqliteCall", nativeSqliteCall, 3);
     installNativeFunction(state->context, global, "__aiNativeConsoleCall", nativeConsoleCall, 2);
+    installNativeFunction(state->context, global, "__aiNativeWebCreate", nativeWebCreate, 1);
+    installNativeFunction(state->context, global, "__aiNativeWebCall", nativeWebCall, 3);
+    installNativeFunction(state->context, global, "__aiNativePostJsCallbackAsync",
+                          nativePostJsCallbackAsync, 2);
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
@@ -6235,6 +6497,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     JS_FreeValue(state->context, bootstrap);
 
     const jlong handle = gNextHandle.fetch_add(1);
+    state->handle = handle;
     {
         std::lock_guard<std::mutex> lock(gEnginesMutex);
         gEngines.emplace(handle, state);
@@ -6339,6 +6602,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
             throwQuickJs(env, timerError.empty() ? "Timer callback failed" : timerError);
             return nullptr;
         }
+        pumpJavaJsTasks(state, state->context);
         waitForNextTimer(state.get());
     }
 

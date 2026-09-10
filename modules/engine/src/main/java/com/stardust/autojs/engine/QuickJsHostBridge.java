@@ -90,7 +90,8 @@ import okhttp3.ResponseBody;
  * Deliberately small Java/Native API boundary for QuickJS. New native APIs
  * should be added here instead of exposing arbitrary Java reflection to JS.
  */
-final class QuickJsHostBridge implements AutoCloseable {
+final class QuickJsHostBridge implements AutoCloseable,
+        com.stardust.autojs.core.web.QuickJsWebScriptHost {
 
     private final ScriptRuntime mRuntime;
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
@@ -3271,6 +3272,214 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
         String result = QuickJsNativeBridge.invokeJsCallback(engineHandle, callbackId, argsJson);
         return result == null ? "{}" : result;
+    }
+
+    // ------------------------------------------------------------------
+    // 跨线程 JS 任务（WebView 页面回调、注入结果回调等）
+    //
+    // 非引擎线程只把任务放进队列，真正的 JS 调用由 native 事件循环在引擎线程上取出执行
+    // （`__aiRunJsTask`），避免多线程同时进入 QuickJS 上下文。
+    // ------------------------------------------------------------------
+
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> mJsTasks =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    /** native 事件循环用：当前排队的任务数。 */
+    public int pendingJsTaskCount() {
+        return mJsTasks.size();
+    }
+
+    /** native 事件循环用：取出一个任务（JSON 描述）。 */
+    public String takePendingJsTask() {
+        return mJsTasks.poll();
+    }
+
+    /** native 事件循环用：任务执行失败时把原因写进脚本控制台。 */
+    public void reportJsTaskResult(String message) {
+        if (message == null || message.isEmpty()) {
+            return;
+        }
+        try {
+            mRuntime.console.error(message);
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", message);
+        }
+    }
+
+    /** 在其它线程里安排一次脚本回调（异步）。 */
+    public void postJsCallback(long callbackId, String argsJson) {
+        enqueueJsTask("callback", json -> {
+            json.put("id", callbackId);
+            json.put("args", argsJson == null || argsJson.isEmpty() ? "[]" : argsJson);
+        });
+    }
+
+    /** 在其它线程里安排一次脚本全局函数调用（页面里的 `rhino.call`）。 */
+    public void postJsFunctionCall(String functionName, String argsJson) {
+        enqueueJsTask("call", json -> {
+            json.put("name", functionName == null ? "" : functionName);
+            json.put("args", argsJson == null || argsJson.isEmpty() ? "[]" : argsJson);
+        });
+    }
+
+    /** 在其它线程里安排一次脚本求值（页面里的 `rhino.eval`）。 */
+    public void postJsEval(String script) {
+        enqueueJsTask("eval", json -> json.put("code", script == null ? "" : script));
+    }
+
+    private interface JsTaskEncoder {
+        void encode(JSONObject json) throws JSONException;
+    }
+
+    /** 从一个非引擎线程延迟安排回调（页面桥与回归测试都走这条路径）。 */
+    public void postJsCallbackDelayed(final long callbackId, final long delayMillis) {
+        mDialogHandler.postDelayed(() -> postJsCallback(callbackId, "[]"), Math.max(0, delayMillis));
+    }
+
+    // ---- QuickJsWebScriptHost：页面里的 rhino 桥 ----
+    @Override
+    public void postScriptCall(String name, String argsJson) {
+        postJsFunctionCall(name, argsJson);
+    }
+
+    @Override
+    public void postScriptEval(String script) {
+        postJsEval(script);
+    }
+
+    @Override
+    public void postScriptCallback(long callbackId, String value) {
+        String argsJson = new JSONArray().put(value == null ? "" : value).toString();
+        postJsCallback(callbackId, argsJson);
+    }
+
+    private void enqueueJsTask(String kind, JsTaskEncoder encoder) {
+        try {
+            JSONObject json = new JSONObject().put("kind", kind);
+            encoder.encode(json);
+            mJsTasks.add(json.toString());
+        } catch (JSONException impossible) {
+            Log.w("QuickJsHostBridge", "Cannot enqueue JS task: " + kind, impossible);
+        }
+    }
+
+    // ---- web 模块（QuickJS 版 InjectableWebView / InjectableWebClient）----
+    private final AtomicLong mNextWebHandle = new AtomicLong(1);
+    private final Map<Long, Object> mWebHandles = new ConcurrentHashMap<>();
+
+    /** UI 线程创建 WebView / WebViewClient，返回句柄；`withView=false` 只建客户端。 */
+    public long webCreate(boolean withView) {
+        final CountDownLatch latch = new CountDownLatch(1);
+        final long[] handle = new long[]{ 0 };
+        mDialogHandler.post(() -> {
+            try {
+                Object injector;
+                if (withView) {
+                    android.app.Activity activity = mRuntime.app.getCurrentActivity();
+                    Context context = activity != null ? activity : mRuntime.uiHandler.getContext();
+                    injector = new com.stardust.autojs.core.web.QuickJsInjectableWebView(context, this);
+                } else {
+                    injector = new com.stardust.autojs.core.web.QuickJsInjectableWebClient(this);
+                }
+                handle[0] = putWebHandle(injector);
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "Cannot create injectable web view", error);
+                handle[0] = 0;
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return handle[0];
+    }
+
+    /** web 对象方法分派（全部回到 UI 线程执行）。 */
+    public String webCall(long handle, String method, String argsJson) throws Exception {
+        Object target = mWebHandles.get(handle);
+        if (target == null) {
+            throw new IllegalStateException("WebView 句柄已失效：" + handle);
+        }
+        JSONArray args = new JSONArray(argsJson == null || argsJson.isEmpty() ? "[]" : argsJson);
+        return runOnUiThread(() -> {
+            try {
+                return invokeWebMethod(target, method, args);
+            } catch (Exception e) {
+                throw new IllegalStateException(e.getMessage(), e);
+            }
+        });
+    }
+
+    private String invokeWebMethod(Object target, String method, JSONArray args) throws Exception {
+        switch (method == null ? "" : method) {
+            case "inject":
+                injectScript(target, args.getString(0), args.optLong(1, 0));
+                return "{\"t\":\"v\"}";
+            case "loadUrl":
+                requireWebView(target).loadUrl(args.getString(0));
+                return "{\"t\":\"v\"}";
+            case "loadData":
+                requireWebView(target).loadData(args.getString(0), args.getString(1),
+                        args.length() > 2 ? args.getString(2) : "utf-8");
+                return "{\"t\":\"v\"}";
+            case "reload":
+                requireWebView(target).reload();
+                return "{\"t\":\"v\"}";
+            case "stopLoading":
+                requireWebView(target).stopLoading();
+                return "{\"t\":\"v\"}";
+            case "getUrl":
+                return new JSONObject().put("t", "s").put("v", requireWebView(target).getUrl()).toString();
+            default:
+                throw new IllegalArgumentException("不支持的 web 方法：" + method);
+        }
+    }
+
+    private void injectScript(Object target, String script, long callbackId) {
+        if (target instanceof com.stardust.autojs.core.web.QuickJsInjectableWebView) {
+            ((com.stardust.autojs.core.web.QuickJsInjectableWebView) target).inject(script, callbackId);
+            return;
+        }
+        ((com.stardust.autojs.core.web.QuickJsInjectableWebClient) target).inject(script, callbackId);
+    }
+
+    private android.webkit.WebView requireWebView(Object target) {
+        if (!(target instanceof android.webkit.WebView)) {
+            throw new IllegalStateException("该对象不是 WebView（newInjectableWebClient 只有 inject）");
+        }
+        return (android.webkit.WebView) target;
+    }
+
+    private long putWebHandle(Object value) {
+        long handle = mNextWebHandle.getAndIncrement();
+        mWebHandles.put(handle, value);
+        return handle;
+    }
+
+    /** 在 UI 线程执行并等待结果（桥里的 UI 操作统一走这里）。 */
+    private String runOnUiThread(java.util.concurrent.Callable<String> action) throws Exception {
+        final CountDownLatch latch = new CountDownLatch(1);
+        final String[] result = new String[1];
+        final Exception[] failure = new Exception[1];
+        mDialogHandler.post(() -> {
+            try {
+                result[0] = action.call();
+            } catch (Exception e) {
+                failure[0] = e;
+            } catch (Throwable error) {
+                failure[0] = new IllegalStateException(error);
+            } finally {
+                latch.countDown();
+            }
+        });
+        latch.await(10, TimeUnit.SECONDS);
+        if (failure[0] != null) {
+            throw failure[0];
+        }
+        return result[0];
     }
 
     /** 脚本谓词：UiGlobalSelector.filter(BooleanSupplier) 用。 */
