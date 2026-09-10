@@ -214,6 +214,24 @@ assert('选择器动作全局形式', typeof scrollForward === 'function' && typ
     && typeof copy === 'function' && typeof collapse === 'function' && typeof contextClick === 'function');
 assert('顶层 select（对话框语义）', typeof select === 'function');
 
+// --- 手势 / 输入 / RootShell 按键助手 ---
+assert('gesture/gestureAsync', typeof gesture === 'function' && typeof gestureAsync === 'function');
+assert('gestures/gesturesAsync', typeof gestures === 'function' && typeof gesturesAsync === 'function');
+assert('input', typeof input === 'function');
+assert('RootShell 按键助手', typeof KeyCode === 'function' && typeof Tap === 'function'
+    && typeof Swipe === 'function' && typeof Screencap === 'function' && typeof Text === 'function'
+    && typeof Home === 'function' && typeof Back === 'function' && typeof Power === 'function'
+    && typeof Up === 'function' && typeof Down === 'function' && typeof Left === 'function'
+    && typeof Right === 'function' && typeof OK === 'function' && typeof VolumeUp === 'function'
+    && typeof VolumeDown === 'function' && typeof Menu === 'function' && typeof Camera === 'function');
+home();
+sleep(800);
+var gestureX = Math.round(device.width / 2);
+var gestureFrom = Math.round(device.height * 0.7);
+var gestureTo = Math.round(device.height * 0.5);
+assert('gesture 真实滑动', typeof gesture(200, [gestureX, gestureFrom], [gestureX, gestureTo]) === 'boolean');
+assert('gestures 真实滑动', typeof gestures([0, 200, [gestureX, gestureFrom], [gestureX, gestureTo]]) === 'boolean');
+
 console.log('\n=== 回归测试完成: ' + pass + ' 通过, ' + fail + ' 失败 ===');
 if (fail > 0) {
     throw new Error('QuickJS 全模块回归失败: ' + fail + ' 项未通过');

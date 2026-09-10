@@ -1,12 +1,14 @@
 package com.stardust.autojs.engine;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.accessibilityservice.GestureDescription;
 import android.app.Activity;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.hardware.Sensor;
@@ -366,6 +368,88 @@ final class QuickJsHostBridge implements AutoCloseable {
      */
     public void setScreenMetrics(int width, int height) {
         mRuntime.setScreenMetrics(width, height);
+    }
+
+    // ---- 多指手势 / 文本输入 ----
+
+    /**
+     * 单指手势路径（Auto.js 的 `gesture(duration, [x, y], ...)`）：
+     * 点坐标交给 Automator，它会按 ScreenMetrics 缩放（与 Rhino 一致）。
+     */
+    public boolean gesture(int start, int duration, String pointsJson, boolean async) throws JSONException {
+        int[][] points = parseGesturePoints(pointsJson);
+        if (async) {
+            mRuntime.automator.gestureAsync((long) start, (long) duration, points);
+            return true;
+        }
+        return mRuntime.automator.gesture((long) start, (long) duration, points);
+    }
+
+    /**
+     * 多指手势（Auto.js 的 `gestures([start, duration, [x, y], ...], ...)`）：
+     * Rhino 在 JS 层拼 StrokeDescription；白名单桥不给脚本 Java 类，改由宿主拼。
+     */
+    public boolean gestures(String strokesJson, boolean async) throws JSONException {
+        GestureDescription.StrokeDescription[] strokes = parseStrokes(strokesJson);
+        if (async) {
+            mRuntime.automator.gesturesAsync(strokes);
+            return true;
+        }
+        return mRuntime.automator.gestures(strokes);
+    }
+
+    /** Auto.js 的 input(text)：向当前聚焦的输入框追加文本（无障碍 ACTION_APPEND_TEXT）。 */
+    public boolean inputText(String text) {
+        return mRuntime.automator.appendText(mRuntime.automator.editable(-1), text == null ? "" : text);
+    }
+
+    private int[][] parseGesturePoints(String json) throws JSONException {
+        JSONArray points = new JSONArray(json == null || json.isEmpty() ? "[]" : json);
+        int[][] result = new int[points.length()][2];
+        for (int i = 0; i < points.length(); i++) {
+            JSONArray point = points.getJSONArray(i);
+            result[i][0] = point.getInt(0);
+            result[i][1] = point.getInt(1);
+        }
+        return result;
+    }
+
+    private GestureDescription.StrokeDescription[] parseStrokes(String json) throws JSONException {
+        JSONArray strokes = new JSONArray(json == null || json.isEmpty() ? "[]" : json);
+        GestureDescription.StrokeDescription[] result =
+                new GestureDescription.StrokeDescription[strokes.length()];
+        for (int i = 0; i < strokes.length(); i++) {
+            JSONArray stroke = strokes.getJSONArray(i);
+            long start = 0;
+            long duration;
+            int pointIndex;
+            // [delay, duration, [x, y], ...] 或 [delay, [x, y], ...]（与 Rhino 的 toStrokes 一致）。
+            if (stroke.length() > 1 && stroke.get(1) instanceof Number) {
+                start = stroke.getLong(0);
+                duration = stroke.getLong(1);
+                pointIndex = 2;
+            } else {
+                duration = stroke.getLong(0);
+                pointIndex = 1;
+            }
+            Path path = new Path();
+            JSONArray first = stroke.getJSONArray(pointIndex);
+            path.moveTo(scaleX(first.getInt(0)), scaleY(first.getInt(1)));
+            for (int j = pointIndex + 1; j < stroke.length(); j++) {
+                JSONArray point = stroke.getJSONArray(j);
+                path.lineTo(scaleX(point.getInt(0)), scaleY(point.getInt(1)));
+            }
+            result[i] = new GestureDescription.StrokeDescription(path, start, duration);
+        }
+        return result;
+    }
+
+    private float scaleX(int value) {
+        return (float) mRuntime.getScreenMetrics().scaleX(value);
+    }
+
+    private float scaleY(int value) {
+        return (float) mRuntime.getScreenMetrics().scaleY(value);
     }
 
     public boolean click(int x, int y) {

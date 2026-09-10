@@ -1473,6 +1473,57 @@ JSValue nativeAutoCall(JSContext *context, JSValueConst, int argc, JSValueConst 
     return JS_NewStringLen(context, text.data(), text.size());
 }
 
+JSValue nativeGesture(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 3) {
+        return JS_ThrowTypeError(context, "gesture(start, duration, points, async) requires three arguments");
+    }
+    int32_t start = 0;
+    int32_t duration = 0;
+    if (JS_ToInt32(context, &start, argv[0]) < 0 || JS_ToInt32(context, &duration, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "gesture start/duration must be numbers");
+    }
+    const std::string points = jsString(context, argv[2]);
+    const bool async = argc > 3 && JS_ToBool(context, argv[3]) == 1;
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "gesture", "(IILjava/lang/String;Z)Z");
+    jstring javaPoints = toJavaString(env, points);
+    const jboolean result = env->CallBooleanMethod(state->host, method, start, duration, javaPoints,
+                                                  async ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(javaPoints);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeGestures(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string strokes = argc > 0 ? jsString(context, argv[0]) : std::string("[]");
+    const bool async = argc > 1 && JS_ToBool(context, argv[1]) == 1;
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "gestures", "(Ljava/lang/String;Z)Z");
+    jstring javaStrokes = toJavaString(env, strokes);
+    const jboolean result = env->CallBooleanMethod(state->host, method, javaStrokes,
+                                                  async ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(javaStrokes);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeInputText(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string text = argc > 0 ? jsString(context, argv[0]) : std::string();
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "inputText", "(Ljava/lang/String;)Z");
+    jstring javaText = toJavaString(env, text);
+    const jboolean result = env->CallBooleanMethod(state->host, method, javaText);
+    env->DeleteLocalRef(javaText);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
 JSValue nativeSetScreenMetrics(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int32_t width = 0;
     int32_t height = 0;
@@ -4963,6 +5014,61 @@ const char kBootstrapScript[] = R"JS(
         };
     });
 
+    // ---- 多指手势 / 文本输入 / RootShell 按键助手 ----
+    global.gesture = function (duration) {
+        var points = Array.prototype.slice.call(arguments, 1);
+        return __aiNativeGesture(0, Math.round(Number(duration)), JSON.stringify(points), false);
+    };
+    global.gestureAsync = function (duration) {
+        var points = Array.prototype.slice.call(arguments, 1);
+        return __aiNativeGesture(0, Math.round(Number(duration)), JSON.stringify(points), true);
+    };
+    global.gestures = function () {
+        return __aiNativeGestures(JSON.stringify(Array.prototype.slice.call(arguments)), false);
+    };
+    global.gesturesAsync = function () {
+        return __aiNativeGestures(JSON.stringify(Array.prototype.slice.call(arguments)), true);
+    };
+    global.input = function (text) {
+        return __aiNativeInputText(String(text == null ? '' : text));
+    };
+
+    // RootShell 同名助手（与 Rhino 的 __shell__.js 一致，需要 root）。
+    function rootShellCommand(command) {
+        if (typeof shell.isRootAvailable === 'function' && !shell.isRootAvailable()) {
+            throw new Error('该功能需要 root 权限');
+        }
+        return shell(command, { root: true });
+    }
+    global.KeyCode = function (keyCode) {
+        return rootShellCommand('input keyevent ' + Math.round(Number(keyCode)));
+    };
+    global.Tap = function (x, y) {
+        return rootShellCommand('input tap ' + Math.round(Number(x)) + ' ' + Math.round(Number(y)));
+    };
+    global.Swipe = function (x1, y1, x2, y2, duration) {
+        var command = 'input swipe ' + Math.round(Number(x1)) + ' ' + Math.round(Number(y1)) + ' '
+            + Math.round(Number(x2)) + ' ' + Math.round(Number(y2));
+        if (duration !== undefined) command += ' ' + Math.round(Number(duration));
+        return rootShellCommand(command);
+    };
+    global.Screencap = function (path) { return rootShellCommand('screencap -p ' + String(path)); };
+    global.Text = function (text) {
+        return rootShellCommand("input text '" + String(text).replace(/'/g, '').replace(/ /g, '%s') + "'");
+    };
+    global.Home = function () { return global.KeyCode(3); };
+    global.Back = function () { return global.KeyCode(4); };
+    global.Power = function () { return global.KeyCode(26); };
+    global.Up = function () { return global.KeyCode(19); };
+    global.Down = function () { return global.KeyCode(20); };
+    global.Left = function () { return global.KeyCode(21); };
+    global.Right = function () { return global.KeyCode(22); };
+    global.OK = function () { return global.KeyCode(23); };
+    global.VolumeUp = function () { return global.KeyCode(24); };
+    global.VolumeDown = function () { return global.KeyCode(25); };
+    global.Menu = function () { return global.KeyCode(1); };
+    global.Camera = function () { return global.KeyCode(27); };
+
     // ---- app / 文件快捷别名（Auto.js 4.x 顶层函数）----
     ['launch', 'launchApp', 'launchPackage', 'openAppSetting', 'getAppName', 'getPackageName']
         .forEach(function (name) {
@@ -5205,6 +5311,9 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeForegroundInfo", nativeForegroundInfo, 1);
     installNativeFunction(state->context, global, "__aiNativeSetScreenMetrics", nativeSetScreenMetrics, 2);
     installNativeFunction(state->context, global, "__aiNativeAutoCall", nativeAutoCall, 2);
+    installNativeFunction(state->context, global, "__aiNativeGesture", nativeGesture, 4);
+    installNativeFunction(state->context, global, "__aiNativeGestures", nativeGestures, 2);
+    installNativeFunction(state->context, global, "__aiNativeInputText", nativeInputText, 1);
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);

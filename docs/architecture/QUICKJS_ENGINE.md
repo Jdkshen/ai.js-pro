@@ -91,6 +91,10 @@ toast("这是 QuickJS 脚本");
 | `floaty` | 已接入 | `window(xmlOrConfig)` / `rawWindow` / `closeAll`；`window.<id>` 控件代理：`click` / `longClick` / `on("click"/"long_click"/"key")` / `onKey` / `getText` / `setText` / `setVisibility` / `setOnTouchListener` / `requestFocus`；窗口级 `setAdjustEnabled` / `isAdjustEnabled` / `getX` / `getY` / `requestFocus` / `disableFocus` / `exitOnClose()`（close 时退出脚本，与 Rhino 一致）；触摸/按键事件经有界队列回到引擎线程；QuickJS 无 E4X，XML 使用字符串 |
 | `ui` / `$ui` | 基础实现 | 支持 XML 布局、常用控件、点击和列表事件；`ui.run(fn)` 保持 Rhino 写法兼容；E4X/JSX、Java 反射与完整动态绑定仍需 Rhino |
 | `exit()` / `keys` | 已接入 | `exit()` 以正常完成结束脚本（不再报中断错误）；`keys.back/home/menu/enter` 等常量用于 `on("key")` 监听 |
+| 选择器 / UiObject | 已接入 | `selector()`、`text/id/desc/className/bounds` 等过滤器与动作挂在全局作用域，`find/findOnce/findOne/untilFind/untilFindOne/exists/waitFor` 与控件属性、动作、树访问直接复用 Rhino 的 `UiSelector`/`UiObject`/`UiObjectCollection` |
+| 手势与输入 | 已接入 | `gesture/gestureAsync`、`gestures/gesturesAsync`（多指，坐标经 `screenMetrics` 缩放）、`input(text)`（无障碍 ACTION_APPEND_TEXT）；`setScreenMetrics(w, h)` 与 `SetScreenMetrics` 均可用于分辨率适配 |
+| RootShell 按键助手 | 已接入 | `KeyCode/Tap/Swipe/Screencap/Text` 与 `Back/Home/Menu/Power/Camera/Up/Down/Left/Right/OK/VolumeUp/VolumeDown`，内部执行 `shell(cmd, {root:true})`，无 root 时抛出明确错误 |
+| 顶层兼容别名 | 已接入 | `print/err`、`random`、`sync`、`auto`（含 normal/fast 模式与 flags）、`setImmediate`/`clearImmediate`、`waitForActivity/WaitForPackage`、`launchApp`、`home` 等 Auto.js 4.x 顶层写法 |
 
 全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`：根目录保留入口脚本（`新模块快速上手.js`、`QuickJS 模块示例.js`、`QuickJS运行环境测试.js`），其余按分类存放——`悬浮窗/`、`图色处理/`、`YOLO目标检测/`、`引擎与线程/`、`界面与交互/`、`系统与设备/`、`文件与网络/`、`图像与视觉/`、`回归测试/`。
 
