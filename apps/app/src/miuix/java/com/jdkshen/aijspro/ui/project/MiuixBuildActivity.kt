@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -462,7 +463,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         if (showSplash && splashIconPath.isNotEmpty()) {
             appConfig.setSplashIcon(splashIconPath)
         }
-        // 没选自定义签名（或还没验证通过）时置空，保持 tiny-sign 的默认行为。
+        // 没选自定义签名（或还没验证通过）时置空，交给打包器注入 `.keyStore/` 里的本机身份；
+        // 密钥没验证通过的情况由 validate() 拦住，不会静默换成别的证书。
         // 判定放在 SigningOptions 里：只认「使用已有密钥库」会让新建签名静默失效。
         appConfig.setSigner(SigningOptions.signerFor(signingMode, signingKey, keyStoreAlias))
     }
@@ -472,15 +474,30 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
      * 用户不需要自备密钥库也能避开 tiny-sign 那份全世界共用的测试证书。
      */
     private fun generateSigningKey() {
-        // 名字可以改：默认名已经存在时就换个名（或者先去 .keyStore/ 把旧的删掉）。
-        val typed = newKeyStoreName.trim().ifEmpty { SigningOptions.DEFAULT_KEYSTORE_NAME }
-        val fileName = typed.replace(Regex("[/\\\\]"), "_")
-            .let { if (it.contains('.')) it else "$it.keystore" }
+        val fileName = SigningOptions.newKeyStoreFileName(newKeyStoreName)
         val target = File(keyStoreDir(), fileName)
         if (target.exists()) {
+            // 同名文件已经存在时不再当错误：密钥库是按名字认身份的，同名就是同一份。
+            // 直接载入并验证（口令本机记着），否则用户每点一次「生成」就多出一套证书，
+            // 之前签过的包反而再也覆盖升级不了。真想新建一份，改个名字就行。
+            if (SigningOptions.recordedPasswords(target).isEmpty() && keyStorePassword.isBlank()) {
+                signingKey = null
+                signingSummary = ""
+                signingError = getString(R.string.format_signing_key_exists, target.path)
+                return
+            }
+            keyStorePath = target.path
+            // 密钥口令留空，交给验证逻辑按「同上」处理，避免上一份密钥库的口令串进来。
+            keyPassword = ""
             signingKey = null
             signingSummary = ""
-            signingError = getString(R.string.format_signing_key_exists, target.path)
+            signingError = null
+            signingMode = SIGNING_MODE_EXISTING
+            persistSigningSettings()
+            Toast.makeText(
+                this, getString(R.string.format_signing_key_reused, fileName), Toast.LENGTH_SHORT
+            ).show()
+            verifySigningKey()
             return
         }
         signingError = null
@@ -579,8 +596,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     }
 
     /**
-     * 签名设置要跨页面、跨脚本保留：否则每进一次打包页就默默退回内置证书，
-     * 用户以为换了身份其实没换（报毒结果自然不会变）。
+     * 签名设置要跨页面、跨脚本保留：否则每进一次打包页就默默换回默认身份，
+     * 用户以为换了证书其实没换（报毒结果自然不会变）。
      * 口令存在应用私有 SharedPreferences（同 AutoX.js 的做法），密钥库本身仍在外部存储。
      */
     private fun persistSigningSettings() {
@@ -1340,8 +1357,9 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     }
 
     /**
-     * 签名：默认沿用 tiny-sign 内嵌的公共测试证书（所有打包应用共用同一身份），
-     * 选择签名后产物换成开发者自己的密钥身份，可与自己的其他版本互相覆盖安装。
+     * 签名：「自动」用 `.keyStore/` 里那份**本机身份**（一份身份服务所有打包应用，和 AutoX.js 一样），
+     * 「选择签名」换成用户指定的密钥库，「新建签名」在本机生成一套新的自签名证书。
+     * 不再有全世界共用的测试证书兜底：密钥没验证通过时打包会被拦住，而不是静默换证书。
      */
     @Composable
     private fun SigningCard() {
@@ -1409,7 +1427,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         horizontalAlignment = Alignment.End
                     ) {
-                        // 让用户决定叫什么：默认名字只能建一次，想再生成一份就得换名。
+                        // 让用户决定叫什么：同名的那份会被直接载入，想再生成一份就得换名。
                         TextField(
                             value = newKeyStoreName.ifEmpty { SigningOptions.DEFAULT_KEYSTORE_NAME },
                             onValueChange = { newKeyStoreName = it },
@@ -1417,6 +1435,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                             label = getString(R.string.text_new_key_store_name),
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
+                        )
+                        Text(
+                            getString(R.string.text_new_key_store_hint),
+                            modifier = Modifier.fillMaxWidth(),
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Start,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant
                         )
                         TextButton(
                             text = getString(R.string.text_generate_signing_key),

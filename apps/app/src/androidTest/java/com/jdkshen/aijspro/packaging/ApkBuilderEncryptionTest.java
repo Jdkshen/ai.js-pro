@@ -382,6 +382,29 @@ public class ApkBuilderEncryptionTest {
     }
 
     /**
+     * 回归：「新建签名」里填的名字 → 文件名。
+     *
+     * 默认名 `aijspro.keystore` 和本机身份（自动签名用的那份）同名属于常态，
+     * 所以这里必须稳定地算出同一个名字 —— 打包页据此判定「已存在 = 同一份身份」并直接载入，
+     * 而不是把用户堵在「已存在同名密钥库」的错误上（真实用户反馈：新建签名又不行了）。
+     */
+    @Test
+    public void newKeyStoreNameKeepsTheDefaultIdentityNameAndStaysAFileName() {
+        assertEquals("留空要用默认名，否则和本机身份对不上",
+                SigningOptions.DEFAULT_KEYSTORE_NAME,
+                SigningOptions.INSTANCE.newKeyStoreFileName(""));
+        assertEquals("照抄默认名也要落在同一份身份上",
+                SigningOptions.DEFAULT_KEYSTORE_NAME,
+                SigningOptions.INSTANCE.newKeyStoreFileName("aijspro.keystore"));
+        assertEquals("没写扩展名要补上",
+                "mykey.keystore", SigningOptions.INSTANCE.newKeyStoreFileName(" mykey "));
+        assertEquals("路径分隔符不能当目录用",
+                "a_b.keystore", SigningOptions.INSTANCE.newKeyStoreFileName("a/b"));
+        assertFalse("名字不能带着路径溜出 .keyStore/",
+                SigningOptions.INSTANCE.newKeyStoreFileName("../evil").contains("/"));
+    }
+
+    /**
      * 默认签名不得落到 tiny-sign 那份全世界共用的测试证书（CN=Test），也不能每个应用
      * 在产物旁边生成一个密钥库：统一用 `<脚本目录>/.keyStore/aijspro.keystore` 一份身份，
      * 而且重复打包要复用同一份（否则旧包永远升不了级）。

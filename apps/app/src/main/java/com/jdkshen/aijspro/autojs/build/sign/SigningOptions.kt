@@ -61,6 +61,17 @@ object SigningOptions {
      */
     const val DEFAULT_KEYSTORE_NAME = "aijspro.keystore"
 
+    /**
+     * 「新建签名」里用户填的名字 → `.keyStore/` 下的文件名。
+     * 留空用默认名；路径分隔符换成下划线（外面传进来的名字不能当路径用）；
+     * 没写扩展名就补 `.keystore`。
+     */
+    fun newKeyStoreFileName(typedName: String?): String {
+        val typed = typedName.orEmpty().trim().ifEmpty { DEFAULT_KEYSTORE_NAME }
+        val cleaned = typed.replace(Regex("[/\\\\]"), "_")
+        return if (cleaned.contains('.')) cleaned else "$cleaned.keystore"
+    }
+
     private val KEYSTORE_EXTENSIONS = setOf("jks", "keystore", "p12", "pfx", "bks")
 
     fun keyStoreDir(scriptDirPath: String): File = File(scriptDirPath, KEYSTORE_DIR_NAME)

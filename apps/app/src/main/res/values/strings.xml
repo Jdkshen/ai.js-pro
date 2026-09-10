@@ -381,9 +381,11 @@
     <string name="text_new_signing">新建签名</string>
     <string name="summary_signing_generate">在本机生成一套全新的自签名证书，产物身份唯一；口令会自动生成并回填，请自行妥善保存密钥库</string>
     <string name="text_generate_signing_key">生成密钥库</string>
-    <string name="text_new_key_store_name">文件名（默认 aijspro.keystore）</string>
+    <string name="text_new_key_store_name">密钥库文件名（默认 aijspro.keystore）</string>
+    <string name="text_new_key_store_hint">同名密钥库已存在时直接载入并验证，不会再生成第二份；要新的一份就换个名字</string>
     <string name="format_signing_generated">已生成：%1$s</string>
-    <string name="format_signing_key_exists">已存在同名密钥库：%1$s —— 换个文件名，或先把它删掉</string>
+    <string name="format_signing_key_exists">已存在同名密钥库：%1$s，而本机没有它的口令 —— 换个文件名，或改用「选择签名」载入它</string>
+    <string name="format_signing_key_reused">已存在同名密钥库，已直接载入：%1$s</string>
     <string name="summary_signing_default">密钥库集中在脚本目录下的 .keyStore 里，一份身份服务所有打包应用（和 AutoX.js 一样）；首次打包自动生成，之后固定复用，不再使用全世界共用的测试证书</string>
     <string name="summary_signing_custom">使用自己的密钥库，产物身份唯一，不再和其他应用共用证书</string>
     <string name="text_key_store_file">密钥库文件</string>
@@ -401,7 +403,7 @@
     <string name="text_signing_builtin_identity">本机自动生成</string>
     <string name="format_signing_auto_pending">首次打包时生成 %1$s</string>
     <string name="format_signing_auto_ready">本机专属 %1$s</string>
-    <string name="text_signing_unverified">尚未验证，打包仍会退回内置证书</string>
+    <string name="text_signing_unverified">尚未验证，打包前请先点「验证密钥」</string>
     <string name="format_build_signer">签名：%1$s</string>
     <string name="format_signing_recovered">旧密钥库 %1$s 打不开（本机没有它的口令），已改名备份并重新生成了一套身份；用过旧身份的已装应用需要先卸载</string>
     <string name="summary_signing_switch_hint">注意：换成新证书后无法覆盖安装旧证书签名的包，需先卸载</string>
