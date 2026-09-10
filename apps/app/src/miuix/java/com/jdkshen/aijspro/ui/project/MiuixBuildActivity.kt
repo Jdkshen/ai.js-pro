@@ -185,6 +185,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     /** 自动模式下即将使用的身份（首次打包时生成，之后固定复用）。 */
     private var autoIdentitySummary by mutableStateOf("")
+    /** 「新建签名」的用户自定义文件名（留空用默认名）。 */
+    private var newKeyStoreName by mutableStateOf("")
     private var signingSummary by mutableStateOf("")
     private var signingError by mutableStateOf<String?>(null)
 
@@ -470,7 +472,11 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
      * 用户不需要自备密钥库也能避开 tiny-sign 那份全世界共用的测试证书。
      */
     private fun generateSigningKey() {
-        val target = AutoSigningIdentity.identityFile()
+        // 名字可以改：默认名已经存在时就换个名（或者先去 .keyStore/ 把旧的删掉）。
+        val typed = newKeyStoreName.trim().ifEmpty { SigningOptions.DEFAULT_KEYSTORE_NAME }
+        val fileName = typed.replace(Regex("[/\\\\]"), "_")
+            .let { if (it.contains('.')) it else "$it.keystore" }
+        val target = File(keyStoreDir(), fileName)
         if (target.exists()) {
             signingKey = null
             signingSummary = ""
@@ -1398,11 +1404,20 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     else File(keyStorePath).name,
                     onClick = { openKeyStoreList() })
                 if (signingMode == SIGNING_MODE_NEW) {
-                    Row(
+                    Column(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.End
                     ) {
+                        // 让用户决定叫什么：默认名字只能建一次，想再生成一份就得换名。
+                        TextField(
+                            value = newKeyStoreName.ifEmpty { SigningOptions.DEFAULT_KEYSTORE_NAME },
+                            onValueChange = { newKeyStoreName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = getString(R.string.text_new_key_store_name),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
+                        )
                         TextButton(
                             text = getString(R.string.text_generate_signing_key),
                             onClick = { generateSigningKey() },

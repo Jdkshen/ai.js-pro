@@ -199,8 +199,9 @@
     <string name="text_new_signing">New key</string>
     <string name="summary_signing_generate">Mints a fresh self-signed certificate on this device so the app has a unique identity; the password is generated for you, keep the keystore safe</string>
     <string name="text_generate_signing_key">Create keystore</string>
+    <string name="text_new_key_store_name">File name (default aijspro.keystore)</string>
     <string name="format_signing_generated">Created: %1$s</string>
-    <string name="format_signing_key_exists">A keystore with that name already exists, remove or rename it first: %1$s</string>
+    <string name="format_signing_key_exists">A keystore with that name already exists: %1$s — pick another name, or delete it first</string>
     <string name="summary_signing_default">Keystores live in .keyStore under the script folder and one identity serves every packaged app (same as AutoX.js); created automatically on the first build, then reused. The shared test certificate is no longer used</string>
     <string name="summary_signing_custom">Sign with your own keystore so the app has a unique identity instead of a shared certificate</string>
     <string name="text_key_store_file">Keystore file</string>
