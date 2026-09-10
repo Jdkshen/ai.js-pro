@@ -1451,6 +1451,24 @@ JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValue
     return callStringHost(context, "getForegroundInfo", kind == "activity" ? "activity" : "package");
 }
 
+JSValue nativeSetScreenMetrics(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int32_t width = 0;
+    int32_t height = 0;
+    if (argc < 2 || JS_ToInt32(context, &width, argv[0]) < 0 || JS_ToInt32(context, &height, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "setScreenMetrics(width, height) requires two integers");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "setScreenMetrics", "(II)V");
+    env->CallVoidMethod(state->host, method, width, height);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_UNDEFINED;
+}
+
 // 控件选择器：Java 侧持句柄，JS 侧只拿到 long，不暴露对象。
 JSValue nativeSelectorCreate(JSContext *context, JSValueConst, int, JSValueConst *) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
@@ -2875,6 +2893,12 @@ const char kBootstrapScript[] = R"JS(
     global.getClip = __aiNativeGetClip;
     global.currentPackage = function () { return __aiNativeForegroundInfo('package'); };
     global.currentActivity = function () { return __aiNativeForegroundInfo('activity'); };
+    // 多分辨率适配：设了坐标系后，click/swipe/图色/找图都会按实际屏幕缩放（与 Rhino 同一份 ScreenMetrics）。
+    global.setScreenMetrics = function (width, height) {
+        __aiNativeSetScreenMetrics(Math.round(Number(width)), Math.round(Number(height)));
+    };
+    // Rhino 里 SetScreenMetrics 是 shell 模块的同名写法，这里统一到同一套坐标系。
+    global.SetScreenMetrics = global.setScreenMetrics;
 
     const frameState = new WeakMap();
     function wrapFrame(info, logicalSize) {
@@ -5054,6 +5078,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSetClip", nativeSetClip, 1);
     installNativeFunction(state->context, global, "__aiNativeGetClip", nativeGetClip, 0);
     installNativeFunction(state->context, global, "__aiNativeForegroundInfo", nativeForegroundInfo, 1);
+    installNativeFunction(state->context, global, "__aiNativeSetScreenMetrics", nativeSetScreenMetrics, 2);
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);

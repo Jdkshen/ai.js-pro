@@ -359,6 +359,14 @@ final class QuickJsHostBridge implements AutoCloseable {
         mRuntime.toast(message);
     }
 
+    /**
+     * 多分辨率适配：设置脚本坐标系后，点击、滑动、图色与找图的坐标都会按实际屏幕缩放。
+     * 与 Rhino 共用同一个 ScreenMetrics 实例（Automator/Images/Shell 已接好）。
+     */
+    public void setScreenMetrics(int width, int height) {
+        mRuntime.setScreenMetrics(width, height);
+    }
+
     public boolean click(int x, int y) {
         return mRuntime.automator.click(x, y);
     }

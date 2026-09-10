@@ -103,6 +103,15 @@ events.emit('regression-test', 123);
 assert('events.emit/on 传递值', eventResult === 123);
 events.removeAllListeners();
 
+// --- 分辨率适配 ---
+assert('setScreenMetrics', typeof setScreenMetrics === 'function');
+assert('SetScreenMetrics 别名', typeof SetScreenMetrics === 'function');
+setScreenMetrics(1080, 1920);
+assert('setScreenMetrics 调用不异常', true);
+// 还原成真实分辨率，避免影响后面的坐标类测试。
+setScreenMetrics(device.width, device.height);
+assert('setScreenMetrics 可还原', true);
+
 // --- 选择器 / UiObject（无障碍控件查找）---
 assert('selector', typeof selector === 'function');
 assert('text', typeof text === 'function');
@@ -117,8 +126,10 @@ assert('集合 size() 是数字', typeof uiNodes.size() === 'number');
 assert('集合 get() 与 empty()', typeof uiNodes.get(0) === 'object' || uiNodes.size() === 0);
 var clickableNodes = clickable(true).find();
 assert('clickable(true).find() 可用', typeof clickableNodes.size() === 'number');
-var anyNode = clickableNodes.size() > 0 ? clickableNodes.get(0) : uiNodes.get(0);
-assert('能取到控件对象', anyNode !== null && anyNode !== undefined && typeof anyNode.bounds === 'function');
+var anyNode = clickableNodes.size() > 0 ? clickableNodes.get(0) : uiNodes.get(0);if (anyNode === null || anyNode === undefined) {
+    // 刚启动时窗口还没稳定，带超时的 findOne 会等到控件出现（这也是阻塞路径的实际验证）。
+    anyNode = clickable(true).findOne(3000);
+}assert('能取到控件对象', anyNode !== null && anyNode !== undefined && typeof anyNode.bounds === 'function');
 if (anyNode !== null && anyNode !== undefined) {
     var nodeRect = anyNode.bounds();
     assert('控件 bounds() 返回矩形', nodeRect !== null && !isNaN(nodeRect.width())

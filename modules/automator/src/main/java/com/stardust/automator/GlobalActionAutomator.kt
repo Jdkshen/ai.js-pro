@@ -173,7 +173,9 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
     }
 
     private fun scaleY(y: Int): Int {
-        return mScreenMetrics?.scaleX(y) ?: y
+        // 上游一直误用了 scaleX：横竖缩放比不同时（例如 setScreenMetrics(1080, 1920) 打 1080x2248 屏）
+        // 纵向坐标会被按横向比例缩放，点位整体偏移。
+        return mScreenMetrics?.scaleY(y) ?: y
     }
 
     @RequiresApi(api = Build.VERSION_CODES.N)
