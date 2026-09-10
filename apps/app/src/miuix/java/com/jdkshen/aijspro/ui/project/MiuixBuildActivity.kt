@@ -128,9 +128,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var projectConfig: ProjectConfig? = null
 
     // ---- permission / runtime config state ----
-    private var permissions by mutableStateOf(PermissionCatalog.TEMPLATE_DEFAULTS)
+    private var permissions by mutableStateOf(PermissionCatalog.DEFAULT_DECLARED)
+    private var requestPermissions by mutableStateOf(PermissionCatalog.DEFAULT_REQUEST)
+    /** 0 = 权限声明（写入清单）, 1 = 启动时自动申请 */
+    private var permissionTab by mutableStateOf(0)
     private var permissionQuery by mutableStateOf("")
     private val permissionShow = mutableStateOf(false)
+    private lateinit var permissionDetails: PermissionDetails
     private var hideLogs by mutableStateOf(false)
     private var showSplash by mutableStateOf(true)
     private var splashText by mutableStateOf("")
@@ -170,6 +174,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        permissionDetails = PermissionDetails(this)
         setContentView(ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
@@ -230,6 +235,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             hideLogs = launchConfig.shouldHideLogs()
             showSplash = launchConfig.shouldShowSplash()
             splashText = launchConfig.splashText ?: ""
+            val projectRequest = launchConfig.requestPermissions
+            if (!projectRequest.isNullOrEmpty()) {
+                requestPermissions = projectRequest
+            }
             val projectSplash = File(file, "splash.png")
             if (projectSplash.isFile()) {
                 splashIconPath = projectSplash.path
@@ -354,6 +363,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             selected.filter { !PermissionCatalog.TEMPLATE_DEFAULTS.contains(it) })
         appConfig.setPermissionsToRemove(
             PermissionCatalog.TEMPLATE_DEFAULTS.filter { !selected.contains(it) })
+        appConfig.setRequestPermissions(requestPermissions.toList())
         appConfig.setHideLogs(hideLogs)
         appConfig.setShowSplash(showSplash)
         appConfig.setSplashText(splashText.trim())
@@ -363,10 +373,14 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     }
 
     private fun togglePermission(name: String) {
-        permissions = if (permissions.contains(name)) {
-            permissions - name
+        if (permissionTab == 0) {
+            permissions = if (permissions.contains(name)) permissions - name else permissions + name
         } else {
-            permissions + name
+            requestPermissions = if (requestPermissions.contains(name)) {
+                requestPermissions - name
+            } else {
+                requestPermissions + name
+            }
         }
     }
 
@@ -824,7 +838,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 modifier = Modifier.weight(1f)
             )
             Text(
-                getString(R.string.format_permission_count, permissions.size),
+                getString(R.string.format_permission_summary,
+                    permissions.size, requestPermissions.size),
                 fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.onBackgroundVariant
             )
@@ -833,6 +848,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 text = getString(R.string.text_config),
                 onClick = {
                     permissionQuery = ""
+                    permissionTab = 0
                     permissionShow.value = true
                 },
                 colors = ButtonDefaults.textButtonColorsPrimary()
@@ -921,6 +937,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     @Composable
     private fun PermissionDialog() {
+        val declaring = permissionTab == 0
+        val selected = if (declaring) permissions else requestPermissions
         SuperDialog(
             show = permissionShow,
             title = getString(R.string.text_permissions),
@@ -929,15 +947,18 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             }
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                PermissionTabRow()
                 TextField(
                     value = permissionQuery,
                     onValueChange = { permissionQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     label = getString(R.string.text_permission_search),
                     singleLine = true
                 )
                 Text(
-                    getString(R.string.summary_permission_template_hint),
+                    getString(
+                        if (declaring) R.string.summary_permission_template_hint
+                        else R.string.summary_permission_request_hint),
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
@@ -949,12 +970,17 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 ) {
                     TextButton(
                         text = getString(R.string.text_select_all),
-                        onClick = { permissions = PermissionCatalog.ALL.map { it.name } },
+                        onClick = {
+                            val all = PermissionCatalog.ALL.map { it.name }
+                            if (declaring) permissions = all else requestPermissions = all
+                        },
                         colors = ButtonDefaults.textButtonColorsPrimary()
                     )
                     TextButton(
                         text = getString(R.string.text_clear_selection),
-                        onClick = { permissions = emptyList() },
+                        onClick = {
+                            if (declaring) permissions = emptyList() else requestPermissions = emptyList()
+                        },
                         colors = ButtonDefaults.textButtonColorsPrimary()
                     )
                 }
@@ -972,7 +998,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                             )
                         }
                         items(entries, key = { it.name }) { entry ->
-                            PermissionItem(entry)
+                            PermissionItem(entry, selected.contains(entry.name))
                         }
                     }
                 }
@@ -991,6 +1017,39 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         }
     }
 
+    /** 两个维度：写入清单（声明）与启动时向用户申请，等价于 Pro 的两个 Tab。 */
+    @Composable
+    private fun PermissionTabRow() {
+        Row(Modifier.fillMaxWidth()) {
+            PermissionTab(
+                getString(R.string.text_permission_tab_declare),
+                permissionTab == 0, Modifier.weight(1f)) { permissionTab = 0 }
+            PermissionTab(
+                getString(R.string.text_permission_tab_request),
+                permissionTab == 1, Modifier.weight(1f)) { permissionTab = 1 }
+        }
+    }
+
+    @Composable
+    private fun PermissionTab(title: String, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
+        Column(
+            modifier.clickable(onClick = onClick),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                title,
+                fontSize = 14.sp,
+                color = if (active) MiuixTheme.colorScheme.primary
+                else MiuixTheme.colorScheme.onBackgroundVariant,
+                modifier = Modifier.padding(top = 10.dp, bottom = 8.dp)
+            )
+            Box(
+                Modifier.fillMaxWidth().height(2.dp).background(
+                    if (active) MiuixTheme.colorScheme.primary else Color.Transparent)
+            )
+        }
+    }
+
     private fun matchesQuery(entry: PermissionCatalog.Entry): Boolean {
         val query = permissionQuery.trim()
         if (query.isEmpty()) return true
@@ -1000,7 +1059,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     }
 
     @Composable
-    private fun PermissionItem(entry: PermissionCatalog.Entry) {
+    private fun PermissionItem(entry: PermissionCatalog.Entry, checked: Boolean) {
+        val info = permissionDetails.of(entry.name)
         Row(
             Modifier.fillMaxWidth()
                 .clickable { togglePermission(entry.name) }
@@ -1008,21 +1068,53 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(entry.label, fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        entry.label,
+                        fontSize = 15.sp,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    info?.let { PermissionLevelBadge(it.level) }
+                }
+                // 系统官方（已本地化）描述优先，拿不到时回退到目录里的自写说明。
+                val description = info?.description?.takeIf { it.isNotBlank() } ?: entry.summary
                 Text(
-                    entry.summary,
+                    description,
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
             Spacer(Modifier.width(12.dp))
-            Checkbox(
-                checked = permissions.contains(entry.name),
-                onCheckedChange = { togglePermission(entry.name) }
-            )
+            Checkbox(checked = checked, onCheckedChange = { togglePermission(entry.name) })
         }
+    }
+
+    @Composable
+    private fun PermissionLevelBadge(level: PermissionDetails.Level) {
+        val (textRes, color) = when (level) {
+            PermissionDetails.Level.DANGEROUS ->
+                R.string.text_permission_level_dangerous to Color(0xFFD32F2F)
+            PermissionDetails.Level.PRIVILEGED ->
+                R.string.text_permission_level_privileged to Color(0xFF1976D2)
+            PermissionDetails.Level.SIGNATURE ->
+                R.string.text_permission_level_signature to Color(0xFF7B1FA2)
+            else -> return
+        }
+        Text(
+            getString(textRes),
+            fontSize = 10.sp,
+            color = color,
+            modifier = Modifier
+                .padding(start = 6.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(color.copy(alpha = 0.12f))
+                .padding(horizontal = 5.dp, vertical = 1.dp)
+        )
     }
 
     private fun displayName(path: String): String {

@@ -2,6 +2,8 @@ package com.stardust.autojs.project;
 
 import com.google.gson.annotations.SerializedName;
 
+import java.util.List;
+
 /**
  * Created by Stardust on 2018/1/25.
  */
@@ -16,6 +18,9 @@ public class LaunchConfig {
 
     @SerializedName("splashText")
     private String mSplashText;
+
+    @SerializedName("requestPermissions")
+    private List<String> mRequestPermissions;
 
     public boolean shouldHideLogs() {
         return mHideLogs;
@@ -46,6 +51,19 @@ public class LaunchConfig {
 
     public void setSplashText(String splashText) {
         mSplashText = splashText;
+    }
+
+    /**
+     * Runtime permissions the packaged app asks for on start-up. Null/empty keeps the
+     * runtime default (storage + phone state), so packages made before this field existed
+     * behave exactly as before.
+     */
+    public List<String> getRequestPermissions() {
+        return mRequestPermissions;
+    }
+
+    public void setRequestPermissions(List<String> requestPermissions) {
+        mRequestPermissions = requestPermissions;
     }
 
 }

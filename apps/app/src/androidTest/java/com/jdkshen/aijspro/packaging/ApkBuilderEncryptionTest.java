@@ -14,6 +14,7 @@ import com.stardust.autojs.engine.encryption.ScriptEncryption;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.util.MD5;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 
@@ -74,7 +75,11 @@ public class ApkBuilderEncryptionTest {
                 .setHideLogs(true)
                 .setShowSplash(true)
                 .setSplashText("打包测试")
-                .setSplashIcon(splashFile.getAbsolutePath());
+                .setSplashIcon(splashFile.getAbsolutePath())
+                // 打包页的“启动时自动申请权限”。
+                .setRequestPermissions(Arrays.asList(
+                        "android.permission.WRITE_EXTERNAL_STORAGE",
+                        "android.permission.CAMERA"));
         // sign() repackages the workspace into out.apk, so it has to run before the
         // packaged artifact can be parsed below.
         new ApkBuilder(template, outApk, workspace.getPath())
@@ -149,6 +154,12 @@ public class ApkBuilderEncryptionTest {
         assertTrue("hideLogs should be persisted", launchConfig.getBoolean("hideLogs"));
         assertTrue("showSplash should be persisted", launchConfig.getBoolean("showSplash"));
         assertEquals("打包测试", launchConfig.getString("splashText"));
+        // 启动时自动申请权限：inrt SplashActivity 读回该列表发请求，不能多也不能少。
+        JSONArray requestPermissions = launchConfig.getJSONArray("requestPermissions");
+        assertEquals(2, requestPermissions.length());
+        assertEquals("android.permission.WRITE_EXTERNAL_STORAGE",
+                requestPermissions.getString(0));
+        assertEquals("android.permission.CAMERA", requestPermissions.getString(1));
 
         // 6) 启动界面图片应作为资源写进 assets/project/splash.png。
         assertArrayEquals(readBytes(splashFile),

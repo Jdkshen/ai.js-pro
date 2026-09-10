@@ -34,6 +34,85 @@ object PermissionCatalog {
         "android.permission.WRITE_SECURE_SETTINGS"
     )
 
+    /**
+     * Auto.js Pro 9.3.11「配置权限 → 权限声明」的默认勾选集（59 条，实机采集）。
+     * 拿来当我们的推荐默认值；与 [TEMPLATE_DEFAULTS] 取并集后使用，
+     * 这样既对齐 Pro 的推荐能力，又不会把模板自带权限取消掉。
+     */
+    val PRO_DEFAULT_DECLARED: List<String> = listOf(
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_LOCATION_EXTRA_COMMANDS",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BROADCAST_STICKY",
+        "android.permission.CALL_PHONE",
+        "android.permission.CAMERA",
+        "android.permission.CHANGE_NETWORK_STATE",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+        "android.permission.CHANGE_WIFI_STATE",
+        "android.permission.DISABLE_KEYGUARD",
+        "android.permission.EXPAND_STATUS_BAR",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.GET_ACCOUNTS",
+        "android.permission.GET_PACKAGE_SIZE",
+        "android.permission.GET_TASKS",
+        "android.permission.INTERNET",
+        "android.permission.KILL_BACKGROUND_PROCESSES",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.NFC",
+        "android.permission.PERSISTENT_ACTIVITY",
+        "android.permission.PROCESS_OUTGOING_CALLS",
+        "android.permission.READ_CALENDAR",
+        "android.permission.READ_CONTACTS",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.READ_SMS",
+        "android.permission.READ_SYNC_SETTINGS",
+        "android.permission.READ_SYNC_STATS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.RECEIVE_MMS",
+        "android.permission.RECEIVE_SMS",
+        "android.permission.RECEIVE_WAP_PUSH",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.REORDER_TASKS",
+        "android.permission.REQUEST_DELETE_PACKAGES",
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+        "android.permission.RESTART_PACKAGES",
+        "android.permission.SEND_SMS",
+        "android.permission.SET_TIME_ZONE",
+        "android.permission.SET_WALLPAPER",
+        "android.permission.SET_WALLPAPER_HINTS",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.USE_SIP",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.WRITE_SETTINGS",
+        "android.permission.WRITE_SYNC_SETTINGS",
+        "com.android.alarm.permission.SET_ALARM",
+        "com.android.launcher.permission.INSTALL_SHORTCUT",
+        "com.android.launcher.permission.UNINSTALL_SHORTCUT",
+        "moe.shizuku.manager.permission.API_V23"
+    )
+
+    /** 打开页面时的初始勾选：Pro 推荐集 + 模板自带权限（取并集，不会误删模板能力）。 */
+    val DEFAULT_DECLARED: List<String> =
+        (PRO_DEFAULT_DECLARED + TEMPLATE_DEFAULTS).distinct()
+
+    /**
+     * 打包产物在启动时自动申请的运行时权限（“启动时自动申请权限” 页的默认值）。
+     * 与 Auto.js Pro 一致，默认只申请存储权限；用户可自行增删。
+     */
+    val DEFAULT_REQUEST: List<String> = listOf(
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+    )
+
     private fun entry(name: String, label: String, summary: String) = Entry(name, label, summary)
 
     /**

@@ -30,9 +30,12 @@ import android.content.pm.PackageManager.PERMISSION_DENIED
 
 class SplashActivity : AppCompatActivity() {
 
+    private var launchConfig: LaunchConfig? = null
+
     override fun onCreate(@Nullable savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val launchConfig = launchConfig()
+        val launchConfig = readLaunchConfig()
+        this.launchConfig = launchConfig
         // "显示启动界面" can be disabled at packaging time: the runtime then starts the
         // script immediately instead of flashing a splash screen.
         if (launchConfig != null && !launchConfig.shouldShowSplash()) {
@@ -50,7 +53,7 @@ class SplashActivity : AppCompatActivity() {
         }
     }
 
-    private fun launchConfig(): LaunchConfig? {
+    private fun readLaunchConfig(): LaunchConfig? {
         return try {
             ProjectConfig.fromAssets(this, ProjectConfig.configFileOfDir(PROJECT_ASSET_DIR))?.launchConfig
         } catch (e: Exception) {
@@ -79,8 +82,15 @@ class SplashActivity : AppCompatActivity() {
     }
 
     private fun main() {
-        checkPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                Manifest.permission.READ_PHONE_STATE)
+        // "启动时自动申请权限" 由打包页配置；未配置时沿用旧行为（存储 + 手机状态）。
+        val configured = launchConfig?.requestPermissions
+        android.util.Log.d(TAG, "launchConfig=" + launchConfig + " request=" + configured)
+        if (configured.isNullOrEmpty()) {
+            checkPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.READ_PHONE_STATE)
+        } else {
+            checkPermission(*configured.toTypedArray())
+        }
     }
 
 
@@ -130,6 +140,7 @@ class SplashActivity : AppCompatActivity() {
 
     companion object {
 
+        private const val TAG = "InrtSplash"
         private const val PERMISSION_REQUEST_CODE = 11186
         private const val INIT_TIMEOUT: Long = 2500
         private const val PROJECT_ASSET_DIR = "project"

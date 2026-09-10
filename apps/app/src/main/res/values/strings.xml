@@ -370,7 +370,14 @@
     <string name="text_launch_config">运行配置</string>
     <string name="text_permissions">权限</string>
     <string name="format_permission_count">%1$d 个权限</string>
+    <string name="format_permission_summary">声明 %1$d · 启动申请 %2$d</string>
     <string name="text_permission_search">搜索权限</string>
+    <string name="text_permission_tab_declare">权限声明</string>
+    <string name="text_permission_tab_request">启动时自动申请</string>
+    <string name="summary_permission_request_hint">应用启动时向用户申请这些权限，建议只勾选必需项</string>
+    <string name="text_permission_level_dangerous">危险</string>
+    <string name="text_permission_level_privileged">特权</string>
+    <string name="text_permission_level_signature">签名</string>
     <string name="text_select_all">全选</string>
     <string name="text_clear_selection">清空</string>
     <string name="summary_permission_template_hint">取消模板自带权限可能导致脚本功能异常，仅按需增删</string>

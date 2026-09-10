@@ -162,7 +162,14 @@
 
     <string name="text_permissions">Permissions</string>
     <string name="format_permission_count">%1$d permissions</string>
+    <string name="format_permission_summary">%1$d declared · %2$d requested</string>
     <string name="text_permission_search">Search permissions</string>
+    <string name="text_permission_tab_declare">Declared</string>
+    <string name="text_permission_tab_request">Request on start</string>
+    <string name="summary_permission_request_hint">Asked for when the packaged app starts; keep only what is needed</string>
+    <string name="text_permission_level_dangerous">Dangerous</string>
+    <string name="text_permission_level_privileged">Privileged</string>
+    <string name="text_permission_level_signature">Signature</string>
     <string name="text_select_all">Select all</string>
     <string name="text_clear_selection">Clear</string>
     <string name="summary_permission_template_hint">Removing template permissions may break script features</string>

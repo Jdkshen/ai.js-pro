@@ -16,6 +16,7 @@ import com.stardust.util.MD5;
 
 import com.jdkshen.aijspro.R;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -385,6 +386,17 @@ public class ApkBuilder {
                 }
                 launchConfig.put("hideLogs", config.hideLogs);
                 launchConfig.put("showSplash", config.showSplash);
+                if (config.requestPermissions != null && !config.requestPermissions.isEmpty()) {
+                    JSONArray requestPermissions = new JSONArray();
+                    for (String permission : config.requestPermissions) {
+                        if (permission != null && permission.length() > 0) {
+                            requestPermissions.put(permission);
+                        }
+                    }
+                    launchConfig.put("requestPermissions", requestPermissions);
+                } else {
+                    launchConfig.remove("requestPermissions");
+                }
                 if (config.splashText != null && config.splashText.length() > 0) {
                     launchConfig.put("splashText", config.splashText);
                 } else {
@@ -465,6 +477,7 @@ public class ApkBuilder {
         private Callable<Bitmap> icon;
         private List<String> permissionsToAdd;
         private List<String> permissionsToRemove;
+        private List<String> requestPermissions;
         private boolean hideLogs = false;
         private boolean showSplash = true;
         private String splashText;
@@ -486,6 +499,7 @@ public class ApkBuilder {
                 config.hideLogs = launchConfig.shouldHideLogs();
                 config.showSplash = launchConfig.shouldShowSplash();
                 config.splashText = launchConfig.getSplashText();
+                config.requestPermissions = launchConfig.getRequestPermissions();
             }
             File projectSplash = new File(source, "splash.png");
             if (projectSplash.isFile()) {
@@ -553,6 +567,15 @@ public class ApkBuilder {
         /** Skip the log screen and run the script right after launch. */
         public AppConfig setHideLogs(boolean hideLogs) {
             this.hideLogs = hideLogs;
+            return this;
+        }
+
+        /**
+         * Runtime permissions the packaged app requests on start-up. Empty means "keep the
+         * runtime default" (storage + phone state).
+         */
+        public AppConfig setRequestPermissions(List<String> requestPermissions) {
+            this.requestPermissions = requestPermissions;
             return this;
         }
 

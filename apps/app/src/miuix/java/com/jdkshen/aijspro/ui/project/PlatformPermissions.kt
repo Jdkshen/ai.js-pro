@@ -1,5 +1,44 @@
 package com.jdkshen.aijspro.ui.project
 
+import android.content.Context
+import android.content.pm.PackageManager
+import android.content.pm.PermissionInfo
+
+/**
+ * 从系统读取权限的保护级别与官方（已本地化）描述，
+ * 用于在打包页上与 Auto.js Pro 一样展示「危险 / 特权 / 签名」徽章和系统解释文案。
+ * 第三方或系统未安装的权限拿不到信息时返回 null，界面回退到目录里的自写说明。
+ */
+internal class PermissionDetails(context: Context) {
+
+    private val packageManager: PackageManager = context.packageManager
+    private val cache = HashMap<String, Info?>()
+
+    data class Info(val level: Level, val description: String?)
+
+    enum class Level { NORMAL, DANGEROUS, PRIVILEGED, SIGNATURE }
+
+    fun of(permission: String): Info? = cache.getOrPut(permission) {
+        try {
+            val info = packageManager.getPermissionInfo(permission, 0)
+            Info(levelOf(info.protectionLevel), info.loadDescription(packageManager)?.toString())
+        } catch (e: Exception) {
+            // 未在本机声明的权限（如第三方/新版权限）无法查询。
+            null
+        }
+    }
+
+    private fun levelOf(protectionLevel: Int): Level {
+        val privileged = protectionLevel and PermissionInfo.PROTECTION_FLAG_PRIVILEGED != 0
+        return when (protectionLevel and 0x3) {
+            PermissionInfo.PROTECTION_DANGEROUS -> Level.DANGEROUS
+            PermissionInfo.PROTECTION_SIGNATURE -> if (privileged) Level.PRIVILEGED else Level.SIGNATURE
+            0 -> if (privileged) Level.PRIVILEGED else Level.NORMAL
+            else -> Level.NORMAL
+        }
+    }
+}
+
 /**
  * Packaged-app permission catalogue supplied by the Android platform.
  *
