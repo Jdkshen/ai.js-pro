@@ -141,6 +141,12 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var splashIconPath by mutableStateOf("")
     private var splashIcon by mutableStateOf<Bitmap?>(null)
 
+    // ---- features (Pro 的“特性”组) ----
+    /** "" = 自动（Rhino）, "rhino", "quickjs" */
+    private var engine by mutableStateOf("")
+    private var includeAccessibility by mutableStateOf(true)
+    private var includeImageModule by mutableStateOf(true)
+
     // ---- build state ----
     private var busy by mutableStateOf(false)
     private var stage by mutableStateOf(R.string.apk_builder_prepare)
@@ -239,6 +245,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             if (!projectRequest.isNullOrEmpty()) {
                 requestPermissions = projectRequest
             }
+            engine = config.engine ?: ""
             val projectSplash = File(file, "splash.png")
             if (projectSplash.isFile()) {
                 splashIconPath = projectSplash.path
@@ -367,6 +374,9 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         appConfig.setHideLogs(hideLogs)
         appConfig.setShowSplash(showSplash)
         appConfig.setSplashText(splashText.trim())
+        appConfig.setEngine(engine.ifEmpty { null })
+        appConfig.setIncludeAccessibility(includeAccessibility)
+        appConfig.setIncludeImageModule(includeImageModule)
         if (showSplash && splashIconPath.isNotEmpty()) {
             appConfig.setSplashIcon(splashIconPath)
         }
@@ -469,6 +479,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         AppConfigCard()
                     }
                     LaunchConfigCard()
+                    FeaturesCard()
                     errorText?.let {
                         Text(it, fontSize = 13.sp, color = Color(0xFFD32F2F),
                             modifier = Modifier.padding(start = 4.dp))
@@ -932,6 +943,64 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     modifier = Modifier.size(24.dp)
                 )
             }
+        }
+    }
+
+    /** Pro 的「特性」组：引擎 + 按需裁剪（无障碍 / 图色），直接决定产物内容与体积。 */
+    @Composable
+    private fun FeaturesCard() {
+        SmallTitle(getString(R.string.text_features))
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    getString(R.string.text_script_engine),
+                    fontSize = 16.sp,
+                    color = MiuixTheme.colorScheme.onSurface
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EngineChip(getString(R.string.text_engine_auto), engine.isEmpty()) { engine = "" }
+                    EngineChip("Rhino", engine == "rhino") { engine = "rhino" }
+                    EngineChip("QuickJS", engine == "quickjs") { engine = "quickjs" }
+                }
+                Text(
+                    getString(R.string.summary_script_engine),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                )
+            }
+            SuperSwitch(
+                title = getString(R.string.text_accessibility_service),
+                summary = getString(R.string.summary_include_accessibility),
+                checked = includeAccessibility,
+                onCheckedChange = { includeAccessibility = it }
+            )
+            SuperSwitch(
+                title = getString(R.string.text_image_module),
+                summary = getString(R.string.summary_include_image_module),
+                checked = includeImageModule,
+                onCheckedChange = { includeImageModule = it }
+            )
+        }
+    }
+
+    @Composable
+    private fun EngineChip(label: String, selected: Boolean, onClick: () -> Unit) {
+        Box(
+            Modifier.clip(RoundedCornerShape(8.dp))
+                .background(
+                    if (selected) MiuixTheme.colorScheme.primary
+                    else MiuixTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            Text(
+                label,
+                fontSize = 13.sp,
+                color = if (selected) Color.White else MiuixTheme.colorScheme.onSurface
+            )
         }
     }
 

@@ -44,6 +44,7 @@ public class ManifestEditor {
     private byte[] mManifestData;
     private List<String> mPermissionsToAdd;
     private List<String> mPermissionsToRemove;
+    private List<String> mComponentsToRemove;
 
 
     public ManifestEditor(InputStream manifestInputStream) {
@@ -88,12 +89,23 @@ public class ManifestEditor {
         return this;
     }
 
+    /**
+     * Removes whole components (service / activity / receiver / provider) declared with the
+     * given {@code android:name}, used by the packaging page's "features" switches
+     * (e.g. dropping the accessibility service from the packaged app).
+     */
+    public ManifestEditor setComponentsToRemove(List<String> componentNames) {
+        mComponentsToRemove = componentNames;
+        return this;
+    }
+
     public ManifestEditor commit() throws IOException {
         AxmlReader reader = new AxmlReader(StreamUtils.readAsBytes(mManifestInputStream));
         mManifestInputStream.close();
         MutableAxmlWriter writer = new MutableAxmlWriter();
         reader.accept(new DumpAdapter(writer));
         writer.applyPermissions(mPermissionsToAdd, mPermissionsToRemove);
+        writer.applyComponents(mComponentsToRemove);
         mManifestData = writer.toByteArray();
         return this;
     }
@@ -209,6 +221,14 @@ public class ManifestEditor {
             }
         }
 
+        /** Removes declared components by {@code android:name} from the application node. */
+        void applyComponents(List<String> namesToRemove) {
+            if (mManifestNode == null || namesToRemove == null || namesToRemove.isEmpty()) {
+                return;
+            }
+            mManifestNode.removeDescendantComponents(namesToRemove);
+        }
+
         private class MutableNodeImpl extends AxmlWriter.NodeImpl {
 
             /**
@@ -256,6 +276,26 @@ public class ManifestEditor {
                             && permissions.contains(node.mAndroidName)) {
                         it.remove();
                     }
+                }
+            }
+
+            /**
+             * Drops every descendant declaring one of {@code componentNames} through
+             * {@code android:name}, including its meta-data / intent-filter children.
+             * Components live under {@code <application>}, so the whole tree is walked.
+             */
+            void removeDescendantComponents(List<String> componentNames) {
+                for (Iterator<NodeImpl> it = children.iterator(); it.hasNext(); ) {
+                    NodeImpl child = it.next();
+                    if (!(child instanceof MutableNodeImpl)) {
+                        continue;
+                    }
+                    MutableNodeImpl node = (MutableNodeImpl) child;
+                    if (node.mAndroidName != null && componentNames.contains(node.mAndroidName)) {
+                        it.remove();
+                        continue;
+                    }
+                    node.removeDescendantComponents(componentNames);
                 }
             }
 

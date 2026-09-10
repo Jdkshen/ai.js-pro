@@ -182,4 +182,11 @@
     <string name="text_splash_icon">Splash image</string>
     <string name="text_invalid_image">Cannot read this image, pick a valid png/jpg file</string>
 
+    <string name="text_features">Features</string>
+    <string name="text_script_engine">Script engine</string>
+    <string name="text_engine_auto">Auto</string>
+    <string name="summary_script_engine">Default engine of the packaged app; Auto = Rhino (a script can still force // \@engine quickjs)</string>
+    <string name="summary_include_accessibility">When off the package does not declare the accessibility service</string>
+    <string name="text_image_module">Image / color module</string>
+    <string name="summary_include_image_module">When off the package drops ~70MB per ABI and loses find-image / OpenCV features</string>
 </resources>

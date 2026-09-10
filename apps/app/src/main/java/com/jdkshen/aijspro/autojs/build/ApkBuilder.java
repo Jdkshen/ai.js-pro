@@ -27,6 +27,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Callable;
@@ -43,6 +44,18 @@ public class ApkBuilder {
 
     /** Relative path of the optional custom splash image inside the packaged assets. */
     private static final String SPLASH_ASSET_PATH = "assets/project/splash.png";
+
+    /**
+     * 打包页“特性”开关关掉时要移除的东西：
+     *  - 无障碍服务声明（清单里的 service 节点）
+     *  - 图色模块（OpenCV 动态库，单 ABI 约 70MB）
+     */
+    private static final String ACCESSIBILITY_SERVICE =
+            "com.stardust.autojs.core.accessibility.AccessibilityService";
+    private static final String[] IMAGE_MODULE_LIBS = {
+            "libopencv_core.so", "libopencv_dnn.so", "libopencv_flann.so",
+            "libopencv_geometry.so", "libopencv_imgcodecs.so", "libopencv_imgproc.so",
+            "libopencv_java5.so", "libtbb.so"};
 
     public interface ProgressCallback {
         void onPrepare(ApkBuilder builder);
@@ -147,7 +160,37 @@ public class ApkBuilder {
         }
         copyProjectToWorkspace();
         copySplashIcon();
+        removeDisabledFeatures();
         return this;
+    }
+
+    /**
+     * Applies the packaging page's "features" switches by deleting what the template ships
+     * but the user does not want in the packaged app.
+     */
+    private void removeDisabledFeatures() {
+        if (mAppConfig == null || !mAppConfig.includeImageModule) {
+            if (mAppConfig != null) {
+                for (String lib : IMAGE_MODULE_LIBS) {
+                    deleteFileRecursively(new File(mWorkspacePath, "lib"), lib);
+                }
+            }
+        }
+    }
+
+    private void deleteFileRecursively(File dir, String fileName) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (child.isDirectory()) {
+                deleteFileRecursively(child, fileName);
+            } else if (fileName.equals(child.getName())) {
+                //noinspection ResultOfMethodCallIgnored
+                child.delete();
+            }
+        }
     }
 
     private void copyProjectToWorkspace() throws Exception {
@@ -247,6 +290,10 @@ public class ApkBuilder {
         }
         if (config.permissionsToRemove != null) {
             mManifestEditor.setPermissionsToRemove(config.permissionsToRemove);
+        }
+        if (!config.includeAccessibility) {
+            mManifestEditor.setComponentsToRemove(
+                    Collections.singletonList(ACCESSIBILITY_SERVICE));
         }
     }
 
@@ -378,6 +425,9 @@ public class ApkBuilder {
                 if (config.versionCode != -1) {
                     json.put("versionCode", config.versionCode);
                 }
+                if (config.engine != null && config.engine.length() > 0) {
+                    json.put("engine", config.engine);
+                }
                 // Runtime behaviour of the packaged app. The inrt launcher reads these
                 // values back (AssetsProjectLauncher / SplashActivity).
                 JSONObject launchConfig = json.optJSONObject("launchConfig");
@@ -482,6 +532,9 @@ public class ApkBuilder {
         private boolean showSplash = true;
         private String splashText;
         private String splashIconPath;
+        private String engine;
+        private boolean includeAccessibility = true;
+        private boolean includeImageModule = true;
         private final ArrayList<String> ignoredDirs = new ArrayList<>();
 
         public static AppConfig fromProjectConfig(String source, ProjectConfig projectConfig) {
@@ -494,6 +547,7 @@ public class ApkBuilder {
             if (projectConfig.getIcon() != null) {
                 config.icon = () -> BitmapFactory.decodeFile(projectConfig.getIcon());
             }
+            config.engine = projectConfig.getEngine(null);
             LaunchConfig launchConfig = projectConfig.getLaunchConfig();
             if (launchConfig != null) {
                 config.hideLogs = launchConfig.shouldHideLogs();
@@ -567,6 +621,27 @@ public class ApkBuilder {
         /** Skip the log screen and run the script right after launch. */
         public AppConfig setHideLogs(boolean hideLogs) {
             this.hideLogs = hideLogs;
+            return this;
+        }
+
+        /**
+         * Script engine of the packaged app: {@code "rhino"} or {@code "quickjs"};
+         * null keeps the runtime default.
+         */
+        public AppConfig setEngine(String engine) {
+            this.engine = engine;
+            return this;
+        }
+
+        /** When false the packaged app no longer declares the accessibility service. */
+        public AppConfig setIncludeAccessibility(boolean includeAccessibility) {
+            this.includeAccessibility = includeAccessibility;
+            return this;
+        }
+
+        /** When false the OpenCV libraries (约 70MB/ABI) are dropped from the package. */
+        public AppConfig setIncludeImageModule(boolean includeImageModule) {
+            this.includeImageModule = includeImageModule;
             return this;
         }
 

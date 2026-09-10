@@ -33,6 +33,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -79,7 +80,11 @@ public class ApkBuilderEncryptionTest {
                 // 打包页的“启动时自动申请权限”。
                 .setRequestPermissions(Arrays.asList(
                         "android.permission.WRITE_EXTERNAL_STORAGE",
-                        "android.permission.CAMERA"));
+                        "android.permission.CAMERA"))
+                // 打包页的“特性”：引擎 + 先掉无障碍与图色模块。
+                .setEngine("quickjs")
+                .setIncludeAccessibility(false)
+                .setIncludeImageModule(false);
         // sign() repackages the workspace into out.apk, so it has to run before the
         // packaged artifact can be parsed below.
         new ApkBuilder(template, outApk, workspace.getPath())
@@ -92,7 +97,8 @@ public class ApkBuilderEncryptionTest {
         //    GET_PERMISSIONS 才会填充 requestedPermissions（权限配置断言依赖它）。
         PackageInfo archiveInfo = context.getPackageManager()
                 .getPackageArchiveInfo(outApk.getPath(),
-                        PackageManager.GET_PROVIDERS | PackageManager.GET_PERMISSIONS);
+                        PackageManager.GET_PROVIDERS | PackageManager.GET_PERMISSIONS
+                                | PackageManager.GET_SERVICES);
         assertNotNull("packaged apk should be parseable", archiveInfo);
         assertEquals("com.example.encryptionprobe", archiveInfo.packageName);
         assertEquals("1.0.0", archiveInfo.versionName);
@@ -171,6 +177,29 @@ public class ApkBuilderEncryptionTest {
         assertNotNull("packaged apk should contain a launcher icon", packagedIcon);
         assertArrayEquals("launcher icon must be the user icon",
                 readBytes(iconFile), packagedIcon);
+
+        // 8) 特性开关：引擎写入 project.json，无障碍服务从清单移除，图库从产物删除。
+        assertEquals("quickjs", json.getString("engine"));
+        assertFalse("accessibility service must be dropped from the manifest",
+                hasService(archiveInfo, "com.stardust.autojs.core.accessibility.AccessibilityService"));
+        assertTrue("unrelated services must stay",
+                hasService(archiveInfo, "com.stardust.notification.NotificationListenerService"));
+        assertNull("opencv libraries must be removed",
+                readZipEntry(outApk, "libopencv_", ".so"));
+        assertNotNull("quickjs libraries must stay",
+                readZipEntry(outApk, "libquickjs", ".so"));
+    }
+
+    private static boolean hasService(PackageInfo info, String name) {
+        if (info.services == null) {
+            return false;
+        }
+        for (android.content.pm.ServiceInfo service : info.services) {
+            if (name.equals(service.name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void writePng(File file, int color) throws Exception {
@@ -184,7 +213,7 @@ public class ApkBuilderEncryptionTest {
         }
     }
 
-    /** First zip entry under res/ whose name contains {@code contains} and ends with {@code suffix}. */
+    /** First zip entry whose name contains {@code contains} and ends with {@code suffix}. */
     private static byte[] readZipEntry(File zipFile, String contains, String suffix) throws Exception {
         ZipFile zip = new ZipFile(zipFile);
         try {
@@ -192,7 +221,7 @@ public class ApkBuilderEncryptionTest {
             while (entries.hasMoreElements()) {
                 ZipEntry entry = entries.nextElement();
                 String name = entry.getName();
-                if (name.startsWith("res/") && name.contains(contains) && name.endsWith(suffix)) {
+                if (name.contains(contains) && name.endsWith(suffix)) {
                     return readStream(zip.getInputStream(entry));
                 }
             }
