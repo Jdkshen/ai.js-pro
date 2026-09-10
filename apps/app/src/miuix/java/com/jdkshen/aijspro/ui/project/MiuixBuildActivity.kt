@@ -1032,6 +1032,20 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                 )
+                // 选到危险权限时提醒：安全软件（含 MIUI 安装器）会对这类权限画像报风险。
+                val dangerousCount = if (declaring) {
+                    selected.count { permissionDetails.of(it)?.level == PermissionDetails.Level.DANGEROUS }
+                } else {
+                    0
+                }
+                if (dangerousCount > 0) {
+                    Text(
+                        getString(R.string.format_dangerous_permission_warning, dangerousCount),
+                        fontSize = 12.sp,
+                        color = Color(0xFFD32F2F),
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                    )
+                }
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
@@ -1045,6 +1059,16 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         },
                         colors = ButtonDefaults.textButtonColorsPrimary()
                     )
+                    if (declaring) {
+                        TextButton(
+                            text = getString(R.string.text_preset_pro),
+                            onClick = {
+                                permissions = (PermissionCatalog.PRO_DEFAULT_DECLARED
+                                        + PermissionCatalog.TEMPLATE_DEFAULTS).distinct()
+                            },
+                            colors = ButtonDefaults.textButtonColorsPrimary()
+                        )
+                    }
                     TextButton(
                         text = getString(R.string.text_clear_selection),
                         onClick = {

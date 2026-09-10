@@ -35,9 +35,9 @@ object PermissionCatalog {
     )
 
     /**
-     * Auto.js Pro 9.3.11「配置权限 → 权限声明」的默认勾选集（59 条，实机采集）。
-     * 拿来当我们的推荐默认值；与 [TEMPLATE_DEFAULTS] 取并集后使用，
-     * 这样既对齐 Pro 的推荐能力，又不会把模板自带权限取消掉。
+     * Auto.js Pro 9.3.11 权限页里的“推荐勾选集”（实机采集 59 条），
+     * 仅作为一键预设提供，**不做默认值**：它包含短信/联系人/相机等敏感权限，
+     * 写进产物后容易被安全软件标记为风险（MIUI 安装器实测会报 RiskWare）。
      */
     val PRO_DEFAULT_DECLARED: List<String> = listOf(
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -101,9 +101,8 @@ object PermissionCatalog {
         "moe.shizuku.manager.permission.API_V23"
     )
 
-    /** 打开页面时的初始勾选：Pro 推荐集 + 模板自带权限（取并集，不会误删模板能力）。 */
-    val DEFAULT_DECLARED: List<String> =
-        (PRO_DEFAULT_DECLARED + TEMPLATE_DEFAULTS).distinct()
+    /** 打开页面时的初始勾选：保持模板自带的权限集（= Auto.js Pro 产物的 17 条）不变。 */
+    val DEFAULT_DECLARED: List<String> = TEMPLATE_DEFAULTS
 
     /**
      * 打包产物在启动时自动申请的运行时权限（“启动时自动申请权限” 页的默认值）。

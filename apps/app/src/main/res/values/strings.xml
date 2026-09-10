@@ -386,6 +386,8 @@
     <string name="text_permission_level_privileged">特权</string>
     <string name="text_permission_level_signature">签名</string>
     <string name="text_select_all">全选</string>
+    <string name="text_preset_pro">Pro 推荐</string>
+    <string name="format_dangerous_permission_warning">已选 %1$d 条危险权限，安全软件可能提示风险，建议只保留脚本真正需要的</string>
     <string name="text_clear_selection">清空</string>
     <string name="summary_permission_template_hint">取消模板自带权限可能导致脚本功能异常，仅按需增删</string>
     <string name="text_hide_logs">隐藏日志</string>
