@@ -33,6 +33,8 @@ import com.stardust.autojs.core.accessibility.UiSelector;
 import com.stardust.autojs.core.http.MutableOkHttp;
 import com.stardust.autojs.core.inputevent.InputEventObserver;
 import com.stardust.autojs.core.inputevent.TouchObserver;
+import com.stardust.autojs.core.database.Database;
+import com.stardust.autojs.core.database.DatabaseResultSet;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
@@ -3353,6 +3355,145 @@ final class QuickJsHostBridge implements AutoCloseable {
         return (UiGlobalSelector) target;
     }
 
+    // ------------------------------------------------------------------
+    // sqlite 模块（复用 core/database 的 Database）
+    // ------------------------------------------------------------------
+
+    private final AtomicLong mNextSqliteHandle = new AtomicLong(1);
+    private final Map<Long, Database> mSqliteHandles = new ConcurrentHashMap<>();
+
+    public long sqliteOpen(String name, int version) {
+        Database database = version > 0
+                ? mRuntime.sqlite.open(name, version)
+                : mRuntime.sqlite.open(name);
+        long handle = mNextSqliteHandle.getAndIncrement();
+        mSqliteHandles.put(handle, database);
+        return handle;
+    }
+
+    /**
+     * 数据库方法分派：`exec`/`select`/`insert`/`update`/`delete`/`close` 与事务开关。
+     * 结果统一编码为 JSON（`{"insertId":n,"rowsAffected":m,"rows":[...]}`），无结果返回 "null"。
+     */
+    public String sqliteCall(long handle, String method, String argsJson) throws JSONException {
+        Database database = mSqliteHandles.get(handle);
+        if (database == null) {
+            throw new IllegalStateException("数据库句柄已失效（连接可能已关闭）");
+        }
+        JSONArray args = new JSONArray(argsJson == null || argsJson.isEmpty() ? "[]" : argsJson);
+        switch (method == null ? "" : method) {
+            case "exec": {
+                String sql = args.getString(0);
+                if (args.isNull(1)) {
+                    return encodeSqliteResult(database.exec(sql));
+                }
+                database.executeSql(sql, toSqliteArgs(args.optJSONArray(1)));
+                return "null";
+            }
+            case "select": {
+                String sql = args.getString(0);
+                DatabaseResultSet result = args.isNull(1)
+                        ? database.select(sql)
+                        : database.select(sql, toSqliteArgs(args.optJSONArray(1)));
+                return encodeSqliteResult(result);
+            }
+            case "insert":
+                return encodeSqliteResult(database.insert(args.getString(0), toSqliteValues(args.getJSONObject(1))));
+            case "update":
+                return encodeSqliteResult(database.update(args.getString(0), toSqliteValues(args.getJSONObject(1)),
+                        args.isNull(2) ? null : args.getString(2), toSqliteArgs(args.optJSONArray(3))));
+            case "delete":
+                return encodeSqliteResult(database.delete(args.getString(0),
+                        args.isNull(1) ? null : args.getString(1), toSqliteArgs(args.optJSONArray(2))));
+            case "begin":
+                sqliteWritable(database).beginTransaction();
+                return "null";
+            case "end":
+                android.database.sqlite.SQLiteDatabase writable = sqliteWritable(database);
+                if (writable.inTransaction()) {
+                    if (args.optBoolean(0)) {
+                        writable.setTransactionSuccessful();
+                    }
+                    writable.endTransaction();
+                }
+                return "null";
+            case "close":
+                database.close();
+                mSqliteHandles.remove(handle);
+                return "null";
+            default:
+                throw new IllegalArgumentException("sqlite 不支持的方法: " + method);
+        }
+    }
+
+    /**
+     * 事务：`Database` 只提供回调式 transaction，而回调要跨层调回 JS。
+     * 这里（宿主内部，非脚本可见）通过私有 `writable()` 拿同一个连接开关事务，
+     * 脚本层用 try/catch 包住，语义与 Rhino 的 begin/commit/rollback 一致。
+     */
+    private android.database.sqlite.SQLiteDatabase sqliteWritable(Database database) {
+        try {
+            Method method = Database.class.getDeclaredMethod("writable");
+            method.setAccessible(true);
+            return (android.database.sqlite.SQLiteDatabase) method.invoke(database);
+        } catch (Exception e) {
+            throw new IllegalStateException("无法开启数据库事务: " + e.getMessage(), e);
+        }
+    }
+
+    private String encodeSqliteResult(Object result) throws JSONException {
+        if (result == null) {
+            return "null";
+        }
+        if (!(result instanceof DatabaseResultSet)) {
+            return "null";
+        }
+        DatabaseResultSet set = (DatabaseResultSet) result;
+        JSONArray rows = new JSONArray();
+        if (set.rows != null) {
+            for (int i = 0; i < set.rows.length; i++) {
+                Object row = set.rows.item(i);
+                rows.put(row == null ? new JSONObject() : new JSONObject((Map<?, ?>) row));
+            }
+        }
+        JSONObject object = new JSONObject();
+        object.put("insertId", set.insertId);
+        object.put("rowsAffected", set.rowsAffected);
+        object.put("rows", rows);
+        return object.toString();
+    }
+
+    private Object[] toSqliteArgs(JSONArray array) throws JSONException {
+        if (array == null) {
+            return null;
+        }
+        Object[] result = new Object[array.length()];
+        for (int i = 0; i < array.length(); i++) {
+            result[i] = array.isNull(i) ? null : array.get(i);
+        }
+        return result;
+    }
+
+    private Map<String, Object> toSqliteValues(JSONObject object) throws JSONException {
+        Map<String, Object> values = new java.util.LinkedHashMap<>();
+        java.util.Iterator<String> keys = object.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            values.put(key, object.isNull(key) ? null : object.get(key));
+        }
+        return values;
+    }
+
+    private void closeSqliteHandles() {
+        for (Database database : new ArrayList<>(mSqliteHandles.values())) {
+            try {
+                database.close();
+            } catch (Throwable ignored) {
+            }
+        }
+        mSqliteHandles.clear();
+    }
+
     private void releaseAutomatorHandles() {
         mAutomatorHandles.clear();
         mAutomatorMethods.clear();
@@ -3370,6 +3511,7 @@ final class QuickJsHostBridge implements AutoCloseable {
         floatyCloseAll();
         uiClose();
         releaseAutomatorHandles();
+        closeSqliteHandles();
         for (android.app.AlertDialog dialog : new ArrayList<>(pendingDialogRegistry.values())) {
             try {
                 dialog.dismiss();

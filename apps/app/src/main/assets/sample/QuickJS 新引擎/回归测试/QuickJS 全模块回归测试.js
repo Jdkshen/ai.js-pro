@@ -279,6 +279,8 @@ assert('运行时状态全局', typeof isRunning === 'function' && typeof notSto
     && typeof isStopped === 'function' && typeof stop === 'function'
     && typeof requiresApi === 'function' && typeof requiresAutojsVersion === 'function'
     && isRunning() === true && isStopped() === false && isRunning === notStopped);
+assert('loop/isShuttingDown', typeof loop === 'function' && loop() === undefined
+    && typeof isShuttingDown === 'function' && isShuttingDown() === false);
 assert('requiresApi/requiresAutojsVersion', (function () {
     requiresApi(24);
     requiresAutojsVersion('1.0.0');
@@ -290,7 +292,46 @@ assert('requiresApi/requiresAutojsVersion', (function () {
 })());
 assert('require 内置模块', require('crypto') === crypto && require('zips') === zips
     && require('util') === util && require('automator') === automator
-    && require('context') === context && require('rawInput') === rawInput);
+    && require('context') === context && require('rawInput') === rawInput
+    && require('sqlite') === sqlite);
+assert('sqlite 建表/插入/查询/更新/删除', (function () {
+    var db = sqlite.open('quickjs-regression');
+    try {
+        db.exec('DROP TABLE IF EXISTS regression');
+        db.exec('CREATE TABLE regression (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, score REAL)');
+        var inserted = db.insert('regression', { name: '甲', score: 1.5 });
+        var second = db.insert('regression', { name: '乙', score: 2.5 });
+        var all = db.select('SELECT name, score FROM regression ORDER BY id');
+        var updated = db.update('regression', { score: 9.5 }, 'name = ?', ['甲']);
+        var after = db.select('SELECT score FROM regression WHERE name = ?', ['甲']);
+        var deleted = db.delete('regression', 'name = ?', ['乙']);
+        var rest = db.select('SELECT id FROM regression');
+        return inserted.rowsAffected === 1 && second.insertId > 0
+            && all.rows.length === 2 && all.rows[0].name === '甲'
+            && updated.rowsAffected === 1 && after.rows[0].score === 9.5
+            && deleted.rowsAffected === 1 && rest.rows.length === 1;
+    } finally {
+        db.close();
+    }
+})());
+assert('sqlite 事务回滚', (function () {
+    var db = sqlite.open('quickjs-regression');
+    try {
+        var threw = false;
+        try {
+            db.transaction(function (tx) {
+                tx.insert('regression', { name: '丙' });
+                throw new Error('rollback-probe');
+            });
+        } catch (e) { threw = true; }
+        var rows = db.select("SELECT name FROM regression WHERE name = '丙'");
+        db.transaction(function (tx) { tx.insert('regression', { name: '丁' }); });
+        var committed = db.select("SELECT name FROM regression WHERE name = '丁'");
+        return threw && rows.length === 0 && committed.rows.length === 1;
+    } finally {
+        db.close();
+    }
+})());
 
 console.log('\n=== 回归测试完成: ' + pass + ' 通过, ' + fail + ' 失败 ===');
 if (fail > 0) {

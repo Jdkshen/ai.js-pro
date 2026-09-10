@@ -157,7 +157,15 @@ public class Database {
             if (v == null) {
                 cv.putNull(entry.getKey());
             } else if (v instanceof Number) {
-                cv.put(entry.getKey(), ((Number) v).longValue());
+                Number number = (Number) v;
+                double decimal = number.doubleValue();
+                // 整数值仍按 long 写入（保持原有行为），带小数的值按 REAL 写入，
+                // 否则 JS/JSON 的 1.5 会被 longValue() 截断成 1。
+                if (Double.isFinite(decimal) && decimal == Math.rint(decimal)) {
+                    cv.put(entry.getKey(), number.longValue());
+                } else {
+                    cv.put(entry.getKey(), decimal);
+                }
             } else if (v instanceof Boolean) {
                 cv.put(entry.getKey(), (Boolean) v);
             } else if (v instanceof byte[]) {

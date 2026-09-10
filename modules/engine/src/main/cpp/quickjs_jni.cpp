@@ -1659,6 +1659,60 @@ JSValue nativeContextInfo(JSContext *context, JSValueConst, int argc, JSValueCon
     return value;
 }
 
+JSValue nativeSqliteOpen(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string name = argc > 0 ? jsString(context, argv[0]) : std::string();
+    int32_t version = 0;
+    if (argc > 1 && JS_ToInt32(context, &version, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "sqlite.open(name, version) version must be a number");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "sqliteOpen", "(Ljava/lang/String;I)J");
+    jstring javaName = toJavaString(env, name);
+    const jlong handle = env->CallLongMethod(state->host, methodId, javaName, version);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, handle);
+}
+
+JSValue nativeSqliteCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 2) {
+        return JS_ThrowTypeError(context, "sqlite call requires a handle and a method");
+    }
+    int64_t handle = 0;
+    if (JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "sqlite handle must be a number");
+    }
+    const std::string method = jsString(context, argv[1]);
+    const std::string args = argc > 2 ? jsString(context, argv[2]) : std::string("[]");
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "sqliteCall",
+                                          "(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaMethod = toJavaString(env, method);
+    jstring javaArgs = toJavaString(env, args);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(state->host, methodId,
+                                                               static_cast<jlong>(handle), javaMethod, javaArgs));
+    env->DeleteLocalRef(javaMethod);
+    env->DeleteLocalRef(javaArgs);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (result == nullptr) {
+        return JS_NULL;
+    }
+    const char *chars = env->GetStringUTFChars(result, nullptr);
+    JSValue value = JS_NewString(context, chars == nullptr ? "" : chars);
+    if (chars != nullptr) {
+        env->ReleaseStringUTFChars(result, chars);
+    }
+    env->DeleteLocalRef(result);
+    return value;
+}
+
 JSValue nativeSetScreenMetrics(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int32_t width = 0;
     int32_t height = 0;
@@ -5522,7 +5576,12 @@ const char kBootstrapScript[] = R"JS(
     global.isStopped = function () { return __aiNativeScriptStopped(); };
     global.notStopped = function () { return !__aiNativeScriptStopped(); };
     global.isRunning = global.notStopped;
+    global.isShuttingDown = global.isStopped;
     global.stop = global.exit;
+    // Rhino __timers__.js 的 loop() 已废弃：保留同名空实现（只给提示，不产生副作用）。
+    global.loop = function () {
+        console.warn('loop() has been deprecated and has no effect. Remove it from your code.');
+    };
     global.requiresApi = function (api) { __aiNativeRequiresApi(Math.round(Number(api))); };
 
     var appVersion = String(__aiNativeAppVersion()).split('|');
@@ -5547,6 +5606,67 @@ const char kBootstrapScript[] = R"JS(
         }
     };
 
+    // sqlite 模块：复用 core/database 的 Database，事务用 begin/end 包住脚本回调。
+    global.sqlite = (function () {
+        function decodeResult(json) {
+            if (json === null || json === undefined || json === 'null' || json === '') return null;
+            var parsed = JSON.parse(json);
+            var rows = parsed.rows || [];
+            return {
+                insertId: parsed.insertId,
+                rowsAffected: parsed.rowsAffected,
+                rows: rows,
+                length: rows.length,
+                item: function (index) { return rows[index]; }
+            };
+        }
+        function open(name, version) {
+            var handle = __aiNativeSqliteOpen(String(name),
+                version === undefined ? 0 : Math.round(Number(version)));
+            function call(method, args) {
+                return decodeResult(__aiNativeSqliteCall(handle, method, JSON.stringify(args)));
+            }
+            function sqlArgs(args) {
+                return args === undefined ? null : args;
+            }
+            var db = {
+                handle: handle,
+                exec: function (sql, args) { return call('exec', [String(sql), sqlArgs(args)]); },
+                executeSql: function (sql, args) { call('exec', [String(sql), sqlArgs(args)]); },
+                select: function (sql, args) { return call('select', [String(sql), sqlArgs(args)]); },
+                query: function (sql, args) { return call('select', [String(sql), sqlArgs(args)]); },
+                insert: function (table, values) {
+                    return call('insert', [String(table), values === undefined ? {} : values]);
+                },
+                update: function (table, values, whereClause, whereArgs) {
+                    return call('update', [String(table), values === undefined ? {} : values,
+                        whereClause === undefined ? null : String(whereClause), sqlArgs(whereArgs)]);
+                },
+                delete: function (table, whereClause, whereArgs) {
+                    return call('delete', [String(table),
+                        whereClause === undefined ? null : String(whereClause), sqlArgs(whereArgs)]);
+                },
+                // Rhino 的 transaction 会传 Transaction 对象，这里直接传 db（方法集一致）。
+                transaction: function (action) {
+                    if (typeof action !== 'function') {
+                        throw new TypeError('transaction(action) 需要一个函数参数');
+                    }
+                    call('begin', []);
+                    try {
+                        action(db);
+                        call('end', [true]);
+                    } catch (error) {
+                        call('end', [false]);
+                        throw error;
+                    }
+                },
+                close: function () { call('close', []); }
+            };
+            return db;
+        }
+        return Object.freeze({ open: open });
+    })();
+
     // 内置模块表：require('crypto') 等直接返回全局对象，同名文件仍可覆盖（磁盘优先）。
     var builtinModules = {
         crypto: global.crypto,
@@ -5554,7 +5674,8 @@ const char kBootstrapScript[] = R"JS(
         util: global.util,
         automator: global.automator,
         context: global.context,
-        rawInput: global.rawInput
+        rawInput: global.rawInput,
+        sqlite: global.sqlite
     };
 
     // ---- CommonJS module system (require) ----
@@ -5717,6 +5838,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeRequiresApi", nativeRequiresApi, 1);
     installNativeFunction(state->context, global, "__aiNativeAppVersion", nativeAppVersion, 0);
     installNativeFunction(state->context, global, "__aiNativeContextInfo", nativeContextInfo, 1);
+    installNativeFunction(state->context, global, "__aiNativeSqliteOpen", nativeSqliteOpen, 2);
+    installNativeFunction(state->context, global, "__aiNativeSqliteCall", nativeSqliteCall, 3);
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
