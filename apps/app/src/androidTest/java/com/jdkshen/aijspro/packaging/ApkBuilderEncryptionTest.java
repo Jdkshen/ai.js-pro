@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
+import android.graphics.Bitmap;
 
 import androidx.test.platform.app.InstrumentationRegistry;
 
@@ -20,7 +21,14 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -47,12 +55,26 @@ public class ApkBuilderEncryptionTest {
         writeText(script, "console.log('encryption probe');\nvar v = 1 + 1;\n");
 
         InputStream template = ApkBuilderPluginHelper.openTemplateApk(context);
+        File iconFile = new File(workDir, "icon.png");
+        writePng(iconFile, 0xFF3366FF);
+        File splashFile = new File(workDir, "splash-icon.png");
+        writePng(splashFile, 0xFF993366);
+
         ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
                 .setAppName("EncryptionProbe")
                 .setPackageName("com.example.encryptionprobe")
                 .setVersionName("1.0.0")
                 .setVersionCode(1)
-                .setSourcePath(script.getAbsolutePath());
+                .setSourcePath(script.getAbsolutePath())
+                .setIcon(iconFile.getAbsolutePath())
+                // 打包页的“权限配置”：一个新增、一个从模板移除，其余保持默认。
+                .setPermissionsToAdd(Arrays.asList("android.permission.CAMERA"))
+                .setPermissionsToRemove(Arrays.asList("android.permission.WRITE_SECURE_SETTINGS"))
+                // 打包页的“运行配置”。
+                .setHideLogs(true)
+                .setShowSplash(true)
+                .setSplashText("打包测试")
+                .setSplashIcon(splashFile.getAbsolutePath());
         // sign() repackages the workspace into out.apk, so it has to run before the
         // packaged artifact can be parsed below.
         new ApkBuilder(template, outApk, workspace.getPath())
@@ -62,8 +84,10 @@ public class ApkBuilderEncryptionTest {
                 .sign();
 
         // 0) APK 身份（包名/版本/authorities）必须来自 AppConfig，不能保留模板身份。
+        //    GET_PERMISSIONS 才会填充 requestedPermissions（权限配置断言依赖它）。
         PackageInfo archiveInfo = context.getPackageManager()
-                .getPackageArchiveInfo(outApk.getPath(), PackageManager.GET_PROVIDERS);
+                .getPackageArchiveInfo(outApk.getPath(),
+                        PackageManager.GET_PROVIDERS | PackageManager.GET_PERMISSIONS);
         assertNotNull("packaged apk should be parseable", archiveInfo);
         assertEquals("com.example.encryptionprobe", archiveInfo.packageName);
         assertEquals("1.0.0", archiveInfo.versionName);
@@ -108,6 +132,77 @@ public class ApkBuilderEncryptionTest {
         byte[] decrypted = ScriptEncryption.INSTANCE.decrypt(
                 packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
         assertEquals(readText(script), new String(decrypted, "UTF-8"));
+
+        // 4) 权限配置：新增的权限要进产物清单，取消的模板权限要被移除。
+        List<String> requestedPermissions = archiveInfo.requestedPermissions == null
+                ? new ArrayList<String>()
+                : Arrays.asList(archiveInfo.requestedPermissions);
+        assertTrue("CAMERA should be declared, got " + requestedPermissions,
+                requestedPermissions.contains("android.permission.CAMERA"));
+        assertFalse("WRITE_SECURE_SETTINGS should be removed, got " + requestedPermissions,
+                requestedPermissions.contains("android.permission.WRITE_SECURE_SETTINGS"));
+        assertTrue("untouched template permissions must survive, got " + requestedPermissions,
+                requestedPermissions.contains("android.permission.INTERNET"));
+
+        // 5) 运行配置：inrt 启动器读回这个 launchConfig 决定日志界面与启动屏。
+        JSONObject launchConfig = json.getJSONObject("launchConfig");
+        assertTrue("hideLogs should be persisted", launchConfig.getBoolean("hideLogs"));
+        assertTrue("showSplash should be persisted", launchConfig.getBoolean("showSplash"));
+        assertEquals("打包测试", launchConfig.getString("splashText"));
+
+        // 6) 启动界面图片应作为资源写进 assets/project/splash.png。
+        assertArrayEquals(readBytes(splashFile),
+                readBytes(new File(workspace, "assets/project/splash.png")));
+
+        // 7) 图标替换：产物里真正的 launcher icon 必须是用户选的图（旧实现写死了
+        //    res/mipmap-mdpi/ic_launcher.png，在资源名被缩短的模板上根本不生效）。
+        byte[] packagedIcon = readZipEntry(outApk, "ic_launcher", ".png");
+        assertNotNull("packaged apk should contain a launcher icon", packagedIcon);
+        assertArrayEquals("launcher icon must be the user icon",
+                readBytes(iconFile), packagedIcon);
+    }
+
+    private static void writePng(File file, int color) throws Exception {
+        Bitmap bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888);
+        bitmap.eraseColor(color);
+        FileOutputStream out = new FileOutputStream(file);
+        try {
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, out));
+        } finally {
+            out.close();
+        }
+    }
+
+    /** First zip entry under res/ whose name contains {@code contains} and ends with {@code suffix}. */
+    private static byte[] readZipEntry(File zipFile, String contains, String suffix) throws Exception {
+        ZipFile zip = new ZipFile(zipFile);
+        try {
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (name.startsWith("res/") && name.contains(contains) && name.endsWith(suffix)) {
+                    return readStream(zip.getInputStream(entry));
+                }
+            }
+        } finally {
+            zip.close();
+        }
+        return null;
+    }
+
+    private static byte[] readStream(InputStream in) throws Exception {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) >= 0) {
+                out.write(buffer, 0, read);
+            }
+        } finally {
+            in.close();
+        }
+        return out.toByteArray();
     }
 
     private static void deleteRecursively(File file) {

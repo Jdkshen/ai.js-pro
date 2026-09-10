@@ -2,9 +2,11 @@ package com.jdkshen.aijspro.ui.project
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.Environment
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -76,6 +78,7 @@ import io.reactivex.schedulers.Schedulers
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
@@ -83,6 +86,7 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.extra.SuperArrow
 import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.extra.SuperSwitch
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.MiuixPopupUtil
 import java.io.File
@@ -102,8 +106,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         private const val TAG = "MiuixBuildActivity"
         private const val PICKER_SOURCE = 0
         private const val PICKER_OUTPUT = 1
+        private const val PICKER_SPLASH = 2
         private val REGEX_PACKAGE_NAME =
             Pattern.compile("^([A-Za-z][A-Za-z\\d_]*\\.)+([A-Za-z][A-Za-z\\d_]*)$")
+        private val IMAGE_EXTENSIONS = listOf("png", "jpg", "jpeg", "webp")
+
+        private fun isImageFile(name: String): Boolean =
+            IMAGE_EXTENSIONS.contains(name.substringAfterLast('.', "").lowercase())
     }
 
     // ---- form state ----
@@ -118,6 +127,16 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var projectMode by mutableStateOf(false)
     private var projectConfig: ProjectConfig? = null
 
+    // ---- permission / runtime config state ----
+    private var permissions by mutableStateOf(PermissionCatalog.TEMPLATE_DEFAULTS)
+    private var permissionQuery by mutableStateOf("")
+    private val permissionShow = mutableStateOf(false)
+    private var hideLogs by mutableStateOf(false)
+    private var showSplash by mutableStateOf(true)
+    private var splashText by mutableStateOf("")
+    private var splashIconPath by mutableStateOf("")
+    private var splashIcon by mutableStateOf<Bitmap?>(null)
+
     // ---- build state ----
     private var busy by mutableStateOf(false)
     private var stage by mutableStateOf(R.string.apk_builder_prepare)
@@ -128,7 +147,9 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     // ---- picker state ----
     private val pickerShow = mutableStateOf(false)
-    private var pickerTarget = PICKER_SOURCE
+    // Observable: the dialog reads it while composing, so a plain field could keep a
+    // stale mode if the popup content is reused between openings.
+    private var pickerTarget by mutableStateOf(PICKER_SOURCE)
     private var pickerDir by mutableStateOf(File(Environment.getExternalStorageDirectory().path))
 
     private val disposables = CompositeDisposable()
@@ -178,6 +199,20 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         super.onDestroy()
     }
 
+    /**
+     * The page is launched from the explorer with a script/project path. When it is already
+     * on top Android delivers the new intent here instead of recreating the activity, so the
+     * form has to be re-targeted explicitly.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val newSource = intent.getStringExtra(BuildActivity.EXTRA_SOURCE)
+        if (!newSource.isNullOrEmpty() && newSource != source) {
+            applySource(File(newSource), fillDefaults = true)
+        }
+    }
+
     // ------------------------------------------------------------------
     // State helpers (mirror the legacy page's defaults and validation)
     // ------------------------------------------------------------------
@@ -189,6 +224,17 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             projectConfig = config
             projectMode = true
             output = File(file, config.buildDir).path
+            // 项目模式下运行配置来自项目内 project.json，打包时会原样写回，
+            // 所以打开页面时必须先回读，否则会把项目已有设置覆盖成默认值。
+            val launchConfig = config.launchConfig
+            hideLogs = launchConfig.shouldHideLogs()
+            showSplash = launchConfig.shouldShowSplash()
+            splashText = launchConfig.splashText ?: ""
+            val projectSplash = File(file, "splash.png")
+            if (projectSplash.isFile()) {
+                splashIconPath = projectSplash.path
+                splashIcon = BitmapFactory.decodeFile(projectSplash.path)
+            }
             return
         }
         projectConfig = null
@@ -205,11 +251,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         if (file.isDirectory) file.name else file.name.substringBeforeLast('.', file.name)
 
     private fun openPicker(target: Int) {
+        Log.d(TAG, "openPicker target=$target")
         pickerTarget = target
-        val startDir = if (target == PICKER_OUTPUT) {
-            output.ifEmpty { Pref.getScriptDirPath() }
-        } else {
-            source.takeIf { it.isNotEmpty() }?.let { File(it).parent }
+        val startDir = when (target) {
+            PICKER_OUTPUT -> output.ifEmpty { Pref.getScriptDirPath() }
+            PICKER_SPLASH -> splashIconPath.takeIf { it.isNotEmpty() }?.let { File(it).parent }
+                ?: Pref.getScriptDirPath()
+            else -> source.takeIf { it.isNotEmpty() }?.let { File(it).parent }
                 ?: Pref.getScriptDirPath()
         }
         val start = File(startDir)
@@ -219,10 +267,22 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     }
 
     private fun applyPicked(file: File) {
-        if (pickerTarget == PICKER_SOURCE) {
-            applySource(file, fillDefaults = appName.isBlank())
-        } else {
-            output = file.path
+        Log.d(TAG, "applyPicked target=$pickerTarget file=$file")
+        when (pickerTarget) {
+            PICKER_SOURCE -> applySource(file, fillDefaults = appName.isBlank())
+            PICKER_OUTPUT -> output = file.path
+            PICKER_SPLASH -> {
+                val bitmap = BitmapFactory.decodeFile(file.path)
+                if (bitmap == null) {
+                    // 扩展名是图片但内容不是（例如被改名的文本文件）：保持原选择并提示。
+                    splashIconPath = ""
+                    splashIcon = null
+                    Toast.makeText(this, R.string.text_invalid_image, Toast.LENGTH_SHORT).show()
+                } else {
+                    splashIconPath = file.path
+                    splashIcon = bitmap
+                }
+            }
         }
         MiuixPopupUtil.dismissDialog(pickerShow)
     }
@@ -264,21 +324,50 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     private fun createAppConfig(): ApkBuilder.AppConfig? {
         val config = projectConfig
-        if (config != null) {
-            return ApkBuilder.AppConfig.fromProjectConfig(source, config)
+        val appConfig = if (config != null) {
+            ApkBuilder.AppConfig.fromProjectConfig(source, config)
+        } else {
+            val code = versionCode.trim().toIntOrNull() ?: return null
+            val created = ApkBuilder.AppConfig()
+                .setAppName(appName.trim())
+                .setSourcePath(source)
+                .setPackageName(appPackageName.trim())
+                .setVersionName(versionName.trim())
+                .setVersionCode(code)
+            val bitmap = icon
+            if (bitmap != null) {
+                created.setIcon(Callable { bitmap })
+            }
+            created
         }
-        val code = versionCode.trim().toIntOrNull() ?: return null
-        val appConfig = ApkBuilder.AppConfig()
-            .setAppName(appName.trim())
-            .setSourcePath(source)
-            .setPackageName(appPackageName.trim())
-            .setVersionName(versionName.trim())
-            .setVersionCode(code)
-        val bitmap = icon
-        if (bitmap != null) {
-            appConfig.setIcon(Callable { bitmap })
-        }
+        applyLaunchConfig(appConfig)
         return appConfig
+    }
+
+    /**
+     * Permissions are sent to the packager as a diff against the template manifest: the
+     * template set stays untouched when the page is used with its defaults.
+     */
+    private fun applyLaunchConfig(appConfig: ApkBuilder.AppConfig) {
+        val selected = permissions
+        appConfig.setPermissionsToAdd(
+            selected.filter { !PermissionCatalog.TEMPLATE_DEFAULTS.contains(it) })
+        appConfig.setPermissionsToRemove(
+            PermissionCatalog.TEMPLATE_DEFAULTS.filter { !selected.contains(it) })
+        appConfig.setHideLogs(hideLogs)
+        appConfig.setShowSplash(showSplash)
+        appConfig.setSplashText(splashText.trim())
+        if (showSplash && splashIconPath.isNotEmpty()) {
+            appConfig.setSplashIcon(splashIconPath)
+        }
+    }
+
+    private fun togglePermission(name: String) {
+        permissions = if (permissions.contains(name)) {
+            permissions - name
+        } else {
+            permissions + name
+        }
     }
 
     // ------------------------------------------------------------------
@@ -365,6 +454,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         SourceAndOutputCards()
                         AppConfigCard()
                     }
+                    LaunchConfigCard()
                     errorText?.let {
                         Text(it, fontSize = 13.sp, color = Color(0xFFD32F2F),
                             modifier = Modifier.padding(start = 4.dp))
@@ -389,6 +479,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             MiuixPopupUtil.MiuixPopupHost()
         }
         FilePickerDialog()
+        PermissionDialog()
         SuccessDialog()
         FailureDialog()
     }
@@ -466,6 +557,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         colors = ButtonDefaults.textButtonColorsPrimary()
                     )
                 }
+                PermissionRow()
             }
         }
     }
@@ -484,6 +576,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 InfoRow(
                     getString(R.string.text_version_name),
                     "${config.versionName} (${config.versionCode})")
+                PermissionRow()
                 Text(
                     "使用项目目录中的 project.json 配置",
                     fontSize = 13.sp,
@@ -582,10 +675,15 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     @Composable
     private fun FilePickerDialog() {
         val outputMode = pickerTarget == PICKER_OUTPUT
+        val splashMode = pickerTarget == PICKER_SPLASH
         SuperDialog(
             show = pickerShow,
             title = getString(
-                if (outputMode) R.string.text_output_apk_path else R.string.text_source_file_path),
+                when (pickerTarget) {
+                    PICKER_OUTPUT -> R.string.text_output_apk_path
+                    PICKER_SPLASH -> R.string.text_splash_icon
+                    else -> R.string.text_source_file_path
+                }),
             // SuperDialog invokes onDismissRequest even while show == false; calling
             // dismissDialog there would clear the process-wide visibility flag and hide
             // an unrelated open dialog, so only do it when this dialog is actually open.
@@ -607,16 +705,20 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     if (parent != null) {
                         item { PickerRow(".. ${parent.name}") { pickerDir = parent } }
                     }
-                    item {
-                        PickerRow("使用此文件夹：${pickerDir.name}", highlight = true) {
-                            applyPicked(pickerDir)
+                    if (!splashMode) {
+                        item {
+                            PickerRow("使用此文件夹：${pickerDir.name}", highlight = true) {
+                                applyPicked(pickerDir)
+                            }
                         }
                     }
                     items(children) { child ->
-                        if (child.isDirectory) {
-                            PickerRow("${child.name}/") { pickerDir = child }
-                        } else if (!outputMode) {
-                            PickerRow(child.name) { applyPicked(child) }
+                        when {
+                            child.isDirectory -> PickerRow("${child.name}/") { pickerDir = child }
+                            splashMode -> if (isImageFile(child.name)) {
+                                PickerRow(child.name) { applyPicked(child) }
+                            }
+                            !outputMode -> PickerRow(child.name) { applyPicked(child) }
                         }
                     }
                 }
@@ -709,6 +811,216 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun PermissionRow() {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                getString(R.string.text_permissions),
+                fontSize = 16.sp,
+                color = MiuixTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                getString(R.string.format_permission_count, permissions.size),
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant
+            )
+            Spacer(Modifier.width(8.dp))
+            TextButton(
+                text = getString(R.string.text_config),
+                onClick = {
+                    permissionQuery = ""
+                    permissionShow.value = true
+                },
+                colors = ButtonDefaults.textButtonColorsPrimary()
+            )
+        }
+    }
+
+    @Composable
+    private fun LaunchConfigCard() {
+        SmallTitle(getString(R.string.text_launch_config))
+        Card(Modifier.fillMaxWidth()) {
+            SuperSwitch(
+                title = getString(R.string.text_hide_logs),
+                summary = getString(R.string.summary_hide_logs),
+                checked = hideLogs,
+                onCheckedChange = { hideLogs = it }
+            )
+            SuperSwitch(
+                title = getString(R.string.text_show_splash),
+                summary = getString(R.string.summary_show_splash),
+                checked = showSplash,
+                onCheckedChange = { showSplash = it }
+            )
+            if (showSplash) {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    TextField(
+                        value = splashText,
+                        onValueChange = { splashText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = getString(R.string.text_splash_text),
+                        singleLine = true
+                    )
+                    Text(
+                        getString(R.string.summary_splash_text),
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SplashIconTile()
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            getString(R.string.text_splash_icon),
+                            fontSize = 16.sp,
+                            color = MiuixTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            text = getString(R.string.text_select),
+                            onClick = { openPicker(PICKER_SPLASH) },
+                            colors = ButtonDefaults.textButtonColorsPrimary()
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun SplashIconTile() {
+        Box(
+            Modifier.size(52.dp).clip(RoundedCornerShape(14.dp))
+                .background(MiuixTheme.colorScheme.primary)
+                .clickable { openPicker(PICKER_SPLASH) },
+            contentAlignment = Alignment.Center
+        ) {
+            val bitmap = splashIcon
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Image(
+                    painter = painterResource(R.drawable.ic_add_white_48dp),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun PermissionDialog() {
+        SuperDialog(
+            show = permissionShow,
+            title = getString(R.string.text_permissions),
+            onDismissRequest = {
+                if (permissionShow.value) MiuixPopupUtil.dismissDialog(permissionShow)
+            }
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                TextField(
+                    value = permissionQuery,
+                    onValueChange = { permissionQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = getString(R.string.text_permission_search),
+                    singleLine = true
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        getString(R.string.summary_permission_template_hint),
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        text = getString(R.string.text_select_all),
+                        onClick = { permissions = PermissionCatalog.ALL.map { it.name } },
+                        colors = ButtonDefaults.textButtonColorsPrimary()
+                    )
+                    TextButton(
+                        text = getString(R.string.text_clear_selection),
+                        onClick = { permissions = emptyList() },
+                        colors = ButtonDefaults.textButtonColorsPrimary()
+                    )
+                }
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
+                    val groups = PermissionCatalog.GROUPS
+                        .map { group -> group to group.entries.filter { matchesQuery(it) } }
+                        .filter { it.second.isNotEmpty() }
+                    groups.forEach { (group, entries) ->
+                        item(key = "header-${group.title}") {
+                            Text(
+                                group.title,
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+                            )
+                        }
+                        items(entries, key = { it.name }) { entry ->
+                            PermissionItem(entry)
+                        }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(
+                        onClick = { MiuixPopupUtil.dismissDialog(permissionShow) },
+                        colors = ButtonDefaults.buttonColorsPrimary()
+                    ) {
+                        Text(getString(R.string.text_done))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun matchesQuery(entry: PermissionCatalog.Entry): Boolean {
+        val query = permissionQuery.trim()
+        if (query.isEmpty()) return true
+        return entry.label.contains(query, ignoreCase = true) ||
+            entry.name.contains(query, ignoreCase = true) ||
+            entry.summary.contains(query, ignoreCase = true)
+    }
+
+    @Composable
+    private fun PermissionItem(entry: PermissionCatalog.Entry) {
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable { togglePermission(entry.name) }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(entry.label, fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
+                Text(
+                    entry.summary,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Checkbox(
+                checked = permissions.contains(entry.name),
+                onCheckedChange = { togglePermission(entry.name) }
+            )
         }
     }
 

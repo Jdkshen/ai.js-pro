@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory;
 import com.stardust.autojs.apkbuilder.ApkPackager;
 import com.stardust.autojs.apkbuilder.ManifestEditor;
 import com.stardust.autojs.project.BuildInfo;
+import com.stardust.autojs.project.LaunchConfig;
 import com.stardust.autojs.project.ProjectConfig;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.pio.PFiles;
@@ -26,6 +27,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 
 /**
@@ -37,6 +39,9 @@ import java.util.concurrent.Callable;
  * scripts, re-sign) mirrors {@link com.stardust.autojs.apkbuilder.ApkBuilder}.</p>
  */
 public class ApkBuilder {
+
+    /** Relative path of the optional custom splash image inside the packaged assets. */
+    private static final String SPLASH_ASSET_PATH = "assets/project/splash.png";
 
     public interface ProgressCallback {
         void onPrepare(ApkBuilder builder);
@@ -140,6 +145,7 @@ public class ApkBuilder {
             buildArsc();
         }
         copyProjectToWorkspace();
+        copySplashIcon();
         return this;
     }
 
@@ -166,6 +172,23 @@ public class ApkBuilder {
                 }
             }
         }
+    }
+
+    /**
+     * Copies the user-selected splash image into the packaged assets. The inrt runtime
+     * picks it up from {@code assets/project/splash.png} when the splash screen is shown.
+     */
+    private void copySplashIcon() throws IOException {
+        if (mAppConfig == null || mAppConfig.splashIconPath == null) {
+            return;
+        }
+        File target = new File(mWorkspacePath, SPLASH_ASSET_PATH);
+        File parent = target.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+        StreamUtils.write(new FileInputStream(mAppConfig.splashIconPath),
+                new FileOutputStream(target));
     }
 
     private void notifyPrepare() {
@@ -218,21 +241,56 @@ public class ApkBuilder {
                 throw new UncheckedIOException(new IOException("Failed to replace icon", e));
             }
         }
+        if (config.permissionsToAdd != null) {
+            mManifestEditor.setPermissionsToAdd(config.permissionsToAdd);
+        }
+        if (config.permissionsToRemove != null) {
+            mManifestEditor.setPermissionsToRemove(config.permissionsToRemove);
+        }
     }
 
+    /**
+     * Replaces every launcher icon bitmap the template ships (density and shape variants)
+     * instead of a single hardcoded path, so the packaged app picks up the user icon
+     * regardless of how aapt2 laid the resources out.
+     */
     private void replaceIcon(Bitmap bitmap) throws IOException {
         if (bitmap == null) {
             return;
         }
-        String[] densities = {"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"};
-        String res = "res/mipmap-" + densities[0] + "/ic_launcher.png";
-        File iconFile = new File(mWorkspacePath, res);
-        if (!iconFile.getParentFile().exists()) {
-            iconFile.getParentFile().mkdirs();
+        List<File> targets = new ArrayList<>();
+        collectLauncherIcons(new File(mWorkspacePath, "res"), targets);
+        if (targets.isEmpty()) {
+            targets.add(new File(mWorkspacePath, "res/mipmap-mdpi/ic_launcher.png"));
         }
-        FileOutputStream out = new FileOutputStream(iconFile);
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
-        out.close();
+        for (File target : targets) {
+            File parent = target.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            FileOutputStream out = new FileOutputStream(target);
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+            out.close();
+        }
+    }
+
+    private void collectLauncherIcons(File dir, List<File> out) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (child.isDirectory()) {
+                collectLauncherIcons(child, out);
+            } else if (isLauncherIconFile(child.getName())) {
+                out.add(child);
+            }
+        }
+    }
+
+    private static boolean isLauncherIconFile(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.startsWith("ic_launcher") && lower.endsWith(".png");
     }
 
     private void buildArsc() {
@@ -319,6 +377,20 @@ public class ApkBuilder {
                 if (config.versionCode != -1) {
                     json.put("versionCode", config.versionCode);
                 }
+                // Runtime behaviour of the packaged app. The inrt launcher reads these
+                // values back (AssetsProjectLauncher / SplashActivity).
+                JSONObject launchConfig = json.optJSONObject("launchConfig");
+                if (launchConfig == null) {
+                    launchConfig = new JSONObject();
+                }
+                launchConfig.put("hideLogs", config.hideLogs);
+                launchConfig.put("showSplash", config.showSplash);
+                if (config.splashText != null && config.splashText.length() > 0) {
+                    launchConfig.put("splashText", config.splashText);
+                } else {
+                    launchConfig.remove("splashText");
+                }
+                json.put("launchConfig", launchConfig);
             }
             if (!json.has("name")) {
                 json.put("name", "");
@@ -391,6 +463,12 @@ public class ApkBuilder {
         private String versionName;
         private int versionCode = -1;
         private Callable<Bitmap> icon;
+        private List<String> permissionsToAdd;
+        private List<String> permissionsToRemove;
+        private boolean hideLogs = false;
+        private boolean showSplash = true;
+        private String splashText;
+        private String splashIconPath;
         private final ArrayList<String> ignoredDirs = new ArrayList<>();
 
         public static AppConfig fromProjectConfig(String source, ProjectConfig projectConfig) {
@@ -402,6 +480,16 @@ public class ApkBuilder {
             config.versionCode = projectConfig.getVersionCode();
             if (projectConfig.getIcon() != null) {
                 config.icon = () -> BitmapFactory.decodeFile(projectConfig.getIcon());
+            }
+            LaunchConfig launchConfig = projectConfig.getLaunchConfig();
+            if (launchConfig != null) {
+                config.hideLogs = launchConfig.shouldHideLogs();
+                config.showSplash = launchConfig.shouldShowSplash();
+                config.splashText = launchConfig.getSplashText();
+            }
+            File projectSplash = new File(source, "splash.png");
+            if (projectSplash.isFile()) {
+                config.splashIconPath = projectSplash.getPath();
             }
             return config;
         }
@@ -442,6 +530,46 @@ public class ApkBuilder {
 
         public AppConfig setIcon(Callable<Bitmap> icon) {
             this.icon = icon;
+            return this;
+        }
+
+        /**
+         * Permissions to declare on top of the template manifest. Pass null to leave the
+         * template permission set untouched.
+         */
+        public AppConfig setPermissionsToAdd(List<String> permissions) {
+            this.permissionsToAdd = permissions;
+            return this;
+        }
+
+        /**
+         * Template permissions to drop from the packaged manifest. Pass null to keep all.
+         */
+        public AppConfig setPermissionsToRemove(List<String> permissions) {
+            this.permissionsToRemove = permissions;
+            return this;
+        }
+
+        /** Skip the log screen and run the script right after launch. */
+        public AppConfig setHideLogs(boolean hideLogs) {
+            this.hideLogs = hideLogs;
+            return this;
+        }
+
+        public AppConfig setShowSplash(boolean showSplash) {
+            this.showSplash = showSplash;
+            return this;
+        }
+
+        /** Text shown on the splash screen; null/empty keeps the runtime default. */
+        public AppConfig setSplashText(String splashText) {
+            this.splashText = splashText;
+            return this;
+        }
+
+        /** Local image file copied into the package as the splash screen image. */
+        public AppConfig setSplashIcon(String splashIconPath) {
+            this.splashIconPath = splashIconPath;
             return this;
         }
 

@@ -6,6 +6,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+import java.util.Iterator;
+import java.util.List;
+
 import pxb.android.StringItem;
 import pxb.android.axml.AxmlReader;
 import pxb.android.axml.AxmlVisitor;
@@ -13,6 +16,7 @@ import pxb.android.axml.AxmlWriter;
 import pxb.android.axml.DumpAdapter;
 import pxb.android.axml.NodeVisitor;
 import pxb.android.axml.Util;
+import pxb.android.axml.ValueWrapper;
 
 import static pxb.android.axml.NodeVisitor.TYPE_STRING;
 
@@ -24,6 +28,13 @@ public class ManifestEditor {
 
 
     private static final String NS_ANDROID = "http://schemas.android.com/apk/res/android";
+    private static final String TAG_MANIFEST = "manifest";
+    private static final String TAG_APPLICATION = "application";
+    private static final String TAG_USES_PERMISSION = "uses-permission";
+    private static final String ATTR_NAME = "name";
+    /** android:name is a framework attribute with a fixed resource id. */
+    private static final int ANDROID_ATTR_NAME = 0x01010003;
+
     private InputStream mManifestInputStream;
     private int mVersionCode = -1;
     private String mVersionName;
@@ -31,6 +42,8 @@ public class ManifestEditor {
     private String mPackageName;
     private String mOriginalPackageName;
     private byte[] mManifestData;
+    private List<String> mPermissionsToAdd;
+    private List<String> mPermissionsToRemove;
 
 
     public ManifestEditor(InputStream manifestInputStream) {
@@ -57,11 +70,30 @@ public class ManifestEditor {
         return this;
     }
 
+    /**
+     * Adds {@code <uses-permission>} entries the template does not declare yet.
+     * Duplicates are ignored.
+     */
+    public ManifestEditor setPermissionsToAdd(List<String> permissions) {
+        mPermissionsToAdd = permissions;
+        return this;
+    }
+
+    /**
+     * Removes {@code <uses-permission>} entries declared by the template. Permissions
+     * that are not present are silently ignored.
+     */
+    public ManifestEditor setPermissionsToRemove(List<String> permissions) {
+        mPermissionsToRemove = permissions;
+        return this;
+    }
+
     public ManifestEditor commit() throws IOException {
         AxmlReader reader = new AxmlReader(StreamUtils.readAsBytes(mManifestInputStream));
         mManifestInputStream.close();
-        AxmlWriter writer = new MutableAxmlWriter();
+        MutableAxmlWriter writer = new MutableAxmlWriter();
         reader.accept(new DumpAdapter(writer));
+        writer.applyPermissions(mPermissionsToAdd, mPermissionsToRemove);
         mManifestData = writer.toByteArray();
         return this;
     }
@@ -153,10 +185,50 @@ public class ManifestEditor {
 
 
     private class MutableAxmlWriter extends AxmlWriter {
+
+        private MutableNodeImpl mManifestNode;
+
+        /**
+         * Applies the requested permission set to the parsed manifest tree. Runs between
+         * parsing and serialization, the only window where the node tree can be edited.
+         */
+        void applyPermissions(List<String> toAdd, List<String> toRemove) {
+            if (mManifestNode == null) {
+                return;
+            }
+            if (toRemove != null && !toRemove.isEmpty()) {
+                mManifestNode.removeChildPermissions(toRemove);
+            }
+            if (toAdd == null) {
+                return;
+            }
+            for (String permission : toAdd) {
+                if (permission != null && permission.trim().length() > 0) {
+                    mManifestNode.addPermission(permission.trim());
+                }
+            }
+        }
+
         private class MutableNodeImpl extends AxmlWriter.NodeImpl {
+
+            /**
+             * Element name captured by us: {@link AxmlWriter.NodeImpl} keeps its own name
+             * private, and permission nodes have to be identified while iterating children.
+             */
+            private final String mName;
+            private String mAndroidName;
 
             MutableNodeImpl(String ns, String name) {
                 super(ns, name);
+                mName = name;
+            }
+
+            @Override
+            public void attr(String ns, String name, int resourceId, int type, Object value) {
+                if (NS_ANDROID.equals(ns) && ATTR_NAME.equals(name)) {
+                    mAndroidName = asString(value);
+                }
+                super.attr(ns, name, resourceId, type, value);
             }
 
             @Override
@@ -173,14 +245,87 @@ public class ManifestEditor {
                 return child;
             }
 
+            void removeChildPermissions(List<String> permissions) {
+                for (Iterator<NodeImpl> it = children.iterator(); it.hasNext(); ) {
+                    NodeImpl child = it.next();
+                    if (!(child instanceof MutableNodeImpl)) {
+                        continue;
+                    }
+                    MutableNodeImpl node = (MutableNodeImpl) child;
+                    if (TAG_USES_PERMISSION.equals(node.mName) && node.mAndroidName != null
+                            && permissions.contains(node.mAndroidName)) {
+                        it.remove();
+                    }
+                }
+            }
+
+            void addPermission(String permission) {
+                for (NodeImpl child : children) {
+                    if (!(child instanceof MutableNodeImpl)) {
+                        continue;
+                    }
+                    MutableNodeImpl node = (MutableNodeImpl) child;
+                    if (TAG_USES_PERMISSION.equals(node.mName)
+                            && permission.equals(node.mAndroidName)) {
+                        return;
+                    }
+                }
+                MutableNodeImpl node = new MutableNodeImpl(null, TAG_USES_PERMISSION);
+                node.attr(NS_ANDROID, ATTR_NAME, ANDROID_ATTR_NAME, TYPE_STRING, permission);
+                // Keep the manifest schema order: uses-permission before application.
+                int index = indexOfApplication();
+                if (index < 0) {
+                    children.add(node);
+                } else {
+                    children.add(index, node);
+                }
+            }
+
+            private int indexOfApplication() {
+                for (int i = 0; i < children.size(); i++) {
+                    NodeImpl child = children.get(i);
+                    if (child instanceof MutableNodeImpl
+                            && TAG_APPLICATION.equals(((MutableNodeImpl) child).mName)) {
+                        return i;
+                    }
+                }
+                return -1;
+            }
         }
 
         @Override
         public NodeVisitor child(String ns, String name) {
-            NodeImpl first = new MutableNodeImpl(ns, name);
+            MutableNodeImpl first = new MutableNodeImpl(ns, name);
             this.firsts.add(first);
+            if (TAG_MANIFEST.equals(name)) {
+                mManifestNode = first;
+            }
             return first;
         }
+
+    }
+
+    /**
+     * Attribute values reach {@link AxmlWriter.NodeImpl#attr} as plain strings, string
+     * pool items or wrapped references depending on how aapt2 encoded them.
+     */
+    private static String asString(Object value) {
+        if (value instanceof String) {
+            return (String) value;
+        }
+        if (value instanceof StringItem) {
+            return ((StringItem) value).data;
+        }
+        if (value instanceof ValueWrapper) {
+            Object ref = ((ValueWrapper) value).ref;
+            if (ref instanceof StringItem) {
+                return ((StringItem) ref).data;
+            }
+            if (ref instanceof String) {
+                return (String) ref;
+            }
+        }
+        return null;
     }
 
 

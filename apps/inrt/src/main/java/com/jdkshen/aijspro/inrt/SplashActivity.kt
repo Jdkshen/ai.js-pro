@@ -2,10 +2,12 @@ package com.jdkshen.aijspro.inrt
 
 import android.Manifest
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.widget.ImageView
 import androidx.annotation.NonNull
 import androidx.annotation.Nullable
 import androidx.annotation.RequiresApi
@@ -15,6 +17,8 @@ import android.widget.Toast
 
 import com.jdkshen.aijspro.inrt.autojs.AutoJs
 import com.jdkshen.aijspro.inrt.launch.GlobalProjectLauncher
+import com.stardust.autojs.project.LaunchConfig
+import com.stardust.autojs.project.ProjectConfig
 
 import java.util.ArrayList
 
@@ -28,13 +32,49 @@ class SplashActivity : AppCompatActivity() {
 
     override fun onCreate(@Nullable savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val launchConfig = launchConfig()
+        // "显示启动界面" can be disabled at packaging time: the runtime then starts the
+        // script immediately instead of flashing a splash screen.
+        if (launchConfig != null && !launchConfig.shouldShowSplash()) {
+            main()
+            return
+        }
         setContentView(R.layout.activity_splash)
-        val slug = findViewById<TextView>(R.id.slug)
-        slug.typeface = Typeface.createFromAsset(assets, "roboto_medium.ttf")
+        findViewById<TextView>(R.id.slug).typeface =
+            Typeface.createFromAsset(assets, "roboto_medium.ttf")
+        applyLaunchConfig(launchConfig)
         if (!Pref.isFirstUsing) {
             main()
         } else {
             Handler().postDelayed({ this@SplashActivity.main() }, INIT_TIMEOUT)
+        }
+    }
+
+    private fun launchConfig(): LaunchConfig? {
+        return try {
+            ProjectConfig.fromAssets(this, ProjectConfig.configFileOfDir(PROJECT_ASSET_DIR))?.launchConfig
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun applyLaunchConfig(launchConfig: LaunchConfig?) {
+        if (launchConfig == null) {
+            return
+        }
+        val text = launchConfig.splashText
+        if (!text.isNullOrEmpty()) {
+            findViewById<TextView>(R.id.slug).text = text
+        }
+        // The packaging step drops the user image here, next to the other project assets.
+        try {
+            assets.open(SPLASH_ASSET).use { stream ->
+                BitmapFactory.decodeStream(stream)?.let { bitmap ->
+                    findViewById<ImageView>(R.id.logo).setImageBitmap(bitmap)
+                }
+            }
+        } catch (e: Exception) {
+            // No custom image packaged: keep the built-in logo.
         }
     }
 
@@ -92,6 +132,8 @@ class SplashActivity : AppCompatActivity() {
 
         private const val PERMISSION_REQUEST_CODE = 11186
         private const val INIT_TIMEOUT: Long = 2500
+        private const val PROJECT_ASSET_DIR = "project"
+        private const val SPLASH_ASSET = "project/splash.png"
     }
 
 }

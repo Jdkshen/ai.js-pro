@@ -160,4 +160,19 @@
     <string name="text_show_layout_hierarchy">View in layout bounds\' view</string>
     <string name="default_value_script_dir_path">/Scripts/</string>
 
+    <string name="text_permissions">Permissions</string>
+    <string name="format_permission_count">%1$d permissions</string>
+    <string name="text_permission_search">Search permissions</string>
+    <string name="text_select_all">Select all</string>
+    <string name="text_clear_selection">Clear</string>
+    <string name="summary_permission_template_hint">Removing template permissions may break script features</string>
+    <string name="text_hide_logs">Hide log screen</string>
+    <string name="summary_hide_logs">Run the script directly after launch</string>
+    <string name="text_show_splash">Show splash screen</string>
+    <string name="summary_show_splash">Turn off to run the script right after launch</string>
+    <string name="text_splash_text">Splash text</string>
+    <string name="summary_splash_text">Leave empty to keep the default Powered by text</string>
+    <string name="text_splash_icon">Splash image</string>
+    <string name="text_invalid_image">Cannot read this image, pick a valid png/jpg file</string>
+
 </resources>
