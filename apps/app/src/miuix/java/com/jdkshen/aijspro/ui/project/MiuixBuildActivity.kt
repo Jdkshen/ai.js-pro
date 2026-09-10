@@ -179,6 +179,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var keyPassword by mutableStateOf("")
     /** 只有验证通过的密钥才会真正参与打包，避免用错口令生成无法升级的产物 */
     private var signingKey by mutableStateOf<SigningKey?>(null)
+    /** 「选择签名」先列 `.keyStore/` 里的密钥库：隐藏目录在文件浏览器里很难找。 */
+    private val keyStoreListShow = mutableStateOf(false)
+    private var keyStoreList by mutableStateOf<List<File>>(emptyList())
+
     /** 自动模式下即将使用的身份（首次打包时生成，之后固定复用）。 */
     private var autoIdentitySummary by mutableStateOf("")
     private var signingSummary by mutableStateOf("")
@@ -311,6 +315,15 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private fun simplifiedName(file: File): String =
         if (file.isDirectory) file.name else file.name.substringBeforeLast('.', file.name)
 
+    /** 密钥库目录：`<脚本目录>/.keyStore/`，顺手建好，用户进去就能看到。 */
+    private fun keyStoreDir(): File =
+        SigningOptions.keyStoreDir(Pref.getScriptDirPath()).apply { if (!exists()) mkdirs() }
+
+    private fun openKeyStoreList() {
+        keyStoreList = SigningOptions.listKeyStores(keyStoreDir())
+        keyStoreListShow.value = true
+    }
+
     private fun openPicker(target: Int) {
         Log.d(TAG, "openPicker target=$target")
         pickerTarget = target
@@ -318,8 +331,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             PICKER_OUTPUT -> output.ifEmpty { Pref.getScriptDirPath() }
             PICKER_SPLASH -> splashIconPath.takeIf { it.isNotEmpty() }?.let { File(it).parent }
                 ?: Pref.getScriptDirPath()
+            // 密钥库统一收在 <脚本目录>/.keyStore/ 里：直接落到那儿，
+            // 不让用户去隐藏目录里翻（这里也列出隐藏项，`.keyStore` 是可见可进的）。
             PICKER_KEYSTORE -> keyStorePath.takeIf { it.isNotEmpty() }?.let { File(it).parent }
-                ?: Environment.getExternalStorageDirectory().path
+                ?: keyStoreDir().path
             else -> source.takeIf { it.isNotEmpty() }?.let { File(it).parent }
                 ?: Pref.getScriptDirPath()
         }
@@ -355,6 +370,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 signingSummary = ""
                 signingError = null
                 persistSigningSettings()
+                // 本机记着口令的（例如自动生成的本机身份）直接验，别逼用户手敲随机口令。
+                if (SigningOptions.recordedPasswords(file).isNotEmpty()) {
+                    verifySigningKey()
+                }
             }
         }
         MiuixPopupUtil.dismissDialog(pickerShow)
@@ -508,22 +527,40 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         signingError = null
         signingSummary = ""
         busy = true
-        val storePassword = keyStorePassword.toCharArray()
-        // 与 keytool 一致：密钥口令留空时沿用密钥库口令。
-        val entryPassword = keyPassword.ifEmpty { keyStorePassword }.toCharArray()
+        val typed = keyStorePassword
+        val typedKeyPassword = keyPassword
         val alias = keyStoreAlias.trim()
         disposables.add(
             Observable.fromCallable {
-                SigningKey.load(File(path), null, storePassword, alias, entryPassword)
+                // 口令留空时先用「本机记着的」口令试：自动生成的身份用的随机口令，
+                // 用户不可能手敲，选回它自己时不该再逼他填一遍。
+                val candidates = buildList {
+                    if (typed.isNotEmpty()) add(typed)
+                    addAll(SigningOptions.recordedPasswords(File(path)))
+                }.distinct()
+                var lastError: Exception? = null
+                for (candidate in candidates) {
+                    try {
+                        // 与 keytool 一致：密钥口令留空时沿用密钥库口令。
+                        val entry = typedKeyPassword.ifEmpty { candidate }
+                        return@fromCallable SigningKey.load(File(path), null,
+                            candidate.toCharArray(), alias, entry.toCharArray()) to candidate
+                    } catch (error: Exception) {
+                        lastError = error
+                    }
+                }
+                throw lastError ?: IllegalStateException(getString(R.string.error_signing_key_required))
             }
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe({ key ->
+                .subscribe({ result ->
+                    val (key, usedPassword) = result
                     busy = false
                     signingKey = key
+                    // 回填用上的口令，界面上看得见，也顺手记下来。
+                    keyStorePassword = usedPassword
                     signingSummary = getString(R.string.format_signing_verified, key.subjectName)
-                    // 验证通过的口令也记下来：自动模式靠它复用同一份身份。
-                    Pref.setPrefString(SigningOptions.passwordPrefKey(path), keyStorePassword)
+                    Pref.setPrefString(SigningOptions.passwordPrefKey(path), usedPassword)
                     persistSigningSettings()
                     Log.d(TAG, "Signing key verified: " + key.certificateFingerprint)
                 }, { error ->
@@ -714,6 +751,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             MiuixPopupUtil.MiuixPopupHost()
         }
         FilePickerDialog()
+        KeyStoreListDialog()
         PermissionDialog()
         SuccessDialog()
         FailureDialog()
@@ -904,6 +942,65 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 useCenter = false,
                 style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
             )
+        }
+    }
+
+    @Composable
+    private fun KeyStoreListDialog() {
+        val files = keyStoreList
+        val directory = keyStoreDir()
+        SuperDialog(
+            show = keyStoreListShow,
+            title = getString(R.string.text_key_store_file),
+            onDismissRequest = {
+                if (keyStoreListShow.value) MiuixPopupUtil.dismissDialog(keyStoreListShow)
+            }
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                Text(
+                    directory.path, fontSize = 12.sp, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                )
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp).padding(top = 8.dp)) {
+                    if (files.isEmpty()) {
+                        item {
+                            Text(
+                                getString(R.string.text_key_store_none),
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                    items(files) { file ->
+                        val remembered = SigningOptions.recordedPasswords(file).isNotEmpty()
+                        PickerRow(
+                            file.name + if (remembered) getString(R.string.text_key_store_password_known) else ""
+                        ) {
+                            pickerTarget = PICKER_KEYSTORE
+                            applyPicked(file)
+                            MiuixPopupUtil.dismissDialog(keyStoreListShow)
+                        }
+                    }
+                    item {
+                        PickerRow(getString(R.string.text_browse_other_file), highlight = true) {
+                            MiuixPopupUtil.dismissDialog(keyStoreListShow)
+                            openPicker(PICKER_KEYSTORE)
+                        }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        text = "取消",
+                        onClick = { MiuixPopupUtil.dismissDialog(keyStoreListShow) },
+                        colors = ButtonDefaults.textButtonColorsPrimary()
+                    )
+                }
+            }
         }
     }
 
@@ -1299,7 +1396,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     title = getString(R.string.text_key_store_file),
                     rightText = if (keyStorePath.isEmpty()) getString(R.string.text_select)
                     else File(keyStorePath).name,
-                    onClick = { openPicker(PICKER_KEYSTORE) })
+                    onClick = { openKeyStoreList() })
                 if (signingMode == SIGNING_MODE_NEW) {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp),

@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.autojs.build.sign
 
+import com.jdkshen.aijspro.Pref
 import com.stardust.autojs.apkbuilder.Signer
 import java.io.File
 
@@ -39,6 +40,17 @@ object SigningOptions {
      * 都要能拿着同一份身份继续签，否则每打一次包就换一次证书、旧包再也升级不了。
      */
     fun passwordPrefKey(keyStorePath: String): String = PASSWORD_PREFIX + keyStorePath
+
+    /**
+     * 本机记着的候选口令：先按密钥库路径记账的，再旧版本只存在「当前密钥库口令」里的那个。
+     *
+     * 自动生成的身份用的是随机口令，用户不可能手敲 —— 「选择签名」选回它、或者自动签名
+     * 复用它时，都得靠这个列表自动填。
+     */
+    fun recordedPasswords(keyStore: File): List<String> = listOf(
+        Pref.getPrefString(passwordPrefKey(keyStore.path), ""),
+        Pref.getPrefString(CURRENT_STORE_PASSWORD_PREF, "")
+    ).filter { it.isNotEmpty() }.distinct()
 
     /** 密钥库统一放在脚本目录下的这个隐藏目录里（对齐 AutoX.js 的 `.keyStore/`）。 */
     const val KEYSTORE_DIR_NAME = ".keyStore"

@@ -386,6 +386,9 @@
     <string name="summary_signing_default">密钥库集中在脚本目录下的 .keyStore 里，一份身份服务所有打包应用（和 AutoX.js 一样）；首次打包自动生成，之后固定复用，不再使用全世界共用的测试证书</string>
     <string name="summary_signing_custom">使用自己的密钥库，产物身份唯一，不再和其他应用共用证书</string>
     <string name="text_key_store_file">密钥库文件</string>
+    <string name="text_key_store_none">目录里还没有密钥库；用「新建签名」生成一份</string>
+    <string name="text_key_store_password_known">（口令已知）</string>
+    <string name="text_browse_other_file">浏览其他文件…</string>
     <string name="text_key_store_alias">别名（留空自动选第一个）</string>
     <string name="text_key_store_password">密钥库口令</string>
     <string name="text_key_password">密钥口令（留空同上）</string>

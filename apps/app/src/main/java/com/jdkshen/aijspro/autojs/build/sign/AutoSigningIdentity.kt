@@ -102,7 +102,7 @@ object AutoSigningIdentity {
         if (target.isFile) return
         val legacy = File(outputDir, SigningOptions.keystoreBaseName(appName) + "-signing.p12")
         if (!legacy.isFile) return
-        val password = passwordCandidates(legacy).firstOrNull { canOpen(legacy, it) } ?: return
+        val password = SigningOptions.recordedPasswords(legacy).firstOrNull { canOpen(legacy, it) } ?: return
         if (move(legacy, target)) {
             Pref.setPrefString(SigningOptions.passwordPrefKey(target.path), password)
             Log.i(TAG, "Migrated the signing identity into .keyStore: " + target.path)
@@ -128,12 +128,6 @@ object AutoSigningIdentity {
         }
     }
 
-    /** 本机记得的候选口令：先按路径记的，再旧版本只记在「当前密钥库口令」上的那个。 */
-    private fun passwordCandidates(keyStore: File): List<String> = listOf(
-        Pref.getPrefString(SigningOptions.passwordPrefKey(keyStore.path), ""),
-        Pref.getPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, "")
-    ).filter { it.isNotEmpty() }.distinct()
-
     private fun canOpen(keyStore: File, password: String): Boolean = try {
         SigningKey.load(keyStore, null, password.toCharArray(), ALIAS, password.toCharArray())
         true
@@ -145,7 +139,7 @@ object AutoSigningIdentity {
      * 试着用本机记得的口令打开密钥库；命中后补记账，之后再打包直接命中。
      */
     private fun openExisting(keyStore: File): SigningKey? {
-        for (password in passwordCandidates(keyStore)) {
+        for (password in SigningOptions.recordedPasswords(keyStore)) {
             val key = try {
                 SigningKey.load(keyStore, null,
                     password.toCharArray(), ALIAS, password.toCharArray())

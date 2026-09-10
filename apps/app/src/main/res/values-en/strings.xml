@@ -204,6 +204,9 @@
     <string name="summary_signing_default">Keystores live in .keyStore under the script folder and one identity serves every packaged app (same as AutoX.js); created automatically on the first build, then reused. The shared test certificate is no longer used</string>
     <string name="summary_signing_custom">Sign with your own keystore so the app has a unique identity instead of a shared certificate</string>
     <string name="text_key_store_file">Keystore file</string>
+    <string name="text_key_store_none">No keystore yet, create one with New key</string>
+    <string name="text_key_store_password_known"> (password known)</string>
+    <string name="text_browse_other_file">Browse another file…</string>
     <string name="text_key_store_alias">Alias (empty picks the first key)</string>
     <string name="text_key_store_password">Keystore password</string>
     <string name="text_key_password">Key password (empty reuses the above)</string>
