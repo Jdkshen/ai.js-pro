@@ -42,6 +42,7 @@ import java.util.zip.ZipFile;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -52,6 +53,10 @@ import static org.junit.Assert.assertTrue;
  * 且能用 inrt 运行时相同的密钥派生方式解密还原。
  */
 public class ApkBuilderEncryptionTest {
+
+    /** tiny-sign 内置测试证书（CN=Test）的 SHA-256：全世界共用，绝不能再出现在默认产物里。 */
+    private static final String SHARED_TEST_CERTIFICATE_SHA256 =
+            "e1f6edb5a65a79e69f9f41a44b3b5d5bb95954b34d320a52d3f7b63e647b0a43";
 
     @Test
     public void packagedWorkspaceContainsEncryptedEntryScript() throws Exception {
@@ -243,7 +248,8 @@ public class ApkBuilderEncryptionTest {
                 .prepare()
                 .withConfig(config)
                 .build()
-                .sign();
+                .sign()
+                .cleanWorkspace();
 
         // 1) 平台自己的校验器必须接受这个包，而且报出来的签名者就是我们的证书。
         PackageInfo info = context.getPackageManager()
@@ -326,14 +332,71 @@ public class ApkBuilderEncryptionTest {
         SigningKey key = SigningKey.load(keyStore, null, password.toCharArray(), null,
                 password.toCharArray());
 
-        assertNull("默认签名必须继续用内置公共证书，旧行为不能变",
-                SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_DEFAULT, key, "aijspro"));
+        assertNull("自动模式不显式指定签名器，交给打包器注入本机专属身份",
+                SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_AUTO, key, "aijspro"));
         assertNotNull("选择已有密钥库要生效",
                 SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_EXISTING, key, "aijspro"));
         assertNotNull("新建密钥后也必须生效（回归点）",
                 SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_NEW, key, "aijspro"));
         assertNull("密钥没验证通过时不得拿去签，否则会签出无法升级的产物",
                 SigningOptions.INSTANCE.signerFor(SigningOptions.MODE_NEW, null, "aijspro"));
+    }
+
+    /**
+     * 默认签名不得再落到 tiny-sign 那份全世界共用的测试证书（CN=Test）：
+     * 它会让所有用同款打包器的产物共用一份私钥，安全软件据此判定为同一「家族」。
+     * 同时验证同一应用重复打包复用同一身份 —— 否则旧包永远升不了级。
+     */
+    @Test
+    public void defaultSigningUsesAPerAppIdentity() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File workDir = new File(context.getCacheDir(), "apk-builder-default-signing-test");
+        deleteRecursively(workDir);
+        File outDir = new File(workDir, "out");
+        //noinspection ResultOfMethodCallIgnored
+        outDir.mkdirs();
+        File script = new File(workDir, "probe.js");
+        writeText(script, "console.log('default signing probe');\n");
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("DefaultSigningProbe")
+                .setPackageName("com.example.defaultsigningprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("rhino")
+                .setIncludeAccessibility(false)
+                .setIncludeImageModule(false);
+
+        ApkSignatureReader.Signer first =
+                buildWithConfig(context, outDir, "probe-1.apk", workDir, config);
+        assertNotNull("产物必须能读出签名者", first);
+        assertNotEquals("默认签名不得再是全世界共用的 tiny-sign 测试证书",
+                SHARED_TEST_CERTIFICATE_SHA256, first.getSha256());
+
+        File identity = new File(outDir, "DefaultSigningProbe-signing.p12");
+        assertTrue("首次打包应为本应用生成身份文件: " + identity, identity.length() > 0);
+
+        ApkSignatureReader.Signer second =
+                buildWithConfig(context, outDir, "probe-2.apk", workDir, config);
+        assertNotNull(second);
+        assertEquals("同一应用重复打包必须复用同一份身份", first.getSha256(), second.getSha256());
+        assertTrue("身份主题应带应用名，实际是 " + first.getSubject(),
+                first.getSubject().contains("DefaultSigningProbe"));
+    }
+
+    private static ApkSignatureReader.Signer buildWithConfig(Context context, File outDir, String apkName,
+            File workDir, ApkBuilder.AppConfig config) throws Exception {
+        File outApk = new File(outDir, apkName);
+        File workspace = new File(workDir, "workspace-" + apkName);
+        new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), outApk, workspace.getPath())
+                .prepare()
+                .withConfig(config)
+                .build()
+                .sign()
+                // 解包出来的工作区有上百 MB，不清理的话同一进程里连跑几次就会把内存吃爆。
+                .cleanWorkspace();
+        return ApkSignatureReader.INSTANCE.read(outApk);
     }
 
     /** 中央目录偏移量（= 签名块结束位置）。 */

@@ -376,14 +376,14 @@
     <string name="text_image_module">图色模块</string>
     <string name="summary_include_image_module">关闭可减小约 70MB/架构，脚本无法使用找图找色与 OpenCV 能力</string>
     <string name="text_signing">签名</string>
-    <string name="text_default_signing">默认签名</string>
+    <string name="text_default_signing">自动签名</string>
     <string name="text_custom_signing">选择签名</string>
     <string name="text_new_signing">新建签名</string>
     <string name="summary_signing_generate">在本机生成一套全新的自签名证书，产物身份唯一；口令会自动生成并回填，请自行妥善保存密钥库</string>
     <string name="text_generate_signing_key">生成密钥库</string>
     <string name="format_signing_generated">已生成：%1$s</string>
     <string name="format_signing_key_exists">已存在同名密钥库，请先删除或改名：%1$s</string>
-    <string name="summary_signing_default">⚠ 沿用内置测试证书（CN=Test）：所有用它的产物共用同一身份，安全软件可能据此判定为“同一家族”。要换身份请选「选择签名」或「新建签名」；换后旧包需先卸载</string>
+    <string name="summary_signing_default">首次打包时为本应用生成专属证书（放在产物旁边），以后固定复用；不再使用全世界共用的测试证书。旧证书签的包需先卸载</string>
     <string name="summary_signing_custom">使用自己的密钥库，产物身份唯一，不再和其他应用共用证书</string>
     <string name="text_key_store_file">密钥库文件</string>
     <string name="text_key_store_alias">别名（留空自动选第一个）</string>
@@ -394,7 +394,9 @@
     <string name="format_signing_verified">已验证：%1$s</string>
     <string name="format_signing_fingerprint">证书 SHA-256：%1$s</string>
     <string name="format_signing_current">当前签名：%1$s</string>
-    <string name="text_signing_builtin_identity">内置测试证书 CN=Test（全世界共用）</string>
+    <string name="text_signing_builtin_identity">本机自动生成</string>
+    <string name="format_signing_auto_pending">首次打包时生成 %1$s</string>
+    <string name="format_signing_auto_ready">本机专属 %1$s</string>
     <string name="text_signing_unverified">尚未验证，打包仍会退回内置证书</string>
     <string name="format_build_signer">签名：%1$s</string>
     <string name="summary_signing_switch_hint">注意：换成新证书后无法覆盖安装旧证书签名的包，需先卸载</string>

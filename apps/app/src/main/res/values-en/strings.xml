@@ -194,14 +194,14 @@
     <string name="summary_include_image_module">When off the package drops ~70MB per ABI and loses find-image / OpenCV features</string>
 
     <string name="text_signing">Signing</string>
-    <string name="text_default_signing">Default key</string>
+    <string name="text_default_signing">Automatic</string>
     <string name="text_custom_signing">Custom key</string>
     <string name="text_new_signing">New key</string>
     <string name="summary_signing_generate">Mints a fresh self-signed certificate on this device so the app has a unique identity; the password is generated for you, keep the keystore safe</string>
     <string name="text_generate_signing_key">Create keystore</string>
     <string name="format_signing_generated">Created: %1$s</string>
     <string name="format_signing_key_exists">A keystore with that name already exists, remove or rename it first: %1$s</string>
-    <string name="summary_signing_default">⚠ Keeps the built-in test certificate (CN=Test): every package signed with it shares one identity, which security scanners may treat as the same family. Pick Custom key or New key to get your own identity; packages signed with the old key must be uninstalled first</string>
+    <string name="summary_signing_default">Mints a private certificate for this app on the first build (stored next to the APK) and reuses it afterwards; the shared test certificate is no longer used. Packages signed with the old certificate must be uninstalled first</string>
     <string name="summary_signing_custom">Sign with your own keystore so the app has a unique identity instead of a shared certificate</string>
     <string name="text_key_store_file">Keystore file</string>
     <string name="text_key_store_alias">Alias (empty picks the first key)</string>
@@ -212,7 +212,9 @@
     <string name="format_signing_verified">Verified: %1$s</string>
     <string name="format_signing_fingerprint">Certificate SHA-256: %1$s</string>
     <string name="format_signing_current">Signing with: %1$s</string>
-    <string name="text_signing_builtin_identity">built-in test certificate CN=Test (shared worldwide)</string>
+    <string name="text_signing_builtin_identity">generated on this device</string>
+    <string name="format_signing_auto_pending">created on the first build: %1$s</string>
+    <string name="format_signing_auto_ready">private to this device: %1$s</string>
     <string name="text_signing_unverified">not verified yet, the build will fall back to the built-in certificate</string>
     <string name="format_build_signer">Signature: %1$s</string>
     <string name="summary_signing_switch_hint">Note: packages signed with the old certificate can no longer be upgraded in place, uninstall them first</string>

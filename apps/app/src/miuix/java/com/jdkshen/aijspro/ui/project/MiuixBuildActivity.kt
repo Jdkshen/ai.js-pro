@@ -64,6 +64,7 @@ import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.autojs.build.ApkBuilder
 import com.jdkshen.aijspro.autojs.build.sign.ApkSignatureReader
+import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreGenerator
 import com.jdkshen.aijspro.autojs.build.sign.SigningKey
 import com.jdkshen.aijspro.autojs.build.sign.SigningOptions
@@ -118,8 +119,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         private val KEYSTORE_EXTENSIONS = listOf("jks", "keystore", "p12", "pfx", "bks")
         private const val KEYSTORE_ALIAS = "aijspro"
 
-        /** 签名模式：0 = 内置公共证书；1 = 使用已有密钥库；2 = 新建密钥库 */
-        private const val SIGNING_MODE_DEFAULT = SigningOptions.MODE_DEFAULT
+        /** 签名模式：0 = 自动（本机为该应用生成专属身份）；1 = 使用已有密钥库；2 = 新建密钥库 */
+        private const val SIGNING_MODE_AUTO = SigningOptions.MODE_AUTO
         private const val SIGNING_MODE_EXISTING = SigningOptions.MODE_EXISTING
         private const val SIGNING_MODE_NEW = SigningOptions.MODE_NEW
         private const val PREF_SIGNING_MODE = "aijspro.build.signing.mode"
@@ -178,6 +179,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var keyPassword by mutableStateOf("")
     /** 只有验证通过的密钥才会真正参与打包，避免用错口令生成无法升级的产物 */
     private var signingKey by mutableStateOf<SigningKey?>(null)
+    /** 自动模式下即将使用的身份（首次打包时生成，之后固定复用）。 */
+    private var autoIdentitySummary by mutableStateOf("")
     private var signingSummary by mutableStateOf("")
     private var signingError by mutableStateOf<String?>(null)
 
@@ -240,6 +243,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             applySource(File(initialSource), fillDefaults = true)
         }
         restoreSigningSettings()
+        refreshAutoIdentity()
     }
 
     override fun onDestroy() {
@@ -288,6 +292,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 splashIconPath = projectSplash.path
                 splashIcon = BitmapFactory.decodeFile(projectSplash.path)
             }
+            refreshAutoIdentity()
             return
         }
         projectConfig = null
@@ -298,6 +303,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         output = dir
         appName = simplifiedName(file)
         appPackageName = getString(R.string.format_default_package_name, System.currentTimeMillis())
+        refreshAutoIdentity()
     }
 
     private fun simplifiedName(file: File): String =
@@ -341,7 +347,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             PICKER_KEYSTORE -> {
                 keyStorePath = file.path
                 // 选了密钥库文件就是要用它；停留在“默认签名”会让用户以为换了证书其实没换。
-                if (signingMode == SIGNING_MODE_DEFAULT) signingMode = SIGNING_MODE_EXISTING
+                if (signingMode == SIGNING_MODE_AUTO) signingMode = SIGNING_MODE_EXISTING
                 // 换了密钥库就必须重新验证，否则会拿旧密钥的校验结果去打包。
                 signingKey = null
                 signingSummary = ""
@@ -384,7 +390,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 return false
             }
         }
-        if (signingMode != SIGNING_MODE_DEFAULT && signingKey == null) {
+        if (signingMode != SIGNING_MODE_AUTO && signingKey == null) {
             errorText = getString(R.string.error_signing_key_required)
             return false
         }
@@ -444,8 +450,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
      */
     private fun generateSigningKey() {
         val directory = output.ifEmpty { Pref.getScriptDirPath() }
-        val baseName = ((if (projectMode) projectConfig?.name else null) ?: appName)
-            .orEmpty().ifBlank { "app" }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
+        val baseName = SigningOptions.keystoreBaseName(signingDisplayName())
         val target = File(directory, "$baseName-signing.p12")
         if (target.exists()) {
             signingKey = null
@@ -475,6 +480,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     keyPassword = result.second
                     signingKey = result.first
                     signingSummary = getString(R.string.format_signing_generated, result.third.path)
+                    // 按路径记账，之后不选签名（自动模式）也能拿这份身份继续签。
+                    Pref.setPrefString(SigningOptions.passwordPrefKey(result.third.path), result.second)
                     persistSigningSettings()
                     Log.d(TAG, "Generated signing key " + result.third.path)
                 }, { error ->
@@ -515,6 +522,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     busy = false
                     signingKey = key
                     signingSummary = getString(R.string.format_signing_verified, key.subjectName)
+                    // 验证通过的口令也记下来：自动模式靠它复用同一份身份。
+                    Pref.setPrefString(SigningOptions.passwordPrefKey(path), keyStorePassword)
                     persistSigningSettings()
                     Log.d(TAG, "Signing key verified: " + key.certificateFingerprint)
                 }, { error ->
@@ -541,8 +550,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     private fun restoreSigningSettings() {
         val path = Pref.getPrefString(PREF_SIGNING_KEYSTORE, "")
-        val mode = Pref.getPrefInt(PREF_SIGNING_MODE, SIGNING_MODE_DEFAULT)
-        if (mode == SIGNING_MODE_DEFAULT || path.isBlank() || !File(path).isFile) return
+        val mode = Pref.getPrefInt(PREF_SIGNING_MODE, SIGNING_MODE_AUTO)
+        if (mode == SIGNING_MODE_AUTO || path.isBlank() || !File(path).isFile) return
         // 密钥库已经存在，就按「选择签名」恢复：新建只在第一次需要。
         signingMode = SIGNING_MODE_EXISTING
         keyStorePath = path
@@ -552,6 +561,36 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         if (keyStorePassword.isNotEmpty()) {
             verifySigningKey()
         }
+    }
+
+    /** 密钥库文件名/证书主题都跟着应用名走，界面与打包器要用同一套命名。 */
+    private fun signingDisplayName(): String =
+        ((if (projectMode) projectConfig?.name else null) ?: appName).orEmpty().ifBlank { "app" }
+
+    /**
+     * 「自动」用的是本机为该应用生成的身份（文件就在产物旁边）。
+     * 已经生成过就把证书主题显示出来，用户一眼能确认这次不再是全世界共用的测试证书。
+     */
+    private fun refreshAutoIdentity() {
+        // 还没选源时应用名/输出目录都是空的，先把提示留在笼统说法上。
+        if (appName.isBlank() && !projectMode) {
+            autoIdentitySummary = getString(R.string.text_signing_builtin_identity)
+            return
+        }
+        val directory = File(output.ifEmpty { Pref.getScriptDirPath() })
+        val name = signingDisplayName()
+        autoIdentitySummary = getString(
+            R.string.format_signing_auto_pending, AutoSigningIdentity.identityFile(directory, name).name)
+        disposables.add(
+            Observable.fromCallable { AutoSigningIdentity.existingSubject(directory, name) }
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe({ subject ->
+                    if (subject != null) {
+                        autoIdentitySummary = getString(R.string.format_signing_auto_ready, subject)
+                    }
+                }, { error -> Log.w(TAG, "Failed to inspect the auto signing identity", error) })
+        )
     }
 
     private fun togglePermission(name: String) {
@@ -596,6 +635,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     successPath = outApk.path
                     successSigner = signer?.let { it.subject + " · " + it.shortFingerprint }.orEmpty()
                     successShow.value = true
+                    // 自动模式下首次打包会生成身份，打包后刷新一下卡片上的提示。
+                    refreshAutoIdentity()
                 }, { error ->
                     busy = false
                     failureMessage = error.message ?: error.toString()
@@ -1209,10 +1250,11 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    EngineChip(getString(R.string.text_default_signing), signingMode == SIGNING_MODE_DEFAULT) {
-                        signingMode = SIGNING_MODE_DEFAULT
+                    EngineChip(getString(R.string.text_default_signing), signingMode == SIGNING_MODE_AUTO) {
+                        signingMode = SIGNING_MODE_AUTO
                         signingError = null
                         persistSigningSettings()
+                        refreshAutoIdentity()
                     }
                     EngineChip(getString(R.string.text_custom_signing), signingMode == SIGNING_MODE_EXISTING) {
                         signingMode = SIGNING_MODE_EXISTING
@@ -1226,7 +1268,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 Text(
                     getString(
                         when (signingMode) {
-                            SIGNING_MODE_DEFAULT -> R.string.summary_signing_default
+                            SIGNING_MODE_AUTO -> R.string.summary_signing_default
                             SIGNING_MODE_NEW -> R.string.summary_signing_generate
                             else -> R.string.summary_signing_custom
                         }),
@@ -1239,21 +1281,21 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     getString(
                         R.string.format_signing_current,
                         when {
-                            signingMode == SIGNING_MODE_DEFAULT ->
-                                getString(R.string.text_signing_builtin_identity)
+                            signingMode == SIGNING_MODE_AUTO ->
+                                autoIdentitySummary.ifEmpty { getString(R.string.text_signing_builtin_identity) }
 
                             signer != null -> signer.subjectName
                             else -> getString(R.string.text_signing_unverified)
                         }),
                     fontSize = 12.sp,
-                    color = if (signingMode != SIGNING_MODE_DEFAULT && signer != null) {
+                    color = if (signingMode == SIGNING_MODE_AUTO || signer != null) {
                         MiuixTheme.colorScheme.primary
                     } else {
                         Color(0xFFD32F2F)
                     }
                 )
             }
-            if (signingMode != SIGNING_MODE_DEFAULT) {
+            if (signingMode != SIGNING_MODE_AUTO) {
                 SuperArrow(
                     title = getString(R.string.text_key_store_file),
                     rightText = if (keyStorePath.isEmpty()) getString(R.string.text_select)

@@ -11,19 +11,44 @@ import com.stardust.autojs.apkbuilder.Signer
  */
 object SigningOptions {
 
-    /** 沿用 tiny-sign 内置的公共测试证书，保持历史行为（旧包可覆盖升级）。 */
-    const val MODE_DEFAULT = 0
+    /**
+     * 自动：不显式指定签名器，交给 [com.jdkshen.aijspro.autojs.build.ApkBuilder] 为本应用
+     * 生成/复用一份专属身份。**不再**退回 tiny-sign 那份全世界共用的测试证书。
+     */
+    const val MODE_AUTO = 0
 
     /** 使用已有的密钥库。 */
     const val MODE_EXISTING = 1
 
-    /** 在本机新建密钥库（生成后和 MODE_EXISTING 等价，区别只在界面引导）。 */
+    /** 在本机新建密钥库（生成后和 [MODE_EXISTING] 等价，区别只在界面引导）。 */
     const val MODE_NEW = 2
 
+    private const val PASSWORD_PREFIX = "aijspro.build.signing.password."
+
     /**
-     * @return 要交给打包器的签名器；null 表示继续用内置公共证书。
-     *         密钥没验证通过时一律返回 null，避免拿错口令签出无法升级的产物。
+     * 自动生成的密钥库口令按「路径」记账：重新打开打包页、或者换个会话进来，
+     * 都要能拿着同一份身份继续签，否则每打一次包就换一次证书、旧包再也升级不了。
+     */
+    fun passwordPrefKey(keyStorePath: String): String = PASSWORD_PREFIX + keyStorePath
+
+    /**
+     * 密钥库文件名的基础部分。
+     *
+     * 纯中文应用名 ASCII 化后会剩下一串下划线，不同应用会撞成同一个文件，
+     * 所以退化成用名字的哈希兜底，保证不同应用拿到不同身份。
+     */
+    fun keystoreBaseName(appName: String?): String {
+        val raw = appName.orEmpty().trim()
+        val cleaned = raw.replace(Regex("[^A-Za-z0-9_.-]"), "_")
+        if (cleaned.any { it.isLetterOrDigit() }) return cleaned
+        return "app-" + Integer.toHexString(raw.hashCode())
+    }
+
+    /**
+     * @return 用户显式选择的签名器；null 表示「自动」——由打包器注入本机专属身份。
+     *         密钥没验证通过时也返回 null，调用方必须拦住这次打包，
+     *         避免拿错口令签出无法升级的产物。
      */
     fun signerFor(mode: Int, key: SigningKey?, alias: String): Signer? =
-        if (mode != MODE_DEFAULT && key != null) KeyStoreApkSigner(key, alias.trim()) else null
+        if (mode != MODE_AUTO && key != null) KeyStoreApkSigner(key, alias.trim()) else null
 }

@@ -5,10 +5,13 @@
 - 应用身份是否唯一（能不能和别人的包冲突、能不能被安全软件识别为「家族」）
 - 后续版本能不能覆盖安装（Android 只允许**同一证书**的包互相升级）
 
-## 现状：默认签名是全世界共用的公共证书
+## 现状：不再使用全世界共用的公共证书
 
-`ApkPackager.repackage()` 默认走 `pxb.android.tinysign.TinySign`，而 tiny-sign 把证书和私钥
-**硬编码在库里**：
+打包时如果没有显式选签名（打包页的「自动签名」），由 `AutoSigningIdentity` 在**产物旁边**
+生成/复用 `<应用名>-signing.p12`：身份只属于你这台设备上的这个应用，口令记在应用私有偏好里。
+同一个应用名反复打包复用同一份身份，可以正常覆盖升级；产物是 **v1 + v2** 双签名。
+
+历史遗留的 `pxb.android.tinysign.TinySign` 把证书和私钥 **硬编码在库里**，曾经是我们的默认签名：
 
 | 项 | 值 |
 | --- | --- |
@@ -16,19 +19,20 @@
 | SHA1 | `55:5B:E3:57:FD:FE:3D:0F:A4:2B:B3:37:81:11:7A:CC:DB:11:9A:B2` |
 | SHA256 | `E1:F6:ED:B5:A6:5A:79:E6:9F:9F:41:A4:4B:3B:5D:5B:B9:59:54:B3:4D:32:0A:52:D3:F7:B6:3E:64:7B:0A:43` |
 
-也就是说：所有用 tiny-sign / 同源打包器产出的 APK 共用同一份私钥，产物只是 v1-only
-（`apksigner verify` 显示 `v2: false`），MANIFEST 里还留着 `Created-By: tiny-sign-null`。
-这几个特征都可以被安全软件当作指纹（MIUI 对这类包的命名形如 `RiskWare/Android.E4Ashare.d[fra,crt]`）。
+所有用 tiny-sign / 同源打包器（Auto.js Pro、AutoX.js 的默认分支）产出的 APK 共用同一份私钥，
+产物只是 v1-only（`apksigner verify` 显示 `v2: false`），MANIFEST 里还留着 `Created-By: tiny-sign-null`。
+这几个特征都可以被安全软件当作指纹（实测：同一模板换成本机专属身份后，MIUI 安全中心不再报毒）。
 
-Pro 的打包产物同样是 tiny-sign 签的，所以两边在这一项上并无差异；能改的只有我们自己这条链路。
+现在 `ApkPackager.repackage()` 在**没有签名器时直接报错**，不会再静默退回那份证书；
+默认路径由 `ApkBuilder.sign()` → `AutoSigningIdentity` 提供。
 
 ## 打包页的三个选项
 
 | 选项 | 行为 |
 | --- | --- |
-| 默认签名 | 不改动，继续用 tiny-sign 的公共证书。旧包可以覆盖安装，兼容性最好 |
-| 选择签名 | 用你自己的密钥库（`.jks` / `.keystore` / `.p12` / `.bks`），产物换成你的身份 |
-| 新建签名 | 在本机生成一套 2048 位 RSA 自签名证书并存成 `<应用名>-signing.p12`，口令自动生成并回填 |
+| 自动签名 | 默认。首次打包时为该应用生成专属身份（`<应用名>-signing.p12`，放在产物旁边），之后固定复用 |
+| 选择签名 | 用你自己的密钥库（`.jks` / `.keystore` / `.p12` / `.bks`） |
+| 新建签名 | 显式生成一份（生成后等同于选择签名，只是会把口令回填给你保存） |
 
 卡片上始终有一行「**当前签名：…**」把即将使用的身份写出来：
 
@@ -61,11 +65,13 @@ Pro 的打包产物同样是 tiny-sign 签的，所以两边在这一项上并�
 | `ApkSignerV1` | `META-INF/MANIFEST.MF`、`CERT.SF`、`CERT.RSA`（PKCS#7 SignedData） |
 | `ApkSignerV2` | APK Signature Scheme v2：内容摘要 + 签名块 |
 | `KeyStoreApkSigner` | 编排：按工作区重新打 zip → 写 v1 文件 → 原地插入 v2 签名块 |
-| `SigningOptions` | 打包页的选择逻辑（哪个模式用哪个签名器）；带回归测试 |
-| `ApkSignatureReader` | 从**已打包的 APK** 里读回真实签名者，用于打包成功提示 |
+| `SigningOptions` | 打包页的选择逻辑（哪个模式用哪个签名器）、密钥库命名与口令记账 |
+| `AutoSigningIdentity` | 默认身份：按应用生成/复用 `<应用名>-signing.p12` |
+| `ApkSignatureReader` | 从**已打包的 APK** 里读回真实签名者，用于打包成功提示与回归测试 |
 
-接入点是一个很小的接口 `com.stardust.autojs.apkbuilder.Signer`，`ApkPackager.setSigner()` 设了就用它，
-没设就退回 tiny-sign，因此默认行为完全不变。
+接入点是一个很小的接口 `com.stardust.autojs.apkbuilder.Signer`：`ApkBuilder.sign()` 会先取
+`AppConfig` 里用户显式选的签名器，没选就交给 `AutoSigningIdentity` 按应用生成/复用身份，
+再交给 `ApkPackager.setSigner()`；**打包器拿不到签名器时会直接报错**，不再存在「悄悄用公共证书」的退路。
 
 ### 产物格式要点（改动前务必先读）
 
@@ -101,7 +107,8 @@ C:\Android\build-tools\34.0.0\apksigner.bat verify --verbose --print-certs <apk>
 # v1 单独校验
 & "$env:JAVA_HOME\bin\jarsigner.exe" -verify <apk>
 
-# 真机仪器测试（覆盖：生成密钥 → PKCS#12 往返 → 打包 → 平台校验证书 → JarFile 逐条目校验 → v2 块存在）
+# 真机仪器测试（覆盖：生成密钥 → PKCS#12 往返 → 打包 → 平台校验证书 → JarFile 逐条目校验 → v2 块存在
+#   → 默认签名必须不是公共证书、同一应用必须复用同一身份）
 adb shell am instrument -w -e class com.jdkshen.aijspro.packaging.ApkBuilderEncryptionTest \
   com.jdkshen.aijspro.test/androidx.test.runner.AndroidJUnitRunner
 ```

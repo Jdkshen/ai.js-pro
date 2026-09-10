@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.autojs.build;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 
+import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity;
 import com.stardust.autojs.apkbuilder.ApkPackager;
 import com.stardust.autojs.apkbuilder.ManifestEditor;
 import com.stardust.autojs.apkbuilder.Signer;
@@ -495,9 +496,19 @@ public class ApkBuilder {
 
     public ApkBuilder sign() throws Exception {
         notifySign();
-        if (mAppConfig != null) {
-            mApkPackager.setSigner(mAppConfig.getSigner());
+        Signer signer = mAppConfig != null ? mAppConfig.getSigner() : null;
+        if (signer == null) {
+            // 没有显式指定签名就用本机为该应用自动生成的身份。
+            // tiny-sign 那份全世界共用的测试证书已经不再使用：它会让所有产物共用一份
+            // 私钥，安全软件据此就能把它们归成同一家族。
+            File outputDir = mOutApkFile.getParentFile();
+            if (outputDir == null) {
+                throw new IOException("无法确定产物目录：" + mOutApkFile);
+            }
+            signer = AutoSigningIdentity.INSTANCE.forApp(outputDir,
+                    mAppConfig != null ? mAppConfig.getAppName() : null);
         }
+        mApkPackager.setSigner(signer);
         mApkPackager.repackage(mOutApkFile.getPath());
         return this;
     }
@@ -543,8 +554,10 @@ public class ApkBuilder {
         private final ArrayList<String> ignoredDirs = new ArrayList<>();
 
         /**
-         * Signer used in place of tiny-sign's built-in certificate. Left null the packaged APK
-         * keeps the shared test certificate, which is what makes old packages upgradeable.
+         * 显式指定产物要用哪份签名（用户选的密钥库）。
+         *
+         * <p>置空表示「自动」：打包时会为本应用生成/复用一份本机专属身份。
+         * 无论如何都不会再用 tiny-sign 那份全世界共用的测试证书。
          */
         public AppConfig setSigner(Signer signer) {
             this.signer = signer;
