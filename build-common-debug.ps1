@@ -1,10 +1,13 @@
-param(
+﻿param(
     [switch]$SkipNative,
     [switch]$IncludeInrt
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# 统一选择 JDK 17（避免直接构建吃到系统 Java 8 而在配置阶段失败）。
+. (Join-Path $projectRoot 'tools\jdk17.ps1')
 
 if (-not $SkipNative) {
     & (Join-Path $projectRoot 'modules\engine\src\main\cpp\build-quickjs.ps1')

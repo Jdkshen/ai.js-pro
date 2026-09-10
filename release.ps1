@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Build, hash and optionally install an AI.js Pro Miuix APK.
 .PARAMETER Variant
@@ -25,6 +25,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# 统一选择 JDK 17（避免直接构建吃到系统 Java 8 而在配置阶段失败）。
+. (Join-Path $projectRoot 'tools\jdk17.ps1')
+
 $startedAt = Get-Date
 $gradleWrapper = Join-Path $projectRoot 'gradlew.bat'
 $releaseBuild = $Variant.EndsWith('Release')
