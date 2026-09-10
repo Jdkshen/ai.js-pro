@@ -5,11 +5,20 @@ import android.graphics.BitmapFactory;
 
 import com.stardust.autojs.apkbuilder.ApkPackager;
 import com.stardust.autojs.apkbuilder.ManifestEditor;
+import com.stardust.autojs.project.BuildInfo;
 import com.stardust.autojs.project.ProjectConfig;
+import com.stardust.autojs.script.EncryptedScriptFileHeader;
+import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
+import com.stardust.util.AdvancedEncryptionStandard;
+import com.stardust.util.MD5;
 
 import com.jdkshen.aijspro.R;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -49,8 +58,13 @@ public class ApkBuilder {
     private ProgressCallback mProgressCallback;
     private AppConfig mAppConfig;
     private String mArscPackageName;
-    private String mKey = "Auto.js";
-    private String mInitVector = "Auto.js";
+    // Derived in syncProjectJsonAndDeriveKeys() from assets/project/project.json:
+    // key = MD5(packageName + versionName + mainScriptFile),
+    // vector = MD5(buildId + name).substring(0, 16)
+    // The inrt runtime derives the same values from the same project.json.
+    private String mKey;
+    private String mInitVector;
+    private String mMainScriptFile = "main.js";
     private String mScriptFile;
 
     public ApkBuilder(InputStream apkInputStream, File outApkFile, String workspacePath) {
@@ -132,15 +146,20 @@ public class ApkBuilder {
     private void copyProjectToWorkspace() throws Exception {
         if (mAppConfig == null || mAppConfig.sourcePath == null) {
             if (mScriptFile != null) {
-                encrypt(new File(mScriptFile), new File(mWorkspacePath, "assets/project/main.js"));
+                syncProjectJsonAndDeriveKeys();
+                encrypt(new File(mScriptFile), new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
             }
             return;
         }
         File source = new File(mAppConfig.sourcePath);
         if (source.isDirectory()) {
             copyDir(source.getPath(), mWorkspacePath + "/assets/project");
+            syncProjectJsonAndDeriveKeys();
+            File entryScript = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
+            encrypt(entryScript, entryScript);
         } else {
-            encrypt(source, new File(mWorkspacePath, "assets/project/main.js"));
+            syncProjectJsonAndDeriveKeys();
+            encrypt(source, new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
             if (mAppConfig.ignoredDirs != null) {
                 for (Object ignored : mAppConfig.ignoredDirs) {
                     new File(mWorkspacePath, "assets/project/" + ignored).delete();
@@ -239,19 +258,104 @@ public class ApkBuilder {
     }
 
     private void encrypt(File input, File output) throws IOException {
-        if (!output.getParentFile().exists()) {
-            output.getParentFile().mkdirs();
+        byte[] encrypted = encryptBytes(input);
+        File parent = output.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
         }
         FileOutputStream fos = new FileOutputStream(output);
-        encrypt(fos, input);
+        fos.write(encrypted);
         fos.close();
     }
 
     private void encrypt(FileOutputStream outputStream, File file) throws IOException {
-        // Compatibility placeholder: template projects are packaged as-is; the original
-        // implementation performed AES encryption using mKey/mInitVector. Scripts in
-        // production builds are still protected by the runtime launcher.
-        StreamUtils.write(new FileInputStream(file), outputStream);
+        outputStream.write(encryptBytes(file));
+    }
+
+    private byte[] encryptBytes(File file) throws IOException {
+        if (mKey == null || mInitVector == null) {
+            throw new IllegalStateException("Script encryption key is not initialized");
+        }
+        try {
+            byte[] plain = PFiles.readBytes(file.getPath());
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            EncryptedScriptFileHeader.INSTANCE.writeHeader(out, (short) 0);
+            out.write(new AdvancedEncryptionStandard(mKey.getBytes("UTF-8"), mInitVector).encrypt(plain));
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to encrypt script: " + file, e);
+        }
+    }
+
+    /**
+     * Syncs {@code assets/project/project.json} with the packaged app identity and derives
+     * the script encryption key/vector exactly like the inrt runtime launcher does:
+     * {@code key = MD5(packageName + versionName + mainScriptFile)} and
+     * {@code vector = MD5(buildId + name).substring(0, 16)}. The runtime reads the same
+     * project.json (written here) and derives the same values, so both ends must stay in sync.
+     */
+    private void syncProjectJsonAndDeriveKeys() throws IOException {
+        File jsonFile = new File(mWorkspacePath, "assets/project/project.json");
+        try {
+            JSONObject json;
+            if (jsonFile.exists()) {
+                json = new JSONObject(new String(PFiles.readBytes(jsonFile.getPath()), "UTF-8"));
+            } else {
+                json = new JSONObject();
+            }
+            AppConfig config = mAppConfig;
+            if (config != null) {
+                if (config.appName != null) {
+                    json.put("name", config.appName);
+                }
+                if (config.packageName != null) {
+                    json.put("packageName", config.packageName);
+                }
+                if (config.versionName != null) {
+                    json.put("versionName", config.versionName);
+                }
+                if (config.versionCode != -1) {
+                    json.put("versionCode", config.versionCode);
+                }
+            }
+            if (!json.has("name")) {
+                json.put("name", "");
+            }
+            if (!json.has("packageName")) {
+                json.put("packageName", "");
+            }
+            if (!json.has("versionName")) {
+                json.put("versionName", "");
+            }
+            mMainScriptFile = json.optString("main", "main.js");
+            json.put("main", mMainScriptFile);
+
+            JSONObject build = json.optJSONObject("build");
+            long buildNumber = 1;
+            if (build != null) {
+                buildNumber = build.optLong("build_number", 0) + 1;
+            }
+            BuildInfo buildInfo = BuildInfo.generate(buildNumber);
+            JSONObject newBuild = new JSONObject();
+            newBuild.put("build_number", buildInfo.getBuildNumber());
+            newBuild.put("build_time", buildInfo.getBuildTime());
+            newBuild.put("build_id", buildInfo.getBuildId());
+            json.put("build", newBuild);
+
+            FileOutputStream fos = new FileOutputStream(jsonFile);
+            try {
+                fos.write(json.toString(2).getBytes("UTF-8"));
+            } finally {
+                fos.close();
+            }
+
+            mKey = MD5.md5(json.getString("packageName") + json.getString("versionName") + mMainScriptFile);
+            mInitVector = MD5.md5(buildInfo.getBuildId() + json.getString("name")).substring(0, 16);
+        } catch (JSONException e) {
+            throw new IOException("Failed to sync assets/project/project.json", e);
+        }
     }
 
     public ApkBuilder sign() throws Exception {
