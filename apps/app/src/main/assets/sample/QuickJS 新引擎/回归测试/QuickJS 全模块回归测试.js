@@ -175,6 +175,45 @@ if (clickableNodes.size() > 0) {
     assert('findOne(timeout) 能拿到控件', blocking !== null && blocking !== undefined);
 }
 
+// --- 顶层兼容别名 / random / sync / auto ---
+assert('print/err', typeof print === 'function' && typeof err === 'function');
+assert('alert/confirm/prompt/select', typeof alert === 'function' && typeof confirm === 'function'
+    && typeof prompt === 'function' && typeof select === 'function');
+var unitRandom = random();
+assert('random()', typeof unitRandom === 'number' && unitRandom >= 0 && unitRandom < 1);
+var dice = random(1, 6);
+assert('random(min, max)', dice >= 1 && dice <= 6 && dice === Math.floor(dice));
+var syncWrapper = sync(function (a, b) { return a + b; });
+assert('sync 包装可调用', typeof syncWrapper === 'function' && syncWrapper(19, 23) === 42);
+assert('setImmediate/clearImmediate', typeof setImmediate === 'function' && typeof clearImmediate === 'function');
+var immediateId = setImmediate(function () {});
+assert('setImmediate 返回 ID', typeof immediateId === 'number' && immediateId > 0);
+clearImmediate(immediateId);
+assert('timers 模块', typeof timers === 'object' && typeof timers.setTimeout === 'function'
+    && typeof timers.setImmediate === 'function');
+assert('waitForActivity/waitForPackage', typeof waitForActivity === 'function'
+    && typeof waitForPackage === 'function');
+assert('auto 对象', typeof auto === 'function' && typeof auto.waitFor === 'function'
+    && typeof auto.setMode === 'function' && typeof auto.setFlags === 'function');
+auto.setMode('fast');
+auto.setFlags(['findOnUiThread']);
+assert('auto.setMode/setFlags 调用不异常', true);
+auto.setMode('normal');
+auto.setFlags([]);
+assert('auto 模式可还原', true);
+assert('auto.service 判空语义', auto.service !== undefined);
+var autoRoot = auto.rootInActiveWindow;
+assert('auto.rootInActiveWindow 可读',
+    autoRoot === null || typeof autoRoot.className === 'function');
+assert('powerDialog/splitScreen', typeof powerDialog === 'function' && typeof splitScreen === 'function');
+assert('app 快捷别名', typeof launch === 'function' && typeof launchApp === 'function'
+    && typeof launchPackage === 'function' && typeof openAppSetting === 'function'
+    && typeof getAppName === 'function' && typeof getPackageName === 'function'
+    && typeof open === 'function');
+assert('选择器动作全局形式', typeof scrollForward === 'function' && typeof setText === 'function'
+    && typeof copy === 'function' && typeof collapse === 'function' && typeof contextClick === 'function');
+assert('顶层 select（对话框语义）', typeof select === 'function');
+
 console.log('\n=== 回归测试完成: ' + pass + ' 通过, ' + fail + ' 失败 ===');
 if (fail > 0) {
     throw new Error('QuickJS 全模块回归失败: ' + fail + ' 项未通过');

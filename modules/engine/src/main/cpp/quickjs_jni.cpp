@@ -1451,6 +1451,28 @@ JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValue
     return callStringHost(context, "getForegroundInfo", kind == "activity" ? "activity" : "package");
 }
 
+JSValue nativeAutoCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string method = argc > 0 ? jsString(context, argv[0]) : std::string();
+    int32_t value = 0;
+    if (argc > 1 && JS_ToInt32(context, &value, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "auto value must be an integer");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "autoCall", "(Ljava/lang/String;I)Ljava/lang/String;");
+    jstring javaMethod = toJavaString(env, method);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, methodId, javaMethod, value));
+    env->DeleteLocalRef(javaMethod);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 JSValue nativeSetScreenMetrics(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int32_t width = 0;
     int32_t height = 0;
@@ -2889,6 +2911,8 @@ const char kBootstrapScript[] = R"JS(
     global.recents = function () { return __aiNativeGlobalAction('recents'); };
     global.notifications = function () { return __aiNativeGlobalAction('notifications'); };
     global.quickSettings = function () { return __aiNativeGlobalAction('quickSettings'); };
+    global.powerDialog = function () { return __aiNativeGlobalAction('powerDialog'); };
+    global.splitScreen = function () { return __aiNativeGlobalAction('splitScreen'); };
     global.setClip = function (value) { return __aiNativeSetClip(String(value)); };
     global.getClip = __aiNativeGetClip;
     global.currentPackage = function () { return __aiNativeForegroundInfo('package'); };
@@ -3724,6 +3748,11 @@ const char kBootstrapScript[] = R"JS(
         getInstalledApps: _app.getInstalledApps,
         getAppInfo: _app.getAppInfo,
         launchPackage: _app.launchPackage,
+        // Auto.js 的 app.launchApp(name) 按应用名启动：先查包名再启动。
+        launchApp: function (name) {
+            var pkg = __aiNativeAppGetPackageName(String(name));
+            return pkg ? __aiNativeAppLaunch(String(pkg)) : false;
+        },
         getPackageName: function (name) { return __aiNativeAppGetPackageName(String(name)); },
         getAppName: function (pkg) { return __aiNativeAppGetAppName(String(pkg)); },
         openAppSetting: function (pkg) { return __aiNativeAppOpenAppSetting(String(pkg)); },
@@ -4921,13 +4950,109 @@ const char kBootstrapScript[] = R"JS(
     });
     // Rhino copies every selector method into the global scope as well; mirror the ones that
     // are not already taken by gesture/clipboard globals so older scripts keep working.
+    // `select` is deliberately NOT mirrored: Rhino's global `select` is the selector action,
+    // but the Auto.js 4.x documented meaning is the dialog, which is what QuickJS exposes.
     ['find', 'findOnce', 'findOne', 'untilFind', 'untilFindOne', 'exists', 'waitFor', 'findOf',
-        'findOneOf'].forEach(function (name) {
+        'findOneOf', 'accessibilityFocus', 'clearAccessibilityFocus', 'focus', 'clearFocus', 'copy',
+        'cut', 'paste', 'collapse', 'expand', 'dismiss', 'show', 'contextClick', 'scrollForward',
+        'scrollBackward', 'scrollUp', 'scrollDown', 'scrollLeft', 'scrollRight', 'scrollTo',
+        'setText', 'setSelection', 'setProgress'].forEach(function (name) {
         global[name] = function () {
             var selector = global.selector();
             return selector[name].apply(selector, arguments);
         };
     });
+
+    // ---- app / 文件快捷别名（Auto.js 4.x 顶层函数）----
+    ['launch', 'launchApp', 'launchPackage', 'openAppSetting', 'getAppName', 'getPackageName']
+        .forEach(function (name) {
+            if (typeof global.app[name] !== 'function') return;
+            global[name] = function () { return global.app[name].apply(global.app, arguments); };
+        });
+    global.open = function (path) { return global.app.viewFile(path); };
+
+    // ---- Top level Auto.js 4.x aliases ----
+    global.print = global.console.log;
+    global.err = global.console.error;
+
+    ['alert', 'confirm', 'prompt', 'select', 'singleChoice', 'multiChoice'].forEach(function (name) {
+        if (typeof global.dialogs[name] !== 'function') return;
+        global[name] = function () { return global.dialogs[name].apply(global.dialogs, arguments); };
+    });
+
+    global.random = function (min, max) {
+        if (arguments.length === 0) return Math.random();
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    };
+
+    // Rhino wraps the function in a Rhino Synchronizer; QuickJS engines are single threaded and
+    // workers do not share JS objects, so the lock degrades to a plain wrapper that stays callable.
+    global.sync = function (func) {
+        if (typeof func !== 'function') throw new TypeError('sync(func) requires a function');
+        return function () { return func.apply(this, arguments); };
+    };
+
+    global.setImmediate = function (callback) { return setTimeout(callback, 0); };
+    global.clearImmediate = function (id) { return clearTimeout(id); };
+    global.timers = Object.freeze({
+        setTimeout: global.setTimeout,
+        setInterval: global.setInterval,
+        clearTimeout: global.clearTimeout,
+        clearInterval: global.clearInterval,
+        setImmediate: global.setImmediate,
+        clearImmediate: global.clearImmediate
+    });
+
+    global.waitForActivity = function (activity, period) {
+        period = period || 200;
+        while (global.currentActivity() !== activity) sleep(period);
+    };
+    global.waitForPackage = function (packageName, period) {
+        period = period || 200;
+        while (global.currentPackage() !== packageName) sleep(period);
+    };
+
+    var AUTO_MODES = { normal: 0, fast: 1 };
+    var AUTO_FLAGS = { findOnUiThread: 1, useUsageStats: 2, useShell: 4 };
+    var AUTO_SERVICE = Object.freeze({});
+
+    function autoCall(method, value) {
+        return JSON.parse(__aiNativeAutoCall(method, value === undefined ? 0 : value));
+    }
+
+    var auto = function (mode) {
+        if (mode) global.auto.setMode(mode);
+        autoCall('ensure');
+    };
+    auto.waitFor = function () { autoCall('waitFor'); };
+    auto.setMode = function (modeStr) {
+        if (typeof modeStr !== 'string') throw new TypeError('mode should be a string');
+        var mode = AUTO_MODES[modeStr];
+        if (mode === undefined) throw new Error('unknown mode for auto.setMode(): ' + modeStr);
+        autoCall('setMode', mode);
+    };
+    auto.setFlags = function (flags) {
+        var names = Array.isArray(flags) ? flags : Array.prototype.slice.call(arguments);
+        var value = 0;
+        names.forEach(function (name) {
+            var flag = AUTO_FLAGS[name];
+            if (flag === undefined) throw new Error('unknown flag for auto.setFlags(): ' + name);
+            value |= flag;
+        });
+        autoCall('setFlags', value);
+    };
+    Object.defineProperty(auto, 'service', {
+        // Rhino 返回 AccessibilityService 对象；白名单桥不给脚本 Java 对象，
+        // 这里用空对象 / null 保留「判空」语义。
+        get: function () { return autoCall('serviceReady').v === true ? AUTO_SERVICE : null; }
+    });
+    Object.defineProperty(auto, 'root', {
+        get: function () { return decodeAutomatorResult(__aiNativeAutoCall('rootCurrent', 0)); }
+    });
+    Object.defineProperty(auto, 'rootInActiveWindow', {
+        get: function () { return decodeAutomatorResult(__aiNativeAutoCall('rootActive', 0)); }
+    });
+    global.auto = auto;
 
     var engineInfo = { name: 'QuickJS', version: '2026-06-04', native: true };
     global.__engine__ = Object.freeze(engineInfo);
@@ -5079,6 +5204,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeGetClip", nativeGetClip, 0);
     installNativeFunction(state->context, global, "__aiNativeForegroundInfo", nativeForegroundInfo, 1);
     installNativeFunction(state->context, global, "__aiNativeSetScreenMetrics", nativeSetScreenMetrics, 2);
+    installNativeFunction(state->context, global, "__aiNativeAutoCall", nativeAutoCall, 2);
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);

@@ -25,6 +25,7 @@ import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityNodeInfo;
 
 import com.stardust.autojs.core.accessibility.UiSelector;
 import com.stardust.autojs.core.http.MutableOkHttp;
@@ -395,6 +396,10 @@ final class QuickJsHostBridge implements AutoCloseable {
                 return mRuntime.automator.notifications();
             case "quickSettings":
                 return mRuntime.automator.quickSettings();
+            case "powerDialog":
+                return mRuntime.automator.powerDialog();
+            case "splitScreen":
+                return mRuntime.automator.splitScreen();
             default:
                 throw new IllegalArgumentException("Unknown global action: " + action);
         }
@@ -2880,6 +2885,40 @@ final class QuickJsHostBridge implements AutoCloseable {
     public long selectorCreate() {
         mRuntime.accessibilityBridge.ensureServiceEnabled();
         return putAutomatorHandle(new UiSelector(mRuntime.accessibilityBridge));
+    }
+
+    /**
+     * `auto` 对象（Rhino `__automator__.js` 的子集）：服务确保/等待、模式与标志位、
+     * 以及当前窗口根节点（返回 UiObject 句柄，交给 JS 包装层）。
+     */
+    public String autoCall(String method, int value) throws JSONException {
+        switch (method == null ? "" : method) {
+            case "ensure":
+                mRuntime.accessibilityBridge.ensureServiceEnabled();
+                return AUTOMATOR_VOID_RESULT;
+            case "waitFor":
+                mRuntime.accessibilityBridge.waitForServiceEnabled();
+                return AUTOMATOR_VOID_RESULT;
+            case "setMode":
+                mRuntime.accessibilityBridge.setMode(value);
+                return AUTOMATOR_VOID_RESULT;
+            case "setFlags":
+                mRuntime.accessibilityBridge.setFlags(value);
+                return AUTOMATOR_VOID_RESULT;
+            case "serviceReady":
+                return encodeAutomatorResult(mRuntime.accessibilityBridge.getService() != null);
+            case "rootActive":
+            case "rootCurrent": {
+                AccessibilityNodeInfo root = "rootActive".equals(method)
+                        ? mRuntime.accessibilityBridge.getRootInActiveWindow()
+                        : mRuntime.accessibilityBridge.getRootInCurrentWindow();
+                return root == null
+                        ? encodeAutomatorResult(null)
+                        : encodeAutomatorResult(UiObject.Companion.createRoot(root));
+            }
+            default:
+                throw new IllegalArgumentException("不支持的 auto 方法：" + method);
+        }
     }
 
     /**

@@ -25,7 +25,7 @@
 
 | 领域 | 硬阻塞 |
 | --- | --- |
-| 顶层别名与手势 | `alert/confirm/prompt/select/random/sync/auto/print/err`、`gesture*`、`input`、按键常量、`setScreenMetrics` 仍未对齐；依赖这些的旧脚本需改写法 |
+| 手势与输入 | `gesture*`、`input`/`rawInput`、按键常量（`KeyCode/KeyEvent/Tap/Swipe/…`）仍未对齐；依赖这些的旧脚本需改写法 |
 | 模块 | `web`/`zips`/`sqlite`/`crypto`/`util`/`io`/`plugins` 等模块级能力未迁移 |
 | UI | QuickJS 是最小化 overlay 实现，还未覆盖 Activity 模式、完整控件属性和复杂列表交互 |
 | floaty | 基础窗口已可用，但与 Rhino XML 窗口对象、控件代理和事件 API 尚未完全等价 |
