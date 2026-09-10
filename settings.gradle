@@ -1,3 +1,5 @@
+rootProject.name = 'ai-js-pro'
+
 include ':app', ':automator', ':common', ':autojs', ':rhino-language', ':engine-rhino', ':inrt'
 include ':enhancedfloaty'
 include ':mutabletheme'

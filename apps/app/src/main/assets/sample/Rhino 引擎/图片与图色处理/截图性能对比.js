@@ -6,7 +6,7 @@ if (!requestScreenCapture()) {
 }
 
 var ROUNDS = 15;
-var OUTPUT_PATH = "/sdcard/脚本/autojs_capture_compare_result.txt";
+var OUTPUT_PATH = "/sdcard/脚本/aijspro_capture_compare_result.txt";
 var outputLines = [];
 
 function emit(message) {
@@ -36,11 +36,11 @@ function summarize(name, values, dimensions) {
     var sorted = values.slice().sort(function (left, right) { return left - right; });
     var total = 0;
     for (var i = 0; i < values.length; i++) total += values[i];
-    emit("[AUTOJS_COMPARE][" + name + "] 尺寸: " + dimensions);
-    emit("[AUTOJS_COMPARE][" + name + "] 每帧: " + values.map(function (value) {
+    emit("[AIJSPRO_COMPARE][" + name + "] 尺寸: " + dimensions);
+    emit("[AIJSPRO_COMPARE][" + name + "] 每帧: " + values.map(function (value) {
         return value.toFixed(3);
     }).join(", ") + " ms");
-    emit("[AUTOJS_COMPARE][" + name + "] 平均: " + (total / values.length).toFixed(3) +
+    emit("[AIJSPRO_COMPARE][" + name + "] 平均: " + (total / values.length).toFixed(3) +
         " ms，最小: " + sorted[0].toFixed(3) +
         " ms，P95: " + percentile(sorted, 0.95).toFixed(3) +
         " ms，最大: " + sorted[sorted.length - 1].toFixed(3) + " ms");
@@ -60,11 +60,11 @@ function benchmark(name, paced) {
     summarize(name, values, dimensions);
 }
 
-emit("========== AUTOJS_COMPARE START ==========");
+emit("========== AIJSPRO_COMPARE START ==========");
 var cold = captureOnce();
-emit("[AUTOJS_COMPARE][首次截图] " + cold.dimensions + "，耗时: " + cold.elapsedMs.toFixed(3) + " ms");
+emit("[AIJSPRO_COMPARE][首次截图] " + cold.dimensions + "，耗时: " + cold.elapsedMs.toFixed(3) + " ms");
 benchmark("缓存帧", true);
 benchmark("连续截图", false);
-emit("========== AUTOJS_COMPARE END ==========");
+emit("========== AIJSPRO_COMPARE END ==========");
 files.write(OUTPUT_PATH, outputLines.join("\n") + "\n");
 toast("截图对比完成：" + OUTPUT_PATH);

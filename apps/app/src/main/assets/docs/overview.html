@@ -53,7 +53,7 @@
 <div class="line"></div>
 
 <ul>
-<li><a class="nav-https-github-com-hyb1996-NoRootScriptDroid" href="https://github.com/hyb1996/NoRootScriptDroid">GitHub项目 &amp; Issue提交</a></li>
+<li><a class="nav-https-github-com-jdkshen-ai-js-pro" href="https://github.com/Jdkshen/ai.js-pro">GitHub 项目 &amp; Issue 提交</a></li>
 <li><a class="nav-http-autojs-org" href="https://github.com/Jdkshen/ai.js-pro">AI.js Pro 项目主页</a></li>
 </ul>
 
@@ -85,7 +85,7 @@
 <ul>
 <li>因为AI.js Pro是基于JavaScript的，学习AI.js Pro的API之前建议先学习JavaScript的基本语法和内置对象，可以使用教程前面的两个JavaScript教程链接来学习。</li>
 <li>如果您想要使用TypeScript来开发，目前已经有开发者公布了一个可以把使用TypeScript进行AI.js Pro开发的工具，参见<a href="https://github.com/pboymt/autojs-dev">AI.js Pro DevTools</a>。</li>
-<li>如果想要在电脑而不是手机上开发AI.js Pro，可以使用VS Code以及相应的AI.js Pro插件使得在电脑上编辑的脚本能推送到手机运行，参见<a href="https://github.com/hyb1996/Auto.js-VSCode-Extension">AI.js Pro-VSCode-Extension</a>。</li>
+<li>如果想要在电脑而不是手机上开发AI.js Pro，可以使用VS Code以及相应的插件使得在电脑上编辑的脚本能推送到手机运行，参见<a href="https://github.com/hyb1996/Auto.js-VSCode-Extension">Auto.js-VSCode-Extension</a>（AI.js Pro 兼容该插件）。</li>
 </ul>
 <p>本文档的章节大致上是以模块来分的，总体上可以分成&quot;自动操作&quot;类模块(控件操作、触摸模拟、按键模拟等)和其他类模块(设备、应用、界面等)。</p>
 <p>&quot;自动操作&quot;的部分又可以大致分为基于控件和基于坐标的操作。基于坐标的操作是传统按键精灵、触摸精灵等脚本软件采用的方式，通过屏幕坐标来点击、长按指定位置模拟操作，从而到达目的。例如<code>click(100, 200)</code>, <code>press(100, 200, 500)</code>等。这种方式在游戏类脚本中比较有可行性，结合找图找色、坐标放缩功能也能达到较好的兼容性。但是，这种方式对一般软件脚本却难以达到想要的效果，而且这种方式需要安卓7.0版本以上或者root权限才能执行。所以对于一般软件脚本(例如批量添加联系人、自动提取短信验证码等等)，我们采用基于控件的模拟操作方式，结合通知事情、按键事情等达成更好的工作流。这些部分的文档参见<a href="widgets-based-automation.html">基于控件的操作</a>和<a href="coordinates-based-automation.html">基于坐标的操作</a>。</p>
