@@ -399,6 +399,7 @@
     <string name="format_signing_auto_ready">本机专属 %1$s</string>
     <string name="text_signing_unverified">尚未验证，打包仍会退回内置证书</string>
     <string name="format_build_signer">签名：%1$s</string>
+    <string name="format_signing_recovered">旧密钥库 %1$s 打不开（本机没有它的口令），已改名备份并重新生成了一套身份；用过旧身份的已装应用需要先卸载</string>
     <string name="summary_signing_switch_hint">注意：换成新证书后无法覆盖安装旧证书签名的包，需先卸载</string>
     <string name="text_permissions">权限</string>
     <string name="format_permission_count">%1$d 个权限</string>

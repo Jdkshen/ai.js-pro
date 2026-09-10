@@ -191,6 +191,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var successPath by mutableStateOf("")
     /** 产物里实际读出来的签名者（不是用户选的那个），用于成功提示。 */
     private var successSigner by mutableStateOf("")
+    /** 身份被重建时的提醒（旧密钥库打不开），空字符串表示没什么要说的。 */
+    private var successNotice by mutableStateOf("")
     private val failureShow = mutableStateOf(false)
     private var failureMessage by mutableStateOf("")
 
@@ -634,6 +636,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     busy = false
                     successPath = outApk.path
                     successSigner = signer?.let { it.subject + " · " + it.shortFingerprint }.orEmpty()
+                    successNotice = AutoSigningIdentity.lastOrphanedKeyStore
+                        ?.let { getString(R.string.format_signing_recovered, it) }.orEmpty()
                     successShow.value = true
                     // 自动模式下首次打包会生成身份，打包后刷新一下卡片上的提示。
                     refreshAutoIdentity()
@@ -1017,6 +1021,14 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         getString(R.string.format_build_signer, successSigner),
                         fontSize = 12.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+                if (successNotice.isNotEmpty()) {
+                    Text(
+                        successNotice,
+                        fontSize = 12.sp,
+                        color = Color(0xFFD32F2F),
                         modifier = Modifier.padding(top = 6.dp)
                     )
                 }

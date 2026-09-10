@@ -24,10 +24,19 @@ object AutoSigningIdentity {
     private const val ORGANIZATION = "AI.js Pro"
     private const val COUNTRY = "CN"
 
+    /**
+     * 上一次打包时被兑掉的旧密钥库文件名（口令丢了、打不开），非 null 时界面会提醒用户。
+     * 被兑掉的文件只改名不删除，用的是旧身份、已经装在手机上的包需要先卸载。
+     */
+    @Volatile
+    var lastOrphanedKeyStore: String? = null
+        private set
+
     /** 取得（必要时生成）该应用的签名身份，交给打包器使用。 */
     @Synchronized
     @Throws(Exception::class)
     fun forApp(outputDir: File, appName: String?): Signer {
+        lastOrphanedKeyStore = null
         val key = resolve(outputDir, appName)
             ?: throw IOException("无法准备应用签名身份：$outputDir")
         return KeyStoreApkSigner(key, ALIAS)
@@ -54,30 +63,20 @@ object AutoSigningIdentity {
     ): SigningKey? {
         val keyStore = identityFile(outputDir, appName)
         if (keyStore.isFile) {
-            // 先试按路径记的口令；再试旧版本只记在「当前密钥库口令」上的那个。
-            // 对上了就补记账，之后再打包直接命中。
-            val candidates = listOf(
-                Pref.getPrefString(SigningOptions.passwordPrefKey(keyStore.path), ""),
-                Pref.getPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, "")
-            ).filter { it.isNotEmpty() }.distinct()
-            for (password in candidates) {
-                val key = try {
-                    SigningKey.load(keyStore, null,
-                        password.toCharArray(), ALIAS, password.toCharArray())
-                } catch (error: Exception) {
-                    Log.w(TAG, "Password candidate rejected for " + keyStore.path, error)
-                    null
-                }
-                if (key != null) {
-                    Pref.setPrefString(SigningOptions.passwordPrefKey(keyStore.path), password)
-                    return key
-                }
+            val key = openExisting(keyStore)
+            if (key != null) return key
+            // 只做只读查看（existingSubject）时不要动文件，交给调用方显示“尚未生成”。
+            if (!generateIfMissing) return null
+            // 打不开（口令丢了、或者不是本机生成的）：硬报错会把用户彻底堵死，
+            // 改成把旧文件改名留个备份，再生成一份新身份。
+            val backup = File(keyStore.parentFile, keyStore.name + ".unreadable")
+            backup.delete()
+            if (keyStore.renameTo(backup)) {
+                lastOrphanedKeyStore = backup.name
+                Log.w(TAG, "Moved the unreadable keystore aside: " + backup.path)
+            } else {
+                Log.w(TAG, "Cannot move the unreadable keystore aside: " + keyStore.path)
             }
-            throw IOException(
-                "已存在签名密钥库，但本机没有它的口令：${keyStore.path}。" +
-                        "请在「选择签名」里选中它并填入口令，或删掉这个文件后重新打包（会生成新的身份，" +
-                        "用了旧身份的已装应用需要先卸载）"
-            )
         }
         if (!generateIfMissing) return null
         val password = KeyStoreGenerator.randomPassword()
@@ -88,5 +87,30 @@ object AutoSigningIdentity {
         Pref.setPrefString(SigningOptions.passwordPrefKey(keyStore.path), password)
         Log.i(TAG, "Generated the app signing identity: " + keyStore.path)
         return generated
+    }
+
+    /**
+     * 试着用本机记得的口令打开密钥库：先试按路径记的，再试旧版本只记在
+     * 「当前密钥库口令」上的那个；命中后补记账，之后再打包直接命中。
+     */
+    private fun openExisting(keyStore: File): SigningKey? {
+        val candidates = listOf(
+            Pref.getPrefString(SigningOptions.passwordPrefKey(keyStore.path), ""),
+            Pref.getPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, "")
+        ).filter { it.isNotEmpty() }.distinct()
+        for (password in candidates) {
+            val key = try {
+                SigningKey.load(keyStore, null,
+                    password.toCharArray(), ALIAS, password.toCharArray())
+            } catch (error: Exception) {
+                Log.w(TAG, "Password candidate rejected for " + keyStore.path, error)
+                null
+            }
+            if (key != null) {
+                Pref.setPrefString(SigningOptions.passwordPrefKey(keyStore.path), password)
+                return key
+            }
+        }
+        return null
     }
 }

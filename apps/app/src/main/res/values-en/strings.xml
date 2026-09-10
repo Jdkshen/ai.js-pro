@@ -217,5 +217,6 @@
     <string name="format_signing_auto_ready">private to this device: %1$s</string>
     <string name="text_signing_unverified">not verified yet, the build will fall back to the built-in certificate</string>
     <string name="format_build_signer">Signature: %1$s</string>
+    <string name="format_signing_recovered">The old keystore %1$s could not be opened (its password is not on this device), so it was renamed as a backup and a new identity was created; apps installed with the old identity must be uninstalled first</string>
     <string name="summary_signing_switch_hint">Note: packages signed with the old certificate can no longer be upgraded in place, uninstall them first</string>
 </resources>

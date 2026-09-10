@@ -406,14 +406,62 @@ public class ApkBuilderEncryptionTest {
         File keyStore = new File(workDir, appName + "-signing.p12");
         KeyStoreGenerator.save(KeyStoreGenerator.generate(appName, "AI.js Pro", "CN"),
                 keyStore, password.toCharArray(), "aijspro");
-        // 只写旧版本那个键，并且清掉可能存在的路径键
-        Pref.setPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, password);
-        Pref.setPrefString(SigningOptions.INSTANCE.passwordPrefKey(keyStore.getPath()), "");
+        // 这里会写应用的偏好，测试跑完必须恢复：这些键是 App 真实使用的，
+        // 上一次就是忘了恢复，把用户真实密钥库的口令覆盖掉了。
+        String passwordKey = SigningOptions.INSTANCE.passwordPrefKey(keyStore.getPath());
+        String mixedLegacy = Pref.getPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, null);
+        String mixedPath = Pref.getPrefString(passwordKey, null);
+        try {
+            // 只写旧版本那个键，并且清掉可能存在的路径键
+            Pref.setPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, password);
+            Pref.setPrefString(passwordKey, "");
 
-        Signer signer = AutoSigningIdentity.INSTANCE.forApp(workDir, appName);
-        assertNotNull("必须能复用旧密钥库，而不是报没有口令", signer);
-        assertEquals("应当把口令补记到路径键上", password,
-                Pref.getPrefString(SigningOptions.INSTANCE.passwordPrefKey(keyStore.getPath()), ""));
+            Signer signer = AutoSigningIdentity.INSTANCE.forApp(workDir, appName);
+            assertNotNull("必须能复用旧密钥库，而不是报没有口令", signer);
+            assertEquals("应当把口令补记到路径键上", password,
+                    Pref.getPrefString(passwordKey, ""));
+        } finally {
+            Pref.setPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, mixedLegacy);
+            Pref.setPrefString(passwordKey, mixedPath);
+        }
+    }
+
+    /**
+     * 口令丢失、打不开的旧密钥库不能把用户彻底堵死：应当把旧文件改名备份、
+     * 生成本机新身份继续打包，并把这件事留给界面提示。
+     */
+    @Test
+    public void autoSigningRecoversFromAnUnreadableKeyStore() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File workDir = new File(context.getCacheDir(), "apk-builder-broken-identity-test");
+        deleteRecursively(workDir);
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+
+        String appName = "BrokenIdentityProbe";
+        File keyStore = new File(workDir, appName + "-signing.p12");
+        KeyStoreGenerator.save(KeyStoreGenerator.generate(appName, "AI.js Pro", "CN"),
+                keyStore, KeyStoreGenerator.randomPassword().toCharArray(), "aijspro");
+
+        String passwordKey = SigningOptions.INSTANCE.passwordPrefKey(keyStore.getPath());
+        String mixedLegacy = Pref.getPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, null);
+        String mixedPath = Pref.getPrefString(passwordKey, null);
+        try {
+            Pref.setPrefString(passwordKey, "");
+            Pref.setPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, "not-the-password");
+
+            Signer signer = AutoSigningIdentity.INSTANCE.forApp(workDir, appName);
+            assertNotNull("打不开的旧密钥库应当被换掉，而不是把打包堵死", signer);
+            File backup = new File(workDir, appName + "-signing.p12.unreadable");
+            assertTrue("旧文件应当被改名备份: " + backup, backup.isFile());
+            assertTrue("原路径上应当生成了新身份", keyStore.isFile());
+            assertEquals("应当留下给用户看的提示", backup.getName(),
+                    AutoSigningIdentity.INSTANCE.getLastOrphanedKeyStore());
+            assertNotNull("新身份应当可用", AutoSigningIdentity.INSTANCE.existingSubject(workDir, appName));
+        } finally {
+            Pref.setPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, mixedLegacy);
+            Pref.setPrefString(passwordKey, mixedPath);
+        }
     }
 
     private static ApkSignatureReader.Signer buildWithConfig(Context context, File outDir, String apkName,
