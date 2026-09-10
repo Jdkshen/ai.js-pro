@@ -1,6 +1,6 @@
 rootProject.name = 'ai-js-pro'
 
-include ':app', ':automator', ':common', ':autojs', ':rhino-language', ':engine-rhino', ':inrt'
+include ':app', ':automator', ':common', ':engine', ':rhino-language', ':engine-rhino', ':inrt'
 include ':enhancedfloaty'
 include ':mutabletheme'
 include ':multilevellistview'
@@ -11,7 +11,7 @@ include ':apkbuilder'
 
 project(':app').projectDir = new File(rootProject.projectDir, 'apps/app')
 project(':inrt').projectDir = new File(rootProject.projectDir, 'apps/inrt')
-project(':autojs').projectDir = new File(rootProject.projectDir, 'modules/autojs')
+project(':engine').projectDir = new File(rootProject.projectDir, 'modules/engine')
 project(':engine-rhino').projectDir = new File(rootProject.projectDir, 'modules/engine-rhino')
 project(':rhino-language').projectDir = new File(rootProject.projectDir, 'modules/rhino-language')
 project(':automator').projectDir = new File(rootProject.projectDir, 'modules/automator')

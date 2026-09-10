@@ -25,6 +25,6 @@
 ## 同步原则
 
 1. 已存在的同名示例以仓库版本为准，不用下载目录覆盖。
-2. 新增示例必须能映射到 `modules/autojs` 中的实际 API，或改写为 Android Java API。
+2. 新增示例必须能映射到 `modules/engine` 中的实际 API，或改写为 Android Java API。
 3. 示例资产不得出现 Node.js 入口，也不得包含 `node_modules`。
 4. 需要新增运行时 API 时，先实现并测试 API，再开放对应示例。

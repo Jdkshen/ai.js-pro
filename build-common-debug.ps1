@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not $SkipNative) {
-    & (Join-Path $projectRoot 'modules\autojs\src\main\cpp\build-quickjs.ps1')
+    & (Join-Path $projectRoot 'modules\engine\src\main\cpp\build-quickjs.ps1')
     if ($LASTEXITCODE -ne 0) {
         throw "QuickJS native build failed with exit code $LASTEXITCODE"
     }

@@ -55,7 +55,7 @@
 
 **AI.js Pro**（包名 `com.jdkshen.aijspro`，应用名「AI.js Pro」，当前版本 `1.0.2` / versionCode 465）：
 - 基于 **Auto.js 4.4.1（Stardust）** 源码的定制增强版
-- 双引擎：**Rhino + QuickJS**（JNI 桥接，`modules/autojs`）
+- 双引擎：**Rhino + QuickJS**（JNI 桥接，`modules/engine`）
 - 增强：Miuix 主界面、OpenCV 5.0 DNN / YOLO、Native Frame、Shizuku、悬浮窗重构（旧 ImGui 工作台已移除）
 
 > ⚠️ K40 上另装有 **Auto.js Pro（`org.autojs.autojspro`，AutoX 商业版 9.3.11）**，与本项目同屏易混淆，勿改错包。本项目 UI 对标它的 Material 3 风格（但为原生 View 实现，非 Flutter）。

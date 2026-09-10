@@ -23,9 +23,9 @@
 1. 执行 `git status --short`，记录工作区已有修改。不要覆盖、回滚或删除其他任务与用户的改动。
 2. 阅读并以当前文件为准：
    - [QuickJS 双引擎架构](../architecture/QUICKJS_ENGINE.md)
-   - `modules/autojs/src/main/java/com/stardust/autojs/engine/QuickJsHostBridge.java`
-   - `modules/autojs/src/main/java/com/stardust/autojs/engine/QuickJsJavaScriptEngine.java`
-   - `modules/autojs/src/main/cpp/quickjs_jni.cpp`
+   - `modules/engine/src/main/java/com/stardust/autojs/engine/QuickJsHostBridge.java`
+   - `modules/engine/src/main/java/com/stardust/autojs/engine/QuickJsJavaScriptEngine.java`
+   - `modules/engine/src/main/cpp/quickjs_jni.cpp`
    - 对应的 Rhino API 实现
 3. 先列出当前 QuickJS 全局 API，确认没有同名实现后再增加。
 4. 当前工作区可能同时存在其他任务的未完成改动。只修改本任务必须修改的文件，不要整理无关代码。
@@ -334,7 +334,7 @@ apps/app/src/main/assets/sample/脚本引擎/
 Native 代码有修改时完整执行：
 
 ```powershell
-.\modules\autojs\src\main\cpp\build-quickjs.ps1 -Configuration Release
+.\modules\engine\src\main\cpp\build-quickjs.ps1 -Configuration Release
 .\build-common-debug.ps1 -SkipNative
 ```
 

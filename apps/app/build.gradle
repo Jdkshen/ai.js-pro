@@ -131,7 +131,7 @@ android {
 
 repositories {
     flatDir {
-        dirs rootProject.file('modules/autojs/libs')
+        dirs rootProject.file('modules/engine/libs')
     }
 }
 
@@ -214,7 +214,7 @@ dependencies {
     debugImplementation 'com.squareup.leakcanary:leakcanary-support-fragment:1.6.1'
     implementation project(':automator')
     implementation project(':common')
-    implementation project(':autojs')
+    implementation project(':engine')
     compileOnly project(':rhino-language')
     compatImplementation project(':engine-rhino')
     // The lite runtime rejects Rhino script execution, but the shared editor highlighter and
@@ -331,7 +331,7 @@ tasks.register('verifyBundledFindImageAssets') {
     }
 }
 
-def quickJsNativeSourceDir = rootProject.file('modules/autojs/src/main/cpp')
+def quickJsNativeSourceDir = rootProject.file('modules/engine/src/main/cpp')
 def quickJsNativeSources = [
         'CMakeLists.txt',
         'quickjs_jni.cpp',
@@ -339,7 +339,7 @@ def quickJsNativeSources = [
         'native_frame_store.h'
 ].collect { new File(quickJsNativeSourceDir, it) }
 def quickJsNativeLibraries = ['armeabi-v7a', 'arm64-v8a', 'x86'].collect {
-    rootProject.file("modules/autojs/src/main/jniLibs/${it}/libquickjs_jni.so")
+    rootProject.file("modules/engine/src/main/jniLibs/${it}/libquickjs_jni.so")
 }
 
 tasks.register('verifyQuickJsNativeLibrariesFresh') {
@@ -358,7 +358,7 @@ tasks.register('verifyQuickJsNativeLibrariesFresh') {
         def stale = quickJsNativeLibraries.findAll { it.lastModified() < newestSourceTime }
         if (!stale.isEmpty()) {
             throw new GradleException('QuickJS JNI libraries are older than their native sources. Run ' +
-                    'modules/autojs/src/main/cpp/build-quickjs.ps1 before Gradle packaging:\n' +
+                    'modules/engine/src/main/cpp/build-quickjs.ps1 before Gradle packaging:\n' +
                     stale.collect { ' - ' + it }.join('\n'))
         }
     }

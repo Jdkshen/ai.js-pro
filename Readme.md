@@ -20,7 +20,7 @@ apps/
 ├─ app/                 主应用（Gradle 模块 :app）
 └─ inrt/                独立脚本 APK 运行时（:inrt）
 modules/
-├─ autojs/              JavaScript 引擎与运行时 API（:autojs）
+├─ engine/              JavaScript 引擎与运行时 API（:engine）
 ├─ automator/           无障碍自动化核心（:automator）
 └─ common/              公共基础库（:common）
 third-party/            内嵌第三方 Android 模块

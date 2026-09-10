@@ -37,10 +37,10 @@ private void encrypt(FileOutputStream outputStream, File file) throws IOExceptio
 
 | 类 | 位置 |
 |---|---|
-| `ScriptEncryption`（decrypt；key/vec 经反射注入） | `modules/autojs/src/main/java/com/stardust/autojs/engine/encryption/ScriptEncryption.kt` |
+| `ScriptEncryption`（decrypt；key/vec 经反射注入） | `modules/engine/src/main/java/com/stardust/autojs/engine/encryption/ScriptEncryption.kt` |
 | `AdvancedEncryptionStandard`（AES/CBC/PKCS5Padding，encrypt/decrypt） | `modules/common/src/main/java/com/stardust/util/AdvancedEncryptionStandard.kt` |
-| `EncryptedScriptFileHeader`（`BLOCK_SIZE=8`，魔数 `77 01 17 7F 12 12` + 2 字节 flags） | `modules/autojs/src/main/java/com/stardust/autojs/script/EncryptedScriptFileHeader.kt` |
-| `BuildInfo`（`mBuildId` 等） | `modules/autojs/src/main/java/com/stardust/autojs/project/BuildInfo.java` |
+| `EncryptedScriptFileHeader`（`BLOCK_SIZE=8`，魔数 `77 01 17 7F 12 12` + 2 字节 flags） | `modules/engine/src/main/java/com/stardust/autojs/script/EncryptedScriptFileHeader.kt` |
+| `BuildInfo`（`mBuildId` 等） | `modules/engine/src/main/java/com/stardust/autojs/project/BuildInfo.java` |
 | `XJavaScriptEngine`（解密端） | `apps/inrt/src/main/java/com/jdkshen/aijspro/inrt/autojs/XJavaScriptEngine.kt` |
 
 ## 任务链
@@ -61,7 +61,7 @@ private void encrypt(FileOutputStream outputStream, File file) throws IOExceptio
 
 ### 任务 2：`project.json` 写入 BuildInfo 且密钥派生一致
 
-**文件**：`apps/app/.../build/ApkBuilder.java`、`modules/autojs/src/main/java/com/stardust/autojs/project/BuildInfo.java`
+**文件**：`apps/app/.../build/ApkBuilder.java`、`modules/engine/src/main/java/com/stardust/autojs/project/BuildInfo.java`
 
 1. 打包时更新/生成 `project.json`：确保 `buildInfo.buildId`、`name`、`packageName`、`versionName`、`main` 存在（`ProjectConfig.fromFile` 读回时可解析）。
 2. 校验打包端与运行时端 `initKey()` 的派生公式严格一致：
@@ -85,7 +85,7 @@ private void encrypt(FileOutputStream outputStream, File file) throws IOExceptio
 
 ### 任务 4：回归与提交
 
-1. `gradlew test`（至少 `:autojs:test`、`:common:test`、`:apkbuilder:test`）通过；`build-common-debug.ps1 -SkipNative` 构建成功。
+1. `gradlew test`（至少 `:engine:test`、`:common:test`、`:apkbuilder:test`）通过；`build-common-debug.ps1 -SkipNative` 构建成功。
 2. 提交信息（参考项目现有风格）：
    ```
    fix: restore script encryption in bundled APK packaging

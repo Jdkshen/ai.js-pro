@@ -24,7 +24,7 @@ AI.js Pro 是从 Auto.js 4.4.1 演进而来的 Android JavaScript IDE 与自动�
 | --- | --- | --- |
 | `apps/app` | `:app` | 主 APK、Miuix/原生 UI、编辑器、脚本列表、悬浮窗、MCP、APK 打包入口 |
 | `apps/inrt` | `:inrt` | 脚本打包后独立 APK 的运行时模板 |
-| `modules/autojs` | `:autojs` | Rhino/QuickJS、脚本生命周期、运行时 API、截图图像、Shell、JNI |
+| `modules/engine` | `:engine` | Rhino/QuickJS、脚本生命周期、运行时 API、截图图像、Shell、JNI |
 | `modules/automator` | `:automator` | 无障碍服务、控件选择器、手势与布局分析 |
 | `modules/common` | `:common` | 公共 Android、文件和工具基础设施 |
 | `third-party/` | 多个库模块 | APK Builder、悬浮窗、主题、RootShell、设置兼容等内嵌依赖 |

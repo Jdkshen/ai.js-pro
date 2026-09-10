@@ -191,7 +191,7 @@ const live640 = captureScreen({mode: 'fast', size: 640, fresh: true, timeout: 10
 .\build-common-debug.ps1 -SkipNative
 
 # 仅 QuickJS 原生库
-.\modules\autojs\src\main\cpp\build-quickjs.ps1
+.\modules\engine\src\main\cpp\build-quickjs.ps1
 
 # 仅 ImGui 原生库
 .\apps\app\src\main\cpp\build-native.ps1
@@ -294,13 +294,13 @@ RHINO_REGRESSION_OK
 ## 7. 文件结构
 
 ```text
-modules/autojs/src/main/java/com/stardust/autojs/
+modules/engine/src/main/java/com/stardust/autojs/
 ├─ engine/QuickJsJavaScriptEngine.java    Java 引擎生命周期
 ├─ engine/QuickJsNativeBridge.java        JNI 方法声明
 ├─ engine/QuickJsHostBridge.java          白名单 Java API 桥（~1650行）
 ├─ engine/QuickJsException.java           Native JS 异常类型
 
-modules/autojs/src/main/cpp/
+modules/engine/src/main/cpp/
 ├─ quickjs_jni.cpp                        Context/求值/中断/Host API/Bootstrap JS（~3200行）
 ├─ native_frame_store.{h,cpp}             cv::Mat 句柄/找色/模板匹配/clip/resize/grayscale/cvtColor/save/compress
 ├─ CMakeLists.txt                         libquickjs + libquickjs_jni + OpenCV 依赖
@@ -322,7 +322,7 @@ apps/app/src/main/cpp/
 ## 9. 构建注意事项
 
 1. **源码编码**：修改含中文的 Java/JavaScript/Markdown 文件时使用 `apply_patch` 或明确保留 UTF-8 的编辑器；不要使用未指定 UTF-8 编码的旧版 PowerShell 写文件命令
-2. **.so 同步**：`build-quickjs.ps1` 会自动把 `libquickjs.so` 和 `libquickjs_jni.so` 复制到三个 ABI 的 `modules/autojs/src/main/jniLibs/`；成功后再执行 Gradle 打包
+2. **.so 同步**：`build-quickjs.ps1` 会自动把 `libquickjs.so` 和 `libquickjs_jni.so` 复制到三个 ABI 的 `modules/engine/src/main/jniLibs/`；成功后再执行 Gradle 打包
 3. **JNI NEEDED 路径**：CMake 的 `IMPORTED_LOCATION` 会嵌入 ELF NEEDED 条目，需用 `IMPORTED_NO_SONAME TRUE` + flat 目录避免绝对路径
 4. **ImGui 32 位索引**：Android GLES2 不支持 `glDrawElementsBaseVertex`，必须启用 `#define ImDrawIdx unsigned int` 解决 64K+ 顶点溢出
 5. **定时器事件循环**：QuickJS 定时器在脚本主线程结束后才运行，测试脚本不能用 `sleep` 后断言回调结果

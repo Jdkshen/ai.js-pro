@@ -70,15 +70,15 @@
 
 | 模块 | 当前主要文件 |
 |---|---|
-| Native Frame 存储 | `modules/autojs/src/main/cpp/native_frame_store.h`、`native_frame_store.cpp` |
-| QuickJS JNI 注册 | `modules/autojs/src/main/cpp/quickjs_jni.cpp` |
-| QuickJS Java 桥 | `modules/autojs/src/main/java/com/stardust/autojs/engine/QuickJsHostBridge.java` |
-| Native 方法声明 | `modules/autojs/src/main/java/com/stardust/autojs/engine/QuickJsNativeBridge.java` |
-| 截图来源 | `modules/autojs/src/main/java/com/stardust/autojs/core/image/capture/ScreenCapturer.java` |
-| Rhino 图像 API | `modules/autojs/src/main/java/com/stardust/autojs/runtime/api/Images.java` |
-| YOLO 对外 API | `modules/autojs/src/main/java/com/stardust/autojs/runtime/api/Yolo.java` |
-| OpenCV YOLO | `modules/autojs/src/main/java/com/stardust/autojs/runtime/api/OpenCvYoloDetector.java` |
-| YOLO JS 模块 | `modules/autojs/src/main/assets/modules/__yolo__.js` |
+| Native Frame 存储 | `modules/engine/src/main/cpp/native_frame_store.h`、`native_frame_store.cpp` |
+| QuickJS JNI 注册 | `modules/engine/src/main/cpp/quickjs_jni.cpp` |
+| QuickJS Java 桥 | `modules/engine/src/main/java/com/stardust/autojs/engine/QuickJsHostBridge.java` |
+| Native 方法声明 | `modules/engine/src/main/java/com/stardust/autojs/engine/QuickJsNativeBridge.java` |
+| 截图来源 | `modules/engine/src/main/java/com/stardust/autojs/core/image/capture/ScreenCapturer.java` |
+| Rhino 图像 API | `modules/engine/src/main/java/com/stardust/autojs/runtime/api/Images.java` |
+| YOLO 对外 API | `modules/engine/src/main/java/com/stardust/autojs/runtime/api/Yolo.java` |
+| OpenCV YOLO | `modules/engine/src/main/java/com/stardust/autojs/runtime/api/OpenCvYoloDetector.java` |
+| YOLO JS 模块 | `modules/engine/src/main/assets/modules/__yolo__.js` |
 | QuickJS 图色案例 | `apps/app/src/main/assets/sample/QuickJS 新引擎/图色处理/` |
 | QuickJS YOLO 案例 | `apps/app/src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/opencv/` |
 

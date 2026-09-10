@@ -81,7 +81,7 @@ tasks.whenTaskAdded { task ->
 
 repositories {
     flatDir {
-        dirs rootProject.file('modules/autojs/libs')
+        dirs rootProject.file('modules/engine/libs')
     }
 }
 
@@ -96,6 +96,6 @@ dependencies {
     testImplementation 'junit:junit:4.12'
     implementation project(':automator')
     implementation project(':common')
-    implementation project(':autojs')
+    implementation project(':engine')
     implementation project(':engine-rhino')
 }

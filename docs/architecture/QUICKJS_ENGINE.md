@@ -230,7 +230,7 @@ console.log('设置:', info.label, 'v' + info.versionName);
 ## 4. 关键代码
 
 ```text
-modules/autojs/src/main/java/com/stardust/autojs/
+modules/engine/src/main/java/com/stardust/autojs/
 ├─ script/JavaScriptSource.java           首行指令识别和引擎路由
 ├─ engine/QuickJsJavaScriptEngine.java    Java 引擎生命周期
 ├─ engine/QuickJsNativeBridge.java        JNI 方法声明和动态库加载
@@ -239,7 +239,7 @@ modules/autojs/src/main/java/com/stardust/autojs/
 ├─ AutoJs.java                            Rhino / QuickJS 双引擎注册
 └─ ScriptEngineService.java               两种执行模型分流
 
-modules/autojs/src/main/cpp/
+modules/engine/src/main/cpp/
 ├─ CMakeLists.txt                         libquickjs + libquickjs_jni
 ├─ quickjs_jni.cpp                        Context、求值、中断和 Host API
 ├─ native_frame_store.{h,cpp}             cv::Mat 句柄、找色和模板匹配
@@ -260,7 +260,7 @@ modules/autojs/src/main/cpp/
 只重建 QuickJS Native 库：
 
 ```powershell
-.\modules\autojs\src\main\cpp\build-quickjs.ps1
+.\modules\engine\src\main\cpp\build-quickjs.ps1
 ```
 
 已有 Native 库时只构建 Android 工程：

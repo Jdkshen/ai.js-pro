@@ -3,7 +3,7 @@
           xmlns:tools="http://schemas.android.com/tools"
           package="com.jdkshen.aijspro.inrt">
 
-    <!-- inrt inherits Shizuku through :autojs; keep its Android 5.x minimum while the
+    <!-- inrt inherits Shizuku through :engine; keep its Android 5.x minimum while the
          Shizuku v11 library requires API 23. The bridge reports unavailable below 23. -->
     <uses-sdk tools:overrideLibrary="rikka.shizuku.provider,rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl"/>
 

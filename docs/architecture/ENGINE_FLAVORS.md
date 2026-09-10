@@ -40,7 +40,7 @@
 
 ## 模块边界
 
-- `:autojs`：公共运行时和 QuickJS 引擎。
+- `:engine`：公共运行时和 QuickJS 引擎。
 - `:rhino-language`：过渡期 Rhino Token/AST/类型兼容库。
 - `:engine-rhino`：反射加载的 Rhino 执行 provider，仅 compat 打包。
 

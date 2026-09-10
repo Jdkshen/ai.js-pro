@@ -20,7 +20,7 @@ panel.show();
 
 - `QuickJsJavaScriptEngine.init()` 在创建 Native Context 后注册 `imgui` 模块。
 - `QuickJsNativeBridge` 只提供句柄化的创建、帧提交、事件取回和销毁方法。
-- C++ 实现放在 `modules/autojs/src/main/cpp/`，与 `quickjs_jni` 共享每个脚本引擎的所有权。
+- C++ 实现放在 `modules/engine/src/main/cpp/`，与 `quickjs_jni` 共享每个脚本引擎的所有权。
 - Android 窗口层使用独立的悬浮服务/Surface，不进入 `MainActivity` 的 Miuix 导航树。
 - `QuickJsJavaScriptEngine.destroy()` 和 `forceStop()` 必须销毁该引擎创建的全部窗口和回调，不留悬浮窗。
 

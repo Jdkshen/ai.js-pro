@@ -18,11 +18,11 @@ android {
 
 repositories {
     flatDir {
-        dirs rootProject.file('modules/autojs/libs')
+        dirs rootProject.file('modules/engine/libs')
     }
 }
 
 dependencies {
     api project(':rhino-language')
-    implementation project(':autojs')
+    implementation project(':engine')
 }

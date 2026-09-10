@@ -54,7 +54,7 @@ try {
 
     if (-not $SkipNative) {
         Write-Host '[1/4] QuickJS native libraries' -ForegroundColor Cyan
-        & (Join-Path $projectRoot 'modules\autojs\src\main\cpp\build-quickjs.ps1')
+        & (Join-Path $projectRoot 'modules\engine\src\main\cpp\build-quickjs.ps1')
         if ($LASTEXITCODE -ne 0) { throw "QuickJS build failed with exit code $LASTEXITCODE" }
     } else {
         Write-Host '[1/4] QuickJS native libraries skipped' -ForegroundColor DarkGray
