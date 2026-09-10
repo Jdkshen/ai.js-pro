@@ -54,7 +54,7 @@
 
 <ul>
 <li><a class="nav-https-github-com-hyb1996-NoRootScriptDroid" href="https://github.com/hyb1996/NoRootScriptDroid">GitHub项目 &amp; Issue提交</a></li>
-<li><a class="nav-http-autojs-org" href="http://autojs.org">AI.js Pro交流社区</a></li>
+<li><a class="nav-http-autojs-org" href="https://github.com/Jdkshen/ai.js-pro">AI.js Pro 项目主页</a></li>
 </ul>
 
     </div>
@@ -1275,7 +1275,7 @@ context.startActivity(i);
 <h2>app.parseUri(uri)<span><a class="mark" href="#app_app_parseuri_uri" id="app_app_parseuri_uri">#</a></span></h2>
 <p><strong>[v4.1.0新增]</strong></p>
 <ul>
-<li><code>uri</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 一个代表Uri的字符串，例如&quot;file:///sdcard/1.txt&quot;, &quot;<a href="https://www.autojs.org">https://www.autojs.org</a>&quot;</li>
+<li><code>uri</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type" class="type">&lt;string&gt;</a> 一个代表Uri的字符串，例如&quot;file:///sdcard/1.txt&quot;, &quot;<a href="https://github.com/Jdkshen/ai.js-pro">https://github.com/Jdkshen/ai.js-pro</a>&quot;</li>
 <li>返回 <span class="type">&lt;Uri&gt;</span> 一个代表Uri的对象，参见<a href="https://developer.android.com/reference/android/net/Uri">android.net.Uri</a>。</li>
 </ul>
 <p>解析uri字符串并返回相应的Uri对象。即使Uri格式错误，该函数也会返回一个Uri对象，但之后如果访问该对象的scheme, path等值可能因解析失败而返回<code>null</code>。</p>
@@ -2026,7 +2026,7 @@ dialogs.select(&quot;请选择一个选项&quot;, [&quot;选项A&quot;, &quot;�
     toast(&quot;开始下载....&quot;);
 }).on(&quot;neutral&quot;, ()=&gt;{
     //监听中性键
-    app.openUrl(&quot;https://www.autojs.org&quot;);
+    app.openUrl(&quot;https://github.com/Jdkshen/ai.js-pro&quot;);
 }).on(&quot;check&quot;, (checked)=&gt;{
     //监听勾选框
     log(checked);
@@ -7001,7 +7001,7 @@ ui.layout(
 <p>默认的scaleType为<code>fitCenter</code>；除此之外最常用的是<code>fitXY</code>， 他能使图片放缩到控件一样的大小，但图片可能会变形。</p>
 <h2>radius<span><a class="mark" href="#ui_radius" id="ui_radius">#</a></span></h2>
 <p>图片控件的半径。如果设置为控件宽高的一半并且控件的宽高相同则图片将剪切为圆形显示；否则图片为圆角矩形显示，半径即为四个圆角的半径，也可以通过<code>radiusTopLeft</code>, <code>radiusTopRight</code>, <code>radiusBottomLeft</code>, <code>radiusBottomRight</code>等属性分别设置四个圆角的半径。</p>
-<p>例如，圆角矩形的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
+<p>例如，圆角矩形的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; bg=&quot;white&quot; src=&quot;ai_js_pro_logo&quot; /&gt;</code></p>
 <p>有关该属性的单位，参见<a href="#ui_尺寸的单位_Dimension">尺寸的单位: Dimension</a>。</p>
 <h2>radiusTopLeft<span><a class="mark" href="#ui_radiustopleft" id="ui_radiustopleft">#</a></span></h2>
 <p>图片控件的左上角圆角的半径。有关该属性的单位，参见<a href="#ui_尺寸的单位_Dimension">尺寸的单位: Dimension</a>。</p>
@@ -7013,12 +7013,12 @@ ui.layout(
 <p>图片控件的右下角圆角的半径。有关该属性的单位，参见<a href="#ui_尺寸的单位_Dimension">尺寸的单位: Dimension</a>。</p>
 <h2>borderWidth<span><a class="mark" href="#ui_borderwidth" id="ui_borderwidth">#</a></span></h2>
 <p>图片控件的边框宽度。用于在图片外面显示一个边框，边框会随着图片控件的外形(圆角等)改变而相应变化。
-例如, 圆角矩形带灰色边框的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; borderWidth=&quot;5&quot; borderColor=&quot;gray&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
+例如, 圆角矩形带灰色边框的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; radius=&quot;20&quot; borderWidth=&quot;5&quot; borderColor=&quot;gray&quot; bg=&quot;white&quot; src=&quot;ai_js_pro_logo&quot; /&gt;</code></p>
 <h2>borderColor<span><a class="mark" href="#ui_bordercolor" id="ui_bordercolor">#</a></span></h2>
 <p>图片控件的边框颜色。</p>
 <h2>circle<span><a class="mark" href="#ui_circle" id="ui_circle">#</a></span></h2>
 <p>指定该图片控件的图片是否剪切为圆形显示。如果为<code>true</code>，则图片控件会使其宽高保持一致(如果宽高不一致，则保持高度等于宽度)并使圆形的半径为宽度的一半。</p>
-<p>例如，圆形的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; circle=&quot;true&quot; bg=&quot;white&quot; src=&quot;http://www.autojs.org/assets/uploads/profile/3-profileavatar.png&quot; /&gt;</code></p>
+<p>例如，圆形的AI.js Pro图标：<code>&lt;img w=&quot;100&quot; h=&quot;100&quot; circle=&quot;true&quot; bg=&quot;white&quot; src=&quot;ai_js_pro_logo&quot; /&gt;</code></p>
 <h1>垂直布局: vertical<span><a class="mark" href="#ui_vertical" id="ui_vertical">#</a></span></h1>
 <p>垂直布局是一种比较简单的布局，会把在它里面的控件按照垂直方向依次摆放，如下图所示：</p>
 <p>垂直布局:</p>

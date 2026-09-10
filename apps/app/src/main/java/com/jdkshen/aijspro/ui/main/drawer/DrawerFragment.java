@@ -89,7 +89,7 @@ import io.reactivex.schedulers.Schedulers;
  */
 public class DrawerFragment extends androidx.fragment.app.Fragment {
 
-    private static final String URL_DEV_PLUGIN = "https://www.autojs.org/topic/968/";
+    private static final String URL_PROJECT_HOME = "https://github.com/Jdkshen/ai.js-pro";
 
     View mHeaderView;
     TextView mUserName;
@@ -569,7 +569,7 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
                 .neutralText(R.string.text_help)
                 .onNeutral((dialog, which) -> {
                     setChecked(mConnectionItem, false);
-                    IntentUtil.browse(getActivity(), URL_DEV_PLUGIN);
+                    IntentUtil.browse(getActivity(), URL_PROJECT_HOME);
                 })
                 .cancelListener(dialog -> setChecked(mConnectionItem, false))
                 .show();

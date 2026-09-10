@@ -43,8 +43,6 @@ public class CommunityFragment extends ViewPagerFragment implements BackPressedH
         }
     }
 
-    private static final String POSTS_PAGE_PATTERN = "[\\S\\s]+/topic/[0-9]+/[\\S\\s]+";
-
     CommunityWebView mEWebView;
     WebView mWebView;
 
@@ -70,7 +68,7 @@ public class CommunityFragment extends ViewPagerFragment implements BackPressedH
 
     void setUpViews() {
         mWebView = mEWebView.getWebView();
-        String url = "https://www.autojs.org/";
+        String url = "https://github.com/Jdkshen/ai.js-pro";
         Bundle savedWebViewState = getArguments().getBundle("savedWebViewState");
         if (savedWebViewState != null) {
             mWebView.restoreState(savedWebViewState);
@@ -99,11 +97,7 @@ public class CommunityFragment extends ViewPagerFragment implements BackPressedH
 
     @Override
     protected void onFabClick(FloatingActionButton fab) {
-        if (isInPostsPage()) {
-            mWebView.loadUrl("javascript:$('button[component=\"topic/reply\"]').click()");
-        } else {
-            mWebView.loadUrl("javascript:$('#new_topic').click()");
-        }
+        mWebView.loadUrl("https://github.com/Jdkshen/ai.js-pro/issues/new/choose");
     }
 
     @Subscribe
@@ -117,14 +111,9 @@ public class CommunityFragment extends ViewPagerFragment implements BackPressedH
             return;
         }
         String query = URLEncoder.encode(event.getQuery());
-        String url = String.format("http://www.autojs.org/search?term=%s&in=titlesposts", query);
+        String url = "https://github.com/Jdkshen/ai.js-pro/issues?q=" + query;
         mWebView.loadUrl(url);
         event.collapseSearchView();
-    }
-
-    private boolean isInPostsPage() {
-        String url = mWebView.getUrl();
-        return url != null &&  url.matches(POSTS_PAGE_PATTERN);
     }
 
     @Override

@@ -29,13 +29,13 @@ ui.layout(
                 <text textSize="16sp" margin="8">4. 您更喜欢以下哪个图标?</text>
                 <radiogroup margin="0 16">
                     <radio/>
-                    <img w="100" h="100" margin="0 16" src="http://www.autojs.org/assets/uploads/profile/3-profileavatar.png"/>
+                    <img w="100" h="100" margin="0 16" src="ai_js_pro_logo"/>
                     <radio/>
-                    <img w="100" h="100" margin="0 16" src="http://www.autojs.org/assets/uploads/files/1511945512596-autojs_logo.png"/>
+                    <img w="100" h="100" margin="0 16" src="ic_android_eat_js"/>
                 </radiogroup>
                 <text textSize="16sp" margin="8">5. 您是什么时候开始使用AI.js Pro的呢?</text>
                 <datepicker margin="4 16" datePickerMode="spinner"/>
-                <text textSize="16sp" margin="8">6. 您用过下面这个AI.js Pro的论坛吗?</text>
+                <text textSize="16sp" margin="8">6. 您访问过下面这个 AI.js Pro 项目主页吗?</text>
                 <webview id="webview" h="300" margin="0 16"/>
                 <radiogroup marginLeft="16" marginTop="16">
                     <radio text="没有用过"/>
@@ -51,4 +51,4 @@ ui.layout(
     </vertical>
 )
 
-ui.webview.loadUrl("http://www.autojs.org");
+ui.webview.loadUrl("https://github.com/Jdkshen/ai.js-pro");

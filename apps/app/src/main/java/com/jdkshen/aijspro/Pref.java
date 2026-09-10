@@ -139,12 +139,7 @@ public class Pref {
     }
 
     public static String getDocumentationUrl() {
-        String docSource = def().getString(getString(R.string.key_documentation_source), null);
-        if (docSource == null || docSource.equals("Local")) {
-            return "file:///android_asset/docs/";
-        } else {
-            return "https://www.autojs.org/assets/autojs/docs/";
-        }
+        return "file:///android_asset/docs/";
     }
 
     public static boolean isFloatingMenuShown() {

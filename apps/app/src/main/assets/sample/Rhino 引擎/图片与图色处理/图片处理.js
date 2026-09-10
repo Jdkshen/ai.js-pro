@@ -3,7 +3,8 @@
 function __nowMs() { return Number(java.lang.System.nanoTime()) / 1000000; }
 function __formatMs(value) { return Number(value).toFixed(3); }
 
-var url = "https://www.autojs.org/assets/uploads/files/1540386817060-918021-20160416200702191-185324559.jpg";
+//项目仓库内的 AI.js Pro 图标（需联网，GitHub raw 链接）
+var url = "https://github.com/Jdkshen/ai.js-pro/raw/HEAD/modules/autojs/src/main/res/drawable-nodpi/ai_js_pro_logo.png";
 var logo = null;
 var currentImg = null;
 

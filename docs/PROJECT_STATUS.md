@@ -3,7 +3,7 @@
 > 更新日期：2026-09-08  
 > 当前开发分支：`chore/upgrade-gradle-8`  
 > 应用包名：`com.jdkshen.aijspro`  
-> 当前版本：`1.0.1`（`versionCode 464`）
+> 当前版本：`1.0.2`（`versionCode 465`）
 
 本文是当前项目的简明事实入口。`docs/plans/` 和 `docs/reports/` 记录的是阶段方案与历史测试，不应代替本文判断当前实现状态。
 
@@ -159,7 +159,7 @@ adb -s cccc62c7 install -r -d `
 
 - `:app:assembleMiuixCompatDebug` 与 `:app:assembleMiuixLiteDebug` 构建成功；
 - 新建脚本/项目默认 QuickJS；旧无标记脚本保持 Rhino，项目级 `engine` 与文件指令均已支持；
-- K40：`com.jdkshen.aijspro` 版本 `1.0.1 (464)` 已覆盖安装；
+- K40：`com.jdkshen.aijspro` 版本 `1.0.2 (465)` 已覆盖安装；
 - K40：当前系统仅保留 RustDesk 无障碍，AI.js Pro 无障碍需由用户按需重新开启；
 - 快速开启路径已确认不再使用小米 10 秒手动倒计时；
 - 最近完整 QuickJS 回归记录为 46/46；

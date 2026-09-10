@@ -281,8 +281,6 @@
     <string name="text_using_desc_selector">使用描述选择(desc)</string>
     <string name="text_generate">生成</string>
     <string name="text_generate_fail">生成失败了o(╥﹏╥)o</string>
-    <string name="key_documentation_source">key_documentation_source</string>
-    <string name="text_documentation_source">文档源</string>
     <string name="text_send">发送</string>
     <string name="text_timed_task">定时任务</string>
     <string name="text_running_task">运行中任务</string>

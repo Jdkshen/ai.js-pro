@@ -150,19 +150,11 @@ class MiuixSettingsActivity : ComponentActivity() {
             boolPref(R.string.key_enable_accessibility_service_by_root, false)
         }
         val stableMode = remember(stateRevision) { boolPref(R.string.key_stable_mode, false) }
-        val docSourceIndex = remember(stateRevision) {
-            when (strPref(R.string.key_documentation_source, "Local")) {
-                "Online" -> 1
-                else -> 0
-            }
-        }
         val scriptDir = remember(stateRevision) {
             strPref(R.string.key_script_dir_path, "/脚本/")
         }
         val recordTypeItems = resources.getStringArray(R.array.root_record_out_file_type_keys).toList()
         val recordTypeValues = resources.getStringArray(R.array.root_record_out_file_type_values).toList()
-        val docSourceItems = resources.getStringArray(R.array.keys_documentation_source).toList()
-        val docSourceValues = resources.getStringArray(R.array.values_documentation_source).toList()
 
         Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
             SmallTopAppBar(title = getString(R.string.text_setting), defaultWindowInsetsPadding = false,
@@ -221,12 +213,6 @@ class MiuixSettingsActivity : ComponentActivity() {
 
                 SmallTitle(getString(R.string.text_others))
                 Card(Modifier.fillMaxWidth()) {
-                    SuperDropdown(title = getString(R.string.text_documentation_source),
-                        items = docSourceItems,
-                        selectedIndex = docSourceIndex,
-                        onSelectedIndexChange = { i ->
-                            putStrPref(R.string.key_documentation_source, docSourceValues[i]); revision++
-                        })
                     SuperArrow(title = getString(R.string.text_change_script_dir),
                         rightText = scriptDir,
                         onClick = { showScriptDirDialog() })

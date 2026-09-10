@@ -1,8 +1,8 @@
 function __nowMs() { return Number(java.lang.System.nanoTime()) / 1000000; }
 function __formatMs(value) { return Number(value).toFixed(3); }
 
-//这个是AI.js Pro图标的地址
-var url = "https://www.autojs.org/assets/uploads/profile/3-profileavatar.png";
+//项目仓库内的 AI.js Pro 图标地址（需联网，GitHub raw 链接）
+var url = "https://github.com/Jdkshen/ai.js-pro/raw/HEAD/modules/autojs/src/main/res/drawable-nodpi/ai_js_pro_logo.png";
 var loadStartedAt = __nowMs();
 var logo = images.load(url);
 console.log("[Rhino耗时] 下载并解码网络图片: " + __formatMs(__nowMs() - loadStartedAt) + " ms");

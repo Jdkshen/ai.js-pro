@@ -63,7 +63,7 @@ class MiuixCommunityFragment : ViewPagerFragment(0), BackPressedHandler {
                         if (saved != null) {
                             webView?.restoreState(saved)
                         } else {
-                            webView?.loadUrl("https://www.autojs.org/")
+                            webView?.loadUrl("https://github.com/Jdkshen/ai.js-pro")
                         }
                     }
                 }
@@ -91,11 +91,7 @@ class MiuixCommunityFragment : ViewPagerFragment(0), BackPressedHandler {
 
     override fun onFabClick(fab: FloatingActionButton?) {
         val wv = webView ?: return
-        wv.loadUrl(if (isInPostsPage()) {
-            "javascript:\$('button[component=\"topic/reply\"]').click()"
-        } else {
-            "javascript:\$('#new_topic').click()"
-        })
+        wv.loadUrl("https://github.com/Jdkshen/ai.js-pro/issues/new/choose")
     }
 
     @Subscribe
@@ -106,14 +102,9 @@ class MiuixCommunityFragment : ViewPagerFragment(0), BackPressedHandler {
     @Subscribe
     fun onSubmitQuery(event: QueryEvent) {
         if (!isShown || event == QueryEvent.CLEAR) return
-        webView?.loadUrl("http://www.autojs.org/search?term=" +
-            URLEncoder.encode(event.query, "UTF-8") + "&in=titlesposts")
+        webView?.loadUrl("https://github.com/Jdkshen/ai.js-pro/issues?q=" +
+            URLEncoder.encode(event.query, "UTF-8"))
         event.collapseSearchView()
-    }
-
-    private fun isInPostsPage(): Boolean {
-        val url = webView?.url ?: return false
-        return Regex("[\\S\\s]+/topic/[0-9]+/[\\S\\s]+").matches(url)
     }
 
     override fun onPageShow() {

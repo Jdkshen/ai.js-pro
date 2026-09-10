@@ -60,27 +60,6 @@ android {
     }
 }
 
-def buildApkPluginForAbi(File pluginProjectDir, String abi) {
-    copy {
-        from rootProject.file('apps/app/release')
-        into new File(pluginProjectDir, 'app/src/main/assets')
-        def fileName = "inrt-" + abi + "-release.apk"
-        include fileName
-        rename fileName, 'template.apk'
-    }
-    exec {
-        workingDir pluginProjectDir
-        commandLine './gradlew', 'assembleRelease'
-    }
-    copy {
-        from new File(pluginProjectDir, 'app/build/outputs/apk/release')
-        into rootProject.file('.artifacts/releases/plugins')
-        def fileName = '打包插件-' + versions.appVersionName + '-release.apk'
-        include fileName
-        rename fileName, '打包插件-' + abi + '-' + versions.appVersionName + '-release.apk'
-    }
-}
-
 task buildApkPlugin {
     doLast {
         // The main app now carries an arm64 template so APK packaging works without the
@@ -91,15 +70,6 @@ task buildApkPlugin {
             include 'inrt-arm64-v8a-release-unsigned.apk'
             rename 'inrt-arm64-v8a-release-unsigned.apk', 'template.apk'
         }
-
-        def pluginProjectDir = new File(rootProject.projectDir.parentFile, 'AutoJsApkBuilderPlugin')
-        if (!pluginProjectDir.exists() || !pluginProjectDir.isDirectory()) {
-            println 'pluginProjectDir not exists'
-            return
-        }
-        buildApkPluginForAbi(pluginProjectDir, 'armeabi-v7a')
-        buildApkPluginForAbi(pluginProjectDir, 'arm64-v8a')
-        buildApkPluginForAbi(pluginProjectDir, 'x86')
     }
 }
 

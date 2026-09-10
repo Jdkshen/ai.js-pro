@@ -36,7 +36,9 @@ powershell -ExecutionPolicy Bypass -File .\tools\measure-ui-performance.ps1 -Dev
 
 2026-09-08 K40 首次长列表基线：418 帧、4 个卡顿帧（0.96%）、P50 8 ms、P95 11 ms、P99 11 ms。后续比较必须停在相同页面、使用相同脚本数量与滑动次数。
 
-## 当前 Debug APK 基线
+## Debug APK 基线
+
+> 记录时间 2026-09-08，对应版本 `1.0.1 (464)`；项目当前版本为 `1.0.2 (465)`。以下体积与哈希为历史快照，重新测量后请更新本节。
 
 - 包名/版本：`com.jdkshen.aijspro`，`1.0.1 (464)`；
 - 变体/ABI：`miuixDebug`，`arm64-v8a`；

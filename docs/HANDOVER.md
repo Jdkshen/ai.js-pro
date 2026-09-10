@@ -53,7 +53,7 @@
 
 ## 1. 项目是什么
 
-**AI.js Pro**（包名 `com.jdkshen.aijspro`，应用名「AI.js Pro」，当前版本 `1.0.1` / versionCode 464）：
+**AI.js Pro**（包名 `com.jdkshen.aijspro`，应用名「AI.js Pro」，当前版本 `1.0.2` / versionCode 465）：
 - 基于 **Auto.js 4.4.1（Stardust）** 源码的定制增强版
 - 双引擎：**Rhino + QuickJS**（JNI 桥接，`modules/autojs`）
 - 增强：Miuix 主界面、OpenCV 5.0 DNN / YOLO、Native Frame、Shizuku、悬浮窗重构（旧 ImGui 工作台已移除）
@@ -172,7 +172,7 @@ third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / Colo
 1. SettingsActivity → M3 分组卡片菜单（替换老 Preference）
 2. 抽屉 header / 编辑器页 M3 化（硬编码色清理）
 3. 图标统一 M3 线稿（无障碍/悬浮窗/开发工具/退出）
-4. 版本号发布：`project-versions.json`（当前 1.0.1/464）
+4. 版本号发布：`project-versions.json` 已升至 `1.0.2/465`；剩余：在 GitHub 配置 4 个签名 Secrets 后触发 Release
 5. 收尾：`git commit`（建议 message：`feat: upgrade to Gradle 8.9 + Material 3 UI`）
 
 ## 6. 快速定位文件

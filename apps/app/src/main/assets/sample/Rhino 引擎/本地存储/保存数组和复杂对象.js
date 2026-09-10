@@ -2,7 +2,7 @@ var storage = storages.create("AI.js Pro例子:复杂数据");
 var arr = [1, 4, 2, 5];
 var obj = {
     name: "AI.js Pro",
-    url: "www.autojs.org"
+    url: "https://github.com/Jdkshen/ai.js-pro"
 };
 //保存
 storage.put("arr", arr);

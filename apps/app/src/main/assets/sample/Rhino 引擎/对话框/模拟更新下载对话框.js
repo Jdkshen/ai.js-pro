@@ -10,7 +10,7 @@ dialogs.build({
 })
     .on("positive", download)
     .on("neutral", () => {
-        app.openUrl("https://www.autojs.org");
+        app.openUrl("https://github.com/Jdkshen/ai.js-pro");
     })
     .show();
 
