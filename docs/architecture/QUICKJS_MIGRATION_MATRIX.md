@@ -12,6 +12,8 @@
 | engines、threads、events | worker 参数/返回值与同步事件通过 | compat/lite K40 通过 |
 | 选择器 / UiObject | `selector()`/`text()`…全局 + `find/findOnce/findOne/untilFind/untilFindOne/exists/waitFor` + 控件属性/动作/树访问全部通过（无障碍服务已连接时） | Mi8（回归测试 76 项全绿） |
 | 手势与输入 | `gesture/gestureAsync`、`gestures/gesturesAsync`（含真实滑动）、`input`、RootShell 助手（`KeyCode/Tap/Swipe/Screencap/Text` 与按键全局）全部通过 | Mi8（回归测试 104 项全绿） |
+| 内置模块 | `crypto`（md5/sha256/hmac/base64 固定向量）、`zips`（真实压缩/列表/解压往返）、`util`、`automator`、`context`、`rawInput` 与 `require('crypto')` 全部通过 | Mi8（回归测试 117 项全绿） |
+| 运行时状态 | `isRunning`/`isStopped`/`notStopped`/`stop`/`requiresApi`/`requiresAutojsVersion` 语义与异常路径通过 | Mi8（回归测试 117 项全绿） |
 | UI | 布局创建、文本更新/回读、关闭通过 | compat/lite K40 通过 |
 | floaty | 真实创建、位置/尺寸/文本更新、关闭通过 | compat/lite K40 通过 |
 | Rhino 兼容 | 23 项基础回归通过；lite 可控拒绝且不崩溃 | K40 通过 |
@@ -27,7 +29,7 @@
 | 领域 | 硬阻塞 |
 | --- | --- |
 | 手势与输入 | `gesture*`/`input`/根助手已对齐；仅剩 `rawInput`、`Input`/`KeyEvent` 类注入与 `automator` 模块未迁移，依赖这些的旧脚本需改写法 |
-| 模块 | `web`/`zips`/`sqlite`/`crypto`/`util`/`io`/`plugins` 等模块级能力未迁移 |
+| 模块 | `web`/`sqlite`/`io`/`plugins`/`continuation` 尚未迁移；`crypto`/`zips`/`util`/`automator`/`context`/`rawInput` 已对齐 |
 | UI | QuickJS 是最小化 overlay 实现，还未覆盖 Activity 模式、完整控件属性和复杂列表交互 |
 | floaty | 基础窗口已可用，但与 Rhino XML 窗口对象、控件代理和事件 API 尚未完全等价 |
 | web | `http` 已可用；InjectableWebView/WebSocket 等页面级能力未迁移 |

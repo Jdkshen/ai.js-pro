@@ -1524,6 +1524,141 @@ JSValue nativeInputText(JSContext *context, JSValueConst, int argc, JSValueConst
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
 }
 
+JSValue nativeCryptoCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(context, "crypto call requires a method name");
+    }
+    const std::string method = jsString(context, argv[0]);
+    const std::string arg1 = argc > 1 ? jsString(context, argv[1]) : std::string();
+    const std::string arg2 = argc > 2 ? jsString(context, argv[2]) : std::string();
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "cryptoCall",
+                                          "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaMethod = toJavaString(env, method);
+    jstring javaArg1 = toJavaString(env, arg1);
+    jstring javaArg2 = toJavaString(env, arg2);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(state->host, methodId, javaMethod, javaArg1, javaArg2));
+    env->DeleteLocalRef(javaMethod);
+    env->DeleteLocalRef(javaArg1);
+    env->DeleteLocalRef(javaArg2);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (result == nullptr) {
+        return JS_NULL;
+    }
+    const char *chars = env->GetStringUTFChars(result, nullptr);
+    JSValue value = JS_NewString(context, chars == nullptr ? "" : chars);
+    if (chars != nullptr) {
+        env->ReleaseStringUTFChars(result, chars);
+    }
+    env->DeleteLocalRef(result);
+    return value;
+}
+
+JSValue nativeZipsCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(context, "zips call requires a method name");
+    }
+    const std::string method = jsString(context, argv[0]);
+    const std::string arg1 = argc > 1 ? jsString(context, argv[1]) : std::string();
+    const std::string arg2 = argc > 2 ? jsString(context, argv[2]) : std::string();
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "zipsCall",
+                                          "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaMethod = toJavaString(env, method);
+    jstring javaArg1 = toJavaString(env, arg1);
+    jstring javaArg2 = toJavaString(env, arg2);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(state->host, methodId, javaMethod, javaArg1, javaArg2));
+    env->DeleteLocalRef(javaMethod);
+    env->DeleteLocalRef(javaArg1);
+    env->DeleteLocalRef(javaArg2);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const char *chars = env->GetStringUTFChars(result, nullptr);
+    JSValue value = JS_NewString(context, chars == nullptr ? "" : chars);
+    if (chars != nullptr) {
+        env->ReleaseStringUTFChars(result, chars);
+    }
+    env->DeleteLocalRef(result);
+    return value;
+}
+
+JSValue nativeScriptStopped(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "scriptStopped", "()Z");
+    const jboolean result = env->CallBooleanMethod(state->host, methodId);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeRequiresApi(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int32_t api = 0;
+    if (argc > 0 && JS_ToInt32(context, &api, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "requiresApi(api) requires a number");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "requiresApi", "(I)V");
+    env->CallVoidMethod(state->host, methodId, api);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeAppVersion(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "appVersionInfo", "()Ljava/lang/String;");
+    jstring result = static_cast<jstring>(env->CallObjectMethod(state->host, methodId));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const char *chars = result == nullptr ? nullptr : env->GetStringUTFChars(result, nullptr);
+    JSValue value = JS_NewString(context, chars == nullptr ? "0|" : chars);
+    if (chars != nullptr) {
+        env->ReleaseStringUTFChars(result, chars);
+        env->DeleteLocalRef(result);
+    }
+    return value;
+}
+
+JSValue nativeContextInfo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string key = argc > 0 ? jsString(context, argv[0]) : std::string();
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "contextInfo", "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaKey = toJavaString(env, key);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(state->host, methodId, javaKey));
+    env->DeleteLocalRef(javaKey);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (result == nullptr) {
+        return JS_NULL;
+    }
+    const char *chars = env->GetStringUTFChars(result, nullptr);
+    JSValue value = JS_NewString(context, chars == nullptr ? "" : chars);
+    if (chars != nullptr) {
+        env->ReleaseStringUTFChars(result, chars);
+    }
+    env->DeleteLocalRef(result);
+    return value;
+}
+
 JSValue nativeSetScreenMetrics(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int32_t width = 0;
     int32_t height = 0;
@@ -3597,6 +3732,10 @@ const char kBootstrapScript[] = R"JS(
     function filePath(path) { return String(path); }
     const files = {
         path: function (path) { return __aiNativeFilesPath(filePath(path)); },
+        join: function () {
+            var joined = Array.prototype.slice.call(arguments).map(filePath).join('/');
+            return joined.replace(/\/{2,}/g, '/');
+        },
         cwd: function () { return __aiNativeFilesCwd(); },
         getSdcardPath: function () { return __aiNativeFilesGetSdcardPath(); },
         exists: function (path) { return __aiNativeFilesExists(filePath(path)); },
@@ -5172,6 +5311,252 @@ const char kBootstrapScript[] = R"JS(
         throw new Error('__AIJS_EXIT__');
     };
 
+    // ---- 内置模块：crypto / zips / util / automator / context / rawInput ----
+    // 名称与语义对齐 Rhino 的 runtime.crypto / runtime.zips / __util__.js。
+
+    global.crypto = Object.freeze({
+        md5: function (data) { return __aiNativeCryptoCall('md5', String(data), ''); },
+        sha1: function (data) { return __aiNativeCryptoCall('sha1', String(data), ''); },
+        sha256: function (data) { return __aiNativeCryptoCall('sha256', String(data), ''); },
+        digest: function (algorithm, data) {
+            return __aiNativeCryptoCall('digest', String(algorithm), String(data));
+        },
+        hmacSha256: function (data, key) {
+            return __aiNativeCryptoCall('hmacSha256', String(data), String(key));
+        },
+        base64Encode: function (data) { return __aiNativeCryptoCall('base64Encode', String(data), ''); },
+        base64Decode: function (data) { return __aiNativeCryptoCall('base64Decode', String(data), ''); }
+    });
+
+    global.zips = Object.freeze({
+        zip: function (srcDir, destZip) {
+            return __aiNativeZipsCall('zip', String(srcDir), String(destZip)) === 'true';
+        },
+        unzip: function (zipPath, destDir) {
+            return __aiNativeZipsCall('unzip', String(zipPath), String(destDir)) === 'true';
+        },
+        list: function (zipPath) {
+            return JSON.parse(__aiNativeZipsCall('list', String(zipPath), ''));
+        }
+    });
+
+    global.util = (function () {
+        var util = {
+            isArray: function (v) { return Array.isArray(v); },
+            isBoolean: function (v) { return typeof v === 'boolean'; },
+            isNull: function (v) { return v === null; },
+            isNullOrUndefined: function (v) { return v === null || v === undefined; },
+            isNumber: function (v) { return typeof v === 'number'; },
+            isString: function (v) { return typeof v === 'string'; },
+            isSymbol: function (v) { return typeof v === 'symbol'; },
+            isUndefined: function (v) { return v === undefined; },
+            isRegExp: function (v) { return Object.prototype.toString.call(v) === '[object RegExp]'; },
+            isObject: function (v) { return v !== null && typeof v === 'object'; },
+            isDate: function (v) { return Object.prototype.toString.call(v) === '[object Date]'; },
+            isError: function (v) { return v instanceof Error; },
+            isFunction: function (v) { return typeof v === 'function'; },
+            isPrimitive: function (v) { return v === null || (typeof v !== 'object' && typeof v !== 'function'); },
+            hasOwnProperty: function (obj, prop) { return Object.prototype.hasOwnProperty.call(obj, prop); },
+            isEmpty: function (obj) {
+                if (obj === null || obj === undefined) return true;
+                if (typeof obj === 'string' || Array.isArray(obj)) return obj.length === 0;
+                if (typeof obj === 'object') return Object.keys(obj).length === 0;
+                return false;
+            },
+            size: function (obj) {
+                if (obj === null || obj === undefined) return 0;
+                if (typeof obj === 'string' || Array.isArray(obj)) return obj.length;
+                if (typeof obj === 'object') return Object.keys(obj).length;
+                return 0;
+            },
+            join: function (obj, sep) {
+                if (Array.isArray(obj)) return obj.join(sep === undefined ? ',' : sep);
+                if (obj !== null && typeof obj === 'object') {
+                    return Object.keys(obj).map(function (key) { return key + ': ' + obj[key]; })
+                        .join(sep === undefined ? '\n' : sep);
+                }
+                return String(obj);
+            },
+            extend: function (target, source) {
+                // Rhino 用它做 Java 类继承；QuickJS 下退化为属性拷贝（含 source 的原型链）。
+                if (target === null || target === undefined || source === null || source === undefined) {
+                    return target;
+                }
+                var seen = {};
+                for (var obj = source; obj !== null && obj !== Object.prototype; obj = Object.getPrototypeOf(obj)) {
+                    Object.getOwnPropertyNames(obj).forEach(function (name) {
+                        if (seen[name] || name === 'constructor') return;
+                        seen[name] = true;
+                        var value = obj[name];
+                        if (typeof value === 'function' && target.prototype && !target.prototype[name]) {
+                            target.prototype[name] = value;
+                        } else if (target[name] === undefined) {
+                            target[name] = value;
+                        }
+                    });
+                }
+                return target;
+            },
+            format: function (fmt) {
+                if (typeof fmt !== 'string') return util.join(Array.prototype.slice.call(arguments), ' ');
+                var args = Array.prototype.slice.call(arguments, 1);
+                var index = 0;
+                var out = fmt.replace(/%([sdifjoO%])/g, function (match, spec) {
+                    if (spec === '%') return '%';
+                    if (index >= args.length) return match;
+                    var value = args[index++];
+                    switch (spec) {
+                        case 's': return String(value);
+                        case 'd':
+                        case 'i': return String(parseInt(value, 10));
+                        case 'f': return String(parseFloat(value));
+                        case 'j':
+                            try { return JSON.stringify(value); } catch (e) { return '[Circular]'; }
+                        default: return typeof value === 'string' ? value : JSON.stringify(value);
+                    }
+                });
+                while (index < args.length) {
+                    var extra = args[index++];
+                    out += ' ' + (typeof extra === 'string' ? extra : JSON.stringify(extra));
+                }
+                return out;
+            },
+            random: function (min, max) {
+                if (arguments.length === 0) return Math.random();
+                return Math.floor(Math.random() * (max - min + 1)) + min;
+            },
+            range: function (start, end, step) {
+                if (end === undefined) { end = start; start = 0; }
+                step = step === undefined ? 1 : step;
+                var result = [];
+                for (var i = start; step > 0 ? i < end : i > end; i += step) result.push(i);
+                return result;
+            },
+            sum: function (array, transform) {
+                var total = 0;
+                for (var i = 0; i < array.length; i++) {
+                    total += transform ? transform(array[i]) : array[i];
+                }
+                return total;
+            }
+        };
+        return util;
+    })();
+
+    // automator 模块：直接映射到全局同名函数，语义与 Rhino 的 __automator__.js 一致。
+    global.automator = Object.freeze({
+        click: function () { return global.click.apply(null, arguments); },
+        longClick: function () { return global.longClick.apply(null, arguments); },
+        press: function () { return global.press.apply(null, arguments); },
+        swipe: function () { return global.swipe.apply(null, arguments); },
+        gesture: function () { return global.gesture.apply(null, arguments); },
+        gestureAsync: function () { return global.gestureAsync.apply(null, arguments); },
+        gestures: function () { return global.gestures.apply(null, arguments); },
+        gesturesAsync: function () { return global.gesturesAsync.apply(null, arguments); },
+        scrollDown: function () { return global.scrollDown.apply(null, arguments); },
+        scrollUp: function () { return global.scrollUp.apply(null, arguments); },
+        setText: function () { return global.setText.apply(null, arguments); },
+        input: function (text) { return global.input(text); },
+        setMode: function (mode) { return global.auto.setMode(mode); },
+        setFlags: function () { return global.auto.setFlags.apply(null, arguments); }
+    });
+
+    // context 模块：Rhino 给 Android Context；白名单桥只暴露常用目录与包名，
+    // 目录以 file-like 对象返回（兼容 getAbsolutePath()/toString() 两种写法）。
+    global.context = (function () {
+        function contextFile(path) {
+            if (path === null) return null;
+            return {
+                path: path,
+                getPath: function () { return path; },
+                getAbsolutePath: function () { return path; },
+                toString: function () { return path; }
+            };
+        }
+        return {
+            packageName: __aiNativeContextInfo('packageName'),
+            getPackageName: function () { return __aiNativeContextInfo('packageName'); },
+            getFilesDir: function () { return contextFile(__aiNativeContextInfo('filesDir')); },
+            getCacheDir: function () { return contextFile(__aiNativeContextInfo('cacheDir')); },
+            getNoBackupFilesDir: function () { return contextFile(__aiNativeContextInfo('noBackupFilesDir')); },
+            getExternalFilesDir: function () { return contextFile(__aiNativeContextInfo('externalFilesDir')); },
+            getExternalCacheDir: function () { return contextFile(__aiNativeContextInfo('externalCacheDir')); }
+        };
+    })();
+
+    // rawInput 模块：走 shell 的 `input` 命令（无需 root）。
+    global.rawInput = (function () {
+        function run(command) {
+            var result = shell(command);
+            return result === null || result === undefined ? true : result.code === 0;
+        }
+        function escape(text) {
+            return String(text).replace(/'/g, '').replace(/ /g, '%s');
+        }
+        return Object.freeze({
+            keyevent: function (keyCode) { return run('input keyevent ' + Math.round(Number(keyCode))); },
+            key: function (keyCode) { return run('input keyevent ' + Math.round(Number(keyCode))); },
+            text: function (text) { return run("input text '" + escape(text) + "'"); },
+            tap: function (x, y) {
+                return run('input tap ' + Math.round(Number(x)) + ' ' + Math.round(Number(y)));
+            },
+            press: function (x, y, duration) {
+                var px = Math.round(Number(x));
+                var py = Math.round(Number(y));
+                return run('input swipe ' + px + ' ' + py + ' ' + px + ' ' + py + ' '
+                    + Math.round(Number(duration === undefined ? 500 : duration)));
+            },
+            swipe: function (x1, y1, x2, y2, duration) {
+                var command = 'input swipe ' + Math.round(Number(x1)) + ' ' + Math.round(Number(y1)) + ' '
+                    + Math.round(Number(x2)) + ' ' + Math.round(Number(y2));
+                if (duration !== undefined) command += ' ' + Math.round(Number(duration));
+                return run(command);
+            },
+            roll: function (x, y) {
+                return run('input roll ' + Math.round(Number(x)) + ' ' + Math.round(Number(y)));
+            }
+        });
+    })();
+
+    // ---- 运行时状态与版本声明（Rhino __globals__.js）----
+    global.isStopped = function () { return __aiNativeScriptStopped(); };
+    global.notStopped = function () { return !__aiNativeScriptStopped(); };
+    global.isRunning = global.notStopped;
+    global.stop = global.exit;
+    global.requiresApi = function (api) { __aiNativeRequiresApi(Math.round(Number(api))); };
+
+    var appVersion = String(__aiNativeAppVersion()).split('|');
+    function compareVersion(left, right) {
+        var a = String(left).split('.');
+        var b = String(right).split('.');
+        var length = Math.max(a.length, b.length);
+        for (var i = 0; i < length; i++) {
+            var x = parseInt(a[i] || '0', 10) || 0;
+            var y = parseInt(b[i] || '0', 10) || 0;
+            if (x !== y) return x > y ? 1 : -1;
+        }
+        return 0;
+    }
+    global.requiresAutojsVersion = function (version) {
+        if (typeof version === 'number') {
+            if (Number(appVersion[0]) < version) {
+                throw new Error('需要 AI.js Pro 版本号 ' + version + ' 以上才能运行');
+            }
+        } else if (compareVersion(version, appVersion[1]) > 0) {
+            throw new Error('需要 AI.js Pro 版本 ' + version + ' 以上才能运行');
+        }
+    };
+
+    // 内置模块表：require('crypto') 等直接返回全局对象，同名文件仍可覆盖（磁盘优先）。
+    var builtinModules = {
+        crypto: global.crypto,
+        zips: global.zips,
+        util: global.util,
+        automator: global.automator,
+        context: global.context,
+        rawInput: global.rawInput
+    };
+
     // ---- CommonJS module system (require) ----
     var moduleCache = new Map();
 
@@ -5203,6 +5588,10 @@ const char kBootstrapScript[] = R"JS(
             : '.';
         moduleCache.set(filename, module);
         var localRequire = function (request) {
+            var name = String(request);
+            if (Object.prototype.hasOwnProperty.call(builtinModules, name)) {
+                return builtinModules[name];
+            }
             return loadModule(moduleFilename(request, dirname), dirname);
         };
         localRequire.resolve = function (request) { return moduleFilename(request, dirname); };
@@ -5214,7 +5603,15 @@ const char kBootstrapScript[] = R"JS(
         return module.exports;
     }
 
-    global.require = function (request) { return loadModule(moduleFilename(request, null), null); };
+    global.require = function (request) {
+        var name = String(request);
+        // 内置模块优先于磁盘文件？Rhino 的 require 只解析 assets/modules 下的内置模块，
+        // 这里同样先给内置的实现，避免脚本目录里同名文件意外覆盖核心能力。
+        if (Object.prototype.hasOwnProperty.call(builtinModules, name)) {
+            return builtinModules[name];
+        }
+        return loadModule(moduleFilename(request, null), null);
+    };
     global.__moduleCache = moduleCache;
 
     // ---- runtime info (Auto.js compatible surface) ----
@@ -5314,6 +5711,12 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeGesture", nativeGesture, 4);
     installNativeFunction(state->context, global, "__aiNativeGestures", nativeGestures, 2);
     installNativeFunction(state->context, global, "__aiNativeInputText", nativeInputText, 1);
+    installNativeFunction(state->context, global, "__aiNativeCryptoCall", nativeCryptoCall, 3);
+    installNativeFunction(state->context, global, "__aiNativeZipsCall", nativeZipsCall, 3);
+    installNativeFunction(state->context, global, "__aiNativeScriptStopped", nativeScriptStopped, 0);
+    installNativeFunction(state->context, global, "__aiNativeRequiresApi", nativeRequiresApi, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppVersion", nativeAppVersion, 0);
+    installNativeFunction(state->context, global, "__aiNativeContextInfo", nativeContextInfo, 1);
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);

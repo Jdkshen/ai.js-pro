@@ -61,6 +61,7 @@ import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -450,6 +451,101 @@ final class QuickJsHostBridge implements AutoCloseable {
 
     private float scaleY(int value) {
         return (float) mRuntime.getScreenMetrics().scaleY(value);
+    }
+
+    // ------------------------------------------------------------------
+    // 内置模块：crypto / zips / 运行环境信息
+    // ------------------------------------------------------------------
+
+    /** `crypto` 模块（对齐 Rhino 的 `runtime.crypto`）。 */
+    public String cryptoCall(String method, String arg1, String arg2) {
+        switch (method == null ? "" : method) {
+            case "md5":
+                return mRuntime.crypto.md5(arg1);
+            case "sha1":
+                return mRuntime.crypto.sha1(arg1);
+            case "sha256":
+                return mRuntime.crypto.sha256(arg1);
+            case "digest":
+                return mRuntime.crypto.digest(arg1, arg2);
+            case "hmacSha256":
+                return mRuntime.crypto.hmacSha256(arg1, arg2);
+            case "base64Encode":
+                return mRuntime.crypto.base64Encode(arg1);
+            case "base64Decode":
+                return mRuntime.crypto.base64Decode(arg1);
+            default:
+                throw new IllegalArgumentException("crypto 不支持的方法: " + method);
+        }
+    }
+
+    /**
+     * `zips` 模块（对齐 Rhino 的 `runtime.zips`）。
+     * `zip`/`unzip` 返回 "true"/"false"，`list` 返回 JSON 数组。
+     */
+    public String zipsCall(String method, String arg1, String arg2) throws JSONException {
+        switch (method == null ? "" : method) {
+            case "zip":
+                return String.valueOf(mRuntime.zips.zip(arg1, arg2));
+            case "unzip":
+                return String.valueOf(mRuntime.zips.unzip(arg1, arg2));
+            case "list":
+                return new JSONArray(Arrays.asList(mRuntime.zips.list(arg1))).toString();
+            default:
+                throw new IllegalArgumentException("zips 不支持的方法: " + method);
+        }
+    }
+
+    /** `isStopped()`：引擎线程被中断即视为脚本已请求停止（与 `ScriptRuntime.isStopped` 一致）。 */
+    public boolean scriptStopped() {
+        return mRuntime.isStopped() || Thread.currentThread().isInterrupted();
+    }
+
+    public void requiresApi(int api) {
+        ScriptRuntime.requiresApi(api);
+    }
+
+    /** 应用自身版本，格式 "versionCode|versionName"，供 `requiresAutojsVersion` 比较。 */
+    public String appVersionInfo() {
+        try {
+            Context context = mRuntime.uiHandler.getContext();
+            android.content.pm.PackageInfo info =
+                    context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
+            return info.versionCode + "|" + (info.versionName == null ? "" : info.versionName);
+        } catch (Exception e) {
+            return "0|";
+        }
+    }
+
+    /**
+     * `context` 全局：Rhino 里直接给 Android Context 对象，白名单桥下只暴露常用目录与包名，
+     * 目录类返回的路径字符串会由 JS 包装成带 `getAbsolutePath()` 的 file-like 对象。
+     */
+    public String contextInfo(String key) {
+        Context context = mRuntime.uiHandler.getContext();
+        File file;
+        switch (key == null ? "" : key) {
+            case "packageName":
+                return context.getPackageName();
+            case "filesDir":
+                file = context.getFilesDir();
+                break;
+            case "cacheDir":
+                file = context.getCacheDir();
+                break;
+            case "noBackupFilesDir":
+                file = context.getNoBackupFilesDir();
+                break;
+            case "externalFilesDir":
+                file = context.getExternalFilesDir(null);
+                break;
+            case "externalCacheDir":
+                file = context.getExternalCacheDir();
+                break;
+            default:
+                return null;
+        }
+        return file == null ? null : file.getAbsolutePath();
     }
 
     public boolean click(int x, int y) {

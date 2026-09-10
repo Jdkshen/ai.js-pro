@@ -232,6 +232,66 @@ var gestureTo = Math.round(device.height * 0.5);
 assert('gesture 真实滑动', typeof gesture(200, [gestureX, gestureFrom], [gestureX, gestureTo]) === 'boolean');
 assert('gestures 真实滑动', typeof gestures([0, 200, [gestureX, gestureFrom], [gestureX, gestureTo]]) === 'boolean');
 
+// --- 内置模块：crypto / zips / util / automator / context / rawInput ---
+assert('crypto.md5', crypto.md5('abc') === '900150983cd24fb0d6963f7d28e17f72');
+assert('crypto.sha256', crypto.sha256('abc')
+    === 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+assert('crypto.hmacSha256', crypto.hmacSha256('data', 'key').length === 64);
+assert('crypto base64 往返', crypto.base64Decode(crypto.base64Encode('AI.js Pro')) === 'AI.js Pro');
+assert('files.join', files.join(files.getSdcardPath(), 'engine-matrix', 'x.txt')
+    === files.getSdcardPath() + '/engine-matrix/x.txt');
+assert('zips 压缩/列表/解压', (function () {
+    var base = files.join(files.getSdcardPath(), 'engine-matrix');
+    var src = files.join(base, 'zip-src');
+    var zipPath = files.join(base, 'quickjs-test.zip');
+    var out = files.join(base, 'zip-out');
+    var helloFile = files.join(src, 'hello.txt');
+    var nestedFile = files.join(src, 'nested', 'inner.txt');
+    if (files.exists(zipPath)) files.remove(zipPath);
+    if (files.exists(out)) files.remove(out);
+    // files.ensureDir 确保的是「所在文件夹」，写文件用 createWithDirs 更直接。
+    files.createWithDirs(helloFile);
+    files.createWithDirs(nestedFile);
+    files.write(helloFile, 'hello-zip');
+    files.write(nestedFile, 'inner');
+    var zipped = zips.zip(src, zipPath) && files.exists(zipPath);
+    var entries = zips.list(zipPath);
+    var listed = Array.isArray(entries) && entries.length > 0;
+    var unzipped = zips.unzip(zipPath, out)
+        && files.exists(files.join(out, 'hello.txt'))
+        && files.read(files.join(out, 'hello.txt')) === 'hello-zip';
+    return zipped && listed && unzipped;
+})());
+assert('util 判定/格式化', util.isFunction(function () { }) && !util.isString(1) && util.isString('a')
+    && util.isEmpty([]) && !util.isEmpty({ a: 1 }) && util.size([1, 2, 3]) === 3
+    && util.format('%s=%d/%j', 'x', 7, [1, 2]) === 'x=7/[1,2]'
+    && util.join(['a', 'b'], '-') === 'a-b' && util.isArray(util.range(3)));
+assert('automator 模块', typeof automator.click === 'function' && typeof automator.swipe === 'function'
+    && typeof automator.gesture === 'function' && typeof automator.gestures === 'function'
+    && typeof automator.input === 'function' && typeof automator.setMode === 'function');
+assert('context 模块', typeof context.getPackageName() === 'string' && context.getPackageName().length > 0
+    && typeof context.getFilesDir().getAbsolutePath() === 'string'
+    && String(context.getFilesDir()) === context.getFilesDir().path);
+assert('rawInput 模块', typeof rawInput.keyevent === 'function' && typeof rawInput.text === 'function'
+    && typeof rawInput.tap === 'function' && typeof rawInput.swipe === 'function'
+    && typeof rawInput.press === 'function');
+assert('运行时状态全局', typeof isRunning === 'function' && typeof notStopped === 'function'
+    && typeof isStopped === 'function' && typeof stop === 'function'
+    && typeof requiresApi === 'function' && typeof requiresAutojsVersion === 'function'
+    && isRunning() === true && isStopped() === false && isRunning === notStopped);
+assert('requiresApi/requiresAutojsVersion', (function () {
+    requiresApi(24);
+    requiresAutojsVersion('1.0.0');
+    var threwOnApi = false;
+    try { requiresApi(99); } catch (e) { threwOnApi = true; }
+    var threwOnVersion = false;
+    try { requiresAutojsVersion('99.0.0'); } catch (e) { threwOnVersion = true; }
+    return threwOnApi && threwOnVersion;
+})());
+assert('require 内置模块', require('crypto') === crypto && require('zips') === zips
+    && require('util') === util && require('automator') === automator
+    && require('context') === context && require('rawInput') === rawInput);
+
 console.log('\n=== 回归测试完成: ' + pass + ' 通过, ' + fail + ' 失败 ===');
 if (fail > 0) {
     throw new Error('QuickJS 全模块回归失败: ' + fail + ' 项未通过');
