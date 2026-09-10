@@ -1451,6 +1451,50 @@ JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValue
     return callStringHost(context, "getForegroundInfo", kind == "activity" ? "activity" : "package");
 }
 
+// 控件选择器：Java 侧持句柄，JS 侧只拿到 long，不暴露对象。
+JSValue nativeSelectorCreate(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "selectorCreate", "()J");
+    const jlong handle = env->CallLongMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewInt64(context, handle);
+}
+
+JSValue nativeAutomatorCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 2) {
+        return JS_ThrowTypeError(context, "\u63a7\u4ef6\u8c03\u7528\u9700\u8981\u53e5\u67c4\u548c\u65b9\u6cd5\u540d");
+    }
+    int64_t handle = 0;
+    if (JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "\u63a7\u4ef6\u53e5\u67c4\u5fc5\u987b\u662f\u6570\u5b57");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string name = jsString(context, argv[1]);
+    const std::string arguments = argc > 2 ? jsString(context, argv[2]) : std::string("[]");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "automatorCall",
+                                        "(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaName = toJavaString(env, name);
+    jstring javaArguments = toJavaString(env, arguments);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+                                                             static_cast<jlong>(handle), javaName, javaArguments));
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(javaArguments);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 JSValue frameInfo(JSContext *context, EngineState *state, int64_t handle) {
     const auto frame = state->frames.get(handle);
     NativeFrameInfo nativeInfo;
@@ -4607,6 +4651,260 @@ const char kBootstrapScript[] = R"JS(
         }
     });
 
+    // ---- Selector / UiObject (Auto.js 4.x compatible, backed by the Java UiSelector) ----
+    // Everything below is a thin wrapper over __aiNativeAutomatorCall: the Java side owns the
+    // selector/UiObject/UiObjectCollection instances behind long handles and only exposes the
+    // whitelisted method names, so no Java object ever reaches the script.
+    function automatorCall(handle, method, args) {
+        return __aiNativeAutomatorCall(handle, method, JSON.stringify(args === undefined ? [] : args));
+    }
+
+    function wrapAutomatorRect(value) {
+        var rect = { left: value.left, top: value.top, right: value.right, bottom: value.bottom };
+        rect.width = function () { return rect.right - rect.left; };
+        rect.height = function () { return rect.bottom - rect.top; };
+        rect.centerX = function () { return Math.floor((rect.left + rect.right) / 2); };
+        rect.centerY = function () { return Math.floor((rect.top + rect.bottom) / 2); };
+        rect.toString = function () {
+            return 'Rect(' + rect.left + ', ' + rect.top + ' - ' + rect.right + ', ' + rect.bottom + ')';
+        };
+        return rect;
+    }
+
+    function automatorHandleOf(value) {
+        if (value === null || value === undefined) return null;
+        if (typeof value === 'number') return value;
+        if (value.__handle !== undefined) return value.__handle;
+        throw new TypeError('expects a selector or UiObject');
+    }
+
+    function decodeAutomatorResult(text) {
+        var result = JSON.parse(text);
+        switch (result.t) {
+            case 'b': return result.v === true;
+            case 'i': return result.v;
+            case 's': return result.v;
+            case 'n': return null;
+            case 'r': return wrapAutomatorRect(result.v);
+            case 'h':
+                return result.k === 'c' ? wrapAutomatorCollection(result.v) : wrapAutomatorObject(result.v);
+            default: return undefined;
+        }
+    }
+
+    var AUTOMATOR_STRING_FILTERS = ['text', 'textContains', 'textStartsWith', 'textEndsWith', 'textMatches',
+        'id', 'idContains', 'idStartsWith', 'idEndsWith', 'idMatches',
+        'desc', 'descContains', 'descStartsWith', 'descEndsWith', 'descMatches',
+        'className', 'classNameContains', 'classNameStartsWith', 'classNameEndsWith', 'classNameMatches',
+        'packageName', 'packageNameContains', 'packageNameStartsWith', 'packageNameEndsWith',
+        'packageNameMatches', 'algorithm'];
+    var AUTOMATOR_INT_FILTERS = ['drawingOrder', 'depth', 'row', 'rowCount', 'rowSpan', 'column',
+        'columnCount', 'columnSpan', 'indexInParent'];
+    var AUTOMATOR_BOOL_FILTERS = ['checkable', 'checked', 'focusable', 'focused', 'visibleToUser',
+        'accessibilityFocused', 'selected', 'clickable', 'longClickable', 'enabled', 'password', 'scrollable',
+        'editable', 'contentInvalid', 'contextClickable', 'multiLine', 'dismissable'];
+    var AUTOMATOR_BOUNDS_FILTERS = ['bounds', 'boundsInside', 'boundsContains'];
+    var AUTOMATOR_NODE_ACTIONS = ['click', 'longClick', 'accessibilityFocus', 'clearAccessibilityFocus',
+        'focus', 'clearFocus', 'copy', 'paste', 'select', 'cut', 'collapse', 'expand', 'dismiss', 'show',
+        'scrollForward', 'scrollBackward', 'scrollUp', 'scrollDown', 'scrollLeft', 'scrollRight', 'contextClick'];
+    var AUTOMATOR_STRING_PROPERTIES = ['text', 'desc', 'id', 'className', 'packageName'];
+    var AUTOMATOR_INT_PROPERTIES = ['depth', 'drawingOrder', 'indexInParent', 'childCount', 'row', 'column',
+        'rowSpan', 'columnSpan', 'rowCount', 'columnCount'];
+    var AUTOMATOR_BOOL_PROPERTIES = ['checkable', 'checked', 'focusable', 'focused', 'visibleToUser',
+        'accessibilityFocused', 'selected', 'clickable', 'longClickable', 'enabled', 'password', 'scrollable'];
+
+    function wrapAutomatorSelector(handle) {
+        var selector = { __handle: handle };
+        AUTOMATOR_STRING_FILTERS.forEach(function (name) {
+            selector[name] = function (value) {
+                automatorCall(handle, name, [String(value)]);
+                return selector;
+            };
+        });
+        AUTOMATOR_INT_FILTERS.forEach(function (name) {
+            selector[name] = function (value) {
+                automatorCall(handle, name, [Number(value)]);
+                return selector;
+            };
+        });
+        AUTOMATOR_BOOL_FILTERS.forEach(function (name) {
+            // Both call styles are supported: clickable() means "nodes that are clickable",
+            // clickable(true) filters on the flag value.
+            selector[name] = function (value) {
+                automatorCall(handle, name, arguments.length === 0 ? [] : [value === true]);
+                return selector;
+            };
+        });
+        AUTOMATOR_BOUNDS_FILTERS.forEach(function (name) {
+            selector[name] = function (left, top, right, bottom) {
+                automatorCall(handle, name, [left, top, right, bottom]);
+                return selector;
+            };
+        });
+        // A selector can run actions directly (it waits for the first match first), just like
+        // the Rhino UiSelector does.
+        AUTOMATOR_NODE_ACTIONS.forEach(function (name) {
+            selector[name] = function () { return decodeAutomatorResult(automatorCall(handle, name)); };
+        });
+        selector.setText = function (text) {
+            return decodeAutomatorResult(automatorCall(handle, 'setText', [String(text)]));
+        };
+        selector.setSelection = function (start, end) {
+            return decodeAutomatorResult(automatorCall(handle, 'setSelection', [start, end]));
+        };
+        selector.setProgress = function (value) {
+            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [Number(value)]));
+        };
+        selector.scrollTo = function (row, column) {
+            return decodeAutomatorResult(automatorCall(handle, 'scrollTo', [row, column]));
+        };
+        selector.find = function () { return decodeAutomatorResult(automatorCall(handle, 'find')); };
+        selector.untilFind = function () { return decodeAutomatorResult(automatorCall(handle, 'untilFind')); };
+        selector.findOnce = function (index) {
+            return decodeAutomatorResult(automatorCall(handle, 'findOnce',
+                index === undefined ? [] : [index]));
+        };
+        selector.findOne = function (timeout) {
+            return decodeAutomatorResult(automatorCall(handle, 'findOne',
+                timeout === undefined ? [] : [timeout]));
+        };
+        selector.untilFindOne = function () { return decodeAutomatorResult(automatorCall(handle, 'untilFindOne')); };
+        selector.exists = function () { return decodeAutomatorResult(automatorCall(handle, 'exists')); };
+        selector.waitFor = function () { automatorCall(handle, 'waitFor'); };
+        selector.findOf = function (node, max) {
+            var target = automatorHandleOf(node);
+            if (target === null) throw new TypeError('findOf(node) expects a UiObject');
+            return decodeAutomatorResult(automatorCall(handle, 'findOf',
+                max === undefined ? [target] : [target, max]));
+        };
+        selector.findOneOf = function (node) {
+            var target = automatorHandleOf(node);
+            if (target === null) throw new TypeError('findOneOf(node) expects a UiObject');
+            return decodeAutomatorResult(automatorCall(handle, 'findOneOf', [target]));
+        };
+        selector.toString = function () {
+            var text = decodeAutomatorResult(automatorCall(handle, 'toString'));
+            return text === undefined || text === null ? 'Selector' : String(text);
+        };
+        return selector;
+    }
+
+    function wrapAutomatorObject(handle) {
+        var object = { __handle: handle };
+        AUTOMATOR_STRING_PROPERTIES.concat(AUTOMATOR_INT_PROPERTIES, AUTOMATOR_BOOL_PROPERTIES,
+            AUTOMATOR_NODE_ACTIONS).forEach(function (name) {
+            object[name] = function () { return decodeAutomatorResult(automatorCall(handle, name)); };
+        });
+        object.bounds = function () { return decodeAutomatorResult(automatorCall(handle, 'bounds')); };
+        object.boundsInParent = function () {
+            return decodeAutomatorResult(automatorCall(handle, 'boundsInParent'));
+        };
+        object.setText = function (text) {
+            return decodeAutomatorResult(automatorCall(handle, 'setText', [String(text)]));
+        };
+        object.setSelection = function (start, end) {
+            return decodeAutomatorResult(automatorCall(handle, 'setSelection', [start, end]));
+        };
+        object.setProgress = function (value) {
+            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [Number(value)]));
+        };
+        object.scrollTo = function (row, column) {
+            return decodeAutomatorResult(automatorCall(handle, 'scrollTo', [row, column]));
+        };
+        object.parent = function () { return decodeAutomatorResult(automatorCall(handle, 'parent')); };
+        object.child = function (index) {
+            return decodeAutomatorResult(automatorCall(handle, 'child', [index]));
+        };
+        object.children = function () { return decodeAutomatorResult(automatorCall(handle, 'children')); };
+        object.find = function (selector) {
+            return decodeAutomatorResult(automatorCall(handle, 'find', [automatorHandleOf(selector)]));
+        };
+        object.findOne = function (selector) {
+            return decodeAutomatorResult(automatorCall(handle, 'findOne', [automatorHandleOf(selector)]));
+        };
+        object.recycle = function () { /* handles are released with the engine */ };
+        object.toString = function () {
+            var text = decodeAutomatorResult(automatorCall(handle, 'toString'));
+            return text === undefined || text === null ? 'UiObject' : String(text);
+        };
+        return object;
+    }
+
+    function wrapAutomatorCollection(handle) {
+        var collection = { __handle: handle };
+        collection.size = function () { return decodeAutomatorResult(automatorCall(handle, 'size')); };
+        collection.get = function (index) {
+            return decodeAutomatorResult(automatorCall(handle, 'get', [index]));
+        };
+        collection.empty = function () { return decodeAutomatorResult(automatorCall(handle, 'empty')); };
+        collection.nonEmpty = function () { return decodeAutomatorResult(automatorCall(handle, 'nonEmpty')); };
+        AUTOMATOR_NODE_ACTIONS.forEach(function (name) {
+            collection[name] = function () { return decodeAutomatorResult(automatorCall(handle, name)); };
+        });
+        collection.setText = function (text) {
+            return decodeAutomatorResult(automatorCall(handle, 'setText', [String(text)]));
+        };
+        collection.setSelection = function (start, end) {
+            return decodeAutomatorResult(automatorCall(handle, 'setSelection', [start, end]));
+        };
+        collection.setProgress = function (value) {
+            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [Number(value)]));
+        };
+        collection.scrollTo = function (row, column) {
+            return decodeAutomatorResult(automatorCall(handle, 'scrollTo', [row, column]));
+        };
+        collection.find = function (selector) {
+            return decodeAutomatorResult(automatorCall(handle, 'find', [automatorHandleOf(selector)]));
+        };
+        collection.findOne = function (selector) {
+            return decodeAutomatorResult(automatorCall(handle, 'findOne', [automatorHandleOf(selector)]));
+        };
+        collection.each = function (callback) {
+            var count = collection.size();
+            for (var i = 0; i < count; i++) {
+                var item = collection.get(i);
+                if (item !== null && item !== undefined) callback(item, i);
+            }
+            return collection;
+        };
+        collection.forEach = function (callback) {
+            var count = collection.size();
+            for (var i = 0; i < count; i++) {
+                callback(collection.get(i), i);
+            }
+            return collection;
+        };
+        collection.toArray = function () {
+            var count = collection.size();
+            var items = [];
+            for (var i = 0; i < count; i++) items.push(collection.get(i));
+            return items;
+        };
+        collection.toString = function () {
+            var text = decodeAutomatorResult(automatorCall(handle, 'toString'));
+            return text === undefined || text === null ? 'UiObjectCollection' : String(text);
+        };
+        return collection;
+    }
+
+    global.selector = function () { return wrapAutomatorSelector(Number(__aiNativeSelectorCreate())); };
+    AUTOMATOR_STRING_FILTERS.concat(AUTOMATOR_INT_FILTERS, AUTOMATOR_BOOL_FILTERS,
+        AUTOMATOR_BOUNDS_FILTERS).forEach(function (name) {
+        global[name] = function () {
+            var selector = global.selector();
+            return selector[name].apply(selector, arguments);
+        };
+    });
+    // Rhino copies every selector method into the global scope as well; mirror the ones that
+    // are not already taken by gesture/clipboard globals so older scripts keep working.
+    ['find', 'findOnce', 'findOne', 'untilFind', 'untilFindOne', 'exists', 'waitFor', 'findOf',
+        'findOneOf'].forEach(function (name) {
+        global[name] = function () {
+            var selector = global.selector();
+            return selector[name].apply(selector, arguments);
+        };
+    });
+
     var engineInfo = { name: 'QuickJS', version: '2026-06-04', native: true };
     global.__engine__ = Object.freeze(engineInfo);
 
@@ -4756,6 +5054,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSetClip", nativeSetClip, 1);
     installNativeFunction(state->context, global, "__aiNativeGetClip", nativeGetClip, 0);
     installNativeFunction(state->context, global, "__aiNativeForegroundInfo", nativeForegroundInfo, 1);
+    installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
+    installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
     installNativeFunction(state->context, global, "__aiNativeCaptureFrame", nativeCaptureFrame, 3);
     installNativeFunction(state->context, global, "__aiNativeReadFrame", nativeReadFrame, 1);

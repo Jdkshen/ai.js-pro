@@ -10,6 +10,7 @@
 | files、timers、shell | QuickJS 真实调用通过 | compat/lite K40 通过 |
 | app、storages、device、dialogs | QuickJS 基础桥接通过 | compat/lite K40 通过 |
 | engines、threads、events | worker 参数/返回值与同步事件通过 | compat/lite K40 通过 |
+| 选择器 / UiObject | `selector()`/`text()`…全局 + `find/findOnce/findOne/untilFind/untilFindOne/exists/waitFor` + 控件属性/动作/树访问全部通过（无障碍服务已连接时） | Mi8（回归测试 76 项全绿） |
 | UI | 布局创建、文本更新/回读、关闭通过 | compat/lite K40 通过 |
 | floaty | 真实创建、位置/尺寸/文本更新、关闭通过 | compat/lite K40 通过 |
 | Rhino 兼容 | 23 项基础回归通过；lite 可控拒绝且不崩溃 | K40 通过 |
@@ -24,7 +25,8 @@
 
 | 领域 | 硬阻塞 |
 | --- | --- |
-| 控件选择器 | QuickJS 没有 `text/id/desc/className/bounds` 选择器与 `UiObject`（`find/waitFor/untilFind` 全缺），这是无障碍自动化脚本的主体；移除 Rhino 前必须先补齐或明确不支持 |
+| 顶层别名与手势 | `alert/confirm/prompt/select/random/sync/auto/print/err`、`gesture*`、`input`、按键常量、`setScreenMetrics` 仍未对齐；依赖这些的旧脚本需改写法 |
+| 模块 | `web`/`zips`/`sqlite`/`crypto`/`util`/`io`/`plugins` 等模块级能力未迁移 |
 | UI | QuickJS 是最小化 overlay 实现，还未覆盖 Activity 模式、完整控件属性和复杂列表交互 |
 | floaty | 基础窗口已可用，但与 Rhino XML 窗口对象、控件代理和事件 API 尚未完全等价 |
 | web | `http` 已可用；InjectableWebView/WebSocket 等页面级能力未迁移 |

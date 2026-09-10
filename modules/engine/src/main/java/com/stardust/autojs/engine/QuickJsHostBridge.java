@@ -7,6 +7,7 @@ import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -25,6 +26,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 
+import com.stardust.autojs.core.accessibility.UiSelector;
 import com.stardust.autojs.core.http.MutableOkHttp;
 import com.stardust.autojs.core.inputevent.InputEventObserver;
 import com.stardust.autojs.core.inputevent.TouchObserver;
@@ -33,6 +35,9 @@ import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
 import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.autojs.runtime.api.Yolo;
+import com.stardust.automator.UiGlobalSelector;
+import com.stardust.automator.UiObject;
+import com.stardust.automator.UiObjectCollection;
 import com.stardust.notification.Notification;
 import com.stardust.notification.NotificationListenerService;
 import com.stardust.pio.UncheckedIOException;
@@ -49,6 +54,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -2800,6 +2806,331 @@ final class QuickJsHostBridge implements AutoCloseable {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 控件选择器 / UiObject（Auto.js 4.x 兼容）
+    //
+    // 复用 modules/automator 的同一套实现，find / waitFor / 控件动作的语义与 Rhino 完全一致。
+    // 选择器、UiObject、UiObjectCollection 在 Java 侧各对应一个 long 句柄，JS 侧拿到的也只是
+    // 句柄；脚本能调到的方法名限定在下面几张白名单表里，不向脚本暴露任意反射。
+    // ------------------------------------------------------------------
+
+    private static final String AUTOMATOR_VOID_RESULT = "{\"t\":\"v\"}";
+    private static final Class<?>[] NO_PARAMS = new Class<?>[0];
+    private static final Object[] NO_ARGS = new Object[0];
+    /** 句柄上限：长时间 find 会不断产出新句柄，到顶就整体丢弃（后续调用会明确报句柄失效）。 */
+    private static final int MAX_AUTOMATOR_HANDLES = 8192;
+
+    /** 字符串参数的过滤器，返回自身可链式。 */
+    private static final String[] SELECTOR_STRING_FILTERS = {
+            "text", "textContains", "textStartsWith", "textEndsWith", "textMatches",
+            "id", "idContains", "idStartsWith", "idEndsWith", "idMatches",
+            "desc", "descContains", "descStartsWith", "descEndsWith", "descMatches",
+            "className", "classNameContains", "classNameStartsWith", "classNameEndsWith", "classNameMatches",
+            "packageName", "packageNameContains", "packageNameStartsWith", "packageNameEndsWith",
+            "packageNameMatches", "algorithm",
+    };
+
+    /** int 参数的过滤器。 */
+    private static final String[] SELECTOR_INT_FILTERS = {
+            "drawingOrder", "depth", "row", "rowCount", "rowSpan", "column", "columnCount", "columnSpan",
+            "indexInParent",
+    };
+
+    /** 布尔过滤器：带参数时调布尔重载，不带参数时调无参重载。 */
+    private static final String[] SELECTOR_BOOL_FILTERS = {
+            "checkable", "checked", "focusable", "focused", "visibleToUser", "accessibilityFocused", "selected",
+            "clickable", "longClickable", "enabled", "password", "scrollable", "editable", "contentInvalid",
+            "contextClickable", "multiLine", "dismissable",
+    };
+
+    private static final String[] SELECTOR_BOUNDS_FILTERS = { "bounds", "boundsInside", "boundsContains" };
+
+    /** UiObject / UiObjectCollection 共有的动作（无参、返回布尔）。 */
+    private static final String[] NODE_ACTIONS = {
+            "click", "longClick", "accessibilityFocus", "clearAccessibilityFocus", "focus", "clearFocus",
+            "copy", "paste", "select", "cut", "collapse", "expand", "dismiss", "show",
+            "scrollForward", "scrollBackward", "scrollUp", "scrollDown", "scrollLeft", "scrollRight",
+            "contextClick",
+    };
+
+    private static final String[] OBJECT_STRING_PROPERTIES = { "text", "desc", "id", "className", "packageName" };
+
+    private static final String[] OBJECT_INT_PROPERTIES = {
+            "depth", "drawingOrder", "indexInParent", "childCount", "row", "column", "rowSpan", "columnSpan",
+            "rowCount", "columnCount",
+    };
+
+    private static final String[] OBJECT_BOOL_PROPERTIES = {
+            "checkable", "checked", "focusable", "focused", "visibleToUser", "accessibilityFocused", "selected",
+            "clickable", "longClickable", "enabled", "password", "scrollable",
+    };
+
+    private final AtomicLong mNextAutomatorHandle = new AtomicLong(1);
+    private final Map<Long, Object> mAutomatorHandles = new ConcurrentHashMap<>();
+    private final Map<String, Method> mAutomatorMethods = new ConcurrentHashMap<>();
+
+    public long selectorCreate() {
+        mRuntime.accessibilityBridge.ensureServiceEnabled();
+        return putAutomatorHandle(new UiSelector(mRuntime.accessibilityBridge));
+    }
+
+    /**
+     * 选择器 / UiObject / UiObjectCollection 的统一调用入口。
+     * 返回 JSON：{t:"v"} 无返回值、{t:"n"} null、{t:"b|i|s"} 基本类型、
+     * {t:"r",l,t,r,b} 矩形、{t:"h",k:"o|c",v:handle} 控件或集合句柄。
+     */
+    public String automatorCall(long handle, String method, String argsJson) throws Exception {
+        Object target = mAutomatorHandles.get(handle);
+        if (target == null) {
+            throw new IllegalStateException("自动控制句柄已失效：" + handle);
+        }
+        JSONArray args = new JSONArray(argsJson == null || argsJson.isEmpty() ? "[]" : argsJson);
+        if (target instanceof UiObjectCollection) {
+            return callCollection((UiObjectCollection) target, method, args);
+        }
+        if (target instanceof UiObject) {
+            return callObject((UiObject) target, method, args);
+        }
+        if (target instanceof UiGlobalSelector) {
+            return callSelector((UiGlobalSelector) target, method, args);
+        }
+        throw new IllegalStateException("未知的自动控制句柄类型");
+    }
+
+    private String callSelector(UiGlobalSelector selector, String method, JSONArray args) throws Exception {
+        if (namesContain(SELECTOR_STRING_FILTERS, method)) {
+            invokeAutomator(selector, method, new Class<?>[]{ String.class }, new Object[]{ args.getString(0) });
+            return AUTOMATOR_VOID_RESULT;
+        }
+        if (namesContain(SELECTOR_INT_FILTERS, method)) {
+            invokeAutomator(selector, method, new Class<?>[]{ int.class }, new Object[]{ args.getInt(0) });
+            return AUTOMATOR_VOID_RESULT;
+        }
+        if (namesContain(SELECTOR_BOOL_FILTERS, method)) {
+            if (args.length() > 0 && !args.isNull(0)) {
+                invokeAutomator(selector, method, new Class<?>[]{ boolean.class },
+                        new Object[]{ args.getBoolean(0) });
+            } else {
+                invokeAutomator(selector, method, NO_PARAMS, NO_ARGS);
+            }
+            return AUTOMATOR_VOID_RESULT;
+        }
+        if (namesContain(SELECTOR_BOUNDS_FILTERS, method)) {
+            invokeAutomator(selector, method, new Class<?>[]{ int.class, int.class, int.class, int.class },
+                    new Object[]{ args.getInt(0), args.getInt(1), args.getInt(2), args.getInt(3) });
+            return AUTOMATOR_VOID_RESULT;
+        }
+        // Rhino 的 UiSelector 本身也能直接执行动作（内部先 untilFind），保持一致。
+        if (namesContain(NODE_ACTIONS, method)) {
+            return encodeAutomatorResult(invokeAutomator(selector, method, NO_PARAMS, NO_ARGS));
+        }
+        switch (method) {
+            case "setText":
+                return encodeAutomatorResult(invokeAutomator(selector, method,
+                        new Class<?>[]{ String.class }, new Object[]{ args.getString(0) }));
+            case "setSelection":
+            case "scrollTo":
+                return encodeAutomatorResult(invokeAutomator(selector, method,
+                        new Class<?>[]{ int.class, int.class },
+                        new Object[]{ args.getInt(0), args.getInt(1) }));
+            case "setProgress":
+                return encodeAutomatorResult(invokeAutomator(selector, method,
+                        new Class<?>[]{ float.class }, new Object[]{ (float) args.getDouble(0) }));
+            case "find":
+            case "untilFind":
+            case "untilFindOne":
+            case "exists":
+                return encodeAutomatorResult(invokeAutomator(selector, method, NO_PARAMS, NO_ARGS));
+            case "waitFor":
+                invokeAutomator(selector, method, NO_PARAMS, NO_ARGS);
+                return AUTOMATOR_VOID_RESULT;
+            case "findOnce":
+                return args.length() > 0 && !args.isNull(0)
+                        ? encodeAutomatorResult(invokeAutomator(selector, "findOnce",
+                        new Class<?>[]{ int.class }, new Object[]{ args.getInt(0) }))
+                        : encodeAutomatorResult(invokeAutomator(selector, "findOnce", NO_PARAMS, NO_ARGS));
+            case "findOne":
+                return args.length() > 0 && !args.isNull(0)
+                        ? encodeAutomatorResult(invokeAutomator(selector, "findOne",
+                        new Class<?>[]{ long.class }, new Object[]{ args.getLong(0) }))
+                        : encodeAutomatorResult(invokeAutomator(selector, "findOne", NO_PARAMS, NO_ARGS));
+            case "findOf":
+                return args.length() > 1 && !args.isNull(1)
+                        ? encodeAutomatorResult(invokeAutomator(selector, "findOf",
+                        new Class<?>[]{ UiObject.class, int.class },
+                        new Object[]{ requireAutomatorObject(args.getLong(0)), args.getInt(1) }))
+                        : encodeAutomatorResult(invokeAutomator(selector, "findOf",
+                        new Class<?>[]{ UiObject.class },
+                        new Object[]{ requireAutomatorObject(args.getLong(0)) }));
+            case "findOneOf":
+                return encodeAutomatorResult(invokeAutomator(selector, "findOneOf",
+                        new Class<?>[]{ UiObject.class },
+                        new Object[]{ requireAutomatorObject(args.getLong(0)) }));
+            case "toString":
+                return encodeAutomatorResult(selector.toString());
+            default:
+                throw new IllegalArgumentException("不支持的选择器方法：" + method);
+        }
+    }
+
+    private String callObject(UiObject object, String method, JSONArray args) throws Exception {
+        if (namesContain(OBJECT_STRING_PROPERTIES, method) || namesContain(OBJECT_INT_PROPERTIES, method)
+                || namesContain(OBJECT_BOOL_PROPERTIES, method) || namesContain(NODE_ACTIONS, method)) {
+            return encodeAutomatorResult(invokeAutomator(object, method, NO_PARAMS, NO_ARGS));
+        }
+        switch (method) {
+            case "bounds":
+            case "boundsInParent":
+            case "parent":
+            case "children":
+                return encodeAutomatorResult(invokeAutomator(object, method, NO_PARAMS, NO_ARGS));
+            case "child":
+                return encodeAutomatorResult(invokeAutomator(object, method,
+                        new Class<?>[]{ int.class }, new Object[]{ args.getInt(0) }));
+            case "setText":
+                return encodeAutomatorResult(invokeAutomator(object, method,
+                        new Class<?>[]{ String.class }, new Object[]{ args.getString(0) }));
+            case "setSelection":
+            case "scrollTo":
+                return encodeAutomatorResult(invokeAutomator(object, method,
+                        new Class<?>[]{ int.class, int.class },
+                        new Object[]{ args.getInt(0), args.getInt(1) }));
+            case "setProgress":
+                return encodeAutomatorResult(invokeAutomator(object, method,
+                        new Class<?>[]{ float.class }, new Object[]{ (float) args.getDouble(0) }));
+            case "find":
+            case "findOne":
+                return encodeAutomatorResult(invokeAutomator(object, method,
+                        new Class<?>[]{ UiGlobalSelector.class },
+                        new Object[]{ requireAutomatorSelector(args.getLong(0)) }));
+            case "toString":
+                return encodeAutomatorResult(object.toString());
+            default:
+                throw new IllegalArgumentException("不支持的控件方法：" + method);
+        }
+    }
+
+    private String callCollection(UiObjectCollection collection, String method, JSONArray args) throws Exception {
+        switch (method) {
+            case "size":
+                return encodeAutomatorResult(collection.size());
+            case "get": {
+                int index = args.getInt(0);
+                return encodeAutomatorResult(index >= 0 && index < collection.size()
+                        ? collection.get(index) : null);
+            }
+            case "empty":
+                return encodeAutomatorResult(collection.empty());
+            case "nonEmpty":
+                return encodeAutomatorResult(collection.nonEmpty());
+            case "find":
+                return encodeAutomatorResult(collection.find(requireAutomatorSelector(args.getLong(0))));
+            case "findOne":
+                return encodeAutomatorResult(collection.findOne(requireAutomatorSelector(args.getLong(0))));
+            case "setText":
+                return encodeAutomatorResult(invokeAutomator(collection, method,
+                        new Class<?>[]{ CharSequence.class }, new Object[]{ args.getString(0) }));
+            case "setSelection":
+            case "scrollTo":
+                return encodeAutomatorResult(invokeAutomator(collection, method,
+                        new Class<?>[]{ int.class, int.class },
+                        new Object[]{ args.getInt(0), args.getInt(1) }));
+            case "setProgress":
+                return encodeAutomatorResult(invokeAutomator(collection, method,
+                        new Class<?>[]{ float.class }, new Object[]{ (float) args.getDouble(0) }));
+            case "toString":
+                return encodeAutomatorResult(collection.toString());
+            default:
+                if (namesContain(NODE_ACTIONS, method)) {
+                    return encodeAutomatorResult(invokeAutomator(collection, method, NO_PARAMS, NO_ARGS));
+                }
+                throw new IllegalArgumentException("不支持的控件集合方法：" + method);
+        }
+    }
+
+    private String encodeAutomatorResult(Object value) throws JSONException {
+        JSONObject json = new JSONObject();
+        if (value == null) {
+            json.put("t", "n");
+        } else if (value instanceof Boolean) {
+            json.put("t", "b").put("v", ((Boolean) value).booleanValue());
+        } else if (value instanceof Integer) {
+            json.put("t", "i").put("v", ((Integer) value).intValue());
+        } else if (value instanceof String) {
+            json.put("t", "s").put("v", value);
+        } else if (value instanceof Rect) {
+            Rect rect = (Rect) value;
+            JSONObject bounds = new JSONObject();
+            bounds.put("left", rect.left).put("top", rect.top)
+                    .put("right", rect.right).put("bottom", rect.bottom);
+            json.put("t", "r").put("v", bounds);
+        } else if (value instanceof UiObjectCollection) {
+            json.put("t", "h").put("k", "c").put("v", putAutomatorHandle(value));
+        } else if (value instanceof UiObject) {
+            json.put("t", "h").put("k", "o").put("v", putAutomatorHandle(value));
+        } else {
+            throw new IllegalStateException("不支持的自动控制返回值：" + value.getClass().getName());
+        }
+        return json.toString();
+    }
+
+    private Object invokeAutomator(Object target, String method, Class<?>[] parameters, Object[] arguments)
+            throws Exception {
+        String key = automatorMethodKey(target.getClass(), method, parameters);
+        Method cached = mAutomatorMethods.get(key);
+        if (cached == null) {
+            cached = target.getClass().getMethod(method, parameters);
+            mAutomatorMethods.put(key, cached);
+        }
+        return cached.invoke(target, arguments);
+    }
+
+    private static String automatorMethodKey(Class<?> type, String method, Class<?>[] parameters) {
+        StringBuilder builder = new StringBuilder(type.getName()).append('#').append(method).append('(');
+        for (Class<?> parameter : parameters) {
+            builder.append(parameter.getName()).append(',');
+        }
+        return builder.append(')').toString();
+    }
+
+    private static boolean namesContain(String[] names, String method) {
+        for (String name : names) {
+            if (name.equals(method)) return true;
+        }
+        return false;
+    }
+
+    private long putAutomatorHandle(Object value) {
+        if (mAutomatorHandles.size() >= MAX_AUTOMATOR_HANDLES) {
+            Log.w("QuickJsHostBridge", "Selector handle limit reached, dropping stale handles");
+            mAutomatorHandles.clear();
+        }
+        long handle = mNextAutomatorHandle.getAndIncrement();
+        mAutomatorHandles.put(handle, value);
+        return handle;
+    }
+
+    private UiObject requireAutomatorObject(long handle) {
+        Object target = mAutomatorHandles.get(handle);
+        if (!(target instanceof UiObject)) {
+            throw new IllegalArgumentException("句柄不是控件：" + handle);
+        }
+        return (UiObject) target;
+    }
+
+    private UiGlobalSelector requireAutomatorSelector(long handle) {
+        Object target = mAutomatorHandles.get(handle);
+        if (!(target instanceof UiGlobalSelector)) {
+            throw new IllegalArgumentException("句柄不是选择器：" + handle);
+        }
+        return (UiGlobalSelector) target;
+    }
+
+    private void releaseAutomatorHandles() {
+        mAutomatorHandles.clear();
+        mAutomatorMethods.clear();
+    }
+
     @Override
     public void close() {
         for (String name : new ArrayList<>(mSharedBusSubscriptions)) {
@@ -2811,6 +3142,7 @@ final class QuickJsHostBridge implements AutoCloseable {
         sensorsUnregisterAll();
         floatyCloseAll();
         uiClose();
+        releaseAutomatorHandles();
         for (android.app.AlertDialog dialog : new ArrayList<>(pendingDialogRegistry.values())) {
             try {
                 dialog.dismiss();
