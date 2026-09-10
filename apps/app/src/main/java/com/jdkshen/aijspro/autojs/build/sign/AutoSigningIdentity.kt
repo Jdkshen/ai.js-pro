@@ -54,15 +54,30 @@ object AutoSigningIdentity {
     ): SigningKey? {
         val keyStore = identityFile(outputDir, appName)
         if (keyStore.isFile) {
-            val stored = Pref.getPrefString(SigningOptions.passwordPrefKey(keyStore.path), "")
-            if (stored.isEmpty()) {
-                throw IOException(
-                    "已存在签名密钥库，但没有它的口令记录：${keyStore.path}。" +
-                            "请在「选择签名」里指定它并填入口令，或删除该文件后重新打包生成新的身份"
-                )
+            // 先试按路径记的口令；再试旧版本只记在「当前密钥库口令」上的那个。
+            // 对上了就补记账，之后再打包直接命中。
+            val candidates = listOf(
+                Pref.getPrefString(SigningOptions.passwordPrefKey(keyStore.path), ""),
+                Pref.getPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, "")
+            ).filter { it.isNotEmpty() }.distinct()
+            for (password in candidates) {
+                val key = try {
+                    SigningKey.load(keyStore, null,
+                        password.toCharArray(), ALIAS, password.toCharArray())
+                } catch (error: Exception) {
+                    Log.w(TAG, "Password candidate rejected for " + keyStore.path, error)
+                    null
+                }
+                if (key != null) {
+                    Pref.setPrefString(SigningOptions.passwordPrefKey(keyStore.path), password)
+                    return key
+                }
             }
-            return SigningKey.load(keyStore, null,
-                stored.toCharArray(), ALIAS, stored.toCharArray())
+            throw IOException(
+                "已存在签名密钥库，但本机没有它的口令：${keyStore.path}。" +
+                        "请在「选择签名」里选中它并填入口令，或删掉这个文件后重新打包（会生成新的身份，" +
+                        "用了旧身份的已装应用需要先卸载）"
+            )
         }
         if (!generateIfMissing) return null
         val password = KeyStoreGenerator.randomPassword()

@@ -126,7 +126,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         private const val PREF_SIGNING_MODE = "aijspro.build.signing.mode"
         private const val PREF_SIGNING_KEYSTORE = "aijspro.build.signing.keystore"
         private const val PREF_SIGNING_ALIAS = "aijspro.build.signing.alias"
-        private const val PREF_SIGNING_STORE_PASSWORD = "aijspro.build.signing.storePassword"
+        private const val PREF_SIGNING_STORE_PASSWORD = SigningOptions.CURRENT_STORE_PASSWORD_PREF
         private const val PREF_SIGNING_KEY_PASSWORD = "aijspro.build.signing.keyPassword"
 
         private fun isImageFile(name: String): Boolean =

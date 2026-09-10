@@ -8,13 +8,16 @@ import android.graphics.Bitmap;
 
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.autojs.build.ApkBuilder;
 import com.jdkshen.aijspro.autojs.build.sign.ApkSignatureReader;
+import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity;
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner;
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreGenerator;
 import com.jdkshen.aijspro.autojs.build.sign.SigningKey;
 import com.jdkshen.aijspro.autojs.build.sign.SigningOptions;
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
+import com.stardust.autojs.apkbuilder.Signer;
 import com.stardust.autojs.engine.encryption.ScriptEncryption;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.util.MD5;
@@ -385,9 +388,36 @@ public class ApkBuilderEncryptionTest {
                 first.getSubject().contains("DefaultSigningProbe"));
     }
 
+    /**
+     * 回归：早期版本生成的密钥库只把口令记在「当前密钥库口令」上，没按路径记账。
+     * 自动签名必须能靠它把同一个身份继续用下去（并补记账），
+     * 而不是直接报「已存在密钥库但没有它的口令」把用户堵死。
+     */
+    @Test
+    public void autoSigningRecoversThePasswordOfAnOlderKeyStore() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File workDir = new File(context.getCacheDir(), "apk-builder-auto-identity-test");
+        deleteRecursively(workDir);
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+
+        String appName = "LegacyPasswordProbe";
+        String password = KeyStoreGenerator.randomPassword();
+        File keyStore = new File(workDir, appName + "-signing.p12");
+        KeyStoreGenerator.save(KeyStoreGenerator.generate(appName, "AI.js Pro", "CN"),
+                keyStore, password.toCharArray(), "aijspro");
+        // 只写旧版本那个键，并且清掉可能存在的路径键
+        Pref.setPrefString(SigningOptions.CURRENT_STORE_PASSWORD_PREF, password);
+        Pref.setPrefString(SigningOptions.INSTANCE.passwordPrefKey(keyStore.getPath()), "");
+
+        Signer signer = AutoSigningIdentity.INSTANCE.forApp(workDir, appName);
+        assertNotNull("必须能复用旧密钥库，而不是报没有口令", signer);
+        assertEquals("应当把口令补记到路径键上", password,
+                Pref.getPrefString(SigningOptions.INSTANCE.passwordPrefKey(keyStore.getPath()), ""));
+    }
+
     private static ApkSignatureReader.Signer buildWithConfig(Context context, File outDir, String apkName,
-            File workDir, ApkBuilder.AppConfig config) throws Exception {
-        File outApk = new File(outDir, apkName);
+            File workDir, ApkBuilder.AppConfig config) throws Exception {        File outApk = new File(outDir, apkName);
         File workspace = new File(workDir, "workspace-" + apkName);
         new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), outApk, workspace.getPath())
                 .prepare()

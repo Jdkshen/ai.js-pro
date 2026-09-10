@@ -26,6 +26,13 @@ object SigningOptions {
     private const val PASSWORD_PREFIX = "aijspro.build.signing.password."
 
     /**
+     * 早期版本没有按路径记账，只把「当前密钥库口令」存在这一个键上。
+     * 自动签名复用旧密钥库时要拿它当备选口令，否则用户升上来第一次打包就会报
+     * 「已存在密钥库但没有口令记录」。
+     */
+    const val CURRENT_STORE_PASSWORD_PREF = "aijspro.build.signing.storePassword"
+
+    /**
      * 自动生成的密钥库口令按「路径」记账：重新打开打包页、或者换个会话进来，
      * 都要能拿着同一份身份继续签，否则每打一次包就换一次证书、旧包再也升级不了。
      */
