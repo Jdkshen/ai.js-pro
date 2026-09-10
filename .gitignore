@@ -10,6 +10,7 @@
 !/tools/test-miuix.ps1
 !/tools/compare-engine-api.ps1
 !/tools/measure-ui-performance.ps1
+!/tools/jdk17.ps1
 
 # CodeGraph local index (regenerate with `codegraph init`)
 /.codegraph/
