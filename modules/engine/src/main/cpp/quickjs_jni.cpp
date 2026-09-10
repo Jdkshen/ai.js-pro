@@ -377,6 +377,9 @@ int interruptHandler(JSRuntime *, void *opaque) {
     return state->interrupted.load(std::memory_order_relaxed) ? 1 : 0;
 }
 
+// 前向声明：native 参数读取工具在文件后面定义（nativeSleep 之后）。
+bool readInt(JSContext *context, int argc, JSValueConst *argv, int index, int32_t *value);
+
 JSValue nativeLog(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
@@ -518,6 +521,224 @@ JSValue nativeWebCall(JSContext *context, JSValueConst, int argc, JSValueConst *
     const std::string text = fromJavaString(env, result);
     env->DeleteLocalRef(result);
     return JS_NewStringLen(context, text.data(), text.size());
+}
+
+// ---- 控件通用属性 / 动作 / 尺寸（对齐 Rhino 的 NativeView.attr 与窗口 getWidth/getHeight）----
+
+/** 统一的 jstring 参数读取。 */
+static std::string stringArg(JSContext *context, int argc, JSValueConst *argv, int index) {
+    return index < argc ? jsString(context, argv[index]) : std::string();
+}
+
+JSValue nativeFloatyViewExists(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (!readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyViewExists", "(ILjava/lang/String;)Z");
+    jstring javaId = toJavaString(env, id);
+    jboolean result = env->CallBooleanMethod(state->host, method, windowId, javaId);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeFloatyViewGetAttr(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (!readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    const std::string name = stringArg(context, argc, argv, 2);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyViewGetAttr",
+                                        "(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaId = toJavaString(env, id);
+    jstring javaName = toJavaString(env, name);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(state->host, method, windowId,
+                                                                javaId, javaName));
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string() : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeFloatyViewSetAttr(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (!readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    const std::string name = stringArg(context, argc, argv, 2);
+    const std::string value = stringArg(context, argc, argv, 3);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyViewSetAttr",
+                                        "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
+    jstring javaId = toJavaString(env, id);
+    jstring javaName = toJavaString(env, name);
+    jstring javaValue = toJavaString(env, value);
+    jboolean result = env->CallBooleanMethod(state->host, method, windowId, javaId, javaName,
+                                             javaValue);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(javaValue);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeFloatyViewAction(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (!readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    const std::string action = stringArg(context, argc, argv, 2);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyViewAction",
+                                        "(ILjava/lang/String;Ljava/lang/String;)Z");
+    jstring javaId = toJavaString(env, id);
+    jstring javaAction = toJavaString(env, action);
+    jboolean result = env->CallBooleanMethod(state->host, method, windowId, javaId, javaAction);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaAction);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeFloatyGetWidth(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (!readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyGetWidth", "(I)I");
+    jint result = env->CallIntMethod(state->host, method, windowId);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewInt32(context, result);
+}
+
+JSValue nativeFloatyGetHeight(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (!readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyGetHeight", "(I)I");
+    jint result = env->CallIntMethod(state->host, method, windowId);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewInt32(context, result);
+}
+
+/** UI 视图：是否存在 / 执行动作（ui.<id> 与 ui.findView 用）。 */
+JSValue nativeUiViewExists(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t viewId = 0;
+    if (!readInt(context, argc, argv, 0, &viewId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "uiViewExists", "(ILjava/lang/String;)Z");
+    jstring javaId = toJavaString(env, id);
+    jboolean result = env->CallBooleanMethod(state->host, method, viewId, javaId);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeUiViewAction(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t viewId = 0;
+    if (!readInt(context, argc, argv, 0, &viewId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    const std::string action = stringArg(context, argc, argv, 2);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "uiViewAction",
+                                        "(ILjava/lang/String;Ljava/lang/String;)Z");
+    jstring javaId = toJavaString(env, id);
+    jstring javaAction = toJavaString(env, action);
+    jboolean result = env->CallBooleanMethod(state->host, method, viewId, javaId, javaAction);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaAction);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+/** `ui.isUiThread()`。 */
+JSValue nativeIsMainThread(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "uiIsMainThread", "()Z");
+    jboolean result = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+/** `ui.statusBarColor(color)`。 */
+JSValue nativeStatusBarColor(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string color = stringArg(context, argc, argv, 0);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "statusBarColor", "(Ljava/lang/String;)V");
+    jstring javaColor = toJavaString(env, color);
+    env->CallVoidMethod(state->host, method, javaColor);
+    env->DeleteLocalRef(javaColor);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_UNDEFINED;
 }
 
 /** 从非引擎线程安排一次脚本回调（Web 桥与回归测试使用，验证跨线程回调通路）。 */
@@ -4866,25 +5087,54 @@ const char kBootstrapScript[] = R"JS(
         }
         ensureFloatyPolling();
     }
+    /**
+     * 浮窗控件代理：方法与 Rhino 的 NativeView 对齐。
+     * - `attr(name[, value])` 读写任意 XML 属性（ViewAttributes）
+     * - 属性式访问：`view.text` 读、`view.text = 'x'` 写（走同一套 attr）
+     * - `click()/longClick()` 无参时直接触发控件动作，传函数时注册监听
+     */
     function makeFloatyView(windowId, viewId) {
+        var attributeCache = Object.create(null);
         var view = {
+            __windowId: windowId,
+            __viewId: viewId,
             click: function (fn) {
-                addFloatyHandler(windowId, viewId, 'click', fn);
+                if (typeof fn === 'function') {
+                    addFloatyHandler(windowId, viewId, 'click', fn);
+                    return view;
+                }
+                __aiNativeFloatyViewAction(windowId, viewId, 'click');
                 return view;
             },
             longClick: function (fn) {
-                addFloatyHandler(windowId, viewId, 'long_click', fn);
+                if (typeof fn === 'function') {
+                    addFloatyHandler(windowId, viewId, 'long_click', fn);
+                    return view;
+                }
+                __aiNativeFloatyViewAction(windowId, viewId, 'longClick');
                 return view;
             },
             on: function (event, fn) {
                 event = String(event);
                 if (event === 'click') return view.click(fn);
                 if (event === 'long_click' || event === 'longClick') return view.longClick(fn);
-                if (event === 'key') return view.onKey(fn);
-                throw new Error('Unsupported floaty view event: ' + event);
+                if (event === 'key' || event === 'key_down' || event === 'key_up') return view.onKey(fn);
+                if (event === 'touch' || event === 'touch_down' || event === 'touch_up'
+                        || event === 'touch_move') {
+                    return view.onTouch(fn);
+                }
+                throw new Error('不支持的浮窗控件事件：' + event);
             },
             onKey: function (fn) {
                 addFloatyHandler(windowId, viewId, 'key', fn);
+                return view;
+            },
+            onTouch: function (fn) {
+                addFloatyHandler(windowId, viewId, 'touch', fn);
+                return view;
+            },
+            setOnTouchListener: function (fn) {
+                addFloatyHandler(windowId, viewId, 'touch', fn);
                 return view;
             },
             getText: function () { return __aiNativeFloatyViewGetText(windowId, viewId); },
@@ -4897,16 +5147,70 @@ const char kBootstrapScript[] = R"JS(
                     windowId, viewId, String(Math.round(Number(visibility) || 0)));
                 return view;
             },
-            setOnTouchListener: function (fn) {
-                addFloatyHandler(windowId, viewId, 'touch', fn);
-                return view;
-            },
             requestFocus: function () {
                 __aiNativeFloatyViewRequestFocus(windowId, viewId);
                 return view;
-            }
+            },
+            attr: function (name, value) {
+                name = String(name);
+                if (value === undefined) {
+                    var text = __aiNativeFloatyViewGetAttr(windowId, viewId, name);
+                    return text === '' ? null : text;
+                }
+                __aiNativeFloatyViewSetAttr(windowId, viewId, name, toAttributeText(value));
+                return view;
+            },
+            getWidth: function () { return Number(view.attr('width')); },
+            getHeight: function () { return Number(view.attr('height')); },
+            getVisibility: function () { return Number(view.attr('visibility')); },
+            isEnabled: function () { return view.attr('enabled') === true || view.attr('enabled') === 'true'; },
+            setEnabled: function (enabled) { return view.attr('enabled', !!enabled); },
+            setTextColor: function (color) { return view.attr('textColor', color); },
+            setTextSize: function (size) { return view.attr('textSize', size); },
+            setBackgroundColor: function (color) { return view.attr('backgroundColor', color); },
+            setEnabledState: function (enabled) { return view.attr('enabled', !!enabled); }
         };
-        return Object.freeze(view);
+        // 属性式读写：读取时先看已知方法/缓存过的属性名，再当属性名查一次。
+        return new Proxy(view, {
+            get: function (target, prop) {
+                if (typeof prop !== 'string') return undefined;
+                if (prop in target) return target[prop];
+                if (prop === 'then' || prop === 'toJSON' || prop === 'valueOf'
+                        || prop === 'toString' || prop === 'constructor') {
+                    return undefined;
+                }
+                var text = __aiNativeFloatyViewGetAttr(windowId, viewId, prop);
+                if (text === '') return undefined;
+                attributeCache[prop] = true;
+                return text;
+            },
+            set: function (target, prop, value) {
+                if (typeof prop !== 'string' || prop in target) {
+                    return false;
+                }
+                __aiNativeFloatyViewSetAttr(windowId, viewId, prop, toAttributeText(value));
+                return true;
+            }
+        });
+    }
+
+    /** 属性值转成 Java 侧认的字符串（布尔/数字/字符串）。 */
+    function toAttributeText(value) {
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'string') return value;
+        return String(value);
+    }
+
+    /** 控件代理缓存：同一个 window+id 复用同一个对象（Rhino 的 NativeView 也是同一实例）。 */
+    var floatyViewCache = new Map();
+    function floatyViewOf(windowId, viewId) {
+        var key = windowId + ':' + viewId;
+        var cached = floatyViewCache.get(key);
+        if (!cached) {
+            cached = makeFloatyView(windowId, viewId);
+            floatyViewCache.set(key, cached);
+        }
+        return cached;
     }
     var floaty = {
         window: function (xmlOrConfig, extra) {
@@ -4934,6 +5238,13 @@ const char kBootstrapScript[] = R"JS(
                 },
                 getX: function () { return Number(__aiNativeFloatyGetX(id)); },
                 getY: function () { return Number(__aiNativeFloatyGetY(id)); },
+                getWidth: function () { return Number(__aiNativeFloatyGetWidth(id)); },
+                getHeight: function () { return Number(__aiNativeFloatyGetHeight(id)); },
+                findView: function (viewId) {
+                    viewId = String(viewId);
+                    if (!__aiNativeFloatyViewExists(id, viewId)) return null;
+                    return floatyViewOf(id, viewId);
+                },
                 setText: function (text) {
                     __aiNativeFloatyUpdate(id, JSON.stringify({ text: String(text == null ? '' : text) }));
                 },
@@ -4974,7 +5285,7 @@ const char kBootstrapScript[] = R"JS(
                     if (exitOnClose && typeof global.exit === 'function') global.exit();
                 }
             };
-            // window.<id> resolves to a control proxy (click/getText/setText/...).
+            // window.<id> 解析成控件代理；不存在的 id 返回 undefined（与 Rhino 的 findView 回退一致）。
             return new Proxy(win, {
                 get: function (target, prop) {
                     if (typeof prop !== 'string') return undefined;
@@ -4984,10 +5295,10 @@ const char kBootstrapScript[] = R"JS(
                         return undefined;
                     }
                     var cached = viewCache.get(prop);
-                    if (!cached) {
-                        cached = makeFloatyView(id, prop);
-                        viewCache.set(prop, cached);
-                    }
+                    if (cached) return cached;
+                    if (!__aiNativeFloatyViewExists(id, prop)) return undefined;
+                    cached = floatyViewOf(id, prop);
+                    viewCache.set(prop, cached);
                     return cached;
                 }
             });
@@ -5030,9 +5341,9 @@ const char kBootstrapScript[] = R"JS(
             var raw = __aiNativeUiPollEvent();
             if (!raw) break;
             var ev = JSON.parse(raw);
+            var view = uiView(String(ev.id));
             var entry = uiEventListeners.get(String(ev.id));
             if (entry && entry[ev.event]) {
-                var view = uiView(String(ev.id));
                 entry[ev.event].slice().forEach(function (fn) {
                     if (ev.event === 'item_click' || ev.event === 'item_long_click') {
                         fn(Number(ev.index), view);
@@ -5041,6 +5352,8 @@ const char kBootstrapScript[] = R"JS(
                     }
                 });
             }
+            // 与 Rhino 一致：控件事件同时挂在 ui.emitter 上。
+            uiRootEmitter.emit(ev.event, view);
         }
     }
     function uiListen(id, name, fn) {
@@ -5060,28 +5373,59 @@ const char kBootstrapScript[] = R"JS(
     }
     function uiView(id) {
         id = String(id);
-        return Object.freeze({
+        return new Proxy({
+            __id: id,
             setText: function (text) {
                 uiSet(id, { text: String(text == null ? '' : text) });
+                return this;
             },
             getText: function () {
                 return uiReadText(id);
             },
             setVisibility: function (visibility) {
                 uiSet(id, { visibility: Number(visibility) || 0 });
+                return this;
             },
             setBackgroundColor: function (color) {
                 uiSet(id, { backgroundColor: String(color) });
+                return this;
+            },
+            setTextColor: function (color) {
+                uiSet(id, { textColor: String(color) });
+                return this;
+            },
+            setTextSize: function (size) {
+                uiSet(id, { textSize: Number(size) || 0 });
+                return this;
+            },
+            setEnabled: function (enabled) {
+                uiSet(id, { enabled: !!enabled });
+                return this;
             },
             setDataSource: function (data) {
                 if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
                 __aiNativeUiSetDataSource(uiViewId, id, JSON.stringify(Array.isArray(data) ? data : []));
+                return this;
             },
             click: function (fn) {
+                if (typeof fn !== 'function') {
+                    if (uiViewId > 0) __aiNativeUiViewAction(uiViewId, id, 'click');
+                    return this;
+                }
                 uiListen(id, 'click', fn);
+                return this;
+            },
+            longClick: function (fn) {
+                if (typeof fn !== 'function') {
+                    if (uiViewId > 0) __aiNativeUiViewAction(uiViewId, id, 'longClick');
+                    return this;
+                }
+                uiListen(id, 'long_click', fn);
+                return this;
             },
             on: function (name, fn) {
                 uiListen(id, name, fn);
+                return this;
             },
             attr: function (name, value) {
                 if (value === undefined) {
@@ -5091,8 +5435,80 @@ const char kBootstrapScript[] = R"JS(
                 var config = {};
                 config[String(name)] = value;
                 uiSet(id, config);
+                return this;
+            },
+            getWidth: function () { return Number(this.attr('width')); },
+            getHeight: function () { return Number(this.attr('height')); },
+            getVisibility: function () { return Number(this.attr('visibility')); }
+        }, {
+            // ui.btn.text 这类属性式读写（Rhino 的 NativeView 通过 ViewAttributes 支持）
+            get: function (target, prop) {
+                if (typeof prop !== 'string' || prop in target) return target[prop];
+                if (prop === 'then' || prop === 'toJSON' || prop === 'valueOf'
+                        || prop === 'toString' || prop === 'constructor') {
+                    return undefined;
+                }
+                if (uiViewId <= 0) return undefined;
+                var text = __aiNativeUiGetAttr(uiViewId, id, prop);
+                return text === '' ? undefined : text;
+            },
+            set: function (target, prop, value) {
+                if (typeof prop !== 'string' || prop in target) return false;
+                var config = {};
+                config[prop] = value;
+                uiSet(id, config);
+                return true;
             }
         });
+    }
+
+    /** 极简 EventEmitter：ui.emitter（Rhino 里来自 UI Activity 的 EventEmitter）。 */
+    function makeEmitter() {
+        var listeners = new Map();
+        var emitter = {
+            on: function (name, fn) {
+                if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+                name = String(name);
+                (listeners.get(name) || listeners.set(name, []).get(name)).push(fn);
+                return emitter;
+            },
+            once: function (name, fn) {
+                function wrapper() {
+                    emitter.removeListener(name, wrapper);
+                    return fn.apply(undefined, arguments);
+                }
+                wrapper.listener = fn;
+                return emitter.on(name, wrapper);
+            },
+            off: function (name, fn) { return emitter.removeListener(name, fn); },
+            removeListener: function (name, fn) {
+                var list = listeners.get(String(name));
+                if (list) {
+                    for (var i = list.length - 1; i >= 0; i--) {
+                        if (list[i] === fn || list[i].listener === fn) list.splice(i, 1);
+                    }
+                }
+                return emitter;
+            },
+            removeAllListeners: function (name) {
+                if (name === undefined) listeners.clear();
+                else listeners.delete(String(name));
+                return emitter;
+            },
+            emit: function (name, payload) {
+                var list = listeners.get(String(name));
+                if (!list || !list.length) return false;
+                list.slice().forEach(function (fn) { fn(payload); });
+                return true;
+            },
+            eventNames: function () { return Array.from(listeners.keys()); },
+            listenerCount: function (name) {
+                var list = listeners.get(String(name));
+                return list ? list.length : 0;
+            },
+            listeners: function (name) { return (listeners.get(String(name)) || []).slice(); }
+        };
+        return emitter;
     }
     var ui = {
         layout: function (xml) {
@@ -5100,6 +5516,14 @@ const char kBootstrapScript[] = R"JS(
             if (id < 0) throw new Error('Unable to inflate UI layout');
             uiViewId = id;
             return id;
+        },
+        layoutFile: function (file) {
+            return ui.layout(files.read(String(file)));
+        },
+        findView: function (id) {
+            id = String(id);
+            if (uiViewId <= 0 || !__aiNativeUiViewExists(uiViewId, id)) return null;
+            return uiView(id);
         },
         close: function () {
             __aiNativeUiClose();
@@ -5110,6 +5534,16 @@ const char kBootstrapScript[] = R"JS(
                 uiPollTimer = null;
             }
         },
+        /** Rhino 的 ui.finish() 关闭脚本界面；QuickJS 的 ui 是覆盖层，语义等价于 close()。 */
+        finish: function () { ui.close(); },
+        isUiThread: function () { return !!__aiNativeIsMainThread(); },
+        /** 跨线程回调通路：延迟 delay 毫秒后在脚本引擎线程执行 fn。 */
+        post: function (fn, delay) {
+            if (typeof fn !== 'function') throw new TypeError('ui.post 需要函数');
+            var callbackId = global.__aiRegisterCallback(fn);
+            __aiNativePostJsCallbackAsync(callbackId, Math.max(0, Number(delay) || 0));
+        },
+        statusBarColor: function (color) { __aiNativeStatusBarColor(String(color)); },
         setText: function (id, text) { uiSet(id, { text: String(text == null ? '' : text) }); },
         getText: function (id) { return uiReadText(id); },
         setVisibility: function (id, visibility) { uiSet(id, { visibility: Number(visibility) || 0 }); },
@@ -5122,13 +5556,35 @@ const char kBootstrapScript[] = R"JS(
             // View updates already hop to the Java main thread internally, so a
             // synchronous call keeps Rhino's ui.run(fn) semantics.
             if (typeof fn === 'function') return fn();
-        }
+        },
+        emitter: null,
+        activity: null,
+        view: null
     };
-    global.ui = Object.freeze(ui);
+    // ui.<id> / $ui.<id> 都解析成控件代理；也把控件事件转发给 ui.emitter。
+    var uiRootEmitter = makeEmitter();
+    ui.emitter = uiRootEmitter;
+    global.ui = new Proxy(ui, {
+        get: function (target, prop) {
+            if (typeof prop !== 'string') return undefined;
+            if (prop in target) return target[prop];
+            if (prop === 'then' || prop === 'toJSON' || prop === 'valueOf'
+                    || prop === 'toString' || prop === 'constructor') {
+                return undefined;
+            }
+            if (uiViewId <= 0 || !__aiNativeUiViewExists(uiViewId, prop)) return undefined;
+            return uiView(prop);
+        }
+    });
     global.$ui = new Proxy({}, {
         get: function (target, name) {
-            if (name === 'layout') return ui.layout;
-            return uiView(String(name));
+            if (name === 'layout') return global.ui.layout;
+            if (name === 'findView') return global.ui.findView;
+            if (name === 'close' || name === 'finish') return global.ui[name];
+            if (name === 'emitter') return global.ui.emitter;
+            if (typeof name !== 'string') return undefined;
+            if (uiViewId <= 0 || !__aiNativeUiViewExists(uiViewId, name)) return undefined;
+            return uiView(name);
         }
     });
 
@@ -6410,6 +6866,16 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyViewKey", nativeFloatyViewKey, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatySetWindowFocusable", nativeFloatySetWindowFocusable, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewRequestFocus", nativeFloatyViewRequestFocus, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewExists", nativeFloatyViewExists, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewGetAttr", nativeFloatyViewGetAttr, 3);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewSetAttr", nativeFloatyViewSetAttr, 4);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewAction", nativeFloatyViewAction, 3);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetWidth", nativeFloatyGetWidth, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetHeight", nativeFloatyGetHeight, 1);
+    installNativeFunction(state->context, global, "__aiNativeUiViewExists", nativeUiViewExists, 2);
+    installNativeFunction(state->context, global, "__aiNativeUiViewAction", nativeUiViewAction, 3);
+    installNativeFunction(state->context, global, "__aiNativeIsMainThread", nativeIsMainThread, 0);
+    installNativeFunction(state->context, global, "__aiNativeStatusBarColor", nativeStatusBarColor, 1);
     installNativeFunction(state->context, global, "__aiNativeExitSelf", nativeExitSelf, 0);
     installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
     installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);

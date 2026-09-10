@@ -340,6 +340,71 @@ if (regressionWebView !== null) {
     assert('WebView 创建（当前环境不可用）', true);
 }
 
+// --- floaty / UI 等价性（控件属性、窗口尺寸、ui.<id>、ui.emitter、ui.post）---
+var floatyWin = floaty.window('<frame><text id="label" text="hello" textSize="16"/></frame>');
+assert('floaty 窗口 getWidth/getHeight',
+    typeof floatyWin.getWidth() === 'number' && typeof floatyWin.getHeight() === 'number');
+assert('floaty window.<id> 控件代理', typeof floatyWin.label.setText === 'function'
+    && typeof floatyWin.label.attr === 'function' && floatyWin.label.__viewId === 'label');
+assert('floaty 控件属性式读写', (function () {
+    floatyWin.label.text = 'attr-write';
+    return floatyWin.label.text === 'attr-write' && floatyWin.label.getText() === 'attr-write';
+})());
+assert('floaty 控件 attr()/attr(name, value)', (function () {
+    floatyWin.label.attr('text', 'attr-call');
+    return floatyWin.label.attr('text') === 'attr-call';
+})());
+assert('floaty 不存在的控件返回 undefined', floatyWin.__no_such_view__ === undefined);
+assert('floaty findView', (function () {
+    var found = floatyWin.findView('label');
+    return found !== null && typeof found.getText === 'function' && floatyWin.findView('nope') === null;
+})());
+assert('floaty 控件 enabled/visibility 属性', (function () {
+    floatyWin.label.setEnabled(false);
+    var disabled = String(floatyWin.label.attr('enabled')) === 'false';
+    floatyWin.label.setEnabled(true);
+    floatyWin.label.attr('visibility', 4);
+    var hidden = Number(floatyWin.label.attr('visibility')) === 4;
+    floatyWin.label.attr('visibility', 0);
+    return disabled && hidden && Number(floatyWin.label.attr('visibility')) === 0;
+})());
+floatyWin.close();
+sleep(400);
+
+var uiLayoutId = ui.layout('<vertical><text id="title" text="ui-title" textSize="18"/>'
+    + '<button id="go" text="go"/></vertical>');
+assert('ui.layout 返回 id', uiLayoutId > 0);
+assert('ui.<id> 控件代理可用', ui.title !== undefined && typeof ui.title.setText === 'function');
+assert('ui 不存在的 id 返回 undefined', ui.__missing_view__ === undefined);
+assert('ui.findView', ui.findView('go') !== null && ui.findView('missing') === null);
+assert('ui 控件属性式读写', (function () {
+    ui.title.text = 'ui-attr';
+    return ui.title.text === 'ui-attr' && ui.getText('title') === 'ui-attr';
+})());
+assert('ui 控件 attr()/attr(name, value)', (function () {
+    ui.title.attr('text', 'ui-call');
+    return ui.title.attr('text') === 'ui-call';
+})());
+assert('ui.isUiThread', typeof ui.isUiThread() === 'boolean');
+assert('ui.post 跨线程回调', (function () {
+    var posted = false;
+    ui.post(function () { posted = true; }, 40);
+    sleep(600);
+    return posted === true;
+})());
+assert('ui.emitter + ui 控件事件', (function () {
+    var emitted = 0;
+    var listened = 0;
+    ui.emitter.on('click', function () { emitted++; });
+    ui.go.click(function () { listened++; });
+    ui.go.click();
+    sleep(500);
+    return emitted >= 1 && listened >= 1;
+})());
+assert('ui.statusBarColor 不异常', (function () { ui.statusBarColor('#112233'); return true; })());
+ui.close();
+sleep(300);
+
 // --- 内置模块：crypto / zips / util / automator / context / rawInput ---
 assert('crypto.md5', crypto.md5('abc') === '900150983cd24fb0d6963f7d28e17f72');
 assert('crypto.sha256', crypto.sha256('abc')

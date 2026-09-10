@@ -19,7 +19,7 @@
 | io / 文本文件 | `files.open` 写入/读取/追加/未知模式 null + 全局 `open` 与 `io` 模块均通过 | Mi8（回归测试 133 项全绿） |
 | web / 跨线程回调 | `newInjectableWebView()` 加载 data URL 后 `inject(script, callback)` 拿到页面里的值；`rhino.call/eval` 的任务分发与 sleep 期间的跨线程回调均通过 | Mi8（回归测试 143 项全绿） |
 | continuation | `delay` 阻塞等待、`create/await` 与 `Promise.await` 的明确报错、`enabled === false` 均通过 | Mi8（回归测试 143 项全绿） |
-| UI | 布局创建、文本更新/回读、关闭通过 | compat/lite K40 通过 |
+| UI | 布局创建、文本更新/回读、`ui.<id>`/`$ui.<id>` 控件代理、任意属性 `attr` 读写、`ui.emitter`/`ui.findView`/`ui.post`/`ui.isUiThread`/`ui.statusBarColor` 通过（`ui` 为覆盖层模式，非 Rhino 的 UI Activity） | Mi8（回归测试 162 项全绿） |
 | floaty | 真实创建、位置/尺寸/文本更新、关闭通过 | compat/lite K40 通过 |
 | Rhino 兼容 | 23 项基础回归通过；lite 可控拒绝且不崩溃 | K40 通过 |
 
@@ -36,7 +36,7 @@
 | 手势与输入 | `gesture*`/`input`/根助手已对齐；仅剩 `rawInput`、`Input`/`KeyEvent` 类注入与 `automator` 模块未迁移，依赖这些的旧脚本需改写法 |
 | 模块 | `plugins` 尚未迁移（插件 SDK 依赖 Rhino scope）；`crypto`/`zips`/`util`/`automator`/`context`/`rawInput`/`sqlite`/`io`/`web`/`continuation` 已对齐，控制台浮窗与选择器 JS 谓词（`filter`/`addFilter`/`findAndReturnList`）也已对齐 |
 | UI | QuickJS 是最小化 overlay 实现，还未覆盖 Activity 模式、完整控件属性和复杂列表交互 |
-| floaty | 基础窗口已可用，但与 Rhino XML 窗口对象、控件代理和事件 API 尚未完全等价 |
+| floaty | XML/文本窗口、控件代理（含 `attr` 与属性式读写、`click()/click(fn)`、`on("click"/"long_click"/"key"/"touch")`）、窗口 `getWidth/getHeight/findView`、不存在控件返回 undefined 均已对齐；与 Rhino 的差异只剩控件级 Java 方法（如 `setBackground/setPadding` 之外的任意 View API）与 `ui` 模式绑定 |
 | web | `http` 与 `newInjectableWebView/Client` 的 `inject`/`loadUrl`/`loadData` 已可用；页面→脚本的 `rhino.call/eval` 为异步回调（引擎线程执行，`injectAndWait` 不支持） |
 | debugger | 现有 Dim 调试器是 Rhino 专用，QuickJS 尚无断点、单步、变量查看等价实现 |
 | Java 桥接 | QuickJS 故意采用白名单 host bridge，不提供 Rhino 式任意 `java.lang.*` 反射；需先确定正式兼容边界 |

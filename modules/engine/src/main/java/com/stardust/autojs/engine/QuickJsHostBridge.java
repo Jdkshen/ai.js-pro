@@ -2229,7 +2229,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             int id = mNextFloatyId.getAndIncrement();
             Context context = mRuntime.uiHandler.getContext();
             QuickJsFloatyWindow window = new QuickJsFloatyWindow(
-                    context, id, config, uiInflater(), mFloatyEvents::add);
+                    context, id, config, uiInflater(), mRuntime.ui.getResourceParser(), mFloatyEvents::add);
             mFloatyWindows.put(id, window);
             if (!window.show()) {
                 mFloatyWindows.remove(id);
@@ -2335,6 +2335,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         private final WindowManager mWindowManager;
         private final android.widget.FrameLayout mRoot;
         private final com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater mInflater;
+        private final com.stardust.autojs.core.ui.inflater.ResourceParser mResourceParser;
         private final org.json.JSONObject mConfig;
         private android.widget.TextView mTextView;
         private android.view.View mContent;
@@ -2352,11 +2353,13 @@ final class QuickJsHostBridge implements AutoCloseable,
 
         QuickJsFloatyWindow(Context context, int id, JSONObject config,
                             com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater,
+                            com.stardust.autojs.core.ui.inflater.ResourceParser resourceParser,
                             FloatyEventSink eventSink) {
             mContext = context;
             mId = id;
             mConfig = config;
             mInflater = inflater;
+            mResourceParser = resourceParser;
             mEventSink = eventSink;
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
             mRoot = new android.widget.FrameLayout(context);
@@ -2744,6 +2747,86 @@ final class QuickJsHostBridge implements AutoCloseable,
                 }
             });
         }
+
+        // ---- 通用属性 / 动作 / 尺寸（对齐 Rhino 的 NativeView.attr 与窗口 getWidth/getHeight）----
+
+        boolean hasView(String id) {
+            Boolean result = withView(id, view -> view != null);
+            return result != null && result;
+        }
+
+        String getViewAttr(String id, String name) {
+            return withView(id, view -> readViewAttribute(view, name, mResourceParser));
+        }
+
+        boolean setViewAttr(final String id, final String name, final String value) {
+            final boolean[] result = new boolean[1];
+            final CountDownLatch latch = new CountDownLatch(1);
+            mHandler.post(() -> {
+                result[0] = writeViewAttribute(findViewById(id), name, value, mResourceParser);
+                latch.countDown();
+            });
+            try {
+                latch.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            return result[0];
+        }
+
+        boolean performViewAction(String id, String action) {
+            // 限定外类方法：本类里也有同名的 performViewAction(String, String)。
+            Boolean result = withView(id, view -> QuickJsHostBridge.performViewAction(view, action));
+            return result != null && result;
+        }
+
+        int getWindowWidth() {
+            final int[] result = new int[1];
+            final CountDownLatch latch = new CountDownLatch(1);
+            mHandler.post(() -> {
+                result[0] = mRoot.getWidth();
+                latch.countDown();
+            });
+            try {
+                latch.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            return result[0];
+        }
+
+        int getWindowHeight() {
+            final int[] result = new int[1];
+            final CountDownLatch latch = new CountDownLatch(1);
+            mHandler.post(() -> {
+                result[0] = mRoot.getHeight();
+                latch.countDown();
+            });
+            try {
+                latch.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            return result[0];
+        }
+
+        private interface ViewCallback<T> {
+            T apply(View view);
+        }
+
+        /** 在 main 线程找到控件并取值（找不到时回调收到 null）。 */
+        private <T> T withView(final String id, final ViewCallback<T> callback) {
+            final Object[] result = new Object[1];
+            final CountDownLatch latch = new CountDownLatch(1);
+            mHandler.post(() -> {
+                result[0] = callback.apply(findViewById(id));
+                latch.countDown();
+            });
+            try {
+                latch.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            @SuppressWarnings("unchecked")
+            T typed = (T) result[0];
+            return typed;
+        }
     }
 
     // ---- ui (minimal: DynamicLayoutInflater + fullscreen overlay) ----
@@ -2751,6 +2834,234 @@ final class QuickJsHostBridge implements AutoCloseable,
     private volatile View mUiRoot;
     private volatile boolean mUiShown;
     private volatile int mUiWindowId;
+
+    // ------------------------------------------------------------------
+    // 控件通用属性 / 动作
+    //
+    // Rhino 里窗口控件是 NativeView：任意 XML 属性可以 attr(name[, value]) 读写（ViewAttributes），
+    // 常用控件方法也能直接调。QuickJS 侧用同一套 ViewAttributes 表 + 常用方法兜底。
+    // ------------------------------------------------------------------
+
+    static String readViewAttribute(View view, String name,
+                                    com.stardust.autojs.core.ui.inflater.ResourceParser parser) {
+        if (view == null || name == null) {
+            return null;
+        }
+        try {
+            com.stardust.autojs.core.ui.attribute.ViewAttributes attributes =
+                    com.stardust.autojs.core.ui.ViewExtras.getViewAttributes(view, parser);
+            if (attributes.contains(name)) {
+                String value = attributes.getAttrValue(name);
+                if (value != null) {
+                    return value;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        switch (name) {
+            case "text":
+                return view instanceof android.widget.TextView
+                        ? ((android.widget.TextView) view).getText().toString() : null;
+            case "textSize":
+                return view instanceof android.widget.TextView
+                        ? String.valueOf(((android.widget.TextView) view).getTextSize()) : null;
+            case "textColor":
+                return view instanceof android.widget.TextView
+                        ? String.format("#%08X", ((android.widget.TextView) view).getCurrentTextColor())
+                        : null;
+            case "hint":
+                return view instanceof android.widget.TextView
+                        ? String.valueOf(((android.widget.TextView) view).getHint()) : null;
+            case "visibility": return String.valueOf(view.getVisibility());
+            case "enabled": return String.valueOf(view.isEnabled());
+            case "alpha": return String.valueOf(view.getAlpha());
+            case "clickable": return String.valueOf(view.isClickable());
+            case "longClickable": return String.valueOf(view.isLongClickable());
+            case "selected": return String.valueOf(view.isSelected());
+            case "focusable": return String.valueOf(view.isFocusable());
+            case "checked":
+                return view instanceof android.widget.CompoundButton
+                        ? String.valueOf(((android.widget.CompoundButton) view).isChecked()) : null;
+            case "width": return String.valueOf(view.getWidth());
+            case "height": return String.valueOf(view.getHeight());
+            case "id": return String.valueOf(view.getId());
+            case "className": return view.getClass().getName();
+            default: return null;
+        }
+    }
+
+    static boolean writeViewAttribute(View view, String name, String value,
+                                      com.stardust.autojs.core.ui.inflater.ResourceParser parser) {
+        if (view == null || name == null) {
+            return false;
+        }
+        try {
+            com.stardust.autojs.core.ui.attribute.ViewAttributes attributes =
+                    com.stardust.autojs.core.ui.ViewExtras.getViewAttributes(view, parser);
+            if (attributes.contains(name)) {
+                attributes.setAttrValue(name, value);
+                return true;
+            }
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot set view attribute " + name, error);
+        }
+        try {
+            switch (name) {
+                case "text":
+                    if (!(view instanceof android.widget.TextView)) return false;
+                    ((android.widget.TextView) view).setText(value == null ? "" : value);
+                    return true;
+                case "textSize":
+                    if (!(view instanceof android.widget.TextView)) return false;
+                    ((android.widget.TextView) view).setTextSize(
+                            android.util.TypedValue.COMPLEX_UNIT_SP, Float.parseFloat(value));
+                    return true;
+                case "textColor":
+                    if (!(view instanceof android.widget.TextView)) return false;
+                    ((android.widget.TextView) view).setTextColor(android.graphics.Color.parseColor(value));
+                    return true;
+                case "hint":
+                    if (!(view instanceof android.widget.TextView)) return false;
+                    ((android.widget.TextView) view).setHint(value);
+                    return true;
+                case "visibility":
+                    view.setVisibility(Integer.parseInt(value));
+                    return true;
+                case "enabled":
+                    view.setEnabled(Boolean.parseBoolean(value));
+                    return true;
+                case "alpha":
+                    view.setAlpha(Float.parseFloat(value));
+                    return true;
+                case "clickable":
+                    view.setClickable(Boolean.parseBoolean(value));
+                    return true;
+                case "longClickable":
+                    view.setLongClickable(Boolean.parseBoolean(value));
+                    return true;
+                case "selected":
+                    view.setSelected(Boolean.parseBoolean(value));
+                    return true;
+                case "focusable":
+                    view.setFocusable(Boolean.parseBoolean(value));
+                    return true;
+                case "checked":
+                    if (!(view instanceof android.widget.CompoundButton)) return false;
+                    ((android.widget.CompoundButton) view).setChecked(Boolean.parseBoolean(value));
+                    return true;
+                case "backgroundColor":
+                    view.setBackgroundColor(android.graphics.Color.parseColor(value));
+                    return true;
+                default:
+                    return false;
+            }
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot set view attribute " + name + "=" + value, error);
+            return false;
+        }
+    }
+
+    private static boolean performViewAction(View view, String action) {
+        if (view == null) {
+            return false;
+        }
+        switch (action == null ? "" : action) {
+            case "click":
+                return view.performClick();
+            case "longClick":
+                return view.performLongClick();
+            default:
+                throw new IllegalArgumentException("不支持的控件动作：" + action);
+        }
+    }
+
+    /** 脚本侧 `window.<id>` 是否为真实存在的控件（Rhino 找不到时返回 undefined）。 */
+    public boolean floatyViewExists(int windowId, String id) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window != null && window.hasView(id);
+    }
+
+    public String floatyViewGetAttr(int windowId, String id, String name) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        String value = window == null ? null : window.getViewAttr(id, name);
+        return value == null ? "" : value;
+    }
+
+    public boolean floatyViewSetAttr(int windowId, String id, String name, String value) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window != null && window.setViewAttr(id, name, value);
+    }
+
+    public boolean floatyViewAction(int windowId, String id, String action) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window != null && window.performViewAction(id, action);
+    }
+
+    public int floatyGetWidth(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : window.getWindowWidth();
+    }
+
+    public int floatyGetHeight(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : window.getWindowHeight();
+    }
+
+    public boolean uiViewExists(int viewId, String id) {
+        final boolean[] result = new boolean[1];
+        final CountDownLatch latch = new CountDownLatch(1);
+        mDialogHandler.post(() -> {
+            result[0] = uiFind(id) != null;
+            latch.countDown();
+        });
+        try {
+            latch.await(2, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return result[0];
+    }
+
+    public boolean uiViewAction(int viewId, String id, String action) {
+        final boolean[] result = new boolean[1];
+        final CountDownLatch latch = new CountDownLatch(1);
+        mDialogHandler.post(() -> {
+            result[0] = performViewAction(uiFind(id), action);
+            latch.countDown();
+        });
+        try {
+            latch.await(2, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return result[0];
+    }
+
+    /** `ui.isUiThread()`。 */
+    public boolean uiIsMainThread() {
+        return Looper.myLooper() == Looper.getMainLooper();
+    }
+
+    /** `ui.statusBarColor(color)`：设置当前 Activity 的状态栏颜色。 */
+    public void statusBarColor(String color) {
+        if (color == null || color.isEmpty()) {
+            return;
+        }
+        final int resolved;
+        try {
+            resolved = android.graphics.Color.parseColor(color);
+        } catch (IllegalArgumentException error) {
+            return;
+        }
+        mDialogHandler.post(() -> {
+            try {
+                android.app.Activity activity = mRuntime.app.getCurrentActivity();
+                if (activity != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    activity.getWindow().setStatusBarColor(resolved);
+                }
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "Cannot set status bar color", error);
+            }
+        });
+    }
 
     private com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater uiInflater() {
         if (mUiInflater == null) {
@@ -2845,15 +3156,15 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
             try {
                 org.json.JSONObject config = new org.json.JSONObject(configJson);
-                if (config.has("text")) {
-                    ((android.widget.TextView) view).setText(config.optString("text"));
-                }
-                if (config.has("visibility")) {
-                    view.setVisibility(config.optInt("visibility", View.VISIBLE));
-                }
-                if (config.has("backgroundColor")) {
-                    view.setBackgroundColor(android.graphics.Color.parseColor(
-                            config.optString("backgroundColor")));
+                java.util.Iterator<String> keys = config.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    Object raw = config.opt(key);
+                    String value = raw == null ? "" : String.valueOf(raw);
+                    // 与 Rhino 的 NativeView 一样走 ViewAttributes，外加常用控件方法兜底。
+                    if (!writeViewAttribute(view, key, value, mRuntime.ui.getResourceParser())) {
+                        Log.w("QuickJsHostBridge", "UI 不支持的属性：" + key);
+                    }
                 }
             } catch (Throwable error) {
                 Log.w("QuickJsHostBridge", "Cannot update UI view " + id, error);
@@ -2973,18 +3284,8 @@ final class QuickJsHostBridge implements AutoCloseable,
         final String[] result = new String[]{""};
         final CountDownLatch latch = new CountDownLatch(1);
         mDialogHandler.post(() -> {
-            View view = uiFind(id);
-            if (view != null) {
-                if ("visibility".equals(name)) {
-                    result[0] = String.valueOf(view.getVisibility());
-                } else if ("enabled".equals(name)) {
-                    result[0] = String.valueOf(view.isEnabled());
-                } else if ("alpha".equals(name)) {
-                    result[0] = String.valueOf(view.getAlpha());
-                } else if ("text".equals(name) && view instanceof android.widget.TextView) {
-                    result[0] = ((android.widget.TextView) view).getText().toString();
-                }
-            }
+            String value = readViewAttribute(uiFind(id), name, mRuntime.ui.getResourceParser());
+            result[0] = value == null ? "" : value;
             latch.countDown();
         });
         try {
