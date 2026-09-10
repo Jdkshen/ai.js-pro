@@ -51,6 +51,22 @@ try {
     win.action.setVisibility(8);
     win.action.click(function () { });
     win.action.longClick(function () { });
+    if (typeof win.action.setOnTouchListener !== 'function') {
+        throw new Error('floaty view setOnTouchListener missing');
+    }
+    win.action.setOnTouchListener(function (event) {
+        if (!event || typeof event.getAction !== 'function') {
+            throw new Error('touch event object invalid');
+        }
+    });
+    if (typeof win.action.requestFocus !== 'function') {
+        throw new Error('floaty view requestFocus missing');
+    }
+    if (typeof win.requestFocus !== 'function' || typeof win.disableFocus !== 'function') {
+        throw new Error('floaty window focus helpers missing');
+    }
+    if (typeof ui.run !== 'function') throw new Error('ui.run missing');
+    if (typeof exit !== 'function') throw new Error('exit missing');
     if (win.isAdjustEnabled()) throw new Error('adjust should default to false');
     win.setAdjustEnabled(true);
     if (!win.isAdjustEnabled()) throw new Error('setAdjustEnabled(true) failed');

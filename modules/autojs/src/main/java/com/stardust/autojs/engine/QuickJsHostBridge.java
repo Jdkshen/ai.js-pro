@@ -2043,6 +2043,21 @@ final class QuickJsHostBridge implements AutoCloseable {
         return window == null ? 0 : window.getWindowY();
     }
 
+    public void floatyViewTouch(int windowId, String id) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.registerViewTouch(id);
+    }
+
+    public void floatySetWindowFocusable(int windowId, boolean focusable) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.setWindowFocusable(focusable);
+    }
+
+    public void floatyViewRequestFocus(int windowId, String id) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.requestViewFocus(id);
+    }
+
     private static final class QuickJsFloatyWindow {
         private final Context mContext;
         private final int mId;
@@ -2360,6 +2375,61 @@ final class QuickJsHostBridge implements AutoCloseable {
 
         int getWindowY() {
             return mParams == null ? 0 : mParams.y;
+        }
+
+        void registerViewTouch(String id) {
+            mHandler.post(() -> {
+                try {
+                    View view = findViewById(id);
+                    if (view == null) {
+                        return;
+                    }
+                    view.setOnTouchListener((v, event) -> {
+                        if (mEventSink == null) {
+                            return false;
+                        }
+                        try {
+                            mEventSink.emit(new JSONObject()
+                                    .put("window", mId).put("id", id).put("event", "touch")
+                                    .put("action", event.getAction())
+                                    .put("rawX", (int) event.getRawX())
+                                    .put("rawY", (int) event.getRawY()).toString());
+                        } catch (JSONException ignored) {
+                        }
+                        return true;
+                    });
+                } catch (Throwable error) {
+                    Log.w("QuickJsFloatyWindow", "registerViewTouch failed", error);
+                }
+            });
+        }
+
+        void setWindowFocusable(boolean focusable) {
+            mHandler.post(() -> {
+                if (mParams == null) {
+                    return;
+                }
+                if (focusable) {
+                    mParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                } else {
+                    mParams.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                }
+                if (mShown) {
+                    try {
+                        mWindowManager.updateViewLayout(mRoot, mParams);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        }
+
+        void requestViewFocus(String id) {
+            mHandler.post(() -> {
+                View view = findViewById(id);
+                if (view != null) {
+                    view.requestFocus();
+                }
+            });
         }
     }
 

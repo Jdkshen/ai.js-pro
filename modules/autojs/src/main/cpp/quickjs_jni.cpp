@@ -1218,6 +1218,51 @@ JSValue nativeFloatyGetY(JSContext *context, JSValueConst, int argc, JSValueCons
     return callHostIntInt(context, "floatyGetY", static_cast<int32_t>(windowId));
 }
 
+JSValue nativeFloatyViewTouch(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewTouch requires windowId, id");
+    }
+    const std::string id = jsString(context, argv[1]);
+    return callHostVoidIntString(context, "floatyViewTouch",
+            static_cast<int32_t>(windowId), id);
+}
+
+JSValue nativeFloatySetWindowFocusable(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatySetWindowFocusable requires windowId, focusable");
+    }
+    const bool focusable = JS_ToBool(context, argv[1]) > 0;
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatySetWindowFocusable", "(IZ)V");
+    env->CallVoidMethod(state->host, method, static_cast<jint>(windowId),
+                        focusable ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeFloatyViewRequestFocus(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewRequestFocus requires windowId, id");
+    }
+    const std::string id = jsString(context, argv[1]);
+    return callHostVoidIntString(context, "floatyViewRequestFocus",
+            static_cast<int32_t>(windowId), id);
+}
+
+// Rhino-style exit(): marks the engine as interrupted so the evaluation loop
+// unwinds at the next interrupt check. Unlike Rhino this ends the script as an
+// interruption rather than a normal completion.
+JSValue nativeExitSelf(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    state->interrupted.store(true, std::memory_order_relaxed);
+    return JS_UNDEFINED;
+}
+
 JSValue nativeUiInflate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     const std::string xml = requireStringArg(context, argc, argv, 0);
     return callStringHost(context, "uiInflate", xml.c_str());
@@ -3652,6 +3697,7 @@ const char kBootstrapScript[] = R"JS(
             handle: handle,
             source: String(info.source || ''),
             engineName: String(info.engineName || 'QuickJsJavaScriptEngine'),
+            getEngine: function () { return engine; },
             forceStop: function () { return __aiNativeEngineForceStop(handle); },
             isDestroyed: function () { return __aiNativeEngineIsDestroyed(handle); },
             getResult: function () { return resultState(0); },
@@ -4107,6 +4153,20 @@ const char kBootstrapScript[] = R"JS(
     function floatyHandlerKey(windowId, viewId, mode) {
         return windowId + '#' + viewId + '#' + mode;
     }
+    function makeFloatyTouchEvent(item) {
+        return {
+            action: item.action,
+            rawX: item.rawX,
+            rawY: item.rawY,
+            ACTION_DOWN: 0,
+            ACTION_UP: 1,
+            ACTION_MOVE: 2,
+            ACTION_CANCEL: 3,
+            getAction: function () { return item.action; },
+            getRawX: function () { return item.rawX; },
+            getRawY: function () { return item.rawY; }
+        };
+    }
     function dispatchFloatyEvents() {
         for (;;) {
             var raw = __aiNativeFloatyViewPoll();
@@ -4114,7 +4174,11 @@ const char kBootstrapScript[] = R"JS(
             var item = JSON.parse(raw);
             var handlers = floatyClickHandlers.get(
                 floatyHandlerKey(item.window, item.id, item.event));
-            if (handlers && handlers.length) {
+            if (!handlers || !handlers.length) continue;
+            if (item.event === 'touch') {
+                var touchEvent = makeFloatyTouchEvent(item);
+                handlers.slice().forEach(function (fn) { fn(touchEvent); });
+            } else {
                 handlers.slice().forEach(function (fn) { fn(); });
             }
         }
@@ -4133,7 +4197,11 @@ const char kBootstrapScript[] = R"JS(
             floatyClickHandlers.set(key, handlers);
         }
         handlers.push(fn);
-        __aiNativeFloatyViewClick(windowId, viewId, mode);
+        if (mode === 'touch') {
+            __aiNativeFloatyViewTouch(windowId, viewId);
+        } else {
+            __aiNativeFloatyViewClick(windowId, viewId, mode);
+        }
         ensureFloatyPolling();
     }
     function makeFloatyView(windowId, viewId) {
@@ -4160,6 +4228,14 @@ const char kBootstrapScript[] = R"JS(
             setVisibility: function (visibility) {
                 __aiNativeFloatyViewSetVisibility(
                     windowId, viewId, String(Math.round(Number(visibility) || 0)));
+                return view;
+            },
+            setOnTouchListener: function (fn) {
+                addFloatyHandler(windowId, viewId, 'touch', fn);
+                return view;
+            },
+            requestFocus: function () {
+                __aiNativeFloatyViewRequestFocus(windowId, viewId);
                 return view;
             }
         };
@@ -4205,6 +4281,14 @@ const char kBootstrapScript[] = R"JS(
                     return win;
                 },
                 isAdjustEnabled: function () { return !!__aiNativeFloatyIsAdjustable(id); },
+                requestFocus: function () {
+                    __aiNativeFloatySetWindowFocusable(id, true);
+                    return win;
+                },
+                disableFocus: function () {
+                    __aiNativeFloatySetWindowFocusable(id, false);
+                    return win;
+                },
                 resize: function (width, height) {
                     win.setSize(width, height);
                 },
@@ -4354,6 +4438,11 @@ const char kBootstrapScript[] = R"JS(
         getAttr: function (id, name) {
             if (uiViewId <= 0) throw new Error('ui.layout() must be called first');
             return __aiNativeUiGetAttr(uiViewId, String(id), String(name));
+        },
+        run: function (fn) {
+            // View updates already hop to the Java main thread internally, so a
+            // synchronous call keeps Rhino's ui.run(fn) semantics.
+            if (typeof fn === 'function') return fn();
         }
     };
     global.ui = Object.freeze(ui);
@@ -4456,6 +4545,11 @@ const char kBootstrapScript[] = R"JS(
 
     // Node.js compatible global alias
     global.global = global;
+
+    // Rhino-style exit(): marks the engine as interrupted so the evaluation loop
+    // unwinds and the script stops. Unlike Rhino it ends as an interruption
+    // rather than a normal completion.
+    global.exit = function () { __aiNativeExitSelf(); };
 
     // ---- CommonJS module system (require) ----
     var moduleCache = new Map();
@@ -4673,6 +4767,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyIsAdjustable", nativeFloatyIsAdjustable, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetX", nativeFloatyGetX, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetY", nativeFloatyGetY, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewTouch", nativeFloatyViewTouch, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatySetWindowFocusable", nativeFloatySetWindowFocusable, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewRequestFocus", nativeFloatyViewRequestFocus, 2);
+    installNativeFunction(state->context, global, "__aiNativeExitSelf", nativeExitSelf, 0);
     installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
     installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);
     installNativeFunction(state->context, global, "__aiNativeUiSetConfig", nativeUiSetConfig, 3);
