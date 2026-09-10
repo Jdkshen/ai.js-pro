@@ -1131,6 +1131,93 @@ JSValue nativeFloatyCloseAll(JSContext *context, JSValueConst, int, JSValueConst
     return callHostVoidNoArgs(context, "floatyCloseAll");
 }
 
+JSValue nativeFloatyViewGetText(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewGetText requires windowId, id");
+    }
+    const std::string id = jsString(context, argv[1]);
+    return callHostStringIntString(context, "floatyViewGetText",
+            static_cast<int32_t>(windowId), id);
+}
+
+JSValue nativeFloatyViewSetText(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 3 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewSetText requires windowId, id, text");
+    }
+    const std::string id = jsString(context, argv[1]);
+    const std::string text = jsString(context, argv[2]);
+    return callHostVoidIntStringString(context, "floatyViewSetText",
+            static_cast<int32_t>(windowId), id, text);
+}
+
+JSValue nativeFloatyViewSetVisibility(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 3 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewSetVisibility requires windowId, id, visibility");
+    }
+    const std::string id = jsString(context, argv[1]);
+    const std::string visibility = jsString(context, argv[2]);
+    return callHostVoidIntStringString(context, "floatyViewSetVisibility",
+            static_cast<int32_t>(windowId), id, visibility);
+}
+
+JSValue nativeFloatyViewClick(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 3 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewClick requires windowId, id, mode");
+    }
+    const std::string id = jsString(context, argv[1]);
+    const std::string mode = jsString(context, argv[2]);
+    return callHostVoidIntStringString(context, "floatyViewClick",
+            static_cast<int32_t>(windowId), id, mode);
+}
+
+JSValue nativeFloatyViewPoll(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "floatyViewPoll", nullptr);
+}
+
+JSValue nativeFloatySetAdjustable(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatySetAdjustable requires windowId, enabled");
+    }
+    const bool enabled = JS_ToBool(context, argv[1]) > 0;
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatySetAdjustable", "(IZ)V");
+    env->CallVoidMethod(state->host, method, static_cast<jint>(windowId),
+                        enabled ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeFloatyIsAdjustable(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyIsAdjustable requires windowId");
+    }
+    return callHostBoolInt(context, "floatyIsAdjustable", static_cast<int32_t>(windowId));
+}
+
+JSValue nativeFloatyGetX(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyGetX requires windowId");
+    }
+    return callHostIntInt(context, "floatyGetX", static_cast<int32_t>(windowId));
+}
+
+JSValue nativeFloatyGetY(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyGetY requires windowId");
+    }
+    return callHostIntInt(context, "floatyGetY", static_cast<int32_t>(windowId));
+}
+
 JSValue nativeUiInflate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     const std::string xml = requireStringArg(context, argc, argv, 0);
     return callStringHost(context, "uiInflate", xml.c_str());
@@ -4015,6 +4102,69 @@ const char kBootstrapScript[] = R"JS(
     global.dialogs = Object.freeze(dialogs);
 
     // ---- floaty module (overlay windows: xml layout or text + drag + geometry) ----
+    var floatyClickHandlers = new Map();
+    var floatyPollTimer = null;
+    function floatyHandlerKey(windowId, viewId, mode) {
+        return windowId + '#' + viewId + '#' + mode;
+    }
+    function dispatchFloatyEvents() {
+        for (;;) {
+            var raw = __aiNativeFloatyViewPoll();
+            if (!raw) break;
+            var item = JSON.parse(raw);
+            var handlers = floatyClickHandlers.get(
+                floatyHandlerKey(item.window, item.id, item.event));
+            if (handlers && handlers.length) {
+                handlers.slice().forEach(function (fn) { fn(); });
+            }
+        }
+    }
+    function ensureFloatyPolling() {
+        if (floatyPollTimer === null) {
+            floatyPollTimer = setInterval(dispatchFloatyEvents, 40);
+        }
+    }
+    function addFloatyHandler(windowId, viewId, mode, fn) {
+        if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+        var key = floatyHandlerKey(windowId, viewId, mode);
+        var handlers = floatyClickHandlers.get(key);
+        if (!handlers) {
+            handlers = [];
+            floatyClickHandlers.set(key, handlers);
+        }
+        handlers.push(fn);
+        __aiNativeFloatyViewClick(windowId, viewId, mode);
+        ensureFloatyPolling();
+    }
+    function makeFloatyView(windowId, viewId) {
+        var view = {
+            click: function (fn) {
+                addFloatyHandler(windowId, viewId, 'click', fn);
+                return view;
+            },
+            longClick: function (fn) {
+                addFloatyHandler(windowId, viewId, 'long_click', fn);
+                return view;
+            },
+            on: function (event, fn) {
+                event = String(event);
+                if (event === 'click') return view.click(fn);
+                if (event === 'long_click' || event === 'longClick') return view.longClick(fn);
+                throw new Error('Unsupported floaty view event: ' + event);
+            },
+            getText: function () { return __aiNativeFloatyViewGetText(windowId, viewId); },
+            setText: function (text) {
+                __aiNativeFloatyViewSetText(windowId, viewId, String(text == null ? '' : text));
+                return view;
+            },
+            setVisibility: function (visibility) {
+                __aiNativeFloatyViewSetVisibility(
+                    windowId, viewId, String(Math.round(Number(visibility) || 0)));
+                return view;
+            }
+        };
+        return Object.freeze(view);
+    }
     var floaty = {
         window: function (xmlOrConfig, extra) {
             var cfg = {};
@@ -4029,6 +4179,8 @@ const char kBootstrapScript[] = R"JS(
             var id = Number(__aiNativeFloatyCreate(JSON.stringify(cfg)));
             if (id < 0) throw new Error('Unable to create floaty window');
             var onClose = null;
+            var exitOnClose = false;
+            var viewCache = new Map();
             var win = {
                 id: id,
                 setSize: function (width, height) {
@@ -4037,6 +4189,8 @@ const char kBootstrapScript[] = R"JS(
                 setPosition: function (x, y) {
                     __aiNativeFloatyUpdate(id, JSON.stringify({ x: Math.round(Number(x) || 0), y: Math.round(Number(y) || 0) }));
                 },
+                getX: function () { return Number(__aiNativeFloatyGetX(id)); },
+                getY: function () { return Number(__aiNativeFloatyGetY(id)); },
                 setText: function (text) {
                     __aiNativeFloatyUpdate(id, JSON.stringify({ text: String(text == null ? '' : text) }));
                 },
@@ -4046,6 +4200,11 @@ const char kBootstrapScript[] = R"JS(
                 setTouchable: function (touchable) {
                     __aiNativeFloatyUpdate(id, JSON.stringify({ touchable: !!touchable }));
                 },
+                setAdjustEnabled: function (enabled) {
+                    __aiNativeFloatySetAdjustable(id, !!enabled);
+                    return win;
+                },
+                isAdjustEnabled: function () { return !!__aiNativeFloatyIsAdjustable(id); },
                 resize: function (width, height) {
                     win.setSize(width, height);
                 },
@@ -4054,13 +4213,33 @@ const char kBootstrapScript[] = R"JS(
                     onClose = fn;
                     return win;
                 },
+                exitOnClose: function () {
+                    exitOnClose = true;
+                    return win;
+                },
                 close: function () {
                     if (onClose) onClose(win);
                     __aiNativeFloatyClose(id);
-                },
-                exitOnClose: false
+                    if (exitOnClose && typeof global.exit === 'function') global.exit();
+                }
             };
-            return win;
+            // window.<id> resolves to a control proxy (click/getText/setText/...).
+            return new Proxy(win, {
+                get: function (target, prop) {
+                    if (typeof prop !== 'string') return undefined;
+                    if (prop in target) return target[prop];
+                    if (prop === 'then' || prop === 'toJSON' || prop === 'valueOf'
+                            || prop === 'toString' || prop === 'constructor') {
+                        return undefined;
+                    }
+                    var cached = viewCache.get(prop);
+                    if (!cached) {
+                        cached = makeFloatyView(id, prop);
+                        viewCache.set(prop, cached);
+                    }
+                    return cached;
+                }
+            });
         },
         rawWindow: function (config) {
             return floaty.window(config);
@@ -4485,6 +4664,15 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyUpdate", nativeFloatyUpdate, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyClose", nativeFloatyClose, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyCloseAll", nativeFloatyCloseAll, 0);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewGetText", nativeFloatyViewGetText, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewSetText", nativeFloatyViewSetText, 3);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewSetVisibility", nativeFloatyViewSetVisibility, 3);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewClick", nativeFloatyViewClick, 3);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewPoll", nativeFloatyViewPoll, 0);
+    installNativeFunction(state->context, global, "__aiNativeFloatySetAdjustable", nativeFloatySetAdjustable, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyIsAdjustable", nativeFloatyIsAdjustable, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetX", nativeFloatyGetX, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetY", nativeFloatyGetY, 1);
     installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
     installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);
     installNativeFunction(state->context, global, "__aiNativeUiSetConfig", nativeUiSetConfig, 3);

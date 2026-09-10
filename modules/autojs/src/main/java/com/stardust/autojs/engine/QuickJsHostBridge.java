@@ -1950,13 +1950,20 @@ final class QuickJsHostBridge implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicInteger mNextFloatyId =
             new java.util.concurrent.atomic.AtomicInteger(1);
     private final Map<Integer, QuickJsFloatyWindow> mFloatyWindows = new ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> mFloatyEvents =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    interface FloatyEventSink {
+        void emit(String eventJson);
+    }
 
     public String floatyCreate(String configJson) {
         try {
             JSONObject config = new JSONObject(configJson);
             int id = mNextFloatyId.getAndIncrement();
             Context context = mRuntime.uiHandler.getContext();
-            QuickJsFloatyWindow window = new QuickJsFloatyWindow(context, id, config, uiInflater());
+            QuickJsFloatyWindow window = new QuickJsFloatyWindow(
+                    context, id, config, uiInflater(), mFloatyEvents::add);
             mFloatyWindows.put(id, window);
             if (!window.show()) {
                 mFloatyWindows.remove(id);
@@ -1988,6 +1995,52 @@ final class QuickJsHostBridge implements AutoCloseable {
             window.close();
         }
         mFloatyWindows.clear();
+        mFloatyEvents.clear();
+    }
+
+    public String floatyViewGetText(int windowId, String id) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? "" : window.getViewText(id);
+    }
+
+    public void floatyViewSetText(int windowId, String id, String text) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.setViewText(id, text);
+    }
+
+    public void floatyViewSetVisibility(int windowId, String id, String visibility) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.setViewVisibility(id, visibility);
+    }
+
+    public void floatyViewClick(int windowId, String id, String mode) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.registerViewClick(id, mode);
+    }
+
+    public String floatyViewPoll() {
+        String event = mFloatyEvents.poll();
+        return event == null ? "" : event;
+    }
+
+    public void floatySetAdjustable(int windowId, boolean enabled) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.setAdjustable(enabled);
+    }
+
+    public boolean floatyIsAdjustable(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window != null && window.isAdjustable();
+    }
+
+    public int floatyGetX(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : window.getWindowX();
+    }
+
+    public int floatyGetY(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : window.getWindowY();
     }
 
     private static final class QuickJsFloatyWindow {
@@ -2002,7 +2055,9 @@ final class QuickJsHostBridge implements AutoCloseable {
         private android.graphics.drawable.Drawable mBackground;
         private WindowManager.LayoutParams mParams;
         private final Handler mHandler = new Handler(Looper.getMainLooper());
+        private final FloatyEventSink mEventSink;
         private volatile boolean mShown;
+        private volatile boolean mAdjustable;
         private boolean mTouchable;
         private float mTouchStartX;
         private float mTouchStartY;
@@ -2010,11 +2065,13 @@ final class QuickJsHostBridge implements AutoCloseable {
         private int mStartY;
 
         QuickJsFloatyWindow(Context context, int id, JSONObject config,
-                            com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater) {
+                            com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater,
+                            FloatyEventSink eventSink) {
             mContext = context;
             mId = id;
             mConfig = config;
             mInflater = inflater;
+            mEventSink = eventSink;
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
             mRoot = new android.widget.FrameLayout(context);
             mTouchable = config.optBoolean("touchable", false);
@@ -2195,6 +2252,114 @@ final class QuickJsHostBridge implements AutoCloseable {
                     mShown = false;
                 }
             });
+        }
+
+        // ---- view access (Auto.js-style window.<id> proxies) ----
+
+        private View findViewById(String id) {
+            try {
+                int resourceId = com.stardust.autojs.core.ui.inflater.util.Ids.parse(id);
+                return mRoot.findViewById(resourceId);
+            } catch (Throwable error) {
+                return null;
+            }
+        }
+
+        String getViewText(String id) {
+            final String[] result = new String[]{""};
+            final CountDownLatch latch = new CountDownLatch(1);
+            mHandler.post(() -> {
+                View view = findViewById(id);
+                if (view instanceof android.widget.TextView) {
+                    result[0] = ((android.widget.TextView) view).getText().toString();
+                }
+                latch.countDown();
+            });
+            try {
+                latch.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            return result[0];
+        }
+
+        void setViewText(String id, String text) {
+            mHandler.post(() -> {
+                View view = findViewById(id);
+                if (view instanceof android.widget.TextView) {
+                    ((android.widget.TextView) view).setText(text == null ? "" : text);
+                }
+            });
+        }
+
+        void setViewVisibility(String id, String visibility) {
+            mHandler.post(() -> {
+                View view = findViewById(id);
+                if (view != null) {
+                    try {
+                        view.setVisibility(Integer.parseInt(visibility.trim()));
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            });
+        }
+
+        void registerViewClick(String id, String mode) {
+            mHandler.post(() -> {
+                try {
+                    View view = findViewById(id);
+                    if (view == null) {
+                        return;
+                    }
+                    if ("long_click".equals(mode)) {
+                        view.setOnLongClickListener(v -> {
+                            emitEvent(id, "long_click");
+                            return true;
+                        });
+                    } else if ("touch".equals(mode)) {
+                        view.setOnTouchListener((v, event) -> {
+                            emitEvent(id, "touch");
+                            return false;
+                        });
+                    } else {
+                        view.setClickable(true);
+                        view.setOnClickListener(v -> emitEvent(id, "click"));
+                    }
+                } catch (Throwable error) {
+                    Log.w("QuickJsFloatyWindow", "registerViewClick failed", error);
+                }
+            });
+        }
+
+        private void emitEvent(String viewId, String event) {
+            if (mEventSink == null) {
+                return;
+            }
+            try {
+                mEventSink.emit(new JSONObject()
+                        .put("window", mId).put("id", viewId).put("event", event).toString());
+            } catch (JSONException ignored) {
+            }
+        }
+
+        void setAdjustable(boolean enabled) {
+            mAdjustable = enabled;
+            if (enabled) {
+                // Rhino's adjust mode lets the user drag the window; reuse the
+                // existing touch-drag path so the switch has a visible effect.
+                mTouchable = true;
+            }
+        }
+
+        boolean isAdjustable() {
+            return mAdjustable;
+        }
+
+        int getWindowX() {
+            return mParams == null ? 0 : mParams.x;
+        }
+
+        int getWindowY() {
+            return mParams == null ? 0 : mParams.y;
         }
     }
 

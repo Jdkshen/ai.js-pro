@@ -37,6 +37,33 @@ try {
     win.close();
     win = null;
 
+    // XML 布局 + window.<id> 控件代理(Rhino 悬浮窗案例对齐)
+    win = floaty.window([
+        '<vertical>',
+        '  <text id="label" text="hello" textSize="16sp" textColor="#FFFFFFFF" />',
+        '  <button id="action" text="开始" />',
+        '</vertical>'
+    ].join('\n'));
+    if (!(win.id > 0)) throw new Error('floaty xml window did not return a valid id');
+    if (win.label.getText() !== 'hello') throw new Error('floaty view getText failed');
+    win.label.setText('updated');
+    if (win.label.getText() !== 'updated') throw new Error('floaty view setText failed');
+    win.action.setVisibility(8);
+    win.action.click(function () { });
+    win.action.longClick(function () { });
+    if (win.isAdjustEnabled()) throw new Error('adjust should default to false');
+    win.setAdjustEnabled(true);
+    if (!win.isAdjustEnabled()) throw new Error('setAdjustEnabled(true) failed');
+    win.setAdjustEnabled(false);
+    win.setPosition(30, 60);
+    sleep(200);
+    if (win.getX() !== 30 || win.getY() !== 60) {
+        throw new Error('floaty getX/getY failed: ' + win.getX() + ',' + win.getY());
+    }
+    win.exitOnClose();
+    win.close();
+    win = null;
+
     console.log('QUICKJS_UI_FLOATY_OK');
 } finally {
     if (win) win.close();
