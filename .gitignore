@@ -6,6 +6,7 @@
 
 # Local machine configuration
 /local.properties
+/.vscode/settings.json
 /tools/*
 !/tools/test-miuix.ps1
 !/tools/compare-engine-api.ps1
