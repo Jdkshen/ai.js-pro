@@ -281,6 +281,24 @@ assert('运行时状态全局', typeof isRunning === 'function' && typeof notSto
     && isRunning() === true && isStopped() === false && isRunning === notStopped);
 assert('loop/isShuttingDown', typeof loop === 'function' && loop() === undefined
     && typeof isShuttingDown === 'function' && isShuttingDown() === false);
+assert('控制台浮窗', (function () {
+    if (typeof openConsole !== 'function' || typeof clearConsole !== 'function'
+        || typeof console.show !== 'function' || typeof console.hide !== 'function'
+        || typeof console.clear !== 'function' || typeof console.setTitle !== 'function'
+        || typeof console.setSize !== 'function' || typeof console.setPosition !== 'function') {
+        return false;
+    }
+    openConsole();
+    sleep(600);
+    console.setTitle('QuickJS 回归');
+    console.setSize(600, 500);
+    console.setPosition(20, 200);
+    log('控制台浮窗可见性检查');
+    clearConsole();
+    console.hide();
+    sleep(300);
+    return true;
+})());
 assert('requiresApi/requiresAutojsVersion', (function () {
     requiresApi(24);
     requiresAutojsVersion('1.0.0');

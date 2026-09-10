@@ -97,6 +97,7 @@ toast("这是 QuickJS 脚本");
 | 顶层兼容别名 | 已接入 | `print/err`、`random`、`sync`、`auto`（含 normal/fast 模式与 flags）、`setImmediate`/`clearImmediate`、`waitForActivity/WaitForPackage`、`launchApp`、`home` 等 Auto.js 4.x 顶层写法 |
 | 内置模块 | 已接入 | `crypto`（md5/sha1/sha256/digest/hmacSha256/base64）、`zips`（zip/unzip/list）、`sqlite`（`open` + `exec/select/insert/update/delete/transaction/close`；顺带修正了 `Database.toContentValues` 把小数截断成整数的旧 bug，Rhino 同享）、`util`（判定/`format`/`join`/`range`/`extend`/`sum`）、`automator`（映射同名全局）、`context`（包名与常用目录）、`rawInput`（shell `input`，无需 root）；`require('crypto')` 等内置名同样可用 |
 | 运行时状态 | 已接入 | `isRunning`/`isStopped`/`notStopped`/`stop`、`requiresApi(api)`、`requiresAutojsVersion(version)`；`files.join` 一并补齐 |
+| 控制台浮窗 | 已接入 | `openConsole()` / `clearConsole()` 与 `console.show/hide/clear/setTitle/setSize/setPosition`；复用 `runtime.console`，浮窗实现类上的 `setSize/setPosition` 由宿主内部反射调用 |
 
 全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`：根目录保留入口脚本（`新模块快速上手.js`、`QuickJS 模块示例.js`、`QuickJS运行环境测试.js`），其余按分类存放——`悬浮窗/`、`图色处理/`、`YOLO目标检测/`、`引擎与线程/`、`界面与交互/`、`系统与设备/`、`文件与网络/`、`图像与视觉/`、`回归测试/`。
 

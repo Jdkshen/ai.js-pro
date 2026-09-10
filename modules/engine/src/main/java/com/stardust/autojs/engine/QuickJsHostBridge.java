@@ -503,6 +503,44 @@ final class QuickJsHostBridge implements AutoCloseable {
         return mRuntime.isStopped() || Thread.currentThread().isInterrupted();
     }
 
+    /**
+     * 控制台浮窗（Rhino 的 `openConsole`/`clearConsole` 与 `console.show/hide/clear/setTitle/setSize/setPosition`）。
+     * `setSize`/`setPosition` 只存在于浮窗实现类上，接口里没有，这里用宿主内部反射调用。
+     */
+    public void consoleCall(String method, String arg) throws JSONException {
+        switch (method == null ? "" : method) {
+            case "show":
+                mRuntime.console.show();
+                return;
+            case "hide":
+                mRuntime.console.hide();
+                return;
+            case "clear":
+                mRuntime.console.clear();
+                return;
+            case "setTitle":
+                mRuntime.console.setTitle(arg);
+                return;
+            case "setSize":
+            case "setPosition": {
+                JSONArray pair = new JSONArray(arg == null || arg.isEmpty() ? "[0,0]" : arg);
+                invokeConsoleIntMethod(method, pair.getInt(0), pair.getInt(1));
+                return;
+            }
+            default:
+                throw new IllegalArgumentException("控制台不支持的方法: " + method);
+        }
+    }
+
+    private void invokeConsoleIntMethod(String name, int first, int second) {
+        try {
+            Method method = mRuntime.console.getClass().getMethod(name, int.class, int.class);
+            method.invoke(mRuntime.console, first, second);
+        } catch (Exception e) {
+            throw new IllegalStateException("控制台调用失败 " + name + ": " + e.getMessage(), e);
+        }
+    }
+
     public void requiresApi(int api) {
         ScriptRuntime.requiresApi(api);
     }

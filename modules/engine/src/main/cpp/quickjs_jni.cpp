@@ -1713,6 +1713,26 @@ JSValue nativeSqliteCall(JSContext *context, JSValueConst, int argc, JSValueCons
     return value;
 }
 
+JSValue nativeConsoleCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(context, "console call requires a method name");
+    }
+    const std::string method = jsString(context, argv[0]);
+    const std::string arg = argc > 1 ? jsString(context, argv[1]) : std::string();
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID methodId = env->GetMethodID(hostClass, "consoleCall",
+                                          "(Ljava/lang/String;Ljava/lang/String;)V");
+    jstring javaMethod = toJavaString(env, method);
+    jstring javaArg = toJavaString(env, arg);
+    env->CallVoidMethod(state->host, methodId, javaMethod, javaArg);
+    env->DeleteLocalRef(javaMethod);
+    env->DeleteLocalRef(javaArg);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
 JSValue nativeSetScreenMetrics(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int32_t width = 0;
     int32_t height = 0;
@@ -3133,10 +3153,27 @@ const char kBootstrapScript[] = R"JS(
     global.console = Object.freeze({
         verbose: function () { write(2, arguments); },
         log: function () { write(3, arguments); },
+        print: function () { write(3, arguments); },
         info: function () { write(4, arguments); },
         warn: function () { write(5, arguments); },
-        error: function () { write(6, arguments); }
+        error: function () { write(6, arguments); },
+        // 控制台浮窗（与 Rhino console.show/hide/clear/setTitle 同名同义）。
+        show: function () { __aiNativeConsoleCall('show', ''); },
+        hide: function () { __aiNativeConsoleCall('hide', ''); },
+        clear: function () { __aiNativeConsoleCall('clear', ''); },
+        setTitle: function (title) { __aiNativeConsoleCall('setTitle', String(title)); },
+        setSize: function (width, height) {
+            __aiNativeConsoleCall('setSize',
+                JSON.stringify([Math.round(Number(width)), Math.round(Number(height))]));
+        },
+        setPosition: function (x, y) {
+            __aiNativeConsoleCall('setPosition',
+                JSON.stringify([Math.round(Number(x)), Math.round(Number(y))]));
+        }
     });
+    // Rhino 顶层写法
+    global.openConsole = global.console.show;
+    global.clearConsole = global.console.clear;
     global.log = global.console.log;
     global.performance = Object.freeze({ now: __aiNativePerformanceNow });
     global.toast = function (value) { return __aiNativeToast(format(value)); };
@@ -5840,6 +5877,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeContextInfo", nativeContextInfo, 1);
     installNativeFunction(state->context, global, "__aiNativeSqliteOpen", nativeSqliteOpen, 2);
     installNativeFunction(state->context, global, "__aiNativeSqliteCall", nativeSqliteCall, 3);
+    installNativeFunction(state->context, global, "__aiNativeConsoleCall", nativeConsoleCall, 2);
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
