@@ -27,6 +27,7 @@ import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.rhino.AndroidClassLoader;
 import com.stardust.autojs.script.CompiledScriptPayload;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
+import com.stardust.autojs.script.NativeScriptCrypto;
 import com.stardust.util.MD5;
 
 import org.json.JSONArray;
@@ -214,6 +215,7 @@ public class ApkBuilderEncryptionTest {
         // 3) 用运行时相同的派生方式解密，内容应与原脚本一致。
         byte[] decrypted = decryptPackagedScript(json, packaged);
         assertEquals(readText(script), new String(decrypted, "UTF-8"));
+        assertNativeDecryptionMatches(json, packaged);
 
         // 3.1) 密钥硬化：产物必须带随机盐 + 签名指纹；指纹要与「产物自己的签名」一致，
         //      因为运行端就是拿自己的签名证书去比这个值（反重签的核心）。
@@ -752,6 +754,7 @@ public class ApkBuilderEncryptionTest {
 
         // 用运行时相同的密钥派生解密，解析出编译载荷。
         byte[] plain = decryptPackagedScript(json, packaged);
+        assertNativeDecryptionMatches(json, packaged);
 
         CompiledScriptPayload payload = CompiledScriptPayload.read(plain);
         assertTrue("载荷里应当带类名", payload.className != null && payload.className.length() > 0);
@@ -882,6 +885,7 @@ public class ApkBuilderEncryptionTest {
 
         // 用运行时相同的派生方式解密，确认载荷确实是 QuickJS 字节码（非空且不是源码文本）。
         byte[] bytecode = decryptPackagedScript(json, packaged);
+        assertNativeDecryptionMatches(json, packaged);
         assertTrue("字节码不能为空", bytecode.length > 0);
         assertFalse("载荷不能还是源码文本",
                 new String(bytecode, "ISO-8859-1").startsWith("// @engine"));
@@ -915,6 +919,23 @@ public class ApkBuilderEncryptionTest {
         vectorField.set(null, vector);
         return ScriptEncryption.INSTANCE.decrypt(
                 packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
+    }
+
+    /**
+     * 原生解密必须与 JVM 解密逐字节一致：产物在真机上是走原生路径的，
+     * 两边哪怕差一个字节（派生、填充、字节序）都会让打包应用直接解密失败。
+     */
+    private static void assertNativeDecryptionMatches(JSONObject json, byte[] packaged) throws Exception {
+        assertEquals("原生密码学自检（SHA-256 / AES-256-CBC 标准向量）必须通过",
+                "", NativeScriptCrypto.selfTest());
+        byte[] expected = decryptPackagedScript(json, packaged);
+        byte[] actual = NativeScriptCrypto.decrypt(
+                packaged, EncryptedScriptFileHeader.BLOCK_SIZE,
+                packaged.length - EncryptedScriptFileHeader.BLOCK_SIZE,
+                json.getString("packageName"),
+                json.getString("scriptSalt"),
+                json.getString("signatureFingerprint"));
+        assertArrayEquals("原生解密结果必须与 JVM 一致", expected, actual);
     }
 
     /** 两种指纹写法（带不带冒号、大小写）统一后再比。 */

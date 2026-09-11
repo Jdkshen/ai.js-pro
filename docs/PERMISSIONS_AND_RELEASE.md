@@ -74,6 +74,13 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 启动失败（含签名不符）不会闪退了：`SplashActivity` 捕获 `Throwable`（静态初始化失败抛的是 `Error`，只 catch `Exception` 会让 App 直接崩），弹提示并把原因写进日志界面，logcat 里能看到 `E InrtSplash: LAUNCH_FAILED ...`。
 
+**解密在原生侧完成**：派生与 AES-256-CBC 解密都放在 `libaijscrypto.so`（纯 C，三个 ABI 合计 ≈ 45 KB，
+不链接 C++ 运行时、也不依赖 QuickJS，Rhino 产物不必为了解密加载整个引擎）。
+Java 侧只递「包名 + 盐 + 指纹 + 密文」，密钥不落到 Java 堆里；解密入口统一在 `EncryptedScripts`，
+原生库不可用或解密失败时自动回退 JVM 的 `ScriptEncryption`，保证打包应用在任何环境都能跑起来。
+原生的 SHA-256 / AES-256 用 NIST 标准向量自检（`NativeScriptCrypto.selfTest()`），
+真机测试还会把「原生解密结果」与「JVM 解密结果」逐个载荷（文本 / Rhino class / QuickJS 字节码）逐字节比对。
+
 ### 等级 2（编译）的注意事项
 
 - **两种引擎都支持**：Rhino → class 字节（运行端用 `AndroidClassLoader`（dx → DexClassLoader）加载执行）；

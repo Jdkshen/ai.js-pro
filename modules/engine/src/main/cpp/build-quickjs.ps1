@@ -53,7 +53,7 @@ foreach ($abi in @('armeabi-v7a', 'arm64-v8a', 'x86')) {
         throw "QuickJS native build failed for $abi"
     }
 
-    foreach ($library in @('libquickjs.so', 'libquickjs_jni.so')) {
+    foreach ($library in @('libquickjs.so', 'libquickjs_jni.so', 'libaijscrypto.so')) {
         $libraryPath = Join-Path $buildDirectory $library
         if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
             throw "QuickJS native library was not produced for $abi`: $library"
@@ -63,5 +63,11 @@ foreach ($abi in @('armeabi-v7a', 'arm64-v8a', 'x86')) {
 }
 
 Get-ChildItem -LiteralPath (Join-Path $autoJsDirectory 'src\main\jniLibs') `
-    -Recurse -File -Include 'libquickjs.so', 'libquickjs_jni.so' |
+    -Recurse -File -Include 'libquickjs.so', 'libquickjs_jni.so', 'libaijscrypto.so' |
+    ForEach-Object {
+        # 打包守卫用 mtime 判断「改了原生代码但没重编」。ninja 对没受影响的库不会重新链接，
+        # mtime 会停留在上一次构建，让守卫误报；这里统一标记为本次构建产物。
+        $_.LastWriteTime = Get-Date
+        $_
+    } |
     Select-Object FullName, Length, LastWriteTime

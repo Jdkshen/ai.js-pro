@@ -123,6 +123,8 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             }
             key = ScriptKeyDerivation.deriveKey(projectConfig.packageName, salt, fingerprint)
             vector = ScriptKeyDerivation.deriveVector(salt, fingerprint)
+            // 告诉解密入口「这个产物是新方案的」：优先交给原生库解密（密钥不落到 Java 侧）。
+            EncryptedScripts.setHardenedParams(projectConfig.packageName, salt, fingerprint)
         } else {
             // 老产物：沿用旧的推导方式，保证升级运行端后仍能打开。
             key = ScriptKeyDerivation.legacyKey(projectConfig.packageName,

@@ -336,28 +336,31 @@ def quickJsNativeSources = [
         'CMakeLists.txt',
         'quickjs_jni.cpp',
         'native_frame_store.cpp',
-        'native_frame_store.h'
+        'native_frame_store.h',
+        'script_crypto.c'
 ].collect { new File(quickJsNativeSourceDir, it) }
-def quickJsNativeLibraries = ['armeabi-v7a', 'arm64-v8a', 'x86'].collect {
-    rootProject.file("modules/engine/src/main/jniLibs/${it}/libquickjs_jni.so")
+def quickJsNativeLibraries = ['armeabi-v7a', 'arm64-v8a', 'x86'].collectMany { abi ->
+    ['libquickjs_jni.so', 'libaijscrypto.so'].collect {
+        rootProject.file("modules/engine/src/main/jniLibs/${abi}/${it}")
+    }
 }
 
 tasks.register('verifyQuickJsNativeLibrariesFresh') {
     group = 'verification'
-    description = 'Prevent packaging stale QuickJS JNI libraries after native source changes.'
+    description = 'Prevent packaging stale native libraries after native source changes.'
     inputs.files(quickJsNativeSources)
     inputs.files(quickJsNativeLibraries)
 
     doLast {
         def missing = quickJsNativeLibraries.findAll { !it.isFile() }
         if (!missing.isEmpty()) {
-            throw new GradleException('QuickJS JNI libraries are missing:\n' +
+            throw new GradleException('Native libraries are missing:\n' +
                     missing.collect { ' - ' + it }.join('\n'))
         }
         def newestSourceTime = quickJsNativeSources.collect { it.lastModified() }.max()
         def stale = quickJsNativeLibraries.findAll { it.lastModified() < newestSourceTime }
         if (!stale.isEmpty()) {
-            throw new GradleException('QuickJS JNI libraries are older than their native sources. Run ' +
+            throw new GradleException('Native libraries are older than their sources. Run ' +
                     'modules/engine/src/main/cpp/build-quickjs.ps1 before Gradle packaging:\n' +
                     stale.collect { ' - ' + it }.join('\n'))
         }
