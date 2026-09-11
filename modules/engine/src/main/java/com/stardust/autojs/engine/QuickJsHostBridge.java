@@ -3783,9 +3783,56 @@ final class QuickJsHostBridge implements AutoCloseable,
         return result[0];
     }
 
+    // ------------------------------------------------------------------
+    // Java 互操作（Rhino 兼容：完整 public 反射）
+    //
+    // 用户拍板采用与 Rhino 相同的模型：Packages / importClass / importPackage / Java.type
+    // 都能解析任意类。类与实例统一用 long 句柄跨边界，JS 侧是 Proxy 包装。
+    // ------------------------------------------------------------------
+
+    private final QuickJsJavaInterop mJavaInterop = new QuickJsJavaInterop();
+
+    /** 解析类名，返回类句柄（0 表示找不到）。 */
+    public long javaResolveClass(String name) {
+        return mJavaInterop.resolveClass(name);
+    }
+
+    /**
+     * 把 Android Context 交给脚本（Rhino 里 `context` 就是 Context 对象）。
+     * 拿不到时返回 0，JS 侧回退到白名单版的 context。
+     */
+    public long javaContextHandle() {
+        try {
+            return mJavaInterop.putForScript(mRuntime.uiHandler.getContext());
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot expose Android context", error);
+            return 0;
+        }
+    }
+
+    /** `'m'` 有方法 / `'f'` 有字段 / 空串都没有。 */
+    public String javaProbe(long handle, String name) {
+        return mJavaInterop.probe(handle, name);
+    }
+
+    public String javaCall(long handle, String name, String argsJson) throws JSONException {
+        return mJavaInterop.call(handle, name, argsJson);
+    }
+
+    public String javaGetField(long handle, String name) throws JSONException {
+        return mJavaInterop.getField(handle, name);
+    }
+
+    public boolean javaSetField(long handle, String name, String valueJson) throws JSONException {
+        return mJavaInterop.setField(handle, name, valueJson);
+    }
+
+    public String javaNew(long classHandle, String argsJson) throws JSONException {
+        return mJavaInterop.instantiate(classHandle, argsJson);
+    }
+
     /** 脚本谓词：UiGlobalSelector.filter(BooleanSupplier) 用。 */
-    private final class JsNodePredicate implements BooleanFilter.BooleanSupplier {
-        private final long mCallbackId;
+    private final class JsNodePredicate implements BooleanFilter.BooleanSupplier {        private final long mCallbackId;
 
         JsNodePredicate(long callbackId) {
             mCallbackId = callbackId;
@@ -4144,6 +4191,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         uiClose();
         releaseAutomatorHandles();
         closeSqliteHandles();
+        mJavaInterop.clear();
         for (android.app.AlertDialog dialog : new ArrayList<>(pendingDialogRegistry.values())) {
             try {
                 dialog.dismiss();

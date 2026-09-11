@@ -103,6 +103,7 @@ toast("这是 QuickJS 脚本");
 | io / 文本文件 | 已接入 | `files.open(path[, mode[, encoding[, bufferSize]]])` 与全局 `open`（Rhino 的 `__io__.js` 把 `files.open` 提升为全局）：`r` 可 `read/read(size)/readline/readlines`（共用同一游标），`w` 打开即清空后 `write/writeline/writelines`，`a` 追加，未知模式返回 null；`io` 对象暴露 `open` 与 `files` |
 | web / 可注入 WebView | 已接入 | `newInjectableWebView()` / `newInjectableWebClient()`：`inject(script[, callback])`、`loadUrl` / `loadData` / `reload` / `stopLoading` / `getUrl`；页面里的 `rhino.call(name, ...args)` / `rhino.eval(code)` 由 WebView 线程入队、脚本引擎线程执行（异常会写到脚本控制台）；`injectAndWait` 需要跨线程同步求值，明确报错 |
 | 跨线程 JS 回调 | 已接入 | Java 线程把任务放进 `ConcurrentLinkedQueue`，native 事件循环（定时器循环与 `sleep` 切片）在引擎线程上取出并调 `__aiRunJsTask`，避免多线程同时进 QuickJS 上下文；选择器谓词用同一套回调表（同步路径） |
+| Java 互操作 | 已接入（完整反射） | `Packages`/`importClass`/`importPackage`/`Java.type`；类与实例统一 long 句柄 + JS 侧 Proxy：静态/实例方法、字段读写、JavaBean 属性（`file.path`）、`new` 构造、自动重载解析（整数值优先 int/long）、JS 数组↔ Java 数组/可变参数、Java 异常转脚本 Error；`context` 即真实 Android Context，并预导入 Rhino 的 `Intent`/`Paint`/`Shell`/`KeyEvent`/`MutableOkHttp`/`Canvas`/`Image`/`RootAutomator`/`Input`/`Module`。**注意：与 Rhino 一致开放任意反射，白名单桥不再是安全边界（用户拍板）** |
 | continuation | 部分接入 | `delay(millis)` = 阻塞 `sleep`；`enabled` 恒为 `false`，`await/create` 与 `Promise.prototype.await` 明确报错引导到 `await` 语法 |
 
 全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`：根目录保留入口脚本（`新模块快速上手.js`、`QuickJS 模块示例.js`、`QuickJS运行环境测试.js`），其余按分类存放——`悬浮窗/`、`图色处理/`、`YOLO目标检测/`、`引擎与线程/`、`界面与交互/`、`系统与设备/`、`文件与网络/`、`图像与视觉/`、`回归测试/`。

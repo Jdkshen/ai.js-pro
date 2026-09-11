@@ -405,6 +405,97 @@ assert('ui.statusBarColor 不异常', (function () { ui.statusBarColor('#112233'
 ui.close();
 sleep(300);
 
+// --- Java 互操作（Packages / importClass / importPackage / Java.type）---
+assert('Packages 与 Java.type 存在', typeof Packages === 'object' && typeof Java === 'object'
+    && typeof Java.type === 'function' && typeof importClass === 'function'
+    && typeof importPackage === 'function');
+assert('Java.type 解析类', (function () {
+    var cls = Java.type('java.lang.String');
+    return typeof cls === 'function' && cls.__javaClass === true
+        && cls.__className === 'java.lang.String';
+})());
+assert('Packages 逐级解析', (function () {
+    var intent = Packages.android.content.Intent;
+    return intent !== undefined && intent.__className === 'android.content.Intent';
+})());
+assert('静态字段（Intent.ACTION_VIEW）', (function () {
+    var intent = Packages.android.content.Intent;
+    return String(intent.ACTION_VIEW) === 'android.intent.action.VIEW';
+})());
+assert('静态方法（String.valueOf）', (function () {
+    var s = Java.type('java.lang.String');
+    return s.valueOf(42) === '42';
+})());
+assert('importClass + new 构造', (function () {
+    importClass('android.content.Intent');
+    var intent = new Intent(Intent.ACTION_VIEW);
+    return intent !== undefined && intent.getAction() === 'android.intent.action.VIEW';
+})());
+assert('importPackage', (function () {
+    importPackage('java.util');
+    var map = new HashMap();
+    map.put('k', 'v');
+    return map.get('k') === 'v' && map.size() === 1;
+})());
+assert('实例字段读写', (function () {
+    var point = new android.graphics.Point(1, 2);
+    var before = point.x + ',' + point.y;
+    point.x = 7;
+    return before === '1,2' && point.x === 7 && point.toString().indexOf('7') >= 0;
+})());
+assert('方法重载与类型转换', (function () {
+    var sb = new java.lang.StringBuilder();
+    sb.append('n=').append(7).append(true);
+    return sb.toString() === 'n=7true';
+})());
+assert('Java 异常转成脚本错误', (function () {
+    try {
+        new java.io.FileInputStream('/definitely/not/here/__aijs__');
+        return false;
+    } catch (e) {
+        return /FileNotFoundException/.test(String(e));
+    }
+})());
+assert('Java 数组返回值', (function () {
+    var list = new java.util.ArrayList();
+    list.add('a');
+    list.add('b');
+    var array = list.toArray();
+    return Array.isArray(array) && array.length === 2 && array[1] === 'b';
+})());
+assert('JavaScript 数组转 Java 参数', (function () {
+    var joined = java.lang.String.join('-', ['a', 'b', 'c']);
+    return joined === 'a-b-c';
+})());
+assert('未 import 的类名报错清晰', (function () {
+    try {
+        Java.type('__no_such_class__');
+        return false;
+    } catch (e) {
+        return /找不到 Java 类/.test(String(e));
+    }
+})());
+assert('Rhino 预导入类名', typeof Intent === 'function' && typeof Paint === 'function'
+    && typeof Shell === 'function' && typeof KeyEvent === 'function'
+    && typeof MutableOkHttp === 'function' && typeof Canvas === 'function'
+    && typeof Image === 'function' && typeof RootAutomator === 'function'
+    && typeof Input === 'function' && typeof Module === 'object');
+assert('context 是真实 Android Context', typeof context.getPackageName === 'function'
+    && context.getPackageName() === context.packageName
+    && typeof context.packageName === 'string' && context.packageName.length > 0
+    && context.getPackageName().indexOf('.') > 0);
+assert('JavaBean 属性访问', (function () {
+    var file = context.getFilesDir();
+    return String(file) === file.path && typeof file.absolutePath === 'string'
+        && file.absolutePath === file.getAbsolutePath();
+})());
+assert('Java 对象方法链（Intent + Canvas 构造）', (function () {
+    var intent = new Intent(Intent.ACTION_VIEW);
+    intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    return intent.getFlags() === Intent.FLAG_ACTIVITY_NEW_TASK
+        && String(intent) .indexOf('Intent') >= 0;
+})());
+
 // --- 内置模块：crypto / zips / util / automator / context / rawInput ---
 assert('crypto.md5', crypto.md5('abc') === '900150983cd24fb0d6963f7d28e17f72');
 assert('crypto.sha256', crypto.sha256('abc')

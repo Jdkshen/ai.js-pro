@@ -19,6 +19,7 @@
 | io / 文本文件 | `files.open` 写入/读取/追加/未知模式 null + 全局 `open` 与 `io` 模块均通过 | Mi8（回归测试 133 项全绿） |
 | web / 跨线程回调 | `newInjectableWebView()` 加载 data URL 后 `inject(script, callback)` 拿到页面里的值；`rhino.call/eval` 的任务分发与 sleep 期间的跨线程回调均通过 | Mi8（回归测试 143 项全绿） |
 | continuation | `delay` 阻塞等待、`create/await` 与 `Promise.await` 的明确报错、`enabled === false` 均通过 | Mi8（回归测试 143 项全绿） |
+| Java 互操作 | `Packages`/`importClass`/`importPackage`/`Java.type`、静态字段与方法、`new` 构造、实例字段读写、JavaBean 属性（`file.path`/`context.packageName`）、重载解析（`String.valueOf(42)` 选 int）、Java 异常转 Error、Java 数组返回值、JS 数组作可变参数；`context` 为真实 Android Context；Rhino 预导入的 10 个类名全部可用 | Mi8（回归测试 177 项全绿） |
 | UI | 布局创建、文本更新/回读、`ui.<id>`/`$ui.<id>` 控件代理、任意属性 `attr` 读写、`ui.emitter`/`ui.findView`/`ui.post`/`ui.isUiThread`/`ui.statusBarColor` 通过（`ui` 为覆盖层模式，非 Rhino 的 UI Activity） | Mi8（回归测试 162 项全绿） |
 | floaty | 真实创建、位置/尺寸/文本更新、关闭通过 | compat/lite K40 通过 |
 | Rhino 兼容 | 23 项基础回归通过；lite 可控拒绝且不崩溃 | K40 通过 |
@@ -39,7 +40,7 @@
 | floaty | XML/文本窗口、控件代理（含 `attr` 与属性式读写、`click()/click(fn)`、`on("click"/"long_click"/"key"/"touch")`）、窗口 `getWidth/getHeight/findView`、不存在控件返回 undefined 均已对齐；与 Rhino 的差异只剩控件级 Java 方法（如 `setBackground/setPadding` 之外的任意 View API）与 `ui` 模式绑定 |
 | web | `http` 与 `newInjectableWebView/Client` 的 `inject`/`loadUrl`/`loadData` 已可用；页面→脚本的 `rhino.call/eval` 为异步回调（引擎线程执行，`injectAndWait` 不支持） |
 | debugger | 现有 Dim 调试器是 Rhino 专用，QuickJS 尚无断点、单步、变量查看等价实现 |
-| Java 桥接 | QuickJS 故意采用白名单 host bridge，不提供 Rhino 式任意 `java.lang.*` 反射；需先确定正式兼容边界 |
+| Java 桥接 | 已按用户拍板放开为完整 public 反射（与 Rhino 一致）；白名单 host bridge 仅作为内部默认实现保留，不再是安全边界 |
 | 编辑器 | Token/AST、高亮、自动完成和部分异常仍直接使用 Rhino 类 |
 | 运行时 | `ScriptRuntime`、`TimerThread`、UI 代理、continuation 仍有 Rhino 具体类耦合 |
 

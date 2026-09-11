@@ -741,6 +741,179 @@ JSValue nativeStatusBarColor(JSContext *context, JSValueConst, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+// ---- Java 互操作（Packages / importClass / Java.type）----
+//
+// 类与实例统一用 long 句柄跨边界：JS 侧是 Proxy，参数/返回值用「原生 JSON +
+// {"__ref":handle}」协议；重载解析、字段访问、异常转译都在 Java 侧完成。
+
+/** 解析类名，返回类句柄（0 = 找不到）。 */
+JSValue nativeJavaResolveClass(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string name = stringArg(context, argc, argv, 0);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaResolveClass", "(Ljava/lang/String;)J");
+    jstring javaName = toJavaString(env, name);
+    jlong handle = env->CallLongMethod(state->host, method, javaName);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewInt64(context, static_cast<int64_t>(handle));
+}
+
+/** `'m'` / `'f'` / `''`：这个名字在类或实例上是方法、字段还是不存在。 */
+JSValue nativeJavaProbe(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const std::string name = stringArg(context, argc, argv, 1);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaProbe",
+                                        "(JLjava/lang/String;)Ljava/lang/String;");
+    jstring javaName = toJavaString(env, name);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, static_cast<jlong>(handle), javaName));
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string() : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** 方法调用（receiver 是类句柄时按静态方法解析），返回 JSON 编码的结果。 */
+JSValue nativeJavaCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const std::string name = stringArg(context, argc, argv, 1);
+    const std::string args = argc > 2 ? stringArg(context, argc, argv, 2) : std::string("[]");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaCall",
+                                        "(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaName = toJavaString(env, name);
+    jstring javaArgs = toJavaString(env, args);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, static_cast<jlong>(handle), javaName, javaArgs));
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(javaArgs);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string("null") : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** 字段读取。 */
+JSValue nativeJavaGetField(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const std::string name = stringArg(context, argc, argv, 1);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaGetField",
+                                        "(JLjava/lang/String;)Ljava/lang/String;");
+    jstring javaName = toJavaString(env, name);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, static_cast<jlong>(handle), javaName));
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string("null") : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** 字段写入。 */
+JSValue nativeJavaSetField(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const std::string name = stringArg(context, argc, argv, 1);
+    const std::string value = argc > 2 ? stringArg(context, argc, argv, 2) : std::string("null");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaSetField",
+                                        "(JLjava/lang/String;Ljava/lang/String;)Z");
+    jstring javaName = toJavaString(env, name);
+    jstring javaValue = toJavaString(env, value);
+    jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jlong>(handle),
+                                             javaName, javaValue);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(javaValue);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+/** `new Class(...)`：选构造器并实例化。 */
+JSValue nativeJavaNew(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const std::string args = argc > 1 ? stringArg(context, argc, argv, 1) : std::string("[]");
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaNew",
+                                        "(JLjava/lang/String;)Ljava/lang/String;");
+    jstring javaArgs = toJavaString(env, args);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, static_cast<jlong>(handle), javaArgs));
+    env->DeleteLocalRef(javaArgs);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string("null") : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** 把 Android Context 交给脚本（Rhino 的 context 就是它）。 */
+JSValue nativeJavaContextHandle(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaContextHandle", "()J");
+    jlong handle = env->CallLongMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewInt64(context, static_cast<int64_t>(handle));
+}
+
 /** 从非引擎线程安排一次脚本回调（Web 桥与回归测试使用，验证跨线程回调通路）。 */
 JSValue nativePostJsCallbackAsync(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
@@ -5762,6 +5935,346 @@ const char kBootstrapScript[] = R"JS(
         }
     };
 
+    // ---- Java 互操作（与 Rhino 相同：任意 public 反射）----
+    // 类与实例都用 long 句柄跨边界，JS 侧是 Proxy：
+    //   encodeJavaArg / encodeJavaArgs 把 JS 值编成 JSON + {"__ref":handle}
+    //   decodeJavaResult 把 Java 返回值换回 JS 值（对象包成代理，同一个句柄复用同一代理）
+    var javaObjectCache = new Map();
+    var javaClassCache = new Map();
+    var importedClasses = Object.create(null);
+    var importedPackages = [];
+    var javaNameCache = Object.create(null);
+
+    function encodeJavaArg(value) {
+        if (value === undefined || value === null) return null;
+        var type = typeof value;
+        if (type === 'number' || type === 'string' || type === 'boolean') return value;
+        if (value.__javaHandle !== undefined) {
+            return { __ref: Number(value.__javaHandle) };
+        }
+        if (Array.isArray(value)) {
+            return value.map(encodeJavaArg);
+        }
+        if (type === 'function' && value.__javaClass) {
+            return { __ref: Number(value.__javaHandle) };
+        }
+        throw new TypeError('无法把 ' + Object.prototype.toString.call(value)
+            + ' 作为 Java 参数传递（支持数字/字符串/布尔/null/数组/Java 对象）');
+    }
+
+    function encodeJavaArgs(args) {
+        var result = [];
+        for (var i = 0; i < args.length; i++) result.push(encodeJavaArg(args[i]));
+        return result;
+    }
+
+    function decodeJavaResult(text) {
+        if (text === null || text === undefined || text === '') return undefined;
+        var value;
+        try {
+            value = JSON.parse(String(text));
+        } catch (e) {
+            return String(text);
+        }
+        return decodeJavaValue(value);
+    }
+
+    function decodeJavaValue(value) {
+        if (value === null || value === undefined) return value;
+        if (Array.isArray(value)) return value.map(decodeJavaValue);
+        if (typeof value !== 'object') return value;
+        if (value.__ref !== undefined) {
+            return value.__isClass
+                ? javaClassOf(Number(value.__ref), value.__class)
+                : javaObjectOf(Number(value.__ref), value.__class);
+        }
+        return value;
+    }
+
+    function javaMemberOf(handle, holder, prop, isClass) {
+        var cached = holder.cache.get(prop);
+        if (cached === undefined) {
+            cached = String(__aiNativeJavaProbe(handle, prop));
+            holder.cache.set(prop, cached);
+        }
+        if (cached === 'm') {
+            return function () {
+                return decodeJavaResult(__aiNativeJavaCall(
+                    handle, prop, JSON.stringify(encodeJavaArgs(arguments))));
+            };
+        }
+        if (cached === 'f') {
+            return decodeJavaResult(__aiNativeJavaGetField(handle, prop));
+        }
+        // p:<getter>：Rhino 的 JavaBean 语义，file.path 这类写法直接给值。
+        if (cached.length > 2 && cached.charAt(0) === 'p' && cached.charAt(1) === ':') {
+            return decodeJavaResult(__aiNativeJavaCall(handle, cached.substring(2), '[]'));
+        }
+        return undefined;
+    }
+
+    function javaObjectOf(handle, className) {
+        var cached = javaObjectCache.get(handle);
+        if (cached) return cached;
+        var cache = new Map();
+        var target = { __javaHandle: handle, __className: className };
+        var proxy = new Proxy(target, {
+            get: function (self, prop) {
+                if (prop === '__javaHandle' || prop === '__className') return self[prop];
+                if (typeof prop !== 'string') return undefined;
+                // then 必须为空，否则会被当作 thenable；其余成员交给 Java 侧解析（包括 toString/valueOf）。
+                if (prop === 'then') return undefined;
+                return javaMemberOf(handle, { cache: cache }, prop, false);
+            },
+            set: function (self, prop, value) {
+                if (typeof prop !== 'string' || self[prop] !== undefined) return false;
+                var encoded = JSON.stringify(encodeJavaArg(value));
+                var kind = self.__javaSetters__ || (self.__javaSetters__ = new Map());
+                var cached = kind.get(prop);
+                if (cached === undefined) {
+                    cached = String(__aiNativeJavaProbe(handle, prop));
+                    kind.set(prop, cached);
+                }
+                if (cached === 'f') {
+                    return __aiNativeJavaSetField(handle, prop, encoded);
+                }
+                // JavaBean 属性写入：set<Name>(value)
+                if (cached.length > 2 && cached.charAt(0) === 'p' && cached.charAt(1) === ':') {
+                    var getter = cached.substring(2);
+                    var setter = 'set' + getter.substring(getter.indexOf('is') === 0 ? 2 : 3);
+                    return __aiNativeJavaCall(handle, setter, JSON.stringify([encodeJavaArg(value)])) !== undefined;
+                }
+                return false;
+            }
+        });
+        javaObjectCache.set(handle, proxy);
+        return proxy;
+    }
+
+    function javaClassOf(handle, className) {
+        var cached = javaClassCache.get(handle);
+        if (cached) return cached;
+        var cache = new Map();
+        var target = function JavaClass() {
+            throw new TypeError(className + ' 是 Java 类，请用 new 构造');
+        };
+        var proxy = new Proxy(target, {
+            // construct(target, args, newTarget)：args 是构造参数数组（不要用 arguments）。
+            construct: function (target, args) {
+                return decodeJavaResult(__aiNativeJavaNew(
+                    handle, JSON.stringify(encodeJavaArgs(args))));
+            },
+            get: function (self, prop) {
+                if (prop === '__javaHandle') return handle;
+                if (prop === '__className') return className;
+                if (prop === '__javaClass') return true;
+                if (prop === '__isJavaClass') return true;
+                if (prop === 'name') return className;
+                if (prop === 'class') return proxy;
+                if (typeof prop !== 'string') return undefined;
+                // then 必须为空（thenable 保护）；未知成员返回 undefined（与 Rhino 的 NOT_FOUND 一致）。
+                if (prop === 'then') return undefined;
+                return javaMemberOf(handle, { cache: cache }, prop, true);
+            },
+            set: function (self, prop, value) {
+                if (typeof prop !== 'string' || prop in self) return false;
+                __aiNativeJavaSetField(handle, prop, JSON.stringify(encodeJavaArg(value)));
+                return true;
+            },
+            has: function (self, prop) {
+                if (prop in self) return true;
+                return String(__aiNativeJavaProbe(handle, String(prop))) !== '';
+            },
+            apply: function () {
+                throw new TypeError(className + ' 是 Java 类，请用 new 构造');
+            }
+        });
+        javaClassCache.set(handle, proxy);
+        return proxy;
+    }
+
+    /** 全名解析（不做 import 前缀尝试）。 */
+    function requireJavaClass(name) {
+        name = String(name);
+        var handle = Number(__aiNativeJavaResolveClass(name));
+        return handle ? javaClassOf(handle, name) : null;
+    }
+
+    /** 裸名解析：已 import 的类 → 全名 → importPackage 列表。 */
+    function resolveJavaClass(name) {
+        name = String(name);
+        if (importedClasses[name]) return importedClasses[name];
+        if (Object.prototype.hasOwnProperty.call(javaNameCache, name)) {
+            return javaNameCache[name];
+        }
+        var cls = requireJavaClass(name);
+        if (cls === null) {
+            for (var i = 0; i < importedPackages.length; i++) {
+                cls = requireJavaClass(importedPackages[i] + '.' + name);
+                if (cls !== null) break;
+            }
+        }
+        javaNameCache[name] = cls;
+        return cls;
+    }
+
+    /** 已知的顶层包名：`android.graphics.Point` 这类写法要靠它解析出包代理。 */
+    var PACKAGE_ROOTS = ['java', 'javax', 'android', 'androidx', 'org', 'com', 'edu',
+        'kotlin', 'dalvik', 'sun', 'groovy', 'io'];
+
+    function isPackageName(name) {
+        if (PACKAGE_ROOTS.indexOf(name) >= 0) return true;
+        for (var i = 0; i < importedPackages.length; i++) {
+            var pkg = importedPackages[i];
+            if (pkg === name || pkg.indexOf(name + '.') === 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * importPackage / 顶层包名（android 等）要能直接解析裸名：Rhino 靠 scope 解析器实现，
+     * QuickJS 里把 globalThis 的原型设成代理，未命中的全局变量走这里查 import 列表与包根。
+     * 标准全局对象仍是 globalThis 的自有属性，不受影响。
+     */
+    function installAutoImportResolver() {
+        var resolver = new Proxy(Object.create(null), {
+            get: function (target, prop) {
+                if (typeof prop !== 'string' || prop === 'then' || prop === 'toJSON') {
+                    return undefined;
+                }
+                var cls = resolveJavaClass(prop);
+                if (cls !== null) return cls;
+                return isPackageName(prop) ? makePackageProxy(prop) : undefined;
+            },
+            has: function (target, prop) {
+                if (typeof prop !== 'string') return false;
+                return resolveJavaClass(prop) !== null || isPackageName(prop);
+            }
+        });
+        Object.setPrototypeOf(globalThis, resolver);
+    }
+
+    /** 包代理：Packages.android.content.Intent 逐级解析，解析不到就继续当包。 */
+    function makePackageProxy(prefix) {
+        var target = { __packageName: prefix };
+        return new Proxy(target, {
+            get: function (self, prop) {
+                if (prop === '__packageName' || prop === '__isPackage') return self[prop];
+                if (typeof prop !== 'string') return undefined;
+                if (prop === 'then' || prop === 'toJSON' || prop === 'valueOf'
+                        || prop === 'constructor') {
+                    return undefined;
+                }
+                var full = self.__packageName ? self.__packageName + '.' + prop : prop;
+                return requireJavaClass(full) || makePackageProxy(full);
+            },
+            has: function (self, prop) {
+                var full = self.__packageName ? self.__packageName + '.' + String(prop) : String(prop);
+                return requireJavaClass(full) !== null;
+            }
+        });
+    }
+
+    global.Packages = makePackageProxy('');
+    global.java = makePackageProxy('java');
+    global.javax = makePackageProxy('javax');
+    global.org = makePackageProxy('org');
+    global.com = makePackageProxy('com');
+    global.edu = makePackageProxy('edu');
+    global.android = makePackageProxy('android');
+    global.androidx = makePackageProxy('androidx');
+    global.kotlin = makePackageProxy('kotlin');
+    global.dalvik = makePackageProxy('dalvik');
+
+    global.importClass = function () {
+        var imported = [];
+        for (var i = 0; i < arguments.length; i++) {
+            var cls = arguments[i];
+            if (typeof cls === 'string') {
+                cls = resolveJavaClass(cls) || requireJavaClass(cls);
+                if (cls === null) throw new TypeError('找不到 Java 类：' + arguments[i]);
+            }
+            if (!cls || !cls.__javaClass) {
+                throw new TypeError('importClass 需要类名或 Java 类对象');
+            }
+            var simple = String(cls.__className).substring(String(cls.__className).lastIndexOf('.') + 1);
+            simple = simple.substring(simple.lastIndexOf('$') + 1);
+            importedClasses[simple] = cls;
+            global[simple] = cls;
+            imported.push(simple);
+        }
+        return imported.join(', ');
+    };
+
+    global.importPackage = function () {
+        for (var i = 0; i < arguments.length; i++) {
+            var target = arguments[i];
+            var name = typeof target === 'string'
+                ? target
+                : (target && target.__packageName ? String(target.__packageName) : '');
+            if (!name) throw new TypeError('importPackage 需要包名或 Packages 里的包对象');
+            if (importedPackages.indexOf(name) < 0) importedPackages.push(name);
+            // 新包可能让之前解析失败的裸名变得可用，清掉负缓存。
+            javaNameCache = Object.create(null);
+        }
+    };
+
+    installAutoImportResolver();
+
+    // ---- 与 Rhino 的 init.js / __app__.js / __http__.js / __shell__.js 预导入对齐 ----
+    // Rhino 在这些模块里 importClass 之后脚本可以直接使用这些类名。
+    ['android.view.KeyEvent',
+        'com.stardust.autojs.core.util.Shell',
+        'android.graphics.Paint',
+        'android.content.Intent',
+        'com.stardust.autojs.core.http.MutableOkHttp'].forEach(function (name) {
+        var cls = requireJavaClass(name);
+        if (cls === null) return;
+        var simple = name.substring(name.lastIndexOf('.') + 1);
+        importedClasses[simple] = cls;
+        global[simple] = cls;
+    });
+    global.Canvas = requireJavaClass('com.stardust.autojs.core.graphics.ScriptCanvas');
+    global.Image = requireJavaClass('com.stardust.autojs.core.image.ImageWrapper');
+    // Rhino 的 __shell__.js：Input = Text（RootShell 文本输入；Text 在本段之后才定义，这里延迟转发）
+    global.Input = function () { return global.Text.apply(null, arguments); };
+    // Rhino 的 jvm-npm：这里复用 QuickJS 自己的 CommonJS 加载器。
+    global.Module = {
+        require: function (path) { return global.require(path); },
+        runMain: function (path) { return global.require(path); },
+        _load: function (path) { return global.require(path); }
+    };
+    // Rhino 的 RootAutomator：包装 com.stardust.autojs.core.inputevent.RootAutomator（需要 root）。
+    (function () {
+        var RootAutomatorClass = requireJavaClass('com.stardust.autojs.core.inputevent.RootAutomator');
+        if (RootAutomatorClass === null) return;
+        var methods = ['sendEvent', 'touch', 'setScreenMetrics', 'touchX', 'touchY', 'sendSync',
+            'sendMtSync', 'tap', 'swipe', 'press', 'longPress', 'touchDown', 'touchUp', 'touchMove',
+            'getDefaultId', 'setDefaultId', 'exit'];
+        global.RootAutomator = function (inputDevice, nonBlockingForReady) {
+            var ra = new RootAutomatorClass(global.context,
+                inputDevice === undefined ? null : inputDevice, !nonBlockingForReady);
+            this.__ra__ = ra;
+            var self = this;
+            methods.forEach(function (name) {
+                self[name] = function () { return ra[name].apply(ra, arguments); };
+            });
+        };
+    })();
+
+    global.Java = {
+        type: function (name) {
+            var cls = requireJavaClass(name);
+            if (cls === null) throw new TypeError('找不到 Java 类：' + name);
+            return cls;
+        },
+        /** Java.array('int', [1,2,3])：返回 JS 数组，跨边界时按目标类型转成 Java 数组。 */
+        array: function (typeName, values) {
+            var args = Array.isArray(values) ? values : Array.prototype.slice.call(arguments, 1);
+            return args.slice();
+        }
+    };
+
     // ---- Selector / UiObject (Auto.js 4.x compatible, backed by the Java UiSelector) ----
     // Everything below is a thin wrapper over __aiNativeAutomatorCall: the Java side owns the
     // selector/UiObject/UiObjectCollection instances behind long handles and only exposes the
@@ -6451,6 +6964,12 @@ const char kBootstrapScript[] = R"JS(
     // context 模块：Rhino 给 Android Context；白名单桥只暴露常用目录与包名，
     // 目录以 file-like 对象返回（兼容 getAbsolutePath()/toString() 两种写法）。
     global.context = (function () {
+        // Rhino 里 context 就是 Android Context 对象；QuickJS 通过 Java 互操作同样给真实对象，
+        // 拿不到时回退到白名单版本（只暴露包名与常用目录）。
+        var handle = Number(__aiNativeJavaContextHandle());
+        if (handle) {
+            return javaObjectOf(handle, 'android.content.Context');
+        }
         function contextFile(path) {
             if (path === null) return null;
             return {
@@ -6876,6 +7395,13 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeUiViewAction", nativeUiViewAction, 3);
     installNativeFunction(state->context, global, "__aiNativeIsMainThread", nativeIsMainThread, 0);
     installNativeFunction(state->context, global, "__aiNativeStatusBarColor", nativeStatusBarColor, 1);
+    installNativeFunction(state->context, global, "__aiNativeJavaResolveClass", nativeJavaResolveClass, 1);
+    installNativeFunction(state->context, global, "__aiNativeJavaProbe", nativeJavaProbe, 2);
+    installNativeFunction(state->context, global, "__aiNativeJavaCall", nativeJavaCall, 3);
+    installNativeFunction(state->context, global, "__aiNativeJavaGetField", nativeJavaGetField, 2);
+    installNativeFunction(state->context, global, "__aiNativeJavaSetField", nativeJavaSetField, 3);
+    installNativeFunction(state->context, global, "__aiNativeJavaNew", nativeJavaNew, 2);
+    installNativeFunction(state->context, global, "__aiNativeJavaContextHandle", nativeJavaContextHandle, 0);
     installNativeFunction(state->context, global, "__aiNativeExitSelf", nativeExitSelf, 0);
     installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
     installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);
