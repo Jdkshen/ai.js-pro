@@ -44,12 +44,15 @@ function setOpen(next) {
     if (next === open) return;
     open = next;
     if (open) {
+        // 先小再弹出：系统动画（ViewPropertyAnimator）在渲染线程跑，脚本不逐帧 sleep
+        menu.setAlpha(0.2).setScale(0.85);
         menu.show();
-        menu.setAlpha(0.2).setScale(0.85);      // 先小再放大：无布局重排
-        menu.setAlpha(1).setScale(1);
+        menu.animate({ alpha: 1, scaleX: 1, scaleY: 1 }, 220, 'overshoot');
     } else {
-        menu.setScale(0.9).setAlpha(0.4);
+        menu.animate({ alpha: 0.2, scaleX: 0.85, scaleY: 0.85 }, 160, 'accelerate');
+        sleep(180);
         menu.hide();                            // 原子：返回时窗口已不可见
+        menu.setAlpha(1).setScale(1);
     }
     ball.label.setText(open ? '收' : '球');
 }

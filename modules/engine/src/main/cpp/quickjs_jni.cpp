@@ -1994,6 +1994,65 @@ JSValue nativeFloatyGetContentVisibility(JSContext *context, JSValueConst, int a
     return callHostIntInt(context, "floatyGetContentVisibility", static_cast<int32_t>(windowId));
 }
 
+/** 在主线程同步执行脚本回调（等价 Rhino 的 ui.run(fn)），返回脚本回调的 JSON 结果。 */
+JSValue nativeRunOnMain(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t callbackId = 0;
+    if (argc < 1 || JS_ToInt64(context, &callbackId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "runOnMainThread requires a callback id");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "runJsCallbackOnMain", "(J)Ljava/lang/String;");
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            static_cast<jlong>(callbackId)));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string("{}") : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** 控件对应的真实 android.view.View 句柄（Java 对象句柄，可交给 ObjectAnimator 等系统 API）。 */
+JSValue nativeFloatyViewHandle(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyViewHandle requires windowId, id");
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyViewHandle",
+                                        "(ILjava/lang/String;)J");
+    jstring javaId = toJavaString(env, id);
+    const jlong handle = env->CallLongMethod(state->host, method,
+            static_cast<jint>(windowId), javaId);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewInt64(context, static_cast<int64_t>(handle));
+}
+
+JSValue nativeFloatyRootViewHandle(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyRootViewHandle requires windowId");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyRootViewHandle", "(I)J");
+    const jlong handle = env->CallLongMethod(state->host, method, static_cast<jint>(windowId));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewInt64(context, static_cast<int64_t>(handle));
+}
+
 JSValue nativeFloatySetAlpha(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
@@ -5804,11 +5863,103 @@ const char kBootstrapScript[] = R"JS(
      * - 属性式访问：`view.text` 读、`view.text = 'x'` 写（走同一套 attr）
      * - `click()/longClick()` 无参时直接触发控件动作，传函数时注册监听
      */
+    /**
+     * 在主线程同步执行 fn（等价 Rhino 的 `ui.run(fn)`），并返回其返回值。
+     *
+     * <p>控件与真实 View 的 API（`setPadding`、`ObjectAnimator` 等）只能在主线程调用，
+     * 否则系统会抛 `CalledFromWrongThreadException`；用本函数包一层即可：
+     * {@code runOnMainThread(function () { view.javaView.setPadding(20, 20, 20, 20); })}。
+     */
+    function runOnMainThread(fn) {
+        if (typeof fn !== 'function') throw new TypeError('runOnMainThread 需要函数');
+        var callbackId = global.__aiRegisterCallback(fn);
+        try {
+            var result = JSON.parse(String(__aiNativeRunOnMain(callbackId)));
+            if (result && result.error) throw new Error('主线程执行失败：' + result.error);
+            return result ? result.value : undefined;
+        } finally {
+            global.__aiReleaseCallback(callbackId);
+        }
+    }
+    global.runOnMainThread = runOnMainThread;
+    global.runOnUiThread = runOnMainThread;
+    global.postToMain = runOnMainThread;
+
+    // ---- 系统动画（ViewPropertyAnimator）：不再用逐帧 sleep 做动画 ----
+    var EASING_CLASSES = {
+        linear: 'android.view.animation.LinearInterpolator',
+        accelerate: 'android.view.animation.AccelerateInterpolator',
+        decelerate: 'android.view.animation.DecelerateInterpolator',
+        accelerate_decelerate: 'android.view.animation.AccelerateDecelerateInterpolator',
+        anticipate: 'android.view.animation.AnticipateInterpolator',
+        overshoot: 'android.view.animation.OvershootInterpolator',
+        anticipate_overshoot: 'android.view.animation.AnticipateOvershootInterpolator',
+        bounce: 'android.view.animation.BounceInterpolator',
+        cycle: 'android.view.animation.CycleInterpolator'
+    };
+    /**
+     * 用系统 ViewPropertyAnimator 驱动动画：动画在渲染线程执行，脚本不再逐帧 sleep。
+     * @param {object} javaView android.view.View 的 Java 代理
+     * @param {object} props    { alpha, scaleX, scaleY, x, y, translationX, translationY, rotation… }
+     * @param {number} duration 毫秒（默认 300）
+     * @param {string} easing   linear/accelerate/decelerate/accelerate_decelerate/…/bounce/cycle
+     */
+    function animateJavaView(javaView, props, duration, easing) {
+        if (javaView === undefined || javaView === null || typeof javaView.animate !== 'function') {
+            throw new TypeError('animate 需要可用的 View（控件代理的 javaView 为空）');
+        }
+        if (props === null || props === undefined || typeof props !== 'object') {
+            throw new TypeError('animate(props[, duration[, easing]]) 需要属性对象');
+        }
+        // ViewPropertyAnimator 必须在主线程操作（脚本线程会抛 CalledFromWrongThreadException）。
+        return runOnMainThread(function () {
+            var animator = javaView.animate();
+            animator.setDuration(Math.max(0, Math.round(Number(duration === undefined ? 300 : duration) || 0)));
+            if (easing !== undefined && easing !== null && String(easing) !== '') {
+                var key = String(easing).toLowerCase().replace(/-/g, '_');
+                var className = EASING_CLASSES[key];
+                if (!className) {
+                    throw new Error('未知的缓动函数：' + easing + '（可用：'
+                        + Object.keys(EASING_CLASSES).join('/') + '）');
+                }
+                animator.setInterpolator(new (requireJavaClass(className))());
+            }
+            var animated = 0;
+            for (var property in props) {
+                if (property === 'duration' || property === 'easing') continue;
+                var setter = animator[property];
+                if (typeof setter !== 'function') {
+                    throw new Error('ViewPropertyAnimator 不支持属性：' + property);
+                }
+                setter.call(animator, Number(props[property]));
+                animated++;
+            }
+            animator.start();
+            return animated;
+        });
+    }
+
     function makeFloatyView(windowId, viewId) {
         var attributeCache = Object.create(null);
+        var self = null;
         var view = {
             __windowId: windowId,
             __viewId: viewId,
+            /** 真实 android.view.View 的 Java 代理：可直接交给 ObjectAnimator 等系统 API。 */
+            get javaView() {
+                return javaObjectOf(Number(__aiNativeFloatyViewHandle(windowId, viewId)), 'android.view.View');
+            },
+            /** 系统动画：view.animate({ alpha: 1, scale: 1.2, x: 600 }, 300, 'bounce')。 */
+            animate: function (props, duration, easing) {
+                animateJavaView(this.javaView, props, duration, easing);
+                return self || view;
+            },
+            /** 立即停止当前动画。 */
+            stopAnimation: function () {
+                var javaView = this.javaView;
+                runOnMainThread(function () { javaView.animate().cancel(); });
+                return self || view;
+            },
             click: function (fn) {
                 if (typeof fn === 'function') {
                     addFloatyHandler(windowId, viewId, 'click', fn);
@@ -5882,7 +6033,7 @@ const char kBootstrapScript[] = R"JS(
             setEnabledState: function (enabled) { return view.attr('enabled', !!enabled); }
         };
         // 属性式读写：读取时先看已知方法/缓存过的属性名，再当属性名查一次。
-        return new Proxy(view, {
+        var proxy = new Proxy(view, {
             get: function (target, prop) {
                 if (typeof prop !== 'string') return undefined;
                 if (prop in target) return target[prop];
@@ -5903,6 +6054,8 @@ const char kBootstrapScript[] = R"JS(
                 return true;
             }
         });
+        self = proxy;
+        return proxy;
     }
 
     /** 属性值转成 Java 侧认的字符串（布尔/数字/字符串）。 */
@@ -5990,6 +6143,20 @@ const char kBootstrapScript[] = R"JS(
                 },
                 setContentVisibility: function (visibility) {
                     __aiNativeFloatySetContentVisibility(id, Number(visibility) || 0);
+                    return self || win;
+                },
+                /** 真实根 View 的 Java 代理（整窗动画 / 任意 View API）。 */
+                get javaView() {
+                    return javaObjectOf(Number(__aiNativeFloatyRootViewHandle(id)), 'android.view.View');
+                },
+                /** 整窗系统动画：win.animate({ alpha: 1, scaleX: 1.2 }, 300, 'decelerate')。 */
+                animate: function (props, duration, easing) {
+                    animateJavaView(this.javaView, props, duration, easing);
+                    return self || win;
+                },
+                stopAnimation: function () {
+                    var rootView = this.javaView;
+                    runOnMainThread(function () { rootView.animate().cancel(); });
                     return self || win;
                 },
                 // ---- 窗口级透明度 / 缩放（直接作用于根 View，不重排布局）----
@@ -8008,6 +8175,9 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyIsVisible", nativeFloatyIsVisible, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatySetContentVisibility", nativeFloatySetContentVisibility, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetContentVisibility", nativeFloatyGetContentVisibility, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewHandle", nativeFloatyViewHandle, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyRootViewHandle", nativeFloatyRootViewHandle, 1);
+    installNativeFunction(state->context, global, "__aiNativeRunOnMain", nativeRunOnMain, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatySetAlpha", nativeFloatySetAlpha, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatySetScale", nativeFloatySetScale, 3);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetAlpha", nativeFloatyGetAlpha, 1);

@@ -2343,6 +2343,19 @@ final class QuickJsHostBridge implements AutoCloseable,
         return window == null ? 0 : window.getContentVisibility();
     }
 
+    /** 真实 `android.view.View` 句柄：脚本可把它直接交给系统动画 API（ObjectAnimator 等）。 */
+    public long floatyViewHandle(int windowId, String id) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        android.view.View view = window == null ? null : window.getView(id);
+        return view == null ? 0 : mJavaInterop.putForScript(view);
+    }
+
+    /** 窗口根 View 的句柄（整个悬浮窗的动画目标）。 */
+    public long floatyRootViewHandle(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : mJavaInterop.putForScript(window.getRootView());
+    }
+
     public void floatySetAlpha(int windowId, float alpha) {
         QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
         if (window != null) {
@@ -2772,6 +2785,15 @@ final class QuickJsHostBridge implements AutoCloseable,
                     ((android.widget.TextView) view).setText(text == null ? "" : text);
                 }
             });
+        }
+
+        /** 取真实 View 引用（主线程查找后返回）；找不到返回 null。 */
+        View getView(String id) {
+            return onMain(() -> findViewById(id), null);
+        }
+
+        View getRootView() {
+            return mRoot;
         }
 
         void setViewVisibility(String id, String visibility) {
@@ -3767,6 +3789,56 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
         String result = QuickJsNativeBridge.invokeJsCallback(engineHandle, callbackId, argsJson);
         return result == null ? "{}" : result;
+    }
+
+    /**
+     * 在主线程上同步执行一段脚本回调（等价于 Rhino 的 `ui.run(fn)`）。
+     *
+     * <p>此时引擎线程正阻塞在 native 调用里，因此主线程进入 QuickJS 上下文是安全的；
+     * 控件 / View 的 API 只能在主线程调用（否则抛 CalledFromWrongThreadException），
+     * `runOnMainThread(fn)` 就是给脚本提供的入口。
+     */
+    public String runJsCallbackOnMain(long callbackId) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return invokeJsCallback(callbackId, "[]");
+        }
+        final String[] result = new String[1];
+        final CountDownLatch latch = new CountDownLatch(1);
+        mDialogHandler.post(() -> {
+            try {
+                result[0] = invokeJsCallback(callbackId, "[]");
+            } catch (Throwable error) {
+                result[0] = jsonError(describeError(error));
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                return jsonError("主线程执行超时");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return jsonError("主线程执行被中断");
+        }
+        return result[0] == null ? "{}" : result[0];
+    }
+
+    private static String jsonError(String message) {
+        try {
+            return new JSONObject().put("error", message).toString();
+        } catch (JSONException impossible) {
+            return "{\"error\":\"unknown\"}";
+        }
+    }
+
+    private static String describeError(Throwable error) {
+        Throwable cause = error;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        String message = cause.getMessage();
+        return cause.getClass().getName() + (message == null || message.isEmpty() ? "" : ": " + message);
     }
 
     // ------------------------------------------------------------------

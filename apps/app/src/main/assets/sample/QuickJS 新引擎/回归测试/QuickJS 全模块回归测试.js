@@ -1,6 +1,6 @@
 // @engine quickjs
 // QuickJS 全模块回归测试
-// 用途：198 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
+// 用途：202 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
 // 前置：无（无障碍 / 截图相关用例在缺少权限时自动跳过）
 // 覆盖：Java 互操作 / images / floaty / ui / dialogs / threads / events / engines / http / files / storages / device / app / shell / console 浮窗 / 选择器 / 手势/输入 / timers / continuation / require
 
@@ -448,6 +448,36 @@ assert('floaty 多窗口显隐原子性', (function () {
     var allHidden = !wins[0].isShown() && !wins[1].isShown() && !wins[2].isShown();
     for (var i = 0; i < 3; i++) wins[i].close();
     return allShown && allHidden;
+})());
+assert('runOnMainThread 主线程执行并回传结果', (function () {
+    var result = runOnMainThread(function () { return 6 * 7; });
+    var view = floatyV2.findView('label');
+    var padding = runOnMainThread(function () { view.javaView.setPadding(12, 12, 12, 12); return view.javaView.getPaddingLeft(); });
+    return result === 42 && padding === 12;
+})());
+assert('控件 javaView 是真 android.view.View', (function () {
+    var javaView = floatyV2.findView('label').javaView;
+    return javaView !== undefined && javaView.__className.indexOf('View') >= 0
+        && runOnMainThread(function () { return javaView.getClass().getSimpleName().length > 0; }) === true;
+})());
+assert('控件 animate()（ViewPropertyAnimator）', (function () {
+    var view = floatyV2.findView('label');
+    var chained = view.animate({ alpha: 1, scaleX: 1.2 }, 60, 'linear') === view;
+    sleep(200);
+    var stopped = view.stopAnimation() === view;
+    return chained && stopped;
+})());
+assert('窗口 animate() + 未知属性报错', (function () {
+    var chained = floatyV2.animate({ alpha: 0.8, scaleX: 1.05 }, 60, 'decelerate') === floatyV2;
+    sleep(200);
+    var failed = false;
+    try {
+        floatyV2.animate({ __no_such_prop__: 1 }, 60);
+    } catch (e) {
+        failed = String(e.message).indexOf('不支持属性') >= 0;
+    }
+    floatyV2.setAlpha(1).setScale(1, 1);
+    return chained && failed;
 })());
 floatyV2.close();
 sleep(300);
