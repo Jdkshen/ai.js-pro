@@ -1,6 +1,6 @@
 // @engine quickjs
 // QuickJS 全模块回归测试
-// 用途：209 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
+// 用途：213 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
 // 前置：无（无障碍 / 截图相关用例在缺少权限时自动跳过）
 // 覆盖：Java 互操作 / images / floaty / ui / dialogs / threads / events / engines / http / files / storages / device / app / shell / console 浮窗 / 选择器 / 手势/输入 / timers / continuation / require
 
@@ -533,6 +533,47 @@ assert('worker 结束后主窗口仍存活（引擎销毁不误关）', floatyV3
 floatyV3.close();
 sleep(250);
 assert('close 后窗口不存在', floatyV3.exists() === false && floaty.exists(floatyV3.id) === false);
+
+// --- 悬浮窗用户反馈修复：控件直接当 Java 参数 / 窗口跨线程传参 / 尺寸读取 ---
+var floatyV4 = floaty.window(
+    '<vertical padding="8"><text id="c" w="120px" h="40px" text="x" textSize="14sp"/></vertical>',
+    { x: 200, y: 300 });
+assert('控件代理可直接作为 Java 参数（ObjectAnimator）', (function () {
+    importClass(android.animation.ObjectAnimator);
+    var ok = runOnMainThread(function () {
+        var animator = ObjectAnimator.ofFloat(floatyV4.c, 'alpha', 1, 0.2);
+        animator.setDuration(100);
+        animator.start();
+        return true;
+    });
+    sleep(200);
+    return ok === true && floatyV4.c.__javaHandle > 0;
+})());
+assert('objectAnimator / animateView 一行式', (function () {
+    var a = objectAnimator(floatyV4.c, 'alpha', 0.2, 1, 100);
+    var b = animateView(floatyV4, { alpha: 0.9 }, 100, 'linear') !== undefined;
+    sleep(250);
+    floatyV4.setAlpha(1);
+    return a === true && b;
+})());
+assert('窗口代理可放进 threads 参数（__args.win）', (function () {
+    var worker = threads.start(function () {
+        __args.win.setPosition(__args.x, __args.y);
+        return { x: __args.win.getX(), y: __args.win.getY() };
+    }, { win: floatyV4, x: 640, y: 880 });
+    var result = worker.waitForResult(6000);
+    sleep(200);
+    return result !== null && result !== undefined && result.x === 640 && result.y === 880
+        && floatyV4.getX() === 640 && floatyV4.getY() === 880;
+})());
+assert('控件/窗口尺寸读取不再为 0', (function () {
+    var widget = floatyV4.c.attr('width');
+    floatyV4.setSize(500, 300);
+    return Number(String(widget).replace('px', '')) === 120
+        && floatyV4.getWidth() === 500 && floatyV4.getHeight() === 300;
+})());
+floatyV4.close();
+sleep(250);
 
 var uiLayoutId = ui.layout('<vertical><text id="title" text="ui-title" textSize="18"/>'
     + '<button id="go" text="go"/></vertical>');

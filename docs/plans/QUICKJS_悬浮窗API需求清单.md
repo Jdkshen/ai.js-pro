@@ -15,18 +15,19 @@
 | P0-1 窗口 `setVisibility`/`show`/`hide` | ✅ 批A 已完成 | `win.show()/hide()/setVisibility(v)/isShown()`；隐藏走 `removeViewImmediate`（窗口真正离屏，不再吃触摸），显示重新 attach，同步返回保证原子 |
 | P0-2 出生在 (0,0) 闪现 | ✅ 批A 已完成 | `floaty.window(xml, { x, y, visible: false })`：创建阶段写好 `mParams.x/y`，`visible:false` 时先构建布局不上屏，`show()` 才挂载；`getX()` 创建后即返回目标坐标 |
 | P0-3 多窗口显隐非原子 | ✅ 批A 已完成 | 窗口级显隐同步（调用返回即生效）；另加最快路径 `win.setContentVisible(bool)`（只切根 View，实测 20 次 0ms） |
-| P1-1 原生动画不可用 | ✅ 批B 已完成 | ① `view.javaView` 暴露真实 `android.view.View` 句柄（可直接交给 `ObjectAnimator.ofFloat(view.javaView, "alpha", 1, 0)`）；② `view.animate({alpha,scale,x,y,…}, 300, 'bounce')` / `win.animate(...)`（ViewPropertyAnimator，渲染线程驱动）；③ 新增 `runOnMainThread(fn)`（等价 Rhino 的 `ui.run`）解决 View API 只能在主线程调用的问题 |
+| P1-1 原生动画不可用 | ✅ 批B + 补丁 已完成 | ① `view.javaView` 暴露真实 `android.view.View` 句柄；② **控件/窗口代理自带 `__javaHandle`**，`ObjectAnimator.ofFloat(win.c, "alpha", 1, 0)` 不再报“无法把 [object Object] 作为 Java 参数传递”（Animator 需要 Looper 线程，用 `runOnMainThread` 包一层，或用一行式 `objectAnimator(win.c,'alpha',1,0,300)` / `animateView(win.c,{alpha:1},300,'bounce')`）；③ `view.animate(props,duration,easing)` / `win.animate(...)` |
 | P1-2 窗口 alpha/scale | ✅ 批A 已完成 | `setAlpha/getAlpha`、`setScale(sx,sy)`、`setScaleX/Y`：直接作用于根 View，不触发布局重排 |
-| P2-1 XML 单位不统一 | ✅ 批D 已完成（文档口径） | 与 Rhino 完全一致（同一个 `DynamicLayoutInflater`）：`w/h` 不带单位 = **dp**，`margin*/padding*` 按 **px**；已在 `QUICKJS_ENGINE.md` 与两个悬浮窗样例头部标注「尺寸建议显式写 px」。不改解析行为：改动会同时影响 Rhino 存量脚本 |
+| P2-1 XML 单位不统一 | ✅ 批D + 补丁 已完成（文档口径） | 与 Rhino 完全一致（同一个 `DynamicLayoutInflater`）：`w/h` 不带单位 = **dp**，`margin*/padding*` 按 **px**；**另外修了读取：`attr('width'/'height')` 与 `win.getWidth/getHeight` 在布局未完成时不再返回 0**（回退 layoutParams / setSize 值），已写进文档与样例 |
 | P2-2 `setPosition` 后 `getX()` 旧值 | ✅ 批A 已完成 | `getX()/getY()` 返回最近一次设定值（立即）；`getX(true)/getRealX()` 读主线程 flush 后的生效值 |
-| P2-3 子线程操作窗口 | ✅ 批C 已完成 | 窗口注册表改为**进程级**：`floaty.windowById(id)`/`floaty.getWindow(id)` 可在 worker（独立引擎）里拿到代理并操作（`threads.start(fn, {winId: win.id})`）；另加 `win.post(fn[, delay])`（主线程同步执行 + 回传结果），引擎销毁只关自己创建的窗口（`closeOwnedFloatyWindows`） |
+| P2-3 子线程操作窗口 | ✅ 批C + 补丁 已完成 | 窗口注册表改为**进程级**；**原始写法 `threads.start(fn, {win: win})` + `__args.win.setPosition(...)` 现在直接可用**（参数序列化时窗口转成 `{__floatyWindowId}`，worker 侧自动还原成窗口代理）；另加 `floaty.windowById/getWindow(id)`、`win.post(fn[, delay])`；引擎销毁只关自己创建的窗口 |
 | P3-1 z-order / 触摸穿透 | ✅ 批D 已完成（穿透）/ ⚠️ 层级受系统限制 | `setTouchable(false)` → 真正加 `FLAG_NOT_TOUCHABLE`（触摸穿透到下层，与 Auto.js 语义一致，默认 touchable=true）；拖动与触摸分离：`setDraggable(true)` / `setAdjustEnabled(true)`；overlay 窗口 z-order 由创建顺序与系统决定，`TYPE_APPLICATION_OVERLAY` 无法任意插层，已在文档说明 |
 | P3-2 生命周期事件 | ✅ 批C 已完成 | `win.on('attached'/'detached')`（窗口上屏/离屏，由创建它的引擎接收）；`win.on('close', fn)` 等价 `onClose`；配套 `floaty.exists(id)` / `win.exists()` / `win.id` |
 | MCP-1 `list_engine_api` envelope | ✅ 批C 已完成 | `McpTools.listEngineApi/probeEngineApi` 补上 `toolJson(...)`（标准 MCP tool result envelope），官方 Kotlin SDK 不再报 "Cannot determine RequestResult type from JSON: [engine, count, items]" |
 
 > 批A 真机验证（Mi8 `ce4d2bdb`）：初始坐标 600/400 ✅、`visible:false` 不显示 ✅、显示前 `findView` 可用 ✅、show/hide/setVisibility 往返 ✅、`setPosition` 后 `getX()` 立即 300/500 ✅、`getX(true)` 生效值 ✅、alpha/scale 链式 ✅、3 窗口显隐原子 ✅、`setContentVisible` 20 次 0ms ✅。
 > 批B 真机验证：`javaView` = `JsTextView` / 根 View = `FrameLayout` ✅、`runOnMainThread` 内调 View API ✅、`ObjectAnimator.ofFloat(view.javaView, "alpha", 1, 0.2)` 启动成功 ✅、`view.animate(..., 'decelerate')` 18ms ✅、`win.animate(..., 'bounce'/'linear')` ✅、链式与 `stopAnimation` ✅、未知属性/缓动报错清晰 ✅。
-> 回归：QuickJS 全模块回归 **209 项全绿**（批A 新增 10 项 + 批B 新增 4 项 + 批C 新增 7 项悬浮窗断言）。
+> 回归：QuickJS 全模块回归 **213 项全绿**（批A/B/C + 用户的 P1-1/P2-1/P2-3 补丁共 +14 项悬浮窗断言）。
+> 补丁真机验证（Mi8）：`ObjectAnimator.ofFloat(win.c,'alpha',1,0.2)` ✅、`objectAnimator()`/`animateView()` ✅、`threads.start(fn,{win:win})` + `__args.win.setPosition(600,900)` ✅（主脚本 `getX()` 同步看到 600）、`attr('width')` = 120px（不再 0）✅、`setSize(500,300)` 后 `getWidth()` = 500x300 ✅。
 > 批C 真机验证：`floaty.exists`/`win.exists` ✅、`attached/detached` 事件序列 `attached,detached,attached` ✅、`win.post` 返回值 6 / 带延迟 `delayed-ok` ✅、**worker 线程把主脚本窗口从 200 移到 240（主脚本 `getX()` 同步看到 240）** ✅、`getWindow(不存在)` 报错清晰 ✅、worker 结束后主窗口仍存活 ✅。
 
 ---

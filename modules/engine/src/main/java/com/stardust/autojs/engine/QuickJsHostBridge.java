@@ -1536,7 +1536,9 @@ final class QuickJsHostBridge implements AutoCloseable,
             if (argsJson != null && !argsJson.isEmpty() && !"null".equals(argsJson)) {
                 // Escape single quotes in JSON for embedding
                 String escaped = argsJson.replace("\\", "\\\\").replace("'", "\\'");
-                argsInit = "var __args = JSON.parse('" + escaped + "');\n";
+                argsInit = "var __args = JSON.parse('" + escaped + "');\n"
+                        // 窗口代理在父脚本里被序列化成 {__floatyWindowId:n}，这里还原成可操作的窗口对象
+                        + "if (typeof __aiReviveFloatyArgs === 'function') { __args = __aiReviveFloatyArgs(__args); }\n";
             } else {
                 argsInit = "var __args = null;\n";
             }
@@ -2449,6 +2451,9 @@ final class QuickJsHostBridge implements AutoCloseable,
         private float mAlpha = 1f;
         private float mScaleX = 1f;
         private float mScaleY = 1f;
+        /** setSize/创建配置显式指定的尺寸（超过 0 时 getWidth/getHeight 直接返回它，不等重排）。 */
+        private volatile int mRequestedWidth;
+        private volatile int mRequestedHeight;
         private volatile int mContentVisibility = android.view.View.VISIBLE;
         /** 是否能接收触摸（false = FLAG_NOT_TOUCHABLE，触摸穿透到下层，与 Auto.js 语义一致）。 */
         private volatile boolean mTouchable;
@@ -2554,6 +2559,12 @@ final class QuickJsHostBridge implements AutoCloseable,
             mParams.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
             mParams.x = c.optInt("x", 0);
             mParams.y = c.optInt("y", 0);
+            if (c.optInt("width", 0) > 0) {
+                mRequestedWidth = c.optInt("width", 0);
+            }
+            if (c.optInt("height", 0) > 0) {
+                mRequestedHeight = c.optInt("height", 0);
+            }
             applyTouchableFlag();
         }
 
@@ -2759,9 +2770,11 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
             if (c.has("width")) {
                 mParams.width = c.optInt("width", mParams.width);
+                mRequestedWidth = mParams.width;
             }
             if (c.has("height")) {
                 mParams.height = c.optInt("height", mParams.height);
+                mRequestedHeight = mParams.height;
             }
             if (c.has("alpha")) {
                 mAlpha = Math.max(0f, Math.min(1f, (float) c.optDouble("alpha", mAlpha)));
@@ -3060,11 +3073,26 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
 
         int getWindowWidth() {
-            return onMain(() -> mRoot.getWidth(), 0);
+            if (mRequestedWidth > 0) {
+                return mRequestedWidth;
+            }
+            int measured = onMain(() -> mRoot.getWidth(), 0);
+            if (measured > 0) {
+                return measured;
+            }
+            // 还没完成布局时退回 XML/窗口参数里的期望宽度（避免读出 0）。
+            return mParams != null && mParams.width > 0 ? mParams.width : measured;
         }
 
         int getWindowHeight() {
-            return onMain(() -> mRoot.getHeight(), 0);
+            if (mRequestedHeight > 0) {
+                return mRequestedHeight;
+            }
+            int measured = onMain(() -> mRoot.getHeight(), 0);
+            if (measured > 0) {
+                return measured;
+            }
+            return mParams != null && mParams.height > 0 ? mParams.height : measured;
         }
 
         private interface ViewCallback<T> {
@@ -3130,12 +3158,31 @@ final class QuickJsHostBridge implements AutoCloseable,
             case "checked":
                 return view instanceof android.widget.CompoundButton
                         ? String.valueOf(((android.widget.CompoundButton) view).isChecked()) : null;
-            case "width": return String.valueOf(view.getWidth());
-            case "height": return String.valueOf(view.getHeight());
+            case "width": return String.valueOf(viewSize(view, true));
+            case "height": return String.valueOf(viewSize(view, false));
             case "id": return String.valueOf(view.getId());
             case "className": return view.getClass().getName();
             default: return null;
         }
+    }
+
+    /** 控件尺寸：布局已完成时用实测值，未完成时退回 layoutParams 里的期望值。 */
+    static int viewSize(View view, boolean width) {
+        if (view == null) {
+            return 0;
+        }
+        int measured = width ? view.getWidth() : view.getHeight();
+        if (measured > 0) {
+            return measured;
+        }
+        android.view.ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params != null) {
+            int requested = width ? params.width : params.height;
+            if (requested > 0) {
+                return requested;
+            }
+        }
+        return measured;
     }
 
     static boolean writeViewAttribute(View view, String name, String value,

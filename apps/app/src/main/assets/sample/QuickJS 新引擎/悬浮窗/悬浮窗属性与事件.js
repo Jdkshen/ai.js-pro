@@ -34,6 +34,9 @@ win.hit.on('click', function () {
     clicks++;
     win.info.setText('点击 ' + clicks + ' 次');
     console.log('按钮点击 ' + clicks);
+    // 原生动画：控件代理可以直接当 Java 参数，ObjectAnimator 一行式（内部自动走主线程）
+    objectAnimator(win.info, 'alpha', 1, 0.3, 120);
+    animateView(win.info, { alpha: 1, scaleX: 1.1 }, 160, 'overshoot');
 });
 win.hit.on('touch', function (event) {
     console.log('触摸事件: ' + JSON.stringify(event));

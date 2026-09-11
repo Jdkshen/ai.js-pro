@@ -5909,6 +5909,27 @@ const char kBootstrapScript[] = R"JS(
     global.runOnUiThread = runOnMainThread;
     global.postToMain = runOnMainThread;
 
+    /** 通用动画入口：控件代理或窗口都能用（内部自动走主线程）。 */
+    global.animateView = function (viewOrWindow, props, duration, easing) {
+        var target = viewOrWindow && viewOrWindow.javaView ? viewOrWindow.javaView : viewOrWindow;
+        animateJavaView(target, props, duration, easing);
+        return viewOrWindow;
+    };
+    /**
+     * ObjectAnimator 一行式（内部自动在主线程创建/启动）：
+     * objectAnimator(win.c, 'alpha', 1, 0, 300)；直接写 ObjectAnimator.ofFloat 时需自己包 runOnMainThread。
+     */
+    global.objectAnimator = function (viewOrWindow, property, from, to, duration) {
+        var target = viewOrWindow && viewOrWindow.javaView ? viewOrWindow.javaView : viewOrWindow;
+        return runOnMainThread(function () {
+            var ObjectAnimator = requireJavaClass('android.animation.ObjectAnimator');
+            var animator = ObjectAnimator.ofFloat(target, String(property), Number(from), Number(to));
+            animator.setDuration(Math.max(0, Math.round(Number(duration === undefined ? 300 : duration) || 0)));
+            animator.start();
+            return true;
+        });
+    };
+
     // ---- 系统动画（ViewPropertyAnimator）：不再用逐帧 sleep 做动画 ----
     var EASING_CLASSES = {
         linear: 'android.view.animation.LinearInterpolator',
@@ -5973,6 +5994,15 @@ const char kBootstrapScript[] = R"JS(
             get javaView() {
                 return javaObjectOf(Number(__aiNativeFloatyViewHandle(windowId, viewId)), 'android.view.View');
             },
+            /**
+             * 让控件代理本身就能当 Java 参数用：
+             * ObjectAnimator.ofFloat(win.c, 'alpha', 1, 0) 不会再报“无法把 [object Object] 作为 Java 参数传递”。
+             */
+            get __javaHandle() {
+                return Number(__aiNativeFloatyViewHandle(windowId, viewId));
+            },
+            /** 供 threads 参数序列化识别（窗口代理也带这个标记）。 */
+            __floatyView: true,
             /** 系统动画：view.animate({ alpha: 1, scale: 1.2, x: 600 }, 300, 'bounce')。 */
             animate: function (props, duration, easing) {
                 animateJavaView(this.javaView, props, duration, easing);
@@ -6136,8 +6166,7 @@ const char kBootstrapScript[] = R"JS(
      */
     function makeFloatyWindowProxy(id, cfg) {
             var onClose = null;
-            var exitOnClose = false;
-            var viewCache = new Map();
+            var exitOnClose = false;            var viewCache = new Map();
             // 坐标/尺寸缓存：setPosition 之后 getX() 立即可用（真实上屏仍由主线程完成，
             // 需要确认已生效时用 getX(true) / getRealX()）。
             var pos = {
@@ -6151,6 +6180,12 @@ const char kBootstrapScript[] = R"JS(
             var self = null;
             var win = {
                 id: id,
+                /** threads 参数序列化用：窗口代理在 worker 里会被还原成同样的窗口对象。 */
+                __floatyWindow: true,
+                /** 根 View 句柄：窗口代理也能直接当 Java 参数用（ObjectAnimator.ofFloat(win, …)）。 */
+                get __javaHandle() {
+                    return Number(__aiNativeFloatyRootViewHandle(id));
+                },
                 setSize: function (width, height) {
                     pos.width = Math.max(0, Number(width) || 0);
                     pos.height = Math.max(0, Number(height) || 0);
@@ -6618,6 +6653,39 @@ const char kBootstrapScript[] = R"JS(
     });
 
     // ---- threads module (one QuickJS engine per worker) ----
+    /**
+     * worker 参数序列化：窗口代理（`{win: win}`）会变成 `{__floatyWindowId: n}`，
+     * worker 侧由 __aiReviveFloatyArgs 还原成同 id 的窗口代理，脚本写法不用改。
+     */
+    function threadArgsJson(args) {
+        if (args === undefined) return '';
+        return JSON.stringify(args, function (key, value) {
+            if (value && value.__floatyWindow === true && value.id !== undefined) {
+                return { __floatyWindowId: Number(value.id) };
+            }
+            return value;
+        });
+    }
+    /** worker 侧：把 `{__floatyWindowId}` 还原成窗口代理（递归处理对象/数组）。 */
+    global.__aiReviveFloatyArgs = function revive(value) {
+        if (value === null || value === undefined) return value;
+        if (typeof value !== 'object') return value;
+        if (value.__floatyWindowId !== undefined) {
+            try {
+                return floaty.getWindow(Number(value.__floatyWindowId));
+            } catch (error) {
+                return null;   // 窗口已关闭
+            }
+        }
+        if (Array.isArray(value)) {
+            for (var i = 0; i < value.length; i++) value[i] = revive(value[i]);
+            return value;
+        }
+        for (var key in value) {
+            if (Object.prototype.hasOwnProperty.call(value, key)) value[key] = revive(value[key]);
+        }
+        return value;
+    };
     var workerHandles = new Set();
     function makeThread(engine) {
         var thread = {
@@ -6671,7 +6739,7 @@ const char kBootstrapScript[] = R"JS(
             if (typeof task === 'function') source = '(' + String(task) + ')();';
             else if (typeof task === 'string') source = task;
             else throw new TypeError('threads.start requires a function or script string');
-            var argsJson = args !== undefined ? JSON.stringify(args) : '';
+            var argsJson = threadArgsJson(args);
             var handle = Number(__aiNativeThreadsExec('QuickJS-Thread', source, argsJson));
             if (handle < 0) throw new Error('Unable to start worker thread');
             var engine = makeEngineHandle({ handle: handle, source: 'QuickJS-Thread' });
@@ -6688,7 +6756,7 @@ const char kBootstrapScript[] = R"JS(
          */
         exec: function (name, source, args) {
             if (typeof source !== 'string') throw new TypeError('threads.exec requires a script string');
-            var argsJson = args !== undefined ? JSON.stringify(args) : '';
+            var argsJson = threadArgsJson(args);
             var handle = Number(__aiNativeThreadsExec(
                     String(name || 'worker'), source, argsJson));
             if (handle < 0) throw new Error('Unable to start worker thread');
