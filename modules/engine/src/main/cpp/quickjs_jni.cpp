@@ -1941,6 +1941,131 @@ JSValue nativeFloatyGetY(JSContext *context, JSValueConst, int argc, JSValueCons
     return callHostIntInt(context, "floatyGetY", static_cast<int32_t>(windowId));
 }
 
+/** 窗口（整个悬浮窗）显隐：原子生效，返回操作后是否可见。 */
+JSValue nativeFloatySetVisibility(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    int32_t visibility = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0 ||
+        JS_ToInt32(context, &visibility, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "floatySetVisibility requires windowId, visibility");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatySetVisibility", "(II)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method,
+            static_cast<jint>(windowId), static_cast<jint>(visibility));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeFloatyIsVisible(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyIsVisible requires windowId");
+    }
+    return callHostBoolInt(context, "floatyIsVisible", static_cast<int32_t>(windowId));
+}
+
+/** 只切根 View 可见性（最快路径）。 */
+JSValue nativeFloatySetContentVisibility(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    int32_t visibility = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0 ||
+        JS_ToInt32(context, &visibility, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "floatySetContentVisibility requires windowId, visibility");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatySetContentVisibility", "(II)V");
+    env->CallVoidMethod(state->host, method, static_cast<jint>(windowId),
+                        static_cast<jint>(visibility));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeFloatyGetContentVisibility(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyGetContentVisibility requires windowId");
+    }
+    return callHostIntInt(context, "floatyGetContentVisibility", static_cast<int32_t>(windowId));
+}
+
+JSValue nativeFloatySetAlpha(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    double alpha = 1.0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0 ||
+        JS_ToFloat64(context, &alpha, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "floatySetAlpha requires windowId, alpha");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatySetAlpha", "(IF)V");
+    env->CallVoidMethod(state->host, method, static_cast<jint>(windowId),
+                        static_cast<jfloat>(alpha));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeFloatySetScale(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    double scaleX = 1.0;
+    double scaleY = 1.0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0 ||
+        JS_ToFloat64(context, &scaleX, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "floatySetScale requires windowId, scaleX[, scaleY]");
+    }
+    if (argc > 2 && JS_ToFloat64(context, &scaleY, argv[2]) < 0) {
+        return JS_EXCEPTION;
+    } else if (argc < 3) {
+        scaleY = scaleX;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatySetScale", "(IFF)V");
+    env->CallVoidMethod(state->host, method, static_cast<jint>(windowId),
+                        static_cast<jfloat>(scaleX), static_cast<jfloat>(scaleY));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeFloatyGetAlpha(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyGetAlpha requires windowId");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyGetAlpha", "(I)F");
+    const jfloat result = env->CallFloatMethod(state->host, method, static_cast<jint>(windowId));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewFloat64(context, static_cast<double>(result));
+}
+
+/** 主线程 flush 后再读的真实坐标（setPosition 之后想确认已生效时用）。 */
+JSValue nativeFloatyGetRealX(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyGetRealX requires windowId");
+    }
+    return callHostIntInt(context, "floatyGetRealX", static_cast<int32_t>(windowId));
+}
+
+JSValue nativeFloatyGetRealY(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyGetRealY requires windowId");
+    }
+    return callHostIntInt(context, "floatyGetRealY", static_cast<int32_t>(windowId));
+}
+
 JSValue nativeFloatyViewTouch(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t windowId = 0;
     if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
@@ -5814,18 +5939,81 @@ const char kBootstrapScript[] = R"JS(
             var onClose = null;
             var exitOnClose = false;
             var viewCache = new Map();
+            // 坐标/尺寸缓存：setPosition 之后 getX() 立即可用（真实上屏仍由主线程完成，
+            // 需要确认已生效时用 getX(true) / getRealX()）。
+            var pos = {
+                x: Number(cfg.x) || 0,
+                y: Number(cfg.y) || 0,
+                width: Number(cfg.width) || 0,
+                height: Number(cfg.height) || 0
+            };
+            var scale = { x: 1, y: 1 };
+            // self 在代理创建后指向代理本身，保证 setXxx(...) 的返回值可以继续链式调用。
+            var self = null;
             var win = {
                 id: id,
                 setSize: function (width, height) {
-                    __aiNativeFloatyUpdate(id, JSON.stringify({ width: Math.max(0, Number(width) || 0), height: Math.max(0, Number(height) || 0) }));
+                    pos.width = Math.max(0, Number(width) || 0);
+                    pos.height = Math.max(0, Number(height) || 0);
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ width: pos.width, height: pos.height }));
+                    return self || win;
                 },
                 setPosition: function (x, y) {
-                    __aiNativeFloatyUpdate(id, JSON.stringify({ x: Math.round(Number(x) || 0), y: Math.round(Number(y) || 0) }));
+                    pos.x = Math.round(Number(x) || 0);
+                    pos.y = Math.round(Number(y) || 0);
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ x: pos.x, y: pos.y }));
+                    return self || win;
                 },
-                getX: function () { return Number(__aiNativeFloatyGetX(id)); },
-                getY: function () { return Number(__aiNativeFloatyGetY(id)); },
+                /** getX() 返回最近一次设定的坐标；getX(true) 读主线程已生效的真实坐标。 */
+                getX: function (real) {
+                    return real ? Number(__aiNativeFloatyGetRealX(id)) : pos.x;
+                },
+                getY: function (real) {
+                    return real ? Number(__aiNativeFloatyGetRealY(id)) : pos.y;
+                },
+                getRealX: function () { return Number(__aiNativeFloatyGetRealX(id)); },
+                getRealY: function () { return Number(__aiNativeFloatyGetRealY(id)); },
                 getWidth: function () { return Number(__aiNativeFloatyGetWidth(id)); },
                 getHeight: function () { return Number(__aiNativeFloatyGetHeight(id)); },
+                // ---- 窗口级显隐（原子，返回后即生效）----
+                show: function () { return !!__aiNativeFloatySetVisibility(id, 0); },
+                hide: function () { return !!__aiNativeFloatySetVisibility(id, 8); },
+                setVisibility: function (visibility) {
+                    return !!__aiNativeFloatySetVisibility(id, Number(visibility) || 0);
+                },
+                isShown: function () { return !!__aiNativeFloatyIsVisible(id); },
+                isVisible: function () { return !!__aiNativeFloatyIsVisible(id); },
+                /** 只切根 View 可见性（最快，~0ms），适合高频开合菜单；不会释放窗口。 */
+                setContentVisible: function (visible) {
+                    __aiNativeFloatySetContentVisibility(id, visible === false || Number(visible) === 8 || Number(visible) === 4 ? 8 : 0);
+                    return self || win;
+                },
+                setContentVisibility: function (visibility) {
+                    __aiNativeFloatySetContentVisibility(id, Number(visibility) || 0);
+                    return self || win;
+                },
+                // ---- 窗口级透明度 / 缩放（直接作用于根 View，不重排布局）----
+                setAlpha: function (alpha) {
+                    __aiNativeFloatySetAlpha(id, Math.max(0, Math.min(1, Number(alpha))));
+                    return self || win;
+                },
+                getAlpha: function () { return Number(__aiNativeFloatyGetAlpha(id)); },
+                setScale: function (scaleX, scaleY) {
+                    scale.x = Number(scaleX);
+                    scale.y = scaleY === undefined ? Number(scaleX) : Number(scaleY);
+                    __aiNativeFloatySetScale(id, scale.x, scale.y);
+                    return self || win;
+                },
+                setScaleX: function (scaleX) {
+                    scale.x = Number(scaleX);
+                    __aiNativeFloatySetScale(id, scale.x, scale.y);
+                    return self || win;
+                },
+                setScaleY: function (scaleY) {
+                    scale.y = Number(scaleY);
+                    __aiNativeFloatySetScale(id, scale.x, scale.y);
+                    return self || win;
+                },
                 findView: function (viewId) {
                     viewId = String(viewId);
                     if (!__aiNativeFloatyViewExists(id, viewId)) return null;
@@ -5833,25 +6021,28 @@ const char kBootstrapScript[] = R"JS(
                 },
                 setText: function (text) {
                     __aiNativeFloatyUpdate(id, JSON.stringify({ text: String(text == null ? '' : text) }));
+                    return self || win;
                 },
                 setBackgroundColor: function (color) {
                     __aiNativeFloatyUpdate(id, JSON.stringify({ backgroundColor: String(color) }));
+                    return self || win;
                 },
                 setTouchable: function (touchable) {
                     __aiNativeFloatyUpdate(id, JSON.stringify({ touchable: !!touchable }));
+                    return self || win;
                 },
                 setAdjustEnabled: function (enabled) {
                     __aiNativeFloatySetAdjustable(id, !!enabled);
-                    return win;
+                    return self || win;
                 },
                 isAdjustEnabled: function () { return !!__aiNativeFloatyIsAdjustable(id); },
                 requestFocus: function () {
                     __aiNativeFloatySetWindowFocusable(id, true);
-                    return win;
+                    return self || win;
                 },
                 disableFocus: function () {
                     __aiNativeFloatySetWindowFocusable(id, false);
-                    return win;
+                    return self || win;
                 },
                 resize: function (width, height) {
                     win.setSize(width, height);
@@ -5859,11 +6050,11 @@ const char kBootstrapScript[] = R"JS(
                 onClose: function (fn) {
                     if (typeof fn !== 'function') throw new TypeError('listener must be a function');
                     onClose = fn;
-                    return win;
+                    return self || win;
                 },
                 exitOnClose: function () {
                     exitOnClose = true;
-                    return win;
+                    return self || win;
                 },
                 close: function () {
                     if (onClose) onClose(win);
@@ -5872,7 +6063,7 @@ const char kBootstrapScript[] = R"JS(
                 }
             };
             // window.<id> 解析成控件代理；不存在的 id 返回 undefined（与 Rhino 的 findView 回退一致）。
-            return new Proxy(win, {
+            var proxy = new Proxy(win, {
                 get: function (target, prop) {
                     if (typeof prop !== 'string') return undefined;
                     if (prop in target) return target[prop];
@@ -5888,9 +6079,11 @@ const char kBootstrapScript[] = R"JS(
                     return cached;
                 }
             });
+            self = proxy;
+            return proxy;
         },
-        rawWindow: function (config) {
-            return floaty.window(config);
+        rawWindow: function (config, extra) {
+            return floaty.window(config, extra);
         },
         closeAll: function () {
             __aiNativeFloatyCloseAll();
@@ -7811,6 +8004,15 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyIsAdjustable", nativeFloatyIsAdjustable, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetX", nativeFloatyGetX, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetY", nativeFloatyGetY, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatySetVisibility", nativeFloatySetVisibility, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyIsVisible", nativeFloatyIsVisible, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatySetContentVisibility", nativeFloatySetContentVisibility, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetContentVisibility", nativeFloatyGetContentVisibility, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatySetAlpha", nativeFloatySetAlpha, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatySetScale", nativeFloatySetScale, 3);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetAlpha", nativeFloatyGetAlpha, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetRealX", nativeFloatyGetRealX, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetRealY", nativeFloatyGetRealY, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewTouch", nativeFloatyViewTouch, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewKey", nativeFloatyViewKey, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatySetWindowFocusable", nativeFloatySetWindowFocusable, 2);

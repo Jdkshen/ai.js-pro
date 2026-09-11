@@ -1,6 +1,6 @@
 // @engine quickjs
 // QuickJS 全模块回归测试
-// 用途：188 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
+// 用途：198 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
 // 前置：无（无障碍 / 截图相关用例在缺少权限时自动跳过）
 // 覆盖：Java 互操作 / images / floaty / ui / dialogs / threads / events / engines / http / files / storages / device / app / shell / console 浮窗 / 选择器 / 手势/输入 / timers / continuation / require
 
@@ -398,6 +398,59 @@ assert('floaty 控件 enabled/visibility 属性', (function () {
 })());
 floatyWin.close();
 sleep(400);
+
+// --- 悬浮窗窗口级能力（显隐 / 初始坐标 / alpha·scale / 坐标同步）---
+var floatyV2 = floaty.window('<frame><text id="label" text="v2" textSize="14sp"/></frame>',
+    { x: 321, y: 432, visible: false });
+assert('floaty 初始坐标（不再出生在 0,0）', floatyV2.getX() === 321 && floatyV2.getY() === 432);
+assert('floaty visible:false 创建后不显示', floatyV2.isShown() === false);
+assert('floaty 显示前 findView 可用', floatyV2.findView('label') !== null);
+assert('floaty 窗口显隐（show/hide/setVisibility）', (function () {
+    var shown = floatyV2.show() && floatyV2.isShown() === true;
+    var hidden = floatyV2.hide() && floatyV2.isShown() === false;
+    var again = floatyV2.setVisibility(0) && floatyV2.isShown() === true;
+    var off = floatyV2.setVisibility(8) && floatyV2.isShown() === false;
+    return shown && hidden && again && off;
+})());
+assert('floaty 显隐后真实坐标正确', (function () {
+    floatyV2.setVisibility(0);
+    return floatyV2.getX(true) === 321 && floatyV2.getY(true) === 432;
+})());
+assert('floaty setPosition 后 getX 立即可用', (function () {
+    var chained = floatyV2.setPosition(120, 240) === floatyV2;
+    return chained && floatyV2.getX() === 120 && floatyV2.getY() === 240;
+})());
+assert('floaty getX(true) 读到生效值', (function () {
+    sleep(120);
+    return floatyV2.getX(true) === 120 && floatyV2.getY(true) === 240;
+})());
+assert('floaty 窗口 alpha/scale + 链式', (function () {
+    var alpha = floatyV2.setAlpha(0.5).getAlpha();
+    var scaled = floatyV2.setScale(1.2, 1.5) === floatyV2 && floatyV2.setScaleX(1) === floatyV2;
+    var sized = floatyV2.setSize(300, 150) === floatyV2;
+    return Math.abs(alpha - 0.5) < 0.01 && scaled && sized;
+})());
+assert('floaty setContentVisible 快速显隐', (function () {
+    var start = Date.now();
+    for (var i = 0; i < 10; i++) floatyV2.setContentVisible(i % 2 === 0);
+    floatyV2.setContentVisible(true);
+    return Date.now() - start < 60;
+})());
+assert('floaty 多窗口显隐原子性', (function () {
+    var wins = [];
+    for (var i = 0; i < 3; i++) {
+        wins.push(floaty.window('<frame><text id="t" text="w' + i + '"/></frame>',
+            { x: 60 + i * 40, y: 600, visible: false }));
+    }
+    for (var i = 0; i < 3; i++) wins[i].setVisibility(0);
+    var allShown = wins[0].isShown() && wins[1].isShown() && wins[2].isShown();
+    for (var i = 0; i < 3; i++) wins[i].setVisibility(8);
+    var allHidden = !wins[0].isShown() && !wins[1].isShown() && !wins[2].isShown();
+    for (var i = 0; i < 3; i++) wins[i].close();
+    return allShown && allHidden;
+})());
+floatyV2.close();
+sleep(300);
 
 var uiLayoutId = ui.layout('<vertical><text id="title" text="ui-title" textSize="18"/>'
     + '<button id="go" text="go"/></vertical>');

@@ -1,6 +1,6 @@
 // @engine quickjs
 // 悬浮窗属性与事件
-// 用途：控件 attr 读写、属性式赋值、窗口 getWidth/findView 与 on("click"/"touch") 监听
+// 用途：控件 attr 读写 / 属性式赋值 / 窗口显隐·透明度·缩放 / on("click"·"touch") 事件
 // 前置：悬浮窗权限
 // 覆盖：floaty / timers
 
@@ -9,9 +9,13 @@ var win = floaty.window(
     '  <text id="title" text="属性与事件" textSize="16sp" textColor="#FFFFFFFF"/>' +
     '  <text id="info" text="等待交互" textSize="12sp" textColor="#FFB0BEC5"/>' +
     '  <button id="hit" text="点击我"/>' +
-    '</vertical>'
+    '  <button id="toggle" text="开合菜单"/>' +
+    '  <button id="fade" text="隐藏又显示"/>' +
+    '</vertical>',
+    { x: 80, y: 320, visible: false }   // 先不显示：setPosition 生效前不会在 (0,0) 闪现
 );
 win.exitOnClose();
+win.show();
 
 // 1) attr(name, value) 写、attr(name) 读；属性式赋值等价
 win.title.attr('textSize', '18sp');
@@ -35,12 +39,28 @@ win.hit.on('touch', function (event) {
     console.log('触摸事件: ' + JSON.stringify(event));
 });
 
-// 4) 窗口级能力：尺寸 / 位置 / 可触摸 / 调整模式
+// 4) 窗口级显隐 / 透明度 / 缩放（不影响布局）
+win.toggle.on('click', function () {
+    var open = win.getAlpha() < 0.9;
+    win.setAlpha(open ? 1 : 0.35).setScale(open ? 1 : 0.85);
+    win.info.setText(open ? '菜单已展开' : '菜单已收起');
+});
+// 注意：控件 id 不要与窗口方法重名（show/hide/setVisibility/setSize/close/findView…），
+// 否则 window.<id> 会命中的是方法而不是控件（与 ui.<id> 的规则一样）。
+win.fade.on('click', function () {
+    win.setContentVisible(false);           // 最快：只藏内容，~0ms
+    sleep(600);
+    win.setContentVisible(true);
+    win.info.setText('已重新显示');
+});
+
+// 5) 窗口级能力：尺寸 / 位置 / 可触摸 / 调整模式
 win.setSize(600, -2);
-win.setPosition(80, 320);
 setTimeout(function () {
     win.setTouchable(true);
-    console.log('getX/getY = ' + win.getX() + '/' + win.getY() + ', 可触摸 = true');
+    console.log('getX/getY = ' + win.getX() + '/' + win.getY()
+        + '，真实值 = ' + win.getX(true) + '/' + win.getY(true)
+        + '，isShown = ' + win.isShown());
     win.info.setText('3 秒后自动关闭');
 }, 3000);
 

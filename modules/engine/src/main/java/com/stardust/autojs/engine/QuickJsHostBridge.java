@@ -2231,9 +2231,15 @@ final class QuickJsHostBridge implements AutoCloseable,
             QuickJsFloatyWindow window = new QuickJsFloatyWindow(
                     context, id, config, uiInflater(), mRuntime.ui.getResourceParser(), mFloatyEvents::add);
             mFloatyWindows.put(id, window);
-            if (!window.show()) {
-                mFloatyWindows.remove(id);
-                return "-1";
+            if (config.optBoolean("visible", true)) {
+                if (!window.show()) {
+                    mFloatyWindows.remove(id);
+                    return "-1";
+                }
+            } else {
+                // visible:false：先把布局和窗口参数准备好但不挂载，
+                // 既消掉“出生在 (0,0)”的闪现，又让 window.<id> 在显示前就可访问。
+                window.prepare();
             }
             return String.valueOf(id);
         } catch (Throwable error) {
@@ -2309,6 +2315,64 @@ final class QuickJsHostBridge implements AutoCloseable,
         return window == null ? 0 : window.getWindowY();
     }
 
+    /** 窗口（整个悬浮窗）显隐：0 = 显示，其它（4/8）= 隐藏。原子生效，返回操作后是否可见。 */
+    public boolean floatySetVisibility(int windowId, int visibility) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window == null) {
+            return false;
+        }
+        boolean show = visibility == android.view.View.VISIBLE;
+        return show ? window.show() : window.hide();
+    }
+
+    public boolean floatyIsVisible(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window != null && window.isShownNow();
+    }
+
+    /** 只切根 View 可见性（最快路径，不涉及 WindowManager）；返回后调用方无需等待。 */
+    public void floatySetContentVisibility(int windowId, int visibility) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) {
+            window.setContentVisibility(visibility);
+        }
+    }
+
+    public int floatyGetContentVisibility(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : window.getContentVisibility();
+    }
+
+    public void floatySetAlpha(int windowId, float alpha) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) {
+            window.setWindowAlpha(alpha);
+        }
+    }
+
+    public void floatySetScale(int windowId, float scaleX, float scaleY) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) {
+            window.setWindowScale(scaleX, scaleY);
+        }
+    }
+
+    public float floatyGetAlpha(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 1f : window.getWindowAlpha();
+    }
+
+    /** 主线程 flush 后读真实坐标（setPosition 后立即读时仍可能还是旧值，故单独提供）。 */
+    public int floatyGetRealX(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : window.getRealWindowX();
+    }
+
+    public int floatyGetRealY(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? 0 : window.getRealWindowY();
+    }
+
     public void floatyViewTouch(int windowId, String id) {
         QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
         if (window != null) window.registerViewTouch(id);
@@ -2344,6 +2408,11 @@ final class QuickJsHostBridge implements AutoCloseable,
         private final Handler mHandler = new Handler(Looper.getMainLooper());
         private final FloatyEventSink mEventSink;
         private volatile boolean mShown;
+        private boolean mPrepared;
+        private float mAlpha = 1f;
+        private float mScaleX = 1f;
+        private float mScaleY = 1f;
+        private volatile int mContentVisibility = android.view.View.VISIBLE;
         private volatile boolean mAdjustable;
         private boolean mTouchable;
         private float mTouchStartX;
@@ -2445,21 +2514,32 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
 
         boolean show() {
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                return showNow();
+            return onMain(this::showNow, Boolean.FALSE);
+        }
+
+        /** visible:false 创建时调用：先在主线程构建内容与参数，但不上屏。 */
+        void prepare() {
+            onMain(() -> {
+                prepareNow();
+                return Boolean.TRUE;
+            }, Boolean.FALSE);
+        }
+
+        /** 隐藏整个窗口（与 show 一样是同步的，返回后即已生效）。 */
+        boolean hide() {
+            return onMain(this::hideNow, Boolean.FALSE);
+        }
+
+        boolean isShownNow() {
+            return mShown;
+        }
+
+        private void prepareNow() {
+            if (mPrepared) {
+                return;
             }
-            CountDownLatch latch = new CountDownLatch(1);
-            boolean[] result = new boolean[1];
-            mHandler.post(() -> {
-                result[0] = showNow();
-                latch.countDown();
-            });
-            try {
-                return latch.await(8, TimeUnit.SECONDS) && result[0];
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
+            applyConfig();
+            mPrepared = true;
         }
 
         private boolean showNow() {
@@ -2467,9 +2547,11 @@ final class QuickJsHostBridge implements AutoCloseable,
                 if (mShown) {
                     return true;
                 }
-                applyConfig();
+                prepareNow();
                 mWindowManager.addView(mRoot, mParams);
                 mShown = true;
+                mRoot.setVisibility(mContentVisibility);
+                applyWindowTransform();
                 Log.i("QuickJsFloatyWindow", "Floaty window " + mId + " shown");
                 return true;
             } catch (Throwable error) {
@@ -2479,10 +2561,147 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
         }
 
-        void update(String configJson) {
+        private boolean hideNow() {
+            if (!mShown) {
+                return true;
+            }
+            try {
+                mWindowManager.removeViewImmediate(mRoot);
+            } catch (Throwable error) {
+                Log.w("QuickJsFloatyWindow", "removeView failed", error);
+            }
+            mShown = false;
+            return true;
+        }
+
+        /** 窗口级 alpha / scale（直接作用于根 View，不重排布局）。 */
+        private void applyWindowTransform() {
+            mRoot.setAlpha(mAlpha);
+            mRoot.setScaleX(mScaleX);
+            mRoot.setScaleY(mScaleY);
+            if (mRoot.getWidth() > 0) {
+                mRoot.setPivotX(mRoot.getWidth() / 2f);
+                mRoot.setPivotY(mRoot.getHeight() / 2f);
+            }
+        }
+
+        void setWindowAlpha(float alpha) {
+            mAlpha = Math.max(0f, Math.min(1f, alpha));
+            onMain(() -> {
+                mRoot.setAlpha(mAlpha);
+                return Boolean.TRUE;
+            }, Boolean.FALSE);
+        }
+
+        float getWindowAlpha() {
+            return mAlpha;
+        }
+
+        void setWindowScale(float scaleX, float scaleY) {
+            mScaleX = scaleX;
+            mScaleY = scaleY;
+            onMain(() -> {
+                if (mRoot.getWidth() > 0) {
+                    mRoot.setPivotX(mRoot.getWidth() / 2f);
+                    mRoot.setPivotY(mRoot.getHeight() / 2f);
+                }
+                mRoot.setScaleX(mScaleX);
+                mRoot.setScaleY(mScaleY);
+                return Boolean.TRUE;
+            }, Boolean.FALSE);
+        }
+
+        /** 主线程 flush 一次后再读，得到真正生效的窗口坐标。 */
+        int getRealWindowX() {
+            return onMain(() -> mParams == null ? 0 : mParams.x, 0);
+        }
+        int getRealWindowY() {
+            return onMain(() -> mParams == null ? 0 : mParams.y, 0);
+        }
+
+        /** 只改根 View 可见性：最廉价的开合方式（不掉窗口，不等 WindowManager）。 */
+        void setContentVisibility(int visibility) {
+            mContentVisibility = visibility;
+            mHandler.post(() -> mRoot.setVisibility(visibility));
+        }
+
+        int getContentVisibility() {
+            return mContentVisibility;
+        }
+
+        private interface MainTask<T> {
+            T run();
+        }
+
+        /** 在主线程执行并等待完成（已经主线程时直接执行），返回后调用方看到的状态已生效。 */
+        private <T> T onMain(MainTask<T> task, T fallback) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                try {
+                    return task.run();
+                } catch (Throwable error) {
+                    Log.w("QuickJsFloatyWindow", "main task failed", error);
+                    return fallback;
+                }
+            }
+            final Object[] result = new Object[1];
+            CountDownLatch latch = new CountDownLatch(1);
             mHandler.post(() -> {
                 try {
-                    JSONObject c = new JSONObject(configJson);
+                    result[0] = task.run();
+                } catch (Throwable error) {
+                    Log.w("QuickJsFloatyWindow", "main task failed", error);
+                } finally {
+                    latch.countDown();
+                }
+            });
+            try {
+                if (!latch.await(8, TimeUnit.SECONDS)) {
+                    return fallback;
+                }
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return fallback;
+            }
+            //noinspection unchecked
+            return result[0] == null ? fallback : (T) result[0];
+        }
+
+        void update(String configJson) {
+            JSONObject c;
+            try {
+                c = new JSONObject(configJson);
+            } catch (Throwable error) {
+                Log.w("QuickJsFloatyWindow", "update failed", error);
+                return;
+            }
+            // 位置/尺寸/变换先同步写进 mParams 与字段：调用方紧接着 getX()/getWidth() 就能拿到新值，
+            // 真正上屏仍由主线程完成（setPosition 的“意图值”与“生效值”因此可区分）。
+            if (c.has("x")) {
+                mParams.x = c.optInt("x", mParams.x);
+            }
+            if (c.has("y")) {
+                mParams.y = c.optInt("y", mParams.y);
+            }
+            if (c.has("width")) {
+                mParams.width = c.optInt("width", mParams.width);
+            }
+            if (c.has("height")) {
+                mParams.height = c.optInt("height", mParams.height);
+            }
+            if (c.has("alpha")) {
+                mAlpha = Math.max(0f, Math.min(1f, (float) c.optDouble("alpha", mAlpha)));
+            }
+            if (c.has("scale")) {
+                mScaleX = mScaleY = (float) c.optDouble("scale", mScaleX);
+            }
+            if (c.has("scaleX")) {
+                mScaleX = (float) c.optDouble("scaleX", mScaleX);
+            }
+            if (c.has("scaleY")) {
+                mScaleY = (float) c.optDouble("scaleY", mScaleY);
+            }
+            mHandler.post(() -> {
+                try {
                     if (mTextView != null && c.has("text")) {
                         mTextView.setText(c.optString("text"));
                     }
@@ -2502,26 +2721,10 @@ final class QuickJsHostBridge implements AutoCloseable,
                     if (c.has("touchable")) {
                         mTouchable = c.optBoolean("touchable", false);
                     }
-                    boolean updated = false;
-                    if (c.has("width") || c.has("height")) {
-                        if (c.has("width")) {
-                            mParams.width = c.optInt("width", mParams.width);
-                        }
-                        if (c.has("height")) {
-                            mParams.height = c.optInt("height", mParams.height);
-                        }
-                        updated = true;
+                    if (c.has("alpha") || c.has("scale") || c.has("scaleX") || c.has("scaleY")) {
+                        applyWindowTransform();
                     }
-                    if (c.has("x") || c.has("y")) {
-                        if (c.has("x")) {
-                            mParams.x = c.optInt("x", mParams.x);
-                        }
-                        if (c.has("y")) {
-                            mParams.y = c.optInt("y", mParams.y);
-                        }
-                        updated = true;
-                    }
-                    if (updated && mShown) {
+                    if (mShown && (c.has("width") || c.has("height") || c.has("x") || c.has("y"))) {
                         mWindowManager.updateViewLayout(mRoot, mParams);
                     }
                 } catch (Throwable error) {
@@ -2531,16 +2734,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
 
         void close() {
-            mHandler.post(() -> {
-                try {
-                    if (mShown) {
-                        mWindowManager.removeViewImmediate(mRoot);
-                        mShown = false;
-                    }
-                } catch (Throwable ignored) {
-                    mShown = false;
-                }
-            });
+            hide();
         }
 
         // ---- view access (Auto.js-style window.<id> proxies) ----
