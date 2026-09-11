@@ -118,9 +118,10 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("get_execution", "读取任务状态、结果、异常或运行日志", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
-            add(tool("run_script", "运行脚本；需手机端开启运行授权；wait=true 时等待结束并返回结果、错误与运行日志", objSchema("path", "wait", "timeoutSeconds", required = arrayOf("path"))))
+            add(tool("run_script", "运行脚本；需手机端开启运行授权；wait=true 时等待结束并返回结果、错误与运行日志；engine=quickjs/rhino 可在不改文件的前提下临时指定引擎（需 wait=true）", objSchema("path", "wait", "timeoutSeconds", "engine", required = arrayOf("path"))))
             add(tool("list_engine_api", "枚举指定引擎（quickjs/rhino）当前可用的全局 API 名称列表", objSchema("engine")))
             add(tool("probe_engine_api", "探测指定引擎中某个全局 API 的类型与成员（object/function 及 Object.keys）", objSchema("engine", "name", required = arrayOf("engine", "name"))))
+            add(tool("engine_api_diff", "对比 Rhino 与 QuickJS 的全局 API 差异（common/onlyRhino/onlyQuickJs），用于迁移对照"))
             add(tool("stop_script", "停止本 MCP 发起的运行任务", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("workspace_open", "从真实脚本创建私有工作区快照；目标不存在时可传 create=true 创建空的新文件工作区", objSchema("path", "create", required = arrayOf("path"))))
             add(tool("workspace_list", "列出工作区及待确认状态"))
@@ -164,6 +165,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "run_script" -> runScript(args)
             "list_engine_api" -> listEngineApi(args)
             "probe_engine_api" -> probeEngineApi(args)
+            "engine_api_diff" -> engineApiDiff()
             "stop_script" -> stopScript(args)
             "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
             "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
@@ -189,6 +191,22 @@ internal class McpTools(private val context: Context, private val event: (String
         if (!McpService.allowExecution) throw ToolError("运行授权未开启")
         val file = resolveScript(args.string("path"))
         if (!file.isFile || !file.name.endsWith(".js", true)) throw ToolError("只能运行存在的 .js 文件")
+        // engine=quickjs/rhino：不改原文件，用同目录临时副本强制指定引擎（仅限 wait=true 的同步运行）。
+        val requestedEngine = args.stringOr("engine", "").lowercase()
+        val wait = args.booleanOr("wait", false)
+        var tempFile: File? = null
+        val source: com.stardust.autojs.script.ScriptSource = if (requestedEngine.isEmpty()) {
+            ScriptFile(file).toSource()
+        } else {
+            require(requestedEngine == "quickjs" || requestedEngine == "rhino") { "engine 必须是 quickjs 或 rhino" }
+            requireRhinoCompat(requestedEngine)
+            require(wait) { "指定 engine 时需 wait=true（临时副本只在本次同步运行期间有效）" }
+            val directive = if (requestedEngine == "quickjs") "// @engine quickjs\n" else "// @engine rhino\n"
+            val body = file.readText(Charsets.UTF_8).replaceFirst(Regex("^(\\uFEFF)?"), "\$1")
+            tempFile = File(file.parentFile, ".${file.nameWithoutExtension}.mcp-engine-${System.currentTimeMillis()}.js")
+            tempFile.writeText(directive + body, Charsets.UTF_8)
+            ScriptFile(tempFile).toSource()
+        }
         val key = "mcp-${nextRun.getAndIncrement()}"
         if (runs.size >= 100) runs.values.filter { it.status !in ACTIVE_STATES }.minByOrNull { it.createdAt }?.let { runs.remove(it.id) }
         val record = RunRecord(key, file.relativeTo(root).invariantSeparatorsPath, System.currentTimeMillis())
@@ -216,16 +234,21 @@ internal class McpTools(private val context: Context, private val event: (String
         }
         try {
             val execution = AutoJs.getInstance().scriptEngineService.execute(
-                ScriptFile(file).toSource(), listener, ExecutionConfig(workingDirectory = file.parent.orEmpty()))
+                source, listener, ExecutionConfig(workingDirectory = file.parent.orEmpty()))
             record.execution = execution; record.engineExecutionId = execution.id
         } catch (error: Exception) {
+            tempFile?.delete()
             record.status = "FAILED"; record.finishedAt = System.currentTimeMillis()
             record.errorType = error.javaClass.name; record.errorMessage = error.localizedMessage.orEmpty()
             record.errorStack = Log.getStackTraceString(error).take(16 * 1024)
             throw ToolError("脚本启动失败：${record.errorMessage}")
         }
-        if (args.booleanOr("wait", false)) return toolJson(waitFor(record, args.intOr("timeoutSeconds", 60)))
-        return toolJson(runJson(record))
+        try {
+            if (wait) return toolJson(waitFor(record, args.intOr("timeoutSeconds", 60)))
+            return toolJson(runJson(record))
+        } finally {
+            tempFile?.delete()
+        }
     }
 
     private fun listEngineApi(args: JsonObject): JsonObject {
@@ -264,6 +287,35 @@ internal class McpTools(private val context: Context, private val event: (String
             addProperty("type", obj.get("type").asString)
             add("keys", obj.getAsJsonArray("keys"))
         })
+    }
+
+    /** 对比两引擎的全局 API：一次调用就能看出迁移缺口（lite 版无 Rhino 时只返回 QuickJS）。 */
+    private fun engineApiDiff(): JsonObject {
+        val quickjs = runCatching { engineApiNames("quickjs") }.getOrElse { throw ToolError("QuickJS 探针失败：${it.localizedMessage.orEmpty()}") }
+        val rhino = if (com.jdkshen.aijspro.BuildConfig.RHINO_COMPAT) {
+            runCatching { engineApiNames("rhino") }.getOrNull()
+        } else {
+            null
+        }
+        val quickSet = quickjs.toSet()
+        val rhinoSet = rhino?.toSet().orEmpty()
+        return toolJson(JsonObject().apply {
+            addProperty("quickjsCount", quickSet.size)
+            addProperty("rhinoAvailable", rhino != null)
+            addProperty("rhinoCount", rhinoSet.size)
+            add("onlyQuickJs", JsonArray().apply { (quickSet - rhinoSet).sorted().forEach { name -> add(name) } })
+            add("onlyRhino", JsonArray().apply { (rhinoSet - quickSet).sorted().forEach { name -> add(name) } })
+            addProperty("commonCount", quickSet.intersect(rhinoSet).size)
+        })
+    }
+
+    private fun engineApiNames(engine: String): List<String> {
+        val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
+        val source = header +
+            "console.log('MCP_API_PROBE_RESULT=' + JSON.stringify(Object.keys(typeof globalThis !== 'undefined' ? globalThis : this)" +
+            ".filter(function(n){return !n.startsWith('__')}).sort()))"
+        val items = com.google.gson.JsonParser().parse(engineProbe(engine, source)).asJsonArray
+        return items.map { it.asString }
     }
 
     private fun engineProbe(engine: String, source: String, timeout: Int = 30): String {

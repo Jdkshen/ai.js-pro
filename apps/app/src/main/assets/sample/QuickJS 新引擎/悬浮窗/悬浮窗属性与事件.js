@@ -1,8 +1,8 @@
 // @engine quickjs
 // 悬浮窗属性与事件
-// 用途：控件 attr 读写 / 属性式赋值 / 窗口显隐·透明度·缩放 / on("click"·"touch") 事件
+// 用途：控件 attr 读写、属性式赋值、窗口 getWidth/findView 与 on("click"/"touch") 监听
 // 前置：悬浮窗权限
-// 覆盖：floaty / timers
+// 覆盖：floaty / ui / timers
 
 var win = floaty.window(
     '<vertical padding="12" bg="#CC202020">' +

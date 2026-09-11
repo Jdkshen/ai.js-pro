@@ -2431,6 +2431,23 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (window != null) window.requestViewFocus(id);
     }
 
+    /** 控件级轮廓裁剪（setClipToOutline / setOutlineShape / setCornerRadius 用）。 */
+    public boolean floatyViewShape(int windowId, String id, String configJson) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window != null && window.setViewShape(id, configJson);
+    }
+
+    /** 窗口圆形触摸区域能力探测（隐藏 API WindowManager.LayoutParams#setTouchableRegion）。 */
+    public String floatyTouchRegionInfo() {
+        return QuickJsFloatyWindow.touchRegionInfo();
+    }
+
+    /** 当前窗口的触摸区域快照。 */
+    public String floatyGetTouchRegion(int windowId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        return window == null ? "{\"supported\":false,\"shape\":\"none\"}" : window.getTouchRegionInfo();
+    }
+
     private static final class QuickJsFloatyWindow {
         private final Context mContext;
         private final int mId;
@@ -2464,6 +2481,20 @@ final class QuickJsHostBridge implements AutoCloseable,
         private float mTouchStartY;
         private int mStartX;
         private int mStartY;
+        // ---- 圆形触摸穿透（·轮廓裁剪 + 窗口触摸区域）----
+        /** 窗口轮廓：null（未设置）| oval | roundRect | rect。 */
+        private volatile String mOutlineShape;
+        private volatile float mOutlineRadius = -1f;
+        private volatile boolean mClipToOutline;
+        /** null=自动跟随轮廓，false=整窗矩形，true=按形状收缩触摸区域。 */
+        private volatile Boolean mTouchableOnlyInShape;
+        /** circle（圆外穿透）| rect。 */
+        private volatile String mTouchShape;
+        private volatile int mTouchCenterX = Integer.MIN_VALUE;
+        private volatile int mTouchCenterY = Integer.MIN_VALUE;
+        private volatile int mTouchRadius = -1;
+        /** 最近一次生效的触摸区域 [cx, cy, r]，未生效时为 null。 */
+        private volatile int[] mTouchRegion;
 
         QuickJsFloatyWindow(Context context, int id, JSONObject config,
                             com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater,
@@ -2478,6 +2509,17 @@ final class QuickJsHostBridge implements AutoCloseable,
             mEventSink = eventSink;
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
             mRoot = new android.widget.FrameLayout(context);
+            // 尺寸变化（wrap_content 量完 / setSize 后）需要重算圆形轮廓与触摸区域。
+            mRoot.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                             oldLeft, oldTop, oldRight, oldBottom) -> {
+                if (mOutlineShape != null || mTouchableOnlyInShape != null
+                        || mTouchShape != null || mRoot.getClipToOutline()) {
+                    mHandler.post(() -> {
+                        applyOutlineNow();
+                        applyTouchRegionNow();
+                    });
+                }
+            });
             // 默认可接收触摸；穿透用 setTouchable(false)，拖动单独用 draggable/setAdjustEnabled。
             mTouchable = config.optBoolean("touchable", true);
             mDraggable = config.optBoolean("draggable", false);
@@ -2536,9 +2578,35 @@ final class QuickJsHostBridge implements AutoCloseable,
             mRoot.removeAllViews();
             mRoot.setBackground(mBackground);
             if (mContent != null) {
-                mRoot.addView(mContent, new android.widget.FrameLayout.LayoutParams(
-                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+                // XML 根控件自带 w/h（且窗口是 wrap_content）时按内容尺寸排布：
+                // 否则 MATCH_PARENT 会把它量成 0×0（圆形触摸穿透需求的 card 根就有这个问题）。
+                android.view.ViewGroup.LayoutParams contentParams = mContent.getLayoutParams();
+                android.widget.FrameLayout.LayoutParams frameParams =
+                        new android.widget.FrameLayout.LayoutParams(
+                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
+                if (contentParams != null) {
+                    // 窗口是 wrap_content 的维度才按内容自带尺寸，否则内容填满窗口。
+                    frameParams.width = c.optInt("width", Integer.MIN_VALUE) <= 0
+                            && contentParams.width > 0
+                            ? contentParams.width
+                            : android.widget.FrameLayout.LayoutParams.MATCH_PARENT;
+                    frameParams.height = c.optInt("height", Integer.MIN_VALUE) <= 0
+                            && contentParams.height > 0
+                            ? contentParams.height
+                            : android.widget.FrameLayout.LayoutParams.MATCH_PARENT;
+                    if (contentParams instanceof android.widget.FrameLayout.LayoutParams) {
+                        frameParams.gravity =
+                                ((android.widget.FrameLayout.LayoutParams) contentParams).gravity;
+                    }
+                    if (contentParams instanceof android.view.ViewGroup.MarginLayoutParams) {
+                        android.view.ViewGroup.MarginLayoutParams margins =
+                                (android.view.ViewGroup.MarginLayoutParams) contentParams;
+                        frameParams.setMargins(margins.leftMargin, margins.topMargin,
+                                margins.rightMargin, margins.bottomMargin);
+                    }
+                }
+                mRoot.addView(mContent, frameParams);
             } else {
                 mRoot.addView(mTextView, new android.widget.FrameLayout.LayoutParams(
                         android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -2566,6 +2634,10 @@ final class QuickJsHostBridge implements AutoCloseable,
                 mRequestedHeight = c.optInt("height", 0);
             }
             applyTouchableFlag();
+            if (readShapeConfig(c)) {
+                applyOutlineNow();
+                applyTouchRegionNow();
+            }
         }
 
         /** touchable=false 时窗口不接收触摸，事件穿透到下层（·P3-1 需求）。 */
@@ -2574,6 +2646,357 @@ final class QuickJsHostBridge implements AutoCloseable,
                 mParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
             } else {
                 mParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            }
+        }
+
+        // ---- 圆形触摸穿透：轮廓裁剪 + 窗口触摸区域收缩（·需求文档 P0/P1）----
+
+        /** 读取形状相关配置到字段（不碰视图，可在任意线程调用）；返回是否含形状/触摸区域配置。 */
+        private boolean readShapeConfig(JSONObject c) {
+            boolean regionChanged = false;
+            if (c.has("clipToOutline")) {
+                mClipToOutline = c.optBoolean("clipToOutline", mClipToOutline);
+            }
+            if (c.has("outlineShape")) {
+                mOutlineShape = c.optString("outlineShape", null);
+                mClipToOutline = !"rect".equals(mOutlineShape);
+            }
+            if (c.has("outlineRadius")) {
+                mOutlineRadius = (float) c.optDouble("outlineRadius", mOutlineRadius);
+            }
+            if (c.has("touchShape")) {
+                mTouchShape = c.optString("touchShape", null);
+                regionChanged = true;
+            }
+            if (c.has("touchCenterX")) {
+                mTouchCenterX = c.optInt("touchCenterX", Integer.MIN_VALUE);
+                regionChanged = true;
+            }
+            if (c.has("touchCenterY")) {
+                mTouchCenterY = c.optInt("touchCenterY", Integer.MIN_VALUE);
+                regionChanged = true;
+            }
+            if (c.has("touchRadius")) {
+                mTouchRadius = c.optInt("touchRadius", -1);
+                regionChanged = true;
+            }
+            if (c.has("touchableOnlyInShape")) {
+                mTouchableOnlyInShape = c.optBoolean("touchableOnlyInShape", true);
+                regionChanged = true;
+            }
+            return regionChanged;
+        }
+
+        /** 生成轮廓提供者：oval 用椭圆（正方形即圆），roundRect 用圆角矩形。 */
+        private static android.view.ViewOutlineProvider outlineProviderFor(final String shape,
+                                                                          final float radius) {
+            return new android.view.ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, android.graphics.Outline outline) {
+                    int w = view.getWidth();
+                    int h = view.getHeight();
+                    if (w <= 0 || h <= 0) {
+                        return;
+                    }
+                    if ("oval".equals(shape)) {
+                        outline.setOval(0, 0, w, h);
+                        return;
+                    }
+                    float r = radius > 0 ? radius : Math.min(w, h) / 2f;
+                    outline.setRoundRect(0, 0, w, h, r);
+                }
+            };
+        }
+
+        /** 应用窗口级轮廓裁剪（主线程）。 */
+        private void applyOutlineNow() {
+            try {
+                if (mOutlineShape == null) {
+                    if (mClipToOutline) {
+                        mRoot.setClipToOutline(true);
+                    }
+                    return;
+                }
+                if ("rect".equals(mOutlineShape)) {
+                    mRoot.setClipToOutline(false);
+                    mRoot.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+                } else {
+                    mRoot.setOutlineProvider(outlineProviderFor(mOutlineShape, mOutlineRadius));
+                    mRoot.setClipToOutline(mClipToOutline);
+                }
+                mRoot.invalidateOutline();
+                mRoot.invalidate();
+            } catch (Throwable error) {
+                Log.w("QuickJsFloatyWindow", "applyOutline failed", error);
+            }
+        }
+
+        /** 控件级轮廓裁剪（主线程）：CardView 走 cardCornerRadius，其余用自定义轮廓。 */
+        boolean setViewShape(String id, String configJson) {
+            JSONObject c;
+            try {
+                c = new JSONObject(configJson == null ? "{}" : configJson);
+            } catch (Throwable error) {
+                return false;
+            }
+            return onMain(() -> {
+                View view = findViewById(id);
+                if (view == null) {
+                    return Boolean.FALSE;
+                }
+                try {
+                    String shape = c.optString("outlineShape", "");
+                    float radius = (float) c.optDouble("outlineRadius", -1);
+                    boolean clip = c.optBoolean("clipToOutline", true);
+                    if ("rect".equals(shape)) {
+                        view.setClipToOutline(false);
+                    } else if (view instanceof androidx.cardview.widget.CardView) {
+                        // CardView 自带圆角背景轮廓，只补裁剪（圆角半径由 cardCornerRadius 控制）。
+                        if (radius > 0) {
+                            ((androidx.cardview.widget.CardView) view).setRadius(radius);
+                        } else if ("oval".equals(shape)) {
+                            int side = Math.min(view.getWidth(), view.getHeight());
+                            if (side > 0) {
+                                ((androidx.cardview.widget.CardView) view).setRadius(side / 2f);
+                            }
+                        }
+                        view.setClipToOutline(clip);
+                    } else {
+                        if (!shape.isEmpty()) {
+                            view.setOutlineProvider(outlineProviderFor(shape, radius));
+                        }
+                        view.setClipToOutline(clip);
+                    }
+                    view.invalidateOutline();
+                    view.invalidate();
+                    return Boolean.TRUE;
+                } catch (Throwable error) {
+                    Log.w("QuickJsFloatyWindow", "setViewShape failed", error);
+                    return Boolean.FALSE;
+                }
+            }, Boolean.FALSE);
+        }
+
+        /**
+         * 触摸区域反射策略：不同 Android 版本上隐藏 API 的形态不一样，逐个探测。
+         * 1. {@code WindowManager.LayoutParams#setTouchableRegion(Region)}（Android 12+ 隐藏方法）
+         * 2. 直接写隐藏字段 {@code mTouchableRegion}（+ mSetTouchableRegion 标记位）
+         */
+        private static final class TouchRegionApi {
+            final String name;
+            private final Method mMethod;
+            private final java.lang.reflect.Field mRegionField;
+            private final java.lang.reflect.Field mFlagField;
+
+            TouchRegionApi(String name, Method method, java.lang.reflect.Field regionField,
+                           java.lang.reflect.Field flagField) {
+                this.name = name;
+                mMethod = method;
+                mRegionField = regionField;
+                mFlagField = flagField;
+            }
+
+            void apply(WindowManager.LayoutParams params, android.graphics.Region region)
+                    throws Throwable {
+                if (mMethod != null) {
+                    mMethod.invoke(params, region);
+                }
+                if (mRegionField != null) {
+                    mRegionField.set(params, region);
+                }
+                if (mFlagField != null) {
+                    mFlagField.setBoolean(params, region != null);
+                }
+            }
+        }
+
+        private static Boolean sTouchApiProbed;
+        private static TouchRegionApi sTouchApi;
+
+        private static java.lang.reflect.Field findLayoutParamsField(String name) {
+            try {
+                java.lang.reflect.Field field =
+                        WindowManager.LayoutParams.class.getDeclaredField(name);
+                field.setAccessible(true);
+                return field;
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+
+        private static synchronized TouchRegionApi touchRegionApi() {
+            if (sTouchApiProbed == null) {
+                sTouchApiProbed = Boolean.TRUE;
+                sTouchApi = null;
+                try {
+                    Method method = WindowManager.LayoutParams.class.getDeclaredMethod(
+                            "setTouchableRegion", android.graphics.Region.class);
+                    method.setAccessible(true);
+                    sTouchApi = new TouchRegionApi("LayoutParams#setTouchableRegion", method,
+                            findLayoutParamsField("mTouchableRegion"),
+                            findLayoutParamsField("mSetTouchableRegion"));
+                } catch (Throwable error) {
+                    Log.d("QuickJsFloatyWindow", "no setTouchableRegion method: " + error);
+                }
+                if (sTouchApi == null) {
+                    java.lang.reflect.Field field = findLayoutParamsField("mTouchableRegion");
+                    if (field != null) {
+                        sTouchApi = new TouchRegionApi("LayoutParams.mTouchableRegion", null, field,
+                                findLayoutParamsField("mSetTouchableRegion"));
+                    }
+                }
+                Log.i("QuickJsFloatyWindow", "touch region api = "
+                        + (sTouchApi == null ? "none" : sTouchApi.name));
+            }
+            return sTouchApi;
+        }
+
+        static String touchRegionInfo() {
+            TouchRegionApi api = touchRegionApi();
+            JSONObject json = new JSONObject();
+            try {
+                json.put("supported", api != null);
+                json.put("api", api == null ? "" : api.name);
+                json.put("android", Build.VERSION.SDK_INT);
+                json.put("hint", "隐藏 API 尽力而为：supported=true 时圆外穿透由系统输入分发决定");
+            } catch (Throwable ignored) {
+            }
+            return json.toString();
+        }
+        String getTouchRegionInfo() {
+            JSONObject json = new JSONObject();
+            int[] region = mTouchRegion;
+            try {
+                TouchRegionApi api = touchRegionApi();
+                json.put("supported", api != null);
+                json.put("api", api == null ? "" : api.name);
+                json.put("shape", region == null ? "rect" : "circle");
+                json.put("cx", region == null ? -1 : region[0]);
+                json.put("cy", region == null ? -1 : region[1]);
+                json.put("r", region == null ? -1 : region[2]);
+                json.put("touchable", mTouchable);
+            } catch (Throwable ignored) {
+            }
+            return json.toString();
+        }
+
+        private int windowWidthNow() {
+            if (mParams != null && mParams.width > 0) {
+                return mParams.width;
+            }
+            int measured = mRoot.getWidth();
+            return measured > 0 ? measured : mRequestedWidth;
+        }
+
+        private int windowHeightNow() {
+            if (mParams != null && mParams.height > 0) {
+                return mParams.height;
+            }
+            int measured = mRoot.getHeight();
+            return measured > 0 ? measured : mRequestedHeight;
+        }
+
+        /**
+         * 视图的“接近圆形”轮廓 → 窗口内坐标圆心/半径；不是圆（如普通圆角矩形）返回 null，
+         * 避免把整块面板的触摸区域误缩成圆。
+         */
+        private static int[] circleRegionOf(View view) {
+            if (view == null || !view.getClipToOutline()) {
+                return null;
+            }
+            int w = view.getWidth();
+            int h = view.getHeight();
+            if (w <= 0 || h <= 0) {
+                return null;
+            }
+            try {
+                android.graphics.Outline outline = new android.graphics.Outline();
+                android.view.ViewOutlineProvider provider = view.getOutlineProvider();
+                if (provider == null) {
+                    return null;
+                }
+                provider.getOutline(view, outline);
+                if (outline.isEmpty()) {
+                    return null;
+                }
+                android.graphics.Rect rect = new android.graphics.Rect();
+                if (!outline.getRect(rect)) {
+                    return null;
+                }
+                int rw = Math.max(1, rect.width());
+                int rh = Math.max(1, rect.height());
+                float radius = outline.getRadius();
+                if (radius < Math.min(rw, rh) / 2f - 1.5f) {
+                    return null;
+                }
+                int cx = view.getLeft() + rect.left + rw / 2;
+                int cy = view.getTop() + rect.top + rh / 2;
+                return new int[]{cx, cy, Math.min(rw, rh) / 2};
+            } catch (Throwable error) {
+                return null;
+            }
+        }
+
+        /** 当前应生效的圆形触摸区域；null = 整窗矩形。 */
+        private int[] effectiveTouchRegionNow() {
+            if (mTouchableOnlyInShape != null && !mTouchableOnlyInShape) {
+                return null;
+            }
+            if ("rect".equals(mTouchShape)) {
+                return null;
+            }
+            if (mTouchShape != null || mTouchableOnlyInShape != null) {
+                int w = windowWidthNow();
+                int h = windowHeightNow();
+                if (w <= 0 || h <= 0) {
+                    return null;
+                }
+                int cx = mTouchCenterX != Integer.MIN_VALUE ? mTouchCenterX : w / 2;
+                int cy = mTouchCenterY != Integer.MIN_VALUE ? mTouchCenterY : h / 2;
+                int r = mTouchRadius > 0
+                        ? mTouchRadius
+                        : Math.min(Math.min(cx, w - cx), Math.min(cy, h - cy));
+                return r > 0 ? new int[]{cx, cy, r} : null;
+            }
+            // 自动跟随：窗口根或 XML 根控件的圆形轮廓（clipToOutline="true" + 圆角=半边长）。
+            int[] fromRoot = circleRegionOf(mRoot);
+            if (fromRoot != null) {
+                return fromRoot;
+            }
+            return circleRegionOf(mContent);
+        }
+
+        /** 把触摸区域同步到窗口（主线程）；返回是否成功。 */
+        private boolean applyTouchRegionNow() {
+            if (mParams == null) {
+                return false;
+            }
+            TouchRegionApi api = touchRegionApi();
+            if (api == null) {
+                return false;
+            }
+            int[] region = effectiveTouchRegionNow();
+            try {
+                if (region == null) {
+                    api.apply(mParams, null);
+                    mTouchRegion = null;
+                } else {
+                    int w = Math.max(1, windowWidthNow());
+                    int h = Math.max(1, windowHeightNow());
+                    android.graphics.Region pathRegion = new android.graphics.Region();
+                    Path path = new Path();
+                    path.addCircle(region[0], region[1], region[2], Path.Direction.CW);
+                    pathRegion.setPath(path, new android.graphics.Region(0, 0, w, h));
+                    api.apply(mParams, pathRegion);
+                    mTouchRegion = region;
+                }
+                if (mShown) {
+                    mWindowManager.updateViewLayout(mRoot, mParams);
+                }
+                return true;
+            } catch (Throwable error) {
+                Log.w("QuickJsFloatyWindow", "applyTouchRegion failed", error);
+                return false;
             }
         }
 
@@ -2788,6 +3211,11 @@ final class QuickJsHostBridge implements AutoCloseable,
             if (c.has("scaleY")) {
                 mScaleY = (float) c.optDouble("scaleY", mScaleY);
             }
+            // 触摸开关/形状同步写字段：调用方紧接着 getTouchRegion() 就能读到新值（上屏仍由主线程完成）。
+            if (c.has("touchable")) {
+                mTouchable = c.optBoolean("touchable", true);
+            }
+            boolean regionConfig = readShapeConfig(c);
             mHandler.post(() -> {
                 try {
                     if (mTextView != null && c.has("text")) {
@@ -2818,6 +3246,10 @@ final class QuickJsHostBridge implements AutoCloseable,
                     }
                     if (c.has("draggable")) {
                         mDraggable = c.optBoolean("draggable", false);
+                    }
+                    if (regionConfig) {
+                        applyOutlineNow();
+                        applyTouchRegionNow();
                     }
                     if (c.has("alpha") || c.has("scale") || c.has("scaleX") || c.has("scaleY")) {
                         applyWindowTransform();

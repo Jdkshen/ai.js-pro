@@ -17,6 +17,7 @@ internal object McpToolCatalog {
         "run_script",
         "list_engine_api",
         "probe_engine_api",
+        "engine_api_diff",
         "stop_script",
         "workspace_open",
         "workspace_list",

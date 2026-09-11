@@ -41,8 +41,10 @@ adb forward tcp:18790 tcp:8788
 
 手机端开启“允许运行脚本”后：
 
-- `run_script`：只运行操作目录内已有 `.js`，继续使用应用现有脚本引擎和工作目录。
+- `run_script`：只运行操作目录内已有 `.js`，继续使用应用现有脚本引擎和工作目录。可选 `engine` 参数（`rhino` / `quickjs`）会用**临时副本**指定引擎后运行，原文件不改动，运行结束自动删除副本。
 - `stop_script`：只停止该 MCP 服务启动并记录的 executionId。
+- `list_engine_api` / `probe_engine_api`：枚举某引擎的全局 API、探测类型成员。
+- `engine_api_diff`：一次调用直接对比两引擎全局 API（返回 `onlyQuickJs` / `onlyRhino` / `commonCount` / `quickjsCount` / `rhinoCount`），迁移新引擎时用来快速定位缺口；lite 版无 Rhino 时 `rhinoAvailable=false`。
 
 手机端开启“允许编辑工作区”后：
 

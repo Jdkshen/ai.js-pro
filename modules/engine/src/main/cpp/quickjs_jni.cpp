@@ -2187,6 +2187,64 @@ JSValue nativeFloatyViewRequestFocus(JSContext *context, JSValueConst, int argc,
             static_cast<int32_t>(windowId), id);
 }
 
+/**
+ * 控件级轮廓/裁剪（圆形触摸穿透 P0-2）：
+ * configJson = { clipToOutline, outlineShape, outlineRadius }，返回是否应用成功。
+ */
+JSValue nativeFloatyViewShape(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (argc < 2 || !readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    const std::string configJson = stringArg(context, argc, argv, 2);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyViewShape",
+                                        "(ILjava/lang/String;Ljava/lang/String;)Z");
+    jstring javaId = toJavaString(env, id);
+    jstring javaConfig = toJavaString(env, configJson);
+    jboolean result = env->CallBooleanMethod(state->host, method, windowId, javaId, javaConfig);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaConfig);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+/**
+ * 窗口触摸区域（圆形穿透）能力探测：返回 JSON 描述，脚本用 floaty.touchRegionInfo() 读取。
+ */
+JSValue nativeFloatyTouchRegionInfo(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "floatyTouchRegionInfo", nullptr);
+}
+
+/** 当前窗口触摸区域快照（win.getTouchRegion()）。 */
+JSValue nativeFloatyGetTouchRegion(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t windowId = 0;
+    if (argc < 1 || !readInt(context, argc, argv, 0, &windowId)) {
+        return JS_EXCEPTION;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyGetTouchRegion",
+                                        "(I)Ljava/lang/String;");
+    jstring result = static_cast<jstring>(env->CallObjectMethod(state->host, method, windowId));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string("{}") : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 // Rhino-style exit(): records an exit request; the JS layer then throws a
 // sentinel error that evaluate() converts into a normal completion.
 JSValue nativeExitSelf(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -5724,6 +5782,8 @@ const char kBootstrapScript[] = R"JS(
     });
     global.sensors = Object.freeze({
         ignoresUnsupportedSensor: false,
+        /** 与 Rhino 的 sensors.delay 对齐（单位微秒，等价 SensorManager.SENSOR_DELAY_*）。 */
+        delay: Object.freeze({ normal: 200000, ui: 66667, game: 20000, fastest: 0 }),
         register: function (name, delay) {
             var micros = Number(delay);
             if (isNaN(micros)) micros = 200000;
@@ -5740,7 +5800,7 @@ const char kBootstrapScript[] = R"JS(
         },
         unregisterAll: function () { __aiNativeSensorsUnregisterAll(); },
         list: function () { return JSON.parse(__aiNativeSensorsList()); },
-        Delay: Object.freeze({ normal: 200000, ui: 60000, game: 20000, fastest: 0 })
+        Delay: Object.freeze({ normal: 200000, ui: 66667, game: 20000, fastest: 0 })
     });
 
     // ---- dialogs module (blocking; UI shown on the Java main looper) ----
@@ -5808,6 +5868,8 @@ const char kBootstrapScript[] = R"JS(
     function makeFloatyTouchEvent(item) {
         return {
             action: item.action,
+            x: item.x,
+            y: item.y,
             rawX: item.rawX,
             rawY: item.rawY,
             ACTION_DOWN: 0,
@@ -5815,6 +5877,8 @@ const char kBootstrapScript[] = R"JS(
             ACTION_MOVE: 2,
             ACTION_CANCEL: 3,
             getAction: function () { return item.action; },
+            getX: function () { return item.x; },
+            getY: function () { return item.y; },
             getRawX: function () { return item.rawX; },
             getRawY: function () { return item.rawY; }
         };
@@ -5984,6 +6048,44 @@ const char kBootstrapScript[] = R"JS(
         });
     }
 
+    /**
+     * 形状名归一化（圆形触摸穿透）：circle/oval | roundRect | rect。
+     * circle 与 oval 在 Java 侧都用椭圆轮廓（正方形时就是圆）。
+     */
+    function normalizeOutlineShape(shape) {
+        var name = shape === undefined || shape === null ? 'circle' : String(shape).toLowerCase();
+        if (name === 'circle' || name === 'oval' || name === 'round') return 'oval';
+        if (name === 'rect' || name === 'none') return 'rect';
+        if (name === 'roundrect' || name === 'round_rect' || name === 'card') return 'roundRect';
+        throw new Error('未知的轮廓形状：' + shape + '（可用：circle / oval / roundRect / rect）');
+    }
+    /** 半径参数：数字（px）或 '50%'（→ 圆）/ 其他百分比（需要已知窗口尺寸）。 */
+    function normalizeOutlineRadius(radius) {
+        if (radius === undefined || radius === null || radius === '') return -1;
+        if (typeof radius === 'string' && radius.trim().endsWith('%')) {
+            return -1;
+        }
+        return Math.max(0, Math.round(Number(radius) || 0));
+    }
+    /** 轮廓配置：{ clipToOutline, outlineShape, outlineRadius }。 */
+    function outlineConfigOf(shape, radius) {
+        var name = normalizeOutlineShape(shape);
+        var cfg = { outlineShape: name, clipToOutline: name !== 'rect' };
+        var px = normalizeOutlineRadius(radius);
+        if (px >= 0) cfg.outlineRadius = px;
+        return cfg;
+    }
+    /**
+     * 按区域输入（圆外穿透）只是“尽力而为”：系统隐藏 API 不可用时给出明确告警，
+     * 避免脚本误以为圆外已经不拦截触摸。
+     */
+    function warnTouchRegionUnsupported() {
+        if (floaty.supportsTouchRegion()) return true;
+        console.warn('按区域输入不可用（floaty.touchRegionInfo().supported=false）：'
+            + '窗口对系统的输入区域始终是矩形，圆外方角仍会拦截触摸。'
+            + '建议：容器类窗口用 setTouchable(false) 整窗穿透，菜单项/按钮各自独立小窗口。');
+        return false;
+    }
     function makeFloatyView(windowId, viewId) {
         var attributeCache = Object.create(null);
         var self = null;
@@ -5993,6 +6095,42 @@ const char kBootstrapScript[] = R"JS(
             /** 真实 android.view.View 的 Java 代理：可直接交给 ObjectAnimator 等系统 API。 */
             get javaView() {
                 return javaObjectOf(Number(__aiNativeFloatyViewHandle(windowId, viewId)), 'android.view.View');
+            },
+            /** 与 javaView 等价（Rhino 里真 View 就叫 view）。 */
+            get view() {
+                return this.javaView;
+            },
+            /**
+             * 按轮廓裁剪：clipToOutline=true 时控件按自身轮廓（圆形/圆角）裁剪，
+             * 等同 XML 的 clipToOutline="true"。
+             */
+            setClipToOutline: function (enabled) {
+                __aiNativeFloatyViewShape(windowId, viewId,
+                    JSON.stringify({ clipToOutline: !!enabled }));
+                return view;
+            },
+            /** 轮廓形状：'circle' | 'roundRect'（可选半径 px）| 'rect'（取消裁剪）。 */
+            setOutlineShape: function (shape, radius) {
+                var cfg = outlineConfigOf(shape, radius);
+                __aiNativeFloatyViewShape(windowId, viewId, JSON.stringify(cfg));
+                view.__outlineShape = cfg.outlineShape;
+                view.__outlineRadius = cfg.outlineRadius;
+                return view;
+            },
+            /** 圆角：数字（px）或 '50%'（正方形 → 圆）。CardView 同时改写 cardCornerRadius。 */
+            setCornerRadius: function (radius) {
+                if (typeof radius === 'string' && radius.trim().endsWith('%')) {
+                    return view.setOutlineShape('circle');
+                }
+                var px = Math.max(0, Math.round(Number(radius) || 0));
+                var cfg = { outlineShape: 'roundRect', outlineRadius: px, clipToOutline: true };
+                __aiNativeFloatyViewShape(windowId, viewId, JSON.stringify(cfg));
+                try {
+                    view.attr('cardCornerRadius', px + 'px');
+                } catch (e) {
+                    // 非 CardView 是正常的，轮廓仍由自定义 provider 提供。
+                }
+                return view;
             },
             /**
              * 让控件代理本身就能当 Java 参数用：
@@ -6087,10 +6225,25 @@ const char kBootstrapScript[] = R"JS(
             setEnabledState: function (enabled) { return view.attr('enabled', !!enabled); }
         };
         // 属性式读写：读取时先看已知方法/缓存过的属性名，再当属性名查一次。
+        // 方法统一包一层：链式调用返回「代理自身」而不是内部原始对象（否则 w.c.setX() === w.c 为 false）。
+        var methodCache = new Map();
         var proxy = new Proxy(view, {
             get: function (target, prop) {
                 if (typeof prop !== 'string') return undefined;
-                if (prop in target) return target[prop];
+                if (prop in target) {
+                    var value = target[prop];
+                    if (typeof value !== 'function') return value;
+                    var cached = methodCache.get(prop);
+                    if (!cached) {
+                        var raw = value;
+                        cached = function () {
+                            var result = raw.apply(target, arguments);
+                            return result === target ? self : result;
+                        };
+                        methodCache.set(prop, cached);
+                    }
+                    return cached;
+                }
                 if (prop === 'then' || prop === 'toJSON' || prop === 'valueOf'
                         || prop === 'toString' || prop === 'constructor') {
                     return undefined;
@@ -6153,6 +6306,9 @@ const char kBootstrapScript[] = R"JS(
         },
         getWindow: function (windowId) { return floaty.windowById(windowId); },
         exists: function (windowId) { return !!__aiNativeFloatyExists(Number(windowId)); },
+        /** 窗口触摸区域能力（隐藏 API 探测）：{ supported, api, android }。 */
+        touchRegionInfo: function () { return JSON.parse(String(__aiNativeFloatyTouchRegionInfo())); },
+        supportsTouchRegion: function () { return floaty.touchRegionInfo().supported === true; },
         rawWindow: function (config, extra) {
             return floaty.window(config, extra);
         },
@@ -6232,6 +6388,87 @@ const char kBootstrapScript[] = R"JS(
                 /** 真实根 View 的 Java 代理（整窗动画 / 任意 View API）。 */
                 get javaView() {
                     return javaObjectOf(Number(__aiNativeFloatyRootViewHandle(id)), 'android.view.View');
+                },
+                /** 与 javaView 等价（Rhino 里窗口真 View 也叫 view）。 */
+                get view() {
+                    return this.javaView;
+                },
+                /** 窗口级轮廓裁剪（配合 setOutlineShape / setCornerRadius 使用）。 */
+                setClipToOutline: function (enabled) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ clipToOutline: !!enabled }));
+                    return self || win;
+                },
+                /**
+                 * 轮廓形状：'circle'（正方形即圆）| 'roundRect'（可选半径）| 'rect'（取消）。
+                 * 设置后窗口按轮廓裁剪；未显式关闭时窗口触摸区域会自动跟随圆形轮廓。
+                 */
+                setOutlineShape: function (shape, radius) {
+                    var cfg = outlineConfigOf(shape, radius);
+                    __aiNativeFloatyUpdate(id, JSON.stringify(cfg));
+                    win.__outlineShape = cfg.outlineShape;
+                    win.__outlineRadius = cfg.outlineRadius;
+                    return self || win;
+                },
+                /** 圆角：数字（px）或 '50%'（→ 圆）。 */
+                setCornerRadius: function (radius) {
+                    if (typeof radius === 'string' && radius.trim().endsWith('%')) {
+                        return win.setOutlineShape('circle');
+                    }
+                    return win.setOutlineShape('roundRect', radius);
+                },
+                /**
+                 * 一步到位（圆形触摸穿透 P0-2）：轮廓 + 触摸区域同时按形状收缩，
+                 * 圆外的事件不再命中本窗口，直接落到下层 App。
+                 */
+                setShape: function (shape, radius) {
+                    var cfg = outlineConfigOf(shape, radius);
+                    cfg.touchShape = cfg.outlineShape === 'rect' ? 'rect' : 'circle';
+                    cfg.touchableOnlyInShape = cfg.outlineShape !== 'rect';
+                    __aiNativeFloatyUpdate(id, JSON.stringify(cfg));
+                    if (cfg.touchableOnlyInShape) warnTouchRegionUnsupported();
+                    return self || win;
+                },
+                /** 触摸形状：'circle'（圆外穿透）| 'rect'（恢复整窗矩形）。 */
+                setTouchShape: function (shape) {
+                    var name = shape === undefined || shape === null
+                        ? 'circle' : String(shape).toLowerCase();
+                    var circle = name === 'circle' || name === 'oval' || name === 'round';
+                    __aiNativeFloatyUpdate(id, JSON.stringify({
+                        touchShape: circle ? 'circle' : 'rect',
+                        touchableOnlyInShape: circle
+                    }));
+                    if (circle) warnTouchRegionUnsupported();
+                    return self || win;
+                },
+                /** 显式圆形触摸区域：中心 (x, y) 与半径 r（窗口内坐标，px）。 */
+                setTouchableRegion: function (x, y, r) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({
+                        touchCenterX: Math.round(Number(x) || 0),
+                        touchCenterY: Math.round(Number(y) || 0),
+                        touchRadius: Math.max(1, Math.round(Number(r) || 0)),
+                        touchShape: 'circle',
+                        touchableOnlyInShape: true
+                    }));
+                    warnTouchRegionUnsupported();
+                    return self || win;
+                },
+                /** 恢复整窗矩形触摸区域。 */
+                clearTouchRegion: function () {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ touchableOnlyInShape: false }));
+                    return self || win;
+                },
+                /** 是否只让形状内区域接收触摸（默认自动跟随圆形轮廓）。 */
+                setTouchableOnlyInShape: function (enabled) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ touchableOnlyInShape: !!enabled }));
+                    return self || win;
+                },
+                /** 当前触摸区域快照：{ supported, shape, cx, cy, r, touchable }。 */
+                getTouchRegion: function () {
+                    return JSON.parse(String(__aiNativeFloatyGetTouchRegion(id)));
+                },
+                /** 当前设备是否支持“圆外穿透”（隐藏 API 探测）。 */
+                isTouchableRegionSupported: function () {
+                    return floaty.supportsTouchRegion();
                 },
                 /** 整窗系统动画：win.animate({ alpha: 1, scaleX: 1.2 }, 300, 'decelerate')。 */
                 animate: function (props, duration, easing) {
@@ -8339,6 +8576,9 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyViewKey", nativeFloatyViewKey, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatySetWindowFocusable", nativeFloatySetWindowFocusable, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewRequestFocus", nativeFloatyViewRequestFocus, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatyViewShape", nativeFloatyViewShape, 3);
+    installNativeFunction(state->context, global, "__aiNativeFloatyTouchRegionInfo", nativeFloatyTouchRegionInfo, 0);
+    installNativeFunction(state->context, global, "__aiNativeFloatyGetTouchRegion", nativeFloatyGetTouchRegion, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewExists", nativeFloatyViewExists, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewGetAttr", nativeFloatyViewGetAttr, 3);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewSetAttr", nativeFloatyViewSetAttr, 4);

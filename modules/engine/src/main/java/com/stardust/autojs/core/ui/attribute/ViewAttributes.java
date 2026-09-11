@@ -248,6 +248,17 @@ public class ViewAttributes {
         registerAttr("foregroundTintMode", TINT_MODES::get, this::setForegroundTintMode);
         registerAttr("importantForAccessibility", IMPORTANT_FOR_ACCESSIBILITY::get, mView::setImportantForAccessibility);
         registerAttr("layoutDirection", LAYOUT_DIRECTIONS::get, mView::setLayoutDirection);
+        // 轮廓裁剪：clipToOutline="true" 配合圆形/圆角背景，实现圆形触摸与视觉裁剪
+        // （·圆形触摸穿透需求 P0-2；API 21+）。
+        registerAttr("clipToOutline", Boolean::valueOf, this::setClipToOutline);
+    }
+
+    protected void setClipToOutline(boolean enabled) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            mView.setClipToOutline(enabled);
+            mView.invalidateOutline();
+            mView.invalidate();
+        }
     }
 
     protected void setForegroundTintMode(PorterDuff.Mode mode) {

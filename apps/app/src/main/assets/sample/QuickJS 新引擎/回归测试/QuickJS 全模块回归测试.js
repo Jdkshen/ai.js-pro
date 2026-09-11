@@ -1,6 +1,6 @@
 // @engine quickjs
 // QuickJS 全模块回归测试
-// 用途：213 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
+// 用途：219 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
 // 前置：无（无障碍 / 截图相关用例在缺少权限时自动跳过）
 // 覆盖：Java 互操作 / images / floaty / ui / dialogs / threads / events / engines / http / files / storages / device / app / shell / console 浮窗 / 选择器 / 手势/输入 / timers / continuation / require
 
@@ -573,6 +573,61 @@ assert('控件/窗口尺寸读取不再为 0', (function () {
         && floatyV4.getWidth() === 500 && floatyV4.getHeight() === 300;
 })());
 floatyV4.close();
+sleep(250);
+
+// --- 圆形触摸穿透：view 别名 / clipToOutline / 按区域输入能力位 ---
+assert('floaty.touchRegionInfo 能力探测', (function () {
+    var info = floaty.touchRegionInfo();
+    return typeof info.supported === 'boolean' && typeof info.api === 'string'
+        && floaty.supportsTouchRegion() === info.supported;
+})());
+var floatyCircle = floaty.window(
+    '<card id="c" w="200px" h="200px" cardCornerRadius="50%" clipToOutline="true"/>',
+    { x: 260, y: 620 });
+sleep(500);
+assert('win.view 与控件 view 都是真 View', (function () {
+    var root = floatyCircle.view;
+    var child = floatyCircle.c.view;
+    return root !== undefined && child !== undefined
+        && runOnMainThread(function () {
+            return child.getClass().getSimpleName() === 'CardView';
+        }) === true;
+})());
+assert('card 作为 XML 根按自身 w/h 布局（不再量成 0×0）',
+    floatyCircle.getWidth() === 200 && floatyCircle.getHeight() === 200);
+assert('控件级 setOutlineShape/setCornerRadius/setClipToOutline', (function () {
+    var view = floatyCircle.c;
+    var chained = view.setOutlineShape('circle') === view
+        && view.setCornerRadius(60) === view
+        && view.setClipToOutline(true) === view;
+    return chained && runOnMainThread(function () {
+        return view.javaView.getClipToOutline();
+    }) === true;
+})());
+assert('窗口轮廓 API 链式 + 能力位一致', (function () {
+    var shaped = floatyCircle.setOutlineShape('circle') === floatyCircle
+        && floatyCircle.setCornerRadius('50%') === floatyCircle;
+    var region = floatyCircle.getTouchRegion();
+    // 按区域输入不可用时窗口输入区域始终是矩形（能力位与行为必须一致）
+    if (!floaty.supportsTouchRegion()) return shaped && region.shape === 'rect';
+    return shaped && region.shape === 'circle';
+})());
+assert('setTouchShape/setTouchableRegion/clearTouchRegion 不抛错', (function () {
+    var ok = floatyCircle.setTouchShape('circle') === floatyCircle
+        && floatyCircle.setTouchableRegion(100, 100, 80) === floatyCircle
+        && floatyCircle.setTouchableOnlyInShape(true) === floatyCircle
+        && floatyCircle.clearTouchRegion() === floatyCircle;
+    var region = floatyCircle.getTouchRegion();
+    return ok && (region.shape === 'rect' || region.shape === 'circle');
+})());
+assert('setTouchable(false) 整窗穿透开关（实测可穿透到下层 App）', (function () {
+    var off = floatyCircle.setTouchable(false) === floatyCircle
+        && floatyCircle.getTouchRegion().touchable === false;
+    var on = floatyCircle.setTouchable(true) === floatyCircle
+        && floatyCircle.getTouchRegion().touchable === true;
+    return off && on;
+})());
+floatyCircle.close();
 sleep(250);
 
 var uiLayoutId = ui.layout('<vertical><text id="title" text="ui-title" textSize="18"/>'
