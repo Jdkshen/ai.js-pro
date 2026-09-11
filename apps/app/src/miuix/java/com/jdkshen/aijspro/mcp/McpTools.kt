@@ -108,7 +108,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun listTools() = JsonObject().apply {
         add("tools", JsonArray().apply {
             add(tool("get_status", "读取 MCP、脚本目录、任务和工作区状态"))
-            add(tool("list_scripts", "列出脚本目录中的文件", objSchema("path", "offset", "limit")))
+            add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）", objSchema("path", "offset", "limit", "recursive")))
             add(tool("read_script", "分块读取脚本目录中的文本文件", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
             add(tool("search_scripts", "递归搜索脚本文件名与内容，结果可继续分页", objSchema("query", "path", "limit", required = arrayOf("query"))))
             add(tool("continue_result", "使用 cursor 继续获取搜索或大结果的下一页", objSchema("cursor", "limit", required = arrayOf("cursor"))))
@@ -123,13 +123,16 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("probe_engine_api", "探测指定引擎中某个全局 API 的类型与成员（object/function 及 Object.keys）", objSchema("engine", "name", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比 Rhino 与 QuickJS 的全局 API 差异（common/onlyRhino/onlyQuickJs），用于迁移对照"))
             add(tool("stop_script", "停止本 MCP 发起的运行任务", objSchema("executionId", required = arrayOf("executionId"))))
-            add(tool("workspace_open", "从真实脚本创建私有工作区快照；目标不存在时可传 create=true 创建空的新文件工作区", objSchema("path", "create", required = arrayOf("path"))))
+            add(tool("workspace_open", "从真实脚本创建（或复用）私有工作区快照；create=true 为幂等：不存在则创建（自动建父目录）、已存在则直接打开；子目录文件请传完整相对路径", objSchema("path", "create", required = arrayOf("path"))))
             add(tool("workspace_list", "列出工作区及待确认状态"))
             add(tool("workspace_read", "读取工作区文件", objSchema("workspaceId", "path", "offset", "maxBytes", required = arrayOf("workspaceId", "path"))))
             add(tool("workspace_write", "修改工作区，不会直接覆盖真实脚本；需写入授权", objSchema("workspaceId", "path", "content", required = arrayOf("workspaceId", "path", "content"))))
             add(tool("workspace_delete", "在工作区中标记删除文件；需写入授权", objSchema("workspaceId", "path", required = arrayOf("workspaceId", "path"))))
             add(tool("workspace_diff", "查看工作区与创建时快照的 Diff", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_request_apply", "在手机已开启编辑授权时直接应用工作区；校验原文件、自动备份并支持历史回退（工具名为兼容保留）", objSchema("workspaceId", required = arrayOf("workspaceId"))))
+            add(tool("workspace_mkdir", "在真实脚本目录下创建目录（含多级），需写入授权", objSchema("path", required = arrayOf("path"))))
+            add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
+            add(tool("workspace_cleanup", "清理无用的工作区私有副本：默认只删无修改的 OPEN 与已回退的；applied=true 时连已应用的也删（默认保留 keepAppliedHours=24 小时以便回退）", objSchema("applied", "olderThanHours", "keepAppliedHours")))
             check(map { it.asJsonObject.get("name").asString } == McpToolCatalog.names) {
                 "MCP 工具定义与公开目录不一致"
             }
@@ -147,7 +150,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("retainedExecutions", runs.size); addProperty("workspaces", workspaces.list().size)
                 addProperty("pendingWorkspaceApprovals", workspaces.list().count { it.pendingApproval })
             })
-            "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100)))
+            "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
             "read_script" -> toolJson(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
             "search_scripts" -> toolJson(searchScripts(args.string("query"), args.stringOr("path", ""), args.intOr("limit", 50)))
             "continue_result" -> toolJson(continueResult(args.string("cursor"), args.intOr("limit", 50)))
@@ -183,6 +186,21 @@ internal class McpTools(private val context: Context, private val event: (String
                     addProperty("message", "已应用到真实脚本；修改前已校验并备份，可在手机历史页回退")
                 })
             }
+            "workspace_mkdir" -> {
+                requireWrite()
+                val created = workspaces.makeDirectory(args.string("path"))
+                toolJson(JsonObject().apply { addProperty("path", created); addProperty("created", true) })
+            }
+            "workspace_cancel" -> toolJson(workspaceJson(workspaces.cancel(args.string("workspaceId"))))
+            "workspace_cleanup" -> toolJson(JsonObject().apply {
+                val removed = workspaces.purge(
+                    applied = args.booleanOr("applied", false),
+                    olderThanHours = args.intOr("olderThanHours", 0),
+                    keepAppliedHours = args.intOr("keepAppliedHours", 24)
+                )
+                addProperty("removed", removed)
+                addProperty("remaining", workspaces.list().size)
+            })
             else -> throw ToolError("未知工具：$name")
         }
     }
@@ -477,9 +495,13 @@ internal class McpTools(private val context: Context, private val event: (String
         if (file != root && !file.path.startsWith(root.path + File.separator)) throw ToolError("路径超出脚本目录")
         return file
     }
-    private fun listFiles(dir: File, offset: Int, limit: Int): JsonObject {
-        if (!dir.isDirectory) throw ToolError("目录不存在")
-        val entries = dir.listFiles().orEmpty().sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
+    private fun listFiles(dir: File, offset: Int, limit: Int, recursive: Boolean = false): JsonObject {
+        if (!dir.isDirectory) throw ToolError("目录不存在：${dir.relativeTo(root).invariantSeparatorsPath}")
+        val entries = if (recursive) {
+            dir.walkTopDown().drop(1).filter { it.isFile }.sortedBy { it.relativeTo(dir).invariantSeparatorsPath.lowercase() }.toList()
+        } else {
+            dir.listFiles().orEmpty().sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
+        }
         return page(entries, offset, limit) { file -> JsonObject().apply {
             addProperty("path", file.relativeTo(root).invariantSeparatorsPath); addProperty("name", file.name)
             addProperty("directory", file.isDirectory); addProperty("size", if (file.isFile) file.length() else 0)

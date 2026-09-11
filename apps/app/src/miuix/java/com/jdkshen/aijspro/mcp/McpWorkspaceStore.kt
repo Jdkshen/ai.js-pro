@@ -35,12 +35,25 @@ class McpWorkspaceStore private constructor(
     @Synchronized fun open(path: String, create: Boolean = false): Workspace {
         cleanup()
         val target = resolveScript(path)
-        if (!target.exists() && !create) throw IllegalArgumentException("目标不存在；新建文本文件请传 create=true")
-        if (create && target.exists()) throw IllegalArgumentException("新建目标已存在")
+        val entry = target.relativeTo(scriptRoot).invariantSeparatorsPath
+        if (create && target.exists() && target.isDirectory) {
+            throw IllegalArgumentException("目标已存在且是目录：$entry（用 workspace_mkdir 或在路径后写文件名）")
+        }
+        if (!target.exists() && !create) throw IllegalArgumentException("目标不存在：$entry（新建文本文件请传 create=true）")
         if (create) {
             if (path.isBlank()) throw IllegalArgumentException("新建文件路径不能为空")
-            if (target.extension.lowercase() !in TEXT_EXTENSIONS) throw IllegalArgumentException("只能新建支持的文本文件")
-            if (target.parentFile?.isDirectory != true) throw IllegalArgumentException("新建文件的父目录不存在")
+            if (target.extension.lowercase() !in TEXT_EXTENSIONS) throw IllegalArgumentException("只能新建支持的文本文件：$entry")
+            // 父目录不存在时自动创建（之前直接报“父目录不存在”，用户只能手动建目录）。
+            target.parentFile?.let { parent ->
+                if (!parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
+                    throw IllegalArgumentException("无法创建父目录：${parent.relativeTo(scriptRoot).invariantSeparatorsPath}")
+                }
+            }
+        }
+        // 同一个目标已有未修改的工作区时直接复用，避免每次 open 都新建（旧工作区会无限累积）。
+        if (!create || target.exists()) {
+            list().firstOrNull { it.targetPath == entry && it.state == STATE_OPEN && it.changedFiles == 0 }
+                ?.let { return it }
         }
         val targetIsFile = target.isFile || create
         val id = "ws-" + UUID.randomUUID().toString().substring(0, 8)
@@ -61,16 +74,18 @@ class McpWorkspaceStore private constructor(
             File(work, relative).apply { parentFile?.mkdirs(); writeBytes(bytes) }
         }
         try {
-            if (target.isFile) copyOne(target, target.name)
+            // 单文件工作区必须按「相对脚本目录的完整路径」存放，否则子目录文件
+            // （如 悬浮球项目/README.md）读写时会找不到（·用户反馈 P0-1）。
+            if (target.isFile) copyOne(target, entry)
             else target.walkTopDown().filter { it.isFile }.forEach { file ->
                 val canonical = file.canonicalFile
                 if (!inside(target, canonical)) throw IllegalArgumentException("项目包含越界路径")
                 copyOne(canonical, canonical.relativeTo(target).invariantSeparatorsPath)
             }
-            if (count == 0 && !create) throw IllegalArgumentException("目标中没有可编辑文本文件")
+            if (count == 0 && !create) throw IllegalArgumentException("目标中没有可编辑文本文件：$entry")
             val now = System.currentTimeMillis()
             writeMeta(dir, JSONObject().apply {
-                put("id", id); put("targetPath", target.relativeTo(scriptRoot).invariantSeparatorsPath)
+                put("id", id); put("targetPath", entry); put("entryPath", entry)
                 put("targetIsFile", targetIsFile); put("createdAt", now); put("updatedAt", now)
                 put("state", STATE_OPEN); put("pendingApproval", false)
                 put("originalHashes", JSONObject(hashes as Map<*, *>)); put("appliedHashes", JSONObject())
@@ -90,8 +105,11 @@ class McpWorkspaceStore private constructor(
 
     @Synchronized fun read(id: String, path: String): ByteArray {
         val dir = workspaceDir(id)
-        val file = resolveWorkspace(File(dir, "work"), path)
-        if (!file.isFile || file.extension.lowercase() !in TEXT_EXTENSIONS) throw IllegalArgumentException("工作区文件不存在")
+        val meta = readMeta(dir)
+        val file = resolveWorkspace(File(dir, "work"), clientPath(meta, path))
+        if (!file.isFile || file.extension.lowercase() !in TEXT_EXTENSIONS) {
+            throw IllegalArgumentException("工作区中不存在此文本文件：${path}（可用路径：${entryPathOf(meta)}）")
+        }
         return file.readBytes()
     }
 
@@ -100,9 +118,8 @@ class McpWorkspaceStore private constructor(
         val dir = workspaceDir(id)
         val meta = readMeta(dir)
         if (meta.getString("state") !in setOf(STATE_OPEN, STATE_PENDING)) throw IllegalArgumentException("工作区已结束")
-        validateWorkspacePath(meta, path)
-        val file = resolveWorkspace(File(dir, "work"), path)
-        if (file.extension.lowercase() !in TEXT_EXTENSIONS) throw IllegalArgumentException("不支持此文件类型")
+        val file = resolveWorkspace(File(dir, "work"), clientPath(meta, path))
+        if (file.extension.lowercase() !in TEXT_EXTENSIONS) throw IllegalArgumentException("不支持此文件类型：${path}")
         val workRoot = File(dir, "work")
         val existingSize = if (file.isFile) file.length() else 0L
         val totalAfter = workRoot.walkTopDown().filter { it.isFile }.sumOf { it.length() } - existingSize + content.size
@@ -119,13 +136,59 @@ class McpWorkspaceStore private constructor(
         val dir = workspaceDir(id)
         val meta = readMeta(dir)
         if (meta.getString("state") !in setOf(STATE_OPEN, STATE_PENDING)) throw IllegalArgumentException("工作区已结束")
-        validateWorkspacePath(meta, path)
-        val file = resolveWorkspace(File(dir, "work"), path)
-        if (!file.isFile) throw IllegalArgumentException("工作区文件不存在")
+        val file = resolveWorkspace(File(dir, "work"), clientPath(meta, path))
+        if (!file.isFile) throw IllegalArgumentException("工作区中不存在此文件：${path}（可用路径：${entryPathOf(meta)}）")
         if (!file.delete()) throw IOException("删除失败")
         meta.put("updatedAt", System.currentTimeMillis()).put("state", STATE_OPEN).put("pendingApproval", false)
         writeMeta(dir, meta)
         return summary(dir)
+    }
+
+    /** 取消待确认的应用请求（把工作区恢复成可编辑的 OPEN 状态）。 */
+    @Synchronized fun cancel(id: String): Workspace {
+        val dir = workspaceDir(id)
+        val meta = readMeta(dir)
+        if (meta.getString("state") != STATE_PENDING || !meta.optBoolean("pendingApproval")) {
+            throw IllegalArgumentException("此工作区没有待确认的应用请求")
+        }
+        meta.put("state", STATE_OPEN).put("pendingApproval", false).put("updatedAt", System.currentTimeMillis())
+        writeMeta(dir, meta)
+        return summary(dir)
+    }
+
+    /**
+     * 清理工作区私有副本：[applied] 为 true 时连已应用的一起删（默认保留 [keepAppliedHours] 小时，
+     * 以便手机历史页还能回退），[olderThanHours] 可按最后修改时间进一步限制。
+     */
+    @Synchronized fun purge(applied: Boolean = false, olderThanHours: Int = 0, keepAppliedHours: Int = 24): Int {
+        val now = System.currentTimeMillis()
+        val olderCutoff = if (olderThanHours > 0) now - olderThanHours.toLong() * 3_600_000L else Long.MAX_VALUE
+        val appliedCutoff = now - keepAppliedHours.coerceAtLeast(0).toLong() * 3_600_000L
+        var removed = 0
+        root.listFiles().orEmpty().filter { it.isDirectory && File(it, META).isFile }.forEach { dir ->
+            val meta = runCatching { readMeta(dir) }.getOrNull() ?: return@forEach
+            val state = meta.optString("state")
+            val updatedAt = meta.optLong("updatedAt", dir.lastModified())
+            if (updatedAt > olderCutoff) return@forEach
+            val removable = when (state) {
+                STATE_APPLIED -> applied && updatedAt <= appliedCutoff
+                STATE_ROLLED_BACK -> true
+                STATE_PENDING -> false
+                else -> changedCount(dir) == 0
+            }
+            if (removable && dir.deleteRecursively()) removed++
+        }
+        return removed
+    }
+
+    /** 在真实脚本目录下创建目录（需写入授权，由调用方校验）。 */
+    @Synchronized fun makeDirectory(path: String): String {
+        val clean = path.replace('\\', '/').trim('/')
+        if (clean.isEmpty()) throw IllegalArgumentException("目录路径不能为空")
+        val dir = resolveScript(clean)
+        if (dir.isFile) throw IllegalArgumentException("同名文件已存在：${dir.relativeTo(scriptRoot).invariantSeparatorsPath}")
+        if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) throw IOException("创建目录失败：${dir.relativeTo(scriptRoot).invariantSeparatorsPath}")
+        return dir.relativeTo(scriptRoot).invariantSeparatorsPath
     }
 
     @Synchronized fun diff(id: String): String {
@@ -243,7 +306,8 @@ class McpWorkspaceStore private constructor(
 
     private fun summary(dir: File): Workspace {
         val meta = readMeta(dir)
-        return Workspace(meta.getString("id"), meta.getString("targetPath"), meta.getLong("createdAt"),
+        return Workspace(meta.getString("id"), entryPathOf(meta).ifBlank { meta.getString("targetPath") },
+            meta.getLong("createdAt"),
             meta.getLong("updatedAt"), meta.getString("state"), meta.optBoolean("pendingApproval"), changedCount(dir))
     }
 
@@ -274,10 +338,21 @@ class McpWorkspaceStore private constructor(
         if (!inside(base.canonicalFile, file)) throw IllegalArgumentException("路径超出工作区")
         return file
     }
-    private fun validateWorkspacePath(meta: JSONObject, path: String) {
-        if (meta.optBoolean("targetIsFile") && path.replace('\\', '/').trim('/') != File(meta.getString("targetPath")).name) {
-            throw IllegalArgumentException("单文件工作区不能新建其他文件")
-        }
+    /** 工作区里的入口文件：优先 entryPath，旧工作区回退到 targetPath。 */
+    private fun entryPathOf(meta: JSONObject): String =
+        meta.optString("entryPath").ifBlank { meta.optString("targetPath") }
+
+    /**
+     * 把客户端传来的 path 映射到工作区内真正的位置：
+     * 单文件工作区允许传「完整相对路径」或「文件名」（旧客户端兼容），
+     * 其他路径给带完整路径的清晰报错（旧文案“不能新建其他文件”会让人排查到错方向）。
+     */
+    private fun clientPath(meta: JSONObject, path: String): String {
+        if (!meta.optBoolean("targetIsFile")) return path
+        val entry = entryPathOf(meta)
+        val normalized = path.replace('\\', '/').trim('/')
+        if (normalized == entry || normalized == File(entry).name) return entry
+        throw IllegalArgumentException("单文件工作区（$entry）只能编辑该文件，收到：$path；子目录文件请用 workspace_open('$path') 单独打开")
     }
     private fun inside(base: File, child: File) = child == base || child.path.startsWith(base.path + File.separator)
     private fun readMeta(dir: File) = JSONObject(File(dir, META).readText(Charsets.UTF_8))

@@ -32,7 +32,7 @@ adb forward tcp:18790 tcp:8788
 只读与检索：
 
 - `get_status`：服务授权和脚本工作区状态。
-- `list_scripts`：按相对路径分页列出脚本目录。
+- `list_scripts`：按相对路径分页列出脚本目录；`recursive=true` 时递归子目录（与 `search_scripts` 同一数据源，不再出现“搜得到、列不出”）。
 - `read_script`：分页读取脚本目录内允许的文本文件，并返回 SHA-256。
 - `search_scripts` / `continue_result`：递归搜索文件名和内容，并使用短期游标继续分页。
 - `list_samples` / `read_sample`：分页列出和读取 `sample` 内置示例。
@@ -48,10 +48,25 @@ adb forward tcp:18790 tcp:8788
 
 手机端开启“允许编辑工作区”后：
 
-- `workspace_open` / `workspace_list` / `workspace_read`：从真实脚本建立并查看 App 私有快照。新建文件时调用 `workspace_open` 并传 `path` 与 `create=true`，再用 `workspace_write` 写入内容；父目录必须已经存在。
-- `workspace_write` / `workspace_delete`：只改变私有副本，不直接覆盖真实脚本。
+- `workspace_open` / `workspace_list` / `workspace_read`：从真实脚本建立并查看 App 私有快照。`workspace_open` 的 `path` 一律用**相对脚本目录的完整路径**（如 `悬浮球项目/README.md`），子目录文件可直接读写。
+- `workspace_write` / `workspace_delete`：只改私有副本，不直接覆盖真实脚本。
 - `workspace_diff`：查看基线与私有副本差异。
 - `workspace_request_apply`：手机端开启“允许编辑并应用”后，直接把工作区写入真实脚本；工具名为兼容旧客户端保留。写入前校验原始哈希并建立备份，应用后可在手机历史页回退。
+- `workspace_mkdir`：在真实脚本目录下创建目录（含多级），需写入授权。
+- `workspace_cancel`：取消待确认的应用请求，把工作区恢复为可编辑状态（不再让 `pendingWorkspaceApprovals` 永远残留）。
+- `workspace_cleanup`：清理无用的工作区私有副本（默认只删无修改的 OPEN 与已回退的；`applied=true` 时连已应用的也删，默认保留 `keepAppliedHours=24` 小时以便回退）。
+
+`workspace_open` 语义：
+
+| 情况 | 行为 |
+|---|---|
+| 目标存在 | 建立快照并返回工作区 |
+| 目标不存在 + `create=true` | 创建空的工作区（**自动创建父目录**），可直接 `workspace_write` 写入 |
+| 目标已存在 + `create=true` | **幂等**：直接打开（不再报“新建目标已存在”）|
+| 同一目标已有“未修改的 OPEN 工作区” | **复用**该工作区，不再新建（避免旧版本每个操作都建一个新工作区）|
+| 传其他路径给单文件工作区 | 报错会带**完整路径**与正确做法，而不是旧的“单文件工作区不能新建其他文件”|
+
+> 注意：`workspace_mkdir` 会在真实脚本目录里建目录（不是私有副本），所以需要写入授权。
 
 新建文件示例：
 

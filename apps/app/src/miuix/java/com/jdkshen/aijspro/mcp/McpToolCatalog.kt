@@ -25,6 +25,9 @@ internal object McpToolCatalog {
         "workspace_write",
         "workspace_delete",
         "workspace_diff",
-        "workspace_request_apply"
+        "workspace_request_apply",
+        "workspace_mkdir",
+        "workspace_cancel",
+        "workspace_cleanup"
     )
 }
