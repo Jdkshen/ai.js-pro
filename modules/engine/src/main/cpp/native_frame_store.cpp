@@ -533,6 +533,33 @@ bool NativeFrameStore::findColor(int64_t handle, uint32_t argb, int threshold,
     return false;
 }
 
+bool NativeFrameStore::findAllPointsForColor(int64_t handle, uint32_t argb, int threshold,
+                                             int x, int y, int width, int height,
+                                             size_t maxPoints,
+                                             std::vector<NativeFramePoint> *points) const {
+    if (points == nullptr) {
+        return false;
+    }
+    points->clear();
+    const auto frame = get(handle);
+    if (frame == nullptr || !normalizeRegion(*frame, &x, &y, &width, &height)) {
+        return false;
+    }
+    threshold = std::max(0, std::min(255, threshold));
+    for (int row = y; row < y + height && points->size() < maxPoints; ++row) {
+        const cv::Vec4b *pixels = frame->ptr<cv::Vec4b>(row);
+        for (int col = x; col < x + width && points->size() < maxPoints; ++col) {
+            if (!colorMatches(pixels[col], argb, threshold)) continue;
+            NativeFramePoint point;
+            point.x = col;
+            point.y = row;
+            point.similarity = 1.0;
+            points->push_back(point);
+        }
+    }
+    return true;
+}
+
 bool NativeFrameStore::findMultiColors(
         int64_t handle, uint32_t firstColor,
         const std::vector<NativeFrameColorOffset> &offsets, int threshold,

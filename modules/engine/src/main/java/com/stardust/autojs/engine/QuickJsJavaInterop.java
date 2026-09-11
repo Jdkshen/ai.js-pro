@@ -61,6 +61,11 @@ final class QuickJsJavaInterop {
         return put(value);
     }
 
+    /** 按句柄取回对象（不存在返回 null，调用方决定报错方式）。 */
+    Object objectForHandle(long handle) {
+        return mHandles.get(handle);
+    }
+
     private Object requireHandle(long handle) {        Object value = mHandles.get(handle);
         if (value == null) {
             throw new IllegalStateException("Java 对象句柄已失效：" + handle);

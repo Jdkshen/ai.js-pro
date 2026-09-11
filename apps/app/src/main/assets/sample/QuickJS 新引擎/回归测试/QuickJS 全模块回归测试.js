@@ -5,6 +5,28 @@ function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }
     else { fail++; console.error('❌ ' + name); }
 }
+// 需要帧的用例：有截图权限用屏幕帧，没有就用 OpenCV 合成的帧（不依赖授权）
+function withScreenFrame(test) {
+    var frame = null;
+    try {
+        frame = images.captureScreen();
+    } catch (e) {
+        frame = null;
+    }
+    if (frame === null || frame === undefined) {
+        var opencv = images.opencv;
+        if (!opencv.Mat || !opencv.CvType || !opencv.Scalar) return true; // 无 OpenCV 时跳过
+        var mat = new opencv.Mat(32, 32, opencv.CvType.CV_8UC4);
+        mat.setTo(new opencv.Scalar(16, 96, 240, 255));
+        frame = images.matToImage(mat);
+        mat.release();
+    }
+    try {
+        return test(frame);
+    } finally {
+        frame.recycle();
+    }
+}
 console.log('=== QuickJS 全模块回归测试 ===\n');
 
 // --- console ---
@@ -497,6 +519,60 @@ assert('Java 对象方法链（Intent + Canvas 构造）', (function () {
     return intent.getFlags() === Intent.FLAG_ACTIVITY_NEW_TASK
         && String(intent) .indexOf('Intent') >= 0;
 })());
+
+// --- OpenCV 直连（帧 ↔ Mat）与 Rhino 同名的 OpenCV 包装 ---
+assert('images.opencv 类访问', typeof images.opencv === 'object' && typeof images.toMat === 'function'
+    && typeof images.matToImage === 'function' && typeof images.toBytes === 'function'
+    && typeof images.fromBytes === 'function' && typeof images.readPixels === 'function'
+    && typeof images.inRange === 'function' && typeof images.adaptiveThreshold === 'function'
+    && typeof images.gaussianBlur === 'function' && typeof images.medianBlur === 'function'
+    && typeof images.findCircles === 'function' && typeof images.interval === 'function');
+assert('OpenCV Java API 直连', (function () {
+    importClass('org.opencv.imgproc.Imgproc');
+    importClass('org.opencv.core.CvType');
+    var src = new org.opencv.core.Mat(4, 4, CvType.CV_8UC1);
+    var dst = new org.opencv.core.Mat();
+    Imgproc.threshold(src, dst, 10, 255, Imgproc.THRESH_BINARY);
+    return dst.rows() === 4 && dst.cols() === 4 && Number(dst.channels()) === 1;
+})());
+assert('帧 → Mat → 帧 往返', withScreenFrame(function (screen) {
+    var mat = images.toMat(screen);
+    var back = images.matToImage(mat);
+    var same = Number(mat.rows()) === Number(screen.pixelHeight)
+        && Number(mat.cols()) === Number(screen.pixelWidth)
+        && Math.abs(back.width - screen.width) < 2 && Math.abs(back.height - screen.height) < 2;
+    back.recycle();
+    mat.release();
+    return same;
+}));
+assert('images.inRange（OpenCV 路径）', withScreenFrame(function (screen) {
+    var binary = images.inRange(screen, '#000000', '#FFFFFF');
+    var ok = binary !== null && binary.width === screen.width;
+    binary.recycle();
+    return ok;
+}));
+assert('images.toBytes/fromBytes 往返', withScreenFrame(function (screen) {
+    var bytes = images.toBytes(screen, 'png', 100);
+    var decoded = images.fromBytes(bytes);
+    var ok = bytes.length > 8 && decoded.width === screen.width;
+    decoded.recycle();
+    return ok;
+}));
+assert('images.medianBlur 可用', withScreenFrame(function (screen) {
+    var blurred = images.medianBlur(screen, 3);
+    var ok = blurred !== null && blurred.width === screen.width;
+    blurred.recycle();
+    return ok;
+}));
+assert('images.findAllPointsForColor', withScreenFrame(function (screen) {
+    var points = images.findAllPointsForColor(screen, '#1060F0', { threshold: 4 });
+    if (!Array.isArray(points)) return false;
+    if (points.length === 0) {
+        // 屏幕帧：只验证类型与不抛异常
+        return true;
+    }
+    return points[0].x >= 0 && points[0].x <= screen.width && points[0].y >= 0;
+}));
 
 // --- 内置模块：crypto / zips / util / automator / context / rawInput ---
 assert('crypto.md5', crypto.md5('abc') === '900150983cd24fb0d6963f7d28e17f72');

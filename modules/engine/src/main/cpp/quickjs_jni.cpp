@@ -914,6 +914,164 @@ JSValue nativeJavaContextHandle(JSContext *context, JSValueConst, int, JSValueCo
     return JS_NewInt64(context, static_cast<int64_t>(handle));
 }
 
+// ---- 帧 ↔ OpenCV Mat 桥（对齐 Rhino 的 img.mat：让 Imgproc/Core 能直接处理脚本帧）----
+
+/** NativeFrame → org.opencv.core.Mat（CV_8UC4 拷贝），返回 Java 对象句柄。 */
+// frameInfo 定义在后面，这里先声明（Mat↔帧 转换需要拼装标准帧信息）
+JSValue frameInfo(JSContext *context, EngineState *state, int64_t handle);
+
+JSValue nativeFrameToMat(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    std::shared_ptr<const cv::Mat> frame = state->frames.get(handle);
+    if (!frame || frame->empty()) {
+        return JS_ThrowTypeError(context, "帧已失效");
+    }
+    // 统一成 8 位 BGRA：NativeFrameStore 只保证深度/通道可用，不保证就是 4 通道。
+    cv::Mat bgra(frame->rows, frame->cols, CV_8UC4);
+    for (int y = 0; y < frame->rows; ++y) {
+        const uint8_t *src = frame->ptr<uint8_t>(y);
+        uint8_t *dst = bgra.ptr<uint8_t>(y);
+        for (int x = 0; x < frame->cols; ++x) {
+            dst[x * 4 + 0] = src[x * (frame->channels()) + 0];
+            if (frame->channels() == 4) {
+                dst[x * 4 + 1] = src[x * 4 + 1];
+                dst[x * 4 + 2] = src[x * 4 + 2];
+                dst[x * 4 + 3] = src[x * 4 + 3];
+            } else if (frame->channels() == 3) {
+                dst[x * 4 + 1] = src[x * 3 + 1];
+                dst[x * 4 + 2] = src[x * 3 + 2];
+                dst[x * 4 + 3] = 255;
+            } else {
+                dst[x * 4 + 1] = src[x];
+                dst[x * 4 + 2] = src[x];
+                dst[x * 4 + 3] = 255;
+            }
+        }
+    }
+    jclass matClass = env->FindClass("org/opencv/core/Mat");
+    if (matClass == nullptr) {
+        return JS_ThrowInternalError(context, "OpenCV Java 接口不可用");
+    }
+    jmethodID constructor = env->GetMethodID(matClass, "<init>", "(III)V");
+    jmethodID nativeObj = env->GetMethodID(matClass, "getNativeObjAddr", "()J");
+    jobject mat = env->NewObject(matClass, constructor, bgra.rows, bgra.cols, CV_8UC4);
+    if (mat == nullptr || nativeObj == nullptr) {
+        if (mat != nullptr) env->DeleteLocalRef(mat);
+        env->DeleteLocalRef(matClass);
+        return JS_ThrowInternalError(context, "无法创建 OpenCV Mat");
+    }
+    // 直接把像素写进 Java Mat 的原生缓冲区：Java 侧 put() 只支持单通道 byte[]。
+    const jlong address = env->CallLongMethod(mat, nativeObj);
+    env->DeleteLocalRef(matClass);
+    if (env->ExceptionCheck()) {
+        env->DeleteLocalRef(mat);
+        return throwJavaException(context, env);
+    }
+    if (address == 0) {
+        env->DeleteLocalRef(mat);
+        return JS_ThrowInternalError(context, "无法创建 OpenCV Mat");
+    }
+    auto *target = reinterpret_cast<cv::Mat *>(address);
+    if (target->empty() || target->cols != bgra.cols || target->rows != bgra.rows) {
+        env->DeleteLocalRef(mat);
+        return JS_ThrowInternalError(context, "无法创建 OpenCV Mat");
+    }
+    for (int y = 0; y < bgra.rows; ++y) {
+        std::memcpy(target->ptr<uint8_t>(y), bgra.ptr<uint8_t>(y),
+                    static_cast<size_t>(bgra.cols) * 4);
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID registerMethod = env->GetMethodID(hostClass, "javaRegisterObject", "(Ljava/lang/Object;)J");
+    jlong javaHandle = env->CallLongMethod(state->host, registerMethod, mat);
+    env->DeleteLocalRef(hostClass);
+    env->DeleteLocalRef(mat);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewInt64(context, static_cast<int64_t>(javaHandle));
+}
+
+/** org.opencv.core.Mat（Java 对象句柄）→ NativeFrame；返回帧句柄。 */
+JSValue nativeMatToFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t javaHandle = 0;
+    if (argc < 1 || JS_ToInt64(context, &javaHandle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID lookup = env->GetMethodID(hostClass, "javaObjectForHandle", "(J)Ljava/lang/Object;");
+    jobject mat = env->CallObjectMethod(state->host, lookup, static_cast<jlong>(javaHandle));
+    if (env->ExceptionCheck()) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    if (mat == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return JS_ThrowTypeError(context, "Mat 句柄已失效");
+    }
+    jclass matClass = env->GetObjectClass(mat);
+    jmethodID nativeObj = env->GetMethodID(matClass, "getNativeObjAddr", "()J");
+    if (nativeObj == nullptr) {
+        env->DeleteLocalRef(matClass);
+        env->DeleteLocalRef(mat);
+        env->DeleteLocalRef(hostClass);
+        return JS_ThrowTypeError(context, "不是 OpenCV Mat 对象");
+    }
+    const jlong address = env->CallLongMethod(mat, nativeObj);
+    env->DeleteLocalRef(matClass);
+    env->DeleteLocalRef(mat);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (address == 0) {
+        return JS_ThrowTypeError(context, "Mat 已被释放");
+    }
+    auto *source = reinterpret_cast<cv::Mat *>(address);
+    if (source->empty()) {
+        return JS_ThrowTypeError(context, "Mat 为空");
+    }
+    // clone：脚本随时可以 release 原始 Mat，帧需要自己持有数据；统一转成 4 通道 BGRA。
+    const cv::Mat cloned = source->clone();
+    cv::Mat bgra(cloned.rows, cloned.cols, CV_8UC4);
+    for (int y = 0; y < cloned.rows; ++y) {
+        const uint8_t *src = cloned.ptr<uint8_t>(y);
+        uint8_t *dst = bgra.ptr<uint8_t>(y);
+        for (int x = 0; x < cloned.cols; ++x) {
+            const int channels = cloned.channels();
+            if (channels == 4) {
+                dst[x * 4 + 0] = src[x * 4 + 0];
+                dst[x * 4 + 1] = src[x * 4 + 1];
+                dst[x * 4 + 2] = src[x * 4 + 2];
+                dst[x * 4 + 3] = src[x * 4 + 3];
+            } else if (channels == 3) {
+                dst[x * 4 + 0] = src[x * 3 + 0];
+                dst[x * 4 + 1] = src[x * 3 + 1];
+                dst[x * 4 + 2] = src[x * 3 + 2];
+                dst[x * 4 + 3] = 255;
+            } else {
+                const uint8_t value = src[x * channels];
+                dst[x * 4 + 0] = value;
+                dst[x * 4 + 1] = value;
+                dst[x * 4 + 2] = value;
+                dst[x * 4 + 3] = 255;
+            }
+        }
+    }
+    const int64_t frameHandle = state->frames.createFromRgba(bgra.data, bgra.cols, bgra.rows,
+                                                            bgra.step, 4);
+    if (frameHandle == 0) {
+        return JS_ThrowInternalError(context, "无法创建帧");
+    }
+    return frameInfo(context, state, frameHandle);
+}
+
 /** 从非引擎线程安排一次脚本回调（Web 桥与回归测试使用，验证跨线程回调通路）。 */
 JSValue nativePostJsCallbackAsync(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
@@ -2725,6 +2883,39 @@ JSValue nativeFindColor(JSContext *context, JSValueConst, int argc, JSValueConst
     return pointValue(context, point, false);
 }
 
+/** 扫描区域内所有匹配颜色的像素（Rhino `images.findAllPointsForColor`）；返回 int32 x,y 对数组。 */
+JSValue nativeFindAllColorPoints(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t color = 0;
+    int32_t threshold = 4;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    if (argc < 7 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &color, argv[1]) < 0 || JS_ToInt32(context, &threshold, argv[2]) < 0 ||
+        JS_ToInt32(context, &x, argv[3]) < 0 || JS_ToInt32(context, &y, argv[4]) < 0 ||
+        JS_ToInt32(context, &width, argv[5]) < 0 || JS_ToInt32(context, &height, argv[6]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid images.findAllPointsForColor arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    std::vector<NativeFramePoint> points;
+    // 上限防止全屏纯色把结果数组撑爆（2 万个点 ≈ 160 KB）。
+    constexpr size_t maxPoints = 20000;
+    if (!state->frames.findAllPointsForColor(handle, static_cast<uint32_t>(color), threshold,
+                                             x, y, width, height, maxPoints, &points)) {
+        return JS_NewArrayBufferCopy(context, nullptr, 0);
+    }
+    std::vector<int32_t> flat;
+    flat.reserve(points.size() * 2);
+    for (const auto &point : points) {
+        flat.push_back(point.x);
+        flat.push_back(point.y);
+    }
+    return JS_NewArrayBufferCopy(context, reinterpret_cast<const uint8_t *>(flat.data()),
+                                 flat.size() * sizeof(int32_t));
+}
+
 JSValue nativeFindMultiColors(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t handle = 0;
     int32_t firstColor = 0, threshold = 4, x = 0, y = 0, width = 0, height = 0;
@@ -4068,6 +4259,23 @@ const char kBootstrapScript[] = R"JS(
                 threshold: threshold === undefined ? 4 : threshold
             });
         },
+        findAllPointsForColor: function (frame, color, options) {
+            const state = requireFrame(frame);
+            const region = pixelRegionOf(frame, regionOf(frame, options));
+            const threshold = options && options.similarity !== undefined
+                ? Math.trunc(255 * (1 - Number(options.similarity)))
+                : colorThreshold(options, 4);
+            const flat = new Int32Array(__aiNativeFindAllColorPoints(state.id, parseColor(color),
+                threshold, region[0], region[1], region[2], region[3]));
+            const points = [];
+            for (let index = 0; index + 1 < flat.length; index += 2) {
+                points.push({
+                    x: Math.round(flat[index] / state.scaleX),
+                    y: Math.round(flat[index + 1] / state.scaleY)
+                });
+            }
+            return points;
+        },
         findMultiColors: function (frame, firstColor, paths, options) {
             if (!Array.isArray(paths)) throw new TypeError('paths must be [[dx, dy, color], ...]');
             const state = requireFrame(frame);
@@ -4211,6 +4419,184 @@ const char kBootstrapScript[] = R"JS(
             threshold: threshold === undefined ? 0.9 : threshold
         });
     };
+    // ---- OpenCV 直连：帧 ↔ Mat + Rhino 同名包装（adaptiveThreshold/gaussianBlur/medianBlur/inRange/interval/findCircles）----
+    // Rhino 的 __images__.js 用 img.mat 直接调 OpenCV Java API；QuickJS 通过帧↔Mat 桥提供同样的写法。
+    // 注意：这里必须惰性解析（Java 互操作的名字缓存晚于本段初始化）。
+    var opencvClassMap = null;
+    function opencvClassesOf() {
+        if (opencvClassMap === null) {
+            var names = {
+                Mat: 'org.opencv.core.Mat',
+                Core: 'org.opencv.core.Core',
+                Imgproc: 'org.opencv.imgproc.Imgproc',
+                CvType: 'org.opencv.core.CvType',
+                Scalar: 'org.opencv.core.Scalar',
+                Size: 'org.opencv.core.Size',
+                Point: 'org.opencv.core.Point',
+                Rect: 'org.opencv.core.Rect',
+                Bitmap: 'android.graphics.Bitmap',
+                BitmapFactory: 'android.graphics.BitmapFactory'
+            };
+            var resolved = {};
+            for (var key in names) {
+                var cls = resolveJavaClass(names[key]);
+                if (cls !== null) resolved[key] = cls;
+            }
+            opencvClassMap = resolved;
+        }
+        return opencvClassMap;
+    }
+    Object.defineProperty(images, 'opencv', {
+        get: function () { return opencvClassesOf(); },
+        enumerable: true
+    });
+
+    /** 帧 → OpenCV Mat（CV_8UC4）。 */
+    images.toMat = function (frame) {
+        var id = Number(__aiNativeFrameToMat(requireFrame(frame).id));
+        return javaObjectOf(id, 'org.opencv.core.Mat');
+    };
+    /** OpenCV Mat → 帧（clone，Mat 之后 release 也不影响）。 */
+    images.matToImage = function (mat) {
+        var handle = mat && mat.__javaHandle !== undefined ? Number(mat.__javaHandle) : 0;
+        if (!handle) throw new TypeError('matToImage 需要 OpenCV Mat 对象');
+        return wrapFrame(__aiNativeMatToFrame(handle));
+    };
+
+    function openCvOp(frame, build) {
+        var opencv = opencvClassesOf();
+        if (!opencv.Mat || !opencv.Imgproc) {
+            throw new Error('OpenCV Java 接口不可用');
+        }
+        var source = images.toMat(frame);
+        var target = new opencv.Mat();
+        try {
+            build(source, target, opencv);
+            return images.matToImage(target);
+        } finally {
+            try { source.release(); } catch (e) { }
+            try { target.release(); } catch (e) { }
+        }
+    }
+
+    function colorScalar(opencv, color, delta) {
+        var parsed = parseColor(color);
+        var alpha = (parsed >>> 24) & 0xFF;
+        var red = (parsed >> 16) & 0xFF;
+        var green = (parsed >> 8) & 0xFF;
+        var blue = parsed & 0xFF;
+        if (delta === undefined) {
+            return new opencv.Scalar(red, green, blue, alpha);
+        }
+        var step = Number(delta);
+        return new opencv.Scalar(
+            Math.min(255, Math.max(0, red + step)),
+            Math.min(255, Math.max(0, green + step)),
+            Math.min(255, Math.max(0, blue + step)),
+            alpha);
+    }
+
+    images.inRange = function (frame, lowerBound, upperBound) {
+        return openCvOp(frame, function (source, target, opencv) {
+            opencv.Core.inRange(source, colorScalar(opencv, lowerBound),
+                colorScalar(opencv, upperBound), target);
+        });
+    };
+    images.interval = function (frame, color, threshold) {
+        var delta = threshold === undefined ? 4 : Number(threshold);
+        return openCvOp(frame, function (source, target, opencv) {
+            opencv.Core.inRange(source, colorScalar(opencv, color, -delta),
+                colorScalar(opencv, color, delta), target);
+        });
+    };
+    images.adaptiveThreshold = function (frame, maxValue, adaptiveMethod, thresholdType, blockSize, c) {
+        return openCvOp(frame, function (source, target, opencv) {
+            opencv.Imgproc.adaptiveThreshold(source, target, maxValue,
+                opencv.Imgproc['ADAPTIVE_THRESH_' + (adaptiveMethod || 'MEAN_C')],
+                opencv.Imgproc['THRESH_' + (thresholdType || 'BINARY')],
+                blockSize, c);
+        });
+    };
+    images.gaussianBlur = function (frame, size, sigmaX, sigmaY, type) {
+        return openCvOp(frame, function (source, target, opencv) {
+            var values = Array.isArray(size) ? size : [size, size];
+            opencv.Imgproc.GaussianBlur(source, target,
+                new opencv.Size(Number(values[0]), Number(values[1])),
+                sigmaX === undefined ? 0 : sigmaX, sigmaY === undefined ? 0 : sigmaY,
+                opencv.Core['BORDER_' + (type || 'DEFAULT')]);
+        });
+    };
+    images.medianBlur = function (frame, size) {
+        return openCvOp(frame, function (source, target, opencv) {
+            opencv.Imgproc.medianBlur(source, target, Number(size));
+        });
+    };
+    images.findCircles = function (frame, options) {
+        options = options || {};
+        var opencv = opencvClassesOf();
+        var found = [];
+        if (!opencv.Imgproc) throw new Error('OpenCV Java 接口不可用');
+        var source = images.toMat(frame);
+        var target = new opencv.Mat();
+        try {
+            opencv.Imgproc.HoughCircles(source, target, opencv.Imgproc.CV_HOUGH_GRADIENT,
+                options.dp === undefined ? 1 : options.dp,
+                options.minDst === undefined ? frame.height / 8 : options.minDst,
+                options.param1 === undefined ? 100 : options.param1,
+                options.param2 === undefined ? 100 : options.param2,
+                options.minRadius === undefined ? 0 : options.minRadius,
+                options.maxRadius === undefined ? 0 : options.maxRadius);
+            var columns = Number(target.cols());
+            for (var i = 0; i < columns; i++) {
+                var data = target.get(0, i);
+                found.push({ x: Number(data[0]), y: Number(data[1]), radius: Number(data[2]) });
+            }
+        } finally {
+            try { source.release(); } catch (e) { }
+            try { target.release(); } catch (e) { }
+        }
+        return found;
+    };
+
+    /** 编码后的字节（JS 数组；Rhino 返回 Java byte[]，两边都能直接喂给 BitmapFactory.decodeByteArray）。 */
+    images.toBytes = function (frame, format, quality) {
+        return images.compress(frame, format === undefined ? 'png' : format,
+            quality === undefined ? 100 : quality);
+    };
+    /** 解码字节数组为帧（经 base64 中转）。 */
+    images.fromBytes = function (bytes) {
+        if (bytes === null || bytes === undefined) throw new TypeError('fromBytes 需要字节数组');
+        var table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        var text = '';
+        for (var i = 0; i < bytes.length; i += 3) {
+            var b0 = Number(bytes[i]) & 0xFF;
+            var b1 = i + 1 < bytes.length ? Number(bytes[i + 1]) & 0xFF : 0;
+            var b2 = i + 2 < bytes.length ? Number(bytes[i + 2]) & 0xFF : 0;
+            text += table[b0 >> 2];
+            text += table[((b0 & 3) << 4) | (b1 >> 4)];
+            text += i + 1 < bytes.length ? table[((b1 & 15) << 2) | (b2 >> 6)] : '=';
+            text += i + 2 < bytes.length ? table[b2 & 63] : '=';
+        }
+        return images.fromBase64(text);
+    };
+    /** 逐像素读取图片文件（{data,width,height}，data 为 ARGB int 数组）。 */
+    images.readPixels = function (path) {
+        var opencv = opencvClassesOf();
+        if (!opencv.BitmapFactory) throw new Error('BitmapFactory 不可用');
+        var bitmap = opencv.BitmapFactory.decodeFile(String(path));
+        if (bitmap === null || bitmap === undefined) throw new Error('无法读取图片：' + path);
+        var width = Number(bitmap.getWidth());
+        var height = Number(bitmap.getHeight());
+        var data = [];
+        for (var y = 0; y < height; y++) {
+            for (var x = 0; x < width; x++) {
+                data.push(Number(bitmap.getPixel(x, y)));
+            }
+        }
+        try { bitmap.recycle(); } catch (e) { }
+        return { data: data, width: width, height: height };
+    };
+
     global.NativeFrame = NativeFrame;
     global.colors = Object.freeze(colors);
     global.images = Object.freeze(images);
@@ -7321,6 +7707,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFrameStats", nativeFrameStats, 0);
     installNativeFunction(state->context, global, "__aiNativeFramePixel", nativeFramePixel, 3);
     installNativeFunction(state->context, global, "__aiNativeFindColor", nativeFindColor, 7);
+    installNativeFunction(state->context, global, "__aiNativeFindAllColorPoints", nativeFindAllColorPoints, 7);
     installNativeFunction(state->context, global, "__aiNativeFindMultiColors", nativeFindMultiColors, 8);
     installNativeFunction(state->context, global, "__aiNativeFindImage", nativeFindImage, 7);
     installNativeFunction(state->context, global, "__aiNativeMatchTemplate", nativeMatchTemplate, 8);
@@ -7402,6 +7789,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeJavaSetField", nativeJavaSetField, 3);
     installNativeFunction(state->context, global, "__aiNativeJavaNew", nativeJavaNew, 2);
     installNativeFunction(state->context, global, "__aiNativeJavaContextHandle", nativeJavaContextHandle, 0);
+    installNativeFunction(state->context, global, "__aiNativeFrameToMat", nativeFrameToMat, 1);
+    installNativeFunction(state->context, global, "__aiNativeMatToFrame", nativeMatToFrame, 1);
     installNativeFunction(state->context, global, "__aiNativeExitSelf", nativeExitSelf, 0);
     installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
     installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);

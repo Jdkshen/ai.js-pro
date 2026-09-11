@@ -3810,6 +3810,16 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
     }
 
+    /** native 侧创建好 Java 对象（如 OpenCV Mat）后登记句柄，供 JS 侧 Proxy 包装。 */
+    public long javaRegisterObject(Object value) {
+        return value == null ? 0 : mJavaInterop.putForScript(value);
+    }
+
+    /** native 侧按句柄取回 Java 对象（Mat → 帧桥使用）。 */
+    public Object javaObjectForHandle(long handle) {
+        return mJavaInterop.objectForHandle(handle);
+    }
+
     /** `'m'` 有方法 / `'f'` 有字段 / 空串都没有。 */
     public String javaProbe(long handle, String name) {
         return mJavaInterop.probe(handle, name);

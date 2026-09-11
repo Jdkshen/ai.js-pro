@@ -69,7 +69,11 @@ toast("这是 QuickJS 脚本");
 | `images.pixel`、`NativeFrame.pixel` | 已接入 | 返回 ARGB 整数，像素不进入 JS 堆 |
 | `colors.*` | 已接入 | `rgb` / `argb` / `parseColor` / RGBA 通道 / `toString` / `isSimilar` |
 | `images.findColor`、`findColorInRegion`、`detectsColor` | 已接入 | C++ 直接扫描 RGBA，支持 `threshold` 和 `region` |
+| `images.findAllPointsForColor` | 已接入 | Native 全区域扫描，返回 `{x, y}` 数组（上限 2 万点防爆），与 Rhino 语义一致 |
 | `images.findMultiColors` | 已接入 | Native 多点颜色路径扫描，JS 只传颜色和偏移数组 |
+| `images.opencv`、`images.toMat`、`images.matToImage` | 已接入 | 帧↔`org.opencv.core.Mat`（CV_8UC4）双向桥：`toMat` 直接写 Java Mat 原生缓冲区，`matToImage` 走 `getNativeObjAddr()` 后 clone；`images.opencv` 提供 Mat/Core/Imgproc/CvType/Scalar/Size/Point/Rect/Bitmap/BitmapFactory 类映射（惰性解析，与初始化顺序无关） |
+| `images.inRange`、`interval`、`adaptiveThreshold`、`gaussianBlur`、`medianBlur`、`findCircles` | 已接入 | 走 OpenCV Java API + 帧桥，参数与 Rhino `__images__.js` 一致（`interval` 的上下界按 `color±threshold` 生成 Scalar） |
+| `images.toBytes`、`fromBytes`、`readPixels` | 已接入 | `toBytes` 返回 `Uint8Array`（原生编码），`fromBytes` 走 `fromEncoded`，`readPixels` 用 BitmapFactory 逐像素读文件 |
 | `images.read`、`findImage`、`matchTemplate` | 已接入 | OpenCV C++ 解码与单/多结果模板匹配 |
 | `images.copy`、`clip`、`resize`、`scale` | 已接入 | 操作 Native `cv::Mat`，返回新 `NativeFrame` 句柄 |
 | `images.grayscale/gray`、`cvtColor` | 已接入 | 内部保持 RGBA 句柄约束，支持灰度化和常用 RGB/BGR 转换 |
@@ -139,6 +143,45 @@ try {
 ```
 
 `NativeFrame` 在 JS 中只保存句柄和尺寸信息；完整像素始终留在 C++ 内存。默认截图立即采用当前最新缓存，不会在静止页面无限等待；`fresh: true` 用于等待新帧，`timeout` 默认 100ms，超时后回退最近有效帧。`captureScreen()` 或 `{ mode: 'full' }` 保持原分辨率和像素精度；`{ mode: 'fast', size: 720 }` 与 `size: 640` 在 Native 创建帧时直接缩放。快速帧的 `pixel`、找色、多点找色、模板匹配、YOLO 区域和检测框统一使用原屏幕坐标，桥接层自动完成双向映射。长循环必须用 `try/finally` 调用 `recycle()`，防止在单个长时间脚本内积压截图。可直接运行 `apps/app/src/main/assets/sample/QuickJS 新引擎/图色处理/01-图色 API 自动回归.js`、`05-全分辨率与视觉加速对比.js` 与 `07-截图首帧与稳定耗时测试.js` 检查整条链路。
+
+### OpenCV 直连（与 Rhino 写法一致）
+
+```javascript
+// @engine quickjs
+const frame = captureScreen();
+try {
+    // Rhino 的 img.mat 等价写法：帧 → Mat，直接调用 OpenCV Java API
+    const mat = images.toMat(frame);              // CV_8UC4
+    const gray = new images.opencv.Mat();
+    const binary = new images.opencv.Mat();
+    try {
+        images.opencv.Imgproc.cvtColor(mat, gray, images.opencv.Imgproc.COLOR_RGBA2GRAY);
+        images.opencv.Imgproc.threshold(gray, binary, 120, 255, images.opencv.Imgproc.THRESH_BINARY);
+        const back = images.matToImage(binary);   // clone，binary 之后 release 也不影响
+        try {
+            console.log(back.width, back.height, images.pixel(back, 0, 0));
+        } finally {
+            back.recycle();
+        }
+    } finally {
+        mat.release();
+        gray.release();
+        binary.release();
+    }
+
+    // 快捷封装（内部同样走 OpenCV Java API + 帧桥）
+    const mask = images.inRange(frame, '#000000', '#666666');
+    try {
+        console.log(images.findAllPointsForColor(mask, '#ffffff', { threshold: 8 }).slice(0, 5));
+    } finally {
+        mask.recycle();
+    }
+} finally {
+    frame.recycle();
+}
+```
+
+`images.opencv` 是 Rhino `__images__.js` 里 `opencvImporter` 的 QuickJS 等价物（类映射，惰性解析）；Rhino 中 `img.mat` 这类隐式转换在 QuickJS 里显式写成 `images.toMat(frame)` / `images.matToImage(mat)`，其余参数与返回语义保持一致。
 
 ### NativeFrame + OpenCV YOLO
 

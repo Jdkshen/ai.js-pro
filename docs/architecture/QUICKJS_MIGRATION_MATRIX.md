@@ -22,6 +22,7 @@
 | web / 跨线程回调 | `newInjectableWebView()` 加载 data URL 后 `inject(script, callback)` 拿到页面里的值；`rhino.call/eval` 的任务分发与 sleep 期间的跨线程回调均通过 | Mi8（回归测试 143 项全绿） |
 | continuation | `delay` 阻塞等待、`create/await` 与 `Promise.await` 的明确报错、`enabled === false` 均通过 | Mi8（回归测试 143 项全绿） |
 | Java 互操作 | `Packages`/`importClass`/`importPackage`/`Java.type`、静态字段与方法、`new` 构造、实例字段读写、JavaBean 属性（`file.path`/`context.packageName`）、重载解析（`String.valueOf(42)` 选 int）、Java 异常转 Error、Java 数组返回值、JS 数组作可变参数；`context` 为真实 Android Context；Rhino 预导入的 10 个类名全部可用 | Mi8 + 新机 Android 16（回归测试 177 项全绿） |
+| OpenCV / 图色 | `images.opencv` 类映射（Mat/Core/Imgproc/CvType/Scalar/Size/Point/Rect/Bitmap/BitmapFactory）与 OpenCV Java API 直连（`new Mat(w,h,CV_8UC1)` + `Imgproc.threshold`）；帧→`Mat`→帧往返、`inRange`/`interval`/`adaptiveThreshold`/`gaussianBlur`/`medianBlur`/`findCircles`/`findAllPointsForColor`、`toBytes`/`fromBytes` 往返、`readPixels` 全部通过（无截图权限时用例自动改用 OpenCV 合成帧，不依赖授权） | Mi8（回归测试 184 项全绿，`images` 成员 42 ⊇ Rhino 39） |
 | UI | 布局创建、文本更新/回读、`ui.<id>`/`$ui.<id>` 控件代理、任意属性 `attr` 读写、`ui.emitter`/`ui.findView`/`ui.post`/`ui.isUiThread`/`ui.statusBarColor` 通过（`ui` 为覆盖层模式，非 Rhino 的 UI Activity） | Mi8（回归测试 162 项全绿） |
 | floaty | 真实创建、位置/尺寸/文本更新、关闭通过 | compat/lite K40 通过 |
 | Rhino 兼容 | 23 项基础回归通过；lite 可控拒绝且不崩溃 | K40 通过 |
@@ -37,7 +38,7 @@
 | 领域 | 硬阻塞 |
 | --- | --- |
 | 手势与输入 | `gesture*`/`input`/根助手已对齐；`rawInput`/`Input`/`KeyEvent` 类注入与 `automator` 模块已随完整 Java 反射补齐，旧脚本无需改写法 |
-| 模块 | `plugins` 尚未迁移（插件 SDK 依赖 Rhino scope）；`crypto`/`zips`/`util`/`automator`/`context`/`rawInput`/`sqlite`/`io`/`web`/`continuation` 已对齐，控制台浮窗与选择器 JS 谓词（`filter`/`addFilter`/`findAndReturnList`）也已对齐 |
+| 模块 | `plugins` 尚未迁移（插件 SDK 依赖 Rhino scope）；`images`/OpenCV（帧↔Mat 桥、`images.opencv`、`inRange`/`interval`/`adaptiveThreshold`/`gaussianBlur`/`medianBlur`/`findCircles`/`findAllPointsForColor`/`toBytes`/`fromBytes`/`readPixels`）已对齐，`crypto`/`zips`/`util`/`automator`/`context`/`rawInput`/`sqlite`/`io`/`web`/`continuation` 已对齐 |
 | UI | QuickJS 是 overlay 实现（`ui.layout` 全屏覆盖层 + `ui.<id>` 代理 + `ui.emitter`），未覆盖 Rhino 的 UI Activity 模式与 JSX/动态绑定 |
 | floaty | XML/文本窗口、控件代理（含 `attr` 与属性式读写、`click()/click(fn)`、`on("click"/"long_click"/"key"/"touch")`）、窗口 `getWidth/getHeight/findView`、不存在控件返回 undefined 均已对齐；与 Rhino 的差异只剩控件级 Java 方法（如 `setBackground/setPadding` 之外的任意 View API）与 `ui` 模式绑定 |
 | web | `http` 与 `newInjectableWebView/Client` 的 `inject`/`loadUrl`/`loadData` 已可用；页面→脚本的 `rhino.call/eval` 为异步回调（引擎线程执行，`injectAndWait` 不支持） |
