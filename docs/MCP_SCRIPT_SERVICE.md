@@ -90,6 +90,20 @@ adb forward tcp:18790 tcp:8788
 
 单次读取或写入上限 256 KiB，列表单页最多 200 项。当前实现是无会话的单 JSON Streamable HTTP，兼容 `2024-11-05`、`2025-03-26` 和 `2025-06-18` 的单消息客户端，不支持 HTTP batch 或 SSE-only 响应。
 
+## 真机验证记录（2026-09-11 · Redmi 2602BRT18C / Android 16 / 局域网 MCP）
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| 子目录文件 | `workspace_open('悬浮球项目/README.md')` 成功但 `workspace_read` 报“工作区文件不存在” | ✅ open → read 正常（size=1016）|
+| `create=true` 已存在目标 | 报“新建目标已存在” | ✅ 幂等，直接 OPEN |
+| 新建嵌套文件 | 报“父目录不存在” | ✅ 自动建目录，写入→应用→真实文件读回一致 |
+| 重复 open 同一目标 | 每次新建工作区（累积到 232）| ✅ 未修改的 OPEN 工作区被复用（同一个 workspaceId）|
+| 待确认残留 | `pendingWorkspaceApprovals: 1` 无法清除 | ✅ `workspace_cancel ws-c6bc793d` → OPEN / pending=false |
+| 工作区累积 | 232 个 | ✅ `workspace_cleanup` 一次清掉 135 个（默认保留已应用 1–24h 供回退）|
+| 停止脚本 | `STOPPED` 仍带 `WrappedException → ScriptInterruptedException` | ✅ `STOPPED` + `stopReason: user_stopped`，`error` 缺省（Rhino 与 QuickJS 两个引擎都验过）|
+
+回归：在手机上通过 MCP `run_script` 跑全模块回归，`=== 回归测试完成: 225 通过, 0 失败 ===` + `=== QUICKJS_REGRESSION_OK ===`。
+
 ## 安全边界
 
 - 页面不会因打开而自动启动服务；进程被系统回收后也不会自动恢复。

@@ -37,7 +37,7 @@
 
 > 批A 真机验证（Mi8 `ce4d2bdb`）：初始坐标 600/400 ✅、`visible:false` 不显示 ✅、显示前 `findView` 可用 ✅、show/hide/setVisibility 往返 ✅、`setPosition` 后 `getX()` 立即 300/500 ✅、`getX(true)` 生效值 ✅、alpha/scale 链式 ✅、3 窗口显隐原子 ✅、`setContentVisible` 20 次 0ms ✅。
 > 批B 真机验证：`javaView` = `JsTextView` / 根 View = `FrameLayout` ✅、`runOnMainThread` 内调 View API ✅、`ObjectAnimator.ofFloat(view.javaView, "alpha", 1, 0.2)` 启动成功 ✅、`view.animate(..., 'decelerate')` 18ms ✅、`win.animate(..., 'bounce'/'linear')` ✅、链式与 `stopAnimation` ✅、未知属性/缓动报错清晰 ✅。
-> 回归：QuickJS 全模块回归 **222 项 全绿**（批A/B/C + 用户的 P1-1/P2-1/P2-3 补丁共 +14 项悬浮窗断言，圆形触摸穿透 +7 项，批F 反馈修复 +2 项）。
+> 回归：QuickJS 全模块回归 **225 项 全绿**（批A/B/C + 用户的 P1-1/P2-1/P2-3 补丁共 +14 项悬浮窗断言，圆形触摸穿透 +7 项，批F 反馈修复 +2 项）。
 > 批E 真机验证（Mi8）：`floaty.touchRegionInfo().supported=false`（系统无按区域输入 API）❓；`win.view`/`win.c.view` 均拿到真 View（`CardView`）✅；`<card w="200px" h="200px"/>` 作为 XML 根时窗口量到 200×200（不再 0×0）✅；`setCornerRadius('50%')` → 轮廓变 `oval`、`setCornerRadius(60)` → `roundRect`、`getClipToOutline()=true` ✅；`setTouchable(false)` 后 `getTouchRegion().touchable=false` ✅；**穿透实测：`setTouchable(false)` + `alpha=0.5/1.0` 时点击穿透到计算器（`formula=7`），`setTouchable(true)` 则被拦截（`formula` 空）** ✅。
 > 补丁真机验证（Mi8）：`ObjectAnimator.ofFloat(win.c,'alpha',1,0.2)` ✅、`objectAnimator()`/`animateView()` ✅、`threads.start(fn,{win:win})` + `__args.win.setPosition(600,900)` ✅（主脚本 `getX()` 同步看到 600）、`attr('width')` = 120px（不再 0）✅、`setSize(500,300)` 后 `getWidth()` = 500x300 ✅。
 > 批C 真机验证：`floaty.exists`/`win.exists` ✅、`attached/detached` 事件序列 `attached,detached,attached` ✅、`win.post` 返回值 6 / 带延迟 `delayed-ok` ✅、**worker 线程把主脚本窗口从 200 移到 240（主脚本 `getX()` 同步看到 240）** ✅、`getWindow(不存在)` 报错清晰 ✅、worker 结束后主窗口仍存活 ✅。
