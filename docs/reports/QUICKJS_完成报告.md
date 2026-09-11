@@ -96,6 +96,7 @@ YOLO 当前仅支持 `backend: 'opencv'`（OpenCV 5.0 DNN，`ENGINE_AUTO` 新图
 | `app.viewFile(path)` / `app.editFile(path)` | 查看/编辑文件 |
 | `app.uninstall(pkg)` | 卸载应用 |
 | `app.startActivity(opts)` | 启动 Activity（白名单字段） |
+| `app.versionCode` / `app.versionName` / `app.autojs` | 宿主应用版本（与 Rhino `__app__.js` 对齐，惰性取值） |
 | `storages.create(name)` → `put/get/remove/contains/clear` | SharedPreferences 持久化 |
 | `device.model/brand/sdkInt/release/width/height/...` | 设备信息 |
 | `device.isScreenOn()` / `vibrate(ms)` / `getBattery()` | 设备状态 |

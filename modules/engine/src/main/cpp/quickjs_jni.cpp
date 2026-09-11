@@ -5322,6 +5322,13 @@ const char kBootstrapScript[] = R"JS(
 
     // ---- app module (additional) ----
     var _app = global.app;
+    // 版本信息读取：Rhino 的 __app__.js 暴露 app.versionCode/versionName 与 app.autojs.*，
+    // QuickJS 之前整个缺 ⇒ 脚本里 app.versionName 恒为 undefined（·用户反馈）。
+    // 原生 __aiNativeAppVersion() 返回 "versionCode|versionName"。
+    function readAppVersion() {
+        var parts = String(__aiNativeAppVersion()).split('|');
+        return { code: Number(parts[0]) || 0, name: parts[1] || '' };
+    }
     global.app = Object.freeze({
         launch: _app.launch,
         openUrl: _app.openUrl,
@@ -5346,7 +5353,11 @@ const char kBootstrapScript[] = R"JS(
                 opts.className || opts.class || '', opts.data || '',
                 opts.type || '', JSON.stringify(opts.extras || {}),
                 opts.flags || 0);
-        }
+        },
+        // 用 getter 惰性取值，与 device 模块一致（Object.freeze 后仍可读）
+        get versionCode() { return readAppVersion().code; },
+        get versionName() { return readAppVersion().name; },
+        get autojs() { var v = readAppVersion(); return { versionCode: v.code, versionName: v.name }; }
     });
 
     // ---- shell module ----
