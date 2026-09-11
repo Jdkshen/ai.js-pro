@@ -178,9 +178,15 @@ internal class McpTools(private val context: Context, private val event: (String
             "workspace_read" -> toolJson(readBytes(workspaces.read(args.string("workspaceId"), args.string("path")), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
             "workspace_write" -> {
                 requireWrite(); val bytes = args.string("content").toByteArray(Charsets.UTF_8)
-                toolJson(workspaceJson(workspaces.write(args.string("workspaceId"), args.string("path"), bytes)))
+                toolJson(workspaceJson(workspaces.write(args.string("workspaceId"), args.string("path"), bytes)).apply {
+                    addProperty("needsApply", true)
+                    addProperty("hint", "只写进了私有工作区；真实脚本需要调用 workspace_request_apply 才会更新（目录与文件在 apply 时一起创建）")
+                })
             }
-            "workspace_delete" -> { requireWrite(); toolJson(workspaceJson(workspaces.delete(args.string("workspaceId"), args.string("path")))) }
+            "workspace_delete" -> { requireWrite(); toolJson(workspaceJson(workspaces.delete(args.string("workspaceId"), args.string("path"))).apply {
+                addProperty("needsApply", true)
+                addProperty("hint", "删除只在私有工作区生效；调用 workspace_request_apply 后才会删真实文件")
+            }) }
             "workspace_diff" -> toolResult(workspaces.diff(args.string("workspaceId")))
             "workspace_request_apply" -> {
                 requireWrite()
@@ -535,6 +541,10 @@ internal class McpTools(private val context: Context, private val event: (String
         } }
     }
     private fun readTextFile(file: File): ByteArray {
+        // 分开报错：以前“文件不存在”也会被归成“仅支持文本文件”，
+        // 会让人误以为是扩展名问题（·用户反馈：路径写错时提示误导）。
+        if (!file.exists()) throw ToolError("文件不存在：${file.relativeTo(root).invariantSeparatorsPath}")
+        if (file.isDirectory) throw ToolError("这是目录，不是文件：${file.relativeTo(root).invariantSeparatorsPath}")
         if (!file.isFile || file.extension.lowercase() !in TEXT_EXTENSIONS) throw ToolError("仅支持文本文件")
         if (file.length() > MAX_READ_FILE_BYTES) throw ToolError("文件过大，请在工作区外分析")
         return file.readBytes()

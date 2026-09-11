@@ -73,10 +73,14 @@ adb forward tcp:18790 tcp:8788
 | 情况 | 行为 |
 |---|---|
 | 目标存在 | 建立快照并返回工作区 |
-| 目标不存在 + `create=true` | 创建空的工作区（**自动创建父目录**），可直接 `workspace_write` 写入 |
+| 目标不存在 + `create=true` | 创建空的工作区（**目录与文件都在 apply 时一起创建**，不再一 open 就建空目录），可直接 `workspace_read`（返回空串）/`workspace_write` |
 | 目标已存在 + `create=true` | **幂等**：直接打开（不再报“新建目标已存在”）|
-| 同一目标已有“未修改的 OPEN 工作区” | **复用**该工作区，不再新建（避免旧版本每个操作都建一个新工作区）|
+| 同一目标已有“未修改的 OPEN 工作区” | **复用**该工作区；若磁盘文件已变化，会用**同一个 workspaceId 重新抓快照**（不会拿旧快照豁人）|
 | 传其他路径给单文件工作区 | 报错会带**完整路径**与正确做法，而不是旧的“单文件工作区不能新建其他文件”|
+
+> `workspace_write` / `workspace_delete` 只改私有副本，返回里会带 `needsApply: true` 提醒；
+> 真实脚本要调 `workspace_request_apply` 才更新（目录与文件在 apply 时一起创建）。
+> `workspace_read` 报找不到时会分别列出**请求路径**与**快照内实际文件**，不再出现两边一模一样的误导信息。
 
 > 注意：`workspace_mkdir` 会在真实脚本目录里建目录（不是私有副本），所以需要写入授权。
 
@@ -102,7 +106,20 @@ adb forward tcp:18790 tcp:8788
 | 工作区累积 | 232 个 | ✅ `workspace_cleanup` 一次清掉 135 个（默认保留已应用 1–24h 供回退）|
 | 停止脚本 | `STOPPED` 仍带 `WrappedException → ScriptInterruptedException` | ✅ `STOPPED` + `stopReason: user_stopped`，`error` 缺省（Rhino 与 QuickJS 两个引擎都验过）|
 
-回归：在手机上通过 MCP `run_script` 跑全模块回归，`=== 回归测试完成: 225 通过, 0 失败 ===` + `=== QUICKJS_REGRESSION_OK ===`。
+回归：在手机上通过 MCP `run_script` 跑全模块回归，`=== 回归测试完成: 228 通过, 0 失败 ===` + `=== QUICKJS_REGRESSION_OK ===`。
+
+## 真机验证记录（2026-09-11 第二轮 · MI 8 Explorer Edition / Android 15 / USB 端口转发 MCP）
+
+通过 `adb forward tcp:18788 tcp:8788` 直接访问设备内 MCP 服务，无需 Wi-Fi。
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| `workspace_open(create=true)` 新路径 | 一 open 就在真实脚本目录建出空目录 | ✅ apply 前磁盘无任何变化（`list_scripts` 报“目录不存在”），apply 后文件才出现（size=42）|
+| 新建但未写入的文件 `workspace_read` | 报“工作区文件不存在” | ✅ 返回空串（size=0 / 空 sha256），可直接写 |
+| `workspace_write` / `workspace_delete` 返回 | 只有 `changedFiles`，容易被当成已落盘 | ✅ 附带 `needsApply: true` + 提示要调 `workspace_request_apply` |
+| 快照过期复用 | 复用旧 workspaceId 却拿旧内容 | ✅ 同一 workspaceId 复用，同时按磁盘重新抓快照（外部改成 v2 后 read 返回 v2）|
+| `workspace_read` 找不到文件 | 文案重复请求路径 | ✅ 目录工作区会列出**快照内实际文件**；快照为空时给出原因与做法 |
+| `read_script` 目标不存在 | 报“仅支持文本文件”（误导成扩展名问题）| ✅ 分三类：`文件不存在：<路径>` / `这是目录，不是文件：<路径>` / `仅支持文本文件` |
 
 ## 安全边界
 

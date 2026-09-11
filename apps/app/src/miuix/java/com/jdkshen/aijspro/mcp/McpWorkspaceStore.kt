@@ -43,17 +43,18 @@ class McpWorkspaceStore private constructor(
         if (create) {
             if (path.isBlank()) throw IllegalArgumentException("新建文件路径不能为空")
             if (target.extension.lowercase() !in TEXT_EXTENSIONS) throw IllegalArgumentException("只能新建支持的文本文件：$entry")
-            // 父目录不存在时自动创建（之前直接报“父目录不存在”，用户只能手动建目录）。
-            target.parentFile?.let { parent ->
-                if (!parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
-                    throw IllegalArgumentException("无法创建父目录：${parent.relativeTo(scriptRoot).invariantSeparatorsPath}")
-                }
-            }
+            // 注意：不在这里建真实目录。目录与文件都在 apply 时一起落盘，
+            // 否则“不 apply”会留下空目录半成品（·用户反馈 P1-1）。
         }
-        // 同一个目标已有未修改的工作区时直接复用，避免每次 open 都新建（旧工作区会无限累积）。
+        // 同一目标已有未修改的工作区时复用（旧工作区会无限累积）；
+        // 但快照必须仍与磁盘一致，否则重新抓一次快照（·用户反馈 P1-3：复用旧 ID 却拿着旧快照）。
         if (!create || target.exists()) {
             list().firstOrNull { it.targetPath == entry && it.state == STATE_OPEN && it.changedFiles == 0 }
-                ?.let { return it }
+                ?.let { candidate ->
+                    val dir = File(root, candidate.id)
+                    return if (snapshotMatches(dir, target)) candidate
+                    else resnapshot(dir, target, entry, target.isFile)
+                }
         }
         val targetIsFile = target.isFile || create
         val id = "ws-" + UUID.randomUUID().toString().substring(0, 8)
@@ -83,6 +84,13 @@ class McpWorkspaceStore private constructor(
                 copyOne(canonical, canonical.relativeTo(target).invariantSeparatorsPath)
             }
             if (count == 0 && !create) throw IllegalArgumentException("目标中没有可编辑文本文件：$entry")
+            if (count == 0 && create) {
+                // create 出来的空文件：base/work 各放一个空文件 ——
+                // ① read 返回空串而不是“不存在”；② changedFiles 仍为 0（快照不算已修改，能被复用）。
+                // 不进 originalHashes，apply 时仍按“新建”处理（·用户反馈 P2-1）。
+                File(base, entry).apply { parentFile?.mkdirs(); writeBytes(ByteArray(0)) }
+                File(work, entry).apply { parentFile?.mkdirs(); writeBytes(ByteArray(0)) }
+            }
             val now = System.currentTimeMillis()
             writeMeta(dir, JSONObject().apply {
                 put("id", id); put("targetPath", entry); put("entryPath", entry)
@@ -106,9 +114,14 @@ class McpWorkspaceStore private constructor(
     @Synchronized fun read(id: String, path: String): ByteArray {
         val dir = workspaceDir(id)
         val meta = readMeta(dir)
-        val file = resolveWorkspace(File(dir, "work"), clientPath(meta, path))
+        val resolved = clientPath(meta, path)
+        val file = resolveWorkspace(File(dir, "work"), resolved)
         if (!file.isFile || file.extension.lowercase() !in TEXT_EXTENSIONS) {
-            throw IllegalArgumentException("工作区中不存在此文本文件：${path}（可用路径：${entryPathOf(meta)}）")
+            // “请求的路径”与“快照里实际有的文件”分开列，避免出现两者一模一样却报不存在的误导信息。
+            val snapshot = files(File(dir, "work"))
+            val available = if (snapshot.isEmpty()) "（快照为空：可能是 create 出来的空文件尚未写入，或快照已过期，重新 workspace_open 即可）"
+                else snapshot.joinToString("、")
+            throw IllegalArgumentException("工作区快照中没有此文件：$path；快照内实际文件：$available")
         }
         return file.readBytes()
     }
@@ -137,7 +150,11 @@ class McpWorkspaceStore private constructor(
         val meta = readMeta(dir)
         if (meta.getString("state") !in setOf(STATE_OPEN, STATE_PENDING)) throw IllegalArgumentException("工作区已结束")
         val file = resolveWorkspace(File(dir, "work"), clientPath(meta, path))
-        if (!file.isFile) throw IllegalArgumentException("工作区中不存在此文件：${path}（可用路径：${entryPathOf(meta)}）")
+        if (!file.isFile) {
+            val snapshot = files(File(dir, "work"))
+            throw IllegalArgumentException("工作区快照中没有此文件：$path；快照内实际文件："
+                + (if (snapshot.isEmpty()) "（空）" else snapshot.joinToString("、")))
+        }
         if (!file.delete()) throw IOException("删除失败")
         meta.put("updatedAt", System.currentTimeMillis()).put("state", STATE_OPEN).put("pendingApproval", false)
         writeMeta(dir, meta)
@@ -341,6 +358,55 @@ class McpWorkspaceStore private constructor(
     /** 工作区里的入口文件：优先 entryPath，旧工作区回退到 targetPath。 */
     private fun entryPathOf(meta: JSONObject): String =
         meta.optString("entryPath").ifBlank { meta.optString("targetPath") }
+
+    /**
+     * 判断已有工作区的快照是否仍与磁盘一致（·用户反馈 P1-3：复用旧 ID 却拿着旧快照）。
+     * 单文件工作区只比对入口文件；目录工作区比对整棵树的哈希集合。
+     */
+    private fun snapshotMatches(dir: File, target: File): Boolean {
+        val meta = runCatching { readMeta(dir) }.getOrNull() ?: return false
+        val recorded = meta.optJSONObject("originalHashes") ?: return false
+        val expected = linkedMapOf<String, String>()
+        recorded.keys().asSequence().forEach { key -> expected[key] = recorded.optString(key) }
+        val actual = linkedMapOf<String, String>()
+        if (target.isFile) {
+            if (target.extension.lowercase() in TEXT_EXTENSIONS) {
+                actual[entryPathOf(meta)] = sha256(target.readBytes())
+            }
+        } else if (target.isDirectory) {
+            target.walkTopDown().filter { it.isFile && it.extension.lowercase() in TEXT_EXTENSIONS }
+                .forEach { file -> actual[file.relativeTo(target).invariantSeparatorsPath] = sha256(file.readBytes()) }
+        }
+        return expected == actual
+    }
+
+    /** 刷新已有工作区的快照（保留 workspaceId，重置 base/work 与哈希）。 */
+    private fun resnapshot(dir: File, target: File, entry: String, targetIsFile: Boolean): Workspace {
+        val meta = readMeta(dir)
+        File(dir, "base").deleteRecursively()
+        File(dir, "work").deleteRecursively()
+        val base = File(dir, "base")
+        val work = File(dir, "work")
+        val hashes = linkedMapOf<String, String>()
+        fun copyOne(source: File, relative: String) {
+            if (!source.isFile || source.extension.lowercase() !in TEXT_EXTENSIONS) return
+            val bytes = source.readBytes()
+            hashes[relative] = sha256(bytes)
+            File(base, relative).apply { parentFile?.mkdirs(); writeBytes(bytes) }
+            File(work, relative).apply { parentFile?.mkdirs(); writeBytes(bytes) }
+        }
+        if (target.isFile) copyOne(target, entry)
+        else if (target.isDirectory) target.walkTopDown().filter { it.isFile }.forEach { file ->
+            val canonical = file.canonicalFile
+            if (inside(target, canonical)) copyOne(canonical, canonical.relativeTo(target).invariantSeparatorsPath)
+        }
+        meta.put("targetIsFile", targetIsFile).put("entryPath", entry)
+            .put("originalHashes", JSONObject(hashes as Map<*, *>))
+            .put("appliedHashes", JSONObject())
+            .put("updatedAt", System.currentTimeMillis())
+        writeMeta(dir, meta)
+        return summary(dir)
+    }
 
     /**
      * 把客户端传来的 path 映射到工作区内真正的位置：

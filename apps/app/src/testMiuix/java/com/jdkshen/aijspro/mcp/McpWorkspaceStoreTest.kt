@@ -172,6 +172,55 @@ class McpWorkspaceStoreTest {
         assertTrue(File(root, "a/b").isDirectory)
     }
 
+    @Test
+    fun createdFileIsReadableAsEmptyAndLandsOnDiskOnlyAfterApply() {
+        val root = temporaryFolder.newFolder("scripts")
+        val store = store(root)
+
+        val workspace = store.open("新建目录/空文件.js", create = true)
+        // 空文件可读（返回空串），而不是报“不存在”
+        assertEquals(0, store.read(workspace.id, "新建目录/空文件.js").size)
+        // 目录/文件都不应该在 apply 之前落盘（否则留下空目录半成品）
+        assertFalse(File(root, "新建目录").exists())
+
+        store.write(workspace.id, "新建目录/空文件.js", "x".toByteArray())
+        assertFalse(File(root, "新建目录/空文件.js").exists())
+        store.applyAuthorized(workspace.id)
+        assertTrue(File(root, "新建目录/空文件.js").isFile)
+    }
+
+    @Test
+    fun refreshesSnapshotWhenDiskChangedButKeepsWorkspaceId() {
+        val root = temporaryFolder.newFolder("scripts")
+        val store = store(root)
+
+        // 目标还不存在 → create 出一个空工作区
+        val first = store.open("later.js", create = true)
+        assertEquals(0, store.read(first.id, "later.js").size)
+
+        // 磁盘上出现了这个文件（外部创建），再次 open 必须刷新快照而不是复用旧快照
+        File(root, "later.js").writeText("external content")
+        val second = store.open("later.js")
+        assertEquals(first.id, second.id)
+        assertEquals("external content", String(store.read(second.id, "later.js")))
+    }
+
+    @Test
+    fun readErrorListsSnapshotFilesInsteadOfRepeatingPath() {
+        val root = temporaryFolder.newFolder("scripts")
+        File(root, "a.js").writeText("a")
+        val store = store(root)
+        val workspace = store.open("a.js")
+        store.delete(workspace.id, "a.js")
+
+        val error = runCatching { store.read(workspace.id, "a.js") }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+        val message = error?.message.orEmpty()
+        assertTrue(message.contains("快照内实际文件"))
+        assertFalse(message.contains("（可用路径：a.js）"))
+    }
+
     private fun store(scriptRoot: File): McpWorkspaceStore {
         val storageRoot = temporaryFolder.newFolder("workspace-store-${System.nanoTime()}")
         return McpWorkspaceStore.forTesting(storageRoot, scriptRoot)
