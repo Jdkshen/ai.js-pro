@@ -48,7 +48,7 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 |---:|---|---|
 | 0 | 不加密 | 原始脚本文本（无文件头） |
 | 1 | 加密（默认） | `77 01 17 7F 12 12` + 2 字节 flags + AES/CBC/PKCS5 密文 |
-| 2 | 编译 + 加密（预留） | 先编译为引擎产物（Rhino `.class` / QuickJS 字节码）再加密 |
+| 2 | 编译 + 加密 | 内容同样是「文件头 + 密文」，但载荷是**编译产物**：Rhino 生成的 class 字节（`CompiledScriptPayload`：类名 + 类字节） |
 
 取值规则：
 
@@ -58,7 +58,17 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 `encryptLevel` 会被写回产物内的 `assets/project/project.json`，所以产物自带的配置与实际行为始终一致。密钥仍由 `key = MD5(packageName + versionName + mainScriptFile)`、`vec = MD5(buildId + name)[0,16)` 派生，打包端与运行端（`AssetsProjectLauncher.initKey`）必须同时改。
 
-运行时按 8 字节文件头自描述：没有合法文件头就当普通文本脚本执行，所以等级 0 的产物不需要任何运行时开关。
+文件头的 2 字节 flags 里，低字节留给执行模式等既有标记，**高字节是载荷类型**（`0` 文本 / `1` Rhino 编译类 / `2` QuickJS 字节码，见 `EncryptedScriptFileHeader`）。
+运行时按载荷类型分发：文本走原来的 `StringScriptSource`；编译类交给 `AndroidClassLoader`（dx → DexClassLoader）加载后在引擎作用域里 `exec`。
+
+### 等级 2（编译）的注意事项
+
+- **只有 Rhino 引擎支持编译**：QuickJS 的字节码方案尚未实现，QuickJS 工程即使选了等级 2 也只会退化成「加密」，不会产出跑不起来的包。
+- 编译端与运行端必须使用同一份 Rhino（仓库统一用 `modules/rhino-language/libs/rhino-1.7.7.2.jar`）。
+- 编译时用优化等级 9 且 `setGeneratingSource(false)`：产物里既没有解释模式的 AST，也不带供调试的源码编码，所以**在产物里搜不到脚本源码**。
+- **改动 `:inrt` 后必须重新生成模板**：`.\gradlew.bat :inrt:assembleRelease` 会把运行端产物复制成
+  `apps/app/src/main/assets/template.apk`。打包出来的 App 用的是这份模板里的运行端代码，
+  不重建模板就会出现「打包端已是新逻辑、产物运行时还是旧的」这种半新半旧状态。
 
 ## 2. 当前 SDK 范围
 

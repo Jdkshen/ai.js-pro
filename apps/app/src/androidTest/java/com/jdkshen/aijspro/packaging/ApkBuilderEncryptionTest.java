@@ -23,6 +23,8 @@ import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
 import com.stardust.autojs.apkbuilder.Signer;
 import com.stardust.autojs.engine.encryption.ScriptEncryption;
 import com.stardust.autojs.project.ScriptProtection;
+import com.stardust.autojs.rhino.AndroidClassLoader;
+import com.stardust.autojs.script.CompiledScriptPayload;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.util.MD5;
 
@@ -75,12 +77,34 @@ public class ApkBuilderEncryptionTest {
      * 不隔离的话测试会往用户真实的脚本目录里写东西。
      */
     private static void isolateScriptDir(Context context) {
+        grantStoragePermissions(context);
         String key = context.getString(R.string.key_script_dir_path);
         if (!scriptDirIsolated) {
             previousScriptDir = Pref.getPrefString(key, null);
             scriptDirIsolated = true;
         }
         Pref.setPrefString(key, TEST_SCRIPT_DIR_NAME);
+    }
+
+    /**
+     * 测试脚本目录在外部存储上，而重新安装会把运行时权限重置成未授权，
+     * 于是打包测试会以 ENOENT（建不出目录）的形式集体失败。
+     * 用 UiAutomation 直接授权，让整套用例自己就能跑通。
+     */
+    private static void grantStoragePermissions(Context context) {
+        android.app.Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        String packageName = context.getPackageName();
+        String[] permissions = {
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+        };
+        for (String permission : permissions) {
+            try {
+                instrumentation.getUiAutomation().grantRuntimePermission(packageName, permission);
+            } catch (Exception ignored) {
+                // 已授权或系统拒绝时忽略：真出问题后面的断言会给出更具体的原因。
+            }
+        }
     }
 
     private static File testScriptDir() {
@@ -643,6 +667,131 @@ public class ApkBuilderEncryptionTest {
         assertTrue("默认仍然是加密头 + 密文",
                 EncryptedScriptFileHeader.INSTANCE.isValidFile(
                         readBytes(new File(workspace, "assets/project/main.js"))));
+    }
+
+    /**
+     * 编译等级（encryptLevel ≥ 2）：产物里应当**没有脚本源码**，而是编译好的 class 字节，
+     * 且这些字节在设备上能真正加载执行（dx → DexClassLoader → Rhino）。
+     */
+    @Test
+    public void compileLevelProducesRunnableClassWithoutSource() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-compile-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "compiled.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        // 开头写一个标记文件（用于安装后的端到端验证）；结尾是一个表达式，执行结果 = 3。
+        // 用 typeof 兜底：同一个脚本既要在打包出的 App 里跑（有 context/files），
+        // 也要在测试进程的裸 Rhino 上下文里跑（没有这些全局）。
+        String source = "if (typeof context !== 'undefined' && typeof files !== 'undefined') {\n"
+                + "  var dir = context.getExternalFilesDir(null);\n"
+                + "  if (dir) { files.write(new java.io.File(dir, 'compiled-ran.txt').getAbsolutePath(), 'COMPILED_OK'); }\n"
+                + "}\n"
+                + "var UNIQUE_MARKER_VARIABLE_7788 = 0;\n"
+                + "for (var i = 0; i < 3; i++) { UNIQUE_MARKER_VARIABLE_7788 += i; }\n"
+                + "UNIQUE_MARKER_VARIABLE_7788;\n";
+        writeText(script, source);
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("CompiledProbe")
+                .setPackageName("com.example.compiledprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("rhino")
+                .setEncryptLevel(ScriptProtection.LEVEL_COMPILE);
+
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(config).build().sign();
+
+        assertEquals(ScriptProtection.LEVEL_COMPILE, builder.getEncryptLevel());
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals(ScriptProtection.LEVEL_COMPILE, json.getInt("encryptLevel"));
+
+        byte[] packaged = readBytes(new File(workspace, "assets/project/main.js"));
+        assertTrue("编译模式产物仍然是加密的（只是载荷换成了编译结果）",
+                EncryptedScriptFileHeader.INSTANCE.isValidFile(packaged));
+        short flags = EncryptedScriptFileHeader.INSTANCE.readFlags(packaged);
+        assertEquals("文件头必须标记载荷是 Rhino 编译产物",
+                EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS,
+                EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(flags));
+
+        // 产物里不能出现脚本源码（这是「编译」相对于「加密」的关键差别）。
+        String asText = new String(packaged, "ISO-8859-1");
+        assertFalse("产物里不该出现脚本原文", asText.contains(source));
+        assertFalse("产物里不该出现脚本里的标识符原文",
+                asText.contains("UNIQUE_MARKER_VARIABLE_7788"));
+
+        // 用运行时相同的密钥派生解密，解析出编译载荷。
+        String key = MD5.md5(json.getString("packageName") + json.getString("versionName")
+                + json.getString("main"));
+        String vector = MD5.md5(json.getJSONObject("build").getString("build_id")
+                + json.getString("name")).substring(0, 16);
+        Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
+        keyField.setAccessible(true);
+        keyField.set(null, key);
+        Field vectorField = ScriptEncryption.class.getDeclaredField("mInitVector");
+        vectorField.setAccessible(true);
+        vectorField.set(null, vector);
+        byte[] plain = ScriptEncryption.INSTANCE.decrypt(
+                packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
+
+        CompiledScriptPayload payload = CompiledScriptPayload.read(plain);
+        assertTrue("载荷里应当带类名", payload.className != null && payload.className.length() > 0);
+        assertEquals("编译产物必须是 class 文件", (byte) 0xCA, payload.classBytes[0]);
+        assertEquals((byte) 0xFE, payload.classBytes[1]);
+        assertEquals((byte) 0xBA, payload.classBytes[2]);
+        assertEquals((byte) 0xBE, payload.classBytes[3]);
+
+        // 设备侧执行：AndroidClassLoader（dx → DexClassLoader）加载后交给 Rhino 运行。
+        org.mozilla.javascript.Context rhino = org.mozilla.javascript.Context.enter();
+        try {
+            rhino.setOptimizationLevel(9);
+            org.mozilla.javascript.Scriptable scope = rhino.initStandardObjects();
+            AndroidClassLoader loader = new AndroidClassLoader(getClass().getClassLoader(),
+                    new File(workDir, "compiled-classes"));
+            Class<?> clazz = loader.defineClass(payload.className, payload.classBytes);
+            Object instance = clazz.newInstance();
+            assertTrue("加载出来的类必须实现 Rhino 的 Script",
+                    instance instanceof org.mozilla.javascript.Script);
+            Object result = ((org.mozilla.javascript.Script) instance).exec(rhino, scope);
+            assertEquals("编译产物在设备上的执行结果必须与源码一致", 3.0,
+                    Double.parseDouble(String.valueOf(result)), 0.0001);
+        } finally {
+            org.mozilla.javascript.Context.exit();
+        }
+
+        // 把产物导出到公共目录：安装后可以跑一遍真正的「编译模式打包应用」。
+        copyToSharedStorage(outApk, "aijs-compiled-probe.apk");
+    }
+
+    /** 把打包产物拷到 /sdcard/Download，方便用 adb 拉出去安装做端到端验证。 */
+    private static void copyToSharedStorage(File apk, String name) throws Exception {
+        File downloads = new File(Environment.getExternalStorageDirectory(), "Download");
+        if (!downloads.isDirectory() && !downloads.mkdirs()) {
+            return;
+        }
+        File target = new File(downloads, name);
+        java.io.OutputStream out = new FileOutputStream(target);
+        try {
+            java.io.InputStream in = new java.io.FileInputStream(apk);
+            try {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, read);
+                }
+            } finally {
+                in.close();
+            }
+        } finally {
+            out.close();
+        }
     }
 
     private static ApkSignatureReader.Signer buildWithConfig(Context context, File outDir, String apkName,

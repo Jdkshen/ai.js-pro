@@ -11,6 +11,9 @@ import com.stardust.autojs.project.BuildInfo;
 import com.stardust.autojs.project.LaunchConfig;
 import com.stardust.autojs.project.ProjectConfig;
 import com.stardust.autojs.project.ScriptProtection;
+import com.stardust.autojs.rhino.AndroidClassLoader;
+import com.stardust.autojs.script.CompiledScriptPayload;
+import com.stardust.autojs.script.ScriptCompiler;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
@@ -31,8 +34,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.Callable;
 
 /**
@@ -203,13 +208,7 @@ public class ApkBuilder {
         if (mAppConfig == null || mAppConfig.sourcePath == null) {
             if (mScriptFile != null) {
                 syncProjectJsonAndDeriveKeys();
-                // 等级 0 直接明文拷入（只重新求值一次：等级在 sync 里才最终确定）。
-                if (ScriptProtection.shouldEncrypt(mEncryptLevel)) {
-                    encrypt(new File(mScriptFile), new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
-                } else {
-                    copyFile(new File(mScriptFile),
-                            new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
-                }
+                writeEntryScript(new File(mScriptFile));
             }
             return;
         }
@@ -217,23 +216,104 @@ public class ApkBuilder {
         if (source.isDirectory()) {
             copyDir(source.getPath(), mWorkspacePath + "/assets/project");
             syncProjectJsonAndDeriveKeys();
-            if (ScriptProtection.shouldEncrypt(mEncryptLevel)) {
-                File entryScript = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
-                encrypt(entryScript, entryScript);
-            }
+            writeEntryScript(new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
         } else {
             syncProjectJsonAndDeriveKeys();
-            File target = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
-            if (ScriptProtection.shouldEncrypt(mEncryptLevel)) {
-                encrypt(source, target);
-            } else {
-                copyFile(source, target);
-            }
+            writeEntryScript(source);
             if (mAppConfig.ignoredDirs != null) {
                 for (Object ignored : mAppConfig.ignoredDirs) {
                     new File(mWorkspacePath, "assets/project/" + ignored).delete();
                 }
             }
+        }
+    }
+
+    /**
+     * 按当前等级写入入口脚本：0 = 明文拷贝，1 = 加密，≥ 2 = 先编译再加密。
+     *
+     * <p>编译需要引擎配合：Rhino 才支持编译成 class；QuickJS 字节码是后续批次，
+     * 在那之前 QuickJS 工程暂时退化为「加密」（不会产出跑不起来的产物）。
+     */
+    private void writeEntryScript(File source) throws Exception {
+        File target = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
+        if (!ScriptProtection.shouldEncrypt(mEncryptLevel)) {
+            // 目录工程时入口脚本已经在工作区里了：自己拷自己会先把目标清空，直接跳过。
+            if (source.getCanonicalFile().equals(target.getCanonicalFile())) {
+                return;
+            }
+            copyFile(source, target);
+            return;
+        }
+        if (ScriptProtection.shouldCompile(mEncryptLevel) && !isQuickJsEngine()) {
+            byte[] payload = compileEntryScript(source);
+            writeEncrypted(target, payload,
+                    EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
+                            EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS));
+            return;
+        }
+        writeEncrypted(target, PFiles.readBytes(source.getPath()), (short) 0);
+    }
+
+    /** 打包的产物使用 QuickJS 引擎（此时不能写 Rhino 编译产物）。 */
+    private boolean isQuickJsEngine() {
+        return mAppConfig != null && "quickjs".equalsIgnoreCase(mAppConfig.engine);
+    }
+
+    /**
+     * 把脚本编译成 class 字节并打包成编译载荷。
+     *
+     * <p>借用一个「记录字节 + 正常加载」的类加载器（{@link RecordingClassLoader}）：
+     * Rhino 编译出类时会通过 defineClass 把字节交给我们，一边存一边照常加载。
+     */
+    private byte[] compileEntryScript(File source) throws Exception {
+        String text = new String(PFiles.readBytes(source.getPath()), "UTF-8");
+        Map<String, byte[]> sink = new LinkedHashMap<>();
+        File cacheDir = new File(mWorkspacePath, "compiled-classes");
+        RecordingClassLoader loader = new RecordingClassLoader(
+                ApkBuilder.class.getClassLoader(), cacheDir, sink);
+        ScriptCompiler.CompiledClass compiled = ScriptCompiler.compile(text,
+                source.getName(), ScriptCompiler.factoryFor(loader), sink);
+        return new CompiledScriptPayload(compiled.className, compiled.bytes).toBytes();
+    }
+
+    /** 把载荷加密后写入目标文件（不加密时不会走到这里，见 {@link #writeEntryScript}）。 */
+    private void writeEncrypted(File target, byte[] plain, short flags) throws IOException {
+        if (mKey == null || mInitVector == null) {
+            throw new IllegalStateException("Script encryption key is not initialized");
+        }
+        File parent = target.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+        try {
+            FileOutputStream fos = new FileOutputStream(target);
+            try {
+                EncryptedScriptFileHeader.INSTANCE.writeHeader(fos, flags);
+                fos.write(new AdvancedEncryptionStandard(
+                        mKey.getBytes("UTF-8"), mInitVector).encrypt(plain));
+            } finally {
+                fos.close();
+            }
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to encrypt script: " + target, e);
+        }
+    }
+
+    /** 记录 Rhino 编译产物的类加载器（先存字节，再交给 AndroidClassLoader 正常加载）。 */
+    private static final class RecordingClassLoader extends AndroidClassLoader {
+        private final Map<String, byte[]> mSink;
+
+        RecordingClassLoader(ClassLoader parent, File cacheDir, Map<String, byte[]> sink) {
+            super(parent, cacheDir);
+            mSink = sink;
+        }
+
+        @Override
+        public Class<?> defineClass(String name, byte[] data) {
+            mSink.put(name, data);
+            return super.defineClass(name, data);
         }
     }
 

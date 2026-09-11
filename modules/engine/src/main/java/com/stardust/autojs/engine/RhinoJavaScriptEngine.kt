@@ -6,9 +6,11 @@ import com.stardust.autojs.core.ui.ViewExtras
 import com.stardust.autojs.engine.module.AssetAndUrlModuleSourceProvider
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.project.ScriptConfig
+import com.stardust.autojs.rhino.AndroidClassLoader
 import com.stardust.autojs.rhino.RhinoAndroidHelper
 import com.stardust.autojs.rhino.TopLevelScope
 import com.stardust.autojs.runtime.ScriptRuntime
+import com.stardust.autojs.script.CompiledJavaScriptSource
 import com.stardust.autojs.script.JavaScriptSource
 import com.stardust.automator.UiObjectCollection
 import com.stardust.pio.UncheckedIOException
@@ -66,6 +68,10 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     }
 
     public override fun doExecution(source: JavaScriptSource): Any? {
+        // 打包加密等级 ≥ 2 的产物是编译好的 class（没有源码），这里换成加载类再执行。
+        if (source is CompiledJavaScriptSource) {
+            return executeCompiledScript(source)
+        }
         var reader = source.nonNullScriptReader
         try {
             reader = preprocess(reader)
@@ -79,6 +85,30 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
             throw UncheckedIOException(e)
         }
 
+    }
+
+    /**
+     * 每个引擎一个类加载器：同名类在不同引擎间互不影响（类加载器彼此隔离），
+     * 缓存目录按引擎实例区分，避免其中一个加载器清目录时把别人的 dex 删了。
+     */
+    private val compiledClassLoader: AndroidClassLoader by lazy {
+        val dir = File(mAndroidContext.cacheDir,
+                "compiled-scripts-" + Integer.toHexString(System.identityHashCode(this)))
+        AndroidClassLoader(javaClass.classLoader, dir)
+    }
+
+    private fun executeCompiledScript(source: CompiledJavaScriptSource): Any? {
+        try {
+            val clazz = compiledClassLoader.defineClass(source.className, source.classBytes)
+            val script = clazz.newInstance() as Script
+            return if (hasFeature(ScriptConfig.FEATURE_CONTINUATION)) {
+                context.executeScriptWithContinuations(script, mScriptable)
+            } else {
+                script.exec(context, mScriptable)
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("编译脚本加载失败：" + source.className, e)
+        }
     }
 
     fun hasFeature(feature: String): Boolean {
