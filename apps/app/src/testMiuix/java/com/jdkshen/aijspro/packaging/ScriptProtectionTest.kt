@@ -60,11 +60,28 @@ class ScriptProtectionTest {
         assertEquals(ScriptProtection.LEVEL_COMPILE, ScriptProtection.levelOfChoice(ScriptProtection.CHOICE_COMPILE))
         // 加密 so 也是「加密」，只是载荷换个地方放
         assertEquals(ScriptProtection.LEVEL_ENCRYPT, ScriptProtection.levelOfChoice(ScriptProtection.CHOICE_NATIVE))
+        // 快照 so 也是「编译」，只是密文改放原生库尾部
+        assertEquals(ScriptProtection.LEVEL_COMPILE, ScriptProtection.levelOfChoice(ScriptProtection.CHOICE_NATIVE_COMPILE))
 
         assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_NONE))
         assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_ENCRYPT))
         assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_COMPILE))
         assertEquals(ScriptProtection.STORAGE_NATIVE, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_NATIVE))
+        assertEquals(ScriptProtection.STORAGE_NATIVE, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_NATIVE_COMPILE))
+    }
+
+    @Test
+    fun `native storage plus compile is not downgraded when reopening the project`() {
+        // 回归：「等级 2 + 原生库」以前会被推成「加密 so」→ 再打包时静默丢掉编译。
+        assertEquals(ScriptProtection.CHOICE_NATIVE_COMPILE,
+            ScriptProtection.choiceOf(ScriptProtection.LEVEL_COMPILE, ScriptProtection.STORAGE_NATIVE))
+        assertEquals(ScriptProtection.CHOICE_NATIVE,
+            ScriptProtection.choiceOf(ScriptProtection.LEVEL_ENCRYPT, ScriptProtection.STORAGE_NATIVE))
+        assertEquals(ScriptProtection.CHOICE_COMPILE,
+            ScriptProtection.choiceOf(ScriptProtection.LEVEL_COMPILE, ScriptProtection.STORAGE_ASSETS))
+        // 等级 0 + native 不是页面上的合法组合，按最接近的「加密 so」展示（打包时会自动提到等级 1）
+        assertEquals(ScriptProtection.CHOICE_NATIVE,
+            ScriptProtection.choiceOf(ScriptProtection.LEVEL_NONE, ScriptProtection.STORAGE_NATIVE))
     }
 
     @Test
@@ -79,7 +96,7 @@ class ScriptProtectionTest {
     @Test
     fun `out of range choice falls back to the closest supported one`() {
         assertEquals(ScriptProtection.CHOICE_NONE, ScriptProtection.normalizeChoice(-5))
-        assertEquals(ScriptProtection.CHOICE_NATIVE, ScriptProtection.normalizeChoice(99))
+        assertEquals(ScriptProtection.CHOICE_NATIVE_COMPILE, ScriptProtection.normalizeChoice(99))
     }
 
     @Test
@@ -99,5 +116,10 @@ class ScriptProtectionTest {
         assertEquals("加密（AES）", ScriptProtection.describeChoice(ScriptProtection.CHOICE_ENCRYPT))
         assertEquals("快照（编译）", ScriptProtection.describeChoice(ScriptProtection.CHOICE_COMPILE))
         assertEquals("加密 so", ScriptProtection.describeChoice(ScriptProtection.CHOICE_NATIVE))
+        assertEquals("快照 so", ScriptProtection.describeChoice(ScriptProtection.CHOICE_NATIVE_COMPILE))
+        // 每个档位都必须有自己的名字，界面按档位取文案
+        val names = (0 until ScriptProtection.CHOICE_COUNT)
+            .map { ScriptProtection.describeChoice(it) }
+        assertEquals("档位描述不能重复", names.size, names.toSet().size)
     }
 }

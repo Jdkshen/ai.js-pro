@@ -380,7 +380,8 @@
     <string name="text_protection_encrypt">加密</string>
     <string name="text_protection_snapshot">快照</string>
     <string name="text_protection_so">加密 so</string>
-    <string name="summary_script_protection">加密：产物内是「文件头 + AES 密文」；快照：先编译成 class / 字节码再加密，产物里没有可读源码；加密 so：密文嵌进原生库，产物里连脚本文件都没有（包体会随脚本大小增长）</string>
+    <string name="text_protection_so_snapshot">快照 so</string>
+    <string name="summary_script_protection">加密：产物内是「文件头 + AES 密文」；快照：先编译成 class / 字节码再加密，产物里没有可读源码；加密 so：密文嵌进原生库，产物里连脚本文件都没有（包体会随脚本大小增长）；快照 so：先编译再加密再嵌进原生库，既没有脚本文件也没有可读源码</string>
     <string name="text_signing">签名</string>
     <string name="text_default_signing">自动签名</string>
     <string name="text_custom_signing">选择签名</string>

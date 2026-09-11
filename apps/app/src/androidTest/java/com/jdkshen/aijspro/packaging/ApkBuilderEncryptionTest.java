@@ -964,6 +964,84 @@ public class ApkBuilderEncryptionTest {
     }
 
     /**
+     * 「快照 so」：先按等级 2 编译，再把**编译载荷**的密文嵌进原生库尾部。
+     *
+     * <p>这是保护强度最高的一档：产物里既没有脚本文件（解包只看得到原生库），
+     * 也没有可读源码（载荷是 Rhino class 字节，不是文本）。
+     */
+    @Test
+    public void nativeStorageWithCompileEmbedsClassPayload() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File workDir = new File(context.getCacheDir(), "apk-builder-native-compile-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "native-compile.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        String source = "if (typeof context !== 'undefined' && typeof files !== 'undefined') {\n"
+                + "  var dir = context.getExternalFilesDir(null);\n"
+                + "  if (dir) { files.write(new java.io.File(dir, 'native-so-compiled-ran.txt').getAbsolutePath(), 'NATIVE_SO_COMPILED_OK'); }\n"
+                + "}\n"
+                + "console.log('NATIVE_SO_COMPILED_RAN');\n";
+        writeText(script, source);
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("NativeCompileProbe")
+                .setPackageName("com.example.nativecompileprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("rhino")
+                .setEncryptLevel(ScriptProtection.LEVEL_COMPILE)
+                .setScriptStorage(ScriptProtection.STORAGE_NATIVE);
+
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(config).build().sign();
+
+        assertEquals("等级要保留「编译」，不能被存放位置改写",
+                ScriptProtection.LEVEL_COMPILE, builder.getEncryptLevel());
+        assertEquals(ScriptProtection.STORAGE_NATIVE, builder.getScriptStorage());
+
+        // 1) 产物里一个脚本文件都没有（工作区与 APK 都查一遍）。
+        assertFalse("native 存放时必须删掉工作区里的入口脚本",
+                new File(workspace, "assets/project/main.js").exists());
+        assertNull("native 存放时 APK 里不该有 main.js",
+                readZipEntry(outApk, "assets/project/main.js", "main.js"));
+
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals(ScriptProtection.LEVEL_COMPILE, json.getInt("encryptLevel"));
+        assertEquals(ScriptProtection.STORAGE_NATIVE, json.getString("scriptStorage"));
+
+        // 2) 原生库尾部带的是编译载荷的密文，载荷类型必须标成 Rhino class。
+        byte[] library = readZipEntry(outApk, "libaijscrypto", ".so");
+        assertNotNull("产物里必须有解密库", library);
+        byte[] payload = EmbeddedScriptFooter.payloadOf(library);
+        assertNotNull("原生库尾部必须能读回脚本载荷", payload);
+        short flags = EncryptedScriptFileHeader.INSTANCE.readFlags(payload);
+        assertEquals("文件头必须标记载荷是 Rhino 编译产物",
+                EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS,
+                EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(flags));
+        assertNativeDecryptionMatches(json, payload);
+
+        byte[] plain = decryptPackagedScript(json, payload);
+        CompiledScriptPayload compiled = CompiledScriptPayload.read(plain);
+        assertTrue("载荷里应当带类名",
+                compiled.className != null && compiled.className.length() > 0);
+        assertEquals("编译产物必须是 class 文件", (byte) 0xCA, compiled.classBytes[0]);
+        assertEquals((byte) 0xFE, compiled.classBytes[1]);
+        assertEquals((byte) 0xBA, compiled.classBytes[2]);
+        assertEquals((byte) 0xBE, compiled.classBytes[3]);
+
+        // 3) 库文件里既不该有源码原文，也不该有脚本里的标识符。
+        String asText = new String(library, "ISO-8859-1");
+        assertFalse("产物里不该出现源码原文", asText.contains("NATIVE_SO_COMPILED_RAN"));
+        assertFalse("产物里不该出现脚本标识符", asText.contains("native-so-compiled-ran.txt"));
+
+        copyToSharedStorage(context, outApk, "aijs-native-so-compiled-probe.apk");
+    }
+
+    /**
      * 按运行端的方式解密打包脚本：有随机盐 + 签名指纹就走新派生（密钥绑定签名身份），
      * 老产物（无盐）回退到旧算法。
      */

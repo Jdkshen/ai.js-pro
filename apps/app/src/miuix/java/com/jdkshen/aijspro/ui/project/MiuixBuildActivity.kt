@@ -171,7 +171,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var engine by mutableStateOf("")
     private var includeAccessibility by mutableStateOf(true)
     private var includeImageModule by mutableStateOf(true)
-    /** 脚本保护档位：不加密 / 加密 / 快照（编译）/ 加密 so，见 ScriptProtection 的 CHOICE_*。 */
+    /** 脚本保护档位：不加密 / 加密 / 快照（编译）/ 加密 so / 快照 so，见 ScriptProtection 的 CHOICE_*。 */
     private var scriptProtection by mutableStateOf(ScriptProtection.CHOICE_ENCRYPT)
 
     // ---- signing (Pro 的“签名”组) ----
@@ -1356,6 +1356,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     fontSize = 16.sp,
                     color = MiuixTheme.colorScheme.onSurface
                 )
+                // 五档拆成两行：芯片总宽超出屏幕时单行会被截断（大字体下更明显）。
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     EngineChip(getString(R.string.text_protection_none),
                         scriptProtection == ScriptProtection.CHOICE_NONE) {
@@ -1369,9 +1370,15 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         scriptProtection == ScriptProtection.CHOICE_COMPILE) {
                         scriptProtection = ScriptProtection.CHOICE_COMPILE
                     }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     EngineChip(getString(R.string.text_protection_so),
                         scriptProtection == ScriptProtection.CHOICE_NATIVE) {
                         scriptProtection = ScriptProtection.CHOICE_NATIVE
+                    }
+                    EngineChip(getString(R.string.text_protection_so_snapshot),
+                        scriptProtection == ScriptProtection.CHOICE_NATIVE_COMPILE) {
+                        scriptProtection = ScriptProtection.CHOICE_NATIVE_COMPILE
                     }
                 }
                 Text(

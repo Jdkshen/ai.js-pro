@@ -41,9 +41,16 @@ public final class ScriptProtection {
     public static final int CHOICE_COMPILE = 2;
     /** 打包页档位：加密 so（载荷嵌进原生库，产物里没有脚本文件）。 */
     public static final int CHOICE_NATIVE = 3;
+    /**
+     * 打包页档位：快照 so（先编译再加密，然后把密文嵌进原生库）。
+     *
+     * <p>比 {@link #CHOICE_NATIVE} 更进一步：产物里既没有脚本文件、也没有可读源码；
+     * 与 {@link #CHOICE_COMPILE} 的唯一区别是密文放哪（原生库尾部 vs {@code assets/project/main.js}）。
+     */
+    public static final int CHOICE_NATIVE_COMPILE = 4;
 
     /** 档位数量（界面遍历用）。 */
-    public static final int CHOICE_COUNT = CHOICE_NATIVE + 1;
+    public static final int CHOICE_COUNT = CHOICE_NATIVE_COMPILE + 1;
 
     /**
      * {@code project.json} 里没有该字段时使用的等级。
@@ -91,7 +98,7 @@ public final class ScriptProtection {
         if (choice < CHOICE_NONE) {
             return CHOICE_NONE;
         }
-        return Math.min(choice, CHOICE_NATIVE);
+        return Math.min(choice, CHOICE_NATIVE_COMPILE);
     }
 
     /** 规范化存放位置：只认 {@link #STORAGE_NATIVE}，其余一律当 {@link #STORAGE_ASSETS}。 */
@@ -113,6 +120,7 @@ public final class ScriptProtection {
             case CHOICE_NONE:
                 return LEVEL_NONE;
             case CHOICE_COMPILE:
+            case CHOICE_NATIVE_COMPILE:
                 return LEVEL_COMPILE;
             default:
                 // CHOICE_ENCRYPT 与 CHOICE_NATIVE 都是「加密」；嵌进原生库不允许明文。
@@ -122,21 +130,30 @@ public final class ScriptProtection {
 
     /** 档位 → {@code scriptStorage}。 */
     public static String storageOfChoice(int choice) {
-        return normalizeChoice(choice) == CHOICE_NATIVE ? STORAGE_NATIVE : STORAGE_ASSETS;
+        switch (normalizeChoice(choice)) {
+            case CHOICE_NATIVE:
+            case CHOICE_NATIVE_COMPILE:
+                return STORAGE_NATIVE;
+            default:
+                return STORAGE_ASSETS;
+        }
     }
 
-    /** 由 {@code encryptLevel} + {@code scriptStorage} 反推打包页档位（打开工程时用）。 */
+    /**
+     * 由 {@code encryptLevel} + {@code scriptStorage} 反推打包页档位（打开工程时用）。
+     *
+     * <p>两个字段的每种合法组合都要能原样推回，否则「打开工程再打包」会**静默降级**
+     * （例如「等级 2 + 原生库」若被认成「加密 so」，再打包时编译就丢了）。
+     */
     public static int choiceOf(int level, String storage) {
-        if (usesNativeStorage(storage)) {
-            return CHOICE_NATIVE;
-        }
+        boolean nativeStorage = usesNativeStorage(storage);
         switch (normalize(level)) {
             case LEVEL_NONE:
-                return CHOICE_NONE;
+                return nativeStorage ? CHOICE_NATIVE : CHOICE_NONE;
             case LEVEL_COMPILE:
-                return CHOICE_COMPILE;
+                return nativeStorage ? CHOICE_NATIVE_COMPILE : CHOICE_COMPILE;
             default:
-                return CHOICE_ENCRYPT;
+                return nativeStorage ? CHOICE_NATIVE : CHOICE_ENCRYPT;
         }
     }
 
@@ -149,6 +166,8 @@ public final class ScriptProtection {
                 return "快照（编译）";
             case CHOICE_NATIVE:
                 return "加密 so";
+            case CHOICE_NATIVE_COMPILE:
+                return "快照 so";
             default:
                 return "加密（AES）";
         }

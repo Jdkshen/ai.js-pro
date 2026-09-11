@@ -197,7 +197,8 @@
     <string name="text_protection_encrypt">Encrypted</string>
     <string name="text_protection_snapshot">Snapshot</string>
     <string name="text_protection_so">Encrypted (native)</string>
-    <string name="summary_script_protection">Encrypted: header + AES ciphertext in assets. Snapshot: compiled to class / bytecode before encryption, no readable source. Encrypted (native): ciphertext appended to the native library, the package ships no script file at all (APK grows with script size).</string>
+    <string name="text_protection_so_snapshot">Snapshot (native)</string>
+    <string name="summary_script_protection">Encrypted: header + AES ciphertext in assets. Snapshot: compiled to class / bytecode before encryption, no readable source. Encrypted (native): ciphertext appended to the native library, the package ships no script file at all (APK grows with script size). Snapshot (native): compiled, encrypted and embedded in the native library — no script file and no readable source.</string>
 
     <string name="text_signing">Signing</string>
     <string name="text_default_signing">Automatic</string>

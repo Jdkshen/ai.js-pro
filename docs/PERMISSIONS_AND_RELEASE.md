@@ -42,7 +42,7 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 ## 1.1 脚本 APK 的保护等级（`encryptLevel`）
 
-打包页「特性」分组里的 **脚本保护** 四档选择，以及工程 `project.json` 里的 `encryptLevel` + `scriptStorage` 两个字段，控制产物中脚本的存放形式。判定逻辑集中在 `com.stardust.autojs.project.ScriptProtection`（打包端与打包出的 App 共用同一份语义）：
+打包页「特性」分组里的 **脚本保护** 五档选择（不加密 / 加密 / 快照 / 加密 so / 快照 so），以及工程 `project.json` 里的 `encryptLevel` + `scriptStorage` 两个字段，控制产物中脚本的存放形式。判定逻辑集中在 `com.stardust.autojs.project.ScriptProtection`（打包端与打包出的 App 共用同一份语义）：
 
 | 打包页档位 | `encryptLevel` | `scriptStorage` | 产物里的脚本形态 |
 |---|---:|---|---|
@@ -50,20 +50,23 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 | 加密（默认） | 1 | `assets` | `main.js` = `77 01 17 7F 12 12` + 2 字节 flags + AES/CBC/PKCS5 密文 |
 | 快照（编译） | 2 | `assets` | 同样是「文件头 + 密文」，但载荷是**编译产物**：Rhino 工程是生成的 class 字节（`CompiledScriptPayload`：类名 + 类字节），QuickJS 工程是 **QuickJS 字节码**（`JS_WriteObject(..., JS_WRITE_OBJ_BYTECODE)` 产物） |
 | 加密 so | 1 | `native` | **产物里没有脚本文件**：加密载荷追加在 `lib/<abi>/libaijscrypto.so` 尾部 |
+| 快照 so | 2 | `native` | 保护最强的一档：载荷是编译产物（class / 字节码）的密文，同样追加在原生库尾部 —— 既没有脚本文件，也没有可读源码 |
 
 取值规则：
 
 1. 打包页显式选了档位 → 以页面为准（页面会把 `encryptLevel` 与 `scriptStorage` 一起写进 `AppConfig`）；
 2. 页面没指定（例如由 `AppConfig.fromProjectConfig` 或外部调用打包）→ 以工程 `project.json` 为准；
 3. 工程里没有 `encryptLevel` → 默认 1（保持历史行为，以前是无条件加密）；没有 `scriptStorage` → 默认 `assets`；
-4. `scriptStorage=native` 但等级是 0 时会被自动提到 1：嵌进原生库的内容必须是密文。
+4. `scriptStorage=native` 但等级是 0 时会被自动提到 1：嵌进原生库的内容必须是密文；
+5. 打开工程时由两个字段反推档位（`ScriptProtection.choiceOf`），四种组合各自有对应档位，不会静默降级
+   （历史上的 bug：「等级 2 + `native`」被推成「加密 so」，再打包时编译就丢了）。
 
 两个字段都会被写回产物内的 `assets/project/project.json`，所以产物自带的配置与实际行为始终一致。
 
 文件头的 2 字节 flags 里，低字节留给执行模式等既有标记，**高字节是载荷类型**（`0` 文本 / `1` Rhino 编译类 / `2` QuickJS 字节码，见 `EncryptedScriptFileHeader`）。
 运行时按载荷类型分发：文本走原来的 `StringScriptSource`；编译类交给 `AndroidClassLoader`（dx → DexClassLoader）加载后在引擎作用域里 `exec`。
 
-### 「加密 so」是怎么放的
+### 「加密 so」/「快照 so」是怎么放的
 
 ```text
 lib/<abi>/libaijscrypto.so = [库原本内容][加密载荷][magic "AIJSPv1\0"][载荷长度小端][SHA-256(载荷)]
