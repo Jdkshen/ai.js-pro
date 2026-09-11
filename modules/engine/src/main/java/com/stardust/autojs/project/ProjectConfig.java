@@ -61,6 +61,15 @@ public class ProjectConfig {
     @SerializedName("engine")
     private String mEngine;
 
+    /**
+     * 脚本保护等级（Auto.js / Auto.js Pro 工程格式里的 {@code encryptLevel}）。
+     *
+     * <p>缺省 {@link ScriptProtection#DEFAULT_LEVEL}（加密）：老工程没有这个字段时行为不变；
+     * 显式写 0 才会产出明文脚本，写 2 则编译后再加密。
+     */
+    @SerializedName("encryptLevel")
+    private int mEncryptLevel = ScriptProtection.DEFAULT_LEVEL;
+
 
     public static ProjectConfig fromJson(String json) {
         if (json == null) {
@@ -223,6 +232,15 @@ public class ProjectConfig {
 
     public void setIcon(String icon) {
         mIcon = icon;
+    }
+
+    /** 脚本保护等级，见 {@link ScriptProtection}。 */
+    public int getEncryptLevel() {
+        return mEncryptLevel;
+    }
+
+    public void setEncryptLevel(int encryptLevel) {
+        mEncryptLevel = ScriptProtection.normalize(encryptLevel);
     }
 
     public String getBuildDir() {

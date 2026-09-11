@@ -76,6 +76,7 @@ import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.jdkshen.aijspro.ui.shortcut.ShortcutIconSelectActivity
 import com.stardust.autojs.project.ProjectConfig
+import com.stardust.autojs.project.ScriptProtection
 import com.stardust.util.IntentUtil
 import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
@@ -170,6 +171,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var engine by mutableStateOf("")
     private var includeAccessibility by mutableStateOf(true)
     private var includeImageModule by mutableStateOf(true)
+    /** 脚本加密：对应产物 project.json 的 encryptLevel（开 = 1，关 = 0）。 */
+    private var encryptScript by mutableStateOf(true)
 
     // ---- signing (Pro 的“签名”组) ----
     /** 0 = 默认签名（tiny-sign 内嵌测试证书）, 1 = 使用已有的密钥库, 2 = 新建密钥 */
@@ -296,6 +299,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 requestPermissions = projectRequest
             }
             engine = config.engine ?: ""
+            // 工程里写了 encryptLevel 就按工程展示，否则保持页面的默认（加密）。
+            encryptScript = ScriptProtection.shouldEncrypt(config.encryptLevel)
             val projectSplash = File(file, "splash.png")
             if (projectSplash.isFile()) {
                 splashIconPath = projectSplash.path
@@ -460,6 +465,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         appConfig.setEngine(engine.ifEmpty { null })
         appConfig.setIncludeAccessibility(includeAccessibility)
         appConfig.setIncludeImageModule(includeImageModule)
+        appConfig.setEncryptLevel(
+            if (encryptScript) ScriptProtection.LEVEL_ENCRYPT else ScriptProtection.LEVEL_NONE)
         if (showSplash && splashIconPath.isNotEmpty()) {
             appConfig.setSplashIcon(splashIconPath)
         }
@@ -1334,6 +1341,12 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 summary = getString(R.string.summary_include_image_module),
                 checked = includeImageModule,
                 onCheckedChange = { includeImageModule = it }
+            )
+            SuperSwitch(
+                title = getString(R.string.text_script_encryption),
+                summary = getString(R.string.summary_script_encryption),
+                checked = encryptScript,
+                onCheckedChange = { encryptScript = it }
             )
         }
     }

@@ -40,6 +40,26 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 推送与 `project-versions.json` 匹配的标签（当前为 `v1.0.2+465`）会触发 GitHub Actions 发布任务。仓库 Actions Secrets 必须配置 `AIJSPRO_KEYSTORE_BASE64`、`AIJSPRO_STORE_PASSWORD`、`AIJSPRO_KEY_ALIAS`、`AIJSPRO_KEY_PASSWORD`；前者是 keystore 文件的 Base64 内容，另外三项与本地发布变量含义一致。Secrets 缺失时发布任务会明确失败，不会生成无签名或 debug 签名的 Release。
 
+## 1.1 脚本 APK 的保护等级（`encryptLevel`）
+
+打包页「特性」分组里的 **脚本加密** 开关，以及工程 `project.json` 里的 `encryptLevel` 字段，控制产物中脚本的存放形式。判定逻辑集中在 `com.stardust.autojs.project.ScriptProtection`（打包端与打包出的 App 共用同一份语义）：
+
+| 等级 | 含义 | 产物内 `assets/project/main.js` |
+|---:|---|---|
+| 0 | 不加密 | 原始脚本文本（无文件头） |
+| 1 | 加密（默认） | `77 01 17 7F 12 12` + 2 字节 flags + AES/CBC/PKCS5 密文 |
+| 2 | 编译 + 加密（预留） | 先编译为引擎产物（Rhino `.class` / QuickJS 字节码）再加密 |
+
+取值规则：
+
+1. 打包页显式选了开关 → 以页面为准（开 = 1，关 = 0）；
+2. 页面没指定（例如由 `AppConfig.fromProjectConfig` 或外部调用打包）→ 以工程 `project.json` 为准；
+3. 工程里没有该字段 → 默认 1，保持历史行为（以前是无条件加密）。
+
+`encryptLevel` 会被写回产物内的 `assets/project/project.json`，所以产物自带的配置与实际行为始终一致。密钥仍由 `key = MD5(packageName + versionName + mainScriptFile)`、`vec = MD5(buildId + name)[0,16)` 派生，打包端与运行端（`AssetsProjectLauncher.initKey`）必须同时改。
+
+运行时按 8 字节文件头自描述：没有合法文件头就当普通文本脚本执行，所以等级 0 的产物不需要任何运行时开关。
+
 ## 2. 当前 SDK 范围
 
 | 项目 | 当前值 |

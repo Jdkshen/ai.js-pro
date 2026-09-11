@@ -22,6 +22,7 @@ import com.jdkshen.aijspro.autojs.build.sign.SigningOptions;
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
 import com.stardust.autojs.apkbuilder.Signer;
 import com.stardust.autojs.engine.encryption.ScriptEncryption;
+import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.util.MD5;
 
@@ -525,9 +526,127 @@ public class ApkBuilderEncryptionTest {
         }
     }
 
+    /**
+     * encryptLevel = 0（Auto.js / Auto.js Pro 工程格式里的「不加密」）：
+     * 入口脚本必须原样明文写入，不能再带上加密头 —— 否则「关掉加密」只是说说而已。
+     */
+    @Test
+    public void encryptLevelZeroKeepsScriptPlainText() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-plaintext-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "plain.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        writeText(script, "console.log('plain probe');\n");
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("PlainProbe")
+                .setPackageName("com.example.plainprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEncryptLevel(ScriptProtection.LEVEL_NONE);
+
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(config).build().sign();
+
+        assertEquals("页面选择的等级要生效", ScriptProtection.LEVEL_NONE, builder.getEncryptLevel());
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals("产物 project.json 必须记录真实等级", 0, json.getInt("encryptLevel"));
+        byte[] packaged = readBytes(new File(workspace, "assets/project/main.js"));
+        assertFalse("等级 0 时不能再有加密头",
+                EncryptedScriptFileHeader.INSTANCE.isValidFile(packaged));
+        assertEquals("等级 0 时入口脚本就是原脚本", readText(script), new String(packaged, "UTF-8"));
+    }
+
+    /**
+     * 工程 project.json 里的 encryptLevel 必须被采纳（页面没有显式指定时）：
+     * Auto.js / Pro 的工程拿到这里打包，不能把它的「不加密」静默改成加密。
+     */
+    @Test
+    public void projectJsonEncryptLevelIsHonoured() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-project-level-test");
+        deleteRecursively(workDir);
+        File projectDir = new File(workDir, "project");
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "project.apk");
+        //noinspection ResultOfMethodCallIgnored
+        projectDir.mkdirs();
+        writeText(new File(projectDir, "main.js"), "console.log('project probe');\n");
+        writeText(new File(projectDir, "project.json"),
+                "{\n"
+                        + "  \"name\": \"ProjectLevelProbe\",\n"
+                        + "  \"packageName\": \"com.example.projectlevelprobe\",\n"
+                        + "  \"versionName\": \"1.0.0\",\n"
+                        + "  \"versionCode\": 1,\n"
+                        + "  \"main\": \"main.js\",\n"
+                        + "  \"encryptLevel\": 0\n"
+                        + "}\n");
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("ProjectLevelProbe")
+                .setPackageName("com.example.projectlevelprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(projectDir.getAbsolutePath());
+
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(config).build().sign();
+
+        assertEquals("工程里写了 0 就应当是 0", ScriptProtection.LEVEL_NONE, builder.getEncryptLevel());
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals(0, json.getInt("encryptLevel"));
+        byte[] packaged = readBytes(new File(workspace, "assets/project/main.js"));
+        assertFalse("工程要求不加密时不能再有加密头",
+                EncryptedScriptFileHeader.INSTANCE.isValidFile(packaged));
+        assertEquals("console.log('project probe');\n", new String(packaged, "UTF-8"));
+    }
+
+    /**
+     * 默认路径（工程没写、页面没选）继续加密：新增等级字段不能改变老工程的打包结果。
+     */
+    @Test
+    public void defaultPackagingStillEncrypts() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-default-level-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "default.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        writeText(script, "console.log('default probe');\n");
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("DefaultLevelProbe")
+                .setPackageName("com.example.defaultlevelprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath());
+
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(config).build().sign();
+
+        assertEquals(ScriptProtection.DEFAULT_LEVEL, builder.getEncryptLevel());
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals(ScriptProtection.LEVEL_ENCRYPT, json.getInt("encryptLevel"));
+        assertTrue("默认仍然是加密头 + 密文",
+                EncryptedScriptFileHeader.INSTANCE.isValidFile(
+                        readBytes(new File(workspace, "assets/project/main.js"))));
+    }
+
     private static ApkSignatureReader.Signer buildWithConfig(Context context, File outDir, String apkName,
-            File workDir, ApkBuilder.AppConfig config) throws Exception {        File outApk = new File(outDir, apkName);
-        File workspace = new File(workDir, "workspace-" + apkName);
+            File workDir, ApkBuilder.AppConfig config) throws Exception {        File outApk = new File(outDir, apkName);        File workspace = new File(workDir, "workspace-" + apkName);
         new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), outApk, workspace.getPath())
                 .prepare()
                 .withConfig(config)

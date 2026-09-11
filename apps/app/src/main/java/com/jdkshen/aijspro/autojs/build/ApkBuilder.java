@@ -10,6 +10,7 @@ import com.stardust.autojs.apkbuilder.Signer;
 import com.stardust.autojs.project.BuildInfo;
 import com.stardust.autojs.project.LaunchConfig;
 import com.stardust.autojs.project.ProjectConfig;
+import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
@@ -84,6 +85,9 @@ public class ApkBuilder {
     private String mInitVector;
     private String mMainScriptFile = "main.js";
     private String mScriptFile;
+    // 脚本保护等级（project.json 的 encryptLevel）：0 明文、1 AES、≥2 编译后加密。
+    // 默认跟工程配置走，打包页显式选过则以 AppConfig 为准（见 syncProjectJsonAndDeriveKeys）。
+    private int mEncryptLevel = ScriptProtection.DEFAULT_LEVEL;
 
     public ApkBuilder(InputStream apkInputStream, File outApkFile, String workspacePath) {
         mOutApkFile = outApkFile;
@@ -199,7 +203,13 @@ public class ApkBuilder {
         if (mAppConfig == null || mAppConfig.sourcePath == null) {
             if (mScriptFile != null) {
                 syncProjectJsonAndDeriveKeys();
-                encrypt(new File(mScriptFile), new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
+                // 等级 0 直接明文拷入（只重新求值一次：等级在 sync 里才最终确定）。
+                if (ScriptProtection.shouldEncrypt(mEncryptLevel)) {
+                    encrypt(new File(mScriptFile), new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
+                } else {
+                    copyFile(new File(mScriptFile),
+                            new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
+                }
             }
             return;
         }
@@ -207,17 +217,38 @@ public class ApkBuilder {
         if (source.isDirectory()) {
             copyDir(source.getPath(), mWorkspacePath + "/assets/project");
             syncProjectJsonAndDeriveKeys();
-            File entryScript = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
-            encrypt(entryScript, entryScript);
+            if (ScriptProtection.shouldEncrypt(mEncryptLevel)) {
+                File entryScript = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
+                encrypt(entryScript, entryScript);
+            }
         } else {
             syncProjectJsonAndDeriveKeys();
-            encrypt(source, new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
+            File target = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
+            if (ScriptProtection.shouldEncrypt(mEncryptLevel)) {
+                encrypt(source, target);
+            } else {
+                copyFile(source, target);
+            }
             if (mAppConfig.ignoredDirs != null) {
                 for (Object ignored : mAppConfig.ignoredDirs) {
                     new File(mWorkspacePath, "assets/project/" + ignored).delete();
                 }
             }
         }
+    }
+
+    /** 明文拷贝（不加密时的分支，目录不存在则先建）。 */
+    private void copyFile(File input, File output) throws IOException {
+        File parent = output.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+        StreamUtils.write(new FileInputStream(input), new FileOutputStream(output));
+    }
+
+    /** 本次打包最终生效的脚本保护等级（供测试与日志使用）。 */
+    public int getEncryptLevel() {
+        return mEncryptLevel;
     }
 
     /**
@@ -468,6 +499,15 @@ public class ApkBuilder {
             mMainScriptFile = json.optString("main", "main.js");
             json.put("main", mMainScriptFile);
 
+            // 脚本保护等级：工程里写了就以工程为准，打包页显式选过则以页面控件为准（-1 = 未指定）。
+            // 写回 project.json 是为了让产物里的配置与实际行为一致（运行端读回时能看到真实等级）。
+            int level = json.optInt("encryptLevel", ScriptProtection.DEFAULT_LEVEL);
+            if (mAppConfig != null && mAppConfig.encryptLevel >= 0) {
+                level = mAppConfig.encryptLevel;
+            }
+            mEncryptLevel = ScriptProtection.normalize(level);
+            json.put("encryptLevel", mEncryptLevel);
+
             JSONObject build = json.optJSONObject("build");
             long buildNumber = 1;
             if (build != null) {
@@ -550,6 +590,8 @@ public class ApkBuilder {
         private String engine;
         private boolean includeAccessibility = true;
         private boolean includeImageModule = true;
+        /** 脚本保护等级；-1 表示未指定，打包时沿用 project.json 里的 encryptLevel。 */
+        private int encryptLevel = -1;
         private Signer signer;
         private final ArrayList<String> ignoredDirs = new ArrayList<>();
 
@@ -579,6 +621,7 @@ public class ApkBuilder {
                 config.icon = () -> BitmapFactory.decodeFile(projectConfig.getIcon());
             }
             config.engine = projectConfig.getEngine(null);
+            config.encryptLevel = projectConfig.getEncryptLevel();
             LaunchConfig launchConfig = projectConfig.getLaunchConfig();
             if (launchConfig != null) {
                 config.hideLogs = launchConfig.shouldHideLogs();
@@ -674,6 +717,19 @@ public class ApkBuilder {
         public AppConfig setIncludeImageModule(boolean includeImageModule) {
             this.includeImageModule = includeImageModule;
             return this;
+        }
+
+        /**
+         * 脚本保护等级，见 {@link ScriptProtection}：0 不加密、1 AES 加密、2 编译后加密。
+         * 不调用则沿用工程 project.json 里的值。
+         */
+        public AppConfig setEncryptLevel(int encryptLevel) {
+            this.encryptLevel = encryptLevel;
+            return this;
+        }
+
+        public int getEncryptLevel() {
+            return encryptLevel;
         }
 
         /**
