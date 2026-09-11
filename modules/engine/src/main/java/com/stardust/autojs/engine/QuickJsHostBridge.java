@@ -3391,6 +3391,8 @@ final class QuickJsHostBridge implements AutoCloseable,
                             mEventSink.emit(new JSONObject()
                                     .put("window", mId).put("id", id).put("event", "touch")
                                     .put("action", event.getAction())
+                                    .put("x", (int) event.getX())
+                                    .put("y", (int) event.getY())
                                     .put("rawX", (int) event.getRawX())
                                     .put("rawY", (int) event.getRawY()).toString());
                         } catch (JSONException ignored) {

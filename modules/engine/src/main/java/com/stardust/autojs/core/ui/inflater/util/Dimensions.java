@@ -59,7 +59,13 @@ public class Dimensions {
             throw new InflateException("dimension cannot be resolved: " + dimension);
         }
         int unit = m.groupCount() == 2 ? UNITS.get(m.group(2), TypedValue.COMPLEX_UNIT_DIP) : TypedValue.COMPLEX_UNIT_DIP;
-        float value = Integer.valueOf(m.group(1));
+        // 支持小数（如 cardCornerRadius="73.5px"）：以前用 Integer.valueOf 会直接拖 InflateException。
+        final float value;
+        try {
+            value = Float.parseFloat(m.group(1));
+        } catch (NumberFormatException error) {
+            throw new InflateException("dimension cannot be resolved: " + dimension);
+        }
         return TypedValue.applyDimension(unit, value, context.getResources().getDisplayMetrics());
     }
 

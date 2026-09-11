@@ -2,7 +2,7 @@
 
 更新日期：2026-09-11
 
-设备：Mi8 `ce4d2bdb`（LineageOS/Android 15）为基线机，回归 220 项全绿；主力机 `DQKFJB59596L45BI`（Android 16 / SDK 36）上一轮同一脚本 177 项全绿（OpenCV / Java 互操作 / 悬浮窗批A 增项待复跑）；K40 `cccc62c7` 跑 compat/lite 与 Rhino 兼容回归。
+设备：Mi8 `ce4d2bdb`（LineageOS/Android 15）为基线机，回归 222 项全绿；主力机 `DQKFJB59596L45BI`（Android 16 / SDK 36）上一轮同一脚本 177 项全绿（OpenCV / Java 互操作 / 悬浮窗批A 增项待复跑）；K40 `cccc62c7` 跑 compat/lite 与 Rhino 兼容回归。
 
 ## 已自动验证
 

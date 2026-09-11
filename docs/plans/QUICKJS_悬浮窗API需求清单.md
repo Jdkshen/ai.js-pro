@@ -28,10 +28,16 @@
 | 圆形触摸穿透（P0-2 `clipToOutline` / `50%` 圆角） | ✅ 批 E2 已完成（⚠️ 仅视觉+窗口内命中） | 新增 XML 属性 `clipToOutline`（ViewAttributes）与 `cardCornerRadius="50%"`（CardAttributes 百分比）；并修复「XML 根自带 `w/h` + 窗口 wrap_content → 内容被量成 0×0」的布局 bug |
 | 圆形触摸穿透（P1/P2 按区域输入） | ⚠️ 系统不支持，已降级为能力位 | 实测 Android 15：`WindowManager.LayoutParams` 无 `setTouchableRegion(Region)`/`mTouchableRegion` ⇒ `floaty.touchRegionInfo().supported=false`；API 保留（`setShape`/`setTouchShape`/`setTouchableRegion`/`clearTouchRegion`）并同步 `console.warn`，不支持时行为退回矩形；**可行方案见 `docs/guides/悬浮窗触摸穿透说明.md`** |
 | 触摸穿透实测结论（供脚本作者） | ✅ 已写入文档 | `setTouchable(false)` 时点在窗口内会**真的穿透到下层 App**（计算器实测：`false` 时 `formula=7`，`true` 时为空）⇒ 环形菜单用「容器 `setTouchable(false)` + 菜单项独立小窗口」 |
+| F-1 `cardCornerRadius` 不支持小数 | ✅ 批F 已完成 | `Dimensions` 改用 `Float.parseFloat`：`cardCornerRadius="73.5px"` 可直接建窗（新手机实测 147×147，`attr('cardCornerRadius')` 读回 `73.5px`）；解析失败时仍报 `InflateException` 而非难懂的 `NumberFormatException` |
+| F-2 `onTouch` 坐标 NaN | ✅ 批F 已完成 | 触摸事件补上窗口内坐标：`ev.getX()/getY()`（Java 侧发 `x/y`，与 `getRawX()/getRawY()` 屏幕坐标共存）；实测 `x=100 y=100 rawX=300` |
+| F-3 XML 尺寸单位混淆 | ✅ 文档口径（同 P2-1） | 与 Rhino 一致：`w/h` 不带单位 = dp、`margin*/padding*` = px；`docs/guides/悬浮窗开发踩坑与性能.md` 给了“按屏宽比例 + 显式 px”的自适应模板 |
+| F-4 MCP 返回结构错误 | ✅ 批C 已修复，已在 v1.0.2 生效 | `list_engine_api`/`probe_engine_api` 已包成标准 tool result envelope（见 MCP-1）；另新增 `engine_api_diff` |
+| F-5 `setTouchShape` 存在但系统不支持 | ✅ 保持 API + 明确标注 | 系统无按区域输入隐藏 API（`supported=false`）时：仍可调用（链式），但会 `console.warn` 给出替代方案；`floaty.touchRegionInfo()` / `win.getTouchRegion()` 可事前探测 ⇒ 不删除，避免后续 ROM 支持时脚本要改 |
+| F-6 `animate` 缺 `scale` / `easeIn` 等 | ✅ 批F 已完成 | `scale` 自动拆成 `scaleX+scaleY`；新增别名 `easeIn/easeOut/easeInOut/spring`（`ease-in` 等写法也兼容），未知属性/缓动报错里直接列可用项 |
 
 > 批A 真机验证（Mi8 `ce4d2bdb`）：初始坐标 600/400 ✅、`visible:false` 不显示 ✅、显示前 `findView` 可用 ✅、show/hide/setVisibility 往返 ✅、`setPosition` 后 `getX()` 立即 300/500 ✅、`getX(true)` 生效值 ✅、alpha/scale 链式 ✅、3 窗口显隐原子 ✅、`setContentVisible` 20 次 0ms ✅。
 > 批B 真机验证：`javaView` = `JsTextView` / 根 View = `FrameLayout` ✅、`runOnMainThread` 内调 View API ✅、`ObjectAnimator.ofFloat(view.javaView, "alpha", 1, 0.2)` 启动成功 ✅、`view.animate(..., 'decelerate')` 18ms ✅、`win.animate(..., 'bounce'/'linear')` ✅、链式与 `stopAnimation` ✅、未知属性/缓动报错清晰 ✅。
-> 回归：QuickJS 全模块回归 **220 项 全绿**（批A/B/C + 用户的 P1-1/P2-1/P2-3 补丁共 +14 项悬浮窗断言，圆形触摸穿透 +7 项）。
+> 回归：QuickJS 全模块回归 **222 项 全绿**（批A/B/C + 用户的 P1-1/P2-1/P2-3 补丁共 +14 项悬浮窗断言，圆形触摸穿透 +7 项，批F 反馈修复 +2 项）。
 > 批E 真机验证（Mi8）：`floaty.touchRegionInfo().supported=false`（系统无按区域输入 API）❓；`win.view`/`win.c.view` 均拿到真 View（`CardView`）✅；`<card w="200px" h="200px"/>` 作为 XML 根时窗口量到 200×200（不再 0×0）✅；`setCornerRadius('50%')` → 轮廓变 `oval`、`setCornerRadius(60)` → `roundRect`、`getClipToOutline()=true` ✅；`setTouchable(false)` 后 `getTouchRegion().touchable=false` ✅；**穿透实测：`setTouchable(false)` + `alpha=0.5/1.0` 时点击穿透到计算器（`formula=7`），`setTouchable(true)` 则被拦截（`formula` 空）** ✅。
 > 补丁真机验证（Mi8）：`ObjectAnimator.ofFloat(win.c,'alpha',1,0.2)` ✅、`objectAnimator()`/`animateView()` ✅、`threads.start(fn,{win:win})` + `__args.win.setPosition(600,900)` ✅（主脚本 `getX()` 同步看到 600）、`attr('width')` = 120px（不再 0）✅、`setSize(500,300)` 后 `getWidth()` = 500x300 ✅。
 > 批C 真机验证：`floaty.exists`/`win.exists` ✅、`attached/detached` 事件序列 `attached,detached,attached` ✅、`win.post` 返回值 6 / 带延迟 `delayed-ok` ✅、**worker 线程把主脚本窗口从 200 移到 240（主脚本 `getX()` 同步看到 240）** ✅、`getWindow(不存在)` 报错清晰 ✅、worker 结束后主窗口仍存活 ✅。

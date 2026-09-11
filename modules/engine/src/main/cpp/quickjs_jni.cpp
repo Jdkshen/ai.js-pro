@@ -6006,6 +6006,22 @@ const char kBootstrapScript[] = R"JS(
         bounce: 'android.view.animation.BounceInterpolator',
         cycle: 'android.view.animation.CycleInterpolator'
     };
+    /** 常见缓动别名（easeIn/easeOut/easeInOut 与 ease-in 等写法）。 */
+    var EASING_ALIASES = {
+        easein: 'accelerate',
+        ease_in: 'accelerate',
+        easeout: 'decelerate',
+        ease_out: 'decelerate',
+        easeinout: 'accelerate_decelerate',
+        ease_in_out: 'accelerate_decelerate',
+        ease: 'accelerate_decelerate',
+        default: 'decelerate',
+        accel: 'accelerate',
+        decel: 'decelerate',
+        spring: 'overshoot'
+    };
+    /** ViewPropertyAnimator 属性别名：scale → scaleX + scaleY。 */
+    var ANIMATION_PROPERTY_ALIASES = { scale: ['scaleX', 'scaleY'] };
     /**
      * 用系统 ViewPropertyAnimator 驱动动画：动画在渲染线程执行，脚本不再逐帧 sleep。
      * @param {object} javaView android.view.View 的 Java 代理
@@ -6026,19 +6042,34 @@ const char kBootstrapScript[] = R"JS(
             animator.setDuration(Math.max(0, Math.round(Number(duration === undefined ? 300 : duration) || 0)));
             if (easing !== undefined && easing !== null && String(easing) !== '') {
                 var key = String(easing).toLowerCase().replace(/-/g, '_');
+                if (EASING_ALIASES[key]) key = EASING_ALIASES[key];
                 var className = EASING_CLASSES[key];
                 if (!className) {
                     throw new Error('未知的缓动函数：' + easing + '（可用：'
-                        + Object.keys(EASING_CLASSES).join('/') + '）');
+                        + Object.keys(EASING_CLASSES).join('/')
+                        + '；别名：easeIn/easeOut/easeInOut）');
                 }
                 animator.setInterpolator(new (requireJavaClass(className))());
             }
             var animated = 0;
             for (var property in props) {
                 if (property === 'duration' || property === 'easing') continue;
+                var alias = ANIMATION_PROPERTY_ALIASES[property];
+                if (alias) {
+                    for (var a = 0; a < alias.length; a++) {
+                        var aliasSetter = animator[alias[a]];
+                        if (typeof aliasSetter !== 'function') {
+                            throw new Error('ViewPropertyAnimator 不支持属性：' + property);
+                        }
+                        aliasSetter.call(animator, Number(props[property]));
+                        animated++;
+                    }
+                    continue;
+                }
                 var setter = animator[property];
                 if (typeof setter !== 'function') {
-                    throw new Error('ViewPropertyAnimator 不支持属性：' + property);
+                    throw new Error('ViewPropertyAnimator 不支持属性：' + property
+                        + '（可用：alpha/scaleX/scaleY/x/y/translationX/translationY/rotation，scale 会自动拆成 scaleX+scaleY）');
                 }
                 setter.call(animator, Number(props[property]));
                 animated++;
