@@ -26,6 +26,8 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
     private volatile QuickJsHostBridge mHostBridge;
     private int mOriginalThreadPriority = Process.THREAD_PRIORITY_DEFAULT;
     private boolean mPriorityRaised;
+    /** forceStop() 过：用于把 native 的通用“interrupted”异常识刷为正常停止。 */
+    private volatile boolean mInterruptRequested;
 
     @Override
     public synchronized void put(String name, Object value) {
@@ -80,11 +82,27 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         if (handle == 0) {
             throw new IllegalStateException("QuickJS engine has not been initialized");
         }
-        return QuickJsNativeBridge.evaluate(handle, scriptSource.getScript(), scriptSource.toString());
+        mInterruptRequested = false;
+        try {
+            return QuickJsNativeBridge.evaluate(handle, scriptSource.getScript(), scriptSource.toString());
+        } catch (QuickJsException error) {
+            // 主动停止 / 超时会中断 JS 执行，native 侧抛的是通用 QuickJsException，
+            // 这里换成引擎统一的 ScriptInterruptedException，让上层（MCP / 历史记录）
+            // 能把“正常停止”和“真出错”区分开。
+            if (mInterruptRequested || isInterruptMessage(error.getMessage())) {
+                throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException(error);
+            }
+            throw error;
+        }
+    }
+
+    private static boolean isInterruptMessage(String message) {
+        return message != null && message.contains("interrupted");
     }
 
     @Override
     public void forceStop() {
+        mInterruptRequested = true;
         long handle = mNativeHandle;
         if (handle != 0) {
             QuickJsNativeBridge.requestInterrupt(handle);

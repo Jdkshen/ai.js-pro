@@ -42,6 +42,9 @@ internal class McpTools(private val context: Context, private val event: (String
         @Volatile var logStartId = -1
         @Volatile var logs: List<JsonObject>? = null
         @Volatile var execution: ScriptExecution? = null
+        /** 用户主动 stop（用于区分“正常停止”与“真出错”）。 */
+        @Volatile var stopRequested = false
+        @Volatile var stopReason = ""
     }
     private data class CursorPage(val items: List<JsonObject>, var offset: Int, val createdAt: Long)
 
@@ -243,6 +246,17 @@ internal class McpTools(private val context: Context, private val event: (String
                 event("$key · ${record.status.lowercase()} · ${record.path}")
             }
             override fun onException(execution: ScriptExecution, error: Throwable) {
+                // 主动停止 / 超时会中断脚本，QuickJS 在中断点必然抛异常（等同于 Java 的
+                // InterruptedException）——这不是错误，按 STOPPED 上报并带 stopReason。
+                if (isInterrupt(error)) {
+                    record.status = "STOPPED"
+                    record.stopReason = if (record.stopRequested) "user_stopped" else "interrupted"
+                    record.errorType = ""; record.errorMessage = ""; record.errorStack = ""
+                    record.finishedAt = System.currentTimeMillis()
+                    record.logs = consoleLogsSince(record.logStartId, MAX_RUN_LOGS)
+                    event("$key · stopped · ${record.path}")
+                    return
+                }
                 if (record.status != "STOPPED") record.status = "FAILED"
                 record.errorType = error.javaClass.name; record.errorMessage = error.localizedMessage.orEmpty().take(2000)
                 record.errorStack = Log.getStackTraceString(error).take(16 * 1024); record.finishedAt = System.currentTimeMillis()
@@ -371,12 +385,17 @@ internal class McpTools(private val context: Context, private val event: (String
         if (!McpService.allowExecution) throw ToolError("运行授权未开启")
         val record = runs[args.string("executionId")] ?: throw ToolError("找不到此 MCP 任务")
         if (record.status !in ACTIVE_STATES) throw ToolError("任务已结束：${record.status}")
+        record.stopRequested = true; record.stopReason = "user_stopped"
         record.status = "STOPPED"; record.finishedAt = System.currentTimeMillis()
+        record.errorType = ""; record.errorMessage = ""; record.errorStack = ""
         record.logs = consoleLogsSince(record.logStartId, MAX_RUN_LOGS)
         record.execution?.engine?.forceStop()
         event("${record.id} · stopped · ${record.path}")
         return toolJson(runJson(record))
     }
+
+    /** 中止类异常（QuickJS 的 interrupted / Rhino 的 ScriptInterruptedException）。 */
+    private fun isInterrupt(error: Throwable): Boolean = McpRunOutcome.isInterrupt(error)
 
     private fun waitFor(record: RunRecord, timeoutSeconds: Int): JsonObject {
         val timeout = timeoutSeconds.coerceIn(1, 600)
@@ -393,6 +412,7 @@ internal class McpTools(private val context: Context, private val event: (String
         if (run.startedAt > 0) addProperty("startedAt", run.startedAt)
         if (run.finishedAt > 0) addProperty("finishedAt", run.finishedAt)
         if (run.result.isNotEmpty()) addProperty("result", run.result)
+        if (run.status == "STOPPED") addProperty("stopReason", run.stopReason.ifEmpty { "user_stopped" })
         if (run.errorType.isNotEmpty()) add("error", JsonObject().apply {
             addProperty("type", run.errorType); addProperty("message", run.errorMessage); addProperty("stack", run.errorStack)
         })

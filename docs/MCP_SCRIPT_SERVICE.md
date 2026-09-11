@@ -43,6 +43,18 @@ adb forward tcp:18790 tcp:8788
 
 - `run_script`：只运行操作目录内已有 `.js`，继续使用应用现有脚本引擎和工作目录。可选 `engine` 参数（`rhino` / `quickjs`）会用**临时副本**指定引擎后运行，原文件不改动，运行结束自动删除副本。
 - `stop_script`：只停止该 MCP 服务启动并记录的 executionId。
+
+运行结果语义（`list_executions` / `get_execution` / `wait_execution` / `run_script`）：
+
+| 字段 | 说明 |
+|---|---|
+| `status` | `QUEUED` / `RUNNING` / `SUCCEEDED` / `FAILED` / `STOPPED` |
+| `stopReason` | 仅在 `STOPPED` 时出现：`user_stopped`（用户/客户端停止）或 `interrupted`（执行被中断）|
+| `error` | 仅在**真的报错**（`FAILED`）时出现；脚本被停止时**不再**附带 `interrupted` 异常堆栈 |
+
+> 主动停止是用**中断**实现的（等同于 Java 的 `InterruptedException`），中断点必然抛异常，
+> 所以 `STOPPED` 不是错误：判定成功与否请用 `status`，不要再依据 `error` 是否存在。
+> 引擎侧同时把 QuickJS 的中断异常统一成 `ScriptInterruptedException`，与 Rhino 行为一致。
 - `list_engine_api` / `probe_engine_api`：枚举某引擎的全局 API、探测类型成员。
 - `engine_api_diff`：一次调用直接对比两引擎全局 API（返回 `onlyQuickJs` / `onlyRhino` / `commonCount` / `quickjsCount` / `rhinoCount`），迁移新引擎时用来快速定位缺口；lite 版无 Rhino 时 `rhinoAvailable=false`。
 
