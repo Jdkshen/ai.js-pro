@@ -6,6 +6,7 @@ import android.os.Process;
 import com.stardust.autojs.core.looper.LooperHelper;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.script.JavaScriptSource;
+import com.stardust.autojs.script.QuickJsBytecodeSource;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -84,6 +85,12 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         }
         mInterruptRequested = false;
         try {
+            // 打包加密等级 ≥ 2 的产物是 QuickJS 字节码（没有源码文本），走执行字节码。
+            if (scriptSource instanceof QuickJsBytecodeSource) {
+                return QuickJsNativeBridge.evaluateBytecode(handle,
+                        ((QuickJsBytecodeSource) scriptSource).getBytecode(),
+                        scriptSource.toString());
+            }
             return QuickJsNativeBridge.evaluate(handle, scriptSource.getScript(), scriptSource.toString());
         } catch (QuickJsException error) {
             // 主动停止 / 超时会中断 JS 执行，native 侧抛的是通用 QuickJsException，

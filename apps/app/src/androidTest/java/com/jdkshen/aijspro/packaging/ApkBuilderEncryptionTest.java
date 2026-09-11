@@ -819,6 +819,75 @@ public class ApkBuilderEncryptionTest {
         copyToSharedStorage(outApk, "aijs-quickjs-probe.apk");
     }
 
+    /**
+     * QuickJS 的编译等级（encryptLevel ≥ 2）：载荷是 QuickJS **字节码**，产物里没有源码文本。
+     *
+     * <p>与 Rhino 的编译等级对应（那边是 class 字节）；字节码与 quickjs 版本绑定，
+     * 运行端 `JS_ReadObject` 会做格式校验。
+     */
+    @Test
+    public void quickJsCompileLevelProducesBytecodeWithoutSource() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-quickjs-bytecode-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "quickjs-bytecode.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        String source = "// @engine quickjs\nconsole.log('QUICKJS_BYTECODE_RAN');\n";
+        writeText(script, source);
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("QuickJsBytecodeProbe")
+                .setPackageName("com.example.quickjsbytecodeprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("quickjs")
+                .setHideLogs(false)
+                .setEncryptLevel(ScriptProtection.LEVEL_COMPILE);
+
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(config).build().sign();
+
+        assertEquals(ScriptProtection.LEVEL_COMPILE, builder.getEncryptLevel());
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals(ScriptProtection.LEVEL_COMPILE, json.getInt("encryptLevel"));
+
+        byte[] packaged = readBytes(new File(workspace, "assets/project/main.js"));
+        assertTrue("编译模式产物仍然是加密的", EncryptedScriptFileHeader.INSTANCE.isValidFile(packaged));
+        short flags = EncryptedScriptFileHeader.INSTANCE.readFlags(packaged);
+        assertEquals("文件头必须标记载荷是 QuickJS 字节码",
+                EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE,
+                EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(flags));
+
+        String asText = new String(packaged, "ISO-8859-1");
+        assertFalse("产物里不该出现源码行原文", asText.contains("console.log('QUICKJS_BYTECODE_RAN')"));
+        assertFalse("产物里不该出现整段源码", asText.contains(source));
+
+        // 用运行时相同的派生方式解密，确认载荷确实是 QuickJS 字节码（非空且不是源码文本）。
+        String key = MD5.md5(json.getString("packageName") + json.getString("versionName")
+                + json.getString("main"));
+        String vector = MD5.md5(json.getJSONObject("build").getString("build_id")
+                + json.getString("name")).substring(0, 16);
+        Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
+        keyField.setAccessible(true);
+        keyField.set(null, key);
+        Field vectorField = ScriptEncryption.class.getDeclaredField("mInitVector");
+        vectorField.setAccessible(true);
+        vectorField.set(null, vector);
+        byte[] bytecode = ScriptEncryption.INSTANCE.decrypt(
+                packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
+        assertTrue("字节码不能为空", bytecode.length > 0);
+        assertFalse("载荷不能还是源码文本",
+                new String(bytecode, "ISO-8859-1").startsWith("// @engine"));
+
+        copyToSharedStorage(outApk, "aijs-quickjs-bytecode-probe.apk");
+    }
+
     /** 把打包产物拷到 /sdcard/Download，方便用 adb 拉出去安装做端到端验证。 */
     private static void copyToSharedStorage(File apk, String name) throws Exception {
         File downloads = new File(Environment.getExternalStorageDirectory(), "Download");

@@ -8770,10 +8770,12 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_createNativeFrame(
     return frameHandle;
 }
 
+// 执行收尾（定义在 evaluate 之后，先声明）：跑完挂起 job / 定时器，再把结果转成 Java 对象。
+static jobject finishExecution(JNIEnv *env, const std::shared_ptr<EngineState> &state, JSValue result);
+
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
-        JNIEnv *env, jclass, jlong handle, jstring source, jstring sourceName) {
-    const auto state = findEngine(handle);
+        JNIEnv *env, jclass, jlong handle, jstring source, jstring sourceName) {    const auto state = findEngine(handle);
     if (state == nullptr) {
         throwQuickJs(env, "QuickJS runtime is not available");
         return nullptr;
@@ -8805,6 +8807,12 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
     }
     markMainModuleLoaded(state->context);
 
+    return finishExecution(env, state, result);
+}
+
+// 执行收尾：跑完挂起的 job、把定时器事件循环转完，再把结果转成 Java 对象。
+// evaluate() 与 evaluateBytecode() 共用，避免两套收尾逻辑逐渐跑偏。
+static jobject finishExecution(JNIEnv *env, const std::shared_ptr<EngineState> &state, JSValue result) {
     JSContext *pendingContext = nullptr;
     int pendingResult;
     while ((pendingResult = JS_ExecutePendingJob(state->runtime, &pendingContext)) > 0) {
@@ -8841,6 +8849,121 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
     jobject javaResult = resultToJava(env, state->context, result);
     JS_FreeValue(state->context, result);
     return javaResult;
+}
+
+// 把脚本编译成 QuickJS 字节码（打包加密等级 ≥ 2 用）。
+//
+// 刻意不依赖引擎句柄：打包发生在主应用进程里，那里不一定有正在运行的引擎，
+// 于是这里临时建一套 runtime/context 编译完就释放。
+// 字节码与 quickjs 版本严格绑定，运行端 JS_ReadObject 会做版本校验，不匹配时干净报错。
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_compileToBytecode(
+        JNIEnv *env, jclass, jstring source, jstring sourceName) {
+    const std::string script = fromJavaString(env, source);
+    const std::string filename = fromJavaString(env, sourceName);
+    const std::string displayName = filename.empty() ? "<script>" : filename;
+
+    JSRuntime *runtime = JS_NewRuntime();
+    if (runtime == nullptr) {
+        throwQuickJs(env, "Unable to create a QuickJS runtime for compilation");
+        return nullptr;
+    }
+    JSContext *context = JS_NewContext(runtime);
+    if (context == nullptr) {
+        JS_FreeRuntime(runtime);
+        throwQuickJs(env, "Unable to create a QuickJS context for compilation");
+        return nullptr;
+    }
+
+    JSValue compiled = JS_Eval(context, script.data(), script.size(), displayName.c_str(),
+                               JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(compiled)) {
+        const std::string message = quickJsException(context);
+        JS_FreeValue(context, compiled);
+        JS_FreeContext(context);
+        JS_FreeRuntime(runtime);
+        throwQuickJs(env, message.empty() ? "Unable to compile the script" : message);
+        return nullptr;
+    }
+
+    size_t length = 0;
+    uint8_t *bytes = JS_WriteObject(context, &length, compiled, JS_WRITE_OBJ_BYTECODE);
+    JS_FreeValue(context, compiled);
+    if (bytes == nullptr || length == 0) {
+        const std::string message = quickJsException(context);
+        if (bytes != nullptr) {
+            js_free(context, bytes);
+        }
+        JS_FreeContext(context);
+        JS_FreeRuntime(runtime);
+        throwQuickJs(env, message.empty() ? "Unable to serialize the compiled script" : message);
+        return nullptr;
+    }
+
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(length));
+    if (result != nullptr) {
+        env->SetByteArrayRegion(result, 0, static_cast<jsize>(length),
+                                reinterpret_cast<const jbyte *>(bytes));
+    }
+    js_free(context, bytes);
+    JS_FreeContext(context);
+    JS_FreeRuntime(runtime);
+    return result;
+}
+
+// 执行 QuickJS 字节码（打包加密等级 ≥ 2 的产物）。
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluateBytecode(
+        JNIEnv *env, jclass, jlong handle, jbyteArray code, jstring sourceName) {
+    const auto state = findEngine(handle);
+    if (state == nullptr) {
+        throwQuickJs(env, "QuickJS runtime is not available");
+        return nullptr;
+    }
+    state->interrupted.store(false, std::memory_order_relaxed);
+    const std::string filename = fromJavaString(env, sourceName);
+    const std::string displayName = filename.empty() ? "<script>" : filename;
+    if (!installMainModuleGlobals(state->context, displayName)) {
+        const std::string message = quickJsException(state->context);
+        throwQuickJs(env, message.empty() ? "Unable to create the main CommonJS module" : message);
+        return nullptr;
+    }
+
+    const jsize length = code == nullptr ? 0 : env->GetArrayLength(code);
+    if (length <= 0) {
+        throwQuickJs(env, "Compiled script payload is empty");
+        return nullptr;
+    }
+    std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    env->GetByteArrayRegion(code, 0, length, reinterpret_cast<jbyte *>(bytes.data()));
+
+    JSValue compiled = JS_ReadObject(state->context, bytes.data(), bytes.size(), JS_READ_OBJ_BYTECODE);
+    if (JS_IsException(compiled)) {
+        const std::string message = quickJsException(state->context);
+        JS_FreeValue(state->context, compiled);
+        throwQuickJs(env, message.empty()
+                ? "Compiled script is not compatible with this engine build"
+                : message);
+        return nullptr;
+    }
+
+    JSValue result = JS_EvalFunction(state->context, compiled);
+    if (JS_IsException(result)) {
+        if (state->exitRequested.load(std::memory_order_relaxed)) {
+            state->exitRequested.store(false, std::memory_order_relaxed);
+            JSValue ignored = JS_GetException(state->context);
+            JS_FreeValue(state->context, ignored);
+            JS_FreeValue(state->context, result);
+            return nullptr;
+        }
+        const std::string message = quickJsException(state->context);
+        JS_FreeValue(state->context, result);
+        throwQuickJs(env, message);
+        return nullptr;
+    }
+    markMainModuleLoaded(state->context);
+
+    return finishExecution(env, state, result);
 }
 
 extern "C" JNIEXPORT void JNICALL

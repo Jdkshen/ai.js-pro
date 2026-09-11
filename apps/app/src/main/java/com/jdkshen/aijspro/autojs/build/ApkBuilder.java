@@ -7,6 +7,7 @@ import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity;
 import com.stardust.autojs.apkbuilder.ApkPackager;
 import com.stardust.autojs.apkbuilder.ManifestEditor;
 import com.stardust.autojs.apkbuilder.Signer;
+import com.stardust.autojs.engine.QuickJsBytecodeCompiler;
 import com.stardust.autojs.project.BuildInfo;
 import com.stardust.autojs.project.LaunchConfig;
 import com.stardust.autojs.project.ProjectConfig;
@@ -244,7 +245,16 @@ public class ApkBuilder {
             copyFile(source, target);
             return;
         }
-        if (ScriptProtection.shouldCompile(mEncryptLevel) && !isQuickJsEngine()) {
+        if (ScriptProtection.shouldCompile(mEncryptLevel)) {
+            if (isQuickJsEngine()) {
+                // QuickJS 工程：编译成 QuickJS 字节码（载荷类型 2）。
+                byte[] bytecode = QuickJsBytecodeCompiler.compile(
+                        new String(PFiles.readBytes(source.getPath()), "UTF-8"), source.getName());
+                writeEncrypted(target, bytecode,
+                        EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
+                                EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE));
+                return;
+            }
             byte[] payload = compileEntryScript(source);
             writeEncrypted(target, payload,
                     EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(

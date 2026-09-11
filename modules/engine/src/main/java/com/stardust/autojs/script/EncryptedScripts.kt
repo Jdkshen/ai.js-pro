@@ -14,6 +14,7 @@ import java.io.File
  * <p>载荷类型来自文件头 flags 的高字节（见 [EncryptedScriptFileHeader]）：
  * - 文本 → [StringScriptSource]
  * - Rhino 编译类 → [CompiledJavaScriptSource]
+ * - QuickJS 字节码 → [QuickJsBytecodeSource]
  */
 object EncryptedScripts {
 
@@ -34,6 +35,8 @@ object EncryptedScripts {
                 val payload = CompiledScriptPayload.read(plain)
                 CompiledJavaScriptSource(name, payload.className, payload.classBytes)
             }
+            EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE ->
+                QuickJsBytecodeSource(name, plain)
             else -> StringScriptSource(name, String(plain, Charsets.UTF_8))
         }
     }

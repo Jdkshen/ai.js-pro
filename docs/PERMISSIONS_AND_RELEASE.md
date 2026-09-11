@@ -48,7 +48,7 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 |---:|---|---|
 | 0 | 不加密 | 原始脚本文本（无文件头） |
 | 1 | 加密（默认） | `77 01 17 7F 12 12` + 2 字节 flags + AES/CBC/PKCS5 密文 |
-| 2 | 编译 + 加密 | 内容同样是「文件头 + 密文」，但载荷是**编译产物**：Rhino 生成的 class 字节（`CompiledScriptPayload`：类名 + 类字节） |
+| 2 | 编译 + 加密 | 内容同样是「文件头 + 密文」，但载荷是**编译产物**：Rhino 工程是生成的 class 字节（`CompiledScriptPayload`：类名 + 类字节），QuickJS 工程是 **QuickJS 字节码**（`JS_WriteObject(..., JS_WRITE_OBJ_BYTECODE)` 产物） |
 
 取值规则：
 
@@ -63,12 +63,18 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 ### 等级 2（编译）的注意事项
 
-- **只有 Rhino 引擎支持编译**：QuickJS 的字节码方案尚未实现，QuickJS 工程即使选了等级 2 也只会退化成「加密」，不会产出跑不起来的包。
-- 编译端与运行端必须使用同一份 Rhino（仓库统一用 `modules/rhino-language/libs/rhino-1.7.7.2.jar`）。
-- 编译时用优化等级 9 且 `setGeneratingSource(false)`：产物里既没有解释模式的 AST，也不带供调试的源码编码，所以**在产物里搜不到脚本源码**。
-- **改动 `:inrt` 后必须重新生成模板**：`.\gradlew.bat :inrt:assembleRelease` 会把运行端产物复制成
-  `apps/app/src/main/assets/template.apk`。打包出来的 App 用的是这份模板里的运行端代码，
+- **两种引擎都支持**：Rhino → class 字节（运行端用 `AndroidClassLoader`（dx → DexClassLoader）加载执行）；
+  QuickJS → 字节码（运行端 `JS_ReadObject` + `JS_EvalFunction`，原生层新增 `compileToBytecode` / `evaluateBytecode`）。
+  打包端按产物的 `engine` 字段自动选择，无需手工切换。
+- **两端必须同源**：Rhino 编译端与运行端用同一份 `modules/rhino-language/libs/rhino-1.7.7.2.jar`；
+  QuickJS 字节码与 quickjs 版本严格绑定（`JS_ReadObject` 自校验），打包端与模板必须来自同一份仓库构建。
+- 编译时都关掉了源码信息：Rhino 侧 `setGeneratingSource(false)`，QuickJS 侧字节码本身不带源码文本。
+  产物里搜不到脚本源码（字符串常量仍会在，因为脚本运行时要用）。
+- **改动 `:inrt` 或原生库后必须重新生成模板**：`.\gradlew.bat :inrt:assembleRelease` 会把运行端产物复制成
+  `apps/app/src/main/assets/template.apk`。打包出来的 App 用的是这份模板里的运行端代码（含 `.so`），
   不重建模板就会出现「打包端已是新逻辑、产物运行时还是旧的」这种半新半旧状态。
+- 运行端解密已统一到 `EncryptedScripts`：包入口脚本按载荷类型分发（文本 / Rhino class / QuickJS 字节码），
+  Rhino 与 QuickJS 引擎共用同一套逻辑（此前 QuickJS 的打包应用会把密文当源码解析）。
 
 ## 2. 当前 SDK 范围
 
