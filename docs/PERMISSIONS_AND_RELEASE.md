@@ -56,10 +56,23 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 2. 页面没指定（例如由 `AppConfig.fromProjectConfig` 或外部调用打包）→ 以工程 `project.json` 为准；
 3. 工程里没有该字段 → 默认 1，保持历史行为（以前是无条件加密）。
 
-`encryptLevel` 会被写回产物内的 `assets/project/project.json`，所以产物自带的配置与实际行为始终一致。密钥仍由 `key = MD5(packageName + versionName + mainScriptFile)`、`vec = MD5(buildId + name)[0,16)` 派生，打包端与运行端（`AssetsProjectLauncher.initKey`）必须同时改。
+`encryptLevel` 会被写回产物内的 `assets/project/project.json`，所以产物自带的配置与实际行为始终一致。
 
 文件头的 2 字节 flags 里，低字节留给执行模式等既有标记，**高字节是载荷类型**（`0` 文本 / `1` Rhino 编译类 / `2` QuickJS 字节码，见 `EncryptedScriptFileHeader`）。
 运行时按载荷类型分发：文本走原来的 `StringScriptSource`；编译类交给 `AndroidClassLoader`（dx → DexClassLoader）加载后在引擎作用域里 `exec`。
+
+### 脚本密钥：随机盐 + 签名绑定（反重签）
+
+旧算法只用「包名 + 版本 + 入口文件名 + buildId」这类**产物里公开可见**的信息派生密钥，谁都能照着算出密钥把脚本解出来。现在改成：
+
+- 打包时生成 16 字节随机盐 `scriptSalt`，并把**打包所用签名证书指纹** `signatureFingerprint`（SHA-256、冒号分隔大写，与 `SigningKey.getCertificateFingerprint()` 同格式）一起写进产物 `project.json`；
+- 密钥 `key = SHA-256("aijspro-script-key|" + 包名 + "|" + salt + "|" + 指纹)`，向量同理（`ScriptKeyDerivation`，打包端与运行端共用）；
+- 运行端启动时先算自己**当前签名**的指纹，与产物里的值比对：不一致直接拒绝启动并说明原因（`AssetsProjectLauncher.initKey`），从根上挡住「解包改资源后重新签名分发」；
+- 产物里没有这两个字段（老产物）→ 自动回退旧算法，历史包仍能运行。
+
+签名身份来自打包页/`AppConfig` 指定的签名，未指定时用本机为该应用自动生成的 `AutoSigningIdentity`；`sign()` 与密钥派生用的是同一份身份，因此产物签名证书必然与 `signatureFingerprint` 一致（真机测试里直接校验这一点）。
+
+启动失败（含签名不符）不会闪退了：`SplashActivity` 捕获 `Throwable`（静态初始化失败抛的是 `Error`，只 catch `Exception` 会让 App 直接崩），弹提示并把原因写进日志界面，logcat 里能看到 `E InrtSplash: LAUNCH_FAILED ...`。
 
 ### 等级 2（编译）的注意事项
 
@@ -75,6 +88,8 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
   不重建模板就会出现「打包端已是新逻辑、产物运行时还是旧的」这种半新半旧状态。
 - 运行端解密已统一到 `EncryptedScripts`：包入口脚本按载荷类型分发（文本 / Rhino class / QuickJS 字节码），
   Rhino 与 QuickJS 引擎共用同一套逻辑（此前 QuickJS 的打包应用会把密文当源码解析）。
+- **改完密钥派生/签名校验后同样要重建模板**：运行端的 `initKey` 与打包端必须在同一轮构建里，
+  否则会出现「新密钥打包 + 旧算法运行」——现象是产物启动即报解密失败。
 
 ## 2. 当前 SDK 范围
 

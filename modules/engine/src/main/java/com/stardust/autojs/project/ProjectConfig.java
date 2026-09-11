@@ -70,6 +70,22 @@ public class ProjectConfig {
     @SerializedName("encryptLevel")
     private int mEncryptLevel = ScriptProtection.DEFAULT_LEVEL;
 
+    /**
+     * 脚本密钥的随机盐（十六进制）。打包时生成，每个包不同；
+     * 老产物没有这个字段，运行端回退到旧的密钥派生。
+     */
+    @SerializedName("scriptSalt")
+    private String mScriptSalt;
+
+    /**
+     * 打包时使用的签名证书指纹（SHA-256，冒号分隔大写）。
+     *
+     * <p>参与密钥派生：用别的证书重签就解不开脚本；运行端启动时会比对自己的
+     * 签名证书，不一致时直接拒绝运行（典型场景是重打包与二次修改）。
+     */
+    @SerializedName("signatureFingerprint")
+    private String mSignatureFingerprint;
+
 
     public static ProjectConfig fromJson(String json) {
         if (json == null) {
@@ -241,6 +257,24 @@ public class ProjectConfig {
 
     public void setEncryptLevel(int encryptLevel) {
         mEncryptLevel = ScriptProtection.normalize(encryptLevel);
+    }
+
+    /** 脚本密钥随机盐（hex）；老产物为 null。 */
+    public String getScriptSalt() {
+        return mScriptSalt;
+    }
+
+    public void setScriptSalt(String scriptSalt) {
+        mScriptSalt = scriptSalt;
+    }
+
+    /** 打包时的签名证书指纹（SHA-256，冒号分隔大写）；老产物为 null。 */
+    public String getSignatureFingerprint() {
+        return mSignatureFingerprint;
+    }
+
+    public void setSignatureFingerprint(String signatureFingerprint) {
+        mSignatureFingerprint = signatureFingerprint;
     }
 
     public String getBuildDir() {

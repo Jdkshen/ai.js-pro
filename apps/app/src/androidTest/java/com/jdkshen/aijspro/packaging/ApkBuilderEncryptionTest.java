@@ -22,6 +22,7 @@ import com.jdkshen.aijspro.autojs.build.sign.SigningOptions;
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
 import com.stardust.autojs.apkbuilder.Signer;
 import com.stardust.autojs.engine.encryption.ScriptEncryption;
+import com.stardust.autojs.project.ScriptKeyDerivation;
 import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.rhino.AndroidClassLoader;
 import com.stardust.autojs.script.CompiledScriptPayload;
@@ -50,6 +51,7 @@ import java.util.zip.ZipFile;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
@@ -210,18 +212,39 @@ public class ApkBuilderEncryptionTest {
                 packaged.length > EncryptedScriptFileHeader.BLOCK_SIZE);
 
         // 3) 用运行时相同的派生方式解密，内容应与原脚本一致。
-        String key = MD5.md5(json.getString("packageName") + json.getString("versionName")
-                + json.getString("main"));
-        String vector = MD5.md5(buildId + json.getString("name")).substring(0, 16);
+        byte[] decrypted = decryptPackagedScript(json, packaged);
+        assertEquals(readText(script), new String(decrypted, "UTF-8"));
+
+        // 3.1) 密钥硬化：产物必须带随机盐 + 签名指纹；指纹要与「产物自己的签名」一致，
+        //      因为运行端就是拿自己的签名证书去比这个值（反重签的核心）。
+        String salt = json.getString("scriptSalt");
+        assertEquals("盐必须是 16 字节 hex", 32, salt.length());
+        assertTrue("盐必须是随机 hex，got " + salt, salt.matches("[0-9a-f]{32}"));
+        ApkSignatureReader.Signer artifactSigner = ApkSignatureReader.INSTANCE.read(outApk);
+        assertNotNull("产物应当能读到签名证书", artifactSigner);
+        assertEquals("指纹必须与产物签名证书一致，否则运行端会拒绝启动",
+                normalizeFingerprint(artifactSigner.getSha256()),
+                normalizeFingerprint(json.getString("signatureFingerprint")));
+
+        // 3.2) 反重签：把指纹改一个字符模拟“重新签名后分发”，旧密钥就解不开了。
+        String tampered = tamperFingerprint(json.getString("signatureFingerprint"));
+        String tamperedKey = ScriptKeyDerivation.deriveKey(
+                json.getString("packageName"), salt, tampered);
         Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
         keyField.setAccessible(true);
-        keyField.set(null, key);
+        keyField.set(null, tamperedKey);
         Field vectorField = ScriptEncryption.class.getDeclaredField("mInitVector");
         vectorField.setAccessible(true);
-        vectorField.set(null, vector);
-        byte[] decrypted = ScriptEncryption.INSTANCE.decrypt(
-                packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
-        assertEquals(readText(script), new String(decrypted, "UTF-8"));
+        vectorField.set(null, ScriptKeyDerivation.deriveVector(salt, tampered));
+        try {
+            ScriptEncryption.INSTANCE.decrypt(
+                    packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
+            fail("指纹变了还能解密，说明密钥没有绑定签名");
+        } catch (Exception expected) {
+            // 预期：密钥不匹配 → 解密失败。
+        }
+        // 恢复成真实密钥，避免影响后面的断言。
+        decryptPackagedScript(json, packaged);
 
         // 4) 权限配置：新增的权限要进产物清单，取消的模板权限要被移除。
         List<String> requestedPermissions = archiveInfo.requestedPermissions == null
@@ -728,18 +751,7 @@ public class ApkBuilderEncryptionTest {
                 asText.contains("UNIQUE_MARKER_VARIABLE_7788"));
 
         // 用运行时相同的密钥派生解密，解析出编译载荷。
-        String key = MD5.md5(json.getString("packageName") + json.getString("versionName")
-                + json.getString("main"));
-        String vector = MD5.md5(json.getJSONObject("build").getString("build_id")
-                + json.getString("name")).substring(0, 16);
-        Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
-        keyField.setAccessible(true);
-        keyField.set(null, key);
-        Field vectorField = ScriptEncryption.class.getDeclaredField("mInitVector");
-        vectorField.setAccessible(true);
-        vectorField.set(null, vector);
-        byte[] plain = ScriptEncryption.INSTANCE.decrypt(
-                packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
+        byte[] plain = decryptPackagedScript(json, packaged);
 
         CompiledScriptPayload payload = CompiledScriptPayload.read(plain);
         assertTrue("载荷里应当带类名", payload.className != null && payload.className.length() > 0);
@@ -767,7 +779,7 @@ public class ApkBuilderEncryptionTest {
         }
 
         // 把产物导出到公共目录：安装后可以跑一遍真正的「编译模式打包应用」。
-        copyToSharedStorage(outApk, "aijs-compiled-probe.apk");
+        copyToSharedStorage(context, outApk, "aijs-compiled-probe.apk");
     }
 
     /**
@@ -816,7 +828,7 @@ public class ApkBuilderEncryptionTest {
                 EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(
                         EncryptedScriptFileHeader.INSTANCE.readFlags(packaged)));
 
-        copyToSharedStorage(outApk, "aijs-quickjs-probe.apk");
+        copyToSharedStorage(context, outApk, "aijs-quickjs-probe.apk");
     }
 
     /**
@@ -869,32 +881,64 @@ public class ApkBuilderEncryptionTest {
         assertFalse("产物里不该出现整段源码", asText.contains(source));
 
         // 用运行时相同的派生方式解密，确认载荷确实是 QuickJS 字节码（非空且不是源码文本）。
-        String key = MD5.md5(json.getString("packageName") + json.getString("versionName")
-                + json.getString("main"));
-        String vector = MD5.md5(json.getJSONObject("build").getString("build_id")
-                + json.getString("name")).substring(0, 16);
+        byte[] bytecode = decryptPackagedScript(json, packaged);
+        assertTrue("字节码不能为空", bytecode.length > 0);
+        assertFalse("载荷不能还是源码文本",
+                new String(bytecode, "ISO-8859-1").startsWith("// @engine"));
+
+        copyToSharedStorage(context, outApk, "aijs-quickjs-bytecode-probe.apk");
+    }
+
+    /**
+     * 按运行端的方式解密打包脚本：有随机盐 + 签名指纹就走新派生（密钥绑定签名身份），
+     * 老产物（无盐）回退到旧算法。
+     */
+    private static byte[] decryptPackagedScript(JSONObject json, byte[] packaged) throws Exception {
+        String salt = json.optString("scriptSalt", null);
+        String fingerprint = json.optString("signatureFingerprint", null);
+        String key;
+        String vector;
+        if (salt != null && !salt.isEmpty() && fingerprint != null && !fingerprint.isEmpty()) {
+            key = ScriptKeyDerivation.deriveKey(json.getString("packageName"), salt, fingerprint);
+            vector = ScriptKeyDerivation.deriveVector(salt, fingerprint);
+        } else {
+            key = ScriptKeyDerivation.legacyKey(json.getString("packageName"),
+                    json.getString("versionName"), json.getString("main"));
+            vector = ScriptKeyDerivation.legacyVector(
+                    json.getJSONObject("build").getString("build_id"), json.getString("name"));
+        }
         Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
         keyField.setAccessible(true);
         keyField.set(null, key);
         Field vectorField = ScriptEncryption.class.getDeclaredField("mInitVector");
         vectorField.setAccessible(true);
         vectorField.set(null, vector);
-        byte[] bytecode = ScriptEncryption.INSTANCE.decrypt(
+        return ScriptEncryption.INSTANCE.decrypt(
                 packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
-        assertTrue("字节码不能为空", bytecode.length > 0);
-        assertFalse("载荷不能还是源码文本",
-                new String(bytecode, "ISO-8859-1").startsWith("// @engine"));
-
-        copyToSharedStorage(outApk, "aijs-quickjs-bytecode-probe.apk");
     }
 
-    /** 把打包产物拷到 /sdcard/Download，方便用 adb 拉出去安装做端到端验证。 */
-    private static void copyToSharedStorage(File apk, String name) throws Exception {
-        File downloads = new File(Environment.getExternalStorageDirectory(), "Download");
-        if (!downloads.isDirectory() && !downloads.mkdirs()) {
-            return;
-        }
-        File target = new File(downloads, name);
+    /** 两种指纹写法（带不带冒号、大小写）统一后再比。 */
+    private static String normalizeFingerprint(String fingerprint) {
+        return fingerprint == null ? null
+                : fingerprint.replace(":", "").toUpperCase(Locale.US);
+    }
+
+    /** 把指纹最后一个字符改掉，模拟“被重新签名后分发”。 */
+    private static String tamperFingerprint(String fingerprint) {
+        char last = fingerprint.charAt(fingerprint.length() - 1);
+        char replacement = last == 'A' ? 'B' : 'A';
+        return fingerprint.substring(0, fingerprint.length() - 1) + replacement;
+    }
+
+    /**
+     * 把打包产物写到应用私有目录，方便用 {@code adb shell run-as com.jdkshen.aijspro cat files/xxx.apk}
+     * 拉出去安装做端到端验证。
+     *
+     * <p>不再写 /sdcard/Download：Android 15 的分区存储会让那次写入静默失败，
+     * 结果拉到的还是上一轮的旧产物（曾经因此误判运行时代码没更新）。
+     */
+    private void copyToSharedStorage(Context context, File apk, String name) throws Exception {
+        File target = new File(context.getFilesDir(), name);
         java.io.OutputStream out = new FileOutputStream(target);
         try {
             java.io.InputStream in = new java.io.FileInputStream(apk);
@@ -910,10 +954,14 @@ public class ApkBuilderEncryptionTest {
         } finally {
             out.close();
         }
+        assertEquals("导出的产物大小应当与工作区一致（写失败时旧产物会让人误判）",
+                apk.length(), target.length());
     }
 
     private static ApkSignatureReader.Signer buildWithConfig(Context context, File outDir, String apkName,
-            File workDir, ApkBuilder.AppConfig config) throws Exception {        File outApk = new File(outDir, apkName);        File workspace = new File(workDir, "workspace-" + apkName);
+            File workDir, ApkBuilder.AppConfig config) throws Exception {
+        File outApk = new File(outDir, apkName);
+        File workspace = new File(workDir, "workspace-" + apkName);
         new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), outApk, workspace.getPath())
                 .prepare()
                 .withConfig(config)

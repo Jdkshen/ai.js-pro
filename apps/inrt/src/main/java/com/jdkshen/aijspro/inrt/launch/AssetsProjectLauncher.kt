@@ -14,7 +14,9 @@ import com.jdkshen.aijspro.inrt.autojs.AutoJs
 import com.stardust.autojs.engine.encryption.ScriptEncryption
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecution
+import com.stardust.autojs.project.AppSignature
 import com.stardust.autojs.project.ProjectConfig
+import com.stardust.autojs.project.ScriptKeyDerivation
 import com.stardust.autojs.script.EncryptedScripts
 import com.stardust.autojs.script.JavaScriptFileSource
 import com.stardust.autojs.script.JavaScriptSource
@@ -106,15 +108,35 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
     }
 
     private fun initKey(projectConfig: ProjectConfig) {
-        val key = MD5.md5(projectConfig.packageName + projectConfig.versionName + projectConfig.mainScriptFile)
-        val vec = MD5.md5(projectConfig.buildInfo.buildId + projectConfig.name).substring(0, 16)
+        // 新方案（有随机盐 + 签名指纹）：密钥绑定到打包时的签名身份。
+        // 用别的证书重签（重打包/二次修改）时指纹对不上，直接拒绝运行，
+        // 而不是解密失败后抛一堆看不懂的 padding 错误。
+        val salt = projectConfig.scriptSalt
+        val fingerprint = projectConfig.signatureFingerprint
+        val key: String
+        val vector: String
+        if (!salt.isNullOrEmpty() && !fingerprint.isNullOrEmpty()) {
+            val actual = AppSignature.certificateFingerprint(mActivity)
+            if (actual != null && !actual.equals(fingerprint, ignoreCase = true)) {
+                throw IllegalStateException(
+                        "签名与打包时不一致，无法解密脚本（打包时=$fingerprint，当前=$actual）")
+            }
+            key = ScriptKeyDerivation.deriveKey(projectConfig.packageName, salt, fingerprint)
+            vector = ScriptKeyDerivation.deriveVector(salt, fingerprint)
+        } else {
+            // 老产物：沿用旧的推导方式，保证升级运行端后仍能打开。
+            key = ScriptKeyDerivation.legacyKey(projectConfig.packageName,
+                    projectConfig.versionName, projectConfig.mainScriptFile)
+            vector = ScriptKeyDerivation.legacyVector(
+                    projectConfig.buildInfo.buildId, projectConfig.name)
+        }
         try {
             val fieldKey = ScriptEncryption::class.java.getDeclaredField("mKey")
             fieldKey.isAccessible = true
             fieldKey.set(null, key)
             val fieldVector = ScriptEncryption::class.java.getDeclaredField("mInitVector")
             fieldVector.isAccessible = true
-            fieldVector.set(null, vec)
+            fieldVector.set(null, vector)
         } catch (e: Exception) {
             e.printStackTrace()
         }

@@ -467,6 +467,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         appConfig.setIncludeImageModule(includeImageModule)
         appConfig.setEncryptLevel(
             if (encryptScript) ScriptProtection.LEVEL_ENCRYPT else ScriptProtection.LEVEL_NONE)
+        // 用户选了密钥库时把证书指纹一并带上：脚本密钥会绑定到这份签名身份（用别的证书重签就解不开）。
+        signingKey?.certificateFingerprint
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { appConfig.setSigningCertificateFingerprint(it) }
         if (showSplash && splashIconPath.isNotEmpty()) {
             appConfig.setSplashIcon(splashIconPath)
         }

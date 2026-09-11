@@ -98,12 +98,21 @@ class SplashActivity : AppCompatActivity() {
         Thread {
             try {
                 GlobalProjectLauncher.launch(this)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // 必须捕获 Throwable：静态初始化失败抛的是 Error（ExceptionInInitializerError），
+                // 比如产物被重新签名时 initKey 抛出的 IllegalStateException 会被包成 Error，
+                // 只 catch Exception 会让整个 App 直接闪退，用户看不到原因。
                 e.printStackTrace()
+                val cause = e.cause ?: e
+                // 标记串故意用 ASCII：打包产物只能靠字符串检索确认运行时新旧（见测试脚本）。
+                android.util.Log.e(TAG, "LAUNCH_FAILED " + cause, cause)
                 runOnUiThread {
-                    Toast.makeText(this@SplashActivity, e.message, Toast.LENGTH_LONG).show()
-                    startActivity(Intent(this@SplashActivity, LogActivity::class.java))
-                    AutoJs.instance!!.globalConsole.printAllStackTrace(e)
+                    Toast.makeText(this@SplashActivity,
+                            cause.message?.take(140) ?: cause.toString(),
+                            Toast.LENGTH_LONG).show()
+                    startActivity(Intent(this@SplashActivity, LogActivity::class.java)
+                            .putExtra(LogActivity.EXTRA_ERROR_MESSAGE, cause.toString()))
+                    AutoJs.instance?.globalConsole?.printAllStackTrace(cause)
                 }
             }
         }.start()

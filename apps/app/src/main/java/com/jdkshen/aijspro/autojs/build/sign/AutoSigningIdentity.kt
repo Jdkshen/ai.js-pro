@@ -63,6 +63,20 @@ object AutoSigningIdentity {
         null
     }
 
+    /**
+     * 本机身份的证书指纹（SHA-256、冒号分隔大写）。
+     *
+     * <p>用于脚本密钥派生与产物自校验：必须与 [signer] 实际使用的签名一致，
+     * 否则打包出来的应用自己都解不开脚本。取不到时返回 null（调用方退化为旧派生算法）。
+     */
+    @Synchronized
+    fun certificateFingerprint(): String? = try {
+        resolve()?.certificateFingerprint?.takeIf { it.isNotEmpty() }
+    } catch (error: Exception) {
+        Log.w(TAG, "Cannot resolve the auto signing certificate fingerprint", error)
+        null
+    }
+
     @Synchronized
     private fun resolve(generateIfMissing: Boolean = true): SigningKey? {
         val keyStore = identityFile()

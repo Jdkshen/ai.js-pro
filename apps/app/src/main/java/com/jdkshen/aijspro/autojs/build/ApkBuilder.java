@@ -11,6 +11,7 @@ import com.stardust.autojs.engine.QuickJsBytecodeCompiler;
 import com.stardust.autojs.project.BuildInfo;
 import com.stardust.autojs.project.LaunchConfig;
 import com.stardust.autojs.project.ProjectConfig;
+import com.stardust.autojs.project.ScriptKeyDerivation;
 import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.rhino.AndroidClassLoader;
 import com.stardust.autojs.script.CompiledScriptPayload;
@@ -94,6 +95,9 @@ public class ApkBuilder {
     // 脚本保护等级（project.json 的 encryptLevel）：0 明文、1 AES、≥2 编译后加密。
     // 默认跟工程配置走，打包页显式选过则以 AppConfig 为准（见 syncProjectJsonAndDeriveKeys）。
     private int mEncryptLevel = ScriptProtection.DEFAULT_LEVEL;
+    // 密钥硬化用的字段：随机盐与打包时的签名证书指纹（两者都写进产物 project.json）。
+    private String mScriptSalt;
+    private String mSignatureFingerprint;
 
     public ApkBuilder(InputStream apkInputStream, File outApkFile, String workspacePath) {
         mOutApkFile = outApkFile;
@@ -339,6 +343,35 @@ public class ApkBuilder {
     /** 本次打包最终生效的脚本保护等级（供测试与日志使用）。 */
     public int getEncryptLevel() {
         return mEncryptLevel;
+    }
+
+    /** 本次打包写入产物的随机盐（未使用新方案时为 null）。 */
+    public String getScriptSalt() {
+        return mScriptSalt;
+    }
+
+    /** 本次打包写入产物的签名证书指纹（未使用新方案时为 null）。 */
+    public String getSignatureFingerprint() {
+        return mSignatureFingerprint;
+    }
+
+    /**
+     * 解析本次产物将要使用的签名证书指纹。
+     *
+     * <p>优先用页面选的密钥库（{@link AppConfig#setSigningCertificateFingerprint}），
+     * 否则用本机自动身份（{@link AutoSigningIdentity}）——两者与 {@code sign()} 阶段
+     * 实际使用的签名必须一致，否则产物自己都解不开脚本。
+     */
+    private String resolveSigningCertificateFingerprint() {
+        if (mAppConfig != null && ScriptKeyDerivation.hasCertificateFingerprint(
+                mAppConfig.signingCertificateFingerprint)) {
+            return mAppConfig.signingCertificateFingerprint;
+        }
+        try {
+            return AutoSigningIdentity.INSTANCE.certificateFingerprint();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -610,15 +643,37 @@ public class ApkBuilder {
             newBuild.put("build_id", buildInfo.getBuildId());
             json.put("build", newBuild);
 
+            mKey = MD5.md5(json.getString("packageName") + json.getString("versionName") + mMainScriptFile);
+            mInitVector = MD5.md5(buildInfo.getBuildId() + json.getString("name")).substring(0, 16);
+
+            // 密钥硬化（新方案）：随机盐 + 签名证书指纹参与派生，替换上面的旧算法。
+            // 拿不到签名指纹时（例如身份还没准备好）保持旧算法，产物仍然可用。
+            // 注意：这两个字段必须在写文件之前塞进 json，否则运行端读到的 project.json
+            // 里没有盐/指纹，就会回退旧算法，而包装时用的是新密钥 → 解密失败。
+            String fingerprint = resolveSigningCertificateFingerprint();
+            if (ScriptKeyDerivation.hasCertificateFingerprint(fingerprint)) {
+                String salt = json.optString("scriptSalt", null);
+                if (salt == null || salt.isEmpty()) {
+                    salt = ScriptKeyDerivation.randomSaltHex();
+                }
+                mKey = ScriptKeyDerivation.deriveKey(json.optString("packageName"), salt, fingerprint);
+                mInitVector = ScriptKeyDerivation.deriveVector(salt, fingerprint);
+                json.put("scriptSalt", salt);
+                json.put("signatureFingerprint", fingerprint);
+            } else {
+                // 没有签名指纹就不写这两个字段：运行端看到字段缺失会走旧算法。
+                json.remove("scriptSalt");
+                json.remove("signatureFingerprint");
+            }
+            mScriptSalt = json.optString("scriptSalt", null);
+            mSignatureFingerprint = json.optString("signatureFingerprint", null);
+
             FileOutputStream fos = new FileOutputStream(jsonFile);
             try {
                 fos.write(json.toString(2).getBytes("UTF-8"));
             } finally {
                 fos.close();
             }
-
-            mKey = MD5.md5(json.getString("packageName") + json.getString("versionName") + mMainScriptFile);
-            mInitVector = MD5.md5(buildInfo.getBuildId() + json.getString("name")).substring(0, 16);
         } catch (JSONException e) {
             throw new IOException("Failed to sync assets/project/project.json", e);
         }
@@ -682,6 +737,8 @@ public class ApkBuilder {
         private boolean includeImageModule = true;
         /** 脚本保护等级；-1 表示未指定，打包时沿用 project.json 里的 encryptLevel。 */
         private int encryptLevel = -1;
+        /** 用户选的密钥库对应的证书指纹（SHA-256 冒号分隔大写）；null 表示用本机自动身份。 */
+        private String signingCertificateFingerprint;
         private Signer signer;
         private final ArrayList<String> ignoredDirs = new ArrayList<>();
 
@@ -820,6 +877,15 @@ public class ApkBuilder {
 
         public int getEncryptLevel() {
             return encryptLevel;
+        }
+
+        /**
+         * 本次使用的签名证书指纹（来自用户选的密钥库）。
+         * 不调用时用本机自动身份；两者都必须与最终签名一致，否则密钥派生对不上。
+         */
+        public AppConfig setSigningCertificateFingerprint(String fingerprint) {
+            this.signingCertificateFingerprint = fingerprint;
+            return this;
         }
 
         /**

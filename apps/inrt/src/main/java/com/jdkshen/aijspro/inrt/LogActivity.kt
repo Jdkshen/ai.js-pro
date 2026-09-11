@@ -18,9 +18,25 @@ class LogActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupView()
+        reportLaunchFailure()
         if (intent.getBooleanExtra(EXTRA_LAUNCH_SCRIPT, false)) {
-            GlobalProjectLauncher.launch(this)
+            try {
+                GlobalProjectLauncher.launch(this)
+            } catch (e: Throwable) {
+                // 同 SplashActivity：密钥/签名问题抛的是 Error，不能让它直接闪退。
+                val cause = e.cause ?: e
+                android.util.Log.e(TAG, "LAUNCH_FAILED " + cause, cause)
+                AutoJs.instance?.globalConsole?.printAllStackTrace(cause)
+            }
         }
+    }
+
+    /** 启动阶段就失败时（脚本解密不了 / 签名对不上），把原因写在日志里让用户看得到。 */
+    private fun reportLaunchFailure() {
+        val message = intent.getStringExtra(EXTRA_ERROR_MESSAGE) ?: return
+        val console = AutoJs.instance?.globalConsole
+        console?.error(message)
+        console?.printAllStackTrace(IllegalStateException(message))
     }
 
     private fun setupView() {
@@ -44,7 +60,9 @@ class LogActivity : AppCompatActivity() {
 
     companion object {
 
+        private const val TAG = "LogActivity"
 
         val EXTRA_LAUNCH_SCRIPT = "launch_script"
+        val EXTRA_ERROR_MESSAGE = "error_message"
     }
 }
