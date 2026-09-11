@@ -770,6 +770,55 @@ public class ApkBuilderEncryptionTest {
         copyToSharedStorage(outApk, "aijs-compiled-probe.apk");
     }
 
+    /**
+     * QuickJS 引擎的打包应用：入口脚本同样是加密的，运行端必须能解密后交给 QuickJS 执行。
+     *
+     * <p>以前解密只做在运行时的 Rhino 引擎里，QuickJS 的打包应用会拿密文当源码解析
+     * （`illegal character`），这里既断言产物形式，也把产物导出到 /sdcard/Download
+     * 供安装后的端到端验证。
+     */
+    @Test
+    public void quickJsPackagedAppGetsEncryptedEntryScript() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-quickjs-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "quickjs.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        writeText(script, "// @engine quickjs\nconsole.log('QUICKJS_PACKAGED_RAN');\n");
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("QuickJsProbe")
+                .setPackageName("com.example.quickjsprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("quickjs")
+                .setHideLogs(false)
+                .setEncryptLevel(ScriptProtection.LEVEL_ENCRYPT);
+
+        new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), outApk, workspace.getPath())
+                .prepare()
+                .withConfig(config)
+                .build()
+                .sign();
+
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals("quickjs", json.getString("engine"));
+        byte[] packaged = readBytes(new File(workspace, "assets/project/main.js"));
+        assertTrue("入口脚本必须加密", EncryptedScriptFileHeader.INSTANCE.isValidFile(packaged));
+        assertEquals("QuickJS 工程不做编译，载荷是文本",
+                EncryptedScriptFileHeader.PAYLOAD_TYPE_TEXT,
+                EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(
+                        EncryptedScriptFileHeader.INSTANCE.readFlags(packaged)));
+
+        copyToSharedStorage(outApk, "aijs-quickjs-probe.apk");
+    }
+
     /** 把打包产物拷到 /sdcard/Download，方便用 adb 拉出去安装做端到端验证。 */
     private static void copyToSharedStorage(File apk, String name) throws Exception {
         File downloads = new File(Environment.getExternalStorageDirectory(), "Download");

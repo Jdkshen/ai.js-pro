@@ -15,6 +15,7 @@ import com.stardust.autojs.engine.encryption.ScriptEncryption
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.project.ProjectConfig
+import com.stardust.autojs.script.EncryptedScripts
 import com.stardust.autojs.script.JavaScriptFileSource
 import com.stardust.autojs.script.JavaScriptSource
 import com.stardust.autojs.script.ScriptSource
@@ -67,7 +68,10 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             return
         }
         try {
-            val source = JavaScriptFileSource("main", mMainScriptFile)
+            // 入口脚本可能是加密/编译产物：用统一入口还原成可执行的脚本源。
+            // 以前解密只做在 Rhino 引擎里，QuickJS 引擎的打包应用会拿密文当源码解析。
+            val source = EncryptedScripts.toSource(mMainScriptFile, "main")
+                    ?: JavaScriptFileSource("main", mMainScriptFile)
             source.setPreferredEngine(mProjectConfig.getEngine(mProjectConfig.mainScriptFile))
             val config = ExecutionConfig(
                     workingDirectory = mProjectDir,
