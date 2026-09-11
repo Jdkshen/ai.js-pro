@@ -79,6 +79,8 @@ class MiuixSettingsActivity : ComponentActivity() {
     private val completionText = mutableStateOf(TextFieldValue("2000"))
     private val scriptDirShow = mutableStateOf(false)
     private val scriptDirText = mutableStateOf(TextFieldValue("/脚本/"))
+    private val updateSourceShow = mutableStateOf(false)
+    private val updateSourceText = mutableStateOf(TextFieldValue(""))
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -160,6 +162,9 @@ class MiuixSettingsActivity : ComponentActivity() {
         val scriptDir = remember(stateRevision) {
             strPref(R.string.key_script_dir_path, "/脚本/")
         }
+        val updateSource = remember(stateRevision) {
+            strPref(R.string.key_update_source_url, "")
+        }
         val recordTypeItems = resources.getStringArray(R.array.root_record_out_file_type_keys).toList()
         val recordTypeValues = resources.getStringArray(R.array.root_record_out_file_type_values).toList()
 
@@ -227,6 +232,10 @@ class MiuixSettingsActivity : ComponentActivity() {
 
                 SmallTitle(getString(R.string.text_about))
                 Card(Modifier.fillMaxWidth()) {
+                    SuperArrow(title = getString(R.string.text_update_source),
+                        rightText = if (updateSource.isEmpty()) getString(R.string.text_update_source_default)
+                        else updateSource,
+                        onClick = { showUpdateSourceDialog() })
                     SuperArrow(title = getString(R.string.text_check_for_updates),
                         onClick = { UpdateCheckDialog(this@MiuixSettingsActivity).show() })
                     SuperArrow(title = getString(R.string.text_issue_report),
@@ -259,6 +268,13 @@ class MiuixSettingsActivity : ComponentActivity() {
             onText = { scriptDirText.value = it },
             onDismiss = { if (scriptDirShow.value) MiuixPopupUtil.dismissDialog(scriptDirShow) },
             onApply = { mode -> applyScriptDir(mode) }
+        )
+        UpdateSourceDialog(
+            show = updateSourceShow,
+            text = updateSourceText.value,
+            onText = { updateSourceText.value = it },
+            onDismiss = { if (updateSourceShow.value) MiuixPopupUtil.dismissDialog(updateSourceShow) },
+            onConfirm = { applyUpdateSource() }
         )
     }
 
@@ -306,6 +322,22 @@ class MiuixSettingsActivity : ComponentActivity() {
         scriptDirText.value = TextFieldValue(
             strPref(R.string.key_script_dir_path, "/脚本/"))
         scriptDirShow.value = true
+    }
+
+    private fun showUpdateSourceDialog() {
+        updateSourceText.value = TextFieldValue(strPref(R.string.key_update_source_url, ""))
+        updateSourceShow.value = true
+    }
+
+    private fun applyUpdateSource() {
+        val value = updateSourceText.value.text.trim()
+        if (value.isNotEmpty() && !value.startsWith("http://") && !value.startsWith("https://")) {
+            Toast.makeText(this, getString(R.string.text_update_source_invalid), Toast.LENGTH_LONG).show()
+            return
+        }
+        putStrPref(R.string.key_update_source_url, value)
+        revision++
+        MiuixPopupUtil.dismissDialog(updateSourceShow)
     }
 
     private fun applyScriptDir(mode: Int) {
@@ -415,8 +447,33 @@ class MiuixSettingsActivity : ComponentActivity() {
         }
     }
 
-    private fun showLicenseDialog() {
-        LicenseResolver.registerLicense(MozillaPublicLicense20.instance)
+    /**
+     * 更新源：留空 = 出厂内置的 GitHub Releases，填网址 = 自建源（局域网里的 update.json 也行）。
+     */
+    @Composable
+    private fun UpdateSourceDialog(
+        show: MutableState<Boolean>,
+        text: TextFieldValue,
+        onText: (TextFieldValue) -> Unit,
+        onConfirm: () -> Unit,
+        onDismiss: () -> Unit
+    ) {
+        SuperDialog(show = show, title = getString(R.string.text_update_source),
+            summary = getString(R.string.text_update_source_hint), onDismissRequest = onDismiss) {
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                TextField(value = text, onValueChange = onText, modifier = Modifier.fillMaxWidth(),
+                    singleLine = true)
+                Row(Modifier.fillMaxWidth().padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.End) {
+                    TextButton(text = "取消", modifier = Modifier.padding(end = 8.dp),
+                        onClick = onDismiss, colors = ButtonDefaults.textButtonColorsPrimary())
+                    Button(onClick = onConfirm, colors = ButtonDefaults.buttonColorsPrimary()) { Text("确定") }
+                }
+            }
+        }
+    }
+
+    private fun showLicenseDialog() {        LicenseResolver.registerLicense(MozillaPublicLicense20.instance)
         LicensesDialog.Builder(this)
             .setNotices(R.raw.licenses)
             .setIncludeOwnLicense(true)

@@ -114,6 +114,11 @@
     <string name="text_checking_update">正在检查更新</string>
     <string name="text_new_version">新版本</string>
     <string name="text_check_update_error">检查更新失败Orz</string>
+    <string name="text_check_update_error_detail">检查更新失败：%1$s（自建更新源可在设置里修改）</string>
+    <string name="text_update_source">更新源</string>
+    <string name="text_update_source_default">默认（GitHub）</string>
+    <string name="text_update_source_hint">留空 = 用内置的 GitHub Releases；也可以填自己的网址（如 http://192.168.1.5:8080/update.json），局域网、自托管都行</string>
+    <string name="text_update_source_invalid">地址要以 http:// 或 https:// 开头</string>
     <string name="text_check_for_updates">检查更新</string>
     <string name="text_is_latest_version">已经是最新版本</string>
     <string name="text_version_too_old">版本过低</string>
@@ -338,6 +343,7 @@
     <string name="text_pointer_location">指针位置[Root]</string>
     <string name="text_change_script_dir">更改脚本文件夹路径</string>
     <string name="key_script_dir_path">key_script_dir_path</string>
+    <string name="key_update_source_url">key_update_source_url</string>
     <string name="default_value_script_dir_path">/脚本/</string>
     <string name="text_error_copy_file" formatted="true">发生错误: %s</string>
     <string name="text_debug">调试</string>

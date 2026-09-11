@@ -7,14 +7,24 @@ import android.preference.PreferenceManager;
 import android.text.TextUtils;
 
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonSyntaxException;
 import com.jakewharton.retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
 import com.jdkshen.aijspro.BuildConfig;
+import com.jdkshen.aijspro.Pref;
+import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.network.api.UpdateCheckApi;
 import com.jdkshen.aijspro.network.entity.GitHubRelease;
+import com.jdkshen.aijspro.network.entity.UpdateManifest;
 import com.jdkshen.aijspro.network.entity.VersionInfo;
 import com.jdkshen.aijspro.tool.SimpleObserver;
 import com.stardust.util.NetworkUtils;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Locale;
@@ -76,6 +86,199 @@ public class VersionService {
                     return Observable.error(error);
                 })
                 .subscribeOn(Schedulers.io());
+    }
+
+    /** 自建更新源（{@code update.json}）的网址；留空表示用内置的 GitHub Releases。 */
+    public static String updateSourceUrl(Context context) {
+        try {
+            String value = Pref.getPrefString(context.getString(R.string.key_update_source_url), "");
+            return value == null ? "" : value.trim();
+        } catch (Exception e) {
+            // 读设置失败不该让「检查更新」整个不可用，退回内置源。
+            return "";
+        }
+    }
+
+    /**
+     * 检查更新：配了自建更新源就走自建源（可以放局域网或自己的服务器，不依赖 GitHub），
+     * 否则走内置的 GitHub Releases。
+     */
+    public Observable<VersionInfo> checkForUpdates(Context context) {
+        final String source = updateSourceUrl(context);
+        if (isEmpty(source)) {
+            return checkForUpdates();
+        }
+        return Observable.fromCallable(() -> fromManifest(readText(source), source))
+                .subscribeOn(Schedulers.io());
+    }
+
+    /** 纯 Java 的空串判断：解析路径不依赖 android.text.TextUtils，单测里才能直接跑。 */
+    private static boolean isEmpty(CharSequence value) {
+        return value == null || value.length() == 0;
+    }
+
+    /** 读一个文本资源（更新源 JSON），带超时与明确的错误信息。 */
+    static String readText(String url) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(15000);
+        connection.setRequestProperty("Accept", "application/json");
+        connection.setRequestProperty("Cache-Control", "no-cache");
+        try {
+            int code = connection.getResponseCode();
+            if (code < 200 || code >= 300) {
+                throw new IOException("更新源返回 HTTP " + code);
+            }
+            try (InputStream in = connection.getInputStream()) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, read);
+                }
+                return stripByteOrderMark(out.toString("UTF-8"));
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    /** 手工编辑过的 JSON 很容易带上 BOM（记事本/PowerShell 默认就这么存），Gson 会直接报错。 */
+    static String stripByteOrderMark(String text) {
+        if (text != null && !text.isEmpty() && text.charAt(0) == '\uFEFF') {
+            return text.substring(1);
+        }
+        return text;
+    }
+
+    /**
+     * 把自建更新源的 {@code update.json} 转成界面用的 {@link VersionInfo}。
+     *
+     * <p>挑选规则与 GitHub 源完全一致（compat/lite + ABI），因此两种情况下的行为可以互相推理；
+     * 相对地址按 {@code update.json} 所在目录解析，方便把整套东西丢进一个目录里。
+     */
+    static VersionInfo fromManifest(String json, String sourceUrl) throws IOException {
+        return fromManifest(json, sourceUrl, BuildConfig.RHINO_COMPAT, Build.SUPPORTED_ABIS);
+    }
+
+    /** 可注入 compat / ABI 的重载：单测里不依赖 Build / BuildConfig。 */
+    static VersionInfo fromManifest(String json, String sourceUrl, boolean compat,
+            String[] supportedAbis) throws IOException {
+        UpdateManifest manifest;
+        json = stripByteOrderMark(json);
+        try {
+            manifest = new GsonBuilder().setLenient().create().fromJson(json, UpdateManifest.class);
+        } catch (JsonSyntaxException e) {
+            throw new IOException("更新源内容不是有效的 JSON", e);
+        }
+        if (manifest == null) {
+            throw new IOException("更新源内容不是有效的 JSON");
+        }
+        if (manifest.versionCode <= 0) {
+            throw new IOException("更新源里的 versionCode 无效");
+        }
+        VersionInfo info = new VersionInfo();
+        info.versionCode = manifest.versionCode;
+        info.versionName = isEmpty(manifest.versionName)
+                ? String.valueOf(manifest.versionCode) : manifest.versionName.trim();
+        info.releaseNotes = isEmpty(manifest.releaseNotes)
+                ? "更新源未提供更新说明。" : manifest.releaseNotes;
+        info.deprecated = manifest.deprecated;
+        info.oldVersions = new ArrayList<>();
+        if (manifest.oldVersions != null) {
+            for (UpdateManifest.Note note : manifest.oldVersions) {
+                if (note == null || note.versionCode <= 0) {
+                    continue;
+                }
+                VersionInfo.OldVersion oldVersion = new VersionInfo.OldVersion();
+                oldVersion.versionCode = note.versionCode;
+                oldVersion.issues = note.issues;
+                info.oldVersions.add(oldVersion);
+            }
+        }
+        info.downloads = new ArrayList<>();
+        VersionInfo.Download preferred = null;
+        int preferredScore = Integer.MIN_VALUE;
+        if (manifest.assets != null) {
+            for (UpdateManifest.Asset asset : manifest.assets) {
+                if (asset == null || isEmpty(asset.url)
+                        || !isAbiSupported(asset.abi, supportedAbis)) {
+                    continue;
+                }
+                String name = isEmpty(asset.name) ? fileNameOf(asset.url) : asset.name;
+                if (!isCompatibleApkAsset(name, compat, supportedAbis)) {
+                    continue;
+                }
+                VersionInfo.Download download = new VersionInfo.Download();
+                download.name = name;
+                download.url = resolveUrl(sourceUrl, asset.url);
+                download.digest = asset.sha256;
+                info.downloads.add(download);
+                int score = preferredAssetScore(name, compat, supportedAbis)
+                        + (isEmpty(asset.abi) ? 0 : 1);
+                if (score > preferredScore) {
+                    preferred = download;
+                    preferredScore = score;
+                }
+            }
+        }
+        if (preferred == null && !isEmpty(manifest.apkUrl)) {
+            VersionInfo.Download download = new VersionInfo.Download();
+            download.name = fileNameOf(manifest.apkUrl);
+            download.url = resolveUrl(sourceUrl, manifest.apkUrl);
+            download.digest = manifest.apkSha256;
+            info.downloads.add(download);
+            preferred = download;
+        }
+        if (preferred == null) {
+            throw new IOException("更新源里没有适用于当前设备的 APK");
+        }
+        // 「直接下载」用自动挑出来的那一套，把它放到列表最前，下载按钮的顺序就稳定了。
+        info.downloads.remove(preferred);
+        info.downloads.add(0, preferred);
+        info.downloadUrl = preferred.url;
+        info.downloadDigest = preferred.digest;
+        return info;
+    }
+
+    /** asset 里显式写的 ABI 是否适用于本机；留空表示不限制。 */
+    static boolean isAbiSupported(String abi, String[] supportedAbis) {
+        if (isEmpty(abi)) {
+            return true;
+        }
+        if (supportedAbis == null) {
+            return false;
+        }
+        String value = abi.trim();
+        for (String supported : supportedAbis) {
+            if (value.equalsIgnoreCase(supported)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 解析更新源里的下载地址：绝对地址直接用，相对地址相对 update.json 解析。 */
+    static String resolveUrl(String sourceUrl, String url) throws IOException {
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            return url;
+        }
+        try {
+            return new URL(new URL(sourceUrl), url).toString();
+        } catch (MalformedURLException e) {
+            throw new IOException("更新源里的下载地址无效：" + url, e);
+        }
+    }
+
+    private static String fileNameOf(String url) {
+        String value = url;
+        int query = value.indexOf('?');
+        if (query >= 0) {
+            value = value.substring(0, query);
+        }
+        int slash = value.lastIndexOf('/');
+        String name = slash >= 0 ? value.substring(slash + 1) : value;
+        return name.isEmpty() ? "update.apk" : name;
     }
 
     static boolean isNotFound(Throwable error) {
@@ -253,8 +456,8 @@ public class VersionService {
             return Observable.empty();
         }
         // This method both updates the deprecation cache and returns the result to its caller.
-        // Cache the cold Retrofit stream so those two subscribers share one HTTP request.
-        Observable<VersionInfo> observable = checkForUpdates().cache();
+        // Cache the cold stream so those two subscribers share one HTTP request.
+        Observable<VersionInfo> observable = checkForUpdates(context).cache();
         observable.subscribe(new SimpleObserver<VersionInfo>() {
             @Override
             public void onNext(@NonNull VersionInfo versionInfo) {

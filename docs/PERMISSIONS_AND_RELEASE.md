@@ -40,6 +40,43 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 推送与 `project-versions.json` 匹配的标签（当前为 `v1.0.2+465`）会触发 GitHub Actions 发布任务。仓库 Actions Secrets 必须配置 `AIJSPRO_KEYSTORE_BASE64`、`AIJSPRO_STORE_PASSWORD`、`AIJSPRO_KEY_ALIAS`、`AIJSPRO_KEY_PASSWORD`；前者是 keystore 文件的 Base64 内容，另外三项与本地发布变量含义一致。Secrets 缺失时发布任务会明确失败，不会生成无签名或 debug 签名的 Release。
 
+### 自建更新源（局域网 / 自己的网址）
+
+GitHub 之外还可以完全自托管：设置里把「更新源」填成自己的网址（留空则用内置的 GitHub Releases），检查更新、下载、校验、安装都走同一套流程，离线局域网也能用。
+
+更新源就是一个 `update.json`，与它引用的 APK 放同一个目录即可：
+
+```json
+{
+  "versionCode": 466,
+  "versionName": "1.0.3",
+  "releaseNotes": "## 更新内容\n- ...",
+  "apkUrl": "./aijspro-1.0.3.apk",
+  "apkSha256": "sha256:....",
+  "deprecated": 0,
+  "assets": [
+    { "name": "aijspro-miuix-compat-arm64-v8a.apk", "url": "./arm64.apk", "abi": "arm64-v8a" },
+    { "name": "aijspro-miuix-compat-armeabi-v7a.apk", "url": "./v7a.apk", "abi": "armeabi-v7a" }
+  ],
+  "oldVersions": [ { "versionCode": 465, "issues": "旧版本存在的问题说明" } ]
+}
+```
+
+- 只有 `versionCode` 高于已安装版本才会提示更新；`apkUrl`/`assets[].url` 支持相对地址（相对 `update.json` 所在目录解析），所以整套东西丢进一个目录就能用；
+- 填了 `assets` 时会按**当前产物变体（compat/lite）+ 设备 ABI** 自动挑一套，规则与 GitHub 资产挑选完全一致；挑不出可用包会直接报「更新源里没有适用于当前设备的 APK」，而不是下载一个装不上的包；
+- `apkSha256` 建议一定要填：下载后先比对 SHA-256，再校验 APK 格式、包名、版本号与签名（必须与已安装版本同一签名），全部通过才交给系统安装器。
+
+一条命令就能把某个 APK 发布成更新源（生成 `update.json` + 起 HTTP 服务，打印可直接给新手机用的网址）：
+
+```powershell
+.\tools\serve-updates.ps1 -Apk .\apps\app\build\outputs\apk\miuixCompat\debug\a.apk
+# 只生成 update.json 不上传服务：.\tools\serve-updates.ps1 -Apk .\a.apk -NoServe
+```
+
+新手机首次安装可以直接访问脚本打印的「Direct APK」网址；之后在应用的 **设置 → 更新源** 里填「Update source」网址，就能在应用内检查更新并下载安装。
+
+本机联调（不用同一个 WiFi）可以用 adb 端口反向映射：`adb reverse tcp:8080 tcp:8080`，然后把更新源填成 `http://127.0.0.1:8080/update.json`。
+
 ## 1.1 脚本 APK 的保护等级（`encryptLevel`）
 
 打包页「特性」分组里的 **脚本保护** 五档选择（不加密 / 加密 / 快照 / 加密 so / 快照 so），以及工程 `project.json` 里的 `encryptLevel` + `scriptStorage` 两个字段，控制产物中脚本的存放形式。判定逻辑集中在 `com.stardust.autojs.project.ScriptProtection`（打包端与打包出的 App 共用同一份语义）：

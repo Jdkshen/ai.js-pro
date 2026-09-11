@@ -142,6 +142,12 @@
     <string name="text_clear_file_selection">Reset</string>
     <string name="summary_pre_execute_script">Executed before the script file is executed</string>
     <string name="text_check_update_error">Check for updates failed</string>
+    <string name="text_check_update_error_detail">Update check failed: %1$s (the custom update source can be changed in settings)</string>
+    <string name="text_update_source">Update source</string>
+    <string name="text_update_source_default">Default (GitHub)</string>
+    <string name="text_update_source_hint">Leave empty to use the built-in GitHub Releases, or enter your own URL (e.g. http://192.168.1.5:8080/update.json) — LAN and self-hosted both work</string>
+    <string name="text_update_source_invalid">The address must start with http:// or https://</string>
+    <string name="key_update_source_url">key_update_source_url</string>
     <string name="text_download_url">Download</string>
     <string name="text_directly_download">Download now</string>
     <string name="text_download_failed">Download failed</string>

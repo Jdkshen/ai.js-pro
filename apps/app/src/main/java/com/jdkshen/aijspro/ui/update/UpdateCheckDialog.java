@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.ui.update;
 
 import android.content.Context;
+import android.text.TextUtils;
 import android.widget.Toast;
 
 import com.afollestad.materialdialogs.MaterialDialog;
@@ -34,7 +35,7 @@ public class UpdateCheckDialog {
     public void show() {
         mProgress.show();
         VersionService.getInstance()
-                .checkForUpdates()
+                .checkForUpdates(mContext)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(new SimpleObserver<VersionInfo>() {
                     @Override
@@ -52,7 +53,17 @@ public class UpdateCheckDialog {
                     public void onError(@NonNull Throwable e) {
                         e.printStackTrace();
                         mProgress.dismiss();
-                        Toast.makeText(GlobalAppContext.get(), R.string.text_check_update_error, Toast.LENGTH_SHORT).show();
+                        // 自建更新源时把原因说清楚：自己搭的源出问题（路径写错、没开服务）
+                        // 只报「检查更新失败」根本定位不了。
+                        String detail = e.getMessage();
+                        if (!TextUtils.isEmpty(VersionService.updateSourceUrl(mContext))) {
+                            Toast.makeText(GlobalAppContext.get(), mContext.getString(
+                                    R.string.text_check_update_error_detail,
+                                    TextUtils.isEmpty(detail) ? e.getClass().getSimpleName() : detail),
+                                    Toast.LENGTH_LONG).show();
+                        } else {
+                            Toast.makeText(GlobalAppContext.get(), R.string.text_check_update_error, Toast.LENGTH_SHORT).show();
+                        }
                     }
                 });
     }
