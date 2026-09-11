@@ -19,14 +19,15 @@
 | P1-2 窗口 alpha/scale | ✅ 批A 已完成 | `setAlpha/getAlpha`、`setScale(sx,sy)`、`setScaleX/Y`：直接作用于根 View，不触发布局重排 |
 | P2-1 XML 单位不统一 | 🟡 批D 待做 | `w/h` 默认 dp、`margin` 为 px 与 Rhino 完全一致；计划补文档标注 + QuickJS 侧单位提示 |
 | P2-2 `setPosition` 后 `getX()` 旧值 | ✅ 批A 已完成 | `getX()/getY()` 返回最近一次设定值（立即）；`getX(true)/getRealX()` 读主线程 flush 后的生效值 |
-| P2-3 子线程操作窗口 | 🟡 批C 待做 | 计划：进程级窗口注册表（按 id 跨引擎操作）+ `window.post(fn)` |
+| P2-3 子线程操作窗口 | ✅ 批C 已完成 | 窗口注册表改为**进程级**：`floaty.windowById(id)`/`floaty.getWindow(id)` 可在 worker（独立引擎）里拿到代理并操作（`threads.start(fn, {winId: win.id})`）；另加 `win.post(fn[, delay])`（主线程同步执行 + 回传结果），引擎销毁只关自己创建的窗口（`closeOwnedFloatyWindows`） |
 | P3-1 z-order / 触摸穿透 | 🟡 批D 待做 | 计划：明确 `setTouchable(false)` 的 `FLAG_NOT_TOUCHABLE` 穿透语义 + 文档；overlay 窗口 z-order 受系统限制 |
-| P3-2 生命周期事件 | 🟡 批C 待做 | 计划：`win.on('attached'/'detached')`（View attach 状态监听） |
-| MCP-1 `list_engine_api` envelope | 🟡 批C 待做 | 计划：按 MCP 规范包成 `{content:[{type:"text",…}]}` |
+| P3-2 生命周期事件 | ✅ 批C 已完成 | `win.on('attached'/'detached')`（窗口上屏/离屏，由创建它的引擎接收）；`win.on('close', fn)` 等价 `onClose`；配套 `floaty.exists(id)` / `win.exists()` / `win.id` |
+| MCP-1 `list_engine_api` envelope | ✅ 批C 已完成 | `McpTools.listEngineApi/probeEngineApi` 补上 `toolJson(...)`（标准 MCP tool result envelope），官方 Kotlin SDK 不再报 "Cannot determine RequestResult type from JSON: [engine, count, items]" |
 
 > 批A 真机验证（Mi8 `ce4d2bdb`）：初始坐标 600/400 ✅、`visible:false` 不显示 ✅、显示前 `findView` 可用 ✅、show/hide/setVisibility 往返 ✅、`setPosition` 后 `getX()` 立即 300/500 ✅、`getX(true)` 生效值 ✅、alpha/scale 链式 ✅、3 窗口显隐原子 ✅、`setContentVisible` 20 次 0ms ✅。
 > 批B 真机验证：`javaView` = `JsTextView` / 根 View = `FrameLayout` ✅、`runOnMainThread` 内调 View API ✅、`ObjectAnimator.ofFloat(view.javaView, "alpha", 1, 0.2)` 启动成功 ✅、`view.animate(..., 'decelerate')` 18ms ✅、`win.animate(..., 'bounce'/'linear')` ✅、链式与 `stopAnimation` ✅、未知属性/缓动报错清晰 ✅。
-> 回归：QuickJS 全模块回归 **202 项全绿**（批A 新增 10 项 + 批B 新增 4 项悬浮窗断言）。
+> 回归：QuickJS 全模块回归 **209 项全绿**（批A 新增 10 项 + 批B 新增 4 项 + 批C 新增 7 项悬浮窗断言）。
+> 批C 真机验证：`floaty.exists`/`win.exists` ✅、`attached/detached` 事件序列 `attached,detached,attached` ✅、`win.post` 返回值 6 / 带延迟 `delayed-ok` ✅、**worker 线程把主脚本窗口从 200 移到 240（主脚本 `getX()` 同步看到 240）** ✅、`getWindow(不存在)` 报错清晰 ✅、worker 结束后主窗口仍存活 ✅。
 
 ---
 

@@ -238,7 +238,12 @@ internal class McpTools(private val context: Context, private val event: (String
             ".filter(function(n){return !n.startsWith('__')}).sort()))"
         val resultText = engineProbe(engine, source)
         val items = com.google.gson.JsonParser().parse(resultText).asJsonArray
-        return JsonObject().apply { addProperty("engine", engine); addProperty("count", items.size()); add("items", items) }
+        // 必须走 toolJson 包成标准 MCP tool result envelope，
+        // 否则官方 Kotlin SDK 会因为顶层是 {engine,count,items} 而报
+        // "Cannot determine RequestResult type from JSON"。
+        return toolJson(JsonObject().apply {
+            addProperty("engine", engine); addProperty("count", items.size()); add("items", items)
+        })
     }
 
     private fun probeEngineApi(args: JsonObject): JsonObject {
@@ -253,12 +258,12 @@ internal class McpTools(private val context: Context, private val event: (String
             "keys:(x&&typeof x==='object')?Object.keys(x).slice(0,200):[]}))"
         val resultText = engineProbe(engine, source)
         val obj = com.google.gson.JsonParser().parse(resultText).asJsonObject
-        return JsonObject().apply {
+        return toolJson(JsonObject().apply {
             addProperty("engine", engine)
             addProperty("name", obj.get("name").asString)
             addProperty("type", obj.get("type").asString)
             add("keys", obj.getAsJsonArray("keys"))
-        }
+        })
     }
 
     private fun engineProbe(engine: String, source: String, timeout: Int = 30): String {

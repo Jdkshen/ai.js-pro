@@ -2125,6 +2125,22 @@ JSValue nativeFloatyGetRealY(JSContext *context, JSValueConst, int argc, JSValue
     return callHostIntInt(context, "floatyGetRealY", static_cast<int32_t>(windowId));
 }
 
+/** 窗口是否仍存在（跳引擎按 id 检查）。 */
+JSValue nativeFloatyExists(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t windowId = 0;
+    if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatyExists requires windowId");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "floatyWindowExists", "(I)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jint>(windowId));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env)
+                                 : JS_NewBool(context, result == JNI_TRUE);
+}
+
 JSValue nativeFloatyViewTouch(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t windowId = 0;
     if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
@@ -5784,6 +5800,7 @@ const char kBootstrapScript[] = R"JS(
 
     // ---- floaty module (overlay windows: xml layout or text + drag + geometry) ----
     var floatyClickHandlers = new Map();
+    var floatyLifecycleHandlers = new Map();
     var floatyPollTimer = null;
     function floatyHandlerKey(windowId, viewId, mode) {
         return windowId + '#' + viewId + '#' + mode;
@@ -5820,6 +5837,13 @@ const char kBootstrapScript[] = R"JS(
             var raw = __aiNativeFloatyViewPoll();
             if (!raw) break;
             var item = JSON.parse(raw);
+            // 窗口挂载/卸载：win.on('attached'/'detached') 的回调。
+            if (item.event === 'attached' || item.event === 'detached') {
+                var windowHandlers = floatyLifecycleHandlers.get(item.window);
+                var list = windowHandlers && windowHandlers[item.event];
+                if (list && list.length) list.slice().forEach(function (fn) { fn(); });
+                continue;
+            }
             var handlers = floatyClickHandlers.get(
                 floatyHandlerKey(item.window, item.id, item.event));
             if (!handlers || !handlers.length) continue;
@@ -6089,14 +6113,36 @@ const char kBootstrapScript[] = R"JS(
             }
             var id = Number(__aiNativeFloatyCreate(JSON.stringify(cfg)));
             if (id < 0) throw new Error('Unable to create floaty window');
+            return makeFloatyWindowProxy(id, cfg);
+        },
+        /** 按 id 取窗口代理：worker 线程（独立引擎）用它操作主脚本创建的窗口。 */
+        windowById: function (windowId) {
+            var existing = Number(windowId);
+            if (!__aiNativeFloatyExists(existing)) throw new Error('窗口不存在或已关闭：' + windowId);
+            return makeFloatyWindowProxy(existing, {});
+        },
+        getWindow: function (windowId) { return floaty.windowById(windowId); },
+        exists: function (windowId) { return !!__aiNativeFloatyExists(Number(windowId)); },
+        rawWindow: function (config, extra) {
+            return floaty.window(config, extra);
+        },
+        closeAll: function () {
+            __aiNativeFloatyCloseAll();
+        }
+    };
+    /**
+     * 窗口代理工厂：id + 创建配置 → 可链式操作的窗口对象。
+     * 窗口实现在进程级注册表里，所以同一个 id 在任意引擎（含 worker）都能拿到代理。
+     */
+    function makeFloatyWindowProxy(id, cfg) {
             var onClose = null;
             var exitOnClose = false;
             var viewCache = new Map();
             // 坐标/尺寸缓存：setPosition 之后 getX() 立即可用（真实上屏仍由主线程完成，
             // 需要确认已生效时用 getX(true) / getRealX()）。
             var pos = {
-                x: Number(cfg.x) || 0,
-                y: Number(cfg.y) || 0,
+                x: cfg.x === undefined ? null : Math.round(Number(cfg.x) || 0),
+                y: cfg.y === undefined ? null : Math.round(Number(cfg.y) || 0),
                 width: Number(cfg.width) || 0,
                 height: Number(cfg.height) || 0
             };
@@ -6117,12 +6163,15 @@ const char kBootstrapScript[] = R"JS(
                     __aiNativeFloatyUpdate(id, JSON.stringify({ x: pos.x, y: pos.y }));
                     return self || win;
                 },
-                /** getX() 返回最近一次设定的坐标；getX(true) 读主线程已生效的真实坐标。 */
+                /**
+                 * getX() 返回当前设定坐标（setPosition 后立即生效，且跨引擎一致）；
+                 * getX(true) 会在主线程 flush 后再读一次。
+                 */
                 getX: function (real) {
-                    return real ? Number(__aiNativeFloatyGetRealX(id)) : pos.x;
+                    return real ? Number(__aiNativeFloatyGetRealX(id)) : Number(__aiNativeFloatyGetX(id));
                 },
                 getY: function (real) {
-                    return real ? Number(__aiNativeFloatyGetRealY(id)) : pos.y;
+                    return real ? Number(__aiNativeFloatyGetRealY(id)) : Number(__aiNativeFloatyGetY(id));
                 },
                 getRealX: function () { return Number(__aiNativeFloatyGetRealX(id)); },
                 getRealY: function () { return Number(__aiNativeFloatyGetRealY(id)); },
@@ -6202,6 +6251,41 @@ const char kBootstrapScript[] = R"JS(
                     __aiNativeFloatySetAdjustable(id, !!enabled);
                     return self || win;
                 },
+                /** 窗口是否仍存在（可被 worker 线程检查）。 */
+                exists: function () { return !!__aiNativeFloatyExists(id); },
+                /**
+                 * 线程安全的窗口更新：在主线程同步执行 fn（可传入 worker 线程使用），
+                 * 并回传返回值；delay 为可选延迟。
+                 */
+                post: function (fn, delay) {
+                    if (typeof fn !== 'function') throw new TypeError('window.post 需要函数');
+                    if (delay === undefined || Number(delay) <= 0) return runOnMainThread(fn);
+                    var result;
+                    var done = false;
+                    setTimeout(function () {
+                        try { result = runOnMainThread(fn); } finally { done = true; }
+                    }, Math.max(0, Number(delay) || 0));
+                    while (!done) sleep(4);
+                    return result;
+                },
+                /**
+                 * 窗口事件：'close' | 'attached'（已上屏）| 'detached'（已离屏）。
+                 * attached/detached 由创建它的引擎接收。
+                 */
+                on: function (event, fn) {
+                    if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+                    var name = String(event);
+                    if (name === 'close') return win.onClose(fn);
+                    if (name === 'attached' || name === 'detached') {
+                        if (!floatyLifecycleHandlers.has(id)) {
+                            floatyLifecycleHandlers.set(id, { attached: [], detached: [] });
+                        }
+                        floatyLifecycleHandlers.get(id)[name].push(fn);
+                        ensureFloatyPolling();
+                        return self || win;
+                    }
+                    throw new Error('不支持的窗口事件：' + name + '（可用：close/attached/detached）');
+                },
                 isAdjustEnabled: function () { return !!__aiNativeFloatyIsAdjustable(id); },
                 requestFocus: function () {
                     __aiNativeFloatySetWindowFocusable(id, true);
@@ -6248,14 +6332,8 @@ const char kBootstrapScript[] = R"JS(
             });
             self = proxy;
             return proxy;
-        },
-        rawWindow: function (config, extra) {
-            return floaty.window(config, extra);
-        },
-        closeAll: function () {
-            __aiNativeFloatyCloseAll();
-        }
-    };
+    }
+
     global.floaty = Object.freeze(floaty);
 
     // Key codes for floaty on("key") listeners, mirroring Rhino's keys table.
@@ -8178,6 +8256,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyViewHandle", nativeFloatyViewHandle, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyRootViewHandle", nativeFloatyRootViewHandle, 1);
     installNativeFunction(state->context, global, "__aiNativeRunOnMain", nativeRunOnMain, 1);
+    installNativeFunction(state->context, global, "__aiNativeFloatyExists", nativeFloatyExists, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatySetAlpha", nativeFloatySetAlpha, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatySetScale", nativeFloatySetScale, 3);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetAlpha", nativeFloatyGetAlpha, 1);

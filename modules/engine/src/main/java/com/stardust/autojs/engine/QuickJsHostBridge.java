@@ -2213,14 +2213,40 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     // ---- floaty (minimal overlay windows: text + drag + geometry) ----
-    private final java.util.concurrent.atomic.AtomicInteger mNextFloatyId =
+    // 窗口注册表是**进程级**的：worker 线程（独立 QuickJS 引擎）可以用 floaty.windowById(id)
+    // 操作主脚本创建的窗口，不再限于创建它的那个引擎。
+    private static final java.util.concurrent.atomic.AtomicInteger mNextFloatyId =
             new java.util.concurrent.atomic.AtomicInteger(1);
-    private final Map<Integer, QuickJsFloatyWindow> mFloatyWindows = new ConcurrentHashMap<>();
+    private static final Map<Integer, QuickJsFloatyWindow> mFloatyWindows = new ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentLinkedQueue<String> mFloatyEvents =
             new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     interface FloatyEventSink {
         void emit(String eventJson);
+    }
+
+    /** 窗口是否存在（跨引擎按 id 查询）。 */
+    public boolean floatyWindowExists(int windowId) {
+        return mFloatyWindows.containsKey(windowId);
+    }
+
+    /** floaty.closeAll()：用户显式关闭所有窗口（跨引擎）。 */
+    public void floatyCloseAllGlobal() {
+        for (QuickJsFloatyWindow window : new ArrayList<>(mFloatyWindows.values())) {
+            window.close();
+        }
+        mFloatyWindows.clear();
+    }
+
+    /** 引擎销毁时只关属于本引擎的窗口（不能误伤其它引擎创建的窗口）。 */
+    private void closeOwnedFloatyWindows() {
+        for (QuickJsFloatyWindow window : new ArrayList<>(mFloatyWindows.values())) {
+            if (window.isOwnedBy(mEngineHandle)) {
+                window.close();
+                mFloatyWindows.remove(window.id());
+            }
+        }
+        mFloatyEvents.clear();
     }
 
     public String floatyCreate(String configJson) {
@@ -2229,7 +2255,8 @@ final class QuickJsHostBridge implements AutoCloseable,
             int id = mNextFloatyId.getAndIncrement();
             Context context = mRuntime.uiHandler.getContext();
             QuickJsFloatyWindow window = new QuickJsFloatyWindow(
-                    context, id, config, uiInflater(), mRuntime.ui.getResourceParser(), mFloatyEvents::add);
+                    context, id, config, uiInflater(), mRuntime.ui.getResourceParser(),
+                    mFloatyEvents::add, mEngineHandle);
             mFloatyWindows.put(id, window);
             if (config.optBoolean("visible", true)) {
                 if (!window.show()) {
@@ -2263,11 +2290,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public void floatyCloseAll() {
-        for (QuickJsFloatyWindow window : new ArrayList<>(mFloatyWindows.values())) {
-            window.close();
-        }
-        mFloatyWindows.clear();
-        mFloatyEvents.clear();
+        floatyCloseAllGlobal();
     }
 
     public String floatyViewGetText(int windowId, String id) {
@@ -2409,6 +2432,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     private static final class QuickJsFloatyWindow {
         private final Context mContext;
         private final int mId;
+        private final long mOwnerEngine;
         private final WindowManager mWindowManager;
         private final android.widget.FrameLayout mRoot;
         private final com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater mInflater;
@@ -2436,9 +2460,10 @@ final class QuickJsHostBridge implements AutoCloseable,
         QuickJsFloatyWindow(Context context, int id, JSONObject config,
                             com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater,
                             com.stardust.autojs.core.ui.inflater.ResourceParser resourceParser,
-                            FloatyEventSink eventSink) {
+                            FloatyEventSink eventSink, long ownerEngine) {
             mContext = context;
             mId = id;
+            mOwnerEngine = ownerEngine;
             mConfig = config;
             mInflater = inflater;
             mResourceParser = resourceParser;
@@ -2565,6 +2590,7 @@ final class QuickJsHostBridge implements AutoCloseable,
                 mShown = true;
                 mRoot.setVisibility(mContentVisibility);
                 applyWindowTransform();
+                emitLifecycle("attached");
                 Log.i("QuickJsFloatyWindow", "Floaty window " + mId + " shown");
                 return true;
             } catch (Throwable error) {
@@ -2584,7 +2610,20 @@ final class QuickJsHostBridge implements AutoCloseable,
                 Log.w("QuickJsFloatyWindow", "removeView failed", error);
             }
             mShown = false;
+            emitLifecycle("detached");
             return true;
+        }
+
+        /** 窗口挂载/卸载事件（脚本侧 win.on('attached'/'detached')）。 */
+        private void emitLifecycle(String event) {
+            if (mEventSink == null) {
+                return;
+            }
+            try {
+                mEventSink.emit(new JSONObject()
+                        .put("window", mId).put("id", "").put("event", event).toString());
+            } catch (JSONException ignored) {
+            }
         }
 
         /** 窗口级 alpha / scale（直接作用于根 View，不重排布局）。 */
@@ -2640,6 +2679,14 @@ final class QuickJsHostBridge implements AutoCloseable,
 
         int getContentVisibility() {
             return mContentVisibility;
+        }
+
+        int id() {
+            return mId;
+        }
+
+        boolean isOwnedBy(long engineHandle) {
+            return mOwnerEngine != 0 && mOwnerEngine == engineHandle;
         }
 
         private interface MainTask<T> {
@@ -2762,20 +2809,12 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
 
         String getViewText(String id) {
-            final String[] result = new String[]{""};
-            final CountDownLatch latch = new CountDownLatch(1);
-            mHandler.post(() -> {
+            // 已在主线程时直接执行：在主线程 post + 等 latch 会自锁（runOnMainThread 里就是这种情况）。
+            return onMain(() -> {
                 View view = findViewById(id);
-                if (view instanceof android.widget.TextView) {
-                    result[0] = ((android.widget.TextView) view).getText().toString();
-                }
-                latch.countDown();
-            });
-            try {
-                latch.await(2, TimeUnit.SECONDS);
-            } catch (InterruptedException ignored) {
-            }
-            return result[0];
+                return view instanceof android.widget.TextView
+                        ? ((android.widget.TextView) view).getText().toString() : "";
+            }, "");
         }
 
         void setViewText(String id, String text) {
@@ -2996,52 +3035,20 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
 
         int getWindowWidth() {
-            final int[] result = new int[1];
-            final CountDownLatch latch = new CountDownLatch(1);
-            mHandler.post(() -> {
-                result[0] = mRoot.getWidth();
-                latch.countDown();
-            });
-            try {
-                latch.await(2, TimeUnit.SECONDS);
-            } catch (InterruptedException ignored) {
-            }
-            return result[0];
+            return onMain(() -> mRoot.getWidth(), 0);
         }
 
         int getWindowHeight() {
-            final int[] result = new int[1];
-            final CountDownLatch latch = new CountDownLatch(1);
-            mHandler.post(() -> {
-                result[0] = mRoot.getHeight();
-                latch.countDown();
-            });
-            try {
-                latch.await(2, TimeUnit.SECONDS);
-            } catch (InterruptedException ignored) {
-            }
-            return result[0];
+            return onMain(() -> mRoot.getHeight(), 0);
         }
 
         private interface ViewCallback<T> {
             T apply(View view);
         }
 
-        /** 在 main 线程找到控件并取值（找不到时回调收到 null）。 */
+        /** 在 main 线程找到控件并取值（找不到时回调收到 null）；已在主线程时直接执行。 */
         private <T> T withView(final String id, final ViewCallback<T> callback) {
-            final Object[] result = new Object[1];
-            final CountDownLatch latch = new CountDownLatch(1);
-            mHandler.post(() -> {
-                result[0] = callback.apply(findViewById(id));
-                latch.countDown();
-            });
-            try {
-                latch.await(2, TimeUnit.SECONDS);
-            } catch (InterruptedException ignored) {
-            }
-            @SuppressWarnings("unchecked")
-            T typed = (T) result[0];
-            return typed;
+            return onMain(() -> callback.apply(findViewById(id)), null);
         }
     }
 
@@ -3224,31 +3231,48 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public boolean uiViewExists(int viewId, String id) {
-        final boolean[] result = new boolean[1];
-        final CountDownLatch latch = new CountDownLatch(1);
-        mDialogHandler.post(() -> {
-            result[0] = uiFind(id) != null;
-            latch.countDown();
-        });
-        try {
-            latch.await(2, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {
-        }
-        return result[0];
+        return Boolean.TRUE.equals(runOnMainSync(mDialogHandler, () -> uiFind(id) != null, Boolean.FALSE));
     }
 
     public boolean uiViewAction(int viewId, String id, String action) {
-        final boolean[] result = new boolean[1];
+        return Boolean.TRUE.equals(runOnMainSync(mDialogHandler,
+                () -> performViewAction(uiFind(id), action), Boolean.FALSE));
+    }
+
+    /**
+     * 在主线程执行并等待结果；**已在主线程时直接执行**——
+     * 否则 `runOnMainThread` 回调里再调用这些接口会 post + 等 latch 自锁。
+     */
+    private static <T> T runOnMainSync(Handler handler, java.util.function.Supplier<T> task, T fallback) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            try {
+                return task.get();
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "main task failed", error);
+                return fallback;
+            }
+        }
+        final Object[] result = new Object[1];
         final CountDownLatch latch = new CountDownLatch(1);
-        mDialogHandler.post(() -> {
-            result[0] = performViewAction(uiFind(id), action);
-            latch.countDown();
+        handler.post(() -> {
+            try {
+                result[0] = task.get();
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "main task failed", error);
+            } finally {
+                latch.countDown();
+            }
         });
         try {
-            latch.await(2, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                return fallback;
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return fallback;
         }
-        return result[0];
+        //noinspection unchecked
+        return result[0] == null ? fallback : (T) result[0];
     }
 
     /** `ui.isUiThread()`。 */
@@ -3389,20 +3413,12 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public String uiGetText(int viewId, String id) {
-        final String[] result = new String[]{""};
-        final CountDownLatch latch = new CountDownLatch(1);
-        mDialogHandler.post(() -> {
+        String text = runOnMainSync(mDialogHandler, () -> {
             View view = uiFind(id);
-            if (view instanceof android.widget.TextView) {
-                result[0] = ((android.widget.TextView) view).getText().toString();
-            }
-            latch.countDown();
-        });
-        try {
-            latch.await(2, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {
-        }
-        return result[0];
+            return view instanceof android.widget.TextView
+                    ? ((android.widget.TextView) view).getText().toString() : "";
+        }, "");
+        return text == null ? "" : text;
     }
 
     public void uiSetClickListener(int viewId, String id) {
@@ -4468,7 +4484,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         drawClose();
         mediaStopMusic();
         sensorsUnregisterAll();
-        floatyCloseAll();
+        closeOwnedFloatyWindows();   // 只关本引擎创建的窗口（注册表是进程级的）
         uiClose();
         releaseAutomatorHandles();
         closeSqliteHandles();

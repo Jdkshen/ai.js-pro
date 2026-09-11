@@ -1,6 +1,6 @@
 // @engine quickjs
 // QuickJS 全模块回归测试
-// 用途：202 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
+// 用途：209 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
 // 前置：无（无障碍 / 截图相关用例在缺少权限时自动跳过）
 // 覆盖：Java 互操作 / images / floaty / ui / dialogs / threads / events / engines / http / files / storages / device / app / shell / console 浮窗 / 选择器 / 手势/输入 / timers / continuation / require
 
@@ -481,6 +481,58 @@ assert('窗口 animate() + 未知属性报错', (function () {
 })());
 floatyV2.close();
 sleep(300);
+
+// --- 悬浮窗批C：生命周期事件 / window.post / 跨引擎（worker）窗口操作 ---
+var floatyV3 = floaty.window('<frame><text id="t" text="v3" textSize="14sp"/></frame>',
+    { x: 150, y: 250, visible: false });
+var floatyLifecycle = [];
+floatyV3.on('attached', function () { floatyLifecycle.push('attached'); });
+floatyV3.on('detached', function () { floatyLifecycle.push('detached'); });
+floatyV3.show();
+sleep(250);
+floatyV3.hide();
+sleep(250);
+assert('floaty 生命周期事件 attached/detached',
+    floatyLifecycle.join(',') === 'attached,detached');
+assert('floaty.exists / 按 id 取窗口', floaty.exists(floatyV3.id) === true
+    && floatyV3.exists() === true
+    && floaty.getWindow(floatyV3.id).id === floatyV3.id);
+assert('floaty.getWindow 不存在的 id 报错', (function () {
+    try {
+        floaty.getWindow(999999);
+        return false;
+    } catch (e) {
+        return String(e.message).indexOf('窗口不存在') >= 0;
+    }
+})());
+assert('win.post 在主线程执行并回传结果', (function () {
+    var target = floaty.getWindow(floatyV3.id);
+    var padding = floatyV3.post(function () {
+        var view = target.findView('t');
+        view.javaView.setPadding(9, 9, 9, 9);
+        return view.javaView.getPaddingLeft();
+    });
+    var delayed = floatyV3.post(function () { return 'delayed'; }, 60);
+    return padding === 9 && delayed === 'delayed';
+})());
+assert('worker 线程按 id 操作主脚本窗口', (function () {
+    var worker = threads.start(function () {
+        var target = floaty.getWindow(__args.winId);
+        var before = target.getX();
+        target.setPosition(before + 30, 260);
+        return { before: before, after: target.getX(), exists: target.exists() };
+    }, { winId: floatyV3.id });
+    var result = worker.waitForResult(6000);
+    sleep(200);
+    return result !== null && result !== undefined
+        && result.before === 150 && result.after === 180
+        && result.exists === true
+        && floatyV3.getX() === 180 && floatyV3.getY() === 260;
+})());
+assert('worker 结束后主窗口仍存活（引擎销毁不误关）', floatyV3.exists() === true);
+floatyV3.close();
+sleep(250);
+assert('close 后窗口不存在', floatyV3.exists() === false && floaty.exists(floatyV3.id) === false);
 
 var uiLayoutId = ui.layout('<vertical><text id="title" text="ui-title" textSize="18"/>'
     + '<button id="go" text="go"/></vertical>');
