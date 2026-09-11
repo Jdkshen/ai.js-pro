@@ -199,6 +199,8 @@ if (predicateRoot !== null && predicateRoot !== undefined) {
 assert('io 模块', typeof io === 'object' && typeof io.open === 'function' && io.files === files);
 assert('require("io") 命中内置模块', require('io') === io);
 var openTestPath = files.join(files.getSdcardPath(), 'engine-matrix', '__quickjs_open_test.txt');
+// 目录可能不存在（新设备上 /sdcard/engine-matrix 还没建），先补齐目录再测 open。
+files.createWithDirs(openTestPath);
 assert('files.open 写入', (function () {
     var writer = files.open(openTestPath, 'w');
     writer.write('第一行\n');
