@@ -82,4 +82,4 @@ target_compile_options(aijscrypto PRIVATE -fPIC -Wall -Wextra)
 target_link_options(aijscrypto PRIVATE
         "-Wl,-z,max-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
-target_link_libraries(aijscrypto PRIVATE log)
+target_link_libraries(aijscrypto PRIVATE log dl)

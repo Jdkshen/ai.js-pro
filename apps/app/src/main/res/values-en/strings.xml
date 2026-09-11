@@ -192,8 +192,12 @@
     <string name="summary_include_accessibility">When off the package does not declare the accessibility service</string>
     <string name="text_image_module">Image / color module</string>
     <string name="summary_include_image_module">When off the package drops ~70MB per ABI and loses find-image / OpenCV features</string>
-    <string name="text_script_encryption">Script encryption</string>
-    <string name="summary_script_encryption">On: the package stores a header + AES ciphertext. Off: plain text script (debug / legacy projects only, trivially extractable)</string>
+    <string name="text_script_protection">Script protection</string>
+    <string name="text_protection_none">None</string>
+    <string name="text_protection_encrypt">Encrypted</string>
+    <string name="text_protection_snapshot">Snapshot</string>
+    <string name="text_protection_so">Encrypted (native)</string>
+    <string name="summary_script_protection">Encrypted: header + AES ciphertext in assets. Snapshot: compiled to class / bytecode before encryption, no readable source. Encrypted (native): ciphertext appended to the native library, the package ships no script file at all (APK grows with script size).</string>
 
     <string name="text_signing">Signing</string>
     <string name="text_default_signing">Automatic</string>

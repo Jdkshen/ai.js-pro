@@ -14,7 +14,9 @@
  */
 #include <jni.h>
 
+#include <dlfcn.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -425,6 +427,112 @@ static int self_test(char *message, size_t messageSize) {
     return 0;
 }
 
+/* ------------------------------------------------------------------ 内嵌脚本载荷 */
+
+/* 与 Java 侧 EmbeddedScriptFooter 完全一致的尾部格式：
+ *   [库内容][脚本载荷(密文)][magic "AIJSPv1\0"][载荷长度小端 uint32][SHA-256(载荷)]
+ * Java 侧负责写（打包时追加到工作区里的 .so），这里负责读（运行时从自己的 .so 尾部取回）。 */
+static const uint8_t kFooterMagic[8] = {'A', 'I', 'J', 'S', 'P', 'v', '1', 0};
+#define FOOTER_LENGTH_SIZE 4
+#define FOOTER_DIGEST_SIZE 32
+#define FOOTER_SIZE (sizeof(kFooterMagic) + FOOTER_LENGTH_SIZE + FOOTER_DIGEST_SIZE)
+#define PAYLOAD_SIZE_LIMIT (512u * 1024u * 1024u)
+
+/**
+ * 从「库 + 载荷 + footer」字节里取出载荷。
+ *
+ * @return 载荷长度；格式不对/摘要不符时返回 0
+ */
+static size_t payload_from_library(const uint8_t *data, size_t size, uint8_t **payloadOut) {
+    size_t footerStart;
+    size_t length;
+    size_t i;
+    uint8_t digest[32];
+    size_t payloadStart;
+
+    *payloadOut = NULL;
+    if (data == NULL || size < FOOTER_SIZE) {
+        return 0;
+    }
+    footerStart = size - FOOTER_SIZE;
+    if (memcmp(data + footerStart, kFooterMagic, sizeof(kFooterMagic)) != 0) {
+        return 0;
+    }
+    length = (size_t) data[footerStart + sizeof(kFooterMagic)]
+             | ((size_t) data[footerStart + sizeof(kFooterMagic) + 1] << 8)
+             | ((size_t) data[footerStart + sizeof(kFooterMagic) + 2] << 16)
+             | ((size_t) data[footerStart + sizeof(kFooterMagic) + 3] << 24);
+    if (length == 0 || length > PAYLOAD_SIZE_LIMIT || length > footerStart) {
+        return 0;
+    }
+    payloadStart = footerStart - length;
+    /* 摘要校验：截断/改过的产物在这里就被挡掉，不会拿半截密文去解密。 */
+    {
+        Sha256 ctx;
+        sha256_init(&ctx);
+        sha256_update(&ctx, data + payloadStart, length);
+        sha256_final(&ctx, digest);
+    }
+    for (i = 0; i < FOOTER_DIGEST_SIZE; i++) {
+        if (digest[i] != data[footerStart + sizeof(kFooterMagic) + FOOTER_LENGTH_SIZE + i]) {
+            return 0;
+        }
+    }
+    {
+        uint8_t *payload = (uint8_t *) malloc(length);
+        if (payload == NULL) {
+            return 0;
+        }
+        memcpy(payload, data + payloadStart, length);
+        *payloadOut = payload;
+    }
+    return length;
+}
+
+/** 读整个文件（内容不大：这里只用于读自己的 .so，几十 MB 上限）。 */
+static uint8_t *read_whole_file(const char *path, size_t *sizeOut) {
+    FILE *fp = fopen(path, "rb");
+    long fileSize;
+    uint8_t *buffer;
+    *sizeOut = 0;
+    if (fp == NULL) {
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    fileSize = ftell(fp);
+    if (fileSize <= 0) {
+        fclose(fp);
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    buffer = (uint8_t *) malloc((size_t) fileSize);
+    if (buffer == NULL) {
+        fclose(fp);
+        return NULL;
+    }
+    if (fread(buffer, 1, (size_t) fileSize, fp) != (size_t) fileSize) {
+        free(buffer);
+        fclose(fp);
+        return NULL;
+    }
+    fclose(fp);
+    *sizeOut = (size_t) fileSize;
+    return buffer;
+}
+
+/* 拿一个肯定存在的符号地址定位本库在磁盘上的路径：导出的 JNI 函数不会被优化掉。 */
+extern jbyteArray JNICALL
+Java_com_stardust_autojs_script_NativeScriptCrypto_nativeReadEmbeddedPayload(JNIEnv *, jclass);
+
+/** 尾部格式自检（定义在后面，这里先声明）。 */
+static int footer_self_test(char *message, size_t messageSize);
+
 /* ------------------------------------------------------------------ JNI */
 
 static void throw_illegal_argument(JNIEnv *env, const char *message) {
@@ -526,9 +634,98 @@ Java_com_stardust_autojs_script_NativeScriptCrypto_nativeDecrypt(
 JNIEXPORT jstring JNICALL
 Java_com_stardust_autojs_script_NativeScriptCrypto_nativeSelfTest(JNIEnv *env, jclass clazz) {
     char message[CRYPTO_ERROR_MESSAGE_SIZE];
-    const int code = self_test(message, sizeof(message));
-    if (code == 0) {
-        return (*env)->NewStringUTF(env, "");
+    (void) clazz;
+    if (self_test(message, sizeof(message)) != 0) {
+        return (*env)->NewStringUTF(env, message);
     }
-    return (*env)->NewStringUTF(env, message);
+    if (footer_self_test(message, sizeof(message)) != 0) {
+        return (*env)->NewStringUTF(env, message);
+    }
+    return (*env)->NewStringUTF(env, "");
+}
+
+/** 自检尾部格式：自己造一份「库+载荷+footer」，再读回来比对。 */
+static int footer_self_test(char *message, size_t messageSize) {
+    static const uint8_t kFakeLibrary[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    static const uint8_t kFakePayload[5] = {9, 8, 7, 6, 5};
+    uint8_t buffer[sizeof(kFakeLibrary) + sizeof(kFakePayload) + FOOTER_SIZE];
+    Sha256 ctx;
+    uint8_t digest[32];
+    uint8_t *payload = NULL;
+    size_t payloadSize;
+    size_t i;
+    size_t footerStart = sizeof(kFakeLibrary) + sizeof(kFakePayload);
+
+    memcpy(buffer, kFakeLibrary, sizeof(kFakeLibrary));
+    memcpy(buffer + sizeof(kFakeLibrary), kFakePayload, sizeof(kFakePayload));
+    memcpy(buffer + footerStart, kFooterMagic, sizeof(kFooterMagic));
+    for (i = 0; i < 4; i++) {
+        buffer[footerStart + sizeof(kFooterMagic) + i] =
+                (uint8_t) ((sizeof(kFakePayload) >> (8 * i)) & 0xFF);
+    }
+    sha256_init(&ctx);
+    sha256_update(&ctx, kFakePayload, sizeof(kFakePayload));
+    sha256_final(&ctx, digest);
+    memcpy(buffer + footerStart + sizeof(kFooterMagic) + 4, digest, sizeof(digest));
+
+    payloadSize = payload_from_library(buffer, sizeof(buffer), &payload);
+    if (payloadSize != sizeof(kFakePayload) || payload == NULL) {
+        copy_text(message, messageSize, "尾部格式自检失败：载荷长度不符");
+        free(payload);
+        return 4;
+    }
+    for (i = 0; i < sizeof(kFakePayload); i++) {
+        if (payload[i] != kFakePayload[i]) {
+            copy_text(message, messageSize, "尾部格式自检失败：载荷内容不符");
+            free(payload);
+            return 5;
+        }
+    }
+    free(payload);
+
+    /* 载荷被改动时必须读不出来（摘要只覆盖载荷，所以改载荷里的字节）。 */
+    buffer[sizeof(kFakeLibrary)] ^= 0xFF;
+    payloadSize = payload_from_library(buffer, sizeof(buffer), &payload);
+    free(payload);
+    if (payloadSize != 0) {
+        copy_text(message, messageSize, "尾部格式自检失败：篡改未被发现");
+        return 6;
+    }
+    return 0;
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_stardust_autojs_script_NativeScriptCrypto_nativeReadEmbeddedPayload(JNIEnv *env, jclass clazz) {
+    Dl_info info;
+    uint8_t *fileData;
+    size_t fileSize;
+    uint8_t *payload = NULL;
+    size_t payloadSize;
+    jbyteArray result;
+
+    (void) clazz;
+    if (dladdr((void *) (uintptr_t) &Java_com_stardust_autojs_script_NativeScriptCrypto_nativeReadEmbeddedPayload,
+               &info) == 0 || info.dli_fname == NULL) {
+        return NULL;
+    }
+    /* 库直接从 APK 里映射时路径形如 xxx.apk!/lib/...（没落地成文件），这里读不到就给上层报错。 */
+    if (strstr(info.dli_fname, "!/") != NULL) {
+        return NULL;
+    }
+    fileData = read_whole_file(info.dli_fname, &fileSize);
+    if (fileData == NULL) {
+        return NULL;
+    }
+    payloadSize = payload_from_library(fileData, fileSize, &payload);
+    free(fileData);
+    if (payloadSize == 0 || payload == NULL) {
+        free(payload);
+        return NULL;
+    }
+    result = (*env)->NewByteArray(env, (jsize) payloadSize);
+    if (result != NULL) {
+        (*env)->SetByteArrayRegion(env, result, 0, (jsize) payloadSize, (const jbyte *) payload);
+    }
+    free(payload);
+    return result;
 }

@@ -26,6 +26,7 @@ import com.stardust.autojs.project.ScriptKeyDerivation;
 import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.rhino.AndroidClassLoader;
 import com.stardust.autojs.script.CompiledScriptPayload;
+import com.stardust.autojs.script.EmbeddedScriptFooter;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.autojs.script.NativeScriptCrypto;
 import com.stardust.util.MD5;
@@ -891,6 +892,75 @@ public class ApkBuilderEncryptionTest {
                 new String(bytecode, "ISO-8859-1").startsWith("// @engine"));
 
         copyToSharedStorage(context, outApk, "aijs-quickjs-bytecode-probe.apk");
+    }
+
+    /**
+     * 「加密 so」：加密载荷嵌进产物里各个 ABI 的原生库尾部，产物里一个脚本文件都没有。
+     *
+     * <p>这是对齐「脚本藏进 so」的关键用例：解包 APK 只能看到原生库，脚本在 ELF 段的后面，
+     * 运行端由原生代码读自己的文件尾部取回载荷。
+     */
+    @Test
+    public void nativeStorageHidesScriptInsideLibrary() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File workDir = new File(context.getCacheDir(), "apk-builder-native-storage-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "native-storage.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        // 脚本跑起来会写一个标记文件，安装后可以直接验证（同时也便于确认走的是新运行端）。
+        String source = "if (typeof context !== 'undefined' && typeof files !== 'undefined') {\n"
+                + "  var dir = context.getExternalFilesDir(null);\n"
+                + "  if (dir) { files.write(new java.io.File(dir, 'native-so-ran.txt').getAbsolutePath(), 'NATIVE_SO_OK'); }\n"
+                + "}\n"
+                + "console.log('NATIVE_SO_RAN');\n";
+        writeText(script, source);
+
+        ApkBuilder.AppConfig config = new ApkBuilder.AppConfig()
+                .setAppName("NativeStorageProbe")
+                .setPackageName("com.example.nativestorageprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("rhino")
+                .setEncryptLevel(ScriptProtection.LEVEL_ENCRYPT)
+                .setScriptStorage(ScriptProtection.STORAGE_NATIVE);
+
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(config).build().sign();
+
+        assertEquals("页面选的存放位置要生效",
+                ScriptProtection.STORAGE_NATIVE, builder.getScriptStorage());
+
+        // 1) 产物里不能有脚本文件：工作区与 APK 里都不该有。
+        assertFalse("native 存放时必须删掉工作区里的入口脚本",
+                new File(workspace, "assets/project/main.js").exists());
+        assertNull("native 存放时 APK 里不该有 main.js",
+                readZipEntry(outApk, "assets/project/main.js", "main.js"));
+
+        // 2) project.json 记录存放位置，等级仍是「加密」。
+        JSONObject json = new JSONObject(readText(new File(workspace, "assets/project/project.json")));
+        assertEquals(ScriptProtection.STORAGE_NATIVE, json.getString("scriptStorage"));
+        assertEquals(ScriptProtection.LEVEL_ENCRYPT, json.getInt("encryptLevel"));
+
+        // 3) 原生库尾部带同一份加密载荷，能解出与源脚本一致的内容。
+        byte[] library = readZipEntry(outApk, "libaijscrypto", ".so");
+        assertNotNull("产物里必须有解密库", library);
+        assertTrue("解密库尾部应当多了载荷", library.length > EmbeddedScriptFooter.SIZE);
+        byte[] payload = EmbeddedScriptFooter.payloadOf(library);
+        assertNotNull("原生库尾部必须能读回脚本载荷", payload);
+        assertTrue("载荷应当与文件形态一样带加密头",
+                EncryptedScriptFileHeader.INSTANCE.isValidFile(payload));
+        assertEquals("载荷解出来必须与源脚本一致",
+                source, new String(decryptPackagedScript(json, payload), "UTF-8"));
+        assertNativeDecryptionMatches(json, payload);
+        // 明文与密文都不能出现在库文件里。
+        String asText = new String(library, "ISO-8859-1");
+        assertFalse("产物里不该出现源码原文", asText.contains("NATIVE_SO_RAN"));
+
+        copyToSharedStorage(context, outApk, "aijs-native-so-probe.apk");
     }
 
     /**

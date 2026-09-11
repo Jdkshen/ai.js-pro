@@ -42,24 +42,43 @@ https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
 
 ## 1.1 脚本 APK 的保护等级（`encryptLevel`）
 
-打包页「特性」分组里的 **脚本加密** 开关，以及工程 `project.json` 里的 `encryptLevel` 字段，控制产物中脚本的存放形式。判定逻辑集中在 `com.stardust.autojs.project.ScriptProtection`（打包端与打包出的 App 共用同一份语义）：
+打包页「特性」分组里的 **脚本保护** 四档选择，以及工程 `project.json` 里的 `encryptLevel` + `scriptStorage` 两个字段，控制产物中脚本的存放形式。判定逻辑集中在 `com.stardust.autojs.project.ScriptProtection`（打包端与打包出的 App 共用同一份语义）：
 
-| 等级 | 含义 | 产物内 `assets/project/main.js` |
-|---:|---|---|
-| 0 | 不加密 | 原始脚本文本（无文件头） |
-| 1 | 加密（默认） | `77 01 17 7F 12 12` + 2 字节 flags + AES/CBC/PKCS5 密文 |
-| 2 | 编译 + 加密 | 内容同样是「文件头 + 密文」，但载荷是**编译产物**：Rhino 工程是生成的 class 字节（`CompiledScriptPayload`：类名 + 类字节），QuickJS 工程是 **QuickJS 字节码**（`JS_WriteObject(..., JS_WRITE_OBJ_BYTECODE)` 产物） |
+| 打包页档位 | `encryptLevel` | `scriptStorage` | 产物里的脚本形态 |
+|---|---:|---|---|
+| 不加密 | 0 | `assets` | `assets/project/main.js` 是原始脚本文本（无文件头） |
+| 加密（默认） | 1 | `assets` | `main.js` = `77 01 17 7F 12 12` + 2 字节 flags + AES/CBC/PKCS5 密文 |
+| 快照（编译） | 2 | `assets` | 同样是「文件头 + 密文」，但载荷是**编译产物**：Rhino 工程是生成的 class 字节（`CompiledScriptPayload`：类名 + 类字节），QuickJS 工程是 **QuickJS 字节码**（`JS_WriteObject(..., JS_WRITE_OBJ_BYTECODE)` 产物） |
+| 加密 so | 1 | `native` | **产物里没有脚本文件**：加密载荷追加在 `lib/<abi>/libaijscrypto.so` 尾部 |
 
 取值规则：
 
-1. 打包页显式选了开关 → 以页面为准（开 = 1，关 = 0）；
+1. 打包页显式选了档位 → 以页面为准（页面会把 `encryptLevel` 与 `scriptStorage` 一起写进 `AppConfig`）；
 2. 页面没指定（例如由 `AppConfig.fromProjectConfig` 或外部调用打包）→ 以工程 `project.json` 为准；
-3. 工程里没有该字段 → 默认 1，保持历史行为（以前是无条件加密）。
+3. 工程里没有 `encryptLevel` → 默认 1（保持历史行为，以前是无条件加密）；没有 `scriptStorage` → 默认 `assets`；
+4. `scriptStorage=native` 但等级是 0 时会被自动提到 1：嵌进原生库的内容必须是密文。
 
-`encryptLevel` 会被写回产物内的 `assets/project/project.json`，所以产物自带的配置与实际行为始终一致。
+两个字段都会被写回产物内的 `assets/project/project.json`，所以产物自带的配置与实际行为始终一致。
 
 文件头的 2 字节 flags 里，低字节留给执行模式等既有标记，**高字节是载荷类型**（`0` 文本 / `1` Rhino 编译类 / `2` QuickJS 字节码，见 `EncryptedScriptFileHeader`）。
 运行时按载荷类型分发：文本走原来的 `StringScriptSource`；编译类交给 `AndroidClassLoader`（dx → DexClassLoader）加载后在引擎作用域里 `exec`。
+
+### 「加密 so」是怎么放的
+
+```text
+lib/<abi>/libaijscrypto.so = [库原本内容][加密载荷][magic "AIJSPv1\0"][载荷长度小端][SHA-256(载荷)]
+```
+
+- 打包时对**每个 ABI** 的 `libaijscrypto.so` 各追加一份（`ApkBuilder.embedScriptIntoLibraries`，格式见 `EmbeddedScriptFooter`）；
+  模板里找不到这个库会**直接报错**，不会产出一个必然跑不起来的包
+- 追加的字节在 ELF 段之外，加载器只看程序头，不影响 `.so` 加载；APK 随后照常签名
+- 运行端由**原生自己**读：`dladdr` 找到本库路径 → 读文件尾部 → 校验 magic / 长度 / SHA-256 →
+  返回加密载荷（`NativeScriptCrypto.readEmbeddedPayload()`），再走与文件形态完全相同的解密与分发
+  （`EncryptedScripts.toSourceFromLibrary`）；产物里连 `assets/project/main.js` 都没有
+- 库文件在设备上是解包到 `nativeLibraryDir` 的实体文件（模板 `extractNativeLibs` 为真），所以直接读文件即可；
+  万一只拿到 `xxx.apk!/lib/...` 这种未落地路径，原生读不到会返回 null，运行端会明确报「产物里读不到内嵌脚本」
+- 代价：APK 会多出 `载荷大小 × ABI 数`（脚本不大时就是几 KB 级）；载荷被截断/篡改时摘要校验不过，同样被当成「没有载荷」
+
 
 ### 脚本密钥：随机盐 + 签名绑定（反重签）
 

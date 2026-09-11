@@ -71,6 +71,15 @@ public class ProjectConfig {
     private int mEncryptLevel = ScriptProtection.DEFAULT_LEVEL;
 
     /**
+     * 脚本存放位置：{@code "assets"}（默认，写进 {@code assets/project/}）或
+     * {@code "native"}（加密载荷嵌进原生库，产物里没有脚本文件）。
+     *
+     * <p>跟 {@code encryptLevel} 是两个维度：等级决定「怎么保护」，存放位置决定「放哪」。
+     */
+    @SerializedName("scriptStorage")
+    private String mScriptStorage = ScriptProtection.DEFAULT_STORAGE;
+
+    /**
      * 脚本密钥的随机盐（十六进制）。打包时生成，每个包不同；
      * 老产物没有这个字段，运行端回退到旧的密钥派生。
      */
@@ -257,6 +266,15 @@ public class ProjectConfig {
 
     public void setEncryptLevel(int encryptLevel) {
         mEncryptLevel = ScriptProtection.normalize(encryptLevel);
+    }
+
+    /** 脚本存放位置，见字段说明；非法/为空时当 {@code assets}。 */
+    public String getScriptStorage() {
+        return ScriptProtection.normalizeStorage(mScriptStorage);
+    }
+
+    public void setScriptStorage(String scriptStorage) {
+        mScriptStorage = ScriptProtection.normalizeStorage(scriptStorage);
     }
 
     /** 脚本密钥随机盐（hex）；老产物为 null。 */

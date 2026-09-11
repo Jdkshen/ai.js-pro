@@ -171,8 +171,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private var engine by mutableStateOf("")
     private var includeAccessibility by mutableStateOf(true)
     private var includeImageModule by mutableStateOf(true)
-    /** 脚本加密：对应产物 project.json 的 encryptLevel（开 = 1，关 = 0）。 */
-    private var encryptScript by mutableStateOf(true)
+    /** 脚本保护档位：不加密 / 加密 / 快照（编译）/ 加密 so，见 ScriptProtection 的 CHOICE_*。 */
+    private var scriptProtection by mutableStateOf(ScriptProtection.CHOICE_ENCRYPT)
 
     // ---- signing (Pro 的“签名”组) ----
     /** 0 = 默认签名（tiny-sign 内嵌测试证书）, 1 = 使用已有的密钥库, 2 = 新建密钥 */
@@ -299,8 +299,9 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 requestPermissions = projectRequest
             }
             engine = config.engine ?: ""
-            // 工程里写了 encryptLevel 就按工程展示，否则保持页面的默认（加密）。
-            encryptScript = ScriptProtection.shouldEncrypt(config.encryptLevel)
+            // 工程里写了 encryptLevel / scriptStorage 就按工程展示，否则保持页面的默认（加密）。
+            scriptProtection = ScriptProtection.choiceOf(
+                config.encryptLevel, config.scriptStorage)
             val projectSplash = File(file, "splash.png")
             if (projectSplash.isFile()) {
                 splashIconPath = projectSplash.path
@@ -465,8 +466,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         appConfig.setEngine(engine.ifEmpty { null })
         appConfig.setIncludeAccessibility(includeAccessibility)
         appConfig.setIncludeImageModule(includeImageModule)
-        appConfig.setEncryptLevel(
-            if (encryptScript) ScriptProtection.LEVEL_ENCRYPT else ScriptProtection.LEVEL_NONE)
+        appConfig.setEncryptLevel(ScriptProtection.levelOfChoice(scriptProtection))
+        appConfig.setScriptStorage(ScriptProtection.storageOfChoice(scriptProtection))
         // 用户选了密钥库时把证书指纹一并带上：脚本密钥会绑定到这份签名身份（用别的证书重签就解不开）。
         signingKey?.certificateFingerprint
             ?.takeIf { it.isNotEmpty() }
@@ -1346,12 +1347,39 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 checked = includeImageModule,
                 onCheckedChange = { includeImageModule = it }
             )
-            SuperSwitch(
-                title = getString(R.string.text_script_encryption),
-                summary = getString(R.string.summary_script_encryption),
-                checked = encryptScript,
-                onCheckedChange = { encryptScript = it }
-            )
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    getString(R.string.text_script_protection),
+                    fontSize = 16.sp,
+                    color = MiuixTheme.colorScheme.onSurface
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EngineChip(getString(R.string.text_protection_none),
+                        scriptProtection == ScriptProtection.CHOICE_NONE) {
+                        scriptProtection = ScriptProtection.CHOICE_NONE
+                    }
+                    EngineChip(getString(R.string.text_protection_encrypt),
+                        scriptProtection == ScriptProtection.CHOICE_ENCRYPT) {
+                        scriptProtection = ScriptProtection.CHOICE_ENCRYPT
+                    }
+                    EngineChip(getString(R.string.text_protection_snapshot),
+                        scriptProtection == ScriptProtection.CHOICE_COMPILE) {
+                        scriptProtection = ScriptProtection.CHOICE_COMPILE
+                    }
+                    EngineChip(getString(R.string.text_protection_so),
+                        scriptProtection == ScriptProtection.CHOICE_NATIVE) {
+                        scriptProtection = ScriptProtection.CHOICE_NATIVE
+                    }
+                }
+                Text(
+                    getString(R.string.summary_script_protection),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                )
+            }
         }
     }
 

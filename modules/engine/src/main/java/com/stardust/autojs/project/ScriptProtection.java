@@ -25,6 +25,26 @@ public final class ScriptProtection {
     /** 当前支持的最高等级。 */
     public static final int MAX_LEVEL = LEVEL_COMPILE;
 
+    /** 脚本存放位置：产物的 {@code assets/project/} 里的脚本文件（历史行为）。 */
+    public static final String STORAGE_ASSETS = "assets";
+    /** 脚本存放位置：加密载荷嵌进产物里的原生库（{@code libaijscrypto.so} 尾部），产物中没有脚本文件。 */
+    public static final String STORAGE_NATIVE = "native";
+
+    /** {@code project.json} 里没有 {@code scriptStorage} 字段时使用的位置。 */
+    public static final String DEFAULT_STORAGE = STORAGE_ASSETS;
+
+    /** 打包页给用户看的档位：不加密。 */
+    public static final int CHOICE_NONE = 0;
+    /** 打包页档位：加密（AES）。 */
+    public static final int CHOICE_ENCRYPT = 1;
+    /** 打包页档位：快照（先编译成 class / 字节码，再加密）。 */
+    public static final int CHOICE_COMPILE = 2;
+    /** 打包页档位：加密 so（载荷嵌进原生库，产物里没有脚本文件）。 */
+    public static final int CHOICE_NATIVE = 3;
+
+    /** 档位数量（界面遍历用）。 */
+    public static final int CHOICE_COUNT = CHOICE_NATIVE + 1;
+
     /**
      * {@code project.json} 里没有该字段时使用的等级。
      *
@@ -63,6 +83,74 @@ public final class ScriptProtection {
                 return "加密（AES）";
             default:
                 return "编译 + 加密";
+        }
+    }
+
+    /** 把档位夹到支持范围内。 */
+    public static int normalizeChoice(int choice) {
+        if (choice < CHOICE_NONE) {
+            return CHOICE_NONE;
+        }
+        return Math.min(choice, CHOICE_NATIVE);
+    }
+
+    /** 规范化存放位置：只认 {@link #STORAGE_NATIVE}，其余一律当 {@link #STORAGE_ASSETS}。 */
+    public static String normalizeStorage(String storage) {
+        if (storage == null) {
+            return STORAGE_ASSETS;
+        }
+        return STORAGE_NATIVE.equalsIgnoreCase(storage.trim()) ? STORAGE_NATIVE : STORAGE_ASSETS;
+    }
+
+    /** 是否把脚本载荷嵌进原生库（产物里没有脚本文件）。 */
+    public static boolean usesNativeStorage(String storage) {
+        return STORAGE_NATIVE.equals(normalizeStorage(storage));
+    }
+
+    /** 档位 → {@code encryptLevel}。 */
+    public static int levelOfChoice(int choice) {
+        switch (normalizeChoice(choice)) {
+            case CHOICE_NONE:
+                return LEVEL_NONE;
+            case CHOICE_COMPILE:
+                return LEVEL_COMPILE;
+            default:
+                // CHOICE_ENCRYPT 与 CHOICE_NATIVE 都是「加密」；嵌进原生库不允许明文。
+                return LEVEL_ENCRYPT;
+        }
+    }
+
+    /** 档位 → {@code scriptStorage}。 */
+    public static String storageOfChoice(int choice) {
+        return normalizeChoice(choice) == CHOICE_NATIVE ? STORAGE_NATIVE : STORAGE_ASSETS;
+    }
+
+    /** 由 {@code encryptLevel} + {@code scriptStorage} 反推打包页档位（打开工程时用）。 */
+    public static int choiceOf(int level, String storage) {
+        if (usesNativeStorage(storage)) {
+            return CHOICE_NATIVE;
+        }
+        switch (normalize(level)) {
+            case LEVEL_NONE:
+                return CHOICE_NONE;
+            case LEVEL_COMPILE:
+                return CHOICE_COMPILE;
+            default:
+                return CHOICE_ENCRYPT;
+        }
+    }
+
+    /** 档位的中文描述（日志/界面用）。 */
+    public static String describeChoice(int choice) {
+        switch (normalizeChoice(choice)) {
+            case CHOICE_NONE:
+                return "不加密";
+            case CHOICE_COMPILE:
+                return "快照（编译）";
+            case CHOICE_NATIVE:
+                return "加密 so";
+            default:
+                return "加密（AES）";
         }
     }
 }

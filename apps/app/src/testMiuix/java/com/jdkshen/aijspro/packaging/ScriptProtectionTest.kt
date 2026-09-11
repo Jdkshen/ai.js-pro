@@ -52,4 +52,52 @@ class ScriptProtectionTest {
         assertEquals(ScriptProtection.LEVEL_ENCRYPT, ScriptProtection.DEFAULT_LEVEL)
         assertTrue(ScriptProtection.shouldEncrypt(ScriptProtection.DEFAULT_LEVEL))
     }
+
+    @Test
+    fun `packaging page choices map to level and storage`() {
+        assertEquals(ScriptProtection.LEVEL_NONE, ScriptProtection.levelOfChoice(ScriptProtection.CHOICE_NONE))
+        assertEquals(ScriptProtection.LEVEL_ENCRYPT, ScriptProtection.levelOfChoice(ScriptProtection.CHOICE_ENCRYPT))
+        assertEquals(ScriptProtection.LEVEL_COMPILE, ScriptProtection.levelOfChoice(ScriptProtection.CHOICE_COMPILE))
+        // 加密 so 也是「加密」，只是载荷换个地方放
+        assertEquals(ScriptProtection.LEVEL_ENCRYPT, ScriptProtection.levelOfChoice(ScriptProtection.CHOICE_NATIVE))
+
+        assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_NONE))
+        assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_ENCRYPT))
+        assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_COMPILE))
+        assertEquals(ScriptProtection.STORAGE_NATIVE, ScriptProtection.storageOfChoice(ScriptProtection.CHOICE_NATIVE))
+    }
+
+    @Test
+    fun `choices round trip through project config values`() {
+        for (choice in 0 until ScriptProtection.CHOICE_COUNT) {
+            val level = ScriptProtection.levelOfChoice(choice)
+            val storage = ScriptProtection.storageOfChoice(choice)
+            assertEquals("档位 $choice 不能往返", choice, ScriptProtection.choiceOf(level, storage))
+        }
+    }
+
+    @Test
+    fun `out of range choice falls back to the closest supported one`() {
+        assertEquals(ScriptProtection.CHOICE_NONE, ScriptProtection.normalizeChoice(-5))
+        assertEquals(ScriptProtection.CHOICE_NATIVE, ScriptProtection.normalizeChoice(99))
+    }
+
+    @Test
+    fun `storage only recognizes the native value`() {
+        assertEquals(ScriptProtection.STORAGE_NATIVE, ScriptProtection.normalizeStorage("native"))
+        assertEquals(ScriptProtection.STORAGE_NATIVE, ScriptProtection.normalizeStorage(" NATIVE "))
+        assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.normalizeStorage(null))
+        assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.normalizeStorage(""))
+        assertEquals(ScriptProtection.STORAGE_ASSETS, ScriptProtection.normalizeStorage("lib"))
+        assertTrue(ScriptProtection.usesNativeStorage("native"))
+        assertFalse(ScriptProtection.usesNativeStorage(ScriptProtection.DEFAULT_STORAGE))
+    }
+
+    @Test
+    fun `describeChoice names every option`() {
+        assertEquals("不加密", ScriptProtection.describeChoice(ScriptProtection.CHOICE_NONE))
+        assertEquals("加密（AES）", ScriptProtection.describeChoice(ScriptProtection.CHOICE_ENCRYPT))
+        assertEquals("快照（编译）", ScriptProtection.describeChoice(ScriptProtection.CHOICE_COMPILE))
+        assertEquals("加密 so", ScriptProtection.describeChoice(ScriptProtection.CHOICE_NATIVE))
+    }
 }

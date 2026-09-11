@@ -375,8 +375,12 @@
     <string name="summary_include_accessibility">关闭后产物不声明无障碍服务，脚本无法使用无障碍能力</string>
     <string name="text_image_module">图色模块</string>
     <string name="summary_include_image_module">关闭可减小约 70MB/架构，脚本无法使用找图找色与 OpenCV 能力</string>
-    <string name="text_script_encryption">脚本加密</string>
-    <string name="summary_script_encryption">开启后产物内是「文件头 + AES 密文」；关闭则写入明文脚本（仅调试/兼容旧工程，极易被提取）</string>
+    <string name="text_script_protection">脚本保护</string>
+    <string name="text_protection_none">不加密</string>
+    <string name="text_protection_encrypt">加密</string>
+    <string name="text_protection_snapshot">快照</string>
+    <string name="text_protection_so">加密 so</string>
+    <string name="summary_script_protection">加密：产物内是「文件头 + AES 密文」；快照：先编译成 class / 字节码再加密，产物里没有可读源码；加密 so：密文嵌进原生库，产物里连脚本文件都没有（包体会随脚本大小增长）</string>
     <string name="text_signing">签名</string>
     <string name="text_default_signing">自动签名</string>
     <string name="text_custom_signing">选择签名</string>

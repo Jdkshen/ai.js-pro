@@ -71,8 +71,26 @@ public final class NativeScriptCrypto {
         }
     }
 
+    /**
+     * 读取「嵌在本库尾部」的脚本载荷（打包时的 {@code scriptStorage=native} 形态）。
+     *
+     * <p>原生代码用 {@code dladdr} 找到自己的 .so 路径，读文件末尾的 footer
+     * （magic + 长度 + SHA-256）并校验后返回载荷。产物里因此没有脚本文件。
+     *
+     * @return 加密载荷（含文件头）；库不可用、没有 footer 或校验不过时返回 null
+     */
+    public static byte[] readEmbeddedPayload() {
+        if (!AVAILABLE) {
+            return null;
+        }
+        return nativeReadEmbeddedPayload();
+    }
+
     private static native byte[] nativeDecrypt(byte[] data, int offset, int length,
                                                String packageName, String salt, String fingerprint);
+
+    /** 读取嵌在自身 .so 尾部的脚本载荷（没有时返回 null）。 */
+    private static native byte[] nativeReadEmbeddedPayload();
 
     private static native String nativeSelfTest();
 }

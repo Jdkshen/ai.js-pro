@@ -54,6 +54,34 @@ object EncryptedScripts {
         if (!EncryptedScriptFileHeader.isValidFile(bytes)) {
             return null
         }
+        return sourceOf(bytes, name)
+    }
+
+    /**
+     * 从「嵌在原生库尾部的载荷」还原脚本源（打包时选了 {@code scriptStorage=native} 的产物）。
+     *
+     * <p>产物里没有脚本文件：加密载荷被追加到各个 ABI 的 {@code libaijscrypto.so} 末尾，
+     * 由原生代码读自己的文件尾部取回（见 [EmbeddedScriptFooter] / [NativeScriptCrypto]）。
+     *
+     * @return 可执行的脚本源；没有内嵌载荷或头不合法时返回 null
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun toSourceFromLibrary(name: String = "main"): JavaScriptSource? {
+        val payload = NativeScriptCrypto.readEmbeddedPayload()
+        if (payload == null) {
+            Log.e(TAG, "原生库里没有内嵌脚本载荷（产物不完整或不是 native 存放）")
+            return null
+        }
+        if (!EncryptedScriptFileHeader.isValidFile(payload)) {
+            Log.e(TAG, "内嵌脚本载荷的文件头不合法")
+            return null
+        }
+        return sourceOf(payload, name)
+    }
+
+    /** 按文件头的载荷类型分发：文本 / Rhino 编译类 / QuickJS 字节码。 */
+    private fun sourceOf(bytes: ByteArray, name: String): JavaScriptSource {
         val flags = EncryptedScriptFileHeader.readFlags(bytes)
         val plain = decryptBytes(bytes)
         return when (EncryptedScriptFileHeader.payloadTypeOf(flags)) {

@@ -15,6 +15,7 @@ import com.stardust.autojs.project.ScriptKeyDerivation;
 import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.rhino.AndroidClassLoader;
 import com.stardust.autojs.script.CompiledScriptPayload;
+import com.stardust.autojs.script.EmbeddedScriptFooter;
 import com.stardust.autojs.script.ScriptCompiler;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.pio.PFiles;
@@ -62,6 +63,10 @@ public class ApkBuilder {
      */
     private static final String ACCESSIBILITY_SERVICE =
             "com.stardust.autojs.core.accessibility.AccessibilityService";
+
+    /** 内嵌脚本载荷用的原生库（每个 ABI 一份，载荷追加在它尾部）。 */
+    private static final String EMBEDDED_SCRIPT_LIBRARY = "libaijscrypto.so";
+
     private static final String[] IMAGE_MODULE_LIBS = {
             "libopencv_core.so", "libopencv_dnn.so", "libopencv_flann.so",
             "libopencv_geometry.so", "libopencv_imgcodecs.so", "libopencv_imgproc.so",
@@ -95,6 +100,8 @@ public class ApkBuilder {
     // 脚本保护等级（project.json 的 encryptLevel）：0 明文、1 AES、≥2 编译后加密。
     // 默认跟工程配置走，打包页显式选过则以 AppConfig 为准（见 syncProjectJsonAndDeriveKeys）。
     private int mEncryptLevel = ScriptProtection.DEFAULT_LEVEL;
+    // 脚本存放位置（project.json 的 scriptStorage）：assets 里的脚本文件，或嵌进原生库尾部。
+    private String mScriptStorage = ScriptProtection.DEFAULT_STORAGE;
     // 密钥硬化用的字段：随机盐与打包时的签名证书指纹（两者都写进产物 project.json）。
     private String mScriptSalt;
     private String mSignatureFingerprint;
@@ -236,8 +243,8 @@ public class ApkBuilder {
     /**
      * 按当前等级写入入口脚本：0 = 明文拷贝，1 = 加密，≥ 2 = 先编译再加密。
      *
-     * <p>编译需要引擎配合：Rhino 才支持编译成 class；QuickJS 字节码是后续批次，
-     * 在那之前 QuickJS 工程暂时退化为「加密」（不会产出跑不起来的产物）。
+     * <p>选了 {@code scriptStorage=native} 时载荷不写成文件，而是追加到工作区里各个 ABI 的
+     * {@code libaijscrypto.so} 尾部（产物里一个脚本文件都没有，见 {@link EmbeddedScriptFooter}）。
      */
     private void writeEntryScript(File source) throws Exception {
         File target = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
@@ -249,23 +256,61 @@ public class ApkBuilder {
             copyFile(source, target);
             return;
         }
+        byte[] payload;
+        short flags;
         if (ScriptProtection.shouldCompile(mEncryptLevel)) {
             if (isQuickJsEngine()) {
                 // QuickJS 工程：编译成 QuickJS 字节码（载荷类型 2）。
-                byte[] bytecode = QuickJsBytecodeCompiler.compile(
+                payload = QuickJsBytecodeCompiler.compile(
                         new String(PFiles.readBytes(source.getPath()), "UTF-8"), source.getName());
-                writeEncrypted(target, bytecode,
-                        EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
-                                EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE));
-                return;
+                flags = EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
+                        EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE);
+            } else {
+                payload = compileEntryScript(source);
+                flags = EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
+                        EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS);
             }
-            byte[] payload = compileEntryScript(source);
-            writeEncrypted(target, payload,
-                    EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
-                            EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS));
+        } else {
+            payload = PFiles.readBytes(source.getPath());
+            flags = 0;
+        }
+        byte[] encrypted = encryptedPayload(payload, flags);
+        if (ScriptProtection.usesNativeStorage(mScriptStorage)) {
+            // 工作区里已经拷进来的入口脚本必须删掉：藏了就要藏干净。
+            if (target.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                target.delete();
+            }
+            embedScriptIntoLibraries(encrypted);
             return;
         }
-        writeEncrypted(target, PFiles.readBytes(source.getPath()), (short) 0);
+        writeBytes(target, encrypted);
+    }
+
+    /** 把脚本载荷追加到工作区里每个 ABI 的 libaijscrypto.so 尾部。 */
+    private void embedScriptIntoLibraries(byte[] payload) throws IOException {
+        File libRoot = new File(mWorkspacePath, "lib");
+        File[] abiDirs = libRoot.listFiles();
+        int embedded = 0;
+        if (abiDirs != null) {
+            for (File abiDir : abiDirs) {
+                if (!abiDir.isDirectory()) {
+                    continue;
+                }
+                File library = new File(abiDir, EMBEDDED_SCRIPT_LIBRARY);
+                if (!library.isFile()) {
+                    continue;
+                }
+                byte[] libraryBytes = PFiles.readBytes(library.getPath());
+                byte[] withPayload = EmbeddedScriptFooter.embed(libraryBytes, payload);
+                writeBytes(library, withPayload);
+                embedded++;
+            }
+        }
+        if (embedded == 0) {
+            // 模板里没有解密库就说明产物跑不起来，宁可打包失败也不要出一个必然闪退的包。
+            throw new IOException("模板里没有 " + EMBEDDED_SCRIPT_LIBRARY + "，无法内嵌脚本");
+        }
     }
 
     /** 打包的产物使用 QuickJS 引擎（此时不能写 Rhino 编译产物）。 */
@@ -292,26 +337,37 @@ public class ApkBuilder {
 
     /** 把载荷加密后写入目标文件（不加密时不会走到这里，见 {@link #writeEntryScript}）。 */
     private void writeEncrypted(File target, byte[] plain, short flags) throws IOException {
+        writeBytes(target, encryptedPayload(plain, flags));
+    }
+
+    /** 生成「文件头 + 密文」的完整加密载荷字节（写文件与嵌进原生库共用同一份）。 */
+    private byte[] encryptedPayload(byte[] plain, short flags) throws IOException {
         if (mKey == null || mInitVector == null) {
             throw new IllegalStateException("Script encryption key is not initialized");
         }
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(plain.length + 32);
+            EncryptedScriptFileHeader.INSTANCE.writeHeader(out, flags);
+            out.write(new AdvancedEncryptionStandard(
+                    mKey.getBytes("UTF-8"), mInitVector).encrypt(plain));
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to encrypt script", e);
+        }
+    }
+
+    private static void writeBytes(File target, byte[] bytes) throws IOException {
         File parent = target.getParentFile();
         if (parent != null && !parent.exists()) {
             parent.mkdirs();
         }
+        FileOutputStream fos = new FileOutputStream(target);
         try {
-            FileOutputStream fos = new FileOutputStream(target);
-            try {
-                EncryptedScriptFileHeader.INSTANCE.writeHeader(fos, flags);
-                fos.write(new AdvancedEncryptionStandard(
-                        mKey.getBytes("UTF-8"), mInitVector).encrypt(plain));
-            } finally {
-                fos.close();
-            }
-        } catch (IOException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IOException("Failed to encrypt script: " + target, e);
+            fos.write(bytes);
+        } finally {
+            fos.close();
         }
     }
 
@@ -343,6 +399,11 @@ public class ApkBuilder {
     /** 本次打包最终生效的脚本保护等级（供测试与日志使用）。 */
     public int getEncryptLevel() {
         return mEncryptLevel;
+    }
+
+    /** 脚本存放位置：{@code assets}（脚本文件）或 {@code native}（嵌进原生库）。 */
+    public String getScriptStorage() {
+        return mScriptStorage;
     }
 
     /** 本次打包写入产物的随机盐（未使用新方案时为 null）。 */
@@ -629,7 +690,20 @@ public class ApkBuilder {
                 level = mAppConfig.encryptLevel;
             }
             mEncryptLevel = ScriptProtection.normalize(level);
+
+            // 脚本存放位置：工程里写了就以工程为准，打包页显式选过以页面为准。
+            String storage = json.optString("scriptStorage", ScriptProtection.DEFAULT_STORAGE);
+            if (mAppConfig != null && mAppConfig.scriptStorage != null) {
+                storage = mAppConfig.scriptStorage;
+            }
+            mScriptStorage = ScriptProtection.normalizeStorage(storage);
+            if (ScriptProtection.usesNativeStorage(mScriptStorage)
+                    && !ScriptProtection.shouldEncrypt(mEncryptLevel)) {
+                // 嵌进原生库的内容必须是密文（不然和一个明文文件没区别）。
+                mEncryptLevel = ScriptProtection.LEVEL_ENCRYPT;
+            }
             json.put("encryptLevel", mEncryptLevel);
+            json.put("scriptStorage", mScriptStorage);
 
             JSONObject build = json.optJSONObject("build");
             long buildNumber = 1;
@@ -737,6 +811,9 @@ public class ApkBuilder {
         private boolean includeImageModule = true;
         /** 脚本保护等级；-1 表示未指定，打包时沿用 project.json 里的 encryptLevel。 */
         private int encryptLevel = -1;
+
+        /** 脚本存放位置；null 表示未指定，打包时沿用 project.json 里的 scriptStorage。 */
+        private String scriptStorage;
         /** 用户选的密钥库对应的证书指纹（SHA-256 冒号分隔大写）；null 表示用本机自动身份。 */
         private String signingCertificateFingerprint;
         private Signer signer;
@@ -769,6 +846,7 @@ public class ApkBuilder {
             }
             config.engine = projectConfig.getEngine(null);
             config.encryptLevel = projectConfig.getEncryptLevel();
+            config.scriptStorage = projectConfig.getScriptStorage();
             LaunchConfig launchConfig = projectConfig.getLaunchConfig();
             if (launchConfig != null) {
                 config.hideLogs = launchConfig.shouldHideLogs();
@@ -877,6 +955,16 @@ public class ApkBuilder {
 
         public int getEncryptLevel() {
             return encryptLevel;
+        }
+
+        /** 脚本存放位置（{@link ScriptProtection#STORAGE_ASSETS} / {@link ScriptProtection#STORAGE_NATIVE}）。 */
+        public AppConfig setScriptStorage(String value) {
+            this.scriptStorage = ScriptProtection.normalizeStorage(value);
+            return this;
+        }
+
+        public String getScriptStorage() {
+            return scriptStorage;
         }
 
         /**
