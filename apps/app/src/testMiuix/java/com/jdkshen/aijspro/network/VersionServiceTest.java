@@ -1,10 +1,13 @@
 package com.jdkshen.aijspro.network;
 
+import com.jdkshen.aijspro.network.entity.GitHubRelease;
 import com.jdkshen.aijspro.network.entity.VersionInfo;
 
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -146,5 +149,84 @@ public class VersionServiceTest {
                 withBom, "http://192.168.1.5:8080/update.json", true, ARM64_DEVICE);
         assertEquals(466, info.versionCode);
         assertEquals("http://192.168.1.5:8080/a.apk", info.downloadUrl);
+    }
+
+    @Test
+    public void manifestHistoryKeepsVersionNameAndDate() throws Exception {
+        VersionInfo info = VersionService.fromManifest(manifest(
+                "  \"apkUrl\": \"a.apk\",\n"
+                        + "  \"oldVersions\": [\n"
+                        + "    { \"versionCode\": 466, \"versionName\": \"1.0.3\", \"date\": \"2026-09-12\", \"issues\": \"- 自建更新源\" },\n"
+                        + "    { \"versionCode\": 465, \"issues\": \"- 旧版本\" }\n"
+                        + "  ]\n"),
+                "http://192.168.1.5:8080/update.json", true, ARM64_DEVICE);
+
+        assertEquals(2, info.oldVersions.size());
+        assertEquals("1.0.3", info.oldVersions.get(0).versionName);
+        assertEquals("2026-09-12", info.oldVersions.get(0).date);
+        assertEquals("1.0.3  ·  2026-09-12", info.oldVersions.get(0).displayTitle());
+        // 没写版本名/日期时退回 versionCode，界面上不会出现空标题
+        assertEquals("versionCode 465", info.oldVersions.get(1).displayTitle());
+    }
+
+    @Test
+    public void dialogHistorySkipsTheVersionBeingInstalled() throws Exception {
+        VersionInfo info = VersionService.fromManifest(manifest(
+                "  \"apkUrl\": \"a.apk\",\n"
+                        + "  \"oldVersions\": [\n"
+                        + "    { \"versionCode\": 466, \"issues\": \"本次\" },\n"
+                        + "    { \"versionCode\": 465, \"issues\": \"上一版\" }\n"
+                        + "  ]\n"),
+                "http://192.168.1.5:8080/update.json", true, ARM64_DEVICE);
+
+        // 「本次更新」已经在上面单独展示，历史列表里不再重复一遍
+        assertEquals(2, info.oldVersions.size());
+        assertEquals(1, info.historyForDialog().size());
+        assertEquals(465, info.historyForDialog().get(0).versionCode);
+    }
+
+    @Test
+    public void buildsLatestAndHistoryFromGitHubReleaseList() {
+        GitHubRelease latest = release("v1.0.3+466", "versionCode: 466\n## 1.0.3\n- 自建更新源",
+                "2026-09-12T08:00:00Z");
+        GitHubRelease previous = release("v1.0.2+465", "versionCode: 465\n## 1.0.2\n- 修闪退",
+                "2026-09-01T10:30:00Z");
+        GitHubRelease draft = release("v1.0.4+467", "versionCode: 467", "2026-09-20T00:00:00Z");
+        draft.draft = true;
+        GitHubRelease preview = release("v1.0.9+500", "versionCode: 500", "2026-10-01T00:00:00Z");
+        preview.prerelease = true;
+
+        // GitHub 按时间倒序返回，且草稿/预览版不能当最新版本
+        VersionInfo info = VersionService.fromGitHubReleases(
+                Arrays.asList(preview, draft, latest, previous));
+
+        assertEquals(466, info.versionCode);
+        assertTrue(info.releaseNotes.contains("自建更新源"));
+        assertEquals(1, info.oldVersions.size());
+        assertEquals(465, info.oldVersions.get(0).versionCode);
+        assertEquals("1.0.2", info.oldVersions.get(0).versionName);
+        assertEquals("2026-09-01", info.oldVersions.get(0).date);
+    }
+
+    @Test
+    public void emptyReleaseListMeansAlreadyLatest() {
+        VersionInfo info = VersionService.fromGitHubReleases(Collections.emptyList());
+        assertFalse(info.isNewer());
+        assertEquals(0, info.oldVersions.size());
+    }
+
+    @Test
+    public void publishedAtIsTrimmedToADate() {
+        assertEquals("2026-09-12", VersionService.releaseDate("2026-09-12T08:00:00Z"));
+        assertEquals("", VersionService.releaseDate(null));
+        assertEquals("", VersionService.releaseDate(""));
+    }
+
+    private static GitHubRelease release(String tag, String body, String publishedAt) {
+        GitHubRelease release = new GitHubRelease();
+        release.tagName = tag;
+        release.body = body;
+        release.publishedAt = publishedAt;
+        return release;
     }
 }

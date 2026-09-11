@@ -100,6 +100,7 @@
     <string name="text_script_running">脚本运行</string>
     <string name="key_use_volume_control_running">key_use_volume_control_running</string>
     <string name="text_use_volume_to_stop_running">音量上键停止所有脚本</string>
+    <string name="summary_use_volume_to_stop_running">需要无障碍服务或 Root 才能监听到音量键</string>
     <string name="text_need_to_enable_accessibility_service">需要启用无障碍服务</string>
     <string name="text_import_fail">导入失败</string>
     <string name="text_no_brower">没有浏览器耶o(╯□╰)o快去安装一个吧</string>
@@ -125,6 +126,9 @@
     <string name="warning_version_too_old">当然版本为公测版，显现和潜在的问题很多，不再适合继续使用，</string>
     <string name="text_update">更新</string>
     <string name="text_release_notes">更新日志</string>
+    <string name="text_update_history_count">更新历史（%1$d 个版本）</string>
+    <string name="text_expand">展开</string>
+    <string name="text_collapse">收起</string>
     <string name="text_download_url">下载地址</string>
     <string name="text_directly_download">直接下载</string>
     <string name="text_download_failed">下载失败</string>

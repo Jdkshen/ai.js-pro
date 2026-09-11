@@ -58,13 +58,19 @@ GitHub 之外还可以完全自托管：设置里把「更新源」填成自己�
     { "name": "aijspro-miuix-compat-arm64-v8a.apk", "url": "./arm64.apk", "abi": "arm64-v8a" },
     { "name": "aijspro-miuix-compat-armeabi-v7a.apk", "url": "./v7a.apk", "abi": "armeabi-v7a" }
   ],
-  "oldVersions": [ { "versionCode": 465, "issues": "旧版本存在的问题说明" } ]
+  "oldVersions": [
+    { "versionCode": 466, "versionName": "1.0.3", "date": "2026-09-12", "issues": "## 更新内容\n- ..." },
+    { "versionCode": 465, "versionName": "1.0.2", "date": "2026-09-01", "issues": "## 更新内容\n- ..." }
+  ]
 }
 ```
 
 - 只有 `versionCode` 高于已安装版本才会提示更新；`apkUrl`/`assets[].url` 支持相对地址（相对 `update.json` 所在目录解析），所以整套东西丢进一个目录就能用；
 - 填了 `assets` 时会按**当前产物变体（compat/lite）+ 设备 ABI** 自动挑一套，规则与 GitHub 资产挑选完全一致；挑不出可用包会直接报「更新源里没有适用于当前设备的 APK」，而不是下载一个装不上的包；
-- `apkSha256` 建议一定要填：下载后先比对 SHA-256，再校验 APK 格式、包名、版本号与签名（必须与已安装版本同一签名），全部通过才交给系统安装器。
+- `apkSha256` 建议一定要填：下载后先比对 SHA-256，再校验 APK 格式、包名、版本号与签名（必须与已安装版本同一签名），全部通过才交给系统安装器；
+- `oldVersions`（可选）是**更新历史**：按「新 → 旧」列出历次版本及改动，更新弹窗里会显示成可展开的「更新历史（N 个版本）」；`versionName`/`date` 可省略（省了就只显示 versionCode）。
+
+Github 源（内置）会把发布列表自动整理成同一份历史（跳过草稿与预发布），所以两种源的弹窗体验一致。
 
 一条命令就能把某个 APK 发布成更新源（生成 `update.json` + 起 HTTP 服务，打印可直接给新手机用的网址）：
 
@@ -72,6 +78,8 @@ GitHub 之外还可以完全自托管：设置里把「更新源」填成自己�
 .\tools\serve-updates.ps1 -Apk .\apps\app\build\outputs\apk\miuixCompat\debug\a.apk
 # 只生成 update.json 不上传服务：.\tools\serve-updates.ps1 -Apk .\a.apk -NoServe
 ```
+
+发布时脚本会把本次版本（版本号 + 日期 + 更新说明）追加进同目录的 `update-history.json`（新到旧、按 versionCode 去重、默认保留 30 条，可 `-HistoryLimit` 调整），并同步写进 `update.json` 的 `oldVersions`——所以每发一版，历史就自动长一条，不需要手工维护。
 
 新手机首次安装可以直接访问脚本打印的「Direct APK」网址；之后在应用的 **设置 → 更新源** 里填「Update source」网址，就能在应用内检查更新并下载安装。
 

@@ -34,7 +34,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.storage.file.FileObservable
+import com.jdkshen.aijspro.tool.AccessibilityServiceTool
 import com.jdkshen.aijspro.tool.IntentTool
+import com.jdkshen.aijspro.tool.RootTool
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
@@ -135,6 +137,22 @@ class MiuixSettingsActivity : ComponentActivity() {
         prefs.edit().putString(getKey(id), value).apply()
     }
 
+    /**
+     * 「音量上键停止所有脚本」需要无障碍服务（或 Root）帮忙监听音量键：两者都没有时，
+     * 开关本身能打开但按键永远收不到（表现为按了完全没反应），所以这里在开启时主动补上：
+     * 能用快速方式（写安全设置/Shizuku/Root）就直接开，否则跳到系统无障碍设置引导用户。
+     */
+    private fun ensureVolumeKeyDetectionAvailable() {
+        if (com.stardust.view.accessibility.AccessibilityService.instance != null) {
+            return
+        }
+        if (RootTool.isRootAvailable()) {
+            return
+        }
+        Toast.makeText(this, R.string.text_need_to_enable_accessibility_service, Toast.LENGTH_LONG).show()
+        AccessibilityServiceTool.enableAccessibilityService()
+    }
+
     @Composable
     private fun SettingsPage() {
         val stateRevision = revision
@@ -196,8 +214,13 @@ class MiuixSettingsActivity : ComponentActivity() {
                 SmallTitle(getString(R.string.text_script_running))
                 Card(Modifier.fillMaxWidth()) {
                     SuperSwitch(title = getString(R.string.text_use_volume_to_stop_running),
+                        summary = getString(R.string.summary_use_volume_to_stop_running),
                         checked = stopVolume,
-                        onCheckedChange = { putBoolPref(R.string.key_use_volume_control_running, it); revision++ })
+                        onCheckedChange = { enabled ->
+                            putBoolPref(R.string.key_use_volume_control_running, enabled)
+                            if (enabled) ensureVolumeKeyDetectionAvailable()
+                            revision++
+                        })
                     SuperSwitch(title = getString(R.string.text_guard_mode),
                         summary = getString(R.string.summary_guard_mode),
                         checked = guardMode,

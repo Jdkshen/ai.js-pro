@@ -27,6 +27,7 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,6 +50,8 @@ public class VersionService {
             "(?im)^\\s*versionCode\\s*[:=]\\s*(\\d+)\\s*$");
     private static final Pattern VERSION_CODE_IN_TAG = Pattern.compile(
             "(?:\\+|[-_.]vc)(\\d+)$", Pattern.CASE_INSENSITIVE);
+    /** 历史更新最多展示多少个版本：够回看，又不会把弹窗撑得太大。 */
+    static final int MAX_HISTORY = 20;
     private static final String[] KNOWN_ABIS = {
             "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
     };
@@ -75,8 +78,8 @@ public class VersionService {
 
     public Observable<VersionInfo> checkForUpdates() {
         return mRetrofit.create(UpdateCheckApi.class)
-                .checkForUpdates()
-                .map(VersionService::fromGitHubRelease)
+                .listReleases()
+                .map(VersionService::fromGitHubReleases)
                 .onErrorResumeNext(error -> {
                     // A repository without a published release returns 404. Treat that as
                     // "already latest" instead of surfacing a network failure to the user.
@@ -192,6 +195,8 @@ public class VersionService {
                 }
                 VersionInfo.OldVersion oldVersion = new VersionInfo.OldVersion();
                 oldVersion.versionCode = note.versionCode;
+                oldVersion.versionName = note.versionName;
+                oldVersion.date = note.date;
                 oldVersion.issues = note.issues;
                 info.oldVersions.add(oldVersion);
             }
@@ -290,6 +295,56 @@ public class VersionService {
                 && ((retrofit2.HttpException) error).code() == 404);
     }
 
+    /**
+     * 发布列表 → 最新版本 + 历史更新。
+     *
+     * <p>GitHub 按发布时间倒序返回，因此第一个非草稿/非预览的发布就是最新版本，
+     * 其余比它旧的发布组成「更新历史」（同时也能让界面在下载前先看一眼历次改动）。
+     */
+    static VersionInfo fromGitHubReleases(List<GitHubRelease> releases) {
+        if (releases == null || releases.isEmpty()) {
+            return VersionInfo.current();
+        }
+        GitHubRelease latest = null;
+        for (GitHubRelease release : releases) {
+            if (release == null || release.draft || release.prerelease) {
+                continue;
+            }
+            latest = release;
+            break;
+        }
+        if (latest == null) {
+            return VersionInfo.current();
+        }
+        VersionInfo info = fromGitHubRelease(latest);
+        info.oldVersions = new ArrayList<>();
+        for (GitHubRelease release : releases) {
+            if (release == null || release == latest || release.draft || release.prerelease) {
+                continue;
+            }
+            if (info.oldVersions.size() >= MAX_HISTORY) {
+                break;
+            }
+            VersionInfo.OldVersion oldVersion = new VersionInfo.OldVersion();
+            oldVersion.versionName = releaseVersionName(release);
+            oldVersion.versionCode = releaseVersionCode(release, oldVersion.versionName, 0);
+            oldVersion.date = releaseDate(release.publishedAt);
+            oldVersion.issues = isEmpty(release.body) ? "" : release.body;
+            info.oldVersions.add(oldVersion);
+        }
+        return info;
+    }
+
+    /** ISO-8601 发布时间取前 10 位当日期（{@code 2026-09-12T08:00:00Z} → {@code 2026-09-12}）。 */
+    static String releaseDate(String publishedAt) {
+        if (isEmpty(publishedAt)) {
+            return "";
+        }
+        String value = publishedAt.trim();
+        int time = value.indexOf('T');
+        return time > 0 ? value.substring(0, time) : value;
+    }
+
     static VersionInfo fromGitHubRelease(GitHubRelease release) {
         if (release == null || release.draft) {
             return VersionInfo.current();
@@ -297,7 +352,7 @@ public class VersionService {
         VersionInfo info = new VersionInfo();
         info.versionName = releaseVersionName(release);
         info.versionCode = releaseVersionCode(release, info.versionName);
-        info.releaseNotes = TextUtils.isEmpty(release.body)
+        info.releaseNotes = isEmpty(release.body)
                 ? "查看 GitHub Releases 获取本次更新说明。" : release.body;
         info.deprecated = 0;
         info.oldVersions = Collections.emptyList();
@@ -307,8 +362,8 @@ public class VersionService {
         int preferredScore = Integer.MIN_VALUE;
         if (release.assets != null) {
             for (GitHubRelease.Asset asset : release.assets) {
-                if (asset == null || TextUtils.isEmpty(asset.name)
-                        || TextUtils.isEmpty(asset.browserDownloadUrl)
+                if (asset == null || isEmpty(asset.name)
+                        || isEmpty(asset.browserDownloadUrl)
                         || !isCompatibleApkAsset(asset.name, BuildConfig.RHINO_COMPAT,
                         Build.SUPPORTED_ABIS)) {
                     continue;
@@ -330,7 +385,7 @@ public class VersionService {
             info.downloadUrl = preferred.browserDownloadUrl;
             info.downloadDigest = preferred.digest;
         }
-        if (info.downloads.isEmpty() && !TextUtils.isEmpty(release.htmlUrl)) {
+        if (info.downloads.isEmpty() && !isEmpty(release.htmlUrl)) {
             VersionInfo.Download page = new VersionInfo.Download();
             page.name = "打开 GitHub Releases";
             page.url = release.htmlUrl;
@@ -376,18 +431,29 @@ public class VersionService {
     }
 
     private static String releaseVersionName(GitHubRelease release) {
-        String value = !TextUtils.isEmpty(release.tagName) ? release.tagName : release.name;
-        if (TextUtils.isEmpty(value)) return BuildConfig.VERSION_NAME;
+        String value = !isEmpty(release.tagName) ? release.tagName : release.name;
+        if (isEmpty(value)) return BuildConfig.VERSION_NAME;
         value = value.trim().replaceFirst("^[vV]", "");
         value = VERSION_CODE_IN_TAG.matcher(value).replaceFirst("");
         return value.isEmpty() ? BuildConfig.VERSION_NAME : value;
     }
 
     private static int releaseVersionCode(GitHubRelease release, String versionName) {
+        return releaseVersionCode(release, versionName, BuildConfig.VERSION_CODE);
+    }
+
+    /**
+     * 发布里的 versionCode：优先读发布说明里的 {@code versionCode:} 行，其次读标签后缀，
+     * 都读不到时用 {@code fallback}（最新版本用当前版本号兼容旧行为，历史条目用 0）。
+     */
+    private static int releaseVersionCode(GitHubRelease release, String versionName, int fallback) {
         Matcher body = VERSION_CODE_IN_BODY.matcher(release.body == null ? "" : release.body);
-        if (body.find()) return parsePositiveInt(body.group(1), BuildConfig.VERSION_CODE);
+        if (body.find()) return parsePositiveInt(body.group(1), fallback);
         Matcher tag = VERSION_CODE_IN_TAG.matcher(release.tagName == null ? "" : release.tagName);
-        if (tag.find()) return parsePositiveInt(tag.group(1), BuildConfig.VERSION_CODE);
+        if (tag.find()) return parsePositiveInt(tag.group(1), fallback);
+        if (fallback <= 0) {
+            return 0;
+        }
         return compareVersions(versionName, BuildConfig.VERSION_NAME) > 0
                 ? BuildConfig.VERSION_CODE + 1 : BuildConfig.VERSION_CODE;
     }

@@ -95,6 +95,7 @@
     <string name="text_script_running">Script</string>
     <string name="key_use_volume_control_running">key_use_volume_control_running</string>
     <string name="text_use_volume_to_stop_running">Stop all scripts when volume changes</string>
+    <string name="summary_use_volume_to_stop_running">Requires the accessibility service or root to listen for volume keys</string>
     <string name="text_need_to_enable_accessibility_service">Need to enable Accessibility Service</string>
     <string name="text_refresh">Refresh</string>
     <string name="notice_no_running_script"><![CDATA[No running script φ(>ω<*)]]></string>
@@ -104,6 +105,9 @@
     <string name="text_version_too_old">Version too old</string>
     <string name="warning_version_too_old">This version is deprecated</string>
     <string name="text_release_notes">Release Notes</string>
+    <string name="text_update_history_count">Update history (%1$d versions)</string>
+    <string name="text_expand">Expand</string>
+    <string name="text_collapse">Collapse</string>
 
     <string name="text_update">Update</string>
     <string name="text_processing">Processing</string>

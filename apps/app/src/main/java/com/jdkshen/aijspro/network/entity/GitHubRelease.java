@@ -14,6 +14,9 @@ public class GitHubRelease {
     public String body;
     @SerializedName("html_url")
     public String htmlUrl;
+    /** ISO-8601 发布时间（{@code 2026-09-12T08:00:00Z}），用于历史更新列表。 */
+    @SerializedName("published_at")
+    public String publishedAt;
     public boolean draft;
     public boolean prerelease;
     public List<Asset> assets = Collections.emptyList();

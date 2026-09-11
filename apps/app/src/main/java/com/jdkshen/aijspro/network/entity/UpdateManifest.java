@@ -49,7 +49,7 @@ public class UpdateManifest {
     /** 多套 APK（按 ABI / compat / lite 区分）；填了它就会按当前设备自动挑一套。 */
     public List<Asset> assets;
 
-    /** 历史版本说明（可选）。 */
+    /** 多个历史版本的更新说明（从新到旧）；发布脚本会自动累积写入。 */
     public List<Note> oldVersions;
 
     /** 更新源里的一个 APK。 */
@@ -67,6 +67,11 @@ public class UpdateManifest {
     /** 某个历史版本的说明。 */
     public static class Note {
         public int versionCode;
+        /** 版本号（展示用，可选）。 */
+        public String versionName;
+        /** 发布日期，例如 {@code 2026-09-12}（可选）。 */
+        public String date;
+        /** 该版本的更新说明，支持 Markdown。 */
         public String issues;
     }
 }

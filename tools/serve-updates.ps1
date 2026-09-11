@@ -46,6 +46,7 @@ param(
     [int]$VersionCode = 0,
     [string]$VersionName = "",
     [string]$SourceName = "aijspro",
+    [int]$HistoryLimit = 30,
     [switch]$HardLink,
     [switch]$NoServe
 )
@@ -124,6 +125,51 @@ if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) {
     $ReleaseNotes = "AI.js Pro $VersionName (versionCode $VersionCode)"
 }
 
+# --- history ----------------------------------------------------------------
+# Keep a rolling changelog next to update.json: update-history.json holds every
+# published version (newest first, capped by -HistoryLimit) and is mirrored into
+# the manifest as "oldVersions", which is what the app shows as update history.
+# Entries are keyed by versionCode, so re-publishing a version replaces it.
+$historyPath = Join-Path $Dir "update-history.json"
+$history = @()
+if (Test-Path -LiteralPath $historyPath) {
+    try {
+        $existing = Get-Content -LiteralPath $historyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($existing) { $history = @($existing) }
+    } catch {
+        Write-Warning "update-history.json is not readable; starting a new history"
+    }
+}
+$history = @($history | Where-Object { $_ -and [int]$_.versionCode -ne $VersionCode })
+$today = (Get-Date).ToString("yyyy-MM-dd")
+$history = @([ordered]@{
+    versionCode = $VersionCode
+    versionName = $VersionName
+    date        = $today
+    notes       = $ReleaseNotes
+}) + $history
+if ($HistoryLimit -gt 0 -and $history.Count -gt $HistoryLimit) {
+    $history = @($history[0..($HistoryLimit - 1)])
+}
+# ConvertTo-Json unwraps single-element arrays, so re-wrap when there is one entry.
+$historyJson = if ($history.Count -eq 1) {
+    "[" + (ConvertTo-Json -InputObject $history[0] -Depth 4) + "]"
+} else {
+    ConvertTo-Json -InputObject $history -Depth 4
+}
+[System.IO.File]::WriteAllText($historyPath, $historyJson, (New-Object System.Text.UTF8Encoding($false)))
+$oldVersions = @()
+foreach ($entry in $history) {
+    if (-not $entry.versionCode) { continue }
+    $oldVersions += [ordered]@{
+        versionCode = [int]$entry.versionCode
+        versionName = [string]$entry.versionName
+        date        = [string]$entry.date
+        issues      = [string]$entry.notes
+    }
+}
+Write-Host ("History       : {0} entries (including this release)" -f $history.Count)
+
 $manifest = [ordered]@{
     versionCode  = $VersionCode
     versionName  = $VersionName
@@ -133,6 +179,7 @@ $manifest = [ordered]@{
     apkSize      = $preferred.size
     deprecated   = 0
     assets       = $assets
+    oldVersions  = $oldVersions
 }
 $manifestPath = Join-Path $Dir "update.json"
 # Write without a BOM: Windows PowerShell 5.1's -Encoding UTF8 adds one, and a
