@@ -10,6 +10,7 @@ var RADIUS = 260;       // 环形菜单半径
 var ITEMS = ['图色', '点击', '滑动', '脚本', '设置'];
 
 // 1) 创建即定位：visible:false + {x, y}，show() 之前不会出现在 (0,0)
+//    尺寸单位：w/h 不写单位时按 dp，margin 用 px（与 Rhino 一致），所以这里显式写 px。
 var ball = floaty.window(
     '<frame w="' + BALL + 'px" h="' + BALL + 'px" bg="#CC1E88E5" gravity="center">' +
     '  <text id="label" text="球" textSize="14sp" textColor="#FFFFFFFF"/>' +

@@ -54,10 +54,15 @@ win.fade.on('click', function () {
     win.info.setText('已重新显示');
 });
 
-// 5) 窗口级能力：尺寸 / 位置 / 可触摸 / 调整模式
+// 5) 窗口级能力：尺寸 / 位置 / 触摸穿透 / 拖动
+//    注意：窗口宽度/高度在不写单位时按 **dp** 解析，margin 按 **px** 解析（与 Rhino 一致）——
+//    尺寸建议显式写 px，例如 w="600px"，避免 3.25 倍密度下尺寸对不上。
 win.setSize(600, -2);
 setTimeout(function () {
-    win.setTouchable(true);
+    win.setDraggable(true);            // 可按住拖动
+    win.setTouchable(false);           // 触摸穿透：点击落到下层（悬浮球/菜单常用）
+    sleep(400);
+    win.setTouchable(true);            // 恢复接收触摸
     console.log('getX/getY = ' + win.getX() + '/' + win.getY()
         + '，真实值 = ' + win.getX(true) + '/' + win.getY(true)
         + '，isShown = ' + win.isShown());

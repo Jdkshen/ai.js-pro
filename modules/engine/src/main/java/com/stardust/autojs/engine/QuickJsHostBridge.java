@@ -2450,8 +2450,11 @@ final class QuickJsHostBridge implements AutoCloseable,
         private float mScaleX = 1f;
         private float mScaleY = 1f;
         private volatile int mContentVisibility = android.view.View.VISIBLE;
+        /** 是否能接收触摸（false = FLAG_NOT_TOUCHABLE，触摸穿透到下层，与 Auto.js 语义一致）。 */
+        private volatile boolean mTouchable;
+        /** 是否可按住拖动窗口（setAdjustEnabled(true) 会打开）。 */
+        private volatile boolean mDraggable;
         private volatile boolean mAdjustable;
-        private boolean mTouchable;
         private float mTouchStartX;
         private float mTouchStartY;
         private int mStartX;
@@ -2470,9 +2473,11 @@ final class QuickJsHostBridge implements AutoCloseable,
             mEventSink = eventSink;
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
             mRoot = new android.widget.FrameLayout(context);
-            mTouchable = config.optBoolean("touchable", false);
+            // 默认可接收触摸；穿透用 setTouchable(false)，拖动单独用 draggable/setAdjustEnabled。
+            mTouchable = config.optBoolean("touchable", true);
+            mDraggable = config.optBoolean("draggable", false);
             mRoot.setOnTouchListener((view, event) -> {
-                if (!mTouchable) {
+                if (!mDraggable) {
                     return false;
                 }
                 switch (event.getActionMasked()) {
@@ -2549,6 +2554,16 @@ final class QuickJsHostBridge implements AutoCloseable,
             mParams.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
             mParams.x = c.optInt("x", 0);
             mParams.y = c.optInt("y", 0);
+            applyTouchableFlag();
+        }
+
+        /** touchable=false 时窗口不接收触摸，事件穿透到下层（·P3-1 需求）。 */
+        private void applyTouchableFlag() {
+            if (mTouchable) {
+                mParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            } else {
+                mParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            }
         }
 
         boolean show() {
@@ -2779,7 +2794,17 @@ final class QuickJsHostBridge implements AutoCloseable,
                         }
                     }
                     if (c.has("touchable")) {
-                        mTouchable = c.optBoolean("touchable", false);
+                        mTouchable = c.optBoolean("touchable", true);
+                        applyTouchableFlag();
+                        if (mShown) {
+                            try {
+                                mWindowManager.updateViewLayout(mRoot, mParams);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    }
+                    if (c.has("draggable")) {
+                        mDraggable = c.optBoolean("draggable", false);
                     }
                     if (c.has("alpha") || c.has("scale") || c.has("scaleX") || c.has("scaleY")) {
                         applyWindowTransform();
@@ -2890,7 +2915,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             if (enabled) {
                 // Rhino's adjust mode lets the user drag the window; reuse the
                 // existing touch-drag path so the switch has a visible effect.
-                mTouchable = true;
+                mDraggable = true;
             }
         }
 

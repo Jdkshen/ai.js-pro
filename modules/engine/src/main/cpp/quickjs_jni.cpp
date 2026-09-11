@@ -6247,6 +6247,11 @@ const char kBootstrapScript[] = R"JS(
                     __aiNativeFloatyUpdate(id, JSON.stringify({ touchable: !!touchable }));
                     return self || win;
                 },
+                /** 可按住拖动窗口（与 setAdjustEnabled(true) 等价；触摸穿透与此无关）。 */
+                setDraggable: function (draggable) {
+                    __aiNativeFloatyUpdate(id, JSON.stringify({ draggable: !!draggable }));
+                    return self || win;
+                },
                 setAdjustEnabled: function (enabled) {
                     __aiNativeFloatySetAdjustable(id, !!enabled);
                     return self || win;
