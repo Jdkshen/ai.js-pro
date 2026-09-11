@@ -1,8 +1,9 @@
 // @engine quickjs
-// QuickJS 新模块快速上手：require/runtime/global + ui/$ui + floaty + images
-// 首行 // @engine quickjs 必须保留
+// QuickJS 新模块快速上手
+// 用途：一页跑通 require / runtime / ui / floaty / images 的常见写法
+// 前置：无（ui 与 floaty 需要悬浮窗权限）
+// 覆盖：images / floaty / ui / require
 
-// 1) CommonJS require 与 runtime
 var mod = require('./QuickJS 模块示例.js');          // 同目录模块（缓存）
 log('require.mod = ' + mod.add(2, 3));               // 5
 log('runtime.engine = ' + runtime.engine.name);      // QuickJS

@@ -1,4 +1,8 @@
 // @engine quickjs
+// 快速帧模板坐标回归
+// 用途：验证快速帧（缩放帧）下找色/找图坐标会映射回屏幕坐标系
+// 前置：截图授权
+// 覆盖：images
 
 if (!requestScreenCapture('portrait')) throw new Error('需要截图权限');
 

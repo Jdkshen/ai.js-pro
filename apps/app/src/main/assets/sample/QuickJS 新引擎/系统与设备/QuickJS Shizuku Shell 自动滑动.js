@@ -1,4 +1,8 @@
 // @engine quickjs
+// Shizuku Shell 自动滑动
+// 用途：通过 Shizuku 执行滑动与手势输入
+// 前置：Shizuku 服务或 root
+// 覆盖：device / shizuku / shell
 
 /**
  * 使用 Shizuku Shell 自动向上滑动屏幕。

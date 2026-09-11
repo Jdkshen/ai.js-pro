@@ -1,6 +1,9 @@
 // @engine quickjs
+// Files / Http / Timers 测试
+// 用途：文件读写、网络请求与定时器的组合验证
+// 前置：网络可用
+// 覆盖：http / files / timers
 
-// 引擎信息
 console.log("QUICKJS_ENGINE", __engine__);
 
 // ---- timers ----

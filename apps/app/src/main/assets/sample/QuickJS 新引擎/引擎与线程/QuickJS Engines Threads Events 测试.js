@@ -1,4 +1,8 @@
 // @engine quickjs
+// Engines / Threads / Events 组合测试
+// 用途：子引擎、worker 与事件总线的组合用法
+// 前置：无
+// 覆盖：threads / events / engines / storages
 
 function assert(condition, message) {
     if (!condition) throw new Error('断言失败: ' + message);

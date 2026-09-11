@@ -1,4 +1,8 @@
 // @engine quickjs
+// 全分辨率与视觉加速对比
+// 用途：对比 mode:full 与 mode:fast 的像素尺寸、耗时和坐标映射
+// 前置：截图授权
+// 覆盖：images
 
 if (!requestScreenCapture('portrait')) {
     throw new Error('需要先授权屏幕捕获');

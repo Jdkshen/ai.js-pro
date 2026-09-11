@@ -1,7 +1,8 @@
 // @engine quickjs
-
-// 运行环境测试：OpenCV 5.0 DNN 后端可用性 / 版本 / 模型加载耗时。
-// 实际检测请运行 YOLO单帧直连测试.js（需要截图授权）。
+// YOLO 运行环境测试
+// 用途：检查内置 ONNX 模型、DNN 后端与截图权限是否可用
+// 前置：截图授权（模型随 APK 内置）
+// 覆盖：yolo
 
 const backend = 'dnn';
 const available = yolo.isAvailable(backend);

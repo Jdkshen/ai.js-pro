@@ -1,5 +1,9 @@
 // @engine quickjs
-// 对齐 Rhino 案例：动态悬浮文字。每秒刷新时间、当前 Activity 与包名。
+// 动态悬浮文字
+// 用途：用 setInterval 持续刷新悬浮窗文字
+// 前置：悬浮窗权限
+// 覆盖：floaty / ui / timers
+
 var window = floaty.window(
     '<frame gravity="center">' +
     '  <text id="text" textSize="16sp" textColor="#f44336"/>' +

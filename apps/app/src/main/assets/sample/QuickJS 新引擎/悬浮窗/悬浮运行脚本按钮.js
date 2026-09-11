@@ -1,6 +1,9 @@
 // @engine quickjs
-// 对齐 Rhino 案例：悬浮窗运行脚本按钮（触摸拖动版）。
-// 按住按钮可拖动窗口；按住超过 1.5 秒退出；轻点开始/停止脚本。
+// 悬浮运行脚本按钮
+// 用途：悬浮窗控制台：按钮启动/停止子脚本并显示状态
+// 前置：悬浮窗权限
+// 覆盖：floaty / engines / files / timers
+
 var path = '/sdcard/脚本/test.js';
 if (!files.exists(path)) {
     toast('脚本文件不存在: ' + path);

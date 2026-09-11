@@ -1,6 +1,9 @@
 // @engine quickjs
+// 模板匹配
+// 用途：用 findImage / matchTemplate 在截图里定位模板图并输出相似度
+// 前置：截图授权 + 同目录模板图
+// 覆盖：images
 
-// 直接读取 APK 内置素材，因此从示例页运行或只导入这一份脚本都可以使用。
 var exampleRoot = 'asset://sample/Rhino 引擎/图片与图色处理/找图/';
 var sourcePath = exampleRoot + 'super_mario.jpg';
 var templatePath = exampleRoot + 'block.png';

@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS Shell 模块完整测试
+// Shell 模块测试
+// 用途：普通与 root shell 命令执行、超时与输出
+// 前置：普通命令无需 root（root 用例会检测可用性）
+// 覆盖：shell
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }

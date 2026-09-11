@@ -1,7 +1,8 @@
 // @engine quickjs
-
-// YOLO 基准测试（OpenCV 5.0 DNN 后端）：预热 1 帧 + 测 N 帧，输出平均耗时。
-// 需要截图授权。想跑更准可以加大 frameCount。
+// YOLO 基准测试
+// 用途：测量预处理 / 推理平均耗时与端到端 FPS
+// 前置：截图授权
+// 覆盖：yolo
 
 const frameCount = 5;
 // 基准直接使用最新缓存帧，避免把等待屏幕刷新算入模型性能。

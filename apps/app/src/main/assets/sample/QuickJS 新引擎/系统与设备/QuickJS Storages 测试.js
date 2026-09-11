@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS Storages 模块完整测试
+// Storages 模块测试
+// 用途：本地存储的增删改查与清空
+// 前置：无
+// 覆盖：storages
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }

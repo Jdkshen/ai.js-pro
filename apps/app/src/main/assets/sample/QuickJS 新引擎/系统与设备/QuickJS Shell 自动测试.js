@@ -1,4 +1,8 @@
 // @engine quickjs
+// Shell 自动测试
+// 用途：自动化校验 shell 返回值与错误路径
+// 前置：无
+// 覆盖：shell
 
 function assert(condition, message) {
     if (!condition) throw new Error('断言失败: ' + message);

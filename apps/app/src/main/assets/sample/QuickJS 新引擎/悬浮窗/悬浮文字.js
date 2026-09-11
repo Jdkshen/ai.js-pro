@@ -1,5 +1,9 @@
 // @engine quickjs
-// 对齐 Rhino 案例：悬浮文字。点击文字切换"调整模式"，开启后可拖动窗口。
+// 悬浮文字
+// 用途：对齐 Rhino 案例：点击文字切换调整模式后可拖动
+// 前置：悬浮窗权限
+// 覆盖：floaty / timers
+
 var window = floaty.window(
     '<frame gravity="center">' +
     '  <text id="text" text="点击可调整位置" textSize="16sp"/>' +

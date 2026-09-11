@@ -1,4 +1,8 @@
 // @engine quickjs
+// Worker 参数与结果测试
+// 用途：worker 的 __args 传参、返回值与 join
+// 前置：无
+// 覆盖：threads
 
 var worker = threads.start(function () {
     return __args.a * __args.b;

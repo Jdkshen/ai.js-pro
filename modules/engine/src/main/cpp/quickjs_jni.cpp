@@ -790,6 +790,33 @@ JSValue nativeJavaProbe(JSContext *context, JSValueConst, int argc, JSValueConst
     return JS_NewStringLen(context, text.data(), text.size());
 }
 
+/** 嵌套类全限定名（`android.os.Build.VERSION` → `android.os.Build$VERSION`），找不到返回空串。 */
+JSValue nativeJavaNestedClassName(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const std::string name = stringArg(context, argc, argv, 1);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaNestedClassName",
+                                        "(JLjava/lang/String;)Ljava/lang/String;");
+    jstring javaName = toJavaString(env, name);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, static_cast<jlong>(handle), javaName));
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = result == nullptr ? std::string() : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
 /** 方法调用（receiver 是类句柄时按静态方法解析），返回 JSON 编码的结果。 */
 JSValue nativeJavaCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
@@ -6396,6 +6423,11 @@ const char kBootstrapScript[] = R"JS(
         if (cached.length > 2 && cached.charAt(0) === 'p' && cached.charAt(1) === ':') {
             return decodeJavaResult(__aiNativeJavaCall(handle, cached.substring(2), '[]'));
         }
+        // c：嵌套类（android.os.Build.VERSION 这类写法，与 Rhino 一致）
+        if (cached === 'c') {
+            var nestedName = String(__aiNativeJavaNestedClassName(handle, prop));
+            return nestedName === '' ? undefined : requireJavaClass(nestedName);
+        }
         return undefined;
     }
 
@@ -6457,6 +6489,17 @@ const char kBootstrapScript[] = R"JS(
                 if (prop === '__isJavaClass') return true;
                 if (prop === 'name') return className;
                 if (prop === 'class') return proxy;
+                if (typeof prop === 'symbol') {
+                    // 字符串转换（日志、拼接）与 Rhino 一致：显示成 "class 全限定名"
+                    if (typeof Symbol !== 'undefined' && prop === Symbol.toPrimitive) {
+                        return function () { return 'class ' + className; };
+                    }
+                    return undefined;
+                }
+                if (prop === 'toString') {
+                    // 类引用被拼接/打印时给出可读文本（类上的静态 toString 极罕见，不做优先级区分）
+                    return function () { return 'class ' + className; };
+                }
                 if (typeof prop !== 'string') return undefined;
                 // then 必须为空（thenable 保护）；未知成员返回 undefined（与 Rhino 的 NOT_FOUND 一致）。
                 if (prop === 'then') return undefined;
@@ -7784,6 +7827,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeStatusBarColor", nativeStatusBarColor, 1);
     installNativeFunction(state->context, global, "__aiNativeJavaResolveClass", nativeJavaResolveClass, 1);
     installNativeFunction(state->context, global, "__aiNativeJavaProbe", nativeJavaProbe, 2);
+    installNativeFunction(state->context, global, "__aiNativeJavaNestedClassName",
+                          nativeJavaNestedClassName, 2);
     installNativeFunction(state->context, global, "__aiNativeJavaCall", nativeJavaCall, 3);
     installNativeFunction(state->context, global, "__aiNativeJavaGetField", nativeJavaGetField, 2);
     installNativeFunction(state->context, global, "__aiNativeJavaSetField", nativeJavaSetField, 3);

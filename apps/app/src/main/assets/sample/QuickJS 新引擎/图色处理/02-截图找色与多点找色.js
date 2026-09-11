@@ -1,4 +1,8 @@
 // @engine quickjs
+// 截图找色与多点找色
+// 用途：在屏幕帧上查找单色与多点颜色路径，并打印命中坐标
+// 前置：截图授权
+// 覆盖：images
 
 if (!requestScreenCapture('portrait')) {
     throw new Error('需要先授权屏幕捕获授权');

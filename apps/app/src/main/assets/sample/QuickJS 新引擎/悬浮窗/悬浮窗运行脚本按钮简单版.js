@@ -1,6 +1,9 @@
 // @engine quickjs
-// 对齐 Rhino 案例：悬浮窗运行脚本按钮（简单版）。
-// 点击按钮开始/停止运行指定脚本，长按进入调整模式。
+// 悬浮窗运行脚本按钮（简单版）
+// 用途：最小可用的「按钮 → 执行脚本」悬浮窗
+// 前置：悬浮窗权限
+// 覆盖：floaty / engines / files / 手势/输入 / timers
+
 var path = '/sdcard/脚本/test.js';
 if (!files.exists(path)) {
     toast('脚本文件不存在: ' + path);

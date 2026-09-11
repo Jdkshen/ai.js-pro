@@ -1,4 +1,8 @@
 // @engine quickjs
+// 系统事件监听测试
+// 用途：按键 / 触摸 / 通知 / Toast 等系统事件回调
+// 前置：无障碍服务（按键与触摸事件）
+// 覆盖：events / 手势/输入 / timers
 
 function assert(name, condition) {
     if (!condition) throw new Error('ASSERT_FAIL: ' + name);

@@ -2,7 +2,7 @@
 
 更新日期：2026-09-11
 
-设备：Mi8 `ce4d2bdb`（LineageOS/Android 15）与主力机 `DQKFJB59596L45BI`（Android 16 / SDK 36）——同一份回归脚本两端各 177 项全绿；K40 `cccc62c7` 跑 compat/lite 与 Rhino 兼容回归。
+设备：Mi8 `ce4d2bdb`（LineageOS/Android 15）为基线机，回归 188 项全绿；主力机 `DQKFJB59596L45BI`（Android 16 / SDK 36）上一轮同一脚本 177 项全绿（OpenCV / Java 互操作保真度增项待复跑）；K40 `cccc62c7` 跑 compat/lite 与 Rhino 兼容回归。
 
 ## 已自动验证
 
@@ -21,7 +21,7 @@
 | io / 文本文件 | `files.open` 写入/读取/追加/未知模式 null + 全局 `open` 与 `io` 模块均通过（用例先 `files.createWithDirs`；Rhino 的 `files.write` 同样不自动建目录） | Mi8 + 新机 Android 16（回归测试 177 项全绿） |
 | web / 跨线程回调 | `newInjectableWebView()` 加载 data URL 后 `inject(script, callback)` 拿到页面里的值；`rhino.call/eval` 的任务分发与 sleep 期间的跨线程回调均通过 | Mi8（回归测试 143 项全绿） |
 | continuation | `delay` 阻塞等待、`create/await` 与 `Promise.await` 的明确报错、`enabled === false` 均通过 | Mi8（回归测试 143 项全绿） |
-| Java 互操作 | `Packages`/`importClass`/`importPackage`/`Java.type`、静态字段与方法、`new` 构造、实例字段读写、JavaBean 属性（`file.path`/`context.packageName`）、重载解析（`String.valueOf(42)` 选 int）、Java 异常转 Error、Java 数组返回值、JS 数组作可变参数；`context` 为真实 Android Context；Rhino 预导入的 10 个类名全部可用 | Mi8 + 新机 Android 16（回归测试 177 项全绿） |
+| Java 互操作 | `Packages`/`importClass`/`importPackage`/`Java.type`、静态字段与方法、`new` 构造、实例字段读写、JavaBean 属性（`file.path`/`context.packageName`）、嵌套类（`android.os.Build.VERSION.SDK_INT`、`java.lang.Thread.State.NEW`）、`obj.getClass()` 返回可用 `java.lang.Class`（`getName()`/`getSimpleName()`/`String(cls)`）、重载解析（`String.valueOf(42)` 选 int）、Java 异常转 Error、Java 数组返回值、JS 数组作可变参数；`context` 为真实 Android Context；Rhino 预导入的 10 个类名全部可用 | Mi8 + 新机 Android 16（回归测试 188 项全绿） |
 | OpenCV / 图色 | `images.opencv` 类映射（Mat/Core/Imgproc/CvType/Scalar/Size/Point/Rect/Bitmap/BitmapFactory）与 OpenCV Java API 直连（`new Mat(w,h,CV_8UC1)` + `Imgproc.threshold`）；帧→`Mat`→帧往返、`inRange`/`interval`/`adaptiveThreshold`/`gaussianBlur`/`medianBlur`/`findCircles`/`findAllPointsForColor`、`toBytes`/`fromBytes` 往返、`readPixels` 全部通过（无截图权限时用例自动改用 OpenCV 合成帧，不依赖授权） | Mi8（回归测试 184 项全绿，`images` 成员 42 ⊇ Rhino 39） |
 | UI | 布局创建、文本更新/回读、`ui.<id>`/`$ui.<id>` 控件代理、任意属性 `attr` 读写、`ui.emitter`/`ui.findView`/`ui.post`/`ui.isUiThread`/`ui.statusBarColor` 通过（`ui` 为覆盖层模式，非 Rhino 的 UI Activity） | Mi8（回归测试 162 项全绿） |
 | floaty | 真实创建、位置/尺寸/文本更新、关闭通过 | compat/lite K40 通过 |
@@ -50,7 +50,8 @@
 ## 样例约束
 
 - `QuickJS 新引擎` 目录下的每个 `.js` 必须以 `// @engine quickjs` 作为第一条非空行。
-- 依赖 E4X、任意 Java 反射、旧 `"ui"` 模式或 Rhino 对象代理的样例归入 `Rhino 引擎`。
+- 每个样例统一头部：`// @engine quickjs` → 标题 → `// 用途：…` → `// 前置：…`（权限/依赖）→ `// 覆盖：…`（涉及的模块，由规范化脚本按内容生成）。
+- 依赖 E4X、旧 `"ui"` 模式或 Rhino 对象代理的样例归入 `Rhino 引擎`（QuickJS 已支持任意 Java 反射，但仍无反式写法）。
 - Gradle `verifyQuickJsSamplesMarked` 在每次 `preBuild` 阶段阻止未标记样例再次混入。
 
 只有上述阻塞项完成、compat/lite 设备矩阵持续通过，才能从正式版移除 Rhino。

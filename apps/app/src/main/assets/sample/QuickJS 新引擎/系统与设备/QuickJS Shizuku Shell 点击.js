@@ -1,6 +1,9 @@
 // @engine quickjs
+// Shizuku Shell 点击
+// 用途：通过 Shizuku 授权执行 shell 输入点击
+// 前置：Shizuku 服务或 root
+// 覆盖：shizuku / shell
 
-// 修改成需要点击的原屏幕坐标。
 const x = 500;
 const y = 800;
 

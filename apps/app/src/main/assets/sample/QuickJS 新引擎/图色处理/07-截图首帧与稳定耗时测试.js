@@ -1,4 +1,8 @@
 // @engine quickjs
+// 截图首帧与稳定耗时测试
+// 用途：测量首帧、稳定帧与 fresh 模式的耗时分布
+// 前置：截图授权
+// 覆盖：—
 
 if (!requestScreenCapture('portrait')) {
     throw new Error('需要先授权屏幕捕获');

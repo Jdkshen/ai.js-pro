@@ -1,4 +1,8 @@
 // @engine quickjs
+// QuickJS 运行环境测试
+// 用途：确认脚本跑在 QuickJS 引擎上并输出环境信息
+// 前置：无
+// 覆盖：—
 
 const result = {
     engine: __engine__,

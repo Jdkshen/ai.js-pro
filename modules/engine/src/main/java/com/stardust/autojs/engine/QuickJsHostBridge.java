@@ -3820,9 +3820,14 @@ final class QuickJsHostBridge implements AutoCloseable,
         return mJavaInterop.objectForHandle(handle);
     }
 
-    /** `'m'` 有方法 / `'f'` 有字段 / 空串都没有。 */
+    /** `'m'` 有方法 / `'f'` 有字段 / `'p:getX'` JavaBean 属性 / `'c'` 嵌套类 / 空串都没有。 */
     public String javaProbe(long handle, String name) {
         return mJavaInterop.probe(handle, name);
+    }
+
+    /** 嵌套类全限定名（`android.os.Build` + `VERSION` → `android.os.Build$VERSION`），找不到返回空串。 */
+    public String javaNestedClassName(long handle, String name) {
+        return mJavaInterop.nestedClassName(handle, name);
     }
 
     public String javaCall(long handle, String name, String argsJson) throws JSONException {

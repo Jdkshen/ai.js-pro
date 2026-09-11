@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS Engines 模块完整测试
+// Engines 模块测试
+// 用途：枚举 / 启动 / 停止脚本引擎
+// 前置：无
+// 覆盖：engines
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }

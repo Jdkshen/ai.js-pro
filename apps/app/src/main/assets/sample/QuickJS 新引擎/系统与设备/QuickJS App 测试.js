@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS App 模块完整测试
+// App 模块测试
+// 用途：启动应用、打开链接、读取应用信息
+// 前置：无
+// 覆盖：app
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }

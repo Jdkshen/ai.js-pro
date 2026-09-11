@@ -1,4 +1,8 @@
 // @engine quickjs
+// 图色 API 自动回归
+// 用途：截图 → 取色 / 找色 / 多点找色 / 范围查找 → 释放的完整自动回归
+// 前置：截图授权（首帧会弹窗）
+// 覆盖：images / colors / files / 手势/输入
 
 function assert(condition, message) {
     if (!condition) throw new Error('断言失败: ' + message);

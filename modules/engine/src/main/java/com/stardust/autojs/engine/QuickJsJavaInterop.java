@@ -97,7 +97,7 @@ final class QuickJsJavaInterop {
         return loader != null ? loader : QuickJsJavaInterop.class.getClassLoader();
     }
 
-    /** `m` 方法 / `f` 字段 / `p:<getter>` JavaBean 属性 / 空串都没有。 */
+    /** `m` 方法 / `f` 字段 / `p:<getter>` JavaBean 属性 / `c` 嵌套类 / 空串都没有。 */
     public String probe(long handle, String name) {
         if (name == null || name.isEmpty()) {
             return "";
@@ -106,14 +106,18 @@ final class QuickJsJavaInterop {
         if (receiver == null) {
             return "";
         }
-        Class<?> type = receiver instanceof Class ? (Class<?>) receiver : receiver.getClass();
+        Class<?> type = receiverType(receiver);
         if (!methodsNamed(type, name).isEmpty()) {
             return "m";
         }
         if (findField(type, name) != null) {
             return "f";
         }
-        // Rhino 的 JavaBean 语义：没有同名方法/字段时，getName()/isName() 当属性用。
+        // Rhino 的语义：类接收者先看嵌套类（android.os.Build.VERSION、Thread.State），
+        // 实例接收者才走 JavaBean 属性（getName()/isName()）。
+        if (isStaticReceiver(receiver)) {
+            return nestedClass(type, name) != null ? "c" : "";
+        }
         if (name.length() > 1) {
             String suffix = Character.toUpperCase(name.charAt(0)) + name.substring(1);
             if (!methodsNamed(type, "get" + suffix).isEmpty()) {
@@ -126,20 +130,44 @@ final class QuickJsJavaInterop {
         return "";
     }
 
+    /** 嵌套类全限定名（`android.os.Build` + `VERSION` → `android.os.Build$VERSION`）。 */
+    public String nestedClassName(long handle, String name) {
+        if (name == null || name.isEmpty()) {
+            return "";
+        }
+        Object receiver = mHandles.get(handle);
+        if (receiver == null || !isStaticReceiver(receiver)) {
+            return "";
+        }
+        Class<?> nested = nestedClass(receiverType(receiver), name);
+        return nested == null ? "" : nested.getName();
+    }
+
+    private Class<?> nestedClass(Class<?> top, String name) {
+        if (top == null || name.isEmpty()) {
+            return null;
+        }
+        try {
+            return Class.forName(top.getName() + "$" + name, false, classLoader());
+        } catch (ClassNotFoundException | LinkageError notFound) {
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------------
     // 调用 / 字段 / 构造
     // ------------------------------------------------------------------
 
     public String call(long handle, String name, String argsJson) throws JSONException {
         Object receiver = requireHandle(handle);
-        boolean staticReceiver = receiver instanceof Class;
-        Class<?> type = staticReceiver ? (Class<?>) receiver : receiver.getClass();
+        boolean staticReceiver = isStaticReceiver(receiver);
+        Class<?> type = receiverType(receiver);
         List<Object> rawArgs = parseArgs(argsJson);
         List<Method> candidates = methodsNamed(type, name);
         if (candidates.isEmpty()) {
             Field field = findField(type, name);
             if (field != null) {
-                return encode(readField(field, staticReceiver ? null : receiver));
+                return encode(readField(field, invocationTarget(receiver)));
             }
             throw new IllegalArgumentException("找不到方法或字段：" + type.getName() + "." + name);
         }
@@ -170,13 +198,13 @@ final class QuickJsJavaInterop {
                     + "." + name + "(" + rawArgs.size() + " 个参数)");
         }
         // InvocationFailure 直接向上抛：native 会把它转成脚本侧的 Error（消息带 Java 异常类名）。
-        return encode(invoke(method, staticReceiver ? null : receiver, converted));
+        return encode(invoke(method, invocationTarget(receiver), converted));
     }
 
     public String getField(long handle, String name) throws JSONException {
         Object receiver = requireHandle(handle);
-        boolean staticReceiver = receiver instanceof Class;
-        Class<?> type = staticReceiver ? (Class<?>) receiver : receiver.getClass();
+        boolean staticReceiver = isStaticReceiver(receiver);
+        Class<?> type = receiverType(receiver);
         Field field = findField(type, name);
         if (field == null) {
             throw new IllegalArgumentException("找不到字段：" + type.getName() + "." + name);
@@ -184,20 +212,20 @@ final class QuickJsJavaInterop {
         if (staticReceiver && !Modifier.isStatic(field.getModifiers())) {
             throw new IllegalArgumentException("字段不是静态字段：" + type.getName() + "." + name);
         }
-        return encode(readField(field, staticReceiver ? null : receiver));
+        return encode(readField(field, invocationTarget(receiver)));
     }
 
     public boolean setField(long handle, String name, String valueJson) throws JSONException {
         Object receiver = requireHandle(handle);
-        boolean staticReceiver = receiver instanceof Class;
-        Class<?> type = staticReceiver ? (Class<?>) receiver : receiver.getClass();
+        boolean staticReceiver = isStaticReceiver(receiver);
+        Class<?> type = receiverType(receiver);
         Field field = findField(type, name);
         if (field == null) {
             throw new IllegalArgumentException("找不到字段：" + type.getName() + "." + name);
         }
         Object value = convertValue(field.getType(), parseSingleArg(valueJson));
         try {
-            field.set(staticReceiver ? null : receiver, value);
+            field.set(invocationTarget(receiver), value);
             return true;
         } catch (IllegalAccessException error) {
             throw new IllegalStateException("无法写入字段：" + type.getName() + "." + name, error);
@@ -206,10 +234,11 @@ final class QuickJsJavaInterop {
 
     public String instantiate(long classHandle, String argsJson) throws JSONException {
         Object receiver = requireHandle(classHandle);
-        if (!(receiver instanceof Class)) {
+        Class<?> type = receiver instanceof ClassObject ? ((ClassObject) receiver).type
+                : receiver instanceof Class ? (Class<?>) receiver : null;
+        if (type == null) {
             throw new IllegalArgumentException("不是 Java 类句柄");
         }
-        Class<?> type = (Class<?>) receiver;
         List<Object> rawArgs = parseArgs(argsJson);
         Constructor<?> best = null;
         Object[] converted = null;
@@ -622,10 +651,48 @@ final class QuickJsJavaInterop {
             }
             return array;
         }
-        // 其余一律包成句柄：类对象带 __isClass，普通实例带 __class 方便脚本判断。
-        return referenceHandle(value, value instanceof Class
-                ? ((Class<?>) value).getName() : value.getClass().getName(),
-                value instanceof Class);
+        // 其余一律包成句柄：Class 值包装成“Class 对象”（obj.getClass() 与 Rhino 一样返回可用实例），
+        // 普通实例带 __class 方便脚本判断。
+        if (value instanceof Class) {
+            return referenceHandle(new ClassObject((Class<?>) value), "java.lang.Class", false);
+        }
+        return referenceHandle(value, value.getClass().getName(), false);
+    }
+
+    /**
+     * 脚本里 `obj.getClass()` 的返回值：接收者是实例（成员来自 java.lang.Class），
+     * 不是“类引用”（类引用是 Packages/Java.type 的产物，仍由 Class 直接表示）。
+     */
+    private static final class ClassObject {
+        final Class<?> type;
+
+        ClassObject(Class<?> type) {
+            this.type = type;
+        }
+
+        @Override
+        public String toString() {
+            return "class " + type.getName();
+        }
+    }
+
+    private static Class<?> receiverType(Object receiver) {
+        if (receiver instanceof ClassObject) {
+            return Class.class;
+        }
+        return receiver instanceof Class ? (Class<?>) receiver : receiver.getClass();
+    }
+
+    private static boolean isStaticReceiver(Object receiver) {
+        return receiver instanceof Class;
+    }
+
+    /** 反射调用/字段读写的目标：类引用用 null（静态），Class 对象用被包装的 Class 实例。 */
+    private static Object invocationTarget(Object receiver) {
+        if (receiver instanceof ClassObject) {
+            return ((ClassObject) receiver).type;
+        }
+        return receiver instanceof Class ? null : receiver;
     }
 
     private JSONArray encodeArray(Object[] values) throws JSONException {

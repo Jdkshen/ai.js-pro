@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS Device 模块完整测试
+// Device 模块测试
+// 用途：屏幕尺寸、电量、内存等设备信息
+// 前置：无
+// 覆盖：device
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }

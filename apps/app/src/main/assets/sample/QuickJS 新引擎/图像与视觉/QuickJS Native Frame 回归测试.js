@@ -1,4 +1,8 @@
 // @engine quickjs
+// Native Frame 回归测试
+// 用途：NativeFrame 的创建、取色、回收与回收后访问拒绝
+// 前置：截图授权
+// 覆盖：images
 
 if (!requestScreenCapture('portrait')) {
     throw new Error('用户取消了屏幕捕获授权');

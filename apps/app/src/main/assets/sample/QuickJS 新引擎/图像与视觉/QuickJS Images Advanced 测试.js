@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS Images 高级功能测试 (rotate/threshold/blur)
+// Images 高级功能测试
+// 用途：fromBase64 / toBase64 / concat / 模板匹配等进阶图色接口
+// 前置：截图授权 + 同目录图片资源
+// 覆盖：images / files
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('  PASS: ' + name); }

@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS 全模块回归测试 — 一次性验证所有白名单桥
+// QuickJS 全模块回归测试
+// 用途：188 项断言覆盖全部白名单模块与 Java 互操作，输出 === QUICKJS_REGRESSION_OK ===
+// 前置：无（无障碍 / 截图相关用例在缺少权限时自动跳过）
+// 覆盖：Java 互操作 / images / floaty / ui / dialogs / threads / events / engines / http / files / storages / device / app / shell / console 浮窗 / 选择器 / 手势/输入 / timers / continuation / require
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }
@@ -508,6 +512,24 @@ assert('context 是真实 Android Context', typeof context.getPackageName === 'f
     && context.getPackageName() === context.packageName
     && typeof context.packageName === 'string' && context.packageName.length > 0
     && context.getPackageName().indexOf('.') > 0);
+assert('obj.getClass() 返回 Class 对象', (function () {
+    var cls = context.getClass();
+    return typeof cls.getName === 'function' && typeof cls.getSimpleName === 'function'
+        && cls.getName().indexOf('.') > 0
+        && cls.getSimpleName().length > 0
+        && String(cls) === 'class ' + cls.getName();
+})());
+assert('类引用转字符串', String(Packages.android.content.Intent) === 'class android.content.Intent');
+assert('嵌套类访问（Build.VERSION）', android.os.Build.VERSION.SDK_INT > 0
+    && android.os.Build.VERSION_CODES.M === 23
+    && String(android.os.Build.VERSION).indexOf('$VERSION') > 0);
+assert('枚举嵌套类（Thread.State）', (function () {
+    var state = java.lang.Thread.State.NEW;
+    // 与 Rhino 一致：.name 是方法本身，取字符串要调用 .name()
+    return state !== undefined && String(state) === 'NEW'
+        && typeof state.name === 'function' && state.name() === 'NEW'
+        && state.ordinal() === 0;
+})());
 assert('JavaBean 属性访问', (function () {
     var file = context.getFilesDir();
     return String(file) === file.path && typeof file.absolutePath === 'string'

@@ -1,5 +1,8 @@
 // @engine quickjs
-// QuickJS app / storages / device 模块测试
+// App / Storages / Device 组合测试
+// 用途：应用信息、本地存储与设备信息的批量断言
+// 前置：无
+// 覆盖：storages / device / app
 
 console.log('=== QuickJS 新模块测试 ===');
 

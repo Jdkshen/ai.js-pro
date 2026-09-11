@@ -1,5 +1,8 @@
 // @engine quickjs
-// 非交互回归：验证 QuickJS UI 布局、控件更新与悬浮窗生命周期。
+// UI 与 Floaty 回归测试
+// 用途：ui 覆盖层布局与 floaty 窗口的创建、更新与关闭
+// 前置：悬浮窗权限
+// 覆盖：floaty / ui / device / 手势/输入
 
 var win = null;
 var uiOpened = false;

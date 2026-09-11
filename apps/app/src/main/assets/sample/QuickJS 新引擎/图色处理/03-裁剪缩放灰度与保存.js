@@ -1,4 +1,8 @@
 // @engine quickjs
+// 裁剪、缩放、灰度与保存
+// 用途：NativeFrame 的 clip / resize / scale / grayscale / save 串起来看效果
+// 前置：截图授权 + 存储权限（保存到脚本目录）
+// 覆盖：images / files / 手势/输入
 
 if (!requestScreenCapture('portrait')) throw new Error('需要截图权限');
 

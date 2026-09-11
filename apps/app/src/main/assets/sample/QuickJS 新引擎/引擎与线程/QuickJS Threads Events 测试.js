@@ -1,5 +1,9 @@
 // @engine quickjs
-// QuickJS Threads + Events 模块完整测试
+// Threads / Events 模块测试
+// 用途：worker 启动等待、事件总线与系统事件观察
+// 前置：无
+// 覆盖：threads / events
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }

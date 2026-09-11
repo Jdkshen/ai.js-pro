@@ -1,6 +1,9 @@
 // @engine quickjs
-// 对齐 Rhino 案例：悬浮窗输入框（QuickJS 完整版）。
-// 返回键关闭焦点、触摸输入框重新聚焦、长按确定切换调整模式。
+// 悬浮窗输入框
+// 用途：悬浮窗里的输入框取值与回填
+// 前置：悬浮窗权限
+// 覆盖：floaty / 手势/输入 / timers
+
 var window = floaty.window(
     '<vertical>' +
     '  <input id="input" text="请输入你的名字" textSize="16sp" focusable="true"/>' +

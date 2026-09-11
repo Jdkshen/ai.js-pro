@@ -1,4 +1,8 @@
 // @engine quickjs
+// Dialogs 交互示例
+// 用途：对话框返回值的常见处理写法
+// 前置：需要手动点按对话框
+// 覆盖：dialogs
 
 console.log('=== QuickJS dialogs 交互示例 ===');
 

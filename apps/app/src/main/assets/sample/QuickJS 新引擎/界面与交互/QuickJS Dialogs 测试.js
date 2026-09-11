@@ -1,6 +1,9 @@
 // @engine quickjs
-// QuickJS Dialogs 模块完整测试
-// 注意: 此脚本会弹出对话框，需要用户交互
+// Dialogs 模块测试
+// 用途：alert / confirm / prompt / select / 单选 / 多选对话框
+// 前置：需要手动点按对话框
+// 覆盖：dialogs
+
 var pass = 0, fail = 0;
 function assert(name, cond) {
     if (cond) { pass++; console.log('✅ ' + name); }
