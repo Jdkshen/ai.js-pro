@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Run the QuickJS/Rhino flavor matrix on one connected Android device.
 .PARAMETER Serial
