@@ -199,7 +199,6 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
 
                 new DrawerMenuGroup(R.string.text_others),
                 mConnectionItem,
-                new DrawerMenuItem(R.drawable.ic_personalize, R.string.text_theme_color, this::openThemeColorSettings),
                 new DrawerMenuItem(R.drawable.ic_night_mode, R.string.text_night_mode, R.string.key_night_mode, this::toggleNightMode),
                 mCheckForUpdatesItem
         )));
@@ -487,10 +486,6 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
         } else if (!checked && isFloatingWindowShowing) {
             FloatyWindowManger.hideCircularMenu();
         }
-    }
-
-    void openThemeColorSettings(DrawerMenuItemViewHolder holder) {
-        SettingsActivity.selectThemeColor(getActivity());
     }
 
     void toggleNightMode(DrawerMenuItemViewHolder holder) {

@@ -58,10 +58,12 @@
 
 ### 待做
 
-- `ui.settings.SettingsActivity`：它的 `selectThemeColor(Context)` 仍被抽屉调用，删 body 前先把该静态方法搬到合适的位置（如 `AijsMiuixTheme` 配套工具类）；
-- `MainActivity` 的 legacy 分支残留、`DrawerFragment` 的 `fragment_drawer` 回退分支与其私有 helper；
-- 随之无引用的 `res/layout/*.xml`（`activity_documentation`、`activity_about`、`activity_log`、`activity_service_status`、`activity_login`、`activity_register`、`activity_build` 等）；
-- 收尾目标：全仓 `MIUIX_PILOT` 只剩注释/文档；`BuildConfig.MIUIX_PILOT` 字段标注 deprecated 并在下一轮删除。
+- ~~`ui.settings.SettingsActivity`~~ 已于 2026-09-12 完成：`selectThemeColor` 旧主题色选择器随 legacy 设置页一起删除
+  （Miuix 抽屉自带「主题」分组：暗色/跟随系统），DrawerFragment 里引用它的失效菜单项一并移除；
+  旧资源 `activity_settings/activity_about(_items)/activity_build/activity_documentation/activity_log/activity_login/activity_register/activity_service_status.xml`
+  与 `res/xml/preferences.xml` 已删；
+- `MainActivity` 的 legacy 分支残留、`DrawerFragment` 的 `fragment_drawer` 回退分支与其私有 helper（下一个提交）；
+- 全仓 `MIUIX_PILOT` 现在只剩注释与 `SettingsActivity`/`DrawerFragment` 两处历史提及 → 字段可在下一轮从 BuildConfig 删除。
 
 验收：`assembleMiuixCompatDebug` + 单测 + 真机点检（入口转发 + 页面渲染）确认没有页面变空白。
 
