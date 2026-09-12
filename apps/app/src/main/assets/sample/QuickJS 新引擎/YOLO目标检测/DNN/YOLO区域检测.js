@@ -17,8 +17,39 @@ var BUILTIN_MODEL = {
     model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_640.onnx',
     labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
     inputSize: 640,
+    inputWidth: 0,
+    inputHeight: 0,
     source: '内置资源'
 };
+// 输入尺寸：方形用 inputSize；竖屏矩形（如 160x320）用 inputWidth/inputHeight，由「模型管理.js」设置
+function rectShapeOf(id) {
+    const store = storages.create(MODEL_STORE);
+    const width = Number(store.get('inputWidth.' + id, 0));
+    const height = Number(store.get('inputHeight.' + id, 0));
+    return width >= 32 && width <= 2048 && height >= 32 && height <= 2048
+        ? [Math.round(width), Math.round(height)] : [0, 0];
+}
+function shapeText(model) {
+    return model.inputWidth > 0 && model.inputHeight > 0
+        ? (model.inputWidth + 'x' + model.inputHeight + '（竖屏）')
+        : ('inputSize=' + model.inputSize);
+}
+function loadOptionsFor(backend, model) {
+    const options = {
+        backend: backend,
+        model: model.model,
+        labels: model.labels || undefined,
+        threads: 4
+    };
+    if (model.inputWidth > 0 && model.inputHeight > 0) {
+        options.inputWidth = model.inputWidth;
+        options.inputHeight = model.inputHeight;
+    } else {
+        options.inputSize = model.inputSize;
+    }
+    return options;
+}
+
 function resolveModel() {
     var store = storages.create(MODEL_STORE);
     var id = String(store.get('current', '@builtin'));
@@ -30,24 +61,21 @@ function resolveModel() {
         return BUILTIN_MODEL;
     }
     var labels = String(store.get('labels.' + id, files.join(dir, 'labels.txt')));
+    const shape = rectShapeOf(id);
     return {
         name: id.replace(/\.onnx$/i, ''),
         model: path,
         labels: files.isFile(labels) ? labels : '',
         inputSize: Number(store.get('inputSize.' + id, 640)),
+        inputWidth: shape[0],
+        inputHeight: shape[1],
         source: dir
     };
 }
 var MODEL = resolveModel();
-console.log('[模型] 本次识别使用：' + MODEL.name + '（inputSize=' + MODEL.inputSize + '，来源：' + MODEL.source + '）');
+console.log('[模型] 本次识别使用：' + MODEL.name + '（' + shapeText(MODEL) + '，来源：' + MODEL.source + '）');
 
-var detector = yolo.load({
-    backend: backend,
-    model: MODEL.model,
-    labels: MODEL.labels || undefined,
-    inputSize: MODEL.inputSize,
-    threads: 4
-});
+var detector = yolo.load(loadOptionsFor(backend, MODEL));
 
 var drawingShown = drawing.show();
 console.log('DRAWING_SHOW', drawingShown);

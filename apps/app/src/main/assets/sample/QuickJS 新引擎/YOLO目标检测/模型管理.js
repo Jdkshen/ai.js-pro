@@ -84,6 +84,53 @@ function inputSizeFor(id) {
     return size >= 32 && size <= 2048 ? Math.round(size) : fallback;
 }
 
+// 竖屏矩形模型（如 160x320）：两个值都合法才算数；竖屏手机屏幕用矩形输入能省掉
+// letterbox 两侧的灰边，同样内容质量下推理量减半（见 QUICKJS_ENGINE.md 实测）。
+function inputRectFor(id) {
+    var width = Number(store.get('inputWidth.' + id, 0));
+    var height = Number(store.get('inputHeight.' + id, 0));
+    var ok = width >= 32 && width <= 2048 && height >= 32 && height <= 2048;
+    return ok ? { width: Math.round(width), height: Math.round(height) } : null;
+}
+
+// 显示用：方形是 "640"，矩形是 "160x320"
+function shapeTextForId(id) {
+    var rect = inputRectFor(id);
+    return rect ? (rect.width + 'x' + rect.height) : String(inputSizeFor(id));
+}
+
+// 解析用户输入："640" → 方形；"160x320" / "160×320" / "160*320" → 矩形
+function parseShapeText(text) {
+    var trimmed = String(text).replace(/^\s+|\s+$/g, '');
+    var rect = /^(\d{2,4})\s*[x×*_\-]\s*(\d{2,4})$/.exec(trimmed);
+    if (rect) {
+        var width = Number(rect[1]);
+        var height = Number(rect[2]);
+        if (!(width >= 32 && width <= 2048 && height >= 32 && height <= 2048)) return null;
+        return { width: Math.round(width), height: Math.round(height) };
+    }
+    if (!/^\d{2,4}$/.test(trimmed)) return null;
+    var size = Number(trimmed);
+    return size >= 32 && size <= 2048 ? { size: Math.round(size) } : null;
+}
+
+// 导入时按文件名推断尺寸：yolo26_160x320.onnx → 160x320；yolo26_640.onnx → 640
+function suggestShape(fileName) {
+    var text = String(fileName);
+    var rect = /(\d{2,4})\s*[x×]\s*(\d{2,4})/i.exec(text);
+    if (rect) {
+        var width = Number(rect[1]);
+        var height = Number(rect[2]);
+        if (width >= 32 && width <= 2048 && height >= 32 && height <= 2048) {
+            return { width: Math.round(width), height: Math.round(height) };
+        }
+    }
+    var match = /(\d{3,4})/.exec(text);
+    if (!match) return { size: 640 };
+    var size = Number(match[1]);
+    return { size: size >= 32 && size <= 2048 ? size : 640 };
+}
+
 // 标签是按路径存的，可能指向一个「不是文件」的东西（手误填了名字、文件被删了、
 // 或本来就是目录）；这种值不能直接交给 yolo.load，否则会报
 // 「无法读取 YOLO labels」把整个模型判成坏的。
@@ -126,6 +173,7 @@ function builtinEntry() {
         model: BUILTIN.model,
         labels: labelsFor(BUILTIN_ID),
         inputSize: inputSizeFor(BUILTIN_ID),
+        inputRect: inputRectFor(BUILTIN_ID),
         source: BUILTIN.source
     };
 }
@@ -141,6 +189,7 @@ function entryOf(id) {
         model: path,
         labels: labelsFor(id),
         inputSize: inputSizeFor(id),
+        inputRect: inputRectFor(id),
         source: dir
     };
 }
@@ -152,15 +201,8 @@ function currentEntry() {
 function setCurrent(id) {
     store.put('current', id);
     var entry = entryOf(id);
-    console.log('[模型管理] 当前模型已切换为：' + entry.name + '（inputSize=' + entry.inputSize + '，' + entry.source + '）');
+    console.log('[模型管理] 当前模型已切换为：' + entry.name + '（' + shapeTextForId(id) + '，' + entry.source + '）');
     return entry;
-}
-
-function suggestInputSize(fileName) {
-    var match = /(\d{3,4})/.exec(String(fileName));
-    if (!match) return 640;
-    var size = Number(match[1]);
-    return size >= 32 && size <= 2048 ? size : 640;
 }
 
 // ---- 校验 / 导入 / 删除 ----
@@ -203,13 +245,19 @@ function captureForValidate() {
 }
 
 function yoloLoadOptions(entry, withoutLabels) {
-    return {
+    var options = {
         backend: 'dnn',
         model: entry.model,
         labels: withoutLabels ? undefined : (entry.labels || undefined),
-        inputSize: entry.inputSize,
         threads: 4
     };
+    if (entry.inputRect) {
+        options.inputWidth = entry.inputRect.width;
+        options.inputHeight = entry.inputRect.height;
+    } else {
+        options.inputSize = entry.inputSize;
+    }
+    return options;
 }
 
 // 打开检测器。标签坏掉（路径不合法/文件读不了）不应该把模型判成坏的：
@@ -299,10 +347,19 @@ function copyIntoLibrary(sourcePath) {
         var labelTarget = String(target).replace(/\.onnx$/i, '.txt');
         if (files.copy(labelSource, labelTarget)) report('已一并导入标签：' + baseName(labelTarget));
     }
-    store.put('inputSize.' + name, suggestInputSize(name));
+    var shape = suggestShape(name);
+    if (shape.width) {
+        store.put('inputWidth.' + name, shape.width);
+        store.put('inputHeight.' + name, shape.height);
+        store.remove('inputSize.' + name);
+        report('按文件名认出竖屏尺寸：' + shape.width + 'x' + shape.height);
+    } else {
+        store.put('inputSize.' + name, shape.size);
+        store.remove('inputWidth.' + name);
+        store.remove('inputHeight.' + name);
+    }
     return name;
 }
-
 function findCandidates() {
     var found = [];
     for (var i = 0; i < SCAN_DIRS.length; i++) {
@@ -350,8 +407,8 @@ function importModel() {
     var id = copyIntoLibrary(sourcePath);
     if (!id) return;
     var entry = entryOf(id);
-    report('导入完成：' + entry.name + '（inputSize=' + entry.inputSize + '）');
-    var verify = dialogs.confirm('导入完成', entry.name + '\ninputSize=' + entry.inputSize +
+    report('导入完成：' + entry.name + '（' + shapeTextForId(id) + '）');
+    var verify = dialogs.confirm('导入完成', entry.name + '\n输入尺寸=' + shapeTextForId(id) +
         '\n\n现在跑一帧验证吗（需要截图授权）？');
     report(validate(entry, verify));
     if (dialogs.confirm('设为当前模型', '把「' + entry.name + '」设为当前识别模型吗？')) {
@@ -367,6 +424,8 @@ function deleteModel(index) {
     if (files.remove(model.path)) {
         report('已删除：' + model.path);
         store.remove('inputSize.' + model.id);
+        store.remove('inputWidth.' + model.id);
+        store.remove('inputHeight.' + model.id);
         store.remove('labels.' + model.id);
         delete invalidLabels[model.id];
         if (String(store.get('current', '')) === model.id) {
@@ -382,15 +441,26 @@ function deleteModel(index) {
 function changeInputSize(target) {
     var id = target === 'builtin' ? BUILTIN_ID : target;
     var name = id === BUILTIN_ID ? BUILTIN.name : id;
-    var value = dialogs.prompt('输入尺寸（方形边长，如 640；与模型导出时一致）', String(inputSizeFor(id)));
+    var value = dialogs.prompt(
+        '输入尺寸：方形填一个数（如 640）；竖屏矩形填「宽x高」（如 160x320）；要与模型导出时一致',
+        shapeTextForId(id));
     if (!value) return;
-    var size = Number(value);
-    if (!(size >= 32 && size <= 2048)) {
-        dialogs.alert('数值不合法', '请输入 32~2048 之间的整数');
+    var parsed = parseShapeText(value);
+    if (!parsed) {
+        dialogs.alert('格式不对', '填 640 这样的方形边长，或 160x320 这样的宽x高（每边 32~2048）。');
         return;
     }
-    store.put('inputSize.' + id, Math.round(size));
-    report('已设置：' + name + ' → inputSize=' + Math.round(size));
+    if (parsed.width) {
+        store.put('inputWidth.' + id, parsed.width);
+        store.put('inputHeight.' + id, parsed.height);
+        store.remove('inputSize.' + id);
+        report('已设置：' + name + ' → ' + parsed.width + 'x' + parsed.height + '（竖屏矩形）');
+    } else {
+        store.put('inputSize.' + id, parsed.size);
+        store.remove('inputWidth.' + id);
+        store.remove('inputHeight.' + id);
+        report('已设置：' + name + ' → inputSize=' + parsed.size);
+    }
     render();
 }
 
@@ -469,6 +539,16 @@ function renameModel() {
         store.put('inputSize.' + newId, size);
         store.remove('inputSize.' + oldId);
     }
+    var rectWidth = store.get('inputWidth.' + oldId, null);
+    var rectHeight = store.get('inputHeight.' + oldId, null);
+    if (rectWidth !== null && rectWidth !== undefined) {
+        store.put('inputWidth.' + newId, rectWidth);
+        store.remove('inputWidth.' + oldId);
+    }
+    if (rectHeight !== null && rectHeight !== undefined) {
+        store.put('inputHeight.' + newId, rectHeight);
+        store.remove('inputHeight.' + oldId);
+    }
     var labels = store.get('labels.' + oldId, null);
     if (labels !== null && labels !== undefined) {
         store.put('labels.' + newId, labels);
@@ -537,7 +617,7 @@ function report(text) {
 function render() {
     models = scanLibrary();
     var current = currentEntry();
-    ui.current.setText('当前模型：' + current.name + '\ninputSize=' + current.inputSize +
+    ui.current.setText('当前模型：' + current.name + '\n输入尺寸=' + shapeTextForId(BUILTIN_ID === current.id ? BUILTIN_ID : current.id) +
         '　来源：' + current.source);
     ui.libdir.setText('模型库：' + libraryDir() + '（' + models.length + ' 个模型）');
     for (var i = 0; i < MAX_ROWS; i++) {
@@ -551,7 +631,7 @@ function render() {
     }
     ui.more.setText(models.length > MAX_ROWS
         ? '（只列出前 ' + MAX_ROWS + ' 个，其余请在文件管理器里清理）'
-        : '★ = 当前使用；「导入模型」会把 .onnx 复制进模型库，同名 .txt 会一起带上');
+        : '★ = 当前使用；「导入模型」会把 .onnx 复制进模型库，同名 .txt 会一起带上；竖屏矩形模型（如 160x320.onnx）导入时会自动识别，也可在「设置输入尺寸」里填「160x320」');
 }
 
 function bindActions() {
@@ -564,8 +644,8 @@ function bindActions() {
     ui.refresh.click(function () { render(); report('已刷新'); });
     ui.dir.click(function () { changeLibraryDir(); });
     ui.size.click(function () {
-        var items = ['内置 yolo26_640（inputSize=' + inputSizeFor(BUILTIN_ID) + '）'].concat(
-            models.map(function (m) { return m.name + '（inputSize=' + inputSizeFor(m.id) + '）'; }));
+        var items = ['内置 yolo26_640（' + shapeTextForId(BUILTIN_ID) + '）'].concat(
+            models.map(function (m) { return m.name + '（' + shapeTextForId(m.id) + '）'; }));
         var choice = dialogs.singleChoice('设置输入尺寸', items, 0);
         if (choice === null || choice === undefined || choice < 0) return;
         changeInputSize(choice === 0 ? 'builtin' : models[choice - 1].id);
@@ -591,7 +671,7 @@ function bindRow(index) {
     ui['try' + index].click(function () {
         if (index >= models.length) return;
         var entry = entryOf(models[index].id);
-        report('验证「' + entry.name + '」（inputSize=' + entry.inputSize + '）：');
+        report('验证「' + entry.name + '」（' + shapeTextForId(entry.id) + '）：');
         report(validate(entry, true));
         render();
     });
