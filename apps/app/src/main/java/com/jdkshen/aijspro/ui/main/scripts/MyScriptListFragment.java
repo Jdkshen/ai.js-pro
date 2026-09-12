@@ -44,11 +44,21 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     private static final String TAG = "MyScriptListFragment";
 
+    /** 实验开关：开启后文件页改用 Compose 版列表（S2）。默认关闭，S3 补齐操作后默认开启并删旧实现。 */
+    public static final String PREF_MIUIX_FILE_LIST = "aijspro.experimental.miuix_file_list";
+
     public MyScriptListFragment() {
         super(0);
     }
 
     ExplorerView mExplorerView;
+
+    private com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost mMiuixHost;
+
+    private boolean useMiuixFileList() {
+        return getContext() != null && PreferenceManager.getDefaultSharedPreferences(getContext())
+                .getBoolean(PREF_MIUIX_FILE_LIST, false);
+    }
 
     private FloatingActionMenu mFloatingActionMenu;
 
@@ -61,6 +71,12 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     @NonNull
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        if (useMiuixFileList()) {
+            mMiuixHost = new com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost(this);
+            View view = mMiuixHost.createView();
+            mMiuixHost.reload();
+            return view;
+        }
         View view = inflater.inflate(R.layout.fragment_my_script_list, container, false);
         mExplorerView = view.findViewById(R.id.script_file_list);
         setUpViews();
@@ -132,6 +148,13 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     @Override
     public boolean onBackPressed(Activity activity) {
+        if (mMiuixHost != null) {
+            if (mMiuixHost.canGoBack()) {
+                mMiuixHost.goBack();
+                return true;
+            }
+            return false;
+        }
         if (mFloatingActionMenu != null && mFloatingActionMenu.isExpanded()) {
             mFloatingActionMenu.collapse();
             return true;
@@ -157,12 +180,19 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     /** Used by the Miuix search overlay to return to and reveal a selected file or directory. */
     public boolean revealFileFromSearch(String path) {
+        if (mMiuixHost != null) {
+            return mMiuixHost.revealFile(path);
+        }
         return mExplorerView != null && mExplorerView.revealFile(path);
     }
 
     @Subscribe
     public void onQuerySummit(QueryEvent event) {
         if (!isShown()) {
+            return;
+        }
+        if (mMiuixHost != null) {
+            mMiuixHost.setQuery(event == QueryEvent.CLEAR ? null : event.getQuery());
             return;
         }
         if (event == QueryEvent.CLEAR) {
@@ -176,7 +206,9 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     @Override
     public void onStop() {
         super.onStop();
-        mExplorerView.getSortConfig().saveInto(PreferenceManager.getDefaultSharedPreferences(getContext()));
+        if (mExplorerView != null) {
+            mExplorerView.getSortConfig().saveInto(PreferenceManager.getDefaultSharedPreferences(getContext()));
+        }
     }
 
     @Override
