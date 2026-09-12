@@ -43,6 +43,7 @@ function capabilities() {
         captureScreen: has("captureScreen"),
         yoloLoad: typeOf("yolo.load") === "function",
         imagesClip: typeOf("images.clip") === "function",
+        imagesPixel: typeOf("images.pixel") === "function",
         imagesFromBase64: typeOf("images.fromBase64") === "function",
         filesPath: typeOf("files.path") === "function",
         filesRead: typeOf("files.read") === "function",
@@ -149,8 +150,7 @@ function loadDetector(options) {
     return globals.yolo.load(request);
 }
 
-/** 统一的检测结果形态：只保留业务需要的字段，坐标系说明见任务书 8.2。 */
-function normalizeDetections(raw) {
+/** 统一的检测结果形态：只保留业务需要的字段，坐标系说明见任务书 8.2。 */function normalizeDetections(raw) {
     const list = [];
     for (let i = 0; i < (raw ? raw.length : 0); i++) {
         const item = raw[i];
@@ -176,8 +176,41 @@ function normalizeDetections(raw) {
     return list;
 }
 
+/** 图像采样是否可用：棋盘定位的自动路径依赖它（缺了就只能手动校准）。 */
+function canSamplePixels() {
+    return typeOf("images.pixel") === "function" && has("colors");
+}
+
+/**
+ * 采样某点亮度 0（黑）..1（白）；取不到返回 NaN。
+ * 这里只读一个像素，采样密度由调用方控制（棋盘定位会扫很多点）。
+ */
+function brightnessAt(frame, x, y) {
+    if (!frame || !canSamplePixels()) {
+        return NaN;
+    }
+    try {
+        const pixel = globals.images.pixel(frame, Math.round(x), Math.round(y));
+        return (0.299 * globals.colors.red(pixel) +
+            0.587 * globals.colors.green(pixel) +
+            0.114 * globals.colors.blue(pixel)) / 255;
+    } catch (error) {
+        return NaN;
+    }
+}
+
+/** 给 board-locator 用的采样器：闭包持有帧，采样期间帧必须有效。 */
+function samplerFor(frame) {
+    return function (x, y) {
+        return brightnessAt(frame, x, y);
+    };
+}
+
 const AIJS_ADAPTER = {
     capabilities: capabilities,
+    canSamplePixels: canSamplePixels,
+    brightnessAt: brightnessAt,
+    samplerFor: samplerFor,
     missingRequired: missingRequired,
     has: has,
     typeOf: typeOf,

@@ -9,10 +9,14 @@
 - `project.json`：QuickJS 工程（`engine: quickjs`、`uiMode: true`、保留 OpenCV 模块）。
 - `main.js`：界面骨架 + 两个入口：「运行离线自检」「查看运行环境」（都不点击棋盘）。
 - `src/chess/fen.js`：FEN 生成 / 解析 / 静态校验（不设少子残局门槛，未知轮次不塞 side）。
+- `src/chess/rules.js`：兵种走法（蹩马腿、塞象眼、炮架、九宫、过河、兵卒方向）与将帅照面/被将判断。
+- `src/chess/legal-moves.js`：完整合法着法（过滤自将与照面）、着法比对、局面差异。
+- `src/chess/transition.js`：由「上一局面 + 新观测」推断发生了什么（唯一着法 / 己方着法+对方应手 / 未知）。
 - `src/vision/geometry.js`：规范交点 ↔ 屏幕坐标、180° 方向映射、稳健拟合（含离群点剔除）。
+- `src/vision/board-locator.js`：亮度投影找格线自动定位；失败就明确要求手动校准（四点起）。
 - `src/vision/cell-assignment.js`：检测框 → 90 个交点，保留候选/冲突/残差，不硬猜。
 - `src/vision/temporal-fusion.js`：有时间跨度的多帧融合，版本变化即作废历史。
-- `src/runtime/aijs-adapter.js`：**唯一**直接调用宿主接口的地方，能力缺失如实上报。
+- `src/runtime/aijs-adapter.js`：**唯一**直接调用宿主接口的地方（含按点采样亮度），能力缺失如实上报。
 - `tools/self-check.js` 离线自检；`tools/runtime-probe.js` P0 运行时探针。
 - `assets/models/`：模型槽位（空），见其中的 `README.md`。
 
@@ -20,10 +24,10 @@
 
 ```
 主界面与探针：  main.js、tools/self-check.js、tools/runtime-probe.js
-可离线验证：    src/chess/（FEN、静态校验）、src/vision/（几何、格点分配、时序融合）
+可离线验证：    src/chess/（FEN、走法规则、合法着法、局面变化）、
+                src/vision/（几何、棋盘定位、格点分配、时序融合）
 平台接口：      src/runtime/aijs-adapter.js（业务代码只用它，不直接调宿主）
-还没做：        src/chess/rules.js、legal-moves.js、transition.js
-                src/engine/（UCI 客户端与本地引擎）、src/automation/（状态机、票据、点击、确认）
+还没做：        src/engine/（UCI 客户端与本地引擎）、src/automation/（状态机、票据、点击、确认）
                 src/ui/、assets/models/ 里的模型、assets/book/（可选本地开局库）
 ```
 
@@ -54,5 +58,6 @@
 ## 验收现状
 
 - ✅ 工程能导入、能打开、能进打包页；独立 APK 可启动（K40 实测）
-- ✅ 离线自检：28 条断言全过（Node 上跑；QuickJS 上待复跑）
-- ❌ 识别（无模型）/ 棋规 / 算棋 / 落子：**未实现**，因此也**没有**任何准确率、FPS 或真机成绩
+- ✅ 离线自检 **43 条断言全过**（Node；QuickJS 上待复跑）：FEN、走法规则 R01–R05、几何、格点分配、时序融合、棋盘定位
+- ⚠️ 棋盘定位的**自动路径只在本机用合成棋盘图验证过**，还没在真实截图/真机上跑通；手动四点校准是可靠路径
+- ❌ 识别（无模型）/ 算棋 / 落子：**未实现**，因此也**没有**任何准确率、FPS 或真机成绩

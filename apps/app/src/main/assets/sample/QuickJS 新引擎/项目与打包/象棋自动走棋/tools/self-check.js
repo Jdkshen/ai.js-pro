@@ -305,6 +305,217 @@ check("超出时间跨度的旧帧会被丢掉", function () {
     return fusion.frameCount() <= 3 || "旧帧没有被时间窗口裁掉，实际 " + fusion.frameCount();
 });
 
+// ---------------------------------------------------------------- 走法规则（R01–R04）
+
+const rules = require("../src/chess/rules.js");
+const legal = require("../src/chess/legal-moves.js");
+const transition = require("../src/chess/transition.js");
+const locator = require("../src/vision/board-locator.js");
+
+function boardOf(pieces) {
+    const board = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        board[i] = null;
+    }
+    pieces.forEach(function (item) {
+        board[fen.index(item[1], item[2])] = item[0];
+    });
+    return board;
+}
+
+function moveSet(board, col, row) {
+    return rules.pseudoMoves(board, col, row).map(function (move) {
+        return move.toCol + "," + move.toRow;
+    }).sort();
+}
+
+check("R01 蹩马腿：马腿被堵就走不了那个方向", function () {
+    const open = boardOf([["N", 1, 2], ["K", 4, 9], ["k", 4, 0]]);
+    if (moveSet(open, 1, 2).indexOf("2,4") < 0) return "没有堵腿时也走不到 (2,4)";
+    const blocked = boardOf([["N", 1, 2], ["P", 1, 3], ["K", 4, 9], ["k", 4, 0]]);
+    return moveSet(blocked, 1, 2).indexOf("2,4") < 0 || "马腿被堵仍然能走到 (2,4)";
+});
+
+check("R01b 塞象眼：象眼被堵就走不了那个方向", function () {
+    const open = boardOf([["B", 2, 9], ["K", 4, 9], ["k", 4, 0]]);
+    if (moveSet(open, 2, 9).indexOf("4,7") < 0) return "没有塞眼时也走不到 (4,7)";
+    const blocked = boardOf([["B", 2, 9], ["P", 3, 8], ["K", 4, 9], ["k", 4, 0]]);
+    return moveSet(blocked, 2, 9).indexOf("4,7") < 0 || "象眼被堵仍然能走到 (4,7)";
+});
+
+check("R03 象不过河、士与将不出九宫", function () {
+    // 红相在 (2,5)：田字目标 (0,3)/(4,3) 都已过河，必须被拦掉
+    const board = boardOf([["B", 2, 5], ["A", 4, 8], ["K", 4, 9], ["k", 3, 0]]);
+    const elephant = moveSet(board, 2, 5);
+    if (elephant.indexOf("0,3") >= 0 || elephant.indexOf("4,3") >= 0) return "红相走过了河";
+    if (elephant.indexOf("0,7") < 0 || elephant.indexOf("4,7") < 0) return "红相走不到 (0,7)/(4,7)：" + elephant.join(" ");
+    const advisor = moveSet(board, 4, 8);
+    if (advisor.indexOf("3,7") < 0) return "仕走不到 (3,7)";
+    const king = moveSet(board, 4, 9);
+    return king.indexOf("4,8") < 0 || "帅走不到 (4,8)";
+});
+
+check("R03b 兵：未过河只能向前，过河后可横走、不能后退", function () {
+    const board = boardOf([["P", 2, 6], ["K", 4, 9], ["k", 4, 0]]);
+    const before = moveSet(board, 2, 6);
+    if (before.length !== 1 || before[0] !== "2,5") return "未过河的红兵走法应为 [(2,5)]，实际 " + before.join(" ");
+    const crossed = boardOf([["P", 2, 4], ["K", 4, 9], ["k", 4, 0]]);
+    const after = moveSet(crossed, 2, 4);
+    if (after.indexOf("2,3") < 0 || after.indexOf("1,4") < 0 || after.indexOf("3,4") < 0) {
+        return "过河红兵应能前进一步并横走，实际 " + after.join(" ");
+    }
+    return after.indexOf("2,5") < 0 || "红兵竟然可以后退";
+});
+
+check("R02 炮：平移无阻挡；吃子必须恰好一个炮架", function () {
+    const board = boardOf([
+        ["C", 4, 9], ["P", 4, 6], ["p", 4, 3], ["K", 3, 9], ["k", 3, 0]
+    ]);
+    const moves = moveSet(board, 4, 9);
+    if (moves.indexOf("4,8") < 0 || moves.indexOf("4,7") < 0) return "炮不能平移到炮架之前的空位：" + moves.join(" ");
+    if (moves.indexOf("4,5") >= 0) return "炮越过了炮架却没吃子";
+    if (moves.indexOf("4,3") < 0) return "炮翻过唯一炮架后应能吃 (4,3)";
+    const twoScreens = boardOf([
+        ["C", 4, 9], ["P", 4, 7], ["P", 4, 6], ["p", 4, 3], ["K", 3, 9], ["k", 3, 0]
+    ]);
+    return moveSet(twoScreens, 4, 9).indexOf("4,3") < 0 || "两个炮架竟然还能吃 (4,3)";
+});
+
+check("R04 走完不能自将：垫住的子不能走开", function () {
+    const board = boardOf([
+        ["K", 4, 9], ["R", 4, 5], ["r", 4, 0], ["k", 3, 0]
+    ]);
+    const offFile = legal.isLegalMove(board, 4, 5, 0, 5);
+    if (offFile.legal) return "把垫子挪离本列竟然合法";
+    if (offFile.reason.indexOf("被将") < 0) return "没有说明原因是被将，而是：" + offFile.reason;
+    const alongFile = legal.isLegalMove(board, 4, 5, 4, 4);
+    return alongFile.legal || "沿着本列挪动仍然挡着，应该合法，却被判定：" + alongFile.reason;
+});
+
+check("R04b 将帅照面：走开中间的子不合法", function () {
+    const board = boardOf([["K", 4, 9], ["N", 4, 5], ["k", 4, 0]]);
+    if (!rules.kingsFacing(boardOf([["K", 4, 9], ["k", 4, 0]]))) return "空列上将帅没有判为照面";
+    const result = legal.isLegalMove(board, 4, 5, 3, 7);
+    return result.legal === false || "走成照面竟然合法";
+});
+
+check("R05 唯一合法后继能确定着法", function () {
+    // (4,5) 的兵负责挡住将帅同列，避免整盘因「照面」而没有合法着法
+    const before = boardOf([["K", 4, 9], ["R", 0, 9], ["P", 4, 5], ["k", 4, 0], ["a", 3, 0]]);
+    const after = legal.applyMove(before, rules.pseudoMoves(before, 0, 9).filter(function (move) {
+        return move.toCol === 0 && move.toRow === 8;
+    })[0]).board;
+    const result = transition.infer(before, "w", after);
+    if (result.status !== transition.STATUS.MOVE) return "没有判成唯一着法，而是 " + result.status;
+    return result.moves[0].iccs === "a0a1" || "着法记错：" + result.moves[0].iccs;
+});
+
+check("R05b 局面没变要能被识别出来", function () {
+    const board = boardOf([["K", 4, 9], ["R", 0, 9], ["P", 4, 5], ["k", 4, 0]]);
+    const result = transition.infer(board, "w", board);
+    return result.status === transition.STATUS.UNCHANGED || "判成了 " + result.status;
+});
+
+check("R05c 解释不了的变化返回 UNKNOWN（不补造历史）", function () {
+    const before = boardOf([["K", 4, 9], ["R", 0, 9], ["P", 4, 5], ["k", 4, 0]]);
+    const observed = boardOf([["K", 4, 9], ["R", 8, 8], ["P", 4, 5], ["k", 4, 0], ["C", 1, 1]]);
+    const result = transition.infer(before, "w", observed, { allowPair: false });
+    return result.status === transition.STATUS.UNKNOWN || "判成了 " + result.status;
+});
+
+check("R05d 未知格不参与比对", function () {
+    const before = boardOf([["K", 4, 9], ["R", 0, 9], ["P", 4, 5], ["k", 4, 0]]);
+    const after = legal.applyMove(before, rules.pseudoMoves(before, 0, 9).filter(function (move) {
+        return move.toCol === 0 && move.toRow === 8;
+    })[0]).board.slice();
+    after[fen.index(0, 9)] = "?"; // 起点看不清
+    const result = transition.infer(before, "w", after);
+    return result.status === transition.STATUS.MOVE || "起点未知时没能判出着法，而是 " + result.status;
+});
+
+// ---------------------------------------------------------------- 棋盘定位
+
+check("格线检测：能从亮度投影里找出线", function () {
+    const samples = [];
+    const lineAt = [100, 160, 220, 280, 340];
+    for (let pos = 60; pos <= 380; pos += 1) {
+        let value = 0.9;
+        lineAt.forEach(function (line) {
+            if (Math.abs(pos - line) <= 1) {
+                value = 0.15;
+            }
+        });
+        samples.push({ pos: pos, value: value });
+    }
+    const result = locator.detectLines(locator.profileFromSamples(samples), {});
+    if (result.lines.length !== lineAt.length) return "找到 " + result.lines.length + " 条线（应为 " + lineAt.length + "）";
+    const first = result.lines[0];
+    if (Math.abs(first - 100) > 1.5) return "第一条线位置偏了：" + first;
+    return result.uniformity > 0.95 || "间距一致性太低：" + result.uniformity;
+});
+
+check("棋盘定位：合成棋盘上能还原原点与格距", function () {
+    const step = 60;
+    const originX = 120;
+    const originY = 300;
+    const verticalLines = [];
+    for (let col = 0; col < 9; col++) {
+        verticalLines.push(originX + col * step);
+    }
+    const horizontalLines = [];
+    for (let row = 0; row < 10; row++) {
+        horizontalLines.push(originY + row * step);
+    }
+    // 合成一张「棋盘图」：木色背景 + 深色格线 + 若干棋子造成的暗块
+    const pieces = [[0, 0], [4, 0], [8, 0], [1, 2], [7, 7], [4, 9]];
+    const sampler = function (x, y) {
+        let value = 0.9;
+        for (let i = 0; i < verticalLines.length; i++) {
+            if (Math.abs(x - verticalLines[i]) <= 1.5) value = 0.2;
+        }
+        for (let i = 0; i < horizontalLines.length; i++) {
+            if (Math.abs(y - horizontalLines[i]) <= 1.5) value = Math.min(value, 0.2);
+        }
+        for (let i = 0; i < pieces.length; i++) {
+            const px = originX + pieces[i][0] * step;
+            const py = originY + pieces[i][1] * step;
+            if (Math.abs(x - px) <= 20 && Math.abs(y - py) <= 20) value = Math.min(value, 0.35);
+        }
+        return value;
+    };
+    const result = locator.locateByLines(sampler, {
+        region: { x: 100, y: 280, width: 520, height: 580 },
+        sampleStep: 1
+    });
+    if (!result.ok) return result.reason;
+    const checks = [
+        near(result.grid.originX, originX, 2, "originX"),
+        near(result.grid.originY, originY, 2, "originY"),
+        near(result.grid.stepX, step, 1, "stepX"),
+        near(result.grid.stepY, step, 1, "stepY")
+    ];
+    const bad = checks.filter(function (item) { return item !== true; });
+    return bad.length === 0 ? true : bad.join("；");
+});
+
+check("棋盘定位：没有格线时明确失败，不硬猜", function () {
+    const flat = function () { return 0.8; };
+    const result = locator.locateByLines(flat, { region: { x: 0, y: 0, width: 400, height: 400 }, sampleStep: 2 });
+    return result.ok === false || "纯色画面上竟然定位成功了";
+});
+
+check("手动校准：四个角点能建立几何并给出质量", function () {
+    const grid = geometry.createGrid({ originX: 100, originY: 200, stepX: 50, stepY: 50 });
+    const corners = [[0, 0], [8, 0], [0, 9], [8, 9]].map(function (pair) {
+        const point = geometry.pointAt(grid, pair[0], pair[1]);
+        return { col: pair[0], row: pair[1], x: point.x + 0.5, y: point.y - 0.5 };
+    });
+    const result = locator.locateByCorners(corners, { minSamples: 4 });
+    if (!result.ok) return result.reason;
+    return near(result.grid.originX, 100, 2, "originX") === true &&
+        near(result.grid.stepY, 50, 0.5, "stepY") === true;
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +
