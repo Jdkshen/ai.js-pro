@@ -6046,14 +6046,16 @@ const char kBootstrapScript[] = R"JS(
                 String(title == null ? '' : title), '', JSON.stringify(list), '0')));
             return r && r.index !== undefined ? r.index : -1;
         },
-        singleChoice: function (title, selectedIndex, items) {
+        // 参数顺序与 Rhino（__dialogs__.js）及 Auto.js 文档一致：(title, items, selectedIndex)
+        singleChoice: function (title, items, selectedIndex) {
             var list = items || [];
             var idx = Number(selectedIndex) || 0;
             var r = dialogWait(Number(__aiNativeDialogsShow(4,
                 String(title == null ? '' : title), '', JSON.stringify(list), String(idx))));
             return r && r.index !== undefined ? r.index : -1;
         },
-        multiChoice: function (title, selectedIndices, items) {
+        // 参数顺序：(title, items, selectedIndices)
+        multiChoice: function (title, items, selectedIndices) {
             var list = items || [];
             var def = JSON.stringify(selectedIndices || []);
             var r = dialogWait(Number(__aiNativeDialogsShow(5,

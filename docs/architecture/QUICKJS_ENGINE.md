@@ -221,6 +221,7 @@ try {
 - **模型侧实测（同一帧对比）**：`max_det` 300→100 检出逐位一致、耗时不变（81.99 vs 82.09ms）⇒ 不值得换；**INT8（ONNX QDQ）在 OpenCV DNN 上是死路**——同一帧 0 检出（结果错）且推理 366.6ms（4.6× 慢），ARM 侧没有 int8 快速路径，Q/DQ 只被当普通层执行；换架构也没有空间（yolo26n 2.57M/6.12 GFLOPs@640 已是 n 级最轻，yolo11n 2.62M/6.61）。
 - 预处理占比仅 **2%**：640 下把每帧 `blobFromImage` 改为预分配 blob + `blobFromImageWithParams` 后，预处理 1.64 → 1.64ms、总计无明显变化（收益仅剩减少每帧 4.9MB 的分配/GC 抖动），该尝试已回退。**要提速只能动输入尺寸/模型本身（精度换速度），或换运行时（NCNN/ONNX Runtime）。**
 - `OpenCvYoloDetector` 采用 `Dnn.readNetFromONNX(path, Dnn.ENGINE_AUTO)`、target 默认 CPU，不对外暴露 target/图引擎选项。
+- **模型库（示例 `YOLO目标检测/模型管理.js`）**：发布包只内置 `yolo26_640.onnx` 作保底；用户可用模型管理把 `.onnx`（同名 `.txt` 作标签）导入库目录（默认 `/sdcard/脚本/模型库`）并切换当前模型。选择存在 `storages` 的 `aijspro.yolo.models`（`dir` / `current` / `inputSize.<id>` / `labels.<id>`），六个 YOLO 案例启动时读取它并打印 `[模型] 本次识别使用：…`，结构化输出带 `model=` 字段。
 - 经典引擎（`ENGINE_CLASSIC`）：640 下 93ms，仍慢于新引擎。
 - OpenCL（`DNN_TARGET_OPENCL_FP16` 等）：自编 `WITH_OPENCL=ON` 版实测 **686ms** —— OpenCV DNN 的 OCL 后端仅针对 Intel GPU 优化，在 Adreno 上是负优化，**不要启用**。
 - 预处理骨架未变：letterbox（`LETTERBOX_GRAY=114`、居中、`min` 缩放）+ 1/255 归一化，坐标按 `(coord - pad) / scale` 回映；640 下预处理平均 **1.64ms**。

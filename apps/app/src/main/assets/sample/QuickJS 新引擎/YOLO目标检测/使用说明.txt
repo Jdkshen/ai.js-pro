@@ -9,9 +9,10 @@ ImageReader RGBA Plane
   -> QuickJS 检测框数组
 
 目录结构：
-- DNN/   OpenCV 5.0 DNN 脚本与唯一的 yolo26_640.onnx 模型（输入固定 640×640）
+- DNN/   OpenCV 5.0 DNN 脚本与发布包内置的 yolo26_640.onnx 模型（输入固定 640×640）
+- 模型管理.js   模型库管理：导入 .onnx / .txt 标签、切换当前模型、设置输入尺寸
 
-包含六个模板案例：
+包含六个识别模板 + 一个模型管理（均为 QuickJS 新引擎）：
 - YOLO基准测试.js：预热后检测 5 张最新缓存帧，输出平均推理耗时。
 - YOLO运行环境测试.js：后端可用性 / 版本 / 模型加载耗时，无需截图授权。
 - YOLO单帧直连测试.js：截取一帧，推理并打印检测框与耗时。
@@ -25,6 +26,29 @@ ImageReader RGBA Plane
   [x, y, width, height]（全屏像素坐标，越界会报错）；检测框坐标自动回移到
   全屏坐标系；每 5 秒输出"全屏 vs 区域"性能/命中对比（YOLO_ROI_SUMMARY），
   命中逐条打印（YOLO_ROI_HIT）。绘制层只显示区域命中的框。
+- 模型管理.js：模型库插件。导入 / 切换 / 删除模型，设置 inputSize 与标签文件；
+  切换后上面六个案例会自动改用当前模型。
+
+模型库与模型切换（模型管理.js）：
+- 发布包只内置一个模型（yolo26_640，inputSize=640，删不掉，作为保底）；
+  其它模型通过模型库导入，发布包不必为每个模型变大。
+- 库目录默认 /sdcard/脚本/模型库（可在菜单里改）。三种导入方式任选：
+  ① 菜单「导入模型」→ 手动输入 .onnx 完整路径；
+  ② 菜单「导入模型」→ 自动在 Download / Documents / 脚本 里找 .onnx 让你选；
+  ③ 直接用任何文件管理器把 .onnx（可选同名 .txt 标签）放进库目录。
+- 用菜单导入时会自动按文件名推断 inputSize（如 yolo26_640.onnx → 640），
+  并做「加载 + 可选跑一帧」校验；模型必须是 OpenCV DNN 能读的 end2end ONNX
+  （输出 [1,300,6]：[x1,y1,x2,y2,score,classId]）。
+- 切换：「切换当前模型」列表选一个即可；当前选择存在应用存储里
+  （storages: aijspro.yolo.models），与脚本放在哪无关；
+  删掉正在使用的库内模型会自动回退到内置模型。
+- 识别时的模型备注：六个案例启动时会打印一行
+  [模型] 本次识别使用：<名称>（inputSize=N，来源：…），
+  结构化输出（QUICKJS_YOLO_LOAD_OK / QUICKJS_NATIVE_YOLO_OK / NATIVE_YOLO_FRAME /
+  QUICKJS_NATIVE_YOLO_LOOP_OK / YOLO_ROI_HIT / YOLO_ROI_SUMMARY / YOLO_BENCH /
+  [STABILITY]）都带 model= 字段。
+- 注意：方式③手动丢进库目录的模型默认按 inputSize=640 加载；不是 640 的模型
+  （例如 320）请在菜单「设置输入尺寸」里改，或用方式①②导入（会自动认文件名里的数字）。
 
 持续识别停止方式：在应用任务列表（"运行中任务"）点击停止单个脚本或
 "停止全部"。正在推理时会在当前帧结束后响应停止。

@@ -11,12 +11,42 @@ if (!yolo.isAvailable(backend)) {
     throw new Error(backend + ' 不可用：' + yolo.getUnavailableReason(backend));
 }
 
-var modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
+// ---- 当前模型：由「模型管理.js」选择，没选过就用发布包内置模型 ----
+var MODEL_STORE = 'aijspro.yolo.models';
+var BUILTIN_MODEL = {
+    name: '内置 yolo26_640',
+    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_640.onnx',
+    labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
+    inputSize: 640,
+    source: '内置资源'
+};
+function resolveModel() {
+    var store = storages.create(MODEL_STORE);
+    var id = String(store.get('current', '@builtin'));
+    if (id === '@builtin') return BUILTIN_MODEL;
+    var dir = String(store.get('dir', files.join(files.getSdcardPath(), '脚本', '模型库')));
+    var path = files.join(dir, id);
+    if (!files.isFile(path)) {
+        console.log('[模型] 模型库里的 ' + id + ' 已不存在，回退内置模型');
+        return BUILTIN_MODEL;
+    }
+    var labels = String(store.get('labels.' + id, files.join(dir, 'labels.txt')));
+    return {
+        name: id.replace(/\.onnx$/i, ''),
+        model: path,
+        labels: files.isFile(labels) ? labels : '',
+        inputSize: Number(store.get('inputSize.' + id, 640)),
+        source: dir
+    };
+}
+var MODEL = resolveModel();
+console.log('[模型] 本次识别使用：' + MODEL.name + '（inputSize=' + MODEL.inputSize + '，来源：' + MODEL.source + '）');
+
 var detector = yolo.load({
     backend: backend,
-    model: modelRoot + 'yolo26_640.onnx',
-    labels: modelRoot + 'labels.txt',
-    inputSize: 640,
+    model: MODEL.model,
+    labels: MODEL.labels || undefined,
+    inputSize: MODEL.inputSize,
     threads: 4
 });
 
@@ -83,7 +113,8 @@ var peakPoolBytes = 0;
 
 console.log('========================================');
 console.log('[YOLO] YOLO持续识别长稳测试');
-console.log('[YOLO] TOTAL_FRAMES=' + TOTAL_FRAMES + ' backend=' + backend);
+console.log('[YOLO] TOTAL_FRAMES=' + TOTAL_FRAMES + ' backend=' + backend +
+    ' model=' + MODEL.name + ' inputSize=' + MODEL.inputSize);
 console.log('========================================');
 
 var frameIndex = 0;
@@ -212,8 +243,8 @@ try {
         'ms p95=' + sTotal.p95.toFixed(3) + 'ms max=' + sTotal.max.toFixed(3) + 'ms');
 
     console.log('');
-    console.log('[STABILITY] YOLO ' + TOTAL_FRAMES + '帧完成 errors=' + errors +
-        ' totalHits=' + totalHits);
+    console.log('[STABILITY] YOLO ' + TOTAL_FRAMES + '帧完成 model=' + MODEL.name +
+        ' errors=' + errors + ' totalHits=' + totalHits);
 
     if (baselineStats && finalStats) {
         console.log('[STABILITY] activeFrames ' + baselineStats.activeFrames + ' -> ' +

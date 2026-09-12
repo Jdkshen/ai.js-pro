@@ -191,7 +191,16 @@ while (true) {
     }
     sleep(500);
 }
-</code></pre><p>可运行的完整示例见<code>QuickJS 新引擎/YOLO目标检测</code>（环境测试、单帧直连、实时直连、区域检测、基准测试、持续识别）。</p>
+</code></pre><p>可运行的完整示例见<code>QuickJS 新引擎/YOLO目标检测</code>（环境测试、单帧直连、实时直连、区域检测、基准测试、持续识别，以及模型管理）。</p>
+<h2>模型库与模型切换<span><a class="mark" href="#yolo_model_library" id="yolo_model_library">#</a></span></h2>
+<p>发布包只内置一个模型（<code>yolo26_640.onnx</code>，inputSize 640，删不掉，作为保底）；其它模型放进<strong>模型库</strong>后即可切换使用，不必让发布包为每个模型变大。</p>
+<ul>
+<li>库目录默认<code>/sdcard/脚本/模型库</code>；把 <code>.onnx</code> 放进去即可（同名 <code>.txt</code> 会当作标签一起识别）。</li>
+<li>管理界面用<code>QuickJS 新引擎/YOLO目标检测/模型管理.js</code>：导入（手动输入路径，或自动在 Download / Documents / 脚本 目录里找）、切换当前模型、设置 inputSize 与标签文件、删除、更换库目录。</li>
+<li>用「导入模型」导入时会按文件名推断 inputSize（<code>yolo26_640.onnx</code> → 640）并做加载（可选跑一帧）校验；直接用文件管理器丢进库目录的模型默认按 640 加载，其它尺寸请在菜单里改。</li>
+<li>当前选择存在应用存储里（<code>storages</code> 的 <code>aijspro.yolo.models</code>），与脚本放在哪无关；库内正在使用的模型被删掉会自动回退内置模型。</li>
+<li>内置示例会打印<code>[模型] 本次识别使用：&lt;名称&gt;（inputSize=N，来源：…）</code>，结构化输出里也带 <code>model</code> 字段，便于确认本次是用哪个模型识别的。</li>
+</ul>
 <h2>注意事项<span><a class="mark" href="#yolo_notes" id="yolo_notes">#</a></span></h2>
 <ul>
 <li>需要<strong>完整版 APK</strong>（内置 OpenCV 5.0）；lite 版本没有该模块，<code>yolo.isAvailable()</code>返回<code>false</code>，用<code>yolo.getUnavailableReason()</code>看原因。</li>
