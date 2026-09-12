@@ -1,0 +1,32 @@
+{
+  "name": "象棋自动走棋",
+  "description": "中国象棋识别与自动走棋（QuickJS 工程骨架，识别/棋规/算棋/落子尚未接入）",
+  "packageName": "com.jdkshen.xiangqi.quickjs",
+  "versionName": "0.1.0",
+  "versionCode": 1,
+  "main": "main.js",
+  "scripts": {
+    "main.js": {
+      "useFeatures": [],
+      "uiMode": true,
+      "engine": "quickjs"
+    }
+  },
+  "useFeatures": [],
+  "launchConfig": {
+    "displaySplash": true,
+    "hideLogs": false,
+    "splashText": "象棋自动走棋",
+    "stableMode": false
+  },
+  "optimization": {
+    "removeOpenCv": false,
+    "unusedResources": false,
+    "obfuscateComponents": false
+  },
+  "permissionConfig": {
+    "manifestPermissions": [],
+    "requestListOnStartup": []
+  },
+  "engine": "quickjs"
+}

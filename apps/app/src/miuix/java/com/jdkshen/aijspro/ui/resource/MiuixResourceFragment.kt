@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,6 +33,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -67,6 +69,7 @@ import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
+import com.jdkshen.aijspro.ui.project.BuildActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -80,13 +83,16 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
+import org.json.JSONObject
 
 /**
- * Auto.js Pro-like "资源" page (third tab). Backed by the local resource directory
- * ("我的资源" under the script root) plus the bundled sample assets; reuses the same
- * import/run/share/edit flows as the ImGui workspace resource panel.
+ * Auto.js Pro-like "资源" page (third tab). Lists bundled **projects** (any sample directory
+ * containing `project.json`) plus the local resource directory ("我的资源" under the script
+ * root); flat `.js` samples are intentionally not listed here — they live in the 示例 page.
+ * Reuses the same import/run/build flows as the ImGui workspace resource panel.
  */
 class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
@@ -100,7 +106,9 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         val metadata: String,
         val assetPath: String? = null,
         val file: File? = null,
-        val imported: Boolean = false
+        val imported: Boolean = false,
+        /** 目录里带 `project.json` 的工程：整份一条，导入/打包都按目录走。 */
+        val project: Boolean = false
     )
 
     private lateinit var rootView: ComposeView
@@ -114,6 +122,13 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private var reloadTick by mutableStateOf(0)
     private var selected by mutableStateOf<ResourceEntry?>(null)
     private var busy by mutableStateOf(false)
+
+    private companion object {
+        /** 目录里带这个文件就当成「工程」整条展示，里面的模块/模型不逐个铺开。 */
+        private const val PROJECT_MARKER = "project.json"
+
+        private const val PROJECT_LIMIT = 60
+    }
 
     private val uploadLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
@@ -197,18 +212,23 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
     private fun loadEntries(): List<ResourceEntry> {
         val list = mutableListOf<ResourceEntry>()
-        val assets = requireContext().assets
-        val discovered = mutableListOf<String>()
-        collectResourceAssets("sample", discovered, 80)
-        discovered.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it }).forEach { assetPath ->
+        // 内置部分只列「工程」：一个工程一条（名字/描述取工程自己的 project.json），
+        // 不再把散装 .js 铺成条目——散装示例在「示例」页里看。
+        val projects = mutableListOf<String>()
+        collectProjectAssets("sample", projects, PROJECT_LIMIT)
+        projects.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it }).forEach { assetPath ->
+            val project = readBundledProject(assetPath)
             list += ResourceEntry(
-                name = File(assetPath).name.replaceFirst(Regex("\\.js$"), ""),
+                name = project?.optString("name")?.trim().orEmpty().ifEmpty { File(assetPath).name },
                 kind = Source.BUILTIN,
                 category = resourceCategoryFor(assetPath),
-                description = "AI.js Pro 内置示例脚本",
-                metadata = "内置|${resourceCategoryFor(assetPath)}|${readableAssetSize(assetPath)}",
+                description = project?.optString("description")?.trim().orEmpty()
+                    .ifEmpty { readBundledDescription(assetPath) }
+                    .ifEmpty { "AI.js Pro 内置示例工程" },
+                metadata = "工程|${resourceCategoryFor(assetPath)}|${readableAssetTreeSize(assetPath)}",
                 assetPath = assetPath,
-                imported = resourceTargetFor(assetPath).isFile
+                imported = resourceTargetFor(assetPath).isDirectory,
+                project = true
             )
         }
         val mine = mutableListOf<File>()
@@ -227,20 +247,71 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         return list
     }
 
-    private fun collectResourceAssets(path: String, result: MutableList<String>, limit: Int) {
+    /** 收集工程：目录里带 project.json 就整条收录并停止下钻。 */
+    private fun collectProjectAssets(path: String, result: MutableList<String>, limit: Int) {
         if (result.size >= limit) return
-        try {
-            val children = requireContext().assets.list(path)
-            if (children.isNullOrEmpty()) {
-                if (path.endsWith(".js")) result += path
-                return
-            }
-            children.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it }).forEach { child ->
-                collectResourceAssets("$path/$child", result, limit)
-                if (result.size >= limit) return
-            }
+        val children = try {
+            requireContext().assets.list(path)
         } catch (_: IOException) {
+            null
         }
+        if (children.isNullOrEmpty()) return
+        if (children.contains(PROJECT_MARKER)) {
+            result += path
+            return
+        }
+        children.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it }).forEach { child ->
+            collectProjectAssets("$path/$child", result, limit)
+            if (result.size >= limit) return
+        }
+    }
+
+    private fun readBundledProject(assetPath: String): JSONObject? = try {
+        requireContext().assets.open("$assetPath/$PROJECT_MARKER").use { input ->
+            JSONObject(String(input.readBytes(), Charsets.UTF_8))
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * 工程的一句话描述：project.json 里的 description 优先；打包器回写工程配置时会丢掉
+     * 未知字段，所以再退回 README.md 的第一行（显示用，不影响工程本身）。
+     */
+    private fun readBundledDescription(assetPath: String): String = try {
+        requireContext().assets.open("$assetPath/README.md").use { input ->
+            input.bufferedReader(Charsets.UTF_8).readLines()
+                .firstOrNull { it.isNotBlank() }
+                ?.trim()?.trimStart('#')?.trim()
+                .orEmpty()
+        }
+    } catch (_: Exception) {
+        ""
+    }
+
+    /** 工程条目体积：递归累加内置资源里的文件大小。 */
+    private fun readableAssetTreeSize(assetPath: String): String {
+        var bytes = 0L
+        val pending = ArrayDeque<String>()
+        pending.add(assetPath)
+        while (pending.isNotEmpty()) {
+            val current = pending.removeFirst()
+            val children = try {
+                requireContext().assets.list(current)
+            } catch (_: IOException) {
+                null
+            }
+            if (children.isNullOrEmpty()) {
+                bytes += try {
+                    requireContext().assets.open(current).use { it.available().toLong() }
+                } catch (_: IOException) {
+                    0L
+                }
+            } else {
+                children.forEach { pending.addLast("$current/$it") }
+            }
+        }
+        return readableSize(bytes)
     }
 
     private fun collectResourceFiles(directory: File, result: MutableList<File>, limit: Int) {
@@ -272,18 +343,12 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         return dir
     }
 
-    private fun readableAssetSize(assetPath: String): String = try {
-        requireContext().assets.open(assetPath).use { input ->
-            val bytes = input.available().toLong()
-            if (bytes >= 1024) String.format(Locale.getDefault(), "%.1f KB", bytes / 1024f) else "$bytes B"
-        }
-    } catch (_: IOException) {
-        "?"
-    }
+    private fun readableFileSize(file: File): String = readableSize(file.length())
 
-    private fun readableFileSize(file: File): String {
-        val bytes = file.length()
-        return if (bytes >= 1024) String.format(Locale.getDefault(), "%.1f KB", bytes / 1024f) else "$bytes B"
+    private fun readableSize(bytes: Long): String = when {
+        bytes >= 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f MB", bytes / 1024f / 1024f)
+        bytes >= 1024 -> String.format(Locale.getDefault(), "%.1f KB", bytes / 1024f)
+        else -> "$bytes B"
     }
 
     private fun categories(all: List<ResourceEntry>): List<String> {
@@ -390,14 +455,17 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         }.start()
     }
 
-    private fun viewBuiltin(entry: ResourceEntry) {
+    private fun viewBuiltin(entry: ResourceEntry, innerName: String = "") {
         // 预览源码统一走新版 Pro 编辑器：已导入过就直接打开「下载资源」里的副本，
         // 否则先把内置资源静默落盘再打开（编辑器记录的 assets 来源可“重置”恢复最新版）。
+        // 工程条目要落在目录里，innerName 指定看哪一个文件（工程默认 main.js）。
         val context = requireContext()
         val assetPath = entry.assetPath ?: return
         val target = resourceTargetFor(assetPath)
-        if (target.isFile) {
-            startActivity(ProCodeEditorActivity.sampleIntent(context, target, assetPath))
+        val openTarget = if (innerName.isEmpty()) target else File(target, innerName)
+        val openAsset = if (innerName.isEmpty()) assetPath else "$assetPath/$innerName"
+        if (openTarget.isFile) {
+            startActivity(ProCodeEditorActivity.sampleIntent(context, openTarget, openAsset))
             return
         }
         busy = true
@@ -411,7 +479,7 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
             requireActivity().runOnUiThread {
                 busy = false
                 if (failure == null) {
-                    startActivity(ProCodeEditorActivity.sampleIntent(context, target, assetPath))
+                    startActivity(ProCodeEditorActivity.sampleIntent(context, openTarget, openAsset))
                 } else {
                     Toast.makeText(context,
                         "打开资源失败：${failure.localizedMessage ?: "未知错误"}",
@@ -422,8 +490,42 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun runBuiltin(entry: ResourceEntry) {
-        val execution = Scripts.run(SampleFile(entry.assetPath!!, requireContext().assets).toSource())
+        val assetPath = entry.assetPath ?: return
+        // 工程条目的入口是工程目录里的 main.js。
+        val runnable = if (entry.project) "$assetPath/main.js" else assetPath
+        val execution = Scripts.run(SampleFile(runnable, requireContext().assets).toSource())
         if (execution != null) Toast.makeText(requireContext(), "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 打包工程条目：示例本体在 APK 内置资源里，打包器要的是磁盘上的真实文件，
+     * 所以先把整棵工程落到「下载资源」（已存在的文件不覆盖），再以该目录为源进打包页
+     * （打包页会读目录里的 project.json，按项目模式打包）。
+     */
+    private fun buildProject(entry: ResourceEntry) {
+        val context = requireContext()
+        val assetPath = entry.assetPath ?: return
+        val target = resourceTargetFor(assetPath)
+        busy = true
+        Thread {
+            var failure: Exception? = null
+            try {
+                if (!target.isDirectory) copyAssetTree(assetPath, target)
+            } catch (error: Exception) {
+                failure = error
+            }
+            requireActivity().runOnUiThread {
+                busy = false
+                if (failure == null) {
+                    startActivity(Intent(context, BuildActivity::class.java)
+                        .putExtra(BuildActivity.EXTRA_SOURCE, target.absolutePath))
+                } else {
+                    Toast.makeText(context,
+                        "打包失败：${failure.localizedMessage ?: "未知错误"}",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
     }
 
     private fun runLocal(entry: ResourceEntry) {
@@ -512,8 +614,14 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 .padding(start = 12.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
-                    Text("‹›", fontSize = 27.sp, fontWeight = FontWeight.Medium,
-                        color = MiuixTheme.colorScheme.onSurface)
+                    if (entry.project) {
+                        Image(painterResource(R.drawable.ic_project_compass_24dp), "工程",
+                            Modifier.size(27.dp),
+                            colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.primary))
+                    } else {
+                        Text("‹›", fontSize = 27.sp, fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onSurface)
+                    }
                 }
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text(entry.name, fontSize = 18.sp, maxLines = 1,
@@ -524,12 +632,14 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     val metadata = entry.metadata.split('|')
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(metadata.getOrElse(0) { "" }, fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
                             color = MiuixTheme.colorScheme.primary)
                         Text(metadata.getOrElse(1) { entry.category }, fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             color = MiuixTheme.colorScheme.onSurfaceSecondary,
                             modifier = Modifier.weight(1f).padding(start = 18.dp))
                         Text(metadata.getOrElse(2) { "" }, fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
                             color = MiuixTheme.colorScheme.onSurfaceSecondary)
                     }
                 }
@@ -554,9 +664,10 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
     @Composable
     private fun ResourceBottomBar() {
-        Box(Modifier.fillMaxWidth().height(72.dp).background(MiuixTheme.colorScheme.surface)) {
-            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f).fillMaxSize().clickable {
+        Box(Modifier.fillMaxWidth().navigationBarsPadding().heightIn(min = 72.dp)
+            .background(MiuixTheme.colorScheme.surface)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 72.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f).fillMaxWidth().heightIn(min = 72.dp).clickable {
                     mineOnly = false
                     showCategoryDialog = true
                 }.padding(start = 26.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -566,8 +677,8 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     Text("▾", fontSize = 18.sp, modifier = Modifier.padding(start = 10.dp),
                         color = MiuixTheme.colorScheme.onSurfaceSecondary)
                 }
-                Spacer(Modifier.width(72.dp))
-                Row(Modifier.weight(1f).fillMaxSize().clickable {
+                Spacer(Modifier.width(56.dp))
+                Row(Modifier.weight(1f).fillMaxWidth().heightIn(min = 72.dp).clickable {
                     mineOnly = true
                     category = ""
                 }.padding(end = 24.dp), verticalAlignment = Alignment.CenterVertically,
@@ -580,7 +691,7 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         else MiuixTheme.colorScheme.onSurfaceSecondary)
                 }
             }
-            Box(Modifier.size(64.dp).align(Alignment.TopCenter).clip(CircleShape)
+            Box(Modifier.size(64.dp).align(Alignment.Center).clip(CircleShape)
                 .background(MiuixTheme.colorScheme.primary).clickable(enabled = !busy) { pickUpload() },
                 contentAlignment = Alignment.Center) {
                 Image(painterResource(R.drawable.ic_file_download_black_48dp), "上传资源",
@@ -598,7 +709,8 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
                     Text("资源分类", fontSize = 22.sp,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)
+                        .heightIn(max = 480.dp)) {
                         items(choices) { choice ->
                             val value = if (choice == "全部分类") "" else choice
                             Row(Modifier.fillMaxWidth().clickable {
@@ -638,38 +750,62 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     .background(MiuixTheme.colorScheme.surface)
                     .padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.Top) {
-                        Text("{ }", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                        Column(Modifier.padding(start = 16.dp)) {
-                            Text(entry.name, fontSize = 24.sp, maxLines = 2,
-                                fontWeight = FontWeight.Medium, overflow = TextOverflow.Ellipsis,
-                                color = MiuixTheme.colorScheme.onSurface)
-                            Text(if (entry.kind == Source.LOCAL) "本机资源" else "JavaScript",
-                                fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                        }
-                    }
-                    Text(entry.description, fontSize = 16.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                    Text(entry.metadata.replace("|", " · "), fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                    when (entry.kind) {
-                        Source.BUILTIN -> {
-                            ActionChoice("预览源码") { dismiss(); viewBuiltin(entry) }
-                            ActionChoice("运行") { dismiss(); runBuiltin(entry) }
-                            ActionChoice(if (entry.imported) "打开已导入文件" else "导入到脚本目录") {
-                                if (entry.imported) {
-                                    dismiss()
-                                    entry.assetPath?.let { startActivity(ProCodeEditorActivity.intent(
-                                        requireContext(), resourceTargetFor(it))) }
-                                } else importBuiltin(entry) { dismiss(); refresh() }
+                    // 正文与操作项放入可滚动区，「关闭」留在滚动区外：横屏/大字体下内容再长也只会滚动，按钮不被挤出窗口。
+                    Column(Modifier.fillMaxWidth().weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Text("{ }", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                            Column(Modifier.padding(start = 16.dp)) {
+                                Text(entry.name, fontSize = 24.sp, maxLines = 2,
+                                    fontWeight = FontWeight.Medium, overflow = TextOverflow.Ellipsis,
+                                    color = MiuixTheme.colorScheme.onSurface)
+                                Text(when {
+                                    entry.kind == Source.LOCAL -> "本机资源"
+                                    entry.project -> "QuickJS 工程"
+                                    else -> "JavaScript"
+                                },
+                                    fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
                             }
                         }
-                        Source.LOCAL -> {
-                            ActionChoice("编辑") { dismiss(); editLocal(entry) }
-                            ActionChoice("运行") { dismiss(); runLocal(entry) }
-                            ActionChoice("分享") { dismiss(); shareLocal(entry) }
-                            ActionChoice("删除") {
-                                deleteLocal(entry) { dismiss(); refresh() }
+                        Text(entry.description, fontSize = 16.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                        Text(entry.metadata.replace("|", " · "), fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                        when (entry.kind) {
+                            Source.BUILTIN -> {
+                                if (entry.project) {
+                                    ActionChoice("预览 main.js") { dismiss(); viewBuiltin(entry, "main.js") }
+                                    ActionChoice("运行") { dismiss(); runBuiltin(entry) }
+                                    ActionChoice(if (entry.imported) "打开已导入工程" else "导入到脚本目录") {
+                                        if (entry.imported) {
+                                            dismiss()
+                                            entry.assetPath?.let {
+                                                startActivity(ProCodeEditorActivity.intent(requireContext(),
+                                                    File(resourceTargetFor(it), "main.js")))
+                                            }
+                                        } else importBuiltin(entry) { dismiss(); refresh() }
+                                    }
+                                    ActionChoice("打包（项目）") { dismiss(); buildProject(entry) }
+                                } else {
+                                    ActionChoice("预览源码") { dismiss(); viewBuiltin(entry) }
+                                    ActionChoice("运行") { dismiss(); runBuiltin(entry) }
+                                    ActionChoice(if (entry.imported) "打开已导入文件" else "导入到脚本目录") {
+                                        if (entry.imported) {
+                                            dismiss()
+                                            entry.assetPath?.let { startActivity(ProCodeEditorActivity.intent(
+                                                requireContext(), resourceTargetFor(it))) }
+                                        } else importBuiltin(entry) { dismiss(); refresh() }
+                                    }
+                                }
+                            }
+                            Source.LOCAL -> {
+                                ActionChoice("编辑") { dismiss(); editLocal(entry) }
+                                ActionChoice("运行") { dismiss(); runLocal(entry) }
+                                ActionChoice("分享") { dismiss(); shareLocal(entry) }
+                                ActionChoice("删除") {
+                                    deleteLocal(entry) { dismiss(); refresh() }
+                                }
                             }
                         }
                     }
