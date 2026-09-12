@@ -3,6 +3,7 @@ package com.stardust.autojs.core.image.capture;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.media.projection.MediaProjectionConfig;
 import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import androidx.annotation.RequiresApi;
@@ -68,7 +69,19 @@ public interface ScreenCaptureRequester {
 
         @Override
         public void request() {
-            mActivity.startActivityForResult(((MediaProjectionManager) mActivity.getSystemService(Context.MEDIA_PROJECTION_SERVICE)).createScreenCaptureIntent(), REQUEST_CODE_MEDIA_PROJECTION);
+            MediaProjectionManager manager = (MediaProjectionManager)
+                    mActivity.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+            Intent intent;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                // Android 14+ 的授权弹窗默认多一步「共享一个应用 / 整个屏幕」。脚本要的是整屏截图：
+                // 一旦选了「共享一个应用」，只要那个应用不在前台，投屏就只回全黑帧（K40/新机实测亮度 0，
+                // 且不报错），脚本会拿着黑图继续推理。这里显式请求默认显示器，去掉这一步。
+                intent = manager.createScreenCaptureIntent(
+                        MediaProjectionConfig.createConfigForDefaultDisplay());
+            } else {
+                intent = manager.createScreenCaptureIntent();
+            }
+            mActivity.startActivityForResult(intent, REQUEST_CODE_MEDIA_PROJECTION);
         }
 
         @Override

@@ -233,6 +233,7 @@ try {
   - 复现脚本（都在 `.artifacts/yolo-bench/`）：`export-models.py`（导出多尺寸）、`size-bench.js` / `rect-bench.js`（真机跑，输出 `IMG/BENCH/DET/AVG`，目录从 `/sdcard/yolo-bench/bench-dir.txt` 读）、`analyze-gt.py`、`analyze-table.py`（召回/分档）、`compare-rect.py`（方形 vs 矩形一致性）、`std-overlay.jpg`（人工核对用的叠加图）。
 - 经典引擎（`ENGINE_CLASSIC`）：640 下 93ms，仍慢于新引擎。
 - OpenCL（`DNN_TARGET_OPENCL_FP16` 等）：自编 `WITH_OPENCL=ON` 版实测 **686ms** —— OpenCV DNN 的 OCL 后端仅针对 Intel GPU 优化，在 Adreno 上是负优化，**不要启用**。
+- **Android 14+ 的「共享一个应用」必须避开（dev-548 修）**：新系统（实测 Android 16）的截图授权弹窗多了一步「应用范围：共享一个应用 / 共享整个屏幕」，选前者后**只要被共享的应用不在前台，投屏就只回全黑帧且不报错**（实测帧亮度 mean=0.0、stddev=0.0；被共享应用在前台时 mean=31.8 正常），脚本会拿着黑图继续推理、什么都检不到——用户感受就是「没有画面给它推理」。`ScreenCaptureRequester` 现在在 API 34+ 显式调用 `createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())`，弹窗固定为「共享整个屏幕」一步授权（按钮变成「共享屏幕」），画面不再受前台应用影响；K40（Android 13）走原路径无变化（`PROBE_TIGHT ok=5 fail=0`）。
 - 预处理骨架未变：letterbox（`LETTERBOX_GRAY=114`、居中、`min` 缩放）+ 1/255 归一化，坐标按 `(coord - pad) / scale` 回映；640 下预处理平均 **1.64ms**。
 - 内置模型已由 `yolo26_320.onnx` 换为 **`yolo26_640.onnx`**（输入固定 640×640，`inputSize` 默认 640，导出参数与旧模型一致：opset 12 / simplify / end2end，输出仍为 `[1,300,6]`）。下文 45.42ms / 18.5 FPS / 26.4 FPS 等数字均为 **320 时期**数据，仅供参考。
 - MIUI 在工作区退到后台后会将纯脚本进程放入后台受限调度组。运行脚本期间现使用计数的前台服务租约，QuickJS 执行线程使用 `THREAD_PRIORITY_DISPLAY`；脚本结束后自动恢复线程优先级，且在用户未开启常驻服务时释放租约。K40 后台 150 帧同帧实测由约 **104–112ms** 恢复到平均 **44.37ms**（p50 **42.52ms** / p95 **54.48ms**）；完整截图 + YOLO 100 帧端到端为 **26.4 FPS**。
