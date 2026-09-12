@@ -63,7 +63,8 @@
   旧资源 `activity_settings/activity_about(_items)/activity_build/activity_documentation/activity_log/activity_login/activity_register/activity_service_status.xml`
   与 `res/xml/preferences.xml` 已删；
 - `MainActivity` 的 legacy 分支残留、`DrawerFragment` 的 `fragment_drawer` 回退分支与其私有 helper（下一个提交）；
-- 全仓 `MIUIX_PILOT` 现在只剩注释与 `SettingsActivity`/`DrawerFragment` 两处历史提及 → 字段可在下一轮从 BuildConfig 删除。
+- 全仓 `MIUIX_PILOT` 已退场：`BuildConfig` 字段删除（2026-09-12），代码里没有任何判断，只剩 Miuix 源集里几处历史注释；
+  同时删掉 `MainActivity` 里已成空壳的 `syncStatusBarWithAppBar()`。
 
 验收：`assembleMiuixCompatDebug` + 单测 + 真机点检（入口转发 + 页面渲染）确认没有页面变空白。
 

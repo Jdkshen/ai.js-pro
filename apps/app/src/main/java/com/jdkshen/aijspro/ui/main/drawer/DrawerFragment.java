@@ -213,7 +213,7 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
         startActivity(new Intent(getContext(), com.jdkshen.aijspro.ui.service.ServiceStatusActivity.class));
     }
 
-    // ---- Miuix drawer bridge (only called when BuildConfig.MIUIX_PILOT) ----
+    // ---- Miuix drawer bridge（Miuix 抽屉宿主回调下面这几个方法）----
 
     public String getDrawerUserName() {
         return mUserName != null ? mUserName.getText().toString() : null;

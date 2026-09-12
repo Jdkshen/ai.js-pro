@@ -131,12 +131,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         // Match the familiar Auto.js Pro startup flow: scripts are the primary
         // workspace. The service dashboard remains available from the drawer.
         showPage(0);
-        syncStatusBarWithAppBar();
-    }
-
-    private void syncStatusBarWithAppBar() {
-        // Miuix navigation/status colors are installed by installMiuixNavigationIfNeeded.
-        return;
     }
 
     private void bindViews() {

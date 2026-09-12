@@ -26,7 +26,6 @@ android {
         versionName versions.appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled true
-        buildConfigField 'boolean', 'MIUIX_PILOT', 'false'
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments = [resourcePackageName: "com.jdkshen.aijspro"]
@@ -101,12 +100,11 @@ android {
     }
     productFlavors {
         // 只保留 Miuix 一条界靨线：common / coolapk 两个旧界面 flavor 已退役
-        // （发布脚本与 CI 一直只用 miuix 变体），MIUIX_PILOT 因此在所有变体里恒为 true。
+        // （发布脚本与 CI 一直只用 miuix 变体），因此不再需要 MIUIX_PILOT 这类双轨开关。
         miuix {
             dimension "channel"
             minSdkVersion 26
             buildConfigField 'String', 'CHANNEL', '"common"'
-            buildConfigField 'boolean', 'MIUIX_PILOT', 'true'
         }
         compat {
             dimension "engine"
