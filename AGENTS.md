@@ -24,8 +24,10 @@
 - 日常变体（MIUIX 皮肤）：`.\gradlew.bat :app:assembleMiuixCompatDebug --console=plain`
 - 单元测试：`.\gradlew.bat :app:testMiuixCompatDebugUnitTest`
 - 产物：`apps/app/build/outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk`
-- 一键出 dev 包并发布到本地更新源：`tools\dev-update.ps1 -NoServe -ReleaseNotes "…"`
-  （版本号自动 +1，产物落在 `.artifacts/updates/`）
+- 一键出 dev 包并发布到本地更新源：**`.\tools\publish.ps1 -ReleaseNotes "…"`**
+  （带前置校验 + 发布后验证 + 自动日志；`-DryRun` 只算版本号不发布。详见下方「踩过的坑」一节）
+- 只需要底层发布器时：`tools\dev-update.ps1 -NoServe -ReleaseNotes "…"`
+  （版本号自动 +1，产物落在 `.artifacts/updates/`）—— ⚠️ 它**不受 `-NoServe` 保护，会真的发布**
 - 装机验证：`C:\Android\platform-tools\adb.exe -s ce4d2bdb install -r <apk>`（小米 8 = 首选真机）
 
 ## 本仓库踩过的坑：发布与脚本（改之前先读）
@@ -38,10 +40,38 @@
 
 - 用**任意假版本号**试脚本，会把这个假版本发布到真实更新源。曾用 `-VersionCode 9999` 试
   `-DeviceId`，结果更新源变成 9999、手机永远提示「发现新版本」，历史里也多出一条垃圾记录。
-- 只想验证参数解析/报错路径时，必须同时满足：加 `-SkipBuild`、**且**用一个临时 `-Dir`
-  （或干脆别碰真实源）。任何会让它走到「发布」这一步的调用都要先想清楚。
-- `-SkipBuild` 时版本号读自现有 APK；不指定 `-VersionCode` 时会退回读**仓库**的
-  `project-versions.json`（通常是 465），会把历史污染成 465。
+- **要验证参数解析或报错路径，用 `-DryRun`**（只算版本号并打印将要做什么；不构建、不发布、
+  不写任何文件）。已验证：`-VersionCode 9999 -DryRun` 不会改动 update.json /
+  project-versions.json / 更新历史。
+- 不要用 `-SkipBuild` + 假 `-VersionCode` 去"只试一下"：那仍然会真的发布。`-SkipBuild` 时版本号
+  读自现有 APK；不指定 `-VersionCode` 会退回读**仓库**的 `project-versions.json`（通常是 465），
+  把历史污染成 465。
+
+### 发布用 `tools/publish.ps1`，不要裸跑 `dev-update.ps1`
+
+`tools/publish.ps1` 在 `dev-update.ps1` 之上包了前置校验与发布后验证：
+
+- 用 `-s` 自己读手机 versionCode 算基准，再**显式**把版本号传给 `dev-update.ps1`
+  （绕过它在多设备下把手机版本静默读成 0 的问题）
+- 发布后校验 versionCode == 预期、SHA-256 与清单一致、**手机自己 curl 能拉到清单**，任一不符即失败
+- 自动把完整输出写进 `.artifacts/publish-<时间戳>.log`
+- 支持 `-DryRun`（只检查与算版本号，不发布）
+
+```powershell
+.\tools\publish.ps1 -ReleaseNotes "本版改了什么"     # 正式发布
+.\tools\publish.ps1 -ReleaseNotes "..." -DryRun     # 只看会发什么版本
+```
+
+⚠️ `-AllowMultiDevice` 只放开**它自己**的检查；`-DeviceId` 必须一并传给下游
+（漏传会在 `dev-update.ps1` 的「检测到 2 台设备」处直接失败 —— 这个调用点已经踩过一次）。
+
+### 不要用 `Select-String` / `Where-Object` 过滤会调 gradle 的脚本输出
+
+管道被提前关闭会**杀掉 gradle 进程**，而且 `$LASTEXITCODE` 会变成 cmdlet 的、不再反映真实结果。
+本仓库已因此损失过两次构建，并发现在同一进程组里的常驻服务（`python -m http.server 8080`）
+也会被一起干掉。
+
+正确做法：`*> 日志文件` 再读文件，或用 `tools/publish.ps1`（它自己写 transcript 日志）。
 
 ### PowerShell 脚本的路径：别依赖 cwd 或 `$PSScriptRoot`
 

@@ -15,9 +15,13 @@
 # dev-update.ps1 是 AGENTS.md 指定的日常出包入口，此前被 /tools/* 静默忽略，
 # 导致对它的修改（如多设备 -DeviceId 修复）无法提交且没有任何提示。
 !/tools/dev-update.ps1
+# publish.ps1 是推荐的发布入口（前置校验 + 发布后验证 + 自动日志 + -DryRun）；
+# 它原先只存在于被忽略的 .artifacts/ 下，永远无法入库。
+!/tools/publish.ps1
 !/tools/serve-updates.ps1
 !/tools/probe-engine-api.ps1
 !/tools/test-engine-flavors-device.ps1
+!/tools/observe-filelist.ps1
 
 # CodeGraph local index (regenerate with `codegraph init`)
 /.codegraph/

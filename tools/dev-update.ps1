@@ -76,6 +76,11 @@
 
 .EXAMPLE
     .\tools\dev-update.ps1 -VersionCode 500 -VersionName "1.0.4-test"
+
+.EXAMPLE
+    .\tools\dev-update.ps1 -DryRun -ReleaseNotes "x"
+    # 只算版本号并打印将要做什么；不构建、不发布、不写任何文件。
+    # 验证参数解析或报错路径时用这个，不要用假版本号真的发一版。
 #>
 param(
     [int]$VersionCode = 0,
@@ -86,6 +91,9 @@ param(
     [switch]$SkipBuild,
     [switch]$NoServe,
     [switch]$NoReverse,
+    # 只算版本号并打印将要做什么，不构建、不发布、不写任何文件。
+    # 本脚本的发布动作**不受 -NoServe 保护**：用假版本号试探会真的写进真实更新源。
+    [switch]$DryRun,
     # 目标设备序列号。留空时：恰好一台在线设备则自动使用；多台则报错要求显式指定
     # （多设备下不带 -s 会让 dumpsys/reverse 静默失效，进而算错版本号）。
     [string]$DeviceId = ""
@@ -209,6 +217,17 @@ Write-Host ("version      : {0} (versionCode {1})" -f $newName, $newCode)
 Write-Host ("baseline     : repo={0} published={1} device={2}" -f $repoVersion, $publishedVersion, $deviceVersion) -ForegroundColor DarkGray
 if ($SkipBuild) {
     Write-Host "skipping the build; the published version is read from the existing APK" -ForegroundColor Yellow
+}
+
+if ($DryRun) {
+    Write-Host ""
+    Write-Host "[DryRun] 到此为止：不构建、不发布、不改 project-versions.json、不写 update.json。" -ForegroundColor Cyan
+    Write-Host ("  将要发布 : {0} (versionCode {1})" -f $newName, $newCode) -ForegroundColor Cyan
+    Write-Host ("  ABI      : {0}" -f $Abi) -ForegroundColor Cyan
+    Write-Host ("  目标目录 : {0}" -f (Join-Path (Split-Path -Parent $PSScriptRoot) '.artifacts\updates')) -ForegroundColor Cyan
+    Write-Host ("  设备     : {0}" -f $(if ($resolvedDevice) { $resolvedDevice } else { '(无)' })) -ForegroundColor Cyan
+    Write-Host ("  发布说明 : {0}" -f $ReleaseNotes) -ForegroundColor Cyan
+    exit 0
 }
 
 # --- 2. build ----------------------------------------------------------------
