@@ -70,11 +70,36 @@
 
 ## 4. 第 2 步：迁移仍以 View 形态存在的页面
 
+### 4.1 文件列表（`ExplorerView`）：切四片做
+
+盘点（2026-09-12）：
+
+| 文件 | 规模 | 谁在用 |
+|---|---:|---|
+| `ui/explorer/ExplorerView.java` | 890 行 | `MyScriptListFragment`（21 处，文件页）、`FileChooseListView`（9 处，文件选择器）、`ExplorerViewHelper`、以及 Compose 侧菜单宿主（`MiuixExplorerMenuHost` / `MiuixProjectMenuHost` / `MiuixSampleFragment` 调它的 `performExplorerActionFromMiuix`、`runCurrentProjectFromMiuix` 等） |
+| `ui/viewmodel/ExplorerItemList.java` | 194 行 | 列表数据源与排序 |
+| `ui/explorer/ExplorerProjectToolbar.java` | 107 行 | 项目目录的运行/打包/同步/编辑 |
+| `ui/explorer/ExplorerViewHelper.java` | 88 行 | 图标、描述等展示细节 |
+
+结论：它不是"一个页面的 View"，而是**被 3 处复用的列表组件**，且已经和 Compose 菜单混用。所以迁移要按片走，每片都能独立验证与回退：
+
+- **S1 状态层抽离**：把 `ExplorerItemList` / `ExplorerPage` / `SortConfig` / 选中集、面包屑路径等抽成不依赖 View 的 `ExplorerUiState`（纯 Kotlin，可单测）。
+  *先让旧 `ExplorerView` 使用它*，行为不变 → 这一步没有 UI 变化，却让后续 Compose 实现可以直接复用，也让"回退"永远可行。
+- **S2 Compose 文件列表组件**：新增 `ui/miuix/explorer/MiuixFileList.kt`（面包屑 + `LazyColumn` 网格切换 + 图标/副标题 + 点击进入目录/打开文件 + 长按菜单，菜单复用现有 `MiuixExplorerMenuHost`）。
+  先接进**文件页**（替换 `MyScriptListFragment` 的内容），旧 `ExplorerView` 暂时留给文件选择器。
+- **S3 操作补齐**：多选、重命名/删除/复制/移动/打包/压缩、排序菜单、新建文件/文件夹、项目工具条（运行/打包/同步/编辑）、下拉刷新、空状态与错误提示。
+  其中删除/覆盖类操作要按现有确认对话框语义逐条对照（安全相关，宁可多测）。
+- **S4 收口**：文件选择器（`FileChooseListView`）切到同一组件的"选择模式"，然后删除 `ExplorerView` / `ExplorerViewHelper` / `ExplorerProjectToolbar` 与 `fragment_my_script_list.xml`，以及 `attrs.xml` 里只服务于它们的自定义属性。
+
+每片的验收：真机点检（浅色/深色、大字体、横屏、空目录、超长文件名）+ 状态层单测 + 与旧实现的行为对照清单（功能一个都不能少）。
+
+### 4.2 其余 View 页面的处理（不变）
+
 | 类别 | 目标 | 理由 |
 |---|---|---|
-| **A：建议迁移到 Compose** | `explorer/ExplorerView` 列表与菜单宿主、设置子页（定时任务等）、`CodeGenerateDialog`、`EditorMenu`、`DebugToolbarFragment`、任务列表相关 View | 结构简单、Compose 组件已就绪；迁完可删大量 adapter + layout |
+| **A：建议迁移到 Compose** | 设置子页（定时任务等）、`CodeGenerateDialog`、`EditorMenu`、`DebugToolbarFragment` | 结构简单、Compose 组件已就绪；迁完可删大量 adapter + layout |
 | **B：保留 View（Compose 里的 View 岛）** | `ProCodeEditorActivity` + `edit/editor/*`（`CodeEditText`/`EditorView`，合计 150k+ 字符的自定义输入控件）、`EmbeddedTerminalActivity` 终端视图、`floating/*` 悬浮窗 | 语法高亮、光标/输入法、终端 I/O 在 Compose 里重做成本远超收益；只把外围壳、菜单、对话框换成 Miuix |
-| **C：壳层** | `MainActivity`（ViewPager + AppBarLayout + DrawerLayout） | 可以继续用 View 壳装 Compose 页面；若后续要换 `Scaffold`，单独排期 |
+| **C：壳层** | `MainActivity`（ViewPager + AppBarLayout + DrawerLayout） | 可以继续用 View 壳装 Compose 页面；等 4.1 的 S2/S3 完成后再评估是否换 `Scaffold` |
 
 每个页面迁移的固定流程：Compose 实现 → 真机点检（浅色/深色/大字/横屏）→ 相关单测或截图留档 → 删旧 View 与 layout。
 
