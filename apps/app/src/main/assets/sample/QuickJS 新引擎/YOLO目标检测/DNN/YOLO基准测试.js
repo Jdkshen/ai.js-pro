@@ -70,10 +70,16 @@ function resolveModel() {
     }
     const labels = String(store.get('labels.' + id, files.join(dir, 'labels.txt')));
     const shape = rectShapeOf(id);
+    // 没有同名 .txt / labels.txt 时用发布包内置的默认标签（COCO 80），免得识别结果只剩 classId 数字
+    const useBuiltinLabels = !files.isFile(labels);
+    if (useBuiltinLabels) {
+        console.log('[模型] 没找到标签文件（' + labels + '），改用内置默认标签（COCO 80）');
+    }
+    const modelLabels = useBuiltinLabels ? BUILTIN_MODEL.labels : labels;
     return {
         name: id.replace(/\.onnx$/i, ''),
         model: path,
-        labels: files.isFile(labels) ? labels : '',
+        labels: modelLabels,
         inputSize: Number(store.get('inputSize.' + id, 640)),
         inputWidth: shape[0],
         inputHeight: shape[1],

@@ -162,7 +162,18 @@ function labelsFor(id) {
     var same = files.join(dir, String(id).replace(/\.onnx$/i, '') + '.txt');
     if (files.isFile(same)) return same;
     var shared = files.join(dir, 'labels.txt');
-    return files.isFile(shared) ? shared : '';
+    if (files.isFile(shared)) return shared;
+    // 库里既没有同名 .txt 也没有 labels.txt：用发布包内置的默认标签（COCO 80），
+    // 否则识别结果只剩 classId 数字，看不出是什么类别。
+    return BUILTIN.labels;
+}
+
+// 显示用：内置默认 / 文件名 / 无
+function labelsTextForId(id) {
+    var path = labelsFor(id);
+    if (!path) return '无';
+    if (String(path).indexOf('asset://') === 0) return '内置默认（COCO 80）';
+    return baseName(path);
 }
 
 // 内置模型也允许改 inputSize / 标签（改完六个案例同样会读到）
@@ -346,6 +357,8 @@ function copyIntoLibrary(sourcePath) {
     if (files.isFile(labelSource)) {
         var labelTarget = String(target).replace(/\.onnx$/i, '.txt');
         if (files.copy(labelSource, labelTarget)) report('已一并导入标签：' + baseName(labelTarget));
+    } else {
+        report('模型旁边没有同名 .txt，标签将用内置默认（COCO 80）；需要自定义请点「设置标签」');
     }
     var shape = suggestShape(name);
     if (shape.width) {
@@ -468,12 +481,12 @@ function changeLabels(target) {
     var id = target === 'builtin' ? BUILTIN_ID : target;
     var name = id === BUILTIN_ID ? BUILTIN.name : id;
     var current = labelsFor(id);
-    var value = dialogs.prompt('输入标签 .txt 完整路径（清空表示自动找同名 .txt / labels.txt）', String(current));
+    var value = dialogs.prompt('输入标签 .txt 完整路径（清空 = 自动：同名 .txt → 库里 labels.txt → 内置默认）', String(current));
     if (value === null || value === undefined) return;
     if (String(value).length === 0) {
         store.remove('labels.' + id);
         delete invalidLabels[id];
-        report('已恢复自动查找标签：' + name + '（现在用 ' + (labelsFor(id) || '无') + '）');
+        report('已恢复自动标签：' + name + '（' + labelsTextForId(id) + '）');
         render();
         return;
     }
@@ -618,6 +631,7 @@ function render() {
     models = scanLibrary();
     var current = currentEntry();
     ui.current.setText('当前模型：' + current.name + '\n输入尺寸=' + shapeTextForId(BUILTIN_ID === current.id ? BUILTIN_ID : current.id) +
+        '　标签=' + labelsTextForId(BUILTIN_ID === current.id ? BUILTIN_ID : current.id) +
         '　来源：' + current.source);
     ui.libdir.setText('模型库：' + libraryDir() + '（' + models.length + ' 个模型）');
     for (var i = 0; i < MAX_ROWS; i++) {
@@ -651,10 +665,9 @@ function bindActions() {
         changeInputSize(choice === 0 ? 'builtin' : models[choice - 1].id);
     });
     ui.labels.click(function () {
-        var items = ['内置 yolo26_640（' + baseName(BUILTIN.labels) + '）'].concat(
+        var items = ['内置 yolo26_640（' + labelsTextForId(BUILTIN_ID) + '）'].concat(
             models.map(function (m) {
-                var labels = labelsFor(m.id);
-                return m.name + '（' + (labels ? baseName(labels) : '无') + '）';
+                return m.name + '（' + labelsTextForId(m.id) + '）';
             }));
         var choice = dialogs.singleChoice('设置标签文件', items, 0);
         if (choice === null || choice === undefined || choice < 0) return;
