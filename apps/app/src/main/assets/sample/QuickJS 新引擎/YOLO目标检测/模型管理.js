@@ -76,14 +76,41 @@ function scanLibrary() {
     return found;
 }
 
+var invalidLabels = {};
+
 function inputSizeFor(id) {
-    var size = Number(store.get('inputSize.' + id, 640));
-    return size >= 32 && size <= 2048 ? Math.round(size) : 640;
+    var fallback = id === BUILTIN_ID ? BUILTIN.inputSize : 640;
+    var size = Number(store.get('inputSize.' + id, fallback));
+    return size >= 32 && size <= 2048 ? Math.round(size) : fallback;
+}
+
+// 标签是按路径存的，可能指向一个「不是文件」的东西（手误填了名字、文件被删了、
+// 或本来就是目录）；这种值不能直接交给 yolo.load，否则会报
+// 「无法读取 YOLO labels」把整个模型判成坏的。
+function isUsableLabelsPath(path) {
+    var text = String(path || '');
+    if (text.length === 0) return false;
+    if (text.indexOf('asset://') === 0) return true; // 内置资源不走 files
+    try {
+        return files.isFile(text);
+    } catch (e) {
+        return false;
+    }
 }
 
 function labelsFor(id) {
-    var override = store.get('labels.' + id, '');
-    if (override && String(override).length > 0) return String(override);
+    var override = String(store.get('labels.' + id, '') || '');
+    if (override.length > 0) {
+        if (isUsableLabelsPath(override)) {
+            delete invalidLabels[id];
+            return override;
+        }
+        // 失效的标签设置：清掉并记一笔，让「验证」能告诉用户发生了什么
+        invalidLabels[id] = override;
+        store.remove('labels.' + id);
+        console.log('[模型管理] 标签设置无效，已清掉：' + id + ' → ' + override);
+    }
+    if (id === BUILTIN_ID) return BUILTIN.labels;
     var dir = libraryDir();
     var same = files.join(dir, String(id).replace(/\.onnx$/i, '') + '.txt');
     if (files.isFile(same)) return same;
@@ -91,8 +118,20 @@ function labelsFor(id) {
     return files.isFile(shared) ? shared : '';
 }
 
+// 内置模型也允许改 inputSize / 标签（改完六个案例同样会读到）
+function builtinEntry() {
+    return {
+        id: BUILTIN_ID,
+        name: BUILTIN.name,
+        model: BUILTIN.model,
+        labels: labelsFor(BUILTIN_ID),
+        inputSize: inputSizeFor(BUILTIN_ID),
+        source: BUILTIN.source
+    };
+}
+
 function entryOf(id) {
-    if (!id || id === BUILTIN_ID) return BUILTIN;
+    if (!id || id === BUILTIN_ID) return builtinEntry();
     var dir = libraryDir();
     var path = files.join(dir, id);
     if (!files.isFile(path)) return BUILTIN;
@@ -163,21 +202,50 @@ function captureForValidate() {
     return { reason: authorized ? 'capture' : 'auth', message: errorText(lastError) };
 }
 
-function validate(entry, withFrame) {
-    var detector = null;
+function yoloLoadOptions(entry, withoutLabels) {
+    return {
+        backend: 'dnn',
+        model: entry.model,
+        labels: withoutLabels ? undefined : (entry.labels || undefined),
+        inputSize: entry.inputSize,
+        threads: 4
+    };
+}
+
+// 打开检测器。标签坏掉（路径不合法/文件读不了）不应该把模型判成坏的：
+// 六个识别案例就是「不是文件就不传」，这里保持一致，并且把失效的标签设置顺手清掉。
+function openDetector(entry) {
+    if (entry.id) labelsFor(entry.id); // 顺手体检 + 清理失效的标签设置
+    var repaired = entry.id ? invalidLabels[entry.id] : '';
+    var note = repaired
+        ? '· 标签设置「' + repaired + '」不是文件，已忽略并清除（现在按库里的同名 .txt / labels.txt 找）'
+        : '';
     try {
-        detector = yolo.load({
-            backend: 'dnn',
-            model: entry.model,
-            labels: entry.labels || undefined,
-            inputSize: entry.inputSize,
-            threads: 4
-        });
+        return { detector: yolo.load(yoloLoadOptions(entry, false)), note: note };
     } catch (error) {
-        return '✗ 加载失败：' + errorText(error) +
+        var text = errorText(error);
+        // 标签文件存在但读不了（比如它是目录、没权限）时退一步：不带标签也要能把模型用起来
+        if (!/labels/i.test(text) || !entry.labels) return { error: text };
+        try {
+            return {
+                detector: yolo.load(yoloLoadOptions(entry, true)),
+                note: (note ? note + '\n' : '') +
+                    '· 标签读不了（' + text + '），本次按「无标签」加载，只能拿到 classId'
+            };
+        } catch (again) {
+            return { error: errorText(again) };
+        }
+    }
+}
+
+function validate(entry, withFrame) {
+    var opened = openDetector(entry);
+    if (opened.error) {
+        return '✗ 加载失败：' + opened.error +
             '\n（需要 OpenCV DNN 能读的 ONNX，建议按 opset 12 / simplify / end2end 导出）';
     }
-    var message = '✓ 加载成功';
+    var detector = opened.detector;
+    var message = '✓ 加载成功' + (opened.note ? '\n' + opened.note : '');
     if (!withFrame) {
         try { detector.close(); } catch (e) { }
         return message;
@@ -300,6 +368,7 @@ function deleteModel(index) {
         report('已删除：' + model.path);
         store.remove('inputSize.' + model.id);
         store.remove('labels.' + model.id);
+        delete invalidLabels[model.id];
         if (String(store.get('current', '')) === model.id) {
             store.put('current', BUILTIN_ID);
             report('删掉的正是当前模型，已回退到「' + BUILTIN.name + '」');
@@ -328,16 +397,29 @@ function changeInputSize(target) {
 function changeLabels(target) {
     var id = target === 'builtin' ? BUILTIN_ID : target;
     var name = id === BUILTIN_ID ? BUILTIN.name : id;
-    var current = id === BUILTIN_ID ? BUILTIN.labels : labelsFor(id);
+    var current = labelsFor(id);
     var value = dialogs.prompt('输入标签 .txt 完整路径（清空表示自动找同名 .txt / labels.txt）', String(current));
     if (value === null || value === undefined) return;
     if (String(value).length === 0) {
         store.remove('labels.' + id);
-        report('已恢复自动查找标签：' + name);
-    } else {
-        store.put('labels.' + id, String(value));
-        report('已设置标签：' + name + ' → ' + value);
+        delete invalidLabels[id];
+        report('已恢复自动查找标签：' + name + '（现在用 ' + (labelsFor(id) || '无') + '）');
+        render();
+        return;
     }
+    var candidate = String(value);
+    // 这里填的是「文件的完整路径」（不是标签名）。不校验的话，一个手误的名字
+    // 会让下次验证直接报「无法读取 YOLO labels」，看起来像模型坏了。
+    if (!isUsableLabelsPath(candidate)) {
+        dialogs.alert('这个路径不是文件', '找不到这个文件：\n' + candidate +
+            '\n\n这里要填 .txt 的完整路径，例如：\n' +
+            files.join(libraryDir(), 'labels.txt') +
+            '\n如果想自动找同名 .txt / labels.txt，把输入框清空后确定。');
+        return;
+    }
+    store.put('labels.' + id, candidate);
+    delete invalidLabels[id];
+    report('已设置标签：' + name + ' → ' + candidate);
     render();
 }
 
