@@ -194,9 +194,9 @@ try {
 const root = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
 const detector = yolo.load({
     backend: 'dnn',
-    model: root + 'yolo26_320.onnx',
+    model: root + 'yolo26_640.onnx',
     labels: root + 'labels.txt',
-    inputSize: 320
+    inputSize: 640
 });
 try {
     if (!requestScreenCapture('portrait')) throw new Error('未获得截图权限');
@@ -214,12 +214,17 @@ try {
 
 可直接运行 `apps/app/src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/` 中的 OpenCV 5.0 DNN 案例，包括环境测试、单帧、实时、持续识别、ROI 区域检测与基准脚本。`yolo.load({ backend: "dnn", model: ..., ... })` 加载 ONNX 模型，对 JS 暴露 `detect` / `close` / `isClosed`。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟约 100ms 中止；`detect` 支持 `region: [x, y, w, h]` 区域检测，检测框坐标会自动回移到全屏坐标系。
 
-**OpenCV 引擎实测结论（骁龙870 / yolo26_320@320）**：
-- 新图引擎（`ENGINE_AUTO` 默认，KleidiCV CPU 路径）：当前 Release 零拷贝链路 100 帧实测推理 **p50 44.47ms / 平均 45.42ms**，检测正常；不支持 `setPreferableTarget`（仅 CPU）。
-- 经典引擎（`ENGINE_CLASSIC`）：~134ms，旧卷积路径，较慢。
+**OpenCV 引擎实测结论（小米 K40，骁龙870；2026-09-12 以 640 模型重测）**：
+- **640 基线（官方构建，3 预热 + 30 帧）**：`inputSize=640, threads=4` 时 load 47.6ms、预处理 **1.64ms**、推理 **80.48ms**、总计 **82.11ms（12.2 FPS）**；同一台机 320 为 22.55ms（44.4 FPS），代价约 3.6×。
+- **线程数扫描（640）**：4 线程 82.1ms 最优；6 线程 101.9ms（-24%）；2 线程 141.6ms（-72%）。默认 `threads` 取 `min(4, 核数)` 与该结论一致。
+- **推理侧对比（用临时实验开关实测，640 / 4 线程；开关已在验证后移除）**：CPU_FP16(80.3ms)、ENGINE_ORT(81.3ms) 与默认 CPU/AUTO(80.8~81.6ms) 无差异；ENGINE_CLASSIC 慢 12%（93.0ms）；OpenCL 沿用下方 686ms 的负结论。**当前 `ENGINE_AUTO` + 默认 CPU target 已是这条栈上的最优组合，不要再指望换 target/引擎提速。**
+- **模型侧实测（同一帧对比）**：`max_det` 300→100 检出逐位一致、耗时不变（81.99 vs 82.09ms）⇒ 不值得换；**INT8（ONNX QDQ）在 OpenCV DNN 上是死路**——同一帧 0 检出（结果错）且推理 366.6ms（4.6× 慢），ARM 侧没有 int8 快速路径，Q/DQ 只被当普通层执行；换架构也没有空间（yolo26n 2.57M/6.12 GFLOPs@640 已是 n 级最轻，yolo11n 2.62M/6.61）。
+- 预处理占比仅 **2%**：640 下把每帧 `blobFromImage` 改为预分配 blob + `blobFromImageWithParams` 后，预处理 1.64 → 1.64ms、总计无明显变化（收益仅剩减少每帧 4.9MB 的分配/GC 抖动），该尝试已回退。**要提速只能动输入尺寸/模型本身（精度换速度），或换运行时（NCNN/ONNX Runtime）。**
+- `OpenCvYoloDetector` 采用 `Dnn.readNetFromONNX(path, Dnn.ENGINE_AUTO)`、target 默认 CPU，不对外暴露 target/图引擎选项。
+- 经典引擎（`ENGINE_CLASSIC`）：640 下 93ms，仍慢于新引擎。
 - OpenCL（`DNN_TARGET_OPENCL_FP16` 等）：自编 `WITH_OPENCL=ON` 版实测 **686ms** —— OpenCV DNN 的 OCL 后端仅针对 Intel GPU 优化，在 Adreno 上是负优化，**不要启用**。
-- 因此 `OpenCvYoloDetector` 采用 `Dnn.readNetFromONNX(path, Dnn.ENGINE_AUTO)` 且不设 target（默认即最优）。
-- OpenCV 后端当前实测（Release，100 帧）：预处理平均 **1.05ms**，推理平均 **45.42ms**，端到端 **18.5 FPS**；NCNN / ONNX Runtime 后端已移除（2026-08-30）。
+- 预处理骨架未变：letterbox（`LETTERBOX_GRAY=114`、居中、`min` 缩放）+ 1/255 归一化，坐标按 `(coord - pad) / scale` 回映；640 下预处理平均 **1.64ms**。
+- 内置模型已由 `yolo26_320.onnx` 换为 **`yolo26_640.onnx`**（输入固定 640×640，`inputSize` 默认 640，导出参数与旧模型一致：opset 12 / simplify / end2end，输出仍为 `[1,300,6]`）。下文 45.42ms / 18.5 FPS / 26.4 FPS 等数字均为 **320 时期**数据，仅供参考。
 - MIUI 在工作区退到后台后会将纯脚本进程放入后台受限调度组。运行脚本期间现使用计数的前台服务租约，QuickJS 执行线程使用 `THREAD_PRIORITY_DISPLAY`；脚本结束后自动恢复线程优先级，且在用户未开启常驻服务时释放租约。K40 后台 150 帧同帧实测由约 **104–112ms** 恢复到平均 **44.37ms**（p50 **42.52ms** / p95 **54.48ms**）；完整截图 + YOLO 100 帧端到端为 **26.4 FPS**。
 
 ### files / http / timers 白名单 API

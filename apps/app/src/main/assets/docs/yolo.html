@@ -117,7 +117,7 @@ log('YOLO 运行时版本：' + yolo.getVersion(backend));
 <div class="signature"><ul>
 <li><code>options.model</code> <span class="type">&lt;string&gt;</span> ONNX 模型路径（也支持<code>onnx</code>作为别名）；<code>asset://</code>开头表示 APK 内资源</li>
 <li><code>options.backend</code> <span class="type">&lt;string&gt;</span> 可选，默认<code>'opencv'</code></li>
-<li><code>options.inputSize</code> <span class="type">&lt;number&gt;</span> 可选，模型输入边长，默认<code>320</code>；长方形输入可用<code>inputWidth</code>/<code>inputHeight</code>（QuickJS 引擎支持）</li>
+<li><code>options.inputSize</code> <span class="type">&lt;number&gt;</span> 可选，模型输入边长，默认<code>640</code>；长方形输入可用<code>inputWidth</code>/<code>inputHeight</code>（QuickJS 引擎支持）</li>
 <li><code>options.threads</code> <span class="type">&lt;number&gt;</span> 可选，推理线程数，默认<code>min(4, CPU 核数)</code></li>
 <li><code>options.labels</code> <span class="type">&lt;Array&lt;string&gt;&gt; | &lt;string&gt;</span> 可选，类别名数组；QuickJS 引擎还支持传<strong>标签文件路径</strong>（每行一个类别）</li>
 <li>返回 <span class="type">&lt;Detector&gt;</span> 检测器对象</li>
@@ -125,9 +125,9 @@ log('YOLO 运行时版本：' + yolo.getVersion(backend));
 </div><p>加载会同步读模型（几百 KB 的模型通常在几十毫秒级），建议在脚本开始时加载一次并复用。检测器不再使用时请<code>close()</code>释放。</p>
 <pre><code>var detector = yolo.load({
     backend: 'dnn',
-    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_320.onnx',
+    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_640.onnx',
     labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
-    inputSize: 320,
+    inputSize: 640,
     threads: 4
 });
 </code></pre><h2>detector.detect(image[, options])<span><a class="mark" href="#yolo_detect" id="yolo_detect">#</a></span></h2>
@@ -176,7 +176,7 @@ if (item) {
 var detector = yolo.load({
     model: '/sdcard/yolo/det.onnx',
     labels: ['按钮', '开关'],
-    inputSize: 320
+    inputSize: 640
 });
 requestScreenCapture();
 while (true) {

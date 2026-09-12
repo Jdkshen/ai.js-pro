@@ -3553,8 +3553,8 @@ JSValue nativeYoloLoad(JSContext *context, JSValueConst, int argc, JSValueConst 
     const std::string model = jsString(context, argv[1]);
     const std::string param = jsString(context, argv[2]);
     const std::string bin = jsString(context, argv[3]);
-    int32_t inputWidth = 320;
-    int32_t inputHeight = 320;
+    int32_t inputWidth = 640;
+    int32_t inputHeight = 640;
     int32_t threads = 4;
     if (JS_ToInt32(context, &inputWidth, argv[4]) < 0 ||
         JS_ToInt32(context, &inputHeight, argv[5]) < 0 ||
@@ -5191,7 +5191,7 @@ const char kBootstrapScript[] = R"JS(
             }
             if (!Array.isArray(labels)) throw new TypeError('labels must be an array or path');
             const detector = Object.create(YoloDetector.prototype);
-            const inputSize = options.inputSize === undefined ? 320 : Number(options.inputSize);
+            const inputSize = options.inputSize === undefined ? 640 : Number(options.inputSize);
             const inputWidth = options.inputWidth === undefined ? inputSize : Number(options.inputWidth);
             const inputHeight = options.inputHeight === undefined ? inputSize : Number(options.inputHeight);
             const id = __aiNativeYoloLoad('opencv', model, '', '',

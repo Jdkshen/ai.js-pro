@@ -14,9 +14,9 @@ if (!yolo.isAvailable(backend)) {
 var modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
 var detector = yolo.load({
     backend: backend,
-    model: modelRoot + 'yolo26_320.onnx',
+    model: modelRoot + 'yolo26_640.onnx',
     labels: modelRoot + 'labels.txt',
-    inputSize: 320,
+    inputSize: 640,
     threads: 4
 });
 

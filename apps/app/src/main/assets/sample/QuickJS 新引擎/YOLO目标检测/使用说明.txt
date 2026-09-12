@@ -9,7 +9,7 @@ ImageReader RGBA Plane
   -> QuickJS 检测框数组
 
 目录结构：
-- DNN/   OpenCV 5.0 DNN 脚本与唯一的 yolo26_320.onnx 模型
+- DNN/   OpenCV 5.0 DNN 脚本与唯一的 yolo26_640.onnx 模型（输入固定 640×640）
 
 包含六个模板案例：
 - YOLO基准测试.js：预热后检测 5 张最新缓存帧，输出平均推理耗时。
@@ -48,14 +48,16 @@ detect 可选参数：
 - region      [x, y, width, height] 只检测该区域（默认全屏）
 
 yolo.load 可选参数（输入尺寸）：
-- inputSize       正方形边长（默认 320），等价 inputWidth=inputHeight=该值
+- inputSize       正方形边长（默认 640，需与模型输入一致）
 - inputWidth     输入宽度（如 480）——矩形模型（如 480x640）使用，优先于 inputSize
 - inputHeight    输入高度（如 640）
 例：{ inputWidth: 480, inputHeight: 640 }（需模型输入 shape 匹配，如 [1,3,640,480]）
 
-实测基准（Redmi K40 / 骁龙870 / yolo26_320 @320，Release，100 帧）：
-- 截图平均 7.06 ms，预处理平均 1.05 ms，推理平均 45.42 ms。
-- 模型总耗时平均 46.47 ms，端到端 18.5 FPS，100 帧 errors=0。
+实测基准（Redmi K40 / 骁龙870 / Release）：
+- 旧 320 模型（yolo26_320 @320，100 帧）：截图平均 7.06 ms，预处理平均 1.05 ms，
+  推理平均 45.42 ms，模型总耗时平均 46.47 ms，端到端 18.5 FPS，100 帧 errors=0。
+- 当前 640 模型的算力约为 320 的 4 倍，耗时需在本机重新实测：直接跑
+  YOLO基准测试.js，看输出的平均 totalMs 与 FPS。
 注意：OpenCV 的 OpenCL target 在骁龙/Adreno 上为负优化（实测 686ms），案例默认
 不启用；OpenCV 5.0 新图引擎不支持手动指定 target，使用默认 CPU 即最优。
 

@@ -22,9 +22,9 @@ const loadStarted = performance.now();
 try {
     detector = yolo.load({
         backend: backend,
-        model: modelRoot + 'yolo26_320.onnx',
+        model: modelRoot + 'yolo26_640.onnx',
         labels: modelRoot + 'labels.txt',
-        inputSize: 320,
+        inputSize: 640,
         threads: 4
     });
     const loadMs = performance.now() - loadStarted;

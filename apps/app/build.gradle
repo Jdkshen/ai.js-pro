@@ -256,7 +256,7 @@ tasks.register('verifyBundledYoloSamples') {
 
     doLast {
         def expectedAssets = [
-                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_320.onnx'),
+                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_640.onnx'),
                 file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt')
         ]
         def missingAssets = expectedAssets.findAll { !it.isFile() }

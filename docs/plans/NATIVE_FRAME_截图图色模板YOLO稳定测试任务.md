@@ -292,12 +292,12 @@ try {
 // @engine quickjs
 
 const backend = 'opencv';
-const modelRoot = 'asset://sample/YOLO目标检测/OpenCV 5.0 DNN版本/models/';
+const modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
 const detector = yolo.load({
     backend: backend,
-    model: modelRoot + 'yolo26_320.onnx',
+    model: modelRoot + 'yolo26_640.onnx',
     labels: modelRoot + 'labels.txt',
-    inputSize: 320,
+    inputSize: 640,
     threads: 4
 });
 

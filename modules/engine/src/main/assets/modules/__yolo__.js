@@ -104,7 +104,7 @@ module.exports = function (runtime, scope) {
         if (!javaYolo.isAvailable(backend)) {
             throw new Error(String(javaYolo.getUnavailableReason(backend)));
         }
-        var inputSize = Math.round(numberOption(options.inputSize, 320));
+        var inputSize = Math.round(numberOption(options.inputSize, 640));
         var defaultThreads = Math.min(4, java.lang.Runtime.getRuntime().availableProcessors());
         var threads = Math.round(numberOption(options.threads, defaultThreads));
 
