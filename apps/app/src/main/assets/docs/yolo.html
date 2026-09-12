@@ -125,9 +125,9 @@ log('YOLO 运行时版本：' + yolo.getVersion(backend));
 </div><p>加载会同步读模型（几百 KB 的模型通常在几十毫秒级），建议在脚本开始时加载一次并复用。检测器不再使用时请<code>close()</code>释放。</p>
 <pre><code>var detector = yolo.load({
     backend: 'dnn',
-    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_640.onnx',
+    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_160.onnx',
     labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
-    inputSize: 640,
+    inputSize: 160,
     threads: 4
 });
 </code></pre><h2>detector.detect(image[, options])<span><a class="mark" href="#yolo_detect" id="yolo_detect">#</a></span></h2>
@@ -193,7 +193,7 @@ while (true) {
 }
 </code></pre><p>可运行的完整示例见<code>QuickJS 新引擎/YOLO目标检测</code>（环境测试、单帧直连、实时直连、区域检测、基准测试、持续识别，以及模型管理）。</p>
 <h2>模型库与模型切换<span><a class="mark" href="#yolo_model_library" id="yolo_model_library">#</a></span></h2>
-<p>发布包只内置一个模型（<code>yolo26_640.onnx</code>，inputSize 640，删不掉，作为保底）；其它模型放进<strong>模型库</strong>后即可切换使用，不必让发布包为每个模型变大。</p>
+<p>发布包内置两个模型：默认 <code>yolo26_160.onnx</code>（inputSize 160，最快、小目标易漏）与保底 <code>yolo26_640.onnx</code>（inputSize 640，最准），删不掉；其它模型放进<strong>模型库</strong>后即可切换使用（竖屏手机推荐导入 160×320），不必让发布包为每个模型变大。</p>
 <ul>
 <li>库目录默认<code>/sdcard/脚本/模型库</code>；把 <code>.onnx</code> 放进去即可（同名 <code>.txt</code> 会当作标签一起识别）。</li>
 <li>管理界面用<code>QuickJS 新引擎/YOLO目标检测/模型管理.js</code>：导入（手动输入路径，或自动在 Download / Documents / 脚本 目录里找）、切换当前模型、设置 inputSize 与标签文件、删除、重命名、更换库目录。列表每行有「使用 / 验证 / 删除」，「验证」= 用当前画面跑一帧，随时可点，不必重新导入。</li>

@@ -10,10 +10,10 @@ var STORE_NAME = 'aijspro.yolo.models';
 var BUILTIN_ID = '@builtin';
 var BUILTIN = {
     id: BUILTIN_ID,
-    name: '内置 yolo26_640',
-    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_640.onnx',
+    name: '内置 yolo26_160',
+    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_160.onnx',
     labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
-    inputSize: 640,
+    inputSize: 160,
     source: '内置资源（发布包自带，删不掉）'
 };
 var DEFAULT_DIR = files.join(files.getSdcardPath(), '脚本', '模型库');
@@ -658,14 +658,14 @@ function bindActions() {
     ui.refresh.click(function () { render(); report('已刷新'); });
     ui.dir.click(function () { changeLibraryDir(); });
     ui.size.click(function () {
-        var items = ['内置 yolo26_640（' + shapeTextForId(BUILTIN_ID) + '）'].concat(
+        var items = ['内置 yolo26_160（' + shapeTextForId(BUILTIN_ID) + '）'].concat(
             models.map(function (m) { return m.name + '（' + shapeTextForId(m.id) + '）'; }));
         var choice = dialogs.singleChoice('设置输入尺寸', items, 0);
         if (choice === null || choice === undefined || choice < 0) return;
         changeInputSize(choice === 0 ? 'builtin' : models[choice - 1].id);
     });
     ui.labels.click(function () {
-        var items = ['内置 yolo26_640（' + labelsTextForId(BUILTIN_ID) + '）'].concat(
+        var items = ['内置 yolo26_160（' + labelsTextForId(BUILTIN_ID) + '）'].concat(
             models.map(function (m) {
                 return m.name + '（' + labelsTextForId(m.id) + '）';
             }));

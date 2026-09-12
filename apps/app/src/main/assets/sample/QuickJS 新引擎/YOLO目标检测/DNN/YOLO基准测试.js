@@ -21,10 +21,10 @@ if (!yolo.isAvailable(backend)) {
 // ---- 当前模型：由「模型管理.js」选择，没选过就用发布包内置模型 ----
 const MODEL_STORE = 'aijspro.yolo.models';
 const BUILTIN_MODEL = {
-    name: '内置 yolo26_640',
-    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_640.onnx',
+    name: '内置 yolo26_160',
+    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_160.onnx',
     labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
-    inputSize: 640,
+    inputSize: 160,
     inputWidth: 0,
     inputHeight: 0,
     source: '内置资源'

@@ -194,9 +194,9 @@ try {
 const root = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
 const detector = yolo.load({
     backend: 'dnn',
-    model: root + 'yolo26_640.onnx',
+    model: root + 'yolo26_160.onnx',   // 发布包内置默认模型（160×160）
     labels: root + 'labels.txt',
-    inputSize: 640
+    inputSize: 160
 });
 try {
     if (!requestScreenCapture('portrait')) throw new Error('未获得截图权限');
@@ -221,7 +221,7 @@ try {
 - **模型侧实测（同一帧对比）**：`max_det` 300→100 检出逐位一致、耗时不变（81.99 vs 82.09ms）⇒ 不值得换；**INT8（ONNX QDQ）在 OpenCV DNN 上是死路**——同一帧 0 检出（结果错）且推理 366.6ms（4.6× 慢），ARM 侧没有 int8 快速路径，Q/DQ 只被当普通层执行；换架构也没有空间（yolo26n 2.57M/6.12 GFLOPs@640 已是 n 级最轻，yolo11n 2.62M/6.61）。
 - 预处理占比仅 **2%**：640 下把每帧 `blobFromImage` 改为预分配 blob + `blobFromImageWithParams` 后，预处理 1.64 → 1.64ms、总计无明显变化（收益仅剩减少每帧 4.9MB 的分配/GC 抖动），该尝试已回退。**要提速只能动输入尺寸/模型本身（精度换速度），或换运行时（NCNN/ONNX Runtime）。**
 - `OpenCvYoloDetector` 采用 `Dnn.readNetFromONNX(path, Dnn.ENGINE_AUTO)`、target 默认 CPU，不对外暴露 target/图引擎选项。
-- **模型库（示例 `YOLO目标检测/模型管理.js`）**：发布包只内置 `yolo26_640.onnx` 作保底；用户可用模型管理把 `.onnx`（同名 `.txt` 作标签）导入库目录（默认 `/sdcard/脚本/模型库`）并切换当前模型。选择存在 `storages` 的 `aijspro.yolo.models`（`dir` / `current` / `inputSize.<id>` / `labels.<id>`），六个 YOLO 案例启动时读取它并打印 `[模型] 本次识别使用：…`，结构化输出带 `model=` 字段。面板每 2 秒按「文件列表 + 当前模型 + 库目录」签名比对，变了才重绘（在文件管理器里改名/增删会自动跟上）；每行可「使用 / 验证 / 删除」，另有「重命名模型」（同时改 `.onnx` 与同名 `.txt`，并把 `inputSize.<id>`、`labels.<id>` 与 `current` 迁到新名字）。
+- **模型库（示例 `YOLO目标检测/模型管理.js`）**：发布包内置两个模型——默认 **`yolo26_160.onnx`**（`inputSize` 160，最快、小目标易漏）与保底 `yolo26_640.onnx`（`inputSize` 640，最准），都删不掉；用户可用模型管理把 `.onnx`（同名 `.txt` 作标签）导入库目录（默认 `/sdcard/脚本/模型库`）并切换当前模型。选择存在 `storages` 的 `aijspro.yolo.models`（`dir` / `current` / `inputSize.<id>` / `labels.<id>`），六个 YOLO 案例启动时读取它并打印 `[模型] 本次识别使用：…`，结构化输出带 `model=` 字段。面板每 2 秒按「文件列表 + 当前模型 + 库目录」签名比对，变了才重绘（在文件管理器里改名/增删会自动跟上）；每行可「使用 / 验证 / 删除」，另有「重命名模型」（同时改 `.onnx` 与同名 `.txt`，并把 `inputSize.<id>`、`labels.<id>` 与 `current` 迁到新名字）。
 - **「跑一帧验证」必须把截图与推理分开报（dev-544 修）**：`images.captureScreen({ fresh: true, timeout })` 在**屏幕静止**时会一直等到超时（超时返回最后一帧，不抛错），真正抛 `TimeoutException: Timed out waiting for the first screen capture frame` 的是**一帧都还没到**——即投屏尚未建立（系统「开始录制或投屏」确认框没点、或 MIUI 把 `PROJECT_MEDIA` 拒了）。把这种错报成「✗ 推理失败（输出需要是 end2end）」纯属误导。现在的写法：`requestScreenCapture('portrait')` 之后**循环等待最多 9 秒**（每 ~400ms 用 `fresh: false` 立即取最近一帧），期间提示用户点「立即开始」；截图没成就只说「跳过推理验证（与模型无关）」并给处理办法，只有 `detector.detect()` 抛错才算推理失败。
 - **标签（labels）路径必须先验证存在（dev-546 修）**：`labels.<id>` 存的是路径，一旦存进不是文件的值（手误填了名字、目标文件被删），下次 `yolo.load({ labels })` 会抛 `IllegalArgumentException: 无法读取 YOLO labels: <path>`，整个模型被报成「✗ 加载失败」；而六个识别案例都先做 `files.isFile(labels) ? labels : ''` 过滤，同一模型推理完全正常——表现就是「管理页说加载失败，但推理能用」。现在管理器与案例口径一致：写入时拒绝非文件路径；读取时忽略并清除失效值（面板提示「已忽略并清除」）；若标签文件存在但读不了，退一步按「无标签」加载（只出 classId）。
 - **输入尺寸对速度/精度的影响（2026-09-12 实测，K40，同一组图同一帧）**：
@@ -255,7 +255,7 @@ try {
 - OpenCL（`DNN_TARGET_OPENCL_FP16` 等）：自编 `WITH_OPENCL=ON` 版实测 **686ms** —— OpenCV DNN 的 OCL 后端仅针对 Intel GPU 优化，在 Adreno 上是负优化，**不要启用**。
 - **Android 14+ 的「共享一个应用」必须避开（dev-548 修）**：新系统（实测 Android 16）的截图授权弹窗多了一步「应用范围：共享一个应用 / 共享整个屏幕」，选前者后**只要被共享的应用不在前台，投屏就只回全黑帧且不报错**（实测帧亮度 mean=0.0、stddev=0.0；被共享应用在前台时 mean=31.8 正常），脚本会拿着黑图继续推理、什么都检不到——用户感受就是「没有画面给它推理」。`ScreenCaptureRequester` 现在在 API 34+ 显式调用 `createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())`，弹窗固定为「共享整个屏幕」一步授权（按钮变成「共享屏幕」），画面不再受前台应用影响；K40（Android 13）走原路径无变化（`PROBE_TIGHT ok=5 fail=0`）。
 - 预处理骨架未变：letterbox（`LETTERBOX_GRAY=114`、居中、`min` 缩放）+ 1/255 归一化，坐标按 `(coord - pad) / scale` 回映；640 下预处理平均 **1.64ms**。
-- 内置模型已由 `yolo26_320.onnx` 换为 **`yolo26_640.onnx`**（输入固定 640×640，`inputSize` 默认 640，导出参数与旧模型一致：opset 12 / simplify / end2end，输出仍为 `[1,300,6]`）。下文 45.42ms / 18.5 FPS / 26.4 FPS 等数字均为 **320 时期**数据，仅供参考。
+- 内置模型沿革：`yolo26_320.onnx` → `yolo26_640.onnx`（dev-541，最大精度）→ **`yolo26_160.onnx` 为默认、640 保留作保底**（dev-551；两者导出参数一致：opset 12 / simplify / end2end，输出 `[1,300,6]`）。六个示例与管理页 **都显式传尺寸**（内置 160 传 `inputSize:160`）；**引擎的 `inputSize` 缺省值仍保持 640**（面向任意第三方模型，直接用内置 160 时请显式传 160）。下文 45.42ms / 18.5 FPS / 26.4 FPS 等数字均为 **320 时期**数据，仅供参考。
 - MIUI 在工作区退到后台后会将纯脚本进程放入后台受限调度组。运行脚本期间现使用计数的前台服务租约，QuickJS 执行线程使用 `THREAD_PRIORITY_DISPLAY`；脚本结束后自动恢复线程优先级，且在用户未开启常驻服务时释放租约。K40 后台 150 帧同帧实测由约 **104–112ms** 恢复到平均 **44.37ms**（p50 **42.52ms** / p95 **54.48ms**）；完整截图 + YOLO 100 帧端到端为 **26.4 FPS**。
 
 ### files / http / timers 白名单 API
