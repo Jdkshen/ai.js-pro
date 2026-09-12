@@ -101,8 +101,10 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     private Explorer mExplorer;
     private ExplorerPage mRootPage;
     private String mPendingHighlightPath;
-    private Stack<ExplorerPageState> mPageStateHistory = new Stack<>();
-    private ExplorerPageState mCurrentPageState = new ExplorerPageState();
+    // 页面栈搬到 ExplorerNavigationState（纯状态、可单测）：这里是它唯一的“View 侧”调用方。
+    private final com.jdkshen.aijspro.ui.viewmodel.ExplorerNavigationState<ExplorerPageState> mPageStateHistory =
+            new com.jdkshen.aijspro.ui.viewmodel.ExplorerNavigationState<>(new ExplorerPageState());
+    private ExplorerPageState mCurrentPageState = mPageStateHistory.getCurrent();
     private int mDirectorySpanSize = 2;
     private final SimpleDateFormat mItemTimestampFormat =
             new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
@@ -148,12 +150,14 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     }
 
     public void setRootPage(ExplorerPage page) {
-        mPageStateHistory.clear();
-        setCurrentPageState(new ExplorerPageState(page));
+        mPageStateHistory.reset(new ExplorerPageState(page));
+        setCurrentPageState(mPageStateHistory.getCurrent());
         loadItemList();
     }
 
     private void setCurrentPageState(ExplorerPageState currentPageState) {
+        // 状态栈与实际显示保持一致：否则后续 push 会把过期的“上一页”压进历史。
+        mPageStateHistory.replaceCurrent(currentPageState);
         mCurrentPageState = currentPageState;
         if (mCurrentPageState.page instanceof ExplorerProjectPage) {
             mProjectToolbar.setProject(currentPageState.page.toScriptFile());
@@ -178,8 +182,8 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
     protected void enterDirectChildPage(ExplorerPage childItemGroup) {
         saveScrollPosition();
-        mPageStateHistory.push(mCurrentPageState);
-        setCurrentPageState(new ExplorerPageState(childItemGroup));
+        mPageStateHistory.push(new ExplorerPageState(childItemGroup));
+        setCurrentPageState(mPageStateHistory.getCurrent());
         loadItemList();
     }
 
@@ -209,7 +213,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             mExplorer.unregisterChangeListener(this);
         mExplorer = explorer;
         mRootPage = rootPage;
-        mPageStateHistory.clear();
+        mPageStateHistory.clearHistory();
         setCurrentPageState(new ExplorerPageState(rootPage));
         mExplorer.registerChangeListener(this);
         enterChildPage(currentPage);
@@ -229,7 +233,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         } catch (java.io.IOException | SecurityException error) {
             return false;
         }
-        mPageStateHistory.clear();
+        mPageStateHistory.clearHistory();
         setCurrentPageState(new ExplorerPageState(mRootPage));
         enterChildPage(new ExplorerDirPage(parent, mRootPage));
         return true;
@@ -263,11 +267,11 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     }
 
     public boolean canGoBack() {
-        return !mPageStateHistory.empty();
+        return mPageStateHistory.canGoBack();
     }
 
     public void goBack() {
-        setCurrentPageState(mPageStateHistory.pop());
+        setCurrentPageState(mPageStateHistory.back());
         loadItemList();
     }
 
