@@ -91,6 +91,26 @@
   其中删除/覆盖类操作要按现有确认对话框语义逐条对照（安全相关，宁可多测）。
 - **S4 收口**：文件选择器（`FileChooseListView`）切到同一组件的"选择模式"，然后删除 `ExplorerView` / `ExplorerViewHelper` / `ExplorerProjectToolbar` 与 `fragment_my_script_list.xml`，以及 `attrs.xml` 里只服务于它们的自定义属性。
 
+### S3 的接口清单（已侦察，照着补即可）
+
+长按菜单要复刻的 action id 与文案（来源：`ExplorerView` 的菜单构建段）：
+
+| 场景 | 菜单项（id → 文案 → 现有实现入口） |
+|---|---|
+| 脚本文件 | `run_repeatedly` 循环运行（`ScriptLoopDialog`）、`timed_task` 定时任务（`ScriptOperations.timedTask`）、`create_shortcut` 发送快捷方式（`ScriptOperations.createShortcut`）、`action_build_apk` 打包 APK（`BuildActivity.EXTRA_SOURCE`） |
+| 通用（按能力位） | `rename` 重命名（`ScriptOperations.rename`，`item.canRename()`）、`delete` 删除（`ScriptOperations.delete`，`item.canDelete()`）、`send` 发送（`Scripts.send`）、`open_by_other_apps` 打开方式（`Scripts.openByOtherApps`） |
+| 示例脚本 | `reset` 重置为初始内容（`Explorers.Providers.workspace().resetSample`）、目录级 `reset_all` 重置全部示例 |
+| 目录 | `rename` / `delete` |
+| 排序（空目录/文件夹头） | `action_sort_by_name` / `action_sort_by_type` / `action_sort_by_size` / `action_sort_by_date` → `SortConfig` |
+
+落地方式建议：
+
+1. 把 `MiuixExplorerMenuHost.show(owner: ExplorerView, …)` 里的底部弹层抽成不依赖 `ExplorerView` 的版本
+   （`showFor(activity/fragment, ids, labels, title, onAction: (Int) -> Unit)`），旧入口委托过去 —— 旧列表行为不变；
+2. Compose 列表里长按 → 按上表构菜单（`canRename()/canDelete()` 等能力位判断保持一致）→ 回调里按 id 分发；
+3. 分发实现直接调 `ScriptOperations` / `Scripts` / `BuildActivity` / `SortConfig`，不要再经过 `ExplorerView`。
+4. 补齐后把实验开关 `aijspro.experimental.miuix_file_list` 默认开启，再删 `ExplorerView` 族群（S4）。
+
 每片的验收：真机点检（浅色/深色、大字体、横屏、空目录、超长文件名）+ 状态层单测 + 与旧实现的行为对照清单（功能一个都不能少）。
 
 ### 4.2 其余 View 页面的处理（不变）
