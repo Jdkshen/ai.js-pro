@@ -31,6 +31,8 @@ import java.util.zip.ZipOutputStream;
  */
 public final class KeyStoreApkSigner implements Signer {
 
+    private static final String TAG = "KeyStoreApkSigner";
+
     private static final String MANIFEST_PATH = "META-INF/MANIFEST.MF";
     private static final String SIGNATURE_FILE_PATH = "META-INF/CERT.SF";
     private static final String SIGNATURE_BLOCK_PATH = "META-INF/CERT.RSA";
@@ -77,6 +79,8 @@ public final class KeyStoreApkSigner implements Signer {
         TreeMap<String, File> files = new TreeMap<>();
         TreeSet<String> directories = new TreeSet<>();
         collect(workspaceDir, "", files, directories);
+        android.util.Log.i(TAG, "unsigned: files=" + files.size() + " dirs=" + directories.size()
+                + " workspace=" + workspaceDir + " out=" + outputApk);
 
         Map<String, byte[]> entryDigests = new LinkedHashMap<>();
         for (Map.Entry<String, File> entry : files.entrySet()) {
@@ -130,6 +134,7 @@ public final class KeyStoreApkSigner implements Signer {
         RandomAccessFile apk = new RandomAccessFile(apkFile, "rw");
         try {
             long fileLength = apk.length();
+            android.util.Log.i(TAG, "v2 sign start: len=" + fileLength + " file=" + apkFile);
             long eocdOffset = findEndOfCentralDirectory(apk, fileLength);
             int eocdSize = (int) (fileLength - eocdOffset);
             byte[] eocd = new byte[eocdSize];

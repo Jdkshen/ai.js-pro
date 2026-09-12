@@ -29,6 +29,9 @@ tools/          runtime-probe.js、inspect-model.py
 ## 硬性约束
 
 - **完全本地**：不做云库、远程推理、远程棋力；不添加 `INTERNET` 权限。资源随包提供，断网可用。
+- **权限**：本工程在 `permissionConfig.manifestPermissions` 里明确声明 5 条
+  （存储读写 / 悬浮窗 / WakeLock / 震动），**不含** `INTERNET`、`ACCESS_NETWORK_STATE`。
+  打包页以工程声明为准；模板自带的那 16 条只在工程没写这段时才是默认值。
 - **模型契约**：`yolo.load({ backend: 'dnn' })` 走 OpenCV DNN，当前只适配固定输入、六列输出
   （`[x1,y1,x2,y2,score,classId]`）的 YOLO26 类模型；非六列输出必须先按 `decoder` 显式解码，
   不能靠"总元素能除以 6"猜。

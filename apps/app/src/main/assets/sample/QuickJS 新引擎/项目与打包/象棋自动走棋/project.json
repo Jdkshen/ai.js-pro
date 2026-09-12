@@ -25,7 +25,13 @@
     "obfuscateComponents": false
   },
   "permissionConfig": {
-    "manifestPermissions": [],
+    "manifestPermissions": [
+      "android.permission.WRITE_EXTERNAL_STORAGE",
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.SYSTEM_ALERT_WINDOW",
+      "android.permission.WAKE_LOCK",
+      "android.permission.VIBRATE"
+    ],
     "requestListOnStartup": []
   },
   "engine": "quickjs"

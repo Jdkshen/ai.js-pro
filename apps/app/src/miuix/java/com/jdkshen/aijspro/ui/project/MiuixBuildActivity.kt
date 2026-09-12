@@ -83,6 +83,8 @@ import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.schedulers.Schedulers
+import org.json.JSONArray
+import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -299,6 +301,9 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             if (!projectRequest.isNullOrEmpty()) {
                 requestPermissions = projectRequest
             }
+            // 工程显式写了权限清单就以工程为准：模板自带的那 16 条只是「工程没声明」时的基线。
+            // 否则像象棋工程这种要求"不带网络"的产物仍会继承模板的 INTERNET / ACCESS_NETWORK_STATE。
+            readDeclaredPermissions(file)?.let { permissions = it }
             engine = config.engine ?: ""
             // 工程里写了 encryptLevel / scriptStorage 就按工程展示，否则保持页面的默认（加密）。
             scriptProtection = ScriptProtection.choiceOf(
@@ -324,6 +329,31 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     private fun simplifiedName(file: File): String =
         if (file.isDirectory) file.name else file.name.substringBeforeLast('.', file.name)
+
+    /**
+     * 读工程 `project.json` 的 `permissionConfig.manifestPermissions`（Auto.js Pro 的工程字段）。
+     *
+     * 返回 `null` = 工程没写这一段 → 用模板默认；返回空列表 = 工程明确声明"什么都不声明"。
+     * 工程里那个「自定义权限」示例就是靠这个字段表达意图的，以前打包页一直忽略它。
+     */
+    private fun readDeclaredPermissions(projectDir: File): List<String>? = try {
+        val configFile = File(projectDir, ProjectConfig.CONFIG_FILE_NAME)
+        val permissionConfig = if (configFile.isFile) {
+            JSONObject(configFile.readText(Charsets.UTF_8)).optJSONObject("permissionConfig")
+        } else {
+            null
+        }
+        if (permissionConfig == null || !permissionConfig.has("manifestPermissions")) {
+            null
+        } else {
+            val declared = permissionConfig.optJSONArray("manifestPermissions") ?: JSONArray()
+            (0 until declared.length()).mapNotNull { index ->
+                declared.optString(index).takeIf { it.isNotBlank() }
+            }
+        }
+    } catch (_: Exception) {
+        null
+    }
 
     /** 密钥库目录：`<脚本目录>/.keyStore/`，顺手建好，用户进去就能看到。 */
     private fun keyStoreDir(): File =
@@ -1000,7 +1030,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     overflow = TextOverflow.Ellipsis,
                     color = MiuixTheme.colorScheme.onBackgroundVariant
                 )
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp).padding(top = 8.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)
+                    .heightIn(max = 320.dp).padding(top = 8.dp)) {
                     if (files.isEmpty()) {
                         item {
                             Text(
@@ -1072,7 +1103,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
                         ?: emptyList()
                 }
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp).padding(top = 8.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)
+                    .heightIn(max = 360.dp).padding(top = 8.dp)) {
                     val parent = pickerDir.parentFile
                     if (parent != null) {
                         item { PickerRow(".. ${parent.name}") { pickerDir = parent } }
@@ -1685,7 +1717,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         colors = ButtonDefaults.textButtonColorsPrimary()
                     )
                 }
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)
+                    .heightIn(max = 380.dp)) {
                     val groups = PermissionCatalog.GROUPS
                         .map { group -> group to group.entries.filter { matchesQuery(it) } }
                         .filter { it.second.isNotEmpty() }

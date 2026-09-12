@@ -226,7 +226,8 @@ public class ApkBuilder {
         }
         File source = new File(mAppConfig.sourcePath);
         if (source.isDirectory()) {
-            copyDir(source.getPath(), mWorkspacePath + "/assets/project");
+            copyDir(source.getPath(), mWorkspacePath + "/assets/project",
+                    excludedOutputDir(source));
             syncProjectJsonAndDeriveKeys();
             writeEntryScript(new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
         } else {
@@ -563,7 +564,30 @@ public class ApkBuilder {
         // rename is applied through the manifest/axml path. Kept for API compatibility.
     }
 
+    /**
+     * 工程目录里属于「打包产物」的子目录（默认 `build/`）不能进 assets：
+     * 一是会把上一次的 APK 塞进新包（体积翻倍），二是 inrt 启动器复制资产时
+     * 会把 `project/build` 当文件打开 —— `FileNotFoundException: project/build`，产物一装就崩。
+     * 只有产物目录确实在工程目录里面时才排除。
+     */
+    private File excludedOutputDir(File sourceDir) throws IOException {
+        if (mOutApkFile == null) {
+            return null;
+        }
+        File outputDir = mOutApkFile.getParentFile();
+        if (outputDir == null) {
+            return null;
+        }
+        String source = sourceDir.getCanonicalPath();
+        String output = outputDir.getCanonicalPath();
+        return output.startsWith(source + File.separator) ? outputDir : null;
+    }
+
     private void copyDir(String src, String dst) throws IOException {
+        copyDir(src, dst, null);
+    }
+
+    private void copyDir(String src, String dst, File excluded) throws IOException {
         File srcDir = new File(src);
         File[] children = srcDir.listFiles();
         if (children == null) {
@@ -576,8 +600,11 @@ public class ApkBuilder {
             throw new IOException("无法创建目录：" + dst);
         }
         for (File child : children) {
+            if (excluded != null && child.getCanonicalFile().equals(excluded)) {
+                continue;
+            }
             if (child.isDirectory()) {
-                copyDir(child.getPath(), dst + "/" + child.getName());
+                copyDir(child.getPath(), dst + "/" + child.getName(), excluded);
             } else {
                 FileOutputStream out = new FileOutputStream(new File(dstDir, child.getName()));
                 FileInputStream in = new FileInputStream(child);
