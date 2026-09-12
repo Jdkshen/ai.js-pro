@@ -81,13 +81,13 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
         if (mSharedPreferences.getBoolean(KEY_DO_NOT_ASK_AGAIN_FOR_VERSION + mVersionInfo.versionCode, false)) {
             return null;
         }
-        if (BuildConfig.MIUIX_PILOT && showWithMiuix()) {
+        if (showWithMiuix()) {
             return null;
         }
         return super.show();
     }
 
-    /** Miuix 版（pilot）走独立的 Compose 对话框；失败时回退到 Material 实现。 */
+    /** Miuix 版：「发现新版本」走 Compose 对话框；拿不到 Activity 时回退 Material 实现。 */
     private boolean showWithMiuix() {
         if (!(getContext() instanceof android.app.Activity)) {
             return false;
@@ -101,25 +101,16 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
             historyTitles[i] = entry.displayTitle();
             historyNotes[i] = entry.issues == null ? "" : entry.issues;
         }
-        try {
-            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.update.MiuixUpdateDialog");
-            host.getMethod("show", android.app.Activity.class, String.class, String.class,
-                            int.class, boolean.class, String.class, Runnable.class,
-                            String[].class, String[].class)
-                    .invoke(null, getContext(),
-                            getContext().getString(R.string.text_new_version) + " " + mVersionInfo.versionName,
-                            mVersionInfo.releaseNotes,
-                            mVersionInfo.versionCode,
-                            mShowDoNotAskAgain,
-                            KEY_DO_NOT_ASK_AGAIN_FOR_VERSION,
-                            (Runnable) () -> directlyDownload(mVersionInfo),
-                            historyTitles,
-                            historyNotes);
-            return true;
-        } catch (Throwable error) {
-            android.util.Log.e("UpdateInfoDialogBuilder", "Miuix update dialog failed, fallback to Material", error);
-            return false;
-        }
+        return com.jdkshen.aijspro.ui.update.MiuixUpdateDialog.show(
+                (android.app.Activity) getContext(),
+                getContext().getString(R.string.text_new_version) + " " + mVersionInfo.versionName,
+                mVersionInfo.releaseNotes,
+                mVersionInfo.versionCode,
+                mShowDoNotAskAgain,
+                KEY_DO_NOT_ASK_AGAIN_FOR_VERSION,
+                (Runnable) () -> directlyDownload(mVersionInfo),
+                historyTitles,
+                historyNotes);
     }
 
     private void setCurrentVersionIssues(View view, VersionInfo info) {

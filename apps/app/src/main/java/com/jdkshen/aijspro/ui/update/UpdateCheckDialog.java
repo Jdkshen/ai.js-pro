@@ -23,10 +23,6 @@ import io.reactivex.annotations.NonNull;
 
 public class UpdateCheckDialog {
 
-    private static final String TAG = "UpdateCheckDialog";
-    private static final String MIUIX_DIALOG_CLASS =
-            "com.jdkshen.aijspro.ui.update.MiuixUpdateCheckDialog";
-
     /** 「正在检查更新」提示框的最短显示时间：本地/自建更新源响应极快时，
      *  不设下限就会出现「弹出来立刻被关掉」的一闪而过。 */
     private static final long MIN_SHOW_DURATION_MS = 400;
@@ -44,9 +40,13 @@ public class UpdateCheckDialog {
 
     public void show() {
         mShownAtMs = android.os.SystemClock.uptimeMillis();
-        // Miuix（pilot）下用同风格的 Compose 提示框：旧 Material 进度框在网络很快时
-        // 会一闪而过且风格不搭。反射失败时自动回退。
-        if (!showWithMiuix()) {
+        // Miuix（Compose）提示框：旧 Material 进度框在网络很快时会一闪而过且风格不搭。
+        // miuix 源集已是唯一界面线，这里直接调用；只有拿不到 Activity 时才回退 Material。
+        if (mContext instanceof Activity) {
+            mMiuixHandle = com.jdkshen.aijspro.ui.update.MiuixUpdateCheckDialog.show(
+                    (Activity) mContext, mContext.getString(R.string.text_checking_update));
+        }
+        if (mMiuixHandle == null) {
             mProgress = new MaterialDialog.Builder(mContext)
                     .progress(true, 0)
                     .content(R.string.text_checking_update)
@@ -91,21 +91,6 @@ public class UpdateCheckDialog {
                 });
     }
 
-    private boolean showWithMiuix() {
-        if (!BuildConfig.MIUIX_PILOT || !(mContext instanceof Activity)) {
-            return false;
-        }
-        try {
-            Class<?> host = Class.forName(MIUIX_DIALOG_CLASS);
-            mMiuixHandle = host.getMethod("show", Activity.class, String.class)
-                    .invoke(null, mContext, mContext.getString(R.string.text_checking_update));
-            return mMiuixHandle != null;
-        } catch (Throwable error) {
-            Log.e(TAG, "Miuix update check dialog failed, fallback to Material", error);
-            return false;
-        }
-    }
-
     private void dismissProgress(Runnable andThen) {
         long elapsed = android.os.SystemClock.uptimeMillis() - mShownAtMs;
         long remain = MIN_SHOW_DURATION_MS - elapsed;
@@ -124,11 +109,7 @@ public class UpdateCheckDialog {
 
     private void dismissProgressNow() {
         if (mMiuixHandle != null) {
-            try {
-                Class.forName(MIUIX_DIALOG_CLASS).getMethod("dismiss", Object.class)
-                        .invoke(null, mMiuixHandle);
-            } catch (Throwable ignored) {
-            }
+            com.jdkshen.aijspro.ui.update.MiuixUpdateCheckDialog.dismiss(mMiuixHandle);
             mMiuixHandle = null;
         } else if (mProgress != null) {
             mProgress.dismiss();

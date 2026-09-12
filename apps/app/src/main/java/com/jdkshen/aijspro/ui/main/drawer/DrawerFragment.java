@@ -145,17 +145,16 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     @NonNull
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        if (BuildConfig.MIUIX_PILOT) {
-            View miuixView = tryCreateMiuixDrawerView();
-            if (miuixView != null) {
-                mMiuixDrawerView = miuixView;
-                // setUpViews() is skipped in pilot mode, restore the floating
-                // window from the persisted preference like the legacy drawer did.
-                if (Pref.isFloatingMenuShown()) {
-                    FloatyWindowManger.showCircularMenuIfNeeded();
-                }
-                return miuixView;
+        // Miuix（Compose）抽屉：miuix 源集已是唯一界面线，这里直接构造，不再反射探测。
+        View miuixView = com.jdkshen.aijspro.ui.main.drawer.MiuixDrawerHost.createView(this);
+        if (miuixView != null) {
+            mMiuixDrawerView = miuixView;
+            // setUpViews() is skipped in pilot mode, restore the floating
+            // window from the persisted preference like the legacy drawer did.
+            if (Pref.isFloatingMenuShown()) {
+                FloatyWindowManger.showCircularMenuIfNeeded();
             }
+            return miuixView;
         }
         View view = inflater.inflate(R.layout.fragment_drawer, container, false);
         mHeaderView = view.findViewById(R.id.header);
@@ -167,16 +166,6 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
         view.findViewById(R.id.avatar).setOnClickListener(v -> loginOrShowUserInfo());
         setUpViews();
         return view;
-    }
-
-    private View tryCreateMiuixDrawerView() {
-        try {
-            Class<?> clazz = Class.forName("com.jdkshen.aijspro.ui.main.drawer.MiuixDrawerHost");
-            java.lang.reflect.Method method = clazz.getMethod("createView", DrawerFragment.class);
-            return (View) method.invoke(null, this);
-        } catch (Throwable ignored) {
-            return null;
-        }
     }
 
     void setUpViews() {

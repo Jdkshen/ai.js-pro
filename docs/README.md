@@ -34,6 +34,7 @@
 - [Rhino 双引擎回归与发布验收](plans/RHINO_双引擎回归与发布验收任务.md)
 - [侧边栏按钮与全分辨率 UI 适配](plans/侧边栏按钮与全分辨率UI适配方案.md)（已作废）
 - [悬浮窗流畅度优化](plans/悬浮窗流畅度优化方案.md)（部分失效，见文内说明）
+- [UI 统一到 Compose(Miuix) 迁移方案](plans/UI_统一到 Compose(Miuix) 迁移方案.md)：退役 legacy flavor 与双轨分支、剩下的 View 页面迁移顺序与验收清单
 
 ## 历史报告
 

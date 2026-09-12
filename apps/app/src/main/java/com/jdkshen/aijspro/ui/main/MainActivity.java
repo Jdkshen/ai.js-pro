@@ -135,23 +135,8 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private void syncStatusBarWithAppBar() {
-        if (BuildConfig.MIUIX_PILOT) {
-            // Miuix navigation/status colors are installed by installMiuixNavigationIfNeeded.
-            return;
-        }
-        int surface = com.google.android.material.color.MaterialColors.getColor(
-                findViewById(R.id.app_bar), com.google.android.material.R.attr.colorSurface);
-        getWindow().setStatusBarColor(surface);
-        getWindow().setNavigationBarColor(surface);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            View decorView = getWindow().getDecorView();
-            int flags = decorView.getSystemUiVisibility();
-            if (Pref.isNightModeEnabled()) {
-                decorView.setSystemUiVisibility(flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
-            } else {
-                decorView.setSystemUiVisibility(flags | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
-            }
-        }
+        // Miuix navigation/status colors are installed by installMiuixNavigationIfNeeded.
+        return;
     }
 
     private void bindViews() {
@@ -256,12 +241,10 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         });
     }
 
-    /** Installs the flavor-isolated Compose/Miuix bar while keeping the native pager and lists. */
+    /** Installs the Compose/Miuix bar while keeping the native pager and lists. */
     private void installMiuixNavigationIfNeeded() {
-        if (!BuildConfig.MIUIX_PILOT) return;
         try {
-            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.main.MiuixMainNavigationHost");
-            View bar = (View) host.getMethod("createView", MainActivity.class).invoke(null, this);
+            View bar = com.jdkshen.aijspro.ui.main.MiuixMainNavigationHost.createView(this);
             AppBarLayout appBar = findViewById(R.id.app_bar);
             Toolbar toolbar = findViewById(R.id.toolbar);
             toolbar.setVisibility(View.GONE);
@@ -298,10 +281,8 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private void installMiuixFabIfNeeded() {
-        if (!BuildConfig.MIUIX_PILOT) return;
         try {
-            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.main.MiuixMainFabHost");
-            mMiuixFab = (View) host.getMethod("createView", MainActivity.class).invoke(null, this);
+            mMiuixFab = com.jdkshen.aijspro.ui.main.MiuixMainFabHost.createView(this);
             ViewGroup parent = (ViewGroup) mFab.getParent();
             androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams params =
                     new androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(
@@ -490,14 +471,10 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private ViewPagerFragment createManageFragment() {
-        if (BuildConfig.MIUIX_PILOT) {
-            try {
-                return (ViewPagerFragment) Class.forName(
-                        "com.jdkshen.aijspro.ui.task.MiuixTaskManagerFragment")
-                        .getDeclaredConstructor().newInstance();
-            } catch (Throwable error) {
-                android.util.Log.e(LOG_TAG, "Unable to create Miuix manage page", error);
-            }
+        try {
+            return new com.jdkshen.aijspro.ui.task.MiuixTaskManagerFragment();
+        } catch (Throwable error) {
+            android.util.Log.e(LOG_TAG, "Unable to create Miuix manage page", error);
         }
         return new TaskManagerFragment();
     }
@@ -524,40 +501,28 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private ViewPagerFragment createTutorialFragment() {
-        if (BuildConfig.MIUIX_PILOT) {
-            try {
-                return (ViewPagerFragment) Class.forName(
-                        "com.jdkshen.aijspro.ui.sample.MiuixSampleFragment")
-                        .getDeclaredConstructor().newInstance();
-            } catch (Throwable error) {
-                android.util.Log.e(LOG_TAG, "Unable to create Miuix sample page", error);
-            }
+        try {
+            return new com.jdkshen.aijspro.ui.sample.MiuixSampleFragment();
+        } catch (Throwable error) {
+            android.util.Log.e(LOG_TAG, "Unable to create Miuix sample page", error);
         }
         return new DocsFragment();
     }
 
     private ViewPagerFragment createMarketFragment() {
-        if (BuildConfig.MIUIX_PILOT) {
-            try {
-                return (ViewPagerFragment) Class.forName(
-                        "com.jdkshen.aijspro.ui.plugin.MiuixPluginFragment")
-                        .getDeclaredConstructor().newInstance();
-            } catch (Throwable error) {
-                android.util.Log.e(LOG_TAG, "Unable to create Miuix plugin page", error);
-            }
+        try {
+            return new com.jdkshen.aijspro.ui.plugin.MiuixPluginFragment();
+        } catch (Throwable error) {
+            android.util.Log.e(LOG_TAG, "Unable to create Miuix plugin page", error);
         }
         return new MarketFragment();
     }
 
     private ViewPagerFragment createCommunityFragment() {
-        if (BuildConfig.MIUIX_PILOT) {
-            try {
-                return (ViewPagerFragment) Class.forName(
-                        "com.jdkshen.aijspro.ui.resource.MiuixResourceFragment")
-                        .getDeclaredConstructor().newInstance();
-            } catch (Throwable error) {
-                android.util.Log.e(LOG_TAG, "Unable to create Miuix resource page", error);
-            }
+        try {
+            return new com.jdkshen.aijspro.ui.resource.MiuixResourceFragment();
+        } catch (Throwable error) {
+            android.util.Log.e(LOG_TAG, "Unable to create Miuix resource page", error);
         }
         return new CommunityFragment();
     }

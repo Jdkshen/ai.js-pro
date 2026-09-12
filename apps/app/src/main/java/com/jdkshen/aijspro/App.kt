@@ -50,14 +50,9 @@ class App : MultiDexApplication() {
         setUpStaticsTool()
         setUpDebugEnvironment()
         init()
-        // MCP 自动启停：仅 miuix 变体通过反射注册（跟随前台启动因类仅存在于 miuix 源集）
-        if (BuildConfig.MIUIX_PILOT) {
-            runCatching {
-                val lifecycle = Class.forName("com.jdkshen.aijspro.mcp.McpAutoLifecycle")
-                    .getConstructor(Application::class.java).newInstance(this)
-                registerActivityLifecycleCallbacks(lifecycle as Application.ActivityLifecycleCallbacks)
-            }
-        }
+        // MCP 自动启停：跟随前台服务状态自动起停内置的 MCP HTTP 服务。
+        // miuix 源集已随 flavor 退役成为唯一界面线，这里直接引用，不再走反射探测。
+        registerActivityLifecycleCallbacks(com.jdkshen.aijspro.mcp.McpAutoLifecycle(this))
     }
 
     private fun setUpStaticsTool() {
