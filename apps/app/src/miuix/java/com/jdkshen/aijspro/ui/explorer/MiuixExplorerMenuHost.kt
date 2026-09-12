@@ -31,13 +31,34 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** Miuix replacement for the explorer's legacy anchored PopupMenu. */
 object MiuixExplorerMenuHost {
+
+    /** 旧入口（旧列表用）：动作直接回给 ExplorerView。 */
     @JvmStatic
     fun show(owner: ExplorerView, ids: IntArray, labels: Array<String>, title: String) {
-        val dialog = Dialog(owner.context)
+        showFor(owner.context as android.app.Activity, ids, labels, title) { id ->
+            owner.performExplorerActionFromMiuix(id)
+        }
+    }
+
+    /**
+     * 不依赖 ExplorerView 的版本：Compose 列表长按后直接拿回调分发动作。
+     * 生命周期挂到宿主 Activity（ComponentActivity 同时是 LifecycleOwner 与 SavedStateRegistryOwner）。
+     */
+    @JvmStatic
+    fun showFor(
+        activity: android.app.Activity,
+        ids: IntArray,
+        labels: Array<String>,
+        title: String,
+        onAction: (Int) -> Unit
+    ) {
+        val dialog = Dialog(activity)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        dialog.setContentView(ComposeView(owner.context).apply {
-            setViewTreeLifecycleOwner(owner.findViewTreeLifecycleOwner())
-            setViewTreeSavedStateRegistryOwner(owner.findViewTreeSavedStateRegistryOwner())
+        dialog.setContentView(ComposeView(activity).apply {
+            val lifecycleOwner = activity as? androidx.lifecycle.LifecycleOwner
+            val savedStateOwner = activity as? androidx.savedstate.SavedStateRegistryOwner
+            if (lifecycleOwner != null) setViewTreeLifecycleOwner(lifecycleOwner)
+            if (savedStateOwner != null) setViewTreeSavedStateRegistryOwner(savedStateOwner)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
                 AijsMiuixTheme {
@@ -52,7 +73,7 @@ object MiuixExplorerMenuHost {
                                     color = if (ids[index] == R.id.delete) ComposeColor(0xFFE5484D)
                                     else MiuixTheme.colorScheme.onSurface,
                                     modifier = Modifier.fillMaxWidth().clickable {
-                                        owner.performExplorerActionFromMiuix(ids[index])
+                                        onAction(ids[index])
                                         dialog.dismiss()
                                     }.padding(horizontal = 20.dp, vertical = 14.dp))
                             }
@@ -66,7 +87,7 @@ object MiuixExplorerMenuHost {
             setGravity(Gravity.BOTTOM)
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             attributes = attributes.apply { dimAmount = 0.42f }
-            setLayout((owner.resources.displayMetrics.widthPixels * 0.94f).toInt(),
+            setLayout((activity.resources.displayMetrics.widthPixels * 0.94f).toInt(),
                 ViewGroup.LayoutParams.WRAP_CONTENT)
         }
     }

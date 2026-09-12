@@ -1,9 +1,13 @@
 package com.jdkshen.aijspro.ui.explorer
 
+import android.content.Intent
 import android.view.View
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,10 +39,15 @@ import androidx.compose.ui.unit.sp
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.model.explorer.ExplorerDirPage
+import com.jdkshen.aijspro.model.explorer.ExplorerFileItem
 import com.jdkshen.aijspro.model.explorer.ExplorerItem
 import com.jdkshen.aijspro.model.explorer.ExplorerPage
+import com.jdkshen.aijspro.model.explorer.ExplorerSamplePage
 import com.jdkshen.aijspro.model.explorer.Explorers
 import com.jdkshen.aijspro.model.script.Scripts
+import com.jdkshen.aijspro.ui.common.ScriptLoopDialog
+import com.jdkshen.aijspro.ui.common.ScriptOperations
+import com.jdkshen.aijspro.ui.project.BuildActivity
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerItemList
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerNavigationState
@@ -197,7 +206,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .background(MiuixTheme.colorScheme.surface)
-                .clickable { navigation.push(page); reload() }
+                .itemGestures(page)
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -237,7 +246,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .background(MiuixTheme.colorScheme.surface)
-                .clickable { open(item) }
+                .itemGestures(item)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -294,6 +303,78 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
         } else {
             IntentUtil.viewFile(GlobalAppContext.get(), item.getPath(), AppFileProvider.AUTHORITY)
         }
+    }
+
+    // ---- 长按菜单（S3 第一批：重命名 / 删除 / 发送 / 打开方式 / 定时任务 / 快捷方式 / 打包 / 循环运行 / 重置样例）----
+
+    @OptIn(ExperimentalFoundationApi::class)
+    private fun Modifier.itemGestures(item: ExplorerItem): Modifier = combinedClickable(
+        onClick = {
+            if (item is ExplorerPage) {
+                navigation.push(item)
+                reload()
+            } else {
+                open(item)
+            }
+        },
+        onLongClick = { showItemMenu(item) }
+    )
+
+    private fun showItemMenu(item: ExplorerItem) {
+        val activity = fragment.activity ?: return
+        val ids = ArrayList<Int>()
+        val labels = ArrayList<Int>()
+        fun add(id: Int, label: Int) {
+            ids.add(id)
+            labels.add(label)
+        }
+        if (item !is ExplorerPage && ExplorerViewHelper.isJavaScript(item)) {
+            add(R.id.run_repeatedly, R.string.text_run_repeatedly)
+            add(R.id.timed_task, R.string.text_timed_task)
+            add(R.id.create_shortcut, R.string.text_send_shortcut)
+            add(R.id.action_build_apk, R.string.text_build_apk)
+        }
+        if (item.canRename()) add(R.id.rename, R.string.text_rename)
+        if (item.canDelete()) add(R.id.delete, R.string.text_delete)
+        if (item !is ExplorerPage) {
+            add(R.id.send, R.string.text_send)
+            add(R.id.open_by_other_apps, R.string.text_open_by_other_apps)
+        }
+        if (item is ExplorerSamplePage) add(R.id.reset, R.string.text_reset_to_initial_content)
+        if (ids.isEmpty()) return
+        MiuixExplorerMenuHost.showFor(activity, ids.toIntArray(),
+            labels.map { fragment.getString(it) }.toTypedArray(),
+            ExplorerViewHelper.getDisplayName(item)) { id -> performAction(item, id) }
+    }
+
+    private fun performAction(item: ExplorerItem, id: Int) {
+        val context = fragment.context ?: return
+        val operations = { ScriptOperations(context, null, navigation.current) }
+        when (id) {
+            R.id.rename -> operations().rename(item as ExplorerFileItem)
+                .subscribe({ reload() }, { error -> toast(error) })
+            R.id.delete -> {
+                operations().delete(item.toScriptFile())
+                reload()
+            }
+            R.id.timed_task -> operations().timedTask(item.toScriptFile())
+            R.id.create_shortcut -> operations().createShortcut(item.toScriptFile())
+            R.id.send -> Scripts.send(item.toScriptFile())
+            R.id.open_by_other_apps -> Scripts.openByOtherApps(item.toScriptFile())
+            R.id.run_repeatedly -> ScriptLoopDialog(context, item.toScriptFile()).show()
+            R.id.action_build_apk -> context.startActivity(
+                Intent(context, BuildActivity::class.java)
+                    .putExtra(BuildActivity.EXTRA_SOURCE, item.getPath())
+            )
+            R.id.reset -> Explorers.Providers.workspace().resetSample(item.toScriptFile())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe({ reload() }, { error -> toast(error) })
+        }
+    }
+
+    private fun toast(error: Throwable) {
+        val context = fragment.context ?: return
+        Toast.makeText(context, error.message ?: error.javaClass.simpleName, Toast.LENGTH_LONG).show()
     }
 
     private fun breadcrumbOf(page: ExplorerItem): String {
