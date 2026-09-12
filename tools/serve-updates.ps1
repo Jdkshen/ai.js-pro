@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Publish one or more APKs as a self-hosted update source (update.json + HTTP server).
 
@@ -40,7 +40,11 @@
 #>
 param(
     [Parameter(Mandatory = $true)][string[]]$Apk,
-    [string]$Dir = "$PSScriptRoot\..\.artifacts\updates",
+    # 默认落到【仓库内】的 .artifacts\updates。不要写成 "$PSScriptRoot\..\.artifacts\updates"：
+    # 用 `powershell -File` 直接调用本脚本时 $PSScriptRoot 会变成 C:\tools 这类值，
+    # 于是路径解析到 C:\.artifacts\updates —— 清单写到了别处，真正的更新源根本没更新，
+    # 而脚本仍然报成功（曾因此把一次修复发布写丢）。
+    [string]$Dir = "",
     [int]$Port = 8080,
     [string]$ReleaseNotes = "",
     [int]$VersionCode = 0,
@@ -52,6 +56,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# 仓库根 = 本脚本所在目录的父目录。用 $MyInvocation 而非 $PSScriptRoot 更稳，
+# 并在解析后校验确实存在，避免再次静默写到别处。
+if ([string]::IsNullOrWhiteSpace($Dir)) {
+    $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $repoRoot = Split-Path -Parent $repoRoot
+    $Dir = Join-Path $repoRoot '.artifacts\updates'
+    $versionsMarker = Join-Path $repoRoot 'project-versions.json'
+    if (-not (Test-Path -LiteralPath $versionsMarker)) {
+        throw "无法从 $($MyInvocation.MyCommand.Path) 推断仓库根（未找到 $versionsMarker）；请显式传 -Dir。"
+    }
+}
 
 $Apk = $Apk | ForEach-Object {
     $item = Get-Item -LiteralPath $_ -ErrorAction SilentlyContinue
