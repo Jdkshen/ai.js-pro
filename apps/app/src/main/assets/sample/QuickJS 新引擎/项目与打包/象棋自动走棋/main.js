@@ -2,14 +2,14 @@
 "ui";
 
 /**
- * 象棋自动走棋 · 工程骨架 v0.1.0
+ * 象棋自动走棋 · 工程骨架 v0.2.0
  *
- * 现状：这里只有界面骨架和目录约定。棋盘识别（ONNX）、棋规、本机算棋（UCI）与
- * 自动落子都还没有实现，界面显示的状态就是真实状态——不做任何"看起来能跑"的假动作。
+ * 现状：FEN / 棋盘几何 / 格点分配 / 时序融合已是真代码（离线自检可验），
+ * 但识别链路还没有模型，棋规、本机算棋（UCI）与自动落子都还没接入 —— 界面显示的就是真实状态。
  * 开发规格与分阶段要求见本工程 README.md。
  */
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const STEPS = [
   "P0  运行时探针：截图 / 模型 / 线程 / 打包能力核对",
@@ -30,34 +30,64 @@ ui.layout(
   '  <frame height="14"/>' +
   '  <text text="开发阶段" textSize="16sp" textStyle="bold"/>' +
   '  <text id="steps" textSize="13sp" textColor="#555555"/>' +
-  '  <frame height="14"/>' +
+  '  <frame height="10"/>' +
+  '  <button id="selfcheck" text="运行离线自检"/>' +
   '  <button id="probe" text="查看运行环境"/>' +
+  '  <scroll height="260dp">' +
+  '    <text id="output" textSize="12sp" textColor="#333333"/>' +
+  '  </scroll>' +
   '</vertical>'
 );
 
 ui.version.setText("工程版本 v" + VERSION + "（骨架）");
-ui.status.setText("状态：识别 / 棋规 / 算棋 / 落子均未接入。本工程当前不会点击棋盘。");
+ui.status.setText("状态：识别（无模型）/ 棋规 / 算棋 / 落子均未接入。本工程当前不会点击棋盘。");
 ui.steps.setText(STEPS.join("\n"));
 
-// 探针只读环境信息，不截图、不加载模型、不点击。真正的能力探针按任务书另建脚本。
+function show(text) {
+    ui.output.setText(text);
+    console.log("[xiangqi] " + text);
+}
+
+// 离线自检：只跑纯 JS 模块（FEN / 几何 / 格点分配 / 时序融合），不截图、不点棋盘。
+ui.selfcheck.on("click", () => {
+    try {
+        const result = require("./tools/self-check.js");
+        const lines = [result.summary];
+        for (let i = 0; i < result.failures.length; i++) {
+            lines.push((i + 1) + ". " + result.failures[i]);
+        }
+        show(lines.join("\n"));
+    } catch (error) {
+        show("自检没能运行：" + error);
+    }
+});
+
+// 运行时探针：核对平台能力（会截一张图看帧字段），不点击棋盘。
 ui.probe.on("click", () => {
-    const lines = ["引擎：QuickJS"];
     try {
-        lines.push("Android：" + android.os.Build.VERSION.RELEASE);
-        lines.push("机型：" + android.os.Build.MODEL + "（" + android.os.Build.SUPPORTED_ABIS[0] + "）");
+        const report = require("./tools/runtime-probe.js");
+        const lines = [];
+        lines.push("引擎：" + report.platform.engine + "  Android：" + report.platform.android);
+        lines.push("机型：" + report.platform.model + "（" + report.platform.abi + "）");
+        lines.push("屏幕：" + report.platform.screenWidth + " × " + report.platform.screenHeight);
+        lines.push("截图授权：" + report.frames.granted);
+        if (report.frames.full) {
+            lines.push("实时帧：" + report.frames.full.width + "×" + report.frames.full.height +
+                "  像素 " + report.frames.full.pixelWidth + "×" + report.frames.full.pixelHeight);
+        }
+        if (report.frames.fast) {
+            lines.push("快截图像素：" + report.frames.fast.pixelWidth + "×" + report.frames.fast.pixelHeight);
+        }
+        lines.push("yolo.load：" + report.capabilities.yoloLoad + "  线程：" + report.threads.start);
+        lines.push("模型：" + (report.model.hasOnnx ? "已随包" : "未随包（识别无法实测）"));
+        if (report.missingRequired.length > 0) {
+            lines.push("缺关键能力：" + report.missingRequired.join("、"));
+        }
+        if (report.errors.length > 0) {
+            lines.push("探针告警：" + report.errors.join("；"));
+        }
+        show(lines.join("\n"));
     } catch (error) {
-        lines.push("设备信息读取失败：" + error);
+        show("探针没能运行：" + error);
     }
-    try {
-        lines.push("屏幕：" + device.width + " × " + device.height);
-    } catch (error) {
-        lines.push("屏幕信息读取失败：" + error);
-    }
-    try {
-        lines.push("工程目录：" + files.cwd());
-    } catch (error) {
-        lines.push("工程目录读取失败：" + error);
-    }
-    ui.status.setText(lines.join("\n"));
-    console.log("[xiangqi] " + lines.join(" | "));
 });
