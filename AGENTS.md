@@ -2,6 +2,10 @@
 
 给 AI 助手 / 自动化 agent 的项目约定。dsh（DeepSeek Harness）、Codex、Copilot、Claude Code 都会读这个文件。
 
+> **接手当前进度看这里**：[`docs/reports/2026-09-12_接手指南_Codex.md`](docs/reports/2026-09-12_接手指南_Codex.md)。
+> 记录了截至 commit `7252b58` 的已完成项、**尚未验证项**（含为什么长按不能用 adb 自动化验）、
+> 下一步顺序，以及本仓库专用工具（`tools/publish.ps1`、`tools/observe-filelist.ps1`）的用法。
+
 ## 先用 CodeGraph，再考虑 grep
 
 本仓库已经建好 CodeGraph 索引（`.codegraph/`，被 git 忽略；用法见 `docs/guides/CODEGRAPH.md`），CLI 已在 PATH 上（`codegraph`）。

@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- **[接手指南（给 Codex / 下一个 agent）](reports/2026-09-12_接手指南_Codex.md)：从当前 commit 接手要看的第一份。进度、未验证项、下一步顺序、本仓库专用工具与坑。**
 - [项目现状与接手说明](PROJECT_STATUS.md)：当前主架构、功能边界、构建安装、K40 状态和后续整理顺序。接手项目应先读此文。
 - [剩余细节审计与收尾清单](REMAINING_WORK.md)：按 P0/P1/P2 列出尚需处理的 MCP、发布、Miuix、ImGui、引擎、测试和文档事项。
 - [权限与发布基线](PERMISSIONS_AND_RELEASE.md)：正式签名变量、release 构建、SDK 范围、权限用途和发布验收。
