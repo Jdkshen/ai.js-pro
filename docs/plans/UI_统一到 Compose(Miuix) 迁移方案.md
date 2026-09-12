@@ -113,6 +113,71 @@
 
 每片的验收：真机点检（浅色/深色、大字体、横屏、空目录、超长文件名）+ 状态层单测 + 与旧实现的行为对照清单（功能一个都不能少）。
 
+### S3.5：Compose 列表与旧 `ExplorerView` 显示对齐（2026-09-12）
+
+**背景**：S2/S3 交付后真机验收判定「新模式的显示和旧的不一样」——那不是 UI 统一，而是重新设计了一个文件列表。
+本片的目标改为：**底层换 Compose，用户看不出差别**。
+
+**旧实现的真实结构（逐项核准，这是唯一基准）**
+
+```text
+[pinned_category 48dp]  ← res/layout/script_file_list_category.xml，固定一个，在列表上方
+   标题 14sp：项目页=项目名 / 其他=面包屑 `内部存储  ›  a  ›  b`
+   右侧 4 个 48dp 按钮：back(仅非项目页, canGoBack 时 alpha=1 否则 0.38) / collapse(仅项目页)
+                        / order(升降序图标) / sort(排序方式)
+[文件夹行 × N]          整行, minHeight 60dp, 44dp 圆底图标, 名称 16sp, 描述 12sp, more
+[文件行 × M]            整行, minHeight 60dp, 44dp 圆底图标, 名称 15sp, 描述 11sp, run(仅可执行) + more
+两组之间没有分组头，也没有折叠 —— dirsCollapsed/filesCollapsed 字段从未被置 true（死功能）
+```
+
+图标底色（**固定色，不随主题变化**，来自 drawable + colors.xml）：
+
+| 行类型 | 底色 | 图标 | tint |
+|---|---|---|---|
+| 普通文件夹 | `#1976D2` (`folder_icon_background`) | `ic_folder_outline_24dp` | `colorOnPrimary`（白） |
+| 项目目录 | `#5C6BC0` (`project_icon_background`) | `ic_project_compass_24dp` | 同上 |
+| 文件（有专属图标） | `#5cab7d` (`file_icon_background`) | 22dp 专属图标，**不 tint** | — |
+| 文件（无图标） | 同上 | 22sp 白色首字母 | — |
+
+描述文案复用资源：`text_directory_modified`（`文件夹\n修改于 %s`）、`text_file_modified`（`%s\n修改于 %s`），
+大小走 `PFiles.getHumanReadableSize()`，时间格式 `yyyy-MM-dd HH:mm:ss`。
+
+**已完成**
+
+- 新增 `ui/viewmodel/ExplorerListRows.kt`：排序/分组/折叠的**纯状态层**，不依赖 Android，可 JVM 单测；
+- 新增 `ExplorerListRowsTest`（17 例）与 `ExplorerSorterParityTest`（4 例）——后者**直接调用真实的
+  `ExplorerSorter` 做 oracle 比对**，把四个比较器的方向钉死。这一步抓到过三处方向写反：
+  `reversed()` 是交换参数而非取负，最终方向取决于原比较器把谁放在 o1 位；
+  实测 ascending=false 时：NAME 名称升序 / SIZE 大小升序 / DATE 时间降序 / TYPE 类型升序；
+- 重写 `MiuixScriptListHost.kt`：分类头（标题+4 按钮）、整行文件夹/文件、44dp 圆底图标、字号颜色间距、
+  `run`/`more`、1px 分隔线（缩进 74dp）、`·` 无、水波纹 -> 全部按上表对齐；
+- **修掉一个功能性偏差**：原实现对子项写死「目录在前 + 名称升序」，完全不读用户的排序设置；
+  现在读写与旧实现**同一份** `SortConfig`（`ScriptList.SortConfig.*`），并接上排序菜单与升降序切换；
+- 长按/`more` 菜单按旧 `showOptionMenu` 的条件对齐（`isExecutable()` 而非仅 JS；示例文件夹只给「重置所有示例」）；
+  `reset_all` 补回**确认对话框**（删改级操作，旧实现有 `confirmResetAllSamples()`）。
+
+**验收状态（2026-09-12 更新）**
+
+- [x] `:app:assembleMiuixCompatDebug` + `:app:testMiuixCompatDebugUnitTest` —— **BUILD SUCCESSFUL，128 例 0 失败**；
+- [x] 开关开/关**逐项对照**（K40，dev-534 直接 `adb install`）：分类头、文件夹行图标与字号、文件行 `run`/`more`、
+      描述格式、分隔线缩进、面包屑文本 —— 两张同位置截图**逐像素级一致**，证据见
+      `.artifacts/screenshots/11-new-list-files.png`（开关 ON）与 `12-flag-off-old-explorerview.png`（开关 OFF）。
+      验证方法：开关 OFF 必然走旧原生 `ExplorerView`；开关 ON 那张跑的是含本次改动的 APK
+      （已解 `resources.arsc` 确认含新增的 `file_icon_background`）。
+- [ ] 浅色/深色、150% 字体、横屏、空目录、超长文件名；
+- [ ] 长按文件项应出脚本菜单（**仍未验证**：`adb input swipe` 被系统判成点击，弹的是「排序方式」；
+      截图也无法证明，必须用手指长按）；
+- [ ] 排序菜单四项与升降序切换的**实际点击**验证（代码已接 `SortConfig`，但未点过）。
+
+**已知未做（不是遗漏，是明确留到下一片）**
+
+- 项目页分类头标题可点 -> 项目操作菜单：`MiuixProjectMenuHost.show(owner: ExplorerView)` 依赖旧 View 实例，
+  Compose 模式拿不到，留待 S4 把项目工具条一并 Compose 化；
+- 分类头的 `sort`（漏斗）按钮：旧实现点击是「排序方式」菜单，Compose 侧已同样接到排序菜单，
+  但**图标语义与旧实现一致、行为也一致**，无需另做筛选层（旧实现本就没有筛选）；
+- 无 `SwipeRefreshLayout` 等价物：旧列表下拉可刷新，Compose 侧目前靠 `reload()`；
+- 加载/空/错误态用纯文本，旧实现用下拉刷新转圈。
+
 ### 4.2 其余 View 页面的处理（不变）
 
 | 类别 | 目标 | 理由 |

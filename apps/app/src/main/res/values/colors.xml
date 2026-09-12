@@ -35,5 +35,9 @@
     <color name="market_button_selected">#e14123</color>
     <color name="market_button_unselected">#939393</color>
 
+    <!-- 文件列表图标底色：与 drawable/circle_light_green.xml 的取色保持一致，
+         供 Compose 版文件列表复用同一色值（形状由 Compose 侧决定）。 -->
+    <color name="file_icon_background">#5cab7d</color>
+
 
 </resources>
