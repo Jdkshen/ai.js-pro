@@ -138,14 +138,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         mViewPager = findViewById(R.id.viewpager);
         mFab = findViewById(R.id.fab);
         mTabLayout = findViewById(R.id.tab);
-        View setting = findViewById(R.id.setting);
-        if (setting != null) {
-            setting.setOnClickListener(v -> startSettingActivity());
-        }
-        View exit = findViewById(R.id.exit);
-        if (exit != null) {
-            exit.setOnClickListener(v -> exitCompletely());
-        }
         setupQuickCards();
     }
 

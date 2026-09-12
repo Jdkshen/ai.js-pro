@@ -12,4 +12,7 @@
     <item name="layout_hierarchy" type="id"/>
     <item name="pointer_location" type="id"/>
     <item name="disable_pointer_location" type="id"/>
+    <!-- 悬浮菜单「退出悬浮窗」的 item id：以前借用 fragment_drawer.xml 里的 exit，
+         抽屉迁到 Miuix 后那个布局已删除，这里显式声明（对话框 item 只要唯一 id 即可）。 -->
+    <item name="floating_menu_exit" type="id"/>
 </resources>
