@@ -755,15 +755,21 @@ public class ApkBuilder {
 
     public ApkBuilder sign() throws Exception {
         notifySign();
+        // 产物目录可能还不存在（第一次在某个工程里打包时，工程下还没有 build/ 目录），
+        // 以前直接写产物会抛 "open failed: ENOENT (No such file or directory)"。
+        // 这里统一先建好目录：选择任意新文件夹当输出目录也能打包成功。
+        File outputDir = mOutApkFile.getParentFile();
+        if (outputDir == null) {
+            throw new IOException("无法确定产物目录：" + mOutApkFile);
+        }
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            throw new IOException("无法创建产物目录：" + outputDir);
+        }
         Signer signer = mAppConfig != null ? mAppConfig.getSigner() : null;
         if (signer == null) {
             // 没有显式指定签名就用本机为该应用自动生成的身份。
             // tiny-sign 那份全世界共用的测试证书已经不再使用：它会让所有产物共用一份
             // 私钥，安全软件据此就能把它们归成同一家族。
-            File outputDir = mOutApkFile.getParentFile();
-            if (outputDir == null) {
-                throw new IOException("无法确定产物目录：" + mOutApkFile);
-            }
             signer = AutoSigningIdentity.INSTANCE.signer(outputDir,
                     mAppConfig != null ? mAppConfig.getAppName() : null);
         }

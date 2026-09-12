@@ -2,13 +2,18 @@ package com.stardust.autojs.core.ui.nativeview;
 
 import android.graphics.PorterDuff;
 import android.view.View;
+import android.webkit.WebView;
 import android.widget.Button;
 
 import com.stardust.autojs.core.ui.JsViewHelper;
 import com.stardust.autojs.core.ui.ViewExtras;
 import com.stardust.autojs.core.ui.attribute.ViewAttributes;
+import com.stardust.autojs.core.web.InjectableWebClient;
 import com.stardust.autojs.rhino.NativeJavaObjectWithPrototype;
 
+import org.mozilla.javascript.BaseFunction;
+import org.mozilla.javascript.Context;
+import org.mozilla.javascript.Function;
 import org.mozilla.javascript.NativeJavaObject;
 import org.mozilla.javascript.NativeObject;
 import org.mozilla.javascript.ScriptRuntime;
@@ -17,6 +22,8 @@ import org.mozilla.javascript.Scriptable;
 public class NativeView extends NativeJavaObjectWithPrototype {
 
     private static final String LOG_TAG = "NativeView";
+
+    private static final String SET_WEB_VIEW_CLIENT = "setWebViewClient";
 
     public static class ScrollEvent {
         public int scrollX;
@@ -64,6 +71,13 @@ public class NativeView extends NativeJavaObjectWithPrototype {
 
     @Override
     public Object get(String name, Scriptable start) {
+        if (mView instanceof WebView && SET_WEB_VIEW_CLIENT.equals(name)) {
+            Object member = super.has(name, start) ? super.get(name, start) : Scriptable.NOT_FOUND;
+            if (member instanceof Function) {
+                return new SetWebViewClientFunction((Function) member, (WebView) mView);
+            }
+            return member;
+        }
         if (super.has(name, start)) {
             return super.get(name, start);
         } else {
@@ -73,6 +87,45 @@ public class NativeView extends NativeJavaObjectWithPrototype {
             }
         }
         return Scriptable.NOT_FOUND;
+    }
+
+    /**
+     * `webView.setWebViewClient(client)` 的包装：如果 client 是本引擎的 {@link InjectableWebClient}，
+     * 则趁 loadUrl / loadData 之前把页面桥（页面里的 `rhino`）与 WebView 设置提前应用。
+     * <p>
+     * 现代 Chromium WebView 只在「文档开始」时注入 addJavascriptInterface 注册的对象，
+     * 而历史上这个桥是在 onPageFinished 才注册的，于是页面里 `window.rhino` 一直是 undefined、
+     * 页面回调脚本的能力失效（Auto.js 经典写法就是「先 setWebViewClient 再 loadUrl」）。
+     */
+    public static class SetWebViewClientFunction extends BaseFunction {
+
+        private static final long serialVersionUID = 1L;
+
+        private final Function mOriginal;
+        private final WebView mWebView;
+
+        SetWebViewClientFunction(Function original, WebView webView) {
+            mOriginal = original;
+            mWebView = webView;
+        }
+
+        @Override
+        public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
+            Object client = args.length > 0 ? args[0] : null;
+            // 脚本传进来的是 NativeJavaObject 包装，得先解包才能 instanceof 判断
+            if (client instanceof NativeJavaObject) {
+                client = ((NativeJavaObject) client).unwrap();
+            }
+            if (client instanceof InjectableWebClient) {
+                ((InjectableWebClient) client).attach(mWebView);
+            }
+            return mOriginal.call(cx, scope, thisObj, args);
+        }
+
+        @Override
+        public String getFunctionName() {
+            return SET_WEB_VIEW_CLIENT;
+        }
     }
 
     public ViewPrototype getViewPrototype() {

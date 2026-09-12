@@ -1,3 +1,4 @@
+// @engine rhino
 //以写入模式打开SD卡根目录文件1.txt
 var file = open("/sdcard/1.txt", "w")
 //写入aaaa
@@ -28,8 +29,8 @@ file = open("/sdcard/test.txt", "r")
 //读取一行并打印
 print(file.readline());
 //读取剩余所有行并打印
-for each(line in file.readlines()){
-  print(line)
+for each(line in file.readlines()) {
+    print(line)
 }
 file.close()
 

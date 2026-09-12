@@ -62,7 +62,6 @@ import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.common.ScriptOperations
 import com.jdkshen.aijspro.Pref
-import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
 import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
@@ -124,7 +123,9 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         rootView = ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         }
-        if (isShown) installContentIfNeeded()
+        // 不等 onPageShow：ViewPager 预创建相邻页时就把内容装好并开始组合、读取示例清单，
+        // 否则滑到本页的瞬间才首次 setContent + 首帧组合，滑动过程会掉帧发卡。
+        installContentIfNeeded()
         return rootView
     }
 
@@ -276,11 +277,11 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 }.padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.size(50.dp).clip(CircleShape).background(
-                    if (entry.directory) Color(0xFF2196F3) else Color(0xFF4CAF50))) {
+                // 与「文件管理」列表保持同一套图标：圆底 + 白色类型符号。
+                // 颜色/图形规则与 ExplorerViewHelper.getFileIconRes / getIconColor 同步。
+                Box(Modifier.size(50.dp).clip(CircleShape).background(sampleIconColor(entry))) {
                     Image(
-                        painterResource(if (entry.directory) R.drawable.ic_folder_outline_24dp
-                            else R.drawable.ic_floating_action_menu_file),
+                        painterResource(sampleIconRes(entry)),
                         contentDescription = null,
                         modifier = Modifier.size(28.dp).align(Alignment.Center),
                         colorFilter = ColorFilter.tint(Color.White)
@@ -288,11 +289,9 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 }
                 Column(Modifier.weight(1f).padding(start = 14.dp)) {
                     Text(entry.name, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(when {
-                        entry.directory -> if (childCount > 0) "文件夹 · $childCount 项" else "文件夹"
-                        entry.runnable -> "JavaScript 示例"
-                        else -> "示例资源"
-                    }, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    Text(sampleDescription(entry, childCount), fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Start)
                     if (query.text.isNotBlank() || filter != SampleFilter.ALL) {
                         Text(entry.path.removePrefix("sample/"), fontSize = 12.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -305,6 +304,35 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
             Box(Modifier.fillMaxWidth().padding(start = 82.dp).height(1.dp)
                 .background(MiuixTheme.colorScheme.dividerLine))
         }
+    }
+
+    /** 示例文件图标：与文件管理的专属图标一致（js/json/md/apk 各有花色，其余走通用文件图标）。 */
+    private fun sampleIconRes(entry: SampleEntry): Int = when {
+        entry.directory -> R.drawable.ic_folder_outline_24dp
+        entry.name.endsWith(".js", true) -> R.drawable.ic_code_file_24dp
+        entry.name.endsWith(".json", true) -> R.drawable.ic_json_file_24dp
+        entry.name.endsWith(".md", true) -> R.drawable.ic_markdown_file_24dp
+        entry.name.endsWith(".apk", true) -> R.drawable.ic_apk_file_24dp
+        else -> R.drawable.ic_floating_action_menu_file
+    }
+
+    /** 与 ExplorerViewHelper.getIconColor 的颜色规则保持一致。 */
+    private fun sampleIconColor(entry: SampleEntry): Color = when {
+        entry.directory -> Color(0xFF1976D2)
+        entry.name.endsWith(".js", true) -> Color(0xFF0A0E0F)
+        entry.name.endsWith(".json", true) -> Color(0xFF0A0E0F)
+        entry.name.endsWith(".md", true) -> Color(0xFF1E88E5)
+        entry.name.endsWith(".apk", true) -> Color(0xFF32D780)
+        else -> Color(0xFF9E9E9E)
+    }
+
+    private fun sampleDescription(entry: SampleEntry, childCount: Int): String = when {
+        entry.directory -> if (childCount > 0) "文件夹 · $childCount 项" else "文件夹"
+        entry.name.endsWith(".js", true) -> "JavaScript 示例"
+        entry.name.endsWith(".md", true) -> "Markdown 文档"
+        entry.name.endsWith(".json", true) -> "JSON 文件"
+        entry.name.endsWith(".apk", true) -> "安装包"
+        else -> "示例资源"
     }
 
     @Composable
@@ -434,7 +462,9 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private fun MessagePanel(text: String, action: String? = null,
         textColor: Color = MiuixTheme.colorScheme.onSurface, onAction: () -> Unit = {}) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(text, color = textColor)
+            // Miuix 的 Text 默认两端对齐，长段中文会被拉伸成大字距——提示文本明确左对齐。
+            Text(text, color = textColor,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Start)
             action?.let { Button(onClick = onAction) { Text(it) } }
         }
     }

@@ -1,12 +1,13 @@
+// @engine rhino
 "ui";
 
 showLoginUI();
 ui.statusBarColor("#000000")
 
 //显示登录界面
-function showLoginUI(){
+function showLoginUI() {
     ui.layout(
-      <frame>
+        <frame>
         <vertical h="auto" align="center" margin="0 50">
           <linear>
              <text w="56" gravity="center" color="#111111" size="16">用户名</text>
@@ -25,15 +26,15 @@ function showLoginUI(){
     );
 
     ui.login.on("click", () => {
-       toast("您输入的用户名为" + ui.name.text() + " 密码为" + ui.password.text());
+        toast("您输入的用户名为" + ui.name.text() + " 密码为" + ui.password.text());
     });
     ui.register.on("click", () => showRegisterUI());
 }
 
 //显示注册界面
-function showRegisterUI(){
+function showRegisterUI() {
     ui.layout(
-      <frame>
+        <frame>
         <vertical h="auto" align="center" margin="0 50">
           <linear>
              <text w="56" gravity="center" color="#111111" size="16">用户名</text>

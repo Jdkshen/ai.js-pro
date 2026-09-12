@@ -12,7 +12,7 @@
   <div id="content" class="clearfix">
     <div id="column2" class="interior">
       <div id="intro" class="interior">
-        <a href="/" title="返回首页">
+        <a href="index.html" title="返回首页">
           AI.js Pro
         </a>
       </div>
@@ -178,7 +178,7 @@ callbackFunction((err, ret) =&gt; {
 <p><em>Note</em>:</p>
 <ul>
 <li><p>The callback is executed asynchronously, and will have a limited stack trace.
-If the callback throws, the process will emit an <a href="process.html#process_event_uncaughtexception"><code>&#39;uncaughtException&#39;</code></a>
+If the callback throws, the process will emit an <code>&#39;uncaughtException&#39;</code>
 event, and if not handled will exit.</p>
 </li>
 <li><p>Since <code>null</code> has a special meaning as the first argument to a callback, if a
@@ -624,7 +624,7 @@ one or more aliases may be used.</p>
 <p>Different Node.js build configurations support different sets of encodings.
 While a very basic set of encodings is supported even on Node.js builds without
 ICU enabled, support for some encodings is provided only when Node.js is built
-with ICU and using the full ICU data (see <a href="intl.html">Internationalization</a>).</p>
+with ICU and using the full ICU data (see Internationalization).</p>
 <h4>Encodings Supported Without ICU<span><a class="mark" href="#util_encodings_supported_without_icu" id="util_encodings_supported_without_icu">#</a></span></h4>
 <table>
 <thead>
@@ -822,7 +822,7 @@ supports. Defaults to <code>&#39;utf-8&#39;</code>.</li>
 <li><code>options</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object" class="type">&lt;Object&gt;</a><ul>
 <li><code>fatal</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Boolean_type" class="type">&lt;boolean&gt;</a> <code>true</code> if decoding failures are fatal. Defaults to
 <code>false</code>. This option is only supported when ICU is enabled (see
-<a href="intl.html">Internationalization</a>).</li>
+Internationalization).</li>
 <li><code>ignoreBOM</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Boolean_type" class="type">&lt;boolean&gt;</a> When <code>true</code>, the <code>TextDecoder</code> will include the byte
  order mark in the decoded result. When <code>false</code>, the byte order mark will
  be removed from the output. This option is only used when <code>encoding</code> is
@@ -945,7 +945,7 @@ util.isBoolean(false);
 <h3>util.isBuffer(object)<span><a class="mark" href="#util_util_isbuffer_object" id="util_util_isbuffer_object">#</a></span></h3>
 <div class="api_metadata">
 <span>Added in: v0.11.5</span><span>Deprecated since: v4.0.0</span>
-</div><div class="api_stability api_stability_0"><a href="documentation.html#documentation_stability_index">Stability: 0</a> - Deprecated: Use <a href="buffer.html#buffer_class_method_buffer_isbuffer_obj"><code>Buffer.isBuffer()</code></a> instead.</div><ul>
+</div><div class="api_stability api_stability_0"><a href="documentation.html#documentation_stability_index">Stability: 0</a> - Deprecated: Use <code>Buffer.isBuffer()</code> instead.</div><ul>
 <li><code>object</code> <span class="type">&lt;any&gt;</span></li>
 </ul>
 <p>Returns <code>true</code> if the given <code>object</code> is a <code>Buffer</code>. Otherwise, returns <code>false</code>.</p>
@@ -980,7 +980,7 @@ util.isDate({});
 </div><div class="api_stability api_stability_0"><a href="documentation.html#documentation_stability_index">Stability: 0</a> - Deprecated</div><ul>
 <li><code>object</code> <span class="type">&lt;any&gt;</span></li>
 </ul>
-<p>Returns <code>true</code> if the given <code>object</code> is an <a href="errors.html#errors_class_error"><code>Error</code></a>. Otherwise, returns
+<p>Returns <code>true</code> if the given <code>object</code> is an <code>Error</code>. Otherwise, returns
 <code>false</code>.</p>
 <pre><code class="lang-js">const util = require(&#39;util&#39;);
 

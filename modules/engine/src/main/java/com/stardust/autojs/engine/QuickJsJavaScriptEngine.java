@@ -25,6 +25,8 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
     private volatile long mNativeHandle;
     private volatile Thread mThread;
     private volatile QuickJsHostBridge mHostBridge;
+    /** `"ui"` 模式（跑在 ScriptExecuteActivity 里）注入的宿主 Activity；普通脚本为 null。 */
+    private volatile android.app.Activity mHostActivity;
     private int mOriginalThreadPriority = Process.THREAD_PRIORITY_DEFAULT;
     private boolean mPriorityRaised;
     /** forceStop() 过：用于把 native 的通用“interrupted”异常识刷为正常停止。 */
@@ -68,6 +70,7 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
             throw new QuickJsException("Unable to create QuickJS runtime");
         }
         hostBridge.attachEngine(handle);
+        hostBridge.setUiHostActivity(mHostActivity);
         mNativeHandle = handle;
         synchronized (this) {
             for (Map.Entry<String, Object> entry : mPendingGlobals.entrySet()) {
@@ -121,11 +124,40 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         }
     }
 
+    /**
+     * `"ui"` 模式的脚本跑在 {@code ScriptExecuteActivity} 里：把宿主 Activity 交给 host bridge，
+     * {@code ui.layout} 就会 inflate 到 Activity 的内容视图（按 Home 退到后台、返回键才结束），
+     * 而不是挂一个一直盖在最上层的系统悬浮窗。
+     */
+    public void setHostActivity(android.app.Activity activity) {
+        mHostActivity = activity;
+        QuickJsHostBridge hostBridge = mHostBridge;
+        if (hostBridge != null) {
+            hostBridge.setUiHostActivity(activity);
+        }
+    }
+
     @Override
     public synchronized void destroy() {
         long handle = mNativeHandle;
         mNativeHandle = 0;
+        Thread thread = mThread;
         if (handle != 0) {
+            // 先请求中断并等脚本线程退出，再释放 JS 运行时。
+            // 脚本线程平时就停在 native 的事件循环里（界面还在就会有定时器在跑），
+            // 直接 destroy 会把 context 从正在执行的线程脚下抽走（use-after-free）——
+            // 「返回键结束 ui 脚本」正好会走到这条路径。
+            QuickJsNativeBridge.requestInterrupt(handle);
+            if (thread != null && thread != Thread.currentThread()) {
+                try {
+                    thread.join(2000);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                if (thread.isAlive()) {
+                    Log.w(TAG, "script thread did not exit before destroy; releasing runtime anyway");
+                }
+            }
             QuickJsNativeBridge.destroy(handle);
         }
         QuickJsHostBridge hostBridge = mHostBridge;
@@ -133,7 +165,6 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         if (hostBridge != null) {
             hostBridge.close();
         }
-        Thread thread = mThread;
         if (thread != null) {
             LooperHelper.quitForThread(thread);
         }

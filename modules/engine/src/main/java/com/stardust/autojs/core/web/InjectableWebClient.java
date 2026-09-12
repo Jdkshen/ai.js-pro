@@ -44,6 +44,14 @@ public class InjectableWebClient extends WebViewClient {
     }
 
     @Override
+    public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+        // 页面桥要在文档开始（document start）前注册，晚了页面里就看不到 `rhino`；
+        // 这里只是补救，正常路径由 attach(view) / setWebViewClient 拦截完成（见 NativeView）。
+        setUpWebView(view);
+        super.onPageStarted(view, url, favicon);
+    }
+
+    @Override
     public void onPageFinished(WebView view, String url) {
         mWebView = view;
         setUpWebView(view);
@@ -52,6 +60,20 @@ public class InjectableWebClient extends WebViewClient {
             inject(view, pair.first, pair.second);
         }
         super.onPageFinished(view, url);
+    }
+
+    /**
+     * 把页面桥（页面里的 `rhino` 对象）与 WebView 设置提前应用到指定 WebView。
+     * <p>
+     * <b>必须在 loadUrl / loadData 之前调用。</b>现代 Chromium WebView 只在「文档开始」时把
+     * {@code addJavascriptInterface} 注册的对象注入页面，而本类历史上是在 onPageFinished 才注册，
+     * 因此页面里 {@code window.rhino} 一直是 undefined，页面回调脚本的能力失效。
+     * <p>
+     * 与 onPageFinished 不同，这里不会把 WebView 记为「已加载」，所以 attach() 之后、
+     * 页面加载完成之前调用的 inject(script) 仍然会排队等待注入。
+     */
+    public void attach(WebView view) {
+        setUpWebView(view);
     }
 
     @SuppressLint("SetJavaScriptEnabled")

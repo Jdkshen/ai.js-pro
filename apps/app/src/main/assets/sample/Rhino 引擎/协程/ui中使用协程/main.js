@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 ui.layout(
@@ -15,7 +16,7 @@ if (!requestScreenCapture()) {
 
 
 // 退出应用对话框
-ui.emitter.on("back_pressed", function (e) {
+ui.emitter.on("back_pressed", function(e) {
     e.consumed = true;
     let exit = dialogs.confirm("确定要退出程序").await();
     if (exit) {

@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Yolo | AI.js Pro 4.1.0 文档</title>
+  <link rel="stylesheet" href="assets/fonts.css">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/sh.css">
+  <link rel="canonical" href="https://nodejs.org/api/yolo.html">
+</head>
+<body class="alt apidoc" id="api-section-yolo">
+  <div id="content" class="clearfix">
+    <div id="column2" class="interior">
+      <div id="intro" class="interior">
+        <a href="/" title="返回首页">
+          AI.js Pro
+        </a>
+      </div>
+      <ul>
+<li><a class="nav-documentation" href="documentation.html">关于本文档</a></li>
+<li><a class="nav-http-www-w3school-com-cn-js-pro_js_syntax-asp" href="http://www.w3school.com.cn/js/pro_js_syntax.asp">W3CSchool - ECMAScript教程</a></li>
+<li><a class="nav-http-es6-ruanyifeng-com-README" href="http://es6.ruanyifeng.com/#README">阮一峰 - ECMAScript 6教程</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-overview" href="overview.html">Overview - 综述</a></li>
+<li><a class="nav-qa" href="qa.html">Q&amp;A - 常见问题</a></li>
+<li><a class="nav-app" href="app.html">App - 应用</a></li>
+<li><a class="nav-console" href="console.html">Console - 控制台</a></li>
+<li><a class="nav-coordinates-based-automation" href="coordinates-based-automation.html">CoordinatesBasedAutomation - 基于坐标的操作</a></li>
+<li><a class="nav-device" href="device.html">Device - 设备</a></li>
+<li><a class="nav-dialogs" href="dialogs.html">Dialogs - 对话框</a></li>
+<li><a class="nav-engines" href="engines.html">Engines - 脚本引擎</a></li>
+<li><a class="nav-events" href="events.html">Events - 事件与监听</a></li>
+<li><a class="nav-floaty" href="floaty.html">Floaty - 悬浮窗</a></li>
+<li><a class="nav-files" href="files.html">Files - 文件系统</a></li>
+<li><a class="nav-globals" href="globals.html">Globals - 一般全局函数</a></li>
+<li><a class="nav-http" href="http.html">Http - HTTP</a></li>
+<li><a class="nav-images" href="images.html">Images - 图片与图色处理</a></li>
+<li><a class="nav-keys" href="keys.html">Keys - 按键模拟</a></li>
+<li><a class="nav-media" href="media.html">Media - 多媒体</a></li>
+<li><a class="nav-modules" href="modules.html">Modules - 模块</a></li>
+<li><a class="nav-widgets-based-automation" href="widgets-based-automation.html">WidgetsBasedAutomation - 基于控件的操作</a></li>
+<li><a class="nav-sensors" href="sensors.html">Sensors - 传感器</a></li>
+<li><a class="nav-shell" href="shell.html">Shell - Shell命令</a></li>
+<li><a class="nav-storages" href="storages.html">Storages - 本地存储</a></li>
+<li><a class="nav-threads" href="threads.html">Threads - 多线程</a></li>
+<li><a class="nav-timers" href="timers.html">Timers - 定时器</a></li>
+<li><a class="nav-ui" href="ui.html">UI - 用户界面</a></li>
+<li><a class="nav-continuation" href="continuation.html">Continuation - 阻塞式等待</a></li>
+<li><a class="nav-io" href="io.html">IO - 文件流与逐行读写</a></li>
+<li><a class="nav-plugins" href="plugins.html">Plugins - 插件</a></li>
+<li><a class="nav-web" href="web.html">Web - 网页注入</a></li>
+<li><a class="nav-yolo active" href="yolo.html">Yolo - 目标检测</a></li>
+<li><a class="nav-rootautomator" href="RootAutomator.html">RootAutomator - Root 输入模拟</a></li>
+<li><a class="nav-https-developer-mozilla-org-zh-CN-docs-Mozilla-Projects-Rhino-Scripting_Java" href="https://developer.mozilla.org/zh-CN/docs/Mozilla/Projects/Rhino/Scripting_Java">Work with Java - 调用Java API</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-https-github-com-jdkshen-ai-js-pro" href="https://github.com/Jdkshen/ai.js-pro">GitHub 项目 &amp; Issue 提交</a></li>
+<li><a class="nav-http-autojs-org" href="https://github.com/Jdkshen/ai.js-pro">AI.js Pro 项目主页</a></li>
+</ul>
+
+    </div>
+
+    <div id="column1" data-id="yolo" class="interior">
+      <header>
+        <h1>AI.js Pro 4.1.0 文档</h1>
+        <div id="gtoc">
+          <p>
+            <a href="index.html" name="toc">索引</a> |
+            <a href="all.html">查看全部</a>
+          </p>
+        </div>
+        <hr>
+      </header>
+
+      <div id="toc">
+        <h2>目录</h2>
+        <ul>
+<li><span class="stability_1"><a href="#yolo_yolo">Yolo</a></span><ul>
+<li><span class="stability_undefined"><a href="#yolo_isavailable">yolo.isAvailable([backend])</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_load">yolo.load(options)</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_detect">detector.detect(image[, options])</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_result">检测结果</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_detector_close">detector.close()</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_example">示例</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_notes">注意事项</a></span></li>
+</ul>
+</li>
+</ul>
+
+      </div>
+
+      <div id="apicontent">
+        <h1>Yolo<span><a class="mark" href="#yolo_yolo" id="yolo_yolo">#</a></span></h1>
+<div class="api_stability api_stability_1"><a href="documentation.html#documentation_stability_index">Stability: 1</a> - Experimental（需要内置 OpenCV 的完整版 APK）</div><p>Yolo 模块用<strong>内置的 OpenCV 5.0 DNN</strong>跑 ONNX 目标检测模型，用来替代「找色/找图」完成更灵活的任务：识别按钮、图标、游戏元素、裁剪区域等。模型只要导出成 ONNX（YOLO 风格输出）即可，不需要额外装 ncnn 之类的库。</p>
+<p>模型可以放在<strong>设备的任意路径</strong>，也可以直接引用 APK 内的示例资源：路径写成<code>asset://sample/…</code>，引擎会把模型复制到缓存目录后再加载。</p>
+<div class="signature"><ul>
+<li><code>yolo.isAvailable([backend])</code> <span class="type">&lt;boolean&gt;</span> 该后端是否可用（当前只有<code>opencv</code>）</li>
+<li><code>yolo.getUnavailableReason([backend])</code> <span class="type">&lt;string&gt;</span> 不可用原因，可用时返回<code>''</code></li>
+<li><code>yolo.getVersion([backend])</code> <span class="type">&lt;string&gt;</span> 运行时版本，不可用时返回<code>'unavailable'</code></li>
+</ul>
+</div><h2>yolo.isAvailable([backend])<span><a class="mark" href="#yolo_isavailable" id="yolo_isavailable">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>backend</code> <span class="type">&lt;string&gt;</span> 后端名，默认<code>'opencv'</code>；<code>dnn</code>、<code>opencv5</code>、<code>opencv-dnn</code>、<code>cpu</code>都是<code>opencv</code>的别名</li>
+<li>返回 <span class="type">&lt;boolean&gt;</span></li>
+</ul>
+</div><pre><code>var backend = 'dnn';
+if (!yolo.isAvailable(backend)) {
+    throw new Error('YOLO 不可用：' + yolo.getUnavailableReason(backend));
+}
+log('YOLO 运行时版本：' + yolo.getVersion(backend));
+</code></pre><h2>yolo.load(options)<span><a class="mark" href="#yolo_load" id="yolo_load">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>options.model</code> <span class="type">&lt;string&gt;</span> ONNX 模型路径（也支持<code>onnx</code>作为别名）；<code>asset://</code>开头表示 APK 内资源</li>
+<li><code>options.backend</code> <span class="type">&lt;string&gt;</span> 可选，默认<code>'opencv'</code></li>
+<li><code>options.inputSize</code> <span class="type">&lt;number&gt;</span> 可选，模型输入边长，默认<code>320</code>；长方形输入可用<code>inputWidth</code>/<code>inputHeight</code>（QuickJS 引擎支持）</li>
+<li><code>options.threads</code> <span class="type">&lt;number&gt;</span> 可选，推理线程数，默认<code>min(4, CPU 核数)</code></li>
+<li><code>options.labels</code> <span class="type">&lt;Array&lt;string&gt;&gt; | &lt;string&gt;</span> 可选，类别名数组；QuickJS 引擎还支持传<strong>标签文件路径</strong>（每行一个类别）</li>
+<li>返回 <span class="type">&lt;Detector&gt;</span> 检测器对象</li>
+</ul>
+</div><p>加载会同步读模型（几百 KB 的模型通常在几十毫秒级），建议在脚本开始时加载一次并复用。检测器不再使用时请<code>close()</code>释放。</p>
+<pre><code>var detector = yolo.load({
+    backend: 'dnn',
+    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_320.onnx',
+    labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
+    inputSize: 320,
+    threads: 4
+});
+</code></pre><h2>detector.detect(image[, options])<span><a class="mark" href="#yolo_detect" id="yolo_detect">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>image</code> <span class="type">&lt;Image | Frame&gt;</span> 待检测的图像：Rhino 引擎传<code>images</code>模块的图像（如<code>captureScreen()</code>、<code>images.read()</code>）；QuickJS 引擎传<code>captureScreen(options)</code>返回的帧</li>
+<li><code>options.confidence</code> <span class="type">&lt;number&gt;</span> 可选，置信度阈值，默认<code>0.25</code></li>
+<li><code>options.nms</code> <span class="type">&lt;number&gt;</span> 可选，NMS 阈值，默认<code>0.45</code></li>
+<li><code>options.region</code> <span class="type">&lt;Array&lt;number&gt;&gt;</span> 可选（QuickJS 引擎），只检测<code>[x, y, width, height]</code>区域</li>
+<li>返回 <span class="type">&lt;Array&lt;Object&gt;&gt;</span> 检测结果数组（见下节），并额外带<code>preprocessMs</code>/<code>inferenceMs</code>/<code>totalMs</code>三个耗时字段（毫秒）</li>
+</ul>
+</div><pre><code>if (!requestScreenCapture('portrait')) {
+    throw new Error('没有截图权限');
+}
+var frame = captureScreen();
+try {
+    var result = detector.detect(frame, { confidence: 0.25, nms: 0.45 });
+    result.forEach(function (item) {
+        console.log(item.label + ' ' + item.score.toFixed(2) +
+            ' @ ' + item.bounds.centerX + ', ' + item.bounds.centerY);
+    });
+    console.log('推理耗时 ' + result.inferenceMs.toFixed(1) + ' ms');
+} finally {
+    frame.recycle();
+}
+</code></pre><h2>检测结果<span><a class="mark" href="#yolo_result" id="yolo_result">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>item.classId</code> <span class="type">&lt;number&gt;</span> 类别序号</li>
+<li><code>item.label</code> <span class="type">&lt;string&gt;</span> 类别名（没提供<code>labels</code>时是序号的字符串）</li>
+<li><code>item.score</code> <span class="type">&lt;number&gt;</span> 置信度</li>
+<li><code>item.bounds.left</code> / <code>top</code> / <code>right</code> / <code>bottom</code> <span class="type">&lt;number&gt;</span> 检测框的屏幕坐标</li>
+<li><code>item.bounds.width</code> / <code>height</code> / <code>centerX</code> / <code>centerY</code> <span class="type">&lt;number&gt;</span> 宽高与中心点，点按目标时直接用<code>centerX</code>/<code>centerY</code>即可</li>
+</ul>
+</div><p>QuickJS 引擎在<code>detect()</code>里已经把坐标系换算回<strong>屏幕坐标</strong>（截图缩放时不用自己乘换算系数）；Rhino 引擎传的是<code>Image</code>，坐标就是图像坐标。</p>
+<pre><code>var item = result[0];
+if (item) {
+    click(item.bounds.centerX, item.bounds.centerY);   // 直接点按目标
+}
+</code></pre><h2>detector.close()<span><a class="mark" href="#yolo_detector_close" id="yolo_detector_close">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>detector.close()</code> <span class="type">&lt;boolean&gt;</span> 释放检测器（释放后不能再<code>detect()</code>）</li>
+<li><code>detector.isClosed()</code> <span class="type">&lt;boolean&gt;</span> 是否已释放</li>
+</ul>
+</div><p>脚本退出时引擎也会统一回收本脚本创建过的检测器，但长时间运行的循环里建议自己管理生命周期。</p>
+<h2>示例<span><a class="mark" href="#yolo_example" id="yolo_example">#</a></span></h2>
+<pre><code>// Rhino：找屏幕上的目标并点它
+var detector = yolo.load({
+    model: '/sdcard/yolo/det.onnx',
+    labels: ['按钮', '开关'],
+    inputSize: 320
+});
+requestScreenCapture();
+while (true) {
+    var img = captureScreen();
+    var result = detector.detect(img, { confidence: 0.4 });
+    img.recycle();
+    for (var i = 0; i &lt; result.length; i++) {
+        if (result[i].label === '按钮') {
+            click(result[i].bounds.centerX, result[i].bounds.centerY);
+            break;
+        }
+    }
+    sleep(500);
+}
+</code></pre><p>可运行的完整示例见<code>QuickJS 新引擎/YOLO目标检测</code>（环境测试、单帧直连、实时直连、区域检测、基准测试、持续识别）。</p>
+<h2>注意事项<span><a class="mark" href="#yolo_notes" id="yolo_notes">#</a></span></h2>
+<ul>
+<li>需要<strong>完整版 APK</strong>（内置 OpenCV 5.0）；lite 版本没有该模块，<code>yolo.isAvailable()</code>返回<code>false</code>，用<code>yolo.getUnavailableReason()</code>看原因。</li>
+<li>模型输出格式：YOLO 风格（<code>[x1, y1, x2, y2, score, class]</code>角点坐标、像素值，附带可选的前两个数值作为耗时）。导出模型时别用中心点格式。</li>
+<li>模型里若已包含 TopK 但没有 NMS，本模块会在<code>detect()</code>里按<code>nms</code>阈值过滤。</li>
+<li>检测框坐标是<strong>像素</strong>，点按前可用<code>setScreenMetrics()</code>对齐不同分辨率。</li>
+<li>YOLO 只适合“学习过的目标”；纯颜色/图形匹配仍然用<code>images.findColor()</code>、<code>images.matchTemplate()</code>更快更省电。</li>
+</ul>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

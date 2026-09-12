@@ -1,3 +1,4 @@
+// @engine rhino
 // 数据库操作示例（Rhino / sqlite 模块）
 // 演示 open / create / insert / select / update / delete / transaction
 

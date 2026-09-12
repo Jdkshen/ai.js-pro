@@ -1,3 +1,4 @@
+// @engine rhino
 //以UTF-8编码打开SD卡上的1.txt文件
 var f = open("/sdcard/1.txt", "r", "utf-8");
 //读取文件所有内容
@@ -10,4 +11,3 @@ var out = open("/sdcard/2.txt", "w", "gbk");
 out.write(text);
 //关闭文件
 out.close();
-

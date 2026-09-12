@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 ui.layout(
@@ -18,29 +19,29 @@ var icons = ['ic_3d_rotation_black_48dp', 'ic_accessibility_black_48dp', 'ic_acc
 
 ui.icons.setDataSource(icons);
 
-ui.icons.on("item_click", function(icon){
+ui.icons.on("item_click", function(icon) {
     var d = "@drawable/" + icon;
     setClip(d);
     toast(d + "已复制到剪贴板");
 });
 
-ui.search.on("click", function(){
+ui.search.on("click", function() {
     var text = ui.input.text();
-    if(text.length == 0){
+    if (text.length == 0) {
         return;
     }
     search(text);
 });
 
-ui.reset.on("click", function(){
+ui.reset.on("click", function() {
     ui.icons.setDataSource(icons);
 });
 
-function search(keywords){
+function search(keywords) {
     var result = [];
-    for(var i = 0; i < icons.length; i++){
+    for (var i = 0; i < icons.length; i++) {
         var icon = icons[i];
-        if(icon.indexOf(keywords) >= 0){
+        if (icon.indexOf(keywords) >= 0) {
             result.push(icon);
         }
     }

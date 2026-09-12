@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 //ui布局为一块画布
 ui.layout(
@@ -7,7 +8,7 @@ ui.layout(
 );
 
 //要绘制的函数，这里是一个一元二次函数
-var f = function(x){
+var f = function(x) {
     return x * x + 3 * x - 4;
 }
 
@@ -19,7 +20,7 @@ var minY = -10;
 //画笔
 var paint = new Paint();
 
-ui.board.on("draw", function(canvas){
+ui.board.on("draw", function(canvas) {
     var w = canvas.getWidth();
     var h = canvas.getHeight();
     //计算y轴区间上限
@@ -32,7 +33,7 @@ ui.board.on("draw", function(canvas){
     //设置画笔颜色为红色
     paint.setColor(colors.parseColor("#ff0000"));
     //绘制图像
-    for(var i = 0; i < w; i++){
+    for (var i = 0; i < w; i++) {
         var x = minX + i / w * (maxX - minX);
         var y = f(x);
         var j = h - (y - minY) / (maxY - minY) * h;

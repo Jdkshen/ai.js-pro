@@ -1,3 +1,4 @@
+// @engine rhino
 // Rhino 回归测试 — 验证 QuickJS 改动没有破坏 Rhino 引擎功能
 // 注意：此脚本故意不加标记，用于验证历史脚本继续使用 Rhino。
 

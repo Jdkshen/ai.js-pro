@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RootAutomator | AI.js Pro 4.1.0 文档</title>
+  <link rel="stylesheet" href="assets/fonts.css">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/sh.css">
+  <link rel="canonical" href="https://nodejs.org/api/RootAutomator.html">
+</head>
+<body class="alt apidoc" id="api-section-RootAutomator">
+  <div id="content" class="clearfix">
+    <div id="column2" class="interior">
+      <div id="intro" class="interior">
+        <a href="/" title="返回首页">
+          AI.js Pro
+        </a>
+      </div>
+      <ul>
+<li><a class="nav-documentation" href="documentation.html">关于本文档</a></li>
+<li><a class="nav-http-www-w3school-com-cn-js-pro_js_syntax-asp" href="http://www.w3school.com.cn/js/pro_js_syntax.asp">W3CSchool - ECMAScript教程</a></li>
+<li><a class="nav-http-es6-ruanyifeng-com-README" href="http://es6.ruanyifeng.com/#README">阮一峰 - ECMAScript 6教程</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-overview" href="overview.html">Overview - 综述</a></li>
+<li><a class="nav-qa" href="qa.html">Q&amp;A - 常见问题</a></li>
+<li><a class="nav-app" href="app.html">App - 应用</a></li>
+<li><a class="nav-console" href="console.html">Console - 控制台</a></li>
+<li><a class="nav-coordinates-based-automation" href="coordinates-based-automation.html">CoordinatesBasedAutomation - 基于坐标的操作</a></li>
+<li><a class="nav-device" href="device.html">Device - 设备</a></li>
+<li><a class="nav-dialogs" href="dialogs.html">Dialogs - 对话框</a></li>
+<li><a class="nav-engines" href="engines.html">Engines - 脚本引擎</a></li>
+<li><a class="nav-events" href="events.html">Events - 事件与监听</a></li>
+<li><a class="nav-floaty" href="floaty.html">Floaty - 悬浮窗</a></li>
+<li><a class="nav-files" href="files.html">Files - 文件系统</a></li>
+<li><a class="nav-globals" href="globals.html">Globals - 一般全局函数</a></li>
+<li><a class="nav-http" href="http.html">Http - HTTP</a></li>
+<li><a class="nav-images" href="images.html">Images - 图片与图色处理</a></li>
+<li><a class="nav-keys" href="keys.html">Keys - 按键模拟</a></li>
+<li><a class="nav-media" href="media.html">Media - 多媒体</a></li>
+<li><a class="nav-modules" href="modules.html">Modules - 模块</a></li>
+<li><a class="nav-widgets-based-automation" href="widgets-based-automation.html">WidgetsBasedAutomation - 基于控件的操作</a></li>
+<li><a class="nav-sensors" href="sensors.html">Sensors - 传感器</a></li>
+<li><a class="nav-shell" href="shell.html">Shell - Shell命令</a></li>
+<li><a class="nav-storages" href="storages.html">Storages - 本地存储</a></li>
+<li><a class="nav-threads" href="threads.html">Threads - 多线程</a></li>
+<li><a class="nav-timers" href="timers.html">Timers - 定时器</a></li>
+<li><a class="nav-ui" href="ui.html">UI - 用户界面</a></li>
+<li><a class="nav-continuation" href="continuation.html">Continuation - 阻塞式等待</a></li>
+<li><a class="nav-io" href="io.html">IO - 文件流与逐行读写</a></li>
+<li><a class="nav-plugins" href="plugins.html">Plugins - 插件</a></li>
+<li><a class="nav-web" href="web.html">Web - 网页注入</a></li>
+<li><a class="nav-yolo" href="yolo.html">Yolo - 目标检测</a></li>
+<li><a class="nav-rootautomator active" href="RootAutomator.html">RootAutomator - Root 输入模拟</a></li>
+<li><a class="nav-https-developer-mozilla-org-zh-CN-docs-Mozilla-Projects-Rhino-Scripting_Java" href="https://developer.mozilla.org/zh-CN/docs/Mozilla/Projects/Rhino/Scripting_Java">Work with Java - 调用Java API</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-https-github-com-jdkshen-ai-js-pro" href="https://github.com/Jdkshen/ai.js-pro">GitHub 项目 &amp; Issue 提交</a></li>
+<li><a class="nav-http-autojs-org" href="https://github.com/Jdkshen/ai.js-pro">AI.js Pro 项目主页</a></li>
+</ul>
+
+    </div>
+
+    <div id="column1" data-id="RootAutomator" class="interior">
+      <header>
+        <h1>AI.js Pro 4.1.0 文档</h1>
+        <div id="gtoc">
+          <p>
+            <a href="index.html" name="toc">索引</a> |
+            <a href="all.html">查看全部</a>
+          </p>
+        </div>
+        <hr>
+      </header>
+
+      <div id="toc">
+        <h2>目录</h2>
+        <ul>
+<li><span class="stability_1"><a href="#rootautomator_rootautomator">RootAutomator</a></span><ul>
+<li><span class="stability_undefined"><a href="#rootautomator_new">new RootAutomator([inputDevice][, nonBlockingForReady])</a></span></li>
+<li><span class="stability_undefined"><a href="#rootautomator_methods">方法</a></span></li>
+<li><span class="stability_undefined"><a href="#rootautomator_multitouch">多指手势</a></span></li>
+<li><span class="stability_undefined"><a href="#rootautomator_notes">限制与替代方案</a></span></li>
+</ul>
+</li>
+</ul>
+
+      </div>
+
+      <div id="apicontent">
+        <h1>RootAutomator<span><a class="mark" href="#rootautomator_rootautomator" id="rootautomator_rootautomator">#</a></span></h1>
+<div class="api_stability api_stability_1"><a href="documentation.html#documentation_stability_index">Stability: 1</a> - Experimental（需要设备已 root）</div><p>RootAutomator 用<strong>root 权限</strong>直接往<code>/dev/input/event*</code>写输入事件，不走无障碍服务。它的特点是：</p>
+<ul>
+<li>不需要开启无障碍、不需要前台窗口，能在锁屏/游戏/输入法拦截等场景下点按；</li>
+<li>支持<strong>多指手势</strong>（双指缩放、三指等），这是无障碍<code>gestures</code>之外更底层的做法；</li>
+<li>代价是需要 root，并且要自己管理手指的按下/抬起（忘记<code>exit()</code>会残留“手指”）。</li>
+</ul>
+<p>两个引擎的用法一致（Rhino 里是全局<code>RootAutomator</code>，QuickJS 里也是）；Pro 的<code>RootAutomator2({ root: true } / { adb: true })</code>（数组式多指、支持 Shizuku/ADB 授权）<strong>本引擎尚未实现</strong>，用本页的接口即可完成同样的操作。</p>
+<h2>new RootAutomator([inputDevice][, nonBlockingForReady])<span><a class="mark" href="#rootautomator_new" id="rootautomator_new">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>inputDevice</code> <span class="type">&lt;string&gt;</span> 可选，触摸设备名（如<code>event3</code>）或设备路径（<code>/dev/input/event3</code>）；不传则自动选择触摸屏设备</li>
+<li><code>nonBlockingForReady</code> <span class="type">&lt;boolean&gt;</span> 可选，<code>true</code>表示构造时不等待 root shell 就绪（默认<code>false</code>，会等 root 授权完成）</li>
+<li>返回 <span class="type">&lt;RootAutomator&gt;</span></li>
+</ul>
+</div><p>构造时会启动一个 root shell。设备未 root 时构造会失败（<code>nonBlockingForReady</code>为<code>false</code>时会一直等 root 授权），建议先用下面的方式探测：</p>
+<pre><code>var hasRoot = shell('id', true).result.indexOf('uid=0') &gt;= 0;
+if (!hasRoot) {
+    toastLog('需要 root 权限');
+    exit();
+}
+var ra = new RootAutomator();
+</code></pre><h2>方法<span><a class="mark" href="#rootautomator_methods" id="rootautomator_methods">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>ra.tap(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 点按</li>
+<li><code>ra.press(x, y, duration[, id])</code> <span class="type">&lt;void&gt;</span> 按住<code>duration</code>毫秒</li>
+<li><code>ra.longPress(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 长按</li>
+<li><code>ra.swipe(x1, y1, x2, y2[, duration[, id]])</code> <span class="type">&lt;void&gt;</span> 滑动，默认时长 300ms</li>
+<li><code>ra.touch(x, y)</code> / <code>ra.touchX(x)</code> / <code>ra.touchY(y)</code> <span class="type">&lt;void&gt;</span> 直接设置触摸坐标（等价于写<code>ABS_MT_POSITION_X/Y</code>）</li>
+<li><code>ra.touchDown(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 按下某个手指</li>
+<li><code>ra.touchMove(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 移动某个手指</li>
+<li><code>ra.touchUp([id])</code> <span class="type">&lt;void&gt;</span> 抬起某个手指（不传 id 时抬起默认手指）</li>
+<li><code>ra.sendSync()</code> / <code>ra.sendMtSync()</code> <span class="type">&lt;void&gt;</span> 提交当前事件（多指手势里每改完一组坐标都要同步一次）</li>
+<li><code>ra.sendEvent(type, code, value)</code> <span class="type">&lt;void&gt;</span> 直接写一个 input 事件（<code>type</code>/<code>code</code>是<code>EV_*</code>/<code>ABS_*</code>等常量值）</li>
+<li><code>ra.getDefaultId()</code> / <code>ra.setDefaultId(id)</code> <span class="type">&lt;number / void&gt;</span> 默认手指 id</li>
+<li><code>ra.setScreenMetrics(width, height)</code> <span class="type">&lt;void&gt;</span> 设置设计分辨率，之后坐标自动按屏幕缩放</li>
+<li><code>ra.exit()</code> <span class="type">&lt;void&gt;</span> 关闭 root shell 并释放手指，<strong>脚本结束前务必调用</strong></li>
+</ul>
+</div><h2>多指手势<span><a class="mark" href="#rootautomator_multitouch" id="rootautomator_multitouch">#</a></span></h2>
+<p>多指手势的过程是：<strong>逐指按下 → 逐指移动 → 逐指抬起</strong>，同一时刻的坐标用相同的<code>sendSync()</code>提交。下面是从两指捏合（缩放）的示例：</p>
+<pre><code>var ra = new RootAutomator();
+sleep(1000);
+
+var p0 = { x: 150, y: 300 }, p1 = { x: 850, y: 1700 };
+// 手指 0 按住左上，手指 1 按住右下
+ra.touchDown(p0.x, p0.y, 0);
+ra.touchDown(p1.x, p1.y, 1);
+
+// 两个手指相向移动
+for (var i = 0; i &lt; 350; i++) {
+    ra.touchMove(p0.x + i, p0.y + i * 2, 0);
+    ra.touchMove(p1.x - i, p1.y - i * 2, 1);
+    ra.sendMtSync();
+    sleep(1);
+}
+ra.touchUp(0);
+ra.touchUp(1);
+ra.exit();
+</code></pre><div class="warning">
+<p>忘记<code>ra.exit()</code>（或用<code>exit()</code>提前结束脚本）时，屏幕上可能残留“按着不放”的手指。脚本里用<code>try…finally</code>包住手势代码，确保退出时释放。</p>
+</div><h2>限制与替代方案<span><a class="mark" href="#rootautomator_notes" id="rootautomator_notes">#</a></span></h2>
+<ul>
+<li>需要<strong>root</strong>；没有 root 时请用无障碍方式：<code>click()</code>、<code>gestures()</code>、<code>automator</code>（<code>swipe</code>/<code>gesture</code>等）。</li>
+<li>坐标是<strong>设备像素</strong>；换设备或改分辨率后请重新<code>setScreenMetrics()</code>。</li>
+<li>输入事件是“真实的”，系统与游戏都会当成真人操作，无法被无障碍检测到；但同样也会影响其它应用，请谨慎在游戏里使用。</li>
+<li>多指手势里的<code>id</code>是逻辑手指编号（0、1、2…），由本模块管理并映射到内核的 slot。</li>
+<li>Pro 的<code>RootAutomator2</code>（<code>{ root: true }</code>/<code>{ adb: true }</code>、数组式多指、Shizuku 授权）未实现；本页接口同样支持多指，只是写法不同。</li>
+</ul>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

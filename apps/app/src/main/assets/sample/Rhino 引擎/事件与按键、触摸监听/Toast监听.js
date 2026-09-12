@@ -1,6 +1,7 @@
+// @engine rhino
 auto();
 events.observeToast();
-events.onToast(function(toast){
+events.onToast(function(toast) {
     var pkg = toast.getPackageName();
     log("Toast内容: " + toast.getText() +
         " 来自: " + getAppName(pkg) +

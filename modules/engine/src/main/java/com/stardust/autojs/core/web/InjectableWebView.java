@@ -25,6 +25,8 @@ public class InjectableWebView extends WebView {
     private void init(org.mozilla.javascript.Context jsCtx, Scriptable scriptable) {
         mInjectableWebClient = new InjectableWebClient(jsCtx, scriptable);
         setWebViewClient(mInjectableWebClient);
+        // 构造完就让页面桥就位：之后 loadUrl/loadData 打开的页面里 `window.rhino` 才可见
+        mInjectableWebClient.attach(this);
     }
 
     @ScriptInterface

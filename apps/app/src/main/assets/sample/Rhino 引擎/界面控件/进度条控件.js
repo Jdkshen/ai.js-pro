@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 ui.layout(
@@ -24,29 +25,29 @@ ui.layout(
 
 var downloadId = null;
 
-ui.download.click(()=>{
-    if(downloadId != null){
+ui.download.click(() => {
+    if (downloadId != null) {
         stopDownload();
-    }else{
+    } else {
         startDownload();
     }
 });
 
-function stopDownload(){
+function stopDownload() {
     ui.download.text("开始下载");
     clearInterval(downloadId);
     downloadId = null;
 }
 
-function startDownload(){
-    if(ui.progress.getProgress() == 100){
+function startDownload() {
+    if (ui.progress.getProgress() == 100) {
         ui.progress.setProgress(0);
     }
     ui.download.text("停止下载");
-    downloadId = setInterval(()=>{
+    downloadId = setInterval(() => {
         var p = ui.progress.getProgress();
         p++;
-        if(p > 100){
+        if (p > 100) {
             stopDownload();
             return;
         }

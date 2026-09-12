@@ -275,11 +275,25 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
             ConsoleImpl.LogEntry logEntry = mFilteredEntries.get(position);
             holder.textView.setText(logEntry.content);
             holder.textView.setTextColor(mColors.get(logEntry.level));
+            // 长按复制单条日志；悬浮控制台与日志页共用这段逻辑。
+            holder.itemView.setOnLongClickListener(v -> copyLogEntry(v.getContext(), logEntry.content));
         }
 
         @Override
         public int getItemCount() {
             return mFilteredEntries.size();
         }
+    }
+
+    /** 长按复制单条日志（悬浮控制台与日志页共用）。 */
+    private static boolean copyLogEntry(android.content.Context context, CharSequence content) {
+        android.content.ClipboardManager clipboard = (android.content.ClipboardManager)
+                context.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            return false;
+        }
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("log", content));
+        android.widget.Toast.makeText(context, "已复制该条日志", android.widget.Toast.LENGTH_SHORT).show();
+        return true;
     }
 }

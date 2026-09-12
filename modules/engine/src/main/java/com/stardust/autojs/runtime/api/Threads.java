@@ -19,6 +19,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public class Threads {
 
     private final HashSet<Thread> mThreads = new HashSet<>();
+    private final HashSet<ScriptThreadPool> mPools = new HashSet<>();
     private ScriptRuntime mRuntime;
     private final Thread mMainThread;
     private MainThreadProxy mMainThreadProxy;
@@ -71,6 +72,29 @@ public class Threads {
         };
     }
 
+    /** 供 {@link ScriptThreadPool} 的线程工厂使用：让池中任务也跑在脚本线程上。 */
+    @NonNull
+    TimerThread createPoolThread(Runnable runnable) {
+        return createThread(runnable);
+    }
+
+    /**
+     * Auto.js Pro 的 {@code $threads.pool({corePoolSize, maxPoolSize})}。
+     *
+     * @param corePoolSize 核心线程数
+     * @param maxPoolSize  最大线程数（小于核心线程数时按核心线程数处理）
+     */
+    public ScriptThreadPool createPool(int corePoolSize, int maxPoolSize) {
+        ScriptThreadPool pool = new ScriptThreadPool(this, corePoolSize, maxPoolSize);
+        synchronized (mPools) {
+            if (mExit) {
+                throw new IllegalStateException("script exiting");
+            }
+            mPools.add(pool);
+        }
+        return pool;
+    }
+
     public VolatileDispose disposable() {
         return new VolatileDispose();
     }
@@ -88,6 +112,12 @@ public class Threads {
     }
 
     public void shutDownAll() {
+        synchronized (mPools) {
+            for (ScriptThreadPool pool : mPools) {
+                pool.shutdownNow();
+            }
+            mPools.clear();
+        }
         synchronized (mThreads) {
             for (Thread thread : mThreads) {
                 thread.interrupt();

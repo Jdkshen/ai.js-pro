@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 var PrefCheckBox = require('./自定义控件-模块-配置勾选框.js');
@@ -10,9 +11,7 @@ ui.layout(
     </vertical>
 );
 
-ui.btn.on("click", function(){
+ui.btn.on("click", function() {
     toast("配置1为" + PrefCheckBox.getPref().get("perf1"));
     toast("配置2为" + PrefCheckBox.getPref().get("perf2"));
 });
-
-

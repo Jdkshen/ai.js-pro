@@ -1,3 +1,4 @@
+// @engine rhino
 /* -*- Mode: java; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
@@ -8,9 +9,9 @@ print("----------------------------------------");
 
 // Use the XML constructor to parse an string into an XML object
 var John = "<employee><name>John</name><age>25</age></employee>";
-var Sue ="<employee><name>Sue</name><age>32</age></employee>";
+var Sue = "<employee><name>Sue</name><age>32</age></employee>";
 var tagName = "employees";
-var employees = new XML("<" + tagName +">" + John + Sue + "</" + tagName +">");
+var employees = new XML("<" + tagName + ">" + John + Sue + "</" + tagName + ">");
 print("The employees XML object constructed from a string is:\n" + employees);
 
 print("----------------------------------------");
@@ -86,7 +87,7 @@ var message = <soap:Envelope
 
 // declare the SOAP and stocks namespaces
 var soap = new Namespace("http://schemas.xmlsoap.org/soap/envelope/");
-var stock = new Namespace ("http://mycompany.com/stocks");
+var stock = new Namespace("http://mycompany.com/stocks");
 
 // extract the soap encoding style and body from the soap message
 var encodingStyle = message.@soap::encodingStyle;
@@ -112,7 +113,7 @@ x.c = <c xmlns="http://some.other.namespace.com">three</c>;
 
 print("XML object constructed using the default xml namespace:\n" + x);
 
-default xml namespace="";
+default xml namespace = "";
 
 print("----------------------------------------");
 
@@ -140,10 +141,10 @@ var order = <order id = "123456" timestamp="Mon Mar 10 2003 16:03:25 GMT-0800 (P
 print("The order id is:" + order.@id);
 
 // get all the child elements from the order element
-print("The children of the order are:\n" + order.*); 
+print("The children of the order are:\n" + order.*);
 
 // get the list of all item descriptions
-print("The order descriptions are:\n" + order.item.description); 
+print("The order descriptions are:\n" + order.item.description);
 
 
 // get second item by numeric index
@@ -157,8 +158,8 @@ print("The second child of the order is:\n" + order.*[1]);
 
 // calculate the total price of the order
 var totalprice = 0;
-for each (i in order.item) {
-	totalprice += i.price * i.quantity;
+for each(i in order.item) {
+    totalprice += i.price * i.quantity;
 }
 print("The total price of the order is: " + totalprice);
 
@@ -176,7 +177,7 @@ print("All the employee names are:\n" + e..name);
 print("The employee named Joe is:\n" + e.employee.(name == "Joe"));
 
 // employees with id's 1 & 2
-print("Employees with ids 1 & 2:\n" + e.employee.(@id == 1 || @id == 2)); 
+print("Employees with ids 1 & 2:\n" + e.employee.(@id == 1 || @id == 2));
 
 // name of employee with id 1
 print("Name of the the employee with ID=1: " + e.employee.(@id == 1).name);
@@ -184,7 +185,3 @@ print("Name of the the employee with ID=1: " + e.employee.(@id == 1).name);
 print("----------------------------------------");
 
 openConsole();
-
-
-
-

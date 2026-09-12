@@ -304,6 +304,10 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                 if (newState == RecyclerView.SCROLL_STATE_IDLE) {
                     saveScrollPosition();
                 }
+                if (mOnScrollStateChangedCallback != null) {
+                    mOnScrollStateChangedCallback.onScrollStateChanged(
+                            newState != RecyclerView.SCROLL_STATE_IDLE);
+                }
             }
         });
         WrapContentGridLayoutManger manager = new WrapContentGridLayoutManger(getContext(), 2);
@@ -525,10 +529,35 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                             Snackbar.make(this, R.string.text_reset_succeed, Snackbar.LENGTH_SHORT).show();
                         }, Observers.toastMessage());
                 break;
+            case R.id.reset_all:
+                confirmResetAllSamples();
+                break;
             default:
                 return false;
         }
         return true;
+    }
+
+    private void confirmResetAllSamples() {
+        new androidx.appcompat.app.AlertDialog.Builder(getContext())
+                .setTitle(R.string.text_reset_all_samples)
+                .setMessage(R.string.text_reset_all_samples_message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.text_reset_to_initial_content,
+                        (dialog, which) -> resetAllSamples())
+                .show();
+    }
+
+    private void resetAllSamples() {
+        Snackbar.make(this, R.string.text_reset_all_samples_running, Snackbar.LENGTH_SHORT).show();
+        Explorers.Providers.workspace().resetAllSamples()
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(count -> {
+                    Snackbar.make(this,
+                            getResources().getString(R.string.text_reset_all_samples_done, count),
+                            Snackbar.LENGTH_LONG).show();
+                    notifyOperated();
+                }, Observers.toastMessage());
     }
 
     private boolean showMiuixActionMenu(int[] ids, String[] labels, String title) {
@@ -615,6 +644,17 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
     protected RecyclerView getExplorerItemListView() {
         return mExplorerItemListView;
+    }
+
+    /** 列表滚动状态回调（true = 正在滚动）：主界面用它让悬浮按钮随滚动收起。 */
+    public interface OnScrollStateChangedCallback {
+        void onScrollStateChanged(boolean scrolling);
+    }
+
+    private OnScrollStateChangedCallback mOnScrollStateChangedCallback;
+
+    public void setOnScrollStateChangedCallback(OnScrollStateChangedCallback callback) {
+        mOnScrollStateChangedCallback = callback;
     }
 
     private class ExplorerAdapter extends RecyclerView.Adapter<BindableViewHolder<?>> {
@@ -704,8 +744,12 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                     mItemTimestampFormat.format(new Date(item.lastModified()))));
             mFirstChar.setText(ExplorerViewHelper.getIconText(item));
             mFirstCharBackground.setColor(ExplorerViewHelper.getIconColor(item));
-            itemView.findViewById(R.id.file_code_icon).setVisibility(
-                    ExplorerViewHelper.usesCodeIcon(item) ? VISIBLE : GONE);
+            android.widget.ImageView fileIcon = itemView.findViewById(R.id.file_code_icon);
+            int fileIconRes = ExplorerViewHelper.getFileIconRes(item);
+            fileIcon.setVisibility(fileIconRes != 0 ? VISIBLE : GONE);
+            if (fileIconRes != 0) {
+                fileIcon.setImageResource(fileIconRes);
+            }
             mRun.setVisibility(item.isExecutable() ? VISIBLE : GONE);
             applyPendingHighlight(itemView, item.getPath());
         }
@@ -797,15 +841,16 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             mName.setText(ExplorerViewHelper.getDisplayName(data));
             mDesc.setText(getResources().getString(R.string.text_directory_modified,
                     mItemTimestampFormat.format(new Date(data.lastModified()))));
-            boolean isProject = data instanceof ExplorerProjectPage
-                    || data instanceof ExplorerSamplePage;
+            // 「项目」保留专属的紫圆底 + 指南针；「示例代码」入口改用和普通文件夹
+            // 同款的蓝圆底 + 文件夹图标，避免它在文件列表里显得突兀。
+            boolean isProject = data instanceof ExplorerProjectPage;
             mIcon.setBackgroundResource(isProject
                     ? R.drawable.circle_project
                     : R.drawable.circle_folder);
             mIcon.setImageResource(isProject
                     ? R.drawable.ic_project_compass_24dp
                     : R.drawable.ic_folder_outline_24dp);
-            mOptions.setVisibility(data instanceof ExplorerSamplePage ? GONE : VISIBLE);
+            mOptions.setVisibility(VISIBLE);
             mExplorerPage = data;
             applyPendingHighlight(itemView, data.getPath());
 
@@ -817,6 +862,20 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
         void showOptionMenu() {
             mSelectedItem = mExplorerPage;
+            if (mExplorerPage instanceof ExplorerSamplePage) {
+                // 示例文件夹：只给「重置所有示例」，避免改名/删除把内置示例目录弄丢
+                int[] sampleIds = {R.id.reset_all};
+                String[] sampleLabels = {getResources().getString(R.string.text_reset_all_samples)};
+                if (showMiuixActionMenu(sampleIds, sampleLabels,
+                        ExplorerViewHelper.getDisplayName(mExplorerPage).toString())) return;
+                PopupMenu sampleMenu = new PopupMenu(getContext(), mOptions);
+                sampleMenu.inflate(R.menu.menu_dir_options);
+                sampleMenu.getMenu().removeItem(R.id.rename);
+                sampleMenu.getMenu().removeItem(R.id.delete);
+                sampleMenu.setOnMenuItemClickListener(ExplorerView.this);
+                sampleMenu.show();
+                return;
+            }
             int[] ids = {R.id.rename, R.id.delete};
             String[] labels = {getResources().getString(R.string.text_rename),
                     getResources().getString(R.string.text_delete)};

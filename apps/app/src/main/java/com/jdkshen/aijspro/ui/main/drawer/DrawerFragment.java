@@ -53,6 +53,7 @@ import com.jdkshen.aijspro.ui.main.MainActivity;
 import com.jdkshen.aijspro.ui.main.community.CommunityFragment;
 import com.jdkshen.aijspro.ui.user.LoginActivity;
 import com.jdkshen.aijspro.ui.settings.SettingsActivity;
+import com.jdkshen.aijspro.ui.update.UpdateCheckDialog;
 import com.jdkshen.aijspro.ui.update.UpdateInfoDialogBuilder;
 import com.jdkshen.aijspro.ui.user.WebActivity;
 import com.jdkshen.aijspro.ui.widget.AvatarView;
@@ -385,30 +386,13 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     }
 
     public void checkForUpdatesFromDrawer() {
-        VersionService.getInstance().checkForUpdates()
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(new SimpleObserver<VersionInfo>() {
-
-                    @Override
-                    public void onNext(@io.reactivex.annotations.NonNull VersionInfo versionInfo) {
-                        if (getActivity() == null) {
-                            return;
-                        }
-                        if (versionInfo.isNewer()) {
-                            new UpdateInfoDialogBuilder(getActivity(), versionInfo).show();
-                        } else {
-                            Toast.makeText(GlobalAppContext.get(), R.string.text_is_latest_version,
-                                    Toast.LENGTH_SHORT).show();
-                        }
-                    }
-
-                    @Override
-                    public void onError(@io.reactivex.annotations.NonNull Throwable e) {
-                        e.printStackTrace();
-                        Toast.makeText(GlobalAppContext.get(), R.string.text_check_update_error,
-                                Toast.LENGTH_SHORT).show();
-                    }
-                });
+        // 统一走设置页同一条链路（UpdateCheckDialog）：它会读取「更新源」设置（自建源），
+        // 出错时还会带上具体原因。旧实现直接调无参 checkForUpdates()，永远只查 GitHub，
+        // 配了自建更新源也不会生效。
+        if (getActivity() == null) {
+            return;
+        }
+        new UpdateCheckDialog(getActivity()).show();
     }
 
     public void openSettingsFromDrawer() {
@@ -583,7 +567,8 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
 
     void checkForUpdates(DrawerMenuItemViewHolder holder) {
         setProgress(mCheckForUpdatesItem, true);
-        VersionService.getInstance().checkForUpdates()
+        // 带 Context 的重载才读「更新源」设置（自建源）；无参版永远只查 GitHub。
+        VersionService.getInstance().checkForUpdates(GlobalAppContext.get())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(new SimpleObserver<VersionInfo>() {
 
@@ -603,7 +588,16 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
                     @Override
                     public void onError(@io.reactivex.annotations.NonNull Throwable e) {
                         e.printStackTrace();
-                        Toast.makeText(GlobalAppContext.get(), R.string.text_check_update_error, Toast.LENGTH_SHORT).show();
+                        // 自建更新源出错时把原因带出来（路径写错、服务没起等），与设置页行为一致。
+                        String detail = e.getMessage();
+                        if (!TextUtils.isEmpty(VersionService.updateSourceUrl(GlobalAppContext.get()))) {
+                            Toast.makeText(GlobalAppContext.get(), GlobalAppContext.get().getString(
+                                    R.string.text_check_update_error_detail,
+                                    TextUtils.isEmpty(detail) ? e.getClass().getSimpleName() : detail),
+                                    Toast.LENGTH_LONG).show();
+                        } else {
+                            Toast.makeText(GlobalAppContext.get(), R.string.text_check_update_error, Toast.LENGTH_SHORT).show();
+                        }
                         setProgress(mCheckForUpdatesItem, false);
                     }
                 });

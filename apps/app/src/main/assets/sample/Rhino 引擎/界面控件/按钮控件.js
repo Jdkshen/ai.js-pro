@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 ui.layout(
@@ -11,10 +12,10 @@ ui.layout(
     </vertical>
 );
 
-ui.click_me.on("click", ()=>{
+ui.click_me.on("click", () => {
     toast("我被点啦");
 });
 
-ui.click_me.on("long_click", ()=>{
+ui.click_me.on("long_click", () => {
     toast("我被长按啦");
 });

@@ -21,6 +21,15 @@ public class Files {
         mRuntime = runtime;
     }
 
+    /**
+     * Auto.js Pro 的 `files.observe(path)`：监听目录/文件变化。
+     *
+     * @return 支持 `on(event, callback)` / `stopWatching()` / `startWatching()` 的监听对象
+     */
+    public com.stardust.autojs.core.io.ScriptFileObserver observe(String path) {
+        return new com.stardust.autojs.core.io.ScriptFileObserver(mRuntime, path(path));
+    }
+
     // FIXME: 2018/10/16 is not correct in sub-directory?
     public String path(String relativePath) {
         String cwd = cwd();

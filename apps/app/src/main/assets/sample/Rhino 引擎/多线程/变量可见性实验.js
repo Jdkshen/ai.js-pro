@@ -1,7 +1,8 @@
+// @engine rhino
 var running = true;
 
-threads.start(function(){
-    while(running){
+threads.start(function() {
+    while (running) {
         log("running = true");
     }
 });

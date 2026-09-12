@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 ui.layout(
@@ -27,14 +28,14 @@ ui.layout(
     </vertical>
 );
 
-ui.ok.click(()=>{
+ui.ok.click(() => {
     var text = ui.qq.text();
-    if(text.length == 0){
+    if (text.length == 0) {
         ui.qq.setError("输入不能为空");
         return;
     }
     var qq = parseInt(text);
-    if(qq < 10000){
+    if (qq < 10000) {
         ui.qq.setError("QQ号码格式错误");
         return;
     }

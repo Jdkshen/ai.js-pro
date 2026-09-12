@@ -614,9 +614,8 @@ bool NativeFrameStore::findImage(int64_t sourceHandle, int64_t templateHandle, d
         return false;
     }
     if (templ->cols > width || templ->rows > height) {
-        if (error != nullptr) {
-            *error = "Template is larger than the search region";
-        }
+        // 模板比搜索区域大：按「未找到」处理（返回 false、不报错），
+        // 与 Auto.js 的 findImage 语义一致，也与 QuickJS 示例的预期一致。
         return false;
     }
 
@@ -656,7 +655,7 @@ bool NativeFrameStore::matchTemplate(
         return false;
     }
     if (templ->cols > width || templ->rows > height) {
-        if (error != nullptr) *error = "Template is larger than the search region";
+        // 同上：模板比区域大 = 没有匹配项，不当作错误
         return false;
     }
     try {

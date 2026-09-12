@@ -24,6 +24,7 @@ import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.build.ApkBuilder;
+import com.jdkshen.aijspro.autojs.build.BuildFailureLog;
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
 import com.jdkshen.aijspro.model.script.ScriptFile;
@@ -277,8 +278,11 @@ public class BuildActivity extends BaseActivity implements ApkBuilder.ProgressCa
             mProgressDialog.dismiss();
             mProgressDialog = null;
         }
-        Toast.makeText(this, getString(R.string.text_build_failed) + error.getMessage(), Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, getString(R.string.text_build_failed) + BuildFailureLog.describe(error),
+                Toast.LENGTH_SHORT).show();
         Log.e(LOG_TAG, "Build failed", error);
+        // 与 Miuix 打包页一致：失败写应用内全局日志，事后不用连电脑抓 logcat。
+        BuildFailureLog.report(mSourcePath.getText().toString(), null, error);
     }
 
     private void onBuildSuccessful(File outApk) {

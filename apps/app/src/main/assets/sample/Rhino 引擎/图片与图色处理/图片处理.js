@@ -1,18 +1,15 @@
+// @engine rhino
 "ui";
 
-function __nowMs() { return Number(java.lang.System.nanoTime()) / 1000000; }
-function __formatMs(value) { return Number(value).toFixed(3); }
-
-//项目仓库内的 AI.js Pro 图标（需联网，GitHub raw 链接）
-var url = "https://github.com/Jdkshen/ai.js-pro/raw/HEAD/modules/engine/src/main/res/drawable-nodpi/ai_js_pro_logo.png";
+var url = "https://homepages.cae.wisc.edu/~ece533/images/lena.png";
 var logo = null;
 var currentImg = null;
 
-events.on("exit", function(){
-    if(logo != null){
+events.on("exit", function() {
+    if (logo != null) {
         logo.recycle();
     }
-    if(currentImg != null){
+    if (currentImg != null) {
         currentImg.recycle();
     }
 });
@@ -42,8 +39,8 @@ function setImage(img) {
         ui.img.setImageBitmap(img.bitmap);
         var oldImg = currentImg;
         //不能立即回收currentImg，因为此时img控件还在使用它，应该在下次消息循环再回收它
-        ui.post(()=>{
-            if(oldImg != null){
+        ui.post(() => {
+            if (oldImg != null) {
                 oldImg.recycle();
             }
         });
@@ -52,22 +49,18 @@ function setImage(img) {
 }
 
 //启动一个处理图片的线程
-var imgProcess = threads.start(function () {
-    setInterval(() => { }, 1000);
+var imgProcess = threads.start(function() {
+    setInterval(() => {}, 1000);
 });
 
 //处理图片的函数，把任务交给图片处理线程处理
-function processImg(name, process) {
+function processImg(process) {
     imgProcess.setTimeout(() => {
         if (logo == null) {
-            var loadStartedAt = __nowMs();
             logo = images.load(url);
-            console.log("[Rhino耗时] 下载并解码原图: " + __formatMs(__nowMs() - loadStartedAt) + " ms");
         }
         //处理图片
-        var processStartedAt = __nowMs();
         var result = process(logo);
-        console.log("[Rhino耗时] " + name + ": " + __formatMs(__nowMs() - processStartedAt) + " ms");
         //把处理后的图片设置到图片控件中
         setImage(result);
     }, 0);
@@ -76,7 +69,7 @@ function processImg(name, process) {
 var degress = 0;
 
 ui.rotate.on("click", () => {
-    processImg("旋转", img => {
+    processImg(img => {
         degress += 90;
         //旋转degress角度
         return images.rotate(img, degress);
@@ -84,8 +77,8 @@ ui.rotate.on("click", () => {
 });
 
 ui.concat.on("click", () => {
-    processImg("拼接", img => {
-        if(currentImg == null){
+    processImg(img => {
+        if (currentImg == null) {
             toast("请先点击其他按钮，再点击本按钮");
             return img.clone();
         }
@@ -95,14 +88,14 @@ ui.concat.on("click", () => {
 });
 
 ui.grayscale.on("click", () => {
-    processImg("灰度化", img => {
+    processImg(img => {
         //灰度化
         return images.grayscale(img);
     });
 });
 
 ui.binary.on("click", () => {
-    processImg("二值化", img => {
+    processImg(img => {
         var g = images.grayscale(img);
         //二值化，取灰度为30到200之间的图片
         var result = images.threshold(g, 100, 200);
@@ -112,7 +105,7 @@ ui.binary.on("click", () => {
 });
 
 ui.adaptiveBinary.on("click", () => {
-    processImg("自适应二值化", img => {
+    processImg(img => {
         var g = images.grayscale(img);
         //自适应二值化，最大值为200，块大小为25
         var result = images.adaptiveThreshold(g, 200, "MEAN_C", "BINARY", 25, 10);
@@ -122,28 +115,28 @@ ui.adaptiveBinary.on("click", () => {
 });
 
 ui.hsv.on("click", () => {
-    processImg("RGB转HSV", img => {
+    processImg(img => {
         //RGB转HSV
         return images.cvtColor(img, "BGR2HSV");
     });
 });
 
 ui.blur.on("click", () => {
-    processImg("模糊", img => {
+    processImg(img => {
         //模糊
         return images.blur(img, [10, 10]);
     });
 });
 
 ui.medianBlur.on("click", () => {
-    processImg("中值滤波", img => {
+    processImg(img => {
         //中值滤波
         return images.medianBlur(img, 5);
     });
 });
 
 ui.gaussianBlur.on("click", () => {
-    processImg("高斯模糊", img => {
+    processImg(img => {
         //高斯模糊
         return images.gaussianBlur(img, [5, 5]);
     });

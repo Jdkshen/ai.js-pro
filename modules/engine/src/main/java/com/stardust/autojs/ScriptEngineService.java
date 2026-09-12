@@ -150,7 +150,10 @@ public class ScriptEngineService {
         ScriptSource source = task.getSource();
         boolean isQuickJs = source instanceof JavaScriptSource
                 && JavaScriptSource.ENGINE_QUICKJS.equals(source.getEngineName());
-        if (source instanceof JavaScriptSource && !isQuickJs) {
+        // 带 `"ui";` 声明的脚本（Rhino / QuickJS 一样）跑在专用的 ScriptExecuteActivity 里：
+        // 界面是 Activity 的内容视图，按 Home 会退到后台、返回键才结束。以前 QuickJS 分支
+        // 被排除在这条路之外，于是 ui.layout 只能挂系统悬浮窗——退到桌面后还盖在上面。
+        if (source instanceof JavaScriptSource) {
             int mode = ((JavaScriptSource) source).getExecutionMode();
             if ((mode & JavaScriptSource.EXECUTION_MODE_UI) != 0) {
                 return ScriptExecuteActivity.execute(mContext, mScriptEngineManager, task);

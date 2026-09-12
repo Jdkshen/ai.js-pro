@@ -267,6 +267,10 @@
     <string name="text_sample">示例代码</string>
     <string name="text_reset_to_initial_content">重置为初始内容</string>
     <string name="text_reset_succeed">重置成功</string>
+    <string name="text_reset_all_samples">重置所有示例</string>
+    <string name="text_reset_all_samples_message">将用应用内置版本覆盖示例文件夹里的全部示例（同级目录保持原样），你改过的示例内容会被覆盖。是否继续？</string>
+    <string name="text_reset_all_samples_running">正在重置示例…</string>
+    <string name="text_reset_all_samples_done">已重置 %1$d 个示例文件</string>
     <string name="text_cannot_read_file">无法读取文件</string>
     <string name="text_service">服务</string>
     <string name="text_notification_permission">通知读取权限</string>

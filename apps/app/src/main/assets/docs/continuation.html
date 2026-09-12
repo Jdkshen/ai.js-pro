@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Continuation | AI.js Pro 4.1.0 文档</title>
+  <link rel="stylesheet" href="assets/fonts.css">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/sh.css">
+  <link rel="canonical" href="https://nodejs.org/api/continuation.html">
+</head>
+<body class="alt apidoc" id="api-section-continuation">
+  <div id="content" class="clearfix">
+    <div id="column2" class="interior">
+      <div id="intro" class="interior">
+        <a href="/" title="返回首页">
+          AI.js Pro
+        </a>
+      </div>
+      <ul>
+<li><a class="nav-documentation" href="documentation.html">关于本文档</a></li>
+<li><a class="nav-http-www-w3school-com-cn-js-pro_js_syntax-asp" href="http://www.w3school.com.cn/js/pro_js_syntax.asp">W3CSchool - ECMAScript教程</a></li>
+<li><a class="nav-http-es6-ruanyifeng-com-README" href="http://es6.ruanyifeng.com/#README">阮一峰 - ECMAScript 6教程</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-overview" href="overview.html">Overview - 综述</a></li>
+<li><a class="nav-qa" href="qa.html">Q&amp;A - 常见问题</a></li>
+<li><a class="nav-app" href="app.html">App - 应用</a></li>
+<li><a class="nav-console" href="console.html">Console - 控制台</a></li>
+<li><a class="nav-coordinates-based-automation" href="coordinates-based-automation.html">CoordinatesBasedAutomation - 基于坐标的操作</a></li>
+<li><a class="nav-device" href="device.html">Device - 设备</a></li>
+<li><a class="nav-dialogs" href="dialogs.html">Dialogs - 对话框</a></li>
+<li><a class="nav-engines" href="engines.html">Engines - 脚本引擎</a></li>
+<li><a class="nav-events" href="events.html">Events - 事件与监听</a></li>
+<li><a class="nav-floaty" href="floaty.html">Floaty - 悬浮窗</a></li>
+<li><a class="nav-files" href="files.html">Files - 文件系统</a></li>
+<li><a class="nav-globals" href="globals.html">Globals - 一般全局函数</a></li>
+<li><a class="nav-http" href="http.html">Http - HTTP</a></li>
+<li><a class="nav-images" href="images.html">Images - 图片与图色处理</a></li>
+<li><a class="nav-keys" href="keys.html">Keys - 按键模拟</a></li>
+<li><a class="nav-media" href="media.html">Media - 多媒体</a></li>
+<li><a class="nav-modules" href="modules.html">Modules - 模块</a></li>
+<li><a class="nav-widgets-based-automation" href="widgets-based-automation.html">WidgetsBasedAutomation - 基于控件的操作</a></li>
+<li><a class="nav-sensors" href="sensors.html">Sensors - 传感器</a></li>
+<li><a class="nav-shell" href="shell.html">Shell - Shell命令</a></li>
+<li><a class="nav-storages" href="storages.html">Storages - 本地存储</a></li>
+<li><a class="nav-threads" href="threads.html">Threads - 多线程</a></li>
+<li><a class="nav-timers" href="timers.html">Timers - 定时器</a></li>
+<li><a class="nav-ui" href="ui.html">UI - 用户界面</a></li>
+<li><a class="nav-continuation active" href="continuation.html">Continuation - 阻塞式等待</a></li>
+<li><a class="nav-io" href="io.html">IO - 文件流与逐行读写</a></li>
+<li><a class="nav-plugins" href="plugins.html">Plugins - 插件</a></li>
+<li><a class="nav-web" href="web.html">Web - 网页注入</a></li>
+<li><a class="nav-yolo" href="yolo.html">Yolo - 目标检测</a></li>
+<li><a class="nav-rootautomator" href="RootAutomator.html">RootAutomator - Root 输入模拟</a></li>
+<li><a class="nav-https-developer-mozilla-org-zh-CN-docs-Mozilla-Projects-Rhino-Scripting_Java" href="https://developer.mozilla.org/zh-CN/docs/Mozilla/Projects/Rhino/Scripting_Java">Work with Java - 调用Java API</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-https-github-com-jdkshen-ai-js-pro" href="https://github.com/Jdkshen/ai.js-pro">GitHub 项目 &amp; Issue 提交</a></li>
+<li><a class="nav-http-autojs-org" href="https://github.com/Jdkshen/ai.js-pro">AI.js Pro 项目主页</a></li>
+</ul>
+
+    </div>
+
+    <div id="column1" data-id="continuation" class="interior">
+      <header>
+        <h1>AI.js Pro 4.1.0 文档</h1>
+        <div id="gtoc">
+          <p>
+            <a href="index.html" name="toc">索引</a> |
+            <a href="all.html">查看全部</a>
+          </p>
+        </div>
+        <hr>
+      </header>
+
+      <div id="toc">
+        <h2>目录</h2>
+        <ul>
+<li><span class="stability_2"><a href="#continuation_continuation">Continuation</a></span><ul>
+<li><span class="stability_undefined"><a href="#continuation_continuation_enabled">continuation.enabled</a></span></li>
+<li><span class="stability_undefined"><a href="#continuation_continuation_create_scope">continuation.create([scope])</a></span></li>
+<li><span class="stability_undefined"><a href="#continuation_continuation_await_any">continuation.await(any)</a></span></li>
+<li><span class="stability_undefined"><a href="#continuation_continuation_delay_millis">continuation.delay(millis)</a></span></li>
+<li><span class="stability_undefined"><a href="#continuation_promise_prototype_await">Promise.prototype.await()</a></span></li>
+</ul>
+</li>
+<li><span class="stability_undefined"><a href="#continuation_continuation_1">Continuation 对象</a></span><ul>
+<li><span class="stability_undefined"><a href="#continuation_continuation_await">cont.await()</a></span></li>
+<li><span class="stability_undefined"><a href="#continuation_continuation_resume_result">cont.resume(result)</a></span></li>
+<li><span class="stability_undefined"><a href="#continuation_continuation_resumeerror_error">cont.resumeError(error)</a></span></li>
+<li><span class="stability_undefined"><a href="#continuation_continuation_2">注意事项</a></span></li>
+</ul>
+</li>
+</ul>
+
+      </div>
+
+      <div id="apicontent">
+        <h1>Continuation<span><a class="mark" href="#continuation_continuation" id="continuation_continuation">#</a></span></h1>
+<div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable（仅 Rhino 引擎）</div><p>continuation模块提供了把异步回调写成同步代码的能力：调用<code>await()</code>时脚本在当前位置挂起，等到<code>resume()</code>时再到挂起处继续执行。</p>
+<p>与<code>sleep()</code>不同，挂起<strong>不会阻塞线程</strong>：Rhino引擎通过continuation机制把JS调用栈展开（抛出<code>ContinuationPending</code>），把线程交还给脚本的事件循环，因此挂起期间定时器、事件回调、其它线程都能继续运行。<code>sleep()</code>则会让当前线程彻底停下来，该线程上的定时器和事件回调都会延迟。</p>
+<p>注意：continuation是Rhino引擎特有的能力（<code>continuation.enabled</code>为<code>true</code>）。QuickJS引擎是单线程执行模型，没有可挂起的continuation：<code>continuation.enabled</code>恒为<code>false</code>，<code>delay</code>退化为阻塞式<code>sleep</code>，<code>await</code>/<code>create</code>会直接抛错并提示改用async/await语法。</p>
+<h2>continuation.enabled<span><a class="mark" href="#continuation_continuation_enabled" id="continuation_continuation_enabled">#</a></span></h2>
+<div class="signature"><ul>
+<li>返回 <span class="type">&lt;boolean&gt;</span> 当前引擎是否支持continuation</li>
+</ul>
+</div><p>Rhino引擎返回<code>true</code>，QuickJS引擎返回<code>false</code>。可以用来写兼容两个引擎的代码：</p>
+<pre><code>if (continuation.enabled) {
+    log(&quot;当前引擎支持阻塞式等待&quot;);
+} else {
+    log(&quot;请使用 async/await 或 .then() 回调&quot;);
+}
+</code></pre><h2>continuation.create([scope])<span><a class="mark" href="#continuation_continuation_create_scope" id="continuation_continuation_create_scope">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>scope</code> <span class="type">&lt;Object&gt;</span> 可选，恢复时使用的JS作用域，默认为全局作用域</li>
+<li>返回 <span class="type">&lt;Continuation&gt;</span> continuation对象</li>
+</ul>
+</div><p>创建一个continuation对象，随后可以用它把某个异步结果&quot;搬&quot;成同步返回值：</p>
+<pre><code>var cont = continuation.create();
+setTimeout(function () {
+    cont.resume(&quot;定时器结果&quot;);
+}, 1000);
+var result = cont.await(); // 挂起1秒后拿到结果，且期间事件循环照常运行
+log(result); // 定时器结果
+</code></pre><h2>continuation.await(any)<span><a class="mark" href="#continuation_continuation_await_any" id="continuation_continuation_await_any">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>any</code> <span class="type">&lt;Promise&gt;</span> 要等待的Promise</li>
+<li>返回 <span class="type">&lt;any&gt;</span> Promise的完成值</li>
+</ul>
+</div><p>等待一个Promise并返回其结果，Promise被拒绝时把异常抛回当前代码位置。传入非Promise对象会抛出<code>TypeError</code>。</p>
+<pre><code>var response = continuation.await(http.get(&quot;https://www.example.com&quot;));
+log(&quot;状态码 = &quot; + response.statusCode);
+</code></pre><p>注意：<code>continuation.await()</code>只接受Promise（不是任意对象、也不是线程）。要等待子线程的结果，请在子线程里<code>cont.resume(result)</code>（见下面的例子）。</p>
+<h2>continuation.delay(millis)<span><a class="mark" href="#continuation_continuation_delay_millis" id="continuation_continuation_delay_millis">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>millis</code> <span class="type">&lt;number&gt;</span> 延迟毫秒数</li>
+</ul>
+</div><p>挂起指定毫秒数（等价于<code>setTimeout</code>+<code>await</code>），挂起期间事件循环继续运行。</p>
+<pre><code>for (var i = 0; i &lt; 3; i++) {
+    log(&quot;第 &quot; + (i + 1) + &quot; 次&quot;);
+    continuation.delay(1000);
+}
+</code></pre><h2>Promise.prototype.await()<span><a class="mark" href="#continuation_promise_prototype_await" id="continuation_promise_prototype_await">#</a></span></h2>
+<div class="signature"><ul>
+<li>返回 <span class="type">&lt;any&gt;</span> Promise的完成值</li>
+</ul>
+</div><p>便于链式书写的语法糖，等价于<code>continuation.await(promise)</code>：</p>
+<pre><code>var result = http.get(&quot;https://www.example.com&quot;).await();
+log(result.statusCode);
+</code></pre><h2>Continuation 对象<span><a class="mark" href="#continuation_continuation_1" id="continuation_continuation_1">#</a></span></h2>
+<p>由<code>continuation.create([scope])</code>返回，包含以下方法。</p>
+<h2>cont.await()<span><a class="mark" href="#continuation_continuation_await" id="continuation_continuation_await">#</a></span></h2>
+<div class="signature"><ul>
+<li>返回 <span class="type">&lt;any&gt;</span> <code>resume(result)</code>传入的结果</li>
+</ul>
+</div><p>挂起当前脚本，直到有人调用<code>cont.resume(result)</code>或<code>cont.resumeError(error)</code>。若被<code>resumeError</code>恢复，则在这里抛出该错误。</p>
+<h2>cont.resume(result)<span><a class="mark" href="#continuation_continuation_resume_result" id="continuation_continuation_resume_result">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>result</code> <span class="type">&lt;any&gt;</span> 恢复后<code>await()</code>的返回值</li>
+</ul>
+</div><p>恢复被挂起的脚本。<strong>同一个线程</strong>调用时立即恢复（<code>await()</code>处同步继续），<strong>其它线程</strong>调用时会被投递到该脚本的定时器队列（0毫秒后执行），因此可以安全地在线程间传递结果：</p>
+<pre><code>var cont = continuation.create();
+threads.start(function () {
+    sleep(2000);
+    cont.resume(&quot;子线程算完了&quot;);
+});
+log(cont.await()); // 2000ms 后输出：子线程算完了
+</code></pre><h2>cont.resumeError(error)<span><a class="mark" href="#continuation_continuation_resumeerror_error" id="continuation_continuation_resumeerror_error">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>error</code> <span class="type">&lt;any&gt;</span> 抛回<code>await()</code>位置的错误，不能为null或undefined</li>
+</ul>
+</div><p>用异常的方式恢复脚本，典型用法是把回调里的失败转成同步异常：</p>
+<pre><code>var cont = continuation.create();
+http.post(url, data, function (res, err) {
+    if (err) {
+        cont.resumeError(err);
+    } else {
+        cont.resume(res);
+    }
+});
+try {
+    var res = cont.await();
+    log(&quot;成功：&quot; + res.body.string());
+} catch (e) {
+    log(&quot;失败：&quot; + e);
+}
+</code></pre><h2>注意事项<span><a class="mark" href="#continuation_continuation_2" id="continuation_continuation_2">#</a></span></h2>
+<ul>
+<li><code>resume()</code>/<code>resumeError()</code>必须在<code>await()</code>挂起之后调用，否则抛出<code>IllegalStateException: call resume() without suspend()!</code>；同一个continuation重复<code>await()</code>会抛出<code>call suspend twice!</code>。</li>
+<li>挂起的是&quot;当前线程的当前执行位置&quot;，不是整个脚本：其它线程、定时器和事件监听都在继续工作。</li>
+<li>脚本被停止（例如音量键停止所有脚本）时挂起的continuation不会恢复，脚本直接结束。</li>
+<li>UI模式下脚本运行在<code>ScriptExecuteActivity</code>的脚本线程里，挂起不会卡住界面。</li>
+<li>QuickJS引擎：<code>enabled === false</code>、<code>delay()</code>为阻塞<code>sleep()</code>、<code>await()</code>/<code>create()</code>抛出<code>Error</code>；<code>require(&quot;continuation&quot;)</code>可以拿到该对象用于特性探测，但请改用<code>async</code>/<code>await</code>语法。</li>
+</ul>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -18,6 +18,7 @@ import com.stardust.autojs.core.eventloop.EventEmitter;
 import com.stardust.autojs.core.eventloop.SimpleEvent;
 import com.stardust.autojs.engine.JavaScriptEngine;
 import com.stardust.autojs.engine.LoopBasedJavaScriptEngine;
+import com.stardust.autojs.engine.QuickJsJavaScriptEngine;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
 import com.stardust.autojs.runtime.ScriptRuntime;
@@ -83,6 +84,21 @@ public class ScriptExecuteActivity extends AppCompatActivity {
     }
 
     private void runScript() {
+        if (mScriptEngine instanceof QuickJsJavaScriptEngine) {
+            // QuickJS 的脚本必须在引擎自己的线程上跑：native 事件循环会一直占住执行线程
+            // （界面还在就用定时器维持），在 onCreate 里同步执行会把主线程占死（输入超时 ANR）。
+            // Rhino 的 LoopBasedJavaScriptEngine 本来就是异步回调，这里对齐它的语义：
+            // 主线程只负责建界面，脚本在后台线程跑。
+            new Thread(() -> {
+                try {
+                    prepare();
+                    doExecution();
+                } catch (Throwable e) {
+                    onException(e);
+                }
+            }, "QuickJsScriptHost").start();
+            return;
+        }
         try {
             prepare();
             doExecution();
@@ -94,30 +110,63 @@ public class ScriptExecuteActivity extends AppCompatActivity {
     }
 
     private void onException(Throwable e) {
+        // 异常可能来自脚本线程（QuickJS），而监听器/收尾都要在主线程做。
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            runOnUiThread(() -> onException(e));
+            return;
+        }
+        // Activity 已经收掉时（返回键/停止脚本/音量键停止都会走到这里）execution 已被置空，
+        // 此时脚本的结束本来就是预期结果，再上报只会把 null 塞给监听器（曾因此 NPE 崩溃）。
+        if (mScriptExecution == null || mExecutionListener == null) {
+            Log.d(LOG_TAG, "ignore exception after the activity was destroyed: " + e);
+            return;
+        }
         mExecutionListener.onException(mScriptExecution, e);
         super.finish();
     }
 
-    @SuppressWarnings("unchecked")
     private void doExecution() {
+        // 脚本线程可能晚于 Activity 生命周期启动：此时 execution/listener 已被 onDestroy 置空，
+        // 直接不跑（监听器要求非空参数，传 null 会直接崩溃）。
+        final ScriptExecution execution = mScriptExecution;
+        final ScriptExecutionListener listener = mExecutionListener;
+        if (execution == null || listener == null) {
+            Log.d(LOG_TAG, "activity was destroyed before the script started; abort");
+            return;
+        }
         mScriptEngine.setTag(ScriptEngine.TAG_SOURCE, mScriptSource);
-        mExecutionListener.onStart(mScriptExecution);
-        ((LoopBasedJavaScriptEngine) mScriptEngine).execute(mScriptSource, new LoopBasedJavaScriptEngine.ExecuteCallback() {
-            @Override
-            public void onResult(Object r) {
-                mResult = r;
-            }
+        listener.onStart(execution);
+        if (mScriptEngine instanceof LoopBasedJavaScriptEngine) {
+            ((LoopBasedJavaScriptEngine) mScriptEngine).execute(mScriptSource, new LoopBasedJavaScriptEngine.ExecuteCallback() {
+                @Override
+                public void onResult(Object r) {
+                    mResult = r;
+                }
 
-            @Override
-            public void onException(Exception e) {
-                ScriptExecuteActivity.this.onException(e);
-            }
-        });
+                @Override
+                public void onException(Exception e) {
+                    ScriptExecuteActivity.this.onException(e);
+                }
+            });
+            return;
+        }
+        // QuickJS：同步执行，native 事件循环在脚本存活期间继续派发定时器/回调；
+        // 界面收在本 Activity 里，退到后台与返回键的行为与 Rhino 一致。
+        try {
+            mResult = mScriptEngine.execute(mScriptSource);
+        } catch (Exception e) {
+            onException(e);
+        }
     }
 
     private void prepare() {
         mScriptEngine.put("activity", this);
         mScriptEngine.setTag("activity", this);
+        // QuickJS 的 put() 只收简单类型（对象会被忽略），因此宿主 Activity 另走一条通道：
+        // host bridge 拿到它以后会把 ui.layout 结果挂到本 Activity 的内容视图。
+        if (mScriptEngine instanceof QuickJsJavaScriptEngine) {
+            ((QuickJsJavaScriptEngine) mScriptEngine).setHostActivity(this);
+        }
         mScriptEngine.setTag(ScriptEngine.TAG_ENV_PATH, mScriptExecution.getConfig().getPath());
         mScriptEngine.setTag(ScriptEngine.TAG_WORKING_DIRECTORY, mScriptExecution.getConfig().getWorkingDirectory());
         mScriptEngine.init();

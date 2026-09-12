@@ -1,23 +1,25 @@
+// @engine rhino
+// ⚠ 需要 Auto.js Pro 专属 API：ES6 模板字符串（当前 Rhino 1.7.7 不支持，请改成字符串拼接）（当前引擎暂未实现，直接运行会报错）
 "ui";
 
-ui.layout(
+$ui.layout(
     <vertical>
         <horizontal>
-            <button id="add" text="插入 1 条" layout_weight="1" />
-            <button id="remove" text="删除前 100 条" layout_weight="1" />
+            <button id="add" text="插入1条数据" />
+            <button id="remove" text="删除前100条数据" />
         </horizontal>
         <horizontal>
-            <button id="update" text="更新首条" layout_weight="1" />
-            <button id="scrollToStart" text="回到开头" layout_weight="1" />
-            <button id="scrollToEnd" text="滑到末尾" layout_weight="1" />
+            <button id="upate" text="更新数据" />
+            <button id="scrollToStart" text="滑动到开头" />
+            <button id="scrollToEnd" text="滑动到末尾" />
         </horizontal>
-        <list id="list" layout_weight="1">
+        <list id="list">
             <card margin="8" cardBackgroundColor="#F0F3E8" cardCornerRadius="8"
                 w="*" contentPadding="12">
-                <horizontal gravity="center_vertical">
+                <horizontal>
                     <vertical layout_weight="1">
-                        <text textSize="16sp" textColor="#000000" text="名称：{{name}}" />
-                        <text textSize="14sp" textColor="#666666" text="ID：{{id}}" />
+                        <text id="name" textSize="16sp" textColor="#000000" text="名称: {{name}}" />
+                        <text id="id" textSize="16sp" textColor="#000000" text="ID: {{id}}" />
                     </vertical>
                     <button id="deleteItem" text="删除" style="Widget.AppCompat.Button.Borderless" />
                 </horizontal>
@@ -26,58 +28,72 @@ ui.layout(
     </vertical>
 );
 
-var items = [];
+let items = [];
 
-// 当前引擎会观察数组的 push/splice 操作并刷新列表，不需要手动调用 Adapter。
-ui.list.setDataSource(items);
+// 重要！
+// 第二个参数传入false禁用自动数组监听模式
+// 所有数组操作需要手动通知列表变化
+$ui.list.setDataSource(items, false);
 
-ui.list.on("item_click", function (item) {
-    toast("点击：" + item.name + "，ID=" + item.id);
+$ui.list.on("item_click", function (item, i, itemView, listView) {
+    toast("被点击的项目名字为: " + item.name + "，ID为: " + item.id);
 });
 
-ui.list.on("item_bind", function (itemView, itemHolder) {
+$ui.list.on("item_bind", function (itemView, itemHolder) {
     itemView.deleteItem.on("click", function () {
+        let item = itemHolder.item;
+        toast("被删除的人名字为: " + item.name + "，ID为: " + item.id);
         items.splice(itemHolder.position, 1);
+        // 手动通知列表在该位置有一条数据删除
+        $ui.list.adapter.notifyItemRemoved(itemHolder.position);
     });
 });
 
-ui.add.on("click", function () {
-    var position = Math.min(5, items.length);
-    items.splice(position, 0, { name: "新数据", id: -Date.now() });
+$ui.add.on("click", () => {
+    // 在位置5处插入一条数据
+    items.splice(5, 0, { name: "新数据", id: -1 });
+    // 通知列表在该位置有一条新数据
+    $ui.list.adapter.notifyItemInserted(5);
 });
 
-ui.remove.on("click", function () {
-    items.splice(0, Math.min(100, items.length));
+$ui.remove.on("click", () => {
+    // 删除前100条数据
+    items.splice(0, 100);
+    // 通知列表在位置0有100条数据被删除
+    $ui.list.adapter.notifyItemRangeRemoved(0, 100);
 });
 
-ui.update.on("click", function () {
-    if (!items.length) {
-        return;
+$ui.upate.on("click", () => {
+    // 更新第1条数据
+    items[0].id++;
+    items[0].name = "新名称: " + items[0].id;
+    // 通知列表在位置0的数据更新
+    $ui.list.adapter.notifyItemChanged(0);
+    // 如果有批量更新则需要用notifyItemRangeChanged(position, itemCount)
+});
+
+$ui.scrollToStart.on("click", () => {
+    $ui.list.scrollToPosition(0);
+});
+
+$ui.scrollToEnd.on("click", () => {
+    $ui.list.smoothScrollToPosition(items.length - 1);
+});
+
+$threads.start(() => {
+    // 生成10000条数据
+    let data = [];
+    for (let i = 0; i < 10000; i++) {
+        data.push({
+            name: `第${i}个`,
+            id: i,
+        });
     }
-    // 修改对象属性不会触发数组观察，因此用 splice 替换这一项。
-    var first = items[0];
-    items.splice(0, 1, { name: "已更新 " + new Date().toLocaleTimeString(), id: first.id + 1 });
-});
-
-ui.scrollToStart.on("click", function () {
-    if (items.length) {
-        ui.list.scrollToPosition(0);
-    }
-});
-
-ui.scrollToEnd.on("click", function () {
-    if (items.length) {
-        ui.list.smoothScrollToPosition(items.length - 1);
-    }
-});
-
-threads.start(function () {
-    var data = [];
-    for (var i = 0; i < 10000; i++) {
-        data.push({ name: "第 " + i + " 项", id: i });
-    }
-    ui.run(function () {
-        // 一次 push 完成批量插入，避免逐条跨线程刷新 UI。
+    // 在UI线程插入数据
+    $ui.post(() => {
+        let index = items.length;
         Array.prototype.push.apply(items, data);
+        // 通知列表从位置index开始，有data.length个数据插入
+        $ui.list.adapter.notifyItemRangeInserted(index, data.length);
     });
 });

@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 var InputLayout = (function() {
@@ -6,12 +7,12 @@ var InputLayout = (function() {
 
     function InputLayout() {
         ui.Widget.call(this);
-        this.defineAttr("hint", (view, attr, value, defineSetter)=>{
+        this.defineAttr("hint", (view, attr, value, defineSetter) => {
             view._hint.setText(value);
         });
-        this.defineAttr("text", (view, attr, value, defineSetter)=>{
-             view._input.setText(value);
-         });
+        this.defineAttr("text", (view, attr, value, defineSetter) => {
+            view._input.setText(value);
+        });
     }
     InputLayout.prototype.render = function() {
         return (
@@ -36,6 +37,6 @@ ui.layout(
     </vertical>
 );
 
-ui.ok.on("click", function(){
+ui.ok.on("click", function() {
     toast("名字是：" + ui.name.widget.getInput() + ", 年龄是：" + ui.age.widget.getInput());
 });

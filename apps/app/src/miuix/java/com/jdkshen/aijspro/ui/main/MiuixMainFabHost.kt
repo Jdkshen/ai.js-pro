@@ -36,24 +36,39 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** Visible Miuix FAB; MainActivity's original FAB remains the business-action bridge. */
 object MiuixMainFabHost {
+    /** 当前页的 FAB 图标（MainActivity 在切页时同步，如管理页 = ✕ 停止全部）。 */
+    private var fabIconRes by mutableStateOf(R.drawable.ic_menu)
+
+    /** 新建菜单展开状态提升到此层：切页时可从外部收起，避免菜单跨页残留。 */
+    private var fabMenuExpanded by mutableStateOf(false)
+
+    @JvmStatic
+    fun updateFabIconRes(res: Int) {
+        fabIconRes = res
+    }
+
+    @JvmStatic
+    fun collapseFabMenu() {
+        fabMenuExpanded = false
+    }
+
     @JvmStatic
     fun createView(host: MainActivity): View {
         val view = ComposeView(host).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 AijsMiuixTheme {
-                    var expanded by remember { mutableStateOf(false) }
                     Column(horizontalAlignment = Alignment.End,
                         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        AnimatedVisibility(visible = expanded,
+                        AnimatedVisibility(visible = fabMenuExpanded,
                             enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
                             exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)) {
                             Column(horizontalAlignment = Alignment.End,
                                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Action(host, "项目", R.drawable.ic_project, 3) { expanded = false }
-                                Action(host, "导入", R.drawable.ic_floating_action_menu_open, 2) { expanded = false }
-                                Action(host, "文件", R.drawable.ic_floating_action_menu_file, 1) { expanded = false }
-                                Action(host, "文件夹", R.drawable.ic_floating_action_menu_dir, 0) { expanded = false }
+                                Action(host, "项目", R.drawable.ic_project, 3) { fabMenuExpanded = false }
+                                Action(host, "导入", R.drawable.ic_floating_action_menu_open, 2) { fabMenuExpanded = false }
+                                Action(host, "文件", R.drawable.ic_floating_action_menu_file, 1) { fabMenuExpanded = false }
+                                Action(host, "文件夹", R.drawable.ic_floating_action_menu_dir, 0) { fabMenuExpanded = false }
                             }
                         }
                         FloatingActionButton(
@@ -61,7 +76,7 @@ object MiuixMainFabHost {
                                 // File page: open the create menu. Other pages keep the
                                 // original per-page FAB behaviour (stop all / reply, etc.).
                                 if (host.isCurrentPageCreateMenu) {
-                                    expanded = !expanded
+                                    fabMenuExpanded = !fabMenuExpanded
                                 } else {
                                     host.performMainFabClickFromMiuix()
                                 }
@@ -73,8 +88,8 @@ object MiuixMainFabHost {
                             defaultWindowInsetsPadding = false
                         ) {
                             Image(
-                                painter = painterResource(if (expanded) R.drawable.ic_close_white_48dp else R.drawable.ic_menu),
-                                contentDescription = if (expanded) "关闭新建菜单" else "打开新建菜单",
+                                painter = painterResource(if (fabMenuExpanded) R.drawable.ic_close_white_48dp else fabIconRes),
+                                contentDescription = if (fabMenuExpanded) "关闭新建菜单" else "打开新建菜单",
                                 colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onPrimary)
                             )
                         }

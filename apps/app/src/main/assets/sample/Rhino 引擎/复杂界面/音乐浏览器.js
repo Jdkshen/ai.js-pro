@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 var IconView = (function() {

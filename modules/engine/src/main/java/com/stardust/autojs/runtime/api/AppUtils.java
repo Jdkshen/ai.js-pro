@@ -14,6 +14,9 @@ import android.util.Log;
 import com.stardust.autojs.annotation.ScriptInterface;
 import com.stardust.util.IntentUtil;
 
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+
 import java.lang.ref.WeakReference;
 import java.util.List;
 
@@ -84,6 +87,61 @@ public class AppUtils {
             return appName == null ? null : appName.toString();
         } catch (PackageManager.NameNotFoundException e) {
             return null;
+        }
+    }
+
+    /**
+     * 已安装应用列表。注意：**不要**改回 getInstalledPackages —— 脚本侧的 `app.getInstalledPackages()`
+     * 需要返回 JS 数组（见 `__app__.js`），而 Java 方法名被占位后 JS 层就无法覆盖同名成员。
+     */
+    @ScriptInterface
+    public List<PackageInfo> getInstalledPackageList() {
+        PackageManager packageManager = mContext.getPackageManager();
+        List<PackageInfo> packages = packageManager.getInstalledPackages(0);
+        for (PackageInfo info : packages) {
+            if (info != null && info.applicationInfo != null) {
+                info.applicationInfo = new LabeledApplicationInfo(info.applicationInfo, packageManager);
+            }
+        }
+        return packages;
+    }
+
+    /**
+     * Auto.js Pro 的 `app.getApkInfo(path)`：解析 APK 文件返回 PackageInfo。
+     * 已补上 sourceDir/publicSourceDir，因此 `apkInfo.applicationInfo.label`、
+     * `apkInfo.applicationInfo.loadIcon(pm)` 都能直接拿到。
+     *
+     * @param path APK 文件路径
+     * @return 解析失败时返回 null
+     */
+    @ScriptInterface
+    public PackageInfo getApkInfo(String path) {
+        PackageManager packageManager = mContext.getPackageManager();
+        PackageInfo info = packageManager.getPackageArchiveInfo(path, 0);
+        if (info != null && info.applicationInfo != null) {
+            info.applicationInfo.sourceDir = path;
+            info.applicationInfo.publicSourceDir = path;
+            info.applicationInfo = new LabeledApplicationInfo(info.applicationInfo, packageManager);
+        }
+        return info;
+    }
+
+    /**
+     * Android 的 ApplicationInfo 只有 `loadLabel(pm)`，而 Auto.js Pro 的脚本习惯直接读
+     * `applicationInfo.label`；这里给 applicationInfo 挂上一个带 `getLabel()` 的子类。
+     */
+    public static class LabeledApplicationInfo extends ApplicationInfo {
+
+        private final PackageManager mPackageManager;
+
+        LabeledApplicationInfo(ApplicationInfo source, PackageManager packageManager) {
+            super(source);
+            mPackageManager = packageManager;
+        }
+
+        /** 对应 Pro 示例里的 `apkInfo.applicationInfo.label`。 */
+        public CharSequence getLabel() {
+            return loadLabel(mPackageManager);
         }
     }
 

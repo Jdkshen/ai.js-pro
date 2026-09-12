@@ -1,3 +1,4 @@
+// @engine rhino
 // 消息处理：加密、摘要、编码（Rhino / crypto 模块）
 // 演示 MD5 / SHA-1 / SHA-256 / HMAC-SHA256 / Base64
 

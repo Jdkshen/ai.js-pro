@@ -1,3 +1,4 @@
+// @engine rhino
 "auto";
 
 events.observeKey();
@@ -11,23 +12,20 @@ var keyNames = {
     "KEYCODE_POWER": "电源键",
 };
 
-events.on("key", function(code, event){
+events.on("key", function(code, event) {
     var keyName = getKeyName(code, event);
-    if(event.getAction() == event.ACTION_DOWN){
+    if (event.getAction() == event.ACTION_DOWN) {
         toast(keyName + "被按下");
-    }else if(event.getAction() == event.ACTION_UP){
+    } else if (event.getAction() == event.ACTION_UP) {
         toast(keyName + "弹起");
     }
 });
 
-loop();
 
-
-
-function getKeyName(code, event){
+function getKeyName(code, event) {
     var keyCodeStr = event.keyCodeToString(code);
     var keyName = keyNames[keyCodeStr];
-    if(!keyName){
+    if (!keyName) {
         return keyCodeStr;
     }
     return keyName;

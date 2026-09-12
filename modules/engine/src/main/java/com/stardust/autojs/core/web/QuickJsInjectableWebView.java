@@ -15,6 +15,8 @@ public class QuickJsInjectableWebView extends WebView {
         super(context);
         mClient = new QuickJsInjectableWebClient(host);
         setWebViewClient(mClient);
+        // 页面桥必须在第一次 loadUrl/loadData 之前注册，否则页面里看不到 `rhino`
+        mClient.attach(this);
     }
 
     public void inject(String script, long callbackId) {

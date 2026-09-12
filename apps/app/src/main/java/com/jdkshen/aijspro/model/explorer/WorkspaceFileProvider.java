@@ -114,6 +114,36 @@ public class WorkspaceFileProvider extends ExplorerFileProvider {
                 .subscribeOn(Schedulers.io());
     }
 
+    /**
+     * 「重置所有示例」：把 APK 内置的整棵 sample/ 目录写回示例文件夹（同名文件直接覆盖），
+     * 返回重置后的 .js 示例文件数量。用户自己放进去的文件不在 sample/ 里，不受影响。
+     */
+    public Observable<Integer> resetAllSamples() {
+        return Observable.fromCallable(() -> {
+            String target = mSampleDir.getPath();
+            new File(target).mkdirs();
+            PFiles.copyAssetDir(mAssetManager, SAMPLE_PATH, target, null);
+            return countScriptFiles(new File(target));
+        })
+                .subscribeOn(Schedulers.io());
+    }
+
+    private static int countScriptFiles(File dir) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return 0;
+        }
+        int count = 0;
+        for (File child : children) {
+            if (child.isDirectory()) {
+                count += countScriptFiles(child);
+            } else if (child.getName().toLowerCase().endsWith(".js")) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     @Override
     protected ExplorerDirPage createExplorerPage(String path, ExplorerPage parent) {
         ExplorerDirPage page = super.createExplorerPage(path, parent);

@@ -1,3 +1,4 @@
+// @engine rhino
 // Zip 压缩与解压（Rhino / zips 模块）
 // 演示 zip / unzip / list
 

@@ -17,6 +17,7 @@
         <activity android:name="com.jdkshen.aijspro.ui.user.MiuixRegisterActivity"
             android:exported="false" />
         <activity android:name="com.jdkshen.aijspro.ui.doc.MiuixDocumentationActivity"
+            android:launchMode="singleTop"
             android:exported="false" />
         <activity android:name="com.jdkshen.aijspro.ui.log.MiuixLogActivity"
             android:exported="false" />

@@ -64,7 +64,6 @@ import com.jdkshen.aijspro.model.sample.SampleFile
 import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
-import com.jdkshen.aijspro.ui.edit.ViewSampleActivity
 import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
@@ -392,7 +391,34 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun viewBuiltin(entry: ResourceEntry) {
-        ViewSampleActivity.view(requireContext(), SampleFile(entry.assetPath!!, requireContext().assets))
+        // 预览源码统一走新版 Pro 编辑器：已导入过就直接打开「下载资源」里的副本，
+        // 否则先把内置资源静默落盘再打开（编辑器记录的 assets 来源可“重置”恢复最新版）。
+        val context = requireContext()
+        val assetPath = entry.assetPath ?: return
+        val target = resourceTargetFor(assetPath)
+        if (target.isFile) {
+            startActivity(ProCodeEditorActivity.sampleIntent(context, target, assetPath))
+            return
+        }
+        busy = true
+        Thread {
+            var failure: Exception? = null
+            try {
+                copyAssetTree(assetPath, target)
+            } catch (error: Exception) {
+                failure = error
+            }
+            requireActivity().runOnUiThread {
+                busy = false
+                if (failure == null) {
+                    startActivity(ProCodeEditorActivity.sampleIntent(context, target, assetPath))
+                } else {
+                    Toast.makeText(context,
+                        "打开资源失败：${failure.localizedMessage ?: "未知错误"}",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
     }
 
     private fun runBuiltin(entry: ResourceEntry) {
@@ -667,7 +693,9 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private fun MessagePanel(text: String, action: String? = null,
         textColor: Color = MiuixTheme.colorScheme.onSurface, onAction: () -> Unit = {}) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(text, color = textColor)
+            // Miuix 的 Text 默认两端对齐，长段中文会被拉伸成大字距——提示文本明确左对齐。
+            Text(text, color = textColor,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Start)
             action?.let { Button(onClick = onAction) { Text(it) } }
         }
     }

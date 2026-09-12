@@ -365,7 +365,9 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private fun MessagePanel(text: String, action: String? = null,
         textColor: Color = MiuixTheme.colorScheme.onSurface, onAction: () -> Unit = {}) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(text, color = textColor)
+            // Miuix 的 Text 默认两端对齐，长段中文会被拉伸成大字距——提示文本明确左对齐。
+            Text(text, color = textColor,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Start)
             action?.let { Button(onClick = onAction) { Text(it) } }
         }
     }

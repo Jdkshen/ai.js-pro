@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 ui.layout(
     <vertical padding="16">
@@ -8,14 +9,11 @@ ui.layout(
         <input id="content" h="*" gravity="top"/>
     </vertical>
 );
-var storage = storages.create("AI.js Pro例子:随手记");
+var storage = storages.create("Auto.js例子:随手记");
 var content = storage.get("content");
-if(content != null){
+if (content != null) {
     ui.content.setText(content);
 }
-ui.save.click(()=>{
+ui.save.click(() => {
     storage.put("content", ui.content.text());
 });
-
-
-

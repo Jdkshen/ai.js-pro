@@ -1,4 +1,4 @@
-
+// @engine rhino
 console.show();
 
 var str = "";
@@ -12,7 +12,6 @@ str += "\n产品名称:" + device.product;
 str += "\nbootloader版本:" + device.bootloader;
 str += "\n硬件名称:" + device.hardware;
 str += "\n唯一标识码:" + device.fingerprint;
-str += "\nIMEI: " + device.getIMEI();
 str += "\nAndroidId: " + device.getAndroidId();
 str += "\nMac: " + device.getMacAddress();
 str += "\nAPI: " + device.sdkInt;

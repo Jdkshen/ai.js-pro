@@ -341,6 +341,45 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         }
         boolean visible = fragment != null && fragment.isShown() && !fragment.isFabRotationGone();
         mMiuixFab.setVisibility(visible ? View.VISIBLE : View.GONE);
+        // 各页可自定义 FAB 图标（管理页 = ✕ 停止全部，其余 = ☰）；切页时顺便收起新建菜单，避免跨页残留。
+        int icon = fragment != null ? fragment.getFabIconRes() : R.drawable.ic_menu;
+        try {
+            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.main.MiuixMainFabHost");
+            host.getMethod("updateFabIconRes", int.class).invoke(null, icon);
+            host.getMethod("collapseFabMenu").invoke(null);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 文件列表滚动时收起 Miuix FAB、停下再恢复。
+     * Compose 的 Miuix FAB 不在 CoordinatorLayout 里，不会随列表滚动自动隐藏。
+     */
+    public void onMainListScrollStateChanged(boolean scrolling) {
+        if (mMiuixFab != null) {
+            mMiuixFab.animate().cancel();
+            if (scrolling) {
+                mMiuixFab.animate()
+                        .alpha(0f).scaleX(0.85f).scaleY(0.85f)
+                        .setDuration(140)
+                        .withEndAction(() -> {
+                            if (mMiuixFab != null) {
+                                mMiuixFab.setVisibility(View.INVISIBLE);
+                            }
+                        })
+                        .start();
+            } else {
+                mMiuixFab.setVisibility(View.VISIBLE);
+                mMiuixFab.animate()
+                        .alpha(1f).scaleX(1f).scaleY(1f)
+                        .setDuration(160)
+                        .start();
+            }
+        }
+        if (mFab != null) {
+            // 普通版仍用原 Material FAB；hide/show 幂等，重复调用无害。
+            if (scrolling) mFab.hide(); else mFab.show();
+        }
     }
 
     public void performMainCreateActionFromMiuix(int position) {

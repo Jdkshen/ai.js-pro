@@ -3539,11 +3539,22 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
     }
 
-    // ---- ui (minimal: DynamicLayoutInflater + fullscreen overlay) ----
+    // ---- ui (Activity 承载 / fullscreen overlay 两种形态) ----
     private com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater mUiInflater;
     private volatile View mUiRoot;
     private volatile boolean mUiShown;
     private volatile int mUiWindowId;
+    /** `"ui"` 模式（跑在 ScriptExecuteActivity 里）注入的宿主 Activity；其余场景为 null。 */
+    private volatile android.app.Activity mUiHostActivity;
+
+    /**
+     * 由 {@code QuickJsJavaScriptEngine.setHostActivity} 注入：有宿主 Activity 时
+     * {@code ui.layout} 挂到它的内容视图（按 Home 退到后台、返回键才结束），
+     * 与 Rhino 的 {@code ui.setContentView(activity)} 一致；没有时仍用系统悬浮窗。
+     */
+    public void setUiHostActivity(android.app.Activity activity) {
+        mUiHostActivity = activity;
+    }
 
     // ------------------------------------------------------------------
     // 控件通用属性 / 动作
@@ -3745,6 +3756,288 @@ final class QuickJsHostBridge implements AutoCloseable,
                 () -> performViewAction(uiFind(id), action), Boolean.FALSE));
     }
 
+    /** 控件句柄缓存：ui.xxx.yyy() 这类 Java 成员调用要把控件交给 Java 互操作反射。 */
+    private final java.util.Map<String, Long> mUiViewHandles =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 控件成员探测（m/f/p:getter/空），JS 侧据此决定属性是「函数」还是「值」。 */
+    public String uiViewProbe(int viewId, String id, String name) {
+        return runOnMainSync(mDialogHandler, () -> {
+            long handle = uiViewHandle(id);
+            return handle == 0 ? "" : mJavaInterop.probe(handle, name);
+        }, "");
+    }
+
+    /**
+     * 控件 Java 成员调用（ui.wv.loadUrl(...)、getSettings() 这类）；字段名返回字段值。
+     * 结果按 Java 值编码：对象 → 句柄，与 java.* 通道共用解码逻辑。
+     */
+    public String uiViewInvoke(int viewId, String id, String name, String argsJson) {
+        return runOnMainSync(mDialogHandler, () -> {
+            try {
+                long handle = uiViewHandle(id);
+                if (handle == 0) {
+                    return "{\"__error\":\"ui view not found: " + id + "\"}";
+                }
+                if ("f".equals(mJavaInterop.probe(handle, name))) {
+                    return mJavaInterop.getField(handle, name);
+                }
+                return mJavaInterop.call(handle, name, argsJson);
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "uiViewInvoke failed: " + name, error);
+                String message = error.getMessage() == null
+                        ? error.getClass().getSimpleName() : error.getMessage();
+                return "{\"__error\":" + org.json.JSONObject.quote(message) + "}";
+            }
+        }, "{\"__error\":\"uiViewInvoke timed out\"}");
+    }
+
+    private long uiViewHandle(String id) {
+        Long cached = mUiViewHandles.get(id);
+        if (cached != null) {
+            return cached;
+        }
+        View view = uiFind(id);
+        if (view == null) {
+            return 0;
+        }
+        long handle = mJavaInterop.putForScript(view);
+        mUiViewHandles.put(id, handle);
+        return handle;
+    }
+
+    /** 页面桥引用（防 GC：WebView 内部对注入对象持弱引用）。 */
+    private final java.util.Map<String, WebViewJsBridge> mWebViewBridges =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 把 JS 对象注册为 WebView 页面桥（脚本里的 `wv.addJavascriptInterface(obj, name)`）。
+     * WebView 只能调用带 {@code @JavascriptInterface} 注解的方法（API 17+ 强制），
+     * 所以用这个注解桥接；页面侧会由注入的 shim 把 window[name].xxx(...) 转发到 __ajs。
+     */
+    public boolean uiAddJsInterface(int viewId, String id, long callbackId, String name) {
+        return Boolean.TRUE.equals(runOnMainSync(mDialogHandler, () -> {
+            View view = uiFind(id);
+            if (!(view instanceof android.webkit.WebView)) {
+                return false;
+            }
+            WebViewJsBridge bridge = new WebViewJsBridge(callbackId);
+            mWebViewBridges.put(name, bridge);
+            ((android.webkit.WebView) view).addJavascriptInterface(bridge, name);
+            return true;
+        }, Boolean.FALSE));
+    }
+
+    /** WebView 页面 → 脚本对象的桥接体（方法需 @JavascriptInterface 注解）。 */
+    private final class WebViewJsBridge {
+
+        private final long mCallbackId;
+
+        WebViewJsBridge(long callbackId) {
+            mCallbackId = callbackId;
+        }
+
+        @android.webkit.JavascriptInterface
+        public String __ajs(String method, String argsJson) {
+            // 这个方法运行在 WebView 的 JavaScript 线程上，不能直接进 QuickJS 上下文
+            // （引擎线程可能正在执行脚本），与页面注入桥一样只排队。
+            try {
+                org.json.JSONObject payload = new org.json.JSONObject();
+                payload.put("method", method);
+                payload.put("args", new org.json.JSONArray(argsJson == null ? "[]" : argsJson));
+                postJsCallback(mCallbackId, new org.json.JSONArray().put(payload).toString());
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "web bridge call failed: " + method, error);
+            }
+            return "";
+        }
+    }
+
+    /**
+     * `new JavaAdapter(Base, overrides)` 的宿主侧实现。
+     *
+     * <p>Rhino 会为任意基类动态生成子类字节码；QuickJS 里改为预置常用基类的转发子类
+     * （WebView 脚本几乎只用这两个），不支持的基类返回空串让脚本侧抛明确错误。
+     *
+     * @return `{"__ref":handle,"__class":name}`；不支持的基类返回空串。
+     */
+    public String javaAdapterCreate(long baseHandle, long callbackId) {
+        Object base = mJavaInterop.objectForHandle(baseHandle);
+        if (!(base instanceof Class)) {
+            return "";
+        }
+        Class<?> baseClass = (Class<?>) base;
+        Object adapter;
+        String className;
+        if (android.webkit.WebViewClient.class.isAssignableFrom(baseClass)) {
+            adapter = new AdapterWebViewClient(this, callbackId);
+            className = "android.webkit.WebViewClient";
+        } else if (android.webkit.WebChromeClient.class.isAssignableFrom(baseClass)) {
+            adapter = new AdapterWebChromeClient(this, callbackId);
+            className = "android.webkit.WebChromeClient";
+        } else {
+            return "";
+        }
+        long handle = mJavaInterop.putForScript(adapter);
+        return "{\"__ref\":" + handle + ",\"__class\":\"" + className + "\"}";
+    }
+
+    /**
+     * 适配器回调 → 脚本。WebView 回调在主线程，而 QuickJS 上下文只能在引擎线程进入，
+     * 因此这里只排队（{@link #postJsCallback}），由 native 事件循环在引擎线程取出执行。
+     */
+    void postAdapterCallback(long callbackId, String method, Object... args) {
+        try {
+            org.json.JSONArray encodedArgs = new org.json.JSONArray();
+            for (Object arg : args) {
+                if (arg == null) {
+                    encodedArgs.put(org.json.JSONObject.NULL);
+                } else if (arg instanceof String || arg instanceof Number || arg instanceof Boolean) {
+                    encodedArgs.put(arg);
+                } else {
+                    long handle = mJavaInterop.putForScript(arg);
+                    encodedArgs.put(new org.json.JSONObject()
+                            .put("__ref", handle)
+                            .put("__class", arg.getClass().getName()));
+                }
+            }
+            org.json.JSONObject payload = new org.json.JSONObject();
+            payload.put("method", method);
+            payload.put("args", encodedArgs);
+            postJsCallback(callbackId, new org.json.JSONArray().put(payload).toString());
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "adapter callback failed: " + method, error);
+        }
+    }
+
+    /**
+     * `android.webkit.JsResult` 的脚本侧代理。
+     *
+     * <p>为什么需要代理：JavaAdapter 回调是异步桥（见 {@link #postAdapterCallback}），
+     * `onJsAlert` 只能同步返回 `true`（声称已接管），而页面的 JS 线程要等 JsResult 被
+     * confirm/cancel 才会解冻。脚本一旦抛异常没调用到，整页就会永久失去响应（点击、
+     * 切页全部失效），因此这里包一层记录“是否已处理”，配合
+     * {@link #scheduleJsResultFallback} 兜底。
+     */
+    public static final class JsResultProxy {
+
+        private final android.webkit.JsResult mResult;
+        private boolean mHandled;
+
+        JsResultProxy(android.webkit.JsResult result) {
+            mResult = result;
+        }
+
+        /** 脚本侧 `result.confirm()`。 */
+        public void confirm() {
+            finish(true);
+        }
+
+        /** 脚本侧 `result.cancel()`。 */
+        public void cancel() {
+            finish(false);
+        }
+
+        /** 是否已被脚本处理（重复完成时以第一次为准）。 */
+        public boolean isHandled() {
+            synchronized (this) {
+                return mHandled;
+            }
+        }
+
+        private void finish(final boolean confirmed) {
+            synchronized (this) {
+                if (mHandled) {
+                    return;
+                }
+                mHandled = true;
+            }
+            // 脚本侧可能在引擎线程调用，完成 JsResult 统一回主线程。
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                try {
+                    if (confirmed) {
+                        mResult.confirm();
+                    } else {
+                        mResult.cancel();
+                    }
+                } catch (Throwable error) {
+                    Log.w("QuickJsHostBridge", "完成 JsResult 失败", error);
+                }
+            });
+        }
+    }
+
+    /**
+     * JS 弹窗兜底：脚本侧若因异常没有调用 `confirm()/cancel()`，renderer 的 JS 线程会
+     * 一直等待（现象就是 alert 之后整页失去响应），这里延迟替它确认一次。
+     */
+    void scheduleJsResultFallback(final JsResultProxy proxy) {
+        mDialogHandler.postDelayed(() -> {
+            if (!proxy.isHandled()) {
+                Log.w("QuickJsHostBridge", "JS 弹窗未被脚本处理，已兜底 confirm()");
+                proxy.confirm();
+            }
+        }, 1500);
+    }
+
+    /** `JavaAdapter(android.webkit.WebViewClient, {...})` 的宿主子类。 */
+    private static final class AdapterWebViewClient extends android.webkit.WebViewClient {
+
+        private final QuickJsHostBridge mBridge;
+        private final long mCallbackId;
+
+        AdapterWebViewClient(QuickJsHostBridge bridge, long callbackId) {
+            mBridge = bridge;
+            mCallbackId = callbackId;
+        }
+
+        @Override
+        public void onPageStarted(android.webkit.WebView view, String url,
+                                  android.graphics.Bitmap favicon) {
+            mBridge.postAdapterCallback(mCallbackId, "onPageStarted", view, url, favicon);
+            super.onPageStarted(view, url, favicon);
+        }
+
+        @Override
+        public void onPageFinished(android.webkit.WebView view, String url) {
+            mBridge.postAdapterCallback(mCallbackId, "onPageFinished", view, url);
+            super.onPageFinished(view, url);
+        }
+    }
+
+    /** `JavaAdapter(android.webkit.WebChromeClient, {...})` 的宿主子类。 */
+    private static final class AdapterWebChromeClient extends android.webkit.WebChromeClient {
+
+        private final QuickJsHostBridge mBridge;
+        private final long mCallbackId;
+
+        AdapterWebChromeClient(QuickJsHostBridge bridge, long callbackId) {
+            mBridge = bridge;
+            mCallbackId = callbackId;
+        }
+
+        @Override
+        public boolean onJsAlert(android.webkit.WebView view, String url, String message,
+                                 android.webkit.JsResult result) {
+            // 页面 alert 一律交给脚本处理（脚本常用它做 ajs:// 消息通道），异步桥表达不了
+            // 同步返回值，因此统一按“已被脚本处理”返回；由 JsResultProxy + 兜底保证
+            // 一定会被完成，避免页面 JS 线程永久等待。
+            JsResultProxy proxy = new JsResultProxy(result);
+            mBridge.postAdapterCallback(mCallbackId, "onJsAlert", view, url, message, proxy);
+            mBridge.scheduleJsResultFallback(proxy);
+            return true;
+        }
+
+        @Override
+        public boolean onJsConfirm(android.webkit.WebView view, String url, String message,
+                                   android.webkit.JsResult result) {
+            JsResultProxy proxy = new JsResultProxy(result);
+            mBridge.postAdapterCallback(mCallbackId, "onJsConfirm", view, url, message, proxy);
+            mBridge.scheduleJsResultFallback(proxy);
+            return true;
+        }
+    }
+
     /**
      * 在主线程执行并等待结果；**已在主线程时直接执行**——
      * 否则 `runOnMainThread` 回调里再调用这些接口会 post + 等 latch 自锁。
@@ -3825,7 +4118,53 @@ final class QuickJsHostBridge implements AutoCloseable,
         return mUiInflater;
     }
 
+    /**
+     * 与 Rhino 的 {@code runtime.ui.layoutInflater.setContext(...)} 对应：
+     * 固定缓存一个 inflater，但每次按当前场景换上下文（Activity / 应用上下文）。
+     */
+    private com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater uiInflaterFor(
+            android.content.Context context) {
+        com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater = uiInflater();
+        inflater.setContext(context);
+        return inflater;
+    }
+
     public String uiInflate(String xml) {
+        // `"ui"` 模式的脚本跑在 ScriptExecuteActivity 里：界面就是 Activity 的内容视图
+        // （按 Home 退到后台、返回键才结束），也不需要「显示在其他应用上层」权限。
+        final android.app.Activity host = mUiHostActivity;
+        if (host != null) {
+            return uiInflateIntoActivity(host, xml);
+        }
+        // 其余场景（普通脚本用 ui.layout 做覆盖层）保持系统悬浮窗方案。
+        // 没有「显示在其他应用上层」权限时 addView 会以 BadTokenException 失败，
+        // 脚本只会看到「Unable to inflate UI layout」这种误导性错误。这里提前检查并引导授权。
+        final android.content.Context appContext = mRuntime.uiHandler.getContext();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && !android.provider.Settings.canDrawOverlays(appContext)) {
+            Log.w("QuickJsHostBridge",
+                    "Cannot inflate UI layout: overlay permission not granted");
+            mDialogHandler.post(() -> {
+                try {
+                    android.content.Intent intent = new android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:" + appContext.getPackageName()));
+                    android.app.Activity activity = mRuntime.app.getCurrentActivity();
+                    if (activity != null) {
+                        activity.startActivity(intent);
+                    } else {
+                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                        appContext.startActivity(intent);
+                    }
+                    android.widget.Toast.makeText(appContext,
+                            "脚本界面需要「显示在其他应用上层」权限，请在打开的页面中开启后重新运行",
+                            android.widget.Toast.LENGTH_LONG).show();
+                } catch (Throwable error) {
+                    Log.w("QuickJsHostBridge", "Cannot open overlay permission page", error);
+                }
+            });
+            return "-1";
+        }
         final CountDownLatch latch = new CountDownLatch(1);
         final String[] result = new String[1];
         mDialogHandler.post(() -> {
@@ -3877,7 +4216,72 @@ final class QuickJsHostBridge implements AutoCloseable,
         return root.findViewById(rid);
     }
 
+    /** 把界面挂到宿主 Activity 的内容视图（`"ui"` 模式）。已在主线程时直接执行，避免自锁。 */
+    private String uiInflateIntoActivity(final android.app.Activity host, String xml) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            return inflateIntoActivityNow(host, xml);
+        }
+        final CountDownLatch latch = new CountDownLatch(1);
+        final String[] result = new String[1];
+        host.runOnUiThread(() -> {
+            result[0] = inflateIntoActivityNow(host, xml);
+            latch.countDown();
+        });
+        try {
+            if (!latch.await(8, java.util.concurrent.TimeUnit.SECONDS)) {
+                return "-1";
+            }
+        } catch (InterruptedException ignored) {
+            return "-1";
+        }
+        return result[0];
+    }
+
+    private String inflateIntoActivityNow(android.app.Activity host, String xml) {
+        try {
+            View root = uiInflaterFor(host).inflate(xml);
+            host.setContentView(root);
+            mUiRoot = root;
+            mUiShown = true;
+            mUiWindowId++;
+            return String.valueOf(mUiWindowId);
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot inflate UI layout into activity", error);
+            return "-1";
+        }
+    }
+
+    /** 宿主 Activity 的脚本侧句柄（脚本里的 `activity` 全局）；没有宿主时返回空串。 */
+    public String hostActivityRef() {
+        android.app.Activity host = mUiHostActivity;
+        if (host == null) {
+            return "";
+        }
+        long handle = mJavaInterop.putForScript(host);
+        return "{\"__ref\":" + handle + ",\"__class\":\"" + host.getClass().getName() + "\"}";
+    }
+
     public void uiClose() {
+        final android.app.Activity host = mUiHostActivity;
+        if (host != null) {
+            // Activity 承载：关界面 = 结束这个脚本界面（Rhino 的 ui.finish 语义），
+            // Activity 结束会连带停掉引擎，因此直接 finish 并由生命周期收尾。
+            mUiRoot = null;
+            mUiShown = false;
+            mUiEvents.clear();
+            mUiViewHandles.clear();
+            mWebViewBridges.clear();
+            mDialogHandler.post(() -> {
+                try {
+                    if (!host.isFinishing()) {
+                        host.finish();
+                    }
+                } catch (Throwable error) {
+                    Log.w("QuickJsHostBridge", "Cannot finish host activity", error);
+                }
+            });
+            return;
+        }
         mDialogHandler.post(() -> {
             try {
                 if (mUiRoot != null && mUiShown) {
@@ -3891,6 +4295,8 @@ final class QuickJsHostBridge implements AutoCloseable,
             mUiRoot = null;
             mUiShown = false;
             mUiEvents.clear();
+            mUiViewHandles.clear();
+            mWebViewBridges.clear();
         });
     }
 

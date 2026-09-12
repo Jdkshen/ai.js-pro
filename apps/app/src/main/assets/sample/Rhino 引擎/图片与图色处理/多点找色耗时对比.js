@@ -1,3 +1,4 @@
+// @engine rhino
 function __nowMs() { return Number(java.lang.System.nanoTime()) / 1000000; }
 function __formatMs(value) { return Number(value).toFixed(3); }
 

@@ -1,0 +1,64 @@
+<html>
+
+<body>
+  <div id="app"></div>
+  <link rel="stylesheet" href="vendor/vant.css" />
+
+  <!-- 依赖全部本地携带（示例不依赖外网） -->
+  <script src="vendor/vue.min.js"></script>
+  <script src="vendor/vue2-sfc-loader.js"></script>
+  <script src="vendor/vant.min.js"></script>
+  <!-- 桥（window.$autojs）由脚本侧在页面加载完成后注入，见 main.js -->
+  <script>
+    const { loadModule, vueVersion } = window['vue2-sfc-loader'];
+    const options = {
+      moduleCache: {
+        vue: Vue,
+        myData: {
+          vueVersion,
+        }
+      },
+      async getFile(url) {
+        let getContentData;
+        if (typeof ($autojs) !== 'undefined') {
+          const res = await $autojs.invoke('fetch', { path: url });
+          getContentData = (asBinary) => asBinary ? str2ab(res) : res;
+        } else {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw Object.assign(new Error(res.statusText + ' ' + url), { res });
+          }
+          getContentData = (asBinary) => asBinary ? res.arrayBuffer() : res.text();
+        }
+        return {
+          getContentData,
+        };
+        function str2ab(str) {
+          var buf = new ArrayBuffer(str.length * 2); // 2 bytes for each char
+          var bufView = new Uint16Array(buf);
+          for (var i = 0, strLen = str.length; i < strLen; i++) {
+            bufView[i] = str.charCodeAt(i);
+          }
+          return buf;
+        }
+      },
+      addStyle() { /* unused here */ },
+    }
+
+    // 桥由脚本侧注入，这里等它就绪再启动（否则 getFile 里的 $autojs 还是 undefined）
+    whenBridgeReady(function () {
+      loadModule('/main.vue', options)
+        .then(component => new Vue(component).$mount('#app'));
+    });
+
+    function whenBridgeReady(fn) {
+      if (window.$autojs) {
+        fn();
+        return;
+      }
+      setTimeout(function () { whenBridgeReady(fn); }, 30);
+    }
+  </script>
+</body>
+
+</html>

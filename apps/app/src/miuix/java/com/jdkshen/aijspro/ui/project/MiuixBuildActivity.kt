@@ -64,6 +64,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.autojs.build.ApkBuilder
+import com.jdkshen.aijspro.autojs.build.BuildFailureLog
 import com.jdkshen.aijspro.autojs.build.sign.ApkSignatureReader
 import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreGenerator
@@ -702,9 +703,11 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     refreshAutoIdentity()
                 }, { error ->
                     busy = false
-                    failureMessage = error.message ?: error.toString()
+                    failureMessage = BuildFailureLog.describe(error)
                     failureShow.value = true
                     Log.e(TAG, "Build failed", error)
+                    // 失败也要写应用内全局日志：以前只进 logcat，用户查“全局日志”什么都看不到。
+                    BuildFailureLog.report(source, getString(stage), error)
                 })
         )
     }

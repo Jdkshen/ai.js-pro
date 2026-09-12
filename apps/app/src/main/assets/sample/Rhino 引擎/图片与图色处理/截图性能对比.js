@@ -1,3 +1,4 @@
+// @engine rhino
 // AI.js Pro（Rhino）与 Auto.js Pro 通用截图基准。
 // 两边必须在同一设备、相同屏幕分辨率和刷新率下分别运行。
 

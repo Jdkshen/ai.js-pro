@@ -1,9 +1,11 @@
 package com.jdkshen.aijspro.network.download;
 
+import android.app.Activity;
 import android.content.Context;
 import android.util.Log;
 
 import com.afollestad.materialdialogs.MaterialDialog;
+import com.jdkshen.aijspro.BuildConfig;
 import com.jakewharton.retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
 import com.stardust.pio.PFiles;
 
@@ -16,6 +18,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.net.URLDecoder;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -99,28 +102,108 @@ public class DownloadManager {
 
     public Observable<File> downloadWithProgress(Context context, String url, String path) {
         String fileName = DownloadManager.parseFileNameLocally(url);
-        return download(url, path, createDownloadProgressDialog(context, url, fileName));
+        return download(url, path, createDownloadProgressUi(context, url, fileName));
     }
 
-    private MaterialDialog createDownloadProgressDialog(Context context, String url, String fileName) {
-        return new MaterialDialog.Builder(context)
+    /** 下载进度 UI：Miuix（pilot）与 Material（回退）都实现这套接口。 */
+    private interface ProgressUi {
+        void setProgress(int progress);
+
+        void dismiss();
+    }
+
+    private ProgressUi createDownloadProgressUi(Context context, String url, String fileName) {
+        if (BuildConfig.MIUIX_PILOT) {
+            ProgressUi miuix = MiuixProgressUi.tryCreate(context, url, fileName);
+            if (miuix != null) {
+                return miuix;
+            }
+        }
+        MaterialDialog dialog = new MaterialDialog.Builder(context)
                 .progress(false, 100)
                 .title(fileName)
                 .cancelable(false)
                 .positiveText(R.string.text_cancel_download)
-                .onPositive((dialog, which) -> DownloadManager.getInstance().cancelDownload(url))
-                .show();
+                .onPositive((d, which) -> DownloadManager.getInstance().cancelDownload(url))
+                .build();
+        dialog.show();
+        return new ProgressUi() {
+            @Override
+            public void setProgress(int progress) {
+                dialog.setProgress(progress);
+            }
+
+            @Override
+            public void dismiss() {
+                dialog.dismiss();
+            }
+        };
     }
 
-    private Observable<File> download(String url, String path, MaterialDialog progressDialog) {
+    /**
+     * Miuix 版进度对话框的反射包装（main 不能编译期依赖 miuix flavor）。
+     * 任一步失败都返回 null，调用方回退 Material 对话框。
+     */
+    private static class MiuixProgressUi implements ProgressUi {
+
+        private final Object mHandle;
+        private final Method mSetProgress;
+        private final Method mDismiss;
+
+        private MiuixProgressUi(Object handle, Method setProgress, Method dismiss) {
+            mHandle = handle;
+            mSetProgress = setProgress;
+            mDismiss = dismiss;
+        }
+
+        static MiuixProgressUi tryCreate(Context context, String url, String fileName) {
+            if (!(context instanceof Activity)) {
+                return null;
+            }
+            try {
+                Class<?> host = Class.forName("com.jdkshen.aijspro.ui.update.MiuixDownloadProgressDialog");
+                Object handle = host.getMethod("show", Activity.class, String.class,
+                                String.class, Runnable.class)
+                        .invoke(null, context, "正在下载更新", fileName,
+                                (Runnable) () -> DownloadManager.getInstance().cancelDownload(url));
+                if (handle == null) {
+                    return null;
+                }
+                return new MiuixProgressUi(handle,
+                        host.getMethod("setProgress", Object.class, int.class),
+                        host.getMethod("dismiss", Object.class));
+            } catch (Throwable error) {
+                Log.e(LOG_TAG, "Miuix download progress dialog failed, fallback to Material", error);
+                return null;
+            }
+        }
+
+        @Override
+        public void setProgress(int progress) {
+            try {
+                mSetProgress.invoke(null, mHandle, progress);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        @Override
+        public void dismiss() {
+            try {
+                mDismiss.invoke(null, mHandle);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private Observable<File> download(String url, String path, ProgressUi progressUi) {
         PublishSubject<File> subject = PublishSubject.create();
         DownloadManager.getInstance().download(url, path)
                 .observeOn(AndroidSchedulers.mainThread())
-                .doOnNext(progressDialog::setProgress)
+                .doOnNext(progressUi::setProgress)
                 .subscribe(new SimpleObserver<Integer>() {
                     @Override
                     public void onComplete() {
-                        progressDialog.dismiss();
+                        progressUi.dismiss();
                         subject.onNext(new File(path));
                         subject.onComplete();
                     }
@@ -128,7 +211,7 @@ public class DownloadManager {
                     @Override
                     public void onError(Throwable error) {
                         Log.e(LOG_TAG, "Download failed", error);
-                        progressDialog.dismiss();
+                        progressUi.dismiss();
                         subject.onError(error);
                     }
                 });

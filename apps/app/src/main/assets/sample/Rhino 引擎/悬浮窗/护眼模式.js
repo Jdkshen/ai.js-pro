@@ -1,3 +1,4 @@
+// @engine rhino
 var w = floaty.rawWindow(
     <frame gravity="center" bg="#44ffcc00"/>
 );
@@ -5,6 +6,6 @@ var w = floaty.rawWindow(
 w.setSize(-1, -1);
 w.setTouchable(false);
 
-setTimeout(()=>{
+setTimeout(() => {
     w.close();
 }, 60000);

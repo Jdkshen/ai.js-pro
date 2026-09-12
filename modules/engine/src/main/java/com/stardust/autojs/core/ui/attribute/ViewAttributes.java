@@ -560,6 +560,12 @@ public class ViewAttributes {
 
     protected void setWidth(int width) {
         ViewGroup.LayoutParams layoutParams = mView.getLayoutParams();
+        if (layoutParams == null) {
+            // 根节点（inflate 时还没有 parent）没有 LayoutParams，先造一个默认的，
+            // 否则给根节点设置 layout_width 会直接 NPE（脚本 ui.layout 的常见写法）。
+            layoutParams = new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
         layoutParams.width = width;
         mView.setLayoutParams(layoutParams);
     }
@@ -567,6 +573,11 @@ public class ViewAttributes {
 
     protected void setHeight(int height) {
         ViewGroup.LayoutParams layoutParams = mView.getLayoutParams();
+        if (layoutParams == null) {
+            // 同上：根节点的 layout_height。
+            layoutParams = new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
         layoutParams.height = height;
         mView.setLayoutParams(layoutParams);
     }

@@ -1,9 +1,10 @@
+// @engine rhino
 var handsome = confirm("你帅吗？");
-if(handsome){
+if (handsome) {
     toast("真不要脸！");
     toast("真不要脸！");
     toast("真不要脸！");
     alert("真不要脸！");
-}else{
+} else {
     toast("嗯");
 }

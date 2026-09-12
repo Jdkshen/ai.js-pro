@@ -1,3 +1,4 @@
+// @engine rhino
 console.show();
 
 var i = {

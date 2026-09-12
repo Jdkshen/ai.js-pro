@@ -63,7 +63,13 @@ runtime.init();
      //设置JavaScriptBridges用于与Java层的交互和数据转换
      runtime.bridges.setBridges(require('__bridges__.js'));
 
-    //初始化全局函数
+    // Auto.js Pro 的顶层脚本也能用 CommonJS 的 module / exports（模块内部的局部变量会遮蔽它）
+    if (typeof module === 'undefined') {
+        global.module = { exports: {} };
+    }
+    if (typeof exports === 'undefined') {
+        global.exports = global.module.exports;
+    }
     require("__globals__")(runtime, global);
     //初始化一般模块
     (function (scope) {
@@ -77,6 +83,33 @@ runtime.init();
         }
         // Auto.js Pro exposes the UI module also as $ui; mirror that alias.
         scope.$ui = scope.ui;
+        // Auto.js Pro 的 `$` 前缀模块名（$files / $images / $threads / $crypto ...）：
+        // 给已有模块统一挂一份别名，Pro 示例可以不改一行直接跑。
+        var aliasNames = ['app', 'automator', 'console', 'dialogs', 'ui', 'images', 'threads', 'events',
+            'engines', 'http', 'storages', 'floaty', 'sensors', 'media', 'plugins', 'yolo', 'continuation',
+            'shell', 'selector', 'web', 'io', 'timers', 'util', 'device', 'sqlite', 'crypto', 'zips',
+            'files', 'RootAutomator'];
+        for (var j = 0; j < aliasNames.length; j++) {
+            var name = aliasNames[j];
+            if (scope[name] !== undefined) {
+                scope['$' + name] = scope[name];
+            }
+        }
+        // App 模块注入的 Pro 风格模块（如 $work_manager）：由 App 侧 putProperty 注册，这里暴露成全局。
+        var injected = ['work_manager'];
+        for (var k = 0; k < injected.length; k++) {
+            var injectedName = injected[k];
+            var injectedModule = null;
+            try {
+                injectedModule = runtime.getProperty(injectedName);
+            } catch (e) {
+                injectedModule = null;
+            }
+            if (injectedModule) {
+                scope[injectedName] = injectedModule;
+                scope['$' + injectedName] = injectedModule;
+            }
+        }
     })(global);
 
     importClass(android.view.KeyEvent);

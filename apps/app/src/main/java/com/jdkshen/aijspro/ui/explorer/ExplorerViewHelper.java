@@ -30,12 +30,36 @@ public class ExplorerViewHelper {
         return TYPE_JAVASCRIPT.equals(item.getType());
     }
 
-    public static boolean usesCodeIcon(ExplorerItem item) {
+    /**
+     * 有专属图标的类型返回图标资源，其它返回 0（回退到「首字母 + 灰底」方案）。
+     * 全套图标风格统一：圆角色块底 + 白色图形符号（与 ic_code_file_24dp 的 &lt;/&gt; 一致）。
+     */
+    public static int getFileIconRes(ExplorerItem item) {
+        if (isJavaScript(item)) {
+            return R.drawable.ic_code_file_24dp;
+        }
         String name = item.getName().toLowerCase(java.util.Locale.ROOT);
-        return isJavaScript(item) || name.endsWith(".json");
+        if (name.endsWith(".json")) {
+            return R.drawable.ic_json_file_24dp;
+        }
+        if (name.endsWith(".md")) {
+            return R.drawable.ic_markdown_file_24dp;
+        }
+        if (name.endsWith(".apk")) {
+            return R.drawable.ic_apk_file_24dp;
+        }
+        return 0;
+    }
+
+    public static boolean usesCodeIcon(ExplorerItem item) {
+        return getFileIconRes(item) != 0;
     }
 
     public static String getIconText(ExplorerItem item) {
+        if (usesCodeIcon(item)) {
+            // 有专属图标时不再叠字母，避免图标下面透出半个首字母。
+            return "";
+        }
         String type = item.getType();
         if (type.isEmpty()) {
             return TYPE_UNKNOWN;
@@ -43,23 +67,28 @@ public class ExplorerViewHelper {
         if (type.equals(TYPE_AUTO_FILE)) {
             return "R";
         }
-        if (type.equals(TYPE_JAVASCRIPT)) {
-            return "";
-        }
 
         return type.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
     }
 
     public static int getIconColor(ExplorerItem item) {
+        String name = item.getName().toLowerCase(java.util.Locale.ROOT);
+        if (isJavaScript(item)) {
+            return Color.rgb(10, 14, 15);        // 黑：JS（对齐 Auto.js Pro 的 "<>" 黑徽章）
+        }
+        if (name.endsWith(".json")) {
+            return Color.rgb(10, 14, 15);        // 黑：JSON（与 JS 同色，Pro 同款近黑）
+        }
+        if (name.endsWith(".md")) {
+            return Color.rgb(30, 136, 229);      // 蓝：Markdown
+        }
+        if (name.endsWith(".apk")) {
+            return Color.rgb(50, 215, 128);      // 亮绿：安装包（对齐 Auto.js Pro）
+        }
         switch (item.getType()) {
-            case TYPE_JAVASCRIPT:
-                return Color.rgb(76, 175, 80);
             case TYPE_AUTO_FILE:
                 return getColor(GlobalAppContext.get(), R.color.color_r);
             default:
-                if (item.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".json")) {
-                    return Color.rgb(4, 9, 11);
-                }
                 return Color.GRAY;
         }
     }

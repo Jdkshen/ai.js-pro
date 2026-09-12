@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.ui.doc
 
+import android.content.Intent
 import android.os.Bundle
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
@@ -83,6 +84,18 @@ class MiuixDocumentationActivity : ComponentActivity() {
         } else {
             super.onBackPressed()
         }
+    }
+
+    /** 已在文档页时再次 startActivity：系统只投递 onNewIntent，这里换页。 */
+    /**
+     * 已在文档页时再次 startActivity（清单里声明了 singleTop）：系统只投递 onNewIntent，
+     * 不会重建 Activity，这里把新的 url 载进去。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val url = intent.getStringExtra(EXTRA_URL) ?: (Pref.getDocumentationUrl() + "index.html")
+        eWebView?.webView?.loadUrl(url)
     }
 
     companion object {

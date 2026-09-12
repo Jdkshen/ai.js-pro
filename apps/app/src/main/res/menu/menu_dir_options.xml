@@ -8,4 +8,8 @@
         android:id="@+id/delete"
         android:title="@string/text_delete"/>
 
+    <item
+        android:id="@+id/reset_all"
+        android:title="@string/text_reset_all_samples"/>
+
 </menu>

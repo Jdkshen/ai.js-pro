@@ -120,6 +120,12 @@ public class FileChooseListView extends ExplorerView {
             mDesc.setText(PFiles.getHumanReadableSize(item.getSize()));
             mFirstChar.setText(ExplorerViewHelper.getIconText(item));
             mFirstCharBackground.setColor(ExplorerViewHelper.getIconColor(item));
+            android.widget.ImageView fileIcon = itemView.findViewById(R.id.file_code_icon);
+            int fileIconRes = ExplorerViewHelper.getFileIconRes(item);
+            fileIcon.setVisibility(fileIconRes != 0 ? VISIBLE : GONE);
+            if (fileIconRes != 0) {
+                fileIcon.setImageResource(fileIconRes);
+            }
             mCheckBox.setChecked(mSelectedFiles.containsKey(mExplorerItem.toScriptFile()), false);
         }
 

@@ -4,6 +4,20 @@ module.exports = function (runtime, global) {
     var app = Object.create(runtime.app);
     var context = global.context;
 
+    /**
+     * Auto.js Pro 的 app.getInstalledPackages() 返回可以 forEach/map 的数组。
+     * 直接返回 Java List 的话，`list.forEach(pkg => ...)` 会走 Java 的 forEach(Consumer)，
+     * 而 Rhino 1.7.7 无法把箭头函数转成 Java 接口 —— 所以这里转成真正的 JS 数组。
+     */
+    app.getInstalledPackages = function () {
+        var list = runtime.app.getInstalledPackageList();
+        var result = [];
+        for (var i = 0; i < list.size(); i++) {
+            result.push(list.get(i));
+        }
+        return result;
+    }
+
     app.intent = function (i) {
         var intent = new android.content.Intent();
         if (i.className && i.packageName) {

@@ -1,11 +1,12 @@
+// @engine rhino
 auto();
 events.observeNotification();
-events.onNotification(function(notification){
+events.onNotification(function(notification) {
     printNotification(notification);
 });
 toast("监听中，请在日志中查看记录的通知及其内容");
 
-function printNotification(notification){
+function printNotification(notification) {
     log("应用包名: " + notification.getPackageName());
     log("通知文本: " + notification.getText());
     log("通知优先级: " + notification.priority);

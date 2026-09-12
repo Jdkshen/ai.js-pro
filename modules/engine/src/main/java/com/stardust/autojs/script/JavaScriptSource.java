@@ -25,9 +25,8 @@ public abstract class JavaScriptSource extends ScriptSource {
     public static final String ENGINE_QUICKJS = ENGINE + ".QuickJS";
 
     /**
-     * QuickJS is opt-in so every existing Auto.js script keeps using Rhino.
-     * Put this directive on the first non-empty line of a script:
-     * {@code // @engine quickjs}
+     * 脚本首行写上这个指令可以显式指定引擎；不写时默认走 QuickJS，
+     * 需要回到旧引擎的脚本在首行加 {@code // @engine rhino} 即可回退。
      */
     public static final String QUICKJS_ENGINE_DIRECTIVE = "// @engine quickjs";
     public static final String RHINO_ENGINE_DIRECTIVE = "// @engine rhino";
@@ -123,9 +122,11 @@ public abstract class JavaScriptSource extends ScriptSource {
     @Override
     public String getEngineName() {
         String directiveEngine = engineFromDirective(getScript());
+        // 无指令、无工程配置时默认走 QuickJS（新引擎）；需要旧引擎的脚本
+        // 在首行加 // @engine rhino 就能回退。
         return directiveEngine != null
                 ? directiveEngine
-                : (mPreferredEngine == null ? ENGINE_RHINO : mPreferredEngine);
+                : (mPreferredEngine == null ? ENGINE_QUICKJS : mPreferredEngine);
     }
 
     public static boolean requestsQuickJs(String script) {
@@ -153,6 +154,13 @@ public abstract class JavaScriptSource extends ScriptSource {
                 }
                 if (RHINO_ENGINE_DIRECTIVE.equalsIgnoreCase(line)) {
                     return ENGINE_RHINO;
+                }
+                // 「"ui";」「"auto";」这类执行模式声明按惯例写在脚本最前面，
+                // 可以出现在引擎指令之前——跳过它继续找引擎指令。
+                if (line.equals("\"ui\";") || line.equals("'ui';")
+                        || line.equals("\"auto\";") || line.equals("'auto';")) {
+                    offset = lineEnd + 1;
+                    continue;
                 }
                 return null;
             }

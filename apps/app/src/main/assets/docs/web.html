@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Web | AI.js Pro 4.1.0 文档</title>
+  <link rel="stylesheet" href="assets/fonts.css">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/sh.css">
+  <link rel="canonical" href="https://nodejs.org/api/web.html">
+</head>
+<body class="alt apidoc" id="api-section-web">
+  <div id="content" class="clearfix">
+    <div id="column2" class="interior">
+      <div id="intro" class="interior">
+        <a href="/" title="返回首页">
+          AI.js Pro
+        </a>
+      </div>
+      <ul>
+<li><a class="nav-documentation" href="documentation.html">关于本文档</a></li>
+<li><a class="nav-http-www-w3school-com-cn-js-pro_js_syntax-asp" href="http://www.w3school.com.cn/js/pro_js_syntax.asp">W3CSchool - ECMAScript教程</a></li>
+<li><a class="nav-http-es6-ruanyifeng-com-README" href="http://es6.ruanyifeng.com/#README">阮一峰 - ECMAScript 6教程</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-overview" href="overview.html">Overview - 综述</a></li>
+<li><a class="nav-qa" href="qa.html">Q&amp;A - 常见问题</a></li>
+<li><a class="nav-app" href="app.html">App - 应用</a></li>
+<li><a class="nav-console" href="console.html">Console - 控制台</a></li>
+<li><a class="nav-coordinates-based-automation" href="coordinates-based-automation.html">CoordinatesBasedAutomation - 基于坐标的操作</a></li>
+<li><a class="nav-device" href="device.html">Device - 设备</a></li>
+<li><a class="nav-dialogs" href="dialogs.html">Dialogs - 对话框</a></li>
+<li><a class="nav-engines" href="engines.html">Engines - 脚本引擎</a></li>
+<li><a class="nav-events" href="events.html">Events - 事件与监听</a></li>
+<li><a class="nav-floaty" href="floaty.html">Floaty - 悬浮窗</a></li>
+<li><a class="nav-files" href="files.html">Files - 文件系统</a></li>
+<li><a class="nav-globals" href="globals.html">Globals - 一般全局函数</a></li>
+<li><a class="nav-http" href="http.html">Http - HTTP</a></li>
+<li><a class="nav-images" href="images.html">Images - 图片与图色处理</a></li>
+<li><a class="nav-keys" href="keys.html">Keys - 按键模拟</a></li>
+<li><a class="nav-media" href="media.html">Media - 多媒体</a></li>
+<li><a class="nav-modules" href="modules.html">Modules - 模块</a></li>
+<li><a class="nav-widgets-based-automation" href="widgets-based-automation.html">WidgetsBasedAutomation - 基于控件的操作</a></li>
+<li><a class="nav-sensors" href="sensors.html">Sensors - 传感器</a></li>
+<li><a class="nav-shell" href="shell.html">Shell - Shell命令</a></li>
+<li><a class="nav-storages" href="storages.html">Storages - 本地存储</a></li>
+<li><a class="nav-threads" href="threads.html">Threads - 多线程</a></li>
+<li><a class="nav-timers" href="timers.html">Timers - 定时器</a></li>
+<li><a class="nav-ui" href="ui.html">UI - 用户界面</a></li>
+<li><a class="nav-continuation" href="continuation.html">Continuation - 阻塞式等待</a></li>
+<li><a class="nav-io" href="io.html">IO - 文件流与逐行读写</a></li>
+<li><a class="nav-plugins" href="plugins.html">Plugins - 插件</a></li>
+<li><a class="nav-web active" href="web.html">Web - 网页注入</a></li>
+<li><a class="nav-yolo" href="yolo.html">Yolo - 目标检测</a></li>
+<li><a class="nav-rootautomator" href="RootAutomator.html">RootAutomator - Root 输入模拟</a></li>
+<li><a class="nav-https-developer-mozilla-org-zh-CN-docs-Mozilla-Projects-Rhino-Scripting_Java" href="https://developer.mozilla.org/zh-CN/docs/Mozilla/Projects/Rhino/Scripting_Java">Work with Java - 调用Java API</a></li>
+</ul>
+<div class="line"></div>
+
+<ul>
+<li><a class="nav-https-github-com-jdkshen-ai-js-pro" href="https://github.com/Jdkshen/ai.js-pro">GitHub 项目 &amp; Issue 提交</a></li>
+<li><a class="nav-http-autojs-org" href="https://github.com/Jdkshen/ai.js-pro">AI.js Pro 项目主页</a></li>
+</ul>
+
+    </div>
+
+    <div id="column1" data-id="web" class="interior">
+      <header>
+        <h1>AI.js Pro 4.1.0 文档</h1>
+        <div id="gtoc">
+          <p>
+            <a href="index.html" name="toc">索引</a> |
+            <a href="all.html">查看全部</a>
+          </p>
+        </div>
+        <hr>
+      </header>
+
+      <div id="toc">
+        <h2>目录</h2>
+        <ul>
+<li><span class="stability_undefined"><a href="#web_newinjectablewebview">newInjectableWebView([activity])</a></span></li>
+<li><span class="stability_undefined"><a href="#web_newinjectablewebclient">newInjectableWebClient()</a></span></li>
+<li><span class="stability_undefined"><a href="#web_client_attach">client.attach(webView)</a></span></li>
+<li><span class="stability_undefined"><a href="#web_rhino">页面里的 rhino 对象</a></span></li>
+<li><span class="stability_undefined"><a href="#web_timing">注入时机（重要）</a></span></li>
+<li><span class="stability_undefined"><a href="#web_example">完整示例</a></span></li>
+<li><span class="stability_undefined"><a href="#web_notes">引擎差异与已知限制</a></span></li>
+</ul>
+
+      </div>
+
+      <div id="apicontent">
+        <h1>Web<span><a class="mark" href="#web" id="web">#</a></span></h1>
+<p>网页注入（web）让脚本加载一个网页，并和页面里的 JavaScript 双向通信：脚本可以往页面里注入代码、读取 DOM；页面也可以反过来调用脚本里的函数。常见用途是<strong>用 HTML + Vue / Vant 之类的前端框架写复杂界面</strong>（比原生控件更好排版），然后用脚本提供数据与能力。</p>
+<div class="signature"><ul>
+<li><code>newInjectableWebView([activity])</code> <span class="type">&lt;WebView&gt;</span> 创建一个自带注入能力的 WebView</li>
+<li><code>newInjectableWebClient()</code> <span class="type">&lt;WebViewClient&gt;</span> 创建一个可注入的 WebViewClient，用于已有的 WebView（例如布局里的<code>&lt;webview&gt;</code>）</li>
+</ul>
+</div><p>两个引擎都支持。和 Auto.js Pro 的差别是：Pro 用<code>$ui.web.jsBridge</code>配合<code>autojs://sdk/v1.js</code>注入页面 SDK；本引擎页面里提供的是<code>rhino</code>对象（用法见下文），页面代码不用改协议、直接<code>rhino.call()</code> / <code>rhino.eval()</code>即可。</p>
+<div class="warning">
+<p>页面里的<code>rhino</code>对象<strong>必须在<code>loadUrl()</code>/<code>loadData()</code>之前注册</strong>：Android 的 WebView 只在「文档开始」时把<code>addJavascriptInterface</code>注册的对象注入页面，注册晚了页面里永远是<code>undefined</code>。引擎已经替你把时机处理好了（设置 WebViewClient 时立即注册），只有自己用别的方式创建 WebView 时才需要手动<code>attach()</code>。</p>
+</div>
+<h2>newInjectableWebView([activity])<span><a class="mark" href="#web_newinjectablewebview" id="web_newinjectablewebview">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>activity</code> <span class="type">&lt;Activity&gt;</span> 可选，WebView 所属的 Activity；不传则用当前 Activity</li>
+<li>返回 <span class="type">&lt;WebView&gt;</span> 一个<code>InjectableWebView</code>，本质就是<code>android.webkit.WebView</code></li>
+</ul>
+</div><p>这是一个独立的控件：<strong>必须把它加进界面（或悬浮窗）</strong>才会显示并执行页面脚本：</p>
+<pre><code>var view = newInjectableWebView();
+ui.layout(
+    &lt;vertical&gt;
+        &lt;frame id=&quot;box&quot; w=&quot;*&quot; h=&quot;*&quot; /&gt;
+    &lt;/vertical&gt;
+);
+ui.box.addView(view);
+view.loadUrl(&quot;file:///sdcard/网页/index.html&quot;);
+</code></pre><p>页面里的 JS 可以直接调用脚本里的全局函数：</p>
+<pre><code>&lt;button onclick=&quot;rhino.call('onClicked', document.title)&quot;&gt;点我&lt;/button&gt;
+&lt;script&gt;rhino.eval('doSomething(1, 2)');&lt;/script&gt;
+</code></pre><h2>newInjectableWebClient()<span><a class="mark" href="#web_newinjectablewebclient" id="web_newinjectablewebclient">#</a></span></h2>
+<div class="signature"><ul>
+<li>返回 <span class="type">&lt;WebViewClient&gt;</span> 可注入的 WebViewClient</li>
+</ul>
+</div><p>用于界面里已经有的 WebView（布局<code>&lt;webview&gt;</code>标签或<code>findViewById</code>拿到的）：</p>
+<pre><code>&quot;ui&quot;;
+ui.layout(
+    &lt;vertical&gt;
+        &lt;webview id=&quot;web&quot; w=&quot;*&quot; h=&quot;*&quot; /&gt;
+    &lt;/vertical&gt;
+);
+var client = newInjectableWebClient();
+ui.web.setWebViewClient(client);   // 这一步会同时把页面桥（window.rhino）注册好
+client.inject('document.title = &quot;来自脚本&quot;');   // 排队到页面加载完成后执行
+ui.web.loadUrl('file:///sdcard/网页/index.html');
+</code></pre><div class="signature"><ul>
+<li><code>client.inject(script[, callback])</code> / <code>view.inject(script[, callback])</code> <span class="type">&lt;void&gt;</span> 在页面里执行一段 JS；页面还没加载完时会先排队；<code>callback</code>收到的参数是页面里这段代码的求值结果（JSON 字符串）</li>
+<li><code>view.loadUrl(url)</code> <span class="type">&lt;void&gt;</span> 加载网址，支持<code>file://</code>、<code>http(s)://</code>与<code>data:</code></li>
+<li><code>view.loadData(data, mimeType, encoding)</code> <span class="type">&lt;void&gt;</span> 直接加载一段 HTML</li>
+<li><code>view.reload()</code> / <code>view.stopLoading()</code> / <code>view.getUrl()</code> <span class="type">&lt;void / string&gt;</span> 刷新、停止加载、取当前地址</li>
+</ul>
+</div><h2>client.attach(webView)<span><a class="mark" href="#web_client_attach" id="web_client_attach">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>webView</code> <span class="type">&lt;WebView&gt;</span> 目标 WebView</li>
+<li>返回 <span class="type">&lt;void&gt;</span></li>
+</ul>
+</div><p>把页面桥（页面里的<code>rhino</code>）和 WebView 设置（开启 JS、允许<code>file://</code>页面访问本地文件）<strong>提前</strong>应用到目标 WebView。<strong>必须在<code>loadUrl()</code>/<code>loadData()</code>之前调用</strong>。</p>
+<p>正常用法下不需要手动调用：<code>webView.setWebViewClient(webClient)</code>时引擎会自动完成（Auto.js 的经典写法就是先设置 client 再 loadUrl）。只有把 WebView 交给别的 client、或自己封装加载流程时才需要显式<code>attach()</code>。</p>
+<h2>页面里的 rhino 对象<span><a class="mark" href="#web_rhino" id="web_rhino">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>rhino.call(name, arg1, arg2, ...)</code> <span class="type">&lt;void&gt;</span> 调用脚本里的全局函数<code>name</code>，参数按字符串传入</li>
+<li><code>rhino.eval(code)</code> <span class="type">&lt;string&gt;</span> 在脚本引擎里执行一段脚本代码，返回结果的字符串形式</li>
+</ul>
+</div><p>示例：页面点按钮时，把数据交回脚本处理。</p>
+<pre><code>&lt;button onclick=&quot;rhino.call('saveData', JSON.stringify({ name: '张三', age: 18 }))&quot;&gt;保存&lt;/button&gt;
+</code></pre><pre><code>global.saveData = function (json) {
+    var data = JSON.parse(json);            // 参数按字符串传，JSON 自己解析
+    files.write('/sdcard/数据.json', JSON.stringify(data));
+    toastLog('已保存 ' + data.name);
+};
+</code></pre><div class="note">
+<p><code>rhino.call</code>的参数只有字符串可靠（Android 的 JS 桥限制：<code>Object</code>参数收到<code>null</code>，可变参数直接丢失）。要传结构化数据请先<code>JSON.stringify()</code>。数字、布尔同样会被转成字符串。</p>
+</div><h2>注入时机（重要）<span><a class="mark" href="#web_timing" id="web_timing">#</a></span></h2>
+<p>页面里的<code>rhino</code>只有在<strong>页面开始加载之前</strong>注册才可见。三种写法引擎都会处理好：</p>
+<ol>
+<li><code>ui.web.setWebViewClient(newInjectableWebClient())</code> —— 引擎在<code>setWebViewClient</code>时就完成注册（推荐，兼容 Auto.js 经典写法）；</li>
+<li><code>newInjectableWebView()</code> —— 控件创建时注册，之后随便 loadUrl；</li>
+<li>手动 <code>client.attach(webView)</code> —— 在<code>loadUrl()</code>之前调用。</li>
+</ol>
+<p>另外要注意：<code>inject(script)</code>注入的代码在<strong>页面加载完成后</strong>才执行，所以<strong>页面自己的脚本跑起来时脚本注入的代码可能还没到</strong>。页面里要用脚本注入的东西（例如自定义的<code>$autojs</code>对象），先进轮询等待：</p>
+<pre><code>whenBridgeReady(function () {
+    // 这里再用注入进来的对象
+});
+function whenBridgeReady(fn) {
+    if (window.$autojs) { fn(); return; }
+    setTimeout(function () { whenBridgeReady(fn); }, 30);
+}
+</code></pre><h2>完整示例<span><a class="mark" href="#web_example" id="web_example">#</a></span></h2>
+<pre><code>&quot;ui&quot;;
+ui.layout(
+    &lt;vertical&gt;
+        &lt;webview id=&quot;web&quot; w=&quot;*&quot; h=&quot;*&quot; /&gt;
+    &lt;/vertical&gt;
+);
+
+var client = newInjectableWebClient();
+ui.web.setWebViewClient(client);
+ui.web.loadData(
+    '&lt;html&gt;&lt;body&gt;&lt;h1 id=&quot;t&quot;&gt;hello&lt;/h1&gt;' +
+    '&lt;button onclick=&quot;rhino.call('onClicked', document.getElementById('t').innerText)&quot;&gt;读标题&lt;/button&gt;' +
+    '&lt;/body&gt;&lt;/html&gt;', 'text/html', 'utf-8');
+
+// 页面 → 脚本
+global.onClicked = function (text) {
+    toastLog('页面里的标题是：' + text);
+};
+
+// 脚本 → 页面：读 DOM，结果通过 callback 回到脚本
+sleep(1500);
+client.inject('document.getElementById(&quot;t&quot;).innerText', function (value) {
+    console.log('页面标题 = ' + value);
+});
+</code></pre><p>复杂前端界面（Vue2 + Vant 的单文件组件、依赖全部随示例携带、离线可跑）可参考示例<code>复杂界面/Vue2+Vant(SFC)</code>。</p>
+<h2>引擎差异与已知限制<span><a class="mark" href="#web_notes" id="web_notes">#</a></span></h2>
+<ul>
+<li><strong>页面 → 脚本的时机</strong>：Rhino 引擎里<code>rhino.eval/rhino.call</code>是在脚本线程上<strong>同步</strong>执行的，脚本正好在<code>sleep()</code>或长循环里时，页面的调用要等脚本空下来；QuickJS 引擎则是入队异步执行（不会互相卡住）。</li>
+<li><strong>injectAndWait</strong>：QuickJS 引擎不支持（需要跨线程同步求值），会直接报错，请改用<code>inject(script, callback)</code>。</li>
+<li><strong>页面的 console.log 不会出现在脚本控制台</strong>，需要回传时用<code>rhino.eval('console.log 的内容交回脚本')</code>或让页面调用<code>rhino.call()</code>。</li>
+<li><strong>iOS / 桌面端</strong>没有该模块。</li>
+</ul>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -477,6 +477,10 @@ final class QuickJsJavaInterop {
             if (target == CharSequence.class) {
                 return 5;
             }
+            // 字符串当 byte[] 用：加密/摘要这类 Java API 普遍收 byte[]（按 UTF-8 转）
+            if (target == byte[].class) {
+                return 5;
+            }
             if (target == char.class || target == Character.class) {
                 return ((CharSequence) raw).length() == 1 ? 4 : 1;
             }
@@ -557,6 +561,10 @@ final class QuickJsJavaInterop {
             String text = raw.toString();
             if (target == char.class || target == Character.class) {
                 return text.isEmpty() ? '\0' : text.charAt(0);
+            }
+            // 字符串 → byte[]：按 UTF-8 编码（MessageDigest.digest、SecretKeySpec、Cipher.doFinal 等）
+            if (target == byte[].class) {
+                return text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             }
             return text;
         }

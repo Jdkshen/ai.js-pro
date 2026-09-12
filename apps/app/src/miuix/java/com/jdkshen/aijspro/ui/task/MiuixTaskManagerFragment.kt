@@ -98,6 +98,8 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
     private var selected by mutableStateOf<TaskItem?>(null)
     private var showSearchDialog by mutableStateOf(false)
     private var query by mutableStateOf("")
+    private var runningExpanded by mutableStateOf(true)
+    private var pendingExpanded by mutableStateOf(true)
 
     private val scriptListener = object : SimpleScriptExecutionListener() {
         override fun onStart(execution: ScriptExecution) = refreshOnUi()
@@ -139,32 +141,30 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
                         else pending.filter { it.name.contains(needle, true) || it.desc.contains(needle, true) }
                     }
                     Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-                        TaskToolbar(
-                            running = visibleRunning.size,
-                            pending = visiblePending.size,
-                            onRefresh = { reloadTick++ },
-                            onSearch = { showSearchDialog = true }
-                        )
                         LazyColumn(
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                             contentPadding = PaddingValues(bottom = 18.dp)
                         ) {
-                            if (visibleRunning.isEmpty() && visiblePending.isEmpty()) {
-                                item { MessagePanel("暂无任务。运行脚本后会显示在“运行中任务”，定时任务显示在“定时任务”。") }
+                            if (visibleRunning.isEmpty() && visiblePending.isEmpty() && query.isNotEmpty()) {
+                                item { EmptyHint("没有匹配的任务") }
                             }
-                            item { GroupHeader("运行中任务", visibleRunning.size) }
-                            if (visibleRunning.isEmpty()) {
-                                item { EmptyHint("没有正在运行的脚本") }
+                            item {
+                                GroupHeader("运行中任务", visibleRunning.size, R.drawable.ic_run_gray,
+                                    runningExpanded) { runningExpanded = !runningExpanded }
                             }
-                            items(visibleRunning, key = { it.task.hashCode().toString() }) { item ->
-                                TaskRow(item) { selected = it }
+                            if (runningExpanded) {
+                                items(visibleRunning, key = { it.task.hashCode().toString() }) { item ->
+                                    TaskRow(item) { selected = it }
+                                }
                             }
-                            item { GroupHeader("定时任务", visiblePending.size) }
-                            if (visiblePending.isEmpty()) {
-                                item { EmptyHint("没有待执行的定时任务") }
+                            item {
+                                GroupHeader("任务", visiblePending.size, R.drawable.ic_schedule_black_48dp,
+                                    pendingExpanded) { pendingExpanded = !pendingExpanded }
                             }
-                            items(visiblePending, key = { it.task.hashCode().toString() }) { item ->
-                                TaskRow(item) { selected = it }
+                            if (pendingExpanded) {
+                                items(visiblePending, key = { it.task.hashCode().toString() }) { item ->
+                                    TaskRow(item) { selected = it }
+                                }
                             }
                         }
                     }
@@ -213,6 +213,9 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
         reloadTick++
     }
 
+    /** 管理页的 FAB 是"停止全部"，图标对齐 Pro 的 ✕。 */
+    override fun getFabIconRes(): Int = R.drawable.ic_close_white_48dp
+
     override fun onBackPressed(activity: Activity): Boolean = when {
         selected != null -> { selected = null; true }
         showSearchDialog -> { showSearchDialog = false; true }
@@ -223,24 +226,6 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
     // ---------- ui ----------
 
     @Composable
-    private fun TaskToolbar(running: Int, pending: Int, onRefresh: () -> Unit, onSearch: () -> Unit) {
-        Row(
-            Modifier.fillMaxWidth().height(54.dp)
-                .background(MiuixTheme.colorScheme.surface)
-                .padding(start = 18.dp, end = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("管理", fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("运行中 $running · 定时 $pending${if (query.isNotEmpty()) " · 已筛选" else ""}",
-                    fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
-            }
-            ToolbarAction(R.drawable.ic_refresh_white_24dp, "刷新", onRefresh)
-            ToolbarAction(R.drawable.ic_search_white_24dp, "搜索任务", onSearch)
-        }
-    }
-
-    @Composable
     private fun ToolbarAction(icon: Int, description: String, onClick: () -> Unit) {
         Box(Modifier.size(48.dp).clickable(onClick = onClick)) {
             Image(painterResource(icon), contentDescription = description,
@@ -249,12 +234,30 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
         }
     }
 
+    /** Auto.js Pro 风格分组头：圆底图标 + 大标题 + 计数 + 折叠箭头，点击整行折叠/展开。 */
     @Composable
-    private fun GroupHeader(title: String, count: Int) {
-        Row(Modifier.fillMaxWidth().padding(start = 18.dp, top = 16.dp, bottom = 6.dp),
+    private fun GroupHeader(title: String, count: Int, icon: Int, expanded: Boolean, onToggle: () -> Unit) {
+        Row(Modifier.fillMaxWidth().clickable(onClick = onToggle)
+                .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text(title, fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-            Text("$count", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
+            Box(Modifier.size(34.dp).clip(CircleShape)
+                .background(MiuixTheme.colorScheme.onSurfaceSecondary.copy(alpha = 0.22f))) {
+                Image(painterResource(icon), contentDescription = title,
+                    colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurfaceSecondary),
+                    modifier = Modifier.size(20.dp).align(Alignment.Center))
+            }
+            Text(title, fontSize = 20.sp, color = MiuixTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f).padding(start = 12.dp))
+            if (count > 0) {
+                Text("$count", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                    modifier = Modifier.padding(end = 10.dp))
+            }
+            Image(
+                painterResource(if (expanded) R.drawable.ic_expand_less_black_48dp
+                    else R.drawable.ic_expand_more_black_48dp),
+                contentDescription = if (expanded) "收起" else "展开",
+                colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurfaceSecondary),
+                modifier = Modifier.size(22.dp))
         }
     }
 
@@ -285,7 +288,8 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
                 Column(Modifier.weight(1f).padding(start = 14.dp)) {
                     Text(item.name, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(item.desc, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Start)
                 }
                 ToolbarAction(if (item is TaskItem.Running) R.drawable.ic_close_gray600_48dp
                 else R.drawable.ic_close_gray600_48dp,
@@ -337,7 +341,8 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
                     Text(item.name, fontSize = 21.sp, maxLines = 2,
                         overflow = TextOverflow.Ellipsis, color = MiuixTheme.colorScheme.onSurface)
                     Text(item.desc, fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Start)
                     ActionChoice(if (item is TaskItem.Running) "停止脚本" else "取消定时任务") {
                         item.cancel()
                         reloadTick++
@@ -359,13 +364,6 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
             .clickable(onClick = onClick).padding(vertical = 14.dp, horizontal = 16.dp)) {
             Text(label, fontSize = 16.sp, color = MiuixTheme.colorScheme.onSurface,
                 modifier = Modifier.align(Alignment.CenterStart))
-        }
-    }
-
-    @Composable
-    private fun MessagePanel(text: String) {
-        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(text, color = MiuixTheme.colorScheme.onSurface)
         }
     }
 }

@@ -1,29 +1,21 @@
-// 可在任务管理中把本脚本配置为处理 text/plain 的 VIEW 或 SEND Intent。
-var intent = engines.myEngine().execArgv.intent;
-
-if (!intent || !intent.getData()) {
-    dialogs.alert(
-        "读取文本文件",
-        "请在任务管理中添加本脚本，动作选择查看或发送，文件类型填写 text/plain。"
-    );
+// @engine rhino
+// ⚠ 需要 Auto.js Pro 专属 API：ES6 模板字符串（当前 Rhino 1.7.7 不支持，请改成字符串拼接）（当前引擎暂未实现，直接运行会报错）
+// 获取Intent参数，用于获取要处理的文件路径等参数
+const intent = $engines.myEngine().execArgv.intent;
+// 若Intent不为空，则是打开外部文件触发的脚本执行
+if (intent) {
+    // 读取文本文件
+    handleIntent(intent);
     exit();
 }
+alert("请在任务中将本脚本添加到外部Intent触发", "动作为查看或发送，文件类型填写为text/plain");
 
-var stream = null;
-var reader = null;
-try {
-    stream = context.getContentResolver().openInputStream(intent.getData());
-    reader = new java.io.BufferedReader(new java.io.InputStreamReader(stream, "UTF-8"));
-    var lines = [];
-    var line;
-    while ((line = reader.readLine()) != null) {
-        lines.push(String(line));
-    }
-    dialogs.alert("文件：" + intent.getData(), lines.join("\n"));
-} finally {
-    if (reader) {
-        reader.close();
-    } else if (stream) {
-        stream.close();
-    }
+function handleIntent(intent) {
+    // 根据安卓文档，使用contentResolver打开流，无需获取文件路径
+    const stream = context.contentResolver.openInputStream(intent.data);
+    // 读取文件内容
+    const content = $files.read(stream);
+    // 关闭流
+    stream.close();
+    alert(`文件${intent.data}内容`, content);
 }

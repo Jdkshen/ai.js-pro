@@ -349,17 +349,77 @@ JSValue throwJavaException(JSContext *context, JNIEnv *env) {
     return JS_ThrowInternalError(context, "%s", message.empty() ? "Java API bridge failed" : message.c_str());
 }
 
-std::string quickJsException(JSContext *context) {
-    JSValue exception = JS_GetException(context);
-    std::string message = jsString(context, exception);
-    JSValue stack = JS_GetPropertyStr(context, exception, "stack");
-    if (!JS_IsUndefined(stack) && !JS_IsNull(stack)) {
-        const std::string stackText = jsString(context, stack);
-        if (!stackText.empty() && stackText != message) {
-            message += "\n" + stackText;
+// 异常文本长度上限：消息会进 Java 字符串、日志与界面，超大对象不能把整条管道刷爆。
+constexpr size_t kMaxExceptionTextLength = 2048;
+
+std::string truncateExceptionText(const std::string &text) {
+    if (text.size() <= kMaxExceptionTextLength) {
+        return text;
+    }
+    size_t length = kMaxExceptionTextLength;
+    // 不要把一个多字节 UTF-8 字符切成两半。
+    while (length > 0 && (static_cast<unsigned char>(text[length]) & 0xC0) == 0x80) {
+        length--;
+    }
+    return text.substr(0, length) + "…(已截断)";
+}
+
+// 把异常值转成可读文本，逐级兜底：
+// 1) Error（含各原生错误类）：直接取 name/message —— 不经过 Error.prototype.toString，
+//    避免原型链异常时退化成 “[object Object]”；
+// 2) 普通对象：先试 JSON.stringify —— 脚本 throw 的对象（如 {code:500,msg:'...'}）
+//    保留全部字段，而不是在 UI 上变成 “[object Object]”；
+// 3) 其余值：回退 JS_ToCString（字符串/数字等原始值本就正确）。
+// 注意：JSON 化失败产生的次生异常会在函数内清掉，不影响调用方消费的原始异常。
+std::string exceptionValueText(JSContext *context, JSValueConst exception) {
+    if (JS_IsError(context, exception)) {
+        JSValue nameValue = JS_GetPropertyStr(context, exception, "name");
+        JSValue messageValue = JS_GetPropertyStr(context, exception, "message");
+        const std::string name = jsString(context, nameValue);
+        const std::string text = jsString(context, messageValue);
+        JS_FreeValue(context, nameValue);
+        JS_FreeValue(context, messageValue);
+        if (!name.empty() && !text.empty()) {
+            return name + ": " + text;
+        }
+        if (!text.empty()) {
+            return text;
+        }
+        if (!name.empty()) {
+            return name;
+        }
+        return {};
+    }
+    if (JS_IsObject(exception)) {
+        JSValue json = JS_JSONStringify(context, exception, JS_UNDEFINED, JS_UNDEFINED);
+        if (JS_IsException(json)) {
+            // 循环引用等让 JSON 化失败：清掉次生异常，避免盖掉原始异常状态。
+            JS_FreeValue(context, JS_GetException(context));
+        } else {
+            const std::string text = jsString(context, json);
+            JS_FreeValue(context, json);
+            if (!text.empty()) {
+                return truncateExceptionText(text);
+            }
         }
     }
-    JS_FreeValue(context, stack);
+    return jsString(context, exception);
+}
+
+std::string quickJsException(JSContext *context) {
+    JSValue exception = JS_GetException(context);
+    std::string message = exceptionValueText(context, exception);
+    if (JS_IsObject(exception)) {
+        // stack 只对对象有意义：对 null/undefined 取属性会再产生一个次生异常。
+        JSValue stack = JS_GetPropertyStr(context, exception, "stack");
+        if (!JS_IsUndefined(stack) && !JS_IsNull(stack)) {
+            const std::string stackText = jsString(context, stack);
+            if (!stackText.empty() && stackText != message) {
+                message += "\n" + stackText;
+            }
+        }
+        JS_FreeValue(context, stack);
+    }
     JS_FreeValue(context, exception);
     return message.empty() ? "QuickJS execution failed" : message;
 }
@@ -708,6 +768,145 @@ JSValue nativeUiViewAction(JSContext *context, JSValueConst, int argc, JSValueCo
         return throwJavaException(context, env);
     }
     return JS_NewBool(context, result == JNI_TRUE);
+}
+
+/** UI 视图 Java 成员探测（ui.wv.loadUrl 这类）：返回 "m"/"f"/"p:getter"/空。 */
+JSValue nativeUiViewProbe(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t viewId = 0;
+    if (!readInt(context, argc, argv, 0, &viewId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    const std::string name = stringArg(context, argc, argv, 2);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "uiViewProbe",
+                                        "(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaId = toJavaString(env, id);
+    jstring javaName = toJavaString(env, name);
+    auto result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, viewId, javaId, javaName));
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** UI 视图 Java 成员调用（ui.wv.loadUrl(...) 这类）；返回 Java 值编码。 */
+JSValue nativeUiViewInvoke(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t viewId = 0;
+    if (!readInt(context, argc, argv, 0, &viewId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    const std::string name = stringArg(context, argc, argv, 2);
+    const std::string args = stringArg(context, argc, argv, 3);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "uiViewInvoke",
+                                        "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaId = toJavaString(env, id);
+    jstring javaName = toJavaString(env, name);
+    jstring javaArgs = toJavaString(env, args);
+    auto result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, viewId, javaId, javaName, javaArgs));
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(javaArgs);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/** UI 视图页面桥注册：JS 对象回调 + @JavascriptInterface 桥（参数 callbackId 为 JS 回调）。 */
+JSValue nativeUiAddJsInterface(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t viewId = 0;
+    if (!readInt(context, argc, argv, 0, &viewId)) {
+        return JS_EXCEPTION;
+    }
+    const std::string id = stringArg(context, argc, argv, 1);
+    int64_t callbackId = 0;
+    if (argc > 2) {
+        JS_ToInt64(context, &callbackId, argv[2]);
+    }
+    const std::string name = stringArg(context, argc, argv, 3);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "uiAddJsInterface",
+                                        "(ILjava/lang/String;JLjava/lang/String;)Z");
+    jstring javaId = toJavaString(env, id);
+    jstring javaName = toJavaString(env, name);
+    jboolean result = env->CallBooleanMethod(
+            state->host, method, viewId, javaId, static_cast<jlong>(callbackId), javaName);
+    env->DeleteLocalRef(javaId);
+    env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+/** `new JavaAdapter(Base, overrides)`：宿主预置子类，返回 `{"__ref":handle}` 或空串。 */
+JSValue nativeJavaAdapterCreate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t baseHandle = 0;
+    if (argc > 0) {
+        JS_ToInt64(context, &baseHandle, argv[0]);
+    }
+    int64_t callbackId = 0;
+    if (argc > 1) {
+        JS_ToInt64(context, &callbackId, argv[1]);
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaAdapterCreate", "(JJ)Ljava/lang/String;");
+    auto *result = static_cast<jstring>(env->CallObjectMethod(
+            state->host, method, static_cast<jlong>(baseHandle), static_cast<jlong>(callbackId)));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (result == nullptr) {
+        return JS_NewStringLen(context, "", 0);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+/**
+ * `"ui"` 模式的宿主 Activity（ScriptExecuteActivity 注入）的脚本侧句柄；
+ * 普通脚本/悬浮窗模式没有宿主，返回空串（脚本侧 `activity` 即为 undefined）。
+ */
+JSValue nativeHostActivity(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "hostActivityRef", "()Ljava/lang/String;");
+    auto *result = static_cast<jstring>(env->CallObjectMethod(state->host, method));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (result == nullptr) {
+        return JS_NewStringLen(context, "", 0);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
 }
 
 /** `ui.isUiThread()`。 */
@@ -6714,6 +6913,70 @@ const char kBootstrapScript[] = R"JS(
             uiPollTimer = setInterval(uiDispatchEvents, 60);
         }
     }
+    var uiJsInterfaceNames = [];
+
+    // ---- JavaAdapter：Rhino 会动态生成 Java 子类，QuickJS 里改为宿主预置子类 ----
+    // 目前支持 android.webkit.WebViewClient / WebChromeClient（WebView 脚本最常用的两个），
+    // 覆盖的方法在宿主子类里转发回脚本；其它基类会抛错（而不是静默失败）。
+    global.JavaAdapter = function (base, overrides) {
+        var baseHandle = base === null || base === undefined ? undefined : base.__javaHandle;
+        if (baseHandle === undefined) {
+            throw new TypeError('JavaAdapter: 第一个参数必须是 Java 类');
+        }
+        var implementation = overrides === null || overrides === undefined ? {} : overrides;
+        var callbackId = global.__aiRegisterCallback(function (payload) {
+            try {
+                if (payload === null || payload === undefined) return null;
+                var handler = implementation[String(payload.method)];
+                if (typeof handler !== 'function') return null;
+                // payload.args 里形如 {"__ref":handle} 的 Java 对象参数必须先解码成
+                // 互操作代理，否则脚本拿到的只是 {__ref:...} 普通对象
+                // （现象：result.confirm() 报 TypeError: not a function）。
+                var handlerArgs = Array.isArray(payload.args)
+                        ? payload.args.map(decodeCallbackArg) : [];
+                var result = handler.apply(implementation, handlerArgs);
+                return result === undefined ? null : result;
+            } catch (error) {
+                // 静默吞掉会让 WebView 侧的怪现象（例如 alert 之后整页失去响应）无从排查，
+                // 因此这里必须把异常打到日志里。
+                try {
+                    console.error('JavaAdapter 回调 ' + String(payload.method) + ' 出错: ' + error);
+                } catch (reportError) { }
+                return null;
+            }
+        });
+        var created = decodeJavaResult(__aiNativeJavaAdapterCreate(baseHandle, callbackId));
+        if (!created) {
+            var name = base.__className !== undefined ? String(base.__className) : String(base);
+            throw new TypeError('JavaAdapter: 暂不支持继承 ' + name
+                    + '（目前支持 android.webkit.WebViewClient / android.webkit.WebChromeClient）');
+        }
+        return created;
+    };
+
+    /** 页面桥 shim：把 window[name] 换成转发到 @JavascriptInterface 方法 __ajs 的 Proxy。 */
+    function injectJsInterfaceShims(html) {
+        if (!uiJsInterfaceNames.length) return html;
+        var script = '<script>(function(){';
+        for (var i = 0; i < uiJsInterfaceNames.length; i++) {
+            var n = JSON.stringify(uiJsInterfaceNames[i]);
+            script += 'var b' + i + '=window[' + n + '];'
+                    + 'if(b' + i + '&&!b' + i + '.__ajsWrapped){'
+                    + 'b' + i + '.__ajsWrapped=1;'
+                    + 'window[' + n + ']=new Proxy({},{get:function(t,p){'
+                    + 'if(typeof p!=="string"||p==="then"||p==="toString"||p==="valueOf"||p==="constructor")return undefined;'
+                    + 'return function(){var a=Array.prototype.slice.call(arguments);'
+                    + 'try{return b' + i + '.__ajs(p,JSON.stringify(a));}catch(e){return undefined;}};}});'
+                    + '}';
+        }
+        script += '})();<\/script>';
+        var idx = html.indexOf('</head>');
+        if (idx >= 0) return html.substring(0, idx) + script + html.substring(idx);
+        idx = html.indexOf('<body');
+        if (idx >= 0) return html.substring(0, idx) + script + html.substring(idx);
+        return script + html;
+    }
+
     function uiView(id) {
         id = String(id);
         return new Proxy({
@@ -6792,6 +7055,49 @@ const char kBootstrapScript[] = R"JS(
                     return undefined;
                 }
                 if (uiViewId <= 0) return undefined;
+                // 控件的 Java 成员（ui.wv.loadUrl(...) / getSettings() 这类）：探到方法或
+                // JavaBean 属性就返回可调用包装，参数/返回值走与 java.* 相同的编码。
+                var member = String(__aiNativeUiViewProbe(uiViewId, id, prop));
+                if (member === 'm' || (member.length > 1 && member.charAt(0) === 'p')) {
+                    if (prop === 'addJavascriptInterface') {
+                        return function (object, name) {
+                            // JS 对象注册为页面桥：页面里 window[name].xxx(...) 同步回到脚本对象的方法。
+                            var target = object;
+                            var callbackId = global.__aiRegisterCallback(function (payload) {
+                                try {
+                                    if (target == null || payload == null) return null;
+                                    var fn = target[payload.method];
+                                    if (typeof fn !== 'function') return null;
+                                    var result = fn.apply(target, Array.isArray(payload.args) ? payload.args : []);
+                                    if (result === undefined || result === null) return null;
+                                    return typeof result === 'string' ? result : String(result);
+                                } catch (error) {
+                                    return null;
+                                }
+                            });
+                            uiJsInterfaceNames.push(String(name));
+                            return __aiNativeUiAddJsInterface(uiViewId, id, callbackId, String(name));
+                        };
+                    }
+                    if (prop === 'loadDataWithBaseURL' || prop === 'loadData') {
+                        return function () {
+                            var args = Array.prototype.slice.call(arguments);
+                            var dataIndex = prop === 'loadDataWithBaseURL' ? 1 : 0;
+                            if (typeof args[dataIndex] === 'string') {
+                                args[dataIndex] = injectJsInterfaceShims(args[dataIndex]);
+                            }
+                            return decodeJavaResult(__aiNativeUiViewInvoke(uiViewId, id, prop,
+                                    JSON.stringify(encodeJavaArgs(args))));
+                        };
+                    }
+                    return function () {
+                        return decodeJavaResult(__aiNativeUiViewInvoke(uiViewId, id, prop,
+                                JSON.stringify(encodeJavaArgs(Array.prototype.slice.call(arguments)))));
+                    };
+                }
+                if (member === 'f') {
+                    return decodeJavaResult(__aiNativeUiViewInvoke(uiViewId, id, prop, '[]'));
+                }
                 var text = __aiNativeUiGetAttr(uiViewId, id, prop);
                 return text === '' ? undefined : text;
             },
@@ -6853,11 +7159,29 @@ const char kBootstrapScript[] = R"JS(
         };
         return emitter;
     }
+    // `"ui"` 模式的脚本跑在 ScriptExecuteActivity 里：宿主 Activity 由引擎注入，
+    // 这里暴露成脚本里的 `activity` 全局（Rhino 里靠 engine.put("activity", this)）。
+    // 普通脚本没有宿主——对应 Rhino 的 `typeof activity == 'undefined'`。
+    Object.defineProperty(global, 'activity', {
+        configurable: true,
+        enumerable: true,
+        get: function () {
+            var ref = String(__aiNativeHostActivity());
+            if (ref.length === 0) return undefined;
+            var decoded = decodeJavaResult(ref);
+            return decoded === null ? undefined : decoded;
+        }
+    });
     var ui = {
         layout: function (xml) {
             var id = Number(__aiNativeUiInflate(String(xml)));
             if (id < 0) throw new Error('Unable to inflate UI layout');
             uiViewId = id;
+            // UI 存续期间事件循环必须活着：控件事件轮询、页面桥回调（postJsCallback）
+            // 都靠它派发；Rhino 的 ui 模式同样是「界面在则脚本在」。
+            if (uiPollTimer === null) {
+                uiPollTimer = setInterval(uiDispatchEvents, 60);
+            }
             return id;
         },
         layoutFile: function (file) {
@@ -6872,6 +7196,7 @@ const char kBootstrapScript[] = R"JS(
             __aiNativeUiClose();
             uiViewId = 0;
             uiEventListeners.clear();
+            uiJsInterfaceNames.length = 0;
             if (uiPollTimer !== null) {
                 clearInterval(uiPollTimer);
                 uiPollTimer = null;
@@ -7061,6 +7386,8 @@ const char kBootstrapScript[] = R"JS(
         if (value === null || typeof value !== 'object') return value;
         if (value.__node !== undefined) return wrapAutomatorObject(Number(value.__node));
         if (value.__selector !== undefined) return wrapAutomatorSelector(Number(value.__selector));
+        // Java 对象参数（适配器回调里的 View/JsResult 等）走与互操作相同的句柄协议。
+        if (value.__ref !== undefined) return decodeJavaValue(value);
         if (Array.isArray(value)) return value.map(decodeCallbackArg);
         return value;
     }
@@ -8629,6 +8956,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyGetHeight", nativeFloatyGetHeight, 1);
     installNativeFunction(state->context, global, "__aiNativeUiViewExists", nativeUiViewExists, 2);
     installNativeFunction(state->context, global, "__aiNativeUiViewAction", nativeUiViewAction, 3);
+    installNativeFunction(state->context, global, "__aiNativeUiViewProbe", nativeUiViewProbe, 3);
+    installNativeFunction(state->context, global, "__aiNativeUiViewInvoke", nativeUiViewInvoke, 4);
+    installNativeFunction(state->context, global, "__aiNativeUiAddJsInterface", nativeUiAddJsInterface, 4);
+    installNativeFunction(state->context, global, "__aiNativeJavaAdapterCreate", nativeJavaAdapterCreate, 2);
     installNativeFunction(state->context, global, "__aiNativeIsMainThread", nativeIsMainThread, 0);
     installNativeFunction(state->context, global, "__aiNativeStatusBarColor", nativeStatusBarColor, 1);
     installNativeFunction(state->context, global, "__aiNativeJavaResolveClass", nativeJavaResolveClass, 1);
@@ -8644,6 +8975,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeMatToFrame", nativeMatToFrame, 1);
     installNativeFunction(state->context, global, "__aiNativeExitSelf", nativeExitSelf, 0);
     installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
+    installNativeFunction(state->context, global, "__aiNativeHostActivity", nativeHostActivity, 0);
     installNativeFunction(state->context, global, "__aiNativeUiClose", nativeUiClose, 0);
     installNativeFunction(state->context, global, "__aiNativeUiSetConfig", nativeUiSetConfig, 3);
     installNativeFunction(state->context, global, "__aiNativeUiGetText", nativeUiGetText, 2);

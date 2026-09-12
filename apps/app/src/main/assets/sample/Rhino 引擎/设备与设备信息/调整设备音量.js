@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 ui.layout(
@@ -16,8 +17,8 @@ ui.layout(
 ui.music.setMax(device.getMusicMaxVolume());
 ui.music.setProgress(device.getMusicVolume());
 ui.music.setOnSeekBarChangeListener({
-    onProgressChanged: function(seekbar, p, fromUser){
-        if(fromUser){
+    onProgressChanged: function(seekbar, p, fromUser) {
+        if (fromUser) {
             device.setMusicVolume(p);
         }
     }
@@ -26,8 +27,8 @@ ui.music.setOnSeekBarChangeListener({
 ui.notification.setMax(device.getNotificationMaxVolume());
 ui.notification.setProgress(device.getAlarmVolume());
 ui.notification.setOnSeekBarChangeListener({
-    onProgressChanged: function(seekbar, p, fromUser){
-        if(fromUser){
+    onProgressChanged: function(seekbar, p, fromUser) {
+        if (fromUser) {
             device.setNotificationVolume(p);
         }
     }
@@ -36,8 +37,8 @@ ui.notification.setOnSeekBarChangeListener({
 ui.alarm.setMax(device.getAlarmMaxVolume());
 ui.alarm.setProgress(device.getAlarmVolume());
 ui.alarm.setOnSeekBarChangeListener({
-    onProgressChanged: function(seekbar, p, fromUser){
-        if(fromUser){
+    onProgressChanged: function(seekbar, p, fromUser) {
+        if (fromUser) {
             device.setAlarmVolume(p);
         }
     }

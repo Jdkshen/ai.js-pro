@@ -1,77 +1,74 @@
+// @engine rhino
 "ui";
 
-var packageManager = context.getPackageManager();
-var iconCache = {};
+let pm = context.getPackageManager();
+let iconCache = {};
 
-var IconView = (function () {
-    util.extend(IconView, ui.Widget);
+let IconView = (function () {
+    // 继承ui.Widget
+    $util.extend(IconView, $ui.Widget);
 
     function IconView() {
-        ui.Widget.call(this);
-        var widget = this;
-        this.defineAttr("packageName", function () {
-            return widget._packageName;
-        }, function (view, name, value) {
-            widget._packageName = value;
+        // 调用父类构造函数
+        $ui.Widget.call(this);
+        // 自定义属性packageName
+        this.defineAttr("packageName", (view, name, defaultGetter) => {
+            return this._packageName;
+        }, (view, name, value, defaultSetter) => {
+            this._packageName = value;
             view.setImageDrawable(iconCache[value]);
         });
     }
-
     IconView.prototype.render = function () {
-        return <img w="56" h="56" scaleType="fitCenter" />;
-    };
-
-    ui.registerWidget("appicon", IconView);
+        return (
+            <img w="*" h="*" scaleType="fitXY"/>
+        );
+    }
+    ui.registerWidget("icon", IconView);
     return IconView;
 })();
 
-var apps = [];
+let apps = [];
 
 ui.layout(
     <vertical bg="#ffffff">
-        <progressbar id="progress" indeterminate="true"
-            style="@style/Base.Widget.AppCompat.ProgressBar.Horizontal" />
         <list id="apps" layout_weight="1">
-            <horizontal w="*" padding="12 8" gravity="center_vertical"
-                bg="?selectableItemBackground">
-                <appicon packageName="{{this.packageName}}" />
-                <vertical layout_weight="1" marginLeft="12">
-                    <text text="{{this.appName}}" textSize="16sp" textColor="#202124"
-                        maxLines="1" ellipsize="end" />
-                    <text text="{{this.packageName}}" textSize="13sp" textColor="#777777"
-                        maxLines="1" ellipsize="end" />
-                    <text text="版本 {{this.versionName}} ({{this.versionCode}})"
-                        textSize="12sp" textColor="#999999" />
+            <linear bg="?selectableItemBackground" w="*" gravity="center_vertical">
+                <icon packageName="{{this.packageName}}" w="80" h="80" />
+                <vertical h="auto">
+                    <text id="name" textSize="16sp" textColor="#000000" text="{{this.appName}}" maxLines="1" ellipsize="end" />
+                    <text id="path" textSize="13sp" textColor="#929292" text="{{this.packageName}}" marginTop="4" maxLines="1" ellipsize="end" />
                 </vertical>
-            </horizontal>
+            </linear>
         </list>
+        <progressbar id="progressbar" indeterminate="true" style="@style/Base.Widget.AppCompat.ProgressBar.Horizontal" />
     </vertical>
 );
 
-ui.apps.setDataSource(apps);
-ui.apps.on("item_click", function (item) {
-    toast(item.appName + "\n" + item.packageName);
+$ui.apps.setDataSource(apps);
+
+$ui.apps.on("item_click", function (item, pos) {
+    toast($util.inspect(item));
 });
 
-threads.start(function () {
-    var installed = packageManager.getInstalledPackages(0);
-    var loaded = [];
-    for (var i = 0; i < installed.size(); i++) {
-        var info = installed.get(i);
-        var label = info.applicationInfo.loadLabel(packageManager).toString();
-        iconCache[info.packageName] = info.applicationInfo.loadIcon(packageManager);
-        loaded.push({
-            appName: label,
-            packageName: info.packageName,
-            versionName: info.versionName || "-",
-            versionCode: info.versionCode
-        });
-    }
-    loaded.sort(function (left, right) {
-        return left.appName.localeCompare(right.appName);
-    });
-    ui.run(function () {
-        Array.prototype.push.apply(apps, loaded);
-        ui.progress.setVisibility(8);
+// 启动线程来扫描app
+$threads.start(function () {
+    listApps(apps);
+    // 切换回UI线程隐藏进度条
+    $ui.run(() => {
+        ui.progressbar.attr("visibility", "gone");
     });
 });
+
+function listApps(apps) {
+    let list = $app.getInstalledPackages();
+    list.forEach(pkgInfo => {
+        apps.push({
+            appName: pkgInfo.applicationInfo.label,
+            packageName: pkgInfo.packageName,
+            versionName: pkgInfo.versionName,
+            versionCode: pkgInfo.versionCode,
+        });
+        iconCache[pkgInfo.packageName] = pkgInfo.applicationInfo.loadIcon(pm)
+    });
+}

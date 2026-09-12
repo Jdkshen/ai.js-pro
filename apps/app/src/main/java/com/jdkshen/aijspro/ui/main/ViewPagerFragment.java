@@ -6,6 +6,7 @@ import androidx.fragment.app.Fragment;
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
 import android.view.View;
 
+import com.jdkshen.aijspro.R;
 import com.stardust.util.BackPressedHandler;
 
 /**
@@ -33,6 +34,11 @@ public abstract class ViewPagerFragment extends Fragment implements BackPressedH
 
     public boolean isFabRotationGone() {
         return mFabRotation == ROTATION_GONE;
+    }
+
+    /** 当前页希望在 Miuix FAB 上显示的图标；"管理"页覆写为 ✕（停止全部）。 */
+    public int getFabIconRes() {
+        return R.drawable.ic_menu;
     }
 
     private void notifyMiuixFabVisibility() {

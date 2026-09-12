@@ -1,3 +1,4 @@
+// @engine rhino
 // Rhino 兼容引擎全模块回归测试
 // 故意不加引擎标记，用于验证历史脚本仍会交给 Rhino。
 // 结果写入 /sdcard/脚本/zz_regress_rhino_result.json

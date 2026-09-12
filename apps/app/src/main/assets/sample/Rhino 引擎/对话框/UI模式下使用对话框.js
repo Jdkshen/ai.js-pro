@@ -1,3 +1,4 @@
+// @engine rhino
 "ui";
 
 ui.layout(
@@ -8,47 +9,47 @@ ui.layout(
     </vertical>
 );
 
-ui.callback.click(()=>{
-    dialogs.confirm("要弹出输入框吗?", "", function(b){
-        if(b){
-            dialogs.rawInput("输入", "", function(str){
+ui.callback.click(() => {
+    dialogs.confirm("要弹出输入框吗?", "", function(b) {
+        if (b) {
+            dialogs.rawInput("输入", "", function(str) {
                 alert("您输入的是:" + str);
             });
-        }else{
+        } else {
             ui.finish();
         }
     });
 });
 
-ui.promise.click(()=>{
+ui.promise.click(() => {
     dialogs.confirm("要弹出输入框吗")
-        .then(function(b){
-            if(b){
-               return dialogs.rawInput("输入");
-            }else{
+        .then(function(b) {
+            if (b) {
+                return dialogs.rawInput("输入");
+            } else {
                 ui.finish();
             }
-        }).then(function(str){
+        }).then(function(str) {
             alert("您输入的是:" + str);
         });
 });
 
 
-ui.calc.click(()=>{
+ui.calc.click(() => {
     let num1, num2, op;
-    dialogs.input("请输入第一个数字")
+    dialogs.rawInput("请输入第一个数字")
         .then(n => {
-            num1 = n;
+            num1 = parseInt(n);
             return dialogs.singleChoice("请选择运算", ["加", "减", "乘", "除", "幂"]);
         })
         .then(o => {
             op = o;
-            return dialogs.input("请输入第二个数字");
-         })
+            return dialogs.rawInput("请输入第二个数字");
+        })
         .then(n => {
-            num2 = n;
+            num2 = parseInt(n);
             var result;
-            switch(op){
+            switch (op) {
                 case 0:
                     result = num1 + num2;
                     break;

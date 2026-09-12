@@ -1,3 +1,4 @@
+// @engine rhino
 log("Hello world!!!");
-toast("Hello, AI.js Pro!");
+toast("Hello, AutoJs!");
 console.show();

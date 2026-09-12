@@ -1,3 +1,4 @@
+// @engine rhino
 console.setGlobalLogConfig({
     file: "/sdcard/log.txt"
 });

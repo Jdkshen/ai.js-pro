@@ -184,6 +184,8 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
         runtime.putProperty("class.console", LogActivity.class);
         runtime.putProperty("broadcast.inspect_layout_bounds", LayoutBoundsFloatyWindow.class.getName());
         runtime.putProperty("broadcast.inspect_layout_hierarchy", LayoutHierarchyFloatyWindow.class.getName());
+        // Auto.js Pro 的 $work_manager（定时任务）：实现类在 app 模块，引擎 init.js 负责暴露成全局变量
+        runtime.putProperty("work_manager", new com.jdkshen.aijspro.autojs.api.timing.WorkManagerModule());
         return runtime;
     }
 

@@ -7,6 +7,7 @@ import com.stardust.autojs.engine.module.AssetAndUrlModuleSourceProvider
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.project.ScriptConfig
 import com.stardust.autojs.rhino.AndroidClassLoader
+import com.stardust.autojs.rhino.PreferIntJavaObject
 import com.stardust.autojs.rhino.RhinoAndroidHelper
 import com.stardust.autojs.rhino.TopLevelScope
 import com.stardust.autojs.runtime.ScriptRuntime
@@ -76,15 +77,28 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         try {
             reader = preprocess(reader)
             val script = context.compileReader(reader, source.toString(), 1, null)
-            return if (hasFeature(ScriptConfig.FEATURE_CONTINUATION)) {
-                context.executeScriptWithContinuations(script, mScriptable)
-            } else {
-                script.exec(context, mScriptable)
-            }
+            return runScript(script)
         } catch (e: IOException) {
             throw UncheckedIOException(e)
         }
 
+    }
+
+    /**
+     * continuation 只决定脚本入口用哪套 API 执行：Rhino 在解释器模式下天然支持挂起/恢复，
+     * 不需要 project.json 里配置 features —— 否则普通脚本里 continuation.await 会报
+     * "Cannot capture continuation from JavaScript code not called directly by executeScriptWithContinuations"。
+     */
+    private fun runScript(script: Script): Any? {
+        return try {
+            context.executeScriptWithContinuations(script, mScriptable)
+        } catch (e: IllegalArgumentException) {
+            if (e.message?.startsWith("Script argument was not a script") == true) {
+                script.exec(context, mScriptable)
+            } else {
+                throw e
+            }
+        }
     }
 
     /**
@@ -101,17 +115,18 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         try {
             val clazz = compiledClassLoader.defineClass(source.className, source.classBytes)
             val script = clazz.newInstance() as Script
-            return if (hasFeature(ScriptConfig.FEATURE_CONTINUATION)) {
-                context.executeScriptWithContinuations(script, mScriptable)
-            } else {
-                script.exec(context, mScriptable)
-            }
+            return runScript(script)
         } catch (e: Exception) {
             throw IllegalStateException("编译脚本加载失败：" + source.className, e)
         }
     }
 
     fun hasFeature(feature: String): Boolean {
+        // continuation 恒为 true：Rhino 解释器模式天然支持挂起/恢复，脚本入口统一走
+        // executeScriptWithContinuations（见 runScript），普通脚本也能用 continuation.await。
+        if (ScriptConfig.FEATURE_CONTINUATION == feature) {
+            return true
+        }
         val config = getTag(ExecutionConfig.tag) as ExecutionConfig?
         return config != null && config.scriptConfig.hasFeature(feature)
     }
@@ -193,10 +208,12 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
 
         override fun wrapAsJavaObject(cx: Context?, scope: Scriptable, javaObject: Any?, staticType: Class<*>?): Scriptable? {
             //Log.d(LOG_TAG, "wrapAsJavaObject: java = " + javaObject + ", result = " + result + ", scope = " + scope);
-            return if (javaObject is View) {
-                ViewExtras.getNativeView(scope, javaObject, staticType, runtime)
-            } else {
-                super.wrapAsJavaObject(cx, scope, javaObject, staticType)
+            return when {
+                javaObject is View -> ViewExtras.getNativeView(scope, javaObject, staticType, runtime)
+                // Paint 这类同时有 int/long 重载的类：让 JS 的数字参数优先走 int 版本
+                PreferIntJavaObject.supports(javaObject) ->
+                    PreferIntJavaObject(scope, javaObject as Any, staticType)
+                else -> super.wrapAsJavaObject(cx, scope, javaObject, staticType)
             }
         }
 

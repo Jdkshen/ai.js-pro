@@ -1,3 +1,4 @@
+// @engine rhino
 //显示控制台
 console.show();
 
@@ -11,4 +12,3 @@ hey();
 function hey() {
     console.trace("打印日志行数");
 }
-

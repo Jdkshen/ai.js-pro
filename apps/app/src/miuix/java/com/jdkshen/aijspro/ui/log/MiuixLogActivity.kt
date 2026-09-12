@@ -1,8 +1,12 @@
 package com.jdkshen.aijspro.ui.log
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.util.SparseArray
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -109,6 +113,18 @@ class MiuixLogActivity : ComponentActivity() {
         IntentUtil.shareText(this, sb.toString())
     }
 
+    private fun copyLog() {
+        val logs = consoleImpl?.getAllLogs() ?: return
+        if (logs.isEmpty()) return
+        val sb = StringBuilder()
+        for (entry in logs) {
+            sb.append(entry.content).append('\n')
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("log", sb.toString()))
+        Toast.makeText(this, "日志已复制到剪贴板（${logs.size} 条）", Toast.LENGTH_SHORT).show()
+    }
+
     /** Console colors following the Miuix theme directly (not the legacy M3 palette). */
     private fun applyLogTheme(view: ConsoleView) {
         val dark = isAijsDarkTheme()
@@ -157,6 +173,11 @@ class MiuixLogActivity : ComponentActivity() {
                             IconButton(onClick = { searchShown = !searchShown }) {
                                 Icon(painter = painterResource(R.drawable.ic_search_white_24dp),
                                     contentDescription = "搜索",
+                                    tint = MiuixTheme.colorScheme.onBackgroundVariant)
+                            }
+                            IconButton(onClick = { copyLog() }) {
+                                Icon(painter = painterResource(R.drawable.ic_content_copy_white_24dp),
+                                    contentDescription = "复制全部",
                                     tint = MiuixTheme.colorScheme.onBackgroundVariant)
                             }
                             IconButton(onClick = { shareLog() }) {

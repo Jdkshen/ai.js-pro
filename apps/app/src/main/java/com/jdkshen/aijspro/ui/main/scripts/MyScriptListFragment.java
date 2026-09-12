@@ -25,6 +25,7 @@ import com.jdkshen.aijspro.tool.SimpleObserver;
 import com.jdkshen.aijspro.ui.common.ScriptOperations;
 import com.jdkshen.aijspro.ui.explorer.ExplorerView;
 import com.jdkshen.aijspro.ui.main.FloatingActionMenu;
+import com.jdkshen.aijspro.ui.main.MainActivity;
 import com.jdkshen.aijspro.ui.main.QueryEvent;
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment;
 import com.jdkshen.aijspro.ui.project.ProjectConfigActivity;
@@ -73,6 +74,12 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         ExplorerDirPage storageRoot = ExplorerDirPage.createRoot(storageDirectory.getPath());
         ExplorerDirPage scriptDirectory = new ExplorerDirPage(Pref.getScriptDirPath(), storageRoot);
         mExplorerView.setExplorer(Explorers.workspace(), storageRoot, scriptDirectory);
+        // 滚动时收起主界面悬浮按钮（Miuix FAB 不在 CoordinatorLayout 里，需要手动联动）。
+        mExplorerView.setOnScrollStateChangedCallback(scrolling -> {
+            if (getActivity() instanceof MainActivity) {
+                ((MainActivity) getActivity()).onMainListScrollStateChanged(scrolling);
+            }
+        });
         mExplorerView.setOnItemClickListener((view, item) -> {
             if (item.isEditable()) {
                 Scripts.INSTANCE.edit(getActivity(), item.toScriptFile());
@@ -138,6 +145,10 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     @Override
     public void onPageHide() {
+        // 滚动可能把主 FAB 隐去了：离开页面前先恢复，之后 super 会按页面状态重算显隐。
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).onMainListScrollStateChanged(false);
+        }
         super.onPageHide();
         if (mFloatingActionMenu != null && mFloatingActionMenu.isExpanded()) {
             mFloatingActionMenu.collapse();

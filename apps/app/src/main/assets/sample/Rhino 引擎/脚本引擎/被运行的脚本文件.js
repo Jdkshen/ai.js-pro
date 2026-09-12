@@ -1,3 +1,2 @@
-var args = engines.myEngine().execArgv;
+// @engine rhino
 toastLog("Hello, engines!");
-log("脚本参数：", args);

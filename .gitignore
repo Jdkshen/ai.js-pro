@@ -29,6 +29,8 @@
 !apps/app/src/main/java/com/jdkshen/aijspro/build/**
 !apps/app/src/main/java/com/jdkshen/aijspro/autojs/build/
 !apps/app/src/main/java/com/jdkshen/aijspro/autojs/build/**
+!apps/app/src/testMiuix/java/com/jdkshen/aijspro/autojs/build/
+!apps/app/src/testMiuix/java/com/jdkshen/aijspro/autojs/build/**
 
 # Generated release and capture directories
 /release/

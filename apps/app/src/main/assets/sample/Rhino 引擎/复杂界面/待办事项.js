@@ -1,6 +1,5 @@
+// @engine rhino
 "ui";
-
-importClass(android.graphics.Paint);
 
 ui.layout(
     <frame>
@@ -8,6 +7,7 @@ ui.layout(
             <appbar>
                 <toolbar id="toolbar" title="Todo" />
             </appbar>
+            <button id="selectAll" text="全选"/>
             <list id="todoList">
                 <card w="*" h="70" margin="10 5" cardCornerRadius="2dp"
                     cardElevation="1dp" foreground="?selectableItemBackground">
@@ -29,12 +29,12 @@ ui.layout(
 );
 
 var materialColors = ["#e91e63", "#ab47bc", "#5c6bc0", "#7e57c2", "##2196f3", "#00bcd4",
-    "#26a69a", "#4caf50", "#8bc34a", "#ffeb3b", "#ffa726", "#78909c", "#8d6e63"];
+    "#26a69a", "#4caf50", "#8bc34a", "#ffeb3b", "#ffa726", "#78909c", "#8d6e63"
+];
 
 var storage = storages.create("todoList");
 //从storage获取todo列表
-var todoList = storage.get("items", [
-    {
+var todoList = storage.get("items", [{
         title: "写操作系统作业",
         summary: "明天第1～2节",
         color: "#f44336",
@@ -47,7 +47,7 @@ var todoList = storage.get("items", [
         done: false
     },
     {
-        title: "发布AI.js Pro 5.0.0正式版",
+        title: "发布Auto.js 5.0.0正式版",
         summary: "2019年1月",
         color: "#4caf50",
         done: false
@@ -62,9 +62,17 @@ var todoList = storage.get("items", [
 
 ui.todoList.setDataSource(todoList);
 
-ui.todoList.on("item_bind", function (itemView, itemHolder) {
+ui.selectAll.on("click", function() {
+    todoList.forEach(item => {
+        item.done = true;
+    });
+    // 通知数据全部更新
+    ui.todoList.adapter.notifyDataSetChanged();
+});
+
+ui.todoList.on("item_bind", function(itemView, itemHolder) {
     //绑定勾选框事件
-    itemView.done.on("check", function (checked) {
+    itemView.done.on("check", function(checked) {
         let item = itemHolder.item;
         item.done = checked;
         let paint = itemView.title.paint;
@@ -78,11 +86,11 @@ ui.todoList.on("item_bind", function (itemView, itemHolder) {
     });
 });
 
-ui.todoList.on("item_click", function (item, i, itemView, listView) {
+ui.todoList.on("item_click", function(item, i, itemView, listView) {
     itemView.done.checked = !itemView.done.checked;
 });
 
-ui.todoList.on("item_long_click", function (e, item, i, itemView, listView) {
+ui.todoList.on("item_long_click", function(e, item, i, itemView, listView) {
     confirm("确定要删除" + item.title + "吗？")
         .then(ok => {
             if (ok) {

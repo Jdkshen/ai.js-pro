@@ -27,17 +27,30 @@
             android:layout_gravity="center_vertical"
             android:gravity="center"/>
 
-        <TextView
-            android:id="@+id/first_char"
+        <FrameLayout
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:layout_gravity="center_vertical"
-            android:layout_marginLeft="8dp"
-            android:background="@drawable/circle_light_green"
-            android:gravity="center"
-            android:textColor="@android:color/white"
-            android:textSize="24sp"
-            tools:text="J"/>
+            android:layout_marginLeft="8dp">
+
+            <TextView
+                android:id="@+id/first_char"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/circle_light_green"
+                android:gravity="center"
+                android:textColor="@android:color/white"
+                android:textSize="24sp"
+                tools:text="J"/>
+
+            <ImageView
+                android:id="@+id/file_code_icon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_code_file_24dp"
+                android:visibility="gone"/>
+        </FrameLayout>
 
         <LinearLayout
             android:layout_width="0dp"
@@ -81,4 +94,3 @@
         android:background="#EDEEEF"/>
 
 </LinearLayout>
-

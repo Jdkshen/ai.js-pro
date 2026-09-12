@@ -948,6 +948,34 @@
 <li><span class="stability_undefined"><a href="#ui_drawables">Drawables</a></span></li>
 <li><span class="stability_undefined"><a href="#ui">颜色</a></span></li>
 </ul>
+<li><span class="stability_undefined"><a href="#web_newinjectablewebview">Web - 网页注入</a></span><ul>
+<li><span class="stability_undefined"><a href="#web_newinjectablewebview">newInjectableWebView([activity])</a></span></li>
+<li><span class="stability_undefined"><a href="#web_newinjectablewebclient">newInjectableWebClient()</a></span></li>
+<li><span class="stability_undefined"><a href="#web_client_attach">client.attach(webView)</a></span></li>
+<li><span class="stability_undefined"><a href="#web_rhino">页面里的 rhino 对象</a></span></li>
+<li><span class="stability_undefined"><a href="#web_timing">注入时机（重要）</a></span></li>
+<li><span class="stability_undefined"><a href="#web_example">完整示例</a></span></li>
+<li><span class="stability_undefined"><a href="#web_notes">引擎差异与已知限制</a></span></li>
+</ul>
+</li>
+<li><span class="stability_undefined"><a href="#yolo_isavailable">Yolo - 目标检测</a></span><ul>
+<li><span class="stability_undefined"><a href="#yolo_isavailable">yolo.isAvailable([backend])</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_load">yolo.load(options)</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_detect">detector.detect(image[, options])</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_result">检测结果</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_detector_close">detector.close()</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_example">示例</a></span></li>
+<li><span class="stability_undefined"><a href="#yolo_notes">注意事项</a></span></li>
+</ul>
+</li>
+<li><span class="stability_undefined"><a href="#rootautomator_new">RootAutomator - Root 输入模拟</a></span><ul>
+<li><span class="stability_undefined"><a href="#rootautomator_new">new RootAutomator([inputDevice][, nonBlockingForReady])</a></span></li>
+<li><span class="stability_undefined"><a href="#rootautomator_methods">方法</a></span></li>
+<li><span class="stability_undefined"><a href="#rootautomator_multitouch">多指手势</a></span></li>
+<li><span class="stability_undefined"><a href="#rootautomator_notes">限制与替代方案</a></span></li>
+</ul>
+</li>
+
 
       </div>
 
@@ -7125,6 +7153,305 @@ ui.layout(
 <h1>颜色<span><a class="mark" href="#ui" id="ui">#</a></span></h1>
 <p><strong>(完善中...)</strong>
 <!-- [end-include:ui.md] --></p>
+
+<!-- [start-include:web.md] -->
+
+        <h1>Web<span><a class="mark" href="#web" id="web">#</a></span></h1>
+<p>网页注入（web）让脚本加载一个网页，并和页面里的 JavaScript 双向通信：脚本可以往页面里注入代码、读取 DOM；页面也可以反过来调用脚本里的函数。常见用途是<strong>用 HTML + Vue / Vant 之类的前端框架写复杂界面</strong>（比原生控件更好排版），然后用脚本提供数据与能力。</p>
+<div class="signature"><ul>
+<li><code>newInjectableWebView([activity])</code> <span class="type">&lt;WebView&gt;</span> 创建一个自带注入能力的 WebView</li>
+<li><code>newInjectableWebClient()</code> <span class="type">&lt;WebViewClient&gt;</span> 创建一个可注入的 WebViewClient，用于已有的 WebView（例如布局里的<code>&lt;webview&gt;</code>）</li>
+</ul>
+</div><p>两个引擎都支持。和 Auto.js Pro 的差别是：Pro 用<code>$ui.web.jsBridge</code>配合<code>autojs://sdk/v1.js</code>注入页面 SDK；本引擎页面里提供的是<code>rhino</code>对象（用法见下文），页面代码不用改协议、直接<code>rhino.call()</code> / <code>rhino.eval()</code>即可。</p>
+<div class="warning">
+<p>页面里的<code>rhino</code>对象<strong>必须在<code>loadUrl()</code>/<code>loadData()</code>之前注册</strong>：Android 的 WebView 只在「文档开始」时把<code>addJavascriptInterface</code>注册的对象注入页面，注册晚了页面里永远是<code>undefined</code>。引擎已经替你把时机处理好了（设置 WebViewClient 时立即注册），只有自己用别的方式创建 WebView 时才需要手动<code>attach()</code>。</p>
+</div>
+<h2>newInjectableWebView([activity])<span><a class="mark" href="#web_newinjectablewebview" id="web_newinjectablewebview">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>activity</code> <span class="type">&lt;Activity&gt;</span> 可选，WebView 所属的 Activity；不传则用当前 Activity</li>
+<li>返回 <span class="type">&lt;WebView&gt;</span> 一个<code>InjectableWebView</code>，本质就是<code>android.webkit.WebView</code></li>
+</ul>
+</div><p>这是一个独立的控件：<strong>必须把它加进界面（或悬浮窗）</strong>才会显示并执行页面脚本：</p>
+<pre><code>var view = newInjectableWebView();
+ui.layout(
+    &lt;vertical&gt;
+        &lt;frame id=&quot;box&quot; w=&quot;*&quot; h=&quot;*&quot; /&gt;
+    &lt;/vertical&gt;
+);
+ui.box.addView(view);
+view.loadUrl(&quot;file:///sdcard/网页/index.html&quot;);
+</code></pre><p>页面里的 JS 可以直接调用脚本里的全局函数：</p>
+<pre><code>&lt;button onclick=&quot;rhino.call('onClicked', document.title)&quot;&gt;点我&lt;/button&gt;
+&lt;script&gt;rhino.eval('doSomething(1, 2)');&lt;/script&gt;
+</code></pre><h2>newInjectableWebClient()<span><a class="mark" href="#web_newinjectablewebclient" id="web_newinjectablewebclient">#</a></span></h2>
+<div class="signature"><ul>
+<li>返回 <span class="type">&lt;WebViewClient&gt;</span> 可注入的 WebViewClient</li>
+</ul>
+</div><p>用于界面里已经有的 WebView（布局<code>&lt;webview&gt;</code>标签或<code>findViewById</code>拿到的）：</p>
+<pre><code>&quot;ui&quot;;
+ui.layout(
+    &lt;vertical&gt;
+        &lt;webview id=&quot;web&quot; w=&quot;*&quot; h=&quot;*&quot; /&gt;
+    &lt;/vertical&gt;
+);
+var client = newInjectableWebClient();
+ui.web.setWebViewClient(client);   // 这一步会同时把页面桥（window.rhino）注册好
+client.inject('document.title = &quot;来自脚本&quot;');   // 排队到页面加载完成后执行
+ui.web.loadUrl('file:///sdcard/网页/index.html');
+</code></pre><div class="signature"><ul>
+<li><code>client.inject(script[, callback])</code> / <code>view.inject(script[, callback])</code> <span class="type">&lt;void&gt;</span> 在页面里执行一段 JS；页面还没加载完时会先排队；<code>callback</code>收到的参数是页面里这段代码的求值结果（JSON 字符串）</li>
+<li><code>view.loadUrl(url)</code> <span class="type">&lt;void&gt;</span> 加载网址，支持<code>file://</code>、<code>http(s)://</code>与<code>data:</code></li>
+<li><code>view.loadData(data, mimeType, encoding)</code> <span class="type">&lt;void&gt;</span> 直接加载一段 HTML</li>
+<li><code>view.reload()</code> / <code>view.stopLoading()</code> / <code>view.getUrl()</code> <span class="type">&lt;void / string&gt;</span> 刷新、停止加载、取当前地址</li>
+</ul>
+</div><h2>client.attach(webView)<span><a class="mark" href="#web_client_attach" id="web_client_attach">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>webView</code> <span class="type">&lt;WebView&gt;</span> 目标 WebView</li>
+<li>返回 <span class="type">&lt;void&gt;</span></li>
+</ul>
+</div><p>把页面桥（页面里的<code>rhino</code>）和 WebView 设置（开启 JS、允许<code>file://</code>页面访问本地文件）<strong>提前</strong>应用到目标 WebView。<strong>必须在<code>loadUrl()</code>/<code>loadData()</code>之前调用</strong>。</p>
+<p>正常用法下不需要手动调用：<code>webView.setWebViewClient(webClient)</code>时引擎会自动完成（Auto.js 的经典写法就是先设置 client 再 loadUrl）。只有把 WebView 交给别的 client、或自己封装加载流程时才需要显式<code>attach()</code>。</p>
+<h2>页面里的 rhino 对象<span><a class="mark" href="#web_rhino" id="web_rhino">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>rhino.call(name, arg1, arg2, ...)</code> <span class="type">&lt;void&gt;</span> 调用脚本里的全局函数<code>name</code>，参数按字符串传入</li>
+<li><code>rhino.eval(code)</code> <span class="type">&lt;string&gt;</span> 在脚本引擎里执行一段脚本代码，返回结果的字符串形式</li>
+</ul>
+</div><p>示例：页面点按钮时，把数据交回脚本处理。</p>
+<pre><code>&lt;button onclick=&quot;rhino.call('saveData', JSON.stringify({ name: '张三', age: 18 }))&quot;&gt;保存&lt;/button&gt;
+</code></pre><pre><code>global.saveData = function (json) {
+    var data = JSON.parse(json);            // 参数按字符串传，JSON 自己解析
+    files.write('/sdcard/数据.json', JSON.stringify(data));
+    toastLog('已保存 ' + data.name);
+};
+</code></pre><div class="note">
+<p><code>rhino.call</code>的参数只有字符串可靠（Android 的 JS 桥限制：<code>Object</code>参数收到<code>null</code>，可变参数直接丢失）。要传结构化数据请先<code>JSON.stringify()</code>。数字、布尔同样会被转成字符串。</p>
+</div><h2>注入时机（重要）<span><a class="mark" href="#web_timing" id="web_timing">#</a></span></h2>
+<p>页面里的<code>rhino</code>只有在<strong>页面开始加载之前</strong>注册才可见。三种写法引擎都会处理好：</p>
+<ol>
+<li><code>ui.web.setWebViewClient(newInjectableWebClient())</code> —— 引擎在<code>setWebViewClient</code>时就完成注册（推荐，兼容 Auto.js 经典写法）；</li>
+<li><code>newInjectableWebView()</code> —— 控件创建时注册，之后随便 loadUrl；</li>
+<li>手动 <code>client.attach(webView)</code> —— 在<code>loadUrl()</code>之前调用。</li>
+</ol>
+<p>另外要注意：<code>inject(script)</code>注入的代码在<strong>页面加载完成后</strong>才执行，所以<strong>页面自己的脚本跑起来时脚本注入的代码可能还没到</strong>。页面里要用脚本注入的东西（例如自定义的<code>$autojs</code>对象），先进轮询等待：</p>
+<pre><code>whenBridgeReady(function () {
+    // 这里再用注入进来的对象
+});
+function whenBridgeReady(fn) {
+    if (window.$autojs) { fn(); return; }
+    setTimeout(function () { whenBridgeReady(fn); }, 30);
+}
+</code></pre><h2>完整示例<span><a class="mark" href="#web_example" id="web_example">#</a></span></h2>
+<pre><code>&quot;ui&quot;;
+ui.layout(
+    &lt;vertical&gt;
+        &lt;webview id=&quot;web&quot; w=&quot;*&quot; h=&quot;*&quot; /&gt;
+    &lt;/vertical&gt;
+);
+
+var client = newInjectableWebClient();
+ui.web.setWebViewClient(client);
+ui.web.loadData(
+    '&lt;html&gt;&lt;body&gt;&lt;h1 id=&quot;t&quot;&gt;hello&lt;/h1&gt;' +
+    '&lt;button onclick=&quot;rhino.call('onClicked', document.getElementById('t').innerText)&quot;&gt;读标题&lt;/button&gt;' +
+    '&lt;/body&gt;&lt;/html&gt;', 'text/html', 'utf-8');
+
+// 页面 → 脚本
+global.onClicked = function (text) {
+    toastLog('页面里的标题是：' + text);
+};
+
+// 脚本 → 页面：读 DOM，结果通过 callback 回到脚本
+sleep(1500);
+client.inject('document.getElementById(&quot;t&quot;).innerText', function (value) {
+    console.log('页面标题 = ' + value);
+});
+</code></pre><p>复杂前端界面（Vue2 + Vant 的单文件组件、依赖全部随示例携带、离线可跑）可参考示例<code>复杂界面/Vue2+Vant(SFC)</code>。</p>
+<h2>引擎差异与已知限制<span><a class="mark" href="#web_notes" id="web_notes">#</a></span></h2>
+<ul>
+<li><strong>页面 → 脚本的时机</strong>：Rhino 引擎里<code>rhino.eval/rhino.call</code>是在脚本线程上<strong>同步</strong>执行的，脚本正好在<code>sleep()</code>或长循环里时，页面的调用要等脚本空下来；QuickJS 引擎则是入队异步执行（不会互相卡住）。</li>
+<li><strong>injectAndWait</strong>：QuickJS 引擎不支持（需要跨线程同步求值），会直接报错，请改用<code>inject(script, callback)</code>。</li>
+<li><strong>页面的 console.log 不会出现在脚本控制台</strong>，需要回传时用<code>rhino.eval('console.log 的内容交回脚本')</code>或让页面调用<code>rhino.call()</code>。</li>
+<li><strong>iOS / 桌面端</strong>没有该模块。</li>
+</ul>
+<!-- [end-include:web.md] -->
+<!-- [start-include:yolo.md] -->
+
+        <h1>Yolo<span><a class="mark" href="#yolo_yolo" id="yolo_yolo">#</a></span></h1>
+<div class="api_stability api_stability_1"><a href="documentation.html#documentation_stability_index">Stability: 1</a> - Experimental（需要内置 OpenCV 的完整版 APK）</div><p>Yolo 模块用<strong>内置的 OpenCV 5.0 DNN</strong>跑 ONNX 目标检测模型，用来替代「找色/找图」完成更灵活的任务：识别按钮、图标、游戏元素、裁剪区域等。模型只要导出成 ONNX（YOLO 风格输出）即可，不需要额外装 ncnn 之类的库。</p>
+<p>模型可以放在<strong>设备的任意路径</strong>，也可以直接引用 APK 内的示例资源：路径写成<code>asset://sample/…</code>，引擎会把模型复制到缓存目录后再加载。</p>
+<div class="signature"><ul>
+<li><code>yolo.isAvailable([backend])</code> <span class="type">&lt;boolean&gt;</span> 该后端是否可用（当前只有<code>opencv</code>）</li>
+<li><code>yolo.getUnavailableReason([backend])</code> <span class="type">&lt;string&gt;</span> 不可用原因，可用时返回<code>''</code></li>
+<li><code>yolo.getVersion([backend])</code> <span class="type">&lt;string&gt;</span> 运行时版本，不可用时返回<code>'unavailable'</code></li>
+</ul>
+</div><h2>yolo.isAvailable([backend])<span><a class="mark" href="#yolo_isavailable" id="yolo_isavailable">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>backend</code> <span class="type">&lt;string&gt;</span> 后端名，默认<code>'opencv'</code>；<code>dnn</code>、<code>opencv5</code>、<code>opencv-dnn</code>、<code>cpu</code>都是<code>opencv</code>的别名</li>
+<li>返回 <span class="type">&lt;boolean&gt;</span></li>
+</ul>
+</div><pre><code>var backend = 'dnn';
+if (!yolo.isAvailable(backend)) {
+    throw new Error('YOLO 不可用：' + yolo.getUnavailableReason(backend));
+}
+log('YOLO 运行时版本：' + yolo.getVersion(backend));
+</code></pre><h2>yolo.load(options)<span><a class="mark" href="#yolo_load" id="yolo_load">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>options.model</code> <span class="type">&lt;string&gt;</span> ONNX 模型路径（也支持<code>onnx</code>作为别名）；<code>asset://</code>开头表示 APK 内资源</li>
+<li><code>options.backend</code> <span class="type">&lt;string&gt;</span> 可选，默认<code>'opencv'</code></li>
+<li><code>options.inputSize</code> <span class="type">&lt;number&gt;</span> 可选，模型输入边长，默认<code>320</code>；长方形输入可用<code>inputWidth</code>/<code>inputHeight</code>（QuickJS 引擎支持）</li>
+<li><code>options.threads</code> <span class="type">&lt;number&gt;</span> 可选，推理线程数，默认<code>min(4, CPU 核数)</code></li>
+<li><code>options.labels</code> <span class="type">&lt;Array&lt;string&gt;&gt; | &lt;string&gt;</span> 可选，类别名数组；QuickJS 引擎还支持传<strong>标签文件路径</strong>（每行一个类别）</li>
+<li>返回 <span class="type">&lt;Detector&gt;</span> 检测器对象</li>
+</ul>
+</div><p>加载会同步读模型（几百 KB 的模型通常在几十毫秒级），建议在脚本开始时加载一次并复用。检测器不再使用时请<code>close()</code>释放。</p>
+<pre><code>var detector = yolo.load({
+    backend: 'dnn',
+    model: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_320.onnx',
+    labels: 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt',
+    inputSize: 320,
+    threads: 4
+});
+</code></pre><h2>detector.detect(image[, options])<span><a class="mark" href="#yolo_detect" id="yolo_detect">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>image</code> <span class="type">&lt;Image | Frame&gt;</span> 待检测的图像：Rhino 引擎传<code>images</code>模块的图像（如<code>captureScreen()</code>、<code>images.read()</code>）；QuickJS 引擎传<code>captureScreen(options)</code>返回的帧</li>
+<li><code>options.confidence</code> <span class="type">&lt;number&gt;</span> 可选，置信度阈值，默认<code>0.25</code></li>
+<li><code>options.nms</code> <span class="type">&lt;number&gt;</span> 可选，NMS 阈值，默认<code>0.45</code></li>
+<li><code>options.region</code> <span class="type">&lt;Array&lt;number&gt;&gt;</span> 可选（QuickJS 引擎），只检测<code>[x, y, width, height]</code>区域</li>
+<li>返回 <span class="type">&lt;Array&lt;Object&gt;&gt;</span> 检测结果数组（见下节），并额外带<code>preprocessMs</code>/<code>inferenceMs</code>/<code>totalMs</code>三个耗时字段（毫秒）</li>
+</ul>
+</div><pre><code>if (!requestScreenCapture('portrait')) {
+    throw new Error('没有截图权限');
+}
+var frame = captureScreen();
+try {
+    var result = detector.detect(frame, { confidence: 0.25, nms: 0.45 });
+    result.forEach(function (item) {
+        console.log(item.label + ' ' + item.score.toFixed(2) +
+            ' @ ' + item.bounds.centerX + ', ' + item.bounds.centerY);
+    });
+    console.log('推理耗时 ' + result.inferenceMs.toFixed(1) + ' ms');
+} finally {
+    frame.recycle();
+}
+</code></pre><h2>检测结果<span><a class="mark" href="#yolo_result" id="yolo_result">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>item.classId</code> <span class="type">&lt;number&gt;</span> 类别序号</li>
+<li><code>item.label</code> <span class="type">&lt;string&gt;</span> 类别名（没提供<code>labels</code>时是序号的字符串）</li>
+<li><code>item.score</code> <span class="type">&lt;number&gt;</span> 置信度</li>
+<li><code>item.bounds.left</code> / <code>top</code> / <code>right</code> / <code>bottom</code> <span class="type">&lt;number&gt;</span> 检测框的屏幕坐标</li>
+<li><code>item.bounds.width</code> / <code>height</code> / <code>centerX</code> / <code>centerY</code> <span class="type">&lt;number&gt;</span> 宽高与中心点，点按目标时直接用<code>centerX</code>/<code>centerY</code>即可</li>
+</ul>
+</div><p>QuickJS 引擎在<code>detect()</code>里已经把坐标系换算回<strong>屏幕坐标</strong>（截图缩放时不用自己乘换算系数）；Rhino 引擎传的是<code>Image</code>，坐标就是图像坐标。</p>
+<pre><code>var item = result[0];
+if (item) {
+    click(item.bounds.centerX, item.bounds.centerY);   // 直接点按目标
+}
+</code></pre><h2>detector.close()<span><a class="mark" href="#yolo_detector_close" id="yolo_detector_close">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>detector.close()</code> <span class="type">&lt;boolean&gt;</span> 释放检测器（释放后不能再<code>detect()</code>）</li>
+<li><code>detector.isClosed()</code> <span class="type">&lt;boolean&gt;</span> 是否已释放</li>
+</ul>
+</div><p>脚本退出时引擎也会统一回收本脚本创建过的检测器，但长时间运行的循环里建议自己管理生命周期。</p>
+<h2>示例<span><a class="mark" href="#yolo_example" id="yolo_example">#</a></span></h2>
+<pre><code>// Rhino：找屏幕上的目标并点它
+var detector = yolo.load({
+    model: '/sdcard/yolo/det.onnx',
+    labels: ['按钮', '开关'],
+    inputSize: 320
+});
+requestScreenCapture();
+while (true) {
+    var img = captureScreen();
+    var result = detector.detect(img, { confidence: 0.4 });
+    img.recycle();
+    for (var i = 0; i &lt; result.length; i++) {
+        if (result[i].label === '按钮') {
+            click(result[i].bounds.centerX, result[i].bounds.centerY);
+            break;
+        }
+    }
+    sleep(500);
+}
+</code></pre><p>可运行的完整示例见<code>QuickJS 新引擎/YOLO目标检测</code>（环境测试、单帧直连、实时直连、区域检测、基准测试、持续识别）。</p>
+<h2>注意事项<span><a class="mark" href="#yolo_notes" id="yolo_notes">#</a></span></h2>
+<ul>
+<li>需要<strong>完整版 APK</strong>（内置 OpenCV 5.0）；lite 版本没有该模块，<code>yolo.isAvailable()</code>返回<code>false</code>，用<code>yolo.getUnavailableReason()</code>看原因。</li>
+<li>模型输出格式：YOLO 风格（<code>[x1, y1, x2, y2, score, class]</code>角点坐标、像素值，附带可选的前两个数值作为耗时）。导出模型时别用中心点格式。</li>
+<li>模型里若已包含 TopK 但没有 NMS，本模块会在<code>detect()</code>里按<code>nms</code>阈值过滤。</li>
+<li>检测框坐标是<strong>像素</strong>，点按前可用<code>setScreenMetrics()</code>对齐不同分辨率。</li>
+<li>YOLO 只适合“学习过的目标”；纯颜色/图形匹配仍然用<code>images.findColor()</code>、<code>images.matchTemplate()</code>更快更省电。</li>
+</ul>
+<!-- [end-include:yolo.md] -->
+<!-- [start-include:rootautomator.md] -->
+
+        <h1>RootAutomator<span><a class="mark" href="#rootautomator_rootautomator" id="rootautomator_rootautomator">#</a></span></h1>
+<div class="api_stability api_stability_1"><a href="documentation.html#documentation_stability_index">Stability: 1</a> - Experimental（需要设备已 root）</div><p>RootAutomator 用<strong>root 权限</strong>直接往<code>/dev/input/event*</code>写输入事件，不走无障碍服务。它的特点是：</p>
+<ul>
+<li>不需要开启无障碍、不需要前台窗口，能在锁屏/游戏/输入法拦截等场景下点按；</li>
+<li>支持<strong>多指手势</strong>（双指缩放、三指等），这是无障碍<code>gestures</code>之外更底层的做法；</li>
+<li>代价是需要 root，并且要自己管理手指的按下/抬起（忘记<code>exit()</code>会残留“手指”）。</li>
+</ul>
+<p>两个引擎的用法一致（Rhino 里是全局<code>RootAutomator</code>，QuickJS 里也是）；Pro 的<code>RootAutomator2({ root: true } / { adb: true })</code>（数组式多指、支持 Shizuku/ADB 授权）<strong>本引擎尚未实现</strong>，用本页的接口即可完成同样的操作。</p>
+<h2>new RootAutomator([inputDevice][, nonBlockingForReady])<span><a class="mark" href="#rootautomator_new" id="rootautomator_new">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>inputDevice</code> <span class="type">&lt;string&gt;</span> 可选，触摸设备名（如<code>event3</code>）或设备路径（<code>/dev/input/event3</code>）；不传则自动选择触摸屏设备</li>
+<li><code>nonBlockingForReady</code> <span class="type">&lt;boolean&gt;</span> 可选，<code>true</code>表示构造时不等待 root shell 就绪（默认<code>false</code>，会等 root 授权完成）</li>
+<li>返回 <span class="type">&lt;RootAutomator&gt;</span></li>
+</ul>
+</div><p>构造时会启动一个 root shell。设备未 root 时构造会失败（<code>nonBlockingForReady</code>为<code>false</code>时会一直等 root 授权），建议先用下面的方式探测：</p>
+<pre><code>var hasRoot = shell('id', true).result.indexOf('uid=0') &gt;= 0;
+if (!hasRoot) {
+    toastLog('需要 root 权限');
+    exit();
+}
+var ra = new RootAutomator();
+</code></pre><h2>方法<span><a class="mark" href="#rootautomator_methods" id="rootautomator_methods">#</a></span></h2>
+<div class="signature"><ul>
+<li><code>ra.tap(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 点按</li>
+<li><code>ra.press(x, y, duration[, id])</code> <span class="type">&lt;void&gt;</span> 按住<code>duration</code>毫秒</li>
+<li><code>ra.longPress(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 长按</li>
+<li><code>ra.swipe(x1, y1, x2, y2[, duration[, id]])</code> <span class="type">&lt;void&gt;</span> 滑动，默认时长 300ms</li>
+<li><code>ra.touch(x, y)</code> / <code>ra.touchX(x)</code> / <code>ra.touchY(y)</code> <span class="type">&lt;void&gt;</span> 直接设置触摸坐标（等价于写<code>ABS_MT_POSITION_X/Y</code>）</li>
+<li><code>ra.touchDown(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 按下某个手指</li>
+<li><code>ra.touchMove(x, y[, id])</code> <span class="type">&lt;void&gt;</span> 移动某个手指</li>
+<li><code>ra.touchUp([id])</code> <span class="type">&lt;void&gt;</span> 抬起某个手指（不传 id 时抬起默认手指）</li>
+<li><code>ra.sendSync()</code> / <code>ra.sendMtSync()</code> <span class="type">&lt;void&gt;</span> 提交当前事件（多指手势里每改完一组坐标都要同步一次）</li>
+<li><code>ra.sendEvent(type, code, value)</code> <span class="type">&lt;void&gt;</span> 直接写一个 input 事件（<code>type</code>/<code>code</code>是<code>EV_*</code>/<code>ABS_*</code>等常量值）</li>
+<li><code>ra.getDefaultId()</code> / <code>ra.setDefaultId(id)</code> <span class="type">&lt;number / void&gt;</span> 默认手指 id</li>
+<li><code>ra.setScreenMetrics(width, height)</code> <span class="type">&lt;void&gt;</span> 设置设计分辨率，之后坐标自动按屏幕缩放</li>
+<li><code>ra.exit()</code> <span class="type">&lt;void&gt;</span> 关闭 root shell 并释放手指，<strong>脚本结束前务必调用</strong></li>
+</ul>
+</div><h2>多指手势<span><a class="mark" href="#rootautomator_multitouch" id="rootautomator_multitouch">#</a></span></h2>
+<p>多指手势的过程是：<strong>逐指按下 → 逐指移动 → 逐指抬起</strong>，同一时刻的坐标用相同的<code>sendSync()</code>提交。下面是从两指捏合（缩放）的示例：</p>
+<pre><code>var ra = new RootAutomator();
+sleep(1000);
+
+var p0 = { x: 150, y: 300 }, p1 = { x: 850, y: 1700 };
+// 手指 0 按住左上，手指 1 按住右下
+ra.touchDown(p0.x, p0.y, 0);
+ra.touchDown(p1.x, p1.y, 1);
+
+// 两个手指相向移动
+for (var i = 0; i &lt; 350; i++) {
+    ra.touchMove(p0.x + i, p0.y + i * 2, 0);
+    ra.touchMove(p1.x - i, p1.y - i * 2, 1);
+    ra.sendMtSync();
+    sleep(1);
+}
+ra.touchUp(0);
+ra.touchUp(1);
+ra.exit();
+</code></pre><div class="warning">
+<p>忘记<code>ra.exit()</code>（或用<code>exit()</code>提前结束脚本）时，屏幕上可能残留“按着不放”的手指。脚本里用<code>try…finally</code>包住手势代码，确保退出时释放。</p>
+</div><h2>限制与替代方案<span><a class="mark" href="#rootautomator_notes" id="rootautomator_notes">#</a></span></h2>
+<ul>
+<li>需要<strong>root</strong>；没有 root 时请用无障碍方式：<code>click()</code>、<code>gestures()</code>、<code>automator</code>（<code>swipe</code>/<code>gesture</code>等）。</li>
+<li>坐标是<strong>设备像素</strong>；换设备或改分辨率后请重新<code>setScreenMetrics()</code>。</li>
+<li>输入事件是“真实的”，系统与游戏都会当成真人操作，无法被无障碍检测到；但同样也会影响其它应用，请谨慎在游戏里使用。</li>
+<li>多指手势里的<code>id</code>是逻辑手指编号（0、1、2…），由本模块管理并映射到内核的 slot。</li>
+<li>Pro 的<code>RootAutomator2</code>（<code>{ root: true }</code>/<code>{ adb: true }</code>、数组式多指、Shizuku 授权）未实现；本页接口同样支持多指，只是写法不同。</li>
+</ul>
+<!-- [end-include:rootautomator.md] -->
 
       </div>
     </div>
