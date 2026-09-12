@@ -569,11 +569,17 @@ public class ApkBuilder {
         if (children == null) {
             return;
         }
+        // 目标目录必须自己建：以前只会被「上层先写了文件」顺带创建，工程里出现
+        // 二级子目录（如 assets/models/）时就会 FileNotFoundException: ENOENT。
+        File dstDir = new File(dst);
+        if (!dstDir.isDirectory() && !dstDir.mkdirs()) {
+            throw new IOException("无法创建目录：" + dst);
+        }
         for (File child : children) {
             if (child.isDirectory()) {
                 copyDir(child.getPath(), dst + "/" + child.getName());
             } else {
-                FileOutputStream out = new FileOutputStream(new File(dst, child.getName()));
+                FileOutputStream out = new FileOutputStream(new File(dstDir, child.getName()));
                 FileInputStream in = new FileInputStream(child);
                 StreamUtils.write(in, out);
             }
