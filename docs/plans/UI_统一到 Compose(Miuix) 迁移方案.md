@@ -39,17 +39,31 @@
 
 验收：`:app:assembleMiuixCompatDebug` + `:app:testMiuixCompatDebugUnitTest` 通过；Mi8 真机冒烟（Miuix 导航栏/文件列表/FAB 正常、更新弹窗为 Miuix 样式、logcat 无 FATAL）。
 
-## 3. 第 1.5 步：删除死代码（纯机械，建议单独一次提交）
+## 3. 第 1.5 步：删除死代码（进行中）
 
-改造后下面这些代码已经不可达，删除不影响行为：
+### 已完成（2026-09-12，提交见 git log “UI 统一（二）”）
 
-- 8 个"转发壳"Activity 里的 legacy body：`SettingsActivity`、`AboutActivity`、`ServiceStatusActivity`、`LogActivity`、`DocumentationActivity`、`BuildActivity`、`LoginActivity`、`RegisterActivity`
-  （先搬走仍被外部调用的静态工具，例如 `SettingsActivity.selectThemeColor`；`BuildActivity.EXTRA_SOURCE` 之类的常量保留）
-- `MainActivity` 的 legacy 分支残留、`DrawerFragment` 的 `fragment_drawer` 回退分支与其私有 helper
-- 随之无引用的 `res/layout/*.xml`
-- 收尾目标：全仓 `MIUIX_PILOT` 只剩注释/文档；`BuildConfig.MIUIX_PILOT` 字段标注 deprecated 并在下一轮删除
+7 个"转发壳"Activity 的 legacy body 已删完，改成只做转发的空壳（保留类名/常量/静态方法，外部调用点不用改）：
 
-验收：同上；额外用 `aapt dump badging` 与真机点检确认没有页面变空白。
+| 转发壳 | 目标页 | 保留的对外契约 |
+|---|---|---|
+| `ui.doc.DocumentationActivity` | `MiuixDocumentationActivity` | `EXTRA_URL`；`SINGLE_TOP` 转发（已在文档页时走目标页 `onNewIntent` 换页） |
+| `ui.settings.AboutActivity` | `MiuixAboutActivity` | — |
+| `ui.log.LogActivity` | `MiuixLogActivity` | 类名（脚本 `class.console`、编辑器菜单按类启动） |
+| `ui.service.ServiceStatusActivity` | `MiuixServiceActivity` | 类名 |
+| `ui.user.LoginActivity` / `RegisterActivity` | `MiuixLoginActivity` / `MiuixRegisterActivity` | 类名 |
+| `ui.project.BuildActivity` | `MiuixBuildActivity` | `EXTRA_SOURCE`（键名 = 类名 + `.extra_source_file`，不能改） |
+
+真机验证（Mi8）：逐个 `am start` 这 7 个入口，`topResumedActivity` 全部落到对应的 `Miuix*` 页面。
+
+### 待做
+
+- `ui.settings.SettingsActivity`：它的 `selectThemeColor(Context)` 仍被抽屉调用，删 body 前先把该静态方法搬到合适的位置（如 `AijsMiuixTheme` 配套工具类）；
+- `MainActivity` 的 legacy 分支残留、`DrawerFragment` 的 `fragment_drawer` 回退分支与其私有 helper；
+- 随之无引用的 `res/layout/*.xml`（`activity_documentation`、`activity_about`、`activity_log`、`activity_service_status`、`activity_login`、`activity_register`、`activity_build` 等）；
+- 收尾目标：全仓 `MIUIX_PILOT` 只剩注释/文档；`BuildConfig.MIUIX_PILOT` 字段标注 deprecated 并在下一轮删除。
+
+验收：`assembleMiuixCompatDebug` + 单测 + 真机点检（入口转发 + 页面渲染）确认没有页面变空白。
 
 ## 4. 第 2 步：迁移仍以 View 形态存在的页面
 
