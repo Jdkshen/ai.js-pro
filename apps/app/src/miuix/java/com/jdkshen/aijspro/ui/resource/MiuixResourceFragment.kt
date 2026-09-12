@@ -67,6 +67,7 @@ import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
+import com.jdkshen.aijspro.ui.main.MainActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
 import com.jdkshen.aijspro.ui.project.BuildActivity
@@ -489,6 +490,48 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         }.start()
     }
 
+    /**
+     * 打开工程文件夹：内置资源先整份落到「下载资源」（已有文件不覆盖），
+     * 再切到文件页并**进入**该目录 —— 工程里的模块、资源、模型都在那儿。
+     */
+    private fun openProjectFolder(entry: ResourceEntry) {
+        val context = requireContext()
+        val assetPath = entry.assetPath ?: return
+        val target = resourceTargetFor(assetPath)
+        if (target.isDirectory) {
+            openFolderInFilePage(target)
+            return
+        }
+        busy = true
+        Thread {
+            var failure: Exception? = null
+            try {
+                copyAssetTree(assetPath, target)
+            } catch (error: Exception) {
+                failure = error
+            }
+            requireActivity().runOnUiThread {
+                busy = false
+                if (failure == null) {
+                    openFolderInFilePage(target)
+                } else {
+                    Toast.makeText(context,
+                        "打开文件夹失败：${failure.localizedMessage ?: "未知错误"}",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun openFolderInFilePage(folder: File) {
+        val host = activity as? MainActivity
+        if (host == null) {
+            Toast.makeText(requireContext(), "找不到文件页：${folder.absolutePath}", Toast.LENGTH_LONG).show()
+            return
+        }
+        host.openScriptFolderFromMiuix(folder.absolutePath)
+    }
+
     private fun runBuiltin(entry: ResourceEntry) {
         val assetPath = entry.assetPath ?: return
         // 工程条目的入口是工程目录里的 main.js。
@@ -775,6 +818,7 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         when (entry.kind) {
                             Source.BUILTIN -> {
                                 if (entry.project) {
+                                    ActionChoice("打开文件夹") { dismiss(); openProjectFolder(entry) }
                                     ActionChoice("预览 main.js") { dismiss(); viewBuiltin(entry, "main.js") }
                                     ActionChoice("运行") { dismiss(); runBuiltin(entry) }
                                     ActionChoice(if (entry.imported) "打开已导入工程" else "导入到脚本目录") {

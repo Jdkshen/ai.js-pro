@@ -19,6 +19,7 @@ import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
 import com.jdkshen.aijspro.model.explorer.ExplorerDirPage;
+import com.jdkshen.aijspro.model.explorer.ExplorerPage;
 import com.jdkshen.aijspro.model.explorer.Explorers;
 import com.jdkshen.aijspro.model.script.Scripts;
 import com.jdkshen.aijspro.tool.SimpleObserver;
@@ -54,6 +55,10 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     ExplorerView mExplorerView;
 
     private com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost mMiuixHost;
+    private static final String STATE_MIUIX_FILE_LIST = "miuix_file_list_state";
+    private Bundle mMiuixSavedState;
+    private static final String STATE_LEGACY_FILE_LIST = "legacy_file_list_state";
+    private Bundle mLegacySavedState;
 
     private boolean useMiuixFileList() {
         return getContext() != null && PreferenceManager.getDefaultSharedPreferences(getContext())
@@ -65,6 +70,10 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            mMiuixSavedState = savedInstanceState.getBundle(STATE_MIUIX_FILE_LIST);
+            mLegacySavedState = savedInstanceState.getBundle(STATE_LEGACY_FILE_LIST);
+        }
         EventBus.getDefault().register(this);
     }
 
@@ -72,7 +81,7 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         if (useMiuixFileList()) {
-            mMiuixHost = new com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost(this);
+            mMiuixHost = new com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost(this, mMiuixSavedState);
             View view = mMiuixHost.createView();
             mMiuixHost.reload();
             return view;
@@ -80,6 +89,7 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         View view = inflater.inflate(R.layout.fragment_my_script_list, container, false);
         mExplorerView = view.findViewById(R.id.script_file_list);
         setUpViews();
+        mExplorerView.restoreBrowserState(mLegacySavedState);
         return view;
     }
 
@@ -159,7 +169,7 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
             mFloatingActionMenu.collapse();
             return true;
         }
-        if (mExplorerView.canGoBack()) {
+        if (mExplorerView != null && mExplorerView.canGoBack()) {
             mExplorerView.goBack();
             return true;
         }
@@ -186,6 +196,14 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         return mExplorerView != null && mExplorerView.revealFile(path);
     }
 
+    /** 资源页「打开文件夹」：进入该目录本身（不是只高亮它所在的行）。 */
+    public boolean openDirectoryFromSearch(String path) {
+        if (mMiuixHost != null) {
+            return mMiuixHost.openDirectory(path);
+        }
+        return mExplorerView != null && mExplorerView.openDirectory(path);
+    }
+
     @Subscribe
     public void onQuerySummit(QueryEvent event) {
         if (!isShown()) {
@@ -196,11 +214,11 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
             return;
         }
         if (event == QueryEvent.CLEAR) {
-            mExplorerView.setFilter(null);
+            if (mExplorerView != null) mExplorerView.setFilter(null);
             return;
         }
         String query = event.getQuery();
-        mExplorerView.setFilter((item -> item.getName().contains(query)));
+        if (mExplorerView != null) mExplorerView.setFilter((item -> item.getName().contains(query)));
     }
 
     @Override
@@ -218,6 +236,35 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
             mFloatingActionMenu.setOnFloatingActionButtonClickListener(null);
     }
 
+    @Override
+    public void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        Bundle state = mMiuixHost == null ? mMiuixSavedState : mMiuixHost.saveState();
+        if (state != null) outState.putBundle(STATE_MIUIX_FILE_LIST, state);
+        Bundle legacy = mExplorerView == null ? mLegacySavedState : mExplorerView.saveBrowserState();
+        if (legacy != null) outState.putBundle(STATE_LEGACY_FILE_LIST, legacy);
+    }
+
+    @Override
+    public void onDestroyView() {
+        if (mMiuixHost != null) {
+            mMiuixSavedState = mMiuixHost.saveState();
+            mMiuixHost.dispose();
+            mMiuixHost = null;
+        }
+        if (mExplorerView != null) {
+            mLegacySavedState = mExplorerView.saveBrowserState();
+            mExplorerView.setOnScrollStateChangedCallback(null);
+            mExplorerView.setOnItemClickListener(null);
+            mExplorerView = null;
+        }
+        if (mFloatingActionMenu != null) {
+            mFloatingActionMenu.setOnFloatingActionButtonClickListener(null);
+            mFloatingActionMenu = null;
+        }
+        super.onDestroyView();
+    }
+
 
     @Override
     public void onDestroy() {
@@ -227,24 +274,26 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     @Override
     public void onClick(FloatingActionButton button, int pos) {
-        if (mExplorerView == null)
+        ExplorerPage page = mMiuixHost != null ? mMiuixHost.getCurrentPage()
+                : mExplorerView != null ? mExplorerView.getCurrentPage() : null;
+        if (page == null || getContext() == null)
             return;
         switch (pos) {
             case 0:
-                new ScriptOperations(getContext(), mExplorerView, mExplorerView.getCurrentPage())
+                new ScriptOperations(getContext(), mExplorerView, page)
                         .newDirectory();
                 break;
             case 1:
-                new ScriptOperations(getContext(), mExplorerView, mExplorerView.getCurrentPage())
+                new ScriptOperations(getContext(), mExplorerView, page)
                         .newFile();
                 break;
             case 2:
-                new ScriptOperations(getContext(), mExplorerView, mExplorerView.getCurrentPage())
+                new ScriptOperations(getContext(), mExplorerView, page)
                         .importFile();
                 break;
             case 3:
                 Intent intent = new Intent(getContext(), ProjectConfigActivity.class);
-                intent.putExtra(ProjectConfigActivity.EXTRA_PARENT_DIRECTORY, mExplorerView.getCurrentPage().getPath());
+                intent.putExtra(ProjectConfigActivity.EXTRA_PARENT_DIRECTORY, page.getPath());
                 intent.putExtra(ProjectConfigActivity.EXTRA_NEW_PROJECT, true);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 getContext().startActivity(intent);

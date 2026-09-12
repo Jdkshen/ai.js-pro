@@ -236,15 +236,34 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             toolbar.setVisibility(View.GONE);
             // Match AijsMiuixTheme backgrounds (light #F7F7F7 / dark black)
             // so the status bar and tab strip blend with the Miuix navigation bar.
-            int surface = Pref.isNightModeEnabled()
+            // Mirror AijsMiuixTheme's own rule (follow-system wins, otherwise the
+            // in-app switch); reading only the in-app switch painted a light bar
+            // while the pages were dark whenever "follow system" was on.
+            boolean followSystem = Pref.isFollowSystemThemeEnabled();
+            boolean systemDark = (getResources().getConfiguration().uiMode
+                    & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                    == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+            boolean dark = followSystem ? systemDark : Pref.isNightModeEnabled();
+            int surface = dark
                     ? android.graphics.Color.BLACK
                     : android.graphics.Color.rgb(0xF7, 0xF7, 0xF7);
             int selected = android.graphics.Color.rgb(0, 150, 136);
-            int normal = Pref.isNightModeEnabled()
+            int normal = dark
                     ? android.graphics.Color.argb(170, 255, 255, 255)
                     : android.graphics.Color.argb(130, 0, 0, 0);
             mTabLayout.setBackgroundColor(surface);
             getWindow().setStatusBarColor(surface);
+            // The status bar icon appearance must follow the bar we just painted.
+            // It used to follow the system instead: with a dark system theme the
+            // icons stayed white on the light #F7F7F7 bar and were unreadable.
+            View decor = getWindow().getDecorView();
+            int uiFlags = decor.getSystemUiVisibility();
+            if (dark) {
+                uiFlags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                uiFlags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            decor.setSystemUiVisibility(uiFlags);
             mTabLayout.setTabIconTint(new android.content.res.ColorStateList(
                     new int[][] { new int[] { android.R.attr.state_selected }, new int[] {} },
                     new int[] { selected, normal }));
@@ -406,6 +425,25 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         }
         if (retry && mViewPager != null) {
             mViewPager.postDelayed(() -> revealScriptFileInCurrentFragment(path, false), 120);
+        }
+    }
+
+    /** 资源页「打开文件夹」：切到文件页并**进入**该目录。 */
+    public void openScriptFolderFromMiuix(String path) {
+        if (path == null || path.trim().isEmpty()) return;
+        hideKeyboardFromMiuixSearch();
+        showPage(0);
+        openDirectoryInCurrentFragment(path, true);
+    }
+
+    private void openDirectoryInCurrentFragment(String path, boolean retry) {
+        Fragment fragment = mPagerAdapter == null ? null : mPagerAdapter.getStoredFragment(0);
+        if (fragment instanceof MyScriptListFragment
+                && ((MyScriptListFragment) fragment).openDirectoryFromSearch(path)) {
+            return;
+        }
+        if (retry && mViewPager != null) {
+            mViewPager.postDelayed(() -> openDirectoryInCurrentFragment(path, false), 120);
         }
     }
 

@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.ui.explorer
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Environment
+import android.os.Bundle
 import android.preference.PreferenceManager
 import android.view.View
 import android.widget.Toast
@@ -22,10 +23,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -39,6 +43,10 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,9 +54,11 @@ import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.model.explorer.ExplorerDirPage
+import com.jdkshen.aijspro.model.explorer.ExplorerChangeEvent
 import com.jdkshen.aijspro.model.explorer.ExplorerFileItem
 import com.jdkshen.aijspro.model.explorer.ExplorerItem
 import com.jdkshen.aijspro.model.explorer.ExplorerPage
+import com.jdkshen.aijspro.model.explorer.ExplorerPageFactory
 import com.jdkshen.aijspro.model.explorer.ExplorerProjectPage
 import com.jdkshen.aijspro.model.explorer.ExplorerSamplePage
 import com.jdkshen.aijspro.model.explorer.Explorers
@@ -60,11 +70,14 @@ import com.jdkshen.aijspro.ui.project.BuildActivity
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerItemList
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerListRows
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerNavigationState
+import com.jdkshen.aijspro.ui.viewmodel.ExplorerRevealPlan
+import com.jdkshen.aijspro.ui.viewmodel.ExplorerScrollPosition
 import com.stardust.app.GlobalAppContext
 import com.stardust.pio.PFiles
 import com.stardust.util.IntentUtil
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
+import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.schedulers.Schedulers
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -72,6 +85,9 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import kotlinx.coroutines.delay
 
 /**
  * 文件列表（Compose 版），**显示与 [ExplorerView] 逐项对齐**。
@@ -87,7 +103,10 @@ import java.util.Locale
  * <p>排序/分组/折叠的语义不在这里实现，而在可单测的 [ExplorerListRows]（已与真实
  * [com.jdkshen.aijspro.model.explorer.ExplorerSorter] 做过对照测试）。
  */
-class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) {
+class MiuixScriptListHost @JvmOverloads constructor(
+    private val fragment: androidx.fragment.app.Fragment,
+    savedState: Bundle? = null
+) {
 
     private val navigation = ExplorerNavigationState<ExplorerPage>(rootPage())
     private var items by mutableStateOf<List<ExplorerItem>>(emptyList())
@@ -95,11 +114,85 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     private var error by mutableStateOf<String?>(null)
     private var searchQuery by mutableStateOf<String?>(null)
     private var loadDisposable: Disposable? = null
+    private val operations = CompositeDisposable()
+    private var disposed = false
+    private var loadGeneration = 0
+    private var currentPath by mutableStateOf(navigation.current.getPath())
+    private var loadedPath: String? = null
+    // Owned by the host, not remember() inside a loading branch. Each directory has its own viewport.
+    private val listStates = mutableMapOf<String, LazyListState>()
+    private val restoredPositions = mutableMapOf<String, ExplorerScrollPosition>()
+    private var pendingHighlightPath by mutableStateOf<String?>(null)
+    private var highlightedPath by mutableStateOf<String?>(null)
 
     /** 排序设置；与旧实现共用 preferences 里的同一份 SortConfig 键。 */
     private var sortSpec by mutableStateOf(loadSortSpec())
 
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+    init {
+        restoreState(savedState)
+        Explorers.workspace().registerChangeListener(this)
+    }
+
+    fun getCurrentPage(): ExplorerPage = navigation.current
+
+    fun saveState(): Bundle = Bundle().apply {
+        putStringArrayList("pages", ArrayList((navigation.historySnapshot() + navigation.current).map { it.getPath() }))
+        putString("query", searchQuery)
+        putString("highlight", pendingHighlightPath)
+        val positions = Bundle()
+        restoredPositions.forEach { (path, position) ->
+            positions.putBundle(path, positionBundle(position))
+        }
+        listStates.forEach { (path, state) ->
+            val anchor = if (path == loadedPath) rowPaths().getOrNull(state.firstVisibleItemIndex) else null
+            positions.putBundle(path, positionBundle(ExplorerScrollPosition(
+                state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset, anchor
+            )))
+        }
+        putBundle("positions", positions)
+    }
+
+    private fun positionBundle(position: ExplorerScrollPosition) = Bundle().apply {
+        putInt("index", position.index)
+        putInt("offset", position.offset)
+        putString("anchor", position.anchorPath)
+    }
+
+    private fun restoreState(state: Bundle?) {
+        state ?: return
+        val pages = state.getStringArrayList("pages")
+        if (!pages.isNullOrEmpty()) {
+            navigation.reset(pageForPath(pages.first(), null))
+            pages.drop(1).forEach { navigation.push(pageForPath(it, navigation.current)) }
+        }
+        currentPath = navigation.current.getPath()
+        searchQuery = state.getString("query")
+        pendingHighlightPath = state.getString("highlight")
+        state.getBundle("positions")?.let { positions ->
+            positions.keySet().forEach { path ->
+                positions.getBundle(path)?.let {
+                    restoredPositions[path] = ExplorerScrollPosition(
+                        it.getInt("index").coerceAtLeast(0), it.getInt("offset").coerceAtLeast(0), it.getString("anchor")
+                    )
+                }
+            }
+        }
+    }
+
+    private fun rowPaths(): List<String> {
+        val rows = sortedRows()
+        return (rows.folders + rows.files).map { it.item.getPath() }
+    }
+
+    private fun pageForPath(path: String, parent: ExplorerPage?): ExplorerPage =
+        ExplorerPageFactory.fromPath(fragment.requireContext(), path, parent)
+
+    private fun listState(path: String): LazyListState = listStates.getOrPut(path) {
+        val position = restoredPositions.remove(path)
+        LazyListState(position?.indexIn(rowPaths()) ?: 0, position?.offset ?: 0)
+    }
 
     fun createView(): View = ComposeView(fragment.requireContext()).apply {
         setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
@@ -113,22 +206,31 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     fun canGoBack(): Boolean = navigation.canGoBack()
 
     fun goBack() {
+        if (!canGoBack()) return
+        pendingHighlightPath = null
+        highlightedPath = null
         navigation.back()
         reload()
     }
 
     /** 搜索命中后跳到该文件/目录所在目录并高亮（沿用旧语义：逐级下钻，保持返回栈有意义）。 */
     fun revealFile(path: String): Boolean {
-        val target = File(path).absoluteFile
-        val parent = target.parentFile ?: return false
-        val rootPath = navigation.current.getPath()
-        if (!target.absolutePath.startsWith(rootPath)) return false
-        var current = File(rootPath)
-        val segments = parent.absolutePath.removePrefix(rootPath).split('/').filter { it.isNotEmpty() }
-        for (segment in segments) {
-            current = File(current, segment)
-            navigation.push(ExplorerDirPage(current.path, navigation.current))
+        if (disposed) return false
+        // Match the legacy explorer's storage root, not the directory currently being browsed.
+        val target = File(path)
+        val plan = ExplorerRevealPlan.create(Environment.getExternalStorageDirectory(), target)
+            ?: ExplorerRevealPlan.create(File(fragment.requireContext().filesDir, "sample"), target)
+            ?: return false
+        val currentDirectory = runCatching { File(navigation.current.getPath()).canonicalPath }.getOrNull()
+        if (currentDirectory != plan.directories.last()) {
+            navigation.reset(pageForPath(plan.directories.first(), null))
+            plan.directories.drop(1).forEach {
+                navigation.push(pageForPath(it, navigation.current))
+            }
         }
+        searchQuery = null
+        pendingHighlightPath = plan.targetPath
+        highlightedPath = null
         reload()
         return true
     }
@@ -138,16 +240,60 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
         reload()
     }
 
+    /**
+     * 直接进入某个目录（资源页「打开文件夹」用）：与 [revealFile] 一样逐级下钻保证返回栈有意义，
+     * 但把**目标目录本身**也压栈，进不去就等于没打开。
+     */
+    fun openDirectory(path: String): Boolean {
+        if (disposed) return false
+        val target = File(path)
+        if (!target.isDirectory) return false
+        val plan = ExplorerRevealPlan.create(Environment.getExternalStorageDirectory(), target)
+            ?: ExplorerRevealPlan.create(File(fragment.requireContext().filesDir, "sample"), target)
+            ?: return false
+        val currentDirectory = runCatching { File(navigation.current.getPath()).canonicalPath }.getOrNull()
+        if (currentDirectory != plan.targetPath) {
+            navigation.reset(pageForPath(plan.directories.first(), null))
+            plan.directories.drop(1).forEach {
+                navigation.push(pageForPath(it, navigation.current))
+            }
+            navigation.push(pageForPath(plan.targetPath, navigation.current))
+        }
+        searchQuery = null
+        pendingHighlightPath = null
+        highlightedPath = null
+        reload()
+        return true
+    }
+
     fun dispose() {
+        if (disposed) return
+        disposed = true
+        loadGeneration++
         loadDisposable?.dispose()
+        operations.dispose()
+        Explorers.workspace().unregisterChangeListener(this)
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onExplorerChange(event: ExplorerChangeEvent) {
+        if (disposed) return
+        if (event.getAction() == ExplorerChangeEvent.ALL ||
+            event.getPage()?.getPath() == navigation.current.getPath() ||
+            event.getItem()?.getPath() == navigation.current.getPath()) {
+            reload()
+        }
     }
 
     fun reload() {
+        if (disposed) return
+        val generation = ++loadGeneration
         loadDisposable?.dispose()
         loading = true
         error = null
         val keyword = searchQuery
         val page = navigation.current
+        currentPath = page.getPath()
         loadDisposable = Explorers.workspace().fetchChildren(page)
             .subscribeOn(Schedulers.io())
             .map { children ->
@@ -155,9 +301,12 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
             }
             .observeOn(AndroidSchedulers.mainThread())
             .subscribe({ list ->
+                if (disposed || generation != loadGeneration) return@subscribe
                 items = list
+                loadedPath = page.getPath()
                 loading = false
             }, { throwable ->
+                if (disposed || generation != loadGeneration) return@subscribe
                 error = throwable.message ?: throwable.javaClass.simpleName
                 loading = false
             })
@@ -232,17 +381,22 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
         override val lastModified: Long get() = item.lastModified()
     }
 
-    @Composable
-    private fun FileListScreen() {
+    private fun sortedRows(): ExplorerListRows.Result<Row> {
         val folders = items.filterIsInstance<ExplorerPage>().map { Row(it) }
         val files = items.filterNot { it is ExplorerPage }.map { Row(it) }
-        val rows = ExplorerListRows.build(
+        return ExplorerListRows.build(
             folders = folders,
             files = files,
             spec = sortSpec,
             dirsCollapsed = false,
             filesCollapsed = false
         )
+    }
+
+    @Composable
+    private fun FileListScreen() {
+        val path = currentPath
+        val rows = sortedRows()
         val isProjectPage = navigation.current is ExplorerProjectPage
 
         Column(Modifier.fillMaxSize()) {
@@ -255,17 +409,41 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
                 onBack = { goBack() },
                 onProjectMenu = { showProjectActions() }
             )
-            when {
-                loading -> StatusText("加载中…")
-                error != null -> StatusText("读取失败：$error")
-                rows.count == 0 -> StatusText("空目录")
-                else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(rows.folders, key = { it.item.getPath() }) { row ->
-                        FolderRow(row.item as ExplorerPage)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                // Keep the current list composed while refreshing; don't measure a new page against old/empty rows.
+                if (loadedPath == path && rows.count > 0) key(path) {
+                    val state = listState(path)
+                    val paths = (rows.folders + rows.files).map { it.item.getPath() }
+                    val target = pendingHighlightPath
+                    LaunchedEffect(path, target, paths) {
+                        val index = target?.let { wanted -> paths.indexOfFirst {
+                            try { File(it).canonicalPath == wanted } catch (_: Exception) { false }
+                        } } ?: -1
+                        if (index >= 0) {
+                            state.scrollToItem(index)
+                            pendingHighlightPath = null
+                            highlightedPath = paths[index]
+                        }
                     }
-                    items(rows.files, key = { it.item.getPath() }) { row ->
-                        FileRow(row.item)
+                    LaunchedEffect(highlightedPath) {
+                        if (highlightedPath != null) {
+                            delay(1800)
+                            highlightedPath = null
+                        }
                     }
+                    LazyColumn(Modifier.fillMaxSize(), state = state) {
+                        items(rows.folders, key = { it.item.getPath() }) { row ->
+                            FolderRow(row.item as ExplorerPage)
+                        }
+                        items(rows.files, key = { it.item.getPath() }) { row ->
+                            FileRow(row.item)
+                        }
+                    }
+                }
+                when {
+                    error != null -> StatusText("读取失败：$error")
+                    loading -> StatusText("加载中…")
+                    rows.count == 0 -> StatusText("空目录")
                 }
             }
         }
@@ -310,6 +488,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
             if (showBack) {
                 HeaderIcon(
                     resId = R.drawable.ic_dir_up,
+                    label = "返回上级目录",
                     tint = Color(0xFF828384),
                     enabled = canGoBack,
                     onClick = onBack
@@ -318,6 +497,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
             if (showProjectCompass) {
                 HeaderIcon(
                     resId = R.drawable.ic_project_compass_24dp,
+                    label = "项目操作",
                     tint = Color(0xFF828384),
                     enabled = true,
                     onClick = onProjectMenu
@@ -326,12 +506,14 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
             HeaderIcon(
                 resId = if (ascending) R.drawable.ic_sort_ascending_24dp
                 else R.drawable.ic_sort_descending_24dp,
+                label = "切换排序方向",
                 tint = Color(0xFF828384),
                 enabled = true,
                 onClick = { toggleSortOrder() }
             )
             HeaderIcon(
                 resId = R.drawable.ic_filter_funnel_24dp,
+                label = "排序方式",
                 tint = Color(0xFF828384),
                 enabled = true,
                 onClick = { showSortOptions() }
@@ -341,11 +523,12 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
 
     /** 分类头按钮：48dp 命中区、12dp 内边距；禁用时 alpha = 0.38（与旧实现一致）。 */
     @Composable
-    private fun HeaderIcon(resId: Int, tint: Color, enabled: Boolean, onClick: () -> Unit) {
+    private fun HeaderIcon(resId: Int, label: String, tint: Color, enabled: Boolean, onClick: () -> Unit) {
         Box(
             Modifier.size(48.dp)
                 .alpha(if (enabled) 1f else 0.38f)
-                .clickable(enabled = enabled) { onClick() },
+                .semantics { contentDescription = label }
+                .clickable(enabled = enabled, role = Role.Button, onClickLabel = label) { onClick() },
             contentAlignment = Alignment.Center
         ) {
             Image(
@@ -365,6 +548,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     private fun FolderRow(page: ExplorerPage) {
         val isProject = page is ExplorerProjectPage
         ItemRow(
+            path = page.getPath(),
             // 旧实现用 circle_folder / circle_project 作图标底（固定色，不随主题变化），
             // 图标本身则叠在上面：文件夹/项目图标统一 tint 成 colorOnPrimary（白色系）。
             iconBackground = colorResource(
@@ -397,6 +581,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     private fun FileRow(item: ExplorerItem) {
         val iconRes = ExplorerViewHelper.getFileIconRes(item)
         ItemRow(
+            path = item.getPath(),
             // 旧实现：circle_light_green 固定 #5cab7d 椭圆底；有专属图标时图标不 tint、
             // 隐藏首字母，否则显示 22sp 白色首字母。
             iconBackground = colorResource(R.color.file_icon_background),
@@ -426,6 +611,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     @OptIn(ExperimentalFoundationApi::class)
     @Composable
     private fun ItemRow(
+        path: String,
         iconBackground: Color,
         iconRes: Int,
         iconTint: Color?,
@@ -443,7 +629,10 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
         Column(Modifier.fillMaxWidth()) {
             Row(
                 Modifier.fillMaxWidth()
-                    .combinedClickable(onClick = onBodyClick, onLongClick = onOpen)
+                    .background(if (highlightedPath == path) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+                    .semantics { selected = highlightedPath == path }
+                    .combinedClickable(onClick = onBodyClick, onClickLabel = "打开 $name",
+                        onLongClick = onOpen, onLongClickLabel = "更多操作：$name")
                     .heightIn(min = 60.dp)
                     .padding(start = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -488,9 +677,9 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
                     )
                 }
                 if (runVisible) {
-                    RowIcon(R.drawable.ic_run_gray, onRun)
+                    RowIcon(R.drawable.ic_run_gray, "运行 $name", onRun)
                 }
-                RowIcon(R.drawable.ic_more_vert_black_24dp, onMore)
+                RowIcon(R.drawable.ic_more_vert_black_24dp, "更多操作：$name", onMore)
             }
             Box(
                 Modifier.fillMaxWidth()
@@ -503,9 +692,10 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
 
     /** 行内动作按钮：48dp 命中区、12dp 内边距。 */
     @Composable
-    private fun RowIcon(resId: Int, onClick: () -> Unit) {
+    private fun RowIcon(resId: Int, label: String, onClick: () -> Unit) {
         Box(
-            Modifier.size(48.dp).clickable { onClick() },
+            Modifier.size(48.dp).semantics { contentDescription = label }
+                .clickable(role = Role.Button, onClickLabel = label) { onClick() },
             contentAlignment = Alignment.Center
         ) {
             Image(
@@ -530,10 +720,10 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     // ---- 行为 ----------------
 
     private fun enterPage(page: ExplorerPage) {
-        if (page is ExplorerPage) {
-            navigation.push(page)
-            reload()
-        }
+        pendingHighlightPath = null
+        highlightedPath = null
+        navigation.push(page)
+        reload()
     }
 
     private fun showProjectActions() {
@@ -594,15 +784,14 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     }
 
     private fun performAction(item: ExplorerItem, id: Int) {
+        if (disposed) return
         val context = fragment.context ?: return
         val operations = { ScriptOperations(context, null, navigation.current) }
         when (id) {
             R.id.rename -> operations().rename(item as ExplorerFileItem)
-                .subscribe({ reload() }, { error -> toast(error) })
-            R.id.delete -> {
-                operations().delete(item.toScriptFile())
-                reload()
-            }
+                .subscribe({}, { error -> toast(error) }).also(this.operations::add)
+            // ExplorerChangeEvent is emitted only after confirmation AND successful IO deletion.
+            R.id.delete -> operations().delete(item.toScriptFile())
             R.id.timed_task -> operations().timedTask(item.toScriptFile())
             R.id.create_shortcut -> operations().createShortcut(item.toScriptFile())
             R.id.send -> Scripts.send(item.toScriptFile())
@@ -615,6 +804,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
             R.id.reset -> Explorers.Providers.workspace().resetSample(item.toScriptFile())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe({ reload() }, { error -> toast(error) })
+                .also(this.operations::add)
             R.id.reset_all -> confirmResetAllSamples()
         }
     }
@@ -635,6 +825,7 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
     }
 
     private fun runResetAllSamples() {
+        if (disposed) return
         val context = fragment.context ?: return
         Toast.makeText(context, R.string.text_reset_all_samples_running, Toast.LENGTH_SHORT).show()
         Explorers.Providers.workspace().resetAllSamples()
@@ -646,10 +837,11 @@ class MiuixScriptListHost(private val fragment: androidx.fragment.app.Fragment) 
                     Toast.LENGTH_LONG
                 ).show()
                 reload()
-            }, { error -> toast(error) })
+            }, { error -> toast(error) })?.also(operations::add)
     }
 
     private fun toast(error: Throwable) {
+        if (disposed) return
         val context = fragment.context ?: return
         Toast.makeText(context, error.message ?: error.javaClass.simpleName, Toast.LENGTH_LONG).show()
     }

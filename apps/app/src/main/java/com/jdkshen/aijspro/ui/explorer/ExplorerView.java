@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Environment;
+import android.os.Bundle;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
@@ -39,6 +40,7 @@ import com.jdkshen.aijspro.model.explorer.ExplorerDirPage;
 import com.jdkshen.aijspro.model.explorer.ExplorerFileItem;
 import com.jdkshen.aijspro.model.explorer.ExplorerItem;
 import com.jdkshen.aijspro.model.explorer.ExplorerPage;
+import com.jdkshen.aijspro.model.explorer.ExplorerPageFactory;
 import com.jdkshen.aijspro.model.explorer.ExplorerProjectPage;
 import com.jdkshen.aijspro.model.explorer.ExplorerSampleItem;
 import com.jdkshen.aijspro.model.explorer.ExplorerSamplePage;
@@ -61,11 +63,13 @@ import java.io.File;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Stack;
+import java.util.ArrayList;
 
 import io.reactivex.Observable;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.functions.Function;
 import io.reactivex.schedulers.Schedulers;
+import io.reactivex.disposables.Disposable;
 
 /**
  * Created by Stardust on 2017/8/21.
@@ -101,10 +105,13 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     private Explorer mExplorer;
     private ExplorerPage mRootPage;
     private String mPendingHighlightPath;
+    private Disposable mLoadDisposable;
+    private int mLoadGeneration;
     // 页面栈搬到 ExplorerNavigationState（纯状态、可单测）：这里是它唯一的“View 侧”调用方。
     private final com.jdkshen.aijspro.ui.viewmodel.ExplorerNavigationState<ExplorerPageState> mPageStateHistory =
             new com.jdkshen.aijspro.ui.viewmodel.ExplorerNavigationState<>(new ExplorerPageState());
     private ExplorerPageState mCurrentPageState = mPageStateHistory.getCurrent();
+    private ExplorerPageState mDisplayedPageState;
     private int mDirectorySpanSize = 2;
     private final SimpleDateFormat mItemTimestampFormat =
             new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
@@ -169,15 +176,58 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     }
 
     private void saveScrollPosition() {
+        // During directory loading the RecyclerView may still display the previous page.
+        if (mDisplayedPageState != mCurrentPageState) return;
         if (mExplorerItemListView == null || mExplorerItemListView.getLayoutManager() == null) {
             return;
         }
-        int position = ((LinearLayoutManager) mExplorerItemListView.getLayoutManager())
-                .findFirstCompletelyVisibleItemPosition();
+        LinearLayoutManager manager = (LinearLayoutManager) mExplorerItemListView.getLayoutManager();
+        int position = manager.findFirstVisibleItemPosition();
         if (position >= 0) {
             mCurrentPageState.scrollY = position;
+            View first = manager.findViewByPosition(position);
+            mCurrentPageState.scrollOffset = first == null ? 0
+                    : manager.getDecoratedTop(first) - mExplorerItemListView.getPaddingTop();
             Log.d(LOG_TAG, "saveScrollPosition=" + position + " page=" + mCurrentPageState.page.getPath());
         }
+    }
+
+    /** Persist the browser stack and viewport across Fragment view recreation, not just directory back. */
+    public Bundle saveBrowserState() {
+        saveScrollPosition();
+        ArrayList<Bundle> pages = new ArrayList<>();
+        for (ExplorerPageState page : mPageStateHistory.historySnapshot()) pages.add(savePage(page));
+        pages.add(savePage(mCurrentPageState));
+        Bundle state = new Bundle();
+        state.putParcelableArrayList("pages", pages);
+        return state;
+    }
+
+    private Bundle savePage(ExplorerPageState page) {
+        Bundle state = new Bundle();
+        state.putString("path", page.page.getPath());
+        state.putInt("index", page.scrollY);
+        state.putInt("offset", page.scrollOffset);
+        return state;
+    }
+
+    public void restoreBrowserState(Bundle state) {
+        ArrayList<Bundle> pages = state == null ? null : state.getParcelableArrayList("pages");
+        if (pages == null || pages.isEmpty()) return;
+        ExplorerPage parent = null;
+        boolean first = true;
+        for (Bundle saved : pages) {
+            String path = saved.getString("path");
+            if (path == null) return;
+            ExplorerPageState page = new ExplorerPageState(ExplorerPageFactory.fromPath(getContext(), path, parent));
+            page.scrollY = Math.max(0, saved.getInt("index"));
+            page.scrollOffset = saved.getInt("offset");
+            if (first) mPageStateHistory.reset(page); else mPageStateHistory.push(page);
+            first = false;
+            parent = page.page;
+        }
+        setCurrentPageState(mPageStateHistory.getCurrent());
+        loadItemList();
     }
 
     protected void enterDirectChildPage(ExplorerPage childItemGroup) {
@@ -239,6 +289,31 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         return true;
     }
 
+    /**
+     * Enter a directory itself (used by the resource page's 「打开文件夹」).
+     * Unlike {@link #revealFile(String)} this does not stop at the parent and highlight a row —
+     * it walks the same root→child chain but ends on the target directory.
+     */
+    public boolean openDirectory(String directoryPath) {
+        if (directoryPath == null || mExplorer == null || mRootPage == null) return false;
+        File target = new File(directoryPath).getAbsoluteFile();
+        if (!target.isDirectory()) return false;
+        try {
+            String rootPath = new File(mRootPage.getPath()).getCanonicalPath();
+            String targetPath = target.getCanonicalPath();
+            if (!targetPath.equals(rootPath) && !targetPath.startsWith(rootPath + File.separator)) {
+                return false;
+            }
+        } catch (java.io.IOException | SecurityException error) {
+            return false;
+        }
+        mPendingHighlightPath = null;
+        mPageStateHistory.clearHistory();
+        setCurrentPageState(new ExplorerPageState(mRootPage));
+        enterChildPage(new ExplorerDirPage(target, mRootPage));
+        return true;
+    }
+
     public void enterChildPage(ExplorerPage childPage) {
         saveScrollPosition();
         ScriptFile root = mCurrentPageState.page.toScriptFile();
@@ -271,6 +346,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     }
 
     public void goBack() {
+        saveScrollPosition();
         setCurrentPageState(mPageStateHistory.back());
         loadItemList();
     }
@@ -332,11 +408,13 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
     @SuppressLint("CheckResult")
     private void loadItemList() {
+        final int generation = ++mLoadGeneration;
+        if (mLoadDisposable != null) mLoadDisposable.dispose();
+        final ExplorerPageState pageState = mCurrentPageState;
         setRefreshing(true);
-        mExplorer.fetchChildren(mCurrentPageState.page)
+        mLoadDisposable = mExplorer.fetchChildren(pageState.page)
                 .subscribeOn(Schedulers.io())
                 .flatMapObservable(page -> {
-                    mCurrentPageState.page = page;
                     return Observable.fromIterable(page);
                 })
                 .filter(f -> mFilter == null ? true : mFilter.apply(f))
@@ -345,18 +423,23 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                 .doOnSuccess(ExplorerItemList::sort)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(list -> {
+                    if (generation != mLoadGeneration || pageState != mCurrentPageState) return;
                     mExplorerItemList = list;
+                    mDisplayedPageState = pageState;
                     mExplorerAdapter.notifyDataSetChanged();
                     mPinnedCategoryHolder.bind(true, 0);
                     setRefreshing(false);
                     int scrollY = mCurrentPageState.scrollY;
                     Log.d(LOG_TAG, "loadItemList done, restore scrollY=" + scrollY);
-                    if (scrollY > 0) {
-                        // 立即恢复；再延迟一次兜底（等 RecyclerView 完成首次布局）
-                        post(() -> mExplorerItemListView.scrollToPosition(scrollY));
-                        postDelayed(() -> mExplorerItemListView.scrollToPosition(scrollY), 120);
-                    }
+                    // Queue the exact row AND pixel offset for the next layout. A delayed second
+                    // scroll can otherwise overwrite a user gesture or a different page's position.
+                    ((LinearLayoutManager) mExplorerItemListView.getLayoutManager())
+                            .scrollToPositionWithOffset(scrollY, pageState.scrollOffset);
                     revealPendingItem();
+                }, error -> {
+                    if (generation != mLoadGeneration) return;
+                    setRefreshing(false);
+                    android.widget.Toast.makeText(getContext(), error.getMessage(), android.widget.Toast.LENGTH_SHORT).show();
                 });
     }
 
@@ -364,14 +447,16 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         if (mPendingHighlightPath == null) return;
         int position = findAdapterPositionByPath(mPendingHighlightPath);
         if (position < 0) return;
+        final int generation = mLoadGeneration;
         String highlightedPath = mPendingHighlightPath;
-        post(() -> mExplorerItemListView.scrollToPosition(position));
-        postDelayed(() -> mExplorerItemListView.scrollToPosition(position), 100);
+        ((LinearLayoutManager) mExplorerItemListView.getLayoutManager()).scrollToPositionWithOffset(position, 0);
         mExplorerAdapter.notifyItemChanged(position);
         postDelayed(() -> {
+            if (generation != mLoadGeneration) return;
             if (!highlightedPath.equals(mPendingHighlightPath)) return;
             mPendingHighlightPath = null;
-            mExplorerAdapter.notifyItemChanged(position);
+            int currentPosition = findAdapterPositionByPath(highlightedPath);
+            if (currentPosition >= 0) mExplorerAdapter.notifyItemChanged(currentPosition);
         }, 2200);
     }
 
@@ -624,15 +709,20 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        if (mExplorer != null)
+        if (mExplorer != null) {
             mExplorer.registerChangeListener(this);
+            if (mLoadDisposable != null && mLoadDisposable.isDisposed()) loadItemList();
+        }
 
     }
 
     @Override
     protected void onDetachedFromWindow() {
+        saveScrollPosition();
         super.onDetachedFromWindow();
-        mExplorer.unregisterChangeListener(this);
+        mLoadGeneration++;
+        if (mLoadDisposable != null) mLoadDisposable.dispose();
+        if (mExplorer != null) mExplorer.unregisterChangeListener(this);
     }
 
 
@@ -759,6 +849,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         }
 
         void onItemClick() {
+            saveScrollPosition();
             if (mOnItemClickListener != null) {
                 mOnItemClickListener.onItemClick(itemView, mExplorerItem);
             }
@@ -1006,6 +1097,8 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         boolean filesCollapsed;
 
         int scrollY;
+
+        int scrollOffset;
 
         ExplorerPageState() {
         }
