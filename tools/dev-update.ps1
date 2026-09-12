@@ -55,8 +55,18 @@
 .PARAMETER NoServe
     Only write update.json; do not start the HTTP server.
 
+    ⚠️ 注意：本开关**只**跳过起服务。**发布动作（写 update.json + 拷贝 APK）照常执行**，
+    所以任何一次调用都会改写真实更新源。用假版本号试参数会真的把假版本发出去
+    （曾用 -VersionCode 9999 试 -DeviceId，导致更新源变成 9999、手机永远提示有新版本）。
+    只验证参数解析/报错路径时：加 -SkipBuild 并给一个临时 -Dir，或干脆别调用本脚本。
+
 .PARAMETER NoReverse
     Do not touch adb reverse even when a device is connected.
+
+.PARAMETER DeviceId
+    Target device serial. Leave empty when exactly one device is online (auto-selected);
+    with several devices connected you MUST pass it, otherwise the device version is read
+    as 0 (dumpsys without -s fails silently) and the next versionCode is computed too low.
 
 .EXAMPLE
     .\tools\dev-update.ps1

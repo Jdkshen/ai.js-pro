@@ -82,14 +82,52 @@ flowchart LR
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 提示「已经是最新版本」 | 源的 versionCode **不比你手机上的大**（相等不提示） | 用 `dev-update.ps1`（自动 +1）；或手动核对两侧版本号 |
+| **永远**提示发现新版本、装了还是提示 | 更新源被写入了**天文数字版本号**（例如误用 `-VersionCode 9999` 试参数） | 见下方「更新源被污染」一节的恢复步骤 |
 | 提示「检查更新失败：…（自建更新源可在设置里修改）」 | 服务没起 / 地址写错 / 手机连不上电脑 | 看详情里的具体原因；确认终端里服务在跑；`adb reverse` 或改走局域网 IP |
 | 下载完装不上 | APK 与手机上的**签名不一致**（app 会自动拦截） | 自测统一用 debug 包（同一台电脑的 debug keystore） |
 | 服务在跑，手机却报网络错误 | 更新源填的是 `127.0.0.1`，但没做 `adb reverse`（拔了 USB / 换 WiFi 场景） | 重新插 USB（脚本自动 reverse）；或把更新源改成 `http://<电脑局域网IP>:8080/update.json` |
 | GitHub 检查更新常年失败 | 本机网络到 GitHub 不稳 | 用自建源；发布后检查更新不碰 GitHub |
+| `serve-updates.ps1` 报成功但更新源没变 | 脚本把文件写到了**仓库外**（旧版默认 `$Dir` 用 `$PSScriptRoot\..` 解析，`powershell -File` 调用时会算成 `C:\.artifacts\updates`） | 已修：改用 `$MyInvocation.MyCommand.Path` 推断仓库根并校验 `project-versions.json`；如再遇到，检查脚本打印的 `Update folder` 是否真的是仓库内路径 |
+
+### 更新源被污染后怎么恢复
+
+症状：`update.json` 的 `versionCode` 是个明显不合理的值（9999、99999…），或历史里出现垃圾记录。
+
+```powershell
+# 1. 看清现状
+(Get-Content .artifacts\updates\update.json -Raw -Encoding UTF8 | ConvertFrom-Json) |
+    Select-Object versionCode, versionName, apkSha256
+
+# 2. 重建目标版本的 APK（版本号来自仓库 project-versions.json 的临时补丁）
+#    注意 dev-update.ps1 构建完会把 project-versions.json 还原成 465，
+#    所以单独跑 assemble 出来的包是 465，必须自己临时打补丁：
+#    改 project-versions.json 的 appVersionCode/Name -> 构建 -> 还原
+
+# 3. 用底层发布器把正确版本写回（serve-updates 会按 versionCode 去重）
+.\tools\serve-updates.ps1 -Apk <apk路径> -VersionCode <正确版本号> -VersionName "dev-<正确版本号>" `
+    -ReleaseNotes "..." -HardLink -NoServe
+
+# 4. 手动清掉历史里的垃圾记录（serve-updates 只按同名 versionCode 去重，去不掉别的）
+#    .artifacts\updates\update-history.json 与 update.json 的 oldVersions
+
+# 5. 校验：重建出来的 APK SHA-256 应与被覆盖前的原包一致（构建可复现）
+#    并确认手机读取的 versionCode 恢复正常
+```
 
 ---
 
 ## 四、命令速查
+
+> ⚠️ **先读这条：`-NoServe` 不等于「只试不发」。**
+> 它**只**跳过起 HTTP 服务；**写 `update.json` + 拷贝 APK 的发布动作照常执行**。
+> 任何一次 `dev-update.ps1` 调用都会改写真实更新源（`.artifacts/updates/`）。
+>
+> 真实事故：用 `-VersionCode 9999` 试 `-DeviceId` 参数，结果：
+> 更新源 `versionCode` 变成 9999 → 手机「检查更新」永远提示发现新版本（已装 535 < 9999）；
+> 历史里多出一条 `9999 dev-9999`；原来那个 535 的 APK 被覆盖，只能重建。
+>
+> **只想验证参数解析或报错路径时**，必须同时满足：加 `-SkipBuild`、**且**给一个临时 `-Dir`，
+> 或者干脆别调用本脚本（直接读脚本 / 用 `-WhatIf` 式的方式检查）。
 
 ```powershell
 # 一键：升版本 + 构建 + 发布 + 起服务（阻塞，Ctrl+C 停）
@@ -103,7 +141,11 @@ flowchart LR
 .\tools\dev-update.ps1 -Abi armeabi-v7a
 .\tools\dev-update.ps1 -Port 8090
 
+# 多设备在线时必须指定目标机（否则手机版本读成 0，版本号会算小）
+.\tools\dev-update.ps1 -DeviceId cccc62c7
+
 # 只生成 update.json 不起服务（拷贝/scp 到别的机器的场景）
+# 注意：仍然会发布到真实更新源！
 .\tools\dev-update.ps1 -NoServe
 
 # 底层发布器（已有 APK 时直接用）
