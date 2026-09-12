@@ -12,6 +12,12 @@
 !/tools/compare-engine-api.ps1
 !/tools/measure-ui-performance.ps1
 !/tools/jdk17.ps1
+# dev-update.ps1 是 AGENTS.md 指定的日常出包入口，此前被 /tools/* 静默忽略，
+# 导致对它的修改（如多设备 -DeviceId 修复）无法提交且没有任何提示。
+!/tools/dev-update.ps1
+!/tools/serve-updates.ps1
+!/tools/probe-engine-api.ps1
+!/tools/test-engine-flavors-device.ps1
 
 # CodeGraph local index (regenerate with `codegraph init`)
 /.codegraph/

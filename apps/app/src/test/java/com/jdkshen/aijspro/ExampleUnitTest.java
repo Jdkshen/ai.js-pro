@@ -1,37 +1,28 @@
 package com.jdkshen.aijspro;
 
+import org.junit.Assert;
 import org.junit.Test;
 
-import java.util.concurrent.Callable;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import io.reactivex.Observable;
-import io.reactivex.annotations.NonNull;
-import io.reactivex.functions.Action;
-import io.reactivex.functions.Consumer;
-import io.reactivex.functions.Function;
-import io.reactivex.schedulers.Schedulers;
-
 /**
- * Example local unit test, which will execute on the development machine (host).
+ * 占位测试类。
  *
- * @see <a href="http://d.android.com/tools/testing">Testing documentation</a>
+ * <p>原本含两个不验证任何东西的方法（一个只 {@code System.out.println}、一个空方法体）。
+ * 空测试带来的"绿"是误导性的——它让人以为这里有覆盖。已移除那两个方法，
+ * 本类只作为 {@code src/test} 源集的存在标记保留。
+ *
+ * <p>真正的断言在 {@code src/testMiuix}：{@code McpHttpServerTest}、
+ * {@code McpWorkspaceStoreTest}、{@code ExplorerListRowsTest}、
+ * {@code ExplorerSorterParityTest}、{@code ExplorerViewHelperTest} 等。
+ *
+ * <p>如果将来不再需要这个占位类，可以连同本文件一起删除；
+ * 届时应确认 {@code src/test} 源集没有其他文件依赖它存在。
  */
 public class ExampleUnitTest {
 
     @Test
-    public void test() {
-        Matcher matcher = Pattern.compile("[0-9]+").matcher("2937Finish!");
-        if (matcher.find()) {
-            System.out.println(matcher.group());
-        }
+    public void sourceSetIsWired() {
+        // 唯一目的：确认 src/test 源集仍被 Gradle 收集。
+        // 不要在这里加"看起来在测什么"的假断言。
+        Assert.assertTrue(true);
     }
-
-    @Test
-    public void testAutoReorder() {
-
-    }
-
-
 }

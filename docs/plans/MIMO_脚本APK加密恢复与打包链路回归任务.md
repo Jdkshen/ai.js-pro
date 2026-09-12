@@ -85,7 +85,7 @@ private void encrypt(FileOutputStream outputStream, File file) throws IOExceptio
 
 ### 任务 4：回归与提交
 
-1. `gradlew test`（至少 `:engine:test`、`:common:test`、`:apkbuilder:test`）通过；`build-common-debug.ps1 -SkipNative` 构建成功。
+1. `gradlew test`（至少 `:engine:test`、`:common:test`、`:apkbuilder:test`）通过；`build-miuix-debug.ps1 -SkipNative` 构建成功。
 2. 提交信息（参考项目现有风格）：
    ```
    fix: restore script encryption in bundled APK packaging

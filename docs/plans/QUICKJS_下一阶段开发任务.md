@@ -335,7 +335,7 @@ Native 代码有修改时完整执行：
 
 ```powershell
 .\modules\engine\src\main\cpp\build-quickjs.ps1 -Configuration Release
-.\build-common-debug.ps1 -SkipNative
+.\build-miuix-debug.ps1 -SkipNative
 ```
 
 如果构建脚本的实际参数已经变化，以当前脚本帮助信息为准。最终必须：

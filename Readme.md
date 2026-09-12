@@ -36,14 +36,22 @@ Gradle 逻辑模块名、Java/Kotlin 包名和脚本公开 API 均保持不变�
 在 Windows PowerShell 中执行：
 
 ```powershell
-# 已有预编译原生库，只组装主应用
-.\build-common-debug.ps1 -SkipNative
+# 已有预编译原生库，只组装主应用（miuix + compat，即 Miuix 皮肤 + Rhino/QuickJS 双引擎）
+.\build-miuix-debug.ps1 -SkipNative
 
-# 重建 ImGui、QuickJS 原生库并组装主应用
-.\build-common-debug.ps1
+# 先重建 QuickJS 原生库，再组装主应用
+.\build-miuix-debug.ps1
+
+# 精简执行版（仅注册 QuickJS）
+.\build-miuix-debug.ps1 -SkipNative -Lite
+
+# 同时产出独立脚本 APK 运行时
+.\build-miuix-debug.ps1 -SkipNative -IncludeInrt
 ```
 
-Debug APK 输出到 `apps/app/build/outputs/apk/common/debug/`。完整环境要求和故障排查见[编译指南](docs/guides/编译指南.md)。
+Debug APK 输出到 `apps/app/build/outputs/apk/miuixCompat/debug/`（`-Lite` 时是 `miuixLite/debug/`），
+每个 ABI 一个包，K40/arm64 装 `app-miuix-compat-arm64-v8a-debug.apk`。
+完整环境要求和故障排查见[编译指南](docs/guides/编译指南.md)。
 
 ## 文档
 

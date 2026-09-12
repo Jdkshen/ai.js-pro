@@ -115,23 +115,25 @@ adb forward tcp:18790 tcp:8788
 | Miuix | 0.3.1 |
 | Compose UI/Foundation | 1.7.6 |
 
-Windows PowerShell 常用命令：
+Windows PowerShell 常用命令（统一入口会自己切 JDK 17，不必手动设 `JAVA_HOME`）：
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+# 统一入口（默认 miuix + compat，自动选择 JDK 17）
+.\build-miuix-debug.ps1 -SkipNative
 
-# 当前主界面兼容版（QuickJS + Rhino）
+# 等价的手工命令
 .\gradlew.bat :app:assembleMiuixCompatDebug --no-daemon
 
 # 精简执行版（仅注册 QuickJS；编辑器暂留 Rhino 语言解析库）
 .\gradlew.bat :app:assembleMiuixLiteDebug --no-daemon
 
-# 原生回退版本
-.\gradlew.bat :app:assembleCommonCompatDebug --no-daemon
-
 # 独立脚本 APK 运行时
 .\gradlew.bat :inrt:assembleDebug --no-daemon
 ```
+
+> **2026-09-12 更正**：本节原先还列了 `:app:assembleCommonCompatDebug`（标注为「原生回退版本」），
+> 但 `common` / `coolapk` 两个 channel flavor 已随「UI 统一到 Compose」退役，该任务名不存在；
+> 入口脚本也从 `build-miuix-debug.ps1` 改名为 `build-miuix-debug.ps1`。
 
 K40（arm64）安装文件：
 

@@ -315,7 +315,7 @@ modules/engine/src/main/cpp/
 完整重建 Native 库和 Debug APK：
 
 ```powershell
-.\build-common-debug.ps1
+.\build-miuix-debug.ps1
 ```
 
 只重建 QuickJS Native 库：
@@ -327,7 +327,7 @@ modules/engine/src/main/cpp/
 已有 Native 库时只构建 Android 工程：
 
 ```powershell
-.\build-common-debug.ps1 -SkipNative
+.\build-miuix-debug.ps1 -SkipNative
 ```
 
 当前输出 `armeabi-v7a`、`arm64-v8a`、`x86`，两个 QuickJS `.so` 都使用 16 KiB 最大页对齐。

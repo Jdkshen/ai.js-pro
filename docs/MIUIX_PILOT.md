@@ -2,6 +2,23 @@
 
 日期：2026-09-05
 
+> **2026-09-12 时效更正（正文保留原样，作为试点当时的事实记录）**
+>
+> 本文写作时 `miuix` 只是**试点轨道**，与 `common` / `coolapk` 两个 channel flavor 并存，
+> 因此正文里的构建命令是 `:app:assembleMiuixDebug` / `:app:assembleCommonDebug`，
+> `BuildConfig.MIUIX_PILOT` 也是当时的双轨开关。
+>
+> 现在这些都已退役：`common` / `coolapk` flavor 已删除、`MIUIX_PILOT` 字段已移除，
+> `miuix` 是唯一显示层。构建请用现存的变体名：
+>
+> ```powershell
+> .\build-miuix-debug.ps1 -SkipNative      # 或
+> .\gradlew.bat :app:assembleMiuixCompatDebug --no-daemon
+> ```
+>
+> 当前事实入口见 [PROJECT_STATUS.md](PROJECT_STATUS.md)；
+> 双轨拆除过程见 [UI 统一到 Compose 迁移方案](plans/UI_统一到%20Compose(Miuix)%20迁移方案.md) 第 2 节。
+
 ## 0. 试点扩展（2026-09-05 下午，新增）
 
 在核心服务页试点之后，额外迁移了 3 个低风险页面（同一 `miuix` flavor，普通变体不受影响）：

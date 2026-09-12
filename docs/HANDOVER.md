@@ -4,7 +4,7 @@
 
 - **Miuix 是主界面**；旧 ImGui 工作台、JNI/C++ 渲染桥和 `libautojs_imgui.so` 已删除。未来如果增加 ImGui，只作为 QuickJS 可调用的独立悬浮窗 API，不恢复旧主界面。
 - 编辑器和终端已独立到 `ui.editor` / `ui.terminal`；多标签可直接关闭。YOLO 示例只保留 OpenCV DNN 路线，不引入 NCNN 或 ONNX Runtime。
-- MCP 当前公开 22 个工具；手机开启一次写入授权后可直接应用，保留 Diff、冲突校验、自动备份和历史回退。
+- MCP 当前公开 26 个工具；手机开启一次写入授权后可直接应用，保留 Diff、冲突校验、自动备份和历史回退。
 - Windows 中文检出路径会使 JDK/Gradle 参数文件错误解码，表现为单测 `ClassNotFoundException`。统一使用 `powershell -ExecutionPolicy Bypass -File tools/test-miuix.ps1`；脚本会临时映射 ASCII 盘符并自动清理。
 - 新建脚本和新建项目默认 QuickJS；已有无标记脚本继续 Rhino。支持文件首行 `// @engine quickjs|rhino`、项目顶层 `engine` 和 `scripts.<path>.engine`，文件指令优先。
 - 构建已拆为 `MiuixCompat*` 与 `MiuixLite*`。`:engine-rhino` 只进入 compat；lite 不注册 Rhino 执行引擎，但暂留 `:rhino-language` 供编辑器 Token/AST 使用。完整边界和命令见 `docs/architecture/ENGINE_FLAVORS.md`。
@@ -15,10 +15,10 @@
 
 - 抽屉“开发”分组新增“**MCP 服务**”。Miuix 页面提供启动/停止、连接地址、二维码、令牌、端口/局域网/操作目录设置、调用历史，以及编辑和执行授权。
 - 服务默认监听 `127.0.0.1:8788/mcp`。同一手机的 MT 客户端直接使用该地址；电脑端项目配置统一使用 USB Host 端口 `18790`（`adb forward tcp:18790 tcp:8788`）。本机兼容模式默认开启，loopback 可免令牌；错误令牌仍拒绝，局域网始终要求 Bearer 令牌。
-- 当前共 22 个工具：脚本/示例分页读取、递归搜索及游标续页、运行任务状态/异常/停止、APK 全局日志、双引擎 API 枚举/探测，以及私有工作区的打开/读取/编辑/删除/Diff/应用。默认只读；手机端开启“允许编辑并应用”后，`workspace_request_apply` 会直接应用，应用前校验原文件并备份，历史页可查看和安全回退。
+- 当前共 26 个工具：脚本/示例分页读取、递归搜索及游标续页、运行任务状态/异常/停止、APK 全局日志、双引擎 API 枚举/探测，以及私有工作区的打开/读取/编辑/删除/Diff/应用。默认只读；手机端开启“允许编辑并应用”后，`workspace_request_apply` 会直接应用，应用前校验原文件并备份，历史页可查看和安全回退。
 - 编辑和运行授权只在本次服务运行期间有效，停止服务自动撤销。路径、Host/Origin、正文/请求头、JSON 深度、文件大小、工作区总量和并发均有限制；支持有界 chunked 请求、宽松 `Accept` 以及 `2024-11-05`、`2025-03-26`、`2025-06-18` 客户端版本。
 - 教程/示例页已统一为 Miuix：后台建立资产索引，支持搜索、全部/JavaScript/文件夹/其他文件筛选、查看、运行、原子导入和直接打包（单文件示例先落盘再进打包页；带 `project.json` 的项目型示例整目录复制后按项目模式打包），保留原有示例数据与脚本执行逻辑。
-- 验证：Miuix Debug APK 构建成功；当前 6 个测试类共 52 个 JVM 测试通过（含 HTTP 传输、22 工具清单、工作区和示例目录）。K40 的历史快照已验证无令牌 loopback 初始化、搜索续页、APK 日志、chunked 请求和工作区读取/Diff；当前工具集仍需在 K40 执行完整客户端回归。
+- 验证：Miuix Debug APK 构建成功；当前 6 个测试类共 52 个 JVM 测试通过（含 HTTP 传输、26 工具清单、工作区和示例目录）。K40 的历史快照已验证无令牌 loopback 初始化、搜索续页、APK 日志、chunked 请求和工作区读取/Diff；当前工具集仍需在 K40 执行完整客户端回归。
 - MT 报错 `IllegalArgumentException: name is empty` 是客户端自定义请求头中存在空白“名称”行，发生在 OkHttp 发包之前；删除整条空白请求头即可。本机兼容模式不需要为了占位而新增请求头。
 - 详细连接、工具和安全说明见 `docs/MCP_SCRIPT_SERVICE.md`。本功能只在 `miuix` flavor 存在，普通 flavor 不注册页面或服务。
 
@@ -86,7 +86,7 @@ third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / Colo
 ```powershell
 .\gradlew.bat :app:assembleCommonDebug --no-daemon   # 主应用（arm64/v7a/x86 三 ABI）
 .\gradlew.bat :inrt:assembleDebug --no-daemon          # inrt 运行时
-.\build-common-debug.ps1 -SkipNative                   # 一键构建（跳过 .so）
+.\build-miuix-debug.ps1 -SkipNative                   # 一键构建（跳过 .so）
 ```
 
 ### 设备
@@ -145,7 +145,7 @@ third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / Colo
 - 轻页面配色清理：about/login 硬编码色 → `?attr/colorOnSurface*`
 
 ### 3.4 构建脚本
-- `build-common-debug.ps1` / `release.ps1`：移除 JDK 17 `--add-opens/--add-exports` hack 与 `--max-workers=1`（Gradle 8.9 不再需要）
+- `build-miuix-debug.ps1` / `release.ps1`：移除 JDK 17 `--add-opens/--add-exports` hack 与 `--max-workers=1`（Gradle 8.9 不再需要）
 - 启动入口为 **Splash → MainActivity**；旧 ImGui 工作台及入口均已移除。
 
 ### 3.5 Miuix 第三页（资源）

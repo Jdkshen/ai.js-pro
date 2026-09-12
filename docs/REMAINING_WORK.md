@@ -35,7 +35,7 @@
 
 当前实现存在明确的语义冲突：
 
-- `McpTools.kt` 实际公开 **22 个工具**，旧 `HANDOVER.md` 仍写 19 个；
+- `McpTools.kt` 实际公开 **26 个工具**，旧 `HANDOVER.md` 仍写 19 个；
 - `workspace_request_apply` 当前会先调用 `requestApply()`，随后立即调用 `applyConfirmed()`，即 MCP 客户端可在手机开启写入授权后直接修改真实脚本；
 - Miuix 设置页也写明“免审批，自动备份可回退”；
 - `MCP_SCRIPT_SERVICE.md`、旧交接记录和 `McpWorkspaceStore.kt` 注释仍写“只能由手机历史页确认应用”。
@@ -94,7 +94,11 @@
 - [x] 删除 Manifest 注册、工作台 Activity、Surface/Bridge/AccessibilityProvider 和 C++ 实现；
 - [x] 删除三 ABI 的 `libautojs_imgui.so`；APK 体积变化在本轮构建后记录；
 - [x] 将 `ProCodeEditorActivity`、`EmbeddedTerminalActivity` 分别移入 `ui.editor` 和 `ui.terminal`，避免与未来 QuickJS ImGui 悬浮 API 混淆；
-- [ ] `miuixDebug`、`commonDebug` 均已构建；Miuix Debug 已在 K40 覆盖安装，设置稳定模式和独立终端已点击通过，编辑器、示例和资源页仍需完整回归。
+- [x] 构建变体：`:app:assembleMiuixCompatDebug` 与 `:app:assembleMiuixLiteDebug` 均已构建成功
+      （6 个 ABI 包：compat 144.9/96.8/127.8 MB、lite 144.9/122.5/153.4 MB，arm64 两者同为 144.9 MB）；
+      Miuix Debug 已在 K40 覆盖安装，设置稳定模式和独立终端已点击通过。
+      **2026-09-12 更正**：原条目写的 `miuixDebug` / `commonDebug` 是已退役的变体名（`common` channel 已删除），
+      本条已按现存的 `miuixCompat` / `miuixLite` 重写；**编辑器、示例和资源页仍未完整回归**。
 
 注意：QuickJS 和 OpenCV 所需 `.so` 仍是正式运行时输入。后台 Shell 与独立终端已改用 `ProcessBuilder`，不再需要仅支持旧 ABI 的 Jackpal 终端 AAR/`.so`。
 
@@ -151,6 +155,11 @@ Miuix 源集中目前仍有大量直接写在 Kotlin 中的中文文案，应逐
 
 现有实测文档记录 Rhino 全局 API 约 225 项、QuickJS 约 57 项。QuickJS 采用白名单桥接，目标是现代 JavaScript 和高性能场景，不是复制 Rhino 的 Java 反射环境。
 
+> **2026-09-12 更正**：上面的「QuickJS 约 57 项」是 2026-09-08 的旧基线，已严重滞后。
+> 按 `architecture/双引擎功能对比.md` 的 2026-09-11 实测，QuickJS 已注册全局 API **250 项**（Rhino 225 项），
+> 差异表只剩 4 项。本文其余涉及「约 57 项」的表述同此更正。但**数量接近不等于行为等价**——
+> 第 4.1 节的结论（不可宣称 100% 等价）依然成立。
+
 已知仍不等价或暂不支持的能力包括：
 
 - E4X/JSX、完整 UI DSL 和任意 Java 反射；
@@ -193,14 +202,30 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 ### 5.2 测试结构
 
-当前 Miuix 测试已覆盖 MCP HTTP、22 工具清单、工作区应用/冲突/回退、文件搜索和示例目录；仓库内部分测试仍是模板 `ExampleUnitTest`。下一步至少补：
+当前 Miuix 测试已覆盖 MCP HTTP、26 工具清单、工作区应用/冲突/回退、文件搜索和示例目录。
 
-- [ ] MCP 空请求头兼容、USB Host 和鉴权；22 工具清单及 workspace 新建、应用、冲突、回退已有 JVM 测试；
+**2026-09-12 进展（本次新增/清理）**：
+
+- 新增 `ExplorerListRowsTest`（17 例）：文件列表的排序/分组/折叠纯状态层；
+- 新增 `ExplorerSorterParityTest`（4 例）：**直接调用真实 `ExplorerSorter` 当 oracle** 比对排序方向。
+  这条抓到了三处方向写反——`reversed()` 是交换参数而非取负，方向取决于原比较器把谁放在 `o1` 位；
+  实测 `ascending=false`（默认）时 NAME 名称升序 / SIZE 大小升序 / DATE 时间降序 / TYPE 类型升序；
+- 新增 `ExplorerViewHelperTest`（12 例）：图标与首字母选择规则。**注意 `getIconColor` 覆盖不到**——
+  它内部调用 `android.graphics.Color.rgb(...)`，本地单测里是 not-mocked 桩，除非引入 Robolectric；
+  那条路径目前只有真机截图作为证据（S3.5 节）；
+- 清理 `apps/app` 的 `ExampleUnitTest`：删掉一个只 `println` 的方法和一个空方法体（空测试的"绿"是误导性的），
+  保留 1 个确认源集被收集的用例；
+- 合计 **139 例 0 失败**。
+
+下一步至少补：
+
+- [ ] MCP 空请求头兼容、USB Host 和鉴权；26 工具清单及 workspace 新建、应用、冲突、回退已有 JVM 测试；
 - [ ] 搜索结果点击后的目录定位、高亮和滚动恢复；
 - [ ] 编辑器打开/保存/外部修改冲突；
 - [ ] 小米无障碍快速开启时保留其他无障碍服务；
 - [ ] Miuix 页面最小截图或语义树回归；
-- [ ] release APK 安装和升级烟雾测试。
+- [ ] release APK 安装和升级烟雾测试；
+- [ ] 把 `getIconColor` 的「后缀/类型 -> 色值」抽成不依赖 `android.graphics` 的纯函数，使颜色映射可单测。
 
 ### 5.3 文档和根目录清理
 
@@ -216,7 +241,7 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 1. **发布基线**：版本/更新源、权限精简、release 签名、升级与降级测试；
 2. **UI 验收**：搜索定位、弹层、菜单、编辑器多标签、深色、大字体、横屏和安全区；
-3. **MCP 兼容回归**：USB Host、不同客户端版本、22 工具、直接应用、冲突与回退；
+3. **MCP 兼容回归**：USB Host、不同客户端版本、26 工具、直接应用、冲突与回退；
 4. **性能基准**：先测量，再处理列表重组、主线程 IO 和动画；
 5. **引擎差异自动化**：持续补真实需要的 QuickJS API，并保持 Rhino 回归；
 6. **文档与根目录收尾**：历史报告明确归档，确认后单独删除无用脚本。
@@ -225,8 +250,10 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 
 准备下一个可交付 APK 前，至少满足：
 
-- [ ] `:app:assembleMiuixCompatDebug`、`:app:assembleMiuixLiteDebug` 已成功；目标 release 变体仍需正式签名环境；
+- [x] `:app:assembleMiuixCompatDebug`、`:app:assembleMiuixLiteDebug` 已成功（2026-09-12 复验，见第 3.1 节）；目标 release 变体仍需正式签名环境；
 - [x] 当前 Miuix JVM 测试全部通过，MCP 工具清单与工作区关键路径有真实断言；Windows 中文路径请使用 `tools/test-miuix.ps1`；
+      **2026-09-12 复验：128 例 0 失败**（含新增的 `ExplorerListRowsTest` 17 例与
+      `ExplorerSorterParityTest` 4 例——后者直接调用真实 `ExplorerSorter` 做 oracle 比对）；
 - [ ] K40 全新安装和覆盖安装均通过；
 - [ ] 首页、搜索定位、编辑器、运行、日志、示例、资源、插件、任务和 MCP 可走通；
 - [ ] 小米无障碍快速开启不覆盖 RustDesk 等其他服务；
@@ -235,5 +262,15 @@ Node.js 不纳入当前 APK，也不应为了对齐下载目录示例而引入�
 - [ ] 深色、150% 字体、横屏和底部手势安全区无明显遮挡；
 - [x] 当前 Miuix ARM64 APK 的 `.so` 清单与源码决定一致，不含旧 ImGui 或本地验证产物；
 - [ ] Git 工作树干净，本地分支与远程同步，发布 APK 有版本号和 SHA-256 记录。
+
+> **2026-09-12 新增待办：Miuix 文件管理在「文件管理」与「设置」中仍以构建变体/开关暴露**
+>
+> 文件列表的 Compose 实现（`MiuixScriptListHost`）目前由实验开关
+> `aijspro.experimental.miuix_file_list` 控制，默认关闭且**界面上没有入口**——只能改
+> SharedPreferences 才能打开。发布前二选一：
+> 1. 验收通过后把开关默认值改为 true 并删除旧 `ExplorerView` 族群（原计划 S4）；
+> 2. 或在设置页补一个可见开关，避免"只能靠 adb 改 XML"的隐藏状态。
+>
+> 相关：`docs/plans/UI_统一到 Compose(Miuix) 迁移方案.md` 的 S3.5 节。
 
 完成以上条目后，项目才适合从“持续改造版”转入“候选发布版”。
