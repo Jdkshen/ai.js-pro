@@ -12,16 +12,12 @@
  */
 "use strict";
 
-const path = require("path");
-const ROOT = path.join(__dirname, "..");
-function req(rel) {
-    return require(path.join(ROOT, rel));
-}
-
-const cells = req("src/vision/cells.js");
-const geometry = req("src/vision/geometry.js");
-const gridSearch = req("src/vision/grid-search.js");
-const fen = req("src/chess/fen.js");
+// 既能在 PC 上 `node tools/test-cells-contract.js`，也能在手机上被悬浮窗 require ——
+// 所以不用 node 专用的 `path`，只走相对 require（QuickJS 也支持）。
+const cells = require("../src/vision/cells.js");
+const geometry = require("../src/vision/geometry.js");
+const gridSearch = require("../src/vision/grid-search.js");
+const fen = require("../src/chess/fen.js");
 
 let pass = 0;
 const failures = [];
@@ -308,5 +304,12 @@ console.log("== 汇总：ok " + pass + " / FAIL " + failures.length + " ==");
 for (let i = 0; i < failures.length; i++) {
     console.log("FAIL " + failures[i].name + " → " + failures[i].message);
 }
-console.log("TESTCELLS " + (failures.length === 0 ? "PASS" : "FAIL") + " pass=" + pass + " fail=" + failures.length);
-process.exit(failures.length === 0 ? 0 : 1);
+const summary = "CONTRACT " + (failures.length === 0 ? "PASS" : "FAIL") +
+    " pass=" + pass + " fail=" + failures.length +
+    (failures.length ? ("｜首个失败：" + failures[0].name + " → " + failures[0].message) : "");
+console.log(summary);
+// 兼容 PC（node）与手机（QuickJS）：不依赖 process.exit
+if (typeof process !== "undefined" && process && typeof process.exit === "function") {
+    process.exit(failures.length === 0 ? 0 : 1);
+}
+module.exports = { pass: pass, failures: failures, summary: summary };
