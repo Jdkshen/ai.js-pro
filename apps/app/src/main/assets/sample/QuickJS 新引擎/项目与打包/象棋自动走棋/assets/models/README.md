@@ -6,7 +6,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `chessai_160.onnx` | 9,651,826 字节（走 git LFS），SHA-256 `F2D3453AD4019C774E04B2215996DDD42F7E2D32F5F8E73E2E9B8AA69DB38E38` |
+| `chessai_160.onnx` | 9,651,802 字节（走 git LFS），SHA-256 `BF9D66E2E5F5C5C8807A84877175C902C878A4FCE26438E868D742BA73287B75`（2026-09-13 域内微调版） |
 | `chessai_160.txt` | 类别表**7 行**，与训练时顺序完全一致：`R N B A K C P` |
 
 类别字母就是 FEN 的棋子字符（与 `src/chess/fen.js` 同一套）：
@@ -37,6 +37,10 @@ output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，�
   22,958 训练图 / 20.4 万框；来源与映射见 `.artifacts/chess-merge-prep.py`）
 - 训练：`yolo26n.pt` @160，30 epochs，AdamW，CPU（`.artifacts/chess-train-merged.py`）
 - 结果：val mAP50 **0.532** / mAP50-95 0.326；K40 真机推理 ~6.7ms
+- **域内微调（2026-09-13）**：在上述合并版权重上续训 25 epochs —— 2500 张合并样本 + 20 张真机截屏人工标注 ×10 过采样
+  （另 6 张留出验证）；脚本 `.artifacts/train-domain-local.py`（含续训脚本 `.artifacts/resume-domain-train.py`），
+  产物 `.artifacts/chessai-runs/chess160-domain/`。真实域对照（同批 820 框、IoU≥0.5）：
+  留出 6 帧 P/R/F1 **0.910 / 0.958 / 0.933**（旧模型 0.868 / 0.905 / 0.886）、全 26 帧 F1 **0.959**（旧 0.936）
 - ⚠️ **不要拿这份 160 权重直接导 320 用**：实测 val mAP50 掉到 0.450、真机 ≥0.5 的框反而更少；
   要 320 必须在 320 重训
 - 引擎里 `inputSize` 缺省值是 640（面向任意第三方模型），本工程显式传 160
@@ -68,7 +72,7 @@ output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，�
   "id": "chess-160",
   "version": "1.0.0",
   "file": "assets/models/chessai_160.onnx",
-  "sha256": "F2D3453AD4019C774E04B2215996DDD42F7E2D32F5F8E73E2E9B8AA69DB38E38",
+  "sha256": "BF9D66E2E5F5C5C8807A84877175C902C878A4FCE26438E868D742BA73287B75",
   "backend": "dnn",
   "input": { "shape": [1, 3, 160, 160], "color": "RGB", "normalization": "x / 255",
              "resize": "letterbox", "padColor": [114, 114, 114] },
