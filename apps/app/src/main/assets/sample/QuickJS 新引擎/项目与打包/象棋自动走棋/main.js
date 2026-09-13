@@ -34,6 +34,9 @@ ui.layout(
   '  <button id="selfcheck" text="运行离线自检"/>' +
   '  <button id="probe" text="查看运行环境"/>' +
   '  <button id="locate" text="定位棋盘（真机）"/>' +
+  '  <text text="棋盘截图路径（相册里的图就能用）" textSize="13sp" textColor="#555555"/>' +
+  '  <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="13sp"/>' +
+  '  <button id="locateImage" text="定位棋盘（图片）"/>' +
   '  <scroll height="260dp">' +
   '    <text id="output" textSize="12sp" textColor="#333333"/>' +
   '  </scroll>' +
@@ -50,6 +53,19 @@ function show(text) {
     lastOutput = text;
     ui.output.setText(text);
     console.log("[xiangqi] " + text);
+}
+
+/** 读输入框内容（不同引擎下 text()/getText() 的可用性不一样，都试一下）。 */
+function inputText(view) {
+    try {
+        return String(view.text());
+    } catch (error) {
+        try {
+            return String(view.getText());
+        } catch (inner) {
+            return "";
+        }
+    }
 }
 
 // 离线自检：只跑纯 JS 模块（FEN / 几何 / 格点分配 / 时序融合），不截图、不点棋盘。
@@ -103,6 +119,24 @@ ui.locate.on("click", () => {
         const keep = lastOutput;
         show("正在定位棋盘…");
         const result = board.locateBoardOnScreen();
+        show(board.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
+    } catch (error) {
+        show("定位没能运行：" + error);
+    }
+});
+
+// 棋盘定位（图片）：在已保存的截图上定位。真机自测推荐用这个（不必把棋盘摆到屏幕上）。
+ui.locateImage.on("click", () => {
+    try {
+        const board = require("./tools/locate-board.js");
+        const path = inputText(ui.image).trim();
+        if (!path) {
+            show("请先填图片路径");
+            return;
+        }
+        const keep = lastOutput;
+        show("正在读图并定位…");
+        const result = board.locateBoardInImage(path);
         show(board.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
     } catch (error) {
         show("定位没能运行：" + error);

@@ -534,10 +534,52 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
     private fun runBuiltin(entry: ResourceEntry) {
         val assetPath = entry.assetPath ?: return
-        // 工程条目的入口是工程目录里的 main.js。
-        val runnable = if (entry.project) "$assetPath/main.js" else assetPath
-        val execution = Scripts.run(SampleFile(runnable, requireContext().assets).toSource())
-        if (execution != null) Toast.makeText(requireContext(), "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+        if (!entry.project) {
+            val execution = Scripts.run(SampleFile(assetPath, requireContext().assets).toSource())
+            if (execution != null) Toast.makeText(requireContext(), "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 工程是多文件树：`require('./src/xx.js')` 只解析**磁盘**路径（模块加载器走 files.read），
+        // 直接从内置资源跑会报 `Cannot find module: ./src/...`。
+        // 所以先把整份工程拷到临时目录（每次都刷新，保证跑的是当前内置版本），再从磁盘运行入口脚本；
+        // 用户自己导入的「下载资源」副本完全不受影响。
+        runProjectCopy(entry, assetPath)
+    }
+
+    /** 把工程整份拷到 cacheDir 后运行入口脚本（不覆盖、也不读取用户导入的副本）。 */
+    private fun runProjectCopy(entry: ResourceEntry, assetPath: String) {
+        val context = requireContext()
+        val slug = assetPath.substringAfterLast('/').ifBlank { "project" }
+        val target = File(File(context.cacheDir, "resource-run"), slug)
+        busy = true
+        Thread {
+            var failure: Exception? = null
+            try {
+                target.deleteRecursively()
+                target.mkdirs()
+                copyAssetTree(assetPath, target)
+            } catch (error: Exception) {
+                failure = error
+            }
+            requireActivity().runOnUiThread {
+                busy = false
+                if (failure != null) {
+                    Toast.makeText(context,
+                        "运行失败：${failure.localizedMessage ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                val entryScript = File(target, "main.js")
+                if (!entryScript.isFile) {
+                    Toast.makeText(context,
+                        "工程里没有 main.js：${target.absolutePath}", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                val execution = Scripts.run(ScriptFile(entryScript))
+                if (execution != null) {
+                    Toast.makeText(context, "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
     }
 
     /**

@@ -137,6 +137,73 @@ function locateBoardOnScreen(options) {
     };
 }
 
+/**
+ * 在**已保存的图片**上定位棋盘（不用把棋盘摆到屏幕上来截）。
+ * 这是真机自测最方便的路子：手机相册里有一张棋盘截图就能跑。
+ * @param path 图片路径（如 /sdcard/Download/chess.png）
+ */
+function locateBoardInImage(path, options) {
+    const opts = options || {};
+    if (!adapter.capabilities().imagesRead) {
+        return { ok: false, reason: "缺少能力：images.read（读不了磁盘图片）" };
+    }
+    if (!adapter.canSamplePixels()) {
+        return { ok: false, reason: "缺少能力：images.pixel / colors（无法采样像素）" };
+    }
+    const startedAt = adapter.nowMono();
+    let image;
+    let readMs;
+    try {
+        const readStart = adapter.nowMono();
+        image = adapter.readImage(path);
+        readMs = adapter.nowMono() - readStart;
+    } catch (error) {
+        return { ok: false, reason: String(error && error.message ? error.message : error) };
+    }
+    const size = adapter.sizeOf(image);
+    if (!size) {
+        return { ok: false, reason: "读到的图片没有尺寸：" + path };
+    }
+    const region = opts.region || ratioToRegion(opts.regionRatio, size.width, size.height);
+    const step = opts.step == null ? 4 : opts.step;
+    const acrossStep = opts.acrossStep == null ? 10 : opts.acrossStep;
+    const scanStart = adapter.nowMono();
+    const result = locator.locate({
+        getValue: adapter.samplerFor(image),
+        region: region,
+        orientation: opts.orientation || "RED_BOTTOM",
+        step: step,
+        acrossStep: acrossStep,
+        minSupport: opts.minSupport,
+        tolerance: opts.tolerance,
+        margin: opts.margin
+    });
+    const locateMs = adapter.nowMono() - scanStart;
+    const timing = { captureMs: readMs, locateMs: locateMs, totalMs: adapter.nowMono() - startedAt };
+    if (!result.ok) {
+        return { ok: false, reason: result.reason, method: result.method, region: region, timing: timing };
+    }
+    return {
+        ok: true,
+        source: path,
+        method: result.method,
+        reason: result.reason,
+        warning: result.warning || "",
+        grid: result.grid,
+        region: region,
+        regionRatio: regionToRatio(region, size.width, size.height),
+        image: size,
+        columns: result.vertical ? result.vertical.matched : null,
+        rows: result.horizontal ? result.horizontal.matched : null,
+        reconstructed: {
+            x: result.vertical ? result.vertical.quality.reconstructed : null,
+            y: result.horizontal ? result.horizontal.quality.reconstructed : null
+        },
+        residual: result.grid.quality ? result.grid.quality.maxResidual : null,
+        timing: timing
+    };
+}
+
 /** 把定位结果整理成给人看的多行文本（main.js 的按钮与日志共用）。 */
 function describeResult(result) {
     const lines = [];
@@ -152,7 +219,9 @@ function describeResult(result) {
             lines.push("⚠ " + result.warning);
         }
     }
-    if (result.frame) {
+    if (result.image) {
+        lines.push("图片 " + result.image.width + "×" + result.image.height + "  " + (result.source || ""));
+    } else if (result.frame) {
         lines.push("屏幕 " + result.frame.width + "×" + result.frame.height +
             "（像素 " + result.frame.pixelWidth + "×" + result.frame.pixelHeight + "）");
     }
@@ -161,8 +230,10 @@ function describeResult(result) {
             result.region.width + "×" + result.region.height);
     }
     if (result.timing) {
-        lines.push("耗时：截图 " + result.timing.captureMs + "ms / 定位 " + result.timing.locateMs +
-            "ms（取像素约 " + result.timing.samples + " 次）");
+        const cost = result.timing.samples == null
+            ? "定位 " + result.timing.locateMs + "ms"
+            : "定位 " + result.timing.locateMs + "ms（取像素约 " + result.timing.samples + " 次）";
+        lines.push("耗时：读图/截图 " + result.timing.captureMs + "ms / " + cost);
     }
     return lines.join("\n");
 }
@@ -180,6 +251,7 @@ const LOCATE_BOARD = {
     ratioToRegion: ratioToRegion,
     regionToRatio: regionToRatio,
     locateBoardOnScreen: locateBoardOnScreen,
+    locateBoardInImage: locateBoardInImage,
     describeResult: describeResult,
     pointOf: pointOf
 };

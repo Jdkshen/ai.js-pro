@@ -42,6 +42,7 @@ function capabilities() {
         requestScreenCapture: has("requestScreenCapture"),
         captureScreen: has("captureScreen"),
         yoloLoad: typeOf("yolo.load") === "function",
+        imagesRead: typeOf("images.read") === "function",
         imagesClip: typeOf("images.clip") === "function",
         imagesPixel: typeOf("images.pixel") === "function",
         imagesFromBase64: typeOf("images.fromBase64") === "function",
@@ -199,6 +200,35 @@ function brightnessAt(frame, x, y) {
     }
 }
 
+/**
+ * 读一张磁盘图片（截图/相册导出）。
+ * 用途：棋盘定位可以在**已保存的截图**上先标定，不必把棋盘摆到屏幕上来截。
+ * images.pixel 对 Image 与 ScreenCapture 是同一套接口，所以 samplerFor 两者通用。
+ */
+function readImage(path) {
+    if (typeOf("images.read") !== "function") {
+        throw new Error("缺少能力：images.read");
+    }
+    const image = globals.images.read(path);
+    if (!image) {
+        throw new Error("读不到图片：" + path);
+    }
+    return image;
+}
+
+/** 图片（或帧）的像素尺寸；取不到返回 null。 */
+function sizeOf(imageOrFrame) {
+    if (!imageOrFrame) {
+        return null;
+    }
+    const width = imageOrFrame.getWidth ? imageOrFrame.getWidth() : imageOrFrame.pixelWidth;
+    const height = imageOrFrame.getHeight ? imageOrFrame.getHeight() : imageOrFrame.pixelHeight;
+    if (!isFinite(width) || !isFinite(height)) {
+        return null;
+    }
+    return { width: width, height: height };
+}
+
 /** 给 board-locator 用的采样器：闭包持有帧，采样期间帧必须有效。 */
 function samplerFor(frame) {
     return function (x, y) {
@@ -219,6 +249,8 @@ const AIJS_ADAPTER = {
     projectPath: projectPath,
     requestCapture: requestCapture,
     capture: capture,
+    readImage: readImage,
+    sizeOf: sizeOf,
     describeFrame: describeFrame,
     loadDetector: loadDetector,
     normalizeDetections: normalizeDetections
