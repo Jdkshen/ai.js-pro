@@ -108,6 +108,8 @@ function createDriver(options) {
         /** 最近一次「状态机发 COMPUTE → 拿到结果」的总耗时（ms），含排队与轮询延迟 */
         thinkMs: 0
     };
+    /** 落点格按票据补齐的次数（游戏给刚落的子加高亮，那一格认不出来） */
+    stats.ownMovePatched = 0;
     const history = [];
 
     let running = false;
@@ -130,6 +132,13 @@ function createDriver(options) {
         ? "inline"
         : "worker";
     let pendingCompute = null;    // { jobId, effect, startedAtMono }：正在 worker 里算的任务
+    /**
+     * 「我方落点格」的补齐信息 { index, char }：
+     * 游戏会给刚落的子加高亮/换画法，那一格就认不出来了（小米8 真机实测）。
+     * 兵种是**已知事实**（就是我们票据里的那个子），所以后续观察里只要那格还是 `?`，
+     * 就用它补齐 —— 这样轮次推断/状态机看到的才是完整局面。格子里读到别的子就自动失效。
+     */
+    let ownMovePatch = null;
 
     function useWorkerSearch() {
         return computeMode === "worker";
@@ -370,6 +379,7 @@ function createDriver(options) {
             screen: opts.screen ? opts.screen() : null,
             cancel: function () { return !running || machine.state() === machineModule.STATE.PAUSED; }
         });
+        ownMovePatch = null;   // 要走新的子了：上一次的落点补齐作废
         note("点击：" + ticket.moveICCS + " → " + outcome.status + "（" + outcome.reason + "）" +
             "，点击 " + outcome.clickCount + " 次");
         return pump(machine.dispatch({
@@ -398,6 +408,14 @@ function createDriver(options) {
         note("确认：" + verifier.describe(verdict));
         if (verifier.isSuccess(verdict.result)) {
             stats.confirms += 1;
+        }
+        // 落点格被游戏画花（未知）→ 记住这一格，后续观察一律按票据已知的兵种补齐
+        if (verdict.patched) {
+            ownMovePatch = { index: verdict.patched.index, char: verdict.patched.char };
+            note("落点格 " + verdict.patched.char + "（下标 " + verdict.patched.index +
+                "）后续观察按票据补齐（直到那格能自己认出来）");
+        } else if (verifier.isSuccess(verdict.result)) {
+            ownMovePatch = null;   // 认得出来就不需要补
         }
         return pump(machine.dispatch({ type: "VERIFY_RESULT", ticket: ticket, verdict: verdict }));
     }
@@ -466,10 +484,26 @@ function createDriver(options) {
                 (result.stats && result.stats.autoAlign ? result.stats.autoAlign.unknown : "?") + "）");
         }
         lastBoard = result.chars ? result.chars.slice() : null;
+        // 我方落点格被游戏画花（那格还是 `?`）→ 按票据已知的兵种补齐。
+        // 不补的话未知格≠0，轮次推断会直接放弃（真机就是这样卡在 RECOVERING 的）。
+        let patchedNow = null;
+        let unknownCells = result.unknownCells == null ? 0 : result.unknownCells;
+        if (ownMovePatch && result.chars) {
+            if (result.chars[ownMovePatch.index] === "?") {
+                result.chars[ownMovePatch.index] = ownMovePatch.char;
+                unknownCells = Math.max(0, unknownCells - 1);
+                patchedNow = ownMovePatch;
+                stats.ownMovePatched += 1;
+            } else {
+                // 那格已经能自己认出来（或已经被吃/换子）→ 不再需要补
+                ownMovePatch = null;
+            }
+        }
         return {
             ok: true,
             chars: result.chars,
-            unknownCells: result.unknownCells == null ? 0 : result.unknownCells,
+            unknownCells: unknownCells,
+            patched: patchedNow,
             conflicts: result.stats && result.stats.conflicts ? result.stats.conflicts : 0,
             layout: result.layout,
             result: result
@@ -642,6 +676,7 @@ function createDriver(options) {
             running = false;
             workerSearch.cancel();
             pendingCompute = null;
+            ownMovePatch = null;
             return pump(machine.dispatch({ type: "STOP" }));
         },
         setMySide: function (side) {
@@ -664,6 +699,7 @@ function createDriver(options) {
             machine.setSession(id);
             lastReliable = null;
             grid = null;
+            ownMovePatch = null;
             note("新会话 #" + id + "（基准与几何已清空）");
             return id;
         },
@@ -694,6 +730,7 @@ function createDriver(options) {
                 "，确认 " + counters.confirms + " 次，重试 " + counters.retries + " 次");
             lines.push("算棋：" + computeMode + "（worker " + stats.thinkOffThread +
                 " 次 / 本线程 " + stats.thinkInline + " 次，最近一次 " + Math.round(stats.thinkMs) + "ms）");
+            lines.push("落点补齐 " + stats.ownMovePatched + " 次（游戏给刚落的子加高亮，那格认不出来时按票据补）");
             if (!clickAllowed) {
                 lines.push("模式：不点击（拦截了 " + disabledTap.calls() + " 次点击调用）");
             }

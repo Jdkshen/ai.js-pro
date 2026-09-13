@@ -2108,6 +2108,73 @@ check("截图通道：captureChannel() 默认是「还没截图」（界面靠�
         : ("返回值类型不对：" + typeof used);
 });
 
+// ---------------------------------------------------------------- 落点格被游戏画花（真机：小米8）
+
+check("落点补齐：未知格恰好是我方落点、其它 89 格全对 → 允许确认（兵种来自票据，不是猜）", function () {
+    const ticket = sampleTicket();
+    const dest = verifier.destinationIndex(ticket);
+    if (dest == null) {
+        return "destinationIndex 没算出来（ICCS=" + ticket.moveICCS + "）";
+    }
+    const observed = AFTER_BOARD.slice();
+    observed[dest] = "?";                     // 游戏给刚落的子加高亮 → 那格认不出来
+    const verdict = verifier.verify({
+        ticket: ticket,
+        observed: observed,
+        unknownCells: 1,
+        stable: true,
+        geometryTrusted: true,
+        conflicts: 0
+    });
+    if (verdict.result !== verifier.RESULT.CONFIRMED) {
+        return "应当确认，实际 " + verdict.result + "：" + verdict.reason;
+    }
+    if (!verdict.patched || verdict.patched.index !== dest) {
+        return "没有报告补齐的格子：" + JSON.stringify(verdict.patched);
+    }
+    if (verdict.board[dest] !== AFTER_BOARD[dest]) {
+        return "补齐后的局面不对：落点是 " + verdict.board[dest];
+    }
+    return true;
+});
+
+check("落点补齐：未知格不在落点上 → 仍然 UNRELIABLE（看不清就是看不清）", function () {
+    const ticket = sampleTicket();
+    const dest = verifier.destinationIndex(ticket);
+    const observed = AFTER_BOARD.slice();
+    const other = dest === 0 ? 1 : 0;
+    observed[other] = "?";
+    const verdict = verifier.verify({
+        ticket: ticket,
+        observed: observed,
+        unknownCells: 1,
+        stable: true,
+        geometryTrusted: true,
+        conflicts: 0
+    });
+    return verdict.result === verifier.RESULT.UNRELIABLE
+        ? true
+        : ("应当 UNRELIABLE，实际 " + verdict.result + "：" + verdict.reason);
+});
+
+check("落点补齐：落点未知但局面根本不是这一手（起点没清空）→ 不许确认", function () {
+    const ticket = sampleTicket();
+    const dest = verifier.destinationIndex(ticket);
+    const observed = START_BOARD.slice();     // 还停在走之前
+    observed[dest] = "?";
+    const verdict = verifier.verify({
+        ticket: ticket,
+        observed: observed,
+        unknownCells: 1,
+        stable: true,
+        geometryTrusted: true,
+        conflicts: 0
+    });
+    return verifier.isSuccess(verdict.result) === false
+        ? true
+        : ("这种情况不该算走成了：" + verdict.result);
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +

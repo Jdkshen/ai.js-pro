@@ -55,7 +55,7 @@ function verify(input) {
     const unknownCells = src.unknownCells == null
         ? (observed ? observed.filter(function (ch) { return ch === "?"; }).length : 90)
         : Number(src.unknownCells);
-    const base = { board: null, plies: [], unknownCells: unknownCells };
+    const base = { board: null, plies: [], unknownCells: unknownCells, patched: null };
 
     if (!ticket) {
         return Object.assign({}, base, { result: RESULT.UNRELIABLE, reason: "没有票据，无法确认" });
@@ -72,21 +72,54 @@ function verify(input) {
     if (!observed || observed.length !== 90) {
         return Object.assign({}, base, { result: RESULT.UNRELIABLE, reason: "观测不是完整的 90 格" });
     }
-    // 有未知格就不做「成功」判定：看不清的格子可能正是那个子
-    if (unknownCells > 0) {
-        return Object.assign({}, base, { result: RESULT.UNRELIABLE, reason: "还有 " + unknownCells + " 个未知格" });
-    }
 
     const expected = boardOfFen(ticket.expectedAfterFen);
     if (!expected) {
         return Object.assign({}, base, { result: RESULT.UNRELIABLE, reason: "票据的预期局面 FEN 解析不了" });
     }
-    if (legal.boardMatches(expected, observed)) {
+
+    /**
+     * 未知格处理。
+     *
+     * 只有一种情形允许继续判：**未知格恰好是「我方这步棋的落点」**。
+     * 真机原因：游戏会给刚落的子加高亮/换画法，那一格就认不出来了
+     * （小米8 实测：落子后 …/2?4C1/…，起点已空、其它 89 格全对）。
+     * 这时那一格的**兵种是已知事实**（就是我们票据里的那个子），用它补齐 —— 不是猜；
+     * 而且其余 89 格仍必须与票据预期完全一致（含起点已空），否则一概 UNRELIABLE。
+     */
+    let subject = observed;
+    let patched = null;
+    if (unknownCells > 0) {
+        const dest = destinationIndex(ticket);
+        const unknown = [];
+        for (let i = 0; i < 90; i++) {
+            if (observed[i] === "?") {
+                unknown.push(i);
+            }
+        }
+        const onlyDestination = dest != null && unknown.length > 0 &&
+            unknown.every(function (index) { return index === dest; });
+        if (!onlyDestination) {
+            return Object.assign({}, base, {
+                result: RESULT.UNRELIABLE,
+                reason: "还有 " + unknownCells + " 个未知格" +
+                    (dest == null ? "" : "（且不全是落点格）")
+            });
+        }
+        subject = observed.slice();
+        subject[dest] = expected[dest];
+        patched = { index: dest, char: expected[dest] };
+    }
+
+    if (legal.boardMatches(expected, subject)) {
         return Object.assign({}, base, {
             result: RESULT.CONFIRMED,
-            reason: "与预期落子后局面一致",
-            board: observed.slice(),
-            plies: [ticket.moveICCS]
+            reason: patched
+                ? "与预期落子后局面一致（落点格被游戏画花了，按票据已知的兵种补齐 1 格）"
+                : "与预期落子后局面一致",
+            board: subject.slice(),
+            plies: [ticket.moveICCS],
+            patched: patched
         });
     }
 
@@ -95,7 +128,7 @@ function verify(input) {
     const matched = [];
     for (let i = 0; i < replies.length; i++) {
         const after = legal.applyMove(expected, replies[i]).board;
-        if (legal.boardMatches(after, observed)) {
+        if (legal.boardMatches(after, subject)) {
             matched.push(replies[i]);
         }
     }
@@ -103,7 +136,7 @@ function verify(input) {
         return Object.assign({}, base, {
             result: RESULT.OPPONENT_REPLY,
             reason: "我方 " + ticket.moveICCS + " 已落子，对方应手 " + matched[0].iccs,
-            board: observed.slice(),
+            board: subject.slice(),
             plies: [ticket.moveICCS, matched[0].iccs]
         });
     }
@@ -115,15 +148,15 @@ function verify(input) {
     }
 
     const baseBoard = boardOfFen(ticket.baseFen);
-    if (baseBoard && legal.boardMatches(baseBoard, observed)) {
+    if (baseBoard && legal.boardMatches(baseBoard, subject)) {
         return Object.assign({}, base, {
             result: RESULT.UNCHANGED,
             reason: "局面仍是走之前的样子（可能只选中了棋子，没落子）",
-            board: observed.slice()
+            board: subject.slice()
         });
     }
 
-    const diff = baseBoard ? legal.diffBoards(baseBoard, observed) : [];
+    const diff = baseBoard ? legal.diffBoards(baseBoard, subject) : [];
     return Object.assign({}, base, {
         result: RESULT.UNEXPECTED,
         reason: "出现了无法解释的局面（与基准差 " + diff.length + " 格：" +
@@ -131,8 +164,22 @@ function verify(input) {
                 return "(col " + item.col + ",row " + item.row + ") " +
                     (item.before || "空") + "→" + (item.after || "空");
             }).join("；") + (diff.length > 6 ? " …" : "") + "）",
-        board: observed.slice()
+        board: subject.slice()
     });
+}
+
+/**
+ * 票据这步棋的**落点**在 90 格里的下标。
+ * ICCS 记法：文件字母 a..i + 行号 9..0（红方底线 = 9），与 rules.moveToIccs 对称。
+ */
+function destinationIndex(ticket) {
+    const iccs = ticket && ticket.moveICCS ? String(ticket.moveICCS) : "";
+    if (!/^[a-i][0-9][a-i][0-9]$/.test(iccs)) {
+        return null;
+    }
+    const col = "abcdefghi".indexOf(iccs.charAt(2));
+    const row = 9 - Number(iccs.charAt(3));
+    return row * 9 + col;
 }
 
 /** 结论是否算「我方真的走成了」（CONFIRMED 与 OPPONENT_REPLY 都算）。 */
@@ -151,5 +198,6 @@ module.exports = {
     RESULT: RESULT,
     verify: verify,
     isSuccess: isSuccess,
-    describe: describe
+    describe: describe,
+    destinationIndex: destinationIndex
 };
