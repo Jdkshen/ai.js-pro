@@ -188,7 +188,9 @@ public final class EmbeddedTerminalActivity extends Activity {
     }
 
     private void applyWindowSystemUi() {
-        int flags = getWindow().getDecorView().getSystemUiVisibility();
+        // 从「不隐藏系统栏」的干净状态起步（残留的 FULLSCREEN/IMMERSIVE 会让状态栏永不显示）
+        int flags = com.jdkshen.aijspro.theme.AppThemePalette.withoutHiddenSystemBars(
+                getWindow().getDecorView().getSystemUiVisibility());
         if (android.os.Build.VERSION.SDK_INT >= 23) {
             flags = mPalette.isDark
                     ? flags & ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR

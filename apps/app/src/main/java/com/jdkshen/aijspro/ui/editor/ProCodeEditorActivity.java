@@ -170,8 +170,8 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mPalette = resolvePalette();
-        getWindow().setStatusBarColor(mPalette.statusBar);
-        getWindow().setNavigationBarColor(mPalette.navigationBar);
+        // 顺带清掉可能残留的系统栏隐藏标记（见 AppThemePalette.withoutHiddenSystemBars）
+        applyWindowSystemUi(mPalette);
         String path = getIntent().getStringExtra(EXTRA_PATH);
         String sampleAssetPath = getIntent().getStringExtra(EXTRA_SAMPLE_ASSET_PATH);
         if (!TextUtils.isEmpty(sampleAssetPath)) {
@@ -2027,7 +2027,10 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private void applyWindowSystemUi(AppThemePalette palette) {
         getWindow().setStatusBarColor(palette.statusBar);
         getWindow().setNavigationBarColor(palette.navigationBar);
-        int flags = getWindow().getDecorView().getSystemUiVisibility();
+        // 从「不隐藏系统栏」的干净状态起步：残留的 FULLSCREEN/IMMERSIVE 会让状态栏
+        // 一直不显示（只剩黑条）——这里只调 LIGHT_* 两位，继承下去就永远修不好。
+        int flags = AppThemePalette.withoutHiddenSystemBars(
+                getWindow().getDecorView().getSystemUiVisibility());
         if (android.os.Build.VERSION.SDK_INT >= 23) {
             flags = palette.isDark
                     ? flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR

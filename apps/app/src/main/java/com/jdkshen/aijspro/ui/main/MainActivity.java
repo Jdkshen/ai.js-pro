@@ -256,7 +256,9 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             // It used to follow the system instead: with a dark system theme the
             // icons stayed white on the light #F7F7F7 bar and were unreadable.
             View decor = getWindow().getDecorView();
-            int uiFlags = decor.getSystemUiVisibility();
+            // 先清掉可能残留的隐藏系统栏标记，否则只会继承下去
+            int uiFlags = com.jdkshen.aijspro.theme.AppThemePalette
+                    .withoutHiddenSystemBars(decor.getSystemUiVisibility());
             if (dark) {
                 uiFlags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             } else {

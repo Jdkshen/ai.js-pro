@@ -5431,7 +5431,6 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     // ---- drawing overlay whitelist ----
 
-    private static int sImmersiveCount = 0;
     private volatile QuickJsOverlay mOverlay;
 
     public boolean drawCreate() {
@@ -5450,10 +5449,15 @@ final class QuickJsHostBridge implements AutoCloseable,
                 mOverlay = null;
                 return false;
             }
-            // Hide status/navigation bars while drawing so capture coordinates and
-            // the overlay stay aligned, and the drawn boxes are not overlapped by
-            // system UI.
-            applySystemUi(mRuntime.app == null ? null : mRuntime.app.getCurrentActivity(), true);
+            // 这里**不要**再去隐藏系统栏（历史实现给当前 Activity 设过
+            // FULLSCREEN | HIDE_NAVIGATION | IMMERSIVE_STICKY，已删除）。原因：
+            //   1) 那只作用于「我们自己的窗口」——画板盖在其他应用上时，系统状态栏
+            //      照样压在画板上，达不到「不被系统 UI 遮挡」的目的；
+            //   2) 副作用却是实打实的：脚本一跑，回到本应用看到的状态栏就是被隐藏后
+            //      的一条黑条（真机 K40 实测：顶部 0~75px 纯黑、无时间/电量图标）；
+            //   3) 恢复只发生在 drawClose()，脚本被强停/异常结束就永远不会恢复；
+            //      sImmersiveCount 是 static，跨 Activity 计数还会漂移。
+            // 截图坐标也无需隐藏系统栏——MediaProjection 截的始终是整块屏幕。
             return true;
         } catch (Throwable error) {
             Log.w("QuickJsHostBridge", "Cannot create drawing overlay", error);
@@ -5486,38 +5490,6 @@ final class QuickJsHostBridge implements AutoCloseable,
         QuickJsOverlay overlay = mOverlay;
         mOverlay = null;
         if (overlay != null) overlay.close();
-        applySystemUi(mRuntime.app == null ? null : mRuntime.app.getCurrentActivity(), false);
-    }
-
-    private static void applySystemUi(Activity activity, boolean immersive) {
-        if (activity == null) return;
-        new Handler(Looper.getMainLooper()).post(() -> {
-            try {
-                // Reference-counted: multiple script instances may hide the system
-                // bars at the same time. Only restore them when the last instance
-                // closes, otherwise the capture size changes and remaining overlay
-                // boxes misalign with the screen.
-                if (immersive) {
-                    sImmersiveCount++;
-                } else {
-                    sImmersiveCount = Math.max(0, sImmersiveCount - 1);
-                }
-                View decor = activity.getWindow().getDecorView();
-                if (sImmersiveCount > 0) {
-                    decor.setSystemUiVisibility(
-                            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                                    | View.SYSTEM_UI_FLAG_FULLSCREEN
-                                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
-                } else {
-                    decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
-                }
-            } catch (Throwable error) {
-                Log.w("QuickJsHostBridge", "Cannot update system UI visibility", error);
-            }
-        });
     }
 
     private static final class Detection {

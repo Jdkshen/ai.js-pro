@@ -65,7 +65,8 @@ public abstract class BaseActivity extends AppCompatActivity {
             getWindow().setStatusBarColor(surface);
             getWindow().setNavigationBarColor(surface);
             if (Build.VERSION.SDK_INT >= 23) {
-                int flags = getWindow().getDecorView().getSystemUiVisibility();
+                int flags = com.jdkshen.aijspro.theme.AppThemePalette
+                        .withoutHiddenSystemBars(getWindow().getDecorView().getSystemUiVisibility());
                 if (Pref.isNightModeEnabled()) {
                     getWindow().getDecorView().setSystemUiVisibility(flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
                 } else {

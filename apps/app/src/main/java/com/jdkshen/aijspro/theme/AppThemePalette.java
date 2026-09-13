@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.theme;
 
 import android.graphics.Color;
+import android.view.View;
 
 /**
  * Immutable semantic color palette for the entire app.
@@ -229,6 +230,23 @@ public final class AppThemePalette {
     }
 
     // ---- Utility ----
+
+    /**
+     * 清掉「隐藏系统栏」的标记：全屏 / 隐藏导航 / 沉浸式 / 低电量模式。
+     *
+     * 为什么需要：重设系统栏的代码普遍写法是「读出当前 flags → 只改 LIGHT_* 两位」，
+     * 于是任何一处留下的 FULLSCREEN / IMMERSIVE 会被后续页面一路继承，且不会自愈 ——
+     * 表现就是应用自己的状态栏不见了、顶部只剩一条黑条（真机 K40 复现过：脚本画板
+     * drawing.show() 给当前 Activity 设了沉浸式，脚本一跑就再也回不来）。
+     * 所以每次按主题重设系统栏时，都从「不隐藏任何系统栏」的干净状态起步。
+     */
+    public static int withoutHiddenSystemBars(int flags) {
+        return flags & ~(View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_IMMERSIVE
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_LOW_PROFILE);
+    }
 
     private static int darken(int color, float factor) {
         float[] hsv = new float[3];
