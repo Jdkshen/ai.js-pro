@@ -17,6 +17,7 @@
 const adapter = require("../src/runtime/aijs-adapter.js");
 const locator = require("../src/vision/board-locator.js");
 const recognizer = require("../src/vision/recognizer.js");
+const sequenceModule = require("../src/vision/sequence.js");
 const locateBoard = require("./locate-board.js");
 
 const MODEL_FILE = "assets/models/chessai_160.onnx";
@@ -165,6 +166,125 @@ function run(image, located, opts, frame) {
     return result;
 }
 
+/**
+ * 多帧识别（图片序列）：同一局面的几张图依次识别，按格投票出稳定局面。
+ *
+ * 单帧一定会错几个子（模型本身只有 mAP50 0.53），而错的那几个每帧都不一样 ——
+ * 投票就能洗掉；真正会变的只有刚走的那一步。
+ * @param paths 图片路径数组（同一局面、不同时刻的截图；只给一张时 = 只测链路接通）
+ */
+function recognizeImageSequence(paths, options) {
+    const opts = options || {};
+    const list = [];
+    for (let i = 0; i < (paths ? paths.length : 0); i++) {
+        const item = String(paths[i] || "").trim();
+        if (item) {
+            list.push(item);
+        }
+    }
+    if (list.length === 0) {
+        return { ok: false, stage: "input", reason: "没有给图片路径" };
+    }
+    const sequence = sequenceModule.createSequence({
+        modelVersion: MODEL_FILE,
+        sessionId: "image",
+        minFrames: opts.minFrames,
+        minAgree: opts.minAgree,
+        minShare: opts.minShare,
+        maxSpanMs: 60000
+    });
+    const perFrame = [];
+    for (let i = 0; i < list.length; i++) {
+        const result = recognizeImage(list[i], opts);
+        perFrame.push({
+            path: list[i],
+            ok: !!result.ok,
+            reason: result.reason || "",
+            layout: result.layout || null,
+            detectionCount: result.detectionCount || 0,
+            unknownCells: result.unknownCells == null ? null : result.unknownCells,
+            timing: result.timing || null,
+            elapsedMs: result.elapsedMs || 0
+        });
+        sequence.observe(result, { geometryVersion: result.located ? result.located.grid.version : 0 });
+    }
+    const fused = sequence.snapshot();
+    return {
+        ok: fused.layout != null,
+        frames: list.length,
+        perFrame: perFrame,
+        fusion: fused,
+        reason: fused.reason
+    };
+}
+
+/** 多帧识别（连拍屏幕）：连续截 N 帧识别后投票。 */
+function recognizeScreenSequence(options) {
+    const opts = options || {};
+    const count = opts.frames == null ? 3 : opts.frames;
+    const sequence = sequenceModule.createSequence({
+        modelVersion: MODEL_FILE,
+        sessionId: "screen",
+        minFrames: opts.minFrames,
+        minAgree: opts.minAgree,
+        minShare: opts.minShare,
+        maxSpanMs: opts.maxSpanMs == null ? 8000 : opts.maxSpanMs
+    });
+    const perFrame = [];
+    let first = null;
+    for (let i = 0; i < count; i++) {
+        // 第一帧定位；后续帧复用同一个格点（棋盘不会动，省下每次 700ms）
+        const result = first == null
+            ? recognizeScreen(opts)
+            : recognizeScreen(Object.assign({}, opts, { frame: adapter.capture("full", opts.timeoutMs), region: first.located.region }));
+        if (first == null && result.ok) {
+            first = result;
+        }
+        perFrame.push({
+            ok: !!result.ok,
+            reason: result.reason || "",
+            layout: result.layout || null,
+            detectionCount: result.detectionCount || 0,
+            elapsedMs: result.elapsedMs || 0
+        });
+        sequence.observe(result, {
+            geometryVersion: result.located ? result.located.grid.version : 0,
+            capturedAt: adapter.nowMono()
+        });
+    }
+    const fused = sequence.snapshot();
+    return { ok: fused.layout != null, frames: count, perFrame: perFrame, fusion: fused, reason: fused.reason };
+}
+
+/** 多帧结果的说明文本。 */
+function describeSequence(result) {
+    const lines = [];
+    if (!result || !result.frames) {
+        return "没有结果";
+    }
+    lines.push("共 " + result.frames + " 帧：");
+    for (let i = 0; i < result.perFrame.length; i++) {
+        const frame = result.perFrame[i];
+        lines.push("  第 " + (i + 1) + " 帧：" + (frame.ok
+            ? ("检测 " + frame.detectionCount + " 个框，未知格 " + frame.unknownCells + "，" + frame.elapsedMs + "ms")
+            : ("失败：" + frame.reason)));
+    }
+    const fusion = result.fusion;
+    lines.push("");
+    lines.push("融合：" + (fusion.stable ? "稳定" : "还不稳定") + "（" + fusion.reason + "，窗口 " + fusion.spanMs + "ms）");
+    if (fusion.stats) {
+        lines.push("融合后：棋子 " + fusion.stats.pieces + " / 空 " + fusion.stats.empty + " / 未知 " + fusion.stats.unknown);
+    }
+    if (fusion.layout) {
+        lines.push("");
+        lines.push("局面（大写=红、小写=黑、?=未知）：");
+        lines.push(sequenceModule.boardText(fusion.chars));
+        lines.push("");
+        lines.push("FEN 布局：" + fusion.layout);
+    }
+    return lines.join("\n");
+}
+
 /** 给人看的多行文本。 */
 function describeResult(result) {
     const lines = [];
@@ -222,5 +342,8 @@ module.exports = {
     loadDetector: loadDetector,
     recognizeImage: recognizeImage,
     recognizeScreen: recognizeScreen,
-    describeResult: describeResult
+    recognizeImageSequence: recognizeImageSequence,
+    recognizeScreenSequence: recognizeScreenSequence,
+    describeResult: describeResult,
+    describeSequence: describeSequence
 };

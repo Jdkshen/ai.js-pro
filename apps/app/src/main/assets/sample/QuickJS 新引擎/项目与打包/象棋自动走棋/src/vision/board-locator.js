@@ -442,7 +442,10 @@ function latticeFromSupport(scan, options) {
     const rangeFrom = opts.rangeFrom;
     const rangeTo = opts.rangeTo;
     const hasRange = isFinite(rangeFrom) && isFinite(rangeTo);
-    if (hasRange) {
+    // 全中的时候序号不需要靠范围定：9 条线都命中了，那它们就是 0..8 条，
+    // 不能因为「范围装不下整块棋盘」把正确答案拒掉（真机上踩到过：竖线 9/9、步长也对，却报"对不齐"）。
+    const allMatched = matched.length === expected;
+    if (hasRange && !allMatched) {
         const slack = fittedStep * 0.6;
         let best = null;
         for (let slot = kMin - 3; slot <= kMin + 6; slot++) {
@@ -454,7 +457,7 @@ function latticeFromSupport(scan, options) {
             const distance = Math.abs(origin - rangeFrom);
             if (best === null || distance < best.distance) best = { slot: slot, distance: distance };
         }
-        // 给了棋盘范围却找不到任何「所有线都在范围内」的序号：宁可报失败，
+        // 有缺线（序号本来就不确定）又和给定范围对不齐：宁可报失败，
         // 也不要给出一个起点错一整行/列的假几何（残局会全判错）。
         if (best === null) {
             return {

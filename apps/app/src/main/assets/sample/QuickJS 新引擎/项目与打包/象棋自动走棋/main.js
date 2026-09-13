@@ -38,6 +38,7 @@ ui.layout(
   '  <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="13sp"/>' +
   '  <button id="locateImage" text="定位棋盘（图片）"/>' +
   '  <button id="recognizeImage" text="识别棋盘 → FEN（图片）"/>' +
+  '  <button id="recognizeSeq" text="连拍识别 ×3 → FEN（多帧投票）"/>' +
   '  <scroll height="260dp">' +
   '    <text id="output" textSize="12sp" textColor="#333333"/>' +
   '  </scroll>' +
@@ -145,6 +146,30 @@ ui.recognizeImage.on("click", () => {
         show(board.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
     } catch (error) {
         show("识别没能运行：" + error);
+    }
+});
+
+// 连拍识别：同一局面多帧投票，洗掉单帧的错子（P2）。
+// 图片路径可以逗号分隔多张；只填一张时会把这张当作 3 帧（用来验证链路接通）。
+ui.recognizeSeq.on("click", () => {
+    try {
+        const board = require("./tools/recognize-board.js");
+        const raw = inputText(ui.image).trim();
+        if (!raw) {
+            show("请先填图片路径");
+            return;
+        }
+        const paths = raw.split(",").map(function (item) { return item.trim(); })
+            .filter(function (item) { return item.length > 0; });
+        while (paths.length > 0 && paths.length < 3) {
+            paths.push(paths[0]);
+        }
+        const keep = lastOutput;
+        show("正在连拍识别（" + paths.length + " 帧）…");
+        const result = board.recognizeImageSequence(paths);
+        show(board.describeSequence(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
+    } catch (error) {
+        show("连拍识别没能运行：" + error);
     }
 });
 

@@ -809,6 +809,138 @@ check("局面校验：兵卒列与相象行的告警方向正确", function () {
     return true;
 });
 
+// 真机踩到：某批图竖线 9/9 全中、步长也对，却因为「给定范围装不下整块棋盘」被拒。
+// 9 条线全中时序号本来就是确定的（就是 0..8），不该再拿范围去卡它。
+check("支撑度定位：9 条线全中时，范围装不下也要给结果", function () {
+    const step = 60;
+    const originX = 120;
+    const originY = 300;
+    const vLines = [];
+    const hLines = [];
+    for (let col = 0; col < 9; col++) vLines.push(originX + col * step);
+    for (let row = 0; row < 10; row++) hLines.push(originY + row * step);
+    // 棋子只放在中间几行：四边的线都露出来，两轴都能全中（本轮要测的不是缺线补回）
+    const pieces = [[4, 4], [3, 5], [5, 5], [2, 6], [6, 6]];
+    const sampler = function (x, y) {
+        let value = 0.9;
+        for (let i = 0; i < vLines.length; i++) {
+            if (Math.abs(x - vLines[i]) <= 1.2) value = 0.2;
+        }
+        for (let i = 0; i < hLines.length; i++) {
+            if (Math.abs(y - hLines[i]) <= 1.2) value = Math.min(value, 0.2);
+        }
+        for (let i = 0; i < pieces.length; i++) {
+            const px = originX + pieces[i][0] * step;
+            const py = originY + pieces[i][1] * step;
+            if (Math.abs(x - px) <= 20 && Math.abs(y - py) <= 20) value = Math.min(value, 0.1);
+        }
+        return value;
+    };
+    // 故意给一个「扫描范围够大（能扫到全部 9/10 条线）但起点离棋盘很远」的范围：
+    // 旧逻辑要求「第 0 条线离范围起点不超过 1.2 个格距」，这种范围会被误拒。
+    const result = locator.locateBySupport(sampler, {
+        region: { x: 0, y: 0, width: 700, height: 900 },
+        step: 1
+    });
+    if (!result.ok) {
+        return "全中却被拒：" + result.reason;
+    }
+    return near(result.grid.originX, originX, 3, "originX") === true &&
+        near(result.grid.stepX, step, 1, "stepX") === true;
+});
+
+// ---------------------------------------------------------------- 多帧融合（P2）
+
+const sequenceModule = require("../src/vision/sequence.js");
+
+/** 拼一帧识别结果里那种 cells（只填要点：有子的格、未知格，其余算空）。 */
+function stubCells(placements, unknownIndexes) {
+    const cells = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        cells[i] = { state: "EMPTY", piece: null, score: 0, candidates: [], conflict: false, residual: 0 };
+    }
+    Object.keys(placements || {}).forEach(function (key) {
+        cells[Number(key)] = {
+            state: "PIECE", piece: placements[key], score: 0.9,
+            candidates: [], conflict: false, residual: 0
+        };
+    });
+    (unknownIndexes || []).forEach(function (index) {
+        cells[index] = { state: "UNKNOWN", piece: null, score: 0, candidates: [], conflict: false, residual: 0 };
+    });
+    return cells;
+}
+
+// 单帧识别一定会错几个子，而错的那几个每帧都不一样 —— 按格投票就能洗掉。
+// 这是 P2 存在的全部理由，所以必须有断言守着。
+check("多帧融合：3 帧里有 1 帧认错子 → 投票洗掉", function () {
+    const truth = { 0: "r", 9: "n", 40: "K", 80: "P" };
+    const wrong = Object.assign({}, truth, { 40: "A" }); // 帅被认成仕
+    const sequence = sequenceModule.createSequence({ minFrames: 3, sessionId: "t" });
+    sequence.observe({ ok: true, assigned: stubCells(truth, []) }, { geometryVersion: 1, modelVersion: "m" });
+    sequence.observe({ ok: true, assigned: stubCells(wrong, []) }, { geometryVersion: 1, modelVersion: "m" });
+    const fused = sequence.observe({ ok: true, assigned: stubCells(truth, []) }, { geometryVersion: 1, modelVersion: "m" });
+    if (!fused.stable) {
+        return "三帧一致（两帧正确）应当稳定，实际：" + fused.reason;
+    }
+    const expected = fen.layoutOf(
+        stubChars(truth), { allowUnknown: true });
+    if (fused.layout !== expected) {
+        return "融合结果不对：\n" + fused.layout + "\n应为：\n" + expected;
+    }
+    if (fused.chars[40] !== "K") {
+        return "第 40 格应当是 K（被两帧纠正），实际 " + fused.chars[40];
+    }
+    return true;
+});
+
+check("多帧融合：帧数不够时明确说「还不够」，不给结论", function () {
+    const sequence = sequenceModule.createSequence({ minFrames: 3, sessionId: "t" });
+    sequence.observe({ ok: true, assigned: stubCells({ 0: "r" }, []) }, { geometryVersion: 1, modelVersion: "m" });
+    const fused = sequence.observe({ ok: true, assigned: stubCells({ 0: "r" }, []) }, { geometryVersion: 1, modelVersion: "m" });
+    if (fused.stable) {
+        return "只看了 2 帧就给了稳定结论";
+    }
+    return fused.reason.indexOf("帧不足") >= 0 || ("原因没说清：" + fused.reason);
+});
+
+check("多帧融合：只有一帧看到的子 → 判未知（宁可不判）", function () {
+    const sequence = sequenceModule.createSequence({ minFrames: 3, minAgree: 2, sessionId: "t" });
+    sequence.observe({ ok: true, assigned: stubCells({ 0: "r", 50: "P" }, []) }, { geometryVersion: 1, modelVersion: "m" });
+    sequence.observe({ ok: true, assigned: stubCells({ 0: "r" }, [50]) }, { geometryVersion: 1, modelVersion: "m" });
+    const fused = sequence.observe({ ok: true, assigned: stubCells({ 0: "r" }, [50]) }, { geometryVersion: 1, modelVersion: "m" });
+    if (fused.chars[50] !== "?") {
+        return "只出现一票的格子应当是未知（?），实际 " + fused.chars[50];
+    }
+    if (fused.stable) {
+        return "有未知格时不该判稳定";
+    }
+    return true;
+});
+
+check("多帧融合：几何版本变化 → 旧观测作废，重新数帧", function () {
+    const sequence = sequenceModule.createSequence({ minFrames: 3, sessionId: "t" });
+    sequence.observe({ ok: true, assigned: stubCells({ 0: "r" }, []) }, { geometryVersion: 1, modelVersion: "m" });
+    sequence.observe({ ok: true, assigned: stubCells({ 0: "r" }, []) }, { geometryVersion: 1, modelVersion: "m" });
+    const fused = sequence.observe({ ok: true, assigned: stubCells({ 0: "r" }, []) }, { geometryVersion: 2, modelVersion: "m" });
+    if (fused.frames !== 1) {
+        return "几何变了以后帧数应重新从 1 起，实际 " + fused.frames;
+    }
+    return fused.stable === false || "几何变了却仍然判稳定";
+});
+
+/** 把 {index: char} 变成 90 长的 chars 数组（给 layoutOf 用）。 */
+function stubChars(placements) {
+    const chars = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        chars[i] = null;
+    }
+    Object.keys(placements || {}).forEach(function (key) {
+        chars[Number(key)] = placements[key];
+    });
+    return chars;
+}
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +

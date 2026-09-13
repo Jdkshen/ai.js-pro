@@ -149,14 +149,18 @@ function recognize(options) {
             continue;
         }
         const side = sideOf[index] ? sideOf[index].side : pieceSide.SIDE_UNKNOWN;
-        const letter = pieceSide.applySide(cell.piece, side);
+        const label = cell.piece;
+        const letter = pieceSide.applySide(label, side);
         chars[index] = letter;
+        // 把「带阵营的字符」写回格子：下游（时序融合、棋规层）都用 FEN 字符说话，
+        // 只留模型原始字母的话阵营信息会在融合时丢掉。原始字母仍留在 candidates[0].label。
+        cell.piece = letter;
         placements.push({
             index: index,
             col: index % geometry.COLS,
             row: Math.floor(index / geometry.COLS),
-            label: cell.piece,
-            name: PIECE_NAMES[String(cell.piece).toUpperCase()] || String(cell.piece),
+            label: label,
+            name: PIECE_NAMES[String(label).toUpperCase()] || String(label),
             side: pieceSide.describeSide(side),
             fen: letter,
             score: cell.score
