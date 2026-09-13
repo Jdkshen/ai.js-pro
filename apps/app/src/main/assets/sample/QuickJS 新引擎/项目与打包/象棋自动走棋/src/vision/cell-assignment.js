@@ -9,6 +9,7 @@
 "use strict";
 
 const geometryModule = require("./geometry.js");
+const defaults = require("../util/defaults.js");
 
 const STATE_EMPTY = "EMPTY";
 const STATE_PIECE = "PIECE";
@@ -28,7 +29,7 @@ const DEFAULTS = {
  * @returns { cells, stats }
  */
 function assign(detections, grid, options) {
-    const opts = Object.assign({}, DEFAULTS, options || {});
+    const opts = defaults.mergeDefaults(DEFAULTS, options);
     const cells = new Array(90);
     for (let i = 0; i < 90; i++) {
         cells[i] = { state: STATE_EMPTY, piece: null, score: 0, candidates: [], conflict: false, residual: 0 };

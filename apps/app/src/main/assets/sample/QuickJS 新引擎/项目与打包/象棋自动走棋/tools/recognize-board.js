@@ -182,7 +182,8 @@ function describeResult(result) {
     lines.push("检测：" + result.detectionCount + " 个框 → 落到格上 " + stats.placed +
         "，未知格 " + stats.unknownCells + "，淘汰(低分/出界) " +
         (stats.detected - stats.placed - stats.unknown));
-    lines.push("阵营：判出 " + result.sides.length + " 个，其中判不出 " + stats.sideUnknown + " 个");
+    lines.push("阵营：判出 " + result.stats.sideRed + " 红 / " + result.stats.sideBlack + " 黑" +
+        (result.stats.sideUnknown > 0 ? "，判不出 " + result.stats.sideUnknown + " 个" : ""));
     const timings = [];
     if (result.located.timing) {
         timings.push("定位 " + result.located.timing.locateMs + "ms");
@@ -203,7 +204,13 @@ function describeResult(result) {
         lines.push("⚠ 有 " + result.unknownCells + " 个未知格（'?'），所以这里只给布局、不给完整 FEN");
     }
     if (result.stats.sideUnknown > 0) {
-        lines.push("⚠ 有 " + result.stats.sideUnknown + " 个棋子判不出红黑（棋子颜色太暗/太淡），这些格显示为 '?'");
+        const reasons = [];
+        for (const key in result.stats.sideReasons) {
+            if (Object.prototype.hasOwnProperty.call(result.stats.sideReasons, key)) {
+                reasons.push(key + "（" + result.stats.sideReasons[key] + " 个）");
+            }
+        }
+        lines.push("⚠ 有 " + result.stats.sideUnknown + " 个棋子判不出红黑： " + reasons.join("；"));
     }
     return lines.join("\n");
 }

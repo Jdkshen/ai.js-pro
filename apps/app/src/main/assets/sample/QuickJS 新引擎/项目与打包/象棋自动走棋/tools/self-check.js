@@ -14,6 +14,7 @@ const assignment = require("../src/vision/cell-assignment.js");
 const fusionModule = require("../src/vision/temporal-fusion.js");
 const pieceSide = require("../src/vision/piece-side.js");
 const recognizer = require("../src/vision/recognizer.js");
+const defaultsUtil = require("../src/util/defaults.js");
 
 let passed = 0;
 const failures = [];
@@ -570,6 +571,26 @@ check("手动校准：四个角点能建立几何并给出质量", function () {
 
 // ---------------------------------------------------------------- 阵营判定与识别链路
 
+// 真机踩过两次：`Object.assign({}, DEFAULTS, options)` 在 options 里**有这个键但值是 undefined**
+// 时会把默认值覆盖成 undefined（frameQuality 丢 → 空格全变未知；sampleStep 丢 → 采样步进变 NaN）。
+check("默认值合并：显式传 undefined 不覆盖默认（真机踩过）", function () {
+    const merged = defaultsUtil.mergeDefaults({ a: 1, b: 2, c: 3 }, { a: 5, b: undefined });
+    if (merged.a !== 5) {
+        return "显式传的值没生效：a=" + merged.a;
+    }
+    if (merged.b !== 2) {
+        return "undefined 把默认值覆盖掉了：b=" + merged.b;
+    }
+    if (merged.c !== 3) {
+        return "没传的字段应保留默认：c=" + merged.c;
+    }
+    const empty = defaultsUtil.mergeDefaults({ x: 7 }, null);
+    if (empty.x !== 7) {
+        return "options 为 null 时应全部用默认值";
+    }
+    return true;
+});
+
 // 象棋盘上红方是红字、黑方是黑字，而模型只有 7 个兵种类别（没有颜色），
 // 所以阵营要靠在棋子范围内数「红笔画 / 黑笔画」补回来。
 check("阵营判定：红笔画占优 → 红", function () {
@@ -664,6 +685,10 @@ check("识别链路：桩检测器 + 桩取色 → 还原开局 FEN 布局", fun
     const result = recognizer.recognize({
         image: { stub: true },
         grid: grid,
+        // 显式传 undefined：必须仍然是默认值（否则低分框不会被挡、空格会全部变未知）
+        minScore: undefined,
+        frameQuality: undefined,
+        sideSampleStep: undefined,
         detect: function () { return detections; },
         crop: function (image, cropBox) { return { stub: true, box: cropBox }; },
         rgbAt: function (image, x, y) {

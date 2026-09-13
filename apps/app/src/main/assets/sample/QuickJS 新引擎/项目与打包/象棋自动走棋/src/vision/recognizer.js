@@ -18,6 +18,7 @@ const geometry = require("./geometry.js");
 const assignment = require("./cell-assignment.js");
 const pieceSide = require("./piece-side.js");
 const fen = require("../chess/fen.js");
+const defaults = require("../util/defaults.js");
 
 const DEFAULTS = {
     /** 棋盘外框外扩（格距倍数） */
@@ -51,7 +52,7 @@ const PIECE_NAMES = {
  * @param options.sideToMove  "w"/"b"/null（识别本身给不出轮次，默认 null）
  */
 function recognize(options) {
-    const opts = Object.assign({}, DEFAULTS, options || {});
+    const opts = defaults.mergeDefaults(DEFAULTS, options);
     const startedAt = Date.now();
     const timing = { cropMs: 0, detectMs: 0, sideMs: 0, totalMs: 0 };
     if (!opts.image) {
@@ -126,7 +127,11 @@ function recognize(options) {
             return opts.rgbAt(opts.image, x, y);
         }, opts.grid, col, row, { sampleStep: opts.sideSampleStep });
         sideOf[index] = result;
-        sides.push({ col: col, row: row, piece: cell.piece, side: result.side, redShare: result.redShare, darkShare: result.darkShare });
+        sides.push({
+            col: col, row: row, piece: cell.piece, side: result.side,
+            redShare: result.redShare, darkShare: result.darkShare,
+            counted: result.counted, reason: result.reason
+        });
     }
     timing.sideMs = Date.now() - sideStart;
 
@@ -159,8 +164,18 @@ function recognize(options) {
     }
 
     const unknownCount = chars.filter(function (ch) { return ch === "?"; }).length;
+    const sideReasons = {};
+    sides.forEach(function (entry) {
+        if (entry.side === pieceSide.SIDE_UNKNOWN) {
+            const key = entry.reason || "未说明";
+            sideReasons[key] = (sideReasons[key] || 0) + 1;
+        }
+    });
     const stats = Object.assign({}, assigned.stats, {
         sideUnknown: sides.filter(function (s) { return s.side === pieceSide.SIDE_UNKNOWN; }).length,
+        sideRed: sides.filter(function (s) { return s.side === pieceSide.SIDE_RED; }).length,
+        sideBlack: sides.filter(function (s) { return s.side === pieceSide.SIDE_BLACK; }).length,
+        sideReasons: sideReasons,
         unknownCells: unknownCount
     });
 

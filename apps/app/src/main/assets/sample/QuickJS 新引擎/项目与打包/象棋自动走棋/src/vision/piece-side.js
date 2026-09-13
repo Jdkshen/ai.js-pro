@@ -11,6 +11,8 @@
  */
 "use strict";
 
+const defaults = require("../util/defaults.js");
+
 const SIDE_RED = "RED";
 const SIDE_BLACK = "BLACK";
 const SIDE_UNKNOWN = "UNKNOWN";
@@ -52,7 +54,7 @@ function isDarkPixel(r, g, b, options) {
  * @returns { side, redShare, darkShare, counted, reason }
  */
 function classify(samples, options) {
-    const opts = Object.assign({}, DEFAULTS, options || {});
+    const opts = defaults.mergeDefaults(DEFAULTS, options);
     let red = 0;
     let dark = 0;
     let counted = 0;
@@ -87,7 +89,7 @@ function classify(samples, options) {
 
 /** 某一格（规范坐标）在屏幕上的采样框，边长按格距算。 */
 function samplingBox(grid, col, row, options) {
-    const opts = Object.assign({}, DEFAULTS, options || {});
+    const opts = defaults.mergeDefaults(DEFAULTS, options);
     const geometry = require("./geometry.js");
     const point = geometry.pointAt(grid, col, row);
     const step = Math.min(Math.abs(grid.stepX), Math.abs(grid.stepY)) * opts.sampleRatio;
@@ -102,7 +104,7 @@ function samplingBox(grid, col, row, options) {
 
 /** 在框内按 step 采样 RGB。sampler(x, y) 返回 [r,g,b] 或 null。 */
 function sampleBox(sampler, box, options) {
-    const opts = Object.assign({}, DEFAULTS, options || {});
+    const opts = defaults.mergeDefaults(DEFAULTS, options);
     const samples = [];
     for (let y = box.y; y < box.y + box.height; y += opts.sampleStep) {
         for (let x = box.x; x < box.x + box.width; x += opts.sampleStep) {
