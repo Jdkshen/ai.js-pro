@@ -50,6 +50,7 @@ import com.jdkshen.aijspro.autojs.AutoJs
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
+import com.jdkshen.aijspro.theme.isAijsDarkThemeResolved
 import com.stardust.autojs.core.console.ConsoleImpl
 import com.stardust.autojs.core.console.ConsoleView
 import com.stardust.util.IntentUtil
@@ -127,7 +128,8 @@ class MiuixLogActivity : ComponentActivity() {
 
     /** Console colors following the Miuix theme directly (not the legacy M3 palette). */
     private fun applyLogTheme(view: ConsoleView) {
-        val dark = isAijsDarkTheme()
+        // 这里不是 @Composable 上下文，用带 Context 的版本（与 Compose 主题同规则、同数据源）
+        val dark = isAijsDarkThemeResolved(this)
         val colors = SparseArray<Int>()
         colors.put(Log.VERBOSE, if (dark) 0xFF9E9E9E.toInt() else 0xFF757575.toInt())
         colors.put(Log.DEBUG, if (dark) 0xFFE6E6E6.toInt() else 0xFF212121.toInt())

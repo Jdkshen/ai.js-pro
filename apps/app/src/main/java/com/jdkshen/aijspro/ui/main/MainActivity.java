@@ -236,14 +236,13 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             toolbar.setVisibility(View.GONE);
             // Match AijsMiuixTheme backgrounds (light #F7F7F7 / dark black)
             // so the status bar and tab strip blend with the Miuix navigation bar.
-            // Mirror AijsMiuixTheme's own rule (follow-system wins, otherwise the
-            // in-app switch); reading only the in-app switch painted a light bar
-            // while the pages were dark whenever "follow system" was on.
-            boolean followSystem = Pref.isFollowSystemThemeEnabled();
-            boolean systemDark = (getResources().getConfiguration().uiMode
-                    & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
-                    == android.content.res.Configuration.UI_MODE_NIGHT_YES;
-            boolean dark = followSystem ? systemDark : Pref.isNightModeEnabled();
+            //
+            // ⚠️ 必须跟 Compose 主题**共用同一份判定**，不要在这里自己读 Pref 重算：
+            // 两边各算一次就会不一致 —— 真机（新机 Android 16，系统深色 + 应用内跟随系统）
+            // 上出现过：这里算出 dark 把状态栏刷成纯黑，而页面走 AijsMiuixThemeState 的旧值
+            // 仍按浅色画，结果就是「黑状态栏配白页面」。
+            com.jdkshen.aijspro.theme.AijsMiuixThemeKt.ensureMiuixThemeStateLoaded();
+            boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this);
             int surface = dark
                     ? android.graphics.Color.BLACK
                     : android.graphics.Color.rgb(0xF7, 0xF7, 0xF7);

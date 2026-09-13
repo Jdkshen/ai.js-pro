@@ -4,6 +4,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
+import android.content.Context
+import android.content.res.Configuration
 import com.jdkshen.aijspro.Pref
 import top.yukonga.miuix.kmp.theme.Colors
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -38,12 +40,53 @@ object AijsMiuixThemeState {
     val followSystem = mutableStateOf(Pref.isFollowSystemThemeEnabled())
 }
 
-fun isAijsDarkTheme(): Boolean = AijsMiuixThemeState.dark.value
-
 fun isAijsFollowSystemTheme(): Boolean = AijsMiuixThemeState.followSystem.value
+
+/**
+ * 有效深色状态（Composable 用）。
+ *
+ * ⚠️ 必须与 `AijsMiuixTheme` 用**一模一样**的规则，否则页面与系统栏会打架。
+ * 真机踩过：本函数原来只读 `AijsMiuixThemeState.dark`（应用内开关），
+ * 而 MainActivity 自己读 Pref 并且「跟随系统优先」—— 系统深色时
+ * MainActivity 把状态栏刷成纯黑、页面却是浅色的（黑状态栏配白页面）。
+ */
+@Composable
+fun isAijsDarkTheme(): Boolean =
+    if (AijsMiuixThemeState.followSystem.value) {
+        isSystemInDarkTheme()
+    } else {
+        AijsMiuixThemeState.dark.value
+    }
+
+/**
+ * 有效深色状态（非 Composable 用，比如 Java 的 Activity 要给状态栏上色）。
+ *
+ * 与 [isAijsDarkTheme] / [AijsMiuixTheme] 同规则、同数据源：
+ * 只认 `AijsMiuixThemeState`，不再自己重算 Pref —— 两边各算一次就会不一致。
+ */
+fun isAijsDarkThemeResolved(context: Context): Boolean {
+    if (!AijsMiuixThemeState.followSystem.value) {
+        return AijsMiuixThemeState.dark.value
+    }
+    val mode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    return mode == Configuration.UI_MODE_NIGHT_YES
+}
 
 fun refreshMiuixDarkTheme() {
     AijsMiuixThemeState.dark.value = Pref.isNightModeEnabled()
+}
+
+/**
+ * 进程内第一次用到主题状态时，从 Pref 读一次真实值。
+ *
+ * 为什么需要：[AijsMiuixThemeState] 的几个 mutableStateOf 是在**对象初始化那一刻**求值的，
+ * 若那一刻 Pref 还没 init（或调用方还没读到设置），它们会停在默认的 false ——
+ * 而刷新函数原来只有抽屉里的开关会调，于是整个进程里页面都按「浅色」画，
+ * 与现场（跟随系统 + 系统深色）对不上。Activity 上色前调一下这个就对齐了。
+ */
+fun ensureMiuixThemeStateLoaded() {
+    AijsMiuixThemeState.dark.value = Pref.isNightModeEnabled()
+    AijsMiuixThemeState.followSystem.value = Pref.isFollowSystemThemeEnabled()
 }
 
 fun refreshMiuixFollowSystemTheme() {
