@@ -41,6 +41,7 @@ ui.layout(
   '      <button id="modeAuto" text="③ 自动走棋：校验通过后真的点击"/>' +
   '      <button id="mySide" text="我方：红方（点一下切换）"/>' +
   '      <button id="tapMethod" text="点击通道：自动（有 Shizuku 就用它）"/>' +
+  '      <button id="captureChannel" text="截图通道：自动"/>' +
   '      <button id="assertTurn" text="现在轮到我（声明轮次基准）"/>' +
   '      <button id="autoToggle" text="开始观察 / 暂停"/>' +
   '      <button id="autoStop" text="停止（关画板）"/>' +
@@ -313,6 +314,21 @@ function describeTapChannel() {
     const caps = adapter.capabilities();
     return TAP_LABEL[tapMethodKey] + "｜无障碍=" + (caps.accessibilityReady ? "就绪" : "未就绪") +
         "，Shizuku=" + (caps.shizuku ? "可用" : "不可用");
+}
+
+const CAPTURE_BACKENDS = ["auto", "screen", "shell"];
+const CAPTURE_LABEL = {
+    auto: "自动（系统截屏失败就改走 screencap）",
+    screen: "只用系统截屏（MediaProjection）",
+    shell: "只用 screencap（Shizuku/root）"
+};
+
+/** 截图通道现状：偏好 + 最近一次真正用上的通道 + 能用什么。 */
+function describeCaptureChannel() {
+    const caps = adapter.capabilities();
+    return "偏好：" + CAPTURE_LABEL[adapter.captureBackend()] +
+        "｜最近实际用的：" + (adapter.captureChannel() || "还没截图") +
+        "｜shell 通道=" + (caps.captureShell ? ("可用（" + caps.captureShellBackend + "）") : "不可用");
 }
 
 /** 读棋盘范围输入框（比例 x,y,w,h）；空的就返回 null（用默认比例）。 */
@@ -593,9 +609,22 @@ ui.tapMethod.on("click", function () {
     tapMethodKey = TAP_METHODS[(index + 1) % TAP_METHODS.length];
     ui.tapMethod.setText("点击通道：" + TAP_LABEL[tapMethodKey]);
     show("点击通道改为：" + describeTapChannel() + "\n" +
-        "（无障碍事件带自动化标记，腾讯天天象棋这类游戏会直接忽略 —— 实测：click/press/swipe/longClick\n" +
-        " 都返回 true 但画面零变化，而 Shizuku 的 input tap 能正常落子）");
+        "两条通道都能落子（实测）：「无障碍」不需要装 Shizuku 但要开无障碍服务；" +
+        "「Shizuku」用 shell 身份注入 input tap，不受游戏过滤影响。\n" +
+        "越关键是：注入时**游戏必须真的在前台** —— 我们自己的窗口盖在上面时，\n" +
+        "触摸会被我们自己吃掉（看起来像「返回 true 但没反应」）。");
     rebuildDriver();
+});
+
+ui.captureChannel.on("click", function () {
+    const index = CAPTURE_BACKENDS.indexOf(adapter.captureBackend());
+    const next = CAPTURE_BACKENDS[(index + 1) % CAPTURE_BACKENDS.length];
+    adapter.setCaptureBackend(next);
+    ui.captureChannel.setText("截图通道：" + (next === "auto" ? "自动" : (next === "screen" ? "系统截屏" : "screencap")));
+    show("截图通道改为：" + describeCaptureChannel() + "\n" +
+        "说明：系统截屏（MediaProjection）很快，但 MIUI 会在切前后台/前台服务变化时把会话移除，\n" +
+        "之后每一帧都超时（实测连续 31s 全失败）。screencap 走 Shizuku/root，不需要授权、不会被作废，\n" +
+        "代价是慢（K40 约 1.2s/帧）。自动模式：先用系统截屏，失败自动改走 screencap。");
 });
 
 ui.mySide.on("click", function () {

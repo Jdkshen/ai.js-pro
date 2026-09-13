@@ -24,6 +24,28 @@ function has(name) {
     return typeof globals[name] !== "undefined" && globals[name] !== null;
 }
 
+/**
+ * 截图通道偏好：`auto`（默认：先系统截屏，失败自动退到 shell）| `screen`（只用系统截屏）| `shell`（只用 screencap）。
+ * 模块级状态，因为截图是在识别链路深处调的，没法逐次传 UI 选择。
+ */
+var captureBackendKey = "auto";
+/** 最近一次**真正用上**的通道：`screen` | `shizuku` | `root`（界面/日志要看这个，别只看偏好） */
+var lastCaptureChannel = null;
+
+function setCaptureBackend(key) {
+    const value = String(key || "auto");
+    captureBackendKey = (value === "screen" || value === "shell") ? value : "auto";
+    return captureBackendKey;
+}
+
+function captureBackend() {
+    return captureBackendKey;
+}
+
+function captureChannel() {
+    return lastCaptureChannel;
+}
+
 function typeOf(path) {
     const parts = String(path).split(".");
     let current = globals;
@@ -41,6 +63,9 @@ function capabilities() {
     return {
         requestScreenCapture: has("requestScreenCapture"),
         captureScreen: has("captureScreen"),
+        // shell 截图（Shizuku/root 跑 screencap）：MediaProjection 会话被系统移除后的救生通道
+        captureShell: shellCaptureBackend() !== null,
+        captureShellBackend: shellCaptureBackend(),
         yoloLoad: typeOf("yolo.load") === "function",
         imagesRead: typeOf("images.read") === "function",
         imagesClip: typeOf("images.clip") === "function",
@@ -106,11 +131,26 @@ function projectPath(relative) {
 }
 
 function requestCapture(orientation) {
+    // 走 shell 截图（Shizuku/root 的 screencap）时**根本不需要**系统截屏授权：
+    // 这里直接返回 true，免得白白弹出授权界面（弹了也不影响，只是多余）。
+    if (captureBackendKey === "shell") {
+        return true;
+    }
     if (!has("requestScreenCapture")) {
+        if (captureBackendKey === "auto" && shellCaptureBackend() !== null) {
+            return true; // 没有系统截屏接口，但 auto 还有 shell 通道
+        }
         throw new Error("缺少能力：requestScreenCapture");
     }
     // 已知语义：返回 false 表示用户拒绝授权；真正的新帧语义要等平台补齐（见任务书 21.3）。
-    return globals.requestScreenCapture(orientation || "portrait");
+    const granted = globals.requestScreenCapture(orientation || "portrait");
+    if (granted === false && captureBackendKey === "auto" && shellCaptureBackend() !== null) {
+        // 授权被拒/系统不给（MIUI 上常见）：auto 模式还能退到 shell 通道，
+        // 所以不要在这里让整条链路提前失败。
+        log("capture", "系统截屏授权失败，auto 模式将改用 shell 通道（screencap）");
+        return true;
+    }
+    return granted;
 }
 
 /** 小睡：优先用平台的 sleep，没有就忙等。只在「丢了黑帧要重截」这条小概率路径上用。 */
@@ -187,24 +227,99 @@ function looksBlank(frame, options) {
 }
 
 /**
+ * shell 截图的落盘路径：**必须是 shell 身份能写的地方**（应用内部目录 shell 写不了）。
+ * 用两个文件轮流写（ping-pong）：避免宿主按路径缓存图片导致拿到上一帧。
+ */
+var SHELL_CAPTURE_FILES = ["/sdcard/aijspro-capture-0.png", "/sdcard/aijspro-capture-1.png"];
+var shellCaptureIndex = 0;
+
+/**
+ * 能用 shell 截图吗？返回 "shizuku" / "root" / null。
+ * shell 身份的 `screencap` 等同 `adb shell screencap`，不需要 MediaProjection 授权、
+ * 也不会被系统在前后台切换时移除 —— 这是 MediaProjection 挂掉后的救生通道。
+ */
+function shellCaptureBackend() {
+    if (shizukuReady()) {
+        return "shizuku";
+    }
+    if (typeOf("shell.isRootAvailable") === "function") {
+        try {
+            if (globals.shell.isRootAvailable() === true) {
+                return "root";
+            }
+        } catch (error) {
+            // 判不了就当没有
+        }
+    }
+    return null;
+}
+
+/**
+ * 用 `screencap -p <file>` 抓一帧再读回来。
+ * 耗时主要在设备端 PNG 编码（K40 1080×2400 实测约 1.2s），但胜在**稳定**：
+ * 不需要授权，也不会因为应用切前后台而被作废。
+ */
+function captureViaShell(options) {
+    const opts = options || {};
+    const backend = opts.shellBackend || shellCaptureBackend();
+    if (!backend) {
+        throw new Error("没有 Shizuku/root，无法用 shell 截图（screencap 需要 shell 身份）");
+    }
+    if (!has("images") || typeOf("images.read") !== "function") {
+        throw new Error("缺少能力：images.read（读不回截图文件）");
+    }
+    const files = opts.paths || SHELL_CAPTURE_FILES;
+    const path = files[shellCaptureIndex % files.length];
+    shellCaptureIndex += 1;
+    const shellOptions = { timeout: opts.shellTimeoutMs == null ? 12000 : opts.shellTimeoutMs };
+    shellOptions[backend] = true;
+    const result = globals.shell("screencap -p " + path, shellOptions);
+    if (!result || result.code !== 0) {
+        throw new Error("shell 截图失败：exit " + (result ? result.code : "无结果") + " " +
+            String((result && result.error) || "").trim().slice(0, 80));
+    }
+    const frame = globals.images.read(path);
+    if (!frame) {
+        throw new Error("shell 截图读不回来：" + path);
+    }
+    lastCaptureChannel = backend;
+    return frame;
+}
+
+/**
  * 截一帧。
  *
- * ⚠️ 会**自动丢掉纯黑帧**并重试（原因见 looksBlank）：默认最多 3 次、每次间隔 60ms。
+ * **两条通道**（`options.backend` / `setCaptureBackend()`）：
+ *   - `screen`：宿主的 `captureScreen()`（MediaProjection）—— 快（几毫秒），但要用户授权，
+ *     而且**会话很脆**：MIUI 会在前台/前台服务变化时移除它（`removeMediaProjection`），
+ *     之后每一帧都是 `Timed out waiting for the first screen capture frame`（真机实测连续 31s 全失败）；
+ *   - `shell`：**用 Shizuku / root 跑 `screencap -p` 再读回图片** —— 慢（K40 实测约 1.2s/帧），
+ *     但**不需要任何授权、也不会被系统悄悄作废**（2026-09-13 真机实测：连续多次都拿到真实屏）。
+ *
+ * 默认 `auto`：先用 `screen`（便宜），**失败就自动改走 `shell`**（有 Shizuku/root 才行），
+ * 所以「MediaProjection 挂了」不再需要用户手动切应用重新授权。
+ *
+ * ⚠️ 还会**自动丢掉纯黑帧**并重试（原因见 looksBlank）：默认最多 3 次、每次间隔 60ms。
  * 拿到非黑帧就立即返回，所以正常情况下（第二帧起）不会多花时间。
  * 三次都还是黑的话，仍然把最后一帧交出去（并在 describeFrame 里报 blank=true），
  * 不抛错 —— 因为极暗的真实界面也可能命中，调用方需要能拿到图并自己处理。
- *
- * ⚠️ 单次截图**超时**（`Timed out waiting for the first screen capture frame`）是另一种失败：它直接抛异常。
- * 真机实测：刚从我们自己的界面切到游戏时，虚拟显示屏要过一会儿才出第一帧（3 次 × 600ms 全超时），
- * 于是整轮直接崩。所以：
- * 1) 每次尝试各自 try/catch，超时**逐次放宽**（默认 600ms → 1500ms → 3000ms，可用 options.timeouts 覆盖）；
- * 2) 三次都超时才抛出，错误信息里写明次数，便于调用方判断是「权限没了」还是「首帧慢」。
  */
 function capture(mode, timeoutMs, options) {
-    if (!has("captureScreen")) {
-        throw new Error("缺少能力：captureScreen");
-    }
     const opts = options || {};
+    const backend = opts.backend || captureBackendKey;
+    const wantShell = backend === "shell";
+    const wantScreen = backend === "screen";
+
+    if (wantShell) {
+        return captureViaShell(opts);
+    }
+    if (!has("captureScreen")) {
+        if (wantScreen) {
+            throw new Error("缺少能力：captureScreen");
+        }
+        return captureViaShell(opts);
+    }
+
     const attempts = opts.attempts == null ? 3 : opts.attempts;
     const gapMs = opts.gapMs == null ? 60 : opts.gapMs;
     const base = timeoutMs == null ? 600 : timeoutMs;
@@ -225,6 +340,7 @@ function capture(mode, timeoutMs, options) {
             lastError = error;
         }
         if (frame && !looksBlank(frame)) {
+            lastCaptureChannel = "screen";
             return frame;
         }
         if (i < attempts - 1 && gapMs > 0) {
@@ -232,9 +348,27 @@ function capture(mode, timeoutMs, options) {
         }
     }
     if (!frame) {
-        throw new Error("截屏连续 " + attempts + " 次失败：" +
-            (lastError && lastError.message ? lastError.message : String(lastError)));
+        const message = "截屏连续 " + attempts + " 次失败：" +
+            (lastError && lastError.message ? lastError.message : String(lastError));
+        // MediaProjection 会话被系统移除后就再也出不了帧 —— 有 Shizuku/root 就直接换通道，
+        // 而不是把这个错误抛给上层（上层只会当成「这一轮没看清」，永远恢复不了）。
+        if (opts.allowShellFallback !== false && shellCaptureBackend() !== null) {
+            try {
+                const fallback = captureViaShell(opts);
+                if (fallback) {
+                    log("capture", "系统截屏失败，已自动改用 " + lastCaptureChannel + " 通道（screencap）");
+                    return fallback;
+                }
+            } catch (error) {
+                throw new Error(message + "；改用 shell 截图也失败：" +
+                    (error && error.message ? error.message : String(error)));
+            }
+        }
+        // 没有 shell 通道（没装 Shizuku / 没 root）时，只能靠用户把应用切回前台重新授权截屏。
+        throw new Error(message +
+            "；这台设备没有 Shizuku/root，无法自动换通道 —— 请切回应用重新授权截屏后重试");
     }
+    lastCaptureChannel = "screen";
     return frame;
 }
 
@@ -633,6 +767,11 @@ const AIJS_ADAPTER = {
     projectPath: projectPath,
     requestCapture: requestCapture,
     capture: capture,
+    setCaptureBackend: setCaptureBackend,
+    captureBackend: captureBackend,
+    captureChannel: captureChannel,
+    shellCaptureBackend: shellCaptureBackend,
+    captureViaShell: captureViaShell,
     looksBlank: looksBlank,
     waitMs: waitMs,
     createTap: createTap,

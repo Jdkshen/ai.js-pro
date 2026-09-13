@@ -71,6 +71,23 @@ K40（cccc62c7）+ 腾讯天天象棋实测（2026-09-13，engine dev-568/569/57
 | **真机点击（Shizuku 通道）** | ✅ **成功落子**：`shell("input tap x y",{shizuku:true})` 点炮二平五 → 棋盘实测 红炮 在 (第4列,第7行)、游戏「2步」、黑方已应着 |
 | **真机点击（无障碍通道）** | ✅ **同样成功**：`press(x,y,120)` 走 馬二进三 → 馬 从 (1,9) 消失、出现在 (2,7) |
 | 截图会话（MediaProjection） | ⚠️ 脆弱：会话在应用切前台/后台变化时会被 MIUI 移除（`removeMediaProjection`），之后连续 31s 都是 `Timed out waiting for the first screen capture frame` |
+| **截图回退通道（Shizuku screencap）** | ✅ **实测可用**：`shell("screencap -p /sdcard/aijspro-capture-0.png",{shizuku:true})` + `images.read` → 真实全分辨率帧（1080×2400，棋盘色 `#f0d5ac`），不需要任何授权、不会被作废；代价约 **0.6–1.4s/帧** |
+
+### 截图会话挂了怎么办：自动换通道（不用人工重新授权）
+
+`aijs-adapter.capture()` 现在有**两条通道**，默认 `auto`：
+
+1. `screen` = 宿主的 `captureScreen()`（MediaProjection）—— 快（几毫秒），但要授权、且会被系统移除；
+2. `shell` = **用 Shizuku/root 跑 `screencap -p` 再 `images.read` 读回来** —— 慢（K40 实测 0.6–1.4s/帧），
+   但**不需要授权、也不会被系统悄悄作废**（等同 `adb shell screencap`，只是身份换成 shell）。
+
+`auto` 的行为：先用 `screen`，**失败（超时/被移除）自动改走 `shell`**；`requestCapture()` 在 shell 通道下直接返回
+true（不弹授权框），授权被拒时 auto 也不会提前失败。没有 Shizuku/root 的设备只能靠人工重新授权，
+错误信息里会写明这一点。界面加了「截图通道」按钮可强制指定（自动 / 系统截屏 / screencap）。
+
+验收探针：`tools/p4-capture-fallback.js`（实测输出 `capture ok=true 实际通道=shizuku` + `recognize ok=true`）。
+⚠️ 用 shell 通道时**每帧 1 秒起**，所以自动走棋的节奏会明显变慢（`tickMs` 要放宽），
+且它与点击共用同一个 shell 通道（串行执行）。
 
 ### 点击通道的结论（之前搞错了，这里更正）
 
