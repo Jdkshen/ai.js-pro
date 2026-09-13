@@ -148,7 +148,10 @@ function recognizeScreen(options) {
             if (!adapter.requestCapture("portrait")) {
                 return { ok: false, stage: "capture", reason: "用户拒绝了截图授权" };
             }
-            reuseFrame = adapter.capture("full", opts.timeoutMs == null ? 300 : opts.timeoutMs);
+            // ⚠️ 真机踩过（小米8 + Android 15）：这里原来写死 300ms。投屏通道慢时会
+            // 拿到「半更新」的帧 —— 症状是**左列一片丢子**（a9-c9 读成空，而同一帧
+            // 用文件识别是全的）。给足 1200ms，宁可多等一会儿也不要半截帧。
+            reuseFrame = adapter.capture("full", opts.timeoutMs == null ? 1200 : opts.timeoutMs);
             if (!reuseFrame) {
                 return { ok: false, stage: "capture", reason: "截图失败：没有拿到帧" };
             }

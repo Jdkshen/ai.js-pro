@@ -1011,6 +1011,12 @@ function main() {
             computeModeKey = String(auto.computeMode) === "inline" ? "inline" : "worker";
             logLine("算棋模式：" + computeModeKey);
         }
+        if (auto.captureBackend) {
+            // "auto"（默认，先系统截屏）/ "screen" / "shell"（Shizuku/root 跑 screencap）：
+            // shell 通道不需要投屏授权（小米8 上实测又快一倍且颜色正确），适合无人值守跑。
+            const key = adapter.setCaptureBackend(auto.captureBackend);
+            logLine("截图通道偏好：" + key + "（最近一次实际用过：" + (adapter.captureChannel() || "未用过") + "）");
+        }
         if (auto.start) {
             startLoop();
             if (auto.declareTurn) {
