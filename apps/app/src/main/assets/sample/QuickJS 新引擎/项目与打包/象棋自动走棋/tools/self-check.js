@@ -1016,6 +1016,53 @@ check("一致性修复：合法的标准开局不该被降级", function () {
     return result.demoted.length === 0 || ("合法开局被降级了：" + JSON.stringify(result.demoted));
 });
 
+// ---------------------------------------------------------------- 结果文本
+
+// recognize-board 依赖宿主适配层，但适配层在离线环境下会退化成空对象，所以这里能 require
+let recognizeBoard = null;
+try {
+    recognizeBoard = require("./recognize-board.js");
+} catch (error) {
+    recognizeBoard = null;
+}
+
+check("结果文本：模型要报出文件名，不能是 undefined", function () {
+    if (!recognizeBoard) {
+        return "require ./recognize-board.js 失败，跳过";
+    }
+    const stub = {
+        ok: true,
+        stats: {
+            placed: 32, unknownCells: 2, unknown: 2, detected: 34,
+            sideRed: 16, sideBlack: 16, sideUnknown: 0, sideReasons: {}
+        },
+        located: { reason: "桩定位", timing: { locateMs: 1 } },
+        timing: { cropMs: 0, detectMs: 1, sideMs: 1 },
+        native: { inferenceMs: 0.5 },
+        elapsedMs: 10,
+        detectionCount: 34,
+        unknownCells: 2,
+        // ⚠️ 这里就是曾经写成 result.model.model 的地方（loaded.request 里只有 modelPath）
+        model: { modelPath: "C:\\x\\assets\\models\\chessai_160.onnx", inputSize: 160 },
+        modelSource: "脚本目录",
+        layout: "9/9",
+        chars: new Array(90).fill("?")
+    };
+    let text;
+    try {
+        text = recognizeBoard.describeResult(stub);
+    } catch (error) {
+        return "describeResult 抛错：" + (error && error.message ? error.message : error);
+    }
+    if (text.indexOf("undefined") >= 0) {
+        return "结果文本里出现了 undefined：" + text.split("\n").slice(0, 3).join(" | ");
+    }
+    if (text.indexOf("chessai_160.onnx") < 0) {
+        return "没有报出模型文件名：" + text.split("\n").slice(0, 3).join(" | ");
+    }
+    return true;
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +

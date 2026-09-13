@@ -245,6 +245,7 @@ function recognizeScreenSequence(options) {
             reason: result.reason || "",
             layout: result.layout || null,
             detectionCount: result.detectionCount || 0,
+            unknownCells: result.unknownCells == null ? null : result.unknownCells,
             elapsedMs: result.elapsedMs || 0
         });
         sequence.observe(result, {
@@ -298,7 +299,11 @@ function describeResult(result) {
     }
     const stats = result.stats;
     lines.push("棋盘：" + result.located.reason);
-    lines.push("模型：" + result.model.model + "（路径来源：" + result.modelSource + "）");
+    // ⚠️ loaded.request 里存的是 **modelPath**（键名与 yolo.load 一致），没有 model 字段 —— 以前写成
+    // result.model.model 就会打出「模型：undefined」
+    const request = result.model || {};
+    const modelFile = request.modelPath ? String(request.modelPath).split(/[\\/]/).pop() : "(未知)";
+    lines.push("模型：" + modelFile + "（" + result.modelSource + "，输入 " + request.inputSize + "）");
     lines.push("检测：" + result.detectionCount + " 个框 → 落到格上 " + stats.placed +
         "，未知格 " + stats.unknownCells + "，淘汰(低分/出界) " +
         (stats.detected - stats.placed - stats.unknown));
