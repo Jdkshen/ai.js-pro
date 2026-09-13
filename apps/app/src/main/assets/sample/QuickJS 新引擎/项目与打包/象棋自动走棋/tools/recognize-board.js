@@ -434,10 +434,19 @@ function calibrateGrid(image, located, options) {
         }
         tried += 1;
         const unknown = result.ok ? result.unknownCells : 999;
-        if (best == null || unknown < best.unknown) {
+        // 代价 = 「修复动作数（降级+翻色）」优先，再看未知格：
+        // ⚠️ 不能只看未知格 —— 有翻色修复后，任意偏移都能凑出「0 未知格」，
+        // 搜索会立刻停在未对齐的 (0,0) 上，反而丢掉对齐带来的颜色正确性（实测颜色错 0 → 18）。
+        const repairedInfo = result.repaired || {};
+        const fixes = (repairedInfo.demoted ? repairedInfo.demoted.length : 0) +
+            (repairedInfo.flipped ? repairedInfo.flipped.length : 0);
+        const cost = fixes * 1000 + (unknown < 0 ? 999 : unknown);
+        if (best == null || cost < best.cost) {
             best = {
                 ok: result.ok,
                 unknown: unknown,
+                fixes: fixes,
+                cost: cost,
                 dx: dx,
                 dy: dy,
                 layout: result.layout,
@@ -445,7 +454,7 @@ function calibrateGrid(image, located, options) {
                 sideUnknown: result.stats ? result.stats.sideUnknown : null
             };
         }
-        if (unknown === 0) {
+        if (cost === 0) {
             break;
         }
     }
@@ -462,7 +471,10 @@ function calibrateGrid(image, located, options) {
     }
     best.tried = tried;
     best.base = { originX: base.originX, originY: base.originY, stepX: base.stepX, stepY: base.stepY };
-    best.reason = best.unknown === 0 ? "已校准（无未知格）" : ("校准后仍有 " + best.unknown + " 个未知格");
+    best.reason = (best.unknown === 0
+        ? "已校准（无未知格"
+        : ("校准后仍有 " + best.unknown + " 个未知格")) +
+        (best.fixes ? ("；修复动作 " + best.fixes + " 次") : "") + "）";
     return best;
 }
 
