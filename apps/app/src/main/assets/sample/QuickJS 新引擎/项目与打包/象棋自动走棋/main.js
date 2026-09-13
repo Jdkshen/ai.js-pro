@@ -118,9 +118,20 @@ ui.probe.on("click", () => {
         lines.push("机型：" + report.platform.model + "（" + report.platform.abi + "）");
         lines.push("屏幕：" + report.platform.screenWidth + " × " + report.platform.screenHeight);
         lines.push("截图授权：" + report.frames.granted);
+        if (report.frames.rawFirst) {
+            lines.push("首帧体检（不重试）：纯黑=" + report.frames.rawFirst.blank +
+                "（true = 碰到了「刚授权第一帧是黑的」那个平台行为）");
+        }
         if (report.frames.full) {
             lines.push("实时帧：" + report.frames.full.width + "×" + report.frames.full.height +
-                "  像素 " + report.frames.full.pixelWidth + "×" + report.frames.full.pixelHeight);
+                "  像素 " + report.frames.full.pixelWidth + "×" + report.frames.full.pixelHeight +
+                (report.frames.full.blank ? "  ⚠ 整幅纯黑" : "  非黑"));
+        }
+        if (report.frames.fullTop && report.frames.fullTop.length) {
+            lines.push("实时帧顶部取样：" + report.frames.fullTop.join("  "));
+        }
+        if (report.frames.fastTop && report.frames.fastTop.length) {
+            lines.push("快截图顶部取样：" + report.frames.fastTop.join("  "));
         }
         if (report.frames.fast) {
             lines.push("快截图像素：" + report.frames.fast.pixelWidth + "×" + report.frames.fast.pixelHeight);

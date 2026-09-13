@@ -1202,6 +1202,40 @@ check("算棋·门面：结果文本不出现 undefined", function () {
     return text.indexOf("undefined") < 0 || ("描述里有 undefined：" + text);
 });
 
+// ---------------------------------------------------------------- 截图黑帧
+
+const adapter = require("../src/runtime/aijs-adapter.js");
+
+check("截图·黑帧判定：整幅纯黑要认出来", function () {
+    const frame = { pixelWidth: 1000, pixelHeight: 2000 };
+    const result = adapter.looksBlank(frame, { read: function () { return 0; } });
+    return result === true || ("纯黑帧没被判为黑：" + result);
+});
+
+check("截图·黑帧判定：只要有一处不黑就不算黑", function () {
+    const frame = { pixelWidth: 1000, pixelHeight: 2000 };
+    let calls = 0;
+    // 第 5 个点（正中间）给 #00796B 的绿通道 121，其余全 0
+    const result = adapter.looksBlank(frame, {
+        read: function () {
+            calls++;
+            return calls === 5 ? 121 : 0;
+        }
+    });
+    return result === false || "只有一个点不黑却被判为黑帧";
+});
+
+check("截图·黑帧判定：深色主题（非纯黑）不能误判", function () {
+    const frame = { pixelWidth: 1000, pixelHeight: 2000 };
+    const result = adapter.looksBlank(frame, { read: function () { return 11; } });
+    return result === false || "整屏 #0B0B0B 被误判为黑帧";
+});
+
+check("截图·黑帧判定：拿不到像素时说“不是黑”，不乱报", function () {
+    const frame = { pixelWidth: 1000, pixelHeight: 2000 };
+    return adapter.looksBlank(frame) === false || "离线环境不该判为黑帧";
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +

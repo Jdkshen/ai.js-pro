@@ -36,6 +36,40 @@ function safe(label, body) {
     }
 }
 
+function toHex(value) {
+    const text = Number(value).toString(16).toUpperCase();
+    return text.length < 2 ? "0" + text : text;
+}
+
+/**
+ * 顶部若干行的颜色（取画面水平中点）。用途：确认**截下来的图**里状态栏那一条正不正常。
+ * 应用自己的状态栏是 colorPrimaryDark（亮色 #00796B / 深色 #006064），
+ * 截出来的图里如果是 #000000，就说明问题在截图链路而不是界面主题。
+ */
+function topRowColors(frame) {
+    if (!frame) {
+        return null;
+    }
+    const width = frame.pixelWidth || frame.width;
+    const height = frame.pixelHeight || frame.height;
+    if (!width || !height) {
+        return null;
+    }
+    const out = [];
+    const rows = [1, 20, 60, 200];
+    for (let i = 0; i < rows.length; i++) {
+        if (rows[i] >= height) {
+            continue;
+        }
+        const rgb = adapter.rgbAt(frame, Math.round(width / 2), rows[i]);
+        if (!rgb) {
+            continue;
+        }
+        out.push("y" + rows[i] + "=#" + toHex(rgb[0]) + toHex(rgb[1]) + toHex(rgb[2]));
+    }
+    return out;
+}
+
 // ---- 平台信息 ----
 safe("平台信息", function () {
     report.platform.engine = "quickjs";
@@ -60,9 +94,21 @@ safe("截图授权", function () {
     return true;
 });
 
+// 诊断：紧接授权之后**不重试**地抓一帧 —— 用来观察「刚授权后第一帧整幅纯黑」这个平台行为。
+// 日常流程不该这样抓（capture 默认会自动丢弃黑帧并重截）。
+safe("首帧体检（不重试）", function () {
+    const frame = adapter.capture("full", 400, { attempts: 1 });
+    report.frames.rawFirst = adapter.describeFrame(frame);
+    if (frame && frame.recycle) {
+        frame.recycle();
+    }
+    return true;
+});
+
 safe("实时截图", function () {
     const frame = adapter.capture("full", 400);
     report.frames.full = adapter.describeFrame(frame);
+    report.frames.fullTop = topRowColors(frame);
     if (frame && frame.recycle) {
         frame.recycle();
     }
@@ -72,6 +118,7 @@ safe("实时截图", function () {
 safe("快截图", function () {
     const frame = adapter.capture("fast", 400);
     report.frames.fast = adapter.describeFrame(frame);
+    report.frames.fastTop = topRowColors(frame);
     if (frame && frame.recycle) {
         frame.recycle();
     }

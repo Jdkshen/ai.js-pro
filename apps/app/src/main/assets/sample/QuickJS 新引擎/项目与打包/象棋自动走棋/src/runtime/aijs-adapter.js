@@ -102,17 +102,102 @@ function requestCapture(orientation) {
     return globals.requestScreenCapture(orientation || "portrait");
 }
 
-function capture(mode, timeoutMs) {
+/** 小睡：优先用平台的 sleep，没有就忙等。只在「丢了黑帧要重截」这条小概率路径上用。 */
+function waitMs(ms) {
+    if (typeof globals.sleep === "function") {
+        globals.sleep(ms);
+        return;
+    }
+    const until = nowMono() + ms;
+    while (nowMono() < until) {
+        // 忙等
+    }
+}
+
+/**
+ * 一帧是不是「整幅纯黑」——这不是屏幕内容，而是截图管线还没出图。
+ *
+ * 实测（K40）：`requestScreenCapture()` 之后的**第一帧 `full` 截图整幅 0,0,0**
+ * （1080×2400，上/中/下取样全是纯黑），而同一时刻的 `fast` 截图是正常的。
+ * 不看这一层，定位/识别就会拿到一张全黑图然后报一堆看不懂的失败。
+ *
+ * 判法：取 9 个点（上/中/下 × 左/中/右）看最大亮度，**全都** ≤ threshold 才算黑。
+ * 真·深色界面很少整屏 0,0,0（我们自己的深色主题也还留着 #0A0E0F、#006064 这类值），
+ * 所以阈值取 3 足够保守；只要有一个点不是黑的就不当作黑帧。
+ *
+ * @param options.read 自定义取样函数 (frame, x, y) -> 0..255 亮度；不给就用宿主像素接口。
+ *                     给这个参数是为了能离线自检（宿主接口在 PC 上不存在）。
+ */
+function looksBlank(frame, options) {
+    const opts = options || {};
+    if (!frame) {
+        return false;
+    }
+    const width = frame.pixelWidth || frame.width;
+    const height = frame.pixelHeight || frame.height;
+    if (!width || !height) {
+        return false;
+    }
+    let read = opts.read;
+    if (!read) {
+        if (!canSamplePixels()) {
+            return false; // 取不到像素就没法判，不要凭空说它是黑的
+        }
+        read = function (target, x, y) {
+            const pixel = globals.images.pixel(target, x, y);
+            return Math.max(globals.colors.red(pixel), globals.colors.green(pixel),
+                globals.colors.blue(pixel));
+        };
+    }
+    const limit = opts.threshold == null ? 3 : opts.threshold;
+    const xs = [Math.round(width * 0.25), Math.round(width * 0.5), Math.round(width * 0.75)];
+    const ys = [Math.round(height * 0.02), Math.round(height * 0.5), Math.round(height * 0.98)];
+    for (let i = 0; i < xs.length; i++) {
+        for (let j = 0; j < ys.length; j++) {
+            if (read(frame, xs[i], ys[j]) > limit) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * 截一帧。
+ *
+ * ⚠️ 会**自动丢掉纯黑帧**并重试（原因见 looksBlank）：默认最多 3 次、每次间隔 60ms。
+ * 拿到非黑帧就立即返回，所以正常情况下（第二帧起）不会多花时间。
+ * 三次都还是黑的话，仍然把最后一帧交出去（并在 describeFrame 里报 blank=true），
+ * 不抛错 —— 因为极暗的真实界面也可能命中，调用方需要能拿到图并自己处理。
+ */
+function capture(mode, timeoutMs, options) {
     if (!has("captureScreen")) {
         throw new Error("缺少能力：captureScreen");
     }
-    const options = { mode: mode || "full", fresh: true, timeout: timeoutMs == null ? 300 : timeoutMs };
-    return globals.captureScreen(options);
+    const opts = options || {};
+    const attempts = opts.attempts == null ? 3 : opts.attempts;
+    const gapMs = opts.gapMs == null ? 60 : opts.gapMs;
+    let frame = null;
+    for (let i = 0; i < attempts; i++) {
+        frame = globals.captureScreen({
+            mode: mode || "full",
+            fresh: true,
+            timeout: timeoutMs == null ? 300 : timeoutMs
+        });
+        if (!looksBlank(frame)) {
+            return frame;
+        }
+        if (i < attempts - 1 && gapMs > 0) {
+            waitMs(gapMs);
+        }
+    }
+    return frame;
 }
 
 /**
  * 描述一帧的字段：区分 width/height 与 pixelWidth/pixelHeight（快截图会降采样）。
- * 没有底层源序号时如实写 null，不用调用编号冒充。
+ * 没有底层源序号时如实写 null，不用调用编号充数。
+ * blank 是「整幅纯黑」的体检结果 —— 自动重截之后还报 true，就说明真该看设备的截图权限/foreground 了。
  */
 function describeFrame(frame) {
     if (!frame) {
@@ -125,6 +210,7 @@ function describeFrame(frame) {
         pixelHeight: frame.pixelHeight,
         captureMode: frame.captureMode,
         recycled: frame.recycled,
+        blank: looksBlank(frame),
         sourceFrameId: null,
         // 当前版本没有公开的底层时间戳；这里只记录调用侧时间，别当成源时间。
         acquiredAtMono: nowMono()
@@ -328,6 +414,8 @@ const AIJS_ADAPTER = {
     projectPath: projectPath,
     requestCapture: requestCapture,
     capture: capture,
+    looksBlank: looksBlank,
+    waitMs: waitMs,
     readImage: readImage,
     sizeOf: sizeOf,
     rgbAt: rgbAt,
