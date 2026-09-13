@@ -57,6 +57,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
+import com.jdkshen.aijspro.model.explorer.Explorers
 import com.jdkshen.aijspro.model.sample.SampleFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
@@ -216,7 +217,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         onSearch: () -> Unit
     ) {
         Row(
-            Modifier.fillMaxWidth().height(54.dp)
+            Modifier.fillMaxWidth().heightIn(min = 54.dp)
                 .background(MiuixTheme.colorScheme.surface)
                 .padding(start = 18.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -226,6 +227,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     overflow = TextOverflow.Ellipsis)
                 if (query.text.isNotBlank() || filter != SampleFilter.ALL) {
                     Text("$resultCount 项 · 搜索结果", fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary)
                 }
             }
@@ -425,6 +427,12 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                             dismiss()
                             buildProject(entry)
                         }
+                        // 示例本体在 APK 内置资源里，改乱了可以一键把磁盘上的整棵示例目录恢复成内置版本。
+                        // 与文件页（ExplorerView / MiuixScriptListHost）同一条链路、同一批文案。
+                        ActionChoice("重置所有示例") {
+                            dismiss()
+                            confirmResetAllSamples()
+                        }
                     } else {
                         if (entry.runnable) {
                             ActionChoice("运行") { dismiss(); run(entry) }
@@ -456,6 +464,32 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
             Text(label, fontSize = 16.sp, color = MiuixTheme.colorScheme.onSurface,
                 modifier = Modifier.align(Alignment.CenterStart))
         }
+    }
+
+    /** 重置全部示例：删改级操作，必须先确认（与文件页/旧实现同一批字符串资源）。 */
+    private fun confirmResetAllSamples() {
+        val activity = activity ?: return
+        androidx.appcompat.app.AlertDialog.Builder(activity)
+            .setTitle(R.string.text_reset_all_samples)
+            .setMessage(R.string.text_reset_all_samples_message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.text_reset_to_initial_content) { _, _ -> runResetAllSamples() }
+            .show()
+    }
+
+    private fun runResetAllSamples() {
+        val context = context ?: return
+        Toast.makeText(context, R.string.text_reset_all_samples_running, Toast.LENGTH_SHORT).show()
+        imports.add(Explorers.Providers.workspace().resetAllSamples()
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe({ count ->
+                Toast.makeText(context,
+                    context.getString(R.string.text_reset_all_samples_done, count),
+                    Toast.LENGTH_SHORT).show()
+            }, { error ->
+                Toast.makeText(context, error.localizedMessage ?: "重置失败", Toast.LENGTH_LONG)
+                    .show()
+            }))
     }
 
     @Composable
