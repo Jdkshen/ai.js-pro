@@ -1063,6 +1063,145 @@ check("结果文本：模型要报出文件名，不能是 undefined", function 
     return true;
 });
 
+// ---------------------------------------------------------------- 算棋（本地引擎）
+
+const evalModule = require("../src/engine/eval.js");
+const searchModule = require("../src/engine/search.js");
+const engineModule = require("../src/engine/engine.js");
+const uciModule = require("../src/engine/uci.js");
+const localEngine = require("../src/engine/local-engine.js");
+
+// 一步杀：黑将 (4,0) 无子；红兵 (4,2) 保住 (4,1)，红兵 (3,1)/(5,1) 封住 (3,0)/(5,0)，红车 (0,1) 一击
+const MATE_IN_1 = "4k4/R2P1P3/4P4/9/9/9/9/9/9/4K4";
+// 白吃一个车：红车 (0,4) 沿第 4 行吃无保护的黑车 (4,4)
+const WIN_ROOK = "3k5/9/9/9/R3r4/9/9/9/9/4K4";
+
+check("算棋·评估：开局红黑对称", function () {
+    const value = evalModule.evaluate(fen.parseFen(fen.START_FEN).board);
+    return Math.abs(value) < 40 || ("开局分数偏离 0 太多：" + value);
+});
+
+check("算棋·评估：红多一个车至少领先 800", function () {
+    const value = evalModule.evaluate(fen.parseFen("3k5/9/9/9/9/9/9/9/9/3RK4").board);
+    return value > 800 || ("分数 " + value);
+});
+
+check("算棋·搜索：一步杀能被找到", function () {
+    const result = searchModule.search(fen.parseFen(MATE_IN_1).board, "w",
+        { movetime: 1500, depth: 3 });
+    if (!result.ok) {
+        return "搜索失败：" + result.reason;
+    }
+    return result.score > searchModule.MATE - 200 ||
+        ("没看到杀棋：score=" + result.score + " best=" + result.iccs + " depth=" + result.depth);
+});
+
+check("算棋·搜索：白吃一个车能被找到", function () {
+    const result = searchModule.search(fen.parseFen(WIN_ROOK).board, "w",
+        { movetime: 1500, depth: 3 });
+    if (!result.ok) {
+        return "搜索失败：" + result.reason;
+    }
+    return result.captured === "r" || ("没吃车：走 " + result.iccs + "，score=" + result.score);
+});
+
+check("算棋·搜索：无着可走（将死/困毙）要明确报出来", function () {
+    const result = searchModule.search(fen.parseFen(MATE_IN_1).board, "b", { movetime: 300 });
+    if (result.ok) {
+        return "黑方无着可走却给出 " + result.iccs;
+    }
+    return result.reason && result.reason.length > 0 || "没给原因";
+});
+
+check("算棋·搜索：给出的着法经棋规复核仍合法", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const result = searchModule.search(board, "w", { movetime: 1200, depth: 3 });
+    if (!result.ok) {
+        return "搜索失败：" + result.reason;
+    }
+    const verify = legal.isLegalMove(board, result.move.fromCol, result.move.fromRow,
+        result.move.toCol, result.move.toRow, "w");
+    return verify.legal || ("不合法：" + result.iccs + "（" + verify.reason + "）");
+});
+
+check("算棋·门面：有未知格就拒绝算棋（不猜）", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    board[40] = "?";
+    const result = engineModule.analyze({ board: board, side: "w" }, { movetime: 200 });
+    if (result.ok) {
+        return "有未知格却算出了 " + result.iccs;
+    }
+    return result.reason.indexOf("未知格") >= 0 || ("原因没提未知格：" + result.reason);
+});
+
+check("算棋·门面：将/帅数量不对要拦下", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    board[85] = null; // 85 = col4,row9 正是红帅那一格（81 是车，别写错）
+    const result = engineModule.analyze({ board: board, side: "w" }, { movetime: 200 });
+    if (result.ok) {
+        return "帅数量不对却算出了 " + result.iccs;
+    }
+    return result.reason.indexOf("帅") >= 0 || ("原因不对：" + result.reason);
+});
+
+check("算棋·UCI：着法记法与 rules.moveToIccs 一致", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const moves = searchModule.generateMoves(board, true, false);
+    for (let i = 0; i < moves.length; i++) {
+        if (uciModule.moveToUci(moves[i]) !== rules.moveToIccs(moves[i])) {
+            return "不一致：" + uciModule.moveToUci(moves[i]) + " vs " + rules.moveToIccs(moves[i]);
+        }
+    }
+    return moves.length > 0 || "开局没有着法？";
+});
+
+check("算棋·UCI：本地引擎能应答 uci/isready/position/go", function () {
+    const instance = localEngine.create();
+    const uciLines = instance.send("uci");
+    if (!uciLines.some(function (line) { return line === "uciok"; })) {
+        return "没有 uciok：" + JSON.stringify(uciLines);
+    }
+    if (instance.send("isready")[0] !== "readyok") {
+        return "isready 没回 readyok";
+    }
+    if (instance.send("position startpos moves b2e2 b7e7").length !== 0) {
+        return "position 不该有输出";
+    }
+    const parsed = fen.parseFen(instance.currentFen());
+    if (!parsed.ok || parsed.sideToMove !== "w") {
+        return "走完两子后 FEN/轮次不对：" + instance.currentFen();
+    }
+    const lines = instance.send("go depth 2");
+    const best = lines[lines.length - 1];
+    return /^bestmove [a-i][0-9][a-i][0-9]$/.test(best) || ("bestmove 行不对：" + best);
+});
+
+check("算棋·集成：自我对弈 6 步，每步都用棋规复核", function () {
+    let board = fen.parseFen(fen.START_FEN).board;
+    let side = "w";
+    for (let ply = 0; ply < 6; ply++) {
+        const result = engineModule.analyze({ board: board, side: side },
+            { movetime: 400, depth: 2 });
+        if (!result.ok) {
+            return "第 " + (ply + 1) + " 步算不出来：" + result.reason;
+        }
+        const verify = legal.isLegalMove(board, result.move.fromCol, result.move.fromRow,
+            result.move.toCol, result.move.toRow, side);
+        if (!verify.legal) {
+            return "第 " + (ply + 1) + " 步不合法：" + result.iccs + "（" + verify.reason + "）";
+        }
+        board = legal.applyMove(board, result.move).board;
+        side = side === "w" ? "b" : "w";
+    }
+    return true;
+});
+
+check("算棋·门面：结果文本不出现 undefined", function () {
+    const result = engineModule.analyze(fen.START_FEN, { movetime: 400, depth: 2 });
+    const text = engineModule.describe(result);
+    return text.indexOf("undefined") < 0 || ("描述里有 undefined：" + text);
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +
