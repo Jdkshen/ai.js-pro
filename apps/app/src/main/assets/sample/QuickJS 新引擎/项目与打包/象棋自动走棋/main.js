@@ -13,6 +13,10 @@
  *   ③ 自动走棋 —— 轮次/局面/几何/票据/着法全部校验通过后真的点击，并验证落子
  *
  * 开发规格与分阶段要求见本工程 README.md。
+ *
+ * ⚠️ 工程内的**模块路径**：入口脚本自己的 cwd 由宿主保证（= 工程目录），但
+ * `engines.execScriptFile()` 拉起的脚本 cwd 可能是 "/"，所以子脚本请用 `__dirname` 拼绝对路径
+ * （见「悬浮窗运行与测试.js」里的 load()）。
  */
 
 const VERSION = "0.6.0";
@@ -32,6 +36,13 @@ ui.layout(
   '  <text text="象棋自动走棋" textSize="24sp" textStyle="bold"/>' +
   '  <text id="version" textSize="13sp" textColor="#888888"/>' +
   '  <text id="status" textSize="14sp" textColor="#d32f2f"/>' +
+  // 悬浮窗面板放最上面、不进滚动区：这是「在真实棋局上操作与验收」的入口，要一眼看得到
+  '  <frame height="12"/>' +
+  '  <text text="悬浮窗面板（浮在棋局上操作/验收）" textSize="16sp" textStyle="bold"/>' +
+  '  <button id="floatyOpen" text="打开悬浮窗面板（运行与测试）"/>' +
+  '  <button id="floatyClose" text="关闭悬浮窗面板"/>' +
+  '  <text id="floatyStatus" textSize="12sp" textColor="#0d47a1"/>' +
+  '  <frame height="6"/>' +
   '  <scroll>' +
   '    <vertical>' +
   '      <frame height="12"/>' +
@@ -117,6 +128,110 @@ function inputText(view) {
         }
     }
 }
+
+/**
+ * 悬浮窗面板：独立的脚本（浮窗 + 在真实棋局上跑定位/识别/算棋/自检/契约测试）。
+ * 它自己 require("./src/...")，所以**必须和 main.js 同目录启动** —— 引擎会把 cwd 设成脚本所在目录，
+ * 下面这个路径就是同目录下的面板文件。
+ */
+const PANEL_FILE = "悬浮窗运行与测试.js";
+let panelExecution = null;
+
+function panelPath() {
+    try {
+        return files.join(files.cwd(), PANEL_FILE);
+    } catch (error) {
+        return "/sdcard/脚本/下载资源/象棋自动走棋/" + PANEL_FILE;
+    }
+}
+
+/**
+ * 找正在运行的面板引擎。
+ * 为什么要扫 engines.all() 而不是只记一个句柄：面板是**独立引擎**，连点两次「打开」
+ * 就会开出两个面板（真机实测出现过 2 个浮窗窗口，互相盖住），而「关闭」只关得住最后一次拉起的那个。
+ */
+function runningPanels() {
+    const found = [];
+    try {
+        const all = engines.all() || [];
+        for (let i = 0; i < all.length; i++) {
+            const engine = all[i];
+            let source = "";
+            try {
+                source = String(engine.getSource ? engine.getSource() : (engine.source || ""));
+            } catch (error) {
+                source = "";
+            }
+            if (source.indexOf(PANEL_FILE) >= 0) {
+                found.push(engine);
+            }
+        }
+    } catch (error) {
+        // 拿不到引擎列表就退化成「只看自己记的那个句柄」
+    }
+    return found;
+}
+
+function setPanelStatus(text) {
+    try {
+        ui.floatyStatus.setText(text);
+    } catch (error) {
+        // 界面上没有这个控件也不影响功能
+    }
+}
+
+ui.floatyOpen.on("click", () => {
+    const path = panelPath();
+    if (!files.exists(path)) {
+        setPanelStatus("面板脚本不在工程里：\n" + path +
+            "\n\n若是旧副本（应用升级过），去「资源页 → 象棋自动走棋 → 同步内置版本」再试。");
+        return;
+    }
+    const alive = runningPanels();
+    if (alive.length > 0) {
+        setPanelStatus("面板已经在运行（" + alive.length + " 个）—— 不重复打开。\n" +
+            "面板默认浮在屏幕下半部、抓帧时会自己临时隐藏；要收起来点面板里的「关闭面板」。");
+        return;
+    }
+    try {
+        // 显式给面板指定工作目录（cwd），否则新引擎的 cwd 可能是 "/"，面板里的相对 require 会失败。
+        // 面板自己也用 __dirname 拼路径（双保险）。
+        panelExecution = engines.execScriptFile(path, { path: files.cwd() });
+        setPanelStatus("面板已启动（独立脚本引擎，浮在屏幕下半部）。\n" +
+            "抓帧时面板会自己临时隐藏，不会挡住棋盘；面板里「离线自检」「契约测试」都可直接点。");
+        show("已启动悬浮窗面板：" + path);
+    } catch (error) {
+        setPanelStatus("启动面板失败：" + error + "（面板需要悬浮窗权限）");
+    }
+});
+
+ui.floatyClose.on("click", () => {
+    const alive = runningPanels();
+    if (alive.length === 0 && !panelExecution) {
+        setPanelStatus("面板没在运行。");
+        return;
+    }
+    let stopped = 0;
+    for (let i = 0; i < alive.length; i++) {
+        try {
+            alive[i].forceStop();
+            stopped += 1;
+        } catch (error) {
+            setPanelStatus("有关不掉的面板：" + error);
+        }
+    }
+    if (stopped === 0 && panelExecution) {
+        try {
+            panelExecution.getEngine().forceStop();
+            stopped += 1;
+        } catch (error) {
+            setPanelStatus("关不掉（可到最近任务里划掉本应用）：" + error);
+            return;
+        }
+    }
+    panelExecution = null;
+    setPanelStatus("已关闭 " + stopped + " 个悬浮窗面板。");
+});
 
 // 离线自检：只跑纯 JS 模块（FEN / 几何 / 格点分配 / 时序融合），不截图、不点棋盘。
 ui.selfcheck.on("click", () => {

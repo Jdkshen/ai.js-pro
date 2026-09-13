@@ -20,13 +20,26 @@
  */
 "use strict";
 
-const adapter = require("./src/runtime/aijs-adapter.js");
-const geometryModule = require("./src/vision/geometry.js");
-const recognizeBoard = require("./tools/recognize-board.js");
-const locateBoard = require("./tools/locate-board.js");
-const driverModule = require("./src/automation/auto-driver.js");
-const engineModule = require("./src/engine/engine.js");
-const cellsContract = require("./src/vision/cells.js");
+/**
+ * 模块加载：**必须用 __dirname 拼绝对路径**，不能用相对 require。
+ * 真机踩过（从工程主界面的「打开悬浮窗面板」按铃拉起）：`engines.execScriptFile()` 起的引擎里
+ * cwd 可能是 "/"，于是 `require("./src/...")` 被解析成 `/src/...` → 「Cannot find module」、
+ * 脚本 0.005 秒就退（注意 engine 把它记在 `resolved: /src/...` 里）。
+ * `__dirname` 是**入口脚本自己的目录**（bootstrap 里由 scriptDirectory(filename) 算出，与 cwd 无关）。
+ */
+const BASE_DIR = (typeof __dirname === "string" && __dirname && __dirname !== ".") ? __dirname : ".";
+
+function load(relative) {
+    return require(BASE_DIR === "." ? relative : (BASE_DIR + "/" + relative));
+}
+
+const adapter = load("src/runtime/aijs-adapter.js");
+const geometryModule = load("src/vision/geometry.js");
+const recognizeBoard = load("tools/recognize-board.js");
+const locateBoard = load("tools/locate-board.js");
+const driverModule = load("src/automation/auto-driver.js");
+const engineModule = load("src/engine/engine.js");
+const cellsContract = load("src/vision/cells.js");
 
 const TMP_FRAME = "/sdcard/xiangqi-p4/floaty-frame.png";
 const AUTORUN_FILE = "/sdcard/xiangqi-p4/floaty-autorun.json";
@@ -76,7 +89,7 @@ function button(id, label, width) {
 }
 
 const XML = [
-    '<vertical id="root" w="1020px" h="940px" bg="#E6000000" padding="8px">',
+    '<vertical id="root" w="1020px" h="940px" bg="#FF101014" padding="8px">',
     '  <horizontal h="70px">',
     '    <text id="title" text="象棋面板" w="200px" h="70px" textColor="#FFFFFF" textSize="16" gravity="center"/>',
     button("modeBtn", "①只识别", 210),
@@ -96,9 +109,10 @@ const XML = [
     button("sessionBtn", "新会话", 260),
     '  </horizontal>',
     '  <horizontal h="70px">',
-    button("selfcheckBtn", "离线自检", 260),
-    button("contractBtn", "契约测试", 260),
-    button("clearBtn", "清空日志", 260),
+    button("selfcheckBtn", "离线自检", 240),
+    button("contractBtn", "契约测试", 240),
+    button("clearBtn", "清空日志", 240),
+    button("closeBtn", "关闭面板", 230),
     '  </horizontal>',
     '  <text id="status" text="准备中…" w="1000px" h="34px" textColor="#B0FFFFFF" textSize="12"/>',
     '  <text id="logArea" text="" w="1000px" h="420px" textColor="#90FFFFFF" textSize="11"/>',
@@ -424,7 +438,7 @@ function stopLoop() {
 
 function runSelfCheck() {
     try {
-        const result = require("./tools/self-check.js");
+        const result = load("tools/self-check.js");
         logLine("离线自检：" + result.summary);
         for (let i = 0; i < Math.min(result.failures.length, 3); i++) {
             logLine("  失败 " + (i + 1) + "：" + result.failures[i]);
@@ -438,7 +452,7 @@ function runSelfCheck() {
 
 function runContractTests() {
     try {
-        const result = require("./tools/test-cells-contract.js");
+        const result = load("tools/test-cells-contract.js");
         logLine("契约测试：" + result.summary);
         for (let i = 0; i < Math.min(result.failures.length, 3); i++) {
             logLine("  失败 " + (i + 1) + "：" + result.failures[i].name + " → " + result.failures[i].message);
@@ -514,7 +528,19 @@ function readAutorun() {
 }
 
 function main() {
-    win = floaty.window(XML, { x: 30, y: 200, visible: true });
+    try {
+        // 默认放在屏幕下半部：从工程主界面拉起时，主界面的「打开/关闭悬浮窗面板」按钮不能被盖住
+        win = floaty.window(XML, { x: 30, y: 700, visible: true });
+    } catch (error) {
+        // 从工程主界面的按钮拉起时最容易踩到：没有悬浮窗权限，窗口建不出来
+        console.log("[floaty] 打不开悬浮窗（多半是没有悬浮窗权限）：" + error);
+        try {
+            toast("需要悬浮窗权限才能显示面板（设置 → 权限 → 悬浮窗）");
+        } catch (inner) {
+            // 没有 toast 就算了
+        }
+        return;
+    }
     win.setTouchable(true);
     // ⚠️ 不要在这里 setSize(…, -2)：真机上会得到零高窗口（画得出来但点不动）。尺寸全部由 XML 的 px 指定。
     logLine("面板已启动（" + describeCapabilities() + "）");
@@ -524,8 +550,8 @@ function main() {
     // 拖动：按住标题栏移动窗口
     let downX = 0;
     let downY = 0;
-    let winX = 40;
-    let winY = 260;
+    let winX = 30;
+    let winY = 700;
     win.title.on("touch", function (event) {
         const action = event.getAction();
         if (action === 0) {
@@ -597,7 +623,25 @@ function main() {
         logLines.length = 0;
         render();
     });
-    logLine("按钮绑定完成：模式/收起/隐藏抓帧/微调/开始/停止/定位/识别/轮到我/换我方/新会话/自检/契约/清空");
+    // 面板自己关自己：它默认浮在主界面下半部，主界面上那一个「关闭」按钮可能被盖住
+    win.closeBtn.on("click", function () {
+        console.log("[floaty] 关闭面板（用户点按钮）");
+        stopLoop();
+        try {
+            if (aliveTimer) {
+                clearInterval(aliveTimer);
+                aliveTimer = null;
+            }
+        } catch (error) {
+            // 清不掉也不影响关窗
+        }
+        try {
+            win.close();
+        } catch (error) {
+            console.log("[floaty] 关窗失败：" + error);
+        }
+    });
+    logLine("按钮绑定完成：模式/收起/隐藏抓帧/微调/开始/停止/定位/识别/轮到我/换我方/新会话/自检/契约/清空/关闭");
     // 抓帧时隐藏面板：开着时面板不会盖住棋盘（实测面板会挡住上面几行棋子）
     win.hideBtn.on("click", function () {
         hideOnCapture = !hideOnCapture;
