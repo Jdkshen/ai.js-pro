@@ -2,22 +2,22 @@
 "ui";
 
 /**
- * 象棋自动走棋 · 工程骨架 v0.3.0
+ * 象棋自动走棋 · 工程骨架 v0.4.0
  *
- * 现状：FEN / 棋盘几何 / 格点分配 / 时序融合 / 棋盘格线自动定位已是真代码
- * （离线自检 + 真实截图都已验过），但没有模型、棋规、本机算棋（UCI）与自动落子都还没接入 ——
- * 界面显示的就是真实状态。开发规格与分阶段要求见本工程 README.md。
+ * 现状：FEN / 棋盘几何 / 格线自动定位 / 格点分配 / 时序融合 / 识别链路（模型随包）都是真代码，
+ * 棋规与合法着法也已在；缺的是本机算棋（UCI）与自动落子 —— 界面显示的就是真实状态。
+ * 开发规格与分阶段要求见本工程 README.md。
  */
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 const STEPS = [
   "P0  运行时探针：截图 / 模型 / 线程 / 打包能力核对",
   "P0-A 平台能力补齐：模型契约、帧来源、UCI 桥接、原生打包",
-  "P1  离线识别：棋盘定位 + 格点校准 + FEN",
-  "P2  实时观察：截图时序 + 轮次 + 遮挡恢复",
-  "P3  本机算棋：本地引擎握手与着法建议",
-  "P4  自动执行：动作票据 + 点击 + 落子确认",
+  "P1  离线识别：棋盘定位 + 格点校准 + FEN（已可用，模型随包）",
+  "P2  实时观察：截图时序 + 轮次 + 遮挡恢复（待接）",
+  "P3  本机算棋：本地引擎握手与着法建议（待接）",
+  "P4  自动执行：动作票据 + 点击 + 落子确认（待接）",
   "P5  真机验收：打包独立 APK 后回归"
 ];
 
@@ -37,6 +37,7 @@ ui.layout(
   '  <text text="棋盘截图路径（相册里的图就能用）" textSize="13sp" textColor="#555555"/>' +
   '  <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="13sp"/>' +
   '  <button id="locateImage" text="定位棋盘（图片）"/>' +
+  '  <button id="recognizeImage" text="识别棋盘 → FEN（图片）"/>' +
   '  <scroll height="260dp">' +
   '    <text id="output" textSize="12sp" textColor="#333333"/>' +
   '  </scroll>' +
@@ -44,7 +45,7 @@ ui.layout(
 );
 
 ui.version.setText("工程版本 v" + VERSION + "（骨架）");
-ui.status.setText("状态：棋盘定位可用（需自备模型）/ 棋规 / 算棋 / 落子未接入。本工程当前不会点击棋盘。");
+ui.status.setText("状态：棋盘定位 + 识别→FEN 可用（模型随包）/ 棋规 / 算棋 / 落子未接入。本工程当前不会点击棋盘。");
 ui.steps.setText(STEPS.join("\n"));
 
 let lastOutput = "";
@@ -99,7 +100,11 @@ ui.probe.on("click", () => {
             lines.push("快截图像素：" + report.frames.fast.pixelWidth + "×" + report.frames.fast.pixelHeight);
         }
         lines.push("yolo.load：" + report.capabilities.yoloLoad + "  线程：" + report.threads.start);
-        lines.push("模型：" + (report.model.hasOnnx ? "已随包" : "未随包（识别无法实测）"));
+        lines.push("模型：" + report.model.modelPath);
+        lines.push("模型加载：" + report.model.loaded + "（" + (report.model.onDisk ? "磁盘" : "随包 asset") + "）");
+        if (report.model.scriptDir) {
+            lines.push("脚本目录：" + report.model.scriptDir);
+        }
         if (report.missingRequired.length > 0) {
             lines.push("缺关键能力：" + report.missingRequired.join("、"));
         }
@@ -122,6 +127,24 @@ ui.locate.on("click", () => {
         show(board.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
     } catch (error) {
         show("定位没能运行：" + error);
+    }
+});
+
+// 识别（图片）：定位 → 按棋盘外框裁剪 → 160 模型检测 → 落格 → 格心判红黑 → FEN。
+ui.recognizeImage.on("click", () => {
+    try {
+        const board = require("./tools/recognize-board.js");
+        const path = inputText(ui.image).trim();
+        if (!path) {
+            show("请先填图片路径");
+            return;
+        }
+        const keep = lastOutput;
+        show("正在识别…（定位 + 检测 + 判色）");
+        const result = board.recognizeImage(path);
+        show(board.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
+    } catch (error) {
+        show("识别没能运行：" + error);
     }
 });
 

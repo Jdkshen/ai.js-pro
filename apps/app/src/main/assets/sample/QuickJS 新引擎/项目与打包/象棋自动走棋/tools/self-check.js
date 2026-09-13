@@ -12,6 +12,8 @@ const fen = require("../src/chess/fen.js");
 const geometry = require("../src/vision/geometry.js");
 const assignment = require("../src/vision/cell-assignment.js");
 const fusionModule = require("../src/vision/temporal-fusion.js");
+const pieceSide = require("../src/vision/piece-side.js");
+const recognizer = require("../src/vision/recognizer.js");
 
 let passed = 0;
 const failures = [];
@@ -564,6 +566,135 @@ check("手动校准：四个角点能建立几何并给出质量", function () {
     if (!result.ok) return result.reason;
     return near(result.grid.originX, 100, 2, "originX") === true &&
         near(result.grid.stepY, 50, 0.5, "stepY") === true;
+});
+
+// ---------------------------------------------------------------- 阵营判定与识别链路
+
+// 象棋盘上红方是红字、黑方是黑字，而模型只有 7 个兵种类别（没有颜色），
+// 所以阵营要靠在棋子范围内数「红笔画 / 黑笔画」补回来。
+check("阵营判定：红笔画占优 → 红", function () {
+    const result = pieceSide.classify([[210, 60, 55], [198, 72, 66], [190, 170, 140], [205, 58, 50]]);
+    return result.side === pieceSide.SIDE_RED ||
+        ("判成了 " + result.side + "（红 " + result.redShare.toFixed(3) + " / 暗 " + result.darkShare.toFixed(3) + "）");
+});
+
+check("阵营判定：黑笔画占优 → 黑", function () {
+    const result = pieceSide.classify([[45, 45, 45], [60, 58, 55], [190, 170, 140], [30, 30, 30]]);
+    return result.side === pieceSide.SIDE_BLACK ||
+        ("判成了 " + result.side + "（红 " + result.redShare.toFixed(3) + " / 暗 " + result.darkShare.toFixed(3) + "）");
+});
+
+check("阵营判定：只有木色（没有笔画）→ 未知，不猜", function () {
+    const result = pieceSide.classify([[190, 170, 140], [185, 165, 138], [200, 180, 150]]);
+    return result.side === pieceSide.SIDE_UNKNOWN || ("竟然判成了 " + result.side);
+});
+
+check("阵营判定：套上阵营得到 FEN 字符", function () {
+    if (pieceSide.applySide("R", pieceSide.SIDE_RED) !== "R") {
+        return "红方应保留大写";
+    }
+    if (pieceSide.applySide("R", pieceSide.SIDE_BLACK) !== "r") {
+        return "黑方应转小写";
+    }
+    if (pieceSide.applySide("K", pieceSide.SIDE_UNKNOWN) !== "?") {
+        return "判不出阵营时应返回 '?'，不能猜";
+    }
+    return true;
+});
+
+check("棋盘外框：罩得住四条边且按格距外扩", function () {
+    const grid = geometry.createGrid({ originX: 100, originY: 200, stepX: 50, stepY: 50 });
+    const box = geometry.boundsOf(grid, 0.75);
+    const a = geometry.pointAt(grid, 0, 0);
+    const b = geometry.pointAt(grid, 8, 9);
+    if (!(box.x < a.x && box.y < a.y)) {
+        return "左上角没被罩住：框 " + JSON.stringify(box);
+    }
+    if (!(box.x + box.width > b.x && box.y + box.height > b.y)) {
+        return "右下角没被罩住";
+    }
+    if (Math.abs(box.x - (a.x - 37.5)) > 1) {
+        return "外扩量不对，box.x=" + box.x + "（期望 " + (a.x - 37.5) + "）";
+    }
+    return true;
+});
+
+check("FEN 布局：未知格用 ? 表示（不允许时要报错）", function () {
+    const cells = new Array(90).fill(null);
+    cells[0] = "R";
+    cells[1] = "?";
+    const layout = fen.layoutOf(cells, { allowUnknown: true });
+    if (layout.indexOf("?") < 0) {
+        return "未知格没有用 ? 表示：" + layout;
+    }
+    let threw = false;
+    try {
+        fen.layoutOf(cells, {});
+    } catch (error) {
+        threw = true;
+    }
+    return threw || "不允许未知格时应当报错";
+});
+
+// 端到端（全程用桩，不加载模型、不截图）：
+// 按标准开局摆一盘「真值棋」，把它换成模型会给出的东西（7 个兵种字母、没有颜色）当检测框，
+// 再用「真值颜色」当取像素的结果，看整条链路能不能还原出开局的 FEN 布局。
+check("识别链路：桩检测器 + 桩取色 → 还原开局 FEN 布局", function () {
+    const grid = geometry.createGrid({ originX: 100, originY: 200, stepX: 50, stepY: 50 });
+    const truth = fen.parseFen(fen.START_FEN).board;
+    const box = geometry.boundsOf(grid, 0.75);
+    const detections = [];
+    for (let index = 0; index < 90; index++) {
+        const ch = truth[index];
+        if (!ch) {
+            continue;
+        }
+        const point = geometry.pointAt(grid, index % 9, Math.floor(index / 9));
+        // 检测框给的是**裁剪图**坐标：这里减掉裁剪偏移，顺带把「坐标要加回去」这件事锁死
+        detections.push({
+            label: ch.toUpperCase(),
+            score: 0.9,
+            x: point.x + 1.5 - box.x,
+            y: point.y - 1.0 - box.y
+        });
+    }
+    // 一枚低分假框：必须被门槛挡掉，不能变成棋子
+    detections.push({ label: "P", score: 0.2, x: 25, y: 25 });
+
+    const result = recognizer.recognize({
+        image: { stub: true },
+        grid: grid,
+        detect: function () { return detections; },
+        crop: function (image, cropBox) { return { stub: true, box: cropBox }; },
+        rgbAt: function (image, x, y) {
+            const hit = geometry.nearest(grid, x, y);
+            if (!hit.inside) {
+                return [190, 170, 140];
+            }
+            const ch = truth[hit.row * 9 + hit.col];
+            if (!ch) {
+                return [190, 170, 140]; // 木色：没有笔画
+            }
+            return ch === ch.toUpperCase() ? [205, 60, 55] : [45, 45, 45];
+        }
+    });
+    if (!result.ok) {
+        return result.reason;
+    }
+    const expected = fen.START_FEN.split(" ")[0];
+    if (result.layout !== expected) {
+        return "布局不一致：\n" + result.layout + "\n应为：\n" + expected;
+    }
+    if (result.stats.placed !== 32) {
+        return "落到格上的棋子应为 32，实际 " + result.stats.placed;
+    }
+    if (result.unknownCells !== 0) {
+        return "不应该有未知格，实际 " + result.unknownCells + "（" + result.layout + "）";
+    }
+    if (result.stats.sideUnknown !== 0) {
+        return "不应该有判不出阵营的棋子，实际 " + result.stats.sideUnknown;
+    }
+    return true;
 });
 
 // ---------------------------------------------------------------- 收尾

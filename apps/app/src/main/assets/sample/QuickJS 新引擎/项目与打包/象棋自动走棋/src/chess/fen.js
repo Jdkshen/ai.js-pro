@@ -35,8 +35,12 @@ function isRed(ch) {
     return ch >= "A" && ch <= "Z";
 }
 
-/** 由 90 格生成 FEN。cells[i] = 棋子字符、null（空格）或 ""（未知，用 '?' 表示）。 */
-function buildFen(cells, sideToMove, options) {
+/**
+ * 由 90 格生成 FEN 的**布局段**（不含轮次等字段）。
+ * 单独拿出来是因为识别链路经常只能给出布局（轮次得看界面，或由时序推断）。
+ * cells[i] = 棋子字符、null（空格）或 "?"（未知）。
+ */
+function layoutOf(cells, options) {
     const opts = options || {};
     if (!cells || cells.length !== CELLS) {
         throw new Error("cells 必须是长度 90 的数组");
@@ -69,11 +73,18 @@ function buildFen(cells, sideToMove, options) {
         }
         rows.push(line);
     }
+    return rows.join("/");
+}
+
+/** 由 90 格生成 FEN。cells[i] = 棋子字符、null（空格）或 ""（未知，用 '?' 表示）。 */
+function buildFen(cells, sideToMove, options) {
+    const opts = options || {};
+    const layout = layoutOf(cells, opts);
     const side = sideToMove === "b" || sideToMove === "B" ? "b" : (sideToMove === "w" || sideToMove === "W" ? "w" : "-");
     if (side === "-") {
         throw new Error("轮次未知时不能生成带 side 字段的 FEN");
     }
-    return rows.join("/") + " " + side + " - - 0 1";
+    return layout + " " + side + " - - 0 1";
 }
 
 /** 解析 FEN；坏 FEN 一律报错，不做「补空格静默修复」。 */
@@ -229,6 +240,7 @@ const XQ_FEN = {
     rowOf: rowOf,
     isRed: isRed,
     inPalace: inPalace,
+    layoutOf: layoutOf,
     buildFen: buildFen,
     parseFen: parseFen,
     validateBoard: validateBoard,

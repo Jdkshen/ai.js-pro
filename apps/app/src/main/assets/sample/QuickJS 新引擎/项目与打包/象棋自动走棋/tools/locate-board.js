@@ -113,7 +113,8 @@ function locateBoardOnScreen(options) {
             method: result.method,
             region: region,
             timing: timing,
-            frame: info
+            frame: info,
+            frameObject: frame
         };
     }
     const grid = result.grid;
@@ -133,6 +134,7 @@ function locateBoardOnScreen(options) {
         },
         residual: grid.quality ? grid.quality.maxResidual : null,
         frame: info,
+        frameObject: frame,
         timing: timing
     };
 }
@@ -192,7 +194,8 @@ function locateBoardInImage(path, options) {
         grid: result.grid,
         region: region,
         regionRatio: regionToRatio(region, size.width, size.height),
-        image: size,
+        imageSize: size,
+        imageObject: image,
         columns: result.vertical ? result.vertical.matched : null,
         rows: result.horizontal ? result.horizontal.matched : null,
         reconstructed: {
@@ -219,8 +222,8 @@ function describeResult(result) {
             lines.push("⚠ " + result.warning);
         }
     }
-    if (result.image) {
-        lines.push("图片 " + result.image.width + "×" + result.image.height + "  " + (result.source || ""));
+    if (result.imageSize) {
+        lines.push("图片 " + result.imageSize.width + "×" + result.imageSize.height + "  " + (result.source || ""));
     } else if (result.frame) {
         lines.push("屏幕 " + result.frame.width + "×" + result.frame.height +
             "（像素 " + result.frame.pixelWidth + "×" + result.frame.pixelHeight + "）");

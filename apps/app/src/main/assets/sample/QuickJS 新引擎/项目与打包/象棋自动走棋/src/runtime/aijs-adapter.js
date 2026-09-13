@@ -236,6 +236,80 @@ function samplerFor(frame) {
     };
 }
 
+/** 采样某点的 RGB；取不到返回 null。 */
+function rgbAt(image, x, y) {
+    if (!image || typeOf("images.pixel") !== "function" || !has("colors")) {
+        return null;
+    }
+    try {
+        const pixel = globals.images.pixel(image, Math.round(x), Math.round(y));
+        return [globals.colors.red(pixel), globals.colors.green(pixel), globals.colors.blue(pixel)];
+    } catch (error) {
+        return null;
+    }
+}
+
+/** 裁剪一块区域（识别时按定位出来的棋盘外框裁）。 */
+function clip(image, box) {
+    if (typeOf("images.clip") !== "function") {
+        throw new Error("缺少能力：images.clip");
+    }
+    return globals.images.clip(image, box.x, box.y, box.width, box.height);
+}
+
+/**
+ * 检测器封装：detector.detect 的返回还带 preprocessMs/inferenceMs/totalMs，
+ * 这里统一成 { list, preprocessMs, inferenceMs, totalMs }，并把坐标留在裁剪图坐标系。
+ */
+function detect(detector, image, options) {
+    if (!detector || typeof detector.detect !== "function") {
+        throw new Error("检测器不可用（先 yolo.load）");
+    }
+    const opts = options || {};
+    const raw = detector.detect(image, {
+        confidence: opts.confidence == null ? 0.25 : opts.confidence,
+        nms: opts.nms == null ? 0.45 : opts.nms
+    });
+    const items = [];
+    for (let i = 0; i < (raw ? raw.length : 0); i++) {
+        items.push(raw[i]);
+    }
+    return {
+        list: items,
+        length: items.length,
+        preprocessMs: raw ? raw.preprocessMs : null,
+        inferenceMs: raw ? raw.inferenceMs : null,
+        totalMs: raw ? raw.totalMs : null
+    };
+}
+
+/**
+ * 把「工程内的相对路径」解析成能直接用的路径。
+ * 因为工程有两种跑法：
+ *  - 应用内置示例直接运行：脚本在 assets 里，模型也随包 → 要用 asset://
+ *  - 打包成独立 APK（或用户导入到脚本目录）：运行端会把整棵工程拷到磁盘 → 就是普通文件
+ * 这里优先用磁盘路径（存在就用），否则回退 asset://。
+ */
+function resolveProjectFile(relative) {
+    const dir = (typeof globals.__dirname === "string" && globals.__dirname) ? globals.__dirname : ".";
+    const joined = String(dir).replace(/\/+$/, "") + "/" + String(relative).replace(/^\/+/, "");
+    if (typeOf("files.isFile") === "function") {
+        try {
+            if (globals.files.isFile(joined)) {
+                return joined;
+            }
+        } catch (error) {
+            // 忽略：落到 asset 分支
+        }
+    }
+    return "asset://" + joined;
+}
+
+/** 当前脚本所在目录（诊断用：能看出这次是 assets 跑还是磁盘跑）。 */
+function scriptDir() {
+    return (typeof globals.__dirname === "string" && globals.__dirname) ? globals.__dirname : "";
+}
+
 const AIJS_ADAPTER = {
     capabilities: capabilities,
     canSamplePixels: canSamplePixels,
@@ -251,6 +325,11 @@ const AIJS_ADAPTER = {
     capture: capture,
     readImage: readImage,
     sizeOf: sizeOf,
+    rgbAt: rgbAt,
+    clip: clip,
+    detect: detect,
+    resolveProjectFile: resolveProjectFile,
+    scriptDir: scriptDir,
     describeFrame: describeFrame,
     loadDetector: loadDetector,
     normalizeDetections: normalizeDetections

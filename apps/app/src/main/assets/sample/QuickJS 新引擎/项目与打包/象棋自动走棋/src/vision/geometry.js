@@ -90,6 +90,37 @@ function normalizedResidual(grid, x, y) {
     return nearest(grid, x, y).normalized;
 }
 
+/** 平均格距（像素）：取两轴绝对值里小的那个（保守）。 */
+function stepOf(grid) {
+    return Math.min(Math.abs(grid.stepX), Math.abs(grid.stepY));
+}
+
+/**
+ * 棋盘外框（屏幕像素，含 margin 倍格距的外扩）。
+ * 用途：给模型裁剪时**按定位出来的真实棋盘**裁，而不是写死屏幕比例 ——
+ * 写死比例会把边缘棋子切掉（实测 shot-41/49 上会影响近一半棋子的分数）。
+ *
+ * @param grid   createGrid 的产物
+ * @param margin 外扩量（以格距为单位，默认 0.75）
+ */
+function boundsOf(grid, margin) {
+    const m = margin == null ? 0.75 : margin;
+    const a = pointAt(grid, 0, 0);
+    const b = pointAt(grid, COLS - 1, ROWS - 1);
+    const padX = Math.abs(grid.stepX) * m;
+    const padY = Math.abs(grid.stepY) * m;
+    const left = Math.min(a.x, b.x) - padX;
+    const right = Math.max(a.x, b.x) + padX;
+    const top = Math.min(a.y, b.y) - padY;
+    const bottom = Math.max(a.y, b.y) + padY;
+    return {
+        x: Math.round(left),
+        y: Math.round(top),
+        width: Math.max(2, Math.round(right - left)),
+        height: Math.max(2, Math.round(bottom - top))
+    };
+}
+
 /**
  * 用可靠样本（已知 col/row 的屏幕坐标）稳健拟合原点与格距。
  * @param samples [{col, row, x, y}]
@@ -198,6 +229,8 @@ const XQ_GEOMETRY = {
     createGrid: createGrid,
     pointAt: pointAt,
     nearest: nearest,
+    stepOf: stepOf,
+    boundsOf: boundsOf,
     normalizedResidual: normalizedResidual,
     fit: fit,
     isTrustworthy: isTrustworthy

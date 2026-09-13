@@ -88,29 +88,26 @@ report.frames.samePixelSize = (function () {
 })();
 
 // ---- 模型 ----
+// 路径解析：脚本在 assets 里跑（应用内置示例）还是磁盘上跑（独立 APK / 已导入）会不一样，
+// 这里两条都报出来，免得「明明随包了却加载不到」猜半天。
 safe("模型文件", function () {
-    const modelsDir = adapter.projectPath("assets/models");
-    report.model.directory = modelsDir;
-    const names = (function () {
+    report.model.scriptDir = adapter.scriptDir();
+    report.model.modelPath = adapter.resolveProjectFile("assets/models/chessai_160.onnx");
+    report.model.labelsPath = adapter.resolveProjectFile("assets/models/chessai_160.txt");
+    const onnxExists = (function () {
         try {
-            if (globals.files && typeof globals.files.listDir === "function") {
-                return globals.files.listDir(modelsDir);
-            }
+            return globals.files && typeof globals.files.isFile === "function"
+                ? globals.files.isFile(report.model.modelPath)
+                : false;
         } catch (error) {
-            return null;
+            return false;
         }
-        return null;
     })();
-    report.model.files = names;
-    const onnx = (names || []).filter(function (name) { return /\.onnx$/i.test(String(name)); });
-    report.model.hasOnnx = onnx.length > 0;
-    if (onnx.length === 0) {
-        report.model.note = "工程里没有 ONNX 模型：识别链路无法实测，这不是接口缺失";
-        return true;
-    }
+    report.model.onDisk = onnxExists;
+    report.model.assetMode = !onnxExists;
     const detector = adapter.loadDetector({
-        modelPath: adapter.projectPath("assets/models/" + onnx[0]),
-        labels: adapter.projectPath("assets/models/labels.txt"),
+        modelPath: report.model.modelPath,
+        labels: report.model.labelsPath,
         inputSize: 160,
         threads: 4
     });
@@ -119,7 +116,7 @@ safe("模型文件", function () {
     if (detector && detector.close) {
         detector.close();
     }
-    report.model.note = "加载成功只说明接口可用，不代表模型能识别象棋棋子";
+    report.model.note = "加载成功只说明接口可用；识别效果看「识别棋盘 → FEN」按钮";
     return true;
 });
 
