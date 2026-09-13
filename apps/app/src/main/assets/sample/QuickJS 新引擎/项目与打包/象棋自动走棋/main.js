@@ -197,8 +197,12 @@ ui.floatyOpen.on("click", () => {
         // 显式给面板指定工作目录（cwd），否则新引擎的 cwd 可能是 "/"，面板里的相对 require 会失败。
         // 面板自己也用 __dirname 拼路径（双保险）。
         panelExecution = engines.execScriptFile(path, { path: files.cwd() });
+        const lock = loopLock.status();
         setPanelStatus("面板已启动（独立脚本引擎，浮在屏幕下半部）。\n" +
-            "抓帧时面板会自己临时隐藏，不会挡住棋盘；面板里「离线自检」「契约测试」都可直接点。");
+            "抓帧时面板会自己临时隐藏，不会挡住棋盘；面板里「离线自检」「契约测试」都可直接点。\n" +
+            (lock.held
+                ? "注意：棋盘循环已在「" + lock.owner + "」里跑着（两边互锁，别重复开始）。"
+                : "当前没有循环在跑（两边互锁：谁先开始谁持有，另一方会被拒绝）。"));
         show("已启动悬浮窗面板：" + path);
     } catch (error) {
         setPanelStatus("启动面板失败：" + error + "（面板需要悬浮窗权限）");
@@ -400,6 +404,7 @@ ui.think.on("click", () => {
 const adapter = require("./src/runtime/aijs-adapter.js");
 const geometryModule = require("./src/vision/geometry.js");
 const driverModule = require("./src/automation/auto-driver.js");
+const loopLock = require("./src/automation/loop-lock.js");
 const recognizeBoard = require("./tools/recognize-board.js");
 const locateBoard = require("./tools/locate-board.js");
 const engineModule = require("./src/engine/engine.js");
@@ -653,6 +658,12 @@ function runAutoLoop() {
                 show("检测到停止标记（" + stopFile() + "），退出自动循环。");
                 break;
             }
+            // 互锁续期：被别人抢走（例如面板里又点了开始）就果断停，不要两个引擎同时跑
+            if (!loopLock.touch(loopLock.OWNER_MAIN)) {
+                const now = loopLock.status();
+                show("互锁被「" + (now.owner || "?") + "」拿走，本页自动循环退出。");
+                break;
+            }
             driverTick();
             ticks += 1;
             if (String(currentPackage()) !== ownPackage) {
@@ -693,6 +704,7 @@ function stopAuto(why) {
         autoDriver.stop();
     }
     autoRunning = false;
+    loopLock.release(loopLock.OWNER_MAIN);   // 互锁：本页停了就把锁交出去
     if (overlayShown) {
         adapter.overlayHide();
         overlayShown = false;
@@ -771,10 +783,19 @@ ui.autoToggle.on("click", function () {
     }
     if (autoDriver.isRunning()) {
         autoDriver.pause();
+        loopLock.release(loopLock.OWNER_MAIN);
         show("已暂停：票据与算棋任务都作废了，不会再有点击。");
         return;
     }
+    // 互锁：悬浮窗面板里有另一套驱动循环，两个引擎一起跑会双份截图/算棋（模式③还会双份点击）
+    const gate = loopLock.acquire(loopLock.OWNER_MAIN);
+    if (!gate.ok) {
+        show(gate.reason + "。先把悬浮窗面板里的循环停掉（面板上的「停止」或「关闭面板」）。");
+        ui.autoStatus.setText("未开始：" + gate.reason);
+        return;
+    }
     if (!adapter.requestCapture("portrait")) {
+        loopLock.release(loopLock.OWNER_MAIN);
         show("没有拿到截图授权，自动模式不启动。");
         return;
     }

@@ -41,6 +41,9 @@ const locateBoard = load("tools/locate-board.js");
 const driverModule = load("src/automation/auto-driver.js");
 const engineModule = load("src/engine/engine.js");
 const cellsContract = load("src/vision/cells.js");
+// 跨引擎互锁：主界面（main.js）里还有另一套驱动循环，两边一起跑会双份截图/算棋，
+// 模式③还会双份点击棋盘 —— 用同一个锁文件互斥（见 src/automation/loop-lock.js）。
+const loopLock = load("src/automation/loop-lock.js");
 
 /**
  * 临时文件目录。**不要再写死 /sdcard/xiangqi-p4**，但也不能全放工程目录里：
@@ -102,7 +105,9 @@ function pickFrameDir() {
 const SCRATCH_DIR = pickScratchDir();
 const FRAME_DIR = pickFrameDir();
 const TMP_FRAME = FRAME_DIR + "/floaty-frame.png";
-const AUTORUN_FILE = SCRATCH_DIR + "/floaty-autorun.json";
+// ⚠️ autorun 是**给 adb / PC 用的验证钩子**，所以它要放 shell 可写的地方
+//  （应用缓存目录 adb 写不进去，我们自己的无人值守流程就断了）：跟截图目录同一个。
+const AUTORUN_FILE = FRAME_DIR + "/floaty-autorun.json";
 const MODES = ["watch", "advice", "auto"];
 const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
 
@@ -117,30 +122,28 @@ let lastLoggedLayout = null;  // 驱动视角去重打印用
 let aliveTimer = null;        // 保活心跳（见 main 里的说明）
 let aliveSeconds = 0;
 let collapsed = false;
-let logExpanded = false;   // 日志默认只显 3 行（面板矮一大截，不挡棋盘），点「日志±」展开到 12 行
 let grid = null;          // 已校准几何（会话内复用）
 let calibrationNote = "未校准";
 const logLines = [];
-/** 日志行数：紧凑 3 行 / 展开 12 行（缓冲区统一留 12 行，展开能看到历史） */
+/** 屏上只显示最后几行（面板固定 470px 高，不遮棋盘）；完整日志走 logcat（前缀 [floaty]） */
 const LOG_LINES_COMPACT = 3;
-const LOG_LINES_FULL = 12;
-/** 窗口高度（px）：紧凑 470 / 展开 770 / 收起 310（高度必须显式 px，给 -2 就是零高窗口点不动） */
+const LOG_LINES_FULL = 12;   // 缓冲区保留行数（方便 console 侧对账）
+/** 窗口高度只由 XML 的 px 决定（见 applyWindowHeight 的注释：setSize 会把窗口框体弄坏） */
 const WIN_H_COMPACT = 470;
-const WIN_H_FULL = 770;
-const WIN_H_COLLAPSED = 310;
 
 function visibleLog() {
-    const take = logExpanded ? LOG_LINES_FULL : LOG_LINES_COMPACT;
-    return logLines.slice(Math.max(0, logLines.length - take));
+    return logLines.slice(Math.max(0, logLines.length - LOG_LINES_COMPACT));
 }
 
+/**
+ * ⚠️ **绝对不要用 `win.setSize()`**（2026-09-13 真机事故）：
+ *   · `setSize(w, -2)` → 窗口变成 `(900x0)` **零高**：画得出来、点不动；
+ *   · `setSize(1020, 470)` → 窗口框体直接坏掉：整个面板塔成屏幕左上角一条**撕裂窄条**，
+ *     看起来就像「点一下悬浮窗就闪退了」（用户报的就是这个）。
+ * 所以窗口尺寸**只由 XML 的显式 px 决定**，运行期不再改尺寸（需要另一个尺寸就重建窗口）。
+ */
 function applyWindowHeight() {
-    const height = collapsed ? WIN_H_COLLAPSED : (logExpanded ? WIN_H_FULL : WIN_H_COMPACT);
-    try {
-        win.setSize(1020, height);
-    } catch (error) {
-        console.log("[floaty] 调整窗口高度失败：" + error);
-    }
+    // 保留函数名（调用点不动），但**不再调 setSize** —— 尺寸全交给 XML。
 }
 
 function logLine(text) {
@@ -171,7 +174,7 @@ function button(id, label, width) {
 }
 
 const XML = [
-    '<vertical id="root" w="1020px" h="940px" bg="#FF101014" padding="8px">',
+    '<vertical id="root" w="1020px" h="470px" bg="#FF101014" padding="8px">',
     '  <horizontal h="70px">',
     '    <text id="title" text="象棋面板" w="200px" h="70px" textColor="#FFFFFF" textSize="16" gravity="center"/>',
     button("modeBtn", "①只识别", 210),
@@ -191,14 +194,13 @@ const XML = [
     button("sessionBtn", "新会话", 260),
     '  </horizontal>',
     '  <horizontal h="70px">',
-    button("selfcheckBtn", "离线自检", 190),
-    button("contractBtn", "契约测试", 190),
-    button("clearBtn", "清空日志", 190),
-    button("logBtn", "日志±", 130),
-    button("closeBtn", "关闭面板", 200),
+    button("selfcheckBtn", "离线自检", 240),
+    button("contractBtn", "契约测试", 240),
+    button("clearBtn", "清空日志", 240),
+    button("closeBtn", "关闭面板", 230),
     '  </horizontal>',
     '  <text id="status" text="准备中…" w="1000px" h="34px" textColor="#B0FFFFFF" textSize="12"/>',
-    '  <text id="logArea" text="" w="1000px" h="420px" textColor="#90FFFFFF" textSize="11"/>',
+    '  <text id="logArea" text="" w="1000px" h="120px" textColor="#90FFFFFF" textSize="11"/>',
     '</vertical>'
 ].join("\n");
 
@@ -217,7 +219,6 @@ function render() {
         win.collapseBtn.setText(collapsed ? "展开" : "收起");
         win.hideBtn.setText("隐藏抓帧：" + (hideOnCapture ? "开" : "关"));
         win.alignBtn.setText("微调：" + (autoAlignOn ? "开" : "关"));
-        win.logBtn.setText(logExpanded ? "日志－" : "日志＋");
     } catch (error) {
         console.log("[floaty] 渲染失败：" + error);
     }
@@ -446,6 +447,13 @@ function tick() {
         const result = driver.tick();
         const machine = driver.machine;
         const stats = driver.stats();
+        // 互锁续期：锁被别人（主界面）抢走就果断停，绝不让两个引擎同时跑
+        if (!loopLock.touch(loopLock.OWNER_FLOATY)) {
+            const now = loopLock.status();
+            logLine("循环锁被「" + (now.owner || "?") + "」拿走，面板循环退出。");
+            stopLoop();
+            return;
+        }
         logLine("状态 " + machine.state() + "｜" + machine.reason());
         if (result) {
             // 驱动实际看到的局面（排障用）：只在与上一轮不同时打印，避免刷屏
@@ -486,6 +494,12 @@ function startLoop() {
     if (running) {
         return;
     }
+    // 互锁：主界面那边正在跑就先拒绝（两个引擎同时跑等于双份截图/算棋）
+    const gate = loopLock.acquire(loopLock.OWNER_FLOATY);
+    if (!gate.ok) {
+        logLine("拒绝开始：" + gate.reason + "。先到主界面点「开始观察 / 暂停」把它停掉。");
+        return;
+    }
     if (modeKey === "auto") {
         logLine("③ 自动走棋会真的点击棋盘，请确认游戏在前台且轮到我方");
     }
@@ -496,12 +510,13 @@ function startLoop() {
         const state = driver.start();
         logLine("驱动已启动，状态机：" + state);
     } catch (error) {
+        loopLock.release(loopLock.OWNER_FLOATY);
         logLine("驱动启动失败：" + error);
         return;
     }
     running = true;
     timer = setInterval(tick, 1400);
-    logLine("已开始：" + MODE_LABEL[modeKey]);
+    logLine("已开始：" + MODE_LABEL[modeKey] + "（已持有棋盘循环锁：" + loopLock.lockPath() + "）");
 }
 
 function stopLoop() {
@@ -517,7 +532,8 @@ function stopLoop() {
             logLine("停止驱动出错：" + error);
         }
     }
-    logLine("已停止：驱动已停、定时器已清（几何与校准结果保留，点“定位+校准”可重来）");
+    loopLock.release(loopLock.OWNER_FLOATY);   // 互锁：停了就把锁交出去
+    logLine("已停止：驱动已停、定时器已清、循环锁已释放（几何与校准结果保留）");
 }
 
 function runSelfCheck() {
@@ -637,10 +653,9 @@ function main() {
         return;
     }
     win.setTouchable(true);
-    // ⚠️ 不要在这里 setSize(…, -2)：真机上会得到零高窗口（画得出来但点不动）。尺寸全部由 XML 的 px 指定。
-    applyWindowHeight();
+    // ⚠️ 不要在这里 setSize(…)：真机上会把窗口框体弄坏（零高 / 熔成一条窄条），尺寸全部由 XML 的 px 指定。
     logLine("面板已启动（" + describeCapabilities() + "）");
-    logLine("临时文件：" + SCRATCH_DIR + "（跟着工程走，不再写死 /sdcard/xiangqi-p4）");
+    logLine("临时目录：" + FRAME_DIR + "｜autorun：" + AUTORUN_FILE + "（shell 可写，便于 adb 驱动）");
     logLine("提示：面板会浮在棋盘上，抓帧时已默认自动隐藏；嫌碍事可点「收起」或拖标题栏");
     startKeepAlive();
 
@@ -749,7 +764,7 @@ function main() {
     // 面板自己关自己：它默认浮在主界面下半部，主界面上那一个「关闭」按钮可能被盖住
     win.closeBtn.on("click", function () {
         console.log("[floaty] 关闭面板（用户点按钮）");
-        stopLoop();
+        stopLoop();   // 内部会释放循环锁
         try {
             if (aliveTimer) {
                 clearInterval(aliveTimer);
@@ -815,14 +830,7 @@ function main() {
         } catch (error) {
             logLine("收起/展开失败：" + error);
         }
-        applyWindowHeight();
         render();
-    });
-    // 日志默认只显 3 行（面板矮一大截、不挡棋盘）；要看完整日志就点一下
-    win.logBtn.on("click", function () {
-        logExpanded = !logExpanded;
-        applyWindowHeight();
-        logLine("日志：" + (logExpanded ? "展开（" + LOG_LINES_FULL + " 行）" : "紧凑（" + LOG_LINES_COMPACT + " 行）"));
     });
 
     render();
