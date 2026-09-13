@@ -1014,7 +1014,8 @@ function main() {
         if (auto.captureBackend) {
             // "auto"（默认，先系统截屏）/ "screen" / "shell"（Shizuku/root 跑 screencap）：
             // shell 通道不需要投屏授权（小米8 上实测又快一倍且颜色正确），适合无人值守跑。
-            const key = adapter.setCaptureBackend(auto.captureBackend);
+            // persist:false —— 这是测试钩子，别把偏好写进 storages（界面上选"的才算主人选择）。
+            const key = adapter.setCaptureBackend(auto.captureBackend, { persist: false });
             logLine("截图通道偏好：" + key + "（最近一次实际用过：" + (adapter.captureChannel() || "未用过") + "）");
         }
         if (auto.start) {

@@ -2065,6 +2065,34 @@ check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（�
         : ("没能进到 PRECHECK，停在 " + state + "（" + driver.machine.reason() + "）");
 });
 
+check("截图通道：setCaptureBackend 会归一转值，且没有 storages 时不抛异常（离线自检就是这个环境）", function () {
+    const back = adapter.setCaptureBackend;
+    if (typeof back !== "function") {
+        return "适配层没有 setCaptureBackend";
+    }
+    const before = adapter.captureBackend();
+    const shell = back("shell", { persist: false });
+    if (shell !== "shell") {
+        return "设 shell 却返回 " + shell;
+    }
+    const bogus = back("不存在的通道", { persist: false });
+    if (bogus !== "auto") {
+        return "非法值应当归一到 auto，实际 " + bogus;
+    }
+    back(before, { persist: false });   // 恢复，别影响后面的用例
+    return true;
+});
+
+check("截图通道：captureChannel() 默认是「还没截图」（界面靠它区分「偏好」和「实际用上」）", function () {
+    if (typeof adapter.captureChannel !== "function") {
+        return "适配层没有 captureChannel";
+    }
+    const used = adapter.captureChannel();
+    return used === null || used === undefined || typeof used === "string"
+        ? true
+        : ("返回值类型不对：" + typeof used);
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +

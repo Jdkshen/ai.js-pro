@@ -451,6 +451,18 @@ function describeCaptureChannel() {
         "｜shell 通道=" + (caps.captureShell ? ("可用（" + caps.captureShellBackend + "）") : "不可用");
 }
 
+/** 按钮上直写「偏好 + 最近实际用过」——只看偏好会骗人（auto 下实际可能走的是 screencap）。 */
+function captureButtonText() {
+    const used = adapter.captureChannel();
+    return "截图通道：" + CAPTURE_LABEL[adapter.captureBackend()] +
+        (used ? ("（最近：" + used + "）") : "");
+}
+
+// 启动时把「上次选的通道」写回按钮上。
+// ⚠️ 这一行必须在 adapter / CAPTURE_LABEL / captureButtonText 都定义之后 ——
+// 它们都是 const，提前用会报 "... is not initialized"（真机上就是 main.js 启动即退）。
+ui.captureChannel.setText(captureButtonText());
+
 /** 读棋盘范围输入框（比例 x,y,w,h）；空的就返回 null（用默认比例）。 */
 function regionRatioFromUi() {
     const raw = inputText(ui.region).trim();
@@ -598,6 +610,8 @@ function updateAutoStatus(result) {
         (driver.clickAllowed ? "" : ("，已拦截点击 " + stats.disabledTapCalls + " 次")));
     lines.push("算棋：" + driver.computeMode() + "（独立线程 " + stats.thinkOffThread +
         " 次 / 本线程 " + stats.thinkInline + " 次，最近一次 " + Math.round(stats.thinkMs) + "ms）");
+    lines.push("截图：" + describeCaptureChannel());
+    ui.captureChannel.setText(captureButtonText());
     const text = lines.join("\n");
     if (text !== lastDriverLine) {
         lastDriverLine = text;
@@ -760,12 +774,15 @@ ui.tapMethod.on("click", function () {
 ui.captureChannel.on("click", function () {
     const index = CAPTURE_BACKENDS.indexOf(adapter.captureBackend());
     const next = CAPTURE_BACKENDS[(index + 1) % CAPTURE_BACKENDS.length];
-    adapter.setCaptureBackend(next);
-    ui.captureChannel.setText("截图通道：" + (next === "auto" ? "自动" : (next === "screen" ? "系统截屏" : "screencap")));
+    adapter.setCaptureBackend(next);   // 界面上的选择会持久化（storages），重启脚本也记得
+    ui.captureChannel.setText(captureButtonText());
+    rebuildDriver();
     show("截图通道改为：" + describeCaptureChannel() + "\n" +
-        "说明：系统截屏（MediaProjection）很快，但 MIUI 会在切前后台/前台服务变化时把会话移除，\n" +
-        "之后每一帧都超时（实测连续 31s 全失败）。screencap 走 Shizuku/root，不需要授权、不会被作废，\n" +
-        "代价是慢（K40 约 1.2s/帧）。自动模式：先用系统截屏，失败自动改走 screencap。");
+        "说明：系统截屏（MediaProjection）很快，但两条真实问题都踩到过：\n" +
+        "  · MIUI 切前后台/前台服务变化会把会话移除，之后每帧都超时（实测连续 31s 全失败）；\n" +
+        "  · 小米8 + Android 15 上还会给「半更新帧」：左列丢子、颜色判反（同一帧用文件识别是全对的）。\n" +
+        "screencap 走 Shizuku/root：不需要授权、不会被作废、帧是完整的（小米8 实测 469~510ms/帧，\n" +
+        "比投屏的 490~550ms 还略快）；没有 Shizuku/root 的设备只能用系统截屏。自动：先系统截屏，失败改走 screencap。");
 });
 
 ui.mySide.on("click", function () {

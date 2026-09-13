@@ -32,11 +32,56 @@ var captureBackendKey = "auto";
 /** 最近一次**真正用上**的通道：`screen` | `shizuku` | `root`（界面/日志要看这个，别只看偏好） */
 var lastCaptureChannel = null;
 
-function setCaptureBackend(key) {
+/** 截图通道偏好的持久化（关机/重启脚本后不用重选）。取不到 storages 就退化成内存。 */
+const CAPTURE_STORE = "xiangqi-capture";
+const CAPTURE_STORE_KEY = "backend";
+function captureStore() {
+    try {
+        if (typeOf("storages.create") !== "function") {
+            return null;
+        }
+        return globals.storages.create(CAPTURE_STORE);
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * 设截图通道偏好。
+ * @param key "auto" | "screen" | "shell"
+ * @param options.persist true（界面上的选择，默认）| false（autorun/测试钩子，不写盘）
+ */
+function setCaptureBackend(key, options) {
     const value = String(key || "auto");
     captureBackendKey = (value === "screen" || value === "shell") ? value : "auto";
+    if (!options || options.persist !== false) {
+        const store = captureStore();
+        if (store) {
+            try {
+                store.put(CAPTURE_STORE_KEY, captureBackendKey);
+            } catch (error) {
+                // 写不进去就算了：内存里的选择仍然生效
+            }
+        }
+    }
     return captureBackendKey;
 }
+
+/** 启动时把上次选的通道读回来（面板/主界面都靠它保持一致）。 */
+(function restoreCaptureBackend() {
+    const store = captureStore();
+    if (!store) {
+        return;
+    }
+    try {
+        const saved = store.get(CAPTURE_STORE_KEY, null);
+        if (saved === "auto" || saved === "screen" || saved === "shell") {
+            captureBackendKey = saved;
+        }
+    } catch (error) {
+        // 读不到就用默认
+    }
+})();
 
 function captureBackend() {
     return captureBackendKey;
