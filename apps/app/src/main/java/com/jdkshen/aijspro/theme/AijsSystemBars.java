@@ -63,6 +63,35 @@ public final class AijsSystemBars {
         Window window = activity.getWindow();
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(surface);
+        applyIconAppearance(window, dark);
+        return surface;
+    }
+
+    /**
+     * **透明**状态栏：内容仍然铺到状态栏下面，但状态栏本身不画底色 → 透出下面的 App。
+     *
+     * 给「浮窗 / 覆盖式脚本宿主」（{@code external/open/RunIntentActivity}）用。
+     * 这里不能刷成我们自己的页面底色：这类宿主是压在别人 App 上的（真机场景：压在腾讯天天象棋上），
+     * 刷成 #F7F7F7 就变成「顶部一条浅灰带」，比原来那条黑带更眼。
+     * 黑带的成因是**缺 FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS**：没有它，平台认为这个窗口不画系统栏，
+     * 状态栏就用不透明的默认色（黑）。补上这个标志再把颜色设成 TRANSPARENT，就是真透明。
+     *
+     * @return 实际的浅/深判定（调用方日志用）
+     */
+    public static boolean applyTransparent(Activity activity) {
+        if (activity == null) {
+            return true;
+        }
+        boolean dark = isDark(activity);
+        Window window = activity.getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        window.setStatusBarColor(Color.TRANSPARENT);
+        applyIconAppearance(window, dark);
+        return dark;
+    }
+
+    /** 状态栏图标的明暗（浅色页 → 深色图标），并顺手清掉残留的隐藏系统栏标记。 */
+    private static void applyIconAppearance(Window window, boolean dark) {
         View decor = window.getDecorView();
         int flags = AppThemePalette.withoutHiddenSystemBars(decor.getSystemUiVisibility());
         if (dark) {
@@ -71,6 +100,5 @@ public final class AijsSystemBars {
             flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         }
         decor.setSystemUiVisibility(flags);
-        return surface;
     }
 }

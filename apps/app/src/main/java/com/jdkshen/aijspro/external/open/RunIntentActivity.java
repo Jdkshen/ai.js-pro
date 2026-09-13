@@ -33,9 +33,11 @@ public class RunIntentActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 这个窗口会一直停在前台直到脚本跑完，所以**它就是脚本页面的顶窗**：
-        // 主题（Theme.Translucent.NoTitleBar）没有 android:statusBarColor，平台默认给纯黑，
-        // 不显式刷成页面底色的话，脚本页面顶部就是一条黑条（真机 K40 实测）。
+        // 这个窗口会一直停在前台直到脚本跑完，所以**它就是脚本页面的顶窗**。
+        // 它是覆盖式宿主（常常压在别人 App 上，例如腾讯天天象棋），所以状态栏要**透明**：
+        // 主题 Theme.Translucent.NoTitleBar 既没有 android:statusBarColor、也没有
+        // FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS，平台就按「不画系统栏」处理 → 顶部一条不透明黑带。
+        // 刷成我们自己的页面底色也不行（会变成压在游戏上的一条灰带）——要的是透出下层 App。
         applyStatusBar();
         try {
             hold(handleIntent(getIntent()));
@@ -49,12 +51,12 @@ public class RunIntentActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // 脚本运行期间用户可能切换了深浅色：回来后要跟着走
+        // 脚本运行期间用户可能切换了深浅色：回来后要跟着走（只影响图标明暗）
         applyStatusBar();
     }
 
     private void applyStatusBar() {
-        AijsSystemBars.apply(this);
+        AijsSystemBars.applyTransparent(this);
     }
 
     private ScriptExecution handleIntent(Intent intent) throws FileNotFoundException {
