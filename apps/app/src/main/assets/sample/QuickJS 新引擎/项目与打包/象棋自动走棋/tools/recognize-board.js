@@ -19,6 +19,10 @@ const locator = require("../src/vision/board-locator.js");
 const recognizer = require("../src/vision/recognizer.js");
 const sequenceModule = require("../src/vision/sequence.js");
 const locateBoard = require("./locate-board.js");
+const geometry = require("../src/vision/geometry.js");
+const fen = require("../src/chess/fen.js");
+const cells = require("../src/vision/cells.js");
+const gridSearch = require("../src/vision/grid-search.js");
 
 const MODEL_FILE = "assets/models/chessai_160.onnx";
 const LABELS_FILE = "assets/models/chessai_160.txt";
@@ -392,8 +396,13 @@ function describeResult(result) {
  */
 function calibrateGrid(image, located, options) {
     const opts = options || {};
-    if (!image || !located || !located.ok || !located.grid) {
-        return { ok: false, reason: "缺少图像或基准几何" };
+    // ⚠️ 真机踩过：locateBoardOnScreen() 给的是 `frameObject`，**没有** `imageObject`
+    //    （locateBoardInImage 才有）→ 只读 imageObject 会让校准**静默失败**，
+    //    而失败后仍然返回、上层继续用未校准的几何（颜色判错、未知格一堆）。
+    //    所以这里两个字段都认，并且允许调用方直接传图。
+    const frame = image || (located && (located.imageObject || located.frameObject)) || null;
+    if (!frame || !located || !located.ok || !located.grid) {
+        return { ok: false, reason: "缺少图像（imageObject/frameObject 都没有）或基准几何" };
     }
     const search = opts.search || { maxShift: 18, step: 7 };
     const maxShift = search.maxShift == null ? 18 : search.maxShift;
@@ -434,7 +443,7 @@ function calibrateGrid(image, located, options) {
         });
         let result;
         try {
-            result = run(image, candidate, runOpts, null);
+            result = run(frame, candidate, runOpts, null);
         } catch (error) {
             continue;
         }
@@ -484,6 +493,260 @@ function calibrateGrid(image, located, options) {
     return best;
 }
 
+/** 给一个候选网格打分（**完整识别**路径：每个候选都跑一次模型）。
+ *
+ * 只在 `pickGrid({mode:"detect"})` 对照时用；默认路径是 grid-search.js 的缓存框评分（快得多）。
+ * ⚠️ 两条铁律（都踩过）：
+ *   1. 计数必须走 `cells.js` —— 这里原来写「不是 '.' 也不是 '?' 就算棋子」，
+ *      而空格在字符层是 `null`，于是**空格全被算成棋子**（读出「子 90」这种不可能的数）；
+ *   2. 解析失败**不能**算 0 违规（否则瞎网格会被选成最优）。 */
+function scoreGrid(image, grid, options) {
+    const opts = options || {};
+    const runOpts = Object.assign({}, opts);
+    delete runOpts.search;
+    const holder = { ok: true, method: "probe", grid: grid, imageObject: image, frameObject: image };
+    let result = null;
+    try {
+        result = run(image, holder, runOpts, null);
+    } catch (error) {
+        return null;
+    }
+    if (!result || !result.ok) {
+        return null;
+    }
+    const counts = cells.count(result.chars || []);
+    let violations = 0;
+    const parsed = fen.parseFen(result.layout + " w");
+    if (!parsed.ok) {
+        violations = 9;
+    } else {
+        violations = fen.validateBoard(parsed.board).errors.length;
+    }
+    const expect = opts.expectPieces;
+    let cost = violations * 1000 + (result.unknownCells || 0) * 10 + counts.invalid.length * 1000 +
+        Math.max(0, counts.pieces - 32) * 100;
+    if (typeof expect === "number" && isFinite(expect)) {
+        cost += Math.abs(counts.pieces - expect) * 20;
+    }
+    return {
+        grid: grid,
+        cost: cost,
+        pieces: counts.pieces,
+        empty: counts.empty,
+        unknown: result.unknownCells || 0,
+        violations: violations,
+        counts: counts,
+        result: result
+    };
+}
+
+/**
+ * 取棋盘（几何）：找棋盘所在的那组网格。
+ *
+ * 默认走**缓存框**路径（执行单 §4.2）：先把整块棋盘区域检测一次，之后每个候选用纯坐标运算评分 ——
+ * 旧的「每候选跑一次 run()」一共 171 次完整识别（含 171 次模型加载/关闭），19.8 秒/帧且分不清耗时去哪了。
+ *
+ * 不设「至少 24 枚」这种通用门槛（合法残局可能只有 2~8 枚）：接受规则见 grid-search.js，
+ * 需要「将帅都在、未知格少、检测框落在棋盘内、兵种不超限」；`expectPieces` 只作为**软先验**（允许吃子）。
+ */
+function pickGrid(image, options) {
+    const opts = options || {};
+    const seeds = opts.seeds || [
+        { originX: 81, originY: 666, stepX: 115, stepY: 114, orientation: "RED_BOTTOM" },
+        { originX: 72, originY: 660, stepX: 114.8, stepY: 114.3, orientation: "RED_BOTTOM" }
+    ];
+    const orientation = opts.orientation || "RED_BOTTOM";
+    const mode = opts.mode === "detect" ? "detect" : "cached";
+    const report = { mode: mode, tried: 0, detectCount: 0, detectMs: null, searchMs: null, finalMs: null, totalMs: null };
+    const startedAt = adapter.nowMono();
+    if (!image) {
+        return { ok: false, reason: "没有图像", tried: 0, report: report };
+    }
+
+    // 1) 检测器只加载一次；调用方注入的归调用方，我们不关
+    let detector = opts.detector || null;
+    let loaded = null;
+    let owner = false;
+    if (!detector) {
+        try {
+            loaded = loadDetector(opts);
+            detector = loaded.detector;
+            owner = true;
+        } catch (error) {
+            return { ok: false, reason: "加载模型失败：" + (error && error.message ? error.message : error), tried: 0, report: report };
+        }
+    } else {
+        loaded = { request: opts.detectorRequest || null, source: "调用方注入", failures: [] };
+    }
+
+    const runOpts = Object.assign({}, opts, { detector: detector, detectorRequest: loaded ? loaded.request : null });
+    delete runOpts.search;
+    delete runOpts.seeds;
+    delete runOpts.radius;
+    delete runOpts.step;
+    delete runOpts.fineRadius;
+    delete runOpts.fineStep;
+    delete runOpts.minPieces;
+    delete runOpts.maxUnknown;
+    delete runOpts.requireKings;
+    delete runOpts.minCoverage;
+    delete runOpts.probeCropMargin;
+
+    try {
+        if (mode === "detect") {
+            // 对照路径：每候选完整识别（保留下来做性能对比）
+            let best = null;
+            for (let s = 0; s < seeds.length; s++) {
+                const seed = seeds[s];
+                const radius = opts.radius == null ? 30 : opts.radius;
+                const step = opts.step == null ? 6 : opts.step;
+                for (let dx = -radius; dx <= radius; dx += step) {
+                    for (let dy = -radius; dy <= radius; dy += step) {
+                        const grid = geometry.createGrid({
+                            originX: seed.originX + dx, originY: seed.originY + dy,
+                            stepX: seed.stepX, stepY: seed.stepY, orientation: seed.orientation || orientation
+                        });
+                        const scored = scoreGrid(image, grid, runOpts);
+                        report.tried += 1;
+                        if (scored && (!best || scored.cost < best.cost)) {
+                            best = scored;
+                        }
+                        if (best && best.cost === 0) {
+                            break;
+                        }
+                    }
+                    if (best && best.cost === 0) {
+                        break;
+                    }
+                }
+            }
+            report.totalMs = adapter.nowMono() - startedAt;
+            if (!best) {
+                return { ok: false, reason: "所有候选都识别失败（detect 模式）", tried: report.tried, report: report };
+            }
+            return {
+                ok: !!best.result.ok,
+                reason: best.result.ok ? "" : best.result.reason,
+                grid: best.grid,
+                cost: best.cost,
+                tried: report.tried,
+                pieces: best.pieces,
+                empty: best.empty,
+                unknown: best.unknown,
+                counts: best.counts,
+                violations: best.violations,
+                result: best.result,
+                imageObject: image,
+                frameObject: image,
+                method: "pick-grid-detect",
+                report: report
+            };
+        }
+
+        // 2) 检测一次：裁剪范围比棋盘多留一圈，保证 ±radius 内的候选棋盘都在检测范围内
+        const probeGrid = geometry.createGrid({
+            originX: seeds[0].originX, originY: seeds[0].originY,
+            stepX: seeds[0].stepX, stepY: seeds[0].stepY,
+            orientation: seeds[0].orientation || orientation
+        });
+        const probeMargin = opts.probeCropMargin == null ? 0.45 : opts.probeCropMargin;
+        const probeOpts = Object.assign({}, runOpts, { cropMargin: probeMargin, autoAlign: false });
+        const probe = run(image, { ok: true, method: "pick-probe", grid: probeGrid, imageObject: image, frameObject: image }, probeOpts, null);
+        report.detectMs = probe && probe.timing ? probe.timing.detectMs : null;
+        report.detectCount = probe && probe.detections ? probe.detections.length : 0;
+        if (!probe || !probe.ok || !probe.detections || !probe.detections.length) {
+            report.totalMs = adapter.nowMono() - startedAt;
+            return {
+                ok: false,
+                reason: "首次检测没拿到检测框（棋盘不在画面里？）" + (probe && probe.reason ? "：" + probe.reason : ""),
+                tried: 0,
+                report: report,
+                probe: probe
+            };
+        }
+
+        const searchStart = adapter.nowMono();
+        const found = gridSearch.searchByDetections(probe.detections, {
+            seeds: seeds,
+            radius: opts.radius,
+            step: opts.step,
+            fineRadius: opts.fineRadius,
+            fineStep: opts.fineStep,
+            orientation: orientation,
+            expectPieces: opts.expectPieces,
+            expectWeight: opts.expectWeight,
+            minPieces: opts.minPieces,
+            maxUnknown: opts.maxUnknown,
+            requireKings: opts.requireKings,
+            requireTypeLimits: opts.requireTypeLimits,
+            minCoverage: opts.minCoverage,
+            assign: {
+                minScore: opts.minScore,
+                conflictGap: opts.conflictGap,
+                maxResidual: opts.maxResidual,
+                frameQuality: opts.frameQuality
+            }
+        });
+        report.searchMs = adapter.nowMono() - searchStart;
+        report.tried = found.tried;
+        if (!found.ok) {
+            report.totalMs = adapter.nowMono() - startedAt;
+            return {
+                ok: false,
+                reason: found.reason,
+                tried: found.tried,
+                candidates: found.candidates,
+                rejectionSummary: found.rejectionSummary,
+                best: found.best,
+                report: report,
+                probe: probe
+            };
+        }
+
+        // 3) 用胜出的几何做一次完整识别（颜色/一致性修复/布局以它为准）
+        const finalStart = adapter.nowMono();
+        const finalResult = run(image, { ok: true, method: "pick-grid", grid: found.grid, imageObject: image, frameObject: image }, runOpts, null);
+        report.finalMs = adapter.nowMono() - finalStart;
+        const counts = cells.count(finalResult && finalResult.chars ? finalResult.chars : []);
+        let violations = 0;
+        if (finalResult && finalResult.layout) {
+            const parsed = fen.parseFen(finalResult.layout + " w");
+            violations = parsed.ok ? fen.validateBoard(parsed.board).errors.length : 9;
+        } else {
+            violations = 9;
+        }
+        report.totalMs = adapter.nowMono() - startedAt;
+        return {
+            ok: !!(finalResult && finalResult.ok),
+            reason: finalResult && finalResult.ok ? "" : ("最终识别失败：" + (finalResult && finalResult.reason ? finalResult.reason : "无结果")),
+            grid: found.grid,
+            cost: found.cost,
+            tried: found.tried,
+            pieces: counts.pieces,
+            empty: counts.empty,
+            unknown: finalResult ? finalResult.unknownCells : null,
+            counts: counts,
+            violations: violations,
+            residual: found.best ? found.best.residual : null,
+            coverage: found.best ? found.best.coverage : null,
+            result: finalResult,
+            imageObject: image,
+            frameObject: image,
+            method: "pick-grid-cached",
+            report: report
+        };
+    } finally {
+        // 所有权：只有我们自己加载的才关；错误/早退/取消都不会漏
+        if (owner && detector && typeof detector.close === "function") {
+            try {
+                detector.close();
+            } catch (error) {
+                // 关不掉的检测器不影响结果
+            }
+        }
+    }
+}
+
 module.exports = {
     MODEL_FILE: MODEL_FILE,
     LABELS_FILE: LABELS_FILE,
@@ -496,6 +759,8 @@ module.exports = {
     describeResult: describeResult,
     describeSequence: describeSequence,
     calibrateGrid: calibrateGrid,
+    pickGrid: pickGrid,
+    scoreGrid: scoreGrid,
     // 调参用：直接把「一帧图 + 自定义几何」交给识别管线，不重新截图、不重新定位
     // （离线排查「未知格是不是几何偏出来的」就靠它）
     run: run

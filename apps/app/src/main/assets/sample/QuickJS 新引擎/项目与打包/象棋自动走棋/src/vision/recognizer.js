@@ -16,6 +16,7 @@
 
 const geometry = require("./geometry.js");
 const assignment = require("./cell-assignment.js");
+const cellsContract = require("./cells.js");
 const pieceSide = require("./piece-side.js");
 const fen = require("../chess/fen.js");
 const consistency = require("../chess/consistency.js");
@@ -100,6 +101,9 @@ function alignGrid(detections, grid, assignOptions, search) {
     const cfg = search || {};
     const maxShift = cfg.maxShift == null ? 18 : cfg.maxShift;
     const step = cfg.step == null ? 6 : cfg.step;
+    /** 小于这个位移（|dx|+|dy|，像素）只当诊断，不改执行几何（同一格内不会变，免得票据天天失效） */
+    const minApply = cfg.minApply == null ? 3 : cfg.minApply;
+    const baseVersion = grid.version == null ? 1 : grid.version;
     const base = assignment.assign(detections, grid, assignOptions);
     const best = {
         grid: grid,
@@ -143,8 +147,25 @@ function alignGrid(detections, grid, assignOptions, search) {
             }
         }
     }
+    // 执行几何的冻结/更新策略（执行单 §5）：
+    //   · 位移低于 minApply：**不动执行几何**，只当作诊断（同一格内落点不变，也不必作废票据）；
+    //   · 位移达标：真的换几何，**同时把 version +1** —— 否则用旧几何算出来的票据会被拿去点新几何的格子。
+    const applied = Math.abs(best.dx) + Math.abs(best.dy) >= minApply;
+    let appliedGrid = grid;
+    if (applied) {
+        appliedGrid = geometry.createGrid({
+            originX: best.grid.originX,
+            originY: best.grid.originY,
+            stepX: best.grid.stepX,
+            stepY: best.grid.stepY,
+            orientation: best.grid.orientation,
+            version: baseVersion + 1,
+            quality: best.grid.quality
+        });
+        appliedGrid.alignedFrom = baseVersion;
+    }
     return {
-        grid: best.grid,
+        grid: appliedGrid,
         assigned: best.assigned,
         report: {
             dx: best.dx,
@@ -154,7 +175,14 @@ function alignGrid(detections, grid, assignOptions, search) {
             outOfBoard: best.out,
             conflicts: best.conflicts,
             residual: best.residual,
-            moved: best.dx !== 0 || best.dy !== 0
+            moved: best.dx !== 0 || best.dy !== 0,
+            // 量化后是否真的改了「执行几何」；改了就必须换版本，否则旧票据会拿旧几何去点
+            applied: applied,
+            minApply: minApply,
+            versionBefore: baseVersion,
+            versionAfter: appliedGrid.version,
+            /** 几何可疑（残差大 / 有框出界）：交给状态机去 RECOVER 重新定位 */
+            suspect: best.out > 0 || best.residual > (cfg.suspectResidual == null ? 0.25 : cfg.suspectResidual)
         }
     };
 }
@@ -253,12 +281,13 @@ function recognize(options) {
     const placements = [];
     for (let index = 0; index < 90; index++) {
         const cell = assigned.cells[index];
-        if (cell.state === "EMPTY") {
-            chars[index] = null;
+        if (cell.state === cellsContract.STATE_EMPTY) {
+            // FEN 字符层的空格用 null（既定契约：fen.layoutOf / rules.pieceAt 都按 falsy 判空）
+            chars[index] = cellsContract.EMPTY;
             continue;
         }
-        if (cell.state === "UNKNOWN") {
-            chars[index] = "?";
+        if (cell.state === cellsContract.STATE_UNKNOWN) {
+            chars[index] = cellsContract.UNKNOWN;
             continue;
         }
         const side = sideOf[index] ? sideOf[index].side : pieceSide.SIDE_UNKNOWN;
@@ -294,6 +323,8 @@ function recognize(options) {
         }
     }
     const unknownCount = chars.filter(function (ch) { return ch === "?"; }).length;
+    /** 三态计数走契约模块（不要再写「不是 . 不是 ?」这类排除法） */
+    const stateCounts = cellsContract.count(chars);
     const sideReasons = {};
     sides.forEach(function (entry) {
         if (entry.side === pieceSide.SIDE_UNKNOWN) {
@@ -308,6 +339,10 @@ function recognize(options) {
         sideReasons: sideReasons,
         unknownCells: unknownCount,
         unknownBeforeRepair: unknownCount0,
+        pieceCells: stateCounts.pieces,
+        emptyCells: stateCounts.empty,
+        invalidCells: stateCounts.invalid.length,
+        stateCounts: stateCounts,
         autoAlign: aligned ? aligned.report : null
     });
 

@@ -376,11 +376,14 @@ function rebuildDriver() {
          */
         locate: function (options) {
             const located = locateBoard.locateBoardOnScreen(options);
-            if (!located.ok || !located.imageObject) {
+            if (!located.ok) {
                 return located;
             }
             try {
-                const calibrated = recognizeBoard.calibrateGrid(located.imageObject, located, {
+                // ⚠️ locateBoardOnScreen 给的是 frameObject（没有 imageObject）——
+                // 只传 imageObject 会让校准静默失败（历史 bug，已修库里的兼容）。
+                const avatar = located.imageObject || located.frameObject;
+                const calibrated = recognizeBoard.calibrateGrid(avatar, located, {
                     orientation: "RED_BOTTOM",
                     confidence: 0.25,
                     search: { maxShift: 18, step: 7 },
