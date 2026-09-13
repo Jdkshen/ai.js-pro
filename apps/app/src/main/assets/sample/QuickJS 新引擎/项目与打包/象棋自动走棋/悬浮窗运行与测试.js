@@ -14,9 +14,10 @@
  *   · 运行离线自检（tools/self-check.js，105 项纯逻辑用例）
  *   · 运行格子契约测试（tools/test-cells-contract.js，15 项：空格计数/残局/退化网格拒绝）
  *
- * 自动运行（便于无人值守验证）：往 /sdcard/xiangqi-p4/floaty-autorun.json 写
+ * 自动运行（便于无人值守验证）：往**临时目录**（工程目录下的 .floaty-panel/，见 pickScratchDir）
+ * 里的 floaty-autorun.json 写：
  *   { "captureProbe": true, "selftest": true, "contract": true, "locate": true, "mode": "watch", "start": false }
- * 启动后会按顺序执行并把结果写进日志（tag：GlobalConsole，前缀 [floaty]）。
+ * 启动后会按顺序执行并把结果写进日志（tag：GlobalConsole，前缀 [floaty]）。启动日志里会打印临时目录的绝对路径。
  */
 "use strict";
 
@@ -41,8 +42,67 @@ const driverModule = load("src/automation/auto-driver.js");
 const engineModule = load("src/engine/engine.js");
 const cellsContract = load("src/vision/cells.js");
 
-const TMP_FRAME = "/sdcard/xiangqi-p4/floaty-frame.png";
-const AUTORUN_FILE = "/sdcard/xiangqi-p4/floaty-autorun.json";
+/**
+ * 临时文件目录。**不要再写死 /sdcard/xiangqi-p4**，但也不能全放工程目录里：
+ *
+ *  · autorun 配置只有脚本自己读写 → 跟着工程走（工程目录下的 .floaty-panel/），
+ *    应用内示例副本在 cacheDir/resource-run、独立 APK 在 filesDir/project、用户导入在脚本目录，
+ *    放外部写死路径就会「面板和工程分家」；
+ *  · 截图文件是**用 shell（uid 2000 / Shizuku）写的** → shell 写不进应用私有目录
+ *    （/data/user/0/...）：写失败就静默退化成应用截屏通道（还要授权）。
+ *    所以它必须落在 /sdcard 下的可写目录。
+ */
+function ensureDir(dir) {
+    try {
+        if (typeof files.ensureDir === "function") {
+            files.ensureDir(dir + "/");
+        }
+        return files.exists(dir) || files.isDir(dir);
+    } catch (error) {
+        return false;
+    }
+}
+
+function pickScratchDir() {
+    // 1) 应用缓存目录优先：一定可写，而且**不会被「打包（项目）」拷进产物** ——
+    //    放工程目录里会在产物 assets 里多出 .floaty-panel/（一堆截图 + 空目录条目）。
+    try {
+        if (typeof context !== "undefined" && context && typeof context.getCacheDir === "function") {
+            const cached = files.join(String(context.getCacheDir()), "floaty-panel");
+            if (ensureDir(cached)) {
+                return cached;
+            }
+        }
+    } catch (error) { /* 试下一个 */ }
+    // 2) 退而求其次：工程目录（脚本自己那层），至少「跟着工程走」
+    const projectLocal = files.join(BASE_DIR, ".floaty-panel");
+    if (ensureDir(projectLocal)) {
+        return projectLocal;
+    }
+    // 3) 最后兜底：老路径（PC 侧脚本也认它）
+    ensureDir("/sdcard/xiangqi-p4");
+    return "/sdcard/xiangqi-p4";
+}
+
+function pickFrameDir() {
+    let sdcard = "/sdcard";
+    try {
+        if (typeof files.getSdcardPath === "function") {
+            sdcard = String(files.getSdcardPath());
+        }
+    } catch (error) { /* 用默认值 */ }
+    const dir = files.join(sdcard, ".aijspro-floaty");
+    if (ensureDir(dir)) {
+        return dir;
+    }
+    ensureDir("/sdcard/xiangqi-p4");
+    return "/sdcard/xiangqi-p4";
+}
+
+const SCRATCH_DIR = pickScratchDir();
+const FRAME_DIR = pickFrameDir();
+const TMP_FRAME = FRAME_DIR + "/floaty-frame.png";
+const AUTORUN_FILE = SCRATCH_DIR + "/floaty-autorun.json";
 const MODES = ["watch", "advice", "auto"];
 const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
 
@@ -57,14 +117,36 @@ let lastLoggedLayout = null;  // 驱动视角去重打印用
 let aliveTimer = null;        // 保活心跳（见 main 里的说明）
 let aliveSeconds = 0;
 let collapsed = false;
+let logExpanded = false;   // 日志默认只显 3 行（面板矮一大截，不挡棋盘），点「日志±」展开到 12 行
 let grid = null;          // 已校准几何（会话内复用）
 let calibrationNote = "未校准";
 const logLines = [];
+/** 日志行数：紧凑 3 行 / 展开 12 行（缓冲区统一留 12 行，展开能看到历史） */
+const LOG_LINES_COMPACT = 3;
+const LOG_LINES_FULL = 12;
+/** 窗口高度（px）：紧凑 470 / 展开 770 / 收起 310（高度必须显式 px，给 -2 就是零高窗口点不动） */
+const WIN_H_COMPACT = 470;
+const WIN_H_FULL = 770;
+const WIN_H_COLLAPSED = 310;
+
+function visibleLog() {
+    const take = logExpanded ? LOG_LINES_FULL : LOG_LINES_COMPACT;
+    return logLines.slice(Math.max(0, logLines.length - take));
+}
+
+function applyWindowHeight() {
+    const height = collapsed ? WIN_H_COLLAPSED : (logExpanded ? WIN_H_FULL : WIN_H_COMPACT);
+    try {
+        win.setSize(1020, height);
+    } catch (error) {
+        console.log("[floaty] 调整窗口高度失败：" + error);
+    }
+}
 
 function logLine(text) {
     const line = String(text);
     logLines.push(line);
-    while (logLines.length > 6) {
+    while (logLines.length > LOG_LINES_FULL) {
         logLines.shift();
     }
     console.log("[floaty] " + line);
@@ -109,10 +191,11 @@ const XML = [
     button("sessionBtn", "新会话", 260),
     '  </horizontal>',
     '  <horizontal h="70px">',
-    button("selfcheckBtn", "离线自检", 240),
-    button("contractBtn", "契约测试", 240),
-    button("clearBtn", "清空日志", 240),
-    button("closeBtn", "关闭面板", 230),
+    button("selfcheckBtn", "离线自检", 190),
+    button("contractBtn", "契约测试", 190),
+    button("clearBtn", "清空日志", 190),
+    button("logBtn", "日志±", 130),
+    button("closeBtn", "关闭面板", 200),
     '  </horizontal>',
     '  <text id="status" text="准备中…" w="1000px" h="34px" textColor="#B0FFFFFF" textSize="12"/>',
     '  <text id="logArea" text="" w="1000px" h="420px" textColor="#90FFFFFF" textSize="11"/>',
@@ -128,12 +211,13 @@ function render() {
     try {
         win.status.setText(calibrationNote + "｜" + (running ? "运行中" : "已停止") +
             (hideOnCapture ? "｜抓帧时隐藏面板" : "") + "｜存活 " + aliveSeconds + "s");
-        win.logArea.setText(logLines.join("\n"));
+        win.logArea.setText(visibleLog().join("\n"));
         win.modeBtn.setText(MODE_LABEL[modeKey]);
         win.startBtn.setText(running ? "暂停" : "开始");
         win.collapseBtn.setText(collapsed ? "展开" : "收起");
         win.hideBtn.setText("隐藏抓帧：" + (hideOnCapture ? "开" : "关"));
         win.alignBtn.setText("微调：" + (autoAlignOn ? "开" : "关"));
+        win.logBtn.setText(logExpanded ? "日志－" : "日志＋");
     } catch (error) {
         console.log("[floaty] 渲染失败：" + error);
     }
@@ -528,9 +612,20 @@ function readAutorun() {
 }
 
 function main() {
+    // 默认落在**棋盘下方的空档**：棋盘在屏幕中部（K40 实测 ~y 690..1700），面板紧凑态只有 470px 高，
+    // 放下面就不会遮住棋子（用户反馈「日志挡住象棋盘了」）。屏幕高度从 device 度量取。
+    let startX = 30;
+    let startY = 700;
     try {
-        // 默认放在屏幕下半部：从工程主界面拉起时，主界面的「打开/关闭悬浮窗面板」按钮不能被盖住
-        win = floaty.window(XML, { x: 30, y: 700, visible: true });
+        const size = adapter.screenSize();
+        if (size && size.height > 0) {
+            startY = Math.max(120, size.height - WIN_H_COMPACT - 120);
+        }
+    } catch (error) {
+        // 量不到就用默认值
+    }
+    try {
+        win = floaty.window(XML, { x: startX, y: startY, visible: true });
     } catch (error) {
         // 从工程主界面的按钮拉起时最容易踩到：没有悬浮窗权限，窗口建不出来
         console.log("[floaty] 打不开悬浮窗（多半是没有悬浮窗权限）：" + error);
@@ -543,28 +638,56 @@ function main() {
     }
     win.setTouchable(true);
     // ⚠️ 不要在这里 setSize(…, -2)：真机上会得到零高窗口（画得出来但点不动）。尺寸全部由 XML 的 px 指定。
+    applyWindowHeight();
     logLine("面板已启动（" + describeCapabilities() + "）");
+    logLine("临时文件：" + SCRATCH_DIR + "（跟着工程走，不再写死 /sdcard/xiangqi-p4）");
     logLine("提示：面板会浮在棋盘上，抓帧时已默认自动隐藏；嫌碍事可点「收起」或拖标题栏");
     startKeepAlive();
 
-    // 拖动：按住标题栏移动窗口
-    let downX = 0;
-    let downY = 0;
-    let winX = 30;
-    let winY = 700;
-    win.title.on("touch", function (event) {
-        const action = event.getAction();
-        if (action === 0) {
-            downX = event.getRawX();
-            downY = event.getRawY();
-        } else if (action === 2) {
-            win.setPosition(winX + (event.getRawX() - downX), winY + (event.getRawY() - downY));
-        } else if (action === 1) {
-            winX = winX + (event.getRawX() - downX);
-            winY = winY + (event.getRawY() - downY);
-        }
-        return true;
-    });
+    // ---- 拖动 ----
+    // 之前是自己在 JS 里拖：**每个 ACTION_MOVE 都调一次 win.setPosition()**，
+    // 每次都要过 JS→Java 桥 + WindowManager.updateViewLayout，而且触摸事件排在脚本线程上
+    // （自动循环/算棋一跑就更卡）——真机上手感就是「拖着走一顿一顿」。
+    // 正确做法：用平台原生拖动，脚本线程完全不参与。
+    let nativeDrag = false;
+    try {
+        win.setDraggable(true);
+        nativeDrag = !!win.isAdjustEnabled();
+    } catch (error) {
+        nativeDrag = false;
+    }
+    if (nativeDrag) {
+        logLine("拖动：按住窗口直接拖（平台原生拖动，不过脚本线程）");
+    } else {
+        // 兜底：平台没有原生拖动时才自己拖，而且**必须限频**（否则就是上面那个卡的原因）
+        logLine("拖动：平台没给原生拖动，退回脚本拖动（已限频 40ms）");
+        let downX = 0;
+        let downY = 0;
+        let winX = startX;
+        let winY = startY;
+        let lastMoveAt = 0;
+        win.title.on("touch", function (event) {
+            const action = event.getAction();
+            if (action === 0) {
+                downX = event.getRawX();
+                downY = event.getRawY();
+            } else if (action === 2) {
+                const now = Date.now();
+                if (now - lastMoveAt < 40) {
+                    return true;   // 限频：拖动手感不受影响，但桥调用次数掉到 1/4 以下
+                }
+                lastMoveAt = now;
+                win.setPosition(winX + (event.getRawX() - downX), winY + (event.getRawY() - downY));
+            } else if (action === 1) {
+                winX = winX + (event.getRawX() - downX);
+                winY = winY + (event.getRawY() - downY);
+                win.setPosition(winX, winY);
+                logLine("拖动到 (" + Math.round(winX) + "," + Math.round(winY) + ")（实测 " +
+                    win.getX(true) + "," + win.getY(true) + "）");
+            }
+            return true;
+        });
+    }
 
     // 触摸诊断：悬浮窗控件不在 uiautomator dump 里，只能靠日志判断「事件到底到没到」
     let touchLogs = 0;
@@ -689,12 +812,17 @@ function main() {
         try {
             win.status.setVisibility(collapsed ? 8 : 0);
             win.logArea.setVisibility(collapsed ? 8 : 0);
-            // 收起时把窗口也缩掉（高度同样必须是显式 px，不能给 -2）
-            win.setSize(1020, collapsed ? 310 : 940);
         } catch (error) {
             logLine("收起/展开失败：" + error);
         }
+        applyWindowHeight();
         render();
+    });
+    // 日志默认只显 3 行（面板矮一大截、不挡棋盘）；要看完整日志就点一下
+    win.logBtn.on("click", function () {
+        logExpanded = !logExpanded;
+        applyWindowHeight();
+        logLine("日志：" + (logExpanded ? "展开（" + LOG_LINES_FULL + " 行）" : "紧凑（" + LOG_LINES_COMPACT + " 行）"));
     });
 
     render();
