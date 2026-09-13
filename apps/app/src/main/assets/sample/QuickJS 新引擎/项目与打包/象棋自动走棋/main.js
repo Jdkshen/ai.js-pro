@@ -40,6 +40,7 @@ ui.layout(
   '      <button id="modeAdvice" text="② 着法建议：算棋并显示，不点击"/>' +
   '      <button id="modeAuto" text="③ 自动走棋：校验通过后真的点击"/>' +
   '      <button id="mySide" text="我方：红方（点一下切换）"/>' +
+  '      <button id="tapMethod" text="点击通道：自动（有 Shizuku 就用它）"/>' +
   '      <button id="assertTurn" text="现在轮到我（声明轮次基准）"/>' +
   '      <button id="autoToggle" text="开始观察 / 暂停"/>' +
   '      <button id="autoStop" text="停止（关画板）"/>' +
@@ -291,6 +292,7 @@ const MODES = { WATCH: "watch", ADVICE: "advice", AUTO: "auto" };
 const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
 
 let modeKey = MODES.WATCH;
+let tapMethodKey = "auto";
 let autoDriver = null;
 let autoRunning = false;
 let overlayShown = false;
@@ -298,6 +300,19 @@ let lastDriverLine = "";
 
 function sideLabel(side) {
     return side === "b" ? "黑方" : "红方";
+}
+
+const TAP_METHODS = ["auto", "accessibility", "shizuku"];
+const TAP_LABEL = {
+    auto: "自动（有 Shizuku 就用它）",
+    accessibility: "无障碍手势",
+    shizuku: "Shizuku 注入 input tap"
+};
+
+function describeTapChannel() {
+    const caps = adapter.capabilities();
+    return TAP_LABEL[tapMethodKey] + "｜无障碍=" + (caps.accessibilityReady ? "就绪" : "未就绪") +
+        "，Shizuku=" + (caps.shizuku ? "可用" : "不可用");
 }
 
 /** 读棋盘范围输入框（比例 x,y,w,h）；空的就返回 null（用默认比例）。 */
@@ -321,11 +336,11 @@ function rebuildDriver() {
     let tapFunction = null;
     let tapNote = "（不点击）";
     if (clickAllowed) {
-        if (!adapter.capabilities().tap) {
-            tapNote = "（这台设备没有 press/click，出手会一直被拒绝）";
+        if (!adapter.capabilities().tap && !adapter.capabilities().shizuku) {
+            tapNote = "（这台设备没有 press/click，也没有 Shizuku，出手会一直被拒绕）";
         } else {
-            tapFunction = adapter.createTap({ pressMs: 60 }).tap;
-            tapNote = adapter.capabilities().accessibilityReady ? "（会点击）" : "（点击接口在，但无障碍服务没就绪）";
+            tapFunction = adapter.createTap({ pressMs: 60, method: tapMethodKey }).tap;
+            tapNote = "（会点击：“" + describeTapChannel() + "）";
         }
     }
     const keepSide = autoDriver ? autoDriver.mySide() : "w";
@@ -334,7 +349,45 @@ function rebuildDriver() {
         mySide: keepSide,
         tap: tapFunction,
         recognize: function (options) { return recognizeBoard.recognizeScreen(options); },
-        locate: function (options) { return locateBoard.locateBoardOnScreen(options); },
+        /**
+         * 定位 + **会话级几何校准**。
+         *
+         * 为什么必须有：定位给的原点有系统性偏差时，会有几格**每一帧都认不出来**（多帧投票也洗不掉），
+         * 状态机就会一直拒绝计算/落子。真机实测（K40 + 腾讯天天象棋）：
+         * 原点 (81,666) → 未知格 6；挪到 (70,662)（dx=-11,dy=-4）→ 未知格 1。
+         * 校准按**最终未知格数**打分（不是几何残差），因为残差最小的偏移并没能减少未知格。
+         * 代价：十几次推理、约 2 秒，而定位本身一局只做一次，所以可以承受。
+         */
+        locate: function (options) {
+            const located = locateBoard.locateBoardOnScreen(options);
+            if (!located.ok || !located.imageObject) {
+                return located;
+            }
+            try {
+                const calibrated = recognizeBoard.calibrateGrid(located.imageObject, located, {
+                    orientation: "RED_BOTTOM",
+                    confidence: 0.25,
+                    search: { maxShift: 18, step: 7 },
+                    maxCandidates: 16
+                });
+                if (calibrated.ok && calibrated.grid) {
+                    console.log("[xiangqi][calibrate] 几何校准：" + calibrated.reason +
+                        "（偏移 " + calibrated.dx + "," + calibrated.dy + "，试了 " + calibrated.tried +
+                        " 个候选）" + (calibrated.layout ? (" 局面 " + calibrated.layout) : ""));
+                    return Object.assign({}, located, {
+                        grid: calibrated.grid,
+                        calibration: {
+                            dx: calibrated.dx, dy: calibrated.dy,
+                            unknown: calibrated.unknown, tried: calibrated.tried
+                        }
+                    });
+                }
+            } catch (error) {
+                console.log("[xiangqi][calibrate] 校准异常（沿用定位结果）：" +
+                    String(error && error.message ? error.message : error));
+            }
+            return located;
+        },
         analyze: function (position, options) { return engineModule.analyze(position, options); },
         isTrustworthy: function (grid) {
             return geometryModule.isTrustworthy(grid, { minSamples: 4, maxResidual: 0.35 });
@@ -533,6 +586,16 @@ ui.modeAuto.on("click", function () {
     show("模式：③ 自动走棋 —— 点「开始观察 / 暂停」后，只有轮次、局面、几何、票据、着法" +
         "全部校验通过才会点击；落子要用新观测确认过才算成功。\n" +
         "第一次开始会弹截图授权；轮次推不出来时按「现在轮到我」声明一次。");
+});
+
+ui.tapMethod.on("click", function () {
+    const index = TAP_METHODS.indexOf(tapMethodKey);
+    tapMethodKey = TAP_METHODS[(index + 1) % TAP_METHODS.length];
+    ui.tapMethod.setText("点击通道：" + TAP_LABEL[tapMethodKey]);
+    show("点击通道改为：" + describeTapChannel() + "\n" +
+        "（无障碍事件带自动化标记，腾讯天天象棋这类游戏会直接忽略 —— 实测：click/press/swipe/longClick\n" +
+        " 都返回 true 但画面零变化，而 Shizuku 的 input tap 能正常落子）");
+    rebuildDriver();
 });
 
 ui.mySide.on("click", function () {

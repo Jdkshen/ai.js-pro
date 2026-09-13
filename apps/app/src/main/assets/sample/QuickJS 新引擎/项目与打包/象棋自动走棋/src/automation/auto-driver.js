@@ -309,6 +309,16 @@ function createDriver(options) {
             stats.unrecognized += 1;
             return { ok: false, reason: (result && result.reason) ? result.reason : "识别失败" };
         }
+        // 识别时几何被微调过（按检测框对齐）→ 记下来，让后面的点击用同一套几何，
+        // 否则会出现「按 A 几何认棋盘、按 B 几何点坐标」的错位。
+        if (result.grid && grid &&
+            (result.grid.originX !== grid.originX || result.grid.originY !== grid.originY)) {
+            const dx = Math.round(result.grid.originX - grid.originX);
+            const dy = Math.round(result.grid.originY - grid.originY);
+            grid = result.grid;
+            note("几何按检测框微调：原点偏移 (" + dx + "," + dy + ")（未知格 " +
+                (result.stats && result.stats.autoAlign ? result.stats.autoAlign.unknown : "?") + "）");
+        }
         lastBoard = result.chars ? result.chars.slice() : null;
         return {
             ok: true,
@@ -446,7 +456,21 @@ function createDriver(options) {
         disabledTap: disabledTap,
         clickAllowed: clickAllowed,
         start: start,
-        tick: tick,
+        /**
+         * 安全网：一轮里的异常不能把整个自动循环带走。
+         * 真机踩过：从我们自己的界面刚切到游戏时截屏超时，`locateBoard` 抛异常直接结束脚本。
+         * 这里只记数 + 返回 ok:false（**不**把状态机推到 ERROR），下一轮还有机会成功。
+         */
+        tick: function () {
+            try {
+                return tick();
+            } catch (error) {
+                stats.errors += 1;
+                stats.lastError = String(error && error.message ? error.message : error);
+                note("本轮异常（已跳过，下一轮重试）：" + stats.lastError);
+                return { ok: false, reason: stats.lastError, state: machine.state() };
+            }
+        },
         isRunning: function () { return running; },
         pause: function () { return pump(machine.dispatch({ type: "PAUSE" })); },
         resume: function () { return pump(machine.dispatch({ type: "RESUME" })); },

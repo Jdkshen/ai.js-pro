@@ -36,7 +36,15 @@ const DEFAULTS = {
     /** 阵营采样步长（像素） */
     sideSampleStep: 3,
     /** 识别后是否用棋规反查可疑格（违规格降级为未知，而不是当事实） */
-    repairConsistency: true
+    repairConsistency: true,
+    /**
+     * 检测框自动对齐几何：真机实测 board-locator 给出的原点有**系统性偏差**
+     * （K40 + 腾讯天天象棋：origin (81,666)，把原点挪 (-7,-14) 后未知格 6→1）。
+     * 开着时先只用一次检测结果试若干偏移（很便宜：只是把框归格），挑最优几何再分类阵营。
+     */
+    autoAlign: false,
+    /** 对齐搜索范围：±maxShift 像素，步长 step 像素 */
+    alignSearch: { maxShift: 18, step: 3 }
 };
 
 /** 认字：模型类别字母 → 中文，仅用于给人看。 */
@@ -54,6 +62,103 @@ const PIECE_NAMES = {
  * @param options.rgbAt       (image, x, y) → [r,g,b]（原图坐标）
  * @param options.sideToMove  "w"/"b"/null（识别本身给不出轮次，默认 null）
  */
+/**
+ * 认出「说不准」的格子有多少个。
+ */
+function countUnknown(cells) {
+    let n = 0;
+    for (let i = 0; i < cells.length; i++) {
+        if (cells[i].state === "UNKNOWN") {
+            n++;
+        }
+    }
+    return n;
+}
+
+/** 全部格子的残差之和：越小说明检测框越贴近格心。 */
+function sumResidual(cells) {
+    let sum = 0;
+    for (let i = 0; i < cells.length; i++) {
+        sum += cells[i].residual || 0;
+    }
+    return sum;
+}
+
+/**
+ * 用检测框给几何做微调：在 ±maxShift 像素内试若干原点偏移，按几何质量挑最优：
+ *   **出界框最少 → 残差之和最小 → 冲突最少 → 未知格最少**
+ *
+ * 为什么以「残差」为主而不是以「未知格」为主：未知格是模型认不出/被棋规降级的结果，
+ * 跟几何好坏只是间接相关；真实偏差就是「框心普遍偏离交点」，所以直接把这个偏差压到最小才对。
+ *
+ * 只挪原点，**不改格距、也不改 version**：
+ *   - 格距是定位拟合出来的，比原点可信（残差 0.016 格 ≈ 1.8px）；
+ *   - 版本不变，已发出的走棋票据不会因为一次微调被作废（微调幅度 ≤ 半格距的 1/3，落点仍在同一格内）。
+ * 代价：只有一次模型推理，对齐本身是纯坐标运算（几十个框 × 几十个候选）。
+ */
+function alignGrid(detections, grid, assignOptions, search) {
+    const cfg = search || {};
+    const maxShift = cfg.maxShift == null ? 18 : cfg.maxShift;
+    const step = cfg.step == null ? 6 : cfg.step;
+    const base = assignment.assign(detections, grid, assignOptions);
+    const best = {
+        grid: grid,
+        assigned: base,
+        unknown: countUnknown(base.cells),
+        out: base.stats.outOfBoard,
+        conflicts: base.stats.conflicts,
+        residual: sumResidual(base.cells),
+        dx: 0,
+        dy: 0,
+        tried: 1
+    };
+    for (let dx = -maxShift; dx <= maxShift; dx += step) {
+        for (let dy = -maxShift; dy <= maxShift; dy += step) {
+            if (dx === 0 && dy === 0) {
+                continue;
+            }
+            const candidate = Object.assign({}, grid, {
+                originX: grid.originX + dx,
+                originY: grid.originY + dy
+            });
+            const result = assignment.assign(detections, candidate, assignOptions);
+            best.tried += 1;
+            const unknown = countUnknown(result.cells);
+            const out = result.stats.outOfBoard;
+            const conflicts = result.stats.conflicts;
+            const residual = sumResidual(result.cells);
+            const better = out < best.out ||
+                (out === best.out && (residual < best.residual - 0.01 ||
+                    (residual <= best.residual + 0.01 && (conflicts < best.conflicts ||
+                        (conflicts === best.conflicts && unknown < best.unknown)))));
+            if (better) {
+                best.grid = candidate;
+                best.assigned = result;
+                best.unknown = unknown;
+                best.out = out;
+                best.conflicts = conflicts;
+                best.residual = residual;
+                best.dx = dx;
+                best.dy = dy;
+            }
+        }
+    }
+    return {
+        grid: best.grid,
+        assigned: best.assigned,
+        report: {
+            dx: best.dx,
+            dy: best.dy,
+            tried: best.tried,
+            unknown: best.unknown,
+            outOfBoard: best.out,
+            conflicts: best.conflicts,
+            residual: best.residual,
+            moved: best.dx !== 0 || best.dy !== 0
+        }
+    };
+}
+
 function recognize(options) {
     const opts = defaults.mergeDefaults(DEFAULTS, options);
     const startedAt = Date.now();
@@ -104,13 +209,18 @@ function recognize(options) {
     // 两种模式下归一化的偏移量不同：区域模式坐标已回移，裁剪模式要自己加回去。
     const detections = normalize(raw, opts.useRegion === true ? null : box);
 
-    const assigned = assignment.assign(detections, opts.grid, {
+    const assignOptions = {
         minScore: opts.minScore,
         maxResidual: opts.maxResidual,
         conflictGap: opts.conflictGap,
         frameQuality: opts.frameQuality
-    });
-
+    };
+    // 几何微调（定位系统性偏差的兜底）：只花一次检测的钱，所以可以逐帧跑。
+    const aligned = opts.autoAlign === true
+        ? alignGrid(detections, opts.grid, assignOptions, opts.alignSearch)
+        : null;
+    const grid = aligned ? aligned.grid : opts.grid;
+    const assigned = aligned ? aligned.assigned : assignment.assign(detections, grid, assignOptions);
     // 逐格判阵营（只对「有子」的格子采样，空格不花这个钱）
     const sideStart = Date.now();
     const sideOf = new Array(90);
@@ -128,7 +238,7 @@ function recognize(options) {
         }
         const result = pieceSide.classifyAt(function (x, y) {
             return opts.rgbAt(opts.image, x, y);
-        }, opts.grid, col, row, { sampleStep: opts.sideSampleStep });
+        }, grid, col, row, { sampleStep: opts.sideSampleStep });
         sideOf[index] = result;
         sides.push({
             col: col, row: row, piece: cell.piece, side: result.side,
@@ -197,7 +307,8 @@ function recognize(options) {
         sideBlack: sides.filter(function (s) { return s.side === pieceSide.SIDE_BLACK; }).length,
         sideReasons: sideReasons,
         unknownCells: unknownCount,
-        unknownBeforeRepair: unknownCount0
+        unknownBeforeRepair: unknownCount0,
+        autoAlign: aligned ? aligned.report : null
     });
 
     let layout = null;
@@ -214,6 +325,7 @@ function recognize(options) {
         ok: layout != null,
         reason: layout == null ? ("生成布局失败：" + layoutError) : "",
         box: box,
+        grid: grid,
         detections: detections,
         detectionCount: detections.length,
         assigned: assigned.cells,
@@ -287,6 +399,7 @@ module.exports = {
     DEFAULTS: DEFAULTS,
     PIECE_NAMES: PIECE_NAMES,
     recognize: recognize,
+    alignGrid: alignGrid,
     normalize: normalize,
     boardText: boardText
 };

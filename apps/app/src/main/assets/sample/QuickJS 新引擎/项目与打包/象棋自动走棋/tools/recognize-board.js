@@ -142,7 +142,10 @@ function run(image, located, opts, frame) {
     const started = adapter.nowMono();
     let loaded;
     try {
-        loaded = loadDetector(opts);
+        // 允许调用方注入已加载的检测器：几何校准要连着跑十几次识别，每次都重新 load 一遍模型太贵。
+        loaded = opts.detector
+            ? { detector: opts.detector, request: opts.detectorRequest || null, source: "调用方注入", failures: [] }
+            : loadDetector(opts);
     } catch (error) {
         return {
             ok: false,
@@ -170,9 +173,13 @@ function run(image, located, opts, frame) {
         minScore: opts.minScore,
         frameQuality: opts.frameQuality,
         sideSampleStep: opts.sideSampleStep,
-        sideToMove: opts.sideToMove
+        sideToMove: opts.sideToMove,
+        // 真机上定位有系统性偏差（K40+天天象棋实测 (-7,-14)，未知格 6→1），
+        // 所以默认开着「按检测框微调几何」；要对照原行为传 autoAlign: false
+        autoAlign: opts.autoAlign !== false,
+        alignSearch: opts.alignSearch
     });
-    if (detector && typeof detector.close === "function") {
+    if (!opts.detector && detector && typeof detector.close === "function") {
         try {
             detector.close();
         } catch (error) {
@@ -363,6 +370,102 @@ function describeResult(result) {
     return lines.join("\n");
 }
 
+/**
+ * **会话级几何校准**：定位给出的原点常有系统性偏差 —— K40 + 腾讯天天象棋实测：
+ * 把原点从 (81,666) 挪到 (74,652)（dx=-7, dy=-14），未知格从 **6 降到 1**；
+ * 而「按检测框残差最小」的另一种微调（+3,+6）未知格仍是 6。
+ * 所以校准的评分标准必须是**最终未知格数**，不是几何残差。
+ *
+ * 代价：每个候选要跑一次完整识别（推理为主，~0.4s），所以这是**一局一次**的动作
+ * （自动走棋在一轮识别里不会调它）。模型只加载一次，候选之间复用。
+ *
+ * @param image    一帧图（或图片对象）
+ * @param located  locateBoard 的结果（用它的 grid 做基准、坐标做搜索中心）
+ * @param options.search {maxShift, step}；options.maxCandidates 上限；其余参数透传给识别
+ * @returns { ok, grid, dx, dy, unknown, tried, layout, reason }
+ */
+function calibrateGrid(image, located, options) {
+    const opts = options || {};
+    if (!image || !located || !located.ok || !located.grid) {
+        return { ok: false, reason: "缺少图像或基准几何" };
+    }
+    const search = opts.search || { maxShift: 18, step: 7 };
+    const maxShift = search.maxShift == null ? 18 : search.maxShift;
+    const step = search.step == null ? 7 : search.step;
+    const maxCandidates = opts.maxCandidates == null ? 25 : opts.maxCandidates;
+
+    let loaded;
+    try {
+        loaded = loadDetector(opts);
+    } catch (error) {
+        return { ok: false, reason: "加载模型失败：" + (error && error.message ? error.message : error) };
+    }
+    const base = located.grid;
+    const runOpts = Object.assign({}, opts, { detector: loaded.detector });
+    delete runOpts.search;
+
+    let best = null;
+    let tried = 0;
+    const offsets = [];
+    offsets.push([0, 0]);
+    for (let dx = -maxShift; dx <= maxShift; dx += step) {
+        for (let dy = -maxShift; dy <= maxShift; dy += step) {
+            if (dx !== 0 || dy !== 0) {
+                offsets.push([dx, dy]);
+            }
+        }
+    }
+    // 先试偏移小的：真机偏差就在十几像素，大的只作为兜底
+    offsets.sort(function (a, b) {
+        return (Math.abs(a[0]) + Math.abs(a[1])) - (Math.abs(b[0]) + Math.abs(b[1]));
+    });
+
+    for (let i = 0; i < offsets.length && tried < maxCandidates; i++) {
+        const dx = offsets[i][0];
+        const dy = offsets[i][1];
+        const candidate = Object.assign({}, located, {
+            grid: Object.assign({}, base, { originX: base.originX + dx, originY: base.originY + dy })
+        });
+        let result;
+        try {
+            result = run(image, candidate, runOpts, null);
+        } catch (error) {
+            continue;
+        }
+        tried += 1;
+        const unknown = result.ok ? result.unknownCells : 999;
+        if (best == null || unknown < best.unknown) {
+            best = {
+                ok: result.ok,
+                unknown: unknown,
+                dx: dx,
+                dy: dy,
+                layout: result.layout,
+                grid: candidate.grid,
+                sideUnknown: result.stats ? result.stats.sideUnknown : null
+            };
+        }
+        if (unknown === 0) {
+            break;
+        }
+    }
+
+    if (loaded.detector && typeof loaded.detector.close === "function") {
+        try {
+            loaded.detector.close();
+        } catch (error) {
+            // 忽略
+        }
+    }
+    if (!best) {
+        return { ok: false, reason: "所有候选都识别失败" };
+    }
+    best.tried = tried;
+    best.base = { originX: base.originX, originY: base.originY, stepX: base.stepX, stepY: base.stepY };
+    best.reason = best.unknown === 0 ? "已校准（无未知格）" : ("校准后仍有 " + best.unknown + " 个未知格");
+    return best;
+}
+
 module.exports = {
     MODEL_FILE: MODEL_FILE,
     LABELS_FILE: LABELS_FILE,
@@ -373,5 +476,9 @@ module.exports = {
     recognizeImageSequence: recognizeImageSequence,
     recognizeScreenSequence: recognizeScreenSequence,
     describeResult: describeResult,
-    describeSequence: describeSequence
+    describeSequence: describeSequence,
+    calibrateGrid: calibrateGrid,
+    // 调参用：直接把「一帧图 + 自定义几何」交给识别管线，不重新截图、不重新定位
+    // （离线排查「未知格是不是几何偏出来的」就靠它）
+    run: run
 };

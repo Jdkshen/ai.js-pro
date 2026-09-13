@@ -61,6 +61,10 @@ function capabilities() {
         click: has("click"),
         tap: has("press") || has("click"),
         accessibilityReady: !!(globals.auto && globals.auto.service),
+        // Shizuku 特权 shell（可跑 `input tap`）：有些游戏会**忽略无障碍注入的事件**
+        // （实测腾讯天天象棋：click/press/swipe/longClick 都返回 true 但画面零变化，
+        // 而 `input tap` 能正常落子）→ 这条通道是必需的备选。
+        shizuku: shizukuReady(),
         drawing: typeOf("drawing.show") === "function",
         // 任务书要求但当前版本未必有的能力，单独列出来：
         nativeFrameSourceId: false, // 帧来源序号/时间：平台尚未提供
@@ -189,6 +193,12 @@ function looksBlank(frame, options) {
  * 拿到非黑帧就立即返回，所以正常情况下（第二帧起）不会多花时间。
  * 三次都还是黑的话，仍然把最后一帧交出去（并在 describeFrame 里报 blank=true），
  * 不抛错 —— 因为极暗的真实界面也可能命中，调用方需要能拿到图并自己处理。
+ *
+ * ⚠️ 单次截图**超时**（`Timed out waiting for the first screen capture frame`）是另一种失败：它直接抛异常。
+ * 真机实测：刚从我们自己的界面切到游戏时，虚拟显示屏要过一会儿才出第一帧（3 次 × 600ms 全超时），
+ * 于是整轮直接崩。所以：
+ * 1) 每次尝试各自 try/catch，超时**逐次放宽**（默认 600ms → 1500ms → 3000ms，可用 options.timeouts 覆盖）；
+ * 2) 三次都超时才抛出，错误信息里写明次数，便于调用方判断是「权限没了」还是「首帧慢」。
  */
 function capture(mode, timeoutMs, options) {
     if (!has("captureScreen")) {
@@ -197,19 +207,33 @@ function capture(mode, timeoutMs, options) {
     const opts = options || {};
     const attempts = opts.attempts == null ? 3 : opts.attempts;
     const gapMs = opts.gapMs == null ? 60 : opts.gapMs;
+    const base = timeoutMs == null ? 600 : timeoutMs;
+    const ladder = opts.timeouts || [base, Math.max(base, 1500), Math.max(base, 3000)];
     let frame = null;
+    let lastError = null;
     for (let i = 0; i < attempts; i++) {
-        frame = globals.captureScreen({
-            mode: mode || "full",
-            fresh: true,
-            timeout: timeoutMs == null ? 300 : timeoutMs
-        });
-        if (!looksBlank(frame)) {
+        const limit = ladder[Math.min(i, ladder.length - 1)];
+        try {
+            frame = globals.captureScreen({
+                mode: mode || "full",
+                fresh: true,
+                timeout: limit
+            });
+            lastError = null;
+        } catch (error) {
+            frame = null;
+            lastError = error;
+        }
+        if (frame && !looksBlank(frame)) {
             return frame;
         }
         if (i < attempts - 1 && gapMs > 0) {
             waitMs(gapMs);
         }
+    }
+    if (!frame) {
+        throw new Error("截屏连续 " + attempts + " 次失败：" +
+            (lastError && lastError.message ? lastError.message : String(lastError)));
     }
     return frame;
 }
@@ -433,18 +457,74 @@ function scriptDir() {
 }
 
 /**
- * 真机点击（P4）：优先 `press(x, y, duration)`（能控按压时长），没有就退回 `click(x, y)`。
+ * Shizuku 可用且已授权吗？（可用时 `shell(cmd, {shizuku:true})` 以 shell 身份执行）
+ */
+function shizukuReady() {
+    if (typeOf("shizuku.isAvailable") !== "function" || typeOf("shizuku.hasPermission") !== "function") {
+        return false;
+    }
+    try {
+        return globals.shizuku.isAvailable() === true && globals.shizuku.hasPermission() === true;
+    } catch (error) {
+        return false;
+    }
+}
+
+/**
+ * 真机点击（P4）：只有这里碰宿主的点击接口；执行器只管「什么时候点、点哪里」。
+ * 返回的 ok 只代表**接口调用有没有发出**，不代表棋子真的走了 —— 落子成败由
+ * move-verifier 看新观测判断（这两件事必须分开统计）。
  *
- * 只有这里碰宿主的点击接口；执行器只管「什么时候点、点哪里」。返回的 ok 只代表
- * **接口调用有没有发出**，不代表棋子真的走了 —— 落子成败由 move-verifier 看新观测判断。
- *
- * ⚠️ 点击走无障碍手势，服务没就绪时接口会返回 false（历史日志里那 7 次「引擎执行权限异常」
- * 就是这个）。这里把它翻译成能看懂的原因，而不是让上层看到一个莫名的失败。
+ * ⚠️ 两个通道差别很大，默认 `auto`（有 Shizuku 就用它）：
+ *   - `shizuku`：`shell("input tap x y", {shizuku:true})` —— shell 身份注入，最接近真手指，
+ *     实测能点动**会忽略无障碍事件的游戏**（腾讯天天象棋）；
+ *   - `accessibility`：`press/click`（无障碍手势）—— 通用、无额外依赖，但事件带自动化标记，
+ *     部分游戏直接忽略（**返回 true 却没反应，静默失败**）。
+ * 另外：`auto.service` 在 force-stop 之后可能一直不重新绑定（MIUI），所以上层要先有界等待，
+ * 不要调会无限阻塞的 `auto.waitFor()`。
  */
 function createTap(options) {
     const opts = options || {};
+    const requested = opts.method || "auto";
+    const method = requested === "auto" ? (shizukuReady() ? "shizuku" : "accessibility") : requested;
     const defaultDuration = opts.pressMs == null ? 60 : Number(opts.pressMs);
-    const stats = { calls: 0, ok: 0, failed: 0, lastError: "" };
+    const stats = { calls: 0, ok: 0, failed: 0, lastError: "", method: method };
+
+    function tapViaShizuku(px, py) {
+        if (!shizukuReady()) {
+            return { ok: false, error: "Shizuku 不可用或未授权（在应用里授权后重试）" };
+        }
+        let result;
+        try {
+            result = globals.shell("input tap " + px + " " + py, { shizuku: true, timeout: 5000 });
+        } catch (exception) {
+            return { ok: false, error: String(exception && exception.message ? exception.message : exception) };
+        }
+        return {
+            ok: result.code === 0,
+            error: result.code === 0 ? "" : String(result.error || ("exit " + result.code))
+        };
+    }
+
+    function tapViaAccessibility(px, py, duration) {
+        if (!has("press") && !has("click")) {
+            return { ok: false, error: "缺少能力：press/click（这台设备上无法点击）" };
+        }
+        const usePress = has("press");
+        try {
+            const ok = usePress
+                ? !!globals.press(px, py, Math.max(1, Math.round(duration)))
+                : !!globals.click(px, py);
+            return {
+                ok: ok,
+                error: ok ? "" : ((globals.auto && globals.auto.service)
+                    ? "点击接口返回失败（被系统拦下？目标窗口不可点？）"
+                    : "点击接口返回失败：无障碍服务未就绪")
+            };
+        } catch (exception) {
+            return { ok: false, error: String(exception && exception.message ? exception.message : exception) };
+        }
+    }
 
     function tap(x, y, callOptions) {
         stats.calls += 1;
@@ -455,50 +535,33 @@ function createTap(options) {
             stats.lastError = "坐标不是有效数字：" + x + "," + y;
             return { ok: false, method: null, error: stats.lastError };
         }
-        if (!has("press") && !has("click")) {
-            stats.failed += 1;
-            stats.lastError = "缺少能力：press/click（这台设备上无法点击）";
-            return { ok: false, method: null, error: stats.lastError };
-        }
         const duration = callOptions && callOptions.pressMs != null
             ? Number(callOptions.pressMs) : defaultDuration;
-        const usePress = has("press");
-        let ok = false;
-        let error = "";
-        try {
-            ok = usePress
-                ? !!globals.press(px, py, Math.max(1, Math.round(duration)))
-                : !!globals.click(px, py);
-        } catch (exception) {
-            error = String(exception && exception.message ? exception.message : exception);
-        }
-        if (!ok && !error) {
-            error = (globals.auto && globals.auto.service)
-                ? "点击接口返回失败（被系统拦下？目标窗口不可点？）"
-                : "点击接口返回失败：无障碍服务未就绪";
-        }
-        if (ok) {
+        const result = method === "shizuku"
+            ? tapViaShizuku(px, py)
+            : tapViaAccessibility(px, py, duration);
+        if (result.ok) {
             stats.ok += 1;
         } else {
             stats.failed += 1;
-            stats.lastError = error;
+            stats.lastError = result.error;
         }
         return {
-            ok: ok,
-            method: usePress ? "press" : "click",
+            ok: result.ok,
+            method: method === "shizuku" ? "shizuku-input-tap" : (has("press") ? "press" : "click"),
             x: px,
             y: py,
             durationMs: duration,
-            error: error
+            error: result.error
         };
     }
 
     return {
         tap: tap,
         disabled: false,
+        method: method,
         describe: function () {
-            return (has("press") ? "press" : "click") + "：" +
-                stats.ok + " 成功 / " + stats.failed + " 失败（共 " + stats.calls + " 次）";
+            return method + "：" + stats.ok + " 成功 / " + stats.failed + " 失败（共 " + stats.calls + " 次）";
         },
         stats: function () { return { calls: stats.calls, ok: stats.ok, failed: stats.failed }; }
     };
@@ -573,6 +636,7 @@ const AIJS_ADAPTER = {
     looksBlank: looksBlank,
     waitMs: waitMs,
     createTap: createTap,
+    shizukuReady: shizukuReady,
     screenSize: screenSize,
     overlayAvailable: overlayAvailable,
     overlayShow: overlayShow,
