@@ -452,6 +452,8 @@ function calibrateGrid(image, located, options) {
     const maxShift = search.maxShift == null ? 18 : search.maxShift;
     const step = search.step == null ? 7 : search.step;
     const maxCandidates = opts.maxCandidates == null ? 25 : opts.maxCandidates;
+    /** 粗扫（覆盖半格级错位）的候选上限：会话级一次，宽容一些没代价 */
+    const coarseCandidates = opts.coarseCandidates == null ? 81 : opts.coarseCandidates;
 
     let loaded;
     try {
@@ -463,59 +465,84 @@ function calibrateGrid(image, located, options) {
     const runOpts = Object.assign({}, opts, { detector: loaded.detector });
     delete runOpts.search;
 
-    let best = null;
     let tried = 0;
-    const offsets = [];
-    offsets.push([0, 0]);
-    for (let dx = -maxShift; dx <= maxShift; dx += step) {
-        for (let dy = -maxShift; dy <= maxShift; dy += step) {
-            if (dx !== 0 || dy !== 0) {
-                offsets.push([dx, dy]);
+
+    /**
+     * 扫一批候选偏移，返回代价最小的那个（dx/dy 相对 base 原点）。
+     *
+     * ⚠️ 不做「代价 0 就提前收工」：降级/翻色修复能让好几个偏移都凑出代价 0，
+     * 提前退出会把**没对齐**的那个留下（K40 真机踩过）。代价相同则取位移更小的。
+     */
+    function scanOffsets(centerX, centerY, halfRange, stepPx, cap) {
+        const candidates = [];
+        for (let dx = -halfRange; dx <= halfRange; dx += stepPx) {
+            for (let dy = -halfRange; dy <= halfRange; dy += stepPx) {
+                candidates.push([dx, dy]);
             }
         }
-    }
-    // 先试偏移小的：真机偏差就在十几像素，大的只作为兜底
-    offsets.sort(function (a, b) {
-        return (Math.abs(a[0]) + Math.abs(a[1])) - (Math.abs(b[0]) + Math.abs(b[1]));
-    });
-
-    for (let i = 0; i < offsets.length && tried < maxCandidates; i++) {
-        const dx = offsets[i][0];
-        const dy = offsets[i][1];
-        const candidate = Object.assign({}, located, {
-            grid: Object.assign({}, base, { originX: base.originX + dx, originY: base.originY + dy })
+        // 先试偏移小的：真机偏差就在十几像素，大的只作为兜底
+        candidates.sort(function (a, b) {
+            return (Math.abs(a[0]) + Math.abs(a[1])) - (Math.abs(b[0]) + Math.abs(b[1]));
         });
-        let result;
-        try {
-            result = run(frame, candidate, runOpts, null);
-        } catch (error) {
-            continue;
+        let found = null;
+        for (let i = 0; i < candidates.length && i < cap; i++) {
+            const dx = centerX + candidates[i][0];
+            const dy = centerY + candidates[i][1];
+            const candidate = Object.assign({}, located, {
+                grid: Object.assign({}, base, {
+                    originX: base.originX + dx,
+                    originY: base.originY + dy
+                })
+            });
+            let result;
+            try {
+                result = run(frame, candidate, runOpts, null);
+            } catch (error) {
+                continue;
+            }
+            tried += 1;
+            const unknown = result.ok ? result.unknownCells : 999;
+            // 代价 = 「修复动作数（降级+翻色）」优先，再看未知格：
+            // ⚠️ 不能只看未知格 —— 有翻色修复后，任意偏移都能凑出「0 未知格」，
+            // 搜索会立刻停在未对齐的 (0,0) 上，反而丢掉对齐带来的颜色正确性（实测颜色错 0 → 18）。
+            const repairedInfo = result.repaired || {};
+            const fixes = (repairedInfo.demoted ? repairedInfo.demoted.length : 0) +
+                (repairedInfo.flipped ? repairedInfo.flipped.length : 0);
+            const cost = fixes * 1000 + (unknown < 0 ? 999 : unknown);
+            const shift = Math.abs(dx) + Math.abs(dy);
+            const better = found == null || cost < found.cost ||
+                (cost === found.cost && shift < Math.abs(found.dx) + Math.abs(found.dy));
+            if (better) {
+                found = {
+                    ok: result.ok,
+                    unknown: unknown,
+                    fixes: fixes,
+                    cost: cost,
+                    dx: dx,
+                    dy: dy,
+                    layout: result.layout,
+                    grid: candidate.grid,
+                    sideUnknown: result.stats ? result.stats.sideUnknown : null
+                };
+            }
         }
-        tried += 1;
-        const unknown = result.ok ? result.unknownCells : 999;
-        // 代价 = 「修复动作数（降级+翻色）」优先，再看未知格：
-        // ⚠️ 不能只看未知格 —— 有翻色修复后，任意偏移都能凑出「0 未知格」，
-        // 搜索会立刻停在未对齐的 (0,0) 上，反而丢掉对齐带来的颜色正确性（实测颜色错 0 → 18）。
-        const repairedInfo = result.repaired || {};
-        const fixes = (repairedInfo.demoted ? repairedInfo.demoted.length : 0) +
-            (repairedInfo.flipped ? repairedInfo.flipped.length : 0);
-        const cost = fixes * 1000 + (unknown < 0 ? 999 : unknown);
-        if (best == null || cost < best.cost) {
-            best = {
-                ok: result.ok,
-                unknown: unknown,
-                fixes: fixes,
-                cost: cost,
-                dx: dx,
-                dy: dy,
-                layout: result.layout,
-                grid: candidate.grid,
-                sideUnknown: result.stats ? result.stats.sideUnknown : null
-            };
-        }
-        if (cost === 0) {
-            break;
-        }
+        return found;
+    }
+
+    // 第一段（粗）：范围必须能覆盖「半格」级错位 —— 线定位偶尔把第一条线锚错半格
+    // （K40 实测偏差 49px，而调用方习惯传 maxShift=18 → 那段参数下根本够不到真值，
+    // 校准只能挑个「最不像错」的，整盘照旧读花）。范围按格距自适应，步长大 → 候选量可控。
+    const cellStep = Math.max(base.stepX || 0, base.stepY || 0);
+    const coarseRange = Math.max(maxShift, Math.round(cellStep * 0.75));
+    const coarseStep = Math.max(6, Math.round(coarseRange / 3));
+    let best = scanOffsets(0, 0, coarseRange, coarseStep, coarseCandidates);
+
+    // 第二段（细）：以粗扫结果为原点，用调用方给的 (maxShift, step) 精修。
+    // 粗扫已经到位时这一段就地确认（位移归 0），不会把结果带偏。
+    const fine = scanOffsets(best ? best.dx : 0, best ? best.dy : 0,
+        maxShift, step, maxCandidates);
+    if (fine && (best == null || fine.cost < best.cost)) {
+        best = fine;
     }
 
     if (loaded.detector && typeof loaded.detector.close === "function") {
