@@ -31,7 +31,9 @@ const gridSearch = require("../src/vision/grid-search.js");
  *     整屏→矩形 763/787 = 97.0% ＞ 裁棋盘→矩形 759/787 = 96.4%，
  *     而且这正好是训练侧的评测口径（电脑端 xq36：全屏→矩形 0.969）。
  *   · 方形档 `chessai_160_v5r.onnx`（1×3×160×160）作为回滚/对照（同套帧 771/787 = 98.0%，
- *     纯颜色错 0）：改下面四个常量（MODEL_FILE / LABELS_FILE / REGION_ASPECT=null / REGION_MODE="board"）。
+ *     纯颜色错 0）：改下面**五个**常量 —— MODEL_FILE / LABELS_FILE / INPUT_WIDTH=160 /
+ *     INPUT_HEIGHT=160 / REGION_ASPECT=null / REGION_MODE="board"。
+ *     ⚠️ 只改模型名不改 INPUT_HEIGHT 会直接报 OpenCV reshape2 断言（方形模型吃 160×320）。
  *   · 更老的 `chessai_160.onnx` 保留在目录里，供历史评测脚本对照（同套帧 782/787 = 99.4%，
  *     但这 9 帧很可能就是它当初的基线集，有「见过」的嫌疑，不能当泛化结论）。
  */
@@ -95,8 +97,17 @@ function loadDetector(options) {
         threads: opts.threads == null ? THREADS : opts.threads
     };
     // 矩形（非方形）模型：必须显式给 inputWidth/inputHeight，否则引擎按方形 letterbox，比例就错了
-    const inputWidth = opts.inputWidth == null ? INPUT_WIDTH : opts.inputWidth;
-    const inputHeight = opts.inputHeight == null ? INPUT_HEIGHT : opts.inputHeight;
+    // 反面防呆（真机踩过）：传了方形的 inputSize 却又没给 inputWidth/Height 时，
+    // 如果沿用默认的 160×320，方形模型会直接报
+    //   OpenCV reshape2_layer: Assertion failed outTotal == inpTotal
+    // —— 回滚到方形档时只改 MODEL_FILE/LABELS_FILE 是*不够*的。这里让 inputSize 自己把两个维度拉平。
+    let inputWidth = opts.inputWidth == null ? INPUT_WIDTH : opts.inputWidth;
+    let inputHeight = opts.inputHeight == null ? INPUT_HEIGHT : opts.inputHeight;
+    if (opts.inputWidth == null && opts.inputHeight == null &&
+        opts.inputSize != null && opts.inputSize !== INPUT_HEIGHT) {
+        inputWidth = opts.inputSize;
+        inputHeight = opts.inputSize;
+    }
     if (inputWidth && inputHeight && inputWidth !== inputHeight) {
         request.inputWidth = inputWidth;
         request.inputHeight = inputHeight;

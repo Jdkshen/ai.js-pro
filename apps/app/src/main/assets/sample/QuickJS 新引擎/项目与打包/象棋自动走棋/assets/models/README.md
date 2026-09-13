@@ -107,4 +107,8 @@ output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，�
 它「见过」这些帧，所以那个数不能当泛化结论；v5r 的强项（残局页）也不在这套帧里。
 
 回滚到方形档：`tools/recognize-board.js` 里把 `MODEL_FILE/LABELS_FILE` 换成
-`chessai_160_v5r.onnx/txt`，并把 `REGION_ASPECT` 设为 `null`、`REGION_MODE` 设为 `"board"`。
+`chessai_160_v5r.onnx/txt`，并把 `INPUT_WIDTH = 160`、**`INPUT_HEIGHT = 160`**、
+`REGION_ASPECT` 设为 `null`、`REGION_MODE` 设为 `"board"`。
+⚠️ **只改模型名不改 `INPUT_HEIGHT` 会直接崩**：方形模型被喂 160×320 时 OpenCV 会报
+`reshape2_layer.cpp: Assertion failed outTotal == inpTotal`（已加防呆：传方形 `inputSize` 时自动拉平两维，
+但常量本身还是要改对）。
