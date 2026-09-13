@@ -296,8 +296,11 @@ function createMachine(config, deps) {
             if (state === STATE.PRECHECK && currentTicket) {
                 const gate = canClick(currentTicket);
                 if (gate.ok) {
-                    executedTickets[currentTicket.actionId] = true;
-                    ticketModule.start(currentTicket, nowMono());
+                    // ⚠️ 这里**不能**先记 executedTickets、也不能先 ticketModule.start()：
+                    // 驱动拿到 EXECUTE_TICKET 后会再调一次 canClick()（防「排队期间局面/轮次变了」），
+                    // 而 canClick → ticketModule.canExecute 要求票据还是 NEW。提前动状态就会把自己的
+                    // 那一核挡掉——真机症状：卡在「该票据已经执行过 / 票据状态是 STARTED」，③ 永远点不出去。
+                    // 防重执行靠的是状态（下面立刻进 CLICKING），那两件事放到点击真的发出后（onClickResult SENT）。
                     setState(STATE.CLICKING, "出手条件成立");
                     return effectsOut([{ type: "EXECUTE_TICKET", ticket: currentTicket }], reason);
                 }
@@ -413,6 +416,12 @@ function createMachine(config, deps) {
         const ticket = event.ticket || currentTicket;
         counters.clicks += event.clickCount == null ? 0 : Number(event.clickCount);
         if (event.status === "SENT") {
+            // 点击真的发出去了，才算「这张票据执行过」（S04：只执行一次）。
+            // 提前记（或提前 start()）会把驱动的出手前核对挡掉（见 PRECHECK 分支里的注释）。
+            if (ticket) {
+                ticketModule.start(ticket, nowMono());
+                executedTickets[ticket.actionId] = true;
+            }
             verifyDeadlineMono = nowMono() + cfg.verifyTimeoutMs;
             setState(STATE.VERIFYING, "点击已发出，等待新观测确认");
             return effectsOut([{ type: "VERIFY", ticket: ticket, deadlineMono: verifyDeadlineMono }], reason);

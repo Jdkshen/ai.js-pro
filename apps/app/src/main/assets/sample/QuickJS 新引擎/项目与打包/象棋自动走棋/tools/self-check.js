@@ -1376,9 +1376,24 @@ function harness(options) {
         return count;
     }
 
-    /** 把状态机吐出的 EXECUTE_TICKET 真的走一遍点击（真机上是 main.js 的驱动在做）。 */
+    /**
+     * 把状态机吐出的 EXECUTE_TICKET 真的走一遍点击（真机上是 auto-driver 在做）。
+     *
+     * ⚠️ 必须**照抄**驱动的顺序：驱动在拿到 EXECUTE_TICKET 之后、真正点之前还会再调一次
+     * `machine.canClick(ticket)`（防「排队期间局面/轮次变了」）。夹具以前省了这一步，
+     * 结果漏掉了一个真机 bug：状态机在放行时就把 actionId 记进 executedTickets，
+     * 驱动这一核对立刻被自己的标记挡住（"该票据已经执行过"）→ ③ 永远点不出去。
+     */
     function executeCurrentTicket() {
         const ticket = machine.currentTicket();
+        const gate = machine.canClick(ticket);
+        if (!gate.ok) {
+            dispatch({
+                type: "CLICK_RESULT", ticket: ticket, status: "REJECTED",
+                clickCount: 0, reason: gate.reason
+            });
+            return { ticket: ticket, outcome: { status: "REJECTED", clickCount: 0, reason: gate.reason } };
+        }
         const outcome = executor.execute(ticket, {
             grid: TEST_GRID,
             cancel: function () { return opts.cancelled === true; }
