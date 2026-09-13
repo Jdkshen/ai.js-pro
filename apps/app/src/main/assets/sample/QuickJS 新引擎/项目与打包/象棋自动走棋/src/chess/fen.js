@@ -183,7 +183,9 @@ function validateBoard(board) {
             if (ownSideRows.indexOf(row) < 0) {
                 errors.push((red ? "红相" : "黑象") + "过河（第 " + (row + 1) + " 行第 " + (col + 1) + " 列）");
             }
-            if (row % 2 !== 0) {
+            // 红相只能落在第 7、9 行，黑象只能落在第 0、2 行 —— 告警应该在**其它行**时发
+            const ownElephant = red ? (row === 7 || row === 9) : (row === 0 || row === 2);
+            if (!ownElephant) {
                 warnings.push((red ? "红相" : "黑象") + "落在非象位行（第 " + (row + 1) + " 行）");
             }
         }
@@ -194,7 +196,8 @@ function validateBoard(board) {
             if (behind) {
                 errors.push((red ? "红兵" : "黑卒") + "退到起始线之后（第 " + (row + 1) + " 行）");
             }
-            if (!crossed && col % 2 === 0) {
+            // 兵/卒未过河时只可能在偶数列（0/2/4/6/8）—— 告警应该在**奇数列**时发
+            if (!crossed && col % 2 !== 0) {
                 warnings.push((red ? "红兵" : "黑卒") + "未过河却不在兵位列（第 " + (col + 1) + " 列）");
             }
         }

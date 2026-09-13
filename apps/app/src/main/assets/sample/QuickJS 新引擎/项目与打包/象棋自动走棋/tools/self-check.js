@@ -779,7 +779,38 @@ check("识别链路：区域检测模式（坐标已回移）→ 同样还原开
     return true;
 });
 
+// 这条是拿真机识别结果去跑 validateBoard 时才发现的：两个告警条件方向写反了 ——
+// 合法局面（兵在偶数列、相在 7/9 行）每一条都报，反而真正的异常不报。
+check("局面校验：兵卒列与相象行的告警方向正确", function () {
+    const start = fen.parseFen(fen.START_FEN).board;
+    const clean = fen.validateBoard(start);
+    if (clean.errors.length > 0) {
+        return "标准开局不该有错误：" + clean.errors.join("；");
+    }
+    const noisy = clean.warnings.filter(function (w) {
+        return w.indexOf("兵位列") >= 0 || w.indexOf("非象位行") >= 0;
+    });
+    if (noisy.length > 0) {
+        return "合法局面不该报这类告警：" + noisy.join("；");
+    }
+    // 反向：把红兵放到奇数列、红相放到第 8 行（非象位行）→ 必须报
+    const bad = start.slice();
+    bad[fen.index(0, 6)] = null;
+    bad[fen.index(1, 6)] = "P";
+    bad[fen.index(2, 9)] = null;
+    bad[fen.index(2, 8)] = "B";
+    const flagged = fen.validateBoard(bad).warnings;
+    if (flagged.filter(function (w) { return w.indexOf("兵位列") >= 0; }).length === 0) {
+        return "红兵在奇数列应当报「不在兵位列」";
+    }
+    if (flagged.filter(function (w) { return w.indexOf("非象位行") >= 0; }).length === 0) {
+        return "红相在第 8 行应当报「非象位行」";
+    }
+    return true;
+});
+
 // ---------------------------------------------------------------- 收尾
+
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +
     " passed=" + passed + " failed=" + failures.length;
 console.log(summary);
