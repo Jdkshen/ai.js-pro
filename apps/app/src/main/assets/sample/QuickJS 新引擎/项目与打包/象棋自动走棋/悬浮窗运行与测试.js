@@ -705,7 +705,10 @@ function startKeepAlive() {
             lagCount += 1;
             lagMax = Math.max(lagMax, gap);
             if (lagCount <= 3) {
-                console.log("[floaty] 心跳间隔 " + gap + "ms（本站线程被采集/同步算棋占着，点按钮要排队）");
+                // 多出来的那部分就是「本站线程一次被占多久」：空载 1s 心跳的间隔本该 ~1000ms，
+                // 观察一帧 ~500ms 时就是 ~1500ms（真机实测值）。
+                console.log("[floaty] 心跳间隔 " + gap + "ms（≈本站线程被占 " + (gap - 1000) +
+                    "ms：采集/识别，或退回的同步算棋）");
             }
         }
         aliveSeconds += 1;
