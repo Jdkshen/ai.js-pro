@@ -2,14 +2,14 @@
 "ui";
 
 /**
- * 象棋自动走棋 · 工程骨架 v0.2.0
+ * 象棋自动走棋 · 工程骨架 v0.3.0
  *
- * 现状：FEN / 棋盘几何 / 格点分配 / 时序融合已是真代码（离线自检可验），
- * 但识别链路还没有模型，棋规、本机算棋（UCI）与自动落子都还没接入 —— 界面显示的就是真实状态。
- * 开发规格与分阶段要求见本工程 README.md。
+ * 现状：FEN / 棋盘几何 / 格点分配 / 时序融合 / 棋盘格线自动定位已是真代码
+ * （离线自检 + 真实截图都已验过），但没有模型、棋规、本机算棋（UCI）与自动落子都还没接入 ——
+ * 界面显示的就是真实状态。开发规格与分阶段要求见本工程 README.md。
  */
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 const STEPS = [
   "P0  运行时探针：截图 / 模型 / 线程 / 打包能力核对",
@@ -33,6 +33,7 @@ ui.layout(
   '  <frame height="10"/>' +
   '  <button id="selfcheck" text="运行离线自检"/>' +
   '  <button id="probe" text="查看运行环境"/>' +
+  '  <button id="locate" text="定位棋盘（真机）"/>' +
   '  <scroll height="260dp">' +
   '    <text id="output" textSize="12sp" textColor="#333333"/>' +
   '  </scroll>' +
@@ -40,10 +41,13 @@ ui.layout(
 );
 
 ui.version.setText("工程版本 v" + VERSION + "（骨架）");
-ui.status.setText("状态：识别（无模型）/ 棋规 / 算棋 / 落子均未接入。本工程当前不会点击棋盘。");
+ui.status.setText("状态：棋盘定位可用（需自备模型）/ 棋规 / 算棋 / 落子未接入。本工程当前不会点击棋盘。");
 ui.steps.setText(STEPS.join("\n"));
 
+let lastOutput = "";
+
 function show(text) {
+    lastOutput = text;
     ui.output.setText(text);
     console.log("[xiangqi] " + text);
 }
@@ -89,5 +93,18 @@ ui.probe.on("click", () => {
         show(lines.join("\n"));
     } catch (error) {
         show("探针没能运行：" + error);
+    }
+});
+
+// 棋盘定位（真机）：截一帧，在默认范围内自动找格线。只截图，不点击棋盘。
+ui.locate.on("click", () => {
+    try {
+        const board = require("./tools/locate-board.js");
+        const keep = lastOutput;
+        show("正在定位棋盘…");
+        const result = board.locateBoardOnScreen();
+        show(board.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
+    } catch (error) {
+        show("定位没能运行：" + error);
     }
 });

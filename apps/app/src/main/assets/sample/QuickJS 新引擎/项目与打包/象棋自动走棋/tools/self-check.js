@@ -504,6 +504,56 @@ check("棋盘定位：没有格线时明确失败，不硬猜", function () {
     return result.ok === false || "纯色画面上竟然定位成功了";
 });
 
+// 真实照片上，最上一行与最下一行的横线正好被棋子压住（残局照片就是这个样子）：
+// 格点阵必须把缺的线补回来，而且序号不能错 —— 错一格就是整盘错一行。
+check("支撑度定位：被棋子压住两行线时补回格点且序号正确", function () {
+    const step = 60;
+    const originX = 120;
+    const originY = 300;
+    const cols = 9;
+    const rows = 10;
+    const vLines = [];
+    const hLines = [];
+    for (let col = 0; col < cols; col++) vLines.push(originX + col * step);
+    for (let row = 0; row < rows; row++) hLines.push(originY + row * step);
+    const sampler = function (x, y) {
+        let value = 0.9;
+        for (let i = 0; i < vLines.length; i++) {
+            if (Math.abs(x - vLines[i]) <= 1.2) value = 0.2;
+        }
+        for (let i = 0; i < hLines.length; i++) {
+            if (Math.abs(y - hLines[i]) <= 1.2) value = Math.min(value, 0.2);
+        }
+        // 首行 / 末行整行摆满棋子：比格线还暗，于是这两条线的支撑度直接归零
+        for (let col = 0; col < cols; col++) {
+            const px = originX + col * step;
+            const onFirst = Math.abs(y - hLines[0]) <= 22;
+            const onLast = Math.abs(y - hLines[rows - 1]) <= 22;
+            if (Math.abs(x - px) <= 22 && (onFirst || onLast)) value = Math.min(value, 0.1);
+        }
+        return value;
+    };
+    const result = locator.locateBySupport(sampler, {
+        region: { x: 100, y: 280, width: 520, height: 580 },
+        step: 1
+    });
+    if (!result.ok) return result.reason;
+    const bad = [
+        near(result.grid.originX, originX, 3, "originX"),
+        near(result.grid.originY, originY, 3, "originY"),
+        near(result.grid.stepX, step, 1, "stepX"),
+        near(result.grid.stepY, step, 1, "stepY")
+    ].filter(function (item) { return item !== true; });
+    if (bad.length > 0) {
+        return bad.join("；") + "（横线命中 " + result.horizontal.matched + "/" + rows +
+            "，起点序号 " + result.horizontal.startIndex + "）";
+    }
+    if (result.horizontal.quality.reconstructed < 1) {
+        return "这次并没有真的「缺线」（补回 " + result.horizontal.quality.reconstructed + " 条），断言失去意义";
+    }
+    return true;
+});
+
 check("手动校准：四个角点能建立几何并给出质量", function () {
     const grid = geometry.createGrid({ originX: 100, originY: 200, stepX: 50, stepY: 50 });
     const corners = [[0, 0], [8, 0], [0, 9], [8, 9]].map(function (pair) {
