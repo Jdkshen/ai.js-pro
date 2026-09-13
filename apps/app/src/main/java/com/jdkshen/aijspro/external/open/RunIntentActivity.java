@@ -15,6 +15,7 @@ import com.jdkshen.aijspro.autojs.AutoJs;
 import com.jdkshen.aijspro.external.ScriptIntents;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.model.script.Scripts;
+import com.jdkshen.aijspro.theme.AijsSystemBars;
 
 import java.io.FileNotFoundException;
 import java.io.InputStream;
@@ -32,6 +33,10 @@ public class RunIntentActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 这个窗口会一直停在前台直到脚本跑完，所以**它就是脚本页面的顶窗**：
+        // 主题（Theme.Translucent.NoTitleBar）没有 android:statusBarColor，平台默认给纯黑，
+        // 不显式刷成页面底色的话，脚本页面顶部就是一条黑条（真机 K40 实测）。
+        applyStatusBar();
         try {
             hold(handleIntent(getIntent()));
         } catch (Exception e) {
@@ -39,6 +44,17 @@ public class RunIntentActivity extends Activity {
             Toast.makeText(this, R.string.edit_and_run_handle_intent_error, Toast.LENGTH_LONG).show();
             finish();
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 脚本运行期间用户可能切换了深浅色：回来后要跟着走
+        applyStatusBar();
+    }
+
+    private void applyStatusBar() {
+        AijsSystemBars.apply(this);
     }
 
     private ScriptExecution handleIntent(Intent intent) throws FileNotFoundException {

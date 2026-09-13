@@ -108,6 +108,29 @@ function recognizeImage(path, options) {
 /** 识别当前屏幕：截图 → 定位棋盘 → 识别。 */
 function recognizeScreen(options) {
     const opts = options || {};
+    // 复用已校准的几何：自动走棋每一步都要看棋盘，重复定位一次要 700ms 左右，
+    // 而棋盘在对局中不会动 —— 只有 RECOVERING（几何可疑）时才重新定位。
+    if (opts.grid) {
+        let reuseFrame = opts.frame;
+        if (!reuseFrame) {
+            if (!adapter.requestCapture("portrait")) {
+                return { ok: false, stage: "capture", reason: "用户拒绝了截图授权" };
+            }
+            reuseFrame = adapter.capture("full", opts.timeoutMs == null ? 300 : opts.timeoutMs);
+            if (!reuseFrame) {
+                return { ok: false, stage: "capture", reason: "截图失败：没有拿到帧" };
+            }
+        }
+        const reused = {
+            ok: true,
+            method: "reuse",
+            reason: "复用已校准的几何（v" + opts.grid.version + "）",
+            grid: opts.grid,
+            frameObject: reuseFrame,
+            imageObject: reuseFrame
+        };
+        return run(reuseFrame, reused, opts, reuseFrame);
+    }
     const located = locateBoard.locateBoardOnScreen(opts);
     if (!located.ok) {
         return { ok: false, stage: "locate", reason: "定位失败：" + located.reason, timing: located.timing };

@@ -2,22 +2,28 @@
 "ui";
 
 /**
- * 象棋自动走棋 · 工程骨架 v0.5.0
+ * 象棋自动走棋 · 工程 v0.6.0
  *
- * 现状：FEN / 棋盘几何 / 格线自动定位 / 格点分配 / 时序融合 / 识别链路（模型随包）/ 棋规与合法着法 /
- * 本机算棋（本地 UCI 语义引擎）都是真代码；缺的是自动落子 —— 界面显示的就是真实状态。
+ * 现状：FEN / 棋盘几何 / 格线自动定位 / 格点分配 / 时序融合 / 识别链路（模型随包）/ 棋规 /
+ * 本机算棋 / **自动执行（票据 + 点击 + 落子确认）** 都是真代码。
+ *
+ * 三个模式（任务书 13.2）：
+ *   ① 只识别  —— 只显示局面，点击接口是**显式禁用**的（调用即计数报错）
+ *   ② 着法建议 —— 算棋并显示起终点，仍然不点击
+ *   ③ 自动走棋 —— 轮次/局面/几何/票据/着法全部校验通过后真的点击，并验证落子
+ *
  * 开发规格与分阶段要求见本工程 README.md。
  */
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 const STEPS = [
   "P0  运行时探针：截图 / 模型 / 线程 / 打包能力核对",
   "P0-A 平台能力补齐：模型契约、帧来源、UCI 桥接、原生打包",
   "P1  离线识别：棋盘定位 + 格点校准 + FEN（已可用，模型随包）",
-  "P2  实时观察：截图时序 + 轮次 + 遮挡恢复（待接）",
-  "P3  本机算棋：本地引擎握手与着法建议（已可用，\./src/engine）",
-  "P4  自动执行：动作票据 + 点击 + 落子确认（待接）",
+  "P2  实时观察：截图时序 + 轮次推断 + 遮挡恢复（已接入自动模式）",
+  "P3  本机算棋：本地引擎握手与着法建议（已可用，./src/engine）",
+  "P4  自动执行：票据 + 点击 + 落子确认（已可用，./src/automation）",
   "P5  真机验收：打包独立 APK 后回归"
 ];
 
@@ -25,31 +31,46 @@ ui.layout(
   '<vertical padding="18">' +
   '  <text text="象棋自动走棋" textSize="24sp" textStyle="bold"/>' +
   '  <text id="version" textSize="13sp" textColor="#888888"/>' +
-  '  <frame height="14"/>' +
-  '  <text id="status" textSize="15sp" textColor="#d32f2f"/>' +
-  '  <frame height="14"/>' +
-  '  <text text="开发阶段" textSize="16sp" textStyle="bold"/>' +
-  '  <text id="steps" textSize="13sp" textColor="#555555"/>' +
-  '  <frame height="10"/>' +
-  '  <button id="selfcheck" text="运行离线自检"/>' +
-  '  <button id="probe" text="查看运行环境"/>' +
-  '  <button id="locate" text="定位棋盘（真机）"/>' +
-  '  <text text="棋盘截图路径（相册里的图就能用）" textSize="13sp" textColor="#555555"/>' +
-  '  <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="13sp"/>' +
-  '  <button id="locateImage" text="定位棋盘（图片）"/>' +
-  '  <button id="recognizeImage" text="识别棋盘 → FEN（图片）"/>' +
-  '  <button id="recognizeSeq" text="连拍识别 ×3 → FEN（多帧投票）"/>' +
-  '  <text text="算棋局面（FEN，含轮次；识别成功会自动填进来）" textSize="13sp" textColor="#555555"/>' +
-  '  <input id="fen" text="rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" textSize="12sp"/>' +
-  '  <button id="think" text="算棋（本地引擎）→ 最佳着法"/>' +
-  '  <scroll height="260dp">' +
-  '    <text id="output" textSize="12sp" textColor="#333333"/>' +
+  '  <text id="status" textSize="14sp" textColor="#d32f2f"/>' +
+  '  <scroll>' +
+  '    <vertical>' +
+  '      <frame height="12"/>' +
+  '      <text text="走棋模式（当前模式决定会不会点棋盘）" textSize="16sp" textStyle="bold"/>' +
+  '      <button id="modeWatch" text="① 只识别：只看局面，不点击"/>' +
+  '      <button id="modeAdvice" text="② 着法建议：算棋并显示，不点击"/>' +
+  '      <button id="modeAuto" text="③ 自动走棋：校验通过后真的点击"/>' +
+  '      <button id="mySide" text="我方：红方（点一下切换）"/>' +
+  '      <button id="assertTurn" text="现在轮到我（声明轮次基准）"/>' +
+  '      <button id="autoToggle" text="开始观察 / 暂停"/>' +
+  '      <button id="autoStop" text="停止（关画板）"/>' +
+  '      <text id="autoStatus" textSize="12sp" textColor="#0d47a1"/>' +
+  '      <frame height="14"/>' +
+  '      <text text="开发阶段" textSize="16sp" textStyle="bold"/>' +
+  '      <text id="steps" textSize="13sp" textColor="#555555"/>' +
+  '      <frame height="10"/>' +
+  '      <text text="单次操作" textSize="16sp" textStyle="bold"/>' +
+  '      <button id="selfcheck" text="运行离线自检"/>' +
+  '      <button id="probe" text="查看运行环境"/>' +
+  '      <button id="locate" text="定位棋盘（真机）"/>' +
+  '      <text text="棋盘截图路径（相册里的图就能用）" textSize="13sp" textColor="#555555"/>' +
+  '      <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="13sp"/>' +
+  '      <button id="locateImage" text="定位棋盘（图片）"/>' +
+  '      <button id="recognizeImage" text="识别棋盘 → FEN（图片）"/>' +
+  '      <button id="recognizeSeq" text="连拍识别 ×3 → FEN（多帧投票）"/>' +
+  '      <text text="算棋局面（FEN，含轮次；识别成功会自动填进来）" textSize="13sp" textColor="#555555"/>' +
+  '      <input id="fen" text="rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" textSize="12sp"/>' +
+  '      <text text="棋盘范围（比例 x,y,w,h；留空用默认。定位总失败时填，例如 0.013,0.251,0.958,0.472）" textSize="13sp" textColor="#555555"/>' +
+  '      <input id="region" text="" textSize="13sp"/>' +
+  '      <button id="think" text="算棋（本地引擎）→ 最佳着法"/>' +
+  '      <frame height="10"/>' +
+  '      <text id="output" textSize="12sp" textColor="#333333"/>' +
+  '    </vertical>' +
   '  </scroll>' +
   '</vertical>'
 );
 
-ui.version.setText("工程版本 v" + VERSION + "（骨架）");
-ui.status.setText("状态：识别→FEN 可用（模型随包）/ 棋规可用 / 本地引擎算棋可用；自动落子未接入。本工程当前不会点击棋盘。");
+ui.version.setText("工程版本 v" + VERSION);
+ui.status.setText("等开始。自动走棋会真的点击棋盘，先读一遍模式说明。");
 ui.steps.setText(STEPS.join("\n"));
 
 /**
@@ -249,3 +270,313 @@ ui.think.on("click", () => {
         show("算棋没能运行：" + error);
     }
 });
+
+// ---------------------------------------------------------------- 自动走棋（P4）
+//
+// 三个模式的区别只有一件事：**允不允许点击**。
+//   ① 只识别 / ② 着法建议：状态机配 allowClick=false，点击执行器换成显式禁用的桩
+//      （调用会被计数并报错，界面上能看到「拦截 N 次」）——不点击是靠禁用保证的，
+//      不是靠“记得别调”。
+//   ③ 自动走棋：真的点。但必须同时满足轮次、局面、几何、票据、着法合法性，
+//      而且确认阶段要用**新观测**看到落子才算成功（点击函数返回成功 ≠ 落子成功）。
+
+const adapter = require("./src/runtime/aijs-adapter.js");
+const geometryModule = require("./src/vision/geometry.js");
+const driverModule = require("./src/automation/auto-driver.js");
+const recognizeBoard = require("./tools/recognize-board.js");
+const locateBoard = require("./tools/locate-board.js");
+const engineModule = require("./src/engine/engine.js");
+
+const MODES = { WATCH: "watch", ADVICE: "advice", AUTO: "auto" };
+const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
+
+let modeKey = MODES.WATCH;
+let autoDriver = null;
+let autoRunning = false;
+let overlayShown = false;
+let lastDriverLine = "";
+
+function sideLabel(side) {
+    return side === "b" ? "黑方" : "红方";
+}
+
+/** 读棋盘范围输入框（比例 x,y,w,h）；空的就返回 null（用默认比例）。 */
+function regionRatioFromUi() {
+    const raw = inputText(ui.region).trim();
+    if (!raw) {
+        return null;
+    }
+    const parts = raw.split(/[,\s]+/).map(function (item) { return Number(item); });
+    if (parts.length !== 4 || parts.some(function (value) { return !isFinite(value) || value < 0; })) {
+        show("棋盘范围格式不对：应形如 0.013,0.251,0.958,0.472（比例）");
+        return null;
+    }
+    return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+}
+
+/** 换模式（或换我方颜色后重建）会重置驱动：会话、几何与轮次基准全部清空。 */
+function rebuildDriver() {
+    stopAuto("重建驱动");
+    const clickAllowed = modeKey === MODES.AUTO;
+    let tapFunction = null;
+    let tapNote = "（不点击）";
+    if (clickAllowed) {
+        if (!adapter.capabilities().tap) {
+            tapNote = "（这台设备没有 press/click，出手会一直被拒绝）";
+        } else {
+            tapFunction = adapter.createTap({ pressMs: 60 }).tap;
+            tapNote = adapter.capabilities().accessibilityReady ? "（会点击）" : "（点击接口在，但无障碍服务没就绪）";
+        }
+    }
+    const keepSide = autoDriver ? autoDriver.mySide() : "w";
+    autoDriver = driverModule.createDriver({
+        allowClick: clickAllowed,
+        mySide: keepSide,
+        tap: tapFunction,
+        recognize: function (options) { return recognizeBoard.recognizeScreen(options); },
+        locate: function (options) { return locateBoard.locateBoardOnScreen(options); },
+        analyze: function (position, options) { return engineModule.analyze(position, options); },
+        isTrustworthy: function (grid) {
+            return geometryModule.isTrustworthy(grid, { minSamples: 4, maxResidual: 0.35 });
+        },
+        screen: function () { return adapter.screenSize(); },
+        log: function (text) { console.log(text); },
+        config: {
+            tickMs: 900,
+            movetimeMs: 1200,
+            modelVersion: "chessai_160",
+            confidence: 0.25,
+            orientation: "RED_BOTTOM",
+            regionRatio: regionRatioFromUi()
+        },
+        executorConfig: { pressMs: 60, settleMs: 140 }
+    });
+    ui.mySide.setText("我方：" + sideLabel(keepSide) + "（点一下切换）");
+    ui.autoStatus.setText("模式：" + MODE_LABEL[modeKey] + tapNote + "，我方：" + sideLabel(keepSide) + "，未开始");
+    ui.status.setText(MODE_LABEL[modeKey] + tapNote);
+    lastDriverLine = "";
+    return autoDriver;
+}
+
+function driverTick() {
+    if (!autoDriver) {
+        return;
+    }
+    try {
+        updateAutoStatus(autoDriver.tick());
+    } catch (error) {
+        show("自动走棋出错：" + error);
+        stopAuto("出错");
+    }
+}
+
+function updateAutoStatus(result) {
+    const driver = autoDriver;
+    if (!driver) {
+        return;
+    }
+    const machine = driver.machine;
+    const stats = driver.stats();
+    const counters = machine.counters();
+    const ticket = machine.currentTicket();
+    const lines = [];
+    lines.push("模式：" + MODE_LABEL[modeKey] + "，我方：" + sideLabel(driver.mySide()) +
+        "，状态：" + machine.state() + "，几何：" + (driver.grid() ? ("v" + driver.grid().version) : "无"));
+    if (result && result.ok) {
+        lines.push("观察：未知格 " + result.unknownCells +
+            "，轮次：" + (result.side ? sideLabel(result.side) : "未知") +
+            "，本轮 " + stats.lastObserveMs + "ms");
+    } else if (result) {
+        lines.push("本轮没看清：" + result.reason);
+    }
+    lines.push(machine.reason());
+    if (ticket) {
+        lines.push("计划：" + ticket.moveICCS + "（深度 " + (ticket.depth == null ? "?" : ticket.depth) +
+            "，评分 " + (ticket.score == null ? "?" : Math.round(ticket.score)) + "，" +
+            ticket.executionState + "）");
+    }
+    lines.push("点击 " + stats.clicksByExecutor + " 次，确认 " + counters.confirms +
+        " 次，重试 " + counters.retries + "，看门狗 " + counters.watchdogTrips +
+        (driver.clickAllowed ? "" : ("，已拦截点击 " + stats.disabledTapCalls + " 次")));
+    const text = lines.join("\n");
+    if (text !== lastDriverLine) {
+        lastDriverLine = text;
+        ui.autoStatus.setText(text);
+    }
+    ui.status.setText(machine.state() + "：" + machine.reason());
+    drawPlan(ticket);
+}
+
+/** 把「计划」画到悬浮层：没有悬浮窗权限就不画，不影响走棋。 */
+function drawPlan(ticket) {
+    const driver = autoDriver;
+    if (!driver || !adapter.overlayAvailable()) {
+        return;
+    }
+    if (!overlayShown) {
+        overlayShown = adapter.overlayShow();
+        if (!overlayShown) {
+            return;
+        }
+    }
+    const items = [];
+    const grid = driver.grid();
+    if (ticket && ticket.move && grid && grid.version === ticket.geometryVersion) {
+        const from = geometryModule.pointAt(grid, ticket.move.fromCol, ticket.move.fromRow);
+        const to = geometryModule.pointAt(grid, ticket.move.toCol, ticket.move.toRow);
+        items.push({ x1: from.x - 28, y1: from.y - 28, x2: from.x + 28, y2: from.y + 28, label: "起点", score: 0 });
+        items.push({ x1: to.x - 28, y1: to.y - 28, x2: to.x + 28, y2: to.y + 28, label: ticket.moveICCS, score: 0 });
+    }
+    adapter.overlayUpdate(items, "象棋 " + MODE_LABEL[modeKey] + "｜" + driver.machine.state() +
+        (ticket ? ("｜计划 " + ticket.moveICCS) : "") +
+        (driver.clickAllowed ? "" : "｜不点击"));
+}
+
+/**
+ * 自动走棋主循环（阻塞在脚本主线程上）。
+ *
+ * ⚠️ 为什么不用 setInterval：真机实测（K40）本应用切到后台后**定时器不再被派发**，
+ * 自动走棋会停在最后一帧；改用本仓库验证过的「sleep 分片循环」（YOLO 持续识别 同写法）。
+ *
+ * 退出条件（任意一条）：
+ *   1) 驱动自己不在运行了（暂停/停止/出错）；
+ *   2) 用户切走又**回到本页面**：说明要看界面了，交回控制权（否则按钮按不动）；
+ *   3) 跑满 maxTicks（保险，防止没人看着时无限跑）。
+ * 脚本被任务列表停掉时 sleep 会被中断，循环随脚本一起结束。
+ */
+function runAutoLoop() {
+    if (autoRunning || !autoDriver) {
+        return;
+    }
+    const ownPackage = String(currentPackage());
+    const tickMs = autoDriver.config.tickMs ? autoDriver.config.tickMs : 900;
+    const maxTicks = 600;
+    let ticks = 0;
+    let leftOwnApp = false;
+    autoRunning = true;
+    const caps = adapter.capabilities();
+    show("开始前能力核对：截图=" + caps.requestScreenCapture + "，点击接口=" + (caps.tap ? "有" : "无") +
+        "，无障碍=" + (caps.accessibilityReady ? "就绪" : "**未就绪：自动走棋点不下去**（去抽屉打开「无障碍服务」）") +
+        "，悬浮画板=" + (caps.drawing ? "可用" : "无"));
+    show("自动观测已开始" + (ownPackage ? "（前台：" + ownPackage + "）" : "") +
+        "。请切到棋局画面；回到本页面会自动交回界面控制。");
+    try {
+        while (autoDriver && autoDriver.isRunning() && ticks < maxTicks) {
+            if (stopRequested()) {
+                show("检测到停止标记（" + stopFile() + "），退出自动循环。");
+                break;
+            }
+            driverTick();
+            ticks += 1;
+            if (String(currentPackage()) !== ownPackage) {
+                leftOwnApp = true;
+            } else if (leftOwnApp) {
+                show("检测到回到本应用，自动观测先停在这里（按钮重新可用）。");
+                break;
+            }
+            sleep(tickMs);
+        }
+    } catch (error) {
+        show("自动循环结束：" + error);
+    } finally {
+        autoRunning = false;
+    }
+}
+
+/** 外部停止标记：真机测试 / 无人看着时用 `touch /sdcard/xiangqi-p4/STOP.flag` 就能停。 */
+function stopFile() {
+    try {
+        return files.join(files.getSdcardPath(), "xiangqi-p4", "STOP.flag");
+    } catch (error) {
+        return "";
+    }
+}
+
+function stopRequested() {
+    try {
+        const path = stopFile();
+        return path !== "" && files.exists(path);
+    } catch (error) {
+        return false;
+    }
+}
+
+function stopAuto(why) {
+    if (autoDriver) {
+        autoDriver.stop();
+    }
+    autoRunning = false;
+    if (overlayShown) {
+        adapter.overlayHide();
+        overlayShown = false;
+    }
+    if (autoDriver) {
+        ui.status.setText("已停止（" + why + "）");
+    }
+}
+
+ui.modeWatch.on("click", function () {
+    modeKey = MODES.WATCH;
+    rebuildDriver();
+    show("模式：① 只识别 —— 只看局面、算棋建议，点击接口是禁用桩（调用会被计数）。");
+});
+
+ui.modeAdvice.on("click", function () {
+    modeKey = MODES.ADVICE;
+    rebuildDriver();
+    show("模式：② 着法建议 —— 会算棋并显示起点/终点，仍然不会点击棋盘。");
+});
+
+ui.modeAuto.on("click", function () {
+    modeKey = MODES.AUTO;
+    rebuildDriver();
+    show("模式：③ 自动走棋 —— 点「开始观察 / 暂停」后，只有轮次、局面、几何、票据、着法" +
+        "全部校验通过才会点击；落子要用新观测确认过才算成功。\n" +
+        "第一次开始会弹截图授权；轮次推不出来时按「现在轮到我」声明一次。");
+});
+
+ui.mySide.on("click", function () {
+    if (!autoDriver) {
+        rebuildDriver();
+    }
+    const side = autoDriver.mySide() === "b" ? "w" : "b";
+    autoDriver.setMySide(side);
+    ui.mySide.setText("我方：" + sideLabel(side) + "（点一下切换）");
+    show("我方改为：" + sideLabel(side) + "。轮次基准已清空，跑一轮观察后按「现在轮到我」。");
+});
+
+ui.assertTurn.on("click", function () {
+    if (!autoDriver) {
+        rebuildDriver();
+    }
+    const result = autoDriver.assertTurn();
+    show(result.ok
+        ? ("已把当前局面当作轮次基准：" + sideLabel(autoDriver.mySide()) + "走棋。")
+        : ("还不能声明：" + result.reason));
+});
+
+ui.autoToggle.on("click", function () {
+    if (!autoDriver) {
+        rebuildDriver();
+    }
+    if (autoDriver.isRunning()) {
+        autoDriver.pause();
+        show("已暂停：票据与算棋任务都作废了，不会再有点击。");
+        return;
+    }
+    if (!adapter.requestCapture("portrait")) {
+        show("没有拿到截图授权，自动模式不启动。");
+        return;
+    }
+    autoDriver.start();
+    driverTick();
+    runAutoLoop();   // 阻塞到这里为止（详见 runAutoLoop 的退出条件）
+});
+
+ui.autoStop.on("click", function () {
+    stopAuto("用户停止");
+    show("已停止：会话与轮次基准清空，画板已关。");
+    ui.autoStatus.setText("未开始（模式：" + MODE_LABEL[modeKey] + "）");
+    lastDriverLine = "";
+});
+

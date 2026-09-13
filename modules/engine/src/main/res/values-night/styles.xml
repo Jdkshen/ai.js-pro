@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色模式下的脚本页面状态栏（布局见 values/styles.xml 的 ScriptTheme）。
+
+      为什么需要这份覆盖：AppCompat 主题没有 android:statusBarColor，不显式给就是平台默认的
+      纯黑 + 白色图标；浅色模式下页面是 #F7F7F7，状态栏必须跟着浅色**并且**把图标换成深色
+      （windowLightStatusBar），否则白底配白图标看不见。
+    -->
+    <color name="script_status_bar">#000000</color>
+    <bool name="script_light_status_bar">false</bool>
+</resources>

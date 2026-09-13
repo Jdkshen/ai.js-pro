@@ -1236,6 +1236,660 @@ check("截图·黑帧判定：拿不到像素时说“不是黑”，不乱报",
     return adapter.looksBlank(frame) === false || "离线环境不该判为黑帧";
 });
 
+// ---------------------------------------------------------------- P4 自动执行
+// 状态机 / 动作票据 / 点击执行器 / 落子确认全是纯逻辑，所以任务书 17.2–17.3 里
+// 「禁止出手」和「落子确认」的用例可以直接搬进离线自检：先是这些断言兜住，
+// 真机上能不能点才有意义（对手是真人，点错一步就下不了了）。
+
+const ticketModule = require("../src/automation/move-ticket.js");
+const executorModule = require("../src/automation/click-executor.js");
+const verifier = require("../src/automation/move-verifier.js");
+const machineModule = require("../src/automation/state-machine.js");
+
+const START_FEN = fen.START_FEN;
+const START_BOARD = fen.parseFen(START_FEN).board;
+const OWN_MOVE = legal.legalMoves(START_BOARD, 1, 7, "w")[0];      // 红方炮的一个合法着法
+const AFTER_BOARD = legal.applyMove(START_BOARD, OWN_MOVE).board;
+const AFTER_FEN = fen.buildFen(AFTER_BOARD, "b");
+const REPLY_MOVE = legal.allLegalMoves(AFTER_BOARD, "b")[0];       // 对方的一个合法应手
+const AFTER_REPLY_BOARD = legal.applyMove(AFTER_BOARD, REPLY_MOVE).board;
+
+const TEST_GRID = geometry.createGrid({
+    originX: 96,
+    originY: 782,
+    stepX: 136,
+    stepY: 135,
+    orientation: geometry.ORIENTATION_RED_BOTTOM,
+    version: 7,
+    quality: { sampleCount: 20, inlierCount: 20, maxResidual: 0.05, meanResidual: 0.02 }
+});
+
+function sampleTicket(overrides) {
+    const input = {
+        sessionId: 1,
+        basePositionVersion: 3,
+        baseFen: START_FEN,
+        baseSide: "w",
+        modelVersion: "self-check-model",
+        geometryVersion: 7,
+        moveICCS: OWN_MOVE.iccs,
+        move: OWN_MOVE,
+        expectedAfterFen: AFTER_FEN,
+        source: "self-check",
+        score: 15,
+        depth: 3
+    };
+    if (overrides) {
+        for (const key in overrides) {
+            if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+                input[key] = overrides[key];
+            }
+        }
+    }
+    return ticketModule.create(input);
+}
+
+function sampleContext(overrides) {
+    const ctx = {
+        running: true,
+        paused: false,
+        sessionId: 1,
+        positionVersion: 3,
+        boardFen: START_FEN,
+        side: "w",
+        modelVersion: "self-check-model",
+        geometryVersion: 7
+    };
+    if (overrides) {
+        for (const key in overrides) {
+            if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+                ctx[key] = overrides[key];
+            }
+        }
+    }
+    return ctx;
+}
+
+/** 自检用的小驱动：假点击 + 状态机，方便断言「点了几下、发了哪些动作」。 */
+function harness(options) {
+    const opts = options || {};
+    const clock = { value: 1000000 };
+    const nowMono = function () { return clock.value; };
+    const clicked = [];
+    const fakeTap = function (x, y, tapOptions) {
+        clicked.push({ x: x, y: y, kind: tapOptions && tapOptions.kind });
+        return { ok: true, method: "self-check-tap" };
+    };
+    const disabledTap = executorModule.createDisabledTap("自检：只识别/建议模式");
+    const executor = executorModule.createExecutor({
+        tap: opts.allowClick === false ? disabledTap.tap : fakeTap,
+        nowMono: nowMono,
+        waitMs: function () { },
+        config: { pressMs: 40, settleMs: 0, pointTolerance: 0.35 }
+    });
+    const machine = machineModule.createMachine({
+        mySide: "w",
+        allowClick: opts.allowClick !== false,
+        unknownTurnWatchdogMs: 5000,
+        verifyTimeoutMs: 2000,
+        retryLimit: opts.retryLimit == null ? 1 : opts.retryLimit,
+        ticketTtlMs: 15000,
+        movetimeMs: 200
+    }, { nowMono: nowMono });
+    const log = [];
+
+    function dispatch(event) {
+        const outcome = machine.dispatch(event);
+        log.push({
+            event: typeof event === "string" ? event : event.type,
+            state: outcome.state,
+            effects: outcome.effects.map(function (item) { return item.type; })
+        });
+        return outcome;
+    }
+
+    function snapshotEvent(board, side, extra) {
+        const ext = extra || {};
+        return {
+            type: "SNAPSHOT",
+            snapshot: {
+                board: board.slice(),
+                side: side,
+                fen: ext.fen || fen.buildFen(board, side === "b" ? "b" : "w"),
+                unknownCells: ext.unknownCells == null ? 0 : ext.unknownCells,
+                stable: ext.stable !== false,
+                geometryTrusted: ext.geometryTrusted !== false,
+                conflicts: ext.conflicts || 0
+            }
+        };
+    }
+
+    function effectsOf(type) {
+        let count = 0;
+        for (let i = 0; i < log.length; i++) {
+            for (let j = 0; j < log[i].effects.length; j++) {
+                if (log[i].effects[j] === type) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    /** 把状态机吐出的 EXECUTE_TICKET 真的走一遍点击（真机上是 main.js 的驱动在做）。 */
+    function executeCurrentTicket() {
+        const ticket = machine.currentTicket();
+        const outcome = executor.execute(ticket, {
+            grid: TEST_GRID,
+            cancel: function () { return opts.cancelled === true; }
+        });
+        dispatch({ type: "CLICK_RESULT", ticket: ticket, status: outcome.status, clickCount: outcome.clickCount, reason: outcome.reason });
+        return { ticket: ticket, outcome: outcome };
+    }
+
+    return {
+        machine: machine,
+        clock: clock,
+        executor: executor,
+        disabledTap: disabledTap,
+        clicked: clicked,
+        log: log,
+        dispatch: dispatch,
+        snapshotEvent: snapshotEvent,
+        effectsOf: effectsOf,
+        executeCurrentTicket: executeCurrentTicket
+    };
+}
+
+/** 走完「开局 → 就绪 → 几何 → 轮到我方」，停在 THINKING（算棋进行中）。 */
+function advanceToThinking(h) {
+    h.dispatch({ type: "START" });
+    h.dispatch({ type: "READY", modelVersion: "self-check-model" });
+    h.dispatch({ type: "GEOMETRY", geometryVersion: 7, trusted: true });
+    const first = h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    const compute = first.effects.filter(function (item) { return item.type === "COMPUTE"; })[0];
+    if (!compute) {
+        return { ok: false, reason: "第一帧没有开始算棋（状态 " + first.state + "）" };
+    }
+    return { ok: true, jobId: compute.jobId };
+}
+
+/** 走完「开局 → 就绪 → 几何 → 轮到我方 → 算出着法」，停在 PRECHECK。 */
+function advanceToPrecheck(h) {
+    const prep = advanceToThinking(h);
+    if (!prep.ok) {
+        return prep;
+    }
+    h.dispatch({
+        type: "JOB_RESULT",
+        jobId: prep.jobId,
+        ok: true,
+        iccs: OWN_MOVE.iccs,
+        move: OWN_MOVE,
+        expectedAfterFen: AFTER_FEN,
+        score: 15,
+        depth: 3
+    });
+    return prep;
+}
+
+// ---- 票据：出手前核对
+
+check("P4·票据：缺少关键字段要明确报错", function () {
+    try {
+        ticketModule.create({ baseFen: START_FEN, baseSide: "w" });
+        return "缺字段却没报错";
+    } catch (error) {
+        return String(error.message).indexOf("票据缺少字段") === 0 ? true : ("报错信息不清楚：" + error.message);
+    }
+});
+
+check("P4·票据：同一张票只能执行一次（S04）", function () {
+    const ticket = sampleTicket();
+    const first = ticketModule.canExecute(ticket, sampleContext());
+    if (!first.ok) {
+        return "第一次就该放行：" + first.reason;
+    }
+    ticketModule.start(ticket);
+    const second = ticketModule.canExecute(ticket, sampleContext());
+    if (second.ok) {
+        return "已经开始的票据还能再执行";
+    }
+    return second.reason.indexOf("只能执行一次") >= 0 || second.reason.indexOf("STARTED") >= 0
+        ? true : ("拒绝原因没说清： " + second.reason);
+});
+
+check("P4·票据：过期不能执行", function () {
+    const ticket = sampleTicket();
+    const result = ticketModule.canExecute(ticket, sampleContext(), ticket.expiresAtMono + 1);
+    return result.ok ? "过期票据仍被放行" : true;
+});
+
+check("P4·票据：会话/模型/几何/局面/轮次任一变化都拒绝（S02）", function () {
+    const variants = [
+        { sessionId: 2 },
+        { modelVersion: "另一个模型" },
+        { geometryVersion: 8 },
+        { positionVersion: 4 },
+        { boardFen: AFTER_FEN },
+        { side: "b" }
+    ];
+    for (let i = 0; i < variants.length; i++) {
+        const result = ticketModule.canExecute(sampleTicket(), sampleContext(variants[i]));
+        if (result.ok) {
+            return "第 " + (i + 1) + " 种变化（" + JSON.stringify(variants[i]) + "）没有被拦下";
+        }
+    }
+    return true;
+});
+
+check("P4·票据：暂停时不执行（S03）", function () {
+    const result = ticketModule.canExecute(sampleTicket(), sampleContext({ paused: true }));
+    return result.ok ? "暂停时仍被放行" : true;
+});
+
+// ---- 点击执行器
+
+check("P4·点击：起点→终点两次，且按压时长可配", function () {
+    const clicked = [];
+    const executor = executorModule.createExecutor({
+        tap: function (x, y, tapOptions) {
+            clicked.push({ x: x, y: y, pressMs: tapOptions.pressMs });
+            return { ok: true, method: "fake" };
+        },
+        nowMono: function () { return 1000; },
+        waitMs: function () { },
+        config: { pressMs: 55, settleMs: 0 }
+    });
+    const outcome = executor.execute(sampleTicket(), { grid: TEST_GRID });
+    if (outcome.status !== "SENT") {
+        return "没有发出点击：" + outcome.status + " " + outcome.reason;
+    }
+    if (clicked.length !== 2) {
+        return "点击次数应为 2，实际 " + clicked.length;
+    }
+    if (clicked[0].pressMs !== 55) {
+        return "按压时长没按配置走：" + clicked[0].pressMs;
+    }
+    const from = geometry.pointAt(TEST_GRID, OWN_MOVE.fromCol, OWN_MOVE.fromRow);
+    const to = geometry.pointAt(TEST_GRID, OWN_MOVE.toCol, OWN_MOVE.toRow);
+    if (clicked[0].x !== Math.round(from.x) || clicked[0].y !== Math.round(from.y)) {
+        return "起点坐标不对：" + clicked[0].x + "," + clicked[0].y;
+    }
+    return clicked[1].x === Math.round(to.x) && clicked[1].y === Math.round(to.y)
+        ? true : ("终点坐标不对：" + clicked[1].x + "," + clicked[1].y);
+});
+
+check("P4·点击：起点之后被取消 → 不发终点点击（A04）", function () {
+    let cancelNow = false;
+    const clicked = [];
+    const executor = executorModule.createExecutor({
+        tap: function (x, y, tapOptions) {
+            clicked.push(tapOptions.kind);
+            cancelNow = true;   // 起点点完立刻暂停
+            return { ok: true, method: "fake" };
+        },
+        nowMono: function () { return 1000; },
+        waitMs: function () { },
+        config: { pressMs: 40, settleMs: 0 }
+    });
+    const outcome = executor.execute(sampleTicket(), {
+        grid: TEST_GRID,
+        cancel: function () { return cancelNow; }
+    });
+    if (outcome.status !== "CANCELLED") {
+        return "取消后状态应为 CANCELLED，实际 " + outcome.status;
+    }
+    if (!outcome.cancelledBetween) {
+        return "没有记录「起点已点、终点前取消」";
+    }
+    return outcome.clickCount === 1 && clicked.length === 1
+        ? true : ("取消后仍点了 " + clicked.length + " 次：" + clicked.join(","));
+});
+
+check("P4·点击：点击前就被取消 → 一次都不点", function () {
+    const executor = executorModule.createExecutor({
+        tap: function () { return { ok: true }; },
+        nowMono: function () { return 1000; },
+        waitMs: function () { },
+        config: { pressMs: 40, settleMs: 0 }
+    });
+    const outcome = executor.execute(sampleTicket(), {
+        grid: TEST_GRID,
+        cancel: function () { return true; }
+    });
+    return outcome.status === "CANCELLED" && outcome.clickCount === 0
+        ? true : ("状态 " + outcome.status + "，点了 " + outcome.clickCount + " 次");
+});
+
+check("P4·点击：几何版本不一致 / 落点出界 → 拒绝且不点", function () {
+    const executor = executorModule.createExecutor({
+        tap: function () { return { ok: true }; },
+        nowMono: function () { return 1000; },
+        waitMs: function () { },
+        config: { pressMs: 40, settleMs: 0 }
+    });
+    const otherVersion = geometry.createGrid({
+        originX: 96, originY: 782, stepX: 136, stepY: 135,
+        orientation: geometry.ORIENTATION_RED_BOTTOM, version: 8
+    });
+    const stale = executor.execute(sampleTicket(), { grid: otherVersion });
+    if (stale.status !== "REJECTED" || stale.clickCount !== 0) {
+        return "几何版本不一致时没有拒绝：" + stale.status + " / " + stale.clickCount;
+    }
+    // 原点大到棋子全在屏幕外：nearest() 判不了，得靠屏幕边界兜底
+    const outside = geometry.createGrid({
+        originX: -5000, originY: -5000, stepX: 136, stepY: 135,
+        orientation: geometry.ORIENTATION_RED_BOTTOM, version: 7
+    });
+    const off = executor.execute(sampleTicket(), {
+        grid: outside,
+        screen: { width: 1080, height: 2400 }
+    });
+    return off.status === "REJECTED" && off.clickCount === 0
+        ? true : ("出界坐标没有被拒绝：" + off.status + " / " + off.clickCount);
+});
+
+check("P4·点击：只识别/建议模式用禁用桩，调用即计数（A05 的基础）", function () {
+    const disabled = executorModule.createDisabledTap("只识别模式");
+    const result = disabled.tap(100, 200);
+    if (result.ok !== false) {
+        return "禁用桩不该返回成功";
+    }
+    if (disabled.calls() !== 1) {
+        return "禁用桩没有计数：" + disabled.calls();
+    }
+    return disabled.describe().indexOf("1 次") >= 0 ? true : ("描述不对：" + disabled.describe());
+});
+
+// ---- 落子确认
+
+check("P4·确认：等于预期落子后局面 → CONFIRMED（A01）", function () {
+    const verdict = verifier.verify({ ticket: sampleTicket(), observed: AFTER_BOARD.slice() });
+    return verdict.result === "CONFIRMED" ? true : (verdict.result + "：" + verdict.reason);
+});
+
+check("P4·确认：还是走之前的样子 → UNCHANGED，不算成功（A02）", function () {
+    const verdict = verifier.verify({ ticket: sampleTicket(), observed: START_BOARD.slice() });
+    if (verdict.result !== "UNCHANGED") {
+        return verdict.result + "：" + verdict.reason;
+    }
+    return verifier.isSuccess(verdict.result) === false ? true : "UNCHANGED 被当成了成功";
+});
+
+check("P4·确认：出现一个合法对方应手 → OPPONENT_REPLY（A03）", function () {
+    const verdict = verifier.verify({ ticket: sampleTicket(), observed: AFTER_REPLY_BOARD.slice() });
+    if (verdict.result !== "OPPONENT_REPLY") {
+        return verdict.result + "：" + verdict.reason;
+    }
+    return verdict.plies.length === 2 ? true : ("应手确认应该记两步，实际 " + verdict.plies.length + " 步");
+});
+
+check("P4·确认：有未知格是「看不清」，绝不能当成没落子", function () {
+    const observed = AFTER_BOARD.slice();
+    observed[0] = "?";
+    observed[1] = "?";
+    const verdict = verifier.verify({ ticket: sampleTicket(), observed: observed, unknownCells: 2 });
+    return verdict.result === "UNRELIABLE" ? true : (verdict.result + "：" + verdict.reason);
+});
+
+check("P4·确认：别的可靠局面 → UNEXPECTED 并带上差异格", function () {
+    const observed = START_BOARD.slice();
+    observed[0] = null;                                     // 凭空少一个黑车
+    const verdict = verifier.verify({ ticket: sampleTicket(), observed: observed });
+    if (verdict.result !== "UNEXPECTED") {
+        return verdict.result + "：" + verdict.reason;
+    }
+    return verdict.reason.indexOf("←") < 0 && verdict.reason.indexOf("→") >= 0
+        ? true : ("差异描述不完整：" + verdict.reason);
+});
+
+check("P4·确认：几何不可信 / 观测不稳定 → UNRELIABLE", function () {
+    const a = verifier.verify({ ticket: sampleTicket(), observed: AFTER_BOARD.slice(), geometryTrusted: false });
+    const b = verifier.verify({ ticket: sampleTicket(), observed: AFTER_BOARD.slice(), stable: false });
+    const c = verifier.verify({ ticket: sampleTicket(), observed: AFTER_BOARD.slice(), conflicts: 1 });
+    return (a.result === "UNRELIABLE" && b.result === "UNRELIABLE" && c.result === "UNRELIABLE")
+        ? true : ("三种不可靠情形没有都识别：" + a.result + "/" + b.result + "/" + c.result);
+});
+
+// ---- 状态机：禁止出手与正常一轮
+
+check("P4·状态机：轮次未知超过看门狗 → 不点击（S01）", function () {
+    const h = harness();
+    h.dispatch({ type: "START" });
+    h.dispatch({ type: "READY", modelVersion: "self-check-model" });
+    h.dispatch({ type: "GEOMETRY", geometryVersion: 7, trusted: true });
+    h.clock.value += 1000;
+    h.dispatch({ type: "SNAPSHOT", snapshot: { board: START_BOARD.slice(), side: null, fen: START_FEN, unknownCells: 0, stable: true } });
+    if (h.effectsOf("COMPUTE") !== 0) {
+        return "轮次未知就开始算棋了";
+    }
+    h.clock.value += 6000;   // 超过 5s 看门狗
+    h.dispatch({ type: "TICK", nowMono: h.clock.value });
+    if (h.machine.counters().watchdogTrips !== 1) {
+        return "看门狗没有记一次触发：" + h.machine.counters().watchdogTrips;
+    }
+    if (h.effectsOf("EXECUTE_TICKET") !== 0 || h.clicked.length !== 0) {
+        return "轮次未知超时后仍然出了手";
+    }
+    return h.machine.state() === "RECOVERING" ? true : ("超时后状态不对：" + h.machine.state());
+});
+
+check("P4·状态机：思考中局面变了，旧结果不生成票据（S02）", function () {
+    const h = harness();
+    const prep = advanceToThinking(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    if (h.machine.state() !== "THINKING") {
+        return "应该停在 THINKING，实际 " + h.machine.state();
+    }
+    // 思考中棋盘变了（对方先落子），机器应取消旧任务并开始新任务
+    const changed = h.dispatch(h.snapshotEvent(AFTER_BOARD, "w"));
+    if (h.effectsOf("CANCEL_JOB") !== 1) {
+        return "局面变了却没有取消旧任务";
+    }
+    if (h.machine.counters().jobsCancelled !== 1) {
+        return "取消计数不对：" + h.machine.counters().jobsCancelled;
+    }
+    if (changed.effects.filter(function (e) { return e.type === "COMPUTE"; }).length !== 1) {
+        return "没有为新局面重新开始算棋";
+    }
+    // 旧任务的着法结果迟到：必须被丢掉，不能生成票据、更不能出手
+    const late = h.dispatch({
+        type: "JOB_RESULT", jobId: prep.jobId, ok: true,
+        iccs: OWN_MOVE.iccs, move: OWN_MOVE, expectedAfterFen: AFTER_FEN
+    });
+    if (late.effects.length !== 0) {
+        return "过期结果产生了动作：" + late.effects.map(function (e) { return e.type; }).join(",");
+    }
+    if (h.machine.counters().ticketsCreated !== 0) {
+        return "过期结果生成了票据";
+    }
+    if (h.machine.state() !== "THINKING") {
+        return "状态被过期结果带偏：" + h.machine.state();
+    }
+    return true;
+});
+
+check("P4·状态机：拿到票据后局面又变了 → 旧票据作废且不出手", function () {
+    const h = harness();
+    const prep = advanceToPrecheck(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    const staleTicket = h.machine.currentTicket();
+    if (!staleTicket) {
+        return "PRECHECK 阶段应该有票据";
+    }
+    h.dispatch(h.snapshotEvent(AFTER_BOARD, "w"));
+    if (staleTicket.executionState !== "CANCELLED") {
+        return "局面变了旧票据居然还是 " + staleTicket.executionState;
+    }
+    return (h.effectsOf("EXECUTE_TICKET") === 0 && h.clicked.length === 0)
+        ? true : "旧票据仍然出了手";
+});
+
+check("P4·状态机：暂停后结果才回来 → 不生成票据、不点击（S03）", function () {
+    const h = harness();
+    h.dispatch({ type: "START" });
+    h.dispatch({ type: "READY", modelVersion: "self-check-model" });
+    h.dispatch({ type: "GEOMETRY", geometryVersion: 7, trusted: true });
+    const first = h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    const jobId = first.effects.filter(function (e) { return e.type === "COMPUTE"; })[0].jobId;
+    h.dispatch({ type: "PAUSE" });
+    if (h.machine.state() !== "PAUSED") {
+        return "暂停后状态不对：" + h.machine.state();
+    }
+    h.dispatch({
+        type: "JOB_RESULT", jobId: jobId, ok: true,
+        iccs: OWN_MOVE.iccs, move: OWN_MOVE, expectedAfterFen: AFTER_FEN
+    });
+    if (h.machine.counters().ticketsCreated !== 0) {
+        return "暂停后仍然生成了票据";
+    }
+    return (h.effectsOf("EXECUTE_TICKET") === 0 && h.clicked.length === 0)
+        ? true : "暂停后出了手";
+});
+
+check("P4·状态机：正常一轮 → 算棋、核对、点击、确认各一次", function () {
+    const h = harness();
+    const prep = advanceToPrecheck(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    if (h.machine.state() !== "PRECHECK") {
+        return "拿到着法后状态应为 PRECHECK，实际 " + h.machine.state();
+    }
+    const pre = h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    if (h.effectsOf("EXECUTE_TICKET") !== 1) {
+        return "出手前核对没有通过：" + pre.reason;
+    }
+    const executed = h.executeCurrentTicket();
+    if (executed.outcome.status !== "SENT") {
+        return "点击没发出：" + executed.outcome.status + " " + executed.outcome.reason;
+    }
+    if (h.clicked.length !== 2) {
+        return "点击次数不是 2：" + h.clicked.length;
+    }
+    if (h.machine.state() !== "VERIFYING") {
+        return "点击后应在确认状态，实际 " + h.machine.state();
+    }
+    const verdict = verifier.verify({ ticket: executed.ticket, observed: AFTER_BOARD.slice() });
+    h.dispatch({ type: "VERIFY_RESULT", ticket: executed.ticket, verdict: verdict });
+    const counters = h.machine.counters();
+    if (counters.confirms !== 1) {
+        return "确认计数应为 1，实际 " + counters.confirms;
+    }
+    if (counters.clicks !== 2) {
+        return "点击计数应为 2，实际 " + counters.clicks;
+    }
+    if (h.machine.state() !== "RECOVERING") {
+        return "确认后应进入恢复，实际 " + h.machine.state();
+    }
+    return executed.ticket.executionState === "CONFIRMED"
+        ? true : ("票据状态不是 CONFIRMED：" + executed.ticket.executionState);
+});
+
+check("P4·状态机：只识别/建议模式任何输入都不产生点击（A05）", function () {
+    const h = harness({ allowClick: false });
+    const prep = advanceToPrecheck(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    const pre = h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    if (h.effectsOf("EXECUTE_TICKET") !== 0) {
+        return "只识别模式下仍然产生了点击动作";
+    }
+    if (h.clicked.length !== 0 || h.disabledTap.calls() !== 0) {
+        return "只识别模式下的点击调用数不为 0：" + h.clicked.length + "/" + h.disabledTap.calls();
+    }
+    return pre.reason.indexOf("禁止点击") >= 0 ? true : ("拒绝原因没说清：" + pre.reason);
+});
+
+check("P4·状态机：确认没落子 → 最多重试一次，且第二次用的是新票据", function () {
+    const h = harness();
+    const prep = advanceToPrecheck(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    const first = h.executeCurrentTicket();
+    const unchanged = verifier.verify({ ticket: first.ticket, observed: START_BOARD.slice() });
+    h.dispatch({ type: "VERIFY_RESULT", ticket: first.ticket, verdict: unchanged });
+    if (h.machine.counters().retries !== 1) {
+        return "第一次没落子后没有准备重试：" + h.machine.counters().retries;
+    }
+    if (h.machine.state() !== "PRECHECK") {
+        return "重试前应回到 PRECHECK，实际 " + h.machine.state();
+    }
+    h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    if (h.effectsOf("EXECUTE_TICKET") !== 2) {
+        return "重试没有发出第二次点击：" + h.effectsOf("EXECUTE_TICKET");
+    }
+    const second = h.executeCurrentTicket();
+    if (second.ticket.actionId === first.ticket.actionId) {
+        return "重试复用了同一张票据（违反「同一票据只执行一次」）";
+    }
+    const unchanged2 = verifier.verify({ ticket: second.ticket, observed: START_BOARD.slice() });
+    h.dispatch({ type: "VERIFY_RESULT", ticket: second.ticket, verdict: unchanged2 });
+    if (h.machine.counters().retries !== 1) {
+        return "重试计数被加了多次：" + h.machine.counters().retries;
+    }
+    return h.effectsOf("EXECUTE_TICKET") === 2
+        ? true : ("重试用尽了还在点：" + h.effectsOf("EXECUTE_TICKET"));
+});
+
+check("P4·状态机：确认超时 → 只恢复，不重复盲点", function () {
+    const h = harness();
+    const prep = advanceToPrecheck(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    h.executeCurrentTicket();
+    const before = h.effectsOf("EXECUTE_TICKET");
+    h.clock.value += 3000;   // 超过 verifyTimeoutMs=2000
+    h.dispatch({ type: "TICK", nowMono: h.clock.value });
+    if (h.machine.state() !== "RECOVERING") {
+        return "确认超时后应进入恢复，实际 " + h.machine.state();
+    }
+    return h.effectsOf("EXECUTE_TICKET") === before
+        ? true : "确认超时后又点了一次";
+});
+
+check("P4·状态机：未知格 / 几何不可信 → 不出手也不算棋", function () {
+    const h = harness();
+    h.dispatch({ type: "START" });
+    h.dispatch({ type: "READY", modelVersion: "self-check-model" });
+    h.dispatch({ type: "GEOMETRY", geometryVersion: 7, trusted: true });
+    const unknown = h.dispatch(h.snapshotEvent(START_BOARD, "w", { unknownCells: 3 }));
+    if (h.effectsOf("COMPUTE") !== 0) {
+        return "有未知格仍然开始算棋：" + unknown.state;
+    }
+    const untrusted = h.dispatch(h.snapshotEvent(START_BOARD, "w", { geometryTrusted: false }));
+    if (h.effectsOf("COMPUTE") !== 0 || h.machine.state() !== "RECOVERING") {
+        return "几何不可信时状态不对：" + untrusted.state;
+    }
+    return (h.effectsOf("EXECUTE_TICKET") === 0 && h.clicked.length === 0)
+        ? true : "不可靠观测下仍然出了手";
+});
+
+check("P4·状态机：接管新会话会清基准，旧票据作废", function () {
+    const h = harness();
+    const prep = advanceToPrecheck(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    const ticket = h.machine.currentTicket();
+    h.machine.setSession(2);
+    const gate = h.machine.canClick(ticket);
+    if (gate.ok) {
+        return "换会话后旧票据仍可执行";
+    }
+    return gate.reason.indexOf("会话") >= 0 ? true : ("拒绝原因没说清：" + gate.reason);
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +

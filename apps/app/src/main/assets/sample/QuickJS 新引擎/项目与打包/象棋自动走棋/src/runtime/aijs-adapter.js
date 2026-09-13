@@ -55,6 +55,13 @@ function capabilities() {
         device: has("device"),
         ui: has("ui"),
         storages: has("storages"),
+        // 点击能力（P4）：press 优先（能配按压时长），click 兑底；
+        // tap 为 true 只代表接口存在，**能不能真的点下去**还要看无障碍服务是否就绪
+        press: has("press"),
+        click: has("click"),
+        tap: has("press") || has("click"),
+        accessibilityReady: !!(globals.auto && globals.auto.service),
+        drawing: typeOf("drawing.show") === "function",
         // 任务书要求但当前版本未必有的能力，单独列出来：
         nativeFrameSourceId: false, // 帧来源序号/时间：平台尚未提供
         persistentUci: false        // 持久 UCI 会话：平台尚未提供
@@ -144,9 +151,18 @@ function looksBlank(frame, options) {
             return false; // 取不到像素就没法判，不要凭空说它是黑的
         }
         read = function (target, x, y) {
-            const pixel = globals.images.pixel(target, x, y);
-            return Math.max(globals.colors.red(pixel), globals.colors.green(pixel),
-                globals.colors.blue(pixel));
+            // 传进来的不是真帧（比如离线自检里的普通对象）时宿主会抛错，
+            // 这时应该老实说「判不了」，而不是把异常抛给调用方。
+            try {
+                const pixel = globals.images.pixel(target, x, y);
+                if (pixel === undefined || pixel === null) {
+                    return null;
+                }
+                return Math.max(globals.colors.red(pixel), globals.colors.green(pixel),
+                    globals.colors.blue(pixel));
+            } catch (error) {
+                return null;
+            }
         };
     }
     const limit = opts.threshold == null ? 3 : opts.threshold;
@@ -154,7 +170,11 @@ function looksBlank(frame, options) {
     const ys = [Math.round(height * 0.02), Math.round(height * 0.5), Math.round(height * 0.98)];
     for (let i = 0; i < xs.length; i++) {
         for (let j = 0; j < ys.length; j++) {
-            if (read(frame, xs[i], ys[j]) > limit) {
+            const value = read(frame, xs[i], ys[j]);
+            if (value === null || value === undefined) {
+                return false; // 取不到像素就没法判，不要凭空说它是黑的
+            }
+            if (value > limit) {
                 return false;
             }
         }
@@ -383,22 +403,158 @@ function detect(detector, image, options) {
  */
 function resolveProjectFile(relative) {
     const dir = (typeof globals.__dirname === "string" && globals.__dirname) ? globals.__dirname : ".";
-    const joined = String(dir).replace(/\/+$/, "") + "/" + String(relative).replace(/^\/+/, "");
-    if (typeOf("files.isFile") === "function") {
-        try {
-            if (globals.files.isFile(joined)) {
-                return joined;
+    const clean = String(relative).replace(/^\/+/, "");
+    // 从脚本目录开始**逐级向上**找：工程里的 tools/ 下的脚本（__dirname = …/tools）
+    // 也要能按「工程内相对路径」找到 assets/models/…，否则会解析成 …/tools/assets/… 而失败。
+    let base = String(dir).replace(/\/+$/, "");
+    for (let level = 0; level < 4 && base; level++) {
+        const joined = base + "/" + clean;
+        if (typeOf("files.isFile") === "function") {
+            try {
+                if (globals.files.isFile(joined)) {
+                    return joined;
+                }
+            } catch (error) {
+                // 忽略：继续往上或落到 asset 分支
             }
-        } catch (error) {
-            // 忽略：落到 asset 分支
         }
+        const slash = base.lastIndexOf("/");
+        if (slash <= 0) {
+            break;
+        }
+        base = base.slice(0, slash);
     }
-    return "asset://" + joined;
+    return "asset://" + String(dir).replace(/\/+$/, "") + "/" + clean;
 }
 
 /** 当前脚本所在目录（诊断用：能看出这次是 assets 跑还是磁盘跑）。 */
 function scriptDir() {
     return (typeof globals.__dirname === "string" && globals.__dirname) ? globals.__dirname : "";
+}
+
+/**
+ * 真机点击（P4）：优先 `press(x, y, duration)`（能控按压时长），没有就退回 `click(x, y)`。
+ *
+ * 只有这里碰宿主的点击接口；执行器只管「什么时候点、点哪里」。返回的 ok 只代表
+ * **接口调用有没有发出**，不代表棋子真的走了 —— 落子成败由 move-verifier 看新观测判断。
+ *
+ * ⚠️ 点击走无障碍手势，服务没就绪时接口会返回 false（历史日志里那 7 次「引擎执行权限异常」
+ * 就是这个）。这里把它翻译成能看懂的原因，而不是让上层看到一个莫名的失败。
+ */
+function createTap(options) {
+    const opts = options || {};
+    const defaultDuration = opts.pressMs == null ? 60 : Number(opts.pressMs);
+    const stats = { calls: 0, ok: 0, failed: 0, lastError: "" };
+
+    function tap(x, y, callOptions) {
+        stats.calls += 1;
+        const px = Math.round(Number(x));
+        const py = Math.round(Number(y));
+        if (!isFinite(px) || !isFinite(py)) {
+            stats.failed += 1;
+            stats.lastError = "坐标不是有效数字：" + x + "," + y;
+            return { ok: false, method: null, error: stats.lastError };
+        }
+        if (!has("press") && !has("click")) {
+            stats.failed += 1;
+            stats.lastError = "缺少能力：press/click（这台设备上无法点击）";
+            return { ok: false, method: null, error: stats.lastError };
+        }
+        const duration = callOptions && callOptions.pressMs != null
+            ? Number(callOptions.pressMs) : defaultDuration;
+        const usePress = has("press");
+        let ok = false;
+        let error = "";
+        try {
+            ok = usePress
+                ? !!globals.press(px, py, Math.max(1, Math.round(duration)))
+                : !!globals.click(px, py);
+        } catch (exception) {
+            error = String(exception && exception.message ? exception.message : exception);
+        }
+        if (!ok && !error) {
+            error = (globals.auto && globals.auto.service)
+                ? "点击接口返回失败（被系统拦下？目标窗口不可点？）"
+                : "点击接口返回失败：无障碍服务未就绪";
+        }
+        if (ok) {
+            stats.ok += 1;
+        } else {
+            stats.failed += 1;
+            stats.lastError = error;
+        }
+        return {
+            ok: ok,
+            method: usePress ? "press" : "click",
+            x: px,
+            y: py,
+            durationMs: duration,
+            error: error
+        };
+    }
+
+    return {
+        tap: tap,
+        disabled: false,
+        describe: function () {
+            return (has("press") ? "press" : "click") + "：" +
+                stats.ok + " 成功 / " + stats.failed + " 失败（共 " + stats.calls + " 次）";
+        },
+        stats: function () { return { calls: stats.calls, ok: stats.ok, failed: stats.failed }; }
+    };
+}
+
+/** 屏幕尺寸（点击前做越界兜底用）；拿不到返回 null。 */
+function screenSize() {
+    if (globals.device && globals.device.width > 0 && globals.device.height > 0) {
+        return { width: Number(globals.device.width), height: Number(globals.device.height) };
+    }
+    return null;
+}
+
+/**
+ * 画出「计划/状态」（起始点标记 + 一行文字）。
+ *
+ * 说明：只有这里碰 `drawing`。它是可选的 —— 没有悬浮窗权限就返回 false，
+ * 业务照跑（不画框不等于不能走棋）。
+ */
+function overlayAvailable() {
+    return typeOf("drawing.show") === "function";
+}
+
+function overlayShow() {
+    if (!overlayAvailable()) {
+        return false;
+    }
+    try {
+        return globals.drawing.show() === true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function overlayUpdate(items, text) {
+    if (!overlayAvailable()) {
+        return false;
+    }
+    try {
+        globals.drawing.update(items || [], text == null ? "" : String(text));
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function overlayHide() {
+    if (!overlayAvailable()) {
+        return false;
+    }
+    try {
+        globals.drawing.hide();
+        return true;
+    } catch (error) {
+        return false;
+    }
 }
 
 const AIJS_ADAPTER = {
@@ -416,6 +572,12 @@ const AIJS_ADAPTER = {
     capture: capture,
     looksBlank: looksBlank,
     waitMs: waitMs,
+    createTap: createTap,
+    screenSize: screenSize,
+    overlayAvailable: overlayAvailable,
+    overlayShow: overlayShow,
+    overlayUpdate: overlayUpdate,
+    overlayHide: overlayHide,
     readImage: readImage,
     sizeOf: sizeOf,
     rgbAt: rgbAt,

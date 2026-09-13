@@ -11,6 +11,11 @@
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorAccent">@color/colorAccent</item>
         <item name="android:popupTheme" tools:ignore="NewApi">@style/ScriptTheme.PopupOverlay</item>
+        <!-- 状态栏颜色必须显式写：AppCompat 主题不带 android:statusBarColor，平台就用默认的**纯黑**，
+             脚本页面（ScriptExecuteActivity）顶部因此一直是一条黑条（真机 K40 实测，2026-09-13）。
+             深浅两套在 values-night 里覆盖，跟 Miuix 页面（浅 #F7F7F7 / 深 黑）保持一致。 -->
+        <item name="android:statusBarColor">@color/script_status_bar</item>
+        <item name="android:windowLightStatusBar">@bool/script_light_status_bar</item>
     </style>
 
     <style name="ScriptTheme.PopupOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar"/>
@@ -30,4 +35,8 @@
     <color name="colorPrimary">#009688</color>
     <color name="colorPrimaryDark">#009688</color>
     <color name="colorAccent">#03a9f4</color>
+
+    <!-- 脚本页面状态栏：浅色模式与 Miuix 页面同色，深色模式见 values-night -->
+    <color name="script_status_bar">#F7F7F7</color>
+    <bool name="script_light_status_bar">true</bool>
 </resources>
