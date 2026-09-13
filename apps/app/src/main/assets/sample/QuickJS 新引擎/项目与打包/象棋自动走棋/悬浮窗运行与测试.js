@@ -116,11 +116,21 @@ let driver = null;
 let running = false;
 let timer = null;
 let pendingDeclare = false;   // autorun：等首个观察成功后再声明「现在轮到我」
-let hideOnCapture = true;     // 抓帧时把面板藏起来（否则面板会盖住棋盘）
+let hideOnCapture = "auto";  // "auto" 只在面板真的压住棋盘时才藏（默认）；true/false 手动开/关
 let autoAlignOn = false;      // 几何按检测框自动微调（真机实测会把子认重，默认关）
 let lastLoggedLayout = null;  // 驱动视角去重打印用
 let aliveTimer = null;        // 保活心跳（见 main 里的说明）
 let aliveSeconds = 0;
+let lastBeatAt = 0;           // 心跳漂移：衡量「脚本线程被占多久」
+let lagMax = 0;
+let lagCount = 0;
+
+/** 状态栏文字（心跳里每秒刷一次，写成一个函数免得两处不同步）。 */
+function statusLine() {
+    return calibrationNote + "｜" + (running ? "运行中" : "已停止") +
+        "｜隐藏抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")) +
+        "｜存活 " + aliveSeconds + "s" + (lagMax > 400 ? "｜线程阻塞峰值 " + lagMax + "ms" : "");
+}
 let collapsed = false;
 let grid = null;          // 已校准几何（会话内复用）
 let calibrationNote = "未校准";
@@ -153,7 +163,21 @@ function logLine(text) {
         logLines.shift();
     }
     console.log("[floaty] " + line);
-    render();
+    scheduleRender();   // 日志驱动的重绘做 250ms 合并，别让每个 logLine 都过一次 JS→Java 桥
+}
+
+let renderScheduled = false;
+
+/** 日志驱动的重绘合并（250ms）；用户操作直接调 render() 保持即时反馈。 */
+function scheduleRender() {
+    if (renderScheduled) {
+        return;
+    }
+    renderScheduled = true;
+    setTimeout(function () {
+        renderScheduled = false;
+        render();
+    }, 250);
 }
 
 /**
@@ -211,13 +235,12 @@ function render() {
         return;
     }
     try {
-        win.status.setText(calibrationNote + "｜" + (running ? "运行中" : "已停止") +
-            (hideOnCapture ? "｜抓帧时隐藏面板" : "") + "｜存活 " + aliveSeconds + "s");
+        win.status.setText(statusLine());
         win.logArea.setText(visibleLog().join("\n"));
         win.modeBtn.setText(MODE_LABEL[modeKey]);
         win.startBtn.setText(running ? "暂停" : "开始");
         win.collapseBtn.setText(collapsed ? "展开" : "收起");
-        win.hideBtn.setText("隐藏抓帧：" + (hideOnCapture ? "开" : "关"));
+        win.hideBtn.setText("隐藏抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")));
         win.alignBtn.setText("微调：" + (autoAlignOn ? "开" : "关"));
     } catch (error) {
         console.log("[floaty] 渲染失败：" + error);
@@ -225,11 +248,67 @@ function render() {
 }
 
 /**
+ * 面板当前占的屏幕矩形（XML 尺寸是固定的 1020×470；位置可能被用户拖过）。
+ * 拿不到就返回 null（调用方按「可能挡着」处理）。
+ */
+const PANEL_W = 1020;
+const PANEL_H = 470;
+
+function panelRect() {
+    try {
+        const x = win.getX(true);
+        const y = win.getY(true);
+        if (!isFinite(x) || !isFinite(y)) {
+            return null;
+        }
+        return { x: x, y: y, width: PANEL_W, height: PANEL_H };
+    } catch (error) {
+        return null;
+    }
+}
+
+/** 棋盘在屏幕上的矩形（用已校准几何算外框）。 */
+function boardRect() {
+    if (!grid) {
+        return null;
+    }
+    try {
+        const box = geometryModule.boundsOf(grid, 0);
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+    } catch (error) {
+        return null;
+    }
+}
+
+function rectsOverlap(a, b) {
+    if (!a || !b) {
+        return null;   // 不知道
+    }
+    return !(a.x + a.width <= b.x || b.x + b.width <= a.x ||
+        a.y + a.height <= b.y || b.y + b.height <= a.y);
+}
+
+/** show=true 开／false 关／"auto" 只在面板真的压住棋盘时才藏（默认）。 */
+function needHideForCapture() {
+    if (hideOnCapture === true) {
+        return true;
+    }
+    if (hideOnCapture === false) {
+        return false;
+    }
+    const overlap = rectsOverlap(panelRect(), boardRect());
+    return overlap === null ? true : overlap;   // 判断不了就按「会挡」处理（安全）
+}
+
+/**
  * 抓一帧：优先 Shizuku/root 的 screencap（不受投屏会话失效影响），再回退应用截屏。
- * 抓帧期间默认把自己藏起来 —— 面板浮在棋盘上会直接把上几行子盖掉，识别就废了。
+ *
+ * 抓帧期间可能要先把面板藏起来（面板浮在棋盘上会把上几行子盖掉，识别就废了）——
+ * 但**藏+等 90ms+恢复** 每帧都要花掉约 100ms，所以默认是 "auto"：
+ * 面板在棋盘外（现在的默认位置就在棋盘下方）时**不藏**，省掉这一百毫秒和一次闪动。
  */
 function grabFrame() {
-    if (!hideOnCapture) {
+    if (!needHideForCapture()) {
         return grabFrameRaw();
     }
     let hidden = false;
@@ -429,7 +508,7 @@ function buildDriver() {
         config: {
             tickMs: 1400,          // screencap 通道 0.6~1.4s/帧，tick 必须放大
             movetimeMs: 1200,
-            modelVersion: "chessai_160",
+            modelVersion: "chessai_160x320_v5r",
             confidence: 0.25,
             orientation: "RED_BOTTOM",
             autoAlign: autoAlignOn
@@ -578,18 +657,29 @@ function startKeepAlive() {
         return;
     }
     aliveTimer = setInterval(function () {
+        const now = Date.now();
+        // 心跳每 1s 一次；实际间隔超出多少，就是「脚本线程被占了多少毫秒」
+        // —— 采集/识别/算棋都排在这个线程上，阻塞时长就是按钮要等的时长。
+        const drift = lastBeatAt ? Math.max(0, now - lastBeatAt - 1000) : 0;
+        lastBeatAt = now;
+        if (drift > 400) {
+            lagCount += 1;
+            lagMax = Math.max(lagMax, drift);
+            if (lagCount <= 3) {
+                console.log("[floaty] 心跳延迟 " + drift + "ms（脚本线程被采集/算棋占着，点按钮要排队）");
+            }
+        }
         aliveSeconds += 1;
         try {
-            win.status.setText(calibrationNote + "｜" + (running ? "运行中" : "已停止") +
-                (hideOnCapture ? "｜抓帧时隐藏面板" : "") + "｜存活 " + aliveSeconds + "s");
+            win.status.setText(statusLine());
         } catch (error) {
             // 渲染失败不影响保活
         }
         if (aliveSeconds % 30 === 0) {
-            logLine("面板保活中（存活 " + aliveSeconds + "s，脚本仍在运行）");
+            logLine("面板保活中（存活 " + aliveSeconds + "s，最大心跳延迟 " + lagMax + "ms，被占 " + lagCount + " 次）");
         }
     }, 1000);
-    logLine("保活心跳已启动（1s 一次；没有它脚本会在 ~19 秒后被引擎回收，窗口还在但点不动）");
+    logLine("保活心跳已启动（1s 一次；顺带度量脚本线程被占多久 —— 这个数就是「卡」的来源）");
     registerExitHook();
 }
 
@@ -781,9 +871,10 @@ function main() {
     });
     logLine("按钮绑定完成：模式/收起/隐藏抓帧/微调/开始/停止/定位/识别/轮到我/换我方/新会话/自检/契约/清空/关闭");
     // 抓帧时隐藏面板：开着时面板不会盖住棋盘（实测面板会挡住上面几行棋子）
+    // 隐藏抓帧：自动 → 开 → 关 循环（默认「自动」= 只在面板真的压住棋盘时才藏，省每帧 ~100ms）
     win.hideBtn.on("click", function () {
-        hideOnCapture = !hideOnCapture;
-        logLine("抓帧时隐藏面板：" + (hideOnCapture ? "开（推荐，面板不挡棋盘）" : "关（面板挡住的地方会识别不到）"));
+        hideOnCapture = hideOnCapture === "auto" ? true : (hideOnCapture === true ? false : "auto");
+        logLine("隐藏抓帧：" + (hideOnCapture === "auto" ? "自动（只在压住棋盘时藏）" : (hideOnCapture ? "开" : "关")));
         render();
     });
     // 几何自动微调：真机实测开着时会把同一子认成两个（红R 3 个），所以默认关
