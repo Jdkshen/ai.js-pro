@@ -416,13 +416,14 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         null
     }
 
-    private fun copyAssetTree(assetPath: String, target: File) {
+    private fun copyAssetTree(assetPath: String, target: File, overwrite: Boolean = false, changed: MutableList<String>? = null) {
         val children = requireContext().assets.list(assetPath)
         if (!children.isNullOrEmpty()) {
             if (!target.isDirectory && !target.mkdirs()) throw IOException("无法创建目录 ${target.name}")
-            children.forEach { child -> copyAssetTree("$assetPath/$child", File(target, child)) }
+            children.forEach { child -> copyAssetTree("$assetPath/$child", File(target, child), overwrite, changed) }
             return
         }
+        if (!overwrite && target.isFile) return
         target.parentFile?.let { parent -> if (!parent.isDirectory) parent.mkdirs() }
         requireContext().assets.open(assetPath).use { input ->
             FileOutputStream(target).use { output ->
@@ -432,6 +433,38 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 output.fd.sync()
             }
         }
+        changed?.add(assetPath)
+    }
+
+    /**
+     * 把已导入的副本同步成当前内置版本（只覆盖内置文件，用户自己放进该目录的文件不动）。
+     * 存在的意义：内置资源会随应用升级而变，而「打开文件夹 / 打包（项目）」为了不丢掉用户改动
+     * 只在副本不存在时才复制 —— 升级后直接打包会打出**旧代码**的产物（真实踩过）。
+     */
+    private fun syncBuiltinCopy(entry: ResourceEntry) {
+        val context = requireContext()
+        val assetPath = entry.assetPath ?: return
+        val target = resourceTargetFor(assetPath)
+        busy = true
+        Thread {
+            var failure: Exception? = null
+            val changed = mutableListOf<String>()
+            try {
+                copyAssetTree(assetPath, target, overwrite = true, changed = changed)
+            } catch (error: Exception) {
+                failure = error
+            }
+            requireActivity().runOnUiThread {
+                busy = false
+                if (failure != null) {
+                    Toast.makeText(context,
+                        "同步失败：${failure.localizedMessage ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                Toast.makeText(context,
+                    "已同步内置版本：${changed.size} 个文件", Toast.LENGTH_LONG).show()
+            }
+        }.start()
     }
 
     private fun importBuiltin(entry: ResourceEntry, onDone: () -> Unit) {
@@ -873,6 +906,13 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                                         } else importBuiltin(entry) { dismiss(); refresh() }
                                     }
                                     ActionChoice("打包（项目）") { dismiss(); buildProject(entry) }
+                                    if (entry.imported) {
+                                        // 副本是以前导入的：内置代码可能已随应用升级变过，
+                                        // 不加这一项就只能靠人记得「先删掉旧目录」。
+                                        ActionChoice("同步内置版本（覆盖内置文件）") {
+                                            dismiss(); syncBuiltinCopy(entry)
+                                        }
+                                    }
                                 } else {
                                     ActionChoice("预览源码") { dismiss(); viewBuiltin(entry) }
                                     ActionChoice("运行") { dismiss(); runBuiltin(entry) }
