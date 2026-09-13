@@ -69,6 +69,12 @@ function loadDetector(options) {
         inputSize: opts.inputSize == null ? INPUT_SIZE : opts.inputSize,
         threads: opts.threads == null ? THREADS : opts.threads
     };
+    // 竖屏（非方形）模型：160×320 这种。引擎会按 inputWidth/inputHeight 做 letterbox，
+    // 不传的话会按方形处理 → 输入尺寸与模型不匹配。
+    if (opts.inputWidth && opts.inputHeight) {
+        request.inputWidth = opts.inputWidth;
+        request.inputHeight = opts.inputHeight;
+    }
     const candidates = opts.model
         ? [{ label: "调用方指定", model: opts.model, labels: opts.labels }]
         : candidatePaths();

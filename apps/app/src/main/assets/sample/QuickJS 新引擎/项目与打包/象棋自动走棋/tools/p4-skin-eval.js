@@ -66,12 +66,14 @@ if (!truth) {
     const calibrate = options.calibrate === true;
     console.log("SKINE 开始：帧 " + names.length + " 张｜校准=" + calibrate +
         "｜confidence=" + (options.confidence == null ? 0.25 : options.confidence) +
-        "｜模型=" + (options.model || "内置（assets/models/chessai_160.onnx）"));
+        "｜模型=" + (options.model || "内置（assets/models/chessai_160.onnx）") +
+        (options.inputWidth ? ("｜输入=" + options.inputWidth + "x" + options.inputHeight) : ""));
 
     let scored = 0;
     let hit = 0;
     let looseHit = 0;
     let total = 0;
+    let skippedSum = 0;
     let unknownSum = 0;
     let colourOnlySum = 0;
     let perfect = 0;
@@ -95,6 +97,8 @@ if (!truth) {
                 autoAlign: false,
                 model: options.model,
                 labels: options.labels,
+                inputWidth: options.inputWidth,
+                inputHeight: options.inputHeight,
                 search: options.search || { maxShift: 18, step: 3 },
                 maxCandidates: options.maxCandidates == null ? 25 : options.maxCandidates
             });
@@ -115,17 +119,24 @@ if (!truth) {
             confidence: options.confidence == null ? 0.25 : options.confidence,
             autoAlign: false,
             model: options.model,
-            labels: options.labels
+            labels: options.labels,
+            inputWidth: options.inputWidth,
+            inputHeight: options.inputHeight
         }, null);
 
         const expect = expand(truth[name]);
         const got = result && result.chars ? result.chars.map(function (ch) { return ch == null ? "." : ch; }) : [];
         let right = 0;        // 严格：要一模一样（阵营也要对）
         let rightLoose = 0;   // 只算「兵种 + 位置」，不看阵营
+        let skipped = 0;      // 真值里标 '?' 的格子：交叉验证没定论，**不参与计分**
         const wrong = [];
         const colourOnly = [];
         for (let index = 0; index < 90; index++) {
             const want = expect[index] == null ? "." : expect[index];
+            if (want === "?") {
+                skipped += 1;
+                continue;
+            }
             const gotCh = got.length > index ? got[index] : "?";
             const strict = String(want) === String(gotCh);
             const loose = String(want).toLowerCase() === String(gotCh).toLowerCase();
@@ -144,10 +155,12 @@ if (!truth) {
                 }
             }
         }
+        console.log("SKINE " + name + " 布局 " + (result && result.layout ? result.layout : "（无）"));
         scored += 1;
         hit += right;
         looseHit += rightLoose;
-        total += 90;
+        total += (90 - skipped);
+        skippedSum += skipped;
         colourOnlySum += colourOnly.length;
         unknownSum += result && result.ok ? result.unknownCells : 90;
         if (right === 90) {
@@ -172,7 +185,8 @@ if (!truth) {
             }
         }
         console.log("SKINE " + name +
-            " 严格 " + right + "/90｜不看颜色 " + rightLoose + "/90（颜色错 " + colourOnly.length + "）" +
+            " 严格 " + right + "/" + (90 - skipped) + "｜不看颜色 " + rightLoose + "/" + (90 - skipped) +
+            "（颜色错 " + colourOnly.length + "，跳过 " + skipped + "）" +
             " 未知=" + (result && result.ok ? result.unknownCells : "-") +
             "（修复前 " + (result && result.stats ? result.stats.unknownBeforeRepair : "-") + "）" +
             " 框=" + (result && result.stats ? result.stats.detected : "-") +
@@ -193,10 +207,10 @@ if (!truth) {
     }
 
     if (scored) {
-        console.log("SKINE === 盘面级（严格，含阵营）" + hit + "/" + total + " = " +
+        console.log("SKINE === 盘面级（严格，含阵营，跳过交叉验证未定论的格）" + hit + "/" + total + " = " +
             (100 * hit / total).toFixed(1) + "%｜只看兵种+位置 " + looseHit + "/" + total + " = " +
-            (100 * looseHit / total).toFixed(1) + "%｜其中纯颜色错 " + colourOnlySum + " 格（" +
-            perfect + "/" + scored + " 张全对，平均未知格 " + (unknownSum / scored).toFixed(1) + "）");
+            (100 * looseHit / total).toFixed(1) + "%｜纯颜色错 " + colourOnlySum + " 格｜平均未知格 " +
+            (unknownSum / scored).toFixed(1) + "｜共跳过 " + skippedSum + " 格");
     } else {
         console.log("SKINE 没有可评分的帧");
     }
