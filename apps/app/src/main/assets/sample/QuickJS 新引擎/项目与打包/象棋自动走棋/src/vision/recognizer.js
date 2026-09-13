@@ -43,8 +43,10 @@ const PIECE_NAMES = {
 /**
  * @param options.image       帧或图片（交给 crop/detect 用）
  * @param options.grid        棋盘几何（location 的产物）
- * @param options.detector    检测器（detect(image, opts) → 检测列表）
- * @param options.crop        (image, box) → 裁剪后的图
+ * @param options.detect      (image, {confidence, nms, region?}) → 检测列表
+ * @param options.useRegion   true = 用宿主自带的区域检测（官方实现会把坐标**回移**到全图，本模块不再加偏移）；
+ *                            false/缺省 = 先 crop 再检测，检测结果按 crop 偏移加回去
+ * @param options.crop        (image, box) → 裁剪后的图（useRegion=false 时用）
  * @param options.rgbAt       (image, x, y) → [r,g,b]（原图坐标）
  * @param options.sideToMove  "w"/"b"/null（识别本身给不出轮次，默认 null）
  */
@@ -63,22 +65,29 @@ function recognize(options) {
     }
 
     const box = geometry.boundsOf(opts.grid, opts.cropMargin);
-    let cropped = null;
-    if (typeof opts.crop === "function") {
-        const t0 = Date.now();
-        cropped = opts.crop(opts.image, box);
-        timing.cropMs = Date.now() - t0;
-        if (!cropped) {
-            return { ok: false, reason: "裁剪棋盘区域失败", stage: "crop", box: box };
-        }
-    } else {
-        cropped = opts.image;
-    }
-
     const detectStart = Date.now();
     let raw = [];
+    let detectTarget = opts.image;
     try {
-        raw = opts.detect(cropped, { confidence: opts.confidence, nms: opts.nms }) || [];
+        if (opts.useRegion === true) {
+            // 官方区域检测：Java 侧会把 region 加回结果（OpenCvYoloDetector.detectRgba），
+            // 所以拿到的坐标已经是**全图**坐标，这里不能再加偏移。
+            raw = opts.detect(opts.image, {
+                confidence: opts.confidence,
+                nms: opts.nms,
+                region: [box.x, box.y, box.width, box.height]
+            }) || [];
+        } else {
+            if (typeof opts.crop === "function") {
+                const t0 = Date.now();
+                detectTarget = opts.crop(opts.image, box);
+                timing.cropMs = Date.now() - t0;
+                if (!detectTarget) {
+                    return { ok: false, reason: "裁剪棋盘区域失败", stage: "crop", box: box };
+                }
+            }
+            raw = opts.detect(detectTarget, { confidence: opts.confidence, nms: opts.nms }) || [];
+        }
     } catch (error) {
         return {
             ok: false,
@@ -88,7 +97,8 @@ function recognize(options) {
         };
     }
     timing.detectMs = Date.now() - detectStart;
-    const detections = normalize(raw, box);
+    // 两种模式下归一化的偏移量不同：区域模式坐标已回移，裁剪模式要自己加回去。
+    const detections = normalize(raw, opts.useRegion === true ? null : box);
 
     const assigned = assignment.assign(detections, opts.grid, {
         minScore: opts.minScore,
@@ -182,9 +192,11 @@ function recognize(options) {
     };
 }
 
-/** 检测结果 → 统一形态（中心点坐标 + 还原裁剪偏移）。 */
+/** 检测结果 → 统一形态（中心点坐标 + 可选裁剪偏移）。box 为 null 表示坐标已经是全图坐标。 */
 function normalize(raw, box) {
     const list = [];
+    const offsetX = box ? box.x : 0;
+    const offsetY = box ? box.y : 0;
     for (let i = 0; i < (raw ? raw.length : 0); i++) {
         const item = raw[i];
         if (!item) {
@@ -208,9 +220,8 @@ function normalize(raw, box) {
             label: item.label,
             classId: item.classId,
             score: item.score == null ? 1 : item.score,
-            // 裁剪图坐标 → 原图坐标
-            x: x + box.x,
-            y: y + box.y,
+            x: x + offsetX,
+            y: y + offsetY,
             width: bounds.width,
             height: bounds.height
         });

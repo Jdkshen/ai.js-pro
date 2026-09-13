@@ -697,8 +697,64 @@ check("识别链路：桩检测器 + 桩取色 → 还原开局 FEN 布局", fun
     return true;
 });
 
-// ---------------------------------------------------------------- 收尾
+// 同一条链路，但走宿主自带的「区域检测」：`detect(image, {region})` 会把检测框坐标
+// **回移**到全图（Java 侧 detectRgba 里 packed[i] += regionX）。这条断言就是把这个契约锁死：
+// 桩检测器按「区域坐标 + 区域原点」返回，最后的布局必须与裁剪模式一致 —— 两处都加一次偏移就会错。
+check("识别链路：区域检测模式（坐标已回移）→ 同样还原开局", function () {
+    const grid = geometry.createGrid({ originX: 100, originY: 200, stepX: 50, stepY: 50 });
+    const truth = fen.parseFen(fen.START_FEN).board;
+    const seenRegions = [];
+    const result = recognizer.recognize({
+        image: { stub: true },
+        grid: grid,
+        useRegion: true,
+        detect: function (image, detectOptions) {
+            seenRegions.push(detectOptions.region);
+            const region = detectOptions.region || [0, 0, 0, 0];
+            const list = [];
+            for (let index = 0; index < 90; index++) {
+                const ch = truth[index];
+                if (!ch) {
+                    continue;
+                }
+                const point = geometry.pointAt(grid, index % 9, Math.floor(index / 9));
+                list.push({
+                    label: ch.toUpperCase(),
+                    score: 0.9,
+                    // 宿主行为：区域内算完把坐标**移回全图**，所以这里直接给全图坐标
+                    x: point.x,
+                    y: point.y
+                });
+            }
+            return list;
+        },
+        rgbAt: function (image, x, y) {
+            const hit = geometry.nearest(grid, x, y);
+            if (!hit.inside) {
+                return [190, 170, 140];
+            }
+            const ch = truth[hit.row * 9 + hit.col];
+            return !ch ? [190, 170, 140] : (ch === ch.toUpperCase() ? [205, 60, 55] : [45, 45, 45]);
+        }
+    });
+    if (seenRegions.length !== 1) {
+        return "应当只调用一次检测，实际 " + seenRegions.length + " 次";
+    }
+    const region = seenRegions[0];
+    if (!region || region[2] < 400 || region[3] < 400) {
+        return "传给检测的区域明显不对：" + JSON.stringify(region);
+    }
+    if (!result.ok) {
+        return result.reason;
+    }
+    const expected = fen.START_FEN.split(" ")[0];
+    if (result.layout !== expected) {
+        return "布局不一致：\n" + result.layout + "\n应为：\n" + expected;
+    }
+    return true;
+});
 
+// ---------------------------------------------------------------- 收尾
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +
     " passed=" + passed + " failed=" + failures.length;
 console.log(summary);

@@ -266,10 +266,15 @@ function detect(detector, image, options) {
         throw new Error("检测器不可用（先 yolo.load）");
     }
     const opts = options || {};
-    const raw = detector.detect(image, {
+    const request = {
         confidence: opts.confidence == null ? 0.25 : opts.confidence,
         nms: opts.nms == null ? 0.45 : opts.nms
-    });
+    };
+    if (opts.region) {
+        // 只算这块区域；宿主会把检测框坐标回移到整帧坐标系（不必自己再加偏移）
+        request.region = opts.region;
+    }
+    const raw = detector.detect(image, request);
     const items = [];
     for (let i = 0; i < (raw ? raw.length : 0); i++) {
         items.push(raw[i]);

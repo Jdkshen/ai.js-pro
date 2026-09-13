@@ -75,8 +75,9 @@ function loadDetector(options) {
     for (let i = 0; i < candidates.length; i++) {
         const candidate = candidates[i];
         try {
+            // ⚠️ 适配层的键名是 modelPath（不是 model），传错会得到“yolo.load opencv 需要 model 路径”
             const full = Object.assign({}, request, {
-                model: candidate.model,
+                modelPath: candidate.model,
                 labels: candidate.labels
             });
             const detector = adapter.loadDetector(full);
@@ -131,12 +132,11 @@ function run(image, located, opts, frame) {
     const result = recognizer.recognize({
         image: image,
         grid: located.grid,
-        detect: function (cropped, detectOptions) {
-            native = adapter.detect(detector, cropped, detectOptions);
+        // 宿主自带区域检测：传 region 就只算那块，而且返回的坐标已经移回全图
+        useRegion: true,
+        detect: function (img, detectOptions) {
+            native = adapter.detect(detector, img, detectOptions);
             return native.list;
-        },
-        crop: function (img, box) {
-            return adapter.clip(img, box);
         },
         rgbAt: function (img, x, y) {
             return adapter.rgbAt(img, x, y);
