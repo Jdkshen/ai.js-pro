@@ -159,6 +159,8 @@ function inPalace(col, row, red) {
 function validateBoard(board) {
     const errors = [];
     const warnings = [];
+    /** 可归因到具体格子的违规，供「一致性修复」把可疑格降级为未知（errors/warnings 保持原形不变） */
+    const violations = [];
     const counts = {};
     let total = 0;
     for (let i = 0; i < CELLS; i++) {
@@ -174,14 +176,17 @@ function validateBoard(board) {
         const upper = ch.toUpperCase();
         if (upper === "K" && !inPalace(col, row, red)) {
             errors.push((red ? "红帅" : "黑将") + "不在九宫内（第 " + (row + 1) + " 行第 " + (col + 1) + " 列）");
+            violations.push({ index: i, char: ch, kind: "palace", message: "将帅不在九宫" });
         }
         if (upper === "A" && !inPalace(col, row, red)) {
             errors.push((red ? "红仕" : "黑士") + "不在九宫内（第 " + (row + 1) + " 行第 " + (col + 1) + " 列）");
+            violations.push({ index: i, char: ch, kind: "palace", message: "仕士不在九宫" });
         }
         if (upper === "B") {
             const ownSideRows = red ? [7, 8, 9] : [0, 1, 2];
             if (ownSideRows.indexOf(row) < 0) {
                 errors.push((red ? "红相" : "黑象") + "过河（第 " + (row + 1) + " 行第 " + (col + 1) + " 列）");
+                violations.push({ index: i, char: ch, kind: "river", message: "相象过河" });
             }
             // 红相只能落在第 7、9 行，黑象只能落在第 0、2 行 —— 告警应该在**其它行**时发
             const ownElephant = red ? (row === 7 || row === 9) : (row === 0 || row === 2);
@@ -195,6 +200,7 @@ function validateBoard(board) {
             const behind = red ? row > startRow : row < startRow;
             if (behind) {
                 errors.push((red ? "红兵" : "黑卒") + "退到起始线之后（第 " + (row + 1) + " 行）");
+                violations.push({ index: i, char: ch, kind: "pawn-back", message: "兵卒退到起始线之后" });
             }
             // 兵/卒未过河时只可能在偶数列（0/2/4/6/8）—— 告警应该在**奇数列**时发
             if (!crossed && col % 2 !== 0) {
@@ -211,16 +217,33 @@ function validateBoard(board) {
         const max = MAX_PER_TYPE[red];
         if ((counts[red] || 0) > max) {
             errors.push("红" + red + " 有 " + counts[red] + " 个，超过上限 " + max);
+            pushCountViolations(violations, board, red, "红" + red + "数量超上限");
         }
         if ((counts[black] || 0) > max) {
             errors.push("黑" + black + " 有 " + counts[black] + " 个，超过上限 " + max);
+            pushCountViolations(violations, board, black, "黑" + black + "数量超上限");
         }
     }
     if ((counts.K || 0) !== 1 || (counts.k || 0) !== 1) {
         // 少子残局也可能合法，但「双方各一枚将帅」是标准在局状态；缺了要显式报告。
         errors.push("将帅数量异常：红帅 " + (counts.K || 0) + " 枚、黑将 " + (counts.k || 0) + " 枚");
+        if ((counts.K || 0) > 1) {
+            pushCountViolations(violations, board, "K", "红帅数量超上限");
+        }
+        if ((counts.k || 0) > 1) {
+            pushCountViolations(violations, board, "k", "黑将数量超上限");
+        }
     }
-    return { errors: errors, warnings: warnings };
+    return { errors: errors, warnings: warnings, violations: violations };
+}
+
+/** 某一类超上限时，把所有该类棋子都列成违规（具体降级哪一个交给修复逻辑按分数挑）。 */
+function pushCountViolations(violations, board, ch, message) {
+    for (let i = 0; i < CELLS; i++) {
+        if (board[i] === ch) {
+            violations.push({ index: i, char: ch, kind: "type-count", message: message });
+        }
+    }
 }
 
 function pieceCount(board) {

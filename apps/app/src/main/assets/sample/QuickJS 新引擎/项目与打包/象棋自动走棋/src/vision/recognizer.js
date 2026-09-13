@@ -18,6 +18,7 @@ const geometry = require("./geometry.js");
 const assignment = require("./cell-assignment.js");
 const pieceSide = require("./piece-side.js");
 const fen = require("../chess/fen.js");
+const consistency = require("../chess/consistency.js");
 const defaults = require("../util/defaults.js");
 
 const DEFAULTS = {
@@ -33,7 +34,9 @@ const DEFAULTS = {
     /** 整帧质量（0..1）：定位差就当「没看到」而不是「没有子」 */
     frameQuality: 1,
     /** 阵营采样步长（像素） */
-    sideSampleStep: 3
+    sideSampleStep: 3,
+    /** 识别后是否用棋规反查可疑格（违规格降级为未知，而不是当事实） */
+    repairConsistency: true
 };
 
 /** 认字：模型类别字母 → 中文，仅用于给人看。 */
@@ -167,6 +170,19 @@ function recognize(options) {
         });
     }
 
+    const unknownCount0 = chars.filter(function (ch) { return ch === "?"; }).length;
+    // 用棋规反查：违规的格子降级为未知（详见 src/chess/consistency.js）
+    let repaired = null;
+    if (opts.repairConsistency) {
+        repaired = consistency.repair(assigned.cells);
+        if (repaired.changed) {
+            // 降级后必须从 cells 重新生成 chars：被降级的格子要变成 '?'
+            const repairedChars = consistency.charsOf(assigned.cells);
+            for (let i = 0; i < 90; i++) {
+                chars[i] = repairedChars[i];
+            }
+        }
+    }
     const unknownCount = chars.filter(function (ch) { return ch === "?"; }).length;
     const sideReasons = {};
     sides.forEach(function (entry) {
@@ -180,7 +196,8 @@ function recognize(options) {
         sideRed: sides.filter(function (s) { return s.side === pieceSide.SIDE_RED; }).length,
         sideBlack: sides.filter(function (s) { return s.side === pieceSide.SIDE_BLACK; }).length,
         sideReasons: sideReasons,
-        unknownCells: unknownCount
+        unknownCells: unknownCount,
+        unknownBeforeRepair: unknownCount0
     });
 
     let layout = null;
@@ -203,6 +220,7 @@ function recognize(options) {
         stats: stats,
         placements: placements,
         sides: sides,
+        repaired: repaired,
         chars: chars,
         layout: layout,
         unknownCells: unknownCount,

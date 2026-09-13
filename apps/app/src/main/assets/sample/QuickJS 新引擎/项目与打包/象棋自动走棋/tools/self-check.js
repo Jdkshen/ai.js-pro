@@ -941,6 +941,81 @@ function stubChars(placements) {
     return chars;
 }
 
+// ---------------------------------------------------------------- 一致性修复
+
+const consistency = require("../src/chess/consistency.js");
+
+// 这一盘的识别结果是**真机跑出来的**（K40，dev-560，chess-shot-01.png），
+// 32 格看起来挺好，但棋规一校验就露馅：红仕 3 个（上限 2）、黑卒退到起始线之后。
+// 修复应当把这两类"可归因到格子"的错误降级成未知，而不是整盘作废。
+const DEVICE_BOARD = [
+    // [index, fenChar, score]
+    [0, "r", 0.92], [1, "n", 0.93], [2, "b", 0.94], [3, "a", 0.84], [4, "k", 0.88],
+    [5, "a", 0.64], [6, "b", 0.94], [8, "r", 0.84],
+    [19, "c", 0.91], [24, "c", 0.51], [26, "p", 0.59],
+    [27, "p", 0.92], [29, "p", 0.92], [31, "p", 0.93], [33, "p", 0.91], [35, "p", 0.90],
+    [54, "P", 0.90], [56, "P", 0.93], [58, "P", 0.92], [60, "P", 0.89], [62, "P", 0.90],
+    [68, "C", 0.86], [70, "C", 0.92],
+    [81, "R", 0.78], [82, "B", 0.85], [83, "A", 0.80], [84, "A", 0.89], [85, "K", 0.84],
+    [86, "A", 0.87], [87, "B", 0.77], [88, "N", 0.90], [89, "R", 0.85]
+];
+
+function deviceCells() {
+    const cells = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        cells[i] = { state: "EMPTY", piece: null, score: 0, candidates: [], conflict: false, residual: 0 };
+    }
+    DEVICE_BOARD.forEach(function (item) {
+        cells[item[0]] = {
+            state: "PIECE", piece: item[1], score: item[2],
+            candidates: [{ label: item[1], score: item[2], count: 1, residual: 0.05 }],
+            conflict: false, residual: 0.05
+        };
+    });
+    return cells;
+}
+
+check("一致性修复：真机那盘能被棋规反查出问题（先确认它确实有问题）", function () {
+    const before = fen.validateBoard(consistency.boardOf(deviceCells()));
+    if (before.errors.length === 0) {
+        return "这盘本该有结构性错误（红仕 3 个 / 黑卒退到起始线之后），现在一个都没有，断言失去意义";
+    }
+    return before.errors.length >= 2 || ("错误数偏少：" + before.errors.join("；"));
+});
+
+check("一致性修复：违规格降级为未知后，结构性错误清空", function () {
+    const cells = deviceCells();
+    const result = consistency.repair(cells);
+    if (!result.changed) {
+        return "应当修复出至少一处降级";
+    }
+    if (result.after.length !== 0) {
+        return "修复后仍有错误：" + result.after.join("；") + "（降级了 " +
+            result.demoted.map(function (d) { return d.char + "@" + d.row + "," + d.col; }).join(" ") + "）";
+    }
+    if (result.demoted.length > 4) {
+        return "降级太多（" + result.demoted.length + " 格），会把真棋子也扔掉";
+    }
+    const chars = consistency.charsOf(cells);
+    const unknown = chars.filter(function (ch) { return ch === "?"; }).length;
+    if (unknown !== result.demoted.length) {
+        return "未知格数（" + unknown + "）与降级次数（" + result.demoted.length + "）不一致";
+    }
+    return true;
+});
+
+check("一致性修复：合法的标准开局不该被降级", function () {
+    const start = fen.parseFen(fen.START_FEN).board;
+    const cells = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        cells[i] = start[i]
+            ? { state: "PIECE", piece: start[i], score: 0.9, candidates: [], conflict: false, residual: 0.05 }
+            : { state: "EMPTY", piece: null, score: 0, candidates: [], conflict: false, residual: 0 };
+    }
+    const result = consistency.repair(cells);
+    return result.demoted.length === 0 || ("合法开局被降级了：" + JSON.stringify(result.demoted));
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +
