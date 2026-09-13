@@ -452,6 +452,8 @@ function calibrateGrid(image, located, options) {
     const maxShift = search.maxShift == null ? 18 : search.maxShift;
     const step = search.step == null ? 7 : search.step;
     const maxCandidates = opts.maxCandidates == null ? 25 : opts.maxCandidates;
+    /** 粗扫（覆盖半格级错锚）的候选上限：会话级一次，宽容一些没代价 */
+    const coarseCandidates = opts.coarseCandidates == null ? 81 : opts.coarseCandidates;
 
     let loaded;
     try {
@@ -463,60 +465,141 @@ function calibrateGrid(image, located, options) {
     const runOpts = Object.assign({}, opts, { detector: loaded.detector });
     delete runOpts.search;
 
-    let best = null;
     let tried = 0;
-    const offsets = [];
-    offsets.push([0, 0]);
-    for (let dx = -maxShift; dx <= maxShift; dx += step) {
-        for (let dy = -maxShift; dy <= maxShift; dy += step) {
-            if (dx !== 0 || dy !== 0) {
-                offsets.push([dx, dy]);
+    /**
+     * 丢一个子的代价。单位与「未知格」同量级：一个格子被认错，无论是「读不出来」还是
+     * 「读成了空格」，对盘面都是同一个错。取 12 是为了让「丢子」稳稳压过未知格的±几格抖动。
+     */
+    const PIECE_LOSS_WEIGHT = 12;
+    const results = [];
+
+    /** 从 layout（FEN 风格字符串）数棋子个数：字母是棋子，数字是空格。 */
+    function countPieces(layout) {
+        if (!layout) {
+            return 0;
+        }
+        let count = 0;
+        for (let i = 0; i < layout.length; i++) {
+            const ch = layout.charAt(i);
+            if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z")) {
+                count += 1;
             }
         }
+        return count;
     }
-    // 先试偏移小的：真机偏差就在十几像素，大的只作为兜底
-    offsets.sort(function (a, b) {
-        return (Math.abs(a[0]) + Math.abs(a[1])) - (Math.abs(b[0]) + Math.abs(b[1]));
-    });
 
-    for (let i = 0; i < offsets.length && tried < maxCandidates; i++) {
-        const dx = offsets[i][0];
-        const dy = offsets[i][1];
+    /**
+     * 评估一个偏移；失败会**重试一次**。
+     * ⚠️ 冷启动（模型/图刚打开）时第一发可能直接失败，而失败在旧的实现里等价于
+     * 「最差候选」（unknown=999）—— 结果就是基准偏移 (0,0) 被淘汰、一个便宜但错的偏移胜出。
+     */
+    function evaluate(dx, dy) {
         const candidate = Object.assign({}, located, {
-            grid: Object.assign({}, base, { originX: base.originX + dx, originY: base.originY + dy })
+            grid: Object.assign({}, base, {
+                originX: base.originX + dx,
+                originY: base.originY + dy
+            })
         });
-        let result;
-        try {
-            result = run(frame, candidate, runOpts, null);
-        } catch (error) {
-            continue;
+        let result = null;
+        for (let attempt = 0; attempt < 2 && result == null; attempt++) {
+            try {
+                const current = run(frame, candidate, runOpts, null);
+                if (current && current.ok) {
+                    result = current;
+                }
+            } catch (error) {
+                result = null;
+            }
+        }
+        if (result == null) {
+            return null;
         }
         tried += 1;
-        const unknown = result.ok ? result.unknownCells : 999;
-        // 代价 = 「修复动作数（降级+翻色）」优先，再看未知格：
-        // ⚠️ 不能只看未知格 —— 有翻色修复后，任意偏移都能凑出「0 未知格」，
-        // 搜索会立刻停在未对齐的 (0,0) 上，反而丢掉对齐带来的颜色正确性（实测颜色错 0 → 18）。
         const repairedInfo = result.repaired || {};
         const fixes = (repairedInfo.demoted ? repairedInfo.demoted.length : 0) +
             (repairedInfo.flipped ? repairedInfo.flipped.length : 0);
-        const cost = fixes * 1000 + (unknown < 0 ? 999 : unknown);
-        if (best == null || cost < best.cost) {
-            best = {
-                ok: result.ok,
-                unknown: unknown,
-                fixes: fixes,
-                cost: cost,
-                dx: dx,
-                dy: dy,
-                layout: result.layout,
-                grid: candidate.grid,
-                sideUnknown: result.stats ? result.stats.sideUnknown : null
-            };
+        return {
+            ok: result.ok,
+            dx: dx,
+            dy: dy,
+            unknown: result.unknownCells,
+            fixes: fixes,
+            pieces: countPieces(result.layout),
+            cost: 0,
+            layout: result.layout,
+            grid: candidate.grid,
+            sideUnknown: result.stats ? result.stats.sideUnknown : null
+        };
+    }
+
+    /** 扫一批候选偏移（dx/dy = center + 偏移）；不做「代价 0 就提前收工」：
+     *  降级/翻色修复能让多个偏移都凑出代价 0，提前退出会把没对齐的那个留下。 */
+    function scanOffsets(centerX, centerY, halfRange, stepPx, cap) {
+        const offsets = [];
+        for (let dx = -halfRange; dx <= halfRange; dx += stepPx) {
+            for (let dy = -halfRange; dy <= halfRange; dy += stepPx) {
+                offsets.push([dx, dy]);
+            }
         }
-        if (cost === 0) {
-            break;
+        // 先试偏移小的：真机偏差就在十几像素，大的只作为兜底
+        offsets.sort(function (a, b) {
+            return (Math.abs(a[0]) + Math.abs(a[1])) - (Math.abs(b[0]) + Math.abs(b[1]));
+        });
+        for (let i = 0; i < offsets.length && i < cap; i++) {
+            const item = evaluate(centerX + offsets[i][0], centerY + offsets[i][1]);
+            if (item) {
+                results.push(item);
+            }
         }
     }
+
+    /**
+     * 在已评估的候选里挑最优。
+     *
+     * 代价 = 修复动作 × 1000 + 未知格 + **丢子 × 12**
+     * ⚠️ 「丢子」这一项是补上来的（真机踩过）：只按「修复动作 + 未知格」打分时，一个把棋子
+     * 认成空格的错误偏移可以拿到同样的 0 分 —— K40 实测 dx=1,dy=1 把黑方 5 个卒认成 3 个，
+     * unknown 仍是 0、修复动作 0，于是它顶掉了本来读对的基准几何。
+     * 子数只在**同一张图的候选之间**比（以候选中最多子者为基准），不需要知道真实局面。
+     */
+    function pickBest(list) {
+        let maxPieces = 0;
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].pieces > maxPieces) {
+                maxPieces = list[i].pieces;
+            }
+        }
+        let best = null;
+        for (let i = 0; i < list.length; i++) {
+            const item = list[i];
+            const cost = item.fixes * 1000 + item.unknown +
+                (maxPieces - item.pieces) * PIECE_LOSS_WEIGHT;
+            const shift = Math.abs(item.dx) + Math.abs(item.dy);
+            if (best == null || cost < best.cost ||
+                (cost === best.cost && shift < Math.abs(best.dx) + Math.abs(best.dy))) {
+                best = Object.assign({}, item, { cost: cost, maxPieces: maxPieces });
+            }
+        }
+        return best;
+    }
+
+    // (1) 基准偏移：先用单点扫确认它真被评过（内含重试）
+    scanOffsets(0, 0, 0, step, 1);
+
+    // (2) 粗扫：范围覆盖「半格」级错锚 —— 线定位偶尔把第一条线锚错半格（K40 实测偏差 49px），
+    //     而调用方习惯传 maxShift=18，那段参数根本够不到真值。步长大 → 候选量可控。
+    //     ⚠️ 这一步只有在代价函数看得见「丢子」之后才是安全的（见 pickBest）。
+    const cellStep = Math.max(base.stepX || 0, base.stepY || 0);
+    const coarseRange = Math.max(maxShift, Math.round(cellStep * 0.75));
+    const coarseStep = Math.max(6, Math.round(coarseRange / 3));
+    scanOffsets(0, 0, coarseRange, coarseStep, coarseCandidates);
+
+    // (3) 精修：以当前最优为原点，用调用方给的 (maxShift, step) 再扫一遍
+    const interim = pickBest(results);
+    scanOffsets(interim ? interim.dx : 0, interim ? interim.dy : 0,
+        maxShift, step, maxCandidates);
+
+    const best = pickBest(results);
 
     if (loaded.detector && typeof loaded.detector.close === "function") {
         try {
@@ -533,7 +616,8 @@ function calibrateGrid(image, located, options) {
     best.reason = (best.unknown === 0
         ? "已校准（无未知格"
         : ("校准后仍有 " + best.unknown + " 个未知格")) +
-        (best.fixes ? ("；修复动作 " + best.fixes + " 次") : "") + "）";
+        (best.fixes ? ("；修复动作 " + best.fixes + " 次") : "") +
+        "；子 " + best.pieces + "/" + best.maxPieces + "）";
     return best;
 }
 
