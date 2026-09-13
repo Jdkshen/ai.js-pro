@@ -539,7 +539,9 @@ function rebuildDriver() {
             modelVersion: "chessai_160x320_v5r",
             confidence: 0.25,
             orientation: "RED_BOTTOM",
-            regionRatio: regionRatioFromUi()
+            regionRatio: regionRatioFromUi(),
+            // 算棋放独立引擎线程：不然一步 ~1.2s 的搜索会把本页按钮/日志一起挡住
+            computeMode: "worker"
         },
         executorConfig: { pressMs: 60, settleMs: 140 }
     });
@@ -575,9 +577,13 @@ function updateAutoStatus(result) {
     lines.push("模式：" + MODE_LABEL[modeKey] + "，我方：" + sideLabel(driver.mySide()) +
         "，状态：" + machine.state() + "，几何：" + (driver.grid() ? ("v" + driver.grid().version) : "无"));
     if (result && result.ok) {
-        lines.push("观察：未知格 " + result.unknownCells +
-            "，轮次：" + (result.side ? sideLabel(result.side) : "未知") +
-            "，本轮 " + stats.lastObserveMs + "ms");
+        if (result.thinking) {
+            lines.push("算棋中（" + driver.computeMode() + " 线程）：" + result.reason);
+        } else {
+            lines.push("观察：未知格 " + result.unknownCells +
+                "，轮次：" + (result.side ? sideLabel(result.side) : "未知") +
+                "，本轮 " + stats.lastObserveMs + "ms");
+        }
     } else if (result) {
         lines.push("本轮没看清：" + result.reason);
     }
@@ -590,6 +596,8 @@ function updateAutoStatus(result) {
     lines.push("点击 " + stats.clicksByExecutor + " 次，确认 " + counters.confirms +
         " 次，重试 " + counters.retries + "，看门狗 " + counters.watchdogTrips +
         (driver.clickAllowed ? "" : ("，已拦截点击 " + stats.disabledTapCalls + " 次")));
+    lines.push("算棋：" + driver.computeMode() + "（独立线程 " + stats.thinkOffThread +
+        " 次 / 本线程 " + stats.thinkInline + " 次，最近一次 " + Math.round(stats.thinkMs) + "ms）");
     const text = lines.join("\n");
     if (text !== lastDriverLine) {
         lastDriverLine = text;
@@ -672,7 +680,10 @@ function runAutoLoop() {
                 show("检测到回到本应用，自动观测先停在这里（按钮重新可用）。");
                 break;
             }
-            sleep(tickMs);
+            // 算棋中（worker 在自己线程里转）→ 只密轮询结果（不截图）：算完第一时间出手；
+            // 其他情况按 tickMs 走（screencap 通道 0.6~1.4s/帧，密了只是白烧 CPU）。
+            const thinking = typeof autoDriver.isThinking === "function" && autoDriver.isThinking();
+            sleep(thinking ? 120 : tickMs);
         }
     } catch (error) {
         show("自动循环结束：" + error);

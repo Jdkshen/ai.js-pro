@@ -20,6 +20,7 @@
 const machineModule = require("./state-machine.js");
 const verifier = require("./move-verifier.js");
 const executorModule = require("./click-executor.js");
+const searchWorkerModule = require("./search-worker.js");
 const transition = require("../chess/transition.js");
 const fenModule = require("../chess/fen.js");
 const legal = require("../chess/legal-moves.js");
@@ -29,9 +30,17 @@ const DEFAULTS = {
     /** 每轮观察间隔（ms）。识别一轮约 200ms，留出余量给界面。 */
     tickMs: 900,
     /** 模型版本号（写进票据；换模型要让旧票据失效）。 */
-    modelVersion: "chessai_160",
+    modelVersion: "chessai_160x320_v5r",
     /** 算棋时间预算（ms）。 */
     movetimeMs: 1200,
+    /**
+     * 算棋跑在哪里："worker" = 独立引擎线程（默认，不阻塞悬浮窗）；
+     * "inline" = 老路径（本线程同步算，仅用于对照/宿主没有 threads 时）。
+     * "auto" = 有 threads 用 worker，否则 inline。
+     */
+    computeMode: "worker",
+    /** worker 算棋的结果超时（ms）：算不出来也要有结论，别把状态机永远卡在 THINKING。 */
+    computeGraceMs: 4000,
     /** 检测置信度。 */
     confidence: 0.25,
     /** 棋盘方向。 */
@@ -92,7 +101,12 @@ function createDriver(options) {
         confirms: 0,
         errors: 0,
         lastError: "",
-        lastObserveMs: 0
+        lastObserveMs: 0,
+        /** 算棋去重：交给 worker 线程的次数 / 退回本线程同步算的次数 */
+        thinkOffThread: 0,
+        thinkInline: 0,
+        /** 最近一次「状态机发 COMPUTE → 拿到结果」的总耗时（ms），含排队与轮询延迟 */
+        thinkMs: 0
     };
     const history = [];
 
@@ -101,6 +115,25 @@ function createDriver(options) {
     let lastReliable = null;      // { board, side }：上一可靠局面与「该走棋方」
     let lastResult = null;        // 最近一次识别结果（界面/诊断用）
     let lastBoard = null;
+
+    // ---- 算棋放在哪跑 ----
+    // worker：独立 QuickJS 引擎（自己的线程），主线程只负责「起任务 + 每轮 poll 一次」；
+    // inline：老路径（本线程同步算，会挡触控），只在宿主没有 threads 或显式要求对照时用。
+    const projectDir = opts.projectDir || (typeof __dirname === "string" ? __dirname + "/../.." : ".");
+    const workerSearch = searchWorkerModule.create({
+        dir: projectDir,
+        graceMs: cfg.computeGraceMs,
+        nowMono: nowMono,
+        log: function (text) { note(text); }
+    });
+    const computeMode = cfg.computeMode === "inline" || !searchWorkerModule.available()
+        ? "inline"
+        : "worker";
+    let pendingCompute = null;    // { jobId, effect, startedAtMono }：正在 worker 里算的任务
+
+    function useWorkerSearch() {
+        return computeMode === "worker";
+    }
 
     function note(text) {
         history.push({ atMono: nowMono(), text: text });
@@ -125,9 +158,18 @@ function createDriver(options) {
             case "RECOVER":
                 return recover();
             case "INIT":
-            case "CANCEL_JOB":
             case "CANCEL_TICKET":
                 note(effect.type + "：" + (effect.reason || ""));
+                return null;
+            case "CANCEL_JOB":
+                // 局面变了/暂停：worker 里的旧任务立刻停掉，别白烧 CPU
+                if (workerSearch.isRunning()) {
+                    workerSearch.cancel();
+                    pendingCompute = null;
+                    note("算棋任务已取消（worker 已停）：" + (effect.reason || ""));
+                } else {
+                    note(effect.type + "：" + (effect.reason || ""));
+                }
                 return null;
             default:
                 return null;
@@ -184,12 +226,54 @@ function createDriver(options) {
     }
 
     function compute(effect) {
+        // 算棋放到独立引擎线程（worker）：主线程不再被 ~1.2s 的搜索占住，
+        // 悬浮窗触摸/心跳照常。结果由 pollCompute() 在后续 tick 里非阻塞收回来。
+        if (useWorkerSearch()) {
+            const started = nowMono();
+            if (workerSearch.start(effect.fen || effect.board, {
+                side: effect.side,
+                movetime: effect.movetimeMs
+            })) {
+                pendingCompute = {
+                    jobId: effect.jobId,
+                    effect: effect,
+                    startedAtMono: started
+                };
+                stats.thinkOffThread += 1;
+                note("算棋（worker 线程）：轮到 " + (effect.side === "w" ? "红" : "黑") +
+                    "，预算 " + effect.movetimeMs + "ms");
+                return null;   // 不阻塞：JOB_RESULT 稍后由 pollCompute 喂回去
+            }
+        }
+        return computeInline(effect);
+    }
+
+    /** 兜底 / 对照路径：在本线程同步算（会挡住触控，就是被替换掉的那条老路）。 */
+    function computeInline(effect) {
+        stats.thinkInline += 1;
         let result;
         try {
             result = opts.analyze({ board: effect.board, side: effect.side }, { movetime: effect.movetimeMs });
         } catch (error) {
             result = { ok: false, reason: String(error && error.message ? error.message : error) };
         }
+        return finishCompute(effect, {
+            ok: !!result.ok,
+            reason: result.reason || "",
+            iccs: result.iccs,
+            move: result.move,
+            score: result.score,
+            depth: result.depth,
+            ms: result.ms
+        });
+    }
+
+    /**
+     * 把一个算棋结果变成 JOB_RESULT 喂回状态机（worker 与同步两条路共用）。
+     * @param effect 当时那个 COMPUTE 效果（里面有 board/side，用来算预期后局面）
+     * @param result { ok, reason, iccs, move, score, depth, ms }
+     */
+    function finishCompute(effect, result) {
         const outcome = { jobId: effect.jobId, ok: !!result.ok, reason: result.reason || "" };
         if (result.ok) {
             outcome.iccs = result.iccs;
@@ -205,7 +289,69 @@ function createDriver(options) {
         } else {
             note("算棋失败：" + outcome.reason);
         }
+        stats.thinkMs = pendingCompute ? (nowMono() - pendingCompute.startedAtMono) : 0;
+        pendingCompute = null;
         return pump(machine.dispatch(Object.assign({ type: "JOB_RESULT" }, outcome)));
+    }
+
+    /** worker 里只回传 ICCS：在这里从合法着法表里把着法对象找回来（着法生成比搜索便宜得多）。 */
+    function moveFromIccs(effect, iccs) {
+        const list = legal.allLegalMoves(effect.board, effect.side);
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].iccs === iccs) {
+                return list[i];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 非阻塞收算棋结果（每轮 tick 开头调一次）。
+     * @returns null                                  没有在算
+     *          { pending: true,  elapsedMs }         还在算（本轮不用再截图/观察）
+     *          { pending: false, elapsedMs, status } 已收尾（结果或失败已喂回状态机）
+     */
+    function pollCompute() {
+        if (!pendingCompute || !workerSearch.isRunning()) {
+            return null;
+        }
+        const state = workerSearch.poll();
+        if (state.status === "running") {
+            return { pending: true, elapsedMs: state.elapsedMs };
+        }
+        const job = pendingCompute;
+        // 收尾期间状态机可能已经离开 THINKING（暂停/新会话/局面变了）：交给 finishCompute 的路由，
+        // 由状态机自己判定是否接受（onJobResult 里有 S02/S03 两道门）。
+        if (state.status === "done") {
+            const result = state.result;
+            let move = null;
+            if (result.ok && result.iccs) {
+                move = moveFromIccs(job.effect, result.iccs);
+            }
+            if (!result.ok) {
+                finishCompute(job.effect, { ok: false, reason: result.reason || "worker 算棋失败" });
+            } else if (!move) {
+                finishCompute(job.effect, {
+                    ok: false,
+                    reason: "worker 给的着法 " + result.iccs + " 不在合法着法表里"
+                });
+            } else {
+                finishCompute(job.effect, {
+                    ok: true,
+                    iccs: result.iccs,
+                    move: move,
+                    score: result.score,
+                    depth: result.depth,
+                    ms: result.ms
+                });
+            }
+            return { pending: false, elapsedMs: state.elapsedMs, status: "done" };
+        }
+        const reason = state.status === "timeout"
+            ? ("worker 算棋超时（超过 " + state.elapsedMs + "ms）")
+            : ("worker 算棋异常：" + (state.error || ""));
+        finishCompute(job.effect, { ok: false, reason: reason });
+        return { pending: false, elapsedMs: state.elapsedMs, status: state.status };
     }
 
     function executeTicket(effect) {
@@ -373,6 +519,19 @@ function createDriver(options) {
             return { ok: false, reason: "没有在运行" };
         }
         stats.ticks += 1;
+
+        // 先非阻塞地把 worker 的算棋结果收回来（不截图、不观察，每轮只花一次 getResult()）。
+        // 还在算就直接返回：既不挡界面，也不会在思考期间反复去截屏干扰棋盘。
+        const thinking = pollCompute();
+        if (thinking && thinking.pending) {
+            return {
+                ok: true,
+                state: machine.state(),
+                reason: "算棋中（worker 线程，已 " + Math.round(thinking.elapsedMs) + "ms）",
+                thinking: true
+            };
+        }
+
         pump(machine.dispatch({ type: "TICK", nowMono: nowMono() }));
 
         // 没有可用几何（还没定位成功 / 恢复中）就**每一轮都重试定位**：
@@ -472,10 +631,17 @@ function createDriver(options) {
             }
         },
         isRunning: function () { return running; },
+        /** 还在 worker 里算棋（界面可用它决定要不要缩短轮询间隔）。 */
+        isThinking: function () { return !!pendingCompute; },
+        /** 非阻塞收算棋结果：宿主自己起定时器轮询时可以直接调它。 */
+        pollCompute: pollCompute,
+        computeMode: function () { return computeMode; },
         pause: function () { return pump(machine.dispatch({ type: "PAUSE" })); },
         resume: function () { return pump(machine.dispatch({ type: "RESUME" })); },
         stop: function () {
             running = false;
+            workerSearch.cancel();
+            pendingCompute = null;
             return pump(machine.dispatch({ type: "STOP" }));
         },
         setMySide: function (side) {
@@ -526,6 +692,8 @@ function createDriver(options) {
             lines.push("观察 " + stats.observations + " 次（未识别 " + stats.unrecognized + "）" +
                 "，点击 " + (executor.stats ? executor.stats().clicks : 0) + " 次" +
                 "，确认 " + counters.confirms + " 次，重试 " + counters.retries + " 次");
+            lines.push("算棋：" + computeMode + "（worker " + stats.thinkOffThread +
+                " 次 / 本线程 " + stats.thinkInline + " 次，最近一次 " + Math.round(stats.thinkMs) + "ms）");
             if (!clickAllowed) {
                 lines.push("模式：不点击（拦截了 " + disabledTap.calls() + " 次点击调用）");
             }

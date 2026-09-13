@@ -116,12 +116,15 @@ let driver = null;
 let running = false;
 let timer = null;
 let pendingDeclare = false;   // autorun：等首个观察成功后再声明「现在轮到我」
+// 算棋放哪里跑：worker（独立引擎线程，默认）/ inline（本线程同步，对照用）
+let computeModeKey = "worker";
+let lastThinkingLogAt = 0;    // 算棋中按秒报一次状态，不刷屏
 let hideOnCapture = "auto";  // "auto" 只在面板真的压住棋盘时才藏（默认）；true/false 手动开/关
 let autoAlignOn = false;      // 几何按检测框自动微调（真机实测会把子认重，默认关）
 let lastLoggedLayout = null;  // 驱动视角去重打印用
 let aliveTimer = null;        // 保活心跳（见 main 里的说明）
 let aliveSeconds = 0;
-let lastBeatAt = 0;           // 心跳漂移：衡量「脚本线程被占多久」
+let lastBeatAt = 0;           // 心跳间隔：衡量「本站线程被占多久」（空载 ≈1000ms）
 let lagMax = 0;
 let lagCount = 0;
 
@@ -129,7 +132,7 @@ let lagCount = 0;
 function statusLine() {
     return calibrationNote + "｜" + (running ? "运行中" : "已停止") +
         "｜隐藏抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")) +
-        "｜存活 " + aliveSeconds + "s" + (lagMax > 400 ? "｜线程阻塞峰值 " + lagMax + "ms" : "");
+        "｜存活 " + aliveSeconds + "s" + (lagMax > 1200 ? "｜最长心跳间隔 " + lagMax + "ms" : "");
 }
 let collapsed = false;
 let grid = null;          // 已校准几何（会话内复用）
@@ -511,7 +514,10 @@ function buildDriver() {
             modelVersion: "chessai_160x320_v5r",
             confidence: 0.25,
             orientation: "RED_BOTTOM",
-            autoAlign: autoAlignOn
+            autoAlign: autoAlignOn,
+            // 算棋默认放独立引擎线程（worker）：不然一步 ~1.2s 的搜索会把面板触摸一起挡掉。
+            // autorun 里写 "computeMode":"inline" 可以对照老路径。
+            computeMode: computeModeKey
         },
         executorConfig: { pressMs: 60, settleMs: 140 }
     });
@@ -531,6 +537,15 @@ function tick() {
             const now = loopLock.status();
             logLine("循环锁被「" + (now.owner || "?") + "」拿走，面板循环退出。");
             stopLoop();
+            return;
+        }
+        // 算棋中：本轮没截图、只 poll 了一次 worker 结果 → 只按秒报一次，不刷屏
+        if (result && result.thinking) {
+            const now = Date.now();
+            if (now - lastThinkingLogAt >= 1000) {
+                lastThinkingLogAt = now;
+                logLine("状态 " + machine.state() + "｜" + result.reason);
+            }
             return;
         }
         logLine("状态 " + machine.state() + "｜" + machine.reason());
@@ -594,13 +609,35 @@ function startLoop() {
         return;
     }
     running = true;
-    timer = setInterval(tick, 1400);
-    logLine("已开始：" + MODE_LABEL[modeKey] + "（已持有棋盘循环锁：" + loopLock.lockPath() + "）");
+    scheduleNextTick();
+    logLine("已开始：" + MODE_LABEL[modeKey] + "（已持有棋盘循环锁：" + loopLock.lockPath() + "，算棋 " +
+        (driver && driver.computeMode ? driver.computeMode() : "?") + "）");
+}
+
+/**
+ * 下一轮什么时候跑：
+ *   · 算棋中（worker 在自己的线程里转）→ 只轮询结果，120ms 一次；本轮不截图、不观察，
+ *     所以密轮询很便宜，而且能在算完的第一时间出手（不用等到下一个 1400ms）。
+ *   · 其他 → 正常间隔（screencap 通道 0.6~1.4s/帧，密了只是白烧 CPU）。
+ */
+function scheduleNextTick() {
+    const thinking = driver && typeof driver.isThinking === "function" && driver.isThinking();
+    const delay = thinking ? 120 : 1400;
+    timer = setTimeout(function () {
+        timer = null;
+        if (!running) {
+            return;
+        }
+        tick();
+        if (running) {
+            scheduleNextTick();
+        }
+    }, delay);
 }
 
 function stopLoop() {
     if (timer) {
-        clearInterval(timer);
+        clearTimeout(timer);
         timer = null;
     }
     running = false;
@@ -658,15 +695,17 @@ function startKeepAlive() {
     }
     aliveTimer = setInterval(function () {
         const now = Date.now();
-        // 心跳每 1s 一次；实际间隔超出多少，就是「脚本线程被占了多少毫秒」
-        // —— 采集/识别/算棋都排在这个线程上，阻塞时长就是按钮要等的时长。
-        const drift = lastBeatAt ? Math.max(0, now - lastBeatAt - 1000) : 0;
+        // 心跳每 1s 一次 → **最长心跳间隔**就是「脚本线程被占多久」的滞后指标：
+        // 空载 ≈1000ms；本线程里跑采集/识别（或退回同步算棋）时会被拉长。
+        // ⚠️ 口径修正（小米8 探针实测）：不能再减 1000ms —— 定时器是「上一次触发 + 1000ms」重排的，
+        //    减 1000 会把一次长阻塞少算一个时钟周期（实测 1279ms 的同步算棋只报出 290ms）。
+        const gap = lastBeatAt ? (now - lastBeatAt) : 0;
         lastBeatAt = now;
-        if (drift > 400) {
+        if (gap > 1200) {
             lagCount += 1;
-            lagMax = Math.max(lagMax, drift);
+            lagMax = Math.max(lagMax, gap);
             if (lagCount <= 3) {
-                console.log("[floaty] 心跳延迟 " + drift + "ms（脚本线程被采集/算棋占着，点按钮要排队）");
+                console.log("[floaty] 心跳间隔 " + gap + "ms（本站线程被采集/同步算棋占着，点按钮要排队）");
             }
         }
         aliveSeconds += 1;
@@ -676,7 +715,8 @@ function startKeepAlive() {
             // 渲染失败不影响保活
         }
         if (aliveSeconds % 30 === 0) {
-            logLine("面板保活中（存活 " + aliveSeconds + "s，最大心跳延迟 " + lagMax + "ms，被占 " + lagCount + " 次）");
+            logLine("面板保活中（存活 " + aliveSeconds + "s，最长心跳间隔 " + lagMax +
+                "ms，超 1.2s 的 " + lagCount + " 次）");
         }
     }, 1000);
     logLine("保活心跳已启动（1s 一次；顺带度量脚本线程被占多久 —— 这个数就是「卡」的来源）");
@@ -962,6 +1002,11 @@ function main() {
         if (auto.autoAlign != null) {
             autoAlignOn = !!auto.autoAlign;
             logLine("几何自动微调：" + (autoAlignOn ? "开" : "关"));
+        }
+        if (auto.computeMode) {
+            // "worker"（默认，独立引擎线程）/ "inline"（本线程同步，对照老路径）
+            computeModeKey = String(auto.computeMode) === "inline" ? "inline" : "worker";
+            logLine("算棋模式：" + computeModeKey);
         }
         if (auto.start) {
             startLoop();

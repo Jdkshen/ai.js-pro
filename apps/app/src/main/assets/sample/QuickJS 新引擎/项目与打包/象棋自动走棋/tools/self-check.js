@@ -1982,6 +1982,89 @@ check("autoAlign：定位整体错 40px（框全出界）→ 不硬凑，报告 
     return report.suspect ? true : "40px 错位却没有报告 suspect";
 });
 
+// ---------------------------------------------------------------- 算棋挪到 worker（独立引擎线程）
+
+const searchWorker = require("../src/automation/search-worker.js");
+const driverModule = require("../src/automation/auto-driver.js");
+
+check("worker 算棋：宿主没有 threads 时必须报不可用（Node 侧就是这种情况）", function () {
+    if (typeof threads !== "undefined") {
+        return true;   // 设备端：有 threads，跳过这条
+    }
+    return searchWorker.available() === false ? true : "Node 下 available() 应为 false";
+});
+
+check("worker 算棋：回传载荷「对象」与「JSON 串」都要认（引擎会提前反序列化成对象）", function () {
+    const asObject = searchWorker.decode({ ok: true, iccs: "b2e2", ms: 1285 });
+    if (!asObject || asObject.iccs !== "b2e2") {
+        return "对象形态没认出来（真机就是这种情况：引擎已把 JSON 串 parse 成对象）";
+    }
+    const asText = searchWorker.decode('{"ok":true,"iccs":"b2e2"}');
+    if (!asText || asText.iccs !== "b2e2") {
+        return "JSON 串形态没认出来";
+    }
+    if (searchWorker.decode("worker 挂了") !== null || searchWorker.decode(null) !== null) {
+        return "非 JSON 载荷应当返回 null（宁可报错也不要拿错数据）";
+    }
+    return true;
+});
+
+check("驱动：没有 threads 时自动退回本线程同步算棋（computeMode=inline）", function () {
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        recognize: function () {
+            return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0, layout: START_FEN };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 }; },
+        config: { movetimeMs: 20 }
+    });
+    if (driver.computeMode() !== "inline") {
+        return "没有 threads 时应当是 inline，实际 " + driver.computeMode();
+    }
+    return typeof driver.isThinking === "function" && typeof driver.pollCompute === "function"
+        ? true
+        : "驱动没有暴露 isThinking/pollCompute";
+});
+
+check("驱动：pollCompute 空闲时返回 null，不制造假任务", function () {
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        recognize: function () {
+            return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0, layout: START_FEN };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 }; },
+        config: { movetimeMs: 20 }
+    });
+    if (driver.pollCompute() !== null) {
+        return "空闲时 pollCompute 应当返回 null";
+    }
+    return driver.isThinking() === false ? true : "空闲时 isThinking 应当为 false";
+});
+
+check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（退回同步，不卡死）", function () {
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        recognize: function () {
+            return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0, layout: START_FEN };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 }; },
+        config: { movetimeMs: 20 }
+    });
+    driver.start();
+    let state = null;
+    for (let i = 0; i < 4 && state !== "PRECHECK"; i++) {
+        driver.tick();
+        state = driver.machine.state();
+    }
+    const stats = driver.stats();
+    return state === "PRECHECK"
+        ? (stats.thinkInline > 0 ? true : "出了着法但没走同步算棋？")
+        : ("没能进到 PRECHECK，停在 " + state + "（" + driver.machine.reason() + "）");
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +
