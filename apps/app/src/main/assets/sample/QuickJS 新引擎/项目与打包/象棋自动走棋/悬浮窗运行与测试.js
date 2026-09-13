@@ -41,6 +41,8 @@ let pendingDeclare = false;   // autorun：等首个观察成功后再声明「�
 let hideOnCapture = true;     // 抓帧时把面板藏起来（否则面板会盖住棋盘）
 let autoAlignOn = false;      // 几何按检测框自动微调（真机实测会把子认重，默认关）
 let lastLoggedLayout = null;  // 驱动视角去重打印用
+let aliveTimer = null;        // 保活心跳（见 main 里的说明）
+let aliveSeconds = 0;
 let collapsed = false;
 let grid = null;          // 已校准几何（会话内复用）
 let calibrationNote = "未校准";
@@ -56,33 +58,50 @@ function logLine(text) {
     render();
 }
 
+/**
+ * 面板布局。两个真机踩过的坑（都是「看不到就点不动」）：
+ *   1. **尺寸必须写 px**：`h="auto"` 或 `win.setSize(w, -2)` 在这个引擎上会得到
+ *      `mAttrs=(900x0)` 的**零高窗口** —— 照样画得出来，但没有任何可触摸区域，
+ *      点哪儿都落到下层 App（点不动）。所以这里全部显式 px。
+ *   2. **`<button>` 收不到点击**：真机对照（`.artifacts/floaty-touch-probe.js`）证明
+ *      `<button>` 只有 `on("touch")` 能到，`on("click")` / `.click()` / `.longClick()` 三种绑定
+ *      全都不触发；而 `<text>` 的 `on("click")` 正常。所以按钮一律用带 bg 的 `<text>` 冒充。
+ */
+const BTN_BG = "#FFDDDDDD";
+const BTN_FG = "#FF101010";
+
+function button(id, label, width) {
+    return '    <text id="' + id + '" text="' + label + '" w="' + width + 'px" h="64px" bg="' + BTN_BG +
+        '" textColor="' + BTN_FG + '" textSize="12" gravity="center"/>';
+}
+
 const XML = [
-    '<vertical w="330" h="auto" bg="#E6000000" padding="10" margin="0">',
-    '  <horizontal>',
-    '    <text id="title" text="象棋面板" w="120" h="auto" textColor="#FFFFFF" textSize="15" gravity="center_vertical"/>',
-    '    <button id="modeBtn" text="①只识别" w="90" h="36" textSize="12"/>',
-    '    <button id="collapseBtn" text="收起" w="60" h="36" textSize="12"/>',
-    '    <button id="hideBtn" text="隐藏抓帧：开" w="96" h="36" textSize="11"/>',
-    '    <button id="alignBtn" text="微调：关" w="80" h="36" textSize="11"/>',
+    '<vertical id="root" w="1020px" h="940px" bg="#E6000000" padding="8px">',
+    '  <horizontal h="70px">',
+    '    <text id="title" text="象棋面板" w="200px" h="70px" textColor="#FFFFFF" textSize="16" gravity="center"/>',
+    button("modeBtn", "①只识别", 210),
+    button("collapseBtn", "收起", 150),
+    button("hideBtn", "隐藏抓帧：开", 220),
+    button("alignBtn", "微调：关", 180),
     '  </horizontal>',
-    '  <horizontal>',
-    '    <button id="startBtn" text="开始" w="72" h="38" textSize="12"/>',
-    '    <button id="stopBtn" text="停止" w="72" h="38" textSize="12"/>',
-    '    <button id="locateBtn" text="定位+校准" w="88" h="38" textSize="12"/>',
-    '    <button id="recognizeBtn" text="识别一帧" w="88" h="38" textSize="12"/>',
+    '  <horizontal h="70px">',
+    button("startBtn", "开始", 190),
+    button("stopBtn", "停止", 190),
+    button("locateBtn", "定位+校准", 230),
+    button("recognizeBtn", "识别一帧", 230),
     '  </horizontal>',
-    '  <horizontal>',
-    '    <button id="turnBtn" text="轮到我" w="104" h="38" textSize="12"/>',
-    '    <button id="sideBtn" text="换我方" w="104" h="38" textSize="12"/>',
-    '    <button id="sessionBtn" text="新会话" w="104" h="38" textSize="12"/>',
+    '  <horizontal h="70px">',
+    button("turnBtn", "轮到我", 260),
+    button("sideBtn", "换我方", 260),
+    button("sessionBtn", "新会话", 260),
     '  </horizontal>',
-    '  <horizontal>',
-    '    <button id="selfcheckBtn" text="离线自检" w="104" h="38" textSize="12"/>',
-    '    <button id="contractBtn" text="契约测试" w="104" h="38" textSize="12"/>',
-    '    <button id="clearBtn" text="清空日志" w="104" h="38" textSize="12"/>',
+    '  <horizontal h="70px">',
+    button("selfcheckBtn", "离线自检", 260),
+    button("contractBtn", "契约测试", 260),
+    button("clearBtn", "清空日志", 260),
     '  </horizontal>',
-    '  <text id="status" text="准备中…" w="310" h="auto" textColor="#B0FFFFFF" textSize="11"/>',
-    '  <text id="logArea" text="" w="310" h="auto" textColor="#80FFFFFF" textSize="10"/>',
+    '  <text id="status" text="准备中…" w="1000px" h="34px" textColor="#B0FFFFFF" textSize="12"/>',
+    '  <text id="logArea" text="" w="1000px" h="420px" textColor="#90FFFFFF" textSize="11"/>',
     '</vertical>'
 ].join("\n");
 
@@ -94,7 +113,7 @@ function render() {
     }
     try {
         win.status.setText(calibrationNote + "｜" + (running ? "运行中" : "已停止") +
-            (hideOnCapture ? "｜抓帧时隐藏面板" : ""));
+            (hideOnCapture ? "｜抓帧时隐藏面板" : "") + "｜存活 " + aliveSeconds + "s");
         win.logArea.setText(logLines.join("\n"));
         win.modeBtn.setText(MODE_LABEL[modeKey]);
         win.startBtn.setText(running ? "暂停" : "开始");
@@ -431,6 +450,57 @@ function runContractTests() {
     }
 }
 
+/**
+ * 保活（真机踩过，必读）：
+ *   悬浮窗的存活**完全靠脚本里挂着的定时器**。面板一开始没有定时器（要等你点「开始」才有），
+ *   所以脚本会在启动后 ~19 秒被引擎回收：
+ *     `QuickJsException: Script execution interrupted` → `Engine destroy`，
+ *   而**窗口像素还留在屏幕上** —— 看着是活的、点任何按钮都没反应。
+ *   修法：常驻一个 1 秒心跳，绝不 clearInterval；同时把「存活 Ns」写进状态栏，
+ *   这样一眼能看出面板到底还活着没有。退出时把窗口关掉，不留「僵尸面板」。
+ */
+function startKeepAlive() {
+    if (aliveTimer) {
+        return;
+    }
+    aliveTimer = setInterval(function () {
+        aliveSeconds += 1;
+        try {
+            win.status.setText(calibrationNote + "｜" + (running ? "运行中" : "已停止") +
+                (hideOnCapture ? "｜抓帧时隐藏面板" : "") + "｜存活 " + aliveSeconds + "s");
+        } catch (error) {
+            // 渲染失败不影响保活
+        }
+        if (aliveSeconds % 30 === 0) {
+            logLine("面板保活中（存活 " + aliveSeconds + "s，脚本仍在运行）");
+        }
+    }, 1000);
+    logLine("保活心跳已启动（1s 一次；没有它脚本会在 ~19 秒后被引擎回收，窗口还在但点不动）");
+    registerExitHook();
+}
+
+/** 退出时关掉窗口：否则脚本一结束就留下一个「点不动的僵尸面板」。 */
+function registerExitHook() {
+    try {
+        if (typeof events !== "undefined" && events && typeof events.on === "function") {
+            events.on("exit", function () {
+                try {
+                    if (win) {
+                        win.close();
+                    }
+                } catch (error) {
+                    // 关不掉也没关系
+                }
+            });
+            logLine("退出钩子已注册（脚本结束时会关掉面板，不留僵尸窗口）");
+        } else {
+            logLine("运行时没有 events.on，退出时不会自动关窗（面板停住请手动 force-stop 应用）");
+        }
+    } catch (error) {
+        logLine("注册退出钩子失败：" + error);
+    }
+}
+
 function readAutorun() {
     try {
         if (!files || typeof files.read !== "function") {
@@ -444,10 +514,12 @@ function readAutorun() {
 }
 
 function main() {
-    win = floaty.window(XML, { x: 40, y: 260, visible: true });
-    win.setSize(340 * 3, -2);   // 单位是 px（1080 宽屏上 ≈ 340dp 的观感）
+    win = floaty.window(XML, { x: 30, y: 200, visible: true });
+    win.setTouchable(true);
+    // ⚠️ 不要在这里 setSize(…, -2)：真机上会得到零高窗口（画得出来但点不动）。尺寸全部由 XML 的 px 指定。
     logLine("面板已启动（" + describeCapabilities() + "）");
     logLine("提示：面板会浮在棋盘上，抓帧时已默认自动隐藏；嫌碍事可点「收起」或拖标题栏");
+    startKeepAlive();
 
     // 拖动：按住标题栏移动窗口
     let downX = 0;
@@ -467,6 +539,21 @@ function main() {
         }
         return true;
     });
+
+    // 触摸诊断：悬浮窗控件不在 uiautomator dump 里，只能靠日志判断「事件到底到没到」
+    let touchLogs = 0;
+    try {
+        win.root.on("touch", function (event) {
+            const action = event && typeof event.getAction === "function" ? event.getAction() : "?";
+            if (action === 0 && touchLogs < 5) {
+                touchLogs += 1;
+                logLine("触摸到达：down@(" + event.getRawX() + "," + event.getRawY() + ")");
+            }
+            return false;
+        });
+    } catch (error) {
+        logLine("根视图触摸监听没绑上：" + error);
+    }
 
     win.modeBtn.on("click", function () {
         const index = MODES.indexOf(modeKey);
@@ -510,6 +597,7 @@ function main() {
         logLines.length = 0;
         render();
     });
+    logLine("按钮绑定完成：模式/收起/隐藏抓帧/微调/开始/停止/定位/识别/轮到我/换我方/新会话/自检/契约/清空");
     // 抓帧时隐藏面板：开着时面板不会盖住棋盘（实测面板会挡住上面几行棋子）
     win.hideBtn.on("click", function () {
         hideOnCapture = !hideOnCapture;
@@ -557,7 +645,8 @@ function main() {
         try {
             win.status.setVisibility(collapsed ? 8 : 0);
             win.logArea.setVisibility(collapsed ? 8 : 0);
-            win.setSize(340 * 3, -2);
+            // 收起时把窗口也缩掉（高度同样必须是显式 px，不能给 -2）
+            win.setSize(1020, collapsed ? 310 : 940);
         } catch (error) {
             logLine("收起/展开失败：" + error);
         }

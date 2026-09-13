@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowManager;
 
 /**
  * 应用自己的页面（含脚本宿主页）的**系统栏**统一处理。
@@ -42,6 +43,15 @@ public final class AijsSystemBars {
     /**
      * 把状态栏刷成当前主题的底色，并把图标明暗调对。
      *
+     * ⚠️ 必须同时加 {@code FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS}：
+     * 只有这个标志置位时，平台才会用 {@code setStatusBarColor} 画状态栏底色；
+     * 缺了它这一行是**空操作**，状态栏回落成平台默认的纯黑。
+     * 真机（K40）踩过：`RunIntentActivity` 的主题是 {@code Theme.Translucent.NoTitleBar}
+     * （没有 android:statusBarColor），而它的窗口 flags 是
+     * {@code NOT_FOCUSABLE LAYOUT_IN_SCREEN HARDWARE_ACCELERATED} —— 没有这个标志，
+     * 于是「跑脚本时顶部一条黑」即使调了 apply() 也照旧。
+     * 实测：主界面状态栏 (247,247,247)，浮窗宿主前台时 (0,0,0)。
+     *
      * @return 实际使用的颜色（调用方要显示/记录时用得上）
      */
     public static int apply(Activity activity) {
@@ -51,6 +61,7 @@ public final class AijsSystemBars {
         boolean dark = isDark(activity);
         int surface = dark ? Color.BLACK : LIGHT_SURFACE;
         Window window = activity.getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(surface);
         View decor = window.getDecorView();
         int flags = AppThemePalette.withoutHiddenSystemBars(decor.getSystemUiVisibility());
