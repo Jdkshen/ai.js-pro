@@ -599,6 +599,10 @@ function main() {
             modeKey = auto.mode;
             logLine("模式设为 " + MODE_LABEL[modeKey]);
         }
+        if (auto.autoAlign != null) {
+            autoAlignOn = !!auto.autoAlign;
+            logLine("几何自动微调：" + (autoAlignOn ? "开" : "关"));
+        }
         if (auto.start) {
             startLoop();
             if (auto.declareTurn) {

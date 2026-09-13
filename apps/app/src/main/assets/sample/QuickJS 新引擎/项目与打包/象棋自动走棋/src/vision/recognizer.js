@@ -86,36 +86,103 @@ function sumResidual(cells) {
 }
 
 /**
- * 用检测框给几何做微调：在 ±maxShift 像素内试若干原点偏移，按几何质量挑最优：
- *   **出界框最少 → 残差之和最小 → 冲突最少 → 未知格最少**
+ * 单个框到最近交点的「贴合度代价」：归一化距离（1 = 半格距），封顶 1，
+ * 免得远处的假框把搜索带偏；分数太低（默认 <0.2）的框完全不参与拟合。
+ */
+function boxFit(det, grid, floorScore) {
+    if (!det || !isFinite(det.x) || !isFinite(det.y)) {
+        return null;
+    }
+    const score = det.score == null ? 1 : det.score;
+    if (score < floorScore) {
+        return null;
+    }
+    const hit = geometry.nearest(grid, det.x, det.y);
+    return {
+        score: score,
+        /** 框心到最近交点的距离（格距为单位，不含出界信息） */
+        distance: Math.min(1, hit.inside ? hit.normalized : 1),
+        inside: hit.inside
+    };
+}
+
+/**
+ * 几何代价：**只看框与点阵的贴合度**，故意不看「认出了几个子 / 几个未知格 / 几个冲突」。
  *
- * 为什么以「残差」为主而不是以「未知格」为主：未知格是模型认不出/被棋规降级的结果，
- * 跟几何好坏只是间接相关；真实偏差就是「框心普遍偏离交点」，所以直接把这个偏差压到最小才对。
+ * 为什么不能把未知格/冲突数放进挑选目标（2026-09-13 真机取证后改）：
+ *   这两项是**分类阈值的产物**（`maxResidual` / `conflictGap`），不是几何质量本身。
+ *   把它们当目标，等于奖励「把边缘框刚好推过阈值」——结果是从「未知格更少」的偏移里
+ *   挑出一个把噪声框也认成棋子的几何。K40 + 天天象棋实测：同一开局局面，
+ *   autoAlign 开着时驱动看到 `红R 3 个 / 红N 3 个 / 红C 4 个 / 红P 9 个`（非法，状态机拒绝出手），
+ *   关掉就是合法开局；位移只有 3px，物理上不可能改变「框→哪一格」的归属。
+ *   更糟的是这个目标**不幂等**：挪完之后的「未知格/冲突」又变了，于是每帧在 (0,3)/(0,-3) 之间来回，
+ *   几何版本被反复 +1。纯几何代价是 (框, 偏移) 的纯函数 → 幂等，挪到位之后下一帧增益为 0、不再动。
+ */
+function latticeCost(detections, grid, floorScore) {
+    let weighted = 0;
+    let weightSum = 0;
+    let count = 0;
+    let out = 0;
+    for (let i = 0; i < (detections ? detections.length : 0); i++) {
+        const fit = boxFit(detections[i], grid, floorScore);
+        if (!fit) {
+            continue;
+        }
+        count += 1;
+        if (!fit.inside) {
+            out += 1;
+        }
+        weighted += fit.score * fit.distance;
+        weightSum += fit.score;
+    }
+    return {
+        /** 总代价（分数加权）：越小 = 框越贴合交点 */
+        cost: weighted,
+        /** 加权平均距离：给 suspect 判定用（与框数无关） */
+        mean: weightSum > 0 ? weighted / weightSum : 0,
+        boxes: count,
+        outOfBoard: out
+    };
+}
+
+/**
+ * 用检测框给几何做微调：在 ±maxShift 像素内试若干原点偏移，**按纯几何代价**挑最优
+ * （分数加权的「框心到最近交点距离」之和，见 latticeCost 的说明）。
  *
- * 只挪原点，**不改格距、也不改 version**：
- *   - 格距是定位拟合出来的，比原点可信（残差 0.016 格 ≈ 1.8px）；
- *   - 版本不变，已发出的走棋票据不会因为一次微调被作废（微调幅度 ≤ 半格距的 1/3，落点仍在同一格内）。
+ * 只挪原点，不改格距。执行几何的冻结/更新策略（执行单 §5）：
+ *   · 相对基础几何的改善不足 minGain（默认 15%）→ 视为抖动，**不挪**（±3px 级的小赢不算赢）；
+ *   · 位移低于 minApply → 只当诊断，不动执行几何；
+ *   · 位移超过 maxApply → **拒绝**：几何不只给「框归哪一格」用，还给**判阵营的像素采样**用。
+ *     采样框是「格距的 84%」且以交点为心，所以几何一旦离开颜色校准的位置，木纹就会跑进采样框。
+ *     K40 + 天天象棋同一帧实测（`tools/p4-align-debug.js` 取证）：
+ *       · 校准后的几何：`rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR`（合法开局）
+ *       · 按框拟合挑出的 (12,6)：`rNbakabnR/9/1C5C1/P1P1p1P1P/…`（红 28 黑 2，非法）
+ *     即「-7,-14 系统性偏差」是**检测框自身的偏置**，不该靠挪几何去凑：框归格用「最近交点」本来就抗得了
+ *     0.4 格以内的偏置，而颜色采样扛不住。真定位错（几十像素）会表现为框大量出界 → 交给 suspect。
+ *   · 真的挪了（且位移在 [minApply, maxApply] 内）→ `version + 1`（否则用旧几何算出来的票据会被拿去点新几何的格子）。
  * 代价：只有一次模型推理，对齐本身是纯坐标运算（几十个框 × 几十个候选）。
  */
 function alignGrid(detections, grid, assignOptions, search) {
     const cfg = search || {};
     const maxShift = cfg.maxShift == null ? 18 : cfg.maxShift;
-    const step = cfg.step == null ? 6 : cfg.step;
+    const step = cfg.step == null ? 3 : cfg.step;
     /** 小于这个位移（|dx|+|dy|，像素）只当诊断，不改执行几何（同一格内不会变，免得票据天天失效） */
     const minApply = cfg.minApply == null ? 3 : cfg.minApply;
+    /** 低于这个分数的框不参与几何拟合（实测 0.2 以下的框基本都是假的） */
+    const floorScore = cfg.floorScore == null ? 0.2 : cfg.floorScore;
+    /** 至少要改善这么多（相对）才真的挪：抑制「同一格内来回微调」 */
+    const minGain = cfg.minGain == null ? 0.15 : cfg.minGain;
+    /**
+     * 允许真的挪的最大位移（|dx|+|dy|，像素）。超过就拒绝 —— 理由见上方注释：
+     * 几何同时是颜色采样的基准，大位移会把木纹采进采样框，把黑子判成红子。
+     * 真的整体错位（几十像素）不是靠微调救的，那是 suspect → 重新定位的活。
+     */
+    const maxApply = cfg.maxApply == null ? 6 : cfg.maxApply;
     const baseVersion = grid.version == null ? 1 : grid.version;
-    const base = assignment.assign(detections, grid, assignOptions);
-    const best = {
-        grid: grid,
-        assigned: base,
-        unknown: countUnknown(base.cells),
-        out: base.stats.outOfBoard,
-        conflicts: base.stats.conflicts,
-        residual: sumResidual(base.cells),
-        dx: 0,
-        dy: 0,
-        tried: 1
-    };
+
+    const baseCost = latticeCost(detections, grid, floorScore);
+    let best = { dx: 0, dy: 0, cost: baseCost };
+    let tried = 1;
     for (let dx = -maxShift; dx <= maxShift; dx += step) {
         for (let dy = -maxShift; dy <= maxShift; dy += step) {
             if (dx === 0 && dy === 0) {
@@ -125,64 +192,80 @@ function alignGrid(detections, grid, assignOptions, search) {
                 originX: grid.originX + dx,
                 originY: grid.originY + dy
             });
-            const result = assignment.assign(detections, candidate, assignOptions);
-            best.tried += 1;
-            const unknown = countUnknown(result.cells);
-            const out = result.stats.outOfBoard;
-            const conflicts = result.stats.conflicts;
-            const residual = sumResidual(result.cells);
-            const better = out < best.out ||
-                (out === best.out && (residual < best.residual - 0.01 ||
-                    (residual <= best.residual + 0.01 && (conflicts < best.conflicts ||
-                        (conflicts === best.conflicts && unknown < best.unknown)))));
-            if (better) {
-                best.grid = candidate;
-                best.assigned = result;
-                best.unknown = unknown;
-                best.out = out;
-                best.conflicts = conflicts;
-                best.residual = residual;
-                best.dx = dx;
-                best.dy = dy;
+            const cost = latticeCost(detections, candidate, floorScore);
+            tried += 1;
+            // 代价更小 → 更贴合；代价相同则取位移更小的（同样的贴合度，别多挪）
+            const closer = cost.cost < best.cost.cost - 1e-9;
+            const tieBreak = Math.abs(cost.cost - best.cost.cost) <= 1e-9 &&
+                (Math.abs(dx) + Math.abs(dy)) < (Math.abs(best.dx) + Math.abs(best.dy));
+            if (closer || tieBreak) {
+                best = { dx: dx, dy: dy, cost: cost };
             }
         }
     }
-    // 执行几何的冻结/更新策略（执行单 §5）：
-    //   · 位移低于 minApply：**不动执行几何**，只当作诊断（同一格内落点不变，也不必作废票据）；
-    //   · 位移达标：真的换几何，**同时把 version +1** —— 否则用旧几何算出来的票据会被拿去点新几何的格子。
-    const applied = Math.abs(best.dx) + Math.abs(best.dy) >= minApply;
+    const shift = Math.abs(best.dx) + Math.abs(best.dy);
+    const gain = baseCost.cost > 0 ? (baseCost.cost - best.cost.cost) / baseCost.cost : 0;
+    const worthwhile = baseCost.cost > 0 && gain >= minGain;
+    /** 位移太大 → 拒绝（见 maxApply 的说明）；仍把最好的偏移与增益报出来，便于诊断 */
+    const tooLarge = worthwhile && shift > maxApply;
+    const moved = worthwhile && !tooLarge && (best.dx !== 0 || best.dy !== 0);
+    const applied = moved && shift >= minApply;
+
+    const bestGrid = moved ? Object.assign({}, grid, {
+        originX: grid.originX + best.dx,
+        originY: grid.originY + best.dy
+    }) : grid;
+    const assigned = assignment.assign(detections, bestGrid, assignOptions);
+    // 基础几何的分配只为报「这次对齐认多了几个子」；没挪就不用再算一遍
+    const baseAssigned = moved ? assignment.assign(detections, grid, assignOptions) : assigned;
     let appliedGrid = grid;
     if (applied) {
         appliedGrid = geometry.createGrid({
-            originX: best.grid.originX,
-            originY: best.grid.originY,
-            stepX: best.grid.stepX,
-            stepY: best.grid.stepY,
-            orientation: best.grid.orientation,
+            originX: bestGrid.originX,
+            originY: bestGrid.originY,
+            stepX: bestGrid.stepX,
+            stepY: bestGrid.stepY,
+            orientation: bestGrid.orientation,
             version: baseVersion + 1,
-            quality: best.grid.quality
+            quality: bestGrid.quality
         });
         appliedGrid.alignedFrom = baseVersion;
     }
+    const assignedAtApplied = assigned;
     return {
         grid: appliedGrid,
-        assigned: best.assigned,
+        assigned: assigned,
         report: {
             dx: best.dx,
             dy: best.dy,
-            tried: best.tried,
-            unknown: best.unknown,
-            outOfBoard: best.out,
-            conflicts: best.conflicts,
-            residual: best.residual,
-            moved: best.dx !== 0 || best.dy !== 0,
+            tried: tried,
+            // 以下都是**信息性**指标（挑选目标里不含它们）：给日志与 suspect 用
+            unknown: countUnknown(assigned.cells),
+            outOfBoard: assigned.stats.outOfBoard,
+            conflicts: assigned.stats.conflicts,
+            residual: sumResidual(assigned.cells),
+            /** 纯几何代价（挑选依据）：基础 / 最优 / 相对增益 */
+            costBefore: Number(baseCost.cost.toFixed(4)),
+            costAfter: Number(best.cost.cost.toFixed(4)),
+            gain: Number(gain.toFixed(4)),
+            gainAccepted: worthwhile,
+            meanDistance: Number(best.cost.mean.toFixed(4)),
+            boxes: best.cost.boxes,
+            /** 对齐让「认出的子」多了几个：>0 说明这次对齐在把边缘框收进来（只做诊断） */
+            pieceDelta: assigned.stats.placed - baseAssigned.stats.placed,
+            moved: moved,
+            /** 框拟合想挪但位移超上限 → 拒绝（用校准几何；颜色采样依赖它） */
+            refused: tooLarge ? ("位移 " + shift + "px 超过 maxApply " + maxApply + "，保持校准几何") : null,
             // 量化后是否真的改了「执行几何」；改了就必须换版本，否则旧票据会拿旧几何去点
             applied: applied,
             minApply: minApply,
+            maxApply: maxApply,
+            minGain: minGain,
             versionBefore: baseVersion,
             versionAfter: appliedGrid.version,
-            /** 几何可疑（残差大 / 有框出界）：交给状态机去 RECOVER 重新定位 */
-            suspect: best.out > 0 || best.residual > (cfg.suspectResidual == null ? 0.25 : cfg.suspectResidual)
+            /** 几何可疑（框整体离交点远 / 有框出界）：交给状态机去 RECOVER 重新定位 */
+            suspect: best.cost.outOfBoard > 0 ||
+                best.cost.mean > (cfg.suspectResidual == null ? 0.25 : cfg.suspectResidual)
         }
     };
 }

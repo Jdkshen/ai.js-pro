@@ -1890,6 +1890,98 @@ check("P4·状态机：接管新会话会清基准，旧票据作废", function 
     return gate.reason.indexOf("会话") >= 0 ? true : ("拒绝原因没说清：" + gate.reason);
 });
 
+// ---------------------------------------------------- 几何自动微调（autoAlign）
+
+/** 造一个 9×10 的点阵几何；格距 115px，和 K40 实测同量级。 */
+function makeGrid(originX, originY, version) {
+    return geometry.createGrid({
+        originX: originX, originY: originY, stepX: 115, stepY: 115,
+        orientation: "RED_BOTTOM", version: version == null ? 1 : version
+    });
+}
+
+/** 在给定点阵上，把每个交点摆一个检测框（centreAt 可整体平移，模拟检测框自身的偏置）。 */
+function boxesOnLattice(lattice, centreOffsetX, centreOffsetY) {
+    const list = [];
+    for (let row = 0; row < 10; row++) {
+        for (let col = 0; col < 9; col++) {
+            const point = geometry.pointAt(lattice, col, row);
+            list.push({
+                label: "P", score: 0.9,
+                x: point.x + (centreOffsetX || 0),
+                y: point.y + (centreOffsetY || 0)
+            });
+        }
+    }
+    return list;
+}
+
+check("autoAlign：几何已对准时不挪（幂等）", function () {
+    const lattice = makeGrid(80, 660);
+    const report = recognizer.alignGrid(boxesOnLattice(lattice, 0, 0), lattice, {}, {}).report;
+    if (report.moved || report.applied) {
+        return "对着准的几何还挪了：" + report.dx + "," + report.dy + "（增益 " + report.gain + "）";
+    }
+    return eq(report.dx, 0, "dx");
+});
+
+check("autoAlign：同样的几何连跑两次，第二次一定不动（旧目标不幂等，会每帧 ±3 抖）", function () {
+    const first = recognizer.alignGrid(boxesOnLattice(makeGrid(80, 660), 4, 0), makeGrid(80, 660), {}, {});
+    if (!first.report.applied) {
+        return "4px 偏置应当被纠正，实际 applied=false（增益 " + first.report.gain + "）";
+    }
+    const second = recognizer.alignGrid(boxesOnLattice(makeGrid(80, 660), 4, 0), first.grid, {}, {});
+    if (second.report.moved || second.report.applied) {
+        return "第二次又挪了：" + second.report.dx + "," + second.report.dy;
+    }
+    return eq(second.report.versionAfter, first.report.versionAfter, "版本");
+});
+
+check("autoAlign：检测框整体偏置 18px 时**拒绝**挪几何（挪了颜色采样就废）", function () {
+    // K40 取证：框拟合想把几何挪 (12,6)，挪完黑子被判成红子（红 28 黑 2）。颜色采样以交点为心，
+    // 所以超过 maxApply 的位移必须拒绝，保留颜色校准过的几何。
+    const lattice = makeGrid(80, 660);
+    const report = recognizer.alignGrid(boxesOnLattice(lattice, 12, 6), lattice, {}, {}).report;
+    if (report.applied) {
+        return "超上限的位移不该应用：" + report.dx + "," + report.dy;
+    }
+    if (!report.refused) {
+        return "拒绝了但没说原因（refused 为空）";
+    }
+    return eq(report.versionAfter, report.versionBefore, "版本");
+});
+
+check("autoAlign：位移在 [minApply,maxApply] 内 → 改几何并把版本 +1（票据必须作废）", function () {
+    const lattice = makeGrid(80, 660);
+    const report = recognizer.alignGrid(boxesOnLattice(lattice, 4, 2), lattice, {}, {}).report;
+    if (!report.moved) {
+        return "6px 位移应当纠正，实际 moved=false（增益 " + report.gain + "）";
+    }
+    if (!report.applied) {
+        return "位移 6px 在 [minApply,maxApply] 内却没应用（refused=" + report.refused + "）";
+    }
+    return eq(report.versionAfter, report.versionBefore + 1, "版本");
+});
+
+check("autoAlign：位移小于 minApply 时只改本帧读数、不动执行几何（票据不作废）", function () {
+    const lattice = makeGrid(80, 660);
+    const report = recognizer.alignGrid(boxesOnLattice(lattice, 2, 0), lattice, {}, { minApply: 6 }).report;
+    if (report.applied) {
+        return "位移没到 minApply 却改了执行几何：" + report.dx + "," + report.dy;
+    }
+    return eq(report.versionAfter, report.versionBefore, "版本");
+});
+
+check("autoAlign：定位整体错 40px（框全出界）→ 不硬凑，报告 suspect 交给重新定位", function () {
+    const trueLattice = makeGrid(80, 660);
+    const wrongGrid = makeGrid(40, 620);   // 错 40px
+    const report = recognizer.alignGrid(boxesOnLattice(trueLattice, 0, 0), wrongGrid, {}, {}).report;
+    if (report.applied) {
+        return "40px 错位不该靠微调解决（应当 RECOVER 重新定位）";
+    }
+    return report.suspect ? true : "40px 错位却没有报告 suspect";
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +
