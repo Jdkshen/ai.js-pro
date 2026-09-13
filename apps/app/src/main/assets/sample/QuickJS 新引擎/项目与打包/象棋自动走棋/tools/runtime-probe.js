@@ -139,8 +139,8 @@ report.frames.samePixelSize = (function () {
 // 这里两条都报出来，免得「明明随包了却加载不到」猜半天。
 safe("模型文件", function () {
     report.model.scriptDir = adapter.scriptDir();
-    report.model.modelPath = adapter.resolveProjectFile("assets/models/chessai_160.onnx");
-    report.model.labelsPath = adapter.resolveProjectFile("assets/models/chessai_160.txt");
+    report.model.modelPath = adapter.resolveProjectFile("assets/models/chessai_160x320_v5r.onnx");
+    report.model.labelsPath = adapter.resolveProjectFile("assets/models/chessai_160x320_v5r.txt");
     const onnxExists = (function () {
         try {
             return globals.files && typeof globals.files.isFile === "function"

@@ -44,6 +44,18 @@ const DEFAULTS = {
      * 开着时先只用一次检测结果试若干偏移（很便宜：只是把框归格），挑最优几何再分类阵营。
      */
     autoAlign: false,
+    /**
+     * 裁剪/区域的目标宽高比（宽/高）。null = 用棋盘外框原比例。
+     * 为什么要它：矩形输入模型（如 160×320）是在**竖屏整屏**上训的（实测全屏→0.969，
+     * 裁成方形棋盘→0.832），所以喂它时必须给一个竖屏比例的窗口，
+     * 而不是把方形棋盘裁剪 letterbox 进去（那等于人为造域差）。
+     */
+    regionAspect: null,
+    /**
+     * 检测区域怎么取："board" = 棋盘外框（可再按 regionAspect 扩成竖屏）；
+     * "full" = 整张图（与「全屏→矩形」评测口径一致，矩形档的实测最佳配对）。
+     */
+    regionMode: "board",
     /** 对齐搜索范围：±maxShift 像素，步长 step 像素 */
     alignSearch: { maxShift: 18, step: 3 }
 };
@@ -270,6 +282,50 @@ function alignGrid(detections, grid, assignOptions, search) {
     };
 }
 
+/**
+ * 把棋盘外框按目标宽高比扩成「竖屏窗口」（保持中心不变，不超出图像）。
+ * 用于矩形输入模型：让它看到的是整屏那样的一竖条，而不是方形棋盘裁剪。
+ */
+function fitAspect(box, aspect, image) {
+    if (!aspect || !box || !(aspect > 0)) {
+        return box;
+    }
+    const maxWidth = image && typeof image.getWidth === "function" ? image.getWidth() : null;
+    const maxHeight = image && typeof image.getHeight === "function" ? image.getHeight() : null;
+    let width = box.width;
+    let height = box.height;
+    if (width / height < aspect) {
+        width = height * aspect;          // 太窄 → 左右扩
+    } else {
+        height = width / aspect;          // 太宽 → 上下扩
+    }
+    const centreX = box.x + box.width / 2;
+    const centreY = box.y + box.height / 2;
+    let x = Math.round(centreX - width / 2);
+    let y = Math.round(centreY - height / 2);
+    width = Math.round(width);
+    height = Math.round(height);
+    if (maxWidth != null && maxHeight != null) {
+        // 夹回图像内（尺寸不够时不再拉比例，宁可略偏比例也别越界）
+        x = Math.max(0, Math.min(x, Math.max(0, maxWidth - width)));
+        y = Math.max(0, Math.min(y, Math.max(0, maxHeight - height)));
+        width = Math.min(width, maxWidth);
+        height = Math.min(height, maxHeight);
+    }
+    return { x: x, y: y, width: width, height: height };
+}
+
+function regionBox(opts) {
+    if (opts.regionMode === "full" && opts.image && typeof opts.image.getWidth === "function") {
+        const width = opts.image.getWidth();
+        const height = opts.image.getHeight();
+        if (width > 0 && height > 0) {
+            return { x: 0, y: 0, width: width, height: height };
+        }
+    }
+    return fitAspect(geometry.boundsOf(opts.grid, opts.cropMargin), opts.regionAspect, opts.image);
+}
+
 function recognize(options) {
     const opts = defaults.mergeDefaults(DEFAULTS, options);
     const startedAt = Date.now();
@@ -284,7 +340,7 @@ function recognize(options) {
         return { ok: false, reason: "没有检测器", stage: "input" };
     }
 
-    const box = geometry.boundsOf(opts.grid, opts.cropMargin);
+    const box = regionBox(opts);
     const detectStart = Date.now();
     let raw = [];
     let detectTarget = opts.image;

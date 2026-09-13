@@ -310,6 +310,8 @@ if (!truth) {
                     labels: options.labels,
                     inputWidth: options.inputWidth,
                     inputHeight: options.inputHeight,
+                    regionMode: options.regionMode,
+                    regionAspect: options.regionAspect,
                     radius: options.pickRadius == null ? 18 : options.pickRadius,
                     step: options.pickStep == null ? 4 : options.pickStep,
                     probeCropMargin: 0.5,
@@ -364,6 +366,8 @@ if (!truth) {
                 labels: options.labels,
                 inputWidth: options.inputWidth,
                 inputHeight: options.inputHeight,
+                regionMode: options.regionMode,
+                regionAspect: options.regionAspect,
                 search: options.search || { maxShift: 18, step: 3 },
                 maxCandidates: options.maxCandidates == null ? 25 : options.maxCandidates
             });
@@ -386,7 +390,9 @@ if (!truth) {
             model: options.model,
             labels: options.labels,
             inputWidth: options.inputWidth,
-            inputHeight: options.inputHeight
+            inputHeight: options.inputHeight,
+            regionMode: options.regionMode,
+            regionAspect: options.regionAspect
         }, null);
 
         const expect = expand(truth[name]);

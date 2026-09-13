@@ -1043,7 +1043,7 @@ check("结果文本：模型要报出文件名，不能是 undefined", function 
         detectionCount: 34,
         unknownCells: 2,
         // ⚠️ 这里就是曾经写成 result.model.model 的地方（loaded.request 里只有 modelPath）
-        model: { modelPath: "C:\\x\\assets\\models\\chessai_160.onnx", inputSize: 160 },
+        model: { modelPath: "C:\\x\\assets\\models\\chessai_160x320_v5r.onnx", inputSize: 160, inputWidth: 160, inputHeight: 320 },
         modelSource: "脚本目录",
         layout: "9/9",
         chars: new Array(90).fill("?")
@@ -1057,7 +1057,7 @@ check("结果文本：模型要报出文件名，不能是 undefined", function 
     if (text.indexOf("undefined") >= 0) {
         return "结果文本里出现了 undefined：" + text.split("\n").slice(0, 3).join(" | ");
     }
-    if (text.indexOf("chessai_160.onnx") < 0) {
+    if (text.indexOf("chessai_160x320_v5r.onnx") < 0) {
         return "没有报出模型文件名：" + text.split("\n").slice(0, 3).join(" | ");
     }
     return true;

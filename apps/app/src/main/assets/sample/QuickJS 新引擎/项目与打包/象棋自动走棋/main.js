@@ -536,7 +536,7 @@ function rebuildDriver() {
         config: {
             tickMs: 900,
             movetimeMs: 1200,
-            modelVersion: "chessai_160",
+            modelVersion: "chessai_160x320_v5r",
             confidence: 0.25,
             orientation: "RED_BOTTOM",
             regionRatio: regionRatioFromUi()

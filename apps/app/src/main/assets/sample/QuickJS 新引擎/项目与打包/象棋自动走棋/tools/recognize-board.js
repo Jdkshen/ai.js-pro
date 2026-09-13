@@ -8,7 +8,7 @@
  *   const out = board.recognizeImage("/sdcard/Download/chess-shot-01.png");
  *   board.describeResult(out)   // 给人看的多行文本
  *
- * 模型放在工程的 assets/models/ 下（chessai_160.onnx + chessai_160.txt 标签）。
+ * 模型放在工程的 assets/models/ 下（v5r 矩形档 chessai_160x320_v5r.onnx + chessai_160x320_v5r.txt 标签）。
  * 标签就是 7 个兵种字母 R N B A K C P（与 fen.js 同一套字符）。
  * ⚠️ 这个模型**没有红黑**，阵营靠格心颜色采样补（见 src/vision/piece-side.js）。
  */
@@ -24,9 +24,30 @@ const fen = require("../src/chess/fen.js");
 const cells = require("../src/vision/cells.js");
 const gridSearch = require("../src/vision/grid-search.js");
 
-const MODEL_FILE = "assets/models/chessai_160.onnx";
-const LABELS_FILE = "assets/models/chessai_160.txt";
-const INPUT_SIZE = 160;
+/**
+ * 内置模型（v5r，2026-09-13 接入）：
+ *   · 默认用**矩形档** `chessai_160x320_v5r.onnx`（输入 1×3×320×160，即宽 160 高 320），
+ *     并配 **整屏入检**（`REGION_MODE = "full"`）：K40 冻结帧实测（9 帧 /787 格，人工真值）
+ *     整屏→矩形 763/787 = 97.0% ＞ 裁棋盘→矩形 759/787 = 96.4%，
+ *     而且这正好是训练侧的评测口径（电脑端 xq36：全屏→矩形 0.969）。
+ *   · 方形档 `chessai_160_v5r.onnx`（1×3×160×160）作为回滚/对照（同套帧 771/787 = 98.0%，
+ *     纯颜色错 0）：改下面四个常量（MODEL_FILE / LABELS_FILE / REGION_ASPECT=null / REGION_MODE="board"）。
+ *   · 更老的 `chessai_160.onnx` 保留在目录里，供历史评测脚本对照（同套帧 782/787 = 99.4%，
+ *     但这 9 帧很可能就是它当初的基线集，有「见过」的嫌疑，不能当泛化结论）。
+ */
+const MODEL_FILE = "assets/models/chessai_160x320_v5r.onnx";
+const LABELS_FILE = "assets/models/chessai_160x320_v5r.txt";
+const INPUT_WIDTH = 160;
+const INPUT_HEIGHT = 320;
+/** 喂矩形模型时希望的区域宽高比（见 recognizer.DEFAULTS.regionAspect 的说明） */
+const REGION_ASPECT = INPUT_WIDTH / INPUT_HEIGHT;
+/**
+ * 检测区域怎么取："full" = 整屏（实测 97.0%，训练侧也是这套「全屏→矩形」口径）；
+ * "board" = 只裁棋盘外框（实测 96.4%，比整屏差）。
+ * 方形档回滚时把它设成 "board"。
+ */
+const REGION_MODE = "full";
+const INPUT_SIZE = INPUT_WIDTH;   // 方形档回滚时用（同时把 REGION_ASPECT 设为 null）
 const THREADS = 4;
 
 /** 模型/标签的路径（磁盘优先，否则 asset://）。给界面显示用，方便看出跑的是哪份。 */
@@ -73,11 +94,12 @@ function loadDetector(options) {
         inputSize: opts.inputSize == null ? INPUT_SIZE : opts.inputSize,
         threads: opts.threads == null ? THREADS : opts.threads
     };
-    // 竖屏（非方形）模型：160×320 这种。引擎会按 inputWidth/inputHeight 做 letterbox，
-    // 不传的话会按方形处理 → 输入尺寸与模型不匹配。
-    if (opts.inputWidth && opts.inputHeight) {
-        request.inputWidth = opts.inputWidth;
-        request.inputHeight = opts.inputHeight;
+    // 矩形（非方形）模型：必须显式给 inputWidth/inputHeight，否则引擎按方形 letterbox，比例就错了
+    const inputWidth = opts.inputWidth == null ? INPUT_WIDTH : opts.inputWidth;
+    const inputHeight = opts.inputHeight == null ? INPUT_HEIGHT : opts.inputHeight;
+    if (inputWidth && inputHeight && inputWidth !== inputHeight) {
+        request.inputWidth = inputWidth;
+        request.inputHeight = inputHeight;
     }
     const candidates = opts.model
         ? [{ label: "调用方指定", model: opts.model, labels: opts.labels }]
@@ -179,6 +201,10 @@ function run(image, located, opts, frame) {
             return adapter.rgbAt(img, x, y);
         },
         cropMargin: opts.cropMargin,
+        // 矩形模型要竖屏窗口（默认 160/320）；方形档回滚时传 regionAspect: null
+        regionAspect: opts.regionAspect === undefined ? REGION_ASPECT : opts.regionAspect,
+        // "full" = 整屏入检（与训练侧的「全屏→矩形」评测口径一致）；"board" 只裁棋盘
+        regionMode: opts.regionMode === undefined ? REGION_MODE : opts.regionMode,
         confidence: opts.confidence,
         minScore: opts.minScore,
         frameQuality: opts.frameQuality,
@@ -343,7 +369,11 @@ function describeResult(result) {
     // result.model.model 就会打出「模型：undefined」
     const request = result.model || {};
     const modelFile = request.modelPath ? String(request.modelPath).split(/[\\/]/).pop() : "(未知)";
-    lines.push("模型：" + modelFile + "（" + result.modelSource + "，输入 " + request.inputSize + "）");
+    // 矩形档要报 宽×高，不能只报 inputSize（否则显示成 undefined）
+    const inputDesc = (request.inputWidth && request.inputHeight)
+        ? (request.inputWidth + "×" + request.inputHeight)
+        : String(request.inputSize);
+    lines.push("模型：" + modelFile + "（" + result.modelSource + "，输入 " + inputDesc + "）");
     lines.push("检测：" + result.detectionCount + " 个框 → 落到格上 " + stats.placed +
         "，未知格 " + stats.unknownCells + "，淘汰(低分/出界) " +
         (stats.detected - stats.placed - stats.unknown));

@@ -86,3 +86,25 @@ output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，�
 `.onnx` 走 git LFS（已确认本文件 filter=lfs）；`*.nnue`（本地引擎权重，约 48 MiB）**目前没有 LFS 规则**，
 直接提交会塞进普通 blob，放进来之前先在 `.gitattributes` 里加 `*.nnue filter=lfs diff=lfs merge=lfs -text`。
 
+
+## v5r（2026-09-13 接入，当前默认）
+
+| 文件 | 输入 | 用途 |
+| --- | --- | --- |
+| `chessai_160x320_v5r.onnx` | 1×3×320×160（宽 160 高 320） | **默认**：竖屏整屏上盘面级成绩最好 |
+| `chessai_160_v5r.onnx` | 1×3×160×160 | 方形档回滚/对照 |
+| `chessai_160.onnx` | 1×3×160×160 | 更老的基线，供历史评测脚本对照 |
+
+两者输出都是 `[1, 300, 6]`（end2end，无需额外 NMS），标签集不变（7 类 R N B A K C P，
+颜色仍由格心像素采样判定）。
+
+⚠️ **矩形档用整屏入检，不要裁棋盘再喂**：K40 冻结帧实测（9 帧 / 787 格，人工真值）
+`整屏→矩形 763/787 = 97.0%` ＞ `裁棋盘→矩形 759/787 = 96.4%` ＞（方形档 771/787 = 98.0%），
+而且整屏正好是训练侧的评测口径（电脑端 xq36：全屏→矩形 0.969）。
+所以 `tools/recognize-board.js` 里 `REGION_MODE = "full"`（`recognizer.regionMode === "full"`
+时检测区域 = 整张图；`"board"` 才是裁棋盘外框）。
+⚠️ 这 9 帧很可能就是更老的 `chessai_160.onnx`（同套帧 782/787 = 99.4%）当年的基线集，
+它「见过」这些帧，所以那个数不能当泛化结论；v5r 的强项（残局页）也不在这套帧里。
+
+回滚到方形档：`tools/recognize-board.js` 里把 `MODEL_FILE/LABELS_FILE` 换成
+`chessai_160_v5r.onnx/txt`，并把 `REGION_ASPECT` 设为 `null`、`REGION_MODE` 设为 `"board"`。
