@@ -24,6 +24,7 @@ const searchWorkerModule = require("./search-worker.js");
 const transition = require("../chess/transition.js");
 const fenModule = require("../chess/fen.js");
 const legal = require("../chess/legal-moves.js");
+const rulesModule = require("../chess/rules.js");
 const defaults = require("../util/defaults.js");
 const logRing = require("../diagnostics/log-ring.js");
 
@@ -136,6 +137,9 @@ function createDriver(options) {
     stats.frameConflicts = 0;
     stats.sideFixes = 0;          // 「盘面按着法改正」次数（落点格被装饰读错时）
     stats.budgetPauses = 0;       // 因「同局面/同手重试超限」暂停的次数
+    stats.sourceGoneRefusals = 0; // 重试前发现「起点子已不在原位」而拒发的次数（§11）
+    stats.rawCorrected = 0;       // 「模型原始读数和最终盘面不一致」的观测次数（§12）
+    let lastRawCorrectedText = "";
     // 日志环：超上限**原地裁剪**（以前的 `const history` + `history = history.slice()` 会抛异常）
     const history = logRing.createLogRing(300, 200);
 
@@ -144,6 +148,8 @@ function createDriver(options) {
     let lastReliable = null;      // { board, side }：上一可靠局面与「该走棋方」
     let lastResult = null;        // 最近一次识别结果（界面/诊断用）
     let lastBoard = null;
+    /** 最近一次观测里**模型读到的原始盘面**（补丁/补齐之前）——诊断与审核用（§12） */
+    let lastRawChars = null;
     /** 本次观测里，轮次推断给出的「按着法改正过的盘面」（仅当确实改动了观测时才存在） */
     let lastSideFix = null;
     /**
@@ -153,6 +159,12 @@ function createDriver(options) {
      */
     const attemptsByMove = {};
     const attemptsByPosition = {};
+    /**
+     * 容差解释的跨帧证据（§12）：装饰容差给的解释必须**连续两帧一致**才采信。
+     * 为什么：两步解释即使唯一，也只是「在给定基准和候选集合内唯一」；模型可能持续把同一格
+     * 读错，单帧就据此行动等于拿噪声当事实。冲突（换了另一种解释）则重新计数、继续等。
+     */
+    let toleranceEvidence = { key: "", count: 0 };
     /** 上次重新定位的单调时间 + 最小间隔（见 recover 的限频说明：定位一次 ~8s，而棋子移动不改变几何） */
     let lastRelocateMono = 0;
     const RELOCATE_MIN_INTERVAL_MS = 30000;
@@ -489,6 +501,26 @@ function createDriver(options) {
                 type: "CLICK_RESULT", ticket: ticket, status: "REJECTED",
                 clickCount: 0, reason: gate.reason
             }));
+        }
+        // ---- §11：重试前必须确认「起点子还在」----
+        // 局面已经变了（子被吃/已走/记错了）时再点起点，只会点到空点或对方子，
+        // 白烧一次尝试额度（预算就是被这种空转吃掉的）。
+        const srcIndex = rulesModule.iccsSquare(ticket.moveICCS, 0);
+        const trustedBoard = (lastReliable && lastReliable.board) ? lastReliable.board : lastBoard;
+        if (srcIndex != null && trustedBoard) {
+            const here = trustedBoard[srcIndex];
+            const mine = (machine.mySide() === "w")
+                ? rulesModule.isRedPiece(here)
+                : rulesModule.isBlackPiece(here);
+            if (!mine) {
+                stats.sourceGoneRefusals += 1;
+                note("重试前核对：起点格(" + ticket.move.fromCol + "," + ticket.move.fromRow + ")现在是 " +
+                    (here && here !== "?" ? here : "空/未知") + "，不再是我方子 → **不发点击**（局面已变，重算）");
+                return pump(machine.dispatch({
+                    type: "CLICK_RESULT", ticket: ticket, status: "REJECTED", clickCount: 0,
+                    reason: "起点子已不在原位（局面已变），未发送点击"
+                }));
+            }
         }
         // ---- 尝试预算（§11：同一局面/同一手不许无限重试）----
         const budget = takeAttemptBudget(ticket);
@@ -952,6 +984,10 @@ function createDriver(options) {
         // 棋规层再把它降级成 '?'。**我方落子和对方应手的子都会被画环**，所以这是
         // 一张表（最多两格）。不补的话未知格≠0，轮次推断直接放弃 → 卡死在 RECOVERING。
         // 每一格一旦能自己认出来（或被吃/换子）就自动从表里去掉。
+        // ⚠️ **先留一份模型读到的原始观测**（§12）：后面的补丁/补脑/纠色会就地改 `result.chars`，
+        // 不留原始读数就分不清「模型看到了什么」与「我们按规则改成了什么」。
+        // 诊断与审核只看 rawChars，行动仍看修正后的盘面（两者都必须能查到）。
+        const rawChars = result.chars ? result.chars.slice() : null;
         let patchedNow = null;
         let unknownCells = result.unknownCells == null ? 0 : result.unknownCells;
         if (knownPatches.length > 0 && result.chars) {
@@ -1044,9 +1080,34 @@ function createDriver(options) {
         // lastBoard 要在**补齐/纠色之后**记：它会被「现在轮到我」拿去当基准，
         // 存的必须是「目前最可信的那张盘」（带 '?' 的原始观测会让基准不干净）。
         lastBoard = result.chars ? result.chars.slice() : null;
+        lastRawChars = rawChars;
+        // 原始读数与修正后盘面不一致时记一笔（限频）：审核、复现都靠它
+        if (rawChars && result.chars && rawChars.join("") !== result.chars.join("")) {
+            let diffCount = 0;
+            const changed = [];
+            for (let i = 0; i < 90; i++) {
+                if (rawChars[i] !== result.chars[i]) {
+                    diffCount += 1;
+                    if (changed.length < 6) {
+                        changed.push("(" + (i % 9) + "," + Math.floor(i / 9) + ")" +
+                            (rawChars[i] || "空") + "→" + (result.chars[i] || "空"));
+                    }
+                }
+            }
+            stats.rawCorrected += 1;
+            const text = "原始读数被修正 " + diffCount + " 格：" + changed.join(" ") +
+                (diffCount > changed.length ? " …" : "");
+            if (lastRawCorrectedText !== text) {
+                lastRawCorrectedText = text;
+                note(text);
+            }
+        } else {
+            lastRawCorrectedText = "";
+        }
         return {
             ok: true,
             chars: result.chars,
+            rawChars: rawChars,
             unknownCells: unknownCells,
             patched: patchedNow,
             conflicts: result.stats && result.stats.conflicts ? result.stats.conflicts : 0,
@@ -1086,6 +1147,11 @@ function createDriver(options) {
         const inferred = transition.infer(lastReliable.board, lastReliable.side, board, { allowPair: true });
         if (inferred.status === "MOVE" || inferred.status === "MOVE_PAIR") {
             const settled = inferred.board ? inferred.board.slice() : board.slice();
+            // 容差解释（§12）：必须连续两帧一致才行动，否则只等
+            if (inferred.tolerant === true && !tolerantSupportedByTwoFrames(lastReliable.board, inferred.reason)) {
+                lastSideFix = null;
+                return null;
+            }
             if (inferred.board && legal.diffBoards(settled, board).length > 0) {
                 lastSideFix = { board: settled, how: inferred.reason };
             }
@@ -1107,6 +1173,10 @@ function createDriver(options) {
         // 收紧点：只允许**一格**不同，而且那格必须正是该着法的落点；其余格子仍要完全一致。
         const tolerant = inferWithDecorationTolerance(lastReliable.board, lastReliable.side, board);
         if (tolerant) {
+            if (!tolerantSupportedByTwoFrames(lastReliable.board,
+                "唯一合法单步 " + tolerant.iccs)) {
+                return null;
+            }
             lastSideFix = { board: tolerant.board, how: "唯一合法单步 " + tolerant.iccs };
             lastReliable = { board: tolerant.board, side: tolerant.nextSide };
             note("轮次推断（装饰容差）：唯一合法单步 " + tolerant.iccs +
@@ -1119,6 +1189,9 @@ function createDriver(options) {
         if (stats.unknownTurn <= 3 || stats.unknownTurn % 10 === 0) {
             const baseFen = lastReliable ? safeFen(lastReliable.board, lastReliable.side) : "（无基准）";
             note("诊断基准 " + baseFen);
+            if (lastRawChars) {
+                note("诊断原始读数 " + safeFen(lastRawChars, lastReliable ? lastReliable.side : "w"));
+            }
             note("诊断观测 " + safeFen(board, lastReliable ? lastReliable.side : "w") +
                 (inferred.debug ? "｜容差：我方着法 " + inferred.debug.ownMoves +
                     "，试 " + inferred.debug.tried + "，最小差 " + inferred.debug.minDiff +

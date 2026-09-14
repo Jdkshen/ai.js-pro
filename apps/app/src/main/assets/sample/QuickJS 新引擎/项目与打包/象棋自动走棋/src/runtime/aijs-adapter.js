@@ -672,6 +672,68 @@ function runShellCapture(command, timeoutMs) {
 }
 
 /**
+ * 列出「覆盖屏幕上某点的窗口」（诊断用，§10.2）。
+ *
+ * 为什么要它：注入的触摸落在**最上面的那个可触摸窗口**上 —— 如果目标坐标那一带压着别人的
+ * 窗口（包括我们自己的悬浮窗），游戏就收不到点击，而日志上只会看到「接口调用成功」。
+ * ⚠️ 只做粗解析（`Window{…}` / `mFrame=` / `isVisible=` 三样），拿不到就返回空数组 ——
+ *    空数组只能说明「没查到」，不能当作「确认没遮挡」。
+ */
+function windowsAt(x, y) {
+    const text = runShellCapture("dumpsys window windows", 5000);
+    if (!text) {
+        return [];
+    }
+    const lines = String(text).split("\n");
+    const all = [];
+    let current = null;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const head = line.match(/Window\{[0-9a-f]+ u0 ([^ }]+)\}/);
+        if (head) {
+            if (current) {
+                all.push(current);
+            }
+            current = { name: head[1], frame: null, visible: null };
+            continue;
+        }
+        if (!current) {
+            continue;
+        }
+        if (!current.frame) {
+            const frame = line.match(/mFrame=\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/);
+            if (frame) {
+                current.frame = [Number(frame[1]), Number(frame[2]), Number(frame[3]), Number(frame[4])];
+            }
+        }
+        if (current.visible == null) {
+            const vis = line.match(/isVisible=(\w+)/);
+            if (vis) {
+                current.visible = vis[1] === "true";
+            }
+        }
+    }
+    if (current) {
+        all.push(current);
+    }
+    const covering = [];
+    for (let i = 0; i < all.length; i++) {
+        const win = all[i];
+        if (!win.frame) {
+            continue;
+        }
+        const f = win.frame;
+        if (x >= f[0] && y >= f[1] && x <= f[2] && y <= f[3]) {
+            covering.push({ name: win.name, frame: f, visible: win.visible });
+        }
+        if (covering.length >= 8) {
+            break;
+        }
+    }
+    return covering;
+}
+
+/**
  * **谁真的拿到触摸焦点**（包名）；拿不到返回 null。
  *
  * 为什么不用 `dumpsys activity activities | grep topResumedActivity`：多任务下它会给误导值
@@ -993,6 +1055,7 @@ const AIJS_ADAPTER = {
     bringToFrontByRecents: bringToFrontByRecents,
     pressAppSwitch: pressAppSwitch,
     screenSize: screenSize,
+    windowsAt: windowsAt,
     overlayAvailable: overlayAvailable,
     overlayShow: overlayShow,
     overlayUpdate: overlayUpdate,

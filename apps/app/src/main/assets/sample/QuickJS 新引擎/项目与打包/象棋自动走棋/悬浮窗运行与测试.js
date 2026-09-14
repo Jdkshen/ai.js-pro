@@ -46,7 +46,12 @@ const PROBE_FILES = [
     "src/runtime/aijs-adapter.js",
     "src/automation/click-executor.js",
     "src/automation/auto-driver.js",
-    "src/automation/state-machine.js"
+    "src/automation/state-machine.js",
+    // 下面这四个是「推一半」最容易漏的（真机事故：没推 rules.js，驱动每轮 EXECUTE_TICKET 报 not a function）
+    "src/chess/rules.js",
+    "src/chess/transition.js",
+    "src/automation/move-verifier.js",
+    "src/diagnostics/log-ring.js"
 ];
 
 /** 32 位 FNV-1a，避免依赖 crypto（QuickJS 里不一定有）。 */
@@ -85,6 +90,9 @@ const locateBoard = load("tools/locate-board.js");
 const driverModule = load("src/automation/auto-driver.js");
 const engineModule = load("src/engine/engine.js");
 const cellsContract = load("src/vision/cells.js");
+// 探针的开局校验要用：FEN 解析 + 盘面比对（只读，不参与循环）
+const fenModule = load("src/chess/fen.js");
+const legalModule = load("src/chess/legal-moves.js");
 const overlayDraw = load("src/vision/overlay-draw.js");
 // 跨引擎互锁：主界面（main.js）里还有另一套驱动循环，两边一起跑会双份截图/算棋，
 // 模式③还会双份点击棋盘 —— 用同一个锁文件互斥（见 src/automation/loop-lock.js）。
@@ -932,12 +940,47 @@ function runTapProbe(config) {
         const before = grabFrameRaw();
         if (before) {
             images.save(before.image, probePng(label + "-before"));
+            // 帧尺寸 / 屏幕尺寸 / 换算比例（§10.2）：识别坐标是帧上的，点击坐标是屏幕上的，
+            // 两者不等比时（缩放/旋转）必须能从日志里看出来。
+            try {
+                const info = adapter.sizeOf(before.image);
+                const screen = adapter.screenSize ? adapter.screenSize() : null;
+                report.frame = {
+                    width: info ? info.width : null,
+                    height: info ? info.height : null,
+                    screenWidth: screen ? screen.width : null,
+                    screenHeight: screen ? screen.height : null,
+                    scaleX: (info && screen && info.width) ? (screen.width / info.width) : null,
+                    scaleY: (info && screen && info.height) ? (screen.height / info.height) : null
+                };
+                logLine("探针帧：" + (info ? info.width + "×" + info.height : "?") +
+                    "，屏幕 " + (screen ? screen.width + "×" + screen.height : "?") +
+                    "，换算 " + (report.frame.scaleX ? report.frame.scaleX.toFixed(3) : "?") + "×" +
+                    (report.frame.scaleY ? report.frame.scaleY.toFixed(3) : "?"));
+            } catch (error) {
+                logLine("探针帧尺寸读取失败：" + error);
+            }
+        }
+        // 开局校验（§10.2）：32 子 + 与标准开局一致，否则本轮作废（除非调用方显式关掉）。
+        if (cfg.expectOpening !== false) {
+            const check = probeCheckOpening(grid);
+            report.openingCheck = check;
+            if (!check.ok) {
+                report.verdict = "开局校验不通过，未发手势：" + check.reason;
+                logLine("探针 " + label + "：" + report.verdict);
+                saveProbeReport(report);
+                return report;
+            }
         }
         logLine("探针 " + label + "：请求通道=" + channel + " 实际=" + tapper.method +
             " 按压=" + pressMs + "ms｜起点格(" + cfg.fromCol + "," + cfg.fromRow + ")→(" + from.x + "," + from.y + ")｜" +
             "落点格(" + cfg.toCol + "," + cfg.toRow + ")→(" + to.x + "," + to.y + ")｜几何v" + grid.version);
 
         // ① 起点手势
+        report.focusBeforeFrom = adapter.focusedWindowPackage ? adapter.focusedWindowPackage() : null;
+        report.windowsBeforeFrom = adapter.windowsAt ? adapter.windowsAt(from.x, from.y) : [];
+        logLine("探针出手前：焦点=" + (report.focusBeforeFrom || "读不到") +
+            "，覆盖该点的窗口 " + (report.windowsBeforeFrom.length ? JSON.stringify(report.windowsBeforeFrom) : "（未查到）"));
         const r1 = tapper.tap(from.x, from.y, { pressMs: pressMs });
         report.steps.push({
             step: "tap-from", x: from.x, y: from.y, ok: !!r1.ok, method: r1.method,
@@ -1083,6 +1126,36 @@ function probePoint(grid, col, row, mode, centers) {
     point.source = "实测框圆心";
     point.normalizedResidual = geometryModule.normalizedResidual(grid, entry.x, entry.y);
     return point;
+}
+
+/**
+ * 探针开局校验（§10.2）：子力 32 且与标准开局完全一致。
+ * 为什么要：真机上曾经“重置开局”实际没重开（选中/悔棋残留），后面所有对照都白做。
+ */
+function probeCheckOpening(grid) {
+    const recognized = probeRecognize(grid);
+    if (!recognized || !recognized.ok || !recognized.chars) {
+        return { ok: false, reason: "识别失败，拿不到盘面（" + (recognized && recognized.reason ? recognized.reason : "无结果") + "）" };
+    }
+    const counts = cellsContract.count(recognized.chars);
+    if (recognized.unknownCells > 0) {
+        return { ok: false, reason: "盘面有 " + recognized.unknownCells + " 个未知格" };
+    }
+    if (counts && counts.pieces !== 32) {
+        return { ok: false, reason: "子力不是 32（实际 " + counts.pieces + "）" };
+    }
+    let start = null;
+    try {
+        start = fenModule.parseFen(fenModule.START_FEN);
+    } catch (error) {
+        start = null;
+    }
+    if (start && start.ok && !(legalModule && legalModule.boardMatches
+        ? legalModule.boardMatches(recognized.chars, start.board)
+        : recognized.chars.join("") === start.board.join(""))) {
+        return { ok: false, reason: "盘面不是标准开局（子力 " + (counts ? counts.pieces : "?") + "）" };
+    }
+    return { ok: true, reason: "标准开局，子力 " + (counts ? counts.pieces : "?") };
 }
 
 function saveProbeReport(report) {

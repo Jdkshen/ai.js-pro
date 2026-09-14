@@ -1709,6 +1709,10 @@ check("R05e 落点格被装饰读错兵种时，「一手+应手」仍要能认�
     if (result.status !== transition.STATUS.MOVE_PAIR) {
         return "应认成两步解释，实际 " + result.status + "：" + result.reason;
     }
+    // 容差解释**必须**带标记：驱动靠它追加「连续两帧一致」的门槛（§12）
+    if (result.tolerant !== true) {
+        return "容差解释没有被标 tolerant，驱动就无从追加跨帧证据";
+    }
     if (!result.board || !legal.boardMatches(result.board, end)) {
         return "没能给出「按着法改正过」的盘面";
     }
@@ -1723,7 +1727,6 @@ check("R05e 落点格被装饰读错兵种时，「一手+应手」仍要能认�
 });
 
 check("R05f 只差「同字母换大小写」的装饰噪声 → 判没走子（真机盘面）", function () {
-    // 2026-09-14 K40 真机卡死时的两张盘面（诊断日志原样）：
     // 两手的起点都还在原位，只有 (2,3)/(4,6) 两格的兵卒被读出反色。
     const before = fen.parseFen("rnbakabnr/9/1c2c4/p1p1p1p1p/9/9/P1P1P1P1P/2C4C1/9/RNBAKABNR").board;
     const observed = fen.parseFen("rnbakabnr/9/1c2c4/p1P1p1p1p/9/9/P1P1p1P1P/2C4C1/9/RNBAKABNR").board;
@@ -2332,6 +2335,23 @@ check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（�
 
 const logRingModule = require("../src/diagnostics/log-ring.js");
 const adapterModule = require("../src/runtime/aijs-adapter.js");
+
+check("ICCS 换算：a..i + 行号 9..0 → 90 格下标（驱动/验证器/推理共用一份）", function () {
+    const rulesModule = require("../src/chess/rules.js");
+    if (rulesModule.iccsSquare("b2c2", 0) !== (9 - 2) * 9 + 1) {
+        return "起点换算错：b2 应当 = 64，实际 " + rulesModule.iccsSquare("b2c2", 0);
+    }
+    if (rulesModule.iccsSquare("b2c2", 1) !== (9 - 2) * 9 + 2) {
+        return "落点换算错：c2 应当 = 65，实际 " + rulesModule.iccsSquare("b2c2", 1);
+    }
+    if (rulesModule.iccsSquare("a9i0", 0) !== 0 || rulesModule.iccsSquare("a9i0", 1) !== 89) {
+        return "边界换算错：a9 应 = 0、i0 应 = 89";
+    }
+    if (rulesModule.iccsSquare("b2", 0) !== null || rulesModule.iccsSquare("", 1) !== null) {
+        return "非法 ICCS 应当返回 null";
+    }
+    return true;
+});
 
 check("长跑：日志环超过上限要原地裁剪，不许抛「常量重新赋值」", function () {
     // 真机回归：`const history = []; history = history.slice(-200)` 在超过 300 条时抛

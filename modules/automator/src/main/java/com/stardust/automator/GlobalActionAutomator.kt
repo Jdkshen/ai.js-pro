@@ -6,6 +6,7 @@ import android.graphics.Path
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.annotation.RequiresApi
 import android.view.ViewConfiguration
 
@@ -18,6 +19,17 @@ import com.stardust.util.ScreenMetrics
  */
 
 class GlobalActionAutomator(private val mHandler: Handler?, private val serviceProvider: () -> AccessibilityService) {
+
+    companion object {
+        /**
+         * 手势日志 tag。
+         *
+         * 为什么要打：JS 侧只能拿到一个布尔值（true = onCompleted，false = onCancelled/失败），
+         * 排查“点击发出去了、棋子不动”时无法区分「被系统取消」「服务死了」「派发失败」。
+         * 抓：`adb logcat -s DshGesture:V`
+         */
+        const val GESTURE_TAG = "DshGesture"
+    }
 
     private val service: AccessibilityService
         get() = serviceProvider()
@@ -101,12 +113,16 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
     @RequiresApi(api = Build.VERSION_CODES.N)
     private fun gesturesWithHandler(handler: Handler, description: GestureDescription): Boolean {
         val result = VolatileDispose<Boolean>()
+        Log.d(GESTURE_TAG, "submit strokes=" + description.strokeCount)
         service.dispatchGesture(description, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription) {
+                Log.d(GESTURE_TAG, "completed strokes=" + gestureDescription.strokeCount)
                 result.setAndNotify(true)
             }
 
             override fun onCancelled(gestureDescription: GestureDescription) {
+                Log.w(GESTURE_TAG, "cancelled strokes=" + gestureDescription.strokeCount +
+                        "（被系统/另一个手势取消，或服务掉线；退回交点再点往往无效）")
                 result.setAndNotify(false)
             }
         }, handler)
@@ -118,13 +134,16 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
         prepareLooperIfNeeded()
         val result = VolatileBox(false)
         val handler = Handler(Looper.myLooper()!!)
+        Log.d(GESTURE_TAG, "submit(no-handler) strokes=" + description.strokeCount)
         service.dispatchGesture(description, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription) {
+                Log.d(GESTURE_TAG, "completed(no-handler)")
                 result.set(true)
                 quitLoop()
             }
 
             override fun onCancelled(gestureDescription: GestureDescription) {
+                Log.w(GESTURE_TAG, "cancelled(no-handler)")
                 result.set(false)
                 quitLoop()
             }

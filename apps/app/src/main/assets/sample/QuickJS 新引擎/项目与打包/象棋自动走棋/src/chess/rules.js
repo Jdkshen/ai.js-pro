@@ -248,6 +248,25 @@ function moveToIccs(move) {
     return files.charAt(move.fromCol) + (9 - move.fromRow) + files.charAt(move.toCol) + (9 - move.toRow);
 }
 
+/**
+ * ICCS 记法（文件字母 a..i + 行号 9..0）里第 which 个端点的 90 格下标；非法返回 null。
+ * which: 0 = 起点，1 = 落点。
+ * ⚠️ 以前这段换算在驱动/验证器/推理里各写了一份，改一处必须改三处 —— 统一放这里。
+ */
+function iccsSquare(iccs, which) {
+    const text = String(iccs == null ? "" : iccs);
+    if (!/^[a-i][0-9][a-i][0-9]$/.test(text)) {
+        return null;
+    }
+    const offset = which === 0 ? 0 : 2;
+    const file = "abcdefghi".indexOf(text.charAt(offset));
+    const rank = Number(text.charAt(offset + 1));
+    if (file < 0 || !isFinite(rank)) {
+        return null;
+    }
+    return (9 - rank) * COLS + file;
+}
+
 const XQ_RULES = {
     ROWS: ROWS,
     COLS: COLS,
@@ -263,7 +282,8 @@ const XQ_RULES = {
     kingsFacing: kingsFacing,
     isAttacked: isAttacked,
     isInCheck: isInCheck,
-    moveToIccs: moveToIccs
+    moveToIccs: moveToIccs,
+    iccsSquare: iccsSquare
 };
 
 module.exports = XQ_RULES;

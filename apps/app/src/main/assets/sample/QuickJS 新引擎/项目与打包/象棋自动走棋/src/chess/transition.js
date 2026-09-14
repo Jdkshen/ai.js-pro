@@ -144,6 +144,9 @@ function infer(before, side, observed, options) {
             nextSide: side,
             candidates: [tolerant.first, tolerant.second],
             board: tolerant.board,
+            // 标成「容差解释」：调用方（驱动）必须追加**跨帧证据**才允许据此行动
+            tolerant: true,
+            tuned: tolerant.debug,
             reason: "己方 " + tolerant.first.iccs + " + 对方应手 " + tolerant.second.iccs +
                 "（落点格被游戏装饰读错，已按着法改正）"
         };
