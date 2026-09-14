@@ -129,6 +129,8 @@ function createDriver(options) {
     };
     /** 落点格按票据补齐的次数（游戏给刚落的子加高亮，那一格认不出来） */
     stats.ownMovePatched = 0;
+    /** 其中「同字异色（红黑读反）」被按已知事实补齐的次数（见 observeOnce 第 ③ 支） */
+    stats.sameGlyphPatched = 0;
     stats.knownFactFills = 0;
     /** 颜色读反被纠正的格子数（游戏装饰导致的已知模型弱点） */
     stats.colorFlips = 0;
@@ -1064,20 +1066,30 @@ function createDriver(options) {
                     keep.push(patch);
                     continue;
                 }
-                // ③ 读成了**别的子**：真机实测（K40）我方炮吃卒落在卒位后，那一格一直被读成
-                //    「红兵 P」而不是炮 —— 于是轮次推断拿到的盘面「差一格且不是合法着法」→ 永远推不出。
-                //    ⚠️ 只在**同色**时才用已知事实覆盖：同色 = 那一格还是我方棋子（只是兵种被装饰读错）；
-                //    异色说明真被对方吃了，**必须让它变**（否则会把吃子藏起来，后面算棋就按错盘面走）。
+                // ③ 读成了**别的子**：分两种，都要按已知事实补齐，但判据不同 ——
+                //    · **同字异色**（C↔c、P↔p…）= 同一个兵种被读成红黑反了。这台机器上实测会**反复抖**
+                //      （2026-09-14 r1.log：`(1,7)?→C` 这类行反复出现）。⚠️ 以前这种情况走 ④ 丢掉记录，
+                //      于是**一帧抖动就足够把记录丢掉**，之后同色读错的帧再没人补 →
+                //      「轮次推不出来（UNKNOWN）」→ 看门狗 → 整轮停在那儿。
+                //      离线回放（diag-patch-life2.js）已复现：一帧 红黑读反 就把 (2,3) 的记录丢掉。
+                //    · **同色不同字**（C↔P）= 兵种被游戏装饰读错（真机实测：我方炮吃卒落在卒位被读成红兵）。
+                //    异色**且**不同字（C↔n）才是「真的被吃/走开了」→ 必须让它变，
+                //    否则会把吃子藏起来，后面算棋就按错盘面走。
+                const sameGlyph = got && patch.char && got.length === 1 && patch.char.length === 1 &&
+                    got.toLowerCase() === patch.char.toLowerCase();
                 const sameColor = got && patch.char &&
                     (got === got.toUpperCase()) === (patch.char === patch.char.toUpperCase());
-                if (got && got !== "" && sameColor) {
+                if (got && got !== "" && (sameGlyph || sameColor)) {
                     result.chars[patch.index] = patch.char;
                     patchedNow = patch;
                     stats.ownMovePatched += 1;
+                    if (sameGlyph && !sameColor) {
+                        stats.sameGlyphPatched += 1;   // 计数：真出现「同兵种吃子被掩盖」时能在日志里看见
+                    }
                     keep.push(patch);
                     continue;
                 }
-                // ④ 变空 / 换成异色 → 真的被吃或走开了，不再保留
+                // ④ 变空 / 换成异色且不同字 → 真的被吃或走开了，不再保留
             }
             knownPatches = keep;
         }
@@ -1332,6 +1344,20 @@ function createDriver(options) {
                 (inferred.debug ? "｜容差：我方着法 " + inferred.debug.ownMoves +
                     "，试 " + inferred.debug.tried + "，最小差 " + inferred.debug.minDiff +
                     "，命中 " + inferred.debug.fits + "，最优 " + inferred.debug.best : ""));
+            // 补齐表内容（2026-09-14 加）：「推不出来」有两种完全不同的原因 ——
+            // ① 表里根本没有那两格的记录；② 表里有、但这帧没补上（读成了别的字）。
+            // 不把表打出来就只能猜（当天为这个来回跑了好几轮真机）。
+            const table = [];
+            for (let i = 0; i < knownPatches.length; i++) {
+                const patch = knownPatches[i];
+                if (!patch || patch.index == null) {
+                    continue;
+                }
+                table.push("(" + (patch.index % 9) + "," + Math.floor(patch.index / 9) + ")" +
+                    patch.char + "/本轮读到" + (lastRawChars ? (lastRawChars[patch.index] || "空") : "？"));
+            }
+            note("诊断补齐表 " + (table.length ? table.join(" ") : "（空）") +
+                "｜周期 " + verifyCycle);
         }
         return null;
     }
@@ -1581,7 +1607,8 @@ function createDriver(options) {
                 "，确认 " + counters.confirms + " 次，重试 " + counters.retries + " 次");
             lines.push("算棋：" + computeMode + "（worker " + stats.thinkOffThread +
                 " 次 / 本线程 " + stats.thinkInline + " 次，最近一次 " + Math.round(stats.thinkMs) + "ms）");
-            lines.push("落点补齐 " + stats.ownMovePatched + " 次、已知事实补齐 " + stats.knownFactFills +
+            lines.push("落点补齐 " + stats.ownMovePatched + " 次（其中同字异色 " + stats.sameGlyphPatched +
+                " 次）、已知事实补齐 " + stats.knownFactFills +
             " 次、颜色纠正 " + stats.colorFlips + " 格（游戏给刚落的子加装饰，那几格认不准）");
             if (!clickAllowed) {
                 lines.push("模式：不点击（拦截了 " + disabledTap.calls() + " 次点击调用）");

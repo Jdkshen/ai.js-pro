@@ -2523,6 +2523,128 @@ check("驱动：我方确认不许作废「对方刚落点」的补齐记录（�
     return true;
 });
 
+/**
+ * 真机回归（r1.log，2026-09-14 K40）：我方第二手确认成功之后，每一帧都「轮次推不出来（UNKNOWN）」。
+ *
+ * 现场三格伪影（日志原始读数）：
+ *   · 我方刚落子那格（带高亮环）被读成 **P**（同色不同兵种）—— 这一格记录在表里
+ *   · 对方刚落子那格（带高亮环）**整格漏检**（读成空）—— 这一格记录也在表里
+ *   · 另有一格只是红黑读反（P → p）
+ *
+ * 根因（离线回放 diag-patch-life2.js 复现）：补齐表第 ④ 支写着「换成异色 → 丢掉记录」，
+ * 而**这台模型会把同一格在红黑之间抖**（实测 `C` ↔ `c` 反复出现）。于是：
+ *   一帧「同字异色」就足够把我方落点那格的记录丢掉 → 后面同色读错的帧再没人补
+ *   → 盘面永远差一格 → 没有任何合法着法能解释 → 看门狗 → 整轮停住。
+ *
+ * 现在：**同字异色不再作废记录**（按记录补齐并留计数），异色且不同字才算「真的被吃走」。
+ */
+check("驱动：同字异色抖动不许丢掉「已知事实」记录（真机每帧推不出回归）", function () {
+    const replyDest = transition.squareIndex(REPLY_MOVE.iccs, 1);
+    const own2 = legal.allLegalMoves(AFTER_REPLY_BOARD, "w")[0];
+    const own2Dest = transition.squareIndex(own2.iccs, 1);
+    const afterOwn2 = legal.applyMove(AFTER_REPLY_BOARD, own2).board;
+    if (replyDest == null || own2Dest == null) {
+        return "夹具着法取不到落点";
+    }
+
+    const stage = { at: 0, clicks: 0, analyzes: 0, frames: 0 };
+    const noteText = [];
+    const countUnknown = function (cells) {
+        let unknown = 0;
+        for (let i = 0; i < 90; i++) {
+            if (cells[i] === "?") {
+                unknown += 1;
+            }
+        }
+        return unknown;
+    };
+    const board = function () {
+        if (stage.at === 0) {
+            return START_BOARD.slice();
+        }
+        if (stage.at === 1) {
+            const one = AFTER_BOARD.slice();
+            one[transition.squareIndex(OWN_MOVE.iccs, 1)] = "?";
+            return one;
+        }
+        if (stage.at === 2) {
+            return AFTER_REPLY_BOARD.slice();
+        }
+        if (stage.at === 3) {
+            const three = afterOwn2.slice();
+            three[own2Dest] = "?";
+            return three;
+        }
+        // 阶段 4：交替喂「同字异色抖动帧」与「真机那一帧」
+        stage.frames += 1;
+        const frame = afterOwn2.slice();
+        frame[replyDest] = null;                                  // 对方那格整格漏检
+        frame[own2Dest] = stage.frames % 2 === 1
+            ? (afterOwn2[own2Dest] === "C" ? "c" : afterOwn2[own2Dest].toLowerCase())   // 抖动：同字异色
+            : "P";                                                // 真机那一帧：同色不同兵种
+        return frame;
+    };
+
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(text); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = board();
+            return {
+                ok: true, chars: cells, unknownCells: countUnknown(cells), conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            stage.analyzes += 1;
+            const move = stage.analyzes === 1 ? OWN_MOVE : own2;
+            return { ok: true, iccs: move.iccs, move: move, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicks += 1;
+                stage.at = stage.clicks === 1 ? 1 : 3;
+            }
+            return { ok: true, method: "self-check-tap" };
+        },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, attemptLimitPerMove: 3, attemptLimitPerPosition: 5 }
+    });
+    driver.start();
+    for (let i = 0; i < 24 && stage.at < 4; i++) {
+        driver.tick();
+        if (stage.at === 1 && driver.stats().confirms >= 1) {
+            stage.at = 2;
+        }
+        if (stage.at === 3 && driver.stats().confirms >= 2) {
+            stage.at = 4;
+        }
+    }
+    if (stage.at !== 4) {
+        return "没能走到回归阶段（阶段 " + stage.at + "，确认 " + driver.stats().confirms +
+            "，状态 " + driver.machine.state() + "：" + driver.machine.reason() + "）";
+    }
+
+    let lastResult = null;
+    for (let i = 0; i < 6; i++) {
+        lastResult = driver.tick();
+    }
+    const stats = driver.stats();
+    if (stats.unknownTurn !== 0) {
+        return "轮次推不出来 " + stats.unknownTurn + " 次（抖动把补齐记录丢掉了）：" +
+            noteText.filter(function (text) { return text.indexOf("轮次推不出来") >= 0; }).slice(-1)[0];
+    }
+    if (!lastResult || lastResult.side !== "b") {
+        return "回归帧里轮次应当是 b（轮到对方），实际 " + (lastResult && lastResult.side);
+    }
+    if (driver.machine.state() !== "WAIT_TURN") {
+        return "应当稳定在 WAIT_TURN（等对方落子），实际 " + driver.machine.state();
+    }
+    return true;
+});
+
 check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（退回同步，不卡死）", function () {
     const driver = driverModule.createDriver({
         allowClick: false,
