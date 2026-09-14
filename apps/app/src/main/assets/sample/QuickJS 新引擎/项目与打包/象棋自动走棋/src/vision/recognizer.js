@@ -275,6 +275,10 @@ function alignGrid(detections, grid, assignOptions, search) {
             unknown: countUnknown(assigned.cells),
             outOfBoard: assigned.stats.outOfBoard,
             conflicts: assigned.stats.conflicts,
+            /** 同字异色冲突（不否决整帧）：见 cell-assignment.sameGlyph */
+            sameGlyphConflicts: assigned.stats.sameGlyphConflicts,
+            /** 冲突格明细，日志/人审用 */
+            conflictCells: assigned.stats.conflictCells,
             residual: sumResidual(assigned.cells),
             /** 纯几何代价（挑选依据）：基础 / 最优 / 相对增益 */
             costBefore: Number(baseCost.cost.toFixed(4)),

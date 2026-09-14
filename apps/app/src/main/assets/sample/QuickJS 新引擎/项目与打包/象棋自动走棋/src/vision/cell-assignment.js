@@ -15,6 +15,24 @@ const STATE_EMPTY = "EMPTY";
 const STATE_PIECE = "PIECE";
 const STATE_UNKNOWN = "UNKNOWN";
 
+/**
+ * 两个候选是不是「同一个字」—— 只差红黑大小写（C/c 炮、K/k 将帅、P/p 兵卒…）。
+ *
+ * 真机实测（K40 + 天天象棋，2026-09-14）：③「等落子」被 **48 次「有 1 处关键冲突」** 卡死。
+ * 根因就在下面那个 conflictGap 分支：模型把同一格的同一个字在**红黑之间抖动**
+ * （日志实见 `(1,7)?→C`），两个候选分差小于阈值 → 判成「关键冲突」→ 验证器一票否决整帧，
+ * 而抖动每帧都发生 → 永远等不到「无冲突」的那一帧 → 驱动只能一直重算。
+ * 「同字异色」与「异字冲突」的可信度完全不同：前者連兵种都已经确定，缺的颜色恰好是
+ * 下游「同字异色修正 + 棋规层」能靠基准盘面还原的信息（那条路已验证可用）；
+ * 后者连兵种都是猜的，必须继续一票否决。
+ */
+function sameGlyph(a, b) {
+    if (typeof a !== "string" || typeof b !== "string" || a.length !== 1 || b.length !== 1) {
+        return false;
+    }
+    return a.toLowerCase() === b.toLowerCase();
+}
+
 const DEFAULTS = {
     minScore: 0.45,
     /**
@@ -45,7 +63,16 @@ function assign(detections, grid, options) {
     for (let i = 0; i < 90; i++) {
         cells[i] = { state: STATE_EMPTY, piece: null, score: 0, candidates: [], conflict: false, residual: 0, center: null };
     }
-    const stats = { detected: 0, placed: 0, merged: 0, conflicts: 0, unknown: 0, outOfBoard: 0, lowQuality: 0, weak: 0 };
+    const stats = {
+        detected: 0, placed: 0, merged: 0,
+        /** 异字冲突数（不同兵种争一格）= 一票否决，必须等新观测 */
+        conflicts: 0,
+        /** 同字异色冲突数（同一兵种只差红黑）= 不否决整帧，交给下游纠色/棋规还原 */
+        sameGlyphConflicts: 0,
+        /** 冲突格明细（最多记 8 个，供日志/人审）：{index, name, best, second, …} */
+        conflictCells: [],
+        unknown: 0, outOfBoard: 0, lowQuality: 0, weak: 0
+    };
     const frameUsable = opts.frameQuality >= 0.5;
 
     for (let i = 0; i < (detections ? detections.length : 0); i++) {
@@ -79,7 +106,7 @@ function assign(detections, grid, options) {
         }
     }
 
-    cells.forEach(function (cell) {
+    cells.forEach(function (cell, cellIndex) {
         if (cell.candidates.length === 0) {
             // 没有框不等于「确定为空」：图像质量差时只能说「没看到」。
             cell.state = frameUsable ? STATE_EMPTY : STATE_UNKNOWN;
@@ -158,8 +185,24 @@ function assign(detections, grid, options) {
             cell.piece = null;
             cell.score = best.score;
             cell.conflict = true;
-            stats.conflicts++;
             stats.unknown++;
+            const same = sameGlyph(best.label, second.label);
+            if (same) {
+                stats.sameGlyphConflicts++;
+            } else {
+                stats.conflicts++;
+            }
+            if (stats.conflictCells.length < 8) {
+                stats.conflictCells.push({
+                    index: cellIndex,
+                    name: "(" + (cellIndex % 9) + "," + Math.floor(cellIndex / 9) + ")",
+                    best: best.label,
+                    bestScore: Number(best.score.toFixed(3)),
+                    second: second.label,
+                    secondScore: Number(second.score.toFixed(3)),
+                    sameGlyph: same
+                });
+            }
             return;
         }
         cell.state = STATE_PIECE;

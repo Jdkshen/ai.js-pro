@@ -93,6 +93,11 @@ const cellsContract = load("src/vision/cells.js");
 // 探针的开局校验要用：FEN 解析 + 盘面比对（只读，不参与循环）
 const fenModule = load("src/chess/fen.js");
 const legalModule = load("src/chess/legal-moves.js");
+// §14 框架层：文案/令牌只定义一次（ui），配置只解析一处（app/config），日志走 diagnostics
+const labelsModule = load("src/ui/labels.js");
+const themeTokens = load("src/ui/theme-tokens.js");
+const configModule = load("src/app/config.js");
+const recorderModule = load("src/diagnostics/recorder.js");
 const overlayDraw = load("src/vision/overlay-draw.js");
 // 跨引擎互锁：主界面（main.js）里还有另一套驱动循环，两边一起跑会双份截图/算棋，
 // 模式③还会双份点击棋盘 —— 用同一个锁文件互斥（见 src/automation/loop-lock.js）。
@@ -161,8 +166,10 @@ const TMP_FRAME = FRAME_DIR + "/floaty-frame.png";
 // ⚠️ autorun 是**给 adb / PC 用的验证钩子**，所以它要放 shell 可写的地方
 //  （应用缓存目录 adb 写不进去，我们自己的无人值守流程就断了）：跟截图目录同一个。
 const AUTORUN_FILE = FRAME_DIR + "/floaty-autorun.json";
-const MODES = ["watch", "advice", "auto"];
-const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
+// 模式/档位文案：**共享部分只在 src/ui/labels.js 定义**（面板自己更细的状态文案在下面追加）
+const MODES = labelsModule.MODES;
+const MODE_LABEL = labelsModule.MODE_LABEL;
+let autorunBlocking = false;   // autorun 有致命配置错误（如拼错的通道名）→ 不自动启动
 
 let modeKey = "watch";
 let driver = null;
@@ -209,14 +216,14 @@ let grid = null;          // 已校准几何（会话内复用）
 let calibrationNote = "未校准";
 const logLines = [];
 /** 屏上只显示最后几行（面板得矮到能塞进棋盘上方的空木纹带）；完整日志走 logcat（前缀 [floaty]） */
-const LOG_LINES_COMPACT = 2;    // 实测行高 ≈ 1.35×字号：8sp ≈ 30px/行 → 2 行 60px，日志区 76px
+const LOG_LINES_COMPACT = themeTokens.LOG_LINES_COMPACT;    // 实测行高 ≈ 1.35×字号 → 2 行 = 60px，日志区 76px
 
 /**
  * 进度摘要：「现在跑到哪一步」——从日志里抽关键节点，每项只留**最近一次**。
  * 为什么要它：完整日志刷得快、又夹着心跳噪声，盯面板看不出「卡在哪」。
  */
-/** 状态机状态 → 中文（给人看的面板上别丢英文枚举）。 */
-const STATE_LABEL = {
+/** 状态机状态 → 中文。共享部分来自 src/ui/labels；面板另外补几条更长的口语化文案。 */
+const STATE_LABEL = Object.assign({}, labelsModule.STATE_LABEL, {
     IDLE: "空闲",
     READY: "已就绪",
     WAIT_STABLE: "等待局面稳定",
@@ -231,7 +238,7 @@ const STATE_LABEL = {
     RECOVERING: "恢复中（重新定位）",
     PAUSED: "已暂停",
     STOPPED: "已停止"
-};
+});
 const progress = {
     turn: "",        // 轮次推断结果（标准开局 / 己方 x + 对方 y）
     think: "",       // 最近一次算棋结论（着法 + 评分）
@@ -423,6 +430,15 @@ function applyWindowHeight() {
 }
 
 function logLine(text) {
+    recorder.log(text);
+}
+
+/**
+ * 日志的实际落地：进面板环形缓冲 + 进度摘要 + logcat。
+ * §14：唯一入口是 diagnostics/recorder（限频、环长度、审计导出都在那儿），
+ * 这里保留原来的入参形态，调用点一个都不用改。
+ */
+function sinkLog(text) {
     const line = String(text);
     noteProgress(line);
     logLines.push(line);
@@ -432,6 +448,9 @@ function logLine(text) {
     console.log("[floaty] " + line);
     scheduleRender();   // 日志驱动的重绘做 250ms 合并，别让每个 logLine 都过一次 JS→Java 桥
 }
+
+/** 诊断记录器：限频日志（logThrottled）与审计摘要都走它。 */
+const recorder = recorderModule.createRecorder({ sink: sinkLog, limit: 400, keep: 250 });
 
 let renderScheduled = false;
 
@@ -674,8 +693,8 @@ let lastOverlay = null;    // { items, text }：抓帧后立刻恢复用，避�
 /** 最近一次实际点击的起终点（从日志里抽出来，画成两个小框 → 人审"点得准不准"）。 */
 let lastClickPlan = null;
 
-const DRAW_LABEL = { off: "关", grid: "网格", cells: "格子", full: "全量" };
-const DRAW_ORDER = ["off", "grid", "cells", "full"];
+const DRAW_LABEL = labelsModule.DRAW_LABEL;
+const DRAW_ORDER = labelsModule.DRAW_ORDER;
 
 function overlayTextNow() {
     const parts = [];
@@ -1859,24 +1878,33 @@ function registerExitHook() {
 }
 
 function readAutorun() {
-    try {
+    // §14：解析与校验只有一处（src/app/config.js）；面板只负责把结果应用到自己的变量上。
+    // 读文件这一步从外面注进去，所以 config 不依赖宿主，随时能单测。
+    const loaded = configModule.loadAutorun(function (path) {
         if (typeof files === "undefined" || !files || typeof files.read !== "function") {
-            logLine("autorun：拿不到 files 接口，跳过（路径 " + AUTORUN_FILE + "）");
             return null;
         }
-        const text = String(files.read(AUTORUN_FILE) || "").trim();
-        if (!text) {
-            logLine("autorun：文件为空或不存在（路径 " + AUTORUN_FILE + "）");
-            return null;
-        }
-        // 把「实际读的路径 + 原文」记下来：ADB 写的是哪个文件、脚本读的是哪个文件，
-        // 不一致时（工程副本/示例副本/导入副本）会直接暴露出来，别再静默无效。
-        logLine("autorun 文件 " + AUTORUN_FILE + " 原文 " + text.replace(/\s+/g, " "));
-        return JSON.parse(text);
-    } catch (error) {
-        logLine("autorun 解析失败（路径 " + AUTORUN_FILE + "）：" + error);
+        return files.read(path);
+    }, AUTORUN_FILE);
+
+    const issues = loaded.issues || [];
+    for (let i = 0; i < issues.length; i++) {
+        logLine("配置" + (issues[i].level === "error" ? "错误" : "提示") + "：" +
+            issues[i].key + " — " + issues[i].message);
+    }
+    autorunBlocking = configModule.hasBlockingIssue(issues);
+    if (autorunBlocking) {
+        logLine("autorun 有致命配置错误 → 按约定**不自动启动**（拼错的通道名会把对照实验弄脏）");
+    }
+    if (loaded.empty || !loaded.raw) {
+        logLine("autorun：文件为空或不存在（路径 " + AUTORUN_FILE + "）");
         return null;
     }
+    // 把「实际读的路径 + 原文」记下来：ADB 写的是哪个文件、脚本读的是哪个文件，
+    // 不一致时（工程副本/示例副本/导入副本）会直接暴露出来，别再静默无效。
+    logLine("autorun 文件 " + AUTORUN_FILE + " 原文 " + String(loaded.text || "").replace(/\s+/g, " "));
+    // 归一化后的值盖在原始对象上（校验/夹取已经做过，下面的块只负责应用）
+    return Object.assign({}, loaded.raw, loaded.config);
 }
 
 /**
@@ -2182,8 +2210,8 @@ function main() {
             // 无人工验证时靠它拿「带绘制的一帧」。
             auditDraw();
         }
-        if (auto.mode && MODES.indexOf(auto.mode) >= 0) {
-            modeKey = auto.mode;
+        if (auto.mode) {
+            modeKey = String(auto.mode);   // 合法性已在 config 校验，这里只应用
             logLine("模式设为 " + MODE_LABEL[modeKey]);
         }
         if (auto.autoAlign != null) {
@@ -2192,37 +2220,23 @@ function main() {
         }
         if (auto.gamePackage) {
             // 目标游戏包名（前台守卫要用它判断「焦点在不在游戏上」；默认腾讯天天象棋）
-            const pkg = String(auto.gamePackage).trim();
-            if (pkg) {
-                gamePackage = pkg;
-                logLine("目标游戏包名：" + gamePackage);
-            }
+            gamePackage = String(auto.gamePackage).trim();
+            logLine("目标游戏包名：" + gamePackage);
         }
         if (auto.clickMethod) {
-            // "auto"（默认）/ "shizuku"（`input tap`/原地 swipe）/ "accessibility"（无障碍 press/click）。
-            // ⚠️ 非法值**不许静默退回 auto**（拼错一个字母就整轮对照实验作废），要原样透传下去，
-            //    让 createTap 在 buildDriver 里直接报错停下来。
-            const key = String(auto.clickMethod);
-            const legal = key === "auto" || key === "shizuku" || key === "accessibility";
-            clickMethodKey = legal ? key : key;
+            // 非法值**不静默退回 auto**：原样透传，让 createTap 在 buildDriver 里直接报错停下来
+            clickMethodKey = String(auto.clickMethod);
+            const legal = labelsModule.CHANNELS.indexOf(clickMethodKey) >= 0;
             logLine("点击通道偏好：" + clickMethodKey + (legal ? "" :
-                "（⚠️ 非法值：只支持 auto / shizuku / accessibility，启动时会直接报错）"));
+                "（⚠️ 非法值：只支持 " + labelsModule.CHANNELS.join(" / ") + "，启动时会直接报错）"));
         }
         if (auto.clickHideSettleMs != null) {
-            // 藏窗后到出手的等待（ms）：见 clickHideSettleMs 的说明
-            const ms = Math.round(Number(auto.clickHideSettleMs));
-            if (isFinite(ms) && ms >= 0) {
-                clickHideSettleMs = Math.min(3000, ms);
-                logLine("点击前藏窗等待：" + clickHideSettleMs + "ms");
-            }
+            clickHideSettleMs = Number(auto.clickHideSettleMs);
+            logLine("点击前藏窗等待：" + clickHideSettleMs + "ms");
         }
         if (auto.clickPressMs != null) {
-            // 按压时长（ms）：有些游戏会忽略过短的注入点击（K40 + 天天象棋需 ≥300ms）
-            const ms = Math.round(Number(auto.clickPressMs));
-            if (isFinite(ms) && ms > 0) {
-                clickPressMs = Math.min(2000, Math.max(1, ms));
-                logLine("点击按压时长：" + clickPressMs + "ms");
-            }
+            clickPressMs = Number(auto.clickPressMs);
+            logLine("点击按压时长：" + clickPressMs + "ms");
         }
         if (auto.computeMode) {
             // "worker"（默认，独立引擎线程）/ "inline"（本线程同步，对照老路径）
@@ -2230,13 +2244,14 @@ function main() {
             logLine("算棋模式：" + computeModeKey);
         }
         if (auto.captureBackend) {
-            // "auto"（默认，先系统截屏）/ "screen" / "shell"（Shizuku/root 跑 screencap）：
-            // shell 通道不需要投屏授权（小米8 上实测又快一倍且颜色正确），适合无人值守跑。
-            // persist:false —— 这是测试钩子，别把偏好写进 storages（界面上选"的才算主人选择）。
+            // "auto" / "app" / "shell"（Shizuku/root 跑 screencap，免投屏授权、无人值守首选）。
+            // persist:false —— 这是测试钩子，别把偏好写进 storages（界面上选的才算主人选择）。
             const key = adapter.setCaptureBackend(auto.captureBackend, { persist: false });
             logLine("截图通道偏好：" + key + "（最近一次实际用过：" + (adapter.captureChannel() || "未用过") + "）");
         }
-        if (auto.start) {
+        if (auto.start && autorunBlocking) {
+            logLine("autorun：配置有致命错误，未自动开始（修好 autorun 再启动）");
+        } else if (auto.start) {
             startLoop();
             if (auto.declareTurn) {
                 // 刚启动时状态机还没观察过任何局面，assertTurn 会被拒；等第一个观察成功的 tick 再声明

@@ -140,6 +140,8 @@ function createDriver(options) {
     stats.sourceGoneRefusals = 0; // 重试前发现「起点子已不在原位」而拒发的次数（§11）
     stats.rawCorrected = 0;       // 「模型原始读数和最终盘面不一致」的观测次数（§12）
     let lastRawCorrectedText = "";
+    /** 冲突明细去重用的上一次文本（限频：同一局面不重复刷） */
+    let lastConflictText = "";
     // 日志环：超上限**原地裁剪**（以前的 `const history` + `history = history.slice()` 会抛异常）
     const history = logRing.createLogRing(300, 200);
 
@@ -612,6 +614,29 @@ function createDriver(options) {
                 verdict: { result: verifier.RESULT.UNRELIABLE, reason: observed.reason }
             }));
         }
+        // 冲突明细（2026-09-14 真机）：以前只报「有 N 处关键冲突」，看不见是**哪一格**，
+        // 48 次卡死的真因（同字异色抖动）只能靠翻视觉层源码猜。现在把格子与两个候选都打出来，
+        // 并把「同字异色」单独计数（那类冲突已不再否决整帧，只在这里留痕）。
+        (function noteConflicts() {
+            const stats = observed.result && observed.result.stats;
+            if (!stats) {
+                return;
+            }
+            const cells = stats.conflictCells || [];
+            const text = "冲突明细：异字 " + (stats.conflicts || 0) +
+                " 处、同字异色 " + (stats.sameGlyphConflicts || 0) + " 处" +
+                (cells.length
+                    ? "｜" + cells.map(function (item) {
+                        return item.name + " " + item.best + "/" + item.second +
+                            "(" + item.bestScore + "/" + item.secondScore + ")" +
+                            (item.sameGlyph ? "同字" : "异字");
+                    }).join(" ")
+                    : "");
+            if (text !== lastConflictText) {
+                lastConflictText = text;
+                note(text);
+            }
+        })();
         const verdict = verifier.verify({
             ticket: ticket,
             observed: observed.chars,

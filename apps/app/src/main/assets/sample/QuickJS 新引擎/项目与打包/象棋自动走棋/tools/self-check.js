@@ -236,6 +236,37 @@ check("中心离交点太远的框判未知", function () {
     return other.state === assignment.STATE_UNKNOWN || "错位的框被当成了可靠棋子";
 });
 
+/**
+ * 2026-09-14 真机事故：③ 自动走棋卡在「等落子」，日志 48 次
+ * `[driver] 确认：UNRELIABLE：有 1 处关键冲突`。
+ * 根因：模型把同一格的同一个字在红黑之间抖（C/c），两候选分差 < conflictGap →
+ * 视觉层算「关键冲突」→ 验证器一票否决整帧，而抖动每帧都发生 → 永远等不到干净帧。
+ * 现在同字异色不再计入关键冲突（棋子是什么、在哪已确定，缺的颜色交给下游纠色/棋规还原），
+ * 但仍然判未知格并且留明细，异字冲突照旧一票否决。
+ */
+check("同字异色冲突不算关键冲突", function () {
+    const result = assignment.assign([detection("C", 1, 7, 0.80), detection("c", 1, 7, 0.78)], grid);
+    const cell = result.cells[fen.index(1, 7)];
+    if (cell.state !== assignment.STATE_UNKNOWN) return "同字异色没判未知，而是 " + cell.state;
+    if (result.stats.conflicts !== 0) return "同字异色被算成 " + result.stats.conflicts + " 处关键冲突";
+    if (result.stats.sameGlyphConflicts !== 1) return "同字异色没计数：" + result.stats.sameGlyphConflicts;
+    const detail = result.stats.conflictCells[0];
+    if (!detail || detail.name !== "(1,7)" || detail.sameGlyph !== true) {
+        return "冲突格明细缺失/不对：" + JSON.stringify(detail);
+    }
+    return true;
+});
+
+check("异字冲突仍然按关键冲突否决", function () {
+    const result = assignment.assign([detection("C", 1, 7, 0.80), detection("N", 1, 7, 0.78)], grid);
+    if (result.stats.conflicts !== 1) return "异字冲突计数 = " + result.stats.conflicts;
+    if (result.stats.sameGlyphConflicts !== 0) return "异字被记成了同字异色";
+    const detail = result.stats.conflictCells[0];
+    if (!detail || detail.sameGlyph !== false) return "异字明细标错：" + JSON.stringify(detail);
+    if (detail.best !== "C" || detail.second !== "N") return "明细候选不对：" + JSON.stringify(detail);
+    return true;
+});
+
 check("图像质量差时空格降级为未知", function () {
     const good = assignment.assign([], grid, { frameQuality: 1 });
     const poor = assignment.assign([], grid, { frameQuality: 0.3 });
@@ -2454,6 +2485,271 @@ check("驱动：同一局面同一手重试超限 → 暂停，不再无限盲�
         driver.tick();
     }
     return taps.length === before ? true : ("暂停后仍在点击（" + before + " → " + taps.length + "）");
+});
+
+// ---------------------------------------------------------------- §14 框架契约
+
+const labelsModule = require("../src/ui/labels.js");
+const themeTokens = require("../src/ui/theme-tokens.js");
+const configModule = require("../src/app/config.js");
+const storeModule = require("../src/app/session-store.js");
+const controllerModule = require("../src/app/controller.js");
+const recorderModule = require("../src/diagnostics/recorder.js");
+const portsModule = require("../src/runtime/ports.js");
+const windowManagerModule = require("../src/runtime/window-manager.js");
+const gameSessionModule = require("../src/services/game-session.js");
+const bootstrapModule = require("../src/app/bootstrap.js");
+
+check("框架·文案：未知状态要原样返回，不能悄悄变成「未知」把新状态藏起来", function () {
+    if (labelsModule.stateText("CLICKING") !== "点击中") {
+        return "已知状态翻译错：" + labelsModule.stateText("CLICKING");
+    }
+    if (labelsModule.stateText("BRAND_NEW_STATE") !== "BRAND_NEW_STATE") {
+        return "未知状态被吞掉了：" + labelsModule.stateText("BRAND_NEW_STATE");
+    }
+    if (labelsModule.MODES.length !== 3 || !labelsModule.MODE_LABEL.auto) {
+        return "模式表不完整";
+    }
+    return themeTokens.PANEL.height > 0 ? true : "面板令牌缺失";
+});
+
+check("框架·配置：合法 autorun 要被归一化（含默认值补齐）", function () {
+    const parsed = configModule.parseAutorun(JSON.stringify({
+        mode: "auto", clickMethod: "accessibility", clickPressMs: 350,
+        clickHideSettleMs: 600, stopAfterMs: 250000, start: true
+    }));
+    if (!parsed.ok) return "合法配置被判非法：" + JSON.stringify(parsed.issues);
+    const merged = configModule.withDefaults(parsed.config);
+    if (merged.mode !== "auto" || merged.clickMethod !== "accessibility") {
+        return "归一化结果不对：" + JSON.stringify(merged);
+    }
+    if (merged.clickHideSettleMs !== 600) {
+        return "clickHideSettleMs 没被采纳：" + merged.clickHideSettleMs;
+    }
+    return merged.gamePackage ? true : "默认值没补上（gamePackage）";
+});
+
+check("框架·配置：非法通道名必须报错、且原样透传（不许静默退回 auto）", function () {
+    const parsed = configModule.parseAutorun('{"clickMethod":"accssibility"}');
+    if (!configModule.hasBlockingIssue(parsed.issues)) {
+        return "拼错的通道名没有被判为致命";
+    }
+    if (parsed.config.clickMethod !== "accssibility") {
+        return "非法值被改写成 " + parsed.config.clickMethod + "（应该原样透传，让 createTap 报错）";
+    }
+    const bad = configModule.parseAutorun("{ 这不是 JSON }");
+    if (bad.ok !== false || !configModule.hasBlockingIssue(bad.issues)) {
+        return "坏 JSON 没有被判为致命";
+    }
+    const empty = configModule.parseAutorun("   ");
+    return (empty.ok === true && empty.empty === true) ? true : "空 autorun 应该 ok+empty";
+});
+
+check("框架·窗口：点击租约期间抓帧不许把窗口恢复出来（今天的血案）", function () {
+    const visibleLog = [];
+    const fakeWin = {
+        x: 30, y: 264,
+        setVisibility: function (visible) { visibleLog.push(visible); return true; },
+        setPosition: function (x, y) { this.x = x; this.y = y; return true; },
+        getPosition: function () { return { x: this.x, y: this.y }; }
+    };
+    const wm = windowManagerModule.createWindowManager({
+        win: fakeWin, sleep: function () { }, panel: { height: 372 }, clickHideSettleMs: 0
+    });
+    // 普通抓帧：藏 → 跑 → 恢复
+    wm.withHidden(function () { visibleLog.push("frame"); });
+    if (visibleLog[0] !== false || visibleLog[visibleLog.length - 1] !== true) {
+        return "普通抓帧没有「藏→跑→恢复」：" + JSON.stringify(visibleLog);
+    }
+    // 租约期间抓帧：藏 → 跑 → **不许恢复**
+    visibleLog.length = 0;
+    wm.acquireClickLease(0);
+    wm.withHidden(function () { visibleLog.push("frame"); });
+    if (visibleLog.indexOf(true) >= 0) {
+        return "租约期间抓帧把窗口恢复了（游戏会丢掉「已选中」）：" + JSON.stringify(visibleLog);
+    }
+    if (!wm.isLeaseHeld()) {
+        return "租约状态没被记住";
+    }
+    wm.releaseClickLease();
+    if (wm.isHidden()) {
+        return "释放租约后窗口应当恢复可见";
+    }
+    // 用户拖过 → 不再自动贴板
+    const first = wm.snapAboveBoard({ y: 900 }, 2400);
+    if (!first.moved) {
+        return "首次贴板应当移动：" + first.reason;
+    }
+    wm.markUserMoved();
+    const after = wm.snapAboveBoard({ y: 1500 }, 2400);
+    return after.moved ? "用户拖过之后不该再抢位置" : true;
+});
+
+check("框架·控制器：命令要校验参数与运行态，别让按钮直接改全局", function () {
+    const calls = [];
+    const controller = controllerModule.createController({
+        handlers: {
+            START: function (arg) { calls.push(["START", arg.mode]); return "ok"; },
+            SET_CHANNEL: function (arg) { calls.push(["SET_CHANNEL", arg.channel]); return "ok"; },
+            STOP: function () { calls.push(["STOP"]); return "ok"; }
+        },
+        isRunning: function () { return false; }
+    });
+    if (!controller.run("SET_CHANNEL", { channel: "shizuku" }).ok) {
+        return "合法通道被拒（应当交给绑定的处理函数）";
+    }
+    if (calls.length !== 1 || calls[0][1] !== "shizuku") {
+        return "合法命令没有传到处理函数：" + JSON.stringify(calls);
+    }
+    const bogus = controller.run("SET_CHANNEL", { channel: "shizukuu" });
+    if (bogus.ok || String(bogus.reason).indexOf("未知点击通道") < 0) {
+        return "非法通道没被拒：" + JSON.stringify(bogus);
+    }
+    if (controller.run("NOT_A_COMMAND").ok) {
+        return "未知命令没被拒";
+    }
+    if (!controller.run("START", { mode: "auto" }).ok) {
+        return "合法 START 被拒";
+    }
+    const running = controllerModule.createController({
+        handlers: { START: function () { return "ok"; } },
+        isRunning: function () { return true; }
+    });
+    if (running.run("START", { mode: "auto" }).ok) {
+        return "已经在跑时不该允许再 START（guard 失效）";
+    }
+    const thrower = controllerModule.createController({
+        handlers: { STOP: function () { throw new Error("内部炸了"); } },
+        isRunning: function () { return false; }
+    });
+    const result = thrower.run("STOP");
+    return (result.ok === false && String(result.error).indexOf("内部炸了") >= 0)
+        ? true : "处理函数抛错时应当返回 ok:false + error";
+});
+
+check("框架·状态：只有真变化才通知订阅者", function () {
+    const store = storeModule.createSessionStore({ mode: "watch" });
+    let notified = 0;
+    store.subscribe(function () { notified += 1; });
+    store.patch({ mode: "auto" }, "test");
+    const after = notified;
+    store.patch({ mode: "auto" }, "same");   // 同值不该再通知
+    if (notified !== after) {
+        return "同值 patch 也通知了（界面会被无意义重画）";
+    }
+    return (after === 1 && store.get("mode") === "auto") ? true : "状态没生效";
+});
+
+check("框架·记录器：限频只放一条，环长度有界", function () {
+    const lines = [];
+    let clock = 0;
+    const recorder = recorderModule.createRecorder({
+        sink: function (text) { lines.push(text); },
+        now: function () { return clock; },
+        limit: 10, keep: 5
+    });
+    recorder.logThrottled("k", 1000, "第一次");
+    clock += 100;
+    recorder.logThrottled("k", 1000, "第二次");
+    if (lines.length !== 1) {
+        return "限频没生效：打了 " + lines.length + " 条";
+    }
+    clock += 2000;
+    recorder.logThrottled("k", 1000, "第三次");
+    if (lines.length !== 2) {
+        return "过了限频窗口应当再打一条，实际 " + lines.length;
+    }
+    for (let i = 0; i < 30; i++) {
+        recorder.log("填 " + i);
+    }
+    return (lines.length === 32 && recorder.size() <= 10)
+        ? true : ("环长度不对：lines=" + lines.length + " size=" + recorder.size());
+});
+
+check("框架·端口：缺能力要能列出来，不能跑到一半才崩", function () {
+    const bare = portsModule.createPorts({}, {});
+    const missing = bare.missing();
+    if (missing.indexOf("capture") < 0 || missing.indexOf("rgbAt") < 0) {
+        return "空适配层应当报出 capture/rgbAt 缺失，实际 " + JSON.stringify(missing);
+    }
+    const fake = portsModule.createPorts({
+        capture: function () { return null; },
+        screenSize: function () { return { width: 1080, height: 2400 }; },
+        rgbAt: function () { return [0, 0, 0]; },
+        createTap: function () { return null; },
+        focusedWindowPackage: function () { return "com.x"; }
+    }, {});
+    if (fake.missing().length !== 0) {
+        return "能力齐备时不该报缺：" + JSON.stringify(fake.missing());
+    }
+    return fake.describe().indexOf("必需能力齐备") >= 0 ? true : "摘要文案不对：" + fake.describe();
+});
+
+check("框架·会话：改了「创建时确定」的参数必须重建驱动（否则界面说 A、实际走 B）", function () {
+    const built = [];
+    const fakeDriver = {
+        start: function () { return "WAIT_STABLE"; },
+        stop: function () { },
+        computeMode: function () { return "inline"; }
+    };
+    const session = gameSessionModule.createGameSession({
+        driverModule: {
+            createDriver: function (deps) {
+                built.push(deps);
+                return Object.assign({}, fakeDriver);
+            }
+        },
+        ports: portsModule.createPorts({}, {}),
+        config: { clickMethod: "shizuku", clickPressMs: 350 },
+        note: function () { }
+    });
+    session.start();
+    if (built.length !== 1) {
+        return "首次启动应当建一次驱动";
+    }
+    const same = session.applyConfig({ drawMode: "cells" }, "绘制档位");
+    if (same.rebuilt) {
+        return "只改绘制档位不该重建驱动";
+    }
+    const changed = session.applyConfig({ clickMethod: "accessibility" }, "换通道");
+    if (!changed.rebuilt) {
+        return "改了点击通道却没作废驱动（通道在 createTap 时就固定了）";
+    }
+    session.stop("测试结束");
+    return session.running() === false ? true : "stop 之后仍是运行中";
+});
+
+check("框架·装配：autorun 致命错误时 blocking=true，dispose 要还锁", function () {
+    const released = [];
+    const app = bootstrapModule.createApp({
+        owner: "self-check",
+        adapter: {
+            capture: function () { return null; },
+            screenSize: function () { return { width: 1080, height: 2400 }; },
+            rgbAt: function () { return [0, 0, 0]; }
+        },
+        host: {
+            readFile: function () { return '{"clickMethod":"bogus"}'; },
+            writeFile: function () { },
+            sleep: function () { },
+            now: function () { return 0; },
+            win: { setVisibility: function () { return true; }, setPosition: function () { return true; } }
+        },
+        modules: {
+            driverModule: { createDriver: function () { return { start: function () { return "X"; }, stop: function () { } }; } },
+            locateBoard: {}, recognizeBoard: {}, geometry: {},
+            loopLock: { acquire: function () { return true; }, release: function () { released.push(1); return true; }, isHeld: function () { return false; }, lockPath: function () { return "/tmp/lock"; } }
+        },
+        paths: { autorun: "/tmp/autorun.json" }
+    });
+    if (!app.blocking) {
+        return "非法 clickMethod 应当让 blocking=true";
+    }
+    if (app.config.clickMethod !== "bogus") {
+        return "非法值不该被改写：" + app.config.clickMethod;
+    }
+    app.dispose("测试");
+    return released.length === 1 ? true : "dispose 没有释放循环锁";
 });
 
 // ---------------------------------------------------------------- 识别绘制（人审用）
