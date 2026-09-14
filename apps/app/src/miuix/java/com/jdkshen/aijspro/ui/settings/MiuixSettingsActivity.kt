@@ -41,9 +41,6 @@ import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.jdkshen.aijspro.ui.update.UpdateCheckDialog
-import de.psdev.licensesdialog.LicenseResolver
-import de.psdev.licensesdialog.LicensesDialog
-import de.psdev.licensesdialog.licenses.License
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.schedulers.Schedulers
@@ -496,29 +493,9 @@ class MiuixSettingsActivity : ComponentActivity() {
         }
     }
 
-    private fun showLicenseDialog() {        LicenseResolver.registerLicense(MozillaPublicLicense20.instance)
-        LicensesDialog.Builder(this)
-            .setNotices(R.raw.licenses)
-            .setIncludeOwnLicense(true)
-            .build()
-            .showAppCompat()
-    }
-
-    class MozillaPublicLicense20 : License() {
-        companion object {
-            val instance = MozillaPublicLicense20()
-        }
-
-        override fun getName(): String = "Mozilla Public License 2.0"
-
-        override fun readSummaryTextFromResources(context: android.content.Context): String =
-            getContent(context, R.raw.mpl_20_summary)
-
-        override fun readFullTextFromResources(context: android.content.Context): String =
-            getContent(context, R.raw.mpl_20_full)
-
-        override fun getVersion(): String = "2.0"
-
-        override fun getUrl(): String = "https://www.mozilla.org/en-US/MPL/2.0/"
+    private fun showLicenseDialog() {
+        // 许可页已 Miuix 化（MiuixLicensesActivity），旧 WebView 对话框退役；
+        // 数据仍是同一份 res/raw/licenses.xml + LicensesDialog 自身许可条目。
+        startActivity(Intent(this, MiuixLicensesActivity::class.java))
     }
 }
