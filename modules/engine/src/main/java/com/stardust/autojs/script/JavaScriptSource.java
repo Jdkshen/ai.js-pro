@@ -25,8 +25,9 @@ public abstract class JavaScriptSource extends ScriptSource {
     public static final String ENGINE_QUICKJS = ENGINE + ".QuickJS";
 
     /**
-     * 脚本首行写上这个指令可以显式指定引擎；不写时默认走 QuickJS，
-     * 需要回到旧引擎的脚本在首行加 {@code // @engine rhino} 即可回退。
+     * 脚本首行写上这个指令可以显式指定引擎。没有任何配置时保持旧行为（Rhino 兼容引擎），
+     * 新建脚本/项目由编辑器与模板写入本指令来使用 QuickJS，不做静默切换；
+     * 选择规则见 docs/architecture/ENGINE_FLAVORS.md。
      */
     public static final String QUICKJS_ENGINE_DIRECTIVE = "// @engine quickjs";
     public static final String RHINO_ENGINE_DIRECTIVE = "// @engine rhino";
@@ -122,11 +123,13 @@ public abstract class JavaScriptSource extends ScriptSource {
     @Override
     public String getEngineName() {
         String directiveEngine = engineFromDirective(getScript());
-        // 无指令、无工程配置时默认走 QuickJS（新引擎）；需要旧引擎的脚本
-        // 在首行加 // @engine rhino 就能回退。
+        // 选择优先级（见 docs/architecture/ENGINE_FLAVORS.md 与 QUICKJS_MIGRATION_MATRIX.md）：
+        //   1. 脚本首行指令 → 2. 工程 scripts.<路径>.engine → 3. 工程顶层 engine
+        //   4. 没有任何配置的旧脚本继续用 Rhino 兼容引擎；新建脚本由编辑器写入
+        //      // @engine quickjs 显式选择新引擎，不做静默切换。
         return directiveEngine != null
                 ? directiveEngine
-                : (mPreferredEngine == null ? ENGINE_QUICKJS : mPreferredEngine);
+                : (mPreferredEngine == null ? ENGINE_RHINO : mPreferredEngine);
     }
 
     public static boolean requestsQuickJs(String script) {
