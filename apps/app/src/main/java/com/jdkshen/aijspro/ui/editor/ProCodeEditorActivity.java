@@ -1,6 +1,5 @@
 package com.jdkshen.aijspro.ui.editor;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.BroadcastReceiver;
@@ -39,6 +38,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.ComponentActivity;
 import androidx.core.view.GravityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
@@ -63,6 +63,7 @@ import com.jdkshen.aijspro.model.indices.ClassSearchingItem;
 import com.jdkshen.aijspro.model.script.ScriptFile;
 import com.jdkshen.aijspro.model.script.Scripts;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
+import com.jdkshen.aijspro.ui.common.MiuixHintDialog;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.edit.ClassSearchDialogBuilder;
 import com.jdkshen.aijspro.ui.edit.debug.DebuggerSingleton;
@@ -93,8 +94,13 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-/** Pro-style multi-file script workspace used by the Miuix application shell. */
-public final class ProCodeEditorActivity extends Activity implements DebugCallback {
+/**
+ * Pro-style multi-file script workspace used by the Miuix application shell.
+ *
+ * 继承 ComponentActivity（不再是裸 Activity）：Miuix 的 Compose 弹窗需要宿主提供
+ * ViewTreeLifecycleOwner，ComponentActivity 是挂 ComposeView 弹窗（如长按 TAB 提示）的前提。
+ */
+public final class ProCodeEditorActivity extends ComponentActivity implements DebugCallback {
 
     private static final String EXTRA_PATH = "path";
     private static final String EXTRA_SAMPLE_ASSET_PATH = "sample_asset_path";
@@ -1839,11 +1845,20 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
     private void onTabLongPress() {
         CodeEditor editor = activeEditor();
         if (editor == null) return;
-        new NotAskAgainDialog.Builder(this, "pro_editor.tab_long_press_beautify")
-                .title(R.string.text_alert)
-                .content(R.string.hint_long_press_tab_beautify)
-                .positiveText("确定")
-                .show();
+        // Miuix 皮肤下走 Compose 提示弹窗（与设置/更新弹窗同一套视觉）；
+        // 宿主不支持时回退旧的 MaterialDialog 实现，两者共用同一 pref key。
+        boolean handled = MiuixHintDialog.show(this,
+                getString(R.string.text_alert),
+                getString(R.string.hint_long_press_tab_beautify),
+                "确定",
+                "pro_editor.tab_long_press_beautify");
+        if (!handled) {
+            new NotAskAgainDialog.Builder(this, "pro_editor.tab_long_press_beautify")
+                    .title(R.string.text_alert)
+                    .content(R.string.hint_long_press_tab_beautify)
+                    .positiveText("确定")
+                    .show();
+        }
         editor.beautifyCode();
     }
 

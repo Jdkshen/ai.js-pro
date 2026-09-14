@@ -139,6 +139,9 @@ public class ScriptOperations {
     }
 
     public void newFile() {
+        if (showNewFileDialogWithMiuix()) {
+            return;
+        }
         DialogUtils.showDialog(new ThemeColorMaterialDialogBuilder(mContext).title(R.string.text_name)
                 .inputType(InputType.TYPE_CLASS_TEXT)
                 .alwaysCallInputCallback()
@@ -156,6 +159,38 @@ public class ScriptOperations {
                     }
                 })
                 .build());
+    }
+
+    /**
+     * 「新建文件」的 Miuix 分支：Compose 弹窗 + 同一套校验语义（空输入禁用「确定」、重名提示）与创建动作。
+     * 宿主不是 ComponentActivity 时返回 false，回退上面的 MaterialDialog 实现。
+     */
+    private boolean showNewFileDialogWithMiuix() {
+        if (!(mContext instanceof Activity)) {
+            return false;
+        }
+        return MiuixInputDialog.show((Activity) mContext,
+                getString(R.string.text_name).toString(),
+                getString(R.string.text_please_input_name).toString(),
+                "",
+                getString(R.string.text_js_file).toString(),
+                true,
+                (input, createJs) -> {
+                    if (input.isEmpty()) {
+                        return null;
+                    }
+                    File target = new File(getCurrentDirectory(), createJs ? input + ".js" : input);
+                    return target.exists() ? getString(R.string.text_file_exists).toString() : null;
+                },
+                getString(R.string.ok).toString(),
+                getString(R.string.cancel).toString(),
+                (input, createJs) -> {
+                    if (createJs) {
+                        createScriptFile(getCurrentDirectoryPath() + input + ".js", null, true);
+                    } else {
+                        createScriptFile(getCurrentDirectoryPath() + input, null, false);
+                    }
+                });
     }
 
     private void validateInput(MaterialDialog dialog, String extension) {
@@ -213,16 +248,48 @@ public class ScriptOperations {
 
 
     public void newDirectory() {
+        if (showNewDirectoryDialogWithMiuix()) {
+            return;
+        }
         showNameInputDialog("", new InputCallback())
-                .subscribe(path -> {
-                    ScriptFile newDir = new ScriptFile(getCurrentDirectory(), path);
-                    if (newDir.mkdirs()) {
-                        showMessage(R.string.text_already_create);
-                        notifyFileCreated(mCurrentDirectory, new ScriptFile(newDir));
-                    } else {
-                        showMessage(R.string.text_create_fail);
+                .subscribe(this::createDirectoryFromDialog);
+    }
+
+    /**
+     * 「新建文件夹」的 Miuix 分支：与 [showNewFileDialogWithMiuix] 同一套弹窗，无勾选项。
+     * 宿主不是 ComponentActivity 时返回 false，回退上面的 MaterialDialog 实现。
+     */
+    private boolean showNewDirectoryDialogWithMiuix() {
+        if (!(mContext instanceof Activity)) {
+            return false;
+        }
+        return MiuixInputDialog.show((Activity) mContext,
+                getString(R.string.text_name).toString(),
+                getString(R.string.text_please_input_name).toString(),
+                "",
+                null,
+                false,
+                (input, checked) -> {
+                    if (input.isEmpty()) {
+                        return null;
                     }
-                });
+                    return new File(getCurrentDirectory(), input).exists()
+                            ? getString(R.string.text_file_exists).toString() : null;
+                },
+                getString(R.string.ok).toString(),
+                getString(R.string.cancel).toString(),
+                (input, checked) -> createDirectoryFromDialog(input));
+    }
+
+    /** Miuix 与 Material 两条路径共用的「新建文件夹」动作（行为与旧实现一致）。 */
+    private void createDirectoryFromDialog(String path) {
+        ScriptFile newDir = new ScriptFile(getCurrentDirectory(), path);
+        if (newDir.mkdirs()) {
+            showMessage(R.string.text_already_create);
+            notifyFileCreated(mCurrentDirectory, new ScriptFile(newDir));
+        } else {
+            showMessage(R.string.text_create_fail);
+        }
     }
 
     private void showMessage(final int resId) {
