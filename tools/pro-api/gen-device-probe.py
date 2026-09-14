@@ -16,10 +16,12 @@ Logcat truncates very long lines and its buffer is small, hence the chunking
 import io
 import json
 import os
+import re
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATUS = os.path.join(REPO, '.artifacts', 'pro-api-status.json')
 OUT = os.path.join(REPO, '.artifacts', 'pro-api-probe.js')
+PATHS_OUT = os.path.join(REPO, '.artifacts', 'pro-api-paths.js')
 
 JS = r'''// @engine %(engine)s
 var MODULES = %(modules)s;
@@ -131,11 +133,47 @@ console.log('PROBE_END');
 '''
 
 
+JS_PATHS = r'''// @engine %(engine)s
+// 逐条 API 路径存在性探针：对每一个 `a.b.c` 形式的条目求值并报告 typeof。
+// 这是唯一能穿过 Rhino `ProxyJavaObject` 包装（ui / floaty 窗口）的手段 —— 那些对象
+// 用 getOwnPropertyNames + 反射都枚举不到成员，但 `ui.layout` 这类取值是正常的。
+var PATHS = %(paths)s;
+
+function kindOf(path) {
+    var parts = path.split('.');
+    var cur = global;
+    for (var i = 0; i < parts.length; i++) {
+        if (cur === null || typeof cur === 'undefined') return 'undefined';
+        try {
+            cur = cur[parts[i]];
+        } catch (e) {
+            return 'throw';
+        }
+    }
+    if (typeof cur === 'undefined') return 'undefined';
+    return (typeof cur === 'function') ? 'function' : 'value';
+}
+
+console.log('PROBE_BEGIN');
+for (var i = 0; i < PATHS.length; i++) {
+    var k = kindOf(PATHS[i]);
+    if (k !== 'undefined') {
+        console.log('PROBE_PATH|' + PATHS[i] + '|' + k);
+    }
+}
+console.log('PROBE_PATH_MISSING|' + PATHS.length);
+console.log('PROBE_END');
+'''
+
+
 def main():
     rows = json.load(io.open(STATUS, encoding='utf-8'))
     modules, globals_ = [], []
+    paths = []
     for r in rows:
         api = r['api']
+        if re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)*', api) and api not in paths:
+            paths.append(api)
         if api.startswith('$'):
             base = api.split('.')[0]
             if base not in modules:
@@ -146,8 +184,8 @@ def main():
                 modules.append(mod)
         elif api not in globals_:
             globals_.append(api)
-    for extra in ('ui.imageCache', 'floaty.window', 'events.bus', 'threads.currentThread',
-                  'console', 'globalconsole', 'runtime'):
+    for extra in ('ui', 'ui.imageCache', 'floaty.window', 'events.bus', 'threads.currentThread',
+                  'console', 'globalconsole', 'runtime', 'windows'):
         if extra not in modules:
             modules.append(extra)
     modules = sorted(m for m in modules if not m.startswith('2.'))
@@ -166,8 +204,20 @@ def main():
         head, rest = src.split('\n', 1)
         io.open(OUT.replace('.js', suffix), 'w', encoding='utf-8', newline='\n').write(
             head + '\n"ui";\n' + rest)
-    print('modules: %d  globals: %d' % (len(modules), len(globals_)))
+
+    # ---- path-existence probe (one file per engine) ----
+    paths_js = JS_PATHS % {'engine': 'quickjs', 'paths': json.dumps(paths, ensure_ascii=False)}
+    io.open(PATHS_OUT, 'w', encoding='utf-8', newline='\n').write(paths_js)
+    io.open(PATHS_OUT.replace('.js', '-rhino.js'), 'w', encoding='utf-8', newline='\n').write(
+        paths_js.replace('// @engine quickjs', '// @engine rhino', 1))
+    ui_js = paths_js.replace('// @engine quickjs', '// @engine rhino', 1)
+    head, rest = ui_js.split('\n', 1)
+    io.open(PATHS_OUT.replace('.js', '-rhino-ui.js'), 'w', encoding='utf-8', newline='\n').write(
+        head + '\n"ui";\n' + rest)
+
+    print('modules: %d  globals: %d  paths: %d' % (len(modules), len(globals_), len(paths)))
     print('-> %s (+ rhino / ui / rhino-ui variants)' % OUT)
+    print('-> %s (+ rhino / rhino-ui variants)' % PATHS_OUT)
     print('modules:', ', '.join(modules))
 
 

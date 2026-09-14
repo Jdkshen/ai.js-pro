@@ -494,47 +494,58 @@ def stage_check():
         p = os.path.join(ART, 'pro-api-device-%s.json' % eng)
         if os.path.exists(p):
             dev[eng] = json.load(io.open(p, encoding='utf-8'))
+    paths_dev = {}
+    for eng in ('rhino', 'quickjs'):
+        p = os.path.join(ART, 'pro-api-paths-%s.json' % eng)
+        if os.path.exists(p):
+            paths_dev[eng] = json.load(io.open(p, encoding='utf-8'))
 
-    def merge_device(engine, mod, member, status, evidence, module_num='', kind=''):
-        """Let the on-device member probe override the static verdict.
+    STATIC_POSITIVE = ('已定义', '已定义(全局)', '回归已覆盖', '样例已用')
+    STATIC_NEGATIVE = ('未定位', '待探针(类成员)', '仅引用')
 
-        * a hit in *any* probe variant (plain script / `"ui";` script) is proof
-          the member exists -> `实机有`;
-        * a miss is only conclusive when the static scan also found nothing --
-          `canvas` for instance is implemented (`ScriptCanvas`) but is handed to
-          `<canvas>` callbacks instead of being mounted as a global module, so a
-          probe miss alone must not be reported as "missing";
-        * class / instance names are never conclusive (host Java objects).
+    def merge_device(engine, mod, member, status, evidence, api='', module_num='', kind=''):
+        """Let the on-device probes override the static verdict.
+
+        1. **逐条路径存在性**（最强证据）：探针在设备上直接取了 `a.b.c` 的值，取得到
+           就是 `实机有` —— 这条能穿过 Rhino 的 `ProxyJavaObject` 包装（`$ui.*`、
+           `floaty` 窗口），而成员枚举做不到。
+        2. **成员枚举**：模块对象的 own props + 原型链 + Java 反射。
+        3. **否定结论要保守**：只有「本来就是模块的名字」才允许判 `实机缺` —— 类型名
+           （`Rect`/`Key`/`UiObject`）与回调参数对象（`canvas`）本来就不是全局，
+           取不到不代表没实现；而且还要静态也没找到实现。
         """
+        vp = paths_dev.get(engine)
+        if vp and api and api in vp['present']:
+            return '实机有', 'probe: %s 存在(%s)' % (api, vp['present'][api])
+
         variants = [v for k, v in dev.items() if k == engine or k == engine + '-ui']
-        if not variants:
-            return status, evidence
         for v in variants:
             if mod == 'globals':
-                kind = v['globals'].get(member)
-                if kind and kind != 'MISSING':
-                    return '实机有', 'probe: global.%s 存在(%s)' % (member, kind)
+                k = v['globals'].get(member)
+                if k and k != 'MISSING':
+                    return '实机有', 'probe: global.%s 存在(%s)' % (member, k)
             elif mod in v['modules'] and member in v['modules'][mod]:
                 return '实机有', 'probe: %s.%s 存在' % (mod, member)
-        if mod == 'globals':
-            # A dot-less name may be a real global function (`toast`, `Home()`)
-            # or a class / class member the doc happens to write without a dot
-            # (`Rect`, `isChecked`).  Only the globals chapter (2.16) is a
-            # reliable place to read "this global is missing".
-            if module_num == '2.16' and kind in ('function', 'constructor') \
-                    and all(v['globals'].get(member) == 'MISSING' for v in variants) \
-                    and status in ('未定位', '待探针(类成员)', '仅引用'):
-                return '实机缺', 'probe: 全局 %s 不存在' % member
-            return status, evidence
-        if mod in MODULE_NAMES and all(mod in v['missing'] for v in variants):
-            if kind != 'label' and status in ('未定位', '待探针(类成员)', '仅引用'):
-                return '实机缺', 'probe: %s 模块未挂载' % mod
-            if kind != 'label':
-                return status, (evidence + ' ; probe: 全局 %s 未挂载' % mod).strip(' ;')
-            return status, evidence
-        if mod in MODULE_NAMES and any(mod in v['modules'] for v in variants):
-            if status not in ('已定义', '已定义(全局)', '回归已覆盖', '样例已用'):
-                return '实机未见', 'probe: %s 在，成员表无 %s' % (mod, member)
+
+        is_module = mod in MODULE_NAMES and mod != 'globals'
+        probed_missing = bool(vp) and bool(api) and api not in vp['present']
+        enum_missing = bool(variants) and all(mod in v['missing'] for v in variants)
+        # `Rect`/`Key`/`ScriptEngine` are *types* (kind=class) and instance-method
+        # paths like `RootAutomator.tap` never resolve -- neither is a gap.
+        allow_negative = kind != 'class' and (mod.islower() or enum_missing)
+        if is_module and allow_negative and (enum_missing or probed_missing) and kind != 'label':
+            if status in STATIC_NEGATIVE:
+                return '实机缺', 'probe: 设备上取不到 %s' % (api or mod)
+            return status, (evidence + ' ; probe: 全局 %s 未挂载' % mod).strip(' ;')
+
+        if mod == 'globals' and module_num == '2.16' and kind in ('function', 'constructor') \
+                and variants and all(v['globals'].get(member) == 'MISSING' for v in variants) \
+                and status in STATIC_NEGATIVE:
+            return '实机缺', 'probe: 全局 %s 不存在' % member
+
+        if is_module and any(mod in v['modules'] for v in variants) \
+                and status not in STATIC_POSITIVE:
+            return '实机未见', 'probe: %s 在，成员表无 %s' % (mod, member)
         return status, evidence
 
     rows = []
@@ -638,8 +649,8 @@ def stage_check():
             # scan cannot see them, so a miss is "needs a device probe", not "not supported".
             q_status = '待探针(类成员)'
 
-        r_status, r_ev = merge_device('rhino', mod, member, r_status, r_ev, e['module_num'], e['kind'])
-        q_status, q_ev = merge_device('quickjs', mod, member, q_status, q_ev, e['module_num'], e['kind'])
+        r_status, r_ev = merge_device('rhino', mod, member, r_status, r_ev, name, e['module_num'], e['kind'])
+        q_status, q_ev = merge_device('quickjs', mod, member, q_status, q_ev, name, e['module_num'], e['kind'])
 
         rows.append({
             'module_num': e['module_num'], 'module': e['module'], 'api': name, 'kind': e['kind'],

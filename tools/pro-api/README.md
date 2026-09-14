@@ -50,6 +50,35 @@ foreach ($v in @('rhino','rhino-ui','qjs','ui')) {
 & '.venv\Scripts\python.exe' 'tools\pro-api\rebuild.py' --stage check --stage rollup
 ```
 
+### 逐条路径取值探针（更硬的一层，推荐一起跑）
+
+成员枚举有个致命盲区：**Rhino 的 `ui` / `floaty` 窗口是 `ProxyJavaObject` 包装**，
+`getOwnPropertyNames` 只能看到 JS 挂上去的 expando（`ui` 只有一个 `bindingContext`），
+">UI API 全没挂"。逐条取值能穿过包装：
+
+```powershell
+# 生成 pro-api-paths*.js（818 个 a.b.c 形式的条目）
+& '.venv\Scripts\python.exe' 'tools\pro-api\gen-device-probe.py'   # 同一条命令一起生成
+
+# 在设备上跑（rhino / rhino-ui / qjs），日志名随意
+foreach ($v in @('rhino','rhino-ui','qjs')) {
+  & $adb -s ce4d2bdb push ".artifacts\pro-api-paths-$v.js" "/sdcard/probe/paths-$v.js"
+  & $adb -s ce4d2bdb logcat -c
+  & $adb -s ce4d2bdb shell am start -a android.intent.action.VIEW -d "file:///sdcard/probe/paths-$v.js" `
+      -t text/plain -n com.jdkshen.aijspro/.external.open.RunIntentActivity
+  & $adb -s ce4d2bdb shell sleep 20
+  cmd /c "`"$adb`" -s ce4d2bdb logcat -d -s GlobalConsole:V > `".artifacts\probe-paths-$v.log`""
+}
+
+# 解析（多个日志可以合并到同一个引擎）
+& '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-paths.py' `
+    '.artifacts\probe-paths-rhino.log' '.artifacts\probe-paths-rhino-ui.log' --engine rhino
+& '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-paths.py' `
+    '.artifacts\probe-paths-qjs.log' --engine quickjs
+```
+
+探针只打印**取得到**的条目（`PROBE_PATH|ui.layout|function`），日志里没出现的即为取不到。
+
 `.artifacts/pro-api-device-*.json` 不存在时，`check` 阶段会**自动跳过**实机合并，只出静态结果。
 
 设备侧坑：
@@ -65,6 +94,7 @@ foreach ($v in @('rhino','rhino-ui','qjs','ui')) {
 | --- | --- |
 | `docs/architecture/pro-api-compatibility.csv` | 主产物，938 行，UTF-8 BOM |
 | `.artifacts/pro-api-device-<引擎>.json` | 真机成员表（`rhino` / `rhino-ui` / `quickjs` / `quickjs-ui`） |
+| `.artifacts/pro-api-paths-<引擎>.json` | 真机逐条路径存在性（`rhino` / `quickjs`） |
 | `.artifacts/pro-api-lines.json` | PDF 逐行文本 + 字号/字体/粗体比例 |
 | `.artifacts/pro-api-index.json` | 模块 / 小节 / 条目 + 参数表、返回值、版本标记 |
 | `.artifacts/pro-api-status.json` | 对照结果（CSV 的 JSON 版，便于脚本消费） |
@@ -110,6 +140,15 @@ foreach ($v in @('rhino','rhino-ui','qjs','ui')) {
    （`回归已覆盖`）和 `sample/QuickJS 新引擎/**` 样例（`样例已用`）。
 4. 模块名不是引擎模块（`window`、`UiObject`、`Tensor`…）且都没命中时标 `待探针(类成员)` ——
    这些在 QuickJS 里是宿主 Java 对象，静态扫描必然看不到，**不能当作不支持**。
+
+### 真机结果的合并优先级（`check` 阶段）
+
+1. **路径取值命中的直接判 `实机有`**（最强，能穿过 `ProxyJavaObject`）；
+2. 成员枚举命中也判 `实机有`；
+3. **否定要保守**：只有「本来就是模块的名字」（`MODULE_NAMES`、非 `globals`）才允许判 `实机缺`，
+   而且还要静态也没找到实现 —— 类型名（`Rect`/`Key`/`ScriptEngine`，`kind=class`）与
+   实例方法路径（`RootAutomator.tap`）本来就不是全局，取不到不代表没实现；
+4. 模块在、成员表里没它 → `实机未见`（可能是实例成员或非枚举属性）。
 
 ## 状态词表
 
