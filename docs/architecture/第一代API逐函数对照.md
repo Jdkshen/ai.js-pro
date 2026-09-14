@@ -71,21 +71,21 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 模块 | 条目 | 函数 | Rhino 实机有 | Rhino 源码有 | Rhino 待核实 | Rhino 未定位 | Rhino 实机缺 | QuickJS 实机有 | QuickJS 源码有 | QuickJS 待探针 | QuickJS 未定位 | QuickJS 实机缺 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1.2 如何阅读本文档 | 2 | 2 | 2 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 |
-| 2.1 自动化-控件操作 | 117 | 106 | 19 | 83 | 2 | 10 | 3 | 16 | 0 | 97 | 1 | 3 |
+| 2.1 自动化-控件操作 | 117 | 106 | 19 | 90 | 1 | 4 | 3 | 16 | 0 | 90 | 1 | 10 |
 | 2.2 自动化 - 坐标操作 | 32 | 30 | 11 | 0 | 18 | 3 | 0 | 11 | 0 | 12 | 2 | 0 |
-| 2.3 app - 应用 | 25 | 21 | 24 | 0 | 0 | 0 | 1 | 17 | 0 | 0 | 0 | 8 |
-| 2.4 base64 | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
+| 2.3 app - 应用 | 25 | 21 | 24 | 0 | 1 | 0 | 0 | 17 | 0 | 0 | 0 | 8 |
+| 2.4 base64 | 2 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 |
 | 2.5 colors - 颜色 | 19 | 8 | 19 | 0 | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 11 |
 | 2.6 canvas - 画布 | 30 | 29 | 0 | 29 | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 29 |
 | 2.7 console - 控制台 | 18 | 18 | 18 | 0 | 0 | 0 | 0 | 11 | 0 | 0 | 0 | 7 |
-| 2.8 crypto - 加解密与消息摘要 | 12 | 6 | 1 | 0 | 1 | 10 | 0 | 0 | 1 | 3 | 8 | 0 |
+| 2.8 crypto - 加解密与消息摘要 | 12 | 6 | 1 | 1 | 1 | 9 | 0 | 0 | 1 | 3 | 8 | 0 |
 | 2.9 debug - 调试工具 | 5 | 5 | 0 | 1 | 0 | 4 | 0 | 0 | 0 | 0 | 5 | 0 |
 | 2.10 device - 设备 | 46 | 28 | 45 | 0 | 0 | 0 | 1 | 18 | 0 | 0 | 0 | 28 |
 | 2.11 dialogs - 对话框 | 26 | 13 | 10 | 0 | 12 | 4 | 0 | 8 | 0 | 4 | 1 | 1 |
 | 2.12 engines - 脚本引擎 | 21 | 15 | 7 | 4 | 5 | 4 | 1 | 6 | 0 | 6 | 4 | 2 |
 | 2.13 events - 事件与监听 | 18 | 14 | 2 | 14 | 1 | 1 | 0 | 1 | 0 | 14 | 1 | 1 |
 | 2.14 floaty - 悬浮窗 | 25 | 23 | 3 | 18 | 0 | 2 | 2 | 3 | 9 | 7 | 2 | 2 |
-| 2.15 files - 文件系统 | 40 | 37 | 27 | 5 | 2 | 6 | 0 | 18 | 0 | 9 | 3 | 9 |
+| 2.15 files - 文件系统 | 40 | 37 | 27 | 9 | 2 | 2 | 0 | 18 | 0 | 0 | 3 | 18 |
 | 2.16 globals - 全局变量与函数 | 16 | 15 | 16 | 0 | 0 | 0 | 0 | 13 | 1 | 2 | 0 | 0 |
 | 2.17 http - HTTP 网络请求 | 13 | 5 | 13 | 0 | 0 | 0 | 0 | 4 | 0 | 7 | 1 | 1 |
 | 2.18 images - 图片处理 | 76 | 64 | 43 | 9 | 7 | 15 | 2 | 42 | 1 | 27 | 4 | 2 |
@@ -97,16 +97,16 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.25 sensors - 传感器 | 8 | 3 | 4 | 0 | 3 | 1 | 0 | 4 | 0 | 0 | 1 | 0 |
 | 2.26 shell - Shell 命令 | 6 | 6 | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 | 2.27 storages - 本地存储 | 8 | 7 | 2 | 5 | 0 | 1 | 0 | 2 | 0 | 5 | 1 | 0 |
-| 2.28 settings - 设置 | 2 | 2 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 | 0 |
+| 2.28 settings - 设置 | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | 2.29 threads - 多线程 | 20 | 17 | 8 | 6 | 5 | 1 | 0 | 5 | 0 | 8 | 2 | 3 |
 | 2.30 thirdPartyPlugins - 第三方插件 | 40 | 23 | 0 | 0 | 2 | 37 | 1 | 0 | 0 | 30 | 8 | 2 |
 | 2.31 timers - 定时器 | 6 | 6 | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
-| 2.32 work_manager - 定时与任务 | 21 | 10 | 9 | 0 | 7 | 5 | 0 | 0 | 0 | 7 | 14 | 0 |
+| 2.32 work_manager - 定时与任务 | 21 | 10 | 9 | 1 | 7 | 4 | 0 | 0 | 0 | 7 | 14 | 0 |
 | 2.33 util - 工具 | 23 | 20 | 22 | 0 | 0 | 1 | 0 | 0 | 15 | 5 | 3 | 0 |
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
-| 2.35 zip - 压缩与解压 | 17 | 17 | 0 | 1 | 3 | 13 | 0 | 0 | 0 | 12 | 5 | 0 |
+| 2.35 zip - 压缩与解压 | 17 | 17 | 0 | 1 | 6 | 10 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **378** | **177** | **221** | **147** | **14** | **247** | **33** | **270** | **95** | **117** |
+| **合计** | **938** | **624** | **378** | **192** | **222** | **132** | **13** | **247** | **33** | **254** | **95** | **133** |
 
 **读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **776/938（83%）**，QuickJS **550/938（59%）**。
 
@@ -132,23 +132,25 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 ### 5.3 真机直接确认"取不到"的条目（`实机缺`）
 
-- **Rhino 14 条**：`automator.takeScreenshot/switchToInputMethod/headsetHook`、`floaty.checkPermission/requestPermission`、`images.getSimilarity/detectsMultiColors`、`engines.startFloatingController`、`app.getInstalledApps`（命名差异，实现叫 `getInstalledPackageList`）、`console.getInput/setColor/setTextSize`（2.36 的 `<console>` 控件属性）、`device.broad`（文档残片）、`ocr.filterScore`。
-- **QuickJS 117 条**，与仓库既有结论完全吻合：`device.*` 28、`canvas.*` 29、`colors` 常量 11、`files.*` 9、`app.*` 8、`console.*` 7、`WebSocket.*` 4、`threads.disposable/atomic/lock` 3 等。
+- **Rhino 13 条**：`automator.takeScreenshot/switchToInputMethod/headsetHook`、`floaty.checkPermission/requestPermission`、`images.getSimilarity/detectsMultiColors`、`engines.startFloatingController`、`app.getInstalledApps`（命名差异，实现叫 `getInstalledPackageList`）、`console.getInput/setColor/setTextSize`（2.36 的 `<console>` 控件属性）、`device.broad`（文档残片）、`ocr.filterScore`。
+- **QuickJS 133 条**，与仓库既有结论完全吻合：`canvas.*` 29、`device.*` 28、`files.*` 18、`colors` 常量 11、`app.*` 8、`console.*` 7、`WebSocket.*` 4、`threads.disposable/atomic/lock` 3 等。
 
-## 6. 65 条 Rhino 未定位/实机缺的定性结论
+## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
 
 ### 6.1 漏扫 / 命名差异 —— 实现其实存在（13 条）
+
+**这 13 条已经修进扫描器**：`rebuild.py` 现在带 `HINTS`（`UiCollection` → `UiObjectCollection`、`ReadableTextFile` → `PReadableTextFile` …）与 `RENAME_HINTS`（PDF 名 → 实现名），并修掉了 `$` 前缀模块取不到 `HINTS` 的问题。重跑后它们的状态是 `已定义` / `已定义(改名)`，CSV 里能看到 `实现名 xxx` 的证据。
 
 | 条目 | 结论与证据 |
 | --- | --- |
 | `UiCollection.size/each/empty/nonEmpty/find/findOne` | **漏扫**：实现在 `modules/automator/.../UiObjectCollection.kt:207/220/227/237/246/250`，类名与文档写法不同 |
 | `ReadableTextFile.read/readline/readlines`（+ 类型本身） | **漏扫**：实现在 `modules/common/.../pio/PReadableTextFile.java`（类名带 `P` 前缀） |
 | `PWritableTextFile.write/writeline/writelines/flush/close` | **漏扫**：同上，`PWritableTextFile.java` |
-| `RootAutomator.tap/swipe/press/longPress/touchDown/touchMove/touchUp` | **漏扫**：`__RootAutomator__.js` 用 methods 列表动态挂到**实例**上，静态查不到 |
+| `RootAutomator.tap/swipe/press/longPress/touchDown/touchMove/touchUp` | **漏扫**：`__RootAutomator__.js` 用 methods 列表动态挂到**实例**上，静态查不到（真机成员表也看不到，属已知盲区） |
 | `$base64.encode/decode` | **命名差异**：实现在 `$crypto.base64Encode/base64Decode`（`Crypto.java:117`，实机已确认存在） |
-| `$work_manager.addIntentTask` | **命名差异**：实现叫 `addBroadcastIntentTask`（`WorkManagerModule.kt`，实机确认） |
+| `$work_manager.addIntentTask` | **命名差异**：实现叫 `addBroadcastIntentTask`（`WorkManagerModule.kt:65`，实机确认） |
 | `app.getInstalledApps` | **命名差异**：实现叫 `getInstalledPackageList`（历史改名，避免与 Java 方法冲突） |
 
 ### 6.2 真缺 —— 两个引擎都没有（约 35 条）
@@ -169,24 +171,20 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **65 条**（未定位 56 + 实机缺 9）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **49 条**（未定位 41 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
-| 2.35 zip | 13 | 0 | `$zip.zipDir/zipFiles/open`、`ZipFile.setPassword/isEncrypted/extractAll` |
-| 2.1 控件操作 | 9 | 3 | `UiObject.clickCenter`、`UiCollection.*`（见 §6.1，多为漏扫）、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
+| 2.35 zip | 10 | 0 | `$zip.zipDir/zipFiles/open`、`ZipFile.setPassword/isEncrypted/extractAll` |
 | 2.18 images | 7 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`ColorMapping.*`、`images.getSimilarity/detectsMultiColors` |
-| 2.8 crypto | 5 | 0 | `$crypto.encrypt/decrypt/generateKeyPair`、`Key`/`KeyPair` |
+| 2.8 crypto | 4 | 0 | `$crypto.encrypt/decrypt/generateKeyPair`、`Key`/`KeyPair` |
 | 2.9 debug | 4 | 0 | `$debug.dumpHprof/dumpAndSendHprof/gc/setMemoryLeakDetectionEnabled` |
-| 2.15 files | 4 | 0 | `ReadableTextFile.read/readline/readlines`（见 §6.1，漏扫） |
 | 2.11 dialogs | 3 | 0 | `dialog.setDefaultDialogType/getProgress/getMaxProgress` |
-| 2.2 坐标操作 | 2 | 0 | `RootAutomator2`、`RootAutomator2.longPress` |
-| 2.4 base64 | 2 | 0 | `$base64.encode/decode`（见 §6.1，实为 `$crypto.base64*`） |
-| 2.22 ocr / 2.24 power_manager | 各 2 | 0 | `OCR.detect`、`$power_manager.*` |
-| 2.14 floaty / 2.3 app | 0 | 2 / 1 | `floaty.checkPermission/requestPermission`、`app.getInstalledApps`（命名差异） |
-| 2.12 / 2.29 / 2.32 | 各 1 | 1（2.12） | `getPath`、`isAlive`、`$work_manager.addIntentTask`（命名差异）、`engines.startFloatingController` |
+| 2.1 控件操作 | 3 | 3 | `UiObject.clickCenter`、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
+| 2.2 坐标操作 / 2.22 ocr / 2.24 power_manager / 2.28 settings | 各 2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`$power_manager.*`、`$settings.*` |
+| 2.12 engines / 2.29 threads / 2.14 floaty | 各 1 / 0 | 1 / 0 / 2 | `engines.startFloatingController`、`getPath`、`isAlive`、`floaty.checkPermission/requestPermission` |
 
-QuickJS 侧同类共 **134 行**（未定位 43 + 实机缺 91），大头是 `canvas.*`(29)、`device.*`(28)、`colors` 常量(11)、`files.*`(9)、`app.*`(8)、`console.*`(7)。
+QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。
 
 ## 8. 怎么复现
 

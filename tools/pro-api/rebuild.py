@@ -297,6 +297,20 @@ HINTS = {
     'RootAutomator': ('RootAutomator', ['RootAutomator']),
     'WebSocket': ('web', ['WebSocket']),
     'thirdPartyPlugins': ('', ['Pytorch', 'Tensor', 'OdResult', 'Vocab', 'ObjectDetection']),
+    # PDF 里的类型名与工程里的类名不一致（文档写作 UiCollection / ReadableTextFile，
+    # 实现是 UiObjectCollection / PReadableTextFile）
+    'UiCollection': ('', ['UiObjectCollection']),
+    'ReadableTextFile': ('', ['PReadableTextFile']),
+    'PWritableTextFile': ('', ['PWritableTextFile']),
+}
+
+# PDF 条目名 -> 工程里的实现名（能力在，只是名字/归属不同）。
+# 静态对照会按实现名去查，并把状态记为 `已定义(改名)`。
+RENAME_HINTS = {
+    '$base64.encode': '$crypto.base64Encode',
+    '$base64.decode': '$crypto.base64Decode',
+    '$work_manager.addIntentTask': '$work_manager.addBroadcastIntentTask',
+    'app.getInstalledApps': 'app.getInstalledPackageList',
 }
 
 GLOBAL_FILES = ('__globals__.js', 'init.js', 'ScriptRuntime.java', '__automator__.js',
@@ -455,7 +469,8 @@ def stage_check():
         return seen_files
 
     def rhino_sources(mod):
-        hint, extra = HINTS.get(mod, (mod.lstrip('$'), []))
+        hint, extra = (HINTS.get(mod) or HINTS.get(mod.lstrip('$'))
+                       or (mod.lstrip('$'), []))
         out = []
         if hint:
             for key in (hint.lower(), ('_' + hint).lower()):
@@ -500,7 +515,7 @@ def stage_check():
         if os.path.exists(p):
             paths_dev[eng] = json.load(io.open(p, encoding='utf-8'))
 
-    STATIC_POSITIVE = ('已定义', '已定义(全局)', '回归已覆盖', '样例已用')
+    STATIC_POSITIVE = ('已定义', '已定义(全局)', '回归已覆盖', '样例已用', '已定义(改名)')
     STATIC_NEGATIVE = ('未定位', '待探针(类成员)', '仅引用')
 
     def merge_device(engine, mod, member, status, evidence, api='', module_num='', kind=''):
@@ -571,17 +586,21 @@ def stage_check():
                 mod = ns
             tokens = re.findall(r'[A-Za-z_$][A-Za-z0-9_$]*', name)
             member = tokens[-1] if tokens else name
+        renamed = RENAME_HINTS.get(name)
+        scan_mod, scan_member = mod, member
+        if renamed:
+            scan_mod, scan_member = renamed.rsplit('.', 1)
         base_mod = mod.lstrip('$')
 
         defpats = [
-            re.compile(r'(?<![\w$])%s\s*\.\s*%s\s*[:=]' % (re.escape(base_mod), re.escape(member))),
-            re.compile(r'(?<![\w$])%s\s*[:=]\s*function' % re.escape(member)),
-            re.compile(r'public\s+[^;{}\n]*\b%s\s*\(' % re.escape(member)),
-            re.compile(r'\bfun\s+%s\s*\(' % re.escape(member)),
-            re.compile(r'\bfunction\s+%s\s*\(' % re.escape(member)),
-            re.compile(r'(?<![\w$])%s\s*\(\s*\)\s*\{' % re.escape(member)),
+            re.compile(r'(?<![\w$])%s\s*\.\s*%s\s*[:=]' % (re.escape(scan_mod.lstrip('$')), re.escape(scan_member))),
+            re.compile(r'(?<![\w$])%s\s*[:=]\s*function' % re.escape(scan_member)),
+            re.compile(r'public\s+[^;{}\n]*\b%s\s*\(' % re.escape(scan_member)),
+            re.compile(r'\bfun\s+%s\s*\(' % re.escape(scan_member)),
+            re.compile(r'\bfunction\s+%s\s*\(' % re.escape(scan_member)),
+            re.compile(r'(?<![\w$])%s\s*\(\s*\)\s*\{' % re.escape(scan_member)),
         ]
-        menpat = re.compile(r'(?<![\w$])%s(?![\w$])' % re.escape(member))
+        menpat = re.compile(r'(?<![\w$])%s(?![\w$])' % re.escape(scan_member))
 
         def scan(rel_list):
             for rel in rel_list:
@@ -596,19 +615,22 @@ def stage_check():
                         return '同模块', '%s:%d' % (rel, n)
             return '未定位', ''
 
-        r_status, r_ev = scan(rhino_sources(mod))
+        r_status, r_ev = scan(rhino_sources(scan_mod))
         if r_status == '未定位':
             g_status, g_ev = scan(global_sources)   # Auto.js also exposes many APIs as globals
             if g_status != '未定位':
                 r_status, r_ev = g_status + '(全局)', g_ev
         if r_status == '未定位':
-            pat = re.compile(r'(?<![\w$])%s\s*\.\s*%s\b' % (re.escape(base_mod), re.escape(member)))
+            pat = re.compile(r'(?<![\w$])%s\s*\.\s*%s\b' % (re.escape(scan_mod.lstrip('$')), re.escape(scan_member)))
             for rel, text in files.items():
                 hit = pat.search(text)
                 if hit:
                     r_status = '仅引用'
                     r_ev = '%s:%d' % (rel, text[:hit.start()].count('\n') + 1)
                     break
+        if renamed and r_status in STATIC_POSITIVE:
+            r_status = '已定义(改名)'
+            r_ev = '实现名 %s（%s）' % (renamed, r_ev)
 
         q_status, q_ev = '未定位', ''
         if member in qjs_members.get(base_mod, set()):
@@ -687,7 +709,7 @@ def stage_rollup():
     def bucket(c, prefix, status):
         if status == '实机有':
             c[prefix + 'yes'] += 1
-        elif status in ('已定义', '已定义(全局)', '回归已覆盖', '样例已用'):
+        elif status in ('已定义', '已定义(全局)', '回归已覆盖', '样例已用', '已定义(改名)'):
             c[prefix + 'src'] += 1
         elif status in ('同模块', '同模块(全局)', '仅引用', '实机未见'):
             c[prefix + 'soft'] += 1
