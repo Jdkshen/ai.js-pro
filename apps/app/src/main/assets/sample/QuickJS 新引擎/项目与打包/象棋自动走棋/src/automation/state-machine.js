@@ -621,7 +621,11 @@ function createMachine(config, deps) {
                 return onTick(event);
             case EVENT.PAUSE: {
                 const effects = cancelCurrentJob("用户暂停");
-                setState(STATE.PAUSED, "已暂停（票据与任务都已作废）");
+                // 带上调用方给的原因（例如「同一着法重试 3 次仍未确认落子」）——
+                // 否则界面/日志只能看到笼统的「已暂停」，看不出为什么停。
+                setState(STATE.PAUSED, event && event.reason
+                    ? "已暂停（" + event.reason + "）"
+                    : "已暂停（票据与任务都已作废）");
                 return effectsOut(effects, reason);
             }
             case EVENT.RESUME:

@@ -181,6 +181,25 @@ function sameColour(a, b) {
 }
 
 /**
+ * 落点格「读错」到什么程度还能接受（容差两步专用）：
+ *   · 同色不同兵种（红炮读成红兵）—— 游戏高亮装饰的典型误读；
+ *   · **读成空** —— 漏检（带高亮环/特效的那一格模型直接看不到），模型已知失效模式。
+ * 异色（红↔黑）仍然拒绝：那说明真被对方吃了，不能当噪声吞掉。
+ */
+function usableAtMoveEnd(expected, observed) {
+    if (typeof expected !== "string" || expected.length !== 1) {
+        return false;
+    }
+    if (observed == null || observed === "" || observed === "?") {
+        return true;   // 漏检 / 读不出来：落点格是已知事实，按着法补齐
+    }
+    if (typeof observed !== "string" || observed.length !== 1) {
+        return false;
+    }
+    return sameColour(expected, observed);
+}
+
+/**
  * 带装饰容差的**两步**解释：模型把「刚落的那个子」读错兵种时用。
  *
  * 真机现场（2026-09-14，K40 + 天天象棋离线局）：我方 炮(c2)吃卒落在 (2,3)、
@@ -232,7 +251,7 @@ function inferPairWithDecorationTolerance(before, side, observed) {
                     usable = false;
                     break;
                 }
-                if (!sameColour(endBoard[index], observed[index])) {
+                if (!usableAtMoveEnd(endBoard[index], observed[index])) {
                     usable = false;
                     break;
                 }

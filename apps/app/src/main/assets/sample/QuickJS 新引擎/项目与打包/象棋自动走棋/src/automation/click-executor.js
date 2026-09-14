@@ -100,6 +100,9 @@ function createExecutor(options) {
                         normalizedResidual: offset,
                         inside: true,
                         usedCenter: true,
+                        col: col,
+                        row: row,
+                        geometryVersion: grid.version,
                         latticeX: Math.round(point.x),
                         latticeY: Math.round(point.y)
                     };
@@ -111,7 +114,12 @@ function createExecutor(options) {
             y: Math.round(point.y),
             normalizedResidual: snapped.normalized,
             inside: snapped.inside,
-            usedCenter: false
+            usedCenter: false,
+            col: col,
+            row: row,
+            geometryVersion: grid.version,
+            latticeX: Math.round(point.x),
+            latticeY: Math.round(point.y)
         };
     }
 
@@ -138,10 +146,21 @@ function createExecutor(options) {
             kind: kind,
             x: point.x,
             y: point.y,
+            col: point.col == null ? null : point.col,
+            row: point.row == null ? null : point.row,
+            latticeX: point.latticeX == null ? null : point.latticeX,
+            latticeY: point.latticeY == null ? null : point.latticeY,
+            geometryVersion: point.geometryVersion == null ? null : point.geometryVersion,
             usedCenter: !!point.usedCenter,
             ok: result === true || (result && result.ok === true),
             disabled: !!(result && result.disabled),
+            // 真实执行的手势（原地 swipe / tap / 无障碍 press / click）；旧适配层可能只给 method
             method: result && result.method ? result.method : null,
+            channel: result && result.channel ? result.channel : null,
+            requested: result && result.requested ? result.requested : null,
+            command: result && result.command ? result.command : null,
+            startedAtMono: result && result.startedAtMono != null ? result.startedAtMono : started,
+            finishedAtMono: result && result.finishedAtMono != null ? result.finishedAtMono : nowMono(),
             error: result && result.error ? result.error : "",
             atMono: started,
             elapsedMs: nowMono() - started

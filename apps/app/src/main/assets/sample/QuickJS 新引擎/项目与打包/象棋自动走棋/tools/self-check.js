@@ -2328,6 +2328,114 @@ check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（�
         : ("没能进到 PRECHECK/SUGGESTED，停在 " + state + "（" + driver.machine.reason() + "）");
 });
 
+// ---------------------------------------------------------------- 诊断日志环 + 点击通道 + 尝试预算
+
+const logRingModule = require("../src/diagnostics/log-ring.js");
+const adapterModule = require("../src/runtime/aijs-adapter.js");
+
+check("长跑：日志环超过上限要原地裁剪，不许抛「常量重新赋值」", function () {
+    // 真机回归：`const history = []; history = history.slice(-200)` 在超过 300 条时抛
+    // "Assignment to constant variable"，而一轮真机跑正好是 200~320 条。
+    const ring = logRingModule.createLogRing(300, 200);
+    for (let i = 1; i <= 500; i++) {
+        ring.push({ text: "第 " + i + " 条" });
+    }
+    if (ring.size() > 300) {
+        return "日志环溢出了上限（300），实际 " + ring.size() + " 条";
+    }
+    if (ring.size() < 200) {
+        return "日志环应当保留 200~300 条，实际只剩 " + ring.size() + " 条";
+    }
+    const all = ring.all();
+    if (all[all.length - 1].text !== "第 500 条") {
+        return "最后一条应是「第 500 条」，实际 " + all[all.length - 1].text;
+    }
+    // 裁剪只丢最旧的，不丢新产生的
+    if (all[all.length - 2].text !== "第 499 条") {
+        return "倒数第二条应是「第 499 条」，实际 " + all[all.length - 2].text;
+    }
+    return true;
+});
+
+check("点击通道：非法通道名必须报错，不许静默退回 auto", function () {
+    let threw = false;
+    try {
+        adapterModule.createTap({ method: "accssibility" });   // 故意拼错
+    } catch (error) {
+        threw = /未知的点击通道/.test(String(error && error.message ? error.message : error));
+    }
+    return threw ? true : "拼错的通道名没有被拒绝（对照实验会被静默污染）";
+});
+
+check("点击通道：日志里的手势名必须是真实手势（原地 swipe ≠ tap）", function () {
+    // pressMs ≥ 120 → 实际执行 `input swipe x y x y ms`（原地按住），名称必须如实反映，
+    // 否则通道对照实验会被「shizuku-input-tap」这个名字误导。
+    const longPress = adapterModule.createTap({ method: "shizuku", pressMs: 350 });
+    const pressed = longPress.tap(100, 200);
+    if (pressed.method !== "shizuku-input-swipe") {
+        return "350ms 按压应记为 shizuku-input-swipe，实际 " + pressed.method;
+    }
+    if (pressed.channel !== "shizuku" || pressed.requested !== "shizuku") {
+        return "请求/实际通道没记全：" + JSON.stringify({ c: pressed.channel, r: pressed.requested });
+    }
+    if (typeof pressed.startedAtMono !== "number" || typeof pressed.finishedAtMono !== "number") {
+        return "缺少起止时刻（无法判断两次手势是否互相取消）";
+    }
+    const shortPress = adapterModule.createTap({ method: "shizuku", pressMs: 60 });
+    const tapped = shortPress.tap(100, 200);
+    return tapped.method === "shizuku-input-tap"
+        ? true : ("60ms 应是 shizuku-input-tap，实际 " + tapped.method);
+});
+
+check("驱动：同一局面同一手重试超限 → 暂停，不再无限盲点（尝试预算）", function () {
+    let clock = 1000;
+    const taps = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        tap: function (x, y) {
+            taps.push({ x: x, y: y });
+            return { ok: true, method: "self-check-tap", x: x, y: y };
+        },
+        // 永远返回同一个开局：模拟「点击确实发出去了，但棋子不落」的真机现场
+        recognize: function () {
+            return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0, layout: START_FEN };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 }; },
+        nowMono: function () { return clock; },
+        log: function () { },
+        config: { movetimeMs: 20, attemptLimitPerMove: 2, attemptLimitPerPosition: 3 }
+    });
+    driver.start();
+    for (let i = 0; i < 80; i++) {
+        clock += 1500;
+        driver.tick();
+        if (driver.machine.state() === "PAUSED") {
+            break;
+        }
+    }
+    if (driver.machine.state() !== "PAUSED") {
+        return "重试超限后应暂停，实际停在 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "）";
+    }
+    if (String(driver.machine.reason()).indexOf("同一") < 0) {
+        return "暂停原因没说明是重试超限：" + driver.machine.reason();
+    }
+    const attempts = Math.floor(taps.length / 2);   // 起点+终点 = 一次出手
+    if (attempts > 3) {
+        return "暂停前出手 " + attempts + " 次（上限 3），预算没生效";
+    }
+    if (attempts < 2) {
+        return "还没到预算就停了（只出手 " + attempts + " 次）";
+    }
+    const before = taps.length;
+    for (let i = 0; i < 5; i++) {
+        clock += 1500;
+        driver.tick();
+    }
+    return taps.length === before ? true : ("暂停后仍在点击（" + before + " → " + taps.length + "）");
+});
+
 // ---------------------------------------------------------------- 识别绘制（人审用）
 
 check("识别绘制：网格线正好落在交点/路上（19 条线，位置与几何一致）", function () {

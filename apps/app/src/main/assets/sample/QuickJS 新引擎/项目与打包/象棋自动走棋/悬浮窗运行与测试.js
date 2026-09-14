@@ -30,6 +30,50 @@
  */
 const BASE_DIR = (typeof __dirname === "string" && __dirname && __dirname !== ".") ? __dirname : ".";
 
+/**
+ * 探针版本号：**改脚本时手动 +1**，所有实验记录里都带上它。
+ * 真机坑：手机上的工程副本、内置示例、资源导入副本、重新装 APK 都可能各不相同，
+ * 不打印版本与指纹就无法确认「跑的是哪一份」（曾经把代码改了、手机却没生效，白排查一整轮）。
+ */
+const PROBE_BUILD_ID = "2026-09-14.3";
+/** 版本核对用的关键文件（相对工程根）。第一个用**入口脚本自身文件名**，
+ *  因为探针/实验可能把面板另存为别的名字运行（panel-probe.js），写死名字会读到旧副本。 */
+const PROBE_SELF_NAME = (typeof __filename === "string" && __filename)
+    ? String(__filename).split("/").pop()
+    : "悬浮窗运行与测试.js";
+const PROBE_FILES = [
+    PROBE_SELF_NAME,
+    "src/runtime/aijs-adapter.js",
+    "src/automation/click-executor.js",
+    "src/automation/auto-driver.js",
+    "src/automation/state-machine.js"
+];
+
+/** 32 位 FNV-1a，避免依赖 crypto（QuickJS 里不一定有）。 */
+function cheapHash(text) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i) & 0xff;
+        hash = (hash * 0x01000193) >>> 0;
+    }
+    return ("00000000" + hash.toString(16)).slice(-8);
+}
+
+/** 关键文件的「名字:指纹」，后面接在启动日志里（adb 那边比对本地副本即可）。 */
+function probeFingerprint() {
+    const parts = [];
+    for (let i = 0; i < PROBE_FILES.length; i++) {
+        const name = PROBE_FILES[i];
+        try {
+            const text = String(files.read(BASE_DIR === "." ? name : (BASE_DIR + "/" + name)) || "");
+            parts.push(name.split("/").pop() + ":" + (text ? cheapHash(text) : "缺失"));
+        } catch (error) {
+            parts.push(name.split("/").pop() + ":读取失败");
+        }
+    }
+    return parts.join(" ");
+}
+
 function load(relative) {
     return require(BASE_DIR === "." ? relative : (BASE_DIR + "/" + relative));
 }
@@ -125,6 +169,10 @@ let autoAlignOn = false;      // 几何按检测框自动微调（真机实测�
 // 点击通道：auto（有 Shizuku 就走 shizuku 的 `input swipe` 原地按住）/ shizuku / accessibility。
 // K40 + 天天象棋实测：超短按（`input tap`）会被游戏直接丢弃，按住 ≥300ms 才选中棋子。
 let clickMethodKey = "auto";
+/** 点击租约的恢复函数（buildDriver 里赋值；停止/退出时兜底调用，别把面板留在隐藏状态） */
+let releaseTapLease = null;
+/** 点击租约是否正持有（抓帧时不能把面板"恢复"出来） */
+let clickLeaseActive = false;
 // 点击按压时长（ms）。真机实测（K40 + 天天象棋）：**60ms 的注入点击会被游戏完全忽略**，
 // 300ms / 400ms / 600ms 都能落子 → 默认值取 350ms（手动点「开始」跑 ③ 也必须这个量级，
 // 否则每轮都是 UNCHANGED 白跑）。小米8 上短按也够用，但长按没副作用，所以统一 350。
@@ -736,7 +784,9 @@ function grabFrame() {
     try {
         return grabFrameRaw();
     } finally {
-        if (hidden) {
+        // ⚠️ 点击租约期间不许把面板恢复出来：那样等于在两次点击之间又动了一次窗口，
+        // 游戏会丢掉"已选中"（真机定位到根因的一条）。
+        if (hidden && !clickLeaseActive) {
             try {
                 win.setVisibility(true);
             } catch (error) {
@@ -749,6 +799,243 @@ function grabFrame() {
 /** 审核绘制的落盘路径（帧 + 画板内容）—— 方便离线审，也方便把人审结果给出去。 */
 const AUDIT_FRAME = FRAME_DIR + "/audit-frame.png";
 const AUDIT_JSON = FRAME_DIR + "/audit-overlay.json";
+
+// ---------------------------------------------------------------- 单手探针（通道对照实验用）
+
+/**
+ * 单手探针的落盘路径：原始帧 + 结论 JSON。
+ *
+ * 为什么要它（见 docs/reports/2026-09-14_…§10）：真机上「普通走子能成、吃子不成」，
+ * 但在区分「通道差异 / 坐标偏差 / 选中未成立 / 游戏真的过滤自动化事件」之前不能下结论。
+ * 探针做的事：**只发一手的两次手势**，每一步都留原始帧与像素证据，并把实际通道、
+ * 真实手势名、坐标来源（实测圆心 / 网格交点）、起止时刻全部落盘。
+ */
+const PROBE_JSON = FRAME_DIR + "/tap-probe.json";
+function probePng(name) {
+    return FRAME_DIR + "/tap-probe-" + name + ".png";
+}
+
+/** 采样方框里「与参考帧不同」的像素数（稀疏采样，够用且快）。 */
+function diffBox(refFrame, frame, box, step) {
+    const s = step == null ? 4 : step;
+    let changed = 0;
+    let total = 0;
+    for (let y = box.y1; y <= box.y2; y += s) {
+        for (let x = box.x1; x <= box.x2; x += s) {
+            const a = adapter.rgbAt(refFrame, x, y);
+            const b = adapter.rgbAt(frame, x, y);
+            total += 1;
+            if (!a || !b) {
+                continue;
+            }
+            if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 60) {
+                changed += 1;
+            }
+        }
+    }
+    return { changed: changed, total: total };
+}
+
+/** 以某个格点为中心、边长 2*margin 的方框（点的位置 = 实际发送的坐标）。 */
+function boxAround(x, y, margin) {
+    const m = margin == null ? 46 : margin;
+    return { x1: Math.round(x - m), y1: Math.round(y - m), x2: Math.round(x + m), y2: Math.round(y + m) };
+}
+
+/** 计步器区域（K40：≈660~900 × 2050~2160）——「这手到底落没落子」的真值判据之一。 */
+function stepBoxNow() {
+    const screen = adapter.screenSize ? adapter.screenSize() : null;
+    if (screen && screen.height > 0) {
+        const y2 = Math.round(screen.height * 0.90);
+        const y1 = Math.round(screen.height * 0.854);
+        return { x1: Math.round(screen.width * 0.61), y1: y1, x2: Math.round(screen.width * 0.83), y2: y2 };
+    }
+    return { x1: 660, y1: 2050, x2: 900, y2: 2160 };
+}
+
+/**
+ * 单手探针：只发**一手**（起点一格 + 落点一格）的两次手势，不做自动搜索、不做后续重试。
+ *
+ * autorun 用法：
+ *   "tapProbe": { "fromCol": 1, "fromRow": 7, "toCol": 1, "toRow": 0,
+ *                 "channel": "auto", "pressMs": 350, "gapMs": 600, "postMs": 1500, "label": "capture-b2x" }
+ *
+ * · 起点 tap 之后先看「棋面有没有反应」（选中高亮/提示点），**没反应就终止**，不发落点手势；
+ * · 全程把面板窗口藏起来（保留宿主与服务：Shizuku / 无障碍都还要用），finally 恢复；
+ * · 每个环节都落盘 PNG + 结论 JSON，坐标可离线叠十字核对（见 report §10.2）。
+ */
+function runTapProbe(config) {
+    const cfg = config || {};
+    const label = cfg.label ? String(cfg.label) : "probe";
+    const channel = cfg.channel ? String(cfg.channel) : clickMethodKey;
+    const pressMs = cfg.pressMs != null ? Math.round(Number(cfg.pressMs)) : clickPressMs;
+    const gapMs = cfg.gapMs != null ? Math.round(Number(cfg.gapMs)) : Math.max(300, pressMs + 250);
+    const postMs = cfg.postMs != null ? Math.round(Number(cfg.postMs)) : 1500;
+    const report = {
+        label: label, buildId: PROBE_BUILD_ID, at: new Date().toISOString(),
+        requestedChannel: channel, pressMs: pressMs, gapMs: gapMs, postMs: postMs,
+        gamePackage: gamePackage, steps: [], verdict: "未完成"
+    };
+
+    // 前台守卫：注入的点击必须落在游戏上（自家透明宿主在前台时点击会被自己吃掉）
+    const guard = foregroundGuard();
+    report.foregroundAfterGuard = guard ? (guard.package || "") : "";
+    report.foregroundGuardOk = !!(guard && guard.ok);
+    if (!report.foregroundGuardOk) {
+        report.verdict = "前台不是游戏，未发手势";
+        logLine("探针 " + label + "：" + report.verdict + "（当前 " + (report.foregroundAfterGuard || "未知") + "）");
+        saveProbeReport(report);
+        return report;
+    }
+
+    let hidden = false;
+    try {
+        // 整轮藏面板（不是"抓帧才藏"）：两次手势期间棋盘上不能有我们自己的窗口
+        hidden = win.setVisibility(false) !== false;
+        if (hidden) {
+            sleep(140);
+        }
+        const grid = ensureProbeGrid();
+        if (!grid) {
+            report.verdict = "定位失败，未发手势";
+            logLine("探针 " + label + "：" + report.verdict);
+            saveProbeReport(report);
+            return report;
+        }
+        const fromPoint = geometryModule.pointAt(grid, cfg.fromCol, cfg.fromRow);
+        const toPoint = geometryModule.pointAt(grid, cfg.toCol, cfg.toRow);
+        const from = { x: Math.round(fromPoint.x), y: Math.round(fromPoint.y), usedCenter: false, source: "网格交点" };
+        const to = { x: Math.round(toPoint.x), y: Math.round(toPoint.y), usedCenter: false, source: "网格交点" };
+        report.geometryVersion = grid.version;
+        report.geometry = { originX: grid.originX, originY: grid.originY, stepX: grid.stepX, stepY: grid.stepY };
+        report.from = Object.assign({ col: cfg.fromCol, row: cfg.fromRow }, from);
+        report.to = Object.assign({ col: cfg.toCol, row: cfg.toRow }, to);
+
+        let tapper;
+        try {
+            tapper = adapter.createTap({ pressMs: pressMs, method: channel });
+        } catch (error) {
+            report.verdict = "通道不可用：" + error;
+            logLine("探针 " + label + "：" + report.verdict);
+            saveProbeReport(report);
+            return report;
+        }
+        report.actualChannel = tapper.method;
+
+        const before = grabFrameRaw();
+        if (before) {
+            images.save(before.image, probePng(label + "-before"));
+        }
+        logLine("探针 " + label + "：请求通道=" + channel + " 实际=" + tapper.method +
+            " 按压=" + pressMs + "ms｜起点格(" + cfg.fromCol + "," + cfg.fromRow + ")→(" + from.x + "," + from.y + ")｜" +
+            "落点格(" + cfg.toCol + "," + cfg.toRow + ")→(" + to.x + "," + to.y + ")｜几何v" + grid.version);
+
+        // ① 起点手势
+        const r1 = tapper.tap(from.x, from.y, { pressMs: pressMs });
+        report.steps.push({
+            step: "tap-from", x: from.x, y: from.y, ok: !!r1.ok, method: r1.method,
+            command: r1.command || null, error: r1.error || "",
+            startedAtMono: r1.startedAtMono, finishedAtMono: r1.finishedAtMono
+        });
+        logLine("探针 手势1：ok=" + (r1.ok ? "是" : "否") + " 手势=" + r1.method +
+            (r1.command ? " 命令「" + r1.command + "」" : "") + (r1.error ? " 错误：" + r1.error : ""));
+
+        sleep(gapMs);
+        const selected = grabFrameRaw();
+        if (selected) {
+            images.save(selected.image, probePng(label + "-selected"));
+        }
+        const selDiff = (before && selected) ? diffBox(before.image, selected.image, boxAround(from.x, from.y)) : null;
+        report.selectionDiff = selDiff;
+        const selectedOk = !!(selDiff && selDiff.changed >= 12);   // 选中会有高亮/提示，明显超过噪声
+        report.selected = selectedOk;
+        logLine("探针 选中检查：" + (selectedOk ? "有反应" : "**没反应**") +
+            (selDiff ? "（该格变化 " + selDiff.changed + "/" + selDiff.total + " 采样点）" : "（没有帧）"));
+        if (!selectedOk) {
+            report.verdict = "起点未选中，按规则终止（不发落点手势）";
+            logLine("探针 " + label + "：" + report.verdict);
+            saveProbeReport(report);
+            return report;
+        }
+
+        // ② 落点手势（必须等第一次手势完成后再发）
+        const r2 = tapper.tap(to.x, to.y, { pressMs: pressMs });
+        report.steps.push({
+            step: "tap-to", x: to.x, y: to.y, ok: !!r2.ok, method: r2.method,
+            command: r2.command || null, error: r2.error || "",
+            startedAtMono: r2.startedAtMono, finishedAtMono: r2.finishedAtMono,
+            gapAfterPreviousMs: (r2.startedAtMono != null && r1.finishedAtMono != null)
+                ? (r2.startedAtMono - r1.finishedAtMono) : null
+        });
+        logLine("探针 手势2：ok=" + (r2.ok ? "是" : "否") + " 手势=" + r2.method +
+            (r2.command ? " 命令「" + r2.command + "」" : "") + (r2.error ? " 错误：" + r2.error : ""));
+
+        sleep(gapMs);
+        const after1 = grabFrameRaw();
+        if (after1) {
+            images.save(after1.image, probePng(label + "-after-1"));
+        }
+        sleep(postMs);
+        const after2 = grabFrameRaw();
+        if (after2) {
+            images.save(after2.image, probePng(label + "-after-2"));
+        }
+
+        if (before && after2) {
+            report.sourceAfter = diffBox(before.image, after2.image, boxAround(from.x, from.y));
+            report.targetAfter = diffBox(before.image, after2.image, boxAround(to.x, to.y));
+            report.stepAfter = diffBox(before.image, after2.image, stepBoxNow());
+            const srcMoved = report.sourceAfter.changed >= 30;      // 子离开起点 = 大面积变化
+            const dstChanged = report.targetAfter.changed >= 30;
+            const stepChanged = report.stepAfter.changed >= 6;      // 计步器数字变了
+            report.verdict = (srcMoved && dstChanged)
+                ? ("落子成立（起点清空 + 落点变化" + (stepChanged ? " + 计步器变化" : "") + "）")
+                : (!srcMoved && !dstChanged ? "两格都没变（手势没被游戏采纳）"
+                    : "部分变化，需要人工看图");
+        } else {
+            report.verdict = "缺帧，无法判定";
+        }
+        logLine("探针 " + label + " 结论：" + report.verdict +
+            "｜起点变化 " + (report.sourceAfter ? report.sourceAfter.changed : "?") +
+            "｜落点变化 " + (report.targetAfter ? report.targetAfter.changed : "?") +
+            "｜计步器变化 " + (report.stepAfter ? report.stepAfter.changed : "?"));
+        saveProbeReport(report);
+        return report;
+    } finally {
+        if (hidden) {
+            try {
+                win.setVisibility(true);
+            } catch (error) {
+                logLine("探针恢复面板失败：" + error);
+            }
+        }
+    }
+}
+
+/** 探针用几何：已有就直接用，没有就现定位一次。 */
+function ensureProbeGrid() {
+    if (grid) {
+        return grid;
+    }
+    try {
+        locateAndCalibrate();
+    } catch (error) {
+        logLine("探针定位异常：" + error);
+    }
+    return grid || null;
+}
+
+function saveProbeReport(report) {
+    try {
+        if (typeof files === "undefined" || !files || typeof files.write !== "function") {
+            return;
+        }
+        files.write(PROBE_JSON, JSON.stringify(report, null, 2));
+        logLine("探针结论已落盘：" + PROBE_JSON);
+    } catch (error) {
+        logLine("探针结论落盘失败：" + error);
+    }
+}
 
 /**
  * **识别绘制（审核）**：抓一帧 → 认一帧 → 把结果画在冻结的画面上，并落盘一份。
@@ -1056,10 +1343,72 @@ function buildDriver() {
     const clickAllowed = modeKey === "auto";
     let tapFunction = null;
     if (clickAllowed && (adapter.capabilities().tap || adapter.capabilities().shizuku)) {
-        tapFunction = adapter.createTap({ pressMs: clickPressMs, method: clickMethodKey }).tap;
-        logLine("点击通道：" + clickMethodKey + "，按压 " + clickPressMs + "ms（无障碍=" +
+        // 通道名非法 → createTap 直接抛错：宁可停在这里，也不要偷檟切回 auto 污染对照实验。
+        let tapper;
+        try {
+            tapper = adapter.createTap({ pressMs: clickPressMs, method: clickMethodKey });
+        } catch (error) {
+            logLine("点击通道不可用：" + error + "（检查 autorun 里的 clickMethod）");
+            throw error;
+        }
+        tapFunction = tapper.tap;
+        logLine("点击请求=" + clickMethodKey + "，实际=" + tapper.method +
+            "，按压=" + clickPressMs + "ms（无障碍=" +
             (adapter.capabilities().accessibilityReady ? "就绪" : "未就绪") + "，Shizuku=" +
-            (adapter.capabilities().shizuku ? "可用" : "不可用") + "）");
+            (adapter.capabilities().shizuku ? "可用" : "不可用") + "），脚本=" + PROBE_BUILD_ID);
+        // ⚠️ **整手藏面板**（真机 A/B 结论，2026-09-14）：
+        //   同一抬手手势、同一通道、同一坐标 —— 单手探针（整轮藏面板）**即时生效、吃子也成**；
+        //   自动循环却"点击无效"：先 SENT，确认阶段连续 UNCHANGED，跑完再截图棋子其实到位了。
+        //   进一步对照后定位到：**两次点击之间把面板显示出来**会让游戏丢掉"已选中"状态
+        //   （窗口增删 → 焦点变化 → 选中被取消），于是落点那一点只是又选中了目标子。
+        //   所以按执行器的 kind 做租约：kind="from" 时藏、kind="to" 之后才恢复。
+        // 兜底：如果 "to" 没来（失败/取消/暂停），loop 停止和下一次 "from" 都会把面板恢复回来。
+        const rawTap = tapper.tap;
+        let clickLeaseHidden = false;
+        function acquireClickLease() {
+            if (clickLeaseHidden) {
+                return;
+            }
+            try {
+                if (win.setVisibility(false) !== false) {
+                    clickLeaseHidden = true;
+                    clickLeaseActive = true;
+                    sleep(120);   // 等 WindowManager 真正移除窗口（与 grabFrame 同值）
+                }
+            } catch (error) {
+                clickLeaseHidden = false;
+                clickLeaseActive = false;
+            }
+        }
+        function releaseClickLease() {
+            if (!clickLeaseHidden) {
+                clickLeaseActive = false;
+                return;
+            }
+            clickLeaseHidden = false;
+            clickLeaseActive = false;
+            try {
+                win.setVisibility(true);
+            } catch (error) {
+                logLine("点击后恢复面板失败：" + error);
+            }
+        }
+        tapFunction = function (x, y, options) {
+            const kind = options && options.kind ? String(options.kind) : "";
+            if (kind !== "to") {
+                // 起点点击（或没标 kind 的调用）：先藏，整手期间保持隐藏
+                acquireClickLease();
+            }
+            try {
+                return rawTap(x, y, options);
+            } finally {
+                if (kind === "to") {
+                    releaseClickLease();
+                }
+            }
+        };
+        // 暴露给停止/退出路径，避免异常路径下面板一直藏着
+        releaseTapLease = releaseClickLease;
     }
     driver = driverModule.createDriver({
         allowClick: clickAllowed,
@@ -1194,7 +1543,14 @@ function startLoop() {
             logLine("开始前前台：" + pre.package);
         }
     }
-    buildDriver();
+    try {
+        buildDriver();
+    } catch (error) {
+        // 通道名非法 / 建驱动失败：**显式失败**，不要带着半个驱动继续跑（点击通道创建时就定了）
+        loopLock.release(loopLock.OWNER_FLOATY);
+        logLine("建驱动失败，已终止本次启动：" + error);
+        return;
+    }
     // ⚠️ 真机踩过：只建驱动 + 起定时器是不够的，状态机还在 STOPPED，
     //    每轮 tick() 都返回「没有在运行」。必须先 driver.start()（START → READY）。
     try {
@@ -1246,6 +1602,14 @@ function stopLoop() {
         }
     }
     loopLock.release(loopLock.OWNER_FLOATY);   // 互锁：停了就把锁交出去
+    // 点击租约兜底：异常路径（起点点了、落点没点）下面板可能还藏着，这里恢复回来
+    if (typeof releaseTapLease === "function") {
+        try {
+            releaseTapLease();
+        } catch (error) {
+            logLine("释放点击租约失败：" + error);
+        }
+    }
     logLine("已停止：驱动已停、定时器已清、循环锁已释放（几何与校准结果保留）");
 }
 
@@ -1361,12 +1725,21 @@ function registerExitHook() {
 
 function readAutorun() {
     try {
-        if (!files || typeof files.read !== "function") {
+        if (typeof files === "undefined" || !files || typeof files.read !== "function") {
+            logLine("autorun：拿不到 files 接口，跳过（路径 " + AUTORUN_FILE + "）");
             return null;
         }
         const text = String(files.read(AUTORUN_FILE) || "").trim();
-        return text ? JSON.parse(text) : null;
+        if (!text) {
+            logLine("autorun：文件为空或不存在（路径 " + AUTORUN_FILE + "）");
+            return null;
+        }
+        // 把「实际读的路径 + 原文」记下来：ADB 写的是哪个文件、脚本读的是哪个文件，
+        // 不一致时（工程副本/示例副本/导入副本）会直接暴露出来，别再静默无效。
+        logLine("autorun 文件 " + AUTORUN_FILE + " 原文 " + text.replace(/\s+/g, " "));
+        return JSON.parse(text);
     } catch (error) {
+        logLine("autorun 解析失败（路径 " + AUTORUN_FILE + "）：" + error);
         return null;
     }
 }
@@ -1425,6 +1798,8 @@ function main() {
     // ⚠️ 不要在这里 setSize(…)：真机上会把窗口框体弄坏（零高 / 熔成一条窄条），尺寸全部由 XML 的 px 指定。
     logLine("面板已启动（" + describeCapabilities() + "）");
     logLine("临时目录：" + FRAME_DIR + "｜autorun：" + AUTORUN_FILE + "（shell 可写，便于 adb 驱动）");
+    // 脚本指纹：确认手机上跑的到底是哪一份（工程副本/示例副本/导入副本很容易分家）
+    logLine("脚本版本 PROBE_BUILD_ID=" + PROBE_BUILD_ID + " 指纹 " + probeFingerprint());
     logLine("提示：面板默认停在棋盘上方的空档（顶部不挡头像、底部不挡菜单/悔棋/提示），可拖标题栏改位置");
     startKeepAlive();
 
@@ -1626,6 +2001,7 @@ function main() {
     if (auto) {
         logLine("检测到 autorun：" + JSON.stringify(auto));
         if (auto.captureProbe) {
+            // 抓帧探测：两条截图通道到底哪条能用（最基础的可用性检查）
             const grabbed = grabFrame();
             let size = "?";
             if (grabbed) {
@@ -1637,6 +2013,14 @@ function main() {
                 }
             }
             logLine("抓帧探测：" + (grabbed ? ("成功，" + grabbed.channel + " " + size) : "失败（两条通道都没有帧）"));
+        }
+        if (auto.tapProbe) {
+            // 单手探针（§10）：只发一手的两次手势 + 像素证据，通道对照实验用
+            const result = runTapProbe(auto.tapProbe);
+            if (result && auto.stopAfterProbe) {
+                logLine("autorun：探针结束，按配置不启动自动循环");
+                return;
+            }
         }
         if (auto.selftest) {
             runSelfCheck();
@@ -1680,11 +2064,14 @@ function main() {
             }
         }
         if (auto.clickMethod) {
-            // "auto"（默认）/ "shizuku"（`input tap`）/ "accessibility"（无障碍 press）。
-            // 游戏会无视 shell 身份注入的触摸时，这里填 accessibility。
+            // "auto"（默认）/ "shizuku"（`input tap`/原地 swipe）/ "accessibility"（无障碍 press/click）。
+            // ⚠️ 非法值**不许静默退回 auto**（拼错一个字母就整轮对照实验作废），要原样透传下去，
+            //    让 createTap 在 buildDriver 里直接报错停下来。
             const key = String(auto.clickMethod);
-            clickMethodKey = (key === "shizuku" || key === "accessibility") ? key : "auto";
-            logLine("点击通道偏好：" + clickMethodKey);
+            const legal = key === "auto" || key === "shizuku" || key === "accessibility";
+            clickMethodKey = legal ? key : key;
+            logLine("点击通道偏好：" + clickMethodKey + (legal ? "" :
+                "（⚠️ 非法值：只支持 auto / shizuku / accessibility，启动时会直接报错）"));
         }
         if (auto.clickPressMs != null) {
             // 按压时长（ms）：有些游戏会忽略过短的注入点击（K40 + 天天象棋需 ≥300ms）

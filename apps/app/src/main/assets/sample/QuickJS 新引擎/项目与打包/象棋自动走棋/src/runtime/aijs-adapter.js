@@ -784,6 +784,10 @@ function bringToFrontByRecents() {
 function createTap(options) {
     const opts = options || {};
     const requested = opts.method || "auto";
+    // 通道名必须显式合法：拼错一个字母不得静默退回 auto，否则对照实验全部污染。
+    if (requested !== "auto" && requested !== "shizuku" && requested !== "accessibility") {
+        throw new Error("未知的点击通道：" + requested + "（只支持 auto / shizuku / accessibility）");
+    }
     const method = requested === "auto" ? (shizukuReady() ? "shizuku" : "accessibility") : requested;
     const defaultDuration = opts.pressMs == null ? 60 : Number(opts.pressMs);
     /** 按压时长 ≥ 此值就走 `input swipe`（原地按住），否则用 `input tap`。见 tapViaShizuku 的说明。 */
@@ -802,21 +806,32 @@ function createTap(options) {
      *   只有极短按压才继续用 `input tap`。
      */
     function tapViaShizuku(px, py, duration) {
-        if (!shizukuReady()) {
-            return { ok: false, error: "Shizuku 不可用或未授权（在应用里授权后重试）" };
-        }
         const ms = Math.max(1, Math.round(duration == null ? defaultDuration : duration));
-        const command = ms >= shizukuMinPressMs
+        const useSwipe = ms >= shizukuMinPressMs;
+        const gestureName = useSwipe ? "shizuku-input-swipe" : "shizuku-input-tap";
+        if (!shizukuReady()) {
+            // 没执行也要报出「本来会用哪个手势」：否则日志里的名字会误导通道对照实验
+            return { ok: false, method: gestureName, error: "Shizuku 不可用或未授权（在应用里授权后重试）" };
+        }
+        const command = useSwipe
             ? "input swipe " + px + " " + py + " " + px + " " + py + " " + ms
             : "input tap " + px + " " + py;
         let result;
         try {
             result = globals.shell(command, { shizuku: true, timeout: 5000 });
         } catch (exception) {
-            return { ok: false, error: String(exception && exception.message ? exception.message : exception) };
+            // ⚠️ 名称必须反映**真实执行的手势**（原地 swipe ≠ tap），否则通道对照实验会被日志误导。
+            return {
+                ok: false,
+                method: gestureName,
+                command: command,
+                error: String(exception && exception.message ? exception.message : exception)
+            };
         }
         return {
             ok: result.code === 0,
+            method: gestureName,
+            command: command,
             error: result.code === 0 ? "" : String(result.error || ("exit " + result.code))
         };
     }
@@ -826,18 +841,24 @@ function createTap(options) {
             return { ok: false, error: "缺少能力：press/click（这台设备上无法点击）" };
         }
         const usePress = has("press");
+        const gestureName = usePress ? "accessibility-press" : "accessibility-click";
         try {
             const ok = usePress
                 ? !!globals.press(px, py, Math.max(1, Math.round(duration)))
                 : !!globals.click(px, py);
             return {
                 ok: ok,
+                method: gestureName,
                 error: ok ? "" : ((globals.auto && globals.auto.service)
                     ? "点击接口返回失败（被系统拦下？目标窗口不可点？）"
                     : "点击接口返回失败：无障碍服务未就绪")
             };
         } catch (exception) {
-            return { ok: false, error: String(exception && exception.message ? exception.message : exception) };
+            return {
+                ok: false,
+                method: gestureName,
+                error: String(exception && exception.message ? exception.message : exception)
+            };
         }
     }
 
@@ -852,6 +873,7 @@ function createTap(options) {
         }
         const duration = callOptions && callOptions.pressMs != null
             ? Number(callOptions.pressMs) : defaultDuration;
+        const startedAtMono = Date.now();
         const result = method === "shizuku"
             ? tapViaShizuku(px, py, duration)
             : tapViaAccessibility(px, py, duration);
@@ -863,10 +885,16 @@ function createTap(options) {
         }
         return {
             ok: result.ok,
-            method: method === "shizuku" ? "shizuku-input-tap" : (has("press") ? "press" : "click"),
+            // **真实执行的手势**（原地 swipe / tap / 无障碍 press / click），不再按请求通道猜。
+            method: result.method || (method === "shizuku" ? "shizuku-input-tap" : "accessibility-unknown"),
+            channel: method,
+            requested: requested,
+            command: result.command || null,
             x: px,
             y: py,
             durationMs: duration,
+            startedAtMono: startedAtMono,
+            finishedAtMono: Date.now(),
             error: result.error
         };
     }
@@ -875,8 +903,10 @@ function createTap(options) {
         tap: tap,
         disabled: false,
         method: method,
+        requested: requested,
         describe: function () {
-            return method + "：" + stats.ok + " 成功 / " + stats.failed + " 失败（共 " + stats.calls + " 次）";
+            return requested + "→" + method + "：" + stats.ok + " 成功 / " + stats.failed +
+                " 失败（共 " + stats.calls + " 次）";
         },
         stats: function () { return { calls: stats.calls, ok: stats.ok, failed: stats.failed }; }
     };

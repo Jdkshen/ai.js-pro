@@ -25,6 +25,7 @@ const transition = require("../chess/transition.js");
 const fenModule = require("../chess/fen.js");
 const legal = require("../chess/legal-moves.js");
 const defaults = require("../util/defaults.js");
+const logRing = require("../diagnostics/log-ring.js");
 
 const DEFAULTS = {
     /** 每轮观察间隔（ms）。识别一轮约 200ms，留出余量给界面。 */
@@ -55,7 +56,15 @@ const DEFAULTS = {
     /** 棋盘大致范围（占屏幕比例 {x, y, width, height}）；null = 用 locate-board 的默认值。 */
     regionRatio: null,
     /** 每隔多少轮强制重新定位一次（0 = 只在恢复时定位）。 */
-    relocateEveryTicks: 0
+    relocateEveryTicks: 0,
+    /**
+     * 同一「可靠局面 + 同一着法」最多完整尝试几次（含第一次）。
+     * 真机教训：点击明明发出、棋子却不落时，旧逻辑会一直重算同一手、一直重点
+     * （换新票据/恢复成功都不算取得进展）→ 一整轮就烧在同一个局面上。
+     */
+    attemptLimitPerMove: 3,
+    /** 同一可靠局面（不区分着法）总共最多尝试几次，防止不断换着法绕过上面的上限。 */
+    attemptLimitPerPosition: 5
 };
 
 function createDriver(options) {
@@ -126,7 +135,9 @@ function createDriver(options) {
     stats.mergedFrames = 0;
     stats.frameConflicts = 0;
     stats.sideFixes = 0;          // 「盘面按着法改正」次数（落点格被装饰读错时）
-    const history = [];
+    stats.budgetPauses = 0;       // 因「同局面/同手重试超限」暂停的次数
+    // 日志环：超上限**原地裁剪**（以前的 `const history` + `history = history.slice()` 会抛异常）
+    const history = logRing.createLogRing(300, 200);
 
     let running = false;
     let grid = null;
@@ -135,6 +146,13 @@ function createDriver(options) {
     let lastBoard = null;
     /** 本次观测里，轮次推断给出的「按着法改正过的盘面」（仅当确实改动了观测时才存在） */
     let lastSideFix = null;
+    /**
+     * 尝试预算（见 DEFAULTS.attemptLimitPerMove 的说明）。
+     * 键 = 会话|基准 FEN|该走棋方（+ 着法）；**故意不在恢复成功/新票据/换几何时清零** ——
+     * 那些都不算取得进展，只有在确认真实合法变化（落子/应手）后才清空。
+     */
+    const attemptsByMove = {};
+    const attemptsByPosition = {};
     /** 上次重新定位的单调时间 + 最小间隔（见 recover 的限频说明：定位一次 ~8s，而棋子移动不改变几何） */
     let lastRelocateMono = 0;
     const RELOCATE_MIN_INTERVAL_MS = 30000;
@@ -178,9 +196,6 @@ function createDriver(options) {
 
     function note(text) {
         history.push({ atMono: nowMono(), text: text });
-        if (history.length > 300) {
-            history = history.slice(-200);
-        }
         log("[driver] " + text);
     }
 
@@ -410,6 +425,60 @@ function createDriver(options) {
         return { pending: false, elapsedMs: state.elapsedMs, status: state.status };
     }
 
+    /**
+     * 「会话|基准 FEN|该走棋方」—— 尝试预算的位置键。
+     * 用**票据里记的基准**（而不是当前观测）做键：恢复重新定位后键不会变，
+     * 否则靠恢复就能无限重置预算。
+     */
+    function positionKeyOf(ticket) {
+        const session = ticket && ticket.sessionId != null ? ticket.sessionId : "?";
+        const fen = ticket && ticket.baseFen ? ticket.baseFen : "?";
+        const side = ticket && ticket.baseSide ? ticket.baseSide : "?";
+        return session + "|" + fen + "|" + side;
+    }
+
+    /**
+     * 取本次尝试的预算（计数 +1）→ { over, reason, moveCount, positionCount }。
+     * 计数点放在 canClick 通过之后：只有真的把两次点击发出去才算一次「完整尝试」。
+     */
+    function takeAttemptBudget(ticket) {
+        const positionKey = positionKeyOf(ticket);
+        const moveKey = positionKey + "|" + (ticket && ticket.moveICCS ? ticket.moveICCS : "?");
+        attemptsByMove[moveKey] = (attemptsByMove[moveKey] || 0) + 1;
+        attemptsByPosition[positionKey] = (attemptsByPosition[positionKey] || 0) + 1;
+        const moveCount = attemptsByMove[moveKey];
+        const positionCount = attemptsByPosition[positionKey];
+        if (moveCount > cfg.attemptLimitPerMove) {
+            return {
+                over: true, moveCount: moveCount, positionCount: positionCount,
+                reason: "同一着法 " + ticket.moveICCS + " 已试 " + moveCount + " 次仍未确认落子"
+            };
+        }
+        if (positionCount > cfg.attemptLimitPerPosition) {
+            return {
+                over: true, moveCount: moveCount, positionCount: positionCount,
+                reason: "同一局面已出手 " + positionCount + " 次仍未确认落子"
+            };
+        }
+        return { over: false, moveCount: moveCount, positionCount: positionCount, reason: "" };
+    }
+
+    /** 确认真实合法变化（落子/应手）后才清空预算。 */
+    function clearAttemptBudget(why) {
+        const moveKeys = Object.keys(attemptsByMove);
+        const positionKeys = Object.keys(attemptsByPosition);
+        if (moveKeys.length === 0 && positionKeys.length === 0) {
+            return;
+        }
+        for (let i = 0; i < moveKeys.length; i++) {
+            delete attemptsByMove[moveKeys[i]];
+        }
+        for (let i = 0; i < positionKeys.length; i++) {
+            delete attemptsByPosition[positionKeys[i]];
+        }
+        note("尝试预算已清零（" + why + "）");
+    }
+
     function executeTicket(effect) {
         const ticket = effect.ticket;
         const gate = machine.canClick(ticket);
@@ -420,6 +489,14 @@ function createDriver(options) {
                 type: "CLICK_RESULT", ticket: ticket, status: "REJECTED",
                 clickCount: 0, reason: gate.reason
             }));
+        }
+        // ---- 尝试预算（§11：同一局面/同一手不许无限重试）----
+        const budget = takeAttemptBudget(ticket);
+        if (budget.over) {
+            note("同局面落子未确认：" + budget.reason + " → 暂停（不再盲点），请看截图与实际通道");
+            note("  预算明细：本手第 " + budget.moveCount + " 次 / 本局面共 " + budget.positionCount +
+                " 次（上限 " + cfg.attemptLimitPerMove + " / " + cfg.attemptLimitPerPosition + "）");
+            return pump(machine.dispatch({ type: "PAUSE", reason: budget.reason }));
         }
         // ---- 点击前的前台守卫（真机血泪）----
         // 脚本宿主 RunIntentActivity 是**透明窗口**：用 am start 起脚本后它常常仍是「有焦点的前台」，
@@ -460,10 +537,25 @@ function createDriver(options) {
         note("点击：" + ticket.moveICCS + " → " + outcome.status + "（" + outcome.reason + "）" +
             "，点击 " + outcome.clickCount + " 次");
         if (outcome.clicks && outcome.clicks.length > 0) {
-            const first = outcome.clicks[0];
-            const last = outcome.clicks[outcome.clicks.length - 1];
-            note("  落点（" + first.x + "," + first.y + "）→（" + last.x + "," + last.y + "）" +
-                (first.usedCenter ? "，用实测框中心" : "，用网格交点"));
+            // 每次手势单独记：真实手势名（原地 swipe≠tap、无障碍 press≠click）、格号、用的是
+            // 实测框中心还是网格交点、交点坐标、接口返回、起止时刻 —— 通道对照实验就靠这几行。
+            for (let i = 0; i < outcome.clicks.length; i++) {
+                const click = outcome.clicks[i];
+                note("  手势" + (i + 1) + " " + (click.kind || "?") + "：" + (click.method || "未知手势") +
+                    " 格(" + click.col + "," + click.row + ") 屏幕(" + click.x + "," + click.y + ")" +
+                    (click.usedCenter ? " 实测框中心" : " 网格交点") +
+                    (click.latticeX != null ? "（交点 " + click.latticeX + "," + click.latticeY + "）" : "") +
+                    " 几何v" + click.geometryVersion +
+                    " ok=" + (click.ok ? "是" : "否") + " 耗时" + click.elapsedMs + "ms" +
+                    (click.command ? " 命令「" + click.command + "」" : "") +
+                    (click.error ? " 错误：" + click.error : ""));
+                if (i > 0) {
+                    const previous = outcome.clicks[i - 1];
+                    const gap = click.startedAtMono - previous.finishedAtMono;
+                    note("  手势间隔 " + gap + "ms" +
+                        (gap < 0 ? "⚠️ 第二次手势在前一次完成前就发出了（手势可能被取消）" : ""));
+                }
+            }
         }
         return pump(machine.dispatch({
             type: "CLICK_RESULT", ticket: ticket, status: outcome.status,
@@ -524,6 +616,9 @@ function createDriver(options) {
             lastReliable = { board: verdict.board.slice(), side: nextSide };
             note("可靠基准已刷新（确认 " + verdict.result + "）：" +
                 (nextSide === mySide ? "轮到我方" : "轮到对方"));
+            // 确实取得了进展（棋真的变了）→ 才能清尝试预算。
+            // 恢复成功、换新票据、换几何**都不算**进展，所以它们都不在这里。
+            clearAttemptBudget("已确认真实变化 " + verdict.result);
         }
         // ★ 把「落点格」登记进已知事实表（不管这次确认有没有用到它）。
         // 为什么要无条件登记：游戏会给我方刚落的子画高亮环，**下一帧起**那一格就认不出来了。
@@ -1292,7 +1387,7 @@ function createDriver(options) {
                 machine: machine.counters()
             });
         },
-        history: function () { return history.slice(); },
+        history: function () { return history.all(); },
         describe: function () {
             const lines = [];
             lines.push("状态：" + machine.state() + "（" + machine.reason() + "）");

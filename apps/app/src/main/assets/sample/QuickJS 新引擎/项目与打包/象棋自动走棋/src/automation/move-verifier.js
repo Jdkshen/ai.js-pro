@@ -193,10 +193,42 @@ function verify(input) {
     // 对方是不是已经应了一步（点击确认期间很常见）
     const replies = legal.allLegalMoves(expected, opposite(ticket.baseSide));
     const matched = [];
+    const decorTolerant = [];
+    const ownDestIndex = destinationIndex(ticket);
     for (let i = 0; i < replies.length; i++) {
         const after = legal.applyMove(expected, replies[i]).board;
         if (legal.boardMatches(after, subject)) {
             matched.push(replies[i]);
+            continue;
+        }
+        // ---- 装饰容差（真机 2026-09-14）----
+        // 游戏会给**刚落的两个子**都画高亮环：我方落点被读成同色不同兵种（红炮→红兵），
+        // 对方应手的落点有时直接**漏检（读成空）**。这种帧严格匹配必然 0 解 →
+        // 旧行为判 UNEXPECTED → 作废票据 + 重新定位（实测白烧十几秒）。
+        // 收紧点：差异只允许落在**我方落点 + 该应手的落点**这两格上，每格必须是
+        // 「同色不同兵种」或「读成空」，且必须**唯一**解释；否则照样不认。
+        const replyDest = indexOfIccs(replies[i].iccs);
+        if (replyDest == null || replyDest === ownDestIndex) {
+            continue;
+        }
+        const diff = legal.diffBoards(after, subject);
+        if (diff.length === 0 || diff.length > 2) {
+            continue;
+        }
+        let usable = true;
+        for (let k = 0; k < diff.length; k++) {
+            const index = diff[k].row * 9 + diff[k].col;
+            if (index !== ownDestIndex && index !== replyDest) {
+                usable = false;
+                break;
+            }
+            if (!decorTolerable(after[index], subject[index])) {
+                usable = false;
+                break;
+            }
+        }
+        if (usable) {
+            decorTolerant.push({ move: replies[i], board: after, replyDest: replyDest });
         }
     }
     if (matched.length === 1) {
@@ -230,6 +262,26 @@ function verify(input) {
         return Object.assign({}, base, {
             result: RESULT.UNRELIABLE,
             reason: "对方应手有 " + matched.length + " 种解释，无法唯一确定"
+        });
+    }
+    // 严格匹配一个都没有，但**装饰容差**下恰好只有一个解释 → 认它（并回传改正后的盘面）
+    if (matched.length === 0 && decorTolerant.length === 1) {
+        const fit = decorTolerant[0];
+        return Object.assign({}, base, {
+            result: RESULT.OPPONENT_REPLY,
+            reason: "我方 " + ticket.moveICCS + " 已落子，对方应手 " + fit.move.iccs +
+                "（两个落点格被游戏高亮装饰读错，已按该应手改正）",
+            board: fit.board.slice(),
+            plies: [ticket.moveICCS, fit.move.iccs],
+            replyPatch: fit.board[fit.replyDest]
+                ? { index: fit.replyDest, char: fit.board[fit.replyDest] }
+                : null
+        });
+    }
+    if (matched.length === 0 && decorTolerant.length > 1) {
+        return Object.assign({}, base, {
+            result: RESULT.UNRELIABLE,
+            reason: "装饰容差下有 " + decorTolerant.length + " 种应手解释，不唯一 → 等下一帧"
         });
     }
 
@@ -309,6 +361,25 @@ function verify(input) {
             }).join("；") + (diff.length > 6 ? " …" : "") + "）",
         board: subject.slice()
     });
+}
+
+/**
+ * 落点格「读错」到什么程度还能容忍（装饰容差专用）：
+ *   · 同色不同兵种（红炮被读成红兵）；
+ *   · **读成空 / 未知**（漏检 —— 高亮环把子盖住时模型直接看不到那一格）。
+ * 异色不能容忍：那说明真被对方吃了，不能当噪声吞掉。
+ */
+function decorTolerable(expected, observed) {
+    if (typeof expected !== "string" || expected.length !== 1) {
+        return false;
+    }
+    if (observed == null || observed === "" || observed === "?") {
+        return true;
+    }
+    if (typeof observed !== "string" || observed.length !== 1) {
+        return false;
+    }
+    return (expected === expected.toUpperCase()) === (observed === observed.toUpperCase());
 }
 
 /**
