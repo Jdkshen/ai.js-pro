@@ -468,10 +468,28 @@ function calibrateGrid(image, located, options) {
     let tried = 0;
     /**
      * 丢一个子的代价。单位与「未知格」同量级：一个格子被认错，无论是「读不出来」还是
-     * 「读成了空格」，对盘面都是同一个错。取 12 是为了让「丢子」稳稳压过未知格的±几格抖动。
+     * 「读成了空格」，对盘面都是同一个错。
+     *
+     * ⚠️ 三项权重的相对大小是**真机事故换来的**，别随手调：
+     *   · 「修复动作」曾经是 ×1000 → 2026-09-14 K40 实测：正确几何 (0,0) 读出「子 31/未知 1」
+     *     但要 1 次棋规修复 → 代价 1001；而一个偏掉 50px（≈0.44 格）的畸形几何虽然把整盘
+     *     推成「子 9 / 未知 23」（一盘垃圾），却因为「不需要修复」而代价只有 287 → 胜出、
+     *     整个面板就卡在 RECOVERING。
+     *   · 而修复降级的格子**本来就已经计进未知格**（repair 会把非法子改成 '?'），所以
+     *     修复只需很低的额外权重（区分「模型自己读不出」与「读出矛盾子要去纠正」）。
+     *   · 「丢子」必须比未知格重：把棋子读成空格时 unknown 不涨（那格成了 EMPTY），
+     *     只能靠这一项把它拉回来。
      */
-    const PIECE_LOSS_WEIGHT = 12;
+    const PIECE_LOSS_WEIGHT = 20;
+    /** 一次棋规修复的额外代价（降级后的格子已计入 unknown，这里只区分来源）。 */
+    const REPAIR_WEIGHT = 6;
     const results = [];
+
+    /** 候选代价：越小越好。pickBest 与诊断落盘共用，避免两处各写一份公式而不同步。 */
+    function costOf(item, maxPieces) {
+        return item.fixes * REPAIR_WEIGHT + item.unknown +
+            (maxPieces - item.pieces) * PIECE_LOSS_WEIGHT;
+    }
 
     /** 从 layout（FEN 风格字符串）数棋子个数：字母是棋子，数字是空格。 */
     function countPieces(layout) {
@@ -556,11 +574,8 @@ function calibrateGrid(image, located, options) {
     /**
      * 在已评估的候选里挑最优。
      *
-     * 代价 = 修复动作 × 1000 + 未知格 + **丢子 × 12**
-     * ⚠️ 「丢子」这一项是补上来的（真机踩过）：只按「修复动作 + 未知格」打分时，一个把棋子
-     * 认成空格的错误偏移可以拿到同样的 0 分 —— K40 实测 dx=1,dy=1 把黑方 5 个卒认成 3 个，
-     * unknown 仍是 0、修复动作 0，于是它顶掉了本来读对的基准几何。
-     * 子数只在**同一张图的候选之间**比（以候选中最多子者为基准），不需要知道真实局面。
+     * 代价 = 修复动作 × REPAIR_WEIGHT + 未知格 + **丢子 × PIECE_LOSS_WEIGHT**
+     * （权重为什么是这几个数，见 costOf 上面的事故记录）
      */
     function pickBest(list) {
         let maxPieces = 0;
@@ -572,11 +587,10 @@ function calibrateGrid(image, located, options) {
         let best = null;
         for (let i = 0; i < list.length; i++) {
             const item = list[i];
-            const cost = item.fixes * 1000 + item.unknown +
-                (maxPieces - item.pieces) * PIECE_LOSS_WEIGHT;
-            const shift = Math.abs(item.dx) + Math.abs(item.dy);
+            const cost = costOf(item, maxPieces);
             if (best == null || cost < best.cost ||
-                (cost === best.cost && shift < Math.abs(best.dx) + Math.abs(best.dy))) {
+                (cost === best.cost &&
+                    (Math.abs(item.dx) + Math.abs(item.dy)) < (Math.abs(best.dx) + Math.abs(best.dy)))) {
                 best = Object.assign({}, item, { cost: cost, maxPieces: maxPieces });
             }
         }
@@ -600,6 +614,37 @@ function calibrateGrid(image, located, options) {
         maxShift, step, maxCandidates);
 
     const best = pickBest(results);
+
+    // 诊断落盘（opts.dumpPath）：把**评估过的全部候选**连同代价写出来。
+    // 「校准挑了一个把整盘推向未知的偏移」这种事故，不看候选全量就只能猜。
+    if (opts.dumpPath) {
+        try {
+            let maxPieces = 0;
+            for (let i = 0; i < results.length; i++) {
+                if (results[i].pieces > maxPieces) {
+                    maxPieces = results[i].pieces;
+                }
+            }
+            const rows = results.map(function (item) {
+                return {
+                    dx: item.dx, dy: item.dy, unknown: item.unknown, pieces: item.pieces,
+                    fixes: item.fixes, sideUnknown: item.sideUnknown,
+                    cost: costOf(item, maxPieces),
+                    layout: item.layout
+                };
+            }).sort(function (a, b) {
+                return a.cost - b.cost || (Math.abs(a.dx) + Math.abs(a.dy)) - (Math.abs(b.dx) + Math.abs(b.dy));
+            });
+            files.write(opts.dumpPath, JSON.stringify({
+                base: { originX: base.originX, originY: base.originY, stepX: base.stepX, stepY: base.stepY },
+                evaluated: results.length,
+                chosen: best ? { dx: best.dx, dy: best.dy, unknown: best.unknown, pieces: best.pieces } : null,
+                candidates: rows
+            }));
+        } catch (error) {
+            // 诊断落盘失败不影响主流程
+        }
+    }
 
     if (loaded.detector && typeof loaded.detector.close === "function") {
         try {

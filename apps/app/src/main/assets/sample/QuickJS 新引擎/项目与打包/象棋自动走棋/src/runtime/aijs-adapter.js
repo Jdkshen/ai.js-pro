@@ -650,13 +650,132 @@ function shizukuReady() {
 }
 
 /**
+ * 跑一条 shell 命令（Shizuku / root），返回 stdout 文本；都没有就返回 null。
+ * 用途见 foregroundPackage / bringToFrontByRecents。
+ */
+function runShellCapture(command, timeoutMs) {
+    const backend = shellCaptureBackend();
+    if (!backend) {
+        return null;
+    }
+    const options = { timeout: timeoutMs == null ? 4000 : timeoutMs };
+    options[backend] = true;
+    try {
+        const result = globals.shell(command, options);
+        if (!result || result.code !== 0) {
+            return null;
+        }
+        return String(result.result || result.output || result.stdout || "");
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * **谁真的拿到触摸焦点**（包名）；拿不到返回 null。
+ *
+ * 为什么不用 `dumpsys activity activities | grep topResumedActivity`：多任务下它会给误导值
+ * —— 真机实测（K40/Android 16）：守卫切完读到的 topResumedActivity 是 `com.android.launcher3`，
+ * 而屏幕上明明是游戏、注入的点击全落到别处（一手棋连试 4 次全 UNCHANGED）。
+ * 决定「注入的触摸给谁」的是 InputDispatcher 的 FocusedWindows。
+ */
+function focusedWindowPackage() {
+    const text = runShellCapture("dumpsys input | grep -A2 FocusedWindows", 4000);
+    if (!text) {
+        return null;
+    }
+    // 形如：displayId=0, name='e693d35 com.jdkshen.aijspro/com.jdkshen.aijspro.external.open.RunIntentActivity'
+    const matched = text.match(/name='[^ ]* ([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)\//);
+    return matched ? matched[1] : null;
+}
+
+/**
+ * 把某个包的任务带到前台（**尽量不重启进程**）。
+ *
+ * ⚠️ 不能用 `am start -a MAIN -c LAUNCHER -p <包>`：腾讯天天象棋**没有 LAUNCHER 入口**
+ * （真机实测 `Error: Activity not started, unable to resolve Intent`）。
+ * 也不能用 `monkey -p <pkg> -c LAUNCHER`：那一路会重启/恢复对局，把刚「重来」出的干净开局弄丢。
+ *
+ * 做法：先从 `dumpsys activity activities` 里把这个包已有的 ActivityRecord 解析出来
+ * （形如 `ActivityRecord{... com.x.y/.AppActivity t33}`），再用 `am start -n 包/类` ——
+ * 目标任务已存在时这条只会把它提到前台（真机实测开局不会被恢复成旧局面）。
+ * 解析不到就退回 monkey（可能重启游戏，日志里说清楚）。
+ */
+function bringPackageToFront(pkg) {
+    if (!pkg) {
+        return false;
+    }
+    const dump = runShellCapture("dumpsys activity activities | grep -m1 '" + pkg + "/'", 5000);
+    let component = null;
+    if (dump) {
+        const matched = dump.match(new RegExp(pkg.replace(/\./g, "\\.") + "/([\\w.$]+)"));
+        if (matched) {
+            component = pkg + "/" + matched[1];
+        }
+    }
+    if (component) {
+        return runShellCapture("am start -n " + component, 6000) !== null;
+    }
+    // 兜底：可能重启游戏（调用方会在之后重新校准/确认局面）
+    return runShellCapture("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1", 8000) !== null;
+}
+
+/**
+ * 当前**真正**在前台（拿到输入焦点）的应用包名；拿不到返回 null。
+ *
+ * 为什么要它：脚本宿主 `RunIntentActivity` 是个**透明窗口**，用 `am start` 起脚本之后
+ * 它常常仍是「有焦点的前台」——游戏只是画在它下面。这时注入的点击会被**我们自己吃掉**
+ * （游戏毫无反应、确认阶段永远 UNCHANGED），而截图上一切正常，极难看出。
+ * 真机证据（K40）：`dumpsys input` 的 FocusedApplications/FocusedWindows 都是本应用。
+ *
+ * ⚠️ 用 `topResumedActivity`：这台 Android 16 上 `mResumedActivity` / `mCurrentFocus` 取不到值。
+ */
+function foregroundPackage() {
+    const text = runShellCapture("dumpsys activity activities | grep -m1 topResumedActivity", 4000);
+    if (!text) {
+        return null;
+    }
+    // 形如：topResumedActivity=ActivityRecord{1a2b3c u0 com.tencent.qqgame.xq/.MainActivity t88}
+    const matched = text.match(/([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)\/[\w.$]+/);
+    return matched ? matched[1] : null;
+}
+
+/**
+ * 按一次「最近任务」键（APP_SWITCH=187）。只按一次 —— 连按两次会在最近两个任务间来回切，
+ * 呼叫方应该「按一次 → 查前台 → 还不对再按」（见面板的 foregroundGuard）。
+ */
+function pressAppSwitch() {
+    return runShellCapture("input keyevent 187", 4000) !== null;
+}
+
+/**
+ * 用「最近任务快速切换」把**上一个应用**切回前台（连按两次 APP_SWITCH 键）。
+ *
+ * 为什么不用 `monkey -p <pkg> -c LAUNCHER`：那会**重新启动**游戏，而天天象棋启动后会
+ * **恢复未完的对局** —— 刚「重来」出来的干净开局会变回旧局面（真机踩过）。
+ * 最近任务切换不会重启进程，游戏保持原样。
+ */
+function bringToFrontByRecents() {
+    if (!pressAppSwitch()) {
+        return false;
+    }
+    if (typeOf("sleep") === "function") {
+        globals.sleep(500);
+    }
+    pressAppSwitch();
+    return true;
+}
+
+/**
  * 真机点击（P4）：只有这里碰宿主的点击接口；执行器只管「什么时候点、点哪里」。
  * 返回的 ok 只代表**接口调用有没有发出**，不代表棋子真的走了 —— 落子成败由
  * move-verifier 看新观测判断（这两件事必须分开统计）。
  *
  * ⚠️ 两个通道差别很大，默认 `auto`（有 Shizuku 就用它）：
- *   - `shizuku`：`shell("input tap x y", {shizuku:true})` —— shell 身份注入，最接近真手指，
+ *   - `shizuku`：shell 身份注入 `input tap`／`input swipe`（按住时长可调），最接近真手指，
  *     实测能点动**会忽略无障碍事件的游戏**（腾讯天天象棋）；
+ *     ⚠️ 部分游戏还会过滤**过短的按压**（K40 + Android 16 + 天天象棋：60ms 被丢弃、300ms 生效），
+ *     这种情况把 pressMs 调到 300~400 即可（上层会自动改用 `input swipe`）。
  *   - `accessibility`：`press/click`（无障碍手势）—— 通用、无额外依赖，但事件带自动化标记，
  *     部分游戏直接忽略（**返回 true 却没反应，静默失败**）。
  * 另外：`auto.service` 在 force-stop 之后可能一直不重新绑定（MIUI），所以上层要先有界等待，
@@ -667,15 +786,32 @@ function createTap(options) {
     const requested = opts.method || "auto";
     const method = requested === "auto" ? (shizukuReady() ? "shizuku" : "accessibility") : requested;
     const defaultDuration = opts.pressMs == null ? 60 : Number(opts.pressMs);
+    /** 按压时长 ≥ 此值就走 `input swipe`（原地按住），否则用 `input tap`。见 tapViaShizuku 的说明。 */
+    const shizukuMinPressMs = 120;
     const stats = { calls: 0, ok: 0, failed: 0, lastError: "", method: method };
 
-    function tapViaShizuku(px, py) {
+    /**
+     * Shizuku 注入。
+     *
+     * ⚠️ `input tap` 的按压时长≈0，实测有些游戏会**把这种「瞬按」直接丢掉**：
+     *   K40（LineageOS 23.2 / Android 16）+ 天天象棋：同一坐标
+     *     · `input tap x y` / `input motionevent DOWN/UP` → 毫无反应；
+     *     · `input swipe x y x y 300` → 棋子被选中（300ms 就对）；600ms 同样有效。
+     *   而同一台机器的**系统弹窗**用 `input tap` 是好的 → 是游戏自己按「按压时长」过滤，
+     *   不是注入失效。所以时长 ≥ 阈值时改用 `input swipe`（起点==终点 = 原地按住的按压），
+     *   只有极短按压才继续用 `input tap`。
+     */
+    function tapViaShizuku(px, py, duration) {
         if (!shizukuReady()) {
             return { ok: false, error: "Shizuku 不可用或未授权（在应用里授权后重试）" };
         }
+        const ms = Math.max(1, Math.round(duration == null ? defaultDuration : duration));
+        const command = ms >= shizukuMinPressMs
+            ? "input swipe " + px + " " + py + " " + px + " " + py + " " + ms
+            : "input tap " + px + " " + py;
         let result;
         try {
-            result = globals.shell("input tap " + px + " " + py, { shizuku: true, timeout: 5000 });
+            result = globals.shell(command, { shizuku: true, timeout: 5000 });
         } catch (exception) {
             return { ok: false, error: String(exception && exception.message ? exception.message : exception) };
         }
@@ -717,7 +853,7 @@ function createTap(options) {
         const duration = callOptions && callOptions.pressMs != null
             ? Number(callOptions.pressMs) : defaultDuration;
         const result = method === "shizuku"
-            ? tapViaShizuku(px, py)
+            ? tapViaShizuku(px, py, duration)
             : tapViaAccessibility(px, py, duration);
         if (result.ok) {
             stats.ok += 1;
@@ -821,6 +957,11 @@ const AIJS_ADAPTER = {
     waitMs: waitMs,
     createTap: createTap,
     shizukuReady: shizukuReady,
+    foregroundPackage: foregroundPackage,
+    focusedWindowPackage: focusedWindowPackage,
+    bringPackageToFront: bringPackageToFront,
+    bringToFrontByRecents: bringToFrontByRecents,
+    pressAppSwitch: pressAppSwitch,
     screenSize: screenSize,
     overlayAvailable: overlayAvailable,
     overlayShow: overlayShow,

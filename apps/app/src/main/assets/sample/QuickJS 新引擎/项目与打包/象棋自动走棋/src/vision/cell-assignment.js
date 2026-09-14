@@ -17,6 +17,17 @@ const STATE_UNKNOWN = "UNKNOWN";
 
 const DEFAULTS = {
     minScore: 0.45,
+    /**
+     * 「弱证据」门槛：低于 minScore 但高于它的框**不当棋子**，但也**不当空格** ——
+     * 那格标成未知格（“那里有东西，但我没把握是什么”）。
+     *
+     * 为什么必须这样（2026-09-14 真机事故）：模型把黑将检出来两次（0.42 / 0.26），
+     * 而这里 minScore=0.45 把两个框都丢掉了 → 那一格变成**空格** → 整盘凭空少了黑将，
+     * 而所有闸门（未知格/冲突/棋规数量）都拦不住（空格不是错）→ 驱动拿着一张
+     * “没有将”的盘面去推轮次/算棋，永远卡住。人审绘制直接把两个 K 框画了出来。
+     * 默认取 0.25 = 检测器那边的 confidence，两边口径必须一致。
+     */
+    weakScore: 0.25,
     conflictGap: 0.15,
     maxResidual: 0.4,
     /** 整帧图像质量（0..1）：定位/清晰度越差，空格与低分框越不可信 */
@@ -32,9 +43,9 @@ function assign(detections, grid, options) {
     const opts = defaults.mergeDefaults(DEFAULTS, options);
     const cells = new Array(90);
     for (let i = 0; i < 90; i++) {
-        cells[i] = { state: STATE_EMPTY, piece: null, score: 0, candidates: [], conflict: false, residual: 0 };
+        cells[i] = { state: STATE_EMPTY, piece: null, score: 0, candidates: [], conflict: false, residual: 0, center: null };
     }
-    const stats = { detected: 0, placed: 0, merged: 0, conflicts: 0, unknown: 0, outOfBoard: 0, lowQuality: 0 };
+    const stats = { detected: 0, placed: 0, merged: 0, conflicts: 0, unknown: 0, outOfBoard: 0, lowQuality: 0, weak: 0 };
     const frameUsable = opts.frameQuality >= 0.5;
 
     for (let i = 0; i < (detections ? detections.length : 0); i++) {
@@ -43,8 +54,9 @@ function assign(detections, grid, options) {
             continue;
         }
         stats.detected++;
-        if (det.score != null && det.score < opts.minScore) {
-            continue;
+        const weak = det.score != null && det.score < opts.minScore;
+        if (weak && (det.score == null || det.score < opts.weakScore)) {
+            continue;   // 连弱证据都算不上 → 丢掉
         }
         const hit = geometryModule.nearest(grid, det.x, det.y);
         if (!hit.inside) {
@@ -57,8 +69,14 @@ function assign(detections, grid, options) {
         cell.candidates.push({
             label: det.label,
             score: det.score == null ? 1 : det.score,
-            residual: hit.normalized
+            residual: hit.normalized,
+            x: det.x,
+            y: det.y,
+            weak: weak
         });
+        if (weak) {
+            stats.weak++;
+        }
     }
 
     cells.forEach(function (cell) {
@@ -70,17 +88,52 @@ function assign(detections, grid, options) {
             }
             return;
         }
+        // 「低分框」怎么算（真机事故 2026-09-14）：模型把黑将检出两次（0.42 / 0.26），
+        // 而 minScore=0.45 把两个都丢掉 → 那格变成**空格** → 盘面凭空少一个将，
+        // 而所有闸门（未知格/冲突/棋规数量）都拦不住「空格」→ 驱动拿着一盘没将的棋永远卡住。
+        // 现在的规则：
+        //   · 有强证据（≥ minScore）→ 照常判子；
+        //   · 只有弱证据：**同标签 ≥2 个 = 一致证据**，可以当子（同一位置重复检出说明确实有东西）；
+        //   · 其他弱证据 → 未知格（“有东西，但我没把握”），交给棋规/驱动去解释。
+        const strong = cell.candidates.filter(function (candidate) { return !candidate.weak; });
+        if (strong.length === 0) {
+            const agree = {};
+            let agreeLabel = null;
+            cell.candidates.forEach(function (candidate) {
+                agree[candidate.label] = (agree[candidate.label] || 0) + 1;
+                if (agree[candidate.label] >= 2) {
+                    agreeLabel = candidate.label;
+                }
+            });
+            if (agreeLabel == null) {
+                cell.state = STATE_UNKNOWN;
+                cell.piece = null;
+                cell.score = cell.candidates.reduce(function (best, candidate) {
+                    return Math.max(best, candidate.score);
+                }, 0);
+                cell.conflict = false;
+                stats.unknown++;
+                return;
+            }
+        }
         // 同类合并：同一格同一类别的多个框只算一次，分数取最高，个数记在 count 上。
         const byLabel = {};
         const order = [];
         cell.candidates.forEach(function (candidate) {
             const entry = byLabel[candidate.label];
             if (!entry) {
-                byLabel[candidate.label] = { label: candidate.label, score: candidate.score, count: 1, residual: candidate.residual };
+                byLabel[candidate.label] = {
+                    label: candidate.label, score: candidate.score, count: 1,
+                    residual: candidate.residual, x: candidate.x, y: candidate.y
+                };
                 order.push(candidate.label);
                 stats.merged++;
             } else {
-                entry.score = Math.max(entry.score, candidate.score);
+                if (candidate.score > entry.score) {
+                    entry.score = candidate.score;
+                    entry.x = candidate.x;
+                    entry.y = candidate.y;
+                }
                 entry.residual = Math.min(entry.residual, candidate.residual);
                 entry.count++;
             }
@@ -112,6 +165,10 @@ function assign(detections, grid, options) {
         cell.state = STATE_PIECE;
         cell.piece = best.label;
         cell.score = best.score;
+        // 检测框中心（屏幕逻辑像素）：点击用它比用「网格交点」准 —— 定位给的原点/格距
+        // 有系统性偏差（K40 + 天天象棋实测 rank0 差 10px、rank7 差 27px），
+        // 识别靠 0.84 格距的采样框抗得住，游戏的命中判定却抗不住。
+        cell.center = (isFinite(best.x) && isFinite(best.y)) ? { x: best.x, y: best.y } : null;
         stats.placed++;
     });
 

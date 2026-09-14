@@ -29,6 +29,13 @@ const defaults = require("../util/defaults.js");
 const DEFAULTS = {
     /** 每轮观察间隔（ms）。识别一轮约 200ms，留出余量给界面。 */
     tickMs: 900,
+    /**
+     * 每次观察抓几帧做合并（默认 2）。两帧一致的格子才采信，不一致的降级为未知格 ——
+     * 模型单帧会有多处孤立误读（真机：一帧内 3~4 处），不合并就会把假盘面喂给轮次推断。
+     */
+    observeFrames: 2,
+    /** 多帧之间的间隔（ms）：留一点时间让游戏动画/装饰变化，避免两帧拿到同一个坏帧。 */
+    observeGapMs: 260,
     /** 模型版本号（写进票据；换模型要让旧票据失效）。 */
     modelVersion: "chessai_160x320_v5r",
     /** 算棋时间预算（ms）。 */
@@ -106,10 +113,19 @@ function createDriver(options) {
         thinkOffThread: 0,
         thinkInline: 0,
         /** 最近一次「状态机发 COMPUTE → 拿到结果」的总耗时（ms），含排队与轮询延迟 */
-        thinkMs: 0
+        thinkMs: 0,
+        /** ② 模式给出的建议着法次数（不点击） */
+        suggestions: 0
     };
     /** 落点格按票据补齐的次数（游戏给刚落的子加高亮，那一格认不出来） */
     stats.ownMovePatched = 0;
+    stats.knownFactFills = 0;
+    /** 颜色读反被纠正的格子数（游戏装饰导致的已知模型弱点） */
+    stats.colorFlips = 0;
+    /** 多帧合并：做过合并的观察次数 / 因两帧不一致而降级的格子数 */
+    stats.mergedFrames = 0;
+    stats.frameConflicts = 0;
+    stats.sideFixes = 0;          // 「盘面按着法改正」次数（落点格被装饰读错时）
     const history = [];
 
     let running = false;
@@ -117,6 +133,14 @@ function createDriver(options) {
     let lastReliable = null;      // { board, side }：上一可靠局面与「该走棋方」
     let lastResult = null;        // 最近一次识别结果（界面/诊断用）
     let lastBoard = null;
+    /** 本次观测里，轮次推断给出的「按着法改正过的盘面」（仅当确实改动了观测时才存在） */
+    let lastSideFix = null;
+    /** 上次重新定位的单调时间 + 最小间隔（见 recover 的限频说明：定位一次 ~8s，而棋子移动不改变几何） */
+    let lastRelocateMono = 0;
+    const RELOCATE_MIN_INTERVAL_MS = 30000;
+    /** 最近一次观测的**每格实测框中心**（点棋用；见 click-executor.pointOf 的说明） */
+    let lastCenters = null;
+    let lastCentersVersion = null;
 
     // ---- 算棋放在哪跑 ----
     // worker：独立 QuickJS 引擎（自己的线程），主线程只负责「起任务 + 每轮 poll 一次」；
@@ -133,12 +157,20 @@ function createDriver(options) {
         : "worker";
     let pendingCompute = null;    // { jobId, effect, startedAtMono }：正在 worker 里算的任务
     /**
-     * 「我方落点格」的补齐信息 { index, char }：
-     * 游戏会给刚落的子加高亮/换画法，那一格就认不出来了（小米8 真机实测）。
-     * 兵种是**已知事实**（就是我们票据里的那个子），所以后续观察里只要那格还是 `?`，
-     * 就用它补齐 —— 这样轮次推断/状态机看到的才是完整局面。格子里读到别的子就自动失效。
+     * 「游戏画花了的格子」的已知事实补齐表：[{ index, char }]。
+     * 游戏会给**刚落的子**加高亮环，那一格会被模型认错（实测：带环的炮读成马），
+     * 棋规层再把它降级成 '?'。我方落子与对方应手的子都会被画环，所以是张表。
+     * 兵种是**已知事实**（票据 + 唯一合法应手推出来的），不是猜；格子里读到别的子/变空就自动失效。
      */
-    let ownMovePatch = null;
+    let knownPatches = [];
+    /**
+     * 「手数周期」：每确认成功一次 +1。补齐表里的记录只在**同一个周期内**有效 ——
+     * 游戏的高亮环只挂在「刚落的那个子」上，下一手一旦确认，上一手的装饰就不再存在。
+     * 真机踩过：不加这个界限，上一手的记录会一直生效，把「那个子真的被吃了」也覆盖掉。
+     */
+    let verifyCycle = 0;
+    /** 上一句「观察层补齐」的说明文案（只用于去重打日志，免得每秒刷屏） */
+    let lastFillText = "";
 
     function useWorkerSearch() {
         return computeMode === "worker";
@@ -160,6 +192,8 @@ function createDriver(options) {
                 return calibrate();
             case "COMPUTE":
                 return compute(effect);
+            case "SUGGEST":
+                return onSuggest(effect);
             case "EXECUTE_TICKET":
                 return executeTicket(effect);
             case "VERIFY":
@@ -209,6 +243,18 @@ function createDriver(options) {
         return outcome;
     }
 
+    /**
+     * ② 只识别 / 着法建议：状态机算出着法后直接把建议报出来（**不点击**）。
+     * 这条日志就是面板「算棋/建议」那一格的来源；也方便 logcat 里对账。
+     */
+    function onSuggest(effect) {
+        const ticket = effect.ticket || {};
+        stats.suggestions = (stats.suggestions || 0) + 1;
+        note("建议着法 " + ticket.moveICCS + "（② 只给建议，不点击）：评分 " + ticket.score +
+            "，深度 " + ticket.depth);
+        return null;
+    }
+
     function calibrate() {
         try {
             const located = opts.locate(locateOptions());
@@ -218,6 +264,7 @@ function createDriver(options) {
             }
             grid = located.grid;
             lastReliable = null;
+            lastRelocateMono = nowMono();   // 定位过就记时间（recover 的限频用它）
             note("棋盘已定位：起点 (" + Math.round(grid.originX) + "," + Math.round(grid.originY) +
                 ") 格距 (" + Math.round(grid.stepX) + "," + Math.round(grid.stepY) +
                 ") 版本 v" + grid.version);
@@ -374,14 +421,50 @@ function createDriver(options) {
                 clickCount: 0, reason: gate.reason
             }));
         }
+        // ---- 点击前的前台守卫（真机血泪）----
+        // 脚本宿主 RunIntentActivity 是**透明窗口**：用 am start 起脚本后它常常仍是「有焦点的前台」，
+        // 游戏只是画在它下面。这时注入的点击会被我们自己吃掉 —— 截图一切正常、棋子纹丝不动、
+        // 确认阶段永远 UNCHANGED（K40 实测：一手棋连试 4 次全 UNCHANGED，`dumpsys input` 的
+        // FocusedApplications 就是本应用）。所以出手前必须确认前台不是自己；是就自动切一次
+        // （最近任务快速切换，不重启游戏），切不回来就不点，别把票据白烧掉。
+        if (typeof opts.foregroundGuard === "function") {
+            let guard = null;
+            try {
+                guard = opts.foregroundGuard();
+            } catch (error) {
+                guard = null;
+            }
+            if (guard && guard.packageChanged) {
+                note("前台守卫：点击前前台是" + (guard.ownPackage ? "本应用（脚本宿主）" : (guard.package || "其它")) +
+                    " → 已用最近任务切回上一步应用" + (guard.ok ? "" : "（仍不是目标，先不点）"));
+            }
+            if (guard && guard.ok === false) {
+                note("前台不是游戏（当前 " + (guard.package || "未知") + "）：**不发点击**，等下一轮再试");
+                return pump(machine.dispatch({
+                    type: "CLICK_RESULT", ticket: ticket, status: "CANCELLED",
+                    clickCount: 0, reason: "前台不是游戏（" + (guard.package || "未知") + "），未发送点击"
+                }));
+            }
+        }
         const outcome = executor.execute(ticket, {
             grid: grid,
+            // 点棋优先用最近一次观测的**实测框中心**（几何版本必须与票据一致，否则退回交点）：
+            // 定位的系统性偏移会让「按交点点的击」落在棋子外沿 → 只选中、不落子。
+            centers: (lastCenters && lastCentersVersion === ticket.geometryVersion) ? lastCenters : null,
             screen: opts.screen ? opts.screen() : null,
             cancel: function () { return !running || machine.state() === machineModule.STATE.PAUSED; }
         });
-        ownMovePatch = null;   // 要走新的子了：上一次的落点补齐作废
+        // 已知事实补齐表**不在这里清空**：我方新落点的子会被再画一次环，而对方上一手的子
+        // 可能还带着环；那些格子一旦能自己认出来（或变成空格/别的子），observeOnce 会自动
+        // 把它从表里去掉，所以留着不会补错。
         note("点击：" + ticket.moveICCS + " → " + outcome.status + "（" + outcome.reason + "）" +
             "，点击 " + outcome.clickCount + " 次");
+        if (outcome.clicks && outcome.clicks.length > 0) {
+            const first = outcome.clicks[0];
+            const last = outcome.clicks[outcome.clicks.length - 1];
+            note("  落点（" + first.x + "," + first.y + "）→（" + last.x + "," + last.y + "）" +
+                (first.usedCenter ? "，用实测框中心" : "，用网格交点"));
+        }
         return pump(machine.dispatch({
             type: "CLICK_RESULT", ticket: ticket, status: outcome.status,
             clickCount: outcome.clickCount, reason: outcome.reason
@@ -390,7 +473,15 @@ function createDriver(options) {
 
     function doVerify(effect) {
         const ticket = effect.ticket;
-        const observed = observeOnce({ forVerify: true });
+        // 把票据的「预期落子后局面」当期望传给观察层：用来纠正「同一兵种颜色读反」的装饰格
+        let expectedBoard = null;
+        try {
+            const parsed = fenModule.parseFen(ticket && ticket.expectedAfterFen);
+            expectedBoard = parsed && parsed.ok ? parsed.board : null;
+        } catch (error) {
+            expectedBoard = null;
+        }
+        const observed = observeOnce({ forVerify: true, expect: expectedBoard });
         if (!observed.ok) {
             return pump(machine.dispatch({
                 type: "VERIFY_RESULT", ticket: ticket,
@@ -406,23 +497,94 @@ function createDriver(options) {
             conflicts: observed.conflicts
         });
         note("确认：" + verifier.describe(verdict));
+        // 诊断（量很少，一手棋 2~3 行）：把实际喂给验证器的观测盘面与期望/基准都打出来。
+        // 「确认判错」这类问题不看这三串就只能猜（真机踩过：观测其实是「我方落子+对方应手」，
+        // 但合并/补齐改过的格子没记录下来，事后无法复盘）。
+        if (!verifier.isSuccess(verdict.result)) {
+            note("  确认观测：" + boardText(observed.chars) +
+                "｜期望：" + (ticket.expectedAfterFen || "-") +
+                "｜基准：" + (ticket.baseFen || "-"));
+        }
         if (verifier.isSuccess(verdict.result)) {
             stats.confirms += 1;
+            // 新的一手：补齐表切到新周期（上一手的记录随之作废，见 verifyCycle 的说明）
+            verifyCycle += 1;
         }
-        // 落点格被游戏画花（未知）→ 记住这一格，后续观察一律按票据已知的兵种补齐
+        // ★ 确认成功后**刷新可靠基准** —— ③ 连续走子必需的一环（K40 真机踩到）：
+        // 不刷新的后果：基准还停在「我方落子之前」，而下一帧局面已经多了我方这手（以及对方应手）
+        //   → 从旧基准看是「两手都变了」→ 观察层「唯一合法着法能解释」这条补不成立
+        //   → 对方应手那格的高亮环补不出来（未知格≠0）→ `sideFor` 直接放弃 → 8s 看门狗
+        //   → 永久 RECOVERING（真机日志：确认 CONFIRMED 之后就一直「轮次未知超时」）。
+        // 刷成「确认后的局面」之后：对方应手只改 2 格，正好是 F2 能解释的情形 → 补得出来 → 轮次接得上。
+        if (verifier.isSuccess(verdict.result) && verdict.board && verdict.board.indexOf("?") < 0) {
+            const mySide = ticket.baseSide === "b" ? "b" : "w";
+            const nextSide = (verdict.result === verifier.RESULT.OPPONENT_REPLY)
+                ? mySide                                   // 对方已应手 → 又轮到我方
+                : (mySide === "w" ? "b" : "w");            // 只确认了我方落子 → 轮到对方
+            lastReliable = { board: verdict.board.slice(), side: nextSide };
+            note("可靠基准已刷新（确认 " + verdict.result + "）：" +
+                (nextSide === mySide ? "轮到我方" : "轮到对方"));
+        }
+        // ★ 把「落点格」登记进已知事实表（不管这次确认有没有用到它）。
+        // 为什么要无条件登记：游戏会给我方刚落的子画高亮环，**下一帧起**那一格就认不出来了。
+        // 如果只在「确认时刚好是未知格」才登记，就会出现：确认成功 → 下一帧那格变 '?' →
+        // 未知格≠0 → `sideFor` 直接放弃 → 8s 看门狗 → 永久 RECOVERING
+        // （真机实测：一手棋确认成功后原地空转 90 秒，没走第二手）。
+        // 落点这一格是**已知事实**（票据 + 棋规推出来的），不是猜；等那格能自己认出来就自动失效。
+        if (verifier.isSuccess(verdict.result) && expectedBoard) {
+            let dest = null;
+            try {
+                dest = verifier.destinationIndex(ticket);
+            } catch (error) {
+                dest = null;
+            }
+            if (dest != null && expectedBoard[dest]) {
+                addPatch({ index: dest, char: expectedBoard[dest] }, "落点格（我方新落的子会被画环）");
+            }
+        }
+        // 落点格被游戏画花（未知）→ 记下来，后续观察一律按已知事实补齐。
+        // 我方落点与对方应手落点都是棋盘上的事实（都从票据 + 棋规唯一推出来），不是猜。
+        function addPatch(entry, label) {
+            if (!entry || entry.index == null || !entry.char) {
+                return;
+            }
+            for (let i = 0; i < knownPatches.length; i++) {
+                if (knownPatches[i].index === entry.index) {
+                    knownPatches[i] = { index: entry.index, char: entry.char, cycle: verifyCycle };
+                    return;
+                }
+            }
+            knownPatches.push({ index: entry.index, char: entry.char, cycle: verifyCycle });
+            note(label + " " + entry.char + "（下标 " + entry.index +
+                "）本手内按已知事实补齐（下一手确认后自动作废）");
+        }
         if (verdict.patched) {
-            ownMovePatch = { index: verdict.patched.index, char: verdict.patched.char };
-            note("落点格 " + verdict.patched.char + "（下标 " + verdict.patched.index +
-                "）后续观察按票据补齐（直到那格能自己认出来）");
-        } else if (verifier.isSuccess(verdict.result)) {
-            ownMovePatch = null;   // 认得出来就不需要补
+            addPatch(verdict.patched, "落点格");
+        }
+        if (verdict.replyPatch) {
+            addPatch(verdict.replyPatch, "对方应手落点格");
         }
         return pump(machine.dispatch({ type: "VERIFY_RESULT", ticket: ticket, verdict: verdict }));
     }
 
     function recover() {
+        // ⚠️ 重新定位一次 ~8s（K40 实测 7.6~8.2s），而**棋子移动不改变几何**。
+        // 失败循环里每次都重新定位的话，一手棋要白烧十几秒 → 这里限频：
+        // 距上次定位不足 RELOCATE_MIN_INTERVAL_MS 时只「重新武装」（直接 RECOVERED → 下一轮观察）。
+        const now = nowMono();
+        if (lastRelocateMono > 0 && now - lastRelocateMono < RELOCATE_MIN_INTERVAL_MS) {
+            note("恢复：距上次定位不到 " + Math.round(RELOCATE_MIN_INTERVAL_MS / 1000) +
+                "s —— 几何没变，直接重新观察（省掉 ~8s 重定位）");
+            return pump(machine.dispatch({ type: "RECOVERED" }));
+        }
+        lastRelocateMono = now;
         note("恢复：重新定位棋盘");
-        lastReliable = null;
+        // ⚠️ **不要**在这里清 lastReliable / knownPatches（曾经清过，K40 实测直接死锁）：
+        // recover 只是重新对齐几何，**轮次不是从当前帧推出来的、而是从上一步延续的**。
+        // 一旦清掉，而局面已经不是标准开局（双方各走了一手），`sideFor` 就永远推不出来
+        // → 永久 RECOVERING。保留基准反而更安全：`transition.infer` 会自己校验（一致=MOVE/
+        // MOVE_PAIR，不一致=其它状态 → 仍然是「推不出」），不会拄着错盘面出手。
+        // 补齐表里的格子是**棋盘格子下标**，与几何无关，换几何也一样有效。
         const located = opts.locate(locateOptions());
         if (!located || !located.ok) {
             stats.errors += 1;
@@ -446,6 +608,208 @@ function createDriver(options) {
         return options;
     }
 
+    /**
+     * 观察层的「已知事实补齐」：用**唯一解释**把少数未知格补出来。
+     *
+     * 为什么需要：游戏给**刚落的子**画高亮环，那一格会被模型认错（实测带环的炮读成马），
+     * 棋规层再降级成 '?'。而状态机的轮次推断要求 `unknownCells === 0` —— 于是对方刚应完一手，
+     * 驱动就“看不见轮次” → 超时进 RECOVERING；`recover()` 又把基准清掉，而局面已经不是
+     * 标准开局 → **再也推不出轮次，永久卡死**（K40 实测：走完第一手后就卡在这）。
+     *
+     * 两种**可验证**的解释（都不是猜，全都要精确对上其余所有已知格）：
+     *   F1 与上一张可靠盘面逐格一致（对方那手的环还在）→ 直接按基准补；
+     *   F2 恰好等于「上一张可靠盘面 + 某一个合法着法」→ 且只有**唯一一种**解释。
+     * 解释不唯一或对不上就返回 null，保持未知（宁可等着）。
+     */
+    function fillKnownFacts(chars) {
+        if (!lastReliable || !lastReliable.board) {
+            return null;
+        }
+        const base = lastReliable.board;
+        // ⚠️ 基准自己必须是**没有未知格**的（它的名字就是「已知事实」）。
+        // 真机踩到：assertTurn 把一个仍然带 '?' 的局面当成了基准 → F1 把 '?' 原样抄进结果、
+        // 还报「与上一张可靠盘面一致」并把 unknownCells 当成 0 → 下游 buildFen 抛
+        // 「存在未知格，不能生成 FEN」→ 每轮都被当异常跳过，面板上只看到「轮次未知」。
+        if (base.indexOf("?") >= 0) {
+            return null;
+        }
+        const unknown = [];
+        for (let i = 0; i < 90; i++) {
+            if (chars[i] === "?") {
+                unknown.push(i);
+            }
+        }
+        if (unknown.length === 0) {
+            return null;
+        }
+        const norm = function (ch) { return ch == null ? null : ch; };
+        const matches = function (board) {
+            for (let i = 0; i < 90; i++) {
+                if (chars[i] === "?") {
+                    continue;
+                }
+                if (norm(chars[i]) !== norm(board[i])) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // F1：除了未知格，其余格子与上一张可靠盘面完全一致
+        if (matches(base)) {
+            const board = chars.slice();
+            for (let k = 0; k < unknown.length; k++) {
+                board[unknown[k]] = base[unknown[k]];
+            }
+            if (board.indexOf("?") >= 0) {
+                return null;   // 补不出确定的局面就别假装成功
+            }
+            return { board: board, how: "与上一张可靠盘面一致（对方那手的环还在）" };
+        }
+        // F2：唯一一个合法着法就能完全解释
+        const fits = [];
+        const sides = [lastReliable.side, lastReliable.side === "w" ? "b" : "w"];
+        for (let s = 0; s < sides.length && fits.length < 2; s++) {
+            const moves = legal.allLegalMoves(base, sides[s]);
+            for (let m = 0; m < moves.length && fits.length < 2; m++) {
+                let after = null;
+                try {
+                    after = legal.applyMove(base, moves[m]).board;
+                } catch (error) {
+                    continue;
+                }
+                // 未知格只允许落在「这一步改动过的格子」上
+                const diff = legal.diffBoards(base, after);
+                const changed = {};
+                for (let d = 0; d < diff.length; d++) {
+                    changed[diff[d].row * 9 + diff[d].col] = true;
+                }
+                let allowed = true;
+                for (let k = 0; k < unknown.length; k++) {
+                    if (!changed[unknown[k]]) {
+                        allowed = false;
+                        break;
+                    }
+                }
+                if (!allowed || !matches(after)) {
+                    continue;
+                }
+                fits.push({ board: after, iccs: moves[m].iccs });
+            }
+        }
+        if (fits.length !== 1 || fits[0].board.indexOf("?") >= 0) {
+            return null;
+        }
+        return { board: fits[0].board, how: "唯一合法着法 " + (fits[0].iccs || "?") + " 解释得通" };
+    }
+
+    /**
+     * 多帧合并识别（默认 2 帧）：**两帧一致的格子才采信，不一致的降级成未知格**。
+     *
+     * 为什么必须这么干（K40 真机实测）：模型单帧会有**多处**孤立误读 —— 同一帧里同时出现
+     * 「黑車(0,0) 读成空」「(0,1) 空位读成黑炮」「黑炮(7,2) 读成红炮」共 3~4 处。
+     * 这种盘面任何推断都解释不了 → 轮次推不出来 → 8s 看门狗 → 永久 RECOVERING。
+     * 而误读是**逐帧随机**的：第二帧往往是对的 → 取「两帧都同意」的格子，
+     * 冲突格算未知格，交给已有的「唯一合法着法能解释就补齐」（fillKnownFacts）走 ——
+     * 宁可拿一张“部分未知”的真盘面，也不要拿一张“看起来完整”的假盘面。
+     *
+     * 代价：每次观察多一帧（K40 shell 通道 ~1.2s/帧），tickMs 已留 2.4s 余量。
+     */
+    function recognizeMerged(request) {
+        const times = Math.max(1, Math.min(3, cfg.observeFrames == null ? 2 : cfg.observeFrames));
+        let first = null;
+        let last = null;
+        let merged = null;
+        for (let i = 0; i < times; i++) {
+            if (i > 0 && cfg.observeGapMs > 0) {
+                clock(cfg.observeGapMs);
+            }
+            const one = opts.recognize(request);
+            if (i === 0) {
+                first = one;
+            }
+            if (!one || !one.ok || !one.chars) {
+                if (i === 0) {
+                    return one;            // 第一帧就失败：直接上报（下一轮再试）
+                }
+                break;                     // 后续帧失败就用已有结果
+            }
+            last = one;
+            if (!merged) {
+                merged = { source: one, chars: one.chars.slice() };
+                continue;
+            }
+            let conflicts = 0;
+            for (let k = 0; k < 90; k++) {
+                const a = merged.chars[k];
+                const b = one.chars[k];
+                if (a === b) {
+                    continue;
+                }
+                // ⚠️ **严格合并**：只要两帧不一致就降级成未知格。
+                // 曾经写成「一帧未知、另一帧有值 → 采信有值的那帧」，那会**跨帧累积棋子**：
+                // 真机实测（对方炮 7→4 的应手帧）每帧的棋规修复降级的是「分数最低的那个重复炮」，
+                // 两帧降的不是同一个 → 合并后 (1,2)(4,2)(7,2) 全留成黑炮 = **3 个炮**的不可能局面
+                // → 确认/轮次推断全都解释不了 → UNEXPECTED + 永久 RECOVERING。
+                // 严格合并后：那两格变成未知，交给「唯一合法着法能解释就补齐」（fillKnownFacts F2）还原。
+                merged.chars[k] = "?";
+                conflicts += 1;
+            }
+            if (conflicts > 0) {
+                stats.frameConflicts += conflicts;
+            }
+        }
+        if (!merged) {
+            return first;
+        }
+        stats.mergedFrames += 1;
+        // 合并后的盘面挂到**最后一帧**上：框中心（点棋用）/几何 都要用最新的那一帧。
+        const out = last || first || merged.source;
+        if (times > 1) {
+            out.chars = merged.chars;
+        }
+        let unknown = 0;
+        for (let k = 0; k < 90; k++) {
+            if (out.chars[k] === "?") {
+                unknown += 1;
+            }
+        }
+        out.unknownCells = unknown;
+        return out;
+    }
+
+    /**
+     * 盘面 → 紧凑文本（FEN 风格：空位用数字压缩，未知格写 '?'）。
+     * ⚠️ 不能用「只拼字符」的写法：那样丢掉了空格子，**看不出列号**，诊断等于白打
+     * （真机踩过：想把「我方落子+对方应手」的判错盘面读出来，结果两行都没列号，只能重跑）。
+     */
+    function boardText(chars) {
+        if (!chars) {
+            return "-";
+        }
+        const rows = [];
+        for (let r = 0; r < 10; r++) {
+            let line = "";
+            let empty = 0;
+            for (let c = 0; c < 9; c++) {
+                const ch = chars[r * 9 + c];
+                if (ch) {
+                    if (empty > 0) {
+                        line += empty;
+                        empty = 0;
+                    }
+                    line += ch;
+                } else {
+                    empty += 1;
+                }
+            }
+            if (empty > 0) {
+                line += empty;
+            }
+            rows.push(line);
+        }
+        return rows.join("/");
+    }
+
     /** 截一帧并识别。复用已校准几何（700ms 的定位不必每轮都做）。 */
     function observeOnce(options) {
         const started = nowMono();
@@ -461,7 +825,7 @@ function createDriver(options) {
         stats.observations += 1;
         let result;
         try {
-            result = opts.recognize(request);
+            result = recognizeMerged(request);
         } catch (error) {
             stats.errors += 1;
             stats.lastError = String(error && error.message ? error.message : error);
@@ -483,22 +847,108 @@ function createDriver(options) {
             note("几何按检测框微调：原点偏移 (" + dx + "," + dy + ")（未知格 " +
                 (result.stats && result.stats.autoAlign ? result.stats.autoAlign.unknown : "?") + "）");
         }
-        lastBoard = result.chars ? result.chars.slice() : null;
-        // 我方落点格被游戏画花（那格还是 `?`）→ 按票据已知的兵种补齐。
-        // 不补的话未知格≠0，轮次推断会直接放弃（真机就是这样卡在 RECOVERING 的）。
+        // 点棋用「实测框中心」：连它所属的几何版本一起记下（版本不符就退回交点）
+        lastCenters = result.centers || null;
+        lastCentersVersion = (result.grid && result.grid.version != null)
+            ? result.grid.version
+            : (grid && grid.version != null ? grid.version : null);
+        // 「游戏画花了的格子」→ 按已知事实补齐。
+        // 真机现象：游戏给刚落的子画高亮环，那一格会被模型认错（实测：带环的炮读成马），
+        // 棋规层再把它降级成 '?'。**我方落子和对方应手的子都会被画环**，所以这是
+        // 一张表（最多两格）。不补的话未知格≠0，轮次推断直接放弃 → 卡死在 RECOVERING。
+        // 每一格一旦能自己认出来（或被吃/换子）就自动从表里去掉。
         let patchedNow = null;
         let unknownCells = result.unknownCells == null ? 0 : result.unknownCells;
-        if (ownMovePatch && result.chars) {
-            if (result.chars[ownMovePatch.index] === "?") {
-                result.chars[ownMovePatch.index] = ownMovePatch.char;
-                unknownCells = Math.max(0, unknownCells - 1);
-                patchedNow = ownMovePatch;
-                stats.ownMovePatched += 1;
-            } else {
-                // 那格已经能自己认出来（或已经被吃/换子）→ 不再需要补
-                ownMovePatch = null;
+        if (knownPatches.length > 0 && result.chars) {
+            const keep = [];
+            for (let i = 0; i < knownPatches.length; i++) {
+                const patch = knownPatches[i];
+                if (patch == null || patch.index == null) {
+                    continue;
+                }
+                const got = result.chars[patch.index];
+                if (patch.cycle !== verifyCycle) {
+                    continue;   // 上一手的记录 → 作废（装饰不会挂在那个子上了）
+                }
+                if (got === "?" || got === "" || got === null || got === undefined) {
+                    // ① 读不出来 / **整格漏检（读成空）**：高亮环把子盖住时模型常常直接看不到它
+                    //    （真机：对方刚落的黑炮在 (4,2) 被读成空 → 盘面与「我方落子+对方应手」对不上）。
+                    //    本手周期内的落点是**已知事实**，按已知补齐。
+                    result.chars[patch.index] = patch.char;
+                    if (got === "?") {
+                        unknownCells = Math.max(0, unknownCells - 1);
+                    }
+                    patchedNow = patch;
+                    stats.ownMovePatched += 1;
+                    keep.push(patch);
+                    continue;
+                }
+                if (got === patch.char) {
+                    // ② 自己能认出来了 → 保留（同一手内下一帧可能又被盖住）
+                    keep.push(patch);
+                    continue;
+                }
+                // ③ 读成了**别的子**：真机实测（K40）我方炮吃卒落在卒位后，那一格一直被读成
+                //    「红兵 P」而不是炮 —— 于是轮次推断拿到的盘面「差一格且不是合法着法」→ 永远推不出。
+                //    ⚠️ 只在**同色**时才用已知事实覆盖：同色 = 那一格还是我方棋子（只是兵种被装饰读错）；
+                //    异色说明真被对方吃了，**必须让它变**（否则会把吃子藏起来，后面算棋就按错盘面走）。
+                const sameColor = got && patch.char &&
+                    (got === got.toUpperCase()) === (patch.char === patch.char.toUpperCase());
+                if (got && got !== "" && sameColor) {
+                    result.chars[patch.index] = patch.char;
+                    patchedNow = patch;
+                    stats.ownMovePatched += 1;
+                    keep.push(patch);
+                    continue;
+                }
+                // ④ 变空 / 换成异色 → 真的被吃或走开了，不再保留
+            }
+            knownPatches = keep;
+        }
+        // 还有未知格 → 试试用「已知事实」补齐（唯一解释；见 fillKnownFacts 的说明）
+        if (unknownCells > 0 && result.chars) {
+            const filled = fillKnownFacts(result.chars);
+            // 只有「补完真的没未知格」才算成功：宁可老老实实报未知格，也不要假装补齐（见 fillKnownFacts 的注释）
+            if (filled && filled.board && filled.board.indexOf("?") < 0) {
+                result.chars = filled.board;
+                unknownCells = 0;
+                stats.knownFactFills += 1;
+                if (lastFillText !== filled.how) {
+                    lastFillText = filled.how;
+                    note("未知格按已知事实补齐：" + filled.how);
+                }
             }
         }
+        // 颜色翻转纠正：游戏给刚落的子/被威胁的子加装饰（高亮环、命中标记），实测会让模型
+        // 把**同一个兵种的颜色判反**（例：落点上的红炮被读成红兵/黑卒）。
+        //
+        // ⚠️ 只改「观测字符与期望字符是同一个字母的不同大小写」的格子，而且**只在确认阶段**
+        // 用（options.expect = 票据的「预期落子后局面」）：
+        //   · 为什么不看上一张可靠盘面？因为「我的红兵吃掉对方的黑卒」也会表现为同一格
+        //     P↔p，拿旧盘面去纠就会**把真实的吃子改掉**；
+        //   · 用票据的预期盘面就没有这个问题：纠正之后整盘必须与预期**完全一致**，
+        //     否则验证器照样判 UNCHANGED/UNEXPECTED —— 风险由验证器兜住，不是无条件采信。
+        if (options && options.expect && result.chars) {
+            const expectBoard = options.expect;
+            let flips = 0;
+            for (let i = 0; i < 90; i++) {
+                const got = result.chars[i];
+                const want = expectBoard[i];
+                if (typeof got !== "string" || typeof want !== "string") {
+                    continue;
+                }
+                if (got !== want && got.toLowerCase() === want.toLowerCase() && /^[A-Za-z]$/.test(got)) {
+                    result.chars[i] = want;
+                    flips += 1;
+                }
+            }
+            if (flips > 0) {
+                stats.colorFlips += flips;
+            }
+        }
+        // lastBoard 要在**补齐/纠色之后**记：它会被「现在轮到我」拿去当基准，
+        // 存的必须是「目前最可信的那张盘」（带 '?' 的原始观测会让基准不干净）。
+        lastBoard = result.chars ? result.chars.slice() : null;
         return {
             ok: true,
             chars: result.chars,
@@ -516,8 +966,16 @@ function createDriver(options) {
         return !!start.ok && legal.boardMatches(board, start.board);
     }
 
-    /** 推轮次：从「上一可靠局面 + 新观测」推出现在轮到谁；推不出就返回 null。 */
+    /**
+     * 推轮次：从「上一可靠局面 + 新观测」推出现在轮到谁；推不出就返回 null。
+     *
+     * 副作用：推断成功时会把 lastReliable 刷成**按着法改正过的盘面**；
+     * 若这次真的改动了观测（落点格被游戏装饰读错），额外留下 lastSideFix，
+     * 交给本轮观察把 lastBoard / 快照一起改正 —— 否则算棋会拿着
+     * 「我方炮在某格被读成兵、炮又不在原位」的错盘面出手。
+     */
     function sideFor(board, unknownCells) {
+        lastSideFix = null;
         if (unknownCells > 0) {
             return null;
         }
@@ -532,16 +990,104 @@ function createDriver(options) {
         }
         const inferred = transition.infer(lastReliable.board, lastReliable.side, board, { allowPair: true });
         if (inferred.status === "MOVE" || inferred.status === "MOVE_PAIR") {
-            lastReliable = { board: board.slice(), side: inferred.nextSide };
+            const settled = inferred.board ? inferred.board.slice() : board.slice();
+            if (inferred.board && legal.diffBoards(settled, board).length > 0) {
+                lastSideFix = { board: settled, how: inferred.reason };
+            }
+            lastReliable = { board: settled, side: inferred.nextSide };
             note("轮次推断：" + inferred.reason);
             return inferred.nextSide;
         }
         if (inferred.status === "UNCHANGED") {
+            // 观测只差几个「颜色读反」的格 → 场面还是基准那张（本手没落子）→
+            // 把观测/快照拉回基准，别把带反色的盘面拿去算棋。
+            if (inferred.board && legal.diffBoards(inferred.board, board).length > 0) {
+                lastSideFix = { board: inferred.board.slice(), how: inferred.reason };
+            }
             return lastReliable.side;
+        }
+        // 严格推断失败 → 再试一次**带装饰容差**的推断（放宽唯一合法着法的**落点那一格**）。
+        // 真机踩到（K40 + 天天象棋）：对方炮吃我方兵、落在兵位上，那一格被模型读成 'p'（炮认成卒）
+        // → 严格推断「既没有合法单步也没有一步+应手能解释」→ 轮次未知 → 8s 看门狗 → 永久 RECOVERING。
+        // 收紧点：只允许**一格**不同，而且那格必须正是该着法的落点；其余格子仍要完全一致。
+        const tolerant = inferWithDecorationTolerance(lastReliable.board, lastReliable.side, board);
+        if (tolerant) {
+            lastSideFix = { board: tolerant.board, how: "唯一合法单步 " + tolerant.iccs };
+            lastReliable = { board: tolerant.board, side: tolerant.nextSide };
+            note("轮次推断（装饰容差）：唯一合法单步 " + tolerant.iccs +
+                "（落点格被游戏装饰读错，已按该着法改正）");
+            return tolerant.nextSide;
         }
         stats.unknownTurn += 1;
         note("轮次推不出来（" + inferred.status + "）：" + inferred.reason);
+        // 诊断（限频）：把「基准 / 观测 / 容差两步统计」都写出来 —— 只报「推不出来」没法定位
+        if (stats.unknownTurn <= 3 || stats.unknownTurn % 10 === 0) {
+            const baseFen = lastReliable ? safeFen(lastReliable.board, lastReliable.side) : "（无基准）";
+            note("诊断基准 " + baseFen);
+            note("诊断观测 " + safeFen(board, lastReliable ? lastReliable.side : "w") +
+                (inferred.debug ? "｜容差：我方着法 " + inferred.debug.ownMoves +
+                    "，试 " + inferred.debug.tried + "，最小差 " + inferred.debug.minDiff +
+                    "，命中 " + inferred.debug.fits + "，最优 " + inferred.debug.best : ""));
+        }
         return null;
+    }
+
+    /** 诊断用：出 FEN，不抛错。 */
+    function safeFen(board, side) {
+        try {
+            return fenModule.buildFen(board, side === "b" ? "b" : "w");
+        } catch (error) {
+            return "（FEN 失败：" + (error && error.message ? error.message : error) + "）";
+        }
+    }
+
+    /**
+     * 带装饰容差的轮次推断：在「唯一合法单步」上允许**落点那一格**与观测不同
+     * （游戏给刚落的子加高亮环/击中特效，模型会把兵种读错）。
+     * 返回 { board（按该着法改正后的盘面）, nextSide, iccs } 或 null。
+     */
+    function inferWithDecorationTolerance(base, baseSide, observed) {
+        if (!base || !observed) {
+            return null;
+        }
+        const moves = legal.allLegalMoves(base, baseSide);
+        const fits = [];
+        for (let i = 0; i < moves.length && fits.length < 2; i++) {
+            const move = moves[i];
+            let after = null;
+            try {
+                after = legal.applyMove(base, move).board;
+            } catch (error) {
+                continue;
+            }
+            const diff = legal.diffBoards(after, observed);
+            if (diff.length > 1) {
+                continue;
+            }
+            if (diff.length === 1) {
+                const text = String(move.iccs || "");
+                if (!/^[a-i][0-9][a-i][0-9]$/.test(text)) {
+                    continue;
+                }
+                const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+                if (diff[0].row * 9 + diff[0].col !== dest) {
+                    continue;   // 差异不在落点上（可能是别的格子被读错）→ 不采信
+                }
+            }
+            fits.push({ move: move, after: after });
+        }
+        if (fits.length !== 1) {
+            return null;
+        }
+        const board = observed.slice();
+        const text = String(fits[0].move.iccs || "");
+        const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+        board[dest] = fits[0].after[dest];   // 落点按着法改正
+        return {
+            board: board,
+            nextSide: baseSide === "w" ? "b" : "w",
+            iccs: fits[0].move.iccs
+        };
     }
 
     /**
@@ -590,6 +1136,25 @@ function createDriver(options) {
         }
 
         const side = sideFor(observed.chars, observed.unknownCells);
+        // 轮次推断如果给出了「按着法改正过的盘面」（落点格被游戏装饰读错兵种），
+        // 就以它为准重算本轮的观测与 lastBoard：这是**唯一合法解释**推出来的事实，
+        // 比模型对那两个装饰格的读数可信；不改正的话算棋会拿着错盘面出手。
+        if (lastSideFix && lastSideFix.board && observed.chars && observed.unknownCells === 0) {
+            const fix = lastSideFix;
+            lastSideFix = null;
+            let fixed = 0;
+            for (let i = 0; i < 90; i++) {
+                if (fix.board[i] && fix.board[i] !== observed.chars[i]) {
+                    observed.chars[i] = fix.board[i];
+                    fixed += 1;
+                }
+            }
+            if (fixed > 0) {
+                lastBoard = observed.chars.slice();
+                stats.sideFixes += 1;
+                note("盘面已按着法改正 " + fixed + " 格（" + fix.how + "）");
+            }
+        }
         if (side == null && observed.unknownCells === 0) {
             stats.unknownTurn += 1;
             if (!lastReliable) {
@@ -676,7 +1241,7 @@ function createDriver(options) {
             running = false;
             workerSearch.cancel();
             pendingCompute = null;
-            ownMovePatch = null;
+            knownPatches = [];
             return pump(machine.dispatch({ type: "STOP" }));
         },
         setMySide: function (side) {
@@ -689,6 +1254,16 @@ function createDriver(options) {
             if (!lastBoard) {
                 return { ok: false, reason: "还没有识别到局面（先跑一轮观察）" };
             }
+            // ⚠️ 基准里不能有未知格：它是后面「已知事实补齐」的唯一依据，
+            // 带 '?' 的基准会把 '?' 当成事实抄回去（真机踩到：报告「已补齐」后 buildFen 抛异常）。
+            const bad = lastBoard.indexOf("?");
+            if (bad >= 0) {
+                return {
+                    ok: false,
+                    reason: "当前局面还有未知格（第 " + (Math.floor(bad / 9) + 1) + " 行第 " + (bad % 9 + 1) +
+                        " 列），不能当基准：等它认出来，或先把棋盘「菜单→重来」清成干净开局"
+                };
+            }
             lastReliable = { board: lastBoard.slice(), side: machine.mySide() };
             note("用户声明轮到" + (machine.mySide() === "w" ? "红方（我方）" : "黑方（我方）"));
             return { ok: true, reason: "已把当前局面当作基准" };
@@ -699,7 +1274,7 @@ function createDriver(options) {
             machine.setSession(id);
             lastReliable = null;
             grid = null;
-            ownMovePatch = null;
+            knownPatches = [];
             note("新会话 #" + id + "（基准与几何已清空）");
             return id;
         },
@@ -730,7 +1305,8 @@ function createDriver(options) {
                 "，确认 " + counters.confirms + " 次，重试 " + counters.retries + " 次");
             lines.push("算棋：" + computeMode + "（worker " + stats.thinkOffThread +
                 " 次 / 本线程 " + stats.thinkInline + " 次，最近一次 " + Math.round(stats.thinkMs) + "ms）");
-            lines.push("落点补齐 " + stats.ownMovePatched + " 次（游戏给刚落的子加高亮，那格认不出来时按票据补）");
+            lines.push("落点补齐 " + stats.ownMovePatched + " 次、已知事实补齐 " + stats.knownFactFills +
+            " 次、颜色纠正 " + stats.colorFlips + " 格（游戏给刚落的子加装饰，那几格认不准）");
             if (!clickAllowed) {
                 lines.push("模式：不点击（拦截了 " + disabledTap.calls() + " 次点击调用）");
             }

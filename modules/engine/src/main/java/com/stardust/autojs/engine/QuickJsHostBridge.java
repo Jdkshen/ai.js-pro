@@ -107,6 +107,8 @@ final class QuickJsHostBridge implements AutoCloseable,
     private final Set<String> mSharedBusSubscriptions = ConcurrentHashMap.newKeySet();
     private final Object mSystemEventLock = new Object();
     private volatile long mEngineHandle;
+    private ByteBuffer mAccessibilityPixels;
+    private boolean mLoggedAccessibilityPath;
     private boolean mObservingKeys;
     private boolean mObservingNotifications;
     private boolean mObservingToasts;
@@ -644,6 +646,13 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public boolean requestScreenCapture(int orientation) {
+        return requestScreenCapture(orientation, "projection");
+    }
+
+    public boolean requestScreenCapture(int orientation, String mode) {
+        if ("accessibility".equals(mode)) return images().requestAccessibilityScreenCapture();
+        if ("auto".equals(mode)) return images().requestAutoScreenCapture(normalizeOrientation(orientation));
+        if (!"projection".equals(mode)) throw new IllegalArgumentException("未知截图通道：" + mode);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             return false;
         }
@@ -658,7 +667,45 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (engineHandle == 0) {
             throw new IllegalStateException("QuickJS engine is not attached");
         }
-        Image image = images().captureScreenRaw(fresh, timeoutMillis);
+        images().prepareAutoCapture();
+        if (images().isAccessibilityScreenCapture()) {
+            try (com.stardust.autojs.core.image.capture.AccessibilityScreenCapturer.HardwareFrame frame
+                         = images().captureAccessibilityHardware(timeoutMillis)) {
+                long nativeFrame = QuickJsNativeBridge.createNativeFrameFromHardwareBuffer(
+                        engineHandle, frame.getBuffer(), targetShortEdge);
+                if (nativeFrame != 0) {
+                    if (!mLoggedAccessibilityPath) {
+                        Log.i("QuickJsHostBridge", "Accessibility capture: hardware-direct, no full Bitmap/ByteBuffer copy");
+                        mLoggedAccessibilityPath = true;
+                    }
+                    return nativeFrame;
+                }
+                if (!mLoggedAccessibilityPath) {
+                    Log.i("QuickJsHostBridge", "Accessibility capture: portable fallback, reusable ByteBuffer");
+                    mLoggedAccessibilityPath = true;
+                }
+                android.graphics.Bitmap bitmap = frame.toBitmap();
+                try {
+                    if (mAccessibilityPixels == null || mAccessibilityPixels.capacity() < bitmap.getByteCount()) {
+                        mAccessibilityPixels = ByteBuffer.allocateDirect(bitmap.getByteCount());
+                    }
+                    mAccessibilityPixels.clear();
+                    bitmap.copyPixelsToBuffer(mAccessibilityPixels);
+                    mAccessibilityPixels.rewind();
+                    return QuickJsNativeBridge.createNativeFrame(engineHandle, mAccessibilityPixels,
+                            bitmap.getWidth(), bitmap.getHeight(), bitmap.getRowBytes(), 4, targetShortEdge);
+                } finally {
+                    bitmap.recycle();
+                }
+            }
+        }
+        Image image;
+        try {
+            image = images().captureScreenRaw(fresh, timeoutMillis);
+        } catch (RuntimeException error) {
+            if (!images().hasStoppedAutoProjection()) throw error;
+            return captureScreenNative(targetShortEdge, fresh, timeoutMillis);
+        }
         Image.Plane[] planes = image.getPlanes();
         if (planes.length == 0) {
             throw new IllegalStateException("Screen capture returned no image planes");
@@ -5389,6 +5436,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     @Override
     public void close() {
+        mAccessibilityPixels = null;
         for (String name : new ArrayList<>(mSharedBusSubscriptions)) {
             sharedBusOff(name);
         }
@@ -5603,6 +5651,8 @@ final class QuickJsHostBridge implements AutoCloseable,
         private final Object mLock = new Object();
         private List<Detection> mDetections = Collections.emptyList();
         private String mStatsText = "";
+        /** HUD 顶部 y：让开系统状态栏（含投屏/录屏胶囊把状态栏撑高的情况）。 */
+        private final int mHudTop;
 
         OverlayView(Context context) {
             super(context);
@@ -5615,6 +5665,42 @@ final class QuickJsHostBridge implements AutoCloseable,
             mStatsPaint.setTextSize(28f);
             mStatsPaint.setColor(Color.WHITE);
             mStatsBgPaint.setColor(0x99000000);
+            mHudTop = resolveHudTop(context);
+        }
+
+        /**
+         * 状态栏底边 + 8dp 作为 HUD 顶部。
+         *
+         * <p>历史原因：HUD 画死在 y=10..54，而状态栏从 y=0 起就有 80dp 上下（K40 状态栏
+         * 高 80px、小米 8 更高，出现投屏/录屏胶囊时还会再涨），于是状态文字一直压在状态栏
+         * 底下看不见（真机反馈「悬浮窗显示的测试时间被挡住」）。
+         */
+        private static int resolveHudTop(Context context) {
+            float density = context.getResources().getDisplayMetrics().density;
+            int statusBar = 0;
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    WindowManager wm =
+                            (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+                    if (wm != null) {
+                        statusBar = wm.getCurrentWindowMetrics().getWindowInsets()
+                                .getInsets(android.view.WindowInsets.Type.statusBars()).top;
+                    }
+                }
+            } catch (Throwable ignored) {
+                // 取不到就退回资源/默认值，绝不因为 HUD 位置把绘制整个搞崩。
+            }
+            if (statusBar <= 0) {
+                int id = context.getResources()
+                        .getIdentifier("status_bar_height", "dimen", "android");
+                if (id > 0) {
+                    statusBar = context.getResources().getDimensionPixelSize(id);
+                }
+            }
+            if (statusBar <= 0) {
+                statusBar = (int) (24 * density);
+            }
+            return statusBar + (int) (8 * density);
         }
 
         void setData(List<Detection> detections, String statsText) {
@@ -5636,12 +5722,18 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
             if (!statsText.isEmpty()) {
                 float textWidth = mStatsPaint.measureText(statsText);
-                canvas.drawRoundRect(new RectF(10, 10, 24 + textWidth, 54), 12, 12, mStatsBgPaint);
-                canvas.drawText(statsText, 24, 42, mStatsPaint);
+                canvas.drawRoundRect(new RectF(10, mHudTop, 24 + textWidth, mHudTop + 44),
+                        12, 12, mStatsBgPaint);
+                canvas.drawText(statsText, 24, mHudTop + 32, mStatsPaint);
             }
             for (Detection detection : detections) {
                 canvas.drawRect(new RectF(detection.x1, detection.y1,
                         detection.x2, detection.y2), mBoxPaint);
+                // 空标签 = **纯框，不画文字**。脚本侧用它画网格线/空格标记（象棋的识别绘制）；
+                // 以前无条件拼 " 100%"，于是满屏都是没意义的百分比标签。
+                if (detection.label == null || detection.label.isEmpty()) {
+                    continue;
+                }
                 String caption = detection.label + " " + Math.round(detection.score * 100) + "%";
                 float captionWidth = mLabelPaint.measureText(caption);
                 float top = Math.max(0f, detection.y1 - 40f);

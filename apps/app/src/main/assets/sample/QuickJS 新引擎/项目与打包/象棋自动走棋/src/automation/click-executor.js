@@ -25,7 +25,12 @@ const DEFAULTS = {
     /** 一张票据最多点几次（起点+终点 = 2；超出说明逻辑出错了，直接拒绝）。 */
     maxClicksPerTicket: 2,
     /** 允许的落点误差（格距为单位）：超过就不点（说明几何或坐标有问题）。 */
-    pointTolerance: 0.35
+    pointTolerance: 0.35,
+    /**
+     * 采用「实测检测框中心」的最大容许偏移（格距为单位）：超过就不要那个中心，退回交点。
+     * 用来挡住异常框（跨格、拖影）把点击带跑偏。
+     */
+    maxCenterOffset: 0.35
 };
 
 /**
@@ -68,15 +73,56 @@ function createExecutor(options) {
     }
     const stats = { tickets: 0, clicks: 0, ok: 0, failed: 0, cancelledBefore: 0, cancelledBetween: 0 };
 
-    function pointOf(grid, col, row) {
+    /**
+     * 格点 → 屏幕坐标。
+     *
+     * `center`（可选）= 该格最近一次识别的**实测检测框中心**。有就用它，但要求：
+     *   · 归一化偏移 ≤ maxCenterOffset（格距为单位）—— 挡住异常框；
+     *   · nearest() 归到的正是同一个 (col,row) —— 否则说明几何与中心不自洽。
+     *
+     * 为什么要用它：定位给的原点/格距有**系统性偏差**（K40 + 天天象棋实测
+     * rank0 差 10px、rank7 差 27px，误差随行号线性增长，真实 stepY ≈ 111.7 vs 定位 114.23）。
+     * 识别只看「框归哪个交点」+ 0.84 格距的采样框，这点偏差不影响判读；
+     * 但游戏的命中判定是「手指得落在棋子上」，按交点去点就是系统性偏移 →
+     * 表现成「起点能选中、落点没反应」→ 确认阶段永远是 UNCHANGED。
+     */
+    function pointOf(grid, col, row, center) {
         const point = geometry.pointAt(grid, col, row);
         const snapped = geometry.nearest(grid, point.x, point.y);
+        if (center && isFinite(center.x) && isFinite(center.y)) {
+            const offset = geometry.normalizedResidual(grid, center.x, center.y);
+            if (offset <= config.maxCenterOffset) {
+                const hit = geometry.nearest(grid, center.x, center.y);
+                if (hit.inside && hit.col === col && hit.row === row) {
+                    return {
+                        x: Math.round(center.x),
+                        y: Math.round(center.y),
+                        normalizedResidual: offset,
+                        inside: true,
+                        usedCenter: true,
+                        latticeX: Math.round(point.x),
+                        latticeY: Math.round(point.y)
+                    };
+                }
+            }
+        }
         return {
             x: Math.round(point.x),
             y: Math.round(point.y),
             normalizedResidual: snapped.normalized,
-            inside: snapped.inside
+            inside: snapped.inside,
+            usedCenter: false
         };
+    }
+
+    /** 取某格最近一次观测的实测框中心（没有就返回 null，让 pointOf 退回交点）。 */
+    function centerAt(ctx, col, row) {
+        const centers = ctx && ctx.centers;
+        if (!centers || col == null || row == null) {
+            return null;
+        }
+        const entry = centers[row * geometry.COLS + col];
+        return (entry && isFinite(entry.x) && isFinite(entry.y)) ? entry : null;
     }
 
     function doTap(point, kind) {
@@ -92,6 +138,7 @@ function createExecutor(options) {
             kind: kind,
             x: point.x,
             y: point.y,
+            usedCenter: !!point.usedCenter,
             ok: result === true || (result && result.ok === true),
             disabled: !!(result && result.disabled),
             method: result && result.method ? result.method : null,
@@ -160,8 +207,8 @@ function createExecutor(options) {
             return finish("CANCELLED", "点击前已取消（暂停/停止/换局）");
         }
 
-        const from = pointOf(grid, ticket.move.fromCol, ticket.move.fromRow);
-        const to = pointOf(grid, ticket.move.toCol, ticket.move.toRow);
+        const from = pointOf(grid, ticket.move.fromCol, ticket.move.fromRow, centerAt(c, ticket.move.fromCol, ticket.move.fromRow));
+        const to = pointOf(grid, ticket.move.toCol, ticket.move.toRow, centerAt(c, ticket.move.toCol, ticket.move.toRow));
         if (!from.inside || !to.inside) {
             return finish("REJECTED", "起终点不在棋盘交点范围内（起 " + from.x + "," + from.y +
                 " 终 " + to.x + "," + to.y + "）");

@@ -88,6 +88,26 @@ function countUnknown(cells) {
     return n;
 }
 
+/**
+ * 每格的**检测框中心**（屏幕逻辑像素），空格/未知格为 null。
+ *
+ * 用途：点棋。定位给的原点/格距有系统性偏差（K40 + 天天象棋实测 rank0 差 10px、
+ * rank7 差 27px，误差随行号线性增长），而识别只看「框归哪个交点」+ 0.84 格距的
+ * 采样框，这点偏差不影响判读；但游戏的命中判定是按「手指落在棋子上」的，
+ * 用交点去点会变成看不见的偏移 → 「只选中、不落子」。所以点棋优先用实测框中心。
+ */
+function centersOf(cells) {
+    const out = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        const cell = cells[i];
+        out[i] = (cell.state === cellsContract.STATE_PIECE && cell.center &&
+            isFinite(cell.center.x) && isFinite(cell.center.y))
+            ? { x: cell.center.x, y: cell.center.y }
+            : null;
+    }
+    return out;
+}
+
 /** 全部格子的残差之和：越小说明检测框越贴近格心。 */
 function sumResidual(cells) {
     let sum = 0;
@@ -503,6 +523,7 @@ function recognize(options) {
         detections: detections,
         detectionCount: detections.length,
         assigned: assigned.cells,
+        centers: centersOf(assigned.cells),
         stats: stats,
         placements: placements,
         sides: sides,

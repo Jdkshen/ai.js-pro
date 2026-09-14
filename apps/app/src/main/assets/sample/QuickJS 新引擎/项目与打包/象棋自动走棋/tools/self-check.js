@@ -248,6 +248,37 @@ check("低分框被丢弃", function () {
     return result.cells[fen.index(1, 7)].state === assignment.STATE_EMPTY || "低分框仍然入格";
 });
 
+// ---- 低分框的两种正确处理（2026-09-14 真机事故：黑将被漏成空格）----
+// 人审绘制（src/vision/overlay-draw.js）把原始检测框画出来才发现的：
+// 同一个黑将检出两个框（0.42 / 0.26），而 minScore=0.45 把两个都丢掉 → 那格变**空格** →
+// 盘面凭空少一个将，而未知格/冲突/数量这些闸门都拦不住「空格」→ 驱动永远卡住。
+
+check("低分框（同标签 ≥2 个）算一致证据 → 当棋子，不能当空格", function () {
+    const result = assignment.assign([
+        detection("k", 4, 0, 0.42),
+        detection("k", 4, 0, 0.26)
+    ], grid);
+    const cell = result.cells[fen.index(4, 0)];
+    if (cell.state !== assignment.STATE_PIECE) {
+        return "重复检出的低分框应该判成棋子（那格是黑将），实际 " + cell.state;
+    }
+    return cell.piece === "k" ? true : ("读成了 " + cell.piece);
+});
+
+check("低分框（孤立一个）→ 未知格，也不许当空格", function () {
+    const result = assignment.assign([detection("k", 4, 0, 0.3)], grid);
+    const cell = result.cells[fen.index(4, 0)];
+    if (cell.state !== assignment.STATE_UNKNOWN) {
+        return "孤立低分框应判未知格（“有东西但没把握”），实际 " + cell.state;
+    }
+    return cell.piece === null ? true : "未知格不该带兵种";
+});
+
+check("低于 weakScore 的框仍然丢弃（别把噪声当证据）", function () {
+    const result = assignment.assign([detection("k", 4, 0, 0.1)], grid);
+    return result.cells[fen.index(4, 0)].state === assignment.STATE_EMPTY || "0.1 的框不该入格";
+});
+
 // ---------------------------------------------------------------- 时序融合
 
 function frameFrom(cells, extras) {
@@ -945,6 +976,32 @@ function stubChars(placements) {
 
 const consistency = require("../src/chess/consistency.js");
 
+check("棋规修复：将/帅缺失 ⇒ 把本方九宫空格标成未知（不再静默少一个将）", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const cells = [];
+    for (let i = 0; i < 90; i++) {
+        cells.push({
+            state: board[i] ? "PIECE" : "EMPTY",
+            piece: board[i] || null,
+            score: board[i] ? 0.9 : 0,
+            candidates: [],
+            conflict: false,
+            residual: 0
+        });
+    }
+    // 人为抹掉黑将（模拟真机漏检：那格读成「空格」而不是未知格）
+    const kingIndex = fen.index(4, 0);
+    cells[kingIndex] = { state: "EMPTY", piece: null, score: 0, candidates: [], conflict: false, residual: 0 };
+    const result = consistency.repair(cells);
+    if (!result.missingRequired || result.missingRequired.indexOf("k") < 0) {
+        return "没有报出「黑将缺失」（missingRequired=" + JSON.stringify(result.missingRequired) + "）";
+    }
+    if (cells[kingIndex].state !== "UNKNOWN") {
+        return "黑将原位（九宫内的空格）应该被标成未知格，实际 " + cells[kingIndex].state;
+    }
+    return true;
+});
+
 // 这一盘的识别结果是**真机跑出来的**（K40，dev-560，chess-shot-01.png），
 // 32 格看起来挺好，但棋规一校验就露馅：红仕 3 个（上限 2）、黑卒退到起始线之后。
 // 修复应当把这两类"可归因到格子"的错误降级成未知，而不是整盘作废。
@@ -1632,12 +1689,123 @@ check("P4·确认：还是走之前的样子 → UNCHANGED，不算成功（A02�
     return verifier.isSuccess(verdict.result) === false ? true : "UNCHANGED 被当成了成功";
 });
 
+check("R05e 落点格被装饰读错兵种时，「一手+应手」仍要能认出来", function () {
+    // 真机现场（2026-09-14，K40 + 天天象棋离线局）：我方 炮(c2)吃卒落在 (2,3)、
+    // 对方紧接着 炮(c4)吃我兵落在 (4,6)，这两个「刚落的子」都被模型读成了兵
+    // （颜色对、兵种错）→ 严格两步匹配 0 解 → 轮次推不出来 → 永久 RECOVERING（白等 90s）。
+    const base = AFTER_REPLY_BOARD.slice();
+    const own = legal.allLegalMoves(base, "w")[0];
+    const mid = legal.applyMove(base, own).board;
+    const reply = legal.allLegalMoves(mid, "b")[0];
+    const end = legal.applyMove(mid, reply).board;
+    const observed = end.slice();
+    [own, reply].forEach(function (move) {
+        const text = String(move.iccs);
+        const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+        const truth = end[dest];
+        observed[dest] = truth === truth.toUpperCase() ? "P" : "p";   // 同色、兵种读错
+    });
+    const result = transition.infer(base, "w", observed, { allowPair: true });
+    if (result.status !== transition.STATUS.MOVE_PAIR) {
+        return "应认成两步解释，实际 " + result.status + "：" + result.reason;
+    }
+    if (!result.board || !legal.boardMatches(result.board, end)) {
+        return "没能给出「按着法改正过」的盘面";
+    }
+    // 反向保护：起点没让开（子其实没走）时**不许**采信
+    const bad = observed.slice();
+    const srcText = String(own.iccs);
+    bad[(9 - Number(srcText.charAt(1))) * 9 + "abcdefghi".indexOf(srcText.charAt(0))] = base[
+        (9 - Number(srcText.charAt(1))) * 9 + "abcdefghi".indexOf(srcText.charAt(0))];
+    const rejected = transition.infer(base, "w", bad, { allowPair: true });
+    return rejected.status === transition.STATUS.MOVE_PAIR
+        ? "起点还留着子（没走）却被认成两步解释" : true;
+});
+
+check("R05f 只差「同字母换大小写」的装饰噪声 → 判没走子（真机盘面）", function () {
+    // 2026-09-14 K40 真机卡死时的两张盘面（诊断日志原样）：
+    // 两手的起点都还在原位，只有 (2,3)/(4,6) 两格的兵卒被读出反色。
+    const before = fen.parseFen("rnbakabnr/9/1c2c4/p1p1p1p1p/9/9/P1P1P1P1P/2C4C1/9/RNBAKABNR").board;
+    const observed = fen.parseFen("rnbakabnr/9/1c2c4/p1P1p1p1p/9/9/P1P1p1P1P/2C4C1/9/RNBAKABNR").board;
+    const result = transition.infer(before, "w", observed, { allowPair: true });
+    if (result.status !== transition.STATUS.UNCHANGED) {
+        return "应判没走子，实际 " + result.status + "：" + result.reason;
+    }
+    if (!result.board || !legal.boardMatches(result.board, before)) {
+        return "没把盘面纠正回基准";
+    }
+    // 反向保护：真的走子（起点变空）绝不能被当噪声吞掉
+    const moved = before.slice();
+    moved[7 * 9 + 2] = "";      // 我方炮离开 (2,7)
+    moved[3 * 9 + 2] = "P";     // 目的格被读成红兵（真机就是这样）
+    const real = transition.infer(before, "w", moved, { allowPair: true });
+    return real.status !== transition.STATUS.UNCHANGED ? true : "真走子被误判成没走";
+});
+
 check("P4·确认：出现一个合法对方应手 → OPPONENT_REPLY（A03）", function () {
     const verdict = verifier.verify({ ticket: sampleTicket(), observed: AFTER_REPLY_BOARD.slice() });
     if (verdict.result !== "OPPONENT_REPLY") {
         return verdict.result + "：" + verdict.reason;
     }
     return verdict.plies.length === 2 ? true : ("应手确认应该记两步，实际 " + verdict.plies.length + " 步");
+});
+
+check("P4·确认：只有别处那格颜色读反（棋其实没走成）→ UNCHANGED，不许一直等", function () {
+    // 真机现场（2026-09-14，K40 + 离线局）：b2c2 走成后，第二手 c2c6 点击**没走成**
+    // （炮还稳稳留在起点），而落点的黑卒被读成红兵（p→P）→ 与基准只差这一格。
+    // 旧逻辑把它当「动画帧」一直等 → 65 次 × 2.5s 白等一整轮。正确结论是 UNCHANGED。
+    const baseBoard = AFTER_REPLY_BOARD.slice();
+    let move = null;
+    for (let i = 0; i < 90 && !move; i++) {
+        const ch = baseBoard[i];
+        if (!ch || ch !== ch.toUpperCase()) {
+            continue;   // 只从我方（红）子出发找着法
+        }
+        const list = legal.legalMoves(baseBoard, i % 9, Math.floor(i / 9), "w");
+        if (list.length > 0) {
+            move = list[0];
+        }
+    }
+    if (!move) {
+        return "夹具前提不成立：红方没有合法着法";
+    }
+    const after = legal.applyMove(baseBoard, move).board;
+    const ticket = sampleTicket({
+        baseFen: fen.buildFen(baseBoard, "w"),
+        baseSide: "w",
+        moveICCS: move.iccs,
+        move: move,
+        expectedAfterFen: fen.buildFen(after, "b")
+    });
+    // 观测 = 基准 + 把某个**非起点格**的颜色读反（模拟装饰误判），棋子一步没动
+    const observed = baseBoard.slice();
+    const sourceIndex = move.fromRow * 9 + move.fromCol;
+    let flipped = -1;
+    for (let i = 0; i < 90; i++) {
+        const ch = baseBoard[i];
+        if (!ch || i === sourceIndex || ch !== ch.toUpperCase()) {
+            continue;
+        }
+        observed[i] = ch.toLowerCase();
+        flipped = i;
+        break;
+    }
+    if (flipped < 0) {
+        return "夹具前提不成立：找不到可翻色的红子";
+    }
+    const verdict = verifier.verify({
+        ticket: ticket, observed: observed, unknownCells: 0,
+        stable: true, geometryTrusted: true, conflicts: 0
+    });
+    if (verdict.result !== "UNCHANGED") {
+        return "颜色读反应判 UNCHANGED，实际 " + verdict.result + "：" + verdict.reason;
+    }
+    // 反向保护：真的走成了（起点空、落点是我方子）必须判 CONFIRMED，别被这条规则吃掉
+    const landed = verifier.verify({
+        ticket: ticket, observed: after.slice(), unknownCells: 0,
+        stable: true, geometryTrusted: true, conflicts: 0
+    });
+    return landed.result === "CONFIRMED" ? true : ("真落子被误判成 " + landed.result);
 });
 
 check("P4·确认：有未知格是「看不清」，绝不能当成没落子", function () {
@@ -1799,8 +1967,13 @@ check("P4·状态机：正常一轮 → 算棋、核对、点击、确认各一�
     if (counters.clicks !== 2) {
         return "点击计数应为 2，实际 " + counters.clicks;
     }
-    if (h.machine.state() !== "RECOVERING") {
-        return "确认后应进入恢复，实际 " + h.machine.state();
+    // 确认之后**不该**再发 RECOVER：那会让驱动重新定位+校准（真机实测一次 ~8 秒，
+    // CONFIRMED + OPPONENT_REPLY 各一次 = 一手棋白烧 ~16 秒）。只等下一帧观测即可。
+    if (h.machine.state() !== "WAIT_STABLE") {
+        return "确认后应等下一帧观测（WAIT_STABLE），实际 " + h.machine.state();
+    }
+    if (h.effectsOf("RECOVER") !== 0) {
+        return "确认后不该重新定位（RECOVER 动作数 " + h.effectsOf("RECOVER") + "）";
     }
     return executed.ticket.executionState === "CONFIRMED"
         ? true : ("票据状态不是 CONFIRMED：" + executed.ticket.executionState);
@@ -1812,6 +1985,14 @@ check("P4·状态机：只识别/建议模式任何输入都不产生点击（A0
     if (!prep.ok) {
         return prep.reason;
     }
+    // 建议模式拿到着法后应停在 **SUGGESTED 稳态**（以前停在 PRECHECK，下一次观测就被
+    // 「出手前核对不通过：当前模式禁止点击」打成 RECOVERING → 真机 ② 模式一直空转）
+    if (h.machine.state() !== "SUGGESTED") {
+        return "拿到着法后应停在 SUGGESTED，实际 " + h.machine.state();
+    }
+    if (h.effectsOf("SUGGEST") !== 1) {
+        return "没把建议交给驱动（SUGGEST 动作数 " + h.effectsOf("SUGGEST") + "）";
+    }
     const pre = h.dispatch(h.snapshotEvent(START_BOARD, "w"));
     if (h.effectsOf("EXECUTE_TICKET") !== 0) {
         return "只识别模式下仍然产生了点击动作";
@@ -1819,7 +2000,38 @@ check("P4·状态机：只识别/建议模式任何输入都不产生点击（A0
     if (h.clicked.length !== 0 || h.disabledTap.calls() !== 0) {
         return "只识别模式下的点击调用数不为 0：" + h.clicked.length + "/" + h.disabledTap.calls();
     }
-    return pre.reason.indexOf("禁止点击") >= 0 ? true : ("拒绝原因没说清：" + pre.reason);
+    // 同一局面重复观测：必须安静（不点击、不重算、更不能掉进恢复）
+    if (h.machine.state() !== "SUGGESTED") {
+        return "同局面重复观测后状态变成了 " + h.machine.state() + "（应保持 SUGGESTED）";
+    }
+    if (h.effectsOf("COMPUTE") !== 1) {
+        return "同局面重复观测重复触发了算棋（COMPUTE 次数 " + h.effectsOf("COMPUTE") + "）";
+    }
+    if (h.effectsOf("RECOVER") !== 0) {
+        return "建议模式不该进恢复流程（RECOVER 动作数 " + h.effectsOf("RECOVER") + "）";
+    }
+    return pre.reason.indexOf("建议") >= 0 ? true : ("拒绝/保持理由没说清：" + pre.reason);
+});
+
+check("P4·状态机：建议模式轮次未知不跑看门狗、不进恢复（② 空转 bug 回归）", function () {
+    const h = harness({ allowClick: false });
+    h.dispatch({ type: "START" });
+    h.dispatch({ type: "READY", modelVersion: "self-check-model" });
+    h.dispatch({ type: "GEOMETRY", geometryVersion: 7, trusted: true });
+    h.clock.value += 1000;
+    h.dispatch({ type: "SNAPSHOT", snapshot: { board: START_BOARD.slice(), side: null, fen: START_FEN, unknownCells: 0, stable: true } });
+    if (h.machine.state() !== "WAIT_TURN") {
+        return "轮次未知应停在 WAIT_TURN，实际 " + h.machine.state();
+    }
+    h.clock.value += 60000;   // 远超 5s 看门狗
+    h.dispatch({ type: "TICK", nowMono: h.clock.value });
+    if (h.machine.counters().watchdogTrips !== 0) {
+        return "建议模式不该触发轮次看门狗（次数 " + h.machine.counters().watchdogTrips + "）";
+    }
+    if (h.machine.state() !== "WAIT_TURN") {
+        return "建议模式轮次未知超时后不该变状态，实际 " + h.machine.state();
+    }
+    return h.effectsOf("RECOVER") === 0 ? true : "建议模式轮次未知却发起了恢复";
 });
 
 check("P4·状态机：确认没落子 → 最多重试一次，且第二次用的是新票据", function () {
@@ -2001,6 +2213,7 @@ check("autoAlign：定位整体错 40px（框全出界）→ 不硬凑，报告 
 
 const searchWorker = require("../src/automation/search-worker.js");
 const driverModule = require("../src/automation/auto-driver.js");
+const overlayDraw = require("../src/vision/overlay-draw.js");
 
 check("worker 算棋：宿主没有 threads 时必须报不可用（Node 侧就是这种情况）", function () {
     if (typeof threads !== "undefined") {
@@ -2058,6 +2271,39 @@ check("驱动：pollCompute 空闲时返回 null，不制造假任务", function
     return driver.isThinking() === false ? true : "空闲时 isThinking 应当为 false";
 });
 
+check("驱动：基准带未知格时不许假装补齐（真机 ② 空转 bug 回归）", function () {
+    const board = START_BOARD.slice();
+    board[0] = "?";   // 人为制造「被高亮环画花」的一格
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        recognize: function () {
+            return { ok: true, chars: board.slice(), unknownCells: 1, conflicts: 0, layout: null };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 }; },
+        config: { movetimeMs: 20 }
+    });
+    driver.start();
+    driver.tick();   // 建立识别基准
+    // 1) 带未知格的局面不能当基准（否则后面会把 '?' 当事实抄回去）
+    const asserted = driver.assertTurn();
+    if (asserted.ok) {
+        return "带未知格的局面不该允许声明轮次";
+    }
+    // 2) 再观察一轮：不许报「已补齐」、更不许把异常抛出（旧行为：补成 unknownCells=0 → buildFen 抛
+    //    「存在未知格，不能生成 FEN」→ 每轮都被当异常跳过，面板上只看到「轮次未知」）
+    const before = driver.stats().knownFactFills;
+    driver.tick();
+    const after = driver.stats();
+    if (after.knownFactFills !== before) {
+        return "没有干净基准时报补齐成功（knownFactFills " + before + " → " + after.knownFactFills + "）";
+    }
+    if (after.errors !== 0) {
+        return "不该抛异常（errors=" + after.errors + "：" + after.lastError + "）";
+    }
+    return driver.machine.state() === "ERROR" ? "状态机被推进 ERROR" : true;
+});
+
 check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（退回同步，不卡死）", function () {
     const driver = driverModule.createDriver({
         allowClick: false,
@@ -2070,14 +2316,115 @@ check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（�
     });
     driver.start();
     let state = null;
-    for (let i = 0; i < 4 && state !== "PRECHECK"; i++) {
+    // 夹具是 allowClick:false → 出着法后停在 SUGGESTED（建议模式稳态）；点击模式才是 PRECHECK。
+    // 这条用例只看「有没有算出着法、有没有走同步算棋」，两个稳态都算通过。
+    for (let i = 0; i < 4 && state !== "PRECHECK" && state !== "SUGGESTED"; i++) {
         driver.tick();
         state = driver.machine.state();
     }
     const stats = driver.stats();
-    return state === "PRECHECK"
+    return state === "PRECHECK" || state === "SUGGESTED"
         ? (stats.thinkInline > 0 ? true : "出了着法但没走同步算棋？")
-        : ("没能进到 PRECHECK，停在 " + state + "（" + driver.machine.reason() + "）");
+        : ("没能进到 PRECHECK/SUGGESTED，停在 " + state + "（" + driver.machine.reason() + "）");
+});
+
+// ---------------------------------------------------------------- 识别绘制（人审用）
+
+check("识别绘制：网格线正好落在交点/路上（19 条线，位置与几何一致）", function () {
+    const items = overlayDraw.gridBoxes(TEST_GRID, { lineThickness: 2, linePadding: 20 });
+    if (items.length !== 19) {
+        return "应有 10 横 + 9 竖 = 19 条线，实际 " + items.length;
+    }
+    const horizontal = items.filter(function (item) { return (item.y2 - item.y1) <= 2.1; });
+    if (horizontal.length !== 10) {
+        return "横线应有 10 条，实际 " + horizontal.length;
+    }
+    // 第 0 条横线的中心 y 必须等于 originY（人审就是看这条线有没有穿过顶排棋子圆心）
+    const first = horizontal[0];
+    const centerY = (first.y1 + first.y2) / 2;
+    if (Math.abs(centerY - TEST_GRID.originY) > 0.01) {
+        return "第 0 条横线没落在 originY 上：" + centerY + " vs " + TEST_GRID.originY;
+    }
+    // 第 8 条竖线的中心 x = originX + 8*stepX
+    const vertical = items.filter(function (item) { return (item.x2 - item.x1) <= 2.1; });
+    if (vertical.length !== 9) {
+        return "竖线应有 9 条，实际 " + vertical.length;
+    }
+    const lastX = (vertical[8].x1 + vertical[8].x2) / 2;
+    if (Math.abs(lastX - (TEST_GRID.originX + 8 * TEST_GRID.stepX)) > 0.01) {
+        return "第 8 条竖线位置不对：" + lastX;
+    }
+    return true;
+});
+
+check("识别绘制：每格标签画在格心、状态编进文字（? / X!）", function () {
+    const start = fen.parseFen(fen.START_FEN).board.slice();
+    const at = function (items, row, col) {
+        const center = overlayDraw.centerOf(TEST_GRID, row, col);
+        return items.filter(function (item) {
+            return Math.abs((item.x1 + item.x2) / 2 - center.x) < 0.01 &&
+                Math.abs((item.y1 + item.y2) / 2 - center.y) < 0.01;
+        })[0];
+    };
+    // ① 只画观测：未知格标签就是 '?'
+    const unknownBoard = start.slice();
+    unknownBoard[0] = "?";
+    const plain = overlayDraw.cellBoxes(TEST_GRID, unknownBoard, { cellBoxSize: 16 });
+    const unknownCell = at(plain, 0, 0);
+    if (!unknownCell) {
+        return "(0,0) 那格没有画出来";
+    }
+    if (unknownCell.label !== "?") {
+        return "未知格的标签应该有且只有 ?，实际 " + unknownCell.label;
+    }
+    // ② 给了期望盘面：与期望不同的格子要标 X!（人审最想看的就是这一格）
+    const wrongBoard = start.slice();
+    wrongBoard[1] = "R";                 // 期望是黑马 n
+    const withExpect = overlayDraw.cellBoxes(TEST_GRID, wrongBoard, {
+        cellBoxSize: 16, expectChars: start
+    });
+    const mismatch = withExpect.filter(function (item) { return item.label.indexOf("X!") === 0; });
+    if (mismatch.length !== 1) {
+        return "期望 vs 观测只有 1 处不同，应恰好标 1 个 X!，实际 " + mismatch.length;
+    }
+    if (mismatch[0].label.indexOf("R") < 0 || mismatch[0].label.indexOf("n") < 0) {
+        return "X! 标签要带上「读到什么→期望什么」，实际 " + mismatch[0].label;
+    }
+    return true;
+});
+
+check("识别绘制：模式决定画什么（grid 只网格 / full 加检测框）", function () {
+    const chars = fen.parseFen(fen.START_FEN).board.slice();
+    const result = {
+        chars: chars,
+        detectionCount: 2,
+        detections: [{ x: 200, y: 300, width: 90, height: 90, label: "N", score: 0.91 },
+            { x: 400, y: 500, width: 90, height: 90, label: "R", score: 0.77 }]
+    };
+    const gridOnly = overlayDraw.build({ grid: TEST_GRID, result: result, mode: "grid" });
+    if (gridOnly.items.length !== 19) {
+        return "grid 模式应只有 19 条线，实际 " + gridOnly.items.length;
+    }
+    const cells = overlayDraw.build({ grid: TEST_GRID, result: result, mode: "cells" });
+    if (cells.items.length <= gridOnly.items.length) {
+        return "cells 模式应比 grid 多出格子标签";
+    }
+    const full = overlayDraw.build({ grid: TEST_GRID, result: result, mode: "full" });
+    if (full.items.length <= cells.items.length) {
+        return "full 模式应再带上原始检测框与空格标记";
+    }
+    const withPlan = overlayDraw.build({
+        grid: TEST_GRID, result: result, mode: "cells",
+        points: [{ x: 196, y: 1495, label: "▶b2" }, { x: 311, y: 1495, label: "◀c2" }]
+    });
+    const arrow = withPlan.items.filter(function (item) { return item.label.indexOf("▶") === 0; });
+    if (arrow.length !== 1 || Math.abs((arrow[0].x1 + arrow[0].x2) / 2 - 196) > 0.01) {
+        return "点击落点的框没画对";
+    }
+    if (full.text.indexOf("绘制 full") !== 0) {
+        return "HUD 文字没带模式：" + full.text;
+    }
+    return true;
 });
 
 check("截图通道：setCaptureBackend 会归一转值，且没有 storages 时不抛异常（离线自检就是这个环境）", function () {

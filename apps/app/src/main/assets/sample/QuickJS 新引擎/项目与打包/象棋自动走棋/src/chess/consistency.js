@@ -230,16 +230,59 @@ function repair(cells, options) {
     }
     const board = boardOf(cells);
     const final = fen.validateBoard(board);
+    // ---- 必需子缺失（将/帅）----
+    // 真机事故（2026-09-14，K40 + 天天象棋）：模型把黑将漏检成**空格** → 盘面上凭空少一个将。
+    // `validateBoard` 会把它报成 error，但「数量超限」那套修复**没有东西可降级**（空格不是违规格）
+    // → violations 为空 → 什么都不做 → 驱动拿着一张没将的盘面永远推不出轮次。
+    // 处理：将/帅**不可能被吃、也走不出九宫** ⇒ 它只可能在本方九宫的空格里 → 把这些空格标成未知，
+    // 把「静默的错误盘面」变成「诚实的未知格」，交给上层的唯一解释补齐/闸门。
+    const missing = [];
+    if ((final.errors || []).length > 0) {
+        const counts = {};
+        for (let i = 0; i < 90; i++) {
+            const ch = board[i];
+            if (ch) {
+                counts[ch] = (counts[ch] || 0) + 1;
+            }
+        }
+        const palaceEmpty = function (rowFrom, rowTo, ch) {
+            const out = [];
+            for (let row = rowFrom; row <= rowTo; row++) {
+                for (let col = 3; col <= 5; col++) {
+                    const index = row * 9 + col;
+                    if (!board[index]) {
+                        out.push(index);
+                    }
+                }
+            }
+            return out;
+        };
+        if (!counts.K) {
+            missing.push({ side: "红帅", char: "K", slots: palaceEmpty(7, 9, "K") });
+        }
+        if (!counts.k) {
+            missing.push({ side: "黑将", char: "k", slots: palaceEmpty(0, 2, "k") });
+        }
+        for (let m = 0; m < missing.length; m++) {
+            const slots = missing[m].slots;
+            for (let s = 0; s < slots.length; s++) {
+                demote(cells, slots[s], missing[m].side + "缺失（应该是漏检）：九宫内该格标为未知", demoted);
+            }
+            rounds++;
+        }
+    }
+    const afterMissing = missing.length > 0 ? fen.validateBoard(boardOf(cells)) : final;
     return {
         cells: cells,
         demoted: demoted,
         flipped: flipped,
         changed: demoted.length > 0 || flipped.length > 0,
         rounds: rounds,
-        errors: final.errors,
-        warnings: final.warnings,
+        errors: afterMissing.errors,
+        warnings: afterMissing.warnings,
+        missingRequired: missing.map(function (item) { return item.char; }),
         before: validation ? validation.errors : [],
-        after: final.errors
+        after: afterMissing.errors
     };
 }
 

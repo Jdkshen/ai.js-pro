@@ -81,34 +81,101 @@ function verify(input) {
     /**
      * 未知格处理。
      *
-     * 只有一种情形允许继续判：**未知格恰好是「我方这步棋的落点」**。
-     * 真机原因：游戏会给刚落的子加高亮/换画法，那一格就认不出来了
-     * （小米8 实测：落子后 …/2?4C1/…，起点已空、其它 89 格全对）。
-     * 这时那一格的**兵种是已知事实**（就是我们票据里的那个子），用它补齐 —— 不是猜；
-     * 而且其余 89 格仍必须与票据预期完全一致（含起点已空），否则一概 UNRELIABLE。
+     * 只有两种情形允许继续判，两者的共同点是「那格的兵种是**已知事实**」：
+     *   ① 未知格恰好是「我方这步棋的落点」—— 游戏会给刚落的子加高亮/换画法，那一格认不出来
+     *     （真机实测：带高亮环的炮会被模型读成马，棋规层又把它降级成 '?'）。
+     *   ② 未知格是「我方落点 + 对方唯一一个合法应手的落点」—— 对局节奏快时，**对方的子也会
+     *     被画上高亮环**，于是同时有两格未知。对方的落点同样不是猜的：枚举合法应手，
+     *     只接受**恰好一种**能对上其余全部格子的情形。
+     * 除这两情形外一概 UNRELIABLE（宁可等着，也不要拄着错盘面出手）。
      */
     let subject = observed;
     let patched = null;
-    if (unknownCells > 0) {
-        const dest = destinationIndex(ticket);
-        const unknown = [];
-        for (let i = 0; i < 90; i++) {
-            if (observed[i] === "?") {
-                unknown.push(i);
+    let replyPatched = null;
+    const destIndex = destinationIndex(ticket);
+    /**
+     * 「被游戏装饰弄花」的格子 —— 两种表现都要算进去：
+     *   ① 读成 '?'（未知格，老路径）；
+     *   ② **读成别的子**：真机实测（K40 + 天天象棋）我方炮吃卒落在卒位上，那一格被读成
+     *      「红兵/黑卒」（`(col 2,row 3) p→P`）—— 只按未知格处理的话，这种帧会被判成
+     *      「出现了无法解释的局面」→ 票据作废 → 重算重试 → 一手棋白跑十几秒。
+     * 落点这一格的兵种是**票据 + 棋规推出来的已知事实**，不是猜；其余格子仍必须完全一致。
+     */
+    const decorated = [];
+    const srcIndex = sourceIndex(ticket);
+    for (let i = 0; i < 90; i++) {
+        const got = observed[i];
+        if (typeof got !== "string" || got === "") {
+            continue;
+        }
+        if (got === "?") {
+            decorated.push(i);
+            continue;
+        }
+        if (i === destIndex && expected[i] && got !== expected[i]) {
+            // 只有「起点确实已经空了」才当成落点被装饰弄花；否则就是我方还没落子
+            // （那种帧必须走 UNCHANGED → 允许一次重试，不能被当成「无法解释」把票据作废）
+            const srcCleared = srcIndex == null || observed[srcIndex] === expected[srcIndex];
+            if (srcCleared) {
+                decorated.push(i);
             }
         }
+    }
+    if (decorated.length > 0 || unknownCells > 0) {
+        const dest = destIndex;
+        const unknown = decorated;   // 含「读成 ?」与「落点格读成别的子」两类（见上面的说明）
         const onlyDestination = dest != null && unknown.length > 0 &&
             unknown.every(function (index) { return index === dest; });
-        if (!onlyDestination) {
-            return Object.assign({}, base, {
-                result: RESULT.UNRELIABLE,
-                reason: "还有 " + unknownCells + " 个未知格" +
-                    (dest == null ? "" : "（且不全是落点格）")
-            });
+        if (onlyDestination) {
+            subject = observed.slice();
+            subject[dest] = expected[dest];
+            patched = { index: dest, char: expected[dest] };
+        } else {
+            // 对方应手也带高亮环 → 枚举“我方落点 + 某一个合法应手落点”的未知格组合
+            const replies = legal.allLegalMoves(expected, opposite(ticket.baseSide));
+            const fits = [];
+            for (let i = 0; i < replies.length; i++) {
+                const reply = replies[i];
+                const replyDest = indexOfIccs(reply.iccs);
+                if (replyDest == null || replyDest === dest) {
+                    continue;
+                }
+                let allowed = true;
+                for (let k = 0; k < unknown.length; k++) {
+                    const index = unknown[k];
+                    if (index !== dest && index !== replyDest) {
+                        allowed = false;
+                        break;
+                    }
+                }
+                if (!allowed) {
+                    continue;
+                }
+                const after = legal.applyMove(expected, reply).board;
+                const candidate = observed.slice();
+                if (dest != null) {
+                    candidate[dest] = expected[dest];
+                }
+                candidate[replyDest] = after[replyDest];
+                if (legal.boardMatches(after, candidate)) {
+                    fits.push({ reply: reply, board: candidate, replyDest: replyDest });
+                }
+            }
+            if (fits.length !== 1) {
+                return Object.assign({}, base, {
+                    result: RESULT.UNRELIABLE,
+                    reason: "还有 " + unknownCells + " 个未知格" +
+                        (fits.length > 1
+                            ? "（且对方应手有 " + fits.length + " 种解释，补齐不唯一）"
+                            : "（且不全是落点格）")
+                });
+            }
+            subject = fits[0].board;
+            if (dest != null) {
+                patched = { index: dest, char: expected[dest] };
+            }
+            replyPatched = { index: fits[0].replyDest, char: subject[fits[0].replyDest] };
         }
-        subject = observed.slice();
-        subject[dest] = expected[dest];
-        patched = { index: dest, char: expected[dest] };
     }
 
     if (legal.boardMatches(expected, subject)) {
@@ -133,11 +200,30 @@ function verify(input) {
         }
     }
     if (matched.length === 1) {
+        // ★ 对方应手的落点格**无条件**给出已知事实（不只在我们用过它的时候）：
+        // 游戏会给刚落的子画高亮环，那一格在**后续几帧**里经常直接漏检（读成空）→
+        // 驱动那边没东西可补 → 盘面与「我方落子 + 对方应手」对不上 → 永久 RECOVERING。
+        // 落点兵种是推出来的已知事实（唯一合法应手 + 棋规），不是猜。
+        let patch = replyPatched;
+        if (!patch) {
+            const replyDest = indexOfIccs(matched[0].iccs);
+            if (replyDest != null) {
+                const afterBoard = legal.applyMove(expected, matched[0]).board;
+                if (afterBoard[replyDest]) {
+                    patch = { index: replyDest, char: afterBoard[replyDest] };
+                }
+            }
+        }
         return Object.assign({}, base, {
             result: RESULT.OPPONENT_REPLY,
-            reason: "我方 " + ticket.moveICCS + " 已落子，对方应手 " + matched[0].iccs,
+            reason: "我方 " + ticket.moveICCS + " 已落子，对方应手 " + matched[0].iccs +
+                (replyPatched
+                    ? "（双方落点都被游戏高亮盖住，均按已知事实补齐）"
+                    : (patched ? "（落点格被游戏画花了，按票据已知的兵种补齐 1 格）" : "")),
             board: subject.slice(),
-            plies: [ticket.moveICCS, matched[0].iccs]
+            plies: [ticket.moveICCS, matched[0].iccs],
+            patched: patched,
+            replyPatch: patch
         });
     }
     if (matched.length > 1) {
@@ -156,7 +242,64 @@ function verify(input) {
         });
     }
 
+    // 「还在动」的帧（真机实测很常见）：我方那个子**两端都画着** —— 起点上还留着一个、
+    // 落点上按预期也已经有了（动画/击中特效/残影）→ 这种帧什么结论都不能下，
+    // 但**也不该把票据作废**：再等一帧就正常了（状态机的 UNRELIABLE 分支会立刻安排下一次确认）。
+    // ⚠️ 判据必须带「落点已按预期出现」这一条：只凭「起点还占着」会把**任何别的局面**都算成动画
+    // （自检就抓到了：把黑车凭空少一个的无关局面判成 UNRELIABLE，而不是 UNEXPECTED）。
+    const srcIndex2 = indexOfIccsSquare(ticket && ticket.moveICCS ? ticket.moveICCS : "", 0);
+    const destIndex2 = indexOfIccsSquare(ticket && ticket.moveICCS ? ticket.moveICCS : "", 1);
+    const bothEndsDrawn = baseBoard && srcIndex2 != null &&
+        subject[srcIndex2] === baseBoard[srcIndex2] &&
+        subject[srcIndex2] !== expected[srcIndex2] &&
+        destIndex2 != null && subject[destIndex2] === expected[destIndex2];
+    if (bothEndsDrawn) {
+        return Object.assign({}, base, {
+            result: RESULT.UNRELIABLE,
+            reason: "我方那个子还画在起点、落点已变（动画中）→ 等下一帧再确认"
+        });
+    }
+
     const diff = baseBoard ? legal.diffBoards(baseBoard, subject) : [];
+    // 「颜色读反」的装饰噪声（真机决定性证据 2026-09-14）：
+    // 与**基准**逐格比，若差异**全是同字母的大小写不同**（p→P / c→C），而且**不涉及本手起点**
+    // （真的走子一定伴随起点变化），那就只是那一格的颜色被判反了 → 局面其实没变 → UNCHANGED。
+    // 真机现场：炮二平五之后点 c2c6 没走成（炮还稳稳留在起点），落点的黑卒被读成红兵；
+    // 旧逻辑把它当成"动画帧"一直等（65 次 × 2.5s 白等一整轮）。
+    // 为什么敢判 UNCHANGED：吃子一定同时改变起点（我方子离开那格），所以「只有同格换色」不可能是吃子。
+    const srcIccs = indexOfIccsSquare(ticket && ticket.moveICCS ? ticket.moveICCS : "", 0);
+    const destIccs = indexOfIccsSquare(ticket && ticket.moveICCS ? ticket.moveICCS : "", 1);
+    if (baseBoard && diff.length > 0) {
+        const onlyColourFlips = diff.every(function (item) {
+            const index = item.row * 9 + item.col;
+            if (index === srcIccs) {
+                return false;
+            }
+            const before = baseBoard[index];
+            const after = subject[index];
+            return typeof before === "string" && typeof after === "string" &&
+                before !== after && before.toLowerCase() === after.toLowerCase();
+        });
+        if (onlyColourFlips) {
+            return Object.assign({}, base, {
+                result: RESULT.UNCHANGED,
+                reason: "局面仍是走之前的样子（" + diff.length + " 格颜色读反，已按基准纠正）",
+                board: baseBoard.slice()
+            });
+        }
+    }
+    // 小差异（≤2 格）**且差异都落在本手起点/落点上** → 先当「没看清 / 还在动」，等下一帧重新确认；
+    // 差异在别处（或 ≥3 格）→ 局面真的变成了我们解释不了的样子 → UNEXPECTED → 让驱动重算。
+    const nearMove = diff.length > 0 && diff.length <= 2 && diff.every(function (item) {
+        const index = item.row * 9 + item.col;
+        return index === srcIccs || index === destIccs;
+    });
+    if (nearMove) {
+        return Object.assign({}, base, {
+            result: RESULT.UNRELIABLE,
+            reason: "起点/落点附近有 " + diff.length + " 格对不上（多半是装饰/动画帧）→ 等下一帧再确认"
+        });
+    }
     return Object.assign({}, base, {
         result: RESULT.UNEXPECTED,
         reason: "出现了无法解释的局面（与基准差 " + diff.length + " 格：" +
@@ -173,13 +316,29 @@ function verify(input) {
  * ICCS 记法：文件字母 a..i + 行号 9..0（红方底线 = 9），与 rules.moveToIccs 对称。
  */
 function destinationIndex(ticket) {
-    const iccs = ticket && ticket.moveICCS ? String(ticket.moveICCS) : "";
-    if (!/^[a-i][0-9][a-i][0-9]$/.test(iccs)) {
+    return indexOfIccsSquare(ticket && ticket.moveICCS ? ticket.moveICCS : "", 1);
+}
+
+/** 票据这步棋的**起点**在 90 格里的下标（“起点是否已空”用来分情况，见 decorated 的说明）。 */
+function sourceIndex(ticket) {
+    return indexOfIccsSquare(ticket && ticket.moveICCS ? ticket.moveICCS : "", 0);
+}
+
+/** ICCS 里的第 which 格（0=起点 / 1=落点）在 90 格里的下标；格式不对返回 null。 */
+function indexOfIccsSquare(iccs, which) {
+    const text = iccs == null ? "" : String(iccs);
+    if (!/^[a-i][0-9][a-i][0-9]$/.test(text)) {
         return null;
     }
-    const col = "abcdefghi".indexOf(iccs.charAt(2));
-    const row = 9 - Number(iccs.charAt(3));
+    const offset = which === 0 ? 0 : 2;
+    const col = "abcdefghi".indexOf(text.charAt(offset));
+    const row = 9 - Number(text.charAt(offset + 1));
     return row * 9 + col;
+}
+
+/** ICCS 着法的**落点**在 90 格里的下标；格式不对返回 null。 */
+function indexOfIccs(iccs) {
+    return indexOfIccsSquare(iccs, 1);
 }
 
 /** 结论是否算「我方真的走成了」（CONFIRMED 与 OPPONENT_REPLY 都算）。 */

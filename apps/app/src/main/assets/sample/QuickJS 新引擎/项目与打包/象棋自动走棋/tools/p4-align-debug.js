@@ -142,7 +142,9 @@ function main() {
     // 会话级校准（一局一次，和面板/主流程同一条路径）
     const calibrated = recognizeBoard.calibrateGrid(located.imageObject, located, {
         orientation: "RED_BOTTOM", confidence: 0.25, autoAlign: false,
-        search: { maxShift: 18, step: 3 }, maxCandidates: 25
+        search: { maxShift: 18, step: 3 }, maxCandidates: 25,
+        // 把评估过的全部候选落盘，便于离线看「为什么挑了这个偏移」
+        dumpPath: "/sdcard/xiangqi-p4/calib-dump.json"
     });
     const grid = calibrated && calibrated.grid ? calibrated.grid : located.grid;
     say("几何 v" + grid.version + " 起点 (" + grid.originX + "," + grid.originY + ") 格距 (" +

@@ -41,6 +41,7 @@ const locateBoard = load("tools/locate-board.js");
 const driverModule = load("src/automation/auto-driver.js");
 const engineModule = load("src/engine/engine.js");
 const cellsContract = load("src/vision/cells.js");
+const overlayDraw = load("src/vision/overlay-draw.js");
 // 跨引擎互锁：主界面（main.js）里还有另一套驱动循环，两边一起跑会双份截图/算棋，
 // 模式③还会双份点击棋盘 —— 用同一个锁文件互斥（见 src/automation/loop-lock.js）。
 const loopLock = load("src/automation/loop-lock.js");
@@ -121,6 +122,13 @@ let computeModeKey = "worker";
 let lastThinkingLogAt = 0;    // 算棋中按秒报一次状态，不刷屏
 let hideOnCapture = "auto";  // "auto" 只在面板真的压住棋盘时才藏（默认）；true/false 手动开/关
 let autoAlignOn = false;      // 几何按检测框自动微调（真机实测会把子认重，默认关）
+// 点击通道：auto（有 Shizuku 就走 shizuku 的 `input swipe` 原地按住）/ shizuku / accessibility。
+// K40 + 天天象棋实测：超短按（`input tap`）会被游戏直接丢弃，按住 ≥300ms 才选中棋子。
+let clickMethodKey = "auto";
+// 点击按压时长（ms）。真机实测（K40 + 天天象棋）：**60ms 的注入点击会被游戏完全忽略**，
+// 300ms / 400ms / 600ms 都能落子 → 默认值取 350ms（手动点「开始」跑 ③ 也必须这个量级，
+// 否则每轮都是 UNCHANGED 白跑）。小米8 上短按也够用，但长按没副作用，所以统一 350。
+let clickPressMs = 350;
 let lastLoggedLayout = null;  // 驱动视角去重打印用
 let aliveTimer = null;        // 保活心跳（见 main 里的说明）
 let aliveSeconds = 0;
@@ -130,22 +138,218 @@ let lagCount = 0;
 
 /** 状态栏文字（心跳里每秒刷一次，写成一个函数免得两处不同步）。 */
 function statusLine() {
-    return calibrationNote + "｜" + (running ? "运行中" : "已停止") +
-        "｜隐藏抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")) +
-        "｜存活 " + aliveSeconds + "s" + (lagMax > 1200 ? "｜最长心跳间隔 " + lagMax + "ms" : "");
+    // 面板宽度有限：太长会在窄行里换行 → 第二行被裁。9sp 下约 24.8px/字，1008px 只放得下 ~40 字。
+    const note = calibrationNote.length > 20 ? (calibrationNote.slice(0, 19) + "…") : calibrationNote;
+    const fg = lastForeground == null
+        ? "?"
+        : (lastForeground === gamePackage ? "游戏✓" : (lastForeground === OWN_PACKAGE ? "自身✗" : lastForeground));
+    return note + "｜" + (running ? "运行中" : "已停止") + "｜" + aliveSeconds + "s｜前台 " + fg;
 }
 let collapsed = false;
 let grid = null;          // 已校准几何（会话内复用）
 let calibrationNote = "未校准";
 const logLines = [];
-/** 屏上只显示最后几行（面板固定 470px 高，不遮棋盘）；完整日志走 logcat（前缀 [floaty]） */
-const LOG_LINES_COMPACT = 3;
+/** 屏上只显示最后几行（面板得矮到能塞进棋盘上方的空木纹带）；完整日志走 logcat（前缀 [floaty]） */
+const LOG_LINES_COMPACT = 2;    // 实测行高 ≈ 1.35×字号：8sp ≈ 30px/行 → 2 行 60px，日志区 76px
+
+/**
+ * 进度摘要：「现在跑到哪一步」——从日志里抽关键节点，每项只留**最近一次**。
+ * 为什么要它：完整日志刷得快、又夹着心跳噪声，盯面板看不出「卡在哪」。
+ */
+/** 状态机状态 → 中文（给人看的面板上别丢英文枚举）。 */
+const STATE_LABEL = {
+    IDLE: "空闲",
+    READY: "已就绪",
+    WAIT_STABLE: "等待局面稳定",
+    THINKING: "算棋中",
+    PRECHECK: "出手前核对",
+    SUGGESTED: "已给出建议（本模式不点击）",
+    CLICKING: "点击中",
+    VERIFYING: "确认落子",
+    WAIT_TURN: "等轮次",
+    WAIT_OPPONENT: "等对方",
+    WAIT_OPPONENT_REPLY: "等对方应手",
+    RECOVERING: "恢复中（重新定位）",
+    PAUSED: "已暂停",
+    STOPPED: "已停止"
+};
+const progress = {
+    turn: "",        // 轮次推断结果（标准开局 / 己方 x + 对方 y）
+    think: "",       // 最近一次算棋结论（着法 + 评分）
+    point: "",       // 最近一次落点（含是否用了实测框中心）
+    confirm: "",     // 最近一次确认结论
+    fill: "",        // 最近一次未知格补齐的说明
+    unknown: null,    // 最近一次观察的未知格数
+    recover: 0        // 恢复（重新定位）次数
+};
+
+/** 从一行日志里更新进度摘要（识别不了就忽略）。 */
+function noteProgress(line) {
+    let m = null;
+    if (line.indexOf("恢复：重新定位棋盘") >= 0) {
+        progress.recover += 1;
+        return;
+    }
+    m = line.match(/本轮观察：未知格 ([\d?]+)/);
+    if (m) {
+        progress.unknown = m[1];
+        return;
+    }
+    if (line.indexOf("局面是标准开局") >= 0) {
+        progress.turn = "标准开局（红先）";
+        return;
+    }
+    m = line.match(/轮次推断：(.+)$/);
+    if (m) {
+        progress.turn = m[1];
+        return;
+    }
+    m = line.match(/算棋：(.+)$/);
+    if (m) {
+        progress.think = m[1].replace(/（深度/, " d").replace(/，评分/, " ").replace(/）/g, "");
+        return;
+    }
+    m = line.match(/建议着法 (.+?)（.*?）：评分 (.+?)，深度 (.+)$/);
+    if (m) {
+        progress.think = "建议 " + m[1] + " " + m[2] + " d" + m[3];
+        return;
+    }
+    m = line.match(/落点（([\d,]+)）→（([\d,]+)）(.*)$/);
+    if (m) {
+        progress.point = m[1] + "→" + m[2] + (m[3] ? "［中心］" : "［交点］");
+        const pair = function (text) {
+            const parts = String(text).split(",");
+            return { x: Number(parts[0]), y: Number(parts[1]) };
+        };
+        lastClickPlan = { from: pair(m[1]), to: pair(m[2]), move: "" };
+        for (let i = logLines.length - 1; i >= 0 && !lastClickPlan.move; i--) {
+            const hit = String(logLines[i]).match(/点击：([a-i][0-9][a-i][0-9])/);
+            if (hit) {
+                lastClickPlan.move = hit[1];
+            }
+        }
+        return;
+    }
+    m = line.match(/确认：(\w+)：(.+)$/);
+    if (m) {
+        progress.confirm = m[1] + "（" + String(m[2]).slice(0, 20) + "）";
+        return;
+    }
+    m = line.match(/按已知事实补齐：(.+)$/);
+    if (m) {
+        progress.fill = m[1];
+    }
+}
+
+/** 状态 → 进度行颜色（用有符号 32 位 int，Java 那边要的不是 JS 的大整数）。 */
+function stepColor() {
+    const signed = function (hex) { return hex >= 0x80000000 ? hex - 0x100000000 : hex; };
+    let state = "";
+    try {
+        state = driver && driver.machine ? driver.machine.state() : "";
+    } catch (error) {
+        state = "";
+    }
+    if (state === "RECOVERING") {
+        return signed(0xFFFF8A80);   // 红：在恢复，得管
+    }
+    if (state === "WAIT_TURN" || state === "WAIT_STABLE") {
+        return signed(0xFFF5C56B);   // 黄：在等（正常但停滞）
+    }
+    if (running && (state === "THINKING" || state === "CLICKING" || state === "VERIFYING" ||
+        state === "SUGGESTED" || state === "PRECHECK")) {
+        return signed(0xFF7FE39A);   // 绿：在干活 / 已有结论
+    }
+    return signed(0xFF8F9AA8);       // 灰：没跑
+}
+
+/** 状态对应的图标（纯文本，不依赖字体库；颜色靠运行期换色，失败也不影响使用）。 */
+function stateIcon(state) {
+    if (state === "RECOVERING") {
+        return "⚠";
+    }
+    if (state === "WAIT_TURN" || state === "WAIT_STABLE") {
+        return "⋯";
+    }
+    if (state === "SUGGESTED") {
+        return "★";
+    }
+    if (state === "THINKING" || state === "CLICKING" || state === "VERIFYING") {
+        return "⚙";
+    }
+    if (state === "PAUSED" || state === "STOPPED" || state === "IDLE") {
+        return "■";
+    }
+    return "▶";
+}
+
+/** 进度行文字（悬浮窗第二块）：**两行**，状态名中文化，一眼看出卡在哪一步。 */
+function stepLine() {
+    const line1 = [];
+    const line2 = [];
+    try {
+        const state = driver && driver.machine ? driver.machine.state() : "-";
+        line1.push(stateIcon(state) + " " + (STATE_LABEL[state] || state));
+    } catch (error) {
+        line1.push("▶ -");
+    }
+    if (driver && typeof driver.stats === "function") {
+        const stats = driver.stats();
+        line1.push("观察 " + stats.observations + " 次｜未知格 " + (progress.unknown == null ? "-" : progress.unknown) +
+            "｜本帧 " + (stats.lastObserveMs || 0) + "ms");
+        const fixes = [];
+        if (stats.ownMovePatched) {
+            fixes.push("落点补齐 " + stats.ownMovePatched);
+        }
+        if (stats.knownFactFills) {
+            fixes.push("事实补齐 " + stats.knownFactFills);
+        }
+        if (stats.colorFlips) {
+            fixes.push("纠色 " + stats.colorFlips);
+        }
+        if (progress.recover) {
+            fixes.push("恢复 " + progress.recover + " 次");
+        }
+        if (fixes.length) {
+            line1.push(fixes.join("、"));
+        }
+    }
+    if (progress.turn) {
+        line2.push("轮次 " + progress.turn);
+    }
+    if (progress.think) {
+        line2.push("算棋 " + progress.think);
+    }
+    if (progress.point) {
+        line2.push("落点 " + progress.point);
+    }
+    if (progress.confirm) {
+        line2.push("确认 " + progress.confirm);
+    }
+    // 两行各自限长：9sp 下 ~37 字就顶到右边缘，再多会换行（换行 = 吃掉一行显示位）
+    const clip = function (text) {
+        return text.length > 38 ? (text.slice(0, 37) + "…") : text;
+    };
+    return clip(line1.join(" │ ")) + "\n" +
+        clip(line2.length ? line2.join(" │ ") : (running ? "…" : "等待开始（点「开始」）"));
+}
 const LOG_LINES_FULL = 12;   // 缓冲区保留行数（方便 console 侧对账）
-/** 窗口高度只由 XML 的 px 决定（见 applyWindowHeight 的注释：setSize 会把窗口框体弄坏） */
-const WIN_H_COMPACT = 470;
+/** 窗口高度只由 XML 的 px 决定（见 applyWindowHeight 的注释：setSize 会把窗口框体弄坏）——
+ *  这个常量必须与 XML 根节点的 h 一致（改 XML 记得一起改，panelRect 的重叠判定与自动落位要用它）。 */
+const WIN_H_COMPACT = 372;
 
 function visibleLog() {
-    return logLines.slice(Math.max(0, logLines.length - LOG_LINES_COMPACT));
+    // 心跳类日志每秒一条，会把有用的事件挤走 → 不上屏（console 里依旧有）；
+    // 过长的行（局面串/路径）也截断：面板里一换行就等于吃掉两行显示位。
+    const keep = [];
+    for (let i = 0; i < logLines.length; i++) {
+        const line = logLines[i];
+        if (/心跳间隔|保活中|心跳延迟/.test(line)) {
+            continue;
+        }
+        keep.push(line.length > 42 ? (line.slice(0, 41) + "…") : line);
+    }
+    return keep.slice(Math.max(0, keep.length - LOG_LINES_COMPACT));
 }
 
 /**
@@ -161,6 +365,7 @@ function applyWindowHeight() {
 
 function logLine(text) {
     const line = String(text);
+    noteProgress(line);
     logLines.push(line);
     while (logLines.length > LOG_LINES_FULL) {
         logLines.shift();
@@ -192,42 +397,70 @@ function scheduleRender() {
  *      `<button>` 只有 `on("touch")` 能到，`on("click")` / `.click()` / `.longClick()` 三种绑定
  *      全都不触发；而 `<text>` 的 `on("click")` 正常。所以按钮一律用带 bg 的 `<text>` 冒充。
  */
-const BTN_BG = "#FFDDDDDD";
-const BTN_FG = "#FF101010";
+/**
+ * 配色：面板整体是深蓝灰底，按钮按功能分组上色（绿=开始、红=停/关、蓝=定位识别），
+ * 进度行与日志区做成两张「卡片」（深色底 + 亮字）。
+ * ⚠️ 静态写在 XML 里 —— 运行期改色要先确定引擎暴露了 setTextColor（见 render 里那层 try）。
+ */
+const C = {
+    panel: "#F0151A22",
+    title: "#FF7FD1FF",
+    btnNeutral: "#FF2A313C",
+    btnNeutralFg: "#FFE6EAF2",
+    btnPrimary: "#FF1F8B4C",
+    btnDanger: "#FFA93B3B",
+    btnAccent: "#FF2F6FB5",
+    btnDim: "#FF232A33",
+    btnDimFg: "#FFAEB7C4",
+    card: "#FF1B222C",
+    step: "#FFF5C56B",
+    logBg: "#FF141920",
+    logFg: "#FFB8C0CC",
+    status: "#FF8F9AA8"
+};
 
-function button(id, label, width) {
-    return '    <text id="' + id + '" text="' + label + '" w="' + width + 'px" h="64px" bg="' + BTN_BG +
-        '" textColor="' + BTN_FG + '" textSize="12" gravity="center"/>';
+/** 按钮：统一用带底色的 <text> 冒充（<button> 在这个引擎上收不到 click，见下方长注释）。 */
+function button(id, label, width, bg, fg) {
+    return '    <text id="' + id + '" text="' + label + '" w="' + width + 'px" h="42px" bg="' +
+        (bg || C.btnNeutral) + '" textColor="' + (fg || C.btnNeutralFg) +
+        '" textSize="10" gravity="center"/>';
 }
 
 const XML = [
-    '<vertical id="root" w="1020px" h="470px" bg="#FF101014" padding="8px">',
-    '  <horizontal h="70px">',
-    '    <text id="title" text="象棋面板" w="200px" h="70px" textColor="#FFFFFF" textSize="16" gravity="center"/>',
-    button("modeBtn", "①只识别", 210),
-    button("collapseBtn", "收起", 150),
-    button("hideBtn", "隐藏抓帧：开", 220),
-    button("alignBtn", "微调：关", 180),
+    '<vertical id="root" w="1020px" h="372px" bg="' + C.panel + '" padding="6px">',
+    // 第 1 行：标题 + 模式 + 跑/停 + 收起/关闭
+    '  <horizontal h="42px">',
+    '    <text id="title" text="象棋面板" w="150px" h="42px" textColor="' + C.title +
+    '" textSize="12" gravity="center"/>',
+    button("modeBtn", "①只识别", 170, C.btnAccent),
+    button("startBtn", "开始", 120, C.btnPrimary),
+    button("stopBtn", "停止", 115, C.btnDanger),
+    button("collapseBtn", "收起", 95, C.btnDim, C.btnDimFg),
+    button("closeBtn", "关闭", 105, C.btnDanger),
     '  </horizontal>',
-    '  <horizontal h="70px">',
-    button("startBtn", "开始", 190),
-    button("stopBtn", "停止", 190),
-    button("locateBtn", "定位+校准", 230),
-    button("recognizeBtn", "识别一帧", 230),
+    // 第 2 行：定位/识别 + 阵营 + 两个开关
+    '  <horizontal h="42px">',
+    button("locateBtn", "定位+校准", 170, C.btnAccent),
+    button("recognizeBtn", "识别一帧", 150, C.btnAccent),
+    button("turnBtn", "轮到我", 110),
+    button("sideBtn", "换我方", 110),
+    button("hideBtn", "抓帧：自动", 140, C.btnDim, C.btnDimFg),
+    button("alignBtn", "微调：关", 115, C.btnDim, C.btnDimFg),
     '  </horizontal>',
-    '  <horizontal h="70px">',
-    button("turnBtn", "轮到我", 260),
-    button("sideBtn", "换我方", 260),
-    button("sessionBtn", "新会话", 260),
+    // 第 3 行：诊断类 + 识别绘制
+    '  <horizontal h="42px">',
+    button("sessionBtn", "新会话", 110, C.btnDim, C.btnDimFg),
+    button("selfcheckBtn", "离线自检", 130, C.btnDim, C.btnDimFg),
+    button("contractBtn", "契约测试", 130, C.btnDim, C.btnDimFg),
+    button("clearBtn", "清空日志", 130, C.btnDim, C.btnDimFg),
+    button("drawBtn", "绘制：关", 120, C.btnDim, C.btnDimFg),
     '  </horizontal>',
-    '  <horizontal h="70px">',
-    button("selfcheckBtn", "离线自检", 240),
-    button("contractBtn", "契约测试", 240),
-    button("clearBtn", "清空日志", 240),
-    button("closeBtn", "关闭面板", 230),
-    '  </horizontal>',
-    '  <text id="status" text="准备中…" w="1000px" h="34px" textColor="#B0FFFFFF" textSize="12"/>',
-    '  <text id="logArea" text="" w="1000px" h="120px" textColor="#90FFFFFF" textSize="11"/>',
+    '  <text id="status" text="准备中…" w="1008px" h="34px" textColor="' + C.status +
+    '" textSize="9" gravity="center_vertical" padding="2px"/>',
+    '  <text id="step" text="进度：等待开始" w="1008px" h="80px" bg="' + C.card +
+    '" textColor="' + C.step + '" textSize="9" padding="6px"/>',
+    '  <text id="logArea" text="" w="1008px" h="76px" bg="' + C.logBg +
+    '" textColor="' + C.logFg + '" textSize="8" padding="6px"/>',
     '</vertical>'
 ].join("\n");
 
@@ -239,12 +472,22 @@ function render() {
     }
     try {
         win.status.setText(statusLine());
+        win.step.setText(stepLine());
         win.logArea.setText(visibleLog().join("\n"));
+        // 运行期换色（增强：状态绿/黄/红）。不同引擎版本暴露的方法不一样，失败就算了。
+        try {
+            if (win.step && typeof win.step.setTextColor === "function") {
+                win.step.setTextColor(stepColor());
+            }
+        } catch (error) {
+            // 不支持就维持 XML 里的静态色
+        }
         win.modeBtn.setText(MODE_LABEL[modeKey]);
         win.startBtn.setText(running ? "暂停" : "开始");
         win.collapseBtn.setText(collapsed ? "展开" : "收起");
-        win.hideBtn.setText("隐藏抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")));
+        win.hideBtn.setText("抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")));
         win.alignBtn.setText("微调：" + (autoAlignOn ? "开" : "关"));
+        win.drawBtn.setText("绘制：" + DRAW_LABEL[drawMode]);
     } catch (error) {
         console.log("[floaty] 渲染失败：" + error);
     }
@@ -255,7 +498,9 @@ function render() {
  * 拿不到就返回 null（调用方按「可能挡着」处理）。
  */
 const PANEL_W = 1020;
-const PANEL_H = 470;
+const PANEL_H = 372;
+/** 我们自己最后一次设的 y（用于区分「用户拖过」与「我们摆的」）。 */
+let panelY = null;
 
 function panelRect() {
     try {
@@ -291,6 +536,59 @@ function rectsOverlap(a, b) {
         a.y + a.height <= b.y || b.y + b.height <= a.y);
 }
 
+/**
+ * 把面板摆到**棋盘上沿之上那条空带**里 —— 真机（天天象棋 1080×2400）实测：
+ *   状态栏 0..80｜对手头像+名字 137..269｜**空木纹带 280..645**｜棋盘（含子上沿）647..1620｜
+ *   空档 1620..1890｜「6步」+我方头像 1900..2010｜菜单/显示分析/悔棋/提示 2060..2280
+ * 所以面板 372px 高时正好塞进 280..645：**顶部不挡头像、不挡棋盘、底部不挡游戏按钮**。
+ * 用户自己拖过（当前 y 与我们上次设的差得远）就不再抢；定位到棋盘之前先用屏幕高比例兜底。
+ */
+function snapPanelAboveBoard() {
+    try {
+        const size = adapter.screenSize();
+        // 兜底位置 = 屏幕高 11%（K40: 2400×0.11 = 264）——真机实测正好落在棋盘上方那条空带里。
+        let y = size && size.height > 0 ? Math.round(size.height * 0.11) : 264;
+        const box = grid ? geometryModule.boundsOf(grid, 0) : null;
+        if (box && isFinite(box.y)) {
+            // 棋子圆盘比「第一条线」高出约 55~60px（半径 + 边距）→ 面板底边要留出这段。
+            // ⚠️ **只允许往上挪**（Math.min）：校准偶发几十像素偏差（真机出现过偏移 (-83,36)）时，
+            // 若直接按 box.y 摆就会把面板推进棋盘、盖住底线那排子（真机踩过）。
+            y = Math.min(y, Math.round(box.y - 62 - PANEL_H - 10));
+        }
+        const minY = statusBarHeight() + 4;
+        if (y < minY) {
+            y = minY;
+        }
+        let cur = null;
+        try {
+            cur = win.getY(true);
+        } catch (error) {
+            cur = null;
+        }
+        if (panelY !== null && isFinite(cur) && Math.abs(cur - panelY) > 24) {
+            return;   // 用户拖过面板（原生拖动也会改变 y）→ 尊重用户的选择
+        }
+        if (panelY !== null && Math.abs(y - panelY) < 6) {
+            panelY = y;
+            return;   // 没实质变化就不动窗口（少一次 updateViewLayout）
+        }
+        let x = 30;
+        try {
+            const curX = win.getX(true);
+            if (isFinite(curX)) {
+                x = curX;
+            }
+        } catch (error) {
+            // 用默认 x
+        }
+        win.setPosition(x, y);
+        panelY = y;
+        logLine("面板已贴到棋盘上沿之上（y=" + y + "，不挡两侧按钮）");
+    } catch (error) {
+        // 拿不到就保持原样
+    }
+}
+
 /** show=true 开／false 关／"auto" 只在面板真的压住棋盘时才藏（默认）。 */
 function needHideForCapture() {
     if (hideOnCapture === true) {
@@ -300,15 +598,127 @@ function needHideForCapture() {
         return false;
     }
     const overlap = rectsOverlap(panelRect(), boardRect());
-    return overlap === null ? true : overlap;   // 判断不了就按「会挡」处理（安全）
+    // ⚠️ 判不出来时**不要**藏（原来是 true，「安全」但真机上是灾难）：
+    // 启动/校准阶段棋盘范围还不知道 → 每帧都隐藏面板，而 `win.setVisibility(true)` 恢复
+    // 在真机上不生效（窗口直接从 WindowManager 里消失、再也回不来，dumpsys 里连窗口都没有）
+    // —— 用户看到的现象就是「跑起来之后面板没了，看不到日志/进度」。
+    // 面板默认停在屏幕顶端、棋盘上方；真压住了（重叠判定得到）再藏。
+    return overlap === null ? false : overlap;
+}
+
+// ---- 识别绘制（给人审的）----
+// 画板是系统悬浮窗，**`screencap` 会把它一起截进去** → 抓帧前必须收掉，
+// 否则绿框/文字会被当成棋盘上的东西、直接把识别搞坏（面板的 grabFrame 已处理）。
+let drawMode = "off";      // off | grid | cells | full
+let overlayOn = false;     // 画板窗口是否已创建
+let lastOverlay = null;    // { items, text }：抓帧后立刻恢复用，避免屏幕闪空白
+/** 最近一次实际点击的起终点（从日志里抽出来，画成两个小框 → 人审"点得准不准"）。 */
+let lastClickPlan = null;
+
+const DRAW_LABEL = { off: "关", grid: "网格", cells: "格子", full: "全量" };
+const DRAW_ORDER = ["off", "grid", "cells", "full"];
+
+function overlayTextNow() {
+    const parts = [];
+    try {
+        const state = driver && driver.machine ? driver.machine.state() : null;
+        if (state) {
+            parts.push("状态 " + (STATE_LABEL[state] || state));
+        }
+    } catch (error) {
+        // 没驱动就算了
+    }
+    if (progress.turn) {
+        parts.push("轮次 " + progress.turn);
+    }
+    if (progress.think) {
+        parts.push("算棋 " + progress.think);
+    }
+    return parts.join("｜");
 }
 
 /**
- * 抓一帧：优先 Shizuku/root 的 screencap（不受投屏会话失效影响），再回退应用截屏。
+ * 用「当前几何 + 这一帧的识别结果」刷新画板。
  *
- * 抓帧期间可能要先把面板藏起来（面板浮在棋盘上会把上几行子盖掉，识别就废了）——
- * 但**藏+等 90ms+恢复** 每帧都要花掉约 100ms，所以默认是 "auto"：
- * 面板在棋盘外（现在的默认位置就在棋盘下方）时**不藏**，省掉这一百毫秒和一次闪动。
+ * ⚠️ **自动循环跑着的时候不画**：驱动每 2.4 秒就要抓一帧，而画板是系统悬浮窗、
+ * `screencap` 会把它一起截进去（要么污染识别，要么每帧收放一次导致画板一闪一闪）。
+ * 所以要审就**停一下循环、点「识别绘制」**：抓一帧 → 认一帧 → 把结果画在**冻结的**画面上，
+ * 一直留着给人看（也可以截图发给我）。
+ *
+ * @param result  recognizer 的结果（可为 null —— 那就只画网格）
+ * @param expectChars 期望盘面（验证阶段用票据的预期后局面，能把读错的格标成 X!）
+ * @param options.force  true = 循环在跑也画（审核动作专用）
+ */
+function refreshOverlay(result, expectChars, options) {
+    const force = !!(options && options.force);
+    if (drawMode === "off") {
+        if (overlayOn) {
+            try {
+                adapter.overlayHide();
+            } catch (error) {
+                // 收不掉也不影响业务
+            }
+            overlayOn = false;
+            lastOverlay = null;
+        }
+        return;
+    }
+    if (!grid) {
+        return;   // 还不知道棋盘在哪，画了也没意义
+    }
+    if (running && !force) {
+        if (!refreshOverlay.warned) {
+            refreshOverlay.warned = true;
+            logLine("识别绘制已开启，但循环在跑：驱动每帧都要抓屏，画板会被截进图里 → 先「暂停」，再点「识别绘制」看冻结帧");
+        }
+        return;
+    }
+    if (!overlayOn) {
+        try {
+            overlayOn = adapter.overlayShow() === true;
+        } catch (error) {
+            overlayOn = false;
+        }
+        if (!overlayOn) {
+            logLine("画板打不开（多半是没有悬浮窗权限）");
+            return;
+        }
+    }
+    const points = [];
+    if (lastClickPlan && lastClickPlan.from) {
+        points.push({ x: lastClickPlan.from.x, y: lastClickPlan.from.y, label: "▶" + lastClickPlan.move });
+        points.push({ x: lastClickPlan.to.x, y: lastClickPlan.to.y, label: "◀" + lastClickPlan.move });
+    }
+    let built = { items: [], text: "" };
+    try {
+        built = overlayDraw.build({
+            grid: grid,
+            result: result,
+            expectChars: expectChars || null,
+            mode: drawMode,
+            points: drawMode === "grid" ? null : points,
+            extraText: overlayTextNow()
+        });
+    } catch (error) {
+        logLine("绘制失败：" + error);
+        return;
+    }
+    lastOverlay = built;
+    try {
+        adapter.overlayUpdate(built.items, built.text);
+    } catch (error) {
+        // 画不上去不影响业务
+    }
+}
+
+/**
+ * 抓一帧（优先 Shizuku 的 screencap，回退应用截屏）。
+ *
+ * 抓帧期间可能要先把面板藏起来（面板浮在棋盘上会把上几行子盖掉）——
+ * 但**藏+等 90ms+恢复** 每帧要花约 100ms，所以默认 "auto"：面板不在棋盘上就不藏。
+ *
+ * ⚠️ 识别画板**不在这里收放**：收放（remove/add 窗口）会让画板一闪一闪、而且一半时间看不见。
+ * 改成「审核时画一次冻结帧」：循环跑着的时候不画（见 refreshOverlay 的说明）。
  */
 function grabFrame() {
     if (!needHideForCapture()) {
@@ -335,6 +745,80 @@ function grabFrame() {
         }
     }
 }
+
+/** 审核绘制的落盘路径（帧 + 画板内容）—— 方便离线审，也方便把人审结果给出去。 */
+const AUDIT_FRAME = FRAME_DIR + "/audit-frame.png";
+const AUDIT_JSON = FRAME_DIR + "/audit-overlay.json";
+
+/**
+ * **识别绘制（审核）**：抓一帧 → 认一帧 → 把结果画在冻结的画面上，并落盘一份。
+ *
+ * 这是「人审」的入口：屏幕上能直接看到
+ *   · 网格线是否穿过棋子圆心（几何对齐）
+ *   · 每格读成了什么子 + 该格置信度（兵种/颜色读错一眼可见）
+ *   · 原始检测框（漏检、同一个子被检测两次）
+ *   · 本手实际点击的起点/落点（点得准不准）
+ * 跑自动循环时不给画（驱动每帧抓屏会把画板截进去），所以让用户先暂停。
+ */
+function auditDraw() {
+    if (running) {
+        logLine("循环在跑，没法画审核帧：先点「暂停」，再点「识别绘制」（驱动每帧都要抓屏，画板会被截进图里）");
+        return;
+    }
+    if (!grid) {
+        const located = locateAndCalibrate();
+        if (!located) {
+            logLine("识别绘制：还没有几何（定位失败）");
+            return;
+        }
+    }
+    const grabbed = grabFrame();
+    if (!grabbed) {
+        logLine("识别绘制：拿不到帧");
+        return;
+    }
+    const result = recognizeBoard.run(grabbed.image, {
+        ok: true, method: "floaty-audit", grid: grid,
+        imageObject: grabbed.image, frameObject: grabbed.image
+    }, {
+        orientation: "RED_BOTTOM",
+        confidence: 0.25,
+        autoAlign: false
+    }, null);
+    if (!result || !result.ok) {
+        logLine("识别绘制：识别失败（" + ((result && result.reason) || "无结果") + "）");
+        return;
+    }
+    if (drawMode === "off") {
+        drawMode = "cells";   // 点这个按钮就是要看图：先给最干净的一档（每格的字 + 置信度）
+    }
+    refreshOverlay(result, null, { force: true });
+    const counts = result.chars ? cellsContract.count(result.chars) : null;
+    let saved = "";
+    try {
+        if (typeof images !== "undefined" && images && typeof images.save === "function") {
+            images.save(grabbed.image, AUDIT_FRAME);
+            saved = AUDIT_FRAME;
+        }
+        if (typeof files !== "undefined" && files && typeof files.write === "function" && lastOverlay) {
+            files.write(AUDIT_JSON, JSON.stringify({
+                at: new Date().toString(),
+                text: lastOverlay.text,
+                items: lastOverlay.items,
+                layout: result.layout,
+                unknownCells: result.unknownCells,
+                detectionCount: result.detectionCount
+            }));
+            saved += (saved ? " / " : "") + AUDIT_JSON;
+        }
+    } catch (error) {
+        saved += "（落盘失败：" + error + "）";
+    }
+    logLine("识别绘制：子 " + (counts ? counts.pieces : "?") + " 空 " + (counts ? counts.empty : "?") +
+        " 未知 " + result.unknownCells + "｜检测框 " + result.detectionCount +
+        "｜已画在屏幕上（截图/录屏就能发给我）" + (saved ? "｜落盘 " + saved : ""));
+}
+
 
 function grabFrameRaw() {
     const caps = adapter.capabilities();
@@ -428,12 +912,14 @@ function locateAndCalibrate() {
         if (calibrated.layout) {
             logLine("局面 " + calibrated.layout);
         }
+        snapPanelAboveBoard();   // 知道棋盘在哪了 → 把自己摆到棋盘上沿之上那条空带里
         return calibrated;
     }
     if (located.grid) {
         grid = located.grid;
         calibrationNote = "几何 v" + grid.version + "（未精校准）";
         logLine("精校准没成功，沿用定位几何：" + calibrationNote);
+        snapPanelAboveBoard();
         return null;
     }
     logLine("校准失败且没有可用几何");
@@ -471,6 +957,7 @@ function recognizeOnce() {
         (counts ? counts.pieces : "?") + " 空 " + (counts ? counts.empty : "?") +
         " 未知 " + result.unknownCells + "（修复前 " + (result.stats ? result.stats.unknownBeforeRepair : "?") + "）");
     logLine("局面 " + result.layout);
+    refreshOverlay(result, null);   // 画到屏幕上 → 人可以肉眼审「每格读成了什么」
     return result;
 }
 
@@ -484,19 +971,113 @@ function describeCapabilities() {
     return lines.join("｜");
 }
 
+/** 本应用包名（判断「前台是不是我们自己」用）。 */
+const OWN_PACKAGE = (function () {
+    try {
+        return context.getPackageName();
+    } catch (error) {
+        return "com.jdkshen.aijspro";
+    }
+})();
+/** 最近一次查到的「触摸焦点」包名（面板状态行显示用）。 */
+let lastForeground = null;
+/** 要自动走棋的目标游戏包名（autorun 里可改；默认腾讯天天象棋）。 */
+const GAME_PACKAGE_DEFAULT = "com.tencent.qqgame.xq";
+let gamePackage = GAME_PACKAGE_DEFAULT;
+
+/**
+ * 点击前的**前台守卫**（真机血泪，见 auto-driver 里的注释）：
+ * 脚本宿主 RunIntentActivity 是透明窗口，`am start` 起脚本后它常常仍是「有窗口焦点的前台」，
+ * 游戏只是画在它下面 —— 这时注入的点击会被我们自己吃掉，截图上却一切正常。
+ *
+ * 判据用 `dumpsys input` 的 FocusedWindows（**决定注入触摸给谁的就是它**）：
+ * 真机踩过：按 topResumedActivity 判会得到 `com.android.launcher3` 这种误导值，
+ * 守卫以为切成功、实际点击全落到别处（一手棋连试 4 次全 UNCHANGED）。
+ *
+ * 处理：焦点不是游戏 → ① 先按一次「最近任务」；② 还不行就用 `am start` 把游戏任务带到前台
+ * （不会重启游戏，实测已重置的开局不会被恢复）；③ 仍不行就告诉驱动「别点」。
+ *
+ * @returns {ok, package, ownPackage, packageChanged}
+ */
+function foregroundGuard() {
+    const readFocus = function () {
+        try {
+            return adapter.focusedWindowPackage();
+        } catch (error) {
+            return null;
+        }
+    };
+    let pkg = readFocus();
+    lastForeground = pkg;
+    if (pkg === null) {
+        // 查不到（没有 Shizuku/root）就不拦：交给点击通道自己报错
+        return { ok: true, package: null, ownPackage: false, packageChanged: false };
+    }
+    if (pkg === gamePackage) {
+        return { ok: true, package: pkg, ownPackage: false, packageChanged: false };
+    }
+    const own = pkg === OWN_PACKAGE;
+    let switched = false;
+    // ① 直接把游戏的任务带到前台（`am start -n 包的已有 Activity`，不重启进程）。
+    //    ⚠️ **不要用 `input keyevent 187`（最近任务）**：这台 ROM 上它会**打开「概览」界面**，
+    //    下一次按键切到哪张任务卡不确定 —— 真机踩过：守卫「切成功了」但焦点落在桌面/概览，
+    //    而驱动截到的画面是游戏的那张**缩略卡**（棋盘看得见、识别正常、点击全落空）。
+    try {
+        if (adapter.bringPackageToFront(gamePackage)) {
+            sleep(1200);
+            switched = true;
+        }
+    } catch (error) {
+        switched = false;
+    }
+    let again = readFocus();
+    // ② 还不行 → 按一次「最近任务」（个别 ROM 上这条才有效；只在①失败时才用）
+    if (again !== gamePackage) {
+        try {
+            if (adapter.pressAppSwitch()) {
+                sleep(900);
+                switched = true;
+            }
+        } catch (error) {
+            // 统一在下面判定
+        }
+        again = readFocus();
+    }
+    lastForeground = again;
+    const ok = again === gamePackage;
+    if (!ok) {
+        logLine("前台守卫：切不到游戏（目标 " + gamePackage + "，当前焦点 " + (again || "未知") +
+            "）—— 不会点击；请手动把游戏点到前台");
+    }
+    return { ok: ok, package: again, ownPackage: own, packageChanged: switched && ok };
+}
+
 function buildDriver() {
     const clickAllowed = modeKey === "auto";
     let tapFunction = null;
     if (clickAllowed && (adapter.capabilities().tap || adapter.capabilities().shizuku)) {
-        tapFunction = adapter.createTap({ pressMs: 60, method: "auto" }).tap;
+        tapFunction = adapter.createTap({ pressMs: clickPressMs, method: clickMethodKey }).tap;
+        logLine("点击通道：" + clickMethodKey + "，按压 " + clickPressMs + "ms（无障碍=" +
+            (adapter.capabilities().accessibilityReady ? "就绪" : "未就绪") + "，Shizuku=" +
+            (adapter.capabilities().shizuku ? "可用" : "不可用") + "）");
     }
     driver = driverModule.createDriver({
         allowClick: clickAllowed,
         tap: tapFunction,
         recognize: function (options) {
+            // ⚠️ 每帧都要走 grabFrame()（会按需先把面板藏起来再抓帧）：驱动默认走
+            // recognizeScreen → adapter.capture，那是**不藏面板**的路径，面板一旦压住棋盘，
+            // 抓到的帧里就带着面板的按钮/文字 → 一批格子被判成未知 → 驱动卡在 RECOVERING。
+            // 真机踩过：同一帧「校准（会藏）未知 0」而「驱动观察（不藏）未知 23」。
+            const grabbed = grabFrame();
             // autoAlign（按检测框微调）默认关：真机实测它会把同一子检测两次合并成一格，
             // 认出来变成「红R 3 个」这种非法局面；所有采集/评估工具也都是 autoAlign:false。
-            return recognizeBoard.recognizeScreen(Object.assign({}, options, { autoAlign: autoAlignOn }));
+            const recognized = recognizeBoard.recognizeScreen(Object.assign({}, options, {
+                autoAlign: autoAlignOn,
+                frame: grabbed ? grabbed.image : undefined
+            }));
+            refreshOverlay(recognized && recognized.ok ? recognized : null, null);
+            return recognized;
         },
         locate: function () {
             const result = locateAndCalibrate();
@@ -507,9 +1088,12 @@ function buildDriver() {
             return geometryModule.isTrustworthy(value, { minSamples: 4, maxResidual: 0.35 });
         },
         screen: function () { return adapter.screenSize(); },
+        foregroundGuard: foregroundGuard,
         log: function (text) { logLine(text); },
         config: {
-            tickMs: 1400,          // screencap 通道 0.6~1.4s/帧，tick 必须放大
+            tickMs: 2400,          // screencap 通道 0.6~1.4s/帧；而且**游戏落子有动画** ——
+            // K40 实测 tick=1400 时，点击后第一次确认会看到「还没动」的旧帧 → 误判 UNCHANGED
+            // → 状态机走恢复、把轮次基准弄丢 → 非开局局面就再也推不出轮次。所以放大到 2400。
             movetimeMs: 1200,
             modelVersion: "chessai_160x320_v5r",
             confidence: 0.25,
@@ -519,7 +1103,10 @@ function buildDriver() {
             // autorun 里写 "computeMode":"inline" 可以对照老路径。
             computeMode: computeModeKey
         },
-        executorConfig: { pressMs: 60, settleMs: 140 }
+        // 两击之间的间隔：太短会「只选中、没落子」（选中动画还没画完）。
+        // ⚠️ 这**不是**之前「一手棋全 UNCHANGED」的原因 —— 真因是**前台是本应用**（点击被脚本宿主吃掉），
+        // 已由 foregroundGuard 在看。这里保持适度间隔即可（350ms 按压 + 600ms 间隔 = 950ms）。
+        executorConfig: { pressMs: clickPressMs, settleMs: Math.max(200, clickPressMs + 600) }
     });
     return driver;
 }
@@ -568,7 +1155,8 @@ function tick() {
                 logLine("autorun 声明轮到我：" + driver.assertTurn().reason);
             }
             // 驱动只保证给「观察到的局面/未知格」；不同版本字段不完全一样，所以逐项判空
-            const unknown = result.unknownCells == null ? "?" : result.unknownCells;            logLine("本轮观察：未知格 " + unknown + "，耗时 " + stats.lastObserveMs + "ms" +
+            const unknown = result.unknownCells == null ? "?" : result.unknownCells;
+            logLine("本轮观察：未知格 " + unknown + "，耗时 " + stats.lastObserveMs + "ms" +
                 (result.layout ? ("，局面 " + result.layout) : ""));
         } else if (result) {
             logLine("本轮没出手：" + result.reason);
@@ -596,6 +1184,15 @@ function startLoop() {
     }
     if (modeKey === "auto") {
         logLine("③ 自动走棋会真的点击棋盘，请确认游戏在前台且轮到我方");
+        // 开始前先查一次前台：脚本宿主（透明窗口）在前台时，注入的点击会被自己吃掉。
+        // 是就自动用最近任务切一次 —— 免得用户以为「脚本坏了」（真机踩过一整轮全 UNCHANGED）。
+        const pre = foregroundGuard();
+        if (pre && pre.packageChanged) {
+            logLine("开始前前台守卫：已把上一步应用切回前台" +
+                (pre.ok ? "（当前 " + (pre.package || "?") + "）" : "（切不动，出招时会再试）"));
+        } else if (pre && pre.package) {
+            logLine("开始前前台：" + pre.package);
+        }
     }
     buildDriver();
     // ⚠️ 真机踩过：只建驱动 + 起定时器是不够的，状态机还在 STOPPED，
@@ -712,6 +1309,15 @@ function startKeepAlive() {
             }
         }
         aliveSeconds += 1;
+        // 每 5 秒刷一次「触摸焦点在谁身上」：状态行要如实反映，不能让用户看着 `前台 游戏✓` 干等
+        // （守卫只在出招前才查，中间被切走的话显示就是旧的）
+        if (aliveSeconds % 5 === 0) {
+            try {
+                lastForeground = adapter.focusedWindowPackage();
+            } catch (error) {
+                // 查不到就保持上次的值
+            }
+        }
         try {
             win.status.setText(statusLine());
         } catch (error) {
@@ -731,6 +1337,11 @@ function registerExitHook() {
     try {
         if (typeof events !== "undefined" && events && typeof events.on === "function") {
             events.on("exit", function () {
+                try {
+                    adapter.overlayHide();   // 画板是独立悬浮窗，不收掉也会变僵尸窗口
+                } catch (error) {
+                    // 收不掉就算了
+                }
                 try {
                     if (win) {
                         win.close();
@@ -760,16 +1371,40 @@ function readAutorun() {
     }
 }
 
+/**
+ * 状态栏高度（面板默认停在屏幕顶端，不能压住状态栏）。
+ * 量不到给 88px 兜底（K40 = 80px）。
+ */
+function statusBarHeight() {
+    try {
+        const res = context.getResources();
+        const id = res.getIdentifier("status_bar_height", "dimen", "android");
+        if (id > 0) {
+            const h = res.getDimensionPixelSize(id);
+            if (h > 0) {
+                return h;
+            }
+        }
+    } catch (error) {
+        // 拿不到就用兜底值
+    }
+    return 88;
+}
+
 function main() {
-    // 默认落在**棋盘下方的空档**：棋盘在屏幕中部（K40 实测 ~y 690..1700），面板紧凑态只有 470px 高，
-    // 放下面就不会遮住棋子（用户反馈「日志挡住象棋盘了」）。屏幕高度从 device 度量取。
+    // 默认停在**棋盘上沿之上那条空木纹带**（见 snapPanelAboveBoard 的量测）：
+    //   · 底端会挡住游戏自己的按钮排（菜单/显示分析/悔棋/提示）—— 用户投诉过；
+    //   · 顶端（状态栏下方）会挡住对手头像/名字 —— 用户也投诉过；
+    //   · 只有棋盘上方那条空带是真正不挡东西的（K40 ≈ 280..645）。
+    // 定位到棋盘后会自动贴到棋盘上沿之上；用户拖过就不再抢。
     let startX = 30;
-    let startY = 700;
+    let startY = 264;
     try {
         const size = adapter.screenSize();
         if (size && size.height > 0) {
-            startY = Math.max(120, size.height - WIN_H_COMPACT - 120);
+            startY = Math.round(size.height * 0.11);
         }
+        startY = Math.max(startY, statusBarHeight() + 4);
     } catch (error) {
         // 量不到就用默认值
     }
@@ -786,10 +1421,11 @@ function main() {
         return;
     }
     win.setTouchable(true);
+    panelY = startY;   // 记住我们自己摆的 y（snapPanelAboveBoard 靠它区分「用户拖过」）
     // ⚠️ 不要在这里 setSize(…)：真机上会把窗口框体弄坏（零高 / 熔成一条窄条），尺寸全部由 XML 的 px 指定。
     logLine("面板已启动（" + describeCapabilities() + "）");
     logLine("临时目录：" + FRAME_DIR + "｜autorun：" + AUTORUN_FILE + "（shell 可写，便于 adb 驱动）");
-    logLine("提示：面板会浮在棋盘上，抓帧时已默认自动隐藏；嫌碍事可点「收起」或拖标题栏");
+    logLine("提示：面板默认停在棋盘上方的空档（顶部不挡头像、底部不挡菜单/悔棋/提示），可拖标题栏改位置");
     startKeepAlive();
 
     // ---- 拖动 ----
@@ -888,6 +1524,22 @@ function main() {
     });
     win.contractBtn.on("click", function () {
         runContractTests();
+        render();
+    });
+    // 识别绘制：点一下 = 抓一帧 → 认一帧 → 把结果画在冻结的画面上（人审用）。
+    // 再点 = 换成更详细的一档；从「全量」再点就收掉。循环在跑时会拒绝（驱动每帧抓屏会把画板截进图）。
+    win.drawBtn.on("click", function () {
+        if (!overlayOn) {
+            drawMode = "cells";          // 先给「格子」档：最干净，一眼看每格读成了什么
+            auditDraw();
+        } else if (drawMode !== "full") {
+            drawMode = "full";           // 再点：加上原始检测框和空格标记
+            auditDraw();
+        } else {
+            drawMode = "off";
+            refreshOverlay(null, null, { force: true });
+            logLine("识别绘制：已收掉画板");
+        }
         render();
     });
     win.clearBtn.on("click", function () {
@@ -998,6 +1650,19 @@ function main() {
         if (auto.recognize) {
             recognizeOnce();
         }
+        if (auto.drawMode) {
+            // 初始绘制档：off / grid / cells / full（必须在 auditDraw 之前处理，否则画完才改档）
+            const key = String(auto.drawMode);
+            if (DRAW_ORDER.indexOf(key) >= 0) {
+                drawMode = key;
+                logLine("识别绘制档位：" + DRAW_LABEL[drawMode]);
+            }
+        }
+        if (auto.auditDraw) {
+            // 人审用：抓一帧→认一帧→把结果画在冻结画面上（+落盘 audit-frame.png/audit-overlay.json）。
+            // 无人工验证时靠它拿「带绘制的一帧」。
+            auditDraw();
+        }
         if (auto.mode && MODES.indexOf(auto.mode) >= 0) {
             modeKey = auto.mode;
             logLine("模式设为 " + MODE_LABEL[modeKey]);
@@ -1005,6 +1670,29 @@ function main() {
         if (auto.autoAlign != null) {
             autoAlignOn = !!auto.autoAlign;
             logLine("几何自动微调：" + (autoAlignOn ? "开" : "关"));
+        }
+        if (auto.gamePackage) {
+            // 目标游戏包名（前台守卫要用它判断「焦点在不在游戏上」；默认腾讯天天象棋）
+            const pkg = String(auto.gamePackage).trim();
+            if (pkg) {
+                gamePackage = pkg;
+                logLine("目标游戏包名：" + gamePackage);
+            }
+        }
+        if (auto.clickMethod) {
+            // "auto"（默认）/ "shizuku"（`input tap`）/ "accessibility"（无障碍 press）。
+            // 游戏会无视 shell 身份注入的触摸时，这里填 accessibility。
+            const key = String(auto.clickMethod);
+            clickMethodKey = (key === "shizuku" || key === "accessibility") ? key : "auto";
+            logLine("点击通道偏好：" + clickMethodKey);
+        }
+        if (auto.clickPressMs != null) {
+            // 按压时长（ms）：有些游戏会忽略过短的注入点击（K40 + 天天象棋需 ≥300ms）
+            const ms = Math.round(Number(auto.clickPressMs));
+            if (isFinite(ms) && ms > 0) {
+                clickPressMs = Math.min(2000, Math.max(1, ms));
+                logLine("点击按压时长：" + clickPressMs + "ms");
+            }
         }
         if (auto.computeMode) {
             // "worker"（默认，独立引擎线程）/ "inline"（本线程同步，对照老路径）

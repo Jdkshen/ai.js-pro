@@ -30,6 +30,14 @@ const STATE = {
     WAIT_TURN: "WAIT_TURN",
     THINKING: "THINKING",
     PRECHECK: "PRECHECK",
+    /**
+     * 只识别 / 着法建议模式专用：着法算出来了、已经报给用户，但**本模式不点击**。
+     * 它是一个**稳态**（不是错误、不需要恢复）—— 牌面不变就一直停在这里等局面变化。
+     * 为什么要单独一个状态：以前建议模式的着法停在 PRECHECK，下一次观测进入出手核对
+     * → `canClick` 因「当前模式禁止点击」拒绝 → 票据作废 + RECOVERING + 重新定位，
+     * 把已算好的建议和几何基准一起打散 → 真机症状：② 模式一直在「恢复中/轮次未知」空转。
+     */
+    SUGGESTED: "SUGGESTED",
     CLICKING: "CLICKING",
     VERIFYING: "VERIFYING",
     RECOVERING: "RECOVERING",
@@ -62,8 +70,15 @@ const DEFAULTS = {
     allowClick: true,
     /** 轮次未知多久就放弃等待（ms）——超时只恢复，不作为出手依据。 */
     unknownTurnWatchdogMs: 8000,
-    /** 落子确认最多等多久（ms）。 */
-    verifyTimeoutMs: 2500,
+    /** 落子确认最多等多久（ms）。一次确认要先截图+识别（~1.1s），所以至少留 3 次的机会。 */
+    verifyTimeoutMs: 4000,
+    /**
+     * 恢复动作的重试间隔（ms）：进入 RECOVERING 时发一次 RECOVER，之后每隔这么久再发一次。
+     * 驱动那边定位失败时会返回 null（「留在 RECOVERING，下一轮再试」），**必须有人再发**，
+     * 否则就是一整轮空转（真机踩到：重新定位失败 → 之后 36 次观察全是「只恢复/等待」）。
+     * 取值要略大于一次定位耗时（K40 实测 ~8s）。
+     */
+    recoverRetryMs: 12000,
     /** 确认「没落子」后允许重试的次数（默认 1 次，够用且不会盲点）。 */
     retryLimit: 1,
     /** 票据有效期（ms，转发给 move-ticket）。 */
@@ -108,12 +123,18 @@ function createMachine(config, deps) {
     let currentJob = null;        // { jobId, board, side, fen, positionVersion, geometryVersion, startedAtMono }
     let currentTicket = null;
     let verifyDeadlineMono = 0;
+    let recoverRetryMono = 0;     // 上次发出 RECOVER 效果的时刻（恢复重试限频用）
     let retriesUsed = 0;
     let history = [];
 
     function setState(next, why) {
         if (state !== next) {
             history.push({ atMono: nowMono(), from: state, to: next, reason: why || "" });
+            if (next === STATE.RECOVERING) {
+                // 恢复重试从这个时刻开始计时（只在**真的进入**时重置：
+                // 看门狗路径会反复调 setState(RECOVERING)，每帧重置的话重试永远不会发）
+                recoverRetryMono = nowMono();
+            }
         }
         state = next;
         reason = why || "";
@@ -230,6 +251,19 @@ function createMachine(config, deps) {
 
     function onSnapshot(event) {
         const snapshot = event.snapshot || event;
+        if (state === STATE.RECOVERING) {
+            // 恢复中：进入 RECOVERING 的那一刻已经发过一次 RECOVER；但如果那次没成（驱动定位失败会
+            // 返回 null「下一轮再试」，或干脆没跑完），**必须有人再发** —— 否则就是整轮空转。
+            // 真机现场（2026-09-14，K40）：确认取消后重新定位失败 → 之后 36 次观察全是
+            // 「RECOVERING｜只恢复/等待」，90 秒白烧。
+            unknownSinceMono = null;
+            if (nowMono() - recoverRetryMono >= cfg.recoverRetryMs) {
+                recoverRetryMono = nowMono();
+                return effectsOut([{ type: "RECOVER", reason: "恢复中重试（还没恢复完）" }],
+                    "恢复没进展，重发恢复动作");
+            }
+            return effectsOut([], reason);
+        }
         if (!snapshot || snapshot.stable === false) {
             // 不稳定观测：只影响等待状态，绝不改变已发出的动作
             if (state === STATE.VERIFYING) {
@@ -246,6 +280,12 @@ function createMachine(config, deps) {
         const sideKnown = snapshot.side === "w" || snapshot.side === "b";
 
         if (!sideKnown) {
+            if (!cfg.allowClick) {
+                // 只识别 / 着法建议：**不出手就不需要轮次基准** → 不走看门狗、也不进 RECOVERING，
+                // 免得把算好的建议、几何基准一起打散（真机症状：② 模式长期「恢复中/轮次未知」空转）。
+                setState(STATE.WAIT_TURN, "轮次未知：建议模式只等待（不恢复、不出手）");
+                return effectsOut([], reason);
+            }
             if (unknownSinceMono == null) {
                 unknownSinceMono = nowMono();
             }
@@ -292,7 +332,12 @@ function createMachine(config, deps) {
         }
 
         // 轮到我方：局面变了才重算（同局面重复观测不该反复算棋）
-        if (!changed && (state === STATE.THINKING || state === STATE.PRECHECK)) {
+        if (!changed && (state === STATE.THINKING || state === STATE.PRECHECK || state === STATE.SUGGESTED)) {
+            if (state === STATE.SUGGESTED) {
+                // 建议模式稳态：局面没变就什么都不做（票据留着，作为「当前建议」的载体）。
+                return effectsOut([], "同一局面，建议已给出（" +
+                    (currentTicket && currentTicket.moveICCS ? currentTicket.moveICCS : "-") + "）");
+            }
             if (state === STATE.PRECHECK && currentTicket) {
                 const gate = canClick(currentTicket);
                 if (gate.ok) {
@@ -355,8 +400,7 @@ function createMachine(config, deps) {
         }
         if (event.jobId != null && event.jobId !== job.jobId) {
             return effectsOut([], "结果的 jobId 不是当前任务（过期结果丢弃）");
-        }
-        if (state === STATE.PAUSED || state === STATE.STOPPED) {
+        }        if (state === STATE.PAUSED || state === STATE.STOPPED) {
             // S03：暂停后才返回的结果一律失效，票据也不生成
             counters.jobsCancelled += 1;
             currentJob = null;
@@ -388,6 +432,12 @@ function createMachine(config, deps) {
         counters.ticketsCreated += 1;
         currentJob = null;
         currentTicket = ticket;
+        if (!cfg.allowClick) {
+            // 只识别 / 着法建议：着法算完就交出去（SUGGEST 效果 = 驱动打一行「建议着法 …」），
+            // 停在 SUGGESTED 稳态；**不进 PRECHECK**，也就不会有「出手前核对不通过 → 恢复」那条链。
+            setState(STATE.SUGGESTED, "建议着法 " + ticket.moveICCS + "（本模式不点击）");
+            return effectsOut([{ type: "SUGGEST", ticket: ticket }], reason);
+        }
         setState(STATE.PRECHECK, "拿到候选着法 " + ticket.moveICCS + "，等待出手前核对");
         return effectsOut([], reason);
     }
@@ -395,7 +445,7 @@ function createMachine(config, deps) {
     function onTick(event) {
         const now = event && event.nowMono != null ? Number(event.nowMono) : nowMono();
         const effects = [];
-        if (state === STATE.WAIT_TURN && unknownSinceMono != null &&
+        if (cfg.allowClick && state === STATE.WAIT_TURN && unknownSinceMono != null &&
             now - unknownSinceMono > cfg.unknownTurnWatchdogMs) {
             counters.watchdogTrips += 1;
             effects.push.apply(effects, cancelCurrentJob("轮次未知超时"));
@@ -451,6 +501,7 @@ function createMachine(config, deps) {
         const ticket = event.ticket || currentTicket;
         const verdict = event.verdict;
         counters.verifies += 1;
+        const previousDeadline = verifyDeadlineMono;
         verifyDeadlineMono = 0;
         if (!ticket) {
             setState(STATE.RECOVERING, "确认结果没有对应票据");
@@ -461,13 +512,16 @@ function createMachine(config, deps) {
             retriesUsed = 0;
             ticketModule.confirm(ticket, { reason: verdict.reason }, nowMono());
             currentTicket = null;
-            // 落子已确认 → 局面真的变了：丢掉旧基准、bump 版本（旧票据全部作废），
-            // 重新采集一次稳定观测再继续。新基准只能来自新观测，不凭票据外推。
+            // 落子已确认 → 局面真的变了：丢掉稳定快照、bump 版本（旧票据全部作废），等下一帧观测再继续。
+            // ⚠️ **不要**在这里发 RECOVER（旧行为）：RECOVER 会让驱动**重新定位 + 校准** ——
+            // 真机实测一次 ~8 秒（K40：校准完成…用时 8221ms），而且 CONFIRMED 与 OPPONENT_REPLY
+            // 会各触发一次 ⇒ **一手棋白烧 ~16 秒**（面板上一手一闪「恢复：重新定位棋盘」）。
+            // 棋子移动不改变棋盘几何，这里需要的只是「重新观察一次」—— 那就是下一轮 tick 的 SNAPSHOT。
             versions.positionVersion += 1;
             stable = null;
             unknownSinceMono = null;
-            setState(STATE.RECOVERING, "落子已确认（" + verdict.result + "），重新稳定观察");
-            return effectsOut([{ type: "RECOVER", reason: verdict.reason }], reason);
+            setState(STATE.WAIT_STABLE, "落子已确认（" + verdict.result + "），等下一帧观测");
+            return effectsOut([], reason);
         }
         if (verdict.result === verify.RESULT.UNCHANGED) {
             counters.unchanged += 1;
@@ -507,9 +561,16 @@ function createMachine(config, deps) {
             return effectsOut([{ type: "RECOVER", reason: verdict.reason }], reason);
         }
         if (verdict.result === verify.RESULT.UNRELIABLE) {
-            // 看不清：继续等新观测（deadline 由 TICK 管），不动票据
-            verifyDeadlineMono = nowMono() + cfg.verifyTimeoutMs;
-            setState(STATE.VERIFYING, "确认观测不可靠（" + verdict.reason + "），继续等待");
+            // 看不清（点完那一帧常常正赶上落子动画/走法提示图层）：**立刻安排下一次确认**，
+            // 而不是干等到 deadline 超时。每次确认前都要重新截图+识别（~1.1s），
+            // 天然拉开间隔；超时上限仍由 TICK 的 deadline 管。
+            const next = previousDeadline > 0 ? previousDeadline : (nowMono() + cfg.verifyTimeoutMs);
+            if (nowMono() < next) {
+                verifyDeadlineMono = next;
+                setState(STATE.VERIFYING, "确认观测不可靠（" + verdict.reason + "），再确认一次");
+                return effectsOut([{ type: "VERIFY", ticket: ticket, deadlineMono: next }], reason);
+            }
+            setState(STATE.VERIFYING, "确认观测不可靠（" + verdict.reason + "），等超时判定");
             return effectsOut([], reason);
         }
         // UNEXPECTED
@@ -553,6 +614,7 @@ function createMachine(config, deps) {
                 if (state === STATE.PAUSED || state === STATE.STOPPED) {
                     return effectsOut([], "仍是暂停/停止状态");
                 }
+                unknownSinceMono = null;   // 恢复完重新计时：否则立刻又被看门狗判成「轮次未知超时」
                 setState(STATE.WAIT_STABLE, "恢复完成，重新稳定观察");
                 return effectsOut([], reason);
             case EVENT.TICK:
