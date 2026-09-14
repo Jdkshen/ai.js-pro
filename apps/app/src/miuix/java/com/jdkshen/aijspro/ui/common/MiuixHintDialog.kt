@@ -35,12 +35,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 object MiuixHintDialog {
 
     @JvmStatic
+    @JvmOverloads
     fun show(
         activity: Activity?,
         title: String,
         message: String,
         confirmText: String,
-        remindPrefKey: String?
+        remindPrefKey: String?,
+        onConfirmed: Runnable? = null
     ): Boolean {
         if (remindPrefKey != null && activity != null) {
             val prefs = PreferenceManager.getDefaultSharedPreferences(activity)
@@ -70,6 +72,7 @@ object MiuixHintDialog {
                                     .edit().putBoolean(remindPrefKey, false).apply()
                             }
                             dlg.dismiss()
+                            onConfirmed?.run()
                         }
                         .padding(vertical = 13.dp),
                     contentAlignment = Alignment.Center

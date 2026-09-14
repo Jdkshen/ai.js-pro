@@ -3,7 +3,7 @@
         <activity android:name="com.jdkshen.aijspro.ui.mcp.MiuixMcpActivity"
             android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jdkshen.aijspro.ui.mcp.MiuixMcpHistoryActivity"
-            android:exported="false" />
+            android:exported="false" android:configChanges="orientation|screenSize|keyboardHidden" />
         <service android:name="com.jdkshen.aijspro.mcp.McpService"
             android:exported="false" android:stopWithTask="true" />
         <activity android:name="com.jdkshen.aijspro.ui.service.MiuixServiceActivity"
@@ -20,8 +20,12 @@
             android:launchMode="singleTop"
             android:exported="false" />
         <activity android:name="com.jdkshen.aijspro.ui.log.MiuixLogActivity"
-            android:exported="false" />
+            android:exported="false" android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
         <activity android:name="com.jdkshen.aijspro.ui.project.MiuixBuildActivity"
             android:exported="false" android:configChanges="orientation|screenSize" />
+        <activity android:name="com.jdkshen.aijspro.ui.project.MiuixProjectConfigActivity"
+            android:exported="false" android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>

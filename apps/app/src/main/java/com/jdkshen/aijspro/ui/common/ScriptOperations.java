@@ -310,7 +310,41 @@ public class ScriptOperations {
 
 
     private Observable<String> showFileNameInputDialog(String prefix, String ext) {
-        return showNameInputDialog(prefix, new InputCallback(ext));
+        Observable<String> miuix = showFileNameInputDialogWithMiuix(prefix, ext);
+        return miuix != null ? miuix : showNameInputDialog(prefix, new InputCallback(ext));
+    }
+
+    /**
+     * 名称输入弹窗的 Miuix 分支（导入文件等流程共用）：校验语义与旧 InputCallback +
+     * validateInput 一致（空输入禁用「确定」、重名显示「文件已存在」）。
+     * 宿主不支持时返回 null，回退 MaterialDialog 实现。
+     */
+    private Observable<String> showFileNameInputDialogWithMiuix(String prefix, String ext) {
+        if (!(mContext instanceof Activity)) {
+            return null;
+        }
+        String suffix = ext == null ? "" : "." + ext;
+        final PublishSubject<String> input = PublishSubject.create();
+        boolean shown = MiuixInputDialog.show((Activity) mContext,
+                getString(R.string.text_name).toString(),
+                getString(R.string.text_please_input_name).toString(),
+                prefix,
+                null,
+                false,
+                (text, checked) -> {
+                    if (text.isEmpty()) {
+                        return null;
+                    }
+                    return new File(getCurrentDirectory(), text + suffix).exists()
+                            ? getString(R.string.text_file_exists).toString() : null;
+                },
+                getString(R.string.ok).toString(),
+                getString(R.string.cancel).toString(),
+                (text, checked) -> {
+                    input.onNext(text);
+                    input.onComplete();
+                });
+        return shown ? input : null;
     }
 
     private Observable<String> showNameInputDialog(String prefix, MaterialDialog.InputCallback textWatcher) {
@@ -501,6 +535,9 @@ public class ScriptOperations {
     }
 
     public void importFile() {
+        if (showImportFileChooserWithMiuix()) {
+            return;
+        }
         new FileChooserDialogBuilder(mContext)
                 .dir(Environment.getExternalStorageDirectory().getPath())
                 .justScriptFile()
@@ -508,6 +545,22 @@ public class ScriptOperations {
                 .title(R.string.text_select_file_to_import)
                 .positiveText(R.string.ok)
                 .show();
+    }
+
+    /**
+     * 「导入」文件选择器的 Miuix 分支：Compose 弹窗逐级浏览、单选 js/auto 文件
+     * （过滤与旧实现 Scripts.FILE_FILTER 一致）；宿主不支持时返回 false 回退旧弹窗。
+     */
+    private boolean showImportFileChooserWithMiuix() {
+        if (!(mContext instanceof Activity)) {
+            return false;
+        }
+        return MiuixFileChooserDialog.show((Activity) mContext,
+                getString(R.string.text_select_file_to_import).toString(),
+                Environment.getExternalStorageDirectory().getPath(),
+                getString(R.string.ok).toString(),
+                getString(R.string.cancel).toString(),
+                path -> importFile(path).subscribe());
     }
 
     public void timedTask(ScriptFile scriptFile) {
