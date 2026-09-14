@@ -179,6 +179,10 @@ let pendingDeclare = false;   // autorun：等首个观察成功后再声明「�
 // 算棋放哪里跑：worker（独立引擎线程，默认）/ inline（本线程同步，对照用）
 let computeModeKey = "worker";
 let lastThinkingLogAt = 0;    // 算棋中按秒报一次状态，不刷屏
+/** 「把游戏留在前台」上次尝试的时间（限频用，见 keepGameInFront） */
+let lastKeepFrontAt = 0;
+/** 上一次打印的前台读数（只在变化时打，避免刷屏） */
+let lastFrontText = "";
 let hideOnCapture = "auto";  // "auto" 只在面板真的压住棋盘时才藏（默认）；true/false 手动开/关
 let autoAlignOn = false;      // 几何按检测框自动微调（真机实测会把子认重，默认关）
 // 点击通道：auto（有 Shizuku 就走 shizuku 的 `input swipe` 原地按住）/ shizuku / accessibility。
@@ -1619,6 +1623,11 @@ function tick() {
         return;
     }
     try {
+        // ★ 先把游戏留在前台再观察：透明宿主的窗口一拿到焦点，游戏就 pause → 对方永不应手
+        //   （真机证据见 keepGameInFront 的注释）。点击租约期间不动，免得抦断正在发的手势。
+        if (!clickLeaseActive && (modeKey === "auto" || modeKey === "advice")) {
+            keepGameInFront();
+        }
         const result = driver.tick();
         const machine = driver.machine;
         const stats = driver.stats();
@@ -1672,6 +1681,55 @@ function tick() {
     } catch (error) {
         logLine("自动循环出错：" + error);
         stopLoop();
+    }
+}
+
+/**
+ * 把游戏留在前台（限频）：③ 的脚本宿主是一个透明窗口，它一拿到焦点游戏就 pause 了。
+ *
+ * 真机实测（K40，2026-09-14，r2.log）：面板跑着的时候对方（联网 AI「特级大师」）**一直不应手**
+ * —— 日志里连续 25 次「轮到对方，等待其落子」、棋盘一直没变；面板一停、游戏拿回前台，
+ * 棋盘几秒内就变成 4 步。没有这一步，③ 就是在「等一个永远不会来的应手」。
+ *
+ * 与出招前的前台守卫（foregroundGuard）的区别：那个是「出手前必须验一次」，
+ * 这个是「等待期间持续把游戏留在前台」；两者共用适配层的 bringPackageToFront（不重启游戏进程）。
+ */
+function keepGameInFront() {
+    const now = Date.now();
+    if (now - lastKeepFrontAt < 4000) {
+        return;          // 限频：切前台本身有开销，而且频繁 am start 会把面板自己的输入也搅乱
+    }
+    lastKeepFrontAt = now;
+    let focus = null;
+    let top = null;
+    try {
+        focus = adapter.focusedWindowPackage();
+    } catch (error) {
+        focus = null;
+    }
+    try {
+        top = adapter.foregroundPackage ? adapter.foregroundPackage() : null;
+    } catch (error) {
+        top = null;
+    }
+    if (focus === null && top === null) {
+        return;          // 两个都读不到（没有 Shizuku/root）就不折腾
+    }
+    // 读数变化时记一行（限频 4s，最多 15 行/分钟）：真机上「此刻到底谁在前台」必须能查到 ——
+    // 只按 focusedWindowPackage 判断时它一直报游戏（真机踩到：这一步一次都没触发，白等一整轮）。
+    const text = "触摸焦点 " + (focus || "未知") + "／栈顶 " + (top || "未知");
+    if (text !== lastFrontText) {
+        lastFrontText = text;
+        logLine("等对方应手期间的前台：" + text);
+    }
+    if (focus === gamePackage && top === gamePackage) {
+        return;
+    }
+    try {
+        const ok = adapter.bringPackageToFront(gamePackage);
+        logLine("等对方应手：把游戏带回前台（之前 " + text + "，切换" + (ok ? "成功" : "失败") + "）");
+    } catch (error) {
+        // 切不动就算了：下一次 tick 还会再试，不抦断循环
     }
 }
 
