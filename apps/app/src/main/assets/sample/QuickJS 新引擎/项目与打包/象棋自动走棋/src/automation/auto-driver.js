@@ -557,6 +557,14 @@ function createDriver(options) {
                 }));
             }
         }
+        // ★ 出手前先作废「这一步起点」的已知事实：棋子从这一刻起就不在那儿了。
+        // ⚠️ 必须在**点击之前**丢（而不是等确认成功再丢）：否则确认阶段那几帧里，
+        // observeOnce 会把旧子补回起点 → 观测看起来「起点还占着、落点也有了」→
+        // 被当成动画帧（UNRELIABLE）等下去，而这条记录永远等不到「确认成功」去作废 → 死锁。
+        const fromIndex = transition.squareIndex(ticket.moveICCS, 0);
+        if (fromIndex >= 0) {
+            dropPatchesAt([fromIndex], "我方要走 " + ticket.moveICCS + "，起点已空");
+        }
         const outcome = executor.execute(ticket, {
             grid: grid,
             // 点棋优先用最近一次观测的**实测框中心**（几何版本必须与票据一致，否则退回交点）：
@@ -656,8 +664,19 @@ function createDriver(options) {
         }
         if (verifier.isSuccess(verdict.result)) {
             stats.confirms += 1;
-            // 新的一手：补齐表切到新周期（上一手的记录随之作废，见 verifyCycle 的说明）
             verifyCycle += 1;
+            // ★ 我方这一步**真的走了** → 起点那一格从此是空的，它在补齐表里的记录必须作废。
+            // ⚠️ 以前这里是「按周期把**整张表**作废」（`patch.cycle !== verifyCycle`）——
+            // 真机事故（2026-09-14，K40，auto35.log）：上一步「对方刚落子」的格子登记在周期 N，
+            // 我方这手一确认周期变 N+1 → 那条记录立刻失效 → 那个子带着高亮环被读成**空** →
+            // 观测比期望只差这一格 → 装饰容差枚举出 8 种结构等价的解释（“那格子的炮走到别处、
+            // 新位置没看见”）→「不唯一」→ 连刷 54 次、一手棋白等 54 秒、连第二手都走不下去。
+            // 现在只丢**我方这手的起点**，其余记录留到它们真的失效（自己认出来了 / 有子从那里离开 /
+            // 被换成异色子）—— 判断依据是“棋子动了”，不是“过了几手”。
+            const from = transition.squareIndex(ticket.moveICCS, 0);
+            if (from >= 0) {
+                dropPatchesAt([from], "我方这手 " + ticket.moveICCS + " 的起点已空");
+            }
         }
         // ★ 确认成功后**刷新可靠基准** —— ③ 连续走子必需的一环（K40 真机踩到）：
         // 不刷新的后果：基准还停在「我方落子之前」，而下一帧局面已经多了我方这手（以及对方应手）
@@ -696,20 +715,7 @@ function createDriver(options) {
         }
         // 落点格被游戏画花（未知）→ 记下来，后续观察一律按已知事实补齐。
         // 我方落点与对方应手落点都是棋盘上的事实（都从票据 + 棋规唯一推出来），不是猜。
-        function addPatch(entry, label) {
-            if (!entry || entry.index == null || !entry.char) {
-                return;
-            }
-            for (let i = 0; i < knownPatches.length; i++) {
-                if (knownPatches[i].index === entry.index) {
-                    knownPatches[i] = { index: entry.index, char: entry.char, cycle: verifyCycle };
-                    return;
-                }
-            }
-            knownPatches.push({ index: entry.index, char: entry.char, cycle: verifyCycle });
-            note(label + " " + entry.char + "（下标 " + entry.index +
-                "）本手内按已知事实补齐（下一手确认后自动作废）");
-        }
+        // （addPatch 本体在工厂作用域，见 registerMoveDestinations 旁边 —— sideFor 也要用它。）
         if (verdict.patched) {
             addPatch(verdict.patched, "落点格");
         }
@@ -1023,8 +1029,22 @@ function createDriver(options) {
                     continue;
                 }
                 const got = result.chars[patch.index];
-                if (patch.cycle !== verifyCycle) {
-                    continue;   // 上一手的记录 → 作废（装饰不会挂在那个子上了）
+                // ⚠️ 这里**不看周期**（2026-09-14 真机事故，见 doVerify 里的说明）：
+                // 以前是「上一手的记录一律作废」，结果是「对方刚落子的那格」在我方一确认就失效
+                // → 那格读成空时没人补 → 每帧都解释不了 → 白等 54 秒。
+                // 现在改成按**棋子是否离开**作废（dropPatchesAt）：能自己认出来/变成别的同色子
+                // 就留着（装饰会反复发作），真被吃成异色子则丢掉（不能把吃子藏起来）。
+                // ⚠️ **票据优先**：确认阶段带着「预期落子后局面」时，如果预期说这一格已经**空了**
+                //    （= 我方这手正是从这一格走出去的），那这个"补齐"就是跟票据对着干。
+                //    真机实测后果（2026-09-14，K40，b2c2 确认成功后走 c2c6）：(2,7) 被补回旧字 →
+                //    整帧看起来跟基准一模一样 → 确认判 UNCHANGED → 重试/恢复，
+                //    而**棋其实已经走成了**（事后截图：红炮确实在 (2,3)，游戏 4 步）。
+                //    所以这种记录不但不能补，还要从表里丢掉（那一格的子真的走了，不会再回来）。
+                if (options && options.expect) {
+                    const want = options.expect[patch.index];
+                    if (want === null || want === "" || want === undefined) {
+                        continue;
+                    }
                 }
                 if (got === "?" || got === "" || got === null || got === undefined) {
                     // ① 读不出来 / **整格漏检（读成空）**：高亮环把子盖住时模型常常直接看不到它
@@ -1148,6 +1168,81 @@ function createDriver(options) {
     }
 
     /**
+     * 登记一个「已知事实」格子：本手内那一格一律按这里给的字补齐。
+     * 依据都是棋规唯一推出来的事实（票据 / 唯一合法着法），不是猜；那格能自己认出来就自动失效。
+     */
+    function addPatch(entry, label) {
+        if (!entry || entry.index == null || !entry.char) {
+            return;
+        }
+        for (let i = 0; i < knownPatches.length; i++) {
+            if (knownPatches[i].index === entry.index) {
+                knownPatches[i] = { index: entry.index, char: entry.char, cycle: verifyCycle };
+                return;
+            }
+        }
+        knownPatches.push({ index: entry.index, char: entry.char, cycle: verifyCycle });
+        note(label + " " + entry.char + "（下标 " + entry.index +
+            "）按已知事实补齐（那格能自己认出来、或有子从那里离开时自动作废）");
+    }
+
+    /**
+     * 把「已知事实」作废：那些格子里有子**离开**了（新着法的起点），记录不再成立。
+     *
+     * 为什么必须有它（2026-09-14 真机，auto35.log）：
+     * 补齐表以前靠 verifyCycle 整表作废 —— 我方一确认，周期 +1，连「对方刚落子」的记录一起丢。
+     * 结果那个子（带高亮环、被模型读成空）没人补 → 观测比期望只差一格 → 装饰容差枚举出 8 种
+     * 结构等价的解释（“那个炮从这一格走到别处、新位置没看见”）→ 不唯一 → 连刷 54 次 → 死等。
+     * 反过来，如果永远不作废，一个真的掉了的子会被“补”回棋盘上 —— 所以作废依据必须是
+     * 「那个格子上的子确实走了」，而不是“过了几手”。
+     */
+    function dropPatchesAt(indexes, why) {
+        if (!indexes || indexes.length === 0 || knownPatches.length === 0) {
+            return;
+        }
+        const keep = [];
+        let dropped = 0;
+        for (let i = 0; i < knownPatches.length; i++) {
+            const patch = knownPatches[i];
+            if (patch && indexes.indexOf(patch.index) >= 0) {
+                dropped += 1;
+                continue;
+            }
+            keep.push(patch);
+        }
+        if (dropped > 0) {
+            knownPatches = keep;
+            note("已知事实作废 " + dropped + " 格（" + why + "）");
+        }
+    }
+
+    /**
+     * 把「刚落的子」所在的格子登记进已知事实表。
+     *
+     * 游戏会给刚落的子画高亮环，**下一帧起那一格就认不出来**（读成空或别的兵种）。
+     * 我方那一格在确认阶段就登记了，但**对方那一格以前没人登记** —— 真机实测的后果（2026-09-14，K40）：
+     * 对方 h7e7 之后 (4,2) 一直读成空 → 每帧都「轮次推不出来（UNKNOWN）」→ 看门狗 → RECOVERING，
+     * 而我方那手也白走（整轮停在那儿）。这里按刚推出来的着法登记，等那格自己能认出来就自动失效。
+     *
+     * @param moves   刚推出来的着法（MOVE 一步 / MOVE_PAIR 两步，落点都算「刚落的子」）
+     * @param settled 推完这些着法后的可靠盘面（补的字取自它）
+     */
+    function registerMoveDestinations(moves, settled) {
+        const list = moves || [];
+        for (let i = 0; i < list.length; i++) {
+            const move = list[i];
+            if (!move || !move.iccs || !settled) {
+                continue;
+            }
+            const dest = transition.squareIndex(move.iccs, 1);
+            if (dest < 0 || !settled[dest]) {
+                continue;
+            }
+            addPatch({ index: dest, char: settled[dest] }, "刚落子的格子（会被画环）");
+        }
+    }
+
+    /**
      * 推轮次：从「上一可靠局面 + 新观测」推出现在轮到谁；推不出就返回 null。
      *
      * 副作用：推断成功时会把 lastReliable 刷成**按着法改正过的盘面**；
@@ -1182,6 +1277,20 @@ function createDriver(options) {
             }
             lastReliable = { board: settled, side: inferred.nextSide };
             note("轮次推断：" + inferred.reason);
+            // 刚落的子会被画高亮环 → 把落点登记成已知事实，否则下一帧那一格变「空」→ 推不出轮次 → 恢复。
+            // ⚠️ 顺序：先作废**这些着法的起点**（那里已经空了），再登记落点。
+            // 反过来的话，一步「走到别处又回来」的棋会把自己的起点记录留下（真机：炮 (2,7)→(2,3)
+            // 之后 (2,7) 的记录还在 → 下一帧那一格被补回旧子 → 整盘看起来没动）。
+            const sources = [];
+            const moves = inferred.moves || [];
+            for (let i = 0; i < moves.length; i++) {
+                const from = transition.squareIndex(moves[i].iccs, 0);
+                if (from >= 0) {
+                    sources.push(from);
+                }
+            }
+            dropPatchesAt(sources, "刚推出来的着法起点已空");
+            registerMoveDestinations(inferred.moves, settled);
             return inferred.nextSide;
         }
         if (inferred.status === "UNCHANGED") {
@@ -1205,7 +1314,9 @@ function createDriver(options) {
             lastSideFix = { board: tolerant.board, how: "唯一合法单步 " + tolerant.iccs };
             lastReliable = { board: tolerant.board, side: tolerant.nextSide };
             note("轮次推断（装饰容差）：唯一合法单步 " + tolerant.iccs +
-                "（落点格被游戏装饰读错，已按该着法改正）");
+                "（落点格被游戏装饰读错，已按该着法改正" +
+                (tolerant.colorNoise ? "；另有 " + tolerant.colorNoise + " 格只是红黑读反，已按基准纠正" : "") +
+                "）");
             return tolerant.nextSide;
         }
         stats.unknownTurn += 1;
@@ -1240,46 +1351,18 @@ function createDriver(options) {
      * 返回 { board（按该着法改正后的盘面）, nextSide, iccs } 或 null。
      */
     function inferWithDecorationTolerance(base, baseSide, observed) {
-        if (!base || !observed) {
+        // 逻辑已下沉到 `transition.inferSingleWithDecorationTolerance`（纯函数，可离线自检）：
+        // 单步 + 只允许「落点格被装饰读错」以及「没被这步碰过的格子只是红黑读反」。
+        // 这里只做形状适配（驱动要用 board/nextSide/iccs，日志要用 colorNoise）。
+        const tolerant = transition.inferSingleWithDecorationTolerance(base, baseSide, observed);
+        if (!tolerant) {
             return null;
         }
-        const moves = legal.allLegalMoves(base, baseSide);
-        const fits = [];
-        for (let i = 0; i < moves.length && fits.length < 2; i++) {
-            const move = moves[i];
-            let after = null;
-            try {
-                after = legal.applyMove(base, move).board;
-            } catch (error) {
-                continue;
-            }
-            const diff = legal.diffBoards(after, observed);
-            if (diff.length > 1) {
-                continue;
-            }
-            if (diff.length === 1) {
-                const text = String(move.iccs || "");
-                if (!/^[a-i][0-9][a-i][0-9]$/.test(text)) {
-                    continue;
-                }
-                const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
-                if (diff[0].row * 9 + diff[0].col !== dest) {
-                    continue;   // 差异不在落点上（可能是别的格子被读错）→ 不采信
-                }
-            }
-            fits.push({ move: move, after: after });
-        }
-        if (fits.length !== 1) {
-            return null;
-        }
-        const board = observed.slice();
-        const text = String(fits[0].move.iccs || "");
-        const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
-        board[dest] = fits[0].after[dest];   // 落点按着法改正
         return {
-            board: board,
-            nextSide: baseSide === "w" ? "b" : "w",
-            iccs: fits[0].move.iccs
+            board: tolerant.board,
+            nextSide: tolerant.nextSide,
+            iccs: tolerant.iccs,
+            colorNoise: tolerant.colorNoise
         };
     }
 

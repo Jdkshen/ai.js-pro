@@ -1776,6 +1776,68 @@ check("R05f 只差「同字母换大小写」的装饰噪声 → 判没走子（
     return real.status !== transition.STATUS.UNCHANGED ? true : "真走子被误判成没走";
 });
 
+check("R05g 应手落点被读错兵种 + 另一格只是红黑读反 → 单步仍要认出来（真机盘面）", function () {
+    // 真机现场（2026-09-14，K40 + 天天象棋离线局，b2c2 刚 CONFIRMED 之后）：
+    // 对方应手是「车九进一」(0,0)→(0,1)，那一格带高亮环被模型读成炮 `c`；
+    // 同时 (7,2) 的黑炮被读成红炮 `C`（同一兵种、只是红黑读反）。
+    // 旧逻辑：差异格数 1 → 3，容差（≤1 且必须落在落点）不成立 →
+    // 「轮次推不出来（UNKNOWN）」→ 看门狗 → RECOVERING 一整轮再也回不来。
+    const base = fen.parseFen("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/2C4C1/9/RNBAKABNR").board;
+    const observed = fen.parseFen("1nbakabnr/c8/1c5C1/p1p1p1p1p/9/9/P1P1P1P1P/2C4C1/9/RNBAKABNR").board;
+    // 前提：严格推断（含两步）解释不了 —— 这正是真机日志里的结论
+    const strict = transition.infer(base, "b", observed, { allowPair: true });
+    if (strict.status !== transition.STATUS.UNKNOWN) {
+        return "夹具前提不成立：严格推断竟给出了 " + strict.status;
+    }
+    const tolerant = transition.inferSingleWithDecorationTolerance(base, "b", observed);
+    if (!tolerant) {
+        return "单步容差没能认出这一步（真机上就是卡在这里）";
+    }
+    if (String(tolerant.iccs) !== "a9a8") {
+        return "认成了 " + tolerant.iccs + "，应为 a9a8（车九进一）";
+    }
+    if (tolerant.nextSide !== "w") {
+        return "下一手应为轮到我方(w)，实际 " + tolerant.nextSide;
+    }
+    const expected = legal.applyMove(base, tolerant.move).board;
+    if (!legal.boardMatches(tolerant.board, expected)) {
+        return "给出的盘面不是「基准 + 这一步」";
+    }
+    if (tolerant.board[2 * 9 + 7] !== "c") {
+        return "(7,2) 没按基准纠回黑炮：" + tolerant.board[2 * 9 + 7];
+    }
+    if (tolerant.colorNoise !== 1) {
+        return "同字异色噪声计数 = " + tolerant.colorNoise;
+    }
+    // 反向保护一：只差颜色读反（一步没走）→ 不许认成走子
+    const noiseOnly = base.slice();
+    noiseOnly[2 * 9 + 7] = "C";
+    if (transition.inferSingleWithDecorationTolerance(base, "b", noiseOnly)) {
+        return "只差颜色读反（其实没走子）却被认成走了一步";
+    }
+    // 反向保护二：起点还留着子（其实没走）→ 不许认
+    const stuck = observed.slice();
+    stuck[0] = "r";
+    if (transition.inferSingleWithDecorationTolerance(base, "b", stuck)) {
+        return "起点还留着子却被认成走子";
+    }
+    // 反向保护三：异字母的差异不能被当噪声吞掉（吃子/换子必须让它变）
+    const swapped = observed.slice();
+    swapped[2 * 9 + 7] = "P";
+    if (transition.inferSingleWithDecorationTolerance(base, "b", swapped)) {
+        return "异字母差异被当成噪声吞掉了";
+    }
+    return true;
+});
+
+/**
+ * ⚠️ 这里有意**没有**「整帧只少一个子 → 判没走子」的断言（2026-09-14 试过又拿掉了）：
+ * 真机那帧 = 「起点少一个子 + 另一格同字母异色」，它跟「真吃子、落点被读成同字母异色」
+ * 在单帧上**结构完全等价**（R05f 的反向保护就是后者）→ 单帧无法区分，硬判会把吃子藏起来。
+ * 正确办法是用驱动已有的「已知事实补齐」表：推断出对方那一手时把它的**落点也登记进去**
+ * （`auto-driver.registerMoveDestinations`），下一帧那一格就不再读成空，自然回到 UNCHANGED。
+ */
+
 check("P4·确认：出现一个合法对方应手 → OPPONENT_REPLY（A03）", function () {
     const verdict = verifier.verify({ ticket: sampleTicket(), observed: AFTER_REPLY_BOARD.slice() });
     if (verdict.result !== "OPPONENT_REPLY") {
@@ -2336,6 +2398,129 @@ check("驱动：基准带未知格时不许假装补齐（真机 ② 空转 bug 
         return "不该抛异常（errors=" + after.errors + "：" + after.lastError + "）";
     }
     return driver.machine.state() === "ERROR" ? "状态机被推进 ERROR" : true;
+});
+
+/**
+ * 真机回归（auto35.log，2026-09-14）：确认阶段连刷 **54 次**
+ * `UNRELIABLE：装饰容差下有 N 种应手解释，不唯一`，一手棋再也走不下去。
+ *
+ * 时序（日志逐行核对过）：
+ *   ① 我方第一手点击 → 落点被高亮环读成 '?' → CONFIRMED（落点登记进已知事实表）
+ *   ② 对方应手**正常可见**那一帧 → 轮次推断认出它 → 它的落点也登记进表（下标 22 = (4,2)）
+ *   ③ 我方第二手点击 → 落点被读成 '?' → CONFIRMED
+ *      ❌ 旧代码在这一步把**整张表**按周期作废（`verifyCycle + 1`），连同 ② 那条一起丢掉
+ *   ④ 之后每一帧里 ② 那个子**整格漏检（读成空）** → 盘面永远差一格 → 没有任何合法着法
+ *      能解释 → 核对给不出结论 / 轮次推不出来
+ *
+ * 现在：作废**按棋子是否真的离开**判定（`addPatch` 的 cycle 不再是唯一依据），
+ * 我方确认不再顺手丢掉别人那格 → ④ 被补齐 → 轮次推断照常成功。
+ */
+check("驱动：我方确认不许作废「对方刚落点」的补齐记录（真机 54 次卡死回归）", function () {
+    const replyDest = transition.squareIndex(REPLY_MOVE.iccs, 1);
+    const own2 = legal.allLegalMoves(AFTER_REPLY_BOARD, "w")[0];
+    const own2Dest = transition.squareIndex(own2.iccs, 1);
+    const afterOwn2 = legal.applyMove(AFTER_REPLY_BOARD, own2).board;
+    if (replyDest == null || own2Dest == null) {
+        return "夹具着法取不到落点：" + JSON.stringify({ reply: REPLY_MOVE.iccs, own2: own2 && own2.iccs });
+    }
+
+    const stage = { at: 0, clicks: 0, analyzes: 0 };
+    const noteText = [];
+    const board = function () {
+        if (stage.at === 0) {
+            return START_BOARD.slice();
+        }
+        if (stage.at === 1) {
+            const one = AFTER_BOARD.slice();
+            one[transition.squareIndex(OWN_MOVE.iccs, 1)] = "?";
+            return one;
+        }
+        if (stage.at === 2) {
+            return AFTER_REPLY_BOARD.slice();
+        }
+        if (stage.at === 3) {
+            const three = afterOwn2.slice();
+            three[own2Dest] = "?";
+            return three;
+        }
+        // ★ 回归帧：我方第二手已成立，但**对方那个子整格漏检**
+        const four = afterOwn2.slice();
+        four[replyDest] = null;
+        return four;
+    };
+    const countUnknown = function (cells) {
+        let unknown = 0;
+        for (let i = 0; i < 90; i++) {
+            if (cells[i] === "?") {
+                unknown += 1;
+            }
+        }
+        return unknown;
+    };
+
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(text); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = board();
+            return {
+                ok: true, chars: cells, unknownCells: countUnknown(cells), conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            stage.analyzes += 1;
+            const move = stage.analyzes === 1 ? OWN_MOVE : own2;
+            return { ok: true, iccs: move.iccs, move: move, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            // ⚠️ 一次出手 = 两次 tap（起手 + 落点），只在**落点那次**推进脚本阶段
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicks += 1;
+                stage.at = stage.clicks === 1 ? 1 : 3;
+            }
+            return { ok: true, method: "self-check-tap" };
+        },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, attemptLimitPerMove: 3, attemptLimitPerPosition: 5 }
+    });
+    driver.start();
+
+    // 跑到「我方两手都确认成功」为止（阶段推进由 tap 回调负责）
+    for (let i = 0; i < 24 && stage.at < 4; i++) {
+        driver.tick();
+        if (stage.at === 1 && driver.stats().confirms >= 1) {
+            stage.at = 2;
+        }
+        if (stage.at === 3 && driver.stats().confirms >= 2) {
+            stage.at = 4;
+        }
+    }
+    if (stage.at !== 4) {
+        return "没能走到回归帧（阶段 " + stage.at + "，确认 " + driver.stats().confirms +
+            "，状态 " + driver.machine.state() + "：" + driver.machine.reason() + "）";
+    }
+
+    // 回归帧：必须被「已知事实补齐」补回去 → 轮次推理照常给出「轮到对方」
+    let lastResult = null;
+    for (let i = 0; i < 4; i++) {
+        lastResult = driver.tick();
+    }
+    const stats = driver.stats();
+    if (stats.unknownTurn !== 0) {
+        return "轮次推不出来 " + stats.unknownTurn + " 次（补齐记录被作废了）：" +
+            noteText.filter(function (text) { return text.indexOf("轮次推不出来") >= 0; }).slice(-1)[0];
+    }
+    if (!lastResult || lastResult.side !== "b") {
+        return "回归帧里轮次应当是 b（轮到对方），实际 " + (lastResult && lastResult.side);
+    }
+    if (driver.machine.state() !== "WAIT_TURN") {
+        return "应当稳定在 WAIT_TURN（等对方落子），实际 " + driver.machine.state() +
+            "：" + driver.machine.reason();
+    }
+    return true;
 });
 
 check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（退回同步，不卡死）", function () {

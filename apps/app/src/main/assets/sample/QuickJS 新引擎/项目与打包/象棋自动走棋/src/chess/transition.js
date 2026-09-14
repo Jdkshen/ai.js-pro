@@ -65,9 +65,7 @@ function infer(before, side, observed, options) {
     // → 严格匹配 0 解、容差两步 0 解 → 「轮次推不出来」→ 永久 RECOVERING（一整轮白烧）。
     const flips = legal.diffBoards(before, observed);
     if (flips.length > 0 && flips.every(function (item) {
-        return typeof item.before === "string" && typeof item.after === "string" &&
-            item.before.length === 1 && item.after.length === 1 &&
-            item.before !== item.after && item.before.toLowerCase() === item.after.toLowerCase();
+        return isCaseFlip(item.before, item.after);
     })) {
         return {
             status: STATUS.UNCHANGED,
@@ -86,7 +84,6 @@ function infer(before, side, observed, options) {
             reason: "有 " + single.candidates.length + " 个合法着法都能得到该局面"
         };
     }
-
     if (opts.allowPair === false) {
         return {
             status: STATUS.UNKNOWN, moves: [], side: side, nextSide: side, candidates: [],
@@ -184,6 +181,94 @@ function sameColour(a, b) {
 }
 
 /**
+ * 是不是「同一个字、只差红黑大小写」的差异（`c` vs `C`）。
+ *
+ * 真机实测（K40 + 天天象棋，2026-09-14）：模型**会把同一个子的红黑读反**，
+ * 而那一格子的子一步都没动 —— 颜色本来就能从基准盘面读出来，属于纯噪声，不该当成「局面变了」。
+ */
+function isCaseFlip(before, after) {
+    return typeof before === "string" && typeof after === "string" &&
+        before.length === 1 && after.length === 1 &&
+        before !== after && before.toLowerCase() === after.toLowerCase();
+}
+
+/**
+ * 带装饰容差的**单步**解释（严格推断与两步解释都失败后，驱动才用它）。
+ *
+ * 允许两种「模型读错」，其余格子必须与「基准 + 这一步」完全一致：
+ *   ① **落点格**被游戏的高亮装饰弄花（读错兵种 / 读成空）—— 落点是着法推出来的已知事实，按着法改正；
+ *   ② **没被这一步碰过的格子**只是红黑读反（同字母换大小写）—— 那格子没动，颜色由基准就知道。
+ *
+ * ⚠️ ② 是 2026-09-14 的新证据（K40 + 天天象棋离线局，b2c2 刚确认成功之后）：
+ * 对方应手是「车九进一」(0,0)→(0,1)，那一格带高亮环被读成炮 `c`（① 能接住），
+ * 同时另有 (7,2) 的炮被读成红炮 `C`（② 之前**没人接**）→ 差异格数 1 变成 3 →
+ * 任何合法着法都解释不了 → 「轮次推不出来」→ 看门狗 → RECOVERING，一整轮再也回不来。
+ * 日志实证：基准 `rnbakabnr/9/1c5c1/…/2C4C1/…`，观测 `1nbakabnr/c8/1c5C1/…/2C4C1/…`。
+ *
+ * 收紧点（宁可交给恢复流程，也不乱认）：
+ *  · 起点必须完全一致（子确实离开了原位）—— 所以「只是颜色读反」不会被当成走子；
+ *  · ② 只接受**同字母换大小写**，异字母/异色一律当真实变化（吃子不能被噪声吞掉）；
+ *  · 必须有**唯一**解释（≥2 个候选一律不认）。
+ *
+ * @returns { move, iccs, board, nextSide, colorNoise } | null
+ */
+function inferSingleWithDecorationTolerance(before, side, observed) {
+    if (!before || !observed) {
+        return null;
+    }
+    let moves = [];
+    try {
+        moves = legal.allLegalMoves(before, side);
+    } catch (error) {
+        return null;
+    }
+    const fits = [];
+    for (let i = 0; i < moves.length && fits.length < 2; i++) {
+        const move = moves[i];
+        const src = squareIndex(move.iccs, 0);
+        const dest = squareIndex(move.iccs, 1);
+        if (src < 0 || dest < 0) {
+            continue;
+        }
+        let after = null;
+        try {
+            after = legal.applyMove(before, move).board;
+        } catch (error) {
+            continue;
+        }
+        const diff = legal.diffBoards(after, observed);
+        const real = [];
+        let colorNoise = 0;
+        for (let k = 0; k < diff.length; k++) {
+            const item = diff[k];
+            const index = item.row * 9 + item.col;
+            if (index !== src && index !== dest && isCaseFlip(item.before, item.after)) {
+                colorNoise += 1;   // 同字异色噪声：那格子没动，按基准纠回
+                continue;
+            }
+            real.push(index);
+        }
+        if (real.length > 1) {
+            continue;
+        }
+        if (real.length === 1 && real[0] !== dest) {
+            continue;   // 差异不在落点上（别处那格被读错）→ 不采信
+        }
+        fits.push({ move: move, board: after, colorNoise: colorNoise });
+    }
+    if (fits.length !== 1) {
+        return null;
+    }
+    return {
+        move: fits[0].move,
+        iccs: fits[0].move.iccs,
+        board: fits[0].board.slice(),
+        nextSide: opposite(side),
+        colorNoise: fits[0].colorNoise
+    };
+}
+
+/**
  * 落点格「读错」到什么程度还能接受（容差两步专用）：
  *   · 同色不同兵种（红炮读成红兵）—— 游戏高亮装饰的典型误读；
  *   · **读成空** —— 漏检（带高亮环/特效的那一格模型直接看不到），模型已知失效模式。
@@ -268,6 +353,13 @@ function inferPairWithDecorationTolerance(before, side, observed) {
     return fits.length === 1 ? fits[0] : null;
 }
 
-const XQ_TRANSITION = { STATUS: STATUS, opposite: opposite, infer: infer };
+const XQ_TRANSITION = {
+    STATUS: STATUS,
+    opposite: opposite,
+    infer: infer,
+    isCaseFlip: isCaseFlip,
+    squareIndex: squareIndex,
+    inferSingleWithDecorationTolerance: inferSingleWithDecorationTolerance
+};
 
 module.exports = XQ_TRANSITION;
