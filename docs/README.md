@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+- [UI 适配记录（2026-09-12）](reports/2026-09-12_UI适配_大字体横屏侧边栏.md)：大字体/横屏/侧边栏按钮/字号矩阵的真机适配——抽屉 304dp 曾是死代码（修复后竖屏 904→836px、横屏 2144→836px）、顶栏与工具栏去固定高度、触摸目标补到 48dp；含未验证清单与并发会话造成的构建污染说明。已发布 **dev-539** 并实测手机可检测到。
+- [文件管理修复记录（2026-09-12）](reports/2026-09-12_文件管理修复.md)：接手检查六项缺陷的代码处理、新旧列表滚动恢复、自动测试和待做真机验收；已发布 dev-537 到局域网更新源，待手机安装验收。
 - **[接手指南（给 Codex / 下一个 agent）](reports/2026-09-12_接手指南_Codex.md)：从当前 commit 接手要看的第一份。进度、未验证项、下一步顺序、本仓库专用工具与坑。**
 - **[项目接手检查](reports/2026-09-12_项目接手检查.md)：同批的独立源码审计。列出文件列表的 P1/P2 具体缺陷（滚动位置丢失、新建菜单无响应、搜索只切目录、删除后刷新时机、Host 生命周期、无障碍名称缺失）与验证结果 —— 动手修之前先看这份。**
 - [项目现状与接手说明](PROJECT_STATUS.md)：当前主架构、功能边界、构建安装、K40 状态和后续整理顺序。接手项目应先读此文。
@@ -15,10 +17,14 @@
 
 - [源码项目说明](architecture/项目说明.md)：模块职责、运行流程、开发入口和维护风险。
 - [Rhino / QuickJS 双引擎架构](architecture/QUICKJS_ENGINE.md)：引擎选择、API 覆盖、Native Frame 和构建方式。
+- [Auto.js Pro API 兼容性与 V8 选型](architecture/Auto.jsPro_API兼容性与V8选型.md)：依据 335 页第一代 API PDF 的 36 模块清单、语义缺口、框架分层与实施验收顺序。
+- **[第一代 API 逐函数对照](architecture/第一代API逐函数对照.md)（含 [pro-api-compatibility.csv](architecture/pro-api-compatibility.csv)）：把 335 页 PDF 解析成 939 条逐函数清单，并与当前源码做静态对照（逐条带证据路径）；含模块汇总、缺口清单与复现方法。**
+- [V8 接入：框架瓶颈与迁移方案](architecture/V8接入_框架瓶颈与迁移方案.md)：整个 AI.js Pro 的宿主解耦、可选 provider、线程与回调、数据桥、打包和性能验收；当前为待实施设计。
 - [QuickJS ImGui 悬浮窗 API 边界](architecture/QUICKJS_IMGUI_FLOATY.md)：脚本调用的 ImGui 悬浮 UI，以及与 Miuix 应用界面的分工。
 
 ## 指南
 
+- [液态玻璃导航：实现、接入与优化](guides/液态玻璃导航_实现接入与优化.md)：顶部胶囊的进度联动、AGSL 折射、完整 Java 源码、接入与性能优化，含当前验证范围。
 - [编译指南](guides/编译指南.md)：环境要求、原生构建、Gradle 组装、输出位置和常见问题。
 - [双引擎 API 与 UI 性能验证](guides/ENGINE_API_AND_PERFORMANCE.md)：可重复的 JVM 测试、API 差异生成和真机帧耗时流程。
 - [CodeGraph 使用说明](guides/CODEGRAPH.md)：代码知识图谱索引与查询，供开发者与 AI 助手快速定位源码和调用链。
