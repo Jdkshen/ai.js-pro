@@ -19,6 +19,7 @@
     <string name="text_save">Save</string>
     <string name="text_run">Run</string>
     <string name="text_alert">Prompt</string>
+    <string name="hint_long_press_tab_beautify">Long press TAB to format code</string>
     <string name="edit_exit_without_save_warn">The content has not been saved, are you sure you want to exit?</string>
     <string name="text_save_and_exit">Save &amp; Exit</string>
     <string name="text_exit_directly">Exit</string>

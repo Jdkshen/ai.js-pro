@@ -63,6 +63,7 @@ import com.jdkshen.aijspro.model.indices.ClassSearchingItem;
 import com.jdkshen.aijspro.model.script.ScriptFile;
 import com.jdkshen.aijspro.model.script.Scripts;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
+import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.edit.ClassSearchDialogBuilder;
 import com.jdkshen.aijspro.ui.edit.debug.DebuggerSingleton;
 import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
@@ -450,10 +451,12 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         scroll.setHorizontalScrollBarEnabled(false);
         LinearLayout symbols = new LinearLayout(this);
         symbols.setOrientation(LinearLayout.VERTICAL);
-        symbols.addView(shortcutRowContent(new String[]{"(", ")", "/", "=", ",", ";", "\""}),
+        // 对齐 Auto.js Pro：$ 与反引号是模板字符串（`${path}`）的必需键，顺带补齐常用符号。
+        symbols.addView(shortcutRowContent(new String[]{"(", ")", "/", "=", ",", ";", "\"",
+                        "$", "`", "!", "?", "&", "%", "@", "#"}),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
-        symbols.addView(shortcutRowContent(new String[]{"'", "{", "}", "[", "]", "`", "<", ">",
-                        "-", "+", "|", ":", "_", "*"}),
+        symbols.addView(shortcutRowContent(new String[]{"'", "{", "}", "[", "]", "<", ">",
+                        "-", "+", "|", ":", "_", "*", "^", "~", ".", "\\"}),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
         scroll.addView(symbols, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -515,6 +518,13 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         view.setGravity(Gravity.CENTER);
         view.setMinWidth(dp(40));
         view.setOnClickListener(v -> onShortcut(label));
+        if ("TAB".equals(label)) {
+            // 对齐 Auto.js Pro：长按 TAB 格式化代码（首次弹说明，可"不再提示"）。
+            view.setOnLongClickListener(v -> {
+                onTabLongPress();
+                return true;
+            });
+        }
         view.setLayoutParams(new LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.MATCH_PARENT));
         return view;
     }
@@ -1822,6 +1832,21 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
                 (dialog, which) -> activeEditor().insert(snippets[which])).show();
     }
 
+    /**
+     * 长按 TAB：首次弹一次说明（可勾选“不再提示”），随后格式化代码。
+     * 与 Auto.js Pro 的 "Long press TAB to format code" 行为对齐。
+     */
+    private void onTabLongPress() {
+        CodeEditor editor = activeEditor();
+        if (editor == null) return;
+        new NotAskAgainDialog.Builder(this, "pro_editor.tab_long_press_beautify")
+                .title(R.string.text_alert)
+                .content(R.string.hint_long_press_tab_beautify)
+                .positiveText("确定")
+                .show();
+        editor.beautifyCode();
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -1831,22 +1856,9 @@ public final class ProCodeEditorActivity extends Activity implements DebugCallba
         applyThemePalette(resolvePalette());
     }
 
-    /**
-     * Theme palette aligned with the rest of the app (Miuix/MainActivity surfaces).
-     * Those surfaces derive darkness from {@link Pref#isNightModeEnabled()}, while
-     * {@link AppThemeRepository} follows the system uiMode, which can be stale on some
-     * devices (e.g. MIUI leaves the app configuration in light mode). Trust the app's own
-     * night-mode switch first so the editor matches the main UI in both light and dark.
-     */
+    /** Editor, console and terminal share the drawer's persisted theme choice. */
     private AppThemePalette resolvePalette() {
-        AppThemeRepository repository = AppThemeRepository.get(this);
-        AppThemePalette base = repository.getPalette();
-        boolean appDark = Pref.isNightModeEnabled();
-        if (base.isDark != appDark) {
-            return appDark ? AppThemePalette.dark(repository.getAccentColor())
-                    : AppThemePalette.light(repository.getAccentColor());
-        }
-        return base;
+        return AppThemeRepository.get(this).getPalette();
     }
 
     @Override

@@ -366,6 +366,7 @@
     <string name="text_variable_or_expr">变量或表达式</string>
     <string name="text_remove_all_breakpoints">删除所有断点</string>
     <string name="hint_long_click_run_to_debug">长按\"运行\"图标也可以启动调试</string>
+    <string name="hint_long_press_tab_beautify">长按 TAB 可格式化代码</string>
     <string name="format_debug_bar_title">调试 [%s]</string>
     <string name="text_copy_value">复制值</string>
     <string name="text_execute_code">执行代码</string>
