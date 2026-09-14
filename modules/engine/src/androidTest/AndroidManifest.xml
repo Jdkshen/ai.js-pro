@@ -1,0 +1,4 @@
+<manifest xmlns:tools="http://schemas.android.com/tools">
+    <!-- The proc-name tests do not call Shizuku; permit its dependency in the test APK. -->
+    <uses-sdk tools:overrideLibrary="rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl" />
+</manifest>

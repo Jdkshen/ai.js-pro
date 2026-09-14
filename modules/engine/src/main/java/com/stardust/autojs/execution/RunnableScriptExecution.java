@@ -27,7 +27,9 @@ public class RunnableScriptExecution extends ScriptExecution.AbstractScriptExecu
 
     @Override
     public void run() {
-        ThreadCompat.currentThread().setName("ScriptThread-" + getId() + "[" + getSource() + "]");
+        // Source paths may contain multi-byte characters. Native thread-name truncation
+        // can split those bytes and abort JNI proc-file readers on some Android builds.
+        ThreadCompat.currentThread().setName(ScriptThreadNames.execution(getId()));
         try {
             execute();
         } catch (Throwable error) {

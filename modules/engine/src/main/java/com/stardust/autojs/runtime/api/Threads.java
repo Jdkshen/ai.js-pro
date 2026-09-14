@@ -4,6 +4,7 @@ import androidx.annotation.NonNull;
 
 import com.stardust.autojs.core.looper.MainThreadProxy;
 import com.stardust.autojs.core.looper.TimerThread;
+import com.stardust.autojs.execution.ScriptThreadNames;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.concurrent.VolatileDispose;
 
@@ -23,7 +24,6 @@ public class Threads {
     private ScriptRuntime mRuntime;
     private final Thread mMainThread;
     private MainThreadProxy mMainThreadProxy;
-    private int mSpawnCount = 0;
     private boolean mExit = false;
 
     public Threads(ScriptRuntime runtime) {
@@ -50,8 +50,6 @@ public class Threads {
                 throw new IllegalStateException("script exiting");
             }
             mThreads.add(thread);
-            thread.setName(mMainThread.getName() + " (Spawn-" + mSpawnCount + ")");
-            mSpawnCount++;
             thread.start();
         }
         return thread;
@@ -59,7 +57,7 @@ public class Threads {
 
     @NonNull
     private TimerThread createThread(Runnable runnable) {
-        return new TimerThread(mRuntime, mRuntime.timers.getMaxCallbackUptimeMillisForAllThreads(),
+        TimerThread thread = new TimerThread(mRuntime, mRuntime.timers.getMaxCallbackUptimeMillisForAllThreads(),
                 runnable
         ) {
             @Override
@@ -70,6 +68,9 @@ public class Threads {
                 super.onExit();
             }
         };
+        // Covers both threads.start and pool workers without copying a script-defined name.
+        thread.setName(ScriptThreadNames.worker(thread.getId()));
+        return thread;
     }
 
     /** 供 {@link ScriptThreadPool} 的线程工厂使用：让池中任务也跑在脚本线程上。 */
