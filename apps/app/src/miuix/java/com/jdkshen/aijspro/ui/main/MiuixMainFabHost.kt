@@ -15,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.ComposeView
@@ -105,15 +106,20 @@ object MiuixMainFabHost {
     @androidx.compose.runtime.Composable
     private fun Action(host: MainActivity, label: String, icon: Int, position: Int,
                        close: () -> Unit) {
+        // 标签和圆钮触发同一个动作：菜单的直觉是点标签也该生效
+        //（真机反馈：只点标签没有任何反应 = 「功能没实现」）。
+        val trigger = {
+            host.performMainCreateActionFromMiuix(position)
+            close()
+        }
         Row(verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(label, fontSize = 14.sp, color = Color.White,
                 modifier = Modifier.background(Color(0xB8000000), androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                    .clickable(onClick = trigger)
                     .padding(horizontal = 9.dp, vertical = 5.dp))
-            FloatingActionButton(onClick = {
-                host.performMainCreateActionFromMiuix(position)
-                close()
-            }, shape = CircleShape, minWidth = 48.dp, minHeight = 48.dp,
+            FloatingActionButton(onClick = trigger, shape = CircleShape, minWidth = 48.dp, minHeight = 48.dp,
                 containerColor = MiuixTheme.colorScheme.primary,
                 shadowElevation = 8f,
                 defaultWindowInsetsPadding = false) {
