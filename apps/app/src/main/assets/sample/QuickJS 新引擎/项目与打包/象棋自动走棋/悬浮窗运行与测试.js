@@ -169,6 +169,9 @@ let autoAlignOn = false;      // 几何按检测框自动微调（真机实测�
 // 点击通道：auto（有 Shizuku 就走 shizuku 的 `input swipe` 原地按住）/ shizuku / accessibility。
 // K40 + 天天象棋实测：超短按（`input tap`）会被游戏直接丢弃，按住 ≥300ms 才选中棋子。
 let clickMethodKey = "auto";
+/** 藏窗后到出手的等待（ms）。autorun `clickHideSettleMs` 可调；真机 A/B 用它区分
+ *  「游戏还没接纳窗口变化」与「坐标/通道问题」。 */
+let clickHideSettleMs = 120;
 /** 点击租约的恢复函数（buildDriver 里赋值；停止/退出时兜底调用，别把面板留在隐藏状态） */
 let releaseTapLease = null;
 /** 点击租约是否正持有（抓帧时不能把面板"恢复"出来） */
@@ -902,10 +905,14 @@ function runTapProbe(config) {
             saveProbeReport(report);
             return report;
         }
-        const fromPoint = geometryModule.pointAt(grid, cfg.fromCol, cfg.fromRow);
-        const toPoint = geometryModule.pointAt(grid, cfg.toCol, cfg.toRow);
-        const from = { x: Math.round(fromPoint.x), y: Math.round(fromPoint.y), usedCenter: false, source: "网格交点" };
-        const to = { x: Math.round(toPoint.x), y: Math.round(toPoint.y), usedCenter: false, source: "网格交点" };
+        // 坐标来源可选："lattice"（网格交点 = 棋子圆心）/ "center"（检测框实测圆心）。
+        // 实验目的：区分「游戏命中判定偏严（必须打实测圆心）」与「坐标无关」。
+        const needCenters = cfg.fromSource === "center" || cfg.toSource === "center";
+        const recognized = needCenters ? probeRecognize(grid) : null;
+        const centers = recognized && recognized.centers ? recognized.centers : null;
+        report.centersAvailable = !!centers;
+        const from = probePoint(grid, cfg.fromCol, cfg.fromRow, cfg.fromSource, centers);
+        const to = probePoint(grid, cfg.toCol, cfg.toRow, cfg.toSource, centers);
         report.geometryVersion = grid.version;
         report.geometry = { originX: grid.originX, originY: grid.originY, stepX: grid.stepX, stepY: grid.stepY };
         report.from = Object.assign({ col: cfg.fromCol, row: cfg.fromRow }, from);
@@ -1023,6 +1030,59 @@ function ensureProbeGrid() {
         logLine("探针定位异常：" + error);
     }
     return grid || null;
+}
+
+/**
+ * 探针用的识别：拿每格的**实测框圆心**（center 模式要用）。
+ * ⚠️ 不画覆盖层（recognizeOnce 会画）—— 手势期间屏幕上不能有我们自己的东西。
+ */
+function probeRecognize(grid) {
+    const grabbed = grabFrameRaw();
+    if (!grabbed) {
+        return null;
+    }
+    try {
+        return recognizeBoard.run(grabbed.image, {
+            ok: true, method: "floaty-probe", grid: grid,
+            imageObject: grabbed.image, frameObject: grabbed.image
+        }, { orientation: "RED_BOTTOM", confidence: 0.25, autoAlign: false }, null);
+    } catch (error) {
+        logLine("探针识别失败：" + error);
+        return null;
+    }
+}
+
+/**
+ * 计算探针要发的坐标。
+ *   · "lattice"（默认）：`geometry.pointAt` = 网格交点 = **棋子圆心**（象棋棋子就摆在交点上）；
+ *   · "center"：该格最近一次识别的**检测框实测圆心**（需通过残差/归属校验，否则退回交点）。
+ */
+function probePoint(grid, col, row, mode, centers) {
+    const lattice = geometryModule.pointAt(grid, col, row);
+    const point = {
+        x: Math.round(lattice.x), y: Math.round(lattice.y),
+        usedCenter: false, source: "网格交点",
+        latticeX: Math.round(lattice.x), latticeY: Math.round(lattice.y)
+    };
+    if (mode !== "center" || !centers) {
+        return point;
+    }
+    const entry = centers[row * geometryModule.COLS + col];
+    if (!entry || !isFinite(entry.x) || !isFinite(entry.y)) {
+        point.source = "网格交点（该格没有实测框）";
+        return point;
+    }
+    const snapped = geometryModule.nearest(grid, entry.x, entry.y);
+    if (!snapped || !snapped.inside || snapped.col !== col || snapped.row !== row) {
+        point.source = "网格交点（实测框不属于该格）";
+        return point;
+    }
+    point.x = Math.round(entry.x);
+    point.y = Math.round(entry.y);
+    point.usedCenter = true;
+    point.source = "实测框圆心";
+    point.normalizedResidual = geometryModule.normalizedResidual(grid, entry.x, entry.y);
+    return point;
 }
 
 function saveProbeReport(report) {
@@ -1373,7 +1433,9 @@ function buildDriver() {
                 if (win.setVisibility(false) !== false) {
                     clickLeaseHidden = true;
                     clickLeaseActive = true;
-                    sleep(120);   // 等 WindowManager 真正移除窗口（与 grabFrame 同值）
+                    // 藏窗到出手的等待：真机 A/B 显示"藏完立刻点"可能还没被游戏接纳
+                    // （探针是藏窗 → 定位 → 抓帧，好几秒后才出手，一点就中）。
+                    sleep(clickHideSettleMs);
                 }
             } catch (error) {
                 clickLeaseHidden = false;
@@ -2072,6 +2134,14 @@ function main() {
             clickMethodKey = legal ? key : key;
             logLine("点击通道偏好：" + clickMethodKey + (legal ? "" :
                 "（⚠️ 非法值：只支持 auto / shizuku / accessibility，启动时会直接报错）"));
+        }
+        if (auto.clickHideSettleMs != null) {
+            // 藏窗后到出手的等待（ms）：见 clickHideSettleMs 的说明
+            const ms = Math.round(Number(auto.clickHideSettleMs));
+            if (isFinite(ms) && ms >= 0) {
+                clickHideSettleMs = Math.min(3000, ms);
+                logLine("点击前藏窗等待：" + clickHideSettleMs + "ms");
+            }
         }
         if (auto.clickPressMs != null) {
             // 按压时长（ms）：有些游戏会忽略过短的注入点击（K40 + 天天象棋需 ≥300ms）
