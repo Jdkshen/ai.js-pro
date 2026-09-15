@@ -24,6 +24,7 @@
 | `tools/pro-api/click-center-contract.js` | 2.1 `UiObject.clickCenter` / `auto.clearCache` / `Rect.intersect`（§5.10） |
 | `tools/pro-api/images-contract.js` | 2.18 `getSimilarity` / `detectsMultiColors` / `getScreenCaptureOptions` / `stopScreenCapture`（§5.11） |
 | `tools/pro-api/automator-extra-contract.js` | 2.1 `takeScreenshot` / `switchToInputMethod` / `headsetHook` + 2.12 `getPath` + 2.29 `isAlive`（§5.12） |
+| `tools/pro-api/engines-controller-contract.js` | 2.12 `engines.startFloatingController`（§5.13） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -59,7 +60,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 403 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 404 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -93,7 +94,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.9 debug - 调试工具 | 5 | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 | 0 |
 | 2.10 device - 设备 | 46 | 28 | 45 | 0 | 0 | 0 | 1 | 18 | 0 | 0 | 0 | 28 |
 | 2.11 dialogs - 对话框 | 26 | 13 | 10 | 5 | 10 | 1 | 0 | 8 | 0 | 0 | 1 | 5 |
-| 2.12 engines - 脚本引擎 | 21 | 15 | 7 | 5 | 5 | 3 | 1 | 6 | 0 | 6 | 4 | 2 |
+| 2.12 engines - 脚本引擎 | 21 | 15 | 8 | 5 | 5 | 3 | 0 | 6 | 0 | 6 | 4 | 2 |
 | 2.13 events - 事件与监听 | 18 | 14 | 2 | 14 | 1 | 1 | 0 | 1 | 0 | 14 | 1 | 1 |
 | 2.14 floaty - 悬浮窗 | 25 | 23 | 5 | 18 | 0 | 2 | 0 | 3 | 9 | 7 | 2 | 2 |
 | 2.15 files - 文件系统 | 40 | 37 | 27 | 9 | 2 | 2 | 0 | 18 | 0 | 0 | 3 | 18 |
@@ -117,9 +118,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **427** | **201** | **212** | **91** | **6** | **247** | **33** | **250** | **95** | **137** |
+| **合计** | **938** | **624** | **428** | **201** | **212** | **91** | **5** | **247** | **33** | **250** | **95** | **137** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **840/938（90%）**，QuickJS **530/938（56%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **841/938（90%）**，QuickJS **530/938（56%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -323,6 +324,33 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 - `headsetHook` 的三条通道按“由强到弱”排：Shizuku/root 注入 `input keyevent 79` 是真正的系统级按键，`AudioManager.dispatchMediaKeyEvent` 只是应用级媒体键（无 root 设备的可用路径）；本机（小米 8，无 root、Shizuku 服务未运行）返回 `true`。
 - `getPath()` 是文档里典型的“裸成员名”（不带类型前缀），扫描器过去按全局名去扫 → 永远 `未定位`；`rebuild.py` 新增 `LOOSE_MEMBER_HINTS` 显式指到实现（`getPath` / `isAlive` 两条），这类条目以后可以直接登记映射。
 
+### 5.13 已按清单补齐：2.12 `engines.startFloatingController`（本轮，行为级验收）
+
+`tools/pro-api/engines-controller-contract.js`：真机 **21/21** 通过。
+
+| 项 | 位置 |
+| --- | --- |
+| 控制器实现 | 新建 `runtime/api/FloatingController.java`（悬浮窗口 + 启动/停止、日志、关闭三个按钮 + 引擎状态回写） |
+| 布局 | 新建 `modules/engine/src/main/res/layout/floaty_controller.xml`（另有两处旧布局 `floating_console_expand/floating_window_collapse` 是仓库自带悬浮日志窗，没动） |
+| 入口 | `Engines.startFloatingController(path, config, runImmediately)` + `__engines__.js` 的 `options.runImmediately` 解析 |
+
+行为验收（用“目标脚本有没有真的跑起来”自证，而不是只看返回值）：
+
+- 默认 `runImmediately=false`：返回控制器对象、`isRunning()==false`、目标脚本没被启动（标记文件不存在）
+- `start()`：启动后 500ms `isRunning()==true` 且标记文件还没写；2500ms 后标记文件出现（说明真的跑完了）、`isRunning()` 回到 `false`
+- `toggleLog()`：日志开关往返（真机 `console.show()/hide()`，`isLogVisible()` 跟着变）
+- `runImmediately=true`：传参当场把脚本跑起来
+- `stop()`：跑一半停掉后，标记文件不会被写出来；重复 `stop()` 返回 `false`
+- `path` 不是字符串 → 直接报错（不静默）
+
+要点：
+
+- 按钮和 `start()/stop()` 走**同一份代码**（监听器与按钮回调都调同一个方法），所以契约里测方法等价于测按钮；窗口本身用 `dumpsys window` 确认存在（`appop=SYSTEM_ALERT_WINDOW` 的 overlay 窗口）。
+- 引擎状态不用自己猜：给 `execScriptFile` 挂 `ScriptExecutionListener`（`onStart` / `onSuccess` / `onException`）回写，`isRunning()` 与按钮文字都从这里来。
+- ⚠️ **文档没写返回值**；我们返回控制器对象（超集：多了 `start/stop/isRunning/toggleLog/isLogVisible/getPath/close`）—— 记入 §9。
+- `close()` 只关窗口、**不停脚本**（要停先 `stop()`）：控制器被关掉时把用户正在跑的脚本一并杀掉更危险。
+- 悬浮窗权限不足时 `startFloatingController` 会走仓库原有的 `Floaty` 权限流程（`FloatingPermission.waitForPermissionGranted`），与 `floaty.window` 一致。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -343,11 +371,11 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ### 6.2 真缺 —— 两个引擎都没有（约 18 条）
 
-⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping`、2.1 `clickCenter`/`clearCache`/`Rect.intersect`、2.18 四条、2.1 `takeScreenshot`/`switchToInputMethod`/`headsetHook`、2.12 `getPath`、2.29 `isAlive` 已分别在 §5.4~§5.12 补齐 / 归位并真机验收，不再属于这一节。
-剩余大头（2.18 特征匹配一组还在）：
-`$images.detectAndComputeFeatures/matchFeatures`、`ImageFeatures`/`ObjectFrame`/`MatchingResult` 成员、
-`RootAutomator2` 与 `RootAutomator2.longPress`、
-`OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、`engines.startFloatingController`。
+⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping`、2.1 `clickCenter`/`clearCache`/`Rect.intersect`、2.18 四条、2.1 `takeScreenshot`/`switchToInputMethod`/`headsetHook`、2.12 `getPath`、2.29 `isAlive`、2.12 `startFloatingController` 已分别在 §5.4~§5.13 补齐 / 归位并真机验收，不再属于这一节。
+剩余只 5 条（两个功能组）：
+`$images.detectAndComputeFeatures` + `matchFeatures`/`ImageFeatures`/`ObjectFrame.*` 一组、
+`OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
+`RootAutomator2` 与 `RootAutomator2.longPress`。
 
 ### 6.3 类型名 —— 不是缺口
 
@@ -355,16 +383,15 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **6 条**（未定位 5 + 实机缺 1）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **5 条**（全未定位，实机缺已清零）：
 
-| 模块 | 未定位 | 实机缺 | 例子 |
+| 模块 | 未定位 | 实机缺 | 条目 |
 | --- | --- | --- | --- |
-| 2.18 images | 1 | 0 | `$images.detectAndComputeFeatures` |
 | 2.22 ocr | 2 | 0 | `OCR.detect`、`OCRResult.clickCenter` |
-| 2.2 坐标操作 | `RootAutomator2` 2 条 | 0 | `RootAutomator2`、`RootAutomator2.longPress` |
-| 2.12 engines | 0 | 1 | `engines.startFloatingController` |
+| 2.2 坐标操作 | 2 | 0 | `RootAutomator2`、`RootAutomator2.longPress` |
+| 2.18 images | 1 | 0 | `$images.detectAndComputeFeatures` |
 
-建议顺序：`engines.startFloatingController`（仓里已有悬浮窗基建）→ `RootAutomator2`（需要 root 才能行为验收）→ `OCR.detect`（要选并接 OCR 引擎）→ `$images` 特征匹配（最大，见下）。
+建议顺序：`RootAutomator2`（可以照搬仓库已有的 `RootAutomator` 通道）→ `OCR.detect`（要选并接 OCR 引擎）→ `$images` 特征匹配（最大，见下）。
 
 ⚠️ 2.18 的 **特征匹配一组**（`$images.detectAndComputeFeatures` / `matchFeatures` / `ImageFeatures` / `ObjectFrame.*`，共 ~11 行，其中多数是类型成员所以不在上表）没实现，而**仓库自带的样例已经在用它**（`sample/Rhino 引擎/图片与图色处理/…`）—— 已列入 §10 下一步。
 
@@ -395,7 +422,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 9. 这份清单不能证明什么
 
 - **不是行为验收**：名字在 ≠ 行为一致。默认值、异常、回调线程、权限取消、资源释放仍要按 [AutoJsPro API 兼容性与 V8 选型](Auto.jsPro_API兼容性与V8选型.md) §7 的场景逐项验证。
-- **已补齐的模块只验了本轮脚本覆盖到的东西**：`$crypto`/`$zip`/`$debug`/`$power_manager`/`floaty` 权限/`$settings`/`dialog`+`ColorMapping`/`clickCenter`/`images`/`automator 三条`+`getPath`+`isAlive` 都有对应的 `tools/pro-api/*-contract.js`（共 **181 项**断言），但**默认值/行为差异仍存在**，已知的几处：
+- **已补齐的模块只验了本轮脚本覆盖到的东西**：`$crypto`/`$zip`/`$debug`/`$power_manager`/`floaty` 权限/`$settings`/`dialog`+`ColorMapping`/`clickCenter`/`images`/`automator 三条`+`getPath`+`isAlive`/`startFloatingController` 都有对应的 `tools/pro-api/*-contract.js`（共 **202 项**断言），但**默认值/行为差异仍存在**，已知的几处：
   - `$settings.isEnabled('stop_all_on_volume_up')`：主应用沿用仓库原有键 `key_use_volume_control_running`，其默认值是**关**，而 Pro 文档写的是默认**开**（打包版默认开，与文档一致）。
   - `$settings.isEnabled('not_show_console')`：主应用没有「脚本启动即弹日志界面」的行为，这个开关只负责存取值。
   - `dialog.setDefaultDialogType` 的**默认值**：文档写 `overlay`，我们保留仓库原有的 `app-or-overlay`（否则现有脚本的对话框会从应用内变成悬浮层）；四种类型本身都支持，也可以随时显式设置。
@@ -404,6 +431,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
   - `automator.headsetHook()`：优先 Shizuku/root 注入 `input keyevent 79`，都不可用时降级为 `AudioManager.dispatchMediaKeyEvent`（应用级媒体键）—— 后者在没有前台媒体会话/来电时看不到可观察副作用，本机只能断言“返回 true”。
   - `automator.switchToInputMethod()`：只传包名时，同一包名下若启用了多个输入法 service，取列表里的第一个（文档也只给包名）。
   - `getPath()`：文档里 `path` 可传 string 或 Array；我们两种都接，但数组只有第一项会当作 `workingDirectory`（require 的基准目录）。
+  - `engines.startFloatingController()`：文档**没写返回值**，我们返回控制器对象（多出 `start/stop/isRunning/toggleLog/isLogVisible/getPath/close`）；另外 `close()` 只关窗口不停脚本。
 - **单机单版本**：本轮只覆盖小米 8 + 当时构建，换设备/版本要重跑（脚本已固化）。
 - **仍有盲区**：动态挂载（`Proxy`、`Object.defineProperty`、反射注册）与"要满足条件才存在"的成员（实例方法、惰性加载）都测不到；`未定位` 只代表四层证据都没找到。
 - **没有 Pro 对照设备**：`version` 列只说明该条目属于哪个版本，不代表我们对齐到了同一版本。
@@ -411,8 +439,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-1. **补真缺口**（按性价比）：`engines.startFloatingController`（先做，仓里已有悬浮窗基建）→ `RootAutomator2`（需 root 行为验收）→ `OCR.detect`（要接 OCR 引擎）→ `$images.detectAndComputeFeatures/matchFeatures`（最大，需要 ORB + 匹配器，且仓库自带样例已在调用）；
-   （已完成：`$crypto` §5.4、`$zip` §5.5、`$debug` §5.6、`$power_manager`+`floaty` 权限 §5.7、`$settings` §5.8、`dialog.*`+`ColorMapping` §5.9、`clickCenter`/`clearCache`/`Rect.intersect` §5.10、images 四条 §5.11、automator 三条 + `getPath` + `isAlive` §5.12）；
+1. **补真缺口**（按性价比）：`RootAutomator2`（先做，可照搬仓库已有的 `RootAutomator` 输入事件通道）→ `OCR.detect` / `OCRResult.clickCenter`（要选并接 OCR 引擎）→ `$images.detectAndComputeFeatures/matchFeatures`（最大，需要 ORB + 匹配器，且仓库自带样例已在调用）；
+   （已完成：`$crypto` §5.4、`$zip` §5.5、`$debug` §5.6、`$power_manager`+`floaty` 权限 §5.7、`$settings` §5.8、`dialog.*`+`ColorMapping` §5.9、`clickCenter`/`clearCache`/`Rect.intersect` §5.10、images 四条 §5.11、automator 三条 + `getPath` + `isAlive` §5.12、`startFloatingController` §5.13）；
 2. **把本轮实现同步给 QuickJS**：`$crypto`/`$zip`/`clickCenter`/images 四条/automator 三条 现在只有 Rhino 侧能用（QuickJS 只实现了各自的一部分）。
    QuickJS 走字符串桥，需要新的宿主方法；改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。
 4. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。

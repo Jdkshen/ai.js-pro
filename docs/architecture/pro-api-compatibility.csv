@@ -340,7 +340,7 @@
 "2.12","engines - 脚本引擎","engines.stopAllAndToast","function","107","","","实机有","实机有","probe: engines.stopAllAndToast 存在(function)","probe: engines.stopAllAndToast 存在(function)","engines.stopAllAndToast()",""
 "2.12","engines - 脚本引擎","engines.myEngine","function","107","","","实机有","实机有","probe: engines.myEngine 存在(function)","probe: engines.myEngine 存在(function)","engines.myEngine()",""
 "2.12","engines - 脚本引擎","engines.all","function","108","","","实机有","实机有","probe: engines.all 存在(function)","probe: engines.all 存在(function)","engines.all()",""
-"2.12","engines - 脚本引擎","engines.startFloatingController","function","108","Pro 9.1.10 新增","","实机缺","实机缺","probe: 设备上取不到 engines.startFloatingController","probe: 设备上取不到 engines.startFloatingController","engines.startFloatingController(path[, config, options])",""
+"2.12","engines - 脚本引擎","engines.startFloatingController","function","108","Pro 9.1.10 新增","","实机有","实机缺","probe: engines.startFloatingController 存在(function)","probe: 设备上取不到 engines.startFloatingController","engines.startFloatingController(path[, config, options])",""
 "2.12","engines - 脚本引擎","ScriptExecution","class","108","","","未定位","未定位","","","ScriptExecution",""
 "2.12","engines - 脚本引擎","ScriptExecution.getEngine","function","108","","","已定义","待探针(类成员)","modules/engine/src/main/java/com/stardust/autojs/execution/ScriptExecution.java:41","","ScriptExecution.getEngine()",""
 "2.12","engines - 脚本引擎","ScriptExecution.getConfig","function","108","","","已定义","待探针(类成员)","modules/engine/src/main/java/com/stardust/autojs/execution/ScriptExecution.java:54","","ScriptExecution.getConfig()",""

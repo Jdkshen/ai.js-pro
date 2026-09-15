@@ -52,6 +52,19 @@ public class Engines {
         return mScriptRuntime.bridges.toArray(mEngineService.getEngines());
     }
 
+    /**
+     * PDF §2.12（Pro 9.1.10 新增）：启动一个悬浮控制器（带启动/暂停/日志等按钮），
+     * 用于控制给定路径的脚本引擎的启停。`options.runImmediately` 决定是否立即启动。
+     */
+    public FloatingController startFloatingController(String path, ExecutionConfig config,
+                                                       boolean runImmediately) {
+        if (path == null || path.isEmpty()) {
+            throw new IllegalArgumentException("path 不能为空");
+        }
+        return FloatingController.start(mScriptRuntime, path,
+                config == null ? new ExecutionConfig() : config, runImmediately);
+    }
+
     public int stopAll() {
         return mEngineService.stopAll();
     }

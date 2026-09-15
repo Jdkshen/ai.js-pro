@@ -21,6 +21,16 @@ module.exports = function(__runtime__, scope){
         return rtEngines.myEngine();
     }
 
+    // PDF §2.12（Pro 9.1.10 新增）：悬浮控制器（启动/暂停/日志按钮），
+    // options.runImmediately 控制是否立即启动脚本引擎。
+    engines.startFloatingController = function(path, config, options){
+        if(typeof(path) !== 'string'){
+            throw new TypeError('path 必须是字符串');
+        }
+        options = options || {};
+        return rtEngines.startFloatingController(path, fillConfig(config), !!options.runImmediately);
+    }
+
     engines.all = function(){
         return rtEngines.all();
     }
