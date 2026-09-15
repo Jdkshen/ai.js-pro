@@ -28,6 +28,11 @@ public class ImageWrapper {
     private int mHeight;
     private Bitmap mBitmap;
 
+    {
+        // PDF §2.9：$debug.setMemoryLeakDetectionEnabled(true) 后，没有手动 recycle 的图片会被报出来
+        com.stardust.autojs.runtime.api.MemoryLeakDetector.watch(this, "Image");
+    }
+
     protected ImageWrapper(Mat mat) {
         mMat = mat;
         mWidth = mat.cols();
@@ -149,7 +154,7 @@ public class ImageWrapper {
             OpenCVHelper.release(mMat);
             mMat = null;
         }
-
+        com.stardust.autojs.runtime.api.MemoryLeakDetector.markRecycled(this);
     }
 
     public boolean isRecycled() {

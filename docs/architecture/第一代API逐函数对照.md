@@ -1,6 +1,6 @@
 # 第一代 Pro API 逐函数对照（Auto.js Pro 官方 API 文档 PDF）
 
-对照日期：2026-09-15（§4 / §5.4 / §5.5 / §6 / §7 为 `$crypto`、`$zip` 补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
+对照日期：2026-09-15（§4 / §5.4~§5.6 / §6 / §7 为 `$crypto`、`$zip`、`$debug` 补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
 真机：**小米 8（`ce4d2bdb`，Android 15）**，两个引擎各跑「普通脚本」与 `"ui";` 脚本。
 
 交付四层证据：**排版解析 → 静态源码对照 → 真机成员枚举 → 真机逐条路径取值**。
@@ -17,6 +17,7 @@
 | `tools/pro-api/run-device-probes.ps1` | 一键跑完 7 个真机探针（4 变体成员枚举 + 3 变体路径取值）并重算对照 |
 | `tools/pro-api/crypto-contract.js` | 2.8 `$crypto` 行为验收脚本（含文档黄金向量，§5.4） |
 | `tools/pro-api/zip-contract.js` | 2.35 `$zip` 行为验收脚本（28 项，§5.5） |
+| `tools/pro-api/debug-contract.js` | 2.9 `$debug` 行为验收脚本（18 项，§5.6） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -52,7 +53,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 378 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 383 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -83,7 +84,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.6 canvas - 画布 | 30 | 29 | 0 | 29 | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 29 |
 | 2.7 console - 控制台 | 18 | 18 | 18 | 0 | 0 | 0 | 0 | 11 | 0 | 0 | 0 | 7 |
 | 2.8 crypto - 加解密与消息摘要 | 12 | 6 | 8 | 3 | 0 | 1 | 0 | 0 | 1 | 3 | 8 | 0 |
-| 2.9 debug - 调试工具 | 5 | 5 | 0 | 1 | 0 | 4 | 0 | 0 | 0 | 0 | 5 | 0 |
+| 2.9 debug - 调试工具 | 5 | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 | 0 |
 | 2.10 device - 设备 | 46 | 28 | 45 | 0 | 0 | 0 | 1 | 18 | 0 | 0 | 0 | 28 |
 | 2.11 dialogs - 对话框 | 26 | 13 | 10 | 0 | 12 | 4 | 0 | 8 | 0 | 4 | 1 | 1 |
 | 2.12 engines - 脚本引擎 | 21 | 15 | 7 | 4 | 5 | 4 | 1 | 6 | 0 | 6 | 4 | 2 |
@@ -110,9 +111,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **402** | **193** | **215** | **114** | **13** | **247** | **33** | **254** | **95** | **133** |
+| **合计** | **938** | **624** | **407** | **192** | **215** | **110** | **13** | **247** | **33** | **254** | **95** | **133** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **810/938（86%）**，QuickJS **534/938（57%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **814/938（87%）**，QuickJS **534/938（57%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -182,6 +183,26 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 验收后重跑四层证据： 2.35 的 `实机有` 由 0 → 17（路径取值 17 条全命中）。
 
+### 5.6 已按清单补齐：2.9 `$debug`（本轮，行为级验收）
+
+清单里 2.9 的 **5 条全部实现并在真机验收**（`tools/pro-api/debug-contract.js`，18 项断言全过）。
+
+| 项 | 位置 |
+| --- | --- |
+| `$debug` 模块 | 新建 `runtime/api/Debug.java`（`dumpHprof`/`dumpAndSendHprof`/`getStackTrace`/`setMemoryLeakDetectionEnabled`/`gc`） |
+| 内存泄露检测 | 新建 `runtime/api/MemoryLeakDetector.java`（弱引用 + `ReferenceQueue`：对象被 GC 时还没 `recycle()` 就报一条日志） |
+| 登记钩子 | `core/image/ImageWrapper.java`：实例初始化块 `watch(this, "Image")`，`recycle()` 里 `markRecycled(this)`（未开启检测时是空操作） |
+| 脚本全局名 | `init.js`：`global.$debug = runtime.debug` |
+
+关键事实与设计决定：
+
+- `dumpHprof` 直接用 `android.os.Debug.dumpHprofData(path)`；`dumpAndSendHprof` 是先 dump 到 `<目标>.tmp.hprof`，再用 `Deflater.BEST_COMPRESSION`（文档：「使用压缩程度最高的压缩等级」）压成 zip，最后删临时文件。
+- **默认值与文档一致**：文档说「在 Auto.js Pro 运行时默认开启，在打包软件中默认关闭」；打包产物是 inrt 模板应用（包名/类名里带 `inrt`），据此判断（`Debug.isPackagedApp`）。
+- `getStackTrace` 同时支持 **JS 异常**（取 `name/message/stack`）与 **Java 异常**（`printStackTrace` 到 StringWriter），真机两类都断言到了。
+- 文档没写、我们额外加的验收辅助接口：`$debug.isMemoryLeakDetectionEnabled()` / `$debug.getMemoryLeakCount()`（否则脚本无法自证泄露检测是否生效）。
+- 真机实测：20 张故意不 `recycle()` 的图片全部报出 `[MemoryLeak] Image 对象没有调用 recycle() …`，20 张正常 `recycle()` 的**一张都没报**。
+- ⚠️ 验证注意：ART 的 `System.gc()` 只是「建议」，小对象往往要等内存压力才真被回收（验收脚本里先分配一块大数组逼一次 GC 再轮询，不然计数一直是 0）。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -200,11 +221,10 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | `$work_manager.addIntentTask` | **命名差异**：实现叫 `addBroadcastIntentTask`（`WorkManagerModule.kt:65`，实机确认） |
 | `app.getInstalledApps` | **命名差异**：实现叫 `getInstalledPackageList`（历史改名，避免与 Java 方法冲突） |
 
-### 6.2 真缺 —— 两个引擎都没有（约 28 条）
+### 6.2 真缺 —— 两个引擎都没有（约 24 条）
 
-⚠️ 2.8 `$crypto` 与 2.35 `$zip` 已分别在 §5.4 / §5.5 补齐并真机验收，不再属于这一节。
+⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug` 已分别在 §5.4 / §5.5 / §5.6 补齐并真机验收，不再属于这一节。
 剩余大头：
-`$debug.dumpHprof/dumpAndSendHprof/gc/setMemoryLeakDetectionEnabled`、
 `ColorMapping.*`（4）、`RootAutomator2` 与 `RootAutomator2.longPress`、
 `$power_manager.*`（2）、`OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
 `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures/matchFeatures`、
@@ -218,17 +238,16 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **35 条**（未定位 27 + 实机缺 8）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **31 条**（未定位 23 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
 | 2.18 images | 7 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`ColorMapping.*`、`images.getSimilarity/detectsMultiColors` |
 | 2.1 控件操作 | 3 | 3 | `UiObject.clickCenter`、`auto.clearCache`、`Rect.intersect`、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
-| 2.9 debug | 4 | 0 | `$debug.dumpHprof/dumpAndSendHprof/gc/setMemoryLeakDetectionEnabled` |
 | 2.11 dialogs | 3 | 0 | `dialog.setDefaultDialogType/getProgress/getMaxProgress` |
 | 2.12 engines / 2.14 floaty | 1 / 0 | 1 / 2 | `engines.startFloatingController`、`getPath`、`floaty.checkPermission/requestPermission` |
 | 2.2 坐标操作 / 2.22 ocr / 2.24 power_manager / 2.28 settings / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`$power_manager.*`、`$settings.*`、`isAlive` |
-| ~~2.8 crypto / 2.35 zip~~ | ~~14~~ | 0 | **已补齐（§5.4 / §5.5），从清单移出** |
+| ~~2.8 crypto / 2.9 debug / 2.35 zip~~ | ~~23~~ | 0 | **已补齐（§5.4 / §5.6 / §5.5），从清单移出** |
 
 QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。
 
@@ -264,8 +283,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-2. **补真缺口**（按性价比）：`$debug`、`ColorMapping`、`$power_manager`、`$settings`、`$images.*`（“低风险、实现短”优先）；
-   （`$crypto` 见 §5.4、`$zip` 见 §5.5，已完成）；
+2. **补真缺口**（按性价比）：`ColorMapping`、`$power_manager`、`$settings`、`$images.*`（“低风险、实现短”优先）；
+   （`$crypto` 见 §5.4、`$zip` 见 §5.5、`$debug` 见 §5.6，已完成）；
 3. **把本轮两套实现同步给 QuickJS**：`$crypto` 与 `$zip` 现在只有 Rhino 侧能用（QuickJS 只有 `digest`/`base64*` 与旧的 `zip/unzip/list`）。
    QuickJS 走字符串桥，需要一个新的 JSON 形式宿主方法；改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。
 4. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。

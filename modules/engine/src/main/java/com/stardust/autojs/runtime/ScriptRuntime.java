@@ -19,6 +19,7 @@ import com.stardust.autojs.runtime.api.AbstractShell;
 import com.stardust.autojs.runtime.api.AppUtils;
 import com.stardust.autojs.runtime.api.Console;
 import com.stardust.autojs.runtime.api.Crypto;
+import com.stardust.autojs.runtime.api.Debug;
 import com.stardust.autojs.runtime.api.Device;
 import com.stardust.autojs.runtime.api.Engines;
 import com.stardust.autojs.runtime.api.Events;
@@ -213,6 +214,9 @@ public class ScriptRuntime {
     @ScriptVariable
     public final Zips zips;
 
+    @ScriptVariable
+    public final Debug debug;
+
     private Images images;
 
     private static WeakReference<Context> applicationContext;
@@ -250,6 +254,7 @@ public class ScriptRuntime {
         sqlite = new Sqlite(context);
         crypto = new Crypto();
         zips = new Zips(context);
+        debug = new Debug(this);
     }
 
     public void init() {
