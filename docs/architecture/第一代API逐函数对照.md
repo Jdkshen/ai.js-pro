@@ -20,6 +20,7 @@
 | `tools/pro-api/debug-contract.js` | 2.9 `$debug` 行为验收脚本（18 项，§5.6） |
 | `tools/pro-api/power-manager-contract.js` / `floaty-permission-contract.js` | 2.24 `$power_manager` / 2.14 `floaty` 权限（§5.7） |
 | `tools/pro-api/settings-contract.js` | 2.28 `$settings` 行为验收脚本（21 项，§5.8） |
+| `tools/pro-api/dialog-contract.js` / `colormapping-contract.js` | 2.11 `dialog.*` / 2.18.8 `ColorMapping`（§5.9） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -55,7 +56,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 387 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 395 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -88,14 +89,14 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.8 crypto - 加解密与消息摘要 | 12 | 6 | 8 | 3 | 0 | 1 | 0 | 0 | 1 | 3 | 8 | 0 |
 | 2.9 debug - 调试工具 | 5 | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 | 0 |
 | 2.10 device - 设备 | 46 | 28 | 45 | 0 | 0 | 0 | 1 | 18 | 0 | 0 | 0 | 28 |
-| 2.11 dialogs - 对话框 | 26 | 13 | 10 | 0 | 12 | 4 | 0 | 8 | 0 | 4 | 1 | 1 |
+| 2.11 dialogs - 对话框 | 26 | 13 | 10 | 5 | 10 | 1 | 0 | 8 | 0 | 0 | 1 | 5 |
 | 2.12 engines - 脚本引擎 | 21 | 15 | 7 | 4 | 5 | 4 | 1 | 6 | 0 | 6 | 4 | 2 |
 | 2.13 events - 事件与监听 | 18 | 14 | 2 | 14 | 1 | 1 | 0 | 1 | 0 | 14 | 1 | 1 |
 | 2.14 floaty - 悬浮窗 | 25 | 23 | 5 | 18 | 0 | 2 | 0 | 3 | 9 | 7 | 2 | 2 |
 | 2.15 files - 文件系统 | 40 | 37 | 27 | 9 | 2 | 2 | 0 | 18 | 0 | 0 | 3 | 18 |
 | 2.16 globals - 全局变量与函数 | 16 | 15 | 16 | 0 | 0 | 0 | 0 | 13 | 1 | 2 | 0 | 0 |
 | 2.17 http - HTTP 网络请求 | 13 | 5 | 13 | 0 | 0 | 0 | 0 | 4 | 0 | 7 | 1 | 1 |
-| 2.18 images - 图片处理 | 76 | 64 | 43 | 9 | 7 | 15 | 2 | 42 | 1 | 27 | 4 | 2 |
+| 2.18 images - 图片处理 | 76 | 64 | 49 | 9 | 6 | 10 | 2 | 42 | 1 | 27 | 4 | 2 |
 | 2.19 keys - 按键模拟 | 21 | 21 | 21 | 0 | 0 | 0 | 0 | 21 | 0 | 0 | 0 | 0 |
 | 2.20 media - 多媒体 | 9 | 9 | 9 | 0 | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | 2.22 ocr - 文字识别 | 12 | 4 | 0 | 0 | 4 | 8 | 0 | 0 | 0 | 9 | 3 | 0 |
@@ -113,9 +114,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **413** | **192** | **215** | **106** | **11** | **247** | **33** | **254** | **95** | **133** |
+| **合计** | **938** | **624** | **419** | **197** | **212** | **98** | **11** | **247** | **33** | **250** | **95** | **137** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **820/938（87%）**，QuickJS **534/938（57%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **828/938（88%）**，QuickJS **530/938（56%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -249,6 +250,24 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 - 真机验证方式是「读 → 取反 → 读 → 还原 → 读」的往返，跑完不改设备状态；并与 App 的 `Pref` 类交叉对比。
 - 样例 `apps/app/src/main/assets/sample/Rhino 引擎/设置/设置.js` 原来写着“当前引擎暂未实现”，现已能直接跑（头注释已更新）。
 
+### 5.9 已按清单补齐：2.11 `dialog.*` + 2.18.8 `ColorMapping`（本轮）
+
+| 条目 | 结论 | 验证 |
+| --- | --- | --- |
+| `dialog.getProgress` | **扫描器漏报**：实现在 `JsDialog.getProgress()/getCurrentProgress()`，但 PDF 写的是 `dialog.` 前缀，扫描器过去把 `dialog` 当成了模块名，找不到对应源文件 | `dialog-contract.js`：读到 0/100 |
+| `dialog.getMaxProgress` | 同上（`JsDialog.getMaxProgress()` 已存在，无需实现） | 同上 |
+| `dialog.setDefaultDialogType` | **新实现**：`Dialogs.setDefaultDialogType/getDefaultDialogType` + Context 解析；`dialogs.build({type: …})` 可覆盖 | 4 个合法值 + 非法值报错 |
+| `ColorMapping.singleton/reset/recycle/findColor/findMultiColors/findAllPointsForColor` | **新实现**：新建 `core/image/ColorMapping.java`（缓存像素数组，后续找色不再走 JNI），`$colors.mapping` 暴露成可 `new` 的类 | `colormapping-contract.js`：22 项 |
+
+要点/踩坑：
+
+- **`dialog.*` 是对象方法，不是模块**：`dialogs.build()` 返回的 `JsDialog` 上带这些方法。扫描器新增 `'dialog' → ['Dialogs','JsDialog','JsDialogBuilder']` 映射后，这三条全部归位。
+- **对话框类型本来就有两种模式**：`BlockedMaterialDialog` 在拿不到 Activity 时会把窗口设成 `TYPE_APPLICATION_OVERLAY`（悬浮窗），拿到 Activity 就是应用内——即仓库原行为 = `app-or-overlay`。新代码就是把这四种类型变成可选，并把「没权限/没界面」变成明确报错（文档语义）。
+  ⚠️ 文档写的默认值是 `overlay`（兼容旧版），我们保留 `app-or-overlay` 作为默认（否则所有现有脚本的对话框都会从应用内变成悬浮层）→ 差异记在 §9。
+- **`$colors` 这个别名以前不存在**（文档 2.18.8 在用）→ 已补进 `init.js` 的别名表；`$colors.mapping` 需要是**能 new 的类对象**，而给 Java 对象加属性会被 Rhino 拒绝、Java 字段里存 `Class` 又只会被包成不可 new 的对象 → 最后用一层 JS 包装（`Object.create`）只给 `$colors` 加 `mapping`，其余成员走原型链照旧。
+- `ColorMapping` 返回的是**图片坐标**（不跟 `images.findColor` 一样做屏幕缩放），因为缓存是按图片建的；`similarity` 与 `threshold` 二选一、同时存在以 `similarity` 为准（文档原文）。
+- 真机上 `Bitmap.eraseColor()` **不生效**（未涂色处是白的）→ 验收脚本改成逐像素填背景，并加了一条背景断言。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -269,7 +288,7 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ### 6.2 真缺 —— 两个引擎都没有（约 18 条）
 
-⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings` 已分别在 §5.4~§5.8 补齐并真机验收，不再属于这一节。
+⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping` 已分别在 §5.4~§5.9 补齐 / 归位并真机验收，不再属于这一节。
 剩余大头：
 `ColorMapping.*`（4）、`RootAutomator2` 与 `RootAutomator2.longPress`、
 `OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
@@ -284,16 +303,15 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **25 条**（未定位 17 + 实机缺 8）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **18 条**（未定位 10 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
-| 2.18 images | 7 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`ColorMapping.*`、`images.getSimilarity/detectsMultiColors` |
 | 2.1 控件操作 | 3 | 3 | `UiObject.clickCenter`、`auto.clearCache`、`Rect.intersect`、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
-| 2.11 dialogs | 3 | 0 | `dialog.setDefaultDialogType/getProgress/getMaxProgress` |
+| 2.18 images | 3 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`matchFeatures`、`images.getSimilarity/detectsMultiColors` |
 | 2.12 engines | 1 | 1 | `engines.startFloatingController`、`getPath` |
 | 2.2 坐标操作 / 2.22 ocr / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`isAlive` |
-| ~~2.8 crypto / 2.9 debug / 2.14 floaty 权限 / 2.24 power_manager / 2.28 settings / 2.35 zip~~ | ~~29~~ | 0 | **已补齐（§5.4~§5.8），从清单移出** |
+| ~~2.8 crypto / 2.9 debug / 2.11 dialog.* / 2.14 floaty 权限 / 2.18.8 ColorMapping / 2.24 power_manager / 2.28 settings / 2.35 zip~~ | ~~36~~ | 0 | **已补齐（§5.4~§5.9），从清单移出** |
 
 QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。
 
@@ -325,6 +343,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 - **已补齐的模块只验了本轮脚本覆盖到的东西**：`$crypto`/`$zip`/`$debug`/`$power_manager`/`floaty` 权限/`$settings` 都有对应的 `tools/pro-api/*-contract.js`（共 88 项断言），但**默认值差异仍存在**，已知两处：
   - `$settings.isEnabled('stop_all_on_volume_up')`：主应用沿用仓库原有键 `key_use_volume_control_running`，其默认值是**关**，而 Pro 文档写的是默认**开**（打包版默认开，与文档一致）。
   - `$settings.isEnabled('not_show_console')`：主应用没有「脚本启动即弹日志界面」的行为，这个开关只负责存取值。
+  - `dialog.setDefaultDialogType` 的**默认值**：文档写 `overlay`，我们保留仓库原有的 `app-or-overlay`（否则现有脚本的对话框会从应用内变成悬浮层）；四种类型本身都支持，也可以随时显式设置。
 - **单机单版本**：本轮只覆盖小米 8 + 当时构建，换设备/版本要重跑（脚本已固化）。
 - **仍有盲区**：动态挂载（`Proxy`、`Object.defineProperty`、反射注册）与"要满足条件才存在"的成员（实例方法、惰性加载）都测不到；`未定位` 只代表四层证据都没找到。
 - **没有 Pro 对照设备**：`version` 列只说明该条目属于哪个版本，不代表我们对齐到了同一版本。
@@ -332,8 +351,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-2. **补真缺口**（按性价比）：`ColorMapping`、`$images.*`、`dialog.*`（“低风险、实现短”优先）；
-   （`$crypto` 见 §5.4、`$zip` 见 §5.5、`$debug` 见 §5.6、`$power_manager`+`floaty` 权限见 §5.7、`$settings` 见 §5.8，已完成）；
+2. **补真缺口**（按性价比）：`UiObject.clickCenter`、`auto.clearCache`、`Rect.intersect`、`$images.*`（先做短的，`detectAndComputeFeatures/matchFeatures` 要接特征匹配，工作量较大）；
+   （`$crypto` 见 §5.4、`$zip` 见 §5.5、`$debug` 见 §5.6、`$power_manager`+`floaty` 权限见 §5.7、`$settings` 见 §5.8、`dialog.*`+`ColorMapping` 见 §5.9，已完成）；
 3. **把本轮两套实现同步给 QuickJS**：`$crypto` 与 `$zip` 现在只有 Rhino 侧能用（QuickJS 只有 `digest`/`base64*` 与旧的 `zip/unzip/list`）。
    QuickJS 走字符串桥，需要一个新的 JSON 形式宿主方法；改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。
 4. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。

@@ -129,12 +129,22 @@ runtime.init();
         var aliasNames = ['app', 'automator', 'console', 'dialogs', 'ui', 'images', 'threads', 'events',
             'engines', 'http', 'storages', 'floaty', 'sensors', 'media', 'plugins', 'yolo', 'continuation',
             'shell', 'selector', 'web', 'io', 'timers', 'util', 'device', 'sqlite', 'crypto', 'zips',
-            'files', 'RootAutomator'];
+            'files', 'RootAutomator', 'colors'];
         for (var j = 0; j < aliasNames.length; j++) {
             var name = aliasNames[j];
             if (scope[name] !== undefined) {
                 scope['$' + name] = scope[name];
             }
+        }
+        // PDF §2.18.8：文档用法是 `let ColorMapping = $colors.mapping;`，之后要能
+        // `ColorMapping.singleton` / `new ColorMapping()`。Java 字段里存 Class 拿到的只是
+        // 一个包装过的 Class（不能 new），所以 $colors 这里用一层 JS 对象：
+        // 其余成员照旧走原型链，不受影响。
+        importClass(com.stardust.autojs.core.image.ColorMapping);
+        if (scope.colors !== undefined) {
+            var colorsProxy = Object.create(scope.colors);
+            colorsProxy.mapping = ColorMapping;
+            scope.$colors = colorsProxy;
         }
         // App 模块注入的 Pro 风格模块（如 $work_manager）：由 App 侧 putProperty 注册，这里暴露成全局。
         var injected = ['work_manager', 'settings'];

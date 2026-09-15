@@ -15,8 +15,11 @@ import com.stardust.autojs.core.ui.dialog.BlockedMaterialDialog;
 import com.stardust.autojs.core.ui.dialog.JsDialogBuilder;
 import com.stardust.autojs.runtime.ScriptBridges;
 import com.stardust.autojs.runtime.ScriptRuntime;
+import com.stardust.autojs.util.FloatingPermission;
 import com.stardust.util.ArrayUtils;
 import com.stardust.util.UiHandler;
+
+import java.util.Locale;
 
 /**
  * Created by Stardust on 2017/5/8.
@@ -74,6 +77,102 @@ public class Dialogs {
         return mThemeWrapper;
     }
 
+    // ------------------------------------------------------------------
+    // PDF §2.11：对话框类型（Pro 8.8.5 新增的 dialog.setDefaultDialogType）
+    // ------------------------------------------------------------------
+
+    /** 始终用悬浮窗权限显示（走 BlockedMaterialDialog 的 TYPE_APPLICATION_OVERLAY 分支）。 */
+    public static final String TYPE_OVERLAY = "overlay";
+    /** 始终为应用内对话框（必须有 Activity）。 */
+    public static final String TYPE_APP = "app";
+    /** 有界面就用应用内，没有界面用悬浮窗。 */
+    public static final String TYPE_APP_OR_OVERLAY = "app-or-overlay";
+    /** 本应用在前台用应用内，后台用悬浮窗。 */
+    public static final String TYPE_FOREGROUND_OR_OVERLAY = "foreground-or-overlay";
+
+    /**
+     * 仓库既有行为就是 app-or-overlay（有 Activity 用应用内，否则走悬浮窗），
+     * 所以默认值取它；文档写的默认是 overlay（为了兼容旧版本），两者的差别记在文档 §9。
+     */
+    private volatile String mDefaultDialogType = TYPE_APP_OR_OVERLAY;
+
+    /** `dialog.setDefaultDialogType(type)`：设置所有对话框的默认类型。 */
+    @ScriptInterface
+    public void setDefaultDialogType(String type) {
+        mDefaultDialogType = normalizeDialogType(type);
+    }
+
+    /** 文档没写、验收用的查询接口：当前默认对话框类型。 */
+    @ScriptInterface
+    public String getDefaultDialogType() {
+        return mDefaultDialogType;
+    }
+
+    static String normalizeDialogType(String type) {
+        String value = type == null ? "" : type.trim().toLowerCase(Locale.ROOT);
+        if (value.isEmpty() || "undefined".equals(value) || "null".equals(value)) {
+            throw new IllegalArgumentException("对话框类型不能为空");
+        }
+        switch (value) {
+            case TYPE_OVERLAY:
+            case TYPE_APP:
+            case TYPE_APP_OR_OVERLAY:
+            case TYPE_FOREGROUND_OR_OVERLAY:
+                return value;
+            default:
+                throw new IllegalArgumentException("未知的对话框类型: " + type
+                        + "（可选 overlay / app / app-or-overlay / foreground-or-overlay）");
+        }
+    }
+
+    /**
+     * 根据类型挑 Context：
+     * 返回 Activity → 普通应用内对话框；返回应用 Context → {@link BlockedMaterialDialog} 会
+     * 自己把窗口设成 {@code TYPE_APPLICATION_OVERLAY}。
+     *
+     * @param type 为空时用默认类型；{@code dialogs.build({type: …})} 传入的就是这里
+     */
+    private Context resolveContext(String type) {
+        String resolved = isNoType(type) ? mDefaultDialogType : normalizeDialogType(type);
+        Activity activity = currentActivity();
+        boolean hasActivity = activity != null && !activity.isFinishing();
+        if (TYPE_APP.equals(resolved)) {
+            if (!hasActivity) {
+                throw new IllegalStateException("app 类型对话框需要本应用有界面（当前没有可用的 Activity）");
+            }
+            return activity;
+        }
+        if (TYPE_OVERLAY.equals(resolved)) {
+            return overlayContext();
+        }
+        // app-or-overlay / foreground-or-overlay：
+        // 该仓库没有单独跟踪"应用是否在前台"的状态，用「有未结束的可见 Activity」近似，
+        // 没有 Activity 时回落到悬浮窗（与文档描述一致）。
+        return hasActivity ? activity : overlayContext();
+    }
+
+    /** 悬浮窗对话框：要求有悬浮窗权限，没权限就直接报错（文档：「没有悬浮窗权限时抛出异常」）。 */
+    private Context overlayContext() {
+        if (!FloatingPermission.canDrawOverlays(mRuntime.uiHandler.getContext())) {
+            throw new IllegalStateException("悬浮窗类型对话框需要悬浮窗权限");
+        }
+        return getContext();
+    }
+
+    private Activity currentActivity() {
+        Context context = mRuntime.app.getCurrentActivity();
+        return context instanceof Activity ? (Activity) context : null;
+    }
+
+    /** 没传 / 传了 JS 的 undefined（Rhino 会变成字符串 "undefined"）都算没指定类型。 */
+    private static boolean isNoType(String type) {
+        if (type == null) {
+            return true;
+        }
+        String value = type.trim().toLowerCase(Locale.ROOT);
+        return value.isEmpty() || "undefined".equals(value) || "null".equals(value);
+    }
+
     @ScriptInterface
     public Object select(String title, String[] items, Object callback) {
         return ((BlockedMaterialDialog.Builder) dialogBuilder(callback)
@@ -128,21 +227,20 @@ public class Dialogs {
     }
 
     private BlockedMaterialDialog.Builder dialogBuilder(Object callback) {
-        Context context = mRuntime.app.getCurrentActivity();
-        if (context == null || ((Activity) context).isFinishing()) {
-            context = getContext();
-        }
-        return (BlockedMaterialDialog.Builder) new BlockedMaterialDialog.Builder(context, mRuntime, callback)
+        return (BlockedMaterialDialog.Builder) new BlockedMaterialDialog.Builder(
+                resolveContext(null), mRuntime, callback)
                 .theme(Theme.LIGHT);
     }
 
     @ScriptInterface
     public MaterialDialog.Builder newBuilder() {
-        Context context = mRuntime.app.getCurrentActivity();
-        if (context == null || ((Activity) context).isFinishing()) {
-            context = getContext();
-        }
-        return new JsDialogBuilder(context, mRuntime)
+        return newBuilder(null);
+    }
+
+    /** `dialogs.build({type: …})` 会把这个 type 传进来覆盖默认类型。 */
+    @ScriptInterface
+    public MaterialDialog.Builder newBuilder(String type) {
+        return new JsDialogBuilder(resolveContext(type), mRuntime)
                 .theme(Theme.LIGHT);
     }
 

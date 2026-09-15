@@ -124,7 +124,9 @@ module.exports = function(__runtime__, scope){
     };
 
     dialogs.build = function(properties){
-        var builder = Object.create(__runtime__.dialogs.newBuilder());
+        // PDF §2.11：自定义对话框可以用 type 属性覆盖默认的对话框类型
+        var type = (properties.type === undefined) ? null : properties.type;
+        var builder = Object.create(__runtime__.dialogs.newBuilder(type));
         builder.thread = threads.currentThread();
         for(var name in properties){
             if(!properties.hasOwnProperty(name)){
@@ -135,6 +137,16 @@ module.exports = function(__runtime__, scope){
         applyOtherDialogProperties(builder, properties);
         return ui.run(()=> builder.buildDialog());
     }
+
+    // PDF §2.11（Pro 8.8.5 新增）：设置所有对话框的默认类型
+    // overlay / app / app-or-overlay / foreground-or-overlay
+    dialogs.setDefaultDialogType = function(type){
+        __runtime__.dialogs.setDefaultDialogType(type);
+    };
+
+    dialogs.getDefaultDialogType = function(){
+        return __runtime__.dialogs.getDefaultDialogType();
+    };
 
     function applyDialogProperty(builder, name, value){
         if(!propertySetters.hasOwnProperty(name)){
