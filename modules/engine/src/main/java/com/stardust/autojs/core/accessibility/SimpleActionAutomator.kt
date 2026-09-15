@@ -28,6 +28,13 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
 
     private var mScreenMetrics: ScreenMetrics? = null
 
+    init {
+        // PDF §2.1.3.1：UiObject.clickCenter() 需要坐标点击，而 automator 模块拿不到本类。
+        // 必须在这里（构造时）就注入：如果放在 prepareForGesture() 里，
+        // 第一次直接调 clickCenter()（没先调过 click）会因 clicker 为 null 而返回 false。
+        UiObject.coordinateClicker = { x, y -> click(x, y) }
+    }
+
     private val isRunningPackageSelf: Boolean
         get() = DeveloperUtils.isSelfPackage(mAccessibilityBridge.infoProvider.latestPackage)
 

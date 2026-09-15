@@ -117,6 +117,15 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
         return mFastRootInActiveWindow
     }
 
+    /**
+     * PDF §2.1.4 `auto.clearCache()`（v9.0.14 新增）：清空无障碍缓存。
+     * 这里的“缓存”就是 [mFastRootInActiveWindow]——控件已经出现但选择器找不到时，
+     * 很可能是它没刷新。
+     */
+    fun clearNodeCache() {
+        mFastRootInActiveWindow = null
+    }
+
     companion object {
 
         private val TAG = "AccessibilityService"

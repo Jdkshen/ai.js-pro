@@ -121,6 +121,17 @@ public abstract class AccessibilityBridge {
         mWindowFilter = windowFilter;
     }
 
+    /**
+     * PDF §2.1.4 `auto.clearCache()`：清空无障碍缓存。
+     * 控件已经出现在屏幕上、但选择器始终找不到时，通常是服务缓存（fastRootInActiveWindow）没刷新。
+     */
+    public void clearCache() {
+        AccessibilityService service = AccessibilityService.Companion.getInstance();
+        if (service != null) {
+            service.clearNodeCache();
+        }
+    }
+
     public abstract ActivityInfoProvider getInfoProvider();
 
     public void setMode(int mode) {

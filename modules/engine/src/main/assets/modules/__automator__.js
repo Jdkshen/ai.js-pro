@@ -126,6 +126,11 @@ module.exports = function(runtime, global){
         runtime.accessibilityBridge.waitForServiceEnabled();
     }
 
+    // PDF §2.1.4（v9.0.14 新增）：清空无障碍缓存（控件已出现但选择器找不到时用）
+    auto.clearCache = function(){
+        runtime.accessibilityBridge.clearCache();
+    }
+
     auto.setMode = function(modeStr){
         if(typeof(modeStr) !== "string"){
             throw new TypeError("mode should be a string");

@@ -322,6 +322,13 @@ GLOBAL_FILES = ('__globals__.js', 'init.js', 'ScriptRuntime.java', '__automator_
 MODULE_NAMES = set(HINTS) | {'globals', 'zips', 'zip', 'web', 'util', 'sqlite', 'io', 'keys',
                              'canvas', 'colors', 'selector', 'automator', 'console', 'timers'}
 
+# PDF 里有些成员本来就来自 Android 框架类（不是仓库源码），按平台类记
+# （`Rect` 就是 `UiObject.bounds()` 返回的 android.graphics.Rect）
+PLATFORM_TYPE_MEMBERS = {
+    ('Rect', 'intersect'): 'android.graphics.Rect#intersect(Rect)（Android 框架方法，'
+                          'UiObject.bounds() 返回的就是它）',
+}
+
 # PDF 会把 JS 类的成员写成 `Key.data`；这些成员定义在 init.js 的构造函数里
 # （`this.data = data;`），既不在模块文件里、也不匹配通用定义形状。
 JS_CLASS_MEMBERS = {
@@ -635,6 +642,9 @@ def stage_check():
             return '未定位', ''
 
         r_status, r_ev = scan(rhino_sources(scan_mod))
+        platform_note = PLATFORM_TYPE_MEMBERS.get((mod, member))
+        if platform_note and r_status in STATIC_NEGATIVE:
+            r_status, r_ev = '已定义', platform_note
         if r_status == '未定位':
             g_status, g_ev = scan(global_sources)   # Auto.js also exposes many APIs as globals
             if g_status != '未定位':

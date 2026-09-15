@@ -167,6 +167,19 @@ open class UiObject(info: Any?, private val allocator: AccessibilityNodeInfoAllo
         return performAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
     }
 
+    /**
+     * PDF §2.1.3.1 `UiObject.clickCenter()`（Pro 8.8.17 新增）：
+     * 用坐标点击控件中点，等价于 `click(bounds().centerX(), bounds().centerY())`。
+     *
+     * 坐标点击需要引擎的 ActionAutomator，automator 模块自己不持有它，
+     * 因此由引擎侧通过 [coordinateClicker] 注入（SimpleActionAutomator 初始化时挂上）。
+     */
+    fun clickCenter(): Boolean {
+        val clicker = coordinateClicker ?: return false
+        val b = bounds()
+        return clicker(b.centerX(), b.centerY())
+    }
+
     fun longClick(): Boolean {
         return performAction(AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
     }
@@ -390,6 +403,12 @@ open class UiObject(info: Any?, private val allocator: AccessibilityNodeInfoAllo
     }
 
     companion object {
+        /**
+         * 坐标点击实现（x, y）-> 是否成功，由引擎侧注入；
+         * 没注入时 UiObject.clickCenter() 直接返回 false（不抛异常，与文档“返回是否点击成功”一致）。
+         */
+        @JvmStatic
+        var coordinateClicker: ((Int, Int) -> Boolean)? = null
 
         val ACTION_APPEND_TEXT = 0x00200001
 

@@ -21,6 +21,7 @@
 | `tools/pro-api/power-manager-contract.js` / `floaty-permission-contract.js` | 2.24 `$power_manager` / 2.14 `floaty` 权限（§5.7） |
 | `tools/pro-api/settings-contract.js` | 2.28 `$settings` 行为验收脚本（21 项，§5.8） |
 | `tools/pro-api/dialog-contract.js` / `colormapping-contract.js` | 2.11 `dialog.*` / 2.18.8 `ColorMapping`（§5.9） |
+| `tools/pro-api/click-center-contract.js` | 2.1 `UiObject.clickCenter` / `auto.clearCache` / `Rect.intersect`（§5.10） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -56,7 +57,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 395 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 396 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -79,7 +80,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 模块 | 条目 | 函数 | Rhino 实机有 | Rhino 源码有 | Rhino 待核实 | Rhino 未定位 | Rhino 实机缺 | QuickJS 实机有 | QuickJS 源码有 | QuickJS 待探针 | QuickJS 未定位 | QuickJS 实机缺 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1.2 如何阅读本文档 | 2 | 2 | 2 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 |
-| 2.1 自动化-控件操作 | 117 | 106 | 19 | 90 | 1 | 4 | 3 | 16 | 0 | 90 | 1 | 10 |
+| 2.1 自动化-控件操作 | 117 | 106 | 20 | 92 | 1 | 1 | 3 | 16 | 0 | 90 | 1 | 10 |
 | 2.2 自动化 - 坐标操作 | 32 | 30 | 11 | 0 | 18 | 3 | 0 | 11 | 0 | 12 | 2 | 0 |
 | 2.3 app - 应用 | 25 | 21 | 24 | 0 | 1 | 0 | 0 | 17 | 0 | 0 | 0 | 8 |
 | 2.4 base64 | 2 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 |
@@ -114,9 +115,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **419** | **197** | **212** | **98** | **11** | **247** | **33** | **250** | **95** | **137** |
+| **合计** | **938** | **624** | **420** | **199** | **212** | **95** | **11** | **247** | **33** | **250** | **95** | **137** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **828/938（88%）**，QuickJS **530/938（56%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **831/938（89%）**，QuickJS **530/938（56%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -268,6 +269,22 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 - `ColorMapping` 返回的是**图片坐标**（不跟 `images.findColor` 一样做屏幕缩放），因为缓存是按图片建的；`similarity` 与 `threshold` 二选一、同时存在以 `similarity` 为准（文档原文）。
 - 真机上 `Bitmap.eraseColor()` **不生效**（未涂色处是白的）→ 验收脚本改成逐像素填背景，并加了一条背景断言。
 
+### 5.10 已按清单补齐：2.1 `clickCenter` / `clearCache` / `Rect.intersect`（本轮）
+
+| 条目 | 实现 | 验收 |
+| --- | --- | --- |
+| `UiObject.clickCenter()`（Pro 8.8.17 新增） | `UiObject.clickCenter()` + 引擎侧注入坐标点击（automator 模块拿不到 ActionAutomator） | 真机点对话框“确定”按钮，positive 回调被触发 |
+| `auto.clearCache()`（v9.0.14 新增） | 清的就是无障碍服务的 `mFastRootInActiveWindow` 缓存：`AccessibilityService.clearNodeCache()` + `AccessibilityBridge.clearCache()` + `__automator__.js` 里的 `auto.clearCache` | 清缓存后服务仍可用（仍能取到根节点） |
+| `Rect.intersect(r)` | 本来就是 Android 框架方法（`UiObject.bounds()` 返回的就是 `android.graphics.Rect`）→ 扫描器新增平台类映射，不再当成漏实现 | 相交/不相交/自身变交集三个断言 |
+
+踩坑/要点：
+
+- ⚠️ **注入时机**：坐标点击实现一开始写在 `prepareForGesture()` 里（只有先调过 `click(x,y)` 才会执行）→ 第一次直接调 `clickCenter()` 时 clicker 还是 null，直接返回 false。改成 **SimpleActionAutomator 构造时**注入。
+- ⚠️ **`clearCache` 会和方法名冲突**：Android 框架的 `AccessibilityService` 已有同名方法，Kotlin 编译报 *hides member of supertype* → 服务端方法改名 `clearNodeCache()`（脚本侧 API 仍是 `auto.clearCache()`）。
+- ⚠️ **验证 `clickCenter` 必须先开无障碍服务**：本机用
+  `adb shell settings put secure enabled_accessibility_services com.jdkshen.aijspro/com.stardust.autojs.core.accessibility.AccessibilityService`
+  + `settings put secure accessibility_enabled 1`；两点注意：① 安装 APK 后系统会把这个设置清成 null，需重新写；② `am force-stop` 后服务不会自动重绑，也要重新写（后再启动脚本）。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -288,7 +305,7 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ### 6.2 真缺 —— 两个引擎都没有（约 18 条）
 
-⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping` 已分别在 §5.4~§5.9 补齐 / 归位并真机验收，不再属于这一节。
+⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping`、2.1 `clickCenter`/`clearCache`/`Rect.intersect` 已分别在 §5.4~§5.10 补齐 / 归位并真机验收，不再属于这一节。
 剩余大头：
 `ColorMapping.*`（4）、`RootAutomator2` 与 `RootAutomator2.longPress`、
 `OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
@@ -303,15 +320,15 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **18 条**（未定位 10 + 实机缺 8）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **15 条**（未定位 7 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
-| 2.1 控件操作 | 3 | 3 | `UiObject.clickCenter`、`auto.clearCache`、`Rect.intersect`、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
 | 2.18 images | 3 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`matchFeatures`、`images.getSimilarity/detectsMultiColors` |
+| 2.1 控件操作 | 0 | 3 | `automator.takeScreenshot/switchToInputMethod/headsetHook` |
 | 2.12 engines | 1 | 1 | `engines.startFloatingController`、`getPath` |
 | 2.2 坐标操作 / 2.22 ocr / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`isAlive` |
-| ~~2.8 crypto / 2.9 debug / 2.11 dialog.* / 2.14 floaty 权限 / 2.18.8 ColorMapping / 2.24 power_manager / 2.28 settings / 2.35 zip~~ | ~~36~~ | 0 | **已补齐（§5.4~§5.9），从清单移出** |
+| ~~2.8 crypto / 2.9 debug / 2.11 dialog.* / 2.14 floaty 权限 / 2.18.8 ColorMapping / 2.24 power_manager / 2.28 settings / 2.35 zip / 2.1 三条~~ | ~~39~~ | 0 | **已补齐（§5.4~§5.10），从清单移出** |
 
 QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。
 
@@ -344,6 +361,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
   - `$settings.isEnabled('stop_all_on_volume_up')`：主应用沿用仓库原有键 `key_use_volume_control_running`，其默认值是**关**，而 Pro 文档写的是默认**开**（打包版默认开，与文档一致）。
   - `$settings.isEnabled('not_show_console')`：主应用没有「脚本启动即弹日志界面」的行为，这个开关只负责存取值。
   - `dialog.setDefaultDialogType` 的**默认值**：文档写 `overlay`，我们保留仓库原有的 `app-or-overlay`（否则现有脚本的对话框会从应用内变成悬浮层）；四种类型本身都支持，也可以随时显式设置。
+  - `UiObject.clickCenter()` 依赖无障碍服务，而本机 MIUI 会在**安装 APK 后**把 `enabled_accessibility_services` 清空、`am force-stop` 后也不自动重绑（验证前需重新写一次，见 §5.10）。
 - **单机单版本**：本轮只覆盖小米 8 + 当时构建，换设备/版本要重跑（脚本已固化）。
 - **仍有盲区**：动态挂载（`Proxy`、`Object.defineProperty`、反射注册）与"要满足条件才存在"的成员（实例方法、惰性加载）都测不到；`未定位` 只代表四层证据都没找到。
 - **没有 Pro 对照设备**：`version` 列只说明该条目属于哪个版本，不代表我们对齐到了同一版本。

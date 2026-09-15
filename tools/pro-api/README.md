@@ -119,13 +119,14 @@ foreach ($v in @('rhino','rhino-ui','qjs')) {
 | `settings-contract.js` | 2.28 `$settings`（5 个 key 的读写往返 + 未知 key 报错） | 21 |
 | `dialog-contract.js` | 2.11 `dialog.*`（对话框类型 + 进度值） | 12 |
 | `colormapping-contract.js` | 2.18.8 `ColorMapping`（reset / 找色 / 多点找色 / 区域 / 阈值与相似度 / recycle） | 22 |
+| `click-center-contract.js` | 2.1 `UiObject.clickCenter` / `auto.clearCache` / `Rect.intersect` | 10 |
 
 ⚠️ `debug-contract.js` 会真的 dump 两个 hprof 并压一个 zip（约 40~60 秒，脚本结束前自己删掉）；
 真机跑它时 `sleep` 给到 70 秒。
 
 ```powershell
 $adb='C:\Android\platform-tools-2\adb.exe'
-foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js','power-manager-contract.js','floaty-permission-contract.js','settings-contract.js','dialog-contract.js','colormapping-contract.js')) {
+foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js','power-manager-contract.js','floaty-permission-contract.js','settings-contract.js','dialog-contract.js','colormapping-contract.js','click-center-contract.js')) {
   & $adb -s ce4d2bdb push "tools\pro-api\$script" '/sdcard/probe/current.js'
   & $adb -s ce4d2bdb shell am force-stop com.jdkshen.aijspro   # 否则 am start 只投递 intent，不重跑
   & $adb -s ce4d2bdb logcat -c
@@ -144,7 +145,8 @@ foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js'
 `floaty-permission-contract` = `FLOATY_SUMMARY|pass=4 failed=0`（会跳到系统悬浮窗权限页，跑完按返回键）；
 `settings-contract` = `SETTINGS_SUMMARY|pass=21 failed=0`（跑完会把改过的设置项还原）；
 `dialog-contract` = `DIALOG_SUMMARY|pass=12 failed=0`（不 show 对话框）；
-`colormapping-contract` = `COLORMAPPING_SUMMARY|pass=22 failed=0`。
+`colormapping-contract` = `COLORMAPPING_SUMMARY|pass=22 failed=0`；
+`click-center-contract` = `CLICKCENTER_SUMMARY|pass=10 failed=0`（**需要无障碍服务已开启**，且安装 APK / force-stop 后要重新写 `enabled_accessibility_services`）。
 
 ## 产物
 
