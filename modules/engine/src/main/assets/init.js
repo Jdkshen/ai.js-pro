@@ -58,6 +58,41 @@ runtime.init();
      global.sqlite = runtime.sqlite;
      global.crypto = runtime.crypto;
      global.zips = runtime.zips;
+     // Auto.js Pro 的 $crypto（文档 2.8）：Java 侧只负责算法，这里把结果包装成文档里的
+     // 对象形状（Key 带 data/algorithm/format，KeyPair 带 publicKey/privateKey）。
+     (function (crypto) {
+         function Key(data, options) {
+             if (!(this instanceof Key)) {
+                 return new Key(data, options);
+             }
+             options = options || {};
+             this.input = options.input || null;
+             if (data && typeof data.getEncoded === 'function' && typeof data.getAlgorithm === 'function') {
+                 this.__key__ = data;
+                 this.data = data.getEncoded();
+                 this.algorithm = data.getAlgorithm();
+                 this.format = data.getFormat();
+             } else {
+                 this.data = data;
+                 this.algorithm = options.algorithm || null;
+                 this.format = options.format || null;
+             }
+         }
+         function KeyPair(publicKey, privateKey, options) {
+             if (!(this instanceof KeyPair)) {
+                 return new KeyPair(publicKey, privateKey, options);
+             }
+             this.publicKey = (publicKey instanceof Key) ? publicKey : new Key(publicKey, options);
+             this.privateKey = (privateKey instanceof Key) ? privateKey : new Key(privateKey, options);
+         }
+         crypto.Key = Key;
+         crypto.KeyPair = KeyPair;
+         var javaGenerateKeyPair = crypto.__generateKeyPair;
+         crypto.generateKeyPair = function (algorithm, length) {
+             var pair = javaGenerateKeyPair.call(crypto, algorithm, length);
+             return new KeyPair(new Key(pair.getPublic()), new Key(pair.getPrivate()));
+         };
+     })(global.crypto);
      global.Promise = require('promise.js');
  
      //设置JavaScriptBridges用于与Java层的交互和数据转换

@@ -1,6 +1,6 @@
 # 第一代 Pro API 逐函数对照（Auto.js Pro 官方 API 文档 PDF）
 
-对照日期：2026-09-15。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
+对照日期：2026-09-15（§4 / §5.4 / §6 / §7 为 `$crypto` 补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
 真机：**小米 8（`ce4d2bdb`，Android 15）**，两个引擎各跑「普通脚本」与 `"ui";` 脚本。
 
 交付四层证据：**排版解析 → 静态源码对照 → 真机成员枚举 → 真机逐条路径取值**。
@@ -12,8 +12,10 @@
 | --- | --- |
 | [`docs/architecture/pro-api-compatibility.csv`](pro-api-compatibility.csv) | **主交付物**。938 行逐条对照，UTF-8 BOM |
 | `tools/pro-api/rebuild.py` | 生成 CSV 的脚本（提取 → 建索引 → 对照 → 汇总），会自动并入真机结果 |
-| `tools/pro-api/gen-device-probe.py` | 生成探针：成员枚举 4 变体 + **逐条路径取值 2 变体** |
+| `tools/pro-api/gen-device-probe.py` | 生成探针：成员枚举 4 变体 + **逐条路径取值 3 变体** |
 | `tools/pro-api/parse-device-probe.py` / `parse-device-paths.py` | 解析探针日志 |
+| `tools/pro-api/run-device-probes.ps1` | 一键跑完 7 个真机探针（4 变体成员枚举 + 3 变体路径取值）并重算对照 |
+| `tools/pro-api/crypto-contract.js` | 2.8 `$crypto` 行为验收脚本（含文档黄金向量，§5.4） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -49,7 +51,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 358 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 361 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -59,6 +61,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | `实机缺` | 路径取值 + 静态 | 设备上取不到，**且静态也没找到实现**；只对模块成员生效（类型名/实例方法不判缺） |
 | `实机未见` | 成员枚举 | 模块在，但成员表里没有它（可能是实例成员或非枚举属性） |
 | `已定义` / `已定义(全局)` | 静态 | 源码里有定义形状 |
+| `已定义(改名)` | 静态 | 实现名与文档不同（见 `RENAME_HINTS`），证据里写明实现名 |
 | `回归已覆盖` / `样例已用` | 静态 | QuickJS：出现在回归脚本 / 仓库样例里 |
 | `同模块` / `同模块(全局)` | 静态 | 成员名在模块自己的源文件里，但没有定义形状 |
 | `仅引用` | 静态 | 只找到调用点 |
@@ -78,7 +81,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.5 colors - 颜色 | 19 | 8 | 19 | 0 | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 11 |
 | 2.6 canvas - 画布 | 30 | 29 | 0 | 29 | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 29 |
 | 2.7 console - 控制台 | 18 | 18 | 18 | 0 | 0 | 0 | 0 | 11 | 0 | 0 | 0 | 7 |
-| 2.8 crypto - 加解密与消息摘要 | 12 | 6 | 1 | 1 | 1 | 9 | 0 | 0 | 1 | 3 | 8 | 0 |
+| 2.8 crypto - 加解密与消息摘要 | 12 | 6 | 8 | 3 | 0 | 1 | 0 | 0 | 1 | 3 | 8 | 0 |
 | 2.9 debug - 调试工具 | 5 | 5 | 0 | 1 | 0 | 4 | 0 | 0 | 0 | 0 | 5 | 0 |
 | 2.10 device - 设备 | 46 | 28 | 45 | 0 | 0 | 0 | 1 | 18 | 0 | 0 | 0 | 28 |
 | 2.11 dialogs - 对话框 | 26 | 13 | 10 | 0 | 12 | 4 | 0 | 8 | 0 | 4 | 1 | 1 |
@@ -106,9 +109,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 0 | 1 | 6 | 10 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **378** | **192** | **222** | **132** | **13** | **247** | **33** | **254** | **95** | **133** |
+| **合计** | **938** | **624** | **385** | **194** | **221** | **124** | **13** | **247** | **33** | **254** | **95** | **133** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **776/938（83%）**，QuickJS **550/938（59%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **800/938（85%）**，QuickJS **534/938（57%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -135,6 +138,26 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 - **Rhino 13 条**：`automator.takeScreenshot/switchToInputMethod/headsetHook`、`floaty.checkPermission/requestPermission`、`images.getSimilarity/detectsMultiColors`、`engines.startFloatingController`、`app.getInstalledApps`（命名差异，实现叫 `getInstalledPackageList`）、`console.getInput/setColor/setTextSize`（2.36 的 `<console>` 控件属性）、`device.broad`（文档残片）、`ocr.filterScore`。
 - **QuickJS 133 条**，与仓库既有结论完全吻合：`canvas.*` 29、`device.*` 28、`files.*` 18、`colors` 常量 11、`app.*` 8、`console.*` 7、`WebSocket.*` 4、`threads.disposable/atomic/lock` 3 等。
 
+### 5.4 已按清单补齐：2.8 `$crypto`（本轮，行为级验收）
+
+清单里 2.8 的 4 条（`$crypto.encrypt` / `$crypto.decrypt` / `$crypto.generateKeyPair` / `Key`+`KeyPair`）已经实现并在真机验收：
+
+| 项 | 位置 |
+| --- | --- |
+| Java 实现 | `modules/engine/src/main/java/com/stardust/autojs/runtime/api/Crypto.java`（`Crypto.encrypt/decrypt/__generateKeyPair` + Key/KeyPair 挂载字段） |
+| JS 形状包装 | `modules/engine/src/main/assets/init.js`（`Key` 带 `data/algorithm/format`，`KeyPair` 带 `publicKey/privateKey`） |
+| 验收脚本 | `tools/pro-api/crypto-contract.js`（12 项，含文档第 74~75 页的黄金向量） |
+
+黄金向量（文档原样）：`"Hello Autojs"` + `new $crypto.Key("a"×16)` + `"AES"` → `7hu7UQKpjBeOqpEoOoHjxQ==`（字节形式 `-18,27,-69,81,2,-87,-116,23,-114,-86,-111,40,58,-127,-29,-59`）—— 真机 **逐字节命中**，说明默认补齐方式（`AES` → `AES/ECB/PKCS5Padding`、`RSA` → `RSA/ECB/PKCS1Padding`）与 Pro 一致。
+
+实现过程中撞到 3 个 Rhino / Android 坑（已修，后来者别再踩）：
+
+1. **不能给 Java 对象动态加属性**：`crypto.Key = Key` 报 `Java class ... has no public instance field or method named "Key"` → 现在在 `Crypto` 上先声明 `public Object Key/KeyPair/generateKeyPair` 字段，JS 才写得进去。
+2. **Rhino 传进来的 Java 对象是 `NativeJavaObject` 包装**：`pair.getPublic()` 不能直接 `instanceof java.security.Key`，必须先 `Wrapper.unwrap()`；否则 RSA 密钥重建会失败。
+3. **设备上 AndroidKeyStore 也注册了 RSA/EC 的 `KeyFactory`**，吃不下 X509/PKCS8 规范（报「To generate a key pair in Android Keystore…」）→ 选 provider 时必须跳过它。
+
+验收后重跑四层证据： 2.8 的 `实机有` 由 1 → 8，整份清单 Rhino `未定位` 132 → 124。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -153,10 +176,11 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | `$work_manager.addIntentTask` | **命名差异**：实现叫 `addBroadcastIntentTask`（`WorkManagerModule.kt:65`，实机确认） |
 | `app.getInstalledApps` | **命名差异**：实现叫 `getInstalledPackageList`（历史改名，避免与 Java 方法冲突） |
 
-### 6.2 真缺 —— 两个引擎都没有（约 35 条）
+### 6.2 真缺 —— 两个引擎都没有（约 30 条）
+
+⚠️ 2.8 `$crypto.encrypt/decrypt/generateKeyPair` 与 `Key`/`KeyPair` **已在 §5.4 补齐并真机验收**，不再属于这一节。
 
 `$zip.zipDir/zipFiles/open` 与 `ZipFile.setPassword/isEncrypted/extractAll/addFile/…`（13 条）、
-`$crypto.encrypt/decrypt/generateKeyPair` 与 `Key`/`KeyPair`、
 `$debug.dumpHprof/dumpAndSendHprof/gc/setMemoryLeakDetectionEnabled`、
 `ColorMapping.*`（4）、`RootAutomator2` 与 `RootAutomator2.longPress`、
 `$power_manager.*`（2）、`OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
@@ -171,18 +195,18 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **49 条**（未定位 41 + 实机缺 8）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **45 条**（未定位 37 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
 | 2.35 zip | 10 | 0 | `$zip.zipDir/zipFiles/open`、`ZipFile.setPassword/isEncrypted/extractAll` |
 | 2.18 images | 7 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`ColorMapping.*`、`images.getSimilarity/detectsMultiColors` |
-| 2.8 crypto | 4 | 0 | `$crypto.encrypt/decrypt/generateKeyPair`、`Key`/`KeyPair` |
 | 2.9 debug | 4 | 0 | `$debug.dumpHprof/dumpAndSendHprof/gc/setMemoryLeakDetectionEnabled` |
 | 2.11 dialogs | 3 | 0 | `dialog.setDefaultDialogType/getProgress/getMaxProgress` |
 | 2.1 控件操作 | 3 | 3 | `UiObject.clickCenter`、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
 | 2.2 坐标操作 / 2.22 ocr / 2.24 power_manager / 2.28 settings | 各 2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`$power_manager.*`、`$settings.*` |
-| 2.12 engines / 2.29 threads / 2.14 floaty | 各 1 / 0 | 1 / 0 / 2 | `engines.startFloatingController`、`getPath`、`isAlive`、`floaty.checkPermission/requestPermission` |
+| 2.12 engines / 2.29 threads / 2.14 floaty | 1 / 1 / 0 | 1 / 0 / 2 | `engines.startFloatingController`、`getPath`、`isAlive`、`floaty.checkPermission/requestPermission` |
+| ~~2.8 crypto~~ | ~~4~~ | 0 | **已补齐（§5.4），从清单移出** |
 
 QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。
 
@@ -194,9 +218,10 @@ QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `
 # PDF -> 清单 -> 静态对照（可分开跑 --stage extract|index|check|rollup）
 & '.venv\Scripts\python.exe' 'tools\pro-api\rebuild.py' --pdf '<PDF 路径>'
 
-# 真机探针：成员枚举 4 变体 + 路径取值 2 变体（设备上跑 6 次，每次约 20 秒）
+# 真机探针：成员枚举 4 变体 + 路径取值 3 变体（设备上跑 7 次，每次约 20~25 秒）
 & '.venv\Scripts\python.exe' 'tools\pro-api\gen-device-probe.py'
-# ... 逐个 push + am start + logcat（完整循环见 tools/pro-api/README.md）
+# 一键跑完 + 解析 + 重算（设备 id 写在脚本里，默认小米 8 ce4d2bdb）
+powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-probes.ps1'
 & '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-probe.py' '.artifacts\probe-rhino.log' rhino
 & '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-paths.py' '.artifacts\probe-paths-rhino.log' '.artifacts\probe-paths-rhino-ui.log' --engine rhino
 & '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-paths.py' '.artifacts\probe-paths-qjs.log' --engine quickjs
@@ -217,7 +242,8 @@ QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-2. **补真缺口**（按性价比）：`$zip` 与 `$crypto` 优先（两引擎都缺、真实脚本常用）；其次 `$debug`、`ColorMapping`、`$power_manager`、`$settings`。
+2. **补真缺口**（按性价比）：**`$zip` 优先**（17 条，两引擎都缺、真实脚本常用）；其次 `$debug`、`ColorMapping`、`$power_manager`、`$settings`。
+   （`$crypto` 已完成 → §5.4；QuickJS 侧的 `$crypto` 与 `$zip` 还要同步到 `cpp/quickjs_jni.cpp` 的 bootstrap，改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。）
 3. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。
 4. **补 Pro 侧对照**（可选）：用同一套探针跑一遍 Pro 9.x，把"我们缺"与"实现不同"彻底分开。
 5. **CSV 当验收登记册**：验收一条改一条状态。

@@ -27,25 +27,42 @@
 
 ```powershell
 # 1) 生成 4 个变体：rhino / rhino-ui / quickjs / quickjs-ui
+#    ⚠️ 文件名与引擎的对应关系（2026-09-15 修正：以前写成 -qjs.js，没有这个文件）：
+#      pro-api-probe.js        = quickjs
+#      pro-api-probe-ui.js     = quickjs + "ui";
+#      pro-api-probe-rhino.js  = rhino
+#      pro-api-probe-rhino-ui.js = rhino + "ui";
 & '.venv\Scripts\python.exe' 'tools\pro-api\gen-device-probe.py'
 
-# 2) 逐个推到设备并运行（这里以小米 8 ce4d2bdb + Rhino 为例）
+# 2) 一键跑完全部 7 个探针（4 成员枚举 + 3 路径取值）并重算对照
+powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-probes.ps1'
+```
+
+脚本内置的坑（手工跑时也要注意）：
+
+- 每次 `am start` 前必须先 `am force-stop com.jdkshen.aijspro`：应用在前台时 `am start` 只投递 onNewIntent，**脚本不会重跑**，日志会是空的（或上一次的）。
+- 设备不用小米 8 时改脚本顶部的 `$adb` / `-s ce4d2bdb`。
+
+手工命令（供参考）：
+
+```powershell
 $adb='C:\Android\platform-tools-2\adb.exe'
-foreach ($v in @('rhino','rhino-ui','qjs','ui')) {
-  & $adb -s ce4d2bdb push ".artifacts\pro-api-probe-$v.js" "/sdcard/probe/$v.js"
+foreach ($v in @('rhino','rhino-ui')) {
+  & $adb -s ce4d2bdb push ".artifacts\pro-api-probe-$v.js" "/sdcard/probe/current.js"
+  & $adb -s ce4d2bdb shell am force-stop com.jdkshen.aijspro
   & $adb -s ce4d2bdb logcat -c
-  & $adb -s ce4d2bdb shell am start -a android.intent.action.VIEW -d "file:///sdcard/probe/$v.js" `
+  & $adb -s ce4d2bdb shell am start -a android.intent.action.VIEW -d "file:///sdcard/probe/current.js" `
       -t text/plain -n com.jdkshen.aijspro/.external.open.RunIntentActivity
   & $adb -s ce4d2bdb shell sleep 25
   cmd /c "`"$adb`" -s ce4d2bdb logcat -d -s GlobalConsole:V > `".artifacts\probe-$v.log`""
 }
+```
 
 # 3) 解析（引擎名要与变体对应）
 & '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-probe.py' '.artifacts\probe-rhino.log' rhino
 & '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-probe.py' '.artifacts\probe-rhino-ui.log' rhino-ui
 & '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-probe.py' '.artifacts\probe-qjs.log' quickjs
 & '.venv\Scripts\python.exe' 'tools\pro-api\parse-device-probe.py' '.artifacts\probe-ui.log' quickjs-ui
-
 # 4) 带上实机结论重新对照
 & '.venv\Scripts\python.exe' 'tools\pro-api\rebuild.py' --stage check --stage rollup
 ```
@@ -87,6 +104,26 @@ foreach ($v in @('rhino','rhino-ui','qjs')) {
 - 应用**已在顶层**时 `am start` 只投递 intent 不会重跑脚本（日志出现 “delivered to currently running top-most instance”）→ 先 `am force-stop`（会顺带关掉无障碍服务，之后要重开）；
 - logcat 缓冲很小，长行会被截断 → 探针按 600 字节分片，并带 `PROBE_BEGIN/PROBE_END` 判断是否跑完（解析结果里的 `complete` 字段）；
 - 普通模式与 `"ui";` 模式要**各跑一遍**：`canvas` 这类名字只在 UI 上下文才可能挂上（本项目实测两者无差异）。
+
+## 行为验收脚本（按清单补实现时用）
+
+`crypto-contract.js` 是 2.8 `$crypto` 的行为验收：12 项断言，含文档第 74~75 页的**黄金向量**
+（`"Hello Autojs"` + `new $crypto.Key("a"×16)` + `"AES"` → `7hu7UQKpjBeOqpEoOoHjxQ==`）。
+它是「名字在 + 行为也对」这一层的样板，补别的模块时按同样方式加脚本。
+
+```powershell
+$adb='C:\Android\platform-tools-2\adb.exe'
+& $adb -s ce4d2bdb push 'tools\pro-api\crypto-contract.js' '/sdcard/probe/current.js'
+& $adb -s ce4d2bdb shell am force-stop com.jdkshen.aijspro
+& $adb -s ce4d2bdb logcat -c
+& $adb -s ce4d2bdb shell am start -a android.intent.action.VIEW -d 'file:///sdcard/probe/current.js' `
+    -t text/plain -n com.jdkshen.aijspro/.external.open.RunIntentActivity
+& $adb -s ce4d2bdb shell sleep 25
+cmd /c "`"$adb`" -s ce4d2bdb logcat -d -s GlobalConsole:V > `.artifacts\crypto-contract.log`""
+Select-String -Path '.artifacts\crypto-contract.log' -Pattern 'OK   |FAIL |_SUMMARY' -Encoding utf8
+```
+
+期望输出：11 行 `OK` + `CRYPTO_SUMMARY|pass=12 failed=0`。
 
 ## 产物
 

@@ -321,6 +321,14 @@ GLOBAL_FILES = ('__globals__.js', 'init.js', 'ScriptRuntime.java', '__automator_
 MODULE_NAMES = set(HINTS) | {'globals', 'zips', 'zip', 'web', 'util', 'sqlite', 'io', 'keys',
                              'canvas', 'colors', 'selector', 'automator', 'console', 'timers'}
 
+# PDF 会把 JS 类的成员写成 `Key.data`；这些成员定义在 init.js 的构造函数里
+# （`this.data = data;`），既不在模块文件里、也不匹配通用定义形状。
+JS_CLASS_MEMBERS = {
+    'Key': [('modules/engine/src/main/assets/init.js',
+             ('data', 'algorithm', 'format', 'input'))],
+    'KeyPair': [('modules/engine/src/main/assets/init.js', ('publicKey', 'privateKey'))],
+}
+
 # PDF module number -> JS namespace, used to attribute free-form labels
 PDF_NS = {
     '2.3': 'app', '2.5': 'colors', '2.6': 'canvas', '2.7': 'console', '2.8': 'crypto',
@@ -542,6 +550,16 @@ def stage_check():
             elif mod in v['modules'] and member in v['modules'][mod]:
                 return '实机有', 'probe: %s.%s 存在' % (mod, member)
 
+        # PDF 里的类型名常常不带命名空间（ 2.8 写 `Key` 而不是 `$crypto.Key`）——
+        # 这类条目会被当成全局名去探，永远探不到；在所属模块的命名空间里再找一次。
+        if mod == 'globals' and module_num and kind in ('class', 'constructor'):
+            ns = PDF_NS.get(module_num)
+            if ns and ns != 'globals':
+                for v in variants:
+                    for candidate in (ns, '$' + ns):
+                        if member in v['modules'].get(candidate, ()):
+                            return '实机有', 'probe: %s.%s 存在' % (candidate, member)
+
         is_module = mod in MODULE_NAMES and mod != 'globals'
         probed_missing = bool(vp) and bool(api) and api not in vp['present']
         enum_missing = bool(variants) and all(mod in v['missing'] for v in variants)
@@ -631,6 +649,24 @@ def stage_check():
         if renamed and r_status in STATIC_POSITIVE:
             r_status = '已定义(改名)'
             r_ev = '实现名 %s（%s）' % (renamed, r_ev)
+
+        # 纯 JS 类（`$crypto.Key` / `KeyPair`）的实例成员写在构造函数里
+        # （`this.data = data;`），既不是模块文件也跑不进上面的 defpats。
+        class_members = JS_CLASS_MEMBERS.get(mod) if r_status in (
+            '未定位', '同模块', '同模块(全局)') else None
+        if class_members:
+            for rel, names in class_members:
+                if member not in names:
+                    continue
+                text = files.get(rel)
+                if text is None:
+                    continue
+                pat = re.compile(r'this\s*\.\s*%s\s*=' % re.escape(member))
+                hit = pat.search(text)
+                if hit:
+                    r_status = '已定义'
+                    r_ev = '%s:%d' % (rel, text[:hit.start()].count('\n') + 1)
+                    break
 
         q_status, q_ev = '未定位', ''
         if member in qjs_members.get(base_mod, set()):
