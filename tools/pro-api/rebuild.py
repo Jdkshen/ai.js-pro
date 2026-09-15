@@ -329,6 +329,18 @@ PLATFORM_TYPE_MEMBERS = {
                           'UiObject.bounds() 返回的就是它）',
 }
 
+# PDF 把一些实例方法写成不带类型名的裸名字（`getPath` 是 ScriptConfig 的成员、
+# `isAlive` 是线程对象的成员）。这些名字会被当成全局名/模块名去扫，永远“未定位”；
+# 这里显式指向实现位置（键 = PDF 模块号 + 条目名）。
+LOOSE_MEMBER_HINTS = {
+    ('2.12', 'getPath'): ('ScriptConfig.getPath()',
+                          'modules/engine/src/main/java/com/stardust/autojs/execution/ExecutionConfig.kt'
+                          '（path: Array<out String>，Kotlin getter 就是 getPath()）'),
+    ('2.29', 'isAlive'): ('Thread.isAlive()',
+                          'java.lang.Thread#isAlive（脚本线程是 Java Thread；'
+                          '主线程是 core/looper/MainThreadProxy.java）'),
+}
+
 # PDF 会把 JS 类的成员写成 `Key.data`；这些成员定义在 init.js 的构造函数里
 # （`this.data = data;`），既不在模块文件里、也不匹配通用定义形状。
 JS_CLASS_MEMBERS = {
@@ -645,6 +657,9 @@ def stage_check():
         platform_note = PLATFORM_TYPE_MEMBERS.get((mod, member))
         if platform_note and r_status in STATIC_NEGATIVE:
             r_status, r_ev = '已定义', platform_note
+        loose_note = LOOSE_MEMBER_HINTS.get((e['module_num'], name))
+        if loose_note and r_status in STATIC_NEGATIVE:
+            r_status, r_ev = '已定义', '%s —— %s' % loose_note
         if r_status == '未定位':
             g_status, g_ev = scan(global_sources)   # Auto.js also exposes many APIs as globals
             if g_status != '未定位':

@@ -96,6 +96,21 @@ module.exports = function(runtime, global){
         }
     }
 
+    // PDF §2.1.3.2（Pro 8.8.0 新增）：使用无障碍权限截图，返回 Image
+    automator.takeScreenshot = function(){
+        return runtime.automator.takeScreenshot();
+    }
+
+    // PDF §2.1.3.3（Pro 8.8.0 新增）：切换到指定包名的输入法
+    automator.switchToInputMethod = function(packageName){
+        return runtime.automator.switchToInputMethod(String(packageName));
+    }
+
+    // PDF §2.1.3.4（Pro 8.8.0 新增）：模拟耳机键（挂断/接听、播放/暂停）
+    automator.headsetHook = function(){
+        return runtime.automator.headsetHook();
+    }
+
     automator.input = function(a, b){
         if(arguments.length == 1){
             return runtime.automator.appendText(runtime.automator.editable(-1), a);

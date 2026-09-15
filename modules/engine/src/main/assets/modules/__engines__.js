@@ -28,12 +28,27 @@ module.exports = function(__runtime__, scope){
     engines.stopAll = rtEngines.stopAll.bind(rtEngines);
     engines.stopAllAndToast = rtEngines.stopAllAndToast.bind(rtEngines);
 
+    // PDF §2.12：config.path 可以是 string 或 Array（模块查找路径）。
+    // ExecutionConfig.path(String[]) 就是文档里 ScriptConfig.getPath() 返回的那个数组。
+    function toPathArray(path){
+        var list = (path instanceof Array) ? path : [path];
+        var array = java.lang.reflect.Array.newInstance(java.lang.String, list.length);
+        for(var i = 0; i < list.length; i++){
+            array[i] = String(list[i]);
+        }
+        return array;
+    }
+
     function fillConfig(c){
         var config = new com.stardust.autojs.execution.ExecutionConfig();
         c = c || {};
         c.path = c.path || files.cwd();
         if(c.path){
-           config.workingDirectory = c.path;
+           var paths = toPathArray(c.path);
+           config.path = paths;
+           if(paths.length > 0){
+               config.workingDirectory = String(paths[0]);
+           }
         }
         config.delay = c.delay || 0;
         config.interval = c.interval || 0;
