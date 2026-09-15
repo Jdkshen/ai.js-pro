@@ -25,8 +25,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,6 +59,8 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.model.explorer.Explorers
 import com.jdkshen.aijspro.model.sample.SampleFile
+import com.jdkshen.aijspro.model.sample.SampleFiles
+import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.common.ScriptOperations
@@ -94,6 +96,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private var catalog: List<SampleEntry>? = null
     private val imports = CompositeDisposable()
     private var contentInstalled = false
+    private val listStates = mutableMapOf<String, LazyListState>()
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -141,7 +144,8 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     var retry by remember { mutableIntStateOf(0) }
                     var importEntry by remember { mutableStateOf<SampleEntry?>(null) }
                     var actionEntry by remember { mutableStateOf<SampleEntry?>(null) }
-                    val listState = rememberLazyListState()
+                    // Keep the parent directory's position, like the file browser.
+                    val listState = remember(path) { listStates.getOrPut(path) { LazyListState() } }
                     LaunchedEffect(retry) {
                         if (allEntries == null) {
                             loadError = null
@@ -163,9 +167,11 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         MiuixSampleCatalog.search(allEntries.orEmpty(), path, query.text, filter,
                             includeSubdirectories, useRegex)
                     }
-                    val entries = if (ascending) searchResult.entries else searchResult.entries.asReversed()
+                    val entries = remember(searchResult, ascending) {
+                        if (ascending) searchResult.entries else searchResult.entries.asReversed()
+                    }
                     val childCounts = remember(allEntries) { directChildCounts(allEntries.orEmpty()) }
-                    LaunchedEffect(path, query.text, filter, includeSubdirectories, useRegex, ascending) {
+                    LaunchedEffect(query.text, filter, includeSubdirectories, useRegex, ascending) {
                         listState.scrollToItem(0)
                     }
 
@@ -199,7 +205,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         }
                     }
 
-                    if (showSearchDialog) SearchDialog { showSearchDialog = false }
+                    if (showSearchDialog) SearchDialog(entries.size) { showSearchDialog = false }
                     actionEntry?.let { entry ->
                         EntryActionsDialog(entry, dismiss = { actionEntry = null },
                             requestImport = { actionEntry = null; importEntry = entry })
@@ -217,13 +223,13 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         onSearch: () -> Unit
     ) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 54.dp)
-                .background(MiuixTheme.colorScheme.surface)
-                .padding(start = 18.dp, end = 10.dp),
+            Modifier.fillMaxWidth().height(48.dp)
+                .background(androidx.compose.ui.res.colorResource(R.color.item_background))
+                .padding(start = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(sampleBreadcrumb(), fontSize = 18.sp, maxLines = 1,
+                Text(sampleBreadcrumb(), fontSize = 14.sp, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
                 if (query.text.isNotBlank() || filter != SampleFilter.ALL) {
                     Text("$resultCount 项 · 搜索结果", fontSize = 12.sp,
@@ -260,7 +266,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
             Image(painterResource(icon), contentDescription = description,
                 colorFilter = ColorFilter.tint(if (enabled) MiuixTheme.colorScheme.onSurface
                     else MiuixTheme.colorScheme.onSurfaceSecondary.copy(alpha = 0.35f)),
-                modifier = Modifier.size(27.dp).align(Alignment.Center))
+                modifier = Modifier.size(24.dp).align(Alignment.Center))
         }
     }
 
@@ -338,7 +344,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     @Composable
-    private fun SearchDialog(dismiss: () -> Unit) {
+    private fun SearchDialog(resultCount: Int, dismiss: () -> Unit) {
         val focusRequester = remember { FocusRequester() }
         val keyboard = LocalSoftwareKeyboardController.current
         LaunchedEffect(Unit) {
@@ -370,8 +376,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                             }
                         }
                     }
-                    Text("当前匹配 ${MiuixSampleCatalog.search(catalog.orEmpty(), path, query.text,
-                        filter, includeSubdirectories, useRegex).entries.size} 项", fontSize = 13.sp,
+                    Text("当前匹配 $resultCount 项", fontSize = 13.sp,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically) {
@@ -504,33 +509,54 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun view(entry: SampleEntry) {
-        // Directly open in the new Pro editor. If the sample was already
-        // imported into the script dir, reuse it; otherwise import silently
-        // (no name prompt) and open after the copy completes.
+        // 导入成「一个示例一个目录」再打开。以前只导入单个 .js，示例里的伴生资源
+        // （./mario.png、./layout.xml、./子模块.js 这些相对路径）没有跟过去，
+        // 一运行就是 image = null / Cannot find module。
+        // 已存在的文件不覆盖（用户改过的内容不丢），编辑器里可从内置版本「重置」恢复。
         val context = requireContext()
         val existing = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
         if (existing.isFile) {
             Toast.makeText(context,
-                "已打开导入副本；如内容较旧，可点编辑器顶部“重置”并自动备份后恢复最新版",
+                "已打开旧版单文件副本；示例目录里已改成按目录导入，可在编辑器里“重置”或删掉后重新打开",
                 Toast.LENGTH_LONG).show()
             startActivity(ProCodeEditorActivity.sampleIntent(context, existing, entry.path))
             return
         }
-        imports.add(ScriptOperations(context, rootView)
-            .importSampleWithName(SampleFile(entry.path, context.assets), entry.name)
-            .subscribe({ path ->
-                startActivity(ProCodeEditorActivity.sampleIntent(
-                    context, java.io.File(path), entry.path))
-            }, { failure ->
+        Thread {
+            var failure: Exception? = null
+            var opened: java.io.File? = null
+            try {
+                opened = SampleFiles.importForEdit(context, entry.path)
+            } catch (error: Exception) {
+                failure = error
+            }
+            val target = opened
+            activity?.runOnUiThread {
+                if (failure != null || target == null) {
+                    Toast.makeText(context,
+                        failure?.localizedMessage ?: "打开示例失败", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
                 Toast.makeText(context,
-                    failure.localizedMessage ?: "打开示例失败", Toast.LENGTH_LONG).show()
-            }))
+                    "已导入到：${target.parentFile?.path ?: target.path}", Toast.LENGTH_LONG).show()
+                startActivity(ProCodeEditorActivity.sampleIntent(context, target, entry.path))
+            }
+        }.start()
     }
 
     private fun run(entry: SampleEntry) {
         if (!entry.runnable) return
-        val execution = Scripts.run(SampleFile(entry.path, requireContext().assets).toSource())
-        if (execution != null) Toast.makeText(requireContext(), "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+        val context = requireContext()
+        // 示例的伴生资源用相对路径引用（./mario.png、./layout.xml），所以要从磁盘跑，
+        // 而且工作目录正好是示例自己所在目录（Scripts.run(File) 取文件父目录）。
+        // 以前直接跑 assets 正文，工作目录是脚本目录 → images.read('./mario.png') 返回 null。
+        val file = SampleFiles.materialize(context, entry.path)
+        val execution = if (file != null) {
+            Scripts.run(ScriptFile(file))
+        } else {
+            Scripts.run(SampleFile(entry.path, context.assets).toSource())
+        }
+        if (execution != null) Toast.makeText(context, "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
     }
 
     /** 项目型示例：目录里直接带 `project.json`，打包时会按项目模式处理。 */

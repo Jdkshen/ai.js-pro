@@ -62,7 +62,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.R
-import com.jdkshen.aijspro.model.sample.SampleFile
+import com.jdkshen.aijspro.model.sample.SampleFiles
 import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
@@ -568,8 +568,10 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private fun runBuiltin(entry: ResourceEntry) {
         val assetPath = entry.assetPath ?: return
         if (!entry.project) {
-            val execution = Scripts.run(SampleFile(assetPath, requireContext().assets).toSource())
-            if (execution != null) Toast.makeText(requireContext(), "已启动：${entry.name}", Toast.LENGTH_SHORT).show()
+            // 单文件资源也可能有同目录的伴生资源（示例里用 ./xxx.png、./layout.xml 这类相对路径引用），
+            // 直接从内置资源跑时工作目录是脚本目录 → images.read 拿到 null。所以和工程一样：
+            // 先连同一目录落到 cache 再跑磁盘上的文件，工作目录自然就是它自己所在目录。
+            runProjectCopy(entry, assetPath, SampleFiles.nameOf(assetPath))
             return
         }
         // 工程是多文件树：`require('./src/xx.js')` 只解析**磁盘**路径（模块加载器走 files.read），
@@ -580,7 +582,7 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     /** 把工程整份拷到 cacheDir 后运行入口脚本（不覆盖、也不读取用户导入的副本）。 */
-    private fun runProjectCopy(entry: ResourceEntry, assetPath: String) {
+    private fun runProjectCopy(entry: ResourceEntry, assetPath: String, entryName: String = "main.js") {
         val context = requireContext()
         val slug = assetPath.substringAfterLast('/').ifBlank { "project" }
         val target = File(File(context.cacheDir, "resource-run"), slug)
@@ -590,7 +592,11 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
             try {
                 target.deleteRecursively()
                 target.mkdirs()
-                copyAssetTree(assetPath, target)
+                // 单文件资源（入口名不是 main.js）要连它同一目录的伴生文件一起拷 —— 示例里的
+                // ./xxx.png / ./layout.xml 都是相对路径；工程则整棵拷（跳过 >8MB 的子目录，如模型库）。
+                SampleFiles.copyAssetTree(context,
+                    if (entryName == "main.js") assetPath else SampleFiles.parentOf(assetPath),
+                    target, false, 8L * 1024 * 1024)
             } catch (error: Exception) {
                 failure = error
             }
@@ -601,10 +607,10 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         "运行失败：${failure.localizedMessage ?: "未知错误"}", Toast.LENGTH_LONG).show()
                     return@runOnUiThread
                 }
-                val entryScript = File(target, "main.js")
+                val entryScript = File(target, entryName)
                 if (!entryScript.isFile) {
                     Toast.makeText(context,
-                        "工程里没有 main.js：${target.absolutePath}", Toast.LENGTH_LONG).show()
+                        "找不到入口脚本：${entryScript.absolutePath}", Toast.LENGTH_LONG).show()
                     return@runOnUiThread
                 }
                 val execution = Scripts.run(ScriptFile(entryScript))
