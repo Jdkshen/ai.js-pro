@@ -24,10 +24,18 @@ import java.util.List;
  *
  * <p>识别结果是**行**（ML Kit 的 Text.Line）：文本、可信度、范围与 PaddleOCR 的行结果同粒度。
  */
-public class Ocr {
+public class Ocr implements AutoCloseable {
 
     /** ML Kit 要求输入图至少 32x32。 */
     private static final int MIN_REGION_SIZE = 32;
+
+    /** 当前进程内未释放的 OCR 会话数（探针用；Pro 文档说 OCR 默认会在程序退出时自动释放）。 */
+    private static final java.util.concurrent.atomic.AtomicInteger sLiveCount =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    public static int liveCount() {
+        return sLiveCount.get();
+    }
 
     private final ScriptRuntime mRuntime;
     private TextRecognizer mRecognizer;
@@ -35,6 +43,11 @@ public class Ocr {
 
     public Ocr(ScriptRuntime runtime) {
         mRuntime = runtime;
+        sLiveCount.incrementAndGet();
+        // 脚本忘了 release() 时由引擎在退出时兜底（与 Pro 文档一致）
+        if (runtime != null) {
+            runtime.addCleanable(this);
+        }
     }
 
     /**
@@ -109,10 +122,20 @@ public class Ocr {
             return;
         }
         mReleased = true;
+        sLiveCount.decrementAndGet();
+        if (mRuntime != null) {
+            mRuntime.removeCleanable(this);
+        }
         if (mRecognizer != null) {
             mRecognizer.close();
             mRecognizer = null;
         }
+    }
+
+    /** 脚本退出时的兜底释放（等同 {@link #release()}）。 */
+    @Override
+    public void close() {
+        release();
     }
 
     public boolean isReleased() {

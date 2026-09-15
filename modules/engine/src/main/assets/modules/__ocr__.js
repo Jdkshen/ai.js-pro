@@ -7,6 +7,11 @@ module.exports = function (runtime, global) {
     var Ocr = com.stardust.autojs.runtime.api.Ocr;
     var ocr = {};
 
+    // 探针用：当前进程内未释放的 OCR 会话数（脚本忘 release() 时应该在下个脚本里看到 0）
+    ocr.liveCount = function () {
+        return Ocr.liveCount();
+    };
+
     function toIntArray(array) {
         if (array == undefined || array == null) {
             return null;
@@ -24,8 +29,7 @@ module.exports = function (runtime, global) {
     // 文档：根据给定选项创建 OCR 对象（每次调用都是一个新对象）
     ocr.create = function (options) {
         options = options || {};
-        var session = new Ocr(runtime);
-        // Java 对象上加不了属性（Rhino 限制），所以用 JS 包装暴露方法
+        var session = new Ocr(runtime);        // Java 对象上加不了属性（Rhino 限制），所以用 JS 包装暴露方法
         return {
             detect: function (image, detectOptions) {
                 detectOptions = detectOptions || {};

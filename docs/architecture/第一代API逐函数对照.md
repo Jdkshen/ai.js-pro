@@ -477,9 +477,50 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 防止再静悄悄地坏回去：新增单测
 `modules/engine/src/test/java/com/stardust/autojs/sample/RhinoSampleSyntaxTest.java`
 （带 `@engine quickjs` 标记的样例跳过，因为 QuickJS 支持 ES6），跑法见 §10。
+### 5.18 引擎 API 审计：性能基线与「脚本忘了释放」兜底（本轮）
 
+做完清单后做了一轮审计，只做两件事：**量性能**、**查资源释放**。
+
+#### 性能基线（全屏 1080×2160，小米 8）
+
+`tools/pro-api/bench-api.js`（脚本自造全屏测试图，不依赖屏幕内容）：
+
+| 接口 | 耗时 |
+| --- | --- |
+| `images.getSimilarity(.., {type:'MSSIM'})` | 70ms |
+| `images.getSimilarity(.., {type:'PNSR'})` | 32ms |
+| `detectAndComputeFeatures`（默认 scale，900×1800） | 79ms |
+| `detectAndComputeFeatures`（scale: 1） | 166ms |
+| `matchFeatures`（600 vs 39 个特征） | 6ms |
+| `OCR.detect`（ML Kit，全屏） | 169ms |
+| `automator.takeScreenshot` | 349ms（含无障碍通道 340ms 限频） |
+
+结论：**没有需要重写的热点** —— 所以没做「为优化而优化」的改动，只把基准固化成脚本，方便以后改动直接对比。
+
+#### 资源释放：脚本忘了写 release() 会怎样（已修）
+
+`ScriptRuntime.onExit()` 本来就有一批清理（`floaty.closeAll` / `media` / `yolo` / `sensors` / `timers` / 截图通道…），
+但新加的这批 API 有些东西不在其中：
+
+| 资源 | 之前的行为 | 现在 |
+| --- | --- | --- |
+| `$ocr.create()` 的识别器 | 不 `release()` 就一直活到进程结束 | 新增 `ScriptRuntime.addCleanable()`，`Ocr` 自己注册，`onExit()` 兜底 `release()`（文档本来就写「默认会在程序退出时自动释放」） |
+| `RootAutomator2` | 不 `exit()` 时 root 通道的 su 壳进程、adb 通道没抬起的「手指」会留下 | 同样注册到 runtime，退出时自动 `exit()` |
+| `ColorMapping.singleton` | **static 单例**，不 `reset()` 会把一整屏 `int[]`（≈8.7MB）抱到进程结束，下个脚本还可能读到旧缓存 | `onExit()` 时 `ColorMapping.recycleSingleton()` |
+| 图片泄露检测 | 开关/登记表/日志出口都是进程级 static，脚本退出后日志出口还抱着已退出的 runtime | 退出时回置到**默认值**（运行端默认开、打包端默认关），并清空登记表与队列 |
+
+验证：`tools/pro-api/cleanup-1.js`（建 3 个 OCR 会话 + 1 个 RootAutomator2 + 建 ColorMapping 缓存，**一个都不释放**）
+→ `cleanup-2.js`（新脚本里打印计数）。真机结果：
+
+```text
+CLEANUP1|创建后 ocr=3 RootAutomator2=1 泄漏检测=true
+CLEANUP2|ocr=0 RootAutomator2=0 泄漏检测=true          <- 引擎已兜底释放
+CLEANUP2|ColorMapping 单例已回收=true
+CLEANUP2|本脚本创建后 ocr=1 / release() 之后 ocr=0      <- 本脚本自己的记账正常
+```
+
+这两步已做成 `run-contracts.ps1` 的 `cleanup` 项（4 条断言），跟全量回归一起跑。
 ## 6. 未定位 / 实机缺 的定性结论
-
 对 §7 清单逐条查过源码与真机后，分三类：
 
 ### 6.1 漏扫 / 命名差异 —— 实现其实存在（13 条）

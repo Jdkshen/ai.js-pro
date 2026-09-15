@@ -24,7 +24,7 @@ module.exports = function(__runtime__, scope){
         if(!useAdb && !useRoot){
             throw new Error('必须指定 adb 或 root 通道之一');
         }
-        this.__ra2__ = new com.stardust.autojs.core.inputevent.RootAutomator2(scope.context, useAdb);
+        this.__ra2__ = new com.stardust.autojs.core.inputevent.RootAutomator2(runtime, scope.context, useAdb);
         // 只绑定“没有 JS 包装”的方法：包装方法写在原型上，不能在这里被遮蔽
         var methods = ["setScreenMetrics", "isAdb"];
         for(var i = 0; i < methods.length; i++){
@@ -113,6 +113,10 @@ module.exports = function(__runtime__, scope){
 
     // 文档里 RootAutomator2 是全局名（`new RootAutomator2(...)`）
     scope.RootAutomator2 = RootAutomator2;
+    // 探针用：当前进程内未 exit() 的 RootAutomator2 数量
+    RootAutomator2.liveCount = function () {
+        return com.stardust.autojs.core.inputevent.RootAutomator2.liveCount();
+    };
 
     return RootAutomator;
 }

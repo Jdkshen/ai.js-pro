@@ -10,6 +10,7 @@ import com.stardust.autojs.R;
 import com.stardust.autojs.ScriptEngineService;
 import com.stardust.autojs.annotation.ScriptVariable;
 import com.stardust.autojs.core.accessibility.AccessibilityBridge;
+import com.stardust.autojs.core.image.ColorMapping;
 import com.stardust.autojs.core.image.Colors;
 import com.stardust.autojs.core.permission.Permissions;
 import com.stardust.autojs.rhino.AndroidClassLoader;
@@ -27,6 +28,7 @@ import com.stardust.autojs.runtime.api.Files;
 import com.stardust.autojs.runtime.api.Floaty;
 import com.stardust.autojs.core.looper.Loopers;
 import com.stardust.autojs.runtime.api.Media;
+import com.stardust.autojs.runtime.api.MemoryLeakDetector;
 import com.stardust.autojs.runtime.api.Plugins;
 import com.stardust.autojs.runtime.api.PowerManager;
 import com.stardust.autojs.runtime.api.Sensors;
@@ -225,6 +227,8 @@ public class ScriptRuntime {
 
     private static WeakReference<Context> applicationContext;
     private Map<String, Object> mProperties = new ConcurrentHashMap<>();
+    private final java.util.Set<AutoCloseable> mCleanables =
+            java.util.Collections.newSetFromMap(new ConcurrentHashMap<AutoCloseable, Boolean>());
     private AbstractShell mRootShell;
     private Supplier<AbstractShell> mShellSupplier;
     private ScreenMetrics mScreenMetrics = new ScreenMetrics();
@@ -435,6 +439,12 @@ public class ScriptRuntime {
         ThreadCompat.interrupted();
         //悬浮窗需要第一时间关闭以免出现恶意脚本全屏悬浮窗屏蔽屏幕并且在exit中写死循环的问题
         ignoresException(floaty::closeAll);
+        // 脚本没手动释放的资源（OCR 会话、RootAutomator2 的注入通道、ColorMapping 单例…）
+        ignoresException(this::closeCleanables);
+        ignoresException(ColorMapping::recycleSingleton);
+        // 图片泄露检测的开关/日志出口是进程级 static，退出时回置到默认值
+        // （日志出口抱着本 runtime，不回置会让下个脚本把日志发到已退出的 runtime 上）
+        ignoresException(() -> MemoryLeakDetector.reset(Debug.isPackagedApp()));
         try {
             events.emit("exit");
         } catch (Throwable e) {
@@ -464,6 +474,34 @@ public class ScriptRuntime {
         } catch (Throwable e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * 注册「脚本结束时需要释放」的资源（OCR 会话、RootAutomator2…）。
+     *
+     * <p>为什么需要：Pro 文档写得很清楚（`$ocr.create()` / `Matrix` 这类对象
+     * “默认会在程序退出时自动释放”），脚本作者却常常忘了写 release()，
+     * 于是识别器/注入通道会拖到进程结束。
+     */
+    public void addCleanable(AutoCloseable cleanable) {
+        if (cleanable != null) {
+            mCleanables.add(cleanable);
+        }
+    }
+
+    public void removeCleanable(AutoCloseable cleanable) {
+        mCleanables.remove(cleanable);
+    }
+
+    private void closeCleanables() {
+        for (AutoCloseable cleanable : mCleanables.toArray(new AutoCloseable[0])) {
+            try {
+                cleanable.close();
+            } catch (Throwable e) {
+                e.printStackTrace();
+            }
+        }
+        mCleanables.clear();
     }
 
     public Object getImages() {

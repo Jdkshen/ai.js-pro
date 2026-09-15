@@ -4,10 +4,12 @@ import android.content.Context;
 import android.view.ViewConfiguration;
 
 import com.stardust.autojs.core.util.ProcessShell;
+import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.util.ScreenMetrics;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 
 /**
  * PDF §2.2.3（第 40~45 页）：{@code new RootAutomator2([options])}。
@@ -24,12 +26,21 @@ import java.io.IOException;
  * <p>⚠️ 没有 root / 没有运行中的 Shizuku 时，本类<b>构造</b>不会失败，
  * 但真正注入事件时会抛出带中文说明的异常（不静默返回成功）。
  */
-public class RootAutomator2 {
+public class RootAutomator2 implements AutoCloseable {
 
     private static final int SHELL_TIMEOUT_MILLIS = 5000;
     /** 文档：长按时长 = ViewConfiguration.getLongPressTimeout() + 100 毫秒。 */
     private static final int LONG_PRESS_EXTRA_MILLIS = 100;
 
+    /** 当前进程内未 exit() 的 RootAutomator2 数量（探针用）。 */
+    private static final java.util.concurrent.atomic.AtomicInteger sLiveCount =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    public static int liveCount() {
+        return sLiveCount.get();
+    }
+
+    private final ScriptRuntime mRuntime;
     private final Context mContext;
     private final boolean mUseAdb;
     private ScreenMetrics mScreenMetrics;
@@ -39,8 +50,21 @@ public class RootAutomator2 {
     private boolean mClosed;
 
     public RootAutomator2(Context context, boolean useAdb) {
+        this(null, context, useAdb);
+    }
+
+    /**
+     * @param runtime 传 runtime 时，脚本没调 {@code exit()} 也会在脚本退出时自动收尾
+     *                （root 通道会挂着 su 壳进程，adb 通道会挂着未抬起的“手指”）
+     */
+    public RootAutomator2(ScriptRuntime runtime, Context context, boolean useAdb) {
+        mRuntime = runtime;
         mContext = context;
         mUseAdb = useAdb;
+        sLiveCount.incrementAndGet();
+        if (runtime != null) {
+            runtime.addCleanable(this);
+        }
     }
 
     public boolean isAdb() {
@@ -158,8 +182,22 @@ public class RootAutomator2 {
             return;
         }
         mClosed = true;
+        sLiveCount.decrementAndGet();
+        if (mRuntime != null) {
+            mRuntime.removeCleanable(this);
+        }
         if (!mUseAdb && mRootAutomator != null) {
             mRootAutomator.exit();
+        }
+    }
+
+    /** 脚本退出时的兜底收尾（等同 {@link #exit()}）。 */
+    @Override
+    public void close() {
+        try {
+            exit();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 

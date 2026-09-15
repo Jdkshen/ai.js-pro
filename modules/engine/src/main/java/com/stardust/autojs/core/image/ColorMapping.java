@@ -58,6 +58,16 @@ public class ColorMapping {
         mHeight = 0;
     }
 
+    /**
+     * 回收单例里缓存的像素（脚本结束时由 {@code ScriptRuntime.onExit()} 调用）。
+     *
+     * <p>单例是 static 的，脚本忘了 {@code reset()} 就会把一整屏的 int[]（1080×2160 ≈ 9MB）
+     * 拖到进程结束，而且下个脚本可能接着用上旧缓存。
+     */
+    public static void recycleSingleton() {
+        singleton.recycle();
+    }
+
     /** 文档没写、验收用的查询接口。 */
     @ScriptInterface
     public boolean isRecycled() {

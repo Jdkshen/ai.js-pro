@@ -188,7 +188,11 @@ public class Debug {
         }
     }
 
-    private static boolean isPackagedApp() {
+    /**
+     * 当前是不是打包产物（包名/类名里带 inrt）——文档规定泄露检测在运行端默认开、打包端默认关。
+     * 脚本退出时 {@code ScriptRuntime.onExit()} 也用它把检测回置到默认值。
+     */
+    public static boolean isPackagedApp() {
         try {
             Context context = ScriptRuntime.getApplicationContext();
             if (context == null) {

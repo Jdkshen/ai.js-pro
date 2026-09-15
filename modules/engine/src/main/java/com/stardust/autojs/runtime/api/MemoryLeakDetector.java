@@ -39,6 +39,27 @@ public final class MemoryLeakDetector {
         return sEnabled;
     }
 
+    /**
+     * 脚本退出时把进程级状态回置到默认（{@code ScriptRuntime.onExit()} 调用）。
+     *
+     * <p>为什么要：开关、登记表与日志出口都是**进程级 static**，而日志出口抱的是**创建它的
+     * runtime**。不管的话：（1）下个脚本会接着录上一个脚本剩下的登记项；
+     * （2）{@code sReporter} 长期持有一个已退出的 runtime（日志发不出去 + 内存泄漏）。
+     *
+     * <p>注意：不能简单地「关掉」——文档规定运行端**默认是开的**（打包端默认关），
+     * 所以这里回置到默认值，而不是 setEnabled(false)。
+     *
+     * @param packagedApp 当前是不是打包产物（由 {@code Debug.isPackagedApp()} 传入）
+     */
+    public static void reset(boolean packagedApp) {
+        sReporter = null;
+        sTracked.clear();
+        while (sQueue.poll() != null) {
+            // 丢弃已排队的引用，避免把上一个脚本的登记报成下个脚本的“泄露”
+        }
+        sEnabled = !packagedApp;
+    }
+
     public static void setEnabled(boolean enabled) {
         sEnabled = enabled;
         if (enabled) {

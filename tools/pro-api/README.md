@@ -127,6 +127,50 @@ foreach ($v in @('rhino','rhino-ui','qjs')) {
 | `ocr-contract.js` | 2.22 `$ocr.create` / `OCR.detect`（含 region/max 选项）/ `OCRResult.*` / `OCR.release` | 26 |
 | `features-contract.js` | 2.18 `detectAndComputeFeatures` / `matchFeatures` / `ImageFeatures.recycle` / `ObjectFrame.*` | 31 |
 
+### 一键跑全部（推荐）
+
+```powershell
+# 全部 15 个契约 + 资源释放检查（每个脚本自己 force-stop、自己开无障碍）
+powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-contracts.ps1'
+
+# 只跑其中几个（名字 = 脚本名去掉 -contract.js）
+powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-contracts.ps1' -Only ocr,features
+```
+
+- 每个脚本的日志落在 `.artifacts\contract-<脚本名>.log`，汇总表写 `.artifacts\contracts-summary.txt`；
+- 任一脚本失败时脚本以退出码 1 结束（可用于 CI / 发布前自检）；
+- `-DeviceId` 可换设备（默认小米 8 `ce4d2bdb`）。
+
+### 性能基线（`bench-api.js`）
+
+新 API 在**全屏尺寸 1080×2160** 下的实测（小米 8，2026-09-15）：
+
+| 接口 | 耗时 |
+| --- | --- |
+| `images.getSimilarity(.., {type:'MSSIM'})` | 70ms |
+| `images.getSimilarity(.., {type:'PNSR'})` | 32ms |
+| `detectAndComputeFeatures`（默认 scale：900×1800） | 79ms |
+| `detectAndComputeFeatures`（scale: 1） | 166ms |
+| `matchFeatures`（600 特征 vs 39 特征） | 6ms |
+| `OCR.detect`（全屏，ML Kit） | 169ms |
+| `automator.takeScreenshot` | 349ms（含无障碍限频 340ms） |
+
+```powershell
+# 重新量一遍（脚本自己造全屏尺寸的测试图，不依赖屏幕内容）
+& 'C:\Android\platform-tools-2\adb.exe' -s ce4d2bdb push tools\pro-api\bench-api.js /sdcard/probe/current.js
+# … 与其它脚本一样 am start 后读 logcat 里的 BENCH| 行
+```
+
+### 资源释放检查（`cleanup-1.js` + `cleanup-2.js`）
+
+专门验证「脚本忘了 release() / exit()」时引擎会不会兜底：
+
+- `cleanup-1.js`：建 3 个 `$ocr.create()` 会话 + 1 个 `RootAutomator2` + 用 `ColorMapping.singleton` 建缓存，
+  **故意一个都不释放**，然后结束；
+- `cleanup-2.js`（新脚本）：打印 `$ocr.liveCount()` / `RootAutomator2.liveCount()` / 单例是否已回收。
+
+预期：第 2 个脚本里两个计数都是 **0**、单例 `isRecycled=true`（见 `run-contracts.ps1` 里的 `cleanup` 项，共 4 条断言）。
+
 ⚠️ `debug-contract.js` 会真的 dump 两个 hprof 并压一个 zip（约 40~60 秒，脚本结束前自己删掉）；
 真机跑它时 `sleep` 给到 70 秒。
 
