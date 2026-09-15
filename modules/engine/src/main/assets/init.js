@@ -137,7 +137,7 @@ runtime.init();
             }
         }
         // App 模块注入的 Pro 风格模块（如 $work_manager）：由 App 侧 putProperty 注册，这里暴露成全局。
-        var injected = ['work_manager'];
+        var injected = ['work_manager', 'settings'];
         for (var k = 0; k < injected.length; k++) {
             var injectedName = injected[k];
             var injectedModule = null;

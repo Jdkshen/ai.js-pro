@@ -1,6 +1,6 @@
 # 第一代 Pro API 逐函数对照（Auto.js Pro 官方 API 文档 PDF）
 
-对照日期：2026-09-15（§4 / §5.4~§5.7 / §6 / §7 为 `$crypto`、`$zip`、`$debug`、`$power_manager`、`floaty` 权限补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
+对照日期：2026-09-15（§4 / §5.4~§5.8 / §6 / §7 为 `$crypto`、`$zip`、`$debug`、`$power_manager`、`floaty` 权限、`$settings` 补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
 真机：**小米 8（`ce4d2bdb`，Android 15）**，两个引擎各跑「普通脚本」与 `"ui";` 脚本。
 
 交付四层证据：**排版解析 → 静态源码对照 → 真机成员枚举 → 真机逐条路径取值**。
@@ -19,6 +19,7 @@
 | `tools/pro-api/zip-contract.js` | 2.35 `$zip` 行为验收脚本（28 项，§5.5） |
 | `tools/pro-api/debug-contract.js` | 2.9 `$debug` 行为验收脚本（18 项，§5.6） |
 | `tools/pro-api/power-manager-contract.js` / `floaty-permission-contract.js` | 2.24 `$power_manager` / 2.14 `floaty` 权限（§5.7） |
+| `tools/pro-api/settings-contract.js` | 2.28 `$settings` 行为验收脚本（21 项，§5.8） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -103,7 +104,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.25 sensors - 传感器 | 8 | 3 | 4 | 0 | 3 | 1 | 0 | 4 | 0 | 0 | 1 | 0 |
 | 2.26 shell - Shell 命令 | 6 | 6 | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 | 2.27 storages - 本地存储 | 8 | 7 | 2 | 5 | 0 | 1 | 0 | 2 | 0 | 5 | 1 | 0 |
-| 2.28 settings - 设置 | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
+| 2.28 settings - 设置 | 2 | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 |
 | 2.29 threads - 多线程 | 20 | 17 | 8 | 6 | 5 | 1 | 0 | 5 | 0 | 8 | 2 | 3 |
 | 2.30 thirdPartyPlugins - 第三方插件 | 40 | 23 | 0 | 0 | 2 | 37 | 1 | 0 | 0 | 30 | 8 | 2 |
 | 2.31 timers - 定时器 | 6 | 6 | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
@@ -112,9 +113,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **411** | **192** | **215** | **108** | **11** | **247** | **33** | **254** | **95** | **133** |
+| **合计** | **938** | **624** | **413** | **192** | **215** | **106** | **11** | **247** | **33** | **254** | **95** | **133** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **818/938（87%）**，QuickJS **534/938（57%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **820/938（87%）**，QuickJS **534/938（57%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -219,6 +220,35 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 - `floaty.checkPermission()` 与 `android.provider.Settings.canDrawOverlays(context)` 结果一致（本机为 `true`）；`requestPermission()` 后 `dumpsys window` 的 `mCurrentFocus` 变成 `com.android.settings/...SpaActivity`（证明真的跳到了系统页）。
 - ⚠️ **踩到的坑**：脚本作用域里的 `floaty` / `$floaty` 并不是 Java 的 `runtime.floaty`，而是 `assets/modules/__floaty__.js` 返回的 JS 对象（只手动挂了 `window`/`rawWindow`/`closeAll`）。新增 API 必须同时改 **Java 类 + `__floaty__.js`**，否则 `Cannot find function checkPermission in object [object Object]`。
 
+### 5.8 已按清单补齐：2.28 `$settings`（本轮，行为级验收）
+
+清单里 2.28 的 **2 条**（`$settings.setEnabled` / `isEnabled`）已实现并在真机验收（`settings-contract.js`：21/21）。
+
+这个模块与前面几个不同：**它必须由 App 侧提供实现**（引擎拿不到应用偏好），所以走仓库已有的注入约定
+（`runtime.putProperty("settings", …)` + `init.js` 的 `injected` 列表 → 全局 `$settings`）。
+
+| 端 | 实现 |
+| --- | --- |
+| 引擎 | `init.js`：`injected` 列表加上 `'settings'`（不依赖 App 具体类） |
+| 主应用 | 新建 `app/…/autojs/api/SettingsModule.java`，`AutoJs.createRuntime()` 里 `putProperty`；`Pref` 补齐几个 setter |
+| 打包版 | 新建 `inrt/…/autojs/api/SettingsModule.kt`，同样 `putProperty` |
+
+key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例脚本在用）：
+
+| 文档 key | 主应用 | 打包版 |
+| --- | --- | --- |
+| `stop_all_on_volume_up` | `key_use_volume_control_running`（默认 **关**；Pro 文档默认**开** —— 差异见 §9） | 同左（打包版默认**开**） |
+| `not_show_console` | 新键 `not_show_console`（默认关） | `key_dont_show_main_activity` |
+| `foreground_service` | `Pref.isForegroundServiceEnabled()`（`ForegroundService` 真的读它） | — |
+| `stable_mode`（样例在用） | `key_stable_mode` | — |
+| `enable_accessibility_service_by_root`（样例在用） | 同名键 | 同名键 |
+
+要点：
+
+- 未知 key **明确报错**（`未知的设置项: xxx`），不静默返回 `false`——静默会让脚本以为设置生效了。
+- 真机验证方式是「读 → 取反 → 读 → 还原 → 读」的往返，跑完不改设备状态；并与 App 的 `Pref` 类交叉对比。
+- 样例 `apps/app/src/main/assets/sample/Rhino 引擎/设置/设置.js` 原来写着“当前引擎暂未实现”，现已能直接跑（头注释已更新）。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -237,9 +267,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | `$work_manager.addIntentTask` | **命名差异**：实现叫 `addBroadcastIntentTask`（`WorkManagerModule.kt:65`，实机确认） |
 | `app.getInstalledApps` | **命名差异**：实现叫 `getInstalledPackageList`（历史改名，避免与 Java 方法冲突） |
 
-### 6.2 真缺 —— 两个引擎都没有（约 20 条）
+### 6.2 真缺 —— 两个引擎都没有（约 18 条）
 
-⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限已分别在 §5.4~§5.7 补齐并真机验收，不再属于这一节。
+⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings` 已分别在 §5.4~§5.8 补齐并真机验收，不再属于这一节。
 剩余大头：
 `ColorMapping.*`（4）、`RootAutomator2` 与 `RootAutomator2.longPress`、
 `OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
@@ -254,7 +284,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **27 条**（未定位 19 + 实机缺 8）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **25 条**（未定位 17 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
@@ -262,8 +292,8 @@ CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, construct
 | 2.1 控件操作 | 3 | 3 | `UiObject.clickCenter`、`auto.clearCache`、`Rect.intersect`、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
 | 2.11 dialogs | 3 | 0 | `dialog.setDefaultDialogType/getProgress/getMaxProgress` |
 | 2.12 engines | 1 | 1 | `engines.startFloatingController`、`getPath` |
-| 2.2 坐标操作 / 2.22 ocr / 2.28 settings / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`$settings.*`、`isAlive` |
-| ~~2.8 crypto / 2.9 debug / 2.14 floaty 权限 / 2.24 power_manager / 2.35 zip~~ | ~~27~~ | 0 | **已补齐（§5.4~§5.7），从清单移出** |
+| 2.2 坐标操作 / 2.22 ocr / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`isAlive` |
+| ~~2.8 crypto / 2.9 debug / 2.14 floaty 权限 / 2.24 power_manager / 2.28 settings / 2.35 zip~~ | ~~29~~ | 0 | **已补齐（§5.4~§5.8），从清单移出** |
 
 QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。
 
@@ -292,6 +322,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 9. 这份清单不能证明什么
 
 - **不是行为验收**：名字在 ≠ 行为一致。默认值、异常、回调线程、权限取消、资源释放仍要按 [AutoJsPro API 兼容性与 V8 选型](Auto.jsPro_API兼容性与V8选型.md) §7 的场景逐项验证。
+- **已补齐的模块只验了本轮脚本覆盖到的东西**：`$crypto`/`$zip`/`$debug`/`$power_manager`/`floaty` 权限/`$settings` 都有对应的 `tools/pro-api/*-contract.js`（共 88 项断言），但**默认值差异仍存在**，已知两处：
+  - `$settings.isEnabled('stop_all_on_volume_up')`：主应用沿用仓库原有键 `key_use_volume_control_running`，其默认值是**关**，而 Pro 文档写的是默认**开**（打包版默认开，与文档一致）。
+  - `$settings.isEnabled('not_show_console')`：主应用没有「脚本启动即弹日志界面」的行为，这个开关只负责存取值。
 - **单机单版本**：本轮只覆盖小米 8 + 当时构建，换设备/版本要重跑（脚本已固化）。
 - **仍有盲区**：动态挂载（`Proxy`、`Object.defineProperty`、反射注册）与"要满足条件才存在"的成员（实例方法、惰性加载）都测不到；`未定位` 只代表四层证据都没找到。
 - **没有 Pro 对照设备**：`version` 列只说明该条目属于哪个版本，不代表我们对齐到了同一版本。
@@ -299,8 +332,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-2. **补真缺口**（按性价比）：`$settings`（需要 App 侧注入模块）、`ColorMapping`、`$images.*`、`dialog.*`（“低风险、实现短”优先）；
-   （`$crypto` 见 §5.4、`$zip` 见 §5.5、`$debug` 见 §5.6、`$power_manager`+`floaty` 权限见 §5.7，已完成）；
+2. **补真缺口**（按性价比）：`ColorMapping`、`$images.*`、`dialog.*`（“低风险、实现短”优先）；
+   （`$crypto` 见 §5.4、`$zip` 见 §5.5、`$debug` 见 §5.6、`$power_manager`+`floaty` 权限见 §5.7、`$settings` 见 §5.8，已完成）；
 3. **把本轮两套实现同步给 QuickJS**：`$crypto` 与 `$zip` 现在只有 Rhino 侧能用（QuickJS 只有 `digest`/`base64*` 与旧的 `zip/unzip/list`）。
    QuickJS 走字符串桥，需要一个新的 JSON 形式宿主方法；改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。
 4. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。

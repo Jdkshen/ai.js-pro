@@ -26,6 +26,8 @@ public class Pref {
     private static final String KEY_FLOATING_MENU_SHOWN = "KEY_FLOATING_MENU_SHOWN";
     private static final String KEY_EDITOR_THEME = "editor.theme";
     private static final String KEY_EDITOR_TEXT_SIZE = "editor.textSize";
+    /** `$settings.setEnabled('not_show_console', …)` 的落盘键（文档原名）。 */
+    private static final String KEY_NOT_SHOW_CONSOLE = "not_show_console";
 
     private static SharedPreferences.OnSharedPreferenceChangeListener onSharedPreferenceChangeListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
         @Override
@@ -45,6 +47,35 @@ public class Pref {
 
     private static SharedPreferences def() {
         return PreferenceManager.getDefaultSharedPreferences(GlobalAppContext.get());
+    }
+
+    // ------------------------------------------------------------------
+    // `$settings`（PDF §2.28）用到的几个开关的读写；缺少 setter 的在这里补齐
+    // ------------------------------------------------------------------
+
+    /** 音量键控制运行（含"音量上键停止所有脚本"）。 */
+    public static void setRunningVolumeControlEnabled(boolean enabled) {
+        def().edit().putBoolean(getString(R.string.key_use_volume_control_running), enabled).apply();
+    }
+
+    /**
+     * 文档里的 `not_show_console`（启动时不显示日志界面）。
+     * 本仓库没有"脚本启动即弹日志界面"的行为，因此这个值目前只是存下来。
+     */
+    public static boolean isConsoleHiddenOnStart() {
+        return def().getBoolean(KEY_NOT_SHOW_CONSOLE, false);
+    }
+
+    public static void setConsoleHiddenOnStart(boolean hidden) {
+        def().edit().putBoolean(KEY_NOT_SHOW_CONSOLE, hidden).apply();
+    }
+
+    public static void setStableModeEnabled(boolean enabled) {
+        def().edit().putBoolean(getString(R.string.key_stable_mode), enabled).apply();
+    }
+
+    public static void setEnableAccessibilityServiceByRoot(boolean enabled) {
+        def().edit().putBoolean(getString(R.string.key_enable_accessibility_service_by_root), enabled).apply();
     }
 
     private static boolean getDisposableBoolean(String key, boolean defaultValue) {

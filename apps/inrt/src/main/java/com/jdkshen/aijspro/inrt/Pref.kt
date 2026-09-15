@@ -47,4 +47,18 @@ object Pref {
     fun shouldStopAllScriptsWhenVolumeUp(): Boolean {
         return preferences.getBoolean(getString(R.string.key_use_volume_control_running), true)
     }
+
+    // `$settings`（PDF §2.28）需要的写入接口
+
+    fun setStopAllScriptsWhenVolumeUp(enabled: Boolean) {
+        preferences.edit().putBoolean(getString(R.string.key_use_volume_control_running), enabled).apply()
+    }
+
+    fun setEnableAccessibilityServiceByRoot(enabled: Boolean) {
+        preferences.edit().putBoolean(getString(R.string.key_enable_accessibility_service_by_root), enabled).apply()
+    }
+
+    fun setHideLogs(hidden: Boolean) {
+        preferences.edit().putBoolean(getString(R.string.key_dont_show_main_activity), hidden).apply()
+    }
 }
