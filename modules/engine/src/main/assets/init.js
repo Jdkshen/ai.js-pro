@@ -118,6 +118,10 @@ runtime.init();
         }
         // Auto.js Pro exposes the UI module also as $ui; mirror that alias.
         scope.$ui = scope.ui;
+        // Pro 文档的压缩模块叫 `$zip`（不是 `$zips`），另外把 ZipFile 类暴露成全局名。
+        if (scope.zips !== undefined) {
+            scope.$zip = scope.zips;
+        }
         // Auto.js Pro 的 `$` 前缀模块名（$files / $images / $threads / $crypto ...）：
         // 给已有模块统一挂一份别名，Pro 示例可以不改一行直接跑。
         var aliasNames = ['app', 'automator', 'console', 'dialogs', 'ui', 'images', 'threads', 'events',
@@ -149,6 +153,7 @@ runtime.init();
 
     importClass(android.view.KeyEvent);
     importClass(com.stardust.autojs.core.util.Shell);
+    importClass(com.stardust.autojs.runtime.api.ZipFile);
     importClass(android.graphics.Paint);
     Canvas = com.stardust.autojs.core.graphics.ScriptCanvas;
     Image = com.stardust.autojs.core.image.ImageWrapper;

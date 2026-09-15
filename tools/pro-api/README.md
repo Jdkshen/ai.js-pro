@@ -107,23 +107,29 @@ foreach ($v in @('rhino','rhino-ui','qjs')) {
 
 ## 行为验收脚本（按清单补实现时用）
 
-`crypto-contract.js` 是 2.8 `$crypto` 的行为验收：12 项断言，含文档第 74~75 页的**黄金向量**
-（`"Hello Autojs"` + `new $crypto.Key("a"×16)` + `"AES"` → `7hu7UQKpjBeOqpEoOoHjxQ==`）。
-它是「名字在 + 行为也对」这一层的样板，补别的模块时按同样方式加脚本。
+清单里的 `实机有` / `已定义` 只证明「名字在」；**行为对不对**靠这两份脚本（补别的模块时照此加）：
+
+| 脚本 | 覆盖 | 断言数 |
+| --- | --- | --- |
+| `crypto-contract.js` | 2.8 `$crypto`（含文档第 74~75 页黄金向量 `7hu7UQKpjBeOqpEoOoHjxQ==`） | 12 |
+| `zip-contract.js` | 2.35 `$zip` / `ZipFile`（含加密压缩、AES-256、`includeRootFolder`、条目增删） | 28 |
 
 ```powershell
 $adb='C:\Android\platform-tools-2\adb.exe'
-& $adb -s ce4d2bdb push 'tools\pro-api\crypto-contract.js' '/sdcard/probe/current.js'
-& $adb -s ce4d2bdb shell am force-stop com.jdkshen.aijspro
-& $adb -s ce4d2bdb logcat -c
-& $adb -s ce4d2bdb shell am start -a android.intent.action.VIEW -d 'file:///sdcard/probe/current.js' `
-    -t text/plain -n com.jdkshen.aijspro/.external.open.RunIntentActivity
-& $adb -s ce4d2bdb shell sleep 25
-cmd /c "`"$adb`" -s ce4d2bdb logcat -d -s GlobalConsole:V > `.artifacts\crypto-contract.log`""
-Select-String -Path '.artifacts\crypto-contract.log' -Pattern 'OK   |FAIL |_SUMMARY' -Encoding utf8
+foreach ($script in @('crypto-contract.js','zip-contract.js')) {
+  & $adb -s ce4d2bdb push "tools\pro-api\$script" '/sdcard/probe/current.js'
+  & $adb -s ce4d2bdb shell am force-stop com.jdkshen.aijspro   # 否则 am start 只投递 intent，不重跑
+  & $adb -s ce4d2bdb logcat -c
+  & $adb -s ce4d2bdb shell am start -a android.intent.action.VIEW -d 'file:///sdcard/probe/current.js' `
+      -t text/plain -n com.jdkshen.aijspro/.external.open.RunIntentActivity
+  & $adb -s ce4d2bdb shell sleep 30
+  cmd /c "`"$adb`" -s ce4d2bdb logcat -d -s GlobalConsole:V > `.artifacts\$script.log`""
+  Select-String -Path ".artifacts\$script.log" -Pattern 'OK   |FAIL |_SUMMARY' -Encoding utf8
+}
 ```
 
-期望输出：11 行 `OK` + `CRYPTO_SUMMARY|pass=12 failed=0`。
+期望：`crypto-contract` = 11 行 `OK` + `CRYPTO_SUMMARY|pass=12 failed=0`；
+`zip-contract` = 28 行 `OK` + `ZIP_SUMMARY|pass=28 failed=0`。
 
 ## 产物
 
