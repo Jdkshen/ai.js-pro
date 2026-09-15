@@ -47,6 +47,16 @@ module.exports = function(runtime, global){
     
     floaty.closeAll = runtime.floaty.closeAll.bind(runtime.floaty);
 
+    // PDF §2.14：floaty.checkPermission() / floaty.requestPermission()
+    // （脚本里的 floaty 是这个 JS 模块，Java 侧对象在 runtime.floaty）
+    floaty.checkPermission = function () {
+        return runtime.floaty.checkPermission();
+    };
+
+    floaty.requestPermission = function () {
+        runtime.floaty.requestPermission();
+    };
+
     return floaty;
 }
 

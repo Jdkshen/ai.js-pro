@@ -7,6 +7,7 @@ import android.view.ContextThemeWrapper;
 import android.view.View;
 
 import com.stardust.autojs.R;
+import com.stardust.autojs.annotation.ScriptInterface;
 import com.stardust.autojs.core.floaty.BaseResizableFloatyWindow;
 import com.stardust.autojs.core.floaty.RawWindow;
 import com.stardust.autojs.core.ui.JsViewHelper;
@@ -40,6 +41,19 @@ public class Floaty {
         mLayoutInflater = ui.getLayoutInflater();
     }
 
+    /** PDF §2.14：`floaty.checkPermission()` —— 当前应用是否有悬浮窗权限（不触发请求）。 */
+    @ScriptInterface
+    public boolean checkPermission() {
+        return FloatingPermission.canDrawOverlays(mUiHandler.getContext());
+    }
+
+    /** PDF §2.14：`floaty.requestPermission()` —— 跳到系统悬浮窗权限界面（不阻塞、不等待）。 */
+    @ScriptInterface
+    public void requestPermission() {
+        FloatingPermission.manageDrawOverlays(mUiHandler.getContext());
+    }
+
+    @ScriptInterface
     public JsResizableWindow window(BaseResizableFloatyWindow.ViewSupplier supplier) {
         try {
             FloatingPermission.waitForPermissionGranted(mContext);

@@ -1,6 +1,6 @@
 # 第一代 Pro API 逐函数对照（Auto.js Pro 官方 API 文档 PDF）
 
-对照日期：2026-09-15（§4 / §5.4~§5.6 / §6 / §7 为 `$crypto`、`$zip`、`$debug` 补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
+对照日期：2026-09-15（§4 / §5.4~§5.7 / §6 / §7 为 `$crypto`、`$zip`、`$debug`、`$power_manager`、`floaty` 权限补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
 真机：**小米 8（`ce4d2bdb`，Android 15）**，两个引擎各跑「普通脚本」与 `"ui";` 脚本。
 
 交付四层证据：**排版解析 → 静态源码对照 → 真机成员枚举 → 真机逐条路径取值**。
@@ -18,6 +18,7 @@
 | `tools/pro-api/crypto-contract.js` | 2.8 `$crypto` 行为验收脚本（含文档黄金向量，§5.4） |
 | `tools/pro-api/zip-contract.js` | 2.35 `$zip` 行为验收脚本（28 项，§5.5） |
 | `tools/pro-api/debug-contract.js` | 2.9 `$debug` 行为验收脚本（18 项，§5.6） |
+| `tools/pro-api/power-manager-contract.js` / `floaty-permission-contract.js` | 2.24 `$power_manager` / 2.14 `floaty` 权限（§5.7） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -53,7 +54,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 383 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 387 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -89,7 +90,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.11 dialogs - 对话框 | 26 | 13 | 10 | 0 | 12 | 4 | 0 | 8 | 0 | 4 | 1 | 1 |
 | 2.12 engines - 脚本引擎 | 21 | 15 | 7 | 4 | 5 | 4 | 1 | 6 | 0 | 6 | 4 | 2 |
 | 2.13 events - 事件与监听 | 18 | 14 | 2 | 14 | 1 | 1 | 0 | 1 | 0 | 14 | 1 | 1 |
-| 2.14 floaty - 悬浮窗 | 25 | 23 | 3 | 18 | 0 | 2 | 2 | 3 | 9 | 7 | 2 | 2 |
+| 2.14 floaty - 悬浮窗 | 25 | 23 | 5 | 18 | 0 | 2 | 0 | 3 | 9 | 7 | 2 | 2 |
 | 2.15 files - 文件系统 | 40 | 37 | 27 | 9 | 2 | 2 | 0 | 18 | 0 | 0 | 3 | 18 |
 | 2.16 globals - 全局变量与函数 | 16 | 15 | 16 | 0 | 0 | 0 | 0 | 13 | 1 | 2 | 0 | 0 |
 | 2.17 http - HTTP 网络请求 | 13 | 5 | 13 | 0 | 0 | 0 | 0 | 4 | 0 | 7 | 1 | 1 |
@@ -98,7 +99,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.20 media - 多媒体 | 9 | 9 | 9 | 0 | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | 2.22 ocr - 文字识别 | 12 | 4 | 0 | 0 | 4 | 8 | 0 | 0 | 0 | 9 | 3 | 0 |
 | 2.23 plugins - 插件 | 4 | 1 | 1 | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 4 | 0 |
-| 2.24 power_manager - 电源管理 | 4 | 2 | 0 | 0 | 1 | 3 | 0 | 0 | 0 | 0 | 4 | 0 |
+| 2.24 power_manager - 电源管理 | 4 | 2 | 2 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 4 | 0 |
 | 2.25 sensors - 传感器 | 8 | 3 | 4 | 0 | 3 | 1 | 0 | 4 | 0 | 0 | 1 | 0 |
 | 2.26 shell - Shell 命令 | 6 | 6 | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 | 2.27 storages - 本地存储 | 8 | 7 | 2 | 5 | 0 | 1 | 0 | 2 | 0 | 5 | 1 | 0 |
@@ -111,9 +112,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **407** | **192** | **215** | **110** | **13** | **247** | **33** | **254** | **95** | **133** |
+| **合计** | **938** | **624** | **411** | **192** | **215** | **108** | **11** | **247** | **33** | **254** | **95** | **133** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **814/938（87%）**，QuickJS **534/938（57%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **818/938（87%）**，QuickJS **534/938（57%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -137,7 +138,8 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 ### 5.3 真机直接确认"取不到"的条目（`实机缺`）
 
-- **Rhino 13 条**：`automator.takeScreenshot/switchToInputMethod/headsetHook`、`floaty.checkPermission/requestPermission`、`images.getSimilarity/detectsMultiColors`、`engines.startFloatingController`、`app.getInstalledApps`（命名差异，实现叫 `getInstalledPackageList`）、`console.getInput/setColor/setTextSize`（2.36 的 `<console>` 控件属性）、`device.broad`（文档残片）、`ocr.filterScore`。
+- **Rhino 11 条**：`automator.takeScreenshot/switchToInputMethod/headsetHook`、`images.getSimilarity/detectsMultiColors`、`engines.startFloatingController`、`app.getInstalledApps`（命名差异，实现叫 `getInstalledPackageList`）、`console.getInput/setColor/setTextSize`（2.36 的 `<console>` 控件属性）、`device.broad`（文档残片）、`ocr.filterScore`。
+  （`floaty.checkPermission/requestPermission` 原本也在这张表里，已在 §5.7 补齐。）
 - **QuickJS 133 条**，与仓库既有结论完全吻合：`canvas.*` 29、`device.*` 28、`files.*` 18、`colors` 常量 11、`app.*` 8、`console.*` 7、`WebSocket.*` 4、`threads.disposable/atomic/lock` 3 等。
 
 ### 5.4 已按清单补齐：2.8 `$crypto`（本轮，行为级验收）
@@ -203,6 +205,20 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 - 真机实测：20 张故意不 `recycle()` 的图片全部报出 `[MemoryLeak] Image 对象没有调用 recycle() …`，20 张正常 `recycle()` 的**一张都没报**。
 - ⚠️ 验证注意：ART 的 `System.gc()` 只是「建议」，小对象往往要等内存压力才真被回收（验收脚本里先分配一块大数组逼一次 GC 再轮询，不然计数一直是 0）。
 
+### 5.7 已按清单补齐：2.24 `$power_manager` + 2.14 `floaty` 权限（本轮）
+
+| 模块 | 条数 | 实现 | 验收 |
+| --- | --- | --- | --- |
+| 2.24 `$power_manager` | 2 | 新建 `runtime/api/PowerManager.java`（`isIgnoringBatteryOptimizations([pkg])` / `requestIgnoreBatteryOptimizations(forceRequest, pkg)`），`init.js` 暴露 `global.$power_manager` | `power-manager-contract.js`：5/5 |
+| 2.14 `floaty` 权限 | 2 | `Floaty.java` 新增 `checkPermission/requestPermission`；**脚本里的 `floaty` 是 `__floaty__.js` 这个 JS 模块**，所以还要在它上面转发一层 | `floaty-permission-contract.js`：4/4 |
+
+对齐细节：
+
+- `requestIgnoreBatteryOptimizations` 严格按文档：`forceRequest=false` 且已开启时**不发起请求**；请求用 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`（系统弹窗、异步、不返回结果），被 ROM 拒绝时回落 `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`。
+- 真机交叉验证：`$power_manager.isIgnoringBatteryOptimizations()` 与直接调 `android.os.PowerManager` 结果一致（本机为 `false`）；请求后系统确实弹出“忽略电池优化”确认框。
+- `floaty.checkPermission()` 与 `android.provider.Settings.canDrawOverlays(context)` 结果一致（本机为 `true`）；`requestPermission()` 后 `dumpsys window` 的 `mCurrentFocus` 变成 `com.android.settings/...SpaActivity`（证明真的跳到了系统页）。
+- ⚠️ **踩到的坑**：脚本作用域里的 `floaty` / `$floaty` 并不是 Java 的 `runtime.floaty`，而是 `assets/modules/__floaty__.js` 返回的 JS 对象（只手动挂了 `window`/`rawWindow`/`closeAll`）。新增 API 必须同时改 **Java 类 + `__floaty__.js`**，否则 `Cannot find function checkPermission in object [object Object]`。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -221,14 +237,14 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | `$work_manager.addIntentTask` | **命名差异**：实现叫 `addBroadcastIntentTask`（`WorkManagerModule.kt:65`，实机确认） |
 | `app.getInstalledApps` | **命名差异**：实现叫 `getInstalledPackageList`（历史改名，避免与 Java 方法冲突） |
 
-### 6.2 真缺 —— 两个引擎都没有（约 24 条）
+### 6.2 真缺 —— 两个引擎都没有（约 20 条）
 
-⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug` 已分别在 §5.4 / §5.5 / §5.6 补齐并真机验收，不再属于这一节。
+⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限已分别在 §5.4~§5.7 补齐并真机验收，不再属于这一节。
 剩余大头：
 `ColorMapping.*`（4）、`RootAutomator2` 与 `RootAutomator2.longPress`、
-`$power_manager.*`（2）、`OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
+`OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
 `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures/matchFeatures`、
-`floaty.checkPermission/requestPermission`、`images.getSimilarity/detectsMultiColors`、
+`images.getSimilarity/detectsMultiColors`、
 `automator.takeScreenshot/switchToInputMethod/headsetHook`、`engines.startFloatingController`、
 `UiObject.clickCenter`、`dialog.setDefaultDialogType/getProgress/getMaxProgress`、`isAlive`、`getPath`。
 
@@ -238,16 +254,16 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **31 条**（未定位 23 + 实机缺 8）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **27 条**（未定位 19 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
 | 2.18 images | 7 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`ColorMapping.*`、`images.getSimilarity/detectsMultiColors` |
 | 2.1 控件操作 | 3 | 3 | `UiObject.clickCenter`、`auto.clearCache`、`Rect.intersect`、`automator.takeScreenshot/switchToInputMethod/headsetHook` |
 | 2.11 dialogs | 3 | 0 | `dialog.setDefaultDialogType/getProgress/getMaxProgress` |
-| 2.12 engines / 2.14 floaty | 1 / 0 | 1 / 2 | `engines.startFloatingController`、`getPath`、`floaty.checkPermission/requestPermission` |
-| 2.2 坐标操作 / 2.22 ocr / 2.24 power_manager / 2.28 settings / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`$power_manager.*`、`$settings.*`、`isAlive` |
-| ~~2.8 crypto / 2.9 debug / 2.35 zip~~ | ~~23~~ | 0 | **已补齐（§5.4 / §5.6 / §5.5），从清单移出** |
+| 2.12 engines | 1 | 1 | `engines.startFloatingController`、`getPath` |
+| 2.2 坐标操作 / 2.22 ocr / 2.28 settings / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`$settings.*`、`isAlive` |
+| ~~2.8 crypto / 2.9 debug / 2.14 floaty 权限 / 2.24 power_manager / 2.35 zip~~ | ~~27~~ | 0 | **已补齐（§5.4~§5.7），从清单移出** |
 
 QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。
 
@@ -283,8 +299,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-2. **补真缺口**（按性价比）：`ColorMapping`、`$power_manager`、`$settings`、`$images.*`（“低风险、实现短”优先）；
-   （`$crypto` 见 §5.4、`$zip` 见 §5.5、`$debug` 见 §5.6，已完成）；
+2. **补真缺口**（按性价比）：`$settings`（需要 App 侧注入模块）、`ColorMapping`、`$images.*`、`dialog.*`（“低风险、实现短”优先）；
+   （`$crypto` 见 §5.4、`$zip` 见 §5.5、`$debug` 见 §5.6、`$power_manager`+`floaty` 权限见 §5.7，已完成）；
 3. **把本轮两套实现同步给 QuickJS**：`$crypto` 与 `$zip` 现在只有 Rhino 侧能用（QuickJS 只有 `digest`/`base64*` 与旧的 `zip/unzip/list`）。
    QuickJS 走字符串桥，需要一个新的 JSON 形式宿主方法；改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。
 4. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。

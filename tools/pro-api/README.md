@@ -114,13 +114,15 @@ foreach ($v in @('rhino','rhino-ui','qjs')) {
 | `crypto-contract.js` | 2.8 `$crypto`（含文档第 74~75 页黄金向量 `7hu7UQKpjBeOqpEoOoHjxQ==`） | 12 |
 | `zip-contract.js` | 2.35 `$zip` / `ZipFile`（含加密压缩、AES-256、`includeRootFolder`、条目增删） | 28 |
 | `debug-contract.js` | 2.9 `$debug`（dumpHprof / dumpAndSendHprof / getStackTrace / 内存泄露检测 / gc） | 18 |
+| `power-manager-contract.js` | 2.24 `$power_manager`（含与系统 API 的交叉对比） | 5 |
+| `floaty-permission-contract.js` | 2.14 `floaty.checkPermission/requestPermission` | 4 |
 
 ⚠️ `debug-contract.js` 会真的 dump 两个 hprof 并压一个 zip（约 40~60 秒，脚本结束前自己删掉）；
 真机跑它时 `sleep` 给到 70 秒。
 
 ```powershell
 $adb='C:\Android\platform-tools-2\adb.exe'
-foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js')) {
+foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js','power-manager-contract.js','floaty-permission-contract.js')) {
   & $adb -s ce4d2bdb push "tools\pro-api\$script" '/sdcard/probe/current.js'
   & $adb -s ce4d2bdb shell am force-stop com.jdkshen.aijspro   # 否则 am start 只投递 intent，不重跑
   & $adb -s ce4d2bdb logcat -c
@@ -134,7 +136,9 @@ foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js'
 
 期望：`crypto-contract` = 11 行 `OK` + `CRYPTO_SUMMARY|pass=12 failed=0`；
 `zip-contract` = 28 行 `OK` + `ZIP_SUMMARY|pass=28 failed=0`；
-`debug-contract` = 18 行 `OK` + `DEBUG_SUMMARY|pass=18 failed=0`（日志里还会出现若干条 `[MemoryLeak]`）。
+`debug-contract` = 18 行 `OK` + `DEBUG_SUMMARY|pass=18 failed=0`（日志里还会出现若干条 `[MemoryLeak]`）；
+`power-manager-contract` = `POWER_SUMMARY|pass=5 failed=0`（会拉起系统"忽略电池优化"弹窗，跑完按返回键）；
+`floaty-permission-contract` = `FLOATY_SUMMARY|pass=4 failed=0`（会跳到系统悬浮窗权限页，跑完按返回键）。
 
 ## 产物
 

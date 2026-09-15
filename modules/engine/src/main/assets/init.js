@@ -58,7 +58,9 @@ runtime.init();
      global.sqlite = runtime.sqlite;
      global.crypto = runtime.crypto;
      global.zips = runtime.zips;    // Auto.js Pro 的 $debug（文档 2.9）：内存 dump / 堆栈 / 内存泄露检测
-    global.$debug = runtime.debug;     // Auto.js Pro 的 $crypto（文档 2.8）：Java 侧只负责算法，这里把结果包装成文档里的
+    global.$debug = runtime.debug;
+    // Auto.js Pro 的 $power_manager（文档 2.24）：忽略电池优化
+    global.$power_manager = runtime.powerManager;     // Auto.js Pro 的 $crypto（文档 2.8）：Java 侧只负责算法，这里把结果包装成文档里的
      // 对象形状（Key 带 data/algorithm/format，KeyPair 带 publicKey/privateKey）。
      (function (crypto) {
          function Key(data, options) {

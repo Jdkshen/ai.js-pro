@@ -28,6 +28,7 @@ import com.stardust.autojs.runtime.api.Floaty;
 import com.stardust.autojs.core.looper.Loopers;
 import com.stardust.autojs.runtime.api.Media;
 import com.stardust.autojs.runtime.api.Plugins;
+import com.stardust.autojs.runtime.api.PowerManager;
 import com.stardust.autojs.runtime.api.Sensors;
 import com.stardust.autojs.runtime.api.Sqlite;
 import com.stardust.autojs.runtime.api.Threads;
@@ -217,6 +218,9 @@ public class ScriptRuntime {
     @ScriptVariable
     public final Debug debug;
 
+    @ScriptVariable
+    public final PowerManager powerManager;
+
     private Images images;
 
     private static WeakReference<Context> applicationContext;
@@ -255,6 +259,7 @@ public class ScriptRuntime {
         crypto = new Crypto();
         zips = new Zips(context);
         debug = new Debug(this);
+        powerManager = new PowerManager(context);
     }
 
     public void init() {
