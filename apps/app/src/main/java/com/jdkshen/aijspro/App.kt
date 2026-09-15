@@ -27,6 +27,7 @@ import com.tencent.bugly.crashreport.CrashReport
 import com.jdkshen.aijspro.autojs.AutoJs
 import com.jdkshen.aijspro.autojs.key.GlobalKeyObserver
 import com.jdkshen.aijspro.external.receiver.DynamicBroadcastReceivers
+import com.jdkshen.aijspro.model.sample.BundledSampleSync
 import com.jdkshen.aijspro.theme.ThemeColorManagerCompat
 import com.jdkshen.aijspro.timing.TimedTaskManager
 import com.jdkshen.aijspro.timing.TimedTaskScheduler
@@ -95,6 +96,9 @@ class App : MultiDexApplication() {
         setupDrawableImageLoader()
         TimedTaskScheduler.init(this)
         initDynamicBroadcastReceivers()
+        // 升级后把内置示例对齐到新版本：示例目录是懒拷贝，内容被改过的示例
+        // 不会自己刷新（旧版本已修好的示例在手机上升级后仍然是旧的）。
+        BundledSampleSync.syncIfNeeded(this)
     }
 
     @SuppressLint("CheckResult")

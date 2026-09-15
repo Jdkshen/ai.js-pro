@@ -28,6 +28,8 @@ public class Pref {
     private static final String KEY_EDITOR_TEXT_SIZE = "editor.textSize";
     /** `$settings.setEnabled('not_show_console', …)` 的落盘键（文档原名）。 */
     private static final String KEY_NOT_SHOW_CONSOLE = "not_show_console";
+    /** APK 内置示例最后一次同步时的 versionCode，见 BundledSampleSync。 */
+    private static final String KEY_SAMPLE_SYNCED_VERSION = "sample.syncedVersionCode";
 
     private static SharedPreferences.OnSharedPreferenceChangeListener onSharedPreferenceChangeListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
         @Override
@@ -76,6 +78,19 @@ public class Pref {
 
     public static void setEnableAccessibilityServiceByRoot(boolean enabled) {
         def().edit().putBoolean(getString(R.string.key_enable_accessibility_service_by_root), enabled).apply();
+    }
+
+    /**
+     * APK 内置示例最后一次同步时的 versionCode。示例目录是懒拷贝（存在即跳过），
+     * 内容改过的示例在升级后不会自己刷新，所以 BundledSampleSync 用这个值判断
+     * 「这个版本是否已经同步过」。
+     */
+    public static int getSampleSyncedVersionCode() {
+        return def().getInt(KEY_SAMPLE_SYNCED_VERSION, 0);
+    }
+
+    public static void setSampleSyncedVersionCode(int versionCode) {
+        def().edit().putInt(KEY_SAMPLE_SYNCED_VERSION, versionCode).apply();
     }
 
     private static boolean getDisposableBoolean(String key, boolean defaultValue) {
