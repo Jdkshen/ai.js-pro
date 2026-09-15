@@ -25,6 +25,7 @@
 | `tools/pro-api/images-contract.js` | 2.18 `getSimilarity` / `detectsMultiColors` / `getScreenCaptureOptions` / `stopScreenCapture`（§5.11） |
 | `tools/pro-api/automator-extra-contract.js` | 2.1 `takeScreenshot` / `switchToInputMethod` / `headsetHook` + 2.12 `getPath` + 2.29 `isAlive`（§5.12） |
 | `tools/pro-api/engines-controller-contract.js` | 2.12 `engines.startFloatingController`（§5.13） |
+| `tools/pro-api/rootautomator2-contract.js` | 2.2 `RootAutomator2` 整组（§5.14） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -60,7 +61,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 404 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 405 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -84,7 +85,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1.2 如何阅读本文档 | 2 | 2 | 2 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 |
 | 2.1 自动化-控件操作 | 117 | 106 | 23 | 92 | 1 | 1 | 0 | 16 | 0 | 90 | 1 | 10 |
-| 2.2 自动化 - 坐标操作 | 32 | 30 | 11 | 0 | 18 | 3 | 0 | 11 | 0 | 12 | 2 | 0 |
+| 2.2 自动化 - 坐标操作 | 32 | 30 | 25 | 7 | 0 | 0 | 0 | 11 | 0 | 12 | 2 | 0 |
 | 2.3 app - 应用 | 25 | 21 | 24 | 0 | 1 | 0 | 0 | 17 | 0 | 0 | 0 | 8 |
 | 2.4 base64 | 2 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 |
 | 2.5 colors - 颜色 | 19 | 8 | 19 | 0 | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 11 |
@@ -118,9 +119,12 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **428** | **201** | **212** | **91** | **5** | **247** | **33** | **250** | **95** | **137** |
+| **合计** | **938** | **624** | **442** | **208** | **194** | **88** | **5** | **247** | **33** | **250** | **95** | **137** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **841/938（90%）**，QuickJS **530/938（56%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **844/938（90%）**，QuickJS **530/938（56%）**。
+
+> 注：`源码有`/`待核实`/`未定位` 三列的分配受扫描规则影响（本轮把 12 行 `RootAutomator2` 成员从“待核实”提到了“实机有”），
+> 所以**看趋势看 `实机有` 与 `未定位`**：实机有 424（§5.11 前）→ 442，未定位 93 → 88。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -351,6 +355,36 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 - `close()` 只关窗口、**不停脚本**（要停先 `stop()`）：控制器被关掉时把用户正在跑的脚本一并杀掉更危险。
 - 悬浮窗权限不足时 `startFloatingController` 会走仓库原有的 `Floaty` 权限流程（`FloatingPermission.waitForPermissionGranted`），与 `floaty.window` 一致。
 
+### 5.14 已按清单补齐：2.2 `RootAutomator2` 整组（本轮，adb 通道真实注入验收）
+
+`tools/pro-api/rootautomator2-contract.js`：真机 **21/21** 通过。扫描后 2.2 的 `实机有` 11 → 25，
+`RootAutomator2` / 构造函数 / `tap` / `longPress` / `press` / `swipe` / `touchDown`(两种) / `touchMove`(两种) / `touchUp`(两种) / `flush` / `exit` 全部归位。
+
+| 项 | 实现 |
+| --- | --- |
+| 新类 | 新建 `core/inputevent/RootAutomator2.java`：`{adb, root}` 两个通道（文档：`adb` 默认 false，未指定 adb 时 `root` 默认 true） |
+| root 通道 | 复用仓库已有的 `RootAutomator`（打包的输入事件二进制 + `su`），支持多点触控 |
+| adb 通道 | 走 Shizuku/adb shell 的 `input` 命令：`input tap` / `input swipe`（起点=终点 = 长按/按住）/ `input motionevent DOWN|MOVE|UP` |
+| JS 侧 | `__RootAutomator__.js` 新增 `RootAutomator2`（挂到 `scope`，文档里它就是全局名），并在 JS 层把文档的**数组形式** `touchDown([{x,y,id}...])` 展开成单指调用 |
+
+真机验收（小米 8，**没有 root，但 Shizuku 服务在跑**）：
+
+- **adb 通道真实注入**：弹一个对话框，用无障碍选择器拿到“确定”按钮的 `bounds()` 中心，
+  `adb.tap(中心)` → positive 回调被触发；`adb.press(中心, 300)` 同样点中 ✓
+- **负向对照**：向按钮下方偏 500px 点一下 → 回调**没**触发（证明真的是按坐标落在按钮上）
+- **root 通道**：本机没有 `su` → `touchDown` 直接抛出「root 通道不可用……要免 root 用 input 注入请改用 `new RootAutomator2({adb:true})`（需要 Shizuku）」，
+  **不静默成功、也不会把脚本卡死**（先在 Java 层用 `ProcessShell.exec({"id"}, true).code == 0` 探一下，避免 `RootAutomator` 在等壳回调时永久阻塞）
+- 选项校验：`adb` 与 `root` 同时为 true 报错；两个都不给报错
+- 多点触控：adb 通道收到多指数组时**明确报错**（不会只动一根手指还返回成功）
+
+踩到的坑：
+
+- ⚠️ **JS 包装不能被构造函数里的 `bind` 遮蔽**：一开始把 Java 的 `tap/touchDown/...` 一并 `bind` 到实例上，
+  原型上的包装方法（数组展开、多指拦截）就永远不生效 —— 数组参数直接落到 Java 重载上报 Rhino 类型错。
+  现在只 `bind` `setScreenMetrics`/`isAdb`，其余全在原型上实现。
+- ⚠️ **验收脚本的对话框顺序**：点在对话框外面会把它 dismiss 掉 → “负向对照”必须用**另一个**对话框，
+  否则后续的正向点击会扑空（先试了一次就踩到了）。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -371,11 +405,10 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ### 6.2 真缺 —— 两个引擎都没有（约 18 条）
 
-⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping`、2.1 `clickCenter`/`clearCache`/`Rect.intersect`、2.18 四条、2.1 `takeScreenshot`/`switchToInputMethod`/`headsetHook`、2.12 `getPath`、2.29 `isAlive`、2.12 `startFloatingController` 已分别在 §5.4~§5.13 补齐 / 归位并真机验收，不再属于这一节。
-剩余只 5 条（两个功能组）：
-`$images.detectAndComputeFeatures` + `matchFeatures`/`ImageFeatures`/`ObjectFrame.*` 一组、
-`OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
-`RootAutomator2` 与 `RootAutomator2.longPress`。
+⚠️ §5.4~§5.14 补齐 / 归位的模块不再属于这一节（`$crypto`、`$zip`、`$debug`、`$power_manager`+`floaty` 权限、`$settings`、`dialog.*`+`ColorMapping`、`clickCenter`/`clearCache`/`Rect.intersect`、images 四条、automator 三条+`getPath`+`isAlive`、`startFloatingController`、`RootAutomator2` 整组）。
+剩余只 3 条，两个功能组：
+`OCR.detect`/`OCRResult.clickCenter`（要接 OCR 引擎）、
+`$images.detectAndComputeFeatures`（+ `matchFeatures`/`ImageFeatures`/`ObjectFrame`/`MatchingResult` 一组，共 ~11 行成员）。
 
 ### 6.3 类型名 —— 不是缺口
 
@@ -383,13 +416,12 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **5 条**（全未定位，实机缺已清零）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，只剩 **3 条**：
 
-| 模块 | 未定位 | 实机缺 | 条目 |
-| --- | --- | --- | --- |
-| 2.22 ocr | 2 | 0 | `OCR.detect`、`OCRResult.clickCenter` |
-| 2.2 坐标操作 | 2 | 0 | `RootAutomator2`、`RootAutomator2.longPress` |
-| 2.18 images | 1 | 0 | `$images.detectAndComputeFeatures` |
+| 模块 | 条目 | 状态 |
+| --- | --- | --- |
+| 2.22 ocr | `OCR.detect`、`OCRResult.clickCenter` | 未定位（要接 OCR 引擎） |
+| 2.18 images | `$images.detectAndComputeFeatures` | 未定位（特征匹配，最大一件） |
 
 建议顺序：`RootAutomator2`（可以照搬仓库已有的 `RootAutomator` 通道）→ `OCR.detect`（要选并接 OCR 引擎）→ `$images` 特征匹配（最大，见下）。
 
@@ -422,7 +454,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 9. 这份清单不能证明什么
 
 - **不是行为验收**：名字在 ≠ 行为一致。默认值、异常、回调线程、权限取消、资源释放仍要按 [AutoJsPro API 兼容性与 V8 选型](Auto.jsPro_API兼容性与V8选型.md) §7 的场景逐项验证。
-- **已补齐的模块只验了本轮脚本覆盖到的东西**：`$crypto`/`$zip`/`$debug`/`$power_manager`/`floaty` 权限/`$settings`/`dialog`+`ColorMapping`/`clickCenter`/`images`/`automator 三条`+`getPath`+`isAlive`/`startFloatingController` 都有对应的 `tools/pro-api/*-contract.js`（共 **202 项**断言），但**默认值/行为差异仍存在**，已知的几处：
+- **已补齐的模块只验了本轮脚本覆盖到的东西**：§5.4~§5.14 每一条都有对应的 `tools/pro-api/*-contract.js`（共 **223 项**断言），但**默认值/行为差异仍存在**，已知的几处：
   - `$settings.isEnabled('stop_all_on_volume_up')`：主应用沿用仓库原有键 `key_use_volume_control_running`，其默认值是**关**，而 Pro 文档写的是默认**开**（打包版默认开，与文档一致）。
   - `$settings.isEnabled('not_show_console')`：主应用没有「脚本启动即弹日志界面」的行为，这个开关只负责存取值。
   - `dialog.setDefaultDialogType` 的**默认值**：文档写 `overlay`，我们保留仓库原有的 `app-or-overlay`（否则现有脚本的对话框会从应用内变成悬浮层）；四种类型本身都支持，也可以随时显式设置。
@@ -432,6 +464,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
   - `automator.switchToInputMethod()`：只传包名时，同一包名下若启用了多个输入法 service，取列表里的第一个（文档也只给包名）。
   - `getPath()`：文档里 `path` 可传 string 或 Array；我们两种都接，但数组只有第一项会当作 `workingDirectory`（require 的基准目录）。
   - `engines.startFloatingController()`：文档**没写返回值**，我们返回控制器对象（多出 `start/stop/isRunning/toggleLog/isLogVisible/getPath/close`）；另外 `close()` 只关窗口不停脚本。
+  - `RootAutomator2`：文档说“adb 权限”用的是 ShellOptions 语义，我们实现成：`root` 通道 = 仓库原有 RootAutomator（需 `su`，支持多指），`adb` 通道 = Shizuku/adb shell 的 `input`（**不支持多点触控**，数组形式会报错）。
+    本机（小米 8）没 root 但有 Shizuku，所以 root 通道只有“不可用时报错”的验证，**装 root 的设备应该补一次真实注入验收**。
 - **单机单版本**：本轮只覆盖小米 8 + 当时构建，换设备/版本要重跑（脚本已固化）。
 - **仍有盲区**：动态挂载（`Proxy`、`Object.defineProperty`、反射注册）与"要满足条件才存在"的成员（实例方法、惰性加载）都测不到；`未定位` 只代表四层证据都没找到。
 - **没有 Pro 对照设备**：`version` 列只说明该条目属于哪个版本，不代表我们对齐到了同一版本。
@@ -439,8 +473,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-1. **补真缺口**（按性价比）：`RootAutomator2`（先做，可照搬仓库已有的 `RootAutomator` 输入事件通道）→ `OCR.detect` / `OCRResult.clickCenter`（要选并接 OCR 引擎）→ `$images.detectAndComputeFeatures/matchFeatures`（最大，需要 ORB + 匹配器，且仓库自带样例已在调用）；
-   （已完成：`$crypto` §5.4、`$zip` §5.5、`$debug` §5.6、`$power_manager`+`floaty` 权限 §5.7、`$settings` §5.8、`dialog.*`+`ColorMapping` §5.9、`clickCenter`/`clearCache`/`Rect.intersect` §5.10、images 四条 §5.11、automator 三条 + `getPath` + `isAlive` §5.12、`startFloatingController` §5.13）；
+1. **补完最后 3 条**：`OCR.detect` / `OCRResult.clickCenter`（用 ML Kit 文字识别，新增依赖，需先定体积/权限影响）→ `$images.detectAndComputeFeatures` 一组。
+   ⚠️ 特征匹配已确认：当前 `opencv-5.0.0-16kb-page-fix.aar` 是**按模块拆 .so 的构建，里面没有 features 模块**；
+   OpenCV 5.0 把这一组 Java 包改名叫 `org.opencv.features`（ORB/BFMatcher/SIFT 都在），官方 SDK 的 `libopencv_java5.so` 里有 `Java_org_opencv_features_*`（330 个）
+   且 arm64 LOAD 对齐已是 16KB —— 所以可以直接用 imgproc 自写 ORB-lite，或换/重编带 features 模块的原生库（后者要动 `build-quickjs.ps1` 链接与 QuickJS 原生库）。
+   （已完成：`$crypto` §5.4、`$zip` §5.5、`$debug` §5.6、`$power_manager`+`floaty` 权限 §5.7、`$settings` §5.8、`dialog.*`+`ColorMapping` §5.9、`clickCenter`/`clearCache`/`Rect.intersect` §5.10、images 四条 §5.11、automator 三条 + `getPath` + `isAlive` §5.12、`startFloatingController` §5.13、`RootAutomator2` §5.14）；
 2. **把本轮实现同步给 QuickJS**：`$crypto`/`$zip`/`clickCenter`/images 四条/automator 三条 现在只有 Rhino 侧能用（QuickJS 只实现了各自的一部分）。
    QuickJS 走字符串桥，需要新的宿主方法；改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。
 4. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。
