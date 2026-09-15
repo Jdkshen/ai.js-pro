@@ -13,7 +13,7 @@ import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Handler;
-import android.os.Looper;
+import android.os.HandlerThread;
 import android.os.SystemClock;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -34,8 +34,8 @@ import java.util.concurrent.TimeoutException;
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 public class ScreenCapturer {
 
-    public static final long DEFAULT_CAPTURE_TIMEOUT_MILLIS = 100L;
-    public static final long MAX_CAPTURE_TIMEOUT_MILLIS = 5000L;
+    public static final long DEFAULT_CAPTURE_TIMEOUT_MILLIS = ScreenCaptureState.DEFAULT_TIMEOUT_MILLIS;
+    public static final long MAX_CAPTURE_TIMEOUT_MILLIS = ScreenCaptureState.MAX_TIMEOUT_MILLIS;
 
     public static final int ORIENTATION_AUTO = Configuration.ORIENTATION_UNDEFINED;
     public static final int ORIENTATION_LANDSCAPE = Configuration.ORIENTATION_LANDSCAPE ;
@@ -44,17 +44,21 @@ public class ScreenCapturer {
 
     private static final String LOG_TAG = "ScreenCapturer";
     private ImageReader mImageReader;
+    private ImageReader mUnderUsingImageReader;
+    private ImageReader mRetiredImageReader;
     private MediaProjection mMediaProjection;
     private MediaProjection.Callback mProjectionCallback;
     private VirtualDisplay mVirtualDisplay;
-    private volatile Looper mImageAcquireLooper;
+    private HandlerThread mImageAcquireThread;
     private volatile Image mUnderUsingImage;
-    private volatile AtomicReference<Image> mCachedImage = new AtomicReference<>();
+    private final AtomicReference<Image> mCachedImage = new AtomicReference<>();
     private final Object mImageAvailableLock = new Object();
     private volatile Exception mException;
     private final int mScreenDensity;
     private Handler mHandler;
     private volatile boolean mReleased;
+    private final ScreenCaptureState mCaptureState = new ScreenCaptureState();
+    private long mUnderUsingImageGeneration = -1L;
     private Context mContext;
     private int mOrientation = -1;
     private int mDetectedOrientation;
@@ -68,16 +72,57 @@ public class ScreenCapturer {
                 context.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         mMediaProjection = projectionManager.getMediaProjection(
                 Activity.RESULT_OK, (Intent) data.clone());
+        if (mMediaProjection == null) {
+            throw new SecurityException("Unable to start screen capture projection");
+        }
+        if (mHandler == null) {
+            mImageAcquireThread = new HandlerThread("ScreenCaptureImages");
+            mImageAcquireThread.start();
+            mHandler = new Handler(mImageAcquireThread.getLooper());
+        }
         mProjectionCallback = new MediaProjection.Callback() {
             @Override
             public void onStop() {
                 onProjectionStopped();
             }
+
+            @Override
+            public void onCapturedContentResize(int width, int height) {
+                synchronized (ScreenCapturer.this) {
+                    if (mReleased || width <= 0 || height <= 0) {
+                        return;
+                    }
+                    try {
+                        refreshCaptureSurface(width, height, true);
+                    } catch (Exception error) {
+                        mException = error;
+                        notifyImageWaiters();
+                    }
+                }
+            }
+
+            @Override
+            public void onCapturedContentVisibilityChanged(boolean isVisible) {
+                synchronized (ScreenCapturer.this) {
+                    if (mReleased || !mCaptureState.setVisible(isVisible)) {
+                        return;
+                    }
+                    discardCachedImage();
+                    Log.i(LOG_TAG, "Captured content visible: " + isVisible);
+                    notifyImageWaiters();
+                }
+            }
         };
-        mMediaProjection.registerCallback(mProjectionCallback,
-                mHandler != null ? mHandler : new Handler(Looper.getMainLooper()));
-        setOrientation(orientation);
-        observeOrientation();
+        synchronized (this) {
+            try {
+                mMediaProjection.registerCallback(mProjectionCallback, mHandler);
+                setOrientation(orientation);
+                observeOrientation();
+            } catch (RuntimeException error) {
+                release();
+                throw error;
+            }
+        }
     }
 
     private void observeOrientation() {
@@ -85,7 +130,8 @@ public class ScreenCapturer {
             @Override
             public void onOrientationChanged(int o) {
                 int orientation = mContext.getResources().getConfiguration().orientation;
-                if (mOrientation == ORIENTATION_AUTO && mDetectedOrientation != orientation) {
+                if (!mCaptureState.hasCapturedContentSize()
+                        && mOrientation == ORIENTATION_AUTO && mDetectedOrientation != orientation) {
                     mDetectedOrientation = orientation;
                     try {
                         refreshVirtualDisplay(orientation);
@@ -102,93 +148,125 @@ public class ScreenCapturer {
         }
     }
 
-    public void setOrientation(int orientation) {
+    public synchronized void setOrientation(int orientation) {
+        if (mReleased) {
+            throw new IllegalStateException("Screen capture session has stopped; request permission again");
+        }
         if (mOrientation == orientation)
             return;
         mOrientation = orientation;
         mDetectedOrientation = mContext.getResources().getConfiguration().orientation;
-        refreshVirtualDisplay(mOrientation == ORIENTATION_AUTO ? mDetectedOrientation : mOrientation);
+        if (!mCaptureState.hasCapturedContentSize()) {
+            refreshVirtualDisplay(mOrientation == ORIENTATION_AUTO ? mDetectedOrientation : mOrientation);
+        }
     }
 
 
     private synchronized void refreshVirtualDisplay(int orientation) {
+        // Before Android 14 (or before its first geometry callback), use screen metrics.
+        // Once the system reports captured bounds, they are authoritative: rotating the
+        // host must not overwrite a single-app window with full-device dimensions.
+        if (mCaptureState.hasCapturedContentSize()) {
+            return;
+        }
+        refreshCaptureSurface(ScreenMetrics.getOrientationAwareScreenWidth(orientation),
+                ScreenMetrics.getOrientationAwareScreenHeight(orientation), false);
+    }
+
+    private synchronized void refreshCaptureSurface(int screenWidth, int screenHeight,
+                                                     boolean capturedContent) {
         if (mReleased || mMediaProjection == null) {
             throw new IllegalStateException("Screen capture session has stopped");
         }
-        if (mImageAcquireLooper != null) {
-            mImageAcquireLooper.quit();
-            mImageAcquireLooper = null;
+        if (mImageReader != null && mCaptureState.hasSize(screenWidth, screenHeight)) {
+            mCaptureState.resize(screenWidth, screenHeight, capturedContent);
+            return;
         }
-        int screenHeight = ScreenMetrics.getOrientationAwareScreenHeight(orientation);
-        int screenWidth = ScreenMetrics.getOrientationAwareScreenWidth(orientation);
         ImageReader oldReader = mImageReader;
         if (oldReader != null) {
             oldReader.setOnImageAvailableListener(null, null);
         }
-        Image oldCachedImage = mCachedImage.getAndSet(null);
-        if (oldCachedImage != null) {
-            oldCachedImage.close();
-        }
+        discardCachedImage();
 
         ImageReader newReader = ImageReader.newInstance(
                 screenWidth, screenHeight, PixelFormat.RGBA_8888, 3);
-        if (mVirtualDisplay == null) {
-            mVirtualDisplay = mMediaProjection.createVirtualDisplay(LOG_TAG,
-                    screenWidth, screenHeight, mScreenDensity,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    newReader.getSurface(), null, null);
+        try {
             if (mVirtualDisplay == null) {
-                newReader.close();
-                throw new IllegalStateException("Unable to create screen capture display");
+                mVirtualDisplay = mMediaProjection.createVirtualDisplay(LOG_TAG,
+                        screenWidth, screenHeight, mScreenDensity,
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                        newReader.getSurface(), null, null);
+                if (mVirtualDisplay == null) {
+                    throw new IllegalStateException("Unable to create screen capture display");
+                }
+            } else {
+                // Consent belongs to one session: resize the existing display, never create
+                // a second VirtualDisplay with the same token on rotation/window changes.
+                mVirtualDisplay.resize(screenWidth, screenHeight, mScreenDensity);
+                mVirtualDisplay.setSurface(newReader.getSurface());
             }
-        } else {
-            // A MediaProjection consent token represents exactly one capture session. Reuse the
-            // existing VirtualDisplay when orientation changes instead of stopping the projection
-            // and passing the same consent Intent to getMediaProjection() a second time.
-            mVirtualDisplay.resize(screenWidth, screenHeight, mScreenDensity);
-            mVirtualDisplay.setSurface(newReader.getSurface());
+        } catch (RuntimeException error) {
+            newReader.close();
+            if (oldReader != null) {
+                setImageListener(mHandler);
+            }
+            throw error;
         }
         mImageReader = newReader;
+        mCaptureState.resize(screenWidth, screenHeight, capturedContent);
         if (oldReader != null) {
-            oldReader.close();
+            if (oldReader == mUnderUsingImageReader) {
+                // ImageReader.close() invalidates its outstanding Images. Keep the old
+                // reader alive until the caller replaces its frame, e.g. after a native copy.
+                mRetiredImageReader = oldReader;
+            } else {
+                oldReader.close();
+            }
         }
-        startAcquireImageLoop();
-    }
-
-    private void startAcquireImageLoop() {
-        if (mHandler != null) {
-            setImageListener(mHandler);
-            return;
-        }
-        new Thread(() -> {
-            Log.d(LOG_TAG, "AcquireImageLoop: start");
-            Looper.prepare();
-            mImageAcquireLooper = Looper.myLooper();
-            setImageListener(new Handler());
-            Looper.loop();
-            Log.d(LOG_TAG, "AcquireImageLoop: stop");
-        }).start();
+        setImageListener(mHandler);
+        Log.i(LOG_TAG, "Capture surface: " + screenWidth + "x" + screenHeight
+                + ", captured bounds: " + capturedContent);
+        notifyImageWaiters();
     }
 
     private void setImageListener(Handler handler) {
         mImageReader.setOnImageAvailableListener(reader -> {
-            try {
-                Image oldCacheImage = mCachedImage.getAndSet(null);
-                if (oldCacheImage != null) {
-                    oldCacheImage.close();
+            synchronized (ScreenCapturer.this) {
+                // An old reader may still have a queued callback after resize/release.
+                if (mReleased || reader != mImageReader) {
+                    return;
                 }
-                mCachedImage.set(reader.acquireLatestImage());
-                synchronized (mImageAvailableLock) {
-                    mImageAvailableLock.notifyAll();
+                try {
+                    Image image = reader.acquireLatestImage();
+                    if (image == null) {
+                        return;
+                    }
+                    if (!mCaptureState.isVisible()) {
+                        image.close();
+                        return;
+                    }
+                    discardCachedImage();
+                    mCachedImage.set(image);
+                } catch (Exception e) {
+                    mException = e;
                 }
-            } catch (Exception e) {
-                mException = e;
-                synchronized (mImageAvailableLock) {
-                    mImageAvailableLock.notifyAll();
-                }
+                notifyImageWaiters();
             }
 
         }, handler);
+    }
+
+    private void discardCachedImage() {
+        Image image = mCachedImage.getAndSet(null);
+        if (image != null) {
+            image.close();
+        }
+    }
+
+    private void notifyImageWaiters() {
+        synchronized (mImageAvailableLock) {
+            mImageAvailableLock.notifyAll();
+        }
     }
 
     @Nullable
@@ -205,39 +283,53 @@ public class ScreenCapturer {
     @Nullable
     public Image capture(boolean fresh, long timeoutMillis) {
         Thread thread = ThreadCompat.currentThread();
-        long boundedTimeout = Math.max(0L, Math.min(MAX_CAPTURE_TIMEOUT_MILLIS, timeoutMillis));
+        long boundedTimeout;
+        synchronized (this) {
+            boundedTimeout = ScreenCaptureState.timeoutForCapture(timeoutMillis,
+                    mUnderUsingImage != null
+                            && mCaptureState.canReuseFrame(mUnderUsingImageGeneration));
+        }
         long deadlineNanos = SystemClock.elapsedRealtimeNanos() + boundedTimeout * 1_000_000L;
         while (!thread.isInterrupted()) {
-            Exception e = mException;
-            if (e != null) {
-                mException = null;
-                throw new ScriptException(e);
-            }
-            Image cachedImage = mCachedImage.getAndSet(null);
-            if (cachedImage != null) {
-                if (mUnderUsingImage != null) {
-                    mUnderUsingImage.close();
-                }
-                mUnderUsingImage = cachedImage;
-                return cachedImage;
-            }
-
-            Image latestImage = mUnderUsingImage;
-            if (!fresh && latestImage != null) {
-                return latestImage;
-            }
-            if (mReleased) {
-                throw new ScriptException(new IllegalStateException("Screen capture session has stopped"));
-            }
-
             long remainingNanos = deadlineNanos - SystemClock.elapsedRealtimeNanos();
-            if (remainingNanos <= 0L) {
-                if (latestImage != null) {
+            synchronized (this) {
+                if (mReleased) {
+                    throw new ScriptException(new SecurityException(
+                            "截图会话已被系统停止（可能是启动了其他录屏或锁屏）；请停止其他录屏后重新授权截图"));
+                }
+                Exception e = mException;
+                if (e != null) {
+                    mException = null;
+                    throw new ScriptException(e);
+                }
+                if (!mCaptureState.isVisible()) {
+                    throw new ScriptException(new IllegalStateException(
+                            "单应用截图的目标当前不可见；请打开授权时选中的应用，或重新授权整个屏幕"));
+                }
+                Image cachedImage = mCachedImage.getAndSet(null);
+                if (cachedImage != null) {
+                    if (mUnderUsingImage != null) {
+                        mUnderUsingImage.close();
+                    }
+                    if (mRetiredImageReader != null) {
+                        mRetiredImageReader.close();
+                        mRetiredImageReader = null;
+                    }
+                    mUnderUsingImage = cachedImage;
+                    mUnderUsingImageReader = mImageReader;
+                    mUnderUsingImageGeneration = mCaptureState.generation();
+                    return cachedImage;
+                }
+                Image latestImage = mCaptureState.canReuseFrame(mUnderUsingImageGeneration)
+                        ? mUnderUsingImage : null;
+                if (latestImage != null && (!fresh || remainingNanos <= 0L)) {
                     return latestImage;
                 }
-                throw new ScriptException(new TimeoutException(
-                        "Timed out waiting for the first screen capture frame after "
-                                + boundedTimeout + " ms"));
+                if (remainingNanos <= 0L) {
+                    throw new ScriptException(new TimeoutException(
+                            "等待有效截图帧超时（" + boundedTimeout
+                                    + " ms）；请确认授权时选中的应用可见且未开启其他录屏"));
+                }
             }
             synchronized (mImageAvailableLock) {
                 if (mCachedImage.get() == null && mException == null && !mReleased) {
@@ -259,9 +351,16 @@ public class ScreenCapturer {
         return mScreenDensity;
     }
 
+    public boolean isReleased() {
+        return mReleased;
+    }
+
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized void release() {
         if (mReleased) {
+            // onStop keeps an outstanding raw frame alive until its script has finished
+            // copying it. Explicit release/finalization must still dispose that frame.
+            releaseDisplayResources(false);
             return;
         }
         mReleased = true;
@@ -276,7 +375,7 @@ public class ScreenCapturer {
         if (projection != null && mProjectionCallback != null) {
             projection.unregisterCallback(mProjectionCallback);
         }
-        releaseDisplayResources();
+        releaseDisplayResources(false);
         if (projection != null) {
             projection.stop();
         }
@@ -296,13 +395,13 @@ public class ScreenCapturer {
         if (mOrientationEventListener != null) {
             mOrientationEventListener.disable();
         }
-        releaseDisplayResources();
+        releaseDisplayResources(true);
     }
 
-    private void releaseDisplayResources() {
-        if (mImageAcquireLooper != null) {
-            mImageAcquireLooper.quit();
-            mImageAcquireLooper = null;
+    private void releaseDisplayResources(boolean preserveUnderUsingFrame) {
+        if (mImageAcquireThread != null) {
+            mImageAcquireThread.quitSafely();
+            mImageAcquireThread = null;
         }
         if (mVirtualDisplay != null) {
             mVirtualDisplay.release();
@@ -310,12 +409,23 @@ public class ScreenCapturer {
         }
         if (mImageReader != null) {
             mImageReader.setOnImageAvailableListener(null, null);
-            mImageReader.close();
+            if (preserveUnderUsingFrame && mImageReader == mUnderUsingImageReader) {
+                mRetiredImageReader = mImageReader;
+            } else {
+                mImageReader.close();
+            }
             mImageReader = null;
         }
-        if (mUnderUsingImage != null) {
-            mUnderUsingImage.close();
-            mUnderUsingImage = null;
+        if (!preserveUnderUsingFrame) {
+            if (mUnderUsingImage != null) {
+                mUnderUsingImage.close();
+                mUnderUsingImage = null;
+            }
+            mUnderUsingImageReader = null;
+            if (mRetiredImageReader != null) {
+                mRetiredImageReader.close();
+                mRetiredImageReader = null;
+            }
         }
         Image cachedImage = mCachedImage.getAndSet(null);
         if (cachedImage != null) {

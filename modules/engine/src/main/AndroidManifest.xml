@@ -31,6 +31,12 @@
             android:taskAffinity="com.stardust.autojs.runtime.api.image.ScreenCaptureRequestActivity"
             android:theme="@style/ScriptTheme.Transparent"/>
 
+        <activity
+            android:name="com.stardust.autojs.core.image.capture.AutoCapturePermissionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/ScriptTheme.Transparent"/>
+
         <service
             android:name="com.stardust.autojs.core.accessibility.AccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

@@ -2,6 +2,7 @@ package com.stardust.autojs.runtime.api;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -11,18 +12,28 @@ import android.media.Image;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.app.KeyguardManager;
 
 import androidx.annotation.RequiresApi;
 
 import android.util.Base64;
 import android.view.Gravity;
 
+import com.stardust.autojs.annotation.ScriptInterface;
 import com.stardust.autojs.annotation.ScriptVariable;
+import org.mozilla.javascript.Scriptable;
+import org.mozilla.javascript.ScriptableObject;
 import com.stardust.autojs.core.image.ColorFinder;
+import com.stardust.autojs.core.image.ImageMetrics;
 import com.stardust.autojs.core.image.ImageWrapper;
 import com.stardust.autojs.core.image.TemplateMatching;
 import com.stardust.autojs.core.image.capture.ScreenCaptureRequester;
 import com.stardust.autojs.core.image.capture.ScreenCapturer;
+import com.stardust.autojs.core.image.capture.AccessibilityScreenCapturer;
+import com.stardust.autojs.core.image.capture.AutoCapturePermissionActivity;
+import com.stardust.autojs.core.image.capture.AutoCapturePolicy;
+import com.stardust.autojs.core.image.capture.ScreenRecordingMonitor;
 import com.stardust.autojs.core.opencv.Mat;
 import com.stardust.autojs.core.opencv.OpenCVHelper;
 import com.stardust.autojs.core.ui.inflater.util.Drawables;
@@ -57,11 +68,23 @@ public class Images {
     private ScriptRuntime mScriptRuntime;
     private ScreenCaptureRequester mScreenCaptureRequester;
     private ScreenCapturer mScreenCapturer;
+    private boolean mAccessibilityCapture;
+    private AutoCapturePolicy mAutoCapturePolicy;
+    private ScreenRecordingMonitor mRecordingMonitor;
+    private final Handler mCaptureMainHandler = new Handler(Looper.getMainLooper());
+    private volatile int mCaptureGeneration;
+    private int mAutoOrientation;
+    private long mNextRecordingCheck;
+    private Intent mPendingProjectionConsent;
+    private Looper mAutoCaptureLooper;
     private Context mContext;
     private Image mPreCapture;
     private ImageWrapper mPreCaptureImage;
     private ScreenMetrics mScreenMetrics;
     private volatile boolean mOpenCvInitialized = false;
+
+    /** PDF §2.18.2：$images.getScreenCaptureOptions() 要报告当初申请的截图方向。 */
+    private volatile int mScreenCaptureOrientation = ScreenCapturer.ORIENTATION_AUTO;
 
     @ScriptVariable
     public final ColorFinder colorFinder;
@@ -75,26 +98,109 @@ public class Images {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public ScriptPromiseAdapter requestScreenCapture(int orientation) {
+    public synchronized ScriptPromiseAdapter requestScreenCapture(int orientation) {
         ScriptRuntime.requiresApi(21);
+        mScreenCaptureOrientation = orientation;
+        mAutoCapturePolicy = null;        mRecordingMonitor = null;
+        mPendingProjectionConsent = null;
+        final int generation = ++mCaptureGeneration;
+        mAccessibilityCapture = false;
         ScriptPromiseAdapter promiseAdapter = new ScriptPromiseAdapter();
-        if (mScreenCapturer != null) {
+        if (mScreenCapturer != null && !mScreenCapturer.isReleased()) {
             mScreenCapturer.setOrientation(orientation);
             promiseAdapter.resolve(true);
             return promiseAdapter;
         }
+        // A stopped projection cannot be reused with the old consent token.
+        if (mScreenCapturer != null) {
+            mScreenCapturer.release();
+        }
+        mScreenCapturer = null;
+        mPreCapture = null;
+        if (mPreCaptureImage != null) {
+            mPreCaptureImage.recycle();
+            mPreCaptureImage = null;
+        }
         Looper servantLooper = mScriptRuntime.loopers.getServantLooper();
         mScreenCaptureRequester.setOnActivityResultCallback((result, data) -> {
+            if (generation != mCaptureGeneration) {
+                promiseAdapter.resolve(false);
+                return;
+            }
             if (result == Activity.RESULT_OK) {
-                mScreenCapturer = new ScreenCapturer(mContext, data, orientation, ScreenMetrics.getDeviceScreenDensity(),
-                        new Handler(servantLooper));
-                promiseAdapter.resolve(true);
+                try {
+                    mScreenCapturer = new ScreenCapturer(mContext, data, orientation, ScreenMetrics.getDeviceScreenDensity(),
+                            new Handler(servantLooper));
+                    promiseAdapter.resolve(true);
+                } catch (Exception error) {
+                    promiseAdapter.reject(error);
+                }
             } else {
                 promiseAdapter.resolve(false);
             }
         });
         mScreenCaptureRequester.request();
         return promiseAdapter;
+    }
+
+    /**
+     * PDF §2.18.2 `$images.getScreenCaptureOptions()`（Pro 8.8.12 新增）：
+     * 当前截图配置；**没申请过截图权限时返回 null**。
+     */
+    @ScriptInterface
+    public Object getScreenCaptureOptions() {
+        ScreenCapturer capturer = mScreenCapturer;
+        boolean projectionReady = capturer != null && !capturer.isReleased();
+        // 无障碍（录屏兼容）截图通道没有 ScreenCapturer 对象，但同样算"已申请截图权限"
+        boolean accessibilityReady = mAccessibilityCapture && AccessibilityScreenCapturer.isAvailable();
+        if (!projectionReady && !accessibilityReady) {
+            return null;
+        }
+        Scriptable scope = mScriptRuntime.getTopLevelScope();
+        if (scope == null) {
+            return null;
+        }
+        int orientation = mScreenCaptureOrientation;
+        org.mozilla.javascript.Context context = org.mozilla.javascript.Context.getCurrentContext();
+        Scriptable options = context.newObject(scope);
+        ScriptableObject.putProperty(options, "width",
+                ScreenMetrics.getOrientationAwareScreenWidth(orientation));
+        ScriptableObject.putProperty(options, "height",
+                ScreenMetrics.getOrientationAwareScreenHeight(orientation));
+        ScriptableObject.putProperty(options, "orientation", orientation);
+        ScriptableObject.putProperty(options, "density", ScreenMetrics.getDeviceScreenDensity());
+        // 本实现的截图都是同步取的（ScreenCapturer.capture 阻塞到拿到帧），所以固定 false
+        ScriptableObject.putProperty(options, "async", false);
+        return options;
+    }
+
+    /**
+     * PDF §2.18.2 `$images.stopScreenCapture()`（Pro 8.8.12 新增）：释放截图权限；
+     * 没申请过就什么都不做。
+     */
+    @ScriptInterface
+    public void stopScreenCapture() {
+        releaseScreenCapturer();
+    }
+
+    /**
+     * PDF §2.18.1 `images.getSimilarity(img1, img2, options)`：
+     * `type` 支持 `MSSIM`（默认）与 `PNSR`/`PSNR`。
+     */
+    @ScriptInterface
+    public double getSimilarity(ImageWrapper first, ImageWrapper second, String type) {
+        String algorithm = type == null || type.trim().isEmpty()
+                ? "MSSIM" : type.trim().toUpperCase(java.util.Locale.ROOT);
+        switch (algorithm) {
+            case "PNSR":
+            case "PSNR":
+                return ImageMetrics.psnr(first.getBitmap(), second.getBitmap());
+            case "MSSIM":
+            case "SSIM":
+                return ImageMetrics.ssim(first.getBitmap(), second.getBitmap());
+            default:
+                throw new IllegalArgumentException("不支持的相似度算法: " + type + "（可选 MSSIM / PNSR）");
+        }
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
@@ -107,6 +213,127 @@ public class Images {
                 .onResolve(value -> result.setAndNotify(Boolean.TRUE.equals(value)))
                 .onReject(error -> result.setAndNotify(false));
         return result.blockedGet();
+    }
+
+    public synchronized boolean requestAccessibilityScreenCapture() {
+        if (Build.VERSION.SDK_INT < 30 || !AccessibilityScreenCapturer.isAvailable()) {
+            throw new SecurityException("录屏兼容截图需要 Android 11+，请开启 AI.js Pro 无障碍服务；更新后若已开启，请关闭再开启一次");
+        }
+        releaseScreenCapturer();
+        mAccessibilityCapture = true;
+        mScriptRuntime.console.warn("截图通道：无障碍（录屏兼容，整个屏幕；系统限制截图频率，不等同于高速录屏通道）");
+        return true;
+    }
+
+    public synchronized boolean requestAutoScreenCapture(int orientation) {
+        mScreenCaptureOrientation = orientation;
+        requestAccessibilityScreenCapture();
+        mAutoCapturePolicy = new AutoCapturePolicy();
+        mRecordingMonitor = new ScreenRecordingMonitor();
+        mAutoOrientation = orientation;
+        mAutoCaptureLooper = mScriptRuntime.loopers.getServantLooper();
+        mNextRecordingCheck = 0;
+        final int generation = mCaptureGeneration;
+        if (!ScreenRecordingMonitor.isConnected()) {
+            mCaptureMainHandler.post(() -> {
+                synchronized (Images.this) {
+                    if (generation != mCaptureGeneration || mAutoCapturePolicy == null) return;
+                }
+                try {
+                    AutoCapturePermissionActivity.show(mContext);
+                } catch (RuntimeException error) {
+                    mScriptRuntime.console.warn("无法打开通知权限说明，请在系统设置开启通知使用权");
+                }
+            });
+        }
+        mScriptRuntime.console.info("截图通道：自动；录屏状态无法确认时保持无障碍兼容，恢复高速需要系统授权");
+        return true;
+    }
+
+    /** Advance only at frame boundaries; UI callbacks never change the channel mid-frame. */
+    public synchronized void prepareAutoCapture() {
+        if (mAutoCapturePolicy == null) return;
+        if (mScreenCapturer != null && mScreenCapturer.isReleased()) {
+            clearProjectionResources();
+            mAccessibilityCapture = true;
+            mScriptRuntime.console.warn("高速截图已被系统停止，自动切换为无障碍兼容截图");
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (now < mNextRecordingCheck && mPendingProjectionConsent == null) return;
+        mNextRecordingCheck = now + 500;
+        AutoCapturePolicy.Recording recording = mRecordingMonitor.snapshot();
+        KeyguardManager keyguard = (KeyguardManager) mContext.getSystemService(Context.KEYGUARD_SERVICE);
+        if (keyguard != null && keyguard.isKeyguardLocked()) recording = AutoCapturePolicy.Recording.UNKNOWN;
+        if (recording == AutoCapturePolicy.Recording.ACTIVE && !mAccessibilityCapture) {
+            clearProjectionResources();
+            mAccessibilityCapture = true;
+            mScriptRuntime.console.info("系统录屏运行中，自动切换为无障碍兼容截图");
+        }
+        if (mPendingProjectionConsent != null) {
+            Intent consent = mPendingProjectionConsent;
+            mPendingProjectionConsent = null;
+            boolean restored = false;
+            if (recording == AutoCapturePolicy.Recording.IDLE) {
+                try {
+                    clearProjectionResources();
+                    mScreenCapturer = new ScreenCapturer(mContext, consent, mAutoOrientation,
+                            ScreenMetrics.getDeviceScreenDensity(), new Handler(mAutoCaptureLooper));
+                    mAccessibilityCapture = false;
+                    restored = true;
+                    mScriptRuntime.console.info("截图通道：高速（自动恢复）");
+                } catch (RuntimeException error) {
+                    mScriptRuntime.console.warn("恢复高速截图失败，保留兼容通道：" + error.getMessage());
+                }
+            }
+            mAutoCapturePolicy.complete(restored);
+        }
+        if (!mAutoCapturePolicy.update(recording, now, mAccessibilityCapture)) return;
+        final int generation = mCaptureGeneration;
+        mCaptureMainHandler.post(() -> {
+            synchronized (Images.this) {
+                if (generation != mCaptureGeneration || mAutoCapturePolicy == null) return;
+                if (mRecordingMonitor.snapshot() != AutoCapturePolicy.Recording.IDLE) {
+                    mAutoCapturePolicy.complete(false);
+                    return;
+                }
+                mScreenCaptureRequester.setOnActivityResultCallback((result, data) -> {
+                    synchronized (Images.this) {
+                        if (generation != mCaptureGeneration || mAutoCapturePolicy == null) return;
+                        if (result == Activity.RESULT_OK && data != null) {
+                            mPendingProjectionConsent = data;
+                        } else {
+                            mAutoCapturePolicy.complete(false);
+                            mScriptRuntime.console.info("已取消恢复高速截图，继续兼容通道");
+                        }
+                    }
+                });
+                try {
+                    mScriptRuntime.console.info("录屏已结束，申请高速截图授权；取消可继续兼容截图");
+                    mScreenCaptureRequester.request();
+                } catch (RuntimeException error) {
+                    mAutoCapturePolicy.complete(false);
+                    mScriptRuntime.console.warn("无法打开截图授权，继续兼容通道：" + error.getMessage());
+                }
+            }
+        });
+    }
+
+    public synchronized boolean hasStoppedAutoProjection() {
+        return mAutoCapturePolicy != null && mScreenCapturer != null && mScreenCapturer.isReleased();
+    }
+
+    public synchronized boolean isAccessibilityScreenCapture() {
+        return mAccessibilityCapture;
+    }
+
+    public synchronized Bitmap captureAccessibilityScreen(long timeoutMillis) {
+        if (!mAccessibilityCapture) throw new IllegalStateException("尚未选择录屏兼容截图通道");
+        return new AccessibilityScreenCapturer().capture(timeoutMillis);
+    }
+
+    public synchronized AccessibilityScreenCapturer.HardwareFrame captureAccessibilityHardware(long timeoutMillis) {
+        if (!mAccessibilityCapture) throw new IllegalStateException("尚未选择录屏兼容截图通道");
+        return new AccessibilityScreenCapturer().captureHardware(timeoutMillis);
     }
 
     /**
@@ -129,16 +356,31 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen() {
-        return captureScreen(false, ScreenCapturer.DEFAULT_CAPTURE_TIMEOUT_MILLIS);
+        return captureScreen(false, mAccessibilityCapture || mAutoCapturePolicy != null
+                ? 2000 : ScreenCapturer.DEFAULT_CAPTURE_TIMEOUT_MILLIS);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen(boolean fresh, long timeoutMillis) {
         ScriptRuntime.requiresApi(21);
+        prepareAutoCapture();
+        if (mAccessibilityCapture) {
+            Bitmap bitmap = captureAccessibilityScreen(timeoutMillis);
+            if (mPreCaptureImage != null) mPreCaptureImage.recycle();
+            mPreCaptureImage = ImageWrapper.ofBitmap(bitmap);
+            return mPreCaptureImage;
+        }
         if (mScreenCapturer == null) {
             throw new SecurityException("No screen capture permission");
         }
-        Image capture = mScreenCapturer.capture(fresh, timeoutMillis);
+        Image capture;
+        try {
+            capture = mScreenCapturer.capture(fresh, timeoutMillis);
+        } catch (RuntimeException error) {
+            if (!hasStoppedAutoProjection()) throw error;
+            prepareAutoCapture();
+            return captureScreen(fresh, timeoutMillis);
+        }
         if (capture == mPreCapture && mPreCaptureImage != null && !mPreCaptureImage.isRecycled()) {
             return mPreCaptureImage;
         }
@@ -310,9 +552,28 @@ public class Images {
         return Bitmap.createBitmap(origin, 0, 0, width, height, matrix, false);
     }
 
-    public void releaseScreenCapturer() {
+    public synchronized void releaseScreenCapturer() {
+        ++mCaptureGeneration;
+        mAutoCapturePolicy = null;
+        mRecordingMonitor = null;
+        mPendingProjectionConsent = null;
+        mAccessibilityCapture = false;
+        clearProjectionResources();
+    }
+
+    private void clearProjectionResources() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && mScreenCapturer != null) {
             mScreenCapturer.release();
+            mScreenCapturer = null;
+            mPreCapture = null;
+            if (mPreCaptureImage != null) {
+                mPreCaptureImage.recycle();
+                mPreCaptureImage = null;
+            }
+        }
+        if (mPreCaptureImage != null) {
+            mPreCaptureImage.recycle();
+            mPreCaptureImage = null;
         }
     }
 

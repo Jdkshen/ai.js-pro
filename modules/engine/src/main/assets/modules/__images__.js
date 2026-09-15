@@ -154,6 +154,9 @@ module.exports = function (runtime, scope) {
         var colorFinder = javaImages.colorFinder;
 
         images.requestScreenCapture = function (landscape) {
+            if (landscape && typeof landscape === 'object' && landscape.mode === 'accessibility') {
+                return javaImages.requestAccessibilityScreenCapture();
+            }
             let ScreenCapturer = com.stardust.autojs.core.image.capture.ScreenCapturer;
             var orientation = ScreenCapturer.ORIENTATION_AUTO;
             if (landscape === true) {
@@ -162,6 +165,9 @@ module.exports = function (runtime, scope) {
             if (landscape === false) {
                 orientation = ScreenCapturer.ORIENTATION_PORTRAIT;
             }
+            if (landscape && typeof landscape === 'object' && landscape.mode === 'auto') {
+                return javaImages.requestAutoScreenCapture(orientation);
+            }
             return ResultAdapter.wait(javaImages.requestScreenCapture(orientation));
         }
 
@@ -169,6 +175,37 @@ module.exports = function (runtime, scope) {
             format = format || "png";
             quality = quality == undefined ? 100 : quality;
             return javaImages.save(img, path, format, quality);
+        }
+
+        // PDF §2.18.2（Pro 8.8.12 新增）：获取/释放截图权限
+        images.getScreenCaptureOptions = function () {
+            return javaImages.getScreenCaptureOptions();
+        }
+
+        images.stopScreenCapture = function () {
+            javaImages.stopScreenCapture();
+        }
+
+        // PDF §2.18.1：images.getSimilarity(img1, img2, options)，type 支持 MSSIM（默认）/ PNSR
+        images.getSimilarity = function (img1, img2, options) {
+            var type = (options && options.type) ? String(options.type) : "MSSIM";
+            return javaImages.getSimilarity(img1, img2, type);
+        }
+
+        // PDF §2.18.2：images.detectsMultiColors(img, x, y, firstColor, colors, options)
+        images.detectsMultiColors = function (img, x, y, firstColor, colors, options) {
+            options = options || {};
+            var threshold;
+            if (options.similarity) {
+                threshold = parseInt(255 * (1 - options.similarity));
+            } else {
+                threshold = options.threshold == undefined ? defaultColorThreshold : options.threshold;
+            }
+            var points = [];
+            for (var i = 0; i < colors.length; i++) {
+                points.push(colors[i][0], colors[i][1], parseColor(colors[i][2]));
+            }
+            return colorFinder.detectsMultiColors(img, x, y, parseColor(firstColor), threshold, points);
         }
 
         images.saveImage = images.save;

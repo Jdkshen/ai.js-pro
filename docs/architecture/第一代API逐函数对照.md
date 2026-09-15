@@ -22,6 +22,7 @@
 | `tools/pro-api/settings-contract.js` | 2.28 `$settings` 行为验收脚本（21 项，§5.8） |
 | `tools/pro-api/dialog-contract.js` / `colormapping-contract.js` | 2.11 `dialog.*` / 2.18.8 `ColorMapping`（§5.9） |
 | `tools/pro-api/click-center-contract.js` | 2.1 `UiObject.clickCenter` / `auto.clearCache` / `Rect.intersect`（§5.10） |
+| `tools/pro-api/images-contract.js` | 2.18 `getSimilarity` / `detectsMultiColors` / `getScreenCaptureOptions` / `stopScreenCapture`（§5.11） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -57,7 +58,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 396 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 400 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -97,7 +98,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.15 files - 文件系统 | 40 | 37 | 27 | 9 | 2 | 2 | 0 | 18 | 0 | 0 | 3 | 18 |
 | 2.16 globals - 全局变量与函数 | 16 | 15 | 16 | 0 | 0 | 0 | 0 | 13 | 1 | 2 | 0 | 0 |
 | 2.17 http - HTTP 网络请求 | 13 | 5 | 13 | 0 | 0 | 0 | 0 | 4 | 0 | 7 | 1 | 1 |
-| 2.18 images - 图片处理 | 76 | 64 | 49 | 9 | 6 | 10 | 2 | 42 | 1 | 27 | 4 | 2 |
+| 2.18 images - 图片处理 | 76 | 64 | 53 | 9 | 6 | 8 | 0 | 42 | 1 | 27 | 4 | 2 |
 | 2.19 keys - 按键模拟 | 21 | 21 | 21 | 0 | 0 | 0 | 0 | 21 | 0 | 0 | 0 | 0 |
 | 2.20 media - 多媒体 | 9 | 9 | 9 | 0 | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | 2.22 ocr - 文字识别 | 12 | 4 | 0 | 0 | 4 | 8 | 0 | 0 | 0 | 9 | 3 | 0 |
@@ -115,9 +116,9 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **420** | **199** | **212** | **95** | **11** | **247** | **33** | **250** | **95** | **137** |
+| **合计** | **938** | **624** | **424** | **199** | **212** | **93** | **9** | **247** | **33** | **250** | **95** | **137** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **831/938（89%）**，QuickJS **530/938（56%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **835/938（89%）**，QuickJS **530/938（56%）**。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -285,6 +286,23 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
   `adb shell settings put secure enabled_accessibility_services com.jdkshen.aijspro/com.stardust.autojs.core.accessibility.AccessibilityService`
   + `settings put secure accessibility_enabled 1`；两点注意：① 安装 APK 后系统会把这个设置清成 null，需重新写；② `am force-stop` 后服务不会自动重绑，也要重新写（后再启动脚本）。
 
+### 5.11 已按清单补齐：2.18 `getSimilarity` / `detectsMultiColors` / `getScreenCaptureOptions` / `stopScreenCapture`（本轮）
+
+| 条目 | 实现 | 验收 |
+| --- | --- | --- |
+| `images.getSimilarity(img1, img2, {type})` | 新建 `core/image/ImageMetrics.java`：PSNR（逐像素 MSE）与 MSSIM（8×8 窗口 SSIM 均值，C1/C2 同原论文）；`type` 纩写容忍（`PNSR`/`PSNR`/`MSSIM`） | 同图 MSSIM=1、PSNR=Infinity；黑白图 MSSIM≈1e-4、PSNR=0 |
+| `images.detectsMultiColors(img, x, y, firstColor, colors, options)` | `ColorFinder.detectsMultiColors`（复用 `DifferenceDetector`）+ JS 侧解析颜色/偏移/`threshold`/`similarity` | 6 个用例（命中/起点不符/偏移不符/越界/threshold 0 与 10） |
+| `$images.getScreenCaptureOptions()` | `Images.getScreenCaptureOptions()`：没申请过权限返回 `null`，否则返回 `{width,height,orientation,density,async}` | 未申请→null；无障碍通道申请后→`1080/2160/0/440/false`；释放后→null |
+| `$images.stopScreenCapture()` | `Images.stopScreenCapture()` → `releaseScreenCapturer()`（同时清普通投影与无障碍兼容通道） | 释放后 `getScreenCaptureOptions()` 为 null |
+
+要点：
+
+- `orientation` 取值与文档一致（`Configuration.ORIENTATION_*` 正好是 0/1/2）；width/height 按申请时指定的方向取。
+- `async` 固定为 `false`：本实现的截图都是阻塞取帧（`ScreenCapturer.capture`），没有异步通道。
+- **无障碍（录屏兼容）通道也算“已申请截图权限”**：它不创建 `ScreenCapturer`，所以 `getScreenCaptureOptions` 额外判断了 `mAccessibilityCapture`。
+- ⚠️ 验收用的是无障碍通道（`requestScreenCapture({mode:'accessibility'})`）：MediaProjection 弹窗在 Android 15 上是「下一步 → 选应用/整个屏幕 → 开始共享」，没法放进自动化契约（辅助脚本留在 `.artifacts/tools/tap-media-projection.py`）。
+- `images.getSimilarity` 要求两张图尺寸相同，否则报错（文档没写，但不同尺寸没法逐像素比）。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -305,7 +323,7 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ### 6.2 真缺 —— 两个引擎都没有（约 18 条）
 
-⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping`、2.1 `clickCenter`/`clearCache`/`Rect.intersect` 已分别在 §5.4~§5.10 补齐 / 归位并真机验收，不再属于这一节。
+⚠️ 2.8 `$crypto`、2.35 `$zip`、2.9 `$debug`、2.24 `$power_manager`、2.14 `floaty` 权限、2.28 `$settings`、2.11 `dialog.*`、2.18.8 `ColorMapping`、2.1 `clickCenter`/`clearCache`/`Rect.intersect`、2.18 四条已分别在 §5.4~§5.11 补齐 / 归位并真机验收，不再属于这一节。
 剩余大头：
 `ColorMapping.*`（4）、`RootAutomator2` 与 `RootAutomator2.longPress`、
 `OCR.detect`/`OCRResult.clickCenter`/`$ocr.create`、
@@ -320,14 +338,15 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **15 条**（未定位 7 + 实机缺 8）：
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，共 **11 条**（未定位 3 + 实机缺 8）：
 
 | 模块 | 未定位 | 实机缺 | 例子 |
 | --- | --- | --- | --- |
-| 2.18 images | 3 | 2 | `$images.getScreenCaptureOptions/stopScreenCapture/detectAndComputeFeatures`、`matchFeatures`、`images.getSimilarity/detectsMultiColors` |
 | 2.1 控件操作 | 0 | 3 | `automator.takeScreenshot/switchToInputMethod/headsetHook` |
 | 2.12 engines | 1 | 1 | `engines.startFloatingController`、`getPath` |
-| 2.2 坐标操作 / 2.22 ocr / 2.29 threads | 各 1~2 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`isAlive` |
+| 2.2 坐标操作 / 2.22 ocr / 2.29 threads / 2.18 images | 各 1 | 0 | `RootAutomator2.longPress`、`OCR.detect`、`isAlive`、`$images.detectAndComputeFeatures` |
+
+⚠️ 2.18 的 **特征匹配一组**（`$images.detectAndComputeFeatures` / `matchFeatures` / `ImageFeatures` / `ObjectFrame.*`，共 ~11 行，其中多数是类型成员所以不在上表）没实现，而**仓库自带的样例已经在用它**（`sample/Rhino 引擎/图片与图色处理/…`）—— 已列入 §10 下一步。
 | ~~2.8 crypto / 2.9 debug / 2.11 dialog.* / 2.14 floaty 权限 / 2.18.8 ColorMapping / 2.24 power_manager / 2.28 settings / 2.35 zip / 2.1 三条~~ | ~~39~~ | 0 | **已补齐（§5.4~§5.10），从清单移出** |
 
 QuickJS 侧同类共 **150 行**（未定位 43 + 实机缺 107），大头是 `canvas.*`(29)、`device.*`(28)、`files.*`(18)、`colors` 常量(11)、`app.*`(8)、`console.*`(7)。

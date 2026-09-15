@@ -1,5 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
+#include <android/hardware_buffer.h>
+#include <dlfcn.h>
 
 #include <algorithm>
 #include <atomic>
@@ -3010,8 +3012,11 @@ JSValue nativeRequestScreenCapture(JSContext *context, JSValueConst, int argc, J
         return JS_EXCEPTION;
     }
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "requestScreenCapture", "(I)Z");
-    const jboolean result = env->CallBooleanMethod(state->host, method, orientation);
+    std::string mode = argc > 1 ? requireStringArg(context, argc, argv, 1) : "projection";
+    jstring javaMode = env->NewStringUTF(mode.c_str());
+    jmethodID method = env->GetMethodID(hostClass, "requestScreenCapture", "(ILjava/lang/String;)Z");
+    const jboolean result = env->CallBooleanMethod(state->host, method, orientation, javaMode);
+    env->DeleteLocalRef(javaMode);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
 }
@@ -4600,14 +4605,20 @@ const char kBootstrapScript[] = R"JS(
         return Number(value) === 1 || Number(value) === 2 ? Number(value) : 0;
     }
 
+    let accessibilityCapture = false;
     const images = {
         requestScreenCapture: function (orientation) {
-            return __aiNativeRequestScreenCapture(orientationOf(orientation));
+            const options = orientation && typeof orientation === 'object' ? orientation : {};
+            const mode = String(options.mode || 'projection').toLowerCase();
+            const granted = __aiNativeRequestScreenCapture(
+                orientationOf(options.orientation === undefined ? orientation : options.orientation), mode);
+            if (granted) accessibilityCapture = mode === 'accessibility' || mode === 'auto';
+            return granted;
         },
         captureScreen: function (options) {
             let targetShortEdge = 0;
             let fresh = false;
-            let timeout = 100;
+            let timeout = accessibilityCapture ? 2000 : 100;
             if (typeof options === 'number') {
                 targetShortEdge = Number(options);
             } else if (typeof options === 'string') {
@@ -4618,7 +4629,7 @@ const char kBootstrapScript[] = R"JS(
                     targetShortEdge = options.size === undefined ? 720 : Number(options.size);
                 }
                 fresh = options.fresh === true;
-                timeout = options.timeout === undefined ? 100 : Number(options.timeout);
+                timeout = options.timeout === undefined ? (accessibilityCapture ? 2000 : 100) : Number(options.timeout);
             }
             if (!Number.isFinite(targetShortEdge) || targetShortEdge < 0 || targetShortEdge > 4096) {
                 throw new RangeError('captureScreen fast size must be between 0 and 4096');
@@ -9102,6 +9113,56 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_createNativeFrame(
         throwQuickJs(env, "Unable to copy screen capture into a NativeFrame");
     }
     return frameHandle;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_stardust_autojs_engine_QuickJsNativeBridge_createNativeFrameFromHardwareBuffer(
+        JNIEnv *env, jclass, jlong engineHandle, jobject javaBuffer, jint targetShortEdge) {
+    const auto state = findEngine(engineHandle);
+    if (state == nullptr) {
+        throwQuickJs(env, "QuickJS runtime is not available");
+        return 0;
+    }
+    // Resolve lazily: the same native library must still load on API 21 devices.
+    struct BufferApi {
+        void *library = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+        using FromJava = AHardwareBuffer *(*)(JNIEnv *, jobject);
+        using Describe = void (*)(const AHardwareBuffer *, AHardwareBuffer_Desc *);
+        using Lock = int (*)(AHardwareBuffer *, uint64_t, int32_t, const ARect *, void **);
+        using Unlock = int (*)(AHardwareBuffer *, int32_t *);
+        FromJava fromJava = library ? reinterpret_cast<FromJava>(dlsym(library, "AHardwareBuffer_fromHardwareBuffer")) : nullptr;
+        Describe describe = library ? reinterpret_cast<Describe>(dlsym(library, "AHardwareBuffer_describe")) : nullptr;
+        Lock lock = library ? reinterpret_cast<Lock>(dlsym(library, "AHardwareBuffer_lock")) : nullptr;
+        Unlock unlock = library ? reinterpret_cast<Unlock>(dlsym(library, "AHardwareBuffer_unlock")) : nullptr;
+    };
+    static const BufferApi api;
+    if (!api.fromJava || !api.describe || !api.lock || !api.unlock || !javaBuffer) return 0;
+    AHardwareBuffer *buffer = api.fromJava(env, javaBuffer);
+    if (!buffer || env->ExceptionCheck()) return 0;
+    AHardwareBuffer_Desc desc{};
+    api.describe(buffer, &desc);
+    // Only canonical RGBA: other formats use Bitmap's conversion fallback, not guessed colors.
+    if (desc.format != AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM || desc.layers != 1
+            || desc.width == 0 || desc.height == 0 || desc.stride < desc.width
+            || desc.stride > static_cast<uint32_t>(std::numeric_limits<int>::max() / 4)
+            || desc.height > static_cast<uint32_t>(std::numeric_limits<int>::max())) return 0;
+    void *pixels = nullptr;
+    if (api.lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, -1, nullptr, &pixels) != 0) return 0;
+    struct UnlockOnExit {
+        AHardwareBuffer *buffer;
+        BufferApi::Unlock unlock;
+        ~UnlockOnExit() { unlock(buffer, nullptr); }
+    } unlockOnExit{buffer, api.unlock};
+    if (!pixels) return 0;
+    try {
+        // Copies/resizes directly into the existing native reusable-frame pool.
+        return state->frames.createFromRgba(static_cast<uint8_t *>(pixels),
+                static_cast<int>(desc.width), static_cast<int>(desc.height),
+                static_cast<int>(desc.stride * 4), 4, targetShortEdge);
+    } catch (const std::exception &error) {
+        throwQuickJs(env, error.what());
+        return 0;
+    }
 }
 
 // 执行收尾（定义在 evaluate 之后，先声明）：跑完挂起 job / 定时器，再把结果转成 Java 对象。

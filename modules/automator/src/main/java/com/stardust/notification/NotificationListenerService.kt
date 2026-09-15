@@ -18,6 +18,20 @@ class NotificationListenerService : android.service.notification.NotificationLis
 
     private val mNotificationListeners = CopyOnWriteArrayList<NotificationListener>()
 
+    @Volatile
+    var connected = false
+        private set
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        connected = true
+    }
+
+    override fun onListenerDisconnected() {
+        connected = false
+        super.onListenerDisconnected()
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -48,11 +62,13 @@ class NotificationListenerService : android.service.notification.NotificationLis
 
 
     override fun onDestroy() {
+        connected = false
         super.onDestroy()
         instance = null
     }
 
     companion object {
+        @Volatile
         var instance: NotificationListenerService? = null
             private set
     }

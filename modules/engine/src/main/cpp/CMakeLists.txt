@@ -72,7 +72,7 @@ target_compile_options(quickjs_jni PRIVATE -fPIC -Wall -Wextra)
 target_link_options(quickjs_jni PRIVATE
         "-Wl,-z,max-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
-target_link_libraries(quickjs_jni PRIVATE quickjs ${OPENCV_LIBS} log)
+target_link_libraries(quickjs_jni PRIVATE quickjs ${OPENCV_LIBS} log dl)
 
 # 脚本解密的原生实现：单独一个小 .so，不依赖 QuickJS/OpenCV，
 # 这样 Rhino 工程的产物不必为了解密把整个引擎加载起来。

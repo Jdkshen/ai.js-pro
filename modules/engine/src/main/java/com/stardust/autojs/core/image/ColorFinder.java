@@ -98,8 +98,39 @@ public class ColorFinder {
         return result;
     }
 
-    public Point findMultiColors(ImageWrapper image, int firstColor, int threshold, Rect rect, int[] points) {
-        Point[] firstPoints = findAllPointsForColor(image, firstColor, threshold, rect);
+    /**
+     * PDF §2.18.2 `images.detectsMultiColors(img, x, y, firstColor, colors, options)`：
+     * 只判断「指定点开始的那一组颜色」是否成立，不做全图搜索。
+     *
+     * @param points 展平成 [x, y, color, …] 的相对偏移与颜色
+     */
+    public boolean detectsMultiColors(ImageWrapper image, int x, int y, int firstColor,
+                                      int threshold, int[] points) {
+        if (x < 0 || y < 0 || x >= image.getWidth() || y >= image.getHeight()) {
+            return false;
+        }
+        if (!detects(image.pixel(x, y), firstColor, threshold)) {
+            return false;
+        }
+        for (int i = 0; i + 2 < points.length; i += 3) {
+            int px = x + points[i];
+            int py = y + points[i + 1];
+            if (px < 0 || py < 0 || px >= image.getWidth() || py >= image.getHeight()) {
+                return false;
+            }
+            if (!detects(image.pixel(px, py), points[i + 2], threshold)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean detects(int pixel, int color, int threshold) {
+        ColorDetector detector = new ColorDetector.DifferenceDetector(color, threshold);
+        return detector.detectsColor(Color.red(pixel), Color.green(pixel), Color.blue(pixel));
+    }
+
+    public Point findMultiColors(ImageWrapper image, int firstColor, int threshold, Rect rect, int[] points) {        Point[] firstPoints = findAllPointsForColor(image, firstColor, threshold, rect);
         for (Point firstPoint : firstPoints) {
             if (firstPoint == null)
                 continue;

@@ -17,6 +17,10 @@ final class QuickJsNativeBridge {
                                          int width, int height, int rowStride, int pixelStride,
                                          int targetShortEdge);
 
+    // Returns zero for an unsupported/unmappable hardware layout, allowing a portable fallback.
+    static native long createNativeFrameFromHardwareBuffer(long engineHandle,
+            android.hardware.HardwareBuffer buffer, int targetShortEdge);
+
     static native Object evaluate(long handle, String source, String sourceName);
 
     /**

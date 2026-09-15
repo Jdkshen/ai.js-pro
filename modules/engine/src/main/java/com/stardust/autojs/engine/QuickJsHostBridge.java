@@ -5729,11 +5729,6 @@ final class QuickJsHostBridge implements AutoCloseable,
             for (Detection detection : detections) {
                 canvas.drawRect(new RectF(detection.x1, detection.y1,
                         detection.x2, detection.y2), mBoxPaint);
-                // 空标签 = **纯框，不画文字**。脚本侧用它画网格线/空格标记（象棋的识别绘制）；
-                // 以前无条件拼 " 100%"，于是满屏都是没意义的百分比标签。
-                if (detection.label == null || detection.label.isEmpty()) {
-                    continue;
-                }
                 String caption = detection.label + " " + Math.round(detection.score * 100) + "%";
                 float captionWidth = mLabelPaint.measureText(caption);
                 float top = Math.max(0f, detection.y1 - 40f);
