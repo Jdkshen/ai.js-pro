@@ -85,7 +85,7 @@ $threads.start(() => {
     let data = [];
     for (let i = 0; i < 10000; i++) {
         data.push({
-            name: `第${i}个`,
+            name: '第' + i + '个',
             id: i,
         });
     }

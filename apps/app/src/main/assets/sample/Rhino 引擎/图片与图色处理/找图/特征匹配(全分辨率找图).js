@@ -1,5 +1,7 @@
 // @engine rhino
-// ⚠ 需要 Auto.js Pro 专属 API：images.matchFeatures（全分辨率特征匹配）、ES6 模板字符串（当前 Rhino 1.7.7 不支持，请改成字符串拼接）（当前引擎暂未实现，直接运行会报错）
+// 全分辨率特征匹配：$images.detectAndComputeFeatures / $images.matchFeatures（PDF §2.18.2）
+// 本实现不是 OpenCV 的 SIFT/ORB（仓里的 OpenCV 构建没有 features 模块），
+// 而是 imgproc 角点 + 自写二进制描述子 + RANSAC，详见 docs/architecture/第一代API逐函数对照.md §5.16
 // 读取小图
 let hellokitty = $images.read('./hellokitty.jpg');
 // 计算小图特征
@@ -26,7 +28,7 @@ for (let i = 0; i < n; i++) {
     // 特征匹配
     // 最后一次匹配时，我们将特征和匹配绘制出来，在调试时更容易看出匹配效果，但会增加耗时
     let drawMatches = (i == n - 1 ? './matches.jpg' : undefined);
-    let result = $images.matchFeatures(sceneFeatures, objectFeatures, { drawMatches });
+    let result = $images.matchFeatures(sceneFeatures, objectFeatures, { drawMatches: drawMatches });
     let end = Date.now();
     // 打印结果和中心点
     console.log(result, result ? result.center : null);
@@ -34,7 +36,7 @@ for (let i = 0; i < n; i++) {
     // 回收特征对象
     sceneFeatures.recycle();
 
-    toastLog(`第${i + 1}次检测: ${end - start}ms`);
+    toastLog('第' + (i + 1) + '次检测: ' + (end - start) + 'ms');
     if (drawMatches) {
         // 可以在当前目录查看matches.jpg图片，会绘制详细匹配详情
         app.viewFile('./matches.jpg');

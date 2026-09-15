@@ -452,6 +452,32 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 - ⚠️ **描述子采样前必须平滑**：不平滑时 `scale: 0.5` 完全匹配不上（二进制描述子逐位翻转）→ 加 `GaussianBlur`（ORB 也是这么做的），并且核大小/sigma 也随 scale 缩放。
 - ⚠️ **描述子半径要归一化**：半径固定成 16px 时，scale=0.5 的图上采样到的实际是半块纹理 → 半径乘 scale 后两边采到的是同一块内容。
 
+### 5.17 顺带修：内置 Rhino 样例里“一运行就报错”的 7 个文件（用户报的 OCR 报错）
+
+用户反馈「OCR 代码运行报错」，真机复现得到的是
+`illegal character (截图并识别文字(PaddleOCR).js#22)` —— 样例里的 **ES6 模板字符串**（反引号）在 Rhino 1.7.7 里**编译期**就失败，
+根本走不到 API：不是 `$ocr` 的问题，而是脚本本身解析不过。
+
+为了不靠人眼，写了个离线检查器逐文件编译全部样例（用仓库自带的 Rhino，与设备同版本、同语言版本 `VERSION_ES6`），
+扫出 **7 个 Rhino 样例是坏的**，已全部修好：
+
+| 样例 | 错误 | 修法 |
+| --- | --- | --- |
+| `文字识别(OCR)/截图并识别文字(PaddleOCR).js` | illegal character（模板字符串）+ 头部写着“暂未实现” | 换成字符串拼接；头部改成“本引擎内置 ML Kit”；补上 `forEach/filter` 与 `recycle()` 示例 |
+| `文字识别(OCR)/截图并识别文字(MLKitOCR).js` | 同上 + `$plugins.load('...plugin.mlkit.ocr')` 插件不存在 | 改用内置的 `$ocr.create()`（本引擎就是 ML Kit） |
+| `图片与图色处理/找图/特征匹配(全分辨率找图).js` | `invalid object initializer`（`{ drawMatches }` 对象简写）+ 模板字符串 | 补全 `drawMatches: drawMatches`；拼接字符串 |
+| `Shell命令/访问data data目录.js` | illegal character | 字符串拼接 |
+| `任务/视频文件提取mp3文件.js` | illegal character ×2 | 字符串拼接 |
+| `任务/读取文本文件.js` | illegal character | 字符串拼接 |
+| `复杂界面/高性能列表.js` | illegal character | 字符串拼接 |
+
+两个 OCR 样例已在真机跑通（用无障碍截图的变体）：`ocr.detect()` 识别出 29 行、`filter(confidence > 0.9)` 生效、
+`toastLog` 打出耗时、`capture.recycle()`/`ocr.release()` 正常退出。
+
+防止再静悄悄地坏回去：新增单测
+`modules/engine/src/test/java/com/stardust/autojs/sample/RhinoSampleSyntaxTest.java`
+（带 `@engine quickjs` 标记的样例跳过，因为 QuickJS 支持 ES6），跑法见 §10。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -567,7 +593,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
    `2.36` 是控件代理的 XML 属性与方法，要跟 JS 函数分开核对。
 4. **补 Pro 侧对照**（可选）：用同一套探针跑一遍 Pro 9.x，把「我们缺」与「实现不同」彻底分开。
 5. **CSV 当验收登记册**：验收一条改一条状态；每次改动后跑 `run-probes.ps1` 再 `--stage check --stage rollup`。
+改样例/脚本相关代码时，顺手跑一下样例语法单测（Rhino 1.7.7 不支持模板字符串/对象简写，写错就是“一运行就报错”）：
 
+```powershell
+.\gradlew.bat :engine:testDebugUnitTest --tests '*RhinoSampleSyntaxTest*'
+```
 已完成的批次（方便回溯）：`$crypto` §5.4、`$zip` §5.5、`$debug` §5.6、`$power_manager`+`floaty` 权限 §5.7、
 `$settings` §5.8、`dialog.*`+`ColorMapping` §5.9、`clickCenter`/`clearCache`/`Rect.intersect` §5.10、
 images 四条 §5.11、automator 三条 + `getPath` + `isAlive` §5.12、`startFloatingController` §5.13、

@@ -57,10 +57,10 @@ function handleIntent(intent) {
     }
     const mp3Path = path + ".mp3";
     // 使用ffmpeg提取文件为mp3，参见https://www.baidu.com/s?wd=ffmpeg%20%E8%A7%86%E9%A2%91%E6%8F%90%E5%8F%96mp3
-    const result = ffmpeg.inProcess.exec(`-i "${path}" "${mp3Path}"`);
+    const result = ffmpeg.inProcess.exec('-i "' + path + '" "' + mp3Path + '"');
     console.log(result);
     if (result.code === 0) {
-        alert("提取mp3成功", `文件路径${mp3Path}，已复制到剪贴板`);
+        alert("提取mp3成功", '文件路径' + mp3Path + '，已复制到剪贴板');
         setClip(mp3Path);
         $app.viewFile(mp3Path);
     } else {

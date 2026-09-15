@@ -17,5 +17,5 @@ function handleIntent(intent) {
     const content = $files.read(stream);
     // 关闭流
     stream.close();
-    alert(`文件${intent.data}内容`, content);
+    alert('文件' + intent.data + '内容', content);
 }
