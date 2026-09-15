@@ -125,13 +125,14 @@ foreach ($v in @('rhino','rhino-ui','qjs')) {
 | `engines-controller-contract.js` | 2.12 `engines.startFloatingController`（悬浮控制器，需悬浮窗权限） | 21 |
 | `rootautomator2-contract.js` | 2.2 `RootAutomator2` 整组（adb 通道需 Shizuku；root 通道本机不可用，只验错误路径） | 21 |
 | `ocr-contract.js` | 2.22 `$ocr.create` / `OCR.detect`（含 region/max 选项）/ `OCRResult.*` / `OCR.release` | 26 |
+| `features-contract.js` | 2.18 `detectAndComputeFeatures` / `matchFeatures` / `ImageFeatures.recycle` / `ObjectFrame.*` | 31 |
 
 ⚠️ `debug-contract.js` 会真的 dump 两个 hprof 并压一个 zip（约 40~60 秒，脚本结束前自己删掉）；
 真机跑它时 `sleep` 给到 70 秒。
 
 ```powershell
 $adb='C:\Android\platform-tools-2\adb.exe'
-foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js','power-manager-contract.js','floaty-permission-contract.js','settings-contract.js','dialog-contract.js','colormapping-contract.js','click-center-contract.js','images-contract.js','automator-extra-contract.js','engines-controller-contract.js','rootautomator2-contract.js','ocr-contract.js')) {
+foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js','power-manager-contract.js','floaty-permission-contract.js','settings-contract.js','dialog-contract.js','colormapping-contract.js','click-center-contract.js','images-contract.js','automator-extra-contract.js','engines-controller-contract.js','rootautomator2-contract.js','ocr-contract.js','features-contract.js')) {
   & $adb -s ce4d2bdb push "tools\pro-api\$script" '/sdcard/probe/current.js'
   & $adb -s ce4d2bdb shell am force-stop com.jdkshen.aijspro   # 否则 am start 只投递 intent，不重跑
   & $adb -s ce4d2bdb logcat -c
@@ -157,6 +158,7 @@ foreach ($script in @('crypto-contract.js','zip-contract.js','debug-contract.js'
 `engines-controller-contract` = `FLOATCTRL_SUMMARY|pass=21 failed=0`（需要悬浮窗权限；会在 `/sdcard/probe/` 下自己造目标脚本与标记文件，跑完清理）。
 `rootautomator2-contract` = `ROOTAUTOMATOR2_SUMMARY|pass=21 failed=0`（adb 通道需要运行中的 Shizuku；脚本会弹 3 个对话框做点击/对照，**不要在中途手动点屏幕**）。
 `ocr-contract` = `OCR_SUMMARY|pass=26 failed=0`（用 Canvas 画已知文字验证识别，再用无障碍截图 + OCR + clickCenter 做端到端点击；不弹系统授权框）。
+`features-contract` = `FEATURES_SUMMARY|pass=31 failed=0`（全离线：自己造纹理图，验匹配位置、负向对照与全部选项）。
 
 ## 产物
 

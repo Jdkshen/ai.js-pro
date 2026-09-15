@@ -26,7 +26,10 @@ import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.ScriptableObject;
 import com.stardust.autojs.core.image.ColorFinder;
 import com.stardust.autojs.core.image.ImageMetrics;
+import com.stardust.autojs.core.image.FeatureMatcher;
+import com.stardust.autojs.core.image.ImageFeatures;
 import com.stardust.autojs.core.image.ImageWrapper;
+import com.stardust.autojs.core.image.ObjectFrame;
 import com.stardust.autojs.core.image.TemplateMatching;
 import com.stardust.autojs.core.image.capture.ScreenCaptureRequester;
 import com.stardust.autojs.core.image.capture.ScreenCapturer;
@@ -617,6 +620,70 @@ public class Images {
                 OpenCVHelper.release(src);
             }
         }
+    }
+
+    /**
+     * PDF §2.18.2（第 164 页，v9.2 新增）：{@code $images.detectAndComputeFeatures(img[, options])}。
+     *
+     * @param scale     缩放比例；<= 0 表示用文档默认值（宽*高 > 1000000 时 0.5，否则 1）
+     * @param grayscale 是否先灰度化（文档默认 true）
+     * @param method    文档为 SIFT（默认）/ORB；本实现内部统一用 imgproc 角点 + 自写二进制描述子
+     * @param region    计算特征的区域，可为 null
+     */
+    public ImageFeatures detectAndComputeFeatures(ImageWrapper image, double scale, boolean grayscale,
+                                                  String method, Rect region) {
+        initOpenCvIfNeeded();
+        if (image == null) {
+            throw new NullPointerException("image = null");
+        }
+        ImageFeatures features = FeatureMatcher.detect(image.getMat(), scale, grayscale,
+                method == null ? "SIFT" : method, region);
+        // drawMatches 调试用：保留一份原图引用（不拷贝）。调用方 recycle 掉图片后 drawMatches
+        // 会退化为只写一个空图，不会崩。
+        features.sourceMat = image.getMat();
+        return features;
+    }
+
+    /**
+     * PDF §2.18.2（第 165 页，v9.2 新增）：{@code $images.matchFeatures(scene, object[, options])}。
+     *
+     * @param matcher  文档的 matcher 选项（FLANNBASED 默认 / BRUTEFORCE*）：接受但内部统一走汉明距离
+     * @param drawPath 文档的 drawMatches 选项：绘制匹配详情到该路径（调试用），可为 null
+     * @param ratio    文档的 thredshold 选项：Lowe ratio 阈值，默认 0.7
+     * @return 小图在大图中的位置（四边形），未找到返回 null
+     */
+    public ObjectFrame matchFeatures(ImageFeatures scene, ImageFeatures object, String matcher,
+                                     String drawPath, double ratio) {
+        if (scene == null) {
+            throw new NullPointerException("scene = null");
+        }
+        if (object == null) {
+            throw new NullPointerException("object = null");
+        }
+        scene.ensureUsable();
+        object.ensureUsable();
+        List<double[]> pairs = FeatureMatcher.match(scene, object, ratio);
+        Point[] corners = FeatureMatcher.estimateFrameCorners(pairs, object.scaledWidth, object.scaledHeight);
+        if (corners == null) {
+            return null;
+        }
+        // 场景「缩放后」坐标 -> 原图坐标（再按屏幕度量缩放，与 matchTemplate 一致）
+        double inverse = scene.scale == 0 ? 1 : 1.0 / scene.scale;
+        Point[] screenCorners = new Point[4];
+        for (int i = 0; i < 4; i++) {
+            double x = corners[i].x * inverse;
+            double y = corners[i].y * inverse;
+            screenCorners[i] = new Point(mScreenMetrics.scaleX((int) Math.round(x)),
+                    mScreenMetrics.scaleY((int) Math.round(y)));
+        }
+        if (drawPath != null && !drawPath.isEmpty() && scene.sourceMat != null) {
+            try {
+                FeatureMatcher.drawMatches(scene.sourceMat, pairs, corners, drawPath);
+            } catch (Throwable ignored) {
+                // 调试绘制失败不应当让匹配失败
+            }
+        }
+        return new ObjectFrame(screenCorners[0], screenCorners[1], screenCorners[3], screenCorners[2]);
     }
 
     public List<TemplateMatching.Match> matchTemplate(ImageWrapper image, ImageWrapper template, float weakThreshold, float threshold, Rect rect, int maxLevel, int limit) {

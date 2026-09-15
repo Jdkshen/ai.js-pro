@@ -474,6 +474,36 @@ module.exports = function (runtime, scope) {
         }
 
 
+        // PDF §2.18.2（第 164 页，v9.2 新增）：计算图片特征，返回 ImageFeatures（不用时要 recycle()）
+        images.detectAndComputeFeatures = function (img, options) {
+            initIfNeeded();
+            options = options || {};
+            // scale <= 0 表示让 Java 侧按文档默认（宽*高 > 1000000 → 0.5，否则 1）
+            var scale = options.scale === undefined ? -1 : Number(options.scale);
+            if (!isFinite(scale)) {
+                throw new TypeError("scale must be a finite number");
+            }
+            var grayscale = options.grayscale === false ? false : true;
+            var method = options.method === undefined ? "SIFT" : String(options.method);
+            var region = options.region === undefined ? null : buildRegion(options.region, img);
+            return javaImages.detectAndComputeFeatures(img, scale, grayscale, method, region);
+        }
+
+        // PDF §2.18.2（第 165 页，v9.2 新增）：特征匹配，返回 ObjectFrame（四边形）或 null
+        images.matchFeatures = function (scene, object, options) {
+            initIfNeeded();
+            options = options || {};
+            var matcher = options.matcher === undefined ? "FLANNBASED" : String(options.matcher);
+            // 文档写的是 thredshold（原文拼写），兼容 threshold
+            var raw = options.thredshold === undefined ? options.threshold : options.thredshold;
+            var ratio = raw === undefined ? 0.7 : Number(raw);
+            if (!isFinite(ratio)) {
+                throw new TypeError("thredshold must be a finite number");
+            }
+            var drawPath = (options.drawMatches === undefined || options.drawMatches === null)
+                ? null : files.path(String(options.drawMatches));
+            return javaImages.matchFeatures(scene, object, matcher, drawPath, ratio);
+        }
 
         images.findImageInRegion = function (img, template, x, y, width, height, threshold) {
             return images.findImage(img, template, {

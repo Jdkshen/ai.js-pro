@@ -343,6 +343,11 @@ LOOSE_MEMBER_HINTS = {
                       'modules/engine/src/main/java/com/stardust/autojs/runtime/api/Ocr.java'),
     ('2.22', 'OCRResult'): ('OCRResult',
                            'modules/engine/src/main/java/com/stardust/autojs/runtime/api/OCRResult.java'),
+    # Java getter 叫 getCenterX()，PDF 写的是成员名 centerX
+    ('2.18', 'centerX'): ('ObjectFrame.getCenterX()',
+                          'modules/engine/src/main/java/com/stardust/autojs/core/image/ObjectFrame.java'),
+    ('2.18', 'centerY'): ('ObjectFrame.getCenterY()',
+                          'modules/engine/src/main/java/com/stardust/autojs/core/image/ObjectFrame.java'),
 }
 
 # PDF 会把 JS 类的成员写成 `Key.data`；这些成员定义在 init.js 的构造函数里
