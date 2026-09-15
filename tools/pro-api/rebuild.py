@@ -339,6 +339,10 @@ LOOSE_MEMBER_HINTS = {
     ('2.29', 'isAlive'): ('Thread.isAlive()',
                           'java.lang.Thread#isAlive（脚本线程是 Java Thread；'
                           '主线程是 core/looper/MainThreadProxy.java）'),
+    ('2.22', 'OCR'): ('$ocr.create() 返回的会话对象',
+                      'modules/engine/src/main/java/com/stardust/autojs/runtime/api/Ocr.java'),
+    ('2.22', 'OCRResult'): ('OCRResult',
+                           'modules/engine/src/main/java/com/stardust/autojs/runtime/api/OCRResult.java'),
 }
 
 # PDF 会把 JS 类的成员写成 `Key.data`；这些成员定义在 init.js 的构造函数里

@@ -112,7 +112,7 @@ runtime.init();
     (function (scope) {
         var modules = ['app', 'automator', 'console', 'dialogs', 'io', 'selector', 'shell', 'web', 'ui',
             "images", "threads", "events", "engines", "RootAutomator", "http", "storages", "floaty",
-            "sensors", "media", "plugins", "yolo", "continuation"];
+            "sensors", "media", "plugins", "yolo", "ocr", "continuation"];
         var len = modules.length;
         for (var i = 0; i < len; i++) {
             var m = modules[i];
@@ -129,7 +129,7 @@ runtime.init();
         var aliasNames = ['app', 'automator', 'console', 'dialogs', 'ui', 'images', 'threads', 'events',
             'engines', 'http', 'storages', 'floaty', 'sensors', 'media', 'plugins', 'yolo', 'continuation',
             'shell', 'selector', 'web', 'io', 'timers', 'util', 'device', 'sqlite', 'crypto', 'zips',
-            'files', 'RootAutomator', 'colors'];
+            'files', 'RootAutomator', 'colors', 'ocr'];
         for (var j = 0; j < aliasNames.length; j++) {
             var name = aliasNames[j];
             if (scope[name] !== undefined) {

@@ -26,6 +26,7 @@
 | `tools/pro-api/automator-extra-contract.js` | 2.1 `takeScreenshot` / `switchToInputMethod` / `headsetHook` + 2.12 `getPath` + 2.29 `isAlive`（§5.12） |
 | `tools/pro-api/engines-controller-contract.js` | 2.12 `engines.startFloatingController`（§5.13） |
 | `tools/pro-api/rootautomator2-contract.js` | 2.2 `RootAutomator2` 整组（§5.14） |
+| `tools/pro-api/ocr-contract.js` | 2.22 `$ocr.create` / `OCR.detect` / `OCRResult.*`（§5.15） |
 | `tools/pro-api/README.md` | 复现步骤、判定规则、设备侧踩坑 |
 | `.artifacts/pro-api-{lines,index,status}.json`、`.artifacts/pro-api-device-*.json`、`.artifacts/pro-api-paths-*.json` | 中间产物（`.artifacts/` 被 git 忽略，可重建） |
 | `.artifacts/probe-*.log` | 本轮 7 次真机运行的原始日志 |
@@ -61,7 +62,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 
 把清单里 818 个 `a.b.c` 形式的条目交给设备**逐个求值并报告 typeof**（`PROBE_PATH|ui.layout|function`）。
 这一层能穿过 `ProxyJavaObject`（`$ui.layout` 取得到），是逐 API 对照真正需要的证据，也是"这个函数到底在不在"的直接答案。
-结果：**Rhino 405 / 818 取得到，QuickJS 230 / 818 取得到**。
+结果：**Rhino 406 / 818 取得到，QuickJS 230 / 818 取得到**。
 
 ## 3. 状态词表
 
@@ -104,7 +105,7 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.18 images - 图片处理 | 76 | 64 | 53 | 9 | 6 | 8 | 0 | 42 | 1 | 27 | 4 | 2 |
 | 2.19 keys - 按键模拟 | 21 | 21 | 21 | 0 | 0 | 0 | 0 | 21 | 0 | 0 | 0 | 0 |
 | 2.20 media - 多媒体 | 9 | 9 | 9 | 0 | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
-| 2.22 ocr - 文字识别 | 12 | 4 | 0 | 0 | 4 | 8 | 0 | 0 | 0 | 9 | 3 | 0 |
+| 2.22 ocr - 文字识别 | 12 | 4 | 1 | 5 | 6 | 0 | 0 | 0 | 0 | 9 | 3 | 0 |
 | 2.23 plugins - 插件 | 4 | 1 | 1 | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 4 | 0 |
 | 2.24 power_manager - 电源管理 | 4 | 2 | 2 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 4 | 0 |
 | 2.25 sensors - 传感器 | 8 | 3 | 4 | 0 | 3 | 1 | 0 | 4 | 0 | 0 | 1 | 0 |
@@ -119,12 +120,12 @@ CSV 列：`module_num, module, api, kind, pdf_page, version, section, rhino, qui
 | 2.34 WebSocket | 6 | 5 | 5 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 4 |
 | 2.35 zip - 压缩与解压 | 17 | 17 | 17 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 5 | 0 |
 | 2.36 Ui - 用户界面 | 188 | 30 | 25 | 2 | 145 | 12 | 3 | 16 | 6 | 6 | 11 | 4 |
-| **合计** | **938** | **624** | **442** | **208** | **194** | **88** | **5** | **247** | **33** | **250** | **95** | **137** |
+| **合计** | **938** | **624** | **443** | **214** | **195** | **80** | **5** | **247** | **33** | **250** | **95** | **137** |
 
-**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **844/938（90%）**，QuickJS **530/938（56%）**。
+**读法**：`实机有 + 源码有 + 待核实` = 有证据合计 → Rhino **852/938（91%）**，QuickJS **530/938（56%）**。
 
-> 注：`源码有`/`待核实`/`未定位` 三列的分配受扫描规则影响（本轮把 12 行 `RootAutomator2` 成员从“待核实”提到了“实机有”），
-> 所以**看趋势看 `实机有` 与 `未定位`**：实机有 424（§5.11 前）→ 442，未定位 93 → 88。
+> 注：`源码有`/`待核实`/`未定位` 三列的分配受扫描规则影响（每个批次会把一批行从“待核实/未定位”提到“实机有”），
+> 所以**看趋势看 `实机有` 与 `未定位`**：实机有 424（§5.11 前）→ 443，未定位 93 → 80。
 
 （`2.36` 的 188 条多是 XML 属性与控件属性标签，不是 JS 函数；`2.30` 是插件 SDK 类。与普通模块不可直接比较。）
 
@@ -385,6 +386,38 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 - ⚠️ **验收脚本的对话框顺序**：点在对话框外面会把它 dismiss 掉 → “负向对照”必须用**另一个**对话框，
   否则后续的正向点击会扑空（先试了一次就踩到了）。
 
+### 5.15 已按清单补齐：2.22 OCR（`$ocr.create` / `OCR.detect` / `OCRResult.*`，本轮，行为级验收）
+
+`tools/pro-api/ocr-contract.js`：真机 **26/26** 通过。2.22 从「实机有 0 / 未定位 8」变成「实机有 1 / 已定义 3 / 同模块 6 / 未定位 2（两个类型名）」。
+
+| 项 | 实现 |
+| --- | --- |
+| 识别引擎 | **ML Kit 中文文字识别**（`com.google.mlkit:text-recognition-chinese:16.0.1`，模型内置、离线），新建 `runtime/api/Ocr.java` |
+| 结果对象 | 新建 `runtime/api/OCRResult.java`（`text` / `confidence` / `bounds` / `rotation` / `rotationConfidence` / `javaObject` / `clickCenter()`） |
+| 脚本全局名 | 新建 `assets/modules/__ocr__.js`，并加入 `init.js` 的模块表与别名表（`$ocr`） |
+
+验收（全部真机）：
+
+- **画图识别**：Canvas 画两行已知文字 → `detect()` 返回 2 条，`text` 逐字命中、`confidence` 0.83/0.82、`bounds` 在图片范围内、`rotation`/`rotationConfidence` 为 0
+- **`max` 选项**：`{max: 1}` 只返回 1 条（图上有两行）
+- **`region` 选项**：上半张能识别到、右半张（文字在左半边）识别不到（正负对照）；只给两个元素（到右下角）、给小于 32px 的区域也不报错
+- **`clickCenter()` 端到端**：弹对话框（按钮文字唯一）→ 无障碍通道截图 → OCR 在截图里找到“确认点击”（共识别出 28 条文字）→ `clickCenter()` 返回 true 且对话框 positive 回调**真的被触发**
+- **`release()`**：`isReleased()` 为 true，再 `detect()` 报错
+
+与 Pro 的差异（已记入 §9）：
+
+- **引擎不同**：Pro 用插件商店的 **PaddleOCR**，我们用 **ML Kit**；因此文档里的 `models` / `labelsFile` / `cpuPowerMode` / 线程数是 PaddleOCR 专用参数 —— 接口上接受但不改变引擎。
+- `rotation` / `rotationConfidence` **恒为 0**：ML Kit 不做旋转检测（文档也说这两个字段只在 `detectRotation: true` 时有效）。
+- 识别粒度是 ML Kit 的 **行**（`Text.Line`），与 PaddleOCR 的行结果同粒度。
+- `region` 小于 32×32 时会自动钳到 32（ML Kit 的硬要求），不让脚本因为传了个小区域就整体失败。
+
+踩到的两个坑（都已修）：
+
+- ⚠️ **`canvas.drawColor(int)` 在 Android 12+ 会报 `Invalid ID: 63`**：Canvas 有 `drawColor(long)` 重载，Rhino 默认挑 long 版 → 走进 `Color.colorSpace(long)`。
+  仓库里已有 `PreferIntJavaObject` 处理 Paint 这类对象，但直接 `new` 出来的 Canvas 不在其列 → 验收脚本改用**两个参数**的 `drawColor(color, mode)`。
+- ⚠️ **Java 集合在 Rhino 里没有 `.length`**：`detect` 最初返回 `List<OCRResult>`，脚本侧 `result.length` 是 undefined、
+  文档示例里的 `forEach/filter/find` 更无从谈起 → Java 侧改回 `OCRResult[]`，并在 `__ocr__.js` 里拷成真正的 JS 数组。
+
 ## 6. 未定位 / 实机缺 的定性结论
 
 对 §7 清单逐条查过源码与真机后，分三类：
@@ -405,10 +438,8 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ### 6.2 真缺 —— 两个引擎都没有（约 18 条）
 
-⚠️ §5.4~§5.14 补齐 / 归位的模块不再属于这一节（`$crypto`、`$zip`、`$debug`、`$power_manager`+`floaty` 权限、`$settings`、`dialog.*`+`ColorMapping`、`clickCenter`/`clearCache`/`Rect.intersect`、images 四条、automator 三条+`getPath`+`isAlive`、`startFloatingController`、`RootAutomator2` 整组）。
-剩余只 3 条，两个功能组：
-`OCR.detect`/`OCRResult.clickCenter`（要接 OCR 引擎）、
-`$images.detectAndComputeFeatures`（+ `matchFeatures`/`ImageFeatures`/`ObjectFrame`/`MatchingResult` 一组，共 ~11 行成员）。
+⚠️ §5.4~§5.15 补齐 / 归位的模块不再属于这一节（……、`RootAutomator2` 整组、OCR 整组）。
+剩余只 **1 条**：`$images.detectAndComputeFeatures`（以及 `matchFeatures`/`ImageFeatures`/`ObjectFrame`/`MatchingResult` 一组，共 ~11 行类型成员）。
 
 ### 6.3 类型名 —— 不是缺口
 
@@ -416,12 +447,8 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 ## 7. 该从哪些行开始
 
-CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，只剩 **3 条**：
-
-| 模块 | 条目 | 状态 |
-| --- | --- | --- |
-| 2.22 ocr | `OCR.detect`、`OCRResult.clickCenter` | 未定位（要接 OCR 引擎） |
-| 2.18 images | `$images.detectAndComputeFeatures` | 未定位（特征匹配，最大一件） |
+CSV 里筛 `rhino ∈ {未定位, 实机缺}` 且 `kind ∈ {function, constructor}`、排除 `2.30`/`2.36`，只剩 **1 条**：
+`2.18 images` 的 `$images.detectAndComputeFeatures`（特征匹配一组，见下）。
 
 建议顺序：`RootAutomator2`（可以照搬仓库已有的 `RootAutomator` 通道）→ `OCR.detect`（要选并接 OCR 引擎）→ `$images` 特征匹配（最大，见下）。
 
@@ -454,7 +481,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 9. 这份清单不能证明什么
 
 - **不是行为验收**：名字在 ≠ 行为一致。默认值、异常、回调线程、权限取消、资源释放仍要按 [AutoJsPro API 兼容性与 V8 选型](Auto.jsPro_API兼容性与V8选型.md) §7 的场景逐项验证。
-- **已补齐的模块只验了本轮脚本覆盖到的东西**：§5.4~§5.14 每一条都有对应的 `tools/pro-api/*-contract.js`（共 **223 项**断言），但**默认值/行为差异仍存在**，已知的几处：
+- **已补齐的模块只验了本轮脚本覆盖到的东西**：§5.4~§5.15 每一条都有对应的 `tools/pro-api/*-contract.js`（共 **249 项**断言），但**默认值/行为差异仍存在**，已知的几处：
   - `$settings.isEnabled('stop_all_on_volume_up')`：主应用沿用仓库原有键 `key_use_volume_control_running`，其默认值是**关**，而 Pro 文档写的是默认**开**（打包版默认开，与文档一致）。
   - `$settings.isEnabled('not_show_console')`：主应用没有「脚本启动即弹日志界面」的行为，这个开关只负责存取值。
   - `dialog.setDefaultDialogType` 的**默认值**：文档写 `overlay`，我们保留仓库原有的 `app-or-overlay`（否则现有脚本的对话框会从应用内变成悬浮层）；四种类型本身都支持，也可以随时显式设置。
@@ -466,6 +493,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
   - `engines.startFloatingController()`：文档**没写返回值**，我们返回控制器对象（多出 `start/stop/isRunning/toggleLog/isLogVisible/getPath/close`）；另外 `close()` 只关窗口不停脚本。
   - `RootAutomator2`：文档说“adb 权限”用的是 ShellOptions 语义，我们实现成：`root` 通道 = 仓库原有 RootAutomator（需 `su`，支持多指），`adb` 通道 = Shizuku/adb shell 的 `input`（**不支持多点触控**，数组形式会报错）。
     本机（小米 8）没 root 但有 Shizuku，所以 root 通道只有“不可用时报错”的验证，**装 root 的设备应该补一次真实注入验收**。
+  - **OCR 引擎不同**：Pro 用插件商店的 PaddleOCR，我们用 ML Kit 中文模型（内置离线）→ `models`/`labelsFile`/`cpuPowerMode` 等选项接受但不生效；`rotation`/`rotationConfidence` 恒为 0（ML Kit 不做旋转检测）；`region` 小于 32×32 自动钳到 32。
+  - **新增依赖**：ML Kit 会把中文识别模型打进 APK（当前 arm64 调试产物约 **194 MiB**）；在意体积可以改成按需下载模型的版本（`com.google.mlkit:text-recognition-chinese` 换成 `...-chinese` 的 unbundled 变体）。
 - **单机单版本**：本轮只覆盖小米 8 + 当时构建，换设备/版本要重跑（脚本已固化）。
 - **仍有盲区**：动态挂载（`Proxy`、`Object.defineProperty`、反射注册）与"要满足条件才存在"的成员（实例方法、惰性加载）都测不到；`未定位` 只代表四层证据都没找到。
 - **没有 Pro 对照设备**：`version` 列只说明该条目属于哪个版本，不代表我们对齐到了同一版本。
@@ -473,11 +502,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\pro-api\run-device-pr
 ## 10. 下一步
 
 1. **按 §6.1 修扫描规则**：把 `UiObjectCollection`、`PReadableTextFile`/`PWritableTextFile`、`$crypto.base64*`、`addBroadcastIntentTask`、`getInstalledPackageList` 这些"名字对不上"的映射写进 `rebuild.py`，让 13 条漏扫自动归位。
-1. **补完最后 3 条**：`OCR.detect` / `OCRResult.clickCenter`（用 ML Kit 文字识别，新增依赖，需先定体积/权限影响）→ `$images.detectAndComputeFeatures` 一组。
+1. **补完最后 1 条**：`$images.detectAndComputeFeatures` 一组（`matchFeatures`/`ImageFeatures`/`ObjectFrame`/`MatchingResult`）。
    ⚠️ 特征匹配已确认：当前 `opencv-5.0.0-16kb-page-fix.aar` 是**按模块拆 .so 的构建，里面没有 features 模块**；
    OpenCV 5.0 把这一组 Java 包改名叫 `org.opencv.features`（ORB/BFMatcher/SIFT 都在），官方 SDK 的 `libopencv_java5.so` 里有 `Java_org_opencv_features_*`（330 个）
-   且 arm64 LOAD 对齐已是 16KB —— 所以可以直接用 imgproc 自写 ORB-lite，或换/重编带 features 模块的原生库（后者要动 `build-quickjs.ps1` 链接与 QuickJS 原生库）。
-   （已完成：`$crypto` §5.4、`$zip` §5.5、`$debug` §5.6、`$power_manager`+`floaty` 权限 §5.7、`$settings` §5.8、`dialog.*`+`ColorMapping` §5.9、`clickCenter`/`clearCache`/`Rect.intersect` §5.10、images 四条 §5.11、automator 三条 + `getPath` + `isAlive` §5.12、`startFloatingController` §5.13、`RootAutomator2` §5.14）；
+   且 arm64 LOAD 对齐已是 16KB —— 可以换/重编带 features 模块的原生库（要同时改 `build-quickjs.ps1` 链接与 QuickJS 原生库），
+   或用 imgproc 自写 ORB-lite（不动原生库）。
+   （已完成：`$crypto` §5.4、`$zip` §5.5、`$debug` §5.6、`$power_manager`+`floaty` 权限 §5.7、`$settings` §5.8、`dialog.*`+`ColorMapping` §5.9、`clickCenter`/`clearCache`/`Rect.intersect` §5.10、images 四条 §5.11、automator 三条 + `getPath` + `isAlive` §5.12、`startFloatingController` §5.13、`RootAutomator2` §5.14、OCR §5.15）；
 2. **把本轮实现同步给 QuickJS**：`$crypto`/`$zip`/`clickCenter`/images 四条/automator 三条 现在只有 Rhino 侧能用（QuickJS 只实现了各自的一部分）。
    QuickJS 走字符串桥，需要新的宿主方法；改完先跑 `modules/engine/src/main/cpp/build-quickjs.ps1`。
 4. **2.36 单独建表**：XML 属性与控件代理方法要和 JS 函数分开核对。
