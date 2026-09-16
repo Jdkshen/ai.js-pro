@@ -168,6 +168,19 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
         post(() -> mInputContainer.setVisibility(enabled ? VISIBLE : GONE));
     }
 
+    /**
+     * Auto.js 的 {@code ui.console.clear()} / {@code ui.globalconsole.clear()}：
+     * 清掉这块控制台绑定的那份日志（列表随之清空）。
+     *
+     * <p>两块控制台绑的不是同一份日志：{@code <console>} 绑脚本自己的 {@code runtime.console}，
+     * {@code <globalconsole>} 绑全局控制台，所以要清哪块就对哪块调用。
+     */
+    public void clear() {
+        if (mConsole != null) {
+            mConsole.clear();
+        }
+    }
+
     /** Auto.js 的 {@code setColor("V", "#bdbdbd")}：按日志级别改颜色。 */
     public void setColor(String level, String color) {
         Integer logLevel = logLevelOf(level);
