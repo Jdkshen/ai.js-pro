@@ -22,6 +22,7 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
 import java.io.Reader
+import java.io.StringReader
 import java.net.URI
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -76,7 +77,14 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         var reader = source.nonNullScriptReader
         try {
             reader = preprocess(reader)
-            val script = context.compileReader(reader, source.toString(), 1, null)
+            // 先读完整份源码再编译：Rhino 只报「illegal character」不说原因，
+            // 编译失败时要回头看一眼源码才能给出「是反引号，加 // @engine quickjs」这种提示。
+            val text = reader.readText()
+            val script = try {
+                context.compileReader(StringReader(text), source.toString(), 1, null)
+            } catch (e: RhinoException) {
+                throw EngineSyntaxHint.decorate(e, text)
+            }
             return runScript(script)
         } catch (e: IOException) {
             throw UncheckedIOException(e)

@@ -1,8 +1,11 @@
 package com.stardust.autojs.script;
 
+import com.stardust.autojs.engine.EngineSyntaxHint;
+
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.ContextFactory;
 import org.mozilla.javascript.GeneratedClassLoader;
+import org.mozilla.javascript.RhinoException;
 
 import java.io.IOException;
 import java.util.Map;
@@ -75,6 +78,10 @@ public final class ScriptCompiler {
             // 关掉源码编码，避免产物里出现脚本原文（Rhino 默认会带上供堆栈显示用）。
             context.setGeneratingSource(false);
             context.compileString(source, scriptName, 1, null);
+        } catch (RhinoException e) {
+            // 打包页会撞上和「运行」同一类语法错误（典型是反引号模板字符串），
+            // 提示保持一致，不要在这里又变回一句干巴巴的 illegal character。
+            throw EngineSyntaxHint.decorate(e, source);
         } finally {
             Context.exit();
         }
