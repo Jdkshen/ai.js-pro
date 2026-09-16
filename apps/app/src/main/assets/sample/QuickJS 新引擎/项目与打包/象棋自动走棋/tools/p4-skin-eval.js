@@ -233,7 +233,7 @@ if (!truth) {
     const calibrate = options.calibrate === true;
     console.log("SKINE 开始：帧 " + names.length + " 张｜校准=" + calibrate +
         "｜confidence=" + (options.confidence == null ? 0.25 : options.confidence) +
-        "｜模型=" + (options.model || "内置（assets/models/chessai_160.onnx）") +
+        "｜模型=" + (options.model || "内置（assets/models/chessai_160x320_v5r.onnx）") +
         (options.inputWidth ? ("｜输入=" + options.inputWidth + "x" + options.inputHeight) : ""));
 
     let scored = 0;

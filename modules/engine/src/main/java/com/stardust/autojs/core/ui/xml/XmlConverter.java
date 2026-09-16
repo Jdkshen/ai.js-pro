@@ -82,6 +82,10 @@ public class XmlConverter {
                     .map("viewpager", JsViewPager.class.getName())
                     .map("card", CardView.class.getName())
                     .map("fab", FloatingActionButton.class.getName())
+                    // Auto.js 的控制台组件：console = 本脚本那份，globalconsole = 全局那份
+                    .map("console", com.stardust.autojs.core.console.ConsoleView.class.getName())
+                    .map("globalconsole",
+                            com.stardust.autojs.core.console.GlobalConsoleView.class.getName())
             );
 
     private static final AttributeHandler ATTRIBUTE_HANDLER = new AttributeHandler.AttrNameRouter()

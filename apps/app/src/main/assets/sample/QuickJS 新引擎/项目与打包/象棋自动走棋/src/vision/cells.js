@@ -19,7 +19,7 @@
  */
 "use strict";
 
-/** 合法的七类棋子字符（大写=红，小写=黑）。顺序与 assets/models/chessai_160.txt 一致。 */
+/** 合法的七类棋子字符（大写=红，小写=黑）。顺序与 assets/models/chessai_160x320_v5r.txt 一致。 */
 const PIECE_CHARS = "RNBAKCPrnbakcp";
 const EMPTY = null;
 const UNKNOWN = "?";

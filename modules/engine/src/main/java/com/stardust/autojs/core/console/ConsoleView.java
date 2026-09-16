@@ -20,6 +20,7 @@ import android.widget.TextView;
 
 import com.stardust.enhancedfloaty.ResizableExpandableFloatyWindow;
 import com.stardust.autojs.R;
+import com.stardust.autojs.runtime.api.Console;
 import com.stardust.util.MapBuilder;
 import com.stardust.util.SparseArrayEntries;
 
@@ -64,6 +65,8 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     private String mSearchQuery = "";
     private int mSeenLogCount = 0;
     private int mMinimumLogLevel = Log.VERBOSE;
+    /** 0 表示用布局默认字号（见 setTextSize）。 */
+    private float mTextSizeSp = 0f;
 
     public ConsoleView(Context context) {
         super(context);
@@ -139,6 +142,75 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     public void setConsole(ConsoleImpl console) {
         mConsole = console;
         mConsole.setConsoleView(this);
+    }
+
+    /**
+     * Auto.js 的 {@code ui.console.setConsole(runtime.console)}。
+     *
+     * <p>形参写成接口 {@link Console} 而不是实现类：Rhino / QuickJS 拿到的 Java 对象
+     * （{@code runtime.console}）能按声明类型正确转换过来。注意脚本里那个全局 {@code console}
+     * 是 JS 包装对象（见 {@code __console__.js}），要用 {@code runtime.console}。
+     * 不匹配实现类时保持原样 —— 总比整个脚本抛异常好。
+     */
+    public void setConsole(Console console) {
+        if (console instanceof ConsoleImpl) {
+            setConsole((ConsoleImpl) console);
+        }
+    }
+
+    /** Auto.js 的 {@code ui.console.input}：底部那个输入框。 */
+    public EditText getInput() {
+        return mEditText;
+    }
+
+    /** Auto.js 的 {@code setInputEnabled(false)}：只用来看日志时把输入区收起来。 */
+    public void setInputEnabled(final boolean enabled) {
+        post(() -> mInputContainer.setVisibility(enabled ? VISIBLE : GONE));
+    }
+
+    /** Auto.js 的 {@code setColor("V", "#bdbdbd")}：按日志级别改颜色。 */
+    public void setColor(String level, String color) {
+        Integer logLevel = logLevelOf(level);
+        if (logLevel == null || android.text.TextUtils.isEmpty(color)) {
+            return;
+        }
+        final int parsed;
+        try {
+            parsed = android.graphics.Color.parseColor(color.trim());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        mColors.put(logLevel, parsed);
+        post(() -> {
+            if (mLogListRecyclerView != null && mLogListRecyclerView.getAdapter() != null) {
+                mLogListRecyclerView.getAdapter().notifyDataSetChanged();
+            }
+        });
+    }
+
+    /** Auto.js 的 {@code setTextSize(12)}（单位 sp）；≤0 表示不管。 */
+    public void setTextSize(float sizeSp) {
+        mTextSizeSp = sizeSp > 0 ? sizeSp : 0f;
+        post(() -> {
+            if (mLogListRecyclerView != null && mLogListRecyclerView.getAdapter() != null) {
+                mLogListRecyclerView.getAdapter().notifyDataSetChanged();
+            }
+        });
+    }
+
+    private static Integer logLevelOf(String level) {
+        if (level == null || level.isEmpty()) {
+            return null;
+        }
+        switch (Character.toUpperCase(level.trim().charAt(0))) {
+            case 'V': return Log.VERBOSE;
+            case 'D': return Log.DEBUG;
+            case 'I': return Log.INFO;
+            case 'W': return Log.WARN;
+            case 'E': return Log.ERROR;
+            case 'A': return Log.ASSERT;
+            default: return null;
+        }
     }
 
     /** Filters the embedded console without deleting entries from the global console. */
@@ -275,6 +347,9 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
             ConsoleImpl.LogEntry logEntry = mFilteredEntries.get(position);
             holder.textView.setText(logEntry.content);
             holder.textView.setTextColor(mColors.get(logEntry.level));
+            if (mTextSizeSp > 0) {
+                holder.textView.setTextSize(mTextSizeSp);
+            }
             // 长按复制单条日志；悬浮控制台与日志页共用这段逻辑。
             holder.itemView.setOnLongClickListener(v -> copyLogEntry(v.getContext(), logEntry.content));
         }

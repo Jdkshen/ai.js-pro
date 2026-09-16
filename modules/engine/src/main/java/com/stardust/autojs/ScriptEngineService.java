@@ -109,6 +109,8 @@ public class ScriptEngineService {
         mContext = mUiHandler.getContext();
         mScriptEngineManager = builder.mScriptEngineManager;
         mGlobalConsole = builder.mGlobalConsole;
+        // 让脚本界面里的 <globalconsole/> 能找到这份全局控制台（见 GlobalConsoleView）
+        com.stardust.autojs.core.console.GlobalConsoleView.setGlobalConsole(mGlobalConsole);
         mScriptEngineManager.setEngineLifecycleCallback(mEngineLifecycleObserver);
         mScriptExecutionObserver.registerScriptExecutionListener(GLOBAL_LISTENER);
         EVENT_BUS.register(this);

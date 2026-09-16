@@ -31,10 +31,12 @@ const gridSearch = require("../src/vision/grid-search.js");
  *     整屏→矩形 763/787 = 97.0% ＞ 裁棋盘→矩形 759/787 = 96.4%，
  *     而且这正好是训练侧的评测口径（电脑端 xq36：全屏→矩形 0.969）。
  *   · 方形档 `chessai_160_v5r.onnx`（1×3×160×160）作为回滚/对照（同套帧 771/787 = 98.0%，
+ *     ⚠️ 已不再随包（省 APK 体积），要从 `.artifacts/model-sync/` 拷回 assets/models/ 才能用）
  *     纯颜色错 0）：改下面**五个**常量 —— MODEL_FILE / LABELS_FILE / INPUT_WIDTH=160 /
  *     INPUT_HEIGHT=160 / REGION_ASPECT=null / REGION_MODE="board"。
  *     ⚠️ 只改模型名不改 INPUT_HEIGHT 会直接报 OpenCV reshape2 断言（方形模型吃 160×320）。
- *   · 更老的 `chessai_160.onnx` 保留在目录里，供历史评测脚本对照（同套帧 782/787 = 99.4%，
+ *   · 更老的 `chessai_160.onnx` 不再随包（同样在 `.artifacts/model-sync/`），
+ *     供历史评测脚本对照（同套帧 782/787 = 99.4%，
  *     但这 9 帧很可能就是它当初的基线集，有「见过」的嫌疑，不能当泛化结论）。
  */
 const MODEL_FILE = "assets/models/chessai_160x320_v5r.onnx";

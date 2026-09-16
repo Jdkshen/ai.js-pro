@@ -6,8 +6,13 @@
 
 | 文件 | 说明 |
 |---|---|
-| `chessai_160.onnx` | 9,651,802 字节（走 git LFS），SHA-256 `BF9D66E2E5F5C5C8807A84877175C902C878A4FCE26438E868D742BA73287B75`（2026-09-13 域内微调版） |
-| `chessai_160.txt` | 类别表**7 行**，与训练时顺序完全一致：`R N B A K C P` |
+| `chessai_160x320_v5r.onnx` | **随包的唯一模型**，9,662,434 字节（走 git LFS），SHA-256 `6A695F00A845705E4B8F26AA6E991B5FB2AB1A7BB81FD2BCBF8B89A6EF84BECB`（v5r 矩形档，2026-09-13 接入） |
+| `chessai_160x320_v5r.txt` | 类别表**7 行**，与训练时顺序完全一致：`R N B A K C P` |
+
+⚠️ **只打包这一个模型**（2026-09-16 起）：此前同目录还有 `chessai_160_v5r.onnx`、`chessai_160.onnx` 两个**方形档**，
+只用于历史评测对照、运行时根本不会加载，却每个还要占 9.2MB —— 三个加起来 ~27.6MB 白进了 APK。
+现已把它们移出工程；本机副本保留在 `.artifacts/model-sync/`（被 git 忽略；与移出前逐字节一致），
+要回滚/对照时从那里拷回本目录即可（回滚注意项见下面「v5r」一节）。
 
 类别字母就是 FEN 的棋子字符（与 `src/chess/fen.js` 同一套）：
 
@@ -23,9 +28,11 @@
 ## 输入输出契约
 
 ```text
-input : [1, 3, 160, 160] float32   # RGB、letterbox（min 缩放 + 居中灰 114 补边）、x/255
+input : [1, 3, 320, 160] float32   # 宽 160 高 320；RGB、letterbox（min 缩放 + 居中灰 114 补边）、x/255
 output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，角点相对模型输入
 ```
+
+（形状用 `onnx.load()` 直接查过随包文件本身：`IN images [1, 3, 320, 160]` / `OUT output0 [1, 300, 6]`。）
 
 - 是 `end2end`（模型自带 TopK、无需额外 NMS）→ 正好走 `yolo.load({ backend: 'dnn' })` 的六列解码路径；
 - 导出时 `dynamic=False`，**batch 恒为 1**（逐张推理，不能一次喂多张）；
@@ -69,19 +76,22 @@ output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，�
 
 ```json
 {
-  "id": "chess-160",
+  "id": "chess-160x320-v5r",
   "version": "1.0.0",
-  "file": "assets/models/chessai_160.onnx",
-  "sha256": "BF9D66E2E5F5C5C8807A84877175C902C878A4FCE26438E868D742BA73287B75",
+  "file": "assets/models/chessai_160x320_v5r.onnx",
+  "sha256": "6A695F00A845705E4B8F26AA6E991B5FB2AB1A7BB81FD2BCBF8B89A6EF84BECB",
   "backend": "dnn",
-  "input": { "shape": [1, 3, 160, 160], "color": "RGB", "normalization": "x / 255",
+  "input": { "shape": [1, 3, 320, 160], "color": "RGB", "normalization": "x / 255",
              "resize": "letterbox", "padColor": [114, 114, 114] },
   "output": { "shape": [1, 300, 6], "decoder": "xyxy_score_class", "postprocess": "model_topk" },
-  "labelsFile": "assets/models/chessai_160.txt"
+  "labelsFile": "assets/models/chessai_160x320_v5r.txt"
 }
 ```
 
 ## 体积提醒
+
+本目录**只放一个**模型：多放的模型每个 9.2MB 都会直接进 APK（assets 不打折），
+对照/回滚用的档位放到库外的 `.artifacts/model-sync/` 就够了。
 
 `.onnx` 走 git LFS（已确认本文件 filter=lfs）；`*.nnue`（本地引擎权重，约 48 MiB）**目前没有 LFS 规则**，
 直接提交会塞进普通 blob，放进来之前先在 `.gitattributes` 里加 `*.nnue filter=lfs diff=lfs merge=lfs -text`。
@@ -89,11 +99,11 @@ output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，�
 
 ## v5r（2026-09-13 接入，当前默认）
 
-| 文件 | 输入 | 用途 |
-| --- | --- | --- |
-| `chessai_160x320_v5r.onnx` | 1×3×320×160（宽 160 高 320） | **默认**：竖屏整屏上盘面级成绩最好 |
-| `chessai_160_v5r.onnx` | 1×3×160×160 | 方形档回滚/对照 |
-| `chessai_160.onnx` | 1×3×160×160 | 更老的基线，供历史评测脚本对照 |
+| 文件 | 输入 | 随包? | 用途 |
+| --- | --- | --- | --- |
+| `chessai_160x320_v5r.onnx` | 1×3×320×160（宽 160 高 320） | ✅ 唯一随包 | **默认**：竖屏整屏上盘面级成绩最好 |
+| `chessai_160_v5r.onnx` | 1×3×160×160 | ❌ 已移出（`.artifacts/model-sync/`） | 方形档回滚/对照 |
+| `chessai_160.onnx` | 1×3×160×160 | ❌ 已移出（`.artifacts/model-sync/`） | 更老的基线，供历史评测脚本对照 |
 
 两者输出都是 `[1, 300, 6]`（end2end，无需额外 NMS），标签集不变（7 类 R N B A K C P，
 颜色仍由格心像素采样判定）。
@@ -106,9 +116,9 @@ output: [1, 300, 6] float32        # 每行 [x1, y1, x2, y2, score, classId]，�
 ⚠️ 这 9 帧很可能就是更老的 `chessai_160.onnx`（同套帧 782/787 = 99.4%）当年的基线集，
 它「见过」这些帧，所以那个数不能当泛化结论；v5r 的强项（残局页）也不在这套帧里。
 
-回滚到方形档：`tools/recognize-board.js` 里把 `MODEL_FILE/LABELS_FILE` 换成
-`chessai_160_v5r.onnx/txt`，并把 `INPUT_WIDTH = 160`、**`INPUT_HEIGHT = 160`**、
-`REGION_ASPECT` 设为 `null`、`REGION_MODE` 设为 `"board"`。
+回滚到方形档：先把 `chessai_160_v5r.onnx/txt`（或更老的 `chessai_160.onnx/txt`）从 `.artifacts/model-sync/`
+拷回本目录，再在 `tools/recognize-board.js` 里把 `MODEL_FILE/LABELS_FILE` 换成对应名字，
+并把 `INPUT_WIDTH = 160`、**`INPUT_HEIGHT = 160`**、`REGION_ASPECT` 设为 `null`、`REGION_MODE` 设为 `"board"`。
 ⚠️ **只改模型名不改 `INPUT_HEIGHT` 会直接崩**：方形模型被喂 160×320 时 OpenCV 会报
 `reshape2_layer.cpp: Assertion failed outTotal == inpTotal`（已加防呆：传方形 `inputSize` 时自动拉平两维，
 但常量本身还是要改对）。

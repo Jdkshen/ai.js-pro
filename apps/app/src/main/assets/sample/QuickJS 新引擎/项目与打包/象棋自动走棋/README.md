@@ -42,7 +42,7 @@
 - `src/runtime/aijs-adapter.js`：**唯一**直接调用宿主接口的地方（截图/裁剪/取像素/模型加载/路径解析），能力缺失如实上报。
 - `tools/self-check.js` 离线自检；`tools/runtime-probe.js` P0 运行时探针；`tools/locate-board.js` 真机定位；
   `tools/recognize-board.js` 真机识别（定位 + 识别 → FEN）。
-- `assets/models/`：**象棋模型已随包**（`chessai_160.onnx` 9.65MB + `chessai_160.txt`），见其中的 `README.md`。
+- `assets/models/`：**象棋模型随包**（`chessai_160x320_v5r.onnx` 9.2MB + `chessai_160x320_v5r.txt`，只这一个），见其中的 `README.md`。
 
 ## 自动走棋（P4）怎么跑、卡在哪
 
@@ -182,7 +182,7 @@ MIUI 游戏加速的悬浮侧栏会让 a11y 一直报 `com.miui.securitycenter`�
                 src/engine/（评估、搜索、UCI 文本层、本地引擎、门面）
                 src/automation/（票据、点击执行、落子确认、状态机、自动驱动）
 平台接口：      src/runtime/aijs-adapter.js（业务代码只用它，不直接调宿主）
-模型：          assets/models/（chessai_160.onnx + chessai_160.txt，随包）
+模型：          assets/models/（chessai_160x320_v5r.onnx + .txt，随包，只带这一个）
 还没做：        assets/book/（可选本地开局库）、GPU/更精的域内模型
 ```
 
@@ -252,7 +252,7 @@ MIUI 游戏加速的悬浮侧栏会让 a11y 一直报 `com.miui.securitycenter`�
 
 ### 识别链路（模型）的实测
 
-模型随包（`assets/models/chessai_160.onnx`，7 类、无阵营）。在 62 张真实截屏上（其中 13 张是棋盘页）：
+模型随包（`assets/models/chessai_160x320_v5r.onnx`，7 类、无阵营）。在 62 张真实截屏上（其中 13 张是棋盘页）：
 
 | 环节 | 结果 |
 | --- | --- |
