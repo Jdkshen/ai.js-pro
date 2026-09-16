@@ -118,10 +118,30 @@ Miuix 已有 `MiuixExplorerMenuHost`，但原生 `ExplorerView` 仍保留 3 处�
   悬浮球与菜单都用它 inflate。
 - 仍是 View 实现（沿用迁移方案的 B 类：窗口机制/弧形展开动画不动），**未**换成 Compose。
 
+**已完成（2026-09-17，布局分析悬浮窗的气泡菜单）**：
+
+- `BubblePopupMenu`（`ui/widget/`，只有两个 layout inspector 窗口在用）的**内容**换成 miuix 源集的
+  `MiuixBubbleMenuHost`（Miuix `Card` + 文本行，反射取、取不到回落旧的深色气泡）。对外 API 一字未改
+  （`showAsDropDownAtLocation` / `preMeasure` / `setOnItemClickListener`）。
+- Miuix 路径去掉指向节点的小三角（卡片自带圆角/阴影），改成把 x 夹在屏幕内；旧的三角+`bubble_bg` 路径原样保留。
+- ⚠️ **Compose 放进 PopupWindow / 悬浮窗的三个坑**（都在真机踩到，改这块前先读）：
+  1. `ComposeView` 在**挂窗口之前被 measure** 会抛 `Cannot locate windowRecomposer` —— 而调用方要求先
+     `preMeasure()` 拿尺寸再定位，所以 `MiuixBubbleMenuHost` 返回的是一层**固定尺寸包装**（自己回答尺寸、
+     attach 之后才去量 Compose 子树）；
+  2. attach 时还会要 `ViewTreeSavedStateRegistryOwner`，而 popup 的根是系统建的 `PopupDecorView`、
+     从它往上找不到 owner → 必须**显式** `setParentCompositionContext(自带 Recomposer)`；
+  3. 自己造的 owner 里 `SavedStateRegistryController` 必须 `performAttach()` → `performRestore(null)` →
+     **最后**才把 lifecycle 置成 RESUMED（顺序错了会抛 `Restarter must be created only during owner's initialization stage`）。
+- 真机验证（Mi8，dev-621）：菜单渲染为 Miuix 卡片（3 行、宽 132dp／行高 46dp，`miuixView=true size=363x380`），
+  点第二行回调 `position=1` 并消失。
+- ⚠️ **另有一个既有问题（不属于本次改动）**：布局分析要先用无障碍服务抓当前窗口节点，Mi8 上用
+  `adb shell settings put secure enabled_accessibility_services …` 开启后，抓到的根节点没有子节点
+  → 检查器浮层是空的、点哪儿都选不中节点（所以气泡菜单也不会弹）。要在真机上回归这个菜单，得先查这条抓取链路。
+
 - [ ] 文件“更多”、排序、项目操作全部验证走 Miuix 菜单宿主；
 - [ ] 弹层统一圆角、遮罩、标题字号、按钮顺序、底部安全区和返回键行为；
 - [ ] 长文件名、超长菜单和大字体下不能被截断或挤出屏幕；
-- [ ] 布局分析悬浮窗的 `BubblePopupMenu` 单独改造，不与普通页面菜单混在一次提交；
+- [x] 布局分析悬浮窗的 `BubblePopupMenu` 单独改造，不与普通页面菜单混在一次提交；
 - [ ] 深色模式下检查菜单背景、分割线、禁用态和危险操作颜色（悬浮球菜单的深色值走 M3 dark 调色板，尚未单独截图）；
 - [ ] 悬浮球 + 环形菜单若要真 Miuix：用 Compose 重做壳与菜单项（`MiuixMainFabHost` 那套 `createView()` + 反射的路子）。
 

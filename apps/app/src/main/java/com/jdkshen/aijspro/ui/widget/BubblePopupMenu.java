@@ -13,6 +13,7 @@ import android.widget.TextView;
 import com.jdkshen.aijspro.R;
 
 import java.util.List;
+import java.util.function.IntConsumer;
 
 /**
  * Created by Stardust on 2017/5/23.
@@ -29,16 +30,64 @@ public class BubblePopupMenu extends PopupWindow {
     private OnItemClickListener mOnItemClickListener;
     private View mLittleTriangle;
 
+    /**
+     * 当前用的是 Miuix(Compose) 内容还是旧的深色气泡。
+     * Miuix 版没有那个指向节点的小三角（卡片自带圆角与阴影），定位时改为直接夹住 x。
+     */
+    private boolean mMiuixContent;
+
     public BubblePopupMenu(Context context, List<String> options) {
         super(context);
         View view = View.inflate(context, R.layout.bubble_popup_menu, null);
         mLittleTriangle = view.findViewById(R.id.little_triangle);
         mRecyclerView = (RecyclerView) view.findViewById(R.id.list);
-        mRecyclerView.setAdapter(new SimpleRecyclerViewAdapter<>(R.layout.bubble_popup_menu_item, options, MenuItemViewHolder::new));
+        View miuixView = createMiuixContentView(context, options);
+        if (miuixView != null) {
+            // Miuix 路径：旧的 RecyclerView 留着（布局不动）但不再用
+            mMiuixContent = true;
+            mRecyclerView.setVisibility(View.GONE);
+            mLittleTriangle.setVisibility(View.GONE);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    miuixViewWidth, miuixViewHeight);
+            ((LinearLayout) view).addView(miuixView, params);
+        } else {
+            mRecyclerView.setAdapter(new SimpleRecyclerViewAdapter<>(R.layout.bubble_popup_menu_item, options, MenuItemViewHolder::new));
+        }
         setContentView(view);
         setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         setOutsideTouchable(true);
         setFocusable(true);
+    }
+
+    private int miuixViewWidth;
+    private int miuixViewHeight;
+
+    /**
+     * 反射取 miuix 源集里的菜单宿主（`main` 不编译依赖 miuix，与 `MiuixMainFabHost` / `MiuixDrawerHost` 同一做法）。
+     * 取不到（或尺寸算不出来）就返回 null，调用方回落旧实现。
+     */
+    private View createMiuixContentView(Context context, List<String> options) {
+        try {
+            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.widget.MiuixBubbleMenuHost");
+            int[] size = (int[]) host.getMethod("preferredSize", Context.class, List.class)
+                    .invoke(null, context, options);
+            if (size == null || size[0] <= 0 || size[1] <= 0) {
+                return null;
+            }
+            miuixViewWidth = size[0];
+            miuixViewHeight = size[1];
+            // 点击回调仍走 OnItemClickListener（第 3 个参数用内容视图充数，两个调用点都只用 position）
+            return (View) host.getMethod("createView", Context.class, List.class, IntConsumer.class)
+                    .invoke(null, context, options, (IntConsumer) index -> {
+                        if (mOnItemClickListener != null) {
+                            mOnItemClickListener.onClick(getContentView(), index);
+                        }
+                    });
+        } catch (Throwable e) {
+            // 回落旧实现是兜底，但**不能静默**：真机上曾因为这里吞掉异常，菜单看起来「没改成 Miuix」。
+            android.util.Log.w("BubblePopupMenu", "Miuix 菜单内容创建失败，回落到旧气泡", e);
+            return null;
+        }
     }
 
     public void setOnItemClickListener(OnItemClickListener onItemClickListener) {
@@ -50,6 +99,19 @@ public class BubblePopupMenu extends PopupWindow {
         int screenHeight = getContentView().getResources().getDisplayMetrics().heightPixels;
         int width = getContentView().getMeasuredWidth();
         int height = getContentView().getMeasuredHeight();
+        if (mMiuixContent) {
+            // 没有小三角可以用来吸收偏移 → 直接把位置夹在屏幕内
+            if (x + width > screenWidth) {
+                x = screenWidth - width;
+            } else if (x < 0) {
+                x = 0;
+            }
+            if (y > screenHeight / 2) {
+                y -= contentHeight + height;
+            }
+            super.showAtLocation(parent, Gravity.NO_GRAVITY, x, y);
+            return;
+        }
         LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) mLittleTriangle.getLayoutParams();
         if (x + width > screenWidth) {
             params.leftMargin = x + width - screenWidth;
