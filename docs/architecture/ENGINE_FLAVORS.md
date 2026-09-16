@@ -11,15 +11,27 @@
 
 新建单文件脚本和新建项目默认写入 `// @engine quickjs`。已有无标记脚本不会被批量修改。
 
-### 唯一的例外：Rhino 编译不过的模板字符串脚本
+### 唯一的例外：当前引擎「连解析都过不去」的脚本
 
-上面第 4 条有一个窄口径例外（`RhinoTemplateStringFallback`）：脚本被判给 Rhino、
-源码里含反引号、且 **Rhino 真的编译不过**时，会自动改投 QuickJS 运行，并往控制台写一条
-W 级说明（`text_switched_to_quickjs_for_template_string`）。
+上面第 4 条有一个窄口径例外（`EngineFallbacks`，在创建引擎之前判定）：脚本被判给某个引擎、
+但那个引擎**根本无法解析**它、而另一个引擎能解析时，会自动换到能跑的那个，并往控制台写一条
+W 级说明。两个方向：
 
-理由：Rhino 1.7.7 的词法层没有模板字符串这条 token，这类脚本在 Rhino 下**注定跑不起来**，
-换引擎不会夺走任何本来可用的行为；其余情况（包括反引号只出现在字符串/注释里、以及别的
-语法错误）一律不动引擎。运行前会额外做一次 Rhino 编译探测，但只在源码含反引号时才会发生。
+| 死角 | 现象 | 兜底 |
+|---|---|---|
+| Rhino 1.7.7 词法层没有模板字符串（反引号） | `illegal character` | 换 QuickJS（`text_switched_to_quickjs_for_template_string`） |
+| QuickJS 没有 E4X（`ui.layout(<xml>)` 这种 Auto.js 经典写法） | `unexpected token in expression: '<'` | 换 Rhino（`text_switched_to_rhino_for_xml_layout`） |
+
+判定只看这三件事：源码里是否含反引号 / XML 字面量、当前引擎是不是那个解析不了的引擎、
+**目标引擎是否真的编译得过**。所以：
+
+- 反引号只出现在字符串/注释里、XML 写成字符串的脚本，一律不动引擎；
+- 两边都用不了的脚本（既含反引号又是 XML 字面量）**不会被来回倒腾** —— 保持原样，
+  由带提示的报错兜底（`EngineSyntaxHint`）。
+
+⚠️ 兜底走的是 `JavaScriptSource.setForcedEngine()`，它能**压过脚本首行的 `// @engine` 指令**。
+这是刻意的：脚本在指定引擎上注定跑不起来，换引擎是救它；但这也意味着这一条例外比其他
+优先级都高。正常路径请用 `setPreferredEngine()`（不压过指令）。
 
 项目配置示例：
 
