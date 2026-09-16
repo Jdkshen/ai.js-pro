@@ -8,6 +8,7 @@
     <string name="text_no_running_script">No running script</string>
     <string name="text_already_stop_n_scripts">Stop %d script(s)</string>
     <string name="text_requires_sdk_version_to_run_the_script">Required Android OS version:</string>
+    <string name="text_switched_to_quickjs_for_template_string">This script uses ES6 template strings (backticks), which the Rhino engine cannot compile. Switched to the QuickJS engine; add "// @engine quickjs" as the first line to make it stick.</string>
     <string name="ok">OK</string>
     <string name="cancel">Cancel</string>
     <string name="text_console">Console</string>

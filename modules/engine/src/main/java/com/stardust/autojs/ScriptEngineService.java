@@ -4,6 +4,7 @@ import android.content.Context;
 import androidx.annotation.Nullable;
 
 import com.stardust.autojs.engine.JavaScriptEngine;
+import com.stardust.autojs.engine.RhinoTemplateStringFallback;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
 import com.stardust.autojs.execution.ExecutionConfig;
@@ -148,6 +149,7 @@ public class ScriptEngineService {
             task.setExecutionListener(mScriptExecutionObserver);
         }
         ScriptSource source = task.getSource();
+        switchTemplateStringScriptToQuickJs(source);
         boolean isQuickJs = source instanceof JavaScriptSource
                 && JavaScriptSource.ENGINE_QUICKJS.equals(source.getEngineName());
         // 带 `"ui";` 声明的脚本（Rhino / QuickJS 一样）跑在专用的 ScriptExecuteActivity 里：
@@ -175,6 +177,30 @@ public class ScriptEngineService {
 
     public ScriptExecution execute(ScriptSource source, ExecutionConfig config) {
         return execute(new ScriptExecutionTask(source, null, config));
+    }
+
+    /**
+     * Rhino 1.7.7 编译不了 ES6 模板字符串（反引号）：这类脚本在 Rhino 下是**注定跑不起来**，
+     * 而不是「跑得起来但行为不同」。与其只丢一句 illegal character，不如直接换到 QuickJS，
+     * 并在控制台把原因写清楚。
+     *
+     * <p>只在「Rhino 连编译都过不去」时才触发（见 {@link RhinoTemplateStringFallback}），
+     * 所以本来能在 Rhino 上跑的脚本不受影响，也不是静默换引擎。
+     */
+    private void switchTemplateStringScriptToQuickJs(ScriptSource source) {
+        if (!(source instanceof JavaScriptSource)) {
+            return;
+        }
+        JavaScriptSource scriptSource = (JavaScriptSource) source;
+        if (JavaScriptSource.ENGINE_QUICKJS.equals(scriptSource.getEngineName())) {
+            return;
+        }
+        if (!RhinoTemplateStringFallback.needsQuickJs(scriptSource.getScript(), scriptSource.toString())) {
+            return;
+        }
+        scriptSource.setPreferredEngine(JavaScriptSource.ENGINE_QUICKJS);
+        mGlobalConsole.warn(mContext.getString(
+                R.string.text_switched_to_quickjs_for_template_string));
     }
 
     @Subscribe

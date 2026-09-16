@@ -18,6 +18,7 @@
     <string name="no_write_settings_permissin">沒有修改系統设置权限</string>
     <string name="exception_notification_service_disabled">通知服务未运行，请重新启用通知权限</string>
     <string name="text_requires_app_version_to_run_the_script" formatted="true">本脚本需要AI.js Pro版本号%d以上才能运行</string>
+    <string name="text_switched_to_quickjs_for_template_string">本脚本用了 ES6 模板字符串（反引号），Rhino 引擎编译不过，已自动改用 QuickJS 引擎运行；要固定下来可在脚本第一行加 // @engine quickjs</string>
     <string name="text_drawer_open">打开侧拉菜单</string>
     <string name="text_drawer_close">关闭侧拉菜单</string>
     <string name="no_read_phone_state_permissin">没有读取设备信息权限</string>
