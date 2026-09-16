@@ -62,6 +62,19 @@ public class ProjectConfig {
     private String mEngine;
 
     /**
+     * Auto.js Pro 工程模式的 Android 资源声明：
+     *
+     * <pre>
+     * "androidResources": { "resDir": "res", "manifest": "AndroidManifest.xml" }
+     * </pre>
+     *
+     * <p>有这一段才允许脚本里用 {@code ui.useAndroidResources()} / {@code ui.R.xxx}（见
+     * {@code com.stardust.autojs.core.ui.inflater.ProjectResources}）。
+     */
+    @SerializedName("androidResources")
+    private AndroidResources mAndroidResources;
+
+    /**
      * 脚本保护等级（Auto.js / Auto.js Pro 工程格式里的 {@code encryptLevel}）。
      *
      * <p>缺省 {@link ScriptProtection#DEFAULT_LEVEL}（加密）：老工程没有这个字段时行为不变；
@@ -205,6 +218,17 @@ public class ProjectConfig {
         return this;
     }
 
+    /**
+     * 工程模式的资源声明；老工程没有这个字段时返回 {@code null}（= 不支持 Android 资源特性）。
+     */
+    public AndroidResources getAndroidResources() {
+        return mAndroidResources;
+    }
+
+    public void setAndroidResources(AndroidResources androidResources) {
+        mAndroidResources = androidResources;
+    }
+
     public Map<String, ScriptConfig> getScriptConfigs() {
         if (mScriptConfigs == null) {
             mScriptConfigs = new HashMap<>();
@@ -257,6 +281,39 @@ public class ProjectConfig {
 
     public void setIcon(String icon) {
         mIcon = icon;
+    }
+
+    /**
+     * 工程模式（Auto.js Pro 的「主题/资源」特性）的资源声明。
+     *
+     * <p>字段名与 Pro 的 {@code project.json} 一致（{@code resDir} / {@code manifest}），
+     * 目的是让工程配置能原样读写不丢字段；真正用到的是 {@code resDir}。
+     */
+    public static class AndroidResources {
+
+        /** 资源目录，相对工程根；缺省 {@code res}。 */
+        @SerializedName("resDir")
+        private String mResDir = "res";
+
+        /** 清单文件，相对工程根；当前引擎不解析它，只为格式对齐保留。 */
+        @SerializedName("manifest")
+        private String mManifest;
+
+        public String getResDir() {
+            return TextUtils.isEmpty(mResDir) ? "res" : mResDir;
+        }
+
+        public void setResDir(String resDir) {
+            mResDir = resDir;
+        }
+
+        public String getManifest() {
+            return mManifest;
+        }
+
+        public void setManifest(String manifest) {
+            mManifest = manifest;
+        }
     }
 
     /** 脚本保护等级，见 {@link ScriptProtection}。 */

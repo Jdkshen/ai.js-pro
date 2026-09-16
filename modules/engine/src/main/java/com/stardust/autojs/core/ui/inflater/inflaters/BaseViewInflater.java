@@ -618,10 +618,11 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
 
     @Override
     public boolean setAttr(V view, String ns, String attrName, String value, ViewGroup parent, Map<String, String> attrs) {
-        if (ns == null || ns.equals("android")) {
-            return setAttr(view, attrName, value, parent, attrs);
-        }
-        return false;
+        // 动态 inflate 里 android:xxx 与 app:xxx（res-auto）没有区别：属性名本来就是本地名，
+        // 取值也在同一张表里（ViewAttributes / 下面的 switch）。
+        // 以前 app: 直接 return false，于是 Material 布局必备的 app:title / app:menu / app:srcCompat
+        // 这些属性全被静默丢掉 —— 原生布局的 Toolbar 空白、底部导航为空都是这个原因。
+        return setAttr(view, attrName, value, parent, attrs);
     }
 
     private boolean setGravity(V view, String g) {

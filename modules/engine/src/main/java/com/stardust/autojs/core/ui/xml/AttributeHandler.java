@@ -46,12 +46,25 @@ public interface AttributeHandler {
 
         @Override
         public boolean handle(String nodeName, Node attr, StringBuilder layoutXml) {
-            if (!attr.getNodeName().equals("style")) {
+            String attrName = attr.getNodeName();
+            if (isNamespaced(attrName)) {
+                // 已经带命名空间前缀的属性（android:xxx / app:xxx）来自 res/layout/*.xml
+                // 这类 Android 原生布局，原样保留：补前缀会写成 android:android:xxx，
+                // 走名字/取值映射也会把原生取值改坏。
+                layoutXml.append(attrName).append("=\"")
+                        .append(attr.getNodeValue()).append("\"\n");
+                return true;
+            }
+            if (!attrName.equals("style")) {
                 layoutXml.append("android:");
             }
-            layoutXml.append(mapAttrName(nodeName, attr.getNodeName()))
-                    .append("=\"").append(mapAttrValue(nodeName, attr.getNodeName(), attr.getNodeValue())).append("\"\n");
+            layoutXml.append(mapAttrName(nodeName, attrName))
+                    .append("=\"").append(mapAttrValue(nodeName, attrName, attr.getNodeValue())).append("\"\n");
             return true;
+        }
+
+        private static boolean isNamespaced(String attrName) {
+            return attrName.indexOf(':') > 0;
         }
 
         public MappedAttributeHandler mapName(String oldAttrName, String newAttrName) {

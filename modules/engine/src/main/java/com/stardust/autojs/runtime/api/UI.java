@@ -5,7 +5,9 @@ import android.graphics.drawable.Drawable;
 import androidx.annotation.Nullable;
 
 import com.stardust.autojs.core.graphics.ScriptCanvasView;
+import com.stardust.autojs.core.ui.inflater.CompiledProjectResources;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
+import com.stardust.autojs.core.ui.inflater.ProjectResources;
 import com.stardust.autojs.core.ui.inflater.ResourceParser;
 import com.stardust.autojs.core.ui.inflater.inflaters.CanvasViewInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.JsGridViewInflater;
@@ -15,10 +17,12 @@ import com.stardust.autojs.core.ui.widget.JsGridView;
 import com.stardust.autojs.core.ui.widget.JsImageView;
 import com.stardust.autojs.core.ui.widget.JsListView;
 import com.stardust.autojs.rhino.ProxyObject;
+import com.stardust.autojs.project.ProjectConfig;
 import com.stardust.autojs.runtime.ScriptRuntime;
 
 import org.mozilla.javascript.Scriptable;
 
+import java.io.File;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,12 +32,24 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class UI extends ProxyObject {
 
+    /**
+     * 工程模式资源表的懒加载入口，名字与 {@code modules/__ui__.js} 里的 {@code ui.__androidResources__} 对应。
+     *
+     * <p>刻意做成「第一次被脚本读到时才扫 {@code res/}」：所有 UI 脚本都会碰 {@code ui}，
+     * 但只有真要用 Android 资源的工程才应该付这份 IO。
+     */
+    public static final String PROP_ANDROID_RESOURCES = "__androidResources__";
+
+    /** 编译好的工程资源包位置，与 {@code tools/build-project-res.ps1} 的默认输出一致。 */
+    private static final String COMPILED_RES_DIR = "build";
+    private static final String COMPILED_RES_NAME = "project-res.apk";
 
     private Context mContext;
     private Map<String, Object> mProperties = new ConcurrentHashMap<>();
     private DynamicLayoutInflater mDynamicLayoutInflater;
     private ScriptRuntime mRuntime;
     private ResourceParser mResourceParser;
+    private boolean mAndroidResourcesLoaded;
 
     public UI(Context context, ScriptRuntime runtime) {
         mContext = context;
@@ -84,10 +100,69 @@ public class UI extends ProxyObject {
 
     @Override
     public Object get(String name, Scriptable start) {
+        if (PROP_ANDROID_RESOURCES.equals(name) && !mAndroidResourcesLoaded) {
+            mAndroidResourcesLoaded = true;
+            AndroidResourcesInfo info = loadAndroidResources();
+            mProperties.put(PROP_ANDROID_RESOURCES, info);
+            mResourceParser.setProjectResources(info.resources);
+        }
         Object value = mProperties.get(name);
         if (value != null)
             return value;
         return super.get(name, start);
+    }
+
+    /**
+     * 从脚本的工作目录找 {@code project.json}，再扫它声明的资源目录。
+     *
+     * <p>脚本的工作目录就是工程根（编辑器运行、外部 Intent 启动都会把脚本所在目录设成 cwd）。
+     * 只有声明了 {@code androidResources} 的工程才会返回资源表；其余情况 {@code resources} 为 null，
+     * 真正的原因放在 {@code error} 里，让 {@code ui.useAndroidResources()} 能报出可读的错误。
+     */
+    private AndroidResourcesInfo loadAndroidResources() {
+        String cwd;
+        try {
+            cwd = mRuntime.files.cwd();
+        } catch (Exception e) {
+            return AndroidResourcesInfo.notProject("取不到脚本工作目录：" + e);
+        }
+        if (cwd == null || cwd.isEmpty()) {
+            return AndroidResourcesInfo.notProject("脚本没有工作目录");
+        }
+        File dir = new File(cwd);
+        ProjectConfig config = ProjectConfig.fromProjectDir(dir.getPath());
+        if (config == null) {
+            return AndroidResourcesInfo.notProject("脚本目录下没有有效的 project.json：" + cwd);
+        }
+        ProjectConfig.AndroidResources androidResources = config.getAndroidResources();
+        if (androidResources == null) {
+            return AndroidResourcesInfo.notProject("project.json 里没有 androidResources 字段");
+        }
+        ProjectResources resources = ProjectResources.load(dir, androidResources.getResDir());
+        if (resources == null) {
+            return AndroidResourcesInfo.notProject("找不到资源目录："
+                    + new File(dir, androidResources.getResDir()).getPath());
+        }
+        // 有 PC aapt2 编好的资源包就挂上（ui.R 拿真 id，AnimationUtils/theme/Resources 都原生可用）。
+        resources.setCompiled(CompiledProjectResources.load(mContext,
+                new File(dir, COMPILED_RES_DIR + File.separator + COMPILED_RES_NAME)));
+        return new AndroidResourcesInfo(resources, null);
+    }
+
+    /** {@code ui.__androidResources__} 的形状：{@code resources} 为 null 时看 {@code error}。 */
+    public static class AndroidResourcesInfo {
+
+        public final ProjectResources resources;
+        public final String error;
+
+        AndroidResourcesInfo(ProjectResources resources, String error) {
+            this.resources = resources;
+            this.error = error;
+        }
+
+        static AndroidResourcesInfo notProject(String error) {
+            return new AndroidResourcesInfo(null, error);
+        }
     }
 
     @Override

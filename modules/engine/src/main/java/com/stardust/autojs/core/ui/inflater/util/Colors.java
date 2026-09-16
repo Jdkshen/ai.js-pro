@@ -12,9 +12,10 @@ import android.view.View;
 public class Colors {
 
     public static int parse(Context context, String color) {
-        Resources resources = context.getResources();
         if (color.startsWith("@color/")) {
-            return resources.getColor(resources.getIdentifier(color.substring("@color/".length()), "color", context.getPackageName()));
+            // app 与工程资源包两个包名都要试，见 ResIds。
+            return context.getResources().getColor(ResIds.of(context,
+                    color.substring("@color/".length()), "color"));
         }
         if (color.startsWith("@android:color/")) {
             return Color.parseColor(color.substring(15));

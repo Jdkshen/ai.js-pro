@@ -313,7 +313,32 @@ public class DynamicLayoutInflater {
             String nodeName = attr.getNodeName();
             attributes.put(nodeName, attr.getNodeValue());
         }
+        resolveProjectResources(attributes);
         return attributes;
+    }
+
+    /**
+     * 把工程资源引用（{@code @color/x}、{@code @string/x}、{@code @dimen/x}、{@code @drawable/x}）
+     * 就地改写成引擎自己能解析的字面量。
+     *
+     * <p>只在工程模式（{@code project.json} 声明了 {@code androidResources}）下才生效，
+     * 普通脚本走这里是一个空循环。
+     */
+    private void resolveProjectResources(HashMap<String, String> attributes) {
+        ProjectResources resources = mResourceParser.getProjectResources();
+        if (resources == null) {
+            return;
+        }
+        for (Map.Entry<String, String> entry : attributes.entrySet()) {
+            String value = entry.getValue();
+            if (value == null || value.length() < 3 || value.charAt(0) != '@') {
+                continue;
+            }
+            String resolved = resources.resolveReference(value);
+            if (resolved != null) {
+                entry.setValue(resolved);
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")

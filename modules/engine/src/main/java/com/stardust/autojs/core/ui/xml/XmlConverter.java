@@ -51,6 +51,10 @@ import javax.xml.parsers.ParserConfigurationException;
 
 public class XmlConverter {
 
+    private static final String ANDROID_NAMESPACE_DECLARATION_NAME = "xmlns:android";
+    private static final String ANDROID_NAMESPACE_DECLARATION =
+            ANDROID_NAMESPACE_DECLARATION_NAME + "=\"http://schemas.android.com/apk/res/android\"\n";
+
     private static final NodeHandler NODE_HANDLER = new NodeHandler.NameRouter()
             .handler("vertical", new NodeHandler.VerticalHandler(JsLinearLayout.class.getName()))
             .defaultHandler(new NodeHandler.MapNameHandler()
@@ -117,8 +121,53 @@ public class XmlConverter {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         DocumentBuilder builder = factory.newDocumentBuilder();
         Document document = builder.parse(source);
-        handleNode(document.getFirstChild(), "xmlns:android=\"http://schemas.android.com/apk/res/android\"", layoutXml);
+        Node root = document.getFirstChild();
+        handleNode(root, namespaceDeclarationsOf(root), layoutXml);
         return layoutXml.toString();
+    }
+
+    /**
+     * 根节点要写的命名空间声明（每行一条，结尾带换行）。
+     *
+     * <p>以前这里是无条件写死一句 {@code xmlns:android="…"} 而且结尾没有换行，有两个问题：
+     *
+     * <ul>
+     *     <li>布局本身就是从 {@code res/layout/*.xml} 拿来的 Android 原生布局时，根节点自带
+     *         {@code xmlns:android}，于是同一个声明出现两次 —— 属性重复在 XML 里是非法的，
+     *         Android 的 DOM 解析器（harmony）会直接抛 {@code DOMException: xmlns}
+     *         （即工程示例「使用Android原生界面」用 {@code ui.layoutFile} 加载原生布局时报的那个错）；</li>
+     *     <li>没有换行会和紧随其后的第一个属性粘成
+     *         {@code xmlns:android="…"android:layout_width="…"}，同样不是合法 XML。</li>
+     * </ul>
+     *
+     * <p>现在改成：源里的声明照抄（去重靠 {@link #isNamespaceDeclaration} 不再重复写属性），
+     * 源里没有 {@code xmlns:android} 才补默认的。
+     */
+    private static String namespaceDeclarationsOf(Node root) {
+        StringBuilder declarations = new StringBuilder();
+        boolean hasAndroidNamespace = false;
+        NamedNodeMap attributes = root.getAttributes();
+        for (int i = 0; attributes != null && i < attributes.getLength(); i++) {
+            Node attr = attributes.item(i);
+            if (!isNamespaceDeclaration(attr)) {
+                continue;
+            }
+            declarations.append(attr.getNodeName()).append("=\"")
+                    .append(attr.getNodeValue()).append("\"\n");
+            if (ANDROID_NAMESPACE_DECLARATION_NAME.equals(attr.getNodeName())) {
+                hasAndroidNamespace = true;
+            }
+        }
+        if (!hasAndroidNamespace) {
+            declarations.insert(0, ANDROID_NAMESPACE_DECLARATION);
+        }
+        return declarations.toString();
+    }
+
+    /** {@code xmlns} / {@code xmlns:xxx} 这类命名空间声明：统一由根节点负责，不在属性里重复写。 */
+    private static boolean isNamespaceDeclaration(Node attr) {
+        String name = attr.getNodeName();
+        return "xmlns".equals(name) || name.startsWith("xmlns:");
     }
 
     private static void handleNode(Node node, String namespace, StringBuilder layoutXml) {
@@ -158,6 +207,9 @@ public class XmlConverter {
         int len = attributes.getLength();
         for (int i = 0; i < len; i++) {
             Node attr = attributes.item(i);
+            if (isNamespaceDeclaration(attr)) {
+                continue;
+            }
             handleAttribute(nodeName, attr, layoutXml);
         }
     }

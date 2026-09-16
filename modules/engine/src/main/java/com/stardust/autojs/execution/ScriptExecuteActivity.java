@@ -3,6 +3,7 @@ package com.stardust.autojs.execution;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.os.Bundle;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -16,6 +17,7 @@ import android.view.MotionEvent;
 import com.stardust.autojs.ScriptEngineService;
 import com.stardust.autojs.core.eventloop.EventEmitter;
 import com.stardust.autojs.core.eventloop.SimpleEvent;
+import com.stardust.autojs.core.ui.inflater.CompiledProjectResources;
 import com.stardust.autojs.engine.JavaScriptEngine;
 import com.stardust.autojs.engine.LoopBasedJavaScriptEngine;
 import com.stardust.autojs.engine.QuickJsJavaScriptEngine;
@@ -81,6 +83,20 @@ public class ScriptExecuteActivity extends AppCompatActivity {
 
     public EventEmitter getEventEmitter() {
         return mEventEmitter;
+    }
+
+    /**
+     * UI 模式下如果挂了工程资源包（{@code build/project-res.apk}），这里返回**合并**后的资源表（宿主 + 工程）。
+     *
+     * <p>为什么必须换：{@code AnimationUtils.loadAnimation(activity, ui.R.anim.ball)}、
+     * {@code activity.resources.getColor(ui.R.color.x)} 这类调用只认真 resource id，
+     * 而它们拿的是 **Activity 自己的** Resources —— 不换掉就永远解析不到工程里的资源。
+     * 挂载是懒的（脚本调 {@code ui.useAndroidResources()} 时才发生），所以这里每次读一下，没挂就原样返回。
+     */
+    @Override
+    public Resources getResources() {
+        Resources overlay = CompiledProjectResources.overlay();
+        return overlay == null ? super.getResources() : overlay;
     }
 
     private void runScript() {

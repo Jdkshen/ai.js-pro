@@ -29,6 +29,28 @@ public class Dimensions {
 
     private static final Pattern DIMENSION_PATTERN = Pattern.compile("([+-]?[0-9.]+)([a-zA-Z]*)");
 
+    /**
+     * 解析 {@code ?attr/xxx} / {@code ?android:attr/xxx} 这种主题属性引用，返回 attr 的资源 id。
+     *
+     * <p>以前是把 {@code ?} 后面的整串直接丢给 {@code getIdentifier}（类型固定传 {@code attr}），
+     * 于是 {@code "attr/actionBarSize"} 这类永远查不到 → 尺寸静默变 0。
+     * 典型后果：{@code res/layout} 里原生布局的 Toolbar 写了 {@code layout_height="?attr/actionBarSize"}，
+     * 高度就是 0，控件直接看不见。
+     */
+    public static int resolveAttr(Context context, String themeAttr) {
+        String name = themeAttr.startsWith("?") ? themeAttr.substring(1) : themeAttr;
+        // 显式写 ?android:attr/xxx 才限定 framework；其余两个包名都试（见 ResIds）。
+        int slash = name.indexOf('/');
+        if (slash >= 0) {
+            String typeAndPackage = name.substring(0, slash);
+            name = name.substring(slash + 1);
+            if (typeAndPackage.startsWith("android:")) {
+                return context.getResources().getIdentifier(name, "attr", "android");
+            }
+        }
+        return ResIds.of(context, name, "attr");
+    }
+
     public static int parseToPixel(String dimension, View view, ViewGroup parent, boolean horizontal) {
         if (dimension.endsWith("%") && parent != null) {
             float pct = Float.parseFloat(dimension.substring(0, dimension.length() - 1)) / 100.0f;
@@ -47,8 +69,7 @@ public class Dimensions {
 
     public static float parseToPixel(String dimension, Context context) {
         if (dimension.startsWith("?")) {
-            int[] attr = {context.getResources().getIdentifier(dimension.substring(1), "attr",
-                    context.getPackageName())};
+            int[] attr = {resolveAttr(context, dimension)};
             TypedArray ta = context.obtainStyledAttributes(attr);
             float d = ta.getDimension(0, 0);
             ta.recycle();

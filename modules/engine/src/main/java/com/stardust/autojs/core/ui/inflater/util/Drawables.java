@@ -15,7 +15,9 @@ import android.view.View;
 import android.widget.ImageView;
 
 import com.stardust.autojs.core.ui.inflater.ImageLoader;
+import com.stardust.autojs.core.ui.inflater.ProjectResources;
 
+import java.io.File;
 import java.net.URL;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,8 +30,18 @@ public class Drawables {
 
     private static final Pattern DATA_PATTERN = Pattern.compile("data:(\\w+/\\w+);base64,(.+)");
     private static ImageLoader sDefaultImageLoader = new DefaultImageLoader();
-    private ImageLoader mImageLoader = sDefaultImageLoader;
+    private ImageLoader mImageLoader = sDefaultImageLoader;    private com.stardust.autojs.core.ui.inflater.ProjectResources mProjectResources;
 
+    /**
+     * 工程模式（{@code project.json} 的 {@code androidResources}）的资源表；普通脚本为 {@code null}。
+     */
+    public void setProjectResources(com.stardust.autojs.core.ui.inflater.ProjectResources projectResources) {
+        mProjectResources = projectResources;
+    }
+
+    public com.stardust.autojs.core.ui.inflater.ProjectResources getProjectResources() {
+        return mProjectResources;
+    }
     public static void setDefaultImageLoader(ImageLoader defaultImageLoader) {
         if (defaultImageLoader == null)
             throw new NullPointerException();
@@ -55,16 +67,47 @@ public class Drawables {
     }
 
     public Drawable loadDrawableResources(Context context, String value) {
-        int resId = context.getResources().getIdentifier(value, "drawable",
-                context.getPackageName());
-        if (resId == 0)
+        // 布局里写的是 @drawable/x / @mipmap/x，查表要用不带前缀的名字（以前整个字符串丢给
+        // getIdentifier，app 自带的图一定找不到）。包名要试 app 与工程资源包两个，见 ResIds。
+        String name = ProjectResources.nameOfReference(value);
+        int resId = ResIds.of(context, name, "drawable");
+        if (resId == 0) {
+            Drawable projectDrawable = loadProjectDrawable(name);
+            if (projectDrawable != null) {
+                return projectDrawable;
+            }
             throw new Resources.NotFoundException("drawable not found: " + value);
+        }
         return context.getResources().getDrawable(resId);
     }
 
+    /**
+     * 工程 {@code res/} 里的 drawable。
+     *
+     * <p>布局里的引用在 inflate 前已经被改写成 {@code file://} 路径（见
+     * {@link ProjectResources#resolveReference}），这里只是兑底：脚本里动态写 {@code "@drawable/x"}
+     * 或 {@code "x"} 时也能取到。
+     */
+    private Drawable loadProjectDrawable(String name) {
+        if (mProjectResources == null || name == null) {
+            return null;
+        }
+        String bareName = ProjectResources.stripExtension(name);
+        File file = mProjectResources.fileOf(ProjectResources.TYPE_DRAWABLE, bareName);
+        if (file == null) {
+            file = mProjectResources.fileOf(ProjectResources.TYPE_MIPMAP, bareName);
+        }
+        if (file == null) {
+            return null;
+        }
+        if (file.getName().toLowerCase().endsWith(".xml")) {
+            return ProjectResources.createXmlDrawable(file);
+        }
+        return new BitmapDrawable(BitmapFactory.decodeFile(file.getAbsolutePath()));
+    }
+
     public Drawable loadAttrResources(Context context, String value) {
-        int[] attr = {context.getResources().getIdentifier(value.substring(1), "attr",
-                context.getPackageName())};
+        int[] attr = {Dimensions.resolveAttr(context, value)};
         TypedArray ta = context.obtainStyledAttributes(attr);
         Drawable drawable = ta.getDrawable(0 /* index */);
         ta.recycle();
@@ -72,6 +115,13 @@ public class Drawables {
     }
 
     public Drawable decodeImage(String path) {
+        if (path != null && path.toLowerCase().endsWith(".xml")) {
+            // 工程 res 下的 xml drawable（<shape> 等）：真资源要 aapt2，这里走手写的子集。
+            Drawable drawable = ProjectResources.createXmlDrawable(new File(path));
+            if (drawable != null) {
+                return drawable;
+            }
+        }
         return new BitmapDrawable(BitmapFactory.decodeFile(path));
     }
 

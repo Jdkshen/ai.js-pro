@@ -17,6 +17,7 @@ public class Res {
         if (value.startsWith("@style/")) {
             value = value.substring(7);
         }
-        return context.getResources().getIdentifier(value, "style", context.getPackageName());
+        // app 与工程资源包两个包名都试，见 ResIds。
+        return ResIds.of(context, value, "style");
     }
 }

@@ -19,8 +19,16 @@ module.exports = function (runtime, global) {
         ui.setContentView(view);
     }
 
+    /**
+     * 与 Pro 语义一致：工程模式下 {@code ui.layoutFile("main")} 按资源名找
+     * {@code res/layout/main.xml}；其他情况还是「把参数当文件路径读进来」。
+     */
     ui.layoutFile = function(file) {
-        ui.layout(files.read(file));
+        var path = null;
+        if (ui.__projectResources__ && typeof(file) == 'string') {
+            path = ui.__projectResources__.layoutFile(file);
+        }
+        ui.layout(files.read(path == null ? file : path));
     }
 
     ui.inflate = function(xml, parent, attachToParent){
@@ -127,6 +135,174 @@ module.exports = function (runtime, global) {
 
     ui.findByStringId = function (view, id) {
         return com.stardust.autojs.core.ui.JsViewHelper.findViewByStringId(view, id);
+    }
+
+    /**
+     * 启用工程模式（project.json 的 androidResources）的 Android 资源特性。
+     *
+     * 资源表由引擎侧 com.stardust.autojs.core.ui.inflater.ProjectResources 扫 res/ 目录生成，
+     * ui.R 暴露的是**合成 id**（0x7e 段）—— 本引擎没有 aapt2，拿不到真 resource id，
+     * 所以布局里的 @color/@string/@dimen/@drawable 引用由 inflater 自己按名字解析。
+     * 需要真 id 的 framework 调用点（Resources.getColor、AnimationUtils.loadAnimation）见下面的垫片。
+     */
+    ui.useAndroidResources = function () {
+        if (ui.R) {
+            return ui.R;
+        }
+        var info = runtime.ui.__androidResources__;
+        if (!info || !info.resources) {
+            throw new Error('ui.useAndroidResources() 需要在工程模式下运行'
+                    + (info && info.error ? '：' + info.error : ''));
+        }
+        ui.__projectResources__ = info.resources;
+        ui.R = buildProjectR(info.resources);
+        installProjectActivityShim(info.resources);
+        return ui.R;
+    };
+
+    /** 把资源表摊成 Pro 那种 ui.R 形状：{ color: { mainColorPrimary: 0x7e000001 }, ... } */
+    function buildProjectR(res) {
+        var R = {};
+        var types = res.types();
+        for (var i = 0; i < types.length; i++) {
+            var type = types[i];
+            var names = res.names(type);
+            var table = {};
+            for (var j = 0; j < names.length; j++) {
+                table[names[j]] = res.idOf(type, names[j]);
+            }
+            R[type] = table;
+        }
+        return R;
+    }
+
+    /**
+     * 工程模式的 activity 垫片。
+     *
+     * 合成 id 交给 framework 就失效了，而下面这几处几乎绕不开（脚本直接写在表达式里）：
+     *   activity.resources.getColor(ui.R.color.x)
+     *   activity.theme.applyStyle(ui.R.style.x, true)
+     * 所以把 activity 换成一个「脚本侧覆盖优先」的代理（引擎侧 OverridingJavaObject），
+     * 只拦需要按名字查表的几个方法，其余成员照旧落到真 Activity 上。
+     */
+    function installProjectActivityShim(res) {
+        if (global.__activityOverridden__) {
+            return;
+        }
+        var real = global.activity;
+        if (real === undefined || real === null || typeof (real.getClass) != 'function') {
+            // 不在 "ui"; 模式（没有宿主 Activity）时不用垫：工程资源的引用由 inflater 自己解析。
+            return;
+        }
+        var Overriding = Packages.com.stardust.autojs.rhino.OverridingJavaObject;
+
+        var resources = Overriding.of(global, real.resources);
+        resources.__overrides__ = {
+            getColor: function (id) {
+                var color = res.colorById(id);
+                return color === null ? real.resources.getColor(id) : color;
+            },
+            getColorStateList: function (id) {
+                var color = res.colorById(id);
+                return color === null ? real.resources.getColorStateList(id)
+                        : android.content.res.ColorStateList.valueOf(color);
+            },
+            getString: function (id) {
+                var text = res.stringById(id);
+                return text === null ? real.resources.getString(id) : text;
+            },
+            getDimension: function (id) {
+                var dimen = res.dimensionById(id);
+                return dimen === null ? real.resources.getDimension(id)
+                        : parseProjectDimension(dimen, real.resources.displayMetrics.density);
+            }
+        };
+
+        var theme = Overriding.of(global, real.theme);
+        theme.__overrides__ = {
+            applyStyle: function (id, force) {
+                var style = res.styleById(id);
+                if (style === null) {
+                    return real.theme.applyStyle(id, force);
+                }
+                return applyProjectStyle(style, res);
+            }
+        };
+
+        var activity = Overriding.of(global, real);
+        activity.__overrides__ = {
+            resources: resources,
+            theme: theme
+        };
+        global.activity = activity;
+        global.__activityOverridden__ = true;
+    }
+
+    /**
+     * 套用工程 style。
+     *
+     * 真资源由 aapt2 编进 theme，这里只能把「知道该落到哪」的属性落地：颜色类的
+     * colorPrimary / colorPrimaryDark / colorAccent 记在 ui.projectTheme 上，
+     * 并顺手刷一下状态栏（与 Pro 观感最接近的那一项）。
+     */
+    function applyProjectStyle(style, res) {
+        var applied = {};
+        var items = style.items();
+        for (var i = 0; i < items.length; i++) {
+            var color = projectColorOf(style.getItem(items[i]), res);
+            if (color !== null) {
+                applied[items[i]] = color;
+            }
+        }
+        ui.projectStyleName = style.getName();
+        ui.projectTheme = applied;
+        var dark = applied.colorPrimaryDark !== undefined ? applied.colorPrimaryDark : applied.colorPrimary;
+        if (dark !== undefined) {
+            ui.statusBarColor(dark);
+        }
+        return applied;
+    }
+
+    /** style item 的值可能写成 @color/x，也可能是色值字面量。 */
+    function projectColorOf(value, res) {
+        if (typeof (value) != 'string') {
+            return null;
+        }
+        var text = value.trim();
+        if (text.indexOf('@color/') === 0) {
+            return res.colorOf(text.substring('@color/'.length));
+        }
+        if (text.charAt(0) == '#') {
+            return android.graphics.Color.parseColor(text);
+        }
+        if (text.indexOf('@android:color/') === 0) {
+            return null;    // framework 颜色：让原来的路径去解析
+        }
+        return null;
+    }
+
+    /** 尺寸资源（"16dp" 等）→ 像素；只覆盖常用单位。 */
+    function parseProjectDimension(value, density) {
+        var matched = /^([0-9.]+)\s*([a-z%]*)$/.exec(String(value).trim());
+        if (!matched) {
+            return 0;
+        }
+        var number = parseFloat(matched[1]);
+        switch (matched[2]) {
+            case 'dp':
+            case 'dip':
+                return number * density;
+            case 'sp':
+                return number * density;
+            case 'in':
+                return number * density * 160;
+            case 'mm':
+                return number / 25.4 * density * 160;
+            case 'pt':
+                return number / 72 * density * 160;
+            default:
+                return number;      // px 或无单位
+        }
     }
 
     runtime.ui.bindingContext = global;

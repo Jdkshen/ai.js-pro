@@ -28,6 +28,20 @@ public class JsViewPager extends ViewPager implements ShouldCallOnFinishInflate 
         setAdapter();
     }
 
+    /**
+     * Auto.js Pro 的 {@code ui.viewPager.initAdapterFromChildren()}：把子 View 当作各页。
+     *
+     * <p>动态 inflate 完已经调过 {@link #onFinishDynamicInflate()}（内部就是 {@link #setAdapter}），
+     * 这里必须**幂等**：{@code ViewPager.setAdapter()} 里有 {@code removeNonDecorViews()}，
+     * 会把「本来就在 ViewPager 里、由适配器直接返回」的子页全删掉 —— 再调一次页面就白了
+     * （示例「使用Android原生界面」第 19 行正是这行调用）。
+     */
+    public void initAdapterFromChildren() {
+        if (getAdapter() == null) {
+            setAdapter();
+        }
+    }
+
     public void setTitles(String[] titles) {
         mTitles = titles;
     }

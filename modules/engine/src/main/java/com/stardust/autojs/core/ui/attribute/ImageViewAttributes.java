@@ -1,6 +1,5 @@
 package com.stardust.autojs.core.ui.attribute;
 
-import android.graphics.Color;
 import android.graphics.PorterDuff;
 
 import androidx.core.widget.ImageViewCompat;
@@ -8,6 +7,7 @@ import android.view.View;
 import android.widget.ImageView;
 
 import com.stardust.autojs.core.ui.inflater.ResourceParser;
+import com.stardust.autojs.core.ui.inflater.util.Colors;
 import com.stardust.util.BiMap;
 import com.stardust.util.BiMaps;
 
@@ -46,7 +46,14 @@ public class ImageViewAttributes extends ViewAttributes {
         registerAttr("src", value ->
                 getDrawables().setupWithImage(getView(), value)
         );
-        registerAttr("tint", Color::parseColor, value -> {
+        // Material 系的布局用的是 app:srcCompat（不写会在 Toolbar/FAB 上静默丢图）。
+        registerAttr("srcCompat", value ->
+                getDrawables().setupWithImage(getView(), value)
+        );
+        // 这里以前直接用 Color.parseColor，只认 #RRGGBB 和色名，写成
+        // @color/x 或 @android:color/white 会直接抛 Unknown color。改成走 Colors.parse，
+        // 与 textColor / background 等属性的取值口径一致。
+        registerAttr("tint", value -> Colors.parse(getView(), value), value -> {
             // FIXME: 2018/10/13 setImageTineList not working
             PorterDuff.Mode mode = ImageViewCompat.getImageTintMode(getView());
             getView().setColorFilter(value, mode == null ? PorterDuff.Mode.SRC_ATOP : mode);
