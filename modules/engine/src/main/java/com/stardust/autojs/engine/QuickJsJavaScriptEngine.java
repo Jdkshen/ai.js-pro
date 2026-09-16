@@ -94,9 +94,13 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
                         ((QuickJsBytecodeSource) scriptSource).getBytecode(),
                         scriptSource.toString());
             }
-            return QuickJsNativeBridge.evaluate(handle, scriptSource.getScript(), scriptSource.toString());
-        } catch (QuickJsException error) {
-            // 主动停止 / 超时会中断 JS 执行，native 侧抛的是通用 QuickJsException，
+            // QuickJS 没有 E4X：Auto.js 那套 ui.layout(<xml>) 写法在它这里是语法错
+            // （unexpected token in expression: '<'）。交给引擎之前先把 XML 字面量包成
+            // 模板字符串 —— 改写保留换行，所以行号、报错位置都不变。
+            return QuickJsNativeBridge.evaluate(handle,
+                    XmlLiteralPreprocessor.apply(scriptSource.getScript()),
+                    scriptSource.toString());
+        } catch (QuickJsException error) {            // 主动停止 / 超时会中断 JS 执行，native 侧抛的是通用 QuickJsException，
             // 这里换成引擎统一的 ScriptInterruptedException，让上层（MCP / 历史记录）
             // 能把“正常停止”和“真出错”区分开。
             if (mInterruptRequested || isInterruptMessage(error.getMessage())) {

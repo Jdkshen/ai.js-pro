@@ -509,37 +509,21 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun view(entry: SampleEntry) {
-        // 导入成「一个示例一个目录」再打开。以前只导入单个 .js，示例里的伴生资源
-        // （./mario.png、./layout.xml、./子模块.js 这些相对路径）没有跟过去，
-        // 一运行就是 image = null / Cannot find module。
-        // 已存在的文件不覆盖（用户改过的内容不丢），编辑器里可从内置版本「重置」恢复。
+        // 不再往脚本目录导入副本：示例本体就是 files/sample 里那一份——
+        // BundledSampleSync 每次升级都会把它对齐到 APK 内置版本，「重置所有示例」覆盖的
+        // 也正是这一份。打开时带上 asset 路径，编辑器里依旧能用「重置」恢复内置版本。
+        //
+        // （旧实现是 importForEdit 拷一份到脚本目录、且已存在的文件不覆盖，于是
+        //  “重置所有示例”永远更新不到用户手上那份，看起来就是“重置了却没更新”。）
         val context = requireContext()
-        val existing = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
-        if (existing.isFile) {
-            Toast.makeText(context,
-                "已打开旧版单文件副本；示例目录里已改成按目录导入，可在编辑器里“重置”或删掉后重新打开",
-                Toast.LENGTH_LONG).show()
-            startActivity(ProCodeEditorActivity.sampleIntent(context, existing, entry.path))
-            return
-        }
         Thread {
-            var failure: Exception? = null
-            var opened: java.io.File? = null
-            try {
-                opened = SampleFiles.importForEdit(context, entry.path)
-            } catch (error: Exception) {
-                failure = error
-            }
-            val target = opened
+            val file = SampleFiles.materialize(context, entry.path)
             activity?.runOnUiThread {
-                if (failure != null || target == null) {
-                    Toast.makeText(context,
-                        failure?.localizedMessage ?: "打开示例失败", Toast.LENGTH_LONG).show()
+                if (file == null) {
+                    Toast.makeText(context, "打开示例失败：落盘没成功", Toast.LENGTH_LONG).show()
                     return@runOnUiThread
                 }
-                Toast.makeText(context,
-                    "已导入到：${target.parentFile?.path ?: target.path}", Toast.LENGTH_LONG).show()
-                startActivity(ProCodeEditorActivity.sampleIntent(context, target, entry.path))
+                startActivity(ProCodeEditorActivity.sampleIntent(context, file, entry.path))
             }
         }.start()
     }
@@ -564,49 +548,31 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         catalog.orEmpty().any { it.path == entry.path + "/project.json" }
 
     /**
-     * 打包单文件示例：示例本体在 APK 内置资源里，而打包器要的是磁盘上的真实文件，
-     * 所以先落到脚本目录。已有导入副本就直接用它（与「查看」一致，不覆盖用户改过的内容）。
+     * 打包单文件示例：打包器要的是磁盘上的真实文件。示例本体已经在 files/sample 里
+     * （升级时整体对齐），直接拿它当源 —— 不再往脚本目录导出一份副本。
      */
     private fun build(entry: SampleEntry) {
         val context = requireContext()
-        val existing = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
-        if (existing.isFile) {
-            Toast.makeText(context, "使用已导入的副本：${existing.name}", Toast.LENGTH_SHORT).show()
-            openBuildPage(existing)
+        val file = SampleFiles.materialize(context, entry.path)
+        if (file == null) {
+            Toast.makeText(context, "示例还没落盘，请重新打开一次示例", Toast.LENGTH_LONG).show()
             return
         }
-        imports.add(ScriptOperations(context, rootView)
-            .importSampleWithName(SampleFile(entry.path, context.assets), entry.name)
-            .subscribe({ path -> openBuildPage(java.io.File(path)) }, { failure ->
-                Toast.makeText(context,
-                    failure.localizedMessage ?: "打包示例失败", Toast.LENGTH_LONG).show()
-            }))
+        openBuildPage(file)
     }
 
     /**
-     * 打包项目型示例：把整棵示例目录复制到脚本目录（同名的文件保留用户已有的版本），
-     * 再以这个目录为源进打包页（打包页会读里面的 project.json，按项目模式打包）。
+     * 打包项目型示例：直接以 files/sample 里那个目录为源（升级时会整棵同步，
+     * project.json / src / assets 都在），打包页会读里面的 project.json 按项目模式打包。
      */
     private fun buildProject(entry: SampleEntry) {
         val context = requireContext()
-        val prefix = entry.path + "/"
-        val files = catalog.orEmpty().filter { !it.directory && it.path.startsWith(prefix) }
-        val target = java.io.File(java.io.File(Pref.getScriptDirPath()), entry.name)
-        imports.add(Observable.fromCallable {
-            files.forEach { file ->
-                val copy = java.io.File(target, file.path.removePrefix(prefix))
-                if (copy.isFile) return@forEach
-                copy.parentFile?.mkdirs()
-                context.assets.open(file.path).use { input ->
-                    copy.outputStream().use { output -> input.copyTo(output) }
-                }
-            }
-            target
-        }.subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ folder -> openBuildPage(folder) }, { failure ->
-                Toast.makeText(context,
-                    failure.localizedMessage ?: "打包示例失败", Toast.LENGTH_LONG).show()
-            }))
+        val folder = SampleFiles.diskFile(context, entry.path)
+        if (!java.io.File(folder, "project.json").isFile) {
+            Toast.makeText(context, "项目示例还没落盘，请重新打开一次示例", Toast.LENGTH_LONG).show()
+            return
+        }
+        openBuildPage(folder)
     }
 
     /** 打包页：MIUIX 司机会把这个 Intent 转给 MiuixBuildActivity（见 BuildActivity.onCreate）。 */
