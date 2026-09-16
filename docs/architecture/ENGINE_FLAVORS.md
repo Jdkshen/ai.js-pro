@@ -22,6 +22,13 @@ W 级说明。两个方向：
 | Rhino 1.7.7 词法层没有模板字符串（反引号） | `illegal character` | 换 QuickJS（`text_switched_to_quickjs_for_template_string`） |
 | QuickJS 没有 E4X（`ui.layout(<xml>)` 这种 Auto.js 经典写法） | `unexpected token in expression: '<'` | 换 Rhino（`text_switched_to_rhino_for_xml_layout`） |
 
+⚠️ 上表第二行现在**基本不会触发**了：`XmlLiteralPreprocessor` 会在把源码交给 QuickJS 之前，
+把 `ui.layout(<xml>)` / `ui.inflate(<xml>)` 的实参改写成**模板字符串**（跨行、行号不变），
+所以 QuickJS 现在也能跑这套写法。留着这条兜底是给「改写没覆盖到的 XML 字面量」保底。
+
+**两者混用**（既写 XML 字面量、又用反引号模板字符串）的脚本，过去两个引擎都跑不了；
+现在走 QuickJS + 预处理即可 —— Mi8 实测通过。
+
 判定只看这三件事：源码里是否含反引号 / XML 字面量、当前引擎是不是那个解析不了的引擎、
 **目标引擎是否真的编译得过**。所以：
 
