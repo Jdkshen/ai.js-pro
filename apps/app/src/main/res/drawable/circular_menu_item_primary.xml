@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  悬浮环形菜单项底色 —— 主操作（运行脚本）。
+  用主题属性而不是写死的颜色，浅色/深色自动跟随（原来五个球是硬编码的绿/红/蓝/黄/灰）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+       android:shape="oval">
+    <solid android:color="?attr/colorPrimary"/>
+</shape>

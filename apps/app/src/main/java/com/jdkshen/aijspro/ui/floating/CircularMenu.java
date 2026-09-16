@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.ui.floating;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.text.TextUtils;
 import android.view.ContextThemeWrapper;
 import android.view.View;
@@ -84,12 +85,35 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
     private Deferred<NodeInfo, Void, Void> mCaptureDeferred;
 
     public CircularMenu(Context context) {
-        mContext = new ContextThemeWrapper(context, R.style.AppTheme);
+        mContext = createThemedContext(context);
         initFloaty();
         setupListeners();
         mRecorder = GlobalActionRecorder.getSingleton(context);
         mRecorder.addOnStateChangedListener(this);
         AutoJs.getInstance().getLayoutInspector().addCaptureAvailableListener(this);
+    }
+
+    /**
+     * 悬浮窗用的是 {@code FloatyService} 的 context，它不归 AppCompat 管，
+     * 所以直接 inflate 会拿到**系统**主题（系统深色、应用浅色时，菜单会渲染成深色底 + 粉色 error 圆，
+     * 2026-09-17 真机踩到）。这里按应用自己的规则（跟随系统 / 手动）把配置写进一个子 context，
+     * 再套 AppTheme —— 与 {@code ThemeColorManagerCompat.applyThemeMode()} 同一条规则。
+     */
+    private static Context createThemedContext(Context base) {
+        Configuration config = new Configuration(base.getResources().getConfiguration());
+        config.uiMode = (config.uiMode & ~Configuration.UI_MODE_NIGHT_MASK)
+                | (isAppInDarkTheme(base) ? Configuration.UI_MODE_NIGHT_YES
+                : Configuration.UI_MODE_NIGHT_NO);
+        return new ContextThemeWrapper(base.createConfigurationContext(config), R.style.AppTheme);
+    }
+
+    /** 应用自己的深色判定：跟随系统优先，否则看应用内开关。 */
+    private static boolean isAppInDarkTheme(Context base) {
+        if (Pref.isFollowSystemThemeEnabled()) {
+            int nightMode = base.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+            return nightMode == Configuration.UI_MODE_NIGHT_YES;
+        }
+        return Pref.isNightModeEnabled();
     }
 
     private void setupListeners() {
@@ -111,14 +135,15 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
 
             @Override
             public View inflateActionView(FloatyService service, CircularMenuWindow window) {
-                View actionView = View.inflate(service, R.layout.circular_action_view, null);
+                // 用 mContext（已按应用主题包好）而不是裸 service context，否则主题属性会落到系统主题上
+                View actionView = View.inflate(mContext, R.layout.circular_action_view, null);
                 mActionViewIcon = actionView.findViewById(R.id.icon);
                 return actionView;
             }
 
             @Override
             public CircularActionMenu inflateMenuItems(FloatyService service, CircularMenuWindow window) {
-                CircularActionMenu menu = (CircularActionMenu) View.inflate(new ContextThemeWrapper(service, R.style.AppTheme), R.layout.circular_action_menu, null);
+                CircularActionMenu menu = (CircularActionMenu) View.inflate(mContext, R.layout.circular_action_menu, null);
                 bindMenuItem(menu, R.id.script_list, CircularMenu.this::showScriptList);
                 bindMenuItem(menu, R.id.record, CircularMenu.this::startRecord);
                 bindMenuItem(menu, R.id.layout_inspect, CircularMenu.this::inspectLayout);
@@ -176,10 +201,10 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
         mState = state;
         mActionViewIcon.setImageResource(mState == STATE_RECORDING ? R.drawable.ic_ali_record :
                 IC_ACTION_VIEW);
-        //  mActionViewIcon.setBackgroundColor(mState == STATE_RECORDING ? mContext.getResources().getColor(R.color.color_red) :
-        //        Color.WHITE);
-        mActionViewIcon.setBackgroundResource(mState == STATE_RECORDING ? R.drawable.circle_red :
-                R.drawable.circle_white);
+        // 悬浮球底色：平时是品牌浅色底盘（跟布局里的 background 一致），录制中换成主题的 error 色。
+        // 原来用的是写死的 circle_white / circle_red（见 2026-09-17 的 Miuix 化）。
+        mActionViewIcon.setBackgroundResource(mState == STATE_RECORDING ? R.drawable.circular_menu_item_danger :
+                R.drawable.ai_js_pro_float_icon_background);
         int padding = (int) mContext.getResources().getDimension(mState == STATE_RECORDING ?
                 R.dimen.padding_circular_menu_recording : R.dimen.padding_circular_menu_normal);
         mActionViewIcon.setPadding(padding, padding, padding, padding);

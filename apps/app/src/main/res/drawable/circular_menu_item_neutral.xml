@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  悬浮环形菜单项底色 —— 普通项（布局分析 / 停止全部 / 设置）。
+  用 surfaceContainerHigh 这种「表面色」而不是饱和彩球：图标改用语义色（见 circular_action_menu.xml 的 tint），
+  观感与 Miuix 页面的圆钮一致，深色模式下也不会出现五个亮球。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+       android:shape="oval">
+    <solid android:color="?attr/colorSurfaceContainerHigh"/>
+    <stroke android:width="1dp" android:color="?attr/colorOutlineVariant"/>
+</shape>

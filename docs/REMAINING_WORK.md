@@ -106,11 +106,24 @@
 
 Miuix 已有 `MiuixExplorerMenuHost`，但原生 `ExplorerView` 仍保留 3 处旧 `PopupMenu` 作为公共/回退路径；布局分析悬浮窗仍使用旧 `BubblePopupMenu`。需要确认 Miuix 流程不会意外回落到旧菜单。
 
+**已完成（2026-09-17，悬浮球 + 环形菜单的外观层）**：
+
+- 环形菜单五个球原来是写死的饱和色（`@color/colorPrimary` / `#ef5350` / `#42a5f5` / `#fdd835` / `#C0C0C0`，
+  资源 `circle_{green,red,blue,yellow,gray}.xml` 已删），现在改成主题语义色：
+  主操作 = `?attr/colorPrimary` + `colorOnPrimary` 图标；录制 = `?attr/colorError` + `colorOnError`；
+  其余 = `?attr/colorSurfaceContainerHigh` + `colorOutlineVariant` 描边，图标按语义给 `colorOnSurfaceVariant` / `colorError`。
+- 顺带修掉「悬浮窗跟的是**系统**主题而不是应用主题」：`FloatyService` 的 context 不归 AppCompat 管，
+  直接 inflate 会拿到系统 uiMode（系统深色 + 应用浅色时，菜单渲染成深底 + 粉色 error 圆）。
+  现在 `CircularMenu` 用 `createThemedContext()` 把应用自己的深浅规则（跟随系统 / 手动）写进子 context 再套 `AppTheme`，
+  悬浮球与菜单都用它 inflate。
+- 仍是 View 实现（沿用迁移方案的 B 类：窗口机制/弧形展开动画不动），**未**换成 Compose。
+
 - [ ] 文件“更多”、排序、项目操作全部验证走 Miuix 菜单宿主；
 - [ ] 弹层统一圆角、遮罩、标题字号、按钮顺序、底部安全区和返回键行为；
 - [ ] 长文件名、超长菜单和大字体下不能被截断或挤出屏幕；
 - [ ] 布局分析悬浮窗的 `BubblePopupMenu` 单独改造，不与普通页面菜单混在一次提交；
-- [ ] 深色模式下检查菜单背景、分割线、禁用态和危险操作颜色。
+- [ ] 深色模式下检查菜单背景、分割线、禁用态和危险操作颜色（悬浮球菜单的深色值走 M3 dark 调色板，尚未单独截图）；
+- [ ] 悬浮球 + 环形菜单若要真 Miuix：用 Compose 重做壳与菜单项（`MiuixMainFabHost` 那套 `createView()` + 反射的路子）。
 
 ### 3.3 搜索、定位与编辑器交互回归
 
