@@ -3,8 +3,8 @@ package com.stardust.autojs;
 import android.content.Context;
 import androidx.annotation.Nullable;
 
+import com.stardust.autojs.engine.EngineFallbacks;
 import com.stardust.autojs.engine.JavaScriptEngine;
-import com.stardust.autojs.engine.RhinoTemplateStringFallback;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
 import com.stardust.autojs.execution.ExecutionConfig;
@@ -149,7 +149,7 @@ public class ScriptEngineService {
             task.setExecutionListener(mScriptExecutionObserver);
         }
         ScriptSource source = task.getSource();
-        switchTemplateStringScriptToQuickJs(source);
+        switchEngineWhenTheChosenOneCannotParse(source);
         boolean isQuickJs = source instanceof JavaScriptSource
                 && JavaScriptSource.ENGINE_QUICKJS.equals(source.getEngineName());
         // 带 `"ui";` 声明的脚本（Rhino / QuickJS 一样）跑在专用的 ScriptExecuteActivity 里：
@@ -180,27 +180,34 @@ public class ScriptEngineService {
     }
 
     /**
-     * Rhino 1.7.7 编译不了 ES6 模板字符串（反引号）：这类脚本在 Rhino 下是**注定跑不起来**，
-     * 而不是「跑得起来但行为不同」。与其只丢一句 illegal character，不如直接换到 QuickJS，
-     * 并在控制台把原因写清楚。
+     * 两个引擎各有一处「对方能跑、它连解析都过不去」的死角（详见 {@link EngineFallbacks}）。
+     * 与其只丢一句 {@code illegal character} / {@code unexpected token '<'}，不如换到能跑的
+     * 那个引擎，并在控制台把原因写清楚。
      *
-     * <p>只在「Rhino 连编译都过不去」时才触发（见 {@link RhinoTemplateStringFallback}），
-     * 所以本来能在 Rhino 上跑的脚本不受影响，也不是静默换引擎。
+     * <p>两边都换不成（目标引擎也编译不过）时保持原样，不做来回倒腾。
      */
-    private void switchTemplateStringScriptToQuickJs(ScriptSource source) {
+    private void switchEngineWhenTheChosenOneCannotParse(ScriptSource source) {
         if (!(source instanceof JavaScriptSource)) {
             return;
         }
         JavaScriptSource scriptSource = (JavaScriptSource) source;
+        String script = scriptSource.getScript();
+        String name = scriptSource.toString();
         if (JavaScriptSource.ENGINE_QUICKJS.equals(scriptSource.getEngineName())) {
+            // QuickJS 没有 E4X：ui.layout(<xml>) 这种写法它解析不了。
+            if (EngineFallbacks.shouldSwitchToRhinoForXmlLayout(script, name)) {
+                scriptSource.setForcedEngine(JavaScriptSource.ENGINE_RHINO);
+                mGlobalConsole.warn(mContext.getString(
+                        R.string.text_switched_to_rhino_for_xml_layout));
+            }
             return;
         }
-        if (!RhinoTemplateStringFallback.needsQuickJs(scriptSource.getScript(), scriptSource.toString())) {
-            return;
+        // Rhino 的词法层没有模板字符串：含反引号的脚本编译必挂。
+        if (EngineFallbacks.shouldSwitchToQuickJs(script, name)) {
+            scriptSource.setForcedEngine(JavaScriptSource.ENGINE_QUICKJS);
+            mGlobalConsole.warn(mContext.getString(
+                    R.string.text_switched_to_quickjs_for_template_string));
         }
-        scriptSource.setPreferredEngine(JavaScriptSource.ENGINE_QUICKJS);
-        mGlobalConsole.warn(mContext.getString(
-                R.string.text_switched_to_quickjs_for_template_string));
     }
 
     @Subscribe

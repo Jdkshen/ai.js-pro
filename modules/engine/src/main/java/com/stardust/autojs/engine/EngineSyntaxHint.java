@@ -20,7 +20,30 @@ public final class EngineSyntaxHint {
 
     private static final char BACKTICK = '`';
 
+    /** QuickJS 遇到 XML 字面量时给出的原文。 */
+    private static final String QUICKJS_XML_TOKEN = "unexpected token in expression: '<'";
+
+    private static final String XML_HINT =
+            "提示：<…> 是 XML 字面量（Auto.js 经典写法 ui.layout(<frame/>)），只有 Rhino 引擎支持。"
+                    + "QuickJS 请把 XML 写成字符串（ui.layout('<frame/>')），"
+                    + "或把脚本第一行改成 // @engine rhino。";
+
     private EngineSyntaxHint() {
+    }
+
+    /**
+     * QuickJS 报 {@code unexpected token in expression: '<'} 时补一句可操作提示。
+     *
+     * <p>这条报错来自 QuickJS 自己的词法阶段，Java 侧只是转发，所以文案不受
+     * QuickJS 那个 256 字节缓冲的限制（那是 native 抛 JS 异常才有的）。
+     */
+    public static QuickJsException decorateQuickJs(QuickJsException error) {
+        String message = error.getMessage();
+        if (message == null || !message.contains(QUICKJS_XML_TOKEN)
+                || message.contains(XML_HINT)) {
+            return error;
+        }
+        return new QuickJsException(message + "\n" + XML_HINT);
     }
 
     /**

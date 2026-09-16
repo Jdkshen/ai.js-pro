@@ -48,6 +48,8 @@ public abstract class JavaScriptSource extends ScriptSource {
 
     private int mExecutionMode = -1;
     private String mPreferredEngine;
+    /** 见 {@link #setForcedEngine}：只有解析兜底会设它。 */
+    private String mForcedEngine;
 
     public JavaScriptSource(String name) {
         super(name);
@@ -122,6 +124,9 @@ public abstract class JavaScriptSource extends ScriptSource {
 
     @Override
     public String getEngineName() {
+        if (mForcedEngine != null) {
+            return mForcedEngine;
+        }
         String directiveEngine = engineFromDirective(getScript());
         // 选择优先级（见 docs/architecture/ENGINE_FLAVORS.md 与 QUICKJS_MIGRATION_MATRIX.md）：
         //   1. 脚本首行指令 → 2. 工程 scripts.<路径>.engine → 3. 工程顶层 engine
@@ -173,18 +178,33 @@ public abstract class JavaScriptSource extends ScriptSource {
     }
 
     public void setPreferredEngine(@Nullable String engine) {
+        mPreferredEngine = normalizeEngine(engine);
+    }
+
+    /**
+     * 强制指定引擎，**优先于脚本首行指令**。
+     *
+     * <p>只给「当前引擎连解析都过不去」的兜底用（见 {@code EngineFallbacks}）：那种情况下
+     * 脚本在指定引擎上注定跑不起来，换引擎是救它。正常路径请用
+     * {@link #setPreferredEngine(String)}（它不会压过首行指令）。
+     */
+    public void setForcedEngine(@Nullable String engine) {
+        mForcedEngine = normalizeEngine(engine);
+    }
+
+    @Nullable
+    private static String normalizeEngine(@Nullable String engine) {
         if (engine == null || engine.trim().isEmpty()) {
-            mPreferredEngine = null;
-            return;
+            return null;
         }
         String normalized = engine.trim();
         if ("quickjs".equalsIgnoreCase(normalized) || ENGINE_QUICKJS.equals(normalized)) {
-            mPreferredEngine = ENGINE_QUICKJS;
-        } else if ("rhino".equalsIgnoreCase(normalized) || ENGINE_RHINO.equals(normalized)) {
-            mPreferredEngine = ENGINE_RHINO;
-        } else {
-            throw new IllegalArgumentException("Unsupported JavaScript engine: " + engine);
+            return ENGINE_QUICKJS;
         }
+        if ("rhino".equalsIgnoreCase(normalized) || ENGINE_RHINO.equals(normalized)) {
+            return ENGINE_RHINO;
+        }
+        throw new IllegalArgumentException("Unsupported JavaScript engine: " + engine);
     }
 
 

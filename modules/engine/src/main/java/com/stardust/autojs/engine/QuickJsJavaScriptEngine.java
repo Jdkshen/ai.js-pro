@@ -102,7 +102,7 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
             if (mInterruptRequested || isInterruptMessage(error.getMessage())) {
                 throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException(error);
             }
-            throw error;
+            throw EngineSyntaxHint.decorateQuickJs(error);
         }
     }
 
