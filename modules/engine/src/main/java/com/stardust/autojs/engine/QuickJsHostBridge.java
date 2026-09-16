@@ -4210,7 +4210,18 @@ final class QuickJsHostBridge implements AutoCloseable,
                     Log.w("QuickJsHostBridge", "Cannot open overlay permission page", error);
                 }
             });
-            return "-1";
+            // 不能只返回 -1：脚本侧会把它翻成「Unable to inflate UI layout」，用户既看不出
+            // 界面为什么不出现，也不知道还有第二条路（写成 "ui"; 就根本不需要这个权限）。
+            //
+            // ⚠️ 文案必须短：QuickJS 的 JS_ThrowError2 是 vsnprintf 进 char buf[256]，
+            // 超长会被硬截断（还会把多字节汉字切成半个）——曾经把「两种改法」整段切掉，
+            // 用户只看到诊断、看不到怎么改。详细说明走日志，脚本里只留一句能照做的。
+            Log.w("QuickJsHostBridge", "UI layout could not be shown: the script uses ui.layout "
+                    + "without a leading \"ui\";, so the layout needs the draw-over-other-apps "
+                    + "permission, which this app does not have. Fix: add \"ui\"; as the first "
+                    + "line (recommended), or grant the overlay permission.");
+            throw new QuickJsException(
+                    "脚本界面没出来：首行加 \"ui\"; 即可（否则 ui.layout 需要「显示在其他应用上层」权限）");
         }
         final CountDownLatch latch = new CountDownLatch(1);
         final String[] result = new String[1];
