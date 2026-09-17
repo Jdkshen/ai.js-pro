@@ -169,9 +169,42 @@ Miuix 已有 `MiuixExplorerMenuHost`，但原生 `ExplorerView` 仍保留 3 处�
   单独截图（悬浮球菜单的坐标点不准，容易误触），**验证完已删除**。
   ⚠️ 顺带踩到：Mi8 截图是 1080×2160，按渲染图目测比例算坐标会点错（连点错两次，点进别的文件夹）。
 
+**已完成（2026-09-17，第三轮：触摸 / 返回 / 跟主题，dev-624）**：
+
+真机反馈「触摸、返回不是很好」「圆角界面和其它界面没统一」「颜色要跟主题同步」，逐条落实：
+
+- 🔴 **最关键的一条：`PopupWindow` 在悬浮窗里弹不出来**。调用方是 `FloatyService` 的 context，
+  它**没有窗口 token** → `showAtLocation` 抛 `WindowManager$BadTokenException: token null is not valid`
+  → `MiuixActionMenuHost` 静默回落到旧的 Material 白框（上一版真机上看到的「小圆角白框」就是它，
+  不是我们的 Miuix 卡片）。修法：`windowLayoutType = FloatyWindowManger.getWindowType()`
+  （`BubblePopupMenu` 同样补上）。**从悬浮窗/服务弹任何 `PopupWindow` 都要设这个。**
+- 底色定案：**用 `surface`**（= `MiuixDialogHost` / `MiuixUpdateDialog` 的容器色，深色主题自动变深），
+  靠「阴影 + 极淡描边」交代边界。前两版在 `surfaceContainer`(#F9F9F9) 与 `surfaceContainerHigh`(#E8E8E8)
+  之间来回试，结论是**都不对**：一个太白、一个发灰，而其它 Miuix 对话框本来就是 `surface`。
+- 圆角统一 **26dp**（气泡菜单从 20dp 改过来），行按下高亮 16dp 圆角。
+- 按下反馈：`Modifier.clickable(interactionSource, indication = null)` + 自己叠
+  `onSurface.copy(alpha = 0.08f)` —— 覆盖层窗口里系统 ripple 不可靠，必须自己画。
+- 返回键：除了 `PopupWindow.isFocusable = true`，再在 `showAtLocation` **之后**给根 view
+  `isFocusableInTouchMode = true` + `requestFocus()` + `OnKeyListener` 兜一层（实测 dev-624 可关）。
+- 遮罩跟主题：浅色 32% / 深色 50%（用 `isAijsDarkThemeResolved(context)` 判断，非 Compose 版）。
+- 行首图标 tint 用 `primary`（跟主题设置里选的主色同步）。
+- **菜单窗口收起时必须整窗 `FLAG_NOT_TOUCHABLE`**：它是 `672×668` 的大矩形，View 虽然 GONE，
+  窗口矩形仍然吃触摸 —— 这就是真机上的「挡住下面应用点不到」和「菜单关掉后还吞一会儿触摸」。
+  实测 `dumpsys` 里能看到 `fl=NOT_FOCUSABLE NOT_TOUCHABLE`，且点原菜单区域能穿透到下层的文件列表。
+- 弧菜单项热区 42dp → **48dp**（视觉仍 42dp，靠 drawable 里的 `<inset>` 3dp 收进去），
+  按下反馈从很弱的 `foreground="?selectableItemBackgroundBorderless"` 改成 background 自带 ripple。
+- 悬浮球改成**正圆**（原来是 16dp 圆角方块，被 `RoundedImageView` 的 `riv_mutate_background` 把
+  background 压成了圆角矩形），底盘改用主题容器色 `colorSurfaceContainerHigh`。
+  ⚠️ `app:tint` 对 `RoundedImageView` **不生效**（它不是 AppCompatImageView），logo 保留原色也挺好；
+  `values(-night)/colors.xml` 里的 `floaty_logo_tint` 目前是预留的。
+- 未验证：布局分析的气泡菜单（要先由无障碍服务抓窗口节点，Mi8 上这条链路仍然抓不到子节点，
+  点「布局范围分析」会跳到系统无障碍设置页），所以 `BubblePopupMenu` 的 `windowLayoutType`
+  修复只是**同类问题的同样修法**，没做端到端复核。
+
 - [ ] 冷启动「需要打开无障碍服务」的 `NotAskAgainDialog`（`ThemeColorMaterialDialogBuilder`，`md_*` 资源 id）
   仍是**纯白 + 直角**的 Material 弹框，且每次冷启动都弹，观感与上面几处不一致 → 建议用 Miuix 卡片重做；
 - [ ] 同类 Material 弹框（进度、确认、权限引导）统一排查一遍底色与圆角。
+
 
 
 ### 3.3 搜索、定位与编辑器交互回归
