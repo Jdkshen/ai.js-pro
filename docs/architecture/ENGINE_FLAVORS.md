@@ -19,12 +19,26 @@ W 级说明。两个方向：
 
 | 死角 | 现象 | 兜底 |
 |---|---|---|
-| Rhino 1.7.7 词法层没有模板字符串（反引号） | `illegal character` | 换 QuickJS（`text_switched_to_quickjs_for_template_string`） |
+| Rhino 1.7.7 词法层没有模板字符串（反引号） | `illegal character` | **先降级**：`TemplateLiteralPreprocessor` 把 `` `a${x}b` `` 改写成 `'a' + (x) + 'b'`，脚本留在 Rhino 上跑 |
 | QuickJS 没有 E4X（`ui.layout(<xml>)` 这种 Auto.js 经典写法） | `unexpected token in expression: '<'` | 换 Rhino（`text_switched_to_rhino_for_xml_layout`） |
+
+⚠️ 第一行现在是**两级兜底**（2026-09-17）：
+
+1. `TemplateLiteralPreprocessor` 能安全降级（普通模板、`${}` 表达式、转义、多行）→
+   直接改写源码、**保留原引擎**，控制台提示 `text_downgraded_template_literals_for_rhino`；
+2. 降级不了（标签模板 `` tag`x` ``、未闭合反引号、表达式里嵌模板等）→ 才沿用「换 QuickJS」
+   （`text_switched_to_quickjs_for_template_string`）。
+
+为什么要这么绕：`<canvas>` 只能在 **Rhino** 上跑（它的 `draw` 回调要在**绘制线程内同步**进脚本，
+而 QuickJS 是单线程引擎做不到），而「拼 XML 的模板字符串」又只有 QuickJS 能解析 ——
+两个限制一撞，脚本在两边都跑不了。降级之后这类脚本**一个字都不用改**。
 
 ⚠️ 上表第二行现在**基本不会触发**了：`XmlLiteralPreprocessor` 会在把源码交给 QuickJS 之前，
 把 `ui.layout(<xml>)` / `ui.inflate(<xml>)` 的实参改写成**模板字符串**（跨行、行号不变），
 所以 QuickJS 现在也能跑这套写法。留着这条兜底是给「改写没覆盖到的 XML 字面量」保底。
+
+**两者混用**（既写 XML 字面量、又用反引号模板字符串）的脚本，过去两个引擎都跑不了；
+现在走 QuickJS + 预处理即可 —— Mi8 实测通过。
 
 **两者混用**（既写 XML 字面量、又用反引号模板字符串）的脚本，过去两个引擎都跑不了；
 现在走 QuickJS + 预处理即可 —— Mi8 实测通过。
