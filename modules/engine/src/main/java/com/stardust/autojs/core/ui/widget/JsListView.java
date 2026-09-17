@@ -80,6 +80,18 @@ public class JsListView extends RecyclerView {
         getAdapter().notifyDataSetChanged();
     }
 
+    /**
+     * 兼容 Auto.js Pro 的两参写法：{@code setDataSource(data, false)} 表示「不自动监听数组变化，
+     * 改完数据自己调 {@code adapter.notifyItemXxx()}」，示例 {@code 复杂界面/高性能列表.js} 就是这种用法。
+     *
+     * <p>本实现本来就是手动模式（改完数据要手动通知），所以第二个参数可以直接忽略；
+     * 但要注意 Pro 传 {@code true}（或省略）时**有数组自动监听**（改数组会自动刷新），
+     * 这个能力我们还没实现 —— 传 true 也不会有自动刷新，需要手动 notify。
+     */
+    public void setDataSource(Object dataSource, boolean notifyDataChanged) {
+        setDataSource(dataSource);
+    }
+
     public void setItemTemplate(DynamicLayoutInflater inflater, Node itemTemplate) {
         mDynamicLayoutInflater = inflater;
         mItemTemplate = itemTemplate;
