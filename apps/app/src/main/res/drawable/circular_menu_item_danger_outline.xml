@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  悬浮环形菜单项底色 —— 「停止全部」这类**破坏性但不改变状态**的操作：空心红圈。
+  实心红留给录制（状态切换），空心红表达「危险动作」，两者不会混。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+       android:shape="oval">
+    <solid android:color="@android:color/transparent"/>
+    <stroke android:width="2dp" android:color="?attr/colorError"/>
+</shape>

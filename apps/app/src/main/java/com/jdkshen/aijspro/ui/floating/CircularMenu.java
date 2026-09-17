@@ -218,6 +218,13 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
 
     void inspectLayout() {
         mWindow.collapse();
+        if (showMiuixActionMenu(mContext.getString(R.string.text_inspect_layout),
+                new int[]{R.id.layout_bounds, R.id.layout_hierarchy},
+                new int[]{R.drawable.ic_circular_menu_bounds, R.drawable.ic_circular_menu_hierarchy},
+                new String[]{mContext.getString(R.string.text_inspect_layout_bounds),
+                        mContext.getString(R.string.text_inspect_layout_hierarchy)})) {
+            return;
+        }
         mLayoutInspectDialog = new OperationDialogBuilder(mContext)
                 .item(R.id.layout_bounds, R.drawable.ic_circular_menu_bounds, R.string.text_inspect_layout_bounds)
                 .item(R.id.layout_hierarchy, R.drawable.ic_circular_menu_hierarchy,
@@ -226,6 +233,26 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
                 .title(R.string.text_inspect_layout)
                 .build();
         DialogUtils.showDialog(mLayoutInspectDialog);
+    }
+
+    /**
+     * 用 miuix 源集的列表弹框（居中卡片、26dp 圆角）弹一个菜单；动作仍由 {@link #onOperationItemClick(int)} 分发。
+     *
+     * @return 是否已用 Miuix 展示；false 时调用方回落旧的 `OperationDialogBuilder`
+     */
+    private boolean showMiuixActionMenu(String title, int[] ids, int[] iconRes, String[] labels) {
+        try {
+            Class<?> host = Class.forName("com.jdkshen.aijspro.ui.floating.MiuixActionMenuHost");
+            Object handled = host.getMethod("show", Context.class, String.class, int[].class,
+                            int[].class, String[].class, java.util.function.IntConsumer.class)
+                    .invoke(null, mContext, title, ids, iconRes, labels,
+                            (java.util.function.IntConsumer) this::onOperationItemClick);
+            return Boolean.TRUE.equals(handled);
+        } catch (Throwable e) {
+            // 回落要有迹可循，不静默
+            android.util.Log.w("CircularMenu", "Miuix 列表弹框不可用，回落旧实现", e);
+            return false;
+        }
     }
 
     void showLayoutBounds() {
@@ -282,15 +309,28 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
         mWindow.collapse();
         mRunningPackage = AutoJs.getInstance().getInfoProvider().getLatestPackageByUsageStatsIfGranted();
         mRunningActivity = AutoJs.getInstance().getInfoProvider().getLatestActivity();
+        // 后两项要带上「当前包名 / 当前 Activity」的实时值，所以文案在这里拼好，两条路径共用
+        int[] ids = {R.id.accessibility_service, R.id.package_name, R.id.class_name,
+                R.id.open_launcher, R.id.pointer_location, R.id.floating_menu_exit};
+        int[] icons = {R.drawable.ic_service_green, R.drawable.ic_ali_app, R.drawable.ic_ali_android,
+                R.drawable.ic_android_eat_js, R.drawable.ic_zoom_out_map_white_24dp,
+                R.drawable.ic_close_white_48dp};
+        String[] labels = {mContext.getString(R.string.text_accessibility_settings),
+                mContext.getString(R.string.text_current_package) + mRunningPackage,
+                mContext.getString(R.string.text_current_activity) + mRunningActivity,
+                mContext.getString(R.string.text_open_main_activity),
+                mContext.getString(R.string.text_pointer_location),
+                mContext.getString(R.string.text_exit_floating_window)};
+        if (showMiuixActionMenu(mContext.getString(R.string.text_more), ids, icons, labels)) {
+            return;
+        }
         mSettingsDialog = new OperationDialogBuilder(mContext)
-                .item(R.id.accessibility_service, R.drawable.ic_service_green, R.string.text_accessibility_settings)
-                .item(R.id.package_name, R.drawable.ic_ali_app,
-                        mContext.getString(R.string.text_current_package) + mRunningPackage)
-                .item(R.id.class_name, R.drawable.ic_ali_android,
-                        mContext.getString(R.string.text_current_activity) + mRunningActivity)
-                .item(R.id.open_launcher, R.drawable.ic_android_eat_js, R.string.text_open_main_activity)
-                .item(R.id.pointer_location, R.drawable.ic_zoom_out_map_white_24dp, R.string.text_pointer_location)
-                .item(R.id.floating_menu_exit, R.drawable.ic_close_white_48dp, R.string.text_exit_floating_window)
+                .item(ids[0], icons[0], labels[0])
+                .item(ids[1], icons[1], labels[1])
+                .item(ids[2], icons[2], labels[2])
+                .item(ids[3], icons[3], labels[3])
+                .item(ids[4], icons[4], labels[4])
+                .item(ids[5], icons[5], labels[5])
                 .bindItemClick(this)
                 .title(R.string.text_more)
                 .build();

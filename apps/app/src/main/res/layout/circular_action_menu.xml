@@ -3,11 +3,12 @@
   悬浮环形菜单（点悬浮球展开的那一圈按钮）。
 
   Miuix 化（2026-09-17）：原来五个球是写死的饱和色（@color/colorPrimary / #ef5350 / #42a5f5 / #fdd835 / #C0C0C0），
-  深色模式下刺眼、观感也和 Miuix 页面的圆钮不一致。这里机制不变（仍是 CircularActionMenu 的弧形展开动画），
-  只把**底色与图标色**换成主题语义色：
-    · 主操作（运行脚本）= primary 底 + onPrimary 图标
-    · 危险（录制）      = error 底 + onError 图标
-    · 其余              = 中性表面底 + 语义图标色（停止=error，其余=onSurfaceVariant）
+  深色模式下刺眼、观感也和 Miuix 页面的圆钮不一致。现在统一到「主色 + 危险色」两个语义：
+    · 运行脚本 / 布局分析 / 设置 = primary 实心 + onPrimary 图标
+    · 录制（状态切换）= error 实心 + onError 图标
+    · 停止全部（危险动作）= error 空心圈 + error 图标
+  第二轮（同日）：上一版把后三项做成了 colorSurfaceContainerHigh 的**近白圆**，真机看着「太白、发虚」，
+  所以改成主色实心/空心两者，不再有大片白色。
   图标本身都是白色位图（ic_menu 是深灰），所以**必须**逐个写 tint，否则白图标压在浅色底上会看不见。
 -->
 <com.jdkshen.aijspro.ui.floating.CircularActionMenu xmlns:android="http://schemas.android.com/apk/res/android"
@@ -45,18 +46,18 @@
         android:layout_width="42dp"
         android:layout_height="42dp"
         android:layout_gravity="center"
-        android:background="@drawable/circular_menu_item_neutral"
+        android:background="@drawable/circular_menu_item_primary"
         android:foreground="?selectableItemBackgroundBorderless"
         android:padding="8dp"
         android:src="@drawable/ic_circular_menu_bounds"
-        app:tint="?attr/colorOnSurfaceVariant"/>
+        app:tint="?attr/colorOnPrimary"/>
 
     <ImageView
         android:id="@+id/stop_all_scripts"
         android:layout_width="42dp"
         android:layout_height="42dp"
         android:layout_gravity="center"
-        android:background="@drawable/circular_menu_item_neutral"
+        android:background="@drawable/circular_menu_item_danger_outline"
         android:foreground="?selectableItemBackgroundBorderless"
         android:padding="8dp"
         android:src="@drawable/ic_close_white_48dp"
@@ -68,11 +69,11 @@
         android:layout_width="42dp"
         android:layout_height="42dp"
         android:layout_gravity="center"
-        android:background="@drawable/circular_menu_item_neutral"
+        android:background="@drawable/circular_menu_item_primary"
         android:foreground="?selectableItemBackgroundBorderless"
         android:padding="8dp"
         android:src="@drawable/ic_circular_menu_settings"
-        app:tint="?attr/colorOnSurfaceVariant"/>
+        app:tint="?attr/colorOnPrimary"/>
 
 
 </com.jdkshen.aijspro.ui.floating.CircularActionMenu>

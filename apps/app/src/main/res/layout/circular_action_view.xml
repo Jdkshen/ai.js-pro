@@ -12,7 +12,7 @@
         android:background="@drawable/ai_js_pro_float_icon_background"
         android:padding="3dp"
         android:src="@drawable/ai_js_pro_float_logo"
-        app:riv_corner_radius="14dp"
+        app:riv_corner_radius="16dp"
         app:riv_mutate_background="true"
         app:riv_oval="false"/>
 </LinearLayout>
