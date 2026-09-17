@@ -6,6 +6,8 @@ import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,10 +15,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,8 +60,8 @@ object MiuixBubbleMenuHost {
     /** 选项字号（sp），与旧 `bubble_popup_menu_item.xml` 的 15sp 对齐。 */
     private const val TEXT_SIZE_SP = 15f
 
-    /** 气泡卡片圆角（dp）：Miuix 的卡片都很圆，旧资源只有很小的圆角。 */
-    private const val BUBBLE_CORNER_DP = 20f
+    /** 气泡卡片圆角（dp）：与仓库里其它 Miuix 对话框（`MiuixDialogHost.kt` 的 26dp）保持一致。 */
+    private const val BUBBLE_CORNER_DP = 26f
 
     /** 气泡卡片阴影（dp）：给一点悬浮感，不然贴在别的应用画面上像一块白板。 */
     private const val BUBBLE_ELEVATION_DP = 8f
@@ -93,27 +98,35 @@ object MiuixBubbleMenuHost {
         val size = preferredSize(context, options)
         return FloatyCompose.createView(context, size[0], size[1]) {
             AijsMiuixTheme {
-                // 不用 Miuix Card：它默认底色是 surface（实测就是纯白 #FFFFFF），
-                // surfaceContainer 也只有 #F9F9F9，看着仍然「白得太白」。
-                // 这里用 surfaceContainerHigh（浅色 #E8E8E8 / 深色自动变深）+ 大圆角 + 细描边，
-                // 既有层次又不会在别的应用画面上发虚。
-                // 描边是必要的：悬浮窗只有内容那么大的空间，阴影会被窗口裁掉，没描边就「糊」在背景上。
+                // 底色用 `surface`（就是仓库里其它 Miuix 对话框 `MiuixDialogCard` 的容器色，深浅自动切换），
+                // 靠**阴影 + 细描边**做边界，而不是把底色压灰 ——
+                // 上一版用 surfaceContainerHigh(#E8E8E8) 被反馈「整块发灰、跟其它界面不统一」。
+                // 描边仍然必要：悬浮窗只有内容那么大的空间，阴影会被窗口裁掉，没描边就「糊」在背景上。
                 val shape = RoundedCornerShape(BUBBLE_CORNER_DP.dp)
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .shadow(BUBBLE_ELEVATION_DP.dp, shape)
                         .clip(shape)
-                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                        .border(1.dp, MiuixTheme.colorScheme.onSurface.copy(alpha = 0.12f), shape)
+                        .background(MiuixTheme.colorScheme.surface)
+                        .border(1.dp, MiuixTheme.colorScheme.onSurface.copy(alpha = 0.08f), shape)
                 ) {
                     Column(Modifier.fillMaxSize()) {
                         options.forEachIndexed { index, label ->
+                            // 按下即时反馈：悬浮窗里没有系统 ripple 兜底，手指按下去必须有反应。
+                            val interaction = remember { MutableInteractionSource() }
+                            val pressed by interaction.collectIsPressedAsState()
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(ROW_HEIGHT_DP.dp)
-                                    .clickable { onAction.accept(index) }
+                                    .clickable(interactionSource = interaction, indication = null) {
+                                        onAction.accept(index)
+                                    }
+                                    .background(
+                                        if (pressed) MiuixTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                                        else Color.Transparent
+                                    )
                                     .padding(horizontal = H_PADDING_DP.dp),
                                 contentAlignment = Alignment.Center
                             ) {

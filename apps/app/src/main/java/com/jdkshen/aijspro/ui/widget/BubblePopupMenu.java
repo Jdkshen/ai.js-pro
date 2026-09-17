@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.ui.widget;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Build;
 import androidx.recyclerview.widget.RecyclerView;
 import android.view.Gravity;
 import android.view.View;
@@ -11,6 +12,7 @@ import android.widget.PopupWindow;
 import android.widget.TextView;
 
 import com.jdkshen.aijspro.R;
+import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 
 import java.util.List;
 import java.util.function.IntConsumer;
@@ -57,6 +59,11 @@ public class BubblePopupMenu extends PopupWindow {
         setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         setOutsideTouchable(true);
         setFocusable(true);
+        // 这个菜单是从布局分析的悬浮窗（FloatyService 的 context）弹的，**没有窗口 token**，
+        // 不指定悬浮窗类型会在 showAtLocation 抛 BadTokenException（菜单直接弹不出来）。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            setWindowLayoutType(FloatyWindowManger.getWindowType());
+        }
     }
 
     private int miuixViewWidth;

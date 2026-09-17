@@ -3,6 +3,8 @@
     <color name="colorPrimary">#009688</color>
     <color name="colorPrimaryDark">#00796B</color>
     <color name="colorAccent">#03A9F4</color>
+    <!-- 悬浮球 logo 的 tint（logo 是单色深色位图，靠它跟深浅主题反色） -->
+    <color name="floaty_logo_tint">#FF101418</color>
     <!-- Material 3 tonal palette (cyan/teal, Auto.js Pro style) -->
     <color name="m3_primary_container">#C0EAF5</color>
     <color name="m3_on_primary_container">#00363F</color>

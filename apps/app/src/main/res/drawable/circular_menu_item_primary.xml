@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  悬浮环形菜单项底色 —— 主操作（运行脚本）。
-  用主题属性而不是写死的颜色，浅色/深色自动跟随（原来五个球是硬编码的绿/红/蓝/黄/灰）。
+  悬浮环形菜单项底色 —— 主操作（运行脚本 / 布局分析 / 设置）。
+  用主题属性而不是写死颜色，浅色/深色自动跟随（原来五个球是硬编码的绿/红/蓝/黄/灰）。
+
+  2026-09-17：改成自带 ripple 的按钮。真机反馈「点起来不跟手、没反馈」——
+  原来靠 `android:foreground="?selectableItemBackgroundBorderless"`，在 overlay 悬浮窗里反馈很弱。
+  ripple 颜色用白色 40%：叠在实心主色上，深浅两档都看得见。
+  `<inset>` 3dp：View 做成 48dp（触摸最小尺寸），视觉圆仍是 42dp。
 -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-       android:shape="oval">
-    <solid android:color="?attr/colorPrimary"/>
-</shape>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+        android:color="#66FFFFFF">
+    <item>
+        <inset android:inset="3dp">
+            <shape android:shape="oval">
+                <solid android:color="?attr/colorPrimary"/>
+            </shape>
+        </inset>
+    </item>
+</ripple>

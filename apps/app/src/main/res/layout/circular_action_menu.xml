@@ -19,59 +19,59 @@
                                                             app:cam_angle="165"
                                                             app:cam_radius="80dp">
 
+    <!--
+      尺寸 48dp = 推荐的最小可点区（原来 42dp，真机反馈「点起来不跟手」）；
+      视觉圆仍然是 42dp —— 靠 drawable 里的 <inset> 3dp 收进去，反馈改由 background 自带的 ripple 提供。
+      图标内容大小不变：48 - 2×11 = 26dp，与原来 42 - 2×8 一致。
+    -->
     <ImageView
         android:id="@+id/script_list"
-        android:layout_width="42dp"
-        android:layout_height="42dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_gravity="center"
         android:background="@drawable/circular_menu_item_primary"
-        android:foreground="?selectableItemBackgroundBorderless"
-        android:padding="8dp"
+        android:padding="11dp"
         android:src="@drawable/ic_menu"
         app:tint="?attr/colorOnPrimary"/>
 
     <ImageView
         android:id="@+id/record"
-        android:layout_width="42dp"
-        android:layout_height="42dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_gravity="center"
         android:background="@drawable/circular_menu_item_danger"
-        android:foreground="?selectableItemBackgroundBorderless"
-        android:padding="8dp"
+        android:padding="11dp"
         android:src="@drawable/ic_ali_record"
         app:tint="?attr/colorOnError"/>
 
     <ImageView
         android:id="@+id/layout_inspect"
-        android:layout_width="42dp"
-        android:layout_height="42dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_gravity="center"
         android:background="@drawable/circular_menu_item_primary"
-        android:foreground="?selectableItemBackgroundBorderless"
-        android:padding="8dp"
+        android:padding="11dp"
         android:src="@drawable/ic_circular_menu_bounds"
         app:tint="?attr/colorOnPrimary"/>
 
     <ImageView
         android:id="@+id/stop_all_scripts"
-        android:layout_width="42dp"
-        android:layout_height="42dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_gravity="center"
         android:background="@drawable/circular_menu_item_danger_outline"
-        android:foreground="?selectableItemBackgroundBorderless"
-        android:padding="8dp"
+        android:padding="11dp"
         android:src="@drawable/ic_close_white_48dp"
         app:tint="?attr/colorError"/>
 
 
     <ImageView
         android:id="@+id/settings"
-        android:layout_width="42dp"
-        android:layout_height="42dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_gravity="center"
         android:background="@drawable/circular_menu_item_primary"
-        android:foreground="?selectableItemBackgroundBorderless"
-        android:padding="8dp"
+        android:padding="11dp"
         android:src="@drawable/ic_circular_menu_settings"
         app:tint="?attr/colorOnPrimary"/>
 

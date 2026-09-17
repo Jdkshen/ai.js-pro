@@ -2,9 +2,16 @@
 <!--
   悬浮环形菜单项底色 —— 「停止全部」这类**破坏性但不改变状态**的操作：空心红圈。
   实心红留给录制（状态切换），空心红表达「危险动作」，两者不会混。
+  ripple 用系统的 colorControlHighlight：这一项本身是透明底，白 ripple 在浅色背景上看不见。
 -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-       android:shape="oval">
-    <solid android:color="@android:color/transparent"/>
-    <stroke android:width="2dp" android:color="?attr/colorError"/>
-</shape>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+        android:color="?android:attr/colorControlHighlight">
+    <item>
+        <inset android:inset="3dp">
+            <shape android:shape="oval">
+                <solid android:color="@android:color/transparent"/>
+                <stroke android:width="2dp" android:color="?attr/colorError"/>
+            </shape>
+        </inset>
+    </item>
+</ripple>

@@ -3,12 +3,14 @@ package com.jdkshen.aijspro.ui.floating
 import android.content.Context
 import android.graphics.drawable.ColorDrawable
 import android.view.Gravity
+import android.view.KeyEvent
 import android.widget.PopupWindow
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,7 +33,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.isAijsDarkThemeResolved
 import com.jdkshen.aijspro.ui.widget.FloatyCompose
+import com.jdkshen.aijspro.ui.floating.FloatyWindowManger
 import java.util.function.IntConsumer
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -59,6 +64,9 @@ object MiuixActionMenuHost {
 
     /** 卡片内左右留白（dp）。 */
     private const val CARD_PADDING_DP = 8f
+
+    /** 行按下高亮的圆角（dp）：比卡片小一档，跟仓库里 Miuix 卡片的内部元素一致。 */
+    private const val ROW_CORNER_DP = 16f
 
     /** 卡片距屏幕两侧留白（dp）。 */
     private const val CARD_MARGIN_DP = 34f
@@ -128,12 +136,13 @@ object MiuixActionMenuHost {
                             .fillMaxWidth()
                             .shadow(10.dp, RoundedCornerShape(CARD_CORNER_DP.dp))
                             .clip(RoundedCornerShape(CARD_CORNER_DP.dp))
-                            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                            // 细描边：底色是浅灰（不用纯白，真机反馈过「白得太白」），
-                            // 描边把卡片从深色遮罩里「抠」出边界，不然整块灰会发闷。
+                            // 底色用 `surface`：就是仓库里其它 Miuix 对话框（`MiuixDialogHost` / `MiuixUpdateDialog`）
+                            // 的容器色，深浅自动切换。上一版压成 surfaceContainerHigh 被反馈「发灰、不统一」。
+                            .background(MiuixTheme.colorScheme.surface)
+                            // 极淡描边：卡片是白的，靠它 + 遮罩把边界交代清楚（不靠把底色变灰）。
                             .border(
                                 1.dp,
-                                MiuixTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                                MiuixTheme.colorScheme.onSurface.copy(alpha = 0.08f),
                                 RoundedCornerShape(CARD_CORNER_DP.dp)
                             )
                             // 卡片自身要吃掉点击，否则点卡片空白处会被下面的遮罩当成「点外面」而关掉。
@@ -160,14 +169,22 @@ object MiuixActionMenuHost {
                             }
                         }
                         labels.forEachIndexed { index, label ->
+                            // 按下即时反馈：覆盖层窗口里没有系统 ripple 兜底，自己叠一层高亮。
+                            val interaction = remember { MutableInteractionSource() }
+                            val pressed by interaction.collectIsPressedAsState()
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(ROW_HEIGHT_DP.dp)
-                                    .clickable {
+                                    .clip(RoundedCornerShape(ROW_CORNER_DP.dp))
+                                    .clickable(interactionSource = interaction, indication = null) {
                                         dismiss()
                                         onAction.accept(ids[index])
                                     }
+                                    .background(
+                                        if (pressed) MiuixTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                                        else Color.Transparent
+                                    )
                                     .padding(horizontal = 16.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
@@ -177,7 +194,8 @@ object MiuixActionMenuHost {
                                     Image(
                                         painter = painterResource(icon),
                                         contentDescription = null,
-                                        colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurface),
+                                        // 强调色用当前主题色（跟主题设置里选的主色同步）
+                                        colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.primary),
                                         modifier = Modifier.size(ICON_SIZE_DP.dp)
                                     )
                                 } else {
@@ -198,11 +216,29 @@ object MiuixActionMenuHost {
             }
         }
 
+        // 遮罩跟着深浅主题走（浅色 32% / 深色 50%），跟 Miuix 对话框的 scrim 观感一致
+        val scrimAlpha = if (isAijsDarkThemeResolved(context)) 0x80 else 0x52
         popup = PopupWindow(content, screenWidth, screenHeight, true).apply {
-            setBackgroundDrawable(ColorDrawable(0x66000000))
+            setBackgroundDrawable(ColorDrawable(scrimAlpha shl 24))
             isOutsideTouchable = true
             isFocusable = true   // 让返回键能关掉
+            // ⚠️ 必需：调用方是 FloatyService 的 context（悬浮球菜单），**它没有窗口 token**，
+            // 用默认类型会抛 `WindowManager$BadTokenException: token null is not valid`，
+            // 真机上的表现就是「弹框没换成 Miuix、回落成旧的 Material 白框」（已踩过）。
+            windowLayoutType = FloatyWindowManger.getWindowType()
         }
         popup.showAtLocation(content, Gravity.CENTER, 0, 0)
+        // overlay 窗口不保证把 BACK 送到 PopupWindow，这里再兜一层：让根 view 拿到焦点自己处理返回键。
+        // （必须在 show 之后请求焦点，窗口还没上屏时 requestFocus 是空的。）
+        content.isFocusableInTouchMode = true
+        content.requestFocus()
+        content.setOnKeyListener { _, keyCode, event ->
+            if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                popup.dismiss()
+                true
+            } else {
+                false
+            }
+        }
     }
 }

@@ -128,15 +128,18 @@ public class CircularMenuWindow extends FloatyWindow {
             public void onExpanding(CircularActionMenu menu) {
                 mDragGesture.setEnabled(false);
                 mCircularActionView.setAlpha(mActiveAlpha);
+                setMenuWindowTouchable(true);
             }
 
             public void onCollapsed(CircularActionMenu menu) {
                 mDragGesture.setEnabled(true);
                 mCircularActionView.setAlpha(mInactiveAlpha);
+                setMenuWindowTouchable(false);
             }
 
             public void onExpanded(CircularActionMenu menu) {
                 mCircularActionView.setAlpha(mActiveAlpha);
+                setMenuWindowTouchable(true);
             }
         });
     }
@@ -200,8 +203,37 @@ public class CircularMenuWindow extends FloatyWindow {
         mCircularActionMenu = mFloaty.inflateMenuItems(service, this);
         mCircularActionView = mFloaty.inflateActionView(service, this);
         mCircularActionMenu.setVisibility(View.GONE);
-        getWindowManager().addView(mCircularActionMenu, mActionViewWindowLayoutParams);
-        getWindowManager().addView(mCircularActionView, mMenuWindowLayoutParams);
+        // 参数别写反：菜单用菜单那份、球用球那份。两个桥对象各自持有自己的 LayoutParams，
+        // 而 setMenuWindowTouchable() 要改的正是菜单那一份。
+        setMenuWindowTouchable(false);   // 初始是收起态，窗口就不该吃触摸（参数存进去，addView 直接带上）
+        getWindowManager().addView(mCircularActionMenu, mMenuWindowLayoutParams);
+        getWindowManager().addView(mCircularActionView, mActionViewWindowLayoutParams);
+    }
+
+    /**
+     * 菜单窗口是个 {@code 672×668} 的大矩形（环形菜单展开用）。收起后 View 虽然 GONE，
+     * **窗口矩形仍然吃触摸**，真机上的表现就是「悬浮窗挡住下面应用，点不到」和
+     * 「菜单关掉之后还要吞一会儿触摸」。收起时整窗 {@code FLAG_NOT_TOUCHABLE}、
+     * 展开时立刻恢复，触摸就能直接落到下层应用。
+     */
+    private void setMenuWindowTouchable(boolean touchable) {
+        if (mMenuWindowLayoutParams == null || mCircularActionMenu == null) {
+            return;
+        }
+        int notTouchable = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        int flags = mMenuWindowLayoutParams.flags;
+        int newFlags = touchable ? (flags & ~notTouchable) : (flags | notTouchable);
+        if (newFlags == flags) {
+            return;
+        }
+        mMenuWindowLayoutParams.flags = newFlags;
+        if (mCircularActionMenu.isAttachedToWindow()) {
+            try {
+                getWindowManager().updateViewLayout(mCircularActionMenu, mMenuWindowLayoutParams);
+            } catch (IllegalArgumentException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     public void onServiceDestroy(FloatyService floatyService) {

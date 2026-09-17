@@ -5,14 +5,19 @@
               android:layout_height="wrap_content"
               android:orientation="vertical">
 
+    <!--
+      悬浮球本体：48dp 触点（视觉圆盘 42dp，靠背景 drawable 里的 <inset> 3dp 收进去）。
+      ⚠️ 这里**不能**再开 `app:riv_mutate_background="true"` + `riv_corner_radius`：
+      RoundedImageView 会把 `android:background` 包成圆角矩形，把底盘的 oval 压回 16dp 圆角方块（上一版就是这么被压方的）。
+      logo 是单色深色位图 → 用 tint 跟深浅主题反色（浅色主题深 logo、深色主题浅 logo），
+      这样底盘改成主题容器色后球也不会糊在深色里。
+    -->
     <com.makeramen.roundedimageview.RoundedImageView
         android:id="@+id/icon"
-        android:layout_width="42dp"
-        android:layout_height="42dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:background="@drawable/ai_js_pro_float_icon_background"
-        android:padding="3dp"
+        android:padding="6dp"
         android:src="@drawable/ai_js_pro_float_logo"
-        app:riv_corner_radius="16dp"
-        app:riv_mutate_background="true"
-        app:riv_oval="false"/>
+        app:tint="@color/floaty_logo_tint"/>
 </LinearLayout>
