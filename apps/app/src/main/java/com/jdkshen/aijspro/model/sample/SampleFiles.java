@@ -35,10 +35,22 @@ public final class SampleFiles {
     private static final String TAG = "SampleFiles";
     public static final String ASSET_ROOT = "sample";
     /**
-     * 导入时单个子目录超过这个大小就不跟着拷：示例里的模型库是 18.8 MB，而示例是用
-     * {@code asset://sample/…} 引用它的，并不依赖磁盘副本。
+     * 运行/导入时单个子目录超过这个大小就不跟着拷（防止把超大的模型库整个搬进 cacheDir）。
+     *
+     * <p>⚠️ 别调小：8 MB 曾经把**工程自己要用的模型**也挡在门外 ——
+     * 「象棋自动走棋」的 {@code assets/models/chessai_160x320_v5r.onnx} 是 9.2 MB、
+     * 「YOLO目标检测/DNN/models」是 9.3 MB，两个整棵目录都被跳过，
+     * 而工程是「磁盘优先、{@code asset://} 兜底」的读法（且兜底那条路径拼不出正确的 asset 名），
+     * 脚本侧只看得到 {@code IllegalArgumentException: 无法读取 YOLO labels: …/assets/models/xxx.txt}，
+     * 完全看不出是拷贝阶段丢的文件。
+     *
+     * <p>16 MB = 覆盖当前随包的两个模型目录，同时仍然挡住 ≥16 MB 的模型库
+     * （原先注释里提到的 18.8 MB 那份）。
+     *
+     * <p>⚠️ 调用方请一律用这个常量（曾经 {@code MiuixResourceFragment} 自己硬编码了一份 8 MB，
+     * 改这里对「资源页 → 运行」不起作用，白查一轮）。
      */
-    private static final long MAX_SUBDIR_BYTES = 8L * 1024 * 1024;
+    public static final long MAX_SUBDIR_BYTES = 16L * 1024 * 1024;
 
     private SampleFiles() {
     }
@@ -159,7 +171,10 @@ public final class SampleFiles {
             if (isDirectory(assets, childAsset)) {
                 long bytes = assetsBytes(assets, childAsset);
                 if (bytes > maxSubdirBytes) {
-                    Log.i(TAG, "跳过过大的内置子目录（" + (bytes / 1048576) + "MB）：" + childAsset);
+                    // 用 WARN：这一步丢掉的可能是脚本运行必需的资源（曾经静默丢掉过象棋模型，
+                    // 表现为脚本侧 "无法读取 YOLO labels"，排查时极难联想到拷贝阶段）。
+                    Log.w(TAG, "跳过过大的内置子目录（" + (bytes / 1048576) + "MB > "
+                            + (maxSubdirBytes / 1048576) + "MB）：" + childAsset);
                     continue;
                 }
                 copyAssetTree(context, childAsset, childTarget, overwrite, maxSubdirBytes);

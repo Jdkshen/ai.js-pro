@@ -593,10 +593,12 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 target.deleteRecursively()
                 target.mkdirs()
                 // 单文件资源（入口名不是 main.js）要连它同一目录的伴生文件一起拷 —— 示例里的
-                // ./xxx.png / ./layout.xml 都是相对路径；工程则整棵拷（跳过 >8MB 的子目录，如模型库）。
+                // ./xxx.png / ./layout.xml 都是相对路径；工程则整棵拷（只挡超大的模型库，
+                // 阈值统一走 SampleFiles.MAX_SUBDIR_BYTES —— 这里曾经硬编码 8MB，把象棋工程
+                // 9.2MB 的 assets/ 整棵跳过，脚本侧只看到「无法读取 YOLO labels」）。
                 SampleFiles.copyAssetTree(context,
                     if (entryName == "main.js") assetPath else SampleFiles.parentOf(assetPath),
-                    target, false, 8L * 1024 * 1024)
+                    target, false, SampleFiles.MAX_SUBDIR_BYTES)
             } catch (error: Exception) {
                 failure = error
             }
