@@ -9,6 +9,7 @@
     <string name="text_already_stop_n_scripts">Stop %d script(s)</string>
     <string name="text_requires_sdk_version_to_run_the_script">Required Android OS version:</string>
     <string name="text_switched_to_quickjs_for_template_string">This script uses ES6 template strings (backticks), which the Rhino engine cannot compile. Switched to the QuickJS engine; add "// @engine quickjs" as the first line to make it stick.</string>
+    <string name="text_downgraded_template_literals_for_rhino">ES6 template strings in this script were rewritten as string concatenation, so it keeps running on the Rhino engine (widgets such as canvas are only available there).</string>
     <string name="text_switched_to_rhino_for_xml_layout">This script uses the ui.layout(&lt;xml&gt;) XML-literal form, which the QuickJS engine cannot parse. Switched to the Rhino engine; add "// @engine rhino" as the first line to make it stick.</string>
     <string name="ok">OK</string>
     <string name="cancel">Cancel</string>

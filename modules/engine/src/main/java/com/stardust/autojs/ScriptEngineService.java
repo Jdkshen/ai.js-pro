@@ -7,6 +7,7 @@ import com.stardust.autojs.engine.EngineFallbacks;
 import com.stardust.autojs.engine.JavaScriptEngine;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
+import com.stardust.autojs.engine.TemplateLiteralPreprocessor;
 import com.stardust.autojs.execution.ExecutionConfig;
 import com.stardust.autojs.execution.LoopedBasedJavaScriptExecution;
 import com.stardust.autojs.execution.RunnableScriptExecution;
@@ -206,6 +207,16 @@ public class ScriptEngineService {
         }
         // Rhino 的词法层没有模板字符串：含反引号的脚本编译必挂。
         if (EngineFallbacks.shouldSwitchToQuickJs(script, name)) {
+            // 但先看能不能把模板字符串降级成 ES5 字符串拼接（TemplateLiteralPreprocessor）。
+            // 能降就**留在 Rhino**：这类脚本往往同时依赖 Rhino 独有的能力，
+            // 最典型的是 `<canvas>` —— 它的 draw 回调必须在绘制线程内同步进脚本，
+            // 而 QuickJS 是单线程引擎、做不到从绘制线程回调 ⇒ 切过去必然报
+            // 「Unable to create floaty window」/「不支持的浮窗控件事件：draw」。
+            if (TemplateLiteralPreprocessor.canApply(script)) {
+                mGlobalConsole.warn(mContext.getString(
+                        R.string.text_downgraded_template_literals_for_rhino));
+                return;
+            }
             scriptSource.setForcedEngine(JavaScriptSource.ENGINE_QUICKJS);
             mGlobalConsole.warn(mContext.getString(
                     R.string.text_switched_to_quickjs_for_template_string));

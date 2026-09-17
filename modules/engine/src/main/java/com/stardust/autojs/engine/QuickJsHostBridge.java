@@ -4177,6 +4177,12 @@ final class QuickJsHostBridge implements AutoCloseable,
                     new com.stardust.autojs.core.ui.inflater.inflaters.JsListViewInflater(parser, mRuntime));
             mUiInflater.registerViewAttrSetter(com.stardust.autojs.core.ui.widget.JsGridView.class.getName(),
                     new com.stardust.autojs.core.ui.inflater.inflaters.JsGridViewInflater(parser, mRuntime));
+            // canvas 控件（XML `<canvas>`）：Rhino 的 UI.java 里注册了 CanvasViewInflater，
+            // QuickJS 侧之前漏了。漏注册时会走「标签名反射 + getConstructor(Context)」的兜底路径，
+            // 而 ScriptCanvasView 只有 (Context, ScriptRuntime) 构造 → NoSuchMethodException，
+            // 脚本只看到 `Unable to create floaty window`（用户脚本「十字坐标线.js」就是这么挂的）。
+            mUiInflater.registerViewAttrSetter(com.stardust.autojs.core.graphics.ScriptCanvasView.class.getName(),
+                    new com.stardust.autojs.core.ui.inflater.inflaters.CanvasViewInflater(parser, mRuntime));
         }
         return mUiInflater;
     }

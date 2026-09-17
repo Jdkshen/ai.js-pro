@@ -139,9 +139,29 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         return config != null && config.scriptConfig.hasFeature(feature)
     }
 
+    /**
+     * 交给 Rhino 之前对源码做一次改写。
+     *
+     * 目前只干一件事：把 ES6 模板字符串降级成 ES5 字符串拼接（[TemplateLiteralPreprocessor]）。
+     * 理由：Rhino 1.7.7 的词法层没有反引号，而「用模板字符串拼 XML + `floaty.rawWindow('<canvas/>')`」
+     * 这类脚本恰恰依赖 Rhino 独有能力（canvas 的 draw 回调要在绘制线程同步进脚本，QuickJS 单线程做不到），
+     * 一旦被自动切到 QuickJS 就必然挂掉。降级后这类脚本可以**一字不改**留在 Rhino 上跑通。
+     */
     @Throws(IOException::class)
     protected fun preprocess(script: Reader): Reader {
-        return script
+        val text = script.readText()
+        if (!TemplateLiteralPreprocessor.containsTemplateLiteral(text)) {
+            return StringReader(text)
+        }
+        val downgraded = TemplateLiteralPreprocessor.apply(text)
+        return if (downgraded == null) {
+            // 无法安全降级的写法（标签模板/未闭合）：原样交给 Rhino，失败时会由
+            // EngineSyntaxHint 提示改用 QuickJS。
+            StringReader(text)
+        } else {
+            Log.d(LOG_TAG, "template literals downgraded to ES5 string concatenation")
+            StringReader(downgraded)
+        }
     }
 
     override fun forceStop() {
