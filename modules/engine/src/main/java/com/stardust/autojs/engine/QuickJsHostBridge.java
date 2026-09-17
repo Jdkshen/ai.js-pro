@@ -2298,6 +2298,22 @@ final class QuickJsHostBridge implements AutoCloseable,
         mFloatyEvents.clear();
     }
 
+    /**
+     * PDF §2.14：{@code floaty.checkPermission()} —— 当前应用是否有悬浮窗权限（不触发请求）。
+     *
+     * <p>直接复用 Rhino 那份实现（{@code ScriptRuntime.floaty} → {@code FloatingPermission}），
+     * 两个引擎语义一致。以前 QuickJS 的 floaty 漏了这两个方法，悬浮窗脚本开头的
+     * {@code if (!floaty.checkPermission()) …} 会报 "TypeError: not a function"。
+     */
+    public boolean floatyCheckPermission() {
+        return mRuntime.floaty.checkPermission();
+    }
+
+    /** PDF §2.14：{@code floaty.requestPermission()} —— 跳到系统悬浮窗权限界面（不阻塞、不等待）。 */
+    public void floatyRequestPermission() {
+        mRuntime.floaty.requestPermission();
+    }
+
     public String floatyCreate(String configJson) {
         try {
             JSONObject config = new JSONObject(configJson);

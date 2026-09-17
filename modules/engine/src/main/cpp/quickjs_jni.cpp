@@ -2055,6 +2055,22 @@ JSValue nativeFloatyCloseAll(JSContext *context, JSValueConst, int, JSValueConst
     return callHostVoidNoArgs(context, "floatyCloseAll");
 }
 
+/**
+ * floaty.checkPermission() / floaty.requestPermission()。
+ *
+ * QuickJS 的 floaty 以前漏了这两个（Rhino 的 __floaty__.js 里有），而悬浮窗脚本开头通常就是
+ * `if (!floaty.checkPermission()) { floaty.requestPermission(); exit(); }` —— 在 QuickJS 下
+ * 会直接报 "TypeError: not a function"。转给宿主，宿主复用 Rhino 同一份实现
+ * （ScriptRuntime.floaty → FloatingPermission），两个引擎语义一致。
+ */
+JSValue nativeFloatyCheckPermission(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostBoolNoArgs(context, "floatyCheckPermission");
+}
+
+JSValue nativeFloatyRequestPermission(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "floatyRequestPermission");
+}
+
 JSValue nativeFloatyViewGetText(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t windowId = 0;
     if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
@@ -6566,6 +6582,9 @@ const char kBootstrapScript[] = R"JS(
         rawWindow: function (config, extra) {
             return floaty.window(config, extra);
         },
+        /** 悬浮窗权限（PDF §2.14）：与 Rhino 的 floaty.checkPermission() 同一份宿主实现。 */
+        checkPermission: function () { return !!__aiNativeFloatyCheckPermission(); },
+        requestPermission: function () { __aiNativeFloatyRequestPermission(); },
         closeAll: function () {
             __aiNativeFloatyCloseAll();
         }
@@ -8932,6 +8951,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyUpdate", nativeFloatyUpdate, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyClose", nativeFloatyClose, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyCloseAll", nativeFloatyCloseAll, 0);
+    installNativeFunction(state->context, global, "__aiNativeFloatyCheckPermission", nativeFloatyCheckPermission, 0);
+    installNativeFunction(state->context, global, "__aiNativeFloatyRequestPermission", nativeFloatyRequestPermission, 0);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewGetText", nativeFloatyViewGetText, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewSetText", nativeFloatyViewSetText, 3);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewSetVisibility", nativeFloatyViewSetVisibility, 3);
