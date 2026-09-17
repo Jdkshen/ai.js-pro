@@ -145,6 +145,35 @@ Miuix 已有 `MiuixExplorerMenuHost`，但原生 `ExplorerView` 仍保留 3 处�
 - [ ] 深色模式下检查菜单背景、分割线、禁用态和危险操作颜色（悬浮球菜单的深色值走 M3 dark 调色板，尚未单独截图）；
 - [ ] 悬浮球 + 环形菜单若要真 Miuix：用 Compose 重做壳与菜单项（`MiuixMainFabHost` 那套 `createView()` + 反射的路子）。
 
+**已完成（2026-09-17，视觉第二版：底色 / 圆角 / 描边，dev-623）**：
+
+真机反馈「优化的不是很好看 白的地方太白了 没有圆角」，三处弹层一起调：
+
+- ⚠️ **先量了 Miuix 调色板的真实值**（`LaunchedEffect` 里打日志，别凭感觉猜）：
+  `surface = #FFFFFF`（纯白）、`surfaceContainer = #F9F9F9`（几乎看不出灰）、
+  `surfaceContainerHigh = surfaceContainerHighest = #E8E8E8`、`surfaceVariant = #FFFFFF`。
+  所以「改用 `surfaceContainer`」其实**解决不了**「太白」，真正能拉出层次的是 `surfaceContainerHigh`。
+- 气泡菜单（`MiuixBubbleMenuHost`）：底色 `surfaceContainer` → `surfaceContainerHigh`，圆角提到 20dp，
+  补 1dp `onSurface` 12% 描边。**描边是必需的**：悬浮窗只有内容那么大，`shadow` 会被窗口裁掉，
+  没描边就「糊」在背景上（实测气泡菜单窗口尺寸 = 内容尺寸）。
+- 「布局分析」列表弹框（`MiuixActionMenuHost`，新增）：全屏 `PopupWindow` + 深色遮罩 + 居中卡片
+  （26dp 圆角、`surfaceContainerHigh`、1dp 描边），标题走 `onSurfaceVariantSummary`、行图标 `onSurface`；
+  卡片自身 `clickable(interactionSource, indication=null)` 吞事件，避免点空白处被当成「点遮罩」而关掉。
+  `CircularMenu.inspectLayout()` / `settings()` 先试 Miuix（反射），失败 `Log.w` 并回落旧的
+  `OperationDialogBuilder`（文案、id、图标两边必须一致）。
+- 悬浮球弧菜单：去掉近白的圆形底色，改为主色实心（主操作）、错误色实心（录制）、错误色空心描边（停止全部）。
+  悬浮球本身是深色圆角图标（`ai_js_pro_float_icon_background` + 深色 logo），本来就不白。
+- 新增 `FloatyCompose`（miuix 源集）：把「Compose 放进悬浮窗/弹窗」的三个坑（离屏 measure、attach 要 owner、
+  自造 owner 的初始化顺序）收成一个共用底座，`MiuixBubbleMenuHost` / `MiuixActionMenuHost` 都走它。
+- 验证方式：临时在 `MainActivity` 加 `--ez action_menu_demo true` / `--ez bubble_menu_demo true` 两个反射入口
+  单独截图（悬浮球菜单的坐标点不准，容易误触），**验证完已删除**。
+  ⚠️ 顺带踩到：Mi8 截图是 1080×2160，按渲染图目测比例算坐标会点错（连点错两次，点进别的文件夹）。
+
+- [ ] 冷启动「需要打开无障碍服务」的 `NotAskAgainDialog`（`ThemeColorMaterialDialogBuilder`，`md_*` 资源 id）
+  仍是**纯白 + 直角**的 Material 弹框，且每次冷启动都弹，观感与上面几处不一致 → 建议用 Miuix 卡片重做；
+- [ ] 同类 Material 弹框（进度、确认、权限引导）统一排查一遍底色与圆角。
+
+
 ### 3.3 搜索、定位与编辑器交互回归
 
 此前要求的关键体验应形成固定验收用例，避免后续 UI 调整再次退化：
