@@ -118,11 +118,12 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
         ViewAttributes viewAttributes = ViewExtras.getViewAttributes(view, getResourceParser());
         ViewAttributes.Attribute attribute = viewAttributes.get(attr);
         if (attribute != null) {
-            Log.d(LOG_TAG, "setAttr use ViewAttributes: attr = " + attr);
             attribute.set(value);
             return true;
         }
-        Log.d(LOG_TAG, "setAttr cannot use ViewAttributes: attr = " + attr);
+        // ⚠️ 这里**不能**打日志：子类 inflater（如 TextViewInflater）是先调 super 再自己 switch，
+        // 而 `text`、`textSize` 这类属性本来就落在下面的 switch 里。
+        // 列表每绑定一项都要重设动态属性，打日志会直接洪泛（实测 3000+ 行 D 日志）。
         Integer layoutRule = null;
         boolean layoutTarget = false;
         ViewGroup.LayoutParams layoutParams = view.getLayoutParams();

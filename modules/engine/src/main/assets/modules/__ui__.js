@@ -442,6 +442,13 @@ module.exports = function (runtime, global) {
                 return data[i];
             },
             setDataSource: function (data) {
+                // 脚本写 setDataSource(data, false) 时是「手动模式」：改完自己调 adapter.notifyItemXxx()。
+                // 以前这里无条件装 Array.observe（object-observe 的 polyfill），于是
+                // `Array.prototype.push.apply(items, 一万条)` 会逐条产生变更记录、再来回 indexOf
+                // 查找（O(n²)，实测主线程 2.2 秒＋之后持续 100% CPU、界面完全不出帧）。
+                if (!list.isDataSourceAutoNotify() || !Array.isArray(data)) {
+                    return;
+                }
                 var adapter = list.getAdapter();
                 Array.observe(data, function (changes) {
                     changes.forEach(change => {

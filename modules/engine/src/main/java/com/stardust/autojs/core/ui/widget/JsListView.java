@@ -44,6 +44,8 @@ public class JsListView extends RecyclerView {
     private Object mDataSource;
     private DataSourceAdapter mDataSourceAdapter;
     private OnItemTouchListener mOnItemTouchListener;
+    /** 是否自动监听数组变化（装 `Array.observe`）；见 {@link #setDataSource(Object, boolean)}。 */
+    private boolean mDataSourceAutoNotify = true;
 
     public JsListView(Context context, ScriptRuntime scriptRuntime) {
         super(context);
@@ -54,6 +56,11 @@ public class JsListView extends RecyclerView {
     protected void init() {
         setAdapter(new Adapter());
         setLayoutManager(new WrapContentLinearLayoutManager(getContext()));
+        // ⚠️ 关掉 item 动画：RecyclerView 默认会给「新增/删除的每一项」都跑一遍动画，
+        // 而脚本的列表动辄 notifyItemRangeInserted(0, 10000) —— 一万个动画同时在跑，
+        // 主线程直接打满（示例 复杂界面/高性能列表.js 实测：滑动时 3 秒内只渲染出 4 帧，
+        // 每帧 1000ms+，主线程 103% CPU）。列表在脚本里是用来展示数据的，不需要这类动画。
+        setItemAnimator(null);
     }
 
     protected ScriptRuntime getScriptRuntime() {
@@ -84,12 +91,18 @@ public class JsListView extends RecyclerView {
      * 兼容 Auto.js Pro 的两参写法：{@code setDataSource(data, false)} 表示「不自动监听数组变化，
      * 改完数据自己调 {@code adapter.notifyItemXxx()}」，示例 {@code 复杂界面/高性能列表.js} 就是这种用法。
      *
-     * <p>本实现本来就是手动模式（改完数据要手动通知），所以第二个参数可以直接忽略；
-     * 但要注意 Pro 传 {@code true}（或省略）时**有数组自动监听**（改数组会自动刷新），
-     * 这个能力我们还没实现 —— 传 true 也不会有自动刷新，需要手动 notify。
+     * <p>这个开关很要緊：开启时 `__ui__.js` 会用 object-observe polyfill 把数组包起来（`Array.observe`），
+     * 而那个 polyfill 对「一次性 push 上万条」是 O(n²)（实测主线程卡 2 秒以上、之后界面完全不出帧）。
+     * 默认值保持与 Pro 一致（省略第二个参数 = 自动监听）。
      */
     public void setDataSource(Object dataSource, boolean notifyDataChanged) {
+        mDataSourceAutoNotify = notifyDataChanged;
         setDataSource(dataSource);
+    }
+
+    /** 供 `__ui__.js` 判断要不要装 `Array.observe`（见 {@link #setDataSource(Object, boolean)}）。 */
+    public boolean isDataSourceAutoNotify() {
+        return mDataSourceAutoNotify;
     }
 
     public void setItemTemplate(DynamicLayoutInflater inflater, Node itemTemplate) {
