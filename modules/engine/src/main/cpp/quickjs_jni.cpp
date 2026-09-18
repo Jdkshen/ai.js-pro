@@ -5642,26 +5642,68 @@ const char kBootstrapScript[] = R"JS(
     };
     global.http = Object.freeze(http);
 
+    // Rhino / Auto.js Pro 的 drawing 是「命令式」的：clear() → drawRect()/drawText() → update()。
+    // QuickJS 的原生层只吃「一批框 + 一行统计」，所以这里加一层兼容垫片：把 drawRect/drawLine/
+    // drawText 累积起来，update() 时连同传入的 detections 一起提交（文字映射成框的 label）。
+    // 兼容性：只用 update(detections, stats) 的老脚本行为完全不变（那时累积列表是空的）。
+    const drawingAccum = { shapes: [], stats: '' };
     const drawing = {
         show: function () { return __aiNativeDrawCreate(); },
         hide: function () { __aiNativeDrawClose(); },
+        clear: function () {
+            drawingAccum.shapes = [];
+            drawingAccum.stats = '';
+            return __aiNativeDrawUpdate('[]', '');
+        },
+        drawRect: function (x1, y1, x2, y2, color, strokeWidth) {
+            drawingAccum.shapes.push({
+                x1: Number(x1), y1: Number(y1), x2: Number(x2), y2: Number(y2),
+                label: '', score: 0, color: color, strokeWidth: strokeWidth
+            });
+            return drawing;
+        },
+        drawLine: function (x1, y1, x2, y2, color, strokeWidth) {
+            return drawing.drawRect(x1, y1, x2, y2, color, strokeWidth);
+        },
+        drawText: function (x, y, text, color, size) {
+            drawingAccum.shapes.push({
+                x1: Number(x), y1: Number(y), x2: Number(x), y2: Number(y),
+                label: String(text), score: 0, color: color, size: size
+            });
+            return drawing;
+        },
         update: function (detections, stats) {
             const packed = [];
             if (Array.isArray(detections)) {
                 detections.forEach(function (item) {
                     const bounds = item.bounds || item;
+                    // 框的来源有三种写法：left/top/right/bottom、x1/y1/x2/y2、x/y/width/height。
+                    const bx = bounds.x !== undefined ? Number(bounds.x) : undefined;
+                    const by = bounds.y !== undefined ? Number(bounds.y) : undefined;
+                    const x1 = bounds.left !== undefined ? Number(bounds.left)
+                        : (bounds.x1 !== undefined ? Number(bounds.x1) : (bx === undefined ? 0 : bx));
+                    const y1 = bounds.top !== undefined ? Number(bounds.top)
+                        : (bounds.y1 !== undefined ? Number(bounds.y1) : (by === undefined ? 0 : by));
+                    const x2 = bounds.right !== undefined ? Number(bounds.right)
+                        : (bounds.x2 !== undefined ? Number(bounds.x2)
+                            : (bx === undefined ? 0 : bx + Number(bounds.width || 0)));
+                    const y2 = bounds.bottom !== undefined ? Number(bounds.bottom)
+                        : (bounds.y2 !== undefined ? Number(bounds.y2)
+                            : (by === undefined ? 0 : by + Number(bounds.height || 0)));
                     packed.push({
-                        x1: Number(bounds.left !== undefined ? bounds.left : bounds.x1),
-                        y1: Number(bounds.top !== undefined ? bounds.top : bounds.y1),
-                        x2: Number(bounds.right !== undefined ? bounds.right : bounds.x2),
-                        y2: Number(bounds.bottom !== undefined ? bounds.bottom : bounds.y2),
+                        x1: x1, y1: y1, x2: x2, y2: y2,
                         label: String(item.label === undefined ? '' : item.label),
                         score: Number(item.score || 0)
                     });
                 });
             }
-            return __aiNativeDrawUpdate(JSON.stringify(packed),
-                stats === undefined || stats === null ? '' : String(stats));
+            for (let i = 0; i < drawingAccum.shapes.length; i++) {
+                packed.push(drawingAccum.shapes[i]);
+            }
+            if (stats !== undefined && stats !== null && String(stats) !== '') {
+                drawingAccum.stats = String(stats);
+            }
+            return __aiNativeDrawUpdate(JSON.stringify(packed), drawingAccum.stats);
         }
     };
     global.drawing = Object.freeze(drawing);
