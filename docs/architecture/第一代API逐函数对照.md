@@ -395,7 +395,7 @@ key 映射（文档 3 个 + 仓库现有设置项里能对上的 2 个，样例�
 
 | 项 | 实现 |
 | --- | --- |
-| 识别引擎 | **ML Kit 中文文字识别**（`com.google.mlkit:text-recognition-chinese:16.0.1`，模型内置、离线），新建 `runtime/api/Ocr.java` |
+| 识别引擎 | **ML Kit 中文文字识别**（`com.google.mlkit:text-recognition-chinese:16.0.1`，模型内置、离线），新建 `runtime/api/Ocr.java`。**2026-09-18 起另有 `{backend:'ppocr'}`**：ncnn 版 PP-OCRv6 tiny（自研推理、模型 3.1MB 随包、只 arm64-v8a），接口同形、脚本可切换；K40 实测置信度 0.95 vs 0.64 且速度同档（168ms vs 360ms） |
 | 结果对象 | 新建 `runtime/api/OCRResult.java`（`text` / `confidence` / `bounds` / `rotation` / `rotationConfidence` / `javaObject` / `clickCenter()`） |
 | 脚本全局名 | 新建 `assets/modules/__ocr__.js`，并加入 `init.js` 的模块表与别名表（`$ocr`） |
 

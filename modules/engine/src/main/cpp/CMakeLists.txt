@@ -83,3 +83,48 @@ target_link_options(aijscrypto PRIVATE
         "-Wl,-z,max-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
 target_link_libraries(aijscrypto PRIVATE log dl)
+
+# PP-OCR（ncnn）文字识别引擎：单独一个 .so，不依赖 QuickJS，Rhino/QuickJS 两个引擎都能用。
+# 只在 arm64-v8a 提供（仓库只 vendor 了 arm64 的 ncnn 静态库）；其余 ABI 没有这个 .so，
+# Java 侧会检测不到并回退到 ML Kit。
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(NCNN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/${ANDROID_ABI}")
+    if(NOT EXISTS "${NCNN_ROOT}/lib/libncnn.a")
+        message(FATAL_ERROR "vendored ncnn static library is missing: ${NCNN_ROOT}/lib/libncnn.a")
+    endif()
+    if(NOT EXISTS "${NCNN_ROOT}/include/ncnn/net.h")
+        message(FATAL_ERROR "vendored ncnn headers are missing: ${NCNN_ROOT}/include/ncnn")
+    endif()
+
+    add_library(ncnn STATIC IMPORTED)
+    set_target_properties(ncnn PROPERTIES
+            IMPORTED_LOCATION "${NCNN_ROOT}/lib/libncnn.a")
+
+    # OpenCV 5 把 boundingRect / minAreaRect / getAffineTransform 挪到了 geometry 模块，
+    # PP-OCR 的检测框与透视裁剪要用（QuickJS 那条链不需要，所以只给 ppocr 加）。
+    set(PPOCR_OPENCV_LIBS ${OPENCV_LIBS})
+    if(EXISTS "${OPENCV_FLAT_DIR}/libopencv_geometry.so")
+        add_library(opencv_geometry SHARED IMPORTED)
+        set_target_properties(opencv_geometry PROPERTIES
+                IMPORTED_LOCATION "${OPENCV_FLAT_DIR}/libopencv_geometry.so"
+                IMPORTED_NO_SONAME TRUE)
+        list(APPEND PPOCR_OPENCV_LIBS opencv_geometry)
+    else()
+        message(FATAL_ERROR "PP-OCR 需要 OpenCV geometry 模块：${OPENCV_FLAT_DIR}/libopencv_geometry.so 不存在")
+    endif()
+
+    add_library(ppocr SHARED
+            ppocr/ppocr_jni.cpp
+            ppocr/ppocr_engine.cpp)
+    target_compile_features(ppocr PRIVATE cxx_std_17)
+    target_include_directories(ppocr PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/ppocr"
+            "${NCNN_ROOT}/include/ncnn"
+            ${OPENCV_INCLUDE_DIR})
+    target_compile_options(ppocr PRIVATE -fPIC -Wall -Wextra)
+    # PP-OCR 的识别阶段会开工作线程，ncnn 内部单线程；这里沿用仓库统一的 16KB page 与 strip 约定。
+    target_link_options(ppocr PRIVATE
+            "-Wl,-z,max-page-size=16384"
+            "$<$<CONFIG:Release>:-Wl,--strip-all>")
+    target_link_libraries(ppocr PRIVATE ncnn ${PPOCR_OPENCV_LIBS} jnigraphics android log dl z m)
+endif()

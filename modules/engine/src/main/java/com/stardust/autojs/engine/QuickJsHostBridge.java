@@ -39,7 +39,9 @@ import com.stardust.autojs.core.database.DatabaseResultSet;
 import com.stardust.autojs.core.image.ImageWrapper;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
+import com.stardust.autojs.runtime.api.OcrSession;
 import com.stardust.autojs.runtime.api.OCRResult;
+import com.stardust.autojs.runtime.api.PPOcr;
 import com.stardust.autojs.runtime.api.Ocr;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
 import com.stardust.autojs.runtime.api.ShizukuShell;
@@ -102,7 +104,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
     /** QuickJS 的 `$ocr.create()` 会话（Rhino 的 __ocr__.js 也是「每次调用一个新对象」）。 */
     private final AtomicLong mNextOcrHandle = new AtomicLong(1);
-    private final Map<Long, Ocr> mOcrSessions = new ConcurrentHashMap<>();
+    private final Map<Long, OcrSession> mOcrSessions = new ConcurrentHashMap<>();
     /**
      * OCR 的复用位图（每帧 1080×2400 就是 10MB，每帧新建 + 回收会让 GC 一直响）。
      * 尺寸没变就复用；尺寸变了才重新分配（并把旧的回收）。
@@ -819,12 +821,27 @@ final class QuickJsHostBridge implements AutoCloseable,
     // 接口面与 Rhino 的 modules/engine/src/main/assets/modules/__ocr__.js 保持一致：
     //   $ocr.create([options]) -> { detect(image[, options]), release(), isReleased() }
     //   $ocr.liveCount()
-    // 后端是 ML Kit 中文文字识别（离线、模型内置），与 Pro 的 PaddleOCR 不同：
-    // Pro 的 models / cpuPowerMode / parallelThreads 这类选项接受但不改变识别引擎。
+    // 后端有两只：默认 ML Kit（模型内置、离线），backend:'ppocr' 则是 ncnn 版 PP-OCRv6。
+    // Pro 的 models / cpuPowerMode / parallelThreads 这些 PaddleOCR 选项现在对 ppocr 后端**真的生效**。
 
-    /** `$ocr.create([options])`：建一个独立会话（脚本忘记 release 时靠引擎销毁兜底）。 */
-    public long ocrCreate() {
-        Ocr session = new Ocr(mRuntime);
+    /** `$ocr.create({backend:'ppocr'})` 的后端编号（与 bootstrap 的约定一致）。 */
+    private static final int OCR_BACKEND_PPOCR = 1;
+
+    /**
+     * `$ocr.create([options])`：建一个独立会话（脚本忘记 release 时靠引擎销毁兜底）。
+     *
+     * @param backend    0=ML Kit（默认） 1=PP-OCR（ncnn）
+     * @param targetSize 检测长边（0=默认 768；只对 ppocr 有意义）
+     * @param cpuPower   0=不绑核（推荐） 1=绑小核 2=绑大核簇
+     * @param threads    识别工作线程数（0=默认 4）
+     * @param useFp16    非 0 则开 ncnn fp16
+     * @param recMaxWidth rec 裁剪宽度上限（0=默认 1024）
+     */
+    public long ocrCreate(int backend, int targetSize, int cpuPower, int threads,
+                          int useFp16, int recMaxWidth) {
+        OcrSession session = backend == OCR_BACKEND_PPOCR
+                ? new PPOcr(mRuntime, null, cpuPower, threads, 0f, targetSize, useFp16 != 0, recMaxWidth)
+                : new Ocr(mRuntime);
         long handle = mNextOcrHandle.getAndIncrement();
         mOcrSessions.put(handle, session);
         return handle;
@@ -840,7 +857,7 @@ final class QuickJsHostBridge implements AutoCloseable,
                             int max, boolean detectRotation,
                             int regionX, int regionY, int regionWidth, int regionHeight)
             throws JSONException {
-        Ocr session = mOcrSessions.get(handle);
+        OcrSession session = mOcrSessions.get(handle);
         if (session == null || session.isReleased()) {
             throw new IllegalStateException("QuickJS OCR 会话不存在或已释放");
         }
@@ -913,7 +930,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     /** `session.release()`：幂等（重复释放返回 false，与 Rhino 侧一致）。 */
     public boolean ocrRelease(long handle) {
-        Ocr session = mOcrSessions.remove(handle);
+        OcrSession session = mOcrSessions.remove(handle);
         if (session == null) {
             return false;
         }
@@ -921,9 +938,9 @@ final class QuickJsHostBridge implements AutoCloseable,
         return true;
     }
 
-    /** `$ocr.liveCount()`：进程内未释放的会话数（探针用）。 */
+    /** `$ocr.liveCount()`：进程内未释放的会话数（探针用；两种后端都算）。 */
     public int ocrLiveCount() {
-        return Ocr.liveCount();
+        return Ocr.liveCount() + PPOcr.liveCount();
     }
 
     private static String normalizeQuickJsBackend(String backend) {
@@ -5633,7 +5650,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
         }
         mYoloSessions.clear();
-        for (Ocr session : new ArrayList<>(mOcrSessions.values())) {
+        for (OcrSession session : new ArrayList<>(mOcrSessions.values())) {
             try {
                 session.release();
             } catch (Throwable error) {

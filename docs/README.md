@@ -38,6 +38,8 @@
 - [MIMO 抽屉按钮无响应返修](plans/MIMO_抽屉按钮无响应返修任务.md)（已作废）
 - [MIMO 脚本 APK 加密恢复与打包链路回归](plans/MIMO_脚本APK加密恢复与打包链路回归任务.md)
 - [Native Frame 截图、图色、模板和 YOLO 稳定测试](plans/NATIVE_FRAME_截图图色模板YOLO稳定测试任务.md)
+- [PP-OCRv6 (NCNN) 接入方案](plans/PP-OCRv6_NCNN接入方案.md)：本机现有资产（模型/ncnn/已编译桥）、真机实测、移植路线与工作量
+- [PP-OCR 接入评估](plans/PP-OCR接入评估.md)（已作废）：早期的 ONNX/OpenCV DNN 路线，仅供历史参考
 - [QuickJS 下一阶段开发](plans/QUICKJS_下一阶段开发任务.md)
 - [Rhino 双引擎回归与发布验收](plans/RHINO_双引擎回归与发布验收任务.md)
 - [侧边栏按钮与全分辨率 UI 适配](plans/侧边栏按钮与全分辨率UI适配方案.md)（已作废）

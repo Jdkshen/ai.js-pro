@@ -3632,16 +3632,45 @@ JSValue nativeYoloClose(JSContext *context, JSValueConst, int argc, JSValueConst
 // 图像走「native 帧 → RGBA 直接缓冲区 → Java」这条路，和 YOLO 一样：
 // 屏幕帧本来就是 CV_8UC4；images.read() 出来的图可能是 BGR / 灰度，这里统一转成 RGBA。
 
-JSValue nativeOcrCreate(JSContext *context, JSValueConst, int, JSValueConst *) {
+JSValue nativeOcrCreate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    // 参数（均可省略）：backend(0=ML Kit / 1=PP-OCR)、targetSize、cpuPower、threads、useFp16、recMaxWidth。
+    // 0 表示「用默认值」，由 Java 侧 PPOcr 自己兑默认。
+    int32_t backend = 0;
+    int32_t targetSize = 0;
+    int32_t cpuPower = 0;
+    int32_t threads = 0;
+    int32_t useFp16 = 0;
+    int32_t recMaxWidth = 0;
+    if (argc >= 1 && JS_ToInt32(context, &backend, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid OCR backend");
+    }
+    if (argc >= 2 && JS_ToInt32(context, &targetSize, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid OCR targetSize");
+    }
+    if (argc >= 3 && JS_ToInt32(context, &cpuPower, argv[2]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid OCR cpuPower");
+    }
+    if (argc >= 4 && JS_ToInt32(context, &threads, argv[3]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid OCR threads");
+    }
+    if (argc >= 5 && JS_ToInt32(context, &useFp16, argv[4]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid OCR useFp16");
+    }
+    if (argc >= 6 && JS_ToInt32(context, &recMaxWidth, argv[5]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid OCR recMaxWidth");
+    }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "ocrCreate", "()J");
+    jmethodID method = env->GetMethodID(hostClass, "ocrCreate", "(IIIIII)J");
     if (method == nullptr) {
         env->DeleteLocalRef(hostClass);
         return throwJavaException(context, env);
     }
-    const jlong handle = env->CallLongMethod(state->host, method);
+    const jlong handle = env->CallLongMethod(state->host, method,
+            static_cast<jint>(backend), static_cast<jint>(targetSize),
+            static_cast<jint>(cpuPower), static_cast<jint>(threads),
+            static_cast<jint>(useFp16), static_cast<jint>(recMaxWidth));
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, handle);
 }
@@ -5353,18 +5382,27 @@ const char kBootstrapScript[] = R"JS(
     global.YoloDetector = YoloDetector;
     global.yolo = Object.freeze(yolo);
 
-    // ---- $ocr（ML Kit 中文文字识别，离线、模型内置）----
+    // ---- $ocr（默认 ML Kit 中文文字识别；backend:'ppocr' 用 ncnn 版 PP-OCRv6）----
     //
     // 为什么要有：Pro 的 $ocr 是脚本里最常见的文字识别入口，而 QuickJS 侧以前完全没挂，
     // 脚本一跑就是 "cannot read property 'create' of undefined"（报错只看得到 create 找不到，
     // 完全看不出是「这个引擎没实现 OCR」）。接口面与 Rhino 的 __ocr__.js 保持一致。
-    // 差异：后端是 ML Kit 而不是 Pro 的 PaddleOCR，因此 models / cpuPowerMode /
-    // parallelThreads 这类 PaddleOCR 专用选项接受但不改变识别引擎。
+    // 两个后端同形（都是 {text, confidence, bounds, rotation, rotationConfidence}）；
+    // ppocr 后端下 cpuPowerMode / parallelThreads / targetSize 这些参数**真的生效**。
     // 会话用「闭包 + 普通对象」实现：与 Rhino 的 __ocr__.js 一致 —— Object.keys(session)
     // 能看到 detect / release / isReleased 三个成员，按名字取方法的脚本才不会踩空。
     const ocr = {
-        create: function () {
-            const id = __aiNativeOcrCreate();
+        create: function (options) {
+            options = options || {};
+            // backend:'ppocr' 跑 ncnn 版 PP-OCRv6（更准；只随包 arm64-v8a），默认仍是 ML Kit。
+            const backend = String(options.backend || '').toLowerCase() === 'ppocr' ? 1 : 0;
+            const targetSize = options.targetSize === undefined ? 0 : Math.round(Number(options.targetSize));
+            const cpuPower = options.cpuPowerMode === undefined ? 0 : Math.round(Number(options.cpuPowerMode));
+            const threadValue = options.threads === undefined ? options.parallelThreads : options.threads;
+            const threads = threadValue === undefined ? 0 : Math.round(Number(threadValue));
+            const useFp16 = options.useFp16 === true ? 1 : 0;
+            const recMaxWidth = options.recMaxWidth === undefined ? 0 : Math.round(Number(options.recMaxWidth));
+            const id = __aiNativeOcrCreate(backend, targetSize, cpuPower, threads, useFp16, recMaxWidth);
             let released = false;
             return {
                 detect: function (image, options) {
@@ -9096,7 +9134,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeYoloReadLabels", nativeYoloReadLabels, 1);
     installNativeFunction(state->context, global, "__aiNativeYoloDetect", nativeYoloDetect, 4);
     installNativeFunction(state->context, global, "__aiNativeYoloClose", nativeYoloClose, 1);
-    installNativeFunction(state->context, global, "__aiNativeOcrCreate", nativeOcrCreate, 0);
+    installNativeFunction(state->context, global, "__aiNativeOcrCreate", nativeOcrCreate, 6);
     installNativeFunction(state->context, global, "__aiNativeOcrDetect", nativeOcrDetect, 8);
     installNativeFunction(state->context, global, "__aiNativeOcrRelease", nativeOcrRelease, 1);
     installNativeFunction(state->context, global, "__aiNativeOcrLiveCount", nativeOcrLiveCount, 0);

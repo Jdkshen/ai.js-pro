@@ -24,7 +24,7 @@ import java.util.List;
  *
  * <p>识别结果是**行**（ML Kit 的 Text.Line）：文本、可信度、范围与 PaddleOCR 的行结果同粒度。
  */
-public class Ocr implements AutoCloseable {
+public class Ocr implements AutoCloseable, OcrSession {
 
     /** ML Kit 要求输入图至少 32x32。 */
     private static final int MIN_REGION_SIZE = 32;

@@ -329,12 +329,19 @@ def quickJsNativeSources = [
         'quickjs_jni.cpp',
         'native_frame_store.cpp',
         'native_frame_store.h',
-        'script_crypto.c'
+        'script_crypto.c',
+        'ppocr/ppocr_jni.cpp',
+        'ppocr/ppocr_engine.cpp',
+        'ppocr/ppocr_engine.h',
+        'ppocr/ppocrv5_dict.h'
 ].collect { new File(quickJsNativeSourceDir, it) }
 def quickJsNativeLibraries = ['armeabi-v7a', 'arm64-v8a', 'x86'].collectMany { abi ->
-    ['libquickjs_jni.so', 'libaijscrypto.so'].collect {
-        rootProject.file("modules/engine/src/main/jniLibs/${abi}/${it}")
+    def names = ['libquickjs_jni.so', 'libaijscrypto.so']
+    if (abi == 'arm64-v8a') {
+        // PP-OCR（ncnn）只随包 arm64-v8a，其余 ABI 由 Java 侧回退到 ML Kit。
+        names += 'libppocr.so'
     }
+    names.collect { rootProject.file("modules/engine/src/main/jniLibs/${abi}/${it}") }
 }
 
 tasks.register('verifyQuickJsNativeLibrariesFresh') {
