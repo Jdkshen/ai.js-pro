@@ -103,6 +103,13 @@ final class QuickJsHostBridge implements AutoCloseable,
     /** QuickJS 的 `$ocr.create()` 会话（Rhino 的 __ocr__.js 也是「每次调用一个新对象」）。 */
     private final AtomicLong mNextOcrHandle = new AtomicLong(1);
     private final Map<Long, Ocr> mOcrSessions = new ConcurrentHashMap<>();
+    /**
+     * OCR 的复用位图（每帧 1080×2400 就是 10MB，每帧新建 + 回收会让 GC 一直响）。
+     * 尺寸没变就复用；尺寸变了才重新分配（并把旧的回收）。
+     */
+    private Bitmap mOcrScratchBitmap;
+    private int mOcrScratchWidth;
+    private int mOcrScratchHeight;
     private final MutableOkHttp mHttpClient = new MutableOkHttp();
     private final ArrayBlockingQueue<String> mSystemEventQueue = new ArrayBlockingQueue<>(256);
     // Shared event bus across all QuickJS engines (parent + workers). Each engine
@@ -840,9 +847,16 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (rgba == null || width <= 0 || height <= 0) {
             throw new IllegalArgumentException("OCR 需要一张有效图像");
         }
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        try {
-            // 按行拷：rowStride 可能大于 width*4（Mat 的行对齐）
+        Bitmap bitmap = ocrBitmapFor(width, height);
+        // 位图以 ARGB_8888 存成 RGBA 字节序，和 native 侧的 CV_8UC4 一致。
+        // 行连续（step == width*4，屏幕帧与 clip/read 出来的图都是）时直接从直接缓冲区拷贝，
+        // 不走中间的 byte[] —— 1080×2400 下这就是每帧省一次 10MB 分配 + 一次 10MB 拷贝。
+        if (rowStride == width * 4) {
+            ByteBuffer source = rgba.duplicate();
+            source.position(0);
+            source.limit(width * height * 4);
+            bitmap.copyPixelsFromBuffer(source);
+        } else {
             byte[] pixels = new byte[width * height * 4];
             ByteBuffer source = rgba.duplicate();
             int rowBytes = width * 4;
@@ -851,37 +865,50 @@ final class QuickJsHostBridge implements AutoCloseable,
                 source.get(pixels, row * rowBytes, rowBytes);
             }
             bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));
-            ImageWrapper image = ImageWrapper.ofBitmap(bitmap);
-            int[] region = (regionWidth > 0 && regionHeight > 0)
-                    ? new int[]{regionX, regionY, regionWidth, regionHeight}
-                    : null;
-            OCRResult[] results = session.detect(image, max, detectRotation, region);
-            JSONArray array = new JSONArray();
-            for (OCRResult result : results) {
-                JSONObject item = new JSONObject();
-                item.put("text", result.getText() == null ? "" : result.getText());
-                item.put("confidence", result.getConfidence());
-                item.put("rotation", result.getRotation());
-                item.put("rotationConfidence", result.getRotationConfidence());
-                Rect bounds = result.getBounds();
-                JSONObject box = new JSONObject();
-                if (bounds != null) {
-                    box.put("left", bounds.left);
-                    box.put("top", bounds.top);
-                    box.put("right", bounds.right);
-                    box.put("bottom", bounds.bottom);
-                    box.put("width", bounds.width());
-                    box.put("height", bounds.height());
-                    box.put("centerX", bounds.centerX());
-                    box.put("centerY", bounds.centerY());
-                }
-                item.put("bounds", box);
-                array.put(item);
-            }
-            return array.toString();
-        } finally {
-            bitmap.recycle();
         }
+        ImageWrapper image = ImageWrapper.ofBitmap(bitmap);
+        int[] region = (regionWidth > 0 && regionHeight > 0)
+                ? new int[]{regionX, regionY, regionWidth, regionHeight}
+                : null;
+        OCRResult[] results = session.detect(image, max, detectRotation, region);
+        JSONArray array = new JSONArray();
+        for (OCRResult result : results) {
+            JSONObject item = new JSONObject();
+            item.put("text", result.getText() == null ? "" : result.getText());
+            item.put("confidence", result.getConfidence());
+            item.put("rotation", result.getRotation());
+            item.put("rotationConfidence", result.getRotationConfidence());
+            Rect bounds = result.getBounds();
+            JSONObject box = new JSONObject();
+            if (bounds != null) {
+                box.put("left", bounds.left);
+                box.put("top", bounds.top);
+                box.put("right", bounds.right);
+                box.put("bottom", bounds.bottom);
+                box.put("width", bounds.width());
+                box.put("height", bounds.height());
+                box.put("centerX", bounds.centerX());
+                box.put("centerY", bounds.centerY());
+            }
+            item.put("bounds", box);
+            array.put(item);
+        }
+        return array.toString();
+    }
+
+    /** 拿（或重建）OCR 用的复用位图（只在本类内部使用，不交给脚本，所以不用管生命周期）。 */
+    private Bitmap ocrBitmapFor(int width, int height) {
+        if (mOcrScratchBitmap != null && mOcrScratchWidth == width && mOcrScratchHeight == height) {
+            return mOcrScratchBitmap;
+        }
+        Bitmap old = mOcrScratchBitmap;
+        mOcrScratchBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        mOcrScratchWidth = width;
+        mOcrScratchHeight = height;
+        if (old != null && !old.isRecycled()) {
+            old.recycle();
+        }
+        return mOcrScratchBitmap;
     }
 
     /** `session.release()`：幂等（重复释放返回 false，与 Rhino 侧一致）。 */
@@ -5614,6 +5641,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
         }
         mOcrSessions.clear();
+        if (mOcrScratchBitmap != null && !mOcrScratchBitmap.isRecycled()) {
+            mOcrScratchBitmap.recycle();
+        }
+        mOcrScratchBitmap = null;
         mEngineResults.clear();
     }
 
