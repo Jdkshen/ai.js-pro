@@ -55,7 +55,8 @@ ui.layout(
   '      <button id="captureChannel" text="截图通道：自动"/>' +
   '      <button id="assertTurn" text="现在轮到我（声明轮次基准）"/>' +
   '      <button id="autoToggle" text="开始观察 / 暂停"/>' +
-  '      <button id="autoStop" text="停止（关画板）"/>' +
+  '      <button id="autoStop" text="停止观察（停止循环、关画板）"/>' +
+  '      <button id="pageDraw" text="绘制：开（点一下关）"/>' +
   '      <text id="autoStatus" textSize="12sp" textColor="#0d47a1"/>' +
   '      <frame height="14"/>' +
   '      <text text="开发阶段" textSize="16sp" textStyle="bold"/>' +
@@ -75,6 +76,10 @@ ui.layout(
   '      <text text="棋盘范围（比例 x,y,w,h；留空用默认。定位总失败时填，例如 0.013,0.251,0.958,0.472）" textSize="13sp" textColor="#555555"/>' +
   '      <input id="region" text="" textSize="13sp"/>' +
   '      <button id="think" text="算棋（本地引擎）→ 最佳着法"/>' +
+  // 与面板对齐的几项（面板有、页面原来没有）：新会话 / 契约测试 / 清空
+  '      <button id="newSession" text="新会话（几何与轮次基准作废）"/>' +
+  '      <button id="contract" text="契约测试（格子契约）"/>' +
+  '      <button id="clearLog" text="清空输出"/>' +
   '      <frame height="10"/>' +
   '      <text id="output" textSize="12sp" textColor="#333333"/>' +
   '    </vertical>' +
@@ -408,6 +413,15 @@ const loopLock = require("./src/automation/loop-lock.js");
 const recognizeBoard = require("./tools/recognize-board.js");
 const locateBoard = require("./tools/locate-board.js");
 const engineModule = require("./src/engine/engine.js");
+const busModule = require("./src/app/panel-bus.js");
+
+// 跨引擎互锁（与悬浮窗面板共用一个文件总线）：状态互锁 + 双向停止 + 配置双向同步。
+// 详见 src/app/panel-bus.js（为什么用文件、为什么放 /sdcard/.aijspro-floaty）。
+const bus = busModule.createPanelBus({
+    owner: "main",
+    files: files,
+    log: function (text) { console.log("[bus] " + text); }
+});
 
 const MODES = { WATCH: "watch", ADVICE: "advice", AUTO: "auto" };
 const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
@@ -417,6 +431,11 @@ let tapMethodKey = "auto";
 let autoDriver = null;
 let autoRunning = false;
 let overlayShown = false;
+// 「绘制（画板）」开关：关掉就不画起点/落点、也不弹悬浮层。
+// （面板上那个「绘制」是**识别绘制**档位，给人审冻结帧用的，是另一件事）
+let pageDrawEnabled = true;
+// 面板通过总线发来的停止请求（循环每 tick 查一次，见 stopRequested）
+let stopByCommand = false;
 let lastDriverLine = "";
 
 function sideLabel(side) {
@@ -624,6 +643,14 @@ function updateAutoStatus(result) {
 /** 把「计划」画到悬浮层：没有悬浮窗权限就不画，不影响走棋。 */
 function drawPlan(ticket) {
     const driver = autoDriver;
+    if (!pageDrawEnabled) {
+        // 绘制开关关掉：既不再画，也把已经画上去的收掉（不再依赖「停止」来关画板）
+        if (overlayShown) {
+            adapter.overlayHide();
+            overlayShown = false;
+        }
+        return;
+    }
     if (!driver || !adapter.overlayAvailable()) {
         return;
     }
@@ -676,6 +703,9 @@ function runAutoLoop() {
         "。请切到棋局画面；回到本页面会自动交回界面控制。");
     try {
         while (autoDriver && autoDriver.isRunning() && ticks < maxTicks) {
+            // 循环期间也要走总线：发布「页面正在跑」（面板靠它显示互锁状态），
+            // 顺便收面板发来的停止/配置命令（stopRequested 会看到 stopByCommand）。
+            pumpBus();
             if (stopRequested()) {
                 show("检测到停止标记（" + stopFile() + "），退出自动循环。");
                 break;
@@ -716,6 +746,9 @@ function stopFile() {
 }
 
 function stopRequested() {
+    if (stopByCommand) {
+        return true;   // 面板通过总线发来的停止（详见 src/app/panel-bus.js）
+    }
     try {
         const path = stopFile();
         return path !== "" && files.exists(path);
@@ -739,21 +772,135 @@ function stopAuto(why) {
     }
 }
 
+// ======================= 跨引擎互锁总线（页面侧） =======================
+// 面板与页面跑在不同 JS 引擎里：状态靠各自发布的快照、命令靠单槽文件（见 panel-bus.js）。
+// 三条语义：状态互锁（谁在跑对方看得见）、双向停止、配置双向同步。
+
+/** 本页状态快照：面板据此显示「页面在跑什么」，也用于判互锁。 */
+function busSnapshot() {
+    return {
+        version: VERSION,
+        running: autoRunning,
+        mode: modeKey,
+        side: (autoDriver ? autoDriver.mySide() : "w"),
+        tap: tapMethodKey,
+        capture: adapter.captureBackend(),
+        drawEnabled: pageDrawEnabled
+    };
+}
+
+/**
+ * 总线泵：发布自己 → 收命令 → 刷新「面板」那一行。
+ * 循环里每 tick 调一次；空闲时由文件末尾的 1s 定时器调（页面切后台没定时器，真机实测）。
+ */
+function pumpBus() {
+    bus.publish(busSnapshot());
+    let message;
+    while ((message = bus.poll())) {
+        applyBusCommand(message);
+    }
+    refreshPanelLine();
+}
+
+/** 「悬浮窗面板」那一行：显示面板状态，并在它跑着时把「开始」写成提醒。 */
+function refreshPanelLine() {
+    const other = bus.readOther();
+    const otherRunning = !!(other && other.fresh && other.state && other.state.running);
+    ui.floatyStatus.setText(bus.describeOther() +
+        (otherRunning ? "｜两边互锁：要本页跑，先在面板点「停止」" : ""));
+    if (!autoRunning) {
+        ui.autoToggle.setText(otherRunning ? "开始观察（面板正在跑，会被拒）" : "开始观察 / 暂停");
+    }
+}
+
+/** 收到面板的命令。目前只有 stop（双向停止）与 setConfig（配置同步）两种。 */
+function applyBusCommand(message) {
+    if (message.name === "stop") {
+        const why = (message.arg && message.arg.why) ? message.arg.why : "面板请求停止";
+        if (autoRunning || (autoDriver && autoDriver.isRunning())) {
+            stopByCommand = true;         // 循环每 tick 看这个标记
+            show("面板请求停止：" + why);
+        } else {
+            show("面板请求停止（本页本来没在跑）");
+        }
+        return;
+    }
+    if (message.name === "setConfig" && message.arg) {
+        applyConfigFromPanel(message.arg.key, message.arg.value);
+    }
+}
+
+/**
+ * 应用面板同步过来的配置。
+ * ⚠️ 只应用、不回发 —— 回发会变成两边互相回弹的死循环。
+ */
+function applyConfigFromPanel(key, value) {
+    if (key === "mode" && MODES[value] && value !== modeKey) {
+        modeKey = value;
+        rebuildDriver();
+        show("面板把模式改成：" + MODE_LABEL[modeKey]);
+    } else if (key === "side" && (value === "w" || value === "b")) {
+        if (!autoDriver) {
+            rebuildDriver();
+        }
+        if (autoDriver.mySide() !== value) {
+            autoDriver.setMySide(value);
+            ui.mySide.setText("我方：" + sideLabel(value) + "（点一下切换）");
+            show("面板把「我方」改成：" + sideLabel(value) + "（轮次基准已清空）");
+        }
+    } else if (key === "tap" && TAP_METHODS.indexOf(value) >= 0 && value !== tapMethodKey) {
+        tapMethodKey = value;
+        ui.tapMethod.setText("点击通道：" + TAP_LABEL[tapMethodKey]);
+        rebuildDriver();
+        show("面板把点击通道改成：" + describeTapChannel());
+    } else if (key === "capture" && CAPTURE_BACKENDS.indexOf(value) >= 0 &&
+               adapter.captureBackend() !== value) {
+        adapter.setCaptureBackend(value);
+        ui.captureChannel.setText(captureButtonText());
+        rebuildDriver();
+        show("面板把截图通道改成：" + describeCaptureChannel());
+    } else if (key === "drawEnabled") {
+        setPageDraw(!!value, false);
+        show("面板把「绘制」改成：" + (pageDrawEnabled ? "开" : "关"));
+    }
+}
+
+/** 绘制开关（本页的画板）：broadcast=true 时把状态同步给面板。 */
+function setPageDraw(on, broadcast) {
+    pageDrawEnabled = !!on;
+    ui.pageDraw.setText(pageDrawEnabled ? "绘制：开（点一下关）" : "绘制：关（点一下开）");
+    if (!pageDrawEnabled) {
+        if (overlayShown) {
+            adapter.overlayHide();
+            overlayShown = false;
+        }
+    } else if (autoDriver && autoDriver.machine) {
+        drawPlan(autoDriver.machine.currentTicket());   // 开的时候立刻把当前计划画出来
+    }
+    if (broadcast) {
+        bus.syncConfig("drawEnabled", pageDrawEnabled);
+    }
+    return pageDrawEnabled;
+}
+
 ui.modeWatch.on("click", function () {
     modeKey = MODES.WATCH;
     rebuildDriver();
+    bus.syncConfig("mode", modeKey);
     show("模式：① 只识别 —— 只看局面、算棋建议，点击接口是禁用桩（调用会被计数）。");
 });
 
 ui.modeAdvice.on("click", function () {
     modeKey = MODES.ADVICE;
     rebuildDriver();
+    bus.syncConfig("mode", modeKey);
     show("模式：② 着法建议 —— 会算棋并显示起点/终点，仍然不会点击棋盘。");
 });
 
 ui.modeAuto.on("click", function () {
     modeKey = MODES.AUTO;
     rebuildDriver();
+    bus.syncConfig("mode", modeKey);
     show("模式：③ 自动走棋 —— 点「开始观察 / 暂停」后，只有轮次、局面、几何、票据、着法" +
         "全部校验通过才会点击；落子要用新观测确认过才算成功。\n" +
         "第一次开始会弹截图授权；轮次推不出来时按「现在轮到我」声明一次。");
@@ -763,6 +910,7 @@ ui.tapMethod.on("click", function () {
     const index = TAP_METHODS.indexOf(tapMethodKey);
     tapMethodKey = TAP_METHODS[(index + 1) % TAP_METHODS.length];
     ui.tapMethod.setText("点击通道：" + TAP_LABEL[tapMethodKey]);
+    bus.syncConfig("tap", tapMethodKey);
     show("点击通道改为：" + describeTapChannel() + "\n" +
         "两条通道都能落子（实测）：「无障碍」不需要装 Shizuku 但要开无障碍服务；" +
         "「Shizuku」用 shell 身份注入 input tap，不受游戏过滤影响。\n" +
@@ -776,6 +924,7 @@ ui.captureChannel.on("click", function () {
     const next = CAPTURE_BACKENDS[(index + 1) % CAPTURE_BACKENDS.length];
     adapter.setCaptureBackend(next);   // 界面上的选择会持久化（storages），重启脚本也记得
     ui.captureChannel.setText(captureButtonText());
+    bus.syncConfig("capture", next);
     rebuildDriver();
     show("截图通道改为：" + describeCaptureChannel() + "\n" +
         "说明：系统截屏（MediaProjection）很快，但两条真实问题都踩到过：\n" +
@@ -792,6 +941,7 @@ ui.mySide.on("click", function () {
     const side = autoDriver.mySide() === "b" ? "w" : "b";
     autoDriver.setMySide(side);
     ui.mySide.setText("我方：" + sideLabel(side) + "（点一下切换）");
+    bus.syncConfig("side", side);
     show("我方改为：" + sideLabel(side) + "。轮次基准已清空，跑一轮观察后按「现在轮到我」。");
 });
 
@@ -834,8 +984,59 @@ ui.autoToggle.on("click", function () {
 
 ui.autoStop.on("click", function () {
     stopAuto("用户停止");
-    show("已停止：会话与轮次基准清空，画板已关。");
+    // 双向停止：面板在跑也一起停掉（否则本页没跑，用户点「停止」看着像没反应）
+    const other = bus.readOther();
+    if (other && other.fresh && other.state && other.state.running) {
+        bus.stopOther("页面点了停止");
+        show("已停止本页，并已请悬浮窗面板也停止。");
+    } else {
+        show("已停止：循环已停、画板已关。");
+    }
     ui.autoStatus.setText("未开始（模式：" + MODE_LABEL[modeKey] + "）");
     lastDriverLine = "";
 });
+
+// ==================== 与面板对齐的三项 + 绘制开关 ====================
+
+ui.pageDraw.on("click", function () {
+    const on = setPageDraw(!pageDrawEnabled, true);
+    show("绘制（画板）：" + (on
+        ? "已开 —— 有可靠计划时把起点/落点画在屏幕悬浮层上"
+        : "已关 —— 不再画、也不再弹悬浮层（面板那边的「识别绘制」是另一档，不受影响）"));
+});
+
+ui.newSession.on("click", function () {
+    stopAuto("新会话");
+    rebuildDriver();      // 重建驱动 = 会话/票据/几何/轮次基准全部作废
+    ui.autoStatus.setText("新会话：票据与基准已作废（模式：" + MODE_LABEL[modeKey] + "）");
+    show("新会话：驱动已重建，既有票据、几何与轮次基准全部作废。");
+});
+
+ui.contract.on("click", function () {
+    try {
+        const result = require("./tools/test-cells-contract.js");
+        const lines = ["契约测试：" + result.summary];
+        for (let i = 0; i < Math.min(result.failures.length, 5); i++) {
+            lines.push("  失败 " + (i + 1) + "：" + result.failures[i].name + " → " + result.failures[i].message);
+        }
+        show(lines.join("\n"));
+    } catch (error) {
+        show("契约测试没能运行：" + error);
+    }
+});
+
+ui.clearLog.on("click", function () {
+    lastOutput = "";
+    ui.output.setText("");
+});
+
+// 空闲时的总线心跳（1s）：页面在前台才有定时器（切到后台定时器不再被派发，真机实测），
+// 所以「面板正在跑」这类互锁显示只在页面可见时刷新 —— 那正是用户看得见的时刻。
+setInterval(function () {
+    if (!autoRunning) {
+        pumpBus();
+    }
+}, 1000);
+pumpBus();
+setPageDraw(pageDrawEnabled, false);   // 按钮文案与状态对齐一次
 

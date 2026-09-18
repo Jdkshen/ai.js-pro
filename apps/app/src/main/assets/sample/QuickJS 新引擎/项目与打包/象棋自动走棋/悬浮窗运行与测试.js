@@ -102,6 +102,9 @@ const overlayDraw = load("src/vision/overlay-draw.js");
 // 跨引擎互锁：主界面（main.js）里还有另一套驱动循环，两边一起跑会双份截图/算棋，
 // 模式③还会双份点击棋盘 —— 用同一个锁文件互斥（见 src/automation/loop-lock.js）。
 const loopLock = load("src/automation/loop-lock.js");
+// 跨引擎互锁总线（与主界面 main.js 共用）：状态互锁 + 双向停止 + 配置双向同步。
+// 锁只能「拒绝同时跑」，看不到对面在不在跑、也没法从这边停那边 —— 所以另开一条文件总线。
+const busModule = load("src/app/panel-bus.js");
 
 /**
  * 临时文件目录。**不要再写死 /sdcard/xiangqi-p4**，但也不能全放工程目录里：
@@ -206,6 +209,91 @@ let lastBeatAt = 0;           // 心跳间隔：衡量「本站线程被占多�
 let lagMax = 0;
 let lagCount = 0;
 
+// ==================== 跨引擎互锁总线（面板侧） ====================
+// 两个入口跑在不同 JS 引擎里，只能用文件：各自的 state 快照 + 单槽命令文件（见 panel-bus.js）。
+const bus = busModule.createPanelBus({
+    owner: "floaty",
+    files: files,
+    log: function (text) { console.log("[bus] " + text); }
+});
+
+/** 本面板的状态快照（页面/主界面读它来显示「面板在跑什么」）。 */
+function busSnapshot() {
+    return {
+        version: PROBE_BUILD_ID,
+        running: running,
+        mode: modeKey,
+        side: (driver ? driver.mySide() : "w"),
+        tap: clickMethodKey,
+        capture: adapter.captureBackend(),
+        drawMode: drawMode
+    };
+}
+
+/** 总线泵：发布自己 → 收页面命令。（面板心跳 1s 调一次，见 startKeepAlive） */
+function pumpBus() {
+    bus.publish(busSnapshot());
+    let message;
+    while ((message = bus.poll())) {
+        applyBusCommand(message);
+    }
+}
+
+/** 收到页面的命令：stop（双向停止）与 setConfig（配置同步）。 */
+function applyBusCommand(message) {
+    if (message.name === "stop") {
+        const why = (message.arg && message.arg.why) ? message.arg.why : "页面请求停止";
+        if (running) {
+            stopLoop();
+            logLine("页面请求停止：" + why);
+            render();
+        } else {
+            logLine("页面请求停止（面板本来就没跑）");
+        }
+        return;
+    }
+    if (message.name === "setConfig" && message.arg) {
+        applyConfigFromPage(message.arg.key, message.arg.value);
+    }
+}
+
+/**
+ * 应用页面同步过来的配置。
+ * ⚠️ 只应用、不回发 —— 回发会变成两边互相回弹的死循环。
+ */
+function applyConfigFromPage(key, value) {
+    if (key === "mode" && MODES.indexOf(value) >= 0 && value !== modeKey) {
+        modeKey = value;
+        if (running) {
+            stopLoop();
+            startLoop();
+        }
+        logLine("页面把模式改成：" + MODE_LABEL[modeKey]);
+        render();
+    } else if (key === "side" && (value === "w" || value === "b") && driver && driver.mySide() !== value) {
+        driver.setMySide(value);
+        logLine("页面把「我方」改成：" + (value === "w" ? "红方" : "黑方") + "（旧基准已作废）");
+        render();
+    } else if (key === "drawEnabled") {
+        // 页面那个「绘制」是它自己的计划画板；面板这边的绘制是「识别绘制」档位（人工审核用），
+        // 语义不同，所以只记一行、不跟着改（避免把审核档位莫名改掉）。
+        logLine("页面把「绘制」改成：" + (value ? "开" : "关") + "（面板的「识别绘制」是另一档，未跟随）");
+    }
+}
+
+/** 状态栏里「页面」那一段（面板窄，只能给最少的字）。 */
+function otherLineShort() {
+    const other = bus.readOther();
+    if (!other || !other.state) {
+        return "页面：未启动";
+    }
+    if (!other.fresh) {
+        return "页面：离线";
+    }
+    return "页面：" + (other.state.running ? "跑中" : "未开始") +
+        "｜" + String(MODE_LABEL[other.state.mode] || "?").replace(/\s/g, "");
+}
+
 /** 状态栏文字（心跳里每秒刷一次，写成一个函数免得两处不同步）。 */
 function statusLine() {
     // 面板宽度有限：太长会在窄行里换行 → 第二行被裁。9sp 下约 24.8px/字，1008px 只放得下 ~40 字。
@@ -213,7 +301,8 @@ function statusLine() {
     const fg = lastForeground == null
         ? "?"
         : (lastForeground === gamePackage ? "游戏✓" : (lastForeground === OWN_PACKAGE ? "自身✗" : lastForeground));
-    return note + "｜" + (running ? "运行中" : "已停止") + "｜" + aliveSeconds + "s｜前台 " + fg;
+    return note + "｜" + (running ? "运行中" : "已停止") + "｜" + aliveSeconds + "s｜前台 " + fg +
+        "｜" + otherLineShort();
 }
 let collapsed = false;
 let grid = null;          // 已校准几何（会话内复用）
@@ -1868,6 +1957,8 @@ function startKeepAlive() {
     }
     aliveTimer = setInterval(function () {
         const now = Date.now();
+        // 互锁总线：发布面板状态 + 收页面命令（双向停止/配置同步）
+        pumpBus();
         // 心跳每 1s 一次 → **最长心跳间隔**就是「脚本线程被占多久」的滞后指标：
         // 空载 ≈1000ms；本线程里跑采集/识别（或退回同步算棋）时会被拉长。
         // ⚠️ 口径修正（小米8 探针实测）：不能再减 1000ms —— 定时器是「上一次触发 + 1000ms」重排的，
@@ -2091,6 +2182,7 @@ function main() {
             stopLoop();
             startLoop();
         }
+        bus.syncConfig("mode", modeKey);   // 配置双向同步：页面跟着改
         logLine("模式切换为 " + MODE_LABEL[modeKey]);
         render();
     });
@@ -2104,6 +2196,12 @@ function main() {
     });
     win.stopBtn.on("click", function () {
         stopLoop();
+        // 双向停止：页面（主界面）在跑也一起停掉（否则面板停了、页面还在抓屏/算棋）
+        const other = bus.readOther();
+        if (other && other.fresh && other.state && other.state.running) {
+            bus.stopOther("面板点了停止");
+            logLine("已请页面（主界面）也停止");
+        }
         render();
     });
     win.locateBtn.on("click", function () {
@@ -2191,6 +2289,7 @@ function main() {
         if (driver) {
             driver.setMySide(next);
         }
+        bus.syncConfig("side", next);   // 配置双向同步：页面跟着改
         logLine("我方改为 " + (next === "w" ? "红方" : "黑方") + "（旧基准已作废，需要重新声明轮次）");
         render();
     });
