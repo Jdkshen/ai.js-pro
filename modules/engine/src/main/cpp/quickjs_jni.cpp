@@ -18,6 +18,10 @@
 #include <unordered_map>
 #include <vector>
 
+// $ocr 要把非 RGBA 的图像（images.read 出来的 BGR / 灰度）转成 RGBA 再交给 ML Kit，
+// 需要 imgproc（CMakeLists 里 opencv_imgproc 是可选的：AAR 里有就会链上）。
+#include <opencv2/imgproc.hpp>
+
 #include "native_frame_store.h"
 
 extern "C" {
@@ -3621,6 +3625,124 @@ JSValue nativeYoloClose(JSContext *context, JSValueConst, int argc, JSValueConst
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
 }
 
+// ---- OCR（$ocr）JNI ----
+//
+// 接口面与 Rhino 的 modules/engine/src/main/assets/modules/__ocr__.js 一致：
+//   $ocr.create() -> session.detect(image[, options]) / release() / isReleased()
+// 图像走「native 帧 → RGBA 直接缓冲区 → Java」这条路，和 YOLO 一样：
+// 屏幕帧本来就是 CV_8UC4；images.read() 出来的图可能是 BGR / 灰度，这里统一转成 RGBA。
+
+JSValue nativeOcrCreate(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "ocrCreate", "()J");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jlong handle = env->CallLongMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, handle);
+}
+
+JSValue nativeOcrDetect(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t sessionHandle = 0;
+    int64_t frameHandle = 0;
+    int32_t max = 1000;
+    int32_t detectRotation = 0;
+    int32_t regionX = 0;
+    int32_t regionY = 0;
+    int32_t regionWidth = 0;
+    int32_t regionHeight = 0;
+    if (argc < 8 || JS_ToInt64(context, &sessionHandle, argv[0]) < 0 ||
+        JS_ToInt64(context, &frameHandle, argv[1]) < 0 ||
+        JS_ToInt32(context, &max, argv[2]) < 0 ||
+        JS_ToInt32(context, &detectRotation, argv[3]) < 0 ||
+        JS_ToInt32(context, &regionX, argv[4]) < 0 ||
+        JS_ToInt32(context, &regionY, argv[5]) < 0 ||
+        JS_ToInt32(context, &regionWidth, argv[6]) < 0 ||
+        JS_ToInt32(context, &regionHeight, argv[7]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid OCR detect arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    const auto frame = state->frames.get(frameHandle);
+    if (frame == nullptr || frame->empty()) {
+        return JS_ThrowTypeError(context, "OCR requires a live image or frame");
+    }
+    cv::Mat rgba;
+    if (frame->type() == CV_8UC4) {
+        rgba = *frame;
+    } else if (frame->type() == CV_8UC3) {
+        cv::cvtColor(*frame, rgba, cv::COLOR_BGR2RGBA);
+    } else if (frame->type() == CV_8UC1) {
+        cv::cvtColor(*frame, rgba, cv::COLOR_GRAY2RGBA);
+    } else {
+        return JS_ThrowTypeError(context, "OCR does not support this image type");
+    }
+    if (!rgba.isContinuous()) {
+        rgba = rgba.clone();   // clip 出来的子矩阵可能不连续，直接缓冲区必须连续
+    }
+    JNIEnv *env = currentEnv(state);
+    const jlong capacity = static_cast<jlong>(rgba.total() * rgba.elemSize());
+    jobject buffer = env->NewDirectByteBuffer(rgba.data, capacity);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "ocrDetect",
+            "(JLjava/nio/ByteBuffer;IIIIZIIII)Ljava/lang/String;");
+    if (method == nullptr) {
+        env->DeleteLocalRef(buffer);
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
+            sessionHandle, buffer, rgba.cols, rgba.rows,
+            static_cast<jint>(rgba.step[0]), max,
+            detectRotation != 0 ? JNI_TRUE : JNI_FALSE,
+            regionX, regionY, regionWidth, regionHeight));
+    env->DeleteLocalRef(hostClass);
+    env->DeleteLocalRef(buffer);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string json = result == nullptr ? "[]" : fromJavaString(env, result);
+    if (result != nullptr) {
+        env->DeleteLocalRef(result);
+    }
+    return JS_NewStringLen(context, json.data(), json.size());
+}
+
+JSValue nativeOcrRelease(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t sessionHandle = 0;
+    if (argc < 1 || JS_ToInt64(context, &sessionHandle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "OCR session handle is required");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "ocrRelease", "(J)Z");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jboolean result = env->CallBooleanMethod(state->host, method, sessionHandle);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeOcrLiveCount(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "ocrLiveCount", "()I");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jint result = env->CallIntMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt32(context, result);
+}
+
 JSValue nativeYoloDetect(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t detectorHandle = 0;
     int64_t frameHandle = 0;
@@ -5230,6 +5352,70 @@ const char kBootstrapScript[] = R"JS(
     };
     global.YoloDetector = YoloDetector;
     global.yolo = Object.freeze(yolo);
+
+    // ---- $ocr（ML Kit 中文文字识别，离线、模型内置）----
+    //
+    // 为什么要有：Pro 的 $ocr 是脚本里最常见的文字识别入口，而 QuickJS 侧以前完全没挂，
+    // 脚本一跑就是 "cannot read property 'create' of undefined"（报错只看得到 create 找不到，
+    // 完全看不出是「这个引擎没实现 OCR」）。接口面与 Rhino 的 __ocr__.js 保持一致。
+    // 差异：后端是 ML Kit 而不是 Pro 的 PaddleOCR，因此 models / cpuPowerMode /
+    // parallelThreads 这类 PaddleOCR 专用选项接受但不改变识别引擎。
+    // 会话用「闭包 + 普通对象」实现：与 Rhino 的 __ocr__.js 一致 —— Object.keys(session)
+    // 能看到 detect / release / isReleased 三个成员，按名字取方法的脚本才不会踩空。
+    const ocr = {
+        create: function () {
+            const id = __aiNativeOcrCreate();
+            let released = false;
+            return {
+                detect: function (image, options) {
+                    if (released) throw new Error('OCR session has been released');
+                    const frame = requireFrame(image);
+                    options = options || {};
+                    const max = options.max === undefined ? 1000
+                        : Math.max(1, Math.round(Number(options.max)));
+                    const detectRotation = options.detectRotation === true;
+                    let region = [0, 0, 0, 0];
+                    if (options.region !== undefined) {
+                        if (!Array.isArray(options.region) || options.region.length !== 4) {
+                            throw new TypeError('region must be [x, y, width, height]');
+                        }
+                        region = options.region.map(function (value) {
+                            return Math.round(Number(value));
+                        });
+                    }
+                    // 原生侧返回 JSON：文本结果字段多且变长，走 JSON 比打包成 float 数组清楚
+                    const packed = __aiNativeOcrDetect(id, frame.id, max, detectRotation ? 1 : 0,
+                        region[0], region[1], region[2], region[3]);
+                    const items = JSON.parse(String(packed || '[]'));
+                    const results = [];
+                    for (let i = 0; i < items.length; i++) {
+                        const item = items[i];
+                        results.push({
+                            text: item.text,
+                            confidence: item.confidence,
+                            bounds: item.bounds,
+                            rotation: item.rotation,
+                            rotationConfidence: item.rotationConfidence
+                        });
+                    }
+                    return results;
+                },
+                release: function () {
+                    if (released) return false;
+                    released = true;
+                    return __aiNativeOcrRelease(id);
+                },
+                isReleased: function () {
+                    return released;
+                }
+            };
+        },
+        liveCount: function () {
+            return __aiNativeOcrLiveCount();
+        }
+    };
+    global.$ocr = ocr;
+    global.ocr = ocr;   // Rhino 侧 $ocr 与 ocr 两个名字都有，这里保持一致
 
     const timerIds = new Set();
     function makeTimer(repeat, callback, millis) {
@@ -8910,6 +9096,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeYoloReadLabels", nativeYoloReadLabels, 1);
     installNativeFunction(state->context, global, "__aiNativeYoloDetect", nativeYoloDetect, 4);
     installNativeFunction(state->context, global, "__aiNativeYoloClose", nativeYoloClose, 1);
+    installNativeFunction(state->context, global, "__aiNativeOcrCreate", nativeOcrCreate, 0);
+    installNativeFunction(state->context, global, "__aiNativeOcrDetect", nativeOcrDetect, 8);
+    installNativeFunction(state->context, global, "__aiNativeOcrRelease", nativeOcrRelease, 1);
+    installNativeFunction(state->context, global, "__aiNativeOcrLiveCount", nativeOcrLiveCount, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesExists", nativeFilesExists, 1);
     installNativeFunction(state->context, global, "__aiNativeFilesIsFile", nativeFilesIsFile, 1);
     installNativeFunction(state->context, global, "__aiNativeFilesIsDir", nativeFilesIsDir, 1);

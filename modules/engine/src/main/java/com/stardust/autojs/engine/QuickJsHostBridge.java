@@ -5,6 +5,7 @@ import android.accessibilityservice.GestureDescription;
 import android.app.Activity;
 import android.content.Context;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -35,8 +36,11 @@ import com.stardust.autojs.core.inputevent.InputEventObserver;
 import com.stardust.autojs.core.inputevent.TouchObserver;
 import com.stardust.autojs.core.database.Database;
 import com.stardust.autojs.core.database.DatabaseResultSet;
+import com.stardust.autojs.core.image.ImageWrapper;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
+import com.stardust.autojs.runtime.api.OCRResult;
+import com.stardust.autojs.runtime.api.Ocr;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
 import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.autojs.runtime.api.Yolo;
@@ -96,6 +100,9 @@ final class QuickJsHostBridge implements AutoCloseable,
     private final ScriptRuntime mRuntime;
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
     private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
+    /** QuickJS 的 `$ocr.create()` 会话（Rhino 的 __ocr__.js 也是「每次调用一个新对象」）。 */
+    private final AtomicLong mNextOcrHandle = new AtomicLong(1);
+    private final Map<Long, Ocr> mOcrSessions = new ConcurrentHashMap<>();
     private final MutableOkHttp mHttpClient = new MutableOkHttp();
     private final ArrayBlockingQueue<String> mSystemEventQueue = new ArrayBlockingQueue<>(256);
     // Shared event bus across all QuickJS engines (parent + workers). Each engine
@@ -798,6 +805,98 @@ final class QuickJsHostBridge implements AutoCloseable,
             Log.w("QuickJsHostBridge", "Cannot close YOLO detector", error);
         }
         return true;
+    }
+
+    // ---- OCR（$ocr）----
+    //
+    // 接口面与 Rhino 的 modules/engine/src/main/assets/modules/__ocr__.js 保持一致：
+    //   $ocr.create([options]) -> { detect(image[, options]), release(), isReleased() }
+    //   $ocr.liveCount()
+    // 后端是 ML Kit 中文文字识别（离线、模型内置），与 Pro 的 PaddleOCR 不同：
+    // Pro 的 models / cpuPowerMode / parallelThreads 这类选项接受但不改变识别引擎。
+
+    /** `$ocr.create([options])`：建一个独立会话（脚本忘记 release 时靠引擎销毁兜底）。 */
+    public long ocrCreate() {
+        Ocr session = new Ocr(mRuntime);
+        long handle = mNextOcrHandle.getAndIncrement();
+        mOcrSessions.put(handle, session);
+        return handle;
+    }
+
+    /**
+     * `session.detect(image[, options])`：RGBA 字节 → Bitmap → ML Kit，结果转 JSON（bootstrap 侧解析）。
+     *
+     * <p>走 RGBA 直接缓冲区的原因与 YOLO 一致：帧在 native 侧就是 CV_8UC4 的 Mat，
+     * 把它整块交给 Java 比逐个像素跨 JNI 调用快得多。
+     */
+    public String ocrDetect(long handle, ByteBuffer rgba, int width, int height, int rowStride,
+                            int max, boolean detectRotation,
+                            int regionX, int regionY, int regionWidth, int regionHeight)
+            throws JSONException {
+        Ocr session = mOcrSessions.get(handle);
+        if (session == null || session.isReleased()) {
+            throw new IllegalStateException("QuickJS OCR 会话不存在或已释放");
+        }
+        if (rgba == null || width <= 0 || height <= 0) {
+            throw new IllegalArgumentException("OCR 需要一张有效图像");
+        }
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        try {
+            // 按行拷：rowStride 可能大于 width*4（Mat 的行对齐）
+            byte[] pixels = new byte[width * height * 4];
+            ByteBuffer source = rgba.duplicate();
+            int rowBytes = width * 4;
+            for (int row = 0; row < height; row++) {
+                source.position(row * rowStride);
+                source.get(pixels, row * rowBytes, rowBytes);
+            }
+            bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));
+            ImageWrapper image = ImageWrapper.ofBitmap(bitmap);
+            int[] region = (regionWidth > 0 && regionHeight > 0)
+                    ? new int[]{regionX, regionY, regionWidth, regionHeight}
+                    : null;
+            OCRResult[] results = session.detect(image, max, detectRotation, region);
+            JSONArray array = new JSONArray();
+            for (OCRResult result : results) {
+                JSONObject item = new JSONObject();
+                item.put("text", result.getText() == null ? "" : result.getText());
+                item.put("confidence", result.getConfidence());
+                item.put("rotation", result.getRotation());
+                item.put("rotationConfidence", result.getRotationConfidence());
+                Rect bounds = result.getBounds();
+                JSONObject box = new JSONObject();
+                if (bounds != null) {
+                    box.put("left", bounds.left);
+                    box.put("top", bounds.top);
+                    box.put("right", bounds.right);
+                    box.put("bottom", bounds.bottom);
+                    box.put("width", bounds.width());
+                    box.put("height", bounds.height());
+                    box.put("centerX", bounds.centerX());
+                    box.put("centerY", bounds.centerY());
+                }
+                item.put("bounds", box);
+                array.put(item);
+            }
+            return array.toString();
+        } finally {
+            bitmap.recycle();
+        }
+    }
+
+    /** `session.release()`：幂等（重复释放返回 false，与 Rhino 侧一致）。 */
+    public boolean ocrRelease(long handle) {
+        Ocr session = mOcrSessions.remove(handle);
+        if (session == null) {
+            return false;
+        }
+        session.release();
+        return true;
+    }
+
+    /** `$ocr.liveCount()`：进程内未释放的会话数（探针用）。 */
+    public int ocrLiveCount() {
+        return Ocr.liveCount();
     }
 
     private static String normalizeQuickJsBackend(String backend) {
@@ -5507,6 +5606,14 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
         }
         mYoloSessions.clear();
+        for (Ocr session : new ArrayList<>(mOcrSessions.values())) {
+            try {
+                session.release();
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "Cannot release OCR session", error);
+            }
+        }
+        mOcrSessions.clear();
         mEngineResults.clear();
     }
 
