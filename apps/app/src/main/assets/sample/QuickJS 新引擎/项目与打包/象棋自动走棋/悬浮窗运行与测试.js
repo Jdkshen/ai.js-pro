@@ -1424,6 +1424,34 @@ function needHideForCapture() {
     return overlap === null ? true : overlap;
 }
 
+/**
+ * autorun 自动定位后的「几何验证」：字形真读一帧，读出乱局（规则门不过）⇒ 判定位不可信。
+ * ⚠️ 2026-09-24 真机事故：`pickGrid` 兜底在中局盘上交付过偏移 (6,-92) 的**假几何**
+ *   （字形全线读串：24 子・23 车・帅将 0），面板却当「定位成功」直接开跑 ⇒ 用户看到「不走了」。
+ *   宁可不自动开始（让用户手动定位），也不能拿假几何跑。只验一帧，成本 ~300ms。
+ * @return true = 几何可信（或全是动画帧，无法判定）；false = 首帧就说局面不可信
+ */
+function verifyAutorunGeometry() {
+    for (let i = 0; i < 2; i++) {
+        let probe = null;
+        try {
+            probe = boardService.recognizeSmart({});
+        } catch (error) {
+            probe = { ok: false, reason: String(error) };
+        }
+        if (probe && probe.ok) {
+            return true;
+        }
+        if (probe && probe.unstable && i === 0) {
+            sleep(250);   // 动画中间帧 → 等一帧再试
+            continue;
+        }
+        logLine("几何验证：首帧识别不过 —— " + ((probe && probe.reason) || "未知"));
+        return false;
+    }
+    return true;
+}
+
 // ---- 识别绘制（给人审的）----
 // 画板是系统悬浮窗，**`screencap` 会把它一起截进去** → 抓帧前必须收掉，
 // 否则绿框/文字会被当成棋盘上的东西、直接把识别搞坏（面板的 grabFrame 已处理）。
@@ -5323,24 +5351,33 @@ function main() {
             } catch (error) {
                 hasGrid = false;
             }
+            let geometryOk = true;
             if (!hasGrid && auto.locate !== false) {
                 logLine("autorun：还没有几何，先自动定位校准（auto.locate=false 可关）");
                 locateAndCalibrate();
+                if (auto.verifyLocate !== false && !verifyAutorunGeometry()) {
+                    geometryOk = false;
+                    logLine("⚠ 自动定位后的首帧识别不过 → 几何可疑，不自动开始；请手动「定位校准」再按开始");
+                }
             }
-            startLoop();
-            if (auto.declareTurn) {
-                // 刚启动时状态机还没观察过任何局面，assertTurn 会被拒；等第一个观察成功的 tick 再声明
-                pendingDeclare = true;
-                logLine("autorun：首个观察成功后会自动声明「现在轮到我」");
-            }
-            const stopAfterMs = auto.stopAfterMs == null ? 0 : Number(auto.stopAfterMs);
-            if (stopAfterMs > 0) {
-                // 无人值守验证「开始 → 停止」两条路径（watch 模式下不点击棋盘，安全）
-                setTimeout(function () {
-                    logLine("autorun：到时自动停止（" + stopAfterMs + "ms）");
-                    stopLoop();
-                    render();
-                }, stopAfterMs);
+            if (!geometryOk) {
+                // 保持未运行（本函数尾部照常 render）—— 不拿假几何跑
+            } else {
+                startLoop();
+                if (auto.declareTurn) {
+                    // 刚启动时状态机还没观察过任何局面，assertTurn 会被拒；等第一个观察成功的 tick 再声明
+                    pendingDeclare = true;
+                    logLine("autorun：首个观察成功后会自动声明「现在轮到我」");
+                }
+                const stopAfterMs = auto.stopAfterMs == null ? 0 : Number(auto.stopAfterMs);
+                if (stopAfterMs > 0) {
+                    // 无人值守验证「开始 → 停止」两条路径（watch 模式下不点击棋盘，安全）
+                    setTimeout(function () {
+                        logLine("autorun：到时自动停止（" + stopAfterMs + "ms）");
+                        stopLoop();
+                        render();
+                    }, stopAfterMs);
+                }
             }
         }
         renderParamSliders();   // 参数滑条始终反映当前值（autorun 可能改过 movetime/线程）
