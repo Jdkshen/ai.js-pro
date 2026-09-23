@@ -47,6 +47,7 @@ function createController(options) {
     function reject(name, reason, arg) {
         counters[name + ":rejected"] = (counters[name + ":rejected"] || 0) + 1;
         history.push({ at: Date.now(), name: name, ok: false, reason: reason, arg: arg == null ? null : arg });
+        if (history.length > 100) { history.shift(); }
         if (recorder) {
             recorder.log("命令 " + name + " 被拒：" + reason);
         }
@@ -126,8 +127,10 @@ function createController(options) {
         } catch (exception) {
             error = String(exception && exception.message ? exception.message : exception);
         }
+        const failed = error != null || result === false || (result && result.ok === false);
+        const reason = error || (result && result.reason) || (failed ? "处理函数报告失败" : null);
         history.push({
-            at: started, name: key, ok: error == null, error: error,
+            at: started, name: key, ok: !failed, error: error, reason: reason,
             ms: Date.now() - started, arg: arg == null ? null : arg
         });
         if (history.length > 100) {
@@ -136,7 +139,7 @@ function createController(options) {
         if (error != null && recorder) {
             recorder.log("命令 " + key + " 执行出错：" + error);
         }
-        return { ok: error == null, name: key, result: result, error: error };
+        return { ok: !failed, name: key, result: result, error: error, reason: reason };
     }
 
     return {

@@ -132,7 +132,7 @@ function infer(before, side, observed, options) {
     }
 
     // 严格两步也失败 → 再试一次**带装饰容差**的两步解释（见函数注释）。
-    const tolerant = inferPairWithDecorationTolerance(before, side, observed);
+    const tolerant = inferPairWithDecorationTolerance(before, side, observed, opts);
     if (tolerant) {
         return {
             status: STATUS.MOVE_PAIR,
@@ -157,6 +157,248 @@ function infer(before, side, observed, options) {
 
 /** 最近一次容差两步的解释情况（诊断用：真机上为什么没匹配上）。 */
 let lastTolerantDebug = null;
+
+/** 兵种名（日志用；`transition` 层不该依赖界面，所以就在这儿放一份最小映射）。 */
+const TRACK_PIECE_NAME = {
+    K: "帅", k: "将", A: "仕", a: "士", B: "相", b: "象",
+    N: "马", n: "马", R: "车", r: "车", C: "炮", c: "炮", P: "兵", p: "卒"
+};
+
+/**
+ * ★ 差分追踪（2026-09-20，用户提的算法）：**先看哪一格动了，再问那个兵种能不能这么走**。
+ *
+ * 与 `infer()` 的分工：
+ *  · `infer()` 是「枚举该方全部合法着法 × 整盘比对」：解释力最强，但**落点格被游戏画花**时
+ *    （高亮环把刚落下的子读成别的兵种/颜色 —— 真机 now24 实测 22 次「轮次推不出来」）会全军覆没；
+ *  · 这里是「起点空了 + 终点多了个东西 ⇒ 只可能是这一枚子走的」+ `legal.isLegalMove` 的
+ *    **兵种规则校验**（马腿 / 象眼 / 炮架 / 九宫 / 过河 / 自将）—— 只看两个格子 + 一段路程，
+ *    而且**不依赖落点格读成了什么**：把落点读成 `p`，也照样认得出「炮 C2→C6」。
+ *
+ * 收得很紧（宁可返回 null 交给 infer，也不乱认）：
+ *  ① 差异格里不许有任何 `?`（看不清就不下追踪结论）；
+ *  ② 「同字母换大小写」是红黑读反的噪声，不算「多了一个子」；
+ *  ③ 单步要求恰好「一个起点空 + 一个终点有子」，两步（我方 + 应手）要求恰好各两个；
+ *     每一种配对都要过**兵种规则**，唯一合法的那一种才算数（0 个或 ≥2 个一律返回 null）；
+ *  ④ 起点残影（终点收到子、起点却还留着同一个子）只在 `allowSourceGhost` 时认
+ *     —— 与 infer 的容差路同一条判据（单帧分不出残影 / 幻觉）。
+ *
+ * @returns 与 `infer()` 同形状；**返回 null = 追踪给不出结论**，调用方去跑 `infer()`。
+ */
+function inferTracked(before, side, observed, options) {
+    const opts = options || {};
+    if (!before || !observed || before.length !== observed.length) {
+        return null;
+    }
+    const diff = legal.diffBoards(before, observed);
+    if (diff.length === 0) {
+        return null;                                  // 没变化 ⇒ 交给 infer 判 UNCHANGED
+    }
+    // ---- 分类：① 起点空了（**那个棋不在那个位置了** —— 用户口径）② 终点多了子（含吃子换子）
+    //          ③ 读成 '?'（多半是刚落点的光环：看不到子，但那一格显然有东西）
+    const vacated = [];
+    const arrived = [];
+    const blurred = [];
+    for (let k = 0; k < diff.length; k++) {
+        const item = diff[k];
+        const wasThere = item.before;
+        const seen = item.after;
+        if (wasThere === "?") {
+            return null;                              // 可靠基准不含 '?' ⇒ 不该发生
+        }
+        if (seen === "?") {
+            blurred.push(item.index);
+            continue;
+        }
+        const had = typeof wasThere === "string" && wasThere.length === 1;
+        const has = typeof seen === "string" && seen.length === 1;
+        if (had && has && isCaseFlip(wasThere, seen)) {
+            continue;                                 // 红黑读反：那格没动，纯噪声
+        }
+        if (had && !has) {
+            vacated.push(item.index);                 // ★ 那个棋不在那个位置了
+        } else if (has) {
+            arrived.push(item.index);                 // 多了子（含「换了子」= 吃子）
+        }
+    }
+    const red = side === "w" || side === "W";
+
+    /** 校验「src → dest」这一步是不是该走棋方（moverRed）的合法着法；不是就返回 null。 */
+    function stepOf(board, src, dest, moverRed) {
+        const piece = board[src];
+        if (typeof piece !== "string" || piece.length !== 1 || piece === "?") {
+            return null;
+        }
+        if (rules.isRedPiece(piece) !== moverRed) {
+            return null;                              // 起点那枚子不是该方走的
+        }
+        const fromCol = src % 9;
+        const fromRow = Math.floor(src / 9);
+        const toCol = dest % 9;
+        const toRow = Math.floor(dest / 9);
+        const verdict = legal.isLegalMove(board, fromCol, fromRow, toCol, toRow,
+            moverRed ? "w" : "b");
+        if (!verdict.legal) {
+            return null;
+        }
+        return {
+            fromCol: fromCol, fromRow: fromRow, toCol: toCol, toRow: toRow,
+            iccs: rules.moveToIccs({ fromCol: fromCol, fromRow: fromRow, toCol: toCol, toRow: toRow }),
+            piece: piece
+        };
+    }
+
+    /**
+     * 这一步能不能解释整张观测（**只看起点/落点两格，别处不许有真实变化**）：
+     *   · 起点：必须空（或开 `allowSourceGhost` 时的残影）；
+     *   · 落点：**随便** —— 高亮环/木纹会把刚落下的子读成别的兵种、别的颜色、甚至只读得出 '?'；
+     *     那格是什么子是着法推出来的已知事实，按着法改正；
+     *   · 别处：只容忍「同字母换大小写」的红黑读反。
+     * 另外要求**落点看得到东西**（子或 '?'）：两边都读空多半是「子还在飞」，不能算走完。
+     */
+    function fits(move) {
+        const applied = legal.applyMove(before, move);
+        const src = move.fromRow * 9 + move.fromCol;
+        const dest = move.toRow * 9 + move.toCol;
+        const probe = legal.diffBoards(applied.board, observed);
+        for (let k = 0; k < probe.length; k++) {
+            const item = probe[k];
+            const index = item.index;
+            if (index === src) {
+                if (isCaseFlip(item.before, item.after)) {
+                    continue;
+                }
+                if (opts.allowSourceGhost && isSourceGhost(before, item, index)) {
+                    continue;
+                }
+                return false;
+            }
+            if (index === dest) {
+                continue;                             // 落点随便（光环/看不清/读成敌色都行）
+            }
+            if (isCaseFlip(item.before, item.after)) {
+                continue;                             // 别处红黑读反：那格没动
+            }
+            return false;                             // 还有别的真实变化 ⇒ 不是这一步
+        }
+        const atDest = observed[dest];
+        if (typeof atDest !== "string" || atDest.length !== 1) {
+            return false;                             // 落点整格空的 ⇒ 多半是「子还在飞」，不算走完
+        }
+        // 「落点看得到东西」要分吃子 / 非吃子（自检抓过一次：吃子时敌子还在原地也被当成「到了」）：
+        //   · 吃子（那格原来有敌子）⇒ 那枚敌子必须**已经不在**（读成我们的子、读成别的、或 '?' 都行）；
+        //   · 非吃子（那格原来空）⇒ 看到子或 '?' 就行。
+        const wasAtDest = before[dest] || null;
+        if (wasAtDest) {
+            return atDest !== wasAtDest;
+        }
+        return true;
+    }
+
+    if (vacated.length <= 1) {
+        // ---- 单步：**只枚举那一枚子自己的合法走法**（不是全方几十手）——
+        //      「按对方的原来位置扫描：那个棋不在那个位置了 ⇒ 按它的走法规则找它去了哪儿」
+        let sources = vacated.slice();
+        if (vacated.length === 0) {
+            if (!opts.allowSourceGhost) {
+                return null;
+            }
+            // 起点残影：终点那枚子来自基准里哪一格？同色的子可能不止一枚，逐个试（规则 + fits 会筛）
+            const anchor = arrived.length ? arrived[0] : (blurred.length ? blurred[0] : -1);
+            const seenPiece = anchor >= 0 ? observed[anchor] : null;
+            if (typeof seenPiece !== "string" || seenPiece.length !== 1 || seenPiece === "?") {
+                return null;                          // 看不清那枚子是什么 ⇒ 找不到来源
+            }
+            for (let i = 0; i < before.length; i++) {
+                if (sameColour(before[i], seenPiece)) {
+                    sources.push(i);
+                }
+            }
+            if (sources.length === 0 || sources.length > 4) {
+                return null;                          // 同色子太多，说不准是哪一枚 ⇒ 交给 infer
+            }
+        }
+        const found = [];
+        for (let i = 0; i < sources.length && found.length < 2; i++) {
+            const src = sources[i];
+            const piece = before[src];
+            if (typeof piece !== "string" || piece.length !== 1 || piece === "?") {
+                continue;
+            }
+            if (rules.isRedPiece(piece) !== red) {
+                continue;                             // 不是该走棋方的子
+            }
+            let list = [];
+            try {
+                list = legal.legalMoves(before, src % 9, Math.floor(src / 9));
+            } catch (error) {
+                list = [];
+            }
+            for (let j = 0; j < list.length && found.length < 2; j++) {
+                if (!fits(list[j])) {
+                    continue;
+                }
+                found.push({
+                    fromCol: list[j].fromCol, fromRow: list[j].fromRow,
+                    toCol: list[j].toCol, toRow: list[j].toRow,
+                    iccs: rules.moveToIccs(list[j]),
+                    piece: piece
+                });
+            }
+        }
+        if (found.length !== 1) {
+            return null;                              // 0 = 这一步解释不了；≥2 = 不唯一 ⇒ 交给 infer
+        }
+        const move = found[0];
+        const applied = legal.applyMove(before, move);
+        return {
+            status: STATUS.MOVE,
+            moves: [move],
+            side: side,
+            nextSide: opposite(side),
+            candidates: [move],
+            board: applied.board,
+            tracked: true,
+            // reason 必须**逐帧稳定**（驱动拿它做「同一解释连续两帧一致」的跨帧佐证），
+            // 所以别把「落点那一帧读成了什么」写进来。
+            reason: "按差分追踪：" + move.iccs + "（" + (TRACK_PIECE_NAME[move.piece] || move.piece) +
+                (applied.captured ? " 吃 " + (TRACK_PIECE_NAME[applied.captured] || applied.captured) : "") +
+                "）"
+        };
+    }
+
+    if (vacated.length === 2 && arrived.length === 2 && opts.allowPair !== false) {
+        // ---- 两步（我方一步 + 对方应手，确认期间常见）：两种配对都试，唯一合法的才算数
+        const orders = [[0, 1], [1, 0]];
+        const found = [];
+        for (let p = 0; p < orders.length; p++) {
+            const first = stepOf(before, vacated[orders[p][0]], arrived[orders[p][0]], red);
+            if (!first) {
+                continue;
+            }
+            const mid = legal.applyMove(before, first).board;
+            const second = stepOf(mid, vacated[orders[p][1]], arrived[orders[p][1]], !red);
+            if (!second) {
+                continue;
+            }
+            found.push({ first: first, second: second, board: legal.applyMove(mid, second).board });
+        }
+        if (found.length !== 1) {
+            return null;
+        }
+        const pair = found[0];
+        return {
+            status: STATUS.MOVE_PAIR,
+            moves: [pair.first, pair.second],
+            side: side,
+            nextSide: side,
+            candidates: [pair.first, pair.second],
+            board: pair.board,
+            tracked: true,
+            reason: "按差分追踪：我方 " + pair.first.iccs + " + 对方应手 " + pair.second.iccs
+        };
+    }
+    return null;
+}
 
 /** ICCS 记法（文件字母 a..i + 行号 9..0）里第 which 个端点的 90 格下标；非法返回 -1。 */
 function squareIndex(iccs, which) {
@@ -193,6 +435,51 @@ function isCaseFlip(before, after) {
 }
 
 /**
+ * 起点「残影」：那格的子**确实走了**（预测盘面里已经空了），模型却还在原地读得到它。
+ *
+ * 真机实证（2026-09-20，K40 + 天天象棋，日志 17:42:31）：对方卒 g6g5 之后，观测在
+ * 起点 (6,3) 仍有一个卒（同时 (6,4) 也有）—— 差异落在**起点**上，而容差函数原先要求
+ * 「起点必须完全一致」⇒ 任何合法着法都解释不了 ⇒ 轮次推不出来 ⇒ 看门狗 ⇒ 恢复（整轮白走）。
+ * 离线复现：`.artifacts/tools/probe-ghost-source.js`（把起点抹空，g6g5 立刻被接受）。
+ *
+ * ⚠️ **单帧分不出「残影」与「其实没走、落点是幻觉」**（两种情况都是「起点与落点各一个子」），
+ * 所以默认**不开**（自检 R05e/R05g 的反向保护就靠它）—— 只有驱动在「同一个解释连续两帧
+ * 一致」的跨帧佐证下才传 `allowSourceGhost: true` 打开（见 auto-driver 的 tolerantSupportedByTwoFrames）。
+ *
+ * 判据收得很紧：观测到的那格必须与**走之前**的值完全相同（同一个字，含大小写）——
+ * 「有别的子走进了起点」不会与旧值一模一样，所以不会被当成噪声吞掉。
+ */
+function isSourceGhost(beforeBoard, item, index) {
+    if (!beforeBoard || index == null) {
+        return false;
+    }
+    const wasThere = beforeBoard[index];
+    if (typeof wasThere !== "string" || wasThere.length !== 1) {
+        return false;
+    }
+    const seen = item && item.after;
+    return typeof seen === "string" && seen === wasThere;
+}
+
+/**
+ * 起点残影能不能算噪声：**必须先在落点看到子到位**（正面证据）。
+ *
+ * 否则「起点还留着子 + 落点读成空」会被解释成「走了一手」—— 而它更像「这手根本没发生、
+ * 落点是漏检」（真机 2026-09-14 那类“第二手没走成”的帧就是长这样）。
+ */
+function destReceivedPiece(beforeBoard, src, dest, observed) {
+    const moved = beforeBoard && beforeBoard[src];
+    const seen = observed && observed[dest];
+    if (typeof moved !== "string" || moved.length !== 1) {
+        return false;
+    }
+    if (typeof seen !== "string" || seen.length !== 1 || seen === "?") {
+        return false;
+    }
+    return sameColour(moved, seen);
+}
+
+/**
  * 带装饰容差的**单步**解释（严格推断与两步解释都失败后，驱动才用它）。
  *
  * 允许两种「模型读错」，其余格子必须与「基准 + 这一步」完全一致：
@@ -212,10 +499,11 @@ function isCaseFlip(before, after) {
  *
  * @returns { move, iccs, board, nextSide, colorNoise } | null
  */
-function inferSingleWithDecorationTolerance(before, side, observed) {
+function inferSingleWithDecorationTolerance(before, side, observed, opts) {
     if (!before || !observed) {
         return null;
     }
+    const allowSourceGhost = !!(opts && opts.allowSourceGhost);
     let moves = [];
     try {
         moves = legal.allLegalMoves(before, side);
@@ -239,11 +527,19 @@ function inferSingleWithDecorationTolerance(before, side, observed) {
         const diff = legal.diffBoards(after, observed);
         const real = [];
         let colorNoise = 0;
+        // 起点残影要**先看到落点有子**才敢认（否则「起点留子 + 落点读空」会被误认成走了一手）
+        const ghostOk = allowSourceGhost && destReceivedPiece(before, src, dest, observed);
         for (let k = 0; k < diff.length; k++) {
             const item = diff[k];
             const index = item.row * 9 + item.col;
             if (index !== src && index !== dest && isCaseFlip(item.before, item.after)) {
                 colorNoise += 1;   // 同字异色噪声：那格子没动，按基准纠回
+                continue;
+            }
+            // ★ 起点残影（2026-09-20 真机）：那格的子确实走了，模型还在原地读得到它。
+            //   只在调用方明确开了 allowSourceGhost 时才算噪声（单帧分不出残影/幻觉）。
+            if (ghostOk && index === src && isSourceGhost(before, item, index)) {
+                colorNoise += 1;
                 continue;
             }
             real.push(index);
@@ -265,6 +561,85 @@ function inferSingleWithDecorationTolerance(before, side, observed) {
         board: fits[0].board.slice(),
         nextSide: opposite(side),
         colorNoise: fits[0].colorNoise
+    };
+}
+
+/**
+ * 「被盖住的应手」推断：走棋方的起点/落点被游戏「上一步」标记盖住、读不出来，观测层又把那格
+ * 按旧基准填回去（未知=没变）⇒ 差分看起来「没动」或「多出来一个子」，两步推断全失败。
+ *
+ * 真机现场（K40 2026-09-21，败局复盘）：黑炮 b7b5 命中 (1,4) 带标记 ⇒ 每帧「顽固未知 1 格→按旧基准填」
+ * ⇒ 盘面永远没变化 ⇒ 轮次停在「轮到对方」5 分钟，直到被对手绝杀。
+ *
+ * 思路：对方其实已经走完了一手，只是**被盖住的那几格**读不出来。枚举它全部合法着法 m：
+ * apply(base, m) 与 observed 的每一处差异都只落在 covered 格上（或「没被这步碰过的格子只是红黑读反」）；
+ * 有且只有一个 m 说得通 ⇒ 就是这一手。
+ *
+ * 收紧点（宁可继续等，也不乱认）：
+ *  · src / dest 至少一个在 covered 里（不然这属于普通两步推断的活）；
+ *  · 非 covered 格必须**完全一致**（只容忍同字母大小写翻转）；
+ *  · 唯一解才认，≥ 2 个候选一律不认。
+ *
+ * @returns { move, iccs, board, nextSide } | null
+ */
+function inferSingleThroughCovered(before, side, observed, coveredIndexes) {
+    if (!before || !observed || !coveredIndexes || !coveredIndexes.length) {
+        return null;
+    }
+    const covered = {};
+    for (let i = 0; i < coveredIndexes.length; i++) {
+        covered[coveredIndexes[i]] = true;
+    }
+    let moves = [];
+    try {
+        moves = legal.allLegalMoves(before, side);
+    } catch (error) {
+        return null;
+    }
+    const fits = [];
+    for (let i = 0; i < moves.length && fits.length < 2; i++) {
+        const move = moves[i];
+        const src = squareIndex(move.iccs, 0);
+        const dest = squareIndex(move.iccs, 1);
+        if (src < 0 || dest < 0) {
+            continue;
+        }
+        if (!covered[src] && !covered[dest]) {
+            continue;   // 这一手解释不了被盖住的格 → 不归这条路管
+        }
+        let after = null;
+        try {
+            after = legal.applyMove(before, move).board;
+        } catch (error) {
+            continue;
+        }
+        const diff = legal.diffBoards(after, observed);
+        let ok = true;
+        for (let k = 0; k < diff.length; k++) {
+            const item = diff[k];
+            const index = item.row * 9 + item.col;
+            if (covered[index]) {
+                continue;   // 被盖住的格：读不出来的，差异随便
+            }
+            if (isCaseFlip(item.before, item.after)) {
+                continue;   // 同字异色噪声：那格没动
+            }
+            ok = false;
+            break;
+        }
+        if (!ok) {
+            continue;
+        }
+        fits.push({ move: move, board: after });
+    }
+    if (fits.length !== 1) {
+        return null;
+    }
+    return {
+        move: fits[0].move,
+        iccs: fits[0].move.iccs,
+        board: fits[0].board.slice(),
+        nextSide: opposite(side)
     };
 }
 
@@ -300,7 +675,8 @@ function usableAtMoveEnd(expected, observed) {
  *  - 每格必须与原子的**颜色一致**（红黑串色另有专门规则处理，这里不接）；
  *  - 必须有**唯一**解释（≥2 个候选一律判未知）。
  */
-function inferPairWithDecorationTolerance(before, side, observed) {
+function inferPairWithDecorationTolerance(before, side, observed, opts) {
+    const allowSourceGhost = !!(opts && opts.allowSourceGhost);
     const ownMoves = legal.allLegalMoves(before, side);
     const debug = { ownMoves: ownMoves.length, tried: 0, minDiff: -1, best: "", fits: 0 };
     lastTolerantDebug = debug;
@@ -329,20 +705,28 @@ function inferPairWithDecorationTolerance(before, side, observed) {
                         (item.after || "空");
                 }).join(",");
             }
-            if (diff.length > 2) {
+            // 差异上限：两手各自的落点装饰（≤2）+ 两个起点的残影（≤2）+ 几格同字异色。
+            if (diff.length > 6) {
                 continue;
             }
             let usable = true;
             for (let k = 0; k < diff.length; k++) {
-                const index = diff[k].row * 9 + diff[k].col;
-                if (index !== firstDest && index !== secondDest) {
-                    usable = false;
-                    break;
+                const item = diff[k];
+                const index = item.row * 9 + item.col;
+                if (index === firstDest || index === secondDest) {
+                    if (!usableAtMoveEnd(endBoard[index], observed[index])) {
+                        usable = false;
+                        break;
+                    }
+                    continue;
                 }
-                if (!usableAtMoveEnd(endBoard[index], observed[index])) {
-                    usable = false;
-                    break;
+                // 起点残影 / 同字异色：那格子的子没动（或已经走了但模型还在原地读）→ 噪声。
+                if (isCaseFlip(item.before, item.after) ||
+                    (allowSourceGhost && isSourceGhost(before, item, index))) {
+                    continue;
                 }
+                usable = false;
+                break;
             }
             if (usable) {
                 fits.push({ first: first, second: second, board: endBoard });
@@ -357,9 +741,11 @@ const XQ_TRANSITION = {
     STATUS: STATUS,
     opposite: opposite,
     infer: infer,
+    inferTracked: inferTracked,
     isCaseFlip: isCaseFlip,
     squareIndex: squareIndex,
-    inferSingleWithDecorationTolerance: inferSingleWithDecorationTolerance
+    inferSingleWithDecorationTolerance: inferSingleWithDecorationTolerance,
+    inferSingleThroughCovered: inferSingleThroughCovered
 };
 
 module.exports = XQ_TRANSITION;

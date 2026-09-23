@@ -183,13 +183,17 @@ function validateBoard(board) {
             violations.push({ index: i, char: ch, kind: "palace", message: "仕士不在九宫" });
         }
         if (upper === "B") {
-            const ownSideRows = red ? [7, 8, 9] : [0, 1, 2];
+            // 过河 = 到了对方半边（红方行 < 5，黑方行 > 4）—— 这是硬错误。
+            const ownSideRows = red ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
             if (ownSideRows.indexOf(row) < 0) {
                 errors.push((red ? "红相" : "黑象") + "过河（第 " + (row + 1) + " 行第 " + (col + 1) + " 列）");
                 violations.push({ index: i, char: ch, kind: "river", message: "相象过河" });
             }
-            // 红相只能落在第 7、9 行，黑象只能落在第 0、2 行 —— 告警应该在**其它行**时发
-            const ownElephant = red ? (row === 7 || row === 9) : (row === 0 || row === 2);
+            // 真·象位：红相 {5(河沿 c4/g4), 7(a2/e2/i2), 9(底线)}，黑象对称 {4,2,0}。
+            // ⚠️ 2026-09-21 真机事故：旧集合写成 {7,8,9} —— 漏了河沿的 5，还把非象位行 8 放行。
+            //    引擎走标准着法「飞相 e2→c4」后，河沿那枚相每帧被判「过河」⇒ inspect 永远不过
+            //    ⇒ 算棋全失败 ⇒ 无限 RECOVERING（K40 卡死 14 分钟）。行 5 是**合法象位**，别删。
+            const ownElephant = red ? (row === 5 || row === 7 || row === 9) : (row === 0 || row === 2 || row === 4);
             if (!ownElephant) {
                 warnings.push((red ? "红相" : "黑象") + "落在非象位行（第 " + (row + 1) + " 行）");
             }

@@ -31,64 +31,112 @@ const STEPS = [
   "P5  真机验收：打包独立 APK 后回归"
 ];
 
+const UI = {
+    page: "#0F141B", panel: "#18212B", panelAlt: "#202B37",
+    text: "#F3F6FA", muted: "#9CA9B8", blue: "#4D8DCC",
+    green: "#2E7D5B", red: "#A93E45", amber: "#B37A24"
+};
+
 ui.layout(
-  '<vertical padding="18">' +
-  '  <text text="象棋自动走棋" textSize="24sp" textStyle="bold"/>' +
-  '  <text id="version" textSize="13sp" textColor="#888888"/>' +
-  '  <text id="status" textSize="14sp" textColor="#d32f2f"/>' +
-  // 悬浮窗面板放最上面、不进滚动区：这是「在真实棋局上操作与验收」的入口，要一眼看得到
-  '  <frame height="12"/>' +
-  '  <text text="悬浮窗面板（浮在棋局上操作/验收）" textSize="16sp" textStyle="bold"/>' +
-  '  <button id="floatyOpen" text="打开悬浮窗面板（运行与测试）"/>' +
-  '  <button id="floatyClose" text="关闭悬浮窗面板"/>' +
-  '  <text id="floatyStatus" textSize="12sp" textColor="#0d47a1"/>' +
-  '  <frame height="6"/>' +
-  '  <scroll>' +
+  '<vertical bg="' + UI.page + '" padding="16">' +
+  '  <horizontal gravity="center_vertical">' +
+  '    <vertical layout_weight="1">' +
+  '      <text text="象棋助手" textSize="24sp" textStyle="bold" textColor="' + UI.text + '"/>' +
+  '      <text id="version" textSize="12sp" textColor="' + UI.muted + '"/>' +
+  '    </vertical>' +
+  '    <button id="floatyOpen" text="悬浮面板" bg="' + UI.blue + '" textColor="#FFFFFF"/>' +
+  '  </horizontal>' +
+  '  <frame height="10"/>' +
+  '  <card cardCornerRadius="12dp" cardElevation="0dp" cardBackgroundColor="' + UI.panel + '">' +
+  '    <vertical padding="14">' +
+  '      <text id="statusIdle" text="●  未运行" textSize="18sp" textStyle="bold" textColor="' + UI.muted + '"/>' +
+  '      <text id="statusGood" text="●  观察中" textSize="18sp" textStyle="bold" textColor="#63C892"/>' +
+  '      <text id="statusWarn" text="●  等待处理" textSize="18sp" textStyle="bold" textColor="#E1A84A"/>' +
+  '      <text id="statusError" text="●  需要处理" textSize="18sp" textStyle="bold" textColor="#EF7078"/>' +
+  '      <text id="status" textSize="13sp" textColor="' + UI.muted + '"/>' +
+  '    </vertical>' +
+  '  </card>' +
+  '  <frame height="10"/>' +
+  '  <horizontal>' +
+  '    <button id="autoToggle" text="开始" layout_weight="1" bg="' + UI.green + '" textColor="#FFFFFF"/>' +
+  '    <button id="autoStop" text="停止" layout_weight="1" bg="' + UI.red + '" textColor="#FFFFFF"/>' +
+  '  </horizontal>' +
+  // 状态与停止固定在滚动区外，长日志或小屏幕上也始终能看见、能操作。
+  '  <scroll layout_weight="1">' +
   '    <vertical>' +
   '      <frame height="12"/>' +
-  '      <text text="走棋模式（当前模式决定会不会点棋盘）" textSize="16sp" textStyle="bold"/>' +
-  '      <button id="modeWatch" text="① 只识别：只看局面，不点击"/>' +
-  '      <button id="modeAdvice" text="② 着法建议：算棋并显示，不点击"/>' +
-  '      <button id="modeAuto" text="③ 自动走棋：校验通过后真的点击"/>' +
-  '      <button id="mySide" text="我方：红方（点一下切换）"/>' +
-  '      <button id="tapMethod" text="点击通道：自动（有 Shizuku 就用它）"/>' +
-  '      <button id="captureChannel" text="截图通道：自动"/>' +
-  '      <button id="assertTurn" text="现在轮到我（声明轮次基准）"/>' +
-  '      <button id="autoToggle" text="开始观察 / 暂停"/>' +
-  '      <button id="autoStop" text="停止观察（停止循环、关画板）"/>' +
-  '      <button id="pageDraw" text="绘制：开（点一下关）"/>' +
-  '      <text id="autoStatus" textSize="12sp" textColor="#0d47a1"/>' +
-  '      <frame height="14"/>' +
-  '      <text text="开发阶段" textSize="16sp" textStyle="bold"/>' +
-  '      <text id="steps" textSize="13sp" textColor="#555555"/>' +
+  '      <text text="运行模式" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
+  '      <horizontal>' +
+  '        <button id="modeWatch" text="只识别" layout_weight="1" bg="' + UI.panelAlt + '" textColor="#FFFFFF"/>' +
+  '        <button id="modeAdvice" text="着法建议" layout_weight="1" bg="' + UI.blue + '" textColor="#FFFFFF"/>' +
+  '        <button id="modeAuto" text="自动走棋" layout_weight="1" bg="' + UI.amber + '" textColor="#FFFFFF"/>' +
+  '      </horizontal>' +
+  '      <text text="自动走棋会在安全检查全部通过后操作棋盘" textSize="12sp" textColor="#D7A754"/>' +
   '      <frame height="10"/>' +
-  '      <text text="单次操作" textSize="16sp" textStyle="bold"/>' +
-  '      <button id="selfcheck" text="运行离线自检"/>' +
-  '      <button id="probe" text="查看运行环境"/>' +
-  '      <button id="locate" text="定位棋盘（真机）"/>' +
-  '      <text text="棋盘截图路径（相册里的图就能用）" textSize="13sp" textColor="#555555"/>' +
-  '      <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="13sp"/>' +
-  '      <button id="locateImage" text="定位棋盘（图片）"/>' +
-  '      <button id="recognizeImage" text="识别棋盘 → FEN（图片）"/>' +
-  '      <button id="recognizeSeq" text="连拍识别 ×3 → FEN（多帧投票）"/>' +
-  '      <text text="算棋局面（FEN，含轮次；识别成功会自动填进来）" textSize="13sp" textColor="#555555"/>' +
-  '      <input id="fen" text="rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" textSize="12sp"/>' +
-  '      <text text="棋盘范围（比例 x,y,w,h；留空用默认。定位总失败时填，例如 0.013,0.251,0.958,0.472）" textSize="13sp" textColor="#555555"/>' +
-  '      <input id="region" text="" textSize="13sp"/>' +
-  '      <button id="think" text="算棋（本地引擎）→ 最佳着法"/>' +
-  // 与面板对齐的几项（面板有、页面原来没有）：新会话 / 契约测试 / 清空
-  '      <button id="newSession" text="新会话（几何与轮次基准作废）"/>' +
-  '      <button id="contract" text="契约测试（格子契约）"/>' +
-  '      <button id="clearLog" text="清空输出"/>' +
+  '      <text text="对局设置" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
+  '      <horizontal>' +
+  '        <button id="mySide" text="我方：红方" layout_weight="1"/>' +
+  '        <button id="assertTurn" text="现在轮到我" layout_weight="1"/>' +
+  '      </horizontal>' +
+  '      <button id="captureChannel" text="截图来源：自动"/>' +
+  '      <button id="tapMethod" text="点击通道：自动"/>' +
+  '      <text id="autoStatus" textSize="12sp" textColor="#8FB9E2"/>' +
   '      <frame height="10"/>' +
-  '      <text id="output" textSize="12sp" textColor="#333333"/>' +
+  '      <text text="快捷工具" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
+  '      <horizontal>' +
+  '        <button id="locate" text="定位棋盘" layout_weight="1"/>' +
+  '        <button id="recognizeSeq" text="识别局面" layout_weight="1"/>' +
+  '      </horizontal>' +
+  '      <horizontal>' +
+  '        <button id="think" text="查看建议" layout_weight="1"/>' +
+  '        <button id="pageDraw" text="识别绘制：开" layout_weight="1"/>' +
+  '      </horizontal>' +
+  '      <button id="advancedToggle" text="高级设置  ▾" bg="' + UI.panelAlt + '" textColor="' + UI.text + '"/>' +
+  '      <vertical id="advancedPanel" bg="' + UI.panel + '" padding="10">' +
+  '        <text text="悬浮窗" textSize="12sp" textColor="' + UI.muted + '"/>' +
+  '        <button id="floatyClose" text="关闭悬浮面板"/>' +
+  '        <text id="floatyStatus" textSize="12sp" textColor="#8FB9E2"/>' +
+  '        <text text="棋盘截图路径" textSize="12sp" textColor="' + UI.muted + '"/>' +
+  '        <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="12sp"/>' +
+  '        <horizontal>' +
+  '          <button id="locateImage" text="定位图片" layout_weight="1"/>' +
+  '          <button id="recognizeImage" text="识别图片" layout_weight="1"/>' +
+  '        </horizontal>' +
+  '        <text text="当前局面 FEN" textSize="12sp" textColor="' + UI.muted + '"/>' +
+  '        <input id="fen" text="rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" textSize="12sp"/>' +
+  '        <text text="棋盘范围 x,y,w,h（留空自动定位）" textSize="12sp" textColor="' + UI.muted + '"/>' +
+  '        <input id="region" text="" textSize="12sp"/>' +
+  '      </vertical>' +
+  '      <button id="diagnosticToggle" text="诊断工具  ▾" bg="' + UI.panelAlt + '" textColor="' + UI.text + '"/>' +
+  '      <vertical id="diagnosticPanel" bg="' + UI.panel + '" padding="10">' +
+  '        <horizontal>' +
+  '          <button id="selfcheck" text="离线自检" layout_weight="1"/>' +
+  '          <button id="contract" text="契约测试" layout_weight="1"/>' +
+  '        </horizontal>' +
+  '        <horizontal>' +
+  '          <button id="probe" text="运行环境" layout_weight="1"/>' +
+  '          <button id="newSession" text="新会话" layout_weight="1"/>' +
+  '        </horizontal>' +
+  '        <button id="clearLog" text="清空日志"/>' +
+  '        <text text="开发阶段" textSize="12sp" textColor="' + UI.muted + '"/>' +
+  '        <text id="steps" textSize="12sp" textColor="' + UI.muted + '"/>' +
+  '      </vertical>' +
+  '      <frame height="10"/>' +
+  '      <text text="运行记录" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
+  '      <scroll height="180dp" bg="#0A0E13" padding="10">' +
+  '        <text id="output" textSize="12sp" textColor="#C8D1DC"/>' +
+  '      </scroll>' +
+  '      <frame height="16"/>' +
   '    </vertical>' +
   '  </scroll>' +
   '</vertical>'
 );
 
-ui.version.setText("工程版本 v" + VERSION);
-ui.status.setText("等开始。自动走棋会真的点击棋盘，先读一遍模式说明。");
+ui.version.setText("本地模型 160×320 · v" + VERSION);
+ui.statusGood.setVisibility(8);
+ui.statusWarn.setVisibility(8);
+ui.statusError.setVisibility(8);
+ui.status.setText("选择模式后点击开始；停止按钮始终可用。");
 ui.steps.setText(STEPS.join("\n"));
 
 /**
@@ -120,6 +168,56 @@ function show(text) {
     ui.output.setText(text);
     console.log("[xiangqi] " + text);
 }
+
+/** 主状态卡只呈现用户需要采取的动作；内部状态名仍保留在运行记录里。 */
+function setMainStatus(state, reason) {
+    const key = String(state || "STOPPED");
+    let kind = "idle";
+    let label = "未运行";
+    if (key === "THINKING") {
+        kind = "good";
+        label = "思考中";
+    } else if (key === "WAIT_TURN") {
+        kind = "warn";
+        label = "等待对方";
+    } else if (key === "PAUSED") {
+        kind = "warn";
+        label = "已暂停";
+    } else if (key === "ERROR" || key === "RECOVERING") {
+        kind = "error";
+        label = "需要处理";
+    } else if (key === "INITIALIZING" || key === "CALIBRATING" || key === "WAIT_STABLE" ||
+               key === "PRECHECK" || key === "CLICKING" || key === "VERIFYING") {
+        kind = "good";
+        label = key === "CLICKING" || key === "VERIFYING" ? "执行中" : "观察中";
+    } else if (key === "GAME_OVER") {
+        kind = "idle";
+        label = "对局结束";
+    }
+    ui.statusIdle.setVisibility(kind === "idle" ? 0 : 8);
+    ui.statusGood.setVisibility(kind === "good" ? 0 : 8);
+    ui.statusWarn.setVisibility(kind === "warn" ? 0 : 8);
+    ui.statusError.setVisibility(kind === "error" ? 0 : 8);
+    const view = kind === "good" ? ui.statusGood : (kind === "warn" ? ui.statusWarn :
+        (kind === "error" ? ui.statusError : ui.statusIdle));
+    view.setText("●  " + label);
+    ui.status.setText(reason || "等待操作");
+}
+
+function bindSection(toggle, panel, label) {
+    let expanded = false;
+    panel.setVisibility(8);
+    toggle.setText(label + "  ▾");
+    toggle.on("click", function () {
+        expanded = !expanded;
+        panel.setVisibility(expanded ? 0 : 8);
+        toggle.setText(label + (expanded ? "  ▴" : "  ▾"));
+    });
+}
+
+bindSection(ui.advancedToggle, ui.advancedPanel, "高级设置");
+bindSection(ui.diagnosticToggle, ui.diagnosticPanel, "诊断工具");
+setMainStatus("STOPPED", "选择模式后点击开始；停止按钮始终可用。");
 
 /** 读输入框内容（不同引擎下 text()/getText() 的可用性不一样，都试一下）。 */
 function inputText(view) {
@@ -412,7 +510,8 @@ const driverModule = require("./src/automation/auto-driver.js");
 const loopLock = require("./src/automation/loop-lock.js");
 const recognizeBoard = require("./tools/recognize-board.js");
 const locateBoard = require("./tools/locate-board.js");
-const engineModule = require("./src/engine/engine.js");
+const boardServiceModule = require("./src/services/board-service.js");
+const engineModule = require("./src/engine/engine-router.js");   // 内置 JS 引擎 ⇄ Pikafish（原生 NNUE）
 const busModule = require("./src/app/panel-bus.js");
 
 // 跨引擎互锁（与悬浮窗面板共用一个文件总线）：状态互锁 + 双向停止 + 配置双向同步。
@@ -425,6 +524,49 @@ const bus = busModule.createPanelBus({
 
 const MODES = { WATCH: "watch", ADVICE: "advice", AUTO: "auto" };
 const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
+
+/**
+ * 棋盘服务（§14「入口收口」）：定位 / 几何校准 / 识别都进服务层，
+ * 主界面与悬浮窗共用同一条链（抓帧、几何版本、未知格统计不再各写一遍）。
+ *
+ * 视觉流水线（YOLO+OCR）暂时只注入悬浮窗：主界面没有常驻检测会话与
+ * 预热策略，等 ocr-runtime 统一完再打开（方案里排在第二步之后）。
+ */
+const boardService = boardServiceModule.createBoardService({
+    ports: {
+        now: function () { return Date.now(); },
+        capture: function () {
+            const granted = adapter.requestCapture("portrait");
+            if (granted === false) {
+                return null;   // 用户拒了授权：服务会报「拿不到帧」
+            }
+            const frame = adapter.capture("full", 800);
+            return frame ? { image: frame, imageObject: frame, frameObject: frame } : null;
+        }
+    },
+    locateBoard: {
+        // 服务已经拓好一帧，给 locate-board 的屏幕版复用（frame 选项），不重复截图
+        locateBoardInImage: function (image, options) {
+            return locateBoard.locateBoardOnScreen(Object.assign({}, options || {}, { frame: image }));
+        }
+    },
+    recognizeBoard: recognizeBoard,
+    /**
+     * 几何精校准：按**最终未知格数**打分挑偏移（不是几何残差 —— 残差最小的并没能减少未知格）。
+     * 为什么必须有：定位原点有系统偏差时会有几格**每一帧都认不出来**（多帧投票也洗不掉），
+     * 状态机就一直拒绝计算/落子。真机实测（K40 + 天天象棋）：原点 (81,666) → 未知格 6；
+     * 挪到 (70,662)（dx=-11,dy=-4）→ 未知格 1。定位一局只做一次，几十次推理约 2 秒可以承受。
+     */
+    calibrate: function (image, located) {
+        return recognizeBoard.calibrateGrid(image, located, {
+            orientation: "RED_BOTTOM",
+            confidence: 0.25,
+            search: { maxShift: 18, step: 7 },
+            maxCandidates: 16
+        });
+    },
+    note: function (text) { console.log("[xiangqi][board] " + text); }
+});
 
 let modeKey = MODES.WATCH;
 let tapMethodKey = "auto";
@@ -515,49 +657,10 @@ function rebuildDriver() {
         allowClick: clickAllowed,
         mySide: keepSide,
         tap: tapFunction,
-        recognize: function (options) { return recognizeBoard.recognizeScreen(options); },
-        /**
-         * 定位 + **会话级几何校准**。
-         *
-         * 为什么必须有：定位给的原点有系统性偏差时，会有几格**每一帧都认不出来**（多帧投票也洗不掉），
-         * 状态机就会一直拒绝计算/落子。真机实测（K40 + 腾讯天天象棋）：
-         * 原点 (81,666) → 未知格 6；挪到 (70,662)（dx=-11,dy=-4）→ 未知格 1。
-         * 校准按**最终未知格数**打分（不是几何残差），因为残差最小的偏移并没能减少未知格。
-         * 代价：十几次推理、约 2 秒，而定位本身一局只做一次，所以可以承受。
-         */
-        locate: function (options) {
-            const located = locateBoard.locateBoardOnScreen(options);
-            if (!located.ok) {
-                return located;
-            }
-            try {
-                // ⚠️ locateBoardOnScreen 给的是 frameObject（没有 imageObject）——
-                // 只传 imageObject 会让校准静默失败（历史 bug，已修库里的兼容）。
-                const avatar = located.imageObject || located.frameObject;
-                const calibrated = recognizeBoard.calibrateGrid(avatar, located, {
-                    orientation: "RED_BOTTOM",
-                    confidence: 0.25,
-                    search: { maxShift: 18, step: 7 },
-                    maxCandidates: 16
-                });
-                if (calibrated.ok && calibrated.grid) {
-                    console.log("[xiangqi][calibrate] 几何校准：" + calibrated.reason +
-                        "（偏移 " + calibrated.dx + "," + calibrated.dy + "，试了 " + calibrated.tried +
-                        " 个候选）" + (calibrated.layout ? (" 局面 " + calibrated.layout) : ""));
-                    return Object.assign({}, located, {
-                        grid: calibrated.grid,
-                        calibration: {
-                            dx: calibrated.dx, dy: calibrated.dy,
-                            unknown: calibrated.unknown, tried: calibrated.tried
-                        }
-                    });
-                }
-            } catch (error) {
-                console.log("[xiangqi][calibrate] 校准异常（沿用定位结果）：" +
-                    String(error && error.message ? error.message : error));
-            }
-            return located;
-        },
+        // 识别与定位都交给服务层（2026-09-20 入口收口）：服务内部把
+        // 「抓帧 → 定位 → 校准 → 识别 → 几何回写」串成一道，主界面只拿结果。
+        recognize: function (options) { return boardService.recognizeSmart(options || {}); },
+        locate: function (options) { return boardService.locate(options || {}); },
         analyze: function (position, options) { return engineModule.analyze(position, options); },
         isTrustworthy: function (grid) {
             return geometryModule.isTrustworthy(grid, { minSamples: 4, maxResidual: 0.35 });
@@ -578,7 +681,7 @@ function rebuildDriver() {
     });
     ui.mySide.setText("我方：" + sideLabel(keepSide) + "（点一下切换）");
     ui.autoStatus.setText("模式：" + MODE_LABEL[modeKey] + tapNote + "，我方：" + sideLabel(keepSide) + "，未开始");
-    ui.status.setText(MODE_LABEL[modeKey] + tapNote);
+    setMainStatus("STOPPED", "模式：" + MODE_LABEL[modeKey] + tapNote + "；我方：" + sideLabel(keepSide));
     lastDriverLine = "";
     return autoDriver;
 }
@@ -636,7 +739,7 @@ function updateAutoStatus(result) {
         lastDriverLine = text;
         ui.autoStatus.setText(text);
     }
-    ui.status.setText(machine.state() + "：" + machine.reason());
+    setMainStatus(machine.state(), machine.reason());
     drawPlan(ticket);
 }
 
@@ -768,7 +871,7 @@ function stopAuto(why) {
         overlayShown = false;
     }
     if (autoDriver) {
-        ui.status.setText("已停止（" + why + "）");
+        setMainStatus("STOPPED", "已停止（" + why + "）");
     }
 }
 
@@ -809,7 +912,7 @@ function refreshPanelLine() {
     ui.floatyStatus.setText(bus.describeOther() +
         (otherRunning ? "｜两边互锁：要本页跑，先在面板点「停止」" : ""));
     if (!autoRunning) {
-        ui.autoToggle.setText(otherRunning ? "开始观察（面板正在跑，会被拒）" : "开始观察 / 暂停");
+        ui.autoToggle.setText(otherRunning ? "面板运行中" : "开始");
     }
 }
 
@@ -962,6 +1065,8 @@ ui.autoToggle.on("click", function () {
     if (autoDriver.isRunning()) {
         autoDriver.pause();
         loopLock.release(loopLock.OWNER_MAIN);
+        ui.autoToggle.setText("继续");
+        setMainStatus("PAUSED", "票据与算棋任务已作废，不会继续点击。");
         show("已暂停：票据与算棋任务都作废了，不会再有点击。");
         return;
     }
@@ -978,6 +1083,8 @@ ui.autoToggle.on("click", function () {
         return;
     }
     autoDriver.start();
+    ui.autoToggle.setText("暂停");
+    setMainStatus("INITIALIZING", "正在取得新画面并校准棋盘。");
     driverTick();
     runAutoLoop();   // 阻塞到这里为止（详见 runAutoLoop 的退出条件）
 });
@@ -993,6 +1100,7 @@ ui.autoStop.on("click", function () {
         show("已停止：循环已停、画板已关。");
     }
     ui.autoStatus.setText("未开始（模式：" + MODE_LABEL[modeKey] + "）");
+    ui.autoToggle.setText("开始");
     lastDriverLine = "";
 });
 

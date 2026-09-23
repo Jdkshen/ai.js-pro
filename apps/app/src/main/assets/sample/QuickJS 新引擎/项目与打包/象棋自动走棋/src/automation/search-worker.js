@@ -25,7 +25,15 @@
  */
 function workerTask() {
     var dir = __args.dir;
-    var engine = require(dir + "/src/engine/engine.js");
+    // 走 engine-router：worker 里必须跟主线程同一个后端（否则面板选 Pikafish、实际还是 JS 在算）。
+    // worker 是独立引擎实例，模块状态不共享 —— 后端与配置只能从 __args 带进来。
+    var engine = require(dir + "/src/engine/engine-router.js");
+    if (__args.engine != null) {
+        engine.setBackend(String(__args.engine));
+    }
+    if (__args.pikafish != null) {
+        engine.configurePikafish(__args.pikafish);
+    }
     var options = {};
     if (__args.movetime != null) {
         options.movetime = __args.movetime;
@@ -37,9 +45,15 @@ function workerTask() {
     if (__args.side != null) {
         options.side = __args.side;
     }
+    // 规划期的排除表（游戏拒绝过的着法 + 疑似循环/长捉的着法）：以前这条路上漏传了，
+    // 结果 worker 模式下黑名单完全不生效（自检 2026-09-21 补）。
+    if (__args.excludeIccs != null) {
+        options.excludeIccs = __args.excludeIccs;
+    }
     var result = engine.analyze(__args.position, options);
     return JSON.stringify({
         ok: !!result.ok,
+        engine: result.engine || engine.lastEngine() || null,
         iccs: result.iccs || null,
         score: result.score == null ? null : result.score,
         depth: result.depth == null ? null : result.depth,
@@ -86,7 +100,8 @@ function decode(value) {
 /**
  * 管理「一个时刻最多一次」的算棋任务。
  * @param options.dir        项目目录（worker 里 require 的绝对路径前缀）
- * @param options.graceMs    结果超时（ms）：worker 卡死时也必须有结论，默认 4000
+ * @param options.graceMs    结果超时下限（ms）：worker 卡死时也必须有结论，默认 4000；
+ *                           单次任务实际用 max(graceMs, movetime + 2000)（Pikafish 会用满 movetime，见 start）
  * @param options.nowMono    单调时钟
  * @param options.log        日志函数
  */
@@ -128,14 +143,24 @@ function create(options) {
                 position: position,
                 side: search.side == null ? null : search.side,
                 movetime: search.movetime == null ? null : search.movetime,
-                depth: search.depth == null ? null : search.depth
+                depth: search.depth == null ? null : search.depth,
+                excludeIccs: (search.excludeIccs && search.excludeIccs.length) ? search.excludeIccs : null,
+                engine: search.engine == null ? null : String(search.engine),
+                pikafish: search.pikafish || null
             });
         } catch (error) {
             thread = null;
             log("worker 起不来，回退同步算棋：" + String(error && error.message ? error.message : error));
             return false;
         }
-        pending = { startedAtMono: nowMono(), movetimeMs: search.movetime || 0 };
+        pending = {
+            startedAtMono: nowMono(),
+            movetimeMs: search.movetime || 0,
+            // 本次任务的超时：Pikafish（原生引擎）会把 movetime **用满**才返回，
+            // 而 JS 引擎常常提前收敛 —— 用固定 graceMs(4000) 卡，movetime 调到 4000 以上时
+            // 会把「正常算棋」误判成 worker 超时（真机踩点：movetime 3500 + grace 4000 只富余 500ms）。
+            deadlineMs: Math.max(graceMs, (search.movetime || 0) + 2000)
+        };
         return true;
     }
 
@@ -145,7 +170,7 @@ function create(options) {
      *          { status: "running", elapsedMs }       还在算
      *          { status: "done", result, elapsedMs }  算完（result 为 worker 回传对象）
      *          { status: "error", error, elapsedMs }  失败了
-     *          { status: "timeout", elapsedMs }       超过 graceMs 还没结论
+     *          { status: "timeout", elapsedMs }       超过本次任务超时（见 start 的 deadlineMs）还没结论
      */
     function poll() {
         if (!thread || !pending) {
@@ -174,7 +199,7 @@ function create(options) {
             cancel();
             return { status: "error", error: state.error || "worker 失败", elapsedMs: elapsed };
         }
-        if (elapsed > graceMs) {
+        if (elapsed > pending.deadlineMs) {
             cancel();
             return { status: "timeout", elapsedMs: elapsed };
         }

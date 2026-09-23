@@ -113,8 +113,12 @@ function capabilities() {
         captureShellBackend: shellCaptureBackend(),
         yoloLoad: typeOf("yolo.load") === "function",
         imagesRead: typeOf("images.read") === "function",
+        /** raw 快通道（`screencap` 不加 -p + `images.readRaw`）：PNG 那条路 893ms、这条 194ms（K40 实测） */
+        imagesReadRaw: typeOf("images.readRaw") === "function",
         imagesClip: typeOf("images.clip") === "function",
         imagesPixel: typeOf("images.pixel") === "function",
+        /** 引擎找色（红黑判色走它；没有就只能退回逐点采样） */
+        countColor: typeOf("images.findAllPointsForColor") === "function",
         imagesFromBase64: typeOf("images.fromBase64") === "function",
         filesPath: typeOf("files.path") === "function",
         filesRead: typeOf("files.read") === "function",
@@ -277,6 +281,52 @@ function looksBlank(frame, options) {
  */
 var SHELL_CAPTURE_FILES = ["/sdcard/aijspro-capture-0.png", "/sdcard/aijspro-capture-1.png"];
 var shellCaptureIndex = 0;
+/** raw（`screencap` 不加 `-p`）那条快通道的文件；也是 ping-pong */
+var SHELL_RAW_FILES = ["/sdcard/aijspro-capture-0.raw", "/sdcard/aijspro-capture-1.raw"];
+var shellRawIndex = 0;
+/**
+ * raw 快通道到底能不能用（null=还没试过）。
+ * 为什么要记住：老引擎没有 `images.readRaw`、或者某台设备 raw 尺寸/头对不上 ——
+ * 那种情况下**不要每帧都白试一次**（一次失败 = 多花 200ms 的 screencap）。
+ */
+var shellRawSupported = null;
+var shellRawNote = "";
+/**
+ * 用 `screencap`（**不加 `-p`，原始 RGBA**）抓一帧再读回来。
+ * 为什么快（真机 K40 实测 2026-09-20）：`screencap -p` 的 **893ms** 里 ~700ms 是设备端 PNG 编码，
+ * raw 只要 **194ms** + 建帧 ~十几 ms —— 而 `images.readRaw` 就是为它加的。
+ * ⚠️ 失败必须能干净地退回 PNG：所以这里只负责写文件+读帧，不处理回退（调用方做）。
+ */
+function captureViaShellRaw(backend, shellOptions) {
+    if (typeOf("images.readRaw") !== "function") {
+        shellRawSupported = false;
+        shellRawNote = "引擎没有 images.readRaw（旧 .so）";
+        return null;
+    }
+    const size = screenSize();
+    if (!size) {
+        shellRawSupported = false;
+        shellRawNote = "拿不到 device.width/height（raw 必须知道屏幕像素尺寸）";
+        return null;
+    }
+    const path = SHELL_RAW_FILES[shellRawIndex % SHELL_RAW_FILES.length];
+    shellRawIndex += 1;
+    const result = globals.shell("screencap " + path, shellOptions);
+    if (!result || result.code !== 0) {
+        shellRawSupported = false;
+        shellRawNote = "screencap（raw）失败：exit " + (result ? result.code : "无结果");
+        return null;
+    }
+    const frame = globals.images.readRaw(path, size.width, size.height);
+    if (!frame) {
+        shellRawSupported = false;
+        shellRawNote = "images.readRaw 没读回帧";
+        return null;
+    }
+    shellRawSupported = true;
+    shellRawNote = "";
+    return frame;
+}
 
 /**
  * 能用 shell 截图吗？返回 "shizuku" / "root" / null。
@@ -300,9 +350,12 @@ function shellCaptureBackend() {
 }
 
 /**
- * 用 `screencap -p <file>` 抓一帧再读回来。
- * 耗时主要在设备端 PNG 编码（K40 1080×2400 实测约 1.2s），但胜在**稳定**：
- * 不需要授权，也不会因为应用切前后台而被作废。
+ * 用 shell 身份抓一帧：**先试 raw 快通道，失败退回 `screencap -p`（PNG）**。
+ *
+ * 两条路的实测（K40 1080×2400，各 3 次取中位数）：
+ *   · `screencap -p` + `images.read`：**893ms + 56ms**（PNG 编码占 ~700ms）
+ *   · `screencap`（raw）+ `images.readRaw`：**194ms + ~15ms**
+ * 两条都稳定（不需要授权、不会被切前后台作废）；raw 只在「引擎没能力 / 尺寸对不上」时才退回 PNG。
  */
 function captureViaShell(options) {
     const opts = options || {};
@@ -313,11 +366,29 @@ function captureViaShell(options) {
     if (!has("images") || typeOf("images.read") !== "function") {
         throw new Error("缺少能力：images.read（读不回截图文件）");
     }
+    const shellOptions = { timeout: opts.shellTimeoutMs == null ? 12000 : opts.shellTimeoutMs };
+    shellOptions[backend] = true;
+    // ① 快通道：raw（除非已经证实这台设备上不行）
+    if (opts.preferRaw === false) {
+        shellRawSupported = false;
+        shellRawNote = "调用方显式要求 PNG（options.preferRaw=false）";
+    }
+    if (shellRawSupported !== false) {
+        const fast = captureViaShellRaw(backend, shellOptions);
+        if (fast) {
+            // ⚠️ 通道名必须**以 shell 开头**（面板靠 `channel.indexOf("shell") === 0` 分流），
+            //    但又要把 raw/png 标出来（否则看不出走的哪条路）
+            lastCaptureChannel = "shell(" + backend + "/raw)";
+            return fast;
+        }
+        if (opts.preferRaw === true) {
+            throw new Error("raw 抓帧失败：" + shellRawNote);
+        }
+    }
+    // ② 回退：PNG
     const files = opts.paths || SHELL_CAPTURE_FILES;
     const path = files[shellCaptureIndex % files.length];
     shellCaptureIndex += 1;
-    const shellOptions = { timeout: opts.shellTimeoutMs == null ? 12000 : opts.shellTimeoutMs };
-    shellOptions[backend] = true;
     const result = globals.shell("screencap -p " + path, shellOptions);
     if (!result || result.code !== 0) {
         throw new Error("shell 截图失败：exit " + (result ? result.code : "无结果") + " " +
@@ -327,7 +398,7 @@ function captureViaShell(options) {
     if (!frame) {
         throw new Error("shell 截图读不回来：" + path);
     }
-    lastCaptureChannel = backend;
+    lastCaptureChannel = "shell(" + backend + "/png)";
     return frame;
 }
 
@@ -514,13 +585,21 @@ function brightnessAt(frame, x, y) {
  * 用途：棋盘定位可以在**已保存的截图**上先标定，不必把棋盘摆到屏幕上来截。
  * images.pixel 对 Image 与 ScreenCapture 是同一套接口，所以 samplerFor 两者通用。
  */
-function readImage(path) {
+/**
+ * 读一张图；**也可以直接传已经拿到的帧**（原样返回）。
+ * 为什么加「帧直通」（2026-09-20）：raw 快通道（`images.readRaw`）的帧没有磁盘路径，
+ * 而 `locate-board.locateBoardInImage()` 原来是「拿路径再读一次」—— 传帧就不用再解码一次（省 ~56ms）。
+ */
+function readImage(source) {
+    if (source && typeof source === "object" && typeof source.width === "number") {
+        return source;      // 已经是帧
+    }
     if (typeOf("images.read") !== "function") {
         throw new Error("缺少能力：images.read");
     }
-    const image = globals.images.read(path);
+    const image = globals.images.read(source);
     if (!image) {
-        throw new Error("读不到图片：" + path);
+        throw new Error("读不到图片：" + source);
     }
     return image;
 }
@@ -555,6 +634,108 @@ function rgbAt(image, x, y) {
         return [globals.colors.red(pixel), globals.colors.green(pixel), globals.colors.blue(pixel)];
     } catch (error) {
         return null;
+    }
+}
+
+/**
+ * 数「区域内与目标色相近的像素个数」——引擎自带的**找色**（`images.findAllPointsForColor`）。
+ *
+ * 为什么不用逐点 `rgbAt`：一个棋子中心区 ≈ 68×68 ≈ 4600 个点，逐点在 JS 里问一遍要几十毫秒；
+ * 找色是**原生实现**（`modules/engine/src/main/cpp/native_frame_store.cpp`），
+ * 一次调用就扫完一个区域，只把命中点交回 JS。
+ * 新引擎的找色示例：`sample/QuickJS 新引擎/图色处理/02-截图找色与多点找色.js`。
+ *
+ * @param image  帧（与 `images.pixel` 同一个对象）
+ * @param color  参考色（'#RRGGBB' / 0xAARRGGBB）
+ * @param options { region: {x,y,width,height} 或 [x,y,w,h], threshold: 每通道容差 }
+ * @return 命中像素数；宿主没有找色能力时返回 **null**（调用方据此回退到采样通道）
+ */
+function countColor(image, color, options) {
+    if (!image || typeOf("images.findAllPointsForColor") !== "function") {
+        return null;
+    }
+    const opts = options || {};
+    const region = opts.region || null;
+    const regionArray = region
+        ? [region.x != null ? region.x : region[0], region.y != null ? region.y : region[1],
+            region.width != null ? region.width : region[2],
+            region.height != null ? region.height : region[3]]
+        : null;
+    try {
+        const points = globals.images.findAllPointsForColor(image, color, {
+            region: regionArray,
+            threshold: opts.threshold == null ? 24 : opts.threshold
+        });
+        return points ? points.length : 0;
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * 给 OCR 做预处理：把格子/整盘先裁出来，可选再转灰度。**返回的帧用完必须 releaseFrame()**。
+ *
+ * 为什么要有这个能力（真机实测 2026-09-20，`tools/ocr-prep-probe.js`，同一帧 20 格 × 10 种预处理）：
+ *   · `clip`（只裁剪，不处理）与「整帧 + region」结果**逐格完全一致**（文字/分数 20/20 相同），
+ *     但每格少拷约 10MB（1080×2400 RGBA）⇒ 31ms → 25ms；
+ *   · `gray`（灰度）在**认不出的格子**上救回一批字形：红帅那格彩色读「印市」0.49、灰度读「師」0.70
+ *     （「師」已在 piece-ocr 的字形表里收成 K）；士 0.57→0.82、將 0.83→0.98；
+ *   · 代价是**也会让一部分原本读对的格子读错**（馬 1.00→志 0.67、兵 0.80→民 0.39）
+ *     ⇒ 所以灰度**只能当「彩色读不出来时的重试」，不能当默认通道**；
+ *   · 二值化（Otsu 各档）整体**更差**（识字 3~12/20 vs 17/20）、放大不加分还慢、
+ *     `inRange` 在这条路上基本无效 —— 都不要用。
+ *
+ * @param image 整帧
+ * @param region [x, y, width, height]（整帧坐标）
+ * @param mode "clip" | "gray"
+ * @return NativeFrame（调用方负责 releaseFrame）；能力缺失或区域越界时返回 **null**
+ */
+function prepareRegion(image, region, mode) {
+    if (!image || !region) {
+        return null;
+    }
+    if (typeOf("images.clip") !== "function") {
+        return null;
+    }
+    const x = Math.round(Number(region[0]));
+    const y = Math.round(Number(region[1]));
+    const width = Math.round(Number(region[2]));
+    const height = Math.round(Number(region[3]));
+    if (!(width > 0 && height > 0)) {
+        return null;
+    }
+    let clipped = null;
+    try {
+        clipped = globals.images.clip(image, x, y, width, height);
+    } catch (error) {
+        return null;      // 区域越界（棋盘边上的格子很常见）⇒ 让调用方走原来的「整帧 + region」
+    }
+    if (!clipped || mode === "clip") {
+        return clipped;
+    }
+    if (mode !== "gray" || typeOf("images.grayscale") !== "function") {
+        releaseFrame(clipped);
+        return null;
+    }
+    let gray = null;
+    try {
+        gray = globals.images.grayscale(clipped);
+    } catch (error) {
+        gray = null;
+    }
+    releaseFrame(clipped);
+    return gray;
+}
+
+/** 释放 `prepareRegion` 造出来的临时帧（原生帧不会 GC，不还就堆在帧表里）。 */
+function releaseFrame(frame) {
+    if (!frame || typeof frame.recycle !== "function") {
+        return false;
+    }
+    try {
+        return frame.recycle() !== false;
+    } catch (error) {
+        return false;
     }
 }
 
@@ -1063,7 +1244,14 @@ const AIJS_ADAPTER = {
     readImage: readImage,
     sizeOf: sizeOf,
     rgbAt: rgbAt,
+    countColor: countColor,
     clip: clip,
+    prepareRegion: prepareRegion,
+    releaseFrame: releaseFrame,
+    /** shell 抓帧走的是 raw 还是 PNG（null=还没试过；note 里有原因） */
+    shellCaptureInfo: function () {
+        return { supported: shellRawSupported, note: shellRawNote };
+    },
     detect: detect,
     resolveProjectFile: resolveProjectFile,
     scriptDir: scriptDir,

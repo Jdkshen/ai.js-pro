@@ -175,24 +175,48 @@ function outOfNodes() {
     return stopped;
 }
 
-/** 静态搜索：只继续搜索吃子，避免「评估在吃到一半时收手」造成的水平线效应。 */
+/** 静态搜索：只继续搜索吃子，避免「评估在吃到一半时收手」造成的水平线效应。
+ *
+ * ⚠️ 2026-09-21 凌晨真机输棋后修的洞：**被将时不认「静态分数」**——逃将着法多数
+ *   不是吃子（走将、垫子），只搜吃子会把它们全漏掉 ⇒ 杀网在搜索里「看不见」
+ *   （那场棋最后 -859 → -29998：引擎在搜索却没看见将被将死）。修：被将就搜
+ *   **全部着法**（generateMoves 的 capturesOnly=false 那一支），且跳过 standPat
+ *   （被将的人不能「停着」）。
+ *   实测量具（4k4/4a4/9/9/9/9/9/9/R8/4K4 w，R(0,8)→(0,0) 是杀）：
+ *   depth1 修前 a1a5/710（看不见杀）、修后 a1a9/MATE。 */
 function quiescence(board, red, alpha, beta, ply) {
     nodes++;
     if (nodes > 0 && (nodes & 2047) === 0 && Date.now() > deadline) {
         stopped = true;
         return 0;
     }
+    const inCheck = attacks.isInCheck(board, red);
     const standPat = evalModule.evaluate(board) * (red ? 1 : -1);
-    if (standPat >= beta) {
-        return beta;
-    }
-    if (standPat > alpha) {
-        alpha = standPat;
+    if (!inCheck) {
+        if (standPat >= beta) {
+            return beta;
+        }
+        if (standPat > alpha) {
+            alpha = standPat;
+        }
     }
     if (ply > 24) {
         return alpha;
     }
-    const moves = generateMoves(board, red, true);
+    const moves = generateMoves(board, red, !inCheck);
+    if (moves.length === 0) {
+        /**
+         * 被将没逃法 = 将死；象棋里困毙也判负 ⇒ 同一分数（与 negamax 的约定一致）。
+         *
+         * ⚠️⚠️ **没被将时「没有吃子」只是安静局面，绝不能判负**（2026-09-21 输棋根因）：
+         *   这一支以前无条件返回 -(MATE-ply)，于是「我方任意走一步、让对手在叶子处
+         *   没有任何吃子」= 引擎眼里的「一步杀」。真机：c6g6 吃卒后黑方 45 步合法着法、
+         *   一个吃子都没有 ⇒ 报 29999（深度 1、3ms）⇒ 连走两步假杀（c6g6/g6g7）
+         *   ⇒ 攻势白送，接下来一路滑到被将死。修前的前科：d6g6 同形。
+         *   现在：只有**确实被将**时才判负；安静局面返回 standPat 已抬到的 alpha。
+         */
+        return inCheck ? -(MATE - ply) : alpha;
+    }
     orderMoves(moves, board, null);
     for (let i = 0; i < moves.length; i++) {
         makeMove(board, moves[i]);
@@ -354,6 +378,15 @@ function search(board, side, options) {
 
     let best = null;
     let reachedDepth = 0;
+    // 被游戏拒绝过的着法（调用方传入的 ICCS 列表）：本局面内不再选它们。
+    // 全部被排除时下面的兜底会忽略排除表（宁可重试同一手，也不要一个字都算不出来）。
+    let excluded = null;
+    if (opts.excludeIccs && opts.excludeIccs.length) {
+        excluded = {};
+        for (let i = 0; i < opts.excludeIccs.length; i++) {
+            excluded[String(opts.excludeIccs[i])] = true;
+        }
+    }
     for (let depth = 1; depth <= maxDepth; depth++) {
         let alpha = -INFINITY;
         const beta = INFINITY;
@@ -362,6 +395,9 @@ function search(board, side, options) {
         const moves = generateMoves(board, red, false);
         orderMoves(moves, board, best ? best.move : null);
         for (let i = 0; i < moves.length; i++) {
+            if (excluded && excluded[rules.moveToIccs(moves[i])]) {
+                continue;
+            }
             makeMove(board, moves[i]);
             const score = -negamax(board, !red, depth - 1, -beta, -alpha, 1);
             unmakeMove(board);
@@ -397,6 +433,11 @@ function search(board, side, options) {
     }
 
     if (!best) {
+        // 兜底：候选全被「游戏拒绝过的着法」（excludeIccs）排除了 → 忽略排除表再搜一次。
+        // 宁可重试同一手，也不要一个字都算不出来（真机上表现为整局卡住不动）。
+        if (excluded) {
+            return search(board, side, Object.assign({}, opts, { excludeIccs: null }));
+        }
         return {
             ok: false,
             reason: "时间太短，连第一层都没搜完",

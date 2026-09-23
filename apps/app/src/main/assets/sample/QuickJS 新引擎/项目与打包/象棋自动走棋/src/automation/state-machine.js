@@ -55,6 +55,8 @@ const EVENT = {
     CLICK_RESULT: "CLICK_RESULT",
     VERIFY_RESULT: "VERIFY_RESULT",
     RECOVERED: "RECOVERED",
+    /** 用户/自动脚本显式声明「现在轮到我」（基准由驱动写好）——必须能把机器从恢复/等待里推出来 */
+    TURN_DECLARED: "TURN_DECLARED",
     TICK: "TICK",
     PAUSE: "PAUSE",
     RESUME: "RESUME",
@@ -69,22 +71,50 @@ const DEFAULTS = {
     /** 只识别 / 着法建议模式必须置 false：任何输入都不产生点击动作（验收 A05）。 */
     allowClick: true,
     /** 轮次未知多久就放弃等待（ms）——超时只恢复，不作为出手依据。 */
-    unknownTurnWatchdogMs: 8000,
+    /**
+     * 轮次未知看门狗（ms）：稳定局面里数不齐子力、推不出轮次时，等这么久就进恢复。
+     * ⚠️ 2026-09-20：8s → **4s**。恢复本身只是「重新对齐 + 按观测重建基准」（不重定位时 <1s），
+     * 而每局能碰到十几次，8s 一挡就是半分钟起步（真机实测每手 ~35s，其中 ~100s 耗在这里）。
+     */
+    unknownTurnWatchdogMs: 4000,
     /** 落子确认最多等多久（ms）。一次确认要先截图+识别（~1.1s），所以至少留 3 次的机会。 */
-    verifyTimeoutMs: 4000,
+    /**
+     * 确认超时（ms）：点击发出后这么久还没确认成功就判超时（进恢复，不重复盲点）。
+     * ⚠️ 2026-09-20：4s → **2.5s**。确认本身 ~2s/次，4s 常常已经多跑了 2~3 次确认；
+     * 2.5s 仍容得下「一两次看不清」。
+     */
+    verifyTimeoutMs: 2500,
     /**
      * 恢复动作的重试间隔（ms）：进入 RECOVERING 时发一次 RECOVER，之后每隔这么久再发一次。
      * 驱动那边定位失败时会返回 null（「留在 RECOVERING，下一轮再试」），**必须有人再发**，
      * 否则就是一整轮空转（真机踩到：重新定位失败 → 之后 36 次观察全是「只恢复/等待」）。
      * 取值要略大于一次定位耗时（K40 实测 ~8s）。
      */
-    recoverRetryMs: 12000,
+    /** 恢复动作的重试间隔（ms）：12s → **6s**（同 unknownTurnWatchdogMs 的理由：恢复很便宜，别让它拖时间）。 */
+    recoverRetryMs: 6000,
+    /**
+     * 「轮到对方」等多久后在状态行里点明「对方一直没动」（ms）。
+     * ⚠️ 2026-09-20 真机：轮次一旦被**判反**（板面其实在等我方），差分每帧「变化 0 格」，
+     * 状态行只会重复「轮到对方，等待其落子」——看日志的人会以为「对方在想棋」。
+     * 这条只改文案、不出手（依据不足时绝不点），作用是把这种死等**一眼可见**。
+     */
+    opponentIdleWarnMs: 20000,
+    /**
+     * 「轮到对方 + 画面一直没变」到这么久 ⇒ **按轮次判反自动处理**：发 DECLARE_TURN 动作
+     * （驱动重立基准 + 翻轮次，与用户点「轮到我」走同一条路）。
+     * ⚠️ 2026-09-21 凌晨真机 now62：对方那步其实已经走完（观测都看到了新落的子），但幻影逻辑
+     *   把它收编成了「基准修正」⇒ 差分永远变化 0 格 ⇒ 空闲警告从 20s 刷到 163s+ 直到循环到点。
+     *   只警告不动作 = 永久死等。翻错的代价有界：游戏会拒绝非我方回合的落子，确认判 UNCHANGED，
+     *   「尝试预算」几次内自动暂停（可见）、且棋子不会被点飞——比无限死等强得多。
+     * 阈值要明显大于「对方真在想」的合理时长（本地特级大师应手一般 <10s）。
+     */
+    opponentIdleDeclareMs: 45000,
     /** 确认「没落子」后允许重试的次数（默认 1 次，够用且不会盲点）。 */
     retryLimit: 1,
     /** 票据有效期（ms，转发给 move-ticket）。 */
     ticketTtlMs: 15000,
     /** 算棋时间预算（ms）。 */
-    movetimeMs: 1200
+    movetimeMs: 3500
 };
 
 function opposite(side) {
@@ -120,6 +150,7 @@ function createMachine(config, deps) {
     let geometryTrusted = false;
     let stable = null;            // { board, side, fen, unknownCells, atMono }
     let unknownSinceMono = null;
+    let opponentIdleSinceMono = null;   // 「轮到对方」且画面一直没变的起点（只用于诊断文案）
     let currentJob = null;        // { jobId, board, side, fen, positionVersion, geometryVersion, startedAtMono }
     let currentTicket = null;
     let verifyDeadlineMono = 0;
@@ -251,6 +282,36 @@ function createMachine(config, deps) {
 
     function onSnapshot(event) {
         const snapshot = event.snapshot || event;
+        /**
+         * ★★ 暂停/停止/结束是**粘性**状态（2026-09-20 真机 now37 铁证）：
+         *   面板的自动循环在暂停后**仍在 tick**、观察也照常往下走，而这里原来没有 PAUSED 闸门 ——
+         *   一条「轮次未知」的观测会 `setState(WAIT_TURN)` 把机器**悄悄拽出暂停**，紧接着
+         *   「轮到我方」的观测又把它推进 THINKING ⇒ 同一个着法（现场是 e6e9 炮吃将）被反复
+         *   重算/重试 20 次，日志里刷「已试 4 次…20 次」，暂停形同虚设、白烧两分半钟。
+         *   语义回到本来的设计：暂停只能靠显式 RESUME / START 解除（见 EVENT 表）。
+         *   ⚠️ RESUME（主界面「继续」）与 START（面板「开始」重开一轮）都**不要**再 gates —— 它们是
+         *     用户的两条出路；这里只闸「观测/回报」这类自动输入。
+         */
+        if (state === STATE.PAUSED || state === STATE.STOPPED || state === STATE.GAME_OVER) {
+            // 观测照旧由驱动记录（lastBoard 等），这里只是不把它当「推进动作」的依据；
+            // 票据/任务在进 PAUSED / STOP / GAME_OVER 的那一刻就已经取消了，这里不必再动。
+            return effectsOut([], state === STATE.PAUSED
+                ? "已暂停：不接受新的观测（等 RESUME）"
+                : (state === STATE.STOPPED ? "已停止：不接受新的观测（等 START）" : "对局已结束：不接受新的观测"));
+        }
+        // ★ 几何版本跟观察帧走（2026-09-21 真机事故）：识别自对齐/钉棋子会让几何版本 +1
+        //   （驱动把 result.grid 收编进 grid），但票据的 geometryVersion 是**发票据那一刻**冻结的
+        //   ⇒ 之后的新票据也拿着旧版本，点击器一核对 grid.version !== ticket.geometryVersion 就
+        //   直接 REJECTED ⇒ 日志「票据几何版本 v1 / 当前 v2」、面板在点、游戏没反应，
+        //   一路空转到尝试预算耗尽暂停。
+        //   这里只同步**版本号**，不动状态 —— GEOMETRY 事件会把状态打回 WAIT_STABLE，
+        //   确认/出手途中不能那么干（那会把在飞的票据/任务全拆掉）。
+        if (snapshot.geometryVersion != null) {
+            const observedGeometryVersion = Number(snapshot.geometryVersion);
+            if (isFinite(observedGeometryVersion) && observedGeometryVersion > 0) {
+                versions.geometryVersion = observedGeometryVersion;
+            }
+        }
         if (state === STATE.RECOVERING) {
             // 恢复中：进入 RECOVERING 的那一刻已经发过一次 RECOVER；但如果那次没成（驱动定位失败会
             // 返回 null「下一轮再试」，或干脆没跑完），**必须有人再发** —— 否则就是整轮空转。
@@ -278,6 +339,16 @@ function createMachine(config, deps) {
 
         const changed = acceptStable(snapshot);
         const sideKnown = snapshot.side === "w" || snapshot.side === "b";
+
+        // ★ 点击/确认进行中：观测只喂确认流程 —— 必须在任何看门狗/几何/冲突判断**之前**返回。
+        //   真机 2026-09-21 07:42（K40）铁证：点击 g0g3 后确认连刷「装饰容差下 12~13 种应手解释」，
+        //   而每条观测的轮次都推不出来 ⇒ 旧顺序里「轮次未知看门狗」先动手：4s 一跳 RECOVERING →
+        //   恢复 → 回来仍是同一张票据 ⇒ 2.5s 的「确认超时 → CANCEL_TICKET」永远等不到
+        //   （TICK 到时状态总不是 VERIFYING）⇒ 同一手卡死两分半，最后还把落点保护（activeOwnMove）清掉。
+        //   和「迟到的点击回报」「暂停粘住」是同一类洞：动作在飞的时候，观测不许改变机器状态。
+        if (state === STATE.CLICKING || state === STATE.VERIFYING) {
+            return effectsOut([], "点击/确认中，等待确认结果");
+        }
 
         if (!sideKnown) {
             if (!cfg.allowClick) {
@@ -316,20 +387,36 @@ function createMachine(config, deps) {
             return effectsOut([], reason);
         }
 
-        if (state === STATE.CLICKING || state === STATE.VERIFYING) {
-            // 点击/确认期间的观测交给确认流程（VERIFY_RESULT），这里不改变动作
-            return effectsOut([], "点击/确认中，等待确认结果");
-        }
-
         if (snapshot.side !== mySide) {
             if (changed) {
+                opponentIdleSinceMono = null;
                 const effects = cancelCurrentJob("轮次已交给对方");
                 setState(STATE.WAIT_TURN, "轮到对方（" + snapshot.side + "）");
                 return effectsOut(effects, reason);
             }
-            setState(STATE.WAIT_TURN, "轮到对方，等待其落子");
+            // 等对方落子：画面**一点没变**地等太久 ⇒ 先怀疑「轮次被判反」（我方才该走）。
+            // 只写进状态行（让日志自证），不改动作 —— 出手依据不足时绝不点。
+            if (opponentIdleSinceMono == null) {
+                opponentIdleSinceMono = nowMono();
+            }
+            const idle = nowMono() - opponentIdleSinceMono;
+            // ★ 升级门槛（见 opponentIdleDeclareMs 的注释）：等得够久就不只警告了 ——
+            //   按「轮次判反」处理，发 DECLARE_TURN（驱动重立基准 + 翻轮次，与用户点「轮到我」同路）。
+            //   真机 now62：对方已走完但被幻影逻辑收编进基准 ⇒ 163s 死等直到循环到点。
+            if (cfg.allowClick && idle > cfg.opponentIdleDeclareMs) {
+                opponentIdleSinceMono = nowMono();   // 重新计时：下一轮再等满才再翻（防连翻）
+                counters.idleTurnDeclares = (counters.idleTurnDeclares || 0) + 1;
+                return effectsOut([{ type: "DECLARE_TURN", reason:
+                    "对方 " + Math.round(idle / 1000) + "s 没动且画面没变（多半是轮次判反）→ 重立基准翻轮次" }],
+                    reason);
+            }
+            setState(STATE.WAIT_TURN, idle > cfg.opponentIdleWarnMs
+                ? "轮到对方，等待其落子（已 " + Math.round(idle / 1000) + "s 画面没变 —— " +
+                  "多半是轮次判反，别当成对方在想棋）"
+                : "轮到对方，等待其落子");
             return effectsOut([], reason);
         }
+        opponentIdleSinceMono = null;
 
         // 轮到我方：局面变了才重算（同局面重复观测不该反复算棋）
         if (!changed && (state === STATE.THINKING || state === STATE.PRECHECK || state === STATE.SUGGESTED)) {
@@ -464,6 +551,14 @@ function createMachine(config, deps) {
 
     function onClickResult(event) {
         const ticket = event.ticket || currentTicket;
+        /**
+         * 迟到的点击回报（在出手中途按下暂停/停止）：PAUSE 已经把票据作废并清了动作，
+         * 这里再 setState(VERIFYING/RECOVERING) 就又把状态从暂停里拽出去了 ——
+         * 与 onSnapshot 那个洞是同一类，一起堵上。
+         */
+        if (state === STATE.PAUSED || state === STATE.STOPPED || state === STATE.GAME_OVER) {
+            return effectsOut([], "已暂停/停止/结束：迟到的点击回报忽略（票据已作废）");
+        }
         counters.clicks += event.clickCount == null ? 0 : Number(event.clickCount);
         if (event.status === "SENT") {
             // 点击真的发出去了，才算「这张票据执行过」（S04：只执行一次）。
@@ -500,6 +595,10 @@ function createMachine(config, deps) {
     function onVerifyResult(event) {
         const ticket = event.ticket || currentTicket;
         const verdict = event.verdict;
+        // 同 onClickResult：暂停/停止之后迟到的确认结果不许把机器推回运行态。
+        if (state === STATE.PAUSED || state === STATE.STOPPED || state === STATE.GAME_OVER) {
+            return effectsOut([], "已暂停/停止/结束：迟到的确认结果忽略（票据已作废）");
+        }
         counters.verifies += 1;
         const previousDeadline = verifyDeadlineMono;
         verifyDeadlineMono = 0;
@@ -570,6 +669,15 @@ function createMachine(config, deps) {
                 setState(STATE.VERIFYING, "确认观测不可靠（" + verdict.reason + "），再确认一次");
                 return effectsOut([{ type: "VERIFY", ticket: ticket, deadlineMono: next }], reason);
             }
+            /**
+             * ⚠️ 超时到了之后**必须保留原来那个（已过期的）截止时间**，不能留 0 ——
+             * TICK 里那条超时判定写的是 `verifyDeadlineMono > 0 && now > verifyDeadlineMono`，
+             * 清成 0 就永远不会判超时；而下一帧的 SNAPSHOT 又会重发一次 VERIFY，
+             * `previousDeadline` 变成 0 ⇒ 每次都用 `nowMono() + verifyTimeoutMs` 重新开一个 4 秒
+             * ⇒ 「再确认一次」死循环：真机 v4 实测连刷 **181 次**
+             * `UNRELIABLE：还有 N 个未知格（且不全是落点格）`、3 分钟不动、恢复 0 次。
+             */
+            verifyDeadlineMono = next;
             setState(STATE.VERIFYING, "确认观测不可靠（" + verdict.reason + "），等超时判定");
             return effectsOut([], reason);
         }
@@ -616,6 +724,17 @@ function createMachine(config, deps) {
                 }
                 unknownSinceMono = null;   // 恢复完重新计时：否则立刻又被看门狗判成「轮次未知超时」
                 setState(STATE.WAIT_STABLE, "恢复完成，重新稳定观察");
+                return effectsOut([], reason);
+            case EVENT.TURN_DECLARED:
+                // 用户/自动脚本显式声明「现在轮到我」（基准已由驱动写好）：把机器放回正常观察。
+                // ⚠️ 2026-09-20 真机：声明原来只在 WAIT_TURN 那条路上起作用 —— 一旦已经进了
+                //    RECOVERING（轮次未知看门狗），onSnapshot 只会重发 RECOVER，声明再也推不动，
+                //    整轮就空转到 stopAfterMs。
+                if (state === STATE.PAUSED || state === STATE.STOPPED) {
+                    return effectsOut([], "当前是暂停/停止状态：声明无效");
+                }
+                unknownSinceMono = null;
+                setState(STATE.WAIT_STABLE, "已声明轮到我（按当前局面立基准）");
                 return effectsOut([], reason);
             case EVENT.TICK:
                 return onTick(event);

@@ -32,6 +32,8 @@ const DEFAULTS = {
     drawMode: "off",
     /** 几何自动微调（真机实测会把同一子并成一格，默认关）。 */
     autoAlign: false,
+    /** 启动后是否把面板收成小窗（默认 false：日志要看得见）。 */
+    collapse: false,
     /** 启动后是否自动开始自动走棋。 */
     start: false,
     /** 首个观察成功后是否自动声明"现在轮到我"。 */
@@ -146,6 +148,11 @@ function parseAutorun(text) {
 
     if (raw.autoAlign != null) {
         config.autoAlign = !!raw.autoAlign;
+    }
+
+    if (raw.collapse != null) {
+        // 默认 false（不收起）：收起会把日志区一起藏掉，只有无人值守跑才需要
+        config.collapse = !!raw.collapse;
     }
 
     if (raw.start != null) {

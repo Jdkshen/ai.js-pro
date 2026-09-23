@@ -17,6 +17,7 @@
 const adapter = require("../src/runtime/aijs-adapter.js");
 const locator = require("../src/vision/board-locator.js");
 const recognizer = require("../src/vision/recognizer.js");
+const detectionStage = require("../src/vision/detection-stage.js");
 const sequenceModule = require("../src/vision/sequence.js");
 const locateBoard = require("./locate-board.js");
 const geometry = require("../src/vision/geometry.js");
@@ -31,12 +32,10 @@ const gridSearch = require("../src/vision/grid-search.js");
  *     整屏→矩形 763/787 = 97.0% ＞ 裁棋盘→矩形 759/787 = 96.4%，
  *     而且这正好是训练侧的评测口径（电脑端 xq36：全屏→矩形 0.969）。
  *   · 方形档 `chessai_160_v5r.onnx`（1×3×160×160）作为回滚/对照（同套帧 771/787 = 98.0%，
- *     ⚠️ 已不再随包（省 APK 体积），要从 `.artifacts/model-sync/` 拷回 assets/models/ 才能用）
  *     纯颜色错 0）：改下面**五个**常量 —— MODEL_FILE / LABELS_FILE / INPUT_WIDTH=160 /
  *     INPUT_HEIGHT=160 / REGION_ASPECT=null / REGION_MODE="board"。
  *     ⚠️ 只改模型名不改 INPUT_HEIGHT 会直接报 OpenCV reshape2 断言（方形模型吃 160×320）。
- *   · 更老的 `chessai_160.onnx` 不再随包（同样在 `.artifacts/model-sync/`），
- *     供历史评测脚本对照（同套帧 782/787 = 99.4%，
+ *   · 更老的 `chessai_160.onnx` 保留在目录里，供历史评测脚本对照（同套帧 782/787 = 99.4%，
  *     但这 9 帧很可能就是它当初的基线集，有「见过」的嫌疑，不能当泛化结论）。
  */
 const MODEL_FILE = "assets/models/chessai_160x320_v5r.onnx";
@@ -134,6 +133,103 @@ function loadDetector(options) {
         }
     }
     throw new Error("模型加载失败，已试过：" + failures.join("；"));
+}
+
+/**
+ * 建一个常驻的 detect-only 会话。
+ *
+ * 新视觉流水线只需要 YOLO 原始框，不应该为了取 `native.list` 先跑完旧识别器的
+ * 格点分配、颜色采样、棋规修复和 FEN。检测器由会话持有，脚本退出时统一 close。
+ */
+function createDetectionSession(options) {
+    const base = Object.assign({}, options || {});
+    const loaded = base.detector
+        ? { detector: base.detector, request: base.detectorRequest || null, source: "调用方注入", failures: [] }
+        : loadDetector(base);
+    const detector = loaded.detector;
+    const ownsDetector = !base.detector;
+    let closed = false;
+    let calls = 0;
+
+    function detect(image, grid, options) {
+        if (closed) {
+            return { ok: false, stage: "detect", reason: "检测会话已关闭", raw: [], detections: [] };
+        }
+        const opts = Object.assign({}, base, options || {});
+        let native = { list: [], preprocessMs: null, inferenceMs: null, totalMs: null };
+        const result = detectionStage.detect({
+            image: image,
+            grid: grid,
+            // AI.js Pro 的 region 检测会把坐标回移到全图；这是矩形模型的生产路径。
+            useRegion: opts.useRegion !== false,
+            detect: function (img, detectOptions) {
+                native = adapter.detect(detector, img, detectOptions);
+                return native.list;
+            },
+            crop: opts.crop,
+            cropMargin: opts.cropMargin,
+            regionAspect: opts.regionAspect === undefined ? REGION_ASPECT : opts.regionAspect,
+            regionMode: opts.regionMode === undefined ? REGION_MODE : opts.regionMode,
+            confidence: opts.confidence,
+            nms: opts.nms
+        });
+        calls += 1;
+        result.native = native;
+        result.model = loaded.request;
+        result.modelSource = loaded.source;
+        result.modelFailures = loaded.failures;
+        return result;
+    }
+
+    function close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        if (ownsDetector && detector && typeof detector.close === "function") {
+            try {
+                detector.close();
+            } catch (ignore) {
+                // 释放失败不改变检测结论；退出钩子仍继续清理其他资源。
+            }
+        }
+    }
+
+    return {
+        detect: detect,
+        close: close,
+        detector: detector,
+        model: loaded.request,
+        modelSource: loaded.source,
+        modelFailures: loaded.failures,
+        calls: function () { return calls; },
+        closed: function () { return closed; }
+    };
+}
+
+/** 一次性 detect-only 入口；连续帧请用 createDetectionSession，避免每帧重载模型。 */
+function detectOnly(image, grid, options) {
+    const opts = options || {};
+    if (opts.session && typeof opts.session.detect === "function") {
+        return opts.session.detect(image, grid, opts);
+    }
+    let session = null;
+    try {
+        session = createDetectionSession(opts);
+        return session.detect(image, grid, opts);
+    } catch (error) {
+        return {
+            ok: false,
+            stage: "load",
+            reason: "加载模型失败：" + (error && error.message ? error.message : error),
+            raw: [],
+            detections: []
+        };
+    } finally {
+        if (session) {
+            session.close();
+        }
+    }
 }
 
 /**
@@ -721,12 +817,18 @@ function scoreGrid(image, grid, options) {
  * 默认走**缓存框**路径（执行单 §4.2）：先把整块棋盘区域检测一次，之后每个候选用纯坐标运算评分 ——
  * 旧的「每候选跑一次 run()」一共 171 次完整识别（含 171 次模型加载/关闭），19.8 秒/帧且分不清耗时去哪了。
  *
- * 不设「至少 24 枚」这种通用门槛（合法残局可能只有 2~8 枚）：接受规则见 grid-search.js，
- * 需要「将帅都在、未知格少、检测框落在棋盘内、兵种不超限」；`expectPieces` 只作为**软先验**（允许吃子）。
+ * 不设「至少 24 枚」这种通用门槛（合法残局可能只有 2~8 枚）：接受规则见 grid-search.js。
+ * ⚠️ 2026-09-22：未知格/覆盖率**不再是硬门槛**（只罚不拒）——它们是识别噪声，不是几何错的
+ * 证据；硬拒会让「分类差、几何对」的帧永远定不了位（新机 unknown 7 / coverage 0.50 真机证据）。
+ * `expectPieces` 只作为**软先验**（允许吃子）。
  */
 function pickGrid(image, options) {
     const opts = options || {};
-    const seeds = opts.seeds || [
+    // 默认种子按**屏幕尺寸**推导（2026-09-22）：旧版写死 K40 坐标（81,666,115,114），
+    // 换手机后采样框整体错位 ⇒ 半数检测框落在候选棋盘外（新机 1280×2772 coverage 0.36~0.50 连续拒绝）。
+    // 推导失败（拿不到尺寸）才退回 K40 常量兜底。
+    const derivedSeeds = gridSearch.deriveSeeds(opts.size || (image ? adapter.sizeOf(image) : null));
+    const seeds = opts.seeds || derivedSeeds || [
         { originX: 81, originY: 666, stepX: 115, stepY: 114, orientation: "RED_BOTTOM" },
         { originX: 72, originY: 660, stepX: 114.8, stepY: 114.3, orientation: "RED_BOTTOM" }
     ];
@@ -761,6 +863,8 @@ function pickGrid(image, options) {
     delete runOpts.step;
     delete runOpts.fineRadius;
     delete runOpts.fineStep;
+    delete runOpts.radiusRatio;
+    delete runOpts.stepScales;
     delete runOpts.minPieces;
     delete runOpts.maxUnknown;
     delete runOpts.requireKings;
@@ -818,8 +922,10 @@ function pickGrid(image, options) {
             };
         }
 
-        // 2) 检测一次：裁剪范围比棋盘多留一圈，保证 ±radius 内的候选棋盘都在检测范围内
-        const probeGrid = geometry.createGrid({
+        // 2) 检测一次：裁剪范围必须覆盖**所有种子 ± 搜索半径**（2026-09-22）。
+        //    旧版只按 seeds[0] 裁 —— 设备推导的种子有 3 档 y（±5% 屏高），
+        //    只锚一个种子会把其它档位棋盘底/顶行的棋子裁掉 ⇒ 边缘格全成未知格。
+        const probeGrid = gridSearch.probeGridFor(seeds) || geometry.createGrid({
             originX: seeds[0].originX, originY: seeds[0].originY,
             stepX: seeds[0].stepX, stepY: seeds[0].stepY,
             orientation: seeds[0].orientation || orientation
@@ -847,6 +953,9 @@ function pickGrid(image, options) {
             step: opts.step,
             fineRadius: opts.fineRadius,
             fineStep: opts.fineStep,
+            // 2026-09-22（多证据融合方案 §10 最小版）：原点 ±0.5 格 + 步距 ±2%/±4%
+            radiusRatio: opts.radiusRatio,
+            stepScales: opts.stepScales,
             orientation: orientation,
             expectPieces: opts.expectPieces,
             expectWeight: opts.expectWeight,
@@ -927,6 +1036,8 @@ module.exports = {
     LABELS_FILE: LABELS_FILE,
     modelPaths: modelPaths,
     loadDetector: loadDetector,
+    createDetectionSession: createDetectionSession,
+    detectOnly: detectOnly,
     recognizeImage: recognizeImage,
     recognizeScreen: recognizeScreen,
     recognizeImageSequence: recognizeImageSequence,

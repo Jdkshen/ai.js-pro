@@ -153,6 +153,50 @@ check("残局 2 / 4 / 8 子：计数与 FEN 一致", function () {
     }
 });
 
+check("统一执行闸门：合法 2 / 4 / 8 子均接受", function () {
+    const layouts = [ENDGAME2, ENDGAME4, ENDGAME8];
+    for (let i = 0; i < layouts.length; i++) {
+        const chars = charsFromLayout(layouts[i]);
+        const n = cells.count(chars).pieces;
+        const audited = gridSearch.auditRecognition(chars, { detectionCount: n, placed: n, outOfBoard: 0 }, {});
+        assert(audited.ok, n + " 子残局应通过：" + audited.reason);
+    }
+});
+
+check("统一执行闸门：缺将、双缺与 UNKNOWN 过多均拒绝", function () {
+    const oneKing = charsFromLayout("9/9/9/9/9/9/9/9/9/4K4");
+    const noKing = new Array(90).fill(cells.EMPTY);
+    noKing[0] = "R";
+    noKing[89] = "r";
+    const unknown = charsFromLayout(ENDGAME2);
+    for (let i = 10; i < 15; i++) unknown[i] = cells.UNKNOWN;
+    const a = gridSearch.auditRecognition(oneKing, { detectionCount: 1, placed: 1 }, {});
+    const b = gridSearch.auditRecognition(noKing, { detectionCount: 2, placed: 2 }, {});
+    const c = gridSearch.auditRecognition(unknown, { detectionCount: 7, placed: 2 }, {});
+    assert(!a.ok && /将帅/.test(a.reason), "缺将应拒绝：" + a.reason);
+    assert(!b.ok && /将帅/.test(b.reason), "双缺应拒绝：" + b.reason);
+    assert(!c.ok && /未知格过多/.test(c.reason), "UNKNOWN 过多应拒绝：" + c.reason);
+});
+
+check("统一执行闸门：非法字符、低覆盖率与框出界均拒绝", function () {
+    const chars = charsFromLayout(ENDGAME2);
+    chars[20] = "X";
+    const invalid = gridSearch.auditRecognition(chars, { detectionCount: 3, placed: 2 }, {});
+    assert(!invalid.ok && /非法字符/.test(invalid.reason), "非法字符应拒绝：" + invalid.reason);
+    const valid = charsFromLayout(ENDGAME4);
+    const low = gridSearch.auditRecognition(valid, { detectionCount: 10, placed: 4 }, {});
+    assert(!low.ok && /比例过低/.test(low.reason), "低覆盖率应拒绝：" + low.reason);
+    const outside = gridSearch.auditRecognition(valid, { detectionCount: 4, placed: 4, outOfBoard: 1 }, {});
+    assert(!outside.ok && /越出棋盘/.test(outside.reason), "出界框应拒绝：" + outside.reason);
+
+    const over = new Array(90).fill(cells.EMPTY);
+    over[0] = "K";
+    over[89] = "k";
+    for (let i = 1; i <= 11; i++) over[i] = "P";
+    const excessive = gridSearch.auditRecognition(over, { detectionCount: 13, placed: 13 }, {});
+    assert(!excessive.ok && /兵种超限/.test(excessive.reason), "兵种超限应拒绝：" + excessive.reason);
+});
+
 check("含 1 个 UNKNOWN：三态数量准确（不算空、不算子）", function () {
     const chars = charsFromLayout(OPENING);
     assert(cells.isPieceChar(chars[0]), "夹具前提：0 号格原本是棋子");
@@ -274,6 +318,29 @@ check("兵种超限默认只当软惩罚（硬拒会把好网格一起废掉）"
     const hard = gridSearch.searchByDetections(detections, { seeds: SEEDS, radius: 30, step: 6, requireTypeLimits: true });
     assert(!hard.ok, "requireTypeLimits=true 时应拒绝");
     assert(/兵种超限/.test(hard.reason), "拒绝原因应说明超限：" + hard.reason);
+});
+
+check("缺一个将帅默认只当软惩罚（模型漏检将帅是识别问题，不是几何问题）", function () {
+    // 真机 2026-09-20：检测模型对帅/将召回差（面板反复报「红帅数量 0」）。
+    // 硬拒会让**每个候选**都被否掉 ⇒ `pickGrid 也失败：最优候选不合用：将帅数量异常（1）` ⇒ 定位做不出来。
+    const chars = new Array(90).fill(cells.EMPTY);
+    chars[0] = "K";                 // 只给红帅（黑将漏检）
+    for (let i = 10; i < 20; i++) {
+        chars[i] = "P";
+    }
+    const detections = [];
+    for (let i = 0; i < 90; i++) {
+        if (!cells.isPieceChar(chars[i])) {
+            continue;
+        }
+        const point = geometry.pointAt(TRUTH_GRID, i % 9, Math.floor(i / 9));
+        detections.push({ label: String(chars[i]).toUpperCase(), score: 0.9, x: point.x, y: point.y });
+    }
+    const soft = gridSearch.searchByDetections(detections, { seeds: SEEDS, radius: 30, step: 6 });
+    assert(soft.ok, "默认（软惩罚）应接受缺将帅的候选：" + (soft.reason || ""));
+    eq(soft.grid.originX, TRUTH_GRID.originX, "软惩罚下也应选中真实网格 originX");
+    const hard = gridSearch.searchByDetections(detections, { seeds: SEEDS, radius: 30, step: 6, requireKings: true });
+    assert(!hard.ok && /将帅/.test(hard.reason || ""), "requireKings=true 时应拒绝：" + (hard.reason || ""));
 });
 
 check("上一局面的子力数先验：允许吃子（3 2 → 30 仍接受）", function () {

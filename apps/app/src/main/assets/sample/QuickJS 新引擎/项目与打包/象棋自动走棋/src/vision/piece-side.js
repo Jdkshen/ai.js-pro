@@ -2,6 +2,15 @@
 /**
  * 阵营判定（红 / 黑）。
  *
+ * ## 与 `piece-color.js` 的边界（2026-09-20 固定，别再合了）
+ *   · **本模块 = 像素级判定**：`isRedPixel`/`isDarkPixel`/`max3` 与它们的阈值（redMin/redDominance/darkMax），
+ *     以及旧路径要用的「数笔画占比 → 判阵营」（`classify`/`classifyAt`）。
+ *     `piece-color.js` 与旧路径 `recognizer.js` **都依赖这里的像素判定** ⇒ 它是底座，不是重复实现。
+ *     ⚠️ 从 `piece-color` 调用时**必须显式传本模块的键名**（见 piece-color 的 `sideOptions`），
+ *     否则 `r > undefined` / `max3 < undefined` 恒为 false，红/暗计数变成死代码（2026-09-19 真机事故）。
+ *   · **`piece-color.js` = 证据层**：特征（redRatio/darkRatio/meanLabA…）+ 打分 + 单帧翻面保留 + 多帧投票。
+ *     新代码统一调用 `piece-color`（或更上层的 `board-scan` / `vision-pipeline`），别再直接调本模块。
+ *
  * 为什么需要它：模型只有 7 个兵种类别（车马相仕帅炮兵），**红黑是合并的** ——
  * 光靠「这一格是车」无法知道是红车还是黑车，也就出不了 FEN。
  * 但象棋盘上红方棋子是红字、黑方是黑字（实物棋盘同理：红子偏红、黑子偏黑），

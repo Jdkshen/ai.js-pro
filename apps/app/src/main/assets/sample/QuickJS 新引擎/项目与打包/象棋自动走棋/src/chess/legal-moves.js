@@ -15,12 +15,39 @@ function cloneBoard(board) {
     return board.slice();
 }
 
-/** 走一步；返回新局面与被吃子，不改动原数组。 */
+/**
+ * 走一步；返回新局面与被吃子，不改动原数组。
+ *
+ * ★ 2026-09-21 真机兜底（v5 慢局根因）：着法对象**可以只带 `iccs`** —— 以前这里只认
+ *   fromCol/fromRow/toCol/toRow，缺了它们 `idx()` 算出 NaN ⇒ **静默返回「没走这手」的盘面**
+ *   （还是真值）⇒ 调用方（票据盘面重建）把「没走」当期望值，真机确认阶段卡了四笔（最长 235s）。
+ *   ICCS 记法：文件字母 a..i + 行号 9..0；棋盘数组的行是 **row = 9 - rank**（与 moveToIccs 对称）。
+ *   解析不出来、或起点根本没子（例如这一手已经走掉了）⇒ 返回 `board: null`（显式失败，
+ *   绝不装作走成了 —— 「假装走成」会把落点那枚子抹掉）。
+ */
 function applyMove(board, move) {
+    let fromCol = move.fromCol;
+    let fromRow = move.fromRow;
+    let toCol = move.toCol;
+    let toRow = move.toRow;
+    if (fromCol == null || fromRow == null || toCol == null || toRow == null) {
+        const fromSquare = rules.iccsSquare(move.iccs, 0);
+        const toSquare = rules.iccsSquare(move.iccs, 1);
+        if (fromSquare == null || toSquare == null) {
+            return { board: null, captured: null };
+        }
+        fromCol = fromSquare % COLS;
+        fromRow = Math.floor(fromSquare / COLS);
+        toCol = toSquare % COLS;
+        toRow = Math.floor(toSquare / COLS);
+        if (!board[rules.idx(fromCol, fromRow)]) {
+            return { board: null, captured: null };
+        }
+    }
     const next = cloneBoard(board);
-    const captured = next[rules.idx(move.toCol, move.toRow)] || null;
-    next[rules.idx(move.toCol, move.toRow)] = next[rules.idx(move.fromCol, move.fromRow)];
-    next[rules.idx(move.fromCol, move.fromRow)] = null;
+    const captured = next[rules.idx(toCol, toRow)] || null;
+    next[rules.idx(toCol, toRow)] = next[rules.idx(fromCol, fromRow)];
+    next[rules.idx(fromCol, fromRow)] = null;
     return { board: next, captured: captured };
 }
 

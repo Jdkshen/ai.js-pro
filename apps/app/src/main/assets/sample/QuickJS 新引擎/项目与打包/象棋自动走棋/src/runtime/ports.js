@@ -32,7 +32,9 @@ const OPTIONAL = {
     foreground: function (adapter) { return !!(adapter && typeof adapter.focusedWindowPackage === "function"); },
     windows: function (adapter) { return !!(adapter && typeof adapter.windowsAt === "function"); },
     shell: function (adapter) { return !!(adapter && typeof adapter.runShellCapture === "function"); },
-    sizeOf: function (adapter) { return !!(adapter && typeof adapter.sizeOf === "function"); }
+    sizeOf: function (adapter) { return !!(adapter && typeof adapter.sizeOf === "function"); },
+    /** 引擎找色（红黑判色用它；缺了会退回逐点采样，只是慢） */
+    countColor: function (adapter) { return !!(adapter && typeof adapter.countColor === "function"); }
 };
 
 /**
@@ -78,6 +80,9 @@ function createPorts(adapter, extra) {
         sizeOf: function (image) { return typeof adapter.sizeOf === "function" ? adapter.sizeOf(image) : null; },
         screenSize: function () { return adapter.screenSize(); },
         rgbAt: function (image, x, y) { return adapter.rgbAt(image, x, y); },
+        countColor: function (image, color, options) {
+            return typeof adapter.countColor === "function" ? adapter.countColor(image, color, options) : null;
+        },
         createTap: function (options) { return adapter.createTap(options); },
         setCaptureBackend: function (backend, options) { return adapter.setCaptureBackend(backend, options); },
         captureBackend: function () { return adapter.captureBackend(); },
@@ -91,6 +96,13 @@ function createPorts(adapter, extra) {
         },
         bringPackageToFront: function (pkg) {
             return typeof adapter.bringPackageToFront === "function" ? adapter.bringPackageToFront(pkg) : false;
+        },
+        /**
+         * 用「最近任务」切出再切回（连按两次 APP_SWITCH）：强制游戏 pause→resume。
+         * 用于「走子动画卡在中间」时催一下（见 auto-driver 的 opts.nudge）。
+         */
+        bringToFrontByRecents: function () {
+            return typeof adapter.bringToFrontByRecents === "function" ? adapter.bringToFrontByRecents() : false;
         },
         windowsAt: function (x, y) {
             return typeof adapter.windowsAt === "function" ? adapter.windowsAt(x, y) : [];

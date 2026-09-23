@@ -15,11 +15,19 @@ const fusionModule = require("../src/vision/temporal-fusion.js");
 const pieceSide = require("../src/vision/piece-side.js");
 const recognizer = require("../src/vision/recognizer.js");
 const defaultsUtil = require("../src/util/defaults.js");
+const gridSearch = require("../src/vision/grid-search.js");
+const boardLocator = require("../src/vision/board-locator.js");
+const latticeDetector = require("../src/vision/lattice-detector.js");
+const locateBoardEntry = require("./locate-board.js");
 
 let passed = 0;
 const failures = [];
 
 function check(name, body) {
+    // 定位「哪个用例挂住」用：SELF_CHECK_TRACE=1 时逐条打印（默认安静）
+    if (process.env.SELF_CHECK_TRACE) {
+        process.stdout.write("[check] " + name + "\n");
+    }
     try {
         const result = body();
         if (result === true || result === undefined) {
@@ -117,6 +125,40 @@ check("象过河会被判为错误", function () {
     cells[fen.index(4, 0)] = "k";
     const validation = fen.validateBoard(cells);
     return validation.errors.length > 0 || "没有报错";
+});
+
+check("河沿象位（红相 row 5 = c4/g4）不是「过河」（2026-09-21 真机卡死 14 分钟的真凶）", function () {
+    // 标准着法「飞相 e2→c4」后，红相落在河沿 (2,5)/(6,5) —— 合法象位。
+    // 旧校验器把象位行写成 {7,8,9}（漏了 5、还误收 8）⇒ 河沿的相每帧被判「过河」⇒
+    // 驱动的 inspect 永远不过 ⇒ 算棋全失败 ⇒ 无限 RECOVERING。这条断言在修前必失败。
+    const cells = new Array(90);
+    cells[fen.index(2, 5)] = "B";
+    cells[fen.index(4, 9)] = "K";
+    cells[fen.index(4, 0)] = "k";
+    const validation = fen.validateBoard(cells);
+    if (validation.errors.length > 0) {
+        return "河沿象位被误判：" + validation.errors.join("；");
+    }
+    // 对称：黑象河沿 (2,4)
+    const blackCells = new Array(90);
+    blackCells[fen.index(2, 4)] = "b";
+    blackCells[fen.index(4, 9)] = "K";
+    blackCells[fen.index(4, 0)] = "k";
+    const blackValidation = fen.validateBoard(blackCells);
+    return blackValidation.errors.length === 0 ||
+        ("黑象河沿被误判：" + blackValidation.errors.join("；"));
+});
+
+check("非象位行（自家半边但不是象位）仍要告警（红线不能放宽）", function () {
+    const cells = new Array(90);
+    cells[fen.index(2, 6)] = "B";     // row 6：自家半边、非象位
+    cells[fen.index(4, 9)] = "K";
+    cells[fen.index(4, 0)] = "k";
+    const validation = fen.validateBoard(cells);
+    const warned = validation.warnings.some(function (text) {
+        return text.indexOf("非象位行") >= 0;
+    });
+    return warned || ("没有对 row 6 的相告警：" + JSON.stringify(validation.warnings));
 });
 
 // ---------------------------------------------------------------- 几何
@@ -1184,6 +1226,19 @@ check("算棋·搜索：一步杀能被找到", function () {
         ("没看到杀棋：score=" + result.score + " best=" + result.iccs + " depth=" + result.depth);
 });
 
+check("算棋·搜索：被将时静态搜索要搜逃将着法（depth1 也要看见一步杀——真机输棋暴露的洞）", function () {
+    // 2026-09-21 凌晨输棋复盘：静态搜索只搜吃子，而被将时的逃法多数**不是吃子**（走将/垫子）
+    //   ⇒ 杀网在搜索里「看不见」（那盘最后 -859 → -29998 被将死，引擎明明在搜）。
+    // 修：quiescence 被将时搜全部着法、跳过 standPat（见 search.js）。
+    // 这条断言在修前会失败（depth1 给的是别的手），修后必须直接报出杀。
+    const result = searchModule.search(fen.parseFen(MATE_IN_1).board, "w", { depth: 1 });
+    if (!result.ok) {
+        return "搜索失败：" + result.reason;
+    }
+    return result.score > searchModule.MATE - 200 ||
+        ("depth1 没看见一步杀：score=" + result.score + " best=" + result.iccs);
+});
+
 check("算棋·搜索：白吃一个车能被找到", function () {
     const result = searchModule.search(fen.parseFen(WIN_ROOK).board, "w",
         { movetime: 1500, depth: 3 });
@@ -1191,6 +1246,65 @@ check("算棋·搜索：白吃一个车能被找到", function () {
         return "搜索失败：" + result.reason;
     }
     return result.captured === "r" || ("没吃车：走 " + result.iccs + "，score=" + result.score);
+});
+
+check("算棋·搜索：叶子处对手「没有吃子」≠ 杀棋（2026-09-21 输棋根因：c6g6 假杀 29999）", function () {
+    // 真机现场（11:00，我方 10:59:57 那手）：FEN = 当时的「基准」。
+    // c6g6 吃卒后黑方**没被将、有 45 步合法着法、且一个吃子都没有** ⇒
+    // 旧 quiescence 在「没被将 + 没吃子」时也返回 -(MATE-ply)，把安静局面当将死
+    // ⇒ 引擎报「一步杀」（深度 1、3ms）⇒ 连走两步假杀（c6g6/g6g7）⇒ 攻势白送后一路滑到被将死。
+    // 修后：只有**确实被将**时才判负；这条断言在修前必失败。
+    const parsed = fen.parseFen("rnbakabnr/9/1c7/p1C1p1p1p/4c4/9/P1P3P1P/2N4C1/9/R1BAKABNR w - - 0 1");
+    if (!parsed.ok) {
+        return "夹具 FEN 解析失败：" + parsed.errors;
+    }
+    const result = searchModule.search(parsed.board, "w", { movetime: 1500, depth: 3 });
+    if (!result.ok) {
+        return "搜索失败：" + result.reason;
+    }
+    if (Math.abs(result.score) > searchModule.MATE - 200) {
+        return "又报了「杀」：" + result.iccs + " 评分 " + result.score + "（这局面根本没有杀）";
+    }
+    return true;
+});
+
+// Pikafish 适配器的选路逻辑是纯函数（不碰 $pikafish），离线可测
+const pikafishEngine = require("../src/engine/pikafish-engine.js");
+
+check("算棋·Pikafish 适配：排除表在候选里跳过（MultiPV 选路）", function () {
+    const candidates = [
+        { move: "b2e2", scoreCp: 10 },
+        { move: "h2e2", scoreCp: 8 },
+        { move: "b0c2", scoreCp: 5 }
+    ];
+    const picked = pikafishEngine.pickCandidate(candidates, ["b2e2"], "b2e2");
+    if (!picked || picked.move !== "h2e2") {
+        return "应当跳过 b2e2 选 h2e2，实际 " + JSON.stringify(picked);
+    }
+    const plain = pikafishEngine.pickCandidate(candidates, null, "b2e2");
+    return (plain && plain.move === "b2e2") ||
+        ("没有排除表就该取头名，实际 " + JSON.stringify(plain));
+});
+
+check("算棋·Pikafish 适配：候选全被排除时明确失败（交给路由回退）", function () {
+    const candidates = [{ move: "b2e2" }, { move: "h2e2" }];
+    const picked = pikafishEngine.pickCandidate(candidates, ["b2e2", "h2e2"], "b2e2");
+    if (picked !== null) {
+        return "全被排除却还给了 " + JSON.stringify(picked);
+    }
+    // 引擎没回候选（极快收敛只给 bestmove）时也要能按兜底着法判断
+    const fallback = pikafishEngine.pickCandidate(null, ["b2e2"], "b2e2");
+    return fallback === null ||
+        ("空候选 + 被排除的兜底着法应当为 null，实际 " + JSON.stringify(fallback));
+});
+
+check("引擎门面：飞相到河沿（e2→c4）后局面仍可算棋（旧校验器让每步算棋都失败）", function () {
+    // 与「河沿象位」同源：驱动卡死那 14 分钟里，inspect() 就是拿 validateBoard 的 errors 说话的。
+    const board = fen.parseFen(fen.START_FEN).board;
+    const one = legal.applyMove(board, { fromCol: 6, fromRow: 9, toCol: 4, toRow: 7 });   // 相 g0→e2
+    const two = legal.applyMove(one.board, { fromCol: 4, fromRow: 7, toCol: 2, toRow: 5 }); // 相 e2→c4
+    const problems = engineModule.inspect(two.board);
+    return problems.length === 0 || ("河沿相被 inspect 拒了：" + problems.join("；"));
 });
 
 check("算棋·搜索：无着可走（将死/困毙）要明确报出来", function () {
@@ -1447,7 +1561,9 @@ function harness(options) {
                 unknownCells: ext.unknownCells == null ? 0 : ext.unknownCells,
                 stable: ext.stable !== false,
                 geometryTrusted: ext.geometryTrusted !== false,
-                conflicts: ext.conflicts || 0
+                conflicts: ext.conflicts || 0,
+                // 识别自对齐会把驱动侧的几何版本 +1，快照要能带上它（见「几何版本同步」用例）
+                geometryVersion: ext.geometryVersion == null ? undefined : ext.geometryVersion
             }
         };
     }
@@ -1535,6 +1651,46 @@ function advanceToPrecheck(h) {
     });
     return prep;
 }
+
+// ---- 几何版本同步（真机 2026-09-21：「面板在点、游戏没反应」的根因）
+
+check("几何版本随观察帧同步：自对齐把版本 +1 后，新票据必须拿新版本", function () {
+    // 真机事故：识别自对齐/钉棋子让驱动侧的 grid.version 从 1 跳到 2（驱动收编了 result.grid），
+    // 但状态机的 versions.geometryVersion 从来不更新 ⇒ 之后新造的票据全挂 v1
+    // ⇒ 点击器核对 grid.version(2) !== ticket.geometryVersion(1) 直接 REJECTED
+    // ⇒ 日志「票据几何版本 v1 / 当前 v2」、面板一直「在点」但游戏毫无反应，直到尝试预算耗尽暂停。
+    // 修法：观察帧（SNAPSHOT）带 geometryVersion，状态机只同步版本号、不动状态。
+    const h = harness({});
+    const prep = advanceToThinking(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    h.dispatch({
+        type: "JOB_RESULT", jobId: prep.jobId, ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE,
+        expectedAfterFen: AFTER_FEN, score: 15, depth: 3
+    });
+    const oldTicket = h.machine.currentTicket();
+    if (!oldTicket || oldTicket.geometryVersion !== 7) {
+        return "第一张票据的几何版本应为 7，实际 " + (oldTicket && oldTicket.geometryVersion);
+    }
+    // 识别自对齐：几何升到 v8；同一帧里局面也变了（对方应手了）⇒ 状态机重开一个任务
+    const next = h.dispatch(h.snapshotEvent(AFTER_REPLY_BOARD, "w", { geometryVersion: 8 }));
+    const compute = next.effects.filter(function (item) { return item.type === "COMPUTE"; })[0];
+    if (!compute) {
+        return "局面变化后没有重开任务（状态 " + next.state + "，效果 " +
+            next.effects.map(function (item) { return item.type; }).join("/") + "）";
+    }
+    h.dispatch({
+        type: "JOB_RESULT", jobId: compute.jobId, ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE,
+        expectedAfterFen: AFTER_FEN, score: 15, depth: 3
+    });
+    const ticket = h.machine.currentTicket();
+    if (!ticket) {
+        return "没有生成新票据";
+    }
+    return ticket.geometryVersion === 8 ||
+        ("新票据仍拿着旧几何版本 " + ticket.geometryVersion + "（点击器会 REJECTED：面板在点、游戏没反应）");
+});
 
 // ---- 票据：出手前核对
 
@@ -1707,6 +1863,53 @@ check("P4·点击：只识别/建议模式用禁用桩，调用即计数（A05 �
 
 // ---- 落子确认
 
+check("R05g 对方应手还在动画中（子同时画在起点与落点）→ UNRELIABLE 等下一帧，不作废票据", function () {
+    // 真机现场（2026-09-20 K40 新局）：确认观测 = 期望 + 「应手那枚子还画在起点」，
+    // 盘面看起来多一枚同型子、没有任何格少子（FEN 只差 1 格）⇒ 旧逻辑判 UNEXPECTED →
+    // 作废票据 + 恢复 → 之后 30s「轮次推不出来」空转。
+    const ticket = sampleTicket();
+    const expected = AFTER_BOARD.slice();
+    const reply = legal.allLegalMoves(expected, "b")[0];
+    const text = String(reply.iccs);
+    const from = (9 - Number(text.charAt(1))) * 9 + "abcdefghi".indexOf(text.charAt(0));
+    const to = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+    const after = legal.applyMove(expected, reply).board;
+    if (!after[to]) {
+        return "夹具不对：应手落点没有子";
+    }
+    const observed = after.slice();
+    observed[from] = after[to];          // 起点那枚子还没清（动画中）
+    const verdict = verifier.verify({ ticket: ticket, observed: observed, unknownCells: 0 });
+    if (verdict.result !== "UNRELIABLE") {
+        return "应当判 UNRELIABLE（等下一帧），实际 " + verdict.result + "：" + verdict.reason;
+    }
+    if (String(verdict.reason).indexOf("动画") < 0) {
+        return "原因里要写明是应手动画（真机上分不出它和「看不清」就只能猜）：" + verdict.reason;
+    }
+    // 反例 1：多出来的那枚子**不在**任何合法应手的起点上（凭空多子）→ 必须仍然 UNEXPECTED
+    const bogus = after.slice();
+    let elsewhere = -1;
+    for (let i = 89; i >= 0; i--) {
+        if (!after[i] && i !== from) {
+            elsewhere = i;
+            break;
+        }
+    }
+    bogus[elsewhere] = after[to];
+    const bad = verifier.verify({ ticket: ticket, observed: bogus, unknownCells: 0 });
+    if (bad.result !== "UNEXPECTED") {
+        return "凭空多子必须照旧判 UNEXPECTED（动画容差不能放宽成万能），实际 " + bad.result + "：" + bad.reason;
+    }
+    // 反例 2：起点画的是**另一枚子**（不是应手那枚）→ 也不算动画
+    const wrongPiece = after.slice();
+    wrongPiece[from] = after[to] === after[to].toUpperCase() ? "p" : "P";
+    const bad2 = verifier.verify({ ticket: ticket, observed: wrongPiece, unknownCells: 0 });
+    if (bad2.result === "UNRELIABLE" && String(bad2.reason).indexOf("动画") >= 0) {
+        return "起点画的不是应手那枚子时不许当成动画帧";
+    }
+    return true;
+});
+
 check("P4·确认：等于预期落子后局面 → CONFIRMED（A01）", function () {
     const verdict = verifier.verify({ ticket: sampleTicket(), observed: AFTER_BOARD.slice() });
     return verdict.result === "CONFIRMED" ? true : (verdict.result + "：" + verdict.reason);
@@ -1838,6 +2041,57 @@ check("R05g 应手落点被读错兵种 + 另一格只是红黑读反 → 单步
  * （`auto-driver.registerMoveDestinations`），下一帧那一格就不再读成空，自然回到 UNCHANGED。
  */
 
+check("R05h 起点残影（模型在起点重读旧子）→ 开 allowSourceGhost 后能认出这一步（真机盘面）", function () {
+    // 真机现场（2026-09-20，K40 + 天天象棋，日志 17:42:31）：对方卒 g6g5 之后，
+    // 观测在起点 (6,3) 仍读得到卒（同时 (6,4) 也有），而我方刚落的炮 (2,3) 被读成黑炮 c。
+    // 旧逻辑：差异落在**起点**上 → 任何合法着法都解释不了 → 轮次推不出来 → 看门狗 → 恢复。
+    const base = fen.parseFen("rnbakab1r/9/1c4nc1/p1C1p1p1p/9/9/P1P1P1P1P/7C1/9/RNBAKABNR").board;
+    const observed = fen.parseFen("rnbakab1r/9/1c4nc1/p1c1p1p1p/6p2/9/P1P1P1P1P/7C1/9/RNBAKABNR").board;
+    // 前提：严格推断解释不了（真机日志里就是这一行“轮次推不出来”）
+    if (transition.infer(base, "b", observed, { allowPair: true }).status !== transition.STATUS.UNKNOWN) {
+        return "夹具前提不成立：严格推断竟然能解释";
+    }
+    // 默认（不开开关）必须**仍然严格**：单帧分不出残影与「其实没走、落点是幻觉」
+    if (transition.inferSingleWithDecorationTolerance(base, "b", observed)) {
+        return "默认不允许起点残影，这里却认了";
+    }
+    const tolerant = transition.inferSingleWithDecorationTolerance(base, "b", observed,
+        { allowSourceGhost: true });
+    if (!tolerant) {
+        return "开了 allowSourceGhost 仍认不出这一步";
+    }
+    if (String(tolerant.iccs) !== "g6g5") {
+        return "认成了 " + tolerant.iccs + "，应为 g6g5";
+    }
+    if (tolerant.nextSide !== "w") {
+        return "下一手应为轮到我方(w)，实际 " + tolerant.nextSide;
+    }
+    // 给出的盘面 = 基准 + 这一步（残影/颜色噪声都按着法纠回，不是拿观测当真相）
+    const expected = legal.applyMove(base, tolerant.move).board;
+    if (!legal.boardMatches(tolerant.board, expected)) {
+        return "给出的盘面不是「基准 + 这一步」";
+    }
+    if (tolerant.board[3 * 9 + 2] !== "C") {
+        return "(2,3) 没按基准纠回红炮：" + tolerant.board[3 * 9 + 2];
+    }
+    if (tolerant.board[3 * 9 + 6] !== null && tolerant.board[3 * 9 + 6] !== "") {
+        return "(6,3) 残影没清掉：" + tolerant.board[3 * 9 + 6];
+    }
+    // 反向保护一：开开关也不许把「起点换成了别的字」当残影
+    const swapped = observed.slice();
+    swapped[3 * 9 + 6] = "P";
+    if (transition.inferSingleWithDecorationTolerance(base, "b", swapped, { allowSourceGhost: true })) {
+        return "起点被换成异色异字却被当成残影";
+    }
+    // 反向保护二：「起点还留着子 + 落点读成空」= 这手很可能根本没发生 → 开开关也不许认
+    const notMoved = observed.slice();
+    notMoved[4 * 9 + 6] = null;
+    if (transition.inferSingleWithDecorationTolerance(base, "b", notMoved, { allowSourceGhost: true })) {
+        return "起点留子 + 落点读空被误认成走了一手";
+    }
+    return true;
+});
+
 check("P4·确认：出现一个合法对方应手 → OPPONENT_REPLY（A03）", function () {
     const verdict = verifier.verify({ ticket: sampleTicket(), observed: AFTER_REPLY_BOARD.slice() });
     if (verdict.result !== "OPPONENT_REPLY") {
@@ -1904,12 +2158,41 @@ check("P4·确认：只有别处那格颜色读反（棋其实没走成）→ UN
     return landed.result === "CONFIRMED" ? true : ("真落子被误判成 " + landed.result);
 });
 
-check("P4·确认：有未知格是「看不清」，绝不能当成没落子", function () {
+check("P4·确认：未知格外围格按「唯一解释」判 —— 只有一种解释能对上 ⇒ 确认", function () {
+    // ⚠️ 2026-09-20 改判据：旧断言是「任何未知格都 UNRELIABLE」，太保守 ——
+    //   真机上木纹压字/水印/装饰造成**任何一格 '?'** 都会让确认超时（实测每次白烧 ~15s 恢复）。
+    //   新判据：把看不清的格剔出比对，看「我方这手（对方未应）」与「我方这手 + 某个合法应手」
+    //   是不是只有一个能对上所有看得清的格。
+    //   本用例：未知格是黑車/黑馬的**原位** —— 若它们动过，落点在观测里看得见且仍是空的 ⇒
+    //   那些应手全被排除 ⇒ 只剩「我方这手、对方未应」一个解释 ⇒ 可以确认。
     const observed = AFTER_BOARD.slice();
     observed[0] = "?";
     observed[1] = "?";
     const verdict = verifier.verify({ ticket: sampleTicket(), observed: observed, unknownCells: 2 });
-    return verdict.result === "UNRELIABLE" ? true : (verdict.result + "：" + verdict.reason);
+    if (verdict.result !== verifier.RESULT.CONFIRMED) {
+        return "应当确认（唯一解释），实际 " + verdict.result + "：" + verdict.reason;
+    }
+    if (verdict.board[0] !== AFTER_BOARD[0] || verdict.board[1] !== AFTER_BOARD[1]) {
+        return "看不清的格要按票据/棋规补齐：" + verdict.board[0] + "/" + verdict.board[1];
+    }
+    if (verdict.unknownCells !== 2) {
+        return "未知格账目要留着（体检用）：" + verdict.unknownCells;
+    }
+    return true;
+});
+
+check("P4·确认：对方那手的两格都看不清 ⇒ 两种解释都能对上 ⇒ 仍然 UNRELIABLE（绝不能当成没落子）", function () {
+    const reply = legal.legalMoves(AFTER_BOARD, 1, 0, "b")[0];      // 黑馬 (col 1,row 0) 的一个合法应手
+    const text = String(reply.iccs);
+    const start = (9 - Number(text.charAt(1))) * 9 + "abcdefghi".indexOf(text.charAt(0));
+    const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+    const observed = AFTER_BOARD.slice();
+    observed[start] = "?";
+    observed[dest] = "?";
+    const verdict = verifier.verify({ ticket: sampleTicket(), observed: observed, unknownCells: 2 });
+    return verdict.result === verifier.RESULT.UNRELIABLE
+        ? true
+        : ("应当 UNRELIABLE（两种解释都能对上），实际 " + verdict.result + "：" + verdict.reason);
 });
 
 check("P4·确认：别的可靠局面 → UNEXPECTED 并带上差异格", function () {
@@ -2181,6 +2464,42 @@ check("P4·状态机：确认超时 → 只恢复，不重复盲点", function (
         ? true : "确认超时后又点了一次";
 });
 
+check("P4·状态机：确认期间「轮次未知」的观测不许把状态拽出 VERIFYING（真机 07:43 UNRELIABLE 死循环根因）", function () {
+    // 真机 2026-09-21 07:42-07:45（K40）：点击 g0g3 后确认连刷「装饰容差下 12~13 种应手解释」，
+    // 而每条观测的轮次都推不出来（基准被幻影/重建搅乱）⇒ 旧顺序里「轮次未知看门狗」在
+    // 「点击/确认中」早退之前动手：4s 一跳 RECOVERING → 恢复 → 回来还是确认同一张票据，
+    // 2.5s 的「确认超时 → CANCEL_TICKET」永远等不到（TICK 到时状态总不是 VERIFYING）
+    // ⇒ 同一手卡死两分半，最后还把 activeOwnMove 清掉。
+    // 修：点击/确认进行中时，观测只喂确认流程 —— 先于任何看门狗/几何/冲突判断返回。
+    const h = harness({});
+    const prep = advanceToPrecheck(h);
+    if (!prep.ok) {
+        return prep.reason;
+    }
+    h.dispatch(h.snapshotEvent(START_BOARD, "w"));
+    h.executeCurrentTicket();
+    if (h.machine.state() !== "VERIFYING") {
+        return "夹具前提不成立：点击后没进 VERIFYING（" + h.machine.state() + "）";
+    }
+    // 一条「轮次未知」的观测：状态必须还是 VERIFYING（修前会被拽成 WAIT_TURN）
+    h.clock.value += 300;
+    h.dispatch({ type: "SNAPSHOT", snapshot: { board: START_BOARD.slice(), side: null, fen: START_FEN, unknownCells: 0, stable: true } });
+    if (h.machine.state() !== "VERIFYING") {
+        return "轮次未知的观测把状态拽走了：" + h.machine.state() + "（" + h.machine.reason() + "）";
+    }
+    // 时间推过确认超时（不足看门狗）：应走「确认超时 → RECOVER + CANCEL_TICKET」，不许被看门狗抢先
+    const watchBefore = h.machine.counters().watchdogTrips;
+    h.clock.value += 3000;
+    h.dispatch({ type: "TICK", nowMono: h.clock.value });
+    if (h.machine.counters().watchdogTrips !== watchBefore) {
+        return "确认期间触发了轮次看门狗（次数 " + h.machine.counters().watchdogTrips + "）";
+    }
+    if (h.machine.state() !== "RECOVERING") {
+        return "确认超时后应进 RECOVERING，实际 " + h.machine.state();
+    }
+    return h.effectsOf("CANCEL_TICKET") >= 1 ? true : "确认超时没有发 CANCEL_TICKET";
+});
+
 check("P4·状态机：未知格 / 几何不可信 → 不出手也不算棋", function () {
     const h = harness();
     h.dispatch({ type: "START" });
@@ -2307,6 +2626,146 @@ check("autoAlign：定位整体错 40px（框全出界）→ 不硬凑，报告 
 
 // ---------------------------------------------------------------- 算棋挪到 worker（独立引擎线程）
 
+// ---------------------------------------------------------------- 差分追踪（用户 2026-09-20 提的算法）
+// 「先看哪一格动了，再问那个兵种能不能这么走」——与「枚举全部合法着法 × 整盘比对」互为补充：
+// 追踪便宜（两个格子 + 一段路程）、且**不看落点格读成了什么**（高亮环把落点读花也认得出）。
+check("追踪：落点格被游戏画花（读成敌色）也认得出这一手 —— 真机 now24 的 C2→C6", function () {
+    const before = START_BOARD.slice();
+    const after = legal.applyMove(before, OWN_MOVE).board;
+    const dest = transition.squareIndex(OWN_MOVE.iccs, 1);
+    if (dest < 0) {
+        return "夹具前提不成立：OWN_MOVE.iccs = " + OWN_MOVE.iccs;
+    }
+    after[dest] = "p";                       // 高亮环：我方炮被读成黑卒
+    const got = transition.inferTracked(before, "w", after,
+        { allowPair: true, allowSourceGhost: true });
+    if (!got || got.status !== "MOVE") {
+        return "没追出来（" + (got ? got.status : "null") + "）";
+    }
+    if (String(got.moves[0].iccs) !== String(OWN_MOVE.iccs)) {
+        return "追出来的着法不对：" + got.moves[0].iccs + "，期望 " + OWN_MOVE.iccs;
+    }
+    if (got.nextSide !== "b") {
+        return "下一手该是黑方，实际 " + got.nextSide;
+    }
+    const applied = legal.applyMove(before, OWN_MOVE).board;
+    for (let i = 0; i < 90; i++) {
+        if ((got.board[i] || null) !== (applied[i] || null)) {
+            return "追踪给的盘面不是「基准 + 这一步」（第 " + i + " 格）";
+        }
+    }
+    return true;
+});
+
+check("追踪：兵种规则当真 —— 车路被挡 / 蹩马腿 / 炮吃子没架子，一律不给结论", function () {
+    const cases = [];
+    // ① 车 a0→a7：中间 (0,3) 有黑卒 ⇒ 车路被挡
+    let before = START_BOARD.slice();
+    let after = before.slice();
+    after[rules.idx(0, 0)] = null;
+    after[rules.idx(0, 7)] = "R";
+    cases.push({ name: "车路被挡", board: before, observed: after });
+    // ② 马 (1,0)→(3,1)：马腿 (2,0) 是象 ⇒ 蹩马腿
+    before = START_BOARD.slice();
+    after = before.slice();
+    after[rules.idx(1, 0)] = null;
+    after[rules.idx(3, 1)] = "N";
+    cases.push({ name: "蹩马腿", board: before, observed: after });
+    // ③ 炮 (1,7)→(1,9) 吃马：中间一个架子都没有 ⇒ 炮不能吃子
+    before = START_BOARD.slice();
+    after = before.slice();
+    after[rules.idx(1, 7)] = null;
+    after[rules.idx(1, 9)] = "C";
+    cases.push({ name: "炮吃子没架子", board: before, observed: after });
+    for (let i = 0; i < cases.length; i++) {
+        const got = transition.inferTracked(cases[i].board, "w", cases[i].observed,
+            { allowPair: true, allowSourceGhost: true });
+        if (got) {
+            return "「" + cases[i].name + "」不该给结论，却给出 " + got.status + " " + got.moves[0].iccs;
+        }
+    }
+    return true;
+});
+
+check("追踪：差分里有看不清的格子就不下结论", function () {
+    const before = START_BOARD.slice();
+    const after = legal.applyMove(before, OWN_MOVE).board;
+    after[transition.squareIndex(OWN_MOVE.iccs, 1)] = "p";   // 落点画花（追踪本来能认）
+    after[rules.idx(4, 5)] = "?";                            // 另一格看不清 ⇒ 不猜
+    const got = transition.inferTracked(before, "w", after,
+        { allowPair: true, allowSourceGhost: true });
+    if (got) {
+        return "有未知格还给结论：" + got.status;
+    }
+    return true;
+});
+
+check("追踪：起点空了 + 落点只读得出 '?'（光环）也能追出来（用户口径：按原来的位置扫）", function () {
+    // 用户 2026-09-20 口径：「按照对方的原来位置扫描，就可以退出来了 —— 那个棋不在那个位置」。
+    // 真机就是这么卡的：起点已空（子确实走了），落点被高亮环盖住只剩 '?'，
+    // 旧逻辑要求「落点必须是个子」⇒ 推不出来 ⇒ 恢复。现在只枚举**那一枚子自己的**合法走法。
+    const before = START_BOARD.slice();
+    const after = legal.applyMove(before, OWN_MOVE).board;
+    const src = transition.squareIndex(OWN_MOVE.iccs, 0);
+    const dest = transition.squareIndex(OWN_MOVE.iccs, 1);
+    after[dest] = "?";                       // 光环：落点看不到子
+    const got = transition.inferTracked(before, "w", after,
+        { allowPair: true, allowSourceGhost: true });
+    if (!got || got.status !== "MOVE") {
+        return "没追出来（" + (got ? got.status : "null") + "）";
+    }
+    if (String(got.moves[0].iccs) !== String(OWN_MOVE.iccs)) {
+        return "追出来的着法不对：" + got.moves[0].iccs;
+    }
+    if (got.board[dest] !== before[src]) {
+        return "落点没按着法改正（应为 " + before[src] + "，实际 " + got.board[dest] + "）";
+    }
+    if (String(got.reason).indexOf("?") >= 0) {
+        return "reason 里混进了「这一帧读成了什么」（会让跨帧佐证永远凑不齐）：" + got.reason;
+    }
+    return true;
+});
+
+check("追踪：起点空了但落点还是空的（子还在飞）⇒ 不许当走完了", function () {
+    const before = START_BOARD.slice();
+    const after = before.slice();
+    after[transition.squareIndex(OWN_MOVE.iccs, 0)] = null;   // 只有起点空了
+    const got = transition.inferTracked(before, "w", after,
+        { allowPair: true, allowSourceGhost: true });
+    if (got) {
+        return "子还在飞就被当成走完了：" + got.status + " " + got.moves[0].iccs;
+    }
+    return true;
+});
+
+check("追踪：两步（我方一步 + 对方应手）也追得出，且两个落点都被画花", function () {
+    const before = START_BOARD.slice();
+    const ours = OWN_MOVE;
+    const mid = legal.applyMove(before, ours).board;
+    const replies = legal.allLegalMoves(mid, "b").filter(function (move) {
+        // 挑一个「不吃子」的应手：落点在中间局面里是空的（吃子会把两处差分并到一格，夹具就没意义了）
+        return !mid[rules.idx(move.toCol, move.toRow)];
+    });
+    if (!replies.length) {
+        return "夹具前提不成立：对方没有不吃子的着法";
+    }
+    const reply = replies[0];
+    const after = legal.applyMove(mid, reply).board;
+    after[transition.squareIndex(ours.iccs, 1)] = "p";       // 我方落点画花
+    after[transition.squareIndex(reply.iccs, 1)] = "c";      // 对方落点也画花
+    const got = transition.inferTracked(before, "w", after,
+        { allowPair: true, allowSourceGhost: true });
+    if (!got || got.status !== "MOVE_PAIR") {
+        return "没追出两步（" + (got ? got.status : "null") + "）";
+    }
+    if (String(got.moves[0].iccs) !== String(ours.iccs) ||
+        String(got.moves[1].iccs) !== String(reply.iccs)) {
+        return "两步追错了：" + got.moves[0].iccs + " + " + got.moves[1].iccs +
+            "，期望 " + ours.iccs + " + " + reply.iccs;
+    }
+    return true;
+});
+
 const searchWorker = require("../src/automation/search-worker.js");
 const driverModule = require("../src/automation/auto-driver.js");
 const overlayDraw = require("../src/vision/overlay-draw.js");
@@ -2398,6 +2857,1733 @@ check("驱动：基准带未知格时不许假装补齐（真机 ② 空转 bug 
         return "不该抛异常（errors=" + after.errors + "：" + after.lastError + "）";
     }
     return driver.machine.state() === "ERROR" ? "状态机被推进 ERROR" : true;
+});
+
+check("驱动·全盘 OCR：说的正是账本上已有的值 ⇒ 不必等 3 帧共识，当帧就登记成已知事实（真机 18:15）", function () {
+    // 真机现场（2026-09-20）：我方炮那格被高亮环读成黑卒 `p`，而全盘 OCR 每 6s 才跑一次
+    // ⇒「翻色要 3 帧」≈ 18s 才落地，可轮次看门狗 4s 就先触发 ⇒ 每帧「轮次推不出来」→ 恢复。
+    // 判据：OCR 说的与**上一张可靠基准**完全一致 ⇒ 那是把帧纠正回来，不是给账本加新事实。
+    const idx = 0;                             // (0,0)：开局那枚黑車（'r'）
+    const truth = START_BOARD[idx];
+    const observed = START_BOARD.slice();
+    let ocrOn = true;
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (t) { noteText.push(String(t)); },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            const glyphs = new Array(90);
+            const sides = new Array(90);
+            const scores = new Array(90);
+            if (ocrOn) {
+                glyphs[idx] = "車";
+                sides[idx] = "BLACK";
+                scores[idx] = 0.95;
+            }
+            return {
+                ok: true,
+                chars: ocrOn ? START_BOARD.slice() : observed.slice(),
+                glyphs: glyphs, sides: sides, scores: scores, hits: ocrOn ? 1 : 0
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();                             // 第 1 帧：干净开局 ⇒ 基准 = 开局
+    // 这一帧模型把黑車读成红車（错），而 OCR 说「还是黑車」= 账本上已有的值 ⇒ 不用等共识
+    observed[idx] = truth.toUpperCase();
+    driver.tick();
+    const registered = noteText.some(function (t) { return t.indexOf("按已知事实补齐") >= 0; });
+    if (!registered) {
+        return "与账本一致的 OCR 结论不必等共识，应当帧就登记 — 日志 " +
+            noteText.filter(function (t) { return t.indexOf("全盘 OCR") >= 0; }).slice(-2).join(" / ");
+    }
+    // 之后 OCR 不可用的帧也不许把那格读回错的颜色（已知事实在兜）
+    ocrOn = false;
+    driver.tick();
+    driver.tick();
+    const seen = driver.lastBoard();
+    if (!seen || seen[idx] !== truth) {
+        return "已知事实没兜住那一格：应为 " + truth + "，实际 " + (seen ? seen[idx] : "无观测");
+    }
+    return true;
+});
+
+check("驱动·全盘 OCR 改正：兵种取字形、颜色取像素，且**翻色要连续 3 帧一致**（真机 (8,9) + 2026-09-20 闸门）", function () {
+    // 真机事故：对手的黑炮吃了我的底車，模型把那一格读成 R（車，旧内容）；
+    // 全盘 OCR 认出「炮」—— 旧代码纠兵种时**颜色取模型**，于是写成 C（红炮）⇒ 盘面「红炮 3 个」
+    // ⇒ 规则门否决整帧、棋卡死。用户口径（2026-09-20）：OCR 只管兵种，红黑一律从像素来。
+    // ★ 2026-09-20 再加闸门：单帧 OCR 直接写基准曾把账本改漂（重复黑炮/丢帅）⇒
+    //   「翻颜色」必须连续 3 帧读到同一个字、且像素（找色）给出决定性结论。
+    const idx = 89;                    // (8,9)
+    const observed = START_BOARD.slice();
+    observed[idx] = "R";               // 模型读成红車（错）
+    const ocrChars = START_BOARD.slice();
+    ocrChars[idx] = "c";               // board-scan：字形「炮」+ 像素采样=黑
+    const noteText = [];
+    const sides = new Array(90);
+    sides[idx] = "BLACK";
+    const scores = new Array(90);
+    scores[idx] = 0.9;
+    // 证据先不给（assertTurn 那一帧不能已被改过，否则基准一开始就是 c，测不出「基准要共识」）
+    const fixture = { on: false };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            let unknown = 0;
+            for (let i = 0; i < 90; i++) {
+                if (observed[i] === "?") { unknown += 1; }
+            }
+            return {
+                ok: true, chars: observed.slice(), unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            const chars = ocrChars.slice();
+            const glyphs = new Array(90);
+            glyphs[idx] = "炮";
+            if (!fixture.on) {
+                chars[idx] = "R";          // 还没给证据：OCR 也按模型读数返回
+            }
+            return {
+                ok: true, chars: chars, glyphs: glyphs,
+                sides: sides.slice(), scores: scores.slice(), hits: 1
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        // 闸门按「一次询问 = 一帧」计数；自检里把限频关掉，每次 tick 都是一帧
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();   // 基准 = 当前观测（此时那一格还是模型读的 R）
+    if (driver.lastReliable().board[idx] !== "R") {
+        return "声明基准时那一格应当还是 R，实际 " + driver.lastReliable().board[idx];
+    }
+    fixture.on = true;
+    driver.tick();         // 第 1 帧
+    // ★ 本帧观测要**立即**用上（否则同帧的验证会看到旧兵种 → UNEXPECTED）
+    const seen1 = driver.lastBoard();
+    if (!seen1 || seen1[idx] !== "c") {
+        return "本帧观测应当立即按证据改成 c（验证靠它），实际 " +
+            (seen1 ? seen1[idx] : "无观测") + " — 日志 " +
+            noteText.filter(function (t) { return t.indexOf("全盘 OCR") >= 0; }).slice(-2).join(" / ");
+    }
+    if (driver.lastReliable().board[idx] !== "R") {
+        return "基准还轮不到第 1 帧就改（账本漂移就是这么来的）：" + driver.lastReliable().board[idx];
+    }
+    driver.tick();         // 第 2 帧
+    if (driver.lastReliable().board[idx] !== "R") {
+        return "翻色要连续 3 帧，第 2 帧仍不该写基准，实际 " + driver.lastReliable().board[idx];
+    }
+    driver.tick();         // 第 3 帧 ⇒ 采纳
+    const reliable = driver.lastReliable();
+    if (!reliable || !reliable.board) {
+        return "没有可靠基准";
+    }
+    if (reliable.board[idx] !== "c") {
+        return "(8,9) 应当是黑炮 c（兵种取字形、颜色取像素），实际 " + reliable.board[idx] +
+            "（若为 C 就是又把颜色取成了模型那一套）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("全盘 OCR") >= 0; }).slice(-2).join(" / ");
+    }
+    return true;
+});
+
+check("驱动·全盘 OCR 硬闸：已知事实已经定死颜色的格子，像素说反色也不许翻（真机 17:49 事故）", function () {
+    // 真机现场（2026-09-20，K40）：我方 h2c2 的落点带高亮环 ⇒ 像素把红炮判成黑 ⇒
+    // 三帧共识把「黑炮」写进基准 ⇒ 之后每帧都对不上、白烧一次恢复。
+    // 棋子一局里**不会改颜色**：已知事实（票据 + 棋规推出来的）说这格是我方炮，它就是红炮。
+    const text = String(OWN_MOVE.iccs);
+    const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+    let observed = START_BOARD.slice();        // 先给一张干净开局，让驱动建立轮次基准
+    let truth = null;
+    let flipOn = false;                        // 真机时序：落点**先**登记成已知事实，之后像素才开始撒谎
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (text2) { noteText.push(String(text2)); },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            const chars = observed.slice();
+            if (flipOn && truth) {
+                chars[dest] = truth === truth.toUpperCase() ? truth.toLowerCase() : truth.toUpperCase();
+            }
+            const glyphs = new Array(90);
+            const sides = new Array(90);
+            const scores = new Array(90);
+            if (flipOn && truth) {
+                glyphs[dest] = "炮";
+                sides[dest] = truth === truth.toUpperCase() ? "BLACK" : "RED";   // 像素也站同一边（判反了）
+                scores[dest] = 0.9;
+            }
+            return { ok: true, chars: chars, glyphs: glyphs, sides: sides, scores: scores, hits: 1 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();                             // 开局 ⇒ 基准 = 开局、轮到红方
+    // 我方走一步：跨帧佐证要连续两帧推出同一个解释，第 2 帧会把**落点登记成已知事实**
+    truth = AFTER_BOARD[dest];
+    observed = AFTER_BOARD.slice();
+    driver.tick();
+    driver.tick();
+    const registered = noteText.some(function (t) { return t.indexOf("会被画环") >= 0; });
+    // 现在才让「像素 + 全盘 OCR」把那格说成反色（真机就是高亮环骗了像素）
+    flipOn = true;
+    for (let i = 0; i < 4; i++) {
+        driver.tick();
+    }
+    if (!registered) {
+        return "夹具前提不成立：落点没被登记成已知事实 — 日志 " +
+            noteText.filter(function (t) { return t.indexOf("已知事实") >= 0; }).slice(-2).join(" / ");
+    }
+    if (!(driver.stats().ocrFlipBlocked >= 1)) {
+        return "颜色翻转没有被已知事实驳回（ocrFlipBlocked=" + driver.stats().ocrFlipBlocked + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("全盘 OCR") >= 0; }).slice(-2).join(" / ");
+    }
+    const reliable = driver.lastReliable();
+    if (!reliable || reliable.board[dest] !== truth) {
+        return "已知事实被像素翻了颜色（应为 " + truth + "，实际 " +
+            (reliable ? reliable.board[dest] : "无基准") + "）";
+    }
+    return true;
+});
+
+check("驱动：全盘 OCR 想改「我方刚落点」时整轮不许抛异常（真机 now22：from is not initialized 死循环）", function () {
+    // 真机铁证（now22）：`activeOwnMove.destIndex` 早退块里用了 `from`/`want`，而这两个 const
+    // 声明在它**下面** ⇒ 一命中就抛 TDZ（QuickJS 文案恰好是 `from is not initialized`）⇒
+    // `applyOcrBoardFixes` 整体抛出 ⇒ 那一轮作废 ⇒ 落点格的误读留到下一帧 ⇒ 又「轮次推不出来」
+    // ⇒ 恢复 ⇒ 再撞。异常被上层 catch 成「本轮异常（已跳过，下一轮重试）」——日志里像良性提示，
+    // 实际是死循环的开关。这条用例只守一件事：那条闸门必须**静默驳回**，不许抛。
+    const text = String(OWN_MOVE.iccs);
+    const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+    const stage = { clicked: false, broken: false };
+    const noteText = [];
+    const board = function () {
+        if (!stage.clicked) {
+            return START_BOARD.slice();
+        }
+        const cells = AFTER_BOARD.slice();
+        if (stage.broken) {
+            cells[79] = "?";                    // 别的格子出未知格 ⇒ 逼确认/恢复路径把 ocrBoard 叫起来
+        }
+        return cells;
+    };
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (t) { noteText.push(String(t)); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = board();
+            let unknown = 0;
+            for (let i = 0; i < 90; i++) {
+                if (cells[i] === "?") {
+                    unknown += 1;
+                }
+            }
+            return {
+                ok: true, chars: cells, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            const chars = board();
+            const glyphs = new Array(90);
+            const sides = new Array(90);
+            const scores = new Array(90);
+            if (stage.clicked) {
+                // 高亮环：「像素 + 全盘 OCR」都把我方刚落下的那格说成黑卒（真机现场）
+                chars[dest] = "p";
+                glyphs[dest] = "卒";
+                sides[dest] = "BLACK";
+                scores[dest] = 0.9;
+            }
+            return { ok: true, chars: chars, glyphs: glyphs, sides: sides, scores: scores, hits: 1 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;           // 落点那次 tap：从此我方刚落点 = 点击窗口内
+            }
+            return { ok: true, method: "self-check-tap" };
+        },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0 }
+    });
+    driver.start();
+    for (let i = 0; i < 6 && !stage.clicked; i++) {
+        driver.tick();                          // 走到「我方出手 → SENT」
+    }
+    if (!stage.clicked) {
+        return "夹具前提不成立：点击没发生（状态 " + driver.machine.state() + "）";
+    }
+    stage.broken = true;                        // 别的格子出未知格 ⇒ 逼出恢复/OCR 路径
+    for (let i = 0; i < 8; i++) {
+        driver.tick();
+    }
+    const crashed = noteText.filter(function (t) { return t.indexOf("本轮异常") >= 0; });
+    if (crashed.length) {
+        return "改「我方刚落点」时整轮抛异常（" + crashed[0] + "）—— 那一刻会作废整轮、误读留到下一帧 ⇒ 死循环";
+    }
+    if (!(driver.stats().ocrFlipBlocked >= 1)) {
+        return "没走到「我方刚落点」这条闸门（ocrFlipBlocked=" + driver.stats().ocrFlipBlocked +
+            "；状态 " + driver.machine.state() + "）— 日志 " + noteText.slice(-5).join(" / ");
+    }
+    return true;
+});
+
+check("驱动：往空位补子必须有墨迹证据（真机 now29 坏轮：(4,7)空→C 与 (7,7) 打架）", function () {
+    // 真机现场：OCR 在**空格** (4,7) 上读出「炮」，找色也说红 ⇒ 补进观测与账本 ⇒
+    // 与 (7,7) 的真炮来回打架 ⇒ 一轮 15 次「轮次推不出来」。修法：往空位补子必须有**正面墨迹证据**
+    // （找色两边的密度都低于门槛 ⇒ 驳回）。
+    const empty = rules.idx(4, 7);            // 开局 (4,7) 是空的（红炮家在 (1,7)/(7,7)）
+    let observed = START_BOARD.slice();
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (t) { noteText.push(String(t)); },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            // 谎报：把空格 (4,7) 读成红炮（连续两帧一致 ⇒ 会过「共识」闸门）
+            const chars = observed.slice();
+            const glyphs = new Array(90);
+            const sides = new Array(90);
+            const scores = new Array(90);
+            chars[empty] = "C";
+            glyphs[empty] = "炮";
+            sides[empty] = "RED";
+            scores[empty] = 0.95;
+            return { ok: true, chars: chars, glyphs: glyphs, sides: sides, scores: scores, hits: 1 };
+        },
+        ocrCell: function () {
+            // 找色：那一格两边都没有墨迹（密度 0）⇒ 空格
+            return { ok: true, side: null, cls: null, char: null, score: 0,
+                ink: { area: 1000, red: 0, black: 0 } };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    for (let i = 0; i < 4; i++) {
+        driver.tick();
+    }
+    if (!((driver.stats().ocrEmptyBlocked || 0) >= 1)) {
+        return "空格补子没被墨迹证据驳回（ocrEmptyBlocked=" + (driver.stats().ocrEmptyBlocked || 0) +
+            "）— 日志 " + noteText.filter(function (t) { return t.indexOf("全盘 OCR") >= 0; })
+                .slice(-2).join(" / ");
+    }
+    const seen = driver.lastBoard();
+    if (seen && seen[empty]) {
+        return "空格还是被补上了子：" + seen[empty];
+    }
+    return true;
+});
+
+check("驱动：观察撞上走子动画（两帧不一致）⇒ 补一帧躲开，且仍是严格合并", function () {
+    // 真机 now30：同一格一帧读成子、一帧读成暗影 ⇒ 严格合并降级成未知 ⇒ 整轮「布局没生成」白等。
+    // ⚠️ 这条能力**默认关**（两轮真机 A/B：补帧每轮多 ~1.4s ⇒ 出招 8→4，得不偿失），
+    //   所以用例里显式打开 —— 将来收紧触发条件再开时，这条用例能保证它仍然“只在变好时才采用”。
+    const board = START_BOARD.slice();
+    const dest = rules.idx(4, 5);
+    let calls = 0;
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (t) { noteText.push(String(t)); },
+        sleep: function () { },
+        recognize: function () {
+            calls += 1;
+            const cells = board.slice();
+            cells[dest] = calls === 1 ? "p" : "P";   // 第一帧撞上动画（读成敌色），之后干净
+            return {
+                ok: true, chars: cells, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 2, observeRetryGapMs: 0, observeRetryOnUnknown: true }
+    });
+    driver.start();
+    for (let i = 0; i < 3; i++) {
+        driver.tick();
+    }
+    if (!((driver.stats().observeRetries || 0) >= 1)) {
+        return "没触发「补一帧」（observeRetries=" + (driver.stats().observeRetries || 0) + "）";
+    }
+    if (!((driver.stats().observeRetryHits || 0) >= 1)) {
+        return "补帧没救回来（observeRetryHits=" + (driver.stats().observeRetryHits || 0) +
+            "）— 日志 " + noteText.slice(-3).join(" / ");
+    }
+    const seen = driver.lastBoard();
+    if (!seen || seen[dest] !== "P") {
+        return "补帧后那格应是 P，实际 " + (seen ? seen[dest] : "无");
+    }
+    return true;
+});
+
+check("驱动·异色异字的落点误读：像素（找色）站已知事实这边时不许丢记录（真机 now23 死循环）", function () {
+    // 真机铁证（now23）：我方炮落在 (2,3) 之后**被游戏画花**，模型把红炮读成**黑卒 p**
+    // （异色 + 异字）⇒ 旧逻辑走 ④「真的被吃/走开了」把已知事实记录**丢掉** ⇒
+    // 之后每帧都读成 p 也没人补 ⇒ 差分「变化 0 格」永远不动 ⇒ 每 12 秒一轮
+    // `轮次推不出来 → 恢复 → 重建基准`（日志里 `(col 2,row 3) C→p` 反复出现）。
+    // 歧义判据（本轮新增）：拿**第三票** —— 找色/像素说那格的墨迹是哪一边。
+    const text = String(OWN_MOVE.iccs);
+    const dest = (9 - Number(text.charAt(3))) * 9 + "abcdefghi".indexOf(text.charAt(2));
+    let observed = START_BOARD.slice();
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (t) { noteText.push(String(t)); },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            return {
+                ok: true, chars: observed.slice(),
+                glyphs: new Array(90), sides: new Array(90), scores: new Array(90), hits: 0
+            };
+        },
+        ocrCell: function () {
+            // 像素（找色）说那格是**红**的，兵种也读成「炮」——与已知事实一致
+            return { ok: true, side: "RED", cls: "炮", char: "C", score: 0.9 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();                             // 开局 ⇒ 基准
+    observed = AFTER_BOARD.slice();            // 我方这一手成立 ⇒ 落点登记成已知事实
+    driver.tick();
+    driver.tick();
+    if (!noteText.some(function (t) { return t.indexOf("会被画环") >= 0; })) {
+        return "夹具前提不成立：落点没被登记成已知事实 — 日志 " + noteText.slice(-3).join(" / ");
+    }
+    observed[dest] = "p";                      // 高亮环：红炮被读成黑卒（异色 + 异字）
+    for (let i = 0; i < 3; i++) {
+        driver.tick();
+    }
+    if (!(driver.stats().pixelKeptFacts >= 1)) {
+        return "异色异字的落点误读没被像素证据挡下（pixelKeptFacts=" +
+            (driver.stats().pixelKeptFacts || 0) + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("已知事实") >= 0; }).slice(-3).join(" / ");
+    }
+    const seen = driver.lastBoard();
+    if (!seen || seen[dest] !== "C") {
+        return "观测/基准里那格没被保住（应为 C，实际 " + (seen ? seen[dest] : "无") + "）";
+    }
+    if (driver.stats().unknownTurn !== 0) {
+        return "保住事实之后仍出现「轮次推不出来」" + driver.stats().unknownTurn + " 次";
+    }
+    return true;
+});
+
+check("驱动·恢复后重建基准：这一帧把子读错兵种，而全盘 OCR 说那格与上一张基准一致 ⇒ 保住基准（真机 17:59）", function () {
+    // 真机现场（2026-09-20）：我方炮刚落下的那一格带高亮环，模型把它读成黑卒 `p` ⇒
+    // 「恢复 → 按观测量重建基准」照单全收 ⇒ 基准被写坏 ⇒ 之后每帧都「解释不了 4 格差异」⇒ 又恢复。
+    // 判据：全盘 OCR 说这格的字与**上一张基准完全一致**（兵种 + 颜色）⇒ 这格没动过，是帧读错了。
+    const idx = 7 * 9 + 1;                     // (col 1, row 7)：开局那门红炮（b2）
+    let observed = START_BOARD.slice();
+    let clock = 0;
+    if (START_BOARD[idx] !== "C") {
+        return "夹具写错了：开局那格应当是红炮，实际 " + START_BOARD[idx];
+    }
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function () { },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            // ⚠️ 冷却故意设得极大：让 applyOcrBoardFixes 那条路用不上，
+            //    只剩「重建基准时的证据闸」能救 —— 否则这条用例测不出新逻辑（真机也是冷却没到）。
+            const glyphs = new Array(90);
+            const sides = new Array(90);
+            const scores = new Array(90);
+            for (let i = 0; i < 90; i++) {
+                if (START_BOARD[i]) {
+                    glyphs[i] = "炮";
+                    sides[i] = START_BOARD[i] === START_BOARD[i].toUpperCase() ? "RED" : "BLACK";
+                    scores[i] = 0.95;
+                }
+            }
+            return { ok: true, chars: START_BOARD.slice(), glyphs: glyphs, sides: sides, scores: scores, hits: 30 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { clock += 1000; return clock; },
+        config: {
+            movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 999999,
+            unknownTurnWatchdogMs: 4000, recoverRetryMs: 1000
+        }
+    });
+    driver.start();
+    driver.tick();                             // 基准 = 开局
+    // 这一帧：(1,7) 的红炮读没了、(2,7) 冒出个黑卒 ⇒ 没有任何合法着法能解释 ⇒ 必然进恢复
+    observed = START_BOARD.slice();
+    observed[idx] = null;
+    observed[2 * 9 + 7] = "p";
+    const rebuildsBefore = driver.stats().baselineRebuilds;
+    // 一直喂坏帧直到**重建基准刚发生**（重建后同一 tick 的观测就是我们要断言的东西；
+    // 再多跑几 tick 会把 lastBoard 覆盖回原始坏帧，断言就没意义了）。
+    for (let i = 0; i < 12 && driver.stats().baselineRebuilds === rebuildsBefore; i++) {
+        driver.tick();
+    }
+    const rel = driver.lastReliable();
+    if (!(driver.stats().baselineRebuilds >= 1)) {
+        return "夹具前提不成立：重建基准没被触发（baselineRebuilds=" +
+            driver.stats().baselineRebuilds + "）";
+    }
+    if (!rel || !rel.board) {
+        return "没有可靠基准";
+    }
+    if (rel.board[idx] !== "C") {
+        return "重建基准时该保住 (1,7) 的红炮（全盘 OCR 说它没动），实际 " + rel.board[idx];
+    }
+    // ★ 只保住基准还不够（真机 now21 死循环 22 次）：「保住」改的是 rebuilt，
+    //   而**同一 tick 紧接着的 `sideFor` 用的是原始观测** —— 那一格还是误读 ⇒ 又「没有合法
+    //   着法能解释」⇒ 又恢复 ⇒ 又重建 ⇒ 循环。改正必须写回观测（`lastBoard`）。
+    const seenAfterRebuild = driver.lastBoard();
+    if (seenAfterRebuild && seenAfterRebuild[idx] !== "C") {
+        return "重建基准的改正没写回观测：lastBoard[1,7]=" + seenAfterRebuild[idx] +
+            "（真机表现为相邻两帧都「轮次推不出来」的死循环）";
+    }
+    return true;
+});
+
+/**
+ * 硬不变量的**两种处置**（2026-09-20 真机 now38 第一次跑就暴露了：白否 6 帧 = ~60s 恢复）：
+ *   · 轮次是**兜底猜的** + 只有一方被将 ⇒ 矛盾恰好能定轮次（被将方必须应着）⇒ 改轮次继续用；
+ *   · 两边同时被将（将帅照面）⇒ 怎么看都错 ⇒ 仍然否掉。
+ * 造夹具的要点：观测必须**解释不了**（否则轮次能按着法推出来，走不到兜底那条路）。
+ */
+check("驱动·重建基准：兜底轮次与盘面冲突（只有一方被将）⇒ 按「被将方必须应着」改轮次继续用", function () {
+    // 真机现场（now38）：兜底还说「黑方刚走完」，盘面却是红炮 (4,4) 隔着黑卒 (4,3) 在将黑将 (4,0)
+    // ⇒ 真相是**红方刚走完、轮到黑方**，兜底过时了。老逻辑白否这张盘 ⇒ 恢复空转一分钟。
+    const gun = 4 * 9 + 4;                     // (col 4, row 4)
+    let observed = START_BOARD.slice();
+    observed[2 * 9 + 1] = null;                // 红炮离开 (1,2)
+    observed[gun] = "C";                       // 红炮出现在 (4,4)：不是直线走法 ⇒ 推不出轮次
+    const noteText = [];
+    let clock = 0;
+    const driver = driverModule.createDriver({
+        allowClick: true,                     // ⚠️ 建议模式（allowClick:false）不恢复、走不到重建基准
+        tap: function () { return { ok: true, clicks: [] }; },
+        log: function (t) { noteText.push(String(t)); },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            return {
+                ok: true, chars: observed.slice(),
+                glyphs: new Array(90), sides: new Array(90), scores: new Array(90), hits: 0
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { clock += 1000; return clock; },
+        config: {
+            movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 999999,
+            unknownTurnWatchdogMs: 4000, recoverRetryMs: 1000
+        }
+    });
+    driver.start();
+    driver.tick();                             // 基准 = 标准开局，轮次红
+    for (let i = 0; i < 20 && !(driver.stats().sideFromCheck >= 1); i++) {
+        driver.tick();
+    }
+    if (!(driver.stats().sideFromCheck >= 1)) {
+        return "兜底轮次与盘面冲突时没有改轮次（sideFromCheck=" +
+            (driver.stats().sideFromCheck || 0) + "，impossibleInCheck=" +
+            (driver.stats().impossibleInCheck || 0) + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("被将") >= 0; }).slice(-2).join(" / ");
+    }
+    const rel = driver.lastReliable();
+    if (!rel || rel.side !== "b") {
+        return "改轮次后该轮到黑方，实际 " + (rel ? rel.side : "没有基准");
+    }
+    if (!rel.board || rel.board[gun] !== "C") {
+        return "改轮次后这张盘该被采纳（(4,4) 是红炮），实际 " + (rel.board ? rel.board[gun] : "无");
+    }
+    return true;
+});
+
+check("驱动·重建基准：将帅照面（两边同时被将）⇒ 仍然否掉，绝不拿来算棋", function () {
+    const observed = START_BOARD.slice();
+    observed[3 * 9 + 4] = null;                // 黑卒 (4,3) 没了
+    observed[6 * 9 + 4] = null;                // 红兵 (4,6) 也没了 ⇒ 中路只剩将帅
+    let clock = 0;
+    const driver = driverModule.createDriver({
+        allowClick: true,                     // 同上：建议模式不会进恢复流程
+        tap: function () { return { ok: true, clicks: [] }; },
+        log: function () { },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            return {
+                ok: true, chars: observed.slice(),
+                glyphs: new Array(90), sides: new Array(90), scores: new Array(90), hits: 0
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { clock += 1000; return clock; },
+        config: {
+            movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 999999,
+            unknownTurnWatchdogMs: 4000, recoverRetryMs: 1000
+        }
+    });
+    driver.start();
+    driver.tick();
+    for (let i = 0; i < 20; i++) {
+        driver.tick();
+    }
+    if (!(driver.stats().impossibleInCheck >= 1)) {
+        return "将帅照面的盘没被不变量拦下（impossibleInCheck=" +
+            (driver.stats().impossibleInCheck || 0) + "）";
+    }
+    if ((driver.stats().sideFromCheck || 0) !== 0) {
+        return "两边同时被将还改了轮次（sideFromCheck=" + driver.stats().sideFromCheck + "）";
+    }
+    const rel = driver.lastReliable();
+    if (rel && rel.board && rel.board[3 * 9 + 4] === null) {
+        return "将帅照面的盘被采纳成了基准（(4,3) 已成空）";
+    }
+    return true;
+});
+
+check("驱动·未知格挡住轮次：兜底门槛提前到 2 帧（别干等 4s 看门狗 → 再烧 5s 恢复）（真机 now39 占 25% 时间）", function () {
+    // now39 实测：8 段恢复全是 `轮次未知超时（看门狗）`，触发链条是
+    //   1 个格子读不出来 ⇒ sideFor 直接 return null ⇒ 看门狗 4s ⇒ 重新定位/观察 ~5s。
+    // 而「顽固未知 → 按上一张可靠盘面兜（未知=没变）」要 **4 帧**（≈4.8s）—— 看门狗总是先动手。
+    // 收紧点：**只在那格确实已经把轮次挡住**（上一帧 side 也是 null）时，门槛降到 2 帧；
+    //   正常节奏一律仍按 4 帧（now33 的教训：无条件提前填值更差）。
+    // 夹具要点：得让「已知事实补齐（F1/F2）」都补不出来，才走得到这条兜底 ——
+    //   · F1 要求「除未知格外全都与基准一致」⇒ 让**红兵真的走一步**（(4,6)→(4,5)）把它打掉；
+    //   · F2 要求「未知格正好是那唯一着法改动的格子」⇒ 未知格放在不相干的 (7,2) 上把它打掉。
+    const idx = 2 * 9 + 7;                     // (7,2) 那门黑炮：这一帧读不出来
+    let phase = 0;                             // 0 = 正常帧；≥1 = 那一格读成 '?'，且红兵已走 (4,6)→(4,5)
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function () { },
+        sleep: function () { },
+        recognize: function () {
+            const chars = START_BOARD.slice();
+            if (phase >= 1) {
+                chars[idx] = "?";
+                chars[6 * 9 + 4] = null;       // 红兵 (4,6) 走掉
+                chars[5 * 9 + 4] = "P";        // 落到 (4,5)
+            }
+            let unknown = 0;
+            for (let i = 0; i < 90; i++) {
+                if (chars[i] === "?") {
+                    unknown += 1;
+                }
+            }
+            return {
+                ok: true, chars: chars, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrCell: function () { return null; },   // 找色 + OCR 也没证据 ⇒ 只能走「按可靠盘面兜」
+        ocrBoard: function () { return { ok: false, reason: "自检：本用例只测兜底门槛" }; },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 999999, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();                             // 基准
+    driver.assertTurn();
+    phase = 1;
+    driver.tick();                             // 第 1 帧未知：还没「被挡住」（上一帧轮次是好的）⇒ 不提前兜
+    if ((driver.stats().unknownFilledFromReliable || 0) !== 0) {
+        return "第 1 帧就提前兜了（正常节奏不该动，now33 的教训）";
+    }
+    phase = 2;
+    driver.tick();                             // 第 2 帧：轮次已被挡住 ⇒ 门槛降到 2 帧 ⇒ 兜底生效
+    if (!((driver.stats().unknownFilledFromReliable || 0) >= 1)) {
+        return "第 2 帧没有兜底（unknownFilledFromReliable=" +
+            (driver.stats().unknownFilledFromReliable || 0) + "）";
+    }
+    phase = 3;
+    const third = driver.tick();               // 第 3 帧：粘住 ⇒ 那一帧就是完整的；跨帧佐证也满了
+    if (!third || third.side !== "b") {
+        return "第 3 帧应当推出「轮到黑方」（红兵已走），实际 " + (third ? third.side : "无结果") +
+            " — 日志 unknownFilledFromReliable=" + (driver.stats().unknownFilledFromReliable || 0);
+    }
+    const seen = driver.lastBoard();
+    if (seen && seen.indexOf("?") >= 0) {
+        return "兜底之后仍有未知格（" + seen.join("") + "）";
+    }
+    return true;
+});
+
+check("驱动·兜底填充不许顶超兵种上限（真机 now60：黑炮被兜成 3 枚 ⇒ 幻影误清真落点 ⇒ 轮次死锁）", function () {
+    // 真机 2026-09-21 now60：对方炮 (7,2)→(4,2) 平中；起点格 (7,2) 被游戏「上一步星光标记」的
+    // 粉白辉光压住 20s+ 读不出（面板侧已改为按**墨迹密度**判空，见 inkLooksEmpty），
+    // 而驱动这边把它兜成旧值 c ⇒ **黑炮 3 枚**（不可能盘面）⇒ 幻影去清真落点 (4,2)c、
+    //（那格有墨迹）又被收编 ⇒ 轮次永远停在「轮到对方」，整局不动。
+    // 夹具：观测 = 开局 + 一枚「谁也解释不了」的 c 落在 (4,4)（无合法单步能到） + (7,2) 读不出。
+    // 此时 c 已经 2 枚（(1,2)+(4,4)），兜底再填 (7,2)=c 就是第 3 枚 ⇒ 必须被硬校验驳回。
+    const logs = [];
+    let phase = 0;
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (line) { logs.push(String(line)); },
+        sleep: function () { },
+        recognize: function () {
+            const chars = START_BOARD.slice();
+            if (phase >= 1) {
+                chars[4 * 9 + 4] = "c";        // 多出来的一枚黑炮（无合法单步解释得了）
+                chars[2 * 9 + 7] = "?";        // 起点格 (7,2) 读不出来
+            }
+            let unknown = 0;
+            for (let i = 0; i < 90; i++) {
+                if (chars[i] === "?") {
+                    unknown += 1;
+                }
+            }
+            return {
+                ok: true, chars: chars, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrCell: function () { return null; },   // OCR+找色也没证据 ⇒ 只能走「按可靠盘面兜」
+        ocrBoard: function () { return { ok: false, reason: "自检：本用例只测上限驳回" }; },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 999999, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();                             // 基准（干净开局：(7,2)=c、(4,4)=空）
+    driver.assertTurn();
+    phase = 1;
+    for (let i = 0; i < 6; i++) {
+        driver.tick();
+    }
+    const seen = driver.lastBoard() || [];
+    let cCount = 0;
+    for (let i = 0; i < seen.length; i++) {
+        if (seen[i] === "c") {
+            cCount += 1;
+        }
+    }
+    if (cCount > 2) {
+        return "黑炮被兜成 " + cCount + " 枚（不可能盘面）：" + seen.join("");
+    }
+    if ((driver.stats().unknownFillRejected || 0) < 1) {
+        return "没有观察到「兵种上限驳回」（unknownFillRejected=" +
+            (driver.stats().unknownFillRejected || 0) + "）——夹具前提失效？";
+    }
+    if ((driver.stats().unknownFilledFromReliable || 0) !== 0) {
+        return "兜底居然填了（会把黑炮变 3 枚）：unknownFilledFromReliable=" +
+            driver.stats().unknownFilledFromReliable;
+    }
+    let hit = false;
+    for (let i = 0; i < logs.length && !hit; i++) {
+        hit = logs[i].indexOf("兵种上限驳回") >= 0;
+    }
+    if (!hit) {
+        return "日志里没有「兵种上限驳回」行";
+    }
+    return true;
+});
+
+check("状态机·等对方长时间没动 ⇒ 自动发 DECLARE_TURN 翻轮次（真机 now62：对方已走完被收编成基准修正 ⇒ 163s 死等）", function () {
+    // 真机 2026-09-21 凌晨：b0c2 确认 → 轮到对方 → 对方那步的新落子被幻影逻辑收编进基准 ⇒
+    // 差分永远「变化 0 格」⇒ 空闲警告从 20s 刷到 163s+ 直到循环到点（外行看像在等对手想棋）。
+    // 修法：等过 opponentIdleDeclareMs 就发 DECLARE_TURN（驱动重立基准+翻轮次，与点「轮到我」同路）。
+    const h = harness({});
+    h.dispatch({ type: "START" });
+    h.dispatch({ type: "READY", modelVersion: "self-check-idle-declare" });
+    h.dispatch({ type: "GEOMETRY", geometryVersion: 4, trusted: true });
+    h.dispatch(h.snapshotEvent(START_BOARD, "b"));      // 轮到对方
+    h.dispatch(h.snapshotEvent(START_BOARD, "b"));      // 画面没变 → 开始记空闲
+    h.clock.value += 21000;                              // 先过 20s 警告门槛
+    h.dispatch(h.snapshotEvent(START_BOARD, "b"));
+    if (String(h.machine.reason()).indexOf("判反") < 0) {
+        return "21s 还没出现「多半是轮次判反」提示：" + h.machine.reason();
+    }
+    const declaresBefore = h.machine.counters().idleTurnDeclares || 0;
+    h.clock.value += 30000;                              // 合计 51s > 45s 门槛
+    const out = h.dispatch(h.snapshotEvent(START_BOARD, "b"));
+    const types = out.effects.map(function (e) { return e.type; });
+    if (types.indexOf("DECLARE_TURN") < 0) {
+        return "超时没发 DECLARE_TURN（effects=" + types.join(",") + "，状态 " +
+            h.machine.state() + "｜" + h.machine.reason() + "）";
+    }
+    if ((h.machine.counters().idleTurnDeclares || 0) !== declaresBefore + 1) {
+        return "idleTurnDeclares 计数没涨（" + declaresBefore + " → " +
+            (h.machine.counters().idleTurnDeclares || 0) + "）";
+    }
+    return true;
+});
+
+check("状态机·暂停是「粘」的：暂停后新的观测不许把状态偷偷拉回 WAIT_TURN / THINKING（真机 now37 炮吃将循环 20 次）", function () {
+    // 真机铁证（now37，21:38–21:39）：暂停之后面板的循环仍在 tick、观察照常，
+    // 而 onSnapshot 原来**没有 PAUSED 闸门** —— 一条「轮次未知」的观测把状态 setState(WAIT_TURN)
+    // 拽出暂停，接着「轮到我方」的观测又推进 THINKING ⇒ 同一着法 e6e9 被重算/重试 20 次。
+    const h = harness({});
+    h.dispatch({ type: "START" });
+    h.dispatch({ type: "READY", modelVersion: "self-check-sticky" });
+    h.dispatch({ type: "GEOMETRY", geometryVersion: 7, trusted: true });
+    h.dispatch(h.snapshotEvent(START_BOARD, "w"));            // 轮到我方 → THINKING
+    h.dispatch({ type: "PAUSE", reason: "同一着法 e6e9 已试 4 次仍未确认落子" });
+    if (h.machine.state() !== "PAUSED") {
+        return "夹具前提不成立：没进 PAUSED（现在 " + h.machine.state() + "）";
+    }
+    const computesBefore = h.effectsOf("COMPUTE");
+    const states = [];
+    for (let i = 0; i < 3; i++) {
+        h.dispatch(h.snapshotEvent(START_BOARD, null));       // 轮次未知：真机就是这一条把暂停拽掉的
+        states.push(h.machine.state());
+        h.dispatch(h.snapshotEvent(START_BOARD, "w"));        // 轮到我方
+        states.push(h.machine.state());
+    }
+    if (h.machine.state() !== "PAUSED") {
+        return "暂停被观测解除了（" + states.join("→") + "）—— 真机上表现为同一着法被反复重试";
+    }
+    if (h.effectsOf("COMPUTE") !== computesBefore) {
+        return "暂停后还在发起算棋（COMPUTE " + computesBefore + "→" + h.effectsOf("COMPUTE") + " 次）";
+    }
+    // 显式 RESUME 仍然要能出来（闸门不能把恢复路一起堵死）
+    h.dispatch({ type: "RESUME" });
+    if (h.machine.state() !== "WAIT_STABLE") {
+        return "RESUME 被闸门挡住了（现在 " + h.machine.state() + "）";
+    }
+    return true;
+});
+
+check("驱动·同字异色抖动：观测只差一格颜色 ⇒ 按基准纠正并算「没变化」，不许判成「轮次推不出来」（真机 now39）", function () {
+    // 真机现场（now39，21:54:54 → 21:55:36，同一格 (4,6)，游戏给那枚棋画了高亮环）：
+    //   模型在 c/C/? 之间跳、全盘 OCR 的像素颜色也跟着跳 ⇒ 差分每帧都看到「变了」。
+    //   这一轮实测：8 段「轮次未知超时 → 恢复」×~5s = 占整轮 25% 的时间。
+    // 期望（既有机制，本用例把它钉住）：**同兵种、只差颜色**的格 ⇒ 按基准纠正、判「局面没变化」，
+    //   绝不当成「推不出来」—— 否则每 4s 看门狗一次、每局白烧几十秒。
+    //   ⚠️ 别为这个另加「按住旧颜色」的机制：既有这条（1 格颜色读反 ⇒ 按基准改）已经覆盖；
+    //      另加一层还会把真实换色（同兵种吃子）按住，反而改坏账本（本用例写完后专门撤销过一版）。
+    const idx = 2 * 9 + 7;                     // (7,2) 那门黑炮：翻转它不会让 clearPhantoms 误清
+    const seq = ["c", "C", "c", "C", "c", "C"];
+    let phase = 0;
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (t) { noteText.push(String(t)); },
+        sleep: function () { },
+        recognize: function () {
+            const chars = START_BOARD.slice();
+            chars[idx] = seq[Math.min(phase, seq.length - 1)];
+            return {
+                ok: true, chars: chars, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () { return { ok: false, reason: "自检：本用例只测同字异色纠正" }; },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();                             // 第 1 帧：c ⇒ 基准
+    driver.assertTurn();
+    const rel0 = driver.lastReliable();
+    if (!rel0 || !rel0.board || rel0.board[idx] !== "c") {
+        return "夹具前提不成立：基准那一格应当是 c，实际 " + (rel0 && rel0.board ? rel0.board[idx] : "无基准");
+    }
+    const unknownBefore = driver.stats().unknownTurn || 0;
+    for (let i = 1; i < seq.length; i++) {
+        phase = i;
+        driver.tick();
+        const seen = driver.lastBoard();
+        if (!seen || seen[idx] !== "c") {
+            return "第 " + i + " 帧（模型读 " + seq[i] + "）应当按基准纠正成 c，实际 " +
+                (seen ? seen[idx] : "无观测") + " — 日志 " +
+                noteText.filter(function (t) { return t.indexOf("按基准纠正") >= 0; }).slice(-1).join(" / ");
+        }
+    }
+    if ((driver.stats().unknownTurn || 0) !== unknownBefore) {
+        return "同字异色的抖动被误判成「轮次推不出来」（unknownTurn " + unknownBefore + "→" +
+            driver.stats().unknownTurn + "）";
+    }
+    return true;
+});
+
+check("驱动·全盘 OCR 补正闸门：像素（找色）没给结论、或与像素矛盾时，永不写基准", function () {
+    const idx = 89;
+    const observed = START_BOARD.slice();
+    observed[idx] = "R";                       // 模型说红車
+    const ocrChars = START_BOARD.slice();
+    ocrChars[idx] = "c";                       // 全盘 OCR 想改成黑炮（= 翻色）
+    const gate = { side: "UNKNOWN", score: 0.9 };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function () { },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            const glyphs = new Array(90);
+            const sides = new Array(90);
+            const scores = new Array(90);
+            glyphs[idx] = "炮";
+            sides[idx] = gate.side;
+            scores[idx] = gate.score;
+            return { ok: true, chars: ocrChars.slice(), glyphs: glyphs, sides: sides, scores: scores, hits: 1 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 5; i++) {
+        driver.tick();
+    }
+    if (driver.lastReliable().board[idx] !== "R") {
+        return "找色没给结论（UNKNOWN）时不许翻色，实际 " + driver.lastReliable().board[idx];
+    }
+    if (!(driver.stats().ocrBoardBlocked >= 1)) {
+        return "被驳回的格子要计数（体检用），实际 blocked=" + driver.stats().ocrBoardBlocked;
+    }
+    // 与像素结论**直接矛盾**（像素说红、补正想写成黑）也一样驳回
+    gate.side = "RED";
+    for (let i = 0; i < 5; i++) {
+        driver.tick();
+    }
+    if (driver.lastReliable().board[idx] !== "R") {
+        return "与找色结论矛盾时不许写（像素说红、却要补成黑炮），实际 " + driver.lastReliable().board[idx];
+    }
+    return true;
+});
+
+check("驱动·全盘 OCR 补正闸门：`?` 与低分字形永不写进盘面与基准，合法高分要连续 2 帧", function () {
+    const idx = 89;
+    const observed = START_BOARD.slice();
+    observed[idx] = null;                      // 模型漏检：那格看起来是空的
+    const fixture = { ch: "?", score: 0.9 };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function () { },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrBoard: function () {
+            const chars = new Array(90);
+            const glyphs = new Array(90);
+            const sides = new Array(90);
+            const scores = new Array(90);
+            chars[idx] = fixture.ch;
+            glyphs[idx] = "炮";
+            sides[idx] = "BLACK";
+            scores[idx] = fixture.score;
+            return { ok: true, chars: chars, glyphs: glyphs, sides: sides, scores: scores, hits: 1 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    // ① OCR 回的是 `?` ⇒ 永远不写（以前会被当成“有字”写进基准）
+    for (let i = 0; i < 4; i++) {
+        driver.tick();
+    }
+    if (driver.lastReliable().board[idx] !== null) {
+        return "`?` 不许写进盘面/基准，实际 " + driver.lastReliable().board[idx];
+    }
+    // ② 合法字但分数 0.2 ⇒ 仍然不写
+    fixture.ch = "c";
+    fixture.score = 0.2;
+    for (let i = 0; i < 4; i++) {
+        driver.tick();
+    }
+    if (driver.lastReliable().board[idx] !== null) {
+        return "低于 ocrPatchMinScore 的字形不许采纳，实际 " + driver.lastReliable().board[idx];
+    }
+    // ③ 分数够了：连续 2 帧才写
+    fixture.score = 0.9;
+    driver.tick();
+    if (driver.lastReliable().board[idx] !== null) {
+        return "第 1 帧不该写基准，实际 " + driver.lastReliable().board[idx];
+    }
+    driver.tick();
+    if (driver.lastReliable().board[idx] !== "c") {
+        return "连续 2 帧一致后应当补成 c，实际 " + driver.lastReliable().board[idx];
+    }
+    return true;
+});
+
+check("几何体检：整行偏一格的「假几何」必须被认出来（真机 origin.y 590 vs 真实 690）", function () {
+    const sanity = require("../src/vision/grid-sanity.js");
+    // 真机当时的行分布：黑方底线跑到第 1 行（8 枚）、第 0 行空的；红方底线掉到网格外
+    const shifted = sanity.rowsOf([
+        { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 },
+        { row: 3 }, { row: 3 }, { row: 3 }, { row: 3 }, { row: 3 },
+        { row: 4 }, { row: 4 }, { row: 4 }, { row: 4 },
+        { row: 6 }, { row: 6 }, { row: 6 }, { row: 6 },
+        { row: 7 }, { row: 7 }
+    ]);
+    const verdict = sanity.suspect(shifted);
+    if (verdict.ok) {
+        return "整行偏的网格必须判为可疑（行分布 " + shifted.join(",") + "）";
+    }
+    // 正常开局：两极端行各 9 枚 ⇒ 放行
+    const normal = sanity.rowsOf([
+        { row: 0 }, { row: 0 }, { row: 0 }, { row: 0 }, { row: 0 }, { row: 0 }, { row: 0 }, { row: 0 }, { row: 0 },
+        { row: 2 }, { row: 2 }, { row: 3 }, { row: 3 }, { row: 3 }, { row: 3 }, { row: 3 },
+        { row: 6 }, { row: 6 }, { row: 6 }, { row: 6 }, { row: 6 }, { row: 7 }, { row: 7 },
+        { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }
+    ]);
+    if (!sanity.suspect(normal).ok) {
+        return "正常开局不该被判可疑（行分布 " + normal.join(",") + "）";
+    }
+    // 下边也偏（第 9 行空、第 8 行挤满）同样要认出来
+    const shiftedDown = sanity.rowsOf([
+        { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 },
+        { row: 8 }, { row: 8 }, { row: 8 }, { row: 8 }, { row: 8 }, { row: 8 }, { row: 8 }
+    ]);
+    if (sanity.suspect(shiftedDown).ok) {
+        return "底边偏（第 9 行空、第 8 行 7 个）也该判可疑";
+    }
+    // ★ now49 真机（2026-09-20 深夜）：中残局里底线只剩 5~7 枚 ⇒ 整行偏的签名变成
+    //   「顶行 0 + 第 1 行 5 + **底行也只剩 1**」（真实的底线整排被挤到网格外）；
+    //   旧规则 ≥6 的门槛刚好漏掉（0,5,1,2,3,1,1,4,1,1 被放行 ⇒ 校准收下偏一行的网格）。
+    const midGameShift = sanity.rowsOf([
+        { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 },
+        { row: 2 },
+        { row: 3 }, { row: 3 },
+        { row: 4 }, { row: 4 }, { row: 4 },
+        { row: 5 },
+        { row: 6 },
+        { row: 7 }, { row: 7 }, { row: 7 }, { row: 7 },
+        { row: 8 },
+        { row: 9 }
+    ]);
+    const midVerdict = sanity.suspect(midGameShift);
+    if (midVerdict.ok || midVerdict.rows.join(",") !== "0,5,1,2,3,1,1,4,1,1") {
+        return "中残局整行偏（0,5,1,2,3,1,1,4,1,1）也要判可疑";
+    }
+    // 反向保护：真实的「顶行真空了」不许误判 —— 红方底线（第 9 行）完好就是最好的反证
+    const topEmptyLegit = sanity.rowsOf([
+        { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 }, { row: 1 },
+        { row: 2 },
+        { row: 3 }, { row: 3 },
+        { row: 4 }, { row: 4 },
+        { row: 6 }, { row: 6 }, { row: 6 },
+        { row: 8 }, { row: 8 },
+        { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }, { row: 9 }
+    ]);
+    if (!sanity.suspect(topEmptyLegit).ok) {
+        return "顶行真空、但底线 6 枚完好（合法局面）不该判可疑";
+    }
+    return true;
+});
+
+check("几何体检：平移候选按「±整行、±半行」排序（now47：锚错一行时先平移救回，不再直接回退缓存框）", function () {
+    const sanity = require("../src/vision/grid-sanity.js");
+    const list = sanity.shiftCandidates({ stepX: 115, stepY: 114 });
+    if (!list || list.length !== 4) {
+        return "应当给 4 个候选，实际 " + (list ? list.length : "无");
+    }
+    const flat = list.map(function (p) { return p.join(":"); }).join(" ");
+    if (flat !== "0:114 0:-114 0:57 0:-57") {
+        return "候选次序/数值不对：" + flat;
+    }
+    const odd = sanity.shiftCandidates({ stepY: 115 });    // 115/2=57.5 ⇒ 四舍五入 58
+    if (odd[2][1] !== 58 || odd[3][1] !== -58) {
+        return "半行应当四舍五入：" + JSON.stringify(odd);
+    }
+    return true;
+});
+
+/**
+ * 真机回归（2026-09-20 K40，用户现场）：`b2c2`（炮 (1,7)→(2,7)）发出后，确认那几帧里
+ * **起点与落点同时是 `?`**（棋子飞在空中/被高亮环盖住），而盘面其余格子与**落子前**完全一致。
+ *
+ * ❌ 旧行为：「已知事实补齐」的 F1（与上一张可靠盘面一致）照**落子前**的基准把两格都补成 C
+ *    ⇒ 基准变成 `…1CC4C1…`（两枚炮都在）⇒ 之后每一帧都「少一个子且解释不了」
+ *    ⇒ 轮次永远推不出来 ⇒ 永久 RECOVERING（用户看到的“卡住”）。
+ *
+ * 修法：本手在飞时（`activeOwnMove`），F1 比对/回填用的是**已走一手的基准** ——
+ * 起点补空、落点补走过去的那个子。
+ */
+check("驱动：我方这手在飞时，起点格不许被补回棋子（幻影炮回归 2026-09-20）", function () {
+    const fromIndex = transition.squareIndex(OWN_MOVE.iccs, 0);
+    const destIndex = transition.squareIndex(OWN_MOVE.iccs, 1);
+    if (fromIndex < 0 || destIndex < 0) {
+        return "夹具着法取不到起/落点：" + OWN_MOVE.iccs;
+    }
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const stage = { clicked: false };
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            // 出手前：干净开局；出手后：起点+落点两个未知格，其余与落子前一致（真机那一帧）
+            const cells = START_BOARD.slice();
+            if (stage.clicked) {
+                cells[fromIndex] = "?";
+                cells[destIndex] = "?";
+            }
+            let unknown = 0;
+            for (let i = 0; i < 90; i++) {
+                if (cells[i] === "?") { unknown += 1; }
+            }
+            return {
+                ok: true, chars: cells, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            // 一次出手 = 两次 tap；落点那次（kind="to"）才算真的出手了
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 8 && !stage.clicked; i++) {
+        driver.tick();
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "），日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 6; i++) {
+        driver.tick();
+    }
+    const reliable = driver.lastReliable();
+    if (!reliable || !reliable.board) {
+        return "没有可靠基准";
+    }
+    if (reliable.board[fromIndex] !== null) {
+        return "起点格被补回了一枚棋子（幻影 " + reliable.board[fromIndex] + "，应为空）—— 基准 " +
+            reliable.board.join("") + "；日志 " + noteText.filter(function (t) { return t.indexOf("补齐") >= 0; }).slice(-2).join(" / ");
+    }
+    if (reliable.board[destIndex] !== afterOwn[destIndex]) {
+        return "落点格不对：" + reliable.board[destIndex] + "，应为 " + afterOwn[destIndex];
+    }
+    return true;
+});
+
+/**
+ * 真机回归（2026-09-20 深夜，now14 18:20:53）：模型把 (0,0) 那枚黑車的框偏到了 (1,0) ⇒
+ * 观测里同一枚車占了**两格**（`rrbakab1r/…` vs 期望 `r1bakab1r/…`）⇒ 确认连刷 5 次
+ * 「还有 N 个未知格（且看得清的格子对不上这一手）」→ 恢复（白烧 ~20s）。
+ *
+ * 判据：**棋子不会分身** —— 观测里某枚子的个数多于期望里的个数，多出来的那些格就是幻影，
+ * 按期望置空。⚠️ 只在「多出的份数 == 候选格数」时清（多一格都不清，宁可交给恢复）；
+ * 真走子不会触发（子走了起点会空 ⇒ 个数不变；吃子则是变少）。
+ */
+check("驱动：重复子（同一枚子在观测里占两格）要按期望清掉，别把确认卡死（真机 18:20 回归）", function () {
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const ghost = 1 * 9 + 1;                 // 开局第 1 行是空的：幻影黑車就放这儿
+    const unknownCell = 1 * 9 + 3;           // 另一个空格读成 '?'（看不清，不是棋子）
+    const real = 0;                          // (0,0) 是真的黑車
+    const stage = { clicked: false };
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = (stage.clicked ? afterOwn : START_BOARD).slice();
+            if (stage.clicked) {
+                cells[ghost] = cells[real];   // 框偏了：同一枚黑車出现在两格
+                cells[unknownCell] = "?";    // 另一格看不清
+            }
+            let unknown = 0;
+            for (let i = 0; i < 90; i++) {
+                if (cells[i] === "?") {
+                    unknown += 1;
+                }
+            }
+            return {
+                ok: true, chars: cells, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 8 && !stage.clicked; i++) {
+        driver.tick();
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "），日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 6; i++) {
+        driver.tick();
+    }
+    if (!(driver.stats().phantomCleared >= 1)) {
+        return "幻影没被清掉（phantomCleared=" + driver.stats().phantomCleared + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0 || t.indexOf("确认") >= 0; })
+                .slice(-3).join(" / ");
+    }
+    if (!(driver.stats().confirms >= 1)) {
+        return "确认还是没成功（confirms=" + driver.stats().confirms + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("确认") >= 0; }).slice(-3).join(" / ");
+    }
+    const seen = driver.lastBoard();
+    if (seen && seen[ghost] !== null) {
+        return "幻影格没清干净：" + seen[ghost];
+    }
+    // ⚠️ '?' 是「看不清」，不是棋子，也绝不能被幻影规则清成空
+    if (seen && seen[unknownCell] === null) {
+        return "'?' 被当成幻影清掉了（看不清 ≠ 没子）";
+    }
+    return true;
+});
+
+/**
+ * 真机回归（2026-09-20 深夜，now24）：`清掉幻影（重复子）1 格（(4,2)c→空）` 在同一局里**连刷 8 次**
+ * ——那格根本不是分身，是**我方子被高亮环读成了敌方兵种**（与 (2,3)/(8,5) 同一类误读，
+ * 只是那两格有已知事实记录、这格没有）。清掉等于让我方那枚子凭空消失，下一帧又来一出。
+ * 判据（本轮新增）：清之前问一句**像素（找色）阵营** —— 与观测相反就**不清也不猜**（改成我方子
+ * 只会立刻又凑出我方那份的重复计数，只是换一出戏），交给恢复流程；没有证据才照旧清。
+ */
+check("驱动：幻影候选其实是我方子被读成敌色时，不许清掉（真机 now24 回归）", function () {
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const ghost = 1 * 9 + 1;                 // 参照里这里是空的；观测却多出一枚「黑卒」
+    const stage = { clicked: false };
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = (stage.clicked ? afterOwn : START_BOARD).slice();
+            if (stage.clicked) {
+                cells[ghost] = "p";          // 高亮环骗了模型：那格被读成黑卒（异色同字）
+            }
+            let unknown = 0;
+            for (let i = 0; i < 90; i++) {
+                if (cells[i] === "?") {
+                    unknown += 1;
+                }
+            }
+            return {
+                ok: true, chars: cells, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrCell: function () {
+            // 像素（找色）：那格的墨迹是**红**的 —— 与观测读到的黑卒相反
+            return { ok: true, side: "RED", cls: "卒", char: "P", score: 0.9 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 8 && !stage.clicked; i++) {
+        driver.tick();
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "），日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 4; i++) {
+        driver.tick();
+    }
+    if (!(driver.stats().phantomHeldBack >= 1)) {
+        return "幻影候选没被像素证据拦下（phantomHeldBack=" +
+            (driver.stats().phantomHeldBack || 0) + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0; }).slice(-2).join(" / ");
+    }
+    const seen = driver.lastBoard();
+    if (seen && seen[ghost] === null) {
+        return "那格还是被清空了（应保持观测到的 p，交给恢复流程）";
+    }
+    return true;
+});
+
+/**
+ * 真机回归（2026-09-20 深夜，now20 卡了 19 次「轮次推不出来」）：
+ * 我方炮 (2,3) 被模型误读成黑卒 ⇒ 卒的总数 +1；而对方那枚卒**从 (6,3) 走到了 (6,4)**。
+ * 幻影规则把「多出来的那份」算在了 (6,4) 那枚**真卒**头上、把它清成空
+ * ⇒ 盘面少了对方一枚卒 ⇒ 任何合法着法都解释不了 ⇒ 恢复 → 重建基准 → 再撞，**死循环**。
+ *
+ * 收紧：只有当参照里这枚子的**每一份都还在原位**（keep == ref）时，多出来的那份才可能是分身；
+ * 有子移动过（keep < ref）就整类不动手。
+ */
+check("驱动：幻影规则不许把「移动过的子」当分身清掉（真机 now20 死循环回归）", function () {
+    const movedFrom = 3 * 9 + 6;              // (col 6,row 3)：参照里那枚黑卒
+    const movedTo = 4 * 9 + 6;                // (col 6,row 4)：它走到了这里
+    const misread = 7 * 9 + 1;                // (col 1,row 7)：开局那门红炮，被误读成卒（把卒数顶成 +1）
+    const observed = START_BOARD.slice();
+    observed[movedFrom] = null;
+    observed[movedTo] = "p";
+    observed[misread] = "p";
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: observed.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: null }; },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrBoardCooldownMs: 999999 }
+    });
+    driver.start();
+    for (let i = 0; i < 5; i++) {
+        driver.tick();
+    }
+    const seen = driver.lastBoard();
+    if (seen && seen[movedTo] !== "p") {
+        return "走过来的那枚卒被当成幻影清掉了（应为 p，实际 " + seen[movedTo] + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0; }).slice(-2).join(" / ");
+    }
+    if (noteText.some(function (t) { return t.indexOf("清掉幻影") >= 0; })) {
+        return "这一帧不该触发任何幻影清理 — 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0; }).slice(-1).join(" / ");
+    }
+    return true;
+});
+
+/**
+ * 真机回归（2026-09-20 深夜，now48）：`清掉幻影（重复子）1 格（(5,3)r→空）` 每帧一次、连刷 20+ 次 ——
+ * 那格的黑車**是真的**（对方走过来了，但那一手没被推断采纳；基准里这枚子的另一份还在原位
+ * ⇒ 计数恒定“多一份”）。每帧把真子擦掉 = 观测永远与真棋盘对不上，而且这枚子永远进不了基准
+ *（它的走子永远推不出来）。
+ *
+ * 修法：同一格连着 `phantomAdoptStreak` 帧都「多出来」且**那格真有墨迹** ⇒ 收编进基准（不再清）。
+ * 反向保护：证据说那格没墨迹（模型框漂移的假子）⇒ 照旧清，绝不收编（下一条用例守着）。
+ */
+check("驱动：幻影僵持 3 帧且那格真有墨迹 ⇒ 收编进基准而不是反复清掉（真机 now48 回归）", function () {
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const ghost = 3 * 9 + 5;                  // (col 5,row 3)：开局是空位，观测里多出一枚黑車
+    const stage = { clicked: false, ghostOn: false };
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = (stage.clicked ? afterOwn : START_BOARD).slice();
+            if (stage.ghostOn) {
+                cells[ghost] = "r";           // 对方那枚車真的走过来了（基准漏收）
+            }
+            return {
+                ok: true, chars: cells, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrCell: function () {
+            // 那格真有墨迹（黑色）—— 不是模型框漂移的假子
+            return {
+                ok: true, side: "BLACK", cls: "車", char: "r", score: 0.9,
+                ink: { red: 0, black: 600, area: 10000 }
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 8 && !stage.clicked; i++) {
+        driver.tick();
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "），日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 6; i++) {
+        driver.tick();                        // 让确认走完、基准落定
+    }
+    stage.ghostOn = true;
+    for (let i = 0; i < 6; i++) {
+        driver.tick();
+    }
+    if (!(driver.stats().phantomAdopted >= 1)) {
+        return "僵持到点没收编（phantomAdopted=" + (driver.stats().phantomAdopted || 0) +
+            "，phantomCleared=" + driver.stats().phantomCleared + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0; }).slice(-3).join(" / ");
+    }
+    const rel = driver.lastReliable();
+    if (!rel || rel.board[ghost] !== "r") {
+        return "收编后基准里还是没有那枚車：" + (rel ? String(rel.board[ghost]) : "没有基准");
+    }
+    const seen = driver.lastBoard();
+    if (!seen || seen[ghost] !== "r") {
+        return "收编之后那格还在被清（观测=" + (seen ? String(seen[ghost]) : "无") + "）";
+    }
+    return true;
+});
+
+check("驱动：幻影僵持但证据说那格**没墨迹** ⇒ 是框漂移的假子，照旧清、绝不收编（安全阀）", function () {
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const ghost = 3 * 9 + 5;
+    const stage = { clicked: false, ghostOn: false };
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = (stage.clicked ? afterOwn : START_BOARD).slice();
+            if (stage.ghostOn) {
+                cells[ghost] = "r";
+            }
+            return {
+                ok: true, chars: cells, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrCell: function () {
+            // 找色说那格**没有墨迹**（密度全 0）⇒ 观测里的“車”是模型框漂移的假子
+            return {
+                ok: false, noText: true, score: 0,
+                ink: { red: 0, black: 0, area: 10000 }
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 8 && !stage.clicked; i++) {
+        driver.tick();
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "），日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 6; i++) {
+        driver.tick();
+    }
+    stage.ghostOn = true;
+    for (let i = 0; i < 6; i++) {
+        driver.tick();
+    }
+    if ((driver.stats().phantomAdopted || 0) !== 0) {
+        return "假子被收编了（phantomAdopted=" + driver.stats().phantomAdopted +
+            "）—— 证据说那格没墨迹";
+    }
+    if (!(driver.stats().phantomCleared >= 2)) {
+        return "假子应当照旧被清（phantomCleared=" + driver.stats().phantomCleared + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0; }).slice(-3).join(" / ");
+    }
+    const seen = driver.lastBoard();
+    if (seen && seen[ghost] != null) {
+        return "假子还留在观测里（" + seen[ghost] + "）";
+    }
+    return true;
+});
+
+/**
+ * 真机回归（2026-09-20，K40 实拍 + 截图放大逐格核对）：**同兵种反吃被两处「纠色」抹掉证据**，
+ * 整局钉死在 `UNRELIABLE：装饰容差下有 11 种应手解释，不唯一` 两分钟以上。
+ *
+ * 现场：
+ *   ① 我方炮 i4i7 吃掉对方第二枚炮（中间隔一个卒当炮架）→ 落点 i7 登记进已知事实（C）；
+ *   ② 对方**同一横线上的另一枚炮 b7×i7 反吃**：观测在 i7 读到的是 `c`（黑炮，**读得没错**），
+ *      但补齐表第 ③ 支按「同字异色 = 红黑读反」写回 C，期望纠色块又按 `toLowerCase()` 相等翻成 C
+ *      ⇒ 观测与期望只剩 b7 变空 ⇒ 看起来像「炮从 b7 走了、去哪儿没看见」
+ *      ⇒ 装饰容差枚举出的 11 种解释永不唯一（那 11 种正是 b7 那门炮的全部合法落点）。
+ *
+ * 现在：同字异色连续 `cfg.colorDisputeStreak` 帧不变 → 按**原始读数**复议，拿到成功结论
+ * （CONFIRMED / OPPONENT_REPLY）才采信，并把那一格的已知事实改写成原始读数
+ * （不改写的话下一帧又被翻回去，僵持原样复发）。
+ */
+function recaptureFixture(mode) {
+    const BASE_FEN = "1rb1kab2/4a4/nc4n1c/p3p3p/6p2/8C/P1P1P1P1P/4C4/7r1/RNBAKABNR w - - 0 1";
+    const parsed = fen.parseFen(BASE_FEN);
+    if (!parsed || !parsed.ok) {
+        return "夹具 FEN 解析失败：" + (parsed && parsed.reason);
+    }
+    const baseBoard = parsed.board;
+    const ownMove = legal.allLegalMoves(baseBoard, "w").filter(function (m) { return m.iccs === "i4i7"; })[0];
+    if (!ownMove) {
+        return "夹具里 i4i7（我方炮吃对方炮）不是合法着法";
+    }
+    const afterOwn = legal.applyMove(baseBoard, ownMove).board;
+    const replyMove = legal.allLegalMoves(afterOwn, "b").filter(function (m) { return m.iccs === "b7i7"; })[0];
+    if (!replyMove) {
+        return "夹具里 b7i7（对方另一枚炮反吃）不是合法应手";
+    }
+    const afterReply = legal.applyMove(afterOwn, replyMove).board;
+    const b7 = 2 * 9 + 1;      // (1,2)：对方另一枚炮
+    const i7 = 2 * 9 + 8;      // (8,2)：我方刚落子那一格
+    if (afterReply[b7] !== null || afterReply[i7] !== "c") {
+        return "夹具结果不对：b7=" + afterReply[b7] + " i7=" + afterReply[i7];
+    }
+    const stage = { clicked: false, frames: 0 };
+    const noteText = [];
+    /**
+     * 自检专用「刹车」：拿到复议结论之后就把这个 tick 打断。
+     *
+     * 为什么需要：自检里帧是**瞬时**的（没有采集/解板的等待），状态机会在一个 tick 内
+     * 反复「观察 → 确认」，直到把帧放完；真机上每帧 ~1.5s 且局面会继续变，不会出现这种事。
+     * 驱动对动作异常有 try/catch（会记一条「动作 … 失败」），所以这里抛异常是安全的。
+     */
+    let brakeArmed = false;
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) {
+            const line = String(text);
+            noteText.push(line);
+            if (!brakeArmed && line.indexOf("可靠基准已刷新") >= 0 &&
+                line.indexOf("OPPONENT_REPLY") >= 0 && line.indexOf("轮到我方") >= 0) {
+                // ⚠️ 必须等到**这一行**（应手已佐证、基准已推进）再刹：
+                //   刹早了会把「采纳复议」那个动作本身打断，计数不涨、断言假失败。
+                brakeArmed = true;
+            }
+            if (brakeArmed) {
+                throw new Error("__SELFCHECK_BRAKE__");
+            }
+        },
+        sleep: function () { },
+        recognize: function () {
+            // ⚠️ 帧上限：自检里帧是**瞬时**的，状态机会在一个 tick 内反复「观察→确认」；
+            //   真机上每帧 ~1.5s、局面会继续变，所以不存在这个问题。放完就报错，逼它停下来。
+            stage.frames += 1;
+            if (stage.frames > 30) {
+                return { ok: false, reason: "自检：脚本帧已放完" };
+            }
+            // 真值帧：对方已经反吃回来了。模型**读对了**（i7 = c）——
+            // 出错的是驱动内部那两处「纠色」，这正是回归点。
+            const cells = (stage.clicked ? afterReply : baseBoard).slice();
+            if (mode === "misread" && stage.clicked) {
+                // 真机第二局现场：反吃过来的那枚**黑炮被直接读成我方颜色**（原始读数 == 期望）
+                // ⇒ 「同字异色」分歧根本形不成，只能靠「对方吃在我方落点」的假设解释。
+                cells[i7] = "C";
+            }
+            return {
+                ok: true, chars: cells, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            // ⚠️ 出手之后不再提供着法：否则状态机会拿旧着法继续规划（自检里会空转）。
+            //   这一条用例只关心「反吃那帧能不能被认下来」。
+            if (stage.clicked) {
+                return { ok: true, iccs: null };
+            }
+            return { ok: true, iccs: ownMove.iccs, move: ownMove, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return { ok: true, method: "self-check-tap" };
+        },
+        screen: function () { return { width: 1500, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1 }
+    });
+    driver.start();
+    /** 带刹车的 tick：刹车只用于自检（帧瞬时 ⇒ 状态机会空转），真机上不存在 */
+    const tick = function () {
+        try {
+            driver.tick();
+        } catch (error) {
+            if (String(error && error.message).indexOf("__SELFCHECK_BRAKE__") >= 0) {
+                return false;
+            }
+            throw error;
+        }
+        return true;
+    };
+    tick();
+    driver.assertTurn();
+    for (let i = 0; i < 10 && !stage.clicked; i++) {
+        if (!tick()) {
+            break;
+        }
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "），日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 14; i++) {
+        if (!tick()) {
+            break;
+        }
+    }
+    const stats = driver.stats();
+    if (stats.colorDisputeAdopted < 1) {
+        return "「同字异色」复议没有生效（adopted=" + stats.colorDisputeAdopted +
+            "，确认 " + stats.confirms + "，状态 " + driver.machine.state() + "：" + driver.machine.reason() +
+            "）—— 日志 " + noteText.filter(function (t) {
+                return t.indexOf("同字异色") >= 0 || t.indexOf("不唯一") >= 0;
+            }).slice(-2).join(" / ");
+    }
+    const reliable = driver.lastReliable();
+    if (!reliable || !reliable.board) {
+        return "没有可靠基准";
+    }
+    if (reliable.board[b7] !== null) {
+        return "b7 应当是空的（那枚炮已经反吃过去），实际 " + reliable.board[b7];
+    }
+    if (reliable.board[i7] !== "c") {
+        return "i7 应当是黑炮 c（对方反吃），实际 " + reliable.board[i7] +
+            "（若为 C 就是又被「同字异色」纠回了我方子）—— 基准 " + reliable.board.join("");
+    }
+    return true;
+}
+
+check("驱动：同兵种反吃 · 目的地读成敌方色（同字异色僵持）要能按原始读数复议认下来（真机回归 2026-09-20）", function () {
+    return recaptureFixture("colordispute");
+});
+
+check("驱动：同兵种反吃 · 目的地被读成我方色（盘面僵持）也要能认下来（真机第二局现场）", function () {
+    return recaptureFixture("misread");
 });
 
 /**
@@ -2645,6 +4831,734 @@ check("驱动：同字异色抖动不许丢掉「已知事实」记录（真机�
     return true;
 });
 
+check("驱动：快速恢复也必须按干净观测重建基准（rebuildMaxUnknown 不能是 undefined）", function () {
+    const recoveredBoard = START_BOARD.slice();
+    // 造一张与开局不一致、但没有未知格的干净观测；恢复后应直接成为新基准。
+    recoveredBoard[0] = null;
+    recoveredBoard[9] = "r";
+    let observations = 0;
+    let snapshots = 0;
+    const notes = [];
+    const fakeMachine = {
+        dispatch: function (event) {
+            const effects = [];
+            if (event.type === "READY") {
+                effects.push({ type: "CALIBRATE" });
+            } else if (event.type === "SNAPSHOT" && snapshots++ === 0) {
+                // 第一次观测后立刻模拟进入 RECOVERING。由于刚校准过，这次必走 25 秒内的快速恢复分支。
+                effects.push({ type: "RECOVER", reason: "测试快速恢复" });
+            }
+            return { effects: effects, reason: event.type };
+        },
+        state: function () { return "WAIT_TURN"; },
+        reason: function () { return "fixture"; },
+        mySide: function () { return "w"; },
+        setMySide: function () { },
+        canClick: function () { return { ok: false, reason: "fixture" }; },
+        counters: function () { return {}; },
+        versions: function () { return { sessionId: 1 }; },
+        setSession: function () { }
+    };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: fakeMachine,
+        nowMono: function () { return 1000; },
+        sleep: function () { },
+        recognize: function () {
+            const board = observations++ === 0 ? START_BOARD : recoveredBoard;
+            return { ok: true, chars: board.slice(), unknownCells: 0, conflicts: 0 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: false, reason: "本用例不算棋" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { observeFrames: 1 }
+    });
+    driver.start();
+    driver.tick();     // 建开局基准，并触发快速 RECOVER
+    driver.tick();     // 应在 sideFor 前按 recoveredBoard 重建
+    const stats = driver.stats();
+    if (stats.baselineRebuilds !== 1) {
+        return "快速恢复后应重建 1 次基准，实际 " + stats.baselineRebuilds +
+            "（rebuildMaxUnknown 是否漏了默认值，或标志在快速恢复早退后才设置？）";
+    }
+    const reliable = driver.lastReliable();
+    if (!reliable || reliable.board[0] !== null || reliable.board[9] !== "r") {
+        return "恢复后的可靠基准不是当前干净观测：" + JSON.stringify(reliable && [reliable.board[0], reliable.board[9]]);
+    }
+    if (!notes.some(function (text) { return text.indexOf("按观测量建基准") >= 0; })) {
+        return "没有记录按观测重建日志";
+    }
+    return true;
+});
+
+check("驱动：重建基准的那一帧不许出手（真机 2026-09-21 07:59 假杀输棋根因）", function () {
+    const recoveredBoard = START_BOARD.slice();
+    recoveredBoard[0] = null;
+    recoveredBoard[9] = "r";
+    let observations = 0;
+    let snapshots = 0;
+    const notes = [];
+    const snapshotSides = [];
+    const fakeMachine = {
+        dispatch: function (event) {
+            const effects = [];
+            if (event.type === "READY") {
+                effects.push({ type: "CALIBRATE" });
+            } else if (event.type === "SNAPSHOT") {
+                snapshotSides.push(event.snapshot ? event.snapshot.side : undefined);
+                if (snapshots++ === 0) {
+                    effects.push({ type: "RECOVER", reason: "测试快速恢复" });
+                }
+            }
+            return { effects: effects, reason: event.type };
+        },
+        state: function () { return "WAIT_TURN"; },
+        reason: function () { return "fixture"; },
+        mySide: function () { return "w"; },
+        setMySide: function () { },
+        canClick: function () { return { ok: false, reason: "fixture" }; },
+        counters: function () { return {}; },
+        versions: function () { return { sessionId: 1 }; },
+        setSession: function () { }
+    };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: fakeMachine,
+        nowMono: function () { return 1000; },
+        sleep: function () { },
+        recognize: function () {
+            const board = observations++ === 0 ? START_BOARD : recoveredBoard;
+            return { ok: true, chars: board.slice(), unknownCells: 0, conflicts: 0 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: false, reason: "本用例不算棋" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { observeFrames: 1 }
+    });
+    driver.start();
+    driver.tick();     // 建开局基准，并在快照后触发快速 RECOVER
+    const held = driver.tick();     // 重建基准的那一帧：重建只用了这一帧，禁止出手
+    if (!held || held.reason !== "重建基准后等下一帧佐证") {
+        return "重建帧应当返回「重建基准后等下一帧佐证」，实际 " + JSON.stringify(held);
+    }
+    if (held.side != null) {
+        return "重建帧的轮次必须是未知（side=null，等下一帧推），实际 " + held.side;
+    }
+    const lastSide = snapshotSides[snapshotSides.length - 1];
+    if (lastSide != null) {
+        return "重建帧喂给状态机的快照轮次必须是 null（不出手），实际 " + lastSide;
+    }
+    if (driver.stats().rebuildHolds !== 1) {
+        return "rebuildHolds 应当是 1，实际 " + driver.stats().rebuildHolds;
+    }
+    if (!notes.some(function (text) { return text.indexOf("等下一帧佐证") >= 0; })) {
+        return "没有记录「等下一帧佐证」日志";
+    }
+    const next = driver.tick();     // 下一帧：盘面佐证后正常推轮次
+    if (next.side !== "w") {
+        return "重建后的下一帧应能推出轮次（w），实际 " + next.side;
+    }
+    return true;
+});
+
+check("驱动：杀棋必须第二帧佐证才放行（真机 2026-09-21 07:59 假杀输棋）", function () {
+    const notes = [];
+    let taps = 0;
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        nowMono: function () { return Date.now(); },
+        sleep: function () { },
+        recognize: function () {
+            return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 29999, depth: 1, ms: 2 };
+        },
+        tap: function () { taps += 1; return { ok: true, method: "self-check-tap" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { movetimeMs: 20, observeFrames: 1 }
+    });
+    driver.start();
+    // 第一轮：校准 + 观测 → 算出「杀」→ 必须被按住（不发 JOB_RESULT ⇒ 无票据、无点击）
+    for (let i = 0; i < 3 && driver.stats().mateHolds === 0; i++) {
+        driver.tick();
+    }
+    if (driver.stats().mateHolds !== 1) {
+        return "杀棋应当被按住 1 次，实际 " + driver.stats().mateHolds +
+            "（状态 " + driver.machine.state() + "：" + driver.machine.reason() + "）";
+    }
+    if (driver.machine.state() !== "THINKING") {
+        return "按住期间状态机应当停在 THINKING（等佐证），实际 " + driver.machine.state();
+    }
+    if (driver.machine.currentTicket()) {
+        return "按住期间不该生成票据（更不该点击）";
+    }
+    if (taps !== 0) {
+        return "按住期间点了 " + taps + " 次（杀棋不许在第二帧佐证前点击）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("杀棋待佐证") >= 0; })) {
+        return "没有记录「杀棋待佐证」日志";
+    }
+    // 第二轮观测：读回同一张盘面 → 佐证通过 → 放行（JOB_RESULT ⇒ PRECHECK + 票据）
+    for (let i = 0; i < 4 && driver.stats().mateHoldPassed === 0; i++) {
+        driver.tick();
+    }
+    const stats = driver.stats();
+    if (stats.mateHoldPassed !== 1) {
+        return "第二帧一致时应当放行，实际 passed=" + stats.mateHoldPassed +
+            "，vetoed=" + stats.mateHoldVetoed + "（状态 " + driver.machine.state() + "）";
+    }
+    if (!driver.machine.currentTicket()) {
+        return "放行后应当生成票据（等出手前核对）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("杀棋佐证通过") >= 0; })) {
+        return "没有记录「杀棋佐证通过」日志";
+    }
+    return true;
+});
+
+check("驱动：杀棋第二帧盘面不一致 ⇒ 作废重算（不许拿读错的盘面出杀）", function () {
+    const notes = [];
+    let taps = 0;
+    const movedBoard = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    let observations = 0;
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        nowMono: function () { return Date.now(); },
+        sleep: function () { },
+        recognize: function () {
+            const board = observations++ === 0 ? START_BOARD.slice() : movedBoard.slice();
+            return { ok: true, chars: board, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 29999, depth: 1, ms: 2 };
+        },
+        tap: function () { taps += 1; return { ok: true, method: "self-check-tap" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { movetimeMs: 20, observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 3 && driver.stats().mateHolds === 0; i++) {
+        driver.tick();
+    }
+    if (driver.stats().mateHolds !== 1) {
+        return "杀棋应当先被按住，实际 " + driver.stats().mateHolds;
+    }
+    for (let i = 0; i < 4 && driver.stats().mateHoldVetoed === 0; i++) {
+        driver.tick();
+    }
+    const stats = driver.stats();
+    if (stats.mateHoldVetoed !== 1) {
+        return "第二帧盘面不一致应当作废，实际 vetoed=" + stats.mateHoldVetoed +
+            "（状态 " + driver.machine.state() + "）";
+    }
+    if (driver.machine.state() !== "RECOVERING") {
+        return "作废后应当进 RECOVERING 重读，实际 " + driver.machine.state();
+    }
+    if (driver.machine.currentTicket() || taps !== 0) {
+        return "作废的那手不许生成票据/点击（票据 " + (driver.machine.currentTicket() ? "有" : "无") +
+            "，点击 " + taps + " 次）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("杀棋佐证未通过") >= 0; })) {
+        return "没有记录「杀棋佐证未通过」日志";
+    }
+    return true;
+});
+
+check("驱动：杀棋佐证帧含「按基准填回」的格 ⇒ 不许直接放行，先强制全盘新鲜重读复核（K40 09:50 假杀 d6g6）", function () {
+    const notes = [];
+    let sawFreshRead = false;
+    let phase = "start";          // start → dirty（第一次观察之后全是「带一个被盖格」的帧）
+    const dirtyCell = 4 * 9 + 4;  // (4,4)：开局是空格；读成 '?' 后会被「按基准填回」补成空
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        nowMono: function () { return Date.now(); },
+        sleep: function () { },
+        recognize: function (options) {
+            if (options && options.freshRead) { sawFreshRead = true; }
+            const board = (phase === "start") ? START_BOARD.slice() : (function () {
+                const copy = START_BOARD.slice();
+                copy[dirtyCell] = "?";
+                return copy;
+            })();
+            let unknown = 0;
+            for (let i = 0; i < board.length; i += 1) { if (board[i] === "?") { unknown += 1; } }
+            return { ok: true, chars: board, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 29999, depth: 1, ms: 2 };
+        },
+        tap: function () { return { ok: true, method: "self-check-tap" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { movetimeMs: 20, observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 10 && driver.stats().mateHoldPassed === 0; i += 1) {
+        driver.tick();
+        phase = "dirty";   // 干净的开局帧只留第一拍
+    }
+    const stats = driver.stats();
+    if (stats.mateHolds !== 1) {
+        return "杀棋应当被按住 1 次，实际 " + stats.mateHolds +
+            "（状态 " + driver.machine.state() + "：" + driver.machine.reason() + "）";
+    }
+    if (stats.mateHoldVetoed !== 0) {
+        return "盘面自始至终一致，不该作废，实际 vetoed=" + stats.mateHoldVetoed;
+    }
+    if (stats.mateHoldPassed !== 1) {
+        return "全盘复核一致后应当放行，实际 passed=" + stats.mateHoldPassed +
+            "（状态 " + driver.machine.state() + "）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("强制全盘新鲜重读复核") >= 0; })) {
+        return "被盖格帧被当成干净佐证了（没有「强制全盘新鲜重读复核」日志）：" +
+            notes.filter(function (t) { return t.indexOf("杀棋") >= 0; }).join(" / ");
+    }
+    if (!sawFreshRead) {
+        return "没有把 freshRead 透传给识别层（面板侧不会跳过差分缓存）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("杀棋全盘复核通过") >= 0; })) {
+        return "没有记录「杀棋全盘复核通过」日志";
+    }
+    if (!driver.machine.currentTicket()) {
+        return "复核通过后应当生成票据（等出手前核对）";
+    }
+    return true;
+});
+
+check("驱动：全盘新鲜重读的盘面与算棋时不一致 ⇒ 杀棋作废（重读才是真相）", function () {
+    const notes = [];
+    let taps = 0;
+    let phase = "start";            // start → dirty → moved（看到「强制全盘新鲜重读」后，下一帧就换成别的盘）
+    const dirtyCell = 4 * 9 + 4;    // 阶段 dirty：开局空格 (4,4)，F1 按基准填回（=> 盘面不变）
+    const movedDest = 6 * 9 + 1;    // 阶段 moved：OWN_MOVE（b2b3）的落点 (1,6)；它属于「这手改动过的格」，F2 能补
+    const movedBoard = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const withDirty = function (board, cell) {
+        const copy = board.slice();
+        copy[cell] = "?";
+        return copy;
+    };
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        nowMono: function () { return Date.now(); },
+        sleep: function () { },
+        recognize: function () {
+            let board;
+            if (phase === "start") {
+                board = START_BOARD.slice();
+            } else if (phase === "dirty") {
+                board = withDirty(START_BOARD, dirtyCell);
+            } else {
+                board = withDirty(movedBoard, movedDest);
+            }
+            let unknown = 0;
+            for (let i = 0; i < board.length; i += 1) { if (board[i] === "?") { unknown += 1; } }
+            return { ok: true, chars: board, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 29999, depth: 1, ms: 2 };
+        },
+        tap: function () { taps += 1; return { ok: true, method: "self-check-tap" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { movetimeMs: 20, observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 12 && driver.stats().mateHoldVetoed === 0; i += 1) {
+        if (phase === "dirty" && notes.some(function (t) {
+            return t.indexOf("强制全盘新鲜重读复核") >= 0;
+        })) {
+            phase = "moved";   // 重读请求已发出 ⇒ 下一帧就是「新鲜重读」该看到的盘面
+        }
+        driver.tick();
+        if (phase === "start") {
+            phase = "dirty";
+        }
+    }
+    const stats = driver.stats();
+    if (stats.mateHolds !== 1) {
+        return "杀棋应当被按住 1 次，实际 " + stats.mateHolds;
+    }
+    if (stats.mateHoldVetoed !== 1) {
+        return "重读盘面不一致应当作废，实际 vetoed=" + stats.mateHoldVetoed +
+            "（状态 " + driver.machine.state() + "）｜notes=" + notes.slice(-12).join(" / ");
+    }
+    if (stats.mateHoldPassed !== 0) {
+        return "绝不该放行（两帧从来没真正独立一致过）";
+    }
+    if (driver.machine.currentTicket() || taps !== 0) {
+        return "作废的那手不许生成票据/点击（票据 " + (driver.machine.currentTicket() ? "有" : "无") +
+            "，点击 " + taps + " 次）";
+    }
+    if (!notes.some(function (t) { return t.indexOf("强制全盘新鲜重读复核") >= 0; })) {
+        return "没有走到「强制全盘新鲜重读」——测试没覆盖目标路径：" + notes.slice(-6).join(" / ");
+    }
+    if (!notes.some(function (t) {
+        return t.indexOf("杀棋全盘复核未通过") >= 0 || t.indexOf("杀棋佐证未通过") >= 0;
+    })) {
+        return "没有记录「复核未通过」日志：" + notes.slice(-6).join(" / ");
+    }
+    return true;
+});
+
+check("驱动：兜底值被兵种上限连续驳回 ⇒ 判定那枚子已离开、按空处理（真机 10:33 (5,7) 死锁）", function () {
+    // 现场复刻：我方炮 b2g2 走后，「上一步」标记压住起点 (1,7) ⇒ 读不出来；
+    // 基准里那格仍是 'C'，可盘面里红炮已经两枚（另一枚就在它走去的 (6,7)）
+    // ⇒ 兜底永远被兵种上限驳回 ⇒ 旧行为：那一格永远 '?'、轮次永远未知（真机卡 12 分钟）。
+    let own = null;
+    const list = legal.legalMoves(START_BOARD, 1, 7, "w");
+    for (let i = 0; i < list.length; i += 1) {
+        if (list[i].toCol === 6 && list[i].toRow === 7) {
+            own = list[i];
+            break;
+        }
+    }
+    if (!own) {
+        return "夹具失败：开局红炮 (1,7) 找不到走到 (6,7) 的走法";
+    }
+    const origin = 7 * 9 + 1;   // (1,7)：被「上一步」标记压住的起点
+    const dest = 7 * 9 + 6;     // (6,7)：炮走过去的那一格
+    const aside = 7 * 9 + 4;    // (4,7)：另一格读不出来（真机同帧还有一格）—— 它能把 F1/F2 堵住，
+                                // 否则「唯一合法着法解释得通」（F2）会先自己补齐、轮不到兜底环节
+    const moved = legal.applyMove(START_BOARD, own).board;
+    let phase = "start";
+    const notes = [];
+    const fakeMachine = {
+        dispatch: function (event) {
+            const effects = [];
+            if (event.type === "READY") {
+                effects.push({ type: "CALIBRATE" });
+            }
+            return { effects: effects, reason: event.type };
+        },
+        state: function () { return "WAIT_TURN"; },
+        reason: function () { return "fixture"; },
+        mySide: function () { return "w"; },
+        setMySide: function () { },
+        canClick: function () { return { ok: false, reason: "fixture" }; },
+        counters: function () { return {}; },
+        versions: function () { return { sessionId: 1 }; },
+        setSession: function () { }
+    };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: fakeMachine,
+        nowMono: function () { return 1000; },
+        sleep: function () { },
+        recognize: function () {
+            let board;
+            if (phase === "start") {
+                board = START_BOARD.slice();
+            } else {
+                board = moved.slice();
+                board[origin] = "?";   // 起点被「上一步」标记压住：读不出来
+                board[aside] = "?";    // 另外一格也读不出来（它不属于这手改动的格）
+            }
+            let unknown = 0;
+            for (let i = 0; i < board.length; i += 1) { if (board[i] === "?") { unknown += 1; } }
+            return { ok: true, chars: board, unknownCells: unknown, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        ocrCell: function () { return null; },   // OCR+找色也没证据 ⇒ 只能走「按可靠盘面兜」
+        analyze: function () { return { ok: false, reason: "本用例不算棋" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 10; i += 1) {
+        driver.tick();
+        phase = "moved";
+    }
+    const stats = driver.stats();
+    if (!(stats.unknownFillEmptied >= 1)) {
+        return "驳回多帧后应当按空处理，实际 unknownFillEmptied=" + (stats.unknownFillEmptied || 0) +
+            "｜notes=" + notes.slice(-6).join(" / ");
+    }
+    if (!notes.some(function (t) { return t.indexOf("按空处理") >= 0; })) {
+        return "没有记录「按空处理」日志：" + notes.slice(-6).join(" / ");
+    }
+    if (!notes.some(function (t) { return t.indexOf("兜底被兵种上限驳回") >= 0; })) {
+        return "夹具没走到『兵种上限驳回』那一环（测试没覆盖目标路径）";
+    }
+    const rel = driver.lastReliable();
+    if (!rel || rel.side !== "b") {
+        return "按空处理后轮次应当顺着炮的着法推进到黑方，实际 " +
+            (rel ? rel.side : "无基准") + "｜notes=" + notes.slice(-6).join(" / ");
+    }
+    if (rel.board[dest] !== "C" || rel.board[origin] != null) {
+        return "推进后的盘面不对（落点=" + String(rel.board[dest]) +
+            "，起点=" + String(rel.board[origin]) + "）";
+    }
+    return true;
+});
+
+/** 夹具：假的「规划机器」——每次快照都发一个 COMPUTE（局面 = 观测到的盘面，轮次固定 w）。 */
+function makeLoopFixtureMachine(stateName) {
+    let jobs = 0;
+    return {
+        dispatch: function (event) {
+            const effects = [];
+            if (event.type === "READY") {
+                effects.push({ type: "CALIBRATE" });
+            } else if (event.type === "SNAPSHOT") {
+                jobs += 1;
+                effects.push({
+                    type: "COMPUTE",
+                    jobId: "loop-fixture-" + jobs,
+                    board: event.snapshot.board,
+                    side: "w",
+                    fen: event.snapshot.fen,
+                    movetimeMs: 5
+                });
+            }
+            return { effects: effects, reason: event.type };
+        },
+        state: function () { return stateName || "THINKING"; },
+        reason: function () { return "fixture"; },
+        mySide: function () { return "w"; },
+        setMySide: function () { },
+        canClick: function () { return { ok: false, reason: "fixture" }; },
+        counters: function () { return {}; },
+        versions: function () { return { sessionId: 1 }; },
+        setSession: function () { }
+    };
+}
+
+check("驱动：取消重算的同一手不算「又摆了一次」（循环历史去重，真机 09:08 误触禁手）", function () {
+    const excludesSeen = [];
+    const notes = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: makeLoopFixtureMachine(),
+        nowMono: function () { return Date.now(); },
+        sleep: function () { },
+        recognize: function () {
+            return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function (position, options) {
+            excludesSeen.push(options && options.excludeIccs ? options.excludeIccs.slice() : null);
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        log: function (text) { notes.push(String(text)); },
+        config: { movetimeMs: 5, observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 4; i++) {
+        driver.tick();
+    }
+    if (excludesSeen.length < 4) {
+        return "应当算了 4 次棋，实际 " + excludesSeen.length + " 次";
+    }
+    for (let i = 0; i < excludesSeen.length; i++) {
+        if (excludesSeen[i]) {
+            return "同一局面连记同手（取消重算场景）不该触发禁手，第 " + (i + 1) +
+                " 次却禁了 " + JSON.stringify(excludesSeen[i]);
+        }
+    }
+    if (driver.stats().loopBanHits !== 0) {
+        return "loopBanHits 应当是 0，实际 " + driver.stats().loopBanHits;
+    }
+    if (notes.some(function (text) { return text.indexOf("疑似循环") >= 0; })) {
+        return "去重场景不该出现「疑似循环」日志";
+    }
+    return true;
+});
+
+check("驱动：两招来回（A,B,A,B）断环——禁掉上一轮那一手（真机 2026-09-21 f1↔f3 摆车）", function () {
+    const boardX = START_BOARD.slice();
+    const boardY = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const moveA = OWN_MOVE;
+    let moveB = null;
+    const candidates = legal.allLegalMoves(boardY, "w");
+    for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i].iccs !== moveA.iccs) {
+            moveB = candidates[i];
+            break;
+        }
+    }
+    let frame = 0;
+    const excludesSeen = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: makeLoopFixtureMachine(),
+        nowMono: function () { return Date.now(); },
+        sleep: function () { },
+        recognize: function () {
+            // 按「帧号」而不是「调用次数」切板面：同一帧里驱动可能识别多次（校准/佐证），
+            // 那几次必须看到同一盘面，否则夹具的奇偶会错位（真机不会一帧内换盘）
+            const board = (frame % 2 === 1) ? boardX : boardY;
+            return { ok: true, chars: board.slice(), unknownCells: 0, conflicts: 0 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function (position, options) {
+            excludesSeen.push(options && options.excludeIccs ? options.excludeIccs.slice() : null);
+            const atX = position.board.join("") === boardX.join("");
+            return { ok: true, iccs: atX ? moveA.iccs : moveB.iccs,
+                move: atX ? moveA : moveB, score: 0, depth: 1, ms: 1 };
+        },
+        log: function () { },
+        config: { movetimeMs: 5, observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 4; i++) {
+        frame = i + 1;
+        driver.tick();
+    }
+    if (excludesSeen.length < 4) {
+        return "应当算了 4 次棋，实际 " + excludesSeen.length + " 次";
+    }
+    if (excludesSeen[2]) {
+        return "第 3 手（A,B,A 里的 A）还不该禁手：" + JSON.stringify(excludesSeen[2]);
+    }
+    const fourth = excludesSeen[3] || [];
+    if (fourth.indexOf(moveB.iccs) < 0) {
+        return "第 4 手应当禁掉来回的那一手 " + moveB.iccs + "，实际 " + JSON.stringify(excludesSeen[3]);
+    }
+    if (driver.stats().loopBanHits !== 1) {
+        return "loopBanHits 应当是 1，实际 " + driver.stats().loopBanHits;
+    }
+    return true;
+});
+
+check("驱动：同一局面同一手摆到第 3 次必禁（①号规则；黑方 a9↔a8 摆车，双方都合法）", function () {
+    // 循环：黑方在 (0,0)↔(1,0) 来回摆车（每一步都是合法着法，轮次推断能解释），
+    // 我们每次都在同一局面决定走同一手 → 第 3 次进这个局面时该手要被禁（长捉要判负，得换一手）。
+    const boardX = START_BOARD.slice();
+    const moveA = OWN_MOVE;
+    let shuttle = null;
+    const blacks = legal.allLegalMoves(boardX, "b");
+    for (let i = 0; i < blacks.length; i++) {
+        const m = blacks[i];
+        if (m.fromCol === 0 && m.fromRow === 0 && m.toCol === 0 && m.toRow === 1) {
+            shuttle = m;
+            break;
+        }
+    }
+    if (!shuttle) {
+        return "夹具前提不成立：黑方 (0,0)→(1,0) 应当是合法着法";
+    }
+    const boardY = legal.applyMove(boardX, shuttle).board;
+    let moveB = null;
+    const redAtY = legal.allLegalMoves(boardY, "w");
+    for (let i = 0; i < redAtY.length; i++) {
+        if (redAtY[i].iccs !== moveA.iccs) {
+            moveB = redAtY[i];
+            break;
+        }
+    }
+    let frame = 0;
+    const excludesSeen = [];
+    const notes = [];
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: makeLoopFixtureMachine(),
+        nowMono: function () { return Date.now(); },
+        sleep: function () { },
+        recognize: function () {
+            const board = (frame % 2 === 1) ? boardX : boardY;
+            return { ok: true, chars: board.slice(), unknownCells: 0, conflicts: 0 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function (position, options) {
+            excludesSeen.push(options && options.excludeIccs ? options.excludeIccs.slice() : null);
+            const atX = position.board.join("") === boardX.join("");
+            return { ok: true, iccs: atX ? moveA.iccs : moveB.iccs,
+                move: atX ? moveA : moveB, score: 0, depth: 1, ms: 1 };
+        },
+        log: function (text) { notes.push(String(text)); },
+        config: { movetimeMs: 5, observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 5; i++) {
+        frame = i + 1;
+        driver.tick();
+    }
+    if (excludesSeen.length < 5) {
+        return "应当算了 5 次棋，实际 " + excludesSeen.length + " 次";
+    }
+    if (excludesSeen[0] || excludesSeen[1] || excludesSeen[2]) {
+        return "前三次决策还不该禁手：" + JSON.stringify(excludesSeen);
+    }
+    const fourth = excludesSeen[3] || [];
+    if (fourth.indexOf(moveB.iccs) < 0) {
+        return "第 4 手应当禁掉来回的那一手 " + moveB.iccs + "，实际 " + JSON.stringify(excludesSeen[3]);
+    }
+    const fifth = excludesSeen[4] || [];
+    if (fifth.indexOf(moveA.iccs) < 0) {
+        return "第 5 手（同一局面第 3 次）应当禁掉 " + moveA.iccs + "，实际 " + JSON.stringify(excludesSeen[4]);
+    }
+    if (driver.stats().loopBanHits !== 2) {
+        return "loopBanHits 应当是 2，实际 " + driver.stats().loopBanHits;
+    }
+    if (!notes.some(function (text) { return text.indexOf("疑似循环") >= 0; })) {
+        return "禁手时应当留下「疑似循环」日志";
+    }
+    return true;
+});
+
+const loopHistoryModule = require("../src/automation/loop-history.js");
+
+check("循环历史：同一世代里取消重算只算一次（真机 09:08 误触禁手）", function () {
+    const history = loopHistoryModule.createLoopHistory();
+    history.record("K", "b2c2", 0);
+    history.record("K", "b2c2", 0);   // CANCEL 后重算：同一个回合世代，是同一手
+    if (history.size() !== 1) {
+        return "同世代同局面同手应当只记一次，实际记了 " + history.size() + " 次";
+    }
+    if (history.bansFor("K")) {
+        return "还不到 3 次，不该禁手：" + JSON.stringify(history.bansFor("K"));
+    }
+    return true;
+});
+
+check("循环历史：跨世代照记，第 3 次进同一局面禁手（长将必须禁得掉）", function () {
+    const history = loopHistoryModule.createLoopHistory();
+    history.record("K", "d6e6", 0);
+    if (history.bansFor("K")) {
+        return "第一次不该禁手";
+    }
+    history.record("K", "d6e6", 1);   // 确认落定一手后对方应回来：新世代，是真摆回来
+    if (history.size() !== 2) {
+        return "跨世代同局面同手必须照记（否则长将永远禁不掉），实际记了 " + history.size() + " 次";
+    }
+    const bans = history.bansFor("K");   // 第 3 次进这个局面前查询
+    if (!bans || bans.indexOf("d6e6") < 0) {
+        return "第 3 次应当禁掉 d6e6，实际 " + JSON.stringify(bans);
+    }
+    return true;
+});
+
+check("循环历史：两招来回 A,B,A → 禁掉 B 局面上一轮走的手（断环）", function () {
+    const history = loopHistoryModule.createLoopHistory();
+    history.record("X", "m1", 0);
+    history.record("Y", "m2", 1);
+    history.record("X", "m1", 2);
+    const bans = history.bansFor("Y");
+    if (!bans || bans.indexOf("m2") < 0) {
+        return "该禁 Y 局面上的 m2，实际 " + JSON.stringify(bans);
+    }
+    return true;
+});
+
+check("循环历史：clear 后什么都不禁（换局/换边）", function () {
+    const history = loopHistoryModule.createLoopHistory();
+    history.record("K", "b2c2", 0);
+    history.record("K", "b2c2", 1);
+    history.clear();
+    if (history.size() !== 0 || history.bansFor("K")) {
+        return "clear 之后应当是干净状态，实际 size=" + history.size() + " bans=" + JSON.stringify(history.bansFor("K"));
+    }
+    return true;
+});
+
 check("驱动：worker 起不来（宿主没有 threads）时仍能出着法（退回同步，不卡死）", function () {
     const driver = driverModule.createDriver({
         allowClick: false,
@@ -2817,13 +5731,33 @@ check("框架·文案：未知状态要原样返回，不能悄悄变成「未�
     if (labelsModule.MODES.length !== 3 || !labelsModule.MODE_LABEL.auto) {
         return "模式表不完整";
     }
+    // 2026-09-20：面板默认不能把日志藏起来（原来的默认是「2 行 + 启动即收起小窗」）
+    if (themeTokens.LOG_LINES_COMPACT < 4) {
+        return "日志默认只显示 " + themeTokens.LOG_LINES_COMPACT + " 行（要求默认别隐藏日志）";
+    }
+    // 2026-09-20 晚：日志**拆成屏幕下方单独一窗**（用户口径「面板在上面，日志在下面」）⇒
+    // 这两个高度不再需要互相装得下，改成各自够用：
+    //   · 控制面板：三行按钮 + 状态行 + 进度卡（126 + 34 + 80 = 240）
+    //   · 日志窗：够 8 行（9sp 行高实测 ~37px；8×37 + padding 12 = 308）
+    const controlsNeed = themeTokens.PANEL.rowHeight * 3 + themeTokens.PANEL.statusHeight + themeTokens.PANEL.stepHeight;
+    if (themeTokens.PANEL.height < controlsNeed) {
+        return "控制面板高度装不下自己的内容：" + themeTokens.PANEL.height + " < " + controlsNeed;
+    }
+    if (themeTokens.PANEL.logHeight < themeTokens.LOG_LINES_COMPACT * 30) {
+        return "日志窗高度装不下 " + themeTokens.LOG_LINES_COMPACT + " 行：" + themeTokens.PANEL.logHeight;
+    }
+    if (!(themeTokens.PANEL.safeTopRatio > 0 && themeTokens.PANEL.safeTopRatio < themeTokens.PANEL.menuTopRatio &&
+        themeTokens.PANEL.menuTopRatio < 1)) {
+        return "面板安全带比例不对：safeTopRatio=" + themeTokens.PANEL.safeTopRatio +
+            " menuTopRatio=" + themeTokens.PANEL.menuTopRatio;
+    }
     return themeTokens.PANEL.height > 0 ? true : "面板令牌缺失";
 });
 
 check("框架·配置：合法 autorun 要被归一化（含默认值补齐）", function () {
     const parsed = configModule.parseAutorun(JSON.stringify({
         mode: "auto", clickMethod: "accessibility", clickPressMs: 350,
-        clickHideSettleMs: 600, stopAfterMs: 250000, start: true
+        clickHideSettleMs: 600, stopAfterMs: 250000, start: true, collapse: true
     }));
     if (!parsed.ok) return "合法配置被判非法：" + JSON.stringify(parsed.issues);
     const merged = configModule.withDefaults(parsed.config);
@@ -2832,6 +5766,12 @@ check("框架·配置：合法 autorun 要被归一化（含默认值补齐）",
     }
     if (merged.clickHideSettleMs !== 600) {
         return "clickHideSettleMs 没被采纳：" + merged.clickHideSettleMs;
+    }
+    if (merged.collapse !== true) {
+        return "collapse 没被采纳：" + merged.collapse;
+    }
+    if (configModule.withDefaults({}).collapse !== false) {
+        return "collapse 默认值应为 false（默认不收起，日志要看得见）";
     }
     return merged.gamePackage ? true : "默认值没补上（gamePackage）";
 });
@@ -3216,7 +6156,9 @@ check("落点补齐：未知格恰好是我方落点、其它 89 格全对 → �
     return true;
 });
 
-check("落点补齐：未知格不在落点上 → 仍然 UNRELIABLE（看不清就是看不清）", function () {
+check("落点补齐：未知格在别处（对方某枚子的原位）⇒ 唯一解释仍成立 ⇒ 允许确认", function () {
+    // ⚠️ 2026-09-20 改：旧断言要求「未知格不在落点上 ⇒ 一律 UNRELIABLE」（真机每次白烧 ~15s 恢复）。
+    //   新判据见上一条：只要**只有一种解释**对得上所有看得清的格，就采信。
     const ticket = sampleTicket();
     const dest = verifier.destinationIndex(ticket);
     const observed = AFTER_BOARD.slice();
@@ -3230,9 +6172,12 @@ check("落点补齐：未知格不在落点上 → 仍然 UNRELIABLE（看不清
         geometryTrusted: true,
         conflicts: 0
     });
-    return verdict.result === verifier.RESULT.UNRELIABLE
+    if (verdict.result !== verifier.RESULT.CONFIRMED) {
+        return "应当确认（唯一解释），实际 " + verdict.result + "：" + verdict.reason;
+    }
+    return verdict.board[other] === AFTER_BOARD[other]
         ? true
-        : ("应当 UNRELIABLE，实际 " + verdict.result + "：" + verdict.reason);
+        : ("看不清的格要按票据/棋规补齐，实际 " + verdict.board[other]);
 });
 
 check("落点补齐：落点未知但局面根本不是这一手（起点没清空）→ 不许确认", function () {
@@ -3251,6 +6196,2387 @@ check("落点补齐：落点未知但局面根本不是这一手（起点没清�
     return verifier.isSuccess(verdict.result) === false
         ? true
         : ("这种情况不该算走成了：" + verdict.result);
+});
+
+// ---------------------------------------------------------------- 视觉架构重构（方案：YOLO/OCR/颜色/规则 四权分离）
+// 2026-09-19：这三块是方案 §3.1/§3.5/§3.9 的落地，用例对应真机踩过的坑。
+
+const pieceOcrModule = require("../src/vision/piece-ocr.js");
+const ocrRuntimeModule = require("../src/vision/ocr-runtime.js");
+const frameGateModule = require("../src/vision/frame-gate.js");
+const boardValidator = require("../src/vision/board-validator.js");
+const pieceColorModule = require("../src/vision/piece-color.js");
+const pieceCropper = require("../src/vision/piece-cropper.js");
+const pieceDetector = require("../src/vision/piece-detector.js");
+const gridTracker = require("../src/vision/grid-tracker.js");
+const evidenceFusion = require("../src/vision/evidence-fusion.js");
+const visionPipelineModule = require("../src/vision/vision-pipeline.js");
+const fakeVisionHost = require("./fake-vision-host.js");
+
+check("视觉流水线（假宿主三帧）：要真出盘面 —— 框分要进融合、融合器要跨帧累积（2026-09-19 两次组装事故）", function () {
+    const host = fakeVisionHost.createFakeHost();
+    const pipeline = visionPipelineModule.create({
+        detect: host.detect,
+        clip: host.clip,
+        rgbAt: host.rgbAt,
+        ocrSession: host.ocrSession,
+        log: function () { }
+    });
+    let result = null;
+    for (let i = 0; i < 3; i++) {
+        result = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    if (!result) {
+        return "流水线没有返回结果";
+    }
+    // ⚠️ 事故 1：cropAll 不带分数 ⇒ detectionScore 恒为 null ⇒ 综合分封顶 0.70
+    const zeroScore = (result.evidence || []).filter(function (one) { return !(one.detectionScore > 0); });
+    if (zeroScore.length) {
+        return "有 " + zeroScore.length + " 枚棋子的 detectionScore 不是正数（框分没接进证据）";
+    }
+    // ⚠️ 事故 2：每帧新建融合器 ⇒ 永远只有一票 ⇒ 确认数恒为 0
+    if (!(result.fusion && result.fusion.confirmed >= 3)) {
+        return "三帧之后应当至少确认 3 格，实际 " + JSON.stringify(result.fusion) +
+            "（融合器没跨帧累积？）";
+    }
+    if (result.chars[0] !== "K") {
+        return "(0,0) 应当是红帅 K，实际 " + result.chars[0];
+    }
+    if (result.chars[1] !== "k") {
+        return "(1,0) 应当是黑将 k，实际 " + result.chars[1];
+    }
+    // 事故 3：(2,0) 的 OCR 读成 “H”（真机就是 0.85 读成 H）。
+    // ⚠️ 2026-09-20 用户口径：**YOLO 只负责定位（哪儿有子），兵种只认 OCR 字形** ——
+    //    所以“士被读成 H”要在**字形表**里收（piece-ocr 的系统性误读表），
+    //    不再拿检测框的类别字母兜底。
+    if (result.chars[2] !== "a") {
+        return "(2,0) 应当是黑士 a（字形表把 “H” 归到士），实际 " + result.chars[2];
+    }
+    const yoloCls = (result.evidence || []).filter(function (one) {
+        return one.clsSource === "yolo" || one.clsSource === "ocr+yolo";
+    });
+    if (yoloCls.length !== 0) {
+        return "YOLO 的类别不许参与兵种判定，实际有 " + yoloCls.length + " 格带 yolo 来源";
+    }
+    return true;
+});
+
+check("视觉流水线：YOLO 只负责定位 —— 框说炮/字形说车就得认车，OCR 认不出也不拿框顶", function () {
+    const host = fakeVisionHost.createFakeHost({
+        pieces: [
+            // 框说 C（炮），字形说「车」 ⇒ 必须认「车」
+            { col: 0, row: 0, label: "C", ocr: { text: "车", score: 0.92 }, side: "red" },
+            // 字形认不出（返回一个不在表里的字，分再高也没用）⇒ 那格保持未知，**不许**用框的类别顶
+            { col: 2, row: 0, label: "R", ocr: { text: "霾", score: 0.99 }, side: "red" }
+        ]
+    });
+    const pipeline = visionPipelineModule.create({
+        detect: host.detect,
+        clip: host.clip,
+        rgbAt: host.rgbAt,
+        ocrSession: host.ocrSession,
+        log: function () { }
+    });
+    let result = null;
+    for (let i = 0; i < 3; i++) {
+        result = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    const boxed = (result.evidence || []).filter(function (one) { return one.col === 0 && one.row === 0; })[0];
+    if (!boxed) {
+        return "没拿到 (0,0) 的证据";
+    }
+    if (boxed.cls !== "R") {
+        return "兵种必须来自 OCR 字形（车 ⇒ R），实际 " + boxed.cls + "（来源 " + boxed.clsSource + "）";
+    }
+    if (boxed.clsSource !== "ocr") {
+        return "类别来源应当只有 ocr，实际 " + boxed.clsSource;
+    }
+    if (result.rawChars[0] !== "R") {
+        return "盘面 (0,0) 应当是红车 R，实际 " + result.rawChars[0];
+    }
+    const unreadable = (result.evidence || []).filter(function (one) { return one.col === 2 && one.row === 0; })[0];
+    if (unreadable && unreadable.cls) {
+        return "OCR 认不出时不许拿框的类别顶上，实际填了 " + unreadable.cls + "（来源 " + unreadable.clsSource + "）";
+    }
+    return true;
+});
+
+check("视觉流水线：OCR 先灰度 —— 灰度主读救回环格；灰度读不出的格再用彩色兜底（2026-09-21）", function () {
+    // 2026-09-21 用户口径「先灰度」：主读走灰度（clip+gray），彩色只在兜底里出现（方向与老顺序相反）。
+    // 探针实测两边互有胜负（灰度会把馬读成「志」、兵读成「民」）⇒ 兜底保留：
+    // 灰度读不出 / 分过低被丢时，用彩色（整帧+region）重读一次。
+    const host = fakeVisionHost.createFakeHost({
+        pieces: [
+            // 环格：彩色读不出（不在字形表里），灰度是正经的「马」（黑方马）
+            { col: 0, row: 0, label: "N", ocr: { text: "霾", score: 0.99 }, ocrGray: { text: "马", score: 0.88 }, side: "black" },
+            // 对照格：彩色就读得出 ⇒ 不该再花一次灰度
+            { col: 2, row: 0, label: "R", ocr: { text: "车", score: 0.92 }, side: "red" },
+            // ⚠️ 真机事故（2026-09-20）：灰度读出**像个字**但只有 0.24 分 —— 当初不加最低分就采纳，
+            //    观测层多了一枚幽灵「卒」，后半局钉死在「装饰容差下有 N 种应手解释，不唯一」。
+            //    这种读数必须丢掉（那格保持未知），而不是写一个错兵种进去。
+            { col: 4, row: 0, label: "P", ocr: { text: "霾", score: 0.99 }, ocrGray: { text: "卒", score: 0.24 }, side: "black" }
+        ]
+    });
+    const pipeline = visionPipelineModule.create({
+        detect: host.detect,
+        clip: host.clip,
+        rgbAt: host.rgbAt,
+        countColor: host.countColor,
+        prepareRegion: host.prepareRegion,
+        releaseFrame: host.releaseFrame,
+        ocrSession: host.ocrSession,
+        log: function () { }
+    });
+    let result = null;
+    for (let i = 0; i < 3; i++) {
+        result = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    const ring = (result.evidence || []).filter(function (one) { return one.col === 0 && one.row === 0; })[0];
+    if (!ring) {
+        return "没拿到 (0,0) 的证据";
+    }
+    if (ring.cls !== "N") {
+        // 证据层的 cls 是**兵种**（大写，不带颜色），颜色由 side 另外记
+        return "灰度重试之后 (0,0) 应当是马 N，实际 " + ring.cls + "（ocrState=" + ring.ocrState + "）";
+    }
+    if (result.chars[0] !== "n") {
+        return "盘面 (0,0) 应当是黑马 n（颜色由 side 上上去），实际 " + result.chars[0];
+    }
+    const stats = pipeline.stats();
+    if (stats.grayPrimary < 3) {
+        return "三格都该先走灰度主读，实际 " + stats.grayPrimary + " 格";
+    }
+    if (stats.colorRetries !== 1 || stats.colorRetryHits !== 0) {
+        // 只有 (4,0)（灰度 0.24 被丢）才轮到彩色兜底；而且彩色也读不出「霾」⇒ 0 救回
+        return "只该对一格格做彩色兜底（(4,0)），实际 retries=" + stats.colorRetries + " hits=" + stats.colorRetryHits;
+    }
+    if (stats.grayLow !== 1) {
+        return "低分灰度读数应当计 1 次被丢，实际 " + stats.grayLow;
+    }
+    const lowCell = (result.evidence || []).filter(function (one) { return one.col === 4 && one.row === 0; })[0];
+    if (lowCell && lowCell.cls) {
+        return "灰度只有 0.24 分时宁可未知，不许写兵种，实际填了 " + lowCell.cls;
+    }
+    if (result.chars[4] !== "?") {
+        return "盘面 (4,0) 应当是 `?`（低分读数丢弃），实际 " + result.chars[4];
+    }
+    if (host.stats().leaked !== 0) {
+        // 原生帧不会 GC：灰度重试裁出来的每一帧都必须 releaseFrame
+        return "灰度重试裁出来的临时帧必须还回去，实际泄漏 " + host.stats().leaked + " 帧";
+    }
+    // 老宿主（没有 prepareRegion）：不许崩，也不许把格子填成别的 —— 保持未知走老路
+    const oldHost = fakeVisionHost.createFakeHost({
+        pieces: [{ col: 0, row: 0, label: "N", ocr: { text: "霾", score: 0.99 }, ocrGray: { text: "马", score: 0.88 }, side: "black" }]
+    });
+    const oldPipeline = visionPipelineModule.create({
+        detect: oldHost.detect,
+        clip: oldHost.clip,
+        rgbAt: oldHost.rgbAt,
+        countColor: oldHost.countColor,
+        ocrSession: oldHost.ocrSession,
+        log: function () { }
+    });
+    let oldResult = null;
+    for (let i = 0; i < 3; i++) {
+        oldResult = oldPipeline.recognize({}, oldHost.grid, { side: "w" });
+    }
+    if (oldResult.chars[0] !== "?") {
+        return "宿主没有 prepareRegion 时应当保持未知（走老路），实际 " + oldResult.chars[0];
+    }
+    if (oldPipeline.stats().grayRetries !== 0 || oldPipeline.stats().grayPrimary !== 0) {
+        return "宿主没有 prepareRegion 时不该走灰度路，实际 grayPrimary=" + oldPipeline.stats().grayPrimary +
+            " grayRetries=" + oldPipeline.stats().grayRetries;
+    }
+    return true;
+});
+
+check("裁剪以检测框为准：框偏一点就跟它走，框跑太远退回格中心（方案 §3.2）", function () {
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const near = pieceCropper.boxForItem(grid, {
+        index: 0, col: 0, row: 0, residual: 0.1,
+        box: { centerX: 118, centerY: 104, width: 112, height: 110 }
+    });
+    if (!near || !near.fromDetector) {
+        return "残差 0.1 格时应当采用检测框，实际 " + JSON.stringify(near);
+    }
+    if (Math.abs(near.centerX - 118) > 1 || Math.abs(near.centerY - 104) > 1) {
+        return "裁块中心应当跟着检测框，实际 (" + near.centerX + "," + near.centerY + ")";
+    }
+    if (!(near.width <= Math.round(120 * 0.95 * 0.82) + 1)) {
+        return "裁块边长应当被夹到 maxDetectorSize×cropRatio 之内，实际 " + near.width;
+    }
+    const far = pieceCropper.boxForItem(grid, {
+        index: 0, col: 0, row: 0, residual: 0.6,
+        box: { centerX: 260, centerY: 104, width: 112, height: 110 }
+    });
+    if (far.fromDetector) {
+        return "残差 0.6 格（明显跑掉）应当退回格中心";
+    }
+    if (Math.abs(far.centerX - 100) > 1) {
+        return "退回后中心应当是交点 (100,100)，实际 " + far.centerX;
+    }
+    return true;
+});
+
+check("视觉流水线：逐格变化缓存 —— 没变的格不该再 OCR，但结论要一样（方案 §7 的预算）", function () {
+    const host = fakeVisionHost.createFakeHost();
+    const pipeline = visionPipelineModule.create({
+        detect: host.detect,
+        clip: host.clip,
+        rgbAt: host.rgbAt,
+        ocrSession: host.ocrSession,
+        log: function () { }
+    });
+    let first = null;
+    let second = null;
+    for (let i = 0; i < 3; i++) {
+        first = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    for (let i = 0; i < 1; i++) {
+        second = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    const cached = (second.stats && second.stats.cellsCached) || 0;
+    if (cached < 3) {
+        return "第 4 帧应当有 3 格命中缓存（像素指纹不变），实际 " + cached;
+    }
+    if (second.chars[0] !== first.chars[0] || second.chars[1] !== first.chars[1]) {
+        return "命中缓存后结论应当不变，实际 " + JSON.stringify([first.chars[0], second.chars[0]]);
+    }
+    // 几何一变，缓存必须作废。
+    // ⚠️ 偏移量别用 5 的倍数：假宿主的像素是按 (dx+dy)%5 造的，偏移 5 会得到**完全相同**的
+    //    采样指纹，测出来像是在缓存没失效（这是测试数据退化，不是缓存坏了）。
+    const before = (second.stats && second.stats.cellsCached) || 0;
+    const moved = Object.assign({}, host.grid, { originX: host.grid.originX + 3, version: 2 });
+    const third = pipeline.recognize({}, moved, { side: "w" });
+    const delta = ((third.stats && third.stats.cellsCached) || 0) - before;
+    if (delta !== 0) {
+        return "几何变了之后缓存应当作废（这一帧命中增量应为 0），实际增量 " + delta;
+    }
+    return true;
+});
+
+check("视觉流水线：帅/将字形分不够时，要靠「两路一致 + 九宫约束」补全（不是猜）", function () {
+    // 造一个「帅那格只有 0.5 分、检测标签也没给出 K」的盘（真机就是这样：
+    // 九宫斜线压着字形，PP-OCR 只给 0.51 分）。label 置空是为了避开「两路一致加权」那条捷径。
+    const host = fakeVisionHost.createFakeHost({
+        pieces: [
+            { col: 4, row: 9, label: null, ocr: { text: "帅", score: 0.51 }, side: "red" },
+            { col: 3, row: 9, label: "A", ocr: { text: "仕", score: 0.95 }, side: "red" },
+            { col: 4, row: 0, label: "K", ocr: { text: "将", score: 0.95 }, side: "black" }
+        ]
+    });
+    const pipeline = visionPipelineModule.create({
+        detect: host.detect,
+        clip: host.clip,
+        rgbAt: host.rgbAt,
+        ocrSession: host.ocrSession,
+        log: function () { }
+    });
+    let result = null;
+    for (let i = 0; i < 3; i++) {
+        result = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    // (4,9) 的索引 = 9*9 + 4 = 85
+    // 字段契约（2026-09-20 评审）：`chars` = **补全后**的盘面；`rawChars` = 融合层原样输出。
+    if (result.rawChars[85] !== "?") {
+        return "融合层原始输出第 85 格（4,9）应该还是 `?`（字形分只有 0.51，不够 0.78），实际 " + result.rawChars[85];
+    }
+    if (result.chars[85] !== "K") {
+        return "规则层应当把 (4,9) 补全为红帅 K，实际 " + result.chars[85];
+    }
+    if (result.board[85] !== "K" || result.chars === result.rawChars) {
+        return "board 与 chars 必须一致（且不等于 rawChars），实际 board=" + result.board[85];
+    }
+    if (!(result.stats && result.stats.inferred >= 1)) {
+        return "补全次数应当计入 stats.inferred，实际 " + JSON.stringify(result.stats && result.stats.inferred);
+    }
+    if (!result.validation || !result.validation.ok) {
+        return "补齐帅之后规则校验应当通过，实际 " +
+            JSON.stringify(result.validation && result.validation.reason);
+    }
+    return true;
+});
+
+check("字形分类：真机系统性误读要认（「兵」被读成「宾」、「士」被读成 H）", function () {
+    const hit = pieceOcrModule.classOf("宾");
+    if (!hit || hit.cls !== "P") {
+        return "「宾」应当归到 P 类（兵/卒只是兵种），实际 " + JSON.stringify(hit);
+    }
+    // ⚠️ 2026-09-20 用户口径：YOLO 只负责定位，**兵种只认 OCR 字形** ⇒ 「H」这类系统性误读
+    //    必须在字形表里认下来（K40 实测 PP-OCR 把「士」读成 H、给 0.85 分）。
+    const h = pieceOcrModule.classOf("H");
+    if (!h || h.cls !== "A") {
+        return "「H」（真机把士读成 H）应当归到 A 类（士），实际 " + JSON.stringify(h);
+    }
+    if (pieceOcrModule.classOf("霾")) {
+        return "表里没有的字不许硬猜（霾 不该有类别）";
+    }
+    const label = pieceOcrModule.classOfLabel("K");
+    if (!label || label.cls !== "K") {
+        return "检测类别字母 K 应当映射到 K 类（仅诊断用），实际 " + JSON.stringify(label);
+    }
+    return true;
+});
+
+check("字形分类不带红黑：黑炮也写「炮」，颜色必须由颜色模块给", function () {
+    const hit = pieceOcrModule.classOf("炮");
+    if (!hit || hit.cls !== "C") {
+        return "「炮」应当归到 C 类，实际 " + JSON.stringify(hit);
+    }
+    if (hit.char != null) {
+        return "字形分类不该带颜色（char），实际 " + JSON.stringify(hit);
+    }
+    if (pieceOcrModule.applySide("C", "BLACK") !== "c" || pieceOcrModule.applySide("C", "RED") !== "C") {
+        return "applySide 没把颜色拼对：" + pieceOcrModule.applySide("C", "BLACK") + "/" +
+            pieceOcrModule.applySide("C", "RED");
+    }
+    return true;
+});
+
+check("字形分类器认不得的字一律 null（绝不猜）", function () {
+    ["", " ", "木", "楚河", "abc", null].forEach(function (text) {
+        const hit = pieceOcrModule.classOf(text);
+        if (hit) {
+            throw new Error("「" + text + "」被错误地认成了 " + hit.cls);
+        }
+    });
+    return true;
+});
+
+check("字形分类覆盖七类异体字（俥傌帥將砲…）", function () {
+    const table = { "车": "R", "俥": "R", "車": "R", "马": "N", "傌": "N", "馬": "N", "相": "B", "象": "B",
+        "仕": "A", "士": "A", "帅": "K", "帥": "K", "将": "K", "將": "K", "炮": "C", "砲": "C",
+        "兵": "P", "卒": "P" };
+    for (const glyph in table) {
+        const hit = pieceOcrModule.classOf(glyph);
+        if (!hit || hit.cls !== table[glyph]) {
+            return "「" + glyph + "」应为 " + table[glyph] + "，实际 " + JSON.stringify(hit);
+        }
+    }
+    return true;
+});
+
+check("OCR 运行时按方案分级：≥0.70 采纳 / 0.55~0.70 低置信 / <0.55 未知", function () {
+    let creates = 0;
+    const runtime = ocrRuntimeModule.create({
+        createSession: function () {
+            creates += 1;
+            return {
+                detect: function (image, options) {
+                    return image && image.blocks ? image.blocks : [];
+                }
+            };
+        }
+    });
+    const cases = [
+        [{ text: "炮", score: 0.99 }, "ok"],
+        [{ text: "炮", score: 0.65 }, "low"],
+        [{ text: "炮", score: 0.40 }, "unknown"]
+    ];
+    for (let i = 0; i < cases.length; i++) {
+        const got = runtime.recognizeGlyph({ blocks: [cases[i][0]] }, [0, 0, 10, 10]);
+        if (got.state !== cases[i][1]) {
+            return "score=" + cases[i][0].score + " 应当 " + cases[i][1] + "，实际 " + got.state;
+        }
+    }
+    if (creates !== 1) {
+        return "OCR 会话应当复用（只创建 1 次），实际 " + creates + " 次";
+    }
+    return true;
+});
+
+check("OCR 没读到字是「未知」而不是「空格」（真机踩过：飞行中的棋子被判成空）", function () {
+    const runtime = ocrRuntimeModule.create({
+        createSession: function () {
+            return { detect: function () { return []; } };
+        }
+    });
+    const got = runtime.recognizeGlyph({}, [0, 0, 10, 10]);
+    if (got.state !== "unknown") {
+        return "空结果应当是 unknown，实际 " + got.state;
+    }
+    if (got.state === "ok" || got.cls != null) {
+        return "空结果不许给出类别";
+    }
+    return true;
+});
+
+check("稳定帧：画面还在动时必须拒绝（方案 §3.1）", function () {
+    let clock = 100000;
+    const gate = frameGateModule.create({ now: function () { return clock; } });
+    const a = [10, 20, 30, 40];
+    // 两帧一样 ⇒ 稳定
+    let verdict = gate.check(a, [10, 20, 30, 40], "board");
+    if (!verdict.stable) {
+        return "两帧应当稳定，实际 " + verdict.reason;
+    }
+    // 差 20 ⇒ 不稳定（阈值 6）
+    verdict = gate.check(a, [30, 40, 50, 60], "board");
+    if (verdict.stable) {
+        return "两帧差 20 应当判不稳定（阈值 " + gate.config.maxMeanDiff + "）";
+    }
+    // 未知格太多 ⇒ 这一帧也不要
+    const unknownVerdict = gate.acceptResult(9);
+    if (unknownVerdict.ok) {
+        return "未知格 9 个（> " + gate.config.maxUnknownCells + "）应当丢弃";
+    }
+    if (!gate.exhausted !== (gate.state.retries >= gate.config.maxRetries)) {
+        return "重试次数的 exhausted 判定不对";
+    }
+    return true;
+});
+
+check("稳定帧：切前台后的第一帧只预热，不进识别（方案 §3.1）", function () {
+    let clock = 5000;
+    const gate = frameGateModule.create({ now: function () { return clock; } });
+    gate.onFocusChange(clock);
+    // 等够时间后，第一帧仍然只预热
+    clock += 1000;
+    const first = gate.check([1, 2, 3], [1, 2, 3], "board");
+    if (!first.warmup || first.stable) {
+        return "切前台后第一帧应当只预热，实际 " + JSON.stringify(first);
+    }
+    // 第二帧才真正比较
+    const second = gate.check([1, 2, 3], [1, 2, 3], "board");
+    if (!second.stable) {
+        return "预热之后的稳定帧应当被采纳，实际 " + second.reason;
+    }
+    return true;
+});
+
+check("规则安全门：标准开局可信，三个炮/缺帅一律否决（方案 §3.9）", function () {
+    const start = fen.parseFen("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w").board;
+    const ok = boardValidator.validate(start, { side: "w" });
+    if (!ok.ok) {
+        return "标准开局应当可信，实际 " + ok.reason;
+    }
+    // 三个黑炮（读错的典型）：应当否决
+    const three = start.slice();
+    const emptyCells = [];
+    for (let i = 0; i < 90; i++) {
+        if (!three[i]) {
+            emptyCells.push(i);
+        }
+    }
+    three[emptyCells[0]] = "c";
+    three[emptyCells[1]] = "c";
+    const bad = boardValidator.validate(three, { side: "w" });
+    if (bad.ok) {
+        return "三个炮的局面应当被否决";
+    }
+    // 缺帅：应当否决
+    const noKing = start.slice();
+    for (let i = 0; i < 90; i++) {
+        if (noKing[i] === "K") {
+            noKing[i] = null;
+        }
+    }
+    if (boardValidator.validate(noKing, { side: "w" }).ok) {
+        return "缺红帅的局面应当被否决";
+    }
+    return true;
+});
+
+check("规则安全门：着法必须在合法着法表里，a0b0 不许当兜底", function () {
+    const start = fen.parseFen("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w").board;
+    const fallback = boardValidator.isLegalMove(start, "w", "a0b0");
+    if (fallback.ok) {
+        return "a0b0 是兜底着法，必须拒绝";
+    }
+    const legalMoves = legal.allLegalMoves(start, "w");
+    if (!legalMoves.length) {
+        return "标准开局应当有合法着法";
+    }
+    const one = boardValidator.isLegalMove(start, "w", legalMoves[0].iccs);
+    if (!one.ok) {
+        return "开局第一手 " + legalMoves[0].iccs + " 应当是合法的，实际 " + one.reason;
+    }
+    return true;
+});
+
+check("稳定帧闸门：采样必须是**数字数组**（传 [r,g,b] 会静默变成 NaN —— 2026-09-20 基准工具踩过）", function () {
+    const gate = frameGateModule.create({});
+    const base = [100, 120, 140, 160, 180];
+    const near = [101, 121, 141, 159, 181];
+    const okVerdict = gate.check(base, near, "t");
+    if (!okVerdict.stable) {
+        return "差 1～2 的两帧应当算稳定，实际 " + okVerdict.reason;
+    }
+    // 反例：传三元组 ⇒ Number([1,2,3]) = NaN ⇒ 闸门应当明确报「无法比较」，而不是当成稳定
+    const triples = [[1, 2, 3], [1, 2, 3]];
+    const bad = frameGateModule.create({}).check(triples, triples, "t");
+    if (bad.stable) {
+        return "三元组采样不该被判成稳定（NaN 陷阱），实际 " + JSON.stringify(bad);
+    }
+    if (!/无法比较/.test(String(bad.reason))) {
+        return "三元组采样应当报「无法比较」，实际 " + bad.reason;
+    }
+    return true;
+});
+
+check("识别服务 board-service：流水线可信就用它；不可信回退旧路径；帧不稳则不观察（2026-09-20 入口收口）", function () {
+    const boardService = require("../src/services/board-service.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM", version: 1 };
+    const charsOf = function () {
+        const out = new Array(90);
+        for (let i = 0; i < 90; i++) {
+            out[i] = null;
+        }
+        out[0] = "r";
+        return out;
+    };
+    let legacyRuns = 0;
+    let lastRunOptions = null;
+    const build = function (pipelineResult, gateStable, calibrate) {
+        return boardService.createBoardService({
+            ports: { now: function () { return Date.now(); }, capture: function () { return { image: {} }; } },
+            locateBoard: { locateBoardInImage: function () { return { ok: true, grid: grid }; } },
+            recognizeBoard: {
+                run: function (image, located, options) {
+                    legacyRuns += 1;
+                    lastRunOptions = options;
+                    return { ok: true, chars: charsOf(), layout: "", grid: grid, unknownCells: 0 };
+                }
+            },
+            calibrate: calibrate || null,
+            vision: {
+                pipeline: { recognize: function () { return pipelineResult; } },
+                gate: {
+                    check: function () { return { stable: gateStable !== false, reason: "画面还在动" }; },
+                    acceptResult: function () { return { ok: true }; }
+                },
+                samples: function () { return [1, 2, 3]; },
+                countUnknown: function () { return 0; }
+            }
+        });
+    };
+    // ① 流水线可信 ⇒ 用它，且**不该**去跑旧路径
+    const chars = charsOf();
+    chars[0] = "n";
+    const good = build({ ok: true, chars: chars, rawChars: charsOf(), validation: { ok: true } }, true);
+    const r1 = good.recognizeSmart({});
+    if (!r1 || r1.method !== "vision-pipeline" || r1.chars[0] !== "n") {
+        return "流水线可信时应当返回流水线盘面，实际 " + JSON.stringify(r1 && { method: r1.method, c0: r1.chars && r1.chars[0] });
+    }
+    if (legacyRuns !== 0) {
+        return "流水线可信时不该跑旧路径，实际跑了 " + legacyRuns + " 次";
+    }
+    // ② 规则门否决 ⇒ 回退旧路径（并标明原因）
+    const bad = build({ ok: true, chars: charsOf(), validation: { ok: false, reason: "红帅数量 0（应为 1）" } }, true);
+    const r2 = bad.recognizeSmart({});
+    if (!r2 || r2.method !== "legacy" || !/红帅数量/.test(String(r2.fallbackReason))) {
+        return "流水线不可信时应当回退旧路径并带原因，实际 " + JSON.stringify(r2 && { m: r2.method, why: r2.fallbackReason });
+    }
+    if (legacyRuns !== 1) {
+        return "回退时应当跑一次旧路径，实际 " + legacyRuns;
+    }
+    // ③ 帧不稳 ⇒ 不观察（既不用流水线，也不回退）
+    const shaky = build({ ok: true, chars: charsOf(), validation: { ok: true } }, false);
+    const r3 = shaky.recognizeSmart({});
+    if (!r3 || r3.ok !== false || r3.unstable !== true) {
+        return "帧不稳定时应当返回 {ok:false, unstable:true}，实际 " + JSON.stringify(r3);
+    }
+    if (legacyRuns !== 1) {
+        return "帧不稳定时不该回退旧路径（画面在动，读了也是脏的），实际又跑了 " + (legacyRuns - 1) + " 次";
+    }
+    // ④ 关掉流水线开关 ⇒ 一律旧路径
+    const off = build({ ok: true, chars: charsOf(), validation: { ok: true } }, true);
+    off.clear();
+    const r4 = off.recognizeSmart({ mode: "legacy" });
+    if (!r4 || r4.method !== "legacy") {
+        return "mode:'legacy' 时必须走旧路径，实际 " + JSON.stringify(r4 && r4.method);
+    }
+    // ⑤ 驱动的 regionRatio / timeoutMs 要透传到旧路径
+    //    （漏传会让主界面填的「棋盘范围」与截图超时静默失效 —— 2026-09-20 收口时补齐）
+    const fwd = build({ ok: true, chars: charsOf(), validation: { ok: true } }, true);
+    fwd.recognizeSmart({ mode: "legacy", regionRatio: { x: 1, y: 2, width: 3, height: 4 }, timeoutMs: 400 });
+    if (!lastRunOptions || !lastRunOptions.regionRatio || lastRunOptions.timeoutMs !== 400) {
+        return "regionRatio/timeoutMs 必须透传给旧路径，实际 " + JSON.stringify(lastRunOptions);
+    }
+    // ⑥ **当前几何必须带下去**：旧路径 recognizeScreen 只有看到 opts.grid 才会复用已校准几何，
+    //    不带 ⇒ 它自己重新定位（未校准的原点）⇒ 每帧把会话级校准顶回去（2026-09-20 真机事故）
+    if (!lastRunOptions.grid) {
+        return "旧路径必须带上当前几何（opts.grid），否则校准偏移会被下一帧的重新定位顶掉";
+    }
+    // ⑥ 注入校准 ⇒ locate() 用校准后的几何（主界面/悬浮窗共用同一份校准参数）
+    const calib = build({ ok: true, chars: charsOf(), validation: { ok: true } }, true, function (image, located, options) {
+        return {
+            ok: true, grid: Object.assign({}, located.grid, { version: 7 }),
+            dx: -11, dy: -4, unknown: 1, tried: 16, layout: ""
+        };
+    });
+    const located = calib.locate({});
+    if (!located.ok || located.grid.version !== 7 || calib.grid().version !== 7) {
+        return "注入校准后 locate() 必须用校准后的几何，实际 " +
+            JSON.stringify({ ok: located && located.ok, v: located && located.grid && located.grid.version });
+    }
+    return true;
+});
+
+check("board-scan：颜色采样跟着 YOLO 定位框走（框心偏 50px 也能采到棋子）", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM", version: 1 };
+    const IMAGE = {};
+    // 棋子画在 (150,100)（比交点偏 +50px，真机就是这种偏差）；其余是中性绿底
+    const rgbAt = function (image, x, y) {
+        if (Math.abs(x - 150) <= 12 && Math.abs(y - 100) <= 12) {
+            return [176, 44, 40];
+        }
+        // ⚠️ 不能用纯灰当“无棋子”底色：piece-color 的「低饱和」那一条会把灰判成黑（
+        //    blackFromSat = (0.45-s)/0.45，s=0 直接给 0.4 分）；中性绿两边都不沾 ⇒ UNKNOWN。
+        return [120, 170, 120];
+    };
+    const session = { detect: function () { return [{ text: "车", score: 0.92 }]; } };
+    const host = { session: session, rgbAt: rgbAt };
+    // ① 不给框：按格心采样 ⇒ 采到的全是中性绿底 ⇒ 颜色未定，那格保持 null（不猜颜色）
+    const plain = boardScanMod.scan(host, IMAGE, grid, {});
+    if (!plain.ok) {
+        return "扫描失败：" + plain.reason;
+    }
+    if (plain.chars[0] !== null) {
+        return "不跟框时应当采不到颜色（绿底既不是红也不是黑），实际 " + plain.chars[0];
+    }
+    // ② 给 YOLO 框（框心 (150,100)）：颜色要跟着框采 ⇒ 红车 R
+    const boxes = { 0: { box: { centerX: 150, centerY: 100, width: 80, height: 80 }, residual: 0.25 } };
+    const withBox = boardScanMod.scan(host, IMAGE, grid, { boxes: boxes });
+    if (!withBox.ok) {
+        return "带框扫描失败：" + withBox.reason;
+    }
+    if (withBox.chars[0] !== "R") {
+        return "颜色应当按 YOLO 框心采样（(150,100) 那格是红子），实际 " + withBox.chars[0] +
+            "（side=" + withBox.sides[0] + "）";
+    }
+    return true;
+});
+
+check("红黑（找色版）：框内数红/黑墨迹 → 密度分开才算，空位与平局都留 UNKNOWN", function () {
+    const ink = require("../src/vision/ink-color.js");
+    const area = 68 * 68;                      // 真机一个棋子中心区的量级
+    // 真机实测：红字格红密度 ≈0.09~0.16、黑字格黑密度 ≈0.13、空格两边都 ≈0
+    const red = ink.judgeCounts({ red: Math.round(area * 0.09), black: 0, area: area, source: "findColor" });
+    if (red.side !== "RED") {
+        return "红墨迹占 9% 时应当判 RED，实际 " + red.side + "（" + red.reason + "）";
+    }
+    if (!(red.confidence >= 0.35)) {
+        return "颜色证据分应当饱和（≥0.35）才能过融合门槛，实际 " + red.confidence;
+    }
+    const black = ink.judgeCounts({ red: 20, black: Math.round(area * 0.13), area: area, source: "findColor" });
+    if (black.side !== "BLACK") {
+        return "黑墨迹占 13%、红墨迹极少时应当判 BLACK，实际 " + black.side + "（" + black.reason + "）";
+    }
+    const empty = ink.judgeCounts({ red: 3, black: 1, area: area, source: "findColor" });
+    if (empty.side !== "UNKNOWN") {
+        return "空格（两边几乎没有墨迹）必须留 UNKNOWN，绝不猜颜色，实际 " + empty.side;
+    }
+    const tie = ink.judgeCounts({ red: 200, black: 200, area: area, source: "findColor" });
+    if (tie.side !== "UNKNOWN") {
+        return "两边都好、互相压不倒时必须 UNKNOWN，实际 " + tie.side;
+    }
+    const half = ink.judgeCounts({ red: Math.round(area * 0.09), black: Math.round(area * 0.07), area: area, source: "findColor" });
+    if (half.side !== "UNKNOWN") {
+        return "红只比黑多 1.3 倍（不够 dominance=1.5）时应当 UNKNOWN，实际 " + half.side;
+    }
+    return true;
+});
+
+check("红黑（找色版）：board-scan 用 YOLO 框的位置调找色；没有找色能力才回退采样", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const AREA = 68 * 68;
+    const calls = [];
+    // 假宿主：把「哪个格子是什么颜色」记在闭包里，countColor 按传入的 region 反推格子
+    const host = {
+        session: { detect: function () { return [{ text: "车", score: 0.9 }]; } },
+        countColor: function (image, color, options) {
+            const region = options.region;
+            const col = Math.round((region.x + region.width / 2 - grid.originX) / grid.stepX);
+            const row = Math.round((region.y + region.height / 2 - grid.originY) / grid.stepY);
+            calls.push({ col: col, row: row, color: color, x: region.x, width: region.width });
+            const isRedRef = String(color).toUpperCase() === "#83412D";
+            if (col === 0 && row === 0) {
+                return isRedRef ? Math.round(AREA * 0.09) : 0;      // (0,0) 红子
+            }
+            if (col === 1 && row === 0) {
+                return isRedRef ? 0 : Math.round(AREA * 0.13);      // (1,0) 黑子
+            }
+            return 0;                                              // 其它格：空位
+        },
+        rgbAt: function () { return null; }                        // 只有采样能力的宿主才用它
+    };
+    // 给 (0,0) 一个**偏 50px** 的 YOLO 框：找色区必须跟着框心走（用户口径 2026-09-20）
+    const boxes = { 0: { box: { centerX: 150, centerY: 100, width: 80, height: 80 }, residual: 0.25 } };
+    const result = boardScanMod.scan(host, {}, grid, { boxes: boxes });
+    if (!result.ok) {
+        return "扫描应当成功，实际 " + result.reason;
+    }
+    if (result.chars[0] !== "R") {
+        return "(0,0) 红子应当是 R，实际 " + JSON.stringify(result.chars[0]);
+    }
+    if (result.chars[1] !== "r") {
+        return "(1,0) 黑子应当是小写 r，实际 " + JSON.stringify(result.chars[1]);
+    }
+    if (result.chars[2] !== null || result.sides[2] !== "UNKNOWN") {
+        return "空格必须留 null/UNKNOWN，实际 " + JSON.stringify({ ch: result.chars[2], side: result.sides[2] });
+    }
+    if (result.inkSkipped !== 88) {
+        // (0,0) 有框、(1,0) 有墨迹 ⇒ 都要扫；剩下 88 格没框也没墨迹 ⇒ 被闸门跳过（性能，不丢证据）
+        return "没框又没墨迹的格子应当被跳过（88 格），实际 inkSkipped=" + result.inkSkipped;
+    }
+    if (result.hits !== 2) {
+        return "只有 2 格有颜色证据，实际 hits=" + result.hits;
+    }
+    const redCall = calls.filter(function (one) { return one.color === "#83412D" && one.col === 0 && one.row === 0; })[0];
+    if (!redCall) {
+        return "(0,0) 应当调过找色（红参考色），实际一条都没有";
+    }
+    // 框心在 150 ⇒ 中心区左边缘 = 150 - width/2（不是格心的 100 - width/2）
+    if (Math.abs((redCall.x + redCall.width / 2) - 150) > 6) {
+        return "找色区必须跟着 YOLO 框心（150）走，实际中心 " + (redCall.x + redCall.width / 2);
+    }
+    // 两个参考色都要问一遍（红黑是对称的）
+    const colours = {};
+    for (let i = 0; i < calls.length; i++) {
+        colours[calls[i].color] = true;
+    }
+    if (!colours["#83412D"] || !colours["#282830"]) {
+        return "红、黑两个参考色都该找一遍，实际 " + JSON.stringify(Object.keys(colours));
+    }
+    return true;
+});
+
+check("分段计时（方案 §7）：mark 累计正确、summary 会封口、format 一定带「合计」", function () {
+    const timing = require("../src/runtime/timing.js");
+    // 假时钟：确定性断言，不依赖真实耗时
+    let now = 1000;
+    const clock = timing.create({ now: function () { return now; } });
+    now += 120;
+    clock.mark("抓帧");
+    now += 30;
+    clock.mark("稳定帧");
+    now += 1500;
+    const summary = clock.summary("流水线");
+    if (summary.total !== 1650) {
+        return "合计应当是 120+30+1500=1650，实际 " + summary.total;
+    }
+    const names = summary.sections.map(function (one) { return one.name; }).join(",");
+    if (names !== "抓帧,稳定帧,流水线") {
+        return "分段名字不对：" + names;
+    }
+    // 封口：summary() 之后不该再涨（否则日志里「边打印边涨」）
+    now += 500;
+    clock.mark("多余的");
+    if (summary.sections.length !== 3 || summary.total !== 1650) {
+        return "summary() 之后不该再涨，实际 " + JSON.stringify(summary);
+    }
+    const line = timing.format(summary, "耗时分期");
+    if (line.indexOf("合计 1650ms") < 0 || line.indexOf("抓帧 120ms") < 0 || line.indexOf("耗时分期：") !== 0) {
+        return "格式不对：" + line;
+    }
+    if (timing.format(null).indexOf("没有分段数据") < 0) {
+        return "空快照也要给一句人话，实际 " + timing.format(null);
+    }
+    // tail=null：不补最后一段（调用方自己已经 mark 过了）
+    let now2 = 0;
+    const clock2 = timing.create({ now: function () { return now2; } });
+    now2 += 7;
+    clock2.mark("a");
+    const s2 = clock2.summary(null);
+    if (s2.sections.length !== 1 || s2.total !== 7) {
+        return "tail=null 时不该补段，实际 " + JSON.stringify(s2);
+    }
+    return true;
+});
+
+check("OCR 预处理（先灰度）：灰度主读直接救回红帅（真机：红帅格灰度「\u5E2B」0.70；彩色那遍「印市」0.49 根本不用跑）", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const AREA = 68 * 68;
+    const prepared = [];
+    const host = {
+        // 彩色：垃圾文本（真机「印市」）；灰度：读成「師」（U+5E2B，已在字形表里收成 K）
+        session: {
+            detect: function (image) {
+                return image && image.__gray
+                    ? [{ text: "\u5E2B", score: 0.70 }]
+                    : [{ text: "\u5370\u5E02", score: 0.49 }];
+            }
+        },
+        countColor: function (image, color, options) {
+            const region = options.region;
+            const col = Math.round((region.x + region.width / 2 - grid.originX) / grid.stepX);
+            const row = Math.round((region.y + region.height / 2 - grid.originY) / grid.stepY);
+            if (col !== 0 || row !== 0) {
+                return 0;                                  // 其它格：空位（没墨迹）
+            }
+            return String(color).toUpperCase() === "#83412D" ? Math.round(AREA * 0.09) : 0;
+        },
+        rgbAt: function () { return null; },
+        prepareRegion: function (image, region, mode) {
+            const frame = { __gray: mode === "gray", mode: mode, region: region, released: false };
+            prepared.push(frame);
+            return frame;
+        },
+        releaseFrame: function (frame) { frame.released = true; return true; }
+    };
+    const result = boardScanMod.scan(host, {}, grid, { only: [0, 1] });
+    if (!result.ok) {
+        return "扫描应当成功，实际 " + result.reason;
+    }
+    if (result.chars[0] !== "K") {
+        return "灰度直读后 (0,0) 应当是红帅 K，实际 " + JSON.stringify(result.chars[0]) +
+            "（灰度那遍必须接上找色结论给出红黑）";
+    }
+    if (result.scores[0] !== 0.70) {
+        return "分数应当用灰度那遍的 0.70，实际 " + result.scores[0];
+    }
+    const grays = prepared.filter(function (one) { return one.mode === "gray"; });
+    const clips = prepared.filter(function (one) { return one.mode === "clip"; });
+    if (grays.length !== 1) {
+        return "只有 (0,0) 有墨迹值得读，(1,0) 空位必须跳过，实际灰度读 " + grays.length + " 次";
+    }
+    if (clips.length !== 0) {
+        // 灰度主读就够 ⇒ 一次彩色兜底都不该花（老顺序里这两行的角色相反）
+        return "灰度主读就够，不该再裁彩色帧，实际 clip " + clips.length + " 次";
+    }
+    if (result.inkSkipped !== 1) {
+        return "(1,0) 空位应当被闸门跳过 1 格，实际 " + result.inkSkipped;
+    }
+    for (let i = 0; i < prepared.length; i++) {
+        if (!prepared[i].released) {
+            return "临时帧必须即时释放（原生帧不会 GC，不还就堆在帧表里）：第 " + i + " 个没还";
+        }
+    }
+    if (prepared[0].mode !== "gray" || !Array.isArray(prepared[0].region) || prepared[0].region.length !== 4) {
+        return "主读要传 mode + [x,y,w,h]，实际 " + JSON.stringify({ mode: prepared[0].mode, region: prepared[0].region });
+    }
+    if (result.grayPrimary !== 1 || result.grayChars !== 1 || result.grayRetries !== 0 || result.colorRetries !== 0) {
+        return "计数不对：" + JSON.stringify({ grayPrimary: result.grayPrimary, chars: result.grayChars, grayRetries: result.grayRetries, colorRetries: result.colorRetries });
+    }
+    return true;
+});
+
+check("性能：复用「刚为同一帧读过的逐格证据」的格子不再重读（真机：一次询问 1155ms → 预期 ~300ms）", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const AREA = 68 * 68;
+    // 流水线刚读过：(0,0) 黑炮 0.92 分（够确定 ⇒ 可复用）；(2,0) 也读了但只有 0.40 分（不够 ⇒ 不复用）；
+    // (3,0) 没有字形（不复用）
+    const evidence = [
+        { index: 0, cls: "c", side: "BLACK", ocrScore: 0.92, text: "炮" },
+        { index: 2, cls: "p", side: "RED", ocrScore: 0.40, text: "兵" },
+        { index: 3, cls: null, side: "RED", ocrScore: 0 }
+    ];
+    const reuse = boardScanMod.reuseFromEvidence(evidence);
+    if (reuse.reused !== 1) {
+        return "只有 (0,0) 够确定（有字形 + 分数 ≥0.6 + 颜色已定），实际复用 " + reuse.reused + " 格";
+    }
+    if (reuse.chars[0] !== "c") {
+        return "(0,0) 应当复用成小写 c（黑炮），实际 " + JSON.stringify(reuse.chars[0]);
+    }
+    if (reuse.scores[0] !== 0.92) {
+        return "分数要一起带出来（驱动写基准前还有一道分闸），实际 " + reuse.scores[0];
+    }
+    const detectCalls = [];
+    const host = {
+        session: {
+            detect: function () {
+                detectCalls.push(1);
+                return [{ text: "车", score: 0.9 }];
+            }
+        },
+        countColor: function (image, color, options) {
+            const region = options.region;
+            const col = Math.round((region.x + region.width / 2 - grid.originX) / grid.stepX);
+            const row = Math.round((region.y + region.height / 2 - grid.originY) / grid.stepY);
+            // 只有 (5,0) 有墨迹（黑）；(2,0)/(3,0) 及其它格都没墨迹
+            if (col === 5 && row === 0) {
+                return String(color).toUpperCase() === "#83412D" ? 0 : Math.round(AREA * 0.13);
+            }
+            return 0;
+        },
+        rgbAt: function () { return null; },
+        prepareRegion: function (image, region, mode) {
+            return { clip: mode === "clip", region: region, recycle: function () { } };
+        },
+        releaseFrame: function () { return true; }
+    };
+    const result = boardScanMod.scan(host, {}, grid, { reuse: reuse });
+    if (!result.ok) {
+        return "扫描应当成功，实际 " + result.reason;
+    }
+    if (result.reused !== 1) {
+        return "复用计数应当是 1，实际 " + result.reused;
+    }
+    if (result.chars[0] !== "c" || result.glyphs[0] !== "炮" || result.sides[0] !== "BLACK") {
+        return "复用格的结论必须原样带出，实际 " + JSON.stringify({
+            ch: result.chars[0], glyph: result.glyphs[0], side: result.sides[0]
+        });
+    }
+    if (detectCalls.length !== 1) {
+        return "只有 (5,0)（没框但有墨迹）该真读一次 OCR，实际 " + detectCalls.length + " 次";
+    }
+    if (result.chars[5] !== "r") {
+        return "(5,0) 黑车应当是 r，实际 " + JSON.stringify(result.chars[5]);
+    }
+    if (result.hits !== 2) {
+        return "hit 应当把复用格与扫到的格都算上（2 格有字），实际 " + result.hits;
+    }
+    return true;
+});
+
+check("性能：没框的格子先用找色问「有没有墨迹」，没墨迹就不花 OCR（真机：全盘 2895ms → 1015ms）", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const AREA = 68 * 68;
+    const detectCalls = [];
+    const host = {
+        session: {
+            detect: function (image, options) {
+                detectCalls.push(options && options.region ? "region" : "clip");
+                return [{ text: "车", score: 0.9 }];
+            }
+        },
+        countColor: function (image, color, options) {
+            const region = options.region;
+            const col = Math.round((region.x + region.width / 2 - grid.originX) / grid.stepX);
+            const row = Math.round((region.y + region.height / 2 - grid.originY) / grid.stepY);
+            // (0,0) 有墨迹、但**没有 YOLO 框**（模拟「模型漏检、OCR 能看到」的那类格）；其它格没墨迹
+            if (col === 0 && row === 0) {
+                return String(color).toUpperCase() === "#83412D" ? Math.round(AREA * 0.09) : 0;
+            }
+            return 0;
+        },
+        rgbAt: function () { return null; },
+        prepareRegion: function (image, region, mode) {
+            return { clip: mode === "clip", region: region, recycle: function () { } };
+        },
+        releaseFrame: function () { return true; }
+    };
+    const result = boardScanMod.scan(host, {}, grid, {});
+    if (!result.ok) {
+        return "扫描应当成功，实际 " + result.reason;
+    }
+    // ★ 最关键的一条：没框但有墨迹的格子**必须照样 OCR**（漏检证据不能丢）
+    if (result.chars[0] !== "R") {
+        return "没框但有墨迹的格子必须照样 OCR（漏检证据），实际 " + JSON.stringify(result.chars[0]);
+    }
+    if (result.hits !== 1) {
+        return "只有 1 格有证据，实际 hits=" + result.hits;
+    }
+    if (result.inkSkipped !== 89) {
+        return "89 格没墨迹应当被跳过，实际 " + result.inkSkipped;
+    }
+    if (detectCalls.length !== 1) {
+        return "OCR 只该跑 1 次（只有那一格有墨迹），实际 " + detectCalls.length + " 次";
+    }
+    // 没有找色能力的宿主（Rhino / 离线夹具）：闸门自动关掉，回到「逐格都试一次」的老行为
+    detectCalls.length = 0;
+    const old = boardScanMod.scan({
+        session: host.session, countColor: null, rgbAt: host.rgbAt,
+        prepareRegion: host.prepareRegion, releaseFrame: host.releaseFrame
+    }, {}, grid, {});
+    if (old.inkSkipped !== 0 || detectCalls.length !== 90) {
+        return "没有找色能力时不许跳格（老行为），实际 inkSkipped=" + old.inkSkipped +
+            "／OCR " + detectCalls.length + " 次";
+    }
+    return true;
+});
+
+check("OCR 预处理：主读=彩色 + retryGray=false ⇒ 完全不碰灰度（老顺序的开关语义不变）；没有 prepareRegion 也一样", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const modes = [];
+    function makeHost(withPrepare) {
+        const host = {
+            session: { detect: function (image) { return image && image.__gray ? [{ text: "車", score: 0.9 }] : []; } },
+            countColor: function (image, color) {
+                return String(color).toUpperCase() === "#83412D" ? 400 : 0;
+            },
+            rgbAt: function () { return null; }
+        };
+        if (withPrepare) {
+            host.prepareRegion = function (image, region, mode) {
+                modes.push(mode);
+                return { __gray: mode === "gray", recycle: function () { return true; } };
+            };
+            host.releaseFrame = function () { return true; };
+        }
+        return host;
+    }
+    const off = boardScanMod.scan(makeHost(true), {}, grid, { only: [0], ocrPrimary: "color", retryGray: false });
+    if (off.chars[0] != null || off.grayRetries !== 0) {
+        return "老顺序 + retryGray=false 时不许碰灰度，实际 " + JSON.stringify({ ch: off.chars[0], retries: off.grayRetries });
+    }
+    const noCap = boardScanMod.scan(makeHost(false), {}, grid, { only: [0] });
+    if (noCap.chars[0] != null || noCap.grayRetries !== 0) {
+        return "宿主没有 prepareRegion 时不许重试，实际 " + JSON.stringify({ ch: noCap.chars[0], retries: noCap.grayRetries });
+    }
+    const grayModes = modes.filter(function (one) { return one === "gray"; });
+    if (grayModes.length !== 0) {
+        return "两种情况下都不该请灰度图，实际 " + grayModes.length + " 次";
+    }
+    return true;
+});
+
+check("OCR 预处理（先灰度）：灰度读不出时用**彩色**兜底救回（新顺序的兜底方向）", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const modes = [];
+    const host = {
+        // 灰度：读不出（[]）；彩色（clip）：正常读「车」—— 探针里灰度把馬读成「志」那种情况就靠它兜
+        session: { detect: function (image) { return image && image.__gray ? [] : [{ text: "车", score: 0.9 }]; } },
+        countColor: function (image, color) {
+            return String(color).toUpperCase() === "#83412D" ? 400 : 0;
+        },
+        rgbAt: function () { return null; },
+        prepareRegion: function (image, region, mode) {
+            modes.push(mode);
+            return { __gray: mode === "gray", recycle: function () { return true; } };
+        },
+        releaseFrame: function () { return true; }
+    };
+    const result = boardScanMod.scan(host, {}, grid, { only: [0] });
+    if (result.chars[0] !== "R") {
+        return "灰度读不出时应当用彩色兜底救回 R，实际 " + JSON.stringify(result.chars[0]);
+    }
+    if (result.grayPrimary !== 1 || result.colorRetries !== 1 || result.colorHits !== 1 || result.colorChars !== 1) {
+        return "计数不对：" + JSON.stringify({
+            grayPrimary: result.grayPrimary, retries: result.colorRetries, hits: result.colorHits, chars: result.colorChars
+        });
+    }
+    if (modes.join(",") !== "gray,clip") {
+        return "顺序必须是「先灰度、再彩色兜底」，实际 " + modes.join(",");
+    }
+    return true;
+});
+
+check("OCR 预处理：主读**先裁剪再送**（灰度/彩色都裁；越界时自动回退「整帧+region」）", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const calls = [];
+    const released = [];
+    let clipCount = 0;
+    const host = {
+        session: {
+            detect: function (image, options) {
+                calls.push({ full: image.__full === true, region: !!(options && options.region) });
+                return [{ text: "车", score: 0.9 }];
+            }
+        },
+        countColor: function (image, color) {
+            // 两格都给「红子」的找色证据（否则颜色未定 ⇒ chars 留 null，跟裁剪无关）
+            return String(color).toUpperCase() === "#83412D" ? 400 : 0;
+        },
+        rgbAt: function () { return null; },
+        prepareRegion: function (image, region, mode) {
+            clipCount += 1;
+            if (clipCount === 1) {
+                return null;                      // 第一格：模拟「区域越界」⇒ 必须回退老路径
+            }
+            return { __clipped: true };
+        },
+        releaseFrame: function (frame) { released.push(frame); return true; }
+    };
+    const result = boardScanMod.scan(host, { __full: true }, grid, { only: [0, 1], retryGray: false });
+    if (!result.ok) {
+        return "扫描应当成功，实际 " + result.reason;
+    }
+    if (result.chars[0] !== "R" || result.chars[1] !== "R") {
+        return "两格都该读出字来，实际 " + JSON.stringify([result.chars[0], result.chars[1]]);
+    }
+    if (calls.length !== 2) {
+        return "每格只该问一次 OCR，实际 " + calls.length + " 次";
+    }
+    if (!calls[0].full || !calls[0].region) {
+        return "越界回退时 detect 必须收到「整帧 + region」，实际 " + JSON.stringify(calls[0]);
+    }
+    if (calls[1].full || calls[1].region) {
+        return "裁剪成功时 detect 必须收到裁剪帧、且**不带** region，实际 " + JSON.stringify(calls[1]);
+    }
+    if (released.length !== 1) {
+        return "裁剪帧用完必须释放（越界那次没有帧），实际 " + released.length + " 次";
+    }
+    return true;
+});
+
+check("字形表：真机误读「師（帥差一撇）」「帅」「帥」都算帅（K）；「飾/师」不在表里", function () {
+    const pieceOcr = require("../src/vision/piece-ocr.js");
+    // ⚠️ 用码点写，别靠手打形近字：師 U+5E2B 是 PP-OCR 实际吐出来的字（真机 (4,7) 灰度过 0.70），
+    //    飾 U+98FE / 师 U+5E08 是**另一个字**，不该被认成帅（错认会把兵种判错）。
+    const yes = ["\u5E05", "\u5E25", "\u5E2B"];   // 帅 / 帥 / 師
+    for (let i = 0; i < yes.length; i++) {
+        const hit = pieceOcr.classOf(yes[i]);
+        if (!hit || hit.cls !== "K") {
+            return yes[i] + "(U+" + yes[i].charCodeAt(0).toString(16).toUpperCase() + ") 应当归到 K，实际 " + JSON.stringify(hit);
+        }
+    }
+    const no = ["\u98FE", "\u5E08"];              // 飾 / 师
+    for (let i = 0; i < no.length; i++) {
+        if (pieceOcr.classOf(no[i])) {
+            return no[i] + "(U+" + no[i].charCodeAt(0).toString(16).toUpperCase() + ") 不是棋子字，不该被认出来";
+        }
+    }
+    return true;
+});
+
+check("未知格账目：空位不算未知（评审 2026-09-20 的第一条）", function () {    const boardScan = require("../src/vision/board-scan.js");
+    // 30 枚棋子 + 60 个空位（null）+ 0 个 `?` ⇒ 未知必须是 0
+    const chars = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        chars[i] = null;
+    }
+    const pieces = "rnbakabnrcpCpppPPcPPCRNBAKABNR";
+    for (let i = 0; i < pieces.length && i < 90; i++) {
+        chars[i] = pieces.charAt(i);
+    }
+    if (boardScan.countUnknownCells(chars) !== 0) {
+        return "60 个空位不该算未知，实际 " + boardScan.countUnknownCells(chars) +
+            "（写 `!ch || ch === \"?\"` 就会得到 60，再被稳定帧闸门把每帧都丢掉）";
+    }
+    chars[3] = "?";
+    if (boardScan.countUnknownCells(chars) !== 1) {
+        return "一个 `?` 应当只算 1 个未知，实际 " + boardScan.countUnknownCells(chars);
+    }
+    return true;
+});
+
+check("校验器：未知格只统计一次（评审 2026-09-20 的第二条）", function () {
+    const validator = require("../src/vision/board-validator.js");
+    const board = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        board[i] = null;
+    }
+    board[0] = "r";
+    board[1] = "n";
+    board[2] = "b";
+    board[3] = "a";
+    board[4] = "k";
+    board[5] = "a";
+    board[6] = "b";
+    board[7] = "n";
+    board[8] = "r";
+    board[81] = "R";
+    board[82] = "N";
+    board[83] = "B";
+    board[84] = "A";
+    board[85] = "K";
+    board[86] = "A";
+    board[87] = "B";
+    board[88] = "N";
+    board[89] = "R";
+    board[40] = "?";
+    const out = validator.validate(board, { allowUnknown: true, side: "b" });
+    if (!out.stats || out.stats.unknown !== 1) {
+        return "1 个 `?` 必须只统计 1 次，实际 " + (out.stats ? out.stats.unknown : "无 stats") +
+            "（写成 red.unknown + black.unknown 就是 2）";
+    }
+    return true;
+});
+
+check("证据融合：自定义阈值/权重必须真的生效（评审 2026-09-20 的第三条）", function () {
+    const fusion = require("../src/vision/evidence-fusion.js");
+    const entry = { index: 0, cls: "R", side: "RED", detectionScore: 0.9, ocrScore: 0.8, colorScore: 1.0 };
+    // ⚠️ 不要传 `frames: 1`：那样历史只剩 1 帧，永远只有一票、永远确认不了（自己先踩了一次）。
+    const loose = fusion.createFuser();
+    const strict = fusion.createFuser({ minFinalScore: 2 });
+    // 融合器要**两票一致**才确认（方案 §3.8），所以同一帧数据推两次再比
+    loose.push([entry]);
+    strict.push([entry]);
+    const a = loose.push([entry]);
+    const b = strict.push([entry]);
+    if (!(a.confirmed === 1)) {
+        return "默认阈值下该格应当确认，实际 " + JSON.stringify(a);
+    }
+    if (!(b.confirmed === 0 && b.unknown === 1)) {
+        return "minFinalScore=2 时该格不该确认（说明配置没被透传），实际 " + JSON.stringify(b);
+    }
+    return true;
+});
+
+check("检测框：先排序再截断 —— 45 个乱序框必须留下分数最高的（评审 2026-09-20 的第四条）", function () {
+    const detector = require("../src/vision/piece-detector.js");
+    const raw = [];
+    for (let i = 0; i < 45; i++) {
+        raw.push({ centerX: 100 + i, centerY: 100, width: 50, height: 50, score: i / 100, label: "R" });
+    }
+    const host = { detect: function () { return raw; } };
+    const out = detector.detect(host, {}, { maxDetections: 40 });
+    if (!out.ok || out.boxes.length !== 40) {
+        return "应当留下 40 个框，实际 " + JSON.stringify({ ok: out.ok, n: out.boxes.length });
+    }
+    if (Math.abs(out.boxes[0].score - 0.44) > 1e-6) {
+        return "留下的应当是分数最高的那批（0.44 开头），实际首个 " + out.boxes[0].score;
+    }
+    return true;
+});
+
+check("流水线：整盘 30 子 60 空位时，未知格必须是 0（不是把那 60 个空位算进去）", function () {
+    const host = fakeVisionHost.createFakeHost(fakeVisionHost.openingPieces ? {} : {});
+    const pipeline = visionPipelineModule.create({
+        detect: host.detect,
+        clip: host.clip,
+        rgbAt: host.rgbAt,
+        ocrSession: host.ocrSession,
+        log: function () { }
+    });
+    let result = null;
+    for (let i = 0; i < 3; i++) {
+        result = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    const unknown = result.chars.filter(function (ch) { return ch === "?"; }).length;
+    if (unknown !== 0) {
+        return "3 格全确认后不应有未知格，实际 " + unknown;
+    }
+    const empties = result.chars.filter(function (ch) { return ch === null; }).length;
+    if (empties !== 87) {
+        return "其余 87 格应当保持空位（null），实际 " + empties;
+    }
+    return true;
+});
+
+check("流水线：帅/将**连检测框都没有**时，用 board-scan（字形+找色）在九宫里抢救，而不是整帧退回旧路径", function () {
+    // 真机 2026-09-20 现场：红帅那一格检测框没检出 ⇒ 融合层里**连证据都没有**（不是 '?'）
+    // ⇒ inferKings（只吃 `?` 格子）无从下手 ⇒ 规则门报「红帅数量 0」⇒ 面板丢弃整帧、退回旧路径。
+    const host = fakeVisionHost.createFakeHost({
+        pieces: [
+            { col: 4, row: 9, label: "K", ocr: { text: "帅", score: 0.51 }, side: "red" },
+            { col: 4, row: 0, label: "K", ocr: { text: "将", score: 0.92 }, side: "black" },
+            { col: 0, row: 0, label: "R", ocr: { text: "车", score: 0.92 }, side: "black" }
+        ],
+        hiddenFromDetect: ["4,9"]        // 帅：检测没检出（模型对帅/将召回差）
+    });
+    const pipeline = visionPipelineModule.create({
+        detect: host.detect,
+        clip: host.clip,
+        rgbAt: host.rgbAt,
+        countColor: host.countColor,
+        ocrSession: host.ocrSession,
+        log: function () { }
+    });
+    const kingIndex = 4 + 9 * 9;         // (4,9) = 85
+    let result = null;
+    for (let i = 0; i < 3; i++) {
+        result = pipeline.recognize({}, host.grid, { side: "w" });
+    }
+    if (result.chars[kingIndex] !== "K") {
+        return "(4,9) 应当被抢救成 K，实际 " + JSON.stringify(result.chars[kingIndex]) +
+            "（不抢救的话这一格是空的，规则门会报「红帅数量 0」）";
+    }
+    if (!result.stats.kingRescued) {
+        return "统计里应当记 kingRescued，实际 " + result.stats.kingRescued;
+    }
+    if (!result.validation || !result.validation.ok) {
+        return "抢救之后规则门应当通过，实际 " +
+            (result.validation ? result.validation.reason : "没有 validation");
+    }
+    // 反例：九宫里也读不到帅（OCR 没字）⇒ 不许猜，仍交给调用方自己的兜底
+    const blind = fakeVisionHost.createFakeHost({
+        pieces: [
+            { col: 4, row: 9, label: "K", ocr: null, side: "red" },
+            { col: 4, row: 0, label: "K", ocr: { text: "将", score: 0.92 }, side: "black" }
+        ],
+        hiddenFromDetect: ["4,9"]
+    });
+    const pipeline2 = visionPipelineModule.create({
+        detect: blind.detect,
+        clip: blind.clip,
+        rgbAt: blind.rgbAt,
+        countColor: blind.countColor,
+        ocrSession: blind.ocrSession,
+        log: function () { }
+    });
+    let result2 = null;
+    for (let i = 0; i < 3; i++) {
+        result2 = pipeline2.recognize({}, blind.grid, { side: "w" });
+    }
+    if (result2.chars[kingIndex] === "K") {
+        return "读不到帅就不该抢救（不许猜），实际补了一个 K";
+    }
+    // 第二路：帅被**检出**（label=K）但字形一个字也读不出 —— 用「检测类别当候选 + 九宫 + 找色颜色」补。
+    // 同宫里故意放一个红仕（label=A）：它不该被当成帅（兵种不取框的类别，标签只用来挑候选）。
+    const labelOnly = fakeVisionHost.createFakeHost({
+        pieces: [
+            { col: 4, row: 8, label: "K", ocr: null, side: "red" },
+            { col: 3, row: 8, label: "A", ocr: null, side: "red" },
+            { col: 4, row: 0, label: "K", ocr: { text: "将", score: 0.92 }, side: "black" }
+        ]
+    });
+    const pipeline3 = visionPipelineModule.create({
+        detect: labelOnly.detect,
+        clip: labelOnly.clip,
+        rgbAt: labelOnly.rgbAt,
+        countColor: labelOnly.countColor,
+        ocrSession: labelOnly.ocrSession,
+        log: function () { }
+    });
+    const kingAt48 = 4 + 8 * 9;
+    let result3 = null;
+    for (let i = 0; i < 3; i++) {
+        result3 = pipeline3.recognize({}, labelOnly.grid, { side: "w" });
+    }
+    if (result3.chars[kingAt48] !== "K") {
+        return "(4,8) 应当用「检测类别候选 + 九宫 + 找色」抢救成 K，实际 " +
+            JSON.stringify(result3.chars[kingAt48]);
+    }
+    if (!(result3.stats.kingRescuedByYolo >= 1)) {
+        return "应当记 kingRescuedByYolo（YOLO 定位优先），实际 " + result3.stats.kingRescuedByYolo;
+    }
+    if (result3.chars[4 + 8 * 9 - 1] === "K") {
+        return "宫里的红仕（label=A）不该被当成帅";
+    }
+    if (!result3.validation || !result3.validation.ok) {
+        return "第二路抢救后规则门应当通过，实际 " +
+            (result3.validation ? result3.validation.reason : "没有 validation");
+    }
+    return true;
+});
+
+check("全盘扫描：字形只给兵种、红黑必须来自像素 —— 差一色都不许硬塞（2026-09-20 镜像事故）", function () {
+    const boardScanModule = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM" };
+    const wood = [196, 168, 138];
+    const host = {
+        // 每一格 OCR 都读成「車」—— 只测红黑归属，不测字形
+        session: { detect: function () { return [{ text: "車", score: 0.9 }]; } },
+        rgbAt: function (image, x, y) {
+            // 最右一列故意不给笔画 ⇒ 颜色证据不足，应当留 null（不猜）
+            if (x > grid.originX + 7 * grid.stepX) {
+                return wood;
+            }
+            if ((x + y) % 5 !== 0) {
+                return wood;
+            }
+            const row = Math.round((y - grid.originY) / grid.stepY);
+            return row <= 4 ? [58, 56, 54] : [176, 44, 40];   // 上半黑笔画、下半红笔画
+        }
+    };
+    const result = boardScanModule.scan(host, {}, grid, {});
+    if (!result.ok) {
+        return "扫描应当成功，实际 " + result.reason;
+    }
+    // ⚠️ 这就是事故点：以前面板返回的是 `hit.cls`（全大写），驱动会把它当红方用
+    if (result.chars[0] !== "r") {
+        return "上半（黑方）那一格应当是**小写** r，实际 " + JSON.stringify(result.chars[0]) +
+            "（回到全大写就说明红黑又被丢了）";
+    }
+    // index 81 = (col 0, row 9)：红方底线，避开最右列那组「故意不给笔画」的格子
+    if (result.chars[81] !== "R") {
+        return "下半（红方）那一格应当是大写 R，实际 " + JSON.stringify(result.chars[81]);
+    }
+    if (result.chars[8] !== null) {
+        return "颜色证据不足的格子必须留 null（不猜），实际 " + JSON.stringify(result.chars[8]);
+    }
+    if (!(result.colourUnknown >= 9)) {
+        return "最右一列（9 格）都应记为颜色未定，实际 " + result.colourUnknown;
+    }
+    return true;
+});
+
+check("颜色分类器：红笔画多 ⇒ RED、暗笔画多 ⇒ BLACK、样本太少/得分太近 ⇒ UNKNOWN（方案 §3.6）", function () {
+    const red = [];
+    for (let i = 0; i < 60; i++) {
+        red.push([200, 40, 40]);   // 红字
+    }
+    const black = [];
+    for (let i = 0; i < 60; i++) {
+        black.push([40, 40, 40]);  // 黑字
+    }
+    const junk = [];
+    for (let i = 0; i < 10; i++) {
+        junk.push([180, 160, 140]);   // 木纹
+    }
+    const redVerdict = pieceColorModule.classifySamples(red);
+    const blackVerdict = pieceColorModule.classifySamples(black);
+    if (redVerdict.side !== "RED") {
+        return "红字应当判 RED，实际 " + redVerdict.side + "（" + redVerdict.reason + "）";
+    }
+    if (blackVerdict.side !== "BLACK") {
+        return "黑字应当判 BLACK，实际 " + blackVerdict.side + "（" + blackVerdict.reason + "）";
+    }
+    if (pieceColorModule.classifySamples(junk).side !== "UNKNOWN") {
+        return "采样太少（<40）应当判 UNKNOWN";
+    }
+    return true;
+});
+
+check("颜色分类器：真机采样（木纹底 + 笔画混合）必须真的数出红/暗像素（2026-09-19 键名不匹配事故）", function () {
+    // 纯色理想样本测不出「像素判定恒为 false」这类 Bug：黑字会靠「低饱和」侥幸过关。
+    // 这里按真机分布构造：大半是木纹底，一小部分是笔画。
+    const wood = [196, 168, 138];
+    const mixedDark = [];
+    for (let i = 0; i < 100; i++) {
+        mixedDark.push(i % 5 === 0 ? [58, 56, 54] : wood);   // 20% 黑笔画
+    }
+    const mixedRed = [];
+    for (let i = 0; i < 100; i++) {
+        mixedRed.push(i % 5 === 0 ? [176, 44, 40] : wood);   // 20% 红笔画
+    }
+    const darkFeatures = pieceColorModule.features(mixedDark);
+    const redFeatures = pieceColorModule.features(mixedRed);
+    if (!(darkFeatures.darkRatio > 0.1)) {
+        return "混合样本的 darkRatio 应当 >0.1（真的数到了暗像素），实际 " + darkFeatures.darkRatio +
+            " —— 像素判定很可能又拿到了错的阈值键名";
+    }
+    if (!(redFeatures.redRatio > 0.1)) {
+        return "混合样本的 redRatio 应当 >0.1（真的数到了红像素），实际 " + redFeatures.redRatio;
+    }
+    const darkVerdict = pieceColorModule.classifySamples(mixedDark);
+    if (darkVerdict.side !== "BLACK") {
+        return "木纹底 + 黑笔画应当判 BLACK，实际 " + darkVerdict.side + "（" + darkVerdict.reason + "）";
+    }
+    const redVerdict = pieceColorModule.classifySamples(mixedRed);
+    if (redVerdict.side !== "RED") {
+        return "木纹底 + 红笔画应当判 RED，实际 " + redVerdict.side + "（" + redVerdict.reason + "）";
+    }
+    return true;
+});
+
+check("颜色投票：单帧翻面保留上一帧并记冲突，不直接换阵营（方案 §3.6）", function () {
+    const voter = pieceColorModule.createVoter();
+    const red = [];
+    for (let i = 0; i < 60; i++) {
+        red.push([200, 40, 40]);
+    }
+    const black = [];
+    for (let i = 0; i < 60; i++) {
+        black.push([40, 40, 40]);
+    }
+    const first = voter.vote(10, red);
+    if (first.side !== "RED") {
+        return "第一帧应当是 RED，实际 " + first.side;
+    }
+    const flipped = voter.vote(10, black);
+    if (flipped.side !== "RED" || !flipped.kept) {
+        return "单帧翻面应当保留上一帧（RED）并标记 kept，实际 " + JSON.stringify(flipped);
+    }
+    if (voter.stats().conflicts !== 1) {
+        return "应当记 1 次冲突，实际 " + voter.stats().conflicts;
+    }
+    // 看不清的一帧不能覆盖结论
+    const unclear = voter.vote(10, [[180, 160, 140]]);
+    if (unclear.side !== "UNKNOWN") {
+        return "采样不足那一帧应当返回 UNKNOWN，实际 " + unclear.side;
+    }
+    return true;
+});
+
+check("颜色投票：连续读反 3 帧必须采纳新颜色（一次误读不能把整格颜色钉死，真机 2026-09-20）", function () {
+    const red = [];
+    for (let i = 0; i < 60; i++) {
+        red.push([200, 40, 40]);
+    }
+    const black = [];
+    for (let i = 0; i < 60; i++) {
+        black.push([40, 40, 40]);
+    }
+    const voter = pieceColorModule.createVoter();
+    if (voter.vote(10, red).side !== "RED") {
+        return "第一帧应当是 RED";
+    }
+    const one = voter.vote(10, black);
+    const two = voter.vote(10, black);
+    if (one.side !== "RED" || two.side !== "RED") {
+        return "前两帧读反应当保留上一帧（RED），实际 " + one.side + "/" + two.side;
+    }
+    const three = voter.vote(10, black);
+    if (three.side !== "BLACK" || !three.swapped) {
+        return "连续 3 帧读反就该采纳新颜色（BLACK）并标记 swapped，实际 " + JSON.stringify(three.side);
+    }
+    if (voter.stats().flips !== 1) {
+        return "应当记 1 次「翻面被采纳」，实际 " + voter.stats().flips;
+    }
+    if (voter.vote(10, black).side !== "BLACK") {
+        return "采纳之后应当稳定在 BLACK";
+    }
+    // 找色通道（ink-color）用的是同一个投票器，同一套翻转规则也得生效
+    const ink = require("../src/vision/ink-color.js");
+    const area = 68 * 68;
+    const inkVoter = ink.createVoter();
+    const redCounts = { red: Math.round(area * 0.09), black: 0, area: area, source: "findColor" };
+    const blackCounts = { red: 0, black: Math.round(area * 0.13), area: area, source: "findColor" };
+    if (inkVoter.vote(0, redCounts).side !== "RED") {
+        return "找色通道第一帧应当是 RED";
+    }
+    inkVoter.vote(0, blackCounts);
+    inkVoter.vote(0, blackCounts);
+    if (inkVoter.vote(0, blackCounts).side !== "BLACK") {
+        return "找色通道连续读反也必须能翻过来（否则黑子在路上永远被当成红子）";
+    }
+    return true;
+});
+
+check("状态机：声明「轮到我」必须能把状态从 RECOVERING 推出来（真机 2026-09-20 整轮空转）", function () {
+    const machineModule = require("../src/automation/state-machine.js");
+    const clock = { value: 0 };
+    const machine = machineModule.createMachine({
+        mySide: "w",
+        allowClick: true,
+        unknownTurnWatchdogMs: 1000,
+        verifyTimeoutMs: 2000,
+        movetimeMs: 100
+    }, { nowMono: function () { return clock.value; } });
+    machine.dispatch({ type: "START" });
+    machine.dispatch({ type: "READY", modelVersion: "self-check" });
+    machine.dispatch({ type: "GEOMETRY", geometryVersion: 1, trusted: true });
+    const board = new Array(90);
+    for (let i = 0; i < 90; i++) {
+        board[i] = null;
+    }
+    board[0] = "r";
+    const snapshot = function (side) {
+        return {
+            type: "SNAPSHOT",
+            snapshot: {
+                board: board.slice(), side: side, geometryTrusted: true,
+                unknownCells: 0, conflicts: 0, stable: true
+            }
+        };
+    };
+    // 轮次未知 + 等过看门狗 ⇒ RECOVERING（超时不算「轮到我」）
+    machine.dispatch(snapshot(null));
+    clock.value = 5000;
+    const tripped = machine.dispatch(snapshot(null));
+    if (tripped.state !== "RECOVERING") {
+        return "轮次未知超过看门狗后应当是 RECOVERING，实际 " + tripped.state;
+    }
+    // 用户声明「现在轮到我」：状态机必须能被推动（原来只发 RECOVER，声明进不来）
+    const declared = machine.dispatch({ type: "TURN_DECLARED" });
+    if (declared.state !== "WAIT_STABLE") {
+        return "声明轮到我之后应当回到 WAIT_STABLE 重新观察，实际 " + declared.state +
+            "（这就是真机「只恢复/等待」空转的原因）";
+    }
+    // 下一帧：轮到我方 ⇒ 应该真的开始算棋
+    const thinking = machine.dispatch(snapshot("w"));
+    if (thinking.state !== "THINKING") {
+        return "基准确立的下一帧应当进入 THINKING，实际 " + thinking.state;
+    }
+    return true;
+});
+
+check("裁剪：只裁有棋子的交点，尺寸 = 格距×0.82，中心留 70%（方案 §3.4）", function () {
+    const grid = { originX: 100, originY: 200, stepX: 100, stepY: 100, orientation: "RED_BOTTOM", version: 1 };
+    const box = pieceCropper.cropBoxFor(grid, 0, 0);
+    if (box.width !== 82 || box.height !== 82) {
+        return "裁块应当 82×82，实际 " + box.width + "×" + box.height;
+    }
+    if (box.centerX !== 100 || box.centerY !== 200) {
+        return "(0,0) 中心应当是 (100,200)，实际 (" + box.centerX + "," + box.centerY + ")";
+    }
+    const centre = pieceCropper.centreRegion(box, 0.7);
+    if (centre.width > box.width || Math.abs(centre.x + centre.width / 2 - box.centerX) > 1) {
+        return "中心区域不对：" + JSON.stringify(centre);
+    }
+    // 只裁传入的交点（给 2 个就只裁 2 个）
+    const host = { clip: function () { return null; }, rgbAt: function () { return [1, 2, 3]; } };
+    const crops = pieceCropper.cropAll(host, {}, grid, [{ index: 0 }, { index: 1 }]);
+    if (crops.length !== 2) {
+        return "应当只裁 2 块，实际 " + crops.length;
+    }
+    return true;
+});
+
+check("检测框→交点：一框一格、超过 0.38 格距拒绝、冲突取更近的（方案 §3.3）", function () {
+    const grid = { originX: 0, originY: 0, stepX: 100, stepY: 100, orientation: "RED_BOTTOM", version: 1 };
+    const boxes = [
+        { x: -10, y: -10, width: 20, height: 20, centerX: 0, centerY: 0, score: 0.9 },        // 正中 (0,0)
+        { x: 90, y: -10, width: 20, height: 20, centerX: 100, centerY: 0, score: 0.5 },       // 正中 (1,0) 但分低
+        { x: 195, y: -10, width: 20, height: 20, centerX: 205, centerY: 0, score: 0.8 },      // (2,0) 偏 0.05 格
+        { x: 900, y: 900, width: 20, height: 20, centerX: 910, centerY: 910, score: 0.9 }     // 远离任何交点
+    ];
+    const mapped = pieceDetector.mapToCells(boxes, grid);
+    if (mapped.cells.length !== 3) {
+        return "应当映射出 3 格，实际 " + mapped.cells.length + "（拒绝 " + mapped.rejected.length + "）";
+    }
+    if (mapped.rejected.length !== 1) {
+        return "应当拒绝 1 个框，实际 " + mapped.rejected.length;
+    }
+    const zero = mapped.cells.filter(function (one) { return one.index === 0; });
+    if (zero.length !== 1) {
+        return "(0,0) 应当只收一个框，实际 " + zero.length;
+    }
+    // 同一格两个框：取更近的那个
+    const conflict = pieceDetector.mapToCells([
+        { centerX: 0, centerY: 0, width: 10, height: 10, score: 0.4 },
+        { centerX: 6, centerY: 0, width: 10, height: 10, score: 0.9 }
+    ], grid);
+    if (conflict.cells.length !== 1 || Math.abs(conflict.cells[0].residual) > 0.01) {
+        return "同格冲突应当保留更近的框，实际 " + JSON.stringify(conflict.cells);
+    }
+    return true;
+});
+
+check("几何跟踪：残差分级（≤0.22 保持 / >0.22 微调 / >0.35 重定位）且换几何必须递增版本（方案 §3.3）", function () {
+    const tracker = gridTracker.create({ originX: 0, originY: 0, stepX: 100, stepY: 100, orientation: "RED_BOTTOM", version: 3 });
+    if (tracker.review([{ residual: 0.1 }, { residual: 0.05 }]).action !== "keep") {
+        return "残差 0.075 应当保持";
+    }
+    if (tracker.review([{ residual: 0.3 }]).action !== "micro") {
+        return "残差 0.3 应当微调";
+    }
+    if (tracker.review([{ residual: 0.5 }]).action !== "relocate") {
+        return "残差 0.5 应当重定位";
+    }
+    const next = tracker.update({ originX: 1, originY: 1, stepX: 100, stepY: 100, orientation: "RED_BOTTOM" }, "微调");
+    if (next.version !== 4) {
+        return "换几何必须 version+1（旧票据要靠它失效），实际 " + next.version;
+    }
+    return true;
+});
+
+check("证据融合：两帧一致才确认、三帧三种结果判未知、综合分数 ≥0.78（方案 §3.7/§3.8）", function () {
+    const score = evidenceFusion.finalScore({ detectionScore: 0.9, ocrScore: 0.9, colorScore: 0.9 });
+    if (Math.abs(score - 0.9) > 0.001) {
+        return "三份证据都是 0.9 时综合分应当 0.9，实际 " + score;
+    }
+    const fuser = evidenceFusion.createFuser();
+    const piece = { index: 40, cls: "C", side: "RED", detectionScore: 0.9, ocrScore: 0.9, colorScore: 0.9 };
+    let out = fuser.push([piece]);
+    if (out.chars[40] !== "?") {
+        return "只一帧时不应确认（拿不准就 ?），实际 " + out.chars[40];
+    }
+    out = fuser.push([piece]);
+    if (out.chars[40] !== "C") {
+        return "两帧一致应当确认为 C，实际 " + out.chars[40];
+    }
+    // 三帧三种结论 ⇒ 未知
+    const fuser2 = evidenceFusion.createFuser();
+    fuser2.push([{ index: 40, cls: "C", side: "RED", detectionScore: 0.9, ocrScore: 0.9, colorScore: 0.9 }]);
+    fuser2.push([{ index: 40, cls: "P", side: "RED", detectionScore: 0.9, ocrScore: 0.9, colorScore: 0.9 }]);
+    const three = fuser2.push([{ index: 40, cls: "N", side: "RED", detectionScore: 0.9, ocrScore: 0.9, colorScore: 0.9 }]);
+    if (three.chars[40] !== "?") {
+        return "三帧三种结论应当判未知，实际 " + three.chars[40];
+    }
+    // 分数不够 ⇒ 不确认
+    const low = evidenceFusion.pieceOf({ index: 0, cls: "C", side: "RED", detectionScore: 0.5, ocrScore: 0.5, colorScore: 0.5 });
+    if (low.char !== "?") {
+        return "综合分 0.5（<0.78）应当输出 ?，实际 " + low.char;
+    }
+    return true;
+});
+
+/**
+ * 真机回归（2026-09-21，K40 败局复盘）：**对手的应手起点/落点被游戏「上一步」标记盖住** ⇒
+ * 观测层「顽固未知 → 按旧基准填」把那几格填回原样 ⇒ 差分看起来「没动」⇒ 轮次永远停在
+ * 「轮到对方」，每帧空转，直到被对手 8 步绝杀（现场日志 09:20:41→09:24:15 全是
+ * 「顽固未知 1 格=(1,4)」+「状态 WAIT_TURN｜轮到对方（b）」，而对方其实早已走出 b7b5）。
+ *
+ * 现在：凡本帧有「按旧基准填」的格子，就先试「被盖住的应手」——枚举走棋方的全部合法着法，
+ * 只有一招能把非被盖格全部对上（还要连续两帧佐证）才采信。
+ */
+check("过渡：『被盖住的应手』——起点/落点都读不出来时，唯一合法着法能认出来、两解则不认", function () {
+    // ① 唯一解：标准开局轮黑方，取他的一步不吃子走法；观测 = 走完后把**起点和落点都填回原值**
+    //    （真机死区盘面：读不出来 → 按旧基准填 → 看上去那枚子根本没动）
+    let reply = null;
+    const list = legal.allLegalMoves(START_BOARD, "b");
+    for (let i = 0; i < list.length && !reply; i += 1) {
+        const d0 = transition.squareIndex(list[i].iccs, 1);
+        if (d0 >= 0 && START_BOARD[d0] == null) {
+            reply = list[i];
+        }
+    }
+    if (!reply) {
+        return "夹具失败：开局黑方找不到不吃子走法";
+    }
+    const src = transition.squareIndex(reply.iccs, 0);
+    const dest = transition.squareIndex(reply.iccs, 1);
+    const moved = legal.applyMove(START_BOARD, reply).board;
+    const observed = moved.slice();
+    observed[src] = START_BOARD[src];       // 起点被盖住 → 填回旧值：看上去没走
+    observed[dest] = START_BOARD[dest];     // 落点被盖住 → 填回旧值：看上去还是空的
+    const hit = transition.inferSingleThroughCovered(START_BOARD, "b", observed, [src, dest]);
+    if (!hit || hit.iccs !== reply.iccs) {
+        return "被盖住的唯一应手没认出来：期望 " + reply.iccs + "，实际 " + (hit ? hit.iccs : "null");
+    }
+    if (hit.board[dest] !== moved[dest] || hit.board[src] != null) {
+        return "认出来的盘面不对（起点应空、落点应有子）";
+    }
+    if (hit.nextSide !== "w") {
+        return "认手之后应当轮到红方，实际 " + hit.nextSide;
+    }
+    // ② 两解 ⇒ 绝不认：孤车有两个「被盖住」的落点，两种走法都说得通
+    const amb = fen.parseFen("r4k3/9/9/9/9/9/9/9/9/3K5 b - - 0 1").board;
+    const ambHit = transition.inferSingleThroughCovered(amb, "b", amb.slice(), [0, 1, 2]);
+    if (ambHit !== null) {
+        return "两解时不许认，实际认了 " + ambHit.iccs;
+    }
+    // ③ 没有「被盖住」的格 ⇒ 不归这条路管（普通差分/枚举的活）
+    if (transition.inferSingleThroughCovered(START_BOARD, "b", moved, []) !== null) {
+        return "没有盖住的格时不应出手";
+    }
+    return true;
+});
+
+check("驱动：对手应手被「上一步」标记盖住（起点/落点读不出、填回原样）也要能推出来（K40 死区回归）", function () {
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    let reply = null;
+    const list = legal.allLegalMoves(afterOwn, "b");
+    for (let i = 0; i < list.length && !reply; i += 1) {
+        const d0 = transition.squareIndex(list[i].iccs, 1);
+        if (d0 >= 0 && afterOwn[d0] == null) {
+            reply = list[i];
+        }
+    }
+    if (!reply) {
+        return "夹具失败：应手找不到不吃子走法";
+    }
+    const afterReply = legal.applyMove(afterOwn, reply).board;
+    const src = transition.squareIndex(reply.iccs, 0);
+    const dest = transition.squareIndex(reply.iccs, 1);
+    let observations = 0;
+    const notes = [];
+    const fakeMachine = {
+        dispatch: function (event) {
+            const effects = [];
+            if (event.type === "READY") {
+                effects.push({ type: "CALIBRATE" });
+            }
+            return { effects: effects, reason: event.type };
+        },
+        state: function () { return "WAIT_TURN"; },
+        reason: function () { return "fixture"; },
+        mySide: function () { return "w"; },
+        setMySide: function () { },
+        canClick: function () { return { ok: false, reason: "fixture" }; },
+        counters: function () { return {}; },
+        versions: function () { return { sessionId: 1 }; },
+        setSession: function () { }
+    };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: fakeMachine,
+        nowMono: function () { return 1000; },
+        sleep: function () { },
+        recognize: function () {
+            observations += 1;
+            let board;
+            if (observations === 1) {
+                board = START_BOARD.slice();           // 第 1 帧：开局基准（轮红）
+            } else if (observations <= 3) {
+                board = afterOwn.slice();              // 第 2~3 帧：我方走了一手（跨帧佐证后采信，轮黑）
+            } else {
+                board = afterReply.slice();            // 第 4 帧起：对方应手已走，但**起点+落点都被盖住**
+                board[src] = "?";
+                board[dest] = "?";
+            }
+            let unknown = 0;
+            for (let i = 0; i < board.length; i += 1) {
+                if (board[i] === "?") {
+                    unknown += 1;
+                }
+            }
+            return { ok: true, chars: board, unknownCells: unknown, conflicts: 0 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: false, reason: "本用例不算棋" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { observeFrames: 1 }
+    });
+    driver.start();
+    for (let i = 0; i < 12; i += 1) {
+        driver.tick();
+    }
+    if (!notes.some(function (text) {
+        return text.indexOf("顽固未知") >= 0 || text.indexOf("与上一张可靠盘面一致") >= 0;
+    })) {
+        return "夹具没走到『按基准填回未知格』（测试没覆盖目标路径）：" + notes.slice(-16).join(" / ") +
+            "｜stats=" + JSON.stringify(driver.stats());
+    }
+    const rel = driver.lastReliable();
+    if (!rel || rel.side !== "w") {
+        return "被盖住的应手没推出来（仍停在 " + (rel ? rel.side : "无基准") + "）：" +
+            notes.slice(-5).join(" / ");
+    }
+    if (rel.board[dest] !== afterReply[dest]) {
+        return "推出来的着法没落进基准盘（" + dest + "=" + String(rel.board[dest]) + "）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("盖住的应手 " + reply.iccs) >= 0; })) {
+        return "没有『盖住的应手』日志：" + notes.slice(-5).join(" / ");
+    }
+    return true;
+});
+
+check("驱动：对手应手『占用唯一解』快路 —— 起点空 + 落点有子、字形全读不出来也能定手（免 OCR）", function () {
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    // 找一手对方的「不吃子」应手（落点本来是空格，最干净）
+    let reply = null;
+    const list = legal.allLegalMoves(afterOwn, "b");
+    for (let i = 0; i < list.length && !reply; i += 1) {
+        const d0 = transition.squareIndex(list[i].iccs, 1);
+        if (d0 >= 0 && afterOwn[d0] == null) {
+            reply = list[i];
+        }
+    }
+    if (!reply) {
+        return "夹具失败：应手找不到不吃子走法";
+    }
+    const afterReply = legal.applyMove(afterOwn, reply).board;
+    const src = transition.squareIndex(reply.iccs, 0);
+    const dest = transition.squareIndex(reply.iccs, 1);
+    /** 由盘面造占用图（红大写→"R"，黑小写→"B"；空格→"."） */
+    function occupancyOf(board) {
+        const occ = new Array(90);
+        for (let i = 0; i < 90; i += 1) {
+            const ch = board[i];
+            occ[i] = ch == null ? "." : (ch === ch.toUpperCase() ? "R" : "B");
+        }
+        return occ;
+    }
+    function buildCase(replyFastPath) {
+        let observations = 0;
+        const localNotes = [];
+        const fakeMachine = {
+            dispatch: function (event) {
+                const effects = [];
+                if (event.type === "READY") {
+                    effects.push({ type: "CALIBRATE" });
+                }
+                return { effects: effects, reason: event.type };
+            },
+            state: function () { return "WAIT_TURN"; },
+            reason: function () { return "fixture"; },
+            mySide: function () { return "w"; },
+            setMySide: function () { },
+            canClick: function () { return { ok: false, reason: "fixture" }; },
+            counters: function () { return {}; },
+            versions: function () { return { sessionId: 1 }; },
+            setSession: function () { },
+            currentTicket: function () { return null; }
+        };
+        const driver = driverModule.createDriver({
+            allowClick: false,
+            machine: fakeMachine,
+            nowMono: function () { return 1000; },
+            sleep: function () { },
+            recognize: function () {
+                observations += 1;
+                if (observations === 1) {
+                    return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0 };
+                }
+                if (observations <= 3) {
+                    // 我方走了一手（跨帧佐证后采信，轮黑）——与『盖住的应手』用例同一套夹具
+                    return { ok: true, chars: afterOwn.slice(), unknownCells: 0, conflicts: 0 };
+                }
+                // 应手已落地：**字形全读不出来**（'?'），但占用图/变化格是硬的 —— 快路只认这两样
+                const board = afterReply.slice();
+                board[src] = "?";
+                board[dest] = "?";
+                return {
+                    ok: true, chars: board, unknownCells: 2, conflicts: 0,
+                    occupancy: occupancyOf(afterReply), changed: [src, dest]
+                };
+            },
+            locate: function () { return { ok: true, grid: TEST_GRID }; },
+            analyze: function () { return { ok: false, reason: "本用例不算棋" }; },
+            log: function (text) { localNotes.push(String(text)); },
+            config: { observeFrames: 1, replyFastPath: replyFastPath }
+        });
+        driver.start();
+        for (let i = 0; i < 12; i += 1) {
+            driver.tick();
+        }
+        return { driver: driver, notes: localNotes };
+    }
+    // ① 开（默认）：占用唯一解 ⇒ 免 OCR 定手，基准轮次翻回我方、盘面含应手
+    const on = buildCase(true);
+    const relOn = on.driver.lastReliable();
+    if (!relOn || relOn.side !== "w") {
+        return "快路没定手（基准仍停在 " + (relOn ? relOn.side : "无") + "）：" + on.notes.slice(-8).join(" / ");
+    }
+    if (relOn.board[dest] !== afterReply[dest] || relOn.board[src] != null) {
+        return "定手后的盘面不对（起点应空、落点应是 " + String(afterReply[dest]) + "）";
+    }
+    if (!on.notes.some(function (text) { return text.indexOf("占用唯一解 " + reply.iccs) >= 0; })) {
+        return "没有『占用唯一解』日志：" + on.notes.slice(-5).join(" / ");
+    }
+    // ② 关（A/B 对照）：同样的帧不许走快路（旧路径在字形 '?'、无补齐记录时推不出来）
+    const off = buildCase(false);
+    if (off.notes.some(function (text) { return text.indexOf("占用唯一解 ") >= 0; })) {
+        return "关掉 replyFastPath 之后仍然走了快路";
+    }
+    if (off.notes.some(function (text) { return text.indexOf("对手应手=占用唯一解") >= 0; })) {
+        return "关掉 replyFastPath 之后仍有采纳日志";
+    }
+    return true;
+});
+
+check("applyMove：只带 iccs 的着法也必须真的走子（2026-09-21 卡确认真因回归）", function () {
+    const src = transition.squareIndex(OWN_MOVE.iccs, 0);
+    const dest = transition.squareIndex(OWN_MOVE.iccs, 1);
+    const viaIccs = legal.applyMove(START_BOARD, { iccs: OWN_MOVE.iccs });
+    const viaCoords = legal.applyMove(START_BOARD, OWN_MOVE);
+    if (!viaIccs.board) {
+        return "只带 iccs 时 applyMove 返回了空盘面（应从 iccs 解析出四元坐标）";
+    }
+    if (viaIccs.board[src] != null) {
+        return "起点没被清空（着法没真的应用）";
+    }
+    if (viaIccs.board[dest] == null || viaIccs.board[dest] !== viaCoords.board[dest]) {
+        return "iccs 版落点与四元坐标版不一致";
+    }
+    if (!legal.boardMatches(viaIccs.board, viaCoords.board)) {
+        return "iccs 版盘面与四元坐标版整体不一致";
+    }
+    const bogus = legal.applyMove(AFTER_BOARD, { iccs: OWN_MOVE.iccs });
+    if (bogus.board !== null) {
+        return "起点已空时仍返回了盘面（会把落点那枚子抹掉）";
+    }
+    return true;
+});
+
+check("验证器：按当前基准重建票据盘面（期望必须带上这一手；走不通不重建）", function () {
+    const ticket = sampleTicket({});
+    // ① 当前基准 = 走之前：重建出的期望必须 = 「基准 + 这一手」，绝不能与 base 相同
+    const rebuilt = verifier.rebuildTicketBoards(ticket, START_BOARD);
+    if (!rebuilt) {
+        return "重建返回 null（夹具失败？）";
+    }
+    if (rebuilt.expectedAfterFen === rebuilt.baseFen) {
+        return "重建出的期望 == base：着法没被应用（2026-09-21 真机卡确认的原始病根）";
+    }
+    const rebuiltAfter = fen.parseFen(rebuilt.expectedAfterFen);
+    if (!rebuiltAfter.ok || !legal.boardMatches(rebuiltAfter.board, AFTER_BOARD)) {
+        return "重建出的期望盘面与「base + 这一手」不一致";
+    }
+    // ② 基准已经把这一手消化掉（起点已空）⇒ 必须拒绝重建（否则会把落点抹掉）
+    if (verifier.rebuildTicketBoards(ticket, AFTER_BOARD) !== null) {
+        return "起点已空时仍重建了盘面";
+    }
+    // ③ 端到端：重建后的票据 + 「已走成」的观测 ⇒ CONFIRMED（修复前这里是无限 UNRELIABLE）
+    const verdict = verifier.verify({
+        ticket: {
+            moveICCS: ticket.moveICCS,
+            baseSide: ticket.baseSide,
+            baseFen: rebuilt.baseFen,
+            expectedAfterFen: rebuilt.expectedAfterFen
+        },
+        observed: AFTER_BOARD.slice(),
+        stable: true,
+        geometryTrusted: true,
+        conflicts: 0
+    });
+    if (verdict.result !== verifier.RESULT.CONFIRMED) {
+        return "重建后的票据 + 已落子的观测没有 CONFIRMED：" + verifier.describe(verdict);
+    }
+    return true;
+});
+
+check("驱动：盘面自检 —— 「轮到的一方 0 合法着法」不许喂引擎（假双将空转回归）", function () {
+    // 真机 2026-09-21 现场盘面：d7 黑士被漏读 ⇒ 黑炮「隔一子打帅」不被挡 ⇒ 假双将
+    const mateFen = "3ck4/3Ra4/4b4/2N6/4N4/9/9/9/9/2rK5 w - - 0 1";
+    const mate = fen.parseFen(mateFen);
+    if (!mate.ok || legal.allLegalMoves(mate.board, "w").length !== 0) {
+        return "夹具失败：这不是一个红方 0 着法的局面";
+    }
+    let analyzeCalls = 0;
+    let jobResults = 0;
+    const notes = [];
+    const fakeMachine = {
+        dispatch: function (event) {
+            if (event.type === "READY") {
+                return { effects: [{ type: "COMPUTE", jobId: "job-mate",
+                    board: mate.board.slice(), side: "w", movetimeMs: 100 }], reason: "fixture" };
+            }
+            if (event.type === "JOB_RESULT") {
+                jobResults += 1;
+            }
+            return { effects: [], reason: event.type };
+        },
+        state: function () { return "THINKING"; },
+        reason: function () { return "fixture"; },
+        mySide: function () { return "w"; },
+        setMySide: function () { },
+        canClick: function () { return { ok: false, reason: "fixture" }; },
+        counters: function () { return {}; },
+        versions: function () { return { sessionId: 1 }; },
+        setSession: function () { },
+        currentTicket: function () { return null; }
+    };
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        machine: fakeMachine,
+        nowMono: function () { return 1000; },
+        sleep: function () { },
+        recognize: function () {
+            return { ok: true, chars: mate.board.slice(), unknownCells: 0, conflicts: 0 };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { analyzeCalls += 1; return { ok: false, reason: "不该被调用" }; },
+        log: function (text) { notes.push(String(text)); },
+        config: { observeFrames: 1 }
+    });
+    driver.start();
+    driver.tick();
+    if (analyzeCalls !== 0) {
+        return "盘面自检没拦住，引擎还是被调用了";
+    }
+    if (jobResults !== 1) {
+        return "JOB_RESULT 没有回给状态机（jobResults=" + jobResults + "）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("盘面自检不通过") >= 0; })) {
+        return "没有『盘面自检不通过』日志：" + notes.slice(-6).join(" / ");
+    }
+    return true;
+});
+
+check("ink-color.looksEmpty：找色压线的黑士（5.8%<6%）靠暗墨迹不判空；空格/星光照旧判空", function () {
+    const inkColor = require("../src/vision/ink-color.js");
+    const area = 104 * 104;
+    // 真机实测（K40，d7 黑士，偏心 28px 的裁剪中心）：黑≈5.83%（<6% 线）、暗≈8.3%
+    const d7 = { red: 6, black: Math.round(area * 0.0583), dark: Math.round(area * 0.083), area: area };
+    if (inkColor.looksEmpty(d7)) {
+        return "压线的黑士被误判为空（旧口径的真身）";
+    }
+    if (!inkColor.looksEmpty({ red: 0, black: 0, dark: 0, area: area })) {
+        return "空格没被判空";
+    }
+    // 星光标记（历史帧 4.2% 红、暗 0）⇒ 仍判空（不许把旧的骗色问题放回来）
+    if (!inkColor.looksEmpty({ red: Math.round(area * 0.042), black: 0, dark: 0, area: area })) {
+        return "星光标记格没被判空（会重新引入旧病）";
+    }
+    if (inkColor.looksEmpty({ red: 0, black: Math.round(area * 0.10), dark: 0, area: area })) {
+        return "正常黑子被误判为空";
+    }
+    if (inkColor.looksEmpty({ red: Math.round(area * 0.14), black: 0, dark: 0, area: area })) {
+        return "红子被误判为空";
+    }
+    return true;
+});
+
+check("board-scan：空框格偏心读成「土」时，1.15×宽窗重读救回「士」（d7 漏读回归）", function () {
+    const boardScanMod = require("../src/vision/board-scan.js");
+    const grid = { originX: 100, originY: 100, stepX: 115, stepY: 114, cols: 9, rows: 10, orientation: "RED_BOTTOM", version: 1 };
+    const d7 = 3 + 2 * 9;
+    const session = {
+        detect: function (img, options) {
+            const region = options && options.region;
+            if (!region) { return []; }
+            const w = Number(region[2]);
+            const col = Math.round((Number(region[0]) + w / 2 - grid.originX) / grid.stepX);
+            const row = Math.round((Number(region[1]) + Number(region[3]) / 2 - grid.originY) / grid.stepY);
+            if (col !== 3 || row !== 2) { return []; }
+            // 窄窗：模型读出的是「土」（无效字）；宽窗：完整地看到「士」
+            return w >= 120 ? [{ text: "士", score: 0.9 }] : [{ text: "土", score: 0.8 }];
+        }
+    };
+    const host = {
+        session: session,
+        countColor: function (image, color, options) {
+            const region = options && options.region;
+            if (!region) { return 0; }
+            const x = region.x != null ? region.x : region[0];
+            const y = region.y != null ? region.y : region[1];
+            const w = region.width != null ? region.width : region[2];
+            const h = region.height != null ? region.height : region[3];
+            const col = Math.round((x + w / 2 - grid.originX) / grid.stepX);
+            const row = Math.round((y + h / 2 - grid.originY) / grid.stepY);
+            if (col !== 3 || row !== 2) { return 0; }
+            const area = Math.max(1, Math.round(w) * Math.round(h));
+            const ref = String(color).toUpperCase();
+            if (ref === "#282830") { return Math.round(area * 0.058); }   // 找色黑：压 6% 线
+            if (ref === "#303030") { return Math.round(area * 0.083); }   // 暗墨迹：稳过
+            return 0;
+        }
+    };
+    const out = boardScanMod.scan(host, {}, grid, {});
+    if (!out || out.wideRetries < 1) {
+        return "没走宽窗重读（wideRetries=" + (out && out.wideRetries) + "）";
+    }
+    if (out.wideHits < 1) {
+        return "宽窗重读没救回字形（wideHits=" + out.wideHits + "）";
+    }
+    if (out.chars[d7] !== "a") {
+        return "(3,2) 应读出黑士 a，实际 " + JSON.stringify(out.chars[d7]) +
+            "｜glyphs=" + JSON.stringify(out.glyphs[d7]) + "｜scores=" + JSON.stringify(out.scores[d7]);
+    }
+    return true;
+});
+
+// ---------------------------------------------------------------- 几何搜索（多证据融合最小版）
+
+check("几何搜索：未知格/覆盖率定位阶段只罚不拒（方案 §10 最小版）", function () {
+    const trueGrid = geometry.createGrid({ originX: 100, originY: 100, stepX: 100, stepY: 100, orientation: "RED_BOTTOM" });
+    const dets = [
+        { label: "R", score: 0.9, x: 100, y: 100 },
+        { label: "N", score: 0.9, x: 300, y: 100 },
+        { label: "K", score: 0.9, x: 500, y: 100 },
+        { label: "P", score: 0.9, x: -500, y: -500 },   // 棋盘外（压低 coverage）
+        { label: "P", score: 0.9, x: -600, y: -600 },
+        { label: "P", score: 0.9, x: -700, y: -700 }
+    ];
+    for (let i = 0; i < 5; i++) {
+        // 只拿到弱证据（0.3 < minScore 0.45）⇒ 5 个未知格（旧硬门槛 >4 会一票否决）
+        dets.push({ label: "C", score: 0.3, x: 100 + i * 100, y: 300 });
+    }
+    const soft = gridSearch.searchByDetections(dets, {
+        seeds: [trueGrid], radius: 0, step: 1, stepScales: [1]
+    });
+    if (!soft.ok) {
+        return "软门槛下应当接受（旧行为会拒绝），实际：" + soft.reason;
+    }
+    const strict = gridSearch.searchByDetections(dets, {
+        seeds: [trueGrid], radius: 0, step: 1, stepScales: [1],
+        requireUnknown: true, requireCoverage: true
+    });
+    if (strict.ok) {
+        return "显式 requireUnknown/requireCoverage 时应当拒绝";
+    }
+    const joined = (strict.best && strict.best.reasons ? strict.best.reasons.join("；") : "");
+    if (joined.indexOf("未知格") < 0 || joined.indexOf("比例过低") < 0) {
+        return "拒绝理由应同时含「未知格过多」与「比例过低」，实际：" + joined;
+    }
+    return true;
+});
+
+check("几何搜索：种子格距偏 3% 时步距缩放（±2%/±4%）能救回", function () {
+    const seed = { originX: 120, originY: 200, stepX: 112.5, stepY: 112.5, orientation: "RED_BOTTOM" };
+    const spots = [[0, 0, "K"], [1, 0, "R"], [8, 9, "k"], [4, 5, "N"], [2, 7, "P"]];
+    const dets = spots.map(function (s) {
+        return { label: s[2], score: 0.9, x: 120 + s[0] * 116, y: 200 + s[1] * 116 };
+    });
+    const found = gridSearch.searchByDetections(dets, { seeds: [seed], radius: 3, step: 3 });
+    if (!found.ok) {
+        return "带步距缩放搜索应当能找到可行几何：" + found.reason;
+    }
+    if (Math.abs(found.grid.stepX - 116) > 116 * 0.025) {
+        return "格距应被纠到 116±2.5%，实际 " + found.grid.stepX;
+    }
+    const pinned = gridSearch.searchByDetections(dets, { seeds: [seed], radius: 3, step: 3, stepScales: [1] });
+    if (!pinned.ok) {
+        return "只搜平移时也应当有可行几何（对照组）";
+    }
+    if (Math.abs(pinned.grid.stepX - 116) <= Math.abs(found.grid.stepX - 116)) {
+        return "对照组（不搜步距）不应与搜索组一样准：pinned=" + pinned.grid.stepX + " found=" + found.grid.stepX;
+    }
+    return true;
+});
+
+check("几何搜索：默认种子按屏幕推导（不再写死 K40 坐标）", function () {
+    const k40 = gridSearch.deriveSeeds({ width: 1080, height: 2400 });
+    if (!k40 || !k40.length) {
+        return "1080×2400 应当能推导出种子";
+    }
+    if (Math.abs(k40[0].stepX - 115.6) > 4) {
+        return "K40 格距应 ≈115.6（实测 115.9），实际 " + k40[0].stepX;
+    }
+    const ys = k40.map(function (s) { return s.originY; }).join(",");
+    if (ys.indexOf("666") < 0) {
+        return "中间档 y 应当是 K40 实测的 666（0.2775×2400），实际 " + ys;
+    }
+    const big = gridSearch.deriveSeeds({ width: 1280, height: 2772 });
+    if (!big || !big.length) {
+        return "1280×2772 应当能推导出种子";
+    }
+    const ratio = big[0].stepX / k40[0].stepX;
+    if (Math.abs(ratio - 1280 / 1080) > 0.03) {
+        return "格距应随屏幕短边等比缩放（期望 " + (1280 / 1080).toFixed(3) + "），实际 " + ratio.toFixed(3);
+    }
+    if (gridSearch.deriveSeeds(null) !== null) {
+        return "无效尺寸应当返回 null（调用方退回兜底常量）";
+    }
+    return true;
+});
+
+check("定位候选评分：条数/残差/补线/警告合成分数（选优取代「首个即胜」）", function () {
+    const mk = function (vq, hq, warning) {
+        return {
+            ok: true, warning: warning || "",
+            vertical: { matched: vq.m, quality: { matched: vq.m, maxResidual: vq.r, reconstructed: vq.c }, lineScore: vq.s },
+            horizontal: { matched: hq.m, quality: { matched: hq.m, maxResidual: hq.r, reconstructed: hq.c }, lineScore: hq.s }
+        };
+    };
+    const good = mk({ m: 9, r: 0.02, c: 0, s: 0.8 }, { m: 10, r: 0.03, c: 0, s: 0.8 }, "");
+    const poor = mk({ m: 9, r: 0.2, c: 1, s: 0.4 }, { m: 9, r: 0.25, c: 1, s: 0.4 }, "棋盘范围与格点阵对不齐");
+    const goodScore = boardLocator.scoreLocateResult(good);
+    const poorScore = boardLocator.scoreLocateResult(poor);
+    if (!(goodScore > poorScore)) {
+        return "好候选分数应更高：good=" + goodScore + " poor=" + poorScore;
+    }
+    if (boardLocator.isAcceptableLocate(poor)) {
+        return "带警告/补线的候选不应算「足够好」";
+    }
+    if (!boardLocator.isAcceptableLocate(good)) {
+        return "无警告、9/9+10/10、残差小的候选应当算「足够好」";
+    }
+    if (isFinite(boardLocator.scoreLocateResult({ ok: false }))) {
+        return "失败的定位结果不应参与比较（-Infinity）";
+    }
+    return true;
+});
+
+check("几何搜索：探测裁剪网格覆盖所有种子（3 档 y 不被裁）", function () {
+    const seeds = gridSearch.deriveSeeds({ width: 1080, height: 2400 });
+    const probe = gridSearch.probeGridFor(seeds);
+    if (!probe) {
+        return "应当生成探测网格";
+    }
+    const first = seeds[0];
+    const last = seeds[seeds.length - 1];
+    const needTop = first.originY;
+    const needBottom = last.originY + 9 * last.stepY;
+    const probeBottom = probe.originY + 9 * probe.stepY;
+    if (!(probe.originY <= needTop) || !(probeBottom >= needBottom)) {
+        return "探测网格 y 范围 [" + probe.originY + "," + probeBottom +
+            "] 没盖住种子区 [" + needTop + "," + needBottom + "]";
+    }
+    const needLeft = first.originX;
+    const needRight = first.originX + 8 * first.stepX;
+    const probeRight = probe.originX + 8 * probe.stepX;
+    if (!(probe.originX <= needLeft) || !(probeRight >= needRight)) {
+        return "探测网格 x 范围没盖住种子区";
+    }
+    return true;
+});
+
+// ---------------------------------------------------------------- 格线探测器（多证据融合 P1）
+
+/** 合成一条「线响应」：centers = [{at, h}] 处放三角形峰（离线测梳状拟合用）。 */
+function mkLatticeResponse(from, to, step, centers, shape) {
+    const n = Math.floor((to - from) / step) + 1;
+    const values = new Array(n);
+    const base = shape && shape.base != null ? shape.base : 0.02;
+    const half = ((shape && shape.width) || 8) / 2;
+    for (let i = 0; i < n; i++) {
+        values[i] = base;
+        const x = from + i * step;
+        for (let c = 0; c < centers.length; c++) {
+            const d = Math.abs(x - centers[c].at);
+            if (d <= half) {
+                values[i] += (centers[c].h == null ? 1 : centers[c].h) * (1 - d / (half + 1));
+            }
+        }
+    }
+    return { axis: "x", from: from, to: to, step: step, values: values };
+}
+
+check("格线探测器：梳状拟合恢复 9 条竖线（±3px），遮挡 2 条也能扛（trimmed）", function () {
+    const truth = [82, 197, 312, 427, 542, 657, 772, 887, 1002];
+    const centers = truth.map(function (at) { return { at: at, h: 1 }; });
+    const resp = mkLatticeResponse(0, 1080, 4, centers, { base: 0.03, width: 8 });
+    const fit = latticeDetector.combFit(resp, 9, { stepMin: 75, stepMax: 151 });
+    if (!fit.best) {
+        return "没出候选";
+    }
+    if (Math.abs(fit.best.origin - 82) > 3) {
+        return "origin 应 ≈82±3，实际 " + fit.best.origin;
+    }
+    if (Math.abs(fit.best.step - 115) > 2) {
+        return "step 应 ≈115±2，实际 " + fit.best.step;
+    }
+    // 遮挡第 2、6 条（被棋子盖住）后仍要恢复
+    const covered = centers.map(function (c, i) {
+        return (i === 2 || i === 6) ? { at: c.at, h: 0 } : c;
+    });
+    const resp2 = mkLatticeResponse(0, 1080, 4, covered, { base: 0.03, width: 8 });
+    const fit2 = latticeDetector.combFit(resp2, 9, { stepMin: 75, stepMax: 151 });
+    if (!fit2.best) {
+        return "遮挡后没出候选";
+    }
+    if (Math.abs(fit2.best.origin - 82) > 3 || Math.abs(fit2.best.step - 115) > 2) {
+        return "遮挡 2 条后应仍恢复：origin=" + fit2.best.origin + " step=" + fit2.best.step;
+    }
+    return true;
+});
+
+check("格线探测器：半格诱饵不许胜出（真梳 115 vs 半格梳 57.5）", function () {
+    const truth = [82, 197, 312, 427, 542, 657, 772, 887, 1002];
+    const centers = truth.map(function (at) { return { at: at, h: 1 }; });
+    for (let k = 0; k < truth.length - 1; k++) {
+        centers.push({ at: (truth[k] + truth[k + 1]) / 2, h: 0.45 });
+    }
+    // stepMin 放宽到 40，半格距 57.5 也在搜索范围内——诱饵真的会被评到
+    const resp = mkLatticeResponse(0, 1080, 4, centers, { base: 0.03, width: 8 });
+    const fit = latticeDetector.combFit(resp, 9, { stepMin: 40, stepMax: 151 });
+    if (!fit.best) {
+        return "没出候选";
+    }
+    if (Math.abs(fit.best.step - 115) > 3) {
+        return "应选真格距 115（半格诱饵 57.5 不许胜），实际 " + fit.best.step;
+    }
+    return true;
+});
+
+check("格线探测器：假宿主端到端恢复棋盘（竖 115 / 横 114）", function () {
+    const vLines = [82, 197, 312, 427, 542, 657, 772, 887, 1002];
+    const hLines = [695, 809, 923, 1037, 1151, 1265, 1379, 1493, 1607, 1721];
+    const fakeImage = { width: 1080, height: 2400 };
+    const fakeHost = {
+        sizeOf: function () { return { width: 1080, height: 2400 }; },
+        countColor: function (image, color, options) {
+            const region = options.region;
+            const vertical = region.width <= 3;   // 竖条带 vs 横条带
+            const lines = vertical ? vLines : hLines;
+            const start = vertical ? region.x : region.y;
+            const end = vertical ? region.x + region.width : region.y + region.height;
+            let hits = 0;
+            for (let i = 0; i < lines.length; i++) {
+                // 线画 3px 宽（[c-1, c+2)）：避开「2px 线 + 4px 采样」的采样混叠
+                const overlap = Math.min(end, lines[i] + 2) - Math.max(start, lines[i] - 1);
+                if (overlap > 0) {
+                    hits += overlap * (vertical ? region.height : region.width);
+                }
+            }
+            return Math.round(hits);
+        }
+    };
+    const out = latticeDetector.detect(fakeHost, fakeImage, {});
+    if (!out.ok) {
+        return "假宿主下应当成功：" + out.reason;
+    }
+    if (Math.abs(out.grid.originX - 82) > 4) {
+        return "originX 应 ≈82±4，实际 " + out.grid.originX;
+    }
+    if (Math.abs(out.grid.stepX - 115) > 2.5) {
+        return "stepX 应 ≈115±2.5，实际 " + out.grid.stepX;
+    }
+    if (Math.abs(out.grid.originY - 695) > 4) {
+        return "originY 应 ≈695±4，实际 " + out.grid.originY;
+    }
+    if (Math.abs(out.grid.stepY - 114) > 2.5) {
+        return "stepY 应 ≈114±2.5，实际 " + out.grid.stepY;
+    }
+    if (!(out.calls > 500)) {
+        return "应当发起多次找色调用，实际 " + out.calls;
+    }
+    if (!(out.evidence.vertical.matched >= 7)) {
+        return "竖线 matched 应 ≥7，实际 " + out.evidence.vertical.matched;
+    }
+    return true;
+});
+
+check("定位融合：lattice 结果映射成旧结果形状（面板兼容）", function () {
+    const grid = { originX: 82, originY: 695, stepX: 115.9, stepY: 114.1, orientation: "RED_BOTTOM" };
+    const latticeOut = {
+        ok: true, grid: grid, score: 3.51, squareness: 0.0157, calls: 640,
+        evidence: {
+            vertical: { origin: 82, step: 115.9, matched: 9, score: 1.8 },
+            horizontal: { origin: 695, step: 114.1, matched: 10, score: 1.7 }
+        },
+        timing: { responseMs: 300, fitMs: 250, totalMs: 561 }
+    };
+    const mapped = locateBoardEntry.mapLatticeResult(latticeOut, {
+        size: { width: 1080, height: 2400 },
+        captureMs: 42, totalMs: 620, frameObject: { id: "frame" }
+    });
+    if (mapped.method !== "lattice") return "method 应为 lattice，实际 " + mapped.method;
+    if (mapped.grid !== grid) return "grid 应原样透传";
+    if (mapped.columns !== 9 || mapped.rows !== 10) return "columns/rows 应取证据条数";
+    if (mapped.earlyAccept !== true || mapped.attempts !== 1) return "应标记 attempts=1/earlyAccept";
+    if (!mapped.frameObject || mapped.frameObject.id !== "frame") return "frameObject 应透传";
+    return near(mapped.region.x, 82 - 115.9 * 0.5, 1, "region.x") &&
+        near(mapped.region.y, 695 - 114.1 * 0.5, 1, "region.y") &&
+        near(mapped.region.width, 9 * 115.9, 1, "region.width") &&
+        near(mapped.region.height, 10 * 114.1, 1, "region.height") &&
+        near(mapped.timing.locateMs, 561, 1, "locateMs") &&
+        eq(mapped.lattice.calls, 640, "找色次数");
+});
+
+check("定位融合：regionFromGrid 与棋盘外沿对齐（±0.5 格）", function () {
+    const region = locateBoardEntry.regionFromGrid(
+        { originX: 82.4, originY: 695.2, stepX: 115.9, stepY: 114.1 }, 1080, 2400);
+    return eq(region.x, Math.round(82.4 - 115.9 * 0.5), "x") &&
+        eq(region.y, Math.round(695.2 - 114.1 * 0.5), "y") &&
+        eq(region.width, Math.round(9 * 115.9), "width") &&
+        eq(region.height, Math.round(10 * 114.1), "height");
 });
 
 // ---------------------------------------------------------------- 收尾

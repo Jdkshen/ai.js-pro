@@ -21,6 +21,7 @@ const pieceSide = require("./piece-side.js");
 const fen = require("../chess/fen.js");
 const consistency = require("../chess/consistency.js");
 const defaults = require("../util/defaults.js");
+const detectionStage = require("./detection-stage.js");
 
 const DEFAULTS = {
     /** 棋盘外框外扩（格距倍数） */
@@ -306,50 +307,6 @@ function alignGrid(detections, grid, assignOptions, search) {
     };
 }
 
-/**
- * 把棋盘外框按目标宽高比扩成「竖屏窗口」（保持中心不变，不超出图像）。
- * 用于矩形输入模型：让它看到的是整屏那样的一竖条，而不是方形棋盘裁剪。
- */
-function fitAspect(box, aspect, image) {
-    if (!aspect || !box || !(aspect > 0)) {
-        return box;
-    }
-    const maxWidth = image && typeof image.getWidth === "function" ? image.getWidth() : null;
-    const maxHeight = image && typeof image.getHeight === "function" ? image.getHeight() : null;
-    let width = box.width;
-    let height = box.height;
-    if (width / height < aspect) {
-        width = height * aspect;          // 太窄 → 左右扩
-    } else {
-        height = width / aspect;          // 太宽 → 上下扩
-    }
-    const centreX = box.x + box.width / 2;
-    const centreY = box.y + box.height / 2;
-    let x = Math.round(centreX - width / 2);
-    let y = Math.round(centreY - height / 2);
-    width = Math.round(width);
-    height = Math.round(height);
-    if (maxWidth != null && maxHeight != null) {
-        // 夹回图像内（尺寸不够时不再拉比例，宁可略偏比例也别越界）
-        x = Math.max(0, Math.min(x, Math.max(0, maxWidth - width)));
-        y = Math.max(0, Math.min(y, Math.max(0, maxHeight - height)));
-        width = Math.min(width, maxWidth);
-        height = Math.min(height, maxHeight);
-    }
-    return { x: x, y: y, width: width, height: height };
-}
-
-function regionBox(opts) {
-    if (opts.regionMode === "full" && opts.image && typeof opts.image.getWidth === "function") {
-        const width = opts.image.getWidth();
-        const height = opts.image.getHeight();
-        if (width > 0 && height > 0) {
-            return { x: 0, y: 0, width: width, height: height };
-        }
-    }
-    return fitAspect(geometry.boundsOf(opts.grid, opts.cropMargin), opts.regionAspect, opts.image);
-}
-
 function recognize(options) {
     const opts = defaults.mergeDefaults(DEFAULTS, options);
     const startedAt = Date.now();
@@ -364,41 +321,15 @@ function recognize(options) {
         return { ok: false, reason: "没有检测器", stage: "input" };
     }
 
-    const box = regionBox(opts);
-    const detectStart = Date.now();
-    let raw = [];
-    let detectTarget = opts.image;
-    try {
-        if (opts.useRegion === true) {
-            // 官方区域检测：Java 侧会把 region 加回结果（OpenCvYoloDetector.detectRgba），
-            // 所以拿到的坐标已经是**全图**坐标，这里不能再加偏移。
-            raw = opts.detect(opts.image, {
-                confidence: opts.confidence,
-                nms: opts.nms,
-                region: [box.x, box.y, box.width, box.height]
-            }) || [];
-        } else {
-            if (typeof opts.crop === "function") {
-                const t0 = Date.now();
-                detectTarget = opts.crop(opts.image, box);
-                timing.cropMs = Date.now() - t0;
-                if (!detectTarget) {
-                    return { ok: false, reason: "裁剪棋盘区域失败", stage: "crop", box: box };
-                }
-            }
-            raw = opts.detect(detectTarget, { confidence: opts.confidence, nms: opts.nms }) || [];
-        }
-    } catch (error) {
-        return {
-            ok: false,
-            stage: "detect",
-            reason: "检测失败：" + (error && error.message ? error.message : error),
-            box: box
-        };
+    // 检测区域、矩形模型宽高比与坐标回移由单一底座负责；新流水线也走同一实现。
+    const detected = detectionStage.detect(opts);
+    if (!detected.ok) {
+        return detected;
     }
-    timing.detectMs = Date.now() - detectStart;
-    // 两种模式下归一化的偏移量不同：区域模式坐标已回移，裁剪模式要自己加回去。
-    const detections = normalize(raw, opts.useRegion === true ? null : box);
+    const box = detected.box;
+    const detections = detected.detections;
+    timing.cropMs = detected.timing.cropMs;
+    timing.detectMs = detected.timing.detectMs;
 
     const assignOptions = {
         minScore: opts.minScore,
@@ -540,43 +471,6 @@ function recognize(options) {
     };
 }
 
-/** 检测结果 → 统一形态（中心点坐标 + 可选裁剪偏移）。box 为 null 表示坐标已经是全图坐标。 */
-function normalize(raw, box) {
-    const list = [];
-    const offsetX = box ? box.x : 0;
-    const offsetY = box ? box.y : 0;
-    for (let i = 0; i < (raw ? raw.length : 0); i++) {
-        const item = raw[i];
-        if (!item) {
-            continue;
-        }
-        let x = item.x;
-        let y = item.y;
-        if (x == null && item.bounds) {
-            x = item.bounds.centerX == null
-                ? item.bounds.x + item.bounds.width / 2
-                : item.bounds.centerX;
-            y = item.bounds.centerY == null
-                ? item.bounds.y + item.bounds.height / 2
-                : item.bounds.centerY;
-        }
-        if (!isFinite(x) || !isFinite(y)) {
-            continue;
-        }
-        const bounds = item.bounds || {};
-        list.push({
-            label: item.label,
-            classId: item.classId,
-            score: item.score == null ? 1 : item.score,
-            x: x + offsetX,
-            y: y + offsetY,
-            width: bounds.width,
-            height: bounds.height
-        });
-    }
-    return list;
-}
-
 /** 给人看的棋盘图（row 0 在上，字母后跟 r/b/?）。 */
 function boardText(result) {
     if (!result || !result.chars) {
@@ -599,6 +493,7 @@ module.exports = {
     PIECE_NAMES: PIECE_NAMES,
     recognize: recognize,
     alignGrid: alignGrid,
-    normalize: normalize,
+    // 兼容旧调用方；实际实现只有 detection-stage.js 一份。
+    normalize: detectionStage.normalize,
     boardText: boardText
 };

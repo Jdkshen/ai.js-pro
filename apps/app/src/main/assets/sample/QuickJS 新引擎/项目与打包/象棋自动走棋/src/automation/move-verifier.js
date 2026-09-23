@@ -46,6 +46,8 @@ function boardOfFen(fen) {
  * @param input.stable          观测是否已稳定（时序融合的结论）
  * @param input.geometryTrusted 当前几何是否可信
  * @param input.conflicts       关键冲突数（>0 视为不可靠）
+ * @param input.trustDestReading 为 true 时，落点格读到别的子**不再**按票据改回（见下面的说明）。
+ *                               只给驱动的「同字异色复议」用：那一条路已经用连续多帧证明「读数是稳的」。
  * @returns { result, reason, board, plies, unknownCells }
  */
 function verify(input) {
@@ -113,6 +115,13 @@ function verify(input) {
             continue;
         }
         if (i === destIndex && expected[i] && got !== expected[i]) {
+            // ★ `trustDestReading`（驱动侧「同字异色复议」专用，2026-09-20）：
+            //   落点格读到**别的子**时，不再当「装饰画花」按票据改回 —— 那一帧更可能是
+            //   「我方那枚子被对方**同兵种**反吃了」，改回正好把证据抹掉（K40 真机卡死两分钟的真因）。
+            //   此时把这一格当**真差异**，留给下面的应手匹配去解释。
+            if (src.trustDestReading) {
+                continue;
+            }
             // 只有「起点确实已经空了」才当成落点被装饰弄花；否则就是我方还没落子
             // （那种帧必须走 UNCHANGED → 允许一次重试，不能被当成「无法解释」把票据作废）
             const srcCleared = srcIndex == null || observed[srcIndex] === expected[srcIndex];
@@ -124,56 +133,68 @@ function verify(input) {
     if (decorated.length > 0 || unknownCells > 0) {
         const dest = destIndex;
         const unknown = decorated;   // 含「读成 ?」与「落点格读成别的子」两类（见上面的说明）
-        const onlyDestination = dest != null && unknown.length > 0 &&
-            unknown.every(function (index) { return index === dest; });
-        if (onlyDestination) {
-            subject = observed.slice();
-            subject[dest] = expected[dest];
-            patched = { index: dest, char: expected[dest] };
-        } else {
-            // 对方应手也带高亮环 → 枚举“我方落点 + 某一个合法应手落点”的未知格组合
-            const replies = legal.allLegalMoves(expected, opposite(ticket.baseSide));
-            const fits = [];
-            for (let i = 0; i < replies.length; i++) {
-                const reply = replies[i];
-                const replyDest = indexOfIccs(reply.iccs);
-                if (replyDest == null || replyDest === dest) {
-                    continue;
+        /**
+         * ★ 2026-09-20（真机：`确认：UNRELIABLE：还有 1 个未知格（且不全是落点格）` 反复卡确认，
+         *   每次白烧一次恢复）：未知格该挡的是**有判别力**的格，不是随便哪一格看不清都不认。
+         *
+         * 一次走子只能改**起点与落点**两格；别的格子无论几格看不清，都不影响「谁走了哪一步」：
+         * 把看不清的格从比对里剔掉，再看候选是不是**唯一**对得上所有看得清的格。
+         * 候选只有两类：「我方这手（对方还没应）」与「我方这手 + 某一个合法应手」；
+         * 唯一才采信，看不清的那些格就按该候选的值补齐（那两类的值都由票据 + 棋规完全确定）。
+         *
+         * 旧规则要求未知格必须恰好落在「我方落点 / 我方途经格 / 对方应手落点」上，否则直接 UNRELIABLE
+         * ⇒ 木纹压字、水印、任意装饰造成的**任何一格 '?'** 都会让确认超时（真机实测每次 ~15s 白烧）。
+         * ⚠️ 唯一性仍是硬要求：若「对方那手的两格」都看不清，「没应手」与「应了那一步」就都能对上
+         *   ⇒ 照样 UNRELIABLE（看不清就是看不清，绝不当成没落子）。
+         */
+        const skip = {};
+        for (let k = 0; k < unknown.length; k++) {
+            skip[unknown[k]] = true;
+        }
+        const matchesSkip = function (candidate) {
+            for (let i = 0; i < 90; i++) {
+                if (skip[i] === true) {
+                    continue;   // 看不清的格不参与比对：它的值由候选补齐
                 }
-                let allowed = true;
-                for (let k = 0; k < unknown.length; k++) {
-                    const index = unknown[k];
-                    if (index !== dest && index !== replyDest) {
-                        allowed = false;
-                        break;
-                    }
-                }
-                if (!allowed) {
-                    continue;
-                }
-                const after = legal.applyMove(expected, reply).board;
-                const candidate = observed.slice();
-                if (dest != null) {
-                    candidate[dest] = expected[dest];
-                }
-                candidate[replyDest] = after[replyDest];
-                if (legal.boardMatches(after, candidate)) {
-                    fits.push({ reply: reply, board: candidate, replyDest: replyDest });
+                const want = (typeof candidate[i] === "string" && candidate[i] !== "") ? candidate[i] : null;
+                const seen = (typeof subject[i] === "string" && subject[i] !== "") ? subject[i] : null;
+                if (want !== seen) {
+                    return false;
                 }
             }
-            if (fits.length !== 1) {
-                return Object.assign({}, base, {
-                    result: RESULT.UNRELIABLE,
-                    reason: "还有 " + unknownCells + " 个未知格" +
-                        (fits.length > 1
-                            ? "（且对方应手有 " + fits.length + " 种解释，补齐不唯一）"
-                            : "（且不全是落点格）")
-                });
+            return true;
+        };
+        const fits = [];
+        if (matchesSkip(expected)) {
+            fits.push({ board: expected.slice(), replyDest: null });
+        }
+        const replyMoves = legal.allLegalMoves(expected, opposite(ticket.baseSide));
+        for (let i = 0; i < replyMoves.length; i++) {
+            const replyDest = indexOfIccs(replyMoves[i].iccs);
+            // 应手落点 == 我方落点（对方吃在我方刚落的那枚子上）：那一格的两种解释无法用「看不清」
+            // 去区分，交给下面的应手匹配 + allowOwnDestCapture 那一套处理（这里不掺和）。
+            if (replyDest == null || replyDest === dest) {
+                continue;
             }
-            subject = fits[0].board;
-            if (dest != null) {
-                patched = { index: dest, char: expected[dest] };
+            const after = legal.applyMove(expected, replyMoves[i]).board;
+            if (matchesSkip(after)) {
+                fits.push({ board: after, replyDest: replyDest });
             }
+        }
+        if (fits.length !== 1) {
+            return Object.assign({}, base, {
+                result: RESULT.UNRELIABLE,
+                reason: "还有 " + unknownCells + " 个未知格" +
+                    (fits.length > 1
+                        ? "（且对方应手有 " + fits.length + " 种解释，补齐不唯一）"
+                        : "（且看得清的格子对不上这一手）")
+            });
+        }
+        subject = fits[0].board;
+        if (dest != null) {
+            patched = { index: dest, char: subject[dest] };
+        }
+        if (fits[0].replyDest != null) {
             replyPatched = { index: fits[0].replyDest, char: subject[fits[0].replyDest] };
         }
     }
@@ -194,6 +215,7 @@ function verify(input) {
     const replies = legal.allLegalMoves(expected, opposite(ticket.baseSide));
     const matched = [];
     const decorTolerant = [];
+    const ownDestCaptures = [];
     const ownDestIndex = destinationIndex(ticket);
     for (let i = 0; i < replies.length; i++) {
         const after = legal.applyMove(expected, replies[i]).board;
@@ -201,16 +223,50 @@ function verify(input) {
             matched.push(replies[i]);
             continue;
         }
+        const replyDest = indexOfIccs(replies[i].iccs);
+        if (replyDest == null) {
+            continue;
+        }
+        if (replyDest === ownDestIndex) {
+            /**
+             * ★ 对方**吃在我方刚落的那一枚子上**（同兵种反吃）—— `allowOwnDestCapture` 专用。
+             *
+             * 真机现场（2026-09-20 v2 局）：我方炮吃对方炮、落点 i7；对方另一枚炮 b7×i7 反吃。
+             * 模型把那枚反吃过来的**黑炮直接读成我方颜色**（原始读数 == 期望里的 `C`）
+             * ⇒ 「同字异色」分歧根本形不成 ⇒ 永远「装饰容差下有 11 种应手解释，不唯一」
+             *（那 11 正是 b7 那门炮的全部合法落点）。
+             *
+             * 判据很严：差异**只**允许落在这一格，而且必须是「同兵种、颜色相反」。
+             * 调用方（驱动）只在一张盘面连续僵持 N 帧之后才开这个开关。
+             */
+            if (!src.allowOwnDestCapture) {
+                continue;
+            }
+            const onlyThisCell = legal.diffBoards(after, subject);
+            if (onlyThisCell.length !== 1) {
+                continue;
+            }
+            if (onlyThisCell[0].row * 9 + onlyThisCell[0].col !== ownDestIndex) {
+                continue;
+            }
+            const want = after[ownDestIndex];
+            const got = subject[ownDestIndex];
+            if (typeof want !== "string" || typeof got !== "string" ||
+                want.length !== 1 || got.length !== 1) {
+                continue;
+            }
+            if (want === got || want.toLowerCase() !== got.toLowerCase()) {
+                continue;
+            }
+            ownDestCaptures.push({ move: replies[i], board: after, replyDest: replyDest });
+            continue;
+        }
         // ---- 装饰容差（真机 2026-09-14）----
-        // 游戏会给**刚落的两个子**都画高亮环：我方落点被读成同色不同兵种（红炮→红兵），
+        // 游戏会给**刚落的两枚子**都画高亮环：我方落点被读成同色不同兵种（红炮→红兵），
         // 对方应手的落点有时直接**漏检（读成空）**。这种帧严格匹配必然 0 解 →
         // 旧行为判 UNEXPECTED → 作废票据 + 重新定位（实测白烧十几秒）。
         // 收紧点：差异只允许落在**我方落点 + 该应手的落点**这两格上，每格必须是
         // 「同色不同兵种」或「读成空」，且必须**唯一**解释；否则照样不认。
-        const replyDest = indexOfIccs(replies[i].iccs);
-        if (replyDest == null || replyDest === ownDestIndex) {
-            continue;
-        }
         const diff = legal.diffBoards(after, subject);
         if (diff.length === 0 || diff.length > 2) {
             continue;
@@ -278,6 +334,22 @@ function verify(input) {
                 : null
         });
     }
+    // ★ 「对方吃在我方落点上」的唯一解释（`allowOwnDestCapture`，见上面的说明）：
+    //   回传的盘面必须是 `after` 改正过的（观测那一格的颜色是**错的**）。
+    //   ⚠️ 必须排在「装饰容差 > 1」那条之前，而且**不能**要求 decorTolerant 为空 ——
+    //   反吃帧在装饰容差下看起来有 N 种解释（那门炮的每个合法落点都"能解释"，代价是
+    //   假定那枚子隐形飞走），比"唯一的精确解释"弱得多。探针实测：不这样排就永远走不到这里。
+    if (matched.length === 0 && ownDestCaptures.length === 1 && decorTolerant.length !== 1) {
+        const fit = ownDestCaptures[0];
+        return Object.assign({}, base, {
+            result: RESULT.OPPONENT_REPLY,
+            reason: "我方 " + ticket.moveICCS + " 已落子，对方应手 " + fit.move.iccs +
+                "（吃在落点上：那一格被模型读成我方颜色，按该应手改正）",
+            board: fit.board.slice(),
+            plies: [ticket.moveICCS, fit.move.iccs],
+            replyPatch: { index: fit.replyDest, char: fit.board[fit.replyDest] }
+        });
+    }
     if (matched.length === 0 && decorTolerant.length > 1) {
         return Object.assign({}, base, {
             result: RESULT.UNRELIABLE,
@@ -309,6 +381,49 @@ function verify(input) {
         return Object.assign({}, base, {
             result: RESULT.UNRELIABLE,
             reason: "我方那个子还画在起点、落点已变（动画中）→ 等下一帧再确认"
+        });
+    }
+
+    // ★ 对方应手端的「两端都画着」（2026-09-20 新局真机）：对方那枚子同时画在**它的起点与落点**上 ——
+    //   盘面看起来「多一枚同型子、没有任何格少子」（真机现场：确认观测比期望多 1 枚黑馬、33 枚子，
+    //   FEN 只差 1 格）。旧逻辑一路走到最后判 UNEXPECTED —— 作废票据 + 恢复 —— 而随后是
+    //   30 秒的「轮次推不出来」空转（那帧既解释不了，也不是真的新局面：动画马上就结束）。
+    //   判据刻意收得很窄（下面每条都必须成立，自检里有反例守着）：
+    //     ① 恰好一种合法应手，其「期望 + 应手」与观测**只差 1 格**；
+    //     ② 那一格正是该应手的**起点**；
+    //     ③ 起点上画的那枚子**就是应手那枚子**（同字符），且落点也已按应手画上。
+    //   多解或差异在别处 → 照样不认（继续走 UNEXPECTED）。
+    const replyInFlight = [];
+    for (let i = 0; i < replies.length; i++) {
+        const move = replies[i];
+        const from = indexOfIccsSquare(move.iccs, 0);
+        const to = indexOfIccsSquare(move.iccs, 1);
+        if (from == null || to == null) {
+            continue;
+        }
+        const after = legal.applyMove(expected, move).board;
+        const gone = legal.diffBoards(after, subject);
+        if (gone.length !== 1) {
+            continue;
+        }
+        const index = gone[0].row * 9 + gone[0].col;
+        if (index !== from) {
+            continue;
+        }
+        if (!subject[from] || subject[from] !== after[to]) {
+            continue;
+        }
+        if (!subject[to] || subject[to] !== after[to]) {
+            continue;
+        }
+        replyInFlight.push(move.iccs);
+    }
+    if (replyInFlight.length > 0) {
+        return Object.assign({}, base, {
+            result: RESULT.UNRELIABLE,
+            reason: replyInFlight.length === 1
+                ? ("对方应手 " + replyInFlight[0] + " 那枚子还画在起点、落点已变（应手动画中）→ 等下一帧再确认")
+                : ("有 " + replyInFlight.length + " 种应手看起来都在动画中，不唯一 → 等下一帧再确认")
         });
     }
 
@@ -347,9 +462,21 @@ function verify(input) {
         return index === srcIccs || index === destIccs;
     });
     if (nearMove) {
+        // ⚠️ 差异明细必须打出来（2026-09-19）：只报「有 2 格对不上」时无法区分
+        //   「真的还在动」与「这手其实已经走成了、只是期望值/基准没对上」——真机为此多跑了三轮。
         return Object.assign({}, base, {
             result: RESULT.UNRELIABLE,
-            reason: "起点/落点附近有 " + diff.length + " 格对不上（多半是装饰/动画帧）→ 等下一帧再确认"
+            reason: "起点/落点附近有 " + diff.length + " 格对不上（多半是装饰/动画帧）→ 等下一帧再确认｜" +
+                diff.map(function (item) {
+                    const index = item.row * 9 + item.col;
+                    const role = index === srcIccs ? "起点" : (index === destIccs ? "落点" : "?");
+                    return role + "(" + item.col + "," + item.row + ") " +
+                        (item.before || "空") + "→" + (item.after || "空") +
+                        "（期望 " + (expected[index] || "空") + "）";
+                }).join("；") +
+                "｜票据着法=" + (ticket.moveICCS || "-") +
+                "｜base=" + String(ticket.baseFen || "-").split(" ")[0] +
+                "｜期望FEN=" + String(ticket.expectedAfterFen || "-").split(" ")[0]
         });
     }
     return Object.assign({}, base, {
@@ -395,6 +522,96 @@ function sourceIndex(ticket) {
     return indexOfIccsSquare(ticket && ticket.moveICCS ? ticket.moveICCS : "", 0);
 }
 
+/**
+ * 用「当前可靠基准 + 票据着法」重建票据里的两个盘面：`baseFen` 与 `expectedAfterFen`。
+ *
+ * 为什么要重建（2026-09-19，K40）：验证器读的是票据里**发票据那一刻**冻结的 FEN ——
+ * 基准被「按观测改正」过（OCR 读到空格 / 幻影清理）之后，旧期望还把被证伪的子算进去，
+ * 验证永远对不上。重建用的是**当前基准 + 这手棋**，两边一起跟着修正。
+ *
+ * ★★ 2026-09-21 真机（v5 慢局，17/17 次重建全是这个毛病）：重建曾经把着法直接丢给
+ *   `legal.applyMove(board, { iccs })` —— 而 applyMove 只认 fromCol/fromRow/toCol/toRow、
+ *   **不解析 iccs** ⇒ 静默返回「没走这手」的盘面（还是真值，没人发现）⇒ 期望 == base ⇒
+ *   验证器把「真走成了」的观测判成「起点/落点附近有 2 格对不上（动画帧）」⇒ 确认阶段无限等
+ *   （真机四笔卡顿 20s / 39s / 120s / 235s 全挂着这条）。
+ *   所以这里：**显式把 ICCS 解析成四元坐标**（棋盘数组 row = 9 - rank），并先用
+ *   `isLegalMove` 校验这一手在当前基准上真能走；走不通（例如基准已经把这一手消化掉了、
+ *   起点已空）返回 null，让调用方保留票据自己的盘面（那才是对的）。
+ *
+ * @return { baseFen, expectedAfterFen }；重建不了返回 null
+ */
+function rebuildTicketBoards(ticket, baseBoard) {
+    if (!ticket || !ticket.moveICCS || !baseBoard || baseBoard.length !== 90) {
+        return null;
+    }
+    const src = indexOfIccsSquare(ticket.moveICCS, 0);
+    const dest = indexOfIccsSquare(ticket.moveICCS, 1);
+    if (src == null || dest == null) {
+        return null;
+    }
+    const side = ticket.baseSide === "b" ? "b" : "w";
+    const fromCol = src % 9;
+    const fromRow = Math.floor(src / 9);
+    const toCol = dest % 9;
+    const toRow = Math.floor(dest / 9);
+    let gate = null;
+    try {
+        gate = legal.isLegalMove(baseBoard, fromCol, fromRow, toCol, toRow, side);
+    } catch (error) {
+        gate = null;
+    }
+    if (!gate || gate.legal !== true) {
+        return null;
+    }
+    const moved = legal.applyMove(baseBoard, {
+        iccs: ticket.moveICCS,
+        fromCol: fromCol, fromRow: fromRow, toCol: toCol, toRow: toRow
+    });
+    const board = moved && moved.board ? moved.board : null;
+    if (!board) {
+        return null;
+    }
+    const baseFen = fenModule.buildFen(baseBoard, side);
+    const afterFen = fenModule.buildFen(board, side);
+    if (!baseFen || !afterFen) {
+        return null;
+    }
+    return { baseFen: baseFen, expectedAfterFen: afterFen };
+}
+
+/**
+ * 票据这步棋的**途经格**（下标 → true）。只有直线移动才会有途经格（马/相/士/兵没有）。
+ *
+ * 为什么要算它（K40 真实盘：炮二进四吃卒）：游戏会把走子**轨迹**也画出来，
+ * 途经格被装饰盖住 → 模型读成 '?'。旧规则只允许「我方落点」与「对方应手落点」两种未知格
+ * → 一律判 UNRELIABLE → 每手白白重试/恢复（实测确认阶段连着 50 秒推不出来）。
+ * 但途经格的兵种**不是猜的**：直线滑行时全空；炮吃子时中间恰有一枚炮架（期望盘面里写得很清楚）。
+ */
+function pathIndexesBetween(ticket) {
+    const map = {};
+    const src = sourceIndex(ticket);
+    const dest = destinationIndex(ticket);
+    if (src == null || dest == null) {
+        return map;
+    }
+    const srcRow = Math.floor(src / 9);
+    const srcCol = src % 9;
+    const destRow = Math.floor(dest / 9);
+    const destCol = dest % 9;
+    if (srcRow === destRow) {
+        const step = destCol > srcCol ? 1 : -1;
+        for (let col = srcCol + step; col !== destCol; col += step) {
+            map[srcRow * 9 + col] = true;
+        }
+    } else if (srcCol === destCol) {
+        const step = destRow > srcRow ? 1 : -1;
+        for (let row = srcRow + step; row !== destRow; row += step) {
+            map[row * 9 + srcCol] = true;
+        }
+    }
+    return map;
+}
+
 /** ICCS 里的第 which 格（0=起点 / 1=落点）在 90 格里的下标；格式不对返回 null。 */
 function indexOfIccsSquare(iccs, which) {
     const text = iccs == null ? "" : String(iccs);
@@ -429,5 +646,10 @@ module.exports = {
     verify: verify,
     isSuccess: isSuccess,
     describe: describe,
-    destinationIndex: destinationIndex
+    destinationIndex: destinationIndex,
+    sourceIndex: sourceIndex,
+    // 票据盘面重建（当前基准 + 这手棋）：驱动在「基准被按观测改正过」之后要用（见函数注释）
+    rebuildTicketBoards: rebuildTicketBoards,
+    // 途经格（直线移动的中间格）：驱动登记「已知事实」时要用（游戏会画走子轨迹盖住它们）
+    pathIndexesBetween: pathIndexesBetween
 };

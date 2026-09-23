@@ -16,7 +16,7 @@ const search = require("./search.js");
 const uci = require("./uci.js");
 const localEngine = require("./local-engine.js");
 
-const DEFAULT_MOVETIME = 1200;
+const DEFAULT_MOVETIME = 3500;
 
 function normalizeSide(side) {
     return side === "b" || side === "B" || side === "black" || side === false ? "b" : "w";
@@ -104,7 +104,10 @@ function analyze(position, options) {
 
     const result = search.search(resolved.board, resolved.side, {
         movetime: opts.movetime == null ? DEFAULT_MOVETIME : opts.movetime,
-        depth: opts.depth
+        depth: opts.depth,
+        // 「游戏不接受的着法」：调用方（auto-driver）点了它但局面没变 → 本局面内不要再选它，
+        // 否则引擎是确定性的，重规划会算出同一手，永远走不完一局（K40 实测）。
+        excludeIccs: opts.excludeIccs
     });
     if (!result.ok) {
         return {
