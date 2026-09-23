@@ -1,0 +1,36 @@
+{
+  "name": "dsh 手机客户端 QuickJS",
+  "packageName": "com.dsh.aijsclient.quickjs",
+  "versionName": "1.1.0",
+  "versionCode": 3,
+  "main": "main.js",
+  "icon": "icon.png",
+  "scripts": {
+    "main.js": {
+      "useFeatures": [],
+      "uiMode": true,
+      "engine": "quickjs"
+    }
+  },
+  "useFeatures": [],
+  "launchConfig": {
+    "displaySplash": true,
+    "hideLogs": true,
+    "splashText": "dsh 手机客户端",
+    "stableMode": false
+  },
+  "optimization": {
+    "removeOpenCv": false,
+    "unusedResources": false,
+    "obfuscateComponents": false
+  },
+  "permissionConfig": {
+    "manifestPermissions": [
+      "android.permission.INTERNET",
+      "android.permission.ACCESS_NETWORK_STATE",
+      "android.permission.CAMERA"
+    ],
+    "requestListOnStartup": []
+  },
+  "engine": "quickjs"
+}

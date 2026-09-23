@@ -1,0 +1,74 @@
+<vertical bg="#0B0E14">
+
+    <!--
+      结构约束：main.js 用「子节点下标」挂相机预览面，改布局前必读。
+      1) 根垂直布局恰好两个子节点：[0]=顶栏、[1]=内容 frame（web 与浮层都在 frame 里）
+      2) 扫码视图恰好三个子节点：[0]=顶部提示、[1]=previewBox、[2]=底部操作行
+      改下标会让 SurfaceView 挂错父容器，相机黑屏。
+      ⚠️ 不要在根元素之前写注释：DOM 解析器会把它当标签，直接 SAXParseException。
+    -->
+
+    <!-- 顶栏：状态 + 刷新 / 设置 -->
+    <horizontal gravity="center_vertical" bg="#131926" paddingLeft="18" paddingRight="10"
+                paddingTop="8" paddingBottom="8">
+        <View w="8" h="8" bg="#4C8DFF"/>
+        <text id="status" w="0" layout_weight="1" marginLeft="10" textSize="13sp"
+              textColor="#9BA6B8" maxLines="1" ellipsize="end" gravity="center_vertical"
+              text="尚未连接"/>
+        <button id="refresh" text="刷新" textSize="13sp" textColor="#E8EDF5"
+                bg="#232C3E" paddingLeft="16" paddingRight="16" paddingTop="9" paddingBottom="9"
+                marginLeft="6" marginRight="2"/>
+        <button id="settings" text="设置" textSize="13sp" textColor="#E8EDF5"
+                bg="#232C3E" paddingLeft="16" paddingRight="16" paddingTop="9" paddingBottom="9"
+                marginLeft="2" marginRight="2"/>
+    </horizontal>
+
+    <frame w="*" h="0" layout_weight="1">
+        <webview id="web" w="*" h="*"/>
+
+        <!-- 配对面板（首次启动 / 连接失败时显示） -->
+        <scroll id="setup" w="*" h="*" bg="#0B0E14" visibility="gone">
+            <vertical paddingLeft="22" paddingRight="22" paddingTop="26" paddingBottom="26">
+                <text text="dsh" textSize="34sp" textColor="#E8EDF5" textStyle="bold"/>
+                <text text="手机客户端" textSize="15sp" textColor="#4C8DFF"
+                      marginTop="2" textStyle="bold"/>
+                <text text="粘贴桌面端远程控制面板的配对链接，或用手机扫一下那个二维码。"
+                      textSize="13sp" textColor="#7C879B" marginTop="14" lineSpacingExtra="4"/>
+                <text text="服务器地址或配对链接" textSize="12sp" textColor="#7C879B"
+                      marginTop="26"/>
+                <!-- 提示放在操作按钮之前：大字体（200%）下内容会超过一屏，
+                     放在末尾会被挤出可视区，用户看不到「解析失败 / 401 / 证书校验失败」这类关键信息。 -->
+                <text id="tip" w="*" textSize="12sp" textColor="#FF7A7A" marginTop="10"
+                      lineSpacingExtra="4"/>
+                <input id="input" w="*" h="52" marginTop="8" textSize="14sp"
+                       textColor="#E8EDF5" textColorHint="#5A6478" bg="#161C29"
+                       paddingLeft="14" paddingRight="14" gravity="center_vertical"
+                       singleLine="true" hint="https://你的地址/pair-app?device=…"/>
+                <button id="scan" w="*" text="扫码填入" textSize="15sp" textColor="#FFFFFF"
+                        bg="#2563EB" textStyle="bold" marginTop="14"
+                        paddingTop="14" paddingBottom="14"/>
+                <button id="paste" w="*" text="粘贴链接" textSize="14sp" textColor="#E8EDF5"
+                        bg="#232C3E" marginTop="10" paddingTop="13" paddingBottom="13"/>
+                <button id="ok" w="*" text="保存并连接" textSize="15sp" textColor="#FFFFFF"
+                        bg="#2563EB" textStyle="bold" marginTop="10"
+                        paddingTop="14" paddingBottom="14"/>
+                <button id="cancel" w="*" text="返回页面" textSize="14sp" textColor="#9BA6B8"
+                        bg="#141A26" marginTop="10" paddingTop="13" paddingBottom="13"/>
+            </vertical>
+        </scroll>
+
+        <!-- 扫码（结构固定：[0]提示 [1]previewBox [2]底部行） -->
+        <vertical id="scanner" w="*" h="*" bg="#0B0E14" visibility="gone">
+            <text w="*" text="将二维码放入取景框" textSize="15sp" textColor="#E8EDF5"
+                  bg="#131926" paddingLeft="18" paddingRight="18" paddingTop="16" paddingBottom="16"/>
+            <frame id="previewBox" w="*" h="0" layout_weight="1"/>
+            <vertical bg="#0B0E14" paddingLeft="22" paddingRight="22"
+                     paddingTop="16" paddingBottom="20">
+                <text w="*" text="对准桌面端「远程控制」里的配对二维码" textSize="13sp"
+                      textColor="#7C879B" gravity="center" marginBottom="14"/>
+                <button id="stopScan" w="*" text="取消扫码" textSize="14sp" textColor="#E8EDF5"
+                        bg="#232C3E" paddingTop="13" paddingBottom="13"/>
+            </vertical>
+        </vertical>
+    </frame>
+</vertical>

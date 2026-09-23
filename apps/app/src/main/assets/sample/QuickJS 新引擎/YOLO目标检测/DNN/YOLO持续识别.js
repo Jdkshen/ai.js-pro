@@ -5,6 +5,9 @@
 // 覆盖：yolo
 
 var backend = 'dnn';
+// 普通模式保留高速 ImageReader；与系统录屏并用时显式选择整个屏幕的无障碍截图。
+var captureChannel = dialogs.select('截图通道', ['高速截图（原方式）', '录屏兼容（需无障碍，系统限频）', '自动切换（录屏结束后弹窗授权高速截图）']);
+if (captureChannel < 0) exit();
 // 直接读取 ImageReader 最新缓存帧，避免静止画面每轮阻塞 50ms。
 var CAPTURE_OPTIONS = { mode: 'fast', size: 720, fresh: false };
 if (!yolo.isAvailable(backend)) {
@@ -90,7 +93,8 @@ if (!drawingShown) {
     toast('未获得悬浮窗权限，无法绘制检测框，请在系统设置里允许悬浮窗');
 }
 
-if (!requestScreenCapture('portrait')) {
+if (!requestScreenCapture(captureChannel === 1
+        ? { mode: 'accessibility' } : captureChannel === 2 ? { mode: 'auto' } : 'portrait')) {
     detector.close();
     throw new Error('用户取消了屏幕捕获授权');
 }

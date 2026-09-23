@@ -17,7 +17,14 @@
 //   recMaxWidth      单行裁剪宽度上限，默认 640（降到 320 开始掉精度）
 //   cpuPowerMode     0=不绑核（默认；绑大核簇实测无收益）
 //   useFp16          false（实测开了慢 2 倍，别开）
-//   models           自带模型目录（以 / 开头的绝对路径才会被采用）
+//   minScore         最低置信度（默认 0.2；调高会丢小字，一般别动）
+//   models           自带模型目录（以 / 开头的绝对路径才会被采用）。
+//                    ⚠️ 目录里必须是那五个固定文件名：`PP_OCRv6_tiny_det.ncnn.param/.bin`、
+//                      `PP_OCRv6_tiny_rec.ncnn.param/.bin`、`ppocr_keys_v6_tiny.txt`。
+//                      换更大的模型（如 v6 small/medium）时，记得**把它自己的字典改名**成
+//                      `ppocr_keys_v6_tiny.txt`（原生 v6 模式的字典名是写死的），否则索引对不上、全是乱码。
+//                    ⚠️ 应用私有目录之外还要注意作用域存储：`/sdcard/xiangqi-p4/**` 这类
+//                      shell push 进去的路径应用自己读不到，要放 `/sdcard/Android/data/<pkg>/files/` 下。
 // detect 的 max 参数会在识别前截断候选框：只关心少数几行文字时传小值能再快 30% 以上。
 
 const ocr = $ocr.create({ backend: "ppocr" });
