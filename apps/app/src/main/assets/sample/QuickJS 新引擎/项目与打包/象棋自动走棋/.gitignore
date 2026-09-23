@@ -1,0 +1,9 @@
+# 本地测试留档（PC 端自检/回归输出，非源码；勿提交）
+/.artifacts-selfcheck.txt
+/cc*.txt
+/reg-out.txt
+/rg[0-9A-D].txt
+/sc-out.txt
+/sc-teeth.txt
+/sc[0-9A-D].txt
+/selfcheck*.txt
