@@ -6,6 +6,8 @@ import androidx.annotation.RequiresApi;
 
 import com.stardust.pio.PFile;
 
+import com.jdkshen.aijspro.model.script.ScriptRepository;
+
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -44,7 +46,8 @@ public class ExplorerDirPage extends ExplorerFileItem implements ExplorerPage {
 
     @Override
     public ExplorerFileItem rename(String newName) {
-        return new ExplorerDirPage(getFile().renameTo(newName), getParent());
+        File renamed = ScriptRepository.renameTo(getFile(), newName);
+        return new ExplorerDirPage(renamed == null ? getFile() : renamed, getParent());
     }
 
     protected int indexOf(ExplorerItem child){

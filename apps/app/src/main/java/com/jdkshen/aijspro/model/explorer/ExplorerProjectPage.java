@@ -3,6 +3,8 @@ package com.jdkshen.aijspro.model.explorer;
 import com.stardust.autojs.project.ProjectConfig;
 import com.stardust.pio.PFile;
 
+import com.jdkshen.aijspro.model.script.ScriptRepository;
+
 import java.io.File;
 
 public class ExplorerProjectPage extends ExplorerDirPage {
@@ -30,6 +32,7 @@ public class ExplorerProjectPage extends ExplorerDirPage {
 
     @Override
     public ExplorerFileItem rename(String newName) {
-        return new ExplorerProjectPage(getFile().renameTo(newName), getParent(), mProjectConfig);
+        File renamed = ScriptRepository.renameTo(getFile(), newName);
+        return new ExplorerProjectPage(renamed == null ? getFile() : renamed, getParent(), mProjectConfig);
     }
 }

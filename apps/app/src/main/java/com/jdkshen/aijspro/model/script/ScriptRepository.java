@@ -2,7 +2,12 @@ package com.jdkshen.aijspro.model.script;
 
 import java.io.File;
 import java.io.FileFilter;
+import java.io.FileOutputStream;
 import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -81,5 +86,62 @@ public final class ScriptRepository {
             }
         }
         return count;
+    }
+
+    // ------------------------------------------------------------------
+    // 写入原语（B1 批次2a）：语义逐条对齐旧调用点（PFiles / PFile），本批只做收口、不改行为。
+    // 备份/回退语义（批次2b）以后只改本类，调用点不动。
+    // ------------------------------------------------------------------
+
+    /** 新建文件（必要时先建父目录）；已存在返回 false —— 对齐 {@code PFiles.createIfNotExists}。 */
+    public static boolean createFile(File file) {
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists()) {
+            // 旧实现（ensureDir）忽略 mkdirs 结果，失败时由后面的 createNewFile 兜底为 false。
+            parent.mkdirs();
+        }
+        if (file.exists()) {
+            return false;
+        }
+        try {
+            return file.createNewFile();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** 覆盖写入文本（UTF-8），失败抛 UncheckedIOException —— 对齐 {@code PFiles.write(File, String)}。 */
+    public static void writeText(File file, String text) {
+        try (OutputStream out = new FileOutputStream(file)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** 递归删除（文件或目录）；目录中任一项失败立即中止返回 false —— 对齐 {@code PFiles.deleteRecursively}。 */
+    public static boolean deleteRecursively(File file) {
+        if (file.isFile()) {
+            return file.delete();
+        }
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                if (!deleteRecursively(child)) {
+                    return false;
+                }
+            }
+        }
+        return file.delete();
+    }
+
+    /**
+     * 同目录内重命名；成功返回新文件，失败返回 null（调用方维持「失败 = 文件没变」的判定，
+     * 与旧 {@code PFile.renameTo(String)} 返回自身的语义对应）。
+     * 目标已存在时的行为由操作系统决定（与旧实现一致，不做额外策略）。
+     */
+    public static File renameTo(File source, String newName) {
+        File target = new File(source.getParentFile(), newName);
+        return source.renameTo(target) ? target : null;
     }
 }

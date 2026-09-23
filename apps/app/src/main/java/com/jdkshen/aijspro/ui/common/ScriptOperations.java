@@ -23,7 +23,6 @@ import com.afollestad.materialdialogs.MaterialDialog;
 import com.stardust.app.DialogUtils;
 import com.stardust.app.GlobalAppContext;
 import com.stardust.pio.PFiles;
-import com.stardust.pio.UncheckedIOException;
 import com.stardust.autojs.script.JavaScriptSource;
 import com.tencent.bugly.crashreport.BuglyLog;
 
@@ -38,6 +37,7 @@ import com.jdkshen.aijspro.model.explorer.Explorers;
 import com.jdkshen.aijspro.storage.file.TmpScriptFiles;
 import com.jdkshen.aijspro.model.sample.SampleFile;
 import com.jdkshen.aijspro.model.script.ScriptFile;
+import com.jdkshen.aijspro.model.script.ScriptRepository;
 import com.jdkshen.aijspro.model.script.Scripts;
 import com.jdkshen.aijspro.network.download.DownloadManager;
 import com.jdkshen.aijspro.ui.filechooser.FileChooserDialogBuilder;
@@ -51,6 +51,7 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 
 import io.reactivex.Observable;
 import io.reactivex.android.schedulers.AndroidSchedulers;
@@ -109,14 +110,14 @@ public class ScriptOperations {
     }
 
     public void createScriptFile(String path, String script, boolean edit) {
-        if (PFiles.createIfNotExists(path)) {
+        if (ScriptRepository.createFile(new File(path))) {
             String initialScript = script;
             if (initialScript == null && "js".equalsIgnoreCase(PFiles.getExtension(path))) {
                 initialScript = JavaScriptSource.QUICKJS_ENGINE_DIRECTIVE + "\n";
             }
             if (initialScript != null) {
                 try {
-                    PFiles.write(path, initialScript);
+                    ScriptRepository.writeText(new File(path), initialScript);
                 } catch (UncheckedIOException e) {
                     showMessage(R.string.text_file_write_fail);
                     return;
@@ -483,7 +484,7 @@ public class ScriptOperations {
         final boolean isDir = scriptFile.isDirectory();
         final File parent = scriptFile.getParentFile();
         Observable.fromCallable(() -> {
-                    if (scriptFile.exists()) PFiles.deleteRecursively(scriptFile);
+                    if (scriptFile.exists()) ScriptRepository.deleteRecursively(scriptFile);
                     return !scriptFile.exists();
                 })
                 .subscribeOn(Schedulers.io())

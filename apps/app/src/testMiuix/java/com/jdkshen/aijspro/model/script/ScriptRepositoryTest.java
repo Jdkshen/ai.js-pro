@@ -13,6 +13,8 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -125,5 +127,64 @@ public class ScriptRepositoryTest {
         int count = ScriptRepository.countRecursively(dir,
                 (directory, name) -> name.toLowerCase().endsWith(".js"));
         assertEquals(3, count);
+    }
+
+    // ---- B1 批次2a：写入原语（锁定与旧 PFiles/PFile 对齐的语义） ----
+
+    @Test
+    public void createFileCreatesAndNeverOverwrites() throws Exception {
+        File dir = newTempDir();
+        File nested = new File(new File(dir, "a/b"), "x.js");
+
+        assertTrue(ScriptRepository.createFile(nested));
+        assertTrue(nested.isFile());
+
+        // 已存在 → false 且内容不动（对齐 PFiles.createIfNotExists）
+        ScriptRepository.writeText(nested, "keep");
+        assertFalse(ScriptRepository.createFile(nested));
+        assertEquals("keep", readUtf8(nested));
+    }
+
+    @Test
+    public void writeTextWritesUtf8() throws Exception {
+        File dir = newTempDir();
+        File file = new File(dir, "a.js");
+        ScriptRepository.writeText(file, "// 中文注释\nvar x = 1;\n");
+        assertEquals("// 中文注释\nvar x = 1;\n", readUtf8(file));
+    }
+
+    @Test
+    public void deleteRecursivelyRemovesFilesAndDirs() throws Exception {
+        File dir = newTempDir();
+        File tree = new File(dir, "tree");
+        assertTrue(new File(tree, "inner").mkdirs());
+        touch(tree, "a.js");
+        touch(new File(tree, "inner"), "b.js");
+
+        assertTrue(ScriptRepository.deleteRecursively(tree));
+        assertFalse(tree.exists());
+
+        // 不存在目标 → false（对齐 PFiles.deleteRecursively）
+        assertFalse(ScriptRepository.deleteRecursively(new File(dir, "missing")));
+    }
+
+    @Test
+    public void renameToReturnsNewFileOrNull() throws Exception {
+        File dir = newTempDir();
+        File source = new File(dir, "old.js");
+        touch(dir, "old.js");
+
+        File renamed = ScriptRepository.renameTo(source, "new.js");
+        assertNotNull(renamed);
+        assertEquals(new File(dir, "new.js").getPath(), renamed.getPath());
+        assertTrue(renamed.isFile());
+        assertFalse(source.exists());
+
+        // 源不存在 → null（调用方据此判定「文件没变」）
+        assertNull(ScriptRepository.renameTo(source, "again.js"));
+    }
+
+    private static String readUtf8(File file) throws Exception {
+        return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
     }
 }

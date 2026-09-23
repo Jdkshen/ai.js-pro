@@ -5,6 +5,7 @@ import com.stardust.util.ObjectHelper;
 import com.stardust.util.Objects;
 
 import com.jdkshen.aijspro.model.script.ScriptFile;
+import com.jdkshen.aijspro.model.script.ScriptRepository;
 
 import java.io.File;
 import java.util.Arrays;
@@ -72,7 +73,8 @@ public class ExplorerFileItem implements ExplorerItem {
     }
 
     public ExplorerFileItem rename(String newName) {
-        return new ExplorerFileItem(mFile.renameTo(newName), getParent());
+        File renamed = ScriptRepository.renameTo(mFile, newName);
+        return new ExplorerFileItem(renamed == null ? mFile : renamed, getParent());
     }
 
     @Override
