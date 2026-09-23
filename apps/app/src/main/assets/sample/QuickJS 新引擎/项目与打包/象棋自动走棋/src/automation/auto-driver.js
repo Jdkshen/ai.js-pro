@@ -32,6 +32,7 @@ const logRing = require("../diagnostics/log-ring.js");
 const attemptBudgetModule = require("./attempt-budget.js");
 const crossFrameGateModule = require("./cross-frame-gate.js");
 const frameConsensusModule = require("./frame-consensus.js");
+const knownFactsModule = require("./known-facts.js");
 
 /**
  * 合法棋子字符（FEN 字母，大写红、小写黑）。
@@ -641,12 +642,12 @@ function createDriver(options) {
         : "worker";
     let pendingCompute = null;    // { jobId, effect, startedAtMono }：正在 worker 里算的任务
     /**
-     * 「游戏画花了的格子」的已知事实补齐表：[{ index, char }]。
+     * 「游戏画花了的格子」的已知事实补齐表（实现见 known-facts.js；记录 { index, char, cycle, ply }）。
      * 游戏会给**刚落的子**加高亮环，那一格会被模型认错（实测：带环的炮读成马），
      * 棋规层再把它降级成 '?'。我方落子与对方应手的子都会被画环，所以是张表。
      * 兵种是**已知事实**（票据 + 唯一合法应手推出来的），不是猜；格子里读到别的子/变空就自动失效。
      */
-    let knownPatches = [];
+    const knownFacts = knownFactsModule.createKnownFacts();
     /** 最近一次「全盘 OCR 待定/驳回」的日志文本与时间（避免每 6s 刷屏） */
     let lastOcrGateText = null;
     let lastOcrGateNoteAt = 0;
@@ -1801,7 +1802,7 @@ function createDriver(options) {
         if (!liveTicket) {
             activeOwnMove = null;
         }
-        // ⚠️ **不要**在这里清 lastReliable / knownPatches（曾经清过，K40 实测直接死锁）：
+        // ⚠️ **不要**在这里清 lastReliable / 已知事实表（曾经清过，K40 实测直接死锁）：
         // recover 只是重新对齐几何，**轮次不是从当前帧推出来的、而是从上一步延续的**。
         // 一旦清掉，而局面已经不是标准开局（双方各走了一手），`sideFor` 就永远推不出来
         // → 永久 RECOVERING。保留基准反而更安全：`transition.infer` 会自己校验（一致=MOVE/
@@ -1935,20 +1936,7 @@ function createDriver(options) {
 
     /** 用已知事实补丁表把盘面上的 '?' 补掉（只补登记过、且当前确实未知的格子）。 */
     function applyKnownPatchesTo(chars) {
-        if (!chars || !chars.length || !knownPatches.length) {
-            return chars;
-        }
-        let out = null;
-        for (let i = 0; i < knownPatches.length; i++) {
-            const patch = knownPatches[i];
-            if (chars[patch.index] === "?") {
-                if (!out) {
-                    out = chars.slice();
-                }
-                out[patch.index] = patch.char;
-            }
-        }
-        return out || chars;
+        return knownFacts.applyTo(chars);
     }
 
     function countUnknownChars(chars) {
@@ -2638,19 +2626,13 @@ function createDriver(options) {
     }
 
     /**
-     * 已知事实表里那一格的字（只查 `knownPatches`，不查可靠基准）。
+     * 已知事实表里那一格的字（不查可靠基准）。
      * 用途：颜色翻转的硬闸（见 applyOcrBoardFixes）—— 已知事实是「票据 + 棋规唯一推出来」的，
      * 它说这格是我方炮，那它就是我方炮，不允许 OCR/像素把它翻成黑炮。
      * 返回 null 表示那格没有已知事实（空子的记录不算：子走了记录就该失效，颜色得重新看证据）。
      */
     function knownFactCharAt(index) {
-        for (let i = 0; i < knownPatches.length; i++) {
-            const patch = knownPatches[i];
-            if (patch && patch.index === index && typeof patch.char === "string" && patch.char) {
-                return patch.char;
-            }
-        }
-        return null;
+        return knownFacts.charAt(index);
     }
 
     /**
@@ -3094,10 +3076,11 @@ function createDriver(options) {
         let unknownCells = result.unknownCells == null ? 0 : result.unknownCells;
         /** 「已知事实说有子，模型却整格读成空」的可疑格 → 交给单格重拍（见 reprobeSuspects） */
         const suspects = [];
-        if (knownPatches.length > 0 && result.chars) {
+        const facts = knownFacts.list();
+        if (facts.length > 0 && result.chars) {
             const keep = [];
-            for (let i = 0; i < knownPatches.length; i++) {
-                const patch = knownPatches[i];
+            for (let i = 0; i < facts.length; i++) {
+                const patch = facts[i];
                 if (patch == null || patch.index == null) {
                     continue;
                 }
@@ -3374,7 +3357,7 @@ function createDriver(options) {
                 }
                 // ④ 变空 / 换成异色且不同字 → 真的被吃或走开了，不再保留
             }
-            knownPatches = keep;
+            knownFacts.replace(keep);
         }
         // 还有未知格 → 试试用「已知事实」补齐（唯一解释；见 fillKnownFacts 的说明）
         if (unknownCells > 0 && result.chars) {
@@ -3702,13 +3685,9 @@ function createDriver(options) {
         const record = { index: entry.index, char: entry.char, cycle: verifyCycle, ply: moveEpoch };
         // 新记录 = 新开始：连着读空的计数与催过的次数都清零（旧记录可能已经催过好几回了）
         delete stuckNudgeAt[entry.index];
-        for (let i = 0; i < knownPatches.length; i++) {
-            if (knownPatches[i].index === entry.index) {
-                knownPatches[i] = record;
-                return;
-            }
+        if (knownFacts.upsert(record)) {
+            return;
         }
-        knownPatches.push(record);
         note(label + " " + (entry.char == null ? "空" : entry.char) + "（下标 " + entry.index +
             "）按已知事实补齐（那格能自己认出来、或有子从那里离开时自动作废）");
     }
@@ -3724,24 +3703,12 @@ function createDriver(options) {
      * 「那个格子上的子确实走了」，而不是“过了几手”。
      */
     function dropPatchesAt(indexes, why) {
-        if (!indexes || indexes.length === 0 || knownPatches.length === 0) {
-            return;
-        }
-        const keep = [];
-        let dropped = 0;
-        for (let i = 0; i < knownPatches.length; i++) {
-            const patch = knownPatches[i];
-            if (patch && indexes.indexOf(patch.index) >= 0) {
-                dropped += 1;
-                // 那格的子已经走了 ⇒ 补正的「连续帧共识」也一并作废，
-                // 否则上一段共识会在下一枚子到达时被直接拿来用
-                frameConsensus.drop(patch.index);
-                continue;
-            }
-            keep.push(patch);
-        }
+        const dropped = knownFacts.drop(indexes, function (patch) {
+            // 那格的子已经走了 ⇒ 补正的「连续帧共识」也一并作废，
+            // 否则上一段共识会在下一枚子到达时被直接拿来用
+            frameConsensus.drop(patch.index);
+        });
         if (dropped > 0) {
-            knownPatches = keep;
             note("已知事实作废 " + dropped + " 格（" + why + "）");
         }
     }
@@ -3788,8 +3755,8 @@ function createDriver(options) {
      * 只该在「恢复之后 + 这一帧够干净」时调（未知格 ≤ cfg.rebuildMaxUnknown）。
      */
     function rebuildBaselineFrom(board) {
-        const dropped = knownPatches ? knownPatches.length : 0;
-        knownPatches = [];
+        const dropped = knownFacts.count();
+        knownFacts.clear();
         frameConsensus.clear();
         // ★ 重建基准用的是**这一帧的读数**，可高亮环/装饰会让模型把子读错（真机 2026-09-20：
         //   我方刚落下的炮被读成黑卒）⇒ 基准被写坏 ⇒ 下一帧起「既有合法单步也解释不了 4 格差异」
@@ -4263,8 +4230,9 @@ function createDriver(options) {
             // ① 表里根本没有那两格的记录；② 表里有、但这帧没补上（读成了别的字）。
             // 不把表打出来就只能猜（当天为这个来回跑了好几轮真机）。
             const table = [];
-            for (let i = 0; i < knownPatches.length; i++) {
-                const patch = knownPatches[i];
+            const factsForLog = knownFacts.list();
+            for (let i = 0; i < factsForLog.length; i++) {
+                const patch = factsForLog[i];
                 if (!patch || patch.index == null) {
                     continue;
                 }
@@ -4375,7 +4343,7 @@ function createDriver(options) {
         //   填不上或超限就**等下一帧**（恢复后总有几帧是干净的）。
         let rebuiltThisTick = false;
         if (needFreshBaseline) {
-            const facts = knownPatches ? knownPatches.slice() : [];
+            const facts = knownFacts.list();
             const rebuilt = observed.chars.slice();
             let unknown = 0;
             let fillable = true;
@@ -4711,7 +4679,7 @@ function createDriver(options) {
             workerSearch.cancel();
             pendingCompute = null;
             pendingMate = null;
-            knownPatches = [];
+            knownFacts.clear();
             frameConsensus.clear();
             phantomStreak = {};
             needFreshBaseline = false;
@@ -4772,7 +4740,7 @@ function createDriver(options) {
             grid = null;
             pendingMate = null;
             planHistory.clear();
-            knownPatches = [];
+            knownFacts.clear();
             frameConsensus.clear();
             phantomStreak = {};
             needFreshBaseline = false;

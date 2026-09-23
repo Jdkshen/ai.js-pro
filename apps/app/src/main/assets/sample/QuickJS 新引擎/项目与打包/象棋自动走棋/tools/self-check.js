@@ -5747,6 +5747,7 @@ const positionTrackerModule = require("../src/services/position-tracker.js");
 const attemptBudgetModule = require("../src/automation/attempt-budget.js");
 const crossFrameGateModule = require("../src/automation/cross-frame-gate.js");
 const frameConsensusModule = require("../src/automation/frame-consensus.js");
+const knownFactsModule = require("../src/automation/known-facts.js");
 
 check("框架·文案：未知状态要原样返回，不能悄悄变成「未知」把新状态藏起来", function () {
     if (labelsModule.stateText("CLICKING") !== "点击中") {
@@ -6359,6 +6360,30 @@ check("连续帧共识账本：同帧重复不刷数 / 跨帧同票+1 / 换字�
     if (d.frames !== 1) { return "drop 后应从 1 重新计数：" + JSON.stringify(d); }
     cons.clear();
     return cons.snapshot().gate["5"] === undefined ? true : "clear 应清空共识";
+});
+
+check("已知事实表：register 去重替换保持位置 / drop 计数与回调 / applyTo 只补 '?' / charAt", function () {
+    const facts = knownFactsModule.createKnownFacts();
+    if (facts.upsert({ index: 3, char: "C", cycle: 1, ply: 0 }) !== false) { return "新记录应返回 false（追加）"; }
+    if (facts.upsert({ index: 5, char: "c", cycle: 1, ply: 0 }) !== false) { return "第二条也应追加"; }
+    if (facts.upsert({ index: 3, char: "R", cycle: 2, ply: 1 }) !== true) { return "同 index 应返回 true（替换）"; }
+    if (facts.count() !== 2) { return "替换不应增加条数：" + facts.count(); }
+    const listed = facts.list();
+    if (listed[0].index !== 3 || listed[0].char !== "R") { return "替换应保持位置且用新值"; }
+    const chars = ["?", "x", "?", "?", "?", "?"];
+    const applied = facts.applyTo(chars);
+    if (applied[3] !== "R" || applied[5] !== "c") { return "applyTo 应把 '?' 补成记录值"; }
+    if (applied[1] !== "x") { return "已读出的字不应被覆盖"; }
+    if (chars[3] !== "?") { return "applyTo 不应就地改原数组"; }
+    if (facts.charAt(3) !== "R" || facts.charAt(0) !== null) { return "charAt 口径错"; }
+    facts.upsert({ index: 7, char: null, cycle: 2, ply: 1 });
+    if (facts.charAt(7) !== null) { return "空网格记录不算「有字」"; }
+    const seen = [];
+    const dropped = facts.drop([3], function (patch) { seen.push(patch.index); });
+    if (dropped !== 1 || seen[0] !== 3) { return "drop 计数/回调错：" + dropped + "/" + seen.join(","); }
+    if (facts.count() !== 2 || facts.charAt(3) !== null) { return "drop 后应移除该格"; }
+    facts.clear();
+    return facts.count() === 0 ? true : "clear 应清空";
 });
 
 // ---------------------------------------------------------------- 识别绘制（人审用）
