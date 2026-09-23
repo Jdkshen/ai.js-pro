@@ -3881,7 +3881,7 @@ JSValue nativePikafishStart(JSContext *context, JSValueConst, int argc, JSValueC
     return JS_NewStringLen(context, text.data(), text.size());
 }
 
-JSValue nativePikafishAnalyze(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+JSValue callPikafishAnalyze(JSContext *context, int argc, JSValueConst *argv, const char *methodName) {
     if (argc < 1) {
         return JS_ThrowTypeError(context, "Invalid Pikafish analyze arguments");
     }
@@ -3901,7 +3901,7 @@ JSValue nativePikafishAnalyze(JSContext *context, JSValueConst, int argc, JSValu
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "pikafishAnalyze",
+    jmethodID method = env->GetMethodID(hostClass, methodName,
             "(Ljava/lang/String;JJI)Ljava/lang/String;");
     if (method == nullptr) {
         env->DeleteLocalRef(hostClass);
@@ -3919,6 +3919,14 @@ JSValue nativePikafishAnalyze(JSContext *context, JSValueConst, int argc, JSValu
     const std::string text = fromJavaString(env, result);
     env->DeleteLocalRef(result);
     return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativePikafishAnalyze(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callPikafishAnalyze(context, argc, argv, "pikafishAnalyze");
+}
+
+JSValue nativePikafishAnalyzePosition(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callPikafishAnalyze(context, argc, argv, "pikafishAnalyzePosition");
 }
 
 JSValue nativePikafishStop(JSContext *context, JSValueConst, int, JSValueConst *) {
@@ -5599,6 +5607,15 @@ const char kBootstrapScript[] = R"JS(
             return { ok: false, error: 'Pikafish 宿主返回的不是 JSON: ' + raw };
         }
     }
+    function runPikafishAnalysis(nativeCall, input, movetimeMs, timeoutMs, multiPv) {
+        const movetimeValue = movetimeMs === undefined ? 1000 : Number(movetimeMs);
+        const movetime = isFinite(movetimeValue) ? Math.max(1, Math.round(movetimeValue)) : 1000;
+        const timeoutValue = timeoutMs === undefined ? 0 : Number(timeoutMs);
+        const timeout = isFinite(timeoutValue) ? Math.max(0, Math.round(timeoutValue)) : 0;
+        const pvValue = multiPv === undefined ? 1 : Number(multiPv);
+        const pv = isFinite(pvValue) ? Math.max(1, Math.min(8, Math.round(pvValue))) : 1;
+        return parsePikafishResult(nativeCall(String(input), movetime, timeout, pv));
+    }
     const pikafish = {
         available: function () {
             return __aiNativePikafishAvailable() === true;
@@ -5614,13 +5631,11 @@ const char kBootstrapScript[] = R"JS(
             return parsePikafishResult(__aiNativePikafishStart(evalFile, threads, hashMb));
         },
         analyze: function (fen, movetimeMs, timeoutMs, multiPv) {
-            const movetimeValue = movetimeMs === undefined ? 1000 : Number(movetimeMs);
-            const movetime = isFinite(movetimeValue) ? Math.max(1, Math.round(movetimeValue)) : 1000;
-            const timeoutValue = timeoutMs === undefined ? 0 : Number(timeoutMs);
-            const timeout = isFinite(timeoutValue) ? Math.max(0, Math.round(timeoutValue)) : 0;
-            const pvValue = multiPv === undefined ? 1 : Number(multiPv);
-            const pv = isFinite(pvValue) ? Math.max(1, Math.min(8, Math.round(pvValue))) : 1;
-            return parsePikafishResult(__aiNativePikafishAnalyze(String(fen), movetime, timeout, pv));
+            return runPikafishAnalysis(__aiNativePikafishAnalyze, fen, movetimeMs, timeoutMs, multiPv);
+        },
+        analyzePosition: function (positionCommand, movetimeMs, timeoutMs, multiPv) {
+            return runPikafishAnalysis(__aiNativePikafishAnalyzePosition,
+                    positionCommand, movetimeMs, timeoutMs, multiPv);
         },
         stop: function () {
             __aiNativePikafishStop();
@@ -9363,6 +9378,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativePikafishAvailable", nativePikafishAvailable, 0);
     installNativeFunction(state->context, global, "__aiNativePikafishStart", nativePikafishStart, 3);
     installNativeFunction(state->context, global, "__aiNativePikafishAnalyze", nativePikafishAnalyze, 4);
+    installNativeFunction(state->context, global, "__aiNativePikafishAnalyzePosition", nativePikafishAnalyzePosition, 4);
     installNativeFunction(state->context, global, "__aiNativePikafishStop", nativePikafishStop, 0);
     installNativeFunction(state->context, global, "__aiNativePikafishQuit", nativePikafishQuit, 0);
     installNativeFunction(state->context, global, "__aiNativePikafishIsRunning", nativePikafishIsRunning, 0);

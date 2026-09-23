@@ -2,13 +2,13 @@
 /**
  * PositionTracker（已确认局面的**单点写入者**）—— 任务书 §4/§5 的事实层。
  *
- * 语义（本批 = A3 影子接入，不改变驱动行为）：
+ * 语义（驱动基准仍由 lastReliable 持有；本层只提供已验证历史给算棋）：
  *   · `adopt()`    采纳一个新基准（对方没有着法语义的场合：重建、声明、开局）；
  *                  开局局面 → 账本以标准开局开「完整」段；其余 → 「中途接管（partial）」段。
  *   · `confirmMove()` 收一手**已验证**着法：先过账本的一致性检查（棋规 + 逐格 + 与当前局面连续），
  *                  通过才推进局面并把着法写进账本；被拒则**不推进**（失败不推进版本）。
  *   · `fix()`      基准被按观测原地改正（对账修正/OCR 改正）：局面换代但**不记着法**，
- *                  并把账本降级为 partial（这一段可能不完整）。
+ *                  从纠正后的 FEN 重开 partial 段，旧着法不再送引擎。
  *   · `invalidate()` 作废（对不上账/预算超限/换边/新会话）；`resetLedger=true` 时连账本一起清。
  *   · `snapshot()` 只读快照：局面、版本号、FEN、`positionCommand()`、historyStatus —— UI/引擎/画板
  *                  都只能读快照（单点写入）。
@@ -51,7 +51,8 @@ function createPositionTracker(options) {
         }
     }
 
-    function isStartBoard(board) {
+    function isStartBoard(board, side) {
+        if (side !== "w") { return false; }
         try {
             const parts = String(fenModule.buildFen(board, "w") || "").split(" ");
             return parts[0] === startFen.split(" ")[0];
@@ -71,7 +72,7 @@ function createPositionTracker(options) {
         version += 1;
         stats.adopts += 1;
         stats.lastReason = position.reason;
-        if (isStartBoard(board)) {
+        if (isStartBoard(board, e.side)) {
             ledger.begin(startFen, ledger.HISTORY.COMPLETE);
             note("账本：以标准开局开段（历史完整）");
         } else {
@@ -132,11 +133,18 @@ function createPositionTracker(options) {
         }
         const mover = e.side || position.side;
         const nextSide = mover === "w" ? "b" : "w";
+        const confirmedBoard = (e.afterBoard && e.afterBoard.length
+            ? e.afterBoard : result.appliedBoard).slice();
         position = {
-            board: (e.afterBoard && e.afterBoard.length ? e.afterBoard : result.appliedBoard).slice(),
+            board: confirmedBoard,
             side: nextSide,
             reason: e.reason || "confirm"
         };
+        // 容差格若仍与着法重放结果不同，旧基准 + moves 已不能还原当前事实。
+        // 从已确认盘面重开 partial 段，避免把过时棋谱送给原生引擎。
+        if (ledgerModule.cellsKey(confirmedBoard) !== ledgerModule.cellsKey(result.appliedBoard)) {
+            ledger.setPartial(fenOf(confirmedBoard, nextSide), "容差确认后局面已改正");
+        }
         version += 1;
         stats.confirms += 1;
         stats.lastReason = position.reason;
@@ -149,7 +157,7 @@ function createPositionTracker(options) {
         };
     }
 
-    /** 基准被原地改正（无着法语义）：换代 + 账本降级 partial。 */
+    /** 基准被原地改正（无着法语义）：从纠正后的局面重开 partial 段。 */
     function fix(entry) {
         const e = entry || {};
         if (!position) {
@@ -162,7 +170,7 @@ function createPositionTracker(options) {
         version += 1;
         stats.fixes += 1;
         stats.lastReason = position.reason;
-        ledger.downgrade(position.reason);
+        ledger.setPartial(fenOf(position.board, position.side), position.reason);
         return { ok: true, version: version, historyStatus: ledger.state().historyStatus };
     }
 

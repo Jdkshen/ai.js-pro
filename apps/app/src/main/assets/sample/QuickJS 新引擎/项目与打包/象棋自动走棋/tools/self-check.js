@@ -1300,6 +1300,49 @@ check("算棋·Pikafish 适配：候选全被排除时明确失败（交给路�
         ("空候选 + 被排除的兜底着法应当为 null，实际 " + JSON.stringify(fallback));
 });
 
+check("算棋·Pikafish：已确认棋谱走新 API，旧宿主安全退回当前 FEN", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const move = legal.allLegalMoves(board, "w")[0].iccs;
+    const command = "position fen " + fen.START_FEN;
+    const calls = [];
+    const previous = global.$pikafish;
+    const fake = {
+        available: function () { return true; },
+        isRunning: function () { return true; },
+        start: function () { return { ok: true }; },
+        quit: function () { },
+        analyze: function (value) {
+            calls.push({ method: "fen", value: value });
+            return { ok: true, move: move, candidates: [{ move: move, scoreCp: 0, depth: 1 }] };
+        },
+        analyzePosition: function (value) {
+            calls.push({ method: "history", value: value });
+            return { ok: true, move: move, candidates: [{ move: move, scoreCp: 0, depth: 1 }] };
+        }
+    };
+    global.$pikafish = fake;
+    try {
+        const withHistory = pikafishEngine.analyze({ board: board, side: "w" },
+            { positionCommand: command, historyStatus: "complete", movetime: 10 });
+        if (!withHistory.ok || !withHistory.historyUsed || calls[0].method !== "history" ||
+            calls[0].value !== command) {
+            return "新宿主未收到棋谱命令：" + JSON.stringify({ result: withHistory, calls: calls });
+        }
+        delete fake.analyzePosition;
+        const legacy = pikafishEngine.analyze({ board: board, side: "w" },
+            { positionCommand: command, historyStatus: "complete", movetime: 10 });
+        if (!legacy.ok || legacy.historyUsed || calls[1].method !== "fen" ||
+            calls[1].value !== fen.START_FEN) {
+            return "旧宿主未安全退回当前 FEN：" + JSON.stringify({ result: legacy, calls: calls });
+        }
+        return true;
+    } finally {
+        pikafishEngine.stop();
+        if (previous === undefined) { delete global.$pikafish; }
+        else { global.$pikafish = previous; }
+    }
+});
+
 check("引擎门面：飞相到河沿（e2→c4）后局面仍可算棋（旧校验器让每步算棋都失败）", function () {
     // 与「河沿象位」同源：驱动卡死那 14 分钟里，inspect() 就是拿 validateBoard 的 errors 说话的。
     const board = fen.parseFen(fen.START_FEN).board;
@@ -6257,12 +6300,46 @@ check("事实跟踪器：开局开段 / 着法推进 / 原地改正降级 / 作�
         return "推进后应轮到黑方：" + JSON.stringify(snap.position && snap.position.side);
     }
     if (String(snap.positionCommand).indexOf(" moves " + first.iccs) < 0) { return "命令应带着法：" + snap.positionCommand; }
-    const f = tracker.fix({ board: snap.position.board.slice(), reason: "resync-test" });
+    const f = tracker.fix({ board: board.slice(), side: "w", reason: "resync-test" });
     if (!f.ok || tracker.snapshot().historyStatus !== "partial") { return "fix 应降级为 partial"; }
-    if (tracker.snapshot().ledger.ply !== 1) { return "fix 不该清已校验着法"; }
+    if (tracker.snapshot().ledger.ply !== 0) { return "fix 应从纠正后的局面重开段"; }
+    if (tracker.snapshot().positionCommand !== "position fen " + tracker.snapshot().fen) {
+        return "fix 后历史命令应以纠正后的局面为基准";
+    }
     tracker.invalidate("new-session-test", { resetLedger: true });
     const end = tracker.snapshot();
     return (!end.position && end.historyStatus === "unknown") ? true : ("作废后应空白：" + end.historyStatus);
+});
+
+check("事实跟踪器：标准布局但黑方先行不能伪装成完整开局历史", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const tracker = positionTrackerModule.createPositionTracker({});
+    const adopted = tracker.adopt({ board: board, side: "b", reason: "black-to-move" });
+    const snap = tracker.snapshot();
+    const expected = "position fen " + fen.buildFen(board, "b");
+    return adopted.ok && snap.historyStatus === "partial" && snap.positionCommand === expected
+        ? true : ("错误地采用红先开局：" + JSON.stringify(snap));
+});
+
+check("事实跟踪器：容差确认后棋谱与当前盘面不同，必须重开部分历史段", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const first = legal.allLegalMoves(board, "w")[0];
+    const applied = legal.applyMove(board, { iccs: first.iccs }).board;
+    const dest = (9 - Number(first.iccs.charAt(3))) * 9 +
+        "abcdefghi".indexOf(first.iccs.charAt(2));
+    const corrected = applied.slice();
+    corrected[dest] = null;
+    const tracker = positionTrackerModule.createPositionTracker({});
+    tracker.adopt({ board: board, side: "w", reason: "test" });
+    const confirmed = tracker.confirmMove({
+        iccs: first.iccs, fromBoard: board, side: "w",
+        afterBoard: corrected, toleranceIndexes: [dest]
+    });
+    const snap = tracker.snapshot();
+    const expected = "position fen " + fen.buildFen(corrected, "b");
+    return confirmed.ok && snap.historyStatus === "partial" &&
+        snap.ledger.ply === 0 && snap.positionCommand === expected
+        ? true : ("容差后的棋谱仍与当前盘面冲突：" + JSON.stringify(snap));
 });
 
 check("事实跟踪器：与当前局面不连续的着法拒收（失败不推进版本）", function () {

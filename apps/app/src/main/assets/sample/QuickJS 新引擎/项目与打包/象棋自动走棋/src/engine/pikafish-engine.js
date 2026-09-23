@@ -182,9 +182,13 @@ function analyze(position, options) {
     // 排除表（游戏拒绝过的着法/循环排除）：用 MultiPV 多要几路，再挑第一路不在表里的。
     const excludes = (opts.excludeIccs && opts.excludeIccs.length) ? opts.excludeIccs : null;
     const multiPv = excludes ? Math.min(excludes.length + 1, 5) : 1;
+    const historyCommand = typeof opts.positionCommand === "string" ? opts.positionCommand : null;
+    const historyUsed = !!(historyCommand && typeof $pikafish.analyzePosition === "function");
     let response;
     try {
-        response = $pikafish.analyze(fen, movetime, timeoutMs, multiPv);
+        response = historyUsed
+            ? $pikafish.analyzePosition(historyCommand, movetime, timeoutMs, multiPv)
+            : $pikafish.analyze(fen, movetime, timeoutMs, multiPv);
     } catch (error) {
         return {
             ok: false, stage: "native", side: resolved.side,
@@ -241,7 +245,9 @@ function analyze(position, options) {
         mateIn: mate,
         pvIccs: pvIccs,
         fen: fen,
-        engine: "pikafish"
+        engine: "pikafish",
+        historyUsed: historyUsed,
+        historyStatus: historyUsed ? (opts.historyStatus || "partial") : "fen"
     };
 }
 

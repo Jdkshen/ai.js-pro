@@ -48,6 +48,7 @@ module.exports = {
 
         const stage = { name: "pre" };
         const notes = [];
+        const analyzeCalls = [];
         let planIndex = 0;
         const planned = [our1, our2];
         const frameBoard = function () {
@@ -68,7 +69,8 @@ module.exports = {
                 };
             },
             locate: function () { return { ok: true, grid: grid }; },
-            analyze: function () {
+            analyze: function (position, options) {
+                analyzeCalls.push({ position: position, options: options });
                 const move = planned[Math.min(planIndex, planned.length - 1)];
                 return { ok: true, iccs: move.iccs, move: move, score: 0, depth: 1, ms: 1 };
             },
@@ -121,6 +123,14 @@ module.exports = {
             return;
         }
 
+        t.equal(analyzeCalls.length, 2, "两次我方算棋都应进入引擎");
+        if (analyzeCalls.length >= 2) {
+            t.equal(analyzeCalls[0].options.positionCommand, "position fen " + fen.START_FEN,
+                "首手搜索应收到标准开局命令");
+            t.equal(analyzeCalls[1].options.positionCommand,
+                "position fen " + fen.START_FEN + " moves " + our1.iccs + " " + reply1.iccs,
+                "第二手搜索应收到双方已验证着法");
+        }
         const snap = driver.tracker();
         t.equal(snap.positionCommand,
             "position fen " + fen.START_FEN + " moves " + our1.iccs + " " + reply1.iccs + " " + our2.iccs,

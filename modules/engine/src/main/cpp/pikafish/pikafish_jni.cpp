@@ -251,7 +251,8 @@ bool startSession(JNIEnv* env, jstring evalPath, jint threads, jint hashMb) {
 // 返回 "info ... pv ...\n…\nbestmove ..."：所有带 pv 的 info 行 + bestmove 行。
 // multiPv>1 时先设置 MultiPV，再照常搜索（上层从多行里按 multipv 序号挑候选）。
 // 出错时返回 "error: ..."（上层识别前缀）。
-std::string analyze(JNIEnv* env, jstring fen, jlong movetimeMs, jlong timeoutMs, jint multiPv) {
+std::string analyze(JNIEnv* env, jstring fen, jlong movetimeMs, jlong timeoutMs, jint multiPv,
+                    bool fullPositionCommand) {
     std::lock_guard<std::mutex> guard(g_stateMutex);  // 整个搜索期间不许 quit
     PikafishSession*            session = g_session.load();
     if (session == nullptr)
@@ -262,7 +263,12 @@ std::string analyze(JNIEnv* env, jstring fen, jlong movetimeMs, jlong timeoutMs,
 
     const int pvCount = multiPv > 1 ? static_cast<int>(multiPv) : 1;
     session->feeder.pushLine("setoption name MultiPV value " + std::to_string(pvCount));
-    session->feeder.pushLine("position fen " + jstringToUtf8(env, fen));
+    const std::string input = jstringToUtf8(env, fen);
+    if (input.empty() || input.size() > 4096 || input.find('\n') != std::string::npos ||
+        input.find('\r') != std::string::npos ||
+        (fullPositionCommand && input.compare(0, 13, "position fen ") != 0))
+        return "error: invalid-position-input";
+    session->feeder.pushLine(fullPositionCommand ? input : "position fen " + input);
     const long movetime = movetimeMs > 0 ? static_cast<long>(movetimeMs) : 1000L;
     session->feeder.pushLine("go movetime " + std::to_string(movetime));
 
@@ -308,7 +314,16 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_stardust_autojs_engine_PikafishNativeBridge_nativeAnalyze(JNIEnv* env, jclass, jstring fen,
                                                                    jlong movetimeMs, jlong timeoutMs,
                                                                    jint multiPv) {
-    const std::string result = analyze(env, fen, movetimeMs, timeoutMs, multiPv);
+    const std::string result = analyze(env, fen, movetimeMs, timeoutMs, multiPv, false);
+    return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_stardust_autojs_engine_PikafishNativeBridge_nativeAnalyzePosition(JNIEnv* env, jclass,
+                                                                            jstring positionCommand,
+                                                                            jlong movetimeMs, jlong timeoutMs,
+                                                                            jint multiPv) {
+    const std::string result = analyze(env, positionCommand, movetimeMs, timeoutMs, multiPv, true);
     return env->NewStringUTF(result.c_str());
 }
 

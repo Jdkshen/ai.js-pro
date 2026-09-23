@@ -406,11 +406,11 @@ function createDriver(options) {
     /**
      * A3 事实层（**影子接入**）：已确认局面 + 已验证着法账本（src/services/position-tracker.js）。
      *
-     * ⚠️ 本批不改变驱动行为：`lastReliable` 仍是唯一读取源；tracker 只做同步记录与一致性守护：
+     * `lastReliable` 仍是驱动的局面读取源；tracker 同步记录，并在算棋时提供已确认着法历史：
      *   · 每处 `lastReliable = …` 旁多一行 `track*()`；
      *   · 账本拒收（非法/与验证盘面不符/与当前局面不连续）→ `stats.trackerRejects`；
      *   · 影子与基准不一致 → `stats.trackerMismatch` + 前几次打日志。
-     * P4（引擎吃 `positionCommand()`）时再把读取源切到 tracker。
+     * 只有 tracker 局面与本次待算局面逐格一致，才向原生引擎传 `positionCommand()`；旧宿主退回当前 FEN。
      */
     const positionTracker = positionTrackerModule.createPositionTracker({
         startFen: fenModule.START_FEN,
@@ -446,6 +446,19 @@ function createDriver(options) {
                 (cur ? cur.side + "/" + cur.board.join("") : "null") + "｜基准=" +
                 (lastReliable ? lastReliable.side + "/" + lastReliable.board.join("") : "null"));
         }
+    }
+
+    /** 只有账本局面与本次待算局面逐格一致，才可把已确认着法交给引擎。 */
+    function verifiedHistoryFor(effect) {
+        const snap = positionTracker.snapshot();
+        const current = snap.position;
+        if (!current || !snap.positionCommand || !effect.board ||
+            current.side !== effect.side ||
+            positionTrackerModule.cellsKey(current.board) !==
+                positionTrackerModule.cellsKey(effect.board)) {
+            return { positionCommand: null, historyStatus: "unknown" };
+        }
+        return { positionCommand: snap.positionCommand, historyStatus: snap.historyStatus };
     }
 
     /** 影子：采纳新基准（无着法语义的场合：重建/声明/开局）。 */
@@ -917,12 +930,15 @@ function createDriver(options) {
         lastComputeObs = stats.observations;
         // 本局面要排除的着法（游戏拒绝过的 + 疑似循环的）：worker 与同步两条路都要带上
         const excludes = excludedIccsFor(effect.board, effect.side);
+        const verifiedHistory = verifiedHistoryFor(effect);
         if (useWorkerSearch()) {
             const started = nowMono();
             if (workerSearch.start(effect.fen || effect.board, {
                 side: effect.side,
                 movetime: effect.movetimeMs,
                 excludeIccs: excludes,
+                positionCommand: verifiedHistory.positionCommand,
+                historyStatus: verifiedHistory.historyStatus,
                 engine: cfg.engineKey,
                 pikafish: cfg.pikafish
             })) {
@@ -937,18 +953,21 @@ function createDriver(options) {
                 return null;   // 不阻塞：JOB_RESULT 稍后由 pollCompute 喂回去
             }
         }
-        return computeInline(effect, excludes);
+        return computeInline(effect, excludes, verifiedHistory);
     }
 
     /** 兜底 / 对照路径：在本线程同步算（会挡住触控，就是被替换掉的那条老路）。 */
-    function computeInline(effect, excludes) {
+    function computeInline(effect, excludes, verifiedHistory) {
         stats.thinkInline += 1;
+        const historyInput = verifiedHistory || verifiedHistoryFor(effect);
         let result;
         try {
             result = opts.analyze({ board: effect.board, side: effect.side }, {
                 movetime: effect.movetimeMs,
                 // 本局面内已经被游戏拒绝过的着法（点下去局面没变）不再选；疑似循环的也一并禁
                 excludeIccs: excludes || null,
+                positionCommand: historyInput.positionCommand,
+                historyStatus: historyInput.historyStatus,
                 engine: cfg.engineKey,
                 pikafish: cfg.pikafish
             });
@@ -962,7 +981,10 @@ function createDriver(options) {
             move: result.move,
             score: result.score,
             depth: result.depth,
-            ms: result.ms
+            ms: result.ms,
+            engine: result.engine,
+            historyUsed: result.historyUsed === true,
+            historyStatus: result.historyStatus || "fen"
         });
     }
 
@@ -993,7 +1015,8 @@ function createDriver(options) {
                 effect.side === "b" ? "w" : "b");
             note("算棋：轮到 " + (effect.side === "w" ? "红" : "黑") + "，" + result.iccs +
                 "（深度 " + result.depth + "，" + result.ms + "ms，评分 " + Math.round(result.score) +
-                (result.engine ? "｜" + result.engine : "") + "）");
+                "｜后端 " + (result.engine || "未知") +
+                "｜历史 " + (result.historyUsed ? (result.historyStatus || "partial") : "当前FEN") + "）");
             /**
              * ★★ 杀棋佐证闸门 v2（2026-09-21 下午；v1 见 16.19）：
              *   v1 只要求「算棋之后出现过一张 0 未知格、盘面一致的观测」——实测挡住了大部分
@@ -1118,7 +1141,9 @@ function createDriver(options) {
                     score: result.score,
                     depth: result.depth,
                     ms: result.ms,
-                    engine: result.engine
+                    engine: result.engine,
+                    historyUsed: result.historyUsed === true,
+                    historyStatus: result.historyStatus || "fen"
                 });
             }
             return { pending: false, elapsedMs: state.elapsedMs, status: "done" };

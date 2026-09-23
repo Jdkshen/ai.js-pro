@@ -6,7 +6,7 @@ package com.stardust.autojs.engine;
  * <p>引擎本体跑在 native 侧的独立线程上（UCI 循环 + 标准输入输出重定向），
  * 这里的方法就是「投喂一条命令 / 等待一条结果」的同步封装：
  * {@link #nativeStart} 建会话（uci → setoption → isready），
- * {@link #nativeAnalyze} 投喂 position/go 并等到 bestmove（阻塞调用线程，耗时约等于 movetime）。
+ * {@link #nativeAnalyze} 投喂当前 FEN，{@link #nativeAnalyzePosition} 投喂已确认着法历史；两者都阻塞等待 bestmove。
  *
  * <p>会话是**进程级单例**（native 侧同一时刻只支持一个引擎实例），
  * 多个脚本引擎（含 threads worker）共享它，native 侧用互斥锁串行化 analyze。
@@ -62,6 +62,10 @@ public final class PikafishNativeBridge {
      * @return 所有带 pv 的 info 行 + bestmove 行（按行拼接）；失败时 "error: ..."
      */
     public static native String nativeAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv);
+
+    /** Search from a validated UCI position command with confirmed moves. */
+    public static native String nativeAnalyzePosition(String positionCommand, long movetimeMs,
+                                                      long timeoutMs, int multiPv);
 
     /** 打断正在跑的搜索（go 会以 bestmove 正常收尾，analyze 随即返回）。 */
     public static native void nativeStop();

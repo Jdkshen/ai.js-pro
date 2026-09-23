@@ -138,7 +138,8 @@ function analyze(position, options) {
             }
             lastFallbackReason = "Pikafish 失败（" + result.reason + "）→ 本步回退 JS 引擎";
             lastUsed = "js";
-            return jsEngine.analyze(position, opts);
+            return Object.assign({ engine: "js", historyUsed: false, historyStatus: "fen" },
+                jsEngine.analyze(position, opts));
         }
         if (wanted === "pikafish") {
             lastUsed = "pikafish";
@@ -151,7 +152,8 @@ function analyze(position, options) {
         lastFallbackReason = pikafishUnavailableReason();
     }
     lastUsed = "js";
-    return jsEngine.analyze(position, opts);
+    return Object.assign({ engine: "js", historyUsed: false, historyStatus: "fen" },
+        jsEngine.analyze(position, opts));
 }
 
 /** 单次调用/全局设置的统一解析：null → 全局设置，'auto' → 跟随全局（不认识的键也算 auto）。 */

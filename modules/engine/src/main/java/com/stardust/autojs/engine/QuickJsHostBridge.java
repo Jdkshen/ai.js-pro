@@ -79,6 +79,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -951,6 +952,9 @@ final class QuickJsHostBridge implements AutoCloseable,
     // 解析成 JSON 交给 bootstrap 的 $pikafish。分数/着法语义（红方视角等）由 JS 侧适配。
 
     private static final String PIKAFISH_NNUE_NAME = "pikafish.nnue";
+    private static final Pattern PIKAFISH_POSITION = Pattern.compile(
+            "^position fen (?:[rnbakcpRNBAKCP1-9]+/){9}[rnbakcpRNBAKCP1-9]+ [wb] - - [0-9]+ [1-9][0-9]*"
+                    + "(?: moves(?: [a-i][0-9][a-i][0-9]){1,512})?$");
 
     /**
      * `$pikafish.start([options])`：启动（或复用）引擎会话。
@@ -999,13 +1003,39 @@ final class QuickJsHostBridge implements AutoCloseable,
      */
     public String pikafishAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv)
             throws JSONException {
+        return pikafishAnalyzeInternal(fen, movetimeMs, timeoutMs, multiPv, false);
+    }
+
+    /** Search from a confirmed `position fen ... moves ...` history. */
+    public String pikafishAnalyzePosition(String positionCommand, long movetimeMs,
+                                          long timeoutMs, int multiPv) throws JSONException {
+        return pikafishAnalyzeInternal(positionCommand, movetimeMs, timeoutMs, multiPv, true);
+    }
+
+    private String pikafishAnalyzeInternal(String input, long movetimeMs, long timeoutMs,
+                                           int multiPv, boolean withHistory) throws JSONException {
         JSONObject result = new JSONObject();
         if (!PikafishNativeBridge.isAvailable()) {
             result.put("ok", false);
             result.put("error", "Pikafish 原生库不可用（" + PikafishNativeBridge.loadError() + "）");
             return result.toString();
         }
-        String raw = PikafishNativeBridge.nativeAnalyze(fen, movetimeMs, timeoutMs, multiPv);
+        if (input == null || input.length() > 4096 ||
+                (withHistory && !PIKAFISH_POSITION.matcher(input).matches())) {
+            result.put("ok", false);
+            result.put("error", "无效的 Pikafish 局面历史命令");
+            return result.toString();
+        }
+        String raw;
+        try {
+            raw = withHistory
+                    ? PikafishNativeBridge.nativeAnalyzePosition(input, movetimeMs, timeoutMs, multiPv)
+                    : PikafishNativeBridge.nativeAnalyze(input, movetimeMs, timeoutMs, multiPv);
+        } catch (UnsatisfiedLinkError error) {
+            result.put("ok", false);
+            result.put("error", "Pikafish 原生库未包含棋谱历史接口：" + error.getMessage());
+            return result.toString();
+        }
         if (raw == null) {
             raw = "";
         }

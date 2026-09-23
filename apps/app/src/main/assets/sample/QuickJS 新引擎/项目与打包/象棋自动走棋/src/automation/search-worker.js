@@ -50,10 +50,16 @@ function workerTask() {
     if (__args.excludeIccs != null) {
         options.excludeIccs = __args.excludeIccs;
     }
+    if (__args.positionCommand != null) {
+        options.positionCommand = __args.positionCommand;
+        options.historyStatus = __args.historyStatus;
+    }
     var result = engine.analyze(__args.position, options);
     return JSON.stringify({
         ok: !!result.ok,
         engine: result.engine || engine.lastEngine() || null,
+        historyUsed: result.historyUsed === true,
+        historyStatus: result.historyStatus || "fen",
         iccs: result.iccs || null,
         score: result.score == null ? null : result.score,
         depth: result.depth == null ? null : result.depth,
@@ -145,6 +151,8 @@ function create(options) {
                 movetime: search.movetime == null ? null : search.movetime,
                 depth: search.depth == null ? null : search.depth,
                 excludeIccs: (search.excludeIccs && search.excludeIccs.length) ? search.excludeIccs : null,
+                positionCommand: search.positionCommand || null,
+                historyStatus: search.historyStatus || "unknown",
                 engine: search.engine == null ? null : String(search.engine),
                 pikafish: search.pikafish || null
             });
