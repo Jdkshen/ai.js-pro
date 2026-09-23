@@ -1191,6 +1191,7 @@ function createDriver(options) {
             lastReliable = null;
             trackClear("attempt-budget");
             needFreshBaseline = true;
+            stats.budgetPauses += 1;
             return pump(machine.dispatch({ type: "PAUSE", reason: budget.reason }));
         }
         // ---- 点击前的前台守卫（真机血泪）----
