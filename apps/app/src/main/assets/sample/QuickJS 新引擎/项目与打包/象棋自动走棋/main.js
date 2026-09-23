@@ -637,14 +637,14 @@ const app = bootstrapModule.createApp({
             });
         },
         note: function (text) { console.log("[xiangqi][board] " + text); },
-        // A2：主界面的视觉流水线注入（懒加载；没有就退回 legacy，见 board-service.recognizeSmart）
+        // vision 注入仍保留 gate/countUnknown/samples（稳定帧闸门用）；识别链不再依赖它。
         vision: visionInjection,
-        // 「新的为主」：字形识别注入（auto 模式先跑它，见 board-service.recognizeSmart）
+        // 识别链只有字形识别（2026-09-24「其他的都不要了」）
         glyph: mainGlyphSource
     }
 });
 const boardService = app.boards;
-visionInjection.ready();   // 提前把 OCR 会话/检测会话拉起来（失败只会记日志，服务层仍可跑）
+// （2026-09-24）不再预热视觉流水线：识别链只有字形识别，YOLO/OCR 会话不再预建。
 
 let modeKey = MODES.WATCH;
 let tapMethodKey = "auto";

@@ -7230,7 +7230,7 @@ check("稳定帧闸门：采样必须是**数字数组**（传 [r,g,b] 会静默
     return true;
 });
 
-check("识别服务 board-service：流水线可信就用它；不可信回退旧路径；帧不稳则不观察（2026-09-20 入口收口）", function () {
+check("识别服务 board-service：识别链只有字形（通过=glyph；否决/超限/帧不稳=这一帧不观察；无字形=明确失败）", function () {
     const boardService = require("../src/services/board-service.js");
     const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM", version: 1 };
     const charsOf = function () {
@@ -7242,80 +7242,101 @@ check("识别服务 board-service：流水线可信就用它；不可信回退�
         return out;
     };
     let legacyRuns = 0;
-    let lastRunOptions = null;
-    const build = function (pipelineResult, gateStable, calibrate) {
+    let glyphRuns = 0;
+    let glyphResult = null;
+    let gateStable = true;
+    const build = function (calibrate) {
         return boardService.createBoardService({
             ports: { now: function () { return Date.now(); }, capture: function () { return { image: {} }; } },
             locateBoard: { locateBoardInImage: function () { return { ok: true, grid: grid }; } },
             recognizeBoard: {
-                run: function (image, located, options) {
+                run: function () {
                     legacyRuns += 1;
-                    lastRunOptions = options;
                     return { ok: true, chars: charsOf(), layout: "", grid: grid, unknownCells: 0 };
                 }
             },
             calibrate: calibrate || null,
+            glyph: {
+                recognize: function () {
+                    glyphRuns += 1;
+                    return glyphResult;
+                }
+            },
             vision: {
-                pipeline: { recognize: function () { return pipelineResult; } },
                 gate: {
-                    check: function () { return { stable: gateStable !== false, reason: "画面还在动" }; },
-                    acceptResult: function () { return { ok: true }; }
+                    check: function () { return { stable: gateStable, reason: "画面还在动" }; },
+                    acceptResult: function (unknown) {
+                        return unknown > 6 ? { ok: false, reason: "未知格 " + unknown + " 个（> 6）" } : { ok: true };
+                    }
                 },
                 samples: function () { return [1, 2, 3]; },
-                countUnknown: function () { return 0; }
+                countUnknown: function () { return 0; },
+                log: function () { }
             }
         });
     };
-    // ① 流水线可信 ⇒ 用它，且**不该**去跑旧路径
+    // ① 字形通过 ⇒ method=glyph；且绝不跑旧路径
     const chars = charsOf();
     chars[0] = "n";
-    const good = build({ ok: true, chars: chars, rawChars: charsOf(), validation: { ok: true } }, true);
+    glyphResult = { ok: true, chars: chars, rawChars: chars.slice(), unknownCells: 0, layout: "x", validation: { ok: true }, stats: { ms: 123 } };
+    const good = build();
     const r1 = good.recognizeSmart({});
-    if (!r1 || r1.method !== "vision-pipeline" || r1.chars[0] !== "n") {
-        return "流水线可信时应当返回流水线盘面，实际 " + JSON.stringify(r1 && { method: r1.method, c0: r1.chars && r1.chars[0] });
+    if (!r1 || r1.method !== "glyph" || r1.chars[0] !== "n") {
+        return "字形通过时应返回 method=glyph，实际 " + JSON.stringify(r1 && { m: r1.method, c0: r1.chars && r1.chars[0] });
     }
     if (legacyRuns !== 0) {
-        return "流水线可信时不该跑旧路径，实际跑了 " + legacyRuns + " 次";
+        return "识别链只有字形，不该跑旧路径，实际跑了 " + legacyRuns + " 次";
     }
-    // ② 规则门否决 ⇒ 回退旧路径（并标明原因）
-    const bad = build({ ok: true, chars: charsOf(), validation: { ok: false, reason: "红帅数量 0（应为 1）" } }, true);
+    if (r1.unknownCells !== 0 || !r1.validation) {
+        return "字形结果要带 unknownCells/validation（驱动按它们做门）";
+    }
+    // ② 规则门否决 ⇒ {ok:false}（**不**回退旧路径：读不过 = 这一帧不观察）
+    glyphResult = { ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: false, reason: "红帅数量 0（应为 1）" }, stats: {} };
+    const bad = build();
     const r2 = bad.recognizeSmart({});
-    if (!r2 || r2.method !== "legacy" || !/红帅数量/.test(String(r2.fallbackReason))) {
-        return "流水线不可信时应当回退旧路径并带原因，实际 " + JSON.stringify(r2 && { m: r2.method, why: r2.fallbackReason });
+    if (!r2 || r2.ok !== false || !/字形识别不通过/.test(String(r2.reason)) || !/红帅数量/.test(String(r2.reason))) {
+        return "字形被否决时应返回 ok:false 且带原因，实际 " + JSON.stringify(r2 && { ok: r2.ok, r: r2.reason });
     }
-    if (legacyRuns !== 1) {
-        return "回退时应当跑一次旧路径，实际 " + legacyRuns;
+    if (legacyRuns !== 0) {
+        return "字形不通过也不许回退旧路径（「其他的都不要了」），实际跑了 " + legacyRuns + " 次";
     }
-    // ③ 帧不稳 ⇒ 不观察（既不用流水线，也不回退）
-    const shaky = build({ ok: true, chars: charsOf(), validation: { ok: true } }, false);
+    // ③ 帧不稳 ⇒ 不观察（连字形都不跑）
+    glyphResult = { ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: true }, stats: {} };
+    const shaky = build();
+    gateStable = false;
+    const beforeShaky = glyphRuns;
     const r3 = shaky.recognizeSmart({});
+    gateStable = true;
     if (!r3 || r3.ok !== false || r3.unstable !== true) {
         return "帧不稳定时应当返回 {ok:false, unstable:true}，实际 " + JSON.stringify(r3);
     }
-    if (legacyRuns !== 1) {
-        return "帧不稳定时不该回退旧路径（画面在动，读了也是脏的），实际又跑了 " + (legacyRuns - 1) + " 次";
+    if (glyphRuns !== beforeShaky || legacyRuns !== 0) {
+        return "帧不稳定时不该跑字形/旧路径，实际 字形+" + (glyphRuns - beforeShaky) + " 旧路径 " + legacyRuns;
     }
-    // ④ 关掉流水线开关 ⇒ 一律旧路径
-    const off = build({ ok: true, chars: charsOf(), validation: { ok: true } }, true);
-    off.clear();
-    const r4 = off.recognizeSmart({ mode: "legacy" });
-    if (!r4 || r4.method !== "legacy") {
-        return "mode:'legacy' 时必须走旧路径，实际 " + JSON.stringify(r4 && r4.method);
+    // ④ 未知格超限（gate.acceptResult 驳回）⇒ 也不观察、不回退
+    glyphResult = { ok: true, chars: charsOf(), unknownCells: 9, validation: { ok: true }, stats: {} };
+    const manyUnknown = build();
+    const r4 = manyUnknown.recognizeSmart({});
+    if (!r4 || r4.ok !== false || !/未知格/.test(String(r4.reason))) {
+        return "字形未知格超限时应返回 ok:false 且标明未知格，实际 " + JSON.stringify(r4 && { ok: r4.ok, r: r4.reason });
     }
-    // ⑤ 驱动的 regionRatio / timeoutMs 要透传到旧路径
-    //    （漏传会让主界面填的「棋盘范围」与截图超时静默失效 —— 2026-09-20 收口时补齐）
-    const fwd = build({ ok: true, chars: charsOf(), validation: { ok: true } }, true);
-    fwd.recognizeSmart({ mode: "legacy", regionRatio: { x: 1, y: 2, width: 3, height: 4 }, timeoutMs: 400 });
-    if (!lastRunOptions || !lastRunOptions.regionRatio || lastRunOptions.timeoutMs !== 400) {
-        return "regionRatio/timeoutMs 必须透传给旧路径，实际 " + JSON.stringify(lastRunOptions);
-    }
-    // ⑥ **当前几何必须带下去**：旧路径 recognizeScreen 只有看到 opts.grid 才会复用已校准几何，
-    //    不带 ⇒ 它自己重新定位（未校准的原点）⇒ 每帧把会话级校准顶回去（2026-09-20 真机事故）
-    if (!lastRunOptions.grid) {
-        return "旧路径必须带上当前几何（opts.grid），否则校准偏移会被下一帧的重新定位顶掉";
+    // ⑤ 没有字形注入 ⇒ 明确失败（不再偷偷退回旧路径）
+    const none = boardService.createBoardService({
+        ports: { now: function () { return Date.now(); }, capture: function () { return { image: {} }; } },
+        locateBoard: { locateBoardInImage: function () { return { ok: true, grid: grid }; } },
+        recognizeBoard: {
+            run: function () {
+                legacyRuns += 1;
+                return { ok: true, chars: charsOf(), layout: "", grid: grid, unknownCells: 0 };
+            }
+        }
+    });
+    const r5 = none.recognizeSmart({});
+    if (!r5 || r5.ok !== false || !/字形识别不可用/.test(String(r5.reason)) || legacyRuns !== 0) {
+        return "没有字形注入时应明确失败且不跑旧路径，实际 " + JSON.stringify(r5 && { ok: r5.ok, r: r5.reason }) + " legacy=" + legacyRuns;
     }
     // ⑥ 注入校准 ⇒ locate() 用校准后的几何（主界面/悬浮窗共用同一份校准参数）
-    const calib = build({ ok: true, chars: charsOf(), validation: { ok: true } }, true, function (image, located, options) {
+    const calib = build(function (image, located, options) {
         return {
             ok: true, grid: Object.assign({}, located.grid, { version: 7 }),
             dx: -11, dy: -4, unknown: 1, tried: 16, layout: ""
@@ -7329,7 +7350,7 @@ check("识别服务 board-service：流水线可信就用它；不可信回退�
     return true;
 });
 
-check("识别服务 board-service：字形为主（auto 先字形；否决回退流水线；glyph 模式不回退；pipeline 跳过）", function () {
+check("识别服务 board-service：字形单路（mode 已废弃；否决/超限=不观察；无字形/enabled:false=明确失败）", function () {
     const boardService = require("../src/services/board-service.js");
     const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM", version: 1 };
     const charsOf = function () {
@@ -7409,39 +7430,58 @@ check("识别服务 board-service：字形为主（auto 先字形；否决回退
     if (r1.unknownCells !== 0 || !r1.validation) {
         return "字形结果要带 unknownCells/validation（驱动按它们做门）";
     }
-    // ② 字形被规则门否决 ⇒ 回退流水线（不是直接旧路径）
+    // ② 字形被规则门否决 ⇒ {ok:false}（不观察；**不**回退流水线/旧路径）
     const reject = buildFull({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: false, reason: "红帅数量 0（应为 1）" }, stats: {} });
     const r2 = reject.recognizeSmart({});
-    if (!r2 || r2.method !== "vision-pipeline") {
-        return "字形被否决时应回退流水线，实际 " + JSON.stringify(r2 && r2.method);
+    if (!r2 || r2.ok !== false || !/字形识别不通过/.test(String(r2.reason))) {
+        return "字形被否决时应返回 ok:false，实际 " + JSON.stringify(r2 && { ok: r2.ok, r: r2.reason });
     }
-    if (glyphRuns !== 2 || pipelineRuns !== 1) {
-        return "字形成被否决那一次应当先跑了字形（共 2 次）再走流水线（1 次），实际 " + glyphRuns + "/" + pipelineRuns;
+    if (glyphRuns !== 2 || pipelineRuns !== 0 || legacyRuns !== 0) {
+        return "字形被否决时只该跑字形（共 2 次），实际 字形 " + glyphRuns + "/流水线 " + pipelineRuns + "/旧路径 " + legacyRuns;
     }
-    // ③ 字形未知格超限（gate.acceptResult 驳回）⇒ 也回退
+    // ③ 字形未知格超限（gate.acceptResult 驳回）⇒ 也不观察
     const manyUnknown = buildFull({ ok: true, chars: charsOf(), unknownCells: 9, validation: { ok: true }, stats: {} });
     const r3 = manyUnknown.recognizeSmart({});
-    if (!r3 || r3.method !== "vision-pipeline") {
-        return "字形未知格超限时应回退流水线，实际 " + JSON.stringify(r3 && r3.method);
+    if (!r3 || r3.ok !== false || pipelineRuns !== 0) {
+        return "字形未知格超限时应返回 ok:false 且不跑流水线，实际 " + JSON.stringify(r3 && { ok: r3.ok, r: r3.reason }) + " pipeline=" + pipelineRuns;
     }
-    // ④ mode="glyph" ⇒ 只走字形：不通过直接返回失败（不回退）
+    // ④ mode 参数已废弃：mode="glyph" 与默认同一行为（不通过=失败）
     const strict = buildFull({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: false, reason: "黑将数量 0（应为 1）" }, stats: {} });
     const r4 = strict.recognizeSmart({ mode: "glyph" });
     if (!r4 || r4.ok !== false || !/字形识别不通过/.test(String(r4.reason))) {
-        return "mode=glyph 不通过时应直接返回失败，实际 " + JSON.stringify(r4 && { ok: r4.ok, r: r4.reason });
+        return "mode=glyph 与默认行为一致（不通过=失败），实际 " + JSON.stringify(r4 && { ok: r4.ok, r: r4.reason });
     }
-    // ⑤ mode="pipeline" ⇒ 跳过字形（A/B 对照用）
+    // ⑤ mode="pipeline" 同样被忽略：仍然只走字形
     const skip = buildFull({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: true }, stats: {} });
     const before = glyphRuns;
     const r5 = skip.recognizeSmart({ mode: "pipeline" });
-    if (!r5 || r5.method !== "vision-pipeline" || glyphRuns !== before) {
-        return "mode=pipeline 应跳过字形，实际 " + JSON.stringify(r5 && r5.method) + " glyphRuns+" + (glyphRuns - before);
+    if (!r5 || r5.method !== "glyph" || glyphRuns !== before + 1 || pipelineRuns !== 0) {
+        return "mode 已废弃：pipeline 也应只走字形，实际 " + JSON.stringify(r5 && r5.method) + " glyphRuns+" + (glyphRuns - before) + " pipeline=" + pipelineRuns;
     }
-    // ⑥ 没有 vision 注入（glyph 专属服务）⇒ auto 也能走字形
+    // ⑥ 没有 vision 注入（字形专属服务）⇒ 照样走字形
     const only = build({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: true }, stats: {} });
     const r6 = only.recognizeSmart({});
     if (!r6 || r6.method !== "glyph") {
-        return "只有字形注入时 auto 也应当走字形，实际 " + JSON.stringify(r6 && r6.method);
+        return "只有字形注入时也应当走字形，实际 " + JSON.stringify(r6 && r6.method);
+    }
+    // ⑦ glyph.enabled=false ⇒ 明确不可用（旧回退语义已删除）
+    const off = boardService.createBoardService({
+        ports: { now: function () { return Date.now(); }, capture: function () { return { image: {} }; } },
+        locateBoard: { locateBoardInImage: function () { return { ok: true, grid: grid }; } },
+        recognizeBoard: {
+            run: function () {
+                legacyRuns += 1;
+                return { ok: true, chars: charsOf(), layout: "", grid: grid, unknownCells: 0 };
+            }
+        },
+        glyph: {
+            enabled: false,
+            recognize: function () { return { ok: true, chars: charsOf(), validation: { ok: true }, stats: {} }; }
+        }
+    });
+    const r7 = off.recognizeSmart({});
+    if (!r7 || r7.ok !== false || !/字形识别不可用/.test(String(r7.reason)) || legacyRuns !== 0) {
+        return "glyph.enabled=false 时应明确失败且不跑旧路径，实际 " + JSON.stringify(r7 && { ok: r7.ok, r: r7.reason });
     }
     return true;
 });

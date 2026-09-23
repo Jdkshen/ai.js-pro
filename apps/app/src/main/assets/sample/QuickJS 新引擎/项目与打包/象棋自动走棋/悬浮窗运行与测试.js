@@ -238,8 +238,8 @@ let autoAlignOn = false;      // 几何按检测框自动微调（真机实测�
  */
 
 /** 视觉链路模式："legacy" 旧路径 / "auto" 全盘流水线 / "diff" 差分（定位一次 + 找色扫描 + 只 OCR 变化格） */
-// 默认「自动」：字形识别优先 →（不通过）视觉流水线 → 旧路径（2026-09-24「新的为主」）
-let visionPipelineMode = "auto";
+// 识别链只有字形识别（2026-09-24「其他的都不要了」）；`visionPipeline` 实例保留给旧探针/审核工具懒建，
+// 日常识别路径不再碰它（YOLO/OCR 会话也不再预热）。
 let visionPipeline = null;
 /** 逐格 OCR 的灰度路（先灰度、读不出再彩色兜底）：autorun `"ocrGray": false` 可关（默认开） */
 let ocrGrayEnabled = true;
@@ -2266,53 +2266,25 @@ function tryReuseGrid(grabbed) {
     if (!grid || !grabbed || !grabbed.image) {
         return null;
     }
-    // 只以 visionPipelineMode 为准；差分与全盘流水线都可复用已验证的几何。
-    if (visionPipelineMode === "legacy") {
-        return null;
-    }
     const sanity = checkGridRows(grabbed.image, grid);
     if (!sanity.ok) {
         logLine("几何沿用检查不过（" + sanity.reason + "），走全量校准");
         return null;
     }
     const started = Date.now();
-    // 差分模式：没有流水线，就用**找色占用扫描**验一帧（20~30ms）——
-    // 只要绝大多数格子都能判出「有子/空格」，几何就是对的。
-    // ⚠️ 但找色体检有假阳性（真机 2026-09-21 11:26，见 lastPipelineUnknown）：错网格上采样框
-    //    跨在两枚棋子中间 ⇒ 几乎全格「有子」⇒ 体检也过。所以先用**上一帧真读出来的未定格数**
-    //    挡一刀：成堆未定格 = 几何不对，别沿用。
+    // 先用**上一帧真读出来的未定格数**挡一刀：成堆未定格 = 几何多半不对，别沿用。
     if (lastPipelineUnknown >= 8) {
         logLine("几何沿用检查：上一帧读出 " + lastPipelineUnknown +
             " 个未定格（几何多半不对）⇒ 走全量校准");
         return null;
     }
-    if (visionPipelineMode === "diff") {
-        const scan = occupancyScan(grabbed.image);
-        const scanned = (scan && scan.scanned) || 0;
-        const undecided = 90 - scanned;
-        if (!scan || scanned < 40 || undecided > GEOMETRY_REUSE_MAX_UNKNOWN) {
-            logLine("几何沿用检查：找色扫描只判出 " + scanned + " 格（未定 " + undecided + "），走全量校准");
-            return null;
-        }
-        grid = attachGridQuality(grabbed.image, snapGridToPieces(grid, grabbed.image, "几何沿用"));
-        if (boardService) {
-            boardService.setGrid(grid);
-        }
-        logLine("几何沿用（差分：体检过 + 找色判出 " + scanned + " 格，用时 " + (Date.now() - started) +
-            "ms，省掉全量校准）｜几何 v" + grid.version);
-        snapPanelAboveBoard();
-        return { ok: true, method: "reuse-diff", grid: grid, unknown: undecided };
-    }
-    const pipeline = ensureVisionPipeline();
-    if (!pipeline) {
-        return null;
-    }
+    // 识别链只有字形（2026-09-24「其他的都不要了」）：用现几何真读一帧，未定超限就不沿用。
     let result = null;
     try {
-        result = pipeline.recognize(grabbed.image, grid, {});
+        result = glyphSource.recognize(grabbed.image, grid, {});
     } catch (error) {
         result = null;
-        logLine("几何沿用检查：流水线异常（" + error + "），走全量校准");
+        logLine("几何沿用检查：字形识别异常（" + error + "），走全量校准");
         return null;
     }
     const unknown = (result && result.ok && result.chars) ? boardScan.countUnknownCells(result.chars) : 999;
@@ -2782,83 +2754,11 @@ function buildDriver() {
             //   一律走 `grabFrame()`。
             const service = ensureBoardService();
             const obsStarted = Date.now();
-            // ── 差分模式（visionPipeline: "diff"）────────────────────────────
-            // 用户提议 2026-09-20：识别模型只做**一次定位**（几何），棋子位置用**找色扫描**判，
-            // 只有**变化的格子**才跑 OCR 认兵种。拿不准（变化太多/变化格认不出）就退回全盘流水线。
-            let smart = null;
-            // ★ 杀棋全盘复核（2026-09-21）：驱动带 freshRead 时**跳过差分缓存**做一次完整识别 ——
-            //   差分只读变化格，被「按基准填回」的格它永远看不出变化，「两帧同错」只能靠
-            //   一次不共享缓存的完整重读来打破（见 auto-driver 的 forceFreshReadOnce）。
-            const forceFreshRead = !!(options && options.freshRead);
-            if (forceFreshRead) {
-                logLine("全盘新鲜重读（杀棋复核）：这一次观察跳过差分缓存，走完整识别");
-            }
-            let grabbedForOcc = null;   // 差分回退到全盘也要留一份帧：下面给回退帧补占用图（快路用）
-            if (visionPipelineMode === "diff" && grid && !forceFreshRead) {
-                const probeA = frameProbeOn ? frameProbeActive() : -1;
-                const grabbed = grabFrame();
-                grabbedForOcc = grabbed;
-                const probeB = frameProbeOn ? frameProbeActive() : -1;
-                if (grabbed && grabbed.image) {
-                    const diff = recognizeDiffFrame(grabbed);
-                    if (frameProbeOn) {
-                        logLine("[帧探针] 抓帧 " + probeA + "→" + probeB + "｜格读后 " +
-                            frameProbeActive() + "（" + (diff ? "diff" : "diff→全盘") + "）");
-                    }
-                    if (diff) {
-                        diffCache = {
-                            geometry: diffGeometryKey(),
-                            board: diff.board.slice(),
-                            occupancy: diff.occupancy,
-                            at: Date.now(),
-                            frames: (diffCache ? diffCache.frames + 1 : 1)
-                        };
-                        smart = {
-                            ok: true, method: "diff", grid: grid,
-                            chars: diff.board, rawChars: diff.board.slice(),
-                            // 占用图 + 变化格（2026-09-21 对方应手快路用）：驱动靠它「免 OCR 定手」
-                            occupancy: diff.occupancy, changed: diff.changed,
-                            unknownCells: diff.board.filter(function (c) { return c === "?"; }).length,
-                            evidence: null,
-                            pipelineStats: { diff: { changed: diff.changed.length, scanMs: diff.scan.ms } },
-                            validation: { ok: true, reason: "差分" },
-                            imageObject: grabbed.image, frameObject: grabbed.image, frame: grabbed
-                        };
-                        logLine("差分：扫描 " + diff.scan.ms + "ms｜变化 " + diff.changed.length + " 格" +
-                            (diff.changed.length
-                                ? "（" + diff.changed.slice(0, 6).map(function (i) {
-                                    return "(" + (i % 9) + "," + Math.floor(i / 9) + ")";
-                                }).join(" ") + "）"
-                                : "") +
-                            "｜已用 " + (diffCache ? diffCache.frames : 1) + "/" + DIFF_REANCHOR_FRAMES + " 帧");
-                    }
-                }
-            }
-            if (!smart) {
-                // ★ 全盘回退帧也补一份占用扫描（对方应手快路用）：差分链路里这一帧以前没有占用图，
-                //   对方应手恰好落在回退帧上时就完全看不见（真机 2026-09-21：就是这样把应手放跑、白等 45 秒）。
-                let fallbackOccupancy = null;
-                if (visionPipelineMode === "diff" && grabbedForOcc && grabbedForOcc.image) {
-                    try {
-                        const scan = occupancyScan(grabbedForOcc.image);
-                        if (scan && scan.scanned >= 40) {
-                            fallbackOccupancy = scan.map;
-                        }
-                    } catch (error) {
-                        fallbackOccupancy = null;   // 扫不出就不带（驱动会跳过这一帧）
-                    }
-                }
-                smart = service.recognizeSmart(Object.assign({}, options, {
-                    mode: visionPipelineMode === "legacy" ? "legacy"
-                        : (visionPipelineMode === "glyph" ? "glyph" : "auto")
-                }));
-                if (frameProbeOn) {
-                    logLine("[帧探针] 全盘识别后 " + frameProbeActive());
-                }
-                if (fallbackOccupancy && smart) {
-                    smart.occupancy = fallbackOccupancy;
-                }
-                seedDiffCache(visionPipelineMode === "diff" ? smart : null);
+            // 识别链只有字形识别（2026-09-24「其他的都不要了」）：差分/流水线/旧路径分支全部移除；
+            // 读不过的帧服务层会返回 ok:false，驱动按「这一帧不观察」处理。
+            const smart = service.recognizeSmart(options || {});
+            if (frameProbeOn) {
+                logLine("[帧探针] 全盘识别后 " + frameProbeActive());
             }
             // 账本：一次观察里驱动会调 2 次（两帧合并）—— 分开记，才看得出「其他时间」在哪
             tickObsCalls += 1;
@@ -3153,7 +3053,7 @@ function ensureBoardService() {
     if (!visionInjection.gate) {
         visionInjection.gate = boardFrameGate || (boardFrameGate = frameGateModule.create({ log: function () { } }));
     }
-    visionInjection.ready();
+    // （2026-09-24「其他的都不要了」）不再预热视觉流水线：识别链只有字形识别，YOLO/OCR 会话不再预建。
     app = bootstrapModule.createApp({
         owner: "floaty",
         bus: bus,                            // A1 批次3：装配与入口共用同一总线实例
@@ -5079,27 +4979,10 @@ function main() {
         //    塞在上面的块里会让 visionPipeline 静默不生效（2026-09-20 真机踩过：
         //    日志里没有任何「视觉流水线」字样，驱动其实还在走旧路径）。
         if (auto.visionPipeline != null) {
-            // true / "auto" = 自动（字形识别优先 → 流水线 → 旧路径）；"glyph" = 只走字形；
-            // "diff" = 差分（用户提议：模型只定位一次，棋子靠找色扫描，变化的格再 OCR 认兵种）；false = 旧路径。
-            if (auto.visionPipeline === "diff") {
-                visionPipelineMode = "diff";
-            } else if (auto.visionPipeline === "glyph") {
-                visionPipelineMode = "glyph";
-            } else {
-                visionPipelineMode = auto.visionPipeline === true ? "auto" : "legacy";
-            }
-            logLine("视觉链路：" + (visionPipelineMode === "diff"
-                ? "差分（找色扫描定位置，只对变化格 OCR；拿不准就退回全盘）"
-                : (visionPipelineMode === "glyph"
-                    ? "字形专用（电脑 py 移植；不通过不退回）"
-                    : (visionPipelineMode === "auto"
-                        ? "自动（字形识别优先，不通过回退流水线→旧路径）"
-                        : "旧识别路径"))));
+            logLine("autorun 的 visionPipeline 已废弃：识别链只有字形识别（无差分/流水线/旧路径）");
         }
-        // 字形通道开关（默认开）：autorun 里 `"glyph": false` 可关掉（回退到流水线优先，A/B 对照用）。
         if (auto.glyph != null) {
-            glyphSource.enabled = auto.glyph !== false;
-            logLine("字形识别：" + (glyphSource.enabled ? "开（默认）" : "关（A/B 对照）"));
+            logLine("autorun 的 glyph 开关已废弃：字形识别是唯一识别链（始终启用）");
         }
         // 逐格 OCR 的灰度重试（落子高亮环格专用）：默认开；autorun 里 `"ocrGray": false` 可关掉，
         // 用于 A/B 对照 —— 或者某次真机上发现它反而把错读数写进观测层时先关。
@@ -5221,6 +5104,27 @@ function main() {
         if (auto.start && autorunBlocking) {
             logLine("autorun：配置有致命错误，未自动开始（修好 autorun 再启动）");
         } else if (auto.start) {
+            // 测试钩子：autorun 里带 grid 就直接当几何（无人值守续跑；中局屏幕上线定位易失败时很有用）。
+            // ⚠ 面板自己有一份 grid（驱动经 getGrid 端口读它），服务层也有一份 —— 两份都要写；
+            //   且 autorun 比 ensureBoardService 早，先 ensure 再 setGrid。
+            if (auto.grid && auto.grid.stepX && auto.grid.stepY) {
+                grid = Object.assign({ orientation: "RED_BOTTOM", version: 1 }, auto.grid);
+                ensureBoardService().setGrid(grid);
+                logLine("autorun：用配置里的几何（起点 " + auto.grid.originX + "," + auto.grid.originY +
+                    " 格距 " + auto.grid.stepX + "," + auto.grid.stepY + "）");
+            }
+            // 2026-09-24：冷启动没有几何时，驱动每 tick 都报「定位由面板负责，请先把 grid 同步进服务」——
+            // autorun 先自己把定位校准做掉（auto.locate=false 可显式跳过）。
+            let hasGrid = false;
+            try {
+                hasGrid = !!(boardService && boardService.grid && boardService.grid());
+            } catch (error) {
+                hasGrid = false;
+            }
+            if (!hasGrid && auto.locate !== false) {
+                logLine("autorun：还没有几何，先自动定位校准（auto.locate=false 可关）");
+                locateAndCalibrate();
+            }
             startLoop();
             if (auto.declareTurn) {
                 // 刚启动时状态机还没观察过任何局面，assertTurn 会被拒；等第一个观察成功的 tick 再声明

@@ -143,7 +143,9 @@ function loadTemplates(host, dir) {
         if (!color) {
             throw new Error("模板读不到：" + path);
         }
-        out.push({ name: name, image: host.grayscale(color) });
+        const gray = host.grayscale(color);
+        recycle(color);   // grayscale 产的是新帧；彩色原图不回收会在 GC 时报 MemoryLeak（真机实测 11 条）
+        out.push({ name: name, image: gray });
     }
     return out;
 }
