@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -186,5 +187,106 @@ public class ScriptRepositoryTest {
 
     private static String readUtf8(File file) throws Exception {
         return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+    }
+
+    // ---- B1 批次2b：备份 / 回退 / 清理 ----
+
+    @Test
+    public void backupToMovesTargetIntoBackupTreeKeepingStructure() throws Exception {
+        File root = newTempDir();
+        File dir = new File(root, "dir");
+        assertTrue(dir.mkdirs());
+        File target = new File(dir, "a.js");
+        Files.write(target.toPath(), "payload".getBytes(StandardCharsets.UTF_8));
+
+        File backup = ScriptRepository.backupTo(target, root);
+        assertNotNull(backup);
+        assertFalse(target.exists());
+        assertTrue(backup.isFile());
+        // 结构：.aijspro-backups/dir/a.js.<时间戳>.bak
+        assertEquals("dir", backup.getParentFile().getName());
+        assertEquals(ScriptRepository.BACKUP_DIR_NAME, backup.getParentFile().getParentFile().getName());
+        assertTrue(backup.getName().startsWith("a.js."));
+        assertTrue(backup.getName().endsWith(".bak"));
+        assertEquals("payload", readUtf8(backup));
+        assertEquals("dir/a.js", ScriptRepository.backupDisplayName(backup, root));
+    }
+
+    @Test
+    public void backupOutsideRootIsRefusedAndKeepsFile() throws Exception {
+        File root = newTempDir();
+        File outside = newTempDir();
+        File target = new File(outside, "b.js");
+        Files.write(target.toPath(), "x".getBytes(StandardCharsets.UTF_8));
+
+        assertNull(ScriptRepository.backupTo(target, root));
+        assertTrue("root 外不备份也不动文件（由调用方保持旧行为）", target.exists());
+        assertFalse(ScriptRepository.isInsideRoot(target, root));
+        assertTrue(ScriptRepository.isInsideRoot(new File(root, "a.js"), root));
+    }
+
+    @Test
+    public void restoreBackupReturnsToOriginalLocationAndRefusesConflict() throws Exception {
+        File root = newTempDir();
+        File dir = new File(root, "dir");
+        assertTrue(dir.mkdirs());
+        File target = new File(dir, "a.js");
+        Files.write(target.toPath(), "v1".getBytes(StandardCharsets.UTF_8));
+        File backup = ScriptRepository.backupTo(target, root);
+        assertNotNull(backup);
+
+        File restored = ScriptRepository.restoreBackup(backup, root);
+        assertNotNull(restored);
+        assertEquals(target.getPath(), restored.getPath());
+        assertEquals("v1", readUtf8(restored));
+        assertFalse(backup.exists());
+
+        // 冲突不覆盖：再次删除产生新备份，然后在原位重建同名文件 → 恢复应失败
+        File second = ScriptRepository.backupTo(restored, root);
+        assertNotNull(second);
+        Files.write(target.toPath(), "v2".getBytes(StandardCharsets.UTF_8));
+        assertNull(ScriptRepository.restoreBackup(second, root));
+        assertEquals("v2", readUtf8(target));
+        assertTrue(second.exists());
+    }
+
+    @Test
+    public void pruneBackupsKeepsNewestWithinLimitAndDropsExpired() throws Exception {
+        File root = newTempDir();
+        File backupDir = ScriptRepository.backupRoot(root);
+        assertTrue(backupDir.mkdirs());
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 55; i++) {
+            File fake = new File(backupDir, "f" + i + ".js.20260923-000000-" +
+                    String.format("%03d", i) + ".bak");
+            Files.write(fake.toPath(), "x".getBytes(StandardCharsets.UTF_8));
+            assertTrue(fake.setLastModified(now - i));
+        }
+        File expired = new File(backupDir, "old.js.20260801-000000-000.bak");
+        Files.write(expired.toPath(), "x".getBytes(StandardCharsets.UTF_8));
+        assertTrue(expired.setLastModified(now - TimeUnit.DAYS.toMillis(31)));
+
+        int removed = ScriptRepository.pruneBackups(root);
+        assertEquals(6, removed);
+        List<ScriptDescriptor> left = ScriptRepository.listBackups(root);
+        assertEquals(50, left.size());
+        assertFalse(expired.exists());
+    }
+
+    @Test
+    public void pruneBackupsAlsoReclaimsEmptyDirectories() throws Exception {
+        File root = newTempDir();
+        File nested = new File(ScriptRepository.backupRoot(root), "dir/sub");
+        assertTrue(nested.mkdirs());
+        File backup = new File(nested, "a.js.20260923-000000-000.bak");
+        Files.write(backup.toPath(), "x".getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(0, ScriptRepository.pruneBackups(root)); // 条目本身在保留期内
+        assertTrue(backup.exists());
+
+        assertTrue(backup.delete());
+        ScriptRepository.pruneBackups(root);
+        assertFalse("空目录应被回收", new File(ScriptRepository.backupRoot(root), "dir").exists());
+        assertTrue(ScriptRepository.backupRoot(root).exists());
     }
 }

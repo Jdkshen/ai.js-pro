@@ -5,6 +5,7 @@ import android.os.SystemClock;
 
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.model.explorer.ExplorerFileItem;
 import com.jdkshen.aijspro.ui.common.ScriptOperations;
 import com.stardust.autojs.script.JavaScriptSource;
@@ -17,13 +18,14 @@ import java.nio.file.Files;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * B1 批次2a 设备侧验证：写原语经过真实调用点（ScriptOperations / ExplorerFileItem）落到磁盘。
+ * B1 设备侧验证：写原语经过真实调用点（ScriptOperations / ExplorerFileItem）落到磁盘。
  *
- * <p>删除路径已由 {@code ProjectUsabilityTest.deletionRemovesFileAndNestedFolderFromDisk} 覆盖，
- * 这里补「新建（含默认引擎指令、不覆写已有文件）」与「重命名（成功/失败语义）」两条。
+ * <p>批次2a：新建（默认引擎指令、不覆写）、重命名（成功/失败语义）；
+ * 批次2b：删除经真实入口后进备份区、可恢复到原位置。
  */
 public class ScriptRepositoryDeviceTest {
 
@@ -86,6 +88,54 @@ public class ScriptRepositoryDeviceTest {
             new File(dir, "b.js").delete();
             source.delete();
             dir.delete();
+        }
+    }
+
+    @Test
+    public void deleteThroughOperationsBacksUpAndRestores() throws Exception {
+        Context ctx = instrumentation.getTargetContext();
+        File scriptRoot = new File(Pref.getScriptDirPath());
+        File dir = new File(scriptRoot, "b1b2b-" + SystemClock.uptimeMillis());
+        assertTrue(dir.mkdirs());
+        File target = new File(dir, "keep.js");
+        ScriptRepository.writeText(target, "var v = 42;\n");
+
+        try {
+            ScriptOperations operations = new ScriptOperations(ctx, null);
+            instrumentation.runOnMainSync(() ->
+                    operations.deleteWithoutConfirm(new ScriptFile(target)));
+
+            long deadline = SystemClock.uptimeMillis() + 8000;
+            while (target.exists() && SystemClock.uptimeMillis() < deadline) {
+                SystemClock.sleep(100);
+            }
+            assertFalse("删除应把文件移出原位置", target.exists());
+
+            String expected = dir.getName() + "/keep.js";
+            File backup = null;
+            for (ScriptDescriptor descriptor : ScriptRepository.listBackups(scriptRoot)) {
+                if (expected.equals(ScriptRepository.backupDisplayName(descriptor.toFile(), scriptRoot))) {
+                    backup = descriptor.toFile();
+                    break;
+                }
+            }
+            assertNotNull("备份区应记录被删文件", backup);
+
+            File restored = ScriptRepository.restoreBackup(backup, scriptRoot);
+            assertNotNull(restored);
+            assertEquals(target.getPath(), restored.getPath());
+            assertEquals("var v = 42;\n", new String(
+                    Files.readAllBytes(restored.toPath()), StandardCharsets.UTF_8));
+        } finally {
+            ScriptRepository.deleteRecursively(dir);
+            for (ScriptDescriptor descriptor : ScriptRepository.listBackups(scriptRoot)) {
+                if (ScriptRepository.backupDisplayName(descriptor.toFile(), scriptRoot)
+                        .startsWith(dir.getName() + "/")) {
+                    ScriptRepository.deleteRecursively(descriptor.toFile());
+                }
+            }
+            // 删掉条目后，把残留的空目录一并回收
+            ScriptRepository.pruneBackups(scriptRoot);
         }
     }
 }

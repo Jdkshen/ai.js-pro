@@ -70,6 +70,7 @@ object MiuixMainFabHost {
                                 Action(host, "导入", R.drawable.ic_floating_action_menu_open, 2) { fabMenuExpanded = false }
                                 Action(host, "文件", R.drawable.ic_floating_action_menu_file, 1) { fabMenuExpanded = false }
                                 Action(host, "文件夹", R.drawable.ic_floating_action_menu_dir, 0) { fabMenuExpanded = false }
+                                Action(host, "最近删除", R.drawable.ic_undo_white_48dp, 4) { fabMenuExpanded = false }
                             }
                         }
                         FloatingActionButton(

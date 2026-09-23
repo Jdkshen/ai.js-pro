@@ -8,9 +8,15 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 统一的「脚本文件系统事实」只读门面（B1 批次1）。
@@ -143,5 +149,184 @@ public final class ScriptRepository {
     public static File renameTo(File source, String newName) {
         File target = new File(source.getParentFile(), newName);
         return source.renameTo(target) ? target : null;
+    }
+
+    // ------------------------------------------------------------------
+    // 备份 / 回退（B1 批次2b）：删除不再直接抹掉，而是先移入备份区。
+    // 约定：备份根 = &lt;scriptRoot&gt;/.aijspro-backups/（隐藏目录——PFile 枚举跳过 「.」 开头，
+    // 文件页不会显示）；备份路径保留原相对目录结构，文件名 = 原名 + .yyyyMMdd-HHmmss-SSS.bak。
+    // 备份失败时调用方应放弃破坏性操作（宁可不删，不丢数据）。
+    // ------------------------------------------------------------------
+
+    public static final String BACKUP_DIR_NAME = ".aijspro-backups";
+
+    /** 保留的最大备份条数（超出按时间从旧到新清理）。 */
+    private static final int BACKUP_KEEP_MAX = 50;
+    /** 保留的最长天数（超过即清理）。 */
+    private static final long BACKUP_KEEP_DAYS = 30;
+    private static final Pattern BACKUP_NAME_PATTERN =
+            Pattern.compile("^(.*)\\.(\\d{8}-\\d{6}-\\d{3})\\.bak$");
+
+    /** 备份根目录（不创建）。 */
+    public static File backupRoot(File scriptRoot) {
+        return scriptRoot == null ? null : new File(scriptRoot, BACKUP_DIR_NAME);
+    }
+
+    /** file 是否在 root 目录内（用于区分「用户脚本目录」与临时/外部路径）。 */
+    public static boolean isInsideRoot(File file, File root) {
+        return relativePathOf(file, root) != null;
+    }
+
+    /**
+     * 把 {@code target} 移入备份区；成功返回备份文件，失败返回 null。
+     * 仅支持 {@code scriptRoot} 内的目标（与备份区同卷，rename 才能原子完成）；
+     * root 外目标返回 null，由调用方决定是否保持旧行为。
+     */
+    public static File backupTo(File target, File scriptRoot) {
+        if (target == null || scriptRoot == null || !target.exists()) {
+            return null;
+        }
+        File root = backupRoot(scriptRoot);
+        if (root == null || root.equals(target)) {
+            return null;
+        }
+        String relative = relativePathOf(target, scriptRoot);
+        if (relative == null) {
+            return null;
+        }
+        File payload = new File(root, relative);
+        File dest = new File(payload.getParentFile(),
+                payload.getName() + "." + backupTimestamp() + ".bak");
+        File parent = dest.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            return null;
+        }
+        if (dest.exists()) {
+            return null;
+        }
+        // 同根存储下 rename 是原子的；失败（权限/异常）不退化——宁可不删，不丢数据。
+        return target.renameTo(dest) ? dest : null;
+    }
+
+    /** 列出备份区里的全部条目（文件与目录），按时间倒序。 */
+    public static List<ScriptDescriptor> listBackups(File scriptRoot) {
+        List<ScriptDescriptor> result = new ArrayList<>();
+        collectBackups(backupRoot(scriptRoot), result);
+        result.sort((a, b) -> Long.compare(b.getLastModified(), a.getLastModified()));
+        return result;
+    }
+
+    private static void collectBackups(File directory, List<ScriptDescriptor> out) {
+        if (directory == null) {
+            return;
+        }
+        File[] children = directory.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (child.getName().endsWith(".bak")) {
+                out.add(ScriptDescriptor.of(child));
+            } else if (child.isDirectory()) {
+                collectBackups(child, out);
+            }
+        }
+    }
+
+    /**
+     * 把备份恢复到原位置；目标已存在或备份不可解析时返回 null（不覆盖）。
+     */
+    public static File restoreBackup(File backupFile, File scriptRoot) {
+        if (backupFile == null || scriptRoot == null || !backupFile.exists()) {
+            return null;
+        }
+        String relative = relativePathOf(backupFile, backupRoot(scriptRoot));
+        if (relative == null) {
+            return null;
+        }
+        Matcher matcher = BACKUP_NAME_PATTERN.matcher(backupFile.getName());
+        if (!matcher.matches()) {
+            return null;
+        }
+        String originalName = matcher.group(1);
+        File relativeParent = new File(relative).getParentFile();
+        File target = relativeParent == null
+                ? new File(scriptRoot, originalName)
+                : new File(new File(scriptRoot, relativeParent.getPath()), originalName);
+        if (target.exists()) {
+            return null;
+        }
+        File parent = target.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            return null;
+        }
+        return backupFile.renameTo(target) ? target : null;
+    }
+
+    /** 备份条目的展示名：原相对路径（去掉时间戳后缀），解析失败回退文件名。 */
+    public static String backupDisplayName(File backupFile, File scriptRoot) {
+        String relative = relativePathOf(backupFile, backupRoot(scriptRoot));
+        if (relative == null) {
+            relative = backupFile.getName();
+        }
+        Matcher matcher = BACKUP_NAME_PATTERN.matcher(new File(relative).getName());
+        if (matcher.matches()) {
+            File parent = new File(relative).getParentFile();
+            String name = matcher.group(1);
+            return parent == null ? name : parent.getPath() + "/" + name;
+        }
+        return relative;
+    }
+
+    /** 清理备份：超过 {@link #BACKUP_KEEP_MAX} 条或超过 {@link #BACKUP_KEEP_DAYS} 天的从旧到新删除；返回删除条数。 */
+    public static int pruneBackups(File scriptRoot) {
+        List<ScriptDescriptor> backups = listBackups(scriptRoot);
+        long cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(BACKUP_KEEP_DAYS);
+        int removed = 0;
+        for (int i = 0; i < backups.size(); i++) {
+            ScriptDescriptor backup = backups.get(i);
+            if (i >= BACKUP_KEEP_MAX || backup.getLastModified() < cutoff) {
+                if (deleteRecursively(backup.toFile())) {
+                    removed++;
+                }
+            }
+        }
+        pruneEmptyDirs(backupRoot(scriptRoot));
+        return removed;
+    }
+
+    /** 删除备份区里已无内容的目录（只删空目录，不动用户可能自己放进去的东西）。 */
+    private static void pruneEmptyDirs(File directory) {
+        File[] children = directory == null ? null : directory.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (!child.isDirectory()) {
+                continue;
+            }
+            pruneEmptyDirs(child);
+            File[] rest = child.listFiles();
+            if (rest != null && rest.length == 0) {
+                child.delete();
+            }
+        }
+    }
+
+    private static String backupTimestamp() {
+        return new SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(new Date());
+    }
+
+    /** file 相对 root 的路径；不在 root 内（或就是 root）时返回 null。 */
+    private static String relativePathOf(File file, File root) {
+        if (file == null || root == null) {
+            return null;
+        }
+        String filePath = file.getAbsolutePath();
+        String rootPath = root.getAbsolutePath();
+        if (filePath.equals(rootPath) || !filePath.startsWith(rootPath + File.separator)) {
+            return null;
+        }
+        return filePath.substring(rootPath.length() + 1);
     }
 }

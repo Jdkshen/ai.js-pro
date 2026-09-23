@@ -483,9 +483,22 @@ public class ScriptOperations {
     public void deleteWithoutConfirm(final ScriptFile scriptFile) {
         final boolean isDir = scriptFile.isDirectory();
         final File parent = scriptFile.getParentFile();
+        final File scriptRoot = new File(Pref.getScriptDirPath());
         Observable.fromCallable(() -> {
-                    if (scriptFile.exists()) ScriptRepository.deleteRecursively(scriptFile);
-                    return !scriptFile.exists();
+                    if (!scriptFile.exists()) {
+                        return Boolean.TRUE;
+                    }
+                    // B1 批次2b：用户脚本目录内的删除 = 先移入备份区（可回退），备份不成则绝不动原文件；
+                    // 目录外（临时文件等，与备份区不同卷）保持旧的直接删除行为。
+                    if (ScriptRepository.isInsideRoot(scriptFile, scriptRoot)) {
+                        File backup = ScriptRepository.backupTo(scriptFile, scriptRoot);
+                        if (backup == null) {
+                            return Boolean.FALSE;
+                        }
+                        ScriptRepository.pruneBackups(scriptRoot);
+                        return !scriptFile.exists() && backup.exists();
+                    }
+                    return ScriptRepository.deleteRecursively(scriptFile);
                 })
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
@@ -493,7 +506,8 @@ public class ScriptOperations {
                     if (deleted) notifyFileRemoved(isDir, scriptFile);
                     refreshDeletedParent(parent);
                     android.widget.Toast.makeText(mContext,
-                            (deleted ? "已删除：" : "删除失败，仍然存在：") + scriptFile.getPath(),
+                            (deleted ? "已删除（可在「最近删除」中恢复）：" : "删除失败（备份未成功，原文件已保留）：")
+                                    + scriptFile.getPath(),
                             android.widget.Toast.LENGTH_LONG).show();
                 }, error -> {
                     refreshDeletedParent(parent);
