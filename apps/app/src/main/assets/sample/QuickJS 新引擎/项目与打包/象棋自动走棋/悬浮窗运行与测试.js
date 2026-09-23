@@ -238,7 +238,8 @@ let autoAlignOn = false;      // 几何按检测框自动微调（真机实测�
  */
 
 /** 视觉链路模式："legacy" 旧路径 / "auto" 全盘流水线 / "diff" 差分（定位一次 + 找色扫描 + 只 OCR 变化格） */
-let visionPipelineMode = "legacy";
+// 默认「自动」：字形识别优先 →（不通过）视觉流水线 → 旧路径（2026-09-24「新的为主」）
+let visionPipelineMode = "auto";
 let visionPipeline = null;
 /** 逐格 OCR 的灰度路（先灰度、读不出再彩色兜底）：autorun `"ocrGray": false` 可关（默认开） */
 let ocrGrayEnabled = true;
@@ -2848,7 +2849,8 @@ function buildDriver() {
                     }
                 }
                 smart = service.recognizeSmart(Object.assign({}, options, {
-                    mode: visionPipelineMode === "legacy" ? "legacy" : "auto"
+                    mode: visionPipelineMode === "legacy" ? "legacy"
+                        : (visionPipelineMode === "glyph" ? "glyph" : "auto")
                 }));
                 if (frameProbeOn) {
                     logLine("[帧探针] 全盘识别后 " + frameProbeActive());
@@ -3210,6 +3212,7 @@ function ensureBoardService() {
                 }
             },
             vision: visionInjection,
+            glyph: glyphSource,
             note: function (text) { logLine(text); }
         }
     });
@@ -3220,9 +3223,23 @@ function ensureBoardService() {
     return boardService;
 }
 
-/** 跟服务要一行限频诊断：到底走的哪条路、流水线自己的账怎么样 */
+/** 跟服务要一行限频诊断：到底走的哪条路、字形/流水线自己的账怎么样 */
 function logPipelineNote(smart) {
-    if (!smart || smart.method !== "vision-pipeline") {
+    if (!smart || !smart.ok) {
+        return;
+    }
+    if (smart.method === "glyph") {
+        if (Date.now() - lastPipelineNoteAt <= 2000) {
+            return;
+        }
+        lastPipelineNoteAt = Date.now();
+        const g = smart.glyphStats || {};
+        logLine("字形识别：触子 " + (g.inked || 0) + "｜未知 " + (smart.unknownCells || 0) +
+            "｜用时 " + (g.ms || 0) + "ms" + (g.retries ? ("（复核 " + g.retries + "）") : "") +
+            "｜验证 " + ((smart.validation && smart.validation.ok) ? "过" : "不过"));
+        return;
+    }
+    if (smart.method !== "vision-pipeline") {
         return;
     }
     if (Date.now() - lastPipelineNoteAt <= 2000) {
@@ -3270,6 +3287,14 @@ const visionCtl = pipelineFactory.create({
             logLine(text);
         }
     }
+});
+
+// 字形识别源（「新的为主」2026-09-24）：模板在工程 assets/glyph-tpl（懒加载）；
+// 服务层 mode="auto" 会先跑它，规则门/未知格不过时自动回退流水线→旧路径。
+const glyphSource = pipelineFactory.createGlyphSource({
+    adapter: adapter,
+    baseDir: BASE_DIR,
+    log: function (text) { logLine(text); }
 });
 
 /**
@@ -5054,18 +5079,27 @@ function main() {
         //    塞在上面的块里会让 visionPipeline 静默不生效（2026-09-20 真机踩过：
         //    日志里没有任何「视觉流水线」字样，驱动其实还在走旧路径）。
         if (auto.visionPipeline != null) {
-            // true / "auto" = 全盘流水线；"diff" = 差分（用户提议：模型只定位一次，棋子靠找色扫描，
-            // 变化的格再 OCR 认兵种）；false = 旧路径。
+            // true / "auto" = 自动（字形识别优先 → 流水线 → 旧路径）；"glyph" = 只走字形；
+            // "diff" = 差分（用户提议：模型只定位一次，棋子靠找色扫描，变化的格再 OCR 认兵种）；false = 旧路径。
             if (auto.visionPipeline === "diff") {
                 visionPipelineMode = "diff";
+            } else if (auto.visionPipeline === "glyph") {
+                visionPipelineMode = "glyph";
             } else {
                 visionPipelineMode = auto.visionPipeline === true ? "auto" : "legacy";
             }
             logLine("视觉链路：" + (visionPipelineMode === "diff"
                 ? "差分（找色扫描定位置，只对变化格 OCR；拿不准就退回全盘）"
-                : (visionPipelineMode === "auto"
-                    ? "流水线（新链路，不可信时自动退回旧路径）"
-                    : "旧识别路径")));
+                : (visionPipelineMode === "glyph"
+                    ? "字形专用（电脑 py 移植；不通过不退回）"
+                    : (visionPipelineMode === "auto"
+                        ? "自动（字形识别优先，不通过回退流水线→旧路径）"
+                        : "旧识别路径"))));
+        }
+        // 字形通道开关（默认开）：autorun 里 `"glyph": false` 可关掉（回退到流水线优先，A/B 对照用）。
+        if (auto.glyph != null) {
+            glyphSource.enabled = auto.glyph !== false;
+            logLine("字形识别：" + (glyphSource.enabled ? "开（默认）" : "关（A/B 对照）"));
         }
         // 逐格 OCR 的灰度重试（落子高亮环格专用）：默认开；autorun 里 `"ocrGray": false` 可关掉，
         // 用于 A/B 对照 —— 或者某次真机上发现它反而把错读数写进观测层时先关。

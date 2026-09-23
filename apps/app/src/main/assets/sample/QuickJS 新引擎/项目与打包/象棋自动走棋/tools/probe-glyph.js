@@ -71,21 +71,9 @@ function makeHost() {
         green: function (pixel) { return colors.green(pixel); },
         blue: function (pixel) { return colors.blue(pixel); },
         resize: function (image, size) { return images.resize(image, size); },
+        read: function (path) { return images.read(path); },
         nowMono: function () { return adapter.nowMono(); }
     };
-}
-
-function loadTemplates() {
-    const out = [];
-    for (let i = 0; i < glyph.TPL_NAMES.length; i++) {
-        const name = glyph.TPL_NAMES[i];
-        const color = images.read(TPL_DIR + "/tpl_" + name + ".png");
-        if (!color) {
-            throw new Error("模板读不到：" + TPL_DIR + "/tpl_" + name + ".png");
-        }
-        out.push({ name: name, image: images.grayscale(color) });
-    }
-    return out;
 }
 
 function truthChars(fen) {
@@ -118,19 +106,21 @@ function runFrame(host, templates, path) {
         return { error: "定位失败：" + located.reason };
     }
     const scale = glyph.scaleFor(located.grid);
-    const prepared = glyph.prepareTemplates(host, templates, scale);
+    const prepared = glyph.prepareFor(host, templates, scale);
     const rec = glyph.recognize(host, image, located.grid, {
-        templates: prepared.templates, TW: prepared.TW, ANCHOR_DY: prepared.ANCHOR_DY
+        templates: prepared.templates, TW: prepared.TW, ANCHOR_DY: prepared.ANCHOR_DY,
+        coarseTemplates: prepared.coarse
     });
     image.recycle();
     rec.scale = scale;
     rec.TW = prepared.TW;
+    rec.coarse = !!prepared.coarse;
     rec.locateMs = located.timing.locateMs;
     return rec;
 }
 
 const host = makeHost();
-const templates = loadTemplates();
+const templates = glyph.loadTemplates(host, TPL_DIR);
 log("模板加载完成：" + templates.length + " 个（" + TPL_DIR + "）");
 
 let totalOk = 0;
@@ -162,6 +152,10 @@ for (let i = 0; i < FRAMES.length; i++) {
         "  定位 " + rec.locateMs + "ms 识别 " + rec.ms + "ms" +
         (Math.abs(rec.scale - 1) >= 0.02 ? ("  缩放 " + rec.scale.toFixed(3)) : ""));
     log("   FEN: " + glyph.charsToFen(rec.chars));
+    if (rec.profile) {
+        log("   分段：门 " + rec.profile.gates + "ms／匹配 " + rec.profile.match +
+            "ms（复核 " + rec.retries + " 次）／阵营 " + rec.profile.side + "ms");
+    }
 }
 log("合计 " + totalOk + "/" + (totalOk + totalBad) + " = " +
     ((totalOk / Math.max(1, totalOk + totalBad)) * 100).toFixed(1) + "%");
@@ -175,6 +169,10 @@ if (extra.error) {
     log("  scale=" + extra.scale.toFixed(3) + " TW=" + extra.TW +
         " 触子 " + extra.inked + " 未知 " + extra.unknown +
         "  定位 " + extra.locateMs + "ms 识别 " + extra.ms + "ms");
+    if (extra.profile) {
+        log("  分段：门 " + extra.profile.gates + "ms／匹配 " + extra.profile.match +
+            "ms（复核 " + extra.retries + " 次）／阵营 " + extra.profile.side + "ms");
+    }
     log("  FEN: " + glyph.charsToFen(extra.chars));
 }
 

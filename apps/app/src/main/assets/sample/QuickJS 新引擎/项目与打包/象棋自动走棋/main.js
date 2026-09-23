@@ -536,6 +536,13 @@ const mainVisionCtl = pipelineFactory.create({
         }
     }
 });
+// 字形识别源（「新的为主」2026-09-24）：模板在工程 assets/glyph-tpl（懒加载）；
+// 服务层 mode="auto" 会先跑它，规则门/未知格不过时自动回退流水线→旧路径。
+const mainGlyphSource = pipelineFactory.createGlyphSource({
+    adapter: adapter,
+    baseDir: (typeof files !== "undefined" && files && typeof files.cwd === "function") ? files.cwd() : ".",
+    log: function (text) { console.log("[xiangqi][glyph] " + text); }
+});
 const visionInjection = {
     pipeline: null,
     gate: null,
@@ -631,7 +638,9 @@ const app = bootstrapModule.createApp({
         },
         note: function (text) { console.log("[xiangqi][board] " + text); },
         // A2：主界面的视觉流水线注入（懒加载；没有就退回 legacy，见 board-service.recognizeSmart）
-        vision: visionInjection
+        vision: visionInjection,
+        // 「新的为主」：字形识别注入（auto 模式先跑它，见 board-service.recognizeSmart）
+        glyph: mainGlyphSource
     }
 });
 const boardService = app.boards;

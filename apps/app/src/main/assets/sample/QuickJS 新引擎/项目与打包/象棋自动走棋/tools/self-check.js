@@ -7329,6 +7329,123 @@ check("识别服务 board-service：流水线可信就用它；不可信回退�
     return true;
 });
 
+check("识别服务 board-service：字形为主（auto 先字形；否决回退流水线；glyph 模式不回退；pipeline 跳过）", function () {
+    const boardService = require("../src/services/board-service.js");
+    const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM", version: 1 };
+    const charsOf = function () {
+        const out = new Array(90);
+        for (let i = 0; i < 90; i++) {
+            out[i] = null;
+        }
+        out[0] = "r";
+        return out;
+    };
+    let glyphRuns = 0;
+    let pipelineRuns = 0;
+    let legacyRuns = 0;
+    const build = function (glyphResult) {
+        return boardService.createBoardService({
+            ports: { now: function () { return Date.now(); }, capture: function () { return { image: {} }; } },
+            locateBoard: { locateBoardInImage: function () { return { ok: true, grid: grid }; } },
+            recognizeBoard: {
+                run: function () {
+                    legacyRuns += 1;
+                    return { ok: true, chars: charsOf(), layout: "", grid: grid, unknownCells: 0 };
+                }
+            },
+            glyph: {
+                recognize: function () {
+                    glyphRuns += 1;
+                    return glyphResult;
+                }
+            }
+        });
+    };
+    // 为了同时注入 vision，单独组装（createBoardService 的参数在创建时就固定）
+    const buildFull = function (glyphResult) {
+        return boardService.createBoardService({
+            ports: { now: function () { return Date.now(); }, capture: function () { return { image: {} }; } },
+            locateBoard: { locateBoardInImage: function () { return { ok: true, grid: grid }; } },
+            recognizeBoard: {
+                run: function () {
+                    legacyRuns += 1;
+                    return { ok: true, chars: charsOf(), layout: "", grid: grid, unknownCells: 0 };
+                }
+            },
+            glyph: {
+                recognize: function () {
+                    glyphRuns += 1;
+                    return glyphResult;
+                }
+            },
+            vision: {
+                pipeline: {
+                    recognize: function () {
+                        pipelineRuns += 1;
+                        return { ok: true, chars: charsOf(), rawChars: charsOf(), validation: { ok: true }, timing: null };
+                    }
+                },
+                gate: {
+                    acceptResult: function (unknown) {
+                        return unknown > 6 ? { ok: false, reason: "未知格 " + unknown + " 个（> 6）" } : { ok: true };
+                    }
+                },
+                countUnknown: function () { return 0; },
+                log: function () { }
+            }
+        });
+    };
+    // ① 字形通过 ⇒ method="glyph"，且**不跑**流水线/旧路径；unknownCells 要透给驱动
+    const chars = charsOf();
+    chars[0] = "n";
+    const good = buildFull({ ok: true, chars: chars, rawChars: chars.slice(), unknownCells: 0, layout: "x", validation: { ok: true }, stats: { ms: 123 } });
+    const r1 = good.recognizeSmart({});
+    if (!r1 || r1.method !== "glyph" || r1.chars[0] !== "n") {
+        return "字形通过时应返回 method=glyph，实际 " + JSON.stringify(r1 && { m: r1.method, c0: r1.chars && r1.chars[0] });
+    }
+    if (pipelineRuns !== 0 || legacyRuns !== 0) {
+        return "字形通过时不该跑流水线/旧路径，实际 流水线 " + pipelineRuns + " 旧路径 " + legacyRuns;
+    }
+    if (r1.unknownCells !== 0 || !r1.validation) {
+        return "字形结果要带 unknownCells/validation（驱动按它们做门）";
+    }
+    // ② 字形被规则门否决 ⇒ 回退流水线（不是直接旧路径）
+    const reject = buildFull({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: false, reason: "红帅数量 0（应为 1）" }, stats: {} });
+    const r2 = reject.recognizeSmart({});
+    if (!r2 || r2.method !== "vision-pipeline") {
+        return "字形被否决时应回退流水线，实际 " + JSON.stringify(r2 && r2.method);
+    }
+    if (glyphRuns !== 2 || pipelineRuns !== 1) {
+        return "字形成被否决那一次应当先跑了字形（共 2 次）再走流水线（1 次），实际 " + glyphRuns + "/" + pipelineRuns;
+    }
+    // ③ 字形未知格超限（gate.acceptResult 驳回）⇒ 也回退
+    const manyUnknown = buildFull({ ok: true, chars: charsOf(), unknownCells: 9, validation: { ok: true }, stats: {} });
+    const r3 = manyUnknown.recognizeSmart({});
+    if (!r3 || r3.method !== "vision-pipeline") {
+        return "字形未知格超限时应回退流水线，实际 " + JSON.stringify(r3 && r3.method);
+    }
+    // ④ mode="glyph" ⇒ 只走字形：不通过直接返回失败（不回退）
+    const strict = buildFull({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: false, reason: "黑将数量 0（应为 1）" }, stats: {} });
+    const r4 = strict.recognizeSmart({ mode: "glyph" });
+    if (!r4 || r4.ok !== false || !/字形识别不通过/.test(String(r4.reason))) {
+        return "mode=glyph 不通过时应直接返回失败，实际 " + JSON.stringify(r4 && { ok: r4.ok, r: r4.reason });
+    }
+    // ⑤ mode="pipeline" ⇒ 跳过字形（A/B 对照用）
+    const skip = buildFull({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: true }, stats: {} });
+    const before = glyphRuns;
+    const r5 = skip.recognizeSmart({ mode: "pipeline" });
+    if (!r5 || r5.method !== "vision-pipeline" || glyphRuns !== before) {
+        return "mode=pipeline 应跳过字形，实际 " + JSON.stringify(r5 && r5.method) + " glyphRuns+" + (glyphRuns - before);
+    }
+    // ⑥ 没有 vision 注入（glyph 专属服务）⇒ auto 也能走字形
+    const only = build({ ok: true, chars: charsOf(), unknownCells: 0, validation: { ok: true }, stats: {} });
+    const r6 = only.recognizeSmart({});
+    if (!r6 || r6.method !== "glyph") {
+        return "只有字形注入时 auto 也应当走字形，实际 " + JSON.stringify(r6 && r6.method);
+    }
+    return true;
+});
+
 check("board-scan：颜色采样跟着 YOLO 定位框走（框心偏 50px 也能采到棋子）", function () {
     const boardScanMod = require("../src/vision/board-scan.js");
     const grid = { originX: 100, originY: 100, stepX: 120, stepY: 120, orientation: "RED_BOTTOM", version: 1 };
@@ -9127,13 +9244,18 @@ check("格线探测器：假宿主端到端恢复棋盘（竖 115 / 横 114）",
 
 // ---------------------------------------------------------------- 字形模板识别（电脑 py 移植）
 
-/** 字形识别的假宿主：按「90 格画像表」回答三道门计数、模板匹配与阵营取样。
- *  cells["r,c"] = { name, sim, side?, dark?, inner?, bright? }（不在表里 = 空格）。 */
+/** 字形识别的假宿主：按「90 格画像表」回答三道门计数、模板匹配（region/裁剪窗/半尺寸）与阵营取样。
+ *  cells["r,c"] = { name, sim, simCoarse?, side?, dark?, inner?, bright?, dy? }（不在表里 = 空格）。
+ *  dy = 该格字形相对基准中心的纵向漂移（模拟 lattice 网格的逐行漂移）。 */
 function makeGlyphFake(options) {
     const opts = options || {};
     const grid = opts.grid || { originX: 100, originY: 100, stepX: 100, stepY: 100 };
     const cells = opts.cells || {};
-    const calls = { matchRegions: [], counts: [], resizes: [], pixels: 0 };
+    const anchorDy = opts.anchorDy == null ? glyphRecognizer.DEFAULTS.ANCHOR_DY : opts.anchorDy;
+    const TW = glyphRecognizer.DEFAULTS.TW;
+    const width = opts.width || 1200;
+    const height = opts.height || 1400;
+    const calls = { matchRegions: [], clips: [], counts: [], resizes: [], pixels: 0, halfMatches: 0 };
     let clock = 0;
     const cellAt = function (r, c) {
         return (r >= 0 && r < 10 && c >= 0 && c < 9) ? (cells[r + "," + c] || null) : null;
@@ -9141,14 +9263,51 @@ function makeGlyphFake(options) {
     const cellOfCell = function (x, y) {      // 格中心（x, y）→ 画像
         return cellAt(Math.round((y - grid.originY) / grid.stepY), Math.round((x - grid.originX) / grid.stepX));
     };
-    const cellOfWindow = function (cx, cy) {  // 搜索窗中心（x, cy=字形中心）→ 画像
+    const cellOfWindow = function (cx, cy) {  // 采样点（x, y≈字形中心）→ 画像
         return cellAt(Math.round((cy + 5 - grid.originY) / grid.stepY), Math.round((cx - grid.originX) / grid.stepX));
+    };
+    /** 某格的「真实字形中心」（格点 + ANCHOR + 可选漂移） */
+    const centerOf = function (key) {
+        const parts = key.split(",");
+        const r = Number(parts[0]);
+        const c = Number(parts[1]);
+        const cell = cells[key] || {};
+        return {
+            x: Math.round(grid.originX + c * grid.stepX),
+            y: Math.round(grid.originY + r * grid.stepY + anchorDy + (cell.dy || 0))
+        };
+    };
+    /** 全尺寸窗匹配语义：模板中心可落在窗口中心 ±(半宽 − TW) 内 */
+    const matchInWindow = function (wx, wy, ww, wh, template, threshold) {
+        let best = null;
+        for (const key in cells) {
+            const cell = cells[key];
+            if (!cell || cell.name !== (template && template.name)) {
+                continue;
+            }
+            const center = centerOf(key);
+            if (Math.abs(center.x - (wx + ww / 2)) > (ww / 2 - TW) ||
+                Math.abs(center.y - (wy + wh / 2)) > (wh / 2 - TW)) {
+                continue;
+            }
+            const sim = cell.sim == null ? 0.9 : cell.sim;
+            if (sim < threshold) {
+                continue;
+            }
+            if (!best || sim > best.sim) {
+                best = { sim: sim, x: center.x, y: center.y };
+            }
+        }
+        return best;
     };
     return {
         calls: calls,
-        sizeOf: function () { return { width: opts.width || 1200, height: opts.height || 1400 }; },
+        sizeOf: function () { return { width: width, height: height }; },
         grayscale: function (image) { return { gray: image }; },
-        clip: function (image, x, y, w, h) { return { kind: "win", cell: cellOfCell(x + w / 2, y + h / 2), width: w }; },
+        clip: function (image, x, y, w, h) {
+            calls.clips.push([x, y, w, h]);
+            return { kind: "win", x: x, y: y, width: w, height: h, cell: cellOfCell(x + w / 2, y + h / 2) };
+        },
         threshold: function (win, t, max) { return { kind: t === 140 ? "dark" : "bright", cell: win.cell, width: win.width }; },
         countColor: function (bin, color, options) {
             const region = options.region;
@@ -9163,26 +9322,61 @@ function makeGlyphFake(options) {
                 }
                 return Math.round((cell.dark == null ? 0.3 : cell.dark) * bin.width * bin.width);
             }
-            if (bin.kind === "bright" && color === "#FFFFFF") {
-                return Math.round((cell.bright == null ? 0.5 : cell.bright) * bin.width * bin.width);
+            if (bin.kind === "bright" && color === "#000000") {
+                // 亮面门：数「≤200 的暗像素」再把亮面算回来
+                return Math.round((1 - (cell.bright == null ? 0.5 : cell.bright)) * bin.width * bin.width);
             }
             return 0;
         },
-        matchTemplate: function (gray, template, options) {
-            const region = options.region;
-            const cx = region[0] + region[2] / 2;
-            const cy = region[1] + region[3] / 2;
-            const tw = region[2] / 2 - glyphRecognizer.DEFAULTS.SEARCH_X;   // 由窗口反推当前 TW
-            calls.matchRegions.push(region);
-            const cell = cellOfWindow(cx, cy);
-            if (!cell || cell.name !== (template && template.name)) {
+        matchTemplate: function (image, template, options) {
+            const threshold = options && options.threshold != null ? options.threshold : 0.7;
+            if (image && image.kind === "half") {
+                // 半尺寸粗搜：窗口/中心都按半坐标（粗模板边长 = TW/2）
+                calls.halfMatches += 1;
+                const region = options.region;
+                const halfSide = TW / 2;
+                const cx = region[0] + region[2] / 2;
+                const cy = region[1] + region[3] / 2;
+                let best = null;
+                for (const key in cells) {
+                    const cell = cells[key];
+                    if (!cell || cell.name !== (template && template.name)) {
+                        continue;
+                    }
+                    const center = centerOf(key);
+                    const hx = center.x / 2;
+                    const hy = center.y / 2;
+                    if (Math.abs(hx - cx) > (region[2] / 2 - halfSide) ||
+                        Math.abs(hy - cy) > (region[3] / 2 - halfSide)) {
+                        continue;
+                    }
+                    const sim = cell.simCoarse == null ? (cell.sim == null ? 0.9 : cell.sim) : cell.simCoarse;
+                    if (sim < threshold) {
+                        continue;
+                    }
+                    if (!best || sim > best.sim) {
+                        best = { sim: sim, x: hx, y: hy };
+                    }
+                }
+                if (!best) {
+                    return { matches: [] };
+                }
+                return { matches: [{ similarity: best.sim, point: { x: best.x - halfSide, y: best.y - halfSide } }] };
+            }
+            let win = null;
+            if (image && image.kind === "win") {
+                win = [image.x, image.y, image.width, image.height];
+            } else if (options && options.region) {
+                win = options.region;
+                calls.matchRegions.push(options.region);
+            } else {
+                win = [0, 0, width, height];
+            }
+            const hit = matchInWindow(win[0], win[1], win[2], win[3], template, threshold);
+            if (!hit) {
                 return { matches: [] };
             }
-            const sim = cell.sim == null ? 0.9 : cell.sim;
-            if (sim < options.threshold) {
-                return { matches: [] };   // 引擎语义：低于门限 = 无匹配
-            }
-            return { matches: [{ similarity: sim, point: { x: cx - tw, y: cy - tw } }] };
+            return { matches: [{ similarity: hit.sim, point: { x: hit.x - win[0] - TW, y: hit.y - win[1] - TW } }] };
         },
         pixel: function (image, x, y) {
             calls.pixels += 1;
@@ -9195,7 +9389,14 @@ function makeGlyphFake(options) {
         red: function (p) { return p.r; },
         green: function (p) { return p.g; },
         blue: function (p) { return p.b; },
-        resize: function (image, size) { calls.resizes.push(size); return { resized: size, of: image }; },
+        resize: function (image, size) {
+            calls.resizes.push(size);
+            // 整帧缩一半 → 半尺寸帧（金字塔粗搜用）；模板缩一半 → 保留 name（粗搜要按名匹配）
+            if (size[0] === Math.round(width / 2) && size[1] === Math.round(height / 2)) {
+                return { kind: "half", of: image };
+            }
+            return { resized: size, of: image, name: image && image.name };
+        },
         nowMono: function () { clock += 5; return clock; }
     };
 }
@@ -9248,17 +9449,17 @@ check("字形识别：端到端（假宿主）——三字判色、低分记未�
     return true;
 });
 
-check("字形识别：搜索窗不对称（横 ±6 / 纵 ±20）与内窗位置（[14,9,40,40]）", function () {
+check("字形识别：窄窗裁剪（横 ±6/纵 ±6）与内窗位置（[14,9,40,40]）", function () {
     const fake = makeGlyphFake({ cells: { "3,3": { name: "卒", sim: 0.9 } } });
     const out = glyphRecognizer.recognize(fake, { color: true },
         { originX: 100, originY: 100, stepX: 100, stepY: 100 }, { templates: glyphMockTemplates() });
     if (out.error) {
         return "识别异常：" + out.error;
     }
-    // 格 (3,3)：x=400、y=400、cy=395 → [400-34-6, 395-34-20, (34+6)*2, (34+20)*2]
-    const region = fake.calls.matchRegions[0];
-    if (!region || region[0] !== 360 || region[1] !== 341 || region[2] !== 80 || region[3] !== 108) {
-        return "搜索窗应为 [360,341,80,108]，实际 " + JSON.stringify(region);
+    // 格 (3,3)：x=400、y=400、cy=395 → 窄窗 [400-34-6, 395-34-6, 80, 80]（落帧内时走裁剪窗）
+    const narrow = fake.calls.clips.filter(function (c) { return c[2] === 80 && c[3] === 80; })[0];
+    if (!narrow || narrow[0] !== 360 || narrow[1] !== 355) {
+        return "窄窗裁剪应为 [360,355,80,80]，实际 " + JSON.stringify(narrow);
     }
     const hasFull = fake.calls.counts.some(function (c) {
         return c.kind === "dark" && c.x === 0 && c.y === 0 && c.w === 68 && c.h === 68;
@@ -9266,11 +9467,143 @@ check("字形识别：搜索窗不对称（横 ±6 / 纵 ±20）与内窗位置�
     const hasInner = fake.calls.counts.some(function (c) {
         return c.kind === "dark" && c.x === 14 && c.y === 9 && c.w === 40 && c.h === 40;
     });
-    if (!hasFull || !hasInner) {
-        return "应分别数「整窗 68×68」与「内窗 [14,9,40,40]」的暗像素";
+    const hasBright = fake.calls.counts.some(function (c) {
+        return c.kind === "bright" && c.w === 68 && c.h === 68;
+    });
+    if (!hasFull || !hasInner || !hasBright) {
+        return "应分别数「整窗 68×68 暗」「内窗 [14,9,40,40] 暗」「亮面（数暗像素算回来）」";
     }
     if (out.chars[30] !== "p") {
         return "r3c3 卒应 → p，实际 " + out.chars[30];
+    }
+    if (out.retries !== 0) {
+        return "0.9 分不该触发复核，实际 " + out.retries;
+    }
+    return true;
+});
+
+check("字形识别：宽窗复核（漂移超出窄窗时靠 ±20 兜住）", function () {
+    const fake = makeGlyphFake({ cells: { "0,3": { name: "卒", sim: 0.93, dy: 12 } } });
+    const out = glyphRecognizer.recognize(fake, { color: true },
+        { originX: 100, originY: 100, stepX: 100, stepY: 100 }, { templates: glyphMockTemplates() });
+    if (out.error) {
+        return "识别异常：" + out.error;
+    }
+    if (out.chars[3] !== "p") {
+        return "r0c3（漂移 12px）应靠宽窗找到 → p，实际 " + out.chars[3];
+    }
+    if (out.retries !== 1) {
+        return "应复核 1 次（窄窗 12>6 出窗），实际 " + out.retries;
+    }
+    const wide = fake.calls.clips.some(function (c) { return c[3] === 108; });
+    if (!wide) {
+        return "复核应使用宽窗（高 108）";
+    }
+    return true;
+});
+
+check("字形识别：行自适应——上一行实测 dy 传给下一行窄窗", function () {
+    const fake = makeGlyphFake({
+        cells: {
+            "4,0": { name: "兵", sim: 0.9, dy: 12 },
+            "4,2": { name: "兵", sim: 0.9, dy: 12 },
+            "5,1": { name: "兵", sim: 0.9, dy: 12 }
+        }
+    });
+    const out = glyphRecognizer.recognize(fake, { color: true },
+        { originX: 100, originY: 100, stepX: 100, stepY: 100 }, { templates: glyphMockTemplates() });
+    if (out.error) {
+        return "识别异常：" + out.error;
+    }
+    if (out.chars[36] !== "P" || out.chars[38] !== "P" || out.chars[46] !== "P") {
+        return "三格都应读出 P，实际 " + out.chars[36] + out.chars[38] + out.chars[46];
+    }
+    if (out.retries !== 1) {
+        return "只应复核 1 次（第一个格子；之后行内/下一行都用窄窗），实际 " + out.retries;
+    }
+    // r5c1：y=600、cy=595、dy=12 → 窄窗中心 607 → 裁剪 [160,567,80,80]
+    const hit = fake.calls.clips.some(function (c) { return c[0] === 160 && c[1] === 567 && c[2] === 80; });
+    if (!hit) {
+        return "r5c1 应使用「上一行 dy=+12」修正后的窄窗 [160,567,80,80]";
+    }
+    return true;
+});
+
+check("字形识别：金字塔——半尺寸粗搜提名 + 全尺寸精修；粗搜没提名则回退全搜", function () {
+    // A) 粗搜提名成功：精修分 0.95 ≥ SAFE，直接采纳（无回退）
+    const fakeA = makeGlyphFake({ cells: { "3,3": { name: "卒", sim: 0.95, simCoarse: 0.8 } } });
+    const tplsA = glyphMockTemplates();
+    const prepA = glyphRecognizer.prepareFor(fakeA, tplsA, 1);
+    const outA = glyphRecognizer.recognize(fakeA, { color: true },
+        { originX: 100, originY: 100, stepX: 100, stepY: 100 },
+        { templates: prepA.templates, TW: prepA.TW, ANCHOR_DY: prepA.ANCHOR_DY, coarseTemplates: prepA.coarse });
+    if (outA.error) {
+        return "识别异常：" + outA.error;
+    }
+    if (outA.chars[30] !== "p") {
+        return "r3c3 应 → p，实际 " + outA.chars[30];
+    }
+    if (outA.retries !== 0) {
+        return "精修分够高不应回退，实际复核 " + outA.retries;
+    }
+    if (fakeA.calls.halfMatches !== 11) {
+        return "粗搜应跑 11 个模板（半尺寸），实际 " + fakeA.calls.halfMatches;
+    }
+    if (prepA.coarse.length !== 11 || prepA.coarse[0].side !== 34) {
+        return "粗模板应为 11 个、边长 34（TW）";
+    }
+
+    // B) 粗搜全部低于门限 → 无提名 → 回退「窄+宽」全搜仍能读出
+    const fakeB = makeGlyphFake({ cells: { "3,3": { name: "卒", sim: 0.95, simCoarse: 0.1 } } });
+    const tplsB = glyphMockTemplates();
+    const prepB = glyphRecognizer.prepareFor(fakeB, tplsB, 1);
+    const outB = glyphRecognizer.recognize(fakeB, { color: true },
+        { originX: 100, originY: 100, stepX: 100, stepY: 100 },
+        { templates: prepB.templates, TW: prepB.TW, ANCHOR_DY: prepB.ANCHOR_DY, coarseTemplates: prepB.coarse });
+    if (outB.error) {
+        return "识别异常：" + outB.error;
+    }
+    if (outB.chars[30] !== "p") {
+        return "回退全搜后应 → p，实际 " + outB.chars[30];
+    }
+    if (outB.retries !== 1) {
+        return "应复核 1 次（金字塔回退），实际 " + outB.retries;
+    }
+    return true;
+});
+
+check("字形识别：normalizeBoard（'.'→null）与未知格计数", function () {
+    const chars = new Array(90).fill(".");
+    chars[0] = "R";
+    chars[10] = "?";
+    const board = glyphRecognizer.normalizeBoard(chars);
+    if (board[0] !== "R" || board[1] !== null || board[10] !== "?") {
+        return "normalizeBoard 不符：" + JSON.stringify([board[0], board[1], board[10]]);
+    }
+    if (glyphRecognizer.countUnknown(board) !== 1) {
+        return "未知格应为 1，实际 " + glyphRecognizer.countUnknown(board);
+    }
+    return true;
+});
+
+check("字形识别：prepareFor 缓存（同缩放比不重复缩放；粗模板随行给出）", function () {
+    const fake = makeGlyphFake({});
+    const tpls = glyphMockTemplates();
+    const p1 = glyphRecognizer.prepareFor(fake, tpls, 1.185);
+    if (p1.TW !== 40 || p1.cached !== false || p1.coarse.length !== 11 || p1.coarse[0].side !== 40) {
+        return "首次准备应为 TW=40 / 非缓存 / 11 粗模板(side 40)，实际 " +
+            JSON.stringify([p1.TW, p1.cached, p1.coarse.length, p1.coarse[0].side]);
+    }
+    if (fake.calls.resizes.length !== 22) {
+        return "应缩放 22 次（11 模板 + 11 粗模板），实际 " + fake.calls.resizes.length;
+    }
+    const p2 = glyphRecognizer.prepareFor(fake, tpls, 1.185);
+    if (p2.cached !== true || fake.calls.resizes.length !== 22) {
+        return "同缩放比应命中缓存且不再缩放";
+    }
+    const p3 = glyphRecognizer.prepareFor(fake, tpls, 1);
+    if (p3.TW !== 34 || p3.cached !== false || fake.calls.resizes.length !== 33) {
+        return "换缩放比应重算（scale≈1 只补 11 个粗模板），实际 resizes=" + fake.calls.resizes.length;
     }
     return true;
 });

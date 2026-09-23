@@ -186,8 +186,137 @@ function create(deps) {
     };
 }
 
+/**
+ * 建「字形识别源」——「新的为主」（2026-09-24）的识别通道：电脑 py 移植的
+ * `glyph-recognizer.js` + 模板加载（assets/glyph-tpl）+ 规则门校验 + 盘面契约归一化。
+ *
+ * 两入口（面板 / 主界面）共用；`board-service.recognizeSmart(mode="auto")` 会先跑它，
+ * 校验不过（规则门否决 / 未知格超限）才退回流水线→旧路径。
+ *
+ * @param deps {
+ *   adapter,   // sizeOf / countColor / nowMono
+ *   baseDir,   // 工程根目录（assets/glyph-tpl 所在）；默认 "."
+ *   host?,     // 测试注入：覆盖默认的 images/colors 宿主映射
+ *   enabled?,  // 默认 true；false = 服务层不走字形（autorun 可关）
+ *   log?
+ * }
+ * @return { enabled, ready(), recognize(image, grid, options), describe() }
+ */
+function createGlyphSource(deps) {
+    const d = deps || {};
+    const log = typeof d.log === "function" ? d.log : function () { };
+    const glyph = require("./glyph-recognizer.js");
+    const boardValidator = require("./board-validator.js");
+    const fenModule = require("../chess/fen.js");
+    const dir = String(d.baseDir || ".").replace(/\/+$/, "") + "/assets/glyph-tpl";
+    let templates = null;
+    let loadError = "";
+    let tried = false;
+
+    function makeHost() {
+        if (d.host) {
+            return d.host;
+        }
+        return {
+            sizeOf: function (image) { return d.adapter.sizeOf(image); },
+            grayscale: function (image) { return images.grayscale(image); },
+            clip: function (image, x, y, w, h) { return images.clip(image, x, y, w, h); },
+            threshold: function (image, t, max) { return images.threshold(image, t, max); },
+            countColor: function (image, color, options) { return d.adapter.countColor(image, color, options); },
+            matchTemplate: function (image, template, options) { return images.matchTemplate(image, template, options); },
+            pixel: function (image, x, y) { return images.pixel(image, x, y); },
+            red: function (pixel) { return colors.red(pixel); },
+            green: function (pixel) { return colors.green(pixel); },
+            blue: function (pixel) { return colors.blue(pixel); },
+            resize: function (image, size) { return images.resize(image, size); },
+            read: function (path) { return images.read(path); },
+            nowMono: function () { return d.adapter.nowMono(); }
+        };
+    }
+
+    const source = {
+        enabled: d.enabled !== false,
+        /** 模板懒加载（第一次识别时）；加载失败只记一次，不再重试。 */
+        ready: function () {
+            if (templates || tried) {
+                return !!templates;
+            }
+            tried = true;
+            try {
+                templates = glyph.loadTemplates(makeHost(), dir);
+                log("字形识别已启用（11 模板：" + dir + "）");
+            } catch (error) {
+                loadError = String(error && error.message ? error.message : error);
+                log("字形识别不可用：" + loadError);
+            }
+            return !!templates;
+        },
+        /**
+         * 识别一帧 → 工程盘面契约（空格 = null、"?" 未知；带 validation/layout/unknownCells/stats）。
+         * @return { ok:true, chars, ... } | { ok:false, reason }
+         */
+        recognize: function (image, grid, options) {
+            if (source.enabled === false) {
+                return { ok: false, reason: "字形识别已关闭" };
+            }
+            if (!source.ready()) {
+                return { ok: false, reason: "字形模板不可用：" + loadError };
+            }
+            const host = makeHost();
+            const scale = glyph.scaleFor(grid);
+            const prepared = glyph.prepareFor(host, templates, scale);
+            const started = host.nowMono();
+            let rec = null;
+            try {
+                rec = glyph.recognize(host, image, grid, {
+                    templates: prepared.templates, TW: prepared.TW, ANCHOR_DY: prepared.ANCHOR_DY,
+                    coarseTemplates: prepared.coarse
+                });
+            } catch (error) {
+                return { ok: false, reason: "字形识别异常：" + (error && error.message ? error.message : error) };
+            }
+            if (!rec || rec.error) {
+                return { ok: false, reason: "字形识别异常：" + ((rec && rec.error) || "没有结果") };
+            }
+            const board = glyph.normalizeBoard(rec.chars);
+            const unknownCells = glyph.countUnknown(board);
+            let layout = "";
+            try {
+                layout = fenModule.layoutOf(board, { allowUnknown: true });
+            } catch (error) {
+                layout = "";
+            }
+            const validation = boardValidator.validate(board, {
+                allowUnknown: true, side: options && options.side
+            });
+            return {
+                ok: true,
+                method: "glyph",
+                chars: board,
+                rawChars: board.slice(),
+                unknownCells: unknownCells,
+                layout: layout,
+                validation: validation,
+                scale: scale,
+                stats: {
+                    ms: host.nowMono() - started,
+                    recognizeMs: rec.ms,
+                    inked: rec.inked,
+                    retries: rec.retries,
+                    profile: rec.profile || null
+                }
+            };
+        },
+        describe: function () {
+            return templates ? "字形识别（电脑 py 移植，11 模板）" : "字形识别（未就绪）";
+        }
+    };
+    return source;
+}
+
 module.exports = {
     create: create,
     createOcrHolder: createOcrHolder,
-    createSamples: createSamples
+    createSamples: createSamples,
+    createGlyphSource: createGlyphSource
 };

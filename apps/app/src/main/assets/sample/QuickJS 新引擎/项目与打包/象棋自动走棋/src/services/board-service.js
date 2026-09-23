@@ -32,6 +32,13 @@ function createBoardService(options) {
      *   }
      */
     const vision = opts.vision || null;
+    /**
+     * 字形识别注入（可选；「新的为主」2026-09-24）：
+     *   glyph = { recognize(image, grid, options) → {ok, chars, unknownCells, validation, layout, stats}, enabled? }
+     * mode="auto"（默认）先跑字形，不通过（规则门否决 / 未知格超限）再回退流水线→旧路径；
+     * mode="glyph" = 只走字形；mode="pipeline" = 跳过字形（A/B）；mode="legacy" = 旧路径。
+     */
+    const glyph = opts.glyph || null;
 
     let grid = null;
     let lastResult = null;
@@ -207,11 +214,12 @@ function createBoardService(options) {
     function recognizeSmart(options) {
         const cb = options || {};
         const wanted = cb.mode || "auto";
-        // 分段计时（方案 §7）：抓帧 / 稳定帧 / 流水线 / 退回旧路径 各花多少
+        // 分段计时（方案 §7）：抓帧 / 稳定帧 / 字形 / 流水线 / 退回旧路径 各花多少
         const clock = timing.create();
         lastTimingDetail = null;
-        const pipelineReady = !!(vision && vision.pipeline && vision.pipelineEnabled !== false);
-        if (!pipelineReady || wanted === "legacy") {
+        const glyphReady = !!(glyph && glyph.enabled !== false && typeof glyph.recognize === "function");
+        const pipelineReady = !!(vision && vision.pipeline && vision.pipelineEnabled !== false && wanted !== "glyph");
+        if ((!glyphReady && !pipelineReady) || wanted === "legacy") {
             const legacyResult = recognizeLegacy(cb);
             clock.mark("回退旧路径");
             rememberTiming(clock, legacyResult);
@@ -232,7 +240,7 @@ function createBoardService(options) {
             return { ok: false, reason: "识别失败：拿不到帧" };
         }
         // ① 稳定帧闸门（方案 §3.1）：动画中间帧上读出来的东西会把已知事实弄脏，宁可不观察
-        const gate = vision.gate || null;
+        const gate = (vision && vision.gate) || null;
         if (gate && typeof gate.check === "function") {
             const samples = typeof vision.samples === "function" ? vision.samples(grabbed.image, grid) : null;
             const verdict = gate.check(lastSamples, samples, "board");
@@ -250,7 +258,59 @@ function createBoardService(options) {
             }
         }
         clock.mark("稳定帧");
-        // ② 流水线
+        // ② 字形识别（新的主路）：规则门 + 未知格闸门都过才算数；否则按模式回退
+        let glyphReject = "";
+        if (glyphReady && wanted !== "pipeline") {
+            let g = null;
+            try {
+                g = glyph.recognize(grabbed.image, grid, { side: cb.side });
+            } catch (error) {
+                g = { ok: false, reason: "字形识别异常：" + (error && error.message ? error.message : error) };
+            }
+            const gUnknown = (g && g.ok && typeof g.unknownCells === "number")
+                ? g.unknownCells
+                : ((g && g.ok && g.chars && vision && typeof vision.countUnknown === "function")
+                    ? vision.countUnknown(g.chars) : null);
+            const gAccepted = (g && g.ok && gate && typeof gate.acceptResult === "function" && gUnknown != null)
+                ? gate.acceptResult(gUnknown)
+                : { ok: true };
+            if (g && g.ok && g.validation && g.validation.ok && gAccepted.ok) {
+                clock.mark("字形识别");
+                lastTimingDetail = {
+                    smart: clock.summary("收尾"),
+                    pipeline: null,
+                    legacy: false,
+                    glyph: g.stats || null
+                };
+                return {
+                    ok: true,
+                    method: "glyph",
+                    grid: grid,
+                    chars: g.chars,
+                    rawChars: g.rawChars || g.chars.slice(),
+                    unknownCells: gUnknown == null ? 0 : gUnknown,
+                    layout: g.layout || null,
+                    validation: g.validation,
+                    glyphStats: g.stats || null,
+                    imageObject: grabbed.image,
+                    frameObject: grabbed.image,
+                    frame: grabbed
+                };
+            }
+            glyphReject = (g && g.ok)
+                ? ((g.validation && g.validation.reason) || gAccepted.reason || "未说明")
+                : ((g && g.reason) || "没有结果");
+            if (wanted === "glyph") {
+                clock.mark("字形识别");
+                rememberTiming(clock, null);
+                return { ok: false, reason: "字形识别不通过：" + glyphReject };
+            }
+            if (glyphReject && vision && vision.log && ports.now() - lastFallbackNoteAt > 5000) {
+                lastFallbackNoteAt = ports.now();
+                vision.log("字形识别不通过 ⇒ 回退" + (pipelineReady ? "流水线" : "旧路径") + "：" + glyphReject);
+            }
+        }
+        // ③ 流水线
         let result = null;
         try {
             result = vision.pipeline.recognize(grabbed.image, grid, { side: cb.side });
