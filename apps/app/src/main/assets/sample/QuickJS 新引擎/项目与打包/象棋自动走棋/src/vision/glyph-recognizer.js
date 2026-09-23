@@ -274,6 +274,7 @@ function matchPyramid(host, grayFrame, halfFrame, x, cy, templates, coarse, opts
     cands.sort(function (a, b) { return b.sim - a.sim; });
     const top = Math.min(cands.length, pick(opts, "PYRAMID_TOP"));
     const r = pick(opts, "PYRAMID_R");
+    const safe = pick(opts, "SAFE_CONF");
     let best = null;
     for (let k = 0; k < top; k++) {
         const ref = bestMatch(host, grayFrame, cands[k].cx, cands[k].cy, [templates[cands[k].index]], {
@@ -281,6 +282,10 @@ function matchPyramid(host, grayFrame, halfFrame, x, cy, templates, coarse, opts
         }, size);
         if (ref && (!best || ref.sim > best.sim)) {
             best = ref;
+        }
+        // 提前收敛：精修分已经「可信」就不再精修剩下的提名（正常格只精修 1 个）
+        if (best && best.sim >= safe) {
+            break;
         }
     }
     return best;

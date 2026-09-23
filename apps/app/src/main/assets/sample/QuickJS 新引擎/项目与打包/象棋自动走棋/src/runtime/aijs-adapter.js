@@ -119,6 +119,8 @@ function capabilities() {
         imagesPixel: typeOf("images.pixel") === "function",
         /** 引擎找色（红黑判色走它；没有就只能退回逐点采样） */
         countColor: typeOf("images.findAllPointsForColor") === "function",
+        /** 原生计数（`images.countColor`，无对象分配）：找色类判定的快通道 */
+        countColorNative: typeOf("images.countColor") === "function",
         imagesFromBase64: typeOf("images.fromBase64") === "function",
         filesPath: typeOf("files.path") === "function",
         filesRead: typeOf("files.read") === "function",
@@ -638,20 +640,20 @@ function rgbAt(image, x, y) {
 }
 
 /**
- * 数「区域内与目标色相近的像素个数」——引擎自带的**找色**（`images.findAllPointsForColor`）。
+ * 数「区域内与目标色相近的像素个数」——**原生计数**（`images.countColor`；旧引擎回退找色点数组）。
  *
- * 为什么不用逐点 `rgbAt`：一个棋子中心区 ≈ 68×68 ≈ 4600 个点，逐点在 JS 里问一遍要几十毫秒；
- * 找色是**原生实现**（`modules/engine/src/main/cpp/native_frame_store.cpp`），
- * 一次调用就扫完一个区域，只把命中点交回 JS。
- * 新引擎的找色示例：`sample/QuickJS 新引擎/图色处理/02-截图找色与多点找色.js`。
+ * 为什么不用逐点 `rgbAt`：一个棋子中心区 ≈ 68×68 ≈ 4600 个点，逐点在 JS 里问一遍要几十毫秒。
+ * 为什么优先 `images.countColor`（2026-09-24 新增）：`findAllPointsForColor` 会为**每个命中点**
+ * 在 JS 侧建一个对象（大面积高命中时是分配风暴；象棋字形识别的门实测被它拖到 ~60ms），
+ * countColor 是纯原生计数、不建任何对象；两者都在 `modules/engine/src/main/cpp/native_frame_store.cpp`。
  *
  * @param image  帧（与 `images.pixel` 同一个对象）
  * @param color  参考色（'#RRGGBB' / 0xAARRGGBB）
  * @param options { region: {x,y,width,height} 或 [x,y,w,h], threshold: 每通道容差 }
- * @return 命中像素数；宿主没有找色能力时返回 **null**（调用方据此回退到采样通道）
+ * @return 命中像素数；宿主没有任何计数能力时返回 **null**（调用方据此回退到采样通道）
  */
 function countColor(image, color, options) {
-    if (!image || typeOf("images.findAllPointsForColor") !== "function") {
+    if (!image) {
         return null;
     }
     const opts = options || {};
@@ -661,11 +663,25 @@ function countColor(image, color, options) {
             region.width != null ? region.width : region[2],
             region.height != null ? region.height : region[3]]
         : null;
+    const request = {
+        region: regionArray,
+        threshold: opts.threshold == null ? 24 : opts.threshold
+    };
+    // 原生计数（`images.countColor`，无对象分配）优先：findAllPointsForColor 会为**每个命中点**
+    // 建一个 JS 对象，大面积高命中数时开销远大于扫描本身（象棋字形识别的门就是被它拖到 ~60ms）。
+    if (typeOf("images.countColor") === "function") {
+        try {
+            const count = globals.images.countColor(image, color, request);
+            return count == null ? null : count;
+        } catch (error) {
+            // 落到下面的回退（旧引擎/异常）
+        }
+    }
+    if (typeOf("images.findAllPointsForColor") !== "function") {
+        return null;
+    }
     try {
-        const points = globals.images.findAllPointsForColor(image, color, {
-            region: regionArray,
-            threshold: opts.threshold == null ? 24 : opts.threshold
-        });
+        const points = globals.images.findAllPointsForColor(image, color, request);
         return points ? points.length : 0;
     } catch (error) {
         return null;
