@@ -53,7 +53,7 @@ flowchart LR
 
 | 源 | 数据来源 | 说明 |
 |---|---|---|
-| 自建源 | `update.json` 的 `oldVersions[].{versionCode, versionName, date, issues}` | `serve-updates.ps1` / `dev-update.ps1` 每次发布都会把「本次版本 + 日期 + 更新说明」追加进同目录的 `update-history.json`（新到旧、按 versionCode 去重、默认 30 条，`-HistoryLimit` 可调）并同步写回 `oldVersions` |
+| 自建源 | `update.json` 的 `oldVersions[].{versionCode, versionName, date, issues}` | `serve-updates.ps1` / `dev-update.ps1` 每次发布都会把「本次版本 + 日期 + 更新说明」追加进同目录的 `update-history.json`（新到旧、按 versionCode 去重、默认保留全部；仅显式指定正数 `-HistoryLimit` 才截断）并同步写回 `oldVersions`，自动生成完整 `release-history.html` |
 | GitHub 内置源 | 发布列表（`releases?per_page=30`） | 取第一个非草稿/非预发布为「最新版本」，其余比它旧的发布组成历史；日期取 `published_at` 前 10 位 |
 
 > 历史里不会重复显示「正在安装的那个版本」（它就是弹窗上半部的「本次更新」），
