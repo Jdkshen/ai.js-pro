@@ -5746,6 +5746,7 @@ const moveLedgerModule = require("../src/chess/move-ledger.js");
 const positionTrackerModule = require("../src/services/position-tracker.js");
 const attemptBudgetModule = require("../src/automation/attempt-budget.js");
 const crossFrameGateModule = require("../src/automation/cross-frame-gate.js");
+const frameConsensusModule = require("../src/automation/frame-consensus.js");
 
 check("框架·文案：未知状态要原样返回，不能悄悄变成「未知」把新状态藏起来", function () {
     if (labelsModule.stateText("CLICKING") !== "点击中") {
@@ -6336,6 +6337,28 @@ check("跨帧佐证门：同一解释要连续两帧；应手同理；换键/ re
     if (gate.replyCorroborated(null).ok !== false) { return "空键不应通过"; }
     gate.reset("测试");
     return gate.supportedByTwoFrames(["board"], "唯一合法单步 a0a1").ok ? "reset 后应重新计数" : true;
+});
+
+check("连续帧共识账本：同帧重复不刷数 / 跨帧同票+1 / 换字矛盾票重置 / drop 清格", function () {
+    const cons = frameConsensusModule.createFrameConsensus({});
+    cons.beginFrame(100);
+    const a1 = cons.vote(5, "C", 2);
+    const a2 = cons.vote(5, "C", 2);
+    if (a1.ok || a1.frames !== 1) { return "首票应 1 帧、未过闸"; }
+    if (a2.frames !== 1 || a2.ok) { return "同一帧重复问不应刷计数：" + JSON.stringify(a2); }
+    cons.beginFrame(101);
+    const b = cons.vote(5, "C", 2);
+    if (!b.ok || b.frames !== 2) { return "跨帧同票应过闸：" + JSON.stringify(b); }
+    cons.beginFrame(102);
+    const c = cons.vote(5, "c", 2);
+    if (!c.unstable || c.frames !== 1) { return "换字票应 unstable 且重置为 1：" + JSON.stringify(c); }
+    const c2 = cons.vote(5, "c", 2);
+    if (!c2.unstable || c2.frames !== 1) { return "不稳的票再重复也不该算稳：" + JSON.stringify(c2); }
+    cons.drop(5);
+    const d = cons.vote(5, "C", 2);
+    if (d.frames !== 1) { return "drop 后应从 1 重新计数：" + JSON.stringify(d); }
+    cons.clear();
+    return cons.snapshot().gate["5"] === undefined ? true : "clear 应清空共识";
 });
 
 // ---------------------------------------------------------------- 识别绘制（人审用）

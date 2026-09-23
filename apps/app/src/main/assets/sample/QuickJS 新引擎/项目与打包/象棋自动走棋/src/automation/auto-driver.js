@@ -31,6 +31,7 @@ const defaults = require("../util/defaults.js");
 const logRing = require("../diagnostics/log-ring.js");
 const attemptBudgetModule = require("./attempt-budget.js");
 const crossFrameGateModule = require("./cross-frame-gate.js");
+const frameConsensusModule = require("./frame-consensus.js");
 
 /**
  * 合法棋子字符（FEN 字母，大写红、小写黑）。
@@ -651,12 +652,10 @@ function createDriver(options) {
     let lastOcrGateNoteAt = 0;
 
     /**
-     * 全盘 OCR 补正的「连续帧共识」账本：index → { char, frames, frameKey }。
+     * 全盘 OCR 补正的「连续帧共识」账本（实现见 frame-consensus.js）：
      * 只在 `applyOcrBoardFixes` 里维护；每格变一次结论就重置为 1 帧。
      */
-    let ocrPatchGate = {};
-    /** 没带 `at` 的宿主（自检/夹具）用「本次询问」当一帧：每次询问 +1 */
-    let ocrPatchSeq = 0;
+    const frameConsensus = frameConsensusModule.createFrameConsensus();
     /** 「颜色抖动按住」日志限频时间戳 */
     let lastFlapNoteAt = 0;
     /**
@@ -766,7 +765,7 @@ function createDriver(options) {
         }
         lastReliable = { board: lastBoard.slice(), side: machine.mySide() };
         trackAdopt(lastBoard, machine.mySide(), { reason: "declare-idle", source: "manual-confirmed" });
-        ocrPatchGate = {};
+        frameConsensus.clear();
         phantomStreak = {};
         needFreshBaseline = false;
         note((effect.reason || "等对方空闲超时") + "：已按当前局面重立基准并翻到我方");
@@ -2696,25 +2695,13 @@ function createDriver(options) {
         const pendingNotes = [];
         const flipBlockedNotes = [];
         // 帧标识：面板给了 `at`（命中缓存时它不变）就用它；没给（自检/夹具）用「本次询问」当一帧
-        const frameKey = board.at != null ? ("t" + board.at) : ("q" + (++ocrPatchSeq));
+        frameConsensus.beginFrame(board.at);
         /**
-         * 「同一格连续 N 帧说同一个字」闸门。
-         * 同一帧重复问不会把计数刷上去（`frameKey` 相同），所以缓存命中/逐帧重复询问都不能凑数。
+         * 「同一格连续 N 帧说同一个字」闸门（实现见 frame-consensus.js：
+         * 同帧重复问不刷计数；矛盾票标记 unstable 并重置）。
          */
         const consensus = function (index, ch, needed) {
-            const prev = ocrPatchGate[index];
-            let frames = 1;
-            let unstable = false;
-            if (prev && prev.char === ch) {
-                frames = prev.frameKey === frameKey ? prev.frames : prev.frames + 1;
-                // 连续两帧同票才算「稳」；单票重现不算
-                unstable = !!prev.unstable && frames < 2;
-            } else if (prev && prev.frameKey !== frameKey) {
-                // 这一票与上一票**矛盾**（同格同一帧里给出不同字）⇒ 这格的字形/颜色证据自己不稳
-                unstable = true;
-            }
-            ocrPatchGate[index] = { char: ch, frames: frames, frameKey: frameKey, unstable: unstable };
-            return { ok: frames >= needed, frames: frames, needed: needed, unstable: unstable };
+            return frameConsensus.vote(index, ch, needed);
         };
         /** 同步改正可靠基准那一格（OCR 是字形证据；基准错了的话，票据期望也跟着错） */
         const fixBaseline = function (index, ch) {
@@ -3748,7 +3735,7 @@ function createDriver(options) {
                 dropped += 1;
                 // 那格的子已经走了 ⇒ 补正的「连续帧共识」也一并作废，
                 // 否则上一段共识会在下一枚子到达时被直接拿来用
-                delete ocrPatchGate[patch.index];
+                frameConsensus.drop(patch.index);
                 continue;
             }
             keep.push(patch);
@@ -3803,9 +3790,7 @@ function createDriver(options) {
     function rebuildBaselineFrom(board) {
         const dropped = knownPatches ? knownPatches.length : 0;
         knownPatches = [];
-        for (const key in ocrPatchGate) {
-            delete ocrPatchGate[key];
-        }
+        frameConsensus.clear();
         // ★ 重建基准用的是**这一帧的读数**，可高亮环/装饰会让模型把子读错（真机 2026-09-20：
         //   我方刚落下的炮被读成黑卒）⇒ 基准被写坏 ⇒ 下一帧起「既有合法单步也解释不了 4 格差异」
         //   ⇒ 又恢复、又重建 —— 循环。判据要的是**直接证据**：
@@ -4727,7 +4712,7 @@ function createDriver(options) {
             pendingCompute = null;
             pendingMate = null;
             knownPatches = [];
-            ocrPatchGate = {};
+            frameConsensus.clear();
             phantomStreak = {};
             needFreshBaseline = false;
             prevOccupancy = null;
@@ -4739,7 +4724,7 @@ function createDriver(options) {
             machine.setMySide(side);
             lastReliable = null;
             trackClear("side-switch", true);
-            ocrPatchGate = {};
+            frameConsensus.clear();
             phantomStreak = {};
             needFreshBaseline = false;
             pendingMate = null;
@@ -4768,7 +4753,7 @@ function createDriver(options) {
             lastReliable = { board: lastBoard.slice(), side: machine.mySide() };
             trackAdopt(lastBoard, machine.mySide(), { reason: "assert-turn", source: "manual-confirmed" });
             // 声明后是一张**新基准**：旧的「连续帧共识」不再适用，清掉重算
-            ocrPatchGate = {};
+            frameConsensus.clear();
             phantomStreak = {};
             needFreshBaseline = false;
             note("用户声明轮到" + (machine.mySide() === "w" ? "红方（我方）" : "黑方（我方）"));
@@ -4788,7 +4773,7 @@ function createDriver(options) {
             pendingMate = null;
             planHistory.clear();
             knownPatches = [];
-            ocrPatchGate = {};
+            frameConsensus.clear();
             phantomStreak = {};
             needFreshBaseline = false;
             settledRaw = null;
