@@ -46,6 +46,18 @@
 /release/
 /captures/
 
+# 本地大体积产物 / 误生成目录（不属于源码，不随仓库分发）
+# None/ = 某次 ai 工具在错误 cwd 下生成的缓存；org/ = javac 编译的 .class；META-INF/ = zip 工具残留
+/None/
+/META-INF/
+/org/
+/output/
+/runs/
+/bench.raw
+/yolo26s.pt
+/chess-preview/
+__pycache__/
+
 # Local diagnostics and archived deliverables
 /.artifacts/
 /.codex-artifacts/
