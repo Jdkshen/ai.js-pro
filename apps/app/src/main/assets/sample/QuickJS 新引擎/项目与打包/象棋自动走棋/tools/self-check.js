@@ -9010,7 +9010,7 @@ check("格线探测器：半格诱饵不许胜出（真梳 115 vs 半格梳 57.5
     return true;
 });
 
-check("格线探测器：外侧两线被整行棋子压住时锚点不许偏、matched 仍 10/10（2026-09-24 真机回放）", function () {
+check("格线探测器：外侧两线被整行棋子压住时锚点不许偏、证据仍 10/10（2026-09-24 真机回放）", function () {
     // 真机四张截图的共性：起始局面首末两行整行摆满棋子，外线只剩 ~22% 支撑度（0.3 vs 1.3）
     const truth = [695, 809.3, 923.6, 1037.9, 1152.2, 1266.5, 1380.8, 1495.1, 1609.4, 1723.7];
     const centers = truth.map(function (at, i) {
@@ -9026,16 +9026,15 @@ check("格线探测器：外侧两线被整行棋子压住时锚点不许偏、m
     if (Math.abs(fit.best.origin - 695) > 3) {
         return "锚点应 ≈695（不许被 ±1 格距平移梳抢走），实际 " + fit.best.origin.toFixed(1);
     }
-    if (latticeDetector.matchedCount(fit.best.perLine, {}) !== 10) {
-        return "外线被压住仍应算命中（10/10），实际 " + latticeDetector.matchedCount(fit.best.perLine, {});
-    }
-    if (latticeDetector.presenceCount(fit.best.perLine, {}) !== 10) {
-        return "被压住的线（0.3/1.3≈23%）应算存在，实际 " + latticeDetector.presenceCount(fit.best.perLine, {});
+    // 入口门槛（matched）与平移加成共用同一个「存在的线」判据（lineEvidence.present）
+    const present = latticeDetector.lineEvidence(fit.best.perLine, {}).present;
+    if (present !== 10) {
+        return "外线被压住仍应算存在（10/10），实际 " + present;
     }
     return true;
 });
 
-check("格线探测器：真缺线时 matched 掉下门槛（横线 9/10 不许凑）", function () {
+check("格线探测器：真缺线时证据掉下门槛（横线 9/10 不许凑）", function () {
     const truth = [695, 809.3, 923.6, 1037.9, 1152.2, 1266.5, 1380.8, 1495.1, 1609.4, 1723.7];
     const centers = truth.map(function (at, i) {
         const missing = (i === 3 || i === 6);   // 两条内部线真的没有（如被弹窗盖死）
@@ -9046,32 +9045,33 @@ check("格线探测器：真缺线时 matched 掉下门槛（横线 9/10 不许�
     if (!fit.best) {
         return "没出候选";
     }
-    const matched = latticeDetector.matchedCount(fit.best.perLine, {});
-    if (matched > 8) {
-        return "两条线真缺失时 matched 应 ≤8（门槛 9/10），实际 " + matched;
+    const present = latticeDetector.lineEvidence(fit.best.perLine, {}).present;
+    if (present > 8) {
+        return "两条线真缺失时证据应 ≤8（门槛 9/10），实际 " + present;
     }
     return true;
 });
 
-check("格线探测器：matchedCount / presenceCount 口径（22% 支持度算命中、空槽与噪声不算）", function () {
+check("格线探测器：lineEvidence 口径（22% 支持度算存在、空槽与纯噪声不算）", function () {
     const perLine = [0.55, 2.5, 2.2, 1.8, 2.4, 1.9, 2.6, 2.1, 2.3, 0.6];
-    if (latticeDetector.matchedCount(perLine, {}) !== 10) {
-        return "0.55/2.5=22% 的外线应算命中";
+    if (latticeDetector.lineEvidence(perLine, {}).present !== 10) {
+        return "0.55/2.5=22% 的外线应算存在";
     }
-    if (latticeDetector.matchedCount([0.55, 2.5, 2.2, 1.8, 2.4, 1.9, 2.6, 2.1, 2.3, 0.02], {}) !== 9) {
-        return "空槽（0.02）不许算命中";
+    if (latticeDetector.lineEvidence([0.55, 2.5, 2.2, 1.8, 2.4, 1.9, 2.6, 2.1, 2.3, 0.02], {}).present !== 9) {
+        return "空槽（0.02）不许算存在";
     }
-    if (latticeDetector.presenceCount([0, 0.65, 2.7, 2.2, 1.4, 0], {}) !== 4) {
-        return "presenceCount 应为 4（0.65 算存在、0.0 不算）";
+    if (latticeDetector.lineEvidence([0, 0.65, 2.7, 2.2, 1.4, 0], {}).present !== 4) {
+        return "0.65 算存在、0.0 不算（应 4 条）";
     }
     // 纯噪声图（2026-09-24「回到应用」文件列表截图实测：全线 0.01~0.02）：相对门槛会降到 0.004，
-    // 全部「命中」→ 必须靠绝对下限（minLineSupport=0.15）全部拦下
+    // 全部「存在」→ 必须靠绝对下限（minLineSupport=0.15）全部拦下
     const noise = [0.01, 0.02, 0.01, 0.02, 0.01, 0.02, 0.01, 0.02, 0.02, 0.02];
-    if (latticeDetector.matchedCount(noise, {}) !== 0) {
-        return "纯噪声（0.01~0.02）不许算命中，实际 " + latticeDetector.matchedCount(noise, {});
+    if (latticeDetector.lineEvidence(noise, {}).present !== 0) {
+        return "纯噪声（0.01~0.02）不许算存在，实际 " + latticeDetector.lineEvidence(noise, {}).present;
     }
-    if (latticeDetector.presenceCount(noise, {}) !== 0) {
-        return "纯噪声不许算「存在的线」，实际 " + latticeDetector.presenceCount(noise, {});
+    // 强线（≥最强线×0.3）只算 3 条（2.7/2.2/1.4），0.65 不算
+    if (latticeDetector.lineEvidence([0, 0.65, 2.7, 2.2, 1.4, 0], {}).strong !== 3) {
+        return "强线应为 3 条，实际 " + latticeDetector.lineEvidence([0, 0.65, 2.7, 2.2, 1.4, 0], {}).strong;
     }
     return true;
 });

@@ -9,11 +9,11 @@
  *   · **梳状（comb）评分**：一次同时评 9 条竖线（10 条横线）的位置，origin/step 全搜，
  *     用 trimmed 求和丢掉最弱的几条线 —— 棋子盖掉 2 条线也照样打分。
  *     旧路的「线条数必须 9/10」会因为遮挡直接判失败（720p 上偏 4% 就报「竖线只匹配 6/9」）。
- *   · **「存在的线」加成 + 遮挡感知门槛（2026-09-24 真机回放修复）**：trimmed 求和会把
- *     「一条线空掉（0.00）」和「一条线被棋子压住（0.5+）」同分 → 平移一格的梳子与真梳
- *     三连平局（靠扫描顺序瞎选，实测四张真实截图里两张因此偏了一整格）。现用「存在的线」
- *     条数加成（presenceCount）让真梳胜出；命中门槛用 0.2×前 3 强均值而不是 0.35 ——
- *     起始局面外侧两行整行摆满棋子，那两条线只剩 ~22% 支撑度，0.35 会把它们全判缺失。
+ *   · **统一的「线证据」判据（2026-09-24 真机回放修复）**：一条线是否「存在」= 支持度 ≥
+ *     max(最强线×presenceRatio, minLineSupport)。trimmed 求和会把「空槽 0.00」与「被压线 0.5+」
+ *     同分（±1 格距平移梳三连平局、靠扫描顺序瞎选），存在的线多 1~2 条的真梳靠加成胜出；
+ *     入口门槛（matched）与平移加成共用这一个判据。历史口径「前 3 强均值×0.35」曾把
+ *     起始局面被整行棋子压住的外线（~22% 支撑度）全判缺失（四张实拍全拒）。
  *
  * 几何先验（实测，不是猜的）：
  *   · 棋盘**水平居中**（K40 1080：竖线起点 82；格距 115.9 ≈ 1080×0.1073）；
@@ -46,28 +46,26 @@ const DEFAULTS = {
     minVerticalMatched: 8,
     minHorizontalMatched: 9,
     /**
-     * matched 门槛（相对前 3 强线均值）：支持度低于它的线不算「命中的线」。
-     * ⚠️ 0.35 → 0.2（2026-09-24 真机回放）：起始局面首末两行整行摆满棋子，
-     * 最外两条横线只剩 ~22% 支撑度（0.5~0.9 vs 内部 2~2.8），0.35 会把棋盘线全在的
-     * 四张真实截图误判成 8/10 直接拒绝；而「空槽」（梳子滑出棋盘）只有 0~0.04，
-     * 0.2 落在两个量级中间。
-     */
-    matchedRatio: 0.2,
-    /**
-     * 单条线的「绝对最小支持度」：低于它的位置一律不算命中/存在。
-     * ⚠️ 纯相对口径在全噪声图上会翻车（2026-09-24 实测「回到应用」文件列表截图：
-     * 全线 0.01~0.02 → 前 3 强均值 0.02 → 相对门槛 0.004 → 10/10「全命中」→ 误判为棋盘）。
-     * 真机实测：空槽 ≤0.04、被棋子压住的线 0.52+ —— 0.15 落在两个量级中间。
-     */
-    minLineSupport: 0.15,
-    /**
-     * 「存在的线」门槛（相对最强线）与加成（每条）—— 破解「±1 格距平移梳」平局：
-     * trimmed 求和把「一条线空掉（0.00）」与「一条线被棋子压住（0.5+）」同分，
-     * 平移到棋盘外的梳子与真梳完全打平（实测锚点 -1/0/+1 三连平局）。
-     * 真梳比平移梳多 1~2 条「存在的线」（空槽 0~0.04 永远不达标），靠这个加成胜出。
+     * 「线证据」判据（一个概念两用；2026-09-24 归并前是 strong / presence / matched 三套口径）：
+     *   · 存在的线（present）：支持度 ≥ max(最强线 × presenceRatio, minLineSupport)。
+     *     ① 锚点选择：trimmed 求和把「空槽 0.00」与「被棋子压住 0.5+」同分，±1 格距平移梳
+     *        与真梳三连平局（靠扫描顺序瞎选）→ 存在的线多 1~2 条的真梳靠加成胜出；
+     *     ② 入口门槛（summarize 里的 matched）：存在线数 < minVerticalMatched /
+     *        minHorizontalMatched 即拒绝（两者共用同一个判据，实测全样本结论一致）。
+     *   · 强线（strong）：支持度 ≥ 最强线 × strongRatio，额外加权 —— 除平局外它还兜住
+     *     锚点细修精度（实测去掉强线加成后 scr-now 锚点偏 13.5px）。
+     * 真机标定：空槽 ≤0.04、被棋子压住的线 0.52+、干净线 1.5~2.8；起始局面外线被整行棋子
+     * 压住只剩 ~22% 支撑度——历史口径「前 3 强均值×0.35」会把它误判成缺失（四张实拍全拒）。
      */
     presenceRatio: 0.15,
     presenceBonus: 0.05,
+    strongRatio: 0.3,
+    strongBonus: 0.05,
+    /**
+     * 单条线「存在」的绝对下限：纯相对口径在全噪声图上会「全命中」
+     * （实测文件列表 UI 全线 0.01~0.02 → 相对门槛 0.004 → 10/10 假命中）。
+     */
+    minLineSupport: 0.15,
     /** 条带半宽：2*half+1 列（行）合起来数色，抗 1px 抖动/抗锯齿。 */
     stripHalf: 1,
     /** 扫描带（占屏幕比例）：横 0~100%，纵 12%~92%（排除状态栏/底部手势带）。 */
@@ -79,14 +77,6 @@ const DEFAULTS = {
     /** 梳状评分：取样窗口（±像素）与丢弃条数（trimmed）。 */
     sampleWindow: 4,
     dropCount: 2,
-    /**
-     * 强线加成（打破「±1 条平移梳」的精确平局，2026-09-22 调试发现）：
-     * 平移一条线的梳子会把一条线「空」出来，而 trimmed 求和与「被棋子盖住」完全同分
-     * ——调试实测：(82,115) 与 (-33,115) 得分一模一样，谁先被扫到谁是「最优」。
-     * 加上「强线（≥ 最强线 × strongRatio）每条 +strongBonus」后，真梳（强线多一条）胜出。
-     */
-    strongRatio: 0.3,
-    strongBonus: 0.05,
     /** 粗扫 origin 步长（像素）与细修。
      *  ⚠️ 真机 2026-09-22：originStep=2 + stepInc=0.5 时拟合要 1.5~1.7s（16k 次候选），
      *  而粗扫只负责「找到大致位置」——精度由细修（±originStep 的插值细扫 + 平顶中心化）
@@ -169,72 +159,36 @@ function accumulator(drop) {
     };
 }
 
-/** 强线计数（≥ 最强线 × strongRatio 的线）——用于打破平移梳的同分平局。 */
-function strongCount(values, options) {
+/**
+ * 一条轴的「线证据」计数（一次扫描算两档，口径见 DEFAULTS 说明）：
+ * present = 存在的线（≥ max(最强线×presenceRatio, minLineSupport)）；
+ * strong  = 强线（≥ 最强线×strongRatio）。
+ * 注释历史：早先三轮修复各自加了 strongCount / presenceCount / matchedCount 三套计数，
+ * 2026-09-24 归并——入口门槛与平移加成共用 present，强线只留加成用途。
+ */
+function lineEvidence(values, options) {
+    const opts = options || {};
     let maxValue = 0;
     for (let i = 0; i < values.length; i++) {
         if (values[i] > maxValue) {
             maxValue = values[i];
         }
     }
-    const floor = maxValue * (options.strongRatio == null ? DEFAULTS.strongRatio : options.strongRatio);
+    const presenceFloor = Math.max(
+        maxValue * (opts.presenceRatio == null ? DEFAULTS.presenceRatio : opts.presenceRatio),
+        opts.minLineSupport == null ? DEFAULTS.minLineSupport : opts.minLineSupport);
+    const strongFloor = maxValue * (opts.strongRatio == null ? DEFAULTS.strongRatio : opts.strongRatio);
+    let present = 0;
     let strong = 0;
     for (let i = 0; i < values.length; i++) {
-        if (values[i] >= floor) {
+        if (values[i] >= presenceFloor) {
+            present += 1;
+        }
+        if (values[i] >= strongFloor) {
             strong += 1;
         }
     }
-    return strong;
-}
-
-/**
- * 「存在的线」计数：值 ≥ max(最强线 × presenceRatio, 绝对下限)。
- * 区分「空槽」（梳子滑到棋盘外，只有 0~0.04 的背景噪声）与「被棋子压住的线」（0.5+）。
- */
-function presenceCount(values, options) {
-    const opts = options || {};
-    let maxValue = 0;
-    for (let i = 0; i < values.length; i++) {
-        if (values[i] > maxValue) {
-            maxValue = values[i];
-        }
-    }
-    const ratio = opts.presenceRatio == null ? DEFAULTS.presenceRatio : opts.presenceRatio;
-    const absMin = opts.minLineSupport == null ? DEFAULTS.minLineSupport : opts.minLineSupport;
-    const floor = Math.max(maxValue * ratio, absMin);
-    let present = 0;
-    for (let i = 0; i < values.length; i++) {
-        if (values[i] >= floor) {
-            present += 1;
-        }
-    }
-    return present;
-}
-
-/**
- * matched 口径：支持度 ≥ max(前 3 强均值 × matchedRatio, 绝对下限) 的线数。
- * ⚠️ 不能拿「最强那条线」当基准：采样相位不同，同一把梳子里真线的值会 "1/2/3" 交替，
- *    用最强线做分母会把正常的线误判成缺失（调试实测：真线全在，matched 只有 6）。
- * ⚠️ 也不能纯相对：全噪声图（所有线 0.01~0.02）相对门槛会降到 0.004，全部「命中」。
- */
-function matchedCount(perLine, options) {
-    const opts = options || {};
-    const ratio = opts.matchedRatio == null ? DEFAULTS.matchedRatio : opts.matchedRatio;
-    const absMin = opts.minLineSupport == null ? DEFAULTS.minLineSupport : opts.minLineSupport;
-    const sorted = perLine.slice().sort(function (a, b) { return b - a; });
-    const topN = Math.max(1, Math.min(3, sorted.length));
-    let topSum = 0;
-    for (let i = 0; i < topN; i++) {
-        topSum += sorted[i];
-    }
-    const floor = Math.max((topSum / topN) * ratio, absMin);
-    let matched = 0;
-    for (let i = 0; i < perLine.length; i++) {
-        if (perLine[i] >= floor) {
-            matched += 1;
-        }
-    }
-    return matched;
+    return { present: present, strong: strong };
 }
 
 /**
@@ -252,11 +206,10 @@ function combScore(resp, count, origin, step, options) {
         perLine[k] = value;
         acc.push(value);
     }
-    const strong = strongCount(perLine, options);
-    const present = presenceCount(perLine, options);
-    const bonus = strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus) +
-        present * (options.presenceBonus == null ? DEFAULTS.presenceBonus : options.presenceBonus);
-    return { score: acc.score() + bonus, sum: acc.total(), perLine: perLine, strong: strong, present: present };
+    const evidence = lineEvidence(perLine, options);
+    const bonus = evidence.strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus) +
+        evidence.present * (options.presenceBonus == null ? DEFAULTS.presenceBonus : options.presenceBonus);
+    return { score: acc.score() + bonus, sum: acc.total(), perLine: perLine, strong: evidence.strong, present: evidence.present };
 }
 
 /**
@@ -273,10 +226,9 @@ function scoreInterp(resp, count, origin, step, options) {
         values[k] = value;
         acc.push(value);
     }
-    const strong = strongCount(values, options);
-    const present = presenceCount(values, options);
-    const bonus = strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus) +
-        present * (options.presenceBonus == null ? DEFAULTS.presenceBonus : options.presenceBonus);
+    const evidence = lineEvidence(values, options);
+    const bonus = evidence.strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus) +
+        evidence.present * (options.presenceBonus == null ? DEFAULTS.presenceBonus : options.presenceBonus);
     return acc.score() + bonus;
 }
 
@@ -588,7 +540,7 @@ function detect(host, image, options) {
         const perLine = fit.best.perLine;
         return {
             origin: fit.best.origin, step: fit.best.step,
-            score: fit.best.score, matched: matchedCount(perLine, merged), strong: fit.best.strong,
+            score: fit.best.score, matched: lineEvidence(perLine, merged).present, strong: fit.best.strong,
             perLine: perLine, topK: fit.candidates
         };
     }
@@ -624,9 +576,7 @@ module.exports = {
     responseAt: responseAt,
     lerpAt: lerpAt,
     windowMax: windowMax,
-    strongCount: strongCount,
-    presenceCount: presenceCount,
-    matchedCount: matchedCount,
+    lineEvidence: lineEvidence,
     combScore: combScore,
     scoreInterp: scoreInterp,
     centerOnPlateau: centerOnPlateau,
