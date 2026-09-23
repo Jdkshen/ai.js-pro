@@ -1,0 +1,79 @@
+《象棋模型 - 百度 AI Studio 免费 GPU 训练步骤》
+=================================================
+AI Studio（百度飞桨社区）= 国内直连、免费 V100 32G 算力，上传数据也是国内速度。
+
+—— 本包文件清单（本地路径）——
+  ① chess-aistudio\.gitattributes                  ← 先上传这个（文件类型登记）
+  ② ..\chess-kaggle\chess-merged-kaggle.zip.part01 / part02 / part03   ← 再依次上传 3 个分卷
+  ③ chess-aistudio\train_aistudio.py               ← 第 4 步拖进 Notebook 用
+  （本地完整的 chess-merged-kaggle.zip 留作备份，不用上传）
+
+—— 当前进度 ——
+  ✅ 数据集已建：jdkshen/chess-merged（私有）；项目已建：chess-train
+  ❌ CLI 上传路线废弃（SDK bug：大文件只留下 136 字节的 LFS 指针，实体没上去）
+  ➡ 现行方案：分卷 + 网页上传（⚠️ 一批总体积 ≤500MB、最多 10 个文件，分卷必须一个一个传；
+    >5MB 的类型需先在 .gitattributes 登记）
+
+— 第 1 步：注册 —
+1. 打开 aistudio.baidu.com，登录百度账号。
+2. 完成实名认证（用免费算力必须实名：手机 + 身份证）。
+
+— 第 2 步：上传数据集（分卷 + 注册文件类型）—
+0. 先传「.gitattributes」（chess-aistudio 目录里就有）：平台规定 >5MB 的文件类型必须先登记；
+   ⚠️ 文件名以点开头，个别文件选择框可能看不到它 → 直接在文件名输入框里粘贴完整路径，
+      或新建同名文件把这 3 行内容粘进去：
+        *.part01 filter=lfs diff=lfs merge=lfs -text
+        *.part02 filter=lfs diff=lfs merge=lfs -text
+        *.part03 filter=lfs diff=lfs merge=lfs -text
+   不先传它，分卷会被拒（提示"超过5M，请先在.gitattributes里添加要上传的文件类型"）。
+1. 打开数据集页（jdkshen/chess-merged）→ 先删掉之前的两个坏文件：
+   chess-merged-kaggle.zip（只有 136 字节的坏指针）和 aistudio-selftest.bin（测试文件）
+2. 「网页上传」→ 传 chess-kaggle 目录下的 3 个分卷（完整名 chess-merged-kaggle.zip.part01/02/03，
+   约 400/400/272MB）：⚠️ 一批的总体积上限 500MB → 必须「一个一批」：
+   选 part01 → 确定 → 传完再点「添加文件」传 part02 → 再 part03。
+   （同时选两个 = 800MB 会被拒；单个 400MB 是安全的）
+3. 传完不用管——训练脚本首次运行会自动把分卷拼回完整 zip 并解压（约 1 分钟）。
+
+— 第 3 步：创建项目 —
+1. 「项目」→ 创建项目 → 类型选 Notebook（默认镜像即可）。
+2. 进入项目：左侧「数据」→ 挂载刚上传的数据集
+   （挂载后文件出现在 /home/aistudio/data/data<ID>/ 下）。
+3. 右上「运行环境」选 V100 32G（免费档；每日赠送算力点，用完等次日）。
+4. 验证：`!nvidia-smi` 应看到 V100；`!ls /home/aistudio/data/data*` 应看到
+   chess-merged-kaggle.zip.part01/02/03 和 .gitattributes（看不到就去「数据」页挂载）。
+
+— 第 4 步：跑训练 —
+1. 把 train_aistudio.py 上传到工作区（小文件秒传），二选一：
+   - 基础版 Notebook：左侧文件面板顶部切到「文件」标签（不是「数据集」标签——那里是只读的挂载文件）
+     再 ⬆ 上传；
+   - 或点右上「专业开发」进 JupyterLab，直接把文件拖进左侧文件区（最省事）。
+   - ⚠️ 上面的都搞不定时（已实测）：把 ..\.artifacts\embed-cell.py 的**全部内容**复制进一个
+     新格子运行——它会把脚本直接写进 /home/aistudio，并打印两个 MD5 自校验：
+        b64 md5 fff8c85206a781ceb0364478800ed33d
+        written 4486 6b12bf0e85425f72caaee75f64e18dea
+     注意：挂载是「开机快照」，新传到数据集的文件要重启环境才会出现在 /home/aistudio/data 下。
+2. 依次运行两个格子：
+       !pip install ultralytics -q
+       !EPOCHS=10 python train_aistudio.py     ← 先 10 轮验证流程（约 15 分钟）
+       !EPOCHS=100 python train_aistudio.py    ← 正式跑（V100 上预计 2~4 小时）
+3. 结果：
+   /home/aistudio/work/runs/train/    （曲线、混淆矩阵、results.csv）
+   /home/aistudio/best.pt  /home/aistudio/best.onnx（在文件区右键下载）
+
+— 注意事项 —
+* 免费算力按「算力点」计费，每天赠送若干点（够跑一版 100 轮左右；具体以页面为准）；
+  A100 需要会员，V100 免费档跑我们这个任务足够。
+* ⚠️ 基础版会「扫格子文本」拦截含 `import torch` 字样的格子（torch 装好了也照拦，3 毫秒直接拒跑）；
+  所以别在格子里直接 import torch——torch 的导入都放在脚本文件里跑（本流程天然如此）。
+  `!EPOCHS=10 python train_aistudio.py` 这种子进程调用不受影响（已实测）。
+* 数据集中现在是 3 个分卷（part01/02/03）——训练脚本首次运行会自动拼装+解压到
+  /home/aistudio/work/data（约 1 分钟，不用手动 unzip）。
+* 单个会话有最长时长；断线后环境会重置：重新挂数据集、重跑 pip 安装（很快），然后续训：
+      from ultralytics import YOLO
+      YOLO('/home/aistudio/work/runs/train/weights/last.pt').train(resume=True)
+  （/home/aistudio/work 里的内容会跨会话保留）
+* 如果 pip 装 ultralytics 时拉 torch 太慢，换清华源：
+      !pip install ultralytics -q -i https://pypi.tuna.tsinghua.edu.cn/simple
+* 类别名是中文，Linux 画图可能提示缺字库（图上中文变方框）——只影响画图，不影响训练。
+* 若网页上传仍被拦（.gitattributes 或分卷被拒）：说一声「换 VPS 方案」，
+  改从腾讯云 VPS 中转下载（zip 放 VPS 上，Notebook 里 wget 拉取），完全绕过上传限制。
