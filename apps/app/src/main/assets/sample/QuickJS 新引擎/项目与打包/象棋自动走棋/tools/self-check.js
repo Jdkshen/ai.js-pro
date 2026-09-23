@@ -8773,6 +8773,217 @@ check("驱动：对手应手『占用唯一解』快路 —— 起点空 + 落�
     return true;
 });
 
+/**
+ * 真机回归（2026-09-24，中途卡顿最后一层）：对方应手的**起点被「找色作废」置空、落点被「幻影清除」擦掉**，
+ * 修订后的基准 = 观测 ⇒ 差分追踪看到「没变化」⇒ 轮次永远停在「轮到对方」，只能等 15s 判反兜底。
+ *
+ * 真实事故：我方确认后，对方同一枚马先走一步（马 → (2,2)），再走一步（(2,2) → (0,1)）。
+ * 第二手落地的帧里「已知事实作废（找色证据是空格）：(2,2)n」把起点从基准删掉，
+ * 下一帧起「清掉幻影（重复子）(0,1)n→空」又把落点从观测擦掉 —— 这一手被两步修订抹平。
+ *
+ * 修法（对账修订）：修订器登记「修订前的基准」；sideFor 发现「修订发生在等对方时、
+ * 且观测里走棋方少了一枚子」⇒ 借回旧基准重算轮次（修订+观测的累计差 = 那一手）⇒ 两帧佐证后翻轮次。
+ */
+check("驱动：对方应手被『找色作废+幻影清除』抹平，也要按『对账修订』借回旧基准认出来（真机 02:58 回归）", function () {
+    const afterOwn1 = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    let reply1 = null;
+    let reply2 = null;
+    let OWN2 = null;
+    let afterOwn2 = null;
+    let afterReply2 = null;
+    let dest1 = -1;
+    let dest2 = -1;
+    const blacks1 = legal.allLegalMoves(afterOwn1, "b");
+    for (let i = 0; i < blacks1.length && !reply1; i += 1) {
+        const f1 = transition.squareIndex(blacks1[i].iccs, 0);
+        const d1 = transition.squareIndex(blacks1[i].iccs, 1);
+        if (f1 < 0 || d1 < 0 || afterOwn1[d1] != null) {
+            continue;   // 只要不吃子的应手
+        }
+        const aR1 = legal.applyMove(afterOwn1, blacks1[i]).board;
+        const reds2 = legal.allLegalMoves(aR1, "w");
+        for (let j = 0; j < reds2.length && !OWN2; j += 1) {
+            const f2 = transition.squareIndex(reds2[j].iccs, 0);
+            const d2 = transition.squareIndex(reds2[j].iccs, 1);
+            if (f2 < 0 || d2 < 0 || aR1[d2] != null || f2 === d1 || d2 === d1) {
+                continue;   // 我方第二步也不吃子、不碰那枚马
+            }
+            const aO2 = legal.applyMove(aR1, reds2[j]).board;
+            const blacks2 = legal.allLegalMoves(aO2, "b");
+            for (let k = 0; k < blacks2.length; k += 1) {
+                if (transition.squareIndex(blacks2[k].iccs, 0) !== d1) {
+                    continue;   // 要的是**同一枚子**再走一步
+                }
+                const d3 = transition.squareIndex(blacks2[k].iccs, 1);
+                if (d3 < 0 || aO2[d3] != null) {
+                    continue;   // 还是不吃子（落点在观测里呈「多出来」的形态）
+                }
+                reply1 = blacks1[i];
+                OWN2 = reds2[j];
+                reply2 = blacks2[k];
+                afterOwn2 = aO2;
+                dest1 = d1;
+                dest2 = d3;
+                afterReply2 = legal.applyMove(aO2, reply2).board;
+                break;
+            }
+            if (reply2) {
+                break;
+            }
+        }
+    }
+    if (!reply1 || !reply2) {
+        return "夹具失败：找不到「同一枚黑子走两步」的着法组合";
+    }
+    const afterReply1 = legal.applyMove(afterOwn1, reply1).board;
+    const own1Dest = transition.squareIndex(OWN_MOVE.iccs, 1);
+    const own2Dest = transition.squareIndex(OWN2.iccs, 1);
+    const charAt = {};
+    charAt[dest1] = afterReply1[dest1];       // 那枚黑子（走到 (2,2) 之后）
+    charAt[dest2] = afterReply2[dest2];       // 同一枚黑子（再走到 (0,1)）
+    charAt[own1Dest] = afterOwn1[own1Dest];
+    charAt[own2Dest] = afterOwn2[own2Dest];
+    const stage = { board: START_BOARD.slice(), move: OWN_MOVE, incident: false, tapCount: 0, onToTap: null };
+    const notes = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { notes.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            return {
+                ok: true, chars: stage.board.slice(), unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        ocrCell: function (query) {
+            const idx = query && query.index;
+            const ch = charAt[idx];
+            if (!ch) {
+                return null;   // 其他格：没有证据（不猜）
+            }
+            const lower = String(ch).toLowerCase();
+            const side = (String(ch) === String(ch).toUpperCase() && String(ch) !== lower) ? "RED" : "BLACK";
+            if (idx === dest1 && stage.incident) {
+                // 那枚子已经走了：这格是空的（找色两边都没有墨迹）—— 正是这一帧触发「找色作废」
+                return { ok: true, side: null, cls: null, ink: { red: 0, black: 0, area: 10000 } };
+            }
+            return {
+                ok: true, side: side, cls: ch, char: ch,
+                ink: side === "RED" ? { red: 600, black: 0, area: 10000 }
+                    : { red: 0, black: 600, area: 10000 }
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: stage.move.iccs, move: stage.move, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.tapCount += 1;
+                // ⚠️ 必须在**点击回调内**就把盘面切到「走成了」——确认在同一个 tick 里就跑，
+                //    切晚了会把真走成的局面判成 UNCHANGED（真机同样如此），进而恢复/重建把夹具带偏。
+                if (typeof stage.onToTap === "function") {
+                    const once = stage.onToTap;
+                    stage.onToTap = null;
+                    once();
+                }
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrCooldownMs: 0 }
+    });
+    const same = function (a, b) {
+        for (let i = 0; i < 90; i += 1) {
+            if (!a || a[i] !== b[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const waitFor = function (pred, maxTicks) {
+        for (let i = 0; i < maxTicks; i += 1) {
+            driver.tick();
+            if (pred()) {
+                return true;
+            }
+        }
+        return false;
+    };
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    // ① 我方第一手（点击）：等点出去 + 观测认下来
+    stage.tapCount = 0;
+    stage.onToTap = function () { stage.board = afterOwn1.slice(); };
+    if (!waitFor(function () { return stage.tapCount >= 1; }, 12)) {
+        return "夹具没走到我方第一手点击：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "）｜日志 " + notes.slice(-6).join(" / ");
+    }
+    if (!waitFor(function () {
+        const rel = driver.lastReliable();
+        return rel && rel.side === "b" && same(rel.board, afterOwn1);
+    }, 10)) {
+        return "我方第一手没落定：日志 " + notes.slice(-8).join(" / ");
+    }
+    for (let i = 0; i < 3; i += 1) {
+        driver.tick();   // 让确认结算走完
+    }
+    // ② 对方应手①（正常差分，应被认出来；同时登记「起点格」的已知事实，其 ply=本手）
+    stage.move = OWN2;                     // 轮次翻回我方后，机器会立刻算并点第二手
+    stage.board = afterReply1.slice();
+    if (!waitFor(function () {
+        const rel = driver.lastReliable();
+        return rel && rel.side === "w" && same(rel.board, afterReply1);
+    }, 10)) {
+        return "对方应手①没被认出来：状态 " + driver.machine.state() +
+            "｜日志 " + notes.slice(-8).join(" / ");
+    }
+    // ③ 我方第二手（点击）：出手后 moveEpoch +1 ⇒ 应手①登记的记录沦为「旧记录」（走证据路径）
+    stage.tapCount = 0;
+    stage.onToTap = function () { stage.board = afterOwn2.slice(); };
+    if (!waitFor(function () { return stage.tapCount >= 1; }, 14)) {
+        return "夹具没走到我方第二手点击：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "）｜日志 " + notes.slice(-8).join(" / ");
+    }
+    if (!waitFor(function () {
+        const rel = driver.lastReliable();
+        return rel && rel.side === "b" && same(rel.board, afterOwn2);
+    }, 12)) {
+        return "我方第二手没落定：日志 " + notes.slice(-8).join(" / ");
+    }
+    for (let i = 0; i < 3; i += 1) {
+        driver.tick();
+    }
+    // ④ 事故帧：对方同一枚马再走一格 —— 起点读空（找色作废）+ 落点在旧基准里没有（幻影清除）
+    stage.incident = true;
+    stage.board = afterReply2.slice();
+    const flipped = waitFor(function () {
+        const rel = driver.lastReliable();
+        return rel && rel.side === "w";
+    }, 16);
+    const rel = driver.lastReliable();
+    if (!flipped) {
+        return "对账修订没接住：应手被修订抹平后轮次没翻回来（停在 " +
+            (rel ? rel.side : "无基准") + "）｜日志 " + notes.slice(-10).join(" / ");
+    }
+    if (!same(rel.board, afterReply2)) {
+        return "轮次翻回来了但盘面不对（dest1=" + String(rel.board[dest1]) +
+            "，dest2=" + String(rel.board[dest2]) + "，期望 dest2=" + String(afterReply2[dest2]) + "）";
+    }
+    if (!notes.some(function (text) { return text.indexOf("可靠基准已按观测改正") >= 0; })) {
+        return "夹具没走到『找色作废』（没覆盖目标路径）：" + notes.slice(-8).join(" / ");
+    }
+    if (!notes.some(function (text) { return text.indexOf("对账修订") >= 0; })) {
+        return "没有『对账修订』借旧基准的日志：" + notes.slice(-8).join(" / ");
+    }
+    if (notes.some(function (text) { return text.indexOf("对账修订超时") >= 0; })) {
+        return "对账修订超时了（应手没在时限内认出来）：" + notes.slice(-8).join(" / ");
+    }
+    return true;
+});
+
 check("applyMove：只带 iccs 的着法也必须真的走子（2026-09-21 卡确认真因回归）", function () {
     const src = transition.squareIndex(OWN_MOVE.iccs, 0);
     const dest = transition.squareIndex(OWN_MOVE.iccs, 1);

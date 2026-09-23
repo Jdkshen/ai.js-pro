@@ -124,6 +124,14 @@ const DEFAULTS = {
      */
     replyFastPath: true,
     /**
+     * 「对账修订」的借基准时限（ms）：修订（找色作废 / 幻影收编）在「等对方应手」的时刻
+     * 改可靠基准时，可能把对方**刚走完的那一手**抹平（起点被置空、落点被当幻影收编）⇒
+     * sideFor 借回「修订前的基准」重算轮次（修订+观测的累计差里带着那一手）；
+     * 超过这个时限还认不出来就放弃、回到修订后的基准（即老行为）。
+     * 8s ≈ 4~8 帧观测；真机对账一般 2~5 帧内出结果（应手动画全程 ~1s）。
+     */
+    baselineBorrowMs: 8000,
+    /**
      * 「单格重拍」：已知事实说这格**有子**、模型却整格读成空时，换一帧、**降低检测阈值**
      * 重认那几个格子（只采信这几格）。设为 0 可关闭。
      * 为什么需要：整格读成空 = 检测框都没检出（阈值 0.25），而模型 mAP50 只有 0.53，
@@ -574,6 +582,95 @@ function createDriver(options) {
     let lastInferHold = false;
     // （对方应手的跨帧佐证计数已移入 crossFrameGate，见上）
     /**
+     * 「对账修订」账本（2026-09-24，中途卡顿最后一层的根治）。
+     *
+     * 问题：等对方应手时，本帧的修订机制（找色作废、幻影收编、催游戏后放弃）会**原地改正可靠基准**。
+     * 如果修订吞掉的正是对方刚走完的那一手（起点被置空、落点被当成「多出来的幻影」收编），
+     * 修订后的基准直接等于观测 ⇒ 差分追踪看到「没变化」⇒ 轮次永远停在「轮到对方」，
+     * 只能靠 15s「判反」兜底（真机 2026-09-24：对方马 (6,4)→(5,2)，找色作废 + 幻影收编
+     * 两步就把它抹平了，之后基线=观测，一直等到兜底）。
+     *
+     * 处置：修订器每次都登记「修订前的基准」（`recordBaselineRevision`）；`sideFor` 里如果发现
+     * 修订发生在「轮到对方」的时刻，就**借回修订前的基准**重算轮次 —— 修订 + 观测的**累计差**
+     * 里带着那一手（起点空了 + 落点有子），差分追踪一步就能认出来。认出来按正常流程翻轮次；
+     * 认不出且超过 `cfg.baselineBorrowMs` 就放弃，回到修订后的基准（即老行为）。
+     */
+    let pendingBaselineRevision = null;   // { beforeBoard, beforeSide, why, atMono }
+    let baselineBorrow = null;            // { base, aside, atMono, why }
+
+    /** 修订器在**动基准之前**调用：登记「修订前的基准」（同一轮观测里多次修订只留最早那份）。 */
+    function recordBaselineRevision(why) {
+        if (!lastReliable || !lastReliable.board || !lastReliable.side) {
+            return;
+        }
+        if (pendingBaselineRevision) {
+            return;   // 同一轮里的多次修订合并成「最早那份」：它才同时含起点的空与落点的子
+        }
+        pendingBaselineRevision = {
+            beforeBoard: lastReliable.board.slice(),
+            beforeSide: lastReliable.side,
+            why: why || "修订",
+            atMono: nowMono()
+        };
+    }
+
+    /** 作废对账账本（基准重建 / 换边 / 新会话等场合：旧基准已经不存在了）。 */
+    function clearBaselineBorrow() {
+        pendingBaselineRevision = null;
+        baselineBorrow = null;
+        relaxUnknownWatchdog(false);
+    }
+
+    /** 对账期间放宽过的看门狗原值（null = 当前没放宽） */
+    let borrowWatchdogSaved = null;
+    /**
+     * 对账进行中暂时放宽「轮次未知看门狗」（4s）：在借基准对账时侧本来就是 null，
+     * 而看门狗一冒头就 RECOVERING，会抢在对账（2~3 帧）前面把恢复带起（真机 03:29 实况）。
+     * 放宽上限 = 借基准时限 + 3s（超过时限 borrow 会自己回退，看门狗随后照常生效）——有界的，不会掩盖真卡死。
+     */
+    function relaxUnknownWatchdog(on) {
+        const mc = (machine && machine.config) ? machine.config : null;
+        if (!mc) {
+            return;
+        }
+        if (on) {
+            if (borrowWatchdogSaved == null) {
+                if (typeof mc.unknownTurnWatchdogMs !== "number") {
+                    return;   // 自定义机器没有这个配置键：别去动它（免得恢复时写出错值）
+                }
+                borrowWatchdogSaved = mc.unknownTurnWatchdogMs;
+                mc.unknownTurnWatchdogMs = cfg.baselineBorrowMs + 3000;
+            }
+        } else if (borrowWatchdogSaved != null) {
+            mc.unknownTurnWatchdogMs = borrowWatchdogSaved;
+            borrowWatchdogSaved = null;
+        }
+    }
+
+    /**
+     * 「观测里走棋方的子少了一枚」（它站的格不再有那枚子）—— 等对方时应手正在发生的**最早证据**：
+     * 起点先空、落点后到（飞行中的子还可能被读成 '?'/整格空）。对账修订靠它触发（见 sideFor）。
+     * 反向形态（凭空多子）不算：那是幻影收编/漏收的地盘，老流程自己会自愈。
+     */
+    function vanishedMoverPiece(beforeBoard, nowBoard, moverSide) {
+        for (let i = 0; i < 90; i++) {
+            const a = beforeBoard[i];
+            if (!a || a === "?") {
+                continue;
+            }
+            const isMover = (moverSide === "w") ? (a === a.toUpperCase()) : (a === a.toLowerCase());
+            if (!isMover) {
+                continue;
+            }
+            const b = nowBoard[i];
+            if (b === a) {
+                continue;   // 还在原位
+            }
+            return true;    // 这枚子从原位消失了（真走了 / 装饰读错 —— 交给对账去分辨）
+        }
+        return false;
+    }
+    /**
      * 对方应手也要跨帧佐证：同一个应手要**连续两次验证**都枚举出来才采信。
      *
      * 为什么要它（2026-09-19，K40 假事实事故）：模型偶尔会把同一枚子读成**两个位置**
@@ -878,6 +975,7 @@ function createDriver(options) {
             }
             grid = located.grid;
             lastReliable = null;
+            clearBaselineBorrow();
             trackClear("calibrate");
             lastRelocateMono = nowMono();   // 定位过就记时间（recover 的限频用它）
             note("棋盘已定位：起点 (" + Math.round(grid.originX) + "," + Math.round(grid.originY) +
@@ -1220,6 +1318,7 @@ function createDriver(options) {
              */
             note("  ⇒ 同时作废可靠基准：被游戏反复拒绝 ≈ 我们的盘面漏子了（下一轮重新全盘确认）");
             lastReliable = null;
+            clearBaselineBorrow();
             trackClear("attempt-budget");
             needFreshBaseline = true;
             stats.budgetPauses += 1;
@@ -2469,6 +2568,9 @@ function createDriver(options) {
             lastReliable.board[patch.index] !== patch.char) {
             return;
         }
+        // ★ 修订前先登记旧基准：等对方时这次修订可能吞掉对方刚走的那一手（见 recordBaselineRevision）
+        recordBaselineRevision("找色/OCR 作废 (" + (patch.index % 9) + "," +
+            Math.floor(patch.index / 9) + ")" + patch.char);
         const fixed = lastReliable.board.slice();
         fixed[patch.index] = null;
         lastReliable = { board: fixed, side: lastReliable.side };
@@ -2636,7 +2738,12 @@ function createDriver(options) {
                             ? phantomStreak[index].count : 0;
                         if (prev + 1 >= cfg.phantomAdoptStreak && hasInk) {
                             delete phantomStreak[index];
-                            lastReliable.board[index] = ch;
+                            // ★ 收编也是「改基准」：先登记旧基准（它可能是对方应手的落点，也可能不是 ——
+                            //   是不是，交给 sideFor 的差分追踪对账，见 recordBaselineRevision）
+                            recordBaselineRevision("幻影收编 " + where + ch);
+                            const adopted = lastReliable.board.slice();
+                            adopted[index] = ch;
+                            lastReliable = { board: adopted, side: lastReliable.side };
                             stats.phantomAdopted = (stats.phantomAdopted || 0) + 1;
                             note("幻影僵持 " + (prev + 1) + " 帧（" + where + ch +
                                 " 连着多出来、且那格真有墨迹）→ 判为可靠基准漏收这枚子，收编进基准");
@@ -3913,6 +4020,7 @@ function createDriver(options) {
                 }
             }
         }
+        clearBaselineBorrow();   // 基准重建：旧基准（含借出的那份）已不存在
         lastReliable = { board: board.slice(), side: nextSide };
         trackAdopt(board, nextSide, { reason: "rebuild", source: "manual-confirmed" });
         baselineCorrectedAt = 0;      // 旧票据不会再重建，避免拿旧事实去凑
@@ -3964,8 +4072,19 @@ function createDriver(options) {
             for (let i = 0; i < 90; i++) {
                 const a = prevOccupancy[i];
                 const b = occ[i];
-                if (a == null || b == null || a === "?" || b === "?") {
+                if (a == null || b == null) {
                     continue;   // 看不清的格不参与
+                }
+                // ★ 2026-09-24：`? → 真子` 也算「翻面」——飞行中的子被读成 '?'（看不清）、
+                //   落位后再读到真子，旧的「有 '?' 就跳过」会让落点格**永远进不了 flipEpoch**
+                //   （真机：马 (6,4)→(5,2) 的 (5,2) 正是走 '?'→n 那条路）⇒ 快路的硬证据③
+                //   “落点必须是本回合翻过面的格” 直接把它挡掉，应手放跑。
+                if (a === "?" && b !== "?") {
+                    churn.push(i);
+                    continue;
+                }
+                if (a === "?" || b === "?") {
+                    continue;   // 其余涉及 '?' 的过渡不参与（快路只关心「落点*出现*了走棋方的子」）
                 }
                 if (a !== b) {
                     churn.push(i);
@@ -4091,6 +4210,7 @@ function createDriver(options) {
         }
         const nextSide = base.side === "w" ? "b" : "w";
         // 用**快照 + 这一手**重建基准（顺带把 fills 对基准的临时改动纠正回来）
+        clearBaselineBorrow();   // 快路认出来了：对账结案（若这手是借旧基准对出来的）
         lastReliable = { board: applied, side: nextSide };
         trackConfirm({ iccs: iccs, fromBoard: base.board, side: base.side, afterBoard: applied, source: "opponent-observed" });
         lastSideFix = null;   // 观测马上被归一成这份盘面，不需要再“修正”
@@ -4123,6 +4243,54 @@ function createDriver(options) {
             }
             return null;
         }
+        // ★★ 2026-09-24 对账修订（见 recordBaselineRevision 的注释）：本帧的修订器动过基准，
+        //   而那时正在等对方应手 —— 借回「修订前的基准」再算轮次：修订+观测的**累计差**里
+        //   就带着对方那一手。认得出 ⇒ 下面的正常流程会按它翻轮次；认不出且超过
+        //   cfg.baselineBorrowMs ⇒ 放弃、回到修订后的基准（即老行为）。
+        //   ⚠️ 只在**证据像应手**时才借：「观测里走棋方的子少了一枚」（= 应手正在飞的最早证据）。
+        //   反过来「凭空多出一枚」（幻影收编的典型形态：now48 的漏收）**维持老行为** ——
+        //   那种情况老流程（收编进基准 + 后续恢复）已经能自愈，借旧基准反而会把基准劈成两半。
+        if (pendingBaselineRevision) {
+            const rev = pendingBaselineRevision;
+            pendingBaselineRevision = null;
+            const fresh = rev && rev.beforeBoard && rev.beforeBoard.length === 90 &&
+                nowMono() - rev.atMono <= cfg.baselineBorrowMs;
+            if (fresh && baselineBorrow) {
+                // 已经在借：把它拉回「这份修订之前」的状态（内容与借出的那份一致），继续等对账
+                lastReliable = { board: rev.beforeBoard.slice(), side: rev.beforeSide };
+                baselineBorrow.base = lastReliable;
+            } else if (fresh && rev.beforeSide !== machine.mySide() &&
+                vanishedMoverPiece(rev.beforeBoard, board, rev.beforeSide)) {
+                const aside = lastReliable;
+                lastReliable = { board: rev.beforeBoard.slice(), side: rev.beforeSide };
+                baselineBorrow = { base: lastReliable, aside: aside, atMono: rev.atMono, why: rev.why };
+                // 影子账本也跟着借回旧基准：不然「resync 改基准 + 借旧基准」一改一借，
+                // 影子与诚实基准对不上，后面每一步推断着法都被它拒收（日志噪声 + 引擎丢历史）。
+                trackAdopt(lastReliable.board, lastReliable.side, { reason: "baseline-borrow" });
+                relaxUnknownWatchdog(true);   // 对账期间别让 4s 看门狗抢先恢复（结案/回退时恢复原值）
+                stats.baselineBorrows = (stats.baselineBorrows || 0) + 1;
+                note("对账修订：本帧修订（“" + rev.why + "”）改过可靠基准，且观测里" +
+                    (rev.beforeSide === "w" ? "红" : "黑") + "方少了一枚子 —— " +
+                    "借回修订前的基准重算轮次（修订+观测的累计差里应含对方那一手）");
+            }
+        } else if (baselineBorrow) {
+            // 借出的旧基准还在用：期间可能被修订器刷新过 lastReliable（那也算还在借）。
+            // 超时仍未认出来 ⇒ 放弃对账，回到修订后的基准（即老行为）。
+            if (nowMono() - baselineBorrow.atMono > cfg.baselineBorrowMs) {
+                const borrowed = baselineBorrow;
+                baselineBorrow = null;
+                relaxUnknownWatchdog(false);   // 回退：看门狗恢复原值，该恢复就恢复
+                if (lastReliable === borrowed.base) {
+                    lastReliable = borrowed.aside || lastReliable;
+                }
+                if (lastReliable && lastReliable.board) {
+                    trackFix(lastReliable.board, lastReliable.side, { reason: "borrow-timeout" });
+                }
+                stats.baselineBorrowTimeouts = (stats.baselineBorrowTimeouts || 0) + 1;
+                note("对账修订超时（" + Math.round(nowMono() - borrowed.atMono) + "ms 还没认出" +
+                    "对方那一手）→ 放弃旧基准，回到修订后的基准");
+            }
+        }
         const inferred = inferMove(lastReliable.board, lastReliable.side, board, {
             allowPair: true,
             // 起点残影（真机 2026-09-20）：只在驱动这边开 —— 这里还有「同一个解释连续两帧一致」
@@ -4143,6 +4311,7 @@ function createDriver(options) {
             }
             const prevReliableBoard = lastReliable.board;
             const prevReliableSide = lastReliable.side;
+            clearBaselineBorrow();   // 认出来了：对账结案（若这手是借旧基准对出来的）
             lastReliable = { board: settled, side: inferred.nextSide };
             trackInferredMoves(inferred.moves || [], prevReliableBoard, prevReliableSide,
                 inferred.side === machine.mySide() ? "our-click" : "opponent-observed");
@@ -4166,6 +4335,7 @@ function createDriver(options) {
                     note("⚠ 盘面自相矛盾：刚走完的" + (inferred.side === "w" ? "红" : "黑") +
                         "方还处在被将状态（规则上不可能）→ 判这张盘不可信，重新全盘确认");
                     lastReliable = null;
+                    clearBaselineBorrow();
                     trackClear("impossible-in-check");
                     needFreshBaseline = true;
                     lastSideFix = null;
@@ -4207,6 +4377,7 @@ function createDriver(options) {
                 lastSideFix = { board: guess.board.slice(), how: "盖住的应手 " + guess.iccs };
                 const prevCoveredBoard = lastReliable.board;
                 const prevCoveredSide = lastReliable.side;
+                clearBaselineBorrow();   // 认出来了：对账结案（若这手是借旧基准对出来的）
                 lastReliable = { board: guess.board, side: guess.nextSide };
                 trackConfirm({
                     iccs: guess.iccs, fromBoard: prevCoveredBoard, side: prevCoveredSide,
@@ -4242,6 +4413,7 @@ function createDriver(options) {
             lastSideFix = { board: tolerant.board, how: "唯一合法单步 " + tolerant.iccs };
             const prevTolerantBoard = lastReliable.board;
             const prevTolerantSide = lastReliable.side;
+            clearBaselineBorrow();   // 认出来了：对账结案（若这手是借旧基准对出来的）
             lastReliable = { board: tolerant.board, side: tolerant.nextSide };
             trackConfirm({
                 iccs: tolerant.iccs, fromBoard: prevTolerantBoard, side: prevTolerantSide,
@@ -4733,11 +4905,13 @@ function createDriver(options) {
             prevOccupancy = null;
             flipEpoch = {};
             replyFastPending = null;
+            clearBaselineBorrow();
             return pump(machine.dispatch({ type: "STOP" }));
         },
         setMySide: function (side) {
             machine.setMySide(side);
             lastReliable = null;
+            clearBaselineBorrow();
             trackClear("side-switch", true);
             frameConsensus.clear();
             phantomStreak = {};
@@ -4765,6 +4939,7 @@ function createDriver(options) {
                         " 列），不能当基准：等它认出来，或先把棋盘「菜单→重来」清成干净开局"
                 };
             }
+            clearBaselineBorrow();   // 人工声明 = 全新基准：对账账本作废
             lastReliable = { board: lastBoard.slice(), side: machine.mySide() };
             trackAdopt(lastBoard, machine.mySide(), { reason: "assert-turn", source: "manual-confirmed" });
             // 声明后是一张**新基准**：旧的「连续帧共识」不再适用，清掉重算
@@ -4783,6 +4958,7 @@ function createDriver(options) {
             const id = machine.versions().sessionId + 1;
             machine.setSession(id);
             lastReliable = null;
+            clearBaselineBorrow();
             trackClear("new-session", true);
             grid = null;
             pendingMate = null;
