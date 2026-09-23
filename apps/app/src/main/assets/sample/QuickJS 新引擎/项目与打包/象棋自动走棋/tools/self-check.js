@@ -5742,6 +5742,8 @@ const gameSessionModule = require("../src/services/game-session.js");
 const bootstrapModule = require("../src/app/bootstrap.js");
 const busModule = require("../src/app/panel-bus.js");
 const pipelineFactoryModule = require("../src/vision/pipeline-factory.js");
+const moveLedgerModule = require("../src/chess/move-ledger.js");
+const positionTrackerModule = require("../src/services/position-tracker.js");
 
 check("框架·文案：未知状态要原样返回，不能悄悄变成「未知」把新状态藏起来", function () {
     if (labelsModule.stateText("CLICKING") !== "点击中") {
@@ -6165,6 +6167,134 @@ check("框架·装配：createBus 单创建口 —— 有 files 走 panel-bus，
         return "空总线描述应当说没有状态：" + nullBus.describeOther();
     }
     return true;
+});
+
+check("棋谱账本：只收已验证着法，positionCommand 从基准 FEN + moves 拼出", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const moves = legal.allLegalMoves(board, "w");
+    if (!moves.length) { return "标准开局没有合法着法？"; }
+    const first = moves[0];
+    const applied = legal.applyMove(board, { iccs: first.iccs });
+    const ledger = moveLedgerModule.createMoveLedger({});
+    ledger.begin(fen.START_FEN, ledger.HISTORY.COMPLETE);
+    const r = ledger.confirm({
+        iccs: first.iccs, fromBoard: board, side: "w", afterBoard: applied.board, source: "our-click"
+    });
+    if (!r.ok) { return "合法着法应能入账：" + r.reason; }
+    const cmd = ledger.positionCommand();
+    if (cmd !== "position fen " + fen.START_FEN + " moves " + first.iccs) {
+        return "命令不符：" + cmd;
+    }
+    return ledger.state().ply === 1 ? true : "ply 应为 1";
+});
+
+check("棋谱账本：棋规不合法的着法拒收（不入历史）", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const ledger = moveLedgerModule.createMoveLedger({});
+    ledger.begin(fen.START_FEN, ledger.HISTORY.COMPLETE);
+    const r = ledger.confirm({ iccs: "a0b1", fromBoard: board, side: "w", source: "our-click" });
+    if (r.ok !== false) { return "非法着法不应入账"; }
+    return ledger.state().ply === 0 ? true : "被拒着法不应写进历史";
+});
+
+check("棋谱账本：落子后盘面与验证值不一致拒收（容差格除外）", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const first = legal.allLegalMoves(board, "w")[0];
+    const applied = legal.applyMove(board, { iccs: first.iccs }).board;
+    const col = "abcdefghi".indexOf(first.iccs.charAt(2));
+    const dest = (9 - Number(first.iccs.charAt(3))) * 9 + col;
+    const tampered = applied.slice();
+    tampered[dest] = null;
+    const ledger = moveLedgerModule.createMoveLedger({});
+    ledger.begin(fen.START_FEN, ledger.HISTORY.COMPLETE);
+    const bad = ledger.confirm({
+        iccs: first.iccs, fromBoard: board, side: "w", afterBoard: tampered, source: "our-click"
+    });
+    if (bad.ok !== false || !(bad.diffIndexes || []).length) {
+        return "篡改盘面应被拒收并给出差异格";
+    }
+    const good = ledger.confirm({
+        iccs: first.iccs, fromBoard: board, side: "w", afterBoard: tampered,
+        source: "our-click", toleranceIndexes: bad.diffIndexes
+    });
+    return good.ok === true ? true : ("容差格内应放行：" + good.reason);
+});
+
+check("棋谱账本：中途接管 = partial 段（段基准 + 已验证着法，仍带不完整标记）", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const first = legal.allLegalMoves(board, "w")[0];
+    const applied = legal.applyMove(board, { iccs: first.iccs }).board;
+    const ledger = moveLedgerModule.createMoveLedger({});
+    ledger.setPartial(fen.START_FEN, "测试接管");
+    const r = ledger.confirm({
+        iccs: first.iccs, fromBoard: board, side: "w", afterBoard: applied.board, source: "our-click"
+    });
+    if (!r.ok) { return "partial 段也应能收已验证着法：" + r.reason; }
+    if (ledger.state().historyStatus !== "partial") { return "状态应为 partial"; }
+    const cmd = ledger.positionCommand();
+    return cmd && cmd.indexOf(" moves " + first.iccs) > 0 ? true : ("partial 段命令错：" + cmd);
+});
+
+check("事实跟踪器：开局开段 / 着法推进 / 原地改正降级 / 作废清账（版本单调）", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const first = legal.allLegalMoves(board, "w")[0];
+    const applied = legal.applyMove(board, { iccs: first.iccs }).board;
+    const tracker = positionTrackerModule.createPositionTracker({});
+    const a = tracker.adopt({ board: board, side: "w", reason: "test" });
+    if (a.historyStatus !== "complete") { return "开局应开完整段：" + a.historyStatus; }
+    const v0 = tracker.snapshot().version;
+    const c = tracker.confirmMove({
+        iccs: first.iccs, fromBoard: board, side: "w", afterBoard: applied, source: "our-click"
+    });
+    if (!c.ok) { return "着法应入账：" + c.reason; }
+    const snap = tracker.snapshot();
+    if (snap.version <= v0) { return "版本应递增"; }
+    if (!snap.position || snap.position.side !== "b") {
+        return "推进后应轮到黑方：" + JSON.stringify(snap.position && snap.position.side);
+    }
+    if (String(snap.positionCommand).indexOf(" moves " + first.iccs) < 0) { return "命令应带着法：" + snap.positionCommand; }
+    const f = tracker.fix({ board: snap.position.board.slice(), reason: "resync-test" });
+    if (!f.ok || tracker.snapshot().historyStatus !== "partial") { return "fix 应降级为 partial"; }
+    if (tracker.snapshot().ledger.ply !== 1) { return "fix 不该清已校验着法"; }
+    tracker.invalidate("new-session-test", { resetLedger: true });
+    const end = tracker.snapshot();
+    return (!end.position && end.historyStatus === "unknown") ? true : ("作废后应空白：" + end.historyStatus);
+});
+
+check("事实跟踪器：与当前局面不连续的着法拒收（失败不推进版本）", function () {
+    const board = fen.parseFen(fen.START_FEN).board;
+    const first = legal.allLegalMoves(board, "w")[0];
+    const applied = legal.applyMove(board, { iccs: first.iccs }).board;
+    const tracker = positionTrackerModule.createPositionTracker({});
+    tracker.adopt({ board: board, side: "w", reason: "test" });
+    const version = tracker.snapshot().version;
+    const r = tracker.confirmMove({
+        iccs: first.iccs, fromBoard: applied, side: "w", afterBoard: applied, source: "our-click"
+    });
+    if (r.ok !== false) { return "不连续/非法的着法不应入账"; }
+    if (tracker.snapshot().version !== version) { return "拒收不应推进版本"; }
+    return tracker.stats().rejects === 1 ? true : ("拒收计数应为 1，实际 " + tracker.stats().rejects);
+});
+
+check("驱动·账本影子：tracker() 访问器存在；newSession 后账本空白", function () {
+    const driver = driverModule.createDriver({
+        allowClick: false,
+        recognize: function () {
+            return { ok: true, chars: START_BOARD.slice(), unknownCells: 0, conflicts: 0, layout: START_FEN };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () { return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 }; },
+        config: { movetimeMs: 20 }
+    });
+    if (typeof driver.tracker !== "function") { return "驱动缺少 tracker() 访问器"; }
+    const before = driver.tracker();
+    if (!before || before.position !== null || before.historyStatus !== "unknown") {
+        return "初始账本应当空白：" + JSON.stringify(before);
+    }
+    driver.newSession();
+    const after = driver.tracker();
+    return (after && after.position === null && after.historyStatus === "unknown")
+        ? true : ("newSession 后账本应空白：" + JSON.stringify(after));
 });
 
 // ---------------------------------------------------------------- 识别绘制（人审用）

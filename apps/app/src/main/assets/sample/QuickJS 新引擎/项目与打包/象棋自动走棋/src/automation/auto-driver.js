@@ -26,6 +26,7 @@ const transition = require("../chess/transition.js");
 const fenModule = require("../chess/fen.js");
 const legal = require("../chess/legal-moves.js");
 const rulesModule = require("../chess/rules.js");
+const positionTrackerModule = require("../services/position-tracker.js");
 const defaults = require("../util/defaults.js");
 const logRing = require("../diagnostics/log-ring.js");
 
@@ -397,6 +398,127 @@ function createDriver(options) {
     let running = false;
     let grid = null;
     let lastReliable = null;      // { board, side }：上一可靠局面与「该走棋方」
+
+    /**
+     * A3 事实层（**影子接入**）：已确认局面 + 已验证着法账本（src/services/position-tracker.js）。
+     *
+     * ⚠️ 本批不改变驱动行为：`lastReliable` 仍是唯一读取源；tracker 只做同步记录与一致性守护：
+     *   · 每处 `lastReliable = …` 旁多一行 `track*()`；
+     *   · 账本拒收（非法/与验证盘面不符/与当前局面不连续）→ `stats.trackerRejects`；
+     *   · 影子与基准不一致 → `stats.trackerMismatch` + 前几次打日志。
+     * P4（引擎吃 `positionCommand()`）时再把读取源切到 tracker。
+     */
+    const positionTracker = positionTrackerModule.createPositionTracker({
+        startFen: fenModule.START_FEN,
+        nowMono: nowMono,
+        note: function (text) { note("[账本] " + text); }
+    });
+    stats.trackerMismatch = 0;
+    stats.trackerRejects = 0;
+    stats.trackerErrors = 0;
+
+    function boardOfFen(fen) {
+        try {
+            const parsed = fenModule.parseFen(fen);
+            return parsed && parsed.ok ? parsed.board : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    /** 影子守护：tracker 快照与 `lastReliable` 必须一致；不一致只计数 + 前几次打日志。 */
+    function trackerMirror(detail) {
+        const snap = positionTracker.snapshot();
+        const cur = snap.position;
+        const same = (!cur && !lastReliable) ||
+            (cur && lastReliable && cur.side === lastReliable.side &&
+                cur.board.join("") === lastReliable.board.join(""));
+        if (same) {
+            return;
+        }
+        stats.trackerMismatch += 1;
+        if (stats.trackerMismatch <= 5) {
+            note("⚠ 账本影子与可靠基准不一致（" + (detail || "") + "）：tracker=" +
+                (cur ? cur.side + "/" + cur.board.join("") : "null") + "｜基准=" +
+                (lastReliable ? lastReliable.side + "/" + lastReliable.board.join("") : "null"));
+        }
+    }
+
+    /** 影子：采纳新基准（无着法语义的场合：重建/声明/开局）。 */
+    function trackAdopt(board, side, meta) {
+        try {
+            positionTracker.adopt(Object.assign({ board: board, side: side }, meta || {}));
+        } catch (error) {
+            stats.trackerErrors += 1;
+        }
+        trackerMirror((meta && meta.reason) || "adopt");
+    }
+
+    /** 影子：收一手已验证着法（被拒也**不改变行为**，只计数）。 */
+    function trackConfirm(entry) {
+        try {
+            const result = positionTracker.confirmMove(entry || {});
+            if (result && result.ok === false) {
+                stats.trackerRejects += 1;
+                if (stats.trackerRejects <= 5) {
+                    note("账本拒收着法：" + result.reason);
+                }
+            }
+        } catch (error) {
+            stats.trackerErrors += 1;
+        }
+        trackerMirror((entry && entry.iccs) || "confirm");
+    }
+
+    /** 影子：基准按观测原地改正（无着法）。 */
+    function trackFix(board, side, meta) {
+        try {
+            positionTracker.fix(Object.assign({ board: board, side: side }, meta || {}));
+        } catch (error) {
+            stats.trackerErrors += 1;
+        }
+        trackerMirror((meta && meta.reason) || "fix");
+    }
+
+    /** 影子：把一串「刚被采纳的推断着法」按顺序记账（before 一路链推）。 */
+    function trackInferredMoves(moves, beforeBoard, beforeSide, source) {
+        let board = beforeBoard;
+        let side = beforeSide;
+        for (let i = 0; i < (moves || []).length; i++) {
+            const item = moves[i] || {};
+            let result = null;
+            try {
+                result = positionTracker.confirmMove({
+                    iccs: item.iccs, fromBoard: board, side: side,
+                    afterBoard: null, source: source
+                });
+            } catch (error) {
+                result = null;
+            }
+            if (!result || result.ok !== true) {
+                stats.trackerRejects += 1;
+                if (stats.trackerRejects <= 5) {
+                    note("账本拒收推断着法（" + (item.iccs || "?") + "）：" +
+                        (result ? result.reason : "异常"));
+                }
+                trackerMirror("inferred");
+                return;
+            }
+            board = result.appliedBoard;
+            side = result.nextSide;
+        }
+        trackerMirror("inferred×" + ((moves || []).length));
+    }
+
+    /** 影子：作废基准（与 lastReliable = null 同步）。 */
+    function trackClear(reason, resetLedger) {
+        try {
+            positionTracker.invalidate(reason, { resetLedger: resetLedger === true });
+        } catch (error) {
+            stats.trackerErrors += 1;
+        }
+        trackerMirror(reason);
+    }
     let lastResult = null;        // 最近一次识别结果（界面/诊断用）
     let lastBoard = null;
     /** 最近一次观测里**模型读到的原始盘面**（补丁/补齐之前）——诊断与审核用（§12） */
@@ -666,6 +788,7 @@ function createDriver(options) {
             return null;
         }
         lastReliable = { board: lastBoard.slice(), side: machine.mySide() };
+        trackAdopt(lastBoard, machine.mySide(), { reason: "declare-idle", source: "manual-confirmed" });
         ocrPatchGate = {};
         phantomStreak = {};
         needFreshBaseline = false;
@@ -759,6 +882,7 @@ function createDriver(options) {
             }
             grid = located.grid;
             lastReliable = null;
+            trackClear("calibrate");
             lastRelocateMono = nowMono();   // 定位过就记时间（recover 的限频用它）
             note("棋盘已定位：起点 (" + Math.round(grid.originX) + "," + Math.round(grid.originY) +
                 ") 格距 (" + Math.round(grid.stepX) + "," + Math.round(grid.stepY) +
@@ -1129,6 +1253,7 @@ function createDriver(options) {
              */
             note("  ⇒ 同时作废可靠基准：被游戏反复拒绝 ≈ 我们的盘面漏子了（下一轮重新全盘确认）");
             lastReliable = null;
+            trackClear("attempt-budget");
             needFreshBaseline = true;
             return pump(machine.dispatch({ type: "PAUSE", reason: budget.reason }));
         }
@@ -1301,6 +1426,14 @@ function createDriver(options) {
                 const fastMySide = ticket.baseSide === "b" ? "b" : "w";
                 const fastNextSide = fastMySide === "w" ? "b" : "w";
                 lastReliable = { board: expectedBoard.slice(), side: fastNextSide };
+                // A3 影子：ROI 确认的我方着法入账（账本只记录，不参与决策）
+                const roiBaseBoard = boardOfFen(ticket.baseFen);
+                if (roiBaseBoard) {
+                    trackConfirm({
+                        iccs: ticket.moveICCS, fromBoard: roiBaseBoard, side: ticket.baseSide,
+                        afterBoard: expectedBoard, source: "our-click"
+                    });
+                }
                 decisionEpoch += 1;
                 note("确认：CONFIRMED（ROI 快速确认：起点已空 + 落点 " + fast.destChar +
                     "｜第 " + fast.attempts + " 次探测）");
@@ -1601,6 +1734,22 @@ function createDriver(options) {
             // 应手未佐证时：可靠盘面只取「我方的着法」，不把那一帧的应手带进去。
             const reliableBoard = (replyOk || !expectedBoard) ? verdict.board.slice() : expectedBoard.slice();
             lastReliable = { board: reliableBoard, side: nextSide };
+            // A3 影子：先把「我方这手」入账，再把已采信的应手入账（不一致只计数，不影响行为）
+            const ledgerBase = expectedBoard ? boardOfFen(ticket.baseFen) : null;
+            if (ledgerBase && expectedBoard) {
+                trackConfirm({
+                    iccs: ticket.moveICCS, fromBoard: ledgerBase, side: ticket.baseSide,
+                    afterBoard: expectedBoard, source: "our-click"
+                });
+            }
+            if (replyOk && replyMove && expectedBoard) {
+                trackConfirm({
+                    iccs: replyMove, fromBoard: expectedBoard,
+                    side: mySide === "w" ? "b" : "w",
+                    afterBoard: reliableBoard, source: "opponent-observed",
+                    toleranceIndexes: verdict.replyPatch ? [verdict.replyPatch.index] : []
+                });
+            }
             decisionEpoch += 1;   // 一手棋真正落定 → 新的回合世代（循环历史去重只在世代内生效）
             note("可靠基准已刷新（确认 " + verdict.result + (replyRejected ? "，应手未采信" : "") + "）：" +
                 (nextSide === mySide ? "轮到我方" : "轮到对方"));
@@ -2353,6 +2502,7 @@ function createDriver(options) {
         const fixed = lastReliable.board.slice();
         fixed[patch.index] = null;
         lastReliable = { board: fixed, side: lastReliable.side };
+        trackFix(fixed, lastReliable.side, { reason: "resync" });
         baselineCorrectedAt = nowMono();
         note("可靠基准已按观测改正那格（(" + (patch.index % 9) + "," +
             Math.floor(patch.index / 9) + ") 置空）：否则下一帧会「少一个子且解释不了」");
@@ -2638,6 +2788,7 @@ function createDriver(options) {
             const board2 = lastReliable.board.slice();
             board2[index] = ch;
             lastReliable = { board: board2, side: lastReliable.side };
+            trackFix(board2, lastReliable.side, { reason: "ocr-fix" });
             baselineFixed += 1;
         };
         for (let i = 0; i < 90; i++) {
@@ -3828,6 +3979,7 @@ function createDriver(options) {
             }
         }
         lastReliable = { board: board.slice(), side: nextSide };
+        trackAdopt(board, nextSide, { reason: "rebuild", source: "manual-confirmed" });
         baselineCorrectedAt = 0;      // 旧票据不会再重建，避免拿旧事实去凑
         // 换了新基准 ⇒ 之前「按旧基准兜住」的粘性一格一律放下（盘面已经不是那张了）
         for (const key in stallFilledUntil) {
@@ -4009,6 +4161,7 @@ function createDriver(options) {
         const nextSide = base.side === "w" ? "b" : "w";
         // 用**快照 + 这一手**重建基准（顺带把 fills 对基准的临时改动纠正回来）
         lastReliable = { board: applied, side: nextSide };
+        trackConfirm({ iccs: iccs, fromBoard: base.board, side: base.side, afterBoard: applied, source: "opponent-observed" });
         lastSideFix = null;   // 观测马上被归一成这份盘面，不需要再“修正”
         dropPatchesAt([fromIndex], "占用唯一解 " + iccs + " 的起点已空");
         registerMoveDestinations([{ iccs: iccs }], applied);
@@ -4033,6 +4186,7 @@ function createDriver(options) {
             // 没有任何历史时唯一的可靠推断：棋盘就是标准开局 → 中国象棋红先
             if (isStartPosition(board)) {
                 lastReliable = { board: board.slice(), side: "w" };
+                trackAdopt(board, "w", { reason: "start-position", source: "manual-confirmed" });
                 note("局面是标准开局 → 按红先处理（轮到红方）");
                 return "w";
             }
@@ -4056,7 +4210,11 @@ function createDriver(options) {
             if (inferred.board && legal.diffBoards(settled, board).length > 0) {
                 lastSideFix = { board: settled, how: inferred.reason };
             }
+            const prevReliableBoard = lastReliable.board;
+            const prevReliableSide = lastReliable.side;
             lastReliable = { board: settled, side: inferred.nextSide };
+            trackInferredMoves(inferred.moves || [], prevReliableBoard, prevReliableSide,
+                inferred.side === machine.mySide() ? "our-click" : "opponent-observed");
             note("轮次推断：" + inferred.reason);
             /**
              * ★★ 硬不变量（2026-09-20 真机 now37，用户报「炮为什么去吃对面的将」）：
@@ -4077,6 +4235,7 @@ function createDriver(options) {
                     note("⚠ 盘面自相矛盾：刚走完的" + (inferred.side === "w" ? "红" : "黑") +
                         "方还处在被将状态（规则上不可能）→ 判这张盘不可信，重新全盘确认");
                     lastReliable = null;
+                    trackClear("impossible-in-check");
                     needFreshBaseline = true;
                     lastSideFix = null;
                     return null;
@@ -4115,7 +4274,14 @@ function createDriver(options) {
                     return null;
                 }
                 lastSideFix = { board: guess.board.slice(), how: "盖住的应手 " + guess.iccs };
+                const prevCoveredBoard = lastReliable.board;
+                const prevCoveredSide = lastReliable.side;
                 lastReliable = { board: guess.board, side: guess.nextSide };
+                trackConfirm({
+                    iccs: guess.iccs, fromBoard: prevCoveredBoard, side: prevCoveredSide,
+                    afterBoard: guess.board, source: "opponent-observed",
+                    toleranceIndexes: coveredFilledIndexes
+                });
                 note("轮次推断（盖住的应手）：唯一合法着法 " + guess.iccs +
                     "（起点/落点在游戏「上一步」标记下读不出来，已按该着法改正）");
                 dropPatchesAt([transition.squareIndex(guess.iccs, 0)], "盖住的应手起点已空");
@@ -4143,7 +4309,15 @@ function createDriver(options) {
                 return null;
             }
             lastSideFix = { board: tolerant.board, how: "唯一合法单步 " + tolerant.iccs };
+            const prevTolerantBoard = lastReliable.board;
+            const prevTolerantSide = lastReliable.side;
             lastReliable = { board: tolerant.board, side: tolerant.nextSide };
+            trackConfirm({
+                iccs: tolerant.iccs, fromBoard: prevTolerantBoard, side: prevTolerantSide,
+                afterBoard: tolerant.board,
+                source: prevTolerantSide === machine.mySide() ? "our-click" : "opponent-observed",
+                toleranceIndexes: [transition.squareIndex(tolerant.iccs, 1)]
+            });
             note("轮次推断（装饰容差）：唯一合法单步 " + tolerant.iccs +
                 "（落点格被游戏装饰读错，已按该着法改正" +
                 (tolerant.colorNoise ? "；另有 " + tolerant.colorNoise + " 格只是红黑读反，已按基准纠正" : "") +
@@ -4632,6 +4806,7 @@ function createDriver(options) {
         setMySide: function (side) {
             machine.setMySide(side);
             lastReliable = null;
+            trackClear("side-switch", true);
             ocrPatchGate = {};
             phantomStreak = {};
             needFreshBaseline = false;
@@ -4659,6 +4834,7 @@ function createDriver(options) {
                 };
             }
             lastReliable = { board: lastBoard.slice(), side: machine.mySide() };
+            trackAdopt(lastBoard, machine.mySide(), { reason: "assert-turn", source: "manual-confirmed" });
             // 声明后是一张**新基准**：旧的「连续帧共识」不再适用，清掉重算
             ocrPatchGate = {};
             phantomStreak = {};
@@ -4675,6 +4851,7 @@ function createDriver(options) {
             const id = machine.versions().sessionId + 1;
             machine.setSession(id);
             lastReliable = null;
+            trackClear("new-session", true);
             grid = null;
             pendingMate = null;
             planHistory.clear();
@@ -4696,6 +4873,10 @@ function createDriver(options) {
         lastBoard: function () { return lastBoard ? lastBoard.slice() : null; },
         lastReliable: function () {
             return lastReliable ? { board: lastReliable.board.slice(), side: lastReliable.side } : null;
+        },
+        /** A3：事实层快照（只读；影子期供测试/面板审计用）。 */
+        tracker: function () {
+            return positionTracker.snapshot();
         },
         stats: function () {
             return Object.assign({}, stats, {
