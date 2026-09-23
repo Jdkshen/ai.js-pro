@@ -144,7 +144,13 @@ function createApp(options) {
         handlers: opts.handlers || {},
         store: store,
         recorder: recorder,
-        isRunning: function () { return session.running(); }
+        // 「在跑」以**驱动实际状态**为准：面板/页面把驱动 pause() 后会话标志还立着，
+        // 此时 START 应当放行（继续），PAUSE/RESUME 的守卫也才和真实状态一致（A1 批次2）。
+        isRunning: function () {
+            const d = session.driver();
+            if (!d) { return session.running(); }
+            return typeof d.isRunning === "function" ? d.isRunning() : session.running();
+        }
     });
 
     // ---- 9) 退出钩子：停业务、还锁、清窗口 ----

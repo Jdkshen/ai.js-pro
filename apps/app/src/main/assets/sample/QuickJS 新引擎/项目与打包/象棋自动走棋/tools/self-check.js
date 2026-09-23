@@ -5722,6 +5722,7 @@ const portsModule = require("../src/runtime/ports.js");
 const windowManagerModule = require("../src/runtime/window-manager.js");
 const gameSessionModule = require("../src/services/game-session.js");
 const bootstrapModule = require("../src/app/bootstrap.js");
+const busModule = require("../src/app/panel-bus.js");
 
 check("框架·文案：未知状态要原样返回，不能悄悄变成「未知」把新状态藏起来", function () {
     if (labelsModule.stateText("CLICKING") !== "点击中") {
@@ -6014,6 +6015,25 @@ check("框架·会话：驱动被 pause 后再次 start 应当视为继续（不
     driver.pause();
     const resume = session.start();
     return resume.ok === true ? true : ("暂停后 start 应当视为继续，实际：" + resume.reason);
+});
+
+check("框架·总线：对方状态行带「几何版本/引擎」——两边共用同一渲染口径", function () {
+    const store = {};
+    const fakeFiles = {
+        getSdcardPath: function () { return "/sdcard"; },
+        join: function (a, b) { return a + "/" + b; },
+        ensureDir: function () { return true; },
+        read: function (p) { return store[p] || ""; },
+        write: function (p, t) { store[p] = String(t); return true; }
+    };
+    const floatyBus = busModule.createPanelBus({ owner: "floaty", files: fakeFiles, now: function () { return 1000; } });
+    floatyBus.publish({ running: true, mode: "auto", side: "b", gridVersion: 7, backend: "pikafish", drawMode: "cells" });
+    const mainBus = busModule.createPanelBus({ owner: "main", files: fakeFiles, now: function () { return 1000; } });
+    const text = mainBus.describeOther();
+    if (text.indexOf("正在跑") < 0) { return "没读到对方运行态：" + text; }
+    if (text.indexOf("几何 v7") < 0) { return "状态行缺几何版本：" + text; }
+    if (text.indexOf("Pikafish") < 0) { return "状态行缺引擎后端：" + text; }
+    return true;
 });
 
 check("框架·装配：autorun 致命错误时 blocking=true，dispose 要还锁", function () {

@@ -289,7 +289,11 @@ function busSnapshot() {
         side: (driver ? driver.mySide() : "w"),
         tap: clickMethodKey,
         capture: adapter.captureBackend(),
-        drawMode: drawMode
+        drawMode: drawMode,
+        // A1 批次2：跨引擎对齐口径（几何版本/状态机/实际引擎）——两边用同一渲染函数显示
+        gridVersion: (grid ? grid.version : null),
+        machineState: (driver && driver.machine) ? driver.machine.state() : "STOPPED",
+        backend: engineModule.lastEngine()
     };
 }
 
@@ -353,7 +357,12 @@ function otherLineShort() {
     if (!other.fresh) {
         return "页面：离线";
     }
+    // A1 批次2：和页面侧同一口径 —— 运行态｜几何｜引擎｜模式（面板窄，先放最重要的，
+    // 超宽由 statusLine 截断；实测模式名放前面会把几何/引擎直接截掉）
     return "页面：" + (other.state.running ? "跑中" : "未开始") +
+        "｜" + (other.state.gridVersion == null ? "—" : ("v" + other.state.gridVersion)) +
+        "｜" + (other.state.backend === "pikafish" ? "Pikafish"
+            : (other.state.backend === "js" ? "JS" : "?")) +
         "｜" + String(MODE_LABEL[other.state.mode] || "?").replace(/\s/g, "");
 }
 
@@ -3182,6 +3191,22 @@ function ensureBoardService() {
         },
         paths: {},                           // 面板仍走自己的 panel-bus；不用 owner 文件通道
         sink: function (text) { logLine(text); },
+        // A1 批次2：状态性命令统一走控制器（参数/运行态校验 → handler → 记录事件）
+        handlers: {
+            START: function () { return startLoop(); },
+            STOP: function () { stopLoop(); return { ok: true }; },
+            RELOCATE: function () { locateAndCalibrate(); return { ok: true }; },
+            RECOGNIZE: function () { recognizeOnce(); return { ok: true }; },
+            SELFTEST: function () { runSelfCheck(); return { ok: true }; },
+            CONTRACT: function () { runContractTests(); return { ok: true }; },
+            NEW_SESSION: function () { newSession(); return { ok: true }; },
+            DECLARE_TURN: function (arg) {
+                if (!driver) { return { ok: false, reason: "先开始（或先识别一帧）再声明轮次" }; }
+                const result = driver.assertTurn();
+                logLine("声明轮到我：" + result.reason);
+                return result && result.ok === false ? { ok: false, reason: result.reason } : { ok: true };
+            }
+        },
         boardOverrides: {
             ports: {
                 now: function () { return Date.now(); },
@@ -4318,13 +4343,13 @@ function keepGameInFront() {
 
 function startLoop() {
     if (running) {
-        return;
+        return { ok: false, reason: "已经在跑" };
     }
     // 互锁：主界面那边正在跑就先拒绝（两个引擎同时跑等于双份截图/算棋）
     const gate = loopLock.acquire(loopLock.OWNER_FLOATY);
     if (!gate.ok) {
         logLine("拒绝开始：" + gate.reason + "。先到主界面点「开始观察 / 暂停」把它停掉。");
-        return;
+        return { ok: false, reason: gate.reason };
     }
     if (modeKey === "auto") {
         logLine("③ 自动走棋会真的点击棋盘，请确认游戏在前台且轮到我方");
@@ -4344,7 +4369,7 @@ function startLoop() {
         // 通道名非法 / 建驱动失败：**显式失败**，不要带着半个驱动继续跑（点击通道创建时就定了）
         loopLock.release(loopLock.OWNER_FLOATY);
         logLine("建驱动失败，已终止本次启动：" + error);
-        return;
+        return { ok: false, reason: "建驱动失败：" + error };
     }
     // 引擎预热：Pikafish 首次启动要加载 ~48MB NNUE 权重（K40 实测 ~0.7s）。
     // 放在这里做掉，别让第一步棋多等这一下；失败也只是日志（router 会自动回退 JS）。
@@ -4359,9 +4384,10 @@ function startLoop() {
     }
     // ⚠️ 真机踩过：只建驱动 + 起定时器是不够的，状态机还在 STOPPED，
     //    每轮 tick() 都返回「没有在运行」。必须先 driver.start()（START → READY）。
+    let started = null;
     try {
         // A1：启动也走会话（与停止同一处；驱动已在 buildDriver 里由会话构建）
-        const started = app ? app.session.start() : { ok: false, reason: "应用未装配" };
+        started = app ? app.session.start() : { ok: false, reason: "应用未装配" };
         if (started && started.ok === false) {
             throw new Error(started.reason || "会话启动失败");
         }
@@ -4369,13 +4395,14 @@ function startLoop() {
     } catch (error) {
         loopLock.release(loopLock.OWNER_FLOATY);
         logLine("驱动启动失败：" + error);
-        return;
+        return { ok: false, reason: "驱动启动失败：" + error };
     }
     running = true;
     scheduleNextTick();
     logLine("已开始：" + MODE_LABEL[modeKey] + "（已持有棋盘循环锁：" + loopLock.lockPath() + "，算棋 " +
         (driver && driver.computeMode ? driver.computeMode() : "?") + "｜" +
         engineModule.engineDescription() + "）");
+    return { ok: true, state: started && started.state };
 }
 
 /**
@@ -4424,6 +4451,22 @@ function stopLoop() {
         }
     }
     logLine("已停止：驱动已停、定时器已清、循环锁已释放（几何与校准结果保留）");
+}
+
+/**
+ * 新会话（§14 / A1 批次2：从 sessionBtn 按钮体抽成命令实现，控制器与按钮共用）。
+ * 停循环 → 驱动 newSession → 清服务层几何/缓存 → 面板备注。
+ */
+function newSession() {
+    stopLoop();
+    if (driver && typeof driver.newSession === "function") {
+        driver.newSession();
+    }
+    grid = null;
+    if (boardService) { boardService.clear(); }   // 几何/缓存放服务层一份，新会话要一起清
+    calibrationNote = "已换会话（几何清空）";
+    logLine("新会话：会话号 +1，票据与基准全部作废，几何已清空");
+    render();
 }
 
 function runSelfCheck() {
@@ -4874,15 +4917,12 @@ function main() {
         render();
     });
     win.startBtn.on("click", function () {
-        if (running) {
-            stopLoop();
-        } else {
-            startLoop();
-        }
+        // A1 批次2：启动/停止统一走控制器命令（实现见 ensureBoardService 里的 handlers）
+        app.controller.run(running ? "STOP" : "START");
         render();
     });
     win.stopBtn.on("click", function () {
-        stopLoop();
+        app.controller.run("STOP");
         // 双向停止：页面（主界面）在跑也一起停掉（否则面板停了、页面还在抓屏/算棋）
         const other = bus.readOther();
         if (other && other.fresh && other.state && other.state.running) {
@@ -4892,19 +4932,19 @@ function main() {
         render();
     });
     win.locateBtn.on("click", function () {
-        locateAndCalibrate();
+        app.controller.run("RELOCATE");
         render();
     });
     win.recognizeBtn.on("click", function () {
-        recognizeOnce();
+        app.controller.run("RECOGNIZE");
         render();
     });
     win.selfcheckBtn.on("click", function () {
-        runSelfCheck();
+        app.controller.run("SELFTEST");
         render();
     });
     win.contractBtn.on("click", function () {
-        runContractTests();
+        app.controller.run("CONTRACT");
         render();
     });
     // 识别绘制：点一下 = 抓一帧 → 认一帧 → 把结果画在冻结的画面上（人审用）。
@@ -4966,12 +5006,8 @@ function main() {
     });
     // 「现在轮到我」：把当前观察到的局面当可靠基准（轮次未知时状态机会一直等）
     win.turnBtn.on("click", function () {
-        if (!driver) {
-            logLine("先开始（或先识别一帧）再声明轮次");
-        } else {
-            const result = driver.assertTurn();
-            logLine("声明轮到我：" + result.reason);
-        }
+        // A1 批次2：命令式（带 side 参数；“没有驱动”由 handler 报错）
+        app.controller.run("DECLARE_TURN", { side: driver ? driver.mySide() : "w" });
         render();
     });
     win.sideBtn.on("click", function () {
@@ -4984,15 +5020,8 @@ function main() {
         render();
     });
     win.sessionBtn.on("click", function () {
-        stopLoop();
-        if (driver && typeof driver.newSession === "function") {
-            driver.newSession();
-        }
-        grid = null;
-        if (boardService) { boardService.clear(); }   // 几何/缓存放服务层一份，新会话要一起清
-        calibrationNote = "已换会话（几何清空）";
-        logLine("新会话：会话号 +1，票据与基准全部作废，几何已清空");
-        render();
+        // A1 批次2：按钮只发命令（实现见 newSession()）
+        app.controller.run("NEW_SESSION");
     });
     win.collapseBtn.on("click", function () {
         setPanelCollapsed(!collapsed);

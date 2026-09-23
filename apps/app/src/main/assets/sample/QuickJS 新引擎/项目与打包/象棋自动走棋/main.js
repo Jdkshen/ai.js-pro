@@ -341,17 +341,9 @@ ui.floatyClose.on("click", () => {
 });
 
 // 离线自检：只跑纯 JS 模块（FEN / 几何 / 格点分配 / 时序融合），不截图、不点棋盘。
+// A1 批次2：按钮只发命令。
 ui.selfcheck.on("click", () => {
-    try {
-        const result = require("./tools/self-check.js");
-        const lines = [result.summary];
-        for (let i = 0; i < result.failures.length; i++) {
-            lines.push((i + 1) + ". " + result.failures[i]);
-        }
-        show(lines.join("\n"));
-    } catch (error) {
-        show("自检没能运行：" + error);
-    }
+    app.controller.run("SELFTEST");
 });
 
 // 运行时探针：核对平台能力（会截一张图看帧字段），不点击棋盘。
@@ -400,16 +392,9 @@ ui.probe.on("click", () => {
 });
 
 // 棋盘定位（真机）：截一帧，在默认范围内自动找格线。只截图，不点击棋盘。
+// A1 批次2：按钮只发命令，实现在 relocateCommand（参数/运行态由控制器校验）。
 ui.locate.on("click", () => {
-    try {
-        const board = require("./tools/locate-board.js");
-        const keep = lastOutput;
-        show("正在定位棋盘…");
-        const result = board.locateBoardOnScreen();
-        show(board.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
-    } catch (error) {
-        show("定位没能运行：" + error);
-    }
+    app.controller.run("RELOCATE");
 });
 
 // 识别（图片）：定位 → 按棋盘外框裁剪 → 160 模型检测 → 落格 → 格心判红黑 → FEN。
@@ -553,6 +538,16 @@ const app = bootstrapModule.createApp({
     recognize: function (options) { return app.boards.recognizeSmart(options || {}); },
     locate: function (options) { return app.boards.locate(options || {}); },
     analyze: function (position, options) { return engineModule.analyze(position, options); },
+    // A1 批次2：状态性命令统一走控制器（参数/运行态校验 → handler → 记录事件）
+    handlers: {
+        START: function () { return startAutoCommand(); },
+        PAUSE: function () { return pauseAutoCommand(); },
+        STOP: function () { return stopAutoCommand(); },
+        RELOCATE: function () { return relocateCommand(); },
+        SELFTEST: function () { return selfcheckCommand(); },
+        CONTRACT: function () { return contractCommand(); },
+        NEW_SESSION: function () { return newSessionCommand(); }
+    },
     driverExtras: {
         isTrustworthy: function (grid) {
             return geometryModule.isTrustworthy(grid, { minSamples: 4, maxResidual: 0.35 });
@@ -895,6 +890,109 @@ function stopAuto(why) {
     }
 }
 
+// ==================== A1 批次2：控制器命令实现（按钮 → 命令 → 业务） ====================
+
+/** START：抢互锁 → 要截图授权 → 会话启动 → 先跑一拍再进主循环（原 ui.autoToggle 的启动段）。 */
+function startAutoCommand() {
+    // 互锁：悬浮窗面板里有另一套驱动循环，两个引擎一起跑会双份截图/算棋（模式③还会双份点击）
+    const gate = loopLock.acquire(loopLock.OWNER_MAIN);
+    if (!gate.ok) {
+        show(gate.reason + "。先把悬浮窗面板里的循环停掉（面板上的「停止」或「关闭面板」）。");
+        ui.autoStatus.setText("未开始：" + gate.reason);
+        return { ok: false, reason: gate.reason };
+    }
+    if (!adapter.requestCapture("portrait")) {
+        loopLock.release(loopLock.OWNER_MAIN);
+        show("没有拿到截图授权，自动模式不启动。");
+        return { ok: false, reason: "没有拿到截图授权" };
+    }
+    const started = app.session.start();
+    if (started && started.ok === false) {
+        loopLock.release(loopLock.OWNER_MAIN);
+        show("自动模式启动失败：" + (started.reason || "未说明"));
+        return { ok: false, reason: started.reason || "启动失败" };
+    }
+    ui.autoToggle.setText("暂停");
+    setMainStatus("INITIALIZING", "正在取得新画面并校准棋盘。");
+    driverTick();
+    runAutoLoop();   // 阻塞到这里为止（详见 runAutoLoop 的退出条件）
+    return { ok: true };
+}
+
+/** PAUSE：作废票据与算棋任务，但保留会话/几何（原 ui.autoToggle 的暂停段）。 */
+function pauseAutoCommand() {
+    autoDriver.pause();
+    loopLock.release(loopLock.OWNER_MAIN);
+    ui.autoToggle.setText("继续");
+    setMainStatus("PAUSED", "票据与算棋任务已作废，不会继续点击。");
+    show("已暂停：票据与算棋任务都作废了，不会再有点击。");
+    return { ok: true };
+}
+
+/** STOP：停本页；「双向停止」仍留在按钮层做（总线语义，不在业务命令里）。 */
+function stopAutoCommand() {
+    stopAuto("用户停止");
+    ui.autoStatus.setText("未开始（模式：" + MODE_LABEL[modeKey] + "）");
+    ui.autoToggle.setText("开始");
+    lastDriverLine = "";
+    return { ok: true };
+}
+
+/** RELOCATE：截一帧自动找格线（原「定位棋盘」按钮的体）。 */
+function relocateCommand() {
+    try {
+        const keep = lastOutput;
+        show("正在定位棋盘…");
+        const result = locateBoard.locateBoardOnScreen();
+        show(locateBoard.describeResult(result) + (keep ? "\n\n—— 上一次输出 ——\n" + keep : ""));
+        return { ok: !!(result && result.ok) };
+    } catch (error) {
+        show("定位没能运行：" + error);
+        return { ok: false, reason: String(error) };
+    }
+}
+
+/** SELFTEST：离线自检（原「离线自检」按钮的体）。 */
+function selfcheckCommand() {
+    try {
+        const result = require("./tools/self-check.js");
+        const lines = [result.summary];
+        for (let i = 0; i < result.failures.length; i++) {
+            lines.push((i + 1) + ". " + result.failures[i]);
+        }
+        show(lines.join("\n"));
+        return { ok: result.failures.length === 0 };
+    } catch (error) {
+        show("自检没能运行：" + error);
+        return { ok: false, reason: String(error) };
+    }
+}
+
+/** CONTRACT：格子契约测试（原「契约测试」按钮的体）。 */
+function contractCommand() {
+    try {
+        const result = require("./tools/test-cells-contract.js");
+        const lines = ["契约测试：" + result.summary];
+        for (let i = 0; i < Math.min(result.failures.length, 5); i++) {
+            lines.push("  失败 " + (i + 1) + "：" + result.failures[i].name + " → " + result.failures[i].message);
+        }
+        show(lines.join("\n"));
+        return { ok: result.failures.length === 0 };
+    } catch (error) {
+        show("契约测试没能运行：" + error);
+        return { ok: false, reason: String(error) };
+    }
+}
+
+/** NEW_SESSION：停 → 重建驱动（票据/几何/轮次基准全部作废）。 */
+function newSessionCommand() {
+    stopAuto("新会话");
+    rebuildDriver();      // 重建驱动 = 会话/票据/几何/轮次基准全部作废
+    ui.autoStatus.setText("新会话：票据与基准已作废（模式：" + MODE_LABEL[modeKey] + "）");
+    show("新会话：驱动已重建，既有票据、几何与轮次基准全部作废。");
+    return { ok: true };
+}
+
 // ======================= 跨引擎互锁总线（页面侧） =======================
 // 面板与页面跑在不同 JS 引擎里：状态靠各自发布的快照、命令靠单槽文件（见 panel-bus.js）。
 // 三条语义：状态互锁（谁在跑对方看得见）、双向停止、配置双向同步。
@@ -908,7 +1006,12 @@ function busSnapshot() {
         side: (autoDriver ? autoDriver.mySide() : "w"),
         tap: tapMethodKey,
         capture: adapter.captureBackend(),
-        drawEnabled: pageDrawEnabled
+        drawEnabled: pageDrawEnabled,
+        // A1 批次2：跨引擎对齐口径（几何版本/状态机/实际引擎）——两边用同一渲染函数显示
+        gridVersion: (autoDriver && typeof autoDriver.grid === "function" && autoDriver.grid())
+            ? autoDriver.grid().version : null,
+        machineState: (autoDriver && autoDriver.machine) ? autoDriver.machine.state() : "STOPPED",
+        backend: engineModule.lastEngine()
     };
 }
 
@@ -1082,40 +1185,12 @@ ui.autoToggle.on("click", function () {
     if (!autoDriver) {
         rebuildDriver();
     }
-    if (autoDriver.isRunning()) {
-        autoDriver.pause();
-        loopLock.release(loopLock.OWNER_MAIN);
-        ui.autoToggle.setText("继续");
-        setMainStatus("PAUSED", "票据与算棋任务已作废，不会继续点击。");
-        show("已暂停：票据与算棋任务都作废了，不会再有点击。");
-        return;
-    }
-    // 互锁：悬浮窗面板里有另一套驱动循环，两个引擎一起跑会双份截图/算棋（模式③还会双份点击）
-    const gate = loopLock.acquire(loopLock.OWNER_MAIN);
-    if (!gate.ok) {
-        show(gate.reason + "。先把悬浮窗面板里的循环停掉（面板上的「停止」或「关闭面板」）。");
-        ui.autoStatus.setText("未开始：" + gate.reason);
-        return;
-    }
-    if (!adapter.requestCapture("portrait")) {
-        loopLock.release(loopLock.OWNER_MAIN);
-        show("没有拿到截图授权，自动模式不启动。");
-        return;
-    }
-    const started = app.session.start();
-    if (started && started.ok === false) {
-        loopLock.release(loopLock.OWNER_MAIN);
-        show("自动模式启动失败：" + (started.reason || "未说明"));
-        return;
-    }
-    ui.autoToggle.setText("暂停");
-    setMainStatus("INITIALIZING", "正在取得新画面并校准棋盘。");
-    driverTick();
-    runAutoLoop();   // 阻塞到这里为止（详见 runAutoLoop 的退出条件）
+    // A1 批次2：启动/暂停统一走控制器命令（实现见下方的 xxxCommand）
+    app.controller.run(autoDriver.isRunning() ? "PAUSE" : "START");
 });
 
 ui.autoStop.on("click", function () {
-    stopAuto("用户停止");
+    app.controller.run("STOP");
     // 双向停止：面板在跑也一起停掉（否则本页没跑，用户点「停止」看着像没反应）
     const other = bus.readOther();
     if (other && other.fresh && other.state && other.state.running) {
@@ -1124,9 +1199,6 @@ ui.autoStop.on("click", function () {
     } else {
         show("已停止：循环已停、画板已关。");
     }
-    ui.autoStatus.setText("未开始（模式：" + MODE_LABEL[modeKey] + "）");
-    ui.autoToggle.setText("开始");
-    lastDriverLine = "";
 });
 
 // ==================== 与面板对齐的三项 + 绘制开关 ====================
@@ -1139,23 +1211,12 @@ ui.pageDraw.on("click", function () {
 });
 
 ui.newSession.on("click", function () {
-    stopAuto("新会话");
-    rebuildDriver();      // 重建驱动 = 会话/票据/几何/轮次基准全部作废
-    ui.autoStatus.setText("新会话：票据与基准已作废（模式：" + MODE_LABEL[modeKey] + "）");
-    show("新会话：驱动已重建，既有票据、几何与轮次基准全部作废。");
+    // A1 批次2：按钮只发命令（实现同 newSessionCommand）
+    app.controller.run("NEW_SESSION");
 });
 
 ui.contract.on("click", function () {
-    try {
-        const result = require("./tools/test-cells-contract.js");
-        const lines = ["契约测试：" + result.summary];
-        for (let i = 0; i < Math.min(result.failures.length, 5); i++) {
-            lines.push("  失败 " + (i + 1) + "：" + result.failures[i].name + " → " + result.failures[i].message);
-        }
-        show(lines.join("\n"));
-    } catch (error) {
-        show("契约测试没能运行：" + error);
-    }
+    app.controller.run("CONTRACT");
 });
 
 ui.clearLog.on("click", function () {
