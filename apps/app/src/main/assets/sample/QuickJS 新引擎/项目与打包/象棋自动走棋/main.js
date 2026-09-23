@@ -496,6 +496,9 @@ const loopLock = require("./src/automation/loop-lock.js");
 const recognizeBoard = require("./tools/recognize-board.js");
 const locateBoard = require("./tools/locate-board.js");
 const bootstrapModule = require("./src/app/bootstrap.js");
+const pipelineFactory = require("./src/vision/pipeline-factory.js");
+const frameGateModule = require("./src/vision/frame-gate.js");
+const boardScan = require("./src/vision/board-scan.js");
 const engineModule = require("./src/engine/engine-router.js");   // 内置 JS 引擎 ⇄ Pikafish（原生 NNUE）
 const busModule = require("./src/app/panel-bus.js");
 
@@ -509,6 +512,46 @@ const bus = busModule.createPanelBus({
 
 const MODES = { WATCH: "watch", ADVICE: "advice", AUTO: "auto" };
 const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
+
+/**
+ * A2 视觉收口：主界面也接上视觉流水线（装配器在 src/vision/pipeline-factory.js，两入口共用）。
+ * 懒加载：第一次识别时才建（OCR 会话 / 检测会话都不便宜）；失败自动退回旧路径（服务层有回退链）。
+ */
+const mainOcrHolder = pipelineFactory.createOcrHolder({
+    log: function (text) { console.log("[xiangqi][ocr] " + text); }
+});
+const mainVisionSamples = pipelineFactory.createSamples(adapter);
+const mainVisionCtl = pipelineFactory.create({
+    adapter: adapter,
+    recognizeBoard: recognizeBoard,
+    getGrid: function () {
+        return (boardService && typeof boardService.grid === "function") ? boardService.grid() : null;
+    },
+    getOcrSession: function () { return mainOcrHolder.get(); },
+    isGrayEnabled: function () { return true; },          // 灰度优先（与面板默认一致）
+    getOcrPrimary: function () { return "gray"; },
+    log: function (text) { console.log("[xiangqi][vision] " + text); },
+    pipelineLog: function (text) {
+        // 默认不打（免得每帧刷屏）；帅/将抢救、规则补全、灰度重试这类关键动作要看得见
+        if (/帅\/将抢救|规则补全|灰度重试|彩色兜底/.test(String(text))) {
+            console.log("[xiangqi][vision] " + text);
+        }
+    }
+});
+const visionInjection = {
+    pipeline: null,
+    gate: null,
+    samples: function (image, g) { return mainVisionSamples(image, g); },
+    countUnknown: function (chars) { return boardScan.countUnknownCells(chars); },
+    log: function (text) { console.log("[xiangqi][vision] " + text); },
+    ready: function () {
+        if (!visionInjection.pipeline) {
+            visionInjection.pipeline = mainVisionCtl.ensure();
+        }
+        return visionInjection.pipeline;
+    }
+};
+visionInjection.gate = frameGateModule.create({ log: function () { } });
 
 /**
  * 棋盘服务与会话（A1「入口收口」批次1）：装配改由 bootstrap 统一，
@@ -586,10 +629,13 @@ const app = bootstrapModule.createApp({
                 maxCandidates: 16
             });
         },
-        note: function (text) { console.log("[xiangqi][board] " + text); }
+        note: function (text) { console.log("[xiangqi][board] " + text); },
+        // A2：主界面的视觉流水线注入（懒加载；没有就退回 legacy，见 board-service.recognizeSmart）
+        vision: visionInjection
     }
 });
 const boardService = app.boards;
+visionInjection.ready();   // 提前把 OCR 会话/检测会话拉起来（失败只会记日志，服务层仍可跑）
 
 let modeKey = MODES.WATCH;
 let tapMethodKey = "auto";

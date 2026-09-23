@@ -93,6 +93,7 @@ const pieceSideModule = load("src/vision/piece-side.js");
 // 「那一格有没有墨迹」的找色计数（见 ocrCell 的 ink 字段）
 const inkColorModule = load("src/vision/ink-color.js");
 const bootstrapModule = load("src/app/bootstrap.js");
+const pipelineFactory = load("src/vision/pipeline-factory.js");
 const locateBoard = load("tools/locate-board.js");
 const driverModule = load("src/automation/auto-driver.js");
 const engineModule = load("src/engine/engine-router.js");   // 引擎路由：内置 JS 引擎 ⇄ Pikafish（原生 NNUE）
@@ -3098,35 +3099,15 @@ const OCR_BOARD_INTERVAL_MS = 15000;
 let ocrBoardCache = null;
 let ocrBoardCacheAt = 0;
 const OCR_BOARD_CACHE_MS = 1200;
+// A2：OCR 会话的懒建/释放抽到 src/vision/pipeline-factory.js（两入口共用一份），
+// 这里保留原函数名与语义（`ocrCell` 等仍按 `ocrRuntime()` 取会话）。
+const ocrHolder = pipelineFactory.createOcrHolder({ log: function (text) { logLine(text); } });
 function ocrRuntime() {
-    if (ocrSession || ocrSessionTried) {
-        return ocrSession;
-    }
-    ocrSessionTried = true;
-    try {
-        if (typeof $ocr === "undefined" || typeof $ocr.create !== "function") {
-            logLine("单格 OCR 不可用：宿主没有 $ocr");
-            return null;
-        }
-        ocrSession = $ocr.create({ backend: "ppocr" });
-        logLine(ocrSession ? "单格 OCR 已启用（PP-OCRv6，随 APK 打包）" : "单格 OCR 会话建立失败");
-    } catch (error) {
-        logLine("单格 OCR 初始化失败：" + error);
-        ocrSession = null;
-    }
-    return ocrSession;
+    return ocrHolder.get();
 }
 
 function releaseOcr() {
-    try {
-        if (ocrSession && ocrSession.release) {
-            ocrSession.release();
-        }
-    } catch (ignore) {
-        // 释放失败不影响结论
-    }
-    ocrSession = null;
-    ocrSessionTried = false;
+    ocrHolder.release();
 }
 
 /**
@@ -3267,54 +3248,38 @@ function logPipelineNote(smart) {
  *   · 原生框是 `{bounds:{centerX,...}}` 形态，要过 `piece-detector.normalizeBoxes`；
  *   · OCR 会话**共用**面板那个（引擎是进程内单例，多建只是浪费）。
  */
+// A2：流水线装配收进 src/vision/pipeline-factory.js（两入口共用一份）。
+// 检测会话仍复用面板自己的 `visionDetectorSession`（audit/probe 等处也用它）；
+// 灰度的「关掉就连能力都不给」「内部日志默认不打」等语义都在工厂里保留。
+const visionCtl = pipelineFactory.create({
+    adapter: adapter,
+    recognizeBoard: recognizeBoard,
+    getGrid: function () { return grid; },
+    getOcrSession: function () { return ocrRuntime(); },
+    isGrayEnabled: function () { return ocrGrayEnabled; },
+    getOcrPrimary: function () { return ocrPrimaryMode; },
+    getDetector: function () { return visionDetectorSession; },
+    setDetector: function (session) { visionDetectorSession = session; },
+    log: function (text) { logLine(text); },
+    pipelineLog: function (text) {
+        // 流水线内部日志默认不打（免得每帧刷屏），但**帅/将抢救**这类关键动作要看得见：
+        // 它直接决定「整帧能不能用」，排查「红帅数量 0 退回旧路径」时全靠这一行。
+        // ★ 灰度重试也要看得见（2026-09-20）：它是「落子高亮环格」唯一能读出字形的路。
+        if (/帅\/将抢救|规则补全|灰度重试|彩色兜底/.test(String(text))) {
+            logLine(text);
+        }
+    }
+});
+
+/**
+ * 建（或取）视觉流水线实例（A2：装配逻辑在工厂里，两入口共用）。
+ * 面板/服务层仍按原语义调用：失败返回 null（服务层会退回旧路径）。
+ */
 function ensureVisionPipeline() {
     if (visionPipeline) {
         return visionPipeline;
     }
-    const session = ocrRuntime();
-    if (!session) {
-        logLine("视觉流水线不可用：没有 OCR 会话");
-        return null;
-    }
-    if (!visionDetectorSession) {
-        try {
-            visionDetectorSession = recognizeBoard.createDetectionSession({ autoAlign: false });
-        } catch (error) {
-            logLine("视觉流水线不可用：YOLO 检测会话初始化失败 " + error);
-            return null;
-        }
-    }
-    visionPipeline = visionPipelineModule.create({
-        detect: function (image, detectOptions) {
-            const detected = visionDetectorSession.detect(image, grid, detectOptions || {});
-            if (!detected || !detected.ok) {
-                throw new Error((detected && detected.reason) || "detect-only 没有结果");
-            }
-            // 保留宿主原始框；piece-detector 是唯一负责统一框形态与排序截断的模块。
-            return detected.raw || [];
-        },
-        clip: function (image, box) { return adapter.clip(image, box); },
-        rgbAt: function (image, x, y) { return adapter.rgbAt(image, x, y); },
-        // 红黑判色优先走引擎找色（数框内红/黑墨迹）；拿不到能力时流水线会自己退回采样。
-        countColor: function (image, color, options) { return adapter.countColor(image, color, options); },
-        // OCR 预处理（2026-09-21「先灰度」）：主读默认就把格子裁出来**转灰度**再认；
-        // 灰度读不出 / 分过低被丢时，流水线会自动用**彩色（整帧+region）兜底**重读一次。
-        //（真机实测：红帅格 灰度「師」0.70；老顺序里彩色那遍「印市」0.49 是垃圾）
-        // ⚠️ 关掉时**连能力都不给**流水线（而不是给个高门槛）：A/B 对照（全彩）要的是“一次都不用”
-        prepareRegion: ocrGrayEnabled ? function (image, region, mode) { return adapter.prepareRegion(image, region, mode); } : undefined,
-        releaseFrame: function (frame) { return adapter.releaseFrame(frame); },
-        ocrSession: session,
-        // 流水线内部日志默认不打（免得每帧刷屏），但**帅/将抢救**这类关键动作要看得见：
-        // 它直接决定「整帧能不能用」，排查「红帅数量 0 退回旧路径」时全靠这一行。
-        // ★ 灰度重试也要看得见（2026-09-20）：它是「落子高亮环格」唯一能读出字形的路，
-        //   日志里没有这行就没法判断「未知格」是没试还是试了也没用。
-        log: function (text) {
-            if (/帅\/将抢救|规则补全|灰度重试|彩色兜底/.test(String(text))) {
-                logLine(text);
-            }
-        }
-    }, { ocrPrimary: ocrPrimaryMode });
-    logLine("视觉流水线已启用（常驻 detect-only YOLO + PP-OCRv6 + 双中心/多尺度 OCR + 逐格变化缓存）");
+    visionPipeline = visionCtl.ensure();
     return visionPipeline;
 }
 
@@ -3325,27 +3290,10 @@ function ensureVisionPipeline() {
  *    `Number(a[i]) - Number(b[i])`，传 `[r,g,b]` 三元组会变成 `Number([1,2,3])` = NaN
  *    ⇒ 判定永远报“平均差 NaN”（2026-09-20 两个探针都踩了，日志里很好认）。
  */
+// A2：采样实现收进工厂（两入口共用）；面板这里保留同名包装（含面板自己的 grid 回退）。
+const boardRegionSamplesCore = pipelineFactory.createSamples(adapter);
 function boardRegionSamples(image, g) {
-    const use = g || grid;
-    if (!use || !image || typeof adapter.rgbAt !== "function") {
-        return null;
-    }
-    const step = Math.max(24, Math.round(Math.min(Math.abs(use.stepX), Math.abs(use.stepY)) / 2));
-    const x0 = Math.round(use.originX - step);
-    const y0 = Math.round(use.originY - step);
-    const x1 = Math.round(use.originX + 8 * use.stepX + step);
-    const y1 = Math.round(use.originY + 9 * use.stepY + step);
-    const out = [];
-    for (let y = y0; y <= y1; y += step) {
-        for (let x = x0; x <= x1; x += step) {
-            const px = adapter.rgbAt(image, x, y);
-            if (!px) {
-                continue;
-            }
-            out.push((Number(px[0]) + Number(px[1]) + Number(px[2])) / 3);
-        }
-    }
-    return out.length ? out : null;
+    return boardRegionSamplesCore(image, g || grid);
 }
 
 // `recognizeViaPipeline` 已并入 `services/board-service.js`（2026-09-20 入口收口）：

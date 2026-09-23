@@ -2769,7 +2769,25 @@ check("追踪：两步（我方一步 + 对方应手）也追得出，且两个�
 });
 
 const searchWorker = require("../src/automation/search-worker.js");
-const driverModule = require("../src/automation/auto-driver.js");
+/**
+ * 驱动场景用例的宿主确定性（2026-09-23 真机实修）。
+ *
+ * 这些用例假定「算棋在本线程同步完成」：Node 宿主没有 threads，驱动自然走 inline；
+ * 而手机上宿主**有** threads ⇒ 驱动默认 worker，算棋异步完成，用例就停在 THINKING
+ * （K40 实测 27 例失败，清单见 .artifacts/k40-now/a1-selfcheck-detail.log）。
+ * 与其逐个用例改（≈40 处），这里套一层壳：测试里**缺省**把 computeMode 强制成 "inline"，
+ * 显式传了 computeMode 的调用不受影响（worker 的定向用例在 searchWorker 层测）。
+ */
+const driverModule = (function () {
+    const raw = require("../src/automation/auto-driver.js");
+    return Object.assign({}, raw, {
+        createDriver: function (options) {
+            const opts = Object.assign({}, options || {});
+            opts.config = Object.assign({ computeMode: "inline" }, opts.config || {});
+            return raw.createDriver(opts);
+        }
+    });
+})();
 const overlayDraw = require("../src/vision/overlay-draw.js");
 
 check("worker 算棋：宿主没有 threads 时必须报不可用（Node 侧就是这种情况）", function () {
@@ -5723,6 +5741,7 @@ const windowManagerModule = require("../src/runtime/window-manager.js");
 const gameSessionModule = require("../src/services/game-session.js");
 const bootstrapModule = require("../src/app/bootstrap.js");
 const busModule = require("../src/app/panel-bus.js");
+const pipelineFactoryModule = require("../src/vision/pipeline-factory.js");
 
 check("框架·文案：未知状态要原样返回，不能悄悄变成「未知」把新状态藏起来", function () {
     if (labelsModule.stateText("CLICKING") !== "点击中") {
@@ -6033,6 +6052,44 @@ check("框架·总线：对方状态行带「几何版本/引擎」——两边�
     if (text.indexOf("正在跑") < 0) { return "没读到对方运行态：" + text; }
     if (text.indexOf("几何 v7") < 0) { return "状态行缺几何版本：" + text; }
     if (text.indexOf("Pikafish") < 0) { return "状态行缺引擎后端：" + text; }
+    return true;
+});
+
+check("视觉工厂：没有 OCR 会话时不建流水线（不抛错，服务层会退回旧路径）", function () {
+    const logs = [];
+    const ctl = pipelineFactoryModule.create({
+        adapter: {
+            clip: function () { }, rgbAt: function () { }, countColor: function () { },
+            prepareRegion: function () { }, releaseFrame: function () { }
+        },
+        recognizeBoard: { createDetectionSession: function () { return { detect: function () { return { ok: true, raw: [] }; } }; } },
+        getOcrSession: function () { return null; },
+        log: function (text) { logs.push(text); },
+        pipelineLog: function () { }
+    });
+    const pipeline = ctl.ensure();
+    if (pipeline !== null) {
+        return "没有 OCR 会话时不应建流水线";
+    }
+    if (!logs.some(function (text) { return text.indexOf("没有 OCR 会话") >= 0; })) {
+        return "应记录不可用原因：" + logs.join("｜");
+    }
+    return true;
+});
+
+check("视觉工厂：稳定帧采样必须返回数字数组（frame-gate 的输入契约）", function () {
+    const adapter = { rgbAt: function () { return [10, 20, 30]; } };
+    const samples = pipelineFactoryModule.createSamples(adapter);
+    const out = samples("img", { originX: 0, originY: 0, stepX: 50, stepY: 50 });
+    if (!out || !out.length) {
+        return "采样不应为空";
+    }
+    if (typeof out[0] !== "number") {
+        return "采样必须是数字数组，实际 " + typeof out[0];
+    }
+    if (samples(null, { originX: 0, originY: 0, stepX: 1, stepY: 1 }) !== null) {
+        return "没有图时应当返回 null";
+    }
     return true;
 });
 

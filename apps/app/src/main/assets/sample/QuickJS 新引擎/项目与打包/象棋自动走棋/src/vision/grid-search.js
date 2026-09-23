@@ -225,6 +225,11 @@ function scoreCandidate(detections, grid, options) {
     if (opts.requireTypeLimits === true && audit.overLimit.length) {
         reasons.push("兵种超限：" + audit.overLimit.join(" "));
     }
+    // 严格模式还必须**解释掉全部检测框**：否则「错位网格把多出来的那枚子丢进冲突/未知」
+    // 就能绕过兵种审计（2026-09-23 契约用例实锤：5 个士在严格模式下仍被接受）。
+    if (opts.requireTypeLimits === true && settled < total) {
+        reasons.push("有检测框解释不了（落 " + settled + "/" + total + "）");
+    }
     if (opts.requireKings === true && audit.kings !== 2) {
         reasons.push("将帅数量异常（" + audit.kings + "）");
     }
