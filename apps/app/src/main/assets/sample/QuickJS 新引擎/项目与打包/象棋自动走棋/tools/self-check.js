@@ -24,8 +24,10 @@ let passed = 0;
 const failures = [];
 
 function check(name, body) {
-    // 定位「哪个用例挂住」用：SELF_CHECK_TRACE=1 时逐条打印（默认安静）
-    if (process.env.SELF_CHECK_TRACE) {
+    // 定位「哪个用例挂住」用：SELF_CHECK_TRACE=1 时逐条打印（默认安静）。
+    // ⚠️ 手机端（QuickJS 宿主）没有 process —— 必须先探测再读，否则整份自检在真机上起不来
+    //（2026-09-23 真机冒烟实锤：TypeError: cannot read property 'env' of undefined）。
+    if (typeof process !== "undefined" && process && process.env && process.env.SELF_CHECK_TRACE) {
         process.stdout.write("[check] " + name + "\n");
     }
     try {
@@ -5964,6 +5966,54 @@ check("框架·会话：改了「创建时确定」的参数必须重建驱动�
     }
     session.stop("测试结束");
     return session.running() === false ? true : "stop 之后仍是运行中";
+});
+
+check("框架·会话：extras 携带的依赖要进驱动（静态 + 每次构建 + driverConfig）", function () {
+    const built = [];
+    const session = gameSessionModule.createGameSession({
+        driverModule: {
+            createDriver: function (deps) {
+                built.push(deps);
+                return { start: function () { return "S"; }, stop: function () { }, isRunning: function () { return false; } };
+            }
+        },
+        ports: portsModule.createPorts({}, {}),
+        extras: { isTrustworthy: function () { return true; } },
+        note: function () { }
+    });
+    const tap = function () { return "tap"; };
+    session.build({ allowClick: true, tap: tap, extras: { mySide: "b" }, driverConfig: { tickMs: 1 } });
+    const deps = built[0];
+    if (!deps) { return "会话没有建驱动"; }
+    if (typeof deps.isTrustworthy !== "function") { return "静态 extras 没进驱动"; }
+    if (deps.mySide !== "b") { return "per-build extras 没进驱动"; }
+    if (typeof deps.tap !== "function") { return "tap 没进驱动"; }
+    if (!deps.config || deps.config.tickMs !== 1) { return "driverConfig 没进驱动 config"; }
+    session.stop("测试结束");
+    return true;
+});
+
+check("框架·会话：驱动被 pause 后再次 start 应当视为继续（不能报「已经在跑」）", function () {
+    let driverRunning = false;
+    const driver = {
+        start: function () { driverRunning = true; return "READY"; },
+        stop: function () { driverRunning = false; },
+        pause: function () { driverRunning = false; },
+        isRunning: function () { return driverRunning; },
+        computeMode: function () { return "inline"; }
+    };
+    const session = gameSessionModule.createGameSession({
+        driverModule: { createDriver: function () { return driver; } },
+        ports: portsModule.createPorts({}, {}),
+        note: function () { }
+    });
+    const first = session.start();
+    if (first.ok !== true) { return "首次启动失败：" + first.reason; }
+    const again = session.start();
+    if (again.ok !== false) { return "驱动在跑时应当拒绝重复启动"; }
+    driver.pause();
+    const resume = session.start();
+    return resume.ok === true ? true : ("暂停后 start 应当视为继续，实际：" + resume.reason);
 });
 
 check("框架·装配：autorun 致命错误时 blocking=true，dispose 要还锁", function () {

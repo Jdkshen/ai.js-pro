@@ -510,7 +510,7 @@ const driverModule = require("./src/automation/auto-driver.js");
 const loopLock = require("./src/automation/loop-lock.js");
 const recognizeBoard = require("./tools/recognize-board.js");
 const locateBoard = require("./tools/locate-board.js");
-const boardServiceModule = require("./src/services/board-service.js");
+const bootstrapModule = require("./src/app/bootstrap.js");
 const engineModule = require("./src/engine/engine-router.js");   // 内置 JS 引擎 ⇄ Pikafish（原生 NNUE）
 const busModule = require("./src/app/panel-bus.js");
 
@@ -526,47 +526,75 @@ const MODES = { WATCH: "watch", ADVICE: "advice", AUTO: "auto" };
 const MODE_LABEL = { watch: "① 只识别", advice: "② 着法建议", auto: "③ 自动走棋" };
 
 /**
- * 棋盘服务（§14「入口收口」）：定位 / 几何校准 / 识别都进服务层，
- * 主界面与悬浮窗共用同一条链（抓帧、几何版本、未知格统计不再各写一遍）。
- *
- * 视觉流水线（YOLO+OCR）暂时只注入悬浮窗：主界面没有常驻检测会话与
- * 预热策略，等 ocr-runtime 统一完再打开（方案里排在第二步之后）。
+ * 棋盘服务与会话（A1「入口收口」批次1）：装配改由 bootstrap 统一，
+ * 主界面只提供平台特异项（抓帧端口 / 定位 / 校准 / 驱动附加依赖）。
+ * 行为参数原样注入，旧直建路径不再使用（可回退：还原本块即可）。
  */
-const boardService = boardServiceModule.createBoardService({
-    ports: {
-        now: function () { return Date.now(); },
-        capture: function () {
-            const granted = adapter.requestCapture("portrait");
-            if (granted === false) {
-                return null;   // 用户拒了授权：服务会报「拿不到帧」
+const app = bootstrapModule.createApp({
+    owner: "main",
+    adapter: adapter,
+    host: {
+        files: (typeof files !== "undefined" ? files : null),
+        context: (typeof context !== "undefined" ? context : null),
+        images: (typeof images !== "undefined" ? images : null),
+        win: null,                       // 页面没有悬浮窗句柄：窗口管理退化为直通
+        sleep: (typeof sleep === "function" ? sleep : null)
+    },
+    modules: {
+        driverModule: driverModule,
+        locateBoard: locateBoard,
+        recognizeBoard: recognizeBoard,
+        geometry: geometryModule,
+        loopLock: loopLock
+    },
+    paths: {},                           // 页面仍走自己的 panel-bus；不用 owner 文件通道
+    sink: function (text) { console.log("[xiangqi][app] " + text); },
+    // 会话静态注入（识别/定位都指向服务层；驱动不再自己拼链路）
+    recognize: function (options) { return app.boards.recognizeSmart(options || {}); },
+    locate: function (options) { return app.boards.locate(options || {}); },
+    analyze: function (position, options) { return engineModule.analyze(position, options); },
+    driverExtras: {
+        isTrustworthy: function (grid) {
+            return geometryModule.isTrustworthy(grid, { minSamples: 4, maxResidual: 0.35 });
+        },
+        screen: function () { return adapter.screenSize(); }
+    },
+    boardOverrides: {
+        ports: {
+            now: function () { return Date.now(); },
+            capture: function () {
+                const granted = adapter.requestCapture("portrait");
+                if (granted === false) {
+                    return null;   // 用户拒了授权：服务会报「拿不到帧」
+                }
+                const frame = adapter.capture("full", 800);
+                return frame ? { image: frame, imageObject: frame, frameObject: frame } : null;
             }
-            const frame = adapter.capture("full", 800);
-            return frame ? { image: frame, imageObject: frame, frameObject: frame } : null;
-        }
-    },
-    locateBoard: {
-        // 服务已经拓好一帧，给 locate-board 的屏幕版复用（frame 选项），不重复截图
-        locateBoardInImage: function (image, options) {
-            return locateBoard.locateBoardOnScreen(Object.assign({}, options || {}, { frame: image }));
-        }
-    },
-    recognizeBoard: recognizeBoard,
-    /**
-     * 几何精校准：按**最终未知格数**打分挑偏移（不是几何残差 —— 残差最小的并没能减少未知格）。
-     * 为什么必须有：定位原点有系统偏差时会有几格**每一帧都认不出来**（多帧投票也洗不掉），
-     * 状态机就一直拒绝计算/落子。真机实测（K40 + 天天象棋）：原点 (81,666) → 未知格 6；
-     * 挪到 (70,662)（dx=-11,dy=-4）→ 未知格 1。定位一局只做一次，几十次推理约 2 秒可以承受。
-     */
-    calibrate: function (image, located) {
-        return recognizeBoard.calibrateGrid(image, located, {
-            orientation: "RED_BOTTOM",
-            confidence: 0.25,
-            search: { maxShift: 18, step: 7 },
-            maxCandidates: 16
-        });
-    },
-    note: function (text) { console.log("[xiangqi][board] " + text); }
+        },
+        locateBoard: {
+            // 服务已经拓好一帧，给 locate-board 的屏幕版复用（frame 选项），不重复截图
+            locateBoardInImage: function (image, options) {
+                return locateBoard.locateBoardOnScreen(Object.assign({}, options || {}, { frame: image }));
+            }
+        },
+        /**
+         * 几何精校准：按**最终未知格数**打分挑偏移（不是几何残差 —— 残差最小的并没能减少未知格）。
+         * 为什么必须有：定位原点有系统偏差时会有几格**每一帧都认不出来**（多帧投票也洗不掉），
+         * 状态机就一直拒绝计算/落子。真机实测（K40 + 天天象棋）：原点 (81,666) → 未知格 6；
+         * 挪到 (70,662)（dx=-11,dy=-4）→ 未知格 1。定位一局只做一次，几十次推理约 2 秒可以承受。
+         */
+        calibrate: function (image, located) {
+            return recognizeBoard.calibrateGrid(image, located, {
+                orientation: "RED_BOTTOM",
+                confidence: 0.25,
+                search: { maxShift: 18, step: 7 },
+                maxCandidates: 16
+            });
+        },
+        note: function (text) { console.log("[xiangqi][board] " + text); }
+    }
 });
+const boardService = app.boards;
 
 let modeKey = MODES.WATCH;
 let tapMethodKey = "auto";
@@ -653,31 +681,25 @@ function rebuildDriver() {
         }
     }
     const keepSide = autoDriver ? autoDriver.mySide() : "w";
-    autoDriver = driverModule.createDriver({
+    // A1「入口收口」批次1：驱动不再由入口直建 —— 统一走会话（装配、停止幂等、资源清理收在一处）。
+    app.session.discard();
+    autoDriver = app.session.build({
         allowClick: clickAllowed,
-        mySide: keepSide,
         tap: tapFunction,
-        // 识别与定位都交给服务层（2026-09-20 入口收口）：服务内部把
-        // 「抓帧 → 定位 → 校准 → 识别 → 几何回写」串成一道，主界面只拿结果。
-        recognize: function (options) { return boardService.recognizeSmart(options || {}); },
-        locate: function (options) { return boardService.locate(options || {}); },
-        analyze: function (position, options) { return engineModule.analyze(position, options); },
-        isTrustworthy: function (grid) {
-            return geometryModule.isTrustworthy(grid, { minSamples: 4, maxResidual: 0.35 });
+        extras: {
+            mySide: keepSide,
+            executorConfig: { pressMs: 60, settleMs: 140 }
         },
-        screen: function () { return adapter.screenSize(); },
-        log: function (text) { console.log(text); },
-        config: {
+        // 算棋放独立引擎线程：不然一步 ~1.2s 的搜索会把本页按钮/日志一起挡住
+        driverConfig: {
             tickMs: 900,
             movetimeMs: 1200,
             modelVersion: "chessai_160x320_v5r",
             confidence: 0.25,
             orientation: "RED_BOTTOM",
             regionRatio: regionRatioFromUi(),
-            // 算棋放独立引擎线程：不然一步 ~1.2s 的搜索会把本页按钮/日志一起挡住
             computeMode: "worker"
-        },
-        executorConfig: { pressMs: 60, settleMs: 140 }
+        }
     });
     ui.mySide.setText("我方：" + sideLabel(keepSide) + "（点一下切换）");
     ui.autoStatus.setText("模式：" + MODE_LABEL[modeKey] + tapNote + "，我方：" + sideLabel(keepSide) + "，未开始");
@@ -861,9 +883,7 @@ function stopRequested() {
 }
 
 function stopAuto(why) {
-    if (autoDriver) {
-        autoDriver.stop();
-    }
+    app.session.stop(why || "停止");   // A1：停止路径统一走会话（幂等；驱动/窗口兜底在会话里）
     autoRunning = false;
     loopLock.release(loopLock.OWNER_MAIN);   // 互锁：本页停了就把锁交出去
     if (overlayShown) {
@@ -1082,7 +1102,12 @@ ui.autoToggle.on("click", function () {
         show("没有拿到截图授权，自动模式不启动。");
         return;
     }
-    autoDriver.start();
+    const started = app.session.start();
+    if (started && started.ok === false) {
+        loopLock.release(loopLock.OWNER_MAIN);
+        show("自动模式启动失败：" + (started.reason || "未说明"));
+        return;
+    }
     ui.autoToggle.setText("暂停");
     setMainStatus("INITIALIZING", "正在取得新画面并校准棋盘。");
     driverTick();

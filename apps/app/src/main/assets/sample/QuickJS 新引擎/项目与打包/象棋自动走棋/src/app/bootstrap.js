@@ -99,7 +99,9 @@ function createApp(options) {
     });
 
     // ---- 6) 棋盘服务 + 对局会话 ----
-    const boards = boardServiceModule.createBoardService({
+    // `boardOverrides`（可选）：入口的平台特异项（自定义抓帧端口、定位/校准实现、视觉流水线注入等）。
+    // 装配顺序仍归 bootstrap，入口只提供零件 —— A1「入口收口」的迁移口。
+    const boards = boardServiceModule.createBoardService(Object.assign({
         ports: ports,
         locateBoard: modules.locateBoard,
         recognizeBoard: modules.recognizeBoard,
@@ -108,7 +110,7 @@ function createApp(options) {
         captureBackend: config.captureBackend,
         hideWindow: function (fn) { return windows.withHidden(fn); },
         note: log
-    });
+    }, opts.boardOverrides || {}));
 
     const session = gameSessionModule.createGameSession({
         driverModule: modules.driverModule,
@@ -122,7 +124,8 @@ function createApp(options) {
         locate: opts.locate,
         analyze: opts.analyze,
         tap: opts.tap,
-        foregroundGuard: opts.foregroundGuard
+        foregroundGuard: opts.foregroundGuard,
+        extras: opts.driverExtras || null   // 入口的驱动附加依赖（isTrustworthy/screen/…），A1 迁移口
     });
 
     // ---- 7) 单运行者 + 跨引擎通道 ----

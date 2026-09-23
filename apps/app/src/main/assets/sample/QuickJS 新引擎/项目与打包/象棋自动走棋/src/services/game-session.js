@@ -46,19 +46,35 @@ function createGameSession(options) {
     }
 
     function build(overrides) {
-        const merged = Object.assign({}, config, overrides || {});
-        const deps = {
-            allowClick: merged.allowClick !== false,
-            recognize: opts.recognize,
-            locate: opts.locate,
-            analyze: opts.analyze,
-            foregroundGuard: opts.foregroundGuard,
-            log: function (text) { note(text); },
-            nowMono: now,
-            config: merged.driverConfig || {}
-        };
-        if (typeof opts.tap === "function" && merged.allowClick !== false) {
-            deps.tap = wrapTap(opts.tap);
+        const ov = overrides || {};
+        const merged = Object.assign({}, config, ov);
+        // 依赖组装顺序（A1 批次1）：静态注入（会话创建时给）→ 每次构建的 extras（入口按当前
+        // UI/环境给：mySide/screen/nudge/executorConfig…）→ 生命周期项（allowClick/tap/log/config）最后定。
+        // extras 让迁移期入口不用改写会话签名，就能把驱动依赖全部收进同一条构建路径；
+        // 旧调用点（只传 driverConfig/allowClick）行为不变。
+        const deps = {};
+        if (typeof opts.recognize === "function") { deps.recognize = opts.recognize; }
+        if (typeof opts.locate === "function") { deps.locate = opts.locate; }
+        if (typeof opts.analyze === "function") { deps.analyze = opts.analyze; }
+        if (typeof opts.foregroundGuard === "function") { deps.foregroundGuard = opts.foregroundGuard; }
+        if (typeof opts.log === "function") { deps.log = opts.log; }
+        Object.assign(deps, opts.extras || {}, ov.extras || {});
+        const allowClick = ov.allowClick === undefined ? (merged.allowClick !== false) : !!ov.allowClick;
+        deps.allowClick = allowClick;
+        if (typeof deps.log !== "function") {
+            deps.log = function (text) { note(text); };
+        }
+        deps.nowMono = now;
+        // 驱动配置：优先 per-build driverConfig；否则用 extras 里直给的 config（迁移期入口）；
+        // 都没有才给空对象（旧调用点行为不变）。
+        if (merged.driverConfig !== undefined) {
+            deps.config = merged.driverConfig;
+        } else if (deps.config === undefined) {
+            deps.config = {};
+        }
+        const tap = (ov.tap === undefined) ? opts.tap : ov.tap;
+        if (typeof tap === "function" && allowClick) {
+            deps.tap = wrapTap(tap);
         }
         driver = driverModule.createDriver(deps);
         if (store) {
@@ -68,8 +84,14 @@ function createGameSession(options) {
     }
 
     function start(overrides) {
+        // 「已经在跑」只认**驱动真的在运行**：面板/页面把驱动 pause() 之后会话标志还立在，
+        // 此时再 start() 应当视为继续（旧写法会误报「已经在跑」，继续按钮失灵）。
+        // 驱动没提供 isRunning()（老实现/测试桩）时退回保守判断，保持旧语义。
         if (running && driver) {
-            return { ok: false, reason: "已经在跑" };
+            const alive = typeof driver.isRunning === "function" ? driver.isRunning() : true;
+            if (alive) {
+                return { ok: false, reason: "已经在跑" };
+            }
         }
         try {
             if (!driver) {

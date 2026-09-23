@@ -92,7 +92,7 @@ const frameGateModule = load("src/vision/frame-gate.js");
 const pieceSideModule = load("src/vision/piece-side.js");
 // 「那一格有没有墨迹」的找色计数（见 ocrCell 的 ink 字段）
 const inkColorModule = load("src/vision/ink-color.js");
-const boardServiceModule = load("src/services/board-service.js");
+const bootstrapModule = load("src/app/bootstrap.js");
 const locateBoard = load("tools/locate-board.js");
 const driverModule = load("src/automation/auto-driver.js");
 const engineModule = load("src/engine/engine-router.js");   // 引擎路由：内置 JS 引擎 ⇄ Pikafish（原生 NNUE）
@@ -248,6 +248,7 @@ let replyFastPathKey = true;
  * —— 以前面板、驱动、探针各写一遍，稳定帧与未知格统计经常漏做一步（2026-09-20 入口收口）。
  */
 let boardService = null;
+let app = null;   // A1：bootstrap 装配的应用（与 boardService 同源创建，会话/板服务都从这里取）
 /** 稳定帧闸门（方案 §3.1）：自己保留实例，判定与限频日志交给服务层 */
 let boardFrameGate = null;
 // 点击通道：auto（有 Shizuku 就走 shizuku 的 `input swipe` 原地按住）/ shizuku / accessibility。
@@ -2757,9 +2758,12 @@ function buildDriver() {
         // 暴露给停止/退出路径，避免异常路径下面板一直藏着
         releaseTapLease = releaseClickLease;
     }
-    driver = driverModule.createDriver(wrapDriverDeps({
+    // A1「入口收口」批次1：驱动不再由面板直建 —— 统一走会话（bootstrap 装配）；
+    // 依赖仍由面板提供（保留 wrapDriverDeps 计时），构建/停止/资源所有权收在会话一处。
+    driver = ensureApp().session.build({
         allowClick: clickAllowed,
         tap: tapFunction,
+        extras: wrapDriverDeps({
         recognize: function (options) {
             // ★ 入口收口（2026-09-20）：这条链的编排（抓帧藏窗 → 稳定帧 → 流水线 → 规则门 → 不可信回退旧路径）
             //   全在 `services/board-service.js`；面板只负责注入平台能力并把结果交给绘制。
@@ -2922,7 +2926,8 @@ function buildDriver() {
             pressMs: clickPressMs,
             settleMs: clickSettleMsKey != null ? clickSettleMsKey : Math.max(200, clickPressMs + 600)
         }
-    }));
+        })
+    });
     return driver;
 }
 
@@ -3138,6 +3143,18 @@ const visionInjection = {
  * 建（或取）识别服务实例：把平台能力注入服务层，**编排逻辑全在服务层**。
  * 定位/校准仍由面板自己管（它有 pickGrid 兜底与校准流程），只需把 grid 同步进服务。
  */
+/**
+ * A1「入口收口」批次1：应用装配改由 bootstrap 统一（棋盘服务 + 会话）。
+ * 面板只提供平台特异项：抓帧端口 / 定位桩 / 旧路径包装 / 视觉流水线注入 —— 行为参数原样。
+ * 可回退：还原本函数体为旧的 createBoardService 直建即可。
+ */
+function ensureApp() {
+    if (!app) {
+        ensureBoardService();   // app 与 boardService 同源创建
+    }
+    return app;
+}
+
 function ensureBoardService() {
     if (boardService) {
         return boardService;
@@ -3146,29 +3163,50 @@ function ensureBoardService() {
         visionInjection.gate = boardFrameGate || (boardFrameGate = frameGateModule.create({ log: function () { } }));
     }
     visionInjection.ready();
-    boardService = boardServiceModule.createBoardService({
-        ports: {
-            now: function () { return Date.now(); },
-            capture: function () { return grabFrame(); }   // 一律走「会先藏面板」的抓帧
+    app = bootstrapModule.createApp({
+        owner: "floaty",
+        adapter: adapter,
+        host: {
+            files: (typeof files !== "undefined" ? files : null),
+            context: (typeof context !== "undefined" ? context : null),
+            images: (typeof images !== "undefined" ? images : null),
+            win: null,                       // 面板窗口的显隐仍由面板自己管（点击租约/抓帧）
+            sleep: (typeof sleep === "function" ? sleep : null)
         },
-        locateBoard: {
-            locateBoardInImage: function () {
-                // 定位由面板负责（locateAndCalibrate 含 pickGrid 兜底与校准），服务层不自己定位
-                return { ok: false, reason: "定位由面板负责，请先把 grid 同步进服务" };
-            }
+        modules: {
+            driverModule: driverModule,
+            locateBoard: locateBoard,
+            recognizeBoard: recognizeBoard,
+            geometry: geometryModule,
+            loopLock: loopLock
         },
-        recognizeBoard: {
-            // 旧路径：沿用面板的 recognizeScreen（含 autoAlign 与藏窗抓帧）
-            run: function (image, located, options) {
-                return recognizeBoard.recognizeScreen(Object.assign({}, options || {}, {
-                    autoAlign: autoAlignOn,
-                    frame: image
-                }));
-            }
-        },
-        vision: visionInjection,
-        note: function (text) { logLine(text); }
+        paths: {},                           // 面板仍走自己的 panel-bus；不用 owner 文件通道
+        sink: function (text) { logLine(text); },
+        boardOverrides: {
+            ports: {
+                now: function () { return Date.now(); },
+                capture: function () { return grabFrame(); }   // 一律走「会先藏面板」的抓帧
+            },
+            locateBoard: {
+                locateBoardInImage: function () {
+                    // 定位由面板负责（locateAndCalibrate 含 pickGrid 兜底与校准），服务层不自己定位
+                    return { ok: false, reason: "定位由面板负责，请先把 grid 同步进服务" };
+                }
+            },
+            recognizeBoard: {
+                // 旧路径：沿用面板的 recognizeScreen（含 autoAlign 与藏窗抓帧）
+                run: function (image, located, options) {
+                    return recognizeBoard.recognizeScreen(Object.assign({}, options || {}, {
+                        autoAlign: autoAlignOn,
+                        frame: image
+                    }));
+                }
+            },
+            vision: visionInjection,
+            note: function (text) { logLine(text); }
+        }
     });
+    boardService = app.boards;
     if (grid) {
         boardService.setGrid(grid);
     }
@@ -4322,8 +4360,12 @@ function startLoop() {
     // ⚠️ 真机踩过：只建驱动 + 起定时器是不够的，状态机还在 STOPPED，
     //    每轮 tick() 都返回「没有在运行」。必须先 driver.start()（START → READY）。
     try {
-        const state = driver.start();
-        logLine("驱动已启动，状态机：" + state);
+        // A1：启动也走会话（与停止同一处；驱动已在 buildDriver 里由会话构建）
+        const started = app ? app.session.start() : { ok: false, reason: "应用未装配" };
+        if (started && started.ok === false) {
+            throw new Error(started.reason || "会话启动失败");
+        }
+        logLine("驱动已启动，状态机：" + (started && started.state));
     } catch (error) {
         loopLock.release(loopLock.OWNER_FLOATY);
         logLine("驱动启动失败：" + error);
@@ -4363,9 +4405,10 @@ function stopLoop() {
         timer = null;
     }
     running = false;
-    if (driver && typeof driver.stop === "function") {
+    if (app) {
+        // A1：停止统一走会话（幂等；驱动与窗口兜底在会话里）
         try {
-            driver.stop();
+            app.session.stop("面板停止");
         } catch (error) {
             logLine("停止驱动出错：" + error);
         }
