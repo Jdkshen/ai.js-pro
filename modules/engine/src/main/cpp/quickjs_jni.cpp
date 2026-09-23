@@ -9,6 +9,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -3185,6 +3186,89 @@ JSValue nativeReadFrame(JSContext *context, JSValueConst, int argc, JSValueConst
     return frameInfo(context, state, handle);
 }
 
+/**
+ * images.readRaw(path, width, height)：读 `screencap`（**不加 -p**）写出的原始 RGBA 文件建帧。
+ *
+ * 为什么要有它（K40 实测 2026-09-20）：`screencap -p` 的 893ms 里 ~700ms 是设备端 PNG 编码，
+ * raw 写盘 + 建帧只要 ~200ms —— 高频抓帧的自动走棋全指望这条快通道。
+ * ⚠️ 这条通道 09-20 做过、但改动没落进 git，后来重编 .so 时丢了（面板抓帧又回到 ~900ms 的 PNG）；
+ *    2026-09-24 补回来。
+ *
+ * 文件两种形态都能读（按大小自动识别）：
+ *   · `16 字节头（u32 宽｜高｜格式｜颜色空间）+ RGBA`（Android 11+ 的 screencap 输出）；
+ *   · 纯 RGBA（老版本/别的工具）。
+ */
+JSValue nativeReadFrameRaw(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 3) {
+        return JS_ThrowTypeError(context, "images.readRaw(path, width, height) requires path, width, height");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string path = jsString(context, argv[0]);
+    int32_t width = 0;
+    int32_t height = 0;
+    if (JS_ToInt32(context, &width, argv[1]) < 0 || JS_ToInt32(context, &height, argv[2]) < 0) {
+        return JS_ThrowTypeError(context, "images.readRaw(path, width, height) has invalid arguments");
+    }
+    if (width <= 0 || height <= 0) {
+        return JS_ThrowRangeError(context, "images.readRaw: width/height must be positive");
+    }
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID resolveMethod = env->GetMethodID(hostClass, "resolvePath",
+                                               "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring javaPath = toJavaString(env, path);
+    auto resolvedPath = static_cast<jstring>(env->CallObjectMethod(state->host, resolveMethod, javaPath));
+    env->DeleteLocalRef(javaPath);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string resolved = fromJavaString(env, resolvedPath);
+    env->DeleteLocalRef(resolvedPath);
+
+    std::FILE *file = std::fopen(resolved.c_str(), "rb");
+    if (file == nullptr) {
+        return JS_ThrowInternalError(context, "images.readRaw: cannot open %s", resolved.c_str());
+    }
+    std::fseek(file, 0, SEEK_END);
+    const long fileSize = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+    if (fileSize <= 0) {
+        std::fclose(file);
+        return JS_ThrowInternalError(context, "images.readRaw: empty file %s", resolved.c_str());
+    }
+    std::vector<uint8_t> bytes(static_cast<size_t>(fileSize));
+    const size_t got = std::fread(bytes.data(), 1, bytes.size(), file);
+    std::fclose(file);
+    if (got != bytes.size()) {
+        return JS_ThrowInternalError(context, "images.readRaw: short read of %s", resolved.c_str());
+    }
+    const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    size_t offset = 0;
+    if (bytes.size() != pixels && bytes.size() >= 16) {
+        uint32_t headerWidth = 0;
+        uint32_t headerHeight = 0;
+        std::memcpy(&headerWidth, bytes.data(), 4);
+        std::memcpy(&headerHeight, bytes.data() + 4, 4);
+        if (bytes.size() == 16 + pixels ||
+            (headerWidth == static_cast<uint32_t>(width) &&
+             headerHeight == static_cast<uint32_t>(height) &&
+             bytes.size() == 16 + static_cast<size_t>(headerWidth) * headerHeight * 4)) {
+            offset = 16;
+        }
+    }
+    if (offset == 0 && bytes.size() != pixels) {
+        return JS_ThrowInternalError(context,
+                "images.readRaw: unexpected size %d for %dx%d (expect %d)",
+                static_cast<int>(bytes.size()), width, height, static_cast<int>(pixels));
+    }
+    const int64_t handle = state->frames.createFromRgba(bytes.data() + offset, width, height, width * 4, 4);
+    if (handle == 0) {
+        return JS_ThrowInternalError(context, "images.readRaw: unable to create frame");
+    }
+    return frameInfo(context, state, handle);
+}
+
 JSValue nativeCopyFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t handle = 0;
     if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
@@ -4950,6 +5034,13 @@ const char kBootstrapScript[] = R"JS(
         },
         read: function (path) {
             return wrapFrame(__aiNativeReadFrame(String(path)));
+        },
+        /**
+         * 读 `screencap`（不加 -p）写出的原始 RGBA 文件建帧（16 字节头自动识别）。
+         * 这是 Shizuku 抓帧的快通道：PNG 那条路 893ms、这条 ~200ms（K40 实测）。
+         */
+        readRaw: function (path, width, height) {
+            return wrapFrame(__aiNativeReadRawFrame(String(path), width | 0, height | 0));
         },
         copy: function (frame) {
             return wrapFrame(__aiNativeCopyFrame(requireFrame(frame).id),
@@ -9395,6 +9486,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
     installNativeFunction(state->context, global, "__aiNativeCaptureFrame", nativeCaptureFrame, 3);
     installNativeFunction(state->context, global, "__aiNativeReadFrame", nativeReadFrame, 1);
+    installNativeFunction(state->context, global, "__aiNativeReadRawFrame", nativeReadFrameRaw, 3);
     installNativeFunction(state->context, global, "__aiNativeFrameFromBase64", nativeFrameFromBase64, 1);
     installNativeFunction(state->context, global, "__aiNativeFrameConcat", nativeFrameConcat, 3);
     installNativeFunction(state->context, global, "__aiNativeCopyFrame", nativeCopyFrame, 1);
