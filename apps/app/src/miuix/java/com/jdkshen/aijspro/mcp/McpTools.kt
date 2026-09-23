@@ -8,6 +8,7 @@ import com.google.gson.JsonNull
 import com.google.gson.JsonObject
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.autojs.AutoJs
+import com.jdkshen.aijspro.model.sample.SampleRepository
 import com.jdkshen.aijspro.model.script.ScriptFile
 import com.stardust.autojs.core.console.ConsoleImpl
 import com.stardust.autojs.execution.ExecutionConfig
@@ -535,9 +536,12 @@ internal class McpTools(private val context: Context, private val event: (String
         } }
     }
     private fun listAssets(path: String, offset: Int, limit: Int): JsonObject {
-        val safe = safeAsset(path); val names = context.assets.list(safe)?.sorted().orEmpty()
-        return page(names, offset, limit) { name -> val child = "$safe/$name"; JsonObject().apply {
-            addProperty("path", child); addProperty("name", name); addProperty("directory", !context.assets.list(child).isNullOrEmpty())
+        val safe = safeSamplePath(path)
+        val nodes = SampleRepository.list(
+            SampleRepository.AssetLister { p -> context.assets.list(p) }, safe)
+        return page(nodes, offset, limit) { node -> JsonObject().apply {
+            addProperty("path", node.path); addProperty("name", node.name)
+            addProperty("directory", node.isDirectory)
         } }
     }
     private fun readTextFile(file: File): ByteArray {
@@ -550,8 +554,10 @@ internal class McpTools(private val context: Context, private val event: (String
         return file.readBytes()
     }
     private fun readAsset(path: String, offset: Int, max: Int): JsonObject {
-        val safe = safeAsset(path)
-        val bytes = try { context.assets.open(safe).use { it.readBytes() } } catch (_: IOException) { throw ToolError("示例不存在") }
+        val safe = safeSamplePath(path)
+        val bytes = try {
+            SampleRepository.readBytes(SampleRepository.AssetOpener { p -> context.assets.open(p) }, safe)
+        } catch (_: IOException) { throw ToolError("示例不存在") }
         return readBytes(bytes, offset, max)
     }
     private fun readBytes(bytes: ByteArray, offset: Int, max: Int): JsonObject {
@@ -562,11 +568,11 @@ internal class McpTools(private val context: Context, private val event: (String
             addProperty("truncated", start + count < bytes.size)
         }
     }
-    private fun safeAsset(path: String): String {
-        val clean = path.replace('\\', '/').trim('/')
-        if (clean != "sample" && !clean.startsWith("sample/")) throw ToolError("只能访问 sample 目录")
-        if (clean.split('/').any { it == "." || it == ".." || it.isEmpty() }) throw ToolError("路径无效")
-        return clean
+    /** 示例路径防护：统一走 [SampleRepository.sanitizePath]，错误语义仍是 MCP 的 ToolError。 */
+    private fun safeSamplePath(path: String): String = try {
+        SampleRepository.sanitizePath(path)
+    } catch (error: IllegalArgumentException) {
+        throw ToolError(error.message ?: "路径无效")
     }
     private fun workspaceJson(ws: McpWorkspaceStore.Workspace) = JsonObject().apply {
         addProperty("workspaceId", ws.id); addProperty("targetPath", ws.targetPath); addProperty("createdAt", ws.createdAt)

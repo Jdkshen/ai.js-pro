@@ -1,6 +1,6 @@
 package com.jdkshen.aijspro.ui.sample
 
-import java.util.ArrayDeque
+import com.jdkshen.aijspro.model.sample.SampleRepository
 import java.util.Locale
 import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
@@ -23,23 +23,14 @@ internal data class SampleSearchResult(
 
 /** Presentation-only index of bundled assets. It never opens or changes sample contents. */
 internal object MiuixSampleCatalog {
-    fun load(listAssets: (String) -> Array<out String>): List<SampleEntry> {
-        val result = mutableListOf<SampleEntry>()
-        val pending = ArrayDeque<Pair<String, Array<out String>>>()
-        pending.addLast("sample" to listAssets("sample"))
-        while (!pending.isEmpty()) {
-            val (parent, names) = pending.removeLast()
-            for (name in names) {
-                val path = "$parent/$name"
-                val children = listAssets(path)
-                // AssetManager lists files as empty arrays; packaged directories contain assets.
-                val directory = children.isNotEmpty()
-                result += SampleEntry(name, path, directory)
-                if (directory) pending.addLast(path to children)
-            }
-        }
-        return result
-    }
+    /**
+     * 遍历入口统一走 [SampleRepository.listAll]（与 MCP list_samples 同源）；
+     * 这里只把注入的 lister 适配成 Java 接口。
+     */
+    fun load(listAssets: (String) -> Array<out String>): List<SampleEntry> =
+        SampleRepository.listAll(SampleRepository.AssetLister { path ->
+            listAssets(path).toList().toTypedArray()
+        }).map { SampleEntry(it.name, it.path, it.isDirectory) }
 
     fun visible(
         entries: List<SampleEntry>,
