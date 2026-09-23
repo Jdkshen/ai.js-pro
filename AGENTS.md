@@ -26,6 +26,7 @@
 
 - 默认 JDK 是 8，**必须先切 17**：`. .\tools\jdk17.ps1 | Out-Null`
 - 日常变体（MIUIX 皮肤）：`.\gradlew.bat :app:assembleMiuixCompatDebug --console=plain`
+- ⚠️ `build-miuix-debug.ps1` 现在**编译成功后会默认自动发布**（复用产物发一版到更新源，版本号自动 +1，见桌面「编译并发布」/「发布更新」）：只想编译请加 `-NoPublish`；只想发布不重编用 `tools\publish.ps1 -SkipBuild`
 - 单元测试：`.\gradlew.bat :app:testMiuixCompatDebugUnitTest`
 - 产物：`apps/app/build/outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk`
 - 一键出 dev 包并发布到本地更新源：**`.\tools\publish.ps1 -ReleaseNotes "…"`**

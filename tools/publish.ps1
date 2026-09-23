@@ -36,6 +36,10 @@ param(
 
     [int]$Port = 8080,
 
+    # 复用现有 APK 直接发布（不重新构建）。「编译后自动发布」链路用它：
+    # 构建已由调用方完成，这里只做发布 + 验证。
+    [switch]$SkipBuild,
+
     # 多设备时也允许发布，但仍需满足下方第 0 节的两个前提。
     [switch]$AllowMultiDevice,
 
@@ -134,6 +138,9 @@ if ($DryRun) {
     Write-Host ""
     Write-Host "[DryRun] 不会构建、不会发布、不会写任何文件。" -ForegroundColor Cyan
     Write-Host "  将要发布的版本：dev-$expected（versionCode $expected）" -ForegroundColor Cyan
+    if ($SkipBuild) {
+        Write-Host "  已指定 -SkipBuild：将复用现有 APK，不重新构建。" -ForegroundColor Cyan
+    }
     Write-Host "  清单 SHA 校验、手机可达性检查均跳过。" -ForegroundColor Cyan
     Done "DryRun 完成。"
 }
@@ -142,19 +149,27 @@ if ($DryRun) {
 # Gradle/JVM 会把「注: 某些输入文件使用或覆盖了已过时的 API」写到 stderr；
 # 在 $ErrorActionPreference='Stop' 下原生命令的任何 stderr 都会被当成终止错误并让整个脚本
 # 以 1 退出 —— 即使构建其实 BUILD SUCCESSFUL。故临时放宽，只认真实退出码。
-Write-Host "[3/5] 构建 + 发布（$Abi，目标 dev-$expected，耗时数分钟）..." -ForegroundColor Cyan
+if ($SkipBuild) {
+    Write-Host "[3/5] 发布（复用现有 APK，目标 dev-$expected，不重新构建）..." -ForegroundColor Cyan
+} else {
+    Write-Host "[3/5] 构建 + 发布（$Abi，目标 dev-$expected，耗时数分钟）..." -ForegroundColor Cyan
+}
 $previousErrorAction = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
     # 必须把 -DeviceId 一并传下去：dev-update.ps1 自己也有多设备守卫，不传会在
     # 「检测到 2 台设备」处抛错 —— 本脚本的 -AllowMultiDevice 管不到下游。
-    & (Join-Path $PSScriptRoot 'dev-update.ps1') `
-        -Abi $Abi `
-        -NoServe `
-        -DeviceId $DeviceId `
-        -VersionCode $expected `
-        -VersionName "dev-$expected" `
-        -ReleaseNotes $ReleaseNotes
+    # -SkipBuild 同样按需透传（复用调用方已构建好的 APK）。
+    $devUpdateArgs = @{
+        Abi          = $Abi
+        NoServe      = $true
+        DeviceId     = $DeviceId
+        VersionCode  = $expected
+        VersionName  = "dev-$expected"
+        ReleaseNotes = $ReleaseNotes
+    }
+    if ($SkipBuild) { $devUpdateArgs['SkipBuild'] = $true }
+    & (Join-Path $PSScriptRoot 'dev-update.ps1') @devUpdateArgs
     $devUpdateExit = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $previousErrorAction

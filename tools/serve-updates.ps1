@@ -50,7 +50,7 @@ param(
     [int]$VersionCode = 0,
     [string]$VersionName = "",
     [string]$SourceName = "aijspro",
-    [int]$HistoryLimit = 30,
+    [ValidateRange(0, 2147483647)][int]$HistoryLimit = 0,
     [switch]$HardLink,
     [switch]$NoServe
 )
@@ -142,9 +142,10 @@ if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) {
 }
 
 # --- history ----------------------------------------------------------------
-# Keep a rolling changelog next to update.json: update-history.json holds every
-# published version (newest first, capped by -HistoryLimit) and is mirrored into
+# Keep a persistent changelog next to update.json: update-history.json holds every
+# published version (newest first, unlimited by default) and is mirrored into
 # the manifest as "oldVersions", which is what the app shows as update history.
+# A positive -HistoryLimit opts into truncation; zero retains all entries.
 # Entries are keyed by versionCode, so re-publishing a version replaces it.
 $historyPath = Join-Path $Dir "update-history.json"
 $history = @()
@@ -153,7 +154,7 @@ if (Test-Path -LiteralPath $historyPath) {
         $existing = Get-Content -LiteralPath $historyPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($existing) { $history = @($existing) }
     } catch {
-        Write-Warning "update-history.json is not readable; starting a new history"
+        throw "Cannot read update-history.json; refusing to discard existing history. $($_.Exception.Message)"
     }
 }
 $history = @($history | Where-Object { $_ -and [int]$_.versionCode -ne $VersionCode })
@@ -202,6 +203,9 @@ $manifestPath = Join-Path $Dir "update.json"
 # leading U+FEFF makes strict JSON parsers (and older clients) unhappy.
 $json = $manifest | ConvertTo-Json -Depth 5
 [System.IO.File]::WriteAllText($manifestPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+
+$historyRenderer = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'render-update-history.ps1'
+& $historyRenderer -HistoryPath $historyPath
 
 # --- addresses -------------------------------------------------------------
 $addresses = @()
