@@ -2,7 +2,12 @@ package com.jdkshen.aijspro.model.explorer;
 
 import com.stardust.pio.PFile;
 
+import com.jdkshen.aijspro.model.script.ScriptDescriptor;
+import com.jdkshen.aijspro.model.script.ScriptRepository;
+
 import java.io.FileFilter;
+import java.util.ArrayList;
+import java.util.List;
 
 import io.reactivex.Observable;
 import io.reactivex.Single;
@@ -39,19 +44,20 @@ public class ExplorerFileProvider implements ExplorerProvider {
         return new ExplorerDirPage(path, parent);
     }
 
+    /**
+     * 目录枚举统一走 {@link ScriptRepository}（B1 批次1）：隐藏条目跳过、目录不存在视为空流。
+     * 用 defer 保持旧实现的懒执行语义——枚举必须发生在订阅线程（调用方 subscribeOn(io)），
+     * 不能提前到 getExplorerPage() 的调用线程。
+     */
     protected Observable<PFile> listFiles(PFile directory) {
-        return Observable.just(directory)
-                .flatMap(dir -> {
-                    PFile[] files;
-                    if (mFileFilter == null) {
-                        files = dir.listFiles();
-                    } else {
-                        files = dir.listFiles(mFileFilter);
-                    }
-                    if (files == null) {
-                        return Observable.empty();
-                    }
-                    return Observable.fromArray(files);
-                });
+        return Observable.defer(() -> Observable.fromIterable(describeChildren(directory)));
+    }
+
+    private List<PFile> describeChildren(PFile directory) {
+        List<PFile> files = new ArrayList<>();
+        for (ScriptDescriptor child : ScriptRepository.list(directory, mFileFilter)) {
+            files.add(new PFile(child.getPath()));
+        }
+        return files;
     }
 }

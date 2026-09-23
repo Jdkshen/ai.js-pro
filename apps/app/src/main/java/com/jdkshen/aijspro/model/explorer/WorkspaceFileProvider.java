@@ -9,6 +9,7 @@ import com.stardust.pio.PFiles;
 
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.model.script.ScriptFile;
+import com.jdkshen.aijspro.model.script.ScriptRepository;
 
 import java.io.File;
 import java.io.FileFilter;
@@ -129,19 +130,9 @@ public class WorkspaceFileProvider extends ExplorerFileProvider {
     }
 
     private static int countScriptFiles(File dir) {
-        File[] children = dir.listFiles();
-        if (children == null) {
-            return 0;
-        }
-        int count = 0;
-        for (File child : children) {
-            if (child.isDirectory()) {
-                count += countScriptFiles(child);
-            } else if (child.getName().toLowerCase().endsWith(".js")) {
-                count++;
-            }
-        }
-        return count;
+        // 旧实现语义：递归、目录不计、只数 .js（大小写不敏感）；枚举收进 ScriptRepository。
+        return ScriptRepository.countRecursively(dir,
+                (directory, name) -> name.toLowerCase().endsWith(".js"));
     }
 
     @Override

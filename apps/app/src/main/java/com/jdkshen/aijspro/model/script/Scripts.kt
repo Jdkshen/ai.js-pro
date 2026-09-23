@@ -40,8 +40,7 @@ object Scripts {
     const val EXTRA_EXCEPTION_COLUMN_NUMBER = "columnNumber"
 
     val FILE_FILTER = FileFilter { file ->
-        file.isDirectory || file.name.endsWith(".js")
-                || file.name.endsWith(".auto")
+        file.isDirectory || ScriptRepository.isScriptFile(file.name)
     }
 
     private fun executionFinishedIntent(): Intent =
