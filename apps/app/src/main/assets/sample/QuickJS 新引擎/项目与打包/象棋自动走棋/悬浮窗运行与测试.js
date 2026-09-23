@@ -31,11 +31,11 @@
 const BASE_DIR = (typeof __dirname === "string" && __dirname && __dirname !== ".") ? __dirname : ".";
 
 /**
- * 探针版本号：**改脚本时手动 +1**，所有实验记录里都带上它。
+ * 工程版本从 src/app/version.js 读取，主界面与悬浮窗共用；实验记录还带关键文件指纹。
  * 真机坑：手机上的工程副本、内置示例、资源导入副本、重新装 APK 都可能各不相同，
  * 不打印版本与指纹就无法确认「跑的是哪一份」（曾经把代码改了、手机却没生效，白排查一整轮）。
  */
-const PROBE_BUILD_ID = "2026-09-19.1";
+// 版本由两个入口共用的 src/app/version.js 提供。
 /** 版本核对用的关键文件（相对工程根）。第一个用**入口脚本自身文件名**，
  *  因为探针/实验可能把面板另存为别的名字运行（panel-probe.js），写死名字会读到旧副本。 */
 const PROBE_SELF_NAME = (typeof __filename === "string" && __filename)
@@ -43,6 +43,7 @@ const PROBE_SELF_NAME = (typeof __filename === "string" && __filename)
     : "悬浮窗运行与测试.js";
 const PROBE_FILES = [
     PROBE_SELF_NAME,
+    "src/app/version.js",
     "src/runtime/aijs-adapter.js",
     "src/automation/click-executor.js",
     "src/automation/auto-driver.js",
@@ -82,6 +83,8 @@ function probeFingerprint() {
 function load(relative) {
     return require(BASE_DIR === "." ? relative : (BASE_DIR + "/" + relative));
 }
+
+const PROBE_BUILD_ID = load("src/app/version.js").VERSION;
 
 const adapter = load("src/runtime/aijs-adapter.js");
 const geometryModule = load("src/vision/geometry.js");
@@ -228,7 +231,7 @@ let autoAlignOn = false;      // 几何按检测框自动微调（真机实测�
  * 新视觉流水线（方案 §2 的整条链）：YOLO 框 → 交点 → 裁剪 → OCR 字形 → 颜色 → 融合 → 规则门。
  * `autorun.visionPipeline = true` 打开；不可信时自动退回旧路径（不会把循环卡死）。
  */
-let visionPipelineOn = false;
+
 /** 视觉链路模式："legacy" 旧路径 / "auto" 全盘流水线 / "diff" 差分（定位一次 + 找色扫描 + 只 OCR 变化格） */
 let visionPipelineMode = "legacy";
 let visionPipeline = null;
@@ -2265,9 +2268,8 @@ function tryReuseGrid(grabbed) {
     if (!grid || !grabbed || !grabbed.image) {
         return null;
     }
-    // ⚠️ 2026-09-20：以前这里要求 `visionPipelineOn` —— 而**差分模式把它设成 false**，
-    //    于是差分跑的时候「几何沿用快路径」永远走不到 ⇒ 每次恢复都全量校准（真机 6.9~9.4s ×5 次/180s ≈ 22% 的时间）。
-    if (!visionPipelineOn && visionPipelineMode !== "diff") {
+    // 只以 visionPipelineMode 为准；差分与全盘流水线都可复用已验证的几何。
+    if (visionPipelineMode === "legacy") {
         return null;
     }
     const sanity = checkGridRows(grabbed.image, grid);
@@ -4800,46 +4802,34 @@ function main() {
     // 每次都要过 JS→Java 桥 + WindowManager.updateViewLayout，而且触摸事件排在脚本线程上
     // （自动循环/算棋一跑就更卡）——真机上手感就是「拖着走一顿一顿」。
     // K40/LineageOS 上整窗原生拖动会吞掉按钮事件，因此只绑定标题区并限频移动。
-    let nativeDrag = false;
-    try {
-        win.setDraggable(false);
-    } catch (error) {
-        nativeDrag = false;
-    }
-    if (nativeDrag) {
-        logLine("拖动：按住窗口直接拖（平台原生拖动，不过脚本线程）");
-    } else {
-        // 兜底：平台没有原生拖动时才自己拖，而且**必须限频**（否则就是上面那个卡的原因）
-        logLine("拖动：平台没给原生拖动，退回脚本拖动（已限频 40ms）");
-        let downX = 0;
-        let downY = 0;
-        let winX = startX;
-        let winY = startY;
-        let lastMoveAt = 0;
-        win.title.on("touch", function (event) {
-            const action = event.getAction();
-            if (action === 0) {
-                downX = event.getRawX();
-                downY = event.getRawY();
-            } else if (action === 2) {
-                const now = Date.now();
-                if (now - lastMoveAt < 40) {
-                    return true;   // 限频：拖动手感不受影响，但桥调用次数掉到 1/4 以下
-                }
-                lastMoveAt = now;
-                win.setPosition(winX + (event.getRawX() - downX), winY + (event.getRawY() - downY));
-            } else if (action === 1) {
-                winX = winX + (event.getRawX() - downX);
-                winY = winY + (event.getRawY() - downY);
-                win.setPosition(winX, winY);
-                panelUserMoved = true;      // 用户拖过 → 以后不再自动贴板
-                logLine("拖动到 (" + Math.round(winX) + "," + Math.round(winY) + ")（实测 " +
-                    win.getX(true) + "," + win.getY(true) + "）");
-            }
-            return true;
-        });
-    }
-
+    // K40 上整窗原生拖动会吞按钮；只让标题区限频拖动。
+    try { win.setDraggable(false); } catch (error) { /* 宿主无此方法时仍可标题拖动 */ }
+    logLine("拖动：标题区限频 40ms");
+    let downX = 0;
+    let downY = 0;
+    let winX = startX;
+    let winY = startY;
+    let lastMoveAt = 0;
+    win.title.on("touch", function (event) {
+        const action = event.getAction();
+        if (action === 0) {
+            downX = event.getRawX();
+            downY = event.getRawY();
+        } else if (action === 2) {
+            const now = Date.now();
+            if (now - lastMoveAt < 40) return true;
+            lastMoveAt = now;
+            win.setPosition(winX + (event.getRawX() - downX), winY + (event.getRawY() - downY));
+        } else if (action === 1) {
+            winX += event.getRawX() - downX;
+            winY += event.getRawY() - downY;
+            win.setPosition(winX, winY);
+            panelUserMoved = true;
+            logLine("拖动到 (" + Math.round(winX) + "," + Math.round(winY) + ")（实测 " +
+                win.getX(true) + "," + win.getY(true) + "）");
+        }
+        return true;
+    });
     // 触摸诊断：悬浮窗控件不在 uiautomator dump 里，只能靠日志判断「事件到底到没到」
     let touchLogs = 0;
     try {
@@ -5065,7 +5055,6 @@ function main() {
             } else {
                 visionPipelineMode = auto.visionPipeline === true ? "auto" : "legacy";
             }
-            visionPipelineOn = visionPipelineMode === "auto";
             logLine("视觉链路：" + (visionPipelineMode === "diff"
                 ? "差分（找色扫描定位置，只对变化格 OCR；拿不准就退回全盘）"
                 : (visionPipelineMode === "auto"

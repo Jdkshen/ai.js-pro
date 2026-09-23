@@ -11,7 +11,7 @@
  * 真实契约（2026-09-19 K40 实测，别再猜）：
  *   `$ocr.create({backend:"ppocr"})` → `session.detect(image, {max, region:[x,y,w,h]})`
  *   → `[{ text, score, bounds }]`，`text` 就是棋子上的**汉字**（炮/车/卒…）。
- *   ⚠️ 不是 `recognizeCell`（那是 onnx-ocr-adapter 的假想接口，会话上没有 ⇒ 永远「OCR 未提供」）。
+ *   ⚠️ 不是旧实验代码的 `recognizeCell`；宿主会话公开的是 `detect`。
  *
  * 阈值（方案 §3.5）：
  *   · score ≥ 0.70 ⇒ 采纳
