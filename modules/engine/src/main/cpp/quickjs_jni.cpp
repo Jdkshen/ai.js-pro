@@ -3434,6 +3434,30 @@ JSValue nativeFindAllColorPoints(JSContext *context, JSValueConst, int argc, JSV
                                  flat.size() * sizeof(int32_t));
 }
 
+/** 数区域内匹配颜色的像素个数（无对象/数组分配；`images.countColor` 用）。 */
+JSValue nativeCountColor(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    int32_t color = 0;
+    int32_t threshold = 4;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    if (argc < 7 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToInt32(context, &color, argv[1]) < 0 || JS_ToInt32(context, &threshold, argv[2]) < 0 ||
+        JS_ToInt32(context, &x, argv[3]) < 0 || JS_ToInt32(context, &y, argv[4]) < 0 ||
+        JS_ToInt32(context, &width, argv[5]) < 0 || JS_ToInt32(context, &height, argv[6]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid images.countColor arguments");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    size_t count = 0;
+    if (!state->frames.countColor(handle, static_cast<uint32_t>(color), threshold,
+                                  x, y, width, height, &count)) {
+        return JS_NewFloat64(context, 0);
+    }
+    return JS_NewFloat64(context, static_cast<double>(count));
+}
+
 JSValue nativeFindMultiColors(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t handle = 0;
     int32_t firstColor = 0, threshold = 4, x = 0, y = 0, width = 0, height = 0;
@@ -5054,6 +5078,15 @@ const char kBootstrapScript[] = R"JS(
                 });
             }
             return points;
+        },
+        countColor: function (frame, color, options) {
+            const state = requireFrame(frame);
+            const region = pixelRegionOf(frame, regionOf(frame, options));
+            const threshold = options && options.similarity !== undefined
+                ? Math.trunc(255 * (1 - Number(options.similarity)))
+                : colorThreshold(options, 4);
+            return __aiNativeCountColor(state.id, parseColor(color), threshold,
+                region[0], region[1], region[2], region[3]);
         },
         findMultiColors: function (frame, firstColor, paths, options) {
             if (!Array.isArray(paths)) throw new TypeError('paths must be [[dx, dy, color], ...]');
@@ -9379,6 +9412,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFramePixel", nativeFramePixel, 3);
     installNativeFunction(state->context, global, "__aiNativeFindColor", nativeFindColor, 7);
     installNativeFunction(state->context, global, "__aiNativeFindAllColorPoints", nativeFindAllColorPoints, 7);
+    installNativeFunction(state->context, global, "__aiNativeCountColor", nativeCountColor, 7);
     installNativeFunction(state->context, global, "__aiNativeFindMultiColors", nativeFindMultiColors, 8);
     installNativeFunction(state->context, global, "__aiNativeFindImage", nativeFindImage, 7);
     installNativeFunction(state->context, global, "__aiNativeMatchTemplate", nativeMatchTemplate, 8);

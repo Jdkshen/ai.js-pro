@@ -63,6 +63,8 @@ public:
     bool findAllPointsForColor(int64_t handle, uint32_t argb, int threshold,
                                int x, int y, int width, int height, size_t maxPoints,
                                std::vector<NativeFramePoint> *points) const;
+    bool countColor(int64_t handle, uint32_t argb, int threshold,
+                    int x, int y, int width, int height, size_t *count) const;
     bool findMultiColors(int64_t handle, uint32_t firstColor,
                          const std::vector<NativeFrameColorOffset> &offsets,
                          int threshold, int x, int y, int width, int height,
