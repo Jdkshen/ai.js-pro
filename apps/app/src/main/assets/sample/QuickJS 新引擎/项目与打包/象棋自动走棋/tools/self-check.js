@@ -3731,13 +3731,14 @@ check("状态机·等对方长时间没动 ⇒ 自动发 DECLARE_TURN 翻轮次�
     h.dispatch({ type: "GEOMETRY", geometryVersion: 4, trusted: true });
     h.dispatch(h.snapshotEvent(START_BOARD, "b"));      // 轮到对方
     h.dispatch(h.snapshotEvent(START_BOARD, "b"));      // 画面没变 → 开始记空闲
-    h.clock.value += 21000;                              // 先过 20s 警告门槛
+    const idleDefaults = machineModule.DEFAULTS;
+    h.clock.value += idleDefaults.opponentIdleWarnMs + 800;   // 只过「警告」门槛（别到判反门槛）
     h.dispatch(h.snapshotEvent(START_BOARD, "b"));
     if (String(h.machine.reason()).indexOf("判反") < 0) {
-        return "21s 还没出现「多半是轮次判反」提示：" + h.machine.reason();
+        return "过了警告门槛还没出现「多半是轮次判反」提示：" + h.machine.reason();
     }
     const declaresBefore = h.machine.counters().idleTurnDeclares || 0;
-    h.clock.value += 30000;                              // 合计 51s > 45s 门槛
+    h.clock.value += (idleDefaults.opponentIdleDeclareMs - idleDefaults.opponentIdleWarnMs) + 2000;   // 过判反门槛
     const out = h.dispatch(h.snapshotEvent(START_BOARD, "b"));
     const types = out.effects.map(function (e) { return e.type; });
     if (types.indexOf("DECLARE_TURN") < 0) {
