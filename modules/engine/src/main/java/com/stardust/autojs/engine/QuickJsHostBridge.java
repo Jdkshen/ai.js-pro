@@ -2868,6 +2868,12 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (window != null) window.setAdjustable(enabled);
     }
 
+    /** 只让指定控件承担原生拖动，避免逐帧触摸事件经过脚本线程。 */
+    public void floatySetDragHandle(int windowId, String viewId) {
+        QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+        if (window != null) window.setDragHandle(viewId);
+    }
+
     public boolean floatyIsAdjustable(int windowId) {
         QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
         return window != null && window.isAdjustable();
@@ -3896,6 +3902,60 @@ final class QuickJsHostBridge implements AutoCloseable,
                         .put("window", mId).put("id", viewId).put("event", event).toString());
             } catch (JSONException ignored) {
             }
+        }
+
+        void setDragHandle(String id) {
+            mHandler.post(() -> {
+                final View handle = findViewById(id);
+                if (handle == null) {
+                    Log.w("QuickJsFloatyWindow", "drag handle not found: " + id);
+                    return;
+                }
+                handle.setOnTouchListener(new View.OnTouchListener() {
+                    private float downX;
+                    private float downY;
+                    private int startX;
+                    private int startY;
+                    private boolean moved;
+
+                    @Override
+                    public boolean onTouch(View view, android.view.MotionEvent event) {
+                        if (mParams == null || !mShown) return false;
+                        switch (event.getActionMasked()) {
+                            case android.view.MotionEvent.ACTION_DOWN:
+                                downX = event.getRawX();
+                                downY = event.getRawY();
+                                startX = mParams.x;
+                                startY = mParams.y;
+                                moved = false;
+                                return true;
+                            case android.view.MotionEvent.ACTION_MOVE:
+                                final int dx = Math.round(event.getRawX() - downX);
+                                final int dy = Math.round(event.getRawY() - downY);
+                                if (Math.abs(dx) + Math.abs(dy) < 3) return true;
+                                moved = true;
+                                android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+                                mWindowManager.getDefaultDisplay().getRealMetrics(metrics);
+                                int maxX = Math.max(0, metrics.widthPixels - mRoot.getWidth());
+                                int maxY = Math.max(0, metrics.heightPixels - mRoot.getHeight());
+                                mParams.x = Math.max(0, Math.min(maxX, startX + dx));
+                                mParams.y = Math.max(0, Math.min(maxY, startY + dy));
+                                try {
+                                    mWindowManager.updateViewLayout(mRoot, mParams);
+                                } catch (Throwable error) {
+                                    Log.w("QuickJsFloatyWindow", "drag update failed", error);
+                                }
+                                return true;
+                            case android.view.MotionEvent.ACTION_UP:
+                            case android.view.MotionEvent.ACTION_CANCEL:
+                                if (moved) emitEvent(id, "drag_end");
+                                return true;
+                            default:
+                                return true;
+                        }
+                    }
+                });
+            });
         }
 
         void setAdjustable(boolean enabled) {

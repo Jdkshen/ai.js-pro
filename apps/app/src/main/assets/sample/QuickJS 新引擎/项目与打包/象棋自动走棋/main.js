@@ -2,7 +2,7 @@
 "ui";
 
 /**
- * 象棋自动走棋 · 工程 v0.6.1
+ * 象棋自动走棋 · 工程 v0.6.3
  *
  * 现状：FEN / 棋盘几何 / 格线自动定位 / 格点分配 / 时序融合 / 识别链路（模型随包）/ 棋规 /
  * 本机算棋 / **自动执行（票据 + 点击 + 落子确认）** 都是真代码。
@@ -32,9 +32,9 @@ const STEPS = [
 ];
 
 const UI = {
-    page: "#0F141B", panel: "#18212B", panelAlt: "#202B37",
-    text: "#F3F6FA", muted: "#9CA9B8", blue: "#4D8DCC",
-    green: "#2E7D5B", red: "#A93E45", amber: "#B37A24"
+    page: "#F5F7FA", panel: "#FFFFFF", panelAlt: "#EAF0F8",
+    text: "#20252E", muted: "#667080", blue: "#3486FF",
+    green: "#24865C", red: "#C24B52", amber: "#B97819"
 };
 
 ui.layout(
@@ -47,12 +47,12 @@ ui.layout(
   '    <button id="floatyOpen" text="悬浮面板" bg="' + UI.blue + '" textColor="#FFFFFF"/>' +
   '  </horizontal>' +
   '  <frame height="10"/>' +
-  '  <card cardCornerRadius="12dp" cardElevation="0dp" cardBackgroundColor="' + UI.panel + '">' +
+  '  <card cardCornerRadius="20dp" cardElevation="0dp" cardBackgroundColor="' + UI.panel + '">' +
   '    <vertical padding="14">' +
   '      <text id="statusIdle" text="●  未运行" textSize="18sp" textStyle="bold" textColor="' + UI.muted + '"/>' +
-  '      <text id="statusGood" text="●  观察中" textSize="18sp" textStyle="bold" textColor="#63C892"/>' +
-  '      <text id="statusWarn" text="●  等待处理" textSize="18sp" textStyle="bold" textColor="#E1A84A"/>' +
-  '      <text id="statusError" text="●  需要处理" textSize="18sp" textStyle="bold" textColor="#EF7078"/>' +
+  '      <text id="statusGood" text="●  观察中" textSize="18sp" textStyle="bold" textColor="#24865C"/>' +
+  '      <text id="statusWarn" text="●  等待处理" textSize="18sp" textStyle="bold" textColor="#B97819"/>' +
+  '      <text id="statusError" text="●  需要处理" textSize="18sp" textStyle="bold" textColor="#C24B52"/>' +
   '      <text id="status" textSize="13sp" textColor="' + UI.muted + '"/>' +
   '    </vertical>' +
   '  </card>' +
@@ -67,11 +67,11 @@ ui.layout(
   '      <frame height="12"/>' +
   '      <text text="运行模式" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
   '      <horizontal>' +
-  '        <button id="modeWatch" text="只识别" layout_weight="1" bg="' + UI.panelAlt + '" textColor="#FFFFFF"/>' +
+  '        <button id="modeWatch" text="只识别" layout_weight="1" bg="' + UI.panelAlt + '" textColor="' + UI.text + '"/>' +
   '        <button id="modeAdvice" text="着法建议" layout_weight="1" bg="' + UI.blue + '" textColor="#FFFFFF"/>' +
   '        <button id="modeAuto" text="自动走棋" layout_weight="1" bg="' + UI.amber + '" textColor="#FFFFFF"/>' +
   '      </horizontal>' +
-  '      <text text="自动走棋会在安全检查全部通过后操作棋盘" textSize="12sp" textColor="#D7A754"/>' +
+  '      <text text="自动走棋会在安全检查全部通过后操作棋盘" textSize="12sp" textColor="#B97819"/>' +
   '      <frame height="10"/>' +
   '      <text text="对局设置" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
   '      <horizontal>' +
@@ -80,7 +80,7 @@ ui.layout(
   '      </horizontal>' +
   '      <button id="captureChannel" text="截图来源：自动"/>' +
   '      <button id="tapMethod" text="点击通道：自动"/>' +
-  '      <text id="autoStatus" textSize="12sp" textColor="#8FB9E2"/>' +
+  '      <text id="autoStatus" textSize="12sp" textColor="#4B83DC"/>' +
   '      <frame height="10"/>' +
   '      <text text="快捷工具" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
   '      <horizontal>' +
@@ -95,7 +95,7 @@ ui.layout(
   '      <vertical id="advancedPanel" bg="' + UI.panel + '" padding="10">' +
   '        <text text="悬浮窗" textSize="12sp" textColor="' + UI.muted + '"/>' +
   '        <button id="floatyClose" text="关闭悬浮面板"/>' +
-  '        <text id="floatyStatus" textSize="12sp" textColor="#8FB9E2"/>' +
+  '        <text id="floatyStatus" textSize="12sp" textColor="#4B83DC"/>' +
   '        <text text="棋盘截图路径" textSize="12sp" textColor="' + UI.muted + '"/>' +
   '        <input id="image" text="/sdcard/Download/chess-shot-01.png" textSize="12sp"/>' +
   '        <horizontal>' +
@@ -104,8 +104,6 @@ ui.layout(
   '        </horizontal>' +
   '        <text text="当前局面 FEN" textSize="12sp" textColor="' + UI.muted + '"/>' +
   '        <input id="fen" text="rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" textSize="12sp"/>' +
-  '        <text text="棋盘范围 x,y,w,h（留空自动定位）" textSize="12sp" textColor="' + UI.muted + '"/>' +
-  '        <input id="region" text="" textSize="12sp"/>' +
   '      </vertical>' +
   '      <button id="diagnosticToggle" text="诊断工具  ▾" bg="' + UI.panelAlt + '" textColor="' + UI.text + '"/>' +
   '      <vertical id="diagnosticPanel" bg="' + UI.panel + '" padding="10">' +
@@ -123,8 +121,8 @@ ui.layout(
   '      </vertical>' +
   '      <frame height="10"/>' +
   '      <text text="运行记录" textSize="14sp" textStyle="bold" textColor="' + UI.text + '"/>' +
-  '      <scroll height="180dp" bg="#0A0E13" padding="10">' +
-  '        <text id="output" textSize="12sp" textColor="#C8D1DC"/>' +
+  '      <scroll height="180dp" bg="#FFFFFF" padding="10">' +
+  '        <text id="output" textSize="12sp" textColor="#303744"/>' +
   '      </scroll>' +
   '      <frame height="16"/>' +
   '    </vertical>' +
@@ -695,20 +693,6 @@ function captureButtonText() {
 // 它们都是 const，提前用会报 "... is not initialized"（真机上就是 main.js 启动即退）。
 ui.captureChannel.setText(captureButtonText());
 
-/** 读棋盘范围输入框（比例 x,y,w,h）；空的就返回 null（用默认比例）。 */
-function regionRatioFromUi() {
-    const raw = inputText(ui.region).trim();
-    if (!raw) {
-        return null;
-    }
-    const parts = raw.split(/[,\s]+/).map(function (item) { return Number(item); });
-    if (parts.length !== 4 || parts.some(function (value) { return !isFinite(value) || value < 0; })) {
-        show("棋盘范围格式不对：应形如 0.013,0.251,0.958,0.472（比例）");
-        return null;
-    }
-    return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
-}
-
 /** 换模式（或换我方颜色后重建）会重置驱动：会话、几何与轮次基准全部清空。 */
 function rebuildDriver() {
     stopAuto("重建驱动");
@@ -740,7 +724,6 @@ function rebuildDriver() {
             modelVersion: "chessai_160x320_v5r",
             confidence: 0.25,
             orientation: "RED_BOTTOM",
-            regionRatio: regionRatioFromUi(),
             computeMode: "worker"
         }
     });

@@ -9,6 +9,11 @@
  *   · **梳状（comb）评分**：一次同时评 9 条竖线（10 条横线）的位置，origin/step 全搜，
  *     用 trimmed 求和丢掉最弱的几条线 —— 棋子盖掉 2 条线也照样打分。
  *     旧路的「线条数必须 9/10」会因为遮挡直接判失败（720p 上偏 4% 就报「竖线只匹配 6/9」）。
+ *   · **「存在的线」加成 + 遮挡感知门槛（2026-09-24 真机回放修复）**：trimmed 求和会把
+ *     「一条线空掉（0.00）」和「一条线被棋子压住（0.5+）」同分 → 平移一格的梳子与真梳
+ *     三连平局（靠扫描顺序瞎选，实测四张真实截图里两张因此偏了一整格）。现用「存在的线」
+ *     条数加成（presenceCount）让真梳胜出；命中门槛用 0.2×前 3 强均值而不是 0.35 ——
+ *     起始局面外侧两行整行摆满棋子，那两条线只剩 ~22% 支撑度，0.35 会把它们全判缺失。
  *
  * 几何先验（实测，不是猜的）：
  *   · 棋盘**水平居中**（K40 1080：竖线起点 82；格距 115.9 ≈ 1080×0.1073）；
@@ -37,6 +42,32 @@ const DEFAULTS = {
     ],
     /** 条带扫描步长（像素）：决定响应数组的分辨率（越细越准、越慢）。 */
     scanStep: 4,
+    /** 缩窄屏幕时按宽度缩小找色采样间距，避免 720p 画面整行错位。 */
+    minVerticalMatched: 8,
+    minHorizontalMatched: 9,
+    /**
+     * matched 门槛（相对前 3 强线均值）：支持度低于它的线不算「命中的线」。
+     * ⚠️ 0.35 → 0.2（2026-09-24 真机回放）：起始局面首末两行整行摆满棋子，
+     * 最外两条横线只剩 ~22% 支撑度（0.5~0.9 vs 内部 2~2.8），0.35 会把棋盘线全在的
+     * 四张真实截图误判成 8/10 直接拒绝；而「空槽」（梳子滑出棋盘）只有 0~0.04，
+     * 0.2 落在两个量级中间。
+     */
+    matchedRatio: 0.2,
+    /**
+     * 单条线的「绝对最小支持度」：低于它的位置一律不算命中/存在。
+     * ⚠️ 纯相对口径在全噪声图上会翻车（2026-09-24 实测「回到应用」文件列表截图：
+     * 全线 0.01~0.02 → 前 3 强均值 0.02 → 相对门槛 0.004 → 10/10「全命中」→ 误判为棋盘）。
+     * 真机实测：空槽 ≤0.04、被棋子压住的线 0.52+ —— 0.15 落在两个量级中间。
+     */
+    minLineSupport: 0.15,
+    /**
+     * 「存在的线」门槛（相对最强线）与加成（每条）—— 破解「±1 格距平移梳」平局：
+     * trimmed 求和把「一条线空掉（0.00）」与「一条线被棋子压住（0.5+）」同分，
+     * 平移到棋盘外的梳子与真梳完全打平（实测锚点 -1/0/+1 三连平局）。
+     * 真梳比平移梳多 1~2 条「存在的线」（空槽 0~0.04 永远不达标），靠这个加成胜出。
+     */
+    presenceRatio: 0.15,
+    presenceBonus: 0.05,
     /** 条带半宽：2*half+1 列（行）合起来数色，抗 1px 抖动/抗锯齿。 */
     stripHalf: 1,
     /** 扫描带（占屏幕比例）：横 0~100%，纵 12%~92%（排除状态栏/底部手势带）。 */
@@ -157,6 +188,56 @@ function strongCount(values, options) {
 }
 
 /**
+ * 「存在的线」计数：值 ≥ max(最强线 × presenceRatio, 绝对下限)。
+ * 区分「空槽」（梳子滑到棋盘外，只有 0~0.04 的背景噪声）与「被棋子压住的线」（0.5+）。
+ */
+function presenceCount(values, options) {
+    const opts = options || {};
+    let maxValue = 0;
+    for (let i = 0; i < values.length; i++) {
+        if (values[i] > maxValue) {
+            maxValue = values[i];
+        }
+    }
+    const ratio = opts.presenceRatio == null ? DEFAULTS.presenceRatio : opts.presenceRatio;
+    const absMin = opts.minLineSupport == null ? DEFAULTS.minLineSupport : opts.minLineSupport;
+    const floor = Math.max(maxValue * ratio, absMin);
+    let present = 0;
+    for (let i = 0; i < values.length; i++) {
+        if (values[i] >= floor) {
+            present += 1;
+        }
+    }
+    return present;
+}
+
+/**
+ * matched 口径：支持度 ≥ max(前 3 强均值 × matchedRatio, 绝对下限) 的线数。
+ * ⚠️ 不能拿「最强那条线」当基准：采样相位不同，同一把梳子里真线的值会 "1/2/3" 交替，
+ *    用最强线做分母会把正常的线误判成缺失（调试实测：真线全在，matched 只有 6）。
+ * ⚠️ 也不能纯相对：全噪声图（所有线 0.01~0.02）相对门槛会降到 0.004，全部「命中」。
+ */
+function matchedCount(perLine, options) {
+    const opts = options || {};
+    const ratio = opts.matchedRatio == null ? DEFAULTS.matchedRatio : opts.matchedRatio;
+    const absMin = opts.minLineSupport == null ? DEFAULTS.minLineSupport : opts.minLineSupport;
+    const sorted = perLine.slice().sort(function (a, b) { return b - a; });
+    const topN = Math.max(1, Math.min(3, sorted.length));
+    let topSum = 0;
+    for (let i = 0; i < topN; i++) {
+        topSum += sorted[i];
+    }
+    const floor = Math.max((topSum / topN) * ratio, absMin);
+    let matched = 0;
+    for (let i = 0; i < perLine.length; i++) {
+        if (perLine[i] >= floor) {
+            matched += 1;
+        }
+    }
+    return matched;
+}
+
+/**
  * 一次梳状评分：在 origin 起点放 count 条间距 step 的线，**窗口取样**后 trimmed 求和
  * （再加强线加成，见 DEFAULTS 说明）。
  * @return { score, sum, perLine, strong }（perLine = 每条线位置的响应值，供证据/日志）
@@ -172,8 +253,10 @@ function combScore(resp, count, origin, step, options) {
         acc.push(value);
     }
     const strong = strongCount(perLine, options);
-    const bonus = strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus);
-    return { score: acc.score() + bonus, sum: acc.total(), perLine: perLine, strong: strong };
+    const present = presenceCount(perLine, options);
+    const bonus = strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus) +
+        present * (options.presenceBonus == null ? DEFAULTS.presenceBonus : options.presenceBonus);
+    return { score: acc.score() + bonus, sum: acc.total(), perLine: perLine, strong: strong, present: present };
 }
 
 /**
@@ -191,7 +274,9 @@ function scoreInterp(resp, count, origin, step, options) {
         acc.push(value);
     }
     const strong = strongCount(values, options);
-    const bonus = strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus);
+    const present = presenceCount(values, options);
+    const bonus = strong * (options.strongBonus == null ? DEFAULTS.strongBonus : options.strongBonus) +
+        present * (options.presenceBonus == null ? DEFAULTS.presenceBonus : options.presenceBonus);
     return acc.score() + bonus;
 }
 
@@ -247,7 +332,10 @@ function combFit(resp, count, options) {
         sampleWindow: opts.sampleWindow == null ? DEFAULTS.sampleWindow : opts.sampleWindow,
         dropCount: opts.dropCount == null ? DEFAULTS.dropCount : opts.dropCount,
         strongRatio: opts.strongRatio == null ? DEFAULTS.strongRatio : opts.strongRatio,
-        strongBonus: opts.strongBonus == null ? DEFAULTS.strongBonus : opts.strongBonus
+        strongBonus: opts.strongBonus == null ? DEFAULTS.strongBonus : opts.strongBonus,
+        presenceRatio: opts.presenceRatio == null ? DEFAULTS.presenceRatio : opts.presenceRatio,
+        presenceBonus: opts.presenceBonus == null ? DEFAULTS.presenceBonus : opts.presenceBonus,
+        minLineSupport: opts.minLineSupport == null ? DEFAULTS.minLineSupport : opts.minLineSupport
     };
     // 画面边界：不传就用响应带外扩一个采样步（调用方传真实画面尺寸更严谨）
     const boundsMin = opts.boundsMin == null ? resp.from - resp.step : opts.boundsMin;
@@ -441,6 +529,9 @@ function detect(host, image, options) {
     if (!size || !(size.width > 0) || !(size.height > 0)) {
         return { ok: false, reason: "拿不到图像尺寸（sizeOf）", calls: 0 };
     }
+    if (opts.scanStep == null && size.width <= 800) {
+        merged.scanStep = 3;
+    }
     const band = {
         x0: Math.round(merged.xBand[0] * size.width),
         y0: Math.round(merged.yBand[0] * size.height),
@@ -494,40 +585,29 @@ function detect(host, image, options) {
     const ok = squareness <= merged.maxSquareness && boundsOk;
 
     function summarize(fit) {
-        // matched 口径：值 ≥「前 3 强线均值 × 0.35」的线数。
-        // ⚠️ 不能拿「最强那条线」当基准：采样相位不同，同一把梳子里真线的值会 "1/2/3" 交替，
-        //    用最强线做分母会把正常的线误判成缺失（调试实测：真线全在，matched 只有 6）。
         const perLine = fit.best.perLine;
-        const sorted = perLine.slice().sort(function (a, b) { return b - a; });
-        const topN = Math.max(1, Math.min(3, sorted.length));
-        let topSum = 0;
-        for (let i = 0; i < topN; i++) {
-            topSum += sorted[i];
-        }
-        const floor = (topSum / topN) * 0.35;
-        let matched = 0;
-        for (let i = 0; i < perLine.length; i++) {
-            if (perLine[i] >= floor) {
-                matched += 1;
-            }
-        }
         return {
             origin: fit.best.origin, step: fit.best.step,
-            score: fit.best.score, matched: matched, strong: fit.best.strong,
+            score: fit.best.score, matched: matchedCount(perLine, merged), strong: fit.best.strong,
             perLine: perLine, topK: fit.candidates
         };
     }
 
+    const vertical = summarize(fitX);
+    const horizontal = summarize(fitY);
+    const linesOk = vertical.matched >= merged.minVerticalMatched &&
+        horizontal.matched >= merged.minHorizontalMatched;
     return {
-        ok: ok,
-        reason: ok ? "" : (squareness > merged.maxSquareness
+        ok: ok && linesOk,
+        reason: !linesOk ? "格线证据不足（竖 " + vertical.matched + "/9，横 " +
+            horizontal.matched + "/10）" : (ok ? "" : (squareness > merged.maxSquareness
             ? "两轴格距差 " + (squareness * 100).toFixed(1) + "%（超过 " + (merged.maxSquareness * 100) + "%）"
-            : "棋盘越界（origin " + Math.round(grid.originX) + "," + Math.round(grid.originY) + "）"),
+            : "棋盘越界（origin " + Math.round(grid.originX) + "," + Math.round(grid.originY) + "）")),
         grid: grid,
         score: fitX.best.score + fitY.best.score,
         squareness: squareness,
         boundsOk: boundsOk,
-        evidence: { vertical: summarize(fitX), horizontal: summarize(fitY) },
+        evidence: { vertical: vertical, horizontal: horizontal },
         timing: {
             responseMs: responseMs, fitMs: fitMs,
             respXMs: respX.ms, respYMs: respY.ms,
@@ -544,6 +624,9 @@ module.exports = {
     responseAt: responseAt,
     lerpAt: lerpAt,
     windowMax: windowMax,
+    strongCount: strongCount,
+    presenceCount: presenceCount,
+    matchedCount: matchedCount,
     combScore: combScore,
     scoreInterp: scoreInterp,
     centerOnPlateau: centerOnPlateau,

@@ -2138,6 +2138,15 @@ JSValue nativeFloatySetAdjustable(JSContext *context, JSValueConst, int argc, JS
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
 }
 
+JSValue nativeFloatySetDragHandle(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t windowId = 0;
+    if (argc < 2 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "floatySetDragHandle requires windowId, viewId");
+    }
+    return callHostVoidIntString(context, "floatySetDragHandle",
+            static_cast<int32_t>(windowId), jsString(context, argv[1]));
+}
+
 JSValue nativeFloatyIsAdjustable(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t windowId = 0;
     if (argc < 1 || JS_ToInt64(context, &windowId, argv[0]) < 0) {
@@ -6638,6 +6647,8 @@ const char kBootstrapScript[] = R"JS(
         handlers.push(fn);
         if (mode === 'touch') {
             __aiNativeFloatyViewTouch(windowId, viewId);
+        } else if (mode === 'drag_end') {
+            // 原生标题栏在手指抬起时发一次事件，无需再注册会覆盖触摸监听的 JS 监听器。
         } else if (mode === 'key') {
             __aiNativeFloatyViewKey(windowId, viewId);
         } else {
@@ -7260,6 +7271,13 @@ const char kBootstrapScript[] = R"JS(
                 },
                 setAdjustEnabled: function (enabled) {
                     __aiNativeFloatySetAdjustable(id, !!enabled);
+                    return self || win;
+                },
+                /** 指定一块标题控件用原生 UI 线程拖动；回调只在拖动结束时调用。 */
+                setDragHandle: function (viewId, onEnd) {
+                    viewId = String(viewId);
+                    if (typeof onEnd === 'function') addFloatyHandler(id, viewId, 'drag_end', onEnd);
+                    __aiNativeFloatySetDragHandle(id, viewId);
                     return self || win;
                 },
                 /** 窗口是否仍存在（可被 worker 线程检查）。 */
@@ -9431,6 +9449,7 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeFloatyViewClick", nativeFloatyViewClick, 3);
     installNativeFunction(state->context, global, "__aiNativeFloatyViewPoll", nativeFloatyViewPoll, 0);
     installNativeFunction(state->context, global, "__aiNativeFloatySetAdjustable", nativeFloatySetAdjustable, 2);
+    installNativeFunction(state->context, global, "__aiNativeFloatySetDragHandle", nativeFloatySetDragHandle, 2);
     installNativeFunction(state->context, global, "__aiNativeFloatyIsAdjustable", nativeFloatyIsAdjustable, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetX", nativeFloatyGetX, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyGetY", nativeFloatyGetY, 1);

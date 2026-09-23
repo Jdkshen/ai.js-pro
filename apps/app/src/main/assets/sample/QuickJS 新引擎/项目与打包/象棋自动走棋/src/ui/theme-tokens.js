@@ -64,17 +64,30 @@ const FONT = {
 
 /** 颜色（ARGB 字符串，宿主 XML 直接吃）。 */
 const COLOR = {
-    bg: "#F2182434",
-    bgSoft: "#E6101820",
-    border: "#6633CCFF",
-    title: "#FFE6F2FF",
-    text: "#FFCFE3FF",
-    textDim: "#FF93A9C4",
-    ok: "#FF6BE08A",
-    warn: "#FFF2C14E",
-    bad: "#FFFF7A7A",
-    accent: "#FF63B3FF"
+    bg: "#F7F8FA", bgSoft: "#FFFFFF", border: "#E6EAF0",
+    title: "#20252E", text: "#303744", textDim: "#667080",
+    ok: "#24865C", warn: "#B97819", bad: "#C24B52", accent: "#3486FF"
 };
+
+/** 以 1080px 宽为基准缩放窗口和所有子控件，避免 720px 溢出和高分屏留白。 */
+function layoutFor(screen) {
+    const width = screen && Number(screen.width) > 0 ? Number(screen.width) : 1080;
+    const height = screen && Number(screen.height) > 0 ? Number(screen.height) : 2400;
+    const nominal = Math.max(0.55, Math.min(1.2, width / 1080));
+    const scale = Math.min(nominal, Math.max(0.3, (width - 16) / PANEL.width));
+    function px(value) { return Math.max(1, Math.round(value * scale)); }
+    const panel = Object.assign({}, PANEL, {
+        width: px(PANEL.width), height: px(PANEL.height), marginX: Math.max(8, px(PANEL.marginX)),
+        menuGap: px(PANEL.menuGap), rowHeight: px(PANEL.rowHeight), rowGap: px(PANEL.rowGap),
+        statusHeight: px(PANEL.statusHeight), stepHeight: px(PANEL.stepHeight),
+        logHeight: Math.min(px(PANEL.logHeight), Math.round(height * 0.22)),
+        radiusPanel: px(22), radiusButton: px(12), radiusCard: px(16)
+    });
+    return {
+        scale: scale, PANEL: panel, compactWidth: px(850), compactHeight: px(54),
+        logWrap: Math.max(15, Math.round(LOG_WRAP * scale))
+    };
+}
 
 /**
  * 日志窗显示几行。
@@ -99,6 +112,7 @@ module.exports = {
     PANEL: PANEL,
     FONT: FONT,
     COLOR: COLOR,
+    layoutFor: layoutFor,
     LOG_LINES_COMPACT: LOG_LINES_COMPACT,
     LOG_WRAP: LOG_WRAP,
     LOG_WRAP_LINES: LOG_WRAP_LINES

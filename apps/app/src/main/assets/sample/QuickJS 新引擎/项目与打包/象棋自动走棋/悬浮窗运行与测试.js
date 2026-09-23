@@ -107,6 +107,11 @@ const legalModule = load("src/chess/legal-moves.js");
 // §14 框架层：文案/令牌只定义一次（ui），配置只解析一处（app/config），日志走 diagnostics
 const labelsModule = load("src/ui/labels.js");
 const themeTokens = load("src/ui/theme-tokens.js");
+const panelLayout = themeTokens.layoutFor((function () {
+    try { return adapter.screenSize(); } catch (error) { return { width: 1080, height: 2400 }; }
+}()));
+const PANEL = panelLayout.PANEL;
+function panelPx(base) { return Math.max(1, Math.round(base * panelLayout.scale)); }
 const configModule = load("src/app/config.js");
 const recorderModule = load("src/diagnostics/recorder.js");
 const overlayDraw = load("src/vision/overlay-draw.js");
@@ -591,12 +596,12 @@ function stepLine() {
 const LOG_LINES_FULL = 12;   // 缓冲区保留行数（方便 console 侧对账）
 /** 窗口高度只由 XML 的 px 决定（见 applyWindowHeight 的注释：setSize 会把窗口框体弄坏）——
  *  这个常量必须与 XML 根节点的 h 一致（改 XML 记得一起改，panelRect 的重叠判定与自动落位要用它）。 */
-const WIN_H_COMPACT = themeTokens.PANEL.height;
+const WIN_H_COMPACT = PANEL.height;
 
 function visibleLog() {
     // 心跳类日志每秒一条，会把有用的事件挤走 → 不上屏（console 里依旧有）；
     // 过长的行**折行**而不是截断（用户两次强调「显示完整」）：一条最多占 LOG_WRAP_LINES 行。
-    const wrap = themeTokens.LOG_WRAP;
+    const wrap = panelLayout.logWrap;
     const maxLines = themeTokens.LOG_WRAP_LINES;
     const rendered = [];
     for (let i = 0; i < logLines.length; i++) {
@@ -688,20 +693,12 @@ function scheduleRender() {
  * ⚠️ 静态写在 XML 里 —— 运行期改色要先确定引擎暴露了 setTextColor（见 render 里那层 try）。
  */
 const C = {
-    panel: "#151A22",
-    title: "#7FD1FF",
-    btnNeutral: "#2A313C",
-    btnNeutralFg: "#E6EAF2",
-    btnPrimary: "#1F8B4C",
-    btnDanger: "#A93B3B",
-    btnAccent: "#2F6FB5",
-    btnDim: "#232A33",
-    btnDimFg: "#AEB7C4",
-    card: "#1B222C",
-    step: "#F5C56B",
-    logBg: "#141920",
-    logFg: "#B8C0CC",
-    status: "#8F9AA8"
+    panel: "#F7F8FC", title: "#20252E",
+    btnNeutral: "#E8EDF5", btnNeutralFg: "#303744",
+    btnPrimary: "#3486FF", btnDanger: "#C24B52", btnAccent: "#4B83DC",
+    btnDim: "#E2E6ED", btnDimFg: "#586575",
+    card: "#FFFFFF", step: "#2F547D",
+    logBg: "#F7F8FC", logFg: "#303744", status: "#667080"
 };
 
 const UI_MODE_LABEL = { watch: "只识别", suggest: "着法建议", auto: "自动走棋" };
@@ -739,25 +736,25 @@ function compactStateText() {
 
 /** 按钮：统一用带底色的 <text> 冒充（<button> 在这个引擎上收不到 click，见下方长注释）。 */
 function button(id, label, width, bg, fg) {
-    const row = themeTokens.PANEL.rowHeight;
-    return '    <text id="' + id + '" text="' + label + '" w="' + width + 'px" h="' + row + 'px" bg="' +
-        (bg || C.btnNeutral) + '" radius="' + themeTokens.PANEL.radiusButton + '" textColor="' +
-        (fg || C.btnNeutralFg) + '" textSize="' + themeTokens.FONT.button + '" gravity="center"/>';
+    const row = PANEL.rowHeight;
+    return '    <text id="' + id + '" text="' + label + '" w="' + panelPx(width) + 'px" h="' + row + 'px" bg="' +
+        (bg || C.btnNeutral) + '" radius="' + PANEL.radiusButton + '" textColor="' +
+        (fg || ((bg === C.btnPrimary || bg === C.btnDanger || bg === C.btnAccent) ? "#FFFFFF" : C.btnNeutralFg)) + '" textSize="' + themeTokens.FONT.button + '" gravity="center"/>';
 }
 
 /** 行首的分组标签（对局 / 诊断） */
 function rowLabel(text) {
-    return '    <text text="' + text + '" w="74px" h="' + themeTokens.PANEL.rowHeight +
+    return '    <text text="' + text + '" w="' + panelPx(74) + 'px" h="' + PANEL.rowHeight +
         'px" textColor="' + C.status + '" textSize="' + themeTokens.FONT.button + '" gravity="center"/>';
 }
 
-const ROW_H = themeTokens.PANEL.rowHeight;
+const ROW_H = PANEL.rowHeight;
 const XML = [
-    '<vertical id="root" w="' + themeTokens.PANEL.width + 'px" h="' + themeTokens.PANEL.height +
-    'px" bg="' + C.panel + '" radius="' + themeTokens.PANEL.radiusPanel + '" padding="8px">',
+    '<vertical id="root" w="' + PANEL.width + 'px" h="' + PANEL.height +
+    'px" bg="' + C.panel + '" radius="' + PANEL.radiusPanel + '" padding="' + panelPx(8) + 'px">',
     // 第 1 行：当前状态 + 模式 + 主操作；停止始终固定在这一行
     '  <horizontal id="primaryRow" h="' + ROW_H + 'px">',
-    '    <text id="title" text="只识别 · 未运行" w="320px" h="' + ROW_H + 'px" textColor="' + C.title +
+    '    <text id="title" text="只识别 · 未运行" w="' + panelPx(320) + 'px" h="' + ROW_H + 'px" textColor="' + C.title +
     '" textSize="' + themeTokens.FONT.title + '" gravity="center_vertical" padding="10px"/>',
     button("modeBtn", "只识别", 180, C.btnAccent),
     button("startBtn", "开始", 140, C.btnPrimary),
@@ -784,11 +781,11 @@ const XML = [
     button("clearBtn", "清空日志", 135, C.btnDim, C.btnDimFg),
     button("closeBtn", "关闭", 105, C.btnDanger),
     '  </horizontal>',
-    '  <text id="status" text="准备中…" w="' + (themeTokens.PANEL.width - 16) +
-    'px" h="' + themeTokens.PANEL.statusHeight + 'px" textColor="' + C.status +
+    '  <text id="status" text="准备中…" w="' + (PANEL.width - panelPx(16)) +
+    'px" h="' + PANEL.statusHeight + 'px" textColor="' + C.status +
     '" textSize="' + themeTokens.FONT.status + '" gravity="center_vertical" padding="2px"/>',
-    '  <text id="step" text="进度：等待开始" w="' + (themeTokens.PANEL.width - 16) +
-    'px" h="' + themeTokens.PANEL.stepHeight + 'px" bg="' + C.card + '" radius="' + themeTokens.PANEL.radiusCard +
+    '  <text id="step" text="进度：等待开始" w="' + (PANEL.width - panelPx(16)) +
+    'px" h="' + PANEL.stepHeight + 'px" bg="' + C.card + '" radius="' + PANEL.radiusCard +
     '" textColor="' + C.step + '" textSize="' + themeTokens.FONT.step + '" padding="8px"/>',
     '</vertical>'
 ].join("\n");
@@ -801,8 +798,8 @@ const XML = [
  * 本来就有条空带（K40: 棋盘底 ~1716 → 菜单上沿 ~2060）⇒ 放 8 行 9sp 完全够，且不挡菜单。
  * ⚠️ 这窗在屏幕下方，藏它的方向与上方面板**相反**（要往下挪出屏幕，见 hidePanel）。
  */
-const LOG_XML = '<text id="logArea" text="" w="' + themeTokens.PANEL.width + 'px" h="' +
-    themeTokens.PANEL.logHeight + 'px" bg="' + C.logBg + '" radius="' + themeTokens.PANEL.radiusPanel +
+const LOG_XML = '<text id="logArea" text="" w="' + PANEL.width + 'px" h="' +
+    PANEL.logHeight + 'px" bg="' + C.logBg + '" radius="' + PANEL.radiusPanel +
     '" textColor="' + C.logFg + '" textSize="' + themeTokens.FONT.log + '" padding="10px"/>';
 
 let win = null;
@@ -813,11 +810,11 @@ let logPanelY = null;
 let logPanelUserMoved = false;
 /** 日志窗总开关（autorun 里 `"logWindow": false` 可关 —— 旧行为：日志挤在上方面板里） */
 let logWindowEnabled = true;
-const COMPACT_W = 850;
-const COMPACT_H = 54;
+const COMPACT_W = panelLayout.compactWidth;
+const COMPACT_H = panelLayout.compactHeight;
 const COMPACT_XML = [
     '<horizontal id="compactRoot" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" bg="' + C.panel + '" padding="6px">',
-    '  <text id="compactStatus" text="只识别 · 未运行" w="280px" h="42px" textColor="' + C.title +
+    '  <text id="compactStatus" text="只识别 · 未运行" w="' + panelPx(280) + 'px" h="' + panelPx(42) + 'px" textColor="' + C.title +
     '" textSize="11" gravity="center_vertical" padding="8px"/>',
     button("compactMode", "只识别", 155, C.btnAccent),
     button("compactStart", "开始", 120, C.btnPrimary),
@@ -954,7 +951,7 @@ function hideLogWindow(reason) {
     if (!logWin || logPosBeforeHide) {
         return true;   // 没建/已经藏了
     }
-    let x = themeTokens.PANEL.marginX;
+    let x = PANEL.marginX;
     let y = 0;
     try {
         const cx = logWin.getX(true);
@@ -1082,10 +1079,10 @@ function render() {
  * 面板当前占的屏幕矩形（XML 尺寸是固定的 1020×470；位置可能被用户拖过）。
  * 拿不到就返回 null（调用方按「可能挡着」处理）。
  */
-const PANEL_W = 1020;
-const PANEL_H = themeTokens.PANEL.height;   // 必须与 XML 根节点的 h 一致（重叠判定/自动落位用）
+const PANEL_W = PANEL.width;
+const PANEL_H = PANEL.height;   // 必须与 XML 根节点的 h 一致（重叠判定/自动落位用）
 /** 日志窗高度（与 LOG_XML 的 h 一致） */
-const LOG_H = themeTokens.PANEL.logHeight;
+const LOG_H = PANEL.logHeight;
 /** 我们自己最后一次设的 y（用于区分「用户拖过」与「我们摆的」）。 */
 let panelY = null;
 
@@ -1138,8 +1135,8 @@ function rectsOverlap(a, b) {
  */
 function panelSafeBand(size) {
     const h = (size && size.height > 0) ? size.height : 2400;
-    const top = Math.max(statusBarHeight() + 4, Math.round(h * themeTokens.PANEL.safeTopRatio));
-    const bottom = Math.round(h * themeTokens.PANEL.menuTopRatio) - themeTokens.PANEL.menuGap;
+    const top = Math.max(statusBarHeight() + 4, Math.round(h * PANEL.safeTopRatio));
+    const bottom = Math.round(h * PANEL.menuTopRatio) - PANEL.menuGap;
     return { top: top, bottom: bottom };
 }
 
@@ -1195,7 +1192,7 @@ function snapLogWindowBelowBoard(size) {
             logPanelY = y;
             return;
         }
-        let x = themeTokens.PANEL.marginX;
+        let x = PANEL.marginX;
         try {
             const curX = logWin.getX(true);
             if (isFinite(curX)) {
@@ -4620,13 +4617,14 @@ function ensureCompactWindow(x, y) {
     }
     compactWin = floaty.window(COMPACT_XML, { x: x, y: y, visible: true });
     compactWin.setTouchable(true);
-    // K40/LineageOS 上整窗原生拖动会吞掉子按钮点击，只让状态区承担拖动。
+    // 标题区在原生 UI 线程拖动；旧宿主保留 JS 兜底。
     let compactNativeDrag = false;
     try {
-        compactWin.setDraggable(false);
-    } catch (error) {
-        compactNativeDrag = false;
-    }
+        if (typeof compactWin.setDragHandle === "function") {
+            compactWin.setDragHandle("compactStatus", function () { panelUserMoved = true; });
+            compactNativeDrag = true;
+        }
+    } catch (error) { compactNativeDrag = false; }
     if (!compactNativeDrag) {
         // 旧平台没有原生拖动时，给状态区一个限频拖动兜底
         let downX = 0;
@@ -4729,7 +4727,7 @@ function main() {
     //   · 顶端（状态栏下方）会挡住对手头像/名字 —— 用户也投诉过；
     //   · 只有棋盘上方那条空带是真正不挡东西的（K40 ≈ 280..645）。
     // 定位到棋盘后会自动贴到棋盘上沿之上；用户拖过就不再抢。
-    let startX = 30;
+    let startX = PANEL.marginX;
     let startY = 264;
     try {
         const size = adapter.screenSize();
@@ -4802,9 +4800,16 @@ function main() {
     // 每次都要过 JS→Java 桥 + WindowManager.updateViewLayout，而且触摸事件排在脚本线程上
     // （自动循环/算棋一跑就更卡）——真机上手感就是「拖着走一顿一顿」。
     // K40/LineageOS 上整窗原生拖动会吞掉按钮事件，因此只绑定标题区并限频移动。
-    // K40 上整窗原生拖动会吞按钮；只让标题区限频拖动。
-    try { win.setDraggable(false); } catch (error) { /* 宿主无此方法时仍可标题拖动 */ }
-    logLine("拖动：标题区限频 40ms");
+    // 只拖标题控件，按钮仍可点击；旧宿主保留限频 JS 兜底。
+    let nativeTitleDrag = false;
+    try {
+        if (typeof win.setDragHandle === "function") {
+            win.setDragHandle("title", function () { panelUserMoved = true; });
+            nativeTitleDrag = true;
+        }
+    } catch (error) { nativeTitleDrag = false; }
+    logLine(nativeTitleDrag ? "拖动：标题栏原生" : "拖动：标题栏兼容模式");
+    if (!nativeTitleDrag) {
     let downX = 0;
     let downY = 0;
     let winX = startX;
@@ -4830,6 +4835,7 @@ function main() {
         }
         return true;
     });
+    }
     // 触摸诊断：悬浮窗控件不在 uiautomator dump 里，只能靠日志判断「事件到底到没到」
     let touchLogs = 0;
     try {

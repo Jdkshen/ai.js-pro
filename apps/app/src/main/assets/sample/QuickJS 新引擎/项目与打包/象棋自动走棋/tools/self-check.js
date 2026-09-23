@@ -5825,6 +5825,25 @@ check("框架·文案：未知状态要原样返回，不能悄悄变成「未�
     return themeTokens.PANEL.height > 0 ? true : "面板令牌缺失";
 });
 
+check("悬浮窗：720p/1080p/1280p 的控件与窗口均在屏宽内", function () {
+    const screens = [{ width: 720, height: 1600 }, { width: 1080, height: 2400 },
+        { width: 1280, height: 2772 }];
+    for (let i = 0; i < screens.length; i++) {
+        const screen = screens[i];
+        const layout = themeTokens.layoutFor(screen);
+        const rowWidth = Math.round((74 + 150 + 140 + 110 + 110 + 160 + 130) * layout.scale) +
+            Math.round(16 * layout.scale);
+        if (layout.PANEL.width > screen.width || layout.compactWidth > screen.width ||
+                rowWidth > layout.PANEL.width) {
+            return screen.width + "px 布局溢出：" + JSON.stringify(layout);
+        }
+        if (layout.PANEL.height <= 0 || layout.PANEL.logHeight <= 0) {
+            return screen.width + "px 布局高度无效";
+        }
+    }
+    return true;
+});
+
 check("框架·配置：合法 autorun 要被归一化（含默认值补齐）", function () {
     const parsed = configModule.parseAutorun(JSON.stringify({
         mode: "auto", clickMethod: "accessibility", clickPressMs: 350,
@@ -8987,6 +9006,72 @@ check("格线探测器：半格诱饵不许胜出（真梳 115 vs 半格梳 57.5
     }
     if (Math.abs(fit.best.step - 115) > 3) {
         return "应选真格距 115（半格诱饵 57.5 不许胜），实际 " + fit.best.step;
+    }
+    return true;
+});
+
+check("格线探测器：外侧两线被整行棋子压住时锚点不许偏、matched 仍 10/10（2026-09-24 真机回放）", function () {
+    // 真机四张截图的共性：起始局面首末两行整行摆满棋子，外线只剩 ~22% 支撑度（0.3 vs 1.3）
+    const truth = [695, 809.3, 923.6, 1037.9, 1152.2, 1266.5, 1380.8, 1495.1, 1609.4, 1723.7];
+    const centers = truth.map(function (at, i) {
+        return { at: at, h: (i === 0 || i === truth.length - 1) ? 0.3 : 1.3 };
+    });
+    const resp = mkLatticeResponse(0, 2400, 4, centers, { base: 0.02, width: 10 });
+    const fit = latticeDetector.combFit(resp, 10, { stepMin: 100, stepMax: 130 });
+    if (!fit.best) {
+        return "没出候选";
+    }
+    // 修复前：锚点 -1 的平移梳把第一条线放到棋盘外的空槽（0.0x），trimmed 求和与真梳完全同分，
+    // 靠扫描顺序选错 → 582；现在「存在的线」加成让真梳胜出。
+    if (Math.abs(fit.best.origin - 695) > 3) {
+        return "锚点应 ≈695（不许被 ±1 格距平移梳抢走），实际 " + fit.best.origin.toFixed(1);
+    }
+    if (latticeDetector.matchedCount(fit.best.perLine, {}) !== 10) {
+        return "外线被压住仍应算命中（10/10），实际 " + latticeDetector.matchedCount(fit.best.perLine, {});
+    }
+    if (latticeDetector.presenceCount(fit.best.perLine, {}) !== 10) {
+        return "被压住的线（0.3/1.3≈23%）应算存在，实际 " + latticeDetector.presenceCount(fit.best.perLine, {});
+    }
+    return true;
+});
+
+check("格线探测器：真缺线时 matched 掉下门槛（横线 9/10 不许凑）", function () {
+    const truth = [695, 809.3, 923.6, 1037.9, 1152.2, 1266.5, 1380.8, 1495.1, 1609.4, 1723.7];
+    const centers = truth.map(function (at, i) {
+        const missing = (i === 3 || i === 6);   // 两条内部线真的没有（如被弹窗盖死）
+        return { at: at, h: missing ? 0 : ((i === 0 || i === 9) ? 0.3 : 1.3) };
+    });
+    const resp = mkLatticeResponse(0, 2400, 4, centers, { base: 0.02, width: 10 });
+    const fit = latticeDetector.combFit(resp, 10, { stepMin: 100, stepMax: 130 });
+    if (!fit.best) {
+        return "没出候选";
+    }
+    const matched = latticeDetector.matchedCount(fit.best.perLine, {});
+    if (matched > 8) {
+        return "两条线真缺失时 matched 应 ≤8（门槛 9/10），实际 " + matched;
+    }
+    return true;
+});
+
+check("格线探测器：matchedCount / presenceCount 口径（22% 支持度算命中、空槽与噪声不算）", function () {
+    const perLine = [0.55, 2.5, 2.2, 1.8, 2.4, 1.9, 2.6, 2.1, 2.3, 0.6];
+    if (latticeDetector.matchedCount(perLine, {}) !== 10) {
+        return "0.55/2.5=22% 的外线应算命中";
+    }
+    if (latticeDetector.matchedCount([0.55, 2.5, 2.2, 1.8, 2.4, 1.9, 2.6, 2.1, 2.3, 0.02], {}) !== 9) {
+        return "空槽（0.02）不许算命中";
+    }
+    if (latticeDetector.presenceCount([0, 0.65, 2.7, 2.2, 1.4, 0], {}) !== 4) {
+        return "presenceCount 应为 4（0.65 算存在、0.0 不算）";
+    }
+    // 纯噪声图（2026-09-24「回到应用」文件列表截图实测：全线 0.01~0.02）：相对门槛会降到 0.004，
+    // 全部「命中」→ 必须靠绝对下限（minLineSupport=0.15）全部拦下
+    const noise = [0.01, 0.02, 0.01, 0.02, 0.01, 0.02, 0.01, 0.02, 0.02, 0.02];
+    if (latticeDetector.matchedCount(noise, {}) !== 0) {
+        return "纯噪声（0.01~0.02）不许算命中，实际 " + latticeDetector.matchedCount(noise, {});
+    }
+    if (latticeDetector.presenceCount(noise, {}) !== 0) {
+        return "纯噪声不许算「存在的线」，实际 " + latticeDetector.presenceCount(noise, {});
     }
     return true;
 });

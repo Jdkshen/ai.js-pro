@@ -12,7 +12,7 @@
 | `vision-pipeline-probe.js` | 真机视觉链路取证 |
 | `board-replay-test.js` | 保存帧回放 |
 | `recognize-board.js` | 主页面与面板共用的定位/旧识别底座 |
-| `locate-board.js` | 格线定位备选 |
+| `locate-board.js` | 唯一运行定位入口：本地图色格线，不回退区域扫描 |
 | `analyze-panel-log.py` | 对局日志耗时和故障汇总 |
 
 其他 `ocr-*`、`probe-*` 工具是专项诊断，需要对应问题时再运行。23 个历史 `p4-*.js` 已移到仓库 `docs/archive/xiangqi-p4-probes/`，不再是日常入口，也不会随示例打包。旧工具分类与实测背景保留在 `docs/archive/xiangqi-tools-readme-before-simplification.md`。
