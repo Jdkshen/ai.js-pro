@@ -35,7 +35,7 @@ function createPositionTracker(options) {
     /** 单调递增版本（事实换代；跨模块消息都该带它） */
     let version = 0;
     const stats = {
-        adopts: 0, confirms: 0, fixes: 0, invalidations: 0, rejects: 0,
+        adopts: 0, confirms: 0, fixes: 0, invalidations: 0, rejects: 0, duplicates: 0,
         lastReason: ""
     };
 
@@ -90,9 +90,19 @@ function createPositionTracker(options) {
             return { ok: false, reason: "还没有基准位置，拒收着法：" + (e.iccs || "") };
         }
         const fromBoard = e.fromBoard ? e.fromBoard : position.board;
-        // 连续性：着法的「起点盘面」必须与账本当前局面一致（影子期允许调用方以 fromBoard 显式对齐）
+        // ① 先判「重复确认」：驱动对一张票据会连续两次走完确认块 —— 第二次是同一件事，
+        //   不是新手。这类调用**必然**过不了连续性检查（账本已推进），必须先行拦截。
+        const lastMove = ledger.state().last;
+        if (lastMove && lastMove.iccs === String(e.iccs || "") &&
+            lastMove.beforeKey === ledgerModule.cellsKey(fromBoard)) {
+            stats.duplicates += 1;
+            return { ok: true, duplicate: true, version: version, nextSide: position.side };
+        }
+        // ② 连续性：着法的「起点盘面」必须与账本当前局面一致。
+        // ⚠️ 必须用 cellsKey（null 安全）比较：join("") 会折叠 null，
+        //   `a0a1` 这类着法前后两盘拼出来是同一串（回放用例抳到的 2026-09-23 回归）。
         if (position.board.length && fromBoard.length &&
-            fromBoard.join("") !== position.board.join("")) {
+            ledgerModule.cellsKey(fromBoard) !== ledgerModule.cellsKey(position.board)) {
             stats.rejects += 1;
             stats.lastReason = "reject:discontinuous";
             return { ok: false, reason: "与账本当前局面不连续：" + (e.iccs || "") };
@@ -111,6 +121,14 @@ function createPositionTracker(options) {
             stats.rejects += 1;
             stats.lastReason = "reject:" + result.reason;
             return { ok: false, reason: result.reason, diffIndexes: result.diffIndexes };
+        }
+        if (result.duplicate) {
+            // 同一手的重复确认（驱动对一张票据会连续两次走完确认块）：不重复记账、不推进
+            stats.duplicates += 1;
+            return {
+                ok: true, duplicate: true, version: version, nextSide: position.side,
+                appliedBoard: result.appliedBoard
+            };
         }
         const mover = e.side || position.side;
         const nextSide = mover === "w" ? "b" : "w";
@@ -184,4 +202,4 @@ function createPositionTracker(options) {
     };
 }
 
-module.exports = { createPositionTracker: createPositionTracker };
+module.exports = { createPositionTracker: createPositionTracker, cellsKey: ledgerModule.cellsKey };

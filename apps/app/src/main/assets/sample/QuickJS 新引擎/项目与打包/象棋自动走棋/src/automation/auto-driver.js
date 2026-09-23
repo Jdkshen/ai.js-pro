@@ -436,7 +436,7 @@ function createDriver(options) {
         const cur = snap.position;
         const same = (!cur && !lastReliable) ||
             (cur && lastReliable && cur.side === lastReliable.side &&
-                cur.board.join("") === lastReliable.board.join(""));
+                positionTrackerModule.cellsKey(cur.board) === positionTrackerModule.cellsKey(lastReliable.board));
         if (same) {
             return;
         }

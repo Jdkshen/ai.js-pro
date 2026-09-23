@@ -19,6 +19,7 @@ module.exports = {
         "tools/regress/cases/gray-retry-reads-king.js",
         "tools/regress/cases/ocr-all-dead.js",
         "tools/regress/cases/geometry-shift.js",
-        "tools/regress/cases/baseline-happy-path.js"
+        "tools/regress/cases/baseline-happy-path.js",
+        "tools/regress/cases/driver-replay-turns.js"
     ]
 };

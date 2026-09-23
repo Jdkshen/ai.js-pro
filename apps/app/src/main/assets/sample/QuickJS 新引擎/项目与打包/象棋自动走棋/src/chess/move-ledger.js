@@ -27,6 +27,23 @@ const HISTORY = {
 const ICCS_RE = /^[a-i][0-9][a-i][0-9]$/;
 
 /**
+ * 盘面的「单位安全」序列化（null → "."）——**比较盘面必须用它，不能用 join("")**：
+ * join 会折叠掉 null，`a0a1`（车从底线上一格）这类着法的前后两盘拼出来是**同一串**，
+ * 连续性/镜像检查会全部误判通过（2026-09-23 回放用例 `driver-replay-turns` 抳到）。
+ */
+function cellsKey(board) {
+    if (!board || !board.length) {
+        return "";
+    }
+    let out = "";
+    for (let i = 0; i < board.length; i++) {
+        const ch = board[i];
+        out += (ch == null ? "." : String(ch));
+    }
+    return out;
+}
+
+/**
  * @param options { note? }
  */
 function createMoveLedger(options) {
@@ -134,12 +151,22 @@ function createMoveLedger(options) {
                 };
             }
         }
+        const beforeKey = cellsKey(fromBoard);
+        // 幂等：同一手（同 iccs + 同起点盘面）的**重复确认**不重复记账
+        //（驱动对一张票据会连续两次走完确认块——第二次是同一件事，不是新手）
+        if (moves.length > 0) {
+            const last = moves[moves.length - 1];
+            if (last.iccs === iccs && last.beforeKey === beforeKey) {
+                return { ok: true, duplicate: true, ply: moves.length, appliedBoard: applied.board };
+            }
+        }
         moves.push({
             iccs: iccs,
             side: e.side || null,
             source: e.source || "unknown",
             atMono: e.atMono == null ? null : e.atMono,
-            evidence: e.evidence || null
+            evidence: e.evidence || null,
+            beforeKey: beforeKey
         });
         return { ok: true, ply: moves.length, appliedBoard: applied.board };
     }
@@ -177,4 +204,4 @@ function createMoveLedger(options) {
     };
 }
 
-module.exports = { createMoveLedger: createMoveLedger, HISTORY: HISTORY };
+module.exports = { createMoveLedger: createMoveLedger, HISTORY: HISTORY, cellsKey: cellsKey };

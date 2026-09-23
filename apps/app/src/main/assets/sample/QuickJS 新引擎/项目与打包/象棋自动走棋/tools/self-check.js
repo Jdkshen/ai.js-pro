@@ -6386,6 +6386,38 @@ check("已知事实表：register 去重替换保持位置 / drop 计数与回�
     return facts.count() === 0 ? true : "clear 应清空";
 });
 
+check("棋谱账本/跟踪器：join 碰撞的盘面必须能区分；同一手的重复确认幂等不重复记账", function () {
+    // 2026-09-23 回放用例抓到的回归：`a0a1`（车只上一格）前后两盘 join("") 是**同一串**
+    //（空行被折叠）⇒ 连续性/镜像检查全部误判通过 → 同一手记了两遍。
+    const board = fen.parseFen(fen.START_FEN).board;
+    const move = legal.allLegalMoves(board, "w")[0];
+    const after = legal.applyMove(board, { iccs: move.iccs }).board;
+    if (board.join("") !== after.join("")) {
+        return "夹具前提变了：" + move.iccs + " 前后 join 不再相同（换别的着法或更新本断言）";
+    }
+    if (moveLedgerModule.cellsKey(board) === moveLedgerModule.cellsKey(after)) {
+        return "cellsKey 必须能区分这两盘（null 安全）";
+    }
+    const tracker = positionTrackerModule.createPositionTracker({});
+    tracker.adopt({ board: board, side: "w", reason: "test" });
+    const first = tracker.confirmMove({
+        iccs: move.iccs, fromBoard: board, side: "w", afterBoard: after, source: "our-click"
+    });
+    if (!first.ok || first.duplicate) { return "首手应正常入账：" + JSON.stringify(first); }
+    const again = tracker.confirmMove({
+        iccs: move.iccs, fromBoard: board, side: "w", afterBoard: after, source: "our-click"
+    });
+    if (!again.ok || again.duplicate !== true) {
+        return "同一手的重复确认应幂等放行（duplicate）：" + JSON.stringify(again);
+    }
+    const snap = tracker.snapshot();
+    if (snap.ledger.ply !== 1) { return "重复确认不应重复记账：" + snap.ledger.ply; }
+    if (tracker.stats().duplicates !== 1 || tracker.stats().rejects !== 0) {
+        return "重复/拒收计数不对：" + JSON.stringify(tracker.stats());
+    }
+    return true;
+});
+
 // ---------------------------------------------------------------- 识别绘制（人审用）
 
 check("识别绘制：网格线正好落在交点/路上（19 条线，位置与几何一致）", function () {
