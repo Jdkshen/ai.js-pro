@@ -52,6 +52,14 @@ object MiuixFileChooserDialog {
     }
 
     @JvmStatic
+    fun showDirectory(activity: Activity?, rootPath: String, onSelected: FileSelected): Boolean {
+        return MiuixDialogHost.showCard(activity) { dlg ->
+            ChooserContent("选择项目所在文件夹", File(rootPath), "使用此文件夹", "取消",
+                { dlg.dismiss() }, { file -> dlg.dismiss(); onSelected.onSelected(file.path) }, true)
+        } != null
+    }
+
+    @JvmStatic
     fun show(
         activity: Activity?,
         title: String,
@@ -84,15 +92,26 @@ private fun ChooserContent(
     confirmText: String,
     cancelText: String,
     onCancel: () -> Unit,
-    onConfirm: (File) -> Unit
+    onConfirm: (File) -> Unit,
+    directoriesOnly: Boolean = false
 ) {
     var current by remember { mutableStateOf(root) }
     var entries by remember { mutableStateOf<List<File>>(emptyList()) }
     var selected by remember { mutableStateOf<File?>(null) }
 
+    var loading by remember { mutableStateOf(true) }
+    var readError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(current) {
-        entries = withContext(Dispatchers.IO) { listEntries(current) }
+        loading = true
+        readError = null
         selected = null
+        entries = emptyList()
+        try {
+            entries = withContext(Dispatchers.IO) { listEntries(current).filter { !directoriesOnly || it.isDirectory } }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            readError = e.message ?: "无法读取文件夹"
+        } finally { loading = false }
     }
 
     MiuixDialogCard {
@@ -115,9 +134,11 @@ private fun ChooserContent(
                 colors = ButtonDefaults.textButtonColorsPrimary()
             )
         }
-        if (entries.isEmpty()) {
+        if (loading || readError != null) {
+            Text(if (loading) "正在读取…" else "读取失败：$readError", modifier = Modifier.padding(12.dp))
+        } else if (entries.isEmpty()) {
             Text(
-                "（此目录没有可导入的脚本文件）",
+                if (directoriesOnly) "此文件夹没有子文件夹，可以直接选择当前位置" else "（此目录没有可导入的脚本文件）",
                 fontSize = 13.sp,
                 color = MiuixTheme.colorScheme.onSurfaceSecondary
             )
@@ -145,7 +166,7 @@ private fun ChooserContent(
             ) {
                 Text(cancelText, fontSize = 16.sp, color = MiuixTheme.colorScheme.onSurface)
             }
-            val enabled = selected != null
+            val enabled = !loading && readError == null && if (directoriesOnly) current.isDirectory && current.canWrite() else selected != null
             Box(
                 Modifier.weight(1f)
                     .clip(RoundedCornerShape(16.dp))
@@ -153,7 +174,7 @@ private fun ChooserContent(
                         if (enabled) MiuixTheme.colorScheme.primary
                         else MiuixTheme.colorScheme.primary.copy(alpha = 0.35f)
                     )
-                    .clickable(enabled = enabled) { selected?.let(onConfirm) }
+                    .clickable(enabled = enabled) { if (directoriesOnly) onConfirm(current) else selected?.let(onConfirm) }
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -197,7 +218,7 @@ private fun EntryRow(file: File, selected: Boolean, onClick: () -> Unit) {
 }
 
 private fun listEntries(dir: File): List<File> {
-    val files = dir.listFiles() ?: return emptyList()
+    val files = dir.listFiles() ?: throw java.io.IOException("无权限读取或文件夹已不存在：${dir.path}")
     val collator = Collator.getInstance(Locale.CHINA)
     return files
         .filter { Scripts.FILE_FILTER.accept(it) }

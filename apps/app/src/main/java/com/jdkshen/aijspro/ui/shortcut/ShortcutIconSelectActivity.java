@@ -45,6 +45,15 @@ public class ShortcutIconSelectActivity extends BaseActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            Class.forName("com.jdkshen.aijspro.ui.shortcut.MiuixIconPicker")
+                    .getMethod("install", ShortcutIconSelectActivity.class).invoke(null, this);
+            return;
+        } catch (ClassNotFoundException ignored) {
+            // Other skins retain their native picker.
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalStateException("Cannot initialize icon picker", error);
+        }
         setContentView(R.layout.activity_shortcut_icon_select);
         mApps = findViewById(R.id.apps);
         setupViews();
@@ -93,15 +102,18 @@ public class ShortcutIconSelectActivity extends BaseActivity {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT)
-                .setType("image/*"), 11234);
+        pickImage();
         return true;
+    }
+
+    public void pickImage() {
+        startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), 11234);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode == RESULT_OK && data != null) {
+        if (requestCode == 11234 && resultCode == RESULT_OK && data != null) {
             setResult(RESULT_OK, data);
             finish();
         }

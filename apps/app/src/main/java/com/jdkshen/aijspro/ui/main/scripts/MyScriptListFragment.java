@@ -115,6 +115,10 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         });
     }
 
+    public void onAppThemeChanged() {
+        if (mExplorerView != null) mExplorerView.applyThemeColors();
+    }
+
     @Override
     protected void onFabClick(FloatingActionButton fab) {
         initFloatingActionMenuIfNeeded(fab);

@@ -238,9 +238,7 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
             PreferenceManager.getDefaultSharedPreferences(getContext())
                     .edit().putBoolean(getString(R.string.key_night_mode), enabled).apply();
         }
-        if (getActivity() instanceof BaseActivity) {
-            ((BaseActivity) getActivity()).setNightModeEnabled(enabled);
-        }
+        // The shared preference listener applies the global native/Compose mode once.
     }
 
     public boolean isFollowSystemEnabled() {

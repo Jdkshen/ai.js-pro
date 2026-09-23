@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -53,6 +54,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.runtime.DisposableEffect
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
@@ -88,6 +92,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private var loadError by mutableStateOf<String?>(null)
     private var reloadTick by mutableStateOf(0)
     private var selected by mutableStateOf<PluginEntry?>(null)
+    private var refreshOnResume = false
 
     private val installLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
@@ -109,6 +114,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
             setContent {
                 AijsMiuixTheme {
                     LaunchedEffect(reloadTick) {
+                        if (plugins != null && reloadTick == 0) return@LaunchedEffect
                         loadError = null
                         try {
                             plugins = withContext(Dispatchers.IO) { loadPlugins() }
@@ -118,6 +124,20 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                             loadError = error.localizedMessage ?: "无法读取插件"
                         }
                     }
+                    // Refresh after returning from installation/app settings, without
+                    // rescanning packages for ordinary ViewPager tab changes.
+                    val lifecycle = viewLifecycleOwner.lifecycle
+                    DisposableEffect(lifecycle) {
+                        val observer = LifecycleEventObserver { _, event ->
+                            if (event == Lifecycle.Event.ON_RESUME && refreshOnResume) {
+                                refreshOnResume = false
+                                reloadTick++
+                            }
+                        }
+                        lifecycle.addObserver(observer)
+                        onDispose { lifecycle.removeObserver(observer) }
+                    }
+                    val listState = rememberLazyListState()
                     val all = plugins.orEmpty()
                     val visible = remember(all, query.text) {
                         val needle = query.text.trim()
@@ -134,18 +154,19 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         )
                         LazyColumn(
                             modifier = Modifier.weight(1f).fillMaxWidth(),
+                            state = listState,
                             contentPadding = PaddingValues(bottom = 18.dp)
                         ) {
                             when {
                                 loadError != null -> item {
                                     MessagePanel("读取失败：$loadError", "重试") { reloadTick++ }
                                 }
-                                all.isEmpty() -> item { MessagePanel("正在读取插件…") }
+                                plugins == null -> item { MessagePanel("正在读取插件…") }
                                 visible.isEmpty() -> item {
                                     MessagePanel("没有匹配的插件，请修改关键词。")
                                 }
                             }
-                            items(visible, key = { "${it.packageName}:${it.label}" }) { entry ->
+                            items(visible, key = { it.packageName }, contentType = { it.installed }) { entry ->
                                 PluginRow(entry) { selected = it }
                             }
                         }
@@ -185,6 +206,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun pickInstallApk() {
+        refreshOnResume = true
         val picker = Intent(Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
             .setType("application/vnd.android.package-archive")
@@ -198,6 +220,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun showAppDetails(entry: PluginEntry) {
+        refreshOnResume = true
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
             Uri.parse("package:${entry.packageName}")))
     }
@@ -216,6 +239,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private fun uninstall(entry: PluginEntry) {
+        refreshOnResume = true
         startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:${entry.packageName}")))
     }
 
@@ -233,15 +257,16 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     @Composable
     private fun PluginToolbar(resultCount: Int, onRefresh: () -> Unit, onSearch: () -> Unit) {
         Row(
-            Modifier.fillMaxWidth().height(54.dp)
-                .background(MiuixTheme.colorScheme.surface)
-                .padding(start = 18.dp, end = 10.dp),
+            Modifier.fillMaxWidth().height(48.dp)
+                .background(androidx.compose.ui.res.colorResource(R.color.item_background))
+                .padding(start = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text("插件", fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("插件", fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (query.text.isNotBlank()) {
                     Text("$resultCount 项 · 搜索结果", fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary)
                 }
             }
@@ -255,7 +280,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         Box(Modifier.size(48.dp).clickable(onClick = onClick)) {
             Image(painterResource(icon), contentDescription = description,
                 colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurface),
-                modifier = Modifier.size(27.dp).align(Alignment.Center))
+                modifier = Modifier.size(24.dp).align(Alignment.Center))
         }
     }
 

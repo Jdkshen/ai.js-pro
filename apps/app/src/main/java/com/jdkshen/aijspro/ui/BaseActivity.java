@@ -10,7 +10,6 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.core.content.ContextCompat;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.app.AppCompatDelegate;
 import androidx.appcompat.widget.Toolbar;
 import android.view.Menu;
 import android.view.View;
@@ -42,16 +41,11 @@ public abstract class BaseActivity extends AppCompatActivity {
     }
 
     protected void applyDayNightMode() {
-        setNightModeEnabled(Pref.isNightModeEnabled());
+        com.jdkshen.aijspro.theme.ThemeColorManagerCompat.applyThemeMode();
     }
 
     public void setNightModeEnabled(boolean enabled) {
-        int requestedMode = enabled
-                ? AppCompatDelegate.MODE_NIGHT_YES
-                : AppCompatDelegate.MODE_NIGHT_NO;
-        if (AppCompatDelegate.getDefaultNightMode() != requestedMode) {
-            AppCompatDelegate.setDefaultNightMode(requestedMode);
-        }
+        com.jdkshen.aijspro.theme.ThemeColorManagerCompat.setNightModeEnabled(enabled);
     }
 
     @Override
@@ -67,7 +61,7 @@ public abstract class BaseActivity extends AppCompatActivity {
             if (Build.VERSION.SDK_INT >= 23) {
                 int flags = com.jdkshen.aijspro.theme.AppThemePalette
                         .withoutHiddenSystemBars(getWindow().getDecorView().getSystemUiVisibility());
-                if (Pref.isNightModeEnabled()) {
+                if (com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this)) {
                     getWindow().getDecorView().setSystemUiVisibility(flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
                 } else {
                     getWindow().getDecorView().setSystemUiVisibility(flags | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
@@ -139,7 +133,8 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
-        if (mShouldApplyDayNightModeForOptionsMenu && Pref.isNightModeEnabled()) {
+        if (mShouldApplyDayNightModeForOptionsMenu
+                && com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this)) {
             for (int i = 0; i < menu.size(); i++) {
                 Drawable drawable = menu.getItem(i).getIcon();
                 if (drawable != null) {

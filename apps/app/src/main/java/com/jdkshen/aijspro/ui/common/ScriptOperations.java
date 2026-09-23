@@ -480,16 +480,35 @@ public class ScriptOperations {
 
     @SuppressLint("CheckResult")
     public void deleteWithoutConfirm(final ScriptFile scriptFile) {
-        boolean isDir = scriptFile.isDirectory();
-        Observable.fromPublisher((Publisher<Boolean>) s -> s.onNext(PFiles.deleteRecursively(scriptFile)))
+        final boolean isDir = scriptFile.isDirectory();
+        final File parent = scriptFile.getParentFile();
+        Observable.fromCallable(() -> {
+                    if (scriptFile.exists()) PFiles.deleteRecursively(scriptFile);
+                    return !scriptFile.exists();
+                })
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(deleted -> {
-                    showMessage(deleted ? R.string.text_already_delete : R.string.text_delete_failed);
-                    if (deleted)
-                        notifyFileRemoved(isDir, scriptFile);
+                    if (deleted) notifyFileRemoved(isDir, scriptFile);
+                    refreshDeletedParent(parent);
+                    android.widget.Toast.makeText(mContext,
+                            (deleted ? "已删除：" : "删除失败，仍然存在：") + scriptFile.getPath(),
+                            android.widget.Toast.LENGTH_LONG).show();
+                }, error -> {
+                    refreshDeletedParent(parent);
+                    android.widget.Toast.makeText(mContext,
+                            "删除失败：" + scriptFile.getPath() + "\n" + error.getMessage(),
+                            android.widget.Toast.LENGTH_LONG).show();
                 });
     }
+
+    private void refreshDeletedParent(File parent) {
+        if (parent != null) {
+            // Invalidate cached children and reload from disk, including partial deletion failures.
+            mExplorer.notifyChildrenChanged(new ExplorerDirPage(parent.getPath(), null));
+        }
+    }
+
 
     private void notifyFileRemoved(boolean isDir, ScriptFile scriptFile) {
         if (isDir) {

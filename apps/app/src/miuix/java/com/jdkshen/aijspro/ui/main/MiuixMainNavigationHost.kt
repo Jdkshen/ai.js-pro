@@ -6,9 +6,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,6 +22,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -41,7 +44,7 @@ object MiuixMainNavigationHost {
     private fun MainBar(host: MainActivity) {
         var showSearch by remember { mutableStateOf(false) }
         Row(
-            Modifier.fillMaxWidth().height(56.dp)
+            Modifier.fillMaxWidth().heightIn(min = 56.dp)
                 .background(MiuixTheme.colorScheme.background)
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -50,6 +53,8 @@ object MiuixMainNavigationHost {
             Text(
                 text = "AI.js Pro",
                 fontSize = 22.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 color = MiuixTheme.colorScheme.onBackground,
                 modifier = Modifier.weight(1f).padding(start = 14.dp)
             )
@@ -77,10 +82,16 @@ object MiuixMainNavigationHost {
 
     @Composable
     private fun Action(icon: Int, description: String, onClick: () -> Unit) {
-        Box(Modifier.clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp)) {
+        // 48dp minimum touch target; the old padding gave only 48x44dp, and a
+        // larger system font scale made the bar taller while the target stayed put.
+        Box(
+            Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
             Image(painter = painterResource(icon), contentDescription = description,
                 colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onBackgroundVariant),
-                modifier = Modifier.align(Alignment.Center))
+                modifier = Modifier.size(24.dp))
         }
     }
 }

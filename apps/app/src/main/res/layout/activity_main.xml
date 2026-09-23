@@ -34,7 +34,7 @@
                 app:layout_scrollFlags="scroll|enterAlways"
                 app:popupTheme="@style/AppTheme.PopupOverlay"/>
 
-            <com.google.android.material.tabs.TabLayout
+            <com.jdkshen.aijspro.ui.widget.GlassTabLayout
                 android:id="@+id/tab"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"

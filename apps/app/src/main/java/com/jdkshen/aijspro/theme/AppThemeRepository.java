@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.theme;
 
 import android.content.Context;
+import android.content.ComponentCallbacks;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.os.Handler;
@@ -11,6 +12,7 @@ import com.stardust.theme.ThemeColor;
 import com.stardust.theme.ThemeColorManager;
 
 import java.util.List;
+import java.util.Arrays;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -36,11 +38,26 @@ public final class AppThemeRepository {
     private static final int DEFAULT_ACCENT = 0xFF009688; // teal
 
     private volatile AppThemePalette mCurrentPalette;
+    private final SharedPreferences.OnSharedPreferenceChangeListener mPreferenceListener = (prefs, key) -> {
+        if (KEY_NIGHT_MODE.equals(key) || "follow_system_theme".equals(key)
+                || KEY_ACCENT_COLOR.equals(key)) refreshFromLegacyTheme();
+    };
+    private final Runnable mNotifyListeners = () -> {
+        AppThemePalette palette = mCurrentPalette;
+        for (ThemeListener listener : mListeners) listener.onThemeChanged(palette);
+    };
 
     private AppThemeRepository(Context context) {
         mAppContext = context.getApplicationContext();
         mPrefs = PreferenceManager.getDefaultSharedPreferences(mAppContext);
         mCurrentPalette = buildPalette();
+        mPrefs.registerOnSharedPreferenceChangeListener(mPreferenceListener);
+        mAppContext.registerComponentCallbacks(new ComponentCallbacks() {
+            @Override public void onConfigurationChanged(Configuration configuration) {
+                refreshSystemAppearance();
+            }
+            @Override public void onLowMemory() { }
+        });
     }
 
     public static AppThemeRepository get(Context context) {
@@ -72,25 +89,27 @@ public final class AppThemeRepository {
 
     /** Call when the user picks a new accent color (from ThemeColorManager). */
     public void refreshFromLegacyTheme() {
-        mCurrentPalette = buildPalette();
+        AppThemePalette palette = buildPalette();
+        if (Arrays.equals(mCurrentPalette.toIntArray(), palette.toIntArray())) return;
+        mCurrentPalette = palette;
         notifyListeners();
     }
 
     /** Rebuild a follow-system palette after a configuration (night mode) change. */
     public void refreshSystemAppearance() {
         if (getThemeMode() != 0) return;
-        mCurrentPalette = buildPalette();
-        notifyListeners();
+        refreshFromLegacyTheme();
     }
 
     /** Switch display mode: 0=follow system, 1=light, 2=dark. */
     public void setThemeMode(int mode) {
-        mPrefs.edit().putInt(KEY_THEME_MODE, mode).apply();
-        // Also sync with old night mode preference for backward compat
-        boolean night = (mode == 2) || (mode == 0 && isSystemDark());
-        mPrefs.edit().putBoolean(KEY_NIGHT_MODE, night).apply();
-        mCurrentPalette = buildPalette();
-        notifyListeners();
+        if (mode < 0 || mode > 2) throw new IllegalArgumentException("Unknown theme mode: " + mode);
+        SharedPreferences.Editor editor = mPrefs.edit()
+                .putInt(KEY_THEME_MODE, mode)
+                .putBoolean("follow_system_theme", mode == 0);
+        // Preserve the manual choice when enabling follow-system.
+        if (mode != 0) editor.putBoolean(KEY_NIGHT_MODE, mode == 2);
+        editor.apply();
     }
 
     /** Set accent color and persist. */
@@ -105,6 +124,7 @@ public final class AppThemeRepository {
         mPrefs.edit()
                 .remove(KEY_THEME_MODE)
                 .remove(KEY_ACCENT_COLOR)
+                .putBoolean("follow_system_theme", true)
                 .apply();
         mCurrentPalette = buildPalette();
         notifyListeners();
@@ -112,7 +132,8 @@ public final class AppThemeRepository {
 
     /** Get the current theme mode. */
     public int getThemeMode() {
-        return mPrefs.getInt(KEY_THEME_MODE, 0);
+        if (mPrefs.getBoolean("follow_system_theme", false)) return 0;
+        return mPrefs.getBoolean(KEY_NIGHT_MODE, false) ? 2 : 1;
     }
 
     /** Get the current accent color. */
@@ -160,11 +181,8 @@ public final class AppThemeRepository {
     }
 
     private void notifyListeners() {
-        final AppThemePalette palette = mCurrentPalette;
-        mMainHandler.post(() -> {
-            for (ThemeListener l : mListeners) {
-                l.onThemeChanged(palette);
-            }
-        });
+        // An atomic mode change can notify for two keys; repaint only the final palette.
+        mMainHandler.removeCallbacks(mNotifyListeners);
+        mMainHandler.post(mNotifyListeners);
     }
 }

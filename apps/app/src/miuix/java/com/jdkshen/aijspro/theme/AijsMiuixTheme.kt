@@ -15,8 +15,8 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
 /**
  * Single source of truth for Miuix theming across all pilot pages.
  *
- * - Dark/light follows the in-app night mode switch (Pref.isNightModeEnabled),
- *   matching BaseActivity.setNightModeEnabled (YES/NO, not follow-system).
+ * - Follow-system has priority over the saved manual dark/light choice, matching
+ *   the app-wide AppCompatDelegate mode used for native resources.
  * - Primary color is teal #009688 (light) / #4DD0E1 (dark), matching
  *   res/values/colors.xml and res/values-night/colors.xml used by the M3 theme.
  */
@@ -101,10 +101,13 @@ fun AijsMiuixTheme(content: @Composable () -> Unit) {
         AijsMiuixThemeState.dark.value
     }
     MiuixTheme(
-        colors = if (dark) aijsDarkColors() else aijsLightColors(),
+        colors = if (dark) DARK_COLORS else LIGHT_COLORS,
         content = content
     )
 }
+
+private val LIGHT_COLORS by lazy { aijsLightColors() }
+private val DARK_COLORS by lazy { aijsDarkColors() }
 
 private fun aijsLightColors(): Colors = lightColorScheme(
     primary = TEAL_500,

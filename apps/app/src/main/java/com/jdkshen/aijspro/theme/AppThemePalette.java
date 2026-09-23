@@ -188,8 +188,8 @@ public final class AppThemePalette {
         b.editorTabActive = 0xFFE0E0E0;
         b.editorTabInactive = 0xFFF5F5F5;
         b.editorSelection = 0x3303A9F4;
-        b.terminalBackground = 0xFF1E1E1E;
-        b.terminalForeground = 0xFFCCCCCC;
+        b.terminalBackground = 0xFFF7F7F7;
+        b.terminalForeground = 0xFF212121;
         return new AppThemePalette(b);
     }
 

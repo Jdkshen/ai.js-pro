@@ -65,7 +65,13 @@ public class ScriptIntents {
         if (source == null) {
             return null;
         }
-        return AutoJs.getInstance().getScriptEngineService().execute(source, config);
+        ScriptExecution execution = AutoJs.getInstance().getScriptEngineService().execute(source, config);
+        if (execution != null && path != null) {
+            // 外部「按路径运行」（am start …RunIntentActivity --es path …）：登记断点续跑，
+            // 进程被系统杀掉后由 App.onCreate → ExternalRunResume.resumeIfNeeded 自动重拉。
+            ExternalRunResume.recordStart(context, path, execution);
+        }
+        return execution;
     }
 
     private static String getPath(Intent intent) {

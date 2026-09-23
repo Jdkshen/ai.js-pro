@@ -15,7 +15,7 @@ import java.util.Set;
 public class ExplorerFileItem implements ExplorerItem {
 
     private static final Set<String> sEditableFileExts = new HashSet<>(Arrays.asList(
-            "js", "java", "xml", "json", "txt", "log", "ts"
+            "js", "java", "xml", "json", "txt", "log", "ts", "md", "markdown"
     ));
 
     private PFile mFile;
@@ -93,14 +93,18 @@ public class ExplorerFileItem implements ExplorerItem {
         return new ScriptFile(mFile);
     }
 
+    public static boolean isEditableExtension(String extension) {
+        return extension != null && sEditableFileExts.contains(extension.toLowerCase(java.util.Locale.ROOT));
+    }
+
     @Override
     public boolean isEditable() {
-        return sEditableFileExts.contains(getType());
+        return isEditableExtension(getType());
     }
 
     @Override
     public boolean isExecutable() {
-        String type = getType();
+        String type = getType().toLowerCase(java.util.Locale.ROOT);
         return type.equals("js") || type.equals("auto");
     }
 

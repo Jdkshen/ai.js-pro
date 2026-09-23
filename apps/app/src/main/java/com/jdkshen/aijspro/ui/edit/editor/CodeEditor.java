@@ -1,7 +1,6 @@
 package com.jdkshen.aijspro.ui.edit.editor;
 
 import android.content.Context;
-import android.graphics.Canvas;
 import com.google.android.material.snackbar.Snackbar;
 import android.text.Layout;
 import android.util.AttributeSet;
@@ -392,15 +391,31 @@ public class CodeEditor extends HVScrollView {
     }
 
     @Override
-    protected void onDraw(Canvas canvas) {
-        int codeWidth = getWidth() - getPaddingLeft() - getPaddingRight();
-        int codeHeight = getHeight() - getPaddingTop() - getPaddingBottom();
-        if (mCodeEditText.getMinWidth() != codeWidth || mCodeEditText.getMinWidth() != codeWidth) {
-            mCodeEditText.setMinWidth(codeWidth);
-            mCodeEditText.setMinHeight(codeHeight);
-            invalidate();
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        // Update the text viewport before measuring, including height-only changes
+        // when the log panel or keyboard opens/closes. Never request layout from draw.
+        if (mCodeEditText != null) {
+            if (MeasureSpec.getMode(widthMeasureSpec) != MeasureSpec.UNSPECIFIED) {
+                int width = Math.max(0, MeasureSpec.getSize(widthMeasureSpec)
+                        - getPaddingLeft() - getPaddingRight());
+                if (mCodeEditText.getMinWidth() != width) mCodeEditText.setMinWidth(width);
+            }
+            if (MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED) {
+                int height = Math.max(0, MeasureSpec.getSize(heightMeasureSpec)
+                        - getPaddingTop() - getPaddingBottom());
+                if (mCodeEditText.getMinHeight() != height) mCodeEditText.setMinHeight(height);
+            }
         }
-        super.onDraw(canvas);
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        // CodeEditText draws only the lines inside its parent viewport. A long
+        // document can keep the same child size while that viewport grows, so its
+        // cached display list must be invalidated as well.
+        if (mCodeEditText != null) mCodeEditText.postInvalidateOnAnimation();
     }
 
     public static class Breakpoint {

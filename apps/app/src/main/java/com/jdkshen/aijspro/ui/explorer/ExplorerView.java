@@ -117,22 +117,25 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
             new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
 
     private CharSequence buildBreadcrumbTitle() {
-        File storage = Environment.getExternalStorageDirectory();
-        File current = new File(mCurrentPageState.page.getPath());
-        String storagePath = storage.getAbsolutePath();
-        String currentPath = current.getAbsolutePath();
-        StringBuilder title = new StringBuilder(getResources().getString(R.string.text_internal_storage));
-        if (currentPath.startsWith(storagePath)) {
-            String relativePath = currentPath.substring(storagePath.length());
-            for (String segment : relativePath.split("[/\\\\]+")) {
-                if (!segment.isEmpty()) {
-                    title.append("  ›  ").append(segment);
-                }
-            }
-        } else if (!current.getName().isEmpty()) {
-            title.append("  ›  ").append(current.getName());
+        java.util.List<ExplorerBreadcrumbs.Segment> segments = ExplorerBreadcrumbs.build(
+                com.jdkshen.aijspro.Pref.getScriptDirPath(),
+                Environment.getExternalStorageDirectory().getPath(), mCurrentPageState.page.getPath());
+        StringBuilder title = new StringBuilder();
+        for (ExplorerBreadcrumbs.Segment segment : segments) {
+            if (title.length() > 0) title.append("  ›  ");
+            title.append(segment.label);
         }
         SpannableString breadcrumb = new SpannableString(title.toString());
+        int offset = 0;
+        for (ExplorerBreadcrumbs.Segment segment : segments) {
+            final String destination = segment.path;
+            breadcrumb.setSpan(new android.text.style.ClickableSpan() {
+                @Override public void onClick(android.view.View view) { openDirectory(destination); }
+                @Override public void updateDrawState(android.text.TextPaint paint) { paint.setUnderlineText(false); }
+            }, offset, offset + segment.label.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            offset += segment.label.length() + 5;
+        }
+
         int lastSeparator = title.lastIndexOf("›");
         if (lastSeparator > 0) {
             breadcrumb.setSpan(new ForegroundColorSpan(MaterialColors.getColor(
@@ -373,6 +376,42 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         mProjectToolbar = findViewById(R.id.project_toolbar);
         mPinnedCategoryHolder = new CategoryViewHolder(findViewById(R.id.pinned_category));
         initExplorerItemListView();
+        applyThemeColors();
+    }
+
+    /** Repaint cached rows without reloading the directory or losing scroll position. */
+    public void applyThemeColors() {
+        boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(getContext());
+        setBackgroundColor(dark ? 0xFF000000 : 0xFFF7F7F7);
+        mProjectToolbar.setCardBackgroundColor(dark ? 0xFF1C1B1F : 0xFFFFFFFF);
+        TextView projectName = mProjectToolbar.findViewById(R.id.project_name);
+        if (projectName != null) projectName.setTextColor(dark ? 0xFFE6E6E6 : 0xFF212121);
+        applyRowTheme(mProjectToolbar, false);
+        applyRowTheme(mPinnedCategoryHolder.itemView, true);
+        for (int i = 0; i < mExplorerItemListView.getChildCount(); i++) {
+            applyRowTheme(mExplorerItemListView.getChildAt(i), false);
+        }
+        mExplorerAdapter.notifyItemRangeChanged(0, mExplorerAdapter.getItemCount());
+    }
+
+    private void applyRowTheme(View row, boolean category) {
+        boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(getContext());
+        int primary = dark ? 0xFFE6E6E6 : 0xFF212121;
+        int secondary = dark ? 0xFFBDBDBD : 0xFF616161;
+        if (category) row.setBackgroundColor(dark ? 0xFF1C1B1F : 0xFFFFFFFF);
+        int[] textIds = {R.id.name, R.id.title, R.id.desc};
+        for (int id : textIds) {
+            TextView text = row.findViewById(id);
+            if (text != null) text.setTextColor(id == R.id.name ? primary : secondary);
+        }
+        int[] iconIds = {R.id.more, R.id.run, R.id.build, R.id.sync, R.id.back, R.id.collapse, R.id.order, R.id.sort};
+        for (int id : iconIds) {
+            View icon = row.findViewById(id);
+            if (icon instanceof ImageView) {
+                androidx.core.widget.ImageViewCompat.setImageTintList((ImageView) icon,
+                        android.content.res.ColorStateList.valueOf(secondary));
+            }
+        }
     }
 
     private void initExplorerItemListView() {
@@ -762,6 +801,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         @SuppressWarnings("unchecked")
         @Override
         public void onBindViewHolder(BindableViewHolder<?> holder, int position) {
+            applyRowTheme(holder.itemView, getItemViewType(position) == VIEW_TYPE_CATEGORY);
             BindableViewHolder bindableViewHolder = (BindableViewHolder) holder;
             if (position < mExplorerItemList.groupCount()) {
                 bindableViewHolder.bind(mExplorerItemList.getItemGroup(position), position);
@@ -1000,6 +1040,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         CategoryViewHolder(View itemView) {
             super(itemView);
             mTitle = itemView.findViewById(R.id.title);
+            mTitle.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
             mSort = itemView.findViewById(R.id.sort);
             mSortOrder = itemView.findViewById(R.id.order);
             mGoBack = itemView.findViewById(R.id.back);
@@ -1015,7 +1056,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         public void bind(Boolean isDirCategory, int position) {
             boolean projectPage = mCurrentPageState.page instanceof ExplorerProjectPage;
             if (projectPage) {
-                mTitle.setText(mCurrentPageState.page.getName());
+                mTitle.setText(buildBreadcrumbTitle());
             } else if (isDirCategory) {
                 mTitle.setText(buildBreadcrumbTitle());
             } else {

@@ -8,6 +8,8 @@ import android.preference.PreferenceManager
 import android.view.View
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -401,7 +403,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
 
         Column(Modifier.fillMaxSize()) {
             CategoryHeader(
-                title = if (isProjectPage) navigation.current.getName() else breadcrumbOf(navigation.current),
+                title = breadcrumbOf(navigation.current),
                 showBack = !isProjectPage,
                 canGoBack = canGoBack(),
                 showProjectCompass = isProjectPage,
@@ -469,21 +471,24 @@ class MiuixScriptListHost @JvmOverloads constructor(
                 .background(colorResource(R.color.item_background)),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // title_container：占满剩余宽度，旧实现在项目页点击它会打开项目菜单
-            Box(
-                Modifier.weight(1f)
-                    .height(48.dp)
-                    .clickable(enabled = showProjectCompass) { onProjectMenu() }
-                    .padding(start = 8.dp),
-                contentAlignment = Alignment.CenterStart
+            val pathScroll = rememberScrollState()
+            LaunchedEffect(currentPath, pathScroll.maxValue) {
+                pathScroll.scrollTo(pathScroll.maxValue)
+            }
+            Row(
+                Modifier.weight(1f).height(48.dp).horizontalScroll(pathScroll)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    title,
-                    fontSize = 14.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                breadcrumbSegments(navigation.current).forEachIndexed { index, segment ->
+                    if (index > 0) Text("  ›  ", fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant)
+                    Text(segment.first, fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 1,
+                        modifier = Modifier.clickable { openDirectory(segment.second) }
+                            .padding(vertical = 12.dp))
+                }
             }
             if (showBack) {
                 HeaderIcon(
@@ -847,18 +852,12 @@ class MiuixScriptListHost @JvmOverloads constructor(
     }
 
     /** 面包屑，与旧 `buildBreadcrumbTitle()` 同构：`内部存储  ›  a  ›  b`。 */
-    private fun breadcrumbOf(page: ExplorerItem): String {
-        val storage = Environment.getExternalStorageDirectory().absolutePath
-        val path = File(page.getPath()).absolutePath
-        val builder = StringBuilder(GlobalAppContext.getString(R.string.text_internal_storage))
-        if (path.startsWith(storage)) {
-            path.removePrefix(storage).split('/').filter { it.isNotEmpty() }
-                .forEach { builder.append("  ›  ").append(it) }
-        } else if (File(path).name.isNotEmpty()) {
-            builder.append("  ›  ").append(File(path).name)
-        }
-        return builder.toString()
-    }
+    private fun breadcrumbSegments(page: ExplorerItem): List<Pair<String, String>> =
+        ExplorerBreadcrumbs.build(Pref.getScriptDirPath(),
+            Environment.getExternalStorageDirectory().path, page.getPath()).map { it.label to it.path }
+
+    private fun breadcrumbOf(page: ExplorerItem): String =
+        breadcrumbSegments(page).joinToString("  ›  ") { it.first }
 
     companion object {
         private fun rootPage(): ExplorerPage {

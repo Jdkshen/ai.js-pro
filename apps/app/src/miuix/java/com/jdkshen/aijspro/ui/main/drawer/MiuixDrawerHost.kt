@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.ui.main.drawer
 
+import android.content.Context
 import android.content.Intent
 import android.view.View
 import android.view.ViewGroup
@@ -62,19 +63,66 @@ object MiuixDrawerHost {
     fun createView(host: DrawerFragment): View {
         val refresh = mutableIntStateOf(0)
         val context = host.requireContext()
-        val density = context.resources.displayMetrics.density
         val composeView = ComposeView(context).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             layoutParams = ViewGroup.LayoutParams(
-                (304 * density).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
+                clampDrawerWidth(context, 0), ViewGroup.LayoutParams.MATCH_PARENT)
             setTag(Runnable { refresh.intValue = refresh.intValue + 1 })
         }
+        // The <fragment> tag in activity_main.xml declares layout_width="match_parent",
+        // and the container applies that LayoutParams after onCreateView, so the width
+        // above is discarded on its own (measured: 904px on a 1080px screen = the whole
+        // width minus DrawerLayout's 64dp minimum margin, on every device). Re-apply it
+        // once attached, and keep it right when the window width changes - rotation and
+        // split screen do not recreate the fragment because MainActivity handles
+        // orientation|screenSize itself.
+        composeView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            private var parentView: View? = null
+            private var listener: View.OnLayoutChangeListener? = null
+
+            override fun onViewAttachedToWindow(view: View) {
+                val parent = view.parent as? View ?: return
+                val onLayout = View.OnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+                    applyDrawerWidth(view, right - left)
+                }
+                parentView = parent
+                listener = onLayout
+                parent.addOnLayoutChangeListener(onLayout)
+                view.post { applyDrawerWidth(view, parent.width) }
+            }
+
+            override fun onViewDetachedFromWindow(view: View) {
+                listener?.let { parentView?.removeOnLayoutChangeListener(it) }
+                listener = null
+                parentView = null
+            }
+        })
         composeView.setContent {
             AijsMiuixTheme {
                 DrawerContent(host, refresh)
             }
         }
         return composeView
+    }
+
+    /**
+     * 304dp on a phone, but never more than 84% of the window: on a 320dp screen,
+     * in split screen and in landscape the fixed width would otherwise swallow the
+     * whole screen and leave no tappable scrim.
+     */
+    private fun clampDrawerWidth(context: Context, windowWidthPx: Int): Int {
+        val metrics = context.resources.displayMetrics
+        val available = if (windowWidthPx > 0) windowWidthPx else metrics.widthPixels
+        return minOf((304 * metrics.density).toInt(), (available * 0.84f).toInt())
+    }
+
+    private fun applyDrawerWidth(view: View, windowWidthPx: Int) {
+        val params = view.layoutParams ?: return
+        val wanted = clampDrawerWidth(view.context, windowWidthPx)
+        if (params.width != wanted) {
+            params.width = wanted
+            view.layoutParams = params
+        }
     }
 
     @Composable

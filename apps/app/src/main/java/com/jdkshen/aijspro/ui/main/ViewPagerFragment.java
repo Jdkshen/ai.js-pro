@@ -28,6 +28,9 @@ public abstract class ViewPagerFragment extends Fragment implements BackPressedH
 
     public void setFab(FloatingActionButton fab) {
         mFab = fab;
+        if (mShown) {
+            updateFab();
+        }
     }
 
     protected abstract void onFabClick(FloatingActionButton fab);
@@ -51,6 +54,14 @@ public abstract class ViewPagerFragment extends Fragment implements BackPressedH
     public void onPageShow() {
         mShown = true;
         notifyMiuixFabVisibility();
+        updateFab();
+    }
+
+    private void updateFab() {
+        // Visibility may arrive before the host binds its view (for example on restore).
+        if (mFab == null) {
+            return;
+        }
         if (mFabRotation == ROTATION_GONE) {
             if (mFab.getVisibility() == View.VISIBLE) {
                 mFab.hide();

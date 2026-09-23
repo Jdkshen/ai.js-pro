@@ -35,6 +35,8 @@ public final class EmbeddedTerminalActivity extends Activity {
     private File mWorkingDirectory;
     private volatile Process mRunningProcess;
     private AppThemePalette mPalette;
+    private LinearLayout mRootLayout;
+    private final AppThemeRepository.ThemeListener mThemeListener = this::applyThemePalette;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -50,6 +52,7 @@ public final class EmbeddedTerminalActivity extends Activity {
 
         int padding = Math.round(12f * getResources().getDisplayMetrics().density);
         LinearLayout root = new LinearLayout(this);
+        mRootLayout = root;
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(padding, padding, padding, padding);
         root.setBackgroundColor(mPalette.terminalBackground);
@@ -185,6 +188,38 @@ public final class EmbeddedTerminalActivity extends Activity {
             }
         }
         return value;
+    }
+
+    private void applyThemePalette(AppThemePalette palette) {
+        mPalette = palette;
+        if (mRootLayout == null) return;
+        mRootLayout.setBackgroundColor(palette.terminalBackground);
+        mConsole.setTextColor(palette.terminalForeground);
+        mCommand.setTextColor(palette.terminalForeground);
+        mCommand.setHintTextColor(palette.textSecondary);
+        mCommand.setBackgroundColor(palette.surfaceSecondary);
+        getWindow().setStatusBarColor(palette.statusBar);
+        getWindow().setNavigationBarColor(palette.navigationBar);
+        applyWindowSystemUi();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        repository.addListener(mThemeListener);
+        applyThemePalette(repository.getPalette());
+    }
+
+    @Override protected void onPause() {
+        AppThemeRepository.get(this).removeListener(mThemeListener);
+        super.onPause();
+    }
+
+    @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        repository.refreshSystemAppearance();
+        applyThemePalette(repository.getPalette());
     }
 
     private void applyWindowSystemUi() {

@@ -430,10 +430,10 @@ public class CodeEditText extends AppCompatEditText {
         String max = Integer.toString(getLineCount());
         // Pro's editor keeps a wide, calm gutter for line numbers, fold markers and
         // breakpoints.  The old fixed 20 px margin became cramped on high-density phones.
-        float gutterWidth = getPaint().measureText(max)
-                + 28 * getResources().getDisplayMetrics().density;
+        int gutterWidth = (int) (getPaint().measureText(max)
+                + 28 * getResources().getDisplayMetrics().density);
         if (getPaddingLeft() != gutterWidth) {
-            setPadding((int) gutterWidth, 0, 0, 0);
+            setPadding(gutterWidth, 0, 0, 0);
         }
     }
 

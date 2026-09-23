@@ -98,6 +98,33 @@ class MiuixProjectConfigActivity : ComponentActivity() {
     private var versionCode by mutableStateOf("1")
     private var mainFileName by mutableStateOf("main.js")
     private var location by mutableStateOf("")
+    private var customLocation = false
+    private var saving by mutableStateOf(false)
+    private var errorLocation by mutableStateOf<String?>(null)
+    private var initialFields = ""
+    private var pendingSwitch: String? = null
+    private fun fields() = listOf(appName, packageNameInput, versionName, versionCode, mainFileName, location).joinToString("\u0000")
+    private fun finishSaved() {
+        pendingSwitch?.let { openProject(it) }
+        finish()
+    }
+    private fun openProject(path: String) {
+        startActivity(Intent(this, ProjectConfigActivity::class.java)
+            .putExtra(ProjectConfigActivity.EXTRA_DIRECTORY, path))
+    }
+    private fun requestSwitch(path: String) {
+        if (saving) return
+        if (fields() == initialFields && iconBitmap == null) { openProject(path); finish(); return }
+        com.jdkshen.aijspro.ui.common.MiuixDialogHost.showCard(this) { dialog ->
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("保存修改后切换项目？")
+                Text("当前位置：" + (directory?.path ?: ""), fontSize = 12.sp)
+                Button(onClick = { dialog.dismiss(); pendingSwitch = path; commit() }) { Text("保存后切换") }
+                Button(onClick = { dialog.dismiss(); openProject(path); finish() }) { Text("放弃修改并切换") }
+                Button(onClick = { dialog.dismiss() }) { Text("取消") }
+            }
+        }
+    }
     private var iconPreview by mutableStateOf<Bitmap?>(null)
     private var errorAppName by mutableStateOf<String?>(null)
     private var errorPackageName by mutableStateOf<String?>(null)
@@ -140,7 +167,8 @@ class MiuixProjectConfigActivity : ComponentActivity() {
             if (config == null) {
                 // 旧实现：Material 弹窗提示「无效项目」，关闭后退出。
                 // 弹窗挂在空 Activity 上，先铺一层 Miuix 背景，避免系统默认黑底。
-                setContentView(ComposeView(this).apply {
+                initialFields = fields()
+        setContentView(ComposeView(this).apply {
                     setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
                     setContent {
                         AijsMiuixTheme {
@@ -217,19 +245,37 @@ class MiuixProjectConfigActivity : ComponentActivity() {
                 getString(R.string.text_invalid_package_name)
             else -> null
         }
-        return errorAppName == null && errorPackageName == null
+        errorLocation = null
+        if (newProject) {
+            val target = File(location)
+            val parent = target.parentFile
+            errorLocation = when {
+                location.isBlank() || !target.isAbsolute -> "请输入项目的完整绝对路径"
+                target.exists() -> "此位置已经存在，请选择其他项目目录"
+                parent == null || !parent.isDirectory || !parent.canWrite() -> "项目所在文件夹不存在或不可写"
+                appName.contains('/') || appName.contains('\\') -> "项目名称不能包含路径分隔符"
+                else -> null
+            }
+            if (errorLocation != null) Toast.makeText(this, errorLocation, Toast.LENGTH_LONG).show()
+        }
+        return errorLocation == null && errorAppName == null && errorPackageName == null
                 && errorVersionName == null && errorVersionCode == null
     }
 
     private fun commit() {
+        if (saving) return
         if (!validate()) {
+            pendingSwitch = null
             return
         }
+        saving = true
         syncProjectConfig()
         val bitmap = iconBitmap
         if (bitmap != null) {
             disposables.add(saveIcon(bitmap)
                 .subscribe({ saveProjectConfig() }, { error ->
+                    saving = false
+                    pendingSwitch = null
                     error.printStackTrace()
                     Toast.makeText(this, error.message, Toast.LENGTH_SHORT).show()
                 }))
@@ -257,8 +303,10 @@ class MiuixProjectConfigActivity : ComponentActivity() {
                 .newProject()
                 .subscribe({
                     Explorers.workspace().notifyChildrenChanged(ExplorerDirPage(parent, null))
-                    finish()
+                    finishSaved()
                 }, { error ->
+                    saving = false
+                    pendingSwitch = null
                     error.printStackTrace()
                     Toast.makeText(this, error.message, Toast.LENGTH_SHORT).show()
                 }))
@@ -272,8 +320,10 @@ class MiuixProjectConfigActivity : ComponentActivity() {
                 .subscribe({
                     val item = ExplorerFileItem(dir, null)
                     Explorers.workspace().notifyItemChanged(item, item)
-                    finish()
+                    finishSaved()
                 }, { error ->
+                    saving = false
+                    pendingSwitch = null
                     error.printStackTrace()
                     Toast.makeText(this, error.message, Toast.LENGTH_SHORT).show()
                 }))
@@ -322,10 +372,11 @@ class MiuixProjectConfigActivity : ComponentActivity() {
                     LaunchCard()
                     Button(
                         onClick = { commit() },
+                        enabled = !saving,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColorsPrimary()
                     ) {
-                        Text(if (newProject) getString(R.string.text_done) else getString(R.string.text_save))
+                        Text(if (saving) "正在保存…" else if (newProject) getString(R.string.text_done) else getString(R.string.text_save))
                     }
                     Spacer(Modifier.height(24.dp))
                 }
@@ -425,11 +476,47 @@ class MiuixProjectConfigActivity : ComponentActivity() {
                 if (newProject) {
                     TextField(
                         value = location,
-                        onValueChange = { location = it },
+                        onValueChange = { location = it; customLocation = true },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         label = getString(R.string.text_project_location)
                     )
+                    errorLocation?.let { FieldError(it) }
+                    Text("项目会创建在此路径；选择文件夹后自动加上项目名称。",
+                        fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    Button(onClick = {
+                        com.jdkshen.aijspro.ui.common.MiuixFileChooserDialog.showDirectory(
+                            this@MiuixProjectConfigActivity,
+                            android.os.Environment.getExternalStorageDirectory().path) { selected ->
+                            parentDirectory = File(selected)
+                            location = File(selected, appName).path
+                            customLocation = false
+                            Toast.makeText(this@MiuixProjectConfigActivity,
+                                "项目位置已选择：$location", Toast.LENGTH_LONG).show()
+                        }
+                    }) { Text("选择项目所在文件夹") }
+                } else {
+                    Text("项目位置", fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    Text(directory?.path ?: "未找到项目目录", fontSize = 14.sp)
+                    Text("保存将修改此目录中的项目配置；修改项目名称不会移动文件夹。",
+                        fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    Text("切换项目会放弃本页尚未保存的修改，请先保存。", fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                    Button(onClick = {
+                        com.jdkshen.aijspro.ui.common.MiuixFileChooserDialog.showDirectory(
+                            this@MiuixProjectConfigActivity,
+                            android.os.Environment.getExternalStorageDirectory().path) { selected ->
+                            val target = ProjectConfig.fromProjectDir(selected)
+                            if (target == null) {
+                                Toast.makeText(this@MiuixProjectConfigActivity,
+                                    "此文件夹没有有效的 project.json，请选择项目目录", Toast.LENGTH_LONG).show()
+                            } else {
+                                requestSwitch(selected)
+                            }
+                        }
+                    }) { Text("切换到其他项目") }
+
                 }
             }
         }
@@ -462,7 +549,7 @@ class MiuixProjectConfigActivity : ComponentActivity() {
 
     /** 旧实现：应用名称每次变化都会把「项目位置」重置为 `<父目录>/<名称>`。 */
     private fun onAppNameChanged(value: String) {
-        if (!newProject) return
+        if (!newProject || customLocation) return
         val parent = parentDirectory ?: return
         location = File(parent, value).path
     }

@@ -241,33 +241,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
             // 两边各算一次就会不一致 —— 真机（新机 Android 16，系统深色 + 应用内跟随系统）
             // 上出现过：这里算出 dark 把状态栏刷成纯黑，而页面走 AijsMiuixThemeState 的旧值
             // 仍按浅色画，结果就是「黑状态栏配白页面」。
-            com.jdkshen.aijspro.theme.AijsMiuixThemeKt.ensureMiuixThemeStateLoaded();
-            boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this);
-            int surface = dark
-                    ? android.graphics.Color.BLACK
-                    : android.graphics.Color.rgb(0xF7, 0xF7, 0xF7);
-            int selected = android.graphics.Color.rgb(0, 150, 136);
-            int normal = dark
-                    ? android.graphics.Color.argb(170, 255, 255, 255)
-                    : android.graphics.Color.argb(130, 0, 0, 0);
-            mTabLayout.setBackgroundColor(surface);
-            getWindow().setStatusBarColor(surface);
-            // The status bar icon appearance must follow the bar we just painted.
-            // It used to follow the system instead: with a dark system theme the
-            // icons stayed white on the light #F7F7F7 bar and were unreadable.
-            View decor = getWindow().getDecorView();
-            // 先清掉可能残留的隐藏系统栏标记，否则只会继承下去
-            int uiFlags = com.jdkshen.aijspro.theme.AppThemePalette
-                    .withoutHiddenSystemBars(decor.getSystemUiVisibility());
-            if (dark) {
-                uiFlags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            } else {
-                uiFlags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            }
-            decor.setSystemUiVisibility(uiFlags);
-            mTabLayout.setTabIconTint(new android.content.res.ColorStateList(
-                    new int[][] { new int[] { android.R.attr.state_selected }, new int[] {} },
-                    new int[] { selected, normal }));
+            applyMainNavigationTheme();
             appBar.addView(bar, 0, new AppBarLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             // The Miuix shell stays fixed; only the file RecyclerView should scroll.
@@ -283,6 +257,45 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         } catch (Throwable error) {
             // A broken pilot must fall back to the proven toolbar, not break startup.
             android.util.Log.e(LOG_TAG, "Unable to install Miuix main navigation", error);
+        }
+    }
+
+    private void applyMainNavigationTheme() {
+        if (mTabLayout == null) return;
+        boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this);
+        int surface = dark ? android.graphics.Color.BLACK : 0xFFF7F7F7;
+        int normal = dark ? 0xAAFFFFFF : 0x82000000;
+        mTabLayout.setBackgroundColor(surface);
+        if (mTabLayout instanceof com.jdkshen.aijspro.ui.widget.GlassTabLayout) {
+            ((com.jdkshen.aijspro.ui.widget.GlassTabLayout) mTabLayout).setGlassTheme(dark, surface);
+        }
+        mTabLayout.setTabIconTint(new android.content.res.ColorStateList(
+                new int[][] { new int[] { android.R.attr.state_selected }, new int[] {} },
+                new int[] { 0xFF009688, normal }));
+        findViewById(R.id.app_bar).setBackgroundColor(surface);
+        mViewPager.setBackgroundColor(surface);
+        findViewById(R.id.home_content).setBackgroundColor(surface);
+        getWindow().setStatusBarColor(surface);
+        getWindow().setNavigationBarColor(surface);
+        androidx.core.view.WindowInsetsControllerCompat controller =
+                new androidx.core.view.WindowInsetsControllerCompat(getWindow(), getWindow().getDecorView());
+        controller.setAppearanceLightStatusBars(!dark);
+        controller.setAppearanceLightNavigationBars(!dark);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        // AppCompat can call this directly without ViewRoot dispatching uiMode to
+        // ComposeView. Keep Compose's LocalConfiguration current when opting out
+        // of Activity recreation (especially manual-light -> follow-system-dark).
+        getWindow().getDecorView().dispatchConfigurationChanged(configuration);
+        applyMainNavigationTheme();
+        if (mPagerAdapter != null) {
+            Fragment files = mPagerAdapter.getStoredFragment(0);
+            if (files instanceof MyScriptListFragment) {
+                ((MyScriptListFragment) files).onAppThemeChanged();
+            }
         }
     }
 
@@ -512,7 +525,13 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
                 .add(createMarketFragment(), R.string.text_market)
                 .add(createManageFragment(), R.string.text_manage)
                 .build();
+        // setOffscreenPageLimit can instantiate pages synchronously; bind their FAB first.
+        setUpViewPagerFragmentBehaviors();
         mViewPager.setAdapter(mPagerAdapter);
+        // All five tabs are lightweight shells with asynchronous data loading.
+        // Precompose them while idle instead of creating distant tabs mid-transition;
+        // keep their list positions and loaded data when switching back.
+        mViewPager.setOffscreenPageLimit(PAGE_TITLES.length - 1);
         mTabLayout.setupWithViewPager(mViewPager);
         for (int i = 0; i < PAGE_ICONS.length; i++) {
             TabLayout.Tab tab = mTabLayout.getTabAt(i);
@@ -522,7 +541,6 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
                 tab.setContentDescription(PAGE_TITLES[i]);
             }
         }
-        setUpViewPagerFragmentBehaviors();
     }
 
     private ViewPagerFragment createTutorialFragment() {
@@ -582,13 +600,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private void setUpViewPagerFragmentBehaviors() {
-        mPagerAdapter.setOnFragmentInstantiateListener((pos, fragment) -> {
-            ((ViewPagerFragment) fragment).setFab(mFab);
-            if (pos == mViewPager.getCurrentItem()) {
-                ((ViewPagerFragment) fragment).onPageShow();
-            }
-        });
-        mViewPager.addOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
+        ViewPager.SimpleOnPageChangeListener pageListener = new ViewPager.SimpleOnPageChangeListener() {
             private ViewPagerFragment mPreviousFragment;
 
             @Override
@@ -599,13 +611,22 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
                 Fragment fragment = mPagerAdapter.getStoredFragment(position);
                 if (fragment == null)
                     return;
-                if (mPreviousFragment != null) {
+                if (mPreviousFragment != null && mPreviousFragment != fragment) {
                     mPreviousFragment.onPageHide();
                 }
                 mPreviousFragment = (ViewPagerFragment) fragment;
+                // Also bind restored fragments before dispatching page visibility.
+                mPreviousFragment.setFab(mFab);
                 mPreviousFragment.onPageShow();
             }
+        };
+        mPagerAdapter.setOnFragmentInstantiateListener((pos, fragment) -> {
+            ((ViewPagerFragment) fragment).setFab(mFab);
+            if (pos == mViewPager.getCurrentItem()) {
+                pageListener.onPageSelected(pos);
+            }
         });
+        mViewPager.addOnPageChangeListener(pageListener);
     }
 
 

@@ -71,6 +71,8 @@ class MiuixLogActivity : ComponentActivity() {
 
     private var consoleImpl: ConsoleImpl? = null
     private var consoleView: ConsoleView? = null
+    private var themedConsoleView: ConsoleView? = null
+    private var appliedConsoleDark: Boolean? = null
 
     private val levels = listOf(
         "Verbose" to Log.VERBOSE,
@@ -127,9 +129,11 @@ class MiuixLogActivity : ComponentActivity() {
     }
 
     /** Console colors following the Miuix theme directly (not the legacy M3 palette). */
-    private fun applyLogTheme(view: ConsoleView) {
+    private fun applyLogTheme(view: ConsoleView, dark: Boolean = isAijsDarkThemeResolved(this)) {
+        if (themedConsoleView === view && appliedConsoleDark == dark) return
+        themedConsoleView = view
+        appliedConsoleDark = dark
         // 这里不是 @Composable 上下文，用带 Context 的版本（与 Compose 主题同规则、同数据源）
-        val dark = isAijsDarkThemeResolved(this)
         val colors = SparseArray<Int>()
         colors.put(Log.VERBOSE, if (dark) 0xFF9E9E9E.toInt() else 0xFF757575.toInt())
         colors.put(Log.DEBUG, if (dark) 0xFFE6E6E6.toInt() else 0xFF212121.toInt())
@@ -147,6 +151,7 @@ class MiuixLogActivity : ComponentActivity() {
 
     @Composable
     private fun LogPage() {
+        val dark = isAijsDarkTheme()
         var levelIndex by remember { mutableIntStateOf(0) }
         var levelsOpen by remember { mutableStateOf(false) }
         var searchShown by remember { mutableStateOf(false) }
@@ -212,7 +217,8 @@ class MiuixLogActivity : ComponentActivity() {
                             val input = view.findViewById<android.view.View>(R.id.input_container)
                             input?.visibility = android.view.View.GONE
                         }
-                    }
+                    },
+                    update = { view -> applyLogTheme(view, dark) }
                 )
             }
             if (levelsOpen) {

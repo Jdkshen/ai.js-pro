@@ -13,12 +13,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -135,12 +138,14 @@ internal fun MiuixSearchOverlayContent(
         ) {
             Column(
                 Modifier.align(Alignment.TopCenter)
+                    .imePadding()
                     .padding(top = 28.dp)
                     .fillMaxWidth(0.80f)
                     .pointerInput(Unit) { detectTapGestures { } }
                     .shadow(20.dp, RoundedCornerShape(6.dp))
                     .clip(RoundedCornerShape(6.dp))
                     .background(MiuixTheme.colorScheme.surface)
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 TextField(value = query, onValueChange = {
@@ -239,6 +244,7 @@ internal fun MiuixSearchOverlayContent(
                                     color = MiuixTheme.colorScheme.onBackgroundVariant)
                                 Text("修改于 ${timestamp.format(Date(file.lastModified()))}",
                                     fontSize = 11.sp, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     color = MiuixTheme.colorScheme.onBackgroundVariant)
                             }
                             if (isDirectory) {
@@ -271,7 +277,7 @@ internal fun MiuixSearchOverlayContent(
         modifier: Modifier,
         onCheckedChange: (Boolean) -> Unit
     ) {
-        Row(modifier.height(36.dp).clickable { onCheckedChange(!checked) },
+        Row(modifier.heightIn(min = 48.dp).clickable { onCheckedChange(!checked) },
             verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = checked, onCheckedChange = onCheckedChange)
             Text(label, fontSize = 14.sp, color = MiuixTheme.colorScheme.onBackground,
@@ -303,7 +309,7 @@ internal fun MiuixSearchOverlayContent(
         Image(
             painter = painterResource(icon),
             contentDescription = description,
-            modifier = Modifier.size(40.dp).clickable(onClick = onClick).padding(8.dp),
+            modifier = Modifier.size(48.dp).clickable(onClick = onClick).padding(12.dp),
             colorFilter = ColorFilter.tint(
                 if (active) MiuixTheme.colorScheme.primary
                 else MiuixTheme.colorScheme.onBackground
