@@ -2855,6 +2855,20 @@ function buildDriver() {
             if (clickLeaseHidden) {
                 return;
             }
+            // 2026-09-24（提前）：面板**不压棋盘**时跳过藏窗 —— 租约要藏的原因是「窗口增删会丢游戏选中」
+            // （见上方 A/B 注释）；而注点全在棋盘上、面板根本没遮住它们时，藏+显示各一次窗口操作
+            // 纯属白花时间（~0.2s/手）且同样是「两次点击之间动窗口」。判不出来（棋盘未知）仍保守藏。
+            let overlap = null;
+            try {
+                overlap = rectsOverlap(panelRect(), boardRect());
+            } catch (error) {
+                overlap = null;
+            }
+            if (overlap === false) {
+                clickLeaseHidden = false;
+                clickLeaseActive = false;
+                return;
+            }
             try {
                 if (setActivePanelVisibility(false, "点击租约") !== false) {
                     clickLeaseHidden = true;

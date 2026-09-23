@@ -684,6 +684,12 @@ function createDriver(options) {
      */
     let activeOwnMove = null;
     /**
+     * 最近的 ROI 快速确认结论（{ actionId, atMono, verdict }）。
+     * 2026-09-24：真机实测一手棋的确认会**完整跑两遍**（两条「第 1 次探测」相隔 ~0.6s），
+     * 第二遍的抓帧+OCR 完全白花 —— doVerify 入口对同一票据 2 秒内直接复用它。
+     */
+    let lastFastConfirm = null;
+    /**
      * 「手数周期」：每确认成功一次 +1。补齐表里的记录只在**同一个周期内**有效 ——
      * 游戏的高亮环只挂在「刚落的那个子」上，下一手一旦确认，上一手的装饰就不再存在。
      * 真机踩过：不加这个界限，上一手的记录会一直生效，把「那个子真的被吃了」也覆盖掉。
@@ -1364,6 +1370,18 @@ function createDriver(options) {
         /** 这一帧枚举出来的对方应手是否被拒（未得到第二次佐证） */
         let replyRejected = false;
         const ticket = effect.ticket;
+        // ★ 2026-09-24 去重：同一张票据 2 秒内**重复**进入确认时，直接复用上一次 ROI 快速确认的结论。
+        //   真机实测（K40）：一手棋的确认会被完整跑两次（两条「第 1 次探测」相隔 ~0.6s —— 第二次多花的
+        //   抓帧+OCR +300ms 等待白烧）；多次定位未成，先在这里兑底（根源待设备插桩再查）。
+        if (lastFastConfirm && ticket && lastFastConfirm.actionId != null &&
+            lastFastConfirm.actionId === ticket.actionId &&
+            nowMono() - lastFastConfirm.atMono < 2000) {
+            note("确认：复用上一轮 ROI 结论（同一票据，省一次抓帧+OCR）");
+            return pump(machine.dispatch({
+                type: "VERIFY_RESULT", ticket: ticket,
+                verdict: Object.assign({}, lastFastConfirm.verdict)
+            }));
+        }
         // 把票据的「预期落子后局面」当期望传给观察层：用来纠正「同一兵种颜色读反」的装饰格
         let expectedBoard = null;
         try {
@@ -1420,14 +1438,17 @@ function createDriver(options) {
                         }
                     }
                 } catch (error) { /* 途经格登记失败不影响确认 */ }
+                const fastVerdict = {
+                    result: verifier.RESULT.CONFIRMED,
+                    board: expectedBoard.slice(),
+                    plies: [ticket.moveICCS],
+                    reason: "ROI 快速确认（起点空 + 落点 " + fast.destChar + "）"
+                };
+                // 同一票据若紧接着又被确认一次（真机实测会往返两次），直接复用这个结论。
+                lastFastConfirm = { actionId: ticket.actionId, atMono: nowMono(), verdict: fastVerdict };
                 return pump(machine.dispatch({
                     type: "VERIFY_RESULT", ticket: ticket,
-                    verdict: {
-                        result: verifier.RESULT.CONFIRMED,
-                        board: expectedBoard.slice(),
-                        plies: [ticket.moveICCS],
-                        reason: "ROI 快速确认（起点空 + 落点 " + fast.destChar + "）"
-                    }
+                    verdict: fastVerdict
                 }));
             }
         }
