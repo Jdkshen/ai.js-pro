@@ -189,6 +189,39 @@ public class ScriptRepositoryTest {
         return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
     }
 
+    // ---- B1 批次4：walkFiles（MCP 递归搜索的枚举源） ----
+
+    @Test
+    public void walkFilesVisitsAllFilesDepthFirstIncludingHidden() throws Exception {
+        File root = newTempDir();
+        touch(root, "a.js");
+        touch(root, ".hidden.js");
+        touch(root, "note.txt");
+        File sub = new File(root, "sub");
+        assertTrue(sub.mkdirs());
+        touch(sub, "b.js");
+        File deep = new File(sub, "deep");
+        assertTrue(deep.mkdirs());
+        touch(deep, "d.js");
+
+        List<String> names = new ArrayList<>();
+        for (ScriptDescriptor descriptor : ScriptRepository.walkFiles(root, 0)) {
+            names.add(descriptor.getName());
+        }
+        Collections.sort(names);
+        assertEquals(Arrays.asList(".hidden.js", "a.js", "b.js", "d.js", "note.txt"), names);
+
+        assertEquals(3, ScriptRepository.walkFiles(root, 3).size());
+
+        // 过滤在计数之前（与 filter{take(n)} 同语义）：只数 .js，上限 2 → 恰好 2 个 .js
+        List<ScriptDescriptor> js = ScriptRepository.walkFiles(root, 2,
+                (dir, name) -> name.endsWith(".js"));
+        assertEquals(2, js.size());
+        for (ScriptDescriptor descriptor : js) {
+            assertTrue(descriptor.getName().endsWith(".js"));
+        }
+    }
+
     // ---- B1 批次2b：备份 / 回退 / 清理 ----
 
     @Test

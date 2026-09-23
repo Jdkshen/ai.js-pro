@@ -10,6 +10,7 @@ import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.autojs.AutoJs
 import com.jdkshen.aijspro.model.sample.SampleRepository
 import com.jdkshen.aijspro.model.script.ScriptFile
+import com.jdkshen.aijspro.model.script.ScriptRepository
 import com.stardust.autojs.core.console.ConsoleImpl
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecution
@@ -462,8 +463,10 @@ internal class McpTools(private val context: Context, private val event: (String
         val start = resolveScript(path)
         if (!start.isDirectory) throw ToolError("搜索目录不存在")
         val hits = mutableListOf<JsonObject>()
-        val candidates = start.walkTopDown().filter { it.isFile && it.extension.lowercase() in TEXT_EXTENSIONS }
-            .take(MAX_SEARCH_FILES + 1).toList()
+        // 枚举统一走 ScriptRepository.walkFiles；过滤在计数之前（与 filter{take(n)} 同语义）。
+        val candidates = ScriptRepository.walkFiles(start, MAX_SEARCH_FILES + 1) { _, name ->
+            name.substringAfterLast('.', "").lowercase() in TEXT_EXTENSIONS
+        }.map { File(it.path) }
         val truncatedFiles = candidates.size > MAX_SEARCH_FILES
         var scanned = 0
         candidates.take(MAX_SEARCH_FILES).forEach { file ->
@@ -524,10 +527,13 @@ internal class McpTools(private val context: Context, private val event: (String
     }
     private fun listFiles(dir: File, offset: Int, limit: Int, recursive: Boolean = false): JsonObject {
         if (!dir.isDirectory) throw ToolError("目录不存在：${dir.relativeTo(root).invariantSeparatorsPath}")
+        // 枚举统一走 ScriptRepository（含隐藏——MCP 与文件页的可见性语义不同）。
         val entries = if (recursive) {
-            dir.walkTopDown().drop(1).filter { it.isFile }.sortedBy { it.relativeTo(dir).invariantSeparatorsPath.lowercase() }.toList()
+            ScriptRepository.walkFiles(dir, 0).map { File(it.path) }
+                .sortedBy { it.relativeTo(dir).invariantSeparatorsPath.lowercase() }
         } else {
-            dir.listFiles().orEmpty().sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
+            ScriptRepository.list(dir, null, true).map { File(it.path) }
+                .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
         }
         return page(entries, offset, limit) { file -> JsonObject().apply {
             addProperty("path", file.relativeTo(root).invariantSeparatorsPath); addProperty("name", file.name)

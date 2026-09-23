@@ -76,6 +76,7 @@ public final class ScriptRepository {
     }
 
     /**
+    /**
      * 递归统计匹配的文件数（目录不计入），与旧 {@code WorkspaceFileProvider.countScriptFiles} 同语义
      * （隐藏条目同样跳过）。
      *
@@ -92,6 +93,47 @@ public final class ScriptRepository {
             }
         }
         return count;
+    }
+
+    /**
+     * 深度优先列出目录下的全部文件（**包含隐藏**；目录本身不出现在结果中）。
+     * 顺序与 {@code FileTreeWalk}（Kotlin {@code walkTopDown()}+isFile）一致：前序 DFS、同级按文件系统顺序。
+     * 供 MCP 搜索/递归列表等内部场景使用（用户可见列表请用 {@link #list} 的默认隐藏过滤）。
+     *
+     * @param maxFiles 最多返回多少个文件；≤0 表示不限。
+     * @param fileNameFilter 只作用于文件，**通过后才计入上限**（与 {@code filter{...}.take(n)} 同语义）；null = 全部。
+     */
+    public static List<ScriptDescriptor> walkFiles(File directory, int maxFiles, FilenameFilter fileNameFilter) {
+        List<ScriptDescriptor> result = new ArrayList<>();
+        walkInto(directory, result, maxFiles, fileNameFilter);
+        return result;
+    }
+
+    public static List<ScriptDescriptor> walkFiles(File directory, int maxFiles) {
+        return walkFiles(directory, maxFiles, null);
+    }
+
+    private static boolean walkInto(File directory, List<ScriptDescriptor> out, int maxFiles,
+                                    FilenameFilter fileNameFilter) {
+        File[] children = directory == null ? null : directory.listFiles();
+        if (children == null) {
+            return false;
+        }
+        for (File child : children) {
+            if (maxFiles > 0 && out.size() >= maxFiles) {
+                return true;
+            }
+            if (child.isFile()) {
+                if (fileNameFilter == null || fileNameFilter.accept(child, child.getName())) {
+                    out.add(ScriptDescriptor.of(child));
+                }
+            } else if (child.isDirectory()) {
+                if (walkInto(child, out, maxFiles, fileNameFilter)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------
