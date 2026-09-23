@@ -1,0 +1,53 @@
+1. Contributors to Fishtest with >10,000 CPU hours, as of 2024-09-16.
+Thank you!
+
+CPU Hours                     Username
+-----------------------------------------------
+13726710                      fsluobing
+7759854                       trivial
+5048466                       浮生若梦
+4349121                       橙
+1328575                       VinXiangQi
+401239                        kaka
+396855                        戒烟戒酒
+288301                        huorongrong
+277878                        长安
+96701                         bacl
+72836                         dblue
+56878                         以往
+39465                         qianbai
+
+2. Contributors for training data generation with >10,000,000,000 positions generated, as of 2024-02-17.
+Thank you!
+
+Positions                     Username
+-----------------------------------------------
+452524769438                  kaka
+344221381035                  千百
+273861027419                  戒烟戒酒
+192541202211                  meamas-teamo
+137760509027                  浮生若梦
+104120272676                  xiaoyan
+83650612424                   影子
+80934057399                   长安
+60702209001                   Duck-King
+56920483079                   huorongrong
+54841370630                   ifater
+42325903141                   VinXiangQi
+37475865590                   句号
+37145000000                   初见
+20579354634                   黑夜白天
+19863119595                   开摆小能手
+19193335104                   以往
+18136147902                   封大雨
+16999907321                   党晓阳
+16115418102                   lenovo2022
+12429846638                   jiangxiaoyu
+11357670472                   laweye
+11043809172                   ǧ  
+10674400782                   Wang
+10385894838                   滚石
+
+
+3. Stockfish Fishtest Contributors (https://github.com/official-stockfish/Stockfish/blob/master/Top CPU Contributors.txt)
+Thank you!

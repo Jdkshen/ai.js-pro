@@ -1,0 +1,71 @@
+name: Report issue
+description: Create a report to help us fix issues with the engine
+body:
+- type: markdown
+  attributes:
+    value: |
+      > [!IMPORTANT]
+      > Please do not open bug reports regarding the engine's choice of moves, such as the engine failing to find a particular "best" move. If you have any questions or wish to discuss engine analysis, please use our community channels, such as Discord.
+
+- type: textarea
+  attributes:
+    label: Describe the issue
+    description: A clear and concise description of what you're experiencing.
+  validations:
+    required: true
+
+- type: textarea
+  attributes:
+    label: Expected behavior
+    description: A clear and concise description of what you expected to happen.
+  validations:
+    required: true
+
+- type: textarea
+  attributes:
+    label: Steps to reproduce
+    description: |
+      Steps to reproduce the behavior.
+      You can also use this section to paste the command line output.
+    placeholder: |
+      ```
+      startpos
+      go depth 1
+      info string NNUE evaluation using pikafish.nnue enabled
+      info depth 1 seldepth 1 multipv 1 score cp 68 nodes 51 nps 17000 hashfull 0 tbhits 0 time 3 pv h0g2
+      bestmove h0g2
+      ```
+  validations:
+    required: true
+
+- type: textarea
+  attributes:
+    label: Anything else?
+    description: |
+      Anything that will give us more context about the issue you are encountering.
+      You can also use this section to propose ideas on how to solve the issue. 
+  validations:
+    required: false
+
+- type: dropdown
+  attributes:
+    label: Operating system
+    options:
+      - All
+      - Windows
+      - Linux
+      - MacOS
+      - Android
+      - Other or N/A
+  validations:
+    required: true
+
+- type: input
+  attributes:
+    label: Pikafish version
+    description: |
+      This can be found by running the engine.
+      You can also use the commit ID.
+    placeholder: Pikafish 2022-10-22 / 5d0cd46
+  validations:
+    required: true
