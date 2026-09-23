@@ -176,12 +176,7 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             sourceView.release();
         }
         if (regionX != 0 || regionY != 0) {
-            for (int i = 2; i + 5 < packed.length; i += 6) {
-                packed[i] += regionX;
-                packed[i + 1] += regionY;
-                packed[i + 2] += regionX;
-                packed[i + 3] += regionY;
-            }
+            shiftToRegion(packed, regionX, regionY);
         }
         return packed;
     }
@@ -218,11 +213,13 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             long inferenceStarted = SystemClock.elapsedRealtimeNanos();
             output = mNet.forward();
             float inferenceMs = elapsedMs(inferenceStarted);
-            int rowCount = (int) (output.total() / 6L);
+            int[] shape = resolveOutputShape(output);
+            int rowCount = shape[0];
+            int colCount = shape[1];
             rows = output.reshape(1, rowCount);
-            float[] raw = new float[rowCount * 6];
+            float[] raw = new float[rowCount * colCount];
             rows.get(0, 0, raw);
-            return decode(raw, rowCount, width, height, scale, padX, padY,
+            return decode(raw, rowCount, colCount, width, height, scale, padX, padY,
                     confidence, preprocessMs, inferenceMs);
         } catch (Throwable error) {
             throw new IllegalStateException("OpenCV 5.0 DNN 推理失败：" + error.getMessage(), error);
@@ -234,21 +231,122 @@ public final class OpenCvYoloDetector implements AutoCloseable {
     }
 
     /**
-     * 解码 YOLO26 ONNX 模型输出。
-     * 模型已内置 TopK 选择（输出形状 [1, 300, 6]），无 IoU-based NMS。
-     * 输出格式：每行 [x1, y1, x2, y2, score, classId]，坐标为像素值（相对于输入尺寸）。
-     * 坐标系：模型在 320×320 输入上推理，输出坐标已映射到输入尺寸。
+     * 解析网络输出形状 → [rows, cols]。
+     *
+     * 端到端（NMS-free、模型自带 TopK）YOLO26 的输出约定是「每行一条检测」：
+     *   · 检测：cols = 6 → [x1,y1,x2,y2,score,classId]
+     *   · 姿态：cols = 6 + 3K → 关键点紧随 classId：每行 (kx,ky,kconf) × K
+     *     （YOLO26n-pose 在 COCO 上是 K=17 → 57 列）
+     * 个别导出会把通道放前（[1,6,300] / [1,57,300]，转置形态）。端到端的行数恒为
+     * TopK（默认 300），所以优先认「行数=300」的一侧；都不是 300 时取列数小的一侧。
+     * 不认识的形状（如 [1,4+nc,8400] 未解码原始头）直接抛错，避免把垃圾行当检测。
      */
-    private float[] decode(float[] raw, int rowCount, int width, int height,
-                           float scale, int padX, int padY, float confidence,
-                           float preprocessMs, float inferenceMs) {
+    private static int[] resolveOutputShape(Mat output) {
+        final int end2endRows = 300;
+        final int maxRows = 1024;   // 原始头行数 8400 会在这里被拒掉
+        int dims = output.dims();
+        long total = output.total();
+        int rows;
+        int cols;
+        if (dims == 3) {
+            int first = output.size(0);
+            int a = output.size(1);
+            int b = output.size(2);
+            if (first != 1) {
+                throw new IllegalStateException("不支持的 ONNX 输出形状：["
+                        + first + "," + a + "," + b + "]");
+            }
+            boolean aAsCols = isValidCols(a) && b <= maxRows;
+            boolean bAsCols = isValidCols(b) && a <= maxRows;
+            if (aAsCols && bAsCols) {
+                if (b == end2endRows) {          // [1, cols, 300] 转置形态
+                    rows = b;
+                    cols = a;
+                } else if (a == end2endRows) {   // [1, 300, cols] 常规形态
+                    rows = a;
+                    cols = b;
+                } else {                          // 都不是 300：取列数小的一侧
+                    rows = Math.max(a, b);
+                    cols = Math.min(a, b);
+                }
+            } else if (aAsCols) {                 // a 是列数，b 是行数
+                rows = b;
+                cols = a;
+            } else if (bAsCols) {                 // b 是列数，a 是行数
+                rows = a;
+                cols = b;
+            } else {
+                throw new IllegalStateException("不支持的 ONNX 输出形状：[1," + a + "," + b
+                        + "]（端到端应为 [1,300,6] 或 [1,300,6+3K]；若是 [1,4+nc,8400] 原始头，请导出 end2end 版）");
+            }
+        } else if (dims == 2) {
+            int r = output.rows();
+            int c = output.cols();
+            // c 是列宽（常规 [rows, cols]）；r 是列宽（转置 [cols, rows]）
+            boolean cAsCols = isValidCols(c) && r <= maxRows;
+            boolean rAsCols = isValidCols(r) && c <= maxRows;
+            if (cAsCols && rAsCols) {
+                // 300 既像 TopK 行数、又像 K=98 的姿态列宽：优先认 300 是行数
+                if (r == end2endRows) {
+                    rows = r;
+                    cols = c;
+                } else if (c == end2endRows) {
+                    rows = c;
+                    cols = r;
+                } else {
+                    rows = Math.max(r, c);
+                    cols = Math.min(r, c);
+                }
+            } else if (cAsCols) {
+                rows = r;
+                cols = c;
+            } else if (rAsCols) {
+                rows = c;
+                cols = r;
+            } else {
+                throw new IllegalStateException("不支持的 ONNX 输出形状：[" + r + "," + c + "]");
+            }
+        } else {
+            throw new IllegalStateException("不支持的 ONNX 输出维度：" + dims);
+        }
+        if (rows <= 0 || cols <= 0 || (long) rows * cols != total) {
+            throw new IllegalStateException("ONNX 输出形状解析失败（total=" + total + "）");
+        }
+        return new int[]{rows, cols};
+    }
+
+    /** 合法列数：6（检测）或 6+3K（姿态，K=1..100）。 */
+    private static boolean isValidCols(int cols) {
+        if (cols == 6) {
+            return true;
+        }
+        int k = cols - 6;
+        return k > 0 && k % 3 == 0 && k / 3 <= 100;
+    }
+
+    /**
+     * 解码 YOLO26 ONNX 模型输出（端到端，模型自带 TopK）。
+     *
+     * 行布局（cols = 6 + 3K）：
+     *   [x1, y1, x2, y2, score, classId, (kx1,ky1,kc1) ... (kxK,kyK,kcK)]
+     * 检测模型 K=0（cols=6）；姿态模型 K=关键点数（YOLO26n-pose @COCO：17 → 57 列）。
+     *
+     * 打包格式 v2（给 JS 侧解包，见 quickjs_jni.cpp 胶水与 __yolo__.js）：
+     *   [preprocessMs, inferenceMs, cols, 行1..., 行2...]
+     *   行 = [x1, y1, x2, y2, score, classId, (kx,ky,kc)×K]（坐标已映射回原图/区域局部坐标）
+     * ⚠️ 旧格式 v1 是 [preMs, infMs, 每行 6 个]；v2 多一个 cols 头字段（两个 JS 解包侧同步升级）。
+     */
+    static float[] decode(float[] raw, int rowCount, int cols, int width, int height,
+                          float scale, int padX, int padY, float confidence,
+                          float preprocessMs, float inferenceMs) {
         // 预分配最大可能大小，避免 resize
-        float[] packed = new float[2 + rowCount * 6];
+        float[] packed = new float[3 + rowCount * cols];
         packed[0] = preprocessMs;
         packed[1] = inferenceMs;
-        int write = 2;
+        packed[2] = cols;
+        int write = 3;
         for (int row = 0; row < rowCount; row++) {
-            int base = row * 6;
+            int base = row * cols;
             float score = raw[base + 4];
             if (score < confidence) continue;
             // 模型直接输出角点坐标 [x1, y1, x2, y2]（像素值）
@@ -263,6 +361,12 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             packed[write++] = y2;
             packed[write++] = score;
             packed[write++] = raw[base + 5];
+            // 姿态：关键点（与框同样做 letterbox 反映射；置信度原样传递）
+            for (int k = 6; k + 2 < cols; k += 3) {
+                packed[write++] = clamp((raw[base + k] - padX) / scale, 0f, width);
+                packed[write++] = clamp((raw[base + k + 1] - padY) / scale, 0f, height);
+                packed[write++] = raw[base + k + 2];
+            }
         }
         // 精确裁剪到实际有效长度
         if (write < packed.length) {
@@ -271,6 +375,37 @@ public final class OpenCvYoloDetector implements AutoCloseable {
             return result;
         }
         return packed;
+    }
+
+    /**
+     * 把「区域局部坐标」的检测框与关键点平移回全图坐标（detectRgba 的 region 路径）。
+     * v2 打包：[preMs, infMs, cols, 每行 cols 个]；兼容旧 v1（[preMs, infMs, 每行 6 个]）。
+     */
+    static void shiftToRegion(float[] packed, int regionX, int regionY) {
+        if (packed == null || packed.length < 2) {
+            return;
+        }
+        // v2 判别要防误伤：v1 数组的 packed[2] 是首个框的 x1，数值也可能落在 6..306。
+        // 再加两个条件——至少一整行、且（长度-3）能被行宽整除。
+        boolean v2 = packed.length >= 9 && isPackedStride(packed[2])
+                && (packed.length - 3) % ((int) packed[2]) == 0;
+        int stride = v2 ? (int) packed[2] : 6;
+        int start = v2 ? 3 : 2;
+        for (int i = start; i + stride - 1 < packed.length; i += stride) {
+            packed[i] += regionX;          // x1
+            packed[i + 1] += regionY;      // y1
+            packed[i + 2] += regionX;      // x2
+            packed[i + 3] += regionY;      // y2
+            for (int k = 6; k + 2 < stride; k += 3) {
+                packed[i + k] += regionX;
+                packed[i + k + 1] += regionY;
+            }
+        }
+    }
+
+    /** 第三个头字段是不是一个合法的行宽（v2 标志）：6..306 之间的整数。 */
+    private static boolean isPackedStride(float value) {
+        return value >= 6.0f && value <= 306.0f && value == Math.round(value);
     }
 
     private static void validateThresholds(float confidence, float nmsThreshold) {

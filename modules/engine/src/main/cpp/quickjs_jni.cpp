@@ -3837,6 +3837,106 @@ JSValue nativeYoloDetect(JSContext *context, JSValueConst, int argc, JSValueCons
     return array;
 }
 
+// ---- Pikafish（$pikafish：中国象棋 NNUE 原生引擎）----
+//
+// 引擎本体在 libpikafish.so（third-party/Pikafish；UCI 会话线程 + std::cin/std::cout 重定向，
+// 见 modules/engine/src/main/cpp/pikafish/pikafish_jni.cpp）。Java 侧 PikafishNativeBridge 是
+// JNI 门面，QuickJsHostBridge 负责权重路径解析与 UCI 输出解析（返回 JSON 字符串），
+// 这里只做参数搬运。analyze 是阻塞调用（时长≈movetime），别在 UI 线程上跑。
+
+JSValue nativePikafishStart(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    std::string evalFile;
+    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+        evalFile = jsString(context, argv[0]);
+    }
+    int32_t threads = 2;
+    int32_t hashMb = 64;
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && JS_ToInt32(context, &threads, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish threads");
+    }
+    if (argc >= 3 && !JS_IsUndefined(argv[2]) && JS_ToInt32(context, &hashMb, argv[2]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish hashMb");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "pikafishStart",
+            "(Ljava/lang/String;II)Ljava/lang/String;");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring evalFileString = evalFile.empty() ? nullptr : env->NewStringUTF(evalFile.c_str());
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, evalFileString,
+            static_cast<jint>(threads), static_cast<jint>(hashMb)));
+    if (evalFileString != nullptr) {
+        env->DeleteLocalRef(evalFileString);
+    }
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativePikafishAnalyze(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish analyze arguments");
+    }
+    const std::string fen = jsString(context, argv[0]);
+    int64_t movetime = 1000;
+    int64_t timeout = 0;
+    int32_t multiPv = 1;
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && JS_ToInt64(context, &movetime, argv[1]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish movetime");
+    }
+    if (argc >= 3 && !JS_IsUndefined(argv[2]) && JS_ToInt64(context, &timeout, argv[2]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish timeout");
+    }
+    if (argc >= 4 && !JS_IsUndefined(argv[3]) && JS_ToInt32(context, &multiPv, argv[3]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish multiPv");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "pikafishAnalyze",
+            "(Ljava/lang/String;JJI)Ljava/lang/String;");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring fenString = env->NewStringUTF(fen.c_str());
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, fenString,
+            static_cast<jlong>(movetime), static_cast<jlong>(timeout),
+            static_cast<jint>(multiPv)));
+    env->DeleteLocalRef(fenString);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    const std::string text = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativePikafishStop(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "pikafishStop");
+}
+
+JSValue nativePikafishQuit(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "pikafishQuit");
+}
+
+JSValue nativePikafishIsRunning(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostBoolNoArgs(context, "pikafishIsRunning");
+}
+
+JSValue nativePikafishAvailable(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostBoolNoArgs(context, "pikafishAvailable");
+}
+
 // ---- app module JNI ----
 
 JSValue nativeAppLaunch(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -5297,14 +5397,25 @@ const char kBootstrapScript[] = R"JS(
         region = pixelRegionOf(frame, region);
         const packed = __aiNativeYoloDetect(detector.id, nativeFrame.id, confidence, nms,
             region[0], region[1], region[2], region[3]);
+        // 打包 v2：[preMs, infMs, cols, 每行 cols 个]；cols=6 为检测，6+3K 为姿态（每行带 K 个关键点）。
+        // 兼容旧 v1（[preMs, infMs, 每行 6 个]）：第三个字段不满足「合法行宽 + 长度整除」时按 v1 解。
+        let stride = 6, start = 2;
+        if (packed.length >= 9) {
+            const cols = Math.round(Number(packed[2]));
+            if (cols >= 6 && cols <= 306 && cols % 3 === 0 && Number(packed[2]) === cols &&
+                (packed.length - 3) % cols === 0) {
+                stride = cols;
+                start = 3;
+            }
+        }
         const detections = [];
-        for (let i = 2; i + 5 < packed.length; i += 6) {
+        for (let i = start; i + stride - 1 < packed.length; i += stride) {
             const left = Number(packed[i]) / nativeFrame.scaleX;
             const top = Number(packed[i + 1]) / nativeFrame.scaleY;
             const right = Number(packed[i + 2]) / nativeFrame.scaleX;
             const bottom = Number(packed[i + 3]) / nativeFrame.scaleY;
             const classId = Math.round(Number(packed[i + 5]));
-            detections.push({
+            const item = {
                 classId: classId,
                 label: detector.labels[classId] === undefined
                     ? String(classId) : detector.labels[classId],
@@ -5319,7 +5430,20 @@ const char kBootstrapScript[] = R"JS(
                     centerX: (left + right) / 2,
                     centerY: (top + bottom) / 2
                 }
-            });
+            };
+            if (stride > 6) {
+                // 姿态：每行尾部是 K 个 (x, y, score)；坐标与框一样除以帧缩放
+                const keypoints = [];
+                for (let k = i + 6; k + 2 < i + stride; k += 3) {
+                    keypoints.push({
+                        x: Number(packed[k]) / nativeFrame.scaleX,
+                        y: Number(packed[k + 1]) / nativeFrame.scaleY,
+                        score: Number(packed[k + 2])
+                    });
+                }
+                item.keypoints = keypoints;
+            }
+            detections.push(item);
         }
         detections.preprocessMs = packed.length >= 2 ? Number(packed[0]) : 0;
         detections.inferenceMs = packed.length >= 2 ? Number(packed[1]) : 0;
@@ -5454,6 +5578,62 @@ const char kBootstrapScript[] = R"JS(
     };
     global.$ocr = ocr;
     global.ocr = ocr;   // Rhino 侧 $ocr 与 ocr 两个名字都有，这里保持一致
+
+    // ---- $pikafish（中国象棋 NNUE 原生引擎：libpikafish.so + pikafish.nnue）----
+    //
+    // 与内置 JS 引擎（项目里的 src/engine/engine.js）互补：这个是 **native** 中国象棋引擎，
+    // UCI 会话跑在自己的线程上，棋力远高于 JS 搜索（K40 上 movetime 1s 已有省市队水平）。
+    // 用法：
+    //   $pikafish.start({evalFile:'/sdcard/xiangqi-p4/pikafish.nnue', threads:2, hashMb:128});
+    //   var r = $pikafish.analyze(fen, 1000);   // {ok, move:'h2e2', scoreCp|mate, depth, pv, ...}
+    //   $pikafish.stop() / $pikafish.quit()
+    // ⚠️ analyze 是**阻塞**调用（时长 ≈ movetime），主线程要保响应就放进 threads worker。
+    function parsePikafishResult(text) {
+        const raw = String(text === undefined || text === null ? '' : text);
+        if (raw === '') {
+            return { ok: false, error: 'Pikafish 宿主没有返回内容' };
+        }
+        try {
+            return JSON.parse(raw);
+        } catch (error) {
+            return { ok: false, error: 'Pikafish 宿主返回的不是 JSON: ' + raw };
+        }
+    }
+    const pikafish = {
+        available: function () {
+            return __aiNativePikafishAvailable() === true;
+        },
+        start: function (options) {
+            options = options || {};
+            const evalFile = (options.evalFile === undefined || options.evalFile === null)
+                ? null : String(options.evalFile);
+            const threadsValue = options.threads === undefined ? 2 : Number(options.threads);
+            const threads = isFinite(threadsValue) ? Math.max(1, Math.round(threadsValue)) : 2;
+            const hashValue = options.hashMb === undefined ? 64 : Number(options.hashMb);
+            const hashMb = isFinite(hashValue) ? Math.max(16, Math.round(hashValue)) : 64;
+            return parsePikafishResult(__aiNativePikafishStart(evalFile, threads, hashMb));
+        },
+        analyze: function (fen, movetimeMs, timeoutMs, multiPv) {
+            const movetimeValue = movetimeMs === undefined ? 1000 : Number(movetimeMs);
+            const movetime = isFinite(movetimeValue) ? Math.max(1, Math.round(movetimeValue)) : 1000;
+            const timeoutValue = timeoutMs === undefined ? 0 : Number(timeoutMs);
+            const timeout = isFinite(timeoutValue) ? Math.max(0, Math.round(timeoutValue)) : 0;
+            const pvValue = multiPv === undefined ? 1 : Number(multiPv);
+            const pv = isFinite(pvValue) ? Math.max(1, Math.min(8, Math.round(pvValue))) : 1;
+            return parsePikafishResult(__aiNativePikafishAnalyze(String(fen), movetime, timeout, pv));
+        },
+        stop: function () {
+            __aiNativePikafishStop();
+        },
+        quit: function () {
+            __aiNativePikafishQuit();
+        },
+        isRunning: function () {
+            return __aiNativePikafishIsRunning() === true;
+        }
+    };
+    global.$pikafish = pikafish;
+    global.pikafish = pikafish;   // 与 $ocr/ocr 一样保留两个名字
 
     const timerIds = new Set();
     function makeTimer(repeat, callback, millis) {
@@ -9180,6 +9360,12 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeOcrDetect", nativeOcrDetect, 8);
     installNativeFunction(state->context, global, "__aiNativeOcrRelease", nativeOcrRelease, 1);
     installNativeFunction(state->context, global, "__aiNativeOcrLiveCount", nativeOcrLiveCount, 0);
+    installNativeFunction(state->context, global, "__aiNativePikafishAvailable", nativePikafishAvailable, 0);
+    installNativeFunction(state->context, global, "__aiNativePikafishStart", nativePikafishStart, 3);
+    installNativeFunction(state->context, global, "__aiNativePikafishAnalyze", nativePikafishAnalyze, 4);
+    installNativeFunction(state->context, global, "__aiNativePikafishStop", nativePikafishStop, 0);
+    installNativeFunction(state->context, global, "__aiNativePikafishQuit", nativePikafishQuit, 0);
+    installNativeFunction(state->context, global, "__aiNativePikafishIsRunning", nativePikafishIsRunning, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesExists", nativeFilesExists, 1);
     installNativeFunction(state->context, global, "__aiNativeFilesIsFile", nativeFilesIsFile, 1);
     installNativeFunction(state->context, global, "__aiNativeFilesIsDir", nativeFilesIsDir, 1);

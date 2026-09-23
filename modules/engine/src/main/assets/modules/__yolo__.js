@@ -32,13 +32,24 @@ module.exports = function (runtime, scope) {
         if (packed === null) throw new Error("YOLO 推理失败");
 
         var result = [];
-        for (var i = 2; i + 5 < packed.length; i += 6) {
+        // 打包 v2：[preMs, infMs, cols, 每行 cols 个]；cols=6 为检测，6+3K 为姿态（每行带 K 个关键点）。
+        // 兼容旧 v1（[preMs, infMs, 每行 6 个]）：第三个字段不满足「合法行宽 + 长度整除」时按 v1 解。
+        var stride = 6, start = 2;
+        if (packed.length >= 9) {
+            var cols = Math.round(Number(packed[2]));
+            if (cols >= 6 && cols <= 306 && cols % 3 === 0 && Number(packed[2]) === cols &&
+                (packed.length - 3) % cols === 0) {
+                stride = cols;
+                start = 3;
+            }
+        }
+        for (var i = start; i + stride - 1 < packed.length; i += stride) {
             var left = Number(packed[i]);
             var top = Number(packed[i + 1]);
             var right = Number(packed[i + 2]);
             var bottom = Number(packed[i + 3]);
             var classId = Math.round(Number(packed[i + 5]));
-            result.push({
+            var item = {
                 classId: classId,
                 label: this.labels[classId] === undefined ? String(classId) : this.labels[classId],
                 score: Number(packed[i + 4]),
@@ -52,7 +63,20 @@ module.exports = function (runtime, scope) {
                     centerX: (left + right) / 2,
                     centerY: (top + bottom) / 2
                 }
-            });
+            };
+            if (stride > 6) {
+                // 姿态：每行尾部是 K 个 (x, y, score)
+                var keypoints = [];
+                for (var k = i + 6; k + 2 < i + stride; k += 3) {
+                    keypoints.push({
+                        x: Number(packed[k]),
+                        y: Number(packed[k + 1]),
+                        score: Number(packed[k + 2])
+                    });
+                }
+                item.keypoints = keypoints;
+            }
+            result.push(item);
         }
         result.preprocessMs = packed.length >= 2 ? Number(packed[0]) : 0;
         result.inferenceMs = packed.length >= 2 ? Number(packed[1]) : 0;

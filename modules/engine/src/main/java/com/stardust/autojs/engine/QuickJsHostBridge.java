@@ -78,6 +78,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -941,6 +942,312 @@ final class QuickJsHostBridge implements AutoCloseable,
     /** `$ocr.liveCount()`：进程内未释放的会话数（探针用；两种后端都算）。 */
     public int ocrLiveCount() {
         return Ocr.liveCount() + PPOcr.liveCount();
+    }
+
+    // ---- Pikafish（$pikafish：中国象棋 NNUE 原生引擎）----
+    //
+    // 引擎本体是 third-party/Pikafish（arm64 上编译成 libpikafish.so，见 build-pikafish.ps1），
+    // UCI 会话跑在 native 线程里。这里只做三件事：找 NNUE 权重、启停会话、把 UCI 输出
+    // 解析成 JSON 交给 bootstrap 的 $pikafish。分数/着法语义（红方视角等）由 JS 侧适配。
+
+    private static final String PIKAFISH_NNUE_NAME = "pikafish.nnue";
+
+    /**
+     * `$pikafish.start([options])`：启动（或复用）引擎会话。
+     *
+     * @param evalFile NNUE 权重路径；null/空 = 依次找 filesDir / externalFilesDir 下的 pikafish.nnue
+     * @param threads  搜索线程数（K40 上 2~4 比较合适）
+     * @param hashMb   置换表大小 MB（64~256；权重本身常驻约 50MB，别开太大）
+     * @return JSON：{ok, running, evalFile, threads, hashMb} 或 {ok:false, error}
+     */
+    public String pikafishStart(String evalFile, int threads, int hashMb) throws JSONException {
+        JSONObject result = new JSONObject();
+        if (!PikafishNativeBridge.isAvailable()) {
+            result.put("ok", false);
+            result.put("error", "Pikafish 原生库不可用（" + PikafishNativeBridge.loadError()
+                    + "）；目前只随包 arm64-v8a");
+            return result.toString();
+        }
+        String nnue = resolvePikafishNnuePath(evalFile);
+        if (nnue == null) {
+            result.put("ok", false);
+            result.put("error", "找不到 " + PIKAFISH_NNUE_NAME + "（默认位置：" + defaultPikafishNnueHint()
+                    + "）；可以用 $pikafish.start({evalFile:'/绝对路径'}) 指定");
+            return result.toString();
+        }
+        boolean ok = PikafishNativeBridge.nativeStart(nnue, threads, hashMb);
+        result.put("ok", ok);
+        result.put("running", PikafishNativeBridge.nativeIsRunning());
+        result.put("evalFile", nnue);
+        result.put("threads", threads);
+        result.put("hashMb", hashMb);
+        if (!ok) {
+            result.put("error", "原生引擎启动失败（uciok/readyok 阶段超时；权重文件可读吗：" + nnue + "）");
+        }
+        return result.toString();
+    }
+
+    /**
+     * `$pikafish.analyze(fen, movetimeMs[, timeoutMs[, multiPv]])`：算一步棋（阻塞）。
+     *
+     * <p>multiPv &gt; 1 时引擎会同时报前 N 路着法（每路给分数/深度/主变），脚本侧可以
+     * 避开「游戏拒绝过的着法/循环排除表」再挑 —— 以前带排除表就只能退回 JS 引擎（深度 3~4），
+     * 这是 v1.1 补上的口子。
+     *
+     * @return JSON：成功 {ok:true, move, scoreCp|mate, depth, nodes, timeMs, pv,
+     * candidates:[{multipv,move,scoreCp,mix,depth,pv}...], raw}；失败 {ok:false, error}
+     */
+    public String pikafishAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv)
+            throws JSONException {
+        JSONObject result = new JSONObject();
+        if (!PikafishNativeBridge.isAvailable()) {
+            result.put("ok", false);
+            result.put("error", "Pikafish 原生库不可用（" + PikafishNativeBridge.loadError() + "）");
+            return result.toString();
+        }
+        String raw = PikafishNativeBridge.nativeAnalyze(fen, movetimeMs, timeoutMs, multiPv);
+        if (raw == null) {
+            raw = "";
+        }
+        String bestmoveLine = null;
+        // 同一路 multipv 取**最后**一条 info（搜索是逐层加深的，后面的深度更大）
+        Map<Integer, PikafishInfo> byPv = new TreeMap<>();
+        for (String line : raw.split("\n")) {
+            line = line.trim();
+            if (line.startsWith("bestmove")) {
+                bestmoveLine = line;
+                continue;
+            }
+            if (!line.startsWith("info ")) {
+                continue;
+            }
+            PikafishInfo info = parsePikafishInfoLine(line);
+            if (info.move == null) {
+                continue;
+            }
+            byPv.put(info.multipv, info);
+        }
+        String bestmove = null;
+        if (bestmoveLine != null) {
+            String[] bestParts = bestmoveLine.split("\\s+");
+            bestmove = bestParts.length >= 2 ? bestParts[1] : null;
+        }
+        if (byPv.isEmpty() && (bestmove == null || bestmove.isEmpty() || "(none)".equals(bestmove))) {
+            result.put("ok", false);
+            result.put("error", raw.isEmpty() ? "引擎没有输出" : raw);
+            return result.toString();
+        }
+        if (byPv.isEmpty()) {
+            // 极快收敛（如单步杀）时可能只有 bestmove、没有 info：当成一个无分数的候选
+            PikafishInfo info = new PikafishInfo();
+            info.move = bestmove;
+            byPv.put(1, info);
+        }
+        JSONArray candidates = new JSONArray();
+        for (PikafishInfo info : byPv.values()) {
+            candidates.put(info.toJson());
+        }
+        PikafishInfo top = byPv.values().iterator().next();
+        result.put("ok", true);
+        // 顶层 move 优先用引擎的 bestmove（与 MultiPV 次序一致的 1 号路），没有就用候选头名
+        result.put("move", bestmove != null && !bestmove.isEmpty() && !"(none)".equals(bestmove)
+                ? bestmove : top.move);
+        if (top.scoreCp != null) {
+            result.put("scoreCp", top.scoreCp.intValue());
+        }
+        if (top.mate != null) {
+            result.put("mate", top.mate.intValue());
+        }
+        if (top.depth != null) {
+            result.put("depth", top.depth.intValue());
+        }
+        if (top.seldepth != null) {
+            result.put("seldepth", top.seldepth.intValue());
+        }
+        if (top.nodes != null) {
+            result.put("nodes", top.nodes.intValue());
+        }
+        if (top.timeMs != null) {
+            result.put("timeMs", top.timeMs.intValue());
+        }
+        result.put("pv", top.pv);
+        result.put("candidates", candidates);
+        result.put("raw", raw);
+        return result.toString();
+    }
+
+    /** `$pikafish.stop()`：打断正在跑的搜索（analyze 会带着 bestmove 返回）。 */
+    public void pikafishStop() {
+        if (PikafishNativeBridge.isAvailable()) {
+            PikafishNativeBridge.nativeStop();
+        }
+    }
+
+    /** `$pikafish.quit()`：退出引擎线程（幂等；下次 start 会重新拉起）。 */
+    public void pikafishQuit() {
+        if (PikafishNativeBridge.isAvailable()) {
+            PikafishNativeBridge.nativeQuit();
+        }
+    }
+
+    public boolean pikafishIsRunning() {
+        return PikafishNativeBridge.isAvailable() && PikafishNativeBridge.nativeIsRunning();
+    }
+
+    public boolean pikafishAvailable() {
+        return PikafishNativeBridge.isAvailable();
+    }
+
+    /** 找权重：显式路径优先（不存在就算失败）；否则 filesDir → externalFilesDir。 */
+    private String resolvePikafishNnuePath(String evalFile) {
+        if (evalFile != null && evalFile.length() > 0) {
+            File file = new File(evalFile);
+            return file.isFile() ? file.getAbsolutePath() : null;
+        }
+        for (File candidate : defaultPikafishNnueCandidates()) {
+            if (candidate.isFile()) {
+                return candidate.getAbsolutePath();
+            }
+        }
+        return null;
+    }
+
+    private List<File> defaultPikafishNnueCandidates() {
+        List<File> candidates = new ArrayList<>();
+        try {
+            Context context = mRuntime.uiHandler.getContext().getApplicationContext();
+            candidates.add(new File(context.getFilesDir(), PIKAFISH_NNUE_NAME));
+            File external = context.getExternalFilesDir(null);
+            if (external != null) {
+                candidates.add(new File(external, PIKAFISH_NNUE_NAME));
+            }
+        } catch (Throwable ignored) {
+            // 拿不到 Context 时只能靠显式路径
+        }
+        return candidates;
+    }
+
+    private String defaultPikafishNnueHint() {
+        StringBuilder hint = new StringBuilder();
+        for (File candidate : defaultPikafishNnueCandidates()) {
+            if (hint.length() > 0) {
+                hint.append(" 或 ");
+            }
+            hint.append(candidate.getAbsolutePath());
+        }
+        return hint.length() == 0 ? "(无法解析默认目录)" : hint.toString();
+    }
+
+    /** 一条 UCI info 行解析出来的候选（multipv 路号 + 着法 + 分数/深度/主变）。 */
+    private static final class PikafishInfo {
+        int multipv = 1;
+        String move;
+        Integer scoreCp;
+        Integer mate;
+        Integer depth;
+        Integer seldepth;
+        Integer nodes;
+        Integer timeMs;
+        String pv = "";
+
+        JSONObject toJson() throws JSONException {
+            JSONObject item = new JSONObject();
+            item.put("multipv", multipv);
+            item.put("move", move == null ? "" : move);
+            if (scoreCp != null) {
+                item.put("scoreCp", scoreCp.intValue());
+            }
+            if (mate != null) {
+                item.put("mate", mate.intValue());
+            }
+            if (depth != null) {
+                item.put("depth", depth.intValue());
+            }
+            if (seldepth != null) {
+                item.put("seldepth", seldepth.intValue());
+            }
+            if (nodes != null) {
+                item.put("nodes", nodes.intValue());
+            }
+            if (timeMs != null) {
+                item.put("timeMs", timeMs.intValue());
+            }
+            item.put("pv", pv);
+            return item;
+        }
+    }
+
+    /**
+     * 解析 "info depth 14 seldepth 22 multipv 2 score cp 12 nodes 123 time 789 pv h2e2 ..."。
+     * move = pv 的第一个 token（引擎着法规则就是主变头）。
+     */
+    private static PikafishInfo parsePikafishInfoLine(String infoLine) {
+        PikafishInfo info = new PikafishInfo();
+        String[] tokens = infoLine.split("\\s+");
+        for (int i = 0; i < tokens.length; i++) {
+            switch (tokens[i]) {
+                case "multipv":
+                    if (i + 1 < tokens.length) {
+                        Integer value = tryParseInt(tokens[i + 1]);
+                        if (value != null && value.intValue() > 0) {
+                            info.multipv = value.intValue();
+                        }
+                    }
+                    break;
+                case "depth":
+                    info.depth = intAt(tokens, i + 1);
+                    break;
+                case "seldepth":
+                    info.seldepth = intAt(tokens, i + 1);
+                    break;
+                case "nodes":
+                    info.nodes = intAt(tokens, i + 1);
+                    break;
+                case "time":
+                    info.timeMs = intAt(tokens, i + 1);
+                    break;
+                case "score":
+                    if (i + 2 < tokens.length) {
+                        Integer value = tryParseInt(tokens[i + 2]);
+                        if ("cp".equals(tokens[i + 1])) {
+                            info.scoreCp = value;
+                        } else if ("mate".equals(tokens[i + 1])) {
+                            info.mate = value;
+                        }
+                    }
+                    break;
+                case "pv":
+                    StringBuilder pv = new StringBuilder();
+                    for (int j = i + 1; j < tokens.length; j++) {
+                        if (pv.length() > 0) {
+                            pv.append(' ');
+                        }
+                        pv.append(tokens[j]);
+                    }
+                    info.pv = pv.toString();
+                    i = tokens.length;  // pv 之后没有别的字段
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (!info.pv.isEmpty()) {
+            int space = info.pv.indexOf(' ');
+            info.move = space > 0 ? info.pv.substring(0, space) : info.pv;
+        }
+        return info;
+    }
+
+    private static Integer intAt(String[] tokens, int index) {
+        return index < tokens.length ? tryParseInt(tokens[index]) : null;
+    }
+
+    private static Integer tryParseInt(String text) {
+        try {
+            return Integer.valueOf(Integer.parseInt(text));
+        } catch (NumberFormatException error) {
+            return null;
+        }
     }
 
     private static String normalizeQuickJsBackend(String backend) {

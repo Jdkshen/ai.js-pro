@@ -12,15 +12,29 @@ import android.view.View;
 public class Colors {
 
     public static int parse(Context context, String color) {
-        if (color.startsWith("@color/")) {
+        if (color == null) {
+            throw new IllegalArgumentException("Unknown color");
+        }
+        String text = color.trim();
+        // 允许直接写颜色整数（`colors.parseColor("#F5C56B")` 的返回值）：JS 侧经常这么传，
+        // 而 `Color.parseColor("-670357")` 会抛 Unknown color（真机日志：
+        // `Cannot set view attribute textColor=-670357 Unknown color`）。
+        if (text.matches("-?\\d+")) {
+            try {
+                return (int) Long.parseLong(text);
+            } catch (NumberFormatException ignored) {
+                // 超出范围就落到标准解析
+            }
+        }
+        if (text.startsWith("@color/")) {
             // app 与工程资源包两个包名都要试，见 ResIds。
             return context.getResources().getColor(ResIds.of(context,
-                    color.substring("@color/".length()), "color"));
+                    text.substring("@color/".length()), "color"));
         }
-        if (color.startsWith("@android:color/")) {
-            return Color.parseColor(color.substring(15));
+        if (text.startsWith("@android:color/")) {
+            return Color.parseColor(text.substring(15));
         }
-        return Color.parseColor(color);
+        return Color.parseColor(text);
     }
 
     public static int parse(View view, String color){

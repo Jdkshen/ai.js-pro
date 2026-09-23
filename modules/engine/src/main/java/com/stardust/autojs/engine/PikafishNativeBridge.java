@@ -1,0 +1,73 @@
+package com.stardust.autojs.engine;
+
+/**
+ * libpikafish.so 的 JNI 门面：中国象棋 NNUE 引擎（third-party/Pikafish）。
+ *
+ * <p>引擎本体跑在 native 侧的独立线程上（UCI 循环 + 标准输入输出重定向），
+ * 这里的方法就是「投喂一条命令 / 等待一条结果」的同步封装：
+ * {@link #nativeStart} 建会话（uci → setoption → isready），
+ * {@link #nativeAnalyze} 投喂 position/go 并等到 bestmove（阻塞调用线程，耗时约等于 movetime）。
+ *
+ * <p>会话是**进程级单例**（native 侧同一时刻只支持一个引擎实例），
+ * 多个脚本引擎（含 threads worker）共享它，native 侧用互斥锁串行化 analyze。
+ * 所以 {@link #nativeQuit} 只在真的要卸载引擎时调（本类不随 QuickJsHostBridge 关闭自动退出）。
+ *
+ * <p>目前只有 arm64-v8a 随包这个 .so；其它 ABI 上加载失败会记在 {@link #isAvailable()} /
+ * {@link #loadError()} 里，让脚本拿到一条能看懂的报错，而不是 UnsatisfiedLinkError。
+ */
+public final class PikafishNativeBridge {
+
+    private static final boolean LOADED;
+    private static final String LOAD_ERROR;
+
+    static {
+        boolean loaded = false;
+        String error = "";
+        try {
+            System.loadLibrary("pikafish");
+            loaded = true;
+        } catch (Throwable failure) {
+            error = failure.toString();
+        }
+        LOADED = loaded;
+        LOAD_ERROR = error;
+    }
+
+    private PikafishNativeBridge() {
+    }
+
+    /** 本设备能不能用（.so 是否加载成功）。 */
+    public static boolean isAvailable() {
+        return LOADED;
+    }
+
+    /** 加载失败原因（成功时是空串）。 */
+    public static String loadError() {
+        return LOAD_ERROR;
+    }
+
+    /**
+     * 启动（或复用）引擎会话；引擎已启动时直接返回 true。
+     *
+     * @param evalFilePath NNUE 权重文件绝对路径
+     * @param threads      搜索线程数（native 侧下限 1、默认 2）
+     * @param hashMb       置换表 MB（native 侧下限 16、默认 64）
+     */
+    public static native boolean nativeStart(String evalFilePath, int threads, int hashMb);
+
+    /**
+     * 算一步棋（阻塞）。
+     *
+     * @param multiPv 同时分析的着法路数（1 = 只算最好的一手；&gt;1 用于避开排除表挑次优）
+     * @return 所有带 pv 的 info 行 + bestmove 行（按行拼接）；失败时 "error: ..."
+     */
+    public static native String nativeAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv);
+
+    /** 打断正在跑的搜索（go 会以 bestmove 正常收尾，analyze 随即返回）。 */
+    public static native void nativeStop();
+
+    /** 退出引擎线程并释放内存（幂等）。 */
+    public static native void nativeQuit();
+
+    public static native boolean nativeIsRunning();
+}
