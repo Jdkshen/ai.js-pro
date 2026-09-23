@@ -18,9 +18,10 @@ const PANEL = {
     /**
      * ⚠️ 2026-09-20 用户口径（「悬浮窗面板在上面，日志在下面」；又提「字太小/面板好看点/轮次没显示完整」）：
      *   控制面板（三行按钮 + 状态 + 进度）在上方；日志单独一窗在下方。
-     *   高度 = 3×rowHeight(48) + statusHeight(42) + stepHeight(144) + padding/余量 ≈ 364。
+     *   高度 = 4×rowHeight(48) + statusHeight(42) + stepHeight(144) + padding/余量 ≈ 418。
+     *   （2026-09-24 新增第 4 行 = 参数滑条「算棋时间 / 线程」，面板上滑动选择）
      */
-    height: 364,
+    height: 418,
     marginX: 30,
     /** 默认停在棋盘上沿之上（K40 ≈ 0.11 × 屏高）；定位成功后由 snapPanelAboveBoard 再贴一次。 */
     defaultTopRatio: 0.11,

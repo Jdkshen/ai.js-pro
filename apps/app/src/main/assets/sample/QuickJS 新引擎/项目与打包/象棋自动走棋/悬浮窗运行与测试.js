@@ -749,6 +749,22 @@ function rowLabel(text) {
         'px" textColor="' + C.status + '" textSize="' + themeTokens.FONT.button + '" gravity="center"/>';
 }
 
+/** 参数滑条：用带底色的 <text> 冒充（拖动改值；这个引擎里 text 的 touch 能到，见 button 的说明）。
+ *  ⚠1 2026-09-24 真机：11sp 下 6 格会被截断（“算棋 3.5s ■□□□□” 后面就没了）——
+ *     减到 4 格 + 10sp，并且留出 padding，保证「值 + 格子」完整显示。 */
+function slider(id, width) {
+    return '    <text id="' + id + '" text="" w="' + width + 'px" h="' + PANEL.rowHeight + 'px" bg="' +
+        C.card + '" radius="' + PANEL.radiusCard + '" textColor="' + C.step + '" textSize="' +
+        themeTokens.FONT.status + '" gravity="center" padding="4px"/>';
+}
+/** 滑条几何：条宽与第 n 条在窗口内的左偏移（要和 XML 里 paramRow 的排布保持一致）。 */
+function sliderWidth() {
+    return Math.round((PANEL.width - panelPx(8) * 3) / 2);
+}
+function sliderLeft(index) {
+    return panelPx(8) + index * (sliderWidth() + panelPx(8));
+}
+
 const ROW_H = PANEL.rowHeight;
 const XML = [
     '<vertical id="root" w="' + PANEL.width + 'px" h="' + PANEL.height +
@@ -781,6 +797,11 @@ const XML = [
     button("drawBtn", "绘制：关", 130, C.btnDim, C.btnDimFg),
     button("clearBtn", "清空日志", 135, C.btnDim, C.btnDimFg),
     button("closeBtn", "关闭", 105, C.btnDanger),
+    '  </horizontal>',
+    // 第 4 行：参数滑条（算棋时间 / 线程）—— 拖动改值，松手生效并写盘
+    '  <horizontal id="paramRow" h="' + ROW_H + 'px">',
+    slider("thinkSlider", sliderWidth()),
+    slider("threadsSlider", sliderWidth()),
     '  </horizontal>',
     '  <text id="status" text="准备中…" w="' + (PANEL.width - panelPx(16)) +
     'px" h="' + PANEL.statusHeight + 'px" textColor="' + C.status +
@@ -1066,6 +1087,7 @@ function render() {
         win.hideBtn.setText("抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")));
         win.alignBtn.setText("微调：" + (autoAlignOn ? "开" : "关"));
         win.drawBtn.setText("绘制：" + DRAW_LABEL[drawMode]);
+        renderParamSliders();
         if (compactWin) {
             compactWin.compactStatus.setText(compactStateText());
             compactWin.compactMode.setText(UI_MODE_LABEL[modeKey] || MODE_LABEL[modeKey]);
@@ -1074,6 +1096,114 @@ function render() {
     } catch (error) {
         console.log("[floaty] 渲染失败：" + error);
     }
+}
+
+// ---- 参数滑条：算棋时间 / Pikafish 线程（2026-09-24 用户：在面板上滑动选择）----
+const THINK_MIN_MS = 500;
+const THINK_MAX_MS = 10000;
+const THINK_STEP_MS = 250;
+const THREAD_MIN = 1;
+const THREAD_MAX = 8;
+let thinkSliderEl = null;
+let threadsSliderEl = null;
+
+/** 滑条选择的持久化（storages；取不到就退化成「本次会话生效」）。 */
+function paramStore() {
+    try {
+        if (typeof storages === "undefined" || typeof storages.create !== "function") {
+            return null;
+        }
+        return storages.create("xiangqi-panel");
+    } catch (error) {
+        return null;
+    }
+}
+
+/** 当前 Pikafish 线程数（面板没设过就是引擎默认 2）。 */
+function currentThreads() {
+    const raw = pikafishOptions && pikafishOptions.threads != null
+        ? Math.round(Number(pikafishOptions.threads)) : 2;
+    return isFinite(raw) && raw >= THREAD_MIN && raw <= THREAD_MAX ? raw : 2;
+}
+
+/** 滑条文案：`前缀 值 ■■□□`（4 格示意，拖到哪儿一眼看出；格数多了会被截断，见 slider 注释）。 */
+function sliderBarText(prefix, valueText, fraction) {
+    const cells = 4;
+    const filled = Math.max(0, Math.min(cells, Math.round(fraction * cells)));
+    let bar = "";
+    for (let i = 0; i < cells; i++) {
+        bar += i < filled ? "■" : "□";
+    }
+    return prefix + " " + valueText + " " + bar;
+}
+
+function renderParamSliders() {
+    if (thinkSliderEl) {
+        thinkSliderEl.setText(sliderBarText("算棋", (movetimeMsKey / 1000).toFixed(1) + "s",
+            (movetimeMsKey - THINK_MIN_MS) / (THINK_MAX_MS - THINK_MIN_MS)));
+    }
+    if (threadsSliderEl) {
+        const threads = currentThreads();
+        threadsSliderEl.setText(sliderBarText("线程", String(threads),
+            (threads - THREAD_MIN) / (THREAD_MAX - THREAD_MIN)));
+    }
+}
+
+/**
+ * 拖动滑条：按手指 x 落在条内的比例取值；按下/拖动即时刷新，松手 `commit` 落定。
+ * 手指 x 优先用 `event.getX()`（相对该控件）；拿不到就用屏幕坐标 − 窗口 x − 条左偏移。
+ */
+function bindParamSlider(view, opts) {
+    if (!view) {
+        return;
+    }
+    function valueAt(event) {
+        let x = null;
+        try {
+            if (typeof event.getX === "function") {
+                const local = Number(event.getX());
+                if (isFinite(local)) {
+                    x = local;
+                }
+            }
+        } catch (error) {
+            x = null;
+        }
+        if (x == null) {
+            let winX = NaN;
+            try {
+                winX = Number(activePanelWindow().getX(true));
+            } catch (error) {
+                winX = NaN;
+            }
+            if (!isFinite(winX)) {
+                return null;
+            }
+            x = Number(event.getRawX()) - winX - opts.left;
+        }
+        const fraction = Math.max(0, Math.min(1, x / opts.width));
+        const steps = Math.round(fraction * (opts.max - opts.min) / opts.step);
+        return Math.max(opts.min, Math.min(opts.max, opts.min + steps * opts.step));
+    }
+    view.on("touch", function (event) {
+        const action = event.getAction();
+        if (action === 0 || action === 2) {
+            const value = valueAt(event);
+            if (value != null && value !== opts.get()) {
+                opts.set(value);
+                renderParamSliders();
+            }
+        } else if (action === 1) {
+            const value = valueAt(event);
+            if (value != null) {
+                opts.set(value);
+                renderParamSliders();
+                opts.commit(value);
+            }
+        }
+        return true;
+    });
+    renderParamSliders();
 }
 
 /**
@@ -4860,6 +4990,78 @@ function main() {
         }
     });
     logLine("按钮绑定完成：模式/收起/隐藏抓帧/微调/开始/停止/定位/识别/轮到我/换我方/新会话/自检/契约/清空/关闭");
+
+    // ---- 参数滑条（2026-09-24 用户：在面板滑动选「算棋时间 / 线程」）----
+    thinkSliderEl = win.thinkSlider;
+    threadsSliderEl = win.threadsSlider;
+    bindParamSlider(thinkSliderEl, {
+        left: sliderLeft(0), width: sliderWidth(),
+        min: THINK_MIN_MS, max: THINK_MAX_MS, step: THINK_STEP_MS,
+        get: function () { return movetimeMsKey; },
+        set: function (value) { movetimeMsKey = value; },
+        commit: function (value) {
+            if (driver && typeof driver.setMovetime === "function") {
+                driver.setMovetime(value);
+            }
+            const store = paramStore();
+            if (store) {
+                try {
+                    store.put("thinkMs", value);
+                } catch (error) {
+                    // 写不进就只生效本次
+                }
+            }
+            logLine("算棋时间：" + (value / 1000).toFixed(1) + "s（下次算棋生效）");
+        }
+    });
+    bindParamSlider(threadsSliderEl, {
+        left: sliderLeft(1), width: sliderWidth(),
+        min: THREAD_MIN, max: THREAD_MAX, step: 1,
+        get: currentThreads,
+        set: function (value) {
+            pikafishOptions = Object.assign({}, pikafishOptions || {}, { threads: value });
+        },
+        commit: function (value) {
+            engineModule.configurePikafish({ threads: value });
+            if (driver && typeof driver.setPikafish === "function") {
+                driver.setPikafish(pikafishOptions);
+            }
+            const store = paramStore();
+            if (store) {
+                try {
+                    store.put("threads", value);
+                } catch (error) {
+                    // 写不进就只生效本次
+                }
+            }
+            logLine("Pikafish 线程：" + value + "（下次算棋生效，会重启引擎）");
+        }
+    });
+    // 上次滑过的值（storages 持久化；缺省 3500ms / 2 线程）
+    (function loadParamStore() {
+        const store = paramStore();
+        if (!store) {
+            return;
+        }
+        try {
+            const think = Math.round(Number(store.get("thinkMs", 0)));
+            if (isFinite(think) && think >= THINK_MIN_MS && think <= THINK_MAX_MS) {
+                movetimeMsKey = think;
+            }
+        } catch (error) {
+            // 读失败用默认
+        }
+        try {
+            const th = Math.round(Number(store.get("threads", 0)));
+            if (isFinite(th) && th >= THREAD_MIN && th <= THREAD_MAX) {
+                pikafishOptions = Object.assign({}, pikafishOptions || {}, { threads: th });
+                engineModule.configurePikafish({ threads: th });
+            }
+        } catch (error) {
+            // 读失败用默认
+        }
+    }());
+    renderParamSliders();
     // 抓帧时隐藏面板：开着时面板不会盖住棋盘（实测面板会挡住上面几行棋子）
     // 隐藏抓帧：自动 → 开 → 关 循环（默认「自动」= 只在面板真的压住棋盘时才藏，省每帧 ~100ms）
     win.hideBtn.on("click", function () {
@@ -5141,6 +5343,7 @@ function main() {
                 }, stopAfterMs);
             }
         }
+        renderParamSliders();   // 参数滑条始终反映当前值（autorun 可能改过 movetime/线程）
         render();
     }
 }

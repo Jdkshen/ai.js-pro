@@ -4780,6 +4780,26 @@ function createDriver(options) {
         },
         grid: function () { return grid; },
         setGrid: function (value) { grid = value; },
+        /**
+         * 面板滑条：改算棋时间预算（下一次 COMPUTE 生效，不用重启循环）。
+         * 驱动自己的 cfg 与状态机的 cfg 都要改：状态机发 COMPUTE 效果时读它自己的 cfg（panel 可滑）。
+         */
+        setMovetime: function (ms) {
+            const value = Math.round(Number(ms));
+            if (!isFinite(value) || value < 100 || value > 60000) {
+                return null;
+            }
+            cfg.movetimeMs = value;
+            if (machine && machine.config) {
+                machine.config.movetimeMs = value;
+            }
+            return value;
+        },
+        /** Pikafish 线程等参数：写入驱动 cfg，下次算棋生效（worker/inline 两条路都从 cfg 取）。 */
+        setPikafish: function (opts) {
+            cfg.pikafish = opts || null;
+            return cfg.pikafish;
+        },
         lastResult: function () { return lastResult; },
         lastBoard: function () { return lastBoard ? lastBoard.slice() : null; },
         lastReliable: function () {
