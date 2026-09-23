@@ -112,7 +112,7 @@ const overlayDraw = load("src/vision/overlay-draw.js");
 const loopLock = load("src/automation/loop-lock.js");
 // 跨引擎互锁总线（与主界面 main.js 共用）：状态互锁 + 双向停止 + 配置双向同步。
 // 锁只能「拒绝同时跑」，看不到对面在不在跑、也没法从这边停那边 —— 所以另开一条文件总线。
-const busModule = load("src/app/panel-bus.js");
+// A1 批次3 归一：创建口收进 bootstrap（createBus → panel-bus 单实现），装配时同一实例注入 app。
 // 单格 OCR（PP-OCRv6，模型随 APK 一起打包）：直接读那一格的汉字，给「到底有没有子」一个证据
 const pieceOcr = load("src/vision/piece-ocr.js");
 const boardScan = load("src/vision/board-scan.js");
@@ -275,7 +275,7 @@ let lagCount = 0;
 
 // ==================== 跨引擎互锁总线（面板侧） ====================
 // 两个入口跑在不同 JS 引擎里，只能用文件：各自的 state 快照 + 单槽命令文件（见 panel-bus.js）。
-const bus = busModule.createPanelBus({
+const bus = bootstrapModule.createBus({
     owner: "floaty",
     files: files,
     log: function (text) { console.log("[bus] " + text); }
@@ -3155,6 +3155,8 @@ function ensureBoardService() {
     visionInjection.ready();
     app = bootstrapModule.createApp({
         owner: "floaty",
+        bus: bus,                            // A1 批次3：装配与入口共用同一总线实例
+        lockOwner: loopLock.OWNER_FLOATY,    // 退出还锁的令牌（与面板 acquire 口径一致）
         adapter: adapter,
         host: {
             files: (typeof files !== "undefined" ? files : null),
@@ -3170,7 +3172,7 @@ function ensureBoardService() {
             geometry: geometryModule,
             loopLock: loopLock
         },
-        paths: {},                           // 面板仍走自己的 panel-bus；不用 owner 文件通道
+        paths: {},                           // autorun 由面板自己读（不用装配器的配置加载）
         sink: function (text) { logLine(text); },
         // A1 批次2：状态性命令统一走控制器（参数/运行态校验 → handler → 记录事件）
         handlers: {

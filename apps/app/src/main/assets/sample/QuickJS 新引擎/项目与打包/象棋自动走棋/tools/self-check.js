@@ -6093,10 +6093,13 @@ check("视觉工厂：稳定帧采样必须返回数字数组（frame-gate 的�
     return true;
 });
 
-check("框架·装配：autorun 致命错误时 blocking=true，dispose 要还锁", function () {
+check("框架·装配：autorun 致命错误时 blocking=true；dispose 按 lockOwner 令牌还锁；app.bus = 注入实例", function () {
     const released = [];
+    const myBus = bootstrapModule.createBus({ owner: "self-check" });   // 无 files → 空总线
     const app = bootstrapModule.createApp({
         owner: "self-check",
+        lockOwner: "自检锁令牌",
+        bus: myBus,
         adapter: {
             capture: function () { return null; },
             screenSize: function () { return { width: 1080, height: 2400 }; },
@@ -6112,7 +6115,7 @@ check("框架·装配：autorun 致命错误时 blocking=true，dispose 要还�
         modules: {
             driverModule: { createDriver: function () { return { start: function () { return "X"; }, stop: function () { } }; } },
             locateBoard: {}, recognizeBoard: {}, geometry: {},
-            loopLock: { acquire: function () { return true; }, release: function () { released.push(1); return true; }, isHeld: function () { return false; }, lockPath: function () { return "/tmp/lock"; } }
+            loopLock: { acquire: function () { return true; }, release: function (token) { released.push(token); return true; }, isHeld: function () { return false; }, lockPath: function () { return "/tmp/lock"; } }
         },
         paths: { autorun: "/tmp/autorun.json" }
     });
@@ -6122,8 +6125,46 @@ check("框架·装配：autorun 致命错误时 blocking=true，dispose 要还�
     if (app.config.clickMethod !== "bogus") {
         return "非法值不该被改写：" + app.config.clickMethod;
     }
+    if (app.bus !== myBus) {
+        return "app.bus 应当是注入的同一实例";
+    }
     app.dispose("测试");
-    return released.length === 1 ? true : "dispose 没有释放循环锁";
+    if (released.length !== 1) {
+        return "dispose 没有释放循环锁";
+    }
+    return released[0] === "自检锁令牌" ? true : ("dispose 的锁令牌不对（旧 owner-channel 就是这里静默失败）：" + released[0]);
+});
+
+check("框架·装配：createBus 单创建口 —— 有 files 走 panel-bus，缺 files 是空总线（不抛错）", function () {
+    const store = {};
+    const fakeFiles = {
+        getSdcardPath: function () { return "/sdcard"; },
+        join: function (a, b) { return a + "/" + b; },
+        ensureDir: function () { return true; },
+        read: function (p) { return store[p] || ""; },
+        write: function (p, t) { store[p] = String(t); return true; }
+    };
+    const realBus = bootstrapModule.createBus({ owner: "main", files: fakeFiles, now: function () { return 1000; } });
+    if (realBus.publish({ running: true, mode: "auto" }) !== true) {
+        return "有 files 时应当能发布状态";
+    }
+    if (!store["/sdcard/.aijspro-floaty/bus-state-main.json"]) {
+        return "发布后应当写入 bus-state-main.json";
+    }
+    const nullBus = bootstrapModule.createBus({ owner: "floaty" });
+    if (nullBus.publish({}) !== false) {
+        return "缺 files 时应当是空总线（publish=false）";
+    }
+    if (nullBus.poll() !== null) {
+        return "空总线 poll 应当返回 null";
+    }
+    if (nullBus.readOther().fresh !== false) {
+        return "空总线 readOther 应当是不在线口径";
+    }
+    if (String(nullBus.describeOther()).indexOf("没有状态") < 0) {
+        return "空总线描述应当说没有状态：" + nullBus.describeOther();
+    }
+    return true;
 });
 
 // ---------------------------------------------------------------- 识别绘制（人审用）

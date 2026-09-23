@@ -13,7 +13,7 @@
 const configModule = require("./config.js");
 const controllerModule = require("./controller.js");
 const sessionStoreModule = require("./session-store.js");
-const ownerChannelModule = require("./owner-channel.js");
+const panelBusModule = require("./panel-bus.js");
 const portsModule = require("../runtime/ports.js");
 const windowManagerModule = require("../runtime/window-manager.js");
 const recorderModule = require("../diagnostics/recorder.js");
@@ -22,10 +22,41 @@ const gameSessionModule = require("../services/game-session.js");
 const viewModel = require("./view-model.js");
 
 /**
+ * 跨引擎总线的**唯一创建口**（A1 批次3 归一）。
+ *
+ * 两个入口与装配器都从这里拿总线 —— 协议实现只有一份（panel-bus.js）。
+ * 原先并存的第二套实现 owner-channel.js 已删除：它的文件通道生产上从未启用
+ * （两入口一直传 paths: {}），而它的 release 用 "main"/"floaty" 调 loop-lock ——
+ * 与 loop-lock 的中文令牌（"主界面"/"悬浮窗面板"）对不上，是**静默 no-op**。
+ *
+ * 没有 files 的宿主（测试桩、装配前算路）拿到空总线：行为=「对面永远没有状态」，不抛错。
+ *
+ * @param options { owner, files, now?, log?, freshMs? }
+ */
+function createBus(options) {
+    const opts = options || {};
+    const owner = String(opts.owner || "main");
+    const files = opts.files;
+    if (files && typeof files.join === "function") {
+        return panelBusModule.createPanelBus({
+            owner: owner,
+            files: files,
+            now: opts.now,
+            log: typeof opts.log === "function" ? opts.log : function () { },
+            freshMs: opts.freshMs
+        });
+    }
+    return panelBusModule.createNullBus(owner);
+}
+
+/**
  * @param options {
  *   owner, adapter, host: { files, context, images, win, sleep, now, readFile, writeFile },
  *   modules: { driverModule, locateBoard, recognizeBoard, geometry, loopLock },
- *   paths: { autorun, command, state, frameDir },
+ *   paths: { autorun },
+ *   bus?（跨引擎总线实例：用 createBus(...) 建好后注入，装配与入口共用同一实例；
+ *         缺省时按 host.files 自动兜底，测试桩拿到空总线）、
+ *   lockOwner?（退出还锁用的 loop-lock 令牌，如 loopLock.OWNER_MAIN；缺省回退 owner）、
  *   panel: { height, width },
  *   handlers: { START, STOP, ... }（由入口提供，业务细节仍归入口）
  * }
@@ -128,15 +159,14 @@ function createApp(options) {
         extras: opts.driverExtras || null   // 入口的驱动附加依赖（isTrustworthy/screen/…），A1 迁移口
     });
 
-    // ---- 7) 单运行者 + 跨引擎通道 ----
-    const owner = ownerChannelModule.createOwnerChannel({
+    // ---- 7) 跨引擎总线（单实现：panel-bus.js；A1 批次3 归一）----
+    // 入口用 bootstrapModule.createBus(...) 建好实例后注入（opts.bus），装配与入口
+    // **同一实例**；没注入时按 host.files 兜底建一份（测试桩 → 空总线）。
+    const bus = opts.bus || createBus({
         owner: opts.owner || "floaty",
-        lock: modules.loopLock,
-        writeFile: writeFile,
-        readFile: readFile,
-        commandPath: paths.command,
-        statePath: paths.state,
-        now: host.now
+        files: host.files,
+        now: host.now,
+        log: typeof opts.busLog === "function" ? opts.busLog : log
     });
 
     // ---- 8) 控制器 ----
@@ -168,7 +198,13 @@ function createApp(options) {
             log("退出时停止会话出错：" + error);
         }
         try {
-            owner.release();
+            // 还锁要按 loop-lock 的**令牌口径**（入口传 lockOwner，如 loopLock.OWNER_MAIN）。
+            // 旧路径经 owner-channel 用 "main"/"floaty" 调 release —— 与 loop-lock 的中文
+            // 令牌对不上，实际是静默 no-op（A1 批次3 跟着协议归一一起修）。
+            const lock = modules.loopLock;
+            if (lock && typeof lock.release === "function") {
+                lock.release(opts.lockOwner || opts.owner || "floaty");
+            }
         } catch (error) {
             log("退出时释放锁出错：" + error);
         }
@@ -200,7 +236,7 @@ function createApp(options) {
         windows: windows,
         boards: boards,
         session: session,
-        owner: owner,
+        bus: bus,
         controller: controller,
         viewModel: viewModel,
         registerExitHook: registerExitHook,
@@ -211,4 +247,4 @@ function createApp(options) {
     };
 }
 
-module.exports = { createApp: createApp };
+module.exports = { createApp: createApp, createBus: createBus };

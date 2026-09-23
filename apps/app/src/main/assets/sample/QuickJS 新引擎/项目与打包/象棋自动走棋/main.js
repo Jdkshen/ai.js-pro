@@ -500,11 +500,11 @@ const pipelineFactory = require("./src/vision/pipeline-factory.js");
 const frameGateModule = require("./src/vision/frame-gate.js");
 const boardScan = require("./src/vision/board-scan.js");
 const engineModule = require("./src/engine/engine-router.js");   // 内置 JS 引擎 ⇄ Pikafish（原生 NNUE）
-const busModule = require("./src/app/panel-bus.js");
 
 // 跨引擎互锁（与悬浮窗面板共用一个文件总线）：状态互锁 + 双向停止 + 配置双向同步。
-// 详见 src/app/panel-bus.js（为什么用文件、为什么放 /sdcard/.aijspro-floaty）。
-const bus = busModule.createPanelBus({
+// A1 批次3 归一：创建口收进 bootstrap（createBus → panel-bus 单实现），
+// 装配时把**同一个实例**注入 createApp（app.bus），不再各处自己 new 一套协议对象。
+const bus = bootstrapModule.createBus({
     owner: "main",
     files: files,
     log: function (text) { console.log("[bus] " + text); }
@@ -560,6 +560,8 @@ visionInjection.gate = frameGateModule.create({ log: function () { } });
  */
 const app = bootstrapModule.createApp({
     owner: "main",
+    bus: bus,                            // A1 批次3：装配与入口共用同一总线实例
+    lockOwner: loopLock.OWNER_MAIN,      // 退出还锁的令牌（与入口 acquire 口径一致）
     adapter: adapter,
     host: {
         files: (typeof files !== "undefined" ? files : null),
@@ -575,7 +577,7 @@ const app = bootstrapModule.createApp({
         geometry: geometryModule,
         loopLock: loopLock
     },
-    paths: {},                           // 页面仍走自己的 panel-bus；不用 owner 文件通道
+    paths: {},                           // 页面不读 autorun 文件（配置走页面的通道）
     sink: function (text) { console.log("[xiangqi][app] " + text); },
     // 会话静态注入（识别/定位都指向服务层；驱动不再自己拼链路）
     recognize: function (options) { return app.boards.recognizeSmart(options || {}); },

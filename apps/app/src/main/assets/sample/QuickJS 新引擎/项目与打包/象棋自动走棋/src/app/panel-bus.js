@@ -184,7 +184,34 @@ function createPanelBus(options) {
     };
 }
 
+/**
+ * 空总线（null-object）：给「没有 files 的宿主」（测试桩、装配前算路）用。
+ * API 与 createPanelBus 完全一致：行为 =「对面永远没有状态」，**不抛错**。
+ * 两个入口在装配完成前也用它当占位（拿到 app.bus 后替换）。
+ */
+function createNullBus(ownerArg) {
+    const owner = String(ownerArg || "main");
+    const other = owner === "main" ? "floaty" : "main";
+    const who = owner === "main" ? "面板" : "页面";
+    return {
+        owner: owner,
+        other: other,
+        dir: "",
+        paths: function () {
+            return { dir: "", state: "", otherState: "", command: "" };
+        },
+        publish: function () { return false; },
+        readOther: function () { return { owner: other, fresh: false, ageMs: null, state: null }; },
+        describeOther: function () { return who + "：没有状态（还没启动过？）"; },
+        send: function () { return false; },
+        stopOther: function () { return false; },
+        syncConfig: function () { return false; },
+        poll: function () { return null; }
+    };
+}
+
 module.exports = {
     createPanelBus: createPanelBus,
+    createNullBus: createNullBus,
     resolveDir: resolveDir
 };
