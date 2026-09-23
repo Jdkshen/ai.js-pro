@@ -5744,6 +5744,8 @@ const busModule = require("../src/app/panel-bus.js");
 const pipelineFactoryModule = require("../src/vision/pipeline-factory.js");
 const moveLedgerModule = require("../src/chess/move-ledger.js");
 const positionTrackerModule = require("../src/services/position-tracker.js");
+const attemptBudgetModule = require("../src/automation/attempt-budget.js");
+const crossFrameGateModule = require("../src/automation/cross-frame-gate.js");
 
 check("框架·文案：未知状态要原样返回，不能悄悄变成「未知」把新状态藏起来", function () {
     if (labelsModule.stateText("CLICKING") !== "点击中") {
@@ -6295,6 +6297,45 @@ check("驱动·账本影子：tracker() 访问器存在；newSession 后账本�
     const after = driver.tracker();
     return (after && after.position === null && after.historyStatus === "unknown")
         ? true : ("newSession 后账本应空白：" + JSON.stringify(after));
+});
+
+check("尝试预算：同着法/同局面超限拦截，清零后从头计数", function () {
+    const budget = attemptBudgetModule.createAttemptBudget({ limitPerMove: 2, limitPerPosition: 10 });
+    const ticket = { sessionId: 1, baseFen: "FEN", baseSide: "w", moveICCS: "a0a1" };
+    const first = budget.take(ticket);
+    const second = budget.take(ticket);
+    const third = budget.take(ticket);
+    if (first.over || second.over) { return "限额内不应拦截"; }
+    if (!third.over || String(third.reason).indexOf("a0a1") < 0) {
+        return "超限应拦截并带着法：" + third.reason;
+    }
+    budget.clear("测试");
+    const again = budget.take(ticket);
+    if (again.over || again.moveCount !== 1) { return "清零后应从头计数：" + again.moveCount; }
+    const posBudget = attemptBudgetModule.createAttemptBudget({ limitPerMove: 10, limitPerPosition: 2 });
+    posBudget.take({ sessionId: 1, baseFen: "FEN", baseSide: "w", moveICCS: "a0a1" });
+    posBudget.take({ sessionId: 1, baseFen: "FEN", baseSide: "w", moveICCS: "b0b1" });
+    const posThird = posBudget.take({ sessionId: 1, baseFen: "FEN", baseSide: "w", moveICCS: "c0c1" });
+    return (posThird.over && String(posThird.reason).indexOf("局面") >= 0)
+        ? true : ("局面限额应生效：" + posThird.reason);
+});
+
+check("跨帧佐证门：同一解释要连续两帧；应手同理；换键/ reset 重新计数", function () {
+    let obs = 1;
+    const gate = crossFrameGateModule.createCrossFrameGate({ sample: function () { return obs; } });
+    const first = gate.supportedByTwoFrames(["board"], "唯一合法单步 a0a1");
+    if (first.ok || !first.wait) { return "第一帧应当暂缓"; }
+    obs = 2;
+    const second = gate.supportedByTwoFrames(["board"], "唯一合法单步 a0a1");
+    if (!second.ok) { return "第二帧（新观测序号）应当通过"; }
+    const other = gate.supportedByTwoFrames(["board"], "唯一合法单步 b0b1");
+    if (other.ok) { return "换了键应当重新计数"; }
+    const r1 = gate.replyCorroborated("a0a1>b0b1>-");
+    const r2 = gate.replyCorroborated("a0a1>b0b1>-");
+    if (r1.ok || !r2.ok) { return "应手也要两次佐证"; }
+    if (gate.replyCorroborated(null).ok !== false) { return "空键不应通过"; }
+    gate.reset("测试");
+    return gate.supportedByTwoFrames(["board"], "唯一合法单步 a0a1").ok ? "reset 后应重新计数" : true;
 });
 
 // ---------------------------------------------------------------- 识别绘制（人审用）

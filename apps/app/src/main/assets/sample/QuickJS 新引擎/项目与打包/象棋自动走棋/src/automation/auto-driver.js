@@ -29,6 +29,8 @@ const rulesModule = require("../chess/rules.js");
 const positionTrackerModule = require("../services/position-tracker.js");
 const defaults = require("../util/defaults.js");
 const logRing = require("../diagnostics/log-ring.js");
+const attemptBudgetModule = require("./attempt-budget.js");
+const crossFrameGateModule = require("./cross-frame-gate.js");
 
 /**
  * 合法棋子字符（FEN 字母，大写红、小写黑）。
@@ -549,14 +551,13 @@ function createDriver(options) {
      * 副作用：真实着法会晚一帧（约一个 tick）被采信 —— 代价可接受，而且 `lastReliable`
      * 在这期间**不变**，所以下一帧会重新推出同一个差异，不会错过。
      */
-    let corroborateKey = null;
-    let corroborateSamples = 0;
-    let corroborateObs = -1;
+    const crossFrameGate = crossFrameGateModule.createCrossFrameGate({
+        keyOf: function (board, side) { return positionKeyOfBoard(board, side); },
+        sample: function () { return stats.observations; }
+    });
     /** 本次 `sideFor` 是不是因为「还没拿到第二帧佐证」而暂缓（用来把它和「真推不出来」分开计数） */
     let lastInferHold = false;
-    /** 对方应手的跨帧佐证计数（键 = 我方的着法 + 应手的着法 + 应手落点的子） */
-    let lastReplyKey = null;
-    let lastReplyCount = 0;
+    // （对方应手的跨帧佐证计数已移入 crossFrameGate，见上）
     /**
      * 对方应手也要跨帧佐证：同一个应手要**连续两次验证**都枚举出来才采信。
      *
@@ -568,40 +569,19 @@ function createDriver(options) {
      * 要求两次验证都枚举出同一个应手，单独一帧的伪影就过不了关。
      */
     function replyCorroborated(key) {
-        if (key == null) {
-            return false;
-        }
-        if (lastReplyKey === key) {
-            lastReplyCount += 1;
-        } else {
-            lastReplyKey = key;
-            lastReplyCount = 1;
-        }
-        if (lastReplyCount < 2) {
+        const result = crossFrameGate.replyCorroborated(key);
+        if (result.wait) {
             stats.replyHolds += 1;
-            return false;
         }
-        return true;
+        return result.ok;
     }
     function tolerantSupportedByTwoFrames(baseBoard, reason) {
-        const key = positionKeyOfBoard(baseBoard, "x") + "|" + (reason || "");
-        // ⚠️ 采样单位必须是**观测**（`stats.observations`），不能靠时间间隔：
-        //   自检里的 tick 是瞬时循环（`sleep` 是空函数），拿墙钟当条件会永远等不到第二帧
-        //   （真机踩不到、自检一跑就挂，2026-09-19）。
-        const obs = stats.observations;
-        if (corroborateKey !== key) {
-            corroborateKey = key;
-            corroborateSamples = 1;
-            corroborateObs = obs;
-        } else if (obs !== corroborateObs) {
-            corroborateSamples += 1;
-            corroborateObs = obs;
-        }
-        if (corroborateSamples < 2) {
+        // 采样单位是**观测次数**（见 cross-frame-gate.js：自检是瞬时循环，墙钟等不到第二帧）
+        const result = crossFrameGate.supportedByTwoFrames(baseBoard, reason);
+        if (result.wait) {
             stats.corroborateWaits += 1;
-            return false;
         }
-        return true;
+        return result.ok;
     }
 
     /**
@@ -629,18 +609,15 @@ function createDriver(options) {
         return transition.infer(beforeBoard, beforeSide, board, options);
     }
     /**
-     * 尝试预算（见 DEFAULTS.attemptLimitPerMove 的说明）。
+     * 尝试预算（见 DEFAULTS.attemptLimitPerMove 的说明；实现见 attempt-budget.js）。
      * 键 = 会话|基准 FEN|该走棋方（+ 着法）；**故意不在恢复成功/新票据/换几何时清零** ——
      * 那些都不算取得进展，只有在确认真实合法变化（落子/应手）后才清空。
      */
-    const attemptsByMove = {};
-    const attemptsByPosition = {};
-    /**
-     * 容差解释的跨帧证据（§12）：装饰容差给的解释必须**连续两帧一致**才采信。
-     * 为什么：两步解释即使唯一，也只是「在给定基准和候选集合内唯一」；模型可能持续把同一格
-     * 读错，单帧就据此行动等于拿噪声当事实。冲突（换了另一种解释）则重新计数、继续等。
-     */
-    let toleranceEvidence = { key: "", count: 0 };
+    const attemptBudget = attemptBudgetModule.createAttemptBudget({
+        limitPerMove: cfg.attemptLimitPerMove,
+        limitPerPosition: cfg.attemptLimitPerPosition,
+        note: note
+    });
     /** 上次重新定位的单调时间 + 最小间隔（见 recover 的限频说明：定位一次 ~8s，而棋子移动不改变几何） */
     let lastRelocateMono = 0;
     const RELOCATE_MIN_INTERVAL_MS = 30000;
@@ -1154,57 +1131,16 @@ function createDriver(options) {
     }
 
     /**
-     * 「会话|基准 FEN|该走棋方」—— 尝试预算的位置键。
-     * 用**票据里记的基准**（而不是当前观测）做键：恢复重新定位后键不会变，
-     * 否则靠恢复就能无限重置预算。
-     */
-    function positionKeyOf(ticket) {
-        const session = ticket && ticket.sessionId != null ? ticket.sessionId : "?";
-        const fen = ticket && ticket.baseFen ? ticket.baseFen : "?";
-        const side = ticket && ticket.baseSide ? ticket.baseSide : "?";
-        return session + "|" + fen + "|" + side;
-    }
-
-    /**
-     * 取本次尝试的预算（计数 +1）→ { over, reason, moveCount, positionCount }。
+     * 取本次尝试的预算（计数 +1）→ { over, reason, moveCount, positionCount }（实现见 attempt-budget.js）。
      * 计数点放在 canClick 通过之后：只有真的把两次点击发出去才算一次「完整尝试」。
      */
     function takeAttemptBudget(ticket) {
-        const positionKey = positionKeyOf(ticket);
-        const moveKey = positionKey + "|" + (ticket && ticket.moveICCS ? ticket.moveICCS : "?");
-        attemptsByMove[moveKey] = (attemptsByMove[moveKey] || 0) + 1;
-        attemptsByPosition[positionKey] = (attemptsByPosition[positionKey] || 0) + 1;
-        const moveCount = attemptsByMove[moveKey];
-        const positionCount = attemptsByPosition[positionKey];
-        if (moveCount > cfg.attemptLimitPerMove) {
-            return {
-                over: true, moveCount: moveCount, positionCount: positionCount,
-                reason: "同一着法 " + ticket.moveICCS + " 已试 " + moveCount + " 次仍未确认落子"
-            };
-        }
-        if (positionCount > cfg.attemptLimitPerPosition) {
-            return {
-                over: true, moveCount: moveCount, positionCount: positionCount,
-                reason: "同一局面已出手 " + positionCount + " 次仍未确认落子"
-            };
-        }
-        return { over: false, moveCount: moveCount, positionCount: positionCount, reason: "" };
+        return attemptBudget.take(ticket);
     }
 
     /** 确认真实合法变化（落子/应手）后才清空预算。 */
     function clearAttemptBudget(why) {
-        const moveKeys = Object.keys(attemptsByMove);
-        const positionKeys = Object.keys(attemptsByPosition);
-        if (moveKeys.length === 0 && positionKeys.length === 0) {
-            return;
-        }
-        for (let i = 0; i < moveKeys.length; i++) {
-            delete attemptsByMove[moveKeys[i]];
-        }
-        for (let i = 0; i < positionKeys.length; i++) {
-            delete attemptsByPosition[positionKeys[i]];
-        }
-        note("尝试预算已清零（" + why + "）");
+        attemptBudget.clear(why);
     }
 
     function executeTicket(effect) {
@@ -3986,11 +3922,7 @@ function createDriver(options) {
             delete stallFilledUntil[key];
         }
         // 新基准不能沿用旧基准积攒的“连续两帧”证据。
-        corroborateKey = null;
-        corroborateSamples = 0;
-        corroborateObs = -1;
-        lastReplyKey = null;
-        lastReplyCount = 0;
+        crossFrameGate.reset("rebuild");
         needFreshBaseline = false;
         stats.baselineRebuilds += 1;
         note("按观测量建基准：丢掉 " + dropped + " 条已知事实，基准 = 本帧盘面" +
