@@ -11,11 +11,14 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,7 +56,9 @@ import com.jdkshen.aijspro.theme.isAijsDarkTheme
 import com.jdkshen.aijspro.theme.isAijsDarkThemeResolved
 import com.stardust.autojs.core.console.ConsoleImpl
 import com.stardust.autojs.core.console.ConsoleView
+import com.stardust.autojs.core.console.ScriptRunLog
 import com.stardust.util.IntentUtil
+import java.io.File
 import top.yukonga.miuix.kmp.basic.FloatingActionButton
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -128,6 +133,42 @@ class MiuixLogActivity : ComponentActivity() {
         Toast.makeText(this, "日志已复制到剪贴板（${logs.size} 条）", Toast.LENGTH_SHORT).show()
     }
 
+    /** 读取历史日志文件（后台线程；大文件只取尾部 3000 行 —— 尾部才是现场）。 */
+    private fun loadHistoryFile(file: File, onDone: (List<String>) -> Unit) {
+        Thread {
+            val lines = try {
+                file.readLines(Charsets.UTF_8)
+            } catch (error: Throwable) {
+                listOf("[加载失败] " + (error.message ?: error.toString()))
+            }
+            val max = 3000
+            val capped = if (lines.size > max) {
+                listOf("（文件共 ${lines.size} 行，这里只显示最后 $max 行）")
+                    .plus(lines.subList(lines.size - max, lines.size))
+            } else {
+                lines
+            }
+            runOnUiThread { onDone(capped) }
+        }.start()
+    }
+
+    /** 从落盘日志行里还原级别（格式 `HH:mm:ss.SSS [I] ...`）。 */
+    private fun levelOf(line: String): Int {
+        return if (line.length >= 16 && line[13] == '[' && line[15] == ']') {
+            when (line[14]) {
+                'V' -> Log.VERBOSE
+                'D' -> Log.DEBUG
+                'I' -> Log.INFO
+                'W' -> Log.WARN
+                'E' -> Log.ERROR
+                'A' -> Log.ASSERT
+                else -> Log.VERBOSE
+            }
+        } else {
+            Log.VERBOSE
+        }
+    }
+
     /** Console colors following the Miuix theme directly (not the legacy M3 palette). */
     private fun applyLogTheme(view: ConsoleView, dark: Boolean = isAijsDarkThemeResolved(this)) {
         if (themedConsoleView === view && appliedConsoleDark == dark) return
@@ -158,6 +199,11 @@ class MiuixLogActivity : ComponentActivity() {
         var query by remember { mutableStateOf(TextFieldValue("")) }
         var anchorPos by remember { mutableStateOf(IntOffset.Zero) }
         var anchorSize by remember { mutableStateOf(IntSize.Zero) }
+        var historyOpen by remember { mutableStateOf(false) }
+        var historyFile by remember { mutableStateOf<File?>(null) }
+        var historyConsole by remember { mutableStateOf<ConsoleImpl?>(null) }
+        var histAnchorPos by remember { mutableStateOf(IntOffset.Zero) }
+        var histAnchorSize by remember { mutableStateOf(IntSize.Zero) }
 
         Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
             Column(Modifier.fillMaxSize()) {
@@ -165,6 +211,18 @@ class MiuixLogActivity : ComponentActivity() {
                     navigationIcon = { MiuixBackButton(onClick = { finish() }) },
                     actions = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(text = "历史",
+                                modifier = Modifier
+                                    .background(MiuixTheme.colorScheme.surfaceVariant,
+                                        RoundedCornerShape(20.dp))
+                                    .onGloballyPositioned {
+                                        histAnchorPos = IntOffset(
+                                            it.positionInRoot().x.toInt(),
+                                            it.positionInRoot().y.toInt()
+                                        )
+                                        histAnchorSize = it.size
+                                    },
+                                onClick = { historyOpen = !historyOpen })
                             TextButton(text = levels[levelIndex].first + " ▾",
                                 modifier = Modifier
                                     .background(MiuixTheme.colorScheme.surfaceVariant,
@@ -200,6 +258,20 @@ class MiuixLogActivity : ComponentActivity() {
                             }
                         }
                     })
+                historyFile?.let { file ->
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+                        Text("历史日志：" + file.name, fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            modifier = Modifier.weight(1f))
+                        TextButton(text = "返回实时", onClick = {
+                            consoleImpl?.let { live -> consoleView?.setConsole(live) }
+                            historyConsole?.clear()
+                            historyConsole = null
+                            historyFile = null
+                        })
+                    }
+                }
                 if (searchShown) {
                     TextField(value = query, onValueChange = {
                         query = it
@@ -251,8 +323,57 @@ class MiuixLogActivity : ComponentActivity() {
                     }
                 }
             }
+            if (historyOpen) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .pointerInput(Unit) { detectTapGestures { historyOpen = false } }
+                )
+                Column(
+                    Modifier
+                        .offset { IntOffset(histAnchorPos.x, histAnchorPos.y + histAnchorSize.height + 6) }
+                        .shadow(24.dp, RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MiuixTheme.colorScheme.surface)
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(4.dp)
+                ) {
+                    val files = remember(historyOpen) {
+                        ScriptRunLog.listRecent(this@MiuixLogActivity, 30)
+                    }
+                    if (files.isEmpty()) {
+                        Text("还没有日志文件（跑一次脚本后就会生成）", fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
+                    } else {
+                        files.forEach { file ->
+                            Text(file.name + "   " + (file.length() / 1024) + " KB",
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onBackground,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        historyOpen = false
+                                        loadHistoryFile(file) { lines ->
+                                            val target = ConsoleImpl(AutoJs.getInstance().uiHandler)
+                                            consoleView?.setConsole(target)
+                                            // 先清掉上一份日志在视图里的残留，再灌历史内容
+                                            target.clear()
+                                            for (line in lines) {
+                                                target.println(levelOf(line), line)
+                                            }
+                                            historyConsole = target
+                                            historyFile = file
+                                        }
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 9.dp))
+                        }
+                    }
+                }
+            }
             FloatingActionButton(
-                onClick = { consoleImpl?.clear() },
+                onClick = { consoleView?.clear() },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
                 shape = RoundedCornerShape(60.dp),
             ) {

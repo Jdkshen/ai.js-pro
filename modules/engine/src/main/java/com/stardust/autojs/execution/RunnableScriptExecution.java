@@ -2,6 +2,7 @@ package com.stardust.autojs.execution;
 
 import android.util.Log;
 
+import com.stardust.autojs.core.console.ScriptRunLog;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
@@ -19,6 +20,7 @@ public class RunnableScriptExecution extends ScriptExecution.AbstractScriptExecu
     private static final String TAG = "RunnableJSExecution";
     private ScriptEngine mScriptEngine;
     private ScriptEngineManager mScriptEngineManager;
+    private ScriptRunLog mRunLog;
 
     public RunnableScriptExecution(ScriptEngineManager manager, ScriptExecutionTask task) {
         super(task);
@@ -43,26 +45,36 @@ public class RunnableScriptExecution extends ScriptExecution.AbstractScriptExecu
     public Object execute() {
         mScriptEngine = mScriptEngineManager.createEngineOfSourceOrThrow(getSource(), getId());
         mScriptEngine.setTag(ExecutionConfig.getTag(), getConfig());
+        // 运行日志落盘：跑完/崩了都能回头翻（内容 = 这次运行自己的控制台输出 + 结束原因/堆栈）
+        mRunLog = ScriptRunLog.attach(mScriptEngine, getSource(), mScriptEngineManager.getAndroidContext());
         return execute(mScriptEngine);
     }
 
     private Object execute(ScriptEngine engine) {
+        Throwable failure = null;
         try {
             prepare(engine);
             Object r = doExecution(engine);
             Throwable uncaughtException = engine.getUncaughtException();
             if (uncaughtException != null) {
+                failure = uncaughtException;
                 onException(engine, uncaughtException);
                 return null;
             }
             getListener().onSuccess(this, r);
             return r;
         } catch (Throwable e) {
+            failure = e;
             onException(engine, e);
             return null;
         } finally {
             Log.d(TAG, "Engine destroy");
             engine.destroy();
+            if (mRunLog != null) {
+                // destroy 之后收尾：destroy 过程里可能还有最后几行控制台输出（如异常堆栈）。
+                mRunLog.finish(failure);
+                mRunLog = null;
+            }
         }
     }
 

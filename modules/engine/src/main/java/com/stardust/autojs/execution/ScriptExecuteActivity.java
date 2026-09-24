@@ -15,6 +15,7 @@ import android.view.MenuItem;
 import android.view.MotionEvent;
 
 import com.stardust.autojs.ScriptEngineService;
+import com.stardust.autojs.core.console.ScriptRunLog;
 import com.stardust.autojs.core.eventloop.EventEmitter;
 import com.stardust.autojs.core.eventloop.SimpleEvent;
 import com.stardust.autojs.core.ui.inflater.CompiledProjectResources;
@@ -39,6 +40,7 @@ public class ScriptExecuteActivity extends AppCompatActivity {
     private static final String EXTRA_EXECUTION_ID = ScriptExecuteActivity.class.getName() + ".execution_id";
     private Object mResult;
     private ScriptEngine mScriptEngine;
+    private ScriptRunLog mRunLog;
     private ScriptExecutionListener mExecutionListener;
     private ScriptSource mScriptSource;
     private ActivityScriptExecution mScriptExecution;
@@ -74,6 +76,7 @@ public class ScriptExecuteActivity extends AppCompatActivity {
         mScriptExecution = (ActivityScriptExecution) execution;
         mScriptSource = mScriptExecution.getSource();
         mScriptEngine = mScriptExecution.createEngine(this);
+        mRunLog = ScriptRunLog.attach(mScriptEngine, mScriptSource, this);
         mExecutionListener = mScriptExecution.getListener();
         mRuntime = ((JavaScriptEngine) mScriptEngine).getRuntime();
         mEventEmitter = new EventEmitter(mRuntime.bridges);
@@ -208,9 +211,14 @@ public class ScriptExecuteActivity extends AppCompatActivity {
         super.onDestroy();
         Log.d(LOG_TAG, "onDestroy");
         if (mScriptEngine != null) {
+            Throwable failure = mScriptEngine.getUncaughtException();
             mScriptEngine.put("activity", null);
             mScriptEngine.setTag("activity", null);
             mScriptEngine.destroy();
+            if (mRunLog != null) {
+                mRunLog.finish(failure);
+                mRunLog = null;
+            }
         }
         mScriptExecution = null;
     }

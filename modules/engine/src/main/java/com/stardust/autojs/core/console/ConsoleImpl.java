@@ -75,6 +75,9 @@ public class ConsoleImpl extends AbstractConsole {
     private volatile boolean mShown = false;
     private int mX, mY;
 
+    /** 这次运行的落盘日志（见 {@link ScriptRunLog}）；null = 不落盘（如全局控制台）。 */
+    private volatile ScriptRunLog mRunLog;
+
     public ConsoleImpl(UiHandler uiHandler) {
         this(uiHandler, null);
     }
@@ -114,6 +117,11 @@ public class ConsoleImpl extends AbstractConsole {
         return mLogEntries;
     }
 
+    /** 挂上落盘日志；只给「这次运行自己的控制台」挂（见 {@link ScriptRunLog#attach}）。 */
+    public void setRunLog(ScriptRunLog runLog) {
+        mRunLog = runLog;
+    }
+
     public void printAllStackTrace(Throwable t) {
         println(android.util.Log.ERROR, ScriptRuntime.getStackTrace(t, true));
     }
@@ -124,6 +132,10 @@ public class ConsoleImpl extends AbstractConsole {
 
     @Override
     public String println(int level, CharSequence charSequence) {
+        ScriptRunLog runLog = mRunLog;
+        if (runLog != null) {
+            runLog.line(level, charSequence);
+        }
         LogEntry logEntry = new LogEntry(mIdCounter.getAndIncrement(), level, charSequence, true);
         synchronized (mLogEntries) {
             mLogEntries.add(logEntry);
