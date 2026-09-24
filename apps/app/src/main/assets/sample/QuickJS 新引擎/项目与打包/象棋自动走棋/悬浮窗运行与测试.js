@@ -702,13 +702,17 @@ const UI_MODE_LABEL = { watch: "只识别", suggest: "着法建议", auto: "自�
 /**
  * 面板标题：**只写状态**（模式已经在旁边那个蓝色模式按钮上了）。
  * ⚠️ 2026-09-20：原来写「自动走棋 · 未运行」，字号提到 12sp 后就顶到模式按钮下面（用户截图里就是被压住）。
+ * ⚠️ 2026-09-24 真机（用户口径：「就是象棋助手 那几个字显示不完整，那个控件挡住了」）：
+ *   标题框只有 350px、12sp 粗体 ⇒ 「象棋助手 · 出手前核对」正好把最后一个「对」字切掉一半，
+ *   更长的「等待局面稳定」要切两个字；紧挨着的模式按钮让它看起来就像「按钮把字挡住了」。
+ *   ⇒ 标题一律用**短状态**（与收起条同一份 COMPACT_STATE_LABEL），长文案留给日志/进度卡。
  */
 function panelTitleText() {
     let state = running ? "运行中" : "未运行";
     try {
         const key = driver && driver.machine ? driver.machine.state() : null;
         if (key) {
-            state = STATE_LABEL[key] || key;
+            state = COMPACT_STATE_LABEL[key] || STATE_LABEL[key] || key;
         }
     } catch (error) {
         // 状态机还没建立时用兜底文案
@@ -1470,7 +1474,14 @@ function verifyAutorunGeometry() {
         logLine("几何验证：棋盘服务初始化失败 —— " + error);
         return false;
     }
-    for (let i = 0; i < 2; i++) {
+    /**
+     * ⚠️ 2026-09-24 真机（面板重启后不自启，两次：11:34 / 11:46）：切前台之后的**前两帧**
+     *   在稳定帧门那里都算「不稳定」（第一帧预热、第二帧才攒够比对），旧逻辑重试 1 次就判
+     *   「几何可疑」→ autorun 拒启、面板停在「未运行」等人手点「开始」。
+     *   帧不稳定 = **没判过**（不是判过了不可信）⇒ 多等几帧；只有**稳定帧读出乱局**才拒
+     *   （防的正是 pickGrid 假几何那种“稳定地读错”）。
+     */
+    for (let i = 0; i < 5; i++) {
         let probe = null;
         try {
             probe = service.recognizeSmart({});
@@ -1480,13 +1491,15 @@ function verifyAutorunGeometry() {
         if (probe && probe.ok) {
             return true;
         }
-        if (probe && probe.unstable && i === 0) {
-            sleep(250);   // 动画中间帧 → 等一帧再试
+        if (probe && probe.unstable) {
+            sleep(i === 0 ? 300 : 220);   // 等一帧（切换前台/动画过渡）
             continue;
         }
-        logLine("几何验证：首帧识别不过 —— " + ((probe && probe.reason) || "未知"));
+        logLine("几何验证：识别不过 —— " + ((probe && probe.reason) || "未知"));
         return false;
     }
+    // 连续几帧都只是「没稳定」：无法判定 ⇒ 不拦（交给驱动自己的等稳定/看门狗）
+    logLine("几何验证：连续 5 帧都没稳定（切换/动画中）→ 不拦自动开始");
     return true;
 }
 
