@@ -88,6 +88,7 @@ const PROBE_BUILD_ID = load("src/app/version.js").VERSION;
 
 const adapter = load("src/runtime/aijs-adapter.js");
 const geometryModule = load("src/vision/geometry.js");
+const circleGridCheck = load("src/vision/circle-grid-check.js");
 const recognizeBoard = load("tools/recognize-board.js");
 const visionPipelineModule = load("src/vision/vision-pipeline.js");
 const frameGateModule = load("src/vision/frame-gate.js");
@@ -701,24 +702,12 @@ const C = {
 const UI_MODE_LABEL = { watch: "只识别", suggest: "着法建议", auto: "自动走棋" };
 
 /**
- * 面板标题：**只写状态**（模式已经在旁边那个蓝色模式按钮上了）。
- * ⚠️ 2026-09-20：原来写「自动走棋 · 未运行」，字号提到 12sp 后就顶到模式按钮下面（用户截图里就是被压住）。
- * ⚠️ 2026-09-24 真机（用户口径：「就是象棋助手 那几个字显示不完整，那个控件挡住了」）：
- *   标题框只有 350px、12sp 粗体 ⇒ 「象棋助手 · 出手前核对」正好把最后一个「对」字切掉一半，
- *   更长的「等待局面稳定」要切两个字；紧挨着的模式按钮让它看起来就像「按钮把字挡住了」。
- *   ⇒ 标题一律用**短状态**（与收起条同一份 COMPACT_STATE_LABEL），长文案留给日志/进度卡。
+ * 固定标题只显示「象棋助手」。运行状态另在进度区显示；不再因状态词长度、
+ * 手机宽度或系统字体缩放，把标题末字挤到旁边的模式按钮下。
  */
 function panelTitleText() {
-    let state = running ? "运行中" : "未运行";
-    try {
-        const key = driver && driver.machine ? driver.machine.state() : null;
-        if (key) {
-            state = COMPACT_STATE_LABEL[key] || STATE_LABEL[key] || key;
-        }
-    } catch (error) {
-        // 状态机还没建立时用兜底文案
-    }
-    return "象棋助手 · " + state;
+    // 状态已经在进度区和收起条显示。标题保持固定，系统大字体/小屏幕也不会截字。
+    return "象棋助手";
 }
 
 /** 收起条的模式按钮已写模式，这里只显示短状态，避免小屏幕和大字体时被截断。 */
@@ -793,7 +782,7 @@ const XML = [
     '<vertical id="root" w="' + PANEL.width + 'px" h="' + PANEL.height + 'px" padding="' + panelPx(8) + 'px">',
     // 第 1 行：当前状态 + 模式 + 主操作；停止始终固定在这一行
     '  <horizontal id="primaryRow" h="' + ROW_H + 'px">',
-    '    <text id="title" text="象棋助手 · 未运行" w="' + panelPx(350) + 'px" h="' + ROW_H + 'px" textColor="' + C.title +
+    '    <text id="title" text="象棋助手" w="' + panelPx(350) + 'px" h="' + ROW_H + 'px" textColor="' + C.title +
      '" textSize="' + themeTokens.FONT.title + '" textStyle="bold" gravity="center_vertical" includeFontPadding="false" singleLine="true" padding="10px"/>',
     gap(),
     button("modeBtn", "只识别", 180, C.btnAccent),
@@ -2337,7 +2326,7 @@ function readCharsWithGrid(image, g) {
  * @return 可采用的几何（可能是原候选本身）；邻域全扫完都读不到返回 null
  */
 const ANCHOR_SHIFTS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
-function findAlignedGrid(image, base) {
+function findAlignedGrid(image, base, circles) {
     if (!base || !base.stepX || !base.stepY) {
         return null;
     }
@@ -2349,6 +2338,7 @@ function findAlignedGrid(image, base) {
     let nearest = null;
     let nearestDistance = Infinity;
     let rejectedByContinuity = 0;
+    let rejectedByCircles = 0;
     for (let i = 0; i < ANCHOR_SHIFTS.length; i++) {
         const sx = ANCHOR_SHIFTS[i][0] * base.stepX;
         const sy = ANCHOR_SHIFTS[i][1] * base.stepY;
@@ -2362,6 +2352,11 @@ function findAlignedGrid(image, base) {
                 orientation: base.orientation,
                 version: (base.version == null ? 1 : base.version)
             });
+        }
+        const circleVerdict = circleGridCheck.evaluate(circles, g);
+        if (circleVerdict.conclusive && !circleVerdict.ok) {
+            rejectedByCircles += 1;
+            continue;
         }
         if (countKings(readCharsWithGrid(image, g)) === 2) {
             if (!reference) {
@@ -2382,6 +2377,9 @@ function findAlignedGrid(image, base) {
     if (!nearest && rejectedByContinuity > 0) {
         logLine("锚定候选虽读出帅/将，但偏离旧几何超过 0.45 格（" +
             rejectedByContinuity + " 个）→ 不采用，等稳定帧");
+    }
+    if (!nearest && rejectedByCircles > 0) {
+        logLine("圆心几何校验拒绝 " + rejectedByCircles + " 个候选（棋子圆心偏离交点），保留旧几何");
     }
     return nearest;
 }
@@ -2720,6 +2718,16 @@ function locateAndCalibrate() {
     if (reused) {
         return reused;
     }
+    let circleEvidence = null;
+    function circlesFor(candidate) {
+        if (circleEvidence === null) {
+            circleEvidence = circleGridCheck.detect(images, grabbed.image, candidate,
+                adapter.sizeOf(grabbed.image));
+            logLine("棋子圆心校验：找到 " + circleEvidence.circles.length + " 个圆" +
+                (circleEvidence.reason ? "（" + circleEvidence.reason + "）" : ""));
+        }
+        return circleEvidence.circles;
+    }
     const options = {
         orientation: "RED_BOTTOM",
         confidence: 0.25,
@@ -2846,12 +2854,12 @@ function locateAndCalibrate() {
         //   读不到时再在 **±1 格锚定邻域**里扫一圈（稀疏残局/棋盘放大后，线定位会把序号锚错一整格）。
         //   代价函数会爱上「大部分格子读成空」的坏网格（未知格少、丢子不计）—— 真机就是这样把
         //   偏移(25,22)/(23,32) 的网格选进来的，之后每帧「帅/将 0」把面板卡死。
-        const aligned = findAlignedGrid(grabbed.image, candidate);
+        const aligned = findAlignedGrid(grabbed.image, candidate, circlesFor(candidate));
         if (!aligned) {
             // ⓵ 校准可能把**线定位本来对的**锚定带歪（真机 12:02：候选被拖到 偏移(-81,26)）——
             //   先拿线定位的原始几何做 ±1 格邻域再验一次。
             const alignedLine = located.grid
-                ? findAlignedGrid(grabbed.image, attachGridQuality(grabbed.image, located.grid))
+                ? findAlignedGrid(grabbed.image, attachGridQuality(grabbed.image, located.grid), circlesFor(located.grid))
                 : null;
             if (alignedLine) {
                 grid = alignedLine.grid;
@@ -2867,7 +2875,7 @@ function locateAndCalibrate() {
             //   棋子（=交点）上，锚定证据比稀疏线的“哪条线是第 0 条”强得多。
             const pickBase = pickGridCandidate(grabbed);
             const alignedPick = pickBase
-                ? findAlignedGrid(grabbed.image, attachGridQuality(grabbed.image, pickBase))
+                ? findAlignedGrid(grabbed.image, attachGridQuality(grabbed.image, pickBase), circlesFor(pickBase))
                 : null;
             if (alignedPick) {
                 grid = alignedPick.grid;
@@ -2905,7 +2913,7 @@ function locateAndCalibrate() {
     if (located.grid) {
         const fallbackCandidate = attachGridQuality(grabbed.image, located.grid);
         // 同样过可信性检查（带 ±1 格锚定邻域）：定位几何读不到帅/将也不采
-        const alignedFallback = findAlignedGrid(grabbed.image, fallbackCandidate);
+        const alignedFallback = findAlignedGrid(grabbed.image, fallbackCandidate, circlesFor(fallbackCandidate));
         if (!alignedFallback) {
             lastCalibrationRejectAt = Date.now();
             logLine("定位几何可信性检查不过（±1 格邻域也读不到帅/将）⇒ 不采用" +

@@ -270,7 +270,8 @@ function createGlyphSource(deps) {
             try {
                 rec = glyph.recognize(host, image, grid, {
                     templates: prepared.templates, TW: prepared.TW, ANCHOR_DY: prepared.ANCHOR_DY,
-                    coarseTemplates: prepared.coarse
+                    coarseTemplates: prepared.coarse,
+                    referenceBoard: options && options.referenceBoard
                 });
             } catch (error) {
                 return { ok: false, reason: "字形识别异常：" + (error && error.message ? error.message : error) };
@@ -278,7 +279,10 @@ function createGlyphSource(deps) {
             if (!rec || rec.error) {
                 return { ok: false, reason: "字形识别异常：" + ((rec && rec.error) || "没有结果") };
             }
-            const board = glyph.normalizeBoard(rec.chars);
+            const rawBoard = glyph.normalizeBoard(rec.chars);
+            const preserved = glyph.preserveIdentityOnSameOccupancy(rawBoard,
+                options && options.referenceBoard);
+            const board = preserved.board;
             const unknownCells = glyph.countUnknown(board);
             let layout = "";
             try {
@@ -293,7 +297,7 @@ function createGlyphSource(deps) {
                 ok: true,
                 method: "glyph",
                 chars: board,
-                rawChars: board.slice(),
+                rawChars: rawBoard,
                 unknownCells: unknownCells,
                 layout: layout,
                 validation: validation,
@@ -303,6 +307,7 @@ function createGlyphSource(deps) {
                     recognizeMs: rec.ms,
                     inked: rec.inked,
                     retries: rec.retries,
+                    heldIdentities: preserved.held,
                     profile: rec.profile || null
                 }
             };

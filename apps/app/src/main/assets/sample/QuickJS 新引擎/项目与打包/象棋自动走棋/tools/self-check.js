@@ -19,6 +19,7 @@ const gridSearch = require("../src/vision/grid-search.js");
 const boardLocator = require("../src/vision/board-locator.js");
 const latticeDetector = require("../src/vision/lattice-detector.js");
 const glyphRecognizer = require("../src/vision/glyph-recognizer.js");
+const circleGridCheck = require("../src/vision/circle-grid-check.js");
 const locateBoardEntry = require("./locate-board.js");
 
 let passed = 0;
@@ -9917,6 +9918,36 @@ check("字形识别：normalizeBoard（'.'→null）与未知格计数", functio
         return "未知格应为 1，实际 " + glyphRecognizer.countUnknown(board);
     }
     return true;
+});
+
+check("选中放大：占位未变时保留棋子身份，原始读数仍可追查", function () {
+    const before = new Array(90).fill(null);
+    const seen = before.slice();
+    before[83] = "B";
+    seen[83] = "A";
+    const held = glyphRecognizer.preserveIdentityOnSameOccupancy(seen, before);
+    if (held.held !== 1 || held.board[83] !== "B" || seen[83] !== "A") {
+        return "同位误读应保留红相，原始数组不得改写";
+    }
+    const moved = seen.slice();
+    moved[83] = null;
+    moved[74] = "B";
+    const accepted = glyphRecognizer.preserveIdentityOnSameOccupancy(moved, before);
+    return accepted.held === 0 && accepted.board[74] === "B" || "真实移子不应被旧身份保护挡住";
+});
+
+check("圆心几何校验：正确交点通过、半格偏移拒绝、少子不误拒", function () {
+    const grid = { originX: 83, originY: 704, stepX: 115, stepY: 114 };
+    const circles = [[0, 0], [4, 0], [8, 0], [1, 2], [4, 5], [2, 9]].map(function (xy) {
+        return { x: grid.originX + xy[0] * grid.stepX,
+            y: grid.originY + xy[1] * grid.stepY, radius: 40 };
+    });
+    const aligned = circleGridCheck.evaluate(circles, grid);
+    const shifted = circleGridCheck.evaluate(circles, Object.assign({}, grid,
+        { originX: grid.originX + grid.stepX * 0.5 }));
+    const sparse = circleGridCheck.evaluate(circles.slice(0, 2), grid);
+    return aligned.ok && aligned.matched === 6 && shifted.conclusive && !shifted.ok &&
+        !sparse.conclusive || "圆心证据判定不符";
 });
 
 check("字形识别：prepareFor 缓存（同缩放比不重复缩放；粗模板随行给出）", function () {

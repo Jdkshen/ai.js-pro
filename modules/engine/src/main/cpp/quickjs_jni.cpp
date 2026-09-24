@@ -5440,9 +5440,13 @@ const char kBootstrapScript[] = R"JS(
         var found = [];
         if (!opencv.Imgproc) throw new Error('OpenCV Java 接口不可用');
         var source = images.toMat(frame);
+        var gray = new opencv.Mat();
         var target = new opencv.Mat();
         try {
-            opencv.Imgproc.HoughCircles(source, target, opencv.Imgproc.CV_HOUGH_GRADIENT,
+            // NativeFrameStore exposes CV_8UC4, while HoughCircles requires CV_8UC1.
+            // OpenCV 5 also names this constant HOUGH_GRADIENT (without CV_).
+            opencv.Imgproc.cvtColor(source, gray, opencv.Imgproc.COLOR_RGBA2GRAY);
+            opencv.Imgproc.HoughCircles(gray, target, opencv.Imgproc.HOUGH_GRADIENT,
                 options.dp === undefined ? 1 : options.dp,
                 options.minDst === undefined ? frame.height / 8 : options.minDst,
                 options.param1 === undefined ? 100 : options.param1,
@@ -5456,6 +5460,7 @@ const char kBootstrapScript[] = R"JS(
             }
         } finally {
             try { source.release(); } catch (e) { }
+            try { gray.release(); } catch (e) { }
             try { target.release(); } catch (e) { }
         }
         return found;

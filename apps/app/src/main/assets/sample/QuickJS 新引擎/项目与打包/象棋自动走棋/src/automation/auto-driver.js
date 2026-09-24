@@ -3211,7 +3211,9 @@ function createDriver(options) {
             grid: options && options.relocate ? null : grid,
             orientation: cfg.orientation,
             confidence: cfg.confidence,
-            timeoutMs: 400
+            timeoutMs: 400,
+            // 只读的上一张可信盘面：选中高亮不能把原地棋子变成另一兵种。
+            referenceBoard: lastReliable && lastReliable.board ? lastReliable.board.slice() : null
         };
         if (cfg.regionRatio) {
             request.regionRatio = cfg.regionRatio;

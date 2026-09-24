@@ -254,7 +254,10 @@ function createBoardService(options) {
         // ② 字形识别（唯一识别链）：规则门 + 未知格闸门都过才算数；不过 = 这一帧不观察
         let g = null;
         try {
-            g = glyph.recognize(grabbed.image, grid, { side: cb.side });
+            g = glyph.recognize(grabbed.image, grid, {
+                side: cb.side,
+                referenceBoard: cb.referenceBoard
+            });
         } catch (error) {
             g = { ok: false, reason: "字形识别异常：" + (error && error.message ? error.message : error) };
         }

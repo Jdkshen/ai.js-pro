@@ -63,6 +63,8 @@ const TPL_NAMES = ["車", "馬", "象", "士", "將", "炮", "卒", "兵", "相"
 const SIDED = { "車": ["R", "r"], "馬": ["N", "n"], "炮": ["C", "c"] };
 /** 其余八字按字形直接定阵营。 */
 const FIXED = { "帥": "K", "仕": "A", "相": "B", "兵": "P", "將": "k", "士": "a", "象": "b", "卒": "p" };
+const GLYPH_FOR_CHAR = { R: "車", r: "車", N: "馬", n: "馬", C: "炮", c: "炮",
+    K: "帥", A: "仕", B: "相", P: "兵", k: "將", a: "士", b: "象", p: "卒" };
 
 function pick(options, key) {
     return options && options[key] != null ? options[key] : DEFAULTS[key];
@@ -168,6 +170,32 @@ function countUnknown(chars) {
         }
     }
     return n;
+}
+
+/**
+ * 棋子被点起/高亮时，字形会放大，但棋子不会在同一个交点变成另一兵种。
+ * 仅当全盘占位完全没变时，保留可信上一盘的身份；真正移动/吃子至少会
+ * 改变起点占位，仍交给走法与多帧校验。原始读数须另存，供诊断使用。
+ */
+function preserveIdentityOnSameOccupancy(board, referenceBoard) {
+    const out = board.slice();
+    if (!referenceBoard || referenceBoard.length !== out.length) {
+        return { board: out, held: 0 };
+    }
+    for (let i = 0; i < out.length; i++) {
+        if (!!out[i] !== !!referenceBoard[i]) {
+            return { board: out, held: 0 };
+        }
+    }
+    let held = 0;
+    for (let i = 0; i < out.length; i++) {
+        if (out[i] && out[i] !== "?" && referenceBoard[i] &&
+            referenceBoard[i] !== "?" && out[i] !== referenceBoard[i]) {
+            out[i] = referenceBoard[i];
+            held += 1;
+        }
+    }
+    return { board: out, held: held };
 }
 
 function countOf(host, image, color, x, y, width, height) {
@@ -486,12 +514,30 @@ function recognize(host, image, grid, options) {
             }
             // (2,9) 被选中的红相放大约 10% 后，普通模板曾把它误判成九宫外的第三枚红仕。
             // 此处仍只使用同一套字形模板；放大复核不足 SAFE_CONF 就留作未知，绝不硬填。
+            const knownChar = opts.referenceBoard && opts.referenceBoard[idx];
+            const knownGlyph = GLYPH_FOR_CHAR[knownChar];
             if (!m || !advisorAllowed(m.name, c, r)) {
                 try {
                     m = matchSelectedScale(host, grayFrame, x, cy, c, r, templates, opts, size);
                 } catch (selectedError) {
                     error = "选中棋子字形复核异常：" + selectedError;
                     break;
+                }
+            } else if (knownGlyph && m.name !== knownGlyph) {
+                // 同一交点的可信旧棋子被点起后可能放大。只对这一格、这一种旧字形
+                // 增加 2 个尺寸候选，不把 90 格全部扩大扫描。
+                const expected = templates.filter(function (tpl) { return tpl.name === knownGlyph; });
+                if (expected.length) {
+                    try {
+                        const selected = matchSelectedScale(host, grayFrame, x, cy, c, r, expected, opts, size);
+                        // 吃子落点可能原本是另一种棋：旧字形必须明显胜过当前读数才可覆盖。
+                        if (selected && selected.sim >= SAFE_CONF && selected.sim >= m.sim + 0.03) {
+                            m = selected;
+                        }
+                    } catch (selectedError) {
+                        error = "选中棋子定向复核异常：" + selectedError;
+                        break;
+                    }
                 }
             }
             matchMs += host.nowMono() - matchStarted;
@@ -568,6 +614,7 @@ module.exports = {
     loadTemplates: loadTemplates,
     normalizeBoard: normalizeBoard,
     countUnknown: countUnknown,
+    preserveIdentityOnSameOccupancy: preserveIdentityOnSameOccupancy,
     bestMatch: bestMatch,
     sideOf: sideOf,
     recognize: recognize,
