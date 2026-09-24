@@ -32,6 +32,7 @@ android {
             }
         }
     }
+    sourceSets.main.assets.srcDir(file("$buildDir/generated/pikafish-assets"))
     signingConfigs {
         if (releaseSigningReady) {
             release {
@@ -116,6 +117,23 @@ android {
             versionNameSuffix '-lite'
         }
     }
+}
+
+// The NNUE weight is kept outside Git (third-party/Pikafish ignores *.nnue), but a local
+// arm64 APK must carry it so the thread control does not silently run the JS fallback.
+def pikafishNnueFile = rootProject.file('third-party/Pikafish/src/pikafish.nnue')
+def pikafishAssetsDir = file("$buildDir/generated/pikafish-assets")
+def stagePikafishNnue = tasks.register('stagePikafishNnue', Sync) {
+    from({ pikafishNnueFile.isFile() ? [pikafishNnueFile] : [] })
+    into(pikafishAssetsDir)
+    doLast {
+        if (!pikafishNnueFile.isFile()) {
+            logger.warn('Pikafish NNUE missing: put pikafish.nnue in third-party/Pikafish/src before packaging arm64')
+        }
+    }
+}
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn(stagePikafishNnue)
 }
 
 

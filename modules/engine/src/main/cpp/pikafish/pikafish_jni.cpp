@@ -172,6 +172,9 @@ struct PikafishSession {
     std::streambuf*   savedCout = nullptr;
     std::streambuf*   savedCerr = nullptr;
     std::atomic<bool> running{false};
+    int               threads = 0;
+    int               hashMb = 0;
+    std::string       evalFile;
 };
 
 std::mutex                    g_stateMutex;  // 保护会话的建立/销毁（quit 需要等搜索结束）
@@ -215,8 +218,32 @@ void destroySessionLocked() {
 
 bool startSession(JNIEnv* env, jstring evalPath, jint threads, jint hashMb) {
     std::lock_guard<std::mutex> guard(g_stateMutex);
-    if (g_session.load() != nullptr)
-        return true;  // 已启动
+    const int         requestedThreads = threads > 0 ? threads : 2;
+    const int         requestedHashMb  = hashMb > 0 ? hashMb : 64;
+    const std::string requestedEvalFile = jstringToUtf8(env, evalPath);
+    if (PikafishSession* active = g_session.load()) {
+        // worker 每次算棋都可能来自新的 QuickJS 上下文；不能因为会话已存在就吞掉新参数。
+        // g_stateMutex 同时包住 analyze，确保 setoption 在两次搜索之间执行。
+        if (active->threads == requestedThreads && active->hashMb == requestedHashMb
+            && active->evalFile == requestedEvalFile)
+            return true;
+        const std::size_t mark = active->sink.mark();
+        if (active->threads != requestedThreads)
+            sendOption(active, "Threads", std::to_string(requestedThreads));
+        if (active->hashMb != requestedHashMb)
+            sendOption(active, "Hash", std::to_string(requestedHashMb));
+        if (active->evalFile != requestedEvalFile && !requestedEvalFile.empty())
+            sendOption(active, "EvalFile", requestedEvalFile);
+        active->feeder.pushLine("isready");
+        if (!active->sink.waitForPrefix(mark, "readyok", 180000)) {
+            destroySessionLocked();
+            return false;
+        }
+        active->threads = requestedThreads;
+        active->hashMb = requestedHashMb;
+        active->evalFile = requestedEvalFile;
+        return true;
+    }
 
     auto* session      = new PikafishSession();
     session->savedCin  = std::cin.rdbuf(&session->feeder);
@@ -233,18 +260,20 @@ bool startSession(JNIEnv* env, jstring evalPath, jint threads, jint hashMb) {
         return false;
     }
 
-    sendOption(session, "Threads", std::to_string(threads > 0 ? threads : 2));
-    sendOption(session, "Hash", std::to_string(hashMb > 0 ? hashMb : 64));
+    sendOption(session, "Threads", std::to_string(requestedThreads));
+    sendOption(session, "Hash", std::to_string(requestedHashMb));
 
-    const std::string evalFile = jstringToUtf8(env, evalPath);
-    if (!evalFile.empty())
-        sendOption(session, "EvalFile", evalFile);
+    if (!requestedEvalFile.empty())
+        sendOption(session, "EvalFile", requestedEvalFile);
 
     session->feeder.pushLine("isready");
     if (!session->sink.waitForPrefix(0, "readyok", 180000)) {  // NNUE 首次加载可能较慢
         destroySessionLocked();
         return false;
     }
+    session->threads = requestedThreads;
+    session->hashMb = requestedHashMb;
+    session->evalFile = requestedEvalFile;
     return true;
 }
 
@@ -308,6 +337,13 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_stardust_autojs_engine_PikafishNativeBridge_nativeStart(JNIEnv* env, jclass, jstring evalPath,
                                                                  jint threads, jint hashMb) {
     return startSession(env, evalPath, threads, hashMb) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_stardust_autojs_engine_PikafishNativeBridge_nativeConfiguredThreads(JNIEnv*, jclass) {
+    std::lock_guard<std::mutex> guard(g_stateMutex);
+    PikafishSession* session = g_session.load();
+    return session != nullptr ? static_cast<jint>(session->threads) : 0;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

@@ -106,6 +106,20 @@ if ($targetOnline.Count -ne 1) {
 }
 Write-Host "[0/5] 设备检查通过：$DeviceId（在线 $($online.Count) 台）" -ForegroundColor Green
 
+# arm64 发布包必须带 Pikafish NNUE；缺失时不能静默退回 JS 算棋，
+# 否则面板上的原生线程设置看似生效、实际完全不起作用。
+if ($Abi -eq 'arm64-v8a' -and -not $SkipBuild) {
+    $nnuePath = Join-Path $projectRoot 'third-party\Pikafish\src\pikafish.nnue'
+    if (-not (Test-Path -LiteralPath $nnuePath -PathType Leaf)) {
+        Fail "找不到 Pikafish 权重：$nnuePath；arm64 发布已取消。"
+    }
+    $nnueBytes = (Get-Item -LiteralPath $nnuePath).Length
+    if ($nnueBytes -lt 20000000) {
+        Fail "Pikafish 权重过小（$nnueBytes 字节）：$nnuePath；arm64 发布已取消。"
+    }
+    Write-Host "      Pikafish NNUE 已就绪：$nnueBytes 字节" -ForegroundColor Green
+}
+
 # --- 1. 当前基准（版本号由本脚本算定，再显式交给 dev-update.ps1）-------------
 $versionsFile = Join-Path $projectRoot 'project-versions.json'
 $repoVersion = [int](Get-Content -LiteralPath $versionsFile -Raw -Encoding UTF8 | ConvertFrom-Json).appVersionCode

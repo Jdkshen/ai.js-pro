@@ -65,6 +65,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
@@ -983,7 +984,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         result.put("ok", ok);
         result.put("running", PikafishNativeBridge.nativeIsRunning());
         result.put("evalFile", nnue);
-        result.put("threads", threads);
+        result.put("threads", PikafishNativeBridge.nativeConfiguredThreads());
         result.put("hashMb", hashMb);
         if (!ok) {
             result.put("error", "原生引擎启动失败（uciok/readyok 阶段超时；权重文件可读吗：" + nnue + "）");
@@ -1128,18 +1129,54 @@ final class QuickJsHostBridge implements AutoCloseable,
         return PikafishNativeBridge.isAvailable();
     }
 
-    /** 找权重：显式路径优先（不存在就算失败）；否则 filesDir → externalFilesDir。 */
+    /** 找权重：显式路径优先；否则已有私有文件 → 外部目录 → APK 内置资产。 */
     private String resolvePikafishNnuePath(String evalFile) {
         if (evalFile != null && evalFile.length() > 0) {
             File file = new File(evalFile);
             return file.isFile() ? file.getAbsolutePath() : null;
         }
         for (File candidate : defaultPikafishNnueCandidates()) {
-            if (candidate.isFile()) {
+            if (candidate.isFile() && candidate.length() > 20_000_000L) {
                 return candidate.getAbsolutePath();
             }
         }
-        return null;
+        return extractBundledPikafishNnue();
+    }
+
+    private String extractBundledPikafishNnue() {
+        try {
+            Context context = mRuntime.uiHandler.getContext().getApplicationContext();
+            File target = new File(context.getFilesDir(), PIKAFISH_NNUE_NAME);
+            synchronized (PikafishNativeBridge.class) {
+                if (target.isFile() && target.length() > 20_000_000L) {
+                    return target.getAbsolutePath();
+                }
+                File temporary = new File(context.getFilesDir(), PIKAFISH_NNUE_NAME + ".tmp");
+                long copied = 0;
+                try (InputStream input = context.getAssets().open(PIKAFISH_NNUE_NAME);
+                     FileOutputStream output = new FileOutputStream(temporary)) {
+                    byte[] buffer = new byte[65536];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        output.write(buffer, 0, count);
+                        copied += count;
+                    }
+                    output.getFD().sync();
+                }
+                if (copied <= 20_000_000L) {
+                    temporary.delete();
+                    return null;
+                }
+                if (!temporary.renameTo(target)) {
+                    temporary.delete();
+                    return null;
+                }
+                return target.getAbsolutePath();
+            }
+        } catch (IOException | RuntimeException error) {
+            Log.w("QuickJsHostBridge", "Bundled Pikafish NNUE extraction failed", error);
+            return null;
+        }
     }
 
     private List<File> defaultPikafishNnueCandidates() {

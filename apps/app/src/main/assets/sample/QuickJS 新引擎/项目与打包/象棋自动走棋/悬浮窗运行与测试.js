@@ -5115,7 +5115,7 @@ function main() {
                     // 写不进就只生效本次
                 }
             }
-            logLine("Pikafish 线程：" + value + "（下次算棋生效，会重启引擎）");
+            logLine("Pikafish 线程：" + value + "（下次算棋前应用原生线程数）");
         }
     });
     // 上次滑过的值（storages 持久化；缺省 3500ms / 2 线程）

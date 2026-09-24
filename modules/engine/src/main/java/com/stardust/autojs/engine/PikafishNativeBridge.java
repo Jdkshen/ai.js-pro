@@ -47,13 +47,16 @@ public final class PikafishNativeBridge {
     }
 
     /**
-     * 启动（或复用）引擎会话；引擎已启动时直接返回 true。
+     * 启动（或复用）引擎会话；已启动但参数变化时，在两次搜索之间重新设置 UCI 选项。
      *
      * @param evalFilePath NNUE 权重文件绝对路径
      * @param threads      搜索线程数（native 侧下限 1、默认 2）
      * @param hashMb       置换表 MB（native 侧下限 16、默认 64）
      */
     public static native boolean nativeStart(String evalFilePath, int threads, int hashMb);
+
+    /** 最近一次收到 readyok 确认的原生 Threads 值；未启动时为 0。 */
+    public static native int nativeConfiguredThreads();
 
     /**
      * 算一步棋（阻塞）。

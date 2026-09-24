@@ -51,26 +51,33 @@ function lastError() {
     return lastStartError;
 }
 
-/** 面板/配置注入：evalFile / threads / hashMb。改配置会强制重启引擎（下次 analyze 时生效）。 */
+/** 面板/配置注入：参数变化后下次 analyze 会重新调用 nativeStart，由原生会话应用 UCI 选项。 */
 function configure(options) {
     const opts = options || {};
+    let changed = false;
     if (opts.evalFile !== undefined) {
-        activeConfig.evalFile = opts.evalFile == null ? null : String(opts.evalFile);
+        const value = opts.evalFile == null ? null : String(opts.evalFile);
+        changed = changed || activeConfig.evalFile !== value;
+        activeConfig.evalFile = value;
     }
     if (opts.threads !== undefined) {
         const threads = Math.round(Number(opts.threads));
         if (isFinite(threads) && threads >= 1) {
+            changed = changed || activeConfig.threads !== threads;
             activeConfig.threads = threads;
         }
     }
     if (opts.hashMb !== undefined) {
         const hashMb = Math.round(Number(opts.hashMb));
         if (isFinite(hashMb) && hashMb >= 16) {
+            changed = changed || activeConfig.hashMb !== hashMb;
             activeConfig.hashMb = hashMb;
         }
     }
     if (opts.restart === true) {
         stop();
+    } else if (changed) {
+        started = false;
     }
 }
 
@@ -122,7 +129,7 @@ function ensureStarted() {
 
 /** 退出引擎（面板「停止」时调用；下次 analyze 会重新拉起）。 */
 function stop() {
-    if (started && available()) {
+    if (available() && $pikafish.isRunning()) {
         try {
             $pikafish.quit();
         } catch (error) { /* 引擎侧已经退出 */ }
