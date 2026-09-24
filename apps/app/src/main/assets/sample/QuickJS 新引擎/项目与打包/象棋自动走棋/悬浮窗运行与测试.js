@@ -688,16 +688,12 @@ function scheduleRender() {
  *      `<button>` 只有 `on("touch")` 能到，`on("click")` / `.click()` / `.longClick()` 三种绑定
  *      全都不触发；而 `<text>` 的 `on("click")` 正常。所以按钮一律用带 bg 的 `<text>` 冒充。
  */
-/**
- * 配色：面板整体是深蓝灰底，按钮按功能分组上色（绿=开始、红=停/关、蓝=定位识别），
- * 进度行与日志区做成两张「卡片」（深色底 + 亮字）。
- * ⚠️ 静态写在 XML 里 —— 运行期改色要先确定引擎暴露了 setTextColor（见 render 里那层 try）。
- */
+/** 主操作高对比、辅助操作浅色；卡片圆角由 cardCornerRadius 实际绘制。 */
 const C = {
-    panel: "#F7F8FC", title: "#20252E",
+    panel: "#F3F5F9", title: "#20252E",
     btnNeutral: "#E8EDF5", btnNeutralFg: "#303744",
-    btnPrimary: "#3486FF", btnDanger: "#C24B52", btnAccent: "#4B83DC",
-    btnDim: "#E2E6ED", btnDimFg: "#586575",
+    btnPrimary: "#3478F6", btnDanger: "#C94E56", btnAccent: "#E1EDFF", btnAccentFg: "#2364BE",
+    btnDim: "#E7EBF2", btnDimFg: "#586575",
     card: "#FFFFFF", step: "#2F547D",
     logBg: "#F7F8FC", logFg: "#303744", status: "#667080"
 };
@@ -718,7 +714,7 @@ function panelTitleText() {
     } catch (error) {
         // 状态机还没建立时用兜底文案
     }
-    return "象棋 · " + state;
+    return "象棋助手 · " + state;
 }
 
 /** 顶栏只放用户此刻需要判断的信息；详细原因仍留在状态行和日志。 */
@@ -735,31 +731,45 @@ function compactStateText() {
     return (UI_MODE_LABEL[modeKey] || "象棋") + " · " + state;
 }
 
-/** 按钮：统一用带底色的 <text> 冒充（<button> 在这个引擎上收不到 click，见下方长注释）。 */
-function button(id, label, width, bg, fg) {
-    const row = PANEL.rowHeight;
-    return '    <text id="' + id + '" text="' + label + '" w="' + panelPx(width) + 'px" h="' + row + 'px" bg="' +
-        (bg || C.btnNeutral) + '" radius="' + PANEL.radiusButton + '" textColor="' +
-        (fg || ((bg === C.btnPrimary || bg === C.btnDanger || bg === C.btnAccent) ? "#FFFFFF" : C.btnNeutralFg)) + '" textSize="' + themeTokens.FONT.button + '" gravity="center"/>';
+/** 点击仍绑在 text 上；外层 card 才能真正画出圆角，text/vertical 的 radius 属性会被宿主忽略。 */
+function button(id, label, width, bg, fg, height) {
+    const row = height || PANEL.rowHeight;
+    const w = panelPx(width);
+    const fill = bg || C.btnNeutral;
+    const color = fg || (fill === C.btnAccent ? C.btnAccentFg :
+        ((fill === C.btnPrimary || fill === C.btnDanger) ? "#FFFFFF" : C.btnNeutralFg));
+    const emphasis = fill === C.btnPrimary || fill === C.btnDanger || fill === C.btnAccent ? ' textStyle="bold"' : '';
+    return '    <card w="' + w + 'px" h="' + row + 'px" cardCornerRadius="' + PANEL.radiusButton + 'px" cardElevation="0dp" cardBackgroundColor="' + fill + '" clipToOutline="true">' +
+        '<text id="' + id + '" text="' + label + '" w="' + w + 'px" h="' + row + 'px" textColor="' + color +
+        '" textSize="' + themeTokens.FONT.button + '" gravity="center"' + emphasis + '/></card>';
+}
+
+function gap(width) {
+    return '    <frame w="' + panelPx(width || 8) + 'px" h="1px"/>';
+}
+
+function rowGap() {
+    return '  <frame h="' + PANEL.rowGap + 'px"/>';
 }
 
 /** 行首的分组标签（对局 / 诊断） */
 function rowLabel(text) {
-    return '    <text text="' + text + '" w="' + panelPx(74) + 'px" h="' + PANEL.rowHeight +
-        'px" textColor="' + C.status + '" textSize="' + themeTokens.FONT.button + '" gravity="center"/>';
+    return '    <text text="' + text + '" w="' + panelPx(70) + 'px" h="' + PANEL.rowHeight +
+        'px" textColor="' + C.status + '" textSize="' + themeTokens.FONT.button + '" textStyle="bold" gravity="center"/>';
 }
 
 /** 参数滑条：用带底色的 <text> 冒充（拖动改值；这个引擎里 text 的 touch 能到，见 button 的说明）。
  *  ⚠1 2026-09-24 真机：11sp 下 6 格会被截断（“算棋 3.5s ■□□□□” 后面就没了）——
  *     减到 4 格 + 10sp，并且留出 padding，保证「值 + 格子」完整显示。 */
 function slider(id, width) {
-    return '    <text id="' + id + '" text="" w="' + width + 'px" h="' + PANEL.rowHeight + 'px" bg="' +
-        C.card + '" radius="' + PANEL.radiusCard + '" textColor="' + C.step + '" textSize="' +
-        themeTokens.FONT.status + '" gravity="center" padding="4px"/>';
+    return '    <card w="' + width + 'px" h="' + PANEL.rowHeight + 'px" cardCornerRadius="' + PANEL.radiusCard +
+        'px" cardElevation="0dp" cardBackgroundColor="' + C.card + '" clipToOutline="true">' +
+        '<text id="' + id + '" text="" w="' + width + 'px" h="' + PANEL.rowHeight + 'px" textColor="' + C.step +
+        '" textSize="' + themeTokens.FONT.status + '" gravity="center" padding="4px"/></card>';
 }
 /** 滑条几何：条宽与第 n 条在窗口内的左偏移（要和 XML 里 paramRow 的排布保持一致）。 */
 function sliderWidth() {
-    return Math.round((PANEL.width - panelPx(8) * 3) / 2);
+    return Math.floor((PANEL.width - panelPx(8) * 3) / 2);
 }
 function sliderLeft(index) {
     return panelPx(8) + index * (sliderWidth() + panelPx(8));
@@ -767,49 +777,54 @@ function sliderLeft(index) {
 
 const ROW_H = PANEL.rowHeight;
 const XML = [
-    '<vertical id="root" w="' + PANEL.width + 'px" h="' + PANEL.height +
-    'px" bg="' + C.panel + '" radius="' + PANEL.radiusPanel + '" padding="' + panelPx(8) + 'px">',
+    '<card id="panelCard" w="' + PANEL.width + 'px" h="' + PANEL.height + 'px" cardCornerRadius="' + PANEL.radiusPanel +
+    'px" cardElevation="0dp" cardBackgroundColor="' + C.panel + '" clipToOutline="true">',
+    '<vertical id="root" w="' + PANEL.width + 'px" h="' + PANEL.height + 'px" padding="' + panelPx(8) + 'px">',
     // 第 1 行：当前状态 + 模式 + 主操作；停止始终固定在这一行
     '  <horizontal id="primaryRow" h="' + ROW_H + 'px">',
-    '    <text id="title" text="只识别 · 未运行" w="' + panelPx(320) + 'px" h="' + ROW_H + 'px" textColor="' + C.title +
-    '" textSize="' + themeTokens.FONT.title + '" gravity="center_vertical" padding="10px"/>',
+    '    <text id="title" text="象棋助手 · 未运行" w="' + panelPx(350) + 'px" h="' + ROW_H + 'px" textColor="' + C.title +
+    '" textSize="' + themeTokens.FONT.title + '" textStyle="bold" gravity="center_vertical" padding="10px"/>',
+    gap(),
     button("modeBtn", "只识别", 180, C.btnAccent),
-    button("startBtn", "开始", 140, C.btnPrimary),
-    button("stopBtn", "停止", 130, C.btnDanger),
-    button("collapseBtn", "收起", 120, C.btnDim, C.btnDimFg),
+    gap(),
+    button("startBtn", "开始", 160, C.btnPrimary),
+    gap(),
+    button("stopBtn", "停止", 140, C.btnDanger),
+    gap(),
+    button("collapseBtn", "收起", 130, C.btnDim, C.btnDimFg),
     '  </horizontal>',
-    // 第 2 行：对局操作
+    rowGap(),
+    // 第 2 行：真正需要随手操作的对局按钮；诊断、自检、绘制、清日志在主界面。
     '  <horizontal id="gameRow" h="' + ROW_H + 'px">',
     rowLabel("对局"),
-    button("locateBtn", "定位校准", 150, C.btnAccent),
-    button("recognizeBtn", "识别一帧", 140, C.btnAccent),
-    button("turnBtn", "轮到我", 110),
-    button("sideBtn", "换我方", 110),
-    button("hideBtn", "抓帧：自动", 160, C.btnDim, C.btnDimFg),
-    button("alignBtn", "微调：关", 130, C.btnDim, C.btnDimFg),
+    gap(),
+    button("locateBtn", "定位校准", 190, C.btnAccent),
+    gap(),
+    button("recognizeBtn", "识别一帧", 190, C.btnAccent),
+    gap(),
+    button("turnBtn", "轮到我", 160),
+    gap(),
+    button("sideBtn", "换我方", 160),
+    gap(),
+    button("sessionBtn", "重开本局", 160, C.btnDim, C.btnDimFg),
     '  </horizontal>',
-    // 第 3 行：诊断工具（与对局操作分层）
-    '  <horizontal id="diagnosticRow" h="' + ROW_H + 'px">',
-    rowLabel("诊断"),
-    button("sessionBtn", "新会话", 110, C.btnDim, C.btnDimFg),
-    button("selfcheckBtn", "离线自检", 140, C.btnDim, C.btnDimFg),
-    button("contractBtn", "契约测试", 140, C.btnDim, C.btnDimFg),
-    button("drawBtn", "绘制：关", 130, C.btnDim, C.btnDimFg),
-    button("clearBtn", "清空日志", 135, C.btnDim, C.btnDimFg),
-    button("closeBtn", "关闭", 105, C.btnDanger),
-    '  </horizontal>',
-    // 第 4 行：参数滑条（算棋时间 / 线程）—— 拖动改值，松手生效并写盘
+    rowGap(),
+    // 第 3 行：算棋时间 / 线程，调速时可直接拖动，松手生效并写盘。
     '  <horizontal id="paramRow" h="' + ROW_H + 'px">',
     slider("thinkSlider", sliderWidth()),
+    gap(),
     slider("threadsSlider", sliderWidth()),
     '  </horizontal>',
     '  <text id="status" text="准备中…" w="' + (PANEL.width - panelPx(16)) +
     'px" h="' + PANEL.statusHeight + 'px" textColor="' + C.status +
     '" textSize="' + themeTokens.FONT.status + '" gravity="center_vertical" padding="2px"/>',
-    '  <text id="step" text="进度：等待开始" w="' + (PANEL.width - panelPx(16)) +
-    'px" h="' + PANEL.stepHeight + 'px" bg="' + C.card + '" radius="' + PANEL.radiusCard +
-    '" textColor="' + C.step + '" textSize="' + themeTokens.FONT.step + '" padding="8px"/>',
-    '</vertical>'
+    '  <card w="' + (PANEL.width - panelPx(16)) + 'px" h="' + PANEL.stepHeight + 'px" cardCornerRadius="' + PANEL.radiusCard +
+    'px" cardElevation="0dp" cardBackgroundColor="' + C.card + '" clipToOutline="true">',
+    '    <text id="step" text="进度：等待开始" w="' + (PANEL.width - panelPx(16)) + 'px" h="' + PANEL.stepHeight +
+    'px" textColor="' + C.step + '" textSize="' + themeTokens.FONT.step + '" padding="8px"/>',
+    '  </card>',
+    '</vertical>',
+    '</card>'
 ].join("\n");
 
 /**
@@ -820,9 +835,10 @@ const XML = [
  * 本来就有条空带（K40: 棋盘底 ~1716 → 菜单上沿 ~2060）⇒ 放 8 行 9sp 完全够，且不挡菜单。
  * ⚠️ 这窗在屏幕下方，藏它的方向与上方面板**相反**（要往下挪出屏幕，见 hidePanel）。
  */
-const LOG_XML = '<text id="logArea" text="" w="' + PANEL.width + 'px" h="' +
-    PANEL.logHeight + 'px" bg="' + C.logBg + '" radius="' + PANEL.radiusPanel +
-    '" textColor="' + C.logFg + '" textSize="' + themeTokens.FONT.log + '" padding="10px"/>';
+const LOG_XML = '<card id="logCard" w="' + PANEL.width + 'px" h="' + PANEL.logHeight + 'px" cardCornerRadius="' + PANEL.radiusPanel +
+    'px" cardElevation="0dp" cardBackgroundColor="' + C.logBg + '" clipToOutline="true">' +
+    '<text id="logArea" text="" w="' + PANEL.width + 'px" h="' + PANEL.logHeight + 'px" textColor="' +
+    C.logFg + '" textSize="' + themeTokens.FONT.log + '" padding="10px"/></card>';
 
 let win = null;
 let compactWin = null;
@@ -835,14 +851,21 @@ let logWindowEnabled = true;
 const COMPACT_W = panelLayout.compactWidth;
 const COMPACT_H = panelLayout.compactHeight;
 const COMPACT_XML = [
-    '<horizontal id="compactRoot" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" bg="' + C.panel + '" padding="6px">',
-    '  <text id="compactStatus" text="只识别 · 未运行" w="' + panelPx(280) + 'px" h="' + panelPx(42) + 'px" textColor="' + C.title +
-    '" textSize="11" gravity="center_vertical" padding="8px"/>',
-    button("compactMode", "只识别", 155, C.btnAccent),
-    button("compactStart", "开始", 120, C.btnPrimary),
-    button("compactStop", "停止", 115, C.btnDanger),
-    button("compactExpand", "展开", 115, C.btnDim, C.btnDimFg),
-    '</horizontal>'
+    '<card id="compactCard" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" cardCornerRadius="' + PANEL.radiusPanel +
+    'px" cardElevation="0dp" cardBackgroundColor="' + C.panel + '" clipToOutline="true">',
+    '<horizontal id="compactRoot" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" padding="6px">',
+    '  <text id="compactStatus" text="只识别 · 未运行" w="' + panelPx(250) + 'px" h="' + panelPx(42) + 'px" textColor="' + C.title +
+    '" textSize="11" textStyle="bold" gravity="center_vertical" padding="8px"/>',
+    gap(),
+    button("compactMode", "只识别", 140, C.btnAccent, null, panelPx(42)),
+    gap(),
+    button("compactStart", "开始", 115, C.btnPrimary, null, panelPx(42)),
+    gap(),
+    button("compactStop", "停止", 105, C.btnDanger, null, panelPx(42)),
+    gap(),
+    button("compactExpand", "展开", 105, C.btnDim, C.btnDimFg, panelPx(42)),
+    '</horizontal>',
+    '</card>'
 ].join("\n");
 
 function activePanelWindow() {
@@ -1084,9 +1107,6 @@ function render() {
         win.modeBtn.setText(UI_MODE_LABEL[modeKey] || MODE_LABEL[modeKey]);
         win.startBtn.setText(running ? "暂停" : "开始");
         win.collapseBtn.setText(collapsed ? "展开" : "收起");
-        win.hideBtn.setText("抓帧：" + (hideOnCapture === "auto" ? "自动" : (hideOnCapture ? "开" : "关")));
-        win.alignBtn.setText("微调：" + (autoAlignOn ? "开" : "关"));
-        win.drawBtn.setText("绘制：" + DRAW_LABEL[drawMode]);
         renderParamSliders();
         if (compactWin) {
             compactWin.compactStatus.setText(compactStateText());
@@ -1272,10 +1292,10 @@ function panelSafeBand(size) {
 }
 
 /** 把 y 夹进安全带（见 panelSafeBand）：先夹下界（不许挡底部菜单），再抬到上界。 */
-function clampPanelY(y, size) {
+function clampPanelY(y, size, height) {
     const band = panelSafeBand(size);
     let out = Math.round(y);
-    out = Math.min(out, band.bottom - PANEL_H);
+    out = Math.min(out, band.bottom - (height || (collapsed ? COMPACT_H : PANEL_H)));
     if (out < band.top) {
         out = band.top;
     }
@@ -1365,13 +1385,14 @@ function snapPanelAboveBoard() {
         // ⚠️ 这个比例是按 **372 高**调的；面板变高后要等量上移，否则起始几帧会压住棋盘顶行，
         //    而「压住 ⇒ 抓帧时藏面板」在部分 ROM 上恢复不可靠（真机踩过：面板再也回不来）。
         const baseY = size && size.height > 0 ? Math.round(size.height * 0.11) : 264;
-        let y = baseY - Math.max(0, PANEL_H - 372);
+        const activeHeight = collapsed ? COMPACT_H : PANEL_H;
+        let y = baseY - Math.max(0, activeHeight - 372);
         const box = grid ? geometryModule.boundsOf(grid, 0) : null;
         if (box && isFinite(box.y)) {
             // 棋子圆盘比「第一条线」高出约 55~60px（半径 + 边距）→ 面板底边要留出这段。
             // ⚠️ 这里只把面板**往上抬**（Math.min）——优先不挡棋盘；抬不上去（会被状态栏/浮层盖住）时
             //    由下面的 clampPanelY 接管：允许压棋盘，但绝不允许挡底部菜单。
-            y = Math.min(y, Math.round(box.y - 62 - PANEL_H - 10));
+            y = Math.min(y, Math.round(box.y - 62 - activeHeight - 10));
         }
         y = clampPanelY(y, size);
         let cur = null;
@@ -4777,30 +4798,42 @@ function ensureCompactWindow(x, y) {
     return compactWin;
 }
 
-/** 单窗口收起：隐藏次要内容并修改根布局高度，规避部分 ROM 的双窗口显隐异常。 */
+/** 真正切到一行高的小窗；宿主的 setContentVisibility 只切根 View，不移除窗口。 */
 function setPanelCollapsed(next) {
     next = !!next;
     if (next === collapsed) {
         return;
     }
-    collapsed = next;
+    let x = PANEL.marginX;
+    let y = panelY == null ? Math.round(2400 * PANEL.defaultTopRatio) : panelY;
     try {
-        panelY = win.getY(true);
-    } catch (error) {
-        // 位置读取失败不影响收起状态切换
-    }
-    try {
-        const detailVisibility = next ? 8 : 0;
-        win.gameRow.setVisibility(detailVisibility);
-        win.diagnosticRow.setVisibility(detailVisibility);
-        win.status.setVisibility(detailVisibility);
-        win.step.setVisibility(detailVisibility);
-        // 日志已经是**单独的窗口**：收起时不要 setVisibility（这台 ROM 上 re-visible 不可靠），
-        // 改用「挪出屏幕再挪回」那条已验证的路（hideLogWindow / showLogWindow）。
         if (next) {
-            hideLogWindow("收起面板");
+            x = win.getX(true);
+            y = win.getY(true);
+            const bar = ensureCompactWindow(x, y);
+            bar.setPosition(x, y);
+            bar.setContentVisibility(0);
+            bar.setTouchable(true);
+            win.setContentVisibility(8);
+            win.setTouchable(false);
+            if (logWin) {
+                logWin.setContentVisibility(8);
+            }
+            collapsed = true;
+            panelY = y;
         } else {
-            logPosBeforeHide = null;        // 先清标记，让 showLogWindow 真的执行
+            x = compactWin.getX(true);
+            y = compactWin.getY(true);
+            win.setPosition(x, clampPanelY(y, adapter.screenSize(), PANEL_H));
+            win.setContentVisibility(0);
+            win.setTouchable(true);
+            compactWin.setContentVisibility(8);
+            compactWin.setTouchable(false);
+            collapsed = false;
+            panelY = win.getY(true);
+            if (logWin) {
+                logWin.setContentVisibility(0);
+            }
             showLogWindow();
             if (logWin && typeof logWin.setPosition === "function") {
                 try {
@@ -4813,6 +4846,11 @@ function setPanelCollapsed(next) {
         }
     } catch (error) {
         logLine("收起/展开失败：" + error);
+        try { win.setPosition(x, y); } catch (inner) { /* 保留现有窗口 */ }
+        try { win.setContentVisibility(0); win.setTouchable(true); } catch (inner) { /* 保留现有窗口 */ }
+        try { if (compactWin) { compactWin.setContentVisibility(8); compactWin.setTouchable(false); } } catch (inner) { /* 保留现有窗口 */ }
+        try { if (logWin) { logWin.setContentVisibility(0); } } catch (inner) { /* 日志不影响控制 */ }
+        collapsed = false;
     } finally {
         render();
     }
@@ -4982,56 +5020,7 @@ function main() {
         app.controller.run("RECOGNIZE");
         render();
     });
-    win.selfcheckBtn.on("click", function () {
-        app.controller.run("SELFTEST");
-        render();
-    });
-    win.contractBtn.on("click", function () {
-        app.controller.run("CONTRACT");
-        render();
-    });
-    // 识别绘制：点一下 = 抓一帧 → 认一帧 → 把结果画在冻结的画面上（人审用）。
-    // 再点 = 换成更详细的一档；从「全量」再点就收掉。循环在跑时会拒绝（驱动每帧抓屏会把画板截进图）。
-    win.drawBtn.on("click", function () {
-        if (!overlayOn) {
-            drawMode = "cells";          // 先给「格子」档：最干净，一眼看每格读成了什么
-            auditDraw();
-        } else if (drawMode !== "full") {
-            drawMode = "full";           // 再点：加上原始检测框和空格标记
-            auditDraw();
-        } else {
-            drawMode = "off";
-            refreshOverlay(null, null, { force: true });
-            logLine("识别绘制：已收掉画板");
-        }
-        render();
-    });
-    win.clearBtn.on("click", function () {
-        logLines.length = 0;
-        render();
-    });
-    // 面板自己关自己：它默认浮在主界面下半部，主界面上那一个「关闭」按钮可能被盖住
-    win.closeBtn.on("click", function () {
-        console.log("[floaty] 关闭面板（用户点按钮）");
-        stopLoop();   // 内部会释放循环锁
-        try {
-            if (aliveTimer) {
-                clearInterval(aliveTimer);
-                aliveTimer = null;
-            }
-        } catch (error) {
-            // 清不掉也不影响关窗
-        }
-        try {
-            win.close();
-            if (compactWin) {
-                compactWin.close();
-            }
-        } catch (error) {
-            console.log("[floaty] 关窗失败：" + error);
-        }
-    });
-    logLine("按钮绑定完成：模式/收起/隐藏抓帧/微调/开始/停止/定位/识别/轮到我/换我方/新会话/自检/契约/清空/关闭");
+    logLine("按钮绑定完成：模式/收起/开始/停止/定位/识别/轮到我/换我方/重开本局；诊断工具在主界面");
 
     // ---- 参数滑条（2026-09-24 用户：在面板滑动选「算棋时间 / 线程」）----
     thinkSliderEl = win.thinkSlider;
@@ -5104,21 +5093,7 @@ function main() {
         }
     }());
     renderParamSliders();
-    // 抓帧时隐藏面板：开着时面板不会盖住棋盘（实测面板会挡住上面几行棋子）
-    // 隐藏抓帧：自动 → 开 → 关 循环（默认「自动」= 只在面板真的压住棋盘时才藏，省每帧 ~100ms）
-    win.hideBtn.on("click", function () {
-        hideOnCapture = hideOnCapture === "auto" ? true : (hideOnCapture === true ? false : "auto");
-        logLine("隐藏抓帧：" + (hideOnCapture === "auto" ? "自动（只在压住棋盘时藏）" : (hideOnCapture ? "开" : "关")));
-        render();
-    });
-    // 几何自动微调：真机实测开着时会把同一子认成两个（红R 3 个），所以默认关
-    win.alignBtn.on("click", function () {
-        autoAlignOn = !autoAlignOn;
-        logLine("几何自动微调：" + (autoAlignOn ?
-            "开（按检测框微调，实测会认重子，建议只在定位明显偏时试）" :
-            "关（推荐：直接用校准后的几何）"));
-        render();
-    });
+    // 抓帧遮挡保持自动判定；几何微调保留诊断配置，默认关闭。
     // 「现在轮到我」：把当前观察到的局面当可靠基准（轮次未知时状态机会一直等）
     win.turnBtn.on("click", function () {
         // A1 批次2：命令式（带 side 参数；“没有驱动”由 handler 报错）

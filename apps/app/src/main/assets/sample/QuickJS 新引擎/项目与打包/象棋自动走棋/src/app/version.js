@@ -1,3 +1,3 @@
 // @engine quickjs
 "use strict";
-module.exports = { VERSION: "0.6.3" };
+module.exports = { VERSION: "0.6.4" };

@@ -14,14 +14,8 @@
 /** 面板几何（真机实测：不挡棋盘、也不挡底部按钮排）。 */
 const PANEL = {
     width: 1020,
-    /** 424 = 三行按钮(42×3) + 状态(34) + 进度卡(80) + 日志区(128) + padding/余量。 */
-    /**
-     * ⚠️ 2026-09-20 用户口径（「悬浮窗面板在上面，日志在下面」；又提「字太小/面板好看点/轮次没显示完整」）：
-     *   控制面板（三行按钮 + 状态 + 进度）在上方；日志单独一窗在下方。
-     *   高度 = 4×rowHeight(48) + statusHeight(42) + stepHeight(144) + padding/余量 ≈ 418。
-     *   （2026-09-24 新增第 4 行 = 参数滑条「算棋时间 / 线程」，面板上滑动选择）
-     */
-    height: 418,
+    /** 常用控制两行 + 参数一行 + 状态 + 进度；诊断工具在主界面。 */
+    height: 364,
     marginX: 30,
     /** 默认停在棋盘上沿之上（K40 ≈ 0.11 × 屏高）；定位成功后由 snapPanelAboveBoard 再贴一次。 */
     defaultTopRatio: 0.11,
@@ -85,7 +79,7 @@ function layoutFor(screen) {
         radiusPanel: px(22), radiusButton: px(12), radiusCard: px(16)
     });
     return {
-        scale: scale, PANEL: panel, compactWidth: px(850), compactHeight: px(54),
+        scale: scale, PANEL: panel, compactWidth: px(780), compactHeight: px(54),
         logWrap: Math.max(15, Math.round(LOG_WRAP * scale))
     };
 }
