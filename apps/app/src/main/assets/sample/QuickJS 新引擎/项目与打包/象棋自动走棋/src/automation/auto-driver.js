@@ -1131,7 +1131,8 @@ function createDriver(options) {
             note("算棋：轮到 " + (effect.side === "w" ? "红" : "黑") + "，" + result.iccs +
                 "（深度 " + result.depth + "，" + result.ms + "ms，评分 " + Math.round(result.score) +
                 "｜后端 " + (result.engine || "未知") +
-                "｜历史 " + (result.historyUsed ? (result.historyStatus || "partial") : "当前FEN") + "）");
+                "｜历史 " + (result.historyUsed ? (result.historyStatus || "partial") : "当前FEN") +
+                (result.excludeRelaxed ? "｜排除放宽" : "") + "）");
             /**
              * ★★ 杀棋佐证闸门 v2（2026-09-21 下午；v1 见 16.19）：
              *   v1 只要求「算棋之后出现过一张 0 未知格、盘面一致的观测」——实测挡住了大部分

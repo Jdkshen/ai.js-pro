@@ -2970,9 +2970,13 @@ function buildDriver() {
             if (smart && smart.ok) {
                 lastPipelineUnknown = smart.unknownCells || 0;
                 refreshOverlay(smart, null);
-                probeGameOver(smart.frame && smart.frame.image);
                 logPipelineNote(smart);
             }
+            // ★ 2026-09-24 真机（和棋那局）：结算页会让字形识别整体失败（双方帅/将读不出来）——
+            //   探针原来挂在上面 ok 分支里 ⇒ 永远等不到 ⇒ 对局结束后循环一直 WAIT_STABLE 空转，
+            //   浮窗一直显示「等稳定」（用户看到的就是「没有变成未运行」）。
+            //   失败帧现在也带 frame（board-service 里补的），有图就探。
+            probeGameOver(smart && smart.frame && smart.frame.image);
             // `ok:false` / `unstable` 都当作「这一帧不观察」：驱动计一次未识别、不会乱推轮次
             return smart || null;
         },

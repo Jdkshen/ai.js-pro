@@ -1289,7 +1289,7 @@ check("算棋·Pikafish 适配：排除表在候选里跳过（MultiPV 选路）
         ("没有排除表就该取头名，实际 " + JSON.stringify(plain));
 });
 
-check("算棋·Pikafish 适配：候选全被排除时明确失败（交给路由回退）", function () {
+check("算棋·Pikafish 适配：pickCandidate 是纯选路（全被排除返回 null；放宽在 analyze 做）", function () {
     const candidates = [{ move: "b2e2" }, { move: "h2e2" }];
     const picked = pikafishEngine.pickCandidate(candidates, ["b2e2", "h2e2"], "b2e2");
     if (picked !== null) {
@@ -1299,6 +1299,68 @@ check("算棋·Pikafish 适配：候选全被排除时明确失败（交给路�
     const fallback = pikafishEngine.pickCandidate(null, ["b2e2"], "b2e2");
     return fallback === null ||
         ("空候选 + 被排除的兜底着法应当为 null，实际 " + JSON.stringify(fallback));
+});
+
+check("算棋·Pikafish 适配：全被排除不再交给 JS —— 加宽扫掠 + 放宽（和棋那局的真机修法）", function () {
+    const plan = pikafishEngine.multiPvPlan;
+    if (typeof plan !== "function") {
+        return "适配器没有导出 multiPvPlan";
+    }
+    if (plan(3, 1) !== 4 || plan(8, 1) !== 5) {
+        return "第一遍计划不对（3→" + plan(3, 1) + "，8→" + plan(8, 1) + "）";
+    }
+    if (plan(8, 2) !== 9 || plan(20, 2) !== 12) {
+        return "第二遍收宽计划不对（8→" + plan(8, 2) + "，20→" + plan(20, 2) + "）";
+    }
+    const board = fen.parseFen(fen.START_FEN).board;
+    const moves = legal.allLegalMoves(board, "w").map(function (m) { return m.iccs; });
+    const banned = moves.slice(0, 5);
+    const wanted = moves[5];
+    const previous = global.$pikafish;
+    const calls = [];
+    let wideExtra = [wanted];   // 第二遍（加宽后）附带的表外候选；测「放宽」时置空
+    const fake = {
+        available: function () { return true; },
+        isRunning: function () { return true; },
+        start: function () { return { ok: true }; },
+        quit: function () { },
+        analyze: function (value, movetime, timeoutMs, multiPv) {
+            calls.push(multiPv);
+            const list = (multiPv || 1) > 5 ? banned.concat(wideExtra) : banned.slice();
+            return {
+                ok: true,
+                move: list[0],
+                candidates: list.map(function (m, i) { return { move: m, scoreCp: 12 - i, depth: 12 }; })
+            };
+        }
+    };
+    global.$pikafish = fake;
+    try {
+        const swept = pikafishEngine.analyze({ board: board, side: "w" },
+            { excludeIccs: banned, movetime: 10 });
+        if (!swept.ok || swept.iccs !== wanted || swept.excludeRelaxed) {
+            return "加宽扫掠没有挑出表外着法：" + JSON.stringify({ r: swept, calls: calls });
+        }
+        if (calls.length < 2 || !(calls[1] > 5)) {
+            return "第二遍没有加宽 MultiPV：" + JSON.stringify(calls);
+        }
+        // 两遍都全被排除 → 放宽（ok 且带标记），不再失败交给路由回退
+        wideExtra = [];
+        calls.length = 0;
+        const relaxed = pikafishEngine.analyze({ board: board, side: "w" },
+            { excludeIccs: banned, movetime: 10 });
+        if (!relaxed.ok || relaxed.excludeRelaxed !== true) {
+            return "全被排除时应当放宽而不是失败：" + JSON.stringify(relaxed);
+        }
+        if (banned.indexOf(relaxed.iccs) < 0) {
+            return "放宽后应当取引擎头名（表内着法），实际 " + relaxed.iccs;
+        }
+        return true;
+    } finally {
+        pikafishEngine.stop();
+        if (previous === undefined) { delete global.$pikafish; }
+        else { global.$pikafish = previous; }
+    }
 });
 
 check("算棋·Pikafish：已确认棋谱走新 API，旧宿主安全退回当前 FEN", function () {

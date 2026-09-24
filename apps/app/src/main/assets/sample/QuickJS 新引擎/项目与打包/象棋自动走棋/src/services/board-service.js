@@ -296,7 +296,11 @@ function createBoardService(options) {
             lastFallbackNoteAt = ports.now();
             vision.log("字形识别不通过（这一帧不观察）：" + why);
         }
-        return { ok: false, reason: "字形识别不通过：" + why };
+        // ★ 2026-09-24（和棋那局）：失败帧也把图带上 —— 对局结算页恰恰会让字形识别整体失败
+        //   （双方帅/将读不出来），而面板的「结算页探针」（probeGameOver）要拿这一帧去 OCR
+        //   底部按钮带。原来失败不带 frame、探针又只挂在 ok 分支上 ⇒ 结算页永远探不到 ⇒
+        //   对局结束后循环一直空转（浮窗一直显示「等稳定」）。
+        return { ok: false, reason: "字形识别不通过：" + why, frame: grabbed };
     }
 
     /** 旧路径（原 `recognize`）：兼容既有调用方，行为不变。 */

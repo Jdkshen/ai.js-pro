@@ -11,10 +11,14 @@
  *   · `score mate N`（N 步杀，走棋方视角）→ score 置 ±29900（越过驱动的杀棋门 29800）、
  *     mateIn = ±N；没有 mate 时 mateIn = null、score = cp。
  *
- * 已知限制（v1.1）：
- *   · movetime 用尽才返回（引擎没有"提前命中就收"的通道），单步耗时 ≈ options.movetime；
- *   · excludeIccs（循环/长捉排除表）靠 MultiPV 选路：请求前 N 路候选（N = 排除数 + 1，最多 5），
- *     取第一路不在排除表里的。全部被挡时返回失败，由 engine-router 回退 JS 引擎兜底。
+ * 已知限制（v1.2）：
+ *   · movetime 用尽才返回（引擎没有"提前命中就收"的通道），单步耗时 ≈ options.movetime
+ *     （排除表全被挡时会加宽 MultiPV 再扫一遍 ⇒ 这一步 ≈ 2×movetime，属罕见路径）；
+ *   · excludeIccs（循环/长捉排除表）靠 MultiPV 选路：先要 N = 排除数+1 路（上限 5），
+ *     取第一路不在表里的（v1.1）；全被挡再加宽到上限 12 扫第二遍；仍全被挡就**放宽排除表取头名**
+ *     （结果带 excludeRelaxed 标记），**不再返回失败交给路由回退**。
+ *     ⚠️ 真机 2026-09-24（和棋那局 11:23:48）：禁用攒到 5 手 → 旧逻辑失败 → 路由回退 JS 引擎
+ *     （深度 4、评分 -153）→ 接着把「已禁的重复着」又走了出来 → 100 回合无吃子判和。
  */
 "use strict";
 
@@ -166,6 +170,19 @@ function pickCandidate(candidates, excludes, fallbackMove) {
     return null;
 }
 
+/** MultiPV 扫掠上限：第一遍按「排除数+1」但不超 5 路；全被挡再加宽到 12 路扫一遍。 */
+const MULTIPV_MAX_FIRST = 5;
+const MULTIPV_MAX_WIDE = 12;
+
+/**
+ * MultiPV 计划（纯函数，自检直接测）：attempt 1 = 第一遍（上限 5），attempt ≥2 = 加宽扫掠（上限 12）。
+ */
+function multiPvPlan(excludeCount, attempt) {
+    const n = Math.max(0, Number(excludeCount) || 0);
+    const cap = (attempt >= 2) ? MULTIPV_MAX_WIDE : MULTIPV_MAX_FIRST;
+    return Math.max(1, Math.min(n + 1, cap));
+}
+
 /**
  * 算一步棋（阻塞，耗时 ≈ options.movetime）。
  * @param position FEN / {board, side} / 90 长数组（同 engine.js）
@@ -188,14 +205,16 @@ function analyze(position, options) {
     const timeoutMs = opts.timeoutMs == null ? movetime + DEFAULTS.timeoutSlackMs : opts.timeoutMs;
     // 排除表（游戏拒绝过的着法/循环排除）：用 MultiPV 多要几路，再挑第一路不在表里的。
     const excludes = (opts.excludeIccs && opts.excludeIccs.length) ? opts.excludeIccs : null;
-    const multiPv = excludes ? Math.min(excludes.length + 1, 5) : 1;
     const historyCommand = typeof opts.positionCommand === "string" ? opts.positionCommand : null;
     const historyUsed = !!(historyCommand && typeof $pikafish.analyzePosition === "function");
-    let response;
-    try {
-        response = historyUsed
+    const callEngine = function (multiPv) {
+        return historyUsed
             ? $pikafish.analyzePosition(historyCommand, movetime, timeoutMs, multiPv)
             : $pikafish.analyze(fen, movetime, timeoutMs, multiPv);
+    };
+    let response;
+    try {
+        response = callEngine(multiPvPlan(excludes ? excludes.length : 0, 1));
     } catch (error) {
         return {
             ok: false, stage: "native", side: resolved.side,
@@ -208,12 +227,39 @@ function analyze(position, options) {
             reason: (response && response.error) ? response.error : "引擎没有返回 bestmove"
         };
     }
-    const chosen = pickCandidate(response.candidates, excludes, response.move);
+    let chosen = pickCandidate(response.candidates, excludes, response.move);
+    let excludeRelaxed = false;
+    if (!chosen && excludes) {
+        /**
+         * ★★ 2026-09-24 真机（和棋那局 · 11:23:48）：禁用着法攒到 ≥5 手时，第一遍只要了 5 路
+         *   候选 ⇒ 全在排除表里 ⇒ 本函数失败 ⇒ **路由回退到 JS 引擎**（深度 4、评分 -153），
+         *   随后一路把「已禁的重复着」又走了出来、100 回合无吃子判和。
+         *   两步补救（与内置 JS 引擎「全被排除就忽略排除表再搜一次」同策略，见 search.js 的兜底）：
+         *     ① 加宽 MultiPV 再扫一遍（上限 12）——优先找「不在表里的下一档好手」；
+         *     ② 仍全被挡 ⇒ 放宽排除表、取引擎头名，**绝不因此降级到 JS 引擎**。
+         *   放宽有「继续长捉」的规则风险，但比换掉引擎（当场掉几百 Elo）小得多；
+         *   日志会带「排除放宽」，真机上看得见。
+         */
+        let wide = null;
+        try {
+            wide = callEngine(multiPvPlan(excludes.length, 2));
+        } catch (error) {
+            wide = null;   // 加宽这步失败不该毁掉整次算棋：下面还有放宽兜底
+        }
+        if (wide && wide.ok === true) {
+            response = wide;
+            chosen = pickCandidate(wide.candidates, excludes, wide.move);
+        }
+        if (!chosen) {
+            chosen = pickCandidate(response.candidates, null, response.move);
+            excludeRelaxed = true;
+        }
+    }
     if (!chosen) {
         return {
             ok: false, stage: "exclude", side: resolved.side,
-            reason: "Pikafish 的 " + (response.candidates ? response.candidates.length : 0) +
-                " 路候选全在排除表里（" + excludes.join("/") + "）"
+            reason: "Pikafish 没给出可用着法（候选 " + (response.candidates ? response.candidates.length : 0) +
+                " 路，排除表 " + (excludes ? excludes.join("/") : "空") + "）"
         };
     }
     const iccs = String(chosen.move || "");
@@ -254,7 +300,9 @@ function analyze(position, options) {
         fen: fen,
         engine: "pikafish",
         historyUsed: historyUsed,
-        historyStatus: historyUsed ? (opts.historyStatus || "partial") : "fen"
+        historyStatus: historyUsed ? (opts.historyStatus || "partial") : "fen",
+        // 全被挡后放宽了排除表（继续出最强的着法；日志/真机排障看这个标记）
+        excludeRelaxed: excludeRelaxed
     };
 }
 
@@ -267,6 +315,8 @@ module.exports = {
     analyze: analyze,
     /** 纯函数：从候选路由挑一手（离线自检用）。 */
     pickCandidate: pickCandidate,
+    /** 纯函数：MultiPV 扫掠计划（离线自检用）。 */
+    multiPvPlan: multiPvPlan,
     /** 一行配置描述（面板/日志用）。 */
     configText: function () {
         return "Pikafish（线程 " + activeConfig.threads + "，Hash " + activeConfig.hashMb + "MB" +
