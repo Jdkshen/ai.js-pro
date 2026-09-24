@@ -2295,13 +2295,15 @@ let lastPipelineUnknown = 0;
 /** 最近一次「校准结果可信性检查」被否掉的时间戳（冷却期内不重跑全量校准，避免每帧重校死循环） */
 let lastCalibrationRejectAt = 0;
 const CALIBRATION_RETRY_COOLDOWN_MS = 30000;
+/** 行体检仍过时，单帧漏掉帅/将先当作选中态/动画；连续 3 次才允许重校准。 */
+let gridKingMissStreak = 0;
 
 /**
- * 数一下这帧读出几个「帅/将」。**几何对不对的硬判据**：
+ * 数一下这帧读出几个「帅/将」，供几何候选检查使用。
  * 真机 2026-09-24 11:50（用户报「又识别不到了」）：中途一次误触发的全量重校准换上了偏移(25,22)
  * 的坏网格 —— 之后每帧都是「红帅数量 0；黑将数量 0」，而**未知格看起来并不多**
  * （错网格上大部分格子读成空、不算未知）⇒ 旧逻辑照样「沿用」⇒ 永远读不出局面。
- * 帅/将是全盘最稳的两个字形：一个都读不到 ⇒ 几何必然不对。
+ * 帅/将通常稳定，但选中高亮或动画会短暂遮字；不能凭单帧漏读重置几何。
  */
 function countKings(chars) {
     if (!chars || !chars.length) {
@@ -2328,7 +2330,7 @@ function readCharsWithGrid(image, g) {
 }
 
 /**
- * 把候选几何的「锚定」在 ±1 格邻域里扫一圈，第一个能读出**双方帅/将**的采用。
+ * 把候选几何的「锚定」在 ±1 格邻域里扫一圈，读出双方帅/将后还要与会话旧几何对齐。
  * 为什么（2026-09-24 真机两回：13 子残局、棋盘被放大后）：线定位找对了线，但把**序号锚错一整格**
  * （历史屡犯：最上一行/列被棋子压住就没有铿锵的锚），而校准的代价函数又偏爱「大多读成空」的
  * 格子（未知格不多、但帅/将都读不到）⇒ 直接采用就卡死。几何只会整体平移，±1 格扫一圈就能纠。
@@ -2339,6 +2341,14 @@ function findAlignedGrid(image, base) {
     if (!base || !base.stepX || !base.stepY) {
         return null;
     }
+    // 稀疏残局把第 0 行错锚到第 1 行时，两套几何都可能读出帅/将（真机 112 步：
+    // originY=573 和 689 都过了旧判据；真实棋盘在 704 左右）。同一屏、格距未变时，
+    // 只能采用距上一张可信几何不足半格的候选；否则保持旧几何等下一帧。
+    const reference = grid && Math.abs(base.stepX / grid.stepX - 1) < 0.12 &&
+        Math.abs(base.stepY / grid.stepY - 1) < 0.12 ? grid : null;
+    let nearest = null;
+    let nearestDistance = Infinity;
+    let rejectedByContinuity = 0;
     for (let i = 0; i < ANCHOR_SHIFTS.length; i++) {
         const sx = ANCHOR_SHIFTS[i][0] * base.stepX;
         const sy = ANCHOR_SHIFTS[i][1] * base.stepY;
@@ -2354,10 +2364,26 @@ function findAlignedGrid(image, base) {
             });
         }
         if (countKings(readCharsWithGrid(image, g)) === 2) {
-            return { grid: g, shift: ANCHOR_SHIFTS[i] };
+            if (!reference) {
+                return { grid: g, shift: ANCHOR_SHIFTS[i] };
+            }
+            const dx = Math.abs(g.originX - reference.originX) / reference.stepX;
+            const dy = Math.abs(g.originY - reference.originY) / reference.stepY;
+            if (dx > 0.45 || dy > 0.45) {
+                rejectedByContinuity += 1;
+                continue;
+            }
+            if (dx + dy < nearestDistance) {
+                nearestDistance = dx + dy;
+                nearest = { grid: g, shift: ANCHOR_SHIFTS[i] };
+            }
         }
     }
-    return null;
+    if (!nearest && rejectedByContinuity > 0) {
+        logLine("锚定候选虽读出帅/将，但偏离旧几何超过 0.45 格（" +
+            rejectedByContinuity + " 个）→ 不采用，等稳定帧");
+    }
+    return nearest;
 }
 
 /**
@@ -2564,6 +2590,7 @@ function tryReuseGrid(grabbed) {
     }
     const sanity = checkGridRows(grabbed.image, grid);
     if (!sanity.ok) {
+        gridKingMissStreak = 0;
         logLine("几何沿用检查不过（" + sanity.reason + "），走全量校准");
         return null;
     }
@@ -2588,22 +2615,39 @@ function tryReuseGrid(grabbed) {
         return null;
     }
     if (kings === 0) {
-        // ★ 2026-09-24 11:50 真机：帅/将都读不到 = 几何必坏（错网格上大部分格子读成空、未知格反而不多，
-        //   光看未定格抓不到）。这时才走全量校准；校准结果另有一道可信性检查（见 locateAndCalibrate）。
+        // 帅/将都读不到也可能只是选中高亮或动画的单帧：真机 112 步就在这一帧重校准错了整行。
+        // 行体检还通过时先保留旧几何；连续三次独立恢复检查都漏读，才允许全量重校准。
+        gridKingMissStreak += 1;
         if (Date.now() - lastCalibrationRejectAt < CALIBRATION_RETRY_COOLDOWN_MS) {
             logLine("几何沿用检查：帅/将读不到，但全量校准刚被否（" +
                 Math.round((Date.now() - lastCalibrationRejectAt) / 1000) + "s 前）→ 冷却期内先用旧几何");
+        } else if (gridKingMissStreak < 3) {
+            logLine("几何沿用检查：帅/将暂时漏读 " + gridKingMissStreak + "/3 次，行体检仍过 → 保留旧几何等下一帧");
         } else {
-            logLine("几何沿用检查：帅/将都读不到 ⇒ 几何不可信，走全量校准");
+            gridKingMissStreak = 0;
+            logLine("几何沿用检查：帅/将连续三次读不到 ⇒ 走全量校准");
             return null;
         }
-    } else if (unknown > GEOMETRY_REUSE_MAX_UNKNOWN) {
+    } else {
+        gridKingMissStreak = 0;
+    }
+    if (kings > 0 && unknown > GEOMETRY_REUSE_MAX_UNKNOWN) {
         // ★ 2026-09-24 11:49 真机事故：这一帧只是读出 未定 5 格（游戏高亮/动画的**暂态**），却被当成
         //   「几何坏了」→ 全量校准 → 换上一个坏网格（偏移(25,22)）→ 之后全部读不出帅/将。
         //   帅/将都在 ⇒ 几何仍然可信；暂态未定格交给驱动当「这一帧不观察」就行，**不重校准**。
         logLine("几何沿用检查：未定 " + unknown + " 格（帅/将都在 ⇒ 几何仍可信，不重校准）");
     }
-    grid = attachGridQuality(grabbed.image, snapGridToPieces(grid, grabbed.image, "几何沿用"));
+    // 帅/将这帧都漏读时只保留上一张几何；不能再用同一张可疑帧的检测框钉原点。
+    if (kings > 0) {
+        const snapped = snapGridToPieces(grid, grabbed.image, "几何沿用");
+        const shifted = snapped &&
+            (snapped.originX !== grid.originX || snapped.originY !== grid.originY);
+        if (!shifted || countKings(readCharsWithGrid(grabbed.image, snapped)) > 0) {
+            grid = attachGridQuality(grabbed.image, snapped);
+        } else {
+            logLine("几何沿用：检测框钉点后帅/将全丢 ⇒ 保持原几何");
+        }
+    }
     if (boardService) {
         boardService.setGrid(grid);
     }

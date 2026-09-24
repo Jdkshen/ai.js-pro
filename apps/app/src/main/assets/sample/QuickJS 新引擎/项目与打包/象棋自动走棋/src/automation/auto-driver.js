@@ -2683,6 +2683,12 @@ function createDriver(options) {
             if (!(typeof got === "string" && got && got !== "?")) {
                 continue;
             }
+            // 将/帅每方只有一枚，且旧格可能已被找色作废：参照盘面一旦暂时丢将，
+            // 新落点就会被计数规则当作「多出来的份」清掉（K40 118 步 d9，真机实拍）。
+            // 唯一将帅永远不能由幻影规则删除；重复/缺失交给规则门与恢复流程。
+            if (got === "K" || got === "k") {
+                continue;
+            }
             // ⚠️ **我方落点格不许在这里被动**（2026-09-20 真机回归）：
             //   那一格的子是我方刚走过去的（带高亮环），被读错兵种/颜色是**已知模式**，
             //   由「票据预期 + 落点格补齐」那条专门的路救（verifier 的 decorated / 驱动的规则②）。
@@ -3249,9 +3255,23 @@ function createDriver(options) {
         // 识别时几何被微调过（按检测框对齐）→ 记下来，让后面的点击用同一套几何，
         // 否则会出现「按 A 几何认棋盘、按 B 几何点坐标」的错位。
         if (result.grid && grid &&
-            (result.grid.originX !== grid.originX || result.grid.originY !== grid.originY)) {
+            (result.grid.originX !== grid.originX || result.grid.originY !== grid.originY ||
+                result.grid.stepX !== grid.stepX || result.grid.stepY !== grid.stepY)) {
             const dx = Math.round(result.grid.originX - grid.originX);
             const dy = Math.round(result.grid.originY - grid.originY);
+            const stepDriftX = Math.abs(result.grid.stepX / grid.stepX - 1);
+            const stepDriftY = Math.abs(result.grid.stepY / grid.stepY - 1);
+            // 检测框误配曾把原点一次挪 (-171,-192)px，后续盘面整行错位。
+            // 同一次观察只接受小幅微调；大位移必须走重新定位及其锚定验证。
+            if (Math.abs(dx) > Math.max(12, grid.stepX * 0.35) ||
+                Math.abs(dy) > Math.max(12, grid.stepY * 0.35) ||
+                stepDriftX > 0.05 || stepDriftY > 0.05) {
+                stats.unrecognized += 1;
+                note("检测框几何微调越界 (" + dx + "," + dy +
+                    ")，格距变化 " + Math.round(Math.max(stepDriftX, stepDriftY) * 100) +
+                    "% → 拒收本帧，保持旧几何并等待重新定位");
+                return { ok: false, reason: "检测框几何微调越界", grid: grid };
+            }
             grid = result.grid;
             note("几何按检测框微调：原点偏移 (" + dx + "," + dy + ")（未知格 " +
                 (result.stats && result.stats.autoAlign ? result.stats.autoAlign.unknown : "?") + "）");
