@@ -293,6 +293,53 @@ function matchPyramid(host, grayFrame, halfFrame, x, cy, templates, coarse, opts
     return best;
 }
 
+/** 士/仕只能站在本方九宫的五个斜线点，盘边误读不能算成第三枚仕。 */
+function advisorAllowed(name, col, row) {
+    if (name !== "仕" && name !== "士") {
+        return true;
+    }
+    const homeRow = name === "仕" ? 9 : 0;
+    return (row === homeRow && (col === 3 || col === 5)) ||
+        (row === homeRow + (name === "仕" ? -1 : 1) && col === 4) ||
+        (row === homeRow + (name === "仕" ? -2 : 2) && (col === 3 || col === 5));
+}
+
+/**
+ * 游戏选中棋子后会把棋子和字一起放大，普通尺寸模板可能读错。
+ * 只在常规匹配没有结果或给出非法位置的士/仕时复核，避免每帧给 90 格增加开销。
+ */
+function matchSelectedScale(host, grayFrame, x, cy, col, row, templates, opts, size) {
+    const baseTW = pick(opts, "TW");
+    let best = null;
+    const scales = [1.10, 1.18];
+    for (let s = 0; s < scales.length; s++) {
+        const half = Math.round(baseTW * scales[s]);
+        const side = half * 2;
+        for (let i = 0; i < templates.length; i++) {
+            const tpl = templates[i];
+            if (!advisorAllowed(tpl.name, col, row)) {
+                continue;
+            }
+            let enlarged = null;
+            try {
+                enlarged = host.resize(tpl.image, [side, side]);
+                const hit = bestMatch(host, grayFrame, x, cy,
+                    [{ name: tpl.name, image: enlarged }],
+                    { TW: half, SEARCH_X: 8, SEARCH_Y: 22, CONF: pick(opts, "SAFE_CONF") }, size);
+                if (hit && (!best || hit.sim > best.sim)) {
+                    best = hit;
+                }
+            } finally {
+                recycle(enlarged);
+            }
+        }
+        if (best && best.sim >= 0.90) {
+            break;
+        }
+    }
+    return best;
+}
+
 /** py `side_of_center`：匹配窗内暗像素（gray<150）平均 R-B > 45 判红（步进采样）。 */
 function sideOf(host, colorFrame, cx, cy, options) {
     const opts = options || {};
@@ -436,6 +483,16 @@ function recognize(host, image, grid, options) {
             } catch (matchError) {
                 error = "matchTemplate 异常：" + matchError;
                 break;
+            }
+            // (2,9) 被选中的红相放大约 10% 后，普通模板曾把它误判成九宫外的第三枚红仕。
+            // 此处仍只使用同一套字形模板；放大复核不足 SAFE_CONF 就留作未知，绝不硬填。
+            if (!m || !advisorAllowed(m.name, c, r)) {
+                try {
+                    m = matchSelectedScale(host, grayFrame, x, cy, c, r, templates, opts, size);
+                } catch (selectedError) {
+                    error = "选中棋子字形复核异常：" + selectedError;
+                    break;
+                }
             }
             matchMs += host.nowMono() - matchStarted;
             if (!m) {
