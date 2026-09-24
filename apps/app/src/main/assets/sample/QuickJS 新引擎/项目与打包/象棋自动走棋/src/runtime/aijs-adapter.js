@@ -31,6 +31,9 @@ function has(name) {
 var captureBackendKey = "auto";
 /** 最近一次**真正用上**的通道：`screen` | `shizuku` | `root`（界面/日志要看这个，别只看偏好） */
 var lastCaptureChannel = null;
+/** auto 退到 shell 后暂时不再碰坏掉的系统截屏；到期试一帧，成功就切回。 */
+var autoScreenRetryAt = 0;
+var AUTO_SCREEN_RETRY_MS = 15000;
 
 /** 截图通道偏好的持久化（关机/重启脚本后不用重选）。取不到 storages 就退化成内存。 */
 const CAPTURE_STORE = "xiangqi-capture";
@@ -54,6 +57,7 @@ function captureStore() {
 function setCaptureBackend(key, options) {
     const value = String(key || "auto");
     captureBackendKey = (value === "screen" || value === "shell") ? value : "auto";
+    autoScreenRetryAt = 0;
     if (!options || options.persist !== false) {
         const store = captureStore();
         if (store) {
@@ -199,6 +203,7 @@ function requestCapture(orientation) {
         // 授权被拒/系统不给（MIUI 上常见）：auto 模式还能退到 shell 通道，
         // 所以不要在这里让整条链路提前失败。
         log("capture", "系统截屏授权失败，auto 模式将改用 shell 通道（screencap）");
+        autoScreenRetryAt = nowMono() + AUTO_SCREEN_RETRY_MS;
         return true;
     }
     return granted;
@@ -414,8 +419,9 @@ function captureViaShell(options) {
  *   - `shell`：**用 Shizuku / root 跑 `screencap -p` 再读回图片** —— 慢（K40 实测约 1.2s/帧），
  *     但**不需要任何授权、也不会被系统悄悄作废**（2026-09-13 真机实测：连续多次都拿到真实屏）。
  *
- * 默认 `auto`：先用 `screen`（便宜），**失败就自动改走 `shell`**（有 Shizuku/root 才行），
- * 所以「MediaProjection 挂了」不再需要用户手动切应用重新授权。
+ * 默认 `auto`：先用 `screen`（便宜），失败就改走 `shell`（有 Shizuku/root 才行）；
+ * shell 使用期间每隔一段时间探一次 screen，恢复后自动切回。若系统撤销了截图授权，
+ * 探测不能替用户重新授权；此时继续用 shell，直到用户重新授予权限。
  *
  * ⚠️ 还会**自动丢掉纯黑帧**并重试（原因见 looksBlank）：默认最多 3 次、每次间隔 60ms。
  * 拿到非黑帧就立即返回，所以正常情况下（第二帧起）不会多花时间。
@@ -427,18 +433,32 @@ function capture(mode, timeoutMs, options) {
     const backend = opts.backend || captureBackendKey;
     const wantShell = backend === "shell";
     const wantScreen = backend === "screen";
+    const auto = !wantShell && !wantScreen;
+    const retryMs = opts.autoRetryMs == null ? AUTO_SCREEN_RETRY_MS : Math.max(0, Number(opts.autoRetryMs) || 0);
 
     if (wantShell) {
         return captureViaShell(opts);
+    }
+    if (auto && autoScreenRetryAt > nowMono() && shellCaptureBackend() !== null) {
+        try {
+            return captureViaShell(opts);
+        } catch (error) {
+            // 备用通道也坏了，立刻再试主通道，不必空等到探测期限。
+            autoScreenRetryAt = 0;
+        }
     }
     if (!has("captureScreen")) {
         if (wantScreen) {
             throw new Error("缺少能力：captureScreen");
         }
-        return captureViaShell(opts);
+        const fallback = captureViaShell(opts);
+        autoScreenRetryAt = nowMono() + retryMs;
+        return fallback;
     }
 
-    const attempts = opts.attempts == null ? 3 : opts.attempts;
+    // 退到 shell 后的恢复探测只试一帧，免得每 15 秒再卡住好几秒。
+    const recoveryProbe = auto && autoScreenRetryAt > 0;
+    const attempts = opts.attempts == null ? (recoveryProbe ? 1 : 3) : opts.attempts;
     const gapMs = opts.gapMs == null ? 60 : opts.gapMs;
     const base = timeoutMs == null ? 600 : timeoutMs;
     const ladder = opts.timeouts || [base, Math.max(base, 1500), Math.max(base, 3000)];
@@ -458,6 +478,10 @@ function capture(mode, timeoutMs, options) {
             lastError = error;
         }
         if (frame && !looksBlank(frame)) {
+            if (recoveryProbe) {
+                log("capture", "系统截屏已恢复，自动切回 screen 通道");
+            }
+            autoScreenRetryAt = 0;
             lastCaptureChannel = "screen";
             return frame;
         }
@@ -465,16 +489,20 @@ function capture(mode, timeoutMs, options) {
             waitMs(gapMs);
         }
     }
-    if (!frame) {
-        const message = "截屏连续 " + attempts + " 次失败：" +
-            (lastError && lastError.message ? lastError.message : String(lastError));
+    if (!frame || looksBlank(frame)) {
+        const message = !frame ? ("截屏连续 " + attempts + " 次失败：" +
+            (lastError && lastError.message ? lastError.message : String(lastError)))
+            : ("截屏连续 " + attempts + " 次都是黑帧");
         // MediaProjection 会话被系统移除后就再也出不了帧 —— 有 Shizuku/root 就直接换通道，
         // 而不是把这个错误抛给上层（上层只会当成「这一轮没看清」，永远恢复不了）。
-        if (opts.allowShellFallback !== false && shellCaptureBackend() !== null) {
+        if (auto && opts.allowShellFallback !== false && shellCaptureBackend() !== null) {
             try {
                 const fallback = captureViaShell(opts);
                 if (fallback) {
-                    log("capture", "系统截屏失败，已自动改用 " + lastCaptureChannel + " 通道（screencap）");
+                    autoScreenRetryAt = nowMono() + retryMs;
+                    if (!recoveryProbe) {
+                        log("capture", "系统截屏失败，已自动改用 " + lastCaptureChannel + " 通道；稍后探测恢复");
+                    }
                     return fallback;
                 }
             } catch (error) {
@@ -482,9 +510,10 @@ function capture(mode, timeoutMs, options) {
                     (error && error.message ? error.message : String(error)));
             }
         }
-        // 没有 shell 通道（没装 Shizuku / 没 root）时，只能靠用户把应用切回前台重新授权截屏。
-        throw new Error(message +
-            "；这台设备没有 Shizuku/root，无法自动换通道 —— 请切回应用重新授权截屏后重试");
+        if (wantScreen) {
+            throw new Error(message + "；当前选择了只用系统截屏，请重新授权或选自动通道");
+        }
+        throw new Error(message + "；这台设备没有可用的 Shizuku/root 截图通道，请重新授权系统截屏");
     }
     lastCaptureChannel = "screen";
     return frame;

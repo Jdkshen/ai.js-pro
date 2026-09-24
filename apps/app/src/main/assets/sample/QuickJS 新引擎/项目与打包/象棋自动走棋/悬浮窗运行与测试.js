@@ -224,7 +224,6 @@ let tickObsMs = 0;
 let tickLocateCalls = 0;
 let tickLocateMs = 0;
 let tickGuardMs = 0;
-let tickOcrBoardMs = 0;
 let tickDriverMs = 0;
 /** 「把游戏留在前台」上次尝试的时间（限频用，见 keepGameInFront） */
 let lastKeepFrontAt = 0;
@@ -748,7 +747,7 @@ function button(id, label, width, bg, fg, height) {
     const emphasis = fill === C.btnPrimary || fill === C.btnDanger || fill === C.btnAccent ? ' textStyle="bold"' : '';
     return '    <card w="' + w + 'px" h="' + row + 'px" cardCornerRadius="' + PANEL.radiusButton + 'px" cardElevation="0dp" cardBackgroundColor="' + fill + '" clipToOutline="true">' +
         '<text id="' + id + '" text="' + label + '" w="' + w + 'px" h="' + row + 'px" textColor="' + color +
-        '" textSize="' + themeTokens.FONT.button + '" gravity="center"' + emphasis + '/></card>';
+         '" textSize="' + themeTokens.FONT.button + '" gravity="center" includeFontPadding="false" singleLine="true"' + emphasis + '/></card>';
 }
 
 function gap(width) {
@@ -762,7 +761,7 @@ function rowGap() {
 /** 行首的分组标签（对局 / 诊断） */
 function rowLabel(text) {
     return '    <text text="' + text + '" w="' + panelPx(70) + 'px" h="' + PANEL.rowHeight +
-        'px" textColor="' + C.status + '" textSize="' + themeTokens.FONT.button + '" textStyle="bold" gravity="center"/>';
+         'px" textColor="' + C.status + '" textSize="' + themeTokens.FONT.button + '" textStyle="bold" gravity="center" includeFontPadding="false" singleLine="true"/>';
 }
 
 /** 参数滑条：用带底色的 <text> 冒充（拖动改值；这个引擎里 text 的 touch 能到，见 button 的说明）。
@@ -772,7 +771,7 @@ function slider(id, width) {
     return '    <card w="' + width + 'px" h="' + PANEL.rowHeight + 'px" cardCornerRadius="' + PANEL.radiusCard +
         'px" cardElevation="0dp" cardBackgroundColor="' + C.card + '" clipToOutline="true">' +
         '<text id="' + id + '" text="" w="' + width + 'px" h="' + PANEL.rowHeight + 'px" textColor="' + C.step +
-        '" textSize="' + themeTokens.FONT.status + '" gravity="center" padding="4px"/></card>';
+         '" textSize="' + themeTokens.FONT.status + '" gravity="center" includeFontPadding="false" singleLine="true" padding="4px"/></card>';
 }
 /** 滑条几何：条宽与第 n 条在窗口内的左偏移（要和 XML 里 paramRow 的排布保持一致）。 */
 function sliderWidth() {
@@ -790,7 +789,7 @@ const XML = [
     // 第 1 行：当前状态 + 模式 + 主操作；停止始终固定在这一行
     '  <horizontal id="primaryRow" h="' + ROW_H + 'px">',
     '    <text id="title" text="象棋助手 · 未运行" w="' + panelPx(350) + 'px" h="' + ROW_H + 'px" textColor="' + C.title +
-    '" textSize="' + themeTokens.FONT.title + '" textStyle="bold" gravity="center_vertical" padding="10px"/>',
+     '" textSize="' + themeTokens.FONT.title + '" textStyle="bold" gravity="center_vertical" includeFontPadding="false" singleLine="true" padding="10px"/>',
     gap(),
     button("modeBtn", "只识别", 180, C.btnAccent),
     gap(),
@@ -823,12 +822,12 @@ const XML = [
     slider("threadsSlider", sliderWidth()),
     '  </horizontal>',
     '  <text id="status" text="准备中…" w="' + (PANEL.width - panelPx(16)) +
-    'px" h="' + PANEL.statusHeight + 'px" textColor="' + C.status +
-    '" textSize="' + themeTokens.FONT.status + '" gravity="center_vertical" padding="2px"/>',
+     'px" h="' + PANEL.statusHeight + 'px" textColor="' + C.status +
+     '" textSize="' + themeTokens.FONT.status + '" gravity="center_vertical" includeFontPadding="false" singleLine="true" padding="2px"/>',
     '  <card w="' + (PANEL.width - panelPx(16)) + 'px" h="' + PANEL.stepHeight + 'px" cardCornerRadius="' + PANEL.radiusCard +
     'px" cardElevation="0dp" cardBackgroundColor="' + C.card + '" clipToOutline="true">',
     '    <text id="step" text="进度：等待开始" w="' + (PANEL.width - panelPx(16)) + 'px" h="' + PANEL.stepHeight +
-    'px" textColor="' + C.step + '" textSize="' + themeTokens.FONT.step + '" padding="8px"/>',
+     'px" textColor="' + C.step + '" textSize="' + themeTokens.FONT.step + '" includeFontPadding="false" padding="8px"/>',
     '  </card>',
     '</vertical>',
     '</card>'
@@ -845,7 +844,7 @@ const XML = [
 const LOG_XML = '<card id="logCard" w="' + PANEL.width + 'px" h="' + PANEL.logHeight + 'px" cardCornerRadius="' + PANEL.radiusPanel +
     'px" cardElevation="0dp" cardBackgroundColor="' + C.logBg + '" clipToOutline="true">' +
     '<text id="logArea" text="" w="' + PANEL.width + 'px" h="' + PANEL.logHeight + 'px" textColor="' +
-    C.logFg + '" textSize="' + themeTokens.FONT.log + '" padding="10px"/></card>';
+     C.logFg + '" textSize="' + themeTokens.FONT.log + '" includeFontPadding="false" padding="10px"/></card>';
 
 let win = null;
 let compactWin = null;
@@ -861,8 +860,8 @@ const COMPACT_XML = [
     '<card id="compactCard" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" cardCornerRadius="' + PANEL.radiusPanel +
     'px" cardElevation="0dp" cardBackgroundColor="' + C.panel + '" clipToOutline="true">',
     '<horizontal id="compactRoot" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" padding="' + panelPx(6) + 'px">',
-    '  <text id="compactStatus" text="未运行" w="' + panelPx(160) + 'px" h="' + panelPx(50) + 'px" textColor="' + C.title +
-    '" textSize="11" textStyle="bold" gravity="center_vertical" includeFontPadding="false" paddingLeft="8px"/>',
+     '  <text id="compactStatus" text="未运行" w="' + panelPx(160) + 'px" h="' + panelPx(50) + 'px" textColor="' + C.title +
+     '" textSize="10" textStyle="bold" gravity="center_vertical" includeFontPadding="false" singleLine="true" paddingLeft="8px"/>',
     gap(),
     button("compactMode", "只识别", 140, C.btnAccent, null, panelPx(50)),
     gap(),
@@ -1606,7 +1605,7 @@ function refreshOverlay(result, expectChars, options) {
 }
 
 /**
- * 抓一帧（优先 Shizuku 的 screencap，回退应用截屏）。
+ * 抓一帧（尊重截图偏好；auto 由适配器负责系统截屏 ↔ shell 故障切换）。
  *
  * 抓帧期间可能要先把面板藏起来（面板浮在棋盘上会把上几行子盖掉）——
  * 但**藏+等 90ms+恢复** 每帧要花约 100ms，所以默认 "auto"：面板不在棋盘上就不藏。
@@ -2155,34 +2154,28 @@ function auditDraw() {
 }
 
 
+let capturePermissionAttempted = false;
 function grabFrameRaw() {
-    const caps = adapter.capabilities();
-    if (caps.captureShell) {
-        // ★ 收口到适配器（2026-09-20）：shell 抓帧的 **raw 快通道**（`screencap` 不加 -p +
-        //   `images.readRaw`，实测 202ms vs PNG 958ms）就实现在 `aijs-adapter.captureViaShell`。
-        //   面板原来自己写了一遍 `screencap -p` ⇒ 引擎刚加的快通道在这条路上根本用不上
-        //   （真机：适配器 202ms vs 面板 1011ms，就是这个重复实现造成的）。
+    const preference = adapter.captureBackend();
+    if (preference !== "shell" && !capturePermissionAttempted) {
+        capturePermissionAttempted = true;
         try {
-            const frame = adapter.capture("full", 2000, { backend: "shell" });
-            if (frame) {
-                return { image: frame, path: null, channel: adapter.captureChannel() || ("shell(" + caps.captureShellBackend + ")") };
+            if (!adapter.requestCapture("portrait") && preference === "screen") {
+                logLine("系统截屏授权未通过，当前是仅系统截屏模式");
+                return null;
             }
         } catch (error) {
-            logLine("shell 截图失败：" + error);
+            logLine("系统截屏授权失败：" + error);
+            if (preference === "screen") return null;
         }
     }
     try {
-        if (!adapter.requestCapture("portrait")) {
-            return null;
-        }
-        const frame = adapter.capture("full", 2000, { backend: "screen" });
-        if (frame) {
-            return { image: frame, path: null, channel: "screen" };
-        }
+        const frame = adapter.capture("full", 2000);
+        return frame ? { image: frame, path: null, channel: adapter.captureChannel() } : null;
     } catch (error) {
-        logLine("应用截屏失败：" + error);
+        logLine("截图失败（" + preference + "）：" + error);
+        return null;
     }
-    return null;
 }
 
 /**
@@ -2976,7 +2969,6 @@ function buildDriver() {
             tickObsMs += Date.now() - obsStarted;
             if (smart && smart.ok) {
                 lastPipelineUnknown = smart.unknownCells || 0;
-                rememberPipelineEvidence(smart);
                 refreshOverlay(smart, null);
                 probeGameOver(smart.frame && smart.frame.image);
                 logPipelineNote(smart);
@@ -3002,14 +2994,8 @@ function buildDriver() {
         // 催游戏（见 nudgeGame）：驱动发现「已知事实连着好几帧读成空」时会调这里 ——
         // 那不是模型漏检，而是画面卡在走子动画中间（人机对战，动画本该 1 秒内走完）。
         nudge: nudgeGame,
-        // 单格 OCR（见 ocrCell）：驱动遇到「已知事实说有子、模型读成空/认不出」时，
-        // 直接 OCR 那一格的汉字当证据（读到字=有子，读不到字=空格）。
-        // 全盘 OCR（见 ocrBoard）：驱动遇到「同色不同兵种」的误读时拿它当证据
-        ocrBoard: ocrBoard,
-        // 单格 OCR（见 ocrCell）：驱动遇到「已知事实说有子、模型读成空/认不出」时问它
-        ocrCell: ocrCell,
-        // ★ 单帧多格证据（ROI 快速确认用）：抓一帧、认指定的几个格（见 ocrCellsNow）
-        ocrCellsNow: ocrCellsNow,
+        // 运行中只用字形识别；不再注入 PP-OCR 单格/全盘/ROI 的第二套识别能力。
+        // 驱动缺少辅助证据时走保守的全盘确认，不用另一种识别器改写盘面。
         log: function (text) { logLine(text); },
         config: {
             tickMs: 2400,          // screencap 通道 0.6~1.4s/帧；而且**游戏落子有动画** ——
@@ -3063,7 +3049,6 @@ function tick() {
     tickLocateCalls = 0;
     tickLocateMs = 0;
     tickGuardMs = 0;
-    tickOcrBoardMs = 0;
     tickDriverMs = 0;
     try {
         // ★ 先把游戏留在前台再观察：透明宿主的窗口一拿到焦点，游戏就 pause → 对方永不应手
@@ -3113,17 +3098,6 @@ function tick() {
             logLine("[帧探针] tick 开始 活跃 " + frameProbeActive());
         }
         logLine("状态 " + machine.state() + "｜" + machine.reason());
-        // ★ 全盘 OCR 对照（每 15s 一次，点击租约期间跳过）：驱动盘面 vs OCR 逐格盘面
-        if (ocrBoardEnabled && !clickLeaseActive && Date.now() - lastOcrBoardAt >= OCR_BOARD_INTERVAL_MS) {
-            lastOcrBoardAt = Date.now();
-            const ocrStarted = Date.now();
-            try {
-                logOcrBoardCompare();
-            } catch (error) {
-                logLine("全盘 OCR 对照异常：" + error);
-            }
-            tickOcrBoardMs += Date.now() - ocrStarted;
-        }
         if (result) {
             // 驱动实际看到的局面（排障用）：只在与上一轮不同时打印，避免刷屏
             const view = driver.lastResult();
@@ -3176,13 +3150,13 @@ function tick() {
         // —— 本轮账（方案 §7：抓帧降下来之后，「其他时间」到底花在哪）——
         //   本轮池 = 整次 tick 的墙钟；识别 N 次 = 驱动两帧合并调了几次、共多少 ms；
         //   剩下的大头通常是：算棋 worker（THINKING 轮次会提前 return）、点击/确认（另开一次观察）、
-        //   全盘 OCR 对照（每 15s 一次 2~3s）、心跳调度。
+        //   点击/确认及心跳调度。
         if (Date.now() - lastAccountLogAt >= 2000) {
             lastAccountLogAt = Date.now();
             logLine("本轮账：tick " + (Date.now() - tickStarted) + "ms｜守前台 " + tickGuardMs +
                 "ms｜驱动 " + tickDriverMs + "ms（识别 " + tickObsCalls + " 次共 " + tickObsMs +
-                "ms｜重定位 " + tickLocateCalls + " 次共 " + tickLocateMs + "ms）｜全盘 OCR " + tickOcrBoardMs +
-                "ms｜依赖 top " + (depTop || "无") + "｜驱动自计观察 " + (stats.lastObserveMs || 0) + "ms" +
+                "ms｜重定位 " + tickLocateCalls + " 次共 " + tickLocateMs + "ms）｜依赖 top " +
+                (depTop || "无") + "｜驱动自计观察 " + (stats.lastObserveMs || 0) + "ms" +
                 (result && result.thinking ? "｜（算棋中）" : ""));
         }
     } catch (error) {
@@ -3203,11 +3177,7 @@ function tick() {
  */
 let ocrSession = null;
 let ocrSessionTried = false;
-/** 全盘 OCR 对照：开关（autorun 的 `ocrBoard`，默认开）与限频时间戳 */
-let ocrBoardEnabled = false;
-let lastOcrBoardAt = 0;
-const OCR_BOARD_INTERVAL_MS = 15000;
-/** 全盘 OCR 结果的缓存（驱动会调 `ocrBoard()`，日志也用它，免得重复跑 1.2s） */
+/** 旧 OCR 排障函数保留但不在走棋循环调用；缓存仅供显式诊断。 */
 let ocrBoardCache = null;
 let ocrBoardCacheAt = 0;
 const OCR_BOARD_CACHE_MS = 1200;
@@ -3425,7 +3395,7 @@ const visionCtl = pipelineFactory.create({
 });
 
 // 字形识别源（「新的为主」2026-09-24）：模板在工程 assets/glyph-tpl（懒加载）；
-// 服务层 mode="auto" 会先跑它，规则门/未知格不过时自动回退流水线→旧路径。
+// 走棋服务只跑它；规则门/未知格不过时丢弃这一帧，不回退第二种识别。
 const glyphSource = pipelineFactory.createGlyphSource({
     adapter: adapter,
     baseDir: BASE_DIR,
@@ -5176,6 +5146,12 @@ function main() {
     const auto = readAutorun();
     if (auto) {
         logLine("检测到 autorun：" + JSON.stringify(auto));
+        if (auto.captureBackend) {
+            // 抓帧探测/定位前就应用，不能让第一帧沿用上次保存的手动偏好。
+            const key = adapter.setCaptureBackend(auto.captureBackend, { persist: false });
+            capturePermissionAttempted = false;
+            logLine("截图通道偏好：" + key + "（实际通道会随抓帧自动更新）");
+        }
         if (auto.collapse === true) {
             // 无人值守跑的**显式选择**（默认不收起：日志要看得见，见 main() 里的注释）
             setPanelCollapsed(true);
@@ -5216,12 +5192,7 @@ function main() {
             recognizeOnce();
         }
         if (auto.ocrBoard != null) {
-            // 全盘 OCR 对照（默认开）：每 15s 把「驱动盘面」与「OCR 逐格盘面」并列打进日志。
-            // 查「某一格/某一枚子凭空消失」时靠它一列就看清（见 logOcrBoardCompare 的说明）。
-            ocrBoardEnabled = auto.ocrBoard === true;
-            logLine("全盘 OCR 对照：" + (ocrBoardEnabled
-                ? "开（每 15s 一次；能白拿就白拿 —— 复用上次识别的逐格证据，不重复抓帧/扫描）"
-                : "关（autorun 里 \"ocrBoard\":true 可开）"));
+            logLine("autorun 的 ocrBoard 已废弃：运行中只用字形识别");
         }
         if (auto.drawMode) {
             // 初始绘制档：off / grid / cells / full（必须在 auditDraw 之前处理，否则画完才改档）
@@ -5253,19 +5224,9 @@ function main() {
         if (auto.glyph != null) {
             logLine("autorun 的 glyph 开关已废弃：字形识别是唯一识别链（始终启用）");
         }
-        // 逐格 OCR 的灰度重试（落子高亮环格专用）：默认开；autorun 里 `"ocrGray": false` 可关掉，
-        // 用于 A/B 对照 —— 或者某次真机上发现它反而把错读数写进观测层时先关。
-        if (auto.ocrGray != null) {
-            ocrGrayEnabled = auto.ocrGray !== false;
-            logLine("逐格灰度路：" + (ocrGrayEnabled ? "开（默认）" : "关（全彩，A/B 对照）"));
+        if (auto.ocrGray != null || auto.ocrPrimary != null) {
+            logLine("autorun 的 ocrGray/ocrPrimary 已废弃：棋子只用字形识别");
         }
-        // OCR 主读通道（2026-09-21 用户口径「先灰度」）：默认灰度优先；autorun `"ocrPrimary": "color"` 切回老顺序
-        if (auto.ocrPrimary != null) {
-            ocrPrimaryMode = auto.ocrPrimary === "color" ? "color" : "gray";
-        }
-        logLine("OCR 主读通道：" + (ocrPrimaryMode === "gray"
-            ? "灰度优先（读不出/分过低 → 彩色兜底）"
-            : "彩色优先（老顺序，灰度只补空）"));
         // 占用扫描取样框（差分模式）：默认 0.9×格；autorun `"scanInner": true` 切 0.6×格
         // （排除游戏画的选中/落子红环，真机实测环半径≈48px）—— 2026-09-20 A/B 实测 0.6 **更差**，
         // 详见 scanRegionFor / scanRatio 的注释；留着开关但别当默认。
@@ -5363,12 +5324,6 @@ function main() {
             // 关掉之后面板就停在你放的位置（代价：可能压住棋盘顶行 → 抓帧会改成「藏面板」）。
             snapPanelEnabled = false;
             logLine("自动贴板：关（面板停在你放的位置；默认会贴到棋盘上沿之上那条空带）");
-        }
-        if (auto.captureBackend) {
-            // "auto" / "app" / "shell"（Shizuku/root 跑 screencap，免投屏授权、无人值守首选）。
-            // persist:false —— 这是测试钩子，别把偏好写进 storages（界面上选的才算主人选择）。
-            const key = adapter.setCaptureBackend(auto.captureBackend, { persist: false });
-            logLine("截图通道偏好：" + key + "（最近一次实际用过：" + (adapter.captureChannel() || "未用过") + "）");
         }
         if (auto.start && autorunBlocking) {
             logLine("autorun：配置有致命错误，未自动开始（修好 autorun 再启动）");
