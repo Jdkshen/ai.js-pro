@@ -1196,82 +1196,14 @@ check("结果文本：模型要报出文件名，不能是 undefined", function 
     return true;
 });
 
-// ---------------------------------------------------------------- 算棋（本地引擎）
+// ---------------------------------------------------------------- 算棋（Pikafish）
 
-const evalModule = require("../src/engine/eval.js");
-const searchModule = require("../src/engine/search.js");
-const engineModule = require("../src/engine/engine.js");
+const engineModule = require("../src/engine/engine.js");   // 局面工具（inspect/resolvePosition/describe…）
 const uciModule = require("../src/engine/uci.js");
-const localEngine = require("../src/engine/local-engine.js");
 
-// 一步杀：黑将 (4,0) 无子；红兵 (4,2) 保住 (4,1)，红兵 (3,1)/(5,1) 封住 (3,0)/(5,0)，红车 (0,1) 一击
-const MATE_IN_1 = "4k4/R2P1P3/4P4/9/9/9/9/9/9/4K4";
-// 白吃一个车：红车 (0,4) 沿第 4 行吃无保护的黑车 (4,4)
-const WIN_ROOK = "3k5/9/9/9/R3r4/9/9/9/9/4K4";
-
-check("算棋·评估：开局红黑对称", function () {
-    const value = evalModule.evaluate(fen.parseFen(fen.START_FEN).board);
-    return Math.abs(value) < 40 || ("开局分数偏离 0 太多：" + value);
-});
-
-check("算棋·评估：红多一个车至少领先 800", function () {
-    const value = evalModule.evaluate(fen.parseFen("3k5/9/9/9/9/9/9/9/9/3RK4").board);
-    return value > 800 || ("分数 " + value);
-});
-
-check("算棋·搜索：一步杀能被找到", function () {
-    const result = searchModule.search(fen.parseFen(MATE_IN_1).board, "w",
-        { movetime: 1500, depth: 3 });
-    if (!result.ok) {
-        return "搜索失败：" + result.reason;
-    }
-    return result.score > searchModule.MATE - 200 ||
-        ("没看到杀棋：score=" + result.score + " best=" + result.iccs + " depth=" + result.depth);
-});
-
-check("算棋·搜索：被将时静态搜索要搜逃将着法（depth1 也要看见一步杀——真机输棋暴露的洞）", function () {
-    // 2026-09-21 凌晨输棋复盘：静态搜索只搜吃子，而被将时的逃法多数**不是吃子**（走将/垫子）
-    //   ⇒ 杀网在搜索里「看不见」（那盘最后 -859 → -29998 被将死，引擎明明在搜）。
-    // 修：quiescence 被将时搜全部着法、跳过 standPat（见 search.js）。
-    // 这条断言在修前会失败（depth1 给的是别的手），修后必须直接报出杀。
-    const result = searchModule.search(fen.parseFen(MATE_IN_1).board, "w", { depth: 1 });
-    if (!result.ok) {
-        return "搜索失败：" + result.reason;
-    }
-    return result.score > searchModule.MATE - 200 ||
-        ("depth1 没看见一步杀：score=" + result.score + " best=" + result.iccs);
-});
-
-check("算棋·搜索：白吃一个车能被找到", function () {
-    const result = searchModule.search(fen.parseFen(WIN_ROOK).board, "w",
-        { movetime: 1500, depth: 3 });
-    if (!result.ok) {
-        return "搜索失败：" + result.reason;
-    }
-    return result.captured === "r" || ("没吃车：走 " + result.iccs + "，score=" + result.score);
-});
-
-check("算棋·搜索：叶子处对手「没有吃子」≠ 杀棋（2026-09-21 输棋根因：c6g6 假杀 29999）", function () {
-    // 真机现场（11:00，我方 10:59:57 那手）：FEN = 当时的「基准」。
-    // c6g6 吃卒后黑方**没被将、有 45 步合法着法、且一个吃子都没有** ⇒
-    // 旧 quiescence 在「没被将 + 没吃子」时也返回 -(MATE-ply)，把安静局面当将死
-    // ⇒ 引擎报「一步杀」（深度 1、3ms）⇒ 连走两步假杀（c6g6/g6g7）⇒ 攻势白送后一路滑到被将死。
-    // 修后：只有**确实被将**时才判负；这条断言在修前必失败。
-    const parsed = fen.parseFen("rnbakabnr/9/1c7/p1C1p1p1p/4c4/9/P1P3P1P/2N4C1/9/R1BAKABNR w - - 0 1");
-    if (!parsed.ok) {
-        return "夹具 FEN 解析失败：" + parsed.errors;
-    }
-    const result = searchModule.search(parsed.board, "w", { movetime: 1500, depth: 3 });
-    if (!result.ok) {
-        return "搜索失败：" + result.reason;
-    }
-    if (Math.abs(result.score) > searchModule.MATE - 200) {
-        return "又报了「杀」：" + result.iccs + " 评分 " + result.score + "（这局面根本没有杀）";
-    }
-    return true;
-});
-
-// Pikafish 适配器的选路逻辑是纯函数（不碰 $pikafish），离线可测
+// ⚠️ 2026-09-24：内置 JS 搜索/eval/本地 UCI 引擎已整体删除（用户「js 引擎相关的东西都删除」）。
+// 原来的评估/搜索/自我对弈断言随之删除；算棋只剩 Pikafish 一条路，下面的断言都不需要真引擎：
+// 适配器的选路是纯函数，真机契约由 tools/regress + 设备上的契约测试负责。
 const pikafishEngine = require("../src/engine/pikafish-engine.js");
 
 check("算棋·Pikafish 适配：排除表在候选里跳过（MultiPV 选路）", function () {
@@ -1415,29 +1347,10 @@ check("引擎门面：飞相到河沿（e2→c4）后局面仍可算棋（旧校
     return problems.length === 0 || ("河沿相被 inspect 拒了：" + problems.join("；"));
 });
 
-check("算棋·搜索：无着可走（将死/困毙）要明确报出来", function () {
-    const result = searchModule.search(fen.parseFen(MATE_IN_1).board, "b", { movetime: 300 });
-    if (result.ok) {
-        return "黑方无着可走却给出 " + result.iccs;
-    }
-    return result.reason && result.reason.length > 0 || "没给原因";
-});
-
-check("算棋·搜索：给出的着法经棋规复核仍合法", function () {
-    const board = fen.parseFen(fen.START_FEN).board;
-    const result = searchModule.search(board, "w", { movetime: 1200, depth: 3 });
-    if (!result.ok) {
-        return "搜索失败：" + result.reason;
-    }
-    const verify = legal.isLegalMove(board, result.move.fromCol, result.move.fromRow,
-        result.move.toCol, result.move.toRow, "w");
-    return verify.legal || ("不合法：" + result.iccs + "（" + verify.reason + "）");
-});
-
 check("算棋·门面：有未知格就拒绝算棋（不猜）", function () {
     const board = fen.parseFen(fen.START_FEN).board;
     board[40] = "?";
-    const result = engineModule.analyze({ board: board, side: "w" }, { movetime: 200 });
+    const result = pikafishEngine.analyze({ board: board, side: "w" }, { movetime: 200 });
     if (result.ok) {
         return "有未知格却算出了 " + result.iccs;
     }
@@ -1447,7 +1360,7 @@ check("算棋·门面：有未知格就拒绝算棋（不猜）", function () {
 check("算棋·门面：将/帅数量不对要拦下", function () {
     const board = fen.parseFen(fen.START_FEN).board;
     board[85] = null; // 85 = col4,row9 正是红帅那一格（81 是车，别写错）
-    const result = engineModule.analyze({ board: board, side: "w" }, { movetime: 200 });
+    const result = pikafishEngine.analyze({ board: board, side: "w" }, { movetime: 200 });
     if (result.ok) {
         return "帅数量不对却算出了 " + result.iccs;
     }
@@ -1456,7 +1369,7 @@ check("算棋·门面：将/帅数量不对要拦下", function () {
 
 check("算棋·UCI：着法记法与 rules.moveToIccs 一致", function () {
     const board = fen.parseFen(fen.START_FEN).board;
-    const moves = searchModule.generateMoves(board, true, false);
+    const moves = legal.allLegalMoves(board, "w");
     for (let i = 0; i < moves.length; i++) {
         if (uciModule.moveToUci(moves[i]) !== rules.moveToIccs(moves[i])) {
             return "不一致：" + uciModule.moveToUci(moves[i]) + " vs " + rules.moveToIccs(moves[i]);
@@ -1465,51 +1378,22 @@ check("算棋·UCI：着法记法与 rules.moveToIccs 一致", function () {
     return moves.length > 0 || "开局没有着法？";
 });
 
-check("算棋·UCI：本地引擎能应答 uci/isready/position/go", function () {
-    const instance = localEngine.create();
-    const uciLines = instance.send("uci");
-    if (!uciLines.some(function (line) { return line === "uciok"; })) {
-        return "没有 uciok：" + JSON.stringify(uciLines);
+check("算棋·描述：结果文本不出现 undefined（吃 Pikafish 适配器的字段集）", function () {
+    // 不依赖真引擎：合成一份适配器形状的结果过 describe（面板/日志就是拿它渲染的）
+    const text = engineModule.describe({
+        ok: true, side: "w", iccs: "b2e2", captured: null, score: 12,
+        depth: 18, nodes: 12345, ms: 1000, mateIn: null, pvIccs: ["b2e2", "b7e7"]
+    });
+    if (text.indexOf("undefined") >= 0) {
+        return "描述里有 undefined：" + text;
     }
-    if (instance.send("isready")[0] !== "readyok") {
-        return "isready 没回 readyok";
-    }
-    if (instance.send("position startpos moves b2e2 b7e7").length !== 0) {
-        return "position 不该有输出";
-    }
-    const parsed = fen.parseFen(instance.currentFen());
-    if (!parsed.ok || parsed.sideToMove !== "w") {
-        return "走完两子后 FEN/轮次不对：" + instance.currentFen();
-    }
-    const lines = instance.send("go depth 2");
-    const best = lines[lines.length - 1];
-    return /^bestmove [a-i][0-9][a-i][0-9]$/.test(best) || ("bestmove 行不对：" + best);
+    return text.indexOf("b2e2") >= 0 || ("描述里没有着法：" + text);
 });
 
-check("算棋·集成：自我对弈 6 步，每步都用棋规复核", function () {
-    let board = fen.parseFen(fen.START_FEN).board;
-    let side = "w";
-    for (let ply = 0; ply < 6; ply++) {
-        const result = engineModule.analyze({ board: board, side: side },
-            { movetime: 400, depth: 2 });
-        if (!result.ok) {
-            return "第 " + (ply + 1) + " 步算不出来：" + result.reason;
-        }
-        const verify = legal.isLegalMove(board, result.move.fromCol, result.move.fromRow,
-            result.move.toCol, result.move.toRow, side);
-        if (!verify.legal) {
-            return "第 " + (ply + 1) + " 步不合法：" + result.iccs + "（" + verify.reason + "）";
-        }
-        board = legal.applyMove(board, result.move).board;
-        side = side === "w" ? "b" : "w";
-    }
-    return true;
-});
-
-check("算棋·门面：结果文本不出现 undefined", function () {
-    const result = engineModule.analyze(fen.START_FEN, { movetime: 400, depth: 2 });
-    const text = engineModule.describe(result);
-    return text.indexOf("undefined") < 0 || ("描述里有 undefined：" + text);
+check("算棋·描述：失败结果也要说清阶段与原因", function () {
+    const text = engineModule.describe({ ok: false, stage: "native", reason: "Pikafish 不可用" });
+    return (text.indexOf("Pikafish 不可用") >= 0 && text.indexOf("undefined") < 0) ||
+        ("失败描述不对：" + text);
 });
 
 // ---------------------------------------------------------------- 截图黑帧

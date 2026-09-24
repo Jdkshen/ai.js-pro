@@ -69,9 +69,9 @@ const DEFAULTS = {
     /** worker 算棋的结果超时（ms）：算不出来也要有结论，别把状态机永远卡在 THINKING。 */
     computeGraceMs: 4000,
     /**
-     * 算棋引擎（实际选路在 engine-router）："auto"（默认，有 Pikafish 就用）/ "pikafish"（强制原生）/
-     * "js"（只内置）。worker 与 inline 两条路都会带上它 —— 不传的话 worker 里会退回默认后端，
-     * 出现「面板显示 Pikafish、实际 JS 在算」这种半生效状态。
+     * 算棋引擎（实际选路在 engine-router）："auto"（默认）/ "pikafish"（保留键名）——
+     * 两者现在都只走 Pikafish（内置 JS 引擎已移除）。worker 与 inline 两条路都会带上它，
+     * 避免「面板显示的和 worker 里用的不是一个后端」这种半生效状态。
      */
     engineKey: "auto",
     /** Pikafish 配置（{evalFile, threads, hashMb}）；null = 用适配器默认。 */

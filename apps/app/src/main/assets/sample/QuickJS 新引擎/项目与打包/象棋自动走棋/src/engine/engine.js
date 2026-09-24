@@ -1,22 +1,24 @@
 // @engine quickjs
 /**
- * 引擎门面：上层（main.js / automation）只跟这里打交道。
+ * 局面工具（原「引擎门面」的**非搜索**部分）：上层（engine-router / pikafish 适配器 /
+ * automation）只跟这里打交道。
  *
  * 输入可以给三种形态：
  *   1) FEN 字符串
  *   2) { board: 90 长数组, side: 'w'|'b' }   ← 识别链路直接给这个
  *   3) 90 长数组 + options.side
  * 有未知格（'?'）一律明确报错 —— 宁可不算棋，也不要在残局上瞎算。
+ *
+ * ⚠️ 2026-09-24（用户「把 js 引擎算法删除了 不要了」）：alpha-beta 搜索（search.js）、
+ *    评估（eval.js）、本地 UCI 引擎（local-engine.js）与这里的 analyze() **已整体删除**，
+ *    算棋只有 Pikafish 一条路（见 engine-router.js / pikafish-engine.js）。
+ *    本文件只留：resolvePosition / inspect / applyBest / describe / describeMove。
  */
 "use strict";
 
 const fenModule = require("../chess/fen.js");
 const legal = require("../chess/legal-moves.js");
-const search = require("./search.js");
 const uci = require("./uci.js");
-const localEngine = require("./local-engine.js");
-
-const DEFAULT_MOVETIME = 3500;
 
 function normalizeSide(side) {
     return side === "b" || side === "B" || side === "black" || side === false ? "b" : "w";
@@ -80,61 +82,6 @@ function inspect(board) {
     return problems;
 }
 
-/**
- * 算一步棋。
- * @param position FEN / {board, side} / 90 长数组
- * @param options.movetime 时间预算 ms（默认 1200）
- * @param options.depth    最大深度（默认只受时间限制）
- * @param options.side     输入是裸数组时用
- * @param options.allowEnded 局面已结束（无着可走）时也返回 ok:false 而不是抛错（默认就是 false）
- * @returns { ok, side, move, iccs, score, depth, nodes, ms, mateIn, pvIccs, reason, fen }
- */
-function analyze(position, options) {
-    const opts = options || {};
-    const resolved = resolvePosition(position, opts);
-    const problems = inspect(resolved.board);
-    if (problems.length > 0) {
-        return {
-            ok: false,
-            stage: "position",
-            reason: problems.join("；"),
-            side: resolved.side
-        };
-    }
-
-    const result = search.search(resolved.board, resolved.side, {
-        movetime: opts.movetime == null ? DEFAULT_MOVETIME : opts.movetime,
-        depth: opts.depth,
-        // 「游戏不接受的着法」：调用方（auto-driver）点了它但局面没变 → 本局面内不要再选它，
-        // 否则引擎是确定性的，重规划会算出同一手，永远走不完一局（K40 实测）。
-        excludeIccs: opts.excludeIccs
-    });
-    if (!result.ok) {
-        return {
-            ok: false,
-            stage: "search",
-            reason: result.reason,
-            side: resolved.side,
-            nodes: result.nodes,
-            ms: result.ms
-        };
-    }
-    return {
-        ok: true,
-        side: resolved.side,
-        move: result.move,
-        iccs: result.iccs,
-        captured: result.captured,
-        score: result.score,
-        depth: result.depth,
-        nodes: result.nodes,
-        ms: result.ms,
-        mateIn: result.mateIn,
-        pvIccs: result.pvIccs,
-        fen: resolved.fen
-    };
-}
-
 /** 算完之后走到那一步，得到新局面（给 automation 用）。 */
 function applyBest(board, result) {
     if (!result || !result.ok) {
@@ -180,14 +127,11 @@ function describeMove(move) {
 }
 
 const XQ_ENGINE = {
-    DEFAULT_MOVETIME: DEFAULT_MOVETIME,
-    analyze: analyze,
     applyBest: applyBest,
     describe: describe,
     describeMove: describeMove,
     inspect: inspect,
-    resolvePosition: resolvePosition,
-    createLocalEngine: localEngine.create
+    resolvePosition: resolvePosition
 };
 
 module.exports = XQ_ENGINE;

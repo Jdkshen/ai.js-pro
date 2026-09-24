@@ -164,9 +164,9 @@ function create(options) {
         pending = {
             startedAtMono: nowMono(),
             movetimeMs: search.movetime || 0,
-            // 本次任务的超时：Pikafish（原生引擎）会把 movetime **用满**才返回，
-            // 而 JS 引擎常常提前收敛 —— 用固定 graceMs(4000) 卡，movetime 调到 4000 以上时
-            // 会把「正常算棋」误判成 worker 超时（真机踩点：movetime 3500 + grace 4000 只富余 500ms）。
+            // 本次任务的超时：Pikafish（原生引擎）会把 movetime **用满**才返回 bestmove，
+            // 固定的 graceMs(4000) 在 movetime 调到 4000 以上时会把「正常算棋」误判成 worker 超时
+            // （真机踩点：movetime 3500 + grace 4000 只富余 500ms）→ 用 movetime+2000 保底。
             deadlineMs: Math.max(graceMs, (search.movetime || 0) + 2000)
         };
         return true;

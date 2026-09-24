@@ -99,7 +99,7 @@ const bootstrapModule = load("src/app/bootstrap.js");
 const pipelineFactory = load("src/vision/pipeline-factory.js");
 const locateBoard = load("tools/locate-board.js");
 const driverModule = load("src/automation/auto-driver.js");
-const engineModule = load("src/engine/engine-router.js");   // 引擎路由：内置 JS 引擎 ⇄ Pikafish（原生 NNUE）
+const engineModule = load("src/engine/engine-router.js");   // 算棋：Pikafish（原生 NNUE；内置 JS 引擎已移除）
 const cellsContract = load("src/vision/cells.js");
 // 探针的开局校验要用：FEN 解析 + 盘面比对（只读，不参与循环）
 const fenModule = load("src/chess/fen.js");
@@ -203,7 +203,7 @@ let timer = null;
 let pendingDeclare = false;   // autorun：等首个观察成功后再声明「现在轮到我」
 // 算棋放哪里跑：worker（独立引擎线程，默认）/ inline（本线程同步，对照用）
 let computeModeKey = "worker";
-// 算棋用哪个引擎："auto"（默认：有 Pikafish 就用）/ "pikafish"（强制原生）/ "js"（只内置 JS 引擎）。
+// 算棋用哪个引擎："auto"（默认）/ "pikafish"（保留键名）—— 两者现在都只走 Pikafish（JS 引擎已移除）。
 // autorun 里写 "engine":"pikafish" 可切换（见 src/engine/engine-router.js）。
 let engineBackendKey = "auto";
 // Pikafish 参数：{evalFile, threads, hashMb}；null = 适配器默认（权重自动找 /sdcard/xiangqi-p4/pikafish.nnue）。
@@ -372,8 +372,7 @@ function otherLineShort() {
     // 超宽由 statusLine 截断；实测模式名放前面会把几何/引擎直接截掉）
     return "页面：" + (other.state.running ? "跑中" : "未开始") +
         "｜" + (other.state.gridVersion == null ? "—" : ("v" + other.state.gridVersion)) +
-        "｜" + (other.state.backend === "pikafish" ? "Pikafish"
-            : (other.state.backend === "js" ? "JS" : "?")) +
+        "｜" + (other.state.backend === "pikafish" || other.state.backend === "auto" ? "Pikafish" : "?") +
         "｜" + String(MODE_LABEL[other.state.mode] || "?").replace(/\s/g, "");
 }
 
@@ -4663,15 +4662,13 @@ function startLoop() {
         return { ok: false, reason: "建驱动失败：" + error };
     }
     // 引擎预热：Pikafish 首次启动要加载 ~48MB NNUE 权重（K40 实测 ~0.7s）。
-    // 放在这里做掉，别让第一步棋多等这一下；失败也只是日志（router 会自动回退 JS）。
-    if (engineBackendKey !== "js") {
-        const warm = engineModule.warmUpPikafish();
-        if (warm && warm.ok) {
-            logLine("引擎预热完成：" + engineModule.engineDescription());
-        } else {
-            logLine("引擎预热跳过：" + (warm && warm.reason ? warm.reason : "Pikafish 不可用") +
-                "（本局算棋走 JS 引擎）");
-        }
+    // 放在这里做掉，别让第一步棋多等这一下；失败也只是日志 —— 没有 JS 回退（引擎已移除），
+    // 后面每一步算棋都会带「Pikafish 不可用」的失败原因，日志里看得见。
+    const warm = engineModule.warmUpPikafish();
+    if (warm && warm.ok) {
+        logLine("引擎预热完成：" + engineModule.engineDescription());
+    } else {
+        logLine("引擎预热跳过：" + (warm && warm.reason ? warm.reason : "Pikafish 不可用"));
     }
     // ⚠️ 真机踩过：只建驱动 + 起定时器是不够的，状态机还在 STOPPED，
     //    每轮 tick() 都返回「没有在运行」。必须先 driver.start()（START → READY）。
@@ -5497,7 +5494,7 @@ function main() {
             logLine("Pikafish 参数：" + JSON.stringify(pikafishOptions));
         }
         if (auto.engine) {
-            // "auto"（默认，有 Pikafish 就用）/ "pikafish"（强制，失败不降级）/ "js"（老路径）
+            // "auto"（默认）/ "pikafish"（保留键名）—— 两者现在都只走 Pikafish（JS 引擎已移除）
             engineBackendKey = engineModule.setBackend(String(auto.engine));
             logLine("算棋引擎：" + engineModule.engineDescription());
         }

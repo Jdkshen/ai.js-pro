@@ -127,7 +127,7 @@ function createPanelBus(options) {
         // 几何版本与引擎后端也放进这一行：两边界面用同一函数渲染，天然「显示一致」（A1 验收）。
         const grid = (state.gridVersion == null) ? "—" : ("v" + state.gridVersion);
         const backend = state.backend === "pikafish" ? "Pikafish"
-            : (state.backend === "js" ? "JS" : (state.backend || "?"));
+            : (state.backend === "pikafish" || state.backend === "auto" ? "Pikafish" : (state.backend || "?"));
         const draw = state.drawMode || (state.drawEnabled === true ? "on" : "off");
         return who + "：" + (state.running ? "正在跑" : "未开始") +
             "（" + mode + "，我方：" + side + "，几何 " + grid + "，引擎 " + backend +

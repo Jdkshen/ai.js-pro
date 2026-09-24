@@ -278,7 +278,7 @@ function createMachine(config, deps) {
             ttlMs: cfg.ticketTtlMs,
             score: jobResult.score,
             depth: jobResult.depth,
-            source: "local-engine",
+            source: "pikafish",
             nowMono: nowMono()
         });
     }

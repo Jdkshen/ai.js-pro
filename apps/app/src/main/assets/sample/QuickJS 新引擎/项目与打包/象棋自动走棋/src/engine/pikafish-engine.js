@@ -1,13 +1,12 @@
 // @engine quickjs
 /**
- * Pikafish 适配器：把宿主 `$pikafish`（native NNUE 引擎）包成与 `engine.js` **同一契约**的
- * `analyze(position, options)`，让驱动/面板/worker 可以无感切换。
+ * Pikafish 适配器：把宿主 `$pikafish`（native NNUE 引擎）包成 `analyze(position, options)`，
+ * 契约字段与驱动/面板/worker 共用（见下方 @returns）—— 内置 JS 引擎已移除，这是**唯一**的算棋实现。
  *
- * 契约对齐（见 engine.js 的 @returns）：
- *   { ok, side, move, iccs, captured, score, depth, nodes, ms, mateIn, pvIccs, fen, engine }
+ * @returns { ok, side, move, iccs, captured, score, depth, nodes, ms, mateIn, pvIccs, fen, engine }
  *
- * 语义换算（Pikafish 是 UCI 引擎，与内置 JS 引擎的约定不同）：
- *   · UCI 的 score 是**走棋方视角**，这里换算成**红方视角**（正 = 红优），与 engine.js 一致；
+ * 语义换算（Pikafish 是 UCI 引擎，与本工程内部约定不同）：
+ *   · UCI 的 score 是**走棋方视角**，这里换算成**红方视角**（正 = 红优，与 automation 的约定一致）；
  *   · `score mate N`（N 步杀，走棋方视角）→ score 置 ±29900（越过驱动的杀棋门 29800）、
  *     mateIn = ±N；没有 mate 时 mateIn = null、score = cp。
  *
@@ -17,8 +16,9 @@
  *   · excludeIccs（循环/长捉排除表）靠 MultiPV 选路：先要 N = 排除数+1 路（上限 5），
  *     取第一路不在表里的（v1.1）；全被挡再加宽到上限 12 扫第二遍；仍全被挡就**放宽排除表取头名**
  *     （结果带 excludeRelaxed 标记），**不再返回失败交给路由回退**。
- *     ⚠️ 真机 2026-09-24（和棋那局 11:23:48）：禁用攒到 5 手 → 旧逻辑失败 → 路由回退 JS 引擎
- *     （深度 4、评分 -153）→ 接着把「已禁的重复着」又走了出来 → 100 回合无吃子判和。
+ *     ⚠️ 真机 2026-09-24（和棋那局 11:23:48）：禁用攒到 5 手 → 旧逻辑失败 → 当时路由回退到
+ *     JS 引擎（深度 4、评分 -153）→ 接着把「已禁的重复着」又走了出来 → 100 回合无吃子判和。
+ *     （内置 JS 引擎现已整体移除；本适配器现在是唯一后端，所以「全被挡」必须在这里就地解决。）
  */
 "use strict";
 
@@ -234,7 +234,7 @@ function analyze(position, options) {
          * ★★ 2026-09-24 真机（和棋那局 · 11:23:48）：禁用着法攒到 ≥5 手时，第一遍只要了 5 路
          *   候选 ⇒ 全在排除表里 ⇒ 本函数失败 ⇒ **路由回退到 JS 引擎**（深度 4、评分 -153），
          *   随后一路把「已禁的重复着」又走了出来、100 回合无吃子判和。
-         *   两步补救（与内置 JS 引擎「全被排除就忽略排除表再搜一次」同策略，见 search.js 的兜底）：
+         *   两步补救（沿用老 JS 引擎「全被排除就忽略排除表再搜一次」的策略）：
          *     ① 加宽 MultiPV 再扫一遍（上限 12）——优先找「不在表里的下一档好手」；
          *     ② 仍全被挡 ⇒ 放宽排除表、取引擎头名，**绝不因此降级到 JS 引擎**。
          *   放宽有「继续长捉」的规则风险，但比换掉引擎（当场掉几百 Elo）小得多；
