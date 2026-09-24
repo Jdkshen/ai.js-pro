@@ -8,9 +8,6 @@
 "use strict";
 
 const timing = require("../runtime/timing.js");
-const glyphModule = require("../vision/glyph-recognizer.js");
-const boardValidator = require("../vision/board-validator.js");
-const fenModule = require("../chess/fen.js");
 
 function createBoardService(options) {
     const opts = options || {};
@@ -42,14 +39,6 @@ function createBoardService(options) {
      * mode="glyph" = 只走字形；mode="pipeline" = 跳过字形（A/B）；mode="legacy" = 旧路径。
      */
     const glyph = opts.glyph || null;
-    /**
-     * YOLO 识别源注入（可选，「YOLO 主识别」2026-09-24）：
-     *   yolo = { ensureServer(), read(image, conf, iou) → {ok, chars[90], n, box, geo, ms} }
-     *   yoloOptions = { votes=3, gapMs=130, confidence=0.45, iou=0.45, minPieces=3 }
-     * 给了就启用 `recognizeYolo()`：抓 N 帧 → 逐格多帧投票 → 同占位身份保持 → 规则门/未知格闸门。
-     */
-    const yolo = opts.yolo || null;
-    const yoloOptions = opts.yoloOptions || {};
 
     let grid = null;
     let lastResult = null;
@@ -317,202 +306,6 @@ function createBoardService(options) {
         return { ok: false, reason: "字形识别不通过：" + why, frame: grabbed };
     }
 
-    /**
-     * YOLO 识别链（「YOLO 主识别」）：一次观察抓 N 帧 → 逐格多帧投票（≥2/3 才落定，
-     * 有票但不够票 = `?` 未知，所有帧都空 = 空）→ 同占位身份保持 → 规则门 + 未知格闸门。
-     *
-     * 返回形状与 `recognizeSmart()` 对齐（method="yolo"）；任一环节不过 = `{ok:false}`（这一帧不观察）。
-     * 用的帧全部走 `grab()`（含藏窗）——与字形链同一条抓帧路径。
-     */
-    function recognizeYolo(options) {
-        const cb = options || {};
-        if (!yolo || typeof yolo.read !== "function") {
-            return { ok: false, reason: "YOLO 识别不可用：没有注入 yolo 源" };
-        }
-        const cfg = yoloOptions || {};
-        const votes = Math.max(1, Math.min(5, Math.round(cfg.votes == null ? 3 : cfg.votes)));
-        const gapMs = Math.max(0, Number(cfg.gapMs == null ? 130 : cfg.gapMs));
-        const conf = cfg.confidence == null ? 0.45 : Number(cfg.confidence);
-        const iou = cfg.iou == null ? 0.45 : Number(cfg.iou);
-        const minPieces = cfg.minPieces == null ? 3 : Number(cfg.minPieces);
-        const clock = timing.create();
-        lastTimingDetail = null;
-        if (typeof yolo.ensureServer === "function" && !yolo.ensureServer()) {
-            return { ok: false, reason: "YOLO 引擎未就绪（TflRunner 加载失败）" };
-        }
-        const pause = typeof ports.sleep === "function" ? ports.sleep : null;
-        const reads = [];
-        let lastGrabbed = null;
-        let lastError = null;
-        for (let i = 0; i < votes; i++) {
-            if (i > 0 && gapMs > 0 && pause) {
-                pause(gapMs);
-            }
-            const grabbed = grab();
-            if (!grabbed || !grabbed.image) {
-                lastError = "拿不到帧";
-                continue;
-            }
-            lastGrabbed = grabbed;
-            const r = yolo.read(grabbed.image, conf, iou);
-            if (r && r.ok && r.chars && r.n >= minPieces) {
-                reads.push(r);
-            } else if (r && r.reason) {
-                lastError = r.reason;
-            }
-        }
-        clock.mark("抓帧+读盘（目标 " + votes + " 帧）");
-        if (reads.length === 0) {
-            return { ok: false, reason: "YOLO 读帧失败：" + (lastError || "没有可用帧"), frame: lastGrabbed };
-        }
-        // 逐格投票：3 帧需 ≥2 票；只剩 1~2 帧有效时按「全部/过半一致」放宽（有效帧数不足会体现在 yoloStats）
-        const need = reads.length >= 3 ? 2 : reads.length;
-        const chars = new Array(90);
-        let votedCells = 0;
-        let unknownByVote = 0;
-        for (let c = 0; c < 90; c++) {
-            const cnt = {};
-            let emptyN = 0;
-            for (let f = 0; f < reads.length; f++) {
-                const ch = reads[f].chars[c];
-                if (ch) {
-                    cnt[ch] = (cnt[ch] || 0) + 1;
-                } else {
-                    emptyN++;
-                }
-            }
-            let best = null;
-            let bestN = 0;
-            for (const k in cnt) {
-                if (cnt[k] > bestN) {
-                    bestN = cnt[k];
-                    best = k;
-                }
-            }
-            if (best && bestN >= need) {
-                chars[c] = best;
-                votedCells++;
-            } else if (emptyN >= need) {
-                // 「空」也是一个候选：单帧误报两枚棋时，剩下两帧读空 —— 这格就该是空
-                // （不这样算的话「p,空,空」会被当成「有票但不够票」→ 白记一个未知格）。
-                chars[c] = null;
-            } else if (best) {
-                // 有票但不过阈值：保守记未知（别当成「空」——会把少子/吃子推错）
-                chars[c] = "?";
-                unknownByVote++;
-            } else {
-                chars[c] = null;   // 所有帧都读空
-            }
-        }
-        clock.mark("投票");
-        // 棋盘框中位数（日志/后续调点击用；本版不动驱动自己的 grid）
-        function med(values) {
-            const a = values.slice().sort(function (x, y) { return x - y; });
-            return a[Math.floor(a.length / 2)];
-        }
-        const box = {
-            x: med(reads.map(function (r) { return r.box ? r.box.x : 0; })),
-            y: med(reads.map(function (r) { return r.box ? r.box.y : 0; })),
-            x2: med(reads.map(function (r) { return r.box ? r.box.x2 : 0; })),
-            y2: med(reads.map(function (r) { return r.box ? r.box.y2 : 0; }))
-        };
-        // 同占位身份保持（与字形链同一条策略：占位不动时身份以参照盘为准）
-        let preserved = { held: 0, board: chars };
-        try {
-            preserved = glyphModule.preserveIdentityOnSameOccupancy(chars, cb.referenceBoard);
-        } catch (error) {
-            preserved = { held: 0, board: chars };
-        }
-        const board = preserved.board;
-        // '?' 的第二次机会：只要全盘占位与参照盘完全一致（没走过子），三帧身份各读各的格子
-        // 不该算未知 —— 字形链还能逐格复核，YOLO 一次观察只有这一批帧，身份直接沿用参照盘。
-        // （字形链自己的语义不动：'?' 保留、由它自己的复核去处理。）
-        let heldUnknown = 0;
-        if (cb.referenceBoard && cb.referenceBoard.length === board.length) {
-            let sameOccupancy = true;
-            for (let i = 0; i < 90; i++) {
-                if (!!board[i] !== !!cb.referenceBoard[i]) {
-                    sameOccupancy = false;
-                    break;
-                }
-            }
-            if (sameOccupancy) {
-                for (let i = 0; i < 90; i++) {
-                    if (board[i] === "?" && cb.referenceBoard[i] && cb.referenceBoard[i] !== "?") {
-                        board[i] = cb.referenceBoard[i];
-                        heldUnknown++;
-                    }
-                }
-            }
-        }
-        const unknownCells = typeof glyphModule.countUnknown === "function"
-            ? glyphModule.countUnknown(board) : 0;
-        let validation = { ok: false, reason: "未校验" };
-        try {
-            validation = boardValidator.validate(board, { allowUnknown: true, side: cb.side });
-        } catch (error) {
-            validation = { ok: false, reason: "规则校验异常：" + error };
-        }
-        clock.mark("校验");
-        if (!(validation && validation.ok)) {
-            return {
-                ok: false,
-                reason: "YOLO 规则门不过：" + ((validation && validation.reason) || "未说明"),
-                frame: lastGrabbed
-            };
-        }
-        const gate = (vision && vision.gate) || null;
-        const gAccepted = (gate && typeof gate.acceptResult === "function")
-            ? gate.acceptResult(unknownCells) : { ok: true };
-        if (gAccepted && gAccepted.ok === false) {
-            return {
-                ok: false,
-                reason: "YOLO 未知格超限（" + unknownCells + "）：" + (gAccepted.reason || ""),
-                frame: lastGrabbed
-            };
-        }
-        let layout = "";
-        try {
-            layout = fenModule.layoutOf(board, { allowUnknown: true });
-        } catch (error) {
-            layout = "";
-        }
-        let avgMs = 0;
-        for (let i = 0; i < reads.length; i++) {
-            avgMs += (reads[i].ms || 0);
-        }
-        avgMs = reads.length ? Math.round(avgMs / reads.length) : 0;
-        lastTimingDetail = {
-            smart: clock.summary("收尾"),
-            pipeline: null,
-            legacy: false,
-            yolo: { frames: reads.length, votes: votes, avgMs: avgMs }
-        };
-        return {
-            ok: true,
-            method: "yolo",
-            grid: grid,
-            chars: board,
-            rawChars: chars.slice(),
-            unknownCells: unknownCells,
-            layout: layout,
-            validation: validation,
-            yoloStats: {
-                frames: reads.length,
-                votes: votes,
-                votedCells: votedCells,
-                unknownByVote: unknownByVote,
-                held: (preserved.held || 0) + heldUnknown,
-                heldUnknown: heldUnknown,
-                avgMs: avgMs,
-                box: box
-            },
-            imageObject: lastGrabbed ? lastGrabbed.image : null,
-            frameObject: lastGrabbed ? lastGrabbed.image : null,
-            frame: lastGrabbed
-        };
-    }
-
     /** 旧路径（原 `recognize`）：兼容既有调用方，行为不变。 */
     function recognizeLegacy(callbacks) {
         const result = recognize(callbacks || {});
@@ -535,7 +328,6 @@ function createBoardService(options) {
         recognize: recognize,
         recognizeLegacy: recognizeLegacy,
         recognizeSmart: recognizeSmart,
-        recognizeYolo: recognizeYolo,
         grab: grab,
         grid: function () { return grid; },
         setGrid: setGrid,

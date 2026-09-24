@@ -98,7 +98,6 @@ const pieceSideModule = load("src/vision/piece-side.js");
 const inkColorModule = load("src/vision/ink-color.js");
 const bootstrapModule = load("src/app/bootstrap.js");
 const pipelineFactory = load("src/vision/pipeline-factory.js");
-const yoloRecognizerModule = load("src/vision/yolo-recognizer.js");
 const locateBoard = load("tools/locate-board.js");
 const driverModule = load("src/automation/auto-driver.js");
 const engineModule = load("src/engine/engine-router.js");   // 算棋：Pikafish（原生 NNUE；内置 JS 引擎已移除）
@@ -212,18 +211,6 @@ let engineBackendKey = "auto";
 let pikafishOptions = null;
 /** 一次观察的帧数/帧间隔（驱动默认 2 帧 + 260ms；A/B 用，见 autorun 的 observeFrames） */
 let observeFramesKey = 2;
-/**
- * 识别源（2026-09-24「YOLO 主识别」；autorun `recognitionSource` 可调）：
- *   auto     = YOLO 先读（内部多帧投票），读不过自动转字形兜底（默认）；
- *   yolo     = 只走 YOLO；
- *   template = 只走字形（模板）识别。
- */
-const RECOGNITION_SOURCES = ["auto", "yolo", "template"];
-const RECOGNITION_LABEL = { auto: "YOLO 主（失败转字形兜底）", yolo: "仅 YOLO", template: "仅字形（模板）" };
-let recognitionSourceKey = "auto";
-/** YOLO 多帧投票的帧数（autorun `yoloVotes` 可调；默认 3，与第三方包口径一致） */
-let yoloVotesKey = 3;
-let lastYoloFallbackNoteAt = 0;
 let observeGapMsKey = 260;
 /** 算棋时间预算（ms）：autorun `movetimeMs` 可调（2026-09-21 提速方案：3500 → 1000~1200） */
 let movetimeMsKey = 3500;
@@ -3206,34 +3193,9 @@ function buildDriver() {
             //   一律走 `grabFrame()`。
             const service = ensureBoardService();
             const obsStarted = Date.now();
-            // 识别源（2026-09-24「YOLO 主识别」）：
-            //   auto     = YOLO 先读（服务层内部 3 帧投票），读不过自动转字形兜底；
-            //   yolo     = 只走 YOLO；template = 只走字形（模板）。autorun `recognitionSource` 可切。
-            let smart = null;
-            const useYolo = recognitionSourceKey === "auto" || recognitionSourceKey === "yolo";
-            if (useYolo) {
-                const y = service.recognizeYolo(options || {});
-                if (y && y.ok) {
-                    smart = y;
-                } else if (recognitionSourceKey === "auto") {
-                    // 兜底：YOLO 读不过（引擎没起来/规则门/未知格超限）→ 字形链再来一次；
-                    // 驱动对丢帧免疫：两边都不过就按「这一帧不观察」处理（保留 YOLO 的原因）。
-                    const t = service.recognizeSmart(options || {});
-                    if (t && t.ok) {
-                        if (Date.now() - lastYoloFallbackNoteAt > 3000) {
-                            lastYoloFallbackNoteAt = Date.now();
-                            logLine("YOLO 失败转字形兜底：" + ((y && y.reason) || "未说明"));
-                        }
-                        smart = t;
-                    } else {
-                        smart = y || t;
-                    }
-                } else {
-                    smart = y;
-                }
-            } else {
-                smart = service.recognizeSmart(options || {});
-            }
+            // 识别链只有字形识别（2026-09-24「其他的都不要了」）：差分/流水线/旧路径分支全部移除；
+            // 读不过的帧服务层会返回 ok:false，驱动按「这一帧不观察」处理。
+            const smart = service.recognizeSmart(options || {});
             if (frameProbeOn) {
                 logLine("[帧探针] 全盘识别后 " + frameProbeActive());
             }
@@ -3296,9 +3258,8 @@ function buildDriver() {
             // 引擎后端与 Pikafish 参数：worker 与 inline 两条路都会带过去（见 compute/computeInline）。
             engineKey: engineBackendKey,
             pikafish: pikafishOptions,
-            // 一次观察看几帧/间隔多少（autorun 可覆盖，做 A/B 用；驱动默认 2 帧 + 260ms）。
-            // YOLO 源下恒为 1：多帧投票在 recognizeYolo 内部做（3 帧/次），外面再合并就重复抓帧了。
-            observeFrames: recognitionSourceKey === "template" ? observeFramesKey : 1,
+            // 一次观察看几帧/间隔多少（autorun 可覆盖，做 A/B 用；驱动默认 2 帧 + 260ms）
+            observeFrames: observeFramesKey,
             observeGapMs: observeGapMsKey,
             // ★ 对方应手「占用唯一解」快路（2026-09-21）：diff 链路的 occupancy/changed 直接定手，省 OCR
             replyFastPath: replyFastPathKey
@@ -3593,8 +3554,7 @@ function ensureBoardService() {
         boardOverrides: {
             ports: {
                 now: function () { return Date.now(); },
-                capture: function () { return grabFrame(); },   // 一律走「会先藏面板」的抓帧
-                sleep: function (ms) { sleep(ms); }             // YOLO 多帧之间的间隔
+                capture: function () { return grabFrame(); }   // 一律走「会先藏面板」的抓帧
             },
             locateBoard: {
                 locateBoardInImage: function () {
@@ -3613,16 +3573,6 @@ function ensureBoardService() {
             },
             vision: visionInjection,
             glyph: glyphSource,
-            // YOLO 主识别注入：votes 用 getter —— 服务是懒建的，但 autorun 可能晚于服务创建，
-            // 冻结值会把 yoloVotes 配置静默吞掉。
-            yolo: yoloSource,
-            yoloOptions: {
-                get votes() { return yoloVotesKey; },
-                gapMs: 130,          // 帧间隔：跳开游戏动画中间帧（第三方主脚本也是 130ms 档）
-                confidence: 0.45,
-                iou: 0.45,
-                minPieces: 3
-            },
             note: function (text) { logLine(text); }
         }
     });
@@ -3646,20 +3596,6 @@ function logPipelineNote(smart) {
         const g = smart.glyphStats || {};
         logLine("字形识别：触子 " + (g.inked || 0) + "｜未知 " + (smart.unknownCells || 0) +
             "｜用时 " + (g.ms || 0) + "ms" + (g.retries ? ("（复核 " + g.retries + "）") : "") +
-            "｜验证 " + ((smart.validation && smart.validation.ok) ? "过" : "不过"));
-        return;
-    }
-    if (smart.method === "yolo") {
-        if (Date.now() - lastPipelineNoteAt <= 2000) {
-            return;
-        }
-        lastPipelineNoteAt = Date.now();
-        const st = smart.yoloStats || {};
-        logLine("YOLO 识别：帧 " + (st.frames || 0) + "/" + (st.votes || 0) +
-            "｜投票格 " + (st.votedCells || 0) +
-            (st.unknownByVote ? ("｜投票未定 " + st.unknownByVote) : "") +
-            "｜保持 " + (st.held || 0) + "｜未知 " + (smart.unknownCells || 0) +
-            "｜" + (st.avgMs || 0) + "ms/帧" +
             "｜验证 " + ((smart.validation && smart.validation.ok) ? "过" : "不过"));
         return;
     }
@@ -3717,13 +3653,6 @@ const visionCtl = pipelineFactory.create({
 // 走棋服务只跑它；规则门/未知格不过时丢弃这一帧，不回退第二种识别。
 const glyphSource = pipelineFactory.createGlyphSource({
     adapter: adapter,
-    baseDir: BASE_DIR,
-    log: function (text) { logLine(text); }
-});
-
-// YOLO 识别源（2026-09-24「YOLO 主识别」）：资产在工程 `yolo/` 目录；
-// 整条 TFLite 流水线（预处理+推理+解码+FEN）在 Java 侧 TflRunner 里跑，脚本只拿 JSON。
-const yoloSource = yoloRecognizerModule.create({
     baseDir: BASE_DIR,
     log: function (text) { logLine(text); }
 });
@@ -5588,24 +5517,6 @@ function main() {
                 logLine("算棋时间预算：" + movetimeMsKey + "ms（默认 3500）");
             } else {
                 logLine("算棋时间预算非法（" + auto.movetimeMs + "），沿用 " + movetimeMsKey + "ms");
-            }
-        }
-        if (auto.recognitionSource != null) {
-            const src = String(auto.recognitionSource);
-            if (RECOGNITION_SOURCES.indexOf(src) >= 0) {
-                recognitionSourceKey = src;
-                logLine("识别源：" + RECOGNITION_LABEL[src]);
-            } else {
-                logLine("识别源非法（" + src + "），沿用 " + RECOGNITION_LABEL[recognitionSourceKey]);
-            }
-        }
-        if (auto.yoloVotes != null) {
-            const n = Math.round(Number(auto.yoloVotes));
-            if (isFinite(n) && n >= 1 && n <= 5) {
-                yoloVotesKey = n;
-                logLine("YOLO 投票帧数：" + n);
-            } else {
-                logLine("yoloVotes 非法（" + auto.yoloVotes + "），沿用 " + yoloVotesKey);
             }
         }
         if (auto.clickSettleMs != null) {
