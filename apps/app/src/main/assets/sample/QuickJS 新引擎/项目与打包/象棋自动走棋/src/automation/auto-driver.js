@@ -951,6 +951,17 @@ function createDriver(options) {
                 }
             }
         }
+        /**
+         * ★★ 2026-09-24（K40 真机根因）：返回前把 effects 清空。
+         *
+         * `handleEffect` 的返回值会被**调用方的 pump 再次入队**；而嵌套动作（executeTicket、
+         * doVerify、compute…）自己也在调 `pump` —— 那些 effects 在里层已经执行过一次。
+         * 不清空 = 同一组动作被内外两层各跑一遍：真机实测「一手棋的确认完整跑 2~3 次」
+         * （每次白烧一整轮全盘观测 ~0.6s；09-24 早上用「同票据复用结论」兑过一次，
+         * 但那只盖住症状、且仅对 ROI 路径生效 —— 去掉 OCR 后立刻复发）。
+         * 清空后：每个 outcome 的 effects 只被执行一次（里层执行、外层看到空）。
+         */
+        outcome.effects = [];
         return outcome;
     }
 

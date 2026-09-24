@@ -4491,6 +4491,67 @@ check("驱动：幻影僵持但证据说那格**没墨迹** ⇒ 是框漂移的�
 });
 
 /**
+ * 真机回归（2026-09-24，K40）：**一次点击的确认被完整跑 2~3 次**（每次多烧一整轮全盘观测，~0.6s）。
+ *
+ * 根因在驱动的 `pump`：`handleEffect` 的返回值会被**调用方的 pump 再次入队**，而嵌套动作
+ * （executeTicket / doVerify / compute…）自己也在调 pump ⇒ 同一组 effects（CLICK_RESULT 的
+ * [VERIFY]）被内外两层各执行一遍。修法：pump 返回前把 effects 清空（每个 outcome 只执行一次）。
+ * 09-24 早上用「同票据复用结论」盖过一次症状（只对 ROI 路径生效），去掉 OCR 后立刻复发。
+ */
+check("驱动：一次点击只确认一次（pump 嵌套不得重复执行 effects —— 真机 2~3 次确认回归）", function () {
+    const afterOwn = legal.applyMove(START_BOARD, OWN_MOVE).board;
+    const stage = { clicked: false };
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = (stage.clicked ? afterOwn : START_BOARD).slice();
+            return {
+                ok: true, chars: cells, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: OWN_MOVE.iccs, move: OWN_MOVE, score: 0, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 8 && !stage.clicked; i++) {
+        driver.tick();
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "）｜日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 6; i++) {
+        driver.tick();
+    }
+    const clicks = noteText.filter(function (t) { return t.indexOf("点击：") >= 0; });
+    if (clicks.length !== 1) {
+        return "应当只有一次点击，实际 " + clicks.length + " 次：" + clicks.join(" / ");
+    }
+    const confirms = noteText.filter(function (t) { return t.indexOf("确认：CONFIRMED") >= 0; });
+    if (confirms.length !== 1) {
+        return "一次点击应当只确认一次，实际 " + confirms.length + " 次：" + confirms.join(" / ");
+    }
+    return true;
+});
+
+/**
  * 真机回归（2026-09-20，K40 实拍 + 截图放大逐格核对）：**同兵种反吃被两处「纠色」抹掉证据**，
  * 整局钉死在 `UNRELIABLE：装饰容差下有 11 种应手解释，不唯一` 两分钟以上。
  *
