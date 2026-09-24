@@ -1453,10 +1453,21 @@ function needHideForCapture() {
  * @return true = 几何可信（或全是动画帧，无法判定）；false = 首帧就说局面不可信
  */
 function verifyAutorunGeometry() {
+    if (!grid) {
+        logLine("几何验证：尚未定位到棋盘；请先切到游戏画面，再点「定位校准」");
+        return false;
+    }
+    let service = null;
+    try {
+        service = ensureBoardService();
+    } catch (error) {
+        logLine("几何验证：棋盘服务初始化失败 —— " + error);
+        return false;
+    }
     for (let i = 0; i < 2; i++) {
         let probe = null;
         try {
-            probe = boardService.recognizeSmart({});
+            probe = service.recognizeSmart({});
         } catch (error) {
             probe = { ok: false, reason: String(error) };
         }
@@ -3239,6 +3250,24 @@ function ensureApp() {
     return app;
 }
 
+/** 浮窗按钮可能在首帧定位失败后被点击；先装配控制器，失败只记状态，不让事件回调杀掉脚本。 */
+function runPanelCommand(name, arg) {
+    try {
+        const current = ensureApp();
+        if (!current || !current.controller) {
+            throw new Error("控制器尚未就绪");
+        }
+        const result = current.controller.run(name, arg);
+        if (result && result.ok === false) {
+            logLine(name + " 未执行：" + (result.reason || "条件不满足"));
+        }
+        return result;
+    } catch (error) {
+        logLine(name + " 失败：" + error);
+        return { ok: false, reason: String(error) };
+    }
+}
+
 function ensureBoardService() {
     if (boardService) {
         return boardService;
@@ -3272,8 +3301,14 @@ function ensureBoardService() {
         handlers: {
             START: function () { return startLoop(); },
             STOP: function () { stopLoop(); return { ok: true }; },
-            RELOCATE: function () { locateAndCalibrate(); return { ok: true }; },
-            RECOGNIZE: function () { recognizeOnce(); return { ok: true }; },
+            RELOCATE: function () {
+                return locateAndCalibrate() ? { ok: true } :
+                    { ok: false, reason: "定位失败；确认游戏棋盘正在屏幕上" };
+            },
+            RECOGNIZE: function () {
+                return recognizeOnce() ? { ok: true } :
+                    { ok: false, reason: "识别失败；先确认棋盘可见并重新定位" };
+            },
             SELFTEST: function () { runSelfCheck(); return { ok: true }; },
             CONTRACT: function () { runContractTests(); return { ok: true }; },
             NEW_SESSION: function () { newSession(); return { ok: true }; },
@@ -4412,6 +4447,14 @@ function startLoop() {
     if (running) {
         return { ok: false, reason: "已经在跑" };
     }
+    if (!grid) {
+        const located = locateAndCalibrate();
+        if (!located) {
+            const reason = "画面中没有可确认的棋盘；请切到游戏，再点「定位校准」";
+            logLine("拒绝开始：" + reason);
+            return { ok: false, reason: reason };
+        }
+    }
     // 互锁：主界面那边正在跑就先拒绝（两个引擎同时跑等于双份截图/算棋）
     const gate = loopLock.acquire(loopLock.OWNER_FLOATY);
     if (!gate.ok) {
@@ -4999,11 +5042,11 @@ function main() {
     });
     win.startBtn.on("click", function () {
         // A1 批次2：启动/停止统一走控制器命令（实现见 ensureBoardService 里的 handlers）
-        app.controller.run(running ? "STOP" : "START");
+        runPanelCommand(running ? "STOP" : "START");
         render();
     });
     win.stopBtn.on("click", function () {
-        app.controller.run("STOP");
+        runPanelCommand("STOP");
         // 双向停止：页面（主界面）在跑也一起停掉（否则面板停了、页面还在抓屏/算棋）
         const other = bus.readOther();
         if (other && other.fresh && other.state && other.state.running) {
@@ -5013,11 +5056,11 @@ function main() {
         render();
     });
     win.locateBtn.on("click", function () {
-        app.controller.run("RELOCATE");
+        runPanelCommand("RELOCATE");
         render();
     });
     win.recognizeBtn.on("click", function () {
-        app.controller.run("RECOGNIZE");
+        runPanelCommand("RECOGNIZE");
         render();
     });
     logLine("按钮绑定完成：模式/收起/开始/停止/定位/识别/轮到我/换我方/重开本局；诊断工具在主界面");
@@ -5097,7 +5140,7 @@ function main() {
     // 「现在轮到我」：把当前观察到的局面当可靠基准（轮次未知时状态机会一直等）
     win.turnBtn.on("click", function () {
         // A1 批次2：命令式（带 side 参数；“没有驱动”由 handler 报错）
-        app.controller.run("DECLARE_TURN", { side: driver ? driver.mySide() : "w" });
+        runPanelCommand("DECLARE_TURN", { side: driver ? driver.mySide() : "w" });
         render();
     });
     win.sideBtn.on("click", function () {
@@ -5111,7 +5154,7 @@ function main() {
     });
     win.sessionBtn.on("click", function () {
         // A1 批次2：按钮只发命令（实现见 newSession()）
-        app.controller.run("NEW_SESSION");
+        runPanelCommand("NEW_SESSION");
     });
     win.collapseBtn.on("click", function () {
         setPanelCollapsed(!collapsed);
@@ -5343,10 +5386,13 @@ function main() {
             let geometryOk = true;
             if (!hasGrid && auto.locate !== false) {
                 logLine("autorun：还没有几何，先自动定位校准（auto.locate=false 可关）");
-                locateAndCalibrate();
-                if (auto.verifyLocate !== false && !verifyAutorunGeometry()) {
+                const located = locateAndCalibrate();
+                if (!located || !grid) {
                     geometryOk = false;
-                    logLine("⚠ 自动定位后的首帧识别不过 → 几何可疑，不自动开始；请手动「定位校准」再按开始");
+                    logLine("⚠ 自动定位失败，不自动开始；请切到游戏棋盘，再点「定位校准」");
+                } else if (auto.verifyLocate !== false && !verifyAutorunGeometry()) {
+                    geometryOk = false;
+                    logLine("⚠ 自动定位后的首帧识别不过 → 几何可疑，不自动开始；请重新定位");
                 }
             }
             if (!geometryOk) {
