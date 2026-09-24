@@ -2329,6 +2329,63 @@ function readCharsWithGrid(image, g) {
 }
 
 /**
+ * 把候选几何的「锚定」在 ±1 格邻域里扫一圈，第一个能读出**双方帅/将**的采用。
+ * 为什么（2026-09-24 真机两回：13 子残局、棋盘被放大后）：线定位找对了线，但把**序号锚错一整格**
+ * （历史屡犯：最上一行/列被棋子压住就没有铿锵的锚），而校准的代价函数又偏爱「大多读成空」的
+ * 格子（未知格不多、但帅/将都读不到）⇒ 直接采用就卡死。几何只会整体平移，±1 格扫一圈就能纠。
+ * @return 可采用的几何（可能是原候选本身）；邻域全扫完都读不到返回 null
+ */
+const ANCHOR_SHIFTS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
+function findAlignedGrid(image, base) {
+    if (!base || !base.stepX || !base.stepY) {
+        return null;
+    }
+    for (let i = 0; i < ANCHOR_SHIFTS.length; i++) {
+        const sx = ANCHOR_SHIFTS[i][0] * base.stepX;
+        const sy = ANCHOR_SHIFTS[i][1] * base.stepY;
+        let g = base;
+        if (sx !== 0 || sy !== 0) {
+            g = geometryModule.createGrid({
+                originX: base.originX + sx,
+                originY: base.originY + sy,
+                stepX: base.stepX,
+                stepY: base.stepY,
+                orientation: base.orientation,
+                version: (base.version == null ? 1 : base.version)
+            });
+        }
+        if (countKings(readCharsWithGrid(image, g)) === 2) {
+            return { grid: g, shift: ANCHOR_SHIFTS[i] };
+        }
+    }
+    return null;
+}
+
+/**
+ * pickGrid 兜底：用**检测框**拟合一个候选几何（框就压在棋子上，锚定证据比稀疏线强）。
+ * 返回 { grid } 或 null；失败只记日志不抛。
+ */
+function pickGridCandidate(grabbed) {
+    if (!grabbed || !grabbed.image) {
+        return null;
+    }
+    try {
+        const picked = recognizeBoard.pickGrid(grabbed.image, {
+            orientation: "RED_BOTTOM", confidence: 0.25, radius: 18, step: 4,
+            radiusRatio: 0.5, probeCropMargin: 0.9
+        });
+        if (!picked || !picked.ok) {
+            logLine("pickGrid 兜底失败：" + ((picked && picked.reason) || "无结果"));
+            return null;
+        }
+        return picked.grid;
+    } catch (error) {
+        logLine("pickGrid 兜底异常：" + error);
+        return null;
+    }
+}
+
+/**
  * 把几何的「交点」钉到**棋子视觉中心**上。
  *
  * 为什么需要（2026-09-21 深夜真机 now55，差分流一整晚的错格根因）：
@@ -2742,17 +2799,56 @@ function locateAndCalibrate() {
     const calibrated = recognizeBoard.calibrateGrid(grabbed.image, located, options);
     if (calibrated && calibrated.ok && calibrated.grid) {
         const candidate = attachGridQuality(grabbed.image, snapGridToPieces(calibrated.grid, grabbed.image, "校准后"));
-        // ★ 2026-09-24 11:50 真机事故的护栏：**校准结果先过可信性检查**（读一帧，帅/将必须看得到）。
+        // ★ 2026-09-24 11:50 / 12:02 真机事故的护栏：**校准结果先过可信性检查**（读一帧，帅/将必须看得到）；
+        //   读不到时再在 **±1 格锚定邻域**里扫一圈（稀疏残局/棋盘放大后，线定位会把序号锚错一整格）。
         //   代价函数会爱上「大部分格子读成空」的坏网格（未知格少、丢子不计）—— 真机就是这样把
-        //   偏移(25,22) 的网格选进来的，之后每帧「帅/将 0」把面板卡死。读不到 ⇒ 不采用（保留原几何）。
-        if (countKings(readCharsWithGrid(grabbed.image, candidate)) === 0) {
+        //   偏移(25,22)/(23,32) 的网格选进来的，之后每帧「帅/将 0」把面板卡死。
+        const aligned = findAlignedGrid(grabbed.image, candidate);
+        if (!aligned) {
+            // ⓵ 校准可能把**线定位本来对的**锚定带歪（真机 12:02：候选被拖到 偏移(-81,26)）——
+            //   先拿线定位的原始几何做 ±1 格邻域再验一次。
+            const alignedLine = located.grid
+                ? findAlignedGrid(grabbed.image, attachGridQuality(grabbed.image, located.grid))
+                : null;
+            if (alignedLine) {
+                grid = alignedLine.grid;
+                if (boardService) { boardService.setGrid(grid); }
+                calibrationNote = "几何 v" + grid.version + "（线定位原始几何）";
+                logLine("校准候选不可信 ⇒ 退回线定位原始几何（±1 格修正后读出帅/将）：" + calibrationNote +
+                    "｜起点 " + Math.round(grid.originX) + "," + Math.round(grid.originY) +
+                    " 格距 " + Math.round(grid.stepX) + "," + Math.round(grid.stepY));
+                snapPanelAboveBoard();
+                return { ok: true, method: "line-raw-rescue", grid: grid };
+            }
+            // ⓶ 线定位/校准的锚定都不可信：最后一招用**检测框拟合**（pickGrid）—— 检测框就压在
+            //   棋子（=交点）上，锚定证据比稀疏线的“哪条线是第 0 条”强得多。
+            const pickBase = pickGridCandidate(grabbed);
+            const alignedPick = pickBase
+                ? findAlignedGrid(grabbed.image, attachGridQuality(grabbed.image, pickBase))
+                : null;
+            if (alignedPick) {
+                grid = alignedPick.grid;
+                if (boardService) { boardService.setGrid(grid); }
+                calibrationNote = "几何 v" + grid.version + "（pickGrid 兜底）";
+                logLine("线定位/校准的锚定不可信 ⇒ 改用 pickGrid 检测框拟合（±1 修正后读出帅/将）：" +
+                    calibrationNote + "｜起点 " + Math.round(grid.originX) + "," + Math.round(grid.originY) +
+                    " 格距 " + Math.round(grid.stepX) + "," + Math.round(grid.stepY));
+                snapPanelAboveBoard();
+                return { ok: true, method: "pick-grid-rescue", grid: grid };
+            }
             lastCalibrationRejectAt = Date.now();
-            logLine("校准结果可信性检查不过（帅/将读不到）⇒ 不采用：候选 偏移(" + calibrated.dx + "," +
-                calibrated.dy + ") 未知格 " + calibrated.unknown +
+            logLine("校准结果可信性检查不过（±1 格邻域 + pickGrid 兜底都读不到帅/将）⇒ 不采用：候选 偏移(" +
+                calibrated.dx + "," + calibrated.dy + ") 未知格 " + calibrated.unknown +
                 (grid ? "，保留原几何" : "，当前无可用几何"));
             return null;
         }
-        grid = candidate;
+        if (aligned.shift[0] !== 0 || aligned.shift[1] !== 0) {
+            logLine("锚定修正：候选读数偏了一整格，按 (" + aligned.shift[0] + "," + aligned.shift[1] +
+                ") 格平移后读出双方帅/将 ⇒ 采用（起点 " + Math.round(aligned.grid.originX) + "," +
+                Math.round(aligned.grid.originY) + " 格距 " + Math.round(aligned.grid.stepX) + "," +
+                Math.round(aligned.grid.stepY) + "）");
+        }
+        grid = aligned.grid;
         if (boardService) { boardService.setGrid(grid); }   // 几何只存服务层一份（2026-09-20 入口收口）
         calibrationNote = "几何 v" + grid.version + " 偏移(" + calibrated.dx + "," + calibrated.dy +
             ") 未知格 " + calibrated.unknown + " 用时 " + (Date.now() - started) + "ms";
@@ -2765,13 +2861,19 @@ function locateAndCalibrate() {
     }
     if (located.grid) {
         const fallbackCandidate = attachGridQuality(grabbed.image, located.grid);
-        // 同样过可信性检查：定位几何读不到帅/将也不采（宁可报定位失败，也不拿坏几何跑）
-        if (countKings(readCharsWithGrid(grabbed.image, fallbackCandidate)) === 0) {
+        // 同样过可信性检查（带 ±1 格锚定邻域）：定位几何读不到帅/将也不采
+        const alignedFallback = findAlignedGrid(grabbed.image, fallbackCandidate);
+        if (!alignedFallback) {
             lastCalibrationRejectAt = Date.now();
-            logLine("定位几何可信性检查不过（帅/将读不到）⇒ 不采用" + (grid ? "，保留原几何" : "，当前无可用几何"));
+            logLine("定位几何可信性检查不过（±1 格邻域也读不到帅/将）⇒ 不采用" +
+                (grid ? "，保留原几何" : "，当前无可用几何"));
             return null;
         }
-        grid = fallbackCandidate;
+        if (alignedFallback.shift[0] !== 0 || alignedFallback.shift[1] !== 0) {
+            logLine("锚定修正：定位几何按 (" + alignedFallback.shift[0] + "," + alignedFallback.shift[1] +
+                ") 格平移后读出双方帅/将 ⇒ 采用（未精校准）");
+        }
+        grid = alignedFallback.grid;
         if (boardService) { boardService.setGrid(grid); }
         calibrationNote = "几何 v" + grid.version + "（未精校准）";
         logLine("精校准没成功，沿用定位几何：" + calibrationNote);
