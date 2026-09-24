@@ -218,6 +218,8 @@ let clickSettleMsKey = null;
 let lastThinkingLogAt = 0;    // 算棋中按秒报一次状态，不刷屏
 let lastTimingLogAt = 0;      // 「耗时分期」限频（方案 §7：一轮观察拆开看，每 2s 最多一行）
 let lastAccountLogAt = 0;     // 「本轮账」限频
+let lastObsOkAt = 0;          // 最近一次成功观察的时间戳（盲读兜底计时用）
+let lastBlindRelocateAt = 0;  // 上次「盲读兜底」强制重定位的时间戳（20s 限频）
 // 一次 tick 内的账本（方案 §7）：识别被调几次/多久、重定位几次、守前台、全盘 OCR 对照
 let tickObsCalls = 0;
 let tickObsMs = 0;
@@ -2291,6 +2293,41 @@ const GEOMETRY_REUSE_MAX_UNKNOWN = 4;
  */
 let lastPipelineUnknown = 0;
 
+/** 最近一次「校准结果可信性检查」被否掉的时间戳（冷却期内不重跑全量校准，避免每帧重校死循环） */
+let lastCalibrationRejectAt = 0;
+const CALIBRATION_RETRY_COOLDOWN_MS = 30000;
+
+/**
+ * 数一下这帧读出几个「帅/将」。**几何对不对的硬判据**：
+ * 真机 2026-09-24 11:50（用户报「又识别不到了」）：中途一次误触发的全量重校准换上了偏移(25,22)
+ * 的坏网格 —— 之后每帧都是「红帅数量 0；黑将数量 0」，而**未知格看起来并不多**
+ * （错网格上大部分格子读成空、不算未知）⇒ 旧逻辑照样「沿用」⇒ 永远读不出局面。
+ * 帅/将是全盘最稳的两个字形：一个都读不到 ⇒ 几何必然不对。
+ */
+function countKings(chars) {
+    if (!chars || !chars.length) {
+        return 0;
+    }
+    let n = 0;
+    for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+        if (c === "K" || c === "k") {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+/** 用给定几何读一帧的 chars（失败返回 null）。校准/沿用检查用（不落地就能把坏几何否掉）。 */
+function readCharsWithGrid(image, g) {
+    try {
+        const r = glyphSource.recognize(image, g, {});
+        return (r && r.ok && r.chars) ? r.chars : null;
+    } catch (error) {
+        return null;
+    }
+}
+
 /**
  * 把几何的「交点」钉到**棋子视觉中心**上。
  *
@@ -2475,11 +2512,9 @@ function tryReuseGrid(grabbed) {
         return null;
     }
     const started = Date.now();
-    // 先用**上一帧真读出来的未定格数**挡一刀：成堆未定格 = 几何多半不对，别沿用。
+    // 上一帧未定格成堆：不再直接判死（多数是动画/高亮暂态），交给下面「真读一帧 + 帅将判据」定夺。
     if (lastPipelineUnknown >= 8) {
-        logLine("几何沿用检查：上一帧读出 " + lastPipelineUnknown +
-            " 个未定格（几何多半不对）⇒ 走全量校准");
-        return null;
+        logLine("几何沿用检查：上一帧读出 " + lastPipelineUnknown + " 个未定格（继续真读一帧再判）");
     }
     // 识别链只有字形（2026-09-24「其他的都不要了」）：用现几何真读一帧，未定超限就不沿用。
     let result = null;
@@ -2491,10 +2526,26 @@ function tryReuseGrid(grabbed) {
         return null;
     }
     const unknown = (result && result.ok && result.chars) ? boardScan.countUnknownCells(result.chars) : 999;
-    if (!result || !result.ok || unknown > GEOMETRY_REUSE_MAX_UNKNOWN) {
-        logLine("几何沿用检查：这一帧读出来 " + (result && result.ok ? ("未定 " + unknown + " 格") : "识别失败") +
-            "，走全量校准");
+    const kings = countKings(result && result.chars);
+    if (!result || !result.ok) {
+        logLine("几何沿用检查：识别失败（" + ((result && result.reason) || "无结果") + "），走全量校准");
         return null;
+    }
+    if (kings === 0) {
+        // ★ 2026-09-24 11:50 真机：帅/将都读不到 = 几何必坏（错网格上大部分格子读成空、未知格反而不多，
+        //   光看未定格抓不到）。这时才走全量校准；校准结果另有一道可信性检查（见 locateAndCalibrate）。
+        if (Date.now() - lastCalibrationRejectAt < CALIBRATION_RETRY_COOLDOWN_MS) {
+            logLine("几何沿用检查：帅/将读不到，但全量校准刚被否（" +
+                Math.round((Date.now() - lastCalibrationRejectAt) / 1000) + "s 前）→ 冷却期内先用旧几何");
+        } else {
+            logLine("几何沿用检查：帅/将都读不到 ⇒ 几何不可信，走全量校准");
+            return null;
+        }
+    } else if (unknown > GEOMETRY_REUSE_MAX_UNKNOWN) {
+        // ★ 2026-09-24 11:49 真机事故：这一帧只是读出 未定 5 格（游戏高亮/动画的**暂态**），却被当成
+        //   「几何坏了」→ 全量校准 → 换上一个坏网格（偏移(25,22)）→ 之后全部读不出帅/将。
+        //   帅/将都在 ⇒ 几何仍然可信；暂态未定格交给驱动当「这一帧不观察」就行，**不重校准**。
+        logLine("几何沿用检查：未定 " + unknown + " 格（帅/将都在 ⇒ 几何仍可信，不重校准）");
     }
     grid = attachGridQuality(grabbed.image, snapGridToPieces(grid, grabbed.image, "几何沿用"));
     if (boardService) {
@@ -2690,7 +2741,18 @@ function locateAndCalibrate() {
     const started = Date.now();
     const calibrated = recognizeBoard.calibrateGrid(grabbed.image, located, options);
     if (calibrated && calibrated.ok && calibrated.grid) {
-        grid = attachGridQuality(grabbed.image, snapGridToPieces(calibrated.grid, grabbed.image, "校准后"));
+        const candidate = attachGridQuality(grabbed.image, snapGridToPieces(calibrated.grid, grabbed.image, "校准后"));
+        // ★ 2026-09-24 11:50 真机事故的护栏：**校准结果先过可信性检查**（读一帧，帅/将必须看得到）。
+        //   代价函数会爱上「大部分格子读成空」的坏网格（未知格少、丢子不计）—— 真机就是这样把
+        //   偏移(25,22) 的网格选进来的，之后每帧「帅/将 0」把面板卡死。读不到 ⇒ 不采用（保留原几何）。
+        if (countKings(readCharsWithGrid(grabbed.image, candidate)) === 0) {
+            lastCalibrationRejectAt = Date.now();
+            logLine("校准结果可信性检查不过（帅/将读不到）⇒ 不采用：候选 偏移(" + calibrated.dx + "," +
+                calibrated.dy + ") 未知格 " + calibrated.unknown +
+                (grid ? "，保留原几何" : "，当前无可用几何"));
+            return null;
+        }
+        grid = candidate;
         if (boardService) { boardService.setGrid(grid); }   // 几何只存服务层一份（2026-09-20 入口收口）
         calibrationNote = "几何 v" + grid.version + " 偏移(" + calibrated.dx + "," + calibrated.dy +
             ") 未知格 " + calibrated.unknown + " 用时 " + (Date.now() - started) + "ms";
@@ -2702,7 +2764,14 @@ function locateAndCalibrate() {
         return calibrated;
     }
     if (located.grid) {
-        grid = attachGridQuality(grabbed.image, located.grid);
+        const fallbackCandidate = attachGridQuality(grabbed.image, located.grid);
+        // 同样过可信性检查：定位几何读不到帅/将也不采（宁可报定位失败，也不拿坏几何跑）
+        if (countKings(readCharsWithGrid(grabbed.image, fallbackCandidate)) === 0) {
+            lastCalibrationRejectAt = Date.now();
+            logLine("定位几何可信性检查不过（帅/将读不到）⇒ 不采用" + (grid ? "，保留原几何" : "，当前无可用几何"));
+            return null;
+        }
+        grid = fallbackCandidate;
         if (boardService) { boardService.setGrid(grid); }
         calibrationNote = "几何 v" + grid.version + "（未精校准）";
         logLine("精校准没成功，沿用定位几何：" + calibrationNote);
@@ -3102,6 +3171,21 @@ function tick() {
             stopLoop();
             return;
         }
+        // ★ 2026-09-24 真机（用户报「又识别不到了」）：坏几何被采用后每帧读不到局面，
+        //   而状态机停在 WAIT_STABLE —— 没有任何看门狗会去重定位 ⇒ 永远空转。
+        //   兜底：连续 25s 没有一次成功观察就强制重定位一次（20s 限频；采用的几何过可信性检查）。
+        if (!lastObsOkAt) {
+            lastObsOkAt = Date.now();
+        }
+        if (running && !(result && result.thinking) && Date.now() - lastObsOkAt > 25000 &&
+            Date.now() - lastBlindRelocateAt > 20000) {
+            lastBlindRelocateAt = Date.now();
+            logLine("连续 " + Math.round((Date.now() - lastObsOkAt) / 1000) +
+                "s 读不到局面 → 强制重新定位（盲读兜底）");
+            const relocated = locateAndCalibrate();
+            logLine(relocated ? "盲读兜底：重新定位完成" : "盲读兜底：这次没换成几何，之后再试");
+            render();
+        }
         // 算棋中：本轮没截图、只 poll 了一次 worker 结果 → 只按秒报一次，不刷屏
         if (result && result.thinking) {
             const now = Date.now();
@@ -3129,6 +3213,7 @@ function tick() {
             }
         }
         if (result && result.ok) {
+            lastObsOkAt = Date.now();   // 盲读兜底计时：只要有一次成功观察就续期
             if (pendingDeclare) {
                 const declared = driver.assertTurn();
                 logLine("autorun 声明轮到我：" + declared.reason);
