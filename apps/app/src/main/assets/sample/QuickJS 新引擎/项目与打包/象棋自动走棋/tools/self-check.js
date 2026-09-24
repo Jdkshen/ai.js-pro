@@ -10041,6 +10041,122 @@ check("定位融合：regionFromGrid 与棋盘外沿对齐（±0.5 格）", func
         eq(region.height, Math.round(10 * 114.1), "height");
 });
 
+// ── YOLO 主识别（多帧投票，2026-09-24）──────────────────────────────
+// 投票是纯逻辑：给 mock 的 yolo 源按脚本喂帧，看服务层怎么合。真机上的 TflRunner
+// 归真机冒烟管（tools/self-check.js 不碰设备）。
+const boardServiceModule = require("../src/services/board-service.js");
+const yoloRecognizer = require("../src/vision/yolo-recognizer.js");
+
+// 开局 FEN（row0=屏幕顶行）→ 90 格；造帧用。
+function initChars() {
+    return yoloRecognizer.create({ baseDir: ".", log: function () { } })
+        .fenToChars("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR");
+}
+
+/** 服务层 mock：脚本化「每帧读什么」。capture 返回的帧只当作句柄用。 */
+function yoloService(frames, options) {
+    let call = 0;
+    return boardServiceModule.createBoardService({
+        ports: {
+            now: function () { return Date.now(); },
+            capture: function () { return { image: { id: call } }; },
+            sleep: function () { }
+        },
+        yolo: {
+            ensureServer: function () { return true; },
+            read: function () {
+                const v = frames[Math.min(call, frames.length - 1)];
+                call++;
+                return v;
+            }
+        },
+        yoloOptions: Object.assign({ votes: 3, gapMs: 0 }, options || {})
+    });
+}
+
+function yoloFrame(chars, n) {
+    return { ok: true, chars: chars.slice(), n: n == null ? 32 : n, box: {}, geo: {}, ms: 170 };
+}
+
+check("YOLO 投票：3 帧一致 → method=yolo、全盘通过、逐格与帧一致", function () {
+    const base = initChars();
+    const service = yoloService([yoloFrame(base), yoloFrame(base), yoloFrame(base)]);
+    const out = service.recognizeYolo();
+    if (!out.ok) return "应通过，实际 " + out.reason;
+    if (out.method !== "yolo") return "method 应为 yolo，实际 " + out.method;
+    if (out.yoloStats.frames !== 3) return "frames 应为 3，实际 " + out.yoloStats.frames;
+    if (out.unknownCells !== 0) return "未知格应为 0，实际 " + out.unknownCells;
+    for (let c = 0; c < 90; c++) {
+        if (out.chars[c] !== base[c]) return "第 " + c + " 格 期望 " + base[c] + "，实际 " + out.chars[c];
+    }
+    return true;
+});
+
+check("YOLO 投票：逐格 3 帧各不同 → 该格记 '?'（有票不过阈值）", function () {
+    const a = initChars(), b = initChars(), c = initChars();
+    a[7 * 9 + 1] = "C"; b[7 * 9 + 1] = "N"; c[7 * 9 + 1] = "P";
+    const out = yoloService([yoloFrame(a), yoloFrame(b), yoloFrame(c)]).recognizeYolo();
+    if (!out.ok) return "应通过（未知格在闸门内），实际 " + out.reason;
+    if (out.chars[7 * 9 + 1] !== "?") return "该格应为 '?'，实际 " + out.chars[7 * 9 + 1];
+    if (out.yoloStats.unknownByVote !== 1) return "unknownByVote 应为 1，实际 " + out.yoloStats.unknownByVote;
+    return eq(out.unknownCells, 1, "未知格");
+});
+
+check("YOLO 投票：单帧误报一枚棋、另两帧读空 → 判空（空也计票）", function () {
+    const a = initChars(), b = initChars(), c = initChars();
+    a[4 * 9 + 4] = "p";   // 中宫本来空：只第一帧看到一枚黑卒
+    const out = yoloService([yoloFrame(a), yoloFrame(b), yoloFrame(c)]).recognizeYolo();
+    if (!out.ok) return "应通过，实际 " + out.reason;
+    if (out.chars[4 * 9 + 4] !== null && out.chars[4 * 9 + 4] !== undefined) {
+        return "该格应为空，实际 " + out.chars[4 * 9 + 4];
+    }
+    return eq(out.unknownCells, 0, "未知格");
+});
+
+check("YOLO 投票：低于 minPieces 的帧被丢弃，frames 反映有效帧数", function () {
+    const base = initChars();
+    const service = yoloService([
+        yoloFrame(base, 32),
+        { ok: true, chars: base.slice(), n: 2, box: {}, geo: {}, ms: 1 },
+        { ok: true, chars: base.slice(), n: 0, box: {}, geo: {}, ms: 1 }
+    ]);
+    const out = service.recognizeYolo();
+    if (!out.ok) return "应通过，实际 " + out.reason;
+    return eq(out.yoloStats.frames, 1, "有效帧数");
+});
+
+check("YOLO 投票：全部帧读不出 → ok:false（不往驱动里塞废帧）", function () {
+    const service = yoloService([
+        { ok: false, reason: "没有棋盘" },
+        { ok: false, reason: "没有棋盘" },
+        { ok: false, reason: "没有棋盘" }
+    ]);
+    const out = service.recognizeYolo();
+    if (out.ok !== false) return "应失败";
+    return true;
+});
+
+check("YOLO 投票：同占位身份保持（参照盘说话，held 计数上升）", function () {
+    const base = initChars();
+    const a = initChars(), b = initChars(), c = initChars();
+    // 7 行 1 列本来是红炮 C：三帧读出 C/N/P 各一 → 投票为 '?'，但占位仍是非空 → 保持参照盘身份
+    a[7 * 9 + 1] = "C"; b[7 * 9 + 1] = "N"; c[7 * 9 + 1] = "P";
+    const service = yoloService([yoloFrame(a), yoloFrame(b), yoloFrame(c)]);
+    const out = service.recognizeYolo({ referenceBoard: base });
+    if (!out.ok) return "应通过，实际 " + out.reason;
+    if (out.chars[7 * 9 + 1] !== "C") return "身份应保持为 C，实际 " + out.chars[7 * 9 + 1];
+    if (out.yoloStats.held < 1) return "held 应 ≥1，实际 " + out.yoloStats.held;
+    return eq(out.unknownCells, 0, "未知格");
+});
+
+check("YOLO 模块：fenToChars 行序（row0=屏幕顶行）与索引映射", function () {
+    const chars = initChars();
+    if (chars[0] !== "r") return "row0col0 应为黑车 r，实际 " + chars[0];
+    if (chars[9 * 1 + 0] !== null) return "row1col0 应为空";
+    if (chars[81] !== "R") return "row9col0 应为红车 R，实际 " + chars[81];
+    return eq(chars[89], "R", "row9col8");
+});
+
 // ---------------------------------------------------------------- 收尾
 
 const summary = "SELF_CHECK " + (failures.length === 0 ? "OK" : "FAILED") +

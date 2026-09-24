@@ -1,0 +1,4 @@
+# YOLO 主识别资产：二进制不许被 git 当文本处理（换行转换会把 dex/.so/模型弄坏）
+yolo/model/*.tflite -text -diff
+yolo/lib/**/*.so -text -diff
+yolo/dex/*.dex -text -diff
