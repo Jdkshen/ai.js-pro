@@ -344,6 +344,15 @@ function createDriver(options) {
     stats.phantomCleared = 0;
     /** 「幻影」僵持后改判为**基准漏子**并收编进基准的次数（见 clearPhantoms；>0 = 真发生过） */
     stats.phantomAdopted = 0;
+    /**
+     * 「幻影候选」没敢清掉的次数（两个护栏各一个计数）：
+     *   · phantomHeldBack：像素（找色）证据说那格是我方子（防「我方子被读成敌色」被当重复子清掉）；
+     *   · phantomHeldByCheck：**拿掉它会改变我方帅的被将状态** —— 2026-09-24 真机：对方那枚
+     *     贴脸将军的黑车被「重复子」连着清了 7 分钟 ⇒ 盘面上永远没有将军、引擎一直走别的
+     *     （真实棋局全拒收）⇒ 用户看到的「自己被将军了 还在走其他的」。
+     */
+    stats.phantomHeldBack = 0;
+    stats.phantomHeldByCheck = 0;
     /** 全盘 OCR 改正「同色不同兵种」误读的格子数 */
     stats.ocrBoardFixes = 0;
     /** 全盘 OCR 的询问次数（限频：见 cfg.ocrBoardCooldownMs） */
@@ -2763,6 +2772,29 @@ function createDriver(options) {
                         }
                         phantomStreak[index] = { key: key, count: prev + 1 };
                     }
+                }
+                // ★ 2026-09-24（K40 实拍：用户「自己被将军了 还在走其他的」的根因）——
+                //   对方那枚**贴着我方帅将军的黑车**（观测 (3,9)r；它刚从别处走到底线）被这里
+                //   当成「重复子」**连着清了 7 分钟**（日志：`清掉幻影（重复子）1 格（(3,9)r→空）`
+                //   每帧一次）—— 驱动眼里的盘面**永远没有将军** ⇒ 引擎一直走别的
+                //   （真实棋局里全都不合法，游戏全部拒收）⇒ 面板卡在「轮次推不出来/RECOVERING」，
+                //   用户看着干着急。为什么既有护栏没拦住：收编（phantomAdoptStreak）要求
+                //   「那格真有墨迹」的证据，而单格证据对那一格一直给不出/给的是空（限频 +
+                //   黑车细笔画密度压线）⇒ 永远走「照旧清」。
+                //   这里补的是**不依赖证据的硬判据**：清一枚子**不许改变我方帅的被将状态**
+                //   （含将帅照面）—— 拿掉前后不一样 ⇒ 它可能就是将军的矛（或挡将的盾）⇒
+                //   不清，留给恢复/收编流程。宁可多花几秒，也不能把「正在被将」从盘面上删掉。
+                const myRedSide = machine.mySide() !== "b";
+                const checkBefore = rulesModule.isInCheck(chars, myRedSide);
+                chars[index] = null;
+                const checkAfter = rulesModule.isInCheck(chars, myRedSide);
+                chars[index] = ch;
+                if (checkBefore !== checkAfter) {
+                    stats.phantomHeldByCheck += 1;
+                    note("幻影候选没敢清：" + where + ch + "—— 拿掉它会" +
+                        (checkBefore ? "解除" : "造成") +
+                        "我方被将（将军的矛 / 挡将的盾都可能就是它）→ 留给恢复流程");
+                    continue;
                 }
                 chars[index] = null;
                 cleared += 1;

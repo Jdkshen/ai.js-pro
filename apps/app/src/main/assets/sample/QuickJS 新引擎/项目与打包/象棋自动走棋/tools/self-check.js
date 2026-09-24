@@ -4233,6 +4233,80 @@ check("驱动：幻影候选其实是我方子被读成敌色时，不许清掉�
 });
 
 /**
+ * 真机回归（2026-09-24 12:48-12:57，用户「自己被将军了 还在走其他的」）：
+ * 对方黑车走到底线 (3,9)、**贴着我方帅 (4,9) 将军**；驱动把它当成「重复子」连着清了 7 分钟
+ * （`清掉幻影（重复子）1 格（(3,9)r→空）` 每帧一次）—— 盘面上永远没有将军 ⇒ 引擎一直走别的
+ * （真实棋局里全都不合法，游戏全部拒收）⇒ 面板卡在「轮次推不出来/RECOVERING」。
+ *
+ * 判据（本轮新增，**不依赖证据**）：清一枚子不许改变我方帅的被将状态（含将帅照面）——
+ * 拿掉前后不一样就不清，留给恢复/收编流程。收编那条路要求「那格真有墨迹」的证据，
+ * 对黑车细笔画 + 单格证据限频的场合给不出来，所以必须有一条不看证据的底线。
+ */
+check("驱动：幻影候选正在将军我方帅 ⇒ 不许清（真机 2026-09-24「被将军还在走其他的」回归）", function () {
+    const BASE = fen.parseFen("3k5/4a4/9/9/9/9/9/9/4A4/4K4").board;   // 黑将(3,0) 黑士(4,1) 我仕(4,8) 我帅(4,9)
+    const own = legal.legalMoves(BASE, 4, 8, "w").filter(function (m) {
+        return m.toCol === 5 && m.toRow === 9;
+    })[0] || legal.legalMoves(BASE, 4, 8, "w")[0];
+    const afterOwn = legal.applyMove(BASE, own).board;
+    const stage = { clicked: false };
+    const noteText = [];
+    const driver = driverModule.createDriver({
+        allowClick: true,
+        log: function (text) { noteText.push(String(text)); },
+        sleep: function () { },
+        recognize: function () {
+            const cells = (stage.clicked ? afterOwn : BASE).slice();
+            if (stage.clicked) {
+                cells[9 * 9 + 3] = "r";   // (col3,row9)：黑车贴脸将军我方帅(4,9)
+            }
+            return {
+                ok: true, chars: cells, unknownCells: 0, conflicts: 0,
+                layout: null, centers: null, grid: TEST_GRID
+            };
+        },
+        locate: function () { return { ok: true, grid: TEST_GRID }; },
+        analyze: function () {
+            return { ok: true, iccs: own.iccs, move: own, score: 1, depth: 1, ms: 1 };
+        },
+        tap: function (x, y, tapOptions) {
+            if (tapOptions && tapOptions.kind === "to") {
+                stage.clicked = true;
+            }
+            return true;
+        },
+        screen: function () { return { width: 1080, height: 2400 }; },
+        nowMono: function () { return Date.now(); },
+        config: { movetimeMs: 20, observeFrames: 1, ocrCooldownMs: 0 }
+    });
+    driver.start();
+    driver.tick();
+    driver.assertTurn();
+    for (let i = 0; i < 8 && !stage.clicked; i++) {
+        driver.tick();
+    }
+    if (!stage.clicked) {
+        return "夹具没走到出手：状态 " + driver.machine.state() +
+            "（" + driver.machine.reason() + "），日志 " + noteText.slice(-3).join(" / ");
+    }
+    for (let i = 0; i < 4; i++) {
+        driver.tick();
+    }
+    const seen = driver.lastBoard();
+    if (!seen || seen[9 * 9 + 3] === null) {
+        return "将军的黑车被清掉了（应保留 r，实际 " +
+            (seen ? JSON.stringify(seen[9 * 9 + 3]) : "无盘面") + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0; }).slice(-2).join(" / ");
+    }
+    if (!(driver.stats().phantomHeldByCheck >= 1)) {
+        return "没走「被将军不删」这条护栏（phantomHeldByCheck=" +
+            (driver.stats().phantomHeldByCheck || 0) + "，phantomCleared=" +
+            driver.stats().phantomCleared + "）— 日志 " +
+            noteText.filter(function (t) { return t.indexOf("幻影") >= 0; }).slice(-2).join(" / ");
+    }
+    return true;
+});
+
+/**
  * 真机回归（2026-09-20 深夜，now20 卡了 19 次「轮次推不出来」）：
  * 我方炮 (2,3) 被模型误读成黑卒 ⇒ 卒的总数 +1；而对方那枚卒**从 (6,3) 走到了 (6,4)**。
  * 幻影规则把「多出来的那份」算在了 (6,4) 那枚**真卒**头上、把它清成空
