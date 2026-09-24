@@ -79,7 +79,7 @@ function layoutFor(screen) {
         radiusPanel: px(22), radiusButton: px(12), radiusCard: px(16)
     });
     return {
-        scale: scale, PANEL: panel, compactWidth: px(780), compactHeight: px(54),
+        scale: scale, PANEL: panel, compactWidth: px(690), compactHeight: px(64),
         logWrap: Math.max(15, Math.round(LOG_WRAP * scale))
     };
 }

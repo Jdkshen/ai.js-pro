@@ -717,18 +717,25 @@ function panelTitleText() {
     return "象棋助手 · " + state;
 }
 
-/** 顶栏只放用户此刻需要判断的信息；详细原因仍留在状态行和日志。 */
+/** 收起条的模式按钮已写模式，这里只显示短状态，避免小屏幕和大字体时被截断。 */
+const COMPACT_STATE_LABEL = {
+    IDLE: "空闲", READY: "已就绪", WAIT_STABLE: "等稳定", THINKING: "算棋中",
+    PRECHECK: "核对中", SUGGESTED: "已建议", CLICKING: "点击中",
+    VERIFYING: "验落子", WAIT_TURN: "等轮次", WAIT_OPPONENT: "等对方",
+    WAIT_OPPONENT_REPLY: "等应手", RECOVERING: "恢复中", PAUSED: "已暂停",
+    STOPPED: "已停止"
+};
 function compactStateText() {
     let state = running ? "运行中" : "未运行";
     try {
         const key = driver && driver.machine ? driver.machine.state() : null;
-        if (key) {
-            state = STATE_LABEL[key] || key;
+        if (key && COMPACT_STATE_LABEL[key]) {
+            state = COMPACT_STATE_LABEL[key];
         }
     } catch (error) {
         // 状态机还没建立时使用 running 的兜底文案
     }
-    return (UI_MODE_LABEL[modeKey] || "象棋") + " · " + state;
+    return state;
 }
 
 /** 点击仍绑在 text 上；外层 card 才能真正画出圆角，text/vertical 的 radius 属性会被宿主忽略。 */
@@ -853,17 +860,17 @@ const COMPACT_H = panelLayout.compactHeight;
 const COMPACT_XML = [
     '<card id="compactCard" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" cardCornerRadius="' + PANEL.radiusPanel +
     'px" cardElevation="0dp" cardBackgroundColor="' + C.panel + '" clipToOutline="true">',
-    '<horizontal id="compactRoot" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" padding="6px">',
-    '  <text id="compactStatus" text="只识别 · 未运行" w="' + panelPx(250) + 'px" h="' + panelPx(42) + 'px" textColor="' + C.title +
-    '" textSize="11" textStyle="bold" gravity="center_vertical" padding="8px"/>',
+    '<horizontal id="compactRoot" w="' + COMPACT_W + 'px" h="' + COMPACT_H + 'px" padding="' + panelPx(6) + 'px">',
+    '  <text id="compactStatus" text="未运行" w="' + panelPx(160) + 'px" h="' + panelPx(50) + 'px" textColor="' + C.title +
+    '" textSize="11" textStyle="bold" gravity="center_vertical" includeFontPadding="false" paddingLeft="8px"/>',
     gap(),
-    button("compactMode", "只识别", 140, C.btnAccent, null, panelPx(42)),
+    button("compactMode", "只识别", 140, C.btnAccent, null, panelPx(50)),
     gap(),
-    button("compactStart", "开始", 115, C.btnPrimary, null, panelPx(42)),
+    button("compactStart", "开始", 115, C.btnPrimary, null, panelPx(50)),
     gap(),
-    button("compactStop", "停止", 105, C.btnDanger, null, panelPx(42)),
+    button("compactStop", "停止", 105, C.btnDanger, null, panelPx(50)),
     gap(),
-    button("compactExpand", "展开", 105, C.btnDim, C.btnDimFg, panelPx(42)),
+    button("compactExpand", "展开", 105, C.btnDim, C.btnDimFg, panelPx(50)),
     '</horizontal>',
     '</card>'
 ].join("\n");
