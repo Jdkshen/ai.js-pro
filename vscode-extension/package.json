@@ -1,0 +1,347 @@
+{
+  "name": "aijspro-vscode",
+  "displayName": "AI.js Pro",
+  "description": "连接 AI.js Pro（Android）：运行当前文件/整个工程、实时日志、Rhino 断点调试、保存自动推送、设备文件浏览与拉取。",
+  "version": "0.3.1",
+  "publisher": "jdkshen",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "icon": "images/icon.png",
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "aijspro.help",
+        "title": "AI.js Pro: 使用教程(Help)",
+        "icon": "$(book)"
+      },
+      {
+        "command": "aijspro.connect",
+        "title": "AI.js Pro: 连接到新设备(Connect)",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "aijspro.selectDevice",
+        "title": "AI.js Pro: 选择设备(Select Device)",
+        "icon": "$(device-mobile)"
+      },
+      {
+        "command": "aijspro.scanDevices",
+        "title": "AI.js Pro: 重新扫描设备(Scan Devices)",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "aijspro.forgetDevices",
+        "title": "AI.js Pro: 删除已记住的设备(Delete Devices)",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "aijspro.run",
+        "title": "AI.js Pro: 运行(Run)",
+        "icon": "$(run)"
+      },
+      {
+        "command": "aijspro.runFile",
+        "title": "AI.js Pro: 运行单文件(Run File)",
+        "icon": "$(play)"
+      },
+      {
+        "command": "aijspro.runProject",
+        "title": "AI.js Pro: 运行项目(Run Project)",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "aijspro.rerun",
+        "title": "AI.js Pro: 重新运行(Rerun)",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "aijspro.stop",
+        "title": "AI.js Pro: 停止当前脚本(Stop)",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "aijspro.stopAll",
+        "title": "AI.js Pro: 停止所有脚本(Stop All)",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "aijspro.inspectLayout",
+        "title": "AI.js Pro: 布局分析(Inspect Layout)",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "aijspro.pickColor",
+        "title": "AI.js Pro: 图色助手(Screenshot & Pick Color)",
+        "icon": "$(symbol-color)"
+      },
+      {
+        "command": "aijspro.browseFiles",
+        "title": "AI.js Pro: 浏览设备文件(Browse Device Files)",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "aijspro.saveFile",
+        "title": "AI.js Pro: 保存当前文件(Save)",
+        "icon": "$(save)"
+      },
+      {
+        "command": "aijspro.saveProject",
+        "title": "AI.js Pro: 保存项目(Save Project)",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "aijspro.newRhinoProject",
+        "title": "AI.js Pro: 新建第一代API项目(Rhino)",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "aijspro.newQuickJsProject",
+        "title": "AI.js Pro: 新建第二代API项目(QuickJS)",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "aijspro.newRhinoProjectInWorkspace",
+        "title": "AI.js Pro: 在工作区建立第一代API项目(Rhino)"
+      },
+      {
+        "command": "aijspro.newQuickJsProjectInWorkspace",
+        "title": "AI.js Pro: 在工作区建立第二代API项目(QuickJS)"
+      },
+      {
+        "command": "aijspro.debug",
+        "title": "AI.js Pro: 调试当前文件(Debug File)",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "aijspro.addDebugConfig",
+        "title": "AI.js Pro: 增加调试设备配置(Add Debug Config)",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "aijspro.disconnect",
+        "title": "AI.js Pro: 断开所有连接(Disconnect)",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "aijspro.refreshFiles",
+        "title": "AI.js Pro: 刷新文件(Refresh Directory)",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aijspro.showLogs",
+        "title": "AI.js Pro: 显示日志(Show Logs)",
+        "icon": "$(output)"
+      },
+      {
+        "command": "aijspro.togglePushOnSave",
+        "title": "AI.js Pro: 开关「保存时自动推送」(Toggle Push On Save)"
+      },
+      {
+        "command": "aijspro.menu",
+        "title": "AI.js Pro: 功能菜单",
+        "icon": {
+          "light": "images/icon.png",
+          "dark": "images/icon.png"
+        }
+      },
+      {
+        "command": "aijspro.pushFile",
+        "title": "AI.js Pro: 推送当前文件到手机",
+        "icon": "$(save-all)"
+      },
+      {
+        "command": "aijspro.openDeviceFile",
+        "title": "打开"
+      },
+      {
+        "command": "aijspro.downloadFile",
+        "title": "下载到工作区"
+      },
+      {
+        "command": "aijspro.runDeviceFile",
+        "title": "在手机上运行"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "aijspro.menu",
+          "when": "resourceExtname == .js || editorLangId == javascript",
+          "group": "navigation@9"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "aijspro.openDeviceFile",
+          "when": "view == aijsproFiles && (viewItem == aijspro.file || viewItem == aijspro.script)",
+          "group": "inline@1"
+        },
+        {
+          "command": "aijspro.runDeviceFile",
+          "when": "view == aijsproFiles && viewItem == aijspro.script",
+          "group": "aijspro@1"
+        },
+        {
+          "command": "aijspro.downloadFile",
+          "when": "view == aijsproFiles && (viewItem == aijspro.file || viewItem == aijspro.script)",
+          "group": "aijspro@2"
+        },
+        {
+          "command": "aijspro.refreshFiles",
+          "when": "view == aijsproFiles",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "aijspro.openDeviceFile",
+          "when": "false"
+        },
+        {
+          "command": "aijspro.downloadFile",
+          "when": "false"
+        },
+        {
+          "command": "aijspro.runDeviceFile",
+          "when": "false"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "aijsproFiles",
+          "name": "AI.js Pro 设备文件"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI.js Pro",
+      "properties": {
+        "aijspro.devices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "已记住的设备地址（IP 或 IP:端口）。手机侧「Pro 扩展服务器」打开后会自动回连本机 8327 端口，这里主要用于电脑主动连接手机 9317 的场景。"
+        },
+        "aijspro.listenPort": {
+          "type": "number",
+          "default": 8327,
+          "description": "接收手机主动回连的监听端口（与官方扩展一致，默认 8327）。"
+        },
+        "aijspro.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动时自动连接已记住的设备，并在掉线后重试。"
+        },
+        "aijspro.ignoredDevices": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "已删除设备的地址：停止自动连接并忽略手机主动回连。删除命令维护此列表，手动连接对应地址时自动解除。"
+        },
+        "aijspro.showLogsOnConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "首次连接到手机时自动切换到 AI.js Pro 输出日志，并在状态栏显示设备 IP。"
+        },
+        "aijspro.pushOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "保存文件时自动把该文件推送到手机的脚本目录（工程目录下按「工程名/相对路径」存放）。"
+        },
+        "aijspro.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules",
+            ".git",
+            ".vscode",
+            ".artifacts",
+            "dist",
+            "build"
+          ],
+          "description": "推送整个工程时忽略的目录/文件名。"
+        }
+      }
+    },
+    "debuggers": [
+      {
+        "type": "aijspro",
+        "label": "AI.js Pro（Rhino 断点调试）",
+        "languages": [
+          "javascript"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "要调试的脚本文件（默认当前打开的文件）。"
+              },
+              "host": {
+                "type": "string",
+                "description": "手机地址（默认使用已连接/已记住的设备）。"
+              },
+              "trace": {
+                "type": "boolean",
+                "description": "打印调试协议细节到「AI.js Pro」输出面板。",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "aijspro",
+            "request": "launch",
+            "name": "AI.js Pro: 调试当前文件（Rhino）",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "AI.js Pro: 调试当前文件（Rhino）",
+            "description": "把当前文件发送到手机，用 Rhino 调试器断点调试",
+            "body": {
+              "type": "aijspro",
+              "request": "launch",
+              "name": "AI.js Pro: 调试当前文件（Rhino）",
+              "program": "^\"\\${file}^\""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "test:devices": "node --test test/manager.test.cjs",
+    "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
+    "watch": "npm run build -- --watch",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "npm run build",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  }
+}

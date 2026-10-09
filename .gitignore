@@ -76,6 +76,9 @@ __pycache__/
 /f_back
 /f_scrim
 
+# vscode-extension 的 npm 安装日志（根目录 /*.log 只挡根目录，这条覆盖子目录）
+npm-install.log
+
 # Generated binaries
 *.apk
 *.exe

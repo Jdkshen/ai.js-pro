@@ -1,0 +1,9 @@
+.vscode/**
+src/**
+test/**
+scripts/**
+node_modules/**
+tsconfig.json
+dist/e2e.js
+npm-install.log
+*.log
