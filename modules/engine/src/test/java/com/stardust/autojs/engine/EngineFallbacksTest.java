@@ -15,10 +15,18 @@ public class EngineFallbacksTest {
     private static final String XML_LAYOUT_SCRIPT =
             "// @engine quickjs\n\"ui\";\n\nui.layout(\n    <frame id=\"root\">\n        <text text=\"hi\"/>\n    </frame>\n);\n";
 
+    /** 官方 Rhino 1.7.14.1 原生支持模板字符串：纯模板脚本不再需要换引擎。 */
     @Test
-    public void templateStringScriptNeedsQuickJs() {
-        assertTrue(EngineFallbacks.shouldSwitchToQuickJs(
+    public void templateStringScriptNoLongerNeedsQuickJs() {
+        assertFalse(EngineFallbacks.shouldSwitchToQuickJs(
                 "let name = \"张三\"\nlog(`姓名：${name}`)\n", "snip.js"));
+    }
+
+    /** 但反引号脚本里另有 Rhino 不认的新语法（如 class）时，兜底换引擎仍然生效。 */
+    @Test
+    public void backtickWithRhinoUnsupportedSyntaxStillSwitches() {
+        assertTrue(EngineFallbacks.shouldSwitchToQuickJs(
+                "class A {}\nlog(`x`)\n", "cls.js"));
     }
 
     @Test
@@ -58,6 +66,15 @@ public class EngineFallbacksTest {
     @Test
     public void xmlLiteralLayoutNeedsRhino() {
         assertTrue(EngineFallbacks.shouldSwitchToRhinoForXmlLayout(XML_LAYOUT_SCRIPT, "tpl.js"));
+    }
+
+    @Test
+    public void xmlLiteralWithCompatibleModernObjectSyntaxUsesRhino() {
+        assertTrue(EngineFallbacks.shouldSwitchToRhinoForXmlLayout(
+                "var name='menu'; var options={name, show(){return `Hi ${name}`;}};"
+                        + "ui.layout(<frame><text text={options.show()}/></frame>);", "mixed.js"));
+        assertFalse(EngineFallbacks.shouldSwitchToRhinoForXmlLayout(
+                "var options={name, bad:};ui.layout(<frame/>);", "broken.js"));
     }
 
     /** ui.inflate 也是同一套 XML 字面量写法。 */

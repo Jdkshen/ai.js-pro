@@ -167,6 +167,15 @@ public class RootAutomator2 implements AutoCloseable {
         root().touchUp(id);
     }
 
+    /** Continuous touch must lift at its last position, including the Shizuku backend. */
+    public void touchUpAt(int x, int y, int id) throws IOException {
+        if (mUseAdb) {
+            execAdb("input motionevent UP " + scaleX(x) + " " + scaleY(y));
+        } else {
+            root().touchUp(id);
+        }
+    }
+
     // ------------------------------------------------- 多点触控：数组形式在 JS 层展开
 
     public void flush() throws IOException {

@@ -9,11 +9,12 @@ import android.util.Log
 import android.view.TextureView
 import android.view.View
 import com.stardust.autojs.core.eventloop.EventEmitter
+import com.stardust.autojs.engine.QuickJsJavaScriptEngine
 import com.stardust.autojs.runtime.ScriptRuntime
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException
-import com.stardust.ext.ifNull
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Created by Stardust on 2018/3/16.
@@ -25,6 +26,11 @@ class ScriptCanvasView(context: Context, private val mScriptRuntime: ScriptRunti
     private var mDrawing = true
     private val mEventEmitter: EventEmitter = EventEmitter(mScriptRuntime.bridges)
     private var mDrawingThreadPool: ExecutorService? = null
+    private val mDrawTaskRunning = AtomicBoolean(false)
+    private val mIsQuickJs = mScriptRuntime.engines.myEngine() is QuickJsJavaScriptEngine
+    private val mFrameBuffer = QuickJsCanvasBuffer()
+    private val mSurfaceLock = Any()
+    private val mCanvasCleanup = AutoCloseable { closeCanvas() }
     @Volatile
     private var mTimePerDraw = (1000 / 30).toLong()
 
@@ -33,32 +39,49 @@ class ScriptCanvasView(context: Context, private val mScriptRuntime: ScriptRunti
 
     init {
         surfaceTextureListener = this
+        isOpaque = false
+        mScriptRuntime.addCleanable(mCanvasCleanup)
     }
 
     fun setMaxFps(maxFps: Int) {
         mTimePerDraw = if (maxFps <= 0) {
             0
         } else {
-            (100 / maxFps).toLong()
+            (1000 / maxFps).toLong().coerceAtLeast(1)
         }
     }
 
     @Synchronized
     private fun performDraw() {
-        ::mDrawingThreadPool.ifNull {
-            Executors.newCachedThreadPool()
-        }.run {
+        if (mFrameBuffer.isClosed || !mDrawTaskRunning.compareAndSet(false, true)) return
+        val pool = mDrawingThreadPool?.takeUnless { it.isShutdown }
+                ?: Executors.newSingleThreadExecutor().also { mDrawingThreadPool = it }
+        pool.run {
             execute {
-                var canvas: Canvas? = null
                 var time = SystemClock.uptimeMillis()
-                val scriptCanvas = ScriptCanvas()
                 try {
                     while (mDrawing) {
-                        canvas = lockCanvas()
-                        scriptCanvas.setCanvas(canvas)
-                        emit("draw", scriptCanvas, this@ScriptCanvasView)
-                        unlockCanvasAndPost(canvas!!)
-                        canvas = null
+                        // Script callbacks must not draw into a Surface that the UI thread can destroy.
+                        // They run outside mSurfaceLock so a callback may safely call ui.run().
+                        if (!mIsQuickJs && mFrameBuffer.begin(width, height)) {
+                            var publish = false
+                            try {
+                                emit("draw", mFrameBuffer.canvas, this@ScriptCanvasView)
+                                publish = true
+                            } finally {
+                                mFrameBuffer.finish(publish)
+                                removeCleanupIfFinished()
+                            }
+                        }
+                        synchronized(mSurfaceLock) {
+                            if (mDrawing && isAvailable) {
+                                val target = lockCanvas()
+                                if (target != null) {
+                                    try { mFrameBuffer.render(target) }
+                                    finally { unlockCanvasAndPost(target) }
+                                }
+                            }
+                        }
                         val dt = mTimePerDraw - (SystemClock.uptimeMillis() - time)
                         if (dt > 0) {
                             sleep(dt)
@@ -66,15 +89,46 @@ class ScriptCanvasView(context: Context, private val mScriptRuntime: ScriptRunti
                         time = SystemClock.uptimeMillis()
                     }
                 } catch (e: Exception) {
-                    mScriptRuntime.exit(e)
+                    if (mDrawing) mScriptRuntime.exit(e)
                     mDrawing = false
                 } finally {
-                    if (canvas != null) {
-                        unlockCanvasAndPost(canvas)
-                    }
+                    mDrawTaskRunning.set(false)
+                    if (mDrawing && isAvailable && !mFrameBuffer.isClosed) performDraw()
                 }
             }
         }
+    }
+
+    fun getQuickJsCanvas(): ScriptCanvas {
+        check(mIsQuickJs) { "此 Canvas 不属于 QuickJS" }
+        return mFrameBuffer.canvas
+    }
+
+    fun beginQuickJsFrame(): Boolean = mIsQuickJs && mDrawing && isAvailable && isShown &&
+            mFrameBuffer.begin(width, height)
+
+    fun endQuickJsFrame(publish: Boolean) {
+        mFrameBuffer.finish(publish)
+        removeCleanupIfFinished()
+    }
+
+    fun getDrawIntervalMillis(): Long = mTimePerDraw
+
+    fun isQuickJsCanvasClosed(): Boolean = !mIsQuickJs || mFrameBuffer.isClosed
+
+    fun closeQuickJsCanvas() {
+        if (mIsQuickJs) closeCanvas()
+    }
+
+    fun closeCanvas() {
+        mDrawing = false
+        mFrameBuffer.close()
+        mDrawingThreadPool?.shutdownNow()
+        removeCleanupIfFinished()
+    }
+
+    private fun removeCleanupIfFinished() {
+        if (mFrameBuffer.isClosed && !mFrameBuffer.isWriting) mScriptRuntime.removeCleanable(mCanvasCleanup)
     }
 
     private fun sleep(dt: Long) {
@@ -149,6 +203,7 @@ class ScriptCanvasView(context: Context, private val mScriptRuntime: ScriptRunti
     }
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        mDrawing = windowVisibility == View.VISIBLE
         performDraw()
         Log.d(LOG_TAG, "onSurfaceTextureAvailable: ${this}, width = $width, height = $height")
     }
@@ -157,6 +212,8 @@ class ScriptCanvasView(context: Context, private val mScriptRuntime: ScriptRunti
 
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
         mDrawing = false
+        // Wait only for the native blit, never for a JS callback that could be waiting on UI.
+        synchronized(mSurfaceLock) { }
         mDrawingThreadPool?.shutdown()
         Log.d(LOG_TAG, "onSurfaceTextureDestroyed: ${this}")
         return true

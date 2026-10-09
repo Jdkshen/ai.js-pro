@@ -113,6 +113,8 @@ module.exports = function(__runtime__, scope){
 
     // 文档里 RootAutomator2 是全局名（`new RootAutomator2(...)`）
     scope.RootAutomator2 = RootAutomator2;
+    scope.touch = require('__touch__')(runtime);
+    scope.$touch = scope.touch;
     // 探针用：当前进程内未 exit() 的 RootAutomator2 数量
     RootAutomator2.liveCount = function () {
         return com.stardust.autojs.core.inputevent.RootAutomator2.liveCount();

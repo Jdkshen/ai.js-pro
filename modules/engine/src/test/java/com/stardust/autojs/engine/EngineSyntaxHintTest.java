@@ -13,11 +13,14 @@ import org.mozilla.javascript.RhinoException;
 /**
  * {@link EngineSyntaxHint} 的行为：只在「源码有反引号 + 编译失败」时追加提示，
  * 且必须原样保留原来的报错文本与行号。
+ *
+ * <p>官方 Rhino 1.7.14.1 已原生支持模板字符串，因此这些用例需要一个「真语法错」
+ * 才会触发编译失败路径（模板字符串本身不再会报错）。
  */
 public class EngineSyntaxHintTest {
 
-    /** 反引号在第 3 行；Rhino 报错时给出的行号不能被我们的包装改掉。 */
-    private static final String BACKTICK_SCRIPT = "var a = 1;\nvar b = 2;\nui.layout(`\n<frame/>\n`);\n";
+    /** 反引号在第 3 行；第 6 行留了一个真语法错；Rhino 报错时给出的行号不能被我们的包装改掉。 */
+    private static final String BACKTICK_SCRIPT = "var a = 1;\nvar b = 2;\nui.layout(`\n<frame/>\n`);\nvar broken = ;\n";
 
     private static RhinoException compileFailure(String script) {
         Context context = Context.enter();

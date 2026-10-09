@@ -127,6 +127,8 @@ public class TextViewInflater<V extends TextView> extends BaseViewInflater<V> {
     private String mFontFamily;
     private Integer mTextStyle;
     private String mTypeface;
+    private Integer mAutoSizeMin;
+    private Integer mAutoSizeMax;
 
     public TextViewInflater(ResourceParser resourceParser) {
         super(resourceParser);
@@ -138,6 +140,12 @@ public class TextViewInflater<V extends TextView> extends BaseViewInflater<V> {
             return true;
         }
         switch (attrName) {
+            case "autoSizeMinTextSize":
+                mAutoSizeMin = Dimensions.parseToIntPixel(value, view);
+                break;
+            case "autoSizeMaxTextSize":
+                mAutoSizeMax = Dimensions.parseToIntPixel(value, view);
+                break;
             case "autoLink":
                 view.setAutoLinkMask(AUTO_LINK_MASKS.get(value));
                 break;
@@ -366,6 +374,15 @@ public class TextViewInflater<V extends TextView> extends BaseViewInflater<V> {
         setLineSpacing(view);
         setDrawables(view);
         setKeyListener(view);
+        if (Build.VERSION.SDK_INT >= 26 && mAutoSizeMin != null && mAutoSizeMax != null) {
+            // singleLine enables horizontal scrolling, which makes Android autosize measure
+            // against a virtually unlimited width. Keep one line but fit the real bounds.
+            view.setHorizontallyScrolling(false);
+            view.setAutoSizeTextTypeUniformWithConfiguration(mAutoSizeMin,
+                    Math.max(mAutoSizeMin, mAutoSizeMax), 1, TypedValue.COMPLEX_UNIT_PX);
+        }
+        mAutoSizeMin = null;
+        mAutoSizeMax = null;
     }
 
     private void setKeyListener(V view) {

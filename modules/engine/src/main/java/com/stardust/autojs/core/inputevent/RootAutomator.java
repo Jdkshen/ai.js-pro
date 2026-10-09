@@ -179,7 +179,8 @@ public class RootAutomator implements Shell.Callback {
             touchDown0(x, y, id);
             return;
         }
-        int slotId = mSlotIdMap.size();
+        int slotId = 0;
+        while (mSlotIdMap.indexOfValue(slotId) >= 0) slotId++;
         mSlotIdMap.put(id, slotId);
         sendEvent(EV_ABS, ABS_MT_SLOT, slotId);
         sendEvent(EV_ABS, ABS_MT_TRACKING_ID, mTracingId.getAndIncrement());
@@ -192,6 +193,7 @@ public class RootAutomator implements Shell.Callback {
 
     private void touchDown0(int x, int y, int id) throws IOException {
         mSlotIdMap.put(id, 0);
+        sendEvent(EV_ABS, ABS_MT_SLOT, 0);
         sendEvent(EV_ABS, ABS_MT_TRACKING_ID, mTracingId.getAndIncrement());
         sendEvent(EV_KEY, BTN_TOUCH, DOWN);
         //sendEvent(EV_KEY, BTN_TOOL_FINGER, 0x00000001);

@@ -16,11 +16,22 @@ public class CompiledJavaScriptSource extends JavaScriptSource {
 
     private final String mClassName;
     private final byte[] mClassBytes;
+    private final int mExecutionMode;
 
     public CompiledJavaScriptSource(String name, String className, byte[] classBytes) {
+        this(name, className, classBytes, EXECUTION_MODE_NORMAL);
+    }
+
+    public CompiledJavaScriptSource(String name, String className, byte[] classBytes, int executionMode) {
         super(name);
         mClassName = className;
         mClassBytes = classBytes;
+        mExecutionMode = executionMode;
+    }
+
+    @Override
+    protected int parseExecutionMode() {
+        return mExecutionMode;
     }
 
     public String getClassName() {

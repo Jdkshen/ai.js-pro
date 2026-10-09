@@ -1,4 +1,5 @@
 #include <jni.h>
+#include "sift_matcher.h"
 #include <android/log.h>
 #include <android/hardware_buffer.h>
 #include <dlfcn.h>
@@ -24,6 +25,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "native_frame_store.h"
+#include "xiangqi_board_detector.h"
 
 extern "C" {
 #include "quickjs.h"
@@ -162,6 +164,29 @@ JSValue registerTimer(JSContext *context, EngineState *state, int argc, JSValueC
     return JS_NewInt64(context, timer->id);
 }
 
+/**
+ * 释放定时器持有的回调引用（**幂等**：释放后槽位置 JS_UNDEFINED，重复调用是无害空操作）。
+ *
+ * ★ 2026-09-27（独立复核 P1）：`clearInterval(自己的 id)` 会在**回调正在执行时**把
+ *   `timer->callback` 释放掉；而 dispatchDueTimers 的收尾（成功/异常两条路）还会
+ *   再碰一次这个槽位 —— 不置空就是「释放后使用 + 二次释放」，真机可复现 SIGSEGV。
+ *   约定：所有释放回调的路径都必须走这里（或等价地先置空再释放）。
+ * ⚠️ 只能在 JS 线程调用（JS_FreeValue 的约定）。
+ */
+void freeTimerCallback(JSContext *context, EngineState *state,
+                       const std::shared_ptr<TimerEntry> &timer) {
+    JSValue callback = JS_UNDEFINED;
+    {
+        std::lock_guard<std::mutex> lock(state->timersMutex);
+        if (JS_IsUndefined(timer->callback)) {
+            return;
+        }
+        callback = timer->callback;
+        timer->callback = JS_UNDEFINED;
+    }
+    JS_FreeValue(context, callback);
+}
+
 // Dispatches all due timers on the current (JS) thread. Returns false when a
 // timer callback throws, filling *error with the exception text.
 bool dispatchDueTimers(JSContext *context, EngineState *state, std::string *error) {
@@ -189,7 +214,15 @@ bool dispatchDueTimers(JSContext *context, EngineState *state, std::string *erro
                 state->timers.erase(timer->id);
             }
         }
-        JSValue result = JS_Call(context, timer->callback, JS_UNDEFINED, 0, nullptr);
+        // ★ 2026-09-27（独立复核 P1）：本次调用单独拿住一份回调引用 ——
+        //   回调里 clearInterval(自己)（或取消同批到期定时器）会释放 timer->callback，
+        //   没有这份引用就是「正在执行的函数对象被释放」（真机复现：interval 自取消 ⇒ 139）。
+        JSValue callback = JS_UNDEFINED;
+        {
+            std::lock_guard<std::mutex> lock(state->timersMutex);
+            callback = JS_DupValue(context, timer->callback);
+        }
+        JSValue result = JS_Call(context, callback, JS_UNDEFINED, 0, nullptr);
         if (JS_IsException(result)) {
             JSValue exception = JS_GetException(context);
             *error = jsString(context, exception);
@@ -200,7 +233,8 @@ bool dispatchDueTimers(JSContext *context, EngineState *state, std::string *erro
                 timer->canceled = true;
                 state->timers.erase(timer->id);
             }
-            JS_FreeValue(context, timer->callback);
+            JS_FreeValue(context, callback);
+            freeTimerCallback(context, state, timer);
             return false;
         }
         JS_FreeValue(context, result);
@@ -218,11 +252,13 @@ bool dispatchDueTimers(JSContext *context, EngineState *state, std::string *erro
                 timer->canceled = true;
                 state->timers.erase(timer->id);
             }
-            JS_FreeValue(context, timer->callback);
+            JS_FreeValue(context, callback);
+            freeTimerCallback(context, state, timer);
             return false;
         }
+        JS_FreeValue(context, callback);
         if (!timer->repeat) {
-            JS_FreeValue(context, timer->callback);
+            freeTimerCallback(context, state, timer);
         }
     }
     return true;
@@ -379,7 +415,7 @@ std::string truncateExceptionText(const std::string &text) {
 // 3) 其余值：回退 JS_ToCString（字符串/数字等原始值本就正确）。
 // 注意：JSON 化失败产生的次生异常会在函数内清掉，不影响调用方消费的原始异常。
 std::string exceptionValueText(JSContext *context, JSValueConst exception) {
-    if (JS_IsError(context, exception)) {
+    if (JS_IsError(exception)) {   // 2026-09 quickjs-ng：JS_IsError 不再要 context
         JSValue nameValue = JS_GetPropertyStr(context, exception, "name");
         JSValue messageValue = JS_GetPropertyStr(context, exception, "message");
         const std::string name = jsString(context, nameValue);
@@ -1229,6 +1265,40 @@ JSValue nativeFrameToMat(JSContext *context, JSValueConst, int argc, JSValueCons
     return JS_NewInt64(context, static_cast<int64_t>(javaHandle));
 }
 
+// A small Java token carries engine/frame identity, never a naked pixel pointer.
+JSValue nativeSiftFrameInput(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) return JS_EXCEPTION;
+    if (!state->frames.get(handle)) return JS_ThrowTypeError(context, "SIFT frame has been recycled");
+    jclass type = env->FindClass("com/stardust/autojs/core/image/SiftMatcher$NativeFrameInput");
+    if (!type) return throwJavaException(context, env);
+    jmethodID constructor = env->GetMethodID(type, "<init>", "(JJ)V");
+    if (!constructor) { env->DeleteLocalRef(type); return throwJavaException(context, env); }
+    jobject input = env->NewObject(type, constructor, state->handle, static_cast<jlong>(handle));
+    env->DeleteLocalRef(type);
+    if (!input) return throwJavaException(context, env);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID registerMethod = env->GetMethodID(hostClass, "javaRegisterObject", "(Ljava/lang/Object;)J");
+    jlong id = registerMethod ? env->CallLongMethod(state->host, registerMethod, input) : 0;
+    env->DeleteLocalRef(hostClass); env->DeleteLocalRef(input);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    return JS_NewInt64(context, id);
+}
+
+JSValue nativeReleaseSiftInput(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) return JS_EXCEPTION;
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "javaReleaseSiftInput", "(J)V");
+    if (method) env->CallVoidMethod(state->host, method, static_cast<jlong>(handle));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
 /** org.opencv.core.Mat（Java 对象句柄）→ NativeFrame；返回帧句柄。 */
 JSValue nativeMatToFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
@@ -1811,6 +1881,38 @@ JSValue callHostVoidStringString(JSContext *context, const char *methodName,
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
 }
 
+JSValue callHostVoidString(JSContext *context, const char *methodName, const std::string &argument) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(Ljava/lang/String;)V");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring javaArgument = toJavaString(env, argument);
+    env->CallVoidMethod(state->host, method, javaArgument);
+    env->DeleteLocalRef(javaArgument);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue callHostIntString(JSContext *context, const char *methodName, const std::string &argument) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, methodName, "(Ljava/lang/String;)I");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring javaArgument = toJavaString(env, argument);
+    const jint result = env->CallIntMethod(state->host, method, javaArgument);
+    env->DeleteLocalRef(javaArgument);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt32(context, result);
+}
+
 std::string requireStringArg(JSContext *context, int argc, JSValueConst *argv, int index) {
     return index < argc ? jsString(context, argv[index]) : std::string();
 }
@@ -2011,6 +2113,32 @@ JSValue nativeEventsSetTouchTimeout(JSContext *context, JSValueConst, int argc, 
 
 JSValue nativeEventsStopAll(JSContext *context, JSValueConst, int, JSValueConst *) {
     return callHostVoidNoArgs(context, "eventsStopAll");
+}
+
+JSValue nativeEventsStopObserving(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostVoidString(context, "eventsStopObserving",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeFileObserverNew(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostIntString(context, "fileObserverNew",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeFileObserverStart(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t id = 0;
+    if (argc < 1 || JS_ToInt64(context, &id, argv[0]) < 0) {
+        return JS_UNDEFINED;
+    }
+    return callHostVoidInt(context, "fileObserverStart", static_cast<int32_t>(id));
+}
+
+JSValue nativeFileObserverStop(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t id = 0;
+    if (argc < 1 || JS_ToInt64(context, &id, argv[0]) < 0) {
+        return JS_UNDEFINED;
+    }
+    return callHostVoidInt(context, "fileObserverStop", static_cast<int32_t>(id));
 }
 
 JSValue nativeDialogsShow(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -2552,6 +2680,78 @@ JSValue nativeFilesGetSdcardPath(JSContext *context, JSValueConst, int, JSValueC
     return callStringHost(context, "filesGetSdcardPath", nullptr);
 }
 
+JSValue nativeFilesGetName(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "filesGetName",
+            argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeFilesGetNameWithoutExtension(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "filesGetNameWithoutExtension",
+            argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeFilesGetExtension(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "filesGetExtension",
+            argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeFilesIsEmptyDir(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesIsEmptyDir",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeFilesCreateIfNotExists(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesCreateIfNotExists",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeFilesRemoveDir(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callHostBooleanString(context, "filesRemoveDir",
+            argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeFilesDirname(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "filesDirname",
+            argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeFilesStat(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "filesStat",
+            argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+JSValue nativeFilesReadBytes(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 1) {
+        return JS_ThrowTypeError(context, "files.readBytes(path) requires a path");
+    }
+    const std::string path = jsString(context, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "filesReadBytes", "(Ljava/lang/String;)[B");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    jstring javaPath = toJavaString(env, path);
+    auto bytes = static_cast<jbyteArray>(env->CallObjectMethod(state->host, method, javaPath));
+    env->DeleteLocalRef(javaPath);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (bytes == nullptr) {
+        return JS_NULL;
+    }
+    const jsize length = env->GetArrayLength(bytes);
+    std::vector<uint8_t> data(static_cast<size_t>(length));
+    if (length > 0) {
+        env->GetByteArrayRegion(bytes, 0, length, reinterpret_cast<jbyte *>(data.data()));
+    }
+    env->DeleteLocalRef(bytes);
+    return JS_NewArrayBufferCopy(context, data.data(), data.size());
+}
+
 JSValue nativeFilesPath(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     return callStringHost(context, "resolvePath", requireStringArg(context, argc, argv, 0).c_str());
 }
@@ -2572,14 +2772,21 @@ JSValue nativeClearTimer(JSContext *context, JSValueConst, int argc, JSValueCons
         return JS_ThrowTypeError(context, "clearTimeout/clearInterval requires a timer id");
     }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
-    std::lock_guard<std::mutex> lock(state->timersMutex);
-    const auto it = state->timers.find(id);
-    if (it == state->timers.end() || it->second->canceled) {
-        return JS_NewBool(context, false);
+    JSValue callback = JS_UNDEFINED;
+    {
+        std::lock_guard<std::mutex> lock(state->timersMutex);
+        const auto it = state->timers.find(id);
+        if (it == state->timers.end() || it->second->canceled) {
+            return JS_NewBool(context, false);
+        }
+        it->second->canceled = true;
+        // ★ 2026-09-27（独立复核 P1）：先把槽位置空、再释放 ——
+        //   这一格可能正是「当前正在执行的回调」：dispatchDueTimers 为本次调用单独拿了一份引用
+        //  （见那里的说明），槽位置空后它收尾时就不会二次释放。
+        callback = it->second->callback;
+        it->second->callback = JS_UNDEFINED;
+        state->timers.erase(it);
     }
-    it->second->canceled = true;
-    JSValue callback = it->second->callback;
-    state->timers.erase(it);
     JS_FreeValue(context, callback);
     return JS_NewBool(context, true);
 }
@@ -2620,12 +2827,15 @@ JSValue nativeHttpRequest(JSContext *context, JSValueConst, int argc, JSValueCon
     return JS_NewStringLen(context, text.data(), text.size());
 }
 
-JSValue nativeDrawCreate(JSContext *context, JSValueConst, int, JSValueConst *) {
+JSValue nativeDrawCreate(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID method = env->GetMethodID(hostClass, "drawCreate", "()Z");
-    const jboolean result = env->CallBooleanMethod(state->host, method);
+    jmethodID method = env->GetMethodID(hostClass, "drawCreateWithRenderer", "(Ljava/lang/String;)Z");
+    const std::string renderer = argc > 0 ? jsString(context, argv[0]) : "canvas";
+    jstring name = toJavaString(env, renderer);
+    const jboolean result = env->CallBooleanMethod(state->host, method, name);
+    env->DeleteLocalRef(name);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
 }
@@ -2655,6 +2865,21 @@ JSValue nativeDrawClose(JSContext *context, JSValueConst, int, JSValueConst *) {
     env->CallVoidMethod(state->host, method);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeImGuiPanel(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "imguiPanel", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    jstring operation = toJavaString(env, argc > 0 ? jsString(context, argv[0]) : "poll");
+    jstring json = toJavaString(env, argc > 1 ? jsString(context, argv[1]) : "{}");
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, operation, json));
+    env->DeleteLocalRef(operation); env->DeleteLocalRef(json); env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    std::string text = fromJavaString(env, result);
+    if (result) env->DeleteLocalRef(result);
+    return JS_NewStringLen(context, text.data(), text.size());
 }
 
 JSValue nativeForegroundInfo(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -2872,17 +3097,16 @@ JSValue nativeContextInfo(JSContext *context, JSValueConst, int argc, JSValueCon
 
 JSValue nativeSqliteOpen(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     const std::string name = argc > 0 ? jsString(context, argv[0]) : std::string();
-    int32_t version = 0;
-    if (argc > 1 && JS_ToInt32(context, &version, argv[1]) < 0) {
-        return JS_ThrowTypeError(context, "sqlite.open(name, version) version must be a number");
-    }
+    const std::string options = argc > 1 ? jsString(context, argv[1]) : std::string("{}");
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
     jclass hostClass = env->GetObjectClass(state->host);
-    jmethodID methodId = env->GetMethodID(hostClass, "sqliteOpen", "(Ljava/lang/String;I)J");
+    jmethodID methodId = env->GetMethodID(hostClass, "sqliteOpen", "(Ljava/lang/String;Ljava/lang/String;)J");
     jstring javaName = toJavaString(env, name);
-    const jlong handle = env->CallLongMethod(state->host, methodId, javaName, version);
+    jstring javaOptions = toJavaString(env, options);
+    const jlong handle = env->CallLongMethod(state->host, methodId, javaName, javaOptions);
     env->DeleteLocalRef(javaName);
+    env->DeleteLocalRef(javaOptions);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, handle);
 }
@@ -3024,6 +3248,26 @@ JSValue frameInfo(JSContext *context, EngineState *state, int64_t handle) {
     return info;
 }
 
+/**
+ * `String(point)` / `'' + point` / 模板字符串的形状对齐 Auto.js（OpenCV `Point.toString()` → `{100.0, 575.0}`；
+ * Rhino 引擎返回的 Java Point 原生就是这个形状）。`JSON.stringify` 仍是 `{"x":100,"y":575}`——toString 为非枚举属性。
+ */
+JSValue pointToString(JSContext *context, JSValueConst thisVal, int, JSValueConst *) {
+    JSValue xValue = JS_GetPropertyStr(context, thisVal, "x");
+    JSValue yValue = JS_GetPropertyStr(context, thisVal, "y");
+    int32_t x = 0;
+    int32_t y = 0;
+    const bool valid = JS_ToInt32(context, &x, xValue) >= 0 && JS_ToInt32(context, &y, yValue) >= 0;
+    JS_FreeValue(context, xValue);
+    JS_FreeValue(context, yValue);
+    if (!valid) {
+        return JS_ThrowTypeError(context, "point.toString requires numeric x/y");
+    }
+    char buffer[48];
+    std::snprintf(buffer, sizeof(buffer), "{%d.0, %d.0}", x, y);
+    return JS_NewString(context, buffer);
+}
+
 JSValue pointValue(JSContext *context, const NativeFramePoint &point, bool includeSimilarity) {
     JSValue value = JS_NewObject(context);
     JS_SetPropertyStr(context, value, "x", JS_NewInt32(context, point.x));
@@ -3031,6 +3275,9 @@ JSValue pointValue(JSContext *context, const NativeFramePoint &point, bool inclu
     if (includeSimilarity) {
         JS_SetPropertyStr(context, value, "similarity", JS_NewFloat64(context, point.similarity));
     }
+    JS_DefinePropertyValueStr(context, value, "toString",
+                              JS_NewCFunction(context, pointToString, "toString", 0),
+                              JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
     return value;
 }
 
@@ -3049,6 +3296,55 @@ JSValue nativeRequestScreenCapture(JSContext *context, JSValueConst, int argc, J
     env->DeleteLocalRef(javaMode);
     env->DeleteLocalRef(hostClass);
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeRequestScreenCaptureEx(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    int32_t orientation = 0, width = -1, height = -1;
+    if (argc > 0 && JS_ToInt32(context, &orientation, argv[0]) < 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc > 1 && JS_ToInt32(context, &width, argv[1]) < 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc > 2 && JS_ToInt32(context, &height, argv[2]) < 0) {
+        return JS_EXCEPTION;
+    }
+    const bool async = argc > 3 && JS_ToBool(context, argv[3]) > 0;
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "requestScreenCaptureEx", "(IIIZ)Z");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jboolean result = env->CallBooleanMethod(state->host, method, orientation, width, height,
+                                                    async ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeScreenCaptureTake(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "takeAsyncScreenCaptureFrame", "()J");
+    if (method == nullptr) {
+        env->DeleteLocalRef(hostClass);
+        return throwJavaException(context, env);
+    }
+    const jlong handle = env->CallLongMethod(state->host, method);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) {
+        return throwJavaException(context, env);
+    }
+    if (handle == 0) return JS_NULL;
+    if (handle < 0) return JS_FALSE;
+    return frameInfo(context, state, handle);
+}
+
+JSValue nativeImagesStopScreenCapture(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "imagesStopScreenCapture");
 }
 
 JSValue nativeCaptureFrame(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -3074,6 +3370,55 @@ JSValue nativeCaptureFrame(JSContext *context, JSValueConst, int argc, JSValueCo
         return throwJavaException(context, env);
     }
     return frameInfo(context, state, handle);
+}
+
+JSValue nativeWindowCaptureAvailable(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass cls = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(cls, "isWindowCaptureAvailable", "()Z");
+    jboolean available = env->CallBooleanMethod(state->host, method);
+    env->DeleteLocalRef(cls);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewBool(context, available);
+}
+
+JSValue nativeListCaptureWindows(JSContext *context, JSValueConst, int, JSValueConst *) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    jclass cls = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(cls, "listCaptureWindows", "()Ljava/lang/String;");
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method));
+    env->DeleteLocalRef(cls);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string json = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    return JS_ParseJSON(context, json.data(), json.size(), "capture-windows");
+}
+
+JSValue nativeCaptureWindow(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    const std::string json = requireStringArg(context, argc, argv, 0);
+    jclass cls = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(cls, "captureWindowNative", "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring options = toJavaString(env, json);
+    auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, options));
+    env->DeleteLocalRef(options);
+    env->DeleteLocalRef(cls);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    const std::string metadata = fromJavaString(env, result);
+    env->DeleteLocalRef(result);
+    JSValue frame = JS_ParseJSON(context, metadata.data(), metadata.size(), "window-frame");
+    if (JS_IsException(frame)) return frame;
+    JSValue handleValue = JS_GetPropertyStr(context, frame, "handle");
+    int64_t handle = 0;
+    const int converted = JS_ToInt64(context, &handle, handleValue);
+    JS_FreeValue(context, handleValue);
+    if (converted < 0) { JS_FreeValue(context, frame); return JS_EXCEPTION; }
+    JSValue info = frameInfo(context, state, handle);
+    if (JS_IsException(info)) { state->frames.release(handle); JS_FreeValue(context, frame); return info; }
+    JS_SetPropertyStr(context, frame, "image", info);
+    return frame;
 }
 
 bool base64Decode(const std::string &input, std::vector<uint8_t> *output) {
@@ -3462,6 +3807,92 @@ JSValue nativeFramePixel(JSContext *context, JSValueConst, int argc, JSValueCons
     return JS_NewUint32(context, color);
 }
 
+JSValue nativeAnalyzeXiangqiBoard(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    if (argc < 1 || JS_ToInt64(context, &handle, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "images.analyzeXiangqiBoard requires a frame");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    const auto frame = state->frames.get(handle);
+    if (!frame || frame->empty()) return JS_ThrowTypeError(context, "帧已失效");
+    XiangqiBoardAnalysis analysis;
+    try {
+        analysis = analyzeXiangqiBoard(*frame);
+    } catch (const cv::Exception &error) {
+        return JS_ThrowInternalError(context, "棋盘分析失败：%s", error.what());
+    }
+    JSValue result = JS_NewObject(context);
+    JS_SetPropertyStr(context, result, "ok", JS_NewBool(context, analysis.ok));
+    JS_SetPropertyStr(context, result, "reason", JS_NewString(context, analysis.reason.c_str()));
+    if (!analysis.ok) return result;
+    JSValue outer = JS_NewObject(context);
+    JS_SetPropertyStr(context, outer, "x", JS_NewInt32(context, analysis.outer.x));
+    JS_SetPropertyStr(context, outer, "y", JS_NewInt32(context, analysis.outer.y));
+    JS_SetPropertyStr(context, outer, "width", JS_NewInt32(context, analysis.outer.width));
+    JS_SetPropertyStr(context, outer, "height", JS_NewInt32(context, analysis.outer.height));
+    JS_SetPropertyStr(context, result, "outer", outer);
+    JSValue grid = JS_NewObject(context);
+    JS_SetPropertyStr(context, grid, "originX", JS_NewFloat64(context, analysis.originX));
+    JS_SetPropertyStr(context, grid, "originY", JS_NewFloat64(context, analysis.originY));
+    JS_SetPropertyStr(context, grid, "stepX", JS_NewFloat64(context, analysis.stepX));
+    JS_SetPropertyStr(context, grid, "stepY", JS_NewFloat64(context, analysis.stepY));
+    JS_SetPropertyStr(context, result, "grid", grid);
+    JS_SetPropertyStr(context, result, "lineScoreX", JS_NewFloat64(context, analysis.lineScoreX));
+    JS_SetPropertyStr(context, result, "lineScoreY", JS_NewFloat64(context, analysis.lineScoreY));
+    JS_SetPropertyStr(context, result, "verticalSegments", JS_NewInt32(context, analysis.verticalSegments));
+    JS_SetPropertyStr(context, result, "horizontalSegments", JS_NewInt32(context, analysis.horizontalSegments));
+    JSValue circles = JS_NewArray(context);
+    for (uint32_t i = 0; i < analysis.circles.size(); ++i) {
+        const auto &circle = analysis.circles[i];
+        JSValue item = JS_NewObject(context);
+        JS_SetPropertyStr(context, item, "x", JS_NewFloat64(context, circle.x));
+        JS_SetPropertyStr(context, item, "y", JS_NewFloat64(context, circle.y));
+        JS_SetPropertyStr(context, item, "radius", JS_NewFloat64(context, circle.radius));
+        JS_SetPropertyStr(context, item, "col", JS_NewInt32(context, circle.col));
+        JS_SetPropertyStr(context, item, "row", JS_NewInt32(context, circle.row));
+        JS_SetPropertyStr(context, item, "color", JS_NewString(context, circle.color.c_str()));
+        JS_SetPropertyStr(context, item, "redFraction", JS_NewFloat64(context, circle.redFraction));
+        JS_SetPropertyStr(context, item, "error", JS_NewFloat64(context, circle.error));
+        JS_SetPropertyUint32(context, circles, i, item);
+    }
+    JS_SetPropertyStr(context, result, "circles", circles);
+    return result;
+}
+
+JSValue nativeDetectXiangqiCircles(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    int64_t handle = 0;
+    double ox = 0, oy = 0, sx = 0, sy = 0;
+    if (argc < 5 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
+        JS_ToFloat64(context, &ox, argv[1]) < 0 || JS_ToFloat64(context, &oy, argv[2]) < 0 ||
+        JS_ToFloat64(context, &sx, argv[3]) < 0 || JS_ToFloat64(context, &sy, argv[4]) < 0 ||
+        !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(sx) || !std::isfinite(sy)) {
+        return JS_ThrowTypeError(context, "images.detectXiangqiCircles requires a frame and finite grid");
+    }
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    const auto frame = state->frames.get(handle);
+    if (!frame || frame->empty()) return JS_ThrowTypeError(context, "帧已失效");
+    std::vector<XiangqiCircle> circles;
+    try {
+        circles = detectXiangqiCircles(*frame, ox, oy, sx, sy);
+    } catch (const cv::Exception &error) {
+        return JS_ThrowInternalError(context, "棋子圆检测失败：%s", error.what());
+    }
+    JSValue result = JS_NewArray(context);
+    for (uint32_t i = 0; i < circles.size(); ++i) {
+        const auto &circle = circles[i];
+        JSValue item = JS_NewObject(context);
+        JS_SetPropertyStr(context, item, "x", JS_NewFloat64(context, circle.x));
+        JS_SetPropertyStr(context, item, "y", JS_NewFloat64(context, circle.y));
+        JS_SetPropertyStr(context, item, "radius", JS_NewFloat64(context, circle.radius));
+        JS_SetPropertyStr(context, item, "col", JS_NewInt32(context, circle.col));
+        JS_SetPropertyStr(context, item, "row", JS_NewInt32(context, circle.row));
+        JS_SetPropertyStr(context, item, "color", JS_NewString(context, circle.color.c_str()));
+        JS_SetPropertyStr(context, item, "redFraction", JS_NewFloat64(context, circle.redFraction));
+        JS_SetPropertyUint32(context, result, i, item);
+    }
+    return result;
+}
+
 JSValue nativeFindColor(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     int64_t handle = 0;
     int32_t color = 0;
@@ -3547,7 +3978,7 @@ JSValue nativeFindMultiColors(JSContext *context, JSValueConst, int argc, JSValu
     int32_t firstColor = 0, threshold = 4, x = 0, y = 0, width = 0, height = 0;
     if (argc < 8 || JS_ToInt64(context, &handle, argv[0]) < 0 ||
         JS_ToInt32(context, &firstColor, argv[1]) < 0 ||
-        !JS_IsArray(context, argv[2]) || JS_ToInt32(context, &threshold, argv[3]) < 0 ||
+        !JS_IsArray(argv[2]) || JS_ToInt32(context, &threshold, argv[3]) < 0 ||
         JS_ToInt32(context, &x, argv[4]) < 0 || JS_ToInt32(context, &y, argv[5]) < 0 ||
         JS_ToInt32(context, &width, argv[6]) < 0 || JS_ToInt32(context, &height, argv[7]) < 0) {
         return JS_ThrowTypeError(context, "images.findMultiColors has invalid arguments");
@@ -3566,7 +3997,7 @@ JSValue nativeFindMultiColors(JSContext *context, JSValueConst, int argc, JSValu
     offsets.reserve(length);
     for (uint32_t index = 0; index < length; ++index) {
         JSValue item = JS_GetPropertyUint32(context, argv[2], index);
-        if (!JS_IsArray(context, item)) {
+        if (!JS_IsArray(item)) {   // 2026-09 quickjs-ng：JS_IsArray 不再要 context
             JS_FreeValue(context, item);
             return JS_ThrowTypeError(context, "Each multi-color entry must be [dx, dy, color]");
         }
@@ -3639,6 +4070,7 @@ JSValue nativeMatchTemplate(JSContext *context, JSValueConst, int argc, JSValueC
         JS_ToInt32(context, &width, argv[6]) < 0 || JS_ToInt32(context, &height, argv[7]) < 0) {
         return JS_ThrowTypeError(context, "images.matchTemplate has invalid arguments");
     }
+    const bool useTransparentMask = argc > 8 && JS_ToBool(context, argv[8]) > 0;
     if (!std::isfinite(threshold)) {
         return JS_ThrowTypeError(context, "threshold must be a finite number");
     }
@@ -3652,7 +4084,7 @@ JSValue nativeMatchTemplate(JSContext *context, JSValueConst, int argc, JSValueC
     std::vector<NativeFramePoint> matches;
     std::string error;
     if (!state->frames.matchTemplate(source, templ, threshold, maxMatches,
-                                     x, y, width, height, &matches, &error)) {
+                                     x, y, width, height, useTransparentMask, &matches, &error)) {
         return JS_ThrowRangeError(context, "%s", error.c_str());
     }
     JSValue values = JS_NewArray(context);
@@ -3968,24 +4400,28 @@ JSValue nativePikafishStart(JSContext *context, JSValueConst, int argc, JSValueC
     }
     int32_t threads = 2;
     int32_t hashMb = 64;
+    int32_t contempt = 0;
     if (argc >= 2 && !JS_IsUndefined(argv[1]) && JS_ToInt32(context, &threads, argv[1]) < 0) {
         return JS_ThrowTypeError(context, "Invalid Pikafish threads");
     }
     if (argc >= 3 && !JS_IsUndefined(argv[2]) && JS_ToInt32(context, &hashMb, argv[2]) < 0) {
         return JS_ThrowTypeError(context, "Invalid Pikafish hashMb");
     }
+    if (argc >= 4 && !JS_IsUndefined(argv[3]) && JS_ToInt32(context, &contempt, argv[3]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish contempt");
+    }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
     jclass hostClass = env->GetObjectClass(state->host);
     jmethodID method = env->GetMethodID(hostClass, "pikafishStart",
-            "(Ljava/lang/String;II)Ljava/lang/String;");
+            "(Ljava/lang/String;III)Ljava/lang/String;");
     if (method == nullptr) {
         env->DeleteLocalRef(hostClass);
         return throwJavaException(context, env);
     }
     jstring evalFileString = evalFile.empty() ? nullptr : env->NewStringUTF(evalFile.c_str());
     auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, evalFileString,
-            static_cast<jint>(threads), static_cast<jint>(hashMb)));
+            static_cast<jint>(threads), static_cast<jint>(hashMb), static_cast<jint>(contempt)));
     if (evalFileString != nullptr) {
         env->DeleteLocalRef(evalFileString);
     }
@@ -4006,6 +4442,7 @@ JSValue callPikafishAnalyze(JSContext *context, int argc, JSValueConst *argv, co
     int64_t movetime = 1000;
     int64_t timeout = 0;
     int32_t multiPv = 1;
+    int32_t depth = 0;
     if (argc >= 2 && !JS_IsUndefined(argv[1]) && JS_ToInt64(context, &movetime, argv[1]) < 0) {
         return JS_ThrowTypeError(context, "Invalid Pikafish movetime");
     }
@@ -4015,11 +4452,14 @@ JSValue callPikafishAnalyze(JSContext *context, int argc, JSValueConst *argv, co
     if (argc >= 4 && !JS_IsUndefined(argv[3]) && JS_ToInt32(context, &multiPv, argv[3]) < 0) {
         return JS_ThrowTypeError(context, "Invalid Pikafish multiPv");
     }
+    if (argc >= 5 && !JS_IsUndefined(argv[4]) && JS_ToInt32(context, &depth, argv[4]) < 0) {
+        return JS_ThrowTypeError(context, "Invalid Pikafish depth");
+    }
     auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
     JNIEnv *env = currentEnv(state);
     jclass hostClass = env->GetObjectClass(state->host);
     jmethodID method = env->GetMethodID(hostClass, methodName,
-            "(Ljava/lang/String;JJI)Ljava/lang/String;");
+            "(Ljava/lang/String;JJII)Ljava/lang/String;");
     if (method == nullptr) {
         env->DeleteLocalRef(hostClass);
         return throwJavaException(context, env);
@@ -4027,7 +4467,7 @@ JSValue callPikafishAnalyze(JSContext *context, int argc, JSValueConst *argv, co
     jstring fenString = env->NewStringUTF(fen.c_str());
     auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method, fenString,
             static_cast<jlong>(movetime), static_cast<jlong>(timeout),
-            static_cast<jint>(multiPv)));
+            static_cast<jint>(multiPv), static_cast<jint>(depth)));
     env->DeleteLocalRef(fenString);
     env->DeleteLocalRef(hostClass);
     if (env->ExceptionCheck()) {
@@ -4256,6 +4696,41 @@ JSValue nativeDeviceGetTotalMem(JSContext *context, JSValueConst, int, JSValueCo
     return env->ExceptionCheck() ? throwJavaException(context, env) : JS_NewInt64(context, result);
 }
 
+JSValue nativeDeviceGetIMEI(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "deviceGetIMEI", nullptr);
+}
+
+JSValue nativeDeviceGetMusicVolume(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "deviceGetMusicVolume");
+}
+
+JSValue nativeDeviceGetNotificationVolume(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "deviceGetNotificationVolume");
+}
+
+JSValue nativeDeviceKeepScreenOn(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    if (argc < 1 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0])) {
+        return callHostVoidNoArgs(context, "deviceKeepScreenOn");
+    }
+    int32_t timeout = 0;
+    if (JS_ToInt32(context, &timeout, argv[0]) < 0) {
+        return JS_ThrowTypeError(context, "device.keepScreenOn(timeout) requires a number");
+    }
+    return callHostVoidInt(context, "deviceKeepScreenOnMs", timeout);
+}
+
+JSValue nativeDeviceWakeUp(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callHostVoidNoArgs(context, "deviceWakeUp");
+}
+
+JSValue nativeDeviceGetScreenOrientation(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "deviceGetScreenOrientation", nullptr);
+}
+
+JSValue nativeDeviceGetScreenRotation(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callIntHostNoArgs(context, "deviceGetScreenRotation");
+}
+
 // ---- app module: additional JNI ----
 
 JSValue nativeAppGetPackageName(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -4280,6 +4755,101 @@ JSValue nativeAppEditFile(JSContext *context, JSValueConst, int argc, JSValueCon
 
 JSValue nativeAppUninstall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
     return callHostBooleanString(context, "appUninstall", argc > 0 ? jsString(context, argv[0]) : std::string());
+}
+
+JSValue nativeAppGetTopActivityInfo(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "appGetTopActivityInfo", nullptr);
+}
+
+JSValue nativeAppGetPathFromUri(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    return callStringHost(context, "appGetPathFromUri",
+                          argc > 0 ? jsString(context, argv[0]).c_str() : nullptr);
+}
+
+// ---- web.newWebSocket JNI ----
+
+JSValue nativeWebSocketNew(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 1) return JS_ThrowTypeError(context, "webSocketNew requires url");
+    const std::string url = jsString(context, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "webSocketNew", "(Ljava/lang/String;)J");
+    jstring jUrl = toJavaString(env, url);
+    jlong id = env->CallLongMethod(state->host, method, jUrl);
+    env->DeleteLocalRef(jUrl);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    return JS_NewInt64(context, static_cast<int64_t>(id));
+}
+
+JSValue nativeWebSocketSend(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 3) return JS_ThrowTypeError(context, "webSocketSend requires id, type, data");
+    int64_t id = 0;
+    JS_ToInt64(context, &id, argv[0]);
+    const std::string type = jsString(context, argv[1]);
+    const std::string data = jsString(context, argv[2]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "webSocketSend",
+            "(JLjava/lang/String;Ljava/lang/String;)Z");
+    jstring jType = toJavaString(env, type);
+    jstring jData = toJavaString(env, data);
+    jboolean result = env->CallBooleanMethod(state->host, method, static_cast<jlong>(id), jType, jData);
+    env->DeleteLocalRef(jData);
+    env->DeleteLocalRef(jType);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeWebSocketClose(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 1) return JS_ThrowTypeError(context, "webSocketClose requires id");
+    int64_t id = 0;
+    JS_ToInt64(context, &id, argv[0]);
+    int32_t code = 1000;
+    if (argc > 1) JS_ToInt32(context, &code, argv[1]);
+    const std::string reason = argc > 2 ? jsString(context, argv[2]) : std::string();
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "webSocketClose",
+            "(JILjava/lang/String;)Z");
+    jstring jReason = toJavaString(env, reason);
+    jboolean result = env->CallBooleanMethod(state->host, method,
+            static_cast<jlong>(id), static_cast<jint>(code), jReason);
+    env->DeleteLocalRef(jReason);
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    return JS_NewBool(context, result == JNI_TRUE);
+}
+
+JSValue nativeWebSocketCancel(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 1) return JS_ThrowTypeError(context, "webSocketCancel requires id");
+    int64_t id = 0;
+    JS_ToInt64(context, &id, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "webSocketCancel", "(J)V");
+    env->CallVoidMethod(state->host, method, static_cast<jlong>(id));
+    env->DeleteLocalRef(hostClass);
+    return env->ExceptionCheck() ? throwJavaException(context, env) : JS_UNDEFINED;
+}
+
+JSValue nativeWebSocketQueueSize(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    auto *state = static_cast<EngineState *>(JS_GetContextOpaque(context));
+    JNIEnv *env = currentEnv(state);
+    if (argc < 1) return JS_ThrowTypeError(context, "webSocketQueueSize requires id");
+    int64_t id = 0;
+    JS_ToInt64(context, &id, argv[0]);
+    jclass hostClass = env->GetObjectClass(state->host);
+    jmethodID method = env->GetMethodID(hostClass, "webSocketQueueSize", "(J)J");
+    jlong size = env->CallLongMethod(state->host, method, static_cast<jlong>(id));
+    env->DeleteLocalRef(hostClass);
+    if (env->ExceptionCheck()) return throwJavaException(context, env);
+    return JS_NewInt64(context, static_cast<int64_t>(size));
 }
 
 JSValue nativeAppStartActivity(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
@@ -4530,6 +5100,24 @@ JSValue nativeDialogBuild(JSContext *context, JSValueConst, int argc, JSValueCon
     const std::string text = fromJavaString(env, result);
     env->DeleteLocalRef(result);
     return JS_NewStringLen(context, text.data(), text.size());
+}
+
+JSValue nativeDialogCall(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string request = argc > 0 ? jsString(context, argv[0]) : std::string("{}");
+    return callStringHost(context, "dialogCall", request.c_str());
+}
+
+JSValue nativeRequestScreenCaptureAsync(JSContext *context, JSValueConst, int argc, JSValueConst *argv) {
+    const std::string request = argc > 0 ? jsString(context, argv[0]) : std::string("{}");
+    return callStringHost(context, "requestScreenCaptureAsync", request.c_str());
+}
+
+JSValue nativeGetScreenCaptureOptions(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "getScreenCaptureOptions", nullptr);
+}
+
+JSValue nativeModernModulesScript(JSContext *context, JSValueConst, int, JSValueConst *) {
+    return callStringHost(context, "modernModulesScript", nullptr);
 }
 
 // ---- threads module JNI ----
@@ -4911,6 +5499,18 @@ const char kBootstrapScript[] = R"JS(
             Math.ceil((logicalRegion[1] + logicalRegion[3]) * state.scaleY));
         return [left, top, Math.max(1, right - left), Math.max(1, bottom - top)];
     }
+    /**
+     * 字符串拼接形状对齐 Auto.js（OpenCV `Point.toString()` → `{100.0, 575.0}`；Rhino 引擎返回的
+     * Java Point 原生即该形状）。toString 为非枚举属性：`JSON.stringify` / `Object.keys` 不变。
+     */
+    function attachPointToString(point) {
+        Object.defineProperty(point, 'toString', {
+            value: function () { return '{' + point.x + '.0, ' + point.y + '.0}'; },
+            configurable: true,
+            writable: true
+        });
+        return point;
+    }
     function logicalPointOf(frame, point) {
         if (point === null || point === undefined) return point;
         const state = requireFrame(frame);
@@ -4919,7 +5519,7 @@ const char kBootstrapScript[] = R"JS(
             y: Math.round(Number(point.y) / state.scaleY)
         };
         if (point.similarity !== undefined) mapped.similarity = Number(point.similarity);
-        return mapped;
+        return attachPointToString(mapped);
     }
     function prepareTemplate(frame, template) {
         const sourceState = requireFrame(frame);
@@ -4992,20 +5592,171 @@ const char kBootstrapScript[] = R"JS(
         }
     };
     function orientationOf(value) {
-        if (value === 'portrait') return 1;
-        if (value === 'landscape') return 2;
+        if (value === true || value === 'landscape') return 2;
+        if (value === false || value === 'portrait') return 1;
         return Number(value) === 1 || Number(value) === 2 ? Number(value) : 0;
+    }
+
+    // ---- images 的事件派发（对齐 Pro：images.on("screen_capture", ...)）与 async 截图流 ----
+    const imageEventListeners = new Map();
+    function imageListenersFor(name, create) {
+        name = String(name);
+        let list = imageEventListeners.get(name);
+        if (!list && create) {
+            list = [];
+            imageEventListeners.set(name, list);
+        }
+        return list;
+    }
+    let screenCaptureStreamTimer = null;
+    function stopScreenCaptureStream() {
+        if (screenCaptureStreamTimer !== null) {
+            clearInterval(screenCaptureStreamTimer);
+            screenCaptureStreamTimer = null;
+        }
+    }
+    function startScreenCaptureStream() {
+        stopScreenCaptureStream();
+        // 40ms 一拍取最新帧（与系统事件队列同一节奏）；会话结束后自动停
+        screenCaptureStreamTimer = setInterval(function () {
+            let info;
+            try {
+                info = __aiNativeScreenCaptureTake();
+            } catch (error) {
+                stopScreenCaptureStream();
+                throw error;
+            }
+            if (info === false) {
+                stopScreenCaptureStream();
+                return;
+            }
+            if (info === null || info === undefined) return;
+            images.emit('screen_capture', wrapFrame(info));
+        }, 40);
     }
 
     let accessibilityCapture = false;
     const images = {
-        requestScreenCapture: function (orientation) {
-            const options = orientation && typeof orientation === 'object' ? orientation : {};
+        on: function (name, listener) {
+            if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+            imageListenersFor(name, true).push(listener);
+            return images;
+        },
+        once: function (name, listener) {
+            if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+            function onceListener() {
+                images.removeListener(name, onceListener);
+                return listener.apply(undefined, arguments);
+            }
+            onceListener.listener = listener;
+            return images.on(name, onceListener);
+        },
+        emit: function (name) {
+            const list = imageListenersFor(name, false);
+            if (!list || list.length === 0) return false;
+            const args = Array.prototype.slice.call(arguments, 1);
+            list.slice().forEach(function (listener) { listener.apply(undefined, args); });
+            return true;
+        },
+        removeListener: function (name, listener) {
+            const list = imageListenersFor(name, false);
+            if (!list) return images;
+            for (let i = list.length - 1; i >= 0; i--) {
+                if (list[i] === listener || list[i].listener === listener) list.splice(i, 1);
+            }
+            if (list.length === 0) imageEventListeners.delete(String(name));
+            return images;
+        },
+        removeAllListeners: function (name) {
+            if (name === undefined) imageEventListeners.clear();
+            else imageEventListeners.delete(String(name));
+            return images;
+        },
+        listenerCount: function (name) {
+            const list = imageListenersFor(name, false);
+            return list ? list.length : 0;
+        },
+        eventNames: function () {
+            const names = [];
+            const it = imageEventListeners.keys();
+            for (;;) {
+                const next = it.next();
+                if (next.done) break;
+                names.push(next.value);
+            }
+            return names;
+        },
+        /**
+         * 与 Pro 同形：支持 (orientation) / (options) / (width, height)；
+         * options 支持 {orientation, width, height, async, mode}。
+         */
+        requestScreenCapture: function (first, second) {
+            let options;
+            if (arguments.length === 2) {
+                options = { orientation: -1, width: Number(first), height: Number(second) };
+            } else if (first && typeof first === 'object') {
+                options = first;
+            } else {
+                options = { orientation: first === undefined ? 0 : first };
+            }
             const mode = String(options.mode || 'projection').toLowerCase();
-            const granted = __aiNativeRequestScreenCapture(
-                orientationOf(options.orientation === undefined ? orientation : options.orientation), mode);
-            if (granted) accessibilityCapture = mode === 'accessibility' || mode === 'auto';
+            const async = options.async === true;
+            if ((mode === 'accessibility' || mode === 'auto') && async) {
+                throw new Error('async 截图流暂不支持无障碍/自动授权通道');
+            }
+            if (mode === 'accessibility' || mode === 'auto') {
+                const granted = __aiNativeRequestScreenCapture(orientationOf(options.orientation), mode);
+                if (granted) accessibilityCapture = true;
+                return granted;
+            }
+            const width = options.width === undefined ? -1 : Math.round(Number(options.width));
+            const height = options.height === undefined ? -1 : Math.round(Number(options.height));
+            const granted = __aiNativeRequestScreenCaptureEx(orientationOf(options.orientation), width, height, async);
+            if (granted) {
+                accessibilityCapture = false;
+                if (async) startScreenCaptureStream();
+                else stopScreenCaptureStream();
+            }
             return granted;
+        },
+        requestScreenCaptureAsync: function (first, second) {
+            const args = Array.prototype.slice.call(arguments);
+            let options;
+            if (args.length === 2) options = { orientation: -1, width: Number(first), height: Number(second) };
+            else if (first && typeof first === 'object') options = Object.assign({}, first);
+            else options = { orientation: first === undefined ? 0 : first };
+            const mode = String(options.mode || 'projection').toLowerCase();
+            if (mode !== 'projection') {
+                return new Promise(function (resolve, reject) {
+                    setTimeout(function () { try { resolve(images.requestScreenCapture.apply(images, args)); } catch (error) { reject(error); } }, 0);
+                });
+            }
+            return new Promise(function (resolve, reject) {
+                const keepAlive = setInterval(function () {}, 40);
+                let callbackId;
+                callbackId = global.__aiRegisterCallback(function (result) {
+                    clearInterval(keepAlive); global.__aiReleaseCallback(callbackId);
+                    if (result && result.error !== undefined) { reject(new Error(String(result.error))); return; }
+                    if (result) {
+                        accessibilityCapture = false;
+                        if (options.async === true) startScreenCaptureStream(); else stopScreenCaptureStream();
+                    }
+                    resolve(result === true);
+                });
+                try {
+                    __aiNativeRequestScreenCaptureAsync(JSON.stringify({
+                        orientation: orientationOf(options.orientation),
+                        width: options.width === undefined ? -1 : Math.round(Number(options.width)),
+                        height: options.height === undefined ? -1 : Math.round(Number(options.height)),
+                        async: options.async === true, callbackId: callbackId
+                    }));
+                } catch (error) { clearInterval(keepAlive); global.__aiReleaseCallback(callbackId); reject(error); }
+            });
+        },
+        getScreenCaptureOptions: function () { return JSON.parse(__aiNativeGetScreenCaptureOptions()); },
+        stopScreenCapture: function () {
+            stopScreenCaptureStream();
+            __aiNativeImagesStopScreenCapture();
         },
         captureScreen: function (options) {
             let targetShortEdge = 0;
@@ -5031,6 +5782,26 @@ const char kBootstrapScript[] = R"JS(
             }
             return wrapFrame(__aiNativeCaptureFrame(
                 Math.round(targetShortEdge), fresh, Math.round(timeout)));
+        },
+        isWindowCaptureAvailable: function () { return __aiNativeWindowCaptureAvailable(); },
+        listCaptureWindows: function () { return __aiNativeListCaptureWindows(); },
+        captureWindow: function (options) {
+            options = options || {};
+            const timeout = options.timeout === undefined ? 2000 : Number(options.timeout);
+            const windowId = options.windowId === undefined ? -1 : Number(options.windowId);
+            const size = options.size === undefined ? 0 : Number(options.size);
+            if (!Number.isInteger(timeout) || timeout < 1 || timeout > 5000)
+                throw new RangeError('captureWindow timeout must be an integer in 1..5000 ms');
+            if (!Number.isInteger(windowId) || windowId < -1 || windowId > 2147483647)
+                throw new RangeError('captureWindow windowId must be a nonnegative integer');
+            if (!Number.isInteger(size) || size < 0 || size > 4096)
+                throw new RangeError('captureWindow size must be an integer in 0..4096');
+            const result = __aiNativeCaptureWindow(JSON.stringify({ windowId: windowId,
+                packageName: String(options.packageName || ''), timeout: timeout, size: size,
+                screenCoordinates: options.screenCoordinates === true }));
+            result.image = wrapFrame(result.image);
+            delete result.handle;
+            return result;
         },
         read: function (path) {
             return wrapFrame(__aiNativeReadFrame(String(path)));
@@ -5086,16 +5857,10 @@ const char kBootstrapScript[] = R"JS(
         },
         rotate: function (frame, angle) {
             angle = Number(angle || 0);
-            var rotated = wrapFrame(__aiNativeRotateFrame(requireFrame(frame).id, Math.round(angle)));
-            // 90/270 swap width/height
-            if (angle === 90 || angle === 270) {
-                rotated.width = frame.height;
-                rotated.height = frame.width;
-            } else {
-                rotated.width = frame.width;
-                rotated.height = frame.height;
-            }
-            return rotated;
+            // native 侧 insert() 已带旋转后的 logical 尺寸（90/270 自动交换宽高），不要再给
+            // 帧对象赋 width/height——wrapFrame 的属性是只读的（defineProperty 默认 writable:false），
+            // 赋值会抛 "'width' is read-only" 并中断整个脚本（2026-09-30 冒烟实测，见样例高级图色测试）。
+            return wrapFrame(__aiNativeRotateFrame(requireFrame(frame).id, Math.round(angle)));
         },
         threshold: function (frame, thresh, maxValue, type) {
             thresh = thresh === undefined ? 128 : Number(thresh);
@@ -5163,10 +5928,10 @@ const char kBootstrapScript[] = R"JS(
                 threshold, region[0], region[1], region[2], region[3]));
             const points = [];
             for (let index = 0; index + 1 < flat.length; index += 2) {
-                points.push({
+                points.push(attachPointToString({
                     x: Math.round(flat[index] / state.scaleX),
                     y: Math.round(flat[index + 1] / state.scaleY)
-                });
+                }));
             }
             return points;
         },
@@ -5219,13 +5984,14 @@ const char kBootstrapScript[] = R"JS(
             let raw;
             try {
                 raw = __aiNativeMatchTemplate(requireFrame(frame).id, requireFrame(prepared.frame).id,
-                    threshold, max, region[0], region[1], region[2], region[3]);
+                    threshold, max, region[0], region[1], region[2], region[3],
+                    !!options.transparentMask);
             } finally {
                 if (prepared.owned) prepared.frame.recycle();
             }
             const matches = raw.map(function (item) {
                 const point = logicalPointOf(frame, item);
-                return { point: { x: point.x, y: point.y }, similarity: item.similarity };
+                return { point: attachPointToString({ x: point.x, y: point.y }), similarity: item.similarity };
             });
             const result = {
                 matches: matches,
@@ -5359,6 +6125,15 @@ const char kBootstrapScript[] = R"JS(
         var id = Number(__aiNativeFrameToMat(requireFrame(frame).id));
         return javaObjectOf(id, 'org.opencv.core.Mat');
     };
+    // Used by the shared SIFT API instead of a full-frame Java Mat copy.
+    images.__siftNativeInput = function (frame) {
+        var id = Number(__aiNativeSiftFrameInput(requireFrame(frame).id));
+        // This temporary argument needs no Proxy or permanent Java-object cache entry.
+        return {__javaHandle: id};
+    };
+    images.__releaseSiftInput = function (input) {
+        __aiNativeReleaseSiftInput(Number(input.__javaHandle));
+    };
     /** OpenCV Mat → 帧（clone，Mat 之后 release 也不影响）。 */
     images.matToImage = function (mat) {
         var handle = mat && mat.__javaHandle !== undefined ? Number(mat.__javaHandle) : 0;
@@ -5464,6 +6239,40 @@ const char kBootstrapScript[] = R"JS(
             try { target.release(); } catch (e) { }
         }
         return found;
+    };
+
+    /** 木色区域 → Canny/Hough 格线 → 9x10 交点 → 交点圆和红黑色。坐标均为逻辑像素。 */
+    images.analyzeXiangqiBoard = function (frame) {
+        var state = requireFrame(frame);
+        var result = __aiNativeAnalyzeXiangqiBoard(state.id);
+        if (!result.ok) return result;
+        result.outer.x /= state.scaleX;
+        result.outer.y /= state.scaleY;
+        result.outer.width /= state.scaleX;
+        result.outer.height /= state.scaleY;
+        result.grid.originX /= state.scaleX;
+        result.grid.originY /= state.scaleY;
+        result.grid.stepX /= state.scaleX;
+        result.grid.stepY /= state.scaleY;
+        for (var i = 0; i < result.circles.length; i++) {
+            result.circles[i].x /= state.scaleX;
+            result.circles[i].y /= state.scaleY;
+            result.circles[i].radius /= (state.scaleX + state.scaleY) / 2;
+        }
+        return result;
+    };
+    images.detectXiangqiCircles = function (frame, grid) {
+        var state = requireFrame(frame);
+        if (!grid) throw new TypeError('detectXiangqiCircles 需要已校准的 grid');
+        var circles = __aiNativeDetectXiangqiCircles(state.id,
+            Number(grid.originX) * state.scaleX, Number(grid.originY) * state.scaleY,
+            Number(grid.stepX) * state.scaleX, Number(grid.stepY) * state.scaleY);
+        for (var i = 0; i < circles.length; i++) {
+            circles[i].x /= state.scaleX;
+            circles[i].y /= state.scaleY;
+            circles[i].radius /= (state.scaleX + state.scaleY) / 2;
+        }
+        return circles;
     };
 
     /** 编码后的字节（JS 数组；Rhino 返回 Java byte[]，两边都能直接喂给 BitmapFactory.decodeByteArray）。 */
@@ -5730,7 +6539,7 @@ const char kBootstrapScript[] = R"JS(
     // 与内置 JS 引擎（项目里的 src/engine/engine.js）互补：这个是 **native** 中国象棋引擎，
     // UCI 会话跑在自己的线程上，棋力远高于 JS 搜索（K40 上 movetime 1s 已有省市队水平）。
     // 用法：
-    //   $pikafish.start({evalFile:'/sdcard/xiangqi-p4/pikafish.nnue', threads:2, hashMb:128});
+    //   $pikafish.start({evalFile:'/sdcard/xiangqi-p4/pikafish.nnue', threads:2, hashMb:128, contempt:40});
     //   var r = $pikafish.analyze(fen, 1000);   // {ok, move:'h2e2', scoreCp|mate, depth, pv, ...}
     //   $pikafish.stop() / $pikafish.quit()
     // ⚠️ analyze 是**阻塞**调用（时长 ≈ movetime），主线程要保响应就放进 threads worker。
@@ -5745,14 +6554,16 @@ const char kBootstrapScript[] = R"JS(
             return { ok: false, error: 'Pikafish 宿主返回的不是 JSON: ' + raw };
         }
     }
-    function runPikafishAnalysis(nativeCall, input, movetimeMs, timeoutMs, multiPv) {
+    function runPikafishAnalysis(nativeCall, input, movetimeMs, timeoutMs, multiPv, depth) {
         const movetimeValue = movetimeMs === undefined ? 1000 : Number(movetimeMs);
         const movetime = isFinite(movetimeValue) ? Math.max(1, Math.round(movetimeValue)) : 1000;
         const timeoutValue = timeoutMs === undefined ? 0 : Number(timeoutMs);
         const timeout = isFinite(timeoutValue) ? Math.max(0, Math.round(timeoutValue)) : 0;
         const pvValue = multiPv === undefined ? 1 : Number(multiPv);
         const pv = isFinite(pvValue) ? Math.max(1, Math.min(8, Math.round(pvValue))) : 1;
-        return parsePikafishResult(nativeCall(String(input), movetime, timeout, pv));
+        const depthValue = depth === undefined ? 0 : Number(depth);
+        const searchDepth = isFinite(depthValue) ? Math.max(0, Math.min(40, Math.round(depthValue))) : 0;
+        return parsePikafishResult(nativeCall(String(input), movetime, timeout, pv, searchDepth));
     }
     const pikafish = {
         available: function () {
@@ -5766,14 +6577,17 @@ const char kBootstrapScript[] = R"JS(
             const threads = isFinite(threadsValue) ? Math.max(1, Math.round(threadsValue)) : 2;
             const hashValue = options.hashMb === undefined ? 64 : Number(options.hashMb);
             const hashMb = isFinite(hashValue) ? Math.max(16, Math.round(hashValue)) : 64;
-            return parsePikafishResult(__aiNativePikafishStart(evalFile, threads, hashMb));
+            const contemptValue = options.contempt === undefined ? 0 : Number(options.contempt);
+            const contempt = isFinite(contemptValue)
+                ? Math.max(-200, Math.min(200, Math.round(contemptValue))) : 0;
+            return parsePikafishResult(__aiNativePikafishStart(evalFile, threads, hashMb, contempt));
         },
-        analyze: function (fen, movetimeMs, timeoutMs, multiPv) {
-            return runPikafishAnalysis(__aiNativePikafishAnalyze, fen, movetimeMs, timeoutMs, multiPv);
+        analyze: function (fen, movetimeMs, timeoutMs, multiPv, depth) {
+            return runPikafishAnalysis(__aiNativePikafishAnalyze, fen, movetimeMs, timeoutMs, multiPv, depth);
         },
-        analyzePosition: function (positionCommand, movetimeMs, timeoutMs, multiPv) {
+        analyzePosition: function (positionCommand, movetimeMs, timeoutMs, multiPv, depth) {
             return runPikafishAnalysis(__aiNativePikafishAnalyzePosition,
-                    positionCommand, movetimeMs, timeoutMs, multiPv);
+                    positionCommand, movetimeMs, timeoutMs, multiPv, depth);
         },
         stop: function () {
             __aiNativePikafishStop();
@@ -5833,7 +6647,44 @@ const char kBootstrapScript[] = R"JS(
         remove: function (path) { return __aiNativeFilesRemove(filePath(path)); },
         rename: function (path, newName) { return __aiNativeFilesRename(filePath(path), String(newName)); },
         copy: function (source, target) { return __aiNativeFilesCopy(filePath(source), filePath(target)); },
-        move: function (source, target) { return __aiNativeFilesMove(filePath(source), filePath(target)); }
+        move: function (source, target) { return __aiNativeFilesMove(filePath(source), filePath(target)); },
+        getName: function (path) { return __aiNativeFilesGetName(filePath(path)); },
+        getNameWithoutExtension: function (path) { return __aiNativeFilesGetNameWithoutExtension(filePath(path)); },
+        getExtension: function (path) { return __aiNativeFilesGetExtension(filePath(path)); },
+        isEmptyDir: function (path) { return __aiNativeFilesIsEmptyDir(filePath(path)); },
+        createIfNotExists: function (path) { return __aiNativeFilesCreateIfNotExists(filePath(path)); },
+        removeDir: function (path) { return __aiNativeFilesRemoveDir(filePath(path)); },
+        readBytes: function (path) { return new Uint8Array(__aiNativeFilesReadBytes(filePath(path))); },
+        dirname: function (path) {
+            var d = __aiNativeFilesDirname(String(path));
+            return d === '' ? null : d;
+        },
+        stat: function (path) {
+            var raw = JSON.parse(__aiNativeFilesStat(filePath(path)));
+            return {
+                path: raw.path === undefined ? null : raw.path,
+                size: raw.size,
+                lastModified: raw.lastModified,
+                isReadable: function () { return raw.readable; },
+                isWritable: function () { return raw.writable; },
+                isExecutable: function () { return raw.executable; },
+                isHidden: function () { return raw.hidden; }
+            };
+        },
+        /**
+         * 与 Rhino 的 `$files.observe(path)` 同语义：FileObserver 监听目录/文件变化，
+         * 事件名与 Pro 一致（create/delete/modify/moved_from/...），且监听期间脚本保持运行。
+         * 返回的对象支持 on/once/removeListener/removeAllListeners/startWatching/stopWatching/
+         * isWatching/getPath。
+         */
+        observe: function (path) {
+            var resolved = files.path(path);
+            var id = Number(__aiNativeFileObserverNew(String(resolved)));
+            if (!(id > 0)) throw new Error('无法监听路径: ' + resolved);
+            __aiFileWatcherBags.set(id, { path: resolved, watching: true });
+            ensureSystemEventTimer();
+            return __aiCreateFileWatcher(id, resolved);
+        }
     };
     /**
      * Rhino 的 `files.open(path[, mode[, encoding[, bufferSize]]])` 返回文本文件对象。
@@ -5928,6 +6779,93 @@ const char kBootstrapScript[] = R"JS(
 
     global.files = Object.freeze(files);
 
+    // ---- files.observe（android.os.FileObserver → 系统事件队列，40ms 派发）----
+    // 与 Rhino 的 ScriptFileObserver 同事件名、同参数：直接事件回调收 (relativePath)，
+    // "any" 回调收 (event, relativePath)。事件名来自 Pro 的 fileEventToString。
+    var __aiFileWatcherBags = new Map();
+    global.__aiDispatchFileObserverEvent = function (event) {
+        var bag = __aiFileWatcherBags.get(event.id);
+        if (!bag) return;
+        var relativePath = event.path === undefined ? null : event.path;
+        var direct = bag[event.event];
+        if (direct) direct.slice().forEach(function (listener) { listener(relativePath); });
+        var any = bag['any'];
+        if (any) any.slice().forEach(function (listener) { listener(event.event, relativePath); });
+    };
+    function __aiCreateFileWatcher(id, path) {
+        var bag = __aiFileWatcherBags.get(id) || { path: path, watching: true };
+        __aiFileWatcherBags.set(id, bag);
+        function listenersForFile(name, create) {
+            name = String(name);
+            var list = bag[name];
+            if (!list && create) {
+                list = [];
+                bag[name] = list;
+            }
+            return list;
+        }
+        var watcher = {
+            getPath: function () { return path; },
+            isWatching: function () { return !!bag.watching; },
+            startWatching: function () {
+                if (!bag.watching) {
+                    __aiNativeFileObserverStart(id);
+                    bag.watching = true;
+                    ensureSystemEventTimer();
+                }
+                return watcher;
+            },
+            stopWatching: function () {
+                if (bag.watching) {
+                    __aiNativeFileObserverStop(id);
+                    bag.watching = false;
+                }
+                return watcher;
+            },
+            on: function (name, listener) {
+                if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+                listenersForFile(name, true).push(listener);
+                return watcher;
+            },
+            once: function (name, listener) {
+                if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+                function onceListener() {
+                    watcher.removeListener(name, onceListener);
+                    return listener.apply(undefined, arguments);
+                }
+                onceListener.listener = listener;
+                return watcher.on(name, onceListener);
+            },
+            removeListener: function (name, listener) {
+                var list = listenersForFile(name, false);
+                if (list) {
+                    for (var i = list.length - 1; i >= 0; i--) {
+                        if (list[i] === listener || list[i].listener === listener) list.splice(i, 1);
+                    }
+                    if (list.length === 0) delete bag[String(name)];
+                }
+                return watcher;
+            },
+            removeAllListeners: function (name) {
+                if (name === undefined) {
+                    var keys = Object.keys(bag);
+                    for (var i = 0; i < keys.length; i++) {
+                        if (keys[i] !== 'path' && keys[i] !== 'watching') delete bag[keys[i]];
+                    }
+                } else {
+                    delete bag[String(name)];
+                }
+                return watcher;
+            },
+            listenerCount: function (name) {
+                var list = listenersForFile(name, false);
+                return list ? list.length : 0;
+            },
+            toString: function () { return 'FileObserver(' + path + ')'; }
+        };
+        return watcher;
+    }
+
     function formEncode(data) {
         if (data === null || data === undefined) return '';
         if (typeof data !== 'object') return encodeURIComponent(String(data));
@@ -5981,8 +6919,19 @@ const char kBootstrapScript[] = R"JS(
     // 兼容性：只用 update(detections, stats) 的老脚本行为完全不变（那时累积列表是空的）。
     const drawingAccum = { shapes: [], stats: '' };
     const drawing = {
-        show: function () { return __aiNativeDrawCreate(); },
-        hide: function () { __aiNativeDrawClose(); },
+        panel: Object.freeze({
+            show: function (options) { return JSON.parse(__aiNativeImGuiPanel('show', JSON.stringify(options || {}))); },
+            update: function (state) { return JSON.parse(__aiNativeImGuiPanel('update', JSON.stringify(state || {}))); },
+            poll: function () { return JSON.parse(__aiNativeImGuiPanel('poll', '{}')); },
+            hide: function () { return JSON.parse(__aiNativeImGuiPanel('close', '{}')); }
+        }),
+        show: function (options) {
+            const renderer = String(options && options.renderer || 'canvas');
+            if (renderer !== 'canvas' && renderer !== 'imgui') throw new RangeError('drawing renderer must be canvas or imgui');
+            drawingAccum.shapes = []; drawingAccum.stats = '';
+            return __aiNativeDrawCreate(renderer);
+        },
+        hide: function () { drawingAccum.shapes = []; drawingAccum.stats = ''; __aiNativeDrawClose(); },
         clear: function () {
             drawingAccum.shapes = [];
             drawingAccum.stats = '';
@@ -5996,11 +6945,23 @@ const char kBootstrapScript[] = R"JS(
             return drawing;
         },
         drawLine: function (x1, y1, x2, y2, color, strokeWidth) {
-            return drawing.drawRect(x1, y1, x2, y2, color, strokeWidth);
+            drawingAccum.shapes.push({kind: 'line', x1:Number(x1), y1:Number(y1), x2:Number(x2), y2:Number(y2),
+                label:'', color:color, strokeWidth:strokeWidth});
+            return drawing;
+        },
+        drawArrow: function (x1, y1, x2, y2, color, strokeWidth, headSize) {
+            drawingAccum.shapes.push({kind:'arrow', x1:Number(x1), y1:Number(y1), x2:Number(x2), y2:Number(y2),
+                label:'', color:color, strokeWidth:strokeWidth, headSize:headSize});
+            return drawing;
+        },
+        drawCircle: function (x, y, radius, color, strokeWidth) {
+            drawingAccum.shapes.push({kind:'circle', x1:Number(x), y1:Number(y), x2:Number(x), y2:Number(y),
+                radius:Number(radius), label:'', color:color, strokeWidth:strokeWidth});
+            return drawing;
         },
         drawText: function (x, y, text, color, size) {
             drawingAccum.shapes.push({
-                x1: Number(x), y1: Number(y), x2: Number(x), y2: Number(y),
+                kind: 'text', x1: Number(x), y1: Number(y), x2: Number(x), y2: Number(y),
                 label: String(text), score: 0, color: color, size: size
             });
             return drawing;
@@ -6025,6 +6986,8 @@ const char kBootstrapScript[] = R"JS(
                             : (by === undefined ? 0 : by + Number(bounds.height || 0)));
                     packed.push({
                         x1: x1, y1: y1, x2: x2, y2: y2,
+                        kind: item.kind || 'rect', color: item.color, radius: item.radius,
+                        strokeWidth: item.strokeWidth, size: item.size, headSize: item.headSize,
                         label: String(item.label === undefined ? '' : item.label),
                         score: Number(item.score || 0)
                     });
@@ -6033,9 +6996,7 @@ const char kBootstrapScript[] = R"JS(
             for (let i = 0; i < drawingAccum.shapes.length; i++) {
                 packed.push(drawingAccum.shapes[i]);
             }
-            if (stats !== undefined && stats !== null && String(stats) !== '') {
-                drawingAccum.stats = String(stats);
-            }
+            if (stats !== undefined) drawingAccum.stats = stats == null ? '' : String(stats);
             return __aiNativeDrawUpdate(JSON.stringify(packed), drawingAccum.stats);
         }
     };
@@ -6142,7 +7103,14 @@ const char kBootstrapScript[] = R"JS(
         getBrightnessMode: function () { return Number(__aiNativeDeviceGetBrightnessMode()); },
         cancelVibration: function () { __aiNativeDeviceCancelVibration(); },
         getAvailMem: function () { return Number(__aiNativeDeviceGetAvailMem()); },
-        getTotalMem: function () { return Number(__aiNativeDeviceGetTotalMem()); }
+        getTotalMem: function () { return Number(__aiNativeDeviceGetTotalMem()); },
+        getIMEI: function () { return __aiNativeDeviceGetIMEI(); },
+        getMusicVolume: function () { return Number(__aiNativeDeviceGetMusicVolume()); },
+        getNotificationVolume: function () { return Number(__aiNativeDeviceGetNotificationVolume()); },
+        keepScreenOn: function (ms) { __aiNativeDeviceKeepScreenOn(ms); },
+        wakeUp: function () { __aiNativeDeviceWakeUp(); },
+        getScreenOrientation: function () { return __aiNativeDeviceGetScreenOrientation(); },
+        getScreenRotation: function () { return Number(__aiNativeDeviceGetScreenRotation()); }
     });
 
     // ---- app module (additional) ----
@@ -6171,6 +7139,22 @@ const char kBootstrapScript[] = R"JS(
         viewFile: function (path) { return __aiNativeAppViewFile(String(path)); },
         editFile: function (path) { return __aiNativeAppEditFile(String(path)); },
         uninstall: function (pkg) { return __aiNativeAppUninstall(String(pkg)); },
+        getTopActivity: function () {
+            var info = String(__aiNativeAppGetTopActivityInfo());
+            if (!info) return null;
+            var parts = info.split('|');
+            var activity = {
+                className: parts[0],
+                packageName: parts.length > 1 ? parts[1] : '',
+                toString: function () { return 'Activity(' + activity.className + ')'; }
+            };
+            return activity;
+        },
+        getPathFromUri: function (uri) {
+            if (uri === undefined || uri === null) return null;
+            var path = String(__aiNativeAppGetPathFromUri(String(uri)));
+            return path === '' ? null : path;
+        },
         startActivity: function (opts) {
             opts = opts || {};
             return __aiNativeAppStartActivity(
@@ -6218,9 +7202,11 @@ const char kBootstrapScript[] = R"JS(
     });
 
     // ---- engines module ----
+    var currentEngineExecArgv = null;
     function makeEngineHandle(info) {
         info = info || {};
         var handle = Number(info.handle === undefined ? info : info.handle);
+        if (handle === 0 && currentEngineExecArgv === null) currentEngineExecArgv = info.execArgv || {};
         function restoreResultValue(value) {
             // Object/array results cross the JNI boundary as JSON text; restore
             // them so waitForResult()/promise() hand back real objects.
@@ -6242,6 +7228,7 @@ const char kBootstrapScript[] = R"JS(
             handle: handle,
             source: String(info.source || ''),
             engineName: String(info.engineName || 'QuickJsJavaScriptEngine'),
+            execArgv: handle === 0 ? currentEngineExecArgv : (info.execArgv || {}),
             getEngine: function () { return engine; },
             forceStop: function () { return __aiNativeEngineForceStop(handle); },
             isDestroyed: function () { return __aiNativeEngineIsDestroyed(handle); },
@@ -6286,6 +7273,13 @@ const char kBootstrapScript[] = R"JS(
     var eventListeners = new Map();
     var maxListeners = 10;
     var systemEventTimer = null;
+    var systemEventConsumers = new Set();
+    function ensureSystemEventTimer(consumer) {
+        systemEventConsumers.add(consumer || 'external');
+        if (systemEventTimer === null) {
+            systemEventTimer = setInterval(dispatchSystemEvents, 40);
+        }
+    }
     function dispatchSystemEvents() {
         for (;;) {
             var raw = __aiNativeEventsPoll();
@@ -6300,6 +7294,16 @@ const char kBootstrapScript[] = R"JS(
                 events.emit('touch', event.x, event.y, event);
             } else if (event.type === 'gesture') {
                 events.emit('gesture', event.gesture, event);
+            } else if (event.type === 'fingerprint_gesture') {
+                events.emit('fingerprint_gesture', event.direction);
+            } else if (event.type === 'fingerprint_gesture_available') {
+                events.emit('fingerprint_gesture_available', event.available);
+            } else if (event.type === 'clip') {
+                events.emit('clip_changed', event.text, event);
+            } else if (event.type === 'file_observer') {
+                if (typeof __aiDispatchFileObserverEvent === 'function') __aiDispatchFileObserverEvent(event);
+            } else if (event.type === 'websocket') {
+                if (typeof __aiDispatchWebSocketEvent === 'function') __aiDispatchWebSocketEvent(event);
             } else {
                 events.emit(event.type, event);
             }
@@ -6307,10 +7311,26 @@ const char kBootstrapScript[] = R"JS(
     }
     function observeSystemEvent(kind) {
         var result = !!__aiNativeEventsObserve(String(kind));
-        if (result && systemEventTimer === null) {
-            systemEventTimer = setInterval(dispatchSystemEvents, 40);
+        if (result) {
+            ensureSystemEventTimer(kind);
         }
         return result;
+    }
+    function stopSystemEvent(kind) {
+        __aiNativeEventsStopObserving(kind);
+        systemEventConsumers.delete(kind);
+        if (systemEventConsumers.size === 0 && systemEventTimer !== null) {
+            clearInterval(systemEventTimer);
+            systemEventTimer = null;
+        }
+    }
+    // 与 Rhino/Pro 一致：订阅 clip_changed 才开始监听剪贴板，取消订阅即停止。
+    function maybeObserveClipOnSubscribe(name) {
+        if (String(name) === 'clip_changed') observeSystemEvent('clip');
+    }
+    function maybeStopClipOnUnsubscribe(name) {
+        if (String(name) !== 'clip_changed') return;
+        if (events.listenerCount('clip_changed') === 0) stopSystemEvent('clip');
     }
     function listenersFor(name, create) {
         name = String(name);
@@ -6325,6 +7345,7 @@ const char kBootstrapScript[] = R"JS(
         on: function (name, listener) {
             if (typeof listener !== 'function') throw new TypeError('listener must be a function');
             listenersFor(name, true).push(listener);
+            maybeObserveClipOnSubscribe(name);
             return events;
         },
         once: function (name, listener) {
@@ -6350,11 +7371,13 @@ const char kBootstrapScript[] = R"JS(
                 if (listeners[i] === listener || listeners[i].listener === listener) listeners.splice(i, 1);
             }
             if (listeners.length === 0) eventListeners.delete(String(name));
+            maybeStopClipOnUnsubscribe(name);
             return events;
         },
         removeAllListeners: function (name) {
             if (name === undefined) eventListeners.clear();
             else eventListeners.delete(String(name));
+            maybeStopClipOnUnsubscribe('clip_changed');
             return events;
         },
         listenerCount: function (name) {
@@ -6380,6 +7403,7 @@ const char kBootstrapScript[] = R"JS(
         prependListener: function (name, listener) {
             if (typeof listener !== 'function') throw new TypeError('listener must be a function');
             listenersFor(name, true).unshift(listener);
+            maybeObserveClipOnSubscribe(name);
             return events;
         },
         prependOnceListener: function (name, listener) {
@@ -6390,6 +7414,7 @@ const char kBootstrapScript[] = R"JS(
             }
             onceListener.listener = listener;
             listenersFor(name, true).unshift(onceListener);
+            maybeObserveClipOnSubscribe(name);
             return events;
         },
         setMaxListeners: function (n) {
@@ -6402,6 +7427,10 @@ const char kBootstrapScript[] = R"JS(
         observeNotification: function () { return observeSystemEvent('notification'); },
         observeToast: function () { return observeSystemEvent('toast'); },
         observeGesture: function () { return observeSystemEvent('gesture'); },
+        observeFingerprintGesture: function () { return observeSystemEvent('fingerprint_gesture'); },
+        isFingerprintGestureAvailable: function () { return !!__aiNativeEventsObserve('fingerprint_available'); },
+        stopObservingFingerprintGesture: function () { stopSystemEvent('fingerprint_gesture'); return events; },
+        observeClip: function () { return observeSystemEvent('clip'); },
         onKeyDown: function (keyName, listener) {
             return events.on('__key_down__#' + String(keyName).toLowerCase(), listener);
         },
@@ -6428,6 +7457,7 @@ const char kBootstrapScript[] = R"JS(
             return events;
         },
         stopObserving: function () {
+            systemEventConsumers.clear();
             if (systemEventTimer !== null) {
                 clearInterval(systemEventTimer);
                 systemEventTimer = null;
@@ -8581,14 +9611,25 @@ const char kBootstrapScript[] = R"JS(
             return decodeAutomatorResult(automatorCall(handle, 'scrollTo', [row, column]));
         };
         selector.find = function () { return decodeAutomatorResult(automatorCall(handle, 'find')); };
-        selector.untilFind = function () { return decodeAutomatorResult(automatorCall(handle, 'untilFind')); };
+        selector.untilFind = function (timeout, interval) {
+            var findArgs = [];
+            if (timeout !== undefined) {
+                findArgs.push(Number(timeout));
+                if (interval !== undefined) findArgs.push(Number(interval));
+            }
+            return decodeAutomatorResult(automatorCall(handle, 'untilFind', findArgs));
+        };
         selector.findOnce = function (index) {
             return decodeAutomatorResult(automatorCall(handle, 'findOnce',
                 index === undefined ? [] : [index]));
         };
-        selector.findOne = function (timeout) {
-            return decodeAutomatorResult(automatorCall(handle, 'findOne',
-                timeout === undefined ? [] : [timeout]));
+        selector.findOne = function (timeout, interval) {
+            var findArgs = [];
+            if (timeout !== undefined) {
+                findArgs.push(Number(timeout));
+                if (interval !== undefined) findArgs.push(Number(interval));
+            }
+            return decodeAutomatorResult(automatorCall(handle, 'findOne', findArgs));
         };
         selector.untilFindOne = function () { return decodeAutomatorResult(automatorCall(handle, 'untilFindOne')); };
         selector.exists = function () { return decodeAutomatorResult(automatorCall(handle, 'exists')); };
@@ -8868,9 +9909,163 @@ const char kBootstrapScript[] = R"JS(
     }
     global.newInjectableWebView = function () { return createWebInjector(true); };
     global.newInjectableWebClient = function () { return createWebInjector(false); };
+
+    // ---- web.newWebSocket / web.ByteString（事件走系统事件队列，40ms 派发）----
+    var __aiWebSocketBags = new Map();
+
+    function __aiUtf8Encode(text) {
+        var bytes = [];
+        for (var i = 0; i < text.length; i++) {
+            var code = text.charCodeAt(i);
+            if (code < 0x80) bytes.push(code);
+            else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 63));
+            else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+                var next = text.charCodeAt(++i);
+                var point = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+                bytes.push(0xf0 | (point >> 18), 0x80 | ((point >> 12) & 63),
+                    0x80 | ((point >> 6) & 63), 0x80 | (point & 63));
+            } else {
+                bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+            }
+        }
+        return new Uint8Array(bytes);
+    }
+
+    function __aiBase64ToBytes(text) {
+        var TABLE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        text = String(text).replace(/[^A-Za-z0-9+/]/g, '');
+        var bytes = [];
+        for (var i = 0; i < text.length; i += 4) {
+            var c0 = TABLE.indexOf(text[i]), c1 = TABLE.indexOf(text[i + 1]),
+                c2 = TABLE.indexOf(text[i + 2]), c3 = TABLE.indexOf(text[i + 3]);
+            bytes.push((c0 << 2) | (c1 >> 4));
+            if (c2 !== -1) bytes.push(((c1 & 15) << 4) | (c2 >> 2));
+            if (c3 !== -1) bytes.push(((c2 & 3) << 6) | c3);
+        }
+        return new Uint8Array(bytes);
+    }
+
+    function __aiBytesToBase64(bytes) {
+        var TABLE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        var out = '';
+        for (var i = 0; i < bytes.length; i += 3) {
+            var b0 = bytes[i],
+                b1 = i + 1 < bytes.length ? bytes[i + 1] : 0,
+                b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+            out += TABLE[b0 >> 2];
+            out += TABLE[((b0 & 3) << 4) | (b1 >> 4)];
+            out += i + 1 < bytes.length ? TABLE[((b1 & 15) << 2) | (b2 >> 6)] : '=';
+            out += i + 2 < bytes.length ? TABLE[b2 & 63] : '=';
+        }
+        return out;
+    }
+
+    function __aiMakeBytes(bytes) {
+        bytes.size = function () { return bytes.length; };
+        bytes.toByteArray = function () { return new Uint8Array(bytes); };
+        bytes.hex = function () {
+            var out = '';
+            for (var i = 0; i < bytes.length; i++) {
+                out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+            }
+            return out;
+        };
+        bytes.base64 = function () { return __aiBytesToBase64(bytes); };
+        bytes.md5 = function () {
+            return String(__aiNativeCryptoCall('md5Base64', __aiBytesToBase64(bytes), ''));
+        };
+        bytes.toString = function () { return 'ByteString(' + bytes.length + ' bytes)'; };
+        return bytes;
+    }
+
+    global.__aiDispatchWebSocketEvent = function (event) {
+        var bag = __aiWebSocketBags.get(event.id);
+        if (!bag) return;
+        var list = bag[String(event.event)];
+        if (!list || list.length === 0) return;
+        var args = (event.args || []).slice();
+        if (event.event === 'binary' && typeof args[0] === 'string') {
+            args[0] = __aiMakeBytes(__aiBase64ToBytes(args[0]));
+        }
+        list.slice().forEach(function (listener) { listener.apply(undefined, args); });
+    };
+
+    function __aiNewWebSocket(url) {
+        var id = Number(__aiNativeWebSocketNew(String(url)));
+        if (!(id > 0)) throw new Error('无法创建 WebSocket: ' + url);
+        __aiWebSocketBags.set(id, {});
+        ensureSystemEventTimer();
+        var ws = {
+            __id: id,
+            on: function (event, listener) {
+                if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+                var bag = __aiWebSocketBags.get(id);
+                if (!bag) return ws;
+                var name = String(event);
+                (bag[name] = bag[name] || []).push(listener);
+                return ws;
+            },
+            once: function (event, listener) {
+                function onceListener() {
+                    ws.removeListener(event, onceListener);
+                    return listener.apply(undefined, arguments);
+                }
+                onceListener.listener = listener;
+                return ws.on(event, onceListener);
+            },
+            removeListener: function (event, listener) {
+                var bag = __aiWebSocketBags.get(id);
+                var list = bag && bag[String(event)];
+                if (!list) return ws;
+                for (var i = list.length - 1; i >= 0; i--) {
+                    if (list[i] === listener || list[i].listener === listener) list.splice(i, 1);
+                }
+                return ws;
+            },
+            removeAllListeners: function (event) {
+                var bag = __aiWebSocketBags.get(id);
+                if (bag) {
+                    if (event === undefined) __aiWebSocketBags.set(id, {});
+                    else delete bag[String(event)];
+                }
+                return ws;
+            },
+            send: function (data) {
+                if (data === undefined || data === null) return false;
+                if (typeof data === 'string') {
+                    return !!__aiNativeWebSocketSend(id, 'text', data);
+                }
+                var bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+                return !!__aiNativeWebSocketSend(id, 'binary', __aiBytesToBase64(bytes));
+            },
+            close: function (code, reason) {
+                var closeCode = code === undefined || code === null ? 1000 : Math.floor(Number(code) || 1000);
+                return !!__aiNativeWebSocketClose(id, closeCode,
+                    reason === undefined || reason === null ? '' : String(reason));
+            },
+            cancel: function () { __aiNativeWebSocketCancel(id); },
+            queueSize: function () { return Number(__aiNativeWebSocketQueueSize(id)); },
+            toString: function () { return 'WebSocket(' + url + ')'; }
+        };
+        return ws;
+    }
+
+    var __aiByteString = Object.freeze({
+        decodeBase64: function (text) { return __aiMakeBytes(__aiBase64ToBytes(String(text))); },
+        encodeUtf8: function (text) { return __aiMakeBytes(__aiUtf8Encode(String(text))); },
+        decodeHex: function (text) {
+            var hex = String(text).replace(/[^0-9a-fA-F]/g, '');
+            var bytes = new Uint8Array(Math.floor(hex.length / 2));
+            for (var i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+            return __aiMakeBytes(bytes);
+        }
+    });
+
     global.web = Object.freeze({
         newInjectableWebView: global.newInjectableWebView,
-        newInjectableWebClient: global.newInjectableWebClient
+        newInjectableWebClient: global.newInjectableWebClient,
+        newWebSocket: function (url, options) { return __aiNewWebSocket(String(url)); },
+        ByteString: __aiByteString
     });
 
     // ---- continuation 模块 ----
@@ -9000,6 +10195,14 @@ const char kBootstrapScript[] = R"JS(
     // ---- 内置模块：crypto / zips / util / automator / context / rawInput ----
     // 名称与语义对齐 Rhino 的 runtime.crypto / runtime.zips / __util__.js。
 
+    function __aiHexNibble(ch) {
+        var code = ch.charCodeAt(0);
+        if (code >= 48 && code <= 57) return code - 48;      // 0-9
+        if (code >= 97 && code <= 102) return code - 87;     // a-f
+        if (code >= 65 && code <= 70) return code - 55;      // A-F
+        throw new Error('char: ' + ch);
+    }
+
     global.crypto = Object.freeze({
         md5: function (data) { return __aiNativeCryptoCall('md5', String(data), ''); },
         sha1: function (data) { return __aiNativeCryptoCall('sha1', String(data), ''); },
@@ -9011,7 +10214,32 @@ const char kBootstrapScript[] = R"JS(
             return __aiNativeCryptoCall('hmacSha256', String(data), String(key));
         },
         base64Encode: function (data) { return __aiNativeCryptoCall('base64Encode', String(data), ''); },
-        base64Decode: function (data) { return __aiNativeCryptoCall('base64Decode', String(data), ''); }
+        base64Decode: function (data) { return __aiNativeCryptoCall('base64Decode', String(data), ''); },
+        /**
+         * 与 Auto.js Pro 9.3.11 的 Crypto.toHex/fromHex 同语义：fromHex 要求偶数长度
+         * （否则抛 'input array length must even.'），非法字符抛 'char: x'；toHex 输出小写十六进制。
+         * QuickJS 没有 Java byte[]，字节一律用 Uint8Array（可选带 ByteString 扩展方法），
+         * 字符串参数按 UTF-8 编码。
+         */
+        toHex: function (data) {
+            var bytes = data;
+            if (typeof data === 'string') bytes = __aiUtf8Encode(data);
+            if (bytes === null || bytes === undefined) return '';
+            var out = '';
+            for (var i = 0; i < bytes.length; i++) {
+                out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+            }
+            return out;
+        },
+        fromHex: function (hex) {
+            hex = String(hex);
+            if (hex.length % 2 !== 0) throw new Error('input array length must even.');
+            var bytes = new Uint8Array(hex.length / 2);
+            for (var i = 0; i < bytes.length; i++) {
+                bytes[i] = (__aiHexNibble(hex.charAt(i * 2)) << 4) | __aiHexNibble(hex.charAt(i * 2 + 1));
+            }
+            return __aiMakeBytes(bytes);
+        }
     });
 
     global.zips = Object.freeze({
@@ -9246,66 +10474,186 @@ const char kBootstrapScript[] = R"JS(
 
     // sqlite 模块：复用 core/database 的 Database，事务用 begin/end 包住脚本回调。
     global.sqlite = (function () {
-        function decodeResult(json) {
-            if (json === null || json === undefined || json === 'null' || json === '') return null;
-            var parsed = JSON.parse(json);
-            var rows = parsed.rows || [];
-            return {
-                insertId: parsed.insertId,
-                rowsAffected: parsed.rowsAffected,
-                rows: rows,
-                length: rows.length,
-                item: function (index) { return rows[index]; }
-            };
+        var connections = new Map();
+        function encodeValue(key, value) {
+            if (value instanceof ArrayBuffer) value = new Uint8Array(value);
+            if (ArrayBuffer.isView(value)) return { __sqliteBlob: Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) };
+            return value;
         }
-        function open(name, version) {
-            var handle = __aiNativeSqliteOpen(String(name),
-                version === undefined ? 0 : Math.round(Number(version)));
-            function call(method, args) {
-                return decodeResult(__aiNativeSqliteCall(handle, method, JSON.stringify(args)));
+        function decodeValue(key, value) {
+            return value && value.__sqliteBlob !== undefined ? new Uint8Array(value.__sqliteBlob) : value;
+        }
+        function sqlArgs(args) { return args === undefined ? null : args; }
+        function cursorFrom(parsed) {
+            var rows = parsed.rows || [], columns = parsed.columns || (rows.length ? Object.keys(rows[0]) : []);
+            var position = -1, closed = false;
+            function ensureOpen() { if (closed) throw new Error('Cursor is closed'); }
+            function current() {
+                ensureOpen();
+                if (position < 0 || position >= rows.length) throw new RangeError('Cursor position is invalid');
+                return rows[position];
             }
-            function sqlArgs(args) {
-                return args === undefined ? null : args;
+            var cursor = {
+                moveToPosition: function (next) { ensureOpen(); position = Math.max(-1, Math.min(rows.length, Number(next))); return position >= 0 && position < rows.length; },
+                moveToNext: function () { return cursor.moveToPosition(position + 1); },
+                moveToPrevious: function () { return cursor.moveToPosition(position - 1); },
+                moveToFirst: function () { return cursor.moveToPosition(0); },
+                moveToLast: function () { return cursor.moveToPosition(rows.length - 1); },
+                move: function (offset) { return cursor.moveToPosition(position + Number(offset)); },
+                getPosition: function () { ensureOpen(); return position; },
+                getCount: function () { ensureOpen(); return rows.length; },
+                getColumnNames: function () { ensureOpen(); return columns.slice(); },
+                getColumnCount: function () { ensureOpen(); return columns.length; },
+                getColumnIndex: function (name) { ensureOpen(); return columns.indexOf(String(name)); },
+                getColumnIndexOrThrow: function (name) { var i = cursor.getColumnIndex(name); if (i < 0) throw new Error('Column does not exist: ' + name); return i; },
+                get: function (index) { index = Number(index); if (index < 0 || index >= columns.length) throw new RangeError('Column index is invalid'); var row = current(); return parsed.data ? parsed.data[position][index] : row[columns[index]]; },
+                getByColumn: function (name) { return cursor.get(cursor.getColumnIndexOrThrow(name)); },
+                getString: function (index) { var value = cursor.get(index); return value == null ? null : String(value); },
+                getLong: function (index) { return Number(cursor.get(index)); },
+                getInt: function (index) { return Math.trunc(Number(cursor.get(index))); },
+                getDouble: function (index) { return Number(cursor.get(index)); },
+                getFloat: function (index) { return Number(cursor.get(index)); },
+                getShort: function (index) { return (cursor.getInt(index) << 16) >> 16; },
+                getType: function (index) { var value = cursor.get(index); return parsed.types ? parsed.types[position][index] : value === null ? 0 : value instanceof Uint8Array ? 4 : typeof value === 'number' ? Number.isInteger(value) ? 1 : 2 : 3; },
+                getBlob: function (index) { return cursor.get(index); },
+                isNull: function (index) { return cursor.get(index) === null; },
+                isBeforeFirst: function () { ensureOpen(); return position < 0 || rows.length === 0; },
+                isAfterLast: function () { ensureOpen(); return position >= rows.length || rows.length === 0; },
+                isFirst: function () { ensureOpen(); return rows.length > 0 && position === 0; },
+                isLast: function () { ensureOpen(); return rows.length > 0 && position === rows.length - 1; },
+                pick: function () { return Object.assign({}, current()); },
+                next: function () { return cursor.moveToNext() ? cursor.pick() : null; },
+                all: function (close) { var values = []; while (cursor.moveToNext()) values.push(cursor.pick()); if (close === undefined || close) cursor.close(); return values; },
+                single: function () { var value = cursor.next(); cursor.close(); return value; },
+                close: function () { closed = true; },
+                isClosed: function () { return closed; }
+            };
+            Object.defineProperties(cursor, {
+                count: { get: cursor.getCount }, position: { get: cursor.getPosition },
+                columnNames: { get: cursor.getColumnNames }, columnCount: { get: cursor.getColumnCount },
+                closed: { get: cursor.isClosed }
+            });
+            return cursor;
+        }
+        function resultFrom(parsed) {
+            var rows = parsed.rows || [];
+            Object.defineProperty(rows, 'item', { value: function (index) { return rows[index]; } });
+            var result = { insertId: parsed.insertId, rowsAffected: parsed.rowsAffected, rows: rows,
+                length: rows.length, item: function (index) { return rows[index]; } };
+            return Object.assign(result, cursorFrom(parsed));
+        }
+        function wrapDatabase(handle) {
+            if (connections.has(handle)) return connections.get(handle);
+            var closed = false, callbackIds = [];
+            function call(method, args) {
+                if (closed) throw new Error('Database connection is closed');
+                var json = __aiNativeSqliteCall(handle, method, JSON.stringify(args || [], encodeValue));
+                if (json === null || json === undefined || json === '' || json === 'null') return null;
+                var value = JSON.parse(json, decodeValue);
+                return method === 'rawQuery' ? cursorFrom(value) : value && value.rows ? resultFrom(value) : value;
             }
             var db = {
                 handle: handle,
+                __callbackIds: callbackIds,
                 exec: function (sql, args) { return call('exec', [String(sql), sqlArgs(args)]); },
-                executeSql: function (sql, args) { call('exec', [String(sql), sqlArgs(args)]); },
+                execSQL: function (sql, args) { call('execSQL', [String(sql), sqlArgs(args)]); },
+                executeSql: function (sql, args) { call('execSQL', [String(sql), sqlArgs(args)]); },
                 select: function (sql, args) { return call('select', [String(sql), sqlArgs(args)]); },
                 query: function (sql, args) { return call('select', [String(sql), sqlArgs(args)]); },
-                insert: function (table, values) {
-                    return call('insert', [String(table), values === undefined ? {} : values]);
-                },
-                update: function (table, values, whereClause, whereArgs) {
-                    return call('update', [String(table), values === undefined ? {} : values,
-                        whereClause === undefined ? null : String(whereClause), sqlArgs(whereArgs)]);
-                },
-                delete: function (table, whereClause, whereArgs) {
-                    return call('delete', [String(table),
-                        whereClause === undefined ? null : String(whereClause), sqlArgs(whereArgs)]);
-                },
-                // Rhino 的 transaction 会传 Transaction 对象，这里直接传 db（方法集一致）。
-                transaction: function (action) {
-                    if (typeof action !== 'function') {
-                        throw new TypeError('transaction(action) 需要一个函数参数');
-                    }
-                    call('begin', []);
-                    try {
-                        action(db);
-                        call('end', [true]);
-                    } catch (error) {
-                        call('end', [false]);
-                        throw error;
-                    }
-                },
-                close: function () { call('close', []); }
+                rawQuery: function (sql, args) { return call('rawQuery', [String(sql), sqlArgs(args)]); },
+                insert: function (table, values) { return call('insert', [String(table), values || {}]); },
+                update: function (table, values, where, args) { return call('update', [String(table), values || {}, where == null ? null : String(where), sqlArgs(args)]); },
+                delete: function (table, where, args) { return call('delete', [String(table), where == null ? null : String(where), sqlArgs(args)]); },
+                insertResult: function (table, values) { return call('insertResult', [String(table), values || {}]); },
+                updateResult: function (table, values, where, args) { return call('updateResult', [String(table), values || {}, where == null ? null : String(where), sqlArgs(args)]); },
+                deleteResult: function (table, where, args) { return call('deleteResult', [String(table), where == null ? null : String(where), sqlArgs(args)]); },
+                beginTransaction: function () { call('begin', [false]); },
+                beginTransactionNonExclusive: function () { call('begin', [true]); },
+                endTransaction: function () { call('end', [false]); },
+                setTransactionSuccessful: function () { call('succeed'); },
+                isOpen: function () { return !closed && call('isOpen'); },
+                isReadOnly: function () { return call('isReadOnly'); },
+                inTransaction: function () { return call('inTransaction'); },
+                close: function () {
+                    if (closed) return;
+                    call('close'); closed = true; connections.delete(handle);
+                    callbackIds.forEach(global.__aiReleaseCallback);
+                }
             };
+            ['version', 'pageSize', 'maximumSize', 'path'].forEach(function (name) {
+                var getter = 'get' + name.charAt(0).toUpperCase() + name.slice(1);
+                db[getter] = function () { return call(name); };
+                var property = { get: db[getter], enumerable: true };
+                if (name !== 'path') {
+                    var setter = 'set' + name.charAt(0).toUpperCase() + name.slice(1);
+                    db[setter] = function (value) { return call(setter, [Number(value)]); };
+                    property.set = db[setter];
+                }
+                Object.defineProperty(db, name, property);
+            });
+            function transaction(action, second, third, nonExclusive) {
+                if (typeof action !== 'function') throw new TypeError('transaction(action) requires a function');
+                var emitter = makeEmitter(), occurred = new Map(), originalOn = emitter.on;
+                emitter.on = function (name, listener) {
+                    if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+                    if (occurred.has(String(name))) listener.apply(emitter, occurred.get(String(name)));
+                    else originalOn(name, listener);
+                    return emitter;
+                };
+                emitter.addListener = emitter.on;
+                emitter.once = function (name, listener) { return emitter.on(name, listener); };
+                function occur(name, value) { occurred.set(name, [value]); emitter.emit(name, value); }
+                var ended = false, committed = false;
+                var tx = Object.create(db);
+                tx.succeed = function () { if (ended) throw new Error('Transaction has ended'); committed = true; };
+                tx.end = function () { if (!ended) { call('end', [committed]); ended = true; } };
+                tx.rollback = function () { committed = false; tx.end(); };
+                call('begin', [nonExclusive === true || second === false]);
+                occur('begin', tx);
+                try { action(tx); if (!ended) { committed = true; tx.end(); } }
+                catch (error) { occur('error', error); committed = false; tx.end(); }
+                occur(committed ? 'commit' : 'rollback', tx); occur('end', tx);
+                if (typeof second === 'function') emitter.on('error', second);
+                if (typeof third === 'function') emitter.on('commit', third);
+                return emitter;
+            }
+            db.transaction = function (action, second, third) { return transaction(action, second, third, false); };
+            db.readTransaction = function (action, error, success) { return transaction(action, error, success, true); };
+            db.changeVersion = function (oldVersion, newVersion, action, error, success) {
+                return transaction(function (tx) { if (db.version === Number(oldVersion)) { action(tx); db.version = Number(newVersion); } }, error, success, false);
+            };
+            connections.set(handle, db);
             return db;
+        }
+        function open(name, options, callbacks) {
+            options = typeof options === 'number' ? { version: options } : Object.assign({}, options || {});
+            if (options.version === undefined) options.version = 1;
+            if (!Number.isInteger(Number(options.version)) || Number(options.version) < 1) throw new RangeError('SQLite version must be >= 1');
+            options.version = Number(options.version);
+            callbacks = callbacks || {};
+            var callbackIds = [], nativeCallbacks = {};
+            ['onCreate', 'onUpgrade', 'onConfigure', 'onOpen', 'onCorruption'].forEach(function (name) {
+                if (typeof callbacks[name] !== 'function') return;
+                var id = global.__aiRegisterCallback(function (handle, oldVersion, newVersion) {
+                    var args = [wrapDatabase(Number(handle))];
+                    if (name === 'onUpgrade') args.push(oldVersion, newVersion);
+                    return callbacks[name].apply(callbacks, args);
+                });
+                callbackIds.push(id); nativeCallbacks[name] = id;
+            });
+            options.callbacks = nativeCallbacks;
+            try {
+                var handle = Number(__aiNativeSqliteOpen(String(name), JSON.stringify(options)));
+                var db = wrapDatabase(handle);
+                Array.prototype.push.apply(db.__callbackIds, callbackIds);
+                return db;
+            } catch (error) { callbackIds.forEach(global.__aiReleaseCallback); throw error; }
         }
         return Object.freeze({ open: open });
     })();
 
     // 内置模块表：require('crypto') 等直接返回全局对象，同名文件仍可覆盖（磁盘优先）。
+    global.__aiModernModules = Object.create(null);
     var builtinModules = {
         crypto: global.crypto,
         zips: global.zips,
@@ -9351,6 +10699,7 @@ const char kBootstrapScript[] = R"JS(
         moduleCache.set(filename, module);
         var localRequire = function (request) {
             var name = String(request);
+            if (Object.prototype.hasOwnProperty.call(global.__aiModernModules, name)) return global.__aiModernModules[name];
             if (Object.prototype.hasOwnProperty.call(builtinModules, name)) {
                 return builtinModules[name];
             }
@@ -9369,12 +10718,14 @@ const char kBootstrapScript[] = R"JS(
         var name = String(request);
         // 内置模块优先于磁盘文件？Rhino 的 require 只解析 assets/modules 下的内置模块，
         // 这里同样先给内置的实现，避免脚本目录里同名文件意外覆盖核心能力。
+        if (Object.prototype.hasOwnProperty.call(global.__aiModernModules, name)) return global.__aiModernModules[name];
         if (Object.prototype.hasOwnProperty.call(builtinModules, name)) {
             return builtinModules[name];
         }
         return loadModule(moduleFilename(request, null), null);
     };
     global.__moduleCache = moduleCache;
+    (new Function('global', String(__aiNativeModernModulesScript())))(global);
 
     // ---- runtime info (Auto.js compatible surface) ----
     global.runtime = Object.freeze({
@@ -9430,6 +10781,11 @@ jobject resultToJava(JNIEnv *env, JSContext *context, JSValueConst result) {
 }
 
 }  // namespace
+
+std::shared_ptr<const cv::Mat> aijsSiftBorrowFrame(int64_t engine, int64_t frame) {
+    const auto state = findEngine(engine);
+    return state ? state->frames.get(frame) : nullptr;
+}
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
@@ -9489,7 +10845,15 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeSelectorCreate", nativeSelectorCreate, 0);
     installNativeFunction(state->context, global, "__aiNativeAutomatorCall", nativeAutomatorCall, 3);
     installNativeFunction(state->context, global, "__aiNativeRequestScreenCapture", nativeRequestScreenCapture, 1);
+    installNativeFunction(state->context, global, "__aiNativeRequestScreenCaptureEx", nativeRequestScreenCaptureEx, 4);
+    installNativeFunction(state->context, global, "__aiNativeRequestScreenCaptureAsync", nativeRequestScreenCaptureAsync, 1);
+    installNativeFunction(state->context, global, "__aiNativeGetScreenCaptureOptions", nativeGetScreenCaptureOptions, 0);
+    installNativeFunction(state->context, global, "__aiNativeScreenCaptureTake", nativeScreenCaptureTake, 0);
+    installNativeFunction(state->context, global, "__aiNativeImagesStopScreenCapture", nativeImagesStopScreenCapture, 0);
     installNativeFunction(state->context, global, "__aiNativeCaptureFrame", nativeCaptureFrame, 3);
+    installNativeFunction(state->context, global, "__aiNativeWindowCaptureAvailable", nativeWindowCaptureAvailable, 0);
+    installNativeFunction(state->context, global, "__aiNativeListCaptureWindows", nativeListCaptureWindows, 0);
+    installNativeFunction(state->context, global, "__aiNativeCaptureWindow", nativeCaptureWindow, 1);
     installNativeFunction(state->context, global, "__aiNativeReadFrame", nativeReadFrame, 1);
     installNativeFunction(state->context, global, "__aiNativeReadRawFrame", nativeReadFrameRaw, 3);
     installNativeFunction(state->context, global, "__aiNativeFrameFromBase64", nativeFrameFromBase64, 1);
@@ -9507,6 +10871,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeReleaseFrame", nativeReleaseFrame, 1);
     installNativeFunction(state->context, global, "__aiNativeFrameStats", nativeFrameStats, 0);
     installNativeFunction(state->context, global, "__aiNativeFramePixel", nativeFramePixel, 3);
+    installNativeFunction(state->context, global, "__aiNativeAnalyzeXiangqiBoard", nativeAnalyzeXiangqiBoard, 1);
+    installNativeFunction(state->context, global, "__aiNativeDetectXiangqiCircles", nativeDetectXiangqiCircles, 5);
     installNativeFunction(state->context, global, "__aiNativeFindColor", nativeFindColor, 7);
     installNativeFunction(state->context, global, "__aiNativeFindAllColorPoints", nativeFindAllColorPoints, 7);
     installNativeFunction(state->context, global, "__aiNativeCountColor", nativeCountColor, 7);
@@ -9525,9 +10891,9 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeOcrRelease", nativeOcrRelease, 1);
     installNativeFunction(state->context, global, "__aiNativeOcrLiveCount", nativeOcrLiveCount, 0);
     installNativeFunction(state->context, global, "__aiNativePikafishAvailable", nativePikafishAvailable, 0);
-    installNativeFunction(state->context, global, "__aiNativePikafishStart", nativePikafishStart, 3);
-    installNativeFunction(state->context, global, "__aiNativePikafishAnalyze", nativePikafishAnalyze, 4);
-    installNativeFunction(state->context, global, "__aiNativePikafishAnalyzePosition", nativePikafishAnalyzePosition, 4);
+    installNativeFunction(state->context, global, "__aiNativePikafishStart", nativePikafishStart, 4);
+    installNativeFunction(state->context, global, "__aiNativePikafishAnalyze", nativePikafishAnalyze, 5);
+    installNativeFunction(state->context, global, "__aiNativePikafishAnalyzePosition", nativePikafishAnalyzePosition, 5);
     installNativeFunction(state->context, global, "__aiNativePikafishStop", nativePikafishStop, 0);
     installNativeFunction(state->context, global, "__aiNativePikafishQuit", nativePikafishQuit, 0);
     installNativeFunction(state->context, global, "__aiNativePikafishIsRunning", nativePikafishIsRunning, 0);
@@ -9566,6 +10932,10 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeEventsPoll", nativeEventsPoll, 0);
     installNativeFunction(state->context, global, "__aiNativeEventsSetTouchTimeout", nativeEventsSetTouchTimeout, 1);
     installNativeFunction(state->context, global, "__aiNativeEventsStopAll", nativeEventsStopAll, 0);
+    installNativeFunction(state->context, global, "__aiNativeEventsStopObserving", nativeEventsStopObserving, 1);
+    installNativeFunction(state->context, global, "__aiNativeFileObserverNew", nativeFileObserverNew, 1);
+    installNativeFunction(state->context, global, "__aiNativeFileObserverStart", nativeFileObserverStart, 1);
+    installNativeFunction(state->context, global, "__aiNativeFileObserverStop", nativeFileObserverStop, 1);
     installNativeFunction(state->context, global, "__aiNativeDialogsShow", nativeDialogsShow, 5);
     installNativeFunction(state->context, global, "__aiNativeDialogsPoll", nativeDialogsPoll, 1);
     installNativeFunction(state->context, global, "__aiNativeFloatyCreate", nativeFloatyCreate, 1);
@@ -9628,6 +10998,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeJavaNew", nativeJavaNew, 2);
     installNativeFunction(state->context, global, "__aiNativeJavaContextHandle", nativeJavaContextHandle, 0);
     installNativeFunction(state->context, global, "__aiNativeFrameToMat", nativeFrameToMat, 1);
+    installNativeFunction(state->context, global, "__aiNativeSiftFrameInput", nativeSiftFrameInput, 1);
+    installNativeFunction(state->context, global, "__aiNativeReleaseSiftInput", nativeReleaseSiftInput, 1);
     installNativeFunction(state->context, global, "__aiNativeMatToFrame", nativeMatToFrame, 1);
     installNativeFunction(state->context, global, "__aiNativeExitSelf", nativeExitSelf, 0);
     installNativeFunction(state->context, global, "__aiNativeUiInflate", nativeUiInflate, 1);
@@ -9641,13 +11013,23 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeUiGetAttr", nativeUiGetAttr, 3);
     installNativeFunction(state->context, global, "__aiNativeFilesGetSdcardPath", nativeFilesGetSdcardPath, 0);
     installNativeFunction(state->context, global, "__aiNativeFilesPath", nativeFilesPath, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesGetName", nativeFilesGetName, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesGetNameWithoutExtension", nativeFilesGetNameWithoutExtension, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesGetExtension", nativeFilesGetExtension, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesIsEmptyDir", nativeFilesIsEmptyDir, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesCreateIfNotExists", nativeFilesCreateIfNotExists, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesRemoveDir", nativeFilesRemoveDir, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesReadBytes", nativeFilesReadBytes, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesDirname", nativeFilesDirname, 1);
+    installNativeFunction(state->context, global, "__aiNativeFilesStat", nativeFilesStat, 1);
     installNativeFunction(state->context, global, "__aiNativeSetTimeout", nativeSetTimeout, 2);
     installNativeFunction(state->context, global, "__aiNativeSetInterval", nativeSetInterval, 2);
     installNativeFunction(state->context, global, "__aiNativeClearTimer", nativeClearTimer, 1);
     installNativeFunction(state->context, global, "__aiNativeHttpRequest", nativeHttpRequest, 5);
-    installNativeFunction(state->context, global, "__aiNativeDrawCreate", nativeDrawCreate, 0);
+    installNativeFunction(state->context, global, "__aiNativeDrawCreate", nativeDrawCreate, 1);
     installNativeFunction(state->context, global, "__aiNativeDrawUpdate", nativeDrawUpdate, 2);
     installNativeFunction(state->context, global, "__aiNativeDrawClose", nativeDrawClose, 0);
+    installNativeFunction(state->context, global, "__aiNativeImGuiPanel", nativeImGuiPanel, 2);
     installNativeFunction(state->context, global, "__aiNativeAppLaunch", nativeAppLaunch, 1);
     installNativeFunction(state->context, global, "__aiNativeAppOpenUrl", nativeAppOpenUrl, 1);
     installNativeFunction(state->context, global, "__aiNativeAppGetInstalledApps", nativeAppGetInstalledApps, 0);
@@ -9664,12 +11046,26 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeDeviceGetBattery", nativeDeviceGetBattery, 0);
     installNativeFunction(state->context, global, "__aiNativeDeviceGetAvailMem", nativeDeviceGetAvailMem, 0);
     installNativeFunction(state->context, global, "__aiNativeDeviceGetTotalMem", nativeDeviceGetTotalMem, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetIMEI", nativeDeviceGetIMEI, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetMusicVolume", nativeDeviceGetMusicVolume, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetNotificationVolume", nativeDeviceGetNotificationVolume, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceKeepScreenOn", nativeDeviceKeepScreenOn, 1);
+    installNativeFunction(state->context, global, "__aiNativeDeviceWakeUp", nativeDeviceWakeUp, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetScreenOrientation", nativeDeviceGetScreenOrientation, 0);
+    installNativeFunction(state->context, global, "__aiNativeDeviceGetScreenRotation", nativeDeviceGetScreenRotation, 0);
     installNativeFunction(state->context, global, "__aiNativeAppGetPackageName", nativeAppGetPackageName, 1);
     installNativeFunction(state->context, global, "__aiNativeAppGetAppName", nativeAppGetAppName, 1);
     installNativeFunction(state->context, global, "__aiNativeAppOpenAppSetting", nativeAppOpenAppSetting, 1);
     installNativeFunction(state->context, global, "__aiNativeAppViewFile", nativeAppViewFile, 1);
     installNativeFunction(state->context, global, "__aiNativeAppEditFile", nativeAppEditFile, 1);
     installNativeFunction(state->context, global, "__aiNativeAppUninstall", nativeAppUninstall, 1);
+    installNativeFunction(state->context, global, "__aiNativeAppGetTopActivityInfo", nativeAppGetTopActivityInfo, 0);
+    installNativeFunction(state->context, global, "__aiNativeAppGetPathFromUri", nativeAppGetPathFromUri, 1);
+    installNativeFunction(state->context, global, "__aiNativeWebSocketNew", nativeWebSocketNew, 1);
+    installNativeFunction(state->context, global, "__aiNativeWebSocketSend", nativeWebSocketSend, 3);
+    installNativeFunction(state->context, global, "__aiNativeWebSocketClose", nativeWebSocketClose, 3);
+    installNativeFunction(state->context, global, "__aiNativeWebSocketCancel", nativeWebSocketCancel, 1);
+    installNativeFunction(state->context, global, "__aiNativeWebSocketQueueSize", nativeWebSocketQueueSize, 1);
     installNativeFunction(state->context, global, "__aiNativeAppStartActivity", nativeAppStartActivity, 7);
     installNativeFunction(state->context, global, "__aiNativeDeviceIsCharging", nativeDeviceIsCharging, 0);
     installNativeFunction(state->context, global, "__aiNativeDeviceGetBrightness", nativeDeviceGetBrightness, 0);
@@ -9686,6 +11082,8 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     installNativeFunction(state->context, global, "__aiNativeDialogSelect", nativeDialogSelect, 3);
     installNativeFunction(state->context, global, "__aiNativeDialogMultiChoice", nativeDialogMultiChoice, 3);
     installNativeFunction(state->context, global, "__aiNativeDialogBuild", nativeDialogBuild, 1);
+    installNativeFunction(state->context, global, "__aiNativeDialogCall", nativeDialogCall, 1);
+    installNativeFunction(state->context, global, "__aiNativeModernModulesScript", nativeModernModulesScript, 0);
     installNativeFunction(state->context, global, "__aiNativeThreadsExec", nativeThreadsExec, 3);
     installNativeFunction(state->context, global, "__aiNativeThreadsStop", nativeThreadsStop, 1);
     installNativeFunction(state->context, global, "__aiNativeSharedBusOn", nativeSharedBusOn, 1);

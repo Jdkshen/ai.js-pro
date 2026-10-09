@@ -1,11 +1,14 @@
 package com.stardust.autojs.runtime.api;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Point;
 import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 
 import androidx.annotation.RequiresApi;
@@ -28,6 +31,7 @@ import com.stardust.autojs.core.inputevent.TouchObserver;
 import com.stardust.util.MapBuilder;
 import com.stardust.view.accessibility.AccessibilityNotificationObserver;
 import com.stardust.view.accessibility.AccessibilityService;
+import com.stardust.view.accessibility.FingerprintGestureDispatcher;
 import com.stardust.view.accessibility.KeyInterceptor;
 import com.stardust.view.accessibility.NotificationListener;
 import com.stardust.view.accessibility.OnKeyListener;
@@ -40,10 +44,11 @@ import java.util.Set;
  * Created by Stardust on 2017/7/18.
  */
 
-public class Events extends EventEmitter implements OnKeyListener, TouchObserver.OnTouchEventListener, NotificationListener, AccessibilityNotificationObserver.ToastListener, AccessibilityService.GestureListener {
+public class Events extends EventEmitter implements OnKeyListener, TouchObserver.OnTouchEventListener, NotificationListener, AccessibilityNotificationObserver.ToastListener, AccessibilityService.GestureListener, ClipboardManager.OnPrimaryClipChangedListener {
 
     private static final String PREFIX_KEY_DOWN = "__key_down__#";
     private static final String PREFIX_KEY_UP = "__key_up__#";
+    private static final String EVENT_CLIP_CHANGED = "clip_changed";
     private static final Map<Integer, String> GESTURES = new MapBuilder<Integer, String>()
             .put(AccessibilityService.GESTURE_SWIPE_UP, "up")
             .put(AccessibilityService.GESTURE_SWIPE_DOWN, "down")
@@ -78,6 +83,23 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     private volatile boolean mInterceptsAllKey = false;
     private KeyInterceptor mKeyInterceptor;
     private Set<String> mInterceptedKeys = new HashSet<>();
+    private boolean mListeningClip = false;
+    private volatile boolean mListeningFingerprint;
+    private volatile int mFingerprintGeneration;
+    private int mFingerprintWaitId;
+    private Handler mFingerprintHandler;
+    private final FingerprintGestureDispatcher.Listener mFingerprintListener =
+            new FingerprintGestureDispatcher.Listener() {
+                @Override
+                public void onFingerprintGesture(String direction) {
+                    postFingerprintEvent("fingerprint_gesture", direction);
+                }
+
+                @Override
+                public void onFingerprintGestureAvailabilityChanged(boolean available) {
+                    postFingerprintEvent("fingerprint_gesture_available", available);
+                }
+            };
 
     public final BroadcastEmitter broadcast;
 
@@ -121,6 +143,42 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         if (mHandler == null) {
             mHandler = new Handler();
         }
+    }
+
+    /** Enables sensor swipes without enabling touchscreen exploration. */
+    public boolean observeFingerprintGesture() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
+        if (mListeningFingerprint) return true;
+        getAccessibilityService();
+        mFingerprintHandler = new Handler();
+        mFingerprintWaitId = mLoopers.waitWhenIdle();
+        mListeningFingerprint = true;
+        AccessibilityService.fingerprintGestureDispatcher.addListener(mFingerprintListener);
+        return true;
+    }
+
+    /** Current availability, including temporary suspension during fingerprint authentication. */
+    public boolean isFingerprintGestureAvailable() {
+        return AccessibilityService.fingerprintGestureDispatcher.isAvailable();
+    }
+
+    public void stopObservingFingerprintGesture() {
+        if (!mListeningFingerprint) return;
+        mListeningFingerprint = false;
+        mFingerprintGeneration++;
+        AccessibilityService.fingerprintGestureDispatcher.removeListener(mFingerprintListener);
+        final int waitId = mFingerprintWaitId;
+        Handler handler = mFingerprintHandler;
+        if (Looper.myLooper() == handler.getLooper()) mLoopers.doNotWaitWhenIdle(waitId);
+        else handler.post(() -> mLoopers.doNotWaitWhenIdle(waitId));
+    }
+
+    private void postFingerprintEvent(String event, Object value) {
+        if (!mListeningFingerprint) return;
+        int generation = mFingerprintGeneration;
+        mFingerprintHandler.post(() -> {
+            if (mListeningFingerprint && generation == mFingerprintGeneration) emit(event, value);
+        });
     }
 
     public void observeTouch() {
@@ -228,7 +286,10 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         mLoopers.waitWhenIdle(true);
         if (NotificationListenerService.Companion.getInstance() == null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                mContext.startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+                // application context 启动 Activity 必须带 NEW_TASK，否则抛
+                // AndroidRuntimeException: Calling startActivity() from outside of an Activity context...
+                mContext.startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             }
             throw new ScriptException(mContext.getString(R.string.exception_notification_service_disabled));
         }
@@ -270,9 +331,107 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         return this;
     }
 
+    // ------------------------------------------------------------------
+    // clip_changed（对齐 Auto.js Pro 9.3.11 的 Events）：脚本订阅 clip_changed
+    // 时自动挂上剪贴板监听，监听被删空/脚本结束时自动移除。
+    // ------------------------------------------------------------------
+
+    private ClipboardManager clipboardManager() {
+        if (mContext == null) return null;
+        return (ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
+    }
+
+    private void addPrimaryClipChangedListener() {
+        if (mListeningClip) return;
+        ClipboardManager manager = clipboardManager();
+        if (manager == null) return;
+        manager.addPrimaryClipChangedListener(this);
+        mListeningClip = true;
+    }
+
+    private void removePrimaryClipChangedListener() {
+        if (!mListeningClip) return;
+        ClipboardManager manager = clipboardManager();
+        if (manager != null) {
+            manager.removePrimaryClipChangedListener(this);
+        }
+        mListeningClip = false;
+    }
+
+    @Override
+    public void onPrimaryClipChanged() {
+        ClipboardManager manager = clipboardManager();
+        ClipData clip = manager == null ? null : manager.getPrimaryClip();
+        if (clip == null) return;
+        CharSequence text = (clip.getItemCount() == 0 || clip.getItemAt(0) == null) ? "" : clip.getItemAt(0).getText();
+        final String content = text == null ? "" : text.toString();
+        ensureHandler();
+        mHandler.post(() -> emit(EVENT_CLIP_CHANGED, content, clip));
+    }
+
+    private void updateClipListener(String eventName) {
+        if (!EVENT_CLIP_CHANGED.equals(eventName)) return;
+        if (listenerCount(EVENT_CLIP_CHANGED) > 0) {
+            addPrimaryClipChangedListener();
+        } else {
+            removePrimaryClipChangedListener();
+        }
+    }
+
+    @Override
+    public EventEmitter on(String eventName, Object listener) {
+        super.on(eventName, listener);
+        updateClipListener(eventName);
+        return this;
+    }
+
+    @Override
+    public EventEmitter once(String eventName, Object listener) {
+        super.once(eventName, listener);
+        updateClipListener(eventName);
+        return this;
+    }
+
+    @Override
+    public EventEmitter prependListener(String eventName, Object listener) {
+        super.prependListener(eventName, listener);
+        updateClipListener(eventName);
+        return this;
+    }
+
+    @Override
+    public EventEmitter prependOnceListener(String eventName, Object listener) {
+        super.prependOnceListener(eventName, listener);
+        updateClipListener(eventName);
+        return this;
+    }
+
+    @Override
+    public EventEmitter removeListener(String eventName, Object listener) {
+        super.removeListener(eventName, listener);
+        updateClipListener(eventName);
+        return this;
+    }
+
+    @Override
+    public EventEmitter removeAllListeners(String eventName) {
+        super.removeAllListeners(eventName);
+        updateClipListener(eventName);
+        return this;
+    }
+
+    @Override
+    public EventEmitter removeAllListeners() {
+        super.removeAllListeners();
+        updateClipListener(EVENT_CLIP_CHANGED);
+        return this;
+    }
+
 
     public void recycle() {
+        stopObservingFingerprintGesture();
         broadcast.unregister();
+        removePrimaryClipChangedListener();
         if (mListeningKey) {
             AccessibilityService service = mAccessibilityBridge.getService();
             if (service != null) {

@@ -7,6 +7,9 @@ import com.stardust.pio.UncheckedIOException;
 import com.stardust.util.Func1;
 
 import java.io.File;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
 /**
@@ -14,6 +17,59 @@ import java.io.IOException;
  */
 
 public class Files {
+
+    /**
+     * Auto.js Pro 的 `files.stat(path)` 返回对象（只读快照）。
+     * Rhino 下 getter 会映射为 `stat.size` / `stat.path` / `stat.lastModified` 属性。
+     */
+    public static class FileStat {
+        private final String path;
+        private final long lastModified;
+        private final long size;
+        private final boolean readable;
+        private final boolean writable;
+        private final boolean executable;
+        private final boolean hidden;
+
+        public FileStat(String path, long lastModified, long size,
+                        boolean readable, boolean writable, boolean executable, boolean hidden) {
+            this.path = path;
+            this.lastModified = lastModified;
+            this.size = size;
+            this.readable = readable;
+            this.writable = writable;
+            this.executable = executable;
+            this.hidden = hidden;
+        }
+
+        public String getPath() {
+            return path;
+        }
+
+        public long getLastModified() {
+            return lastModified;
+        }
+
+        public long getSize() {
+            return size;
+        }
+
+        public boolean isReadable() {
+            return readable;
+        }
+
+        public boolean isWritable() {
+            return writable;
+        }
+
+        public boolean isExecutable() {
+            return executable;
+        }
+
+        public boolean isHidden() {
+            return hidden;
+        }
+    }
 
     private final ScriptRuntime mRuntime;
 
@@ -54,6 +110,29 @@ public class Files {
         return mRuntime.engines.myEngine().cwd();
     }
 
+    /**
+     * Auto.js Pro 的 `files.dirname(path)`：返回父目录（与 Pro 一致：不做 path() 归一化，
+     * 相对路径时行为等价于 `new File(path).getParent()`）。
+     */
+    public String dirname(String path) {
+        return new File(path).getParent();
+    }
+
+    /**
+     * Auto.js Pro 的 `files.stat(path)`：路径经 `path()` 归一化后取 canonicalPath（失败为 null）。
+     */
+    public FileStat stat(String path) {
+        String canonicalPath;
+        File file = new File(path(path));
+        try {
+            canonicalPath = file.getCanonicalPath();
+        } catch (IOException e) {
+            canonicalPath = null;
+        }
+        return new FileStat(canonicalPath, file.lastModified(), file.length(),
+                file.canRead(), file.canWrite(), file.canExecute(), file.isHidden());
+    }
+
     public PFileInterface open(String path, String mode, String encoding, int bufferSize) {
         return PFiles.open(path(path), mode, encoding, bufferSize);
     }
@@ -90,6 +169,41 @@ public class Files {
         return PFiles.ensureDir(path(path));
     }
 
+    public String read(InputStream stream) { return read(stream, "UTF-8"); }
+
+    public String read(InputStream stream, String encoding) {
+        try {
+            return new String(readBytes(stream), encoding);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } finally {
+            PFiles.closeSilently(stream);
+        }
+    }
+
+    /** Read to EOF: available() is not the length of a content-provider or network stream. */
+    public byte[] readBytes(InputStream stream) {
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = stream.read(buffer)) != -1) {
+                if (count > 0) output.write(buffer, 0, count);
+                else {
+                    int value = stream.read();
+                    if (value < 0) break;
+                    output.write(value);
+                }
+            }
+            return output.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    public void write(OutputStream stream, String text) { PFiles.write(stream, text); }
+
+    public void write(OutputStream stream, String text, String encoding) { PFiles.write(stream, text, encoding); }
     public String read(String path, String encoding) {
         return PFiles.read(path(path), encoding);
     }

@@ -25,7 +25,7 @@ endforeach()
 # Import the monolithic library on 32-bit ABIs and any split component
 # libraries present in the arm64 package.
 set(OPENCV_LIBS opencv_java5)
-set(OPENCV_OPTIONAL_LIBS opencv_imgproc opencv_core opencv_imgcodecs)
+set(OPENCV_OPTIONAL_LIBS opencv_imgproc opencv_core opencv_imgcodecs opencv_features opencv_flann opencv_geometry)
 foreach(_lib ${OPENCV_OPTIONAL_LIBS})
     if(EXISTS "${OPENCV_FLAT_DIR}/lib${_lib}.so")
         list(APPEND OPENCV_LIBS ${_lib})
@@ -42,14 +42,13 @@ add_library(quickjs SHARED
         ${QUICKJS_DIR}/quickjs.c
         ${QUICKJS_DIR}/dtoa.c
         ${QUICKJS_DIR}/libregexp.c
-        ${QUICKJS_DIR}/libunicode.c
-        ${QUICKJS_DIR}/cutils.c)
-
+        ${QUICKJS_DIR}/libunicode.c)
+        # 2026-09-24 版 quickjs-ng：cutils.c 已上游合并（头文件改 static inline），不再单独编译。
 target_include_directories(quickjs PUBLIC ${QUICKJS_DIR})
 target_compile_features(quickjs PRIVATE c_std_11)
 target_compile_definitions(quickjs PRIVATE
         _GNU_SOURCE
-        CONFIG_VERSION="2026-06-04")
+        CONFIG_VERSION="2026-09-24")
 target_compile_options(quickjs PRIVATE
         -fPIC
         -funsigned-char
@@ -62,17 +61,30 @@ target_link_libraries(quickjs PRIVATE log m)
 
 add_library(quickjs_jni SHARED
         quickjs_jni.cpp
-        native_frame_store.cpp)
+        native_frame_store.cpp
+        sift_matcher.cpp
+        xiangqi_board_detector.cpp
+        imgui_overlay.cpp
+        third_party/imgui/imgui.cpp
+        third_party/imgui/imgui_draw.cpp
+        third_party/imgui/imgui_tables.cpp
+        third_party/imgui/imgui_widgets.cpp
+        third_party/imgui/backends/imgui_impl_opengl3.cpp)
 target_compile_features(quickjs_jni PRIVATE cxx_std_17)
 target_include_directories(quickjs_jni PRIVATE
         ${QUICKJS_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
         ${OPENCV_INCLUDE_DIR})
-target_compile_definitions(quickjs_jni PRIVATE CONFIG_VERSION="2026-06-04")
+target_compile_definitions(quickjs_jni PRIVATE CONFIG_VERSION="2026-09-24")
+target_compile_definitions(quickjs_jni PRIVATE IMGUI_IMPL_OPENGL_ES3)
+if(TARGET opencv_features AND TARGET opencv_geometry AND TARGET opencv_flann)
+    target_compile_definitions(quickjs_jni PRIVATE AIJS_HAS_SIFT=1)
+endif()
 target_compile_options(quickjs_jni PRIVATE -fPIC -Wall -Wextra)
 target_link_options(quickjs_jni PRIVATE
         "-Wl,-z,max-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
-target_link_libraries(quickjs_jni PRIVATE quickjs ${OPENCV_LIBS} log dl)
+target_link_libraries(quickjs_jni PRIVATE quickjs ${OPENCV_LIBS} log dl GLESv3)
 
 # 脚本解密的原生实现：单独一个小 .so，不依赖 QuickJS/OpenCV，
 # 这样 Rhino 工程的产物不必为了解密把整个引擎加载起来。
@@ -104,10 +116,12 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     # PP-OCR 的检测框与透视裁剪要用（QuickJS 那条链不需要，所以只给 ppocr 加）。
     set(PPOCR_OPENCV_LIBS ${OPENCV_LIBS})
     if(EXISTS "${OPENCV_FLAT_DIR}/libopencv_geometry.so")
+        if(NOT TARGET opencv_geometry)
         add_library(opencv_geometry SHARED IMPORTED)
         set_target_properties(opencv_geometry PROPERTIES
                 IMPORTED_LOCATION "${OPENCV_FLAT_DIR}/libopencv_geometry.so"
                 IMPORTED_NO_SONAME TRUE)
+        endif()
         list(APPEND PPOCR_OPENCV_LIBS opencv_geometry)
     else()
         message(FATAL_ERROR "PP-OCR 需要 OpenCV geometry 模块：${OPENCV_FLAT_DIR}/libopencv_geometry.so 不存在")

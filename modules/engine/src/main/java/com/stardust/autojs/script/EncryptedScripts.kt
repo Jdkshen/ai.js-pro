@@ -54,7 +54,26 @@ object EncryptedScripts {
         if (!EncryptedScriptFileHeader.isValidFile(bytes)) {
             return null
         }
+        if (EncryptedScriptFileHeader.payloadTypeOf(EncryptedScriptFileHeader.readFlags(bytes))
+                == EncryptedScriptFileHeader.PAYLOAD_TYPE_SCRIPT_PACK) {
+            // 脚本容器（scripts.pack）不是可执行脚本：它由启动器解包，不能被当源码执行。
+            return null
+        }
         return sourceOf(bytes, name)
+    }
+
+    /**
+     * 解密「整个文件就是一份加密载荷」的容器（目录工程的 {@code scripts.pack}）。
+     *
+     * @return 解密后的原始字节；没有加密头（或只有头没有内容）时返回 null。
+     */
+    @JvmStatic
+    fun decryptPayload(bytes: ByteArray): ByteArray? {
+        if (bytes.size <= EncryptedScriptFileHeader.BLOCK_SIZE
+                || !EncryptedScriptFileHeader.isValidFile(bytes)) {
+            return null
+        }
+        return decryptBytes(bytes)
     }
 
     /**
@@ -84,13 +103,15 @@ object EncryptedScripts {
     private fun sourceOf(bytes: ByteArray, name: String): JavaScriptSource {
         val flags = EncryptedScriptFileHeader.readFlags(bytes)
         val plain = decryptBytes(bytes)
+        val executionMode = flags.toInt() and
+                (JavaScriptSource.EXECUTION_MODE_UI or JavaScriptSource.EXECUTION_MODE_AUTO)
         return when (EncryptedScriptFileHeader.payloadTypeOf(flags)) {
             EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS -> {
                 val payload = CompiledScriptPayload.read(plain)
-                CompiledJavaScriptSource(name, payload.className, payload.classBytes)
+                CompiledJavaScriptSource(name, payload.className, payload.classBytes, executionMode)
             }
             EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE ->
-                QuickJsBytecodeSource(name, plain)
+                QuickJsBytecodeSource(name, plain, executionMode)
             else -> StringScriptSource(name, String(plain, Charsets.UTF_8))
         }
     }

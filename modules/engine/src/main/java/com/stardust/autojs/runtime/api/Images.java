@@ -28,6 +28,7 @@ import com.stardust.autojs.core.image.ColorFinder;
 import com.stardust.autojs.core.image.ImageMetrics;
 import com.stardust.autojs.core.image.FeatureMatcher;
 import com.stardust.autojs.core.image.ImageFeatures;
+import com.stardust.autojs.core.image.SiftMatcher;
 import com.stardust.autojs.core.image.ImageWrapper;
 import com.stardust.autojs.core.image.ObjectFrame;
 import com.stardust.autojs.core.image.TemplateMatching;
@@ -37,6 +38,9 @@ import com.stardust.autojs.core.image.capture.AccessibilityScreenCapturer;
 import com.stardust.autojs.core.image.capture.AutoCapturePermissionActivity;
 import com.stardust.autojs.core.image.capture.AutoCapturePolicy;
 import com.stardust.autojs.core.image.capture.ScreenRecordingMonitor;
+import com.stardust.autojs.core.image.capture.SelectImageRequests;
+import com.stardust.autojs.core.eventloop.EventEmitter;
+import com.stardust.autojs.core.looper.Timer;
 import com.stardust.autojs.core.opencv.Mat;
 import com.stardust.autojs.core.opencv.OpenCVHelper;
 import com.stardust.autojs.core.ui.inflater.util.Drawables;
@@ -61,6 +65,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import com.stardust.autojs.core.image.capture.SharedCaptureRegistry;
 
 /**
  * Created by Stardust on 2017/5/20.
@@ -71,6 +76,8 @@ public class Images {
     private ScriptRuntime mScriptRuntime;
     private ScreenCaptureRequester mScreenCaptureRequester;
     private ScreenCapturer mScreenCapturer;
+    private static final SharedCaptureRegistry<SharedCaptureBackend> SHARED_CAPTURES = new SharedCaptureRegistry<>();
+    private SharedCaptureRegistry<SharedCaptureBackend>.Lease mSharedCapture;
     private boolean mAccessibilityCapture;
     private AutoCapturePolicy mAutoCapturePolicy;
     private ScreenRecordingMonitor mRecordingMonitor;
@@ -80,6 +87,16 @@ public class Images {
     private long mNextRecordingCheck;
     private Intent mPendingProjectionConsent;
     private Looper mAutoCaptureLooper;
+    /** `images.setImageCaptureCallback(fn)` 注册的 JS 回调（async 截图流）。 */
+    private Object mImageCaptureCallback;
+    /** QuickJS 引擎用的原始帧监听（不经 JS 回调；消费方负责 recycle）。 */
+    private RawImageCaptureListener mRawCaptureListener;
+    private ScreenCapturer.ScreenCaptureListener mAsyncCaptureListener;
+
+    /** QuickJS 等无 JS 回调能力的引擎：直接接收 ImageWrapper（所有权交给回调）。 */
+    public interface RawImageCaptureListener {
+        void onCaptureAvailable(ImageWrapper image);
+    }
     private Context mContext;
     private Image mPreCapture;
     private ImageWrapper mPreCaptureImage;
@@ -102,7 +119,18 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ScriptPromiseAdapter requestScreenCapture(int orientation) {
+        return requestScreenCapture(orientation, -1, -1, false);
+    }
+
+    /**
+     * 与 Auto.js Pro 9.3.11 的 `images.requestScreenCapture(options)` / `(width, height)` 同形：
+     * `width`/`height` &gt; 0 时按请求尺寸创建捕获面；`async` 时帧走
+     * {@link #setImageCaptureCallback(Object)} 的逐帧回调（对应 `images.on("screen_capture")`）。
+     */
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public synchronized ScriptPromiseAdapter requestScreenCapture(int orientation, int width, int height, boolean async) {
         ScriptRuntime.requiresApi(21);
+        if (mSharedCapture != null) releaseScreenCapturer();
         mScreenCaptureOrientation = orientation;
         mAutoCapturePolicy = null;        mRecordingMonitor = null;
         mPendingProjectionConsent = null;
@@ -111,6 +139,7 @@ public class Images {
         ScriptPromiseAdapter promiseAdapter = new ScriptPromiseAdapter();
         if (mScreenCapturer != null && !mScreenCapturer.isReleased()) {
             mScreenCapturer.setOrientation(orientation);
+            attachAsyncCaptureListener(mScreenCapturer, async);
             promiseAdapter.resolve(true);
             return promiseAdapter;
         }
@@ -124,7 +153,6 @@ public class Images {
             mPreCaptureImage.recycle();
             mPreCaptureImage = null;
         }
-        Looper servantLooper = mScriptRuntime.loopers.getServantLooper();
         mScreenCaptureRequester.setOnActivityResultCallback((result, data) -> {
             if (generation != mCaptureGeneration) {
                 promiseAdapter.resolve(false);
@@ -133,7 +161,8 @@ public class Images {
             if (result == Activity.RESULT_OK) {
                 try {
                     mScreenCapturer = new ScreenCapturer(mContext, data, orientation, ScreenMetrics.getDeviceScreenDensity(),
-                            new Handler(servantLooper));
+                            null, width, height, async);
+                    attachAsyncCaptureListener(mScreenCapturer, async);
                     promiseAdapter.resolve(true);
                 } catch (Exception error) {
                     promiseAdapter.reject(error);
@@ -147,11 +176,81 @@ public class Images {
     }
 
     /**
+     * 对齐 Pro：`images.setImageCaptureCallback(fn)` —— async 会话的逐帧回调（fn 在主线程/脚本线程接收 Image）。
+     * Pro 的 JS 层用它转发成 `images.emit("screen_capture", image)`。
+     */
+    public void setImageCaptureCallback(Object callback) {
+        mImageCaptureCallback = callback;
+        ScreenCapturer capturer = mScreenCapturer;
+        if (capturer != null && !capturer.isReleased() && capturer.isAsyncStream()) {
+            attachAsyncCaptureListener(capturer, true);
+        }
+    }
+
+    /** QuickJS 引擎用的内部帧监听；与 {@link #setImageCaptureCallback(Object)} 二选一。 */
+    public void setRawImageCaptureListener(RawImageCaptureListener listener) {
+        mRawCaptureListener = listener;
+        ScreenCapturer capturer = mScreenCapturer;
+        if (capturer != null && !capturer.isReleased() && capturer.isAsyncStream()) {
+            attachAsyncCaptureListener(capturer, true);
+        }
+    }
+
+    /** async 截图会话是否处于活动状态（QuickJS 轮询用）。 */
+    public boolean isAsyncScreenCaptureActive() {
+        ScreenCapturer capturer = mScreenCapturer;
+        return capturer != null && !capturer.isReleased() && capturer.isAsyncStream();
+    }
+
+    private void attachAsyncCaptureListener(final ScreenCapturer capturer, boolean async) {
+        if (!async) {
+            capturer.setCaptureListener(null);
+            return;
+        }
+        if (mAsyncCaptureListener == null) {
+            mAsyncCaptureListener = image -> {
+                final ImageWrapper wrapper;
+                try {
+                    wrapper = ImageWrapper.ofImage(image);
+                } finally {
+                    image.close();
+                }
+                if (wrapper == null) {
+                    return;
+                }
+                RawImageCaptureListener raw = mRawCaptureListener;
+                if (raw != null) {
+                    // QuickJS 通道：直接交帧，不再走 JS 回调
+                    raw.onCaptureAvailable(wrapper);
+                    return;
+                }
+                final Object callback = mImageCaptureCallback;
+                if (callback == null) {
+                    // 回调还没注册：回收这一帧，等注册后再生效（Pro 的 listener 也是后置注册的）
+                    wrapper.recycle();
+                    return;
+                }
+                // 投递到脚本线程（与 events/EventEmitter 同一条路）
+                mScriptRuntime.timers.getMainTimer().post(() -> {
+                    Object latest = mImageCaptureCallback;
+                    if (latest != null) {
+                        mScriptRuntime.bridges.callFunction(latest, null, new Object[]{wrapper});
+                    } else {
+                        wrapper.recycle();
+                    }
+                });
+            };
+        }
+        capturer.setCaptureListener(mAsyncCaptureListener);
+    }
+
+    /**
      * PDF §2.18.2 `$images.getScreenCaptureOptions()`（Pro 8.8.12 新增）：
      * 当前截图配置；**没申请过截图权限时返回 null**。
      */
     @ScriptInterface
-    public Object getScreenCaptureOptions() {
+    public synchronized Object getScreenCaptureOptions() {
+        if (mSharedCapture != null) return mSharedCapture.use(SharedCaptureBackend::options);
         ScreenCapturer capturer = mScreenCapturer;
         boolean projectionReady = capturer != null && !capturer.isReleased();
         // 无障碍（录屏兼容）截图通道没有 ScreenCapturer 对象，但同样算"已申请截图权限"
@@ -159,22 +258,79 @@ public class Images {
         if (!projectionReady && !accessibilityReady) {
             return null;
         }
-        Scriptable scope = mScriptRuntime.getTopLevelScope();
-        if (scope == null) {
-            return null;
+        if (projectionReady) {
+            return capturer.getOptions();
         }
         int orientation = mScreenCaptureOrientation;
-        org.mozilla.javascript.Context context = org.mozilla.javascript.Context.getCurrentContext();
-        Scriptable options = context.newObject(scope);
-        ScriptableObject.putProperty(options, "width",
-                ScreenMetrics.getOrientationAwareScreenWidth(orientation));
-        ScriptableObject.putProperty(options, "height",
-                ScreenMetrics.getOrientationAwareScreenHeight(orientation));
-        ScriptableObject.putProperty(options, "orientation", orientation);
-        ScriptableObject.putProperty(options, "density", ScreenMetrics.getDeviceScreenDensity());
-        // 本实现的截图都是同步取的（ScreenCapturer.capture 阻塞到拿到帧），所以固定 false
-        ScriptableObject.putProperty(options, "async", false);
-        return options;
+        return new ScreenCapturer.Options(
+                ScreenMetrics.getOrientationAwareScreenWidth(orientation),
+                ScreenMetrics.getOrientationAwareScreenHeight(orientation),
+                orientation, ScreenMetrics.getDeviceScreenDensity(), false);
+    }
+
+    /** Opt in to sharing the existing session, without reusing its consent Intent. */
+    public synchronized String shareScreenCapture() {
+        ScriptRuntime.requiresApi(21);
+        if (mSharedCapture != null) {
+            if (getScreenCaptureOptions() == null) throw new IllegalStateException("共享截图授权已经结束");
+            return mSharedCapture.token();
+        }
+        if (mAutoCapturePolicy != null) throw new IllegalStateException("自动切换截图通道暂不支持共享，请使用普通或无障碍截图");
+        if (getScreenCaptureOptions() == null) throw new IllegalStateException("请先成功申请截图权限");
+        if (mScreenCapturer != null && mScreenCapturer.isAsyncStream()) {
+            throw new IllegalStateException("异步截图流暂不支持共享，请使用同步截图");
+        }
+        SharedCaptureBackend backend = new SharedCaptureBackend(mScreenCapturer, mScreenCaptureOrientation);
+        mSharedCapture = SHARED_CAPTURES.publish(backend);
+        // Transfer ownership. Only the last lease is allowed to stop the projection.
+        mScreenCapturer = null;
+        mAccessibilityCapture = false;
+        return mSharedCapture.token();
+    }
+
+    /** Call before captureScreen in the child. A token is valid only in this app process. */
+    public synchronized boolean useSharedScreenCapture(String token) {
+        ScriptRuntime.requiresApi(21);
+        if (mSharedCapture != null && mSharedCapture.token().equals(token)) {
+            if (getScreenCaptureOptions() == null) throw new IllegalStateException("共享截图授权已经结束");
+            return true;
+        }
+        SharedCaptureRegistry<SharedCaptureBackend>.Lease lease = SHARED_CAPTURES.acquire(token);
+        try {
+            ScreenCapturer.Options options = lease.use(SharedCaptureBackend::options);
+            if (options == null) throw new IllegalStateException("共享截图授权已经结束");
+            releaseScreenCapturer();
+            mSharedCapture = lease;
+            mScreenCaptureOrientation = options.orientation;
+            return true;
+        } catch (RuntimeException error) {
+            lease.close();
+            throw error;
+        }
+    }
+
+    public synchronized boolean isSharedScreenCapture() { return mSharedCapture != null; }
+    public static int sharedScreenCaptureSessionCount() { return SHARED_CAPTURES.size(); }
+
+    private static final class SharedCaptureBackend implements AutoCloseable {
+        final ScreenCapturer projection;
+        final int orientation;
+        SharedCaptureBackend(ScreenCapturer projection, int orientation) {
+            this.projection = projection;
+            this.orientation = orientation;
+        }
+        ScreenCapturer.Options options() {
+            if (projection != null) return projection.isReleased() ? null : projection.getOptions();
+            if (!AccessibilityScreenCapturer.isAvailable()) return null;
+            return new ScreenCapturer.Options(ScreenMetrics.getOrientationAwareScreenWidth(orientation),
+                    ScreenMetrics.getOrientationAwareScreenHeight(orientation), orientation,
+                    ScreenMetrics.getDeviceScreenDensity(), false);
+        }
+        ImageWrapper capture(boolean fresh, long timeoutMillis) {
+            if (projection != null) return ImageWrapper.ofImage(projection.capture(fresh, timeoutMillis));
+            return ImageWrapper.ofBitmap(new AccessibilityScreenCapturer().capture(timeoutMillis));
+        }
+        @Override public void close() { if (projection != null) projection.release(); }
     }
 
     /**
@@ -184,6 +340,36 @@ public class Images {
     @ScriptInterface
     public void stopScreenCapture() {
         releaseScreenCapturer();
+    }
+
+    /**
+     * PDF §2.18.4 `images.select()`：弹出系统图片选择器（ACTION_GET_CONTENT）。
+     * 返回 EventEmitter：成功时依次触发 `process`（Uri）与 `result`（ImageWrapper），
+     * 取消/失败时 `result` 为 null；等待期间脚本保持唤醒（与 Pro 相同）。
+     */
+    @ScriptInterface
+    public EventEmitter select() {
+        final Timer timer = mScriptRuntime.timers.getTimerForCurrentThread();
+        final EventEmitter eventEmitter = new EventEmitter(mScriptRuntime.bridges, timer);
+        final int waitId = mScriptRuntime.loopers.waitWhenIdle();
+        final int requestId = SelectImageRequests.register((image, uri) -> timer.post(() -> {
+            if (uri != null) {
+                eventEmitter.emit("process", uri);
+            }
+            eventEmitter.emit("result", image);
+            timer.postDelayed(() -> mScriptRuntime.loopers.doNotWaitWhenIdle(waitId), 0);
+        }));
+        Intent intent = new Intent(SelectImageRequests.ACTION_SELECT_IMAGE);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        intent.putExtra(SelectImageRequests.EXTRA_REQUEST_ID, requestId);
+        try {
+            mContext.startActivity(intent);
+        } catch (Throwable e) {
+            SelectImageRequests.discard(requestId);
+            eventEmitter.emit("result", null);
+            timer.postDelayed(() -> mScriptRuntime.loopers.doNotWaitWhenIdle(waitId), 0);
+        }
+        return eventEmitter;
     }
 
     /**
@@ -208,11 +394,16 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean requestScreenCaptureBlocking(int orientation) {
+        return requestScreenCaptureBlocking(orientation, -1, -1, false);
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public boolean requestScreenCaptureBlocking(int orientation, int width, int height, boolean async) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             throw new IllegalStateException("Blocking screen capture permission cannot run on the main thread");
         }
         VolatileDispose<Boolean> result = new VolatileDispose<>();
-        requestScreenCapture(orientation)
+        requestScreenCapture(orientation, width, height, async)
                 .onResolve(value -> result.setAndNotify(Boolean.TRUE.equals(value)))
                 .onReject(error -> result.setAndNotify(false));
         return result.blockedGet();
@@ -329,6 +520,20 @@ public class Images {
         return mAccessibilityCapture;
     }
 
+    public boolean isWindowCaptureAvailable() {
+        return com.stardust.autojs.core.image.capture.WindowCapture.isAvailable();
+    }
+
+    public String listCaptureWindows() {
+        return com.stardust.autojs.core.image.capture.WindowCapture.list(mScriptRuntime.uiHandler.getContext());
+    }
+
+    public com.stardust.autojs.core.image.capture.WindowCapture.Frame captureWindow(
+            int windowId, String packageName, long timeout, boolean screenCoordinates) {
+        return com.stardust.autojs.core.image.capture.WindowCapture.capture(
+                mScriptRuntime.uiHandler.getContext(), windowId, packageName, timeout, screenCoordinates);
+    }
+
     public synchronized Bitmap captureAccessibilityScreen(long timeoutMillis) {
         if (!mAccessibilityCapture) throw new IllegalStateException("尚未选择录屏兼容截图通道");
         return new AccessibilityScreenCapturer().capture(timeoutMillis);
@@ -351,6 +556,7 @@ public class Images {
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized Image captureScreenRaw(boolean fresh, long timeoutMillis) {
         ScriptRuntime.requiresApi(21);
+        if (mSharedCapture != null) throw new IllegalStateException("共享截图必须使用独立图片，不能获取内部原始帧");
         if (mScreenCapturer == null) {
             throw new SecurityException("No screen capture permission");
         }
@@ -359,13 +565,19 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen() {
-        return captureScreen(false, mAccessibilityCapture || mAutoCapturePolicy != null
+        return captureScreen(false, mAccessibilityCapture || mAutoCapturePolicy != null || mSharedCapture != null
                 ? 2000 : ScreenCapturer.DEFAULT_CAPTURE_TIMEOUT_MILLIS);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen(boolean fresh, long timeoutMillis) {
         ScriptRuntime.requiresApi(21);
+        if (mSharedCapture != null) {
+            ImageWrapper image = mSharedCapture.use(backend -> backend.capture(fresh, timeoutMillis));
+            if (mPreCaptureImage != null) mPreCaptureImage.recycle();
+            mPreCaptureImage = image;
+            return image;
+        }
         prepareAutoCapture();
         if (mAccessibilityCapture) {
             Bitmap bitmap = captureAccessibilityScreen(timeoutMillis);
@@ -565,6 +777,11 @@ public class Images {
     }
 
     private void clearProjectionResources() {
+        if (mSharedCapture != null) {
+            SharedCaptureRegistry<SharedCaptureBackend>.Lease lease = mSharedCapture;
+            mSharedCapture = null;
+            lease.close();
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && mScreenCapturer != null) {
             mScreenCapturer.release();
             mScreenCapturer = null;
@@ -578,6 +795,7 @@ public class Images {
             mPreCaptureImage.recycle();
             mPreCaptureImage = null;
         }
+        mPreCapture = null;
     }
 
     public Point findImage(ImageWrapper image, ImageWrapper template) {
@@ -620,6 +838,23 @@ public class Images {
                 OpenCVHelper.release(src);
             }
         }
+    }
+
+    /** One-shot real SIFT API; paths are decoded directly without intermediate script image objects. */
+    public String matchSift(Object scene, Object template, String options) {
+        initOpenCvIfNeeded();
+        try (SiftMatcher matcher = new SiftMatcher(template, options)) {
+            return matcher.match(scene, options);
+        }
+    }
+
+    /** Cached template features; released by ScriptRuntime even if the script omits recycle(). */
+    public SiftMatcher createSiftMatcher(Object template, String options) {
+        initOpenCvIfNeeded();
+        SiftMatcher matcher = new SiftMatcher(template, options);
+        matcher.setOnClose(() -> mScriptRuntime.removeCleanable(matcher));
+        mScriptRuntime.addCleanable(matcher);
+        return matcher;
     }
 
     /**
@@ -687,6 +922,14 @@ public class Images {
     }
 
     public List<TemplateMatching.Match> matchTemplate(ImageWrapper image, ImageWrapper template, float weakThreshold, float threshold, Rect rect, int maxLevel, int limit) {
+        return matchTemplate(image, template, weakThreshold, threshold, rect, maxLevel, limit, false);
+    }
+
+    /**
+     * 与 Auto.js Pro 9.3.11 一致：`images.matchTemplate(..., {transparentMask: true})` 开启透明掩膜，
+     * 模板中全透明（alpha &lt;= 127）的像素不参与匹配；默认算法相应切换为 TM_CCORR_NORMED。
+     */
+    public List<TemplateMatching.Match> matchTemplate(ImageWrapper image, ImageWrapper template, float weakThreshold, float threshold, Rect rect, int maxLevel, int limit, boolean useTransparentMask) {
         initOpenCvIfNeeded();
         if (image == null)
             throw new NullPointerException("image = null");
@@ -699,7 +942,7 @@ public class Images {
                 src = new Mat(imageMat, rect);
             }
             List<TemplateMatching.Match> result = TemplateMatching.fastTemplateMatching(src, template.getMat(), Imgproc.TM_CCOEFF_NORMED,
-                    weakThreshold, threshold, maxLevel, limit);
+                    weakThreshold, threshold, maxLevel, limit, useTransparentMask);
             for (TemplateMatching.Match match : result) {
                 Point point = match.point;
                 if (rect != null) {

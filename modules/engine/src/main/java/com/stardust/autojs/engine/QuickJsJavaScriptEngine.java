@@ -121,6 +121,10 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         if (handle != 0) {
             QuickJsNativeBridge.requestInterrupt(handle);
         }
+        QuickJsHostBridge hostBridge = mHostBridge;
+        if (hostBridge != null) {
+            hostBridge.stopOwnPikafishSearch();
+        }
         Thread thread = mThread;
         if (thread != null) {
             thread.interrupt();

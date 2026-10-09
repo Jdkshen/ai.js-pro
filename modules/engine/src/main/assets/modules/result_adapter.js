@@ -85,7 +85,7 @@ ResultAdapter.wait = function (promise) {
     if (!proto || proto.constructor !== Promise) {
         promise = ResultAdapter.promise(promise);
     }
-    if (continuation.enabled) {
+    if (continuation.enabled && ui.isUiThread()) {
         return promise.await();
     } else {
         return promise.wait();

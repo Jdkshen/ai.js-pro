@@ -144,6 +144,12 @@ public abstract class AutoJs {
             public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
                 ScreenMetrics.initIfNeeded(activity);
                 mAppUtils.setCurrentActivity(activity);
+                mAppUtils.setTopActivity(activity);
+            }
+
+            @Override
+            public void onActivityStarted(Activity activity) {
+                mAppUtils.setTopActivity(activity);
             }
 
             @Override
@@ -154,6 +160,15 @@ public abstract class AutoJs {
             @Override
             public void onActivityResumed(Activity activity) {
                 mAppUtils.setCurrentActivity(activity);
+                mAppUtils.setTopActivity(activity);
+            }
+
+            @Override
+            public void onActivityDestroyed(Activity activity) {
+                // 与 Pro 一致：top activity 只在其自身被销毁时清空（重叠切换/透明 Activity 不影响）
+                if (mAppUtils.getTopActivity() == activity) {
+                    mAppUtils.setTopActivity(null);
+                }
             }
         });
     }

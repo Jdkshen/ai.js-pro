@@ -19,7 +19,7 @@ public class MainThreadProxy {
         mRuntime = runtime;
     }
 
-    public int setTimeout(Object callback, long delay, Object... args) {
+    public double setTimeout(Object callback, long delay, Object... args) {
         return getMainTimer().setTimeout(callback, delay, args);
     }
 
@@ -27,23 +27,23 @@ public class MainThreadProxy {
         return mRuntime.timers.getMainTimer();
     }
 
-    public boolean clearTimeout(int id) {
+    public boolean clearTimeout(double id) {
         return getMainTimer().clearTimeout(id);
     }
 
-    public int setInterval(Object listener, long interval, Object... args) {
+    public double setInterval(Object listener, long interval, Object... args) {
         return getMainTimer().setInterval(listener, interval, args);
     }
 
-    public boolean clearInterval(int id) {
+    public boolean clearInterval(double id) {
         return getMainTimer().clearInterval(id);
     }
 
-    public int setImmediate(Object listener, Object... args) {
+    public double setImmediate(Object listener, Object... args) {
         return getMainTimer().setImmediate(listener, args);
     }
 
-    public boolean clearImmediate(int id) {
+    public boolean clearImmediate(double id) {
         return getMainTimer().clearImmediate(id);
     }
 

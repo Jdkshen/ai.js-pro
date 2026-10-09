@@ -252,7 +252,8 @@ public class ColorMapping {
         }
         Object value = ScriptableObject.getProperty(options, name);
         if (value == null || value == Scriptable.NOT_FOUND
-                || value instanceof org.mozilla.javascript.Undefined) {
+                || value instanceof org.mozilla.javascript.Undefined
+                || "undefined".equals(String.valueOf(value))) {
             return null;
         }
         return value;

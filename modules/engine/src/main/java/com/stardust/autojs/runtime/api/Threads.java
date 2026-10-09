@@ -86,7 +86,11 @@ public class Threads {
      * @param maxPoolSize  最大线程数（小于核心线程数时按核心线程数处理）
      */
     public ScriptThreadPool createPool(int corePoolSize, int maxPoolSize) {
-        ScriptThreadPool pool = new ScriptThreadPool(this, corePoolSize, maxPoolSize);
+        return createPool(corePoolSize, maxPoolSize, 60000L);
+    }
+
+    public ScriptThreadPool createPool(int corePoolSize, int maxPoolSize, long keepAliveTime) {
+        ScriptThreadPool pool = new ScriptThreadPool(this, corePoolSize, maxPoolSize, keepAliveTime);
         synchronized (mPools) {
             if (mExit) {
                 throw new IllegalStateException("script exiting");

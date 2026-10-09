@@ -143,7 +143,8 @@ final class ZipSupport {
         if (value == null) {
             return null;
         }
-        if (value instanceof org.mozilla.javascript.Undefined) {
+        if (value instanceof org.mozilla.javascript.Undefined
+                || "undefined".equals(String.valueOf(value))) {
             return null;
         }
         return String.valueOf(value);

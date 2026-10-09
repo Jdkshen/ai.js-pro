@@ -14,6 +14,11 @@ public class TextViewAttributes extends ViewAttributes {
     @Override
     protected void onRegisterAttrs() {
         super.onRegisterAttrs();
+        // Read the live widget value, including XML defaults and changes made with setText().
+        registerAttr("text", () -> getView().getText().toString(),
+                value -> getView().setText(parseString(value)));
+        registerAttr("hint", () -> getView().getHint() == null ? "" : getView().getHint().toString(),
+                value -> getView().setHint(parseString(value)));
     }
 
     @Override

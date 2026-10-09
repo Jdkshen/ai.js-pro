@@ -18,33 +18,41 @@ public class Timer {
 
     private SparseArray<Runnable> mHandlerCallbacks = new SparseArray<>();
     private int mCallbackMaxId = 0;
+    private final int mTimerId;
     private ScriptRuntime mRuntime;
     private Handler mHandler;
     private long mMaxCallbackUptimeMillis = 0;
     private final VolatileBox<Long> mMaxCallbackMillisForAllThread;
 
     public Timer(ScriptRuntime runtime, VolatileBox<Long> maxCallbackMillisForAllThread) {
-        mRuntime = runtime;
-        mMaxCallbackMillisForAllThread = maxCallbackMillisForAllThread;
-        mHandler = new Handler();
+        this(runtime, maxCallbackMillisForAllThread, 0);
+    }
+
+    public Timer(ScriptRuntime runtime, VolatileBox<Long> maxCallbackMillisForAllThread, int timerId) {
+        this(runtime, maxCallbackMillisForAllThread, Looper.myLooper(), timerId);
     }
 
     public Timer(ScriptRuntime runtime, VolatileBox<Long> maxCallbackMillisForAllThread, Looper looper) {
+        this(runtime, maxCallbackMillisForAllThread, looper, 0);
+    }
+
+    public Timer(ScriptRuntime runtime, VolatileBox<Long> maxCallbackMillisForAllThread, Looper looper, int timerId) {
+        mTimerId = timerId;
         mRuntime = runtime;
         mMaxCallbackMillisForAllThread = maxCallbackMillisForAllThread;
         mHandler = new Handler(looper);
     }
 
-    public int setTimeout(final Object callback, final long delay, final Object... args) {
-        mCallbackMaxId++;
-        final int id = mCallbackMaxId;
+    public synchronized double setTimeout(final Object callback, final long delay, final Object... args) {
+        if (mCallbackMaxId == Integer.MAX_VALUE) throw new IllegalStateException("Too many callbacks");
+        final int id = ++mCallbackMaxId;
         Runnable r = () -> {
             callFunction(callback, null, args);
-            mHandlerCallbacks.remove(id);
+            synchronized (Timer.this) { mHandlerCallbacks.remove(id); }
         };
         mHandlerCallbacks.put(id, r);
         postDelayed(r, delay);
-        return id;
+        return TimerId.encode(mTimerId, id);
     }
 
     private void callFunction(Object callback, Object thiz, Object[] args) {
@@ -59,25 +67,28 @@ public class Timer {
         }
     }
 
-    public boolean clearTimeout(int id) {
-        return clearCallback(id);
+    public synchronized boolean clearTimeout(double id) {
+        return clearCallback(TimerId.callbackId(id, mTimerId));
     }
 
-    public int setInterval(final Object listener, final long interval, final Object... args) {
-        mCallbackMaxId++;
-        final int id = mCallbackMaxId;
+    public synchronized double setInterval(final Object listener, final long interval, final Object... args) {
+        if (mCallbackMaxId == Integer.MAX_VALUE) throw new IllegalStateException("Too many callbacks");
+        final int id = ++mCallbackMaxId;
         final Runnable r = new Runnable() {
             @Override
             public void run() {
-                if (mHandlerCallbacks.get(id) == null)
-                    return;
+                synchronized (Timer.this) {
+                    if (mHandlerCallbacks.get(id) == null) return;
+                }
                 callFunction(listener, null, args);
-                postDelayed(this, interval);
+                synchronized (Timer.this) {
+                    if (mHandlerCallbacks.get(id) != null) postDelayed(this, interval);
+                }
             }
         };
         mHandlerCallbacks.put(id, r);
         postDelayed(r, interval);
-        return id;
+        return TimerId.encode(mTimerId, id);
     }
 
     public void postDelayed(Runnable r, long interval) {
@@ -90,34 +101,34 @@ public class Timer {
     }
 
     public void post(Runnable r) {
-
+        postDelayed(r, 0);
     }
 
-    public boolean clearInterval(int id) {
-        return clearCallback(id);
+    public synchronized boolean clearInterval(double id) {
+        return clearCallback(TimerId.callbackId(id, mTimerId));
     }
 
-    public int setImmediate(final Object listener, final Object... args) {
-        mCallbackMaxId++;
-        final int id = mCallbackMaxId;
+    public synchronized double setImmediate(final Object listener, final Object... args) {
+        if (mCallbackMaxId == Integer.MAX_VALUE) throw new IllegalStateException("Too many callbacks");
+        final int id = ++mCallbackMaxId;
         Runnable r = () -> {
             callFunction(listener, null, args);
-            mHandlerCallbacks.remove(id);
+            synchronized (Timer.this) { mHandlerCallbacks.remove(id); }
         };
         mHandlerCallbacks.put(id, r);
         postDelayed(r, 0);
-        return id;
+        return TimerId.encode(mTimerId, id);
     }
 
-    public boolean clearImmediate(int id) {
-        return clearCallback(id);
+    public synchronized boolean clearImmediate(double id) {
+        return clearCallback(TimerId.callbackId(id, mTimerId));
     }
 
     private boolean clearCallback(int id) {
         Runnable callback = mHandlerCallbacks.get(id);
         if (callback != null) {
             mHandler.removeCallbacks(callback);
-            mHandlerCallbacks.remove(id);
+            synchronized (Timer.this) { mHandlerCallbacks.remove(id); }
             return true;
         }
         return false;
@@ -127,8 +138,9 @@ public class Timer {
         return mMaxCallbackUptimeMillis > SystemClock.uptimeMillis();
     }
 
-    public void removeAllCallbacks() {
+    public synchronized void removeAllCallbacks() {
         mHandler.removeCallbacksAndMessages(null);
+        mHandlerCallbacks.clear();
     }
 
 }

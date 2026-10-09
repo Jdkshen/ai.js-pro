@@ -53,7 +53,10 @@ public class MutableOkHttp extends OkHttpClient {
                 .writeTimeout(getTimeout(), TimeUnit.MILLISECONDS)
                 .connectTimeout(getTimeout(), TimeUnit.MILLISECONDS);
         for (Interceptor interceptor : getInterceptors()) {
-            builder.addInterceptor(interceptor);
+            // newBuilder() already contains this client's interceptors.
+            if (!builder.interceptors().contains(interceptor)) {
+                builder.addInterceptor(interceptor);
+            }
         }
         return builder.build();
     }

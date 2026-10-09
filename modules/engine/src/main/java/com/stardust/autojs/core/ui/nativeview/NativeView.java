@@ -9,6 +9,7 @@ import com.stardust.autojs.core.ui.JsViewHelper;
 import com.stardust.autojs.core.ui.ViewExtras;
 import com.stardust.autojs.core.ui.attribute.ViewAttributes;
 import com.stardust.autojs.core.web.InjectableWebClient;
+import com.stardust.autojs.rhino.ArrowFunctionSupport;
 import com.stardust.autojs.rhino.NativeJavaObjectWithPrototype;
 
 import org.mozilla.javascript.BaseFunction;
@@ -51,6 +52,8 @@ public class NativeView extends NativeJavaObjectWithPrototype {
     private final ViewAttributes mViewAttributes;
     private final View mView;
     private final ViewPrototype mViewPrototype;
+    /** 已做过"箭头参数适配"的方法对象缓存（按成员名）。 */
+    private final java.util.HashMap<String, Object> mAdaptedMembers = new java.util.HashMap<>();
 
     public NativeView(Scriptable scope, View view, Class<?> staticType, com.stardust.autojs.runtime.ScriptRuntime runtime) {
         super(scope, view, staticType);
@@ -79,7 +82,21 @@ public class NativeView extends NativeJavaObjectWithPrototype {
             return member;
         }
         if (super.has(name, start)) {
-            return super.get(name, start);
+            Object member = super.get(name, start);
+            if (member instanceof Function && (name.contains("Listener")
+                    || name.equals("post") || name.equals("postDelayed")
+                    || name.equals("postOnAnimation") || name.equals("postOnAnimationDelayed")
+                    || name.equals("removeCallbacks"))) {
+                // 箭头函数无法被 Rhino fork 转成 Java interface（见 ArrowFunctionSupport）：
+                // 包一层把箭头参数适配成 NativeFunction，缓存到本 view。
+                Object cached = mAdaptedMembers.get(name);
+                if (cached == null) {
+                    cached = new AdaptedFunction((Function) member);
+                    mAdaptedMembers.put(name, cached);
+                }
+                return cached;
+            }
+            return member;
         } else {
             View view = JsViewHelper.findViewByStringId(mView, name);
             if (view != null) {
@@ -125,6 +142,35 @@ public class NativeView extends NativeJavaObjectWithPrototype {
         @Override
         public String getFunctionName() {
             return SET_WEB_VIEW_CLIENT;
+        }
+    }
+
+    /**
+     * 方法对象的转发包装：调用时把箭头函数参数适配成 NativeFunction，
+     * 使其能被 Rhino fork 的 interface 转换接受（见 {@link ArrowFunctionSupport}）。
+     */
+    private static class AdaptedFunction extends BaseFunction {
+
+        private static final long serialVersionUID = 1L;
+
+        private final Function mOriginal;
+
+        AdaptedFunction(Function original) {
+            mOriginal = original;
+            setParentScope(original.getParentScope());
+            setPrototype(original.getPrototype());
+        }
+
+        @Override
+        public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
+            return mOriginal.call(cx, scope, thisObj,
+                    ArrowFunctionSupport.adaptArguments(cx, thisObj != null ? thisObj : scope, args));
+        }
+
+        @Override
+        public Scriptable construct(Context cx, Scriptable scope, Object[] args) {
+            return mOriginal.construct(cx, scope,
+                    ArrowFunctionSupport.adaptArguments(cx, scope, args));
         }
     }
 

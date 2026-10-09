@@ -638,8 +638,13 @@ bool NativeFrameStore::findImage(int64_t sourceHandle, int64_t templateHandle, d
         return false;
     }
     if (templ->cols > width || templ->rows > height) {
-        // 模板比搜索区域大：按「未找到」处理（返回 false、不报错），
-        // 与 Auto.js 的 findImage 语义一致，也与 QuickJS 示例的预期一致。
+        // 模板比搜索区域大：报错（与 Rhino 引擎同文案；反汇编 Pro 9 旧实现确认该路径同样抛异常，
+        // 不是「返回未找到」——9/12 改成 null 是一次误改）。
+        if (error != nullptr) {
+            *error = "Template " + std::to_string(templ->cols) + "x" + std::to_string(templ->rows) +
+                     " is larger than source/search region " + std::to_string(width) + "x" +
+                     std::to_string(height);
+        }
         return false;
     }
 
@@ -666,7 +671,8 @@ bool NativeFrameStore::findImage(int64_t sourceHandle, int64_t templateHandle, d
 
 bool NativeFrameStore::matchTemplate(
         int64_t sourceHandle, int64_t templateHandle, double threshold, int maxMatches,
-        int x, int y, int width, int height, std::vector<NativeFramePoint> *matches,
+        int x, int y, int width, int height, bool useTransparentMask,
+        std::vector<NativeFramePoint> *matches,
         std::string *error) const {
     const auto source = get(sourceHandle);
     const auto templ = get(templateHandle);
@@ -679,7 +685,12 @@ bool NativeFrameStore::matchTemplate(
         return false;
     }
     if (templ->cols > width || templ->rows > height) {
-        // 同上：模板比区域大 = 没有匹配项，不当作错误
+        // 同上：与 Rhino 同文案（Pro 该路径同样抛异常）
+        if (error != nullptr) {
+            *error = "Template " + std::to_string(templ->cols) + "x" + std::to_string(templ->rows) +
+                     " is larger than source/search region " + std::to_string(width) + "x" +
+                     std::to_string(height);
+        }
         return false;
     }
     try {
@@ -690,7 +701,17 @@ bool NativeFrameStore::matchTemplate(
         cv::cvtColor((*source)(cv::Rect(x, y, width, height)), sourceRgb, cv::COLOR_RGBA2RGB);
         cv::cvtColor(*templ, templateRgb, cv::COLOR_RGBA2RGB);
         cv::Mat scores;
-        cv::matchTemplate(sourceRgb, templateRgb, scores, cv::TM_CCOEFF_NORMED);
+        if (useTransparentMask && templ->channels() >= 4) {
+            // 与 Pro 的 createTransparentMask 同语义：alpha 通道阈值 127 二值化成 0/1 掩膜；
+            // 开启掩膜时默认算法切换为 OpenCV 支持掩膜的 TM_CCORR_NORMED
+            cv::Mat alpha;
+            cv::extractChannel(*templ, alpha, 3);
+            cv::Mat mask;
+            cv::threshold(alpha, mask, 127, 1.0, cv::THRESH_BINARY);
+            cv::matchTemplate(sourceRgb, templateRgb, scores, cv::TM_CCORR_NORMED, mask);
+        } else {
+            cv::matchTemplate(sourceRgb, templateRgb, scores, cv::TM_CCOEFF_NORMED);
+        }
         for (int index = 0; index < maxMatches; ++index) {
             double maxScore = 0.0;
             cv::Point maxLocation;

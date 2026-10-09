@@ -74,6 +74,7 @@ public:
                    NativeFramePoint *point, std::string *error) const;
     bool matchTemplate(int64_t sourceHandle, int64_t templateHandle, double threshold,
                        int maxMatches, int x, int y, int width, int height,
+                       bool useTransparentMask,
                        std::vector<NativeFramePoint> *matches, std::string *error) const;
 
     // ---- 调试统计 ----

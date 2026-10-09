@@ -24,7 +24,7 @@ import static org.junit.Assert.*;
 public class ScriptThreadProcTest {
     @Test
     public void chineseWorkerPathLeavesNativeProcNameValid() throws Exception {
-        String path = "/sdcard/QuickJS 新引擎/项目与打包/象棋自动走棋/控制/worker.js";
+        String path = "/sdcard/脚本/象棋自动走棋/控制/worker.js";
         for (int run = 0; run < 32; run++) {
             RunnableScriptExecution execution = new RunnableScriptExecution(null, null) {
                 @Override

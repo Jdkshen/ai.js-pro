@@ -536,6 +536,8 @@ module.exports = function (runtime, global) {
         return Widget;
     })();
 
+    require("ui-accessibility")(ui, global);
+
     var proxy = runtime.ui;
     proxy.__proxy__ = {
         set: function (name, value) {

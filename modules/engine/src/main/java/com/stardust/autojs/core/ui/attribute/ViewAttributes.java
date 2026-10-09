@@ -199,6 +199,8 @@ public class ViewAttributes {
         registerAttr("backgroundTintMode", TINT_MODES::get,
                 bind(ViewCompat::setBackgroundTintMode, mView));
         registerAttr("clickable", Boolean::parseBoolean, mView::setClickable);
+        registerAttr("enabled", () -> Boolean.toString(mView.isEnabled()),
+                value -> mView.setEnabled(Boolean.parseBoolean(value)));
         registerAttr("checked", Boolean::parseBoolean, this::setChecked);
         registerAttr("contentDescription", this::parseString, mView::setContentDescription);
         registerAttr("contextClickable", Boolean::parseBoolean, this::setContextClickable);

@@ -134,6 +134,63 @@ public class Crypto {
     }
 
     // ------------------------------------------------------------------
+    // Auto.js Pro 9.3.11 的 `Crypto.toHex/fromHex`（原实现见 core/cypto/Crypto.java）：
+    //   fromHex(value): 要求偶数长度（否则 IllegalArgumentException "input array length must even."），
+    //                   非法字符抛 "char: x"
+    //   toHex(value):   输出小写十六进制
+    // ------------------------------------------------------------------
+
+    @ScriptInterface
+    public byte[] fromHex(String value) {
+        if (value == null) {
+            throw new NullPointerException("value");
+        }
+        if (value.length() % 2 != 0) {
+            throw new IllegalArgumentException("input array length must even.");
+        }
+        int length = value.length() / 2;
+        byte[] bytes = new byte[length];
+        for (int i = 0; i < length; i++) {
+            int index = i * 2;
+            bytes[i] = (byte) (singleHexToNumber(value.charAt(index)) * 16
+                    + singleHexToNumber(value.charAt(index + 1)));
+        }
+        return bytes;
+    }
+
+    @ScriptInterface
+    public String toHex(byte[] value) {
+        if (value == null) {
+            throw new NullPointerException("value");
+        }
+        StringBuilder sb = new StringBuilder(value.length * 2);
+        for (byte b : value) {
+            sb.append(HEX_DIGITS[(b & 0xF0) >>> 4]);
+            sb.append(HEX_DIGITS[b & 0x0F]);
+        }
+        return sb.toString();
+    }
+
+    /** 便捷重载：字符串按 UTF-8 编码后转十六进制（Pro 只收 byte[]，这里是额外的入口）。 */
+    @ScriptInterface
+    public String toHex(String value) {
+        return toHex(value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
+
+    private static int singleHexToNumber(char c) {
+        char lower = Character.toLowerCase(c);
+        if (lower >= '0' && lower <= '9') {
+            return lower - '0';
+        }
+        if (lower >= 'a' && lower <= 'f') {
+            return lower - 'a' + 10;
+        }
+        throw new IllegalArgumentException("char: " + c);
+    }
+
+    // ------------------------------------------------------------------
     // Auto.js Pro 风格：$crypto.encrypt / $crypto.decrypt / $crypto.generateKeyPair
     //
     // 契约取自 335 页第一代 API 文档 2.8（第 73~80 页）：
@@ -154,7 +211,9 @@ public class Crypto {
         try {
             java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance(algorithm);
             int size = 0;
-            if (length != null && !(length instanceof org.mozilla.javascript.Undefined)) {
+            // `length` 省略时 Rhino 可能传 Undefined.instance、Undefined.SCRIPTABLE_UNDEFINED
+            // （后者不是 Undefined 类型但 toString 是 "undefined"）或 null，三种都要放过。
+            if (length != null && !isUndefined(length)) {
                 size = toInt(length);
             }
             if (size > 0) {
@@ -164,6 +223,13 @@ public class Crypto {
         } catch (Exception e) {
             throw new RuntimeException("generateKeyPair failed: " + e.getMessage());
         }
+    }
+
+    /** Rhino 的 undefined 可能是 `Undefined.instance`、`Undefined.SCRIPTABLE_UNDEFINED`（toString="undefined"）或 null。 */
+    private static boolean isUndefined(Object value) {
+        if (value == null) return true;
+        if (value instanceof org.mozilla.javascript.Undefined) return true;
+        return "undefined".equals(String.valueOf(value));
     }
 
     @ScriptInterface
@@ -379,7 +445,7 @@ public class Crypto {
 
     private byte[] toBytes(Object data, String input, String encoding) {
         data = unwrapJava(data);
-        if (data == null || data instanceof org.mozilla.javascript.Undefined) {
+        if (data == null || isUndefined(data)) {
             throw new RuntimeException("encrypt/decrypt 的 data 不能为空");
         }
         String charset = encoding == null || encoding.isEmpty() ? "utf-8" : encoding;

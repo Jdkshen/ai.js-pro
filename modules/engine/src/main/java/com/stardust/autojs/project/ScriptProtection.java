@@ -30,6 +30,16 @@ public final class ScriptProtection {
     /** 脚本存放位置：加密载荷嵌进产物里的原生库（{@code libaijscrypto.so} 尾部），产物中没有脚本文件。 */
     public static final String STORAGE_NATIVE = "native";
 
+    /**
+     * 目录工程「非入口脚本」的加密容器文件名（放在产物的 {@code assets/project/} 下）。
+     *
+     * <p>打包时除入口脚本外的所有 .js 会打成 zip、整体加密成这一个文件；运行端
+     * （{@code AssetsProjectLauncher.prepare()}）复制资产后先解密再展开到私有目录。
+     * 此前只有入口脚本受保护，{@code src/**}、{@code tools/**} 这类成百上千的脚本是
+     * 明文拷进 assets 的——解包 APK 就能读源码（2026-09-29 修复）。
+     */
+    public static final String SCRIPT_PACK_FILE = "scripts.pack";
+
     /** {@code project.json} 里没有 {@code scriptStorage} 字段时使用的位置。 */
     public static final String DEFAULT_STORAGE = STORAGE_ASSETS;
 

@@ -2,6 +2,16 @@
 module.exports = function (__runtime__, scope) {
     var threads = Object.create(__runtime__.threads);
 
+    // Old Rhino only converts NativeFunction to Runnable; arrow functions need a normal wrapper.
+    function asRunnable(task) {
+        if (typeof task !== 'function') return task;
+        return function () { task(); };
+    }
+    Object.defineProperty(threads, 'start', {
+        value: function (task) { return __runtime__.threads.start(asRunnable(task)); },
+        writable: true, configurable: true, enumerable: true
+    });
+
 
     scope.sync = function (func, lock) {
         lock = lock || null;
@@ -22,14 +32,16 @@ module.exports = function (__runtime__, scope) {
         if (isNaN(max) || max < core) {
             max = core;
         }
-        var javaPool = __runtime__.threads.createPool(core, max);
+        var keepAlive = options.keepAliveTime === undefined ? 60000 : Number(options.keepAliveTime);
+        if (!isFinite(keepAlive) || keepAlive < 0) throw new RangeError("keepAliveTime must be nonnegative");
+        var javaPool = __runtime__.threads.createPool(core, max, keepAlive);
         var pool = {
             __javaPool: javaPool,
             execute: function (task) {
                 if (typeof task !== 'function') {
                     throw new TypeError('线程池任务必须是函数');
                 }
-                javaPool.execute(task);
+                javaPool.execute(asRunnable(task));
                 return pool;
             },
             shutdown: function () {
@@ -45,6 +57,7 @@ module.exports = function (__runtime__, scope) {
         Object.defineProperty(pool, 'corePoolSize', { get: function () { return javaPool.getCorePoolSize(); } });
         Object.defineProperty(pool, 'maxPoolSize', { get: function () { return javaPool.getMaximumPoolSize(); } });
         Object.defineProperty(pool, 'poolSize', { get: function () { return javaPool.getPoolSize(); } });
+        Object.defineProperty(pool, 'keepAliveTime', { get: function () { return javaPool.getKeepAliveTime(); } });
         Object.defineProperty(pool, 'activeCount', { get: function () { return javaPool.getActiveCount(); } });
         Object.defineProperty(pool, 'completedTaskCount', { get: function () { return javaPool.getCompletedTaskCount(); } });
         return pool;

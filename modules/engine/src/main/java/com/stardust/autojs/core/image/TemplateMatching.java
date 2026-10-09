@@ -71,6 +71,18 @@ public class TemplateMatching {
      * @return
      */
     public static List<Match> fastTemplateMatching(Mat img, Mat template, int matchMethod, float weakThreshold, float strictThreshold, int maxLevel, int limit) {
+        return fastTemplateMatching(img, template, matchMethod, weakThreshold, strictThreshold, maxLevel, limit, false);
+    }
+
+    /**
+     * 与 Auto.js Pro 9.3.11 的 `TemplateMatching.Options.useTransparentMask` 同语义：
+     * 模板带 alpha 通道时，全透明（alpha <= 127）的像素不参与匹配。
+     * 开启掩膜时若传入默认算法（TM_CCOEFF_NORMED），与 Pro 一样切换为 OpenCV 支持掩膜的 TM_CCORR_NORMED。
+     */
+    public static List<Match> fastTemplateMatching(Mat img, Mat template, int matchMethod, float weakThreshold, float strictThreshold, int maxLevel, int limit, boolean useTransparentMask) {
+        if (useTransparentMask && matchMethod == Imgproc.TM_CCOEFF_NORMED) {
+            matchMethod = Imgproc.TM_CCORR_NORMED;
+        }
         TimingLogger logger = new TimingLogger(LOG_TAG, "fast_tm");
         if (maxLevel == MAX_LEVEL_AUTO) {
             //自动选取金字塔层数
@@ -86,13 +98,18 @@ public class TemplateMatching {
             List<Match> currentMatchResult = new ArrayList<>();
             Mat src = getPyramidDownAtLevel(img, level);
             Mat currentTemplate = getPyramidDownAtLevel(template, level);
+            Mat mask = useTransparentMask ? createTransparentMask(currentTemplate) : null;
             // 如果在上一轮中没有匹配到图片，则考虑是否退出匹配
             if (previousMatchResult.isEmpty()) {
                 // 如果不是第一次匹配，并且不满足shouldContinueMatching的条件，则直接退出匹配
                 if (!isFirstMatching && !shouldContinueMatching(level, maxLevel)) {
+                    // 提前退出：本层的金字塔图与掩膜都要释放（原实现只 break，会漏掉下面的 release → 泄漏）
+                    if (mask != null) OpenCVHelper.release(mask);
+                    if (src != img) OpenCVHelper.release(src);
+                    if (currentTemplate != template) OpenCVHelper.release(currentTemplate);
                     break;
                 }
-                Mat matchResult = matchTemplate(src, currentTemplate, matchMethod);
+                Mat matchResult = matchTemplate(src, currentTemplate, matchMethod, mask);
                 getBestMatched(matchResult, currentTemplate, matchMethod, weakThreshold, currentMatchResult, limit, null);
                 OpenCVHelper.release(matchResult);
             } else {
@@ -100,11 +117,14 @@ public class TemplateMatching {
                     // 根据上一轮的匹配点，计算本次匹配的区域
                     Rect r = getROI(match.point, src, currentTemplate);
                     Mat m = new Mat(src, r);
-                    Mat matchResult = matchTemplate(m, currentTemplate, matchMethod);
+                    Mat matchResult = matchTemplate(m, currentTemplate, matchMethod, mask);
                     getBestMatched(matchResult, currentTemplate, matchMethod, weakThreshold, currentMatchResult, limit, r);
                     OpenCVHelper.release(m);
                     OpenCVHelper.release(matchResult);
                 }
+            }
+            if (mask != null) {
+                OpenCVHelper.release(mask);
             }
 
             if (src != img)
@@ -199,7 +219,34 @@ public class TemplateMatching {
     }
 
 
+    /**
+     * 与 Pro 的 `createTransparentMask` 同语义：取模板 alpha 通道，阈值 127 二值化成 0/1 掩膜。
+     * OpenCV 掩膜允许单通道（与模板同尺寸），与 Pro 的「BGR=1 + A=0/1 四通道」等价。
+     * 模板没有 alpha 通道时返回 null（退化：不启用掩膜）。
+     */
+    private static Mat createTransparentMask(Mat template) {
+        if (template == null || template.empty() || template.channels() < 4) {
+            return null;
+        }
+        Mat alpha = new Mat();
+        Mat binary = new Mat();
+        try {
+            Core.extractChannel(template, alpha, 3);
+            Imgproc.threshold(alpha, binary, 127, 1.0, Imgproc.THRESH_BINARY);
+            return binary;
+        } catch (org.opencv.core.CvException error) {
+            OpenCVHelper.release(binary);
+            return null;
+        } finally {
+            OpenCVHelper.release(alpha);
+        }
+    }
+
     private static Mat matchTemplate(Mat img, Mat temp, int match_method) {
+        return matchTemplate(img, temp, match_method, null);
+    }
+
+    private static Mat matchTemplate(Mat img, Mat temp, int match_method, Mat mask) {
         if (img == null || img.empty()) {
             throw new IllegalArgumentException("Source image is empty");
         }
@@ -221,7 +268,11 @@ public class TemplateMatching {
                 matchingTemplate = toGray(temp, "template");
             }
             result = new Mat(result_rows, result_cols, CvType.CV_32FC1);
-            Imgproc.matchTemplate(matchingImage, matchingTemplate, result, match_method);
+            if (mask == null) {
+                Imgproc.matchTemplate(matchingImage, matchingTemplate, result, match_method);
+            } else {
+                Imgproc.matchTemplate(matchingImage, matchingTemplate, result, match_method, mask);
+            }
             return result;
         } catch (org.opencv.core.CvException error) {
             OpenCVHelper.release(result);

@@ -1,7 +1,6 @@
 package com.stardust.autojs.core.image;
 
 import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.media.Image;
 import android.os.Build;
 
@@ -129,11 +128,31 @@ public class ImageWrapper {
 
     public int pixel(int x, int y) {
         ensureNotRecycled();
+        if (x < 0 || y < 0 || x >= mWidth || y >= mHeight) {
+            throw new ArrayIndexOutOfBoundsException("Point (" + x + ", " + y
+                    + ") out of bounds of " + mWidth + "x" + mHeight);
+        }
         if (mBitmap != null) {
             return mBitmap.getPixel(x, y);
         }
-        double[] channels = mMat.get(x, y);
-        return Color.argb((int) channels[3], (int) channels[0], (int) channels[1], (int) channels[2]);
+        // OpenCV indexes pixels by row, column; the script API takes x, y.
+        double[] channels = mMat.get(y, x);
+        if (channels == null) {
+            throw new IllegalStateException("No pixel at (" + x + ", " + y + ")");
+        }
+        switch (channels.length) {
+            case 1:
+                int gray = (int) channels[0];
+                return 0xff000000 | (gray << 16) | (gray << 8) | gray;
+            case 3:
+                return 0xff000000 | ((int) channels[0] << 16)
+                        | ((int) channels[1] << 8) | (int) channels[2];
+            case 4:
+                return ((int) channels[3] << 24) | ((int) channels[0] << 16)
+                        | ((int) channels[1] << 8) | (int) channels[2];
+            default:
+                throw new IllegalStateException("Unsupported image channel count: " + channels.length);
+        }
     }
 
     public Bitmap getBitmap() {

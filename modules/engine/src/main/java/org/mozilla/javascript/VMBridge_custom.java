@@ -5,18 +5,19 @@ import android.util.Log;
 
 import com.stardust.autojs.engine.RhinoJavaScriptEngine;
 
-import org.mozilla.javascript.jdk15.VMBridge_jdk15;
+// SPIKE(2026-10-05): 官方 Rhino 1.7.14.1 中 jdk15.VMBridge_jdk15 已更名为 jdk18.VMBridge_jdk18（钩子名 VMBridge_custom 不变）
+import org.mozilla.javascript.jdk18.VMBridge_jdk18;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
-public class VMBridge_custom extends VMBridge_jdk15 {
+public class VMBridge_custom extends VMBridge_jdk18 {
 
     private static final String LOG_TAG = "VMBridge_custom";
 
-    public VMBridge_custom() throws SecurityException, InstantiationException {
+    public VMBridge_custom() throws SecurityException {
     }
 
     @Override
@@ -73,9 +74,10 @@ public class VMBridge_custom extends VMBridge_jdk15 {
         } catch (InvocationTargetException var10) {
             throw Context.throwAsScriptRuntimeEx(var10);
         } catch (IllegalAccessException var11) {
-            throw Kit.initCause(new IllegalStateException(), var11);
+            // SPIKE(2026-10-05): 1.7.14.1 已移除 Kit.initCause，改用 Throwable 构造函数
+            throw new IllegalStateException(var11);
         } catch (InstantiationException var12) {
-            throw Kit.initCause(new IllegalStateException(), var12);
+            throw new IllegalStateException(var12);
         }
     }
 

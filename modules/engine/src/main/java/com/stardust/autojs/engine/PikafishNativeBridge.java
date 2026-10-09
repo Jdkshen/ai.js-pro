@@ -47,16 +47,24 @@ public final class PikafishNativeBridge {
     }
 
     /**
-     * 启动（或复用）引擎会话；已启动但参数变化时，在两次搜索之间重新设置 UCI 选项。
+     * 启动（或复用）引擎会话；已启动但参数变化时，在两次搜索之间重新设置 UCI 选项
+     * （Threads / Hash / Contempt / EvalFile）。
      *
      * @param evalFilePath NNUE 权重文件绝对路径
      * @param threads      搜索线程数（native 侧下限 1、默认 2）
      * @param hashMb       置换表 MB（native 侧下限 16、默认 64）
+     * @param contempt     避和倾向（自编译补丁选项；-200..200，0 = 关，正数 = 根方避开和棋线）
      */
-    public static native boolean nativeStart(String evalFilePath, int threads, int hashMb);
+    public static native boolean nativeStart(String evalFilePath, int threads, int hashMb, int contempt);
 
     /** 最近一次收到 readyok 确认的原生 Threads 值；未启动时为 0。 */
     public static native int nativeConfiguredThreads();
+
+    /**
+     * 启动时从 "uci" 回复抓到的选项行（每行一条 "option name ..."，换行分隔）。
+     * 未启动或旧 .so 为空串——调用方用 try/catch 包住即可。
+     */
+    public static native String nativeOptions();
 
     /**
      * 算一步棋（阻塞）。
@@ -64,14 +72,17 @@ public final class PikafishNativeBridge {
      * @param multiPv 同时分析的着法路数（1 = 只算最好的一手；&gt;1 用于避开排除表挑次优）
      * @return 所有带 pv 的 info 行 + bestmove 行（按行拼接）；失败时 "error: ..."
      */
-    public static native String nativeAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv);
+    public static native String nativeAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv, int depth);
 
     /** Search from a validated UCI position command with confirmed moves. */
     public static native String nativeAnalyzePosition(String positionCommand, long movetimeMs,
-                                                      long timeoutMs, int multiPv);
+                                                      long timeoutMs, int multiPv, int depth);
 
     /** 打断正在跑的搜索（go 会以 bestmove 正常收尾，analyze 随即返回）。 */
     public static native void nativeStop();
+
+    /** 仅当当前搜索由指定 Android 线程发起时停止；避免停掉其他脚本的搜索。 */
+    public static native boolean nativeStopForTid(int tid);
 
     /** 退出引擎线程并释放内存（幂等）。 */
     public static native void nativeQuit();

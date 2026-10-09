@@ -1,5 +1,6 @@
 package com.stardust.autojs.core.floaty;
 
+import android.content.Context;
 import android.graphics.PixelFormat;
 import android.os.Build;
 import android.view.Gravity;
@@ -23,7 +24,7 @@ public class RawWindow extends FloatyWindow {
 
     public interface RawFloaty {
 
-        View inflateWindowView(FloatyService service, ViewGroup parent);
+        View inflateWindowView(Context context, ViewGroup parent);
     }
 
     private VolatileDispose<RuntimeException> mInflateException = new VolatileDispose<>();
@@ -35,9 +36,9 @@ public class RawWindow extends FloatyWindow {
     }
 
     @Override
-    public void onCreate(FloatyService floatyService, WindowManager windowManager) {
+    public void onCreate(Context context, WindowManager windowManager) {
         try {
-            super.onCreate(floatyService, windowManager);
+            super.onCreate(context, windowManager);
         } catch (RuntimeException e) {
             mInflateException.setAndNotify(e);
             return;
@@ -46,9 +47,9 @@ public class RawWindow extends FloatyWindow {
     }
 
     @Override
-    protected View onCreateView(FloatyService floatyService) {
-        ViewGroup windowView = (ViewGroup) View.inflate(floatyService, R.layout.raw_window, null);
-        mContentView = mRawFloaty.inflateWindowView(floatyService, windowView);
+    protected View onCreateView(Context context) {
+        ViewGroup windowView = (ViewGroup) View.inflate(context, R.layout.raw_window, null);
+        mContentView = mRawFloaty.inflateWindowView(context, windowView);
         return windowView;
     }
 

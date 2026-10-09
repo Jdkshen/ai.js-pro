@@ -102,4 +102,18 @@ public class CompiledScriptPayloadTest {
         assertFalse(EncryptedScriptFileHeader.INSTANCE.readFlags(new byte[]{1, 2, 3})
                 != EncryptedScriptFileHeader.FLAG_INVALID_FILE);
     }
+
+    @Test
+    public void compiledSourcesKeepTheUiModeWithoutReadableSourceText() {
+        byte[] bytecode = new byte[]{1, 2, 3};
+        QuickJsBytecodeSource quickJs = new QuickJsBytecodeSource(
+                "main", bytecode, JavaScriptSource.EXECUTION_MODE_UI);
+        CompiledJavaScriptSource rhino = new CompiledJavaScriptSource(
+                "main", "CompiledMain", bytecode, JavaScriptSource.EXECUTION_MODE_UI);
+
+        assertEquals("", quickJs.getScript());
+        assertEquals("", rhino.getScript());
+        assertEquals(JavaScriptSource.EXECUTION_MODE_UI, quickJs.getExecutionMode());
+        assertEquals(JavaScriptSource.EXECUTION_MODE_UI, rhino.getExecutionMode());
+    }
 }

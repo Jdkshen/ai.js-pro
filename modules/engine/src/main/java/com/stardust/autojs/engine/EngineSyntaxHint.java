@@ -4,8 +4,10 @@ import org.mozilla.javascript.EvaluatorException;
 import org.mozilla.javascript.RhinoException;
 
 /**
- * Rhino 1.7.7 的词法分析器不认 ES6 模板字符串（反引号）：脚本里只要出现一处，
- * 编译期就报 {@code illegal character} —— 既看不出原因，也看不出「换个引擎就能跑」。
+ * 历史上 Rhino 1.7.7 的词法分析器不认 ES6 模板字符串（反引号），脚本里只要出现一处，
+ * 编译期就报 {@code illegal character}，看不出「换个引擎就能跑」；本仓库已升级到
+ * 官方 Rhino 1.7.14.1，模板字符串已原生支持，这条提示退化为兜底：含反引号的脚本若仍
+ * 编译失败，多半是命中了 Rhino 尚未支持的其它新语法（class / 展开 / for-of / 可选链等）。
  *
  * <p>这里在**保留原报错文本与行号**的前提下追加一句可操作的提示。判定只看
  * 「源码里有反引号 + 编译失败」，刻意不匹配具体报错文案：Rhino 在不同调用路径下
@@ -15,8 +17,9 @@ import org.mozilla.javascript.RhinoException;
 public final class EngineSyntaxHint {
 
     public static final String HINT =
-            "本脚本里有反引号（ES6 模板字符串），Rhino 引擎不支持；"
-                    + "可在脚本第一行加 // @engine quickjs 改用 QuickJS 引擎，或把反引号改写成字符串拼接";
+            "提示：Rhino 引擎解析这份脚本失败。"
+                    + "若脚本使用了 Rhino 尚未支持的新语法（如 class、展开、for-of、可选链），"
+                    + "可在脚本第一行加 // @engine quickjs 改用 QuickJS 引擎";
 
     private static final char BACKTICK = '`';
 

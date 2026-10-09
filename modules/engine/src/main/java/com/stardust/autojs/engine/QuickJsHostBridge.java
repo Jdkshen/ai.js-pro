@@ -3,6 +3,8 @@ package com.stardust.autojs.engine;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accessibilityservice.GestureDescription;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
@@ -21,6 +23,7 @@ import android.media.Image;
 import android.media.MediaPlayer;
 import android.media.MediaScannerConnection;
 import android.os.Build;
+import android.os.FileObserver;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -34,6 +37,7 @@ import com.stardust.autojs.core.accessibility.UiSelector;
 import com.stardust.autojs.core.http.MutableOkHttp;
 import com.stardust.autojs.core.inputevent.InputEventObserver;
 import com.stardust.autojs.core.inputevent.TouchObserver;
+import com.stardust.autojs.core.io.ScriptFileObserver;
 import com.stardust.autojs.core.database.Database;
 import com.stardust.autojs.core.database.DatabaseResultSet;
 import com.stardust.autojs.core.image.ImageWrapper;
@@ -44,6 +48,7 @@ import com.stardust.autojs.runtime.api.OCRResult;
 import com.stardust.autojs.runtime.api.PPOcr;
 import com.stardust.autojs.runtime.api.Ocr;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
+import com.stardust.autojs.runtime.api.Files;
 import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.autojs.runtime.api.Yolo;
 import com.stardust.automator.UiGlobalSelector;
@@ -86,6 +91,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.Headers;
@@ -112,9 +118,7 @@ final class QuickJsHostBridge implements AutoCloseable,
      * OCR 的复用位图（每帧 1080×2400 就是 10MB，每帧新建 + 回收会让 GC 一直响）。
      * 尺寸没变就复用；尺寸变了才重新分配（并把旧的回收）。
      */
-    private Bitmap mOcrScratchBitmap;
-    private int mOcrScratchWidth;
-    private int mOcrScratchHeight;
+    private final OcrImageBuffer mOcrImageBuffer = new OcrImageBuffer();
     private final MutableOkHttp mHttpClient = new MutableOkHttp();
     private final ArrayBlockingQueue<String> mSystemEventQueue = new ArrayBlockingQueue<>(256);
     // Shared event bus across all QuickJS engines (parent + workers). Each engine
@@ -126,15 +130,40 @@ final class QuickJsHostBridge implements AutoCloseable,
     private final Set<String> mSharedBusSubscriptions = ConcurrentHashMap.newKeySet();
     private final Object mSystemEventLock = new Object();
     private volatile long mEngineHandle;
+    /** 当前阻塞在 Pikafish 搜索中的脚本线程 TID；由 forceStop 跨线程读取。 */
+    private volatile int mPikafishAnalyzeTid;
+    private volatile boolean mScriptStopRequested;
     private ByteBuffer mAccessibilityPixels;
     private boolean mLoggedAccessibilityPath;
     private boolean mObservingKeys;
     private boolean mObservingNotifications;
     private boolean mObservingToasts;
     private boolean mObservingGestures;
+    private volatile boolean mObservingFingerprintGestures;
+    private boolean mObservingClip;
     private TouchObserver mSystemTouchObserver;
     private long mLastSystemTouchMillis;
     private volatile long mSystemTouchTimeoutMillis = 10;
+    /** `files.observe` 句柄（QuickJS 没有 Rhino 的 waitWhenIdle，靠系统事件定时器保活）。 */
+    private final AtomicInteger mNextFileWatcherId = new AtomicInteger(1);
+    private final Map<Integer, FileWatcher> mFileWatchers = new ConcurrentHashMap<>();
+
+    /** 与 Rhino/Pro 一致：脚本订阅 `clip_changed` 后才会挂上这个监听。 */
+    private final ClipboardManager.OnPrimaryClipChangedListener mQuickJsClipListener = () -> {
+        ClipboardManager manager = clipboardManager();
+        if (manager == null) return;
+        ClipData clip = manager.getPrimaryClip();
+        if (clip == null) return;
+        CharSequence text = (clip.getItemCount() == 0 || clip.getItemAt(0) == null)
+                ? "" : clip.getItemAt(0).getText();
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("text", text == null ? "" : text.toString());
+            enqueueSystemEvent("clip", payload);
+        } catch (JSONException error) {
+            Log.w("QuickJsHostBridge", "Cannot serialize clip event", error);
+        }
+    };
 
     private final OnKeyListener mQuickJsKeyListener = new OnKeyListener() {
         @Override
@@ -204,6 +233,30 @@ final class QuickJsHostBridge implements AutoCloseable,
                 }
             };
 
+    private final com.stardust.view.accessibility.FingerprintGestureDispatcher.Listener mQuickJsFingerprintListener =
+            new com.stardust.view.accessibility.FingerprintGestureDispatcher.Listener() {
+                @Override
+                public void onFingerprintGesture(String direction) {
+                    enqueueFingerprintEvent("fingerprint_gesture", "direction", direction);
+                }
+
+                @Override
+                public void onFingerprintGestureAvailabilityChanged(boolean available) {
+                    enqueueFingerprintEvent("fingerprint_gesture_available", "available", available);
+                }
+            };
+
+    private void enqueueFingerprintEvent(String type, String key, Object value) {
+        if (!mObservingFingerprintGestures) return;
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put(key, value);
+            enqueueSystemEvent(type, payload);
+        } catch (JSONException error) {
+            Log.w("QuickJsHostBridge", "Cannot serialize fingerprint event", error);
+        }
+    }
+
     private static final class YoloSession {
         final String backend;
         final AutoCloseable detector;
@@ -214,12 +267,39 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
     }
 
+    /** `files.observe` 的一个监听句柄；observer 为 null 表示已 stopWatching（可再 start）。 */
+    private static final class FileWatcher {
+        final String path;
+        volatile FileObserver observer;
+
+        FileWatcher(String path) {
+            this.path = path;
+        }
+    }
+
     QuickJsHostBridge(ScriptRuntime runtime) {
         mRuntime = runtime;
+        QuickJsApiExtensions.install(runtime, this);
     }
 
     void attachEngine(long engineHandle) {
         mEngineHandle = engineHandle;
+    }
+
+    public String modernModulesScript() {
+        StringBuilder scripts = new StringBuilder();
+        String[] assets = { "modules/qjs-dialogs-compat.js", "modules/pro-modern-compat.js", "modules/pro-modern-platform.js", "modules/qjs-touch-capture.js", "modules/qjs-canvas.js", "modules/qjs-plugins.js", "modules/sift-api.js", "modules/ui-accessibility.js" };
+        for (String path : assets) {
+            try (InputStream input = mRuntime.uiHandler.getContext().getAssets().open(path);
+                 ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[4096]; int count;
+                while ((count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
+                scripts.append(bytes.toString("UTF-8")).append('\n');
+            } catch (IOException error) {
+                throw new IllegalStateException("Cannot load compatibility asset: " + path, error);
+            }
+        }
+        return scripts.toString();
     }
 
     public void console(int level, String message) {
@@ -246,6 +326,17 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (kind == null) throw new IllegalArgumentException("event observation kind is required");
         synchronized (mSystemEventLock) {
             switch (kind.toLowerCase(Locale.ROOT)) {
+                case "fingerprint_available":
+                    return com.stardust.view.accessibility.AccessibilityService.fingerprintGestureDispatcher.isAvailable();
+                case "fingerprint_gesture": {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
+                    if (mObservingFingerprintGestures) return true;
+                    requireAccessibilityService();
+                    mObservingFingerprintGestures = true;
+                    com.stardust.view.accessibility.AccessibilityService.fingerprintGestureDispatcher
+                            .addListener(mQuickJsFingerprintListener);
+                    return true;
+                }
                 case "key": {
                     if (mObservingKeys) return true;
                     com.stardust.view.accessibility.AccessibilityService service = requireAccessibilityService();
@@ -262,6 +353,13 @@ final class QuickJsHostBridge implements AutoCloseable,
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR2) return false;
                     NotificationListenerService service = NotificationListenerService.Companion.getInstance();
                     if (service == null) {
+                        // 与 Rhino 行为一致：跳系统“通知使用权”设置页引导开启；application context 必须带 NEW_TASK
+                        try {
+                            mRuntime.uiHandler.getContext().getApplicationContext().startActivity(
+                                    new android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+                        } catch (Exception ignored) {
+                        }
                         throw new IllegalStateException("Notification listener service is not enabled");
                     }
                     service.addListener(mQuickJsNotificationListener);
@@ -285,6 +383,14 @@ final class QuickJsHostBridge implements AutoCloseable,
                     }
                     service.getGestureEventDispatcher().addListener(mQuickJsGestureListener);
                     mObservingGestures = true;
+                    return true;
+                }
+                case "clip": {
+                    if (mObservingClip) return true;
+                    ClipboardManager manager = clipboardManager();
+                    if (manager == null) return false;
+                    manager.addPrimaryClipChangedListener(mQuickJsClipListener);
+                    mObservingClip = true;
                     return true;
                 }
                 case "touch": {
@@ -325,6 +431,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     public void eventsStopAll() {
         synchronized (mSystemEventLock) {
+            stopFingerprintObservation();
             com.stardust.view.accessibility.AccessibilityService accessibilityService =
                     mRuntime.accessibilityBridge.getService();
             if (accessibilityService != null) {
@@ -346,12 +453,126 @@ final class QuickJsHostBridge implements AutoCloseable,
                 mSystemTouchObserver.stop();
                 mSystemTouchObserver = null;
             }
+            if (mObservingClip) {
+                ClipboardManager manager = clipboardManager();
+                if (manager != null) {
+                    manager.removePrimaryClipChangedListener(mQuickJsClipListener);
+                }
+                mObservingClip = false;
+            }
             mObservingKeys = false;
             mObservingNotifications = false;
             mObservingToasts = false;
             mObservingGestures = false;
             mSystemEventQueue.clear();
         }
+    }
+
+    /**
+     * `events.removeListener`/`removeAllListeners` 把 clip_changed 的监听删空时，
+     * 停止底层剪贴板监听（与 Pro 的 listenerCount==0 → removePrimaryClipChangedListener 一致）。
+     */
+    public void eventsStopObserving(String kind) {
+        if (kind == null) return;
+        synchronized (mSystemEventLock) {
+            if ("fingerprint_gesture".equalsIgnoreCase(kind)) {
+                stopFingerprintObservation();
+                return;
+            }
+            if (!"clip".equalsIgnoreCase(kind)) return;
+            if (!mObservingClip) return;
+            ClipboardManager manager = clipboardManager();
+            if (manager != null) {
+                manager.removePrimaryClipChangedListener(mQuickJsClipListener);
+            }
+            mObservingClip = false;
+        }
+    }
+
+    private void stopFingerprintObservation() {
+        mObservingFingerprintGestures = false;
+        com.stardust.view.accessibility.AccessibilityService.fingerprintGestureDispatcher
+                .removeListener(mQuickJsFingerprintListener);
+        mSystemEventQueue.removeIf(raw -> raw.contains("\"type\":\"fingerprint_"));
+    }
+
+    private ClipboardManager clipboardManager() {
+        Context context = ScriptRuntime.getApplicationContext();
+        if (context == null) return null;
+        return (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+    }
+
+    /**
+     * `files.observe(path)`（对齐 Rhino 的 ScriptFileObserver）：返回监听句柄 id（失败 -1）。
+     * 事件经系统事件队列以 `file_observer` 派发，事件名与 Pro 的 fileEventToString 一致。
+     */
+    public int fileObserverNew(String path) {
+        if (path == null || path.isEmpty()) return -1;
+        try {
+            FileWatcher watcher = new FileWatcher(path);
+            watcher.observer = createFileObserver(mNextFileWatcherId.get(), path);
+            int id = mNextFileWatcherId.getAndIncrement();
+            mFileWatchers.put(id, watcher);
+            return id;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot observe path: " + path, error);
+            return -1;
+        }
+    }
+
+    public void fileObserverStart(int id) {
+        FileWatcher watcher = mFileWatchers.get(id);
+        if (watcher == null || watcher.observer != null) return;
+        try {
+            watcher.observer = createFileObserver(id, watcher.path);
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot restart file observation: " + watcher.path, error);
+        }
+    }
+
+    public void fileObserverStop(int id) {
+        FileWatcher watcher = mFileWatchers.get(id);
+        if (watcher == null) return;
+        FileObserver observer = watcher.observer;
+        if (observer != null) {
+            observer.stopWatching();
+            watcher.observer = null;
+        }
+    }
+
+    private FileObserver createFileObserver(final int id, String path) {
+        FileObserver observer = new FileObserver(path, FileObserver.ALL_EVENTS) {
+            @Override
+            public void onEvent(int event, @androidx.annotation.Nullable String relativePath) {
+                for (String name : ScriptFileObserver.eventNames(event)) {
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("id", id);
+                        payload.put("event", name);
+                        payload.put("path", relativePath == null ? JSONObject.NULL : relativePath);
+                        enqueueSystemEvent("file_observer", payload);
+                    } catch (JSONException error) {
+                        Log.w("QuickJsHostBridge", "Cannot serialize file observation event", error);
+                    }
+                }
+            }
+        };
+        observer.startWatching();
+        return observer;
+    }
+
+    private void closeFileObservers() {
+        for (FileWatcher watcher : new ArrayList<>(mFileWatchers.values())) {
+            FileObserver observer = watcher.observer;
+            if (observer != null) {
+                try {
+                    observer.stopWatching();
+                } catch (Throwable ignored) {
+                }
+                watcher.observer = null;
+            }
+        }
+        mFileWatchers.clear();
     }
 
     private com.stardust.view.accessibility.AccessibilityService requireAccessibilityService() {
@@ -500,6 +721,22 @@ final class QuickJsHostBridge implements AutoCloseable,
                 return mRuntime.crypto.base64Encode(arg1);
             case "base64Decode":
                 return mRuntime.crypto.base64Decode(arg1);
+            case "md5Base64": {
+                // WebSocket 二进制（web.ByteString.md5()）：arg1 为 base64，输出为字节的 MD5 十六进制
+                try {
+                    okio.ByteString bytes = okio.ByteString.decodeBase64(arg1 == null ? "" : arg1);
+                    byte[] digest = java.security.MessageDigest.getInstance("MD5")
+                            .digest(bytes == null ? new byte[0] : bytes.toByteArray());
+                    StringBuilder builder = new StringBuilder(digest.length * 2);
+                    for (byte b : digest) {
+                        builder.append(Character.forDigit((b >> 4) & 0xF, 16));
+                        builder.append(Character.forDigit(b & 0xF, 16));
+                    }
+                    return builder.toString();
+                } catch (Exception error) {
+                    throw new IllegalStateException("md5Base64 failed", error);
+                }
+            }
             default:
                 throw new IllegalArgumentException("crypto 不支持的方法: " + method);
         }
@@ -678,6 +915,103 @@ final class QuickJsHostBridge implements AutoCloseable,
         return images().requestScreenCaptureBlocking(normalizeOrientation(orientation));
     }
 
+    // ---- async 截图流（对齐 Pro 的 requestScreenCapture({async:true}) + screen_capture 事件）----
+    /** 最新的异步帧（只保留一帧，旧的直接回收）。 */
+    private volatile ImageWrapper mPendingAsyncFrame;
+    private final Images.RawImageCaptureListener mRawCaptureListener = wrapper -> {
+        ImageWrapper previous = mPendingAsyncFrame;
+        mPendingAsyncFrame = wrapper;
+        if (previous != null) previous.recycle();
+    };
+
+    /** 带 width/height/async 的申请（Pro 的 4 参版本）；async 时帧进入 takeAsyncScreenCaptureFrame()。 */
+    public String getScreenCaptureOptions() throws JSONException {
+        com.stardust.autojs.core.image.capture.ScreenCapturer.Options options = (com.stardust.autojs.core.image.capture.ScreenCapturer.Options) images().getScreenCaptureOptions();
+        if (options == null) return "null";
+        return new JSONObject().put("width", options.width).put("height", options.height)
+                .put("orientation", options.orientation).put("density", options.density).put("async", options.async).toString();
+    }
+
+    /** A real asynchronous permission request: its result returns through the engine task queue. */
+    public String requestScreenCaptureAsync(String optionsJson) throws JSONException {
+        JSONObject options = new JSONObject(optionsJson);
+        long callbackId = options.getLong("callbackId");
+        boolean async = options.optBoolean("async");
+        if (async) images().setRawImageCaptureListener(mRawCaptureListener);
+        try {
+            images().requestScreenCapture(normalizeOrientation(options.optInt("orientation", 0)),
+                    options.optInt("width", -1), options.optInt("height", -1), async)
+                    .onResolve(value -> {
+                        if (!Boolean.TRUE.equals(value) && async) images().setRawImageCaptureListener(null);
+                        postJsCallback(callbackId, new JSONArray().put(Boolean.TRUE.equals(value)).toString());
+                    })
+                    .onReject(error -> {
+                        if (async) images().setRawImageCaptureListener(null);
+                        try { postJsCallback(callbackId, new JSONArray().put(new JSONObject().put("error", String.valueOf(error))).toString()); }
+                        catch (JSONException impossible) { throw new IllegalStateException(impossible); }
+                    });
+            return "null";
+        } catch (RuntimeException error) {
+            if (async) images().setRawImageCaptureListener(null);
+            throw error;
+        }
+    }
+
+    public boolean requestScreenCaptureEx(int orientation, int width, int height, boolean async) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return false;
+        if (async) images().setRawImageCaptureListener(mRawCaptureListener);
+        try {
+            return images().requestScreenCaptureBlocking(normalizeOrientation(orientation), width, height, async);
+        } catch (RuntimeException error) {
+            if (async) images().setRawImageCaptureListener(null);
+            throw error;
+        }
+    }
+
+    /**
+     * async 截图流取帧：0=暂无帧，-1=会话已结束，&gt;0=NativeFrame 句柄。
+     * 帧在这里转成 NativeFrame（与 captureScreenNative 同一套 QuickJsNativeBridge 通道）。
+     */
+    public long takeAsyncScreenCaptureFrame() {
+        if (!images().isAsyncScreenCaptureActive()) {
+            recyclePendingAsyncFrame();
+            return -1;
+        }
+        ImageWrapper frame = mPendingAsyncFrame;
+        if (frame == null) return 0;
+        mPendingAsyncFrame = null;
+        long engineHandle = mEngineHandle;
+        if (engineHandle == 0) {
+            frame.recycle();
+            throw new IllegalStateException("QuickJS engine is not attached");
+        }
+        try {
+            android.graphics.Bitmap bitmap = frame.getBitmap();
+            if (mAccessibilityPixels == null || mAccessibilityPixels.capacity() < bitmap.getByteCount()) {
+                mAccessibilityPixels = ByteBuffer.allocateDirect(bitmap.getByteCount());
+            }
+            mAccessibilityPixels.clear();
+            bitmap.copyPixelsToBuffer(mAccessibilityPixels);
+            mAccessibilityPixels.rewind();
+            return QuickJsNativeBridge.createNativeFrame(engineHandle, mAccessibilityPixels,
+                    bitmap.getWidth(), bitmap.getHeight(), bitmap.getRowBytes(), 4, 0);
+        } finally {
+            frame.recycle();
+        }
+    }
+
+    public void imagesStopScreenCapture() {
+        recyclePendingAsyncFrame();
+        images().setRawImageCaptureListener(null);
+        images().stopScreenCapture();
+    }
+
+    private void recyclePendingAsyncFrame() {
+        ImageWrapper frame = mPendingAsyncFrame;
+        mPendingAsyncFrame = null;
+        if (frame != null) frame.recycle();
+    }
+
     public long captureScreenNative(int targetShortEdge, boolean fresh, int timeoutMillis) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             throw new UnsupportedOperationException("Screen capture requires Android 5.0 or newer");
@@ -687,6 +1021,22 @@ final class QuickJsHostBridge implements AutoCloseable,
             throw new IllegalStateException("QuickJS engine is not attached");
         }
         images().prepareAutoCapture();
+        if (images().isSharedScreenCapture()) {
+            ImageWrapper frame = images().captureScreen(fresh, timeoutMillis);
+            try {
+                Bitmap bitmap = frame.getBitmap();
+                if (mAccessibilityPixels == null || mAccessibilityPixels.capacity() < bitmap.getByteCount()) {
+                    mAccessibilityPixels = ByteBuffer.allocateDirect(bitmap.getByteCount());
+                }
+                mAccessibilityPixels.clear();
+                bitmap.copyPixelsToBuffer(mAccessibilityPixels);
+                mAccessibilityPixels.rewind();
+                return QuickJsNativeBridge.createNativeFrame(engineHandle, mAccessibilityPixels,
+                        bitmap.getWidth(), bitmap.getHeight(), bitmap.getRowBytes(), 4, targetShortEdge);
+            } finally {
+                frame.recycle();
+            }
+        }
         if (images().isAccessibilityScreenCapture()) {
             try (com.stardust.autojs.core.image.capture.AccessibilityScreenCapturer.HardwareFrame frame
                          = images().captureAccessibilityHardware(timeoutMillis)) {
@@ -741,6 +1091,34 @@ final class QuickJsHostBridge implements AutoCloseable,
                 plane.getPixelStride(),
                 targetShortEdge
         );
+    }
+
+    public boolean isWindowCaptureAvailable() { return images().isWindowCaptureAvailable(); }
+
+    public String listCaptureWindows() { return images().listCaptureWindows(); }
+
+    public String captureWindowNative(String optionsJson) throws JSONException {
+        JSONObject options = new JSONObject(optionsJson);
+        if (mEngineHandle == 0) throw new IllegalStateException("QuickJS engine is not attached");
+        com.stardust.autojs.core.image.capture.WindowCapture.Frame captured = images().captureWindow(
+                options.optInt("windowId", -1), options.optString("packageName", ""),
+                options.optLong("timeout", 2000), options.optBoolean("screenCoordinates", false));
+        try {
+            JSONObject metadata = new JSONObject(captured.metadata);
+            Bitmap bitmap = captured.image.getBitmap();
+            if (mAccessibilityPixels == null || mAccessibilityPixels.capacity() < bitmap.getByteCount()) {
+                mAccessibilityPixels = ByteBuffer.allocateDirect(bitmap.getByteCount());
+            }
+            mAccessibilityPixels.clear();
+            bitmap.copyPixelsToBuffer(mAccessibilityPixels);
+            mAccessibilityPixels.rewind();
+            long handle = QuickJsNativeBridge.createNativeFrame(mEngineHandle, mAccessibilityPixels,
+                    bitmap.getWidth(), bitmap.getHeight(), bitmap.getRowBytes(), 4, options.optInt("size", 0));
+            if (handle == 0) throw new IllegalStateException("窗口截图原生帧创建失败");
+            return metadata.put("handle", handle).toString();
+        } finally {
+            captured.image.recycle();
+        }
     }
 
     public String resolvePath(String path) {
@@ -867,7 +1245,8 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (rgba == null || width <= 0 || height <= 0) {
             throw new IllegalArgumentException("OCR 需要一张有效图像");
         }
-        Bitmap bitmap = ocrBitmapFor(width, height);
+        ImageWrapper image = mOcrImageBuffer.acquire(width, height);
+        Bitmap bitmap = image.getBitmap();
         // 位图以 ARGB_8888 存成 RGBA 字节序，和 native 侧的 CV_8UC4 一致。
         // 行连续（step == width*4，屏幕帧与 clip/read 出来的图都是）时直接从直接缓冲区拷贝，
         // 不走中间的 byte[] —— 1080×2400 下这就是每帧省一次 10MB 分配 + 一次 10MB 拷贝。
@@ -886,7 +1265,6 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
             bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));
         }
-        ImageWrapper image = ImageWrapper.ofBitmap(bitmap);
         int[] region = (regionWidth > 0 && regionHeight > 0)
                 ? new int[]{regionX, regionY, regionWidth, regionHeight}
                 : null;
@@ -916,28 +1294,17 @@ final class QuickJsHostBridge implements AutoCloseable,
         return array.toString();
     }
 
-    /** 拿（或重建）OCR 用的复用位图（只在本类内部使用，不交给脚本，所以不用管生命周期）。 */
-    private Bitmap ocrBitmapFor(int width, int height) {
-        if (mOcrScratchBitmap != null && mOcrScratchWidth == width && mOcrScratchHeight == height) {
-            return mOcrScratchBitmap;
-        }
-        Bitmap old = mOcrScratchBitmap;
-        mOcrScratchBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        mOcrScratchWidth = width;
-        mOcrScratchHeight = height;
-        if (old != null && !old.isRecycled()) {
-            old.recycle();
-        }
-        return mOcrScratchBitmap;
-    }
-
     /** `session.release()`：幂等（重复释放返回 false，与 Rhino 侧一致）。 */
     public boolean ocrRelease(long handle) {
         OcrSession session = mOcrSessions.remove(handle);
         if (session == null) {
             return false;
         }
-        session.release();
+        try {
+            session.release();
+        } finally {
+            if (mOcrSessions.isEmpty()) mOcrImageBuffer.close();
+        }
         return true;
     }
 
@@ -956,6 +1323,14 @@ final class QuickJsHostBridge implements AutoCloseable,
     private static final Pattern PIKAFISH_POSITION = Pattern.compile(
             "^position fen (?:[rnbakcpRNBAKCP1-9]+/){9}[rnbakcpRNBAKCP1-9]+ [wb] - - [0-9]+ [1-9][0-9]*"
                     + "(?: moves(?: [a-i][0-9][a-i][0-9]){1,512})?$");
+    /**
+     * `$pikafish.analyze` 的 FEN 校验：必须是完整六段（棋盘段 + 走棋方 + "- -" + 两个计数）。
+     *
+     * <p>⚠️ 只给棋盘段（缺 ` w - - 0 1`）会让 native 引擎解析非法局面、**把整个 App 进程静默带走**
+     * （2026-09-25 真机实测：无墓碑、无 ANR、无 FATAL、dropbox 无记录），所以这里在进 native 前就拦掉。
+     */
+    private static final Pattern PIKAFISH_FEN = Pattern.compile(
+            "^(?:[rnbakcpRNBAKCP1-9]+/){9}[rnbakcpRNBAKCP1-9]+ [wb] - - [0-9]+ [1-9][0-9]*$");
 
     /**
      * `$pikafish.start([options])`：启动（或复用）引擎会话。
@@ -963,9 +1338,11 @@ final class QuickJsHostBridge implements AutoCloseable,
      * @param evalFile NNUE 权重路径；null/空 = 依次找 filesDir / externalFilesDir 下的 pikafish.nnue
      * @param threads  搜索线程数（K40 上 2~4 比较合适）
      * @param hashMb   置换表大小 MB（64~256；权重本身常驻约 50MB，别开太大）
-     * @return JSON：{ok, running, evalFile, threads, hashMb} 或 {ok:false, error}
+     * @param contempt 避和倾向（自编译补丁选项；-200..200，0 = 关）
+     * @return JSON：{ok, running, evalFile, threads, hashMb, contempt, options}
+     *         或 {ok:false, error}；options 是启动时抓到的 "option name ..." 行（真机自检用）
      */
-    public String pikafishStart(String evalFile, int threads, int hashMb) throws JSONException {
+    public String pikafishStart(String evalFile, int threads, int hashMb, int contempt) throws JSONException {
         JSONObject result = new JSONObject();
         if (!PikafishNativeBridge.isAvailable()) {
             result.put("ok", false);
@@ -976,20 +1353,46 @@ final class QuickJsHostBridge implements AutoCloseable,
         String nnue = resolvePikafishNnuePath(evalFile);
         if (nnue == null) {
             result.put("ok", false);
-            result.put("error", "找不到 " + PIKAFISH_NNUE_NAME + "（默认位置：" + defaultPikafishNnueHint()
-                    + "）；可以用 $pikafish.start({evalFile:'/绝对路径'}) 指定");
+            result.put("error", "找不到 " + PIKAFISH_NNUE_NAME + "（" + defaultPikafishNnueHint()
+                    + "）；可以装『象棋引擎插件』（自带权重），或把 " + PIKAFISH_NNUE_NAME
+                    + " 放到上面任一目录，或用 $pikafish.start({evalFile:'/绝对路径'}) 指定");
             return result.toString();
         }
-        boolean ok = PikafishNativeBridge.nativeStart(nnue, threads, hashMb);
+        int clampedContempt = Math.max(-200, Math.min(200, contempt));
+        boolean ok = PikafishNativeBridge.nativeStart(nnue, threads, hashMb, clampedContempt);
         result.put("ok", ok);
         result.put("running", PikafishNativeBridge.nativeIsRunning());
         result.put("evalFile", nnue);
         result.put("threads", PikafishNativeBridge.nativeConfiguredThreads());
         result.put("hashMb", hashMb);
+        result.put("contempt", clampedContempt);
+        result.put("options", readPikafishOptions());
         if (!ok) {
             result.put("error", "原生引擎启动失败（uciok/readyok 阶段超时；权重文件可读吗：" + nnue + "）");
         }
         return result.toString();
+    }
+
+    /**
+     * 启动时抓到的 UCI 选项行（自检用：确认 Contempt 等选项真的注册在引擎里）。
+     * 旧 .so 没有这个导出、或会话未启动时返回空数组，绝不让它打断 start 的结果。
+     */
+    private JSONArray readPikafishOptions() {
+        JSONArray options = new JSONArray();
+        try {
+            String raw = PikafishNativeBridge.nativeOptions();
+            if (raw != null) {
+                for (String line : raw.split("\n")) {
+                    String trimmed = line.trim();
+                    if (!trimmed.isEmpty()) {
+                        options.put(trimmed);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // 旧版 .so（没有 _nativeOptions 符号）或加载异常：给空清单即可
+        }
+        return options;
     }
 
     /**
@@ -1002,40 +1405,55 @@ final class QuickJsHostBridge implements AutoCloseable,
      * @return JSON：成功 {ok:true, move, scoreCp|mate, depth, nodes, timeMs, pv,
      * candidates:[{multipv,move,scoreCp,mix,depth,pv}...], raw}；失败 {ok:false, error}
      */
-    public String pikafishAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv)
+    public String pikafishAnalyze(String fen, long movetimeMs, long timeoutMs, int multiPv, int depth)
             throws JSONException {
-        return pikafishAnalyzeInternal(fen, movetimeMs, timeoutMs, multiPv, false);
+        return pikafishAnalyzeInternal(fen, movetimeMs, timeoutMs, multiPv, depth, false);
     }
 
     /** Search from a confirmed `position fen ... moves ...` history. */
     public String pikafishAnalyzePosition(String positionCommand, long movetimeMs,
-                                          long timeoutMs, int multiPv) throws JSONException {
-        return pikafishAnalyzeInternal(positionCommand, movetimeMs, timeoutMs, multiPv, true);
+                                          long timeoutMs, int multiPv, int depth) throws JSONException {
+        return pikafishAnalyzeInternal(positionCommand, movetimeMs, timeoutMs, multiPv, depth, true);
     }
 
     private String pikafishAnalyzeInternal(String input, long movetimeMs, long timeoutMs,
-                                           int multiPv, boolean withHistory) throws JSONException {
+                                           int multiPv, int depth, boolean withHistory) throws JSONException {
+        if (mScriptStopRequested) {
+            throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException();
+        }
         JSONObject result = new JSONObject();
         if (!PikafishNativeBridge.isAvailable()) {
             result.put("ok", false);
             result.put("error", "Pikafish 原生库不可用（" + PikafishNativeBridge.loadError() + "）");
             return result.toString();
         }
+        if (input != null) {
+            input = input.trim();
+        }
         if (input == null || input.length() > 4096 ||
-                (withHistory && !PIKAFISH_POSITION.matcher(input).matches())) {
+                (withHistory && !PIKAFISH_POSITION.matcher(input).matches()) ||
+                (!withHistory && !PIKAFISH_FEN.matcher(input).matches())) {
             result.put("ok", false);
-            result.put("error", "无效的 Pikafish 局面历史命令");
+            result.put("error", withHistory ? "无效的 Pikafish 局面历史命令"
+                    : "无效 FEN：缺 走棋方/回合 字段（应带「 w - - 0 1」）");
             return result.toString();
         }
         String raw;
+        mPikafishAnalyzeTid = android.os.Process.myTid();
         try {
             raw = withHistory
-                    ? PikafishNativeBridge.nativeAnalyzePosition(input, movetimeMs, timeoutMs, multiPv)
-                    : PikafishNativeBridge.nativeAnalyze(input, movetimeMs, timeoutMs, multiPv);
+                    ? PikafishNativeBridge.nativeAnalyzePosition(input, movetimeMs, timeoutMs, multiPv, depth)
+                    : PikafishNativeBridge.nativeAnalyze(input, movetimeMs, timeoutMs, multiPv, depth);
         } catch (UnsatisfiedLinkError error) {
             result.put("ok", false);
             result.put("error", "Pikafish 原生库未包含棋谱历史接口：" + error.getMessage());
             return result.toString();
+        } finally {
+            mPikafishAnalyzeTid = 0;
+        }
+        // nativeStop 会正常返回 bestmove；脚本已停止时不能再把它当成可执行的走法。
+        if (mScriptStopRequested) {
+            throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException();
         }
         if (raw == null) {
             raw = "";
@@ -1114,6 +1532,15 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
     }
 
+    /** 停止本脚本正在等待的原生搜索，不影响其他 QuickJS 脚本。 */
+    void stopOwnPikafishSearch() {
+        mScriptStopRequested = true;
+        int tid = mPikafishAnalyzeTid;
+        if (tid != 0 && PikafishNativeBridge.isAvailable()) {
+            PikafishNativeBridge.nativeStopForTid(tid);
+        }
+    }
+
     /** `$pikafish.quit()`：退出引擎线程（幂等；下次 start 会重新拉起）。 */
     public void pikafishQuit() {
         if (PikafishNativeBridge.isAvailable()) {
@@ -1129,7 +1556,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         return PikafishNativeBridge.isAvailable();
     }
 
-    /** 找权重：显式路径优先；否则已有私有文件 → 外部目录 → APK 内置资产。 */
+    /** 找权重：显式路径优先；否则已有私有文件 → 外部目录 → 公共目录 → APK 内置资产（可选打包）。 */
     private String resolvePikafishNnuePath(String evalFile) {
         if (evalFile != null && evalFile.length() > 0) {
             File file = new File(evalFile);
@@ -1143,6 +1570,13 @@ final class QuickJsHostBridge implements AutoCloseable,
         return extractBundledPikafishNnue();
     }
 
+    /**
+     * 内置权重（只有用 {@code -PwithPikafishNnue=true} 构建的包才有）。
+     *
+     * <p>正式包不再随包 50MB 权重：用象棋请装「象棋引擎插件」（自带权重），
+     * 或者手工把 pikafish.nnue 放到候选目录里。资产缺失不是错误，静默返回 null，
+     * 由调用方给出「权重从哪来」的指引。
+     */
     private String extractBundledPikafishNnue() {
         try {
             Context context = mRuntime.uiHandler.getContext().getApplicationContext();
@@ -1188,6 +1622,8 @@ final class QuickJsHostBridge implements AutoCloseable,
             if (external != null) {
                 candidates.add(new File(external, PIKAFISH_NNUE_NAME));
             }
+            // 象棋工程自己认的公共目录（用户手工放权重最常见的位置）。
+            candidates.add(new File("/sdcard/xiangqi-p4/" + PIKAFISH_NNUE_NAME));
         } catch (Throwable ignored) {
             // 拿不到 Context 时只能靠显式路径
         }
@@ -1411,6 +1847,54 @@ final class QuickJsHostBridge implements AutoCloseable,
         return mRuntime.files.getSdcardPath();
     }
 
+    public String filesGetName(String path) {
+        return mRuntime.files.getName(path);
+    }
+
+    public String filesGetNameWithoutExtension(String path) {
+        return mRuntime.files.getNameWithoutExtension(path);
+    }
+
+    public String filesGetExtension(String path) {
+        return mRuntime.files.getExtension(path);
+    }
+
+    public boolean filesIsEmptyDir(String path) {
+        return mRuntime.files.isEmptyDir(path);
+    }
+
+    public boolean filesCreateIfNotExists(String path) {
+        return mRuntime.files.createIfNotExists(path);
+    }
+
+    public boolean filesRemoveDir(String path) {
+        return mRuntime.files.removeDir(path);
+    }
+
+    public byte[] filesReadBytes(String path) {
+        return mRuntime.files.readBytes(path);
+    }
+
+    public String filesDirname(String path) {
+        return mRuntime.files.dirname(path);
+    }
+
+    public String filesStat(String path) {
+        JSONObject object = new JSONObject();
+        try {
+            Files.FileStat stat = mRuntime.files.stat(path);
+            object.put("path", stat.getPath());
+            object.put("lastModified", stat.getLastModified());
+            object.put("size", stat.getSize());
+            object.put("readable", stat.isReadable());
+            object.put("writable", stat.isWritable());
+            object.put("executable", stat.isExecutable());
+            object.put("hidden", stat.isHidden());
+        } catch (Throwable ignored) {
+        }
+        return object.toString();
+    }
+
     // ---- http whitelist ----
 
     public String httpRequest(String method, String url, String headersJson,
@@ -1529,6 +2013,31 @@ final class QuickJsHostBridge implements AutoCloseable,
         } catch (Throwable e) { return false; }
     }
 
+    /**
+     * app.getTopActivity()（QuickJS 版）：返回 "className|packageName"，无前台 Activity 返回 ""。
+     */
+    public String appGetTopActivityInfo() {
+        try {
+            android.app.Activity activity = mRuntime.app.getTopActivity();
+            if (activity == null) {
+                return "";
+            }
+            return activity.getClass().getName() + "|" + activity.getPackageName();
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    /** app.getPathFromUri(uri)：解析失败返回 ""。 */
+    public String appGetPathFromUri(String uri) {
+        try {
+            String path = mRuntime.app.getPathFromUri(android.net.Uri.parse(uri));
+            return path == null ? "" : path;
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
     public boolean appStartActivity(String action, String packageName, String className,
                                      String data, String type, String extrasJson, int flags) {
         try {
@@ -1635,6 +2144,42 @@ final class QuickJsHostBridge implements AutoCloseable,
         } catch (Throwable error) {
             return 0;
         }
+    }
+
+    public String deviceGetIMEI() {
+        try {
+            return mRuntime.device.getIMEI();
+        } catch (Throwable error) {
+            return null;
+        }
+    }
+
+    public int deviceGetMusicVolume() {
+        return mRuntime.device.getMusicVolume();
+    }
+
+    public int deviceGetNotificationVolume() {
+        return mRuntime.device.getNotificationVolume();
+    }
+
+    public void deviceKeepScreenOn() {
+        mRuntime.device.keepScreenOn();
+    }
+
+    public void deviceKeepScreenOnMs(int timeout) {
+        mRuntime.device.keepScreenOn(timeout);
+    }
+
+    public void deviceWakeUp() {
+        mRuntime.device.wakeUp();
+    }
+
+    public String deviceGetScreenOrientation() {
+        return mRuntime.device.getScreenOrientation();
+    }
+
+    public int deviceGetScreenRotation() {
+        return mRuntime.device.getScreenRotation();
     }
 
     // ---- shell module ----
@@ -1981,107 +2526,160 @@ final class QuickJsHostBridge implements AutoCloseable,
      * Returns JSON: { "action": "positive"|"negative"|"neutral"|"cancel",
      *                 "inputText": "..." }
      */
+    private static final class ScriptDialogState {
+        com.afollestad.materialdialogs.MaterialDialog dialog;
+        final java.util.concurrent.ConcurrentLinkedQueue<String> events = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        void emit(String name, Object... args) {
+            try {
+                JSONArray values = new JSONArray();
+                for (Object arg : args) values.put(arg == null ? JSONObject.NULL : arg);
+                events.add(new JSONObject().put("event", name).put("args", values).toString());
+            } catch (JSONException error) { throw new IllegalStateException(error); }
+        }
+    }
+    private final Map<Long, ScriptDialogState> mScriptDialogs = new ConcurrentHashMap<>();
+
+    /** Build a dialog handle without showing it; JavaScript owns its listeners and lifetime. */
     public String dialogBuild(String propsJson) {
         try {
-            android.app.Activity activity = mRuntime.app.getCurrentActivity();
-            JSONObject fallback = new JSONObject();
-            fallback.put("action", "cancel");
-            fallback.put("inputText", "");
-            if (activity == null || activity.isFinishing()) return fallback.toString();
-
-            final JSONObject[] holder = new JSONObject[]{ fallback };
-            final java.util.concurrent.CountDownLatch latch =
-                    new java.util.concurrent.CountDownLatch(1);
-
-            final JSONObject props = (propsJson != null && !propsJson.isEmpty())
-                    ? new JSONObject(propsJson) : new JSONObject();
-
-            new Handler(Looper.getMainLooper()).post(() -> {
+            final JSONObject props = new JSONObject(propsJson == null ? "{}" : propsJson);
+            // Resolve the same app/overlay context and permission policy as the Rhino API.
+            final com.afollestad.materialdialogs.MaterialDialog.Builder builder =
+                    mRuntime.dialogs.newBuilder(props.optString("type", null));
+            final long id = mNextDialogId.getAndIncrement();
+            final ScriptDialogState state = new ScriptDialogState();
+            final JSONObject self = new JSONObject().put("__dialog", true);
+            return runOnMainSync(mDialogHandler, () -> {
                 try {
-                    com.afollestad.materialdialogs.MaterialDialog.Builder builder =
-                            new com.afollestad.materialdialogs.MaterialDialog.Builder(activity);
-
-                    if (props.has("title"))
-                        builder.title(props.getString("title"));
-                    if (props.has("content"))
-                        builder.content(props.getString("content"));
-
-                    boolean hasInput = props.has("inputHint") || props.has("inputPrefill");
-                    String inputHint = props.optString("inputHint", null);
-                    String inputPrefill = props.optString("inputPrefill", "");
-                    boolean allowEmpty = props.optBoolean("inputAllowEmpty", true);
-
-                    if (hasInput) {
-                        builder.input(inputHint, inputPrefill, allowEmpty,
-                                (d, input) -> {
-                                    try {
-                                        JSONObject r = new JSONObject();
-                                        r.put("action", "input");
-                                        r.put("inputText", input.toString());
-                                        holder[0] = r;
-                                    } catch (JSONException ignored) {}
-                                    latch.countDown();
-                                });
+                    if (props.has("title")) builder.title(props.optString("title"));
+                    if (props.has("content")) builder.content(props.optString("content"));
+                    String[] actions = { "positive", "negative", "neutral" };
+                    for (String action : actions) {
+                        String key = props.has(action) ? action : action + "Text";
+                        if (!props.has(key)) continue;
+                        String label = props.optString(key);
+                        if ("positive".equals(action)) builder.positiveText(label);
+                        else if ("negative".equals(action)) builder.negativeText(label);
+                        else builder.neutralText(label);
                     }
-
-                    String posText = props.has("positiveText")
-                            ? props.getString("positiveText") : null;
-                    String negText = props.has("negativeText")
-                            ? props.getString("negativeText") : null;
-                    String neutText = props.has("neutralText")
-                            ? props.getString("neutralText") : null;
-
-                    // Add button texts only if provided; omit to hide button
-                    if (posText != null) builder.positiveText(posText);
-                    if (negText != null) builder.negativeText(negText);
-                    if (neutText != null) builder.neutralText(neutText);
-
-                    if (posText != null && !hasInput) {
-                        builder.onPositive((d, w) -> {
-                            try { holder[0] = new JSONObject().put("action", "positive"); }
-                            catch (JSONException ignored) {}
-                            latch.countDown();
-                        });
+                    if (props.has("titleColor")) builder.titleColor(dialogColor(props.get("titleColor")));
+                    if (props.has("contentColor")) builder.contentColor(dialogColor(props.get("contentColor")));
+                    if (props.has("itemsColor")) builder.itemsColor(dialogColor(props.get("itemsColor")));
+                    if (props.has("positiveColor")) builder.positiveColor(dialogColor(props.get("positiveColor")));
+                    if (props.has("negativeColor")) builder.negativeColor(dialogColor(props.get("negativeColor")));
+                    if (props.has("neutralColor")) builder.neutralColor(dialogColor(props.get("neutralColor")));
+                    if (props.has("buttonRippleColor")) builder.buttonRippleColor(dialogColor(props.get("buttonRippleColor")));
+                    if (props.has("contentLineSpacing")) builder.contentLineSpacing((float) props.getDouble("contentLineSpacing"));
+                    builder.autoDismiss(props.optBoolean("autoDismiss", true));
+                    builder.cancelable(props.optBoolean("cancelable", true));
+                    builder.canceledOnTouchOutside(props.optBoolean("canceledOnTouchOutside", true));
+                    if (props.has("inputHint") || props.has("inputPrefill")) {
+                        builder.input(props.optString("inputHint", ""), props.optString("inputPrefill", ""),
+                                props.optBoolean("inputAllowEmpty", true),
+                                (dialog, input) -> state.emit("input_change", input.toString(), self));
+                        builder.alwaysCallInputCallback();
                     }
-                    if (negText != null) {
-                        builder.onNegative((d, w) -> {
-                            try { holder[0] = new JSONObject().put("action", "negative"); }
-                            catch (JSONException ignored) {}
-                            latch.countDown();
-                        });
+                    JSONArray items = props.optJSONArray("items");
+                    if (items != null) {
+                        String[] names = new String[items.length()];
+                        for (int i = 0; i < names.length; i++) names[i] = items.optString(i);
+                        builder.items(names);
+                        String mode = props.optString("itemsSelectMode", "select");
+                        if ("single".equals(mode) || "singleChoice".equals(mode)) {
+                            builder.itemsCallbackSingleChoice(props.optInt("itemsSelectedIndex", -1),
+                                    (dialog, view, index, label) -> { state.emit("single_choice", index, String.valueOf(label), self); return true; });
+                        } else if ("multi".equals(mode) || "multiChoice".equals(mode)) {
+                            JSONArray selected = props.optJSONArray("itemsSelectedIndex");
+                            if (props.has("itemsSelectedIndex") && !props.isNull("itemsSelectedIndex") && selected == null)
+                                throw new IllegalArgumentException("itemsSelectedIndex must be an array in multi-choice mode");
+                            Integer[] indices = new Integer[selected == null ? 0 : selected.length()];
+                            for (int i = 0; i < indices.length; i++) indices[i] = selected.getInt(i);
+                            builder.itemsCallbackMultiChoice(indices, (dialog, indicesResult, labels) -> {
+                                JSONArray texts = new JSONArray();
+                                for (CharSequence label : labels) texts.put(String.valueOf(label));
+                                state.emit("multi_choice", new JSONArray(Arrays.asList(indicesResult)), texts, self);
+                                return true;
+                            });
+                        } else if ("select".equals(mode)) {
+                            builder.itemsCallback((dialog, view, index, label) -> state.emit("item_select", index, String.valueOf(label), self));
+                        } else throw new IllegalArgumentException("Unknown itemsSelectMode: " + mode);
                     }
-                    if (neutText != null) {
-                        builder.onNeutral((d, w) -> {
-                            try { holder[0] = new JSONObject().put("action", "neutral"); }
-                            catch (JSONException ignored) {}
-                            latch.countDown();
-                        });
+                    JSONObject progress = props.optJSONObject("progress");
+                    if (progress != null) {
+                        int max = progress.optInt("max", -1);
+                        builder.progress(max == -1, max, progress.optBoolean("showMinMax", true));
+                        builder.progressIndeterminateStyle(progress.optBoolean("horizontal"));
                     }
-
-                    builder.cancelListener(d -> {
-                        try { holder[0] = new JSONObject().put("action", "cancel"); }
-                        catch (JSONException ignored) {}
-                        latch.countDown();
+                    if (props.has("checkBoxPrompt") || props.has("checkBoxChecked")) {
+                        builder.checkBoxPrompt(props.optString("checkBoxPrompt", ""), props.optBoolean("checkBoxChecked"),
+                                (button, checked) -> state.emit("check", checked, self));
+                    }
+                    builder.onAny((dialog, which) -> {
+                        String action = which.name().toLowerCase(Locale.ROOT);
+                        if (which == com.afollestad.materialdialogs.DialogAction.POSITIVE && dialog.getInputEditText() != null)
+                            state.emit("input", dialog.getInputEditText().getText().toString(), self);
+                        state.emit(action, self);
+                        state.emit("any", action, self);
                     });
+                    builder.showListener(dialog -> state.emit("show", self));
+                    builder.cancelListener(dialog -> state.emit("cancel", self));
+                    builder.dismissListener(dialog -> state.emit("dismiss", self));
+                    state.dialog = builder.build();
+                    mScriptDialogs.put(id, state);
+                    return new JSONObject().put("id", id).toString();
+                } catch (Throwable error) { return jsonError(describeError(error)); }
+            }, jsonError("Timed out building dialog"));
+        } catch (Throwable error) { return jsonError(describeError(error)); }
+    }
 
-                    boolean cancelable = props.optBoolean("cancelable", true);
-                    builder.cancelable(cancelable);
+    private static int dialogColor(Object value) {
+        return value instanceof Number ? ((Number) value).intValue() : Color.parseColor(String.valueOf(value));
+    }
 
-                    builder.show();
-                } catch (Throwable e) {
-                    try { holder[0] = new JSONObject().put("action", "error")
-                            .put("error", e.getMessage()); }
-                    catch (JSONException ignored) {}
-                    latch.countDown();
-                }
-            });
-            latch.await(120, java.util.concurrent.TimeUnit.SECONDS);
-            return holder[0].toString();
-        } catch (Throwable e) {
-            try { return new JSONObject().put("action", "error")
-                    .put("error", e.getMessage()).toString(); }
-            catch (JSONException je) { return "{\"action\":\"error\",\"error\":\"unknown\"}"; }
-        }
+    /** Commands and event polling on a previously built dialog. */
+    public String dialogCall(String requestJson) {
+        try {
+            JSONObject request = new JSONObject(requestJson);
+            String method = request.getString("method");
+            if ("setDefaultDialogType".equals(method)) {
+                mRuntime.dialogs.setDefaultDialogType(request.getJSONArray("args").getString(0)); return "null";
+            }
+            if ("getDefaultDialogType".equals(method)) return JSONObject.quote(mRuntime.dialogs.getDefaultDialogType());
+            ScriptDialogState state = mScriptDialogs.get(request.getLong("id"));
+            if (state == null) throw new IllegalStateException("Dialog handle is closed");
+            if ("poll".equals(method)) {
+                JSONArray events = new JSONArray(); String event;
+                while ((event = state.events.poll()) != null) events.put(new JSONObject(event));
+                return events.toString();
+            }
+            JSONArray args = request.optJSONArray("args");
+            return runOnMainSync(mDialogHandler, () -> {
+                try {
+                    com.afollestad.materialdialogs.MaterialDialog dialog = state.dialog;
+                    switch (method) {
+                        case "show":
+                            if (!com.stardust.app.DialogUtils.isActivityContext(dialog.getContext()) && dialog.getWindow() != null)
+                                dialog.getWindow().setType(Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_PHONE);
+                            dialog.show(); return "true";
+                        case "dismiss": dialog.dismiss(); return "null";
+                        case "cancel": dialog.cancel(); return "null";
+                        case "isShowing": return String.valueOf(dialog.isShowing());
+                        case "setTitle": dialog.setTitle(args.getString(0)); return "null";
+                        case "setContent": dialog.setContent(args.getString(0)); return "null";
+                        case "setActionButton":
+                            dialog.setActionButton(com.afollestad.materialdialogs.DialogAction.valueOf(args.getString(0).toUpperCase(Locale.ROOT)), args.getString(1)); return "null";
+                        case "setProgress": dialog.setProgress(args.getInt(0)); return "null";
+                        case "incrementProgress": dialog.incrementProgress(args.getInt(0)); return "null";
+                        case "getProgress": return String.valueOf(dialog.getCurrentProgress());
+                        case "setMaxProgress": dialog.setMaxProgress(args.getInt(0)); return "null";
+                        case "getMaxProgress": return String.valueOf(dialog.getMaxProgress());
+                        case "getInput": return dialog.getInputEditText() == null ? "null" : JSONObject.quote(dialog.getInputEditText().getText().toString());
+                        case "close": dialog.dismiss(); mScriptDialogs.remove(request.getLong("id")); return "null";
+                        default: throw new IllegalArgumentException("Unsupported dialog method: " + method);
+                    }
+                } catch (Throwable error) { return jsonError(describeError(error)); }
+            }, jsonError("Timed out updating dialog"));
+        } catch (Throwable error) { return jsonError(describeError(error)); }
     }
 
     // ---- threads module ----
@@ -2253,6 +2851,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             info.put("engineName", engine == null ? "QuickJsJavaScriptEngine"
                     : engine.getClass().getSimpleName());
             info.put("destroyed", engine == null || engine.isDestroyed());
+            com.stardust.autojs.execution.ExecutionConfig config = engine == null ? null
+                    : (com.stardust.autojs.execution.ExecutionConfig) engine.getTag(
+                            com.stardust.autojs.execution.ExecutionConfig.getTag());
+            info.put("execArgv", config == null ? new JSONObject() : new JSONObject(config.getArguments()));
             return info.toString();
         } catch (Throwable e) {
             return "{\"handle\":0,\"id\":-1,\"source\":\"QuickJS current engine\","
@@ -2959,6 +3561,27 @@ final class QuickJsHostBridge implements AutoCloseable,
         QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
         android.view.View view = window == null ? null : window.getView(id);
         return view == null ? 0 : mJavaInterop.putForScript(view);
+    }
+
+    com.stardust.autojs.core.graphics.ScriptCanvasView findCanvasView(int windowId, String id) {
+        View view = runOnMainSync(mDialogHandler, () -> {
+            QuickJsFloatyWindow window = mFloatyWindows.get(windowId);
+            return windowId == 0 ? uiFind(id) : window == null ? null : window.getView(id);
+        }, null);
+        if (!(view instanceof com.stardust.autojs.core.graphics.ScriptCanvasView)) {
+            throw new IllegalArgumentException("draw 事件需要有效的 canvas 控件：" + id);
+        }
+        return (com.stardust.autojs.core.graphics.ScriptCanvasView) view;
+    }
+
+    private static void closeCanvasViews(View view) {
+        if (view instanceof com.stardust.autojs.core.graphics.ScriptCanvasView) {
+            ((com.stardust.autojs.core.graphics.ScriptCanvasView) view).closeQuickJsCanvas();
+        }
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) closeCanvasViews(group.getChildAt(i));
+        }
     }
 
     /** 窗口根 View 的句柄（整个悬浮窗的动画目标）。 */
@@ -3850,7 +4473,11 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
 
         void close() {
-            hide();
+            onMain(() -> {
+                hideNow();
+                closeCanvasViews(mRoot);
+                return Boolean.TRUE;
+            }, Boolean.FALSE);
         }
 
         // ---- view access (Auto.js-style window.<id> proxies) ----
@@ -4245,6 +4872,8 @@ final class QuickJsHostBridge implements AutoCloseable,
                         ? String.valueOf(((android.widget.CompoundButton) view).isChecked()) : null;
             case "width": return String.valueOf(viewSize(view, true));
             case "height": return String.valueOf(viewSize(view, false));
+            case "canScrollDown": return String.valueOf(view.canScrollVertically(1));
+            case "scrollY": return String.valueOf(view.getScrollY());
             case "id": return String.valueOf(view.getId());
             case "className": return view.getClass().getName();
             default: return null;
@@ -4331,6 +4960,17 @@ final class QuickJsHostBridge implements AutoCloseable,
                     return true;
                 case "backgroundColor":
                     view.setBackgroundColor(android.graphics.Color.parseColor(value));
+                    return true;
+                case "scrollToEnd":
+                    if (!(view instanceof android.widget.ScrollView)) return false;
+                    if (Boolean.parseBoolean(value)) {
+                        view.post(() -> {
+                            android.widget.ScrollView scroll = (android.widget.ScrollView) view;
+                            if (scroll.getChildCount() > 0) {
+                                scroll.scrollTo(0, scroll.getChildAt(0).getBottom());
+                            }
+                        });
+                    }
                     return true;
                 default:
                     return false;
@@ -4827,6 +5467,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         mDialogHandler.post(() -> {
             try {
                 View root = uiInflater().inflate(xml);
+                closeCanvasViews(mUiRoot);
                 WindowManager windowManager =
                         (WindowManager) mRuntime.uiHandler.getContext()
                                 .getSystemService(Context.WINDOW_SERVICE);
@@ -4897,6 +5538,8 @@ final class QuickJsHostBridge implements AutoCloseable,
     private String inflateIntoActivityNow(android.app.Activity host, String xml) {
         try {
             View root = uiInflaterFor(host).inflate(xml);
+            closeCanvasViews(mUiRoot);
+            mUiViewHandles.clear();
             host.setContentView(root);
             mUiRoot = root;
             mUiShown = true;
@@ -4919,6 +5562,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public void uiClose() {
+        closeCanvasViews(mUiRoot);
         final android.app.Activity host = mUiHostActivity;
         if (host != null) {
             // Activity 承载：关界面 = 结束这个脚本界面（Rhino 的 ui.finish 语义），
@@ -5309,10 +5953,20 @@ final class QuickJsHostBridge implements AutoCloseable,
                 return encodeAutomatorResult(invokeAutomator(selector, method,
                         new Class<?>[]{ float.class }, new Object[]{ (float) args.getDouble(0) }));
             case "find":
-            case "untilFind":
             case "untilFindOne":
             case "exists":
                 return encodeAutomatorResult(invokeAutomator(selector, method, NO_PARAMS, NO_ARGS));
+            case "untilFind":
+                if (args.length() > 1 && !args.isNull(1)) {
+                    return encodeAutomatorResult(invokeAutomator(selector, "untilFind",
+                            new Class<?>[]{ long.class, long.class },
+                            new Object[]{ args.getLong(0), args.getLong(1) }));
+                }
+                if (args.length() > 0 && !args.isNull(0)) {
+                    return encodeAutomatorResult(invokeAutomator(selector, "untilFind",
+                            new Class<?>[]{ long.class }, new Object[]{ args.getLong(0) }));
+                }
+                return encodeAutomatorResult(invokeAutomator(selector, "untilFind", NO_PARAMS, NO_ARGS));
             case "waitFor":
                 invokeAutomator(selector, method, NO_PARAMS, NO_ARGS);
                 return AUTOMATOR_VOID_RESULT;
@@ -5322,6 +5976,11 @@ final class QuickJsHostBridge implements AutoCloseable,
                         new Class<?>[]{ int.class }, new Object[]{ args.getInt(0) }))
                         : encodeAutomatorResult(invokeAutomator(selector, "findOnce", NO_PARAMS, NO_ARGS));
             case "findOne":
+                if (args.length() > 1 && !args.isNull(1)) {
+                    return encodeAutomatorResult(invokeAutomator(selector, "findOne",
+                            new Class<?>[]{ long.class, long.class },
+                            new Object[]{ args.getLong(0), args.getLong(1) }));
+                }
                 return args.length() > 0 && !args.isNull(0)
                         ? encodeAutomatorResult(invokeAutomator(selector, "findOne",
                         new Class<?>[]{ long.class }, new Object[]{ args.getLong(0) }))
@@ -5666,6 +6325,11 @@ final class QuickJsHostBridge implements AutoCloseable,
         return value == null ? 0 : mJavaInterop.putForScript(value);
     }
 
+    public void javaReleaseSiftInput(long handle) {
+        if (mJavaInterop.objectForHandle(handle) instanceof com.stardust.autojs.core.image.SiftMatcher.NativeFrameInput)
+            mJavaInterop.releaseForScript(handle);
+    }
+
     /** native 侧按句柄取回 Java 对象（Mat → 帧桥使用）。 */
     public Object javaObjectForHandle(long handle) {
         return mJavaInterop.objectForHandle(handle);
@@ -5907,40 +6571,95 @@ final class QuickJsHostBridge implements AutoCloseable,
     private final AtomicLong mNextSqliteHandle = new AtomicLong(1);
     private final Map<Long, Database> mSqliteHandles = new ConcurrentHashMap<>();
 
-    public long sqliteOpen(String name, int version) {
-        Database database = version > 0
-                ? mRuntime.sqlite.open(name, version)
-                : mRuntime.sqlite.open(name);
-        long handle = mNextSqliteHandle.getAndIncrement();
+    public long sqliteOpen(String name, String optionsJson) throws JSONException {
+        JSONObject options = new JSONObject(optionsJson == null ? "{}" : optionsJson);
+        int version = options.optInt("version", 1);
+        if (version < 1) throw new IllegalArgumentException("SQLite version must be >= 1");
+        JSONObject callbacks = options.optJSONObject("callbacks");
+        final long handle = mNextSqliteHandle.getAndIncrement();
+        Database.Callbacks lifecycle = new Database.Callbacks() {
+            private void fire(String name, Object... extra) {
+                long callbackId = callbacks == null ? 0 : callbacks.optLong(name);
+                if (callbackId == 0) return;
+                JSONArray args = new JSONArray().put(handle);
+                for (Object value : extra) args.put(value);
+                try {
+                    JSONObject result = new JSONObject(invokeJsCallback(callbackId, args.toString()));
+                    if (result.has("error")) throw new IllegalStateException(result.getString("error"));
+                } catch (JSONException error) {
+                    throw new IllegalStateException("Cannot decode SQLite callback", error);
+                }
+            }
+            @Override public void onCreate(Database db) { fire("onCreate"); }
+            @Override public void onUpgrade(Database db, int oldVersion, int newVersion) {
+                fire("onUpgrade", oldVersion, newVersion);
+            }
+            @Override public void onConfigure(Database db) { fire("onConfigure"); }
+            @Override public void onOpen(Database db) { fire("onOpen"); }
+            @Override public void onCorruption(android.database.sqlite.SQLiteDatabase db) {
+                fire("onCorruption");
+            }
+        };
+        String path = name == null ? null : mRuntime.files.path(name);
+        Database database = new Database(ScriptRuntime.getApplicationContext(), path, version,
+                options.optBoolean("readOnly"), lifecycle, mRuntime);
         mSqliteHandles.put(handle, database);
-        return handle;
+        try {
+            database.open();
+            return handle;
+        } catch (RuntimeException error) {
+            mSqliteHandles.remove(handle);
+            database.close();
+            throw error;
+        }
     }
 
-    /**
-     * 数据库方法分派：`exec`/`select`/`insert`/`update`/`delete`/`close` 与事务开关。
-     * 结果统一编码为 JSON（`{"insertId":n,"rowsAffected":m,"rows":[...]}`），无结果返回 "null"。
-     */
+    /** JSON is only the transport; primitive CRUD results stay numbers in JavaScript. */
     public String sqliteCall(long handle, String method, String argsJson) throws JSONException {
         Database database = mSqliteHandles.get(handle);
-        if (database == null) {
-            throw new IllegalStateException("数据库句柄已失效（连接可能已关闭）");
-        }
+        if (database == null) throw new IllegalStateException("Database connection is closed");
         JSONArray args = new JSONArray(argsJson == null || argsJson.isEmpty() ? "[]" : argsJson);
         switch (method == null ? "" : method) {
-            case "exec": {
-                String sql = args.getString(0);
-                if (args.isNull(1)) {
-                    return encodeSqliteResult(database.exec(sql));
-                }
-                database.executeSql(sql, toSqliteArgs(args.optJSONArray(1)));
+            case "exec":
+                return encodeSqliteResult(args.isNull(1) ? database.exec(args.getString(0))
+                        : database.exec(args.getString(0), toSqliteArgs(args.optJSONArray(1))));
+            case "execSQL":
+                if (args.isNull(1)) database.execSQL(args.getString(0));
+                else database.execSQL(args.getString(0), toSqliteArgs(args.optJSONArray(1)));
                 return "null";
-            }
-            case "select": {
-                String sql = args.getString(0);
-                DatabaseResultSet result = args.isNull(1)
-                        ? database.select(sql)
-                        : database.select(sql, toSqliteArgs(args.optJSONArray(1)));
-                return encodeSqliteResult(result);
+            case "select":
+                return encodeSqliteResult(database.select(args.getString(0),
+                        toSqliteArgs(args.optJSONArray(1))));
+            case "rawQuery": {
+                Object[] values = toSqliteArgs(args.optJSONArray(1));
+                String[] strings = values == null ? null : new String[values.length];
+                if (values != null) for (int i = 0; i < values.length; i++) {
+                    strings[i] = values[i] == null ? null : String.valueOf(values[i]);
+                }
+                try (android.database.Cursor cursor = database.getSQLiteDatabase()
+                        .rawQuery(args.getString(0), strings)) {
+                    JSONArray rows = new JSONArray(), data = new JSONArray(), types = new JSONArray();
+                    String[] columns = cursor.getColumnNames();
+                    while (cursor.moveToNext()) {
+                        JSONObject row = new JSONObject();
+                        JSONArray cells = new JSONArray(), cellTypes = new JSONArray();
+                        for (int i = 0; i < columns.length; i++) {
+                            Object value;
+                            switch (cursor.getType(i)) {
+                                case android.database.Cursor.FIELD_TYPE_INTEGER: value = cursor.getLong(i); break;
+                                case android.database.Cursor.FIELD_TYPE_FLOAT: value = cursor.getDouble(i); break;
+                                case android.database.Cursor.FIELD_TYPE_BLOB: value = sqliteBlob(cursor.getBlob(i)); break;
+                                case android.database.Cursor.FIELD_TYPE_STRING: value = cursor.getString(i); break;
+                                default: value = JSONObject.NULL;
+                            }
+                            row.put(columns[i], value);
+                            cells.put(value); cellTypes.put(cursor.getType(i));
+                        }
+                        rows.put(row); data.put(cells); types.put(cellTypes);
+                    }
+                    return new JSONObject().put("rows", rows).put("data", data).put("types", types)
+                            .put("columns", new JSONArray(Arrays.asList(columns))).toString();
+                }
             }
             case "insert":
                 return encodeSqliteResult(database.insert(args.getString(0), toSqliteValues(args.getJSONObject(1))));
@@ -5950,62 +6669,76 @@ final class QuickJsHostBridge implements AutoCloseable,
             case "delete":
                 return encodeSqliteResult(database.delete(args.getString(0),
                         args.isNull(1) ? null : args.getString(1), toSqliteArgs(args.optJSONArray(2))));
+            case "insertResult":
+                return encodeSqliteResult(database.insertResult(args.getString(0), toSqliteValues(args.getJSONObject(1))));
+            case "updateResult":
+                return encodeSqliteResult(database.updateResult(args.getString(0), toSqliteValues(args.getJSONObject(1)),
+                        args.isNull(2) ? null : args.getString(2), toSqliteArgs(args.optJSONArray(3))));
+            case "deleteResult":
+                return encodeSqliteResult(database.deleteResult(args.getString(0),
+                        args.isNull(1) ? null : args.getString(1), toSqliteArgs(args.optJSONArray(2))));
             case "begin":
-                sqliteWritable(database).beginTransaction();
+                if (args.optBoolean(0)) database.getSQLiteDatabase().beginTransactionNonExclusive();
+                else database.getSQLiteDatabase().beginTransaction();
                 return "null";
-            case "end":
-                android.database.sqlite.SQLiteDatabase writable = sqliteWritable(database);
+            case "end": {
+                android.database.sqlite.SQLiteDatabase writable = database.getSQLiteDatabase();
                 if (writable.inTransaction()) {
-                    if (args.optBoolean(0)) {
-                        writable.setTransactionSuccessful();
-                    }
+                    if (args.optBoolean(0)) writable.setTransactionSuccessful();
                     writable.endTransaction();
                 }
                 return "null";
-            case "close":
-                database.close();
-                mSqliteHandles.remove(handle);
-                return "null";
-            default:
-                throw new IllegalArgumentException("sqlite 不支持的方法: " + method);
+            }
+            case "succeed": database.getSQLiteDatabase().setTransactionSuccessful(); return "null";
+            case "version": return String.valueOf(database.getSQLiteDatabase().getVersion());
+            case "setVersion": database.getSQLiteDatabase().setVersion(args.getInt(0)); return "null";
+            case "pageSize": return String.valueOf(database.getSQLiteDatabase().getPageSize());
+            case "setPageSize": database.getSQLiteDatabase().setPageSize(args.getLong(0)); return "null";
+            case "maximumSize": return String.valueOf(database.getSQLiteDatabase().getMaximumSize());
+            case "setMaximumSize": return String.valueOf(database.getSQLiteDatabase().setMaximumSize(args.getLong(0)));
+            case "path": return JSONObject.quote(database.getSQLiteDatabase().getPath());
+            case "isOpen": return String.valueOf(database.getSQLiteDatabase().isOpen());
+            case "isReadOnly": return String.valueOf(database.getSQLiteDatabase().isReadOnly());
+            case "inTransaction": return String.valueOf(database.getSQLiteDatabase().inTransaction());
+            case "close": database.close(); mSqliteHandles.remove(handle); return "null";
+            default: throw new IllegalArgumentException("Unsupported sqlite method: " + method);
         }
     }
 
-    /**
-     * 事务：`Database` 只提供回调式 transaction，而回调要跨层调回 JS。
-     * 这里（宿主内部，非脚本可见）通过私有 `writable()` 拿同一个连接开关事务，
-     * 脚本层用 try/catch 包住，语义与 Rhino 的 begin/commit/rollback 一致。
-     */
-    private android.database.sqlite.SQLiteDatabase sqliteWritable(Database database) {
-        try {
-            Method method = Database.class.getDeclaredMethod("writable");
-            method.setAccessible(true);
-            return (android.database.sqlite.SQLiteDatabase) method.invoke(database);
-        } catch (Exception e) {
-            throw new IllegalStateException("无法开启数据库事务: " + e.getMessage(), e);
+    private static JSONObject sqliteBlob(byte[] bytes) throws JSONException {
+        JSONArray array = new JSONArray();
+        for (byte value : bytes) array.put(value & 255);
+        return new JSONObject().put("__sqliteBlob", array);
+    }
+
+    private Object decodeSqliteValue(Object value) throws JSONException {
+        if (value instanceof JSONObject && ((JSONObject) value).has("__sqliteBlob")) {
+            JSONArray bytes = ((JSONObject) value).getJSONArray("__sqliteBlob");
+            byte[] result = new byte[bytes.length()];
+            for (int i = 0; i < result.length; i++) result[i] = (byte) bytes.getInt(i);
+            return result;
         }
+        return value == JSONObject.NULL ? null : value;
     }
 
     private String encodeSqliteResult(Object result) throws JSONException {
-        if (result == null) {
-            return "null";
-        }
-        if (!(result instanceof DatabaseResultSet)) {
-            return "null";
-        }
+        if (result == null) return "null";
+        if (result instanceof Number || result instanceof Boolean) return result.toString();
+        if (!(result instanceof DatabaseResultSet)) return "null";
         DatabaseResultSet set = (DatabaseResultSet) result;
         JSONArray rows = new JSONArray();
-        if (set.rows != null) {
-            for (int i = 0; i < set.rows.length; i++) {
-                Object row = set.rows.item(i);
-                rows.put(row == null ? new JSONObject() : new JSONObject((Map<?, ?>) row));
+        if (set.rows != null) for (int i = 0; i < set.rows.length; i++) {
+            Map<?, ?> source = (Map<?, ?>) set.rows.item(i);
+            JSONObject row = new JSONObject();
+            if (source != null) for (Map.Entry<?, ?> entry : source.entrySet()) {
+                Object value = entry.getValue();
+                row.put(String.valueOf(entry.getKey()), value instanceof byte[] ? sqliteBlob((byte[]) value)
+                        : value == null ? JSONObject.NULL : value);
             }
+            rows.put(row);
         }
-        JSONObject object = new JSONObject();
-        object.put("insertId", set.insertId);
-        object.put("rowsAffected", set.rowsAffected);
-        object.put("rows", rows);
-        return object.toString();
+        return new JSONObject().put("insertId", set.insertId).put("rowsAffected", set.rowsAffected)
+                .put("rows", rows).toString();
     }
 
     private Object[] toSqliteArgs(JSONArray array) throws JSONException {
@@ -6014,7 +6747,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
         Object[] result = new Object[array.length()];
         for (int i = 0; i < array.length(); i++) {
-            result[i] = array.isNull(i) ? null : array.get(i);
+            result[i] = array.isNull(i) ? null : decodeSqliteValue(array.get(i));
         }
         return result;
     }
@@ -6024,7 +6757,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         java.util.Iterator<String> keys = object.keys();
         while (keys.hasNext()) {
             String key = keys.next();
-            values.put(key, object.isNull(key) ? null : object.get(key));
+            values.put(key, object.isNull(key) ? null : decodeSqliteValue(object.get(key)));
         }
         return values;
     }
@@ -6044,6 +6777,131 @@ final class QuickJsHostBridge implements AutoCloseable,
         mAutomatorMethods.clear();
     }
 
+    // ------------------------------------------------------------------
+    // web.newWebSocket（事件经系统事件队列投递，40ms 轮询派发到脚本）
+    // ------------------------------------------------------------------
+
+    private final java.util.concurrent.ConcurrentHashMap<Long, okhttp3.WebSocket> mWebSockets =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong mNextWebSocketId =
+            new java.util.concurrent.atomic.AtomicLong(1);
+    private volatile okhttp3.OkHttpClient mWebSocketClient;
+
+    /** 创建 WebSocket 连接，返回句柄（>0）；失败返回 -1。 */
+    public long webSocketNew(String url) {
+        try {
+            okhttp3.OkHttpClient client = mWebSocketClient;
+            if (client == null) {
+                synchronized (this) {
+                    if (mWebSocketClient == null) {
+                        mWebSocketClient = new okhttp3.OkHttpClient();
+                    }
+                    client = mWebSocketClient;
+                }
+            }
+            final long id = mNextWebSocketId.getAndIncrement();
+            okhttp3.WebSocket socket = client.newWebSocket(
+                    new okhttp3.Request.Builder().url(url).build(),
+                    new okhttp3.WebSocketListener() {
+                        @Override
+                        public void onOpen(okhttp3.WebSocket webSocket, okhttp3.Response response) {
+                            enqueueWebSocketEvent(id, "open", response == null ? null : response.message());
+                        }
+
+                        @Override
+                        public void onMessage(okhttp3.WebSocket webSocket, String text) {
+                            enqueueWebSocketEvent(id, "text", text);
+                        }
+
+                        @Override
+                        public void onMessage(okhttp3.WebSocket webSocket, okio.ByteString bytes) {
+                            enqueueWebSocketEvent(id, "binary", bytes == null ? "" : bytes.base64());
+                        }
+
+                        @Override
+                        public void onClosing(okhttp3.WebSocket webSocket, int code, String reason) {
+                            enqueueWebSocketEvent(id, "closing", code, reason);
+                        }
+
+                        @Override
+                        public void onClosed(okhttp3.WebSocket webSocket, int code, String reason) {
+                            mWebSockets.remove(id);
+                            enqueueWebSocketEvent(id, "closed", code, reason);
+                        }
+
+                        @Override
+                        public void onFailure(okhttp3.WebSocket webSocket, Throwable t, okhttp3.Response response) {
+                            mWebSockets.remove(id);
+                            enqueueWebSocketEvent(id, "failure",
+                                    t == null ? "WebSocket failure" : String.valueOf(t.getMessage()));
+                        }
+                    });
+            mWebSockets.put(id, socket);
+            return id;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "webSocketNew failed: " + url, error);
+            return -1;
+        }
+    }
+
+    private void enqueueWebSocketEvent(long id, String event, Object... args) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("id", id);
+            payload.put("event", event);
+            JSONArray array = new JSONArray();
+            for (Object arg : args) {
+                array.put(arg == null ? JSONObject.NULL : arg);
+            }
+            payload.put("args", array);
+            enqueueSystemEvent("websocket", payload);
+        } catch (JSONException error) {
+            Log.w("QuickJsHostBridge", "Cannot serialize websocket event", error);
+        }
+    }
+
+    public boolean webSocketSend(long id, String type, String data) {
+        okhttp3.WebSocket socket = mWebSockets.get(id);
+        if (socket == null) {
+            return false;
+        }
+        if ("binary".equals(type)) {
+            okio.ByteString bytes = okio.ByteString.decodeBase64(data == null ? "" : data);
+            return bytes != null && socket.send(bytes);
+        }
+        return socket.send(data == null ? "" : data);
+    }
+
+    public boolean webSocketClose(long id, int code, String reason) {
+        okhttp3.WebSocket socket = mWebSockets.get(id);
+        if (socket == null) {
+            return false;
+        }
+        return socket.close(code, reason == null ? "" : reason);
+    }
+
+    public void webSocketCancel(long id) {
+        okhttp3.WebSocket socket = mWebSockets.get(id);
+        if (socket != null) {
+            socket.cancel();
+        }
+    }
+
+    public long webSocketQueueSize(long id) {
+        okhttp3.WebSocket socket = mWebSockets.get(id);
+        return socket == null ? 0 : socket.queueSize();
+    }
+
+    private void closeWebSockets() {
+        for (okhttp3.WebSocket socket : new ArrayList<>(mWebSockets.values())) {
+            try {
+                socket.cancel();
+            } catch (Throwable ignored) {
+            }
+        }
+        mWebSockets.clear();
+    }
+
     @Override
     public void close() {
         mAccessibilityPixels = null;
@@ -6051,13 +6909,18 @@ final class QuickJsHostBridge implements AutoCloseable,
             sharedBusOff(name);
         }
         eventsStopAll();
+        closeFileObservers();
+        images().setRawImageCaptureListener(null);
+        recyclePendingAsyncFrame();
         drawClose();
+        imguiPanel("close", "{}");
         mediaStopMusic();
         sensorsUnregisterAll();
         closeOwnedFloatyWindows();   // 只关本引擎创建的窗口（注册表是进程级的）
         uiClose();
         releaseAutomatorHandles();
         closeSqliteHandles();
+        closeWebSockets();
         mJavaInterop.clear();
         for (android.app.AlertDialog dialog : new ArrayList<>(pendingDialogRegistry.values())) {
             try {
@@ -6067,6 +6930,10 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
         pendingDialogRegistry.clear();
         mDialogs.clear();
+        for (ScriptDialogState state : mScriptDialogs.values()) {
+            mDialogHandler.post(() -> state.dialog.dismiss());
+        }
+        mScriptDialogs.clear();
         // Kill any shell child processes still running so a stopped script cannot
         // leak background commands.
         for (Process process : new ArrayList<>(mShellProcesses)) {
@@ -6092,20 +6959,58 @@ final class QuickJsHostBridge implements AutoCloseable,
             }
         }
         mOcrSessions.clear();
-        if (mOcrScratchBitmap != null && !mOcrScratchBitmap.isRecycled()) {
-            mOcrScratchBitmap.recycle();
-        }
-        mOcrScratchBitmap = null;
+        mOcrImageBuffer.close();
         mEngineResults.clear();
     }
 
     // ---- drawing overlay whitelist ----
 
     private volatile QuickJsOverlay mOverlay;
+    private volatile com.stardust.autojs.core.graphics.ImGuiDrawingOverlay mImGuiOverlay;
+    private volatile com.stardust.autojs.core.graphics.ImGuiControlPanel mImGuiPanel;
+
+    public String imguiPanel(String operation, String json) {
+        try {
+            if ("close".equals(operation)) {
+                com.stardust.autojs.core.graphics.ImGuiControlPanel closing = mImGuiPanel;
+                mImGuiPanel = null;
+                if (closing != null) closing.close();
+                return "{\"ok\":true,\"events\":[]}";
+            }
+            if ("show".equals(operation)) {
+                imguiPanel("close", "{}");
+                Context context = mRuntime.uiHandler.getContext();
+                if (context == null) return "{\"ok\":false,\"events\":[]}";
+                com.stardust.autojs.core.graphics.ImGuiControlPanel panel = new com.stardust.autojs.core.graphics.ImGuiControlPanel(context);
+                if (!panel.show(new JSONObject(json))) { panel.close(); return "{\"ok\":false,\"events\":[]}"; }
+                mImGuiPanel = panel;
+                return panel.poll();
+            }
+            com.stardust.autojs.core.graphics.ImGuiControlPanel panel = mImGuiPanel;
+            if (panel == null) return "{\"ok\":false,\"events\":[]}";
+            if ("update".equals(operation)) { panel.update(new JSONObject(json)); return "{\"ok\":true}"; }
+            if ("poll".equals(operation)) return panel.poll();
+            throw new IllegalArgumentException("Unknown ImGui panel operation");
+        } catch (org.json.JSONException error) { throw new IllegalArgumentException("Invalid ImGui panel: " + error.getMessage(), error); }
+    }
 
     public boolean drawCreate() {
+        return drawCreateWithRenderer("canvas");
+    }
+
+    public boolean drawCreateWithRenderer(String renderer) {
+        drawClose();
         Context context = mRuntime.uiHandler.getContext();
         if (context == null) return false;
+        com.stardust.autojs.core.graphics.ImGuiDrawingOverlay.closeAll();
+        if ("imgui".equals(renderer)) {
+            QuickJsOverlay.closeAll();
+            com.stardust.autojs.core.graphics.ImGuiDrawingOverlay overlay =
+                    new com.stardust.autojs.core.graphics.ImGuiDrawingOverlay(context);
+            if (!overlay.show()) { overlay.close(); return false; }
+            mImGuiOverlay = overlay;
+            return true;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
             return false;
         }
@@ -6137,19 +7042,18 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public void drawUpdate(String detectionsJson, String statsText) {
+        com.stardust.autojs.core.graphics.ImGuiDrawingOverlay nativeOverlay = mImGuiOverlay;
+        if (nativeOverlay != null) {
+            try { nativeOverlay.update(detectionsJson, statsText); }
+            catch (JSONException error) { Log.w("QuickJsHostBridge", "Invalid ImGui drawing snapshot", error); }
+            return;
+        }
         QuickJsOverlay overlay = mOverlay;
         if (overlay == null) return;
         try {
             JSONArray array = new JSONArray(detectionsJson == null ? "[]" : detectionsJson);
-            List<Detection> detections = new ArrayList<>(array.length());
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject item = array.getJSONObject(i);
-                detections.add(new Detection(
-                        (float) item.optDouble("x1"), (float) item.optDouble("y1"),
-                        (float) item.optDouble("x2"), (float) item.optDouble("y2"),
-                        item.optString("label", ""),
-                        (float) item.optDouble("score")));
-            }
+            List<Detection> detections = new ArrayList<>(Math.min(2048, array.length()));
+            for (int i = 0; i < Math.min(2048, array.length()); i++) detections.add(new Detection(array.getJSONObject(i)));
             overlay.update(detections, statsText == null ? "" : statsText);
         } catch (JSONException ignored) {
             // malformed payload: keep the previous frame
@@ -6157,6 +7061,9 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public void drawClose() {
+        com.stardust.autojs.core.graphics.ImGuiDrawingOverlay nativeOverlay = mImGuiOverlay;
+        mImGuiOverlay = null;
+        if (nativeOverlay != null) nativeOverlay.close();
         QuickJsOverlay overlay = mOverlay;
         mOverlay = null;
         if (overlay != null) overlay.close();
@@ -6169,14 +7076,29 @@ final class QuickJsHostBridge implements AutoCloseable,
         final float y2;
         final String label;
         final float score;
+        final String kind;
+        final int color;
+        final boolean customColor;
+        final float strokeWidth, radius, size, headSize;
 
-        Detection(float x1, float y1, float x2, float y2, String label, float score) {
-            this.x1 = x1;
-            this.y1 = y1;
-            this.x2 = x2;
-            this.y2 = y2;
-            this.label = label;
-            this.score = score;
+        Detection(JSONObject shape) throws JSONException {
+            x1 = (float) shape.optDouble("x1"); y1 = (float) shape.optDouble("y1");
+            x2 = (float) shape.optDouble("x2"); y2 = (float) shape.optDouble("y2");
+            kind = shape.optString("kind", "rect"); label = shape.optString("label", "");
+            score = (float) shape.optDouble("score", 0);
+            strokeWidth = Math.max(1f, (float) shape.optDouble("strokeWidth", 4));
+            radius = Math.max(1f, (float) shape.optDouble("radius", 8));
+            size = Math.max(8f, (float) shape.optDouble("size", 30));
+            headSize = Math.max(4f, (float) shape.optDouble("headSize", 18));
+            for (float value : new float[]{x1, y1, x2, y2, strokeWidth, radius, size, headSize})
+                if (Float.isNaN(value) || Float.isInfinite(value)) throw new JSONException("Non-finite drawing coordinate");
+            Object rawColor = shape.opt("color");
+            int parsed = Color.parseColor("#33FF66");
+            boolean custom = false;
+            if (rawColor instanceof Number) { parsed = ((Number) rawColor).intValue(); custom = true; }
+            else if (rawColor instanceof String) try { parsed = Color.parseColor((String) rawColor); custom = true; }
+            catch (IllegalArgumentException ignored) {}
+            color = parsed; customColor = custom;
         }
     }
 
@@ -6342,16 +7264,51 @@ final class QuickJsHostBridge implements AutoCloseable,
                 detections = mDetections;
                 statsText = mStatsText;
             }
-            if (!statsText.isEmpty()) {
-                float textWidth = mStatsPaint.measureText(statsText);
-                canvas.drawRoundRect(new RectF(10, mHudTop, 24 + textWidth, mHudTop + 44),
+            float hudLeft = 10, hudTop = mHudTop, hudRight = getWidth() - 10, hudBottom = getHeight();
+            for (Detection detection : detections) if ("hud".equals(detection.kind)) {
+                hudLeft = Math.max(0, detection.x1); hudTop = Math.max(0, detection.y1);
+                hudRight = Math.min(getWidth(), detection.x2); hudBottom = Math.min(getHeight(), detection.y2);
+            }
+            if (!statsText.isEmpty() && hudRight > hudLeft && hudBottom > hudTop) {
+                android.text.StaticLayout hud = new android.text.StaticLayout(statsText,
+                        new android.text.TextPaint(mStatsPaint), Math.max(1, (int) (hudRight - hudLeft - 28)),
+                        android.text.Layout.Alignment.ALIGN_NORMAL, 1f, 0f, false);
+                canvas.drawRoundRect(new RectF(hudLeft, hudTop, hudRight, Math.min(hudBottom, hudTop + hud.getHeight() + 16)),
                         12, 12, mStatsBgPaint);
-                canvas.drawText(statsText, 24, mHudTop + 32, mStatsPaint);
+                canvas.save(); canvas.clipRect(hudLeft, hudTop, hudRight, hudBottom);
+                canvas.translate(hudLeft + 14, hudTop + 8); hud.draw(canvas); canvas.restore();
             }
             for (Detection detection : detections) {
-                canvas.drawRect(new RectF(detection.x1, detection.y1,
-                        detection.x2, detection.y2), mBoxPaint);
-                String caption = detection.label + " " + Math.round(detection.score * 100) + "%";
+                mBoxPaint.setColor(detection.color); mBoxPaint.setStrokeWidth(detection.strokeWidth);
+                switch (detection.kind) {
+                    case "line": canvas.drawLine(detection.x1, detection.y1, detection.x2, detection.y2, mBoxPaint); break;
+                    case "circle": canvas.drawCircle(detection.x1, detection.y1, detection.radius, mBoxPaint); break;
+                    case "arrow": {
+                        float dx = detection.x2 - detection.x1, dy = detection.y2 - detection.y1;
+                        float length = (float) Math.hypot(dx, dy);
+                        if (length < 1) break;
+                        float head = Math.min(detection.headSize, length * 0.4f), ux = dx / length, uy = dy / length;
+                        float bx = detection.x2 - ux * head, by = detection.y2 - uy * head;
+                        canvas.drawLine(detection.x1, detection.y1, bx, by, mBoxPaint);
+                        android.graphics.Path triangle = new android.graphics.Path();
+                        triangle.moveTo(detection.x2, detection.y2);
+                        triangle.lineTo(bx - uy * head * 0.5f, by + ux * head * 0.5f);
+                        triangle.lineTo(bx + uy * head * 0.5f, by - ux * head * 0.5f); triangle.close();
+                        mBoxPaint.setStyle(Paint.Style.FILL); canvas.drawPath(triangle, mBoxPaint);
+                        mBoxPaint.setStyle(Paint.Style.STROKE); break;
+                    }
+                    case "text": case "hud": break;
+                    default: canvas.drawRect(new RectF(Math.min(detection.x1, detection.x2), Math.min(detection.y1, detection.y2),
+                            Math.max(detection.x1, detection.x2), Math.max(detection.y1, detection.y2)), mBoxPaint);
+                }
+                if (detection.label.isEmpty()) continue;
+                mLabelPaint.setColor(detection.customColor ? detection.color : Color.parseColor("#FFD54F"));
+                mLabelPaint.setTextSize(detection.size);
+                if ("text".equals(detection.kind)) {
+                    canvas.drawText(detection.label, detection.x1, detection.y1 - mLabelPaint.ascent(), mLabelPaint);
+                    continue;
+                }
+                String caption = detection.label + ("rect".equals(detection.kind) ? " " + Math.round(detection.score * 100) + "%" : "");
                 float captionWidth = mLabelPaint.measureText(caption);
                 float top = Math.max(0f, detection.y1 - 40f);
                 canvas.drawRoundRect(new RectF(detection.x1, top,

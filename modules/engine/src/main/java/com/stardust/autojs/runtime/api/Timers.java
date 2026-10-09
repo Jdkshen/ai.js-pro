@@ -8,9 +8,13 @@ import android.util.SparseArray;
 
 import com.stardust.autojs.core.looper.Timer;
 import com.stardust.autojs.core.looper.TimerThread;
+import com.stardust.autojs.core.looper.TimerId;
 import com.stardust.autojs.runtime.ScriptBridges;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.concurrent.VolatileBox;
+import java.lang.ref.WeakReference;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by Stardust on 2017/7/21.
@@ -24,11 +28,13 @@ public class Timers {
     private Threads mThreads;
     private Timer mMainTimer;
     private Timer mUiTimer;
+    private final ConcurrentHashMap<Integer, WeakReference<Timer>> mTimers = new ConcurrentHashMap<>();
+    private final AtomicInteger mNextTimerId = new AtomicInteger(2);
 
 
     public Timers(ScriptRuntime runtime) {
-        mMainTimer = new Timer(runtime, mMaxCallbackUptimeMillisForAllThreads);
-        mUiTimer = new Timer(runtime, mMaxCallbackUptimeMillisForAllThreads, Looper.getMainLooper());
+        mMainTimer = new Timer(runtime, mMaxCallbackUptimeMillisForAllThreads, 0);
+        mUiTimer = new Timer(runtime, mMaxCallbackUptimeMillisForAllThreads, Looper.getMainLooper(), 1);
         mThreads = runtime.threads;
     }
 
@@ -55,28 +61,54 @@ public class Timers {
         return timer;
     }
 
-    public int setTimeout(Object callback, long delay, Object... args) {
-        return getTimerForCurrentThread().setTimeout(callback, delay, args);
+    public double setTimeout(Object callback, long delay, Object... args) {
+        return getTimerForCurrentOrMainThread().setTimeout(callback, delay, args);
     }
 
-    public boolean clearTimeout(int id) {
-        return getTimerForCurrentThread().clearTimeout(id);
+    public boolean clearTimeout(double id) {
+        Timer timer = getTimerForId(id);
+        return timer != null && timer.clearTimeout(id);
     }
 
-    public int setInterval(Object listener, long interval, Object... args) {
-        return getTimerForCurrentThread().setInterval(listener, interval, args);
+    public double setInterval(Object listener, long interval, Object... args) {
+        return getTimerForCurrentOrMainThread().setInterval(listener, interval, args);
     }
 
-    public boolean clearInterval(int id) {
-        return getTimerForCurrentThread().clearInterval(id);
+    public boolean clearInterval(double id) {
+        Timer timer = getTimerForId(id);
+        return timer != null && timer.clearInterval(id);
     }
 
-    public int setImmediate(Object listener, Object... args) {
-        return getTimerForCurrentThread().setImmediate(listener, args);
+    public double setImmediate(Object listener, Object... args) {
+        return getTimerForCurrentOrMainThread().setImmediate(listener, args);
     }
 
-    public boolean clearImmediate(int id) {
-        return getTimerForCurrentThread().clearImmediate(id);
+    public boolean clearImmediate(double id) {
+        Timer timer = getTimerForId(id);
+        return timer != null && timer.clearImmediate(id);
+    }
+
+    public Timer newTimer(ScriptRuntime runtime) {
+        int timerId = mNextTimerId.getAndIncrement();
+        if (timerId > TimerId.MAX_TIMER_ID) throw new IllegalStateException("Too many script timers");
+        Timer timer = new Timer(runtime, mMaxCallbackUptimeMillisForAllThreads, timerId);
+        mTimers.put(timerId, new WeakReference<>(timer));
+        return timer;
+    }
+
+    public Timer getTimerForCurrentOrMainThread() {
+        Timer timer = getTimerForCurrentThread();
+        return timer != null ? timer : mMainTimer;
+    }
+
+    private Timer getTimerForId(double id) {
+        int timerId = TimerId.timerId(id);
+        if (timerId == 0) return mMainTimer;
+        if (timerId == 1) return mUiTimer;
+        WeakReference<Timer> reference = mTimers.get(timerId);
+        Timer timer = reference == null ? null : reference.get();
+        if (reference != null && timer == null) mTimers.remove(timerId, reference);
+        return timer;
     }
 
     public boolean hasPendingCallbacks() {
@@ -85,11 +117,18 @@ public class Timers {
             return mMaxCallbackUptimeMillisForAllThreads.get() > SystemClock.uptimeMillis();
         }
         // 否则检查当前线程的定时回调
-        return getTimerForCurrentThread().hasPendingCallbacks();
+        Timer timer = getTimerForCurrentThread();
+        return timer != null && timer.hasPendingCallbacks();
     }
 
     public void recycle() {
         mMainTimer.removeAllCallbacks();
+        mUiTimer.removeAllCallbacks();
+        for (WeakReference<Timer> reference : mTimers.values()) {
+            Timer timer = reference.get();
+            if (timer != null) timer.removeAllCallbacks();
+        }
+        mTimers.clear();
     }
 
 }

@@ -88,8 +88,8 @@ module.exports = function(__runtime__, scope){
         index = index || [];
         if(isUiThread() && !callback){
             return new Promise(function(resolve, reject){
-                rtDialogs().singleChoice(title, index, items, function(r){
-                    resolve.apply(null, javaArrayToJsArray(r));
+                rtDialogs().multiChoice(title, index, items, function(r){
+                    resolve(javaArrayToJsArray(r));
                 });
             });
         }
@@ -164,7 +164,7 @@ module.exports = function(__runtime__, scope){
 
     function applyOtherDialogProperties(builder, properties){
         if(properties.inputHint != undefined || properties.inputPrefill != undefined){
-            builder.input(wrapNonNullString(properties.inputHint), wrapNonNullString(properties.inputPrefill), 
+            builder.input(wrapNonNullString(properties.inputHint), wrapNonNullString(properties.inputPrefill),
                 function(dialog, input){
                     input = input.toString();
                     builder.dialog.emit("input_change", builder.dialog, input);
@@ -177,18 +177,18 @@ module.exports = function(__runtime__, scope){
                 builder.itemsCallback(function(dialog, view, position, text){
                     builder.dialog.emit("item_select", position, text.toString(), builder.dialog);
                 });
-            }else if(itemsSelectMode == 'single'){
-                builder.itemsCallbackSingleChoice(properties.itemsSelectedIndex == undefined ? -1 : properties.itemsSelectedIndex, 
+            }else if((itemsSelectMode == 'single' || itemsSelectMode == 'singleChoice')){
+                builder.itemsCallbackSingleChoice(properties.itemsSelectedIndex == undefined ? -1 : properties.itemsSelectedIndex,
                     function(dialog, view, which, text){
                         builder.dialog.emit("single_choice", which, text.toString(), builder.dialog);
                         return true;
                     });
-            }else if(itemsSelectMode == 'multi'){
-                builder.itemsCallbackMultiChoice(properties.itemsSelectedIndex == undefined ? null : properties.itemsSelectedIndex, 
-                    function(dialog, view, indices, texts){
-                        builder.dialog.emit("multi_choice", toJsArray(indices, (l, i)=> parseInt(l.get(i)),
-                            toJsArray(texts, (l, i)=> l.get(i).toString())), builder.dialog);
-                            return true;                        
+            }else if((itemsSelectMode == 'multi' || itemsSelectMode == 'multiChoice')){
+                builder.itemsCallbackMultiChoice(properties.itemsSelectedIndex == undefined ? null : properties.itemsSelectedIndex,
+                    function(dialog, indices, texts){
+                        builder.dialog.emit("multi_choice", toJsArray(indices, (l, i)=> parseInt(l[i])),
+                            toJsArray(texts, (l, i)=> l[i].toString()), builder.dialog);
+                        return true;
                     });
             }else{
                 throw new Error("unknown itemsSelectMode " + itemsSelectMode);
@@ -201,7 +201,7 @@ module.exports = function(__runtime__, scope){
             builder.progressIndeterminateStyle(!!progress.horizontal);
         }
         if(properties.checkBoxPrompt != undefined || properties.checkBoxChecked != undefined){
-            builder.checkBoxPrompt(wrapNonNullString(properties.checkBoxPrompt),  !!properties.checkBoxChecked, 
+            builder.checkBoxPrompt(wrapNonNullString(properties.checkBoxPrompt),  !!properties.checkBoxChecked,
                 function(view, checked){
                     builder.getDialog().emit("check", checked, builder.getDialog());
                 });
@@ -232,11 +232,11 @@ module.exports = function(__runtime__, scope){
         return jsArray;
     }
 
-    function toJsArray(object, adapter){
+    function toJsArray(javaArray, adapter){
         var jsArray = [];
         var len = javaArray.length;
         for (var i = 0;i < len;i++){
-            jsArray.push(adapter(object, i));
+            jsArray.push(adapter(javaArray, i));
         }
         return jsArray;
     }

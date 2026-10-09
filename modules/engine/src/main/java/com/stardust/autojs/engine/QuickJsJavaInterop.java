@@ -66,6 +66,8 @@ final class QuickJsJavaInterop {
         return mHandles.get(handle);
     }
 
+    void releaseForScript(long handle) { mHandles.remove(handle); }
+
     private Object requireHandle(long handle) {        Object value = mHandles.get(handle);
         if (value == null) {
             throw new IllegalStateException("Java 对象句柄已失效：" + handle);
@@ -330,12 +332,40 @@ final class QuickJsJavaInterop {
 
     private Object invoke(Method method, Object receiver, Object[] args) {
         try {
-            return method.invoke(receiver, args);
+            // Public methods of package-private JDK/Android collection implementations are
+            // callable through their public API declaration without opening private access.
+            Method declaration = method;
+            if (receiver != null && !Modifier.isStatic(method.getModifiers())
+                    && !Modifier.isPublic(method.getDeclaringClass().getModifiers())) {
+                Method publicMethod = findPublicDeclaration(receiver.getClass(), method.getName(),
+                        method.getParameterTypes());
+                if (publicMethod != null) declaration = publicMethod;
+            }
+            return declaration.invoke(receiver, args);
         } catch (InvocationTargetException error) {
             throw new InvocationFailure(describeTargetError(error));
         } catch (ReflectiveOperationException error) {
             throw new InvocationFailure("Java 调用失败：" + method.getName() + " - " + error);
         }
+    }
+
+    /** Find the same signature on an accessible API; reflection retains virtual dispatch. */
+    private static Method findPublicDeclaration(Class<?> type, String name, Class<?>[] parameterTypes) {
+        if (type == null) return null;
+        if (Modifier.isPublic(type.getModifiers())) {
+            try {
+                Method method = type.getMethod(name, parameterTypes);
+                if (Modifier.isPublic(method.getDeclaringClass().getModifiers())
+                        && !Modifier.isStatic(method.getModifiers())) return method;
+            } catch (NoSuchMethodException ignored) {
+                // The implementation may expose an API through another interface or superclass.
+            }
+        }
+        for (Class<?> api : type.getInterfaces()) {
+            Method method = findPublicDeclaration(api, name, parameterTypes);
+            if (method != null) return method;
+        }
+        return findPublicDeclaration(type.getSuperclass(), name, parameterTypes);
     }
 
     private static String describeTargetError(InvocationTargetException error) {

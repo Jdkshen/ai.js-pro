@@ -1,5 +1,6 @@
 package com.stardust.autojs.core.accessibility;
 
+import android.os.Build;
 import android.os.Looper;
 import android.os.SystemClock;
 
@@ -21,6 +22,7 @@ import com.stardust.view.accessibility.AccessibilityNodeInfoAllocator;
 
 import org.jetbrains.annotations.NotNull;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -158,14 +160,45 @@ public class UiSelector extends UiGlobalSelector {
         mAccessibilityBridge.ensureServiceEnabled();
     }
 
+    private static final long DEFAULT_REFRESH_TIMEOUT = 7000;
+
     @ScriptInterface
     @NonNull
     public UiObjectCollection untilFind() {
+        return untilFind(0, DEFAULT_REFRESH_TIMEOUT);
+    }
+
+    /**
+     * Auto.js Pro 的 {@code untilFind(timeout)}：超时后返回（可能为空的）集合。
+     */
+    @ScriptInterface
+    @NonNull
+    public UiObjectCollection untilFind(long timeout) {
+        return untilFind(timeout, DEFAULT_REFRESH_TIMEOUT);
+    }
+
+    /**
+     * Auto.js Pro 的 {@code untilFind(timeout, interval)}：timeout<=0 表示一直等待；
+     * interval 为无障碍缓存刷新间隔；查询仍按 50ms 轮询。
+     */
+    @ScriptInterface
+    @NonNull
+    public UiObjectCollection untilFind(long timeout, long interval) {
         ensureNonUiThread();
         UiObjectCollection uiObjectCollection = find();
+        long start = SystemClock.elapsedRealtime();
+        long lastRefresh = start;
         while (uiObjectCollection.empty()) {
             if (Thread.currentThread().isInterrupted()) {
                 throw new ScriptInterruptedException();
+            }
+            long now = SystemClock.elapsedRealtime();
+            if (timeout > 0 && now - start > timeout) {
+                return uiObjectCollection;
+            }
+            if (interval > 0 && now - lastRefresh > interval) {
+                refreshAccessibilityCache();
+                lastRefresh = SystemClock.elapsedRealtime();
             }
             try {
                 Thread.sleep(50);
@@ -177,6 +210,28 @@ public class UiSelector extends UiGlobalSelector {
         return uiObjectCollection;
     }
 
+    protected void refreshAccessibilityCache() {
+        com.stardust.view.accessibility.AccessibilityService service = mAccessibilityBridge.getService();
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (service != null) {
+                    service.clearCache();
+                }
+            } else {
+                Class<?> clientClass = Class.forName("android.view.accessibility.AccessibilityInteractionClient");
+                Method getInstance = clientClass.getMethod("getInstance");
+                Method clearCache = clientClass.getMethod("clearCache");
+                clearCache.invoke(getInstance.invoke(null));
+            }
+        } catch (ReflectiveOperationException | RuntimeException error) {
+            throw new IllegalStateException("Cannot refresh accessibility cache", error);
+        } finally {
+            if (service != null) {
+                service.clearNodeCache();
+            }
+        }
+    }
+
     private void ensureNonUiThread() {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             // TODO: 2018/11/1 配置字符串
@@ -186,14 +241,29 @@ public class UiSelector extends UiGlobalSelector {
 
     @ScriptInterface
     public UiObject findOne(long timeout) {
+        return findOne(timeout, DEFAULT_REFRESH_TIMEOUT);
+    }
+
+    /**
+     * Auto.js Pro 的 {@code findOne(timeout, interval)}：timeout<=0 表示一直等待，超时返回 null。
+     */
+    @ScriptInterface
+    public UiObject findOne(long timeout, long interval) {
+        ensureNonUiThread();
         UiObjectCollection uiObjectCollection = find(1);
-        long start = SystemClock.uptimeMillis();
+        long start = SystemClock.elapsedRealtime();
+        long lastRefresh = start;
         while (uiObjectCollection.empty()) {
             if (Thread.currentThread().isInterrupted()) {
                 throw new ScriptInterruptedException();
             }
-            if (timeout > 0 && SystemClock.uptimeMillis() - start > timeout) {
+            long now = SystemClock.elapsedRealtime();
+            if (timeout > 0 && now - start > timeout) {
                 return null;
+            }
+            if (interval > 0 && now - lastRefresh > interval) {
+                refreshAccessibilityCache();
+                lastRefresh = SystemClock.elapsedRealtime();
             }
             try {
                 Thread.sleep(50);
@@ -244,8 +314,12 @@ public class UiSelector extends UiGlobalSelector {
             addFilter(new Filter() {
                 @Override
                 public boolean filter(@NotNull UiObject node) {
-                    String fullId = mAccessibilityBridge.getInfoProvider().getLatestPackage() + ":id/" + id;
-                    return fullId.equals(node.getViewIdResourceName());
+                    String fullId = node.getViewIdResourceName();
+                    if (fullId == null) {
+                        return false;
+                    }
+                    String[] parts = fullId.split(":id/", 2);
+                    return id.equals(parts.length == 2 ? parts[1] : fullId);
                 }
 
                 @Override

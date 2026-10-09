@@ -5,6 +5,7 @@ import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
 import com.stardust.automator.UiGlobalSelector;
 import com.stardust.automator.UiObject;
 import com.stardust.view.accessibility.NodeInfo;
+import com.google.gson.Gson;
 
 /**
  * Created by Stardust on 2017/12/7.
@@ -24,6 +25,7 @@ public class CodeGenerator {
     private boolean mUsingText = true;
     private int mSearchMode = FIND_ONE;
     private int mAction = -1;
+    private String mActionText = "";
 
     public CodeGenerator(NodeInfo root, NodeInfo target) {
         this(new ReadOnlyUiObject(root), new ReadOnlyUiObject(target));
@@ -55,9 +57,13 @@ public class CodeGenerator {
         mAction = action;
     }
 
+    public void setActionText(String text) {
+        mActionText = text == null ? "" : text;
+    }
+
     public String generateCode() {
         UiObject collection = getCollectionParent(mTarget);
-        if (collection != null) {
+        if (collection != null && mSearchMode == FIND_ONE) {
             return generateCodeForCollectionChild(collection, mTarget);
         }
 
@@ -85,6 +91,9 @@ public class CodeGenerator {
             return selector;
         }
 
+        // Navigation requires a UiObject, not a boolean, void or a collection.
+        if (!withFind || mSearchMode != FIND_ONE) return null;
+
         if (maxChildrenLevel > 0) {
             for (int i = 0; i < target.childCount(); i++) {
                 UiObject child = target.child(i);
@@ -98,10 +107,10 @@ public class CodeGenerator {
         }
         if (maxParentLevel > 0 && target.parent() != null) {
             int index = target.indexInParent();
-            if (index > 0) {
+            if (index >= 0) {
                 String parentCode = generateCode(root, target.parent(), maxParentLevel - 1, 0);
                 if (parentCode != null) {
-                    return parentCode + "child(" + index + ")";
+                    return parentCode + ".child(" + index + ")";
                 }
             }
         }
@@ -115,6 +124,9 @@ public class CodeGenerator {
     protected String generateCode(UiObject root, UiObject target, int maxParentLevel, int maxChildrenLevel, boolean withFind) {
         UiSelectorGenerator generator = new UiSelectorGenerator(root, target);
         generator.setUsingId(mUsingId);
+        generator.setUsingText(mUsingText);
+        generator.setUsingDesc(mUsingDesc);
+        generator.setSearchMode(mSearchMode);
         return generateCode(generator, root, target, maxParentLevel, maxChildrenLevel, withFind);
     }
 
@@ -149,7 +161,7 @@ public class CodeGenerator {
                 return "scrollForward()";
 
             case AccessibilityNodeInfoCompat.ACTION_SET_TEXT:
-                return "setText(\"\")";
+                return "setText(" + new Gson().toJson(mActionText) + ")";
         }
         return "";
     }
@@ -173,13 +185,16 @@ public class CodeGenerator {
         String itemCode = generateCode(collectionItem, target, 1, 2, false);
         if (itemCode == null)
             return null;
+        String action = getAction();
         return collectionCode + ".children().forEach(child => {\n"
                 + "var target = child.findOne(" + itemCode + ");\n"
-                + "target." + getAction() + ";\n"
+                + (action.isEmpty() ? "// target 为当前列表项匹配的控件\n" : "if (target) target." + action + ";\n")
                 + "});";
     }
 
     private boolean inherits(UiObject root, UiObject target) {
+        if (root == null) return false;
+        if (root.equals(target)) return true;
         for (int i = 0; i < root.childCount(); i++) {
             UiObject child = root.child(i);
             if (child != null) {

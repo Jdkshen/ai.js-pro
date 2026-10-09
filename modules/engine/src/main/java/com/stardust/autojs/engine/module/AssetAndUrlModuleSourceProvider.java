@@ -5,6 +5,7 @@ import android.content.res.AssetManager;
 import com.stardust.autojs.engine.encryption.ScriptEncryption;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 
+import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.commonjs.module.provider.ModuleSource;
 
 import java.io.ByteArrayInputStream;
@@ -38,13 +39,21 @@ public class AssetAndUrlModuleSourceProvider extends UrlModuleSourceProvider {
     }
 
     @Override
+    public ModuleSource loadSource(String moduleId, Scriptable paths, Object validator)
+            throws IOException, URISyntaxException {
+        // PathAwareRequire 负责在相对路径解析前转义；直接调用 provider 的入口也保持一致。
+        return super.loadSource(PathAwareRequire.encodeModuleId(moduleId), paths, validator);
+    }
+
+    @Override
     protected ModuleSource loadFromPrivilegedLocations(String moduleId, Object validator) throws IOException, URISyntaxException {
         String moduleIdWithExtension = moduleId;
         if (!moduleIdWithExtension.endsWith(".js")) {
             moduleIdWithExtension += ".js";
         }
         try {
-            return new ModuleSource(new InputStreamReader(mAssetManager.open(mAssetDirPath + "/" + moduleIdWithExtension)), null,
+            String assetPath = mAssetDirPath + "/" + moduleIdWithExtension.replace("%20", " ");
+            return new ModuleSource(new InputStreamReader(mAssetManager.open(assetPath)), null,
                     new URI(mBaseURI.toString() + "/" + moduleIdWithExtension), mBaseURI, validator);
         } catch (FileNotFoundException e) {
             return super.loadFromPrivilegedLocations(moduleId, validator);

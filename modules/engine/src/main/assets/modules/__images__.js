@@ -153,23 +153,90 @@ module.exports = function (runtime, scope) {
 
         var colorFinder = javaImages.colorFinder;
 
-        images.requestScreenCapture = function (landscape) {
-            if (landscape && typeof landscape === 'object' && landscape.mode === 'accessibility') {
+        // 对齐 Pro：images 也是 EventEmitter（`images.on("screen_capture", ...)`），
+        // 事件底座与 events 模块相同（runtime.events.emitter()）。
+        var imagesEventEmitter = runtime.events.emitter();
+        ['on', 'once', 'emit', 'removeListener', 'removeAllListeners', 'listenerCount', 'eventNames',
+            'addListener', 'prependListener', 'prependOnceListener', 'setMaxListeners', 'getMaxListeners',
+            'listeners'].forEach(function (name) {
+            if (images[name] === undefined && imagesEventEmitter[name] !== undefined) {
+                images[name] = imagesEventEmitter[name].bind(imagesEventEmitter);
+            }
+        });
+
+        // 与 Pro 一致：支持 requestScreenCapture([landscape]) / (options) / (width, height)；
+        // 自研扩展：options.mode = 'accessibility' | 'auto'（旧行为保留）
+        images.__requestScreenCapture__ = function (landscape) {
+            let ScreenCapturer = com.stardust.autojs.core.image.capture.ScreenCapturer;
+            var options = {
+                orientation: ScreenCapturer.ORIENTATION_AUTO,
+                width: -1,
+                height: -1,
+                async: false
+            };
+            if (arguments.length == 1) {
+                if (typeof (arguments[0]) === 'boolean') {
+                    options.orientation = arguments[0] ? ScreenCapturer.ORIENTATION_LANDSCAPE : ScreenCapturer.ORIENTATION_PORTRAIT;
+                } else if (arguments[0] && typeof (arguments[0]) === 'object') {
+                    var source = arguments[0];
+                    for (var key in source) {
+                        options[key] = source[key];
+                    }
+                }
+            } else if (arguments.length == 2) {
+                options.orientation = -1;
+                options.width = arguments[0];
+                options.height = arguments[1];
+            }
+            if (options.mode === 'accessibility') {
                 return javaImages.requestAccessibilityScreenCapture();
             }
-            let ScreenCapturer = com.stardust.autojs.core.image.capture.ScreenCapturer;
-            var orientation = ScreenCapturer.ORIENTATION_AUTO;
-            if (landscape === true) {
-                orientation = ScreenCapturer.ORIENTATION_LANDSCAPE;
+            if (options.mode === 'auto') {
+                return javaImages.requestAutoScreenCapture(options.orientation);
             }
-            if (landscape === false) {
-                orientation = ScreenCapturer.ORIENTATION_PORTRAIT;
+            var result = javaImages.requestScreenCapture(options.orientation, options.width, options.height, !!options.async);
+            if (options.async) {
+                javaImages.setImageCaptureCallback(function (image) {
+                    images.emit("screen_capture", image);
+                });
             }
-            if (landscape && typeof landscape === 'object' && landscape.mode === 'auto') {
-                return javaImages.requestAutoScreenCapture(orientation);
+            return result;
+        };
+
+        images.requestScreenCaptureAsync = function () {
+            var result = images.__requestScreenCapture__.apply(this, arguments);
+            // 自研扩展通道（accessibility/auto）返回 boolean，不做 promise 包装
+            if (typeof result === 'boolean') {
+                return result;
             }
-            return ResultAdapter.wait(javaImages.requestScreenCapture(orientation));
-        }
+            return ResultAdapter.promise(result);
+        };
+
+        images.requestScreenCapture = function () {
+            var result = images.__requestScreenCapture__.apply(this, arguments);
+            if (typeof result === 'boolean') {
+                return result;
+            }
+            return ResultAdapter.wait(result);
+        };
+
+        images.isWindowCaptureAvailable = function () { return javaImages.isWindowCaptureAvailable(); };
+        images.listCaptureWindows = function () { return JSON.parse(String(javaImages.listCaptureWindows())); };
+        images.captureWindow = function (options) {
+            options = options || {};
+            if (options.size != null && Number(options.size) !== 0)
+                throw new Error('captureWindow size is currently available in QuickJS only');
+            var timeout = options.timeout == null ? 2000 : Number(options.timeout);
+            var windowId = options.windowId == null ? -1 : Number(options.windowId);
+            if (!isFinite(timeout) || timeout <= 0 || timeout > 5000 || Math.floor(timeout) !== timeout)
+                throw new RangeError('captureWindow timeout must be an integer in 1..5000 ms');
+            if (!isFinite(windowId) || windowId < -1 || windowId > 2147483647 || Math.floor(windowId) !== windowId)
+                throw new RangeError('captureWindow windowId must be a nonnegative integer');
+            var frame = javaImages.captureWindow(windowId, String(options.packageName || ''), timeout, options.screenCoordinates === true);
+            var result = JSON.parse(String(frame.metadata));
+            result.image = frame.image;
+            return result;
+        };
 
         images.save = function (img, path, format, quality) {
             format = format || "png";
@@ -184,6 +251,20 @@ module.exports = function (runtime, scope) {
 
         images.stopScreenCapture = function () {
             javaImages.stopScreenCapture();
+        }
+
+        images.shareScreenCapture = function () {
+            return String(javaImages.shareScreenCapture());
+        };
+        images.useSharedScreenCapture = function (token) {
+            if (typeof token !== 'string' || !token) throw new TypeError('需要有效的共享截图凭据');
+            return javaImages.useSharedScreenCapture(token);
+        };
+
+        // PDF §2.18.4：images.select() —— 弹出系统图片选择器，返回 EventEmitter
+        // （成功时依次触发 process(Uri) 与 result(ImageWrapper)，取消/失败时 result 为 null）
+        images.select = function () {
+            return javaImages.select();
         }
 
         // PDF §2.18.1：images.getSimilarity(img1, img2, options)，type 支持 MSSIM（默认）/ PNSR
@@ -211,7 +292,12 @@ module.exports = function (runtime, scope) {
         images.saveImage = images.save;
 
         images.grayscale = function (img, dstCn) {
-            return images.cvtColor(img, "BGR2GRAY", dstCn);
+            initIfNeeded();
+            // ImageWrapper uses RGB/RGBA (Bitmap -> Mat), matching pixel().
+            // BGR weights darken red/brown surfaces and break brightness gates.
+            var channels = img.mat.channels();
+            if (channels === 1) return images.copy(img);
+            return images.cvtColor(img, channels === 4 ? "RGBA2GRAY" : "RGB2GRAY", dstCn);
         }
 
         images.threshold = function (img, threshold, maxVal, type) {
@@ -464,11 +550,13 @@ module.exports = function (runtime, scope) {
             }
             max = Math.floor(max);
             var weakThreshold = templateThreshold(options.weakThreshold, 0.6, "weakThreshold");
+            // 对齐 Pro：options.transparentMask = true 时，模板 alpha <= 127 的像素不参与匹配
+            var useTransparentMask = !!options.transparentMask;
             var result;
             if (options.region) {
-                result = javaImages.matchTemplate(img, template, weakThreshold, threshold, buildRegion(options.region, img), maxLevel, max);
+                result = javaImages.matchTemplate(img, template, weakThreshold, threshold, buildRegion(options.region, img), maxLevel, max, useTransparentMask);
             } else {
-                result = javaImages.matchTemplate(img, template, weakThreshold, threshold, null, maxLevel, max);
+                result = javaImages.matchTemplate(img, template, weakThreshold, threshold, null, maxLevel, max, useTransparentMask);
             }
             return new MatchingResult(result);
         }
@@ -632,6 +720,7 @@ module.exports = function (runtime, scope) {
 
         scope.colors = colors;
 
+        require('sift-api')(images, scope, javaImages);
         return images;
     }
 }

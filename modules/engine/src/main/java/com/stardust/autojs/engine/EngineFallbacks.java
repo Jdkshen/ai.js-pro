@@ -9,8 +9,9 @@ import org.mozilla.javascript.Context;
  * 跑不起来的情况下**换引擎，并由调用方同时写一条 W 级说明（不做静默切换）。
  *
  * <ol>
- *   <li>Rhino 1.7.7 的词法层没有模板字符串（反引号）：含反引号的脚本在 Rhino 下编译必挂
- *       （{@code illegal character}），QuickJS 能跑。</li>
+ *   <li>Rhino 1.7.14.1 已原生支持模板字符串（反引号）；这条兜底仍保留：含反引号的脚本
+ *       若在 Rhino 下编译不过（通常意味着另有它不支持的语法，如 class / 展开 / for-of），
+ *       交给 QuickJS 试跑。</li>
  *   <li>QuickJS 没有 E4X：XML 字面量（{@code ui.layout(<frame/>)} 这种 Auto.js 经典写法）
  *       在它那里是语法错误（{@code unexpected token in expression: '<'}），Rhino 支持。</li>
  * </ol>
@@ -29,7 +30,7 @@ public final class EngineFallbacks {
     private EngineFallbacks() {
     }
 
-    /** 情况 1：源码含反引号、且 Rhino 编译不过 → 该交给 QuickJS。 */
+    /** 情况 1：源码含反引号、且 Rhino 编译不过 → 兜底交给 QuickJS（模板字符串本身已支持，触发者多为其它新语法）。 */
     public static boolean shouldSwitchToQuickJs(String script, String scriptName) {
         if (script == null || script.isEmpty() || script.indexOf(BACKTICK) < 0) {
             return false;
@@ -42,7 +43,7 @@ public final class EngineFallbacks {
         if (script == null || script.isEmpty() || !XML_LAYOUT.matcher(script).find()) {
             return false;
         }
-        return compilesOnRhino(script, scriptName);
+        return compilesOnRhino(RhinoSyntaxPreprocessor.apply(script), scriptName);
     }
 
     private static boolean compilesOnRhino(String script, String scriptName) {

@@ -4,6 +4,8 @@ import android.util.Log
 import android.view.View
 import com.stardust.autojs.core.ui.ViewExtras
 import com.stardust.autojs.engine.module.AssetAndUrlModuleSourceProvider
+import com.stardust.autojs.engine.module.PathAwareRequire
+import com.stardust.autojs.engine.module.TemplateLiteralModuleSourceProvider
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.project.ScriptConfig
 import com.stardust.autojs.rhino.AndroidClassLoader
@@ -16,7 +18,6 @@ import com.stardust.autojs.script.JavaScriptSource
 import com.stardust.automator.UiObjectCollection
 import com.stardust.pio.UncheckedIOException
 import org.mozilla.javascript.*
-import org.mozilla.javascript.commonjs.module.RequireBuilder
 import org.mozilla.javascript.commonjs.module.provider.SoftCachingModuleScriptProvider
 import java.io.File
 import java.io.IOException
@@ -142,26 +143,12 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     /**
      * 交给 Rhino 之前对源码做一次改写。
      *
-     * 目前只干一件事：把 ES6 模板字符串降级成 ES5 字符串拼接（[TemplateLiteralPreprocessor]）。
-     * 理由：Rhino 1.7.7 的词法层没有反引号，而「用模板字符串拼 XML + `floaty.rawWindow('<canvas/>')`」
-     * 这类脚本恰恰依赖 Rhino 独有能力（canvas 的 draw 回调要在绘制线程同步进脚本，QuickJS 单线程做不到），
-     * 一旦被自动切到 QuickJS 就必然挂掉。降级后这类脚本可以**一字不改**留在 Rhino 上跑通。
+     * 降级模板字符串及旧 Rhino 缺少的对象简写／方法简写，保留 E4X 布局脚本的运行能力。
      */
     @Throws(IOException::class)
     protected fun preprocess(script: Reader): Reader {
         val text = script.readText()
-        if (!TemplateLiteralPreprocessor.containsTemplateLiteral(text)) {
-            return StringReader(text)
-        }
-        val downgraded = TemplateLiteralPreprocessor.apply(text)
-        return if (downgraded == null) {
-            // 无法安全降级的写法（标签模板/未闭合）：原样交给 Rhino，失败时会由
-            // EngineSyntaxHint 提示改用 QuickJS。
-            StringReader(text)
-        } else {
-            Log.d(LOG_TAG, "template literals downgraded to ES5 string concatenation")
-            StringReader(downgraded)
-        }
+        return StringReader(RhinoSyntaxPreprocessor.apply(text))
     }
 
     override fun forceStop() {
@@ -194,12 +181,10 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     }
 
     internal fun initRequireBuilder(context: Context, scope: Scriptable) {
-        val provider = AssetAndUrlModuleSourceProvider(mAndroidContext, MODULES_PATH,
-                listOf<URI>(File("/").toURI()))
-        RequireBuilder()
-                .setModuleScriptProvider(SoftCachingModuleScriptProvider(provider))
-                .setSandboxed(true)
-                .createRequire(context, scope)
+        val provider = TemplateLiteralModuleSourceProvider(
+                AssetAndUrlModuleSourceProvider(mAndroidContext, MODULES_PATH,
+                        listOf<URI>(File("/").toURI())))
+        PathAwareRequire(context, scope, SoftCachingModuleScriptProvider(provider))
                 .install(scope)
 
     }

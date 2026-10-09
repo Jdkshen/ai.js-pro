@@ -28,6 +28,11 @@ public class AppUtils {
 
     private Context mContext;
     private volatile WeakReference<Activity> mCurrentActivity = new WeakReference<>(null);
+    /**
+     * Auto.js Pro 的 top activity：与 currentActivity 不同——它在重叠 Activity 切换时不被
+     * pause 清空，只在被记录的 Activity 被销毁时置空（见 AutoJs 的生命周期回调）。
+     */
+    private volatile WeakReference<Activity> mTopActivity = new WeakReference<>(null);
     private final String mFileProviderAuthority;
 
     public AppUtils(Context context) {
@@ -180,6 +185,73 @@ public class AppUtils {
     public Activity getCurrentActivity() {
         Log.d("App", "getCurrentActivity: " + mCurrentActivity.get());
         return mCurrentActivity.get();
+    }
+
+    /**
+     * Auto.js Pro 的同名方法：返回当前 top Activity（无则为 null）。
+     * 语义与 Pro 一致：created/resumed/started 时更新，仅在其被销毁时清空。
+     */
+    @ScriptInterface
+    public Activity getTopActivity() {
+        return mTopActivity.get();
+    }
+
+    /**
+     * Auto.js Pro 的同名方法（内部注入用，脚本可调）。
+     */
+    public void setTopActivity(Activity activity) {
+        mTopActivity = new WeakReference<>(activity);
+    }
+
+    /**
+     * Auto.js Pro 的 app.getPathFromUri(uri)：把 content:// 等 Uri 解析为文件路径（失败为 null）。
+     */
+    @Nullable
+    @ScriptInterface
+    public String getPathFromUri(Uri uri) {
+        if (uri == null) {
+            return null;
+        }
+        if ("file".equals(uri.getScheme())) {
+            return uri.getPath();
+        }
+        try (android.database.Cursor cursor = mContext.getContentResolver().query(uri,
+                new String[]{android.provider.MediaStore.MediaColumns.DATA}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DATA);
+                if (index >= 0) {
+                    String path = cursor.getString(index);
+                    if (path != null && new java.io.File(path).exists()) {
+                        return path;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        String uriPath = uri.getPath();
+        if (uriPath != null) {
+            int index = uriPath.indexOf("external_files");
+            if (index >= 0) {
+                String suffix = uriPath.substring(index + "external_files".length());
+                if (suffix.startsWith("/")) {
+                    suffix = suffix.substring(1);
+                }
+                java.io.File file = new java.io.File(android.os.Environment.getExternalStorageDirectory(), suffix);
+                if (file.exists() && file.canRead()) {
+                    return file.getPath();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 字符串版重载：脚本常直接传字符串（否则 Rhino 无法把 String 转成 Uri）。
+     */
+    @Nullable
+    @ScriptInterface
+    public String getPathFromUri(String uri) {
+        return uri == null ? null : getPathFromUri(Uri.parse(uri));
     }
 
     @ScriptInterface

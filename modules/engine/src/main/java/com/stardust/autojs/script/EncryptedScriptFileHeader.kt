@@ -17,6 +17,11 @@ object EncryptedScriptFileHeader {
     const val PAYLOAD_TYPE_RHINO_CLASS: Int = 1
     /** 载荷类型：QuickJS 字节码（预留）。 */
     const val PAYLOAD_TYPE_QUICKJS_BYTECODE: Int = 2
+    /**
+     * 载荷类型：目录工程的脚本容器（除入口外所有脚本的加密 zip，
+     * 见 {@code ScriptProtection.SCRIPT_PACK_FILE}）。
+     */
+    const val PAYLOAD_TYPE_SCRIPT_PACK: Int = 3
 
     /**
      * 载荷类型存放在 flags 的高字节：低字节留给执行模式等既有标记，

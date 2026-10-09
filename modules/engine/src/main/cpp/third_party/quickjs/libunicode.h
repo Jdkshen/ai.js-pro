@@ -24,17 +24,27 @@
 #ifndef LIBUNICODE_H
 #define LIBUNICODE_H
 
-#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <inttypes.h>
 
-/* unicode standard version */
-#define LIBUNICODE_UNICODE_VERSION_MAJOR 17
-#define LIBUNICODE_UNICODE_VERSION_MINOR 0
-#define LIBUNICODE_UNICODE_VERSION_PATCH 0
-
-/* define it to include all the unicode tables (40KB larger) */
-#define CONFIG_ALL_UNICODE
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define LRE_CC_RES_LEN_MAX 3
+
+typedef enum {
+    UNICODE_NFC,
+    UNICODE_NFD,
+    UNICODE_NFKC,
+    UNICODE_NFKD,
+} UnicodeNormalizationEnum;
+
+int lre_case_conv(uint32_t *res, uint32_t c, int conv_type);
+int lre_canonicalize(uint32_t c, bool is_unicode);
+bool lre_is_cased(uint32_t c);
+bool lre_is_case_ignorable(uint32_t c);
 
 /* char ranges */
 
@@ -79,8 +89,6 @@ static inline int cr_add_interval(CharRange *cr, uint32_t c1, uint32_t c2)
     return 0;
 }
 
-int cr_op(CharRange *cr, const uint32_t *a_pt, int a_len,
-          const uint32_t *b_pt, int b_len, int op);
 int cr_op1(CharRange *cr, const uint32_t *b_pt, int b_len, int op);
 
 static inline int cr_union_interval(CharRange *cr, uint32_t c1, uint32_t c2)
@@ -91,16 +99,15 @@ static inline int cr_union_interval(CharRange *cr, uint32_t c1, uint32_t c2)
     return cr_op1(cr, b_pt, 2, CR_OP_UNION);
 }
 
+int cr_op(CharRange *cr, const uint32_t *a_pt, int a_len,
+          const uint32_t *b_pt, int b_len, int op);
+
 int cr_invert(CharRange *cr);
+int cr_regexp_canonicalize(CharRange *cr, bool is_unicode);
 
-int cr_regexp_canonicalize(CharRange *cr, int is_unicode);
-
-typedef enum {
-    UNICODE_NFC,
-    UNICODE_NFD,
-    UNICODE_NFKC,
-    UNICODE_NFKD,
-} UnicodeNormalizationEnum;
+bool lre_is_id_start(uint32_t c);
+bool lre_is_id_continue(uint32_t c);
+bool lre_is_white_space(uint32_t c);
 
 int unicode_normalize(uint32_t **pdst, const uint32_t *src, int src_len,
                       UnicodeNormalizationEnum n_type,
@@ -108,7 +115,8 @@ int unicode_normalize(uint32_t **pdst, const uint32_t *src, int src_len,
 
 /* Unicode character range functions */
 
-int unicode_script(CharRange *cr, const char *script_name, int is_ext);
+int unicode_script(CharRange *cr,
+                   const char *script_name, bool is_ext);
 int unicode_general_category(CharRange *cr, const char *gc_name);
 int unicode_prop(CharRange *cr, const char *prop_name);
 
@@ -116,10 +124,7 @@ typedef void UnicodeSequencePropCB(void *opaque, const uint32_t *buf, int len);
 int unicode_sequence_prop(const char *prop_name, UnicodeSequencePropCB *cb, void *opaque,
                           CharRange *cr);
 
-int lre_case_conv(uint32_t *res, uint32_t c, int conv_type);
-int lre_canonicalize(uint32_t c, int is_unicode);
-
-/* Code point type categories */
+/* Code point type categories (ASCII fast path table) */
 enum {
     UNICODE_C_SPACE  = (1 << 0),
     UNICODE_C_DIGIT  = (1 << 1),
@@ -130,12 +135,6 @@ enum {
     UNICODE_C_XDIGIT = (1 << 6),
 };
 extern uint8_t const lre_ctype_bits[256];
-
-/* zero or non-zero return value */
-int lre_is_cased(uint32_t c);
-int lre_is_case_ignorable(uint32_t c);
-int lre_is_id_start(uint32_t c);
-int lre_is_id_continue(uint32_t c);
 
 static inline int lre_is_space_byte(uint8_t c) {
     return lre_ctype_bits[c] & UNICODE_C_SPACE;
@@ -166,31 +165,8 @@ static inline int lre_is_space(uint32_t c) {
         return lre_is_space_non_ascii(c);
 }
 
-static inline int lre_js_is_ident_first(uint32_t c) {
-    if (c < 128) {
-        return lre_is_id_start_byte(c);
-    } else {
-#ifdef CONFIG_ALL_UNICODE
-        return lre_is_id_start(c);
-#else
-        return !lre_is_space_non_ascii(c);
+#ifdef __cplusplus
+} /* extern "C" { */
 #endif
-    }
-}
-
-static inline int lre_js_is_ident_next(uint32_t c) {
-    if (c < 128) {
-        return lre_is_id_continue_byte(c);
-    } else {
-        /* ZWNJ and ZWJ are accepted in identifiers */
-        if (c >= 0x200C && c <= 0x200D)
-            return TRUE;
-#ifdef CONFIG_ALL_UNICODE
-        return lre_is_id_continue(c);
-#else
-        return !lre_is_space_non_ascii(c);
-#endif
-    }
-}
 
 #endif /* LIBUNICODE_H */

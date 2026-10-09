@@ -15,10 +15,21 @@ import java.io.StringReader;
 public class QuickJsBytecodeSource extends JavaScriptSource {
 
     private final byte[] mBytecode;
+    private final int mExecutionMode;
 
     public QuickJsBytecodeSource(String name, byte[] bytecode) {
+        this(name, bytecode, EXECUTION_MODE_NORMAL);
+    }
+
+    public QuickJsBytecodeSource(String name, byte[] bytecode, int executionMode) {
         super(name);
         mBytecode = bytecode;
+        mExecutionMode = executionMode;
+    }
+
+    @Override
+    protected int parseExecutionMode() {
+        return mExecutionMode;
     }
 
     public byte[] getBytecode() {

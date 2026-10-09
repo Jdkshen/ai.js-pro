@@ -37,7 +37,7 @@ public class TimerThread extends ThreadCompat {
     @Override
     public void run() {
         mRuntime.loopers.prepare();
-        mTimer = new Timer(mRuntime, mMaxCallbackUptimeMillisForAllThreads);
+        mTimer = mRuntime.timers.newTimer(mRuntime);
         sTimerMap.put(Thread.currentThread(), mTimer);
         ((RhinoJavaScriptEngine) mRuntime.engines.myEngine()).enterContext();
         notifyRunning();
@@ -50,9 +50,10 @@ public class TimerThread extends ThreadCompat {
             }
         } finally {
             onExit();
+            mTimer.removeAllCallbacks();
+            sTimerMap.remove(Thread.currentThread(), mTimer);
             mTimer = null;
             org.mozilla.javascript.Context.exit();
-            sTimerMap.remove(Thread.currentThread(), mTimer);
         }
     }
 
@@ -82,7 +83,7 @@ public class TimerThread extends ThreadCompat {
         return getTimerForThread(Thread.currentThread());
     }
 
-    public int setTimeout(Object callback, long delay, Object... args) {
+    public double setTimeout(Object callback, long delay, Object... args) {
         return getTimer().setTimeout(callback, delay, args);
     }
 
@@ -93,23 +94,23 @@ public class TimerThread extends ThreadCompat {
         return mTimer;
     }
 
-    public boolean clearTimeout(int id) {
+    public boolean clearTimeout(double id) {
         return getTimer().clearTimeout(id);
     }
 
-    public int setInterval(Object listener, long interval, Object... args) {
+    public double setInterval(Object listener, long interval, Object... args) {
         return getTimer().setInterval(listener, interval, args);
     }
 
-    public boolean clearInterval(int id) {
+    public boolean clearInterval(double id) {
         return getTimer().clearInterval(id);
     }
 
-    public int setImmediate(Object listener, Object... args) {
+    public double setImmediate(Object listener, Object... args) {
         return getTimer().setImmediate(listener, args);
     }
 
-    public boolean clearImmediate(int id) {
+    public boolean clearImmediate(double id) {
         return getTimer().clearImmediate(id);
     }
 

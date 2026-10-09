@@ -71,9 +71,9 @@ public class BaseResizableFloatyWindow extends ResizableFloatyWindow {
     }
 
     @Override
-    public void onCreate(FloatyService service, WindowManager manager) {
+    public void onCreate(Context context, WindowManager manager) {
         try {
-            super.onCreate(service, manager);
+            super.onCreate(context, manager);
         } catch (RuntimeException e) {
             mInflateException.setAndNotify(e);
             return;
@@ -134,7 +134,7 @@ public class BaseResizableFloatyWindow extends ResizableFloatyWindow {
         }
 
         @Override
-        public View inflateView(FloatyService floatyService, ResizableFloatyWindow resizableFloatyWindow) {
+        public View inflateView(Context context, ResizableFloatyWindow resizableFloatyWindow) {
             mRootView = View.inflate(mContext, R.layout.floaty_window, null);
             FrameLayout container = mRootView.findViewById(R.id.container);
             View contentView = mContentViewSupplier.inflate(mContext, container);

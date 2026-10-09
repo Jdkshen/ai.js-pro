@@ -47,8 +47,8 @@ public class ConsoleFloaty extends ResizableExpandableFloaty.AbstractResizableEx
     }
 
     @Override
-    public View inflateCollapsedView(FloatyService service, final ResizableExpandableFloatyWindow window) {
-        ensureContextWrapper(service);
+    public View inflateCollapsedView(Context context, final ResizableExpandableFloatyWindow window) {
+        ensureContextWrapper(context);
         return View.inflate(mContextWrapper, R.layout.floating_window_collapse, null);
     }
 
@@ -59,8 +59,8 @@ public class ConsoleFloaty extends ResizableExpandableFloaty.AbstractResizableEx
     }
 
     @Override
-    public View inflateExpandedView(FloatyService service, ResizableExpandableFloatyWindow window) {
-        ensureContextWrapper(service);
+    public View inflateExpandedView(Context context, ResizableExpandableFloatyWindow window) {
+        ensureContextWrapper(context);
         View view = View.inflate(mContextWrapper, R.layout.floating_console_expand, null);
         setListeners(view, window);
         setUpConsole(view, window);

@@ -259,7 +259,7 @@ public class ScriptRuntime {
         media = new Media(context, this);
         plugins = new Plugins(context, this);
         yolo = new Yolo(context);
-        sqlite = new Sqlite(context);
+        sqlite = new Sqlite(context, files, this);
         crypto = new Crypto();
         zips = new Zips(context);
         debug = new Debug(this);
@@ -439,8 +439,6 @@ public class ScriptRuntime {
         ThreadCompat.interrupted();
         //悬浮窗需要第一时间关闭以免出现恶意脚本全屏悬浮窗屏蔽屏幕并且在exit中写死循环的问题
         ignoresException(floaty::closeAll);
-        // 脚本没手动释放的资源（OCR 会话、RootAutomator2 的注入通道、ColorMapping 单例…）
-        ignoresException(this::closeCleanables);
         ignoresException(ColorMapping::recycleSingleton);
         // 图片泄露检测的开关/日志出口是进程级 static，退出时回置到默认值
         // （日志出口抱着本 runtime，不回置会让下个脚本把日志发到已退出的 runtime 上）
@@ -453,6 +451,8 @@ public class ScriptRuntime {
         ignoresException(threads::shutDownAll);
         ignoresException(events::recycle);
         ignoresException(media::recycle);
+        // Exit listeners can finish database writes before registered resources are closed.
+        ignoresException(this::closeCleanables);
         ignoresException(yolo::close);
         ignoresException(loopers::recycle);
         ignoresException(() -> {

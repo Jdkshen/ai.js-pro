@@ -41,6 +41,23 @@ public class ScreenCapturer {
     public static final int ORIENTATION_LANDSCAPE = Configuration.ORIENTATION_LANDSCAPE ;
     public static final int ORIENTATION_PORTRAIT = Configuration.ORIENTATION_PORTRAIT ;
 
+    /** The requested capture configuration, matching Auto.js Pro's Options. */
+    public static final class Options {
+        public final int width;
+        public final int height;
+        public final int orientation;
+        public final int density;
+        public final boolean async;
+
+        public Options(int width, int height, int orientation, int density, boolean async) {
+            this.width = width;
+            this.height = height;
+            this.orientation = orientation;
+            this.density = density;
+            this.async = async;
+        }
+    }
+
 
     private static final String LOG_TAG = "ScreenCapturer";
     private ImageReader mImageReader;
@@ -63,11 +80,30 @@ public class ScreenCapturer {
     private int mOrientation = -1;
     private int mDetectedOrientation;
     private OrientationEventListener mOrientationEventListener;
+    /** 请求的捕获尺寸（Pro 的 `requestScreenCapture(width, height)`），<=0 表示用屏幕尺寸。 */
+    private final int mRequestedWidth;
+    private final int mRequestedHeight;
+    /** `requestScreenCapture(..., {async:true})`：帧逐张交给 createListener，而不是进缓存。 */
+    private final boolean mAsyncStream;
+    private volatile ScreenCaptureListener mCaptureListener;
+
+    /** `images.requestScreenCapture({async:true})` 的帧回调；image 的所有权交给回调（用后必须 close()）。 */
+    public interface ScreenCaptureListener {
+        void onCaptureAvailable(Image image);
+    }
 
     public ScreenCapturer(Context context, Intent data, int orientation, int screenDensity, Handler handler) {
+        this(context, data, orientation, screenDensity, handler, -1, -1, false);
+    }
+
+    public ScreenCapturer(Context context, Intent data, int orientation, int screenDensity, Handler handler,
+                          int requestedWidth, int requestedHeight, boolean asyncStream) {
         mContext = context;
         mScreenDensity = screenDensity;
         mHandler = handler;
+        mRequestedWidth = requestedWidth;
+        mRequestedHeight = requestedHeight;
+        mAsyncStream = asyncStream;
         MediaProjectionManager projectionManager = (MediaProjectionManager)
                 context.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         mMediaProjection = projectionManager.getMediaProjection(
@@ -90,6 +126,11 @@ public class ScreenCapturer {
             public void onCapturedContentResize(int width, int height) {
                 synchronized (ScreenCapturer.this) {
                     if (mReleased || width <= 0 || height <= 0) {
+                        return;
+                    }
+                    // 对齐 Pro：申请时指定了 width/height 就固定用请求尺寸，
+                    // 不让系统的「内容尺寸」回调把捕获面换回屏幕尺寸（K40 实测会立刻覆盖）。
+                    if (mRequestedWidth > 0 && mRequestedHeight > 0) {
                         return;
                     }
                     try {
@@ -131,7 +172,8 @@ public class ScreenCapturer {
             public void onOrientationChanged(int o) {
                 int orientation = mContext.getResources().getConfiguration().orientation;
                 if (!mCaptureState.hasCapturedContentSize()
-                        && mOrientation == ORIENTATION_AUTO && mDetectedOrientation != orientation) {
+                        && (mOrientation == ORIENTATION_AUTO || mOrientation < 0)
+                        && mDetectedOrientation != orientation) {
                     mDetectedOrientation = orientation;
                     try {
                         refreshVirtualDisplay(orientation);
@@ -152,12 +194,17 @@ public class ScreenCapturer {
         if (mReleased) {
             throw new IllegalStateException("Screen capture session has stopped; request permission again");
         }
-        if (mOrientation == orientation)
-            return;
+        boolean same = mOrientation == orientation;
         mOrientation = orientation;
         mDetectedOrientation = mContext.getResources().getConfiguration().orientation;
-        if (!mCaptureState.hasCapturedContentSize()) {
-            refreshVirtualDisplay(mOrientation == ORIENTATION_AUTO ? mDetectedOrientation : mOrientation);
+        // 首次（还没捕获面）或方向变化时创建/刷新捕获面。
+        // ⚠️ mOrientation 初值也是 -1，而 Pro 的「不指定方向」也用 -1：不能靠相等性短路，
+        // 否则 2 参形态 requestScreenCapture(width, height) 永远不建捕获面（实测会捕获超时）。
+        if (!mCaptureState.hasCapturedContentSize()
+                && (!same || mVirtualDisplay == null || mImageReader == null)) {
+            int effective = (mOrientation == ORIENTATION_AUTO || mOrientation < 0)
+                    ? mDetectedOrientation : mOrientation;
+            refreshVirtualDisplay(effective);
         }
     }
 
@@ -167,6 +214,11 @@ public class ScreenCapturer {
         // Once the system reports captured bounds, they are authoritative: rotating the
         // host must not overwrite a single-app window with full-device dimensions.
         if (mCaptureState.hasCapturedContentSize()) {
+            return;
+        }
+        // 对齐 Pro：请求里带了 width/height 时按请求尺寸创建捕获面（固定尺寸，不随旋转变化）
+        if (mRequestedWidth > 0 && mRequestedHeight > 0) {
+            refreshCaptureSurface(mRequestedWidth, mRequestedHeight, false);
             return;
         }
         refreshCaptureSurface(ScreenMetrics.getOrientationAwareScreenWidth(orientation),
@@ -245,8 +297,14 @@ public class ScreenCapturer {
                         image.close();
                         return;
                     }
-                    discardCachedImage();
-                    mCachedImage.set(image);
+                    ScreenCaptureListener listener = mCaptureListener;
+                    if (listener != null) {
+                        // async 流：帧的所有权交给回调（回调负责 close），不进缓存
+                        listener.onCaptureAvailable(image);
+                    } else {
+                        discardCachedImage();
+                        mCachedImage.set(image);
+                    }
                 } catch (Exception e) {
                     mException = e;
                 }
@@ -254,6 +312,15 @@ public class ScreenCapturer {
             }
 
         }, handler);
+    }
+
+    /** async 流开关：true 表示本会话用 {@link ScreenCaptureListener} 逐帧deliver。 */
+    public boolean isAsyncStream() {
+        return mAsyncStream;
+    }
+
+    public void setCaptureListener(ScreenCaptureListener listener) {
+        mCaptureListener = listener;
     }
 
     private void discardCachedImage() {
@@ -345,6 +412,10 @@ public class ScreenCapturer {
             }
         }
         throw new ScriptInterruptedException();
+    }
+
+    public synchronized Options getOptions() {
+        return new Options(mRequestedWidth, mRequestedHeight, mOrientation, mScreenDensity, mAsyncStream);
     }
 
     public int getScreenDensity() {

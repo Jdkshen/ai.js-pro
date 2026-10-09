@@ -88,8 +88,8 @@ public class ConsoleImpl extends AbstractConsole {
         mGlobalConsole = globalConsole;
         mFloatyWindow = new ResizableExpandableFloatyWindow(mConsoleFloaty) {
             @Override
-            public void onCreate(FloatyService service, WindowManager manager) {
-                super.onCreate(service, manager);
+            public void onCreate(Context context, WindowManager manager) {
+                super.onCreate(context, manager);
                 expand();
                 mFloatyWindow.getWindowBridge().updatePosition(mX, mY);
                 synchronized (WINDOW_SHOW_LOCK) {

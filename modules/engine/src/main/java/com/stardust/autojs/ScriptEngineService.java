@@ -205,13 +205,12 @@ public class ScriptEngineService {
             }
             return;
         }
-        // Rhino 的词法层没有模板字符串：含反引号的脚本编译必挂。
+        // 兜底：含反引号的脚本若 Rhino 编译不过（新版 Rhino 1.7.14.1 已原生支持模板字符串，
+        // 多半是命中了它尚不支持的其它新语法），交给 QuickJS 试跑。
         if (EngineFallbacks.shouldSwitchToQuickJs(script, name)) {
             // 但先看能不能把模板字符串降级成 ES5 字符串拼接（TemplateLiteralPreprocessor）。
-            // 能降就**留在 Rhino**：这类脚本往往同时依赖 Rhino 独有的能力，
-            // 最典型的是 `<canvas>` —— 它的 draw 回调必须在绘制线程内同步进脚本，
-            // 而 QuickJS 是单线程引擎、做不到从绘制线程回调 ⇒ 切过去必然报
-            // 「Unable to create floaty window」/「不支持的浮窗控件事件：draw」。
+            // 可转换的默认脚本继续由 Rhino 执行，保持旧脚本的引擎选择。
+            // QuickJS Canvas 由其 JS 事件循环调度，不再要求绘制线程直接回调 JS。
             if (TemplateLiteralPreprocessor.canApply(script)) {
                 mGlobalConsole.warn(mContext.getString(
                         R.string.text_downgraded_template_literals_for_rhino));

@@ -10,9 +10,9 @@ public class CursorHelper {
             case Cursor.FIELD_TYPE_STRING:
                 return cursor.getString(column);
             case Cursor.FIELD_TYPE_FLOAT:
-                return cursor.getFloat(column);
+                return cursor.getDouble(column);
             case Cursor.FIELD_TYPE_INTEGER:
-                return cursor.getInt(column);
+                return cursor.getLong(column);
             case Cursor.FIELD_TYPE_BLOB:
                 return cursor.getBlob(column);
             default:

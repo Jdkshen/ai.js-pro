@@ -5,7 +5,7 @@ import android.os.Build
 import com.stardust.autojs.core.pref.Pref
 import com.stardust.view.accessibility.AccessibilityService
 
-class AccessibilityService : AccessibilityService() {
+open class AccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         val serviceInfo = serviceInfo

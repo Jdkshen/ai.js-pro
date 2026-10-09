@@ -87,7 +87,8 @@ public class Debug {
     /** `$debug.getStackTrace(error)`：取异常的详细堆栈。 */
     @ScriptInterface
     public String getStackTrace(Object error) {
-        if (error == null || error instanceof org.mozilla.javascript.Undefined) {
+        if (error == null || error instanceof org.mozilla.javascript.Undefined
+                || "undefined".equals(String.valueOf(error))) {
             return "";
         }
         Object unwrapped = error instanceof org.mozilla.javascript.Wrapper

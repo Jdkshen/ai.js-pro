@@ -20,16 +20,25 @@ public class ScriptThreadPool {
     private final int mMaxPoolSize;
 
     ScriptThreadPool(@NonNull Threads threads, int corePoolSize, int maxPoolSize) {
+        this(threads, corePoolSize, maxPoolSize, 60000L);
+    }
+
+    ScriptThreadPool(@NonNull Threads threads, int corePoolSize, int maxPoolSize, long keepAliveTime) {
+        if (keepAliveTime < 0) throw new IllegalArgumentException("keepAliveTime must be nonnegative");
         mCorePoolSize = Math.max(0, corePoolSize);
         mMaxPoolSize = Math.max(mCorePoolSize, maxPoolSize);
         mExecutor = new ThreadPoolExecutor(
                 mCorePoolSize,
                 Math.max(1, mMaxPoolSize),
-                60, TimeUnit.SECONDS,
+                keepAliveTime, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>(Math.max(1, mMaxPoolSize)),
                 threads::createPoolThread,
                 new ThreadPoolExecutor.CallerRunsPolicy());
-        mExecutor.allowCoreThreadTimeOut(true);
+        mExecutor.allowCoreThreadTimeOut(keepAliveTime > 0);
+    }
+
+    public long getKeepAliveTime() {
+        return mExecutor.getKeepAliveTime(TimeUnit.MILLISECONDS);
     }
 
     public void execute(Runnable runnable) {

@@ -17,7 +17,7 @@ public class ReadOnlyUiObject extends UiObject {
     private NodeInfo mNodeInfo;
 
     public ReadOnlyUiObject(NodeInfo info) {
-        super(null, info.getDepth(), -1);
+        super(null, info.getDepth(), info.getParent() == null ? -1 : info.getParent().getChildren().indexOf(info));
         mNodeInfo = info;
     }
 

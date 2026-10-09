@@ -120,6 +120,14 @@ public class Debugger implements DebugCallbackInternal {
         mDim.setReturnValue(Dim.GO);
     }
 
+    /**
+     * 暴露内部 Dim：自研 VS Code 调试会话用它读取调用栈/变量、按帧求值。
+     * （编辑器调试 UI 只用到断点/单步/求值，不需要直接访问 Dim。）
+     */
+    public Dim dim() {
+        return mDim;
+    }
+
     public void stepOut() {
         mDim.setReturnValue(Dim.STEP_OUT);
     }

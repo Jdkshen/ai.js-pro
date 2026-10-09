@@ -15,15 +15,14 @@ import java.util.List;
 /**
  * 特征检测 + 匹配（PDF §2.18.2 第 164~166 页，v9.2 新增）。
  *
- * <p>⚠️ 为什么不是 SIFT/ORB：本仓库用的 OpenCV 5.0.0 AAR 是**按模块拆 .so 的构建**，
- * 只有 core/imgproc/imgcodecs/dnn/geometry/flann，**没有 features 模块**
- * （Java 包 {@code org.opencv.features} 也不在），而且这个构建的 {@code Imgproc}
- * 连 {@code goodFeaturesToTrack} / {@code HoughCircles} 都没有。
- * 所以这里用 {@code Imgproc.cornerMinEigenVal}（Shi-Tomasi 响应）+ 自写非极大值抑制选角点，
+ * <p>这个兼容后端建立于 AAR 尚未包含 features 模块时，使用
+ * {@code Imgproc.cornerMinEigenVal}（Shi-Tomasi 响应）+ 自写非极大值抑制选角点，
  * 再用强度质心定向 + 256 位 BRIEF 风格描述子，匹配用汉明距离暴力匹配 + Lowe ratio。
  *
  * <p>文档里的 {@code method}（SIFT/ORB）与 {@code matcher}（FLANNBASED/BRUTEFORCE*）
  * 选项都接受，但内部统一走这一套实现（差异记入对照文档 §9）。
+ * arm64 AAR 现已补齐 OpenCV 5 features；真正的 SIFT + FLANN + 单应变换
+ * 用法见内置「SIFT特征匹配」示例的 sift.js，本兼容后端未改变算法。
  */
 public final class FeatureMatcher {
 

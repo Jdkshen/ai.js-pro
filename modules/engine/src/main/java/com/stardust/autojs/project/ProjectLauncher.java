@@ -2,6 +2,7 @@ package com.stardust.autojs.project;
 
 import com.stardust.autojs.ScriptEngineService;
 import com.stardust.autojs.execution.ExecutionConfig;
+import com.stardust.autojs.execution.ScriptExecution;
 import com.stardust.autojs.script.JavaScriptFileSource;
 
 import java.io.File;
@@ -18,13 +19,13 @@ public class ProjectLauncher {
         mMainScriptFile = new File(mProjectDir, mProjectConfig.getMainScriptFile());
     }
 
-    public void launch(ScriptEngineService service) {
+    public ScriptExecution launch(ScriptEngineService service) {
         ExecutionConfig config = new ExecutionConfig();
         config.setWorkingDirectory(mProjectDir);
         config.setScriptConfig(mProjectConfig.getScriptConfig(mProjectConfig.getMainScriptFile()));
         JavaScriptFileSource source = new JavaScriptFileSource(mMainScriptFile);
         source.setPreferredEngine(mProjectConfig.getEngine(mProjectConfig.getMainScriptFile()));
-        service.execute(source, config);
+        return service.execute(source, config);
     }
 
 }

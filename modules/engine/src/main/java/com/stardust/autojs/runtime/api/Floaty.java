@@ -5,11 +5,14 @@ import android.content.Intent;
 import android.os.Looper;
 import android.view.ContextThemeWrapper;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
 
 import com.stardust.autojs.R;
 import com.stardust.autojs.annotation.ScriptInterface;
 import com.stardust.autojs.core.floaty.BaseResizableFloatyWindow;
 import com.stardust.autojs.core.floaty.RawWindow;
+import com.stardust.autojs.core.graphics.ScriptCanvasView;
 import com.stardust.autojs.core.ui.JsViewHelper;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.Exceptions;
@@ -17,10 +20,13 @@ import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
 import com.stardust.autojs.util.FloatingPermission;
 import com.stardust.enhancedfloaty.FloatyService;
+import com.stardust.enhancedfloaty.FloatyWindow;
 import com.stardust.util.UiHandler;
 import com.stardust.util.ViewUtil;
 
 import java.util.concurrent.CopyOnWriteArraySet;
+import org.mozilla.javascript.Function;
+import org.mozilla.javascript.Scriptable;
 
 /**
  * Created by Stardust on 2017/12/5.
@@ -99,12 +105,68 @@ public class Floaty {
         return window;
     }
 
+    /** Pro's direct runtime API supplies a scope and a JS view factory. */
+    public JsRawWindow rawWindow(Scriptable scope, Function factory) {
+        return rawWindow((context, parent) -> suppliedView(scope, factory, context, parent));
+    }
+
+    public JsResizableWindow window(Scriptable scope, Function factory) {
+        return window((context, parent) -> suppliedView(scope, factory, context, parent));
+    }
+
+    private View suppliedView(Scriptable scope, Function factory, Context context, ViewGroup parent) {
+        Object value = mRuntime.bridges.callFunction(factory, scope, new Object[]{context, parent});
+        return (View) org.mozilla.javascript.Context.jsToJava(value, View.class);
+    }
+
+    private static void closeCanvases(View view) {
+        if (view instanceof ScriptCanvasView) ((ScriptCanvasView) view).closeCanvas();
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) closeCanvases(group.getChildAt(i));
+        }
+    }
+
     private synchronized void addWindow(JsWindow window) {
         mWindows.add(window);
     }
 
     private synchronized boolean removeWindow(JsWindow window) {
         return mWindows.remove(window);
+    }
+
+    /**
+     * 让 {@link FloatyService} 创建窗口。
+     *
+     * <p>经典 {@code "ui";} 模式脚本运行在主线程上，而窗口创建依赖主线程空闲：
+     * 先 post 再阻塞等待会自锁（脚本永久卡在 {@code floaty.rawWindow}）。所以主线程上
+     * 就地处理：服务已创建 → 直接 addWindow（创建同步完成）；服务尚未创建 → 用宿主
+     * Context 就地创建，并把窗口登记给服务做生命周期管理（服务启动时会跳过已创建窗口）。
+     */
+    private void requestWindowCreation(FloatyWindow window) {
+        Context context = mUiHandler.getContext();
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            startFloatyService(context);
+            if (FloatyService.isCreated()) {
+                FloatyService.addWindow(window);
+            } else {
+                window.onCreate(context, (WindowManager) context.getSystemService(Context.WINDOW_SERVICE));
+                FloatyService.registerWindow(window);
+            }
+            return;
+        }
+        mUiHandler.post(() -> {
+            startFloatyService(context);
+            FloatyService.addWindow(window);
+        });
+    }
+
+    private static void startFloatyService(Context context) {
+        try {
+            context.startService(new Intent(context, FloatyService.class));
+        } catch (Throwable ignored) {
+            // Android 8+ 后台启动服务可能被拒；窗口创建本身不依赖这里成功。
+        }
     }
 
     public synchronized void closeAll() {
@@ -125,10 +187,7 @@ public class Floaty {
 
         public JsRawWindow(RawWindow.RawFloaty floaty) {
             mWindow = new RawWindow(floaty);
-            mUiHandler.post(() -> {
-                mUiHandler.getContext().startService(new Intent(mUiHandler.getContext(), FloatyService.class));
-                FloatyService.addWindow(mWindow);
-            });
+            requestWindowCreation(mWindow);
             RuntimeException exception = mWindow.waitForCreation();
             if (exception != Exceptions.NO_EXCEPTION && exception != null) {
                 throw exception;
@@ -206,6 +265,7 @@ public class Floaty {
                 return;
             }
             runWithWindow(() -> {
+                closeCanvases(mWindow.getContentView());
                 mWindow.close();
                 mWindow = null;
                 if (mExitOnClose) {
@@ -227,10 +287,7 @@ public class Floaty {
                 mView = supplier.inflate(context, parent);
                 return mView;
             });
-            mUiHandler.post(() -> {
-                mUiHandler.getContext().startService(new Intent(mUiHandler.getContext(), FloatyService.class));
-                FloatyService.addWindow(mWindow);
-            });
+            requestWindowCreation(mWindow);
             RuntimeException exception = mWindow.waitForCreation();
             if (exception != Exceptions.NO_EXCEPTION && exception != null) {
                 throw exception;
@@ -315,6 +372,7 @@ public class Floaty {
                 return;
             }
             runWithWindow(() -> {
+                closeCanvases(mView);
                 mWindow.close();
                 mWindow = null;
                 if (mExitOnClose) {

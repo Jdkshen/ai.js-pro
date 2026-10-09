@@ -32,6 +32,8 @@ public class EventEmitter {
 
 
     private class Listeners {
+        private final String eventName;
+        Listeners(String eventName) { this.eventName = eventName; }
         private CopyOnWriteArrayList<ListenerWrapper> mListenerWrappers = new CopyOnWriteArrayList<>();
 
         void add(Object listener, boolean once) {
@@ -53,13 +55,14 @@ public class EventEmitter {
             Iterator<ListenerWrapper> listenerIterator = mListenerWrappers.iterator();
             while (listenerIterator.hasNext()) {
                 ListenerWrapper listenerWrapper = listenerIterator.next();
+                if (listenerWrapper.isOnce && !mListenerWrappers.remove(listenerWrapper)) continue;
                 if (mTimer != null) {
                     mTimer.setImmediate(listenerWrapper.listener, args);
                 } else {
                     mBridges.callFunction(listenerWrapper.listener, EventEmitter.this, args);
                 }
                 if (listenerWrapper.isOnce) {
-                    mListenerWrappers.remove(listenerWrapper);
+                    EventEmitter.this.emit("removeListener", eventName, listenerWrapper.listener);
                 }
             }
         }
@@ -82,15 +85,15 @@ public class EventEmitter {
             mListenerWrappers.add(0, new ListenerWrapper(listener, once));
         }
 
-        void remove(Object listener) {
-            Iterator<ListenerWrapper> listenerIterator = mListenerWrappers.iterator();
-            while (listenerIterator.hasNext()) {
-                ListenerWrapper l = listenerIterator.next();
-                if (l.listener == listener) {
-                    listenerIterator.remove();
-                    break;
+        boolean remove(Object listener) {
+            // CopyOnWriteArrayList 的迭代器不支持 remove()，必须由列表自身按下标/对象删除。
+            for (ListenerWrapper wrapper : mListenerWrappers) {
+                if (wrapper.listener == listener) {
+                    mListenerWrappers.remove(wrapper);
+                    return true;
                 }
             }
+            return false;
         }
     }
 
@@ -111,13 +114,14 @@ public class EventEmitter {
 
     public EventEmitter once(String eventName, Object listener) {
         getListeners(eventName).add(listener, true);
+        emit("newListener", eventName, listener);
         return this;
     }
     @NonNull
     private Listeners getListeners(String eventName) {
         Listeners listeners = mListenersMap.get(eventName);
         if (listeners == null) {
-            listeners = new Listeners();
+            listeners = new Listeners(eventName);
             mListenersMap.put(eventName, listeners);
         }
         return listeners;
@@ -126,6 +130,7 @@ public class EventEmitter {
 
     public EventEmitter on(String eventName, Object listener) {
         getListeners(eventName).add(listener, false);
+        emit("newListener", eventName, listener);
         return this;
     }
 
@@ -158,28 +163,36 @@ public class EventEmitter {
 
     public EventEmitter prependListener(String eventName, Object listener) {
         getListeners(eventName).prepend(listener, false);
+        emit("newListener", eventName, listener);
         return this;
     }
 
     public EventEmitter prependOnceListener(String eventName, Object listener) {
         getListeners(eventName).prepend(listener, true);
+        emit("newListener", eventName, listener);
         return this;
     }
 
     public EventEmitter removeAllListeners() {
-        mListenersMap.clear();
+        for (String event : eventNames()) {
+            if (!"removeListener".equals(event)) removeAllListeners(event);
+        }
+        removeAllListeners("removeListener");
         return this;
     }
 
     public EventEmitter removeAllListeners(String eventName) {
-        mListenersMap.remove(eventName);
+        Listeners removed = mListenersMap.remove(eventName);
+        if (removed != null) {
+            for (Object listener : removed.toArray()) emit("removeListener", eventName, listener);
+        }
         return this;
     }
 
     public EventEmitter removeListener(String eventName, Object listener) {
         Listeners listeners = mListenersMap.get(eventName);
-        if (listeners != null)
-            listeners.remove(listener);
+        if (listeners != null && listeners.remove(listener))
+            emit("removeListener", eventName, listener);
         return this;
     }
 

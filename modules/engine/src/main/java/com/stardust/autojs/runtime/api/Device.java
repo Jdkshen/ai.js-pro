@@ -18,6 +18,8 @@ import android.provider.Settings;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import android.telephony.TelephonyManager;
+import android.view.Surface;
+import android.view.WindowManager;
 
 import com.stardust.autojs.R;
 import com.stardust.autojs.runtime.exception.ScriptException;
@@ -176,6 +178,32 @@ public class Device {
         checkWriteSettingsPermission();
         ((AudioManager) getSystemService(Context.AUDIO_SERVICE))
                 .setStreamVolume(AudioManager.STREAM_NOTIFICATION, i, 0);
+    }
+
+    /** Auto.js Pro 的 `device.getScreenOrientation()`：返回 "portrait"/"landscape"。 */
+    public String getScreenOrientation() {
+        int rotation = getScreenRotation();
+        return (rotation == 0 || rotation == 180) ? "portrait" : "landscape";
+    }
+
+    /** Auto.js Pro 的 `device.getScreenRotation()`：返回 0/90/180/270，未知为 -1。 */
+    public int getScreenRotation() {
+        WindowManager windowManager = getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager == null) {
+            return -1;
+        }
+        switch (windowManager.getDefaultDisplay().getRotation()) {
+            case Surface.ROTATION_0:
+                return 0;
+            case Surface.ROTATION_90:
+                return 90;
+            case Surface.ROTATION_180:
+                return 180;
+            case Surface.ROTATION_270:
+                return 270;
+            default:
+                return -1;
+        }
     }
 
     public float getBattery() {
