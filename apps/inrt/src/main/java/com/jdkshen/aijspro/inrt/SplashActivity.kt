@@ -77,7 +77,7 @@ class SplashActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            // No custom image packaged: keep the built-in logo.
+            // No custom splash image: keep this packaged app's launcher icon.
         }
     }
 

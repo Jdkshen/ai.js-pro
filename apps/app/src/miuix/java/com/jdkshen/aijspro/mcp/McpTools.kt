@@ -12,9 +12,16 @@ import com.jdkshen.aijspro.model.sample.SampleRepository
 import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.ScriptRepository
 import com.stardust.autojs.core.console.ConsoleImpl
+import com.stardust.autojs.engine.JavaScriptEngine
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.execution.ScriptExecutionListener
+import com.stardust.autojs.script.ScriptSource
+import com.stardust.autojs.script.StringScriptSource
+import com.stardust.autojs.script.JavaScriptSource
+import com.stardust.autojs.runtime.exception.ScriptInterruptedException
+import org.mozilla.javascript.Context as RhinoContext
+import org.mozilla.javascript.Scriptable
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -38,10 +45,10 @@ internal class McpTools(private val context: Context, private val event: (String
         @Volatile var finishedAt = 0L
         @Volatile var engineExecutionId = -1
         @Volatile var result = ""
+        @Volatile var engine = ""
         @Volatile var errorType = ""
         @Volatile var errorMessage = ""
         @Volatile var errorStack = ""
-        @Volatile var logStartId = -1
         @Volatile var logs: List<JsonObject>? = null
         @Volatile var execution: ScriptExecution? = null
         /** 用户主动 stop（用于区分“正常停止”与“真出错”）。 */
@@ -81,6 +88,10 @@ internal class McpTools(private val context: Context, private val event: (String
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
             if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "工作区状态冲突", true))
             else rpcError(id, -32602, e.message ?: "Invalid state")
+        } catch (e: SecurityException) {
+            event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
+            if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "缺少手机权限", true))
+            else rpcError(id, -32602, e.message ?: "Permission denied")
         } catch (e: IOException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
             if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "文件操作失败", true))
@@ -93,8 +104,9 @@ internal class McpTools(private val context: Context, private val event: (String
 
     fun stopRuns() {
         runs.values.filter { it.status in ACTIVE_STATES }.forEach { record ->
+            record.stopRequested = true; record.stopReason = "service_stopped"
             record.status = "STOPPED"; record.finishedAt = System.currentTimeMillis()
-            record.logs = consoleLogsSince(record.logStartId, MAX_RUN_LOGS)
+            record.logs = runLogs(record)
             runCatching { record.execution?.engine?.forceStop() }
         }
     }
@@ -106,7 +118,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
-        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.2.0") })
+        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.3.0") })
         addProperty("instructions", "默认只读。用户在手机端开启编辑授权后，客户端可创建/修改私有工作区，并调用 workspace_request_apply 直接应用到真实脚本；工具名为兼容旧客户端保留。应用时会校验原文件未被外部改动并保留备份，可在手机历史页回退。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
     }
 
@@ -123,7 +135,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("get_execution", "读取任务状态、结果、异常或运行日志", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
-            add(tool("run_script", "运行脚本；需手机端开启运行授权；wait=true 时等待结束并返回结果、错误与运行日志；engine=quickjs/rhino 可在不改文件的前提下临时指定引擎（需 wait=true）", objSchema("path", "wait", "timeoutSeconds", "engine", required = arrayOf("path"))))
+            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一）；需运行授权；支持双引擎、工作目录、config、等待及任务专属日志", McpToolSchema.runSchema()))
             add(tool("list_engine_api", "枚举指定引擎（quickjs/rhino）当前可用的全局 API 名称列表", objSchema("engine")))
             add(tool("probe_engine_api", "探测指定引擎中某个全局 API 的类型与成员（object/function 及 Object.keys）", objSchema("engine", "name", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比 Rhino 与 QuickJS 的全局 API 差异（common/onlyRhino/onlyQuickJs），用于迁移对照"))
@@ -138,6 +150,19 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("workspace_mkdir", "在真实脚本目录下创建目录（含多级），需写入授权", objSchema("path", required = arrayOf("path"))))
             add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_cleanup", "清理无用的工作区私有副本：默认只删无修改的 OPEN 与已回退的；applied=true 时连已应用的也删（默认保留 keepAppliedHours=24 小时以便回退）", objSchema("applied", "olderThanHours", "keepAppliedHours")))
+            add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需运行授权与无障碍服务", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
+            add(tool("capture_screen", "返回原图或缩小截图的 MCP 图像内容；支持 png/jpg、quality、dataUri；需运行授权和 Android 11+ 无障碍截图权限", objSchema("format", "quality", "dataUri", "maxWidth", "timeoutMillis")))
+            add(tool("check_syntax", "按 Rhino/QuickJS 只编译检查源码，不执行任何脚本；返回 valid、错误行列和转换说明", objSchema("code", "engine", "name", required = arrayOf("code"))))
+            add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 使用说明、双引擎规则、权限和实际支持范围"))
+            add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本），需运行授权；普通任务应使用 stop_script"))
+            add(tool("get_mcp_log", "读取脚本日志尾部或 MCP 服务请求记录；executionId 可限制为指定任务；maxChars 默认 20000，最大 200000", objSchema("maxChars", "executionId", "channel")))
+            McpToolCatalog.aliases.forEach { (alias, canonical) ->
+                val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
+                add(original.deepCopy().apply {
+                    addProperty("name", alias)
+                    addProperty("description", "高级版兼容名称：" + original.get("description").asString)
+                })
+            }
             check(map { it.asJsonObject.get("name").asString } == McpToolCatalog.names) {
                 "MCP 工具定义与公开目录不一致"
             }
@@ -145,7 +170,7 @@ internal class McpTools(private val context: Context, private val event: (String
     }
 
     private fun call(params: JsonObject): JsonObject {
-        val name = params.string("name")
+        val name = McpToolCatalog.canonicalName(params.string("name"))
         val args = params.getAsJsonObject("arguments") ?: JsonObject()
         return when (name) {
             "get_status" -> toolJson(JsonObject().apply {
@@ -175,6 +200,28 @@ internal class McpTools(private val context: Context, private val event: (String
             "probe_engine_api" -> probeEngineApi(args)
             "engine_api_diff" -> engineApiDiff()
             "stop_script" -> stopScript(args)
+            "get_ui_layout" -> {
+                requireExecution()
+                toolJson(McpDeviceTools.layout(if (args.has("windowId")) args.intOr("windowId", -1) else null,
+                    args.intOr("maxNodes", 3000), args.intOr("maxDepth", 64), args.intOr("timeoutMillis", 3000)))
+            }
+            "capture_screen" -> {
+                requireExecution()
+                McpDeviceTools.screenshot(args.stringOr("format", "png").lowercase(),
+                    args.intOr("quality", 100), args.booleanOr("dataUri", false),
+                    args.intOr("maxWidth", 0), args.intOr("timeoutMillis", 3000))
+            }
+            "check_syntax" -> {
+                val code = args.string("code")
+                val engine = args.stringOr("engine", "").lowercase().ifEmpty {
+                    if (JavaScriptSource.requestsQuickJs(code)) "quickjs" else "rhino"
+                }
+                requireRhinoCompat(engine)
+                toolJson(McpSyntaxChecker.check(code, engine, args.stringOr("name", "mcp-syntax.js")))
+            }
+            "learn_autojs_skill" -> toolResult(context.assets.open("mcp/AIjs-MCP-Guide.md").bufferedReader(Charsets.UTF_8).use { it.readText() })
+            "stop_all_scripts" -> stopAllScripts()
+            "get_mcp_log" -> toolJson(getMcpLog(args))
             "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
             "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
             "workspace_read" -> toolJson(readBytes(workspaces.read(args.string("workspaceId"), args.string("path")), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
@@ -217,86 +264,133 @@ internal class McpTools(private val context: Context, private val event: (String
     }
 
     private fun runScript(args: JsonObject): JsonObject {
-        if (!McpService.allowExecution) throw ToolError("运行授权未开启")
-        val file = resolveScript(args.string("path"))
-        if (!file.isFile || !file.name.endsWith(".js", true)) throw ToolError("只能运行存在的 .js 文件")
-        // engine=quickjs/rhino：不改原文件，用同目录临时副本强制指定引擎（仅限 wait=true 的同步运行）。
-        val requestedEngine = args.stringOr("engine", "").lowercase()
-        val wait = args.booleanOr("wait", false)
+        requireExecution()
+        val input = McpRunInput(args)
+        requireRhinoCompat(input.engine)
+        val file = input.path?.let { path -> resolveScript(path).also {
+            if (!it.isFile || !it.name.endsWith(".js", true)) throw ToolError("只能运行存在的 .js 文件")
+        } }
+        val workingDirectory = input.workingDirectory?.let { resolveScript(it) }
+            ?: file?.parentFile ?: root
+        require(workingDirectory.isDirectory) { "工作目录不存在" }
+        val config = ExecutionConfig(workingDirectory = workingDirectory.path, delay = input.delay.toLong(),
+            interval = input.interval.toLong(), loopTimes = input.loopTimes,
+            path = input.searchPaths().map { resolveScript(it).also { dir ->
+                require(dir.isDirectory) { "config.path 目录不存在" }
+            }.path }.toTypedArray())
+        @Suppress("UNCHECKED_CAST")
+        val arguments = config.arguments as MutableMap<String, Any?>
+        input.config.getAsJsonObject("arguments")?.entrySet()?.forEach {
+            arguments[it.key] = McpRunInput.argumentValue(it.value)
+        }
+        if (input.source != null) {
+            val name = input.name.removeSuffix(".js")
+            val body = if (input.engine.isEmpty()) input.source else
+                "// @engine ${input.engine}\n" + input.source.removePrefix("\uFEFF")
+            val source = StringScriptSource(File(workingDirectory, name).path, body)
+            return executeScript("$name.js (source)", source, workingDirectory.path,
+                input.wait, input.timeoutSeconds, config)
+        }
+        requireNotNull(file)
+        // engine=quickjs/rhino：不改原文件，临时副本保留到脚本实际结束（等待超时不会删）。
+        val requestedEngine = input.engine
         var tempFile: File? = null
-        val source: com.stardust.autojs.script.ScriptSource = if (requestedEngine.isEmpty()) {
+        val source: ScriptSource = if (requestedEngine.isEmpty()) {
             ScriptFile(file).toSource()
         } else {
             require(requestedEngine == "quickjs" || requestedEngine == "rhino") { "engine 必须是 quickjs 或 rhino" }
             requireRhinoCompat(requestedEngine)
-            require(wait) { "指定 engine 时需 wait=true（临时副本只在本次同步运行期间有效）" }
             val directive = if (requestedEngine == "quickjs") "// @engine quickjs\n" else "// @engine rhino\n"
-            val body = file.readText(Charsets.UTF_8).replaceFirst(Regex("^(\\uFEFF)?"), "\$1")
-            tempFile = File(file.parentFile, ".${file.nameWithoutExtension}.mcp-engine-${System.currentTimeMillis()}.js")
-            tempFile.writeText(directive + body, Charsets.UTF_8)
+            val body = file.readText(Charsets.UTF_8).removePrefix("\uFEFF")
+            tempFile = File.createTempFile(".${file.nameWithoutExtension}.mcp-engine-", ".js", file.parentFile)
+            try {
+                tempFile.writeText(directive + body, Charsets.UTF_8)
+            } catch (error: Exception) {
+                tempFile.delete()
+                throw error
+            }
             ScriptFile(tempFile).toSource()
         }
+        return executeScript(file.relativeTo(root).invariantSeparatorsPath, source,
+            workingDirectory.path, input.wait, input.timeoutSeconds, config) { tempFile?.delete() }
+    }
+
+    private fun executeScript(path: String, source: ScriptSource, workingDirectory: String,
+                              wait: Boolean, timeoutSeconds: Int,
+                              config: ExecutionConfig = ExecutionConfig(workingDirectory = workingDirectory),
+                              cleanup: () -> Unit = {}): JsonObject {
         val key = "mcp-${nextRun.getAndIncrement()}"
         if (runs.size >= 100) runs.values.filter { it.status !in ACTIVE_STATES }.minByOrNull { it.createdAt }?.let { runs.remove(it.id) }
-        val record = RunRecord(key, file.relativeTo(root).invariantSeparatorsPath, System.currentTimeMillis())
+        val record = RunRecord(key, path, System.currentTimeMillis())
         runs[key] = record
         val listener = object : ScriptExecutionListener {
             override fun onStart(execution: ScriptExecution) {
                 record.execution = execution; record.engineExecutionId = execution.id
+                record.engine = if (source.engineName == JavaScriptSource.ENGINE_QUICKJS) "quickjs" else "rhino"
+                if (record.stopRequested) throw ScriptInterruptedException()
+                // Rhino's legacy engines module copies top-level values only. JSON maps/lists
+                // must be native JS containers to support nested property access and Array APIs.
+                val argumentTarget = (execution.engine as? JavaScriptEngine)?.execArgv as? Scriptable
+                val rhinoContext = RhinoContext.getCurrentContext()
+                if (argumentTarget != null && rhinoContext != null) {
+                    @Suppress("UNCHECKED_CAST")
+                    McpRhinoArguments.install(rhinoContext, argumentTarget, config.arguments as Map<String, Any?>)
+                }
                 record.status = "RUNNING"; record.startedAt = System.currentTimeMillis()
-                record.logStartId = currentConsoleMaxId()
                 event("$key · 开始 · ${record.path}")
             }
             override fun onSuccess(execution: ScriptExecution, result: Any?) {
-                if (record.status != "STOPPED") record.status = "SUCCEEDED"
-                record.result = result?.toString().orEmpty().take(4096); record.finishedAt = System.currentTimeMillis()
-                record.logs = consoleLogsSince(record.logStartId, MAX_RUN_LOGS)
-                event("$key · ${record.status.lowercase()} · ${record.path}")
+                try {
+                    record.result = result?.toString().orEmpty().take(4096)
+                    record.logs = runLogs(record, execution)
+                    record.finishedAt = System.currentTimeMillis()
+                    // 先保存结果和日志，再发布结束状态，避免等待方拿到空日志。
+                    if (record.status != "STOPPED") record.status = "SUCCEEDED"
+                    event("$key · ${record.status.lowercase()} · ${record.path}")
+                } finally { cleanup() }
             }
             override fun onException(execution: ScriptExecution, error: Throwable) {
-                // 主动停止 / 超时会中断脚本，QuickJS 在中断点必然抛异常（等同于 Java 的
-                // InterruptedException）——这不是错误，按 STOPPED 上报并带 stopReason。
-                if (isInterrupt(error)) {
-                    record.status = "STOPPED"
-                    record.stopReason = if (record.stopRequested) "user_stopped" else "interrupted"
-                    record.errorType = ""; record.errorMessage = ""; record.errorStack = ""
+                try {
+                    // 主动停止造成的中断按 STOPPED 上报；等待超时本身不会中止脚本。
+                    if (record.stopRequested || isInterrupt(error)) {
+                        record.stopReason = record.stopReason.ifEmpty { if (record.stopRequested) "user_stopped" else "interrupted" }
+                        record.errorType = ""; record.errorMessage = ""; record.errorStack = ""
+                        record.finishedAt = System.currentTimeMillis()
+                        record.logs = runLogs(record, execution)
+                        record.status = "STOPPED"
+                        event("$key · stopped · ${record.path}")
+                        return
+                    }
+                    record.errorType = error.javaClass.name
+                    record.errorMessage = error.localizedMessage.orEmpty().take(2000)
+                    record.errorStack = Log.getStackTraceString(error).take(16 * 1024)
                     record.finishedAt = System.currentTimeMillis()
-                    record.logs = consoleLogsSince(record.logStartId, MAX_RUN_LOGS)
-                    event("$key · stopped · ${record.path}")
-                    return
-                }
-                if (record.status != "STOPPED") record.status = "FAILED"
-                record.errorType = error.javaClass.name; record.errorMessage = error.localizedMessage.orEmpty().take(2000)
-                record.errorStack = Log.getStackTraceString(error).take(16 * 1024); record.finishedAt = System.currentTimeMillis()
-                record.logs = consoleLogsSince(record.logStartId, MAX_RUN_LOGS)
-                event("$key · ${record.status.lowercase()} · ${record.errorMessage.take(100)}")
+                    record.logs = runLogs(record, execution)
+                    if (record.status != "STOPPED") record.status = "FAILED"
+                    event("$key · ${record.status.lowercase()} · ${record.errorMessage.take(100)}")
+                } finally { cleanup() }
             }
         }
         try {
             val execution = AutoJs.getInstance().scriptEngineService.execute(
-                source, listener, ExecutionConfig(workingDirectory = file.parent.orEmpty()))
+                source, listener, config)
             record.execution = execution; record.engineExecutionId = execution.id
         } catch (error: Exception) {
-            tempFile?.delete()
+            cleanup()
             record.status = "FAILED"; record.finishedAt = System.currentTimeMillis()
             record.errorType = error.javaClass.name; record.errorMessage = error.localizedMessage.orEmpty()
             record.errorStack = Log.getStackTraceString(error).take(16 * 1024)
             throw ToolError("脚本启动失败：${record.errorMessage}")
         }
-        try {
-            if (wait) return toolJson(waitFor(record, args.intOr("timeoutSeconds", 60)))
-            return toolJson(runJson(record))
-        } finally {
-            tempFile?.delete()
-        }
+        if (wait) return toolJson(waitFor(record, timeoutSeconds))
+        return toolJson(runJson(record))
     }
 
     private fun listEngineApi(args: JsonObject): JsonObject {
         val engine = args.stringOr("engine", "quickjs").lowercase()
         require(engine == "quickjs" || engine == "rhino") { "engine 必须是 quickjs 或 rhino" }
         requireRhinoCompat(engine)
-        val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
-        val source = header +
+        val source =
             "console.log('MCP_API_PROBE_RESULT=' + JSON.stringify(Object.keys(typeof globalThis !== 'undefined' ? globalThis : this)" +
             ".filter(function(n){return !n.startsWith('__')}).sort()))"
         val resultText = engineProbe(engine, source)
@@ -315,10 +409,9 @@ internal class McpTools(private val context: Context, private val event: (String
         require(engine == "quickjs" || engine == "rhino") { "engine 必须是 quickjs 或 rhino" }
         requireRhinoCompat(engine)
         require(name.matches(Regex("[A-Za-z0-9_$.]{1,120}"))) { "name 只允许字母数字下划线 $ ." }
-        val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
-        val source = header + "var x=" + name + ";" +
+        val source = "var x=" + name + ";" +
             "console.log('MCP_API_PROBE_RESULT=' + JSON.stringify({name:'" + name + "',type:typeof x," +
-            "keys:(x&&typeof x==='object')?Object.keys(x).slice(0,200):[]}))"
+            "keys:(x&&(typeof x==='object'||typeof x==='function'))?Object.keys(x).slice(0,200):[]}))"
         val resultText = engineProbe(engine, source)
         val obj = com.google.gson.JsonParser().parse(resultText).asJsonObject
         return toolJson(JsonObject().apply {
@@ -350,8 +443,7 @@ internal class McpTools(private val context: Context, private val event: (String
     }
 
     private fun engineApiNames(engine: String): List<String> {
-        val header = if (engine == "quickjs") "// @engine quickjs\n" else ""
-        val source = header +
+        val source =
             "console.log('MCP_API_PROBE_RESULT=' + JSON.stringify(Object.keys(typeof globalThis !== 'undefined' ? globalThis : this)" +
             ".filter(function(n){return !n.startsWith('__')}).sort()))"
         val items = com.google.gson.JsonParser().parse(engineProbe(engine, source)).asJsonArray
@@ -360,27 +452,23 @@ internal class McpTools(private val context: Context, private val event: (String
 
     private fun engineProbe(engine: String, source: String, timeout: Int = 30): String {
         if (!McpService.allowExecution) throw ToolError("运行授权未开启")
-        val file = File(root, "mcp_api_probe_tmp.js")
-        file.writeText(source)
-        try {
-            val response = runScript(JsonObject().apply {
-                addProperty("path", file.name)
-                addProperty("wait", true)
-                addProperty("timeoutSeconds", timeout)
-            })
-            val text = response.getAsJsonArray("content").first().asJsonObject.get("text").asString
-            val run = com.google.gson.JsonParser().parse(text).asJsonObject
-            if (run.get("status")?.asString == "FAILED") {
-                val err = run.getAsJsonObject("error")
-                throw ToolError("探针执行失败：" + err.get("message")?.asString.orEmpty())
-            }
-            val logs = run.getAsJsonArray("logs") ?: com.google.gson.JsonArray()
-            val line = logs.firstOrNull { it.asJsonObject.get("content")?.asString.orEmpty().contains("MCP_API_PROBE_RESULT=") }
-                ?: throw ToolError("探针无输出（未捕获到结果日志）")
-            return line.asJsonObject.get("content").asString.substringAfter("MCP_API_PROBE_RESULT=")
-        } finally {
-            file.delete()
+        requireRhinoCompat(engine)
+        val probe = McpEngineProbe(engine, source)
+        // 用内存源码执行；不会覆盖用户文件，并发探针也不会争用同一个临时文件。
+        val response = executeScript("${probe.name}.js", StringScriptSource(probe.name, probe.source),
+            root.path, wait = true, timeoutSeconds = timeout)
+        val text = response.getAsJsonArray("content").first().asJsonObject.get("text").asString
+        val run = com.google.gson.JsonParser().parse(text).asJsonObject
+        if (run.get("status")?.asString == "FAILED") {
+            val err = run.getAsJsonObject("error")
+            throw ToolError("探针执行失败：" + err.get("message")?.asString.orEmpty())
         }
+        if (run.get("status")?.asString != "SUCCEEDED") {
+            throw ToolError("探针尚未成功结束：${run.get("status")?.asString}；executionId=${run.get("executionId")?.asString}")
+        }
+        val logs = run.getAsJsonArray("logs") ?: JsonArray()
+        return probe.result(logs.map { it.asJsonObject })
+            ?: throw ToolError("探针无输出（未捕获到本次请求的结果日志）")
     }
 
     private fun requireRhinoCompat(engine: String) {
@@ -396,7 +484,7 @@ internal class McpTools(private val context: Context, private val event: (String
         record.stopRequested = true; record.stopReason = "user_stopped"
         record.status = "STOPPED"; record.finishedAt = System.currentTimeMillis()
         record.errorType = ""; record.errorMessage = ""; record.errorStack = ""
-        record.logs = consoleLogsSince(record.logStartId, MAX_RUN_LOGS)
+        record.logs = runLogs(record)
         record.execution?.engine?.forceStop()
         event("${record.id} · stopped · ${record.path}")
         return toolJson(runJson(record))
@@ -416,6 +504,7 @@ internal class McpTools(private val context: Context, private val event: (String
 
     private fun runJson(run: RunRecord, includeLogs: Boolean = false) = JsonObject().apply {
         addProperty("executionId", run.id); addProperty("engineExecutionId", run.engineExecutionId)
+        if (run.engine.isNotEmpty()) addProperty("engine", run.engine)
         addProperty("path", run.path); addProperty("status", run.status); addProperty("createdAt", run.createdAt)
         if (run.startedAt > 0) addProperty("startedAt", run.startedAt)
         if (run.finishedAt > 0) addProperty("finishedAt", run.finishedAt)
@@ -425,7 +514,7 @@ internal class McpTools(private val context: Context, private val event: (String
             addProperty("type", run.errorType); addProperty("message", run.errorMessage); addProperty("stack", run.errorStack)
         })
         if (includeLogs) add("logs", JsonArray().apply {
-            val snapshot = run.logs ?: if (run.logStartId >= 0 && run.status in ACTIVE_STATES) consoleLogsSince(run.logStartId, MAX_RUN_LOGS) else emptyList()
+            val snapshot = run.logs ?: runLogs(run)
             snapshot.forEach { add(it) }
         })
     }
@@ -445,15 +534,55 @@ internal class McpTools(private val context: Context, private val event: (String
     }
 
     private fun console(): ConsoleImpl? = runCatching { AutoJs.getInstance().scriptEngineService.globalConsole as? ConsoleImpl }.getOrNull()
-    private fun currentConsoleMaxId(): Int = console()?.let { c -> synchronized(c.allLogs) { c.allLogs.lastOrNull()?.id ?: -1 } } ?: -1
-    private fun consoleLogsSince(fromId: Int, limit: Int): List<JsonObject> {
-        if (fromId < 0) return emptyList()
-        val console = console() ?: return emptyList()
-        val all = console.allLogs
-        return synchronized(all) { all.filter { it.id > fromId }.take(limit.coerceIn(1, MAX_RUN_LOGS)) }.map { entry -> JsonObject().apply {
+    private fun runLogs(record: RunRecord, execution: ScriptExecution? = record.execution): List<JsonObject> {
+        val ownConsole = runCatching { (execution?.engine as? JavaScriptEngine)?.runtime?.console as? ConsoleImpl }.getOrNull()
+            ?: return emptyList()
+        val all = ownConsole.allLogs
+        return synchronized(all) { all.takeLast(MAX_RUN_LOGS) }.map { entry -> JsonObject().apply {
             addProperty("id", entry.id); addProperty("level", logLevel(entry.level))
             addProperty("content", entry.content?.toString().orEmpty().take(16 * 1024))
         } }
+    }
+
+    private fun requireExecution() { if (!McpService.allowExecution) throw ToolError("运行授权未开启") }
+
+    private fun stopAllScripts(): JsonObject {
+        requireExecution()
+        runs.values.filter { it.status in ACTIVE_STATES }.forEach { record ->
+            record.stopRequested = true; record.stopReason = "all_scripts_stopped"
+            record.logs = runLogs(record); record.finishedAt = System.currentTimeMillis()
+            record.status = "STOPPED"
+        }
+        val stopped = AutoJs.getInstance().scriptEngineService.stopAll()
+        event("stop_all_scripts · 停止全部脚本 · $stopped")
+        return toolJson(JsonObject().apply { addProperty("success", true); addProperty("stopped", stopped); addProperty("scope", "all_scripts") })
+    }
+
+    private fun getMcpLog(args: JsonObject): JsonObject {
+        val maxChars = args.intOr("maxChars", 20000).also { require(it in 1..200000) { "maxChars 必须是 1～200000" } }
+        val channel = args.stringOr("channel", "script").also { require(it in setOf("script", "service", "all")) { "channel 必须是 script、service 或 all" } }
+        val executionId = args.stringOr("executionId", "")
+        val scriptText = if (executionId.isNotEmpty()) {
+            val record = runs[executionId] ?: throw ToolError("找不到此 MCP 任务")
+            McpLogText.tailResult((record.logs ?: runLogs(record)).map {
+                "${it.get("level").asString}: ${it.get("content").asString}"
+            }, maxChars) { it }
+        } else console()?.let { c -> synchronized(c.allLogs) {
+            McpLogText.tailResult(c.allLogs, maxChars) { it.content.toString() }
+        } } ?: McpLogText.Tail("", false)
+        val text = buildString {
+            if (channel != "service") append(scriptText.text)
+            if (channel != "script") {
+                if (isNotEmpty()) append('\n')
+                append(McpService.recentEvents().asReversed().joinToString("\n"))
+            }
+        }
+        val combined = McpLogText.tailResult(listOf(text), maxChars) { it }
+        return JsonObject().apply {
+            addProperty("log", combined.text); addProperty("maxChars", maxChars)
+            addProperty("truncated", combined.truncated || channel != "service" && scriptText.truncated); addProperty("channel", channel)
+            if (executionId.isNotEmpty()) addProperty("executionId", executionId)
+        }
     }
 
     private fun searchScripts(query: String, path: String, limit: Int): JsonObject {
@@ -521,7 +650,8 @@ internal class McpTools(private val context: Context, private val event: (String
 
     private fun resolveScript(path: String): File {
         if (path.indexOf('\u0000') >= 0) throw ToolError("路径无效")
-        val file = File(root, path).canonicalFile
+        val raw = File(path)
+        val file = (if (raw.isAbsolute) raw else File(root, path)).canonicalFile
         if (file != root && !file.path.startsWith(root.path + File.separator)) throw ToolError("路径超出脚本目录")
         return file
     }
@@ -593,16 +723,9 @@ internal class McpTools(private val context: Context, private val event: (String
         addProperty("nextOffset", end); addProperty("total", all.size); addProperty("hasMore", end < all.size)
     }
     private fun tool(name: String, description: String, schema: JsonObject = objSchema()) = JsonObject().apply { addProperty("name", name); addProperty("description", description); add("inputSchema", schema) }
-    private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) = JsonObject().apply {
-        addProperty("type", "object"); add("properties", JsonObject().apply { names.forEach { n -> add(n, JsonObject().apply {
-            addProperty("type", when (n) {
-                in INTEGER_PARAMS -> "integer"
-                in BOOLEAN_PARAMS -> "boolean"
-                else -> "string"
-            })
-        }) } }); if (required.isNotEmpty()) add("required", JsonArray().apply { required.forEach { add(it) } }); addProperty("additionalProperties", false)
-    }
-    private fun toolJson(json: JsonObject) = toolResult(json.toString())
+    private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) =
+        McpToolSchema.objectSchema(*names, required = required)
+    private fun toolJson(json: JsonObject) = toolResult(json.toString()).apply { add("structuredContent", json) }
     private fun toolResult(text: String, error: Boolean = false) = JsonObject().apply {
         add("content", JsonArray().apply { add(JsonObject().apply { addProperty("type", "text"); addProperty("text", text) }) })
         if (error) addProperty("isError", true)
@@ -620,8 +743,6 @@ internal class McpTools(private val context: Context, private val event: (String
         private val SUPPORTED_PROTOCOLS = setOf("2024-11-05", "2025-03-26", "2025-06-18")
         private val ACTIVE_STATES = setOf("QUEUED", "RUNNING")
         private val TEXT_EXTENSIONS = setOf("js", "json", "txt", "md", "xml", "css", "html")
-        private val INTEGER_PARAMS = setOf("offset", "limit", "maxBytes", "afterId", "timeoutSeconds")
-        private val BOOLEAN_PARAMS = setOf("wait", "create")
         private const val MAX_READ_FILE_BYTES = 8L * 1024 * 1024
         private const val MAX_SEARCH_FILES = 2000
         private const val MAX_SEARCH_HITS = 2000

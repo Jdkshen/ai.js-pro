@@ -31,6 +31,7 @@ import static com.stardust.autojs.util.FloatingPermission.manageDrawOverlays;
 public class FloatyWindowManger {
 
     private static WeakReference<CircularMenu> sCircularMenu;
+    private static final FloatingMenuVisibility sMenuVisibility = new FloatingMenuVisibility();
 
     public static boolean addWindow(Context context, FloatyWindow window) {
         context.startService(new Intent(context, FloatyService.class));
@@ -61,14 +62,16 @@ public class FloatyWindowManger {
     }
 
     public static boolean showCircularMenu() {
+        if (isCircularMenuShowing()) return true;
         if (!FloatingPermission.canDrawOverlays(GlobalAppContext.get())) {
             Toast.makeText(GlobalAppContext.get(), R.string.text_no_floating_window_permission, Toast.LENGTH_SHORT).show();
             manageDrawOverlays(GlobalAppContext.get());
             return false;
         } else {
             GlobalAppContext.get().startService(new Intent(GlobalAppContext.get(), FloatyService.class));
-            CircularMenu menu = new CircularMenu(GlobalAppContext.get());
+            CircularMenu menu = new CircularMenu(GlobalAppContext.get(), sMenuVisibility.isSuppressed());
             sCircularMenu = new WeakReference<>(menu);
+            sMenuVisibility.attach(menu);
             return true;
         }
     }
@@ -80,6 +83,25 @@ public class FloatyWindowManger {
         if (menu != null)
             menu.close();
         sCircularMenu = null;
+    }
+
+    /** Main thread: keep the menu mounted, without changing the user's enabled state. */
+    public static int acquireCircularMenuSuppression() {
+        return sMenuVisibility.acquire();
+    }
+
+    /** Main thread: only the last owner can restore the currently enabled menu. */
+    public static void releaseCircularMenuSuppression(int token) {
+        sMenuVisibility.release(token);
+    }
+
+    public static boolean isCircularMenuSuppressed() {
+        return sMenuVisibility.isSuppressed();
+    }
+
+    static void onCircularMenuClosed(CircularMenu menu) {
+        sMenuVisibility.detach(menu);
+        if (sCircularMenu != null && sCircularMenu.get() == menu) sCircularMenu = null;
     }
 
     public static int getWindowType() {

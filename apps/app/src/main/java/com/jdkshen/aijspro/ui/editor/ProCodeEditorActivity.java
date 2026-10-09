@@ -62,6 +62,7 @@ import com.jdkshen.aijspro.autojs.AutoJs;
 import com.jdkshen.aijspro.model.indices.ClassSearchingItem;
 import com.jdkshen.aijspro.model.script.ScriptFile;
 import com.jdkshen.aijspro.model.script.Scripts;
+import com.jdkshen.aijspro.model.script.ProjectSharing;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
 import com.jdkshen.aijspro.ui.common.MiuixHintDialog;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
@@ -91,8 +92,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 /**
  * Pro-style multi-file script workspace used by the Miuix application shell.
@@ -137,6 +136,9 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private File mWorkspaceRoot;
     private File mProjectRoot;
     private String mSampleAssetDirectory;
+    private Uri mExternalUri;
+    private File mExternalFile;
+    private boolean mExternalDraftDirty;
     private boolean mLogExpanded;
     private boolean mDebugInterrupted;
     private int mLogLevel = Log.VERBOSE;
@@ -180,6 +182,39 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         // 顺带清掉可能残留的系统栏隐藏标记（见 AppThemePalette.withoutHiddenSystemBars）
         applyWindowSystemUi(mPalette);
         String path = getIntent().getStringExtra(EXTRA_PATH);
+        Uri data = getIntent().getData();
+        if (data != null && "content".equals(data.getScheme())) {
+            mExternalUri = data;
+            String restoredPath = savedInstanceState == null ? null : savedInstanceState.getString("external_editor_path");
+            if (restoredPath != null && new File(restoredPath).isFile()) {
+                mExternalFile = new File(restoredPath);
+                mExternalDraftDirty = savedInstanceState.getBoolean("external_editor_dirty", false);
+                initializeEditor(mExternalFile);
+            } else {
+                TextView loading = text("正在打开外部文件…", 16f, mPalette.textPrimary);
+                loading.setGravity(Gravity.CENTER);
+                loading.setBackgroundColor(mPalette.editorBackground);
+                setContentView(loading);
+                new Thread(() -> {
+                    try {
+                        File file = ExternalEditorDocument.read(getApplicationContext(), data);
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            mExternalFile = file;
+                            initializeEditor(file);
+                            toast("外部文件：保存将写回原文件；无写入权限时可在菜单中另存为");
+                        });
+                    } catch (Exception error) {
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            toast("打开失败：" + error.getMessage());
+                            finish();
+                        });
+                    }
+                }, "external-editor-read").start();
+            }
+            return;
+        }
         String sampleAssetPath = getIntent().getStringExtra(EXTRA_SAMPLE_ASSET_PATH);
         if (!TextUtils.isEmpty(sampleAssetPath)) {
             int slash = sampleAssetPath.lastIndexOf('/');
@@ -191,6 +226,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             finish();
             return;
         }
+        initializeEditor(initial);
+    }
+
+    private void initializeEditor(File initial) {
         resolveWorkspace(initial);
         buildWorkspaceUi();
         ContextCompat.registerReceiver(this, mExecutionFinishedReceiver,
@@ -613,6 +652,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     private void showWorkspaceItemMenu(File item) {
         if (item == null) return;
+        if (mExternalUri != null && mExternalFile != null && isWithin(item, mExternalFile.getParentFile())) {
+            saveActiveAs();
+            return;
+        }
         if (item.isFile()) {
             String[] actions = {"打开", "重命名", "发送", "删除", "用其他应用打开", "终端"};
             darkDialog().setTitle(item.getName()).setItems(actions, (dialog, which) -> {
@@ -736,46 +779,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void shareWorkspaceItem(File item) {
-        if (item.isFile()) {
-            Scripts.INSTANCE.send(new ScriptFile(item));
-            return;
-        }
-        new Thread(() -> {
-            File archive = new File(getCacheDir(), "share-" + item.getName() + ".zip");
-            try (ZipOutputStream output = new ZipOutputStream(new FileOutputStream(archive))) {
-                zipDirectory(item, item.getName(), output);
-                runOnUiThread(() -> {
-                    Uri uri = AppFileProvider.getUriForFile(this, archive);
-                    Intent share = new Intent(Intent.ACTION_SEND)
-                            .setType("application/zip")
-                            .putExtra(Intent.EXTRA_STREAM, uri)
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    startActivity(Intent.createChooser(share, "发送项目"));
-                });
-            } catch (IOException error) {
-                runOnUiThread(() -> toast("打包发送失败：" + error.getMessage()));
-            }
-        }, "pro-editor-share").start();
-    }
-
-    private void zipDirectory(File file, String entryName, ZipOutputStream output) throws IOException {
-        if (file.isDirectory()) {
-            File[] children = file.listFiles();
-            if (children == null || children.length == 0) {
-                output.putNextEntry(new ZipEntry(entryName + "/"));
-                output.closeEntry();
-                return;
-            }
-            for (File child : children) zipDirectory(child, entryName + "/" + child.getName(), output);
-            return;
-        }
-        output.putNextEntry(new ZipEntry(entryName));
-        try (InputStream input = new FileInputStream(file)) {
-            byte[] buffer = new byte[8192];
-            int length;
-            while ((length = input.read(buffer)) >= 0) output.write(buffer, 0, length);
-        }
-        output.closeEntry();
+        ProjectSharing.share(this, item);
     }
 
     private void switchWorkspace(File directory) {
@@ -816,11 +820,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private boolean isEditableFile(File file) {
-        String name = file.getName().toLowerCase(Locale.ROOT);
-        return name.endsWith(".js") || name.endsWith(".auto") || name.endsWith(".json")
-                || name.endsWith(".xml") || name.endsWith(".txt") || name.endsWith(".md")
-                || name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".css")
-                || name.endsWith(".html");
+        return com.jdkshen.aijspro.model.explorer.ExplorerFileItem.isEditableFileName(file.getName());
     }
 
     private void openFile(File requested) {
@@ -855,7 +855,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void restoreSessionAndOpen(File initial) {
         SharedPreferences prefs = editorPreferences();
         List<File> files = new ArrayList<>();
-        String encoded = prefs.getString(PREF_OPEN_TABS, "");
+        String encoded = mExternalUri == null ? prefs.getString(PREF_OPEN_TABS, "") : "";
         if (!TextUtils.isEmpty(encoded)) {
             try {
                 JSONArray array = new JSONArray(encoded);
@@ -904,6 +904,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void saveEditorSession() {
+        // Temporary URI backing files must never replace the user's workspace session.
+        if (mExternalUri != null) return;
         JSONArray tabs = new JSONArray();
         SharedPreferences.Editor preferences = editorPreferences().edit();
         for (EditorTab tab : mTabs) {
@@ -1438,7 +1440,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     private void showOtherMenu(View anchor) {
         String[] items = {"项目", "打包单文件", "搜索Java包/类", "信息", "字体大小",
-                "界面主题", "用其他应用打开", "设计"};
+                "界面主题", "用其他应用打开", "设计", "另存为…"};
         showAnchoredMenu(anchor, items, null, which -> {
             if (mActiveTab == null) return;
             if (which == 0) openProjectConfig();
@@ -1448,7 +1450,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             else if (which == 4) selectTextSize();
             else if (which == 5) selectTheme();
             else if (which == 6) Scripts.INSTANCE.openByOtherApps(mActiveTab.file);
-            else showDesigner();
+            else if (which == 7) showDesigner();
+            else saveActiveAs();
         });
     }
 
@@ -1753,6 +1756,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         try {
             String source = expandedText(tab);
             FileUtils.writeStringToFile(tab.file, source, "UTF-8");
+            if (mExternalUri != null && tab.file.equals(mExternalFile) && hasUnsavedChanges(tab)) {
+                ExternalEditorDocument.write(getContentResolver(), mExternalUri, source);
+                mExternalDraftDirty = false;
+            }
             tab.savedText = source;
             tab.dirtyMarkerShown = false;
             tab.editor.markTextAsSaved();
@@ -1760,10 +1767,70 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             updateToolbarState();
             if (showToast) toast("已保存");
             return true;
-        } catch (IOException error) {
-            Toast.makeText(this, "保存失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+        } catch (IOException | SecurityException error) {
+            Toast.makeText(this, "保存失败：" + error.getMessage()
+                    + (mExternalUri == null ? "" : "\n修改仍在编辑器中，可通过菜单「另存为…」保存副本"), Toast.LENGTH_LONG).show();
             return false;
         }
+    }
+
+    private void saveActiveAs() {
+        final EditorTab tab = mActiveTab;
+        if (tab == null) return;
+        com.jdkshen.aijspro.ui.common.MiuixFileChooserDialog.showDirectory(this, "选择另存位置",
+                android.os.Environment.getExternalStorageDirectory().getPath(), Pref.getScriptDirPath(), directory ->
+                com.jdkshen.aijspro.ui.common.MiuixInputDialog.show(this, "另存为", "文件名（包含扩展名）",
+                        tab.file.getName(), null, false, (name, checked) -> {
+                            if (!name.equals(ExternalEditorDocument.safeName(name))) return "请输入有效的文件名";
+                            return new File(directory, name).exists() ? "文件已存在，请更换名称" : null;
+                        }, "保存", "取消", (name, checked) -> {
+                            File target = new File(directory, name);
+                            boolean created = false;
+                            try {
+                                if (!target.createNewFile()) throw new IOException("文件已存在");
+                                created = true;
+                                String source = expandedText(tab);
+                                FileUtils.writeStringToFile(target, source, "UTF-8");
+                                if (tab.file.equals(mExternalFile)) {
+                                    mExternalUri = null;
+                                    mExternalFile = null;
+                                    mExternalDraftDirty = false;
+                                    getIntent().setData(null);
+                                }
+                                tab.file = target;
+                                tab.savedText = source;
+                                tab.dirtyMarkerShown = false;
+                                tab.editor.markTextAsSaved();
+                                getIntent().putExtra(EXTRA_PATH, target.getPath());
+                                switchWorkspace(target.getParentFile());
+                                mProjectRoot = findProjectRoot(target.getParentFile());
+                                refreshTabs();
+                                updateToolbarState();
+                                com.jdkshen.aijspro.model.explorer.Explorers.workspace().notifyChildrenChanged(
+                                        new com.jdkshen.aijspro.model.explorer.ExplorerDirPage(target.getParentFile(), null));
+                                toast("已另存：" + target.getPath());
+                            } catch (IOException error) {
+                                if (created) target.delete();
+                                toast("另存失败：" + error.getMessage());
+                            }
+                        }));
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        if (mExternalFile != null) {
+            outState.putString("external_editor_path", mExternalFile.getPath());
+            for (EditorTab tab : mTabs) {
+                if (!tab.file.equals(mExternalFile)) continue;
+                try {
+                    // Keep the draft locally during recreation, without writing to the provider.
+                    FileUtils.writeStringToFile(mExternalFile, expandedText(tab), "UTF-8");
+                    outState.putBoolean("external_editor_dirty", hasUnsavedChanges(tab));
+                } catch (IOException error) { toast("暂存修改失败：" + error.getMessage()); }
+                break;
+            }
+        }
+        super.onSaveInstanceState(outState);
     }
 
     private void saveAllAndFinish() {
@@ -1772,7 +1839,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private boolean hasUnsavedChanges(EditorTab tab) {
-        return !tab.savedText.equals(expandedText(tab));
+        return (mExternalDraftDirty && tab.file.equals(mExternalFile)) || !tab.savedText.equals(expandedText(tab));
     }
 
     private boolean hasAnyUnsavedChanges() {

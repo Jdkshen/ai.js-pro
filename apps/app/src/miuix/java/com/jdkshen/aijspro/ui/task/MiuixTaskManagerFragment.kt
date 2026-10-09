@@ -53,6 +53,8 @@ import com.jdkshen.aijspro.timing.TimedTaskManager
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
 import com.jdkshen.aijspro.ui.main.task.Task
+import com.stardust.autojs.engine.ScriptEngine
+import com.stardust.autojs.engine.ScriptEngineManager
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.script.AutoFileSource
 import com.stardust.autojs.execution.SimpleScriptExecutionListener
@@ -105,6 +107,17 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
         override fun onStart(execution: ScriptExecution) = refreshOnUi()
         override fun onSuccess(execution: ScriptExecution, result: Any?) = refreshOnUi()
         override fun onException(execution: ScriptExecution, error: Throwable) = refreshOnUi()
+    }
+
+    /**
+     * 运行列表是从 ScriptEngineService 的"运行中执行"里整表重读的，而执行记录要到
+     * 引擎 destroy() 时才从那张表移除——那时已晚于 onSuccess/onException 的刷新事件。
+     * 没有这个回调的话，刚停掉的脚本会一直挂在"运行中任务"里（点停止全部、按返回键
+     * 结束 UI 脚本都会中招），直到下次切页/回前台才消失。
+     */
+    private val engineLifecycleCallback = object : ScriptEngineManager.EngineLifecycleCallback {
+        override fun onEngineCreate(engine: ScriptEngine<*>) = Unit
+        override fun onEngineRemove(engine: ScriptEngine<*>) = refreshOnUi()
     }
 
     private fun refreshOnUi() {
@@ -194,8 +207,13 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
 
     private fun registerListener(register: Boolean) {
         val service = AutoJs.getInstance().scriptEngineService
-        if (register) service.registerGlobalScriptExecutionListener(scriptListener)
-        else service.unregisterGlobalScriptExecutionListener(scriptListener)
+        if (register) {
+            service.registerGlobalScriptExecutionListener(scriptListener)
+            service.registerEngineLifecycleCallback(engineLifecycleCallback)
+        } else {
+            service.unregisterGlobalScriptExecutionListener(scriptListener)
+            service.unregisterEngineLifecycleCallback(engineLifecycleCallback)
+        }
     }
 
     private fun loadTasks(): Pair<List<TaskItem.Running>, List<TaskItem.Pending>> {

@@ -57,6 +57,42 @@ public class ProjectUsabilityTest {
             });
         } finally { instrumentation.runOnMainSync(activity::finish); }
     }
+    @Test public void switchingBuildProjectClearsPreviousSplash() throws Exception {
+        File root = new File(instrumentation.getTargetContext().getCacheDir(), "build-switch-qa-" + SystemClock.uptimeMillis());
+        File first = new File(root, "first"), second = new File(root, "second");
+        assertTrue(first.mkdirs()); assertTrue(second.mkdirs());
+        String json = "{\"name\":\"QA\",\"packageName\":\"com.example.qa\",\"versionName\":\"1.0\",\"versionCode\":1,\"main\":\"main.js\"}";
+        for (File dir : new File[]{first, second}) {
+            java.nio.file.Files.write(new File(dir, "project.json").toPath(), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        android.graphics.Bitmap image = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888);
+        try (java.io.FileOutputStream output = new java.io.FileOutputStream(new File(first, "splash.png"))) {
+            image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output);
+        } finally { image.recycle(); }
+        Intent intent = new Intent(instrumentation.getTargetContext(), MiuixBuildActivity.class)
+                .putExtra(com.jdkshen.aijspro.ui.project.BuildActivity.EXTRA_SOURCE, first.getPath())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Activity activity = instrumentation.startActivitySync(intent);
+        try {
+            instrumentation.runOnMainSync(() -> {
+                assertEquals(new File(first, "splash.png").getPath(), call(activity, "getSplashIconPath", new Class<?>[0]));
+                call(activity, "applySource", new Class<?>[]{File.class, boolean.class}, second, true);
+                assertEquals("", call(activity, "getSplashIconPath", new Class<?>[0]));
+                assertNull(call(activity, "getSplashIcon", new Class<?>[0]));
+                Object config = call(activity, "createAppConfig", new Class<?>[0]);
+                try {
+                    java.lang.reflect.Field splash = config.getClass().getDeclaredField("splashIconPath");
+                    splash.setAccessible(true);
+                    assertNull(splash.get(config));
+                } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+            });
+        } finally {
+            instrumentation.runOnMainSync(activity::finish);
+            new File(first, "splash.png").delete();
+            for (File dir : new File[]{first, second}) { new File(dir, "project.json").delete(); dir.delete(); }
+            root.delete();
+        }
+    }
     @Test public void dirtySwitchProvidesSaveDiscardCancel() {
         Activity activity = launch();
         try {

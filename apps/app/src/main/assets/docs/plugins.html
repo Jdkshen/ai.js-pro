@@ -92,7 +92,7 @@
 
       <div id="apicontent">
         <h1>Plugins<span><a class="mark" href="#plugins_plugins" id="plugins_plugins">#</a></span></h1>
-<div class="api_stability api_stability_1"><a href="documentation.html#documentation_stability_index">Stability: 1</a> - Experimental（仅 Rhino 引擎）</div><p>插件（plugin）是一个独立的APK，用来把原生能力（第三方SDK、算法库、需要Java才能做的事情）打包成可以反复使用的能力包。脚本侧只需要知道插件包名，用<code>plugins.load()</code>加载它即可。</p>
+<div class="api_stability api_stability_1"><a href="documentation.html#documentation_stability_index">Stability: 1</a> - Experimental（Rhino 与 QuickJS 两个引擎都支持）</div><p>插件（plugin）是一个独立的APK，用来把原生能力（第三方SDK、算法库、需要Java才能做的事情）打包成可以反复使用的能力包。脚本侧只需要知道插件包名，用<code>plugins.load()</code>加载它即可。</p>
 <p>插件里同时带有一段脚本作为入口（<code>index.js</code>）：加载时宿主会把插件的脚本目录复制到应用缓存目录，用<code>require()</code>执行入口脚本，并把插件对象传给入口函数。因此插件的使用方式可以完全由插件作者定义。</p>
 <div class="warning">
 <p>插件是需要安装的第三方APK，加载插件等于让插件的原生代码以宿主应用的权限运行，只加载你信任的插件。</p>
@@ -118,7 +118,7 @@ log(result);
 <div class="signature"><ul>
 <li><code>plugin.unwrap()</code> <span class="type">&lt;Object&gt;</span> 取回插件SDK的原始实例，可以直接调用它的Java方法（插件自己的API、版本号等都从这里取）</li>
 <li><code>plugin.getAssetsScriptDir()</code> <span class="type">&lt;string&gt;</span> 插件内脚本目录在APK里的路径</li>
-<li><code>plugin.getMainScriptPath()</code> <span class="type">&lt;string&gt;</span> 复制到缓存后的入口脚本路径（Rhino下也可写成<code>plugin.mainScriptPath</code>）</li>
+<li><code>plugin.getMainScriptPath()</code> <span class="type">&lt;string&gt;</span> 复制到缓存后的入口脚本路径（Rhino下也可写成<code>plugin.mainScriptPath</code>；两个引擎都给）</li>
 </ul>
 </div><p>典型的<code>index.js</code>写法（插件作者提供）：</p>
 <pre><code>// 插件 APK 内的 assets/scripts/index.js
@@ -142,9 +142,11 @@ module.exports = function (plugin) {
 <div class="warning">
 <p>注意事项</p>
 <ul>
-<li>插件只在<strong>Rhino引擎</strong>可用；QuickJS引擎暂未实现<code>plugins</code>模块。</li>
-<li>插件入口脚本按Rhino脚本执行，可以直接使用<code>require</code>、<code>plugins.load</code>之外的Rhino API，但它与宿主脚本是不同的脚本上下文（<code>engines</code>里会多出一个脚本实例）。</li>
+<li>两个引擎都支持：QuickJS 由 <code>modules/qjs-plugins.js</code> 提供 <code>$plugins</code>，Rhino 用 <code>modules/__plugins__.js</code>；两边都会把「插件对象」交给入口脚本。</li>
+<li>插件入口脚本在<strong>宿主当前的引擎</strong>里执行（QuickJS 宿主就是 QuickJS），所以能直接用宿主已有 API；它是与宿主脚本不同的模块实例（<code>engines</code>里会多出一个脚本实例）。</li>
+<li>Rhino 侧会给插件传<code>TopLevelScope</code>，QuickJS 侧传<code>null</code>：插件的<code>loadDefault</code>不要假设 scope 一定存在。</li>
 <li>插件的<code>assets</code>脚本目录每次加载都会被复制到<code>cache/plugin-scripts/</code>，因此修改插件脚本需要重新安装插件APK。</li>
+<li>插件资源里带上来的 JS 由宿主引擎执行：只写 QuickJS 语法的代码在 Rhino 宿主上会直接报错（真实例子：象棋引擎插件在 Rhino 上只提供自带引擎那部分，棋规/识别需要 QuickJS 宿主）。</li>
 </ul>
 </div>
       </div>

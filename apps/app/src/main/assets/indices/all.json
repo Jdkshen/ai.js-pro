@@ -57,7 +57,8 @@
         "url": "globals.html#globals_waitforpackage_package_period_200",
         "summary": "等待包名",
         "global": true
-      },{
+      },
+      {
         "key": "exit",
         "url": "globals.html#globals_exit",
         "summary": "退出",
@@ -362,6 +363,31 @@
     "summary": "图色",
     "properties": [
       {
+        "key": "isWindowCaptureAvailable",
+        "url": "window-capture-imgui.html#available",
+        "summary": "检查 Android 14+ 无障碍窗口截图能力"
+      },
+      {
+        "key": "listCaptureWindows",
+        "url": "window-capture-imgui.html#windows",
+        "summary": "列出其他应用的可选截图窗口"
+      },
+      {
+        "key": "captureWindow",
+        "url": "window-capture-imgui.html#capture",
+        "summary": "指定窗口截图，返回图片、边界与帧序号"
+      },
+      {
+        "key": "matchSift",
+        "url": "images.html#images_matchsift",
+        "summary": "真实SIFT单次匹配，支持图片或本地路径"
+      },
+      {
+        "key": "createSiftMatcher",
+        "url": "images.html#images_createsiftmatcher",
+        "summary": "缓存模板特征，可跟踪上次位置并全图回退"
+      },
+      {
         "key": "save",
         "url": "images.html#images_images_save_image_path",
         "summary": "保存图片"
@@ -429,15 +455,27 @@
       },
       {
         "key": "findImage",
-        "url":"images.html#images_images_findimage_img_template_options",
+        "url": "images.html#images_images_findimage_img_template_options",
         "summary": "找图",
         "global": true
       },
       {
         "key": "findImageInRegion",
-        "url":"images.html#images_images_findimageinregion_img_template_x_y_width_height_threshold",
+        "url": "images.html#images_images_findimageinregion_img_template_x_y_width_height_threshold",
         "summary": "区域找图",
         "global": true
+      },
+      {
+        "key": "shareScreenCapture",
+        "url": "touch-and-shared-capture.html#share",
+        "summary": "发布当前截图会话的共享凭据",
+        "global": false
+      },
+      {
+        "key": "useSharedScreenCapture",
+        "url": "touch-and-shared-capture.html#use",
+        "summary": "连接已有共享截图会话",
+        "global": false
       }
     ]
   },
@@ -1853,5 +1891,38 @@
     ],
     "url": "engines.html",
     "summary": "脚本引擎"
+  },
+  {
+    "name": "touch",
+    "url": "touch-and-shared-capture.html#create",
+    "summary": "连续触控（Root 多指 / Shizuku 单指）",
+    "properties": [
+      {
+        "key": "create",
+        "url": "touch-and-shared-capture.html#create",
+        "summary": "创建连续触控会话，自动抬起和收尾",
+        "global": false
+      }
+    ]
+  },
+  {
+    "name": "drawing",
+    "url": "window-capture-imgui.html#drawing",
+    "summary": "QuickJS Canvas / ImGui 透明绘制层",
+    "properties": [
+      { "key": "show", "url": "window-capture-imgui.html#drawing", "summary": "创建绘制层，可选 renderer: imgui" },
+      { "key": "hide", "url": "window-capture-imgui.html#drawing", "summary": "关闭绘制层并清理缓存" },
+      { "key": "clear", "url": "window-capture-imgui.html#primitives", "summary": "清除图形与状态文字" },
+      { "key": "drawRect", "url": "window-capture-imgui.html#primitives", "summary": "绘制矩形" },
+      { "key": "drawLine", "url": "window-capture-imgui.html#primitives", "summary": "绘制线段" },
+      { "key": "drawArrow", "url": "window-capture-imgui.html#primitives", "summary": "绘制起终点箭头，可设置颜色、线宽和箭头长度" },
+      { "key": "panel.show", "url": "window-capture-imgui.html#panel", "summary": "创建有边界的 ImGui 操作窗，只有窗口范围接收触摸" },
+      { "key": "panel.update", "url": "window-capture-imgui.html#panel", "summary": "更新操作窗按钮、文字、位置和显隐状态" },
+      { "key": "panel.poll", "url": "window-capture-imgui.html#panel", "summary": "读取按钮与拖动事件，由脚本线程执行命令" },
+      { "key": "panel.hide", "url": "window-capture-imgui.html#panel", "summary": "关闭本引擎的 ImGui 操作窗" },
+      { "key": "drawCircle", "url": "window-capture-imgui.html#primitives", "summary": "绘制圆圈，可设置半径、颜色和线宽" },
+      { "key": "drawText", "url": "window-capture-imgui.html#primitives", "summary": "绘制文字" },
+      { "key": "update", "url": "window-capture-imgui.html#primitives", "summary": "提交图形快照与多行状态文字" }
+    ]
   }
 ]

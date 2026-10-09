@@ -27,6 +27,10 @@ import com.jdkshen.aijspro.external.foreground.ForegroundService;
 import com.jdkshen.aijspro.network.NodeBB;
 import com.jdkshen.aijspro.network.UserService;
 import com.jdkshen.aijspro.network.entity.user.User;
+import com.jdkshen.aijspro.pluginclient.DebugServerProvider;
+import com.jdkshen.aijspro.pluginclient.DevPluginPrefs;
+import com.jdkshen.aijspro.pluginclient.DevPluginServer;
+import com.jdkshen.aijspro.pluginclient.DevPluginServerService;
 import com.jdkshen.aijspro.pluginclient.DevPluginService;
 import com.jdkshen.aijspro.tool.AccessibilityServiceTool;
 import com.jdkshen.aijspro.tool.Observers;
@@ -251,6 +255,60 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
 
     public boolean isRemoteConnected() {
         return DevPluginService.getInstance().isConnected();
+    }
+
+    /** 本机是否已开启给 VS Code「Auto.js Pro 扩展」用的 9317 调试服务器。 */
+    public boolean isDevPluginServerRunning() {
+        return DevPluginServer.getInstance().isRunning();
+    }
+
+    public void setDevPluginServerEnabled(boolean enabled) {
+        if (getContext() == null) {
+            return;
+        }
+        // 记住开关选择：应用重启（或进程被回收后再打开）时由 DevPluginAutoStart 自动恢复。
+        DevPluginPrefs.setServerEnabled(getContext(), enabled);
+        if (enabled) {
+            DevPluginServerService.start(getContext());
+        } else {
+            DevPluginServerService.stop(getContext());
+        }
+    }
+
+    /** 抽屉开关下的状态行：未开启 → 提示语；已开启 → 本机地址与已连接客户端数。 */
+    public String getDevPluginServerSummary() {
+        if (!DevPluginServer.getInstance().isRunning()) {
+            // 发布包（-PdevPluginUsbDiscovery=false）不含 USB 自动发现 provider，文案相应收窄。
+            return getString(isDevPluginUsbDiscoveryAvailable()
+                    ? R.string.text_dev_plugin_server_off
+                    : R.string.text_dev_plugin_server_off_no_usb);
+        }
+        String address = DevPluginServer.localIpv4Address();
+        String where = address == null ? getString(R.string.text_dev_plugin_server_port_only) : address + ":9317";
+        int clients = DevPluginServer.getInstance().getClientCount();
+        String computer = DevPluginServer.getInstance().getReconnectHost();
+        return clients > 0
+                ? getString(R.string.format_dev_plugin_server_on_clients, where, clients)
+                : computer.isEmpty() ? getString(R.string.format_dev_plugin_server_on, where)
+                : getString(R.string.format_dev_plugin_server_reconnect, where, computer);
+    }
+
+    /**
+     * USB 自动发现要求本应用声明与真 Auto.js Pro 相同的 provider authority；
+     * 去掉 provider 的构建（发布包）里这返回 false，UI 仍然提供 LAN 引导。
+     */
+    public boolean isDevPluginUsbDiscoveryAvailable() {
+        android.content.Context context = getContext();
+        if (context == null) {
+            return false;
+        }
+        try {
+            android.content.pm.ProviderInfo provider = context.getPackageManager()
+                    .resolveContentProvider(DebugServerProvider.AUTHORITY, 0);
+            return provider != null && context.getPackageName().equals(provider.packageName);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public void openRemoteConnection() {

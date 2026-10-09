@@ -9,6 +9,7 @@ import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.stardust.app.GlobalAppContext;
 import com.stardust.autojs.execution.ScriptExecution;
+import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.project.ProjectLauncher;
 import com.stardust.autojs.script.StringScriptSource;
 import com.stardust.io.Zip;
@@ -67,12 +68,12 @@ public class DevPluginResponseHandler implements Handler {
                         return true;
                     })
                     .handler("stopAll", data -> {
-                        AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
+                        stopAllScripts();
                         return true;
                     }))
             .handler("bytes_command", new Router("command")
                     .handler("run_project", data -> {
-                        launchProject(data.get("dir").getAsString());
+                        launchProject(data.get("id").getAsString(), data.get("dir").getAsString());
                         return true;
                     })
                     .handler("save_project", data -> {
@@ -101,15 +102,31 @@ public class DevPluginResponseHandler implements Handler {
         return mRouter.handle(data);
     }
 
-    public Observable<File> handleBytes(JsonObject data, JsonWebSocket.Bytes bytes) {
+    /** Unzips a project archive pushed by the VSCode extension (md5 already matched by the caller). */
+    public Observable<File> handleBytes(JsonObject data, byte[] bytes) {
         String id = data.get("data").getAsJsonObject().get("id").getAsString();
         String idMd5 = MD5.md5(id);
         return Observable.fromCallable(() -> {
             File dir = new File(mCacheDir, idMd5);
-            Zip.unzip(new ByteArrayInputStream(bytes.byteString.toByteArray()), dir);
+            Zip.unzip(new ByteArrayInputStream(bytes), dir);
+            deleteRemovedFiles(data, dir);
             return dir;
         })
                 .subscribeOn(Schedulers.io());
+    }
+
+    /** The extension pushes incremental archives and lists removed project paths separately. */
+    private void deleteRemovedFiles(JsonObject command, File dir) {
+        JsonElement deleted = command.getAsJsonObject("data").get("deletedFiles");
+        if (deleted == null || !deleted.isJsonArray()) {
+            return;
+        }
+        for (JsonElement element : deleted.getAsJsonArray()) {
+            String path = element.getAsString();
+            if (!TextUtils.isEmpty(path)) {
+                PFiles.deleteRecursively(new File(dir, path));
+            }
+        }
     }
 
     private void runScript(String viewId, String name, String script) {
@@ -122,10 +139,14 @@ public class DevPluginResponseHandler implements Handler {
     }
 
 
-    private void launchProject(String dir) {
+    private void launchProject(String viewId, String dir) {
         try {
-            new ProjectLauncher(dir)
+            // The desktop sends this same id with its later stop command. Without keeping the
+            // execution, project runs cannot be stopped individually even though stop replies OK.
+            stopScript(viewId);
+            ScriptExecution execution = new ProjectLauncher(dir)
                     .launch(AutoJs.getInstance().getScriptEngineService());
+            mScriptExecutions.put(viewId, execution);
         } catch (Exception e) {
             e.printStackTrace();
             GlobalAppContext.toast(R.string.text_invalid_project);
@@ -133,12 +154,21 @@ public class DevPluginResponseHandler implements Handler {
     }
 
 
-    private void stopScript(String viewId) {
+    boolean stopScript(String viewId) {
         ScriptExecution execution = mScriptExecutions.get(viewId);
-        if (execution != null) {
-            execution.getEngine().forceStop();
-            mScriptExecutions.remove(viewId);
-        }
+        if (execution == null) return false;
+        ScriptEngine engine = execution.getEngine();
+        if (engine == null) return false;
+        mScriptExecutions.remove(viewId);
+        if (engine.isDestroyed()) return false;
+        engine.forceStop();
+        return true;
+    }
+
+    int stopAllScripts() {
+        int count = AutoJs.getInstance().getScriptEngineService().stopAll();
+        mScriptExecutions.clear();
+        return count;
     }
 
     private String getName(JsonObject data) {

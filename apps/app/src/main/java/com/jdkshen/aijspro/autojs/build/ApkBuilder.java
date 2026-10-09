@@ -18,6 +18,7 @@ import com.stardust.autojs.script.CompiledScriptPayload;
 import com.stardust.autojs.script.EmbeddedScriptFooter;
 import com.stardust.autojs.script.ScriptCompiler;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
+import com.stardust.autojs.script.StringScriptSource;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
 import com.stardust.util.AdvancedEncryptionStandard;
@@ -37,11 +38,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Builds a standalone APK from the bundled inrt runtime template and a user script.
@@ -62,15 +66,24 @@ public class ApkBuilder {
      *  - 图色模块（OpenCV 动态库，单 ABI 约 70MB）
      */
     private static final String ACCESSIBILITY_SERVICE =
+            "com.google.android.accessibility.selecttospeak.SelectToSpeakService";
+    private static final String LEGACY_ACCESSIBILITY_SERVICE =
             "com.stardust.autojs.core.accessibility.AccessibilityService";
 
     /** 内嵌脚本载荷用的原生库（每个 ABI 一份，载荷追加在它尾部）。 */
     private static final String EMBEDDED_SCRIPT_LIBRARY = "libaijscrypto.so";
 
-    private static final String[] IMAGE_MODULE_LIBS = {
-            "libopencv_core.so", "libopencv_dnn.so", "libopencv_flann.so",
-            "libopencv_geometry.so", "libopencv_imgcodecs.so", "libopencv_imgproc.so",
-            "libopencv_java5.so", "libtbb.so"};
+    /**
+     * 「移除图像模块」的判定前缀：模板里的 OpenCV 运行时全在这里面。
+     *
+     * <p>为什么用前缀而不是逐个列名：模板升级会新增 OpenCV 库
+     * （SIFT 接入时多了 {@code libopencv_features.so}，而这份清单没跟上，
+     * 于是「移除图像模块」只删了一半、留下一个孤立的 features —— 既浪费体积，
+     * 又让打包测试的「opencv 必须删干净」断言莫名其妙地红）。
+     */
+    private static final String IMAGE_MODULE_LIB_PREFIX = "libopencv_";
+    /** 名字不带 opencv 前缀、但同属图像模块的库（OpenCV 的并行后端）。 */
+    private static final String[] IMAGE_MODULE_EXTRA_LIBS = {"libtbb.so"};
 
     public interface ProgressCallback {
         void onPrepare(ApkBuilder builder);
@@ -128,8 +141,25 @@ public class ApkBuilder {
         notifyPrepare();
         new File(mWorkspacePath).mkdirs();
         mApkPackager.unzip();
+        // A template supplies the runtime, never a second project's files or configuration.
+        // Older templates contain main.js, project.json and auto.js.png here.
+        File project = new File(mWorkspacePath, "assets/project");
+        deleteTemplateProject(project);
+        if (!project.mkdirs() && !project.isDirectory()) {
+            throw new IOException("无法创建打包项目目录：" + project);
+        }
         mManifestEditor = new ManifestEditor(new FileInputStream(getManifestFile()));
         return this;
+    }
+
+    private static void deleteTemplateProject(File file) throws IOException {
+        if (!file.exists()) return;
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children == null) throw new IOException("无法读取模板项目目录：" + file);
+            for (File child : children) deleteTemplateProject(child);
+        }
+        if (!file.delete()) throw new IOException("无法清理模板项目文件：" + file);
     }
 
     protected File getManifestFile() {
@@ -190,26 +220,41 @@ public class ApkBuilder {
     /**
      * Applies the packaging page's "features" switches by deleting what the template ships
      * but the user does not want in the packaged app.
+     *
+     * <p>⚠️ 「移除图像模块」对当前模板（QuickJS + OCR）来说仍是危险开关：本机
+     * {@code libquickjs_jni.so} / {@code libppocr.so} 直接依赖 {@code libopencv_java5.so}，
+     * 删掉 OpenCV 后它们加载会失败（内置示例的 README 也写了别关这个开关）。
+     * 这里只保证「关掉时删干净」，不是「关掉是安全的」。
      */
     private void removeDisabledFeatures() {
-        if (mAppConfig == null || !mAppConfig.includeImageModule) {
-            if (mAppConfig != null) {
-                for (String lib : IMAGE_MODULE_LIBS) {
-                    deleteFileRecursively(new File(mWorkspacePath, "lib"), lib);
-                }
-            }
+        if (mAppConfig != null && !mAppConfig.includeImageModule) {
+            deleteLibrariesRecursively(new File(mWorkspacePath, "lib"),
+                    ApkBuilder::isImageModuleLibrary);
         }
     }
 
-    private void deleteFileRecursively(File dir, String fileName) {
+    /** 是否属于「图像模块」（OpenCV 运行时 + 它的并行后端）。 */
+    private static boolean isImageModuleLibrary(String fileName) {
+        if (fileName.startsWith(IMAGE_MODULE_LIB_PREFIX)) {
+            return true;
+        }
+        for (String extra : IMAGE_MODULE_EXTRA_LIBS) {
+            if (extra.equals(fileName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void deleteLibrariesRecursively(File dir, java.util.function.Predicate<String> shouldDelete) {
         File[] children = dir.listFiles();
         if (children == null) {
             return;
         }
         for (File child : children) {
             if (child.isDirectory()) {
-                deleteFileRecursively(child, fileName);
-            } else if (fileName.equals(child.getName())) {
+                deleteLibrariesRecursively(child, shouldDelete);
+            } else if (shouldDelete.test(child.getName())) {
                 //noinspection ResultOfMethodCallIgnored
                 child.delete();
             }
@@ -230,6 +275,8 @@ public class ApkBuilder {
                     excludedOutputDir(source));
             syncProjectJsonAndDeriveKeys();
             writeEntryScript(new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
+            // 除入口外的所有脚本收进加密容器：解包 APK 不该能读到工程源码。
+            packProjectScripts();
         } else {
             syncProjectJsonAndDeriveKeys();
             writeEntryScript(source);
@@ -257,23 +304,26 @@ public class ApkBuilder {
             copyFile(source, target);
             return;
         }
+        byte[] sourceBytes = PFiles.readBytes(source.getPath());
+        String sourceText = new String(sourceBytes, "UTF-8");
+        short modeFlags = (short) (new StringScriptSource(source.getName(), sourceText)
+                .getExecutionMode() & 0xFF);
         byte[] payload;
         short flags;
         if (ScriptProtection.shouldCompile(mEncryptLevel)) {
             if (isQuickJsEngine()) {
                 // QuickJS 工程：编译成 QuickJS 字节码（载荷类型 2）。
-                payload = QuickJsBytecodeCompiler.compile(
-                        new String(PFiles.readBytes(source.getPath()), "UTF-8"), source.getName());
+                payload = QuickJsBytecodeCompiler.compile(sourceText, source.getName());
                 flags = EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
-                        EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE);
+                        EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE, modeFlags);
             } else {
                 payload = compileEntryScript(source);
                 flags = EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
-                        EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS);
+                        EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS, modeFlags);
             }
         } else {
-            payload = PFiles.readBytes(source.getPath());
-            flags = 0;
+            payload = sourceBytes;
+            flags = modeFlags;
         }
         byte[] encrypted = encryptedPayload(payload, flags);
         if (ScriptProtection.usesNativeStorage(mScriptStorage)) {
@@ -317,6 +367,110 @@ public class ApkBuilder {
     /** 打包的产物使用 QuickJS 引擎（此时不能写 Rhino 编译产物）。 */
     private boolean isQuickJsEngine() {
         return mAppConfig != null && "quickjs".equalsIgnoreCase(mAppConfig.engine);
+    }
+
+    /**
+     * 目录工程：把除入口脚本外的所有 .js 打成 zip、整体加密成
+     * {@link ScriptProtection#SCRIPT_PACK_FILE}，再把原文件从工作区删掉。
+     *
+     * <p>以前只有入口脚本受保护，{@code src/**}、{@code tools/**} 这类成百上千的脚本
+     * 是明文拷进 {@code assets/project/} 的——解包 APK 就能读到全部源码。现在产物里
+     * 只剩一个加密容器，运行端启动时先解密再展开到私有目录
+     * （{@code AssetsProjectLauncher.prepare()}），模块加载看到的布局不变。
+     */
+    private void packProjectScripts() throws IOException {
+        if (!ScriptProtection.shouldEncrypt(mEncryptLevel)) {
+            return;
+        }
+        File projectDir = new File(mWorkspacePath, "assets/project");
+        List<File> scripts = new ArrayList<>();
+        collectScriptFiles(projectDir, scripts);
+        // 入口脚本自己已经处理过（加密写文件或嵌进原生库），不进容器。
+        String entryPath = new File(projectDir, mMainScriptFile).getCanonicalPath();
+        for (int i = scripts.size() - 1; i >= 0; i--) {
+            if (scripts.get(i).getCanonicalPath().equals(entryPath)) {
+                scripts.remove(i);
+            }
+        }
+        if (scripts.isEmpty()) {
+            return;
+        }
+        byte[] archive = zipScripts(projectDir, scripts);
+        short flags = EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(
+                EncryptedScriptFileHeader.PAYLOAD_TYPE_SCRIPT_PACK);
+        writeBytes(new File(projectDir, ScriptProtection.SCRIPT_PACK_FILE),
+                encryptedPayload(archive, flags));
+        for (File script : scripts) {
+            //noinspection ResultOfMethodCallIgnored
+            script.delete();
+        }
+        pruneEmptyDirs(projectDir);
+    }
+
+    private static void collectScriptFiles(File dir, List<File> out) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (child.isDirectory()) {
+                collectScriptFiles(child, out);
+            } else if (child.getName().toLowerCase(Locale.ROOT).endsWith(".js")) {
+                out.add(child);
+            }
+        }
+    }
+
+    /** 组一个只含脚本的 zip，条目名就是脚本相对工程目录的路径（/ 分隔）。 */
+    private static byte[] zipScripts(File projectDir, List<File> scripts) throws IOException {
+        String base = projectDir.getAbsolutePath() + File.separator;
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        ZipOutputStream zip = new ZipOutputStream(buffer);
+        try {
+            byte[] chunk = new byte[8192];
+            for (File script : scripts) {
+                String path = script.getAbsolutePath();
+                if (!path.startsWith(base)) {
+                    throw new IOException("脚本不在工程目录里：" + path);
+                }
+                ZipEntry entry = new ZipEntry(
+                        path.substring(base.length()).replace(File.separatorChar, '/'));
+                entry.setTime(script.lastModified());
+                zip.putNextEntry(entry);
+                InputStream in = new FileInputStream(script);
+                try {
+                    int read;
+                    while ((read = in.read(chunk)) > 0) {
+                        zip.write(chunk, 0, read);
+                    }
+                } finally {
+                    in.close();
+                }
+                zip.closeEntry();
+            }
+        } finally {
+            zip.close();
+        }
+        return buffer.toByteArray();
+    }
+
+    /** 脚本全被收进容器后，把空掉的目录骨架删掉（保留工程根目录本身）。 */
+    private static void pruneEmptyDirs(File dir) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (!child.isDirectory()) {
+                continue;
+            }
+            pruneEmptyDirs(child);
+            File[] remaining = child.listFiles();
+            if (remaining != null && remaining.length == 0) {
+                //noinspection ResultOfMethodCallIgnored
+                child.delete();
+            }
+        }
     }
 
     /**
@@ -496,9 +650,8 @@ public class ApkBuilder {
         if (config.icon != null) {
             try {
                 Bitmap bitmap = config.icon.call();
-                if (bitmap != null) {
-                    replaceIcon(bitmap);
-                }
+                if (bitmap == null) throw new IOException("项目图标不存在或无法解码，请重新选择图标");
+                replaceIcon(bitmap);
             } catch (Exception e) {
                 throw new UncheckedIOException(new IOException("Failed to replace icon", e));
             }
@@ -511,7 +664,7 @@ public class ApkBuilder {
         }
         if (!config.includeAccessibility) {
             mManifestEditor.setComponentsToRemove(
-                    Collections.singletonList(ACCESSIBILITY_SERVICE));
+                    Arrays.asList(ACCESSIBILITY_SERVICE, LEGACY_ACCESSIBILITY_SERVICE));
         }
     }
 
@@ -599,8 +752,12 @@ public class ApkBuilder {
         if (!dstDir.isDirectory() && !dstDir.mkdirs()) {
             throw new IOException("无法创建目录：" + dst);
         }
+        // 排除项必须按规范路径比较：从 /sdcard/... 这类符号链接路径打开工程时，
+        // child 的规范路径是 /storage/emulated/0/...，直接比字符串会漏排除，
+        // 结果把上一次的产物 APK 又打进新包（曾经产出过一个翻倍的包）。
+        File excludedCanonical = excluded == null ? null : excluded.getCanonicalFile();
         for (File child : children) {
-            if (excluded != null && child.getCanonicalFile().equals(excluded)) {
+            if (excludedCanonical != null && child.getCanonicalFile().equals(excludedCanonical)) {
                 continue;
             }
             if (child.isDirectory()) {
@@ -880,8 +1037,11 @@ public class ApkBuilder {
             config.packageName = projectConfig.getPackageName();
             config.versionName = projectConfig.getVersionName();
             config.versionCode = projectConfig.getVersionCode();
-            if (projectConfig.getIcon() != null) {
-                config.icon = () -> BitmapFactory.decodeFile(projectConfig.getIcon());
+            if (projectConfig.getIcon() != null && !projectConfig.getIcon().isEmpty()) {
+                File iconFile = new File(projectConfig.getIcon());
+                String iconPath = iconFile.isAbsolute() ? iconFile.getPath()
+                        : new File(source, projectConfig.getIcon()).getPath();
+                config.icon = () -> BitmapFactory.decodeFile(iconPath);
             }
             config.engine = projectConfig.getEngine(null);
             config.encryptLevel = projectConfig.getEncryptLevel();

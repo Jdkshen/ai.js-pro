@@ -68,6 +68,8 @@ public class LayoutBoundsView extends View {
     public void setRootNode(NodeInfo rootNode) {
         mRootNode = rootNode;
         mTouchedNode = null;
+        mTouchedNodeBounds = null;
+        invalidate();
     }
 
 
@@ -129,9 +131,12 @@ public class LayoutBoundsView extends View {
     private void draw(Canvas canvas, NodeInfo node) {
         if (node == null)
             return;
-        drawRect(canvas, node.getBoundsInScreen(), mStatusBarHeight, mBoundsPaint);
-        for (NodeInfo child : node.getChildren()) {
-            draw(canvas, child);
+        java.util.ArrayDeque<NodeInfo> queue = new java.util.ArrayDeque<>();
+        queue.add(node);
+        while (!queue.isEmpty()) {
+            NodeInfo item = queue.removeFirst();
+            drawRect(canvas, item.getBoundsInScreen(), mStatusBarHeight, mBoundsPaint);
+            queue.addAll(item.getChildren());
         }
     }
 
@@ -143,6 +148,7 @@ public class LayoutBoundsView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) return true;
         if (mRootNode != null) {
             setSelectedNode(findNodeAt(mRootNode, (int) event.getRawX(), (int) event.getRawY()));
         }
@@ -150,7 +156,7 @@ public class LayoutBoundsView extends View {
             onNodeInfoClick(mTouchedNode);
             return true;
         }
-        return super.onTouchEvent(event);
+        return true;
 
     }
 
@@ -161,14 +167,18 @@ public class LayoutBoundsView extends View {
     }
 
     private NodeInfo findNodeAt(NodeInfo node, int x, int y) {
-        ArrayList<NodeInfo> list = new ArrayList<>();
-        findNodeAt(node, x, y, list);
-        if (list.isEmpty()) {
-            return null;
+        NodeInfo best = null;
+        long area = Long.MAX_VALUE;
+        java.util.ArrayDeque<NodeInfo> queue = new java.util.ArrayDeque<>();
+        queue.add(node);
+        while (!queue.isEmpty()) {
+            NodeInfo current = queue.removeFirst();
+            Rect bounds = current.getBoundsInScreen();
+            long currentArea = (long) bounds.width() * bounds.height();
+            if (bounds.contains(x, y) && currentArea <= area) { best = current; area = currentArea; }
+            queue.addAll(current.getChildren());
         }
-        return Collections.min(list, (o1, o2) ->
-                o1.getBoundsInScreen().width() * o1.getBoundsInScreen().height() -
-                        o2.getBoundsInScreen().width() * o2.getBoundsInScreen().height());
+        return best;
     }
 
 

@@ -5,148 +5,80 @@ import android.util.AttributeSet
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.snackbar.Snackbar
-import com.stardust.util.ClipboardUtil
-import com.stardust.util.sortedArrayOf
-import com.stardust.view.accessibility.NodeInfo
-import com.yqritc.recyclerviewflexibledivider.HorizontalDividerItemDecoration
+import androidx.recyclerview.widget.DividerItemDecoration
 import com.jdkshen.aijspro.R
-import java.lang.reflect.Field
+import com.stardust.util.ClipboardUtil
+import com.stardust.view.accessibility.NodeInfo
 
-/**
- * Created by Stardust on 2017/3/10.
- */
-
+/** Select properties to compose a selector; long press a row to copy its raw value. */
 class NodeInfoView : RecyclerView {
-
-    private val mData = Array(FIELDS.size + 1) { Array(2) { "" } }
-
-    constructor(context: Context) : super(context) {
-        init()
-    }
-
-    constructor(context: Context, attrs: AttributeSet?) : super(context, attrs) {
-        init()
-    }
-
-    constructor(context: Context, attrs: AttributeSet?, defStyle: Int) : super(context, attrs, defStyle) {
-        init()
-    }
-
-    fun setNodeInfo(nodeInfo: NodeInfo) {
-        for (i in FIELDS.indices) {
-            try {
-                val value = FIELDS[i].get(nodeInfo)
-                mData[i + 1][1] = value?.toString() ?: ""
-            } catch (e: Exception) {
-                throw RuntimeException(e)
-            }
-
-        }
-        adapter!!.notifyDataSetChanged()
-    }
-
+    private var values: Map<String, Any?> = emptyMap()
+    private val selected = linkedSetOf<String>()
+    private var changeListener: Runnable? = null
+    constructor(context: Context) : super(context) { init() }
+    constructor(context: Context, attrs: AttributeSet?) : super(context, attrs) { init() }
+    constructor(context: Context, attrs: AttributeSet?, style: Int) : super(context, attrs, style) { init() }
     private fun init() {
-        initData()
-        adapter = Adapter()
         layoutManager = LinearLayoutManager(context)
-        addItemDecoration(HorizontalDividerItemDecoration.Builder(context)
-                .color(0x1e000000)
-                .size(2)
-                .build())
+        addItemDecoration(DividerItemDecoration(context, DividerItemDecoration.VERTICAL))
+        adapter = PropertyAdapter()
+    }
+    fun setNodeInfo(node: NodeInfo) {
+        values = NodeProperties.read(node)
+        selected.clear()
+        if (node.id != null) selected.add("id")
+        else if (node.text.isNotBlank()) selected.add("text")
+        else if (node.className != null) selected.add("className")
+        if (node.packageName != null) selected.add("packageName")
+        adapter!!.notifyDataSetChanged()
+        changeListener?.run()
+    }
+    fun setOnSelectionChangeListener(listener: Runnable) { changeListener = listener }
+    fun getSelectedCount(): Int = selected.size
+    fun getSelectorCode(): String = NodeSelectorCode.generate(values, selected)
+    fun getSelectedProperties(): Set<String> = selected.toSet()
+    fun setSelectedProperties(names: Set<String>) {
+        selected.clear()
+        selected.addAll(names.filter { NodeSelectorCode.selectable(it, values[it]) })
+        adapter!!.notifyDataSetChanged()
+        changeListener?.run()
     }
 
-    private fun initData() {
-        mData[0][0] = resources.getString(R.string.text_attribute)
-        mData[0][1] = resources.getString(R.string.text_value)
-        for (i in 1 until mData.size) {
-            mData[i][0] = FIELD_NAMES[i - 1]
-            mData[i][1] = ""
-        }
-    }
-
-    private inner class Adapter : RecyclerView.Adapter<ViewHolder>() {
-
-        internal val VIEW_TYPE_HEADER = 0
-        internal val VIEW_TYPE_ITEM = 1
-
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-            val layoutRes = if (viewType == VIEW_TYPE_HEADER) R.layout.node_info_view_header else R.layout.node_info_view_item
-            return ViewHolder(LayoutInflater.from(parent.context).inflate(layoutRes, parent, false))
-        }
-
-        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-            holder.attrName.text = mData[position][0]
-            holder.attrValue.text = mData[position][1]
-        }
-
-        override fun getItemCount(): Int {
-            return mData.size
-        }
-
-        override fun getItemViewType(position: Int): Int {
-            return if (position == 0) VIEW_TYPE_HEADER else VIEW_TYPE_ITEM
-        }
-    }
-
-    internal inner class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-
-        val attrName: TextView = itemView.findViewById(R.id.name)
-
-        val attrValue: TextView = itemView.findViewById(R.id.value)
-
-        init {
-            itemView.setOnClickListener {
-                val pos = adapterPosition
-                if (pos < 1 || pos >= mData.size)
-                    return@setOnClickListener
-                ClipboardUtil.setClip(context, mData[pos][0] + " = " + mData[pos][1])
-                Snackbar.make(this@NodeInfoView, R.string.text_already_copy_to_clip, Snackbar.LENGTH_SHORT).show()
+    private inner class PropertyAdapter : Adapter<PropertyHolder>() {
+        override fun getItemCount() = NodeProperties.NAMES.size + 1
+        override fun getItemViewType(position: Int) = if (position == 0) 0 else 1
+        override fun onCreateViewHolder(parent: ViewGroup, type: Int): PropertyHolder = PropertyHolder(
+            LayoutInflater.from(context).inflate(if (type == 0) R.layout.node_info_view_header else R.layout.node_info_view_item, parent, false))
+        override fun onBindViewHolder(holder: PropertyHolder, position: Int) {
+            val name = if (position == 0) "属性" else NodeProperties.NAMES[position - 1]
+            holder.name.text = name
+            holder.value.text = if (position == 0) "值（长按复制）" else values[name]?.toString() ?: "(无)"
+            holder.check?.apply {
+                setOnCheckedChangeListener(null)
+                isEnabled = NodeSelectorCode.selectable(name, values[name])
+                isChecked = selected.contains(name)
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked) selected.add(name) else selected.remove(name)
+                    changeListener?.run()
+                }
+            }
+            holder.itemView.setOnClickListener { if (holder.check?.isEnabled == true) holder.check.toggle() }
+            holder.itemView.setOnLongClickListener {
+                if (position == 0) false else {
+                    ClipboardUtil.setClip(context, "$name = ${values[name]}")
+                    android.widget.Toast.makeText(context, "已复制属性", android.widget.Toast.LENGTH_SHORT).show()
+                    true
+                }
             }
         }
-
     }
-
-    companion object {
-
-        private val FIELD_NAMES = sortedArrayOf(
-                "id",
-                "idHex",
-                "fullId",
-                "bounds",
-                "depth",
-                "desc",
-                "className",
-                "packageName",
-                "text",
-                "drawingOrder",
-                "accessibilityFocused",
-                "checked",
-                "clickable",
-                "contextClickable",
-                "dismissable",
-                "editable",
-                "enabled",
-                "focusable",
-                "indexInParent",
-                "longClickable",
-                "row",
-                "rowCount",
-                "rowSpan",
-                "column",
-                "columnCount",
-                "columnSpan",
-                "selected",
-                "scrollable")
-        private val FIELDS = Array<Field>(FIELD_NAMES.size) {
-            val field = NodeInfo::class.java.getDeclaredField(FIELD_NAMES[it])
-            field.isAccessible = true
-            field
-        }
+    private class PropertyHolder(view: View) : ViewHolder(view) {
+        val name: TextView = view.findViewById(R.id.name)
+        val value: TextView = view.findViewById(R.id.value)
+        val check: CheckBox? = view.findViewById(R.id.node_property_check)
     }
-
 }

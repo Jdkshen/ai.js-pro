@@ -206,7 +206,7 @@ public class DevPluginService {
 
     @SuppressLint("CheckResult")
     private void handleBytes(JsonObject obj, JsonWebSocket.Bytes bytes) {
-        mResponseHandler.handleBytes(obj, bytes)
+        mResponseHandler.handleBytes(obj, bytes.byteString.toByteArray())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(dir -> {
                     obj.get("data").getAsJsonObject().add("dir", new JsonPrimitive(dir.getPath()));
@@ -295,6 +295,8 @@ public class DevPluginService {
     @SuppressLint("CheckResult")
     @AnyThread
     public void log(String log) {
+        // 旧协议走客户端连接（连 PC:9317），新协议走本机调试服务器（VS Code 扩展主动连入）。
+        DevPluginServer.getInstance().broadcastLog(log);
         if (!isConnected())
             return;
         writePair(mSocket, "log", new Pair<>("log", log));

@@ -34,7 +34,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 internal object MiuixDialogHost {
 
     fun showCard(activity: Activity?, content: @Composable (ComponentDialog) -> Unit): ComponentDialog? {
-        if (activity == null || activity.isFinishing) return null
+        if (activity == null || activity.isFinishing || activity.isDestroyed) return null
         val host = activity as? ComponentActivity ?: return null
         val dialog = ComponentDialog(host)
         val compose = ComposeView(host).apply {
@@ -44,12 +44,12 @@ internal object MiuixDialogHost {
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.setContentView(compose)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
         dialog.window?.setLayout(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        dialog.setCanceledOnTouchOutside(true)
-        dialog.show()
         return dialog
     }
 }

@@ -29,6 +29,7 @@ import com.jdkshen.aijspro.tool.RootTool;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutBoundsFloatyWindow;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutHierarchyFloatyWindow;
+import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutInspectorDiagnostics;
 import com.jdkshen.aijspro.ui.main.MainActivity;
 import com.jdkshen.aijspro.ui.explorer.ExplorerView;
 import com.jdkshen.aijspro.theme.dialog.ThemeColorMaterialDialogBuilder;
@@ -47,7 +48,7 @@ import org.jdeferred.impl.DeferredObject;
  * Created by Stardust on 2017/10/18.
  */
 
-public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInspector.CaptureAvailableListener, OperationItemClickListener {
+public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInspector.CaptureAvailableListener, OperationItemClickListener, FloatingMenuVisibility.Target {
 
 
     public static class StateChangeEvent {
@@ -83,8 +84,15 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
     private MaterialDialog mLayoutInspectDialog;
     private String mRunningPackage, mRunningActivity;
     private Deferred<NodeInfo, Void, Void> mCaptureDeferred;
+    private final boolean mInitiallyHidden;
+    private boolean mClosed;
 
     public CircularMenu(Context context) {
+        this(context, false);
+    }
+
+    CircularMenu(Context context, boolean initiallyHidden) {
+        mInitiallyHidden = initiallyHidden;
         mContext = createThemedContext(context);
         initFloaty();
         setupListeners();
@@ -124,7 +132,9 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
                 mWindow.collapse();
             } else {
                 mCaptureDeferred = new DeferredObject<>();
-                AutoJs.getInstance().getLayoutInspector().captureCurrentWindow();
+                if (!AutoJs.getInstance().getLayoutInspector().captureCurrentWindow()) {
+                    mCaptureDeferred.reject(null);
+                }
                 mWindow.expand();
             }
         });
@@ -134,15 +144,15 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
         mWindow = new CircularMenuWindow(mContext, new CircularMenuFloaty() {
 
             @Override
-            public View inflateActionView(FloatyService service, CircularMenuWindow window) {
-                // 用 mContext（已按应用主题包好）而不是裸 service context，否则主题属性会落到系统主题上
+            public View inflateActionView(Context context, CircularMenuWindow window) {
+                // 用 mContext（已按应用主题包好）而不是传进来的裸 context，否则主题属性会落到系统主题上
                 View actionView = View.inflate(mContext, R.layout.circular_action_view, null);
                 mActionViewIcon = actionView.findViewById(R.id.icon);
                 return actionView;
             }
 
             @Override
-            public CircularActionMenu inflateMenuItems(FloatyService service, CircularMenuWindow window) {
+            public CircularActionMenu inflateMenuItems(Context context, CircularMenuWindow window) {
                 CircularActionMenu menu = (CircularActionMenu) View.inflate(mContext, R.layout.circular_action_menu, null);
                 bindMenuItem(menu, R.id.script_list, CircularMenu.this::showScriptList);
                 bindMenuItem(menu, R.id.record, CircularMenu.this::startRecord);
@@ -153,7 +163,14 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
             }
         });
         mWindow.setKeepToSideHiddenWidthRadio(0.25f);
+        mWindow.setOnCloseListener(this::onWindowClosed);
+        mWindow.setTemporarilyHidden(mInitiallyHidden);
         FloatyService.addWindow(mWindow);
+    }
+
+    @Override
+    public void setTemporarilyHidden(boolean hidden) {
+        mWindow.setTemporarilyHidden(hidden);
     }
 
     private void bindMenuItem(View menu, int id, Runnable action) {
@@ -219,16 +236,19 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
     void inspectLayout() {
         mWindow.collapse();
         if (showMiuixActionMenu(mContext.getString(R.string.text_inspect_layout),
-                new int[]{R.id.layout_bounds, R.id.layout_hierarchy},
-                new int[]{R.drawable.ic_circular_menu_bounds, R.drawable.ic_circular_menu_hierarchy},
+                new int[]{R.id.layout_bounds, R.id.layout_hierarchy, R.id.layout_diagnostics},
+                new int[]{R.drawable.ic_circular_menu_bounds, R.drawable.ic_circular_menu_hierarchy, R.drawable.ic_circular_menu_hierarchy},
                 new String[]{mContext.getString(R.string.text_inspect_layout_bounds),
-                        mContext.getString(R.string.text_inspect_layout_hierarchy)})) {
+                        mContext.getString(R.string.text_inspect_layout_hierarchy),
+                        mContext.getString(R.string.text_layout_inspector_diagnostics)})) {
             return;
         }
         mLayoutInspectDialog = new OperationDialogBuilder(mContext)
                 .item(R.id.layout_bounds, R.drawable.ic_circular_menu_bounds, R.string.text_inspect_layout_bounds)
                 .item(R.id.layout_hierarchy, R.drawable.ic_circular_menu_hierarchy,
                         R.string.text_inspect_layout_hierarchy)
+                .item(R.id.layout_diagnostics, R.drawable.ic_circular_menu_hierarchy,
+                        R.string.text_layout_inspector_diagnostics)
                 .bindItemClick(this)
                 .title(R.string.text_inspect_layout)
                 .build();
@@ -270,9 +290,15 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
             mLayoutInspectDialog = null;
         }
         if (AccessibilityService.Companion.getInstance() == null) {
-            Toast.makeText(mContext, R.string.text_no_accessibility_permission_to_capture, Toast.LENGTH_SHORT).show();
-            AccessibilityServiceTool.goToAccessibilitySetting();
+            AutoJs.getInstance().getLayoutInspector().captureCurrentWindow();
+            LayoutInspectorDiagnostics.show(mContext, AutoJs.getInstance().getLayoutInspector());
             return;
+        }
+        if (mCaptureDeferred == null) {
+            mCaptureDeferred = new DeferredObject<>();
+            if (!AutoJs.getInstance().getLayoutInspector().captureCurrentWindow()) {
+                mCaptureDeferred.reject(null);
+            }
         }
         MaterialDialog progress = DialogUtils.showDialog(new ThemeColorMaterialDialogBuilder(mContext)
                 .content(R.string.text_layout_inspector_is_dumping)
@@ -288,7 +314,10 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
                                 }
                             }
                     );
-                }, err -> mActionViewIcon.post(progress::dismiss));
+                }, err -> mActionViewIcon.post(() -> {
+                    progress.dismiss();
+                    LayoutInspectorDiagnostics.show(mContext, AutoJs.getInstance().getLayoutInspector());
+                }));
     }
 
 
@@ -300,8 +329,10 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
 
     @Override
     public void onCaptureAvailable(NodeInfo capture) {
-        if (mCaptureDeferred != null && mCaptureDeferred.isPending())
-            mCaptureDeferred.resolve(capture);
+        if (mCaptureDeferred != null && mCaptureDeferred.isPending()) {
+            if (capture == null) mCaptureDeferred.reject(null);
+            else mCaptureDeferred.resolve(capture);
+        }
     }
 
 
@@ -385,10 +416,17 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
         } catch (IllegalArgumentException e) {
             e.printStackTrace();
         } finally {
-            EventBus.getDefault().post(new StateChangeEvent(STATE_CLOSED, mState));
-            mState = STATE_CLOSED;
+            onWindowClosed();
         }
-        mRecorder.removeOnStateChangedListener(this);
+    }
+
+    private void onWindowClosed() {
+        if (mClosed) return;
+        mClosed = true;
+        FloatyWindowManger.onCircularMenuClosed(this);
+        EventBus.getDefault().post(new StateChangeEvent(STATE_CLOSED, mState));
+        mState = STATE_CLOSED;
+        if (mRecorder != null) mRecorder.removeOnStateChangedListener(this);
         AutoJs.getInstance().getLayoutInspector().removeCaptureAvailableListener(this);
     }
 
@@ -401,6 +439,13 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
                 break;
             case R.id.layout_hierarchy:
                 showLayoutHierarchy();
+                break;
+            case R.id.layout_diagnostics:
+                if (mLayoutInspectDialog != null) {
+                    mLayoutInspectDialog.dismiss();
+                    mLayoutInspectDialog = null;
+                }
+                LayoutInspectorDiagnostics.show(mContext, AutoJs.getInstance().getLayoutInspector());
                 break;
             case R.id.accessibility_service:
                 enableAccessibilityService();

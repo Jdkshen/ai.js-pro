@@ -4,17 +4,13 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Environment;
 
 import androidx.annotation.Nullable;
 
-import android.text.TextUtils;
 import android.widget.Toast;
 
-import com.stardust.pio.PFiles;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
-import com.jdkshen.aijspro.ui.edit.EditActivity;
 import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity;
 import com.jdkshen.aijspro.R;
 
@@ -25,8 +21,6 @@ import java.io.File;
  */
 
 public class EditIntentActivity extends BaseActivity {
-
-    private static final String EXTERNAL_FILES = "external_files";
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -42,26 +36,19 @@ public class EditIntentActivity extends BaseActivity {
 
     private void handleIntent() {
         Intent intent = getIntent();
-        Uri uri = intent.getData();
-        String path = null;
-        if (uri.getScheme().equals(ContentResolver.SCHEME_FILE)) {
-            path = uri.getPath();
+        Uri uri = ExternalFileIntents.getFileUri(intent);
+        if (uri == null) throw new IllegalArgumentException("没有要打开的文件");
+        if (ContentResolver.SCHEME_FILE.equals(uri.getScheme())) {
+            startActivity(ProCodeEditorActivity.intent(this, new File(uri.getPath())));
+        } else if (ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) {
+            // Forward the actual grant. Never guess filesystem paths from a provider's URI.
+            Intent editor = new Intent(this, ProCodeEditorActivity.class).setData(uri)
+                    .addFlags(intent.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
+            editor.setClipData(android.content.ClipData.newRawUri("document", uri));
+            startActivity(editor);
         } else {
-            int i = uri.getPath().indexOf(EXTERNAL_FILES);
-            if (i >= 0) {
-                path = uri.getPath().substring(i + EXTERNAL_FILES.length());
-                if (!PFiles.exists(path)) {
-                    path = new File(Environment.getExternalStorageDirectory(), path).getPath();
-                    if (!PFiles.exists(path)) {
-                        path = null;
-                    }
-                }
-            }
-        }
-        if (!TextUtils.isEmpty(path)) {
-            startActivity(ProCodeEditorActivity.intent(this, new File(path)));
-        } else {
-            EditActivity.editFile(this, uri, false);
+            throw new IllegalArgumentException("不支持的文件来源");
         }
     }
 }

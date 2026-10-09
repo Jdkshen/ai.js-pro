@@ -34,6 +34,9 @@ public class CircularMenuWindow extends FloatyWindow {
     protected float mInactiveAlpha = 0.4F;
     private Context mContext;
     private OrientationEventListener mOrientationEventListener;
+    private boolean mTemporarilyHidden;
+    private boolean mClosed;
+    private Runnable mOnCloseListener;
 
     public CircularMenuWindow(Context context, CircularMenuFloaty floaty) {
         mFloaty = floaty;
@@ -41,10 +44,10 @@ public class CircularMenuWindow extends FloatyWindow {
     }
 
     @Override
-    protected void onCreateWindow(FloatyService service, WindowManager manager) {
+    protected void onCreateWindow(Context context, WindowManager manager) {
         mActionViewWindowLayoutParams = createWindowLayoutParams();
         mMenuWindowLayoutParams = createWindowLayoutParams();
-        inflateWindowViews(service);
+        inflateWindowViews(context);
         initWindowBridge();
         initGestures();
         setListeners();
@@ -63,7 +66,7 @@ public class CircularMenuWindow extends FloatyWindow {
     }
 
     @Override
-    protected View onCreateView(FloatyService floatyService) {
+    protected View onCreateView(Context context) {
         return null;
     }
 
@@ -88,6 +91,7 @@ public class CircularMenuWindow extends FloatyWindow {
         mDragGesture.setKeepToSideHiddenWidthRadio(mKeepToSideHiddenWidthRadio);
         mDragGesture.setPressedAlpha(mActiveAlpha);
         mDragGesture.setUnpressedAlpha(mInactiveAlpha);
+        mDragGesture.setEnabled(!mTemporarilyHidden);
     }
 
     private void initWindowBridge() {
@@ -132,7 +136,7 @@ public class CircularMenuWindow extends FloatyWindow {
             }
 
             public void onCollapsed(CircularActionMenu menu) {
-                mDragGesture.setEnabled(true);
+                mDragGesture.setEnabled(!mTemporarilyHidden);
                 mCircularActionView.setAlpha(mInactiveAlpha);
                 setMenuWindowTouchable(false);
             }
@@ -153,6 +157,7 @@ public class CircularMenuWindow extends FloatyWindow {
     }
 
     public void expand() {
+        if (mTemporarilyHidden) return;
         setMenuPositionAtActionView();
         if (mActionViewWindowBridge.getX() > mActionViewWindowBridge.getScreenWidth() / 2) {
             mCircularActionMenu.expand(3);
@@ -199,13 +204,15 @@ public class CircularMenuWindow extends FloatyWindow {
         mMenuWindowBridge.updatePosition(x, y);
     }
 
-    private void inflateWindowViews(FloatyService service) {
-        mCircularActionMenu = mFloaty.inflateMenuItems(service, this);
-        mCircularActionView = mFloaty.inflateActionView(service, this);
+    private void inflateWindowViews(Context context) {
+        mCircularActionMenu = mFloaty.inflateMenuItems(context, this);
+        mCircularActionView = mFloaty.inflateActionView(context, this);
         mCircularActionMenu.setVisibility(View.GONE);
+        mCircularActionView.setVisibility(mTemporarilyHidden ? View.GONE : View.VISIBLE);
         // 参数别写反：菜单用菜单那份、球用球那份。两个桥对象各自持有自己的 LayoutParams，
         // 而 setMenuWindowTouchable() 要改的正是菜单那一份。
         setMenuWindowTouchable(false);   // 初始是收起态，窗口就不该吃触摸（参数存进去，addView 直接带上）
+        setActionWindowTouchable(!mTemporarilyHidden);
         getWindowManager().addView(mCircularActionMenu, mMenuWindowLayoutParams);
         getWindowManager().addView(mCircularActionView, mActionViewWindowLayoutParams);
     }
@@ -217,36 +224,66 @@ public class CircularMenuWindow extends FloatyWindow {
      * 展开时立刻恢复，触摸就能直接落到下层应用。
      */
     private void setMenuWindowTouchable(boolean touchable) {
-        if (mMenuWindowLayoutParams == null || mCircularActionMenu == null) {
+        setWindowTouchable(mMenuWindowLayoutParams, mCircularActionMenu, touchable && !mTemporarilyHidden);
+    }
+
+    private void setActionWindowTouchable(boolean touchable) {
+        setWindowTouchable(mActionViewWindowLayoutParams, mCircularActionView, touchable);
+    }
+
+    private void setWindowTouchable(WindowManager.LayoutParams params, View view, boolean touchable) {
+        if (params == null || view == null) {
             return;
         }
         int notTouchable = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        int flags = mMenuWindowLayoutParams.flags;
+        int flags = params.flags;
         int newFlags = touchable ? (flags & ~notTouchable) : (flags | notTouchable);
         if (newFlags == flags) {
             return;
         }
-        mMenuWindowLayoutParams.flags = newFlags;
-        if (mCircularActionMenu.isAttachedToWindow()) {
+        params.flags = newFlags;
+        if (view.isAttachedToWindow()) {
             try {
-                getWindowManager().updateViewLayout(mCircularActionMenu, mMenuWindowLayoutParams);
+                getWindowManager().updateViewLayout(view, params);
             } catch (IllegalArgumentException e) {
                 e.printStackTrace();
             }
         }
     }
 
+    /** Screenshot suppression keeps both windows attached and unable to intercept touches. */
+    public void setTemporarilyHidden(boolean hidden) {
+        if (mTemporarilyHidden == hidden) return;
+        mTemporarilyHidden = hidden;
+        if (mCircularActionView == null) return;
+        if (hidden) {
+            mDragGesture.cancel();
+            mCircularActionMenu.collapse();
+        }
+        mDragGesture.setEnabled(!hidden);
+        mCircularActionMenu.setVisibility(View.GONE);
+        mCircularActionView.setVisibility(hidden ? View.GONE : View.VISIBLE);
+        setMenuWindowTouchable(false);
+        setActionWindowTouchable(!hidden);
+    }
+
     public void onServiceDestroy(FloatyService floatyService) {
         close();
     }
 
+    public void setOnCloseListener(Runnable listener) {
+        mOnCloseListener = listener;
+    }
+
     public void close() {
-        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(mContext);
-        preferences.edit()
-                .putInt(KEY_POSITION_X, mActionViewWindowBridge.getX())
-                .putInt(KEY_POSITION_Y, mActionViewWindowBridge.getY())
-                .apply();
+        if (mClosed) return;
+        mClosed = true;
         try {
+            SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(mContext);
+            preferences.edit()
+                    .putInt(KEY_POSITION_X, mActionViewWindowBridge.getX())
+                    .putInt(KEY_POSITION_Y, mActionViewWindowBridge.getY())
+                    .apply();
             mDragGesture.cancel();
             mOrientationEventListener.disable();
             getWindowManager().removeView(mCircularActionMenu);
@@ -254,6 +291,8 @@ public class CircularMenuWindow extends FloatyWindow {
             FloatyService.removeWindow(this);
         } catch (Exception e) {
             e.printStackTrace();
+        } finally {
+            if (mOnCloseListener != null) mOnCloseListener.run();
         }
     }
 

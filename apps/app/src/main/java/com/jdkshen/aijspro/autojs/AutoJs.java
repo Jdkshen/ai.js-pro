@@ -25,6 +25,7 @@ import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 import com.jdkshen.aijspro.ui.floating.FullScreenFloatyWindow;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutBoundsFloatyWindow;
 import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutHierarchyFloatyWindow;
+import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutInspectorDiagnostics;
 import com.jdkshen.aijspro.ui.log.LogActivity;
 import com.jdkshen.aijspro.ui.settings.SettingsActivity;
 
@@ -93,6 +94,10 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
             @Override
             public void onCaptureAvailable(NodeInfo capture) {
                 inspector.removeCaptureAvailableListener(this);
+                if (capture == null) {
+                    LayoutInspectorDiagnostics.show(getApplication(), inspector);
+                    return;
+                }
                 getUiHandler().post(() ->
                         FloatyWindowManger.addWindow(getApplication().getApplicationContext(), window.create(capture))
                 );
@@ -100,7 +105,7 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
         };
         inspector.addCaptureAvailableListener(listener);
         if (!inspector.captureCurrentWindow()) {
-            inspector.removeCaptureAvailableListener(listener);
+            listener.onCaptureAvailable(null);
         }
     }
 

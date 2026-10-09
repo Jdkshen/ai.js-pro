@@ -10,7 +10,7 @@
         android:layout_height="120dp"
         android:layout_gravity="center"
         android:contentDescription="@string/powered_by"
-        android:src="@drawable/ai_js_pro_logo"/>
+        android:src="@mipmap/ic_launcher"/>
 
     <TextView
         android:id="@+id/slug"

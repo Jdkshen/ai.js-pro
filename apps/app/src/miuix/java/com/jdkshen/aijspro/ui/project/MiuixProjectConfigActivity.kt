@@ -298,7 +298,7 @@ class MiuixProjectConfigActivity : ComponentActivity() {
     private fun saveProjectConfig() {
         val dir = directory ?: return
         if (newProject) {
-            val parent = parentDirectory ?: return
+            val parent = dir.parentFile ?: return
             disposables.add(ProjectTemplate(projectConfig, dir)
                 .newProject()
                 .subscribe({
@@ -487,7 +487,9 @@ class MiuixProjectConfigActivity : ComponentActivity() {
                     Button(onClick = {
                         com.jdkshen.aijspro.ui.common.MiuixFileChooserDialog.showDirectory(
                             this@MiuixProjectConfigActivity,
-                            android.os.Environment.getExternalStorageDirectory().path) { selected ->
+                            "选择项目所在文件夹",
+                            android.os.Environment.getExternalStorageDirectory().path,
+                            File(location).parent ?: parentDirectory?.path ?: android.os.Environment.getExternalStorageDirectory().path) { selected ->
                             parentDirectory = File(selected)
                             location = File(selected, appName).path
                             customLocation = false
@@ -501,12 +503,13 @@ class MiuixProjectConfigActivity : ComponentActivity() {
                     Text(directory?.path ?: "未找到项目目录", fontSize = 14.sp)
                     Text("保存将修改此目录中的项目配置；修改项目名称不会移动文件夹。",
                         fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                    Text("切换项目会放弃本页尚未保存的修改，请先保存。", fontSize = 12.sp,
+                    Text("切换前会提示保存或放弃尚未保存的修改。", fontSize = 12.sp,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary)
                     Button(onClick = {
-                        com.jdkshen.aijspro.ui.common.MiuixFileChooserDialog.showDirectory(
+                        com.jdkshen.aijspro.ui.common.MiuixFileChooserDialog.showProject(
                             this@MiuixProjectConfigActivity,
-                            android.os.Environment.getExternalStorageDirectory().path) { selected ->
+                            android.os.Environment.getExternalStorageDirectory().path,
+                            directory?.path ?: android.os.Environment.getExternalStorageDirectory().path) { selected ->
                             val target = ProjectConfig.fromProjectDir(selected)
                             if (target == null) {
                                 Toast.makeText(this@MiuixProjectConfigActivity,

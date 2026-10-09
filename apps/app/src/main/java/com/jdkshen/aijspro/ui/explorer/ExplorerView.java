@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.ui.explorer;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Environment;
@@ -621,7 +622,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                 notifyOperated();
                 break;
             case R.id.send:
-                Scripts.INSTANCE.send(mSelectedItem.toScriptFile());
+                shareItem(mSelectedItem.toScriptFile());
                 notifyOperated();
                 break;
             case R.id.timed_task:
@@ -721,6 +722,17 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
         android.widget.Toast.makeText(getContext(), "项目已同步", android.widget.Toast.LENGTH_SHORT).show();
     }
     public void editCurrentProjectFromMiuix() { mProjectToolbar.edit(); }
+    public void shareCurrentProjectFromMiuix() { shareItem(getCurrentDirectory()); }
+
+    private void shareItem(ScriptFile file) {
+        Context context = getContext();
+        while (!(context instanceof Activity) && context instanceof ContextWrapper) {
+            Context base = ((ContextWrapper) context).getBaseContext();
+            if (base == context) break;
+            context = base;
+        }
+        Scripts.INSTANCE.send(file, context);
+    }
 
     protected void notifyOperated() {
         if (mOnItemOperatedListener != null) {
@@ -1007,17 +1019,24 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
                 sampleMenu.inflate(R.menu.menu_dir_options);
                 sampleMenu.getMenu().removeItem(R.id.rename);
                 sampleMenu.getMenu().removeItem(R.id.delete);
+                sampleMenu.getMenu().removeItem(R.id.send);
                 sampleMenu.setOnMenuItemClickListener(ExplorerView.this);
                 sampleMenu.show();
                 return;
             }
-            int[] ids = {R.id.rename, R.id.delete};
-            String[] labels = {getResources().getString(R.string.text_rename),
-                    getResources().getString(R.string.text_delete)};
+            boolean project = mExplorerPage instanceof ExplorerProjectPage;
+            int[] ids = project ? new int[]{R.id.rename, R.id.delete, R.id.send}
+                    : new int[]{R.id.rename, R.id.delete};
+            String rename = getResources().getString(R.string.text_rename);
+            String delete = getResources().getString(R.string.text_delete);
+            String[] labels = project
+                    ? new String[]{rename, delete, getResources().getString(R.string.text_share_project)}
+                    : new String[]{rename, delete};
             if (showMiuixActionMenu(ids, labels,
                     ExplorerViewHelper.getDisplayName(mExplorerPage).toString())) return;
             PopupMenu popupMenu = new PopupMenu(getContext(), mOptions);
             popupMenu.inflate(R.menu.menu_dir_options);
+            if (!project) popupMenu.getMenu().removeItem(R.id.send);
             popupMenu.setOnMenuItemClickListener(ExplorerView.this);
             popupMenu.show();
         }

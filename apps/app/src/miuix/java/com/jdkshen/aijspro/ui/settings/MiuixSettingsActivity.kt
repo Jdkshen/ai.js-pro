@@ -468,7 +468,7 @@ class MiuixSettingsActivity : ComponentActivity() {
     }
 
     /**
-     * 更新源：留空 = 出厂内置的 GitHub Releases，填网址 = 自建源（局域网里的 update.json 也行）。
+     * 更新源：留空 = 内置 GitHub 加速（失败直连），填网址 = 自建源。
      */
     @Composable
     private fun UpdateSourceDialog(

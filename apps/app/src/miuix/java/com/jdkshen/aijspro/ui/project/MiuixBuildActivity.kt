@@ -72,6 +72,9 @@ import com.jdkshen.aijspro.autojs.build.sign.SigningKey
 import com.jdkshen.aijspro.autojs.build.sign.SigningOptions
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
+import com.jdkshen.aijspro.network.GitHubUpdateProxy
+import com.jdkshen.aijspro.network.PluginDownloads
+import com.jdkshen.aijspro.network.download.DownloadManager
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
@@ -209,6 +212,14 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private val failureShow = mutableStateOf(false)
     private var failureMessage by mutableStateOf("")
 
+    // ---- packaging template (ships with the apkbuilder plugin, not with this app) ----
+    /** 能不能现在就拿到打包模板；拿不到时页面顶部提示装插件。 */
+    private var templateReady by mutableStateOf(true)
+    private var templateSource by mutableStateOf("")
+    private var templateDetail by mutableStateOf("")
+    /** 正在下载/安装打包插件。 */
+    private var pluginBusy by mutableStateOf(false)
+
     // ---- picker state ----
     private val pickerShow = mutableStateOf(false)
     // Observable: the dialog reads it while composing, so a plain field could keep a
@@ -259,6 +270,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         }
         restoreSigningSettings()
         refreshAutoIdentity()
+        refreshTemplateState()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 装完打包插件回到页面时，这里的检测要让提示立刻消失。
+        refreshTemplateState()
     }
 
     override fun onDestroy() {
@@ -285,6 +303,19 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     // ------------------------------------------------------------------
 
     private fun applySource(file: File, fillDefaults: Boolean) {
+        if (source != file.path) {
+            // A different project must not inherit the last project's artwork or launch settings.
+            icon = null
+            splashIcon = null
+            splashIconPath = ""
+            splashText = ""
+            showSplash = true
+            hideLogs = false
+            engine = ""
+            scriptProtection = ScriptProtection.CHOICE_ENCRYPT
+            permissions = PermissionCatalog.DEFAULT_DECLARED
+            requestPermissions = PermissionCatalog.DEFAULT_REQUEST
+        }
         source = file.path
         val config = if (file.isDirectory) ProjectConfig.fromProjectDir(file.path) else null
         if (config != null) {
@@ -305,6 +336,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             // 否则像象棋工程这种要求"不带网络"的产物仍会继承模板的 INTERNET / ACCESS_NETWORK_STATE。
             readDeclaredPermissions(file)?.let { permissions = it }
             engine = config.engine ?: ""
+            config.icon?.takeIf { it.isNotEmpty() }?.let { path ->
+                val image = File(path).let { if (it.isAbsolute) it else File(file, path) }
+                icon = BitmapFactory.decodeFile(image.path)
+            }
             // 工程里写了 encryptLevel / scriptStorage 就按工程展示，否则保持页面的默认（加密）。
             scriptProtection = ScriptProtection.choiceOf(
                 config.encryptLevel, config.scriptStorage)
@@ -703,6 +738,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
 
     private fun buildApk() {
         errorText = null
+        if (!validateTemplate()) return
         if (!validate()) return
         val appConfig = createAppConfig()
         if (appConfig == null) {
@@ -753,6 +789,67 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
             .cleanWorkspace()
     }
 
+    // ------------------------------------------------------------------
+    // Packaging template (shipped by the apkbuilder plugin)
+    // ------------------------------------------------------------------
+
+    private fun refreshTemplateState() {
+        val status = ApkBuilderPluginHelper.templateStatus(this)
+        templateReady = status.available
+        templateSource = status.source
+        templateDetail = status.detail
+    }
+
+    /** 打包前拦一次：模板不在位就直接给可操作的原因，不要让 ApkBuilder 抛个看不懂的异常。 */
+    private fun validateTemplate(): Boolean {
+        refreshTemplateState()
+        if (templateReady) return true
+        failureMessage = getString(R.string.text_packaging_plugin_missing_detail) +
+                "\n\n" + ApkBuilderPluginHelper.manualTemplateFile().path
+        failureShow.value = true
+        return false
+    }
+
+    /** 从更新源取「APK 打包插件」并交给系统安装；装完 onResume 会重新检测模板。 */
+    private fun installPackagingPlugin() {
+        if (pluginBusy || busy) return
+        pluginBusy = true
+        val url = try {
+            PluginDownloads.pluginUrl(this, PluginDownloads.APK_BUILDER_PLUGIN_FILE)
+        } catch (error: Exception) {
+            pluginBusy = false
+            failureMessage = error.message ?: getString(R.string.text_packaging_plugin_download_failed)
+            failureShow.value = true
+            return
+        }
+        val target = File(File(cacheDir, "plugins"), PluginDownloads.APK_BUILDER_PLUGIN_FILE)
+        target.parentFile?.mkdirs()
+        Log.i(TAG, "Downloading packaging plugin from $url")
+        disposables.add(
+            GitHubUpdateProxy.downloadWithFallback(url) { resolved ->
+                DownloadManager.getInstance().downloadWithProgress(this, resolved, target.path)
+            }
+                .subscribeOn(AndroidSchedulers.mainThread())
+                .subscribe({ file ->
+                    pluginBusy = false
+                    if (!PluginDownloads.isExpectedPackage(
+                            this, file, PluginDownloads.APK_BUILDER_PLUGIN_PACKAGE
+                    )) {
+                        failureMessage = getString(R.string.text_packaging_plugin_download_failed)
+                        failureShow.value = true
+                        return@subscribe
+                    }
+                    installApk(file.path)
+                }, { error ->
+                    pluginBusy = false
+                    failureMessage = getString(R.string.text_packaging_plugin_download_failed) +
+                            "\n" + (error.message.orEmpty())
+                    failureShow.value = true
+                    Log.e(TAG, "Failed to download the packaging plugin", error)
+                })
+        )
+    }
+
     private fun updateStage(resId: Int) {
         runOnUiThread { stage = resId }
     }
@@ -791,6 +888,9 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     } else {
                         SourceAndOutputCards()
                         AppConfigCard()
+                    }
+                    if (!templateReady) {
+                        TemplateNoticeCard()
                     }
                     LaunchConfigCard()
                     FeaturesCard()
@@ -837,6 +937,52 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                 title = getString(R.string.text_output_apk_path),
                 rightText = displayName(output),
                 onClick = { openPicker(PICKER_OUTPUT) })
+        }
+    }
+
+    /**
+     * 打包模板不在位时的提示：模板（~43MB）随「APK 打包插件」分发，
+     * 这里给出下载安装入口与手动放置位置，避免用户只看到「打包失败」。
+     */
+    @Composable
+    private fun TemplateNoticeCard() {
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(getString(R.string.text_packaging_plugin_missing), fontSize = 15.sp)
+                Text(
+                    getString(R.string.text_packaging_plugin_missing_detail),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                )
+                if (templateDetail.isNotEmpty()) {
+                    Text(
+                        templateDetail,
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        text = getString(R.string.text_recheck),
+                        modifier = Modifier.padding(end = 8.dp),
+                        onClick = { refreshTemplateState() },
+                        colors = ButtonDefaults.textButtonColorsPrimary()
+                    )
+                    Button(
+                        onClick = { installPackagingPlugin() },
+                        enabled = !pluginBusy,
+                        colors = ButtonDefaults.buttonColorsPrimary()
+                    ) {
+                        Text(getString(R.string.text_install_packaging_plugin))
+                    }
+                }
+            }
         }
     }
 
@@ -1303,7 +1449,8 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                         SplashIconTile()
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            getString(R.string.text_splash_icon),
+                            if (splashIconPath.isEmpty()) "启动图标（默认使用应用图标）"
+                            else getString(R.string.text_splash_icon),
                             fontSize = 16.sp,
                             color = MiuixTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f)

@@ -176,6 +176,8 @@
 <li><span class="stability_undefined"><a href="#ui_ui_finish">ui.finish()</a></span></li>
 <li><span class="stability_undefined"><a href="#ui_ui_setcontentview_view">ui.setContentView(view)</a></span></li>
 <li><span class="stability_undefined"><a href="#ui_ui_run_callback">ui.run(callback)</a></span></li>
+<li><span class="stability_undefined"><a href="#ui_replace_accessibility_action">ui.replaceAccessibilityAction(view, action, label, callback)</a></span></li>
+<li><span class="stability_undefined"><a href="#ui_perform_click">ui.performClick(view)</a></span></li>
 <li><span class="stability_undefined"><a href="#ui_ui_post_callback_daley">ui.post(callback[, daley])</a></span></li>
 <li><span class="stability_undefined"><a href="#ui_ui_statusbarcolor_color">ui.statusBarColor(color)</a></span></li>
 <li><span class="stability_undefined"><a href="#ui_ui_showpopupmenu_view_menu">ui.showPopupMenu(view, menu)</a></span></li>
@@ -728,6 +730,29 @@ ui.layout(
 <h2>ui.post(callback[, daley])<span><a class="mark" href="#ui_ui_post_callback_daley" id="ui_ui_post_callback_daley">#</a></span></h2>
 <h2>ui.statusBarColor(color)<span><a class="mark" href="#ui_ui_statusbarcolor_color" id="ui_ui_statusbarcolor_color">#</a></span></h2>
 <h2>ui.showPopupMenu(view, menu)<span><a class="mark" href="#ui_ui_showpopupmenu_view_menu" id="ui_ui_showpopupmenu_view_menu">#</a></span></h2>
+<h2>ui.replaceAccessibilityAction(view, action, label, callback)<span><a class="mark" href="#ui_replace_accessibility_action" id="ui_replace_accessibility_action">#</a></span></h2>
+<p>为脚本自己的 UI 或悬浮窗控件定义无障碍点击动作及其描述。Rhino、QuickJS 均支持；适用于已有的 Android View、<code>ui.控件id</code>、<code>window.控件id</code>，也可传当前 UI 的控件 id 字符串。</p>
+<ul>
+<li><code>action</code>：<code>"click"</code> / <code>"ACTION_CLICK"</code> / <code>16</code>，或 <code>"long_click"</code> / <code>"longClick"</code> / <code>"ACTION_LONG_CLICK"</code> / <code>32</code>。也支持上述 Android AccessibilityAction 对象。</li>
+<li><code>label</code>：无障碍服务展示的动作名称，字符串或 <code>null</code>。</li>
+<li><code>callback(view, info)</code>：执行动作时的脚本回调；<code>info</code> 包含 <code>action</code> 和 <code>label</code>。传 <code>null</code> 移除自定义动作，恢复控件的默认动作。</li>
+</ul>
+<p>返回传入的控件（传 id 字符串时返回对应控件）。回调在脚本的事件循环执行；登记后 Android 将动作视为已处理，回调返回值不决定是否处理。普通手指点击仍使用 <code>view.on("click", callback)</code>，需要两种点击执行同一操作时请分别登记同一个函数。脚本停止后自动清理动作。</p>
+<pre><code>function select() { toast("已选择"); }
+ui.target.on("click", select);
+ui.replaceAccessibilityAction(ui.target, "click", "选择", select);
+ui.replaceAccessibilityAction(ui.target, "long_click", "全选", function () {
+    toast("已全选");
+});
+// 移除：ui.replaceAccessibilityAction(ui.target, "click", null, null);
+</code></pre>
+<h2>ui.performClick(view)<span><a class="mark" href="#ui_perform_click" id="ui_perform_click">#</a></span></h2>
+<p>调用控件的原生 <code>View.performClick()</code>，触发已有的普通点击监听及 Android 无障碍点击通知。适合自定义触摸逻辑识别到轻触后分发点击。控件参数与上面的接口一致；返回布尔值，<code>true</code> 表示调用了已有的点击监听，<code>false</code> 表示没有点击监听。调用会自动切到 Android 主线程。</p>
+<p>它不直接调用仅由 <code>replaceAccessibilityAction</code> 登记的回调。应用中的完整示例“自定义触摸与无障碍点击”演示了触摸轻触、拖动取消和两种点击路径。</p>
+<pre><code>ui.performClick(ui.target);
+// 自定义触摸完成一次轻触时：ui.performClick(window.pad);
+</code></pre>
+<p>设计参考：<a href="https://developer.android.com/guide/topics/ui/accessibility/views/custom-views?hl=zh-CN">Android 官方自定义视图无障碍文档</a>。这些接口用于脚本创建的控件；其他应用的节点操作使用 UiObject 点击等自动化接口。</p>
 <h1>尺寸的单位: Dimension<span><a class="mark" href="#ui_dimension" id="ui_dimension">#</a></span></h1>
 <h1>Drawables<span><a class="mark" href="#ui_drawables" id="ui_drawables">#</a></span></h1>
 <h1>颜色<span><a class="mark" href="#ui" id="ui">#</a></span></h1>

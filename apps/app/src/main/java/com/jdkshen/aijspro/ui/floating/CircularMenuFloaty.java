@@ -1,12 +1,11 @@
 package com.jdkshen.aijspro.ui.floating;
 
+import android.content.Context;
 import android.view.View;
-
-import com.stardust.enhancedfloaty.FloatyService;
 
 public interface CircularMenuFloaty {
 
-    View inflateActionView(FloatyService service, CircularMenuWindow window);
+    View inflateActionView(Context context, CircularMenuWindow window);
 
-    CircularActionMenu inflateMenuItems(FloatyService service, CircularMenuWindow window);
+    CircularActionMenu inflateMenuItems(Context context, CircularMenuWindow window);
 }

@@ -14,6 +14,7 @@ import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 
 import com.stardust.autojs.core.accessibility.AccessibilityService;
+import com.google.android.accessibility.selecttospeak.SelectToSpeakService;
 import com.stardust.autojs.core.util.ProcessShell;
 import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.view.accessibility.AccessibilityServiceUtils;
@@ -27,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AccessibilityServiceTool {
 
-    private static final Class<AccessibilityService> sAccessibilityServiceClass = AccessibilityService.class;
+    private static final Class<? extends AccessibilityService> sAccessibilityServiceClass = SelectToSpeakService.class;
     private static final AtomicBoolean sFastEnableInProgress = new AtomicBoolean(false);
 
     public static void enableAccessibilityService() {

@@ -15,6 +15,7 @@ import com.stardust.autojs.runtime.exception.ScriptException
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException
 import com.stardust.autojs.script.JavaScriptSource
 import com.stardust.view.accessibility.AccessibilityService
+import com.google.android.accessibility.selecttospeak.SelectToSpeakService
 import com.stardust.view.accessibility.AccessibilityServiceUtils
 import java.lang.IllegalStateException
 
@@ -39,7 +40,7 @@ class AutoJs private constructor(application: Application) : com.stardust.autojs
             return
         }
         var errorMessage: String? = null
-        if (AccessibilityServiceUtils.isAccessibilityServiceEnabled(application, AccessibilityService::class.java)) {
+        if (AccessibilityServiceUtils.isAccessibilityServiceEnabled(application, SelectToSpeakService::class.java)) {
             errorMessage = GlobalAppContext.getString(R.string.text_auto_operate_service_enabled_but_not_running)
         } else {
             if (Pref.shouldEnableAccessibilityServiceByRoot()) {
@@ -61,7 +62,7 @@ class AutoJs private constructor(application: Application) : com.stardust.autojs
             return
         }
         var errorMessage: String? = null
-        if (AccessibilityServiceUtils.isAccessibilityServiceEnabled(application, AccessibilityService::class.java)) {
+        if (AccessibilityServiceUtils.isAccessibilityServiceEnabled(application, SelectToSpeakService::class.java)) {
             errorMessage = GlobalAppContext.getString(R.string.text_auto_operate_service_enabled_but_not_running)
         } else {
             if (Pref.shouldEnableAccessibilityServiceByRoot()) {

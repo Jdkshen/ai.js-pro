@@ -69,6 +69,7 @@ import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.common.ScriptLoopDialog
 import com.jdkshen.aijspro.ui.common.ScriptOperations
 import com.jdkshen.aijspro.ui.project.BuildActivity
+import com.jdkshen.aijspro.ui.project.ProjectConfigActivity
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerItemList
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerListRows
 import com.jdkshen.aijspro.ui.viewmodel.ExplorerNavigationState
@@ -732,18 +733,35 @@ class MiuixScriptListHost @JvmOverloads constructor(
     }
 
     private fun showProjectActions() {
-        // 旧实现：项目页的分类头标题可点，打开项目操作菜单（ExplorerProjectToolbar 的动作）。
-        // 注意：MiuixProjectMenuHost.show(owner: ExplorerView) 依赖旧 View 实例，Compose 模式拿不到它，
-        // 所以这里暂时不接项目菜单——留待 S4 把项目工具条一并 Compose 化（已记入迁移方案的待办）。
+        if (disposed) return
+        val activity = fragment.activity ?: return
+        val project = navigation.current as? ExplorerProjectPage ?: return
+        MiuixProjectMenuHost.showFor(activity,
+            onRun = {
+                runCatching {
+                    com.stardust.autojs.project.ProjectLauncher(project.getPath())
+                        .launch(com.jdkshen.aijspro.autojs.AutoJs.getInstance().scriptEngineService)
+                }.onFailure { toast(it) }
+            },
+            onBuild = {
+                activity.startActivity(Intent(activity, BuildActivity::class.java)
+                    .putExtra(BuildActivity.EXTRA_SOURCE, project.getPath()))
+            },
+            onSync = {
+                Explorers.workspace().notifyChildrenChanged(project)
+                Toast.makeText(activity, "项目已同步", Toast.LENGTH_SHORT).show()
+            },
+            onEdit = {
+                activity.startActivity(Intent(activity, ProjectConfigActivity::class.java)
+                    .putExtra(ProjectConfigActivity.EXTRA_DIRECTORY, project.getPath()))
+            },
+            onShare = { Scripts.send(project.toScriptFile(), activity) }
+        )
     }
 
     private fun open(item: ExplorerItem) {
         val activity = fragment.activity ?: return
-        if (item.isEditable) {
-            Scripts.edit(activity, item.toScriptFile())
-        } else {
-            IntentUtil.viewFile(GlobalAppContext.get(), item.getPath(), AppFileProvider.AUTHORITY)
-        }
+        com.jdkshen.aijspro.ui.common.FileOpenRouter.open(activity, item)
     }
 
     // ---- 长按 / more 菜单（与旧 ExplorerView 的 showOptionMenu 保持同样的条件）----
@@ -774,6 +792,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
             ) { performAction(item, R.id.reset_all) }
             return
         }
+        if (item is ExplorerProjectPage) add(R.id.send, R.string.text_share_project)
         if (item !is ExplorerPage) {
             add(R.id.send, R.string.text_send)
             add(R.id.open_by_other_apps, R.string.text_open_by_other_apps)
@@ -799,7 +818,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
             R.id.delete -> operations().delete(item.toScriptFile())
             R.id.timed_task -> operations().timedTask(item.toScriptFile())
             R.id.create_shortcut -> operations().createShortcut(item.toScriptFile())
-            R.id.send -> Scripts.send(item.toScriptFile())
+            R.id.send -> fragment.activity?.let { Scripts.send(item.toScriptFile(), it) }
             R.id.open_by_other_apps -> Scripts.openByOtherApps(item.toScriptFile())
             R.id.run_repeatedly -> ScriptLoopDialog(context, item.toScriptFile()).show()
             R.id.action_build_apk -> context.startActivity(

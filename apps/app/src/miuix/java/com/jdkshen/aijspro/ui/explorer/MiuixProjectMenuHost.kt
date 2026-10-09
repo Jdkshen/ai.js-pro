@@ -1,6 +1,8 @@
 package com.jdkshen.aijspro.ui.explorer
 
+import android.app.Activity
 import android.app.Dialog
+import android.content.ContextWrapper
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.view.ViewGroup
@@ -8,15 +10,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.savedstate.findViewTreeSavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
@@ -26,22 +29,47 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 object MiuixProjectMenuHost {
     @JvmStatic
     fun show(owner: ExplorerView) {
-        val dialog = Dialog(owner.context)
+        var context = owner.context
+        while (context !is Activity && context is ContextWrapper) {
+            val base = context.baseContext
+            if (base === context) return
+            context = base
+        }
+        val activity = context as? Activity ?: return
+        showFor(activity,
+            owner::runCurrentProjectFromMiuix,
+            owner::buildCurrentProjectFromMiuix,
+            owner::syncCurrentProjectFromMiuix,
+            owner::editCurrentProjectFromMiuix,
+            owner::shareCurrentProjectFromMiuix)
+    }
+
+    @JvmStatic
+    fun showFor(
+        activity: Activity,
+        onRun: () -> Unit,
+        onBuild: () -> Unit,
+        onSync: () -> Unit,
+        onEdit: () -> Unit,
+        onShare: () -> Unit
+    ) {
+        val dialog = Dialog(activity)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         val actions = listOf(
-            "运行项目" to owner::runCurrentProjectFromMiuix,
-            "构建 APK" to owner::buildCurrentProjectFromMiuix,
-            "同步项目" to owner::syncCurrentProjectFromMiuix,
-            "项目设置" to owner::editCurrentProjectFromMiuix
+            "运行项目" to onRun,
+            "构建 APK" to onBuild,
+            "同步项目" to onSync,
+            "项目设置" to onEdit,
+            activity.getString(R.string.text_share_project) to onShare
         )
-        dialog.setContentView(ComposeView(owner.context).apply {
-            setViewTreeLifecycleOwner(owner.findViewTreeLifecycleOwner())
-            setViewTreeSavedStateRegistryOwner(owner.findViewTreeSavedStateRegistryOwner())
+        dialog.setContentView(ComposeView(activity).apply {
+            (activity as? androidx.lifecycle.LifecycleOwner)?.let { setViewTreeLifecycleOwner(it) }
+            (activity as? androidx.savedstate.SavedStateRegistryOwner)?.let { setViewTreeSavedStateRegistryOwner(it) }
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
                 AijsMiuixTheme {
                     Card(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 10.dp)) {
                             Text("项目操作", fontSize = 20.sp,
                                 color = MiuixTheme.colorScheme.onSurface,
                                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
@@ -49,8 +77,8 @@ object MiuixProjectMenuHost {
                                 Text(label, fontSize = 16.sp,
                                     color = MiuixTheme.colorScheme.onSurface,
                                     modifier = Modifier.fillMaxWidth().clickable {
-                                        action()
                                         dialog.dismiss()
+                                        action()
                                     }.padding(horizontal = 20.dp, vertical = 15.dp))
                             }
                         }
@@ -60,7 +88,7 @@ object MiuixProjectMenuHost {
         })
         dialog.show()
         dialog.window?.setLayout(
-            (owner.resources.displayMetrics.widthPixels * 0.88f).toInt(),
+            (activity.resources.displayMetrics.widthPixels * 0.88f).toInt(),
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
     }

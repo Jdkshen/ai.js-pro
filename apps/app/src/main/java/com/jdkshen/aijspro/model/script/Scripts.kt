@@ -81,7 +81,15 @@ object Scripts {
     }
 
     fun openByOtherApps(file: File) {
-        openByOtherApps(Uri.fromFile(file))
+        val context = GlobalAppContext.get()
+        val opened = try {
+            IntentUtil.viewFile(context, file.path, AppFileProvider.AUTHORITY)
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!opened) {
+            Toast.makeText(context, "没有可打开此文件的应用", Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun createShortcut(scriptFile: ScriptFile) {
@@ -155,12 +163,10 @@ object Scripts {
     }
 
     fun send(file: ScriptFile) {
-        val context = GlobalAppContext.get()
-        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND)
-                .setType("text/plain")
-                .putExtra(Intent.EXTRA_STREAM, IntentUtil.getUriOfFile(context, file.path, AppFileProvider.AUTHORITY)),
-                GlobalAppContext.getString(R.string.text_send)
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        send(file, GlobalAppContext.get())
+    }
 
+    fun send(file: ScriptFile, context: Context) {
+        ProjectSharing.share(context, file)
     }
 }

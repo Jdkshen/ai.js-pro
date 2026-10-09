@@ -26,9 +26,12 @@ import com.stardust.pio.PFiles
 import com.stardust.pio.UncheckedIOException
 import com.stardust.util.MD5
 
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.lang.reflect.Field
+import java.util.zip.ZipInputStream
 
 /**
  * Created by Stardust on 2018/1/24.
@@ -111,6 +114,49 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             PFiles.copyAssetDir(mActivity.assets, mAssetsProjectDir, mProjectDir, null)
         } catch (e: IOException) {
             throw UncheckedIOException(e)
+        }
+        extractScriptPackIfPresent()
+    }
+
+    /**
+     * 展开目录工程的脚本容器（{@code assets/project/scripts.pack}）。
+     *
+     * <p>打包端把除入口脚本外的所有脚本打成 zip、整体加密成一个文件，所以解包 APK
+     * 看不到任何脚本文件；这里在复制完资产后解密并展开到私有目录，之后模块加载
+     * （require）看到的目录布局与原来的打包方式完全一致。
+     */
+    private fun extractScriptPackIfPresent() {
+        val pack = File(mProjectDir, ScriptProtection.SCRIPT_PACK_FILE)
+        if (!pack.isFile) {
+            return
+        }
+        val payload = try {
+            EncryptedScripts.decryptPayload(PFiles.readBytes(pack.path))
+        } catch (error: Exception) {
+            throw IllegalStateException("脚本容器无法解密：${pack.path}", error)
+        } ?: throw IllegalStateException("脚本容器不完整（不是有效的加密载荷）：${pack.path}")
+        unzipInto(payload, File(mProjectDir))
+        //ignore delete
+        pack.delete()
+    }
+
+    private fun unzipInto(bytes: ByteArray, targetDir: File) {
+        val root = targetDir.canonicalPath + File.separator
+        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val target = File(targetDir, entry.name)
+                if (!target.canonicalPath.startsWith(root)) {
+                    throw IllegalStateException("脚本容器包含非法路径：${entry.name}")
+                }
+                if (entry.isDirectory) {
+                    target.mkdirs()
+                } else {
+                    target.parentFile?.mkdirs()
+                    FileOutputStream(target).use { output -> zip.copyTo(output) }
+                }
+                zip.closeEntry()
+            }
         }
     }
 

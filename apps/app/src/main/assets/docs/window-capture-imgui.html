@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>窗口截图与 ImGui 绘制 | AI.js Pro</title>
+<style>body{max-width:850px;margin:auto;padding:20px;font:16px/1.65 system-ui,sans-serif;color:#263238;background:#fff}a{color:#087f72}code,pre{font-family:monospace;background:#f1f5f4}pre{padding:14px;overflow:auto;border-radius:8px}table{width:100%;border-collapse:collapse}td,th{padding:8px;text-align:left;border-bottom:1px solid #ddd}@media(prefers-color-scheme:dark){body{background:#161b1b;color:#e2e8e7}a{color:#71d7c7}code,pre{background:#252d2c}}</style></head><body>
+<p><a href="index.html">文档首页</a> · <a href="images.html">图片处理</a></p>
+<h1>窗口截图与 ImGui 绘制</h1>
+<p>窗口截图支持 Rhino、QuickJS，需要 Android 14+ 和已开启且具有截图能力的无障碍服务。ImGui 绘制接口目前由 QuickJS 提供。</p>
+<h2 id="available">images.isWindowCaptureAvailable()</h2><p>返回窗口截图通道是否可用，不申请 MediaProjection 授权。</p>
+<h2 id="windows">images.listCaptureWindows()</h2><p>返回其他应用的窗口列表：windowId、packageName、active、focused、foreground、bounds、displayId、rotation。窗口 ID 来自无障碍系统，不是进程 ID。</p>
+<p>active、focused 保留系统原始值。foreground 用于选择前台：活动窗口，或宿主自己的无障碍/系统覆盖窗活动时仍有输入焦点的应用窗口。点击操作窗后可继续选底下的应用；普通后台窗口不纳入。点击前仍需复查窗口 ID、包名、边界和旋转。</p>
+<h2 id="capture">images.captureWindow(options)</h2>
+<pre>var frame = images.captureWindow({ timeout: 2000 });
+try {
+    images.save(frame.image, "/sdcard/window.png");
+    log(frame.packageName, frame.bounds, frame.frameId);
+} finally {
+    frame.image.recycle();
+}</pre>
+<table><tr><th>参数</th><th>说明</th></tr>
+<tr><td>windowId</td><td>可选，指定窗口；默认选其他应用的 foreground 窗口。</td></tr>
+<tr><td>packageName</td><td>可选，限制应用；提供 ID 时同时校验应用。</td></tr>
+<tr><td>timeout</td><td>1～5000 毫秒，默认 2000。</td></tr>
+<tr><td>screenCoordinates</td><td>默认 false，返回窗口局部图。true 返回屏幕尺寸画布，窗口外为黑色，方便复用屏幕坐标。</td></tr>
+<tr><td>size</td><td>QuickJS 专用，0～4096 的短边存储尺寸；0 为完整像素。逻辑坐标保持不变。</td></tr></table>
+<p>返回 image、bounds、windowId、packageName、frameId、timestamp、rotation、displayWidth、displayHeight、windowImageWidth、windowImageHeight、coordinateSpace、isolated。timestamp 为开机后经过的毫秒，frameId 为宿主结果序号。</p>
+<p>局部图坐标映射到屏幕：<code>x = bounds.left + localX * bounds.width / width</code>，y 同理。QuickJS 的 width 来自 image.width，Rhino 使用 image.getWidth()。</p>
+<p>仅支持默认显示器。窗口在抓帧期间移动或旋转时丢弃本帧。超时、窗口消失、服务断开或安全画面会抛错，不自动回退到整屏。</p>
+<h2 id="drawing">drawing.show({renderer: "imgui"})</h2>
+<pre>if (!drawing.show({renderer: "imgui"})) throw new Error("无法创建绘制层");
+drawing.update([{x1:100,y1:300,x2:200,y2:400,label:"红车"}], "当前状态");
+// 使用完：drawing.hide();</pre>
+<p>Dear ImGui + OpenGL ES 3 透明绘制层，不接收触摸。操作按钮应放在另一个有边界的窗口里。更新时渲染最新快照；不保证固定 60/120fps。默认 drawing.show() 仍使用 Canvas。</p>
+<p>使用应用自带的静态中文字体；字体图集构建失败时回退到已检查的拉丁字库，避免第一帧闪退。字库未覆盖的字符可能显示方框。</p>
+<h2 id="primitives">QuickJS 绘制箭头与圆圈</h2>
+<pre>drawing.clear();
+drawing.drawArrow(100, 600, 400, 300, "#FFD54F", 5, 24);
+drawing.drawCircle(100, 600, 16, "#40C4FF", 3);
+drawing.drawText(100, 650, "起点", "#40C4FF", 30);
+drawing.update([], "深度 18\n评分 30cp");</pre>
+<p>Canvas 与 ImGui 都支持这些 QuickJS 接口。drawArrow 最后两个参数为线宽和箭头长度，drawCircle 第三个参数为半径，单位均为屏幕像素。也可在 update 的每项中设置 kind 为 arrow、circle、line 或 text，分别设置 headSize、radius、strokeWidth、size、color、label。重合起终点不画箭头。</p>
+<p>状态文字支持多行和自动换行。<code>drawing.update([], "")</code> 明确清除文字；省略第二个参数沿用前一份文字。show/hide 清理上一窗口的命令缓存。</p>
+<p>加入 <code>{kind:"hud",x1:12,y1:200,x2:1068,y2:500}</code> 可限定状态文字的屏幕区域；空边界禁用 HUD，其他图形照常。象棋自动避开操作面板、日志和棋盘。无空带时收起面板可显示诊断；超出区域的文字会裁剪。</p>
+<h2 id="panel">drawing.panel：ImGui 操作窗（QuickJS）</h2>
+<pre>var state = {title:"象棋 · 已暂停", buttons:[
+    {id:"start",label:"开始"}, {id:"stop",label:"停止"},
+    {id:"locate",label:"定位",enabled:true}
+]};
+var options = Object.assign({x:24,y:250,width:900,columns:3}, state);
+if (!drawing.panel.show(options).ok) throw new Error("无法创建操作窗");
+// 在脚本定时器中读取事件，避免在 GL 线程里调用脚本。
+var result = drawing.panel.poll();
+result.events.forEach(function (event) { log(event.id, event.at); });
+drawing.panel.update(state); // 更新文字/禁用状态
+// 隐藏但保留窗口：drawing.panel.update({visible:false,touchable:false});
+// 结束：drawing.panel.hide();</pre>
+<p>每个脚本引擎管理一个操作窗，绘制层与操作窗独立。show 返回 ok、x、y、width、height、visible、events；poll 返回当前位置与本次取出的事件（下一次不会重放）。事件含 id 与 at（墙钟毫秒）；拖动完成产生 drag。按钮数量 1～12，ID 唯一，只能用字母、数字、下划线和连字符；创建后数量固定，改变数量需关闭重建。</p>
+<p>x、y、width 使用屏幕像素。标题区可拖动；宽度、列数与位置会根据屏幕限制，高度按 48dp 按钮自动计算。只有操作窗边界接收触摸，不获取键盘焦点。update 可传 x、y、visible、touchable；传 buttons 时同时传 title 以更新完整内容。隐藏/禁止触摸会清掉待执行输入。drawing.hide() 只关闭绘制层；脚本结束自动关闭两个窗口。</p>
+<p>操作窗显示不依赖截图通道。无障碍服务已连接时使用无障碍覆盖窗；未连接时使用普通悬浮窗，需要授予悬浮窗权限。显示按钮本身不提供截图或自动点击权限。</p>
+<h2>象棋示例</h2><p>主界面“截图来源”选“窗口截图”，再切到游戏定位校准。该通道不为截图隐藏操作面板或悬浮球，识别绘制使用 ImGui。操作面板遮住落子位置时，仍会为点击暂避。旧 Android 版本使用原有通道。</p>
+<p>示例：QuickJS 新引擎 → 图色处理 → 11-窗口截图与ImGui绘制.js、12-ImGui操作窗.js。</p>
+<p>象棋工程 0.6.55 的窗口模式显示最佳走法箭头、起终点、实际搜索深度、评分、PV 与耗时。新盘面、暂停、票据过期、截图失败或重新定位会清理旧建议。截图调用与抓帧总耗时（含稳定等待）存在包含关系，不能相加。</p>
+<p>象棋工程 0.6.56：窗口截图模式点击高级面板上的“ImGui”切换小操作窗，支持模式、开始/暂停、停止、定位、识别、更多。暂停后才能手动定位/识别；切换模式会先停止，等待明确开始。“更多”打开完整参数与日志，旧通道沿用原有小窗。过期开始输入会丢弃，同批停止优先。原生输入无法中断正在阻塞的脚本调用。</p>
+<p>象棋工程 0.6.57：自动、录屏、Shell、窗口四种截图模式都能点击“ImGui”打开六项小操作窗，切换截图来源保留小窗和收起状态。未开启无障碍时以普通悬浮窗显示；普通截图遮住棋盘时仍会暂避。窗口截图仍需要无障碍，录屏需要授权，Shell 需要相应权限；免无障碍自动落子需要可用的 Shizuku 点击通道。画板保持原策略：窗口截图模式实时 ImGui 绘制，其他模式使用暂停审核的 Canvas 冻结帧。</p>
+</body></html>

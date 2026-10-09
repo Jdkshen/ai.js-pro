@@ -110,6 +110,17 @@
                 android:resource="@xml/provider_paths"/>
         </provider>
 
+        <!-- Auto.js Pro 扩展用 adb 执行 content query（debug-server 路径）判断服务器是否开启；
+             authority 是扩展里写死的，state=2 时它才 adb forward 并连接 9317。
+             与真 Auto.js Pro 同机安装时用 -PdevPluginUsbDiscovery=false 构建，
+             构建脚本会注入一个 tools:node="remove" 的清单覆盖层去掉它。 -->
+        <provider
+            android:name=".pluginclient.DebugServerProvider"
+            android:authorities="org.autojs.autojspro.debug.provider"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            tools:ignore="ExportedContentProvider"/>
+
         <!-- Receives the Shizuku binder. The permission prevents ordinary apps from
              calling this exported provider directly. -->
         <provider
@@ -172,6 +183,12 @@
 
 
         <service android:name=".external.foreground.ForegroundService"/>
+        <!-- VS Code「Auto.js Pro 扩展」（hyb1996.auto-js-pro-ext）的调试服务器：9317 端口，
+             抽屉「Pro 扩展服务器」开关控制；DebugServerProvider 只在它运行时回报 state=2。 -->
+        <service
+            android:name=".pluginclient.DevPluginServerService"
+            android:exported="false"
+            android:stopWithTask="true"/>
         <service android:name=".external.ScriptExecutionIntentService"/>
 
         <activity android:name=".external.tasker.TaskPrefEditActivity"/>
@@ -272,7 +289,7 @@
             android:name=".external.open.EditIntentActivity"
             android:exported="true"
             android:icon="@drawable/ai_js_pro_logo"
-            android:label="@string/text_edit_script">
+            android:label="@string/text_external_open_file">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <action android:name="android.intent.action.EDIT"/>
@@ -282,8 +299,34 @@
 
                 <data android:scheme="file"/>
                 <data android:scheme="content"/>
+                <data android:mimeType="text/*"/>
                 <data android:mimeType="application/x-javascript"/>
-                <data android:mimeType="text/plain"/>
+                <data android:mimeType="application/javascript"/>
+                <data android:mimeType="application/json"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="application/octet-stream"/>
+                <data android:mimeType="application/unknown"/>
+                <data android:mimeType="application/x-unknown"/>
+            </intent-filter>
+            <!-- Untyped local files and file attachments shared by QQ / file managers. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <action android:name="android.intent.action.EDIT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/*"/>
+                <data android:mimeType="application/x-javascript"/>
+                <data android:mimeType="application/javascript"/>
+                <data android:mimeType="application/json"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="application/octet-stream"/>
+                <data android:mimeType="application/unknown"/>
+                <data android:mimeType="application/x-unknown"/>
             </intent-filter>
         </activity>
         <activity
@@ -307,10 +350,23 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".external.select.SelectImageActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:label="@string/text_select_image"
+            android:noHistory="true"
+            android:taskAffinity="${applicationId}.external.select.SelectImageActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.jdkshen.aijspro.action.SELECT_IMAGE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </activity>
+        <activity
             android:name=".external.open.ImportIntentActivity"
             android:exported="true"
             android:icon="@drawable/ai_js_pro_logo"
-            android:label="@string/text_import_script"
+            android:label="@string/text_external_import_file"
             android:theme="@style/AppTheme.Transparent">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -321,8 +377,38 @@
 
                 <data android:scheme="file"/>
                 <data android:scheme="content"/>
+                <data android:mimeType="text/*"/>
                 <data android:mimeType="application/x-javascript"/>
-                <data android:mimeType="text/plain"/>
+                <data android:mimeType="application/javascript"/>
+                <data android:mimeType="application/json"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="application/octet-stream"/>
+                <data android:mimeType="application/unknown"/>
+                <data android:mimeType="application/x-unknown"/>
+                <data android:mimeType="application/zip"/>
+                <data android:mimeType="application/x-zip-compressed"/>
+            </intent-filter>
+            <!-- Untyped local files and file attachments shared by QQ / file managers. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <action android:name="android.intent.action.EDIT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/*"/>
+                <data android:mimeType="application/x-javascript"/>
+                <data android:mimeType="application/javascript"/>
+                <data android:mimeType="application/json"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="application/octet-stream"/>
+                <data android:mimeType="application/unknown"/>
+                <data android:mimeType="application/x-unknown"/>
+                <data android:mimeType="application/zip"/>
+                <data android:mimeType="application/x-zip-compressed"/>
             </intent-filter>
         </activity>
 

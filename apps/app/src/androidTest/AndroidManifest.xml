@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider android:name="com.jdkshen.aijspro.ui.editor.EditorDocumentTestProvider"
+            android:authorities="com.jdkshen.aijspro.test.editor.documents"
+            android:exported="true" android:grantUriPermissions="true" />
+    </application>
+</manifest>

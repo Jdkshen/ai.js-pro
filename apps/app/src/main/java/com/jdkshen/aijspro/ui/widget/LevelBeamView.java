@@ -33,6 +33,20 @@ public class LevelBeamView extends View {
     private int mLinesWidth;
     private int mLinesOffset;
     private Paint mLinePaint;
+    private boolean mCompact;
+
+    public void setCompact(boolean compact) {
+        if (mCompact == compact) return;
+        mCompact = compact;
+        if (compact) {
+            float density = getResources().getDisplayMetrics().density;
+            mLinesWidth = Math.max(1, Math.round(density)); mLinesOffset = Math.round(7 * density);
+            mPaddingLeft = mPaddingRight = Math.round(2 * density);
+            mLinePaint.setStrokeWidth(mLinesWidth);
+            mLinePaint.setPathEffect(new android.graphics.DashPathEffect(new float[]{2 * density, 3 * density}, 0));
+        }
+        requestLayout(); invalidate();
+    }
 
     public LevelBeamView(Context context) {
         super(context);
@@ -84,7 +98,7 @@ public class LevelBeamView extends View {
             if (lvl >= 1) {
                 LINE_X += lvl * mLinesOffset;
             }
-            mLinePaint.setColor(getColorForLevel(lvl));
+            mLinePaint.setColor(mCompact ? 0xffaaaaaa : getColorForLevel(lvl));
             canvas.drawLine(LINE_X, 0, LINE_X, canvas.getHeight(), mLinePaint);
         }
     }

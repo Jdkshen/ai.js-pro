@@ -224,7 +224,7 @@ public class ScriptOperations {
                     if (PFiles.copy(pathFrom, pathTo)) {
                         showMessage(R.string.text_import_succeed);
                     } else {
-                        showMessage(R.string.text_import_fail);
+                        throw new IOException(getString(R.string.text_import_fail).toString());
                     }
                     return pathTo;
                 })
@@ -240,11 +240,12 @@ public class ScriptOperations {
                     if (PFiles.copyStream(inputStream, pathTo)) {
                         showMessage(R.string.text_import_succeed);
                     } else {
-                        showMessage(R.string.text_import_fail);
+                        throw new IOException(getString(R.string.text_import_fail).toString());
                     }
-                    notifyFileCreated(mCurrentDirectory, new ScriptFile(pathTo));
                     return pathTo;
-                });
+                })
+                .observeOn(AndroidSchedulers.mainThread())
+                .doOnNext(path -> notifyFileCreated(mCurrentDirectory, new ScriptFile(path)));
     }
 
 
@@ -296,6 +297,7 @@ public class ScriptOperations {
     private void showMessage(final int resId) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             showMessageWithoutThreadSwitch(resId);
+            return;
         }
         //switch to ui thread to show message
         GlobalAppContext.post(() -> showMessageWithoutThreadSwitch(resId));
@@ -326,7 +328,7 @@ public class ScriptOperations {
         }
         String suffix = ext == null ? "" : "." + ext;
         final PublishSubject<String> input = PublishSubject.create();
-        boolean shown = MiuixInputDialog.show((Activity) mContext,
+        boolean shown = MiuixInputDialog.showWithCancel((Activity) mContext,
                 getString(R.string.text_name).toString(),
                 getString(R.string.text_please_input_name).toString(),
                 prefix,
@@ -336,6 +338,9 @@ public class ScriptOperations {
                     if (text.isEmpty()) {
                         return null;
                     }
+                    if (text.equals(".") || text.equals("..") || text.contains("/") || text.contains("\\")) {
+                        return "文件名不能包含路径分隔符";
+                    }
                     return new File(getCurrentDirectory(), text + suffix).exists()
                             ? getString(R.string.text_file_exists).toString() : null;
                 },
@@ -344,7 +349,7 @@ public class ScriptOperations {
                 (text, checked) -> {
                     input.onNext(text);
                     input.onComplete();
-                });
+                }, input::onComplete);
         return shown ? input : null;
     }
 
@@ -484,6 +489,8 @@ public class ScriptOperations {
         final boolean isDir = scriptFile.isDirectory();
         final File parent = scriptFile.getParentFile();
         final File scriptRoot = new File(Pref.getScriptDirPath());
+        final java.util.concurrent.atomic.AtomicBoolean recoverable =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
         Observable.fromCallable(() -> {
                     if (!scriptFile.exists()) {
                         return Boolean.TRUE;
@@ -496,6 +503,7 @@ public class ScriptOperations {
                             return Boolean.FALSE;
                         }
                         ScriptRepository.pruneBackups(scriptRoot);
+                        recoverable.set(!scriptFile.exists() && backup.exists());
                         return !scriptFile.exists() && backup.exists();
                     }
                     return ScriptRepository.deleteRecursively(scriptFile);
@@ -506,7 +514,8 @@ public class ScriptOperations {
                     if (deleted) notifyFileRemoved(isDir, scriptFile);
                     refreshDeletedParent(parent);
                     android.widget.Toast.makeText(mContext,
-                            (deleted ? "已删除（可在「最近删除」中恢复）：" : "删除失败（备份未成功，原文件已保留）：")
+                            (deleted ? (recoverable.get() ? "已删除（可在「最近删除」中恢复）：" : "已删除：")
+                                    : "删除未完成，请检查文件状态：")
                                     + scriptFile.getPath(),
                             android.widget.Toast.LENGTH_LONG).show();
                 }, error -> {
@@ -589,12 +598,10 @@ public class ScriptOperations {
         if (!(mContext instanceof Activity)) {
             return false;
         }
-        return MiuixFileChooserDialog.show((Activity) mContext,
-                getString(R.string.text_select_file_to_import).toString(),
+        return MiuixFileChooserDialog.showImport((Activity) mContext,
                 Environment.getExternalStorageDirectory().getPath(),
-                getString(R.string.ok).toString(),
-                getString(R.string.cancel).toString(),
-                path -> importFile(path).subscribe());
+                getCurrentDirectoryPath(),
+                path -> importFile(path).subscribe(ignored -> {}, error -> showMessage(R.string.text_import_fail)));
     }
 
     public void timedTask(ScriptFile scriptFile) {

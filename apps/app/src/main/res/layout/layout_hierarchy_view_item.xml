@@ -3,13 +3,14 @@
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="32dp"
-    android:padding="5dp">
+    android:layout_height="38dp"
+    android:padding="3dp">
 
     <com.jdkshen.aijspro.ui.widget.LevelBeamView
         android:id="@+id/dataItemLevelBeam"
         android:layout_width="wrap_content"
-        android:layout_height="32dp"/>
+        android:layout_height="30dp"
+        android:layout_centerVertical="true"/>
 
     <LinearLayout
         android:layout_width="wrap_content"
@@ -27,8 +28,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:maxLines="1"
+            android:ellipsize="end"
             android:textColor="@android:color/black"
-            android:textSize="16sp"
+            android:textSize="12sp"
             tools:text="TextView"/>
 
         <TextView
@@ -36,9 +38,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:maxLines="1"
+            android:ellipsize="end"
             android:textColor="@android:color/black"
-            android:textSize="12sp"
-            android:visibility="gone"/>
+            android:textSize="10sp"
+            android:visibility="visible"/>
     </LinearLayout>
 
     <ImageView

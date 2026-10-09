@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>共享截图与连续触控 | AI.js Pro</title>
+  <style>
+    body{max-width:850px;margin:auto;padding:20px;font:16px/1.65 system-ui,sans-serif;color:#263238;background:#fff}
+    a{color:#087f72}h1{font-size:26px}h2{font-size:22px;margin-top:30px}
+    code,pre{font-family:monospace;background:#f1f5f4}code{overflow-wrap:anywhere}
+    pre{padding:14px;overflow:auto;border-radius:8px}table{width:100%;border-collapse:collapse}
+    td,th{padding:9px;text-align:left;vertical-align:top;border-bottom:1px solid #ddd}
+    @media(prefers-color-scheme:dark){body{background:#161b1b;color:#e2e8e7}a{color:#71d7c7}code,pre{background:#252d2c}td,th{border-color:#3a4543}}
+  </style>
+</head>
+<body>
+<p><a href="index.html">文档首页</a> · <a href="images.html">图片与图色处理</a> · <a href="RootAutomator.html">Root 输入模拟</a></p>
+<h1>共享截图与连续触控</h1>
+<p>AI.js Pro 扩展 API，Rhino 和 QuickJS 均支持。已内置到引擎，无需外置 dex / so。</p>
+<h2 id="share">images.shareScreenCapture()</h2>
+<p>先成功申请截图权限，再调用本函数，返回字符串共享凭据。重复调用返回当前会话的同一凭据。</p>
+<pre>if (!images.requestScreenCapture()) throw new Error("未授权");
+var token = images.shareScreenCapture();
+var childSource = '// @engine quickjs\n' +
+    'images.useSharedScreenCapture(' + JSON.stringify(token) + ');\n' +
+    'var img = images.captureScreen();\n' +
+    'try { console.log(img.width, img.height); } finally { img.recycle(); }\n' +
+    'images.stopScreenCapture();';
+var child = engines.execScript("共享截图子引擎", childSource);</pre>
+<p>主引擎保持运行，直到子引擎执行 useSharedScreenCapture。完整的等待和收尾用法见内置“引擎共享截图”示例。</p>
+<h2 id="use">images.useSharedScreenCapture(token)</h2>
+<p>子引擎通过凭据连接已有截图会话，成功返回 true，无效或过期凭据抛错。子引擎无需重复请求授权；随后照常使用 images.captureScreen()。</p>
+<p>各引擎持有独立图片：一个引擎截图或回收不会影响其他引擎保留的图片。同一引擎再次截图仍遵循原来的自动回收上一张图片规则。</p>
+<h2 id="stop">images.stopScreenCapture()</h2>
+<p>共享时只释放当前引擎的引用。主引擎停止或退出后，已连接的子引擎仍能截图；最后一个参与引擎停止或退出时才释放系统截图会话。重复调用安全。</p>
+<p>普通同步截图与无障碍截图支持共享。async: true 和 mode: "auto" 暂不共享，会明确报错。凭据仅在当前应用进程内、会话仍存活时有效，不能保存后重新申请授权。系统撤销授权后 getScreenCaptureOptions() 返回 null。</p>
+<h2 id="create">touch.create(options)</h2>
+<p>也可使用 $touch.create(options)。backend 默认 root；可选 root、shizuku、adb。root 需要设备 Root 与 su 授权；shizuku / adb 需要运行中的 Shizuku 和应用授权。</p>
+<pre>var finger = touch.create({backend: "root"});
+try {
+    finger.down(0, 300, 500);
+    finger.move(0, 350, 550);
+    finger.up(0);
+} finally { finger.exit(); }</pre>
+<table>
+<thead><tr><th>会话 API</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td><code>down(id, x, y)</code></td><td>按下手指，参数顺序与 touch.zip 一样</td></tr>
+<tr><td><code>move(id, x, y)</code></td><td>移动已按下的手指</td></tr>
+<tr><td><code>up(id)</code></td><td>在该手指的最后坐标抬起</td></tr>
+<tr><td><code>pointerCount()</code></td><td>当前按下的手指数</td></tr>
+<tr><td><code>isAdb() / isClosed()</code></td><td>查看通道和关闭状态</td></tr>
+<tr><td><code>exit()</code></td><td>抬起全部手指并关闭，重复调用安全</td></tr>
+</tbody>
+</table>
+<p>root 最多跟踪 10 指，设备实际槽位数可能更少。Shizuku / adb 仅支持单指，第二指会明确报错。id 为 0～31；坐标是当前屏幕像素，必须为非负整数。先 down 再 move / up；重复 down 或未按下就 move / up 会报错。</p>
+<p>异常、脚本退出或停止时自动抬起未释放的手指。原 ZIP 的物理触摸监听请使用已有 events.observeTouch() / events.onTouch(...)，回调遵循 events 格式。此实现使用内置 RootAutomator2，不执行 ZIP 的全局 chmod 或 SELinux 设置。</p>
+<h2 id="samples">内置示例入口</h2>
+<ul>
+<li>示例 → Rhino 引擎 → 图片与图色处理 → 引擎共享截图</li>
+<li>示例 → QuickJS 新引擎 → 图色处理 → 引擎共享截图</li>
+<li>示例 → Rhino 引擎 / QuickJS 新引擎 → 触控 → Root 多点触控</li>
+<li>示例 → Rhino 引擎 / QuickJS 新引擎 → 触控 → Shizuku 单指触控</li>
+</ul>
+</body>
+</html>

@@ -116,6 +116,7 @@ public class BubblePopupMenu extends PopupWindow {
             if (y > screenHeight / 2) {
                 y -= contentHeight + height;
             }
+            y = Math.max(0, Math.min(y, screenHeight - height));
             super.showAtLocation(parent, Gravity.NO_GRAVITY, x, y);
             return;
         }
@@ -137,12 +138,15 @@ public class BubblePopupMenu extends PopupWindow {
             mRecyclerView.setRotation(0);
         }
         mLittleTriangle.setLayoutParams(params);
+        x = Math.max(0, Math.min(x, screenWidth - width));
+        y = Math.max(0, Math.min(y, screenHeight - height));
         super.showAtLocation(parent, Gravity.NO_GRAVITY, x, y);
     }
 
 
     public void preMeasure() {
-        getContentView().measure(getWidth(), getHeight());
+        getContentView().measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
     }
 
 

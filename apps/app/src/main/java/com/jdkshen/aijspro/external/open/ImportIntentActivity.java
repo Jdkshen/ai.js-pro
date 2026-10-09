@@ -1,10 +1,8 @@
 package com.jdkshen.aijspro.external.open;
 
 import android.content.Intent;
-import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
-import android.provider.OpenableColumns;
 import androidx.annotation.Nullable;
 import android.text.TextUtils;
 import android.webkit.MimeTypeMap;
@@ -49,12 +47,12 @@ public class ImportIntentActivity extends BaseActivity {
     }
 
     private void handleIntent(Intent intent) throws FileNotFoundException {
-        Uri uri = intent.getData();
+        Uri uri = ExternalFileIntents.getFileUri(intent);
         if (uri == null) {
             throw new FileNotFoundException("Missing import URI");
         }
         if ("content".equals(uri.getScheme())) {
-            String displayName = queryDisplayName(uri);
+            String displayName = ExternalFileIntents.displayName(this, uri);
             String ext = PFiles.getExtension(displayName);
             if (TextUtils.isEmpty(ext)) {
                 ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(
@@ -76,22 +74,11 @@ public class ImportIntentActivity extends BaseActivity {
         }
     }
 
-    private String queryDisplayName(Uri uri) {
-        try (Cursor cursor = getContentResolver().query(uri,
-                new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-            if (cursor != null && cursor.moveToFirst()) {
-                int column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                if (column >= 0) return cursor.getString(column);
-            }
-        }
-        return "";
-    }
-
     private void subscribeImport(Observable<?> operation) {
         mDisposables.add(operation.subscribe(ignored -> finish(), error -> {
             Toast.makeText(this, R.string.edit_and_run_handle_intent_error, Toast.LENGTH_LONG).show();
             finish();
-        }));
+        }, this::finish));
     }
 
     @Override

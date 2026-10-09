@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A solid stop button stays readable over arbitrary app content. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#66FFFFFF">
+    <item>
+        <inset android:inset="3dp">
+            <shape android:shape="oval">
+                <solid android:color="#D9423D"/>
+            </shape>
+        </inset>
+    </item>
+</ripple>

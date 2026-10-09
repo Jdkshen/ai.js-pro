@@ -6,7 +6,15 @@
               android:background="?selectableItemBackground"
               android:clickable="true"
               android:orientation="horizontal"
-              android:padding="8dp">
+              android:padding="4dp">
+
+    <CheckBox
+        android:id="@+id/node_property_check"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:layout_gravity="center_vertical"
+        android:buttonTint="#198b64"
+        android:contentDescription="选择定位属性" />
 
     <TextView
         android:id="@+id/name"

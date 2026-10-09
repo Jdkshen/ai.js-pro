@@ -10,6 +10,13 @@ def releaseSigningValues = [
 ]
 def releaseSigningReady = releaseSigningValues.values().every { it != null && !it.trim().isEmpty() }
 
+// VS Code「Auto.js Pro 扩展」的 USB 自动发现要求本应用声明一个与真 Auto.js Pro
+// 相同 authority 的 provider（org.autojs.autojspro.debug.provider），代价是：
+// 同机安装了真 Auto.js Pro 的设备无法安装/更新本应用（INSTALL_FAILED_CONFLICTING_PROVIDER）。
+// 需要避开冲突时用 -PdevPluginUsbDiscovery=false 构建（只去掉 provider；
+// 扩展里「输入设备IP地址」的 LAN 连接路径不受影响）。
+def devPluginUsbDiscovery = findProperty('devPluginUsbDiscovery') != 'false'
+
 android {
     namespace 'com.jdkshen.aijspro'
     compileSdkVersion versions.compile
@@ -32,7 +39,6 @@ android {
             }
         }
     }
-    sourceSets.main.assets.srcDir(file("$buildDir/generated/pikafish-assets"))
     signingConfigs {
         if (releaseSigningReady) {
             release {
@@ -119,11 +125,46 @@ android {
     }
 }
 
-// The NNUE weight is kept outside Git (third-party/Pikafish ignores *.nnue), but a local
-// arm64 APK must carry it so the thread control does not silently run the JS fallback.
+// 打包运行时模板已随「APK 打包插件」（plugins/apkbuilder-plugin）分发：
+// 宿主 APK 不再包含 assets/template.apk，所以这里也不再需要依赖 :inrt:buildApkPlugin
+// （模板的刷新改由那个插件模块的 mergeAssets 触发，见它的 build.gradle）。
+
+// With -PdevPluginUsbDiscovery=false a manifest overlay removes the debug-server
+// provider through the merger (tools:node="remove"). Manifest source directories
+// cannot be task outputs, so the tiny overlay is written at configuration time.
+if (!devPluginUsbDiscovery) {
+    def devPluginOverlayDir = layout.buildDirectory.dir('generated/devplugin-no-usb').get().asFile
+    devPluginOverlayDir.mkdirs()
+    new File(devPluginOverlayDir, 'AndroidManifest.xml').setText('''<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <provider
+            android:name=".pluginclient.DebugServerProvider"
+            tools:node="remove"/>
+    </application>
+</manifest>
+''', 'UTF-8')
+    androidComponents {
+        onVariants(selector().all()) { variant ->
+            variant.sources.manifests?.addStaticManifestFile(
+                    new File(devPluginOverlayDir, 'AndroidManifest.xml').absolutePath)
+        }
+    }
+}
+
+// Pikafish NNUE 权重（50MB）不再随宿主包分发：用象棋就走「象棋引擎插件」
+// （plugins/xiangqi-plugin，自带权重），或者自己把 pikafish.nnue 放到
+// files/、externalFiles/、/sdcard/xiangqi-p4/ 下。
+// 开发时想验证「宿主自带权重」这条老路，加 -PwithPikafishNnue=true。
 def pikafishNnueFile = rootProject.file('third-party/Pikafish/src/pikafish.nnue')
 def pikafishAssetsDir = file("$buildDir/generated/pikafish-assets")
-def stagePikafishNnue = tasks.register('stagePikafishNnue', Sync) {
+def bundlePikafishNnue = project.hasProperty('withPikafishNnue')
+if (bundlePikafishNnue) {
+    sourceSets.main.assets.srcDir(pikafishAssetsDir)
+}
+tasks.register('stagePikafishNnue', Sync) {
+    onlyIf { bundlePikafishNnue }
     from({ pikafishNnueFile.isFile() ? [pikafishNnueFile] : [] })
     into(pikafishAssetsDir)
     doLast {
@@ -133,7 +174,16 @@ def stagePikafishNnue = tasks.register('stagePikafishNnue', Sync) {
     }
 }
 tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
-    dependsOn(stagePikafishNnue)
+    dependsOn(tasks.named('stagePikafishNnue'))
+}
+
+// 随包字体是 ImGui 会用到的码位的子集（完整字体在 third-party/fonts）。
+// 生成工具同时负责校验：ImGui 范围一变、或子集漏字，这里就会红。
+tasks.register('verifyImGuiFontSubset', Exec) {
+    group = 'verification'
+    description = 'Ensure the bundled ImGui CJK font still covers every glyph ImGui can ask for.'
+    workingDir rootProject.projectDir
+    commandLine 'python', rootProject.file('tools/imgui-font-subset.py').absolutePath, '--check'
 }
 
 
@@ -239,6 +289,18 @@ dependencies {
 def bundledSampleDir = file('src/main/assets/sample')
 def bundledQuickJsSampleDir = file('src/main/assets/sample/QuickJS 新引擎')
 def bundledYoloSampleDir = file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测')
+
+// 象棋工程源码的版本指纹：project.json 是唯一版本源，清单里是逐文件 SHA-256。
+// 工程本身不随宿主 APK 打包（宿主带的是 plugins/xiangqi-plugin），
+// 这里生成清单是为了让插件构建与发布校验都能核对「打出去的那份工程代码 = 源码」。
+tasks.register('prepareXiangqiRelease', Exec) {
+    group = 'build'
+    workingDir rootProject.projectDir
+    commandLine 'python', rootProject.file('tools/xiangqi-release.py').absolutePath, 'prepare'
+}
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn tasks.named('prepareXiangqiRelease')
+}
 
 tasks.register('verifyBundledSamplesNoNode') {
     group = 'verification'
@@ -347,6 +409,8 @@ def quickJsNativeSources = [
         'quickjs_jni.cpp',
         'native_frame_store.cpp',
         'native_frame_store.h',
+        'xiangqi_board_detector.cpp',
+        'xiangqi_board_detector.h',
         'script_crypto.c',
         'ppocr/ppocr_jni.cpp',
         'ppocr/ppocr_engine.cpp',
@@ -385,11 +449,13 @@ tasks.register('verifyQuickJsNativeLibrariesFresh') {
 }
 
 tasks.matching { it.name == 'preBuild' }.configureEach {
+    dependsOn tasks.named('prepareXiangqiRelease')
     dependsOn tasks.named('verifyBundledSamplesNoNode')
     dependsOn tasks.named('verifyBundledYoloSamples')
     dependsOn tasks.named('verifyQuickJsSamplesMarked')
     dependsOn tasks.named('verifyBundledFindImageAssets')
     dependsOn tasks.named('verifyQuickJsNativeLibrariesFresh')
+    dependsOn tasks.named('verifyImGuiFontSubset')
 }
 
 tasks.register('verifyReleaseConfiguration') {

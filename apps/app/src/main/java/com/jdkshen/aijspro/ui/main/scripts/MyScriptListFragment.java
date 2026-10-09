@@ -116,11 +116,7 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
             }
         });
         mExplorerView.setOnItemClickListener((view, item) -> {
-            if (item.isEditable()) {
-                Scripts.INSTANCE.edit(getActivity(), item.toScriptFile());
-            } else {
-                IntentUtil.viewFile(GlobalAppContext.get(), item.getPath(), AppFileProvider.AUTHORITY);
-            }
+            com.jdkshen.aijspro.ui.common.FileOpenRouter.open(getActivity(), item);
         });
     }
 

@@ -14,6 +14,7 @@ import com.jdkshen.aijspro.autojs.build.ApkBuilder;
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper;
 
 import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.io.File;
@@ -33,7 +34,7 @@ import static org.junit.Assert.assertTrue;
  * （{@code adb exec-out run-as com.jdkshen.aijspro cat files/dsh-phone-client-quickjs.apk}
  * 拉出来做最终装机验证）。
  *
- * <p>打包走的是真实 ApkBuilder + 内置 template.apk，和打包页同一条链路；
+ * <p>打包走的是真实 ApkBuilder + 「APK 打包插件」里的运行时模板，和打包页同一条链路；
  * 不依赖网络，只验证「示例还能被正确打成 App」这条回归。</p>
  */
 public class DshClientSamplePackagingTest {
@@ -91,6 +92,19 @@ public class DshClientSamplePackagingTest {
 
     private static File testScriptDir() {
         return new File(Environment.getExternalStorageDirectory(), TEST_SCRIPT_DIR_NAME);
+    }
+
+    /**
+     * 打包模板（~43MB）现在随「APK 打包插件」分发，主程序不再带 assets/template.apk。
+     * 测试机装了插件、或手动放了 /sdcard/template.apk 才跑；否则跳过并说明原因。
+     */
+    @Before
+    public void requirePackagingTemplate() {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        org.junit.Assume.assumeTrue(
+                "打包模板不在位：安装 apkbuilder-plugin，或把 template.apk 放到 "
+                        + ApkBuilderPluginHelper.manualTemplateFile().getPath(),
+                ApkBuilderPluginHelper.isTemplateAvailable(context));
     }
 
     @After

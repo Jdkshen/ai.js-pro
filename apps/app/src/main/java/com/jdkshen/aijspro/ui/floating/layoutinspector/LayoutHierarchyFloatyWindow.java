@@ -1,134 +1,53 @@
 package com.jdkshen.aijspro.ui.floating.layoutinspector;
 
-import android.content.Context;
-import android.view.ContextThemeWrapper;
-import android.view.KeyEvent;
 import android.view.View;
-import android.view.ViewGroup;
-
-import com.afollestad.materialdialogs.MaterialDialog;
-import com.afollestad.materialdialogs.Theme;
-import com.stardust.app.DialogUtils;
-import com.stardust.enhancedfloaty.FloatyService;
-import com.jdkshen.aijspro.R;
-import com.jdkshen.aijspro.ui.codegeneration.CodeGenerateDialog;
-import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
-import com.jdkshen.aijspro.ui.floating.FullScreenFloatyWindow;
-
+import android.widget.HorizontalScrollView;
+import android.widget.FrameLayout;
+import android.graphics.Paint;
 import com.stardust.view.accessibility.NodeInfo;
-import com.jdkshen.aijspro.ui.widget.BubblePopupMenu;
 
-import java.util.Arrays;
-
-/**
- * Created by Stardust on 2017/3/12.
- */
-
-public class LayoutHierarchyFloatyWindow extends FullScreenFloatyWindow {
-
-    private static final String TAG = "FloatingHierarchyView";
-    private static final int COLOR_SHADOW = 0xddffffff;
-
-    private LayoutHierarchyView mLayoutHierarchyView;
-    private MaterialDialog mNodeInfoDialog;
-    private BubblePopupMenu mBubblePopMenu;
-    private NodeInfoView mNodeInfoView;
-    private Context mContext;
-    private NodeInfo mRootNode;
-    private NodeInfo mSelectedNode;
-
-    public LayoutHierarchyFloatyWindow(NodeInfo rootNode) {
-        mRootNode = rootNode;
-    }
-
-    @Override
-    protected View onCreateView(FloatyService floatyService) {
-        mContext = new ContextThemeWrapper(floatyService, R.style.AppTheme);
-        mLayoutHierarchyView = new LayoutHierarchyView(mContext) {
-            @Override
-            public boolean dispatchKeyEvent(KeyEvent event) {
-                if (event.getKeyCode() == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) {
-                    close();
-                    return true;
-                }
-                return super.dispatchKeyEvent(event);
-            }
-        };
-        return mLayoutHierarchyView;
-    }
-
-    @Override
-    protected void onViewCreated(View v) {
-        mLayoutHierarchyView.setBackgroundColor(COLOR_SHADOW);
-        mLayoutHierarchyView.setShowClickedNodeBounds(true);
-        mLayoutHierarchyView.getBoundsPaint().setStrokeWidth(3);
-        mLayoutHierarchyView.getBoundsPaint().setColor(0xFFD32F2F);
-        mLayoutHierarchyView.setOnItemLongClickListener((view, nodeInfo) -> {
-            mSelectedNode = nodeInfo;
-            ensureOperationPopMenu();
-            if (mBubblePopMenu.getContentView().getMeasuredWidth() <= 0)
-                mBubblePopMenu.preMeasure();
-            mBubblePopMenu.showAsDropDown(view, view.getWidth() / 2 - mBubblePopMenu.getContentView().getMeasuredWidth() / 2, 0);
+public class LayoutHierarchyFloatyWindow extends InspectorFloatyWindow {
+    private LayoutHierarchyView tree;
+    private HorizontalScrollView scroll;
+    public LayoutHierarchyFloatyWindow(NodeInfo root) { super(root, true); }
+    LayoutHierarchyFloatyWindow(InspectorSession session) { super(session, true); }
+    @Override View createInspectorView() {
+        tree = new LayoutHierarchyView(context);
+        tree.setBackgroundColor(0xddffffff);
+        tree.setShowClickedNodeBounds(true);
+        tree.setClickedColor(0xffd7eaff);
+        tree.getBoundsPaint().setStrokeWidth(3);
+        tree.getBoundsPaint().setColor(0xffd32f2f);
+        tree.setOnNodeSelectedListener(this::selectionChanged);
+        tree.setOnItemLongClickListener((view, node) -> {
+            tree.setSelectedNode(node);
+            selectedByTouch(node, view);
         });
-        mLayoutHierarchyView.setRootNode(mRootNode);
-        if (mSelectedNode != null)
-            mLayoutHierarchyView.setSelectedNode(mSelectedNode);
+        scroll = new HorizontalScrollView(context);
+        scroll.setFillViewport(true);
+        int width = treeWidth();
+        tree.setMinimumWidth(width);
+        scroll.addView(tree, new FrameLayout.LayoutParams(width, -1));
+        scroll.setOnScrollChangeListener((view, x, y, oldX, oldY) -> tree.invalidate());
+        return scroll;
     }
-
-    private void ensureOperationPopMenu() {
-        if (mBubblePopMenu != null)
-            return;
-        mBubblePopMenu = new BubblePopupMenu(mContext, Arrays.asList(
-                mContext.getString(R.string.text_show_widget_infomation),
-                mContext.getString(R.string.text_show_layout_bounds),
-                mContext.getString(R.string.text_generate_code)));
-        mBubblePopMenu.setOnItemClickListener((view, position) -> {
-            mBubblePopMenu.dismiss();
-            if (position == 0) {
-                showNodeInfo();
-            } else if (position == 1) {
-                showLayoutBounds();
-            } else {
-                generateCode();
-            }
-        });
-        mBubblePopMenu.setWidth(ViewGroup.LayoutParams.WRAP_CONTENT);
-        mBubblePopMenu.setHeight(ViewGroup.LayoutParams.WRAP_CONTENT);
-    }
-
-    private void generateCode() {
-        DialogUtils.showDialog(new CodeGenerateDialog(mContext, mRootNode, mSelectedNode)
-                .build());
-    }
-
-    private void showLayoutBounds() {
-        close();
-        LayoutBoundsFloatyWindow window = new LayoutBoundsFloatyWindow(mRootNode);
-        window.setSelectedNode(mSelectedNode);
-        FloatyService.addWindow(window);
-    }
-
-
-    void showNodeInfo() {
-        ensureNodeInfoDialog();
-        mNodeInfoView.setNodeInfo(mSelectedNode);
-        mNodeInfoDialog.show();
-    }
-
-    private void ensureNodeInfoDialog() {
-        if (mNodeInfoDialog == null) {
-            mNodeInfoView = new NodeInfoView(mContext);
-            mNodeInfoDialog = new MaterialDialog.Builder(mContext)
-                    .customView(mNodeInfoView, false)
-                    .theme(Theme.LIGHT)
-                    .build();
-            if (mNodeInfoDialog.getWindow() != null)
-                mNodeInfoDialog.getWindow().setType(FloatyWindowManger.getWindowType());
+    private int treeWidth() {
+        android.util.DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        float width = metrics.widthPixels;
+        Paint paint = new Paint();
+        for (NodeInfo node : session.nodes) {
+            paint.setTextSize(12 * metrics.scaledDensity);
+            float text = paint.measureText(node.getClassName() == null ? "" : node.getClassName());
+            paint.setTextSize(10 * metrics.scaledDensity);
+            text = Math.max(text, paint.measureText(LayoutHierarchyView.rowDetail(node)));
+            width = Math.max(width, text + (32 + (Math.max(0, node.getDepth()) + 1) * 8) * metrics.density);
         }
+        return Math.min(Math.round(1600 * metrics.density), (int) Math.ceil(width));
     }
-
-
-    public void setSelectedNode(NodeInfo selectedNode) {
-        mSelectedNode = selectedNode;
+    @Override void renderRoot() {
+        int width = treeWidth(); tree.setMinimumWidth(width);
+        tree.setLayoutParams(new FrameLayout.LayoutParams(width, -1));
+        tree.setRootNode(session.root); if (session.selected != null) tree.setSelectedNode(session.selected);
     }
+    @Override void renderSelection(NodeInfo node) { tree.setSelectedNode(node); }
 }

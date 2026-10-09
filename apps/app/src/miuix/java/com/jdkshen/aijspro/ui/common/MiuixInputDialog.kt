@@ -56,6 +56,17 @@ object MiuixInputDialog {
         cancelText: String,
         onConfirm: Confirmer
     ): Boolean {
+        return showWithCancel(activity, title, placeholder, initialText, checkBoxText, initialChecked,
+            validate, confirmText, cancelText, onConfirm, null)
+    }
+
+    @JvmStatic
+    fun showWithCancel(
+        activity: Activity?, title: String, placeholder: String, initialText: String,
+        checkBoxText: String?, initialChecked: Boolean, validate: Validator?,
+        confirmText: String, cancelText: String, onConfirm: Confirmer, onCancelled: Runnable?
+    ): Boolean {
+        var confirmed = false
         val dialog = MiuixDialogHost.showCard(activity) { dlg ->
             var text by remember { mutableStateOf(TextFieldValue(initialText)) }
             var checked by remember { mutableStateOf(initialChecked) }
@@ -101,6 +112,7 @@ object MiuixInputDialog {
                                 else MiuixTheme.colorScheme.primary.copy(alpha = 0.35f)
                             )
                             .clickable(enabled = enabled) {
+                                confirmed = true
                                 onConfirm.onConfirm(text.text, checked)
                                 dlg.dismiss()
                             }
@@ -116,6 +128,7 @@ object MiuixInputDialog {
                 }
             }
         }
+        dialog?.setOnDismissListener { if (!confirmed) onCancelled?.run() }
         return dialog != null
     }
 }

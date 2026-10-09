@@ -77,6 +77,17 @@ public class VersionService {
     }
 
     public Observable<VersionInfo> checkForUpdates() {
+        return checkAccelerated()
+                .onErrorResumeNext((Throwable error) -> checkGitHubDirect())
+                .subscribeOn(Schedulers.io());
+    }
+
+    Observable<VersionInfo> checkAccelerated() {
+        return Observable.fromCallable(() -> fromManifest(
+                readText(GitHubUpdateProxy.UPDATE_SOURCE), GitHubUpdateProxy.UPDATE_SOURCE));
+    }
+
+    Observable<VersionInfo> checkGitHubDirect() {
         return mRetrofit.create(UpdateCheckApi.class)
                 .listReleases()
                 .map(VersionService::fromGitHubReleases)
@@ -91,7 +102,7 @@ public class VersionService {
                 .subscribeOn(Schedulers.io());
     }
 
-    /** 自建更新源（{@code update.json}）的网址；留空表示用内置的 GitHub Releases。 */
+    /** 自建更新源（{@code update.json}）的网址；留空表示用内置 GitHub 加速源。 */
     public static String updateSourceUrl(Context context) {
         try {
             String value = Pref.getPrefString(context.getString(R.string.key_update_source_url), "");
@@ -104,11 +115,11 @@ public class VersionService {
 
     /**
      * 检查更新：配了自建更新源就走自建源（可以放局域网或自己的服务器，不依赖 GitHub），
-     * 否则走内置的 GitHub Releases。
+     * 否则先走内置 GitHub 加速源，失败后直连 GitHub Releases。
      */
     public Observable<VersionInfo> checkForUpdates(Context context) {
         final String source = updateSourceUrl(context);
-        if (isEmpty(source)) {
+        if (isEmpty(source) || GitHubUpdateProxy.isDefaultProxySource(source)) {
             return checkForUpdates();
         }
         return Observable.fromCallable(() -> fromManifest(readText(source), source))
@@ -122,7 +133,9 @@ public class VersionService {
 
     /** 读一个文本资源（更新源 JSON），带超时与明确的错误信息。 */
     static String readText(String url) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection connection = (HttpURLConnection) new URL(
+                GitHubUpdateProxy.manifestRequestUrl(url, System.currentTimeMillis())).openConnection();
+        connection.setUseCaches(false);
         connection.setConnectTimeout(15000);
         connection.setReadTimeout(15000);
         connection.setRequestProperty("Accept", "application/json");
@@ -398,6 +411,9 @@ public class VersionService {
         if (name == null) return false;
         String lower = name.toLowerCase(Locale.ROOT);
         if (!lower.endsWith(".apk")) return false;
+        // 插件 APK（apkbuilder-plugin.apk 等）与主程序更新同目录发布，但它们不是主程序安装包，
+        // 绝不能出现在「可选安装包」列表里。
+        if (lower.contains("plugin")) return false;
         if (compat && lower.contains("lite")) return false;
         if (!compat && lower.contains("compat")) return false;
 

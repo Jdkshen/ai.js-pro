@@ -10,6 +10,7 @@
     <item name="accessibility_service" type="id"/>
     <item name="layout_bounds" type="id"/>
     <item name="layout_hierarchy" type="id"/>
+    <item name="layout_diagnostics" type="id"/>
     <item name="pointer_location" type="id"/>
     <item name="disable_pointer_location" type="id"/>
     <!-- 悬浮菜单「退出悬浮窗」的 item id：以前借用 fragment_drawer.xml 里的 exit，

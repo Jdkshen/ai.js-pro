@@ -54,6 +54,8 @@ class App : MultiDexApplication() {
         // MCP 自动启停：跟随前台服务状态自动起停内置的 MCP HTTP 服务。
         // miuix 源集已随 flavor 退役成为唯一界面线，这里直接引用，不再走反射探测。
         registerActivityLifecycleCallbacks(com.jdkshen.aijspro.mcp.McpAutoLifecycle(this))
+        // 「Pro 扩展调试服务器」开关持久化：上次开着的话，回到前台自动拉起（以前每次重启 App 都要手动重点一次）。
+        registerActivityLifecycleCallbacks(com.jdkshen.aijspro.pluginclient.DevPluginAutoStart(this))
         // 「外部 Intent 跑脚本」断点续跑：进程被系统杀掉后服务会把进程拉起来，
         // 但脚本不会自己跑（面板窗口消失）——这里补上自动重拉，见 ExternalRunResume。
         com.jdkshen.aijspro.external.ExternalRunResume.resumeIfNeeded(this)

@@ -74,6 +74,9 @@
       <div id="toc">
         <h2>目录</h2>
         <ul>
+<li><span class="stability_undefined"><a href="#images_matchsift">images.matchSift(scene, template[, options])</a></span></li>
+<li><span class="stability_undefined"><a href="#images_createsiftmatcher">images.createSiftMatcher(template[, options])</a></span></li>
+
 <li><span class="stability_2"><a href="#images_colors">colors</a></span><ul>
 <li><span class="stability_undefined"><a href="#images_colors_tostring_color">colors.toString(color)</a></span></li>
 <li><span class="stability_undefined"><a href="#images_colors_red_color">colors.red(color)</a></span></li>
@@ -170,6 +173,8 @@
       </div>
 
       <div id="apicontent">
+<p><a href="touch-and-shared-capture.html#share">新增：跨引擎共享截图授权 API 与示例</a></p>
+<p><a href="window-capture-imgui.html">新增：指定窗口截图 API 与 ImGui 透明绘制</a></p>
         <h1>colors<span><a class="mark" href="#images_colors" id="images_colors">#</a></span></h1>
 <div class="api_stability api_stability_2"><a href="documentation.html#documentation_stability_index">Stability: 2</a> - Stable</div><p>在AI.js Pro有两种方式表示一个颜色。</p>
 <p>一种是使用一个字符串&quot;#AARRGGBB&quot;或&quot;#RRGGBB&quot;，其中 AA 是Alpha通道(透明度)的值，RR 是R通道(红色)的值，GG 是G通道(绿色)的值，BB是B通道(蓝色)的值。例如&quot;#ffffff&quot;表示白色, &quot;#7F000000&quot;表示半透明的黑色。</p>
@@ -919,6 +924,32 @@ log(result.sortBy(&quot;top-right&quot;));
 <p>横坐标。</p>
 <h2>Point.y<span><a class="mark" href="#images_point_y" id="images_point_y">#</a></span></h2>
 <p>纵坐标。</p>
+
+<h2 id="images_matchsift">images.matchSift(scene, template[, options])</h2>
+<p>QuickJS、Rhino 共用真实 SIFT + FLANN + RANSAC。scene、template 支持本地路径或图片对象；没有可靠匹配返回 null，错误路径、参数、写图失败抛错。传入图片仍由调用者回收。</p>
+<pre><code>var result = images.matchSift('./大图.png', './小图.png');
+if (result) console.log(result.centerX, result.centerY);</code></pre>
+<p>结果包括 centerX/centerY、center、四角及 corners、angles、matchCount（可靠内点）、candidateCount、sceneFeatureCount、templateFeatureCount、method: 'SIFT'、searchMode（full/region/tracked）和 elapsedMs。坐标已还原到场景原图，包含区域偏移和缩放舍入。elapsedMs 不包含模板准备；总耗时使用 Date.now() 测量。</p>
+<p>完整匹配流程运行于 C++。QuickJS 直接借用原生帧，Rhino 借用 Mat，调用期间保持图像存活。结果新增 backend:'cpp'、inputMode（frame/mat/path）、templatePrepareMs 和 timings：inputMs（读取/借用图像，不含截图）、featureMs、flannMs、geometryMs、drawMs。模板准备只发生在创建时，不计入每帧 timings。</p>
+<p>fast 默认 false；开启后在大区域先按请求 scale 的2/3搜索，至少8个可靠内点才接受，失败再按请求 scale 搜索。较小目标可能回退并增加一次尝试。reuseScene 默认 true，实际缩放灰度像素逐字节相同且特征参数一致时复用场景特征和 FLANN 索引；false 强制重算。缓存不直接返回旧坐标，阈值及几何验证仍执行。每个 matcher 只保留最近一次数据，回收时释放。结果新增 featureCacheHit、indexCacheHit、searchScale、searchPasses、timings.cacheCheckMs（独立于 featureMs）。静止画面缓存速度不能代表每帧变化的速度。</p>
+<h2 id="images_createsiftmatcher">images.createSiftMatcher(template[, options])</h2>
+<p>缓存模板特征，重复匹配时仅在场景灰度或特征参数变化后计算场景特征。模板源图片可在创建后回收。在循环外创建 matcher，循环内调用 match(frame[, options])，最后 recycle() 或 close()；允许重复回收，脚本退出也会清理。</p>
+<pre><code>var matcher = images.createSiftMatcher('./小图.png', {fast: true, track: true, scale: 0.5});
+try {
+    var result = matcher.match(frame);
+} finally {
+    matcher.recycle();
+}</code></pre>
+<p>track 默认 false；开启后优先搜索上次位置，局部失败后全图搜索，尺寸变化时重新全图搜索。padding≥16时搜索框向外对齐16像素以减少亚像素抖动导致的缓存失效。显式 region 优先。实时截图传图片对象可避免重复解码；省略 drawMatches 可减少绘图写盘。</p>
+<ul>
+<li>scale：场景缩放0.1～4；搜索区域超过100万像素默认0.5，否则1。templateScale：模板缩放，默认1，缓存创建时确定。</li>
+<li>region：[x,y,width,height]，原图内整数区域。trackPadding：跟踪区域扩展原图像素，默认64，范围0～2048。</li>
+<li>maxFeatures / templateMaxFeatures：特征上限0～10000，默认0不限制；过低可能漏匹配。模板上限在创建时确定。</li>
+<li>threshold：Lowe距离比率，默认0.7，范围0.01～0.99，不是相似度。minMatches：可靠内点，默认6、至少4，跟踪局部至少8。</li>
+<li>ransacThreshold：默认3，单位为缩放后场景像素。minAngle / maxAngle：默认30° / 150°。</li>
+<li>drawMatches：调试图输出路径，默认不输出，未匹配时不写图。grayscale：默认false，true输出灰度调试图；SIFT始终计算灰度特征。</li>
+</ul>
+<p>matcher.match 的搜索参数覆盖创建参数；templatePrepareMs 返回一次性模板准备耗时，templateFeatureCount 返回缓存特征数，isRecycled() 查询回收状态。旧 detectAndComputeFeatures()/matchFeatures() 保留兼容后端。真实 SIFT 使用本节新 API；features 已在 arm64-v8a 发布包验证。</p>
 
       </div>
     </div>

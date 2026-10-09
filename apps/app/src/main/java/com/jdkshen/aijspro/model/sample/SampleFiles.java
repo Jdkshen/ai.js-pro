@@ -38,13 +38,14 @@ public final class SampleFiles {
      * 运行/导入时单个子目录超过这个大小就不跟着拷（防止把超大的模型库整个搬进 cacheDir）。
      *
      * <p>⚠️ 别调小：8 MB 曾经把**工程自己要用的模型**也挡在门外 ——
-     * 「象棋自动走棋」的 {@code assets/models/chessai_160x320_v5r.onnx} 是 9.2 MB、
+     * 「象棋自动走棋」的 {@code assets/models/chessai_160x320_v5r.onnx} 是 9.2 MB
+     * （该工程现已移出 APK、随象棋插件分发，这里保留它作为当初调大上限的原因）、
      * 「YOLO目标检测/DNN/models」是 9.3 MB，两个整棵目录都被跳过，
      * 而工程是「磁盘优先、{@code asset://} 兜底」的读法（且兜底那条路径拼不出正确的 asset 名），
      * 脚本侧只看得到 {@code IllegalArgumentException: 无法读取 YOLO labels: …/assets/models/xxx.txt}，
      * 完全看不出是拷贝阶段丢的文件。
      *
-     * <p>16 MB = 覆盖当前随包的两个模型目录，同时仍然挡住 ≥16 MB 的模型库
+     * <p>16 MB = 覆盖当前随包/示例里的模型目录，同时仍然挡住 ≥16 MB 的模型库
      * （原先注释里提到的 18.8 MB 那份）。
      *
      * <p>⚠️ 调用方请一律用这个常量（曾经 {@code MiuixResourceFragment} 自己硬编码了一份 8 MB，

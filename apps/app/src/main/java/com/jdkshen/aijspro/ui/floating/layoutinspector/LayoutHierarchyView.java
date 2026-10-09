@@ -43,6 +43,8 @@ public class LayoutHierarchyView extends MultiLevelListView {
 
     private Adapter mAdapter;
     private OnItemLongClickListener mOnItemLongClickListener;
+    private java.util.function.Consumer<NodeInfo> mOnNodeSelected;
+    public void setOnNodeSelectedListener(java.util.function.Consumer<NodeInfo> listener) { mOnNodeSelected = listener; }
     private AdapterView.OnItemLongClickListener mOnItemLongClickListenerProxy = new AdapterView.OnItemLongClickListener() {
         @Override
         public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
@@ -112,13 +114,8 @@ public class LayoutHierarchyView extends MultiLevelListView {
 
     private void setClickedItem(View view, NodeInfo item) {
         mClickedNodeInfo = item;
-        if (mClickedView == null) {
-            mOriginalBackground = view.getBackground();
-        } else {
-            mClickedView.setBackground(mOriginalBackground);
-        }
-        view.setBackgroundColor(mClickedColor);
-        mClickedView = view;
+        mAdapter.notifyDataSetChanged();
+        if (mOnNodeSelected != null) mOnNodeSelected.accept(item);
         invalidate();
     }
 
@@ -139,33 +136,69 @@ public class LayoutHierarchyView extends MultiLevelListView {
         mRootNode = rootNodeInfo;
         mAdapter.setDataItems(Collections.singletonList(rootNodeInfo));
         mClickedNodeInfo = null;
+        mClickedView = null;
         mInitiallyExpandedNodes.clear();
+        invalidate();
     }
 
     public void setOnItemLongClickListener(final OnItemLongClickListener onNodeInfoSelectListener) {
         mOnItemLongClickListener = onNodeInfoSelectListener;
     }
 
+    @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        // HorizontalScrollView gives an unspecified width. Measure the ListView against the
+        // intended canvas width on the first pass instead of leaving its sole child at zero.
+        if (View.MeasureSpec.getMode(widthMeasureSpec) == View.MeasureSpec.UNSPECIFIED)
+            widthMeasureSpec = View.MeasureSpec.makeMeasureSpec(getMinimumWidth(), View.MeasureSpec.EXACTLY);
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        if (mBoundsInScreen == null) {
-            mBoundsInScreen = new int[4];
-            getLocationOnScreen(mBoundsInScreen);
-            mStatusBarHeight = mBoundsInScreen[1];
-        }
+        if (mBoundsInScreen == null) mBoundsInScreen = new int[4];
+        getLocationOnScreen(mBoundsInScreen);
+        mStatusBarHeight = mBoundsInScreen[1];
         if (mShowClickedNodeBounds && mClickedNodeInfo != null) {
+            canvas.save(); canvas.translate(-mBoundsInScreen[0], 0);
             LayoutBoundsView.drawRect(canvas, mClickedNodeInfo.getBoundsInScreen(), mStatusBarHeight, mPaint);
+            canvas.restore();
         }
     }
 
     public void setSelectedNode(NodeInfo selectedNode) {
+        if (selectedNode == null) {
+            mClickedNodeInfo = null; mClickedView = null;
+            mAdapter.notifyDataSetChanged(); invalidate(); return;
+        }
         mInitiallyExpandedNodes.clear();
         Stack<NodeInfo> parents = new Stack<>();
-        searchNodeParents(selectedNode, mRootNode, parents);
-        mClickedNodeInfo = parents.peek();
+        NodeInfo ancestor = selectedNode;
+        while (ancestor != null) {
+            parents.push(ancestor);
+            if (ancestor == mRootNode) break;
+            ancestor = ancestor.getParent();
+        }
+        if (ancestor != mRootNode) return;
+        mClickedNodeInfo = selectedNode;
         mInitiallyExpandedNodes.addAll(parents);
         mAdapter.reloadData();
+        invalidate();
+        // The adapter expands all ancestors; bring the selected row into view after layout.
+        post(() -> {
+            ListView list = (ListView) getChildAt(0);
+            int position = mAdapter.indexOfObject(selectedNode);
+            if (position >= 0) list.setSelection(position);
+        });
+    }
+
+    static String rowDetail(NodeInfo node) {
+        String detail = "[" + node.getIndexInParent() + "] depth=" + node.getDepth();
+        if (node.getFullId() != null) detail += " id=" + node.getFullId();
+        if (!node.getText().isEmpty()) detail += " text=" + node.getText().replace('\n', ' ');
+        if (node.getDesc() != null && !node.getDesc().isEmpty()) detail += " desc=" + node.getDesc().replace('\n', ' ');
+        detail += " clickable=" + node.getClickable() + " bounds=" + node.getBounds();
+        return detail;
     }
 
     private boolean searchNodeParents(NodeInfo nodeInfo, NodeInfo rootNode, Stack<NodeInfo> stack) {
@@ -232,10 +265,10 @@ public class LayoutHierarchyView extends MultiLevelListView {
                 viewHolder = (ViewHolder) convertView.getTag();
             }
 
-            viewHolder.nameView.setText(simplifyClassName(nodeInfo.getClassName()));
+            viewHolder.nameView.setText(nodeInfo.getClassName());
+            viewHolder.nameView.setTextColor(nodeInfo.getChildren().isEmpty() ? Color.DKGRAY : 0xffa63333);
             viewHolder.nodeInfo = nodeInfo;
-            if (viewHolder.infoView.getVisibility() == VISIBLE)
-                viewHolder.infoView.setText(getItemInfoDsc(itemInfo));
+            viewHolder.infoView.setText(rowDetail(nodeInfo));
 
             if (itemInfo.isExpandable() && !isAlwaysExpanded()) {
                 viewHolder.arrowView.setVisibility(View.VISIBLE);
@@ -246,10 +279,9 @@ public class LayoutHierarchyView extends MultiLevelListView {
             }
 
             viewHolder.levelBeamView.setLevel(itemInfo.getLevel());
+            viewHolder.levelBeamView.setCompact(true);
 
-            if (nodeInfo == mClickedNodeInfo) {
-                setClickedItem(convertView, nodeInfo);
-            }
+            convertView.setBackgroundColor(nodeInfo == mClickedNodeInfo ? mClickedColor : Color.TRANSPARENT);
             return convertView;
         }
 

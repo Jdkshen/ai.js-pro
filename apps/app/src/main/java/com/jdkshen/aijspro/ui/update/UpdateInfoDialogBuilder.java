@@ -22,6 +22,7 @@ import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
 import com.jdkshen.aijspro.network.download.DownloadManager;
+import com.jdkshen.aijspro.network.GitHubUpdateProxy;
 import com.jdkshen.aijspro.network.entity.VersionInfo;
 import com.jdkshen.aijspro.tool.IntentTool;
 import com.jdkshen.aijspro.ui.widget.CommonMarkdownView;
@@ -48,23 +49,44 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
     public UpdateInfoDialogBuilder(@NonNull Context context, VersionInfo info) {
         super(context);
         mSharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
-        updateInfo(info);
+        // 不要在这里构建自定义视图：CommonMarkdownView 内部是 WebView，首次构造要初始化
+        // Chromium，耗时可到秒级。而 VersionGuard 在主界面每次 onResume 都会 new 本 Builder，
+        // show() 里又可能因「不再提示」或走 Miuix(Compose) 路径直接跳过 —— 构造阶段先建
+        // WebView 会白白堵死主线程（实测脚本结束返回主界面时 Skipped 366 帧）。
+        // 视图改为 show() 确认需要走 Material 路径时再惰性构建（见 buildView()）。
+        mVersionInfo = info;
     }
 
+    /** 立即构建/重建自定义视图（保留旧行为，供需要即时取视图的调用方使用）。 */
     public UpdateInfoDialogBuilder updateInfo(VersionInfo info) {
         mVersionInfo = info;
-        mView = View.inflate(context, R.layout.dialog_update_info, null);
-        setReleaseNotes(mView, info);
-        setUpdateHistory(mView, info);
-        setCurrentVersionIssues(mView, info);
-        setUpdateDownloadButtons(mView, info);
-        title(context.getString(R.string.text_new_version) + " " + info.versionName);
-        customView(mView, false);
+        buildView();
         return this;
+    }
+
+    /** 只在确定要显示 Material 对话框时才构建视图（含 WebView）。 */
+    private void buildView() {
+        mView = View.inflate(context, R.layout.dialog_update_info, null);
+        setReleaseNotes(mView, mVersionInfo);
+        setUpdateHistory(mView, mVersionInfo);
+        setCurrentVersionIssues(mView, mVersionInfo);
+        setUpdateDownloadButtons(mView, mVersionInfo);
+        title(context.getString(R.string.text_new_version) + " " + mVersionInfo.versionName);
+        customView(mView, false);
+        if (mShowDoNotAskAgain) {
+            applyDoNotAskAgain();
+        }
     }
 
     public UpdateInfoDialogBuilder showDoNotAskAgain() {
         mShowDoNotAskAgain = true;
+        if (mView != null) {
+            applyDoNotAskAgain();
+        }
+        return this;
+    }
+
+    private void applyDoNotAskAgain() {
         mView.findViewById(R.id.do_not_ask_again_container).setVisibility(View.VISIBLE);
         CheckBox checkBox = (CheckBox) mView.findViewById(R.id.do_not_ask_again);
         checkBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
@@ -73,7 +95,6 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
                 mSharedPreferences.edit().putBoolean(KEY_DO_NOT_ASK_AGAIN_FOR_VERSION + mVersionInfo.versionCode, isChecked).apply();
             }
         });
-        return this;
     }
 
     @Override
@@ -83,6 +104,9 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
         }
         if (showWithMiuix()) {
             return null;
+        }
+        if (mView == null) {
+            buildView();
         }
         return super.show();
     }
@@ -153,7 +177,8 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
     private void directlyDownload(VersionInfo info) {
         final File updateDirectory = new File(getContext().getCacheDir(), "updates");
         final String path = new File(updateDirectory, "AI-js-Pro.apk").getPath();
-        DownloadManager.getInstance().downloadWithProgress(getContext(), info.downloadUrl, path)
+        GitHubUpdateProxy.downloadWithFallback(info.downloadUrl,
+                        url -> DownloadManager.getInstance().downloadWithProgress(getContext(), url, path))
                 .subscribeOn(AndroidSchedulers.mainThread())
                 .flatMap(file -> Observable.fromCallable(() -> UpdatePackageVerifier.verify(
                                 getContext().getApplicationContext(), file, info.versionCode,
@@ -195,6 +220,22 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
         toggle.setText(label + "  ·  " + context.getString(R.string.text_expand));
         toggle.setVisibility(View.VISIBLE);
         container.setVisibility(View.GONE);
+        // 历史更新默认收起，而每条说明都是一个 CommonMarkdownView（WebView）：全部预建
+        // 会让对话框打开时连续构造多个 WebView，历史越多卡得越久。改为展开时才构建。
+        final boolean[] built = {false};
+        toggle.setOnClickListener(v -> {
+            boolean expanded = container.getVisibility() != View.VISIBLE;
+            if (expanded && !built[0]) {
+                built[0] = true;
+                buildUpdateHistoryViews(container, history);
+            }
+            container.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            toggle.setText(label + "  ·  " + context.getString(
+                    expanded ? R.string.text_collapse : R.string.text_expand));
+        });
+    }
+
+    private void buildUpdateHistoryViews(LinearLayout container, List<VersionInfo.OldVersion> history) {
         int padding = (int) (8 * context.getResources().getDisplayMetrics().density);
         for (VersionInfo.OldVersion entry : history) {
             TextView header = new TextView(context);
@@ -208,11 +249,5 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
                 container.addView(notes);
             }
         }
-        toggle.setOnClickListener(v -> {
-            boolean expanded = container.getVisibility() != View.VISIBLE;
-            container.setVisibility(expanded ? View.VISIBLE : View.GONE);
-            toggle.setText(label + "  ·  " + context.getString(
-                    expanded ? R.string.text_collapse : R.string.text_expand));
-        });
     }
 }

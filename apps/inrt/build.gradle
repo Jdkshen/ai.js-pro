@@ -61,12 +61,16 @@ android {
 }
 
 task buildApkPlugin {
+    dependsOn 'packageRelease'
+    inputs.file('build/outputs/apk/release/inrt-arm64-v8a-release-unsigned.apk')
+    outputs.file(rootProject.file('plugins/apkbuilder-plugin/src/main/assets/template.apk'))
     doLast {
-        // The main app now carries an arm64 template so APK packaging works without the
-        // legacy external plugin. ApkBuilder rewrites and signs this unsigned template.
+        // 运行时模板现在随「APK 打包插件」分发（宿主 APK 不再带这 43MB）：
+        // 打包插件模块的 assets/template.apk 就是这份 arm64 未签名产物，
+        // ApkBuilder 会重写它再签名。改 :inrt 后编译插件即可刷新模板。
         copy {
             from file('build/outputs/apk/release')
-            into rootProject.file('apps/app/src/main/assets')
+            into rootProject.file('plugins/apkbuilder-plugin/src/main/assets')
             include 'inrt-arm64-v8a-release-unsigned.apk'
             rename 'inrt-arm64-v8a-release-unsigned.apk', 'template.apk'
         }

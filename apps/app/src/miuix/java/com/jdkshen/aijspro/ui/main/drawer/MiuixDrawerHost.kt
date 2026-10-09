@@ -141,6 +141,7 @@ object MiuixDrawerHost {
         val nightMode = remember { mutableStateOf(host.isNightModePrefEnabled) }
         val followSystem = remember { mutableStateOf(host.isFollowSystemEnabled) }
         val connected = remember { mutableStateOf(host.isRemoteConnected) }
+        val debugServer = remember { mutableStateOf(host.isDevPluginServerRunning) }
         val mcpRunning = remember(rev) { McpService.running }
         val moreOpen = remember { mutableStateOf(false) }
         val themeOpen = remember { mutableStateOf(true) }
@@ -156,6 +157,7 @@ object MiuixDrawerHost {
             nightMode.value = host.isNightModePrefEnabled
             followSystem.value = host.isFollowSystemEnabled
             connected.value = host.isRemoteConnected
+            debugServer.value = host.isDevPluginServerRunning
         }
 
         Column(
@@ -232,10 +234,17 @@ object MiuixDrawerHost {
 
                 SmallTitle("开发")
                 Card(Modifier.fillMaxWidth()) {
-                    SuperArrow(title = "开发者调试", summary = "连接电脑上的开发者插件",
+                    SuperArrow(title = "开发者调试", summary = "连接电脑上旧版开发者插件",
                         rightText = if (connected.value) "已连接" else "未连接",
                         onClick = {
                             if (connected.value) host.disconnectRemote() else host.openRemoteConnection()
+                        })
+                    SuperSwitch(title = "Pro 扩展服务器",
+                        summary = host.devPluginServerSummary,
+                        checked = debugServer.value,
+                        onCheckedChange = {
+                            debugServer.value = it
+                            host.setDevPluginServerEnabled(it)
                         })
                     SuperArrow(title = "MCP 服务", summary = "让 AI 连接脚本开发与调试工具",
                         rightText = if (mcpRunning) "运行中" else "已停止",

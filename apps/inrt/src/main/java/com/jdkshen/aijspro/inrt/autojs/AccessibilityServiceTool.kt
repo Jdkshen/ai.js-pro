@@ -39,9 +39,8 @@ object AccessibilityServiceTool {
     }
 
     fun enableAccessibilityServiceByRootAndWaitFor(context: Context, timeOut: Long): Boolean {
-        if (enableAccessibilityServiceByRoot(context, com.stardust.view.accessibility.AccessibilityService::class.java)) {
-            com.stardust.view.accessibility.AccessibilityService.waitForEnabled(timeOut)
-            return true
+        if (enableAccessibilityServiceByRoot(context, com.google.android.accessibility.selecttospeak.SelectToSpeakService::class.java)) {
+            return com.stardust.view.accessibility.AccessibilityService.waitForEnabled(timeOut)
         }
         return false
     }

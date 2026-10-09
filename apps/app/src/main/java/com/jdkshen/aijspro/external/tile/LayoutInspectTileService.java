@@ -18,6 +18,7 @@ import com.jdkshen.aijspro.autojs.AutoJs;
 import com.jdkshen.aijspro.tool.AccessibilityServiceTool;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 import com.jdkshen.aijspro.ui.floating.FullScreenFloatyWindow;
+import com.jdkshen.aijspro.ui.floating.layoutinspector.LayoutInspectorDiagnostics;
 
 @RequiresApi(api = Build.VERSION_CODES.N)
 public abstract class LayoutInspectTileService extends TileService implements LayoutInspector.CaptureAvailableListener {
@@ -58,15 +59,17 @@ public abstract class LayoutInspectTileService extends TileService implements La
             Log.w(getClass().getName(), "System did not allow collapsing quick settings", error);
         }
         if (AccessibilityService.Companion.getInstance() == null) {
-            Toast.makeText(this, R.string.text_no_accessibility_permission_to_capture, Toast.LENGTH_SHORT).show();
-            AccessibilityServiceTool.goToAccessibilitySetting();
+            AutoJs.getInstance().getLayoutInspector().captureCurrentWindow();
+            LayoutInspectorDiagnostics.show(this, AutoJs.getInstance().getLayoutInspector());
             inactive();
             return;
         }
         mCapturing = true;
-        GlobalAppContext.postDelayed(() ->
-                        AutoJs.getInstance().getLayoutInspector().captureCurrentWindow()
-                , 1000);
+        GlobalAppContext.postDelayed(() -> {
+            if (!AutoJs.getInstance().getLayoutInspector().captureCurrentWindow()) {
+                onCaptureAvailable(null);
+            }
+        }, 1000);
     }
 
     protected void inactive() {
@@ -85,6 +88,11 @@ public abstract class LayoutInspectTileService extends TileService implements La
         }
         mCapturing = false;
         GlobalAppContext.post(() -> {
+            if (capture == null) {
+                LayoutInspectorDiagnostics.show(this, AutoJs.getInstance().getLayoutInspector());
+                inactive();
+                return;
+            }
             FullScreenFloatyWindow window = onCreateWindow(capture);
             if (!FloatyWindowManger.addWindow(getApplicationContext(), window)) {
                 inactive();

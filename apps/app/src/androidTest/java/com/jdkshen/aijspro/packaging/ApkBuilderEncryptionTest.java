@@ -33,6 +33,7 @@ import com.stardust.util.MD5;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.io.File;
@@ -113,6 +114,20 @@ public class ApkBuilderEncryptionTest {
 
     private static File testScriptDir() {
         return new File(Environment.getExternalStorageDirectory(), TEST_SCRIPT_DIR_NAME);
+    }
+
+    /**
+     * 打包模板（~43MB）现在随「APK 打包插件」分发，主程序不再带 assets/template.apk。
+     * 测试机装了插件、或手动放了 /sdcard/template.apk 才跑；否则跳过并说明原因，
+     * 不让「没装插件」表现成一堆看不懂的打包异常。
+     */
+    @Before
+    public void requirePackagingTemplate() {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        org.junit.Assume.assumeTrue(
+                "打包模板不在位：安装 apkbuilder-plugin，或把 template.apk 放到 "
+                        + ApkBuilderPluginHelper.manualTemplateFile().getPath(),
+                ApkBuilderPluginHelper.isTemplateAvailable(context));
     }
 
     @After
@@ -283,9 +298,44 @@ public class ApkBuilderEncryptionTest {
         assertArrayEquals("launcher icon must be the user icon",
                 readBytes(iconFile), packagedIcon);
 
+        // Single scripts must never inherit the template's demo assets or project metadata.
+        try (ZipFile apk = new ZipFile(outApk)) {
+            assertNull("template artwork must not leak into output", apk.getEntry("assets/project/auto.js.png"));
+            java.util.Set<String> projectFiles = new java.util.HashSet<>();
+            Enumeration<? extends ZipEntry> entries = apk.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                if (!entry.isDirectory() && entry.getName().startsWith("assets/project/")) {
+                    projectFiles.add(entry.getName());
+                }
+            }
+            assertEquals(new java.util.HashSet<>(Arrays.asList("assets/project/main.js",
+                    "assets/project/project.json", "assets/project/splash.png")), projectFiles);
+        }
+        archiveInfo.applicationInfo.sourceDir = outApk.getPath();
+        archiveInfo.applicationInfo.publicSourceDir = outApk.getPath();
+        android.content.res.Resources resources = context.getPackageManager()
+                .getResourcesForApplication(archiveInfo.applicationInfo);
+        int layoutId = resources.getIdentifier("activity_splash", "layout", "com.jdkshen.aijspro.inrt");
+        try (android.content.res.XmlResourceParser layout = resources.getLayout(layoutId)) {
+            boolean found = false;
+            while (layout.next() != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                if (layout.getEventType() == org.xmlpull.v1.XmlPullParser.START_TAG
+                        && "ImageView".equals(layout.getName())) {
+                    assertEquals("splash fallback must follow the packaged application icon",
+                            archiveInfo.applicationInfo.icon,
+                            layout.getAttributeResourceValue("http://schemas.android.com/apk/res/android", "src", 0));
+                    found = true;
+                }
+            }
+            assertTrue(found);
+        }
+
         // 8) 特性开关：引擎写入 project.json，无障碍服务从清单移除，图库从产物删除。
         assertEquals("quickjs", json.getString("engine"));
         assertFalse("accessibility service must be dropped from the manifest",
+                hasService(archiveInfo, "com.google.android.accessibility.selecttospeak.SelectToSpeakService"));
+        assertFalse("legacy accessibility service must be dropped from old templates",
                 hasService(archiveInfo, "com.stardust.autojs.core.accessibility.AccessibilityService"));
         assertTrue("unrelated services must stay",
                 hasService(archiveInfo, "com.stardust.notification.NotificationListenerService"));
@@ -293,6 +343,61 @@ public class ApkBuilderEncryptionTest {
                 readZipEntry(outApk, "libopencv_", ".so"));
         assertNotNull("quickjs libraries must stay",
                 readZipEntry(outApk, "libquickjs", ".so"));
+    }
+
+    @Test
+    public void projectRelativeIconAndOwnArtworkSurviveTemplateCleanup() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+        File workDir = new File(context.getCacheDir(), "packaging-branding-project");
+        deleteRecursively(workDir);
+        File project = new File(workDir, "source");
+        File resources = new File(project, "res");
+        assertTrue(resources.mkdirs());
+        File icon = new File(resources, "chosen.png");
+        writePng(icon, 0xFF428877);
+        writeText(new File(project, "main.js"), "console.log('project branding');");
+        // A user's own similarly named file must survive: clean before copying, never by blacklist.
+        File ownArtwork = new File(project, "auto.js.png");
+        writePng(ownArtwork, 0xFF885511);
+        com.stardust.autojs.project.ProjectConfig config = new com.stardust.autojs.project.ProjectConfig()
+                .setName("BrandingProbe").setPackageName("com.example.brandingprobe")
+                .setVersionName("1.0").setVersionCode(1).setMainScriptFile("main.js");
+        config.setIcon("res/chosen.png");
+        writeText(new File(project, "project.json"), config.toJson());
+        File workspace = new File(workDir, "workspace");
+        File stale = new File(workspace, "assets/project/stale-demo/nested.png");
+        assertTrue(stale.getParentFile().mkdirs());
+        writePng(stale, 0xFF112233);
+        File out = new File(workDir, "project.apk");
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), out, workspace.getPath())
+                .prepare().withConfig(ApkBuilder.AppConfig.fromProjectConfig(project.getPath(), config))
+                .build().sign();
+        try (ZipFile apk = new ZipFile(out)) {
+            assertNull(apk.getEntry("assets/project/stale-demo/nested.png"));
+            assertArrayEquals(readBytes(ownArtwork), readZipEntry(out, "assets/project/auto.js", ".png"));
+            assertArrayEquals(readBytes(icon), readZipEntry(out, "ic_launcher", ".png"));
+            assertNotNull(apk.getEntry("assets/project/res/chosen.png"));
+        }
+        builder.cleanWorkspace();
+    }
+
+    @Test
+    public void missingProjectIconFailsInsteadOfSilentlyKeepingTemplateIcon() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File workDir = new File(context.getCacheDir(), "packaging-missing-icon");
+        deleteRecursively(workDir);
+        assertTrue(workDir.mkdirs());
+        File out = new File(workDir, "out.apk");
+        ApkBuilder builder = new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), out,
+                new File(workDir, "workspace").getPath()).prepare();
+        try {
+            builder.withConfig(new ApkBuilder.AppConfig().setIcon(new File(workDir, "missing.png").getPath()))
+                    .build();
+            fail("Invalid icon must be reported before generating an APK");
+        } catch (com.stardust.pio.UncheckedIOException expected) {
+            assertFalse(out.exists());
+        } finally { builder.cleanWorkspace(); }
     }
 
     /**
@@ -895,6 +1000,208 @@ public class ApkBuilderEncryptionTest {
     }
 
     /**
+     * 打包必须保留入口脚本的执行模式（`"ui";` → 加密头 flags 低字节 bit0）。
+     *
+     * <p>回归来源（2026-09-29 K40 真机）：旧打包器只写「载荷类型」、不写执行模式，
+     * 产物里的 main.js 于是被当成**普通脚本**跑 —— runtime 的 UI 分支不触发，
+     * `ui.layout` 落成系统悬浮窗：全屏、吞返回键、Home 回桌面后还盖在最上面
+     * （用户口径「界面固定了、返回不了桌面」）。
+     * 这里把「加密（assets 存放）」与「快照 so（编译 + native 存放）」两种形态都钉住：
+     * flags 低字节必须带 [EncryptedScriptFileHeader.FLAG_EXECUTION_MODE_UI]。
+     */
+    @Test
+    public void uiModeSurvivesPackaging() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-ui-mode-test");
+        deleteRecursively(workDir);
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "ui-mode-encrypted.apk");
+        File script = new File(workDir, "probe.js");
+        //noinspection ResultOfMethodCallIgnored
+        workDir.mkdirs();
+        String source = "// @engine quickjs\n\"ui\";\nconsole.log('UI_MODE_PROBE');\n";
+        writeText(script, source);
+
+        // ---- ① 加密（assets 存放）：flags 低字节 = 执行模式，载荷类型 0 ----
+        ApkBuilder.AppConfig encrypted = new ApkBuilder.AppConfig()
+                .setAppName("UiModeProbe")
+                .setPackageName("com.example.uimodeprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("quickjs")
+                .setEncryptLevel(ScriptProtection.LEVEL_ENCRYPT);
+        new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                outApk, workspace.getPath()).prepare().withConfig(encrypted).build().sign();
+
+        byte[] packaged = readBytes(new File(workspace, "assets/project/main.js"));
+        assertTrue("加密档产物应当带加密头", EncryptedScriptFileHeader.INSTANCE.isValidFile(packaged));
+        assertEquals("加密档的产物必须保留 \"ui\" 执行模式",
+                (int) EncryptedScriptFileHeader.FLAG_EXECUTION_MODE_UI,
+                (int) (EncryptedScriptFileHeader.INSTANCE.readFlags(packaged) & 0xFF));
+
+        // ---- ② 快照 so（编译 + native 存放）：低字节同样必须带 UI 位 ----
+        File nativeWorkDir = new File(context.getCacheDir(), "apk-builder-ui-mode-native-test");
+        deleteRecursively(nativeWorkDir);
+        File nativeWorkspace = new File(nativeWorkDir, "workspace");
+        File nativeApk = new File(nativeWorkDir, "ui-mode-native.apk");
+        //noinspection ResultOfMethodCallIgnored
+        nativeWorkDir.mkdirs();
+
+        ApkBuilder.AppConfig nativeCompiled = new ApkBuilder.AppConfig()
+                .setAppName("UiModeNativeProbe")
+                .setPackageName("com.example.uimodenativeprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(script.getAbsolutePath())
+                .setEngine("quickjs")
+                .setEncryptLevel(ScriptProtection.LEVEL_COMPILE)
+                .setScriptStorage(ScriptProtection.STORAGE_NATIVE);
+        new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context),
+                nativeApk, nativeWorkspace.getPath()).prepare().withConfig(nativeCompiled).build().sign();
+
+        assertFalse("native 存放不该在工作区留脚本文件",
+                new File(nativeWorkspace, "assets/project/main.js").exists());
+        byte[] library = readZipEntry(nativeApk, "libaijscrypto", ".so");
+        assertNotNull("产物里必须有解密库", library);
+        byte[] payload = EmbeddedScriptFooter.payloadOf(library);
+        assertNotNull("原生库尾部必须能读回脚本载荷", payload);
+        short flags = EncryptedScriptFileHeader.INSTANCE.readFlags(payload);
+        assertEquals("「快照 so」档的产物必须保留 \"ui\" 执行模式（2026-09-29 真机回归）",
+                (int) EncryptedScriptFileHeader.FLAG_EXECUTION_MODE_UI,
+                (int) (flags & 0xFF));
+        assertEquals("载荷类型仍然必须是 QuickJS 字节码",
+                EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE,
+                EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(flags));
+
+        copyToSharedStorage(context, outApk, "aijs-ui-mode-probe.apk");
+        copyToSharedStorage(context, nativeApk, "aijs-ui-mode-native-probe.apk");
+    }
+
+    /**
+     * 目录工程：除入口脚本外的所有 .js 必须收进加密容器（{@code scripts.pack}），
+     * 解包产物里不该再有任何可读脚本——这是 2026-09-29「打包后仍能在 APK 里看到
+     * 上百个明文 js」缺口的回归用例。
+     */
+    @Test
+    public void directoryProjectScriptsGoIntoEncryptedContainer() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        isolateScriptDir(context);
+
+        File workDir = new File(context.getCacheDir(), "apk-builder-script-pack-test");
+        deleteRecursively(workDir);
+        File project = new File(workDir, "source");
+        File srcDir = new File(project, "src");
+        File chineseDir = new File(project, "中文 目录");
+        assertTrue(srcDir.mkdirs());
+        assertTrue(chineseDir.mkdirs());
+        // 入口脚本跑起来会 require 模块并把结果写进私有目录（端到端验证用）。
+        String mainSource = "console.log('DIR_PACK_MAIN');\n"
+                + "var m = require('./src/mod.js');\n"
+                + "files.write(files.cwd() + '/dir-pack-ran.txt', 'DIR_PACK_OK ' + m);\n";
+        String moduleSource = "module.exports = 42;\n";
+        String chineseSource = "console.log('中文脚本');\n";
+        writeText(new File(project, "main.js"), mainSource);
+        writeText(new File(srcDir, "mod.js"), moduleSource);
+        writeText(new File(chineseDir, "工具.js"), chineseSource);
+        writeText(new File(project, "data.json"), "{\"keep\":true}");
+
+        // ---- ① 加密（assets 存放）：入口文件保留，其余脚本全进容器 ----
+        File workspace = new File(workDir, "workspace");
+        File outApk = new File(workDir, "dir-pack-encrypted.apk");
+        ApkBuilder.AppConfig encrypted = new ApkBuilder.AppConfig()
+                .setAppName("DirPackProbe")
+                .setPackageName("com.example.dirpackprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(project.getAbsolutePath())
+                .setEngine("quickjs")
+                .setHideLogs(true)
+                .setEncryptLevel(ScriptProtection.LEVEL_ENCRYPT);
+        new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), outApk, workspace.getPath())
+                .prepare().withConfig(encrypted).build().sign();
+
+        File projectDir = new File(workspace, "assets/project");
+        assertFalse("模块脚本不该留在工作区", new File(projectDir, "src/mod.js").exists());
+        assertFalse("中文名脚本同样要进容器", new File(projectDir, "中文 目录/工具.js").exists());
+        assertTrue("容器必须写进工作区",
+                new File(projectDir, ScriptProtection.SCRIPT_PACK_FILE).exists());
+        assertTrue("数据文件保持原样", new File(projectDir, "data.json").exists());
+        assertTrue("入口脚本仍是带加密头的文件",
+                EncryptedScriptFileHeader.INSTANCE.isValidFile(
+                        readBytes(new File(projectDir, "main.js"))));
+
+        JSONObject json = new JSONObject(readText(new File(projectDir, "project.json")));
+        byte[] pack = readBytes(new File(projectDir, ScriptProtection.SCRIPT_PACK_FILE));
+        short packFlags = EncryptedScriptFileHeader.INSTANCE.readFlags(pack);
+        assertEquals("容器载荷类型必须是 SCRIPT_PACK",
+                EncryptedScriptFileHeader.PAYLOAD_TYPE_SCRIPT_PACK,
+                EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(packFlags));
+        byte[] archive = decryptPackagedScript(json, pack);
+        assertNativeDecryptionMatches(json, pack);
+        java.util.Map<String, String> packed = unzipText(archive);
+        assertEquals(2, packed.size());
+        assertEquals(moduleSource, packed.get("src/mod.js"));
+        assertEquals(chineseSource, packed.get("中文 目录/工具.js"));
+
+        // 产物里除入口外不允许再出现 .js 条目，且容器必然在产物里。
+        try (ZipFile apk = new ZipFile(outApk)) {
+            Enumeration<? extends ZipEntry> entries = apk.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (entry.isDirectory() || !name.startsWith("assets/project/")
+                        || !name.endsWith(".js")) {
+                    continue;
+                }
+                assertEquals("除入口外的 js 都该进容器，got " + name,
+                        "assets/project/main.js", name);
+            }
+            assertNotNull("容器要出现在产物里",
+                    apk.getEntry("assets/project/" + ScriptProtection.SCRIPT_PACK_FILE));
+        }
+        copyToSharedStorage(context, outApk, "aijs-dir-pack-probe.apk");
+
+        // ---- ② 快照 so（编译 + native 存放）：产物里一个 .js 都不该有 ----
+        File nativeWorkDir = new File(context.getCacheDir(), "apk-builder-script-pack-native-test");
+        deleteRecursively(nativeWorkDir);
+        File nativeWorkspace = new File(nativeWorkDir, "workspace");
+        File nativeApk = new File(nativeWorkDir, "dir-pack-native.apk");
+        //noinspection ResultOfMethodCallIgnored
+        nativeWorkDir.mkdirs();
+        ApkBuilder.AppConfig nativeCompiled = new ApkBuilder.AppConfig()
+                .setAppName("DirPackNativeProbe")
+                .setPackageName("com.example.dirpacknativeprobe")
+                .setVersionName("1.0.0")
+                .setVersionCode(1)
+                .setSourcePath(project.getAbsolutePath())
+                .setEngine("quickjs")
+                .setHideLogs(true)
+                .setEncryptLevel(ScriptProtection.LEVEL_COMPILE)
+                .setScriptStorage(ScriptProtection.STORAGE_NATIVE);
+        new ApkBuilder(ApkBuilderPluginHelper.openTemplateApk(context), nativeApk,
+                nativeWorkspace.getPath()).prepare().withConfig(nativeCompiled).build().sign();
+
+        try (ZipFile apk = new ZipFile(nativeApk)) {
+            Enumeration<? extends ZipEntry> entries = apk.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                if (!entry.isDirectory() && entry.getName().startsWith("assets/project/")
+                        && entry.getName().endsWith(".js")) {
+                    fail("「快照 so」的目录工程产物里不该有脚本文件，got " + entry.getName());
+                }
+            }
+            assertNotNull("容器要出现在产物里",
+                    apk.getEntry("assets/project/" + ScriptProtection.SCRIPT_PACK_FILE));
+            assertNotNull("入口仍然嵌在原生库里",
+                    readZipEntry(nativeApk, "libaijscrypto", ".so"));
+        }
+        copyToSharedStorage(context, nativeApk, "aijs-dir-pack-native-probe.apk");
+    }
+
+    /**
      * 「加密 so」：加密载荷嵌进产物里各个 ABI 的原生库尾部，产物里一个脚本文件都没有。
      *
      * <p>这是对齐「脚本藏进 so」的关键用例：解包 APK 只能看到原生库，脚本在 ELF 段的后面，
@@ -1276,6 +1583,28 @@ public class ApkBuilderEncryptionTest {
             in.close();
         }
         return out.toByteArray();
+    }
+
+    /** 解开脚本容器的 zip：条目名 → UTF-8 文本（逐条读完，不关闭外层流）。 */
+    private static java.util.Map<String, String> unzipText(byte[] archive) throws Exception {
+        java.util.Map<String, String> files = new java.util.HashMap<>();
+        java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(
+                new java.io.ByteArrayInputStream(archive));
+        try {
+            java.util.zip.ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = zip.read(buffer)) >= 0) {
+                    out.write(buffer, 0, read);
+                }
+                files.put(entry.getName(), new String(out.toByteArray(), "UTF-8"));
+            }
+        } finally {
+            zip.close();
+        }
+        return files;
     }
 
     private static void deleteRecursively(File file) {

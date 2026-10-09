@@ -16,7 +16,14 @@ import java.util.Set;
 public class ExplorerFileItem implements ExplorerItem {
 
     private static final Set<String> sEditableFileExts = new HashSet<>(Arrays.asList(
-            "js", "java", "xml", "json", "txt", "log", "ts", "md", "markdown"
+            "js", "auto", "mjs", "cjs", "jsx", "ts", "tsx", "java", "kt", "kts",
+            "xml", "json", "jsonc", "txt", "log", "md", "markdown", "yaml", "yml",
+            "toml", "ini", "properties", "cfg", "conf", "gradle", "sh", "py", "csv",
+            "css", "scss", "html", "htm", "svg"
+    ));
+    private static final Set<String> sEditableFileNames = new HashSet<>(Arrays.asList(
+            ".gitignore", ".gitattributes", ".editorconfig", ".env",
+            "dockerfile", "makefile", "license", "readme", "gradlew"
     ));
 
     private PFile mFile;
@@ -99,9 +106,16 @@ public class ExplorerFileItem implements ExplorerItem {
         return extension != null && sEditableFileExts.contains(extension.toLowerCase(java.util.Locale.ROOT));
     }
 
+    public static boolean isEditableFileName(String name) {
+        if (name == null) return false;
+        if (sEditableFileNames.contains(name.toLowerCase(java.util.Locale.ROOT))) return true;
+        int dot = name.lastIndexOf('.');
+        return dot >= 0 && isEditableExtension(name.substring(dot + 1));
+    }
+
     @Override
     public boolean isEditable() {
-        return isEditableExtension(getType());
+        return isEditableFileName(getName());
     }
 
     @Override
