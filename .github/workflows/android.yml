@@ -38,6 +38,7 @@ jobs:
             :app:lintMiuixCompatDebug \
             :app:assembleMiuixCompatDebug \
             :app:assembleMiuixLiteDebug \
+            :apkbuilder-plugin:assembleDebug \
             --no-daemon
 
       - name: Upload debug APKs
@@ -99,7 +100,16 @@ jobs:
           ./gradlew \
             :app:assembleMiuixCompatRelease \
             :app:assembleMiuixLiteRelease \
+            :apkbuilder-plugin:assembleRelease \
             --no-daemon
+
+      - name: Collect the packaging plugin APK
+        shell: bash
+        run: |
+          # 打包页按固定文件名 apkbuilder-plugin.apk 从 releases/latest/download 取它
+          # （见 apps/app/.../network/PluginDownloads.java），所以这里必须改名。
+          mkdir -p dist
+          cp plugins/apkbuilder-plugin/build/outputs/apk/release/*.apk dist/apkbuilder-plugin.apk
 
       - name: Generate checksums
         shell: bash
@@ -109,6 +119,7 @@ jobs:
                -maxdepth 1 -type f -name '*.apk' -print0 \
             | sort -z \
             | xargs -0 sha256sum > AI-js-Pro-SHA256SUMS.txt
+          sha256sum dist/apkbuilder-plugin.apk >> AI-js-Pro-SHA256SUMS.txt
 
       - name: Publish GitHub Release
         shell: bash
@@ -118,6 +129,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             apps/app/build/outputs/apk/miuixCompat/release/*.apk \
             apps/app/build/outputs/apk/miuixLite/release/*.apk \
+            dist/apkbuilder-plugin.apk \
             AI-js-Pro-SHA256SUMS.txt \
             --verify-tag \
             --generate-notes \
