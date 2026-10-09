@@ -1,6 +1,8 @@
 rootProject.name = 'ai-js-pro'
 
 include ':app', ':automator', ':common', ':engine', ':rhino-language', ':engine-rhino', ':inrt'
+include ':xiangqi-plugin'
+include ':apkbuilder-plugin'
 include ':enhancedfloaty'
 include ':mutabletheme'
 include ':multilevellistview'
@@ -11,6 +13,8 @@ include ':apkbuilder'
 
 project(':app').projectDir = new File(rootProject.projectDir, 'apps/app')
 project(':inrt').projectDir = new File(rootProject.projectDir, 'apps/inrt')
+project(':xiangqi-plugin').projectDir = new File(rootProject.projectDir, 'plugins/xiangqi-plugin')
+project(':apkbuilder-plugin').projectDir = new File(rootProject.projectDir, 'plugins/apkbuilder-plugin')
 project(':engine').projectDir = new File(rootProject.projectDir, 'modules/engine')
 project(':engine-rhino').projectDir = new File(rootProject.projectDir, 'modules/engine-rhino')
 project(':rhino-language').projectDir = new File(rootProject.projectDir, 'modules/rhino-language')

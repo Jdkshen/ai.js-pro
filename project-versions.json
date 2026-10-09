@@ -1,6 +1,10 @@
 {
   "appVersionCode": 465,
   "appVersionName": "1.0.2",
+  "xiangqiPluginVersionCode": 1,
+  "xiangqiPluginVersionName": "1.0.0",
+  "apkBuilderPluginVersionCode": 1,
+  "apkBuilderPluginVersionName": "1.0.0",
   "target": 28,
   "mini": 21,
   "compile": 35,

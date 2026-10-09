@@ -42,6 +42,15 @@ repositories {
 }
 
 dependencies {
+    // Script-loaded Kotlin compilers call kotlin.reflect.full while delegating
+    // stdlib classes to the application. Keep the full reflection implementation
+    // on that same loader and version instead of mixing it with a dex's copy.
+    api "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
+    // Regression coverage for the command-line argument reflection used by the
+    // unmodified JavaKotlin2Dex compiler. This compiler is only on the test path.
+    testImplementation('org.jetbrains.kotlin:kotlin-compiler-embeddable') {
+        version { strictly '1.6.21' }
+    }
     androidTestImplementation('androidx.test.espresso:espresso-core:3.1.1-alpha01', {
         exclude group: 'com.android.support', module: 'support-annotations'
     })
@@ -73,8 +82,9 @@ dependencies {
     // only contain obsolete ABIs and must not be restored to arm64 builds.
     // Rhino execution is packaged by the optional :engine-rhino module.
     // Core still compiles against its types while legacy APIs are being isolated.
-    compileOnly files('../rhino-language/libs/rhino-1.7.7.2.jar')
-    testImplementation files('../rhino-language/libs/rhino-1.7.7.2.jar')
+    // SPIKE(2026-10-05): 升级试验——官方 Rhino 1.7.15.1（Android 兼容；回退改回 rhino-1.7.7.2.jar 即可）
+    compileOnly files('../rhino-language/libs/rhino-1.7.15.1.jar')
+    testImplementation files('../rhino-language/libs/rhino-1.7.15.1.jar')
     api project(path: ':common')
     api project(path: ':automator')
     // Shizuku client API. shell(..., { shizuku: true }) uses the Shizuku
