@@ -1,6 +1,7 @@
 // @engine quickjs
 // 文件夹变更监听（轮询）
-// 用途：监听一个目录里的文件新增 / 修改 / 删除（引擎没有 FileObserver 绑定，轮询最省事也最稳）
+// 用途：监听一个目录里的文件新增 / 修改 / 删除（不依赖 FileObserver 的轮询实现；
+//      引擎已支持 files.observe，基于 FileObserver 的版本见同目录「文件夹变更监听.js」）
 // 前置：无；目录会自动创建在内置存储根目录 quickjs-watch-demo/
 // 覆盖：files / Java 互操作
 

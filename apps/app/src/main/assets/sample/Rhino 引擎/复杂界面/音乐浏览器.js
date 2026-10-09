@@ -13,7 +13,17 @@ var IconView = (function() {
             return this._icon;
         }, (view, name, value, defaultSetter) => {
             this._icon = value;
-            view.setImageResource(value);
+            // this.icon 绑定的是 loadIcon() 得到的 Drawable；绑定管线可能把值字符串化，
+            // 此时无法还原为 Drawable —— 忽略图标即可，不让演示因图标而失败。
+            try {
+                view.setImageDrawable(value);
+            } catch (e) {
+                try {
+                    view.setImageResource(value);
+                } catch (e2) {
+                    // 图标不可用：保留文本展示即可
+                }
+            }
         });
     }
     IconView.prototype.render = function() {
@@ -29,7 +39,7 @@ var apps = [];
 
 ui.layout(
     <vertical  bg="#ffffff">
-        <list id="files" layout_weight="1">
+        <list id="apps" layout_weight="1">
             <linear bg="?selectableItemBackground">
                 <icon icon="{{this.icon}}" w="50" h="70" margin="16" />
                 <vertical>
@@ -42,17 +52,18 @@ ui.layout(
     </vertical>
 );
 
-ui.apps.setDataSource(musicFiles);
+ui.apps.setDataSource(apps);
 
 ui.apps.on("item_click", function(item, pos){
     toast(item);
 });
 
-//启动线程来扫描音乐文件
+//启动线程来扫描应用（原示例遗留：musicFiles 未定义，统一用 apps，填充后刷新列表）
 threads.start(function () {
     listApps(apps);
     ui.run(()=> {
-        ui.progressbar.setVisility(8);
+        ui.apps.setDataSource(apps);
+        ui.progressbar.setVisibility(8);
     });
 });
 

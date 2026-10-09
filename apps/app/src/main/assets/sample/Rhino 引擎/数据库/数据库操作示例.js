@@ -25,10 +25,18 @@ log('更新后 done = ' + (updated.rows.length > 0 ? updated.rows.item(0).get('d
 db.exec('DELETE FROM notes WHERE id = 2');
 log('删除后剩余 ' + db.select('SELECT COUNT(*) AS c FROM notes').rows.item(0).get('c') + ' 行');
 
-// 事务
+// 事务：同时验证提交结果，避免失败回调被忽略时把回滚误判为成功
+var committed = false;
 db.transaction(function (tx) {
-    tx.exec("INSERT INTO notes (id, title, body) VALUES (3, '事务行', '来自 transaction')");
-}, function () {}, function () {
-    log('事务已提交');
-    db.close();
+    tx.exec("INSERT OR REPLACE INTO notes (id, title, body) VALUES (3, '事务行', '来自 transaction')");
+}, function (error) {
+    throw error;
+}, function () {
+    committed = true;
 });
+var saved = db.select('SELECT COUNT(*) AS c FROM notes WHERE id = 3').rows.item(0).get('c');
+if (!committed || Number(saved) !== 1) {
+    throw new Error('事务未提交或数据未写入');
+}
+log('事务已提交');
+db.close();

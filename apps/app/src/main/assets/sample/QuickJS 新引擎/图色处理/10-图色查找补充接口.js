@@ -1,6 +1,6 @@
 // @engine quickjs
 // 图色查找补充接口
-// 用途：findColorEquals / detectsColor / findImageInRegion / colors 工具补充用法
+// 用途：findColorEquals / detectsColor / findImageInRegion / colors 工具补充用法 / countColor 颜色计数
 // 前置：截图授权（未授权时用 OpenCV 合成帧）
 // 覆盖：images / colors
 
@@ -50,8 +50,13 @@ withFrame(function (frame, synthetic) {
         var found = images.findImageInRegion(frame, template, 0, 0, frame.width, frame.height, 0.9);
         console.log('findImageInRegion(全屏) = ' + JSON.stringify(found));
 
-        var missRegion = images.findImageInRegion(frame, template, 0, 0, 8, 8, 0.9);
-        console.log('findImageInRegion(8x8 过小区域) = ' + JSON.stringify(missRegion));
+        // 8x8 过小区域（模板 32x32 > 区域 8x8）：与 Rhino/Pro 一致 —— 报「Template … is larger than …」错误
+        try {
+            var missRegion = images.findImageInRegion(frame, template, 0, 0, 8, 8, 0.9);
+            console.log('findImageInRegion(8x8 过小区域) = ' + JSON.stringify(missRegion) + '（预期为报错，不应走到这里）');
+        } catch (error) {
+            console.log('findImageInRegion(8x8 过小区域) 报错 = ' + error);
+        }
     } finally {
         template.recycle();
     }
@@ -63,6 +68,13 @@ withFrame(function (frame, synthetic) {
         + ', alpha = ' + colors.alpha(parsed)
         + ', red = ' + colors.red(parsed)
         + ', toString = ' + colors.toString(parsed));
+
+    // 5) countColor：数「与参考色相近」的像素个数（纯原生计数、不建对象；比 findAllPointsForColor 省内存）
+    var region = [0, 0, Math.min(200, frame.width), Math.min(200, frame.height)];
+    console.log('countColor(' + region[2] + 'x' + region[3] + ', threshold 4) = '
+        + images.countColor(frame, target, { region: region, threshold: 4 })
+        + '，threshold 0（精确）= ' + images.countColor(frame, target, { region: region, threshold: 0 }));
+    console.log('countColor 不给 region = 整帧计数 = ' + images.countColor(frame, target));
 });
 
 console.log('=== IMAGE_LOOKUP_EXTRA_DONE ===');

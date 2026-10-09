@@ -1,0 +1,5 @@
+# 本地测试留档（PC 端自检/回归输出，非源码；勿提交）
+# 统一收进 reports/（contract=契约 / regress=回归 / selfcheck=自检；不参与运行）
+/reports/
+# 工具自动产物（探针帧、日志等；vision-pipeline-probe / ui-dump / analyze-panel-log 会写这里）
+.artifacts/

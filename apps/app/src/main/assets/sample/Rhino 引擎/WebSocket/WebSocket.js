@@ -1,5 +1,6 @@
 // @engine rhino
-// ⚠ 需要 Auto.js Pro 专属 API：WebSocket 模块（当前引擎暂未实现，直接运行会报错）
+// WebSocket：自研 Rhino 引擎已支持 web.newWebSocket / web.ByteString（对齐 Auto.js Pro）
+// 默认连公网回显服务；离线时可按需改成局域网地址（如 ws://192.168.31.109:8765）
 // 新建一个WebSocket
 // 指定web socket的事件回调在当前线程（好处是没有多线程问题要处理，坏处是不能阻塞当前线程，包括死循环）
 // 不加后面的参数则回调在IO线程

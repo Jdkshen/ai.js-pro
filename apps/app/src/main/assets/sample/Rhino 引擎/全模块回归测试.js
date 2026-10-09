@@ -9,7 +9,7 @@ function t(name, fn) {
     catch (e) { out[name] = 'ERR:' + e; }
 }
 t('files', function () { return typeof files; });
-t('filesRead', function () { return files.read(files.cwd() + '/zz_regress_rhino.js').length > 0; });
+t('filesRead', function () { files.write(files.cwd() + '/zz_regress_rhino.js', 'zz'); return files.read(files.cwd() + '/zz_regress_rhino.js').length > 0; });
 t('device', function () { return typeof device; });
 t('app', function () { return typeof app; });
 t('appName', function () { return app.getAppName('com.jdkshen.aijspro') || ''; });

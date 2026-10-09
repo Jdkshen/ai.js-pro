@@ -25,7 +25,7 @@ file.close();
 
 
 //以读取模式打开文件
-file = open("/sdcard/test.txt", "r")
+file = open("/sdcard/1.txt", "r")
 //读取一行并打印
 print(file.readline());
 //读取剩余所有行并打印
