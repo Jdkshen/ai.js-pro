@@ -1,0 +1,135 @@
+apply plugin: 'com.android.application'
+
+// Auto.js 插件（plugin）是一个可独立安装的第三方 APK：宿主脚本用
+//   $plugins.load("com.jdkshen.xiangqi.plugin")
+// 加载它，拿到象棋识别/算棋能力。因此它必须自包含——不能 link 宿主 :engine 的类，
+// 也不能假设宿主有 $pikafish（官方 Auto.js Pro 就没有），原生引擎随本 APK 分发。
+//
+// 签名：与主应用同一套 AIJSPRO_* 环境变量；没配时用 debug 签名，方便本地真机自测。
+def pluginSigningValues = [
+        storeFile    : System.getenv('AIJSPRO_KEYSTORE'),
+        storePassword: System.getenv('AIJSPRO_STORE_PASSWORD'),
+        keyAlias     : System.getenv('AIJSPRO_KEY_ALIAS'),
+        keyPassword  : System.getenv('AIJSPRO_KEY_PASSWORD')
+]
+def pluginSigningReady = pluginSigningValues.values().every { it != null && !it.trim().isEmpty() }
+
+android {
+    namespace 'com.jdkshen.xiangqi.plugin'
+    compileSdkVersion versions.compile
+    buildToolsVersion versions.buildTool
+
+    defaultConfig {
+        applicationId 'com.jdkshen.xiangqi.plugin'
+        minSdkVersion versions.mini
+        targetSdkVersion versions.target
+        versionCode versions.xiangqiPluginVersionCode
+        versionName versions.xiangqiPluginVersionName
+        // 引擎只有 arm64-v8a 一份构建（third-party/Pikafish + libxiangqi_engine.so）。
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    // 脚本与视觉资源来自「象棋自动走棋」工程（单一事实来源，在仓库根 samples/ 下），
+    // 构建时整棵拷进 assets/scripts/：宿主加载插件时会把该目录整棵拷到
+    // cache/plugin-scripts/<包名>/，插件的 index.js 就在那里 require。
+    sourceSets.main.assets.srcDirs += [
+            file("$buildDir/generated/xiangqi-plugin-scripts"),
+            file("$buildDir/generated/xiangqi-plugin-nnue")
+    ]
+
+    signingConfigs {
+        if (pluginSigningReady) {
+            release {
+                storeFile file(pluginSigningValues.storeFile)
+                storePassword pluginSigningValues.storePassword
+                keyAlias pluginSigningValues.keyAlias
+                keyPassword pluginSigningValues.keyPassword
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (pluginSigningReady) {
+                signingConfig signingConfigs.release
+            }
+            // 反射/JNI 入口没有 release 覆盖前不要开混淆。
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.12'
+}
+
+def xiangqiProjectDir = rootProject.file('samples/象棋自动走棋')
+def pluginScriptsDir = file("$buildDir/generated/xiangqi-plugin-scripts")
+def pluginNnueDir = file("$buildDir/generated/xiangqi-plugin-nnue")
+
+// 工程指纹（release-manifest.json + src/app/version.js）由 tools/xiangqi-release.py 生成：
+// 先在源码目录里刷新，再把整棵工程拷进插件。发布校验（dev-update.ps1）会用同一份清单
+// 逐文件核对插件 APK，所以两边必须来自同一次生成。
+def prepareXiangqiProject = tasks.register('prepareXiangqiProject', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'python', rootProject.file('tools/xiangqi-release.py').absolutePath, 'prepare'
+}
+
+// 整个工程都进插件（含 tools/tests/reports）：装机后 installProject() 才能还原出与宿主
+// 内置时代一致的工程；同时发布校验要求插件里就是「源码文件全集」。
+// 排除规则必须和 tools/xiangqi-release.py 的 source_files() 一致（点开头、编辑器备份等），
+// 否则 verify-apk 会看到多出来的文件。
+def stagePluginScripts = tasks.register('stagePluginScripts', Sync) {
+    dependsOn prepareXiangqiProject
+    from(xiangqiProjectDir) {
+        exclude { details -> details.relativePath.segments.any { it.startsWith('.') } }
+        exclude '**/__pycache__/**', '**/node_modules/**', '**/*~', '**/*.scc'
+        exclude '**/[Tt]humbs.db', '**/[Pp]icasa.ini'
+    }
+    into(file("$pluginScriptsDir/scripts"))
+}
+
+// NNUE 权重与第三方仓库分离保存（third-party/Pikafish 忽略 *.nnue）：带就随包，缺就警告，
+// 插件在真机上会明确报「找不到权重」，不会静默降级。
+def nnueFile = rootProject.file('third-party/Pikafish/src/pikafish.nnue')
+def stagePluginNnue = tasks.register('stagePluginNnue', Sync) {
+    from({ nnueFile.isFile() ? [nnueFile] : [] })
+    into(pluginNnueDir)
+    doLast {
+        if (!nnueFile.isFile()) {
+            logger.warn('Pikafish NNUE missing: put pikafish.nnue in third-party/Pikafish/src before packaging the plugin')
+        }
+    }
+}
+
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn stagePluginScripts, stagePluginNnue
+}
+
+// 原生库是外部脚本编译的（src/main/cpp/CMakeLists.txt + src/main/cpp/build-native.ps1），
+// 与 :app 的 libpikafish.so 同一份 Pikafish 源码；漏编时这里给出明确提示而不是只在真机上崩。
+def pluginNativeLibrary = file('src/main/jniLibs/arm64-v8a/libxiangqi_engine.so')
+tasks.register('verifyPluginNativeLibrary') {
+    group = 'verification'
+    description = 'Require the plugin native engine before packaging the plugin APK.'
+    inputs.file(pluginNativeLibrary)
+    doLast {
+        if (!pluginNativeLibrary.isFile()) {
+            throw new GradleException('Plugin native engine is missing. Run ' +
+                    'plugins/xiangqi-plugin/src/main/cpp/build-native.ps1 before packaging.')
+        }
+    }
+}
+
+tasks.matching { it.name == 'preBuild' }.configureEach {
+    dependsOn tasks.named('verifyPluginNativeLibrary')
+}

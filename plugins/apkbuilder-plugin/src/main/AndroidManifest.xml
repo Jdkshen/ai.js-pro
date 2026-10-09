@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Auto.js 插件 APK：没有界面，宿主通过 <meta-data> 里的注册类反射加载。
+
+  ⚠️ org.autojs.plugin.sdk.registry 是 Auto.js 插件 SDK 约定的键名，
+  官方 Auto.js Pro 与本仓库（AI.js Pro）都按它找注册类，所以这个插件两边都能装。
+
+  本插件与象棋插件不同：它主要是给宿主 Java/Kotlin 侧（打包页）用的——
+  ApkBuilderPluginHelper 反射调用 ensureTemplate(File) 取模板，
+  assets/scripts/index.js 只是给脚本侧留的同能力入口。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:label="APK 打包插件">
+
+        <meta-data
+            android:name="org.autojs.plugin.sdk.registry"
+            android:value="com.jdkshen.apkbuilder.plugin.PluginRegistry" />
+    </application>
+
+</manifest>

@@ -1,0 +1,47 @@
+{
+  "case": "69/e5f5",
+  "head": "e5f5",
+  "score": 10,
+  "depth": 15,
+  "engineMs": 3012,
+  "historyUsed": true,
+  "candidates": [
+    {
+      "move": "e5f5",
+      "scoreCp": 10,
+      "mate": null,
+      "depth": 15,
+      "pv": "e5f5 g6c6 g4e4 c6c3 e0d0 e9f9 e4f4 f9e9 f4e4"
+    },
+    {
+      "move": "e5e6",
+      "scoreCp": 10,
+      "mate": null,
+      "depth": 15,
+      "pv": "e5e6 g6e6 g4e4 e6c6 d4d5 c6c3 e0d0 c3c9 g1d1 e9f9 d5f5 f9e9 f5d5"
+    },
+    {
+      "move": "e0d0",
+      "scoreCp": -2,
+      "mate": null,
+      "depth": 15,
+      "pv": "e0d0"
+    },
+    {
+      "move": "c3d5",
+      "scoreCp": -10,
+      "mate": null,
+      "depth": 15,
+      "pv": "c3d5 c0c5 e5e6 g6e6 g4e4 e6e5 g0e2 g2g5 d5c7 h2f2 d4d8 f2f3 e4a4 c5a5 a4b4 a5b5 b4a4 b5a5"
+    },
+    {
+      "move": "g0e2",
+      "scoreCp": -10,
+      "mate": null,
+      "depth": 15,
+      "pv": "g0e2 g6c6 e2c0 c6c3 g4e4 c3c0 d4d0 c0c2 f2e1 h2h1 g1g0 h1h3 d0d2 c2c0 d2d0 c0c2"
+    }
+  ],
+  "choice": null,
+  "policyMs": 0
+}

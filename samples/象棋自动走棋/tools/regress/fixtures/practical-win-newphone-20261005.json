@@ -1,0 +1,126 @@
+{
+  "ply": 69,
+  "played": "e5f5",
+  "position": "3ak1b2/4a4/4b4/6r1p/4P4/3R2C2/P1N1P3P/5Acr1/6R2/2c1KAB2 w - - 0 1",
+  "positionCommand": "position fen rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1 moves c3c4 h9g7 g3g4 b7c7 h0g2 c6c5 b0a2 c5c4 h2h4 b9a7 h4c4 a9b9 a0b0 c7c0 d0e1 c0c2 b2b6 b9b7 g2f4 h7h2 c4b4 b7d7 a2c3 a7c6 f4d5 c6b4 b0b4 i9h9 b6g6 e6e5 g4g5 g7e6 g5f5 d7g7 g6a6 f9e8 c3e2 g7a7 a6a4 e6c5 i0h0 h9h5 b4b5 c5d3 h0h1 a7d7 h1g1 h2g2 d5b6 d7c7 b5b3 h5h0 a4g4 c7b7 b3d3 b7b6 e2c3 h0h2 d3d0 c9e7 f5e5 b6c6 d0d3 c2c1 e1f2 c6g6 d3d4 c1c0",
+  "before": {
+    "red": "PRCPNPPARKAB",
+    "black": "akbabrpcrc"
+  },
+  "candidates": [
+    {
+      "depth": 20,
+      "move": "e5f5",
+      "scoreCp": 10,
+      "mate": null,
+      "pv": "e5f5 g6c6 g4e4 c0f0 e0f0 c6c3 f2e1 c3e3 f0e0 e3b3 e0d0 e9f9 e4f4 f9e9 f4e4",
+      "after": {
+        "red": "PRCPPARKB",
+        "black": "akbabprcr"
+      },
+      "captures": [
+        {
+          "iccs": "c0f0",
+          "piece": "c",
+          "captured": "A"
+        },
+        {
+          "iccs": "e0f0",
+          "piece": "K",
+          "captured": "c"
+        },
+        {
+          "iccs": "c6c3",
+          "piece": "r",
+          "captured": "N"
+        },
+        {
+          "iccs": "c3e3",
+          "piece": "r",
+          "captured": "P"
+        }
+      ]
+    },
+    {
+      "depth": 20,
+      "move": "e0d0",
+      "scoreCp": 9,
+      "mate": null,
+      "pv": "e0d0 g6b6 g4e4 c0f0 c3d1 b6c6 d1f0 c6c0 d0d1 c0c1 d1d0 c1g1 e5f5 e9f9 e4f4 e8f7 f5f6 f9e9 d4d9 e9e8 f4e4 e7c5 f6f7 g2g0 f0g2",
+      "after": {
+        "red": "PRCPPPAKNB",
+        "black": "akbabpcrr"
+      },
+      "captures": [
+        {
+          "iccs": "c0f0",
+          "piece": "c",
+          "captured": "A"
+        },
+        {
+          "iccs": "d1f0",
+          "piece": "N",
+          "captured": "c"
+        },
+        {
+          "iccs": "c1g1",
+          "piece": "r",
+          "captured": "R"
+        }
+      ]
+    },
+    {
+      "depth": 20,
+      "move": "e5e6",
+      "scoreCp": -3,
+      "mate": null,
+      "pv": "e5e6 g6e6 g4e4 g2g6 c3d5 e6d6 d4d2 g6e6 g1g6 c0c8 f2e1 h2h5 d5f4 e6e3 g0e2 d6g6 f4g6 h5g5 d2d6",
+      "after": {
+        "red": "RNCPPPRAKAB",
+        "black": "akbcabrcpr"
+      },
+      "captures": [
+        {
+          "iccs": "g6e6",
+          "piece": "r",
+          "captured": "P"
+        }
+      ]
+    },
+    {
+      "depth": 20,
+      "move": "c3d5",
+      "scoreCp": -10,
+      "mate": null,
+      "pv": "c3d5 c0c5 e5e6 g6e6 g4e4 e6e5 g0e2 g2g5 d5c7 h2f2 d4d8 f2f6 g1h1 g5h5 f0e1 f6c6 c7e8 d9e8 h1g1 h5g5 g1f1 g5f5 f1g1 f5g5",
+      "after": {
+        "red": "RNCPPPBRKA",
+        "black": "akbabrpcrc"
+      },
+      "captures": [
+        {
+          "iccs": "g6e6",
+          "piece": "r",
+          "captured": "P"
+        },
+        {
+          "iccs": "h2f2",
+          "piece": "r",
+          "captured": "A"
+        }
+      ]
+    },
+    {
+      "depth": 19,
+      "move": "i3i4",
+      "scoreCp": -10,
+      "mate": null,
+      "pv": "i3i4 g6c6 d4d3 c0a0 e5f5 c6b6 g1b1 b6e6 b1g1 e6b6",
+      "after": {
+        "red": "PCPPNRPARKAB",
+        "black": "akbabrpcrc"
+      },
+      "captures": []
+    }
+  ]
+}

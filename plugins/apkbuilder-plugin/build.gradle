@@ -1,0 +1,98 @@
+apply plugin: 'com.android.application'
+
+// APK 打包插件：把「打包运行时模板」从主程序里搬出来。
+//
+// 主程序打包用户脚本时需要一份 ~43MB 的运行时模板（由 :inrt 构建），以前它作为
+// assets/template.apk 常驻主 APK，所有用户都得为它付体积。现在模板随本插件分发：
+//   * 打包页检测不到模板时提示安装本插件（或手动放 /sdcard/template.apk）；
+//   * 安装后 ApkBuilderPluginHelper 反射调用插件里的 ensureTemplate(File)，
+//     把模板落到宿主私有目录再用，主 APK 不再带这 43MB。
+//
+// 签名：与主应用、象棋插件同一套 AIJSPRO_* 环境变量；没配时用 debug 签名，方便本地真机自测。
+def pluginSigningValues = [
+        storeFile    : System.getenv('AIJSPRO_KEYSTORE'),
+        storePassword: System.getenv('AIJSPRO_STORE_PASSWORD'),
+        keyAlias     : System.getenv('AIJSPRO_KEY_ALIAS'),
+        keyPassword  : System.getenv('AIJSPRO_KEY_PASSWORD')
+]
+def pluginSigningReady = pluginSigningValues.values().every { it != null && !it.trim().isEmpty() }
+
+android {
+    namespace 'com.jdkshen.apkbuilder.plugin'
+    compileSdkVersion versions.compile
+    buildToolsVersion versions.buildTool
+
+    defaultConfig {
+        applicationId 'com.jdkshen.apkbuilder.plugin'
+        minSdkVersion versions.mini
+        targetSdkVersion versions.target
+        versionCode versions.apkBuilderPluginVersionCode
+        versionName versions.apkBuilderPluginVersionName
+        // 模板只有 arm64-v8a 一份（:inrt 的 arm64 release 产物），插件也做 arm64。
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    signingConfigs {
+        if (pluginSigningReady) {
+            release {
+                storeFile file(pluginSigningValues.storeFile)
+                storePassword pluginSigningValues.storePassword
+                keyAlias pluginSigningValues.keyAlias
+                keyPassword pluginSigningValues.keyPassword
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (pluginSigningReady) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+
+    // 模板本身是 zip（再压一遍几乎不减体积），保持不压缩有两个好处：
+    // 宿主可以 openFd() 直接拿到长度、按大小判断缓存是否新鲜，拷贝也不再解压。
+    androidResources {
+        noCompress += 'apk'
+    }
+}
+
+def templateApk = file('src/main/assets/template.apk')
+
+// 模板是打包的实际运行时：缺了或截断了，装机后只会表现为「打包失败」，所以在这里拦。
+tasks.register('verifyTemplateApk') {
+    group = 'verification'
+    description = 'Require the runtime template before packaging the apkbuilder plugin.'
+    inputs.file(templateApk)
+    doLast {
+        if (!templateApk.isFile()) {
+            throw new GradleException('Runtime template is missing. Run ' +
+                    './gradlew.bat :inrt:assembleRelease to regenerate ' + templateApk)
+        }
+        if (templateApk.length() < 20L * 1024 * 1024) {
+            throw new GradleException('Runtime template looks truncated: ' + templateApk +
+                    ' (' + templateApk.length() + ' bytes)')
+        }
+    }
+}
+
+tasks.matching { it.name == 'preBuild' }.configureEach {
+    dependsOn tasks.named('verifyTemplateApk')
+}
+
+// :inrt 的 release 产物会直接写成插件的 assets/template.apk（见 apps/inrt/build.gradle），
+// 打包插件前先跑一遍 :inrt:buildApkPlugin，避免把旧模板打进插件。
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn ':inrt:buildApkPlugin'
+}

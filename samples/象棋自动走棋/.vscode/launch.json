@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "aijspro",
+      "request": "launch",
+      "name": "AI.js Pro: 调试当前文件（Rhino）",
+      "program": "${file}",
+      "host": "192.168.31.59"
+    }
+  ]
+}
