@@ -1,0 +1,5 @@
+begin
+found=269/314
+missing_count=45
+missing=app.sendEmail,app.intent,app.sendBroadcast,console.assert,console.input,console.rawInput,dialogs.input,colors.equals,events.emitter,events.setKeyInterceptionEnabled,events.removeAllTouchListeners,events.getTouchEventTimeout,events.getListeners,events.defaultMaxListeners,files.writeBytes,files.appendBytes,files.renameWithoutExtension,device.broad,device.device,device.bootloader,device.fingerprint,device.serial,device.incremental,device.baseOS,device.securityPatch,device.codename,device.getAndroidId,device.getMacAddress,device.setBrightness,device.setBrightnessMode,device.getAlarmVolume,device.getMusicMaxVolume,device.getNotificationMaxVolume,device.getAlarmMaxVolume,device.setMusicVolume,device.setNotificationVolume,device.setAlarmVolume,device.wakeUpIfNeeded,device.keepScreenDim,device.cancelKeepingAwake,http.postMultipart,threads.disposable,threads.atomic,threads.lock,engines.execAutoFile
+script-end
