@@ -28,6 +28,8 @@
 - 日常变体（MIUIX 皮肤）：`.\gradlew.bat :app:assembleMiuixCompatDebug --console=plain`
 - ⚠️ `build-miuix-debug.ps1` 现在**编译成功后会默认自动发布**（复用产物发一版到更新源，版本号自动 +1，见桌面「编译并发布」/「发布更新」）：只想编译请加 `-NoPublish`；只想发布不重编用 `tools\publish.ps1 -SkipBuild`
 - 单元测试：`.\gradlew.bat :app:testMiuixCompatDebugUnitTest`
+- 与真 Auto.js Pro 同机安装冲突时（provider authority 被占，`INSTALL_FAILED_CONFLICTING_PROVIDER`）：
+  用 `-PdevPluginUsbDiscovery=false` 构建去掉 debug-server provider（只影响 VS Code 扩展的 USB 自动发现，LAN 不受影响）
 - 产物：`apps/app/build/outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk`
 - 一键出 dev 包并发布到本地更新源：**`.\tools\publish.ps1 -ReleaseNotes "…"`**
   （带前置校验 + 发布后验证 + 自动日志；`-DryRun` 只算版本号不发布。详见下方「踩过的坑」一节）
@@ -38,6 +40,14 @@
 ## 本仓库踩过的坑：发布与脚本（改之前先读）
 
 这几条都是真实发生过的事故，不是理论风险。
+
+### 插件 APK 只挑已签名的：`*-unsigned.apk` 发出去装不上
+
+`assembleRelease` 在**没配 `AIJSPRO_*` 时产出的是 `*-release-unsigned.apk`**。第一次发插件时
+`dev-update.ps1` 的「优先 release」正好挑了它，发布源里的 `apkbuilder-plugin.apk` 是未签名的：
+手机能下到（HTTP 200、字节数正确）但**装不上**，打包页只会报「下载失败」。
+现在 `dev-update.ps1` 一律排除 `-unsigned.apk`（同类里优先 release、其次 debug），
+发布后也可用 `apksigner verify --print-certs <apk>` 复核。
 
 ### `tools/dev-update.ps1` 会发布，`-NoServe` 拦不住
 
@@ -107,7 +117,9 @@ Gradle/JVM 会把 `注: 某些输入文件使用或覆盖了已过时的 API` �
 
 - `apps/app`：Android 应用（Miuix/Compose 皮肤与旧界面并存）
 - `modules/engine`：脚本引擎 + QuickJS 原生；`modules/engine-rhino`：Rhino 引擎；`modules/common`、`modules/automator`
-- `inrt`：打包产物用的运行时模板；`third-party/`：第三方库
+- `apps/inrt`：打包产物用的运行时模板，输出到 `plugins/apkbuilder-plugin/src/main/assets/template.apk`；`third-party/`：第三方库
+- `plugins/`：独立插件 APK（`xiangqi-plugin` 象棋引擎/识别、`apkbuilder-plugin` 打包模板）；宿主 APK 不再内嵌这些东西
+- `samples/`：不随主 APK 分发的大型示例工程（`samples/象棋自动走棋` 随象棋插件分发）
 - `docs/`：架构 / 指南 / 计划 / 报告，索引见 `docs/README.md`；`tools/`：构建与真机脚本
 - `.artifacts/`：本地构建、截图、日志产物，**被 git 忽略**（点开头目录，部分 UI 预览不了里面的图）
 
@@ -118,3 +130,7 @@ Gradle/JVM 会把 `注: 某些输入文件使用或覆盖了已过时的 API` �
   否则 `:app:verifyQuickJsNativeLibrariesFresh` 会失败
 - 打包页的权限默认值不要随手改（产物的权限画像是风控敏感点，见 `docs/PERMISSIONS_AND_RELEASE.md`）
 - 示例脚本文本改动要满足 `:app:verifyQuickJsSamplesMarked`、`:app:verifyBundledSamplesNoNode` 两个校验任务
+- 主 APK 只保留「所有人都会用到」的东西：模板（打包）、象棋工程与 NNUE（象棋）都在 `plugins/` 下，
+  体积与搬迁记录见 `docs/guides/安装包瘦身_插件与子集.md`
+- 改了 `modules/engine/src/main/cpp/imgui_font.h` 的字形范围要跑 `python tools/imgui-font-subset.py --write`，
+  否则 `:app:verifyImGuiFontSubset` 会失败

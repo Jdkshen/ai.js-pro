@@ -1,0 +1,552 @@
+{
+  "summary": [
+    {
+      "engine": "quickjs",
+      "profile": "normal",
+      "kind": "board",
+      "total": 9,
+      "counts": {
+        "correct": 9
+      },
+      "medianMs": 162,
+      "minMs": 160,
+      "maxMs": 169,
+      "heldoutCount": 8,
+      "heldoutCounts": {
+        "correct": 8
+      },
+      "medianPrepareMs": 113.456197
+    },
+    {
+      "engine": "quickjs",
+      "profile": "normal",
+      "kind": "piece",
+      "total": 126,
+      "counts": {
+        "miss": 71,
+        "correct": 46,
+        "wrong": 9
+      },
+      "medianMs": 173.5,
+      "minMs": 144,
+      "maxMs": 208,
+      "heldoutCount": 112,
+      "heldoutCounts": {
+        "miss": 62,
+        "correct": 41,
+        "wrong": 9
+      },
+      "medianPrepareMs": 9.609323
+    },
+    {
+      "engine": "quickjs",
+      "profile": "fast",
+      "kind": "board",
+      "total": 9,
+      "counts": {
+        "correct": 9
+      },
+      "medianMs": 120,
+      "minMs": 107,
+      "maxMs": 157,
+      "heldoutCount": 8,
+      "heldoutCounts": {
+        "correct": 8
+      },
+      "medianPrepareMs": 153.532396
+    },
+    {
+      "engine": "quickjs",
+      "profile": "fast",
+      "kind": "piece",
+      "total": 126,
+      "counts": {
+        "miss": 71,
+        "correct": 46,
+        "wrong": 9
+      },
+      "medianMs": 284.0,
+      "minMs": 99,
+      "maxMs": 320,
+      "heldoutCount": 112,
+      "heldoutCounts": {
+        "miss": 62,
+        "correct": 41,
+        "wrong": 9
+      },
+      "medianPrepareMs": 16.178645500000002
+    },
+    {
+      "engine": "quickjs",
+      "profile": "board-fullres",
+      "kind": "piece",
+      "total": 126,
+      "counts": {
+        "correct": 116,
+        "miss": 5,
+        "wrong": 5
+      },
+      "medianMs": 250.0,
+      "minMs": 2,
+      "maxMs": 282,
+      "heldoutCount": 112,
+      "heldoutCounts": {
+        "correct": 102,
+        "miss": 5,
+        "wrong": 5
+      },
+      "medianPrepareMs": 18.329296499999998
+    },
+    {
+      "engine": "rhino",
+      "profile": "normal",
+      "kind": "board",
+      "total": 9,
+      "counts": {
+        "correct": 9
+      },
+      "medianMs": 172,
+      "minMs": 168,
+      "maxMs": 188,
+      "heldoutCount": 8,
+      "heldoutCounts": {
+        "correct": 8
+      },
+      "medianPrepareMs": 118.855781
+    },
+    {
+      "engine": "rhino",
+      "profile": "normal",
+      "kind": "piece",
+      "total": 126,
+      "counts": {
+        "miss": 71,
+        "correct": 46,
+        "wrong": 9
+      },
+      "medianMs": 175.0,
+      "minMs": 143,
+      "maxMs": 203,
+      "heldoutCount": 112,
+      "heldoutCounts": {
+        "miss": 62,
+        "correct": 41,
+        "wrong": 9
+      },
+      "medianPrepareMs": 10.7422395
+    },
+    {
+      "engine": "rhino",
+      "profile": "fast",
+      "kind": "board",
+      "total": 9,
+      "counts": {
+        "correct": 9
+      },
+      "medianMs": 125,
+      "minMs": 106,
+      "maxMs": 135,
+      "heldoutCount": 8,
+      "heldoutCounts": {
+        "correct": 8
+      },
+      "medianPrepareMs": 135.473072
+    },
+    {
+      "engine": "rhino",
+      "profile": "fast",
+      "kind": "piece",
+      "total": 126,
+      "counts": {
+        "miss": 71,
+        "correct": 46,
+        "wrong": 9
+      },
+      "medianMs": 285.0,
+      "minMs": 92,
+      "maxMs": 336,
+      "heldoutCount": 112,
+      "heldoutCounts": {
+        "miss": 62,
+        "correct": 41,
+        "wrong": 9
+      },
+      "medianPrepareMs": 13.5998695
+    },
+    {
+      "engine": "rhino",
+      "profile": "board-fullres",
+      "kind": "piece",
+      "total": 126,
+      "counts": {
+        "correct": 116,
+        "miss": 5,
+        "wrong": 5
+      },
+      "medianMs": 265.0,
+      "minMs": 3,
+      "maxMs": 291,
+      "heldoutCount": 112,
+      "heldoutCounts": {
+        "correct": 102,
+        "miss": 5,
+        "wrong": 5
+      },
+      "medianPrepareMs": 18.737005500000002
+    }
+  ],
+  "cache": [
+    {
+      "engine": "quickjs",
+      "profile": "normal",
+      "target": "board",
+      "firstMs": 162,
+      "samples": [
+        18,
+        18,
+        21,
+        18,
+        19
+      ],
+      "medianMs": 18,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "quickjs",
+      "profile": "normal",
+      "target": "k",
+      "firstMs": 177,
+      "samples": [
+        3,
+        4,
+        3,
+        4,
+        4
+      ],
+      "medianMs": 4,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "quickjs",
+      "profile": "normal",
+      "target": "K",
+      "firstMs": 178,
+      "samples": [
+        4,
+        3,
+        3,
+        4,
+        3
+      ],
+      "medianMs": 3,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "quickjs",
+      "profile": "fast",
+      "target": "board",
+      "firstMs": 115,
+      "samples": [
+        21,
+        21,
+        28,
+        20,
+        28
+      ],
+      "medianMs": 21,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "quickjs",
+      "profile": "fast",
+      "target": "k",
+      "firstMs": 277,
+      "samples": [
+        290,
+        289,
+        295,
+        296,
+        303
+      ],
+      "medianMs": 295,
+      "cacheHits": 0,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "quickjs",
+      "profile": "fast",
+      "target": "K",
+      "firstMs": 115,
+      "samples": [
+        6,
+        5,
+        6,
+        7,
+        9
+      ],
+      "medianMs": 6,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "quickjs",
+      "profile": "board-fullres",
+      "target": "k",
+      "firstMs": 250,
+      "samples": [
+        3,
+        3,
+        5,
+        2,
+        2
+      ],
+      "medianMs": 3,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "quickjs",
+      "profile": "board-fullres",
+      "target": "K",
+      "firstMs": 259,
+      "samples": [
+        3,
+        2,
+        3,
+        2,
+        2
+      ],
+      "medianMs": 2,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "normal",
+      "target": "board",
+      "firstMs": 170,
+      "samples": [
+        20,
+        20,
+        20,
+        20,
+        23
+      ],
+      "medianMs": 20,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "normal",
+      "target": "k",
+      "firstMs": 197,
+      "samples": [
+        5,
+        5,
+        4,
+        5,
+        8
+      ],
+      "medianMs": 5,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "normal",
+      "target": "K",
+      "firstMs": 203,
+      "samples": [
+        5,
+        4,
+        4,
+        5,
+        4
+      ],
+      "medianMs": 4,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "fast",
+      "target": "board",
+      "firstMs": 110,
+      "samples": [
+        24,
+        29,
+        23,
+        21,
+        25
+      ],
+      "medianMs": 24,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "fast",
+      "target": "k",
+      "firstMs": 290,
+      "samples": [
+        291,
+        308,
+        278,
+        274,
+        314
+      ],
+      "medianMs": 291,
+      "cacheHits": 0,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "fast",
+      "target": "K",
+      "firstMs": 124,
+      "samples": [
+        10,
+        9,
+        6,
+        7,
+        7
+      ],
+      "medianMs": 7,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "board-fullres",
+      "target": "k",
+      "firstMs": 265,
+      "samples": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "medianMs": 3,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    },
+    {
+      "engine": "rhino",
+      "profile": "board-fullres",
+      "target": "K",
+      "firstMs": 263,
+      "samples": [
+        4,
+        3,
+        3,
+        3,
+        3
+      ],
+      "medianMs": 3,
+      "cacheHits": 5,
+      "verdicts": [
+        "correct",
+        "correct",
+        "correct",
+        "correct",
+        "correct"
+      ]
+    }
+  ]
+}

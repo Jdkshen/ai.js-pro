@@ -31,12 +31,32 @@ $env:AIJSPRO_KEY_PASSWORD='<key password>'
 应用内更新已从失效的 `autojs.org` 切换到 GitHub Releases API：
 
 ```text
-https://api.github.com/repos/Jdkshen/ai.js-pro/releases/latest
+https://api.github.com/repos/Jdkshen/ai.js-pro/releases?per_page=30
 ```
 
-发布标签推荐写成 `v1.0.2+465`，其中 `1.0.2` 是 `versionName`，`465` 是 Android `versionCode`。也可以在 release notes 中单独写一行 `versionCode: 465`。APK 文件名必须包含 `compat` 或 `lite` 以及 ABI（例如 `arm64-v8a`），应用会优先选择与当前版本和设备 ABI 一致的文件。仓库尚无公开 release 或 GitHub 返回 404 时，客户端按“当前已是最新版”处理，不再产生旧站证书异常。
+发布标签推荐写成 `v1.0.2+465`，其中 `1.0.2` 是 `versionName`，`465` 是 Android `versionCode`。开发通道可使用 `dev-781`，并在 release notes 中单独写一行 `versionCode: 781`。APK 文件名必须包含 `compat` 或 `lite` 以及 ABI（例如 `arm64-v8a`），应用会优先选择与当前版本和设备 ABI 一致的文件。草稿与预发布会被更新检查跳过；仓库尚无公开 release 或 GitHub 返回 404 时，客户端按“当前已是最新版”处理。
 
-“直接下载”会把 APK 放进应用私有缓存 `cache/updates`，随后校验 GitHub 返回的 SHA-256（新 Release 有 digest 时）、APK 格式、包名、版本号及与已安装版本相同的签名。校验通过后才交给系统安装器；Android 8 及以上若尚未允许“安装未知应用”，应用会打开本应用的授权页，用户授权返回后自动继续安装。发布 APK 必须始终使用同一正式签名，否则客户端会在系统安装前拒绝更新包。
+“直接下载”会把 APK 放进应用私有缓存 `cache/updates`，随后校验 GitHub 返回的 SHA-256（新 Release 有 digest 时）、APK 格式、包名、版本号及与已安装版本相同的签名。校验通过后才交给系统安装器；Android 8 及以上若尚未允许“安装未知应用”，应用会打开本应用的授权页，用户授权返回后自动继续安装。正式通道应保持同一正式签名，开发通道应保持同一开发签名；不同签名的包会在系统安装前被拒绝。
+
+当前公开开发版为 [dev-783](https://github.com/Jdkshen/ai.js-pro/releases/tag/dev-783)，含三个 Compat ABI、普通及加速清单、SHA-256 文件。默认加速与真机证据见 [发布记录](reports/2026-10-04_GitHub加速内置_dev783.md)。dev-783 更新源留空使用 GitHub 加速；清单失败回退 GitHub API，APK 网络失败回退直连。自定义局域网、自托管源仍按设置读取。
+
+### GitHub 下载加速（GH-Proxy）
+
+**dev-783 已内置默认加速，更新源留空即可。** 旧版首次升级可在“设置 → 更新源”填写以下地址，同时加速清单和 APK 下载，并避开此前缓存的清单：
+
+```text
+https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/latest/download/update-gh-proxy.json?channel=dev-783
+```
+
+`update-gh-proxy.json` 的 `apkUrl` 与 `assets[].url` 都以 `https://gh-proxy.com/` 为前缀。仅给普通 `update.json` 的网址加前缀，会加速清单读取，但其中的绝对 APK 地址仍然直连 GitHub。APK 版本、大小、SHA-256 与签名校验沿用原流程。dev-783 会为默认代理清单添加每次请求的时间参数，避免 `latest` 缓存旧版本；此前配置了同一代理源的用户也使用默认回退策略。若希望始终直连，更新源填写 `https://github.com/Jdkshen/ai.js-pro/releases/latest/download/update.json`。
+
+**每次 GitHub 发布都需附带同名加速清单**，以便上述 `latest` 地址跟随新版本。先生成包含固定版本 GitHub 下载地址的普通 `update.json`，再运行：
+
+```powershell
+python tools/create-gh-proxy-manifest.py <GitHub-update.json> <输出目录>/update-gh-proxy.json
+```
+
+把普通清单、加速清单与对应 APK 一起上传到同一 Release。生成器只转换 APK URL，保留所有版本信息与哈希。服务前缀用法见 [GH-Proxy 官方文档](https://gh-proxy.com/docs/github-accelerator)。
 
 推送与 `project-versions.json` 匹配的标签（当前为 `v1.0.2+465`）会触发 GitHub Actions 发布任务。仓库 Actions Secrets 必须配置 `AIJSPRO_KEYSTORE_BASE64`、`AIJSPRO_STORE_PASSWORD`、`AIJSPRO_KEY_ALIAS`、`AIJSPRO_KEY_PASSWORD`；前者是 keystore 文件的 Base64 内容，另外三项与本地发布变量含义一致。Secrets 缺失时发布任务会明确失败，不会生成无签名或 debug 签名的 Release。
 
@@ -157,11 +177,17 @@ Java 侧只递「包名 + 盐 + 指纹 + 密文」，密钥不落到 Java 堆里
   QuickJS 字节码与 quickjs 版本严格绑定（`JS_ReadObject` 自校验），打包端与模板必须来自同一份仓库构建。
 - 编译时都关掉了源码信息：Rhino 侧 `setGeneratingSource(false)`，QuickJS 侧字节码本身不带源码文本。
   产物里搜不到脚本源码（字符串常量仍会在，因为脚本运行时要用）。
-- **改动 `:inrt` 或原生库后必须重新生成模板**：`.\gradlew.bat :inrt:assembleRelease` 会把运行端产物复制成
-  `apps/app/src/main/assets/template.apk`。打包出来的 App 用的是这份模板里的运行端代码（含 `.so`），
-  不重建模板就会出现「打包端已是新逻辑、产物运行时还是旧的」这种半新半旧状态。
+- **模板随打包插件重建**：`plugins/apkbuilder-plugin` 的 `merge*Assets` 依赖 `:inrt:buildApkPlugin` → `:inrt:packageRelease`，
+  自动更新 `plugins/apkbuilder-plugin/src/main/assets/template.apk`（主 APK 已不再包含模板，见 `docs/guides/编译指南.md`）。
+  单独执行 `.\gradlew.bat :inrt:assembleRelease` 仍可刷新模板。
+  打包端和模板必须一起交付；原生源码的改动仍须先按仓库约定编译 `.so`，此依赖不会代替原生构建脚本。
 - 运行端解密已统一到 `EncryptedScripts`：包入口脚本按载荷类型分发（文本 / Rhino class / QuickJS 字节码），
   Rhino 与 QuickJS 引擎共用同一套逻辑（此前 QuickJS 的打包应用会把密文当源码解析）。
+- **目录工程的非入口脚本收进加密容器**：打包时把除入口外的所有 `.js` 打成 zip、整体加密成
+  `assets/project/scripts.pack`（载荷类型 3，常量 `ScriptProtection.SCRIPT_PACK_FILE`），
+  解包产物里不再有上百个明文脚本文件；运行端 `AssetsProjectLauncher.prepare()` 复制完资产后
+  先解密再展开到私有目录，模块加载（require）看到的目录布局与原来完全一致。
+  此前只有入口脚本受保护（`src/**`、`tools/**` 明文拷进 assets —— 2026-09-29 修复）。
 - **改完密钥派生/签名校验后同样要重建模板**：运行端的 `initKey` 与打包端必须在同一轮构建里，
   否则会出现「新密钥打包 + 旧算法运行」——现象是产物启动即报解密失败。
 

@@ -19,16 +19,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 cvrec = _load(os.path.join(HERE, 'cv-chess-recognize-2.py'), 'cvrec')
 SKIN = os.path.normpath(os.path.join(HERE, '..'))
 
+# ⚠️ 2026-09-25 逐格核对后修正（共 31 处；放大图 .artifacts/glyph-unknown/，工具 .artifacts/glyph-cells-multi.py）：
+#    · r7c0/r7c8 真值写 C（炮）→ 实为 R（車）；r7c4 写 ? → 实为 C（炮）
+#    · skin2-04..06 r2 写 c?n → 实为 n c 2 n（馬/炮位置）；r3c4 漏了一枚卒
+#    · r9c6 写 ? → 实为 B（相）；r9c7 写 ? → 实为 c（黑炮）；r9c0/r9c8 写 ? → 实为空（只有「最后一步」高亮环）
+#    · r5c7 写 ? → 实为 C（红炮）；skin2-04 r4c4 仍是 `?`（落子动画中间帧，不判）
+#    ⇒ 除 skin2-04 r4c4 外再无 `?`，展开后均能过 fen.validateBoard（0 错 0 警）。
+#    同批修正同步到 skin2-truth.json 与 tools/probe-glyph.js。
 TRUTH = {
     "skin-a.png": "rnbakab1r/9/3c2nc1/p1p1p1p1p/9/9/P1P1P1P1P/2N1C2C1/9/R1BAKABNR",
     "skin-b.png": "rnbakab1r/9/1c4nc1/p1p1p1p1p/9/9/P1P1P1P1P/4C2C1/9/RNBAKABNR",
     "skin-c.png": "rnbakab1r/9/3c2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/2N1C4/9/R1BAKABNR",
-    "skin2-01.png": "rnbakab1r/9/3c2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/C1N1?4/9/?1BAKA?NR",
-    "skin2-02.png": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7?1/P1P1P1P1P/C1N1?4/9/2BAKA?NR",
-    "skin2-03.png": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7?1/P1P1P1P1P/C1N1?3C/9/2BAKA?N?",
-    "skin2-04.png": "r1bakab1r/9/2c2?n2/p1p5p/4?1p2/7?1/P1P1P1P1P/C1N1?3C/9/2BAKA??1",
-    "skin2-05.png": "r1bakab1r/9/2c2?n2/p1p1p3p/6p2/7?1/P1P1P1P1P/C1N1?3C/9/2BAKA??1",
-    "skin2-06.png": "r1bakab1r/9/2c2?n2/p1p1p3p/6p2/7?1/P1P1P1P1P/C1N1?3C/9/2BAKA??1",
+    "skin2-01.png": "rnbakab1r/9/3c2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+    "skin2-02.png": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+    "skin2-03.png": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABN1",
+    "skin2-04.png": "r1bakab1r/9/2nc2n2/p1p1p3p/4?1p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
+    "skin2-05.png": "r1bakab1r/9/2nc2n2/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
+    "skin2-06.png": "r1bakab1r/9/2nc2n2/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
 }
 
 CHAR = {"帥": "K", "仕": "A", "相": "B", "兵": "P", "將": "k", "士": "a", "象": "b", "卒": "p"}

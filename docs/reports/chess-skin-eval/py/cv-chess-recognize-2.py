@@ -37,6 +37,9 @@ TW = 34           # 字窗半宽（68x68）
 ANCHOR_DY = -5    # 字形中心相对格点偏移
 SEARCH = 12       # 位移搜索半径
 CONF_NCC = 0.70   # 分类判定边界（同类min0.96 / 类间max0.55）
+# ★ 「空中子」模糊门（2026-10-04）：认不准（'?'）的格，窗内拉普拉斯方差 < 「认准的格」中位×此值
+#   ⇒ 判「子在空中/没落稳」（落子动画中间帧）按空处理。实测：静止子 ≥1289、空中子 248~395（差 4~5 倍）。
+BLUR_RATIO = 0.5
 DARK_THR = 0.18   # 有子判定（暗像素占比）
 FACE_P90 = 200    # 盘面亮度门限（真棋子窗内必有大片亮盘面；按皮肤标定）
 SIDED = ('車', '馬', '炮')   # 红黑同形、需颜色判阵营的字
@@ -189,6 +192,16 @@ def side_of_center(img, cx, cy):
     return 'r' if (r - b) > 45 else 'b'
 
 
+def _lapvar(gray, cx, cy, tw=TW):
+    """窗内清晰度（拉普拉斯方差）：值越小越糊。越界返回 None。"""
+    r0, r1 = cy - tw, cy + tw
+    c0, c1 = cx - tw, cx + tw
+    if r0 < 0 or c0 < 0 or r1 > gray.shape[0] or c1 > gray.shape[1]:
+        return None
+    win = gray[r0:r1, c0:c1].astype(np.float32)
+    return float(cv2.Laplacian(win, cv2.CV_32F).var())
+
+
 def recognize(img, v9, h10, templates, verbose=False):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     grayf = gray.astype(np.float32)
@@ -223,6 +236,26 @@ def recognize(img, v9, h10, templates, verbose=False):
                 side = 'r' if name in ('帥', '仕', '相', '兵') else 'b'
             results.append({'r': r, 'c': c, 'x': mx, 'y': my, 'name': name,
                             'ncc': round(sc, 3), 'side': side})
+
+    # ★ 「空中子」模糊门（2026-10-04）：认不准的格若远低于本帧「认准的格」的清晰度中位，
+    #   判「子在空中/没落稳」（落子动画中间帧）→ 按空处理（不再算未知格）。
+    refs = [it for it in results if it['name'] != '?' and it.get('ncc', 0) >= CONF_NCC]
+    if refs and any(it['name'] == '?' for it in results):
+        ref_vals = []
+        for it in refs:
+            lv = _lapvar(gray, int(round(it['x'])), int(round(it['y'])))
+            if lv is not None:
+                ref_vals.append(lv)
+        if ref_vals:
+            base = float(np.median(ref_vals))
+            kept = []
+            for it in results:
+                if it['name'] == '?':
+                    lv = _lapvar(gray, int(round(it['x'])), int(round(it['y'])))
+                    if lv is not None and lv < base * BLUR_RATIO:
+                        continue   # 没落稳：按空处理
+                kept.append(it)
+            results = kept
     if verbose:
         print('识别耗时 %.2fs' % (time.time() - t0))
     return results

@@ -63,7 +63,9 @@
 ### 模块结构
 ```
 apps/app       主应用（UI/打包/悬浮窗/定时任务等）
-apps/inrt      运行时模板（打包成 assets/template.apk）
+apps/inrt      运行时模板（打包成 plugins/apkbuilder-plugin 的 assets/template.apk）
+plugins/       独立插件 APK：xiangqi-plugin（象棋引擎/识别）、apkbuilder-plugin（打包模板）
+samples/       不随主 APK 分发的大型示例工程（象棋自动走棋在 samples/象棋自动走棋）
 modules/       autojs(引擎) / automator(无障碍) / common(工具)
 third-party/   EnhancedFloaty / MutableTheme / settingscompat / RootShell / ColorPicker / ApkBuilder / multi-level-listview
 ```

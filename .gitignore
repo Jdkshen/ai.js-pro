@@ -21,7 +21,14 @@
 !/tools/serve-updates.ps1
 !/tools/probe-engine-api.ps1
 !/tools/test-engine-flavors-device.ps1
+!/tools/verify-mcp-alignment-device.py
+!/tools/create-gh-proxy-manifest.py
 !/tools/observe-filelist.ps1
+# Reproducible SIFT/chess device evaluation sources.
+!/tools/prepare-sift-chess-fixtures.py
+!/tools/test-sift-chess-device.js
+!/tools/sift-chess-pipeline.js
+!/tools/test-sift-chess-pipeline-device.js
 
 # CodeGraph local index (regenerate with `codegraph init`)
 /.codegraph/
@@ -73,5 +80,5 @@ __pycache__/
 *.apk
 *.exe
 
-# Required source input for the in-app APK builder.
-!apps/app/src/main/assets/template.apk
+# Required source input for the in-app APK builder (now shipped by the apkbuilder plugin).
+!plugins/apkbuilder-plugin/src/main/assets/template.apk

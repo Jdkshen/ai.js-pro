@@ -1,0 +1,784 @@
+{
+  "complete": true,
+  "failure": null,
+  "rows": [
+    {
+      "file": "skin-a.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": false,
+      "locateMs": 228,
+      "calibrated": "sift-verified",
+      "calibrateMs": 229,
+      "observeMs": 155,
+      "ms": 612,
+      "unknown": 0,
+      "layout": "rnbakab1r/9/3c2nc1/p1p1p1p1p/9/9/P1P1P1P1P/2N1C2C1/9/R1BAKABNR",
+      "glyphStats": {
+        "ms": 149,
+        "recognizeMs": 117,
+        "inked": 32,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 5,
+          "match": 98,
+          "side": 9
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "skin-b.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": true,
+      "locateMs": 1,
+      "calibrated": "sift-verified",
+      "calibrateMs": 207,
+      "observeMs": 164,
+      "ms": 372,
+      "unknown": 0,
+      "layout": "rnbakab1r/9/1c4nc1/p1p1p1p1p/9/9/P1P1P1P1P/4C2C1/9/RNBAKABNR",
+      "glyphStats": {
+        "ms": 162,
+        "recognizeMs": 127,
+        "inked": 32,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 8,
+          "match": 101,
+          "side": 11
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "skin-c.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": false,
+      "locateMs": 111,
+      "calibrated": "sift-verified",
+      "calibrateMs": 236,
+      "observeMs": 219,
+      "ms": 566,
+      "unknown": 0,
+      "layout": "rnbakab1r/9/3c2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/2N1C4/9/R1BAKABNR",
+      "glyphStats": {
+        "ms": 215,
+        "recognizeMs": 180,
+        "inked": 32,
+        "retries": 2,
+        "rescued": 1,
+        "rescues": 1,
+        "rescueMs": 12,
+        "notes": [
+          {
+            "kind": "rescued",
+            "idx": 88,
+            "col": 7,
+            "row": 9,
+            "name": "馬",
+            "sim": 0.8811479806900024,
+            "gap": 0.3375033736228943,
+            "scale": 1.1,
+            "was": "相",
+            "wasSim": 0.3188355267047882
+          }
+        ],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 10,
+          "match": 154,
+          "side": 8
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "skin2-01.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": true,
+      "locateMs": 1,
+      "calibrated": "sift-verified",
+      "calibrateMs": 191,
+      "observeMs": 180,
+      "ms": 372,
+      "unknown": 0,
+      "layout": "rnbakab1r/9/3c2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+      "glyphStats": {
+        "ms": 178,
+        "recognizeMs": 142,
+        "inked": 32,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 9,
+          "match": 120,
+          "side": 7
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "skin2-02.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": true,
+      "locateMs": 1,
+      "calibrated": "sift-verified",
+      "calibrateMs": 200,
+      "observeMs": 172,
+      "ms": 373,
+      "unknown": 0,
+      "layout": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+      "glyphStats": {
+        "ms": 169,
+        "recognizeMs": 134,
+        "inked": 32,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 7,
+          "match": 113,
+          "side": 8
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "skin2-03.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": true,
+      "locateMs": 1,
+      "calibrated": "sift-verified",
+      "calibrateMs": 206,
+      "observeMs": 178,
+      "ms": 385,
+      "unknown": 0,
+      "layout": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABN1",
+      "glyphStats": {
+        "ms": 174,
+        "recognizeMs": 141,
+        "inked": 32,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 11,
+          "match": 114,
+          "side": 8
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "skin2-04.png",
+      "ok": false,
+      "reason": "棋盘河界参照变化，请重新定位",
+      "method": "sift",
+      "geometryCacheHit": false,
+      "locateMs": 113,
+      "calibrated": null,
+      "calibrateMs": null,
+      "observeMs": 1,
+      "ms": 499,
+      "score": {
+        "correct": 58,
+        "total": 89,
+        "wrong": [
+          {
+            "row": 0,
+            "col": 0,
+            "expected": "r",
+            "actual": null
+          },
+          {
+            "row": 0,
+            "col": 2,
+            "expected": "b",
+            "actual": null
+          },
+          {
+            "row": 0,
+            "col": 3,
+            "expected": "a",
+            "actual": null
+          },
+          {
+            "row": 0,
+            "col": 4,
+            "expected": "k",
+            "actual": null
+          },
+          {
+            "row": 0,
+            "col": 5,
+            "expected": "a",
+            "actual": null
+          },
+          {
+            "row": 0,
+            "col": 6,
+            "expected": "b",
+            "actual": null
+          },
+          {
+            "row": 0,
+            "col": 8,
+            "expected": "r",
+            "actual": null
+          },
+          {
+            "row": 2,
+            "col": 2,
+            "expected": "n",
+            "actual": null
+          },
+          {
+            "row": 2,
+            "col": 3,
+            "expected": "c",
+            "actual": null
+          },
+          {
+            "row": 2,
+            "col": 6,
+            "expected": "n",
+            "actual": null
+          },
+          {
+            "row": 3,
+            "col": 0,
+            "expected": "p",
+            "actual": null
+          },
+          {
+            "row": 3,
+            "col": 2,
+            "expected": "p",
+            "actual": null
+          },
+          {
+            "row": 3,
+            "col": 4,
+            "expected": "p",
+            "actual": null
+          },
+          {
+            "row": 3,
+            "col": 8,
+            "expected": "p",
+            "actual": null
+          },
+          {
+            "row": 4,
+            "col": 6,
+            "expected": "p",
+            "actual": null
+          },
+          {
+            "row": 5,
+            "col": 7,
+            "expected": "C",
+            "actual": null
+          },
+          {
+            "row": 6,
+            "col": 0,
+            "expected": "P",
+            "actual": null
+          },
+          {
+            "row": 6,
+            "col": 2,
+            "expected": "P",
+            "actual": null
+          },
+          {
+            "row": 6,
+            "col": 4,
+            "expected": "P",
+            "actual": null
+          },
+          {
+            "row": 6,
+            "col": 6,
+            "expected": "P",
+            "actual": null
+          },
+          {
+            "row": 6,
+            "col": 8,
+            "expected": "P",
+            "actual": null
+          },
+          {
+            "row": 7,
+            "col": 0,
+            "expected": "R",
+            "actual": null
+          },
+          {
+            "row": 7,
+            "col": 2,
+            "expected": "N",
+            "actual": null
+          },
+          {
+            "row": 7,
+            "col": 4,
+            "expected": "C",
+            "actual": null
+          },
+          {
+            "row": 7,
+            "col": 8,
+            "expected": "R",
+            "actual": null
+          },
+          {
+            "row": 9,
+            "col": 2,
+            "expected": "B",
+            "actual": null
+          },
+          {
+            "row": 9,
+            "col": 3,
+            "expected": "A",
+            "actual": null
+          },
+          {
+            "row": 9,
+            "col": 4,
+            "expected": "K",
+            "actual": null
+          },
+          {
+            "row": 9,
+            "col": 5,
+            "expected": "A",
+            "actual": null
+          },
+          {
+            "row": 9,
+            "col": 6,
+            "expected": "B",
+            "actual": null
+          },
+          {
+            "row": 9,
+            "col": 7,
+            "expected": "c",
+            "actual": null
+          }
+        ]
+      }
+    },
+    {
+      "file": "skin2-05.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": true,
+      "locateMs": 1,
+      "calibrated": "sift-verified",
+      "calibrateMs": 188,
+      "observeMs": 166,
+      "ms": 355,
+      "unknown": 0,
+      "layout": "r1bakab1r/9/2nc2n2/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
+      "glyphStats": {
+        "ms": 162,
+        "recognizeMs": 130,
+        "inked": 31,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 31,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 7,
+          "match": 106,
+          "side": 9
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "skin2-06.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": true,
+      "locateMs": 1,
+      "calibrated": "sift-verified",
+      "calibrateMs": 197,
+      "observeMs": 168,
+      "ms": 366,
+      "unknown": 0,
+      "layout": "r1bakab1r/9/2nc2n2/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
+      "glyphStats": {
+        "ms": 166,
+        "recognizeMs": 133,
+        "inked": 31,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 31,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 8,
+          "match": 109,
+          "side": 8
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "shifted.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": false,
+      "locateMs": 129,
+      "calibrated": "sift-verified",
+      "calibrateMs": 232,
+      "observeMs": 190,
+      "ms": 551,
+      "unknown": 0,
+      "layout": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABN1",
+      "glyphStats": {
+        "ms": 185,
+        "recognizeMs": 149,
+        "inked": 32,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 6,
+          "match": 126,
+          "side": 10
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "scaled.png",
+      "ok": true,
+      "reason": null,
+      "method": "sift",
+      "geometryCacheHit": false,
+      "locateMs": 103,
+      "calibrated": "sift-verified",
+      "calibrateMs": 130,
+      "observeMs": 120,
+      "ms": 353,
+      "unknown": 0,
+      "layout": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+      "glyphStats": {
+        "ms": 116,
+        "recognizeMs": 99,
+        "inked": 32,
+        "retries": 0,
+        "rescued": 0,
+        "rescues": 0,
+        "rescueMs": 0,
+        "notes": [],
+        "resolve": {
+          "filled": 0,
+          "demoted": 0,
+          "flipped": 0,
+          "unknownBefore": 0,
+          "unknownAfter": 0
+        },
+        "resolvedFilled": [],
+        "resolvedDemoted": [],
+        "resolvedFlipped": [],
+        "heldIdentities": 0,
+        "circleEvidence": {
+          "active": true,
+          "circles": 32,
+          "conflicts": 0
+        },
+        "profile": {
+          "gates": 9,
+          "match": 79,
+          "side": 8
+        }
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "file": "no-board.png",
+      "ok": false,
+      "reason": "Canny 定位：木色棋盘的连续横带不足；图色格线定位：格线证据不足（竖 0/9，横 0/10）；SIFT：board-not-found",
+      "ms": 499,
+      "score": {
+        "correct": true,
+        "negative": true
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "shifted.png rejects previous grid",
+      "pass": true
+    },
+    {
+      "name": "driver rejects old first frame after board moves in second frame",
+      "pass": true,
+      "calls": 2,
+      "reason": "棋盘河界参照变化，请重新定位",
+      "geometryChanged": true
+    },
+    {
+      "name": "scaled.png rejects previous grid",
+      "pass": true
+    },
+    {
+      "name": "no-board.png rejects previous grid",
+      "pass": true
+    }
+  ],
+  "repeats": [
+    {
+      "ms": 164,
+      "ok": true,
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "ms": 183,
+      "ok": true,
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    },
+    {
+      "ms": 171,
+      "ok": true,
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "wrong": []
+      }
+    }
+  ],
+  "time": 1790931120473
+}

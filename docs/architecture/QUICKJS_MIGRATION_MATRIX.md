@@ -38,7 +38,7 @@
 | 领域 | 硬阻塞 |
 | --- | --- |
 | 手势与输入 | `gesture*`/`input`/根助手已对齐；`rawInput`/`Input`/`KeyEvent` 类注入与 `automator` 模块已随完整 Java 反射补齐，旧脚本无需改写法 |
-| 模块 | `plugins` 尚未迁移（插件 SDK 依赖 Rhino scope）；`images`/OpenCV（帧↔Mat 桥、`images.opencv`、`inRange`/`interval`/`adaptiveThreshold`/`gaussianBlur`/`medianBlur`/`findCircles`/`findAllPointsForColor`/`toBytes`/`fromBytes`/`readPixels`）已对齐，`crypto`/`zips`/`util`/`automator`/`context`/`rawInput`/`sqlite`/`io`/`web`/`continuation` 已对齐 |
+| 模块 | `plugins` 已迁移：两个引擎都能 `$plugins.load(包名)`（QuickJS 侧 `modules/qjs-plugins.js` + `QuickJsApiExtensions.loadPlugin`；Rhino 侧仍传 `TopLevelScope`，QuickJS 传 null）；`images`/OpenCV（帧↔Mat 桥、`images.opencv`、`inRange`/`interval`/`adaptiveThreshold`/`gaussianBlur`/`medianBlur`/`findCircles`/`findAllPointsForColor`/`toBytes`/`fromBytes`/`readPixels`）已对齐，`crypto`/`zips`/`util`/`automator`/`context`/`rawInput`/`sqlite`/`io`/`web`/`continuation` 已对齐 |
 | UI | QuickJS 是 overlay 实现（`ui.layout` 全屏覆盖层 + `ui.<id>` 代理 + `ui.emitter`），未覆盖 Rhino 的 UI Activity 模式与 JSX/动态绑定 |
 | floaty | XML/文本窗口、控件代理（含 `attr` 与属性式读写、`click()/click(fn)`、`on("click"/"long_click"/"key"/"touch")`）、窗口 `getWidth/getHeight/findView`、不存在控件返回 undefined 均已对齐，且窗口级 `show/hide/setVisibility/isShown/setContentVisible` + `setAlpha/setScale` + `{x,y,visible:false}` 创建即定位、`javaView` 真句柄 + `animate()` 系统动画 + `runOnMainThread`、进程级窗口注册表 + `windowById`/`post` + `attached`/`detached` 生命周期、`setTouchable(false)` 触摸穿透 + `setDraggable` 已补齐（需求清单批A/B/C/D）；与 Rhino 的差异只剩 overlay 层级限制 |
 | web | `http` 与 `newInjectableWebView/Client` 的 `inject`/`loadUrl`/`loadData` 已可用；页面→脚本的 `rhino.call/eval` 为异步回调（引擎线程执行，`injectAndWait` 不支持） |

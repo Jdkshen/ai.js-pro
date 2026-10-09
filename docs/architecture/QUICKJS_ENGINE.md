@@ -2,6 +2,8 @@
 
 > 路径核对日期：2026-09-04。双引擎、Native Frame + C++ OpenCV 图色处理、OpenCV YOLO 和白名单 API 已落地；QuickJS 为显式选择的新引擎，Rhino 仍是默认兼容引擎。文中代码路径均以仓库根目录为基准。
 
+> 2026-10-02 / dev-765 更新：QuickJS 已支持字符串布局的 `"ui";`、CommonJS require、Java 桥与 Canvas draw。下文的“第一批”能力表保留历史范围；现阶段画布与真实项目兼容情况见 [dev-765 验收](../reports/2026-10-02_QuickJS画布与佣兵项目兼容修复_dev765.md)。
+
 ## 1. 总体结构
 
 ```text
@@ -37,7 +39,13 @@ console.log(__engine__);
 toast("这是 QuickJS 脚本");
 ```
 
-指令只在第一条非空行生效，防止依赖内容或注释中偶然出现 `@engine quickjs` 时静默切换引擎。QuickJS 脚本不能使用 Rhino 专属的 `"ui";`、E4X、Java 反射对象或 CommonJS `require()`。
+引擎标记放在入口头部（UI 脚本先写 `"ui";`，随后写标记）。当前 QuickJS 支持字符串布局的 UI、CommonJS require 和 Java.type/importClass 桥；裸 XML（E4X）仍是 Rhino 语法，包含 E4X 的旧项目使用 Rhino 执行。
+
+### Canvas draw（dev-765）
+
+QuickJS 的 `ui.board` 与浮窗 `window.board` 支持 `on('draw', callback)`、once、增删监听和 setMaxFps。回调收到 ScriptCanvas 和对应控件，在所属 JS 线程执行；Android Paint/Path 可通过 Java 桥创建。反引号布局可直接使用，无需改成其他绘图库。
+
+两引擎均在离屏 Bitmap 绘制完成帧，然后提交到 TextureView。QuickJS 在 JS 事件循环调度回调，Rhino 保持独立绘制线程；Surface 锁仅包围提交，避免窗口销毁与脚本绘图竞争，允许 Rhino 回调调用 ui.run。正常复用两个 Bitmap，窗口关闭、QuickJS UI 替换和引擎退出回收。示例：`apps/app/src/main/assets/sample/QuickJS 新引擎/画布/悬浮画布.js`。
 
 ## 3. 当前 QuickJS 能力
 

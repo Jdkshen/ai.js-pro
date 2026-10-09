@@ -1,0 +1,2329 @@
+{
+  "engine": "rhino",
+  "complete": true,
+  "rows": [
+    {
+      "frame": "skin-a.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 11.8393006325,
+            "y": 599.802246094
+          },
+          "topRight": {
+            "x": 1067.85955811,
+            "y": 599.633285522
+          },
+          "bottomRight": {
+            "x": 1067.65374756,
+            "y": 1775.80297852
+          },
+          "bottomLeft": {
+            "x": 11.6613628864,
+            "y": 1775.51696777
+          },
+          "corners": [
+            {
+              "x": 11.8393006325,
+              "y": 599.802246094
+            },
+            {
+              "x": 1067.85955811,
+              "y": 599.633285522
+            },
+            {
+              "x": 1067.65374756,
+              "y": 1775.80297852
+            },
+            {
+              "x": 11.6613628864,
+              "y": 1775.51696777
+            }
+          ],
+          "angles": [
+            90.0178385706,
+            89.9808069917,
+            89.9945075271,
+            90.0068469106
+          ],
+          "center": {
+            "x": 539.651367188,
+            "y": 1187.69659424
+          },
+          "centerX": 539.651367188,
+          "centerY": 1187.69659424,
+          "matchCount": 271,
+          "candidateCount": 398,
+          "sceneFeatureCount": 1236,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "full",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.333333333333,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.009948,
+            "featureMs": 71.382187,
+            "flannMs": 20.810938,
+            "cacheCheckMs": 0.000521,
+            "geometryMs": 0.712083,
+            "drawMs": 0
+          },
+          "elapsedMs": 93.040312
+        },
+        "grid": {
+          "originX": 81.24063194778267,
+          "originY": 668.7855078249897,
+          "stepX": 114.777201753769,
+          "stepY": 114.8610187276062
+        },
+        "usable": true,
+        "geometryCacheHit": false,
+        "locateMs": 101,
+        "recognizeMs": 252,
+        "elapsedMs": 353,
+        "chars": [
+          "r",
+          "n",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "c",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "R",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "R"
+        ],
+        "fen": "rnbakab1r/9/3c2nc1/p1p1p1p1p/9/9/P1P1P1P1P/2N1C2C1/9/R1BAKABNR",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 37,
+          "match": 98,
+          "side": 107
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "skin-b.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 11.8393006325,
+            "y": 599.802246094
+          },
+          "topRight": {
+            "x": 1067.85955811,
+            "y": 599.633285522
+          },
+          "bottomRight": {
+            "x": 1067.65374756,
+            "y": 1775.80297852
+          },
+          "bottomLeft": {
+            "x": 11.6613628864,
+            "y": 1775.51696777
+          },
+          "corners": [
+            {
+              "x": 11.8393006325,
+              "y": 599.802246094
+            },
+            {
+              "x": 1067.85955811,
+              "y": 599.633285522
+            },
+            {
+              "x": 1067.65374756,
+              "y": 1775.80297852
+            },
+            {
+              "x": 11.6613628864,
+              "y": 1775.51696777
+            }
+          ],
+          "angles": [
+            90.0178385706,
+            89.9808069917,
+            89.9945075271,
+            90.0068469106
+          ],
+          "center": {
+            "x": 539.651367188,
+            "y": 1187.69659424
+          },
+          "centerX": 539.651367188,
+          "centerY": 1187.69659424,
+          "matchCount": 271,
+          "candidateCount": 398,
+          "sceneFeatureCount": 1236,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "full",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.333333333333,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.009948,
+            "featureMs": 71.382187,
+            "flannMs": 20.810938,
+            "cacheCheckMs": 0.000521,
+            "geometryMs": 0.712083,
+            "drawMs": 0
+          },
+          "elapsedMs": 93.040312
+        },
+        "grid": {
+          "originX": 81.24063194778267,
+          "originY": 668.7855078249897,
+          "stepX": 114.777201753769,
+          "stepY": 114.8610187276062
+        },
+        "usable": true,
+        "geometryCacheHit": true,
+        "locateMs": 7,
+        "recognizeMs": 257,
+        "elapsedMs": 264,
+        "chars": [
+          "r",
+          "n",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "c",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "R",
+          "N",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "R"
+        ],
+        "fen": "rnbakab1r/9/1c4nc1/p1p1p1p1p/9/9/P1P1P1P1P/4C2C1/9/RNBAKABNR",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 36,
+          "match": 97,
+          "side": 117
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "skin-c.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 12.0028266907,
+            "y": 600.004398346
+          },
+          "topRight": {
+            "x": 1068.00256348,
+            "y": 600.001819611
+          },
+          "bottomRight": {
+            "x": 1067.99768066,
+            "y": 1776.00439453
+          },
+          "bottomLeft": {
+            "x": 11.987156868,
+            "y": 1775.9921875
+          },
+          "corners": [
+            {
+              "x": 12.0028266907,
+              "y": 600.004398346
+            },
+            {
+              "x": 1068.00256348,
+              "y": 600.001819611
+            },
+            {
+              "x": 1067.99768066,
+              "y": 1776.00439453
+            },
+            {
+              "x": 11.987156868,
+              "y": 1775.9921875
+            }
+          ],
+          "angles": [
+            90.0009033712,
+            89.9996221901,
+            89.9995755797,
+            89.999898859
+          ],
+          "center": {
+            "x": 539.994262695,
+            "y": 1187.99768066
+          },
+          "centerX": 539.994262695,
+          "centerY": 1187.99768066,
+          "matchCount": 1389,
+          "candidateCount": 1476,
+          "sceneFeatureCount": 1827,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "tracked",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.5,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006614,
+            "featureMs": 85.773698,
+            "flannMs": 22.584427,
+            "cacheCheckMs": 0.001458,
+            "geometryMs": 1.22651,
+            "drawMs": 0
+          },
+          "elapsedMs": 109.827708
+        },
+        "grid": {
+          "originX": 81.40280939257256,
+          "originY": 669.0036818933011,
+          "stepX": 114.7749713920378,
+          "stepY": 114.8876959547653
+        },
+        "usable": true,
+        "geometryCacheHit": false,
+        "locateMs": 120,
+        "recognizeMs": 257,
+        "elapsedMs": 377,
+        "chars": [
+          "r",
+          "n",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "c",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "R",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "R"
+        ],
+        "fen": "rnbakab1r/9/3c2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/2N1C4/9/R1BAKABNR",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 32,
+          "match": 108,
+          "side": 105
+        },
+        "rescues": 1,
+        "notes": [
+          {
+            "kind": "rescued",
+            "idx": 88,
+            "col": 7,
+            "row": 9,
+            "name": "馬",
+            "sim": 0.8811479806900024,
+            "gap": 0.3375033736228943,
+            "scale": 1.1,
+            "was": "相",
+            "wasSim": 0.3188357353210449
+          }
+        ]
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "skin2-01.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 12.0028266907,
+            "y": 600.004398346
+          },
+          "topRight": {
+            "x": 1068.00256348,
+            "y": 600.001819611
+          },
+          "bottomRight": {
+            "x": 1067.99768066,
+            "y": 1776.00439453
+          },
+          "bottomLeft": {
+            "x": 11.987156868,
+            "y": 1775.9921875
+          },
+          "corners": [
+            {
+              "x": 12.0028266907,
+              "y": 600.004398346
+            },
+            {
+              "x": 1068.00256348,
+              "y": 600.001819611
+            },
+            {
+              "x": 1067.99768066,
+              "y": 1776.00439453
+            },
+            {
+              "x": 11.987156868,
+              "y": 1775.9921875
+            }
+          ],
+          "angles": [
+            90.0009033712,
+            89.9996221901,
+            89.9995755797,
+            89.999898859
+          ],
+          "center": {
+            "x": 539.994262695,
+            "y": 1187.99768066
+          },
+          "centerX": 539.994262695,
+          "centerY": 1187.99768066,
+          "matchCount": 1389,
+          "candidateCount": 1476,
+          "sceneFeatureCount": 1827,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "tracked",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.5,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006614,
+            "featureMs": 85.773698,
+            "flannMs": 22.584427,
+            "cacheCheckMs": 0.001458,
+            "geometryMs": 1.22651,
+            "drawMs": 0
+          },
+          "elapsedMs": 109.827708
+        },
+        "grid": {
+          "originX": 81.40280939257256,
+          "originY": 669.0036818933011,
+          "stepX": 114.7749713920378,
+          "stepY": 114.8876959547653
+        },
+        "usable": true,
+        "geometryCacheHit": true,
+        "locateMs": 7,
+        "recognizeMs": 244,
+        "elapsedMs": 251,
+        "chars": [
+          "r",
+          "n",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "c",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "R"
+        ],
+        "fen": "rnbakab1r/9/3c2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 39,
+          "match": 96,
+          "side": 102
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "skin2-02.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 12.0028266907,
+            "y": 600.004398346
+          },
+          "topRight": {
+            "x": 1068.00256348,
+            "y": 600.001819611
+          },
+          "bottomRight": {
+            "x": 1067.99768066,
+            "y": 1776.00439453
+          },
+          "bottomLeft": {
+            "x": 11.987156868,
+            "y": 1775.9921875
+          },
+          "corners": [
+            {
+              "x": 12.0028266907,
+              "y": 600.004398346
+            },
+            {
+              "x": 1068.00256348,
+              "y": 600.001819611
+            },
+            {
+              "x": 1067.99768066,
+              "y": 1776.00439453
+            },
+            {
+              "x": 11.987156868,
+              "y": 1775.9921875
+            }
+          ],
+          "angles": [
+            90.0009033712,
+            89.9996221901,
+            89.9995755797,
+            89.999898859
+          ],
+          "center": {
+            "x": 539.994262695,
+            "y": 1187.99768066
+          },
+          "centerX": 539.994262695,
+          "centerY": 1187.99768066,
+          "matchCount": 1389,
+          "candidateCount": 1476,
+          "sceneFeatureCount": 1827,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "tracked",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.5,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006614,
+            "featureMs": 85.773698,
+            "flannMs": 22.584427,
+            "cacheCheckMs": 0.001458,
+            "geometryMs": 1.22651,
+            "drawMs": 0
+          },
+          "elapsedMs": 109.827708
+        },
+        "grid": {
+          "originX": 81.40280939257256,
+          "originY": 669.0036818933011,
+          "stepX": 114.7749713920378,
+          "stepY": 114.8876959547653
+        },
+        "usable": true,
+        "geometryCacheHit": true,
+        "locateMs": 7,
+        "recognizeMs": 247,
+        "elapsedMs": 254,
+        "chars": [
+          "r",
+          ".",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "R"
+        ],
+        "fen": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 34,
+          "match": 97,
+          "side": 106
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "skin2-03.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 12.0028266907,
+            "y": 600.004398346
+          },
+          "topRight": {
+            "x": 1068.00256348,
+            "y": 600.001819611
+          },
+          "bottomRight": {
+            "x": 1067.99768066,
+            "y": 1776.00439453
+          },
+          "bottomLeft": {
+            "x": 11.987156868,
+            "y": 1775.9921875
+          },
+          "corners": [
+            {
+              "x": 12.0028266907,
+              "y": 600.004398346
+            },
+            {
+              "x": 1068.00256348,
+              "y": 600.001819611
+            },
+            {
+              "x": 1067.99768066,
+              "y": 1776.00439453
+            },
+            {
+              "x": 11.987156868,
+              "y": 1775.9921875
+            }
+          ],
+          "angles": [
+            90.0009033712,
+            89.9996221901,
+            89.9995755797,
+            89.999898859
+          ],
+          "center": {
+            "x": 539.994262695,
+            "y": 1187.99768066
+          },
+          "centerX": 539.994262695,
+          "centerY": 1187.99768066,
+          "matchCount": 1389,
+          "candidateCount": 1476,
+          "sceneFeatureCount": 1827,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "tracked",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.5,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006614,
+            "featureMs": 85.773698,
+            "flannMs": 22.584427,
+            "cacheCheckMs": 0.001458,
+            "geometryMs": 1.22651,
+            "drawMs": 0
+          },
+          "elapsedMs": 109.827708
+        },
+        "grid": {
+          "originX": 81.40280939257256,
+          "originY": 669.0036818933011,
+          "stepX": 114.7749713920378,
+          "stepY": 114.8876959547653
+        },
+        "usable": true,
+        "geometryCacheHit": true,
+        "locateMs": 8,
+        "recognizeMs": 256,
+        "elapsedMs": 264,
+        "chars": [
+          "r",
+          ".",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          "R",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "."
+        ],
+        "fen": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABN1",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 35,
+          "match": 106,
+          "side": 106
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "skin2-04.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 11.994931221,
+            "y": 600.007444382
+          },
+          "topRight": {
+            "x": 1068.00817871,
+            "y": 599.995574951
+          },
+          "bottomRight": {
+            "x": 1068.00561523,
+            "y": 1776.00708008
+          },
+          "bottomLeft": {
+            "x": 11.9887619019,
+            "y": 1775.99194336
+          },
+          "corners": [
+            {
+              "x": 11.994931221,
+              "y": 600.007444382
+            },
+            {
+              "x": 1068.00817871,
+              "y": 599.995574951
+            },
+            {
+              "x": 1068.00561523,
+              "y": 1776.00708008
+            },
+            {
+              "x": 11.9887619019,
+              "y": 1775.99194336
+            }
+          ],
+          "angles": [
+            90.0009445747,
+            89.9992311104,
+            89.9993036283,
+            90.0005206866
+          ],
+          "center": {
+            "x": 539.993286133,
+            "y": 1187.99951172
+          },
+          "centerX": 539.993286133,
+          "centerY": 1187.99951172,
+          "matchCount": 1099,
+          "candidateCount": 1243,
+          "sceneFeatureCount": 1971,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "tracked",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.5,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006407,
+            "featureMs": 98.782501,
+            "flannMs": 23.661615,
+            "cacheCheckMs": 0.001354,
+            "geometryMs": 1.091615,
+            "drawMs": 0
+          },
+          "elapsedMs": 123.832761
+        },
+        "grid": {
+          "originX": 81.39580184196271,
+          "originY": 669.0065348832602,
+          "stepX": 114.77643984900568,
+          "stepY": 114.88737452222712
+        },
+        "usable": false,
+        "geometryCacheHit": false,
+        "locateMs": 133,
+        "recognizeMs": 350,
+        "elapsedMs": 483,
+        "chars": [
+          "r",
+          ".",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          ".",
+          "n",
+          ".",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "?",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "?",
+          ".",
+          "n",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          "R",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "c",
+          "."
+        ],
+        "fen": "r1bakab1r/9/2nc2n2/p1p1p3p/3?2p2/3?1n1C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
+        "unknown": 2,
+        "inked": 34,
+        "profile": {
+          "gates": 45,
+          "match": 190,
+          "side": 109
+        },
+        "rescues": 3,
+        "notes": [
+          {
+            "kind": "unknown",
+            "gate": "match",
+            "idx": 39,
+            "col": 3,
+            "row": 4,
+            "name": "象",
+            "sim": 0.22010381519794464,
+            "second": "馬",
+            "secondSim": 0.18773724138736725
+          },
+          {
+            "kind": "unknown",
+            "gate": "match",
+            "idx": 48,
+            "col": 3,
+            "row": 5,
+            "name": "兵",
+            "sim": 0.24539482593536377,
+            "second": "象",
+            "secondSim": 0.24109847843647003
+          }
+        ]
+      },
+      "score": {
+        "correct": 86,
+        "total": 89,
+        "pieceCorrect": 31,
+        "pieceTotal": 31,
+        "colorWrong": 0,
+        "wrong": [
+          {
+            "row": 4,
+            "col": 3,
+            "expected": ".",
+            "actual": "?"
+          },
+          {
+            "row": 5,
+            "col": 3,
+            "expected": ".",
+            "actual": "?"
+          },
+          {
+            "row": 5,
+            "col": 5,
+            "expected": ".",
+            "actual": "n"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "skin2-05.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 12.0028266907,
+            "y": 600.004398346
+          },
+          "topRight": {
+            "x": 1068.00256348,
+            "y": 600.001819611
+          },
+          "bottomRight": {
+            "x": 1067.99768066,
+            "y": 1776.00439453
+          },
+          "bottomLeft": {
+            "x": 11.987156868,
+            "y": 1775.9921875
+          },
+          "corners": [
+            {
+              "x": 12.0028266907,
+              "y": 600.004398346
+            },
+            {
+              "x": 1068.00256348,
+              "y": 600.001819611
+            },
+            {
+              "x": 1067.99768066,
+              "y": 1776.00439453
+            },
+            {
+              "x": 11.987156868,
+              "y": 1775.9921875
+            }
+          ],
+          "angles": [
+            90.0009033712,
+            89.9996221901,
+            89.9995755797,
+            89.999898859
+          ],
+          "center": {
+            "x": 539.994262695,
+            "y": 1187.99768066
+          },
+          "centerX": 539.994262695,
+          "centerY": 1187.99768066,
+          "matchCount": 1389,
+          "candidateCount": 1476,
+          "sceneFeatureCount": 1827,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "tracked",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.5,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006614,
+            "featureMs": 85.773698,
+            "flannMs": 22.584427,
+            "cacheCheckMs": 0.001458,
+            "geometryMs": 1.22651,
+            "drawMs": 0
+          },
+          "elapsedMs": 109.827708
+        },
+        "grid": {
+          "originX": 81.40280939257256,
+          "originY": 669.0036818933011,
+          "stepX": 114.7749713920378,
+          "stepY": 114.8876959547653
+        },
+        "usable": true,
+        "geometryCacheHit": true,
+        "locateMs": 9,
+        "recognizeMs": 241,
+        "elapsedMs": 250,
+        "chars": [
+          "r",
+          ".",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          ".",
+          "n",
+          ".",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          "R",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "c",
+          "."
+        ],
+        "fen": "r1bakab1r/9/2nc2n2/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
+        "unknown": 0,
+        "inked": 31,
+        "profile": {
+          "gates": 40,
+          "match": 95,
+          "side": 97
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 31,
+        "pieceTotal": 31,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "skin2-06.png",
+      "group": "original",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 12.0028266907,
+            "y": 600.004398346
+          },
+          "topRight": {
+            "x": 1068.00256348,
+            "y": 600.001819611
+          },
+          "bottomRight": {
+            "x": 1067.99768066,
+            "y": 1776.00439453
+          },
+          "bottomLeft": {
+            "x": 11.987156868,
+            "y": 1775.9921875
+          },
+          "corners": [
+            {
+              "x": 12.0028266907,
+              "y": 600.004398346
+            },
+            {
+              "x": 1068.00256348,
+              "y": 600.001819611
+            },
+            {
+              "x": 1067.99768066,
+              "y": 1776.00439453
+            },
+            {
+              "x": 11.987156868,
+              "y": 1775.9921875
+            }
+          ],
+          "angles": [
+            90.0009033712,
+            89.9996221901,
+            89.9995755797,
+            89.999898859
+          ],
+          "center": {
+            "x": 539.994262695,
+            "y": 1187.99768066
+          },
+          "centerX": 539.994262695,
+          "centerY": 1187.99768066,
+          "matchCount": 1389,
+          "candidateCount": 1476,
+          "sceneFeatureCount": 1827,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "tracked",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.5,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006614,
+            "featureMs": 85.773698,
+            "flannMs": 22.584427,
+            "cacheCheckMs": 0.001458,
+            "geometryMs": 1.22651,
+            "drawMs": 0
+          },
+          "elapsedMs": 109.827708
+        },
+        "grid": {
+          "originX": 81.40280939257256,
+          "originY": 669.0036818933011,
+          "stepX": 114.7749713920378,
+          "stepY": 114.8876959547653
+        },
+        "usable": true,
+        "geometryCacheHit": true,
+        "locateMs": 7,
+        "recognizeMs": 245,
+        "elapsedMs": 252,
+        "chars": [
+          "r",
+          ".",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          ".",
+          "n",
+          ".",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          "R",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "c",
+          "."
+        ],
+        "fen": "r1bakab1r/9/2nc2n2/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABc1",
+        "unknown": 0,
+        "inked": 31,
+        "profile": {
+          "gates": 33,
+          "match": 107,
+          "side": 95
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 31,
+        "pieceTotal": 31,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "shifted.png",
+      "group": "transformed",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 71.7213821411,
+            "y": 679.983157958
+          },
+          "topRight": {
+            "x": 1127.70996094,
+            "y": 679.61768268
+          },
+          "bottomRight": {
+            "x": 1128.16635132,
+            "y": 1855.91008979
+          },
+          "bottomLeft": {
+            "x": 71.5508022308,
+            "y": 1855.82516152
+          },
+          "corners": [
+            {
+              "x": 71.7213821411,
+              "y": 679.983157958
+            },
+            {
+              "x": 1127.70996094,
+              "y": 679.61768268
+            },
+            {
+              "x": 1128.16635132,
+              "y": 1855.91008979
+            },
+            {
+              "x": 71.5508022308,
+              "y": 1855.82516152
+            }
+          ],
+          "angles": [
+            90.0281418635,
+            90.0024002821,
+            89.973164478,
+            89.9962933764
+          ],
+          "center": {
+            "x": 599.685974121,
+            "y": 1267.65953337
+          },
+          "centerX": 599.685974121,
+          "centerY": 1267.65953337,
+          "matchCount": 164,
+          "candidateCount": 293,
+          "sceneFeatureCount": 1238,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "full",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.333333333333,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.006666,
+            "featureMs": 96.565521,
+            "flannMs": 21.544428,
+            "cacheCheckMs": 0.001667,
+            "geometryMs": 1.241614,
+            "drawMs": 0
+          },
+          "elapsedMs": 119.637239
+        },
+        "grid": {
+          "originX": 141.12063154322465,
+          "originY": 748.9738877588317,
+          "stepX": 114.7737586473899,
+          "stepY": 114.87345348479856
+        },
+        "usable": true,
+        "geometryCacheHit": false,
+        "locateMs": 129,
+        "recognizeMs": 252,
+        "elapsedMs": 381,
+        "chars": [
+          "r",
+          ".",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          "R",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "."
+        ],
+        "fen": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C3R/9/2BAKABN1",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 38,
+          "match": 98,
+          "side": 100
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "scaled.png",
+      "group": "transformed",
+      "result": {
+        "ok": true,
+        "reason": null,
+        "location": {
+          "topLeft": {
+            "x": 8.56747627258,
+            "y": 449.544021606
+          },
+          "topRight": {
+            "x": 800.639282227,
+            "y": 449.6015625
+          },
+          "bottomRight": {
+            "x": 800.512939453,
+            "y": 1331.66070557
+          },
+          "bottomLeft": {
+            "x": 8.67176270485,
+            "y": 1331.57400513
+          },
+          "corners": [
+            {
+              "x": 8.56747627258,
+              "y": 449.544021606
+            },
+            {
+              "x": 800.639282227,
+              "y": 449.6015625
+            },
+            {
+              "x": 800.512939453,
+              "y": 1331.66070557
+            },
+            {
+              "x": 8.67176270485,
+              "y": 1331.57400513
+            }
+          ],
+          "angles": [
+            89.989063346,
+            89.9959554845,
+            90.0019333865,
+            90.013047783
+          ],
+          "center": {
+            "x": 404.591308594,
+            "y": 890.659332275
+          },
+          "centerX": 404.591308594,
+          "centerY": 890.659332275,
+          "matchCount": 163,
+          "candidateCount": 262,
+          "sceneFeatureCount": 730,
+          "templateFeatureCount": 1823,
+          "method": "SIFT",
+          "backend": "cpp",
+          "searchMode": "full",
+          "inputMode": "mat",
+          "templatePrepareMs": 114.053906,
+          "featureCacheHit": false,
+          "indexCacheHit": false,
+          "searchScale": 0.333333333333,
+          "searchPasses": 1,
+          "timings": {
+            "inputMs": 0.005469,
+            "featureMs": 98.347761,
+            "flannMs": 17.841407,
+            "cacheCheckMs": 0.001406,
+            "geometryMs": 0.842552,
+            "drawMs": 0
+          },
+          "elapsedMs": 117.450729
+        },
+        "grid": {
+          "originX": 60.622195338145104,
+          "originY": 501.29578084337754,
+          "stepX": 86.0890544776691,
+          "stepY": 86.16959589605214
+        },
+        "usable": true,
+        "geometryCacheHit": false,
+        "locateMs": 125,
+        "recognizeMs": 196,
+        "elapsedMs": 321,
+        "chars": [
+          "r",
+          ".",
+          "b",
+          "a",
+          "k",
+          "a",
+          "b",
+          ".",
+          "r",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          ".",
+          "n",
+          "c",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "p",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "C",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          ".",
+          "P",
+          "R",
+          ".",
+          "N",
+          ".",
+          "C",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          ".",
+          "B",
+          "A",
+          "K",
+          "A",
+          "B",
+          "N",
+          "R"
+        ],
+        "fen": "r1bakab1r/9/2nc2nc1/p1p1p3p/6p2/7C1/P1P1P1P1P/R1N1C4/9/2BAKABNR",
+        "unknown": 0,
+        "inked": 32,
+        "profile": {
+          "gates": 33,
+          "match": 95,
+          "side": 55
+        },
+        "rescues": 0,
+        "notes": []
+      },
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "frame": "no-board.png",
+      "group": "negative",
+      "result": {
+        "ok": false,
+        "reason": "board-not-found",
+        "locateMs": 247,
+        "elapsedMs": 247,
+        "chars": null
+      },
+      "score": {
+        "correct": true,
+        "negative": true
+      }
+    }
+  ],
+  "repeat": [
+    {
+      "elapsedMs": 262,
+      "locateMs": 3,
+      "recognizeMs": 259,
+      "geometryCacheHit": true,
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "elapsedMs": 257,
+      "locateMs": 1,
+      "recognizeMs": 256,
+      "geometryCacheHit": true,
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    },
+    {
+      "elapsedMs": 248,
+      "locateMs": 1,
+      "recognizeMs": 247,
+      "geometryCacheHit": true,
+      "score": {
+        "correct": 90,
+        "total": 90,
+        "pieceCorrect": 32,
+        "pieceTotal": 32,
+        "colorWrong": 0,
+        "wrong": []
+      }
+    }
+  ],
+  "apiChecks": [
+    {
+      "name": "RGB grayscale weights",
+      "pass": true,
+      "values": [
+        76,
+        150,
+        29,
+        255
+      ]
+    },
+    {
+      "name": "grayscale copy owns pixels; color input survives",
+      "pass": true
+    }
+  ],
+  "rhinoImagesAssetSha256": "43b218738bcd34be04dba2bda43c37bbdbeec4d9cd15fb70295c717f2ab94802",
+  "templatePrepareMs": 114.053906,
+  "failure": null,
+  "time": 1790928640404
+}

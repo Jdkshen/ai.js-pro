@@ -1,0 +1,46 @@
+[
+  {
+    "engine": "quickjs",
+    "originalCorrect": 806,
+    "originalTotal": 809,
+    "stableFrames": 8,
+    "transformedFrames": 2,
+    "colorWrong": 0,
+    "cachedGeometrySamples": [
+      137,
+      130,
+      137,
+      140,
+      134,
+      126
+    ],
+    "cachedGeometryMedianMs": 135.5,
+    "firstFrameMs": 222,
+    "templatePrepareMs": 121.929843,
+    "sameFrameMedianMs": 133,
+    "negativePassed": true,
+    "imagesAssetSha256": "43b218738bcd34be04dba2bda43c37bbdbeec4d9cd15fb70295c717f2ab94802"
+  },
+  {
+    "engine": "rhino",
+    "originalCorrect": 806,
+    "originalTotal": 809,
+    "stableFrames": 8,
+    "transformedFrames": 2,
+    "colorWrong": 0,
+    "cachedGeometrySamples": [
+      264,
+      251,
+      254,
+      264,
+      250,
+      252
+    ],
+    "cachedGeometryMedianMs": 253.0,
+    "firstFrameMs": 353,
+    "templatePrepareMs": 114.053906,
+    "sameFrameMedianMs": 257,
+    "negativePassed": true,
+    "imagesAssetSha256": "43b218738bcd34be04dba2bda43c37bbdbeec4d9cd15fb70295c717f2ab94802"
+  }
+]
