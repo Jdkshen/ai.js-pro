@@ -75,6 +75,28 @@ public class ProjectConfig {
     private AndroidResources mAndroidResources;
 
     /**
+     * 工程声明的权限清单（Auto.js Pro 的工程字段）：
+     *
+     * <pre>
+     * "permissionConfig": { "manifestPermissions": ["android.permission.INTERNET", ...] }
+     * </pre>
+     *
+     * <p>打包页此前用裸 {@code JSONObject} 直接解析这一段（{@code MiuixBuildActivity
+     * .readDeclaredPermissions}），是「读工程 manifest」路径上唯一绕过本类的地方。
+     * B1 批次5 把它建模到这里，使 manifest 的读取只剩一个入口。
+     *
+     * <p>语义三态（与旧实现一致，勿改）：
+     * <ul>
+     *   <li>整段缺失 → {@code null}，调用方用模板默认权限；</li>
+     *   <li>有 {@code permissionConfig} 但没有 {@code manifestPermissions} → 同样 {@code null}；</li>
+     *   <li>有 {@code manifestPermissions}（哪怕是空数组）→ 返回该列表，
+     *       空列表表示工程明确声明「什么都不声明」。</li>
+     * </ul>
+     */
+    @SerializedName("permissionConfig")
+    private PermissionConfig mPermissionConfig;
+
+    /**
      * 脚本保护等级（Auto.js / Auto.js Pro 工程格式里的 {@code encryptLevel}）。
      *
      * <p>缺省 {@link ScriptProtection#DEFAULT_LEVEL}（加密）：老工程没有这个字段时行为不变；
@@ -229,6 +251,15 @@ public class ProjectConfig {
         mAndroidResources = androidResources;
     }
 
+    /** 工程权限声明；见 {@link #getDeclaredPermissions()} 的三态语义。 */
+    public PermissionConfig getPermissionConfig() {
+        return mPermissionConfig;
+    }
+
+    public void setPermissionConfig(PermissionConfig permissionConfig) {
+        mPermissionConfig = permissionConfig;
+    }
+
     public Map<String, ScriptConfig> getScriptConfigs() {
         if (mScriptConfigs == null) {
             mScriptConfigs = new HashMap<>();
@@ -314,6 +345,51 @@ public class ProjectConfig {
         public void setManifest(String manifest) {
             mManifest = manifest;
         }
+    }
+
+    /**
+     * 工程权限声明的载体，见 {@link #mPermissionConfig}。
+     *
+     * <p>字段名与 Pro 的 {@code project.json} 一致（{@code manifestPermissions}），
+     * 以便原样读写不丢字段。
+     */
+    public static class PermissionConfig {
+
+        /** 声明进产物清单的权限；{@code null} 表示工程没写这一段。 */
+        @SerializedName("manifestPermissions")
+        private List<String> mManifestPermissions;
+
+        public List<String> getManifestPermissions() {
+            return mManifestPermissions;
+        }
+
+        public void setManifestPermissions(List<String> manifestPermissions) {
+            mManifestPermissions = manifestPermissions;
+        }
+    }
+
+    /**
+     * 工程声明的权限列表；{@code null} = 工程没写这一段（调用方用模板默认）。
+     *
+     * <p>等价于旧 {@code MiuixBuildActivity.readDeclaredPermissions()} 的返回值，
+     * 空白项会被过滤（旧实现用 {@code takeIf { it.isNotBlank() }}）。
+     * 与旧实现一致：解析异常时不抛给调用方，按「工程没写」处理。
+     */
+    public List<String> getDeclaredPermissions() {
+        if (mPermissionConfig == null) {
+            return null;
+        }
+        List<String> declared = mPermissionConfig.getManifestPermissions();
+        if (declared == null) {
+            return null;
+        }
+        List<String> result = new ArrayList<>(declared.size());
+        for (String permission : declared) {
+            if (permission != null && !permission.trim().isEmpty()) {
+                result.add(permission);
+            }
+        }
+        return result;
     }
 
     /** 脚本保护等级，见 {@link ScriptProtection}。 */
