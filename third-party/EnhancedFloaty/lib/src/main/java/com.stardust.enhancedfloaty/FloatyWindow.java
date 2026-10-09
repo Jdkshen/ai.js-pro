@@ -1,6 +1,7 @@
 package com.stardust.enhancedfloaty;
 
 import androidx.annotation.CallSuper;
+import android.content.Context;
 import android.view.View;
 import android.view.WindowManager;
 
@@ -15,18 +16,27 @@ public abstract class FloatyWindow {
     private WindowBridge mWindowBridge;
     private WindowManager.LayoutParams mWindowLayoutParams;
     private View mWindowView;
+    private boolean mCreated;
 
     @CallSuper
-    public void onCreate(FloatyService service, WindowManager manager) {
-        mFloatyService = service;
+    public void onCreate(Context context, WindowManager manager) {
+        mCreated = true;
+        if (context instanceof FloatyService) {
+            mFloatyService = (FloatyService) context;
+        }
         mWindowManager = manager;
-        onCreateWindow(service, manager);
+        onCreateWindow(context, manager);
+    }
+
+    /** 窗口是否已经（尝试）创建过；主线程就地创建的窗口靠它避免被服务重复创建。 */
+    public boolean isCreated() {
+        return mCreated;
     }
 
 
-    protected void onCreateWindow(FloatyService service, WindowManager manager) {
+    protected void onCreateWindow(Context context, WindowManager manager) {
         setWindowLayoutParams(onCreateWindowLayoutParams());
-        setWindowView(onCreateView(service));
+        setWindowView(onCreateView(context));
         setWindowBridge(onCreateWindowBridge(getWindowLayoutParams()));
 
         onViewCreated(getWindowView());
@@ -48,7 +58,7 @@ public abstract class FloatyWindow {
 
     }
 
-    protected abstract View onCreateView(FloatyService service);
+    protected abstract View onCreateView(Context context);
 
     protected WindowBridge onCreateWindowBridge(WindowManager.LayoutParams params) {
         return new WindowBridge.DefaultImpl(params, getWindowManager(), getWindowView());

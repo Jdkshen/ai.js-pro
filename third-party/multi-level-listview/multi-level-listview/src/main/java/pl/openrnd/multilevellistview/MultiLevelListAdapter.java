@@ -266,6 +266,15 @@ public abstract class MultiLevelListAdapter {
     /**
      * Helper class used to display created flat list of item's using Android's ListView.
      */
+    /** Position of a visible user object, without exposing the internal Node wrapper. */
+    public int indexOfObject(Object object) {
+        if (mFlatItems == null) return -1;
+        for (int i = 0; i < mFlatItems.size(); i++) {
+            if (mFlatItems.get(i).getObject() == object) return i;
+        }
+        return -1;
+    }
+
     private class ProxyAdapter extends BaseAdapter {
 
         @Override

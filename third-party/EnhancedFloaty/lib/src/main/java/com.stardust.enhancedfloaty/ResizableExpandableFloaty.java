@@ -1,6 +1,7 @@
 package com.stardust.enhancedfloaty;
 
 import androidx.annotation.Nullable;
+import android.content.Context;
 import android.view.View;
 
 /**
@@ -10,9 +11,9 @@ import android.view.View;
 public interface ResizableExpandableFloaty {
 
 
-    View inflateCollapsedView(FloatyService service, ResizableExpandableFloatyWindow window);
+    View inflateCollapsedView(Context context, ResizableExpandableFloatyWindow window);
 
-    View inflateExpandedView(FloatyService service, ResizableExpandableFloatyWindow window);
+    View inflateExpandedView(Context context, ResizableExpandableFloatyWindow window);
 
     @Nullable
     View getResizerView(View expandedView);

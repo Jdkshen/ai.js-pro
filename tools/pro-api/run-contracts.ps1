@@ -50,7 +50,7 @@ $contracts = [ordered]@{
     'features-contract.js'              = 45
 }
 
-$accessibility = 'com.jdkshen.aijspro/com.stardust.autojs.core.accessibility.AccessibilityService'
+$accessibility = 'com.jdkshen.aijspro/com.google.android.accessibility.selecttospeak.SelectToSpeakService'
 
 # -File 调用时 `-Only a,b` 会当成一个字符串传进来，这里统一拆开
 $filter = @()

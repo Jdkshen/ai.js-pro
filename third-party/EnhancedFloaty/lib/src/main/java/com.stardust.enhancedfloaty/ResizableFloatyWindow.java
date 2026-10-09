@@ -34,15 +34,14 @@ public class ResizableFloatyWindow extends FloatyWindow {
     }
 
     @Override
-    public void onCreate(FloatyService service, WindowManager manager) {
-        super.onCreate(service, manager);
+    public void onCreate(Context context, WindowManager manager) {
+        super.onCreate(context, manager);
     }
 
     @Override
-    protected View onCreateView(FloatyService service) {
-        Context context = service.getApplicationContext();
-        ViewGroup windowView = (ViewGroup) View.inflate(context, R.layout.ef_floaty_container, null);
-        mView = mFloaty.inflateView(service, this);
+    protected View onCreateView(Context context) {
+        ViewGroup windowView = (ViewGroup) View.inflate(context.getApplicationContext(), R.layout.ef_floaty_container, null);
+        mView = mFloaty.inflateView(context, this);
         mResizer = mFloaty.getResizerView(mView);
         mMoveCursor = mFloaty.getMoveCursorView(mView);
         ViewGroup.LayoutParams params = new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);

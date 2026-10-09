@@ -1,5 +1,6 @@
 package com.stardust.enhancedfloaty;
 
+import android.content.Context;
 import android.graphics.PixelFormat;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -50,9 +51,9 @@ public class ResizableExpandableFloatyWindow extends FloatyWindow {
 
 
     @Override
-    protected View onCreateView(FloatyService service) {
-        inflateWindowViews(service);
-        View windowView = View.inflate(service, R.layout.ef_expandable_floaty_container, null);
+    protected View onCreateView(Context context) {
+        inflateWindowViews(context);
+        View windowView = View.inflate(context, R.layout.ef_expandable_floaty_container, null);
         windowView.setFocusableInTouchMode(true);
         mCollapseExpandViewSwitcher = windowView.findViewById(R.id.container);
         mCollapseExpandViewSwitcher.setMeasureAllChildren(false);
@@ -155,10 +156,10 @@ public class ResizableExpandableFloatyWindow extends FloatyWindow {
         };
     }
 
-    protected void inflateWindowViews(FloatyService service) {
+    protected void inflateWindowViews(Context context) {
         ResizableExpandableFloaty floaty = getFloaty();
-        mExpandedView = floaty.inflateExpandedView(service, this);
-        mCollapsedView = floaty.inflateCollapsedView(service, this);
+        mExpandedView = floaty.inflateExpandedView(context, this);
+        mCollapsedView = floaty.inflateCollapsedView(context, this);
         mResizer = floaty.getResizerView(getExpandedView());
         mMoveCursor = floaty.getMoveCursorView(getExpandedView());
     }

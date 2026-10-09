@@ -1,6 +1,7 @@
 package com.stardust.view.accessibility
 
 import android.os.Build
+import android.content.Intent
 import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
@@ -28,6 +29,7 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
     val onKeyObserver = OnKeyListener.Observer()
     val keyInterrupterObserver = KeyInterceptor.Observer()
     val gestureEventDispatcher = EventDispatcher<GestureListener>()
+    private var fingerprintBackend: FingerprintGestureDispatcher.Backend? = null
     private var mEventExecutor: ExecutorService? = null
     private var mFastRootInActiveWindow: AccessibilityNodeInfo? = null
     private val eventExecutor: ExecutorService
@@ -48,7 +50,9 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || type == AccessibilityEvent.TYPE_VIEW_FOCUSED) {
             val root = rootInActiveWindow
             if (root != null) {
-                mFastRootInActiveWindow = root
+                synchronized(this) {
+                    mFastRootInActiveWindow = root
+                }
             }
         }
 
@@ -96,7 +100,8 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
 
     override fun onDestroy() {
         Log.v(TAG, "onDestroy: $instance")
-        instance = null
+        disconnectFingerprintGestures()
+        if (instance === this) instance = null
         mEventExecutor?.shutdownNow()
         super.onDestroy()
     }
@@ -106,24 +111,59 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
         Log.v(TAG, "onServiceConnected: " + serviceInfo.toString())
         instance = this
         super.onServiceConnected()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            fingerprintBackend = FingerprintGestureBackend(this, fingerprintGestureDispatcher).also {
+                fingerprintGestureDispatcher.attach(it)
+            }
+        }
         LOCK.lock()
         ENABLED.signalAll()
         LOCK.unlock()
         // FIXME: 2017/2/12 有时在无障碍中开启服务后这里不会调用服务也不会运行，安卓的BUG???
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        disconnectFingerprintGestures()
+        if (instance === this) instance = null
+        return super.onUnbind(intent)
+    }
+
+    private fun disconnectFingerprintGestures() {
+        fingerprintBackend?.let { fingerprintGestureDispatcher.detach(it) }
+        fingerprintBackend = null
+    }
 
     fun fastRootInActiveWindow(): AccessibilityNodeInfo? {
-        return mFastRootInActiveWindow
+        synchronized(this) {
+            mFastRootInActiveWindow?.let { return it }
+        }
+        // A cache refresh must work even when no new accessibility event arrives.
+        val root = rootInActiveWindow
+        return synchronized(this) {
+            mFastRootInActiveWindow ?: root.also { mFastRootInActiveWindow = it }
+        }
     }
 
     /**
      * PDF §2.1.4 `auto.clearCache()`（v9.0.14 新增）：清空无障碍缓存。
-     * 这里的“缓存”就是 [mFastRootInActiveWindow]——控件已经出现但选择器找不到时，
-     * 很可能是它没刷新。
+     * Clear both our fast root and the framework cache, as Pro does before inspection.
      */
     fun clearNodeCache() {
-        mFastRootInActiveWindow = null
+        synchronized(this) {
+            mFastRootInActiveWindow = null
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                super.clearCache()
+            } else {
+                val clientClass = Class.forName("android.view.accessibility.AccessibilityInteractionClient")
+                val client = clientClass.getMethod("getInstance").invoke(null)
+                clientClass.getMethod("clearCache").invoke(client)
+            }
+        } catch (error: Exception) {
+            // Older ROMs may block the hidden method; capture must still be attempted.
+            Log.d(TAG, "Framework accessibility cache clear unavailable", error)
+        }
     }
 
     companion object {
@@ -136,6 +176,8 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
         var instance: AccessibilityService? = null
             private set
         val stickOnKeyObserver = OnKeyListener.Observer()
+        @JvmField
+        val fingerprintGestureDispatcher = FingerprintGestureDispatcher()
         private var containsAllEventTypes = false
         private val eventTypes = HashSet<Int>()
 

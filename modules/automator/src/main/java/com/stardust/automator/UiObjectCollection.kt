@@ -69,7 +69,7 @@ class UiObjectCollection private constructor(private val mNodes: List<UiObject?>
         val bundle = argumentsToBundle(arguments)
         for (node in mNodes) {
             val succeed = node?.performAction(action, bundle) ?: false
-            if (succeed) {
+            if (!succeed) {
                 fail = true
             }
         }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Resources
 import android.graphics.Rect
+import android.util.Log
 import androidx.annotation.Keep
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -11,24 +12,51 @@ import com.stardust.automator.UiObject
 
 import java.util.ArrayList
 import java.util.HashMap
+import java.util.ArrayDeque
+import java.util.HashSet
 
 /**
  * Created by Stardust on 2017/3/10.
  */
 @Keep
-class NodeInfo(resources: Resources?, node: UiObject, var parent: NodeInfo?) {
+class NodeInfo private constructor() {
+
+    var parent: NodeInfo? = null
 
     private val children = ArrayList<NodeInfo>()
     val boundsInScreen = Rect()
     val boundsInParent = Rect()
 
     var id: String? = null
+    private var resourcesLookup: (() -> Resources?)? = null
+    private var idHexResolved = false
     var idHex: String? = null
+        get() {
+            if (!idHexResolved) {
+                idHexResolved = true
+                try {
+                    val appResources = resourcesLookup?.invoke()
+                    if (appResources != null && fullId != null) {
+                        field = "0x" + Integer.toHexString(appResources.getIdentifier(fullId, null, null))
+                    }
+                } catch (error: RuntimeException) {
+                    Log.d("NodeInfo", "Resource identifier unavailable for $packageName", error)
+                } finally {
+                    resourcesLookup = null
+                }
+            }
+            return field
+        }
+        set(value) {
+            idHexResolved = true
+            resourcesLookup = null
+            field = value
+        }
     var fullId: String? = null
     var desc: String? = null
     var className: String? = null
     var packageName: String? = null
-    var text: String
+    var text: String = ""
     var depth: Int = 0
     var drawingOrder: Int = 0
     var accessibilityFocused: Boolean = false
@@ -48,14 +76,16 @@ class NodeInfo(resources: Resources?, node: UiObject, var parent: NodeInfo?) {
     var columnSpan: Int = 0
     var selected: Boolean = false
     var scrollable: Boolean = false
-    var bounds: String
+    var bounds: String = ""
     var checkable: Boolean = false
     var focused: Boolean = false
     var visibleToUser: Boolean = false
     var indexInParent: Int = 0
 
 
-    init {
+    constructor(resources: Resources?, node: UiObject, parent: NodeInfo?) : this() {
+        this.parent = parent
+        resourcesLookup = { resources }
         fullId = node.viewIdResourceName
         id = simplifyId(fullId)
         desc = node.desc()
@@ -91,9 +121,6 @@ class NodeInfo(resources: Resources?, node: UiObject, var parent: NodeInfo?) {
         node.getBoundsInParent(boundsInParent)
         bounds = boundsToString(boundsInScreen)
         indexInParent = node.indexInParent()
-        if (resources != null && packageName != null && fullId != null) {
-            idHex = "0x" + Integer.toHexString(resources.getIdentifier(fullId, null, null))
-        }
     }
 
     private fun simplifyId(idResourceName: String?): String? {
@@ -105,6 +132,13 @@ class NodeInfo(resources: Resources?, node: UiObject, var parent: NodeInfo?) {
 
     fun getChildren(): List<NodeInfo> {
         return children
+    }
+
+    /** Attach an offline snapshot. Live AccessibilityNodeInfo objects are never deserialized. */
+    fun addSnapshotChild(child: NodeInfo) {
+        require(child !== this && child.parent == null)
+        child.parent = this
+        children.add(child)
     }
 
     override fun toString(): String {
@@ -145,41 +179,54 @@ class NodeInfo(resources: Resources?, node: UiObject, var parent: NodeInfo?) {
 
     companion object {
 
+        @JvmStatic
+        fun createSnapshot(): NodeInfo = NodeInfo()
+
         fun boundsToString(rect: Rect): String {
-            return rect.toString().replace('-', ',').replace(" ", "").substring(4)
+            return "(${rect.left},${rect.top},${rect.right},${rect.bottom})"
         }
 
-
-        internal fun capture(resourcesCache: HashMap<String, Resources>, context: Context, uiObject: UiObject, parent: NodeInfo?): NodeInfo {
-            val pkg = uiObject.packageName()
-            var resources: Resources? = null
-            if (pkg != null) {
-                resources = resourcesCache[pkg]
-                if (resources == null) {
-                    try {
-                        resources = context.packageManager.getResourcesForApplication(pkg)
-                        resourcesCache[pkg] = resources
-                    } catch (e: PackageManager.NameNotFoundException) {
-                        e.printStackTrace()
-                    }
-
-                }
-            }
-            val nodeInfo = NodeInfo(resources, uiObject, parent)
-            val childCount = uiObject.childCount
-            for (i in 0 until childCount) {
-                val child = uiObject.child(i)
-                if (child != null) {
-                    nodeInfo.children.add(capture(resourcesCache, context, child, nodeInfo))
-                }
-            }
-            return nodeInfo
-        }
 
         fun capture(context: Context, root: AccessibilityNodeInfo): NodeInfo {
-            val r = UiObject.createRoot(root)
-            val resourcesCache = HashMap<String, Resources>()
-            return capture(resourcesCache, context, r, null)
+            val resourcesCache = HashMap<String, Resources?>()
+            val pending = ArrayDeque<Pair<UiObject, NodeInfo?>>()
+            val visited = HashSet<Any>()
+            pending.add(UiObject.createRoot(root) to null)
+            var result: NodeInfo? = null
+            // Pro also uses a queue: deep WebView/provider trees must not exhaust the stack.
+            while (pending.isNotEmpty()) {
+                val (node, parent) = pending.removeFirst()
+                if (!visited.add(node.unwrap())) continue
+                val snapshot = try {
+                    NodeInfo(null, node, parent)
+                } catch (error: RuntimeException) {
+                    if (parent == null) throw error
+                    Log.d("NodeInfo", "Node disappeared during capture", error)
+                    continue
+                }
+                snapshot.resourcesLookup = {
+                    val pkg = snapshot.packageName
+                    if (pkg == null) null else {
+                        if (!resourcesCache.containsKey(pkg)) {
+                            resourcesCache[pkg] = try {
+                                context.packageManager.getResourcesForApplication(pkg)
+                            } catch (error: PackageManager.NameNotFoundException) {
+                                null
+                            }
+                        }
+                        resourcesCache[pkg]
+                    }
+                }
+                if (parent == null) result = snapshot else parent.children.add(snapshot)
+                for (index in 0 until node.childCount) {
+                    try {
+                        node.child(index)?.let { pending.add(it to snapshot) }
+                    } catch (error: RuntimeException) {
+                        Log.d("NodeInfo", "Child unavailable during capture", error)
+                    }
+                }
+            }
+            return requireNotNull(result)
         }
     }
 }

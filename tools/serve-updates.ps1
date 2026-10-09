@@ -50,6 +50,9 @@ param(
     [int]$VersionCode = 0,
     [string]$VersionName = "",
     [string]$SourceName = "aijspro",
+    # 只拷进更新源目录、不写进 update.json 的附件（插件 APK 等）：
+    # 它们不是主程序安装包，列进 assets 会让「检查更新」把它们当成可选安装包。
+    [string[]]$Extra = @(),
     [ValidateRange(0, 2147483647)][int]$HistoryLimit = 0,
     [switch]$HardLink,
     [switch]$NoServe
@@ -132,6 +135,22 @@ foreach ($source in $Apk) {
     }
     $abiLabel = if ($abi) { $abi } else { "any" }
     Write-Host ("Published: {0}  ({1} bytes)  abi={2}" -f $fileName, $size, $abiLabel)
+}
+
+# 附件（插件 APK）：拷进同一个目录（App 按文件名就能下到），但不进 update.json 的
+# assets —— 否则「检查更新」会把插件当成可选的主程序安装包。
+foreach ($source in $Extra) {
+    $item = Get-Item -LiteralPath $source -ErrorAction SilentlyContinue
+    if (-not $item) {
+        Write-Warning ("Extra attachment not found, skipped: {0}" -f $source)
+        continue
+    }
+    $target = Join-Path $Dir $item.Name
+    if ($target -ne $item.FullName) {
+        Copy-Item -LiteralPath $item.FullName -Destination $target -Force
+    }
+    $size = (Get-Item -LiteralPath $target).Length
+    Write-Host ("Attached : {0}  ({1} bytes)  (not in update.json)" -f $item.Name, $size)
 }
 
 # Prefer arm64 as "apkUrl" (the app falls back to it when assets are absent).

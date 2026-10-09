@@ -232,6 +232,22 @@ if ($DryRun) {
 
 # --- 2. build ----------------------------------------------------------------
 if (-not $SkipBuild) {
+    & node (Join-Path $PSScriptRoot 'verify-xiangqi-architecture.cjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Xiangqi architecture/composition checks failed' }
+    $chessProjectDir = Join-Path $projectRoot 'samples\象棋自动走棋'
+    Push-Location -LiteralPath $chessProjectDir
+    try {
+        & node 'tools/run-regress.js'
+        if ($LASTEXITCODE -ne 0) { throw 'Xiangqi regression checks failed' }
+        & node 'tools/panel-load-smoke.js' '--full'
+        if ($LASTEXITCODE -ne 0) { throw 'Xiangqi panel startup checks failed' }
+    } finally {
+        Pop-Location
+    }
+    # Device-optional image-API gate: runs assets sample 01 through the dev-plugin
+    # channel (QuickJS). SKIPs when no device / app is reachable.
+    & (Join-Path $PSScriptRoot 'verify-image-samples-device.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'QuickJS image API device sample failed' }
     $original = [IO.File]::ReadAllText($versionsFile)
     $patched = $original -replace '"appVersionCode"\s*:\s*\d+', ('"appVersionCode": {0}' -f $newCode)
     $patched = $patched -replace '"appVersionName"\s*:\s*"[^"]*"', ('"appVersionName": "{0}"' -f $newName)
@@ -249,7 +265,10 @@ if (-not $SkipBuild) {
             $previousEap = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             try {
-                & '.\gradlew.bat' $gradleTask '--console=plain'
+                # Self-hosted updates must coexist with the original Auto.js Pro.
+                # Its debug provider authority is global, so the default APK can
+                # fail installation with INSTALL_FAILED_CONFLICTING_PROVIDER.
+                & '.\gradlew.bat' $gradleTask '-PdevPluginUsbDiscovery=false' '--console=plain'
             } finally {
                 $ErrorActionPreference = $previousEap
             }
@@ -279,6 +298,83 @@ if (-not $apk) {
     throw "no APK found under $apkDir; run once without -SkipBuild"
 }
 Write-Host ("apk          : {0}" -f $apk.Name)
+
+# Refuse to publish a stale/wrong APK or one that conflicts with Auto.js Pro.
+# This check also protects the -SkipBuild path before serve-updates.ps1 writes
+# the live manifest.
+$aapt = Get-ChildItem 'C:\Android\build-tools\*\aapt.exe' -ErrorAction SilentlyContinue |
+    Sort-Object FullName -Descending | Select-Object -First 1
+if (-not $aapt) { throw 'aapt.exe not found; cannot verify the update APK' }
+$badging = ((& $aapt.FullName dump badging $apk.FullName) -join "`n")
+if ($LASTEXITCODE -ne 0 -or $badging -notmatch "package: name='com\.jdkshen\.aijspro' versionCode='$newCode'") {
+    throw "APK package/version does not match the intended update dev-$newCode"
+}
+$manifestDump = ((& $aapt.FullName dump xmltree $apk.FullName 'AndroidManifest.xml') -join "`n")
+if ($LASTEXITCODE -ne 0 -or $manifestDump -match 'org\.autojs\.autojspro\.debug\.provider') {
+    throw 'APK still declares the Auto.js Pro debug provider; refusing to publish a conflicting APK'
+}
+
+# A versioned URL prevents old failed downloads from being reused by a browser
+# or proxy. The staged copy contains the same signed APK; it is not rebuilt.
+# Compare source files (including new/deleted modules), not only version strings.
+# This runs before touching the live update manifest and protects -SkipBuild.
+# 象棋工程不再随宿主 APK 打包，所以这里先校验「源码快照 = 清单」，
+# 再（装了打包插件时）用插件 APK 校验「打出去的那份工程代码 = 源码快照」。
+& python (Join-Path $PSScriptRoot 'xiangqi-release.py') verify-source
+if ($LASTEXITCODE -ne 0) { throw 'Xiangqi source/manifest mismatch; rebuild before publishing' }
+$chessPluginApk = Get-ChildItem (Join-Path $projectRoot 'plugins\xiangqi-plugin\build\outputs\apk') -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($chessPluginApk) {
+    & python (Join-Path $PSScriptRoot 'xiangqi-release.py') verify-apk --plugin --apk $chessPluginApk.FullName
+    if ($LASTEXITCODE -ne 0) { throw 'Xiangqi plugin APK/source mismatch; rebuild the plugin before publishing' }
+    Write-Host ("chess plugin verified: {0}" -f $chessPluginApk.Name) -ForegroundColor DarkGray
+} else {
+    Write-Host 'chess plugin APK not built; skipped its source-fingerprint check' -ForegroundColor Yellow
+}
+$chessManifestPath = Join-Path $projectRoot 'samples\象棋自动走棋\release-manifest.json'
+$chessRelease = Get-Content -LiteralPath $chessManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$ReleaseNotes += "`nXiangqi $($chessRelease.version) / source $($chessRelease.sourceSha256.Substring(0, 12))"
+
+$stagingDir = Join-Path $projectRoot '.artifacts\release-staging'
+New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+$stagedName = $apk.BaseName -replace '-debug$', ''
+$stagedName += "-dev-$newCode-no-usb-debug.apk"
+$stagedPath = Join-Path $stagingDir $stagedName
+Copy-Item -LiteralPath $apk.FullName -Destination $stagedPath -Force
+$publishApk = Get-Item -LiteralPath $stagedPath
+Write-Host ("verified apk : {0} (no conflicting provider)" -f $publishApk.Name)
+
+# 插件 APK 也放进更新源目录：打包页按固定文件名 apkbuilder-plugin.apk 去下（见
+# apps/app/.../network/PluginDownloads.java）。它们只作附件发布，不进 update.json 的
+# assets —— 否则「检查更新」会把插件当成主程序安装包列出来（见 serve-updates.ps1 -Extra）。
+# ⚠️ 只挑**已签名**的产物：没配 AIJSPRO_* 时 `assembleRelease` 出的是
+# `*-release-unsigned.apk`，发布出去手机根本装不上（打包页会报「下载失败/解析包错误」）。
+# 所以优先 release，但一律排除 `-unsigned.apk`，退回 debug（本地真机自测装的就是 debug 插件）。
+$pluginAttachments = @()
+$pluginSources = @(
+    @{ Name = 'apkbuilder-plugin.apk'; Dir = 'plugins\apkbuilder-plugin\build\outputs\apk' },
+    @{ Name = 'xiangqi-plugin.apk'; Dir = 'plugins\xiangqi-plugin\build\outputs\apk' }
+)
+foreach ($pluginSource in $pluginSources) {
+    $pluginApkDir = Join-Path $projectRoot $pluginSource.Dir
+    # 只挑已签名的产物（`-unsigned.apk` 装不上），同类里优先 release、其次 debug。
+    $signedPluginApks = Get-ChildItem $pluginApkDir -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '-unsigned\.apk$' }
+    $built = $signedPluginApks |
+        Where-Object { $_.FullName -match '\\release\\' } |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $built) {
+        $built = $signedPluginApks | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
+    if (-not $built) {
+        Write-Host ("plugin not built, skipped: {0}" -f $pluginSource.Name) -ForegroundColor Yellow
+        continue
+    }
+    $stagedPlugin = Join-Path $stagingDir $pluginSource.Name
+    Copy-Item -LiteralPath $built.FullName -Destination $stagedPlugin -Force
+    $pluginAttachments += $stagedPlugin
+    Write-Host ("plugin staged: {0} <- {1}" -f $pluginSource.Name, $built.Name) -ForegroundColor DarkGray
+}
 
 # --- 3.5 port availability ---------------------------------------------------
 if (-not $NoServe) {
@@ -311,9 +407,10 @@ Write-Host "3. download the update and install it"
 Write-Host ""
 
 $serveArgs = @{
-    Apk          = $apk.FullName
+    Apk          = $publishApk.FullName
     ReleaseNotes = $ReleaseNotes
     Port         = $Port
 }
+if ($pluginAttachments.Count -gt 0) { $serveArgs.Extra = $pluginAttachments }
 if ($NoServe) { $serveArgs.NoServe = $true }
 & (Join-Path $PSScriptRoot 'serve-updates.ps1') @serveArgs

@@ -139,10 +139,17 @@ Write-Host "[1/5] baseline: repo=$repoVersion published=$publishedVersion device
 $prefsPath = "/data/data/$packageName/shared_prefs/${packageName}_preferences.xml"
 $prefs = ((& $adb -s $DeviceId shell run-as $packageName cat $prefsPath) 2>&1) -join "`n"
 $sourceUrl = [regex]::Match($prefs, 'key_update_source_url">([^<]+)<').Groups[1].Value
+# 仅本地 update.json 跟随手机的主机；GitHub/代理源不指向这次发布的本地目录。
+$verifyHost = $PcHost
+$configuredSource = $null
+if ([Uri]::TryCreate($sourceUrl, [UriKind]::Absolute, [ref]$configuredSource) -and
+    $configuredSource.AbsolutePath -eq '/update.json' -and $configuredSource.Port -eq $Port) {
+    $verifyHost = $configuredSource.Host
+}
 if ($sourceUrl) {
     Write-Host "[2/5] 手机更新源：$sourceUrl" -ForegroundColor Green
-    if ($sourceUrl -notmatch [regex]::Escape($PcHost)) {
-        Write-Host "      警告：更新源里没有 $PcHost，手机可能连不到本机 $Port" -ForegroundColor Yellow
+    if ($verifyHost -ne $PcHost) {
+        Write-Host "      注意：手机更新源主机是 $verifyHost（脚本默认 $PcHost），发布校验将用 $verifyHost。" -ForegroundColor Yellow
     }
 } else {
     Write-Host "[2/5] 未读到更新源设置（不影响发布，但请确认手机能访问 $PcHost`:$Port）" -ForegroundColor Yellow
@@ -208,7 +215,7 @@ if ($realHash -ne $asset.sha256) {
 $sizeMb = [math]::Round((Get-Item -LiteralPath $apkPath).Length / 1MB, 2)
 
 # --- 服务可达性：用手机自己 curl，比在 PC 上测更有说服力 ---------------------
-$url = "http://${PcHost}:$Port/update.json"
+$url = "http://${verifyHost}:$Port/update.json"
 $code = ((& $adb -s $DeviceId shell "curl -s -o /dev/null -w '%{http_code}' --max-time 6 $url") 2>&1) -join ''
 $code = $code.Trim()
 

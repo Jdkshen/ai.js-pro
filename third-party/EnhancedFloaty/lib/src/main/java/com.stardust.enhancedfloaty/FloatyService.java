@@ -26,6 +26,16 @@ public class FloatyService extends Service {
         windows.remove(window);
     }
 
+    /** 服务是否已创建。主线程创建悬浮窗时用它判断能否借服务同步完成创建。 */
+    public static boolean isCreated() {
+        return instance != null;
+    }
+
+    /** 登记一个已经在别处创建好的窗口（不触发创建），仅供生命周期管理。 */
+    public static void registerWindow(FloatyWindow window) {
+        windows.add(window);
+    }
+
     private static FloatyService instance;
     private WindowManager mWindowManager;
 
@@ -34,7 +44,9 @@ public class FloatyService extends Service {
         super.onCreate();
         mWindowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         for (FloatyWindow delegate : windows) {
-            delegate.onCreate(this, mWindowManager);
+            if (!delegate.isCreated()) {
+                delegate.onCreate(this, mWindowManager);
+            }
         }
         instance = this;
     }
