@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.LayoutInflater
@@ -59,6 +60,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.DisposableEffect
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
+import com.jdkshen.aijspro.model.plugin.PluginRegistry
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment
@@ -78,21 +80,21 @@ import java.util.Locale
  */
 class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
-    private data class PluginEntry(
-        val label: String,
-        val summary: String,
-        val packageName: String,
-        val installed: Boolean
-    )
-
     private lateinit var rootView: ComposeView
     private var query by mutableStateOf(TextFieldValue(""))
     private var showSearchDialog by mutableStateOf(false)
-    private var plugins by mutableStateOf<List<PluginEntry>?>(null)
+    private var plugins by mutableStateOf<List<PluginRegistry.PluginEntry>?>(null)
     private var loadError by mutableStateOf<String?>(null)
+    private var scanError by mutableStateOf<String?>(null)
     private var reloadTick by mutableStateOf(0)
-    private var selected by mutableStateOf<PluginEntry?>(null)
+    private var selected by mutableStateOf<PluginRegistry.PluginEntry?>(null)
     private var refreshOnResume = false
+
+    /** 一次扫描的产物：列表 + 系统级扫描失败原因（两者可同时存在）。 */
+    private data class ScanState(
+        val entries: List<PluginRegistry.PluginEntry>,
+        val scanError: String?
+    )
 
     private val installLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
@@ -116,8 +118,11 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     LaunchedEffect(reloadTick) {
                         if (plugins != null && reloadTick == 0) return@LaunchedEffect
                         loadError = null
+                        scanError = null
                         try {
-                            plugins = withContext(Dispatchers.IO) { loadPlugins() }
+                            val state = withContext(Dispatchers.IO) { loadPlugins() }
+                            plugins = state.entries
+                            scanError = state.scanError
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (error: Exception) {
@@ -166,7 +171,18 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                                     MessagePanel("没有匹配的插件，请修改关键词。")
                                 }
                             }
-                            items(visible, key = { it.packageName }, contentType = { it.installed }) { entry ->
+                            // 扫描系统出错时列表里只剩「安装本地插件 APK」那一行，
+                            // 光看列表会误判成「没装插件」——这里把出错与两条排查路径明说出来。
+                            scanError?.let { error ->
+                                item {
+                                    MessagePanel(
+                                        "系统包扫描失败：$error\n" +
+                                            "列表可能不完整。可先下拉刷新；若仍为空，请把这一行反馈给开发者。",
+                                        "重试扫描"
+                                    ) { reloadTick++ }
+                                }
+                            }
+                            items(visible, key = { it.packageName + it.isInstalled() }, contentType = { it.isInstalled() }) { entry ->
                                 PluginRow(entry) { selected = it }
                             }
                         }
@@ -186,23 +202,88 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
     // ---------- data ----------
 
-    private fun loadPlugins(): List<PluginEntry> {
-        val list = mutableListOf<PluginEntry>()
+    /**
+     * 扫描本机已安装的插件。
+     *
+     * 事实层（过滤、排序、两遍扫描策略）在 [PluginRegistry] 里，本函数只做 PackageManager 适配。
+     *
+     * 与旧实现的差别（真机依据：Redmi 2602BRT18C / Android 16 / HyperOS，2026-10-10
+     * 插件页一个插件都扫不出来，而同版本宿主在 K40 上正常）：
+     *  1. 不再用 `catch (_: RuntimeException) {}` 把扫描异常吞掉 —— 那会让「扫不到」和
+     *     「没装插件」在界面上长得一模一样，现场也留不下任何证据。异常现在回传给界面显示。
+     *  2. 批量接口没给出任何注册插件、但确实存在像插件的包时，逐个 `getPackageInfo`
+     *     取 meta-data 兜底（有些系统会裁剪批量返回的 metaData）。
+     */
+    private fun loadPlugins(): ScanState {
         val pm = requireContext().packageManager
+        var bulkApps: List<ApplicationInfo>? = null
+        var scanError: String? = null
         try {
-            for (app in pm.getInstalledApplications(PackageManager.GET_META_DATA)) {
-                if (app.metaData == null || !app.metaData.containsKey(PLUGIN_REGISTRY_KEY)) continue
-                val info = pm.getPackageInfo(app.packageName, 0)
-                val label = pm.getApplicationLabel(app).toString()
-                val version = info.versionName ?: info.versionCode.toString()
-                list += PluginEntry(label, "已安装 · $version", app.packageName, true)
-            }
-        } catch (_: RuntimeException) {
-        } catch (_: PackageManager.NameNotFoundException) {
+            bulkApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        } catch (error: Exception) {
+            // 旧实现把这里静默吞掉，导致插件页只剩「安装本地插件 APK」且无从排查。
+            scanError = "${error.javaClass.simpleName}: ${error.localizedMessage ?: "无详细信息"}"
         }
-        list.sortWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
-        list += PluginEntry("安装本地插件 APK", "选择设备中的 APK 文件", "", false)
-        return list
+
+        val adapted = (bulkApps ?: emptyList()).map { app ->
+            PluginRegistry.InstalledApp(
+                app.packageName,
+                runCatching { pm.getApplicationLabel(app).toString() }.getOrNull(),
+                versionNameOf(pm, app.packageName),
+                versionCodeOf(pm, app.packageName),
+                registryClassOf(app)
+            )
+        }
+
+        val result = PluginRegistry.build(
+            adapted,
+            { packageName -> registryClassOfQuerying(pm, packageName) },
+            true
+        )
+        return ScanState(result.entries, scanError)
+    }
+
+    /** 从批量接口拿到的 meta-data 里读注册类。 */
+    private fun registryClassOf(app: ApplicationInfo): String? =
+        app.metaData?.getString(PLUGIN_REGISTRY_KEY)?.takeIf { it.isNotBlank() }
+
+    /**
+     * 慢路径：对单个包重新查询 meta-data。
+     *
+     * 有些系统（真机见到的是 HyperOS）会对批量返回的 metaData 做裁剪；用 GET_META_DATA
+     * 单独查这个包通常仍能拿到。查询失败按「不是插件」处理，不抛给调用方。
+     */
+    private fun registryClassOfQuerying(pm: PackageManager, packageName: String): String? = try {
+        pm.getPackageInfo(packageName, PackageManager.GET_META_DATA)
+            .applicationInfo?.metaData?.getString(PLUGIN_REGISTRY_KEY)
+            ?.takeIf { it.isNotBlank() }
+    } catch (_: PackageManager.NameNotFoundException) {
+        null
+    } catch (_: RuntimeException) {
+        null
+    }
+
+    private fun versionNameOf(pm: PackageManager, packageName: String): String? = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pm.getPackageInfo(packageName, 0).versionName
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(packageName, 0).versionName
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun versionCodeOf(pm: PackageManager, packageName: String): Int = try {
+        val info = pm.getPackageInfo(packageName, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode.toInt()
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode
+        }
+    } catch (_: Exception) {
+        0
     }
 
     private fun pickInstallApk() {
@@ -213,19 +294,19 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         installLauncher.launch(Intent.createChooser(picker, "选择插件 APK"))
     }
 
-    private fun openPlugin(entry: PluginEntry) {
+    private fun openPlugin(entry: PluginRegistry.PluginEntry) {
         val launch = requireContext().packageManager.getLaunchIntentForPackage(entry.packageName)
         if (launch != null) startActivity(launch)
         else Toast.makeText(requireContext(), "该插件没有独立启动页面", Toast.LENGTH_SHORT).show()
     }
 
-    private fun showAppDetails(entry: PluginEntry) {
+    private fun showAppDetails(entry: PluginRegistry.PluginEntry) {
         refreshOnResume = true
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
             Uri.parse("package:${entry.packageName}")))
     }
 
-    private fun checkUpdate(entry: PluginEntry) {
+    private fun checkUpdate(entry: PluginRegistry.PluginEntry) {
         try {
             startActivity(Intent(Intent.ACTION_VIEW,
                 Uri.parse("market://details?id=${entry.packageName}"))
@@ -238,7 +319,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         }
     }
 
-    private fun uninstall(entry: PluginEntry) {
+    private fun uninstall(entry: PluginRegistry.PluginEntry) {
         refreshOnResume = true
         startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:${entry.packageName}")))
     }
@@ -285,7 +366,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     @Composable
-    private fun PluginRow(entry: PluginEntry, open: (PluginEntry) -> Unit) {
+    private fun PluginRow(entry: PluginRegistry.PluginEntry, open: (PluginRegistry.PluginEntry) -> Unit) {
         Column(Modifier.fillMaxWidth()) {
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 78.dp).clickable { open(entry) }
@@ -293,9 +374,9 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(Modifier.size(50.dp).clip(CircleShape).background(
-                    if (entry.installed) Color(0xFF2196F3) else Color(0xFF009688))) {
+                    if (entry.isInstalled()) Color(0xFF2196F3) else Color(0xFF009688))) {
                     Image(
-                        painterResource(if (entry.installed) R.drawable.ic_nav_market
+                        painterResource(if (entry.isInstalled()) R.drawable.ic_nav_market
                         else R.drawable.ic_add_white_48dp),
                         contentDescription = null,
                         modifier = Modifier.size(28.dp).align(Alignment.Center),
@@ -306,7 +387,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     Text(entry.label, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(entry.summary, fontSize = 14.sp,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                    if (entry.installed) {
+                    if (entry.isInstalled()) {
                         Text(entry.packageName, fontSize = 12.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             color = MiuixTheme.colorScheme.onSurfaceSecondary)
@@ -344,7 +425,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     @Composable
-    private fun PluginDetailDialog(entry: PluginEntry, dismiss: () -> Unit) {
+    private fun PluginDetailDialog(entry: PluginRegistry.PluginEntry, dismiss: () -> Unit) {
         Dialog(onDismissRequest = dismiss) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth()
@@ -356,10 +437,10 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     Text(
                         buildString {
                             append(entry.summary)
-                            if (entry.installed) append("\n包名：").append(entry.packageName)
+                            if (entry.isInstalled()) append("\n包名：").append(entry.packageName)
                         },
                         fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                    if (!entry.installed) {
+                    if (!entry.isInstalled()) {
                         ActionChoice("选择插件 APK") {
                             dismiss()
                             pickInstallApk()
@@ -398,6 +479,6 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     }
 
     private companion object {
-        const val PLUGIN_REGISTRY_KEY = "org.autojs.plugin.sdk.registry"
+        const val PLUGIN_REGISTRY_KEY = PluginRegistry.REGISTRY_KEY
     }
 }
