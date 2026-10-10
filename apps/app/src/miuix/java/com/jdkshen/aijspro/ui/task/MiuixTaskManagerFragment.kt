@@ -253,20 +253,33 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
         }
     }
 
-    /** Auto.js Pro 风格分组头：圆底图标 + 大标题 + 计数 + 折叠箭头，点击整行折叠/展开。 */
+    /**
+     * 分组头：圆底图标 + 标题 + 计数 + 折叠箭头，点击整行折叠/展开。
+     *
+     * **列网格与下方 [TaskRow] 完全一致**（本轮修的重点）：
+     *   左内边距 16dp + 圆底 48dp + 文字 start 16dp ⇒ 文字起点 80dp，两行同列。
+     *
+     * 分组头是新界面自己加的（旧界面任务页只有 RecyclerView，没有分组头），
+     * 所以没有能直接照抄的旧值。做法是先把 [TaskRow] 逐项对回旧 XML
+     * （`task_list_recycler_view_item.xml`：66 / 16 / 48 / 14 / 11 / 16 / 80），
+     * 再让分组头复用同一套列宽 —— 否则两行的圆底中心差 7dp、文字起点差 18dp，
+     * 分组一展开就能看出错位（原先 34dp 圆底 + 12dp 间距就是这个问题）。
+     *
+     * 标题仍用 20sp（比行内 14sp 大一档，保持「分组 > 条目」的层级感）。
+     */
     @Composable
     private fun GroupHeader(title: String, count: Int, icon: Int, expanded: Boolean, onToggle: () -> Unit) {
         Row(Modifier.fillMaxWidth().clickable(onClick = onToggle)
-                .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 8.dp),
+                .padding(start = 16.dp, end = 12.dp, top = 16.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(34.dp).clip(CircleShape)
+            Box(Modifier.size(48.dp).clip(CircleShape)
                 .background(MiuixTheme.colorScheme.onSurfaceSecondary.copy(alpha = 0.22f))) {
                 Image(painterResource(icon), contentDescription = title,
                     colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurfaceSecondary),
-                    modifier = Modifier.size(20.dp).align(Alignment.Center))
+                    modifier = Modifier.size(22.dp).align(Alignment.Center))
             }
             Text(title, fontSize = 20.sp, color = MiuixTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f).padding(start = 12.dp))
+                modifier = Modifier.weight(1f).padding(start = 16.dp))
             if (count > 0) {
                 Text("$count", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary,
                     modifier = Modifier.padding(end = 10.dp))
@@ -283,20 +296,32 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
     @Composable
     private fun EmptyHint(text: String) {
         Text(text, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary,
-            modifier = Modifier.padding(start = 18.dp, top = 2.dp, bottom = 10.dp))
+            modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 10.dp))
     }
 
+    /**
+     * 任务行。
+     *
+     * 逐项对齐旧界面 `task_list_recycler_view_item.xml`：
+     *   minHeight 66dp · paddingStart 16dp · 上下 padding 5dp
+     *   圆底 48dp · 首字母 22sp 白 · 文字列 marginStart 16dp
+     *   名称 14sp maxLines 1 · 描述 11sp maxLines 2 · marginTop 2dp
+     *   停止按钮命中区 48dp（ToolbarAction）· 分隔线缩进 80dp
+     *
+     * 原先用的是 78 / 18 / 8 / 50 / 17 / 12 / 82 —— 全部偏离基准，
+     * 也是「分组头与内容行看起来没对齐」的一部分原因。
+     */
     @Composable
     private fun TaskRow(item: TaskItem, open: (TaskItem) -> Unit) {
         Column(Modifier.fillMaxWidth()) {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 78.dp).clickable { open(item) }
-                    .padding(start = 18.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+                Modifier.fillMaxWidth().heightIn(min = 66.dp).clickable { open(item) }
+                    .padding(start = 16.dp, top = 5.dp, bottom = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Engine badge aligned with Auto.js Pro: "R" (Rhino, pink #FD999A) / "J" (QuickJS, green #99CC99)
+                // 引擎徽标：R（Rhino，粉 #FD999A）/ J（QuickJS，绿 #99CC99）
                 val isRhino = item.engineName == AutoFileSource.ENGINE
-                Box(Modifier.size(50.dp).clip(CircleShape).background(
+                Box(Modifier.size(48.dp).clip(CircleShape).background(
                     if (isRhino) Color(0xFFFD999A) else Color(0xFF99CC99))) {
                     Text(
                         if (isRhino) "R" else "J",
@@ -304,14 +329,14 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                    Text(item.name, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(item.desc, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                    Text(item.name, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(item.desc, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Start)
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Start,
+                        modifier = Modifier.padding(top = 2.dp))
                 }
-                ToolbarAction(if (item is TaskItem.Running) R.drawable.ic_close_gray600_48dp
-                else R.drawable.ic_close_gray600_48dp,
+                ToolbarAction(R.drawable.ic_close_gray600_48dp,
                     if (item is TaskItem.Running) "停止" else "取消") {
                     item.cancel()
                     reloadTick++
@@ -320,7 +345,8 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
                         Toast.LENGTH_SHORT).show()
                 }
             }
-            MiuixListDivider(indent = 82.dp)
+            // 旧界面分隔线 marginStart = 80dp
+            MiuixListDivider(indent = 80.dp)
         }
     }
 
