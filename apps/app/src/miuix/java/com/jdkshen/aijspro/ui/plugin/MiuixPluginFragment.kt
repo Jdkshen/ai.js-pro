@@ -238,9 +238,63 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         val result = PluginRegistry.build(
             adapted,
             { packageName -> registryClassOfQuerying(pm, packageName) },
-            true
+            true,
+            KNOWN_PLUGIN_PACKAGES,
+            { packageName -> matchOfQuerying(pm, packageName) }
         )
+        if (result.entries.size <= 1) {
+            // 除固定项外一个都没扫到 —— 打印一次现场，好定位是「系统没返回该包」
+            // 还是「返回了但 metaData 被裁剪」。
+            reportScanDiagnostics(pm, adapted.size, result.entries.size - 1, result.candidateCount)
+        }
         return ScanState(result.entries, scanError)
+    }
+
+    /**
+     * 一次性诊断：插件页扫不到东西时，把「系统到底返回了什么」打出来。
+     *
+     * 起因：Redmi 2602BRT18C / Android 16 / HyperOS 上插件页一个都扫不出来，而
+     * `pm list packages` 明确能列出 com.jdkshen.xiangqi.plugin，该插件的 registry
+     * 声明与宿主 QUERY_ALL_PACKAGES 都已逐项验证；同版本宿主在 K40（LineageOS）上正常。
+     *
+     * 用 System.err 是为了在 logcat 里有稳定 tag（System.err）；只在扫描为空时调用一次，
+     * 正常机型不会有输出。
+     */
+    private fun reportScanDiagnostics(
+        pm: PackageManager,
+        bulkCount: Int,
+        registeredCount: Int,
+        candidateCount: Int
+    ) {
+        try {
+            val probe = "com.jdkshen.xiangqi.plugin"
+            val inBulk = try {
+                pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                    .any { it.packageName == probe }
+            } catch (_: Exception) {
+                false
+            }
+            val packagesWithMeta = try {
+                pm.getInstalledPackages(PackageManager.GET_META_DATA).size
+            } catch (_: Exception) {
+                -1
+            }
+            val probeMeta = try {
+                val meta = pm.getPackageInfo(probe, PackageManager.GET_META_DATA)
+                    .applicationInfo?.metaData
+                "meta=$meta registry=${meta?.getString(PLUGIN_REGISTRY_KEY)}"
+            } catch (error: Exception) {
+                "${error.javaClass.simpleName}: ${error.localizedMessage}"
+            }
+            System.err.println(
+                "[plugin-scan] sdk=${Build.VERSION.SDK_INT}" +
+                    " bulk=$bulkCount registered=$registeredCount candidates=$candidateCount" +
+                    " bulkHasProbe=$inBulk packagesWithMeta=$packagesWithMeta" +
+                    " probeMeta=$probeMeta"
+            )
+        } catch (_: Exception) {
+            // 诊断本身绝不影响功能
+        }
     }
 
     /** 从批量接口拿到的 meta-data 里读注册类。 */
@@ -253,15 +307,37 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
      * 有些系统（真机见到的是 HyperOS）会对批量返回的 metaData 做裁剪；用 GET_META_DATA
      * 单独查这个包通常仍能拿到。查询失败按「不是插件」处理，不抛给调用方。
      */
-    private fun registryClassOfQuerying(pm: PackageManager, packageName: String): String? = try {
-        pm.getPackageInfo(packageName, PackageManager.GET_META_DATA)
-            .applicationInfo?.metaData?.getString(PLUGIN_REGISTRY_KEY)
-            ?.takeIf { it.isNotBlank() }
-    } catch (_: PackageManager.NameNotFoundException) {
-        null
-    } catch (_: RuntimeException) {
-        null
-    }
+    private fun registryClassOfQuerying(pm: PackageManager, packageName: String): String? =
+        matchOfQuerying(pm, packageName)?.registryClass
+
+    /**
+     * 精确查询一个包，连展示用的名称/版本一起带回来。
+     *
+     * 为什么需要名称/版本：真机 Android 16 上批量枚举不返回插件包，走精确查询时
+     * 列表里只剩包名可显示，版本会变成 null。这里顺带取一次，界面就能显示
+     * 「象棋引擎插件 / 已安装 · 1.0.0」而不是「com.…plugin / 已安装 · null」。
+     */
+    private fun matchOfQuerying(pm: PackageManager, packageName: String): PluginRegistry.PackageMatch? =
+        try {
+            val info = pm.getPackageInfo(packageName, PackageManager.GET_META_DATA)
+            val registryClass = info.applicationInfo?.metaData
+                ?.getString(PLUGIN_REGISTRY_KEY)
+                ?.takeIf { it.isNotBlank() }
+            val versionName = info.versionName
+                ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode.toString()
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode.toString()
+                }
+            val label = info.applicationInfo
+                ?.let { app -> runCatching { pm.getApplicationLabel(app).toString() }.getOrNull() }
+            PluginRegistry.PackageMatch(registryClass, label, versionName)
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        } catch (_: RuntimeException) {
+            null
+        }
 
     private fun versionNameOf(pm: PackageManager, packageName: String): String? = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -480,5 +556,22 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
 
     private companion object {
         const val PLUGIN_REGISTRY_KEY = PluginRegistry.REGISTRY_KEY
+
+        /**
+         * 已知插件包名（本仓库自研插件的固定身份）。
+         *
+         * 真机 Android 16 上 `getInstalledApplications` / `getInstalledPackages` 都只返回
+         * 1 个应用，插件包不在批量枚举结果里，只能按包名精确查询。这里的包名必须与各
+         * 插件模块 `plugins` 下 build.gradle 的 applicationId、以及 `PluginDownloads`
+         * 里的常量保持一致；查询后仍要确认 registry 非空才会进列表，
+         * 所以名字写错只会漏掉、不会误报。
+         *
+         * 注：本注释里不要出现斜杠紧跟星号的写法 —— Kotlin 的块注释支持嵌套，
+         * 那种写法会被当成注释开头，把后面的代码整段吃掉（本文件已因此踩过一次）。
+         */
+        val KNOWN_PLUGIN_PACKAGES = listOf(
+            "com.jdkshen.xiangqi.plugin",
+            "com.jdkshen.apkbuilder.plugin"
+        )
     }
 }

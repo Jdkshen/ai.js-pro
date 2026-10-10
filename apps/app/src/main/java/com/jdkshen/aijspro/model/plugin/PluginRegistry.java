@@ -119,18 +119,22 @@ public final class PluginRegistry {
         public enum Strategy {
             /** 批量接口的结果里就有注册插件。 */
             BULK,
-            /** 批量接口没给出注册插件，改用逐个查询补齐。 */
+            /** 批量接口没给出注册插件，改用逐个查询批量结果里的候选包补齐。 */
             PER_PACKAGE_FALLBACK,
             /** 批量接口没给出注册插件，且没有像插件的包，未做补齐。 */
-            BULK_ONLY
+            BULK_ONLY,
+            /** 批量枚举根本没返回插件（真机 Android 16 只返回 1 个应用），改由已知包名精确查询。 */
+            DIRECT_KNOWN_PACKAGES
         }
 
         private final List<PluginEntry> entries;
         private final Strategy strategy;
+        private final int candidateCount;
 
-        ScanResult(List<PluginEntry> entries, Strategy strategy) {
+        ScanResult(List<PluginEntry> entries, Strategy strategy, int candidateCount) {
             this.entries = entries;
             this.strategy = strategy;
+            this.candidateCount = candidateCount;
         }
 
         public List<PluginEntry> getEntries() {
@@ -139,6 +143,11 @@ public final class PluginRegistry {
 
         public Strategy getStrategy() {
             return strategy;
+        }
+
+        /** 本次被判为「像插件」的包数量（诊断用；正常机型不关心）。 */
+        public int getCandidateCount() {
+            return candidateCount;
         }
     }
 
@@ -153,6 +162,32 @@ public final class PluginRegistry {
     public static ScanResult build(List<InstalledApp> bulkApps,
                                    PerPackageLookup perPackage,
                                    boolean useFallback) {
+        return build(bulkApps, perPackage, useFallback, null, null);
+    }
+
+    /**
+     * 完整版：额外支持「直接查已知插件包名」。
+     *
+     * <p>为什么必须有这条路径：真机证据（Redmi 2602BRT18C / Android 16 / HyperOS，
+     * 2026-10-10 诊断输出）显示
+     * {@code getInstalledApplications(GET_META_DATA)} 只返回 **1** 个应用、
+     * {@code getInstalledPackages(GET_META_DATA)} 同样只返回 **1** 个 —— 两个批量枚举
+     * 在这台机上基本被废掉，插件包压根不在结果里；而
+     * {@code getPackageInfo("com.jdkshen.xiangqi.plugin", GET_META_DATA)} 能正常拿到
+     * {@code registry=com.jdkshen.xiangqi.plugin.PluginRegistry}。
+     * 所以「按已知包名精确查询」是这台机上唯一可行的发现方式。
+     *
+     * @param directPackages 已知插件包名（本仓库自研插件的固定身份，见
+     *                       {@code PluginDownloads.APK_BUILDER_PLUGIN_PACKAGE} 等）；
+     *                       可为 null。这些包只有在**精确查询确认登记**后才进入列表，
+     *                       不会因为「包里带了这个名字」就被当成插件。
+     * @param directLookup   给包名返回注册类；null 表示不是插件。可为 null。
+     */
+    public static ScanResult build(List<InstalledApp> bulkApps,
+                                   PerPackageLookup perPackage,
+                                   boolean useFallback,
+                                   List<String> directPackages,
+                                   RichPerPackageLookup directLookup) {
         List<PluginEntry> registered = new ArrayList<>();
         List<String> candidates = new ArrayList<>();
         if (bulkApps != null) {
@@ -175,17 +210,36 @@ public final class PluginRegistry {
             strategy = ScanResult.Strategy.PER_PACKAGE_FALLBACK;
             for (String candidate : candidates) {
                 String registryClass = perPackage.lookup(candidate);
-                if (registryClass == null || registryClass.trim().isEmpty()) {
+                if (isBlank(registryClass)) {
                     continue;
                 }
-                InstalledApp app = find(bulkApps, candidate);
-                String label = app != null && app.getLabel() != null
-                        ? app.getLabel() : candidate;
-                String version = app != null ? versionOf(app) : null;
-                registered.add(new PluginEntry(label, "已安装 · " + version, candidate, true));
+                addIfAbsent(registered, candidate, find(bulkApps, candidate));
             }
         } else if (registered.isEmpty()) {
             strategy = ScanResult.Strategy.BULK_ONLY;
+        }
+
+        // 兜底兜底：批量枚举在这台机上只返回 1 个应用，上面两条路径都够不着插件包，
+        // 只能用已知包名精确查询。只有确认登记（注册类非空）才加入。
+        if (directPackages != null && directLookup != null) {
+            boolean added = false;
+            for (String packageName : directPackages) {
+                if (isBlank(packageName) || containsPackage(registered, packageName)) {
+                    continue;
+                }
+                PackageMatch match = directLookup.lookup(packageName);
+                if (match == null || isBlank(match.getRegistryClass())) {
+                    continue;
+                }
+                String label = !isBlank(match.getLabel()) ? match.getLabel() : packageName;
+                String version = !isBlank(match.getVersionName())
+                        ? match.getVersionName() : packageName;
+                registered.add(new PluginEntry(label, "已安装 · " + version, packageName, true));
+                added = true;
+            }
+            if (added) {
+                strategy = ScanResult.Strategy.DIRECT_KNOWN_PACKAGES;
+            }
         }
 
         registered.sort(Comparator.comparing(PluginEntry::getLabel,
@@ -193,12 +247,66 @@ public final class PluginRegistry {
         List<PluginEntry> entries = new ArrayList<>(registered);
         entries.add(new PluginEntry("安装本地插件 APK", "选择设备中的 APK 文件",
                 LOCAL_APK_ENTRY_PACKAGE, false));
-        return new ScanResult(entries, strategy);
+        return new ScanResult(entries, strategy, candidates.size());
+    }
+
+    private static void addIfAbsent(List<PluginEntry> registered, String packageName,
+                                    InstalledApp app) {
+        if (containsPackage(registered, packageName)) {
+            return;
+        }
+        String label = app != null && app.getLabel() != null ? app.getLabel() : packageName;
+        String version = app != null ? versionOf(app) : null;
+        registered.add(new PluginEntry(label, "已安装 · " + version, packageName, true));
+    }
+
+    private static boolean containsPackage(List<PluginEntry> registered, String packageName) {
+        for (PluginEntry entry : registered) {
+            if (packageName.equals(entry.getPackageName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     /** 慢路径回调：给定包名，返回它的插件注册类；不是插件返回 null。 */
     public interface PerPackageLookup {
         String lookup(String packageName);
+    }
+
+    /** 精确查询的完整结果：注册类 + 展示用的名称/版本。 */
+    public static final class PackageMatch {
+
+        private final String registryClass;
+        private final String label;
+        private final String versionName;
+
+        public PackageMatch(String registryClass, String label, String versionName) {
+            this.registryClass = registryClass;
+            this.label = label;
+            this.versionName = versionName;
+        }
+
+        public String getRegistryClass() {
+            return registryClass;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public String getVersionName() {
+            return versionName;
+        }
+    }
+
+    /** 慢路径回调：给定包名返回完整匹配结果；不是插件返回 null。 */
+    public interface RichPerPackageLookup {
+        PackageMatch lookup(String packageName);
     }
 
     private static boolean looksLikePlugin(String packageName) {

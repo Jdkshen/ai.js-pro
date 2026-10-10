@@ -50,6 +50,16 @@ public class PluginRegistryTest {
     private static PluginRegistry.PerPackageLookup lookupOf(Map<String, String> table) {
         return table::get;
     }
+    /** 精确查询的完整结果：注册类 + 名称 + 版本。 */
+    private static PluginRegistry.RichPerPackageLookup richLookupOf(
+            Map<String, PluginRegistry.PackageMatch> table) {
+        return table::get;
+    }
+
+    private static PluginRegistry.PackageMatch match(String registryClass, String label,
+                                                     String version) {
+        return new PluginRegistry.PackageMatch(registryClass, label, version);
+    }
 
     private static final PluginRegistry.PerPackageLookup NO_LOOKUP = packageName -> null;
 
@@ -193,6 +203,86 @@ public class PluginRegistryTest {
         assertEquals("补齐时仍应沿用批量扫描拿到的名字", "象棋引擎插件", entry.getLabel());
         assertEquals("已安装 · 1.0.0", entry.getSummary());
         assertTrue(entry.isInstalled());
+    }
+
+    // ---- 已知包名精确查询（真机 Android 16：批量枚举只返回 1 个应用）--------------------
+
+    @Test
+    public void discoversKnownPluginsByPackageNameWhenBulkEnumerationIsUseless() {
+        // 复现真机：批量只返回 1 个无关应用，per-package 也无候选，
+        // 插件只能靠已知包名精确查询发现。
+        Map<String, PluginRegistry.PackageMatch> table = new HashMap<>();
+        table.put(XIANGQI, match(XIANGQI + ".PluginRegistry", "象棋引擎插件", "1.0.0"));
+
+        PluginRegistry.ScanResult result = PluginRegistry.build(
+                Collections.singletonList(plain(UNRELATED)),
+                NO_LOOKUP,
+                true,
+                Collections.singletonList(XIANGQI),
+                richLookupOf(table));
+
+        assertEquals(PluginRegistry.ScanResult.Strategy.DIRECT_KNOWN_PACKAGES,
+                result.getStrategy());
+        assertEquals(2, result.getEntries().size());
+        assertTrue(hasEntryFor(result.getEntries(), XIANGQI));
+        assertEquals("标签取精确查询带回的名称（批量枚举没给出它）",
+                "象棋引擎插件", result.getEntries().get(0).getLabel());
+        assertEquals("已安装 · 1.0.0", result.getEntries().get(0).getSummary());
+    }
+
+    @Test
+    public void knownPackageThatIsNotRegisteredStaysOutOfTheList() {
+        // 已知包名只是「候选身份」；精确查询确认不是插件就不能进列表
+        PluginRegistry.ScanResult result = PluginRegistry.build(
+                Collections.singletonList(plain(UNRELATED)),
+                NO_LOOKUP,
+                true,
+                Collections.singletonList(XIANGQI),
+                packageName -> null);
+
+        assertEquals(1, result.getEntries().size());
+        assertFalse(hasEntryFor(result.getEntries(), XIANGQI));
+        assertEquals(PluginRegistry.ScanResult.Strategy.BULK_ONLY, result.getStrategy());
+    }
+
+    @Test
+    public void knownPackageAlreadyListedByBulkIsNotDuplicated() {
+        final int[] directCalls = {0};
+        PluginRegistry.ScanResult result = PluginRegistry.build(
+                Collections.singletonList(plugin(XIANGQI, "象棋引擎插件", "1.0.0")),
+                NO_LOOKUP,
+                true,
+                Collections.singletonList(XIANGQI),
+                packageName -> {
+                    directCalls[0]++;
+                    return match(packageName + ".PluginRegistry", "X", "1.0");
+                });
+
+        assertEquals("已由批量枚举列出，不该重复", 2, result.getEntries().size());
+        assertEquals(PluginRegistry.ScanResult.Strategy.BULK, result.getStrategy());
+        assertEquals("已在列表里的包不该再查一次", 0, directCalls[0]);
+    }
+
+    @Test
+    public void directLookupSkipsBlankPackageNames() {
+        PluginRegistry.ScanResult result = PluginRegistry.build(
+                null,
+                NO_LOOKUP,
+                true,
+                Arrays.asList(null, "", "   "),
+                packageName -> match(packageName + ".PluginRegistry", "X", "1.0"));
+
+        assertEquals(1, result.getEntries().size());
+    }
+
+    @Test
+    public void directLookupWithoutKnownPackagesOrLookupIsANoOp() {
+        assertEquals(1, PluginRegistry.build(null, NO_LOOKUP, true, null, null)
+                .getEntries().size());
+        assertEquals(1, PluginRegistry.build(null, NO_LOOKUP, true,
+                Collections.singletonList(XIANGQI), null).getEntries().size());
+        assertEquals(1, PluginRegistry.build(null, NO_LOOKUP, true,
+                null, packageName -> null).getEntries().size());
     }
 
     // ---- 退化输入 -------------------------------------------------------------------
