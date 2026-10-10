@@ -249,7 +249,7 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
         Box(Modifier.size(48.dp).clickable(onClick = onClick)) {
             Image(painterResource(icon), contentDescription = description,
                 colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurface),
-                modifier = Modifier.size(27.dp).align(Alignment.Center))
+                modifier = Modifier.size(24.dp).align(Alignment.Center))
         }
     }
 

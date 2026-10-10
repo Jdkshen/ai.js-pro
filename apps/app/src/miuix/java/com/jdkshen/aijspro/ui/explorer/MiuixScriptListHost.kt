@@ -565,6 +565,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
             else R.drawable.ic_folder_outline_24dp,
             iconTint = Color.White,
             initialText = "",
+            iconSize = 24,
             name = ExplorerViewHelper.getDisplayName(page).toString(),
             nameSize = 16,
             description = fragment.getString(
@@ -595,6 +596,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
             iconRes = iconRes,
             iconTint = null,
             initialText = ExplorerViewHelper.getIconText(item),
+            iconSize = 22,
             name = ExplorerViewHelper.getDisplayName(item).toString(),
             nameSize = 15,
             description = fragment.getString(
@@ -623,6 +625,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
         iconRes: Int,
         iconTint: Color?,
         initialText: String,
+        iconSize: Int,
         name: String,
         nameSize: Int,
         description: String,
@@ -654,7 +657,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
                         Image(
                             painterResource(iconRes),
                             contentDescription = null,
-                            modifier = Modifier.size(24.dp),
+                            modifier = Modifier.size(iconSize.dp),
                             // 旧实现里文件夹/项目图标用 app:tint="?attr/colorOnPrimary"（白色系）；
                             // 文件的专属图标没有 tint，保持原色。
                             colorFilter = iconTint?.let { ColorFilter.tint(it) }

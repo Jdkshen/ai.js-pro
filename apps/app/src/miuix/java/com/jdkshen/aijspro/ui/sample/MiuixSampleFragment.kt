@@ -275,7 +275,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private fun SampleRow(entry: SampleEntry, childCount: Int, requestActions: (SampleEntry) -> Unit) {
         Column(Modifier.fillMaxWidth()) {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 74.dp).clickable {
+                Modifier.fillMaxWidth().heightIn(min = 60.dp).clickable {
                     if (entry.directory) {
                         path = entry.path
                         query = TextFieldValue("")
@@ -283,22 +283,22 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     } else {
                         view(entry)
                     }
-                }.padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                }.padding(start = 16.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 与「文件管理」列表保持同一套图标：圆底 + 白色类型符号。
                 // 颜色/图形规则与 ExplorerViewHelper.getFileIconRes / getIconColor 同步。
-                Box(Modifier.size(50.dp).clip(CircleShape).background(sampleIconColor(entry))) {
+                Box(Modifier.size(44.dp).clip(CircleShape).background(sampleIconColor(entry))) {
                     Image(
                         painterResource(sampleIconRes(entry)),
                         contentDescription = null,
-                        modifier = Modifier.size(28.dp).align(Alignment.Center),
+                        modifier = Modifier.size(24.dp).align(Alignment.Center),
                         colorFilter = ColorFilter.tint(Color.White)
                     )
                 }
                 Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                    Text(entry.name, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(sampleDescription(entry, childCount), fontSize = 14.sp,
+                    Text(entry.name, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(sampleDescription(entry, childCount), fontSize = 12.sp,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Start)
                     if (query.text.isNotBlank() || filter != SampleFilter.ALL) {
@@ -310,7 +310,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 ToolbarAction(R.drawable.ic_more_vert_black_24dp, "更多",
                     onClick = { requestActions(entry) })
             }
-            MiuixListDivider(indent = 82.dp)
+            MiuixListDivider(indent = 74.dp)
         }
     }
 
