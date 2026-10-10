@@ -47,6 +47,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
+import com.jdkshen.aijspro.theme.MiuixListDivider
 import com.jdkshen.aijspro.autojs.AutoJs
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.timing.TimedTaskManager
@@ -156,7 +157,7 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
                     Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
                         LazyColumn(
                             modifier = Modifier.weight(1f).fillMaxWidth(),
-                            contentPadding = PaddingValues(bottom = 18.dp)
+                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp)
                         ) {
                             if (visibleRunning.isEmpty() && visiblePending.isEmpty() && query.isNotEmpty()) {
                                 item { EmptyHint("没有匹配的任务") }
@@ -319,8 +320,7 @@ class MiuixTaskManagerFragment : ViewPagerFragment(0), MainPageSearchHandler {
                         Toast.LENGTH_SHORT).show()
                 }
             }
-            Box(Modifier.fillMaxWidth().padding(start = 82.dp).height(1.dp)
-                .background(MiuixTheme.colorScheme.dividerLine))
+            MiuixListDivider(indent = 82.dp)
         }
     }
 

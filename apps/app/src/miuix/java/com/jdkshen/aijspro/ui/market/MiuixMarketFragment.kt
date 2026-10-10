@@ -7,6 +7,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -100,7 +101,7 @@ class MiuixMarketFragment : ViewPagerFragment(0) {
             } else {
                 LazyColumn(
                     Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(topics, key = { it.tid }) { topic -> TopicCard(topic) }

@@ -57,6 +57,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
+import com.jdkshen.aijspro.theme.MiuixListDivider
 import com.jdkshen.aijspro.model.explorer.Explorers
 import com.jdkshen.aijspro.model.sample.SampleFile
 import com.jdkshen.aijspro.model.sample.SampleFiles
@@ -185,7 +186,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         LazyColumn(
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                             state = listState,
-                            contentPadding = PaddingValues(bottom = 18.dp)
+                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp)
                         ) {
                             when {
                                 loadError != null -> item {
@@ -309,8 +310,7 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                 ToolbarAction(R.drawable.ic_more_vert_black_24dp, "更多",
                     onClick = { requestActions(entry) })
             }
-            Box(Modifier.fillMaxWidth().padding(start = 82.dp).height(1.dp)
-                .background(MiuixTheme.colorScheme.dividerLine))
+            MiuixListDivider(indent = 82.dp)
         }
     }
 

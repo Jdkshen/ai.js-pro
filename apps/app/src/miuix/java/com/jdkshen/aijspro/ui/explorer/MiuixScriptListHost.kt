@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jdkshen.aijspro.Pref
+import com.jdkshen.aijspro.theme.MiuixListDivider
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.model.explorer.ExplorerDirPage
@@ -687,12 +688,7 @@ class MiuixScriptListHost @JvmOverloads constructor(
                 }
                 RowIcon(R.drawable.ic_more_vert_black_24dp, "更多操作：$name", onMore)
             }
-            Box(
-                Modifier.fillMaxWidth()
-                    .padding(start = 74.dp)
-                    .height(1.dp)
-                    .background(colorResource(R.color.m3_list_divider))
-            )
+            MiuixListDivider(indent = 74.dp)
         }
     }
 

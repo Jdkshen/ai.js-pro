@@ -1,9 +1,17 @@
 package com.jdkshen.aijspro.theme
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import android.content.Context
 import android.content.res.Configuration
 import com.jdkshen.aijspro.Pref
@@ -11,6 +19,31 @@ import top.yukonga.miuix.kmp.theme.Colors
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
+
+/**
+ * 列表行分隔线 —— 全应用**唯一**写法。
+ *
+ * 在此之前有 4 处各写一遍的 `Box(height(1.dp))`，而且颜色来源分三种：
+ *   - `MiuixScriptListHost.kt:693`   `R.color.m3_list_divider`（缩进 74dp）
+ *   - `MiuixSampleFragment.kt:312` / `MiuixTaskManagerFragment.kt:322`  `dividerLine`（缩进 82dp）
+ *   - `MiuixSearchActivity.kt:257`   `onBackground.copy(alpha = 0.10f)`
+ * 高度、缩进、配色各自维护，任何一处要调整都得改四个文件。
+ *
+ * 统一到这里：颜色一律取 Miuix 主题令牌 [MiuixTheme.colorScheme.dividerLine]（随亮/暗自动切换）。
+ * **缩进仍由调用方给** —— 文件页 74dp、示例/任务页 82dp 是按各自圆标直径（44 / 50dp）
+ * 加「圆标到文字间距」（14dp 等）推出来的，属于刻意的页面差异，不拉平。
+ *
+ * @param indent 左侧缩进，一般等于「圆标直径 + 圆标到文字的间距」。
+ */
+@Composable
+fun MiuixListDivider(indent: Dp) {
+    Box(
+        Modifier.fillMaxWidth()
+            .padding(start = indent)
+            .height(1.dp)
+            .background(MiuixTheme.colorScheme.dividerLine)
+    )
+}
 
 /**
  * Single source of truth for Miuix theming across all pilot pages.

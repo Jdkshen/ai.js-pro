@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -29,6 +30,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -170,11 +175,13 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     }
                     Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
                         if (searchMode) SearchStrip(visible.size)
-                        LazyColumn(
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
                             modifier = Modifier.weight(1f).fillMaxWidth(),
-                            contentPadding = PaddingValues(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
+                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+) {
                             when {
                                 loadError != null -> item {
                                     MessagePanel("读取失败：$loadError", "重试") { reloadTick++ }
@@ -729,59 +736,108 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         }
     }
 
+    /**
+     * 资源卡片（两列网格里的单元）。
+     *
+     * 形态对齐插件页（`MiuixPluginFragment.PluginCard`）与官方 Auto.js Pro：
+     * 封面（渐变 + 白底圆角方块包住类型图标）→ 名称 → 描述 →
+     * 元信息三列（来源 / 分类 / 大小）→ 右下「已导入 ✓ / 下载」圆钮。
+     *
+     * 与旧全宽行卡的差别：不再是一行一条，改为网格单元；信息项一个没少。
+     * 原行卡里的「工程罗盘」/「‹›」图标语义保留到封面方块里。
+     */
     @Composable
     private fun ResourceCard(
         entry: ResourceEntry,
         open: (ResourceEntry) -> Unit,
         quickAction: (ResourceEntry) -> Unit
     ) {
-        Card(Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 82.dp).clickable { open(entry) }
-                .padding(start = 12.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
+        // 封面底色：沿用旧的 primary 青绿，工程类略深以示区分
+        val coverTop = if (entry.project) Color(0xFF5C6BC0) else Color(0xFF4DB6AC)
+        val coverBottom = if (entry.project) Color(0xFF3F51B5) else Color(0xFF009688)
+        Column(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .border(1.dp, MiuixTheme.colorScheme.dividerLine, RoundedCornerShape(16.dp))
+                .background(MiuixTheme.colorScheme.surfaceVariant)
+                .clickable { open(entry) }
+        ) {
+            // ---- 封面 ----
+            Box(Modifier.fillMaxWidth().height(76.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize().background(
+                    Brush.linearGradient(listOf(coverTop, coverBottom))))
+                Box(
+                    Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))
+                        .background(MiuixTheme.colorScheme.surface),
+                    contentAlignment = Alignment.Center
+                ) {
                     if (entry.project) {
                         Image(painterResource(R.drawable.ic_project_compass_24dp), "工程",
-                            Modifier.size(27.dp),
+                            Modifier.size(30.dp),
                             colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.primary))
                     } else {
-                        Text("‹›", fontSize = 27.sp, fontWeight = FontWeight.Medium,
+                        Text("‹›", fontSize = 26.sp, fontWeight = FontWeight.Medium,
                             color = MiuixTheme.colorScheme.onSurface)
                     }
                 }
-                Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
-                    Text(entry.name, fontSize = 18.sp, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
-                    Text(entry.description, fontSize = 14.sp, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(3.dp))
-                    val metadata = entry.metadata.split('|')
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(metadata.getOrElse(0) { "" }, fontSize = 12.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            color = MiuixTheme.colorScheme.primary)
-                        Text(metadata.getOrElse(1) { entry.category }, fontSize = 12.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            color = MiuixTheme.colorScheme.onSurfaceSecondary,
-                            modifier = Modifier.weight(1f).padding(start = 18.dp))
-                        Text(metadata.getOrElse(2) { "" }, fontSize = 12.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                    }
+            }
+            // ---- 文本区 ----
+            Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                Text(entry.name, fontSize = 17.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                if (entry.description.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(entry.description, fontSize = 13.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
                 }
-                Box(Modifier.size(44.dp).clip(CircleShape).clickable { quickAction(entry) },
-                    contentAlignment = Alignment.Center) {
+                Spacer(Modifier.height(4.dp))
+                val metadata = entry.metadata.split('|')
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(metadata.getOrElse(0) { "" }, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = MiuixTheme.colorScheme.primary)
+                    Text(metadata.getOrElse(1) { entry.category }, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                        modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    Text(metadata.getOrElse(2) { "" }, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
+                }
+                Spacer(Modifier.height(8.dp))
+                // ---- 底部：导入状态 / 下载 ----
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     if (entry.imported) {
-                        Box(Modifier.size(29.dp).clip(CircleShape)
+                        Box(Modifier.size(20.dp).clip(CircleShape)
                             .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.15f)),
                             contentAlignment = Alignment.Center) {
-                            Text("✓", fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                            Text("✓", fontSize = 14.sp, fontWeight = FontWeight.Bold,
                                 color = MiuixTheme.colorScheme.primary)
                         }
+                        Spacer(Modifier.width(6.dp))
+                        Text("已导入", fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f))
                     } else {
-                        Image(painterResource(R.drawable.ic_file_download_black_48dp),
-                            "下载 ${entry.name}", Modifier.size(30.dp),
-                            colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurface))
+                        Text("未导入", fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                            modifier = Modifier.weight(1f))
+                    }
+                    Box(Modifier.size(36.dp).clip(CircleShape).clickable { quickAction(entry) },
+                        contentAlignment = Alignment.Center) {
+                        if (entry.imported) {
+                            Box(Modifier.size(24.dp).clip(CircleShape)
+                                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center) {
+                                Text("✓", fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                                    color = MiuixTheme.colorScheme.primary)
+                            }
+                        } else {
+                            Image(painterResource(R.drawable.ic_file_download_black_48dp),
+                                "下载 ${entry.name}", Modifier.size(24.dp),
+                                colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.primary))
+                        }
                     }
                 }
             }

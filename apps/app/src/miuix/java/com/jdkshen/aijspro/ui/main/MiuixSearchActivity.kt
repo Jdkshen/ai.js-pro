@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.ui.main
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jdkshen.aijspro.Pref
+import com.jdkshen.aijspro.theme.MiuixListDivider
 import com.jdkshen.aijspro.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -201,6 +203,7 @@ internal fun MiuixSearchOverlayContent(
                 LazyColumn(
                     Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 225.dp),
                     state = listState,
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp),
                 ) {
                     items(visibleResults, key = { it.absolutePath }, contentType = { it.isDirectory }) { file ->
                         val isDirectory = file.isDirectory
@@ -254,8 +257,7 @@ internal fun MiuixSearchOverlayContent(
                                     colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.primary))
                             }
                         }
-                        Box(Modifier.fillMaxWidth().height(1.dp)
-                            .background(MiuixTheme.colorScheme.onBackground.copy(alpha = 0.10f)))
+                        MiuixListDivider(indent = 0.dp)
                     }
                 }
                 Row(
