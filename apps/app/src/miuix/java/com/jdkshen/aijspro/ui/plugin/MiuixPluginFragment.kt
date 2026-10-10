@@ -5,6 +5,9 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +19,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,8 +35,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -40,15 +48,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,6 +85,7 @@ import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.Locale
@@ -89,6 +105,9 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
     private var reloadTick by mutableStateOf(0)
     private var selected by mutableStateOf<PluginRegistry.PluginEntry?>(null)
     private var refreshOnResume = false
+
+    /** 卡片开关的本地状态（按包名）。这一页只展示与记忆，真实启停仍走系统设置。 */
+    private var enabledState by mutableStateOf<Map<String, Boolean>>(emptyMap())
 
     /** 一次扫描的产物：列表 + 系统级扫描失败原因（两者可同时存在）。 */
     private data class ScanState(
@@ -142,7 +161,7 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                         lifecycle.addObserver(observer)
                         onDispose { lifecycle.removeObserver(observer) }
                     }
-                    val listState = rememberLazyListState()
+                    val listState = rememberLazyGridState()
                     val all = plugins.orEmpty()
                     val visible = remember(all, query.text) {
                         val needle = query.text.trim()
@@ -157,24 +176,31 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                             onRefresh = { reloadTick++ },
                             onSearch = { showSearchDialog = true }
                         )
-                        LazyColumn(
+                        // 卡片式两列网格（对齐官方 Auto.js Pro 的插件页）：
+                        // 每张卡 = 封面（插件图标）+ 名称 + 版本 + 状态 + 包名 + 启用开关。
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                             state = listState,
-                            contentPadding = PaddingValues(bottom = 18.dp)
+                            contentPadding = PaddingValues(
+                                start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             when {
-                                loadError != null -> item {
+                                loadError != null -> item(span = { GridItemSpan(2) }) {
                                     MessagePanel("读取失败：$loadError", "重试") { reloadTick++ }
                                 }
-                                plugins == null -> item { MessagePanel("正在读取插件…") }
-                                visible.isEmpty() -> item {
+                                plugins == null -> item(span = { GridItemSpan(2) }) {
+                                    MessagePanel("正在读取插件…")
+                                }
+                                visible.isEmpty() -> item(span = { GridItemSpan(2) }) {
                                     MessagePanel("没有匹配的插件，请修改关键词。")
                                 }
                             }
-                            // 扫描系统出错时列表里只剩「安装本地插件 APK」那一行，
-                            // 光看列表会误判成「没装插件」——这里把出错与两条排查路径明说出来。
+                            // 扫描系统出错时消息卡占满整行；否则只看列表会误判成「没装插件」。
                             scanError?.let { error ->
-                                item {
+                                item(span = { GridItemSpan(2) }) {
                                     MessagePanel(
                                         "系统包扫描失败：$error\n" +
                                             "列表可能不完整。可先下拉刷新；若仍为空，请把这一行反馈给开发者。",
@@ -182,8 +208,8 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                                     ) { reloadTick++ }
                                 }
                             }
-                            items(visible, key = { it.packageName + it.isInstalled() }, contentType = { it.isInstalled() }) { entry ->
-                                PluginRow(entry) { selected = it }
+                            items(visible, key = { it.packageName + it.isInstalled() }) { entry ->
+                                PluginCard(entry) { selected = it }
                             }
                         }
                     }
@@ -441,40 +467,159 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         }
     }
 
+    /**
+     * 插件卡片（两列网格里的单元）。
+     *
+     * 形态对齐官方 Auto.js Pro 的插件页：
+     *   封面（渐变 + 白底圆角方块包着插件自己的图标）
+     *   → 名称 → 版本 → 状态（已安装/未安装）→ 包名 → 底部「状态图标 + 启用开关」。
+     *
+     * 与旧行式实现的关系：信息项没减少（名称/版本/状态/包名/开关都在），
+     * 只是从「一行一条」改成「一卡一格」，并把封面补上（旧行式没有封面）。
+     */
     @Composable
-    private fun PluginRow(entry: PluginRegistry.PluginEntry, open: (PluginRegistry.PluginEntry) -> Unit) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 78.dp).clickable { open(entry) }
-                    .padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(Modifier.size(50.dp).clip(CircleShape).background(
-                    if (entry.isInstalled()) Color(0xFF2196F3) else Color(0xFF009688))) {
-                    Image(
-                        painterResource(if (entry.isInstalled()) R.drawable.ic_nav_market
-                        else R.drawable.ic_add_white_48dp),
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp).align(Alignment.Center),
-                        colorFilter = ColorFilter.tint(Color.White)
+    private fun PluginCard(entry: PluginRegistry.PluginEntry, open: (PluginRegistry.PluginEntry) -> Unit) {
+        val installed = entry.isInstalled()
+        // 「安装本地插件 APK」那一项没有包名，是入口而不是插件：单独一套文案与封面。
+        val localEntry = entry.packageName.isEmpty()
+        val icon = rememberPluginIcon(entry.packageName, installed)
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            // 卡片边界：参考图的卡片靠一圈细描边与页面底色区分。
+            // 这里不用 Miuix 的 Card —— 它自带宽度约束，放进网格会让两列退化成单列（实测）。
+            .border(1.dp, MiuixTheme.colorScheme.dividerLine, RoundedCornerShape(16.dp))
+            .background(MiuixTheme.colorScheme.surfaceVariant).clickable { open(entry) }) {
+            Column(Modifier.fillMaxWidth()) {
+                // ---- 封面 ----
+                Box(
+                    Modifier.fillMaxWidth().height(96.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // 渐变底：与参考图一致的青绿双色
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFF4DB6AC), Color(0xFF009688))
+                            )
+                        )
                     )
+                    when {
+                        icon != null -> {
+                            // 白底圆角方块包住插件图标（参考图里那层白色「贴片」）
+                            Box(
+                                Modifier.size(64.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(Color.White),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Image(
+                                    bitmap = icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(44.dp)
+                                )
+                            }
+                        }
+                        // 本地安装入口：用「+」表达「添加」，而不是拿首字当图标
+                        localEntry -> Image(
+                            painterResource(R.drawable.ic_add_white_48dp),
+                            contentDescription = null,
+                            modifier = Modifier.size(44.dp),
+                            colorFilter = ColorFilter.tint(Color.White)
+                        )
+                        // 其余取不到图标的插件：用首字母占位，避免出现空封面
+                        else -> Text(
+                            entry.label.take(1),
+                            fontSize = 34.sp,
+                            color = Color.White,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
-                Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                    Text(entry.label, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(entry.summary, fontSize = 14.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceSecondary)
-                    if (entry.isInstalled()) {
-                        Text(entry.packageName, fontSize = 12.sp, maxLines = 1,
+                // ---- 文本区 ----
+                Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                    Text(entry.label, fontSize = 17.sp, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        // 本地安装入口没有版本号，summary 是说明文案，直接显示
+                        if (localEntry) entry.summary else versionText(entry),
+                        fontSize = 13.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary
+                    )
+                    if (!localEntry) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (installed) "本机已安装的 SDK 插件" else "尚未安装的 SDK 插件",
+                            fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = MiuixTheme.colorScheme.onSurfaceSecondary
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(entry.packageName, fontSize = 11.sp, maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             color = MiuixTheme.colorScheme.onSurfaceSecondary)
                     }
+                    Spacer(Modifier.height(12.dp))
+                    // ---- 底部：状态 + 开关 ----
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painterResource(R.drawable.ic_nav_market),
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            colorFilter = ColorFilter.tint(
+                                if (installed) Color(0xFF009688)
+                                else MiuixTheme.colorScheme.onSurfaceSecondary
+                            )
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            when {
+                                localEntry -> "选择 APK 安装"
+                                installed -> "已安装"
+                                else -> "未安装"
+                            },
+                            fontSize = 13.sp,
+                            color = if (installed) Color(0xFF009688)
+                            else MiuixTheme.colorScheme.onSurfaceSecondary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (installed && !localEntry) {
+                            Switch(
+                                checked = enabledState[entry.packageName] ?: true,
+                                onCheckedChange = { checked ->
+                                    enabledState = enabledState +
+                                        (entry.packageName to checked)
+                                },
+                                modifier = Modifier.height(28.dp)
+                            )
+                        }
+                    }
                 }
-                Image(painterResource(R.drawable.ic_chevron_right), contentDescription = null,
-                    modifier = Modifier.size(24.dp),
-                    colorFilter = ColorFilter.tint(MiuixTheme.colorScheme.onSurfaceSecondary))
             }
-            Box(Modifier.fillMaxWidth().padding(start = 82.dp).height(1.dp)
-                .background(MiuixTheme.colorScheme.dividerLine))
+        }
+    }
+
+    /** 「版本 x.y.z」；summary 里带的是「已安装 · 1.0.0」，这里只取版本段。 */
+    private fun versionText(entry: PluginRegistry.PluginEntry): String {
+        val summary = entry.summary
+        val dot = summary.indexOf('·')
+        val version = if (dot >= 0) summary.substring(dot + 1).trim() else summary.trim()
+        return if (version.isEmpty()) "版本未知" else "版本 $version"
+    }
+
+    /**
+     * 取插件自己的应用图标（参考图封面里就是插件的图标）。
+     *
+     * 取不到返回 null，由调用方回落到首字母占位 —— 不让封面空着，也不让取图标失败影响列表。
+     */
+    @Composable
+    private fun rememberPluginIcon(packageName: String, installed: Boolean): ImageBitmap? {
+        if (!installed || packageName.isEmpty()) return null
+        val context = LocalContext.current
+        return remember(packageName) {
+            runCatching {
+                drawableToBitmap(context.packageManager.getApplicationIcon(packageName))
+                    .asImageBitmap()
+            }.getOrNull()
         }
     }
 
@@ -554,8 +699,28 @@ class MiuixPluginFragment : ViewPagerFragment(-1), MainPageSearchHandler {
         }
     }
 
+    /**
+     * Drawable → Bitmap。
+     *
+     * Compose 的 `Image` 需要 `ImageBitmap`。这里统一按 intrinsic 尺寸画一次；
+     * 自适应图标（AdaptiveIconDrawable）在个别 ROM 上 intrinsic 可能 <= 0，用固定边长兜底。
+     * 任何失败由调用方的 runCatching 接住，不影响列表。
+     */
+    private fun drawableToBitmap(drawable: Drawable): Bitmap {
+        val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: DEFAULT_ICON_SIZE
+        val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: DEFAULT_ICON_SIZE
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
     private companion object {
         const val PLUGIN_REGISTRY_KEY = PluginRegistry.REGISTRY_KEY
+
+        /** 取不到 intrinsic 尺寸时的兜底图标边长（px）。 */
+        const val DEFAULT_ICON_SIZE = 96
 
         /**
          * 已知插件包名（本仓库自研插件的固定身份）。
