@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
@@ -124,6 +125,9 @@ class MiuixScriptListHost @JvmOverloads constructor(
     private var currentPath by mutableStateOf(navigation.current.getPath())
     private var loadedPath: String? = null
     // Owned by the host, not remember() inside a loading branch. Each directory has its own viewport.
+    /** 列表滚动状态回调（true = 正在滚动）。旧 ExplorerView 的同名回调由 Fragment 注入。 */
+    var onListScrollStateChanged: ((Boolean) -> Unit)? = null
+
     private val listStates = mutableMapOf<String, LazyListState>()
     private val restoredPositions = mutableMapOf<String, ExplorerScrollPosition>()
     private var pendingHighlightPath by mutableStateOf<String?>(null)
@@ -205,6 +209,11 @@ class MiuixScriptListHost @JvmOverloads constructor(
                 FileListScreen()
             }
         }
+    }
+
+    /** Java 侧（MyScriptListFragment）注入滚动回调，供 FAB 收起用。 */
+    fun setListScrollStateListener(listener: (Boolean) -> Unit) {
+        onListScrollStateChanged = listener
     }
 
     fun canGoBack(): Boolean = navigation.canGoBack()
@@ -435,6 +444,15 @@ class MiuixScriptListHost @JvmOverloads constructor(
                             highlightedPath = null
                         }
                     }
+                    // 滚动时收起主界面悬浮按钮：旧实现由 ExplorerView 的
+                    // OnScrollStateChangedCallback 驱动（MyScriptListFragment:126-130），
+                    // 而 Compose 列表没有那个回调，这里补一条等价的 bridge。
+                    // isScrollInProgress 的语义与旧回调的 scrolling 一致。
+                    LaunchedEffect(state) {
+                        snapshotFlow { state.isScrollInProgress }.collect { scrolling ->
+                            onListScrollStateChanged?.invoke(scrolling)
+                        }
+                    }
                     LazyColumn(Modifier.fillMaxSize(), state = state) {
                         items(rows.folders, key = { it.item.getPath() }) { row ->
                             FolderRow(row.item as ExplorerPage)
@@ -582,21 +600,61 @@ class MiuixScriptListHost @JvmOverloads constructor(
     }
 
     /**
+     * 文件行圆底色 —— 移植旧 `ExplorerViewHelper.getIconColor`（`ExplorerViewHelper.java:74-93`）。
+     *
+     * 旧实现在 `bind` 里逐项覆盖布局初值，所以「按类型取色」才是旧界面的真实观感；
+     * 示例页 `MiuixSampleFragment.sampleIconColor` 早已照抄这套规则，这里补上文件页那份。
+     *
+     * 注意大小写：旧 `isJavaScript` 是 `TYPE_JAVASCRIPT.equals(item.getType())`（**区分大小写**），
+     * 而 `getType()` 返回的是原样的扩展名，所以 `.JS` 在旧界面里并不算 JS
+     * （会落到 default 的灰、且 `getFileIconRes` 也返回 0 → 走首字母）。
+     * 这里刻意保持同样的判定口径，以免「对齐旧界面」变成「顺手修了个旧瑕疵」而偏离观感。
+     */
+    @Composable
+    private fun fileIconColor(item: ExplorerItem): Color {
+        val name = item.getName().lowercase(java.util.Locale.ROOT)
+        val type = item.getType()
+        return when {
+            // 旧 isJavaScript：TYPE_JAVASCRIPT.equals(getType())，区分大小写
+            type == "js" -> Color(0xFF0A0E0F)
+            name.endsWith(".json") -> Color(0xFF0A0E0F)
+            name.endsWith(".md") -> Color(0xFF1E88E5)
+            name.endsWith(".apk") -> Color(0xFF32D780)
+            // 旧 default 分支：TYPE_AUTO_FILE 取 R.color.color_r，其余 Color.GRAY
+            type == "auto" -> colorResource(R.color.color_r)
+            else -> Color(0xFF9E9E9E)
+        }
+    }
+
+    /**
      * 文件行，对应 `script_file_list_file.xml`：左侧 44dp 圆底（有专属图标则显示图标、否则首字母），
      * 名称 15sp、描述 11sp（`text_file_modified`）、右侧 run（仅可执行时可见）+ more。
+     *
+     * **圆底色按类型逐项取**（不是固定色）：旧实现在 `bind` 里显式覆盖——
+     * `ExplorerView.java:892` 的 `mFirstCharBackground.setColor(getIconColor(item))`，
+     * 规则见 `ExplorerViewHelper.getIconColor`（js/json 近黑 #0A0E0F、md 蓝 #1E88E5、
+     * apk 亮绿 #32D780、auto 粉、其余灰）。
+     * 这里此前固定用 `R.color.file_icon_background`（#5cab7d）并注释成「旧实现是固定椭圆底」——
+     * **那句注释是错的**：`circle_light_green` 只是布局初值，会被运行时覆盖。
+     * 固定浅绿底 + 白色描边图标（`ic_code_file_24dp` 是 `#FFFFFFFF` 描边）对比度明显低，
+     * 且与本仓库示例页 `MiuixSampleFragment.kt` 的 `sampleIconColor`（照抄 getIconColor 规则）
+     * 自相矛盾——现按示例页同一套规则取值。
+     *
+     * 图标尺寸 24dp：`script_file_list_file.xml` 的 `file_code_icon` 虽写 22dp，但它只承载
+     * 24dp viewport 的白色描边图形，22dp 会按 intrinsic 长宽比再缩一次；同仓示例页
+     * （`MiuixSampleFragment.kt:295`）给同一套 drawable 就是 24dp。
      */
     @Composable
     private fun FileRow(item: ExplorerItem) {
         val iconRes = ExplorerViewHelper.getFileIconRes(item)
         ItemRow(
             path = item.getPath(),
-            // 旧实现：circle_light_green 固定 #5cab7d 椭圆底；有专属图标时图标不 tint、
-            // 隐藏首字母，否则显示 22sp 白色首字母。
-            iconBackground = colorResource(R.color.file_icon_background),
+            iconBackground = fileIconColor(item),
             iconRes = iconRes,
+            // 专属图标自带白色描边，不要再 tint；无图标时圆底显示首字母
             iconTint = null,
-            initialText = ExplorerViewHelper.getIconText(item),
-            iconSize = 22,
+            initialText = if (iconRes != 0) "" else ExplorerViewHelper.getIconText(item),
+            iconSize = 24,
             name = ExplorerViewHelper.getDisplayName(item).toString(),
             nameSize = 15,
             description = fragment.getString(

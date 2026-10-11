@@ -54,7 +54,20 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     private static final String TAG = "MyScriptListFragment";
 
-    /** 实验开关：开启后文件页改用 Compose 版列表（S2）。默认关闭，S3 补齐操作后默认开启并删旧实现。 */
+    /**
+     * 文件页列表实现开关。
+     *
+     * 历史上是"S2 实验开关、默认关闭"；**现已默认开启**（Compose 版为默认实现）。
+     * 保留这个 key 与分支只是为了出问题时能一键回退旧实现：
+     *
+     *   adb shell am force-stop com.jdkshen.aijspro
+     *   # 需要回退时把该布尔写成 false（debug 包可 run-as 改 shared_prefs）
+     *
+     * 之所以敢默认开启：`MiuixScriptListHost` 已逐项对齐旧 `ExplorerView` 的全部可触达动作
+     * （14 个 explorer 动作、面包屑、排序、项目菜单、状态保存/恢复、返回键），
+     * 且 `mExplorerView` 为 null 的路径全部做过判空（本文件 `ScriptOperations` 的
+     * view 参数允许 null，`showMessageWithoutThreadSwitch` 见 null 即退化为 Toast）。
+     */
     public static final String PREF_MIUIX_FILE_LIST = "aijspro.experimental.miuix_file_list";
 
     public MyScriptListFragment() {
@@ -70,8 +83,8 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     private Bundle mLegacySavedState;
 
     private boolean useMiuixFileList() {
-        return getContext() != null && PreferenceManager.getDefaultSharedPreferences(getContext())
-                .getBoolean(PREF_MIUIX_FILE_LIST, false);
+        return getContext() == null || PreferenceManager.getDefaultSharedPreferences(getContext())
+                .getBoolean(PREF_MIUIX_FILE_LIST, true);
     }
 
     private FloatingActionMenu mFloatingActionMenu;
@@ -91,6 +104,16 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         if (useMiuixFileList()) {
             mMiuixHost = new com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost(this, mMiuixSavedState);
+            // 滚动时收起主界面悬浮按钮。旧实现把这条接在 ExplorerView 上（setUpViews 里），
+            // 而 Miuix 模式下 setUpViews() 不执行 —— 这里补同一条联动，否则 FAB 一直挡着列表。
+            // 注意：Kotlin 的 (Boolean) -> Unit 在 Java 侧是 Function1<Boolean, Unit>，
+            // lambda 必须显式返回 Unit.INSTANCE，否则类型推断失败。
+            mMiuixHost.setListScrollStateListener(scrolling -> {
+                if (getActivity() instanceof MainActivity) {
+                    ((MainActivity) getActivity()).onMainListScrollStateChanged(scrolling);
+                }
+                return kotlin.Unit.INSTANCE;
+            });
             View view = mMiuixHost.createView();
             mMiuixHost.reload();
             return view;
