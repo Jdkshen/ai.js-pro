@@ -58,6 +58,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.theme.MiuixListDivider
+import com.jdkshen.aijspro.theme.MiuixPullRefresh
 import com.jdkshen.aijspro.model.explorer.Explorers
 import com.jdkshen.aijspro.model.sample.SampleFile
 import com.jdkshen.aijspro.model.sample.SampleFiles
@@ -183,25 +184,34 @@ class MiuixSampleFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                             onSort = { ascending = !ascending },
                             onSearch = { showSearchDialog = true }
                         )
-                        LazyColumn(
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                            state = listState,
-                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp)
+                        // 下拉刷新：示例是随 APK 分发的 assets，正常不会变；但「重置所有示例」
+                        // 与导入会改动它，且旧界面文件页/示例页都有 SwipeRefreshLayout，
+                        // 所以这里也补上同一条手势（刷新 = 重读示例清单）。
+                        MiuixPullRefresh(
+                            refreshing = allEntries == null && retry > 0,
+                            onRefresh = { retry++ },
+                            modifier = Modifier.weight(1f)
                         ) {
-                            when {
-                                loadError != null -> item {
-                                    MessagePanel("读取失败：$loadError", "重试") { retry++ }
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                state = listState,
+                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp)
+                            ) {
+                                when {
+                                    loadError != null -> item {
+                                        MessagePanel("读取失败：$loadError", "重试") { retry++ }
+                                    }
+                                    allEntries == null -> item { MessagePanel("正在读取示例…") }
+                                    searchResult.error != null -> item {
+                                        MessagePanel(searchResult.error, textColor = Color(0xFFD1495B))
+                                    }
+                                    entries.isEmpty() -> item {
+                                        MessagePanel("没有匹配的示例，请修改关键词或筛选条件。")
+                                    }
                                 }
-                                allEntries == null -> item { MessagePanel("正在读取示例…") }
-                                searchResult.error != null -> item {
-                                    MessagePanel(searchResult.error, textColor = Color(0xFFD1495B))
+                                items(entries, key = { it.path }, contentType = { it.directory }) { entry ->
+                                    SampleRow(entry, childCounts[entry.path] ?: 0) { actionEntry = it }
                                 }
-                                entries.isEmpty() -> item {
-                                    MessagePanel("没有匹配的示例，请修改关键词或筛选条件。")
-                                }
-                            }
-                            items(entries, key = { it.path }, contentType = { it.directory }) { entry ->
-                                SampleRow(entry, childCounts[entry.path] ?: 0) { actionEntry = it }
                             }
                         }
                     }

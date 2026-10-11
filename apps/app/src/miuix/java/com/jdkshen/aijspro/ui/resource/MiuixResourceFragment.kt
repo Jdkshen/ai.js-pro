@@ -71,6 +71,7 @@ import com.jdkshen.aijspro.model.sample.SampleFiles
 import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.Scripts
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
+import com.jdkshen.aijspro.theme.MiuixPullRefresh
 import com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity
 import com.jdkshen.aijspro.ui.main.MainActivity
 import com.jdkshen.aijspro.ui.main.MainPageSearchHandler
@@ -175,29 +176,38 @@ class MiuixResourceFragment : ViewPagerFragment(-1), MainPageSearchHandler {
                     }
                     Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
                         if (searchMode) SearchStrip(visible.size)
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-) {
-                            when {
-                                loadError != null -> item {
-                                    MessagePanel("读取失败：$loadError", "重试") { reloadTick++ }
+                        // 下拉刷新：被本页替换掉的旧资源 tab（WebView 社区页）本来就有
+                        // 下拉刷新（ewebview.xml + EWebView 的 onRefresh = WebView.reload），
+                        // 迁移后丢了；这里补回同一条手势。refreshing 绑「资源为空的加载态」。
+                        MiuixPullRefresh(
+                            refreshing = all.isEmpty() && reloadTick > 0,
+                            onRefresh = { reloadTick++ },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                when {
+                                    loadError != null -> item {
+                                        MessagePanel("读取失败：$loadError", "重试") { reloadTick++ }
+                                    }
+                                    all.isEmpty() -> item { MessagePanel("正在读取资源…") }
+                                    visible.isEmpty() -> item {
+                                        MessagePanel(if (mineOnly) "还没有上传的资源"
+                                            else "没有匹配的资源，请修改关键词或分类。")
+                                    }
                                 }
-                                all.isEmpty() -> item { MessagePanel("正在读取资源…") }
-                                visible.isEmpty() -> item {
-                                    MessagePanel(if (mineOnly) "还没有上传的资源"
-                                        else "没有匹配的资源，请修改关键词或分类。")
+                                items(visible, key = { "${it.kind}:${it.assetPath ?: it.file?.path}" }) { entry ->
+                                    ResourceCard(entry, open = { selected = it }, quickAction = {
+                                        if (it.kind == Source.BUILTIN && !it.imported && !busy) {
+                                            importBuiltin(it) { reloadTick++ }
+                                        } else selected = it
+                                    })
                                 }
-                            }
-                            items(visible, key = { "${it.kind}:${it.assetPath ?: it.file?.path}" }) { entry ->
-                                ResourceCard(entry, open = { selected = it }, quickAction = {
-                                    if (it.kind == Source.BUILTIN && !it.imported && !busy) {
-                                        importBuiltin(it) { reloadTick++ }
-                                    } else selected = it
-                                })
                             }
                         }
                         ResourceBottomBar()

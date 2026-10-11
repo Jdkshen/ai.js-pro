@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.theme.MiuixListDivider
+import com.jdkshen.aijspro.theme.MiuixPullRefresh
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.model.explorer.ExplorerDirPage
@@ -453,12 +454,18 @@ class MiuixScriptListHost @JvmOverloads constructor(
                             onListScrollStateChanged?.invoke(scrolling)
                         }
                     }
-                    LazyColumn(Modifier.fillMaxSize(), state = state) {
-                        items(rows.folders, key = { it.item.getPath() }) { row ->
-                            FolderRow(row.item as ExplorerPage)
-                        }
-                        items(rows.files, key = { it.item.getPath() }) { row ->
-                            FileRow(row.item)
+                    // 下拉刷新：旧界面 ExplorerView 继承 ThemeColorSwipeRefreshLayout
+                    // （onRefresh = notifyChildrenChanged + 清 LRU 后重载），迁移到 Compose 后丢了。
+                    // 这里用零依赖的 MiuixPullRefresh 补回来；refreshing 绑 loading，
+                    // 刷新完成（loading 落回 false）时指示器自动回弹。
+                    MiuixPullRefresh(refreshing = loading, onRefresh = { reload() }) {
+                        LazyColumn(Modifier.fillMaxSize(), state = state) {
+                            items(rows.folders, key = { it.item.getPath() }) { row ->
+                                FolderRow(row.item as ExplorerPage)
+                            }
+                            items(rows.files, key = { it.item.getPath() }) { row ->
+                                FileRow(row.item)
+                            }
                         }
                     }
                 }
