@@ -51,6 +51,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jdkshen.aijspro.Pref
@@ -553,7 +554,13 @@ class MiuixScriptListHost @JvmOverloads constructor(
         }
     }
 
-    /** 分类头按钮：48dp 命中区、12dp 内边距；禁用时 alpha = 0.38（与旧实现一致）。 */
+    /**
+     * 分类头按钮：48dp 命中区、12dp 内边距；禁用时 alpha = 0.38（与旧实现一致）。
+     *
+     * 官方 9.3.11 的 `script_file_list_category.xml` 是 32dp 按钮 + `padding="9dp"`，
+     * 但 32dp **低于 Material 规范的 48dp 最小命中区**，手指不易点中 —— 实测对比后
+     * 保留 AI.js Pro 自己的 48dp（详见 [OfficialSpec]）。
+     */
     @Composable
     private fun HeaderIcon(resId: Int, label: String, tint: Color, enabled: Boolean, onClick: () -> Unit) {
         Box(
@@ -573,16 +580,111 @@ class MiuixScriptListHost @JvmOverloads constructor(
     }
 
     /**
+     * **官方 Auto.js Pro 9.3.11 的界面规格**（从 `com.boyai.auma` 未混淆资源名的包反编译得到）。
+     *
+     * 提取方式：`aapt dump xmltree <apk> res/layout/<name>.xml`，二进制 XML 的
+     * dimension 编码为 `值 = raw/256`、低 4 位是单位（1=dp，2=sp）。
+     * 解码规则用 9 个整数样本交叉校准过（`0x801`=8dp、`0x1002`=16sp、`0xc01`=12dp、
+     * `0x2001`=32dp、`0x3201`=50dp、`0x3c01`=60dp 等）。
+     * 完整报告见 `docs/reports/2026-10-11_反编译官方AutoJsPro界面规格.md`。
+     *
+     * ## 结论：**已实做验证后回退**（2026-10-11）
+     *
+     * 曾把文件行/文件夹行/分类头按下面这套官方值实做并装机截图，结论是**不采用**：
+     *
+     *  1. **官方目录行没有圆底**（`script_file_list_directory.xml` 的 AppCompatImageView
+     *     无 `android:background`，裸 24dp），图标本身是**白色描边**，靠官方主题着色。
+     *     搬到 AI.js Pro 后图标在白底上**近乎不可见**，且丢失「普通文件夹（蓝）vs
+     *     项目（靛蓝）」的颜色区分 —— 那是 AI.js Pro 自己的信息层级，不能丢。
+     *  2. **官方分类头按钮只有 32dp**（`layout_width`=32dp + `padding=9dp`），
+     *     **低于 Material 规范的 48dp 最小命中区**，手指不易点中。
+     *  3. 官方行高由 `paddingTop/Bottom 16dp` 撑开、**完全没有 `minHeight`**，
+     *     放到 AI.js Pro 的行结构下显得发虚。
+     *
+     * 保留本对象是为了：a) 把官方数值与出处留在代码里备查；
+     * b) 需要时能一键切回官方规格做 A/B。
+     *
+     * ## 唯一采纳的官方细节
+     *
+     * `fileDescMarginTop = 4dp` —— 官方描述行 `layout_marginTop="4dp"`，
+     * AI.js Pro 原来是 2dp。纯间距改善、不改变设计语言，已在两个行组件里生效。
+     *
+     * ⚠️ 下面这些值**当前未被引用**，属「官方参考值」而非生效值：
+     * 生效值写在 [FolderRow] / [FileRow] / [HeaderIcon] 各自的字面量里，
+     * 便于一眼看出 AI.js Pro 的真实数值体系（44dp 圆底 / 15–16sp / 60dp 行高）。
+     */
+    @Suppress("unused")
+    private object OfficialSpec {
+        // ---- script_file_list_file.xml ----
+        /** 行容器四边统一 padding。 */
+        val fileRowPadding = 8.dp
+        /** 圆底 first_char。 */
+        val fileCircle = 32.dp
+        /** 圆底 layout_marginStart。 */
+        val fileCircleMarginStart = 8.dp
+        /** first_char textSize（首字母）。 */
+        val fileInitialText = 16
+        /** 名称 textSize —— 注意官方是 14sp（AI.js Pro 是 15sp）。 */
+        val fileName = 14
+        /** 描述 textSize。 */
+        val fileDesc = 11
+        /** 描述 layout_marginTop。 */
+        val fileDescMarginTop = 4.dp
+        /** name 列 layout_marginStart。 */
+        val fileTextMarginStart = 16.dp
+        /** 右侧动作按钮容器高度。 */
+        val fileActionsHeight = 34.dp
+        /** run / more 按钮宽度。 */
+        val fileActionButton = 36.dp
+        /** 第三个按钮（官方多一个）。 */
+        val fileActionThird = 32.dp
+
+        // ---- script_file_list_directory.xml ----
+        /** 行容器 paddingTop / paddingBottom。 */
+        val dirRowPaddingV = 16.dp
+        /** 行容器 layout_marginStart / marginEnd。 */
+        val dirRowMarginH = 3.dp
+        /** 图标（官方**没有圆底**，直接是图标）。 */
+        val dirIcon = 24.dp
+        /** 图标 layout_marginStart / marginEnd。 */
+        val dirIconMarginH = 16.dp
+        /** 名称 textSize。 */
+        val dirName = 14
+        /** 名称 paddingEnd。 */
+        val dirTextPaddingEnd = 16.dp
+        /** more 按钮尺寸。 */
+        val dirActionW = 52.dp
+        val dirActionH = 20.dp
+
+        // ---- script_file_list_category.xml ----
+        /** 分类头按钮。 */
+        val headerButton = 32.dp
+        /** 分类头按钮 padding（⇒ 可见图标更小）。 */
+        val headerButtonPadding = 9.dp
+        /** 分类头标题 textSize。 */
+        val headerTitle = 12
+        /** 分类头左侧图标。 */
+        val headerIcon = 16.dp
+        /** 分类头图标左右 margin。 */
+        val headerIconMarginH = 8.dp
+    }
+
+    /**
      * 文件夹行，对应 `script_file_list_directory.xml`：整行、最小 60dp、左侧 44dp 圆底图标、
      * 名称 16sp、描述 12sp（`text_directory_modified`）、右侧 more。
+     *
+     * **数值体系用 AI.js Pro 自己的（44dp 圆底 / 16sp / 60dp 行高），不是官方 9.3.11 的。**
+     * 2026-10-11 曾按官方规格（`OfficialSpec.dirIcon` 24dp 裸图标、paddingTop/Bottom 16dp）
+     * 实做并真机验证，结论是**回退**：官方目录行没有圆底、图标是白色描边，靠官方主题着色；
+     * 搬到 AI.js Pro 后图标在白底上近乎不可见，且丢失「普通文件夹 vs 项目」的蓝/靛蓝颜色区分。
+     * 官方规格仍保留在 [OfficialSpec] 里备查与随时切换。
      */
     @Composable
     private fun FolderRow(page: ExplorerPage) {
         val isProject = page is ExplorerProjectPage
         ItemRow(
             path = page.getPath(),
-            // 旧实现用 circle_folder / circle_project 作图标底（固定色，不随主题变化），
-            // 图标本身则叠在上面：文件夹/项目图标统一 tint 成 colorOnPrimary（白色系）。
+            // AI.js Pro 的图标底：circle_folder / circle_project 固定色，图标 tint 成白色
             iconBackground = colorResource(
                 if (isProject) R.color.project_icon_background else R.color.folder_icon_background
             ),
@@ -590,7 +692,13 @@ class MiuixScriptListHost @JvmOverloads constructor(
             else R.drawable.ic_folder_outline_24dp,
             iconTint = Color.White,
             initialText = "",
+            initialTextSize = 22,
             iconSize = 24,
+            rowHeight = 60.dp,
+            padStart = 16.dp,
+            padV = 5.dp,
+            circleSize = 44.dp,
+            textMarginStart = 14.dp,
             name = ExplorerViewHelper.getDisplayName(page).toString(),
             nameSize = 16,
             description = fragment.getString(
@@ -598,6 +706,10 @@ class MiuixScriptListHost @JvmOverloads constructor(
                 timestampFormat.format(Date(page.lastModified()))
             ),
             descriptionSize = 12,
+            // 唯一从官方取出的一处：`script_file_list_file.xml` 的描述 layout_marginTop = 4dp
+            // （AI.js Pro 原来是 2dp）。纯间距改善，不影响设计语言。
+            descMarginTop = 4.dp,
+            actionButton = 48.dp,
             onMore = { showItemMenu(page) },
             runVisible = false,
             onRun = {},
@@ -650,6 +762,10 @@ class MiuixScriptListHost @JvmOverloads constructor(
      * 图标尺寸 24dp：`script_file_list_file.xml` 的 `file_code_icon` 虽写 22dp，但它只承载
      * 24dp viewport 的白色描边图形，22dp 会按 intrinsic 长宽比再缩一次；同仓示例页
      * （`MiuixSampleFragment.kt:295`）给同一套 drawable 就是 24dp。
+     *
+     * **数值体系用 AI.js Pro 自己的**（44dp 圆底 / 15sp / 16dp padding / 48dp 按钮）。
+     * 官方 9.3.11 是 32dp 圆底 + 四边 8dp padding + 14sp + 36dp 按钮，曾实做验证后回退
+     * （详见 [OfficialSpec] 注释与 `docs/reports/2026-10-11_反编译官方AutoJsPro界面规格.md`）。
      */
     @Composable
     private fun FileRow(item: ExplorerItem) {
@@ -661,7 +777,13 @@ class MiuixScriptListHost @JvmOverloads constructor(
             // 专属图标自带白色描边，不要再 tint；无图标时圆底显示首字母
             iconTint = null,
             initialText = if (iconRes != 0) "" else ExplorerViewHelper.getIconText(item),
+            initialTextSize = 22,
             iconSize = 24,
+            rowHeight = 60.dp,
+            padStart = 16.dp,
+            padV = 5.dp,
+            circleSize = 44.dp,
+            textMarginStart = 14.dp,
             name = ExplorerViewHelper.getDisplayName(item).toString(),
             nameSize = 15,
             description = fragment.getString(
@@ -670,6 +792,9 @@ class MiuixScriptListHost @JvmOverloads constructor(
                 timestampFormat.format(Date(item.lastModified()))
             ),
             descriptionSize = 11,
+            // 唯一从官方取出的一处：官方描述 layout_marginTop = 4dp（原来是 2dp）
+            descMarginTop = 4.dp,
+            actionButton = 48.dp,
             onMore = { showItemMenu(item) },
             runVisible = item.isExecutable(),
             onRun = { Scripts.run(item.toScriptFile()) },
@@ -679,22 +804,34 @@ class MiuixScriptListHost @JvmOverloads constructor(
     }
 
     /**
-     * 行骨架：两行内容 + 右侧动作按钮 + 底部 1px 分隔线（缩进 74dp）。
+     * 行骨架：两行内容 + 右侧动作按钮 + 底部 1px 分隔线。
      * 参数化的只有尺寸/字号/图标与回调，布局本身两种行完全一致。
+     *
+     * [rowHeight] / [padStart] / [padV] / [circleSize] / [textMarginStart] 传 [OfficialSpec]
+     * 里的值即为「官方 Auto.js Pro 9.3.11 规格」；传各自的历史字面值即恢复
+     * AI.js Pro 自己的数值体系（便于对比与回退）。
      */
     @OptIn(ExperimentalFoundationApi::class)
     @Composable
     private fun ItemRow(
         path: String,
-        iconBackground: Color,
+        iconBackground: Color?,
         iconRes: Int,
         iconTint: Color?,
         initialText: String,
+        initialTextSize: Int,
         iconSize: Int,
+        rowHeight: Dp,
+        padStart: Dp,
+        padV: Dp,
+        circleSize: Dp,
+        textMarginStart: Dp,
         name: String,
         nameSize: Int,
         description: String,
         descriptionSize: Int,
+        descMarginTop: Dp,
+        actionButton: Dp,
         runVisible: Boolean,
         onMore: () -> Unit,
         onRun: () -> Unit,
@@ -708,16 +845,17 @@ class MiuixScriptListHost @JvmOverloads constructor(
                     .semantics { selected = highlightedPath == path }
                     .combinedClickable(onClick = onBodyClick, onClickLabel = "打开 $name",
                         onLongClick = onOpen, onLongClickLabel = "更多操作：$name")
-                    .heightIn(min = 60.dp)
-                    .padding(start = 16.dp),
+                    .heightIn(min = rowHeight)
+                    .padding(start = padStart),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    Modifier.size(44.dp)
-                        .clip(CircleShape)
-                        .background(iconBackground),
-                    contentAlignment = Alignment.Center
-                ) {
+                val iconModifier = if (iconBackground != null) {
+                    Modifier.size(circleSize).clip(CircleShape).background(iconBackground)
+                } else {
+                    // 官方目录行：裸图标、无圆底（layout_width/height = 24dp，无 background）
+                    Modifier.size(circleSize)
+                }
+                Box(iconModifier, contentAlignment = Alignment.Center) {
                     if (iconRes != 0) {
                         Image(
                             painterResource(iconRes),
@@ -728,12 +866,12 @@ class MiuixScriptListHost @JvmOverloads constructor(
                             colorFilter = iconTint?.let { ColorFilter.tint(it) }
                         )
                     } else {
-                        Text(initialText, fontSize = 22.sp, color = Color.White)
+                        Text(initialText, fontSize = initialTextSize.sp, color = Color.White)
                     }
                 }
                 Column(
                     Modifier.weight(1f)
-                        .padding(start = 14.dp, top = 5.dp, bottom = 5.dp)
+                        .padding(start = textMarginStart, top = padV, bottom = padV)
                 ) {
                     Text(
                         name,
@@ -748,23 +886,24 @@ class MiuixScriptListHost @JvmOverloads constructor(
                         color = MiuixTheme.colorScheme.onSurfaceSecondary,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp)
+                        modifier = Modifier.padding(top = descMarginTop)
                     )
                 }
                 if (runVisible) {
-                    RowIcon(R.drawable.ic_run_gray, "运行 $name", onRun)
+                    RowIcon(R.drawable.ic_run_gray, "运行 $name", actionButton, onRun)
                 }
-                RowIcon(R.drawable.ic_more_vert_black_24dp, "更多操作：$name", onMore)
+                RowIcon(R.drawable.ic_more_vert_black_24dp, "更多操作：$name", actionButton, onMore)
             }
-            MiuixListDivider(indent = 74.dp)
+            // 分隔线缩进与文字列左边对齐：圆底宽 + 圆底左边距 + 文字左边距
+            MiuixListDivider(indent = padStart + circleSize + textMarginStart)
         }
     }
 
-    /** 行内动作按钮：48dp 命中区、12dp 内边距。 */
+    /** 行内动作按钮：命中区 [size]，内容居中（官方 run/more 为 36dp）。 */
     @Composable
-    private fun RowIcon(resId: Int, label: String, onClick: () -> Unit) {
+    private fun RowIcon(resId: Int, label: String, size: Dp, onClick: () -> Unit) {
         Box(
-            Modifier.size(48.dp).semantics { contentDescription = label }
+            Modifier.size(size).semantics { contentDescription = label }
                 .clickable(role = Role.Button, onClickLabel = label) { onClick() },
             contentAlignment = Alignment.Center
         ) {
