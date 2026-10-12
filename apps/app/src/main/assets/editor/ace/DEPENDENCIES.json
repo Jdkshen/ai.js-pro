@@ -1,0 +1,30 @@
+{
+  "ace": "1.44.0",
+  "typescript": "5.9.3",
+  "androidTouch": "tools/ace-android-touch.js",
+  "files": {
+    "ace.js": "773948e8748a74da8618fff8963be586ee8f5525c438e5090a8522451af9a0f7",
+    "androidTouch.js": "341a031120a94146727b872576194f8c6ca5c62330e6209020e65d63a57dfddd",
+    "beautify.js": "c79713573480ffc0f726a92e4244cc03eebbf95c97b9ec45f201fa8ccd75388d",
+    "bracketHighlight.js": "0fc369062b20fa4add30e03fe79a4ad0965050e884e2253da0c5f9e73c406a42",
+    "editor.css": "0a01b08d94c0e97a0e8dfbf7f8e77ba1631930cdb0cc4dbbcacb25fb091b0f9f",
+    "editor.html": "fa6f00ddbc7e70f94dd6f705348c68216bdab6b328e3c561d5d61bcbbb4d96b1",
+    "editor.js": "27c902ca744a2e85ab3bf6c5431c3c98c8f05d1e23bf3763a58ffb9c8b02c0e5",
+    "editorAppearance.js": "9d8b72b64189453ead25619e8f45fa75e22ef904d04013222a9808f46319332e",
+    "ext-language_tools.js": "799e3a3746f74240d7fbb1a38e525fa01b9718a207f3a50a2550111e11b3a560",
+    "ext-searchbox.js": "427ec52caf01e02536f8429adeb2baee82cdd122f2c25cf01663959734019773",
+    "language/autojs.d.ts": "15a16df75e26fd3a7b6eeecfd99ebec5d79809e03343ef4a425b23ab805ee8fb",
+    "language/LICENSE.txt": "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47",
+    "language/service.js": "a5692a488532799c240f472b7f225a4e1fa934772c1ed768e28451b5aafefcf1",
+    "language/standard-libs.js": "cc0222cf5f8ead2a12266a98c8b12aa2a721475355c73917879a7a86c1a00b97",
+    "language/typescript.js": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675",
+    "LICENSE": "850f545c5254e8c08204edb2a6d50bbb72727c38a82982c17a84bebf6064cdf8",
+    "mode-javascript.js": "85dd763f0290c66e78172693491462d0a426f4457e87f540f92fbd3f36cdf102",
+    "mode-json.js": "010feab73fd75cfcdee30cdc71bdcc868e4f914465a59a7141c5ee4983a8afec",
+    "mode-typescript.js": "90ae05f60685dd4f556bf09db8754bd30eaf6d2d569d31608ef03eb6b1704635",
+    "pinch.js": "760a07f36266034d22ec792b37db27642c2d6791221471d7c389ba3baf46fcaa",
+    "snippets/javascript.js": "6287a6b820c8707a0cd7b9e4545bcb023a8b9228569cfd21be6635d1409aabf4",
+    "theme-textmate.js": "b6d8bae9abd821bc73ad30efa2b640953dee0132a26169330b80b25f15295937",
+    "theme-tomorrow_night.js": "757fb017f0ff7a6f2b47f30a3ff7bd6211529deceebf07909d4647ae1175a38a"
+  }
+}

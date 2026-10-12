@@ -21,6 +21,7 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import com.jdkshen.aijspro.R;
+import com.jdkshen.aijspro.theme.AppThemePalette;
 import com.jdkshen.aijspro.model.indices.Module;
 import com.jdkshen.aijspro.model.indices.Modules;
 import com.jdkshen.aijspro.model.indices.Property;
@@ -59,6 +60,7 @@ public class FunctionsKeyboardView extends FrameLayout {
     private View mSelectedModuleView;
     private Paint mPaint;
     private ClickCallback mClickCallback;
+    private AppThemePalette mEditorPalette;
 
     public FunctionsKeyboardView(@NonNull Context context) {
         super(context);
@@ -83,6 +85,15 @@ public class FunctionsKeyboardView extends FrameLayout {
 
     public void setClickCallback(ClickCallback clickCallback) {
         mClickCallback = clickCallback;
+    }
+
+    public void setEditorPalette(AppThemePalette palette) {
+        mEditorPalette = palette;
+        setBackgroundColor(palette.surfaceSecondary);
+        mPropertiesView.setBackgroundColor(palette.surfaceSecondary);
+        mModulesView.setBackgroundColor(palette.surfaceElevated);
+        mModulesView.getAdapter().notifyDataSetChanged();
+        mPropertiesView.getAdapter().notifyDataSetChanged();
     }
 
     private void init() {
@@ -189,6 +200,7 @@ public class FunctionsKeyboardView extends FrameLayout {
             mSelectedModuleView.setSelected(true);
         initSpanSizes(mSelectedModule);
         mPropertiesView.getAdapter().notifyDataSetChanged();
+        if (mEditorPalette != null) mModulesView.getAdapter().notifyDataSetChanged();
     }
 
     @Override
@@ -226,6 +238,10 @@ public class FunctionsKeyboardView extends FrameLayout {
             mModule = module;
             mTextView.setText(module.getSummary());
             mTextView.setSelected(module == mSelectedModule);
+            if (mEditorPalette != null) {
+                mTextView.setTextColor(mEditorPalette.textPrimary);
+                mTextView.setBackgroundColor(module == mSelectedModule ? mEditorPalette.surfaceSecondary : mEditorPalette.surfaceElevated);
+            }
             if (module == mSelectedModule) {
                 mSelectedModuleView = mTextView;
             }
@@ -258,6 +274,10 @@ public class FunctionsKeyboardView extends FrameLayout {
         void bind(Property property) {
             mProperty = property;
             mTextView.setText(getDisplayText(property));
+            if (mEditorPalette != null) {
+                mTextView.setTextColor(mEditorPalette.textPrimary);
+                mTextView.setBackgroundColor(mEditorPalette.surfaceSecondary);
+            }
         }
     }
 

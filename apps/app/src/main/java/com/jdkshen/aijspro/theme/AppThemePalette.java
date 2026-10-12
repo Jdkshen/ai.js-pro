@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.theme;
 
 import android.graphics.Color;
 import android.view.View;
+import com.aijs.editor.theme.WorkspaceColors;
 
 /**
  * Immutable semantic color palette for the entire app.
@@ -124,33 +125,34 @@ public final class AppThemePalette {
     /** Dark theme with the given accent color. */
     public static AppThemePalette dark(int accent) {
         Builder b = new Builder();
+        WorkspaceColors workspace = WorkspaceColors.get(true);
         b.isDark = true;
         b.windowBackground = 0xFF090C12;
-        b.surfacePrimary = 0xFF1F2123;
+        b.surfacePrimary = workspace.drawer;
         b.surfaceSecondary = 0xFF2A2C2E;
-        b.surfaceElevated = 0xFF333537;
+        b.surfaceElevated = workspace.popup;
         b.toolbarBackground = 0xFF121416;
         b.rowBackground = 0xFF26282A;
         b.rowPressed = 0xFF3A3C3E;
         b.popupBackground = 0xFF1F2123;
-        b.scrim = 0x78000000;   // 46% black
+        b.scrim = workspace.scrim;
         b.divider = 0x1AFFFFFF;
-        b.textPrimary = 0xFFF1F3F4;
-        b.textSecondary = 0xFFA6ABAF;
+        b.textPrimary = workspace.primary;
+        b.textSecondary = workspace.secondary;
         b.textDisabled = 0xFF616467;
-        b.iconPrimary = 0xFFDDE1E4;
+        b.iconPrimary = workspace.icons;
         b.accent = accent;
         b.accentPressed = darken(accent, 0.15f);
         b.accentMuted = setAlpha(accent, 0x30);
         b.danger = 0xFFEF7676;
-        b.statusBar = 0xFF090C12;
-        b.navigationBar = 0xFF090C12;
+        b.statusBar = workspace.status;
+        b.navigationBar = workspace.navigation;
         b.fabBackground = accent;
         b.fabForeground = 0xFFFFFFFF;
-        b.editorBackground = 0xFF1E1E1E;
-        b.editorToolbar = 0xFF181A1A;
-        b.editorTabActive = 0xFF303232;
-        b.editorTabInactive = 0xFF1E1E1E;
+        b.editorBackground = workspace.background;
+        b.editorToolbar = workspace.toolbar;
+        b.editorTabActive = workspace.selectedTool;
+        b.editorTabInactive = workspace.tabs;
         b.editorSelection = 0x3326A69A;
         b.terminalBackground = 0xFF000000;
         b.terminalForeground = 0xFFFFFFFF;
@@ -160,33 +162,34 @@ public final class AppThemePalette {
     /** Light theme with the given accent color. */
     public static AppThemePalette light(int accent) {
         Builder b = new Builder();
+        WorkspaceColors workspace = WorkspaceColors.get(false);
         b.isDark = false;
         b.windowBackground = 0xFFF5F5F5;
-        b.surfacePrimary = 0xFFFFFFFF;
+        b.surfacePrimary = workspace.drawer;
         b.surfaceSecondary = 0xFFF0F0F0;
-        b.surfaceElevated = 0xFFFFFFFF;
+        b.surfaceElevated = workspace.popup;
         b.toolbarBackground = 0xFFFFFFFF;
         b.rowBackground = 0xFFFFFFFF;
         b.rowPressed = 0xFFE8E8E8;
         b.popupBackground = 0xFFFFFFFF;
-        b.scrim = 0x33000000;   // 20% black
+        b.scrim = workspace.scrim;
         b.divider = 0x1A000000;
-        b.textPrimary = 0xFF212121;
-        b.textSecondary = 0xFF757575;
+        b.textPrimary = workspace.primary;
+        b.textSecondary = workspace.secondary;
         b.textDisabled = 0xFFBDBDBD;
-        b.iconPrimary = 0xFF616161;
+        b.iconPrimary = workspace.icons;
         b.accent = accent;
         b.accentPressed = darken(accent, 0.10f);
         b.accentMuted = setAlpha(accent, 0x1A);
         b.danger = 0xFFD32F2F;
-        b.statusBar = 0xFFE0E0E0;
-        b.navigationBar = 0xFFF5F5F5;
+        b.statusBar = workspace.status;
+        b.navigationBar = workspace.navigation;
         b.fabBackground = accent;
         b.fabForeground = 0xFFFFFFFF;
-        b.editorBackground = 0xFFFFFFFF;
-        b.editorToolbar = 0xFFF8F8F8;
-        b.editorTabActive = 0xFFE0E0E0;
-        b.editorTabInactive = 0xFFF5F5F5;
+        b.editorBackground = workspace.background;
+        b.editorToolbar = workspace.toolbar;
+        b.editorTabActive = workspace.selectedTool;
+        b.editorTabInactive = workspace.tabs;
         b.editorSelection = 0x3303A9F4;
         b.terminalBackground = 0xFFF7F7F7;
         b.terminalForeground = 0xFF212121;

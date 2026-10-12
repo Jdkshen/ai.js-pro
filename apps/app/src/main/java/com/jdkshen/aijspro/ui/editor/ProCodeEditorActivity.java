@@ -14,13 +14,9 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
-import android.text.Editable;
 import android.text.InputType;
-import android.text.Layout;
 import android.text.TextUtils;
-import android.text.TextWatcher;
 import android.util.Log;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,6 +56,8 @@ import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.AutoJs;
 import com.jdkshen.aijspro.model.indices.ClassSearchingItem;
+import com.jdkshen.aijspro.model.indices.Module;
+import com.jdkshen.aijspro.model.indices.Property;
 import com.jdkshen.aijspro.model.script.ScriptFile;
 import com.jdkshen.aijspro.model.script.Scripts;
 import com.jdkshen.aijspro.model.script.ProjectSharing;
@@ -69,6 +67,7 @@ import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.edit.ClassSearchDialogBuilder;
 import com.jdkshen.aijspro.ui.edit.debug.DebuggerSingleton;
 import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
+import com.jdkshen.aijspro.ui.edit.keyboard.FunctionsKeyboardView;
 import com.jdkshen.aijspro.ui.edit.theme.Theme;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 import com.jdkshen.aijspro.ui.terminal.EmbeddedTerminalActivity;
@@ -108,6 +107,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private static final String PREF_ACTIVE_TAB = "active_tab";
     private static final String PREF_TEXT_SIZE = "text_size_sp";
     private static final int MAX_RESTORED_TABS = 12;
+    private static final int TAB_INDICATOR_COLOR = com.aijs.editor.theme.WorkspaceColors.TAB_INDICATOR;
     private final List<EditorTab> mTabs = new ArrayList<>();
     private final Set<String> mExpandedDirectories = new HashSet<>();
 
@@ -119,10 +119,13 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private int mWorkspaceDrawerWidth;
     private LinearLayout mTabBar;
     private LinearLayout mTreeContainer;
+    private ScrollView mTreeScroll;
     private TextView mTreeRootLabel;
     private FrameLayout mEditorContainer;
     private View mEditorShield;
     private LinearLayout mShortcutBar;
+    private FrameLayout mFunctionsPanel;
+    private FunctionsKeyboardView mFunctionsKeyboard;
     private LinearLayout mLogPanel;
     private LinearLayout mDebugBar;
     private View mLogTool;
@@ -307,6 +310,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         mShortcutBar = buildShortcutBar();
         mMainLayout.addView(mShortcutBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));
+        mFunctionsPanel = new FrameLayout(this);
+        mFunctionsPanel.setVisibility(View.GONE);
+        mMainLayout.addView(mFunctionsPanel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(220)));
 
         addWorkspaceDrawer();
         setContentView(mDrawerLayout);
@@ -324,18 +331,20 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private View buildToolRow() {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setFillViewport(true);
         scroll.setBackgroundColor(mPalette.editorToolbar);
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.addView(tool(R.drawable.ic_pro_editor_file, "文件", 40, v -> openWorkspaceDrawer()));
-        row.addView(tool(R.drawable.ic_pro_editor_edit, "编辑", 40, v -> showEditMenu(v)));
-        row.addView(tool(R.drawable.ic_pro_editor_debug, "调试", 40, v -> showDebugMenu(v)));
-        row.addView(tool(R.drawable.ic_pro_editor_terminal, "终端", 40, v -> openTerminal()));
-        row.addView(tool(R.drawable.ic_pro_editor_more, "其他", 40, v -> showOtherMenu(v)));
+        row.addView(menuTool(R.drawable.ic_pro_editor_file, "文件", v -> openWorkspaceDrawer()));
+        row.addView(menuTool(R.drawable.ic_pro_editor_edit, "编辑", v -> showEditMenu(v)));
+        row.addView(menuTool(R.drawable.ic_pro_editor_debug, "调试", v -> showDebugMenu(v)));
+        row.addView(menuTool(R.drawable.ic_pro_editor_terminal, "终端", v -> openTerminal()));
+        row.addView(menuTool(R.drawable.ic_pro_editor_more, "其他", v -> showOtherMenu(v)));
         if (!TextUtils.isEmpty(mSampleAssetDirectory))
             row.addView(tool(R.drawable.ic_pro_editor_refresh, "重置", 40, v -> confirmResetSample()));
         View spacer = new View(this);
-        row.addView(spacer, new LinearLayout.LayoutParams(dp(24), dp(44)));
+        spacer.setMinimumWidth(dp(24));
+        row.addView(spacer, new LinearLayout.LayoutParams(0, dp(44), 1f));
         mLogTool = tool(R.drawable.ic_pro_editor_log, "日志", 32, v -> toggleLogPanel());
         row.addView(mLogTool);
         row.addView(tool(R.drawable.ic_pro_editor_play, "运行", 32, v -> runCurrent()));
@@ -349,7 +358,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             updateToolbarState();
         });
         row.addView(mRedoTool);
-        mSaveTool = tool(R.drawable.ic_pro_editor_save, "保存", 40, v -> saveActive(true));
+        mSaveTool = tool(R.drawable.ic_pro_editor_save, "保存", 32, v -> saveActive(true));
         row.addView(mSaveTool);
         scroll.addView(row, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -386,6 +395,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
         mTreeRootLabel = text("▾  " + (mWorkspaceRoot == null ? "脚本" : mWorkspaceRoot.getName()), 16f,
                 mPalette.textPrimary);
+        tintTreePrefix(mTreeRootLabel, 3);
         mTreeRootLabel.setPadding(dp(12), dp(8), dp(8), dp(8));
         mTreeRootLabel.setSingleLine(true);
         mTreeRootLabel.setEllipsize(TextUtils.TruncateAt.MIDDLE);
@@ -396,12 +406,14 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         int rootRowHeight = workspaceRowHeight();
         rootRow.addView(mTreeRootLabel, new LinearLayout.LayoutParams(0, rootRowHeight, 1f));
         TextView rootMore = smallAction("⋮", v -> showWorkspaceItemMenu(mWorkspaceRoot));
+        rootMore.setTextColor(mPalette.iconPrimary);
         rootMore.setContentDescription("工作区更多操作");
         rootRow.addView(rootMore, new LinearLayout.LayoutParams(dp(48), rootRowHeight));
         mWorkspaceDrawer.addView(rootRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, rootRowHeight));
 
         ScrollView treeScroll = new ScrollView(this);
+        mTreeScroll = treeScroll;
         treeScroll.setFillViewport(true);
         treeScroll.setVerticalScrollBarEnabled(false);
         mTreeContainer = new LinearLayout(this);
@@ -496,12 +508,13 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         scroll.setHorizontalScrollBarEnabled(false);
         LinearLayout symbols = new LinearLayout(this);
         symbols.setOrientation(LinearLayout.VERTICAL);
-        // 对齐 Auto.js Pro：$ 与反引号是模板字符串（`${path}`）的必需键，顺带补齐常用符号。
-        symbols.addView(shortcutRowContent(new String[]{"(", ")", "/", "=", ",", ";", "\"",
-                        "$", "`", "!", "?", "&", "%", "@", "#"}),
+        // Keep the original two visible rows and 30dp symbol columns. Extra keys
+        // stay available by horizontal scrolling without moving the fixed actions.
+        symbols.addView(symbolRowContent(new String[]{"(", ")", "/", "=", ",", ";", "\"", "'",
+                        "-", "+", "|", ":", "_", "*", "%", "$"}),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
-        symbols.addView(shortcutRowContent(new String[]{"'", "{", "}", "[", "]", "<", ">",
-                        "-", "+", "|", ":", "_", "*", "^", "~", ".", "\\"}),
+        symbols.addView(symbolRowContent(new String[]{"{", "}", "[", "]", "`", "<", ">",
+                        "!", "?", "&", "@", "#", "^", "~", ".", "\\"}),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
         scroll.addView(symbols, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -516,6 +529,18 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         return row;
     }
 
+    private View symbolRowContent(String[] labels) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        for (String label : labels) {
+            TextView key = shortcut(label);
+            key.setMinWidth(dp(30));
+            key.setContentDescription("Symbol: " + label);
+            row.addView(key, new LinearLayout.LayoutParams(dp(30), ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        return row;
+    }
+
     private View tool(String icon, String label, int widthDp, View.OnClickListener listener) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -526,7 +551,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         TextView iconView = text(icon, 15f, mPalette.iconPrimary);
         iconView.setGravity(Gravity.CENTER);
         iconView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        TextView labelView = text(label, 8.5f, mPalette.textSecondary);
+        TextView labelView = text(label, 11f, mPalette.textSecondary);
         labelView.setGravity(Gravity.CENTER);
         labelView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         box.addView(iconView, new LinearLayout.LayoutParams(dp(widthDp), 0, 1.15f));
@@ -547,19 +572,33 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         icon.setImageResource(iconRes);
         icon.setColorFilter(mPalette.iconPrimary);
         icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        icon.setPadding(dp(7), dp(3), dp(7), 0);
-        TextView labelView = text(label, 8.5f, mPalette.textSecondary);
+        icon.setPadding(0, dp(4), 0, 0);
+        TextView labelView = text(label, 11f, mPalette.textSecondary);
         labelView.setGravity(Gravity.CENTER);
         labelView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        box.addView(icon, new LinearLayout.LayoutParams(dp(widthDp), 0, 1.15f));
-        box.addView(labelView, new LinearLayout.LayoutParams(dp(widthDp), 0, .85f));
+        box.addView(icon, new LinearLayout.LayoutParams(dp(widthDp), dp(24)));
+        box.addView(labelView, new LinearLayout.LayoutParams(dp(widthDp), dp(20)));
         box.setOnClickListener(listener);
         box.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(44)));
         return box;
     }
 
+    private View menuTool(int iconRes, String label, View.OnClickListener listener) {
+        View view = tool(iconRes, label, 32, listener);
+        LinearLayout.LayoutParams params = (LinearLayout.LayoutParams)view.getLayoutParams();
+        params.setMarginStart(dp(8));
+        view.setLayoutParams(params);
+        return view;
+    }
+
     private TextView shortcut(String label) {
-        TextView view = text(label, label.length() > 2 ? 10f : 14f, mPalette.textPrimary);
+        TextView view = text(label, 16f, mPalette.textPrimary);
+        if ("ƒx".equals(label)) view.setTypeface(Typeface.SERIF, Typeface.ITALIC);
+        if ("↑".equals(label) || "↓".equals(label) || "←".equals(label) || "→".equals(label)) {
+            view.setText("↑".equals(label) ? "⌃" : "↓".equals(label) ? "⌄" : "←".equals(label) ? "‹" : "›");
+            view.setTextSize(24f);
+            view.setContentDescription(label);
+        }
         view.setGravity(Gravity.CENTER);
         view.setMinWidth(dp(40));
         view.setOnClickListener(v -> onShortcut(label));
@@ -618,9 +657,9 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             boolean expanded = child.isDirectory() && mExpandedDirectories.contains(child.getAbsolutePath());
             LinearLayout item = new LinearLayout(this);
             item.setGravity(Gravity.CENTER_VERTICAL);
-            TextView row = text((child.isDirectory() ? (expanded ? "▾  " : "›  ") : "<>  ")
-                    + child.getName(), 14f, child.isDirectory()
-                    ? mPalette.textPrimary : mPalette.textSecondary);
+            String prefix = child.isDirectory() ? (expanded ? "▾  " : "›  ") : "<>  ";
+            TextView row = text(prefix + child.getName(), 14f, mPalette.textPrimary);
+            tintTreePrefix(row, prefix.length());
             row.setGravity(Gravity.CENTER_VERTICAL);
             int maxIndent = Math.max(dp(28), mWorkspaceDrawerWidth - dp(168));
             row.setPadding(Math.min(dp(28 + depth * 18), maxIndent), 0, dp(8), 0);
@@ -628,6 +667,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             row.setEllipsize(TextUtils.TruncateAt.MIDDLE);
             row.setContentDescription((child.isDirectory() ? "文件夹 " : "文件 ")
                     + child.getName());
+            row.setTag(child.getAbsolutePath());
             row.setOnClickListener(v -> {
                 if (child.isDirectory()) {
                     if (!mExpandedDirectories.add(child.getAbsolutePath()))
@@ -641,6 +681,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             int rowHeight = workspaceRowHeight();
             item.addView(row, new LinearLayout.LayoutParams(0, rowHeight, 1f));
             TextView more = smallAction("⋮", v -> showWorkspaceItemMenu(child));
+            more.setTextColor(mPalette.iconPrimary);
             more.setTextSize(20f);
             more.setContentDescription(child.getName() + " 更多操作");
             item.addView(more, new LinearLayout.LayoutParams(dp(48), rowHeight));
@@ -775,6 +816,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             String relative = oldPath.equals(tab.file) ? ""
                     : tab.file.getAbsolutePath().substring(oldPath.getAbsolutePath().length() + 1);
             tab.file = canonical(relative.isEmpty() ? newPath : new File(newPath, relative));
+            tab.editor.setDocument(tab.file, mWorkspaceRoot);
         }
     }
 
@@ -786,7 +828,13 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         mWorkspaceRoot = canonical(directory);
         mExpandedDirectories.clear();
         mExpandedDirectories.add(mWorkspaceRoot.getAbsolutePath());
-        if (mTreeRootLabel != null) mTreeRootLabel.setText("▾  " + mWorkspaceRoot.getName());
+        for (EditorTab tab : mTabs) {
+            if (isWithin(tab.file, mWorkspaceRoot)) tab.editor.setDocument(tab.file, mWorkspaceRoot);
+        }
+        if (mTreeRootLabel != null) {
+            mTreeRootLabel.setText("▾  " + mWorkspaceRoot.getName());
+            tintTreePrefix(mTreeRootLabel, 3);
+        }
         refreshFileTree();
     }
 
@@ -847,7 +895,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                 return;
             }
             String finalSource = source;
-            runOnUiThread(() -> attachFileTab(file, finalSource));
+            runOnUiThread(() -> { if (!isFinishing() && !isDestroyed()) attachFileTab(file, finalSource); });
         });
         worker.start();
     }
@@ -872,11 +920,20 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         // The path carried by the launch intent is an explicit user selection. Restore the
         // previous tabs around it, but never let the previously active tab steal focus from
         // the file that was just tapped in the file list or search results.
-        final String activePath = initial.getAbsolutePath();
         Thread worker = new Thread(() -> {
+            // Display the requested file without waiting for every historical file to be read.
+            try {
+                String source = FileUtils.readFileToString(initial, "UTF-8");
+                runOnUiThread(() -> {
+                    if (!isFinishing() && !isDestroyed()) attachFileTab(initial, source);
+                });
+            } catch (IOException error) {
+                runOnUiThread(() -> toast("读取失败：" + error.getMessage()));
+            }
             List<File> loadedFiles = new ArrayList<>();
             List<String> loadedSources = new ArrayList<>();
             for (File file : files) {
+                if (file.equals(initial)) continue;
                 try {
                     loadedSources.add(FileUtils.readFileToString(file, "UTF-8"));
                     loadedFiles.add(file);
@@ -884,12 +941,11 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             }
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                EditorTab preferred = null;
                 for (int i = 0; i < loadedFiles.size(); i++) {
-                    attachFileTab(loadedFiles.get(i), loadedSources.get(i));
-                    if (loadedFiles.get(i).getAbsolutePath().equals(activePath)) preferred = mActiveTab;
+                    attachFileTab(loadedFiles.get(i), loadedSources.get(i), false);
                 }
-                if (preferred != null) selectTab(preferred);
+                if (mActiveTab == null && !mTabs.isEmpty()) selectTab(mTabs.get(0));
+                else refreshTabs();
             });
         }, "pro-editor-restore");
         worker.start();
@@ -913,26 +969,25 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             saveEditorViewState(tab, preferences);
         }
         preferences.putString(PREF_OPEN_TABS, tabs.toString());
+        preferences.putInt("ace_viewport_version", 1);
         if (mActiveTab != null) {
             preferences.putString(PREF_ACTIVE_TAB, mActiveTab.file.getAbsolutePath());
         } else {
             preferences.remove(PREF_ACTIVE_TAB);
         }
         if (mActiveTab != null) {
-            float scaledDensity = getResources().getDisplayMetrics().scaledDensity;
             preferences.putFloat(PREF_TEXT_SIZE,
-                    mActiveTab.editor.getCodeEditText().getTextSize() / Math.max(1f, scaledDensity));
+                    mActiveTab.editor.getTextSizeSp());
         }
         preferences.apply();
     }
 
     private void saveEditorViewState(EditorTab tab, SharedPreferences.Editor preferences) {
-        if (tab == null || tab.editor == null) return;
-        EditText editText = tab.editor.getCodeEditText();
+        if (tab == null || tab.editor == null || !tab.viewStateRestored) return;
         preferences.putInt(viewStateKey("cursor", tab.file),
-                Math.max(0, editText.getSelectionStart()));
-        preferences.putInt(viewStateKey("scroll_x", tab.file), tab.editor.getScrollX());
-        preferences.putInt(viewStateKey("scroll_y", tab.file), tab.editor.getScrollY());
+                Math.max(0, tab.editor.getSelectionStart()));
+        preferences.putInt(viewStateKey("scroll_x", tab.file), tab.editor.getViewportScrollX());
+        preferences.putInt(viewStateKey("scroll_y", tab.file), tab.editor.getViewportScrollY());
     }
 
     private void restoreEditorViewState(EditorTab tab) {
@@ -942,45 +997,59 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         int cursor = prefs.getInt(viewStateKey("cursor", tab.file), 0);
         int scrollX = prefs.getInt(viewStateKey("scroll_x", tab.file), 0);
         int scrollY = prefs.getInt(viewStateKey("scroll_y", tab.file), 0);
-        tab.editor.post(() -> {
+        // The previous Android text view stored physical pixels; Ace uses CSS pixels.
+        float oldScale = prefs.getInt("ace_viewport_version", 0) == 0
+                ? getResources().getDisplayMetrics().density : 1f;
+        int restoredX = Math.round(scrollX / oldScale);
+        int restoredY = Math.round(scrollY / oldScale);
+        tab.editor.getEditorView().post(() -> {
             if (!mTabs.contains(tab)) return;
-            EditText editText = tab.editor.getCodeEditText();
-            editText.setSelection(Math.max(0, Math.min(editText.length(), cursor)));
-            tab.editor.scrollTo(Math.max(0, scrollX), Math.max(0, scrollY));
+            tab.editor.restoreViewState(cursor, restoredX, restoredY);
         });
     }
 
     private void attachFileTab(File file, String source) {
-        CodeEditor editor = new CodeEditor(this);
+        attachFileTab(file, source, true);
+    }
+
+    private EditorTab attachFileTab(File file, String source, boolean select) {
+        for (EditorTab existing : mTabs) if (existing.file.equals(file)) {
+            if (select) selectTab(existing);
+            return existing;
+        }
+        AceCodeEditor editor = new AceCodeEditor(this);
         Theme theme = Theme.fromAssetsJson(this, mPalette.isDark
                 ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
         if (theme != null) editor.setTheme(theme);
-        editor.getCodeEditText().setTextSize(TypedValue.COMPLEX_UNIT_SP,
-                editorPreferences().getFloat(PREF_TEXT_SIZE, 17f));
+        editor.setTextSizeSp(editorPreferences().getFloat(PREF_TEXT_SIZE, 14f));
         editor.setInitialText(source);
+        editor.setDocument(file, mWorkspaceRoot);
         EditorTab tab = new EditorTab(file, editor, source);
-        editor.getCodeEditText().addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
-            @Override public void afterTextChanged(Editable s) {
-                if (tab == mActiveTab && !tab.dirtyMarkerShown) {
-                    tab.dirtyMarkerShown = true;
-                    updateActiveTabLabel();
+        editor.setOnChangeListener(() -> {
+                boolean dirty = hasUnsavedChanges(tab);
+                if (tab.dirtyMarkerShown != dirty) {
+                    tab.dirtyMarkerShown = dirty;
+                    if (tab == mActiveTab) updateActiveTabLabel();
+                    else refreshTabs();
                 }
                 updateToolbarState();
-            }
         });
         mTabs.add(tab);
-        selectTab(tab);
+        if (select) selectTab(tab);
+        return tab;
     }
 
     private void selectTab(EditorTab tab) {
         mActiveTab = tab;
-        mEditorContainer.removeAllViews();
-        if (tab.editor.getParent() instanceof ViewGroup)
-            ((ViewGroup) tab.editor.getParent()).removeView(tab.editor);
-        mEditorContainer.addView(tab.editor, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        for (EditorTab candidate : mTabs) candidate.editor.setActive(candidate == tab);
+        View sharedView = tab.editor.getEditorView();
+        if (sharedView.getParent() != mEditorContainer) {
+            mEditorContainer.removeAllViews();
+            if (sharedView.getParent() instanceof ViewGroup)
+                ((ViewGroup) sharedView.getParent()).removeView(sharedView);
+            mEditorContainer.addView(sharedView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
         applyBreakpointListener(tab);
         refreshTabs();
         restoreEditorViewState(tab);
@@ -988,6 +1057,13 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void refreshTabs() {
+        boolean reusable = mTabBar.getChildCount() == mTabs.size();
+        for (int i = 0; reusable && i < mTabs.size(); i++)
+            reusable = mTabBar.getChildAt(i).getTag() == mTabs.get(i);
+        if (reusable) {
+            for (EditorTab tab : mTabs) updateTabAppearance(tab);
+            return;
+        }
         mTabBar.removeAllViews();
         for (EditorTab tab : mTabs) {
             LinearLayout cell = new LinearLayout(this);
@@ -998,31 +1074,44 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             TextView view = text(tab.file.getName() + (hasUnsavedChanges(tab) ? " •" : ""), 14f,
                     tab == mActiveTab ? mPalette.textPrimary : mPalette.textSecondary);
             view.setGravity(Gravity.CENTER);
-            view.setPadding(dp(16), 0, dp(6), 0);
+            view.setSingleLine(true);
+            view.setPadding(dp(12), 0, dp(12), 0);
             view.setOnClickListener(v -> selectTab(tab));
             view.setOnLongClickListener(v -> {
-                requestCloseTab(tab);
+                showTabMenu(view, tab);
                 return true;
             });
             content.addView(view, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
             TextView close = text("×", 18f, mPalette.textSecondary);
-            close.setContentDescription("关闭 " + tab.file.getName());
             close.setGravity(Gravity.CENTER);
-            close.setPadding(dp(4), 0, dp(8), 0);
+            close.setContentDescription("关闭 " + tab.file.getName());
             close.setOnClickListener(v -> requestCloseTab(tab));
-            content.addView(close, new LinearLayout.LayoutParams(
-                    dp(36), ViewGroup.LayoutParams.MATCH_PARENT));
+            content.addView(close, new LinearLayout.LayoutParams(dp(30),
+                    ViewGroup.LayoutParams.MATCH_PARENT));
             cell.addView(content, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f));
             View indicator = new View(this);
             indicator.setBackgroundColor(tab == mActiveTab
-                    ? mPalette.accent : Color.TRANSPARENT);
+                    ? TAB_INDICATOR_COLOR : Color.TRANSPARENT);
             cell.addView(indicator, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+            cell.setTag(tab);tab.label = view;tab.closeButton = close;tab.indicator = indicator;
+            tab.indicatorColor = tab == mActiveTab ? TAB_INDICATOR_COLOR : Color.TRANSPARENT;
             mTabBar.addView(cell, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
         }
+    }
+
+    private void updateTabAppearance(EditorTab tab) {
+        String label = tab.file.getName() + (hasUnsavedChanges(tab) ? " •" : "");
+        if (!TextUtils.equals(tab.label.getText(), label)) tab.label.setText(label);
+        int textColor = tab == mActiveTab ? mPalette.textPrimary : mPalette.textSecondary;
+        if (tab.label.getCurrentTextColor() != textColor) tab.label.setTextColor(textColor);
+        if (tab.closeButton.getCurrentTextColor() != textColor) tab.closeButton.setTextColor(textColor);
+        tab.closeButton.setContentDescription("关闭 " + tab.file.getName());
+        int indicator = tab == mActiveTab ? TAB_INDICATOR_COLOR : Color.TRANSPARENT;
+        if (tab.indicatorColor != indicator) { tab.indicatorColor = indicator; tab.indicator.setBackgroundColor(indicator); }
     }
 
     private void updateActiveTabLabel() {
@@ -1030,7 +1119,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void updateToolbarState() {
-        CodeEditor editor = activeEditor();
+        AceCodeEditor editor = activeEditor();
         setToolEnabled(mUndoTool, editor != null && editor.canUndo());
         setToolEnabled(mRedoTool, editor != null && editor.canRedo());
         setToolEnabled(mSaveTool, mActiveTab != null && hasUnsavedChanges(mActiveTab));
@@ -1039,10 +1128,92 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void setToolEnabled(View tool, boolean enabled) {
         if (tool == null) return;
         tool.setEnabled(enabled);
-        tool.setAlpha(enabled ? 1f : 0.38f);
+        tool.setAlpha(enabled ? 1f : com.aijs.editor.theme.WorkspaceColors.DISABLED_ALPHA);
     }
 
     private void requestCloseTab(EditorTab tab) {
+        tab.editor.withSnapshot(() -> confirmCloseTab(tab));
+    }
+
+    private void showTabMenu(View anchor, EditorTab tab) {
+        String[] items = {"关闭", "关闭其他标签页", "关闭右侧标签页", "关闭所有标签页",
+                "在左侧文件列表中定位文件", "复制"};
+        showAnchoredMenu(anchor, items, new boolean[]{false, false, false, false, false, true}, which -> {
+            if (!mTabs.contains(tab)) return;
+            if (which == 0) requestCloseTab(tab);
+            else if (which == 4) locateTabFile(tab);
+            else if (which == 5) showAnchoredMenu(anchor,
+                    new String[]{"复制路径", "复制文件夹路径"}, null, item -> {
+                        ClipboardUtil.setClip(this, item == 0 ? tab.file.getAbsolutePath()
+                                : tab.file.getParent());
+                        toast("已复制");
+                    });
+            else {
+                List<EditorTab> targets = new ArrayList<>(mTabs);
+                if (which == 1) targets.remove(tab);
+                else if (which == 2) targets = new ArrayList<>(
+                        mTabs.subList(mTabs.indexOf(tab) + 1, mTabs.size()));
+                requestCloseTabs(targets);
+            }
+        });
+    }
+
+    private void requestCloseTabs(List<EditorTab> targets) {
+        if (targets.isEmpty()) return;
+        withAllSnapshots(targets, 0, () -> {
+            List<String> dirtyNames = new ArrayList<>();
+            for (EditorTab tab : targets)
+                if (mTabs.contains(tab) && hasUnsavedChanges(tab)) dirtyNames.add(tab.file.getName());
+            if (dirtyNames.isEmpty()) { closeTabs(targets); return; }
+            darkDialog().setTitle("保存修改？")
+                    .setMessage(TextUtils.join("\n", dirtyNames))
+                    .setNegativeButton("不保存", (dialog, which) -> closeTabs(targets))
+                    .setNeutralButton("取消", null)
+                    .setPositiveButton("全部保存", (dialog, which) -> {
+                        // Do not remove any tabs when a provider/file write fails.
+                        for (EditorTab tab : targets)
+                            if (mTabs.contains(tab) && hasUnsavedChanges(tab) && !saveTab(tab, false)) return;
+                        closeTabs(targets);
+                    }).show();
+        });
+    }
+
+    private void closeTabs(List<EditorTab> targets) {
+        boolean activeClosed = targets.contains(mActiveTab);
+        int previousIndex = mTabs.indexOf(mActiveTab);
+        for (EditorTab tab : targets) if (mTabs.remove(tab)) tab.editor.destroy();
+        if (mTabs.isEmpty()) {
+            mActiveTab = null;
+            mEditorContainer.removeAllViews();
+            saveEditorSession();
+            finish();
+            return;
+        }
+        if (activeClosed) selectTab(mTabs.get(Math.max(0, Math.min(previousIndex, mTabs.size() - 1))));
+        else refreshTabs();
+        saveEditorSession();
+    }
+
+    private void locateTabFile(EditorTab tab) {
+        if (!isWithin(tab.file, mWorkspaceRoot)) switchWorkspace(tab.file.getParentFile());
+        File parent = tab.file.getParentFile();
+        while (parent != null && isWithin(parent, mWorkspaceRoot)) {
+            mExpandedDirectories.add(parent.getAbsolutePath());
+            parent = parent.getParentFile();
+        }
+        refreshFileTree();
+        openWorkspaceDrawer();
+        mTreeContainer.post(() -> {
+            View row = mTreeContainer.findViewWithTag(tab.file.getAbsolutePath());
+            if (row == null || !(row.getParent() instanceof View)) return;
+            View item = (View) row.getParent();
+            item.setBackgroundColor(mPalette.surfaceElevated);
+            mTreeScroll.smoothScrollTo(0, item.getTop());
+        });
+    }
+
+    private void confirmCloseTab(EditorTab tab) {
+        if (!mTabs.contains(tab)) return;
         if (!hasUnsavedChanges(tab)) {
             closeTab(tab);
             return;
@@ -1052,7 +1223,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                 .setNegativeButton("不保存", (dialog, which) -> closeTab(tab))
                 .setNeutralButton("取消", null)
                 .setPositiveButton("保存", (dialog, which) -> {
-                    if (saveTab(tab, false)) closeTab(tab);
+                    tab.editor.withSnapshot(() -> { if (saveTab(tab, false)) closeTab(tab); });
                 }).show();
     }
 
@@ -1091,7 +1262,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         String[] items = {"查找/替换", "跳转", "复制", "删除", "移动", "折叠", "格式化代码"};
         boolean[] submenus = {false, true, true, true, true, true, false};
         showAnchoredMenu(anchor, items, submenus, which -> {
-            CodeEditor editor = activeEditor();
+            AceCodeEditor editor = activeEditor();
             if (editor == null) return;
             switch (which) {
                 case 0: showFindReplace(); break;
@@ -1101,7 +1272,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                 case 4: showMoveLineMenu(anchor); break;
                 case 5: showFoldMenu(anchor); break;
                 case 6:
-                    editor.getCodeEditText().unfoldAll();
+                    editor.unfoldAll();
                     editor.beautifyCode();
                     break;
             }
@@ -1120,15 +1291,14 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void copySelection() {
-        EditText edit = activeEditor().getCodeEditText();
-        int start = Math.min(edit.getSelectionStart(), edit.getSelectionEnd());
-        int end = Math.max(edit.getSelectionStart(), edit.getSelectionEnd());
-        if (start == end) {
-            toast("请先选中内容");
-            return;
-        }
-        ClipboardUtil.setClip(this, edit.getText().subSequence(start, end));
-        toast("已复制");
+        AceCodeEditor editor = activeEditor();
+        if (editor == null) return;
+        editor.withSnapshot(() -> {
+            int start = editor.getSelectionStart(), end = editor.getSelectionEnd();
+            if (start == end) { toast("请先选中内容"); return; }
+            ClipboardUtil.setClip(this, editor.getText().substring(start, end));
+            toast("已复制");
+        });
     }
 
     private void showDeleteMenu(View anchor) {
@@ -1145,19 +1315,15 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void deleteSelectionOrCharacter() {
-        EditText edit = activeEditor().getCodeEditText();
-        int start = Math.min(edit.getSelectionStart(), edit.getSelectionEnd());
-        int end = Math.max(edit.getSelectionStart(), edit.getSelectionEnd());
-        if (start == end && end < edit.length()) end++;
-        if (start != end) edit.getText().delete(start, end);
+        if (activeEditor() != null) activeEditor().deleteSelectionOrCharacter();
     }
 
     private void showFoldMenu(View anchor) {
         showAnchoredMenu(anchor, new String[]{"折叠", "全部折叠", "全部展开"}, null,
                 which -> {
-                    if (which == 0) activeEditor().getCodeEditText().toggleFoldAtSelection();
-                    else if (which == 1) activeEditor().getCodeEditText().foldAllTopLevel();
-                    else activeEditor().getCodeEditText().unfoldAll();
+                    if (which == 0) activeEditor().toggleFoldAtSelection();
+                    else if (which == 1) activeEditor().foldAllTopLevel();
+                    else activeEditor().unfoldAll();
                 });
     }
 
@@ -1238,7 +1404,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void showJumpMenu(View anchor) {
         String[] items = {"跳转到行", "转到文件开始", "转到文件末尾", "转到行首", "转到行尾"};
         showAnchoredMenu(anchor, items, null, which -> {
-            CodeEditor editor = activeEditor();
+            AceCodeEditor editor = activeEditor();
             if (editor == null) return;
             if (which == 0) showJumpLineDialog();
             else if (which == 1) editor.jumpToStart();
@@ -1270,21 +1436,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     private void moveCurrentLine(int direction) {
         if (activeEditor() == null) return;
-        EditText edit = activeEditor().getCodeEditText();
-        Layout layout = edit.getLayout();
-        if (layout == null) return;
-        int line = layout.getLineForOffset(edit.getSelectionStart());
-        int target = line + direction;
-        if (target < 0 || target >= layout.getLineCount()) return;
-        String[] lines = activeEditor().getText().split("\\n", -1);
-        String swap = lines[line]; lines[line] = lines[target]; lines[target] = swap;
-        StringBuilder result = new StringBuilder();
-        for (int i = 0; i < lines.length; i++) {
-            if (i > 0) result.append('\n');
-            result.append(lines[i]);
-        }
-        activeEditor().setText(result.toString());
-        activeEditor().jumpTo(target, 0);
+        activeEditor().moveCurrentLine(direction);
     }
 
     private String expandedText(EditorTab tab) {
@@ -1308,7 +1460,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void startDebugger() {
-        if (mActiveTab == null || !saveActive(false)) return;
+        saveActiveThen(false, this::startSavedDebugger);
+    }
+
+    private void startSavedDebugger() {
         finishDebugSession(false);
         try {
             mDebugger = DebuggerSingleton.get();
@@ -1417,11 +1572,12 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void floatingRun() {
-        if (!saveActive(false)) return;
-        boolean shown = FloatyWindowManger.showCircularMenu();
-        runCurrent();
-        if (shown) moveTaskToBack(true);
-        else toast("悬浮窗权限未开启，脚本已在当前界面运行");
+        saveActiveThen(false, () -> {
+            boolean shown = FloatyWindowManger.showCircularMenu();
+            runSavedCurrent();
+            if (shown) moveTaskToBack(true);
+            else toast("悬浮窗权限未开启，脚本已在当前界面运行");
+        });
     }
 
     private void openTerminal() {
@@ -1465,10 +1621,11 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void buildApk() {
-        if (!saveActive(false)) return;
-        File source = mProjectRoot == null ? mActiveTab.file : mProjectRoot;
-        startActivity(new Intent(this, BuildActivity.class)
-                .putExtra(BuildActivity.EXTRA_SOURCE, source.getAbsolutePath()));
+        saveActiveThen(false, () -> {
+            File source = mProjectRoot == null ? mActiveTab.file : mProjectRoot;
+            startActivity(new Intent(this, BuildActivity.class)
+                    .putExtra(BuildActivity.EXTRA_SOURCE, source.getAbsolutePath()));
+        });
     }
 
     private void searchJavaClass() {
@@ -1541,7 +1698,13 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void resetActiveSample(String assetPath) {
         EditorTab tab = mActiveTab;
         if (tab == null) return;
-        tab.editor.getCodeEditText().unfoldAll();
+        tab.editor.withSnapshot(() -> {
+            if (tab == mActiveTab && mTabs.contains(tab)) resetSampleFromSnapshot(tab, assetPath);
+        });
+    }
+
+    private void resetSampleFromSnapshot(EditorTab tab, String assetPath) {
+        tab.editor.unfoldAll();
         File backup = null;
         try {
             File backupDir = new File(Pref.getScriptDirPath(), ".aijspro-sample-backups");
@@ -1567,7 +1730,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             tab.editor.setInitialText(source);
             tab.savedText = source;
             tab.dirtyMarkerShown = false;
-            tab.editor.markTextAsSaved();
+            tab.editor.markTextAsSaved(source);
             refreshTabs();
             toast("已恢复最新版；原文件已备份");
         } catch (IOException error) {
@@ -1586,7 +1749,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         String[] sizes = {"12", "14", "15", "16", "18", "20", "22"};
         darkDialog().setTitle("字体大小").setItems(sizes, (dialog, which) -> {
             float size = Float.parseFloat(sizes[which]);
-            for (EditorTab tab : mTabs) tab.editor.getCodeEditText().setTextSize(size);
+            for (EditorTab tab : mTabs) tab.editor.setTextSizeSp(size);
             editorPreferences().edit().putFloat(PREF_TEXT_SIZE, size).apply();
         }).show();
     }
@@ -1736,7 +1899,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void runCurrent() {
-        if (mActiveTab == null || !saveActive(false)) return;
+        saveActiveThen(false, this::runSavedCurrent);
+    }
+
+    private void runSavedCurrent() {
         try {
             mExecution = Scripts.INSTANCE.runWithBroadcastSender(mActiveTab.file);
             if (mExecution != null) {
@@ -1748,8 +1914,17 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         }
     }
 
-    private boolean saveActive(boolean showToast) {
-        return mActiveTab != null && saveTab(mActiveTab, showToast);
+    private void saveActive(boolean showToast) {
+        saveActiveThen(showToast, () -> { });
+    }
+
+    private void saveActiveThen(boolean showToast, Runnable action) {
+        EditorTab tab = mActiveTab;
+        if (tab == null) return;
+        tab.editor.withSnapshot(() -> {
+            if (tab != mActiveTab || !mTabs.contains(tab) || isFinishing()) return;
+            if (saveTab(tab, showToast)) action.run();
+        });
     }
 
     private boolean saveTab(EditorTab tab, boolean showToast) {
@@ -1762,7 +1937,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             }
             tab.savedText = source;
             tab.dirtyMarkerShown = false;
-            tab.editor.markTextAsSaved();
+            tab.editor.markTextAsSaved(source);
             refreshTabs();
             updateToolbarState();
             if (showToast) toast("已保存");
@@ -1784,6 +1959,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                             if (!name.equals(ExternalEditorDocument.safeName(name))) return "请输入有效的文件名";
                             return new File(directory, name).exists() ? "文件已存在，请更换名称" : null;
                         }, "保存", "取消", (name, checked) -> {
+                          tab.editor.withSnapshot(() -> {
+                            if (!mTabs.contains(tab) || isFinishing()) return;
                             File target = new File(directory, name);
                             boolean created = false;
                             try {
@@ -1800,10 +1977,11 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                                 tab.file = target;
                                 tab.savedText = source;
                                 tab.dirtyMarkerShown = false;
-                                tab.editor.markTextAsSaved();
+                                tab.editor.markTextAsSaved(source);
                                 getIntent().putExtra(EXTRA_PATH, target.getPath());
                                 switchWorkspace(target.getParentFile());
                                 mProjectRoot = findProjectRoot(target.getParentFile());
+                                tab.editor.setDocument(target, mWorkspaceRoot);
                                 refreshTabs();
                                 updateToolbarState();
                                 com.jdkshen.aijspro.model.explorer.Explorers.workspace().notifyChildrenChanged(
@@ -1813,6 +1991,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                                 if (created) target.delete();
                                 toast("另存失败：" + error.getMessage());
                             }
+                          });
                         }));
     }
 
@@ -1834,8 +2013,18 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void saveAllAndFinish() {
-        for (EditorTab tab : mTabs) if (hasUnsavedChanges(tab) && !saveTab(tab, false)) return;
-        finish();
+        withAllSnapshots(new ArrayList<>(mTabs), 0, () -> {
+            for (EditorTab tab : mTabs) if (hasUnsavedChanges(tab) && !saveTab(tab, false)) return;
+            finish();
+        });
+    }
+
+    private void withAllSnapshots(List<EditorTab> tabs, int index, Runnable action) {
+        if (isFinishing() || isDestroyed()) return;
+        if (index == tabs.size()) { action.run(); return; }
+        EditorTab tab = tabs.get(index);
+        if (!mTabs.contains(tab)) { withAllSnapshots(tabs, index + 1, action); return; }
+        tab.editor.withSnapshot(() -> withAllSnapshots(tabs, index + 1, action));
     }
 
     private boolean hasUnsavedChanges(EditorTab tab) {
@@ -1847,16 +2036,19 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         return false;
     }
 
-    private CodeEditor activeEditor() {
+    private AceCodeEditor activeEditor() {
         return mActiveTab == null ? null : mActiveTab.editor;
     }
 
     private void onShortcut(String label) {
-        CodeEditor editor = activeEditor();
+        AceCodeEditor editor = activeEditor();
         if (editor == null) return;
-        if ("ƒx".equals(label) || "群".equals(label)) {
+        if ("ƒx".equals(label)) {
+            toggleFunctionsPanel();
+        } else if ("群".equals(label)) {
             showSnippetMenu();
         } else if ("ESC".equals(label)) {
+            mFunctionsPanel.setVisibility(View.GONE);
             View focus = getCurrentFocus();
             if (focus != null) ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
                     .hideSoftInputFromWindow(focus.getWindowToken(), 0);
@@ -1880,20 +2072,11 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void moveCursorHorizontal(int delta) {
-        EditText edit = activeEditor().getCodeEditText();
-        int target = Math.max(0, Math.min(edit.length(), edit.getSelectionStart() + delta));
-        edit.setSelection(target);
+        activeEditor().moveCursorHorizontal(delta);
     }
 
     private void moveCursorVertical(int delta) {
-        EditText edit = activeEditor().getCodeEditText();
-        Layout layout = edit.getLayout();
-        if (layout == null) return;
-        int current = layout.getLineForOffset(edit.getSelectionStart());
-        int targetLine = Math.max(0, Math.min(layout.getLineCount() - 1, current + delta));
-        int column = edit.getSelectionStart() - layout.getLineStart(current);
-        int end = Math.max(layout.getLineStart(targetLine), layout.getLineEnd(targetLine) - 1);
-        edit.setSelection(Math.min(layout.getLineStart(targetLine) + column, end));
+        activeEditor().moveCursorVertical(delta);
     }
 
     private void showSnippetMenu() {
@@ -1905,12 +2088,50 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                 (dialog, which) -> activeEditor().insert(snippets[which])).show();
     }
 
+    private void toggleFunctionsPanel() {
+        if (mFunctionsPanel.getVisibility() == View.VISIBLE) {
+            mFunctionsPanel.setVisibility(View.GONE);
+            return;
+        }
+        hideKeyboardForMenu();
+        if (mFunctionsPanel.getChildCount() == 0) {
+            FunctionsKeyboardView functions = new FunctionsKeyboardView(this);
+            mFunctionsKeyboard = functions;
+            functions.setEditorPalette(mPalette);
+            functions.setClickCallback(new FunctionsKeyboardView.ClickCallback() {
+                @Override public void onModuleLongClick(Module module) { showApiReference(module.getUrl()); }
+                @Override public void onPropertyLongClick(Module module, Property property) {
+                    showApiReference(TextUtils.isEmpty(property.getUrl()) ? module.getUrl() : property.getUrl());
+                }
+                @Override public void onPropertyClick(Module module, Property property) {
+                    AceCodeEditor editor = activeEditor();
+                    if (editor == null) return;
+                    String value = (property.isGlobal() ? "" : module.getName() + ".") + property.getKey();
+                    if (!property.isVariable()) value += "()";
+                    editor.insert(value);
+                    if (!property.isVariable()) editor.moveCursorHorizontal(-1);
+                    mFunctionsPanel.setVisibility(View.GONE);
+                }
+            });
+            mFunctionsPanel.addView(functions, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        mFunctionsPanel.setBackgroundColor(mPalette.surfaceSecondary);
+        mFunctionsPanel.setVisibility(View.VISIBLE);
+    }
+
+    private void showApiReference(String url) {
+        if (TextUtils.isEmpty(url)) return;
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (android.content.ActivityNotFoundException error) { toast("无法打开文档"); }
+    }
+
     /**
      * 长按 TAB：首次弹一次说明（可勾选“不再提示”），随后格式化代码。
      * 与 Auto.js Pro 的 "Long press TAB to format code" 行为对齐。
      */
     private void onTabLongPress() {
-        CodeEditor editor = activeEditor();
+        AceCodeEditor editor = activeEditor();
         if (editor == null) return;
         // Miuix 皮肤下走 Compose 提示弹窗（与设置/更新弹窗同一套视觉）；
         // 宿主不支持时回退旧的 MaterialDialog 实现，两者共用同一 pref key。
@@ -1932,6 +2153,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     @Override
     protected void onResume() {
         super.onResume();
+        if (activeEditor() != null) activeEditor().setActive(true);
         mFileTreeDirty = true;
         AppThemeRepository repository = AppThemeRepository.get(this);
         repository.addListener(mThemeListener);
@@ -1946,6 +2168,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     @Override
     protected void onPause() {
         saveEditorSession();
+        if (activeEditor() != null) activeEditor().setActive(false);
         AppThemeRepository.get(this).removeListener(mThemeListener);
         super.onPause();
     }
@@ -1973,9 +2196,12 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         if (mToolRow != null) mToolRow.setBackgroundColor(palette.editorToolbar);
         if (mTabRow != null) mTabRow.setBackgroundColor(palette.editorTabInactive);
         if (mWorkspaceDrawer != null) mWorkspaceDrawer.setBackgroundColor(palette.surfacePrimary);
+        if (mTreeRootLabel != null) tintTreePrefix(mTreeRootLabel, 3);
         if (mDebugBar != null) mDebugBar.setBackgroundColor(palette.surfaceElevated);
         if (mLogPanel != null) mLogPanel.setBackgroundColor(palette.surfaceSecondary);
         if (mShortcutBar != null) mShortcutBar.setBackgroundColor(palette.editorToolbar);
+        if (mFunctionsPanel != null) mFunctionsPanel.setBackgroundColor(palette.surfaceSecondary);
+        if (mFunctionsKeyboard != null) mFunctionsKeyboard.setEditorPalette(palette);
         if (mConsoleView != null) ConsoleThemeHelper.apply(mConsoleView, palette);
 
         Theme editorTheme = Theme.fromAssetsJson(this, palette.isDark
@@ -2009,6 +2235,13 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         }
     }
 
+    private void tintTreePrefix(TextView view, int length) {
+        android.text.SpannableString value = new android.text.SpannableString(view.getText().toString());
+        value.setSpan(new android.text.style.ForegroundColorSpan(mPalette.iconPrimary), 0,
+                Math.min(length, value.length()), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        view.setText(value);
+    }
+
     private void tintImageTree(View view, int color) {
         if (view instanceof ImageView) ((ImageView) view).setColorFilter(color);
         if (view instanceof ViewGroup) {
@@ -2021,6 +2254,14 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     @Override
     public void onBackPressed() {
+        withAllSnapshots(new ArrayList<>(mTabs), 0, this::handleBackPressed);
+    }
+
+    private void handleBackPressed() {
+        if (mFunctionsPanel != null && mFunctionsPanel.getVisibility() == View.VISIBLE) {
+            mFunctionsPanel.setVisibility(View.GONE);
+            return;
+        }
         if (mDrawerLayout != null && mDrawerLayout.isDrawerOpen(GravityCompat.START)) {
             mDrawerLayout.closeDrawer(GravityCompat.START);
             return;
@@ -2070,7 +2311,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         background.setCornerRadius(dp(4));
         content.setBackground(background);
 
-        PopupWindow popup = new PopupWindow(content, dp(196),
+        boolean tabAnchor = anchor instanceof TextView && mTabs.stream().anyMatch(tab -> tab.label == anchor);
+        PopupWindow popup = new PopupWindow(content, dp(tabAnchor ? 244 : 196),
                 ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(true);
@@ -2262,12 +2504,16 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     private static final class EditorTab {
         File file;
-        final CodeEditor editor;
+        final AceCodeEditor editor;
         String savedText;
         boolean dirtyMarkerShown;
         boolean viewStateRestored;
+        TextView label;
+        TextView closeButton;
+        View indicator;
+        int indicatorColor;
 
-        EditorTab(File file, CodeEditor editor, String savedText) {
+        EditorTab(File file, AceCodeEditor editor, String savedText) {
             this.file = file;
             this.editor = editor;
             this.savedText = savedText;

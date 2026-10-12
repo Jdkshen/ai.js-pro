@@ -7,7 +7,8 @@ import android.net.Uri;
 import android.os.SystemClock;
 import androidx.test.platform.app.InstrumentationRegistry;
 import com.jdkshen.aijspro.external.open.EditIntentActivity;
-import com.jdkshen.aijspro.ui.edit.editor.CodeEditor;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.Test;
 import java.io.InputStream;
 import java.lang.reflect.Method;
@@ -42,7 +43,7 @@ public class ExternalEditorTest {
             while (SystemClock.uptimeMillis() < end) {
                 boolean[] ready = {false};
                 instrumentation.runOnMainSync(() -> ready[0] = call(activity, "activeEditor", new Class<?>[0]) != null);
-                if (ready[0]) return activity;
+                if (ready[0]) { awaitSnapshot(activity); return activity; }
                 SystemClock.sleep(100);
             }
             fail("External document did not load");
@@ -54,18 +55,27 @@ public class ExternalEditorTest {
             return new String(org.apache.commons.io.IOUtils.toByteArray(input), StandardCharsets.UTF_8);
         }
     }
+    private void awaitSnapshot(ProCodeEditorActivity activity) {
+        CountDownLatch complete = new CountDownLatch(1);
+        instrumentation.runOnMainSync(() -> ((AceCodeEditor) call(activity, "activeEditor", new Class<?>[0]))
+                .withSnapshot(complete::countDown));
+        try { assertTrue("Snapshot timed out", complete.await(15, TimeUnit.SECONDS)); }
+        catch (InterruptedException error) { throw new AssertionError(error); }
+        instrumentation.waitForIdleSync();
+    }
     @Test public void externalMarkdownOpensInUnifiedEditorAndSavesTruncatedToOriginal() throws Exception {
         Uri uri = EditorDocumentTestProvider.WRITABLE;
         ExternalEditorDocument.write(context.getContentResolver(), uri, "# original long text with suffix");
         ProCodeEditorActivity activity = open(uri);
         try {
             instrumentation.runOnMainSync(() -> {
-                CodeEditor editor = (CodeEditor) call(activity, "activeEditor", new Class<?>[0]);
+                AceCodeEditor editor = (AceCodeEditor) call(activity, "activeEditor", new Class<?>[0]);
                 assertEquals("# original long text with suffix", editor.getText());
                 editor.setText("# 新内容");
-                assertEquals(true, call(activity, "saveActive", new Class<?>[]{boolean.class}, false));
-                assertEquals(false, call(activity, "hasAnyUnsavedChanges", new Class<?>[0]));
+                call(activity, "saveActive", new Class<?>[]{boolean.class}, false);
             });
+            awaitSnapshot(activity);
+            instrumentation.runOnMainSync(() -> assertEquals(false, call(activity, "hasAnyUnsavedChanges", new Class<?>[0])));
             assertEquals("# 新内容", read(uri));
         } finally { instrumentation.runOnMainSync(activity::finish); }
     }
@@ -75,7 +85,7 @@ public class ExternalEditorTest {
                 .putExtra(Intent.EXTRA_STREAM, EditorDocumentTestProvider.READ_ONLY));
         try {
             instrumentation.runOnMainSync(() -> assertEquals("# QQ attachment",
-                    ((CodeEditor) call(activity, "activeEditor", new Class<?>[0])).getText()));
+                    ((AceCodeEditor) call(activity, "activeEditor", new Class<?>[0])).getText()));
         } finally { instrumentation.runOnMainSync(activity::finish); }
     }
     @Test public void rejectedExternalSaveKeepsDirtyTextAndOriginal() throws Exception {
@@ -83,9 +93,13 @@ public class ExternalEditorTest {
         ProCodeEditorActivity activity = open(EditorDocumentTestProvider.READ_ONLY);
         try {
             instrumentation.runOnMainSync(() -> {
-                CodeEditor editor = (CodeEditor) call(activity, "activeEditor", new Class<?>[0]);
+                AceCodeEditor editor = (AceCodeEditor) call(activity, "activeEditor", new Class<?>[0]);
                 editor.setText("unsaved changes");
-                assertEquals(false, call(activity, "saveActive", new Class<?>[]{boolean.class}, false));
+                call(activity, "saveActive", new Class<?>[]{boolean.class}, false);
+            });
+            awaitSnapshot(activity);
+            instrumentation.runOnMainSync(() -> {
+                AceCodeEditor editor = (AceCodeEditor) call(activity, "activeEditor", new Class<?>[0]);
                 assertEquals(true, call(activity, "hasAnyUnsavedChanges", new Class<?>[0]));
                 assertEquals("unsaved changes", editor.getText());
             });
@@ -98,8 +112,11 @@ public class ExternalEditorTest {
         android.os.Bundle state = new android.os.Bundle();
         try {
             instrumentation.runOnMainSync(() -> {
-                CodeEditor editor = (CodeEditor) call(activity, "activeEditor", new Class<?>[0]);
+                AceCodeEditor editor = (AceCodeEditor) call(activity, "activeEditor", new Class<?>[0]);
                 editor.setText("draft after recreation");
+            });
+            awaitSnapshot(activity);
+            instrumentation.runOnMainSync(() -> {
                 call(activity, "onSaveInstanceState", new Class<?>[]{android.os.Bundle.class}, state);
             });
             assertTrue(state.getBoolean("external_editor_dirty"));
