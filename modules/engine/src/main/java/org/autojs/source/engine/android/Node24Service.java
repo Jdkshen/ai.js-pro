@@ -244,7 +244,7 @@ public class Node24Service extends Service {
     private final class Job implements Runnable {
         final String id,source,filename;final long timeout;final long holdMillis;final boolean uiScript;final Messenger reply;
         final long startedAt=System.currentTimeMillis();
-        volatile boolean cancelled;volatile boolean finished;volatile Node24Engine engine;volatile Node24HostBridge host;
+        volatile boolean cancelled;volatile boolean finished;volatile boolean executeReturned;volatile Node24Engine engine;volatile Node24HostBridge host;
         /** 实时日志只由 node24-output 线程写入；锁同时保护 seq/delivered 与 64 KiB/条数预算。 */
         private final Object logLock=new Object();
         private int logSeq,logBytes,logLines,deliveredLogs;
@@ -299,8 +299,13 @@ public class Node24Service extends Service {
                 try { Thread.sleep(poolProcess ? 2500L : 1500L); } catch (InterruptedException ignored) { return; }
                 Job running=active.get();
                 if(running!=null && running!=this) return;
-                if (poolProcess && finished) {
-                    android.util.Log.i("Node24Service","cancel pool graceful: finished id="+id);
+                if (poolProcess && (finished || executeReturned)) {
+                    // task-185：池进程里 execute 已返回（cancelled 结果已/正在回复），
+                    // 此时还要做 closeUiAfterExecution/bridge.close 等清理；杀死进程会让
+                    // Node24Client 变成 IOException: Node24 service disconnected，
+                    // 用户主动关 Node UI 会被误报成脚本错误。清理完成自然会回复 CANCELLED。
+                    android.util.Log.i("Node24Service","cancel pool graceful: finished="+finished
+                            +" executeReturned="+executeReturned+" id="+id);
                     return;
                 }
                 android.util.Log.w("Node24Service","cancel watchdog: force halt id="+id
@@ -426,6 +431,7 @@ public class Node24Service extends Service {
         int deliveredLogs() { synchronized(logLock) { return deliveredLogs; } }
         @Override public void run() {
             long start=SystemClock.elapsedRealtime();JSONObject result=new JSONObject();
+            boolean replied=false;
             // task-65：stage 记录当前步骤；外层 catch 打 Log.e，任何一步异常都能定位。
             String stage="job-start";
             long nativeTimeout=nativeTimeoutMillis();
@@ -455,7 +461,9 @@ public class Node24Service extends Service {
                         try {
                             watcher.start();
                             value=current.execute(prepared,filename,nativeTimeout,bridge);
+                            executeReturned=true;
                         } catch(Throwable executeError) {
+                            executeReturned=true;
                             android.util.Log.e("Node24Service","execute threw id="+id,executeError);
                             throw executeError;
                         } finally {
@@ -496,6 +504,19 @@ public class Node24Service extends Service {
                             .put("prelude",Node24Prelude.describeAssets(Node24Service.this).toString())
                             .put("legacyNodeLoaded",Node24Libraries.maps().contains("/libv8.so"))
                             .put("legacyAutoJsApiAvailable",false).put("scopePolicy","isolated_per_evaluation");
+                        // task-185：先回复结果再清理 UI/bridge：Node UI 关闭触发的取消若在清理期间
+                        // 被 watchdog 杀进程，客户端会收到 disconnected 并误报脚本错误。
+                        try {
+                            try {result.put("elapsedMillis",SystemClock.elapsedRealtime()-start);}catch(Exception ignored){}
+                            if(cancelled) {
+                                try {result.put("status","CANCELLED").put("success",false).put("cancelled",true);}
+                                catch(Exception ignored){}
+                            }
+                            reply(result);
+                            replied=true;
+                        } catch(Throwable replyError) {
+                            android.util.Log.w("Node24Service","early reply failed id="+id,replyError);
+                        }
                     } finally {
                         // 先停轮询线程，再关 UI / engine；避免 watcher 在 engine.close() 后仍 cancel 或读 bridge。
                         if(watcher!=null) watcher.stop();
@@ -534,7 +555,7 @@ public class Node24Service extends Service {
                 catch(Exception ignored) {}
             }
             try {result.put("elapsedMillis",SystemClock.elapsedRealtime()-start);}catch(Exception ignored){}
-            reply(result);
+            if(!replied) reply(result);
             finishAndHaltIfCancelled();
         }
     }

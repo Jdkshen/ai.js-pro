@@ -23,10 +23,18 @@
 
 编译：`:engine:compileDebugJavaWithJavac` + `:app:compileMiuixCompatDebugJavaWithJavac -PflutterPoc=true` BUILD SUCCESSFUL（15s）。
 
-## 5. K40 验证（dev-1131 待填）
+## 5. K40 验证（dev-1131）PASS
 
-（待填：no-match + drawMatches './task184-nomatch.jpg' → 文件存在 + app.viewFile 不报错；match + drawMatches → 文件存在；相对路径落在脚本目录）
+设备 K40 cccc62c7；验证脚本 /sdcard/脚本/node184/main.js（项目目录运行，drawMatches 使用 ./task184-nomatch.jpg / ./task184-match.jpg）。
 
+| 用例 | 结果 |
+|---|---|
+| 未匹配 + drawMatches | NOMATCH_RESULT null、NOMATCH_EXISTS true（文件写在脚本目录 /sdcard/脚本/node184/task184-nomatch.jpg，795 KB） |
+| 未匹配后 app.viewFile 相对路径 | VIEWFILE_OK true，不再报文件不存在 |
+| 匹配 + drawMatches | MATCH_RESULT center=387,685、MATCH_EXISTS true（task184-match.jpg，271 KB） |
+| 相对路径基准 | 两个文件都落在入口脚本目录，与 prelude resolveImagePath 规则一致 |
+
+结论：示例末尾文件不存在根因（未匹配不写调试图）已修复；示例无需改动。
 ## 6. 限制
 
 1. 未匹配时的调试图只画场景特征点，没有匹配连线/四边形（符合「调试用」语义）；

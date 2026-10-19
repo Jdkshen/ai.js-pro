@@ -63,6 +63,7 @@ public class ForegroundService extends Service {
      * target game covers the workspace, which can more than double OpenCV DNN latency.
      */
     public static boolean acquireExecutionLease(Context context) {
+        ensureNotificationPermission(context);
         if (sExecutionLeases.getAndIncrement() == 0) {
             try {
                 start(context.getApplicationContext());
@@ -76,6 +77,33 @@ public class ForegroundService extends Service {
             }
         }
         return true;
+    }
+
+    /**
+     * task-183：Android 13+ 通知权限被关时 FGS 仍能启动但通知被系统隐藏，
+     * 用户只看到系统的「正在其他应用上层显示」告警。运行脚本前主动请求/引导开启通知权限。
+     */
+    private static void ensureNotificationPermission(Context context) {
+        if (context == null || Build.VERSION.SDK_INT < 33) {
+            return;
+        }
+        try {
+            Context app = context.getApplicationContext();
+            String permission = "android.permission.POST_NOTIFICATIONS";
+            if (app.checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                return;
+            }
+            if (context instanceof android.app.Activity) {
+                ((android.app.Activity) context).requestPermissions(new String[]{permission}, 0x2A31);
+                return;
+            }
+            Intent intent = new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, app.getPackageName())
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            app.startActivity(intent);
+        } catch (Throwable error) {
+            Log.w(TAG, "request notification permission failed", error);
+        }
     }
 
     public static void releaseExecutionLease(Context context) {
