@@ -523,9 +523,15 @@ public class ScriptHostService extends Service {
         @Override
         public void onStart(ScriptExecution execution) {
             try {
+                mState.startMillis = System.currentTimeMillis();
+                synchronized (mLock) {
+                    mState.execution = execution;
+                }
                 reply(mState.replyTo, REPLY_STARTED, mState, mState.name, null);
                 // onStart 时引擎已创建、脚本还没开始跑，正好挂 console 监听（每行实时回主进程）。
                 attachConsoleForwarder(mState, execution);
+                // task-191 P0：开始行也进主进程统一日志页（与 console.log 同流，TRACE/VERBOSE）。
+                forwardGlobalLine(mState, "开始运行[" + execution.getSource().toString() + "]");
                 boolean stopNow;
                 synchronized (mLock) {
                     stopNow = mState.stopRequested && !mState.finished;
@@ -541,6 +547,8 @@ public class ScriptHostService extends Service {
         @Override
         public void onSuccess(ScriptExecution execution, Object result) {
             try {
+                // task-191 P0/P1：结束行（6 位小数）先于任何错误/收尾写入主日志页。
+                forwardGlobalLine(mState, formatFinishedLine(mState, execution));
                 finish(mState, null);
             } catch (Throwable error) {
                 Log.w(TAG, "上报 FINISHED 失败：" + mState.token, error);
@@ -550,6 +558,8 @@ public class ScriptHostService extends Service {
         @Override
         public void onException(ScriptExecution execution, Throwable e) {
             try {
+                // task-191 P1：用户停止/关闭 UI 也只在这里静默打结束行；错误堆栈随后由引擎 console 转发。
+                forwardGlobalLine(mState, formatFinishedLine(mState, execution));
                 finish(mState, e);
             } catch (Throwable error) {
                 Log.w(TAG, "上报 ERROR 失败：" + mState.token, error);
@@ -675,6 +685,49 @@ public class ScriptHostService extends Service {
         if (forwarder != null) {
             forwarder.close();
         }
+    }
+
+    /** task-191 P0：把运行开始/结束行以 what=103 单独转发到主进程统一日志页（TRACE/VERBOSE）。 */
+    private void forwardGlobalLine(RunState state, String text) {
+        if (state == null || state.replyTo == null || text == null || text.isEmpty()) {
+            return;
+        }
+        try {
+            Message reply = Message.obtain(null, REPLY_CONSOLE);
+            Bundle data = new Bundle();
+            data.putString(KEY_TOKEN, state.token);
+            data.putString(KEY_LINE, text);
+            data.putInt(KEY_LEVEL, Log.VERBOSE);
+            data.putStringArray(KEY_CONSOLE_TEXTS, new String[]{text});
+            data.putIntArray(KEY_CONSOLE_LEVELS, new int[]{Log.VERBOSE});
+            reply.setData(data);
+            state.replyTo.send(reply);
+        } catch (RemoteException error) {
+            Log.w(TAG, "运行开始/结束行转发失败（token=" + state.token + "）", error);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "运行开始/结束行组包失败（token=" + state.token + "）", error);
+        }
+    }
+
+    /** task-191：与 Pro 对齐的结束行（\n------------\n[source]运行结束，用时%f秒，6 位小数）。 */
+    private static String formatFinishedLine(RunState state, ScriptExecution execution) {
+        long start = state == null ? 0L : state.startMillis;
+        if (execution != null && execution.getEngine() != null) {
+            Object tag = execution.getEngine().getTag("com.jdkshen.aijspro.autojs.Goodbye, World");
+            if (tag instanceof Long) {
+                start = (Long) tag;
+            }
+        }
+        if (start <= 0L || execution == null) {
+            return "";
+        }
+        String source = execution.getSource().toString();
+        if (source.startsWith("no-log##")) {
+            return "";
+        }
+        double seconds = (System.currentTimeMillis() - start) / 1000.0;
+        return "\n------------\n[" + source + "]运行结束，用时"
+                + String.format(java.util.Locale.US, "%.6f", seconds) + "秒";
     }
 
     /** 把一批 console 文本以 what=103 回给主进程（旧 line/level + 新逐段数组）。 */
@@ -949,6 +1002,7 @@ public class ScriptHostService extends Service {
         final Messenger replyTo;
         volatile String name = "";
         ScriptExecution execution;
+        long startMillis;
         boolean stopRequested;
         boolean finished;
         /** Phase1 P1：本次 RUN 是否已经注入过远程自动化后端（结束时释放一次）。 */

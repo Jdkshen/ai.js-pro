@@ -7,5 +7,7 @@
         <attr name="color_warn" format="reference|color"/>
         <attr name="color_error" format="reference|color"/>
         <attr name="color_assert" format="reference|color"/>
+        <!-- task-190：globalconsole 默认隐藏自带输入区；inputEnabled=true 可恢复 -->
+        <attr name="inputEnabled" format="boolean"/>
     </declare-styleable>
 </resources>

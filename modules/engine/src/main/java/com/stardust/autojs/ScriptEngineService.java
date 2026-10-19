@@ -73,6 +73,23 @@ public class ScriptEngineService {
         return sHeadlessUiMode;
     }
 
+    /** task-191：与 Pro m2414 对齐的运行开始时间 tag。 */
+    private static final String ENGINE_TAG_START_TIME = "com.jdkshen.aijspro.autojs.Goodbye, World";
+
+    /** task-191 P0：写进程 GlobalConsole（主进程直接可见；:script 由宿主转发主日志页）。 */
+    private static void verboseGlobal(String line) {
+        ScriptEngineService service = sInstance;
+        if (service == null) {
+            Log.i(LOG_TAG, line);
+            return;
+        }
+        try {
+            service.mGlobalConsole.verbose(line);
+        } catch (Throwable error) {
+            Log.w(LOG_TAG, "global console verbose failed", error);
+        }
+    }
+
     private static final EventBus EVENT_BUS = new EventBus();
     private static final ScriptExecutionListener GLOBAL_LISTENER = new SimpleScriptExecutionListener() {
         @Override
@@ -81,6 +98,12 @@ public class ScriptEngineService {
                 ((JavaScriptEngine) execution.getEngine()).getRuntime()
                         .console.setTitle(execution.getSource().getName());
             }
+            if (execution.getEngine() != null) {
+                execution.getEngine().setTag(ENGINE_TAG_START_TIME, System.currentTimeMillis());
+            }
+            // task-191 P0：开始行与 Pro 一致（开始运行[source]），写入进程 GlobalConsole；
+            // :script 宿主另行转发到主进程统一日志页（见 ScriptHostService RunListener）。
+            verboseGlobal("开始运行[" + execution.getSource().toString() + "]");
             EVENT_BUS.post(new ScriptExecutionEvent(ScriptExecutionEvent.ON_START, execution.getSource().toString()));
         }
 
@@ -89,14 +112,30 @@ public class ScriptEngineService {
             onFinish(execution);
         }
 
+        /** task-191 P1：结束行先于错误堆栈（对齐 Pro m2414）。 */
         private void onFinish(ScriptExecution execution) {
-
+            ScriptEngine engine = execution.getEngine();
+            if (engine == null) {
+                return;
+            }
+            Long millis = (Long) engine.getTag(ENGINE_TAG_START_TIME);
+            if (millis == null) {
+                return;
+            }
+            String source = execution.getSource().toString();
+            if (source.startsWith("no-log##")) {
+                return;
+            }
+            double seconds = (System.currentTimeMillis() - millis) / 1000.0;
+            verboseGlobal("\n------------\n[" + source + "]运行结束，用时"
+                    + String.format(java.util.Locale.US, "%.6f", seconds) + "秒");
         }
 
         @Override
         public void onException(ScriptExecution execution, Throwable e) {
-            e.printStackTrace();
+            // task-191 P1：先打结束行，再打错误堆栈（Pro 顺序），用户停止也走这里但不会打 error。
             onFinish(execution);
+            e.printStackTrace();
             String message = null;
             if (!causedByInterrupted(e)) {
                 message = e.getMessage();
@@ -344,7 +383,7 @@ public class ScriptEngineService {
     @Subscribe
     public void onScriptExecution(ScriptExecutionEvent event) {
         if (event.getCode() == ScriptExecutionEvent.ON_START) {
-            mGlobalConsole.verbose(mContext.getString(R.string.text_start_running) + "[" + event.getMessage() + "]");
+            // task-191：开始行已由 GLOBAL_LISTENER.onStart 统一打印（避免重复）。
         } else if (event.getCode() == ScriptExecutionEvent.ON_EXCEPTION) {
             mUiHandler.toast(mContext.getString(R.string.text_error) + ": " + event.getMessage());
         }

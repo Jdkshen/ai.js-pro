@@ -2,6 +2,8 @@ package com.stardust.autojs.core.console;
 
 import android.content.Context;
 import android.util.AttributeSet;
+import android.content.res.TypedArray;
+import com.stardust.autojs.R;
 
 import androidx.annotation.Nullable;
 
@@ -29,11 +31,33 @@ public class GlobalConsoleView extends ConsoleView {
     public GlobalConsoleView(Context context) {
         super(context);
         bindGlobalConsole();
+        applyDefaultInputVisibility(null);
     }
 
     public GlobalConsoleView(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
         bindGlobalConsole();
+        applyDefaultInputVisibility(attrs);
+    }
+
+    /**
+     * task-190：{@code <globalconsole>} 默认只显示日志，隐藏自带输入区
+     * （避免悬浮日志示例同时出现控制台自带确定 + 脚本显式确定）；
+     * 需要输入时写 {@code inputEnabled="true"}。{@code <console>} 不受影响。
+     */
+    private void applyDefaultInputVisibility(AttributeSet attrs) {
+        boolean inputEnabled = false;
+        if (attrs != null) {
+            TypedArray typed = null;
+            try {
+                typed = getContext().obtainStyledAttributes(attrs, R.styleable.ConsoleView);
+                inputEnabled = typed.getBoolean(R.styleable.ConsoleView_inputEnabled, false);
+            } catch (Throwable ignored) {
+            } finally {
+                if (typed != null) typed.recycle();
+            }
+        }
+        setInputEnabled(inputEnabled);
     }
 
     private void bindGlobalConsole() {

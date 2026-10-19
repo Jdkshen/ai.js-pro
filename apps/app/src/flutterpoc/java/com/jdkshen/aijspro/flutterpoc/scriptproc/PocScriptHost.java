@@ -462,8 +462,8 @@ public final class PocScriptHost {
             showToast("已回退主进程运行");
             return;
         }
+        // task-191 P1：引擎侧已有「错误: <message>」Toast（Pro 同款），host 不再重复弹。
         Log.w(TAG, "脚本进程任务失败：" + message);
-        showToast("脚本运行失败：" + message);
     }
 
     /**

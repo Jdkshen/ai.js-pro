@@ -69,7 +69,6 @@ public class RunnableScriptExecution extends ScriptExecution.AbstractScriptExecu
             onException(engine, e);
             return null;
         } finally {
-            Log.d(TAG, "Engine destroy");
             // ImGui 桥修复（B）：先等脚本 Looper 队列里已入队/正在执行的帧回调跑完，
             // 再销毁引擎。JavaScriptEngine.destroy 里的 onExit 会把 events.emit("exit")
             // 投递到同一个脚本 Looper 串行执行，避免 exit 监听里的 nativeShutdown/

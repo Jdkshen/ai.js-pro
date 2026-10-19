@@ -184,3 +184,21 @@ owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-11
 ### 备注
 - MI8 当前需 t2 在系统通知权限中授权 AI.js Pro 后复测通知入口（代码已含请求/引导）。
 - K40 通知栏停止入口与双 job overlay 隔离已正式复验；①②③ 关闭。
+## task-189 浮窗两个「确定」按钮排查（2026-10-20 K40 dev-1132）
+
+结论：**不是主进程 inflate 两次，也不是 overlay 重复 attach**。
+- logcat 单次运行只有一次 `overlay show id=overlay-1`，一次 `C-VIEWS: inline {dragHandle,close,console,input,ok}`；
+- DynamicLayoutInflater 只创建一组 JsEditText/JsButton（示例 XML 的 input/ok）；
+- 截图第二个灰色「确定」来自 `<globalconsole>` 内部 `ConsoleView` 自带输入区：`console_view.xml` 中 `input_container` 包含 `EditText @id/input` + `Button @id/submit text=@string/ok`；
+- 示例本身同时有 `<globalconsole>` 和显式 `<row><input id=input/><button id=ok/></row>`，所以视觉上出现两组 input+确定，标题栏只来自示例 XML 一次。
+
+排查证据：`output/flutter-poc/evidence/task189/one-overlay-two-confirm-buttons.png`、`task189-findings.log`。
+可选处理（非 bug）：若产品上只想保留一组，示例应去掉显式 input/ok（用 globalconsole 自带输入），或调用 `console.setInputEnabled(false)` 隐藏控制台输入区；不建议改全局 ConsoleView 行为。
+## task-190 `<globalconsole>` 默认隐藏输入区（2026-10-20）
+
+- 根因（接 task-189）：`<globalconsole>` 绑定的 `ConsoleView` 自带 `input_container`（EditText + submit「确定」），示例又显式写 input/ok → 两组确定。
+- 修复：`GlobalConsoleView` 默认调用 `setInputEnabled(false)`；新增 `ConsoleView` styleable `inputEnabled`，写 `inputEnabled="true"` 可恢复。`<console>`（ConsoleView）与悬浮控制台不变。
+- 验证（K40 debug 465，临时安装后已恢复 dev-1134）：悬浮日志示例截图只剩**一组**「确定」；日志/OpenCV 正常显示；Rhino `<globalconsole>` 示例 `UI中显示控制台.js` 正常启动/打印提示，无 SCRIPT_ERROR/异常。
+
+证据：`output/flutter-poc/evidence/task190/floatlog-one-confirm.png`。
+待正式包：请构建下一个 dev（含本改动）后 K40/MI8 复验。

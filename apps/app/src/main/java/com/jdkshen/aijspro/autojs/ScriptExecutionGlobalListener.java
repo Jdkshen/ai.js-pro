@@ -22,7 +22,6 @@ public class ScriptExecutionGlobalListener implements ScriptExecutionListener {
 
     @Override
     public void onStart(ScriptExecution execution) {
-        execution.getEngine().setTag(ENGINE_TAG_START_TIME, System.currentTimeMillis());
         if (mForegroundExecutions.add(execution.getId())
                 && !ForegroundService.acquireExecutionLease(GlobalAppContext.get())) {
             mForegroundExecutions.remove(execution.getId());
@@ -34,22 +33,14 @@ public class ScriptExecutionGlobalListener implements ScriptExecutionListener {
         onFinish(execution);
     }
 
+    /**
+     * task-191：开始/结束行已统一由 ScriptEngineService.GLOBAL_LISTENER 打印
+     * （结束行在错误堆栈之前），这里只负责前台执行租约；不要再打第二遍结束行。
+     */
     private void onFinish(ScriptExecution execution) {
         if (mForegroundExecutions.remove(execution.getId())) {
             ForegroundService.releaseExecutionLease(GlobalAppContext.get());
         }
-        ScriptEngine engine = execution.getEngine();
-        // Engine selection may fail before an engine instance is created, such
-        // as when a Rhino-only script is started by the lite build.
-        if (engine == null) {
-            return;
-        }
-        Long millis = (Long) engine.getTag(ENGINE_TAG_START_TIME);
-        if (millis == null)
-            return;
-        double seconds = (System.currentTimeMillis() - millis) / 1000.0;
-        AutoJs.getInstance().getScriptEngineService().getGlobalConsole()
-                .verbose(GlobalAppContext.getString(R.string.text_execution_finished), execution.getSource().toString(), seconds);
     }
 
     @Override
