@@ -252,8 +252,10 @@ public class NodeUiBridgeService extends Service {
                     android.view.View view;
                     android.view.View content;
                     if (!xml.isEmpty()) {
-                        android.view.ContextThemeWrapper themed = new android.view.ContextThemeWrapper(
-                                this, android.R.style.Theme_Material_Light_NoActionBar);
+                        // task-199：工程布局含 Material 组件（MaterialCardView 等），必须用 Material 主题；
+                        // NodeUiHost.wrapThemedContext 与 NodeUiActivity 使用同一套 Material3 主题解析。
+                        android.content.Context themed = com.stardust.autojs.engine.node24.NodeUiHost
+                                .wrapThemedContext(this, null);
                         content = com.stardust.autojs.engine.node24.NodeUiHost.inflateInlineLayout(themed, xml);
                         if (content == null) throw new IllegalStateException("floating_window XML inflate 结果为空");
                         android.widget.FrameLayout root = new android.widget.FrameLayout(this) {
