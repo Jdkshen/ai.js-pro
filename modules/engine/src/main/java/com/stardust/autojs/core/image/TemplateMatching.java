@@ -94,6 +94,12 @@ public class TemplateMatching {
         List<Match> previousMatchResult = Collections.emptyList();
         boolean isFirstMatching = true;
         for (int level = maxLevel; level >= 0; level--) {
+            // task-9：提前退出判断必须放在建金字塔图之前——上一轮没有弱命中、且不满足继续条件时，
+            // 本层根本不会做匹配，原来的先 resize 再 break 是纯浪费（每模板白做一对金字塔 resize）。
+            if (previousMatchResult.isEmpty() && !isFirstMatching
+                    && !shouldContinueMatching(level, maxLevel)) {
+                break;
+            }
             // 放缩图片
             List<Match> currentMatchResult = new ArrayList<>();
             Mat src = getPyramidDownAtLevel(img, level);
@@ -101,14 +107,6 @@ public class TemplateMatching {
             Mat mask = useTransparentMask ? createTransparentMask(currentTemplate) : null;
             // 如果在上一轮中没有匹配到图片，则考虑是否退出匹配
             if (previousMatchResult.isEmpty()) {
-                // 如果不是第一次匹配，并且不满足shouldContinueMatching的条件，则直接退出匹配
-                if (!isFirstMatching && !shouldContinueMatching(level, maxLevel)) {
-                    // 提前退出：本层的金字塔图与掩膜都要释放（原实现只 break，会漏掉下面的 release → 泄漏）
-                    if (mask != null) OpenCVHelper.release(mask);
-                    if (src != img) OpenCVHelper.release(src);
-                    if (currentTemplate != template) OpenCVHelper.release(currentTemplate);
-                    break;
-                }
                 Mat matchResult = matchTemplate(src, currentTemplate, matchMethod, mask);
                 getBestMatched(matchResult, currentTemplate, matchMethod, weakThreshold, currentMatchResult, limit, null);
                 OpenCVHelper.release(matchResult);

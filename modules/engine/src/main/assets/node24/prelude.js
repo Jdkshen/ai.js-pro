@@ -1825,6 +1825,19 @@
   // ------------------------------------------------------------------
   var DEFAULT_IMAGE_THRESHOLD = 0;
   var DEFAULT_IMAGE_QUALITY = 100;
+  // countColor 的默认每通道容差与 QuickJS/Rhino 宿主一致（找色默认 4）；findColor 的默认值
+  // 是 0（见 DEFAULT_IMAGE_THRESHOLD），两个 API 的宿主默认值本来就不同，显式传参优先。
+  var DEFAULT_COUNT_COLOR_THRESHOLD = 4;
+  // getPixels 单次原始像素上限，与 Java 侧 Node24Images.MAX_PIXEL_FETCH_BYTES 一致。
+  // 宿主桥单次 payload 有安全线（Node24Client 的 Node 请求 <=196608 字符，响应同量级），
+  // base64 后约为原始字节的 1.37 倍；更大的区域请先 resize/clip 分块读取，
+  // 或改用文件通道（node-smem 负责）。
+  var MAX_IMAGE_PIXEL_FETCH_BYTES = 256 * 1024;
+  // matchTemplateMulti 单次最多模板数，与 Java 侧 MAX_MULTI_TEMPLATES 一致。
+  var MAX_IMAGE_MULTI_TEMPLATES = 64;
+  // exportPixels/pixelsToFile 单次点数上限与 region 原始字节上限，与 Java 侧一致。
+  var MAX_IMAGE_PIXEL_FILE_POINTS = 1024 * 1024;
+  var MAX_IMAGE_PIXEL_FILE_BYTES = 64 * 1024 * 1024;
   var DEFAULT_PROJECTION_CAPTURE_TIMEOUT = 5000;
   var DEFAULT_ACCESSIBILITY_TIMEOUT = 60000;
   // Android GestureDescription 的单次手势总时长上限。
@@ -2072,6 +2085,62 @@
     return imageFindImageSync(this, template, options);
   };
   Image.prototype.findImageSync = Image.prototype.findImage;
+  // 多结果模板匹配（与 Rhino/QuickJS images.matchTemplate 同语义）。
+  Image.prototype.matchTemplate = function (template, options) {
+    return imageMatchTemplateSync(this, template, options);
+  };
+  Image.prototype.matchTemplateSync = Image.prototype.matchTemplate;
+  // 批量像素：一次调用取回整块区域（argb 小端 4B/像素或 gray 1B/像素）。
+  Image.prototype.getPixels = function (options) {
+    return imageGetPixelsSync(this, options);
+  };
+  Image.prototype.getPixelsSync = Image.prototype.getPixels;
+  // 散点批量取色（一次调用取回 Int32Array）。
+  Image.prototype.samplePixels = function (points) {
+    return imageSamplePixelsSync(this, points);
+  };
+  Image.prototype.samplePixelsSync = Image.prototype.samplePixels;
+  // 文件式像素导出：只返回描述，脚本自己 fs.readFileSync 构造 TypedArray。
+  Image.prototype.exportPixels = function (options) {
+    var self = this;
+    return Promise.resolve().then(function () { return imageExportPixelsSync(self, options); });
+  };
+  Image.prototype.exportPixelsSync = function (options) {
+    return imageExportPixelsSync(this, options);
+  };
+  // 图像处理（与宿主 images.* 语义一致）：都返回新的 Image 句柄，原图不受影响。
+  Image.prototype.grayscale = function () { return imageGrayscaleSync(this); };
+  Image.prototype.grayscaleSync = Image.prototype.grayscale;
+  Image.prototype.clip = function (x, y, width, height) {
+    return imageClipSync(this, x, y, width, height);
+  };
+  Image.prototype.clipSync = Image.prototype.clip;
+  Image.prototype.threshold = function (threshold, maxValue, type) {
+    return imageThresholdSync(this, threshold, maxValue, type);
+  };
+  Image.prototype.thresholdSync = Image.prototype.threshold;
+  Image.prototype.resize = function (width, height, interpolation) {
+    return imageResizeSync(this, width, height, interpolation);
+  };
+  Image.prototype.resizeSync = Image.prototype.resize;
+  Image.prototype.sizeOf = function () { return imageSizeOfSync(this); };
+  Image.prototype.countColor = function (color, options) {
+    return imageCountColorSync(this, color, options);
+  };
+  Image.prototype.countColorSync = Image.prototype.countColor;
+  // 多模板一次匹配（宿主内循环跑同一源图，返回与 templates 同序的匹配数组）。
+  Image.prototype.matchTemplateMulti = function (templates, options) {
+    return imageMatchTemplateMultiSync(this, templates, options);
+  };
+  Image.prototype.matchTemplateMultiSync = Image.prototype.matchTemplateMulti;
+  // 帧预处理批量入口（一次调用完成 grayscale(+resize)+size）。
+  Image.prototype.prepFrame = function (options) { return imagePrepFrameSync(this, options); };
+  Image.prototype.prepFrameSync = Image.prototype.prepFrame;
+  // SIFT 便捷封装：内部用 detectAndComputeFeatures + matchFeatures 的兼容后端。
+  Image.prototype.matchSift = function (template, options) {
+    return imageMatchSiftSync(this, template, options);
+  };
+  Image.prototype.matchSiftSync = Image.prototype.matchSift;
   // task-172：计算图片特征（Pro image 模块 Image.detectAndComputeFeatures）。
   // 返回 Promise；宿主保存特征对象，Node 只拿句柄（用完 recycle()）。
   Image.prototype.detectAndComputeFeatures = function (options) {
@@ -2284,6 +2353,629 @@
       region: region
     };
     return normalizeImagePoint(hostValue(request), 'findImage');
+  }
+
+  /**
+   * 批量像素：一次宿主调用取回整块区域，返回 {width,height,format,data:Uint8Array}。
+   * 这是「全 Node 化」的关键 API：把逐像素 pixel() 调用压成一次调用。
+   */
+  function imageGetPixelsSync(image, options) {
+    var frame = wrapImage(image);
+    options = normalizeImageOptions(options);
+    var region = normalizeImageRegion(options.region, frame);
+    if (!region) { region = [0, 0, frame._width, frame._height]; }
+    var format = options.format == null ? 'argb' : String(options.format);
+    if (format !== 'argb' && format !== 'gray') {
+      throw new TypeError('getPixels 的 format 仅支持 argb/gray：' + format);
+    }
+    // 宿主响应必须控制在桥的单次 payload 安全线内；超限时在 JS 侧先抛明确错误，
+    // 不让宿主白拷贝一次大数组再失败。大区域请分块/缩小，或改用文件通道（node-smem）。
+    var fetchBytes = region[2] * region[3] * (format === 'argb' ? 4 : 1);
+    if (fetchBytes > MAX_IMAGE_PIXEL_FETCH_BYTES) {
+      throw apiRangeError('getPixels 区域过大：' + region[2] + 'x' + region[3] + '（'
+        + fetchBytes + ' 字节，单次上限 ' + MAX_IMAGE_PIXEL_FETCH_BYTES
+        + ' 字节原始像素；请先 resize/clip 分块读取，或改用文件通道（node-smem 负责））');
+    }
+    var value = hostValue({
+      kind: 'image',
+      action: 'getPixels',
+      id: frame._id,
+      region: region,
+      format: format
+    });
+    if (!value || typeof value !== 'object' || typeof value.data !== 'string'
+      || !isIntegerValue(value.width) || !isIntegerValue(value.height)) {
+      throw hostError('getPixels 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    var buffer = Buffer.from(value.data, 'base64');
+    return {
+      width: value.width,
+      height: value.height,
+      format: value.format || format,
+      data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+    };
+  }
+
+  /**
+   * 散点批量取色：一次宿主调用取回上万个点的 ARGB，返回 Int32Array。
+   * 这是把「每帧 1.4 万次 pixel/red/green/blue 调用」压成 1 次调用的关键 API。
+   */
+  function imageSamplePixelsSync(image, points) {
+    var frame = wrapImage(image);
+    if (!Array.isArray(points) || points.length === 0) {
+      throw new TypeError('samplePixels 需要非空的 [[x,y],...] 数组');
+    }
+    if (points.length > 65536) {
+      throw apiRangeError('samplePixels 点数过多：' + points.length + '（上限 65536）');
+    }
+    var value = hostValue({
+      kind: 'image',
+      action: 'samplePixels',
+      id: frame._id,
+      points: points
+    });
+    if (!value || typeof value !== 'object' || typeof value.data !== 'string') {
+      throw hostError('samplePixels 返回格式非法');
+    }
+    var buffer = Buffer.from(value.data, 'base64');
+    return new Int32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 4);
+  }
+
+  /**
+   * 文件式像素导出（pixelsToFile）：把区域原始像素或散点 ARGB 写进 app 私有文件，返回描述。
+   * 设计上不读文件：脚本自己 fs.readFileSync(desc.path) 后按 formatDetail 构造 TypedArray。
+   *
+   * 两种入参（二选一）：
+   *   { region: [x,y,w,h] | [x,y] | {x,y,width,height}, format: 'argb'|'gray', path? }
+   *     -> 文件是连续像素块；argb: Uint32Array 元素 == Bitmap.getPixel；gray: Uint8Array。
+   *   { points: [[x,y],...], path? }
+   *     -> 文件是 int32 小端序列；Int32Array[i] == Bitmap.getPixel(points[i][0], points[i][1])，越界点 0。
+   *
+   * path 省略 -> 宿主 scratch（getCacheDir()/node24-pixels/export-<pid>.bin，每次导出覆盖；
+   * 导出后必须立即同步 fs.readFileSync，读出的 Buffer 已复制、可长期持有）。
+   * path 显式 -> 必须是 getFilesDir()/getCacheDir() 下的绝对路径（Java 侧 canonical 校验）。
+   */
+  function imageExportPixelsSync(image, options) {
+    var frame = wrapImage(image);
+    options = normalizeImageOptions(options);
+    var points = options.points;
+    var request = { kind: 'image', action: 'pixelsToFile', id: frame._id };
+    var descriptor;
+    if (points != null) {
+      if (!Array.isArray(points) || points.length === 0) {
+        throw new TypeError('exportPixels 的 points 必须是非空的 [[x,y],...] 数组');
+      }
+      if (points.length > MAX_IMAGE_PIXEL_FILE_POINTS) {
+        throw apiRangeError('exportPixels 的 points 数量过多：' + points.length
+          + '（上限 ' + MAX_IMAGE_PIXEL_FILE_POINTS + '）');
+      }
+      if (options.region != null) {
+        throw new TypeError('exportPixels 的 region 与 points 只能二选一');
+      }
+      if (options.format != null && String(options.format) !== 'argb') {
+        throw new TypeError('exportPixels 的 points 只支持 argb（Int32Array）');
+      }
+      for (var i = 0; i < points.length; i++) {
+        var point = points[i];
+        if (!Array.isArray(point) || point.length !== 2
+          || !isIntegerValue(point[0]) || !isIntegerValue(point[1])) {
+          throw new TypeError('exportPixels 的 points[' + i + '] 必须是 [整数 x, 整数 y]');
+        }
+      }
+      request.points = points;
+    } else {
+      var region = normalizeImageRegion(options.region, frame);
+      if (!region) { region = [0, 0, frame._width, frame._height]; }
+      var format = options.format == null ? 'argb' : String(options.format);
+      if (format !== 'argb' && format !== 'gray') {
+        throw new TypeError('exportPixels 的 format 仅支持 argb/gray：' + format);
+      }
+      var fileBytes = region[2] * region[3] * (format === 'argb' ? 4 : 1);
+      if (fileBytes > MAX_IMAGE_PIXEL_FILE_BYTES) {
+        throw apiRangeError('exportPixels 区域过大：' + region[2] + 'x' + region[3] + '（'
+          + fileBytes + ' 字节，单次上限 ' + MAX_IMAGE_PIXEL_FILE_BYTES + ' 字节）');
+      }
+      request.region = region;
+      request.format = format;
+    }
+    if (options.path != null && String(options.path) !== '') {
+      var rawPath = String(options.path);
+      if (rawPath.charAt(0) !== '/') {
+        throw apiTypeError('exportPixels 的 path 必须是 getFilesDir()/getCacheDir() 下的绝对路径；'
+          + '省略 path 时使用宿主 scratch 文件');
+      }
+      request.path = rawPath;
+    }
+    var value = hostValue(request);
+    if (!value || typeof value !== 'object' || typeof value.path !== 'string' || value.path === '') {
+      throw hostError('pixelsToFile 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    if (value.format !== 'argb' && value.format !== 'gray') {
+      throw hostError('pixelsToFile 返回的 format 非法：' + String(value.format));
+    }
+    if (!isIntegerValue(value.bytes) || value.bytes <= 0) {
+      throw hostError('pixelsToFile 返回的 bytes 非法：' + String(value.bytes));
+    }
+    descriptor = {
+      path: value.path,
+      bytes: value.bytes,
+      format: value.format,
+      formatDetail: value.formatDetail == null ? null : value.formatDetail
+    };
+    if (points != null) {
+      if (!isIntegerValue(value.count) || value.count !== points.length
+        || descriptor.bytes !== points.length * 4) {
+        throw hostError('pixelsToFile points 返回不一致：count=' + value.count
+          + ' bytes=' + value.bytes + ' 期望 ' + points.length * 4);
+      }
+      descriptor.count = value.count;
+    } else {
+      if (!isIntegerValue(value.width) || value.width <= 0
+        || !isIntegerValue(value.height) || value.height <= 0) {
+        throw hostError('pixelsToFile 返回的尺寸非法：' + value.width + 'x' + value.height);
+      }
+      var expectedBytes = value.width * value.height * (value.format === 'argb' ? 4 : 1);
+      if (descriptor.bytes !== expectedBytes) {
+        throw hostError('pixelsToFile 返回的字节数与尺寸不符：bytes=' + value.bytes
+          + '，期望 ' + expectedBytes);
+      }
+      descriptor.width = value.width;
+      descriptor.height = value.height;
+      descriptor.count = value.width * value.height;
+    }
+    return descriptor;
+  }
+
+  /** 多结果模板匹配：返回 [{x,y,similarity,point:{x,y}}]，按相似度降序。 */
+  function imageMatchTemplateSync(image, template, options) {
+    var frame = wrapImage(image);
+    var target = wrapImage(template);
+    options = normalizeImageOptions(options);
+    var threshold = imageSimilarityThreshold(options.threshold, DEFAULT_IMAGE_SIMILARITY, 'threshold');
+    var weakThreshold = imageSimilarityThreshold(
+      options.weakThreshold, DEFAULT_IMAGE_WEAK_SIMILARITY, 'weakThreshold');
+    var level = imageMatchLevel(options.level);
+    var limit = options.limit == null ? 32 : Math.max(1, Math.min(4096, Math.round(Number(options.limit) || 32)));
+    var region = normalizeImageRegion(options.region, frame);
+    if (!region) { region = [0, 0, frame._width, frame._height]; }
+    if (target._width > region[2] || target._height > region[3]) {
+      throw apiRangeError('模板 ' + target._width + 'x' + target._height
+        + ' 大于搜索区域 ' + region[2] + 'x' + region[3]);
+    }
+    var value = hostValue({
+      kind: 'image',
+      action: 'matchTemplate',
+      id: frame._id,
+      templateId: target._id,
+      threshold: threshold,
+      weakThreshold: weakThreshold,
+      level: level,
+      limit: limit,
+      region: region
+    });
+    var matches = value && value.matches;
+    if (!Array.isArray(matches)) {
+      throw hostError('matchTemplate 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    return matches.map(function (match) {
+      return {
+        point: { x: match.x, y: match.y },
+        x: match.x,
+        y: match.y,
+        similarity: match.similarity
+      };
+    });
+  }
+
+  /** 有限数字校验：threshold 系列与 QuickJS/Rhino 一样是 double，不额外限制 0..255。 */
+  function imageFiniteNumber(value, name, fallback) {
+    if (value == null) { return fallback; }
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw apiTypeError(name + ' 必须是有限数字（收到 ' + String(value) + '）');
+    }
+    return value;
+  }
+
+  /**
+   * threshold 的 type 归一化：与宿主 images.threshold 一致。
+   * 基础类型 BINARY=0 / BINARY_INV=1 / TRUNC=2 / TOZERO=3 / TOZERO_INV=4，
+   * 可叠加 OTSU=8、TRIANGLE=16；字符串支持 "BINARY"、"BINARY|OTSU"、"THRESH_BINARY" 等写法。
+   */
+  function imageThresholdType(value) {
+    if (value == null) { return 0; }
+    var names = {
+      BINARY: 0, BINARY_INV: 1, TRUNC: 2, TOZERO: 3, TOZERO_INV: 4,
+      OTSU: 8, BINARY_OTSU: 8, BINARY_INV_OTSU: 9, TRIANGLE: 16
+    };
+    if (typeof value === 'string') {
+      var name = value.trim().toUpperCase().replace(/^THRESH_/, '').replace(/\s+/g, '');
+      if (Object.prototype.hasOwnProperty.call(names, name)) { return names[name]; }
+      var parts = name.split(/[|+]/);
+      if (parts.length === 2) {
+        var base = names[parts[0]];
+        var flag = parts[1] === 'OTSU' ? 8 : (parts[1] === 'TRIANGLE' ? 16 : undefined);
+        if (base !== undefined && base <= 4 && flag !== undefined) { return base | flag; }
+      }
+      throw apiRangeError('未知 threshold 类型：' + value
+        + '（可选 BINARY/BINARY_INV/TRUNC/TOZERO/TOZERO_INV/OTSU/BINARY_OTSU/BINARY_INV_OTSU/TRIANGLE）');
+    }
+    if (!isIntegerValue(value) || value < 0 || value > 28
+      || (value & 7) > 4 || ((value & ~7) & ~(8 | 16)) !== 0) {
+      throw apiRangeError('threshold type 必须是 0..28 的整数或类型名（低 3 位是 0..4 基础类型，'
+        + '可叠加 OTSU=8/TRIANGLE=16；收到 ' + String(value) + '）');
+    }
+    return value;
+  }
+
+  /** resize 插值归一化：0 NEAREST / 1 LINEAR / 2 CUBIC / 3 AREA / 4 LANCZOS4（默认 LINEAR）。 */
+  function imageInterpolation(value) {
+    if (value == null) { return 1; }
+    if (typeof value === 'number') {
+      if (!isIntegerValue(value) || value < 0 || value > 4) {
+        throw apiRangeError('interpolation 必须是 0..4 的整数（收到 ' + value + '）');
+      }
+      return value;
+    }
+    var name = String(value).toUpperCase().replace(/^INTER_/, '');
+    var modes = { NEAREST: 0, LINEAR: 1, CUBIC: 2, AREA: 3, LANCZOS4: 4 };
+    if (!Object.prototype.hasOwnProperty.call(modes, name)) {
+      throw apiRangeError('未知 resize 插值方式：' + value
+        + '（可选 NEAREST/LINEAR/CUBIC/AREA/LANCZOS4）');
+    }
+    return modes[name];
+  }
+
+  /** 尺寸归一化：支持 [width,height]、{width,height} 与 (width, height)；单值表示正方尺寸。 */
+  function imageDimensionPair(value, height, label) {
+    var width;
+    if (Array.isArray(value)) {
+      if (value.length !== 2) {
+        throw apiTypeError(label + ' 的尺寸必须是 [width,height]');
+      }
+      width = value[0];
+      height = value[1];
+    } else if (value && typeof value === 'object') {
+      width = value.width;
+      height = value.height;
+    } else {
+      width = value;
+    }
+    return {
+      width: requireInt(width, label + '.width', 1),
+      height: requireInt(height, label + '.height', 1)
+    };
+  }
+
+  /**
+   * 灰度化（宿主 images.grayscale）：返回新的 Image，原图句柄不受影响（两者都要 recycle）。
+   * 权重与 Rhino/QuickJS 宿主一致（OpenCV RGBA2GRAY，BT.601）。
+   */
+  function imageGrayscaleSync(image) {
+    var frame = wrapImage(image);
+    return wrapImage(imageHostCall('grayscale', { id: frame._id }));
+  }
+
+  /**
+   * 裁剪（宿主 images.clip）：兼容 images.clip(img, x, y, w, h) 与 image.clip(img, region)，
+   * region 支持 [x,y,w,h] / [x,y] / {x,y,width,height}，越界在 JS 侧先抛 RangeError。
+   */
+  function imageClipSync(image, x, y, width, height) {
+    var frame = wrapImage(image);
+    var region;
+    if (Array.isArray(x) || (x && typeof x === 'object')) {
+      region = normalizeImageRegion(x, frame);
+      if (!region) {
+        throw apiTypeError('clip 需要 region');
+      }
+    } else {
+      region = normalizeImageRegion([x, y, width, height], frame);
+    }
+    return wrapImage(imageHostCall('clip', { id: frame._id, region: region }));
+  }
+
+  /**
+   * 二值化（宿主 images.threshold）：threshold 默认 128、maxValue 默认 255、type 默认 BINARY；
+   * 返回新的 Image，原图句柄不受影响。
+   */
+  function imageThresholdSync(image, threshold, maxValue, type) {
+    var frame = wrapImage(image);
+    return wrapImage(imageHostCall('threshold', {
+      id: frame._id,
+      threshold: imageFiniteNumber(threshold, 'threshold', 128),
+      maxValue: imageFiniteNumber(maxValue, 'max', 255),
+      type: imageThresholdType(type)
+    }));
+  }
+
+  /**
+   * 缩放（宿主 images.resize）：兼容 images.resize(img, [w,h], interpolation) /
+   * images.resize(img, w, h, interpolation) / images.resize(img, n)（正方）。
+   * interpolation 默认 LINEAR，返回新的 Image。
+   */
+  function imageResizeSync(image, size, heightOrInterpolation, interpolation) {
+    var frame = wrapImage(image);
+    var height = heightOrInterpolation;
+    var mode = interpolation;
+    if (Array.isArray(size) || (size && typeof size === 'object')) {
+      mode = heightOrInterpolation;
+      height = undefined;
+    } else if (heightOrInterpolation === undefined || typeof heightOrInterpolation === 'string') {
+      // Pro/newSize 语义：单值 size 是正方尺寸；第二参是插值名时同样按正方处理。
+      mode = heightOrInterpolation;
+      height = size;
+    }
+    var dimensions = imageDimensionPair(size, height, 'resize');
+    return wrapImage(imageHostCall('resize', {
+      id: frame._id,
+      width: dimensions.width,
+      height: dimensions.height,
+      interpolation: imageInterpolation(mode)
+    }));
+  }
+
+  /**
+   * 帧预处理批量 action（task-5）：一次宿主调用完成 grayscale(+resize)+size，
+   * 返回 {gray: Image|null, resized: Image|null, size:{width,height}}。
+   * options 支持 resize:[w,h]（或 {width,height}）与 needGray（默认 true）。
+   * gray/resized 是新句柄，调用方负责 recycle；只有 size 需求时 needGray:false 可省一次灰度。
+   */
+  function imagePrepFrameSync(image, options) {
+    var frame = wrapImage(image);
+    options = normalizeImageOptions(options);
+    var request = {
+      kind: 'image',
+      action: 'prepFrame',
+      id: frame._id,
+      needGray: options.needGray === false ? false : true
+    };
+    if (options.resize != null) {
+      var dimensions = imageDimensionPair(options.resize, undefined, 'prepFrame.resize');
+      request.resize = [dimensions.width, dimensions.height];
+    }
+    var value = imageHostCall('prepFrame', request);
+    if (!value || typeof value !== 'object') {
+      throw hostError('prepFrame 返回格式非法：' + String(value));
+    }
+    var size = value.size;
+    if (!size || !isIntegerValue(size.width) || !isIntegerValue(size.height)
+      || size.width <= 0 || size.height <= 0) {
+      throw hostError('prepFrame 返回的 size 非法：' + JSON.stringify(size));
+    }
+    return {
+      gray: value.gray ? wrapImage(value.gray) : null,
+      resized: value.resized ? wrapImage(value.resized) : null,
+      size: { width: size.width, height: size.height }
+    };
+  }
+
+  /** 图片尺寸（宿主 images.sizeOf）：返回 {width,height}，不产生新句柄。 */
+  function imageSizeOfSync(image) {
+    var frame = wrapImage(image);
+    var value = imageHostCall('sizeOf', { id: frame._id });
+    if (!value || !isIntegerValue(value.width) || !isIntegerValue(value.height)
+      || value.width <= 0 || value.height <= 0) {
+      throw hostError('sizeOf 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    return { width: value.width, height: value.height };
+  }
+
+  /**
+   * 颜色计数（宿主 images.countColor）：返回区域内与 color 相近的像素个数。
+   * options 支持 threshold（0..255，默认 4）、similarity（0..1，换算成 255*(1-similarity)）
+   * 与 region；与宿主一样忽略 alpha、按 RGB 三通道最大差值比较。
+   */
+  function imageCountColorSync(image, color, options) {
+    var frame = wrapImage(image);
+    options = normalizeImageOptions(options);
+    var threshold;
+    if (options.similarity != null) {
+      var similarity = imageFiniteNumber(options.similarity, 'similarity', 0);
+      if (similarity < 0 || similarity > 1) {
+        throw apiRangeError('countColor 的 similarity 必须在 0..1 之间（收到 ' + similarity + '）');
+      }
+      threshold = Math.trunc(255 * (1 - similarity));
+    } else if (options.threshold != null) {
+      threshold = requireInt(options.threshold, 'threshold', 0, 255);
+    } else {
+      threshold = DEFAULT_COUNT_COLOR_THRESHOLD;
+    }
+    var request = {
+      kind: 'image',
+      action: 'countColor',
+      id: frame._id,
+      color: colorToInt(color),
+      threshold: threshold
+    };
+    var region = normalizeImageRegion(options.region, frame);
+    if (region) { request.region = region; }
+    var value = imageHostCall('countColor', request);
+    if (!isIntegerValue(value) || value < 0) {
+      throw hostError('countColor 返回值非法：' + String(value));
+    }
+    return value;
+  }
+
+  /**
+   * 多模板模板匹配：一次宿主调用、同一源图 Mat 内循环跑多个模板（与 matchTemplate 同算法）。
+   * 返回与 templates 同序的数组：results[i] = [{point:{x,y},x,y,similarity}, ...]。
+   */
+  function imageMatchTemplateMultiSync(image, templates, options) {
+    var frame = wrapImage(image);
+    if (!Array.isArray(templates) || templates.length === 0) {
+      throw apiTypeError('matchTemplateMulti 需要非空的模板数组');
+    }
+    if (templates.length > MAX_IMAGE_MULTI_TEMPLATES) {
+      throw apiRangeError('matchTemplateMulti 模板过多：' + templates.length
+        + '（上限 ' + MAX_IMAGE_MULTI_TEMPLATES + '）');
+    }
+    options = normalizeImageOptions(options);
+    var threshold = imageSimilarityThreshold(options.threshold, DEFAULT_IMAGE_SIMILARITY, 'threshold');
+    var weakThreshold = imageSimilarityThreshold(
+      options.weakThreshold, DEFAULT_IMAGE_WEAK_SIMILARITY, 'weakThreshold');
+    var level = imageMatchLevel(options.level);
+    var limit = options.limit == null
+      ? 32 : Math.max(1, Math.min(4096, Math.round(Number(options.limit) || 32)));
+    var region = normalizeImageRegion(options.region, frame);
+    if (!region) { region = [0, 0, frame._width, frame._height]; }
+    var ids = [];
+    for (var i = 0; i < templates.length; i++) {
+      var target = wrapImage(templates[i]);
+      if (target._width > region[2] || target._height > region[3]) {
+        throw apiRangeError('第 ' + i + ' 个模板 ' + target._width + 'x' + target._height
+          + ' 大于搜索区域 ' + region[2] + 'x' + region[3]);
+      }
+      ids.push(target._id);
+    }
+    var request = {
+      kind: 'image',
+      action: 'matchTemplateMulti',
+      id: frame._id,
+      templateIds: ids,
+      threshold: threshold,
+      weakThreshold: weakThreshold,
+      level: level,
+      limit: limit,
+      region: region
+    };
+    // 并行度（宿主默认 2..4 线程；threads:1 可串行做 A/B 对比）。
+    if (options.threads != null) {
+      request.threads = requireInt(options.threads, 'threads', 1, 4);
+    }
+    var value = hostValue(request);
+    var results = value && value.results;
+    if (!Array.isArray(results) || results.length !== ids.length) {
+      throw hostError('matchTemplateMulti 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    return results.map(function (list) {
+      if (!Array.isArray(list)) {
+        throw hostError('matchTemplateMulti 单个模板结果不是数组');
+      }
+      return list.map(function (match) {
+        return {
+          point: { x: match.x, y: match.y },
+          x: match.x,
+          y: match.y,
+          similarity: match.similarity
+        };
+      });
+    });
+  }
+
+  /** SIFT/matchSift 的坐标归一化。 */
+  function normalizeSiftPoint(value) {
+    if (!value) { return null; }
+    return {
+      x: imageFiniteNumber(value.x, 'point.x', 0),
+      y: imageFiniteNumber(value.y, 'point.y', 0)
+    };
+  }
+
+  /** matchSift 的输入归一化：Image/descriptor 直接借用，字符串路径读入并由本方法回收。 */
+  function imageSiftInput(value, label) {
+    if (typeof value === 'string') {
+      return { image: imageRead(value), owned: true };
+    }
+    if (value == null) {
+      throw apiTypeError(label + ' 不能为空：请传 Image 或本地图片路径');
+    }
+    return { image: wrapImage(value), owned: false };
+  }
+
+  /**
+   * SIFT 便捷入口（无新增 Java action）：在兼容后端上组合
+   * Image.prototype.detectAndComputeFeatures + image.matchFeatures，
+   * 返回 {matched, count, corners, center, topLeft/topRight/bottomRight/bottomLeft, ...}。
+   *
+   * options 支持：scale（场景缩放）、templateScale（模板缩放）、region（场景搜索区域）、
+   * ratio（=threshold/thredshold，Lowe 比率，默认 0.7）、grayscale、method、drawMatches。
+   * scene/template 可以是 Image、descriptor 或本地图片路径；路径输入由本方法负责回收。
+   */
+  function imageMatchSiftSync(scene, template, options) {
+    options = normalizeImageOptions(options);
+    var ratioRaw = options.ratio !== undefined ? options.ratio
+      : (options.thredshold !== undefined ? options.thredshold : options.threshold);
+    var ratio = imageFiniteNumber(ratioRaw, 'ratio/threshold', 0.7);
+    if (ratio <= 0 || ratio >= 1) {
+      throw apiRangeError('matchSift 的 ratio/threshold 必须在 0..1 之间（收到 ' + ratio + '）');
+    }
+    var sceneInput = imageSiftInput(scene, 'scene');
+    var templateInput = imageSiftInput(template, 'template');
+    var sceneFeatures = null;
+    var templateFeatures = null;
+    try {
+      sceneFeatures = imageDetectFeaturesSync(sceneInput.image, {
+        scale: options.scale,
+        grayscale: options.grayscale,
+        method: options.method,
+        region: options.region
+      });
+      templateFeatures = imageDetectFeaturesSync(templateInput.image, {
+        scale: options.templateScale,
+        grayscale: options.grayscale,
+        method: options.method
+      });
+      var matched = imageMatchFeaturesSync(sceneFeatures, templateFeatures, {
+        threshold: ratio,
+        drawMatches: options.drawMatches
+      });
+      var sceneWidth = sceneFeatures.width;
+      var sceneHeight = sceneFeatures.height;
+      var objectWidth = templateFeatures.width;
+      var objectHeight = templateFeatures.height;
+      if (!matched) {
+        return {
+          matched: false,
+          count: 0,
+          matchCount: 0,
+          corners: null,
+          center: null,
+          centerX: null,
+          centerY: null,
+          sceneWidth: sceneWidth,
+          sceneHeight: sceneHeight,
+          objectWidth: objectWidth,
+          objectHeight: objectHeight
+        };
+      }
+      var corners = [
+        normalizeSiftPoint(matched.topLeft),
+        normalizeSiftPoint(matched.topRight),
+        normalizeSiftPoint(matched.bottomRight),
+        normalizeSiftPoint(matched.bottomLeft)
+      ];
+      var center = normalizeSiftPoint(matched.center);
+      var count = isIntegerValue(matched.matches) ? matched.matches : 0;
+      return {
+        matched: true,
+        count: count,
+        matchCount: count,
+        corners: corners,
+        center: center,
+        centerX: center ? center.x : null,
+        centerY: center ? center.y : null,
+        topLeft: corners[0],
+        topRight: corners[1],
+        bottomRight: corners[2],
+        bottomLeft: corners[3],
+        sceneWidth: isIntegerValue(matched.sceneWidth) ? matched.sceneWidth : sceneWidth,
+        sceneHeight: isIntegerValue(matched.sceneHeight) ? matched.sceneHeight : sceneHeight,
+        objectWidth: isIntegerValue(matched.objectWidth) ? matched.objectWidth : objectWidth,
+        objectHeight: isIntegerValue(matched.objectHeight) ? matched.objectHeight : objectHeight
+      };
+    } finally {
+      if (templateFeatures) {
+        try { templateFeatures.recycle(); } catch (ignored) { }
+      }
+      if (sceneFeatures) {
+        try { sceneFeatures.recycle(); } catch (ignored) { }
+      }
+      if (templateInput.owned) {
+        try { templateInput.image.recycle(); } catch (ignored) { }
+      }
+      if (sceneInput.owned) {
+        try { sceneInput.image.recycle(); } catch (ignored) { }
+      }
+    }
   }
 
   // task-172：特征对象（detectAndComputeFeatures 返回值）与 matchFeatures。
@@ -2575,6 +3267,34 @@
     findMultiColorsSync: imageFindMultiColorsSync,
     findImage: promiseCall(imageFindImageSync),
     findImageSync: imageFindImageSync,
+    matchTemplate: promiseCall(imageMatchTemplateSync),
+    matchTemplateSync: imageMatchTemplateSync,
+    matchTemplateMulti: promiseCall(imageMatchTemplateMultiSync),
+    matchTemplateMultiSync: imageMatchTemplateMultiSync,
+    getPixels: promiseCall(imageGetPixelsSync),
+    getPixelsSync: imageGetPixelsSync,
+    samplePixels: promiseCall(imageSamplePixelsSync),
+    samplePixelsSync: imageSamplePixelsSync,
+    // 文件式像素导出（task-2）：返回描述，脚本自己 fs.readFileSync 构造 TypedArray。
+    exportPixels: promiseCall(imageExportPixelsSync),
+    exportPixelsSync: imageExportPixelsSync,
+    // 图像处理（与宿主 images.* 同语义）：异步版 + 同步版；Image.prototype 上也有同名同步方法。
+    grayscale: promiseCall(imageGrayscaleSync),
+    grayscaleSync: imageGrayscaleSync,
+    clip: promiseCall(imageClipSync),
+    clipSync: imageClipSync,
+    threshold: promiseCall(imageThresholdSync),
+    thresholdSync: imageThresholdSync,
+    resize: promiseCall(imageResizeSync),
+    resizeSync: imageResizeSync,
+    sizeOf: imageSizeOfSync,
+    sizeOfSync: imageSizeOfSync,
+    prepFrame: promiseCall(imagePrepFrameSync),
+    prepFrameSync: imagePrepFrameSync,
+    countColor: promiseCall(imageCountColorSync),
+    countColorSync: imageCountColorSync,
+    matchSift: promiseCall(imageMatchSiftSync),
+    matchSiftSync: imageMatchSiftSync,
     matchFeatures: imageMatchFeatures,
     matchFeaturesSync: imageMatchFeaturesSync,
     detectsColor: imageDetectsColor,

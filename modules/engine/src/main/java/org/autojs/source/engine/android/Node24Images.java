@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: MIT
 package org.autojs.source.engine.android;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.os.Build;
 import android.system.Os;
+import android.util.Base64;
 import android.util.Log;
 
+import com.stardust.app.GlobalAppContext;
 import com.stardust.autojs.core.image.FeatureMatcher;
 import com.stardust.autojs.core.image.ImageFeatures;
 import com.stardust.autojs.core.image.TemplateMatching;
 import com.stardust.autojs.core.opencv.Mat;
 import com.stardust.autojs.core.opencv.OpenCVHelper;
+import com.stardust.util.ResourceMonitor;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -19,16 +24,27 @@ import org.json.JSONObject;
 import org.opencv.android.Utils;
 import org.opencv.core.Point;
 import org.opencv.core.Rect;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * {@code kind:"image"} 的 Java 宿主实现（协议见 docs/guides/Node24基础自动化API.md）。
@@ -53,7 +69,58 @@ public final class Node24Images implements AutoCloseable {
     static final long DEFAULT_MAX_TOTAL_PIXELS = 64_000_000L;
     private static final long MAX_FILE_BYTES = 256L * 1024 * 1024;
     private static final int MAX_PATH_CHARS = 4096;
+    /**
+     * getPixels 单次返回的原始字节上限。
+     *
+     * <p>宿主桥单次 payload 有安全线：Node 请求经 Binder 传输时 Node24Client 明确限制
+     * 196608 字符，响应虽走 JNI 字符串但仍按同一量级约束；Base64 后约为原始字节的 1.37 倍。
+     * 这里把原始像素限制在 256KB（base64 后约 342KB 字符）。更大的区域请改用文件通道
+     * （node-smem 负责），或先在 JS 侧 resize/clip 分块读取。
+     */
+    private static final int MAX_PIXEL_FETCH_BYTES = 256 * 1024;
     private static final int MAX_OFFSET_COLORS = 1024;
+    /** matchTemplateMulti 单次最多模板数（限制一次宿主调用的 OpenCV 工作量）。 */
+    private static final int MAX_MULTI_TEMPLATES = 64;
+
+    // ------------------------------------------------------------------
+    // matchTemplateMulti 性能缓存（task-5）
+    //
+    // 真机拆解（K40）：multi_11 = 8.3ms，其中 11 次模板 Bitmap→Mat 重复转换、每次
+    // fastTemplateMatching 内部重复建源图金字塔是固定开销。模板 Bitmap 注册后不可变，
+    // 可以安全地按图片 id 缓存 Mat；源图 Mat 也按 id 做有界 LRU（Bitmap 回收时失效）。
+    // ------------------------------------------------------------------
+    /** 模板 Mat 缓存条数上限（11 个棋盘模板 + 其他小图，32 足够且只占很小内存）。 */
+    private static final int MAX_CACHED_TEMPLATE_MATS = 32;
+    /** 源图 Mat 缓存条数上限（按访问顺序 LRU）。 */
+    private static final int MAX_CACHED_SOURCE_MATS = 4;
+    /** 源图 Mat 缓存总字节上限（全帧 ARGB Mat ≈ 10MB，最多留 3 张）。 */
+    private static final long MAX_CACHED_SOURCE_MAT_BYTES = 32L * 1024 * 1024;
+    /** 超过该像素数的源图不做缓存（避免单张 4K/超大图的 Mat 长期占内存）。 */
+    private static final long MAX_CACHED_SOURCE_PIXELS = 4_000_000L;
+    /** 多模板并行 worker 上限；requests 可用 {threads:1..4} 覆盖（1=串行）。 */
+    private static final int MATCH_MAX_THREADS = 4;
+    /**
+     * 默认并行线程数：K40（8 核）取 3；可用请求字段 threads=1 关闭并行做 A/B。
+     * 模板匹配是纯 CPU 的独立任务，并行不改变结果顺序。
+     */
+    private static final int DEFAULT_MATCH_THREADS = Math.max(2,
+            Math.min(3, Runtime.getRuntime().availableProcessors() / 2));
+
+    // ------------------------------------------------------------------
+    // 文件式像素交换（pixelsToFile，task-2 / node-smem）
+    // ------------------------------------------------------------------
+    /** pixelsToFile scratch 子目录（位于 getCacheDir() 下，按进程 pid 复用同一个文件）。 */
+    private static final String PIXEL_SCRATCH_DIR = "node24-pixels";
+    /** pixelsToFile region 形态单次原始字节上限（= 单图 16M 像素 × 4B）。 */
+    private static final long MAX_PIXEL_FILE_BYTES = 64L * 1024 * 1024;
+    /** pixelsToFile 分块写的块预算：每块约 256KB，避免为整帧分配 4MB+ 临时数组。 */
+    private static final int PIXEL_FILE_BLOCK_BYTES = 256 * 1024;
+    /** pixelsToFile points 形态单次点数上限（int32 4MB）。 */
+    private static final int MAX_PIXEL_FILE_POINTS = 1024 * 1024;
+    /** points 形态「一次 getPixels 包围盒 + 索引」允许的包围盒字节上限。 */
+    private static final long MAX_POINTS_BBOX_BYTES = 32L * 1024 * 1024;
+    /** 本实例自动创建的 scratch 文件（close() 时 best-effort 删除；显式 path 不动）。 */
+    private File mAutoPixelFile;
 
     private final int mMaxLiveImages;
     private final long mMaxImagePixels;
@@ -65,6 +132,13 @@ public final class Node24Images implements AutoCloseable {
     private int mNextFeatureId = 1;
     private long mLivePixels;
     private boolean mClosed;
+    /** 模板 Mat 缓存：id -> Mat（Bitmap 注册后不可变；recycle/close 时释放）。 */
+    private final Map<Integer, CachedMat> mTemplateMats = new LinkedHashMap<>(16, 0.75f, true);
+    /** 源图 Mat 缓存：id -> Mat，按访问顺序 LRU，受字节/条数上限约束。 */
+    private final Map<Integer, CachedMat> mSourceMats = new LinkedHashMap<>(8, 0.75f, true);
+    private long mCachedSourceMatBytes;
+    /** 多模板匹配 worker 池（懒创建；daemon 线程，空闲 30s 自动回收）。 */
+    private ThreadPoolExecutor mMatchExecutor;
     /** 进程内 OpenCV 只初始化一次；失败后仍允许下次重试。 */
     private static volatile boolean sOpenCvReady;
 
@@ -85,6 +159,25 @@ public final class Node24Images implements AutoCloseable {
 
     /** 返回宿主统一 envelope：{@code {ok:true,value:...}} / {@code {ok:false,error:...}}。 */
     public synchronized JSONObject handle(JSONObject request) {
+        // 调试包里 ResourceMonitor 默认启用：每次 new Mat 都会 fillInStackTrace + 记 SparseArray，
+        // 是 Node24 图像桥（Java 侧大量短命 Mat）的主要固定开销；且 SparseArray 非线程安全，
+        // 并行模板匹配会竞态。:node24 进程一次只跑一个 Node job，因此在单次 action 期间暂停检测，
+        // 结束后恢复原状态（release 包 BuildConfig.DEBUG=false，本来就不启用）。
+        boolean restoreResourceMonitor = ResourceMonitor.isEnabled();
+        if (restoreResourceMonitor) {
+            ResourceMonitor.setEnabled(false);
+        }
+        try {
+            return handleAction(request);
+        } finally {
+            if (restoreResourceMonitor) {
+                ResourceMonitor.setEnabled(true);
+            }
+        }
+    }
+
+    /** handle 的实际 dispatch（调用方已持有本实例锁并暂停了调试期资源监控）。 */
+    private JSONObject handleAction(JSONObject request) {
         try {
             String action = request.optString("action", "");
             switch (action) {
@@ -101,6 +194,30 @@ public final class Node24Images implements AutoCloseable {
                     return ok(findColor(request, true));
                 case "findImage":
                     return ok(findImage(request));
+                case "matchTemplate":
+                    return ok(matchTemplate(request));
+                case "matchTemplateMulti":
+                    return ok(matchTemplateMulti(request));
+                case "prepFrame":
+                    return ok(prepFrame(request));
+                case "grayscale":
+                    return ok(grayscale(request));
+                case "clip":
+                    return ok(clip(request));
+                case "threshold":
+                    return ok(threshold(request));
+                case "resize":
+                    return ok(resize(request));
+                case "sizeOf":
+                    return ok(sizeOf(request));
+                case "countColor":
+                    return ok(countColor(request));
+                case "getPixels":
+                    return ok(getPixels(request));
+                case "samplePixels":
+                    return ok(samplePixels(request));
+                case "pixelsToFile":
+                    return ok(pixelsToFile(request));
                 case "detectsColor":
                     return ok(detectsColor(request, false));
                 case "detectsMultiColors":
@@ -118,8 +235,10 @@ public final class Node24Images implements AutoCloseable {
                 default:
                     return error("image 不支持的操作：" + action
                             + "（支持 read/write/pixel/findColor/findMultiColors/"
-                            + "findImage/detectsColor/detectsMultiColors/recycle/detectAndComputeFeatures/"
-                            + "matchFeatures/recycleFeatures）");
+                            + "findImage/matchTemplate/matchTemplateMulti/prepFrame/"
+                            + "grayscale/clip/threshold/resize/sizeOf/countColor/"
+                            + "getPixels/samplePixels/pixelsToFile/detectsColor/detectsMultiColors/recycle/"
+                            + "detectAndComputeFeatures/matchFeatures/recycleFeatures）");
             }
         } catch (Throwable failure) {
             Log.w(TAG, "image action failed: " + request, failure);
@@ -127,7 +246,6 @@ public final class Node24Images implements AutoCloseable {
         }
     }
 
-    /** 从文件解码并登记一个句柄；失败时不留下资源。 */
     public synchronized JSONObject readFile(String path) throws Exception {
         return read(path);
     }
@@ -378,6 +496,669 @@ public final class Node24Images implements AutoCloseable {
     }
 
     /**
+     * 多结果模板匹配：与 Rhino/QuickJS 的 images.matchTemplate 同一算法
+     * （TM_CCOEFF_NORMED + 金字塔快速匹配），返回 [{x,y,similarity}]。
+     */
+    private JSONObject matchTemplate(JSONObject request) throws Exception {
+        ensureOpen();
+        int sourceId = requireId(request);
+        int templateId = requireInt(request, "templateId");
+        Bitmap source = requireBitmap(sourceId);
+        Bitmap template = requireBitmap(templateId);
+        double threshold = parseSimilarity(request, "threshold", 0.9d);
+        double weakThreshold = parseSimilarity(request, "weakThreshold", 0.6d);
+        int level = parseMatchLevel(request);
+        int limit = Math.max(1, Math.min(4096, request.optInt("limit", 32)));
+        Region region = parseRegion(request.opt("region"), source.getWidth(), source.getHeight());
+        if (template.getWidth() > region.width || template.getHeight() > region.height) {
+            throw new IllegalArgumentException("Template " + template.getWidth() + "x" + template.getHeight()
+                    + " is larger than source/search region " + region.width + "x" + region.height);
+        }
+        ensureOpenCv();
+        Mat sourceMat = new Mat();
+        Mat templateMat = new Mat();
+        Mat regionMat = null;
+        try {
+            Utils.bitmapToMat(source, sourceMat);
+            Utils.bitmapToMat(template, templateMat);
+            Mat search = sourceMat;
+            if (region.x != 0 || region.y != 0 || region.width != source.getWidth()
+                    || region.height != source.getHeight()) {
+                regionMat = new Mat(sourceMat, new Rect(region.x, region.y, region.width, region.height));
+                search = regionMat;
+            }
+            List<TemplateMatching.Match> matches = TemplateMatching.fastTemplateMatching(
+                    search, templateMat, TemplateMatching.MATCHING_METHOD_DEFAULT,
+                    (float) weakThreshold, (float) threshold, level, limit, false);
+            JSONArray array = new JSONArray();
+            for (TemplateMatching.Match match : matches) {
+                array.put(new JSONObject()
+                        .put("x", region.x + (int) Math.round(match.point.x))
+                        .put("y", region.y + (int) Math.round(match.point.y))
+                        .put("similarity", match.similarity));
+            }
+            return new JSONObject().put("matches", array);
+        } catch (IllegalArgumentException error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new IllegalStateException("模板匹配失败：" + describe(error), error);
+        } finally {
+            if (regionMat != null) {
+                OpenCVHelper.release(regionMat);
+            }
+            OpenCVHelper.release(templateMat);
+            OpenCVHelper.release(sourceMat);
+        }
+    }
+
+    /**
+     * 多模板模板匹配：一次宿主调用用同一个源图 Mat 依次跑多个模板
+     * （与 {@link #matchTemplate(JSONObject)} 同一算法/结果语义），
+     * 返回 {@code {results:[[{x,y,similarity}...],...]}}，results 与 templateIds 同序。
+     *
+     * <p>task-5 真机拆解（K40）：multi_11 ≈ 8.3ms。固定开销来自三处：
+     * 1) 每个模板重复 Bitmap→Mat 转换；2) 每次 fastTemplateMatching 内部重复建源图金字塔；
+     * 3) 模板匹配是纯 CPU 独立任务，逐模板串行浪费多核（单次 level0 匹配实测 ~1.6ms）。
+     * 因此这里：模板 Mat 按 id 缓存（Bitmap 回收即失效）、源图 Mat 按 id 有界 LRU、
+     * 模板按线程分摊并行执行；结果仍按 templateIds 原顺序组装，匹配语义不变。
+     *
+     * <p>请求可选 {@code threads:1..4}（1=串行）控制并行度；模板/句柄/阈值非法仍直接抛错。
+     */
+    private JSONObject matchTemplateMulti(JSONObject request) throws Exception {
+        ensureOpen();
+        int sourceId = requireId(request);
+        JSONArray templateIds = request.optJSONArray("templateIds");
+        if (templateIds == null || templateIds.length() == 0) {
+            throw new IllegalArgumentException("matchTemplateMulti 缺少非空的 templateIds");
+        }
+        int count = templateIds.length();
+        if (count > MAX_MULTI_TEMPLATES) {
+            throw new IllegalArgumentException("matchTemplateMulti 模板过多：" + count
+                    + "（上限 " + MAX_MULTI_TEMPLATES + "）");
+        }
+        Bitmap source = requireBitmap(sourceId);
+        // 先解析全部模板句柄：任一模板非法时在碰 OpenCV 前失败。
+        Bitmap[] templates = new Bitmap[count];
+        int[] templateIdValues = new int[count];
+        for (int i = 0; i < count; i++) {
+            Object raw = templateIds.opt(i);
+            if (!(raw instanceof Number)) {
+                throw new IllegalArgumentException("templateIds[" + i + "] 必须是图片句柄 id");
+            }
+            templateIdValues[i] = ((Number) raw).intValue();
+            templates[i] = requireBitmap(templateIdValues[i]);
+        }
+        double threshold = parseSimilarity(request, "threshold", 0.9d);
+        double weakThreshold = parseSimilarity(request, "weakThreshold", 0.6d);
+        int level = parseMatchLevel(request);
+        int limit = Math.max(1, Math.min(4096, request.optInt("limit", 32)));
+        Region region = parseRegion(request.opt("region"), source.getWidth(), source.getHeight());
+        for (int i = 0; i < count; i++) {
+            if (templates[i].getWidth() > region.width
+                    || templates[i].getHeight() > region.height) {
+                throw new IllegalArgumentException("templateIds[" + i + "] 模板 "
+                        + templates[i].getWidth() + "x" + templates[i].getHeight()
+                        + " is larger than source/search region "
+                        + region.width + "x" + region.height);
+            }
+        }
+        ensureOpenCv();
+        List<MatLease> temporaryMats = new ArrayList<>();
+        Mat regionMat = null;
+        try {
+            MatLease sourceLease = acquireSourceMat(sourceId, source);
+            if (!sourceLease.cached) {
+                temporaryMats.add(sourceLease);
+            }
+            Mat search = sourceLease.mat;
+            if (region.x != 0 || region.y != 0 || region.width != source.getWidth()
+                    || region.height != source.getHeight()) {
+                regionMat = new Mat(search, new Rect(region.x, region.y,
+                        region.width, region.height));
+                search = regionMat;
+            }
+            Mat[] templateMats = new Mat[count];
+            for (int i = 0; i < count; i++) {
+                MatLease lease = acquireTemplateMat(templateIdValues[i], templates[i]);
+                templateMats[i] = lease.mat;
+                if (!lease.cached) {
+                    temporaryMats.add(lease);
+                }
+            }
+            JSONArray results = matchTemplatesInParallel(search, region.x, region.y,
+                    templateMats, (float) weakThreshold, (float) threshold, level, limit,
+                    parseMatchThreads(request, count));
+            return new JSONObject().put("results", results);
+        } catch (IllegalArgumentException error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new IllegalStateException("多模板匹配失败：" + describe(error), error);
+        } finally {
+            if (regionMat != null) {
+                OpenCVHelper.release(regionMat);
+            }
+            for (MatLease lease : temporaryMats) {
+                OpenCVHelper.release(lease.mat);
+            }
+        }
+    }
+
+    /** 模板/源图 Mat 的租约：cached=true 时 Mat 归缓存所有，调用方不要 release。 */
+    private static final class MatLease {
+        final Mat mat;
+        final boolean cached;
+
+        MatLease(Mat mat, boolean cached) {
+            this.mat = mat;
+            this.cached = cached;
+        }
+    }
+
+    /** 缓存的 Mat 及其字节数（源图缓存按字节做 LRU 预算）。 */
+    private static final class CachedMat {
+        final Mat mat;
+        final long bytes;
+
+        CachedMat(Mat mat, long bytes) {
+            this.mat = mat;
+            this.bytes = bytes;
+        }
+    }
+
+    /**
+     * 取模板 Mat：模板 Bitmap 注册后不可变，按 id 缓存可省掉每次调用 N 次 bitmapToMat
+     * （真机约 0.07ms/模板）。缓存满时释放最久未用的模板 Mat（访问顺序 LRU）。
+     */
+    private MatLease acquireTemplateMat(int id, Bitmap bitmap) {
+        CachedMat cached = mTemplateMats.get(id);
+        if (cached != null) {
+            return new MatLease(cached.mat, true);
+        }
+        Mat mat = new Mat();
+        try {
+            Utils.bitmapToMat(bitmap, mat);
+        } catch (Throwable error) {
+            OpenCVHelper.release(mat);
+            throw error;
+        }
+        if (mTemplateMats.size() >= MAX_CACHED_TEMPLATE_MATS) {
+            Iterator<Map.Entry<Integer, CachedMat>> iterator = mTemplateMats.entrySet().iterator();
+            if (iterator.hasNext()) {
+                Mat evicted = iterator.next().getValue().mat;
+                iterator.remove();
+                OpenCVHelper.release(evicted);
+            }
+        }
+        mTemplateMats.put(id, new CachedMat(mat, 0L));
+        return new MatLease(mat, true);
+    }
+
+    /**
+     * 取源图 Mat：按 id 做有界 LRU。真机整帧 bitmapToMat 约 5ms，重复对同一帧
+     * （region 搜索 / 多个 action 复用）可以完全省掉；超过 4M 像素的大图不缓存。
+     */
+    private MatLease acquireSourceMat(int id, Bitmap bitmap) {
+        CachedMat cached = mSourceMats.get(id);
+        if (cached != null) {
+            return new MatLease(cached.mat, true);
+        }
+        long pixels = (long) bitmap.getWidth() * (long) bitmap.getHeight();
+        Mat mat = new Mat();
+        try {
+            Utils.bitmapToMat(bitmap, mat);
+        } catch (Throwable error) {
+            OpenCVHelper.release(mat);
+            throw error;
+        }
+        if (pixels > MAX_CACHED_SOURCE_PIXELS) {
+            return new MatLease(mat, false);
+        }
+        long bytes = pixels * 4L;
+        mSourceMats.put(id, new CachedMat(mat, bytes));
+        mCachedSourceMatBytes += bytes;
+        Iterator<Map.Entry<Integer, CachedMat>> iterator = mSourceMats.entrySet().iterator();
+        while ((mSourceMats.size() > MAX_CACHED_SOURCE_MATS
+                || mCachedSourceMatBytes > MAX_CACHED_SOURCE_MAT_BYTES) && iterator.hasNext()) {
+            CachedMat evicted = iterator.next().getValue();
+            iterator.remove();
+            mCachedSourceMatBytes = Math.max(0L, mCachedSourceMatBytes - evicted.bytes);
+            OpenCVHelper.release(evicted.mat);
+        }
+        return new MatLease(mat, true);
+    }
+
+    /** 释放某个图片句柄关联的缓存 Mat（Bitmap 被回收/失效时调用）。 */
+    private void invalidateCachedMats(int id) {
+        CachedMat source = mSourceMats.remove(id);
+        if (source != null) {
+            mCachedSourceMatBytes = Math.max(0L, mCachedSourceMatBytes - source.bytes);
+            OpenCVHelper.release(source.mat);
+        }
+        CachedMat template = mTemplateMats.remove(id);
+        if (template != null) {
+            OpenCVHelper.release(template.mat);
+        }
+    }
+
+    /** 释放全部缓存 Mat（close 用）。 */
+    private void releaseCachedMats() {
+        for (CachedMat cached : mSourceMats.values()) {
+            OpenCVHelper.release(cached.mat);
+        }
+        mSourceMats.clear();
+        mCachedSourceMatBytes = 0L;
+        for (CachedMat cached : mTemplateMats.values()) {
+            OpenCVHelper.release(cached.mat);
+        }
+        mTemplateMats.clear();
+    }
+
+    /** 请求级并行度：默认 DEFAULT_MATCH_THREADS；threads=1 串行（A/B 用），上限 4。 */
+    static int parseMatchThreads(JSONObject request, int count) {
+        int threads = request.has("threads")
+                ? request.optInt("threads", DEFAULT_MATCH_THREADS) : DEFAULT_MATCH_THREADS;
+        threads = Math.max(1, Math.min(MATCH_MAX_THREADS, threads));
+        return Math.max(1, Math.min(threads, count));
+    }
+
+    /** 懒创建的多模板匹配 worker 池；daemon 线程、空闲 30s 回收，close() 时 shutdownNow。 */
+    private synchronized ThreadPoolExecutor matchExecutor() {
+        if (mMatchExecutor == null) {
+            int size = Math.max(2, Math.min(MATCH_MAX_THREADS, DEFAULT_MATCH_THREADS));
+            mMatchExecutor = new ThreadPoolExecutor(size, size, 30L, TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<Runnable>(), runnable -> {
+                        Thread thread = new Thread(runnable, "node24-match");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+            // 空闲线程 30s 后回收，避免 UI 保活期间常驻。
+            mMatchExecutor.allowCoreThreadTimeOut(true);
+        }
+        return mMatchExecutor;
+    }
+
+    /**
+     * 按模板并行执行 fastTemplateMatching：worker t 处理下标 t, t+threads, t+2*threads...
+     * （交叉分配让两个“重模板”尽量落在不同线程），结果按下标写回，顺序与 templateIds 一致。
+     * 任一模板失败时停止其余任务并把原始异常抛给调用方（与串行语义相同）。
+     */
+    private JSONArray matchTemplatesInParallel(final Mat search, final int offsetX, final int offsetY,
+            final Mat[] templateMats, final float weakThreshold, final float strictThreshold,
+            final int level, final int limit, final int threads) throws Exception {
+        final JSONArray[] slots = new JSONArray[templateMats.length];
+        if (threads <= 1 || templateMats.length <= 3) {
+            for (int i = 0; i < templateMats.length; i++) {
+                slots[i] = matchOneTemplate(search, offsetX, offsetY, templateMats[i],
+                        weakThreshold, strictThreshold, level, limit);
+            }
+        } else {
+            final AtomicReference<Throwable> failure = new AtomicReference<>();
+            List<Future<?>> futures = new ArrayList<>(threads);
+            final ThreadPoolExecutor executor = matchExecutor();
+            for (int t = 0; t < threads; t++) {
+                final int offset = t;
+                futures.add(executor.submit(() -> {
+                    try {
+                        for (int i = offset; i < templateMats.length && failure.get() == null;
+                             i += threads) {
+                            slots[i] = matchOneTemplate(search, offsetX, offsetY, templateMats[i],
+                                    weakThreshold, strictThreshold, level, limit);
+                        }
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                    }
+                }));
+            }
+            for (Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("多模板匹配被中断", interrupted);
+                } catch (ExecutionException wrapped) {
+                    if (failure.get() == null) {
+                        failure.set(wrapped.getCause());
+                    }
+                }
+            }
+            Throwable error = failure.get();
+            if (error != null) {
+                if (error instanceof IllegalArgumentException) {
+                    throw (IllegalArgumentException) error;
+                }
+                if (error instanceof IllegalStateException) {
+                    throw (IllegalStateException) error;
+                }
+                throw new IllegalStateException("多模板匹配失败：" + describe(error), error);
+            }
+        }
+        JSONArray results = new JSONArray();
+        for (JSONArray slot : slots) {
+            results.put(slot == null ? new JSONArray() : slot);
+        }
+        return results;
+    }
+
+    /** 单个模板匹配 + 结果 JSON（只读 search/templateMat，可多线程并发调用）。 */
+    private static JSONArray matchOneTemplate(Mat search, int offsetX, int offsetY, Mat templateMat,
+            float weakThreshold, float strictThreshold, int level, int limit) throws JSONException {
+        List<TemplateMatching.Match> matches = TemplateMatching.fastTemplateMatching(
+                search, templateMat, TemplateMatching.MATCHING_METHOD_DEFAULT,
+                weakThreshold, strictThreshold, level, limit, false);
+        JSONArray array = new JSONArray();
+        for (TemplateMatching.Match match : matches) {
+            array.put(new JSONObject()
+                    .put("x", offsetX + (int) Math.round(match.point.x))
+                    .put("y", offsetY + (int) Math.round(match.point.y))
+                    .put("similarity", match.similarity));
+        }
+        return array;
+    }
+
+    /**
+     * 灰度化（宿主 {@code images.grayscale}）：RGBA→GRAY→RGBA，返回同尺寸新句柄，原句柄不受影响。
+     * 权重用 OpenCV {@code COLOR_RGBA2GRAY}（BT.601，0.299R+0.587G+0.114B），与 Rhino/QuickJS
+     * 引擎一致；不能用 BGR 权重（会压暗浅木色棋子/亮面，破坏亮度门）。
+     */
+    private JSONObject grayscale(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap source = requireBitmap(requireId(request));
+        checkRegisterBudget(source.getWidth(), source.getHeight());
+        ensureOpenCv();
+        Mat rgba = new Mat();
+        Mat gray = new Mat();
+        try {
+            Utils.bitmapToMat(source, rgba);
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+            // OpenCV android 的 Utils.matToBitmap 对 CV_8UC1 直接 GRAY2RGBA 写进 Bitmap
+            // （modules/java/generator/src/cpp/utils.cpp），省掉一次整帧 RGBA Mat 分配 + 转换 + 拷贝。
+            return register(matToBitmap(gray));
+        } finally {
+            OpenCVHelper.release(gray);
+            OpenCVHelper.release(rgba);
+        }
+    }
+
+    /**
+     * 裁剪（宿主 {@code images.clip(img, x, y, w, h)}）：按 region 复制一块新图。
+     *
+     * <p>这里用 Canvas 复制而不是 {@code Bitmap.createBitmap(source, x, y, w, h)}：后者在
+     * 整图区域会直接返回原 Bitmap（同一对象），两个句柄共享生命周期，recycle 任一个都会让
+     * 另一个失效。region 越界仍由 {@link #parseRegion} 拒绝。
+     */
+    private JSONObject clip(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap source = requireBitmap(requireId(request));
+        Region region = parseRegion(request.opt("region"), source.getWidth(), source.getHeight());
+        checkRegisterBudget(region.width, region.height);
+        Bitmap clipped = Bitmap.createBitmap(region.width, region.height, Bitmap.Config.ARGB_8888);
+        try {
+            Canvas canvas = new Canvas(clipped);
+            canvas.drawBitmap(source, -region.x, -region.y, null);
+        } catch (RuntimeException error) {
+            recycleQuietly(clipped);
+            throw error;
+        }
+        return register(clipped);
+    }
+
+    /**
+     * 二值化（宿主 {@code images.threshold(img, thresh, maxVal, type)}）：
+     * 先 RGBA→GRAY，再 OpenCV threshold，最后 GRAY→RGBA 输出新句柄。
+     * type 默认 BINARY(0)，支持 BINARY_INV/TRUNC/TOZERO/TOZERO_INV 及叠加 OTSU/TRIANGLE 标志。
+     */
+    private JSONObject threshold(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap source = requireBitmap(requireId(request));
+        double thresh = parseThresholdValue(request, "threshold", 128d);
+        // 协议字段以 maxValue 为准，同时兼容宿主/Pro 常见的 max。
+        double maxValue = parseThresholdValue(request,
+                request.has("maxValue") ? "maxValue" : "max", 255d);
+        int type = parseThresholdType(request.opt("type"));
+        checkRegisterBudget(source.getWidth(), source.getHeight());
+        ensureOpenCv();
+        Mat rgba = new Mat();
+        Mat gray = new Mat();
+        Mat binary = new Mat();
+        try {
+            Utils.bitmapToMat(source, rgba);
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+            Imgproc.threshold(gray, binary, thresh, maxValue, type);
+            // 同 grayscale：CV_8UC1 直接交给 matToBitmap，省一次整帧 RGBA 中转。
+            return register(matToBitmap(binary));
+        } finally {
+            OpenCVHelper.release(binary);
+            OpenCVHelper.release(gray);
+            OpenCVHelper.release(rgba);
+        }
+    }
+
+    /**
+     * 缩放（宿主 {@code images.resize(img, size, interpolation)}）：输出 width×height 新句柄。
+     * interpolation 默认 INTER_LINEAR(1)，与 Rhino/QuickJS 一致；尺寸受
+     * {@link #checkDimensions} 单图像素上限与登记预算约束。
+     */
+    private JSONObject resize(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap source = requireBitmap(requireId(request));
+        int width = requireInt(request, "width");
+        int height = requireInt(request, "height");
+        checkDimensions(width, height);
+        checkRegisterBudget(width, height);
+        int interpolation = parseInterpolation(request);
+        ensureOpenCv();
+        Mat rgba = new Mat();
+        Mat output = new Mat();
+        try {
+            Utils.bitmapToMat(source, rgba);
+            Imgproc.resize(rgba, output, new Size(width, height), 0d, 0d, interpolation);
+            return register(matToBitmap(output));
+        } finally {
+            OpenCVHelper.release(output);
+            OpenCVHelper.release(rgba);
+        }
+    }
+
+    /**
+     * 帧预处理批量 action（task-5）：一次宿主调用完成「灰度化(+缩放)+尺寸」，
+     * 替代 Node 侧 2×grayscale + 1×resize + N×sizeOf 的多次桥往返（真机 ~33ms 级）。
+     *
+     * <p>请求：{@code {id, needGray?(默认 true), resize?:[width,height]}}
+     * <p>返回：{@code {gray:{id,width,height}|null, resized:{id,width,height}|null,
+     * size:{width,height}}}；gray/resized 都是新登记的图片句柄（调用方负责 recycle）。
+     * 源图 Mat 只转换一次；resize 作用在灰度图上（1 通道，比 RGBA 缩放省 3/4 带宽）。
+     */
+    private JSONObject prepFrame(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap source = requireBitmap(requireId(request));
+        boolean needGray = !request.has("needGray") || request.optBoolean("needGray", true);
+        int resizeWidth = 0;
+        int resizeHeight = 0;
+        boolean resize = false;
+        if (request.has("resize") && !request.isNull("resize")) {
+            JSONArray size = request.optJSONArray("resize");
+            if (size == null || size.length() != 2) {
+                throw new IllegalArgumentException("prepFrame 的 resize 必须是 [width,height]");
+            }
+            resizeWidth = size.optInt(0, 0);
+            resizeHeight = size.optInt(1, 0);
+            checkDimensions(resizeWidth, resizeHeight);
+            resize = true;
+        }
+        int sourceWidth = source.getWidth();
+        int sourceHeight = source.getHeight();
+        JSONObject response = new JSONObject()
+                .put("size", new JSONObject().put("width", sourceWidth).put("height", sourceHeight))
+                .put("gray", JSONObject.NULL)
+                .put("resized", JSONObject.NULL);
+        if (!needGray && !resize) {
+            return response;
+        }
+        ensureOpenCv();
+        Mat rgba = new Mat();
+        Mat gray = new Mat();
+        Mat resizedMat = null;
+        JSONObject grayDescriptor = null;
+        try {
+            Utils.bitmapToMat(source, rgba);
+            if (needGray) {
+                Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+                checkRegisterBudget(sourceWidth, sourceHeight);
+                grayDescriptor = register(matToBitmap(gray));
+                response.put("gray", grayDescriptor);
+            }
+            if (resize) {
+                checkRegisterBudget(resizeWidth, resizeHeight);
+                if (needGray) {
+                    resizedMat = new Mat();
+                    Imgproc.resize(gray, resizedMat,
+                            new Size(resizeWidth, resizeHeight), 0d, 0d, Imgproc.INTER_LINEAR);
+                    response.put("resized", register(matToBitmap(resizedMat)));
+                } else {
+                    Imgproc.resize(rgba, gray, new Size(resizeWidth, resizeHeight), 0d, 0d,
+                            Imgproc.INTER_LINEAR);
+                    response.put("resized", register(matToBitmap(gray)));
+                }
+            }
+            return response;
+        } catch (Throwable error) {
+            // gray 已登记但本次调用失败时（例如 resized 登记超预算）回收它，避免 JS 拿不到句柄还占预算。
+            if (grayDescriptor != null) {
+                recycle(grayDescriptor.optInt("id", -1));
+            }
+            throw error;
+        } finally {
+            if (resizedMat != null) {
+                OpenCVHelper.release(resizedMat);
+            }
+            OpenCVHelper.release(gray);
+            OpenCVHelper.release(rgba);
+        }
+    }
+
+    /** 图片尺寸（宿主 {@code images.sizeOf(img)}）：不分配新图，返回 {@code {width,height}}。 */
+    private JSONObject sizeOf(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap bitmap = requireBitmap(requireId(request));
+        return new JSONObject()
+                .put("width", bitmap.getWidth())
+                .put("height", bitmap.getHeight());
+    }
+
+    /**
+     * 颜色计数（宿主 {@code images.countColor(img, color, {region, threshold})}）：
+     * 与找色同一套比较规则（RGB 三通道最大差值 &lt;= threshold，忽略 alpha），返回命中像素数。
+     * 按行读取像素，内存只占一行，避免整帧 int[] 分配。
+     */
+    private int countColor(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap bitmap = requireBitmap(requireId(request));
+        int color = parseColor(request.opt("color"), "color");
+        int threshold = parseThreshold(request);
+        Region region = parseRegion(request.opt("region"), bitmap.getWidth(), bitmap.getHeight());
+        int[] row = new int[region.width];
+        int count = 0;
+        for (int y = 0; y < region.height; y++) {
+            bitmap.getPixels(row, 0, region.width, region.x, region.y + y, region.width, 1);
+            for (int x = 0; x < region.width; x++) {
+                if (colorMatches(color, row[x], threshold)) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    /** Mat → 独立 ARGB_8888 Bitmap；转换失败时回收已分配的 Bitmap，避免泄漏登记预算外的内存。 */
+    private static Bitmap matToBitmap(Mat mat) {
+        Bitmap bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888);
+        try {
+            Utils.matToBitmap(mat, bitmap);
+            return bitmap;
+        } catch (RuntimeException error) {
+            recycleQuietly(bitmap);
+            throw error;
+        }
+    }
+
+    /**
+     * 批量像素：一次调用取回整块区域，避免「每像素一次跨进程调用」。
+     * format=argb（默认，小端 4 字节/像素）或 gray（1 字节/像素，BT.601）。
+     * 单次原始像素上限见 {@link #MAX_PIXEL_FETCH_BYTES}（256KB）；更大的区域请分块读取，
+     * 或改用文件通道（node-smem 负责）。
+     */
+    private JSONObject getPixels(JSONObject request) throws Exception {
+        ensureOpen();
+        int imageId = requireId(request);
+        Bitmap bitmap = requireBitmap(imageId);
+        Region region = parseRegion(request.opt("region"), bitmap.getWidth(), bitmap.getHeight());
+        String format = request.optString("format", "argb");
+        if (!"argb".equals(format) && !"gray".equals(format)) {
+            throw new IllegalArgumentException("getPixels 的 format 仅支持 argb/gray：" + format);
+        }
+        boolean argb = "argb".equals(format);
+        long bytes = (long) region.width * (long) region.height * (argb ? 4L : 1L);
+        if (bytes > MAX_PIXEL_FETCH_BYTES) {
+            throw new IllegalArgumentException("getPixels 区域过大：" + region.width + "x" + region.height
+                    + "（" + bytes + " 字节，单次上限 " + (MAX_PIXEL_FETCH_BYTES / 1024) + "KB 原始像素；"
+                    + "请先 resize/clip 分块读取，或改用文件通道（node-smem 负责））");
+        }
+        int[] pixels = new int[region.width * region.height];
+        bitmap.getPixels(pixels, 0, region.width, region.x, region.y, region.width, region.height);
+        byte[] raw;
+        if (argb) {
+            raw = new byte[pixels.length * 4];
+            ByteBuffer buffer = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+            for (int pixel : pixels) {
+                buffer.putInt(pixel);
+            }
+        } else {
+            raw = new byte[pixels.length];
+            for (int i = 0; i < pixels.length; i++) {
+                int pixel = pixels[i];
+                int r = (pixel >> 16) & 0xFF;
+                int g = (pixel >> 8) & 0xFF;
+                int b = pixel & 0xFF;
+                raw[i] = (byte) Math.round(0.299d * r + 0.587d * g + 0.114d * b);
+            }
+        }
+        return new JSONObject()
+                .put("width", region.width)
+                .put("height", region.height)
+                .put("format", format)
+                .put("data", Base64.encodeToString(raw, Base64.NO_WRAP));
+    }
+
+    /**
+     * 一次取回大量散点颜色（逐点取色是象棋识别的主要桥开销）。
+     * points=[[x,y],...]；返回 Int32Array 的 base64 小端编码。
+     */
+    private JSONObject samplePixels(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap bitmap = requireBitmap(requireId(request));
+        JSONArray points = request.optJSONArray("points");
+        if (points == null) {
+            throw new IllegalArgumentException("samplePixels 缺少 points");
+        }
+        int count = points.length();
+        if (count <= 0 || count > 65536) {
+            throw new IllegalArgumentException("samplePixels 点数非法：" + count + "（1..65536）");
+        }
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        byte[] raw = new byte[count * 4];
+        ByteBuffer buffer = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < count; i++) {
+            JSONArray point = points.optJSONArray(i);
+            int x = point.getInt(0);
+            int y = point.getInt(1);
+            buffer.putInt(x < 0 || y < 0 || x >= width || y >= height ? 0 : bitmap.getPixel(x, y));
+        }
+        return new JSONObject()
+                .put("count", count)
+                .put("data", Base64.encodeToString(raw, Base64.NO_WRAP));
+    }
+    /**
      * task-172：计算图片特征（复用 Rhino/QuickJS 同款的 FeatureMatcher ORB-lite 实现）。
      * 特征对象保存在宿主，Node 只拿到句柄 id；用完后 ImageFeatures.recycle() 释放。
      */
@@ -561,7 +1342,361 @@ public final class Node24Images implements AutoCloseable {
         return true;
     }
 
+    // ------------------------------------------------------------------
+    // 文件式像素交换（pixelsToFile）
+    // ------------------------------------------------------------------
+
+    /**
+     * 把「区域原始像素」或「散点 ARGB」写入应用私有目录文件，返回描述；Node 侧同进程
+     * {@code fs.readFileSync} 读取，脚本自己构造 TypedArray（绕开 base64/JSON/JNI 大字符串）。
+     *
+     * <p>入参二选一：{@code region}（argb/gray 原始块）或 {@code points:[[x,y],...]}（int32 ARGB）。
+     * {@code path} 省略时写宿主 scratch：{@code getCacheDir()/node24-pixels/export-<pid>.bin}
+     * （每次调用覆盖；按 pid 区分，避免 :node24_1..3 池进程互相覆盖）。
+     */
+    private JSONObject pixelsToFile(JSONObject request) throws Exception {
+        ensureOpen();
+        int imageId = requireId(request);
+        Bitmap bitmap = requireBitmap(imageId);
+        String format = request.optString("format", "argb");
+        if (!"argb".equals(format) && !"gray".equals(format)) {
+            throw new IllegalArgumentException("pixelsToFile 的 format 仅支持 argb/gray：" + format);
+        }
+        boolean argb = "argb".equals(format);
+        JSONArray points = request.optJSONArray("points");
+        boolean hasPoints = request.has("points");
+        Object rawRegion = request.opt("region");
+        boolean hasRegion = rawRegion != null && rawRegion != JSONObject.NULL;
+        if (hasPoints && points == null) {
+            throw new IllegalArgumentException("pixelsToFile 的 points 必须是 [[x,y],...] 数组");
+        }
+        if (hasPoints && points.length() == 0) {
+            throw new IllegalArgumentException("pixelsToFile 的 points 不能为空");
+        }
+        if (hasPoints && hasRegion) {
+            throw new IllegalArgumentException("pixelsToFile 的 region 与 points 只能二选一");
+        }
+        if (hasPoints) {
+            if (!argb) {
+                throw new IllegalArgumentException("pixelsToFile 的 points 只支持 argb（Int32Array）");
+            }
+            return pixelsPointsToFile(request, bitmap, points);
+        }
+        return pixelsRegionToFile(request, bitmap, format, argb);
+    }
+
+    /** region 形态：argb=4B/像素（Uint32Array 元素 == Bitmap.getPixel）或 gray=1B/像素（BT.601）。 */
+    private JSONObject pixelsRegionToFile(JSONObject request, Bitmap bitmap, String format, boolean argb)
+            throws Exception {
+        Region region = parseRegion(request.opt("region"), bitmap.getWidth(), bitmap.getHeight());
+        int bytesPerPixel = argb ? 4 : 1;
+        long bytes = (long) region.width * (long) region.height * bytesPerPixel;
+        if (bytes > MAX_PIXEL_FILE_BYTES) {
+            throw new IllegalArgumentException("pixelsToFile 区域过大：" + region.width + "x" + region.height
+                    + "（" + bytes + " 字节，单次上限 " + (MAX_PIXEL_FILE_BYTES / 1024 / 1024) + "MB）");
+        }
+        File target = pixelTargetFile(request.optString("path", ""));
+        int rowBytes = region.width * bytesPerPixel;
+        int rowsPerBlock = Math.max(1, Math.min(region.height,
+                PIXEL_FILE_BLOCK_BYTES / Math.max(1, rowBytes)));
+        byte[] block = new byte[rowsPerBlock * rowBytes];
+        int[] pixels = new int[rowsPerBlock * region.width];
+        FileOutputStream output = new FileOutputStream(target); // 覆盖写；同进程读方在返回后同步读
+        try {
+            int row = 0;
+            while (row < region.height) {
+                int rows = Math.min(rowsPerBlock, region.height - row);
+                bitmap.getPixels(pixels, 0, region.width, region.x, region.y + row, region.width, rows);
+                int offset = 0;
+                int count = rows * region.width;
+                if (argb) {
+                    for (int i = 0; i < count; i++) {
+                        int pixel = pixels[i];
+                        // Bitmap.getPixel 的 int 是 ARGB；小端写出后 Uint32Array 元素值与它一致。
+                        block[offset++] = (byte) (pixel & 0xFF);
+                        block[offset++] = (byte) ((pixel >> 8) & 0xFF);
+                        block[offset++] = (byte) ((pixel >> 16) & 0xFF);
+                        block[offset++] = (byte) ((pixel >> 24) & 0xFF);
+                    }
+                } else {
+                    for (int i = 0; i < count; i++) {
+                        int pixel = pixels[i];
+                        int r = (pixel >> 16) & 0xFF;
+                        int g = (pixel >> 8) & 0xFF;
+                        int b = pixel & 0xFF;
+                        block[offset++] = (byte) Math.round(0.299d * r + 0.587d * g + 0.114d * b);
+                    }
+                }
+                output.write(block, 0, rows * rowBytes);
+                row += rows;
+            }
+            output.flush();
+        } finally {
+            output.close();
+        }
+        long written = target.length();
+        if (written != bytes) {
+            throw new IOException("像素文件大小异常：期望 " + bytes + " 实际 " + written + "（" + target + "）");
+        }
+        JSONObject detail = new JSONObject()
+                .put("kind", "region")
+                .put("pixelStride", bytesPerPixel)
+                .put("rowStride", rowBytes)
+                .put("endian", "little")
+                .put("rowMajor", true);
+        if (argb) {
+            detail.put("channelOrder", "bgra")
+                    .put("alpha", true)
+                    .put("value", "Uint32Array 元素 == Bitmap.getPixel()（ARGB int32）");
+        } else {
+            detail.put("channelOrder", "y")
+                    .put("alpha", false)
+                    .put("value", "Uint8Array 灰度（BT.601: 0.299R+0.587G+0.114B）");
+        }
+        return new JSONObject()
+                .put("path", target.getCanonicalPath())
+                .put("width", region.width)
+                .put("height", region.height)
+                .put("count", (long) region.width * (long) region.height)
+                .put("bytes", bytes)
+                .put("format", format)
+                .put("formatDetail", detail);
+    }
+
+    /**
+     * points 形态：按输入顺序把每个点写成 int32 ARGB（元素 == Bitmap.getPixel；越界点写 0）。
+     * 大点数时先用一次 getPixels 取「所有合法点的包围盒」再索引，避免 1.38 万次逐点 JNI getPixel；
+     * 稀疏点仍走逐点 getPixel（各自更便宜）。
+     */
+    private JSONObject pixelsPointsToFile(JSONObject request, Bitmap bitmap, JSONArray points) throws Exception {
+        int count = points.length();
+        if (count <= 0 || count > MAX_PIXEL_FILE_POINTS) {
+            throw new IllegalArgumentException("pixelsToFile points 数量非法：" + count
+                    + "（1.." + MAX_PIXEL_FILE_POINTS + "）");
+        }
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int minX = Integer.MAX_VALUE;
+        int minY = Integer.MAX_VALUE;
+        int maxX = -1;
+        int maxY = -1;
+        int inBounds = 0;
+        for (int i = 0; i < count; i++) {
+            JSONArray point = points.optJSONArray(i);
+            if (point == null || point.length() != 2) {
+                throw new IllegalArgumentException("pixelsToFile points[" + i + "] 必须是 [x,y]");
+            }
+            int x = point.optInt(0, 0);
+            int y = point.optInt(1, 0);
+            if (x < 0 || y < 0 || x >= width || y >= height) {
+                continue;
+            }
+            inBounds++;
+            if (x < minX) {
+                minX = x;
+            }
+            if (y < minY) {
+                minY = y;
+            }
+            if (x > maxX) {
+                maxX = x;
+            }
+            if (y > maxY) {
+                maxY = y;
+            }
+        }
+        int bboxWidth = maxX < 0 ? 0 : maxX - minX + 1;
+        int bboxHeight = maxY < 0 ? 0 : maxY - minY + 1;
+        long bboxPixels = (long) bboxWidth * (long) bboxHeight;
+        // 逐点 getPixel 约 3.3µs/点；包围盒 getPixels 约 2~3ns/像素 → 点数多且包围盒不稀疏时用包围盒。
+        boolean useBBox = inBounds >= 1024
+                && bboxPixels > 0L
+                && bboxPixels * 4L <= MAX_POINTS_BBOX_BYTES
+                && bboxPixels <= (long) count * 1500L;
+        int[] bbox = null;
+        if (useBBox) {
+            bbox = new int[(int) bboxPixels];
+            bitmap.getPixels(bbox, 0, bboxWidth, minX, minY, bboxWidth, bboxHeight);
+        }
+        byte[] raw = new byte[count * 4];
+        ByteBuffer buffer = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < count; i++) {
+            JSONArray point = points.optJSONArray(i);
+            int x = point.optInt(0, 0);
+            int y = point.optInt(1, 0);
+            int pixel;
+            if (x < 0 || y < 0 || x >= width || y >= height) {
+                pixel = 0; // 与 samplePixels 的越界语义一致
+            } else if (bbox != null) {
+                pixel = bbox[(y - minY) * bboxWidth + (x - minX)];
+            } else {
+                pixel = bitmap.getPixel(x, y);
+            }
+            buffer.putInt(pixel);
+        }
+        File target = pixelTargetFile(request.optString("path", ""));
+        FileOutputStream output = new FileOutputStream(target);
+        try {
+            output.write(raw);
+            output.flush();
+        } finally {
+            output.close();
+        }
+        long bytes = (long) count * 4L;
+        long written = target.length();
+        if (written != bytes) {
+            throw new IOException("像素文件大小异常：期望 " + bytes + " 实际 " + written + "（" + target + "）");
+        }
+        JSONObject detail = new JSONObject()
+                .put("kind", "points")
+                .put("count", count)
+                .put("pixelStride", 4)
+                .put("endian", "little")
+                .put("rowMajor", false)
+                .put("channelOrder", "bgra")
+                .put("alpha", true)
+                .put("value", "Int32Array 元素 == Bitmap.getPixel(points[i][0], points[i][1])；越界点 0");
+        return new JSONObject()
+                .put("path", target.getCanonicalPath())
+                .put("count", count)
+                .put("bytes", bytes)
+                .put("format", "argb")
+                .put("formatDetail", detail);
+    }
+
+    /** path 省略 → 进程级 scratch 文件；显式 path → canonical 校验必须落在应用私有目录内。 */
+    private File pixelTargetFile(String requestedPath) throws IOException {
+        String path = requestedPath == null ? "" : requestedPath.trim();
+        File target;
+        if (path.isEmpty()) {
+            File dir = pixelScratchDir();
+            target = new File(dir, "export-" + android.os.Process.myPid() + ".bin");
+            File canonical = target.getCanonicalFile();
+            checkPixelPathAllowed(canonical);
+            mAutoPixelFile = canonical;
+            return canonical;
+        }
+        if (path.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("pixelsToFile 路径包含 NUL 字符");
+        }
+        if (path.length() > MAX_PATH_CHARS) {
+            throw new IllegalArgumentException("pixelsToFile 路径过长（上限 " + MAX_PATH_CHARS + " 字符）");
+        }
+        File candidate = new File(path);
+        if (!candidate.isAbsolute()) {
+            throw new IllegalArgumentException("pixelsToFile 路径必须是绝对路径：" + path);
+        }
+        target = candidate.getCanonicalFile();
+        checkPixelPathAllowed(target);
+        File parent = target.getParentFile();
+        if (parent == null || (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory())) {
+            throw new IOException("无法创建像素文件目录：" + parent);
+        }
+        // mkdirs 之后再 canonical 一次，确保新创建的目录没有把路径带出私有目录。
+        target = candidate.getCanonicalFile();
+        checkPixelPathAllowed(target);
+        if (target.isDirectory()) {
+            throw new IllegalArgumentException("pixelsToFile 路径是目录：" + target);
+        }
+        return target;
+    }
+
+    /** 应用 cacheDir 下的 scratch 目录（按 pid 区分文件在 pixelTargetFile 里做）。 */
+    private File pixelScratchDir() throws IOException {
+        File cache = requireAppContext().getCacheDir();
+        if (cache == null) {
+            throw new IOException("无法解析应用 cacheDir");
+        }
+        File dir = new File(cache, PIXEL_SCRATCH_DIR);
+        if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
+            throw new IOException("无法创建像素 scratch 目录：" + dir);
+        }
+        return dir;
+    }
+
+    /** path 安全硬要求：canonical 后必须是 getFilesDir()/getCacheDir() 之下的文件。 */
+    private void checkPixelPathAllowed(File canonicalTarget) throws IOException {
+        String target = canonicalTarget.getPath();
+        for (File root : privateRoots()) {
+            String rootPath = root.getCanonicalFile().getPath();
+            if (target.equals(rootPath)) {
+                throw new IllegalArgumentException("pixelsToFile 路径不能是目录：" + target);
+            }
+            String prefix = rootPath.endsWith(File.separator) ? rootPath : rootPath + File.separator;
+            if (target.startsWith(prefix)) {
+                return;
+            }
+        }
+        throw new IllegalArgumentException(
+                "pixelsToFile 路径必须位于应用私有目录（getFilesDir()/getCacheDir()）之下：" + target);
+    }
+
+    private File[] privateRoots() throws IOException {
+        Context context = requireAppContext();
+        File files = context.getFilesDir();
+        File cache = context.getCacheDir();
+        java.util.List<File> roots = new java.util.ArrayList<>(2);
+        if (files != null) {
+            roots.add(files);
+        }
+        if (cache != null) {
+            roots.add(cache);
+        }
+        if (roots.isEmpty()) {
+            throw new IOException("应用私有目录不可用（getFilesDir/getCacheDir 均为 null）");
+        }
+        return roots.toArray(new File[0]);
+    }
+
+    /**
+     * :node24 进程里 App.onCreate 已调用 GlobalAppContext.set()（apps/app/.../App.kt）；
+     * 兜底用 ActivityThread.currentApplication()（与仓库 Device.java 同款），不回退到任意路径。
+     */
+    private Context requireAppContext() throws IOException {
+        Context context = appContextOrNull();
+        if (context == null) {
+            throw new IllegalStateException("无法解析应用私有目录：GlobalAppContext/ActivityThread 均不可用，"
+                    + "pixelsToFile 需要 getFilesDir()/getCacheDir()");
+        }
+        return context;
+    }
+
+    private static Context appContextOrNull() {
+        try {
+            return GlobalAppContext.get();
+        } catch (Throwable ignored) {
+            // fallthrough
+        }
+        try {
+            Class<?> activityThread = Class.forName("android.app.ActivityThread");
+            Object application = activityThread.getMethod("currentApplication").invoke(null);
+            if (application instanceof Context) {
+                return (Context) application;
+            }
+        } catch (Throwable ignored) {
+            // fallthrough
+        }
+        return null;
+    }
+
+    private void deleteAutoPixelFileQuietly() {
+        File file = mAutoPixelFile;
+        mAutoPixelFile = null;
+        if (file == null) {
+            return;
+        }
+        try {
+            if (file.isFile() && !file.delete()) {
+                Log.w(TAG, "pixelsToFile scratch 删除失败：" + file);
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "pixelsToFile scratch 删除异常：" + file, error);
+        }
+    }
+
     private void recycle(int id) {
+        // 先失效 Mat 缓存：Bitmap 一旦回收，缓存的 Mat 快照也没有意义且占内存。
+        invalidateCachedMats(id);
         Bitmap bitmap = mBitmaps.remove(id);
         if (bitmap == null) {
             // 契约要求 recycle 幂等：未知/已回收句柄也返回 true。
@@ -610,6 +1745,13 @@ public final class Node24Images implements AutoCloseable {
             }
             OpenCVHelper.release(state.sourceMat);
         }
+        ThreadPoolExecutor executor = mMatchExecutor;
+        mMatchExecutor = null;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+        releaseCachedMats();
+        deleteAutoPixelFileQuietly();
     }
 
     // ------------------------------------------------------------------
@@ -629,6 +1771,7 @@ public final class Node24Images implements AutoCloseable {
         }
         if (bitmap.isRecycled()) {
             mBitmaps.remove(id);
+            invalidateCachedMats(id);
             mLivePixels = Math.max(0L, mLivePixels - (long) bitmap.getWidth() * (long) bitmap.getHeight());
             throw new IllegalArgumentException("图片句柄已回收：" + id);
         }
@@ -718,6 +1861,98 @@ public final class Node24Images implements AutoCloseable {
             throw new IllegalArgumentException("threshold 必须在 0..255 之间，收到：" + threshold);
         }
         return threshold;
+    }
+
+    /**
+     * 宿主 images.threshold 的 thresh/maxVal 是 double（Rhino 原样传给 OpenCV）；
+     * 这里与宿主一致只拒绝非有限值，不额外限制 0..255。
+     */
+    static double parseThresholdValue(JSONObject request, String name, double fallback) {
+        if (!request.has(name) || request.isNull(name)) {
+            return fallback;
+        }
+        Object raw = request.opt(name);
+        if (!(raw instanceof Number)) {
+            throw new IllegalArgumentException(name + " 必须是数字");
+        }
+        double value = ((Number) raw).doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            throw new IllegalArgumentException(name + " 必须是有限数字：" + value);
+        }
+        return value;
+    }
+
+    /**
+     * threshold 的 type 与宿主 images.threshold 一致：低 3 位是基础类型
+     * （0=BINARY/1=BINARY_INV/2=TRUNC/3=TOZERO/4=TOZERO_INV），可叠加 OTSU(8)/TRIANGLE(16)；
+     * 也接受 "BINARY" / "BINARY_OTSU" / "THRESH_BINARY" 等名称。
+     */
+    static int parseThresholdType(Object raw) {
+        if (raw == null || raw == JSONObject.NULL) {
+            return Imgproc.THRESH_BINARY;
+        }
+        if (raw instanceof String) {
+            String name = ((String) raw).trim().toUpperCase(Locale.US).replace(" ", "");
+            if (name.startsWith("THRESH_")) {
+                name = name.substring("THRESH_".length());
+            }
+            switch (name) {
+                case "BINARY":
+                    return Imgproc.THRESH_BINARY;
+                case "BINARY_INV":
+                    return Imgproc.THRESH_BINARY_INV;
+                case "TRUNC":
+                    return Imgproc.THRESH_TRUNC;
+                case "TOZERO":
+                    return Imgproc.THRESH_TOZERO;
+                case "TOZERO_INV":
+                    return Imgproc.THRESH_TOZERO_INV;
+                case "OTSU":
+                case "BINARY_OTSU":
+                    return Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU;
+                case "BINARY_INV_OTSU":
+                    return Imgproc.THRESH_BINARY_INV | Imgproc.THRESH_OTSU;
+                case "TRIANGLE":
+                    return Imgproc.THRESH_BINARY | Imgproc.THRESH_TRIANGLE;
+                default:
+                    throw new IllegalArgumentException("不支持的 threshold 类型：" + raw
+                            + "（可选 BINARY/BINARY_INV/TRUNC/TOZERO/TOZERO_INV/"
+                            + "OTSU/BINARY_OTSU/BINARY_INV_OTSU/TRIANGLE）");
+            }
+        }
+        if (!(raw instanceof Number)) {
+            throw new IllegalArgumentException("threshold type 必须是整数或类型名：" + raw);
+        }
+        double number = ((Number) raw).doubleValue();
+        if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.rint(number)
+                || number < 0d || number > (Imgproc.THRESH_OTSU | Imgproc.THRESH_TRIANGLE | 4)) {
+            throw new IllegalArgumentException("threshold type 必须是 0..28 之间的整数，收到：" + number);
+        }
+        int type = (int) number;
+        int flags = type & ~7;
+        if ((type & 7) > 4
+                || (flags & ~(Imgproc.THRESH_OTSU | Imgproc.THRESH_TRIANGLE)) != 0) {
+            throw new IllegalArgumentException("threshold type 非法：" + type
+                    + "（低 3 位是 0..4 基础类型，可叠加 OTSU=8/TRIANGLE=16）");
+        }
+        return type;
+    }
+
+    /** resize 插值：0 NEAREST / 1 LINEAR / 2 CUBIC / 3 AREA / 4 LANCZOS4（默认 LINEAR，与宿主一致）。 */
+    static int parseInterpolation(JSONObject request) {
+        if (!request.has("interpolation") || request.isNull("interpolation")) {
+            return Imgproc.INTER_LINEAR;
+        }
+        Object raw = request.opt("interpolation");
+        if (!(raw instanceof Number)) {
+            throw new IllegalArgumentException("interpolation 必须是与 OpenCV 一致的 0..4 整数");
+        }
+        double value = ((Number) raw).doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value) || value != Math.rint(value)
+                || value < 0d || value > 4d) {
+            throw new IllegalArgumentException("interpolation 必须是 0..4 之间的整数，收到：" + value);
+        }
+        return (int) value;
     }
 
     /** 模板相似度阈值只接受 0..1 的有限数字；默认值与 Pro 9.3 的 findImage 一致。 */
