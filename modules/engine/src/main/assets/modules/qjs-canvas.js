@@ -149,7 +149,9 @@
         return proxy;
     }
     const originalFloaty = g.floaty;
-    g.floaty = g.$floaty = Object.freeze(Object.assign({}, originalFloaty, {
+    // task-204：不要 freeze floaty —— 第三方 Node 后端（xiangqi headless-window）会覆盖
+  // global.floaty.window / rawWindow 做逻辑窗口；与 Rhino 语义保持一致。
+  g.floaty = g.$floaty = Object.assign({}, originalFloaty, {
         window: function() { return wrapWindow(originalFloaty.window.apply(originalFloaty, arguments)); },
         rawWindow: function() { return wrapWindow(originalFloaty.rawWindow.apply(originalFloaty, arguments)); },
         windowById: function(id) { return wrapWindow(originalFloaty.windowById(id)); },
@@ -158,7 +160,7 @@
             for (const state of Array.from(states.values())) if (state.windowId !== 0) dispose(state);
             return originalFloaty.closeAll();
         }
-    }));
+    });
     const originalUi = g.ui;
     if (originalUi) {
         g.ui = g.$ui = new Proxy(originalUi, {

@@ -239,3 +239,8 @@ owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-11
 - K40 实操：点「更多」→ 面板展开（按钮变「收起」、显示完整设置/日志）；点「开始」→ feedback 由「后台异常退出」变「后台尚未就绪」（按钮回调生效）；拖动标题 → `C-LOCAL drag move` 面板移动；悬浮日志示例点确定仍触发 `input:`（本地 touch/click 回归正常）。
 - 注：本地 overlay 忽略项目下发的 `FLAG_NOT_TOUCHABLE`（本地无主进程触摸转发，否则面板永远点不到）；隐藏/回退语义仍保留主进程路径。
 证据：`output/flutter-poc/evidence/task201/xiangqi-local-panel-initial.png`、`xiangqi-more-expanded.png`、`xiangqi-start-feedback.png`、`local-overlay.log`。
+### dev-1151 正式包复验（task-201，2026-10-20 02:10）
+- K40 dev-1151：xiangqi 大 XML 8275 字符只出现 `C-LOCAL inflate theme=... xmlLen=8275`，**无 `NodeUiBridgeService overlay show`/remeasure**；点更多→面板展开「收起」+完整设置；点开始→feedback「后台尚未就绪」；拖标题→`C-LOCAL drag move` y 280→647；悬浮日志小 XML 本地 inflate 653 字符，点确定触发 `input:`。
+- 新机 DQKF dev-1151：悬浮日志 `C-LOCAL inflate xmlLen=653`，本地 overlay 正常（未推 xiangqi 工程到新机）。
+- t1 QuickJS floaty 改动并存，无互相干扰。
+证据：`output/flutter-poc/evidence/task201/dev1151-*`、`dev1151-findings.log`。

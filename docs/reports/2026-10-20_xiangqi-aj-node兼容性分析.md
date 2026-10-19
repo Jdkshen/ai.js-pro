@@ -216,3 +216,33 @@ probe（Node24，K40）结果：
 - `.artifacts/task202-verify/backend-probe2.txt`（QuickJS 子引擎 window read-only、bus 旧状态）
 - `.artifacts/task202-verify/engine-probe.txt`（execScriptFile QuickJS 选择）
 - `.artifacts/task202-verify/n202-native-probe2.node.js`（反射/start 探针，待 bridge API 补齐）
+
+---
+
+## 12. task-203：后台修复（dev-1151）
+
+### 12.1 已实现
+
+- **QuickJS `floaty` 可写**：`quickjs_jni.cpp` 的 `global.floaty = Object.freeze(floaty)` 改为 `global.floaty = floaty`；已用 `build-quickjs.ps1` 重建 arm64 原生库，并在 dev-1151 APK 的 `lib/arm64-v8a/libquickjs_jni.so` 中确认新代码（`Object.freeze(floaty)` 字符串已消失、`global.floaty = floaty;` 存在）；
+- **`runtime.methods` / `runtime.fields`**：Node24HostBridge 新增反射 API（动态 dex classloader → `getMethods/getFields` 返回签名），用于 NativeEngine/NativeYolo 方法确认；
+- **engines.all 子引擎列举**：dev-1151 实测 `engines.all=2 ids=2,1`（面板/子引擎可被列出），已满足面板-singleton 基础需求。
+
+### 12.2 实测（K40 dev-1151）
+
+- panel-bus 文件总线已工作：`node-panel-owner.json`（ownerId 0）、`bus-state-main.json`（`nodeFrontend:true`）、`node-window.json` 持续写入；面板日志出现 `[Node.js 面板] 已连接后台引擎 1，Node.js v24.22.0`；
+- 但后台仍失败：`AJ后台.js:15` → `node-headless-window.js install` 在 `host.floaty.window = ...` 仍抛 `TypeError: 'window' is read-only`（QuickJS 子引擎）；直接 QuickJS 探针仍显示 `Object.isFrozen(floaty)=true`，与 APK 二进制中的新代码不一致——**需继续定位 freeze 来源**（可能另有冻结路径/进程加载旧 runtime，或 QuickJS 内置 bootstrap 缓存）；
+- `[Node.js 面板] 后台异常退出`，面板随后显示「已连接后台引擎 1」但实际无识别/算棋后端。
+
+### 12.3 阻塞点 / 下一步
+
+1. 定位 QuickJS `floaty` 仍 frozen 的真实来源（核对设备实际进程 `/proc/<pid>/maps` 的 libquickjs_jni 路径与哈希；检查是否有第二个 bootstrap/JS freeze；确认 Node→QuickJS child 是否加载旧 runtime）；
+2. Node 单 job 互斥：面板/后端运行时 debug runner 会报「已有 Node 脚本正在运行」，需先 stopAll 或错峰验证；
+3. `runtime.methods`/`nativeStart→nativeAnalyze`、`NativeYolo.runtimeVersion/loadedIdentity` 尚未在干净环境验证（受 1/2 阻塞）；
+4. 后台起来后再验证 bus 命令往返、面板「已连接」、定位/识别/算棋。
+
+### 12.4 证据
+
+- `.artifacts/task203-verify/i-floaty2.txt`（QuickJS floaty frozen 探针）
+- `.artifacts/task203-verify/g-native2.txt`（Node 单 job 互斥 + 后台 window 只读）
+- `.artifacts/task203-verify/h-backend.txt`（panel/bus 文件已写入）
+- `.artifacts/task203-verify/base.apk` / `libqjsjni.so`（APK 内新 bootstrap 代码确认）

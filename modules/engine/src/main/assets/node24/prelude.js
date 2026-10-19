@@ -181,11 +181,20 @@
   function memberAccess(target, name) {
     var info = memberInfo(target, name);
     if (info && info.kind === 'method') {
-      return function () {
-        var request = { op: target.cls ? 'static' : 'call', method: name, args: toWireArray(arguments) };
+      if (!info.invoke) {
+        // Cache the callable and invariant JSON only. Each invocation still crosses
+        // the host bridge, converts its current arguments and selects its overload.
+        var request = { kind: 'java', op: target.cls ? 'static' : 'call', method: name };
         if (target.cls) { request.cls = target.cls; } else { request.obj = target.obj; }
-        return javaCall(request);
-      };
+        var prefix = JSON.stringify(request).slice(0, -1) + ',"args":';
+        var noArgs = prefix + '[]}';
+        info.invoke = function () {
+          var payload = arguments.length === 0 ? noArgs
+            : prefix + JSON.stringify(toWireArray(arguments)) + '}';
+          return wrapJavaResult(okValue(hostValue(payload)));
+        };
+      }
+      return info.invoke;
     }
     if (info && info.kind === 'field') { return okValue(info.value); }
     return undefined;
