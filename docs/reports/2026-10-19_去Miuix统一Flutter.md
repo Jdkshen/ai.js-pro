@@ -198,6 +198,44 @@ APK 校验：`aapt dump badging` 的 launchable-activity 只剩 `com.jdkshen.aij
 - 关键回归：原生 Ace 编辑器「打包」→ 玻璃 ProjectPage；设置→关于（本地 AboutDialog/LicensePage）；
   更新检查（Material 原生对话框）；MCP 开关启停服务；打包 APK 安装/分享。
 
+## 7.5 K40 真机逐页验证结果（dev-1130，2026-10-20）
+
+> 验证方式：adb 冷启动 + 逐页截图（截图在 `.artifacts/verify-dev1127/`、`.artifacts/verify-dev1130/`）。
+> dev-1127 坏包修复后，dev-1128/1129/1130 为同一份 Flutter AOT + 去 Miuix 构建，以下结论在 dev-1130 上复核通过。
+
+| 验证项 | 结果 | 证据/说明 |
+|---|---|---|
+| 冷启动直达 Flutter | ✅ | 桌面图标 → Splash（AI Logo）→ Flutter 玻璃首页；无 Miuix 主界面、桌面只有一个图标 |
+| 文件页 | ✅ | 脚本目录文件列表、排序/搜索/新建 FAB 正常 |
+| 示例页 | ✅ | Rhino / QuickJS / Node 引擎三棵示例树 |
+| 资源页 | ✅ | 内置示例目录 19 项，卡片/导入图标正常 |
+| 插件页 | ✅ | 本机已安装插件（象棋引擎插件）显示/开关正常 |
+| 任务页 | ✅ | 运行中任务/任务两组、刷新与设备入口正常 |
+| 日志页 | ✅ | 实时统一流（含 OpenCV init 行），等级过滤/搜索/复制/分享可见 |
+| 本地使用指南 | ✅ | 各段说明完整 |
+| 搜索 | ✅ | 文件页输入 yolo，「包含子目录/正则表达式」筛选与结果列表正常 |
+| 抽屉 | ✅ | 无障碍/悬浮窗/更多、MCP、开发者调试、终端、深色主题、设置、退出 全部可见 |
+| 设置页 | ✅ | 工作空间/外观/调试与脚本运行/Node.js/编辑器字号（读原生偏好 15sp）/运行与日志/关于 |
+| 检查更新 | ✅ | 点击后弹原生检查升级（Material）→ Toast「已经是最新版本」 |
+| 更新源 | ✅ | 显示当前生效值（自建源 http://192.168.10.7:8080/update.json） |
+| 关于（Flutter） | ✅ | Flutter AboutDialog（AI.js Pro / 玻璃界面版本 / VIEW LICENSES / CLOSE） |
+| 开源许可（Flutter） | ✅ | Flutter LicensePage：StackWalker/abseil-cpp/accessibility/AI.js Pro 编辑器参考 等列表 |
+| 设备连接页 | ✅ | MCP 状态/局域网地址、电脑连接（ws-rpc / mDNS）、无障碍入口、Shizuku 状态、存储权限 |
+| MCP 开关 | ✅ | 开→「服务运行中」+ 本机 curl `http://127.0.0.1:8765/mcp` HTTP 200；关→「服务已停止」+ 端口连不上 |
+| 编辑器/工作区 | ✅ | 顶栏 `<>` 打开原生 Ace 工作区（多文件标签/文件树/工具栏） |
+| 编辑器打包 → ProjectPage | ✅ | 编辑器「其他→打包单文件」→ 自动准备单文件项目并打开 Flutter「项目配置与打包」页（本任务新增的 native→Flutter 路由） |
+| 终端 | ✅ | 抽屉→终端→原生终端，cwd 为 `/storage/emulated/0/脚本` |
+| 无障碍服务 | ✅ | 抽屉/设备页状态正确；重装后 Android 会关闭该服务（App 有「无障碍服务已关闭…」提示），adb 重新开启后显示「已启用」 |
+| 崩溃/异常 | ✅ | 多轮 logcat 扫描无 FATAL / UnsatisfiedLinkError / E/flutter |
+
+### 本次真机验证发现的非阻塞问题/注意项
+
+1. **重装/升级 APK 后系统会关闭本应用的无障碍服务**（Android 正常行为，非 App bug）。App 会弹提示引导重新开启；换包后若验无障碍相关功能需重新授权一次（K40 已通过 adb 恢复）。
+2. **Flutter 关于/许可页文案为英文**（VIEW LICENSES / CLOSE / Licenses / Powered by Flutter）：Flutter 默认 Material 本地化缺失，未引入 `flutter_localizations`。不影响功能，后续要中文可补依赖 + `localizationsDelegates`。
+3. K40 自动化期间出现过系统「要与 AI.js Pro 共享屏幕吗？」MediaProjection 授权框、通知栏遮挡、屏幕休眠等**系统级干扰**；排查为 adb 盲点误触（本 App 悬浮控制条/其它已装 AutoJS 测试 App）触发截图授权，不是页面功能问题。真机人工验收时留意即可。
+4. **MCP 默认端口为 8765**（旧文档 8766 已过时）：本机地址 `http://127.0.0.1:8765/mcp` 返回 200，局域网地址返回 401（需鉴权/策略），服务本身监听正常。
+5. 抽屉「开发者调试」展开后的「允许远程调试/主动连接电脑」子项未逐项点击（dev-914 已验收过该链路，本次只确认状态副标题 ws-rpc 正常）。
+
 ## 8. 回退方式（先排除不物理删，全部可回退）
 
 1. `apps/app/build.gradle`：删除 `sourceSets` 里的 `miuix { java.srcDirs = [] ... }` 与 `testMiuix { ... }` 两块；
