@@ -1,5 +1,7 @@
 # QuickJS 默认与 Rhino 兼容分层
 
+> **2026-10-19 时效说明**：本文只描述 Rhino / QuickJS 的构建变体分层。当前还增加了 **Node24 第三引擎**（`"nodejs";` 入口，独立 `:node24` 进程，真实 Node v24.22.0），它不在 `engine-rhino` / `rhino-language` 的 flavor 拆分范围内；`lite` 仍保留 `rhino-language` 供编辑器语法使用。
+
 ## 脚本选择规则
 
 选择优先级从高到低：

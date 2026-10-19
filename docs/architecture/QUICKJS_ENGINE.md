@@ -1,6 +1,8 @@
 # AI.js Pro 双 JavaScript 引擎架构
 
 > 路径核对日期：2026-09-04。双引擎、Native Frame + C++ OpenCV 图色处理、OpenCV YOLO 和白名单 API 已落地；QuickJS 为显式选择的新引擎，Rhino 仍是默认兼容引擎。文中代码路径均以仓库根目录为基准。
+>
+> **2026-10-19 时效说明（dev-1112）**：现在共有 **Rhino / QuickJS / Node24 三引擎**。Node24（真实 Node v24.22.0，`"nodejs";` 入口，独立 `:node24` 进程）不在本文范围内，见 [`docs/reports/2026-10-17_Node24第三引擎与AutoJsPro示例集接入.md`](../reports/2026-10-17_Node24第三引擎与AutoJsPro示例集接入.md) 与 [`Node24 基础自动化 API`](../guides/Node24基础自动化API.md)。QuickJS 当前新增了 `:script` 选择器链、无障碍事件、Node 侧能力同步等，回归基线为 227/227（dev-1103）。
 
 > 2026-10-02 / dev-765 更新：QuickJS 已支持字符串布局的 `"ui";`、CommonJS require、Java 桥与 Canvas draw。下文的“第一批”能力表保留历史范围；现阶段画布与真实项目兼容情况见 [dev-765 验收](../reports/2026-10-02_QuickJS画布与佣兵项目兼容修复_dev765.md)。
 

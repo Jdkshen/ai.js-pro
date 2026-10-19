@@ -2,7 +2,7 @@
 
 适用场景：改完一版代码，想通过 app 自己的「检查更新」链路把新版本推到手机上自测。
 全程只用自建更新源（`update.json` + 本机 HTTP 服务），不碰 GitHub。
-
+> **2026-10-19 现状（dev-1112）**：Flutter dev 通道构建用 `output/flutter-poc/publish-poc-build.ps1 -VersionCode N -VersionName "dev-N"`，发布用 `tools/publish.ps1 -ReleaseNotes "..." -SkipBuild -PcHost 192.168.10.7 -AllowMultiDevice -DeviceId cccc62c7`。不要裸跑 `tools/dev-update.ps1`（`-NoServe` 仍会发布），验证参数用 `-DryRun`。
 ---
 
 ## 零、只想快速装机（不测更新链路，最快）

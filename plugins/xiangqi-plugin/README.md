@@ -1,6 +1,6 @@
 # 象棋引擎插件（Auto.js 插件 APK）
 
-`com.jdkshen.xiangqi.plugin`：把[象棋自动走棋](<../../../samples/象棋自动走棋/项目结构.md>)的
+`com.jdkshen.xiangqi.plugin`：把[象棋自动走棋](<../../samples/象棋自动走棋/项目结构.md>)的
 识别 / 棋规 / 算棋装成可独立安装的 Auto.js 插件，自带 Pikafish 原生引擎与 NNUE 权重，
 宿主脚本 `$plugins.load("com.jdkshen.xiangqi.plugin")` 即可使用。
 

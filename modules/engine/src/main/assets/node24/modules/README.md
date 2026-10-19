@@ -1,5 +1,7 @@
 # Node24 modules（task-146）
 
+> **2026-10-19 状态（dev-1112）**：本目录的模块已由 `Node24Prelude.java` 在 prelude/ui 之后统一加载（`color.js` / `floating_window.js` / `accessibility_extra.js` / `zip.js` / `ocr.js` / `media.js` / `plugins.js`），`REGISTER-PATCH.md` 仅作历史合并方案保留。
+
 `modules/engine/src/main/assets/node24/modules/` 是独立 JS 模块目录，**不修改 prelude.js**：
 
 - `color.js`：Pro 语义完整 color（Color/HSVColor/HSLColor/toColorInt）。

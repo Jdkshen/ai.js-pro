@@ -2,7 +2,7 @@
 
 ## 定位
 
-ImGui 不再用于 APK 主界面或工作台。它作为 **QuickJS 脚本引擎的可选悬浮窗 API**，用于脚本创建实时调试面板、按钮、日志和图形，定位与 Auto.js Pro 的脚本悬浮 UI 类似。Miuix/Compose 继续负责 APK 页面。
+ImGui 不再用于 APK 主界面或工作台。它作为 **QuickJS 脚本引擎的可选悬浮窗 API**，用于脚本创建实时调试面板、按钮、日志和图形，定位与 Auto.js Pro 的脚本悬浮 UI 类 似。APK 页面由 Miuix/Compose（默认构建）与 Flutter（dev 通道）负责，均不复用 ImGui 渲染栈。
 
 ## 预期调用方式
 

@@ -1,5 +1,7 @@
 # QuickJS 迁移与 Rhino 移除门禁
 
+> **2026-10-19 时效说明**：本文的“双引擎 / 移除 Rhino”门禁写于 2026-09-11。之后仓库已加入 **Node24 第三引擎**，且 Flutter dev 通道把脚本放进 `:script` 进程执行；QuickJS 侧新增了 `:script` 选择器链与无障碍事件（dev-1103/1112）。Rhino 仍是旧脚本默认兼容层，**不要按本文推进“移除 Rhino”**；三引擎契约以 [REMAINING_WORK §0](../REMAINING_WORK.md) 为准。
+
 更新日期：2026-09-11
 
 设备：Mi8 `ce4d2bdb`（LineageOS/Android 15）为基线机，回归 228 项全绿；主力机 `DQKFJB59596L45BI`（Android 16 / SDK 36）上一轮同一脚本 177 项全绿（OpenCV / Java 互操作 / 悬浮窗批A 增项待复跑）；K40 `cccc62c7` 跑 compat/lite 与 Rhino 兼容回归。

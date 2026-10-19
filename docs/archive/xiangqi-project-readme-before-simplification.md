@@ -147,7 +147,7 @@ MIUI 游戏加速的悬浮侧栏会让 a11y 一直报 `com.miui.securitycenter`�
 
 建了**交付域**（这套皮肤）的盘面级评测：3 帧真机截图 + 人工逐格核对的 FEN，
 口径是**严格的**（单元格必须完全一致，**含阵营**）。数据与跑法见
-[`docs/reports/chess-skin-eval/`](../../../../../../docs/reports/chess-skin-eval/README.md)，
+[`docs/reports/chess-skin-eval/`](../reports/chess-skin-eval/README.md)，
 设备端工具 `tools/p4-skin-eval.js`。
 
 | 配置 | 严格盘面级 | 平均未知格 | 纯颜色错 |

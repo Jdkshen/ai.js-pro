@@ -1,5 +1,7 @@
 # Node24 基础自动化 API（accessibility / image / color / media_projection / app.viewFile）
 
+> 当前验证基线：dev-1112（Node 21/21、颜色 6/6、Node UI basic 8 steps，dev-1103；dev-1104~1112 又补了 media/ocr/zip/plugins、dialogs customView、engines/threads）。
+
 > 本文面向在 Node24 引擎中编写脚本的用户，说明四个基础自动化模块和 `app.viewFile` 的用法、
 > 参数边界、返回值与宿主协议。
 >

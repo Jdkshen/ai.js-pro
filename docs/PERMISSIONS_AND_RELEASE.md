@@ -1,6 +1,6 @@
 # AI.js Pro 权限与发布基线
 
-> 更新日期：2026-09-09。本文描述当前 `com.jdkshen.aijspro` 的发布约束，不包含任何签名密钥。
+> 更新日期：2026-09-09（正式 release 基线）；2026-10-19 补充：日常迭代发布走 dev 通道（当前 dev-1112，Flutter 构建），由 `output/flutter-poc/publish-poc-build.ps1` + `tools/publish.ps1` 完成，不经过本文的正式签名流程。本文描述正式发布（`version.json` 465 / `1.0.2`）的约束，不包含任何签名密钥。
 
 ## 1. 发布构建
 

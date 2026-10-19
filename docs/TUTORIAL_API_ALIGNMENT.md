@@ -1,8 +1,14 @@
 # 教程与示例 API 对齐说明
 
+> **2026-10-19 时效说明（dev-1112）**：本文记录的是早期（以 Rhino 为主）的示例接入结论，已部分过期。现在仓库提供 **Rhino / QuickJS / Node24 三引擎**；文中“明确排除”的模块大多已经实现或有对应能力：
+>
+> - Node24（`"nodejs";`，真实 Node v24.22.0）已作为第三引擎接入，Node 示例按引擎重排为 Rhino / QuickJS / Node 三类；
+> - `$work_manager`（含 inrt 定时任务）、`$zip`、`$crypto`、`sqlite`、`$ocr`、SIFT/特征匹配、WebSocket 均已有实现或桥接；Node 侧有 `media/ocr/zip/plugins/engines/threads` 等模块；
+> - 当前以 [三引擎 API 与示例核对](reports/2026-10-19_三引擎API与示例核对.md) 的逐文件台账为准；示例仍不应整目录复制进 APK，必须先按引擎标记与依赖审阅。
+
 来源目录：`C:\Users\18101\Downloads\教程文档`
 
-本工程的脚本运行时以 Rhino/Auto.js 4.x API 为主。下载目录同时包含新版 Auto.js Pro API、第二代引擎和 Node.js 示例，因此不能整目录复制到 APK。
+本工程的脚本运行时最初以 Rhino/Auto.js 4.x API 为主。下载目录同时包含新版 Auto.js Pro API、第二代引擎和 Node.js 示例，因此不能整目录复制到 APK。
 
 ## 本次接入
 
@@ -14,11 +20,11 @@
 
 这些示例已改为当前工程实际提供的 `ui`、`threads`、`engines`、`dialogs`、`device` 和 Java 互操作 API。没有复制下载目录里的 `$ui`、`$threads`、`$engines` 等新版别名。
 
-## 明确排除
+## 早期明确排除（现已部分重新评估）
 
-- 第二代引擎官方示例：脚本内容使用 `"nodejs";` 入口。
-- `nodejs-modules`、`node_modules`、npm、CommonJS/ESM 服务端示例。
-- 当前运行时没有实现的 Auto.js Pro 专属模块：`$work_manager`、`$zip`、`$crypto`、`sqlite`、`RootAutomator2`、`$ocr`、特征匹配和新版 WebSocket API。
+- 第二代引擎官方示例：现已由 Node24 引擎接入，但需按项目 `"nodejs";` 标记与 Node 模块支持情况逐项验证。
+- `nodejs-modules`、`node_modules`、npm、CommonJS/ESM 服务端示例：Node24 已支持 CJS/ESM、node_modules 与 `require.resolve`，但并非所有服务端依赖都可直接运行。
+- Auto.js Pro 专属模块：`$work_manager`、`$zip`、`$crypto`、`sqlite`、`RootAutomator2`、`$ocr`、特征匹配和新版 WebSocket API 现已有实现/子集，具体能力与限制见当前三引擎核对报告。
 - 依赖未随 APK 提供的 OCR/FFmpeg 等外部插件示例。
 - 依赖 Android Resources 或新版打包器字段的项目示例；示例页的「打包（项目）」会把整目录复制到脚本目录按项目打包，但这些字段仍未支持。
 

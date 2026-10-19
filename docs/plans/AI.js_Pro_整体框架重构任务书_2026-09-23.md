@@ -4,6 +4,8 @@
 范围：`C:\Users\18101\Documents\ai-js-pro` 整个 Android 项目，不限于象棋示例。  
 用途：交给 DeepSeek / 接手开发者分批实施与验收。**本文是目标方案，不代表这些改造已经完成。**
 
+> **执行状态（2026-10-19，dev-1112）**：本任务书写作于 2026-09-23；之后平台线已推进大部分基础项：B0/B1 的脚本事实门面与设备登记已落库；Flutter dev 通道完成 `:script` / `:native` / `:node24` 多进程隔离；三引擎（Rhino/QuickJS/Node24）已可用并有回归基线（QuickJS 227/227、Rhino 22/22、Node 21/21）；Rhino `:script` 无障碍反向通道与 inrt 定时任务已补齐。仍未收口的主要是：三引擎行为契约（B3）、打包/inrt 成对回归（B5）、性能与正式发布（B6），以及 Node24 真实 Java 继承/部分模块。逐阶段状态以 [`整仓重构全程计划_2026-09-23.md`](整仓重构全程计划_2026-09-23.md) 与 [`REMAINING_WORK.md`](../REMAINING_WORK.md) §0 为准；本文中的 HEAD、分支、“Miuix/双引擎”等事实均已过期。
+
 ## 0. 先固定事实与边界
 
 AI.js Pro 是 Android 端 JavaScript IDE、自动化运行时和脚本 APK 打包器。当前源码保留 Rhino 兼容脚本，`// @engine quickjs` 进入 QuickJS。主 App 使用 Miuix/Compose，编辑器、终端、悬浮窗等仍有 View 实现；脚本打包产物由 `:inrt` 模板运行。仓库 `settings.gradle` 当前包含 `:app`、`:inrt`、`:engine`、`:engine-rhino`、`:rhino-language`、`:automator`、`:common` 和若干第三方模块；`apps/app/build.gradle` 只有 `miuix` 界面 flavor，以及 `compat`、`lite` 引擎 flavor。**旧 ImGui 工作台不是现行主界面，不应按旧架构文档复活。**

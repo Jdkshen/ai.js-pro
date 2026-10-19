@@ -1,5 +1,7 @@
 # 双引擎 API 与 UI 性能验证
 
+> **2026-10-19 时效说明**：本文只覆盖 Rhino / QuickJS。仓库现在还有 Node24 第三引擎（独立 `:node24` 进程）；Node24 的回归见 [三引擎 API 与示例核对](../reports/2026-10-19_三引擎API与示例核对.md)，当前三引擎基线为 QuickJS 227/227、Rhino 22/22、Node 21/21（dev-1103）。
+
 ## Miuix JVM 测试
 
 仓库路径包含中文时，Windows 上的 Gradle Test Worker 可能无法加载测试类。使用临时 ASCII 盘符运行：
@@ -16,7 +18,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\test-miuix.ps1
 2. 运行 `powershell -ExecutionPolicy Bypass -File .\tools\compare-engine-api.ps1 -Device cccc62c7`。
 
 脚本默认使用 USB Host 固定地址 `http://127.0.0.1:18790/mcp`，并自动执行
-`adb forward tcp:18790 tcp:8788`。如果手机端修改过 MCP 端口，使用
+`adb forward tcp:18790 tcp:8765`（默认端口；占用时会顺延）。如果手机端修改过 MCP 端口，使用
 `-DevicePort <端口>`；如果已自行配置网络或转发，传入 `-Url` 并加
 `-SkipAdbForward`。
 

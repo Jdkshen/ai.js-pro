@@ -4,7 +4,7 @@
 
 入口：AI.js Pro 左上角菜单 → 开发 → MCP 服务。
 
-默认地址为 `http://127.0.0.1:8788/mcp`，传输类型选择 **Streamable HTTP**。
+默认地址为 `http://127.0.0.1:8765/mcp`（端口被占用时在 **8765–8795** 顺延，以页面显示为准），传输类型选择 **Streamable HTTP**。服务默认绑 `0.0.0.0`，仍保留 Bearer 令牌鉴权。
 
 同一手机上的 MT 客户端直接填写该地址。默认开启“本机客户端兼容”，loopback 请求可不填写自定义请求头；MT 的自定义请求头列表不能保留名称为空的行，否则 OkHttp 会在发包前抛出 `name is empty`。
 
@@ -20,7 +20,7 @@ MCP-Protocol-Version: 2025-06-18
 电脑通过 USB 连接 K40 时，先执行：
 
 ```powershell
-adb forward tcp:18790 tcp:8788
+adb forward tcp:18790 tcp:8765
 ```
 
 客户端填写 `http://127.0.0.1:18790/mcp`。服务接受 USB 转发后的 loopback Host 端口，不需要伪造 `Host`。也可在页面设置中开启局域网连接，再使用页面列出的 IPv4 地址；局域网 HTTP 未加密，不能暴露到公网。
@@ -28,6 +28,8 @@ adb forward tcp:18790 tcp:8788
 ## 工具
 
 服务始终公布完整工具列表：32 个功能入口和 7 个高级版兼容别名，共 39 个名称。需要授权的工具在未授权时返回明确错误，方便客户端稳定发现能力。
+
+> **引擎范围（2026-10-19）**：MCP 的 `run_script` / `check_syntax` / `list_engine_api` / `probe_engine_api` / `engine_api_diff` 目前只接受 **`rhino` / `quickjs`**；Node24 第三个引擎尚未通过 MCP 暴露。需要 Node24 时请用文件/项目入口运行（`"nodejs";` 标记）。
 
 高级版兼容名称与本项目名称调用同一实现：
 
@@ -53,7 +55,7 @@ adb forward tcp:18790 tcp:8788
 - `read_apk_logs`：增量读取 AI.js Pro 全局控制台日志。
 - `list_executions` / `get_execution`：读取本 MCP 发起的运行任务状态、结果与异常。
 - `check_syntax`：传 `code`，可选 `engine=rhino/quickjs`，返回 `valid`、错误位置和 `executed=false`。支持本项目 XML/模板预处理；错误位置可能来自预处理后的源码。语法通过不保证业务 API、权限或文件存在。
-- `learn_autojs_skill`：读取应用内置的双引擎使用说明。
+- `learn_autojs_skill`：读取应用内置的引擎使用说明（当前工具面为 Rhino/QuickJS；Node24 未纳入 MCP）。
 - `get_mcp_log`：可按 `executionId` 读取单个任务日志，或选择 `channel=script/service/all`。默认最多 20000 字符，最大 200000；服务记录最多最近 30 条，结果标明是否截断。
 
 手机端开启“允许执行与设备操作”后：
@@ -141,7 +143,7 @@ adb forward tcp:18790 tcp:8788
 
 ## 真机验证记录（2026-09-11 第二轮 · MI 8 Explorer Edition / Android 15 / USB 端口转发 MCP）
 
-通过 `adb forward tcp:18788 tcp:8788` 直接访问设备内 MCP 服务，无需 Wi-Fi。
+通过 `adb forward tcp:18788 tcp:8765` 直接访问设备内 MCP 服务，无需 Wi-Fi（若设备实际端口已顺延，把第二个端口改成页面显示值）。
 
 | 场景 | 修复前 | 修复后 |
 |---|---|---|

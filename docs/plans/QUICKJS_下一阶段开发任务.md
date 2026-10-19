@@ -1,5 +1,5 @@
 # QuickJS 下一阶段兼容桥开发任务书
-
+> **2026-10-19 时效说明（dev-1112）**：本任务书的大部分条目已落地（事件/worker、悬浮窗生命周期、文件/网络/图像、Native Frame、Java 互操作、OpenCV 图色等），QuickJS 回归基线为 227/227（dev-1103），并新增 `:script` 选择器链与无障碍事件。当前仍有：`:script` 自动化常用面子集、E4X/JSX 与完整 UI DSL 不适用、`continuation` 部分退化、调试器仍仅 Rhino。开始前仍必须检查当前源码；缺口以 [三引擎 API 与示例核对](../reports/2026-10-19_三引擎API与示例核对.md) 与 [REMAINING_WORK](../REMAINING_WORK.md) §0 为准。
 > 本文件用于交给后续 Codex 任务直接执行。开始前必须检查当前工作区，当前源码是唯一基线；不要根据旧对话或旧文档猜测架构。
 
 ## 1. 任务目标

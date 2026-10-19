@@ -1,7 +1,9 @@
 # task-146 K40 验证记录
 
+> 后续状态：这些模块已由 `Node24Prelude.java` 正式加载（2026-10-19 dev-1112），本记录是合并前的手工验证快照。
+
 环境：K40（M2012K11AC / cccc62c7），App dev-1083（flutterPoc 构建），Node24 Node v24.22.0。
-验证方式：把 main.js 与本目录 3 个模块文件 push 到 /sdcard/脚本/node24-pro-modules/，用 RunIntentActivity 运行 nodejs 脚本；模块通过工程内 require('./modules/xxx.js') 自行注册（模拟 prelude 之后加载；正式合并见 REGISTER-PATCH.md）。
+验证方式：把 main.js 与本目录 3 个模块文件 push 到 /sdcard/脚本/node24-pro-modules/，用 RunIntentActivity 运行 nodejs 脚本；模块通过工程内 require('./modules/xxx.js') 自行注册（模拟 prelude 之后加载；正式合并已落实）。
 证据：.artifacts/task146-k40-result.json、.artifacts/task146-k40-visual.json、.artifacts/task146-visual.png。
 
 ## 结果摘要

@@ -6,13 +6,15 @@
 - 注册类：`com.jdkshen.apkbuilder.plugin.PluginRegistry`（`AndroidManifest.xml` 里的
   `org.autojs.plugin.sdk.registry` 元数据，官方 Auto.js Pro 与本仓库都按它反射加载）
 - 插件对象：`com.jdkshen.apkbuilder.plugin.ApkBuilderPlugin`
-- 体积：约 43MB，几乎全是 `assets/template.apk`（arm64 未签名运行时，由 `:inrt` 构建）
+- 体积：当前仓库里的 `assets/template.apk` 约 **67.5 MB**（70,808,075 B），几乎全是打包运行时模板（arm64 未签名，由 `:inrt` 构建）
 
 ## 为什么做成插件
 
-模板是一份完整的 arm64 运行时 APK（~43MB），只有要打包应用的用户才用得到。
+模板是一份完整的 arm64 运行时 APK，只有要打包应用的用户才用得到。
 以前它以 `assets/template.apk` 常驻主 APK，等于让**所有**用户为它付体积。
-搬进插件后：主 APK 从 253MB 降到 ~141MB，需要打包的人装一次插件即可。
+搬进插件后：主 APK 从 253MB 降到约 132–141MB，需要打包的人装一次插件即可。
+
+> **2026-10-19 状态（dev-1112）**：仓库插件里的模板仍是 **67.5MB 旧全量**；宿主打包优先使用内置瘦身模板（约 16.4MB）。待下一次插件发版时用新 `:inrt` release 整体重建，避免两套模板长期不一致。
 
 ## 构建
 

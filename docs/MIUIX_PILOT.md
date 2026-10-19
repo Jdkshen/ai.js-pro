@@ -2,6 +2,8 @@
 
 日期：2026-09-05
 
+> **2026-10-19 时效说明（dev-1112）**：dev 更新通道自 dev-905 起以 **Flutter 玻璃界面**为主入口（`-PflutterPoc=true`，`GlassFlutterActivity`），桌面保留「AI.js Pro（Miuix 回退）」；Miuix 仍是仓库默认构建与回退界面的主体。本文保留 2026-09-05 试点过程，当前事实入口见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+
 > **2026-09-12 时效更正（正文保留原样，作为试点当时的事实记录）**
 >
 > 本文写作时 `miuix` 只是**试点轨道**，与 `common` / `coolapk` 两个 channel flavor 并存，

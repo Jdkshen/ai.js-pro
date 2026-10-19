@@ -1,5 +1,7 @@
 # Node24 控件查询、点击与文字输入
 
+> 当前验证基线：dev-1112（Node 21/21、Node UI basic 8 steps；`:script` 自动化代理为常用面子集）。
+
 适用主 App 的 flutterPoc 构建。先开启本应用的无障碍服务，再在 Node 引擎中运行脚本。
 
 ```js

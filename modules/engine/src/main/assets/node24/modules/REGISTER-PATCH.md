@@ -1,4 +1,6 @@
-# Node24 modules 注册补丁（task-146，待 native-process/Lead 合并）
+# Node24 modules 注册补丁（task-146，已合并，保留为历史）
+
+> **2026-10-19 状态**：已落地到 `Node24Prelude.java`（`MODULE_ASSETS` 列表包含 `color.js`、`floating_window.js`、`accessibility_extra.js`、`zip.js`、`ocr.js`、`media.js`、`plugins.js`）。本文只作合并方案与顺序说明保留，不需要再手工合并。
 
 本目录新增 3 个独立 JS 模块文件（**不修改 prelude.js**）：
 

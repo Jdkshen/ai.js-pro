@@ -1,5 +1,7 @@
 # Rhino / QuickJS 双引擎回归与发布验收任务
 
+> **2026-10-19 时效说明（dev-1112）**：仓库现在是 **Rhino / QuickJS / Node24 三引擎**。最近一次三引擎回归（dev-1103）：QuickJS 227/227、Rhino 22/22、Node 21/21、Node 颜色 6/6、Node UI basic 8 steps，0 失败 0 跳过；dev-1112 又补了 Rhino `:script` 无障碍事件回调。本文的“双引擎”验收步骤仍可作为 Rhino/QuickJS 部分，但发布门禁需同时覆盖 Node24 与 `:script`/`:native`/`:node24` 多进程。
+
 > 用途：把本文件直接交给开发代理执行。目标不是只修改脚本，而是在连接的手机上完成可复现的 Rhino、QuickJS 双引擎回归，并提交真实日志。
 
 ## 1. 最终目标

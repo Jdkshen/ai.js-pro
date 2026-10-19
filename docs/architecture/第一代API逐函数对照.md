@@ -1,5 +1,7 @@
 # 第一代 Pro API 逐函数对照（Auto.js Pro 官方 API 文档 PDF）
 
+> **2026-10-19 时效说明**：本对照是 **2026-09-15 的静态/真机枚举快照**，不代表 dev-1112 的三引擎行为验收。之后仓库增加了 Node24 引擎与 Flutter `:script` 多进程；QuickJS/Rhino 也有多项补齐（见 [三引擎 API 与示例核对](../reports/2026-10-19_三引擎API与示例核对.md)）。需要当前能力时，先看该报告与 `PROJECT_STATUS.md`，再用 MCP `list_engine_api` / `probe_engine_api` 重新探测。
+
 对照日期：2026-09-15（§4 / §5.4~§5.8 / §6 / §7 为 `$crypto`、`$zip`、`$debug`、`$power_manager`、`floaty` 权限、`$settings` 补齐后重跑）。对象：`C:\Users\18101\Downloads\Auto.js Pro官方API文档.pdf`（335 页，第一代 / Rhino 默认引擎）。
 真机：**小米 8（`ce4d2bdb`，Android 15）**，两个引擎各跑「普通脚本」与 `"ui";` 脚本。
 

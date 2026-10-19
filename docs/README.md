@@ -2,8 +2,14 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
+> **当前状态（2026-10-19，dev-1112）**：HEAD `45fae285`；dev 更新通道 **dev-1112**（Flutter 构建，约 132.1 MB，K40 已装）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24`；MCP 默认端口 **8765**。当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
+
 ## 当前状态
 
+- **[dev-1112 收尾交接（2026-10-19）](reports/2026-10-18_收尾交接_给Codex_v2.md)**：从 dev-1073 到 dev-1112 的逐版记录；末尾「2026-10-19 20:30 更新（dev-1112）」是当前最新进度：Rhino `:script` 无障碍反向通道、inrt 定时任务补全、三引擎回归全绿。
+- **[三引擎 API 与示例核对（2026-10-19）](reports/2026-10-19_三引擎API与示例核对.md)**：全量枚举 377 个示例文件，Rhino 150 / QuickJS 84 / Node 49 编译通过；QuickJS 227/227、Rhino 22/22、Node 21/21 真机回归；列出 QuickJS `:script`、Node 引擎/UI/模块、Rhino 跨进程等核心缺口。
+- [Rhino `:script` 无障碍事件回调（2026-10-19）](reports/2026-10-19_Rhino_script无障碍事件回调.md)：`IAutomationHostCallback` oneway AIDL + 主进程 delegate 转发；`auto.service` 远程代理；K40 收到 accessibility 46 条 / view_clicked 4 条 / toast 1 条。
+- [inrt 定时任务补全（2026-10-19）](reports/2026-10-19_inrt定时任务补全.md)：广播 Intent 任务、按 path 执行工程内脚本、headless `exit()` 中止、exact alarm 未授权引导；模板重建并打入 dev-1111/1112。
 - [Flutter 玻璃界面 POC 验收（2026-10-17）](reports/2026-10-17_Flutter玻璃界面POC验收.md)：按《统一 Flutter 界面可行性评估》§9 在 ai-js-pro 上跑通玻璃界面——首页渲染、真实脚本目录、主题与 Miuix 一致全部验收通过；冷启动 835 ms、PSS +35.6 MiB、APK +17.73 MiB（arm64 debug）。POC 代码以 `-PflutterPoc=true` 隔离在 debug 源集，默认构建/发布零影响；下一步按 A 路线分批移植 95 个桥方法。已按仓库发布流程迭代到 **dev-905**：**主入口已切到 Flutter**（桌面「AI.js Pro」进玻璃首页，安装器「打开」默认也进 Flutter），桌面保留「AI.js Pro（Miuix 回退）」入口；日志/终端/设置/工作区/退出等走原生页兜底，每版都通过 App 内检查更新 → 下载 → 安装全链路实测；**dev-906 起界面品牌统一为 AI.js Pro**（首页标题、抽屉头部、启动字标）；**dev-907 起顶栏 `<>` 直接打开新版多文件工作区**（恢复上次会话文件/标签，不再跳旧 Miuix 列表），抽屉副标题改为「脚本工作区」。**dev-909 完成桥移植第一批**：Flutter 侧可直接运行脚本、看运行中/定时任务并停止、读运行日志，文件新建/改名/删除到回收站/恢复/分享/在编辑器打开全部打通；启动页换 AI.js Pro 新 Logo。**dev-910 完成桥移植第二批（部分）**：抽屉 MCP 开关真正启停服务；插件页可启停/看图标/装本地或 URL 插件包；导入（工作区多选、插件/资源选择器、资源目录导入）、示例重置/复制、桌面快捷方式都打通；桥支持延迟回复（系统选择器类）。**dev-911 把打包/签名入口改走原生打包页**（单文件/工程都直接打开 MiuixBuildActivity，签名模式复用原生），不再移植 Flutter 工程页；**dev-912~914 补上最后两个原生桥**：电脑连接（服务器模式启停 + 主动连接电脑，PC 扩展在线时自动握手显示已连接）与悬浮运行（悬浮控制条 ▶/■/✕，脚本无界面执行可随时停止）；设备连接开关改为异步等待，不再误报失败。**dev-915 补齐最后 6 个未对齐项**：设备页 Shizuku/修复无障碍、抽屉悬浮窗（原生悬浮菜单）、允许远程调试真启停服务、资源页导入记录、设置页编辑器字号（写原生 Ace 偏好）、设置页「关于」五项（检查更新/更新源/问题反馈/关于/许可）。**dev-916 继续补交互**：文件浏览器支持长按多选、复制/剪切/粘贴（同名自动加 (1)、移动后清空剪贴板）与批量移入回收站；悬浮控制条可拖动并记住位置，新增「停止全部」「打开运行日志」按钮。**dev-917~919 对齐原厂 FloatingControllerView 源码**：补齐 ⌄ 收起/⌃ 展开（收起只留箭头、状态持久化）与 ✎ 编辑按钮，并修复控制条加宽后 ✕ 被裁掉的问题。**dev-920~923 视觉完善**：⌄/⌃ 放大为 30dp 圆形按钮，▶/■/⏹/✎/📄/✕ 改为彩色圆底芯片（运行绿/停止红/停止全部橙/编辑蓝/日志青/关闭红），运行中标题「● 脚本名」绿色加粗；窗口宽度按实际内容先量后定，✕ 不再被屏幕裁掉。**dev-924 细节**：收起按钮换成居中的紫色三角（▼ 展开 / 旋转 180° 收起为 ▲），拖动把手也加圆底、运行中变绿；所有芯片加按下水波；标题区收窄留边距。**dev-925**：收起按钮改为自绘 chevron（⌄/⌃ 几何居中，不受字体基线影响），补「收起/展开悬浮窗」tooltip 与首次收起 Toast 提示。**dev-936/937/938 停止任务直接执行**：任务管理页停止脚本/停止全部/取消任务不再弹确认框，点一下即停并浮动提示；运行中任务 kind 归一、引擎标签修正（Rhino 红 R）。**dev-935 跑脚本不再需要先按返回**：`PocRuntime.run` 不再启动透明 `RunIntentActivity`，普通脚本直接后台执行（UI 脚本仍走 `ScriptExecuteActivity`），运行期间界面可正常点击/滑动；悬浮条运行补工作目录。**dev-934 清理历史示例目录**：`BundledSampleSync` 增加 `LEGACY_DIRS` 显式清理（`QuickJS 新引擎`、`Rhino/Node 引擎/中文`、`English`、`pro-samples`），升级时旧目录自动消失（用户改过的先备份到 `sample-backup/legacy/`）；K40 与小米 8 均验证示例页只剩三棵引擎树。**dev-933 三引擎示例全部加首行标记**：Rhino 示例首行 `rhino`、Node 示例 `nodejs`、QuickJS 示例 `quickjs`（字符串指令，ui/auto 模式保持第一行）；引擎识别同时认 Pro 字符串写法与 `// @engine` 注释写法。**dev-932 示例引擎标记与路径清理**：`JavaScriptSource` 引擎识别支持 Auto.js Pro 首行写法 `nodejs` / `quickjs` 字符串指令（Node 示例现在真正由 Node24 执行，真机探针输出 `probe-node v24.22.0`）；示例目录去掉多余的「中文」层（Rhino 引擎/分类、Node 引擎/Node.js），同步修正 QuickJS 找图资源路径与构建校验。**dev-930/931 打包界面切回玻璃 ProjectPage**：新增 `PocPackaging` 桥后端（项目读写、后台打包任务轮询、签名列表/别名/新建/导入、单文件准备、安装/分享），项目/单文件/示例项目/后台请求四种入口都打开 Flutter 自绘打包页；打包在后台线程执行、2s 轮询进度，产物落 `/sdcard/脚本/构建/`；原生 Miuix 打包页保留为回退。报告：`docs/reports/2026-10-17_玻璃打包页接回ProjectPage.md`。**dev-928/929 示例集按引擎重排**：`assets/sample` 顶层改为 `Rhino 引擎 / QuickJS 引擎 / Node 引擎`；Rhino/Node 两棵语料换成 Auto.js Pro 原包示例集中文部分（dev-929 去掉 English），QuickJS 沿用本仓库示例并改名；示例菜单同步 Auto.js Pro（查看/运行/悬浮运行/打包/导入/重置）；`BundledSampleSync` 增加下架示例清理。报告：`docs/reports/2026-10-17_示例集按引擎重排为Rhino-QuickJS-Node.md`。**dev-926/927 示例页对齐原厂 Auto.js Pro**：标题改「示例文件」，行副标题改示例类型（不再显示修改时间）；菜单补齐 运行示例/打包示例/打包（项目）/导入到我的脚本/重置所有示例；点示例走原生编辑器并带 sample_asset_path（工具栏可「重置」）；桥新增 sampleAction。顺手清理了 assets/sample 下 6 个本地空壳目录（不进 APK，纯仓库卫生）。
 - [Phase 0：:native 隔离脚本进程 MVP（2026-10-17）](reports/2026-10-17_Phase0_native隔离进程MVP.md)：带 lib/*.so 或 .dex 的 native 项目自动在独立 :native 进程运行，脚本进程 native 崩溃不再带崩主 App；IPC 运行/停止/任务列表/日志/崩溃自动重连已真机验证；auto_jspro_imgui 仍崩在其自带 native Button（GImGui 空），ImGui 显示问题待继续定位。
 - [Phase 1 P0：脚本迁入 :script 进程（2026-10-18）](reports/2026-10-18_Phase1_脚本迁入script进程P0.md)：普通脚本在独立 :script 进程执行（ScriptHostService/PocScriptHost/ScriptHostStaging），主进程只做 UI/IPC；任务/停止/日志/崩溃重连已真机验证；auto 脚本暂留主进程，AIDL 自动化代理为 P1。
@@ -31,29 +37,31 @@
 - [微信布局分析对照与修复（dev-755）](reports/2026-10-02_微信布局分析对照与修复_dev755.md)：源码修复、官方微信安装、Pro 同页对比、失败恢复与发布证据；欢迎页和登录页已验证，登录后的具体空白页面待复现。
 - [UI 适配记录（2026-09-12）](reports/2026-09-12_UI适配_大字体横屏侧边栏.md)：大字体/横屏/侧边栏按钮/字号矩阵的真机适配——抽屉 304dp 曾是死代码（修复后竖屏 904→836px、横屏 2144→836px）、顶栏与工具栏去固定高度、触摸目标补到 48dp；含未验证清单与并发会话造成的构建污染说明。已发布 **dev-539** 并实测手机可检测到。
 - [文件管理修复记录（2026-09-12）](reports/2026-09-12_文件管理修复.md)：接手检查六项缺陷的代码处理、新旧列表滚动恢复、自动测试和待做真机验收；已发布 dev-537 到局域网更新源，待手机安装验收。
-- **[接手指南（给 Codex / 下一个 agent）](reports/2026-09-12_接手指南_Codex.md)：从当前 commit 接手要看的第一份。进度、未验证项、下一步顺序、本仓库专用工具与坑。**
-- **[项目接手检查](reports/2026-09-12_项目接手检查.md)：同批的独立源码审计。列出文件列表的 P1/P2 具体缺陷（滚动位置丢失、新建菜单无响应、搜索只切目录、删除后刷新时机、Host 生命周期、无障碍名称缺失）与验证结果 —— 动手修之前先看这份。**
-- [项目现状与接手说明](PROJECT_STATUS.md)：当前主架构、功能边界、构建安装、K40 状态和后续整理顺序。接手项目应先读此文。
-- [剩余细节审计与收尾清单](REMAINING_WORK.md)：按 P0/P1/P2 列出尚需处理的 MCP、发布、Miuix、ImGui、引擎、测试和文档事项。
+- [接手指南（2026-09-12，历史）](reports/2026-09-12_接手指南_Codex.md)：截至 commit `7252b58` 的接手说明与工具/坑；**当前进度请改看 [2026-10-18 收尾交接 v2](reports/2026-10-18_收尾交接_给Codex_v2.md) 末尾的 dev-1112 更新**。
+- [项目接手检查（2026-09-12，历史）](reports/2026-09-12_项目接手检查.md)：同批独立源码审计（文件列表滚动、新建菜单、搜索、删除刷新、Host 生命周期、无障碍名称等）；其中大部分已在 dev-537 之后修复，仅作历史依据。
+- [项目现状与接手说明](PROJECT_STATUS.md)：当前主架构、三引擎/多进程、构建安装、K40 状态和后续整理顺序。接手项目应先读此文。
+- [剩余细节审计与收尾清单](REMAINING_WORK.md)：§0 为 dev-1112 当前剩余项；其后保留 2026-09-08 的历史审计清单。
 - [权限与发布基线](PERMISSIONS_AND_RELEASE.md)：正式签名变量、release 构建、SDK 范围、权限用途和发布验收。
 - [详细交接记录](HANDOVER.md)：按时间累积的开发背景和历史验证；与当前状态冲突时，以项目现状说明和当前源码为准。
 
 ## 架构
 
 - [象棋项目架构与运行流程](../samples/象棋自动走棋/项目结构.md)：按 0.6.54 源码梳理启动、截图识别、Pikafish 搜索、落子确认、跨引擎通信与两种悬浮窗的避让；该版源码修复待发布。
-- [源码项目说明](architecture/项目说明.md)：模块职责、运行流程、开发入口和维护风险。
-- [Rhino / QuickJS 双引擎架构](architecture/QUICKJS_ENGINE.md)：引擎选择、API 覆盖、Native Frame 和构建方式。
+- [源码项目说明（2026-09-04 归档快照）](architecture/项目说明.md)：模块职责、运行流程、开发入口和维护风险；当前架构以上方 `PROJECT_STATUS` 为准。
+- [Rhino / QuickJS 双引擎架构](architecture/QUICKJS_ENGINE.md)：Rhino/QuickJS 的引擎选择、API 覆盖、Native Frame 和构建方式；Node24 第三引擎见 [Node24 基础自动化 API](guides/Node24基础自动化API.md)。
+- [双引擎功能对比（Rhino / QuickJS）](architecture/双引擎功能对比.md)：逐模块对照；Node24 不在本表内，单独见 Node24 系列文档。
+- [Node24 基础自动化 API](guides/Node24基础自动化API.md) / [Node24 控件选择器 API](guides/Node24控件选择器API.md)：Node 引擎的无障碍、图片、投屏、控件查询与文字输入。
 - [Auto.js Pro API 兼容性与 V8 选型](architecture/Auto.jsPro_API兼容性与V8选型.md)：依据 335 页第一代 API PDF 的 36 模块清单、语义缺口、框架分层与实施验收顺序。
 - **[第一代 API 逐函数对照](architecture/第一代API逐函数对照.md)（含 [pro-api-compatibility.csv](architecture/pro-api-compatibility.csv)）：把 335 页 PDF 解析成 939 条逐函数清单，并与当前源码做静态对照（逐条带证据路径）；含模块汇总、缺口清单与复现方法。**
-- [V8 接入：框架瓶颈与迁移方案](architecture/V8接入_框架瓶颈与迁移方案.md)：整个 AI.js Pro 的宿主解耦、可选 provider、线程与回调、数据桥、打包和性能验收；当前为待实施设计。
-- [QuickJS ImGui 悬浮窗 API 边界](architecture/QUICKJS_IMGUI_FLOATY.md)：脚本调用的 ImGui 悬浮 UI，以及与 Miuix 应用界面的分工。
+- [V8 接入：框架瓶颈与迁移方案](architecture/V8接入_框架瓶颈与迁移方案.md)：整个 AI.js Pro 的宿主解耦、可选 provider、线程与回调、数据桥、打包和性能验收；其中 V8 路线已通过 Node24 第三引擎落地（真实 Node v24.22.0，独立 `:node24` 进程），其余宿主解耦条目仍为设计目标。
+- [QuickJS ImGui 悬浮窗 API 边界](architecture/QUICKJS_IMGUI_FLOATY.md)：脚本调用的 ImGui 悬浮 UI，以及与 Miuix/Flutter 应用界面的分工。
 
 ## 指南
 
 - [液态玻璃导航：实现、接入与优化](guides/液态玻璃导航_实现接入与优化.md)：顶部胶囊的进度联动、AGSL 折射、完整 Java 源码、接入与性能优化，含当前验证范围。
 - [编译指南](guides/编译指南.md)：环境要求、原生构建、Gradle 组装、输出位置和常见问题。
 - [象棋引擎插件（Auto.js 插件 APK）](guides/象棋插件_打包与使用.md)：把象棋识别/棋规/算棋打包成可独立安装的插件（自带 Pikafish + NNUE），含两个引擎的加载差异、权重解析顺序与真机验证记录。
-- [安装包瘦身：插件化与子集](guides/安装包瘦身_插件与子集.md)：把运行时模板、象棋工程与 NNUE 权重移出主 APK（253MB → 141MB）、ImGui 字体子集，以及各自的验证方式与回退开关。
+- [安装包瘦身：插件化与子集](guides/安装包瘦身_插件与子集.md)：把运行时模板、象棋工程与 NNUE 权重移出主 APK、ImGui 字体子集，以及各自的验证方式与回退开关；当前 dev-1112 约 132.1 MB，打包模板约 16.4 MB。
 - [双引擎 API 与 UI 性能验证](guides/ENGINE_API_AND_PERFORMANCE.md)：可重复的 JVM 测试、API 差异生成和真机帧耗时流程。
 - [CodeGraph 使用说明](guides/CODEGRAPH.md)：代码知识图谱索引与查询，供开发者与 AI 助手快速定位源码和调用链。
 
@@ -61,6 +69,9 @@
 
 `plans/` 保存阶段任务与改造方案，内容可能描述实施当时的状态，应结合当前源码和架构文档阅读。标有“（已作废）”的方案针对已删除的 ImGui 工作台，仅供历史参考。
 
+- **[整仓重构全程计划（2026-09-23）](plans/整仓重构全程计划_2026-09-23.md)：A（象棋）/ B（平台）两条轨道的里程碑、依赖、验收门槛与当前状态；顶部有 2026-10-19 dev-1112 执行状态。**
+- [AI.js Pro 整体框架重构任务书（2026-09-23）](plans/AI.js_Pro_整体框架重构任务书_2026-09-23.md)：平台线目标方案（P0–P6）；顶部标注了已落地/未收口项。
+- [象棋自动走棋框架重构任务书（2026-09-23）](plans/象棋自动走棋_框架重构任务书_2026-09-23.md)：象棋线目标方案（P0–P5）；A0–A3 已推进，A4/A5 待完成。
 - [ImGui 左侧抽屉菜单改造](plans/IMGUI_左侧抽屉菜单改造任务.md)（已作废）
 - [MIMO 全局主题完整覆盖](plans/MIMO_全局主题完整覆盖改造任务.md)
 - [MIMO 抽屉按钮无响应返修](plans/MIMO_抽屉按钮无响应返修任务.md)（已作废）
@@ -70,6 +81,9 @@
 - [PP-OCR 接入评估](plans/PP-OCR接入评估.md)（已作废）：早期的 ONNX/OpenCV DNN 路线，仅供历史参考
 - [QuickJS 下一阶段开发](plans/QUICKJS_下一阶段开发任务.md)
 - [Rhino 双引擎回归与发布验收](plans/RHINO_双引擎回归与发布验收任务.md)
+- [QUICKJS 悬浮窗 API 需求清单](plans/QUICKJS_悬浮窗API需求清单.md)
+- [象棋棋盘定位：多证据融合实施方案](plans/象棋棋盘定位_多证据融合实施方案.md)
+- [象棋 YOLO / OCR / 红黑分离视觉架构重构方案](plans/象棋_YOLO_OCR_红黑分离视觉架构重构方案.md)
 - [侧边栏按钮与全分辨率 UI 适配](plans/侧边栏按钮与全分辨率UI适配方案.md)（已作废）
 - [悬浮窗流畅度优化](plans/悬浮窗流畅度优化方案.md)（部分失效，见文内说明）
 - [UI 统一到 Compose(Miuix) 迁移方案](plans/UI_统一到 Compose(Miuix) 迁移方案.md)：退役 legacy flavor 与双轨分支、剩下的 View 页面迁移顺序与验收清单
@@ -77,6 +91,18 @@
 ## 历史报告
 
 `reports/` 记录特定提交或测试环境下的结果，不自动代表当前工作树已经通过相同验证。
+
+### 2026-10-18 / 10-19 · 三引擎、多进程与收尾
+
+- [收尾交接给 Codex v2（2026-10-18，末尾更新到 dev-1112）](reports/2026-10-18_收尾交接_给Codex_v2.md)：当前最完整的逐版交付记录（Node24 API、投屏路由、模型管理、远程 require、三引擎回归、dev-1112 无障碍与 inrt）。
+- [三引擎 API 与示例核对](reports/2026-10-19_三引擎API与示例核对.md)
+- [Rhino `:script` 无障碍事件回调](reports/2026-10-19_Rhino_script无障碍事件回调.md)
+- [inrt 定时任务补全](reports/2026-10-19_inrt定时任务补全.md) / [inrt 定时任务端到端](reports/2026-10-19_inrt定时任务端到端.md)
+- [Phase 1 P0：脚本迁入 :script 进程](reports/2026-10-18_Phase1_脚本迁入script进程P0.md) / [Phase 1 P1：自动化代理](reports/2026-10-19_Phase1P1_自动化代理实现记录.md) / [IAutomationHost 契约](reports/2026-10-19_IAutomationHost契约与JSON协议.md)
+- [Node24 基础自动化 API](reports/2026-10-18_Node24基础自动化API实现与K40验证.md) / [Node 引擎与线程](reports/2026-10-19_Node_engines_threads实现.md) / [Node media/ocr/zip/plugins](reports/2026-10-19_Node_media_ocr_zip_plugins.md) / [Node dialogs customView](reports/2026-10-19_Node_dialogs_customView.md) / [Node UI layoutXml/Widget](reports/2026-10-19_NodeUI_layoutXml_Widget修复.md) / [Node 模态与通知浮窗事件](reports/2026-10-19_Node_模态与通知浮窗事件.md)
+- [远程运行 require 验证](reports/2026-10-19_远程运行require验证.md) / [自动化 API 使用面与代理拦截点](reports/2026-10-19_自动化API使用面与代理拦截点.md)
+- [16KB RELRO 守卫与 task80](reports/2026-10-19_16KB_RELRO守卫与task80.md) / [OpenCV 原生库 strip 减重](reports/2026-10-18_OpenCV原生库strip减重.md) / [图色示例修复与 dev1049 验收](reports/2026-10-18_图色示例修复与dev1049验收.md)
+- [日志页与 Pro 对照及改造建议](reports/2026-10-19_日志页与Pro对照及改造建议.md)
 
 - [项目接手检查（2026-09-12，基线 commit 7252b58）](reports/2026-09-12_项目接手检查.md)：接手指南的依据——当前架构与已验证范围、源码确认的 P1/P2 问题、接手顺序；报告结尾另列「本轮未宣称完成」。
 - [QuickJS 完成报告](reports/QUICKJS_完成报告.md)

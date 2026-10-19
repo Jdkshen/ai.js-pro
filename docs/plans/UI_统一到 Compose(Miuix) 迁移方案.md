@@ -1,5 +1,7 @@
 # UI 统一到 Compose(Miuix) 迁移方案
 
+> **2026-10-19 时效说明（dev-1112）**：本方案仍是仓库**默认构建（Miuix + 原生 View）**的迁移依据；但 dev 更新通道自 dev-905 起另有一套 **Flutter 玻璃界面**主入口（`-PflutterPoc=true`，`GlassFlutterActivity`）。两套界面并存：Miuix 是默认构建与回退入口，Flutter 是 dev 通道主入口，不要按本方案把 Flutter 页面也改成 Compose。
+
 > 制定日期：2026-09-12
 >
 > 基线：`chore/upgrade-gradle-8`，Miuix 0.3.1 + Compose 1.7.6

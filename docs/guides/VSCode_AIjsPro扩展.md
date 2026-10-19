@@ -1,5 +1,7 @@
 # AI.js Pro 自研 VS Code 扩展（vscode-extension/）
 
+> 当前配套宿主 **dev-1112**。legacy 通道仍为「电脑拨 9317 / 手机回连 8327」；Flutter 构建另有 ws-rpc 动态端口通道，两条链路独立，扩展按需选择。
+
 手机侧保留官方 `hyb1996.auto-js-pro-ext` 兼容协议（`DevPluginServer`），电脑侧新增自研扩展
 `vscode-extension/`（`jdkshen.aijspro-vscode`），不再依赖官方扩展即可完成「连接 → 运行 →
 日志 → 停止 → 文件同步」全流程。
