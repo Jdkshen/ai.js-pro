@@ -594,7 +594,12 @@
   var appModule = {
     openUrl: function (url) { return appCall('openUrl', [toWire(url)]); },
     startActivity: function (name) { return appCall('startActivity', [toWire(name)]); },
-    launch: function (pkg) { return appCall('startActivity', [toWire(pkg)]); },
+    // task-206：Auto.js app.launch(pkg) 语义返回 boolean；工程按返回值判断是否发出
+    // pageAction（返回 falsy 会静默丢弃 获取屏幕/定位/识别/开始）。
+    launch: function (pkg) {
+      appCall('startActivity', [toWire(pkg)]);
+      return true;
+    },
     viewFile: function (path) {
       // 与 image 一致：相对路径按入口脚本目录解析，宿主只接收绝对路径。
       var absolute = resolveImagePath(path, 'app.viewFile 路径');

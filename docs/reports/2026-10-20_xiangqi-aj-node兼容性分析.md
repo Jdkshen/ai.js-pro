@@ -246,3 +246,78 @@ probe（Node24，K40）结果：
 - `.artifacts/task203-verify/g-native2.txt`（Node 单 job 互斥 + 后台 window 只读）
 - `.artifacts/task203-verify/h-backend.txt`（panel/bus 文件已写入）
 - `.artifacts/task203-verify/base.apk` / `libqjsjni.so`（APK 内新 bootstrap 代码确认）
+
+---
+
+## 13. task-204：QuickJS frozen 根因修复 + NativeEngine 跑通（dev-1152）
+
+### 13.1 frozen 根因
+
+- 设备 `/proc/maps`/on-device lib sha256 与 APK `lib/arm64-v8a/libquickjs_jni.so` 完全一致（`4265d5…`），排除旧 lib；
+- 真正来源：QuickJS 启动后加载的 `modules/qjs-canvas.js:152` 又执行 `g.floaty = g.$floaty = Object.freeze(Object.assign({}, originalFloaty, {...}))`，把 bootstrap 里已可写的 floaty 再次冻结；
+- 修复：qjs-canvas.js 去掉 `Object.freeze`（改为 `Object.assign(...)`，并修正括号），与 Rhino 语义一致；node --check 通过；
+- 验证（dev-1152）：QuickJS strict 探针 `Object.isFrozen(floaty)=false`、`Object.isExtensible=true`、`floaty.window` writable=true、strict 赋值 OK。
+
+### 13.2 后台/面板（dev-1152）
+
+- AJ后台.js 越过 `node-headless-window` window 只读，正常运行；
+- 面板日志：`[Node.js 面板] 已连接后台引擎 1，Node.js v24.22.0`；
+- 主界面状态：**「准备就绪」**，浮窗面板显示，拖拽已启用（enableDrag pending name=dragHandle viewId=20161210）；
+- bus 文件：`bus-state-floaty.json` 含 version 0.6.80/settings/recentLogs/backend:pikafish/readyAt；`node-panel-owner.json`、`node-window.json` 持续更新；
+- 未再出现 `window is read-only` / 后台异常退出。
+
+### 13.3 NativeEngine / NativeYolo（dev-1152）
+
+- `runtime.methods` 生效，NativeEngine 签名：`nativeStart(String,int,int,int)`、`nativeAnalyze(String,long,long,int,int)`、`nativeAnalyzePosition(...)`、`nativeStop/nativeQuit/nativeIsRunning/nativeConfiguredThreads/nativeOptions/loadProject/load/loadError/libraryPath/evalPath`；
+- `nativeStart(evalPath, 2, 128, 40)` → true；`nativeIsRunning()=true`；`nativeOptions()` 返回 Pikafish UCI 选项列表；
+- `nativeAnalyze` 用工程 START_FEN（`rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1`）→ 返回 UCI info（`pv b2e2`，score cp 22/119）→ **JNI/SO/NNUE 全链路跑通**；
+- NativeYolo：`loadProject(...)` 成功（void），`runtimeVersion()=1.21.0`，`runtimePath=.../libonnxruntime.so`；dex 无 `loadedIdentity()` 方法，只有 `runtimeVersion/runtimePath/libraryPath/modelPath/create/detect/close`；
+- WindowDrag dex/class OK。
+
+### 13.4 下一个阻塞点
+
+1. 无障碍未开启：面板 state `accessibilityReady:false`，自动落子/定位依赖无障碍；需在设置页开启。
+2. 截图授权：`capture=auto` 需用户点「获取屏幕」授权 MediaProjection 后才能识别；
+3. YOLO `create/detect` 尚未实际调用（native 库与 dex 已加载，可再 probe 一次棋盘图推理）；
+4. 面板已「准备就绪」，下一步用户流程：开权限→获取屏幕→定位/识别→开始自动走棋。
+
+### 13.5 证据
+
+- `.artifacts/task204-verify/a-strict.txt`（floaty frozen=false/赋值 OK）
+- `.artifacts/task204-verify/panel-run.txt`、`panel-ui.xml`（已连接后台引擎 1 / 准备就绪 / 浮窗）
+- `.artifacts/task204-verify/native-start.txt`（nativeStart=true/options）
+- `.artifacts/task204-verify/native-fen.txt`（nativeAnalyze UCI pv b2e2）
+
+---
+
+## 14. task-205：权限/截图/YOLO/全链路收尾（dev-1152）
+
+### 14.1 无障碍
+
+- adb 开启 `SelectToSpeakService` 后 `dumpsys accessibility` 显示 AI.js Pro 已 Bound；面板 bus state `accessibilityReady:true`；
+- 注意 reinstall / force-stop 后系统会关掉无障碍，需重新 enable。
+
+### 14.2 截图 / MediaProjection
+
+- 系统 MediaProjection 授权弹窗（Android 15 应用分享选择器）可正常出现；选择应用后授权成功，`ScreenCapturer` virtual display 创建，`requestScreenCapture()` + `captureScreen()` 实际取到帧并保存 `/sdcard/n205-capture.png`（1080×2400，10.3MB）；
+- **面板「获取屏幕」链路崩溃**：点击后 MediaProjection 成功启动/停止，但后端抛 `TypeError: cannot read property 'message' of null`（面板日志 ScriptExecutionError + 后台异常退出）；直接 QuickJS 探针 requestScreenCapture/captureScreen 正常，问题在面板 capture 流程/错误对象处理；
+- 已把 autorun `captureBackend` 设为 `shell`（root screencap 通道，避免 MediaProjection 弹窗）重启面板，面板显示「截图 shell」；但本次点「定位棋盘」后 `lastPageAction`/`gridVersion` 未更新（后台/总线延迟或前端未收到），需再验证。
+
+### 14.3 YOLO create/detect（PASS）
+
+- `NativeYolo.loadProject` + `create(model, 160, 320, 2)` 成功；模型复制到私有目录 `/data/user/0/.../xiangqi-yolo-models/<sha>/model.onnx`；
+- `detect(bitmap, 0, 0, 1080, 2400, 0.01)` 在实拍游戏截图（1080×2400）上返回 2070 字节检测结果：class 6/1/2/5/0 等，置信度 0.977/0.976/0.966… → **ONNX Runtime + JNI + 模型推理全链路跑通**。
+
+### 14.4 完整链路（定位棋盘/识别一帧/算棋）
+
+- NativeEngine nativeStart/analyze 已通（§13），YOLO 检测已通，无障碍已就绪；
+- 缺口在面板端 capture 命令：MediaProjection 路径 500/空错误导致后台退出；切 shell 通道后本次 page action 未落到 backend（lastPageAction 不变），需再排查前端 page action → bus → backend 的投递与后台存活；
+- 定位/识别/算棋端到端尚未完成验证。
+
+### 14.5 证据
+
+- `.artifacts/task205-verify/strict.txt`（无障碍/floaty 前置）
+- `.artifacts/task205-verify/perm.png`/`perm2.png`（MediaProjection 授权弹窗/应用选择器）
+- `.artifacts/task205-verify/n205-capture.png`（captureScreen 实帧 1080×2400）
+- `.artifacts/task205-verify/yolo2.txt`（YOLO detect 2070B 结果）
+- `.artifacts/task205-verify/locate.png`、`locate2.png`（定位操作后界面）

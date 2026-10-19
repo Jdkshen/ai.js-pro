@@ -13,7 +13,8 @@ globalThis.__autojsHost = function (payload) {
   requests.push(request);
   let value = null;
   if (request.kind === 'java') {
-    if (request.op === 'member') value = { kind: 'method' };
+    if (request.op === 'member') value = { kind:
+      ['elapsedRealtime', 'max', 'append', 'self', 'fail'].includes(request.name) ? 'method' : 'unknown' };
     if (request.op === 'newRef') value = { $obj: nextObject++, $class: request.cls };
     if (request.op === 'static' || request.op === 'call') {
       if (request.method === 'elapsedRealtime') value = ++ticks;
@@ -25,7 +26,6 @@ globalThis.__autojsHost = function (payload) {
   return JSON.stringify({ ok: true, value: value });
 };
 require(path.resolve(__dirname, '../../main/assets/node24/prelude.js'));
-require('rhino').install();
 
 const clock = android.os.SystemClock;
 assert.strictEqual(clock.elapsedRealtime(), 1);

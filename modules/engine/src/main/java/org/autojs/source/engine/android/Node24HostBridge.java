@@ -201,6 +201,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
      * 不能做成 static：否则会跨 job 强引用插件 Class/ClassLoader。
      */
     private final Node24ReflectionCache mReflectionCache = new Node24ReflectionCache();
+    private final Node24NoArgCallCache mNoArgCalls = new Node24NoArgCallCache();
+    private static final Object[] NO_ARGUMENTS = new Object[0];
 
     public Node24HostBridge(Context context) {
         this(context, null);
@@ -221,6 +223,13 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return error("本次 Node 任务的宿主桥已结束").toString();
         }
         try {
+            // The prelude emits this canonical suffix for parameterless calls.
+            // Other requests keep their normal path without hashing/warming a binding.
+            boolean noArgRequest = requestJson != null && requestJson.endsWith(",\"args\":[]}");
+            Node24NoArgCallCache.Call bound = noArgRequest ? mNoArgCalls.get(requestJson) : null;
+            if (bound != null) {
+                return ok(toWire(invokeMethod(bound.method, bound.target, NO_ARGUMENTS))).toString();
+            }
             JSONObject request = new JSONObject(requestJson);
             String kind = request.optString("kind", "");
             if ("ui".equals(kind)) {
@@ -228,7 +237,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
             } else if ("keepalive".equals(kind)) {
                 mLastKeepAliveAt = android.os.SystemClock.elapsedRealtime();
             }
-            return handle(request).toString();
+            JSONObject response = handle(request);
+            if (noArgRequest && response.optBoolean("ok", false)) {
+                rememberNoArgCall(requestJson, request);
+            }
+            return response.toString();
         } catch (Throwable failure) {
             Log.w(TAG, "host request failed: " + requestJson, failure);
             String message = failure.getMessage() == null
@@ -777,6 +790,26 @@ public final class Node24HostBridge implements Node24Engine.Host {
     // Java 反射
     // ------------------------------------------------------------------
 
+    private void rememberNoArgCall(String json, JSONObject request) {
+        if (json.length() > Node24NoArgCallCache.MAX_REQUEST_CHARS) return;
+        String kind = request.optString("kind", "");
+        if (!kind.isEmpty() && !"java".equals(kind) && !"rhino".equals(kind)) return;
+        String op = request.optString("op", "");
+        boolean isStatic = "static".equals(op);
+        if (!isStatic && !"call".equals(op)) return;
+        JSONArray args = request.optJSONArray("args");
+        if (args != null && args.length() != 0) return;
+        try {
+            Object target = isStatic ? null : objectOf(request);
+            if (!isStatic && target == null) return;
+            Class<?> type = isStatic ? findClass(request.optString("cls", "")) : target.getClass();
+            Method method = findMethod(type, request.optString("method", ""), NO_ARGUMENTS, isStatic);
+            if (method != null) mNoArgCalls.put(json, method, target);
+        } catch (Exception ignored) {
+            // Optional metadata warmup must never change an already successful response.
+        }
+    }
+
     private Object newInstance(JSONObject request) throws Exception {
         Class<?> type = findClass(request.optString("cls", ""));
         Object[] args = arguments(request.optJSONArray("args"));
@@ -959,6 +992,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
         mRuntimeClassLoader = new dalvik.system.DexClassLoader(
                 dex.getAbsolutePath(), outputDir.getAbsolutePath(), null, parent);
+        mNoArgCalls.clear();
         return true;
     }
 
@@ -1384,6 +1418,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         if (!mClosed.compareAndSet(false, true)) {
             return;
         }
+        mNoArgCalls.close();
         try {
             shutdownMediaThread();
         } catch (Throwable error) {
