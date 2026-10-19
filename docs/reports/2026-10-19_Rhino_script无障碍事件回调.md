@@ -4,7 +4,7 @@
 
 ## 1. 结论
 
-- IAutomationHost 增加主进程→:script 的 oneway 回调通道：registerEventListener(IAutomationHostCallback) / unregisterEventListener，回调方法 onAccessibilityEvent(String json)、onServiceStateChanged(boolean)；
+- IAutomationHost 增加主进程→:script 的 oneway 回调通道（K40 已验证）：registerEventListener(IAutomationHostCallback) / unregisterEventListener，回调方法 onAccessibilityEvent(String json)、onServiceStateChanged(boolean)；
 - 主进程 AutomationHostService 用 AccessibilityService 的 delegate 把 view_clicked/view_long_clicked/windows_changed/window_state_changed/window_content_changed/toast/notification/accessibility_event 转成 JSON 推给 :script；无订阅者时不产生 Binder 流量；
 - :script 侧 Rhino 的 events.on('accessibility_event'/'view_clicked'/'toast'…) 首次订阅时自动向主进程注册回调，事件到达后 emit('accessibility_event', RemoteAccessibilityEvent) 并同时 emit(kind, event)；Events.recycle() 时退订；
 - auto.service 在 :script 不再恒为 null：返回 JS 代理对象（__remoteProxy=true、enabled getter、on/once/off 转发 events、openSettings()、getServiceInfo() 形状），主进程/本地场景仍返回真实 AccessibilityService。
@@ -37,9 +37,25 @@
 - AutomationHostClient（:script）：实现新 Backend 方法，IAutomationHostCallback.Stub 转发到 listener；disconnect 时反注册；
 - modules/engine/src/main/assets/modules/__automator__.js：auto.service 远程代理。
 
-## 4. K40 验证（dev-XXXX，待填）
+## 4. K40 验证（dev-1112）PASS
 
-（待填：auto.service nonNull/proxy/enabled、accessibility_event/view_clicked/toast 计数与 result JSON）
+单工程：/sdcard/脚本/node163-rhino-a11y/（Rhino 的 :script 隔离进程执行），结果 /sdcard/node163/result.json。
+
+- **auto.service**：nonNull=true、proxy=true、enabled=true（远程代理，__remoteProxy=true）；
+- **订阅**：AutomationHost: event listener registered count=1 ready=true；AutomationHostClient: accessibility event listener registered；
+- **事件**（回调里 flush 的 result JSON）：
+  - accessibility 事件 46 条：kind=toast(com.jdkshen.aijspro/android.widget.Toast)、notification、window_content_changed(com.android.systemui/com.android.settings)、windows_changed；
+  - view_clicked 4 条：pkg=com.android.settings，class=FrameLayout/FrameLayout/Switch/LinearLayout（adb 打开设置后点击）；
+  - toast 1 条：text=NODE163_TOAST（脚本自 toast，主进程无障碍服务观察后转发）；
+- 脚本结束时（DONE 之后）事件回调按队列执行并写盘，说明通道与线程模型工作正常。
+
+证据：.artifacts/node163-verify/（rhino-a11y-result3.json、rhino-a11y-logcat3.txt、main.js）。
+
+**时序说明**：:script 脚本线程在 sleep/阻塞时不会处理事件（与 Auto.js 事件语义一致），回调会在脚本线程让出后执行；需要在事件到来时即时处理的脚本应使用 setTimeout/短 sleep 轮询或事件驱动写法。
+
+**修复记录（首轮 dev-1111 暴露）**：
+1. 主进程回调进入 :script 的 binder 线程，Events 原实现 new Handler() 崩（无 Looper）→ 改为订阅时在脚本线程建 Handler，回调统一 postRemoteEvent（无 Handler 退回主 Looper）；
+2. LineageOS 上 force-stop 会把无障碍服务从 enabled 列表移除，验证时不能先 force-stop，需先重新启用服务再跑。
 
 ## 5. 修改文件
 
