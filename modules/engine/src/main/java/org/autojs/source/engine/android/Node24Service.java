@@ -17,11 +17,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Non-exported, one-active-run service in :node24. No legacy application boot. */
-public final class Node24Service extends Service {
+public class Node24Service extends Service {
     public static final int EXECUTE=1,RESULT=2,CANCEL=3,EVENT=4,LOG=5;
     // task-167：主进程 -> :node24 的任务状态广播/控制通道（主进程任务页要能看到 uiScript keep-alive 任务）。
     public static final String ACTION_NODE24_STATE="com.jdkshen.aijspro.NODE24_STATE";
     public static final String ACTION_NODE24_CONTROL="com.jdkshen.aijspro.NODE24_CONTROL";
+    /** task-175 spike：同进程多 Node24Engine 并行/取消验证（仅 debug 触发）。 */
+    public static final String ACTION_NODE24_SPIKE="com.jdkshen.aijspro.NODE24_SPIKE";
     public static final String EXTRA_STATE="state",EXTRA_COMMAND="command",EXTRA_ID="id",
         EXTRA_FILENAME="filename",EXTRA_SOURCE="source",EXTRA_UI_SCRIPT="uiScript",
         EXTRA_STARTED_AT="startedAt",EXTRA_CANCELLED="cancelled";
@@ -41,6 +43,15 @@ public final class Node24Service extends Service {
     private static final int LIVE_LOG_MAX_LINES=4096;
     private final AtomicReference<Job> active=new AtomicReference<>();
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
+    // task-174：单 job 槽忙时不再立刻 BUSY，而是有界排队（≤8s）；超时才回明确中文提示。
+    private static final long PENDING_TIMEOUT_MS=8000L;
+    private static final int MAX_PENDING_JOBS=4;
+    private final java.util.ArrayDeque<PendingJob> pending=new java.util.ArrayDeque<>();
+    private final Handler mainHandler=new Handler(Looper.getMainLooper());
+    private final class PendingJob {
+        final Job job;final long deadline;
+        PendingJob(Job job,long deadline){this.job=job;this.deadline=deadline;}
+    }
     private final Messenger messenger=new Messenger(new Handler(Looper.getMainLooper()) {
         @Override public void handleMessage(Message message) {
             if (message.sendingUid!=android.os.Process.myUid()) return;
@@ -59,12 +70,70 @@ public final class Node24Service extends Service {
             try {
                 JSONObject request=new JSONObject(message.getData().getString("payload"));
                 Job job=new Job(request,message.replyTo);
-                if(!active.compareAndSet(null,job)) { job.reply(new JSONObject().put("status","BUSY").put("success",false));return; }
+                if(!active.compareAndSet(null,job)) { enqueuePending(job); return; }
                 broadcastState("started",job);
                 worker.execute(job);
             } catch(Exception error) { android.util.Log.e("Node24Service","Invalid engine request",error); }
         }
     });
+    /** task-174：当前 job 忙时排队；等待期间不再让客户端立刻 BUSY。 */
+    private void enqueuePending(Job job) {
+        Job running=active.get();
+        if(running!=null && running.cancelled) {
+            // 正在停止：进程马上会被结束，排队请求会随进程丢失；立刻回明确提示让用户稍后重试。
+            replyBusy(job,"当前 Node 脚本正在停止，请稍后重试");
+            return;
+        }
+        synchronized(pending) {
+            if(pending.size()>=MAX_PENDING_JOBS) {
+                replyBusy(job,"已有 Node 脚本正在运行（排队已满），请先停止后再运行");
+                return;
+            }
+            pending.addLast(new PendingJob(job,SystemClock.elapsedRealtime()+PENDING_TIMEOUT_MS));
+            android.util.Log.i("Node24Service","job queued id="+job.id
+                    +" pending="+pending.size()+" active="+(active.get()==null?"none":active.get().id));
+        }
+        mainHandler.postDelayed(this::drainPending,PENDING_TIMEOUT_MS+100L);
+    }
+
+    /** 从排队请求里取下一个可执行 job；过期请求回明确中文 BUSY。 */
+    private void drainPending() {
+        synchronized(pending) {
+            while(!pending.isEmpty()) {
+                PendingJob head=pending.peekFirst();
+                if(head==null) return;
+                if(SystemClock.elapsedRealtime()>head.deadline) {
+                    pending.pollFirst();
+                    replyBusy(head.job,"已有 Node 脚本正在运行（Node UI/悬浮窗或上一个任务未结束），已等待 8 秒仍未释放；请先停止当前脚本再运行");
+                    continue;
+                }
+                if(active.compareAndSet(null,head.job)) {
+                    pending.pollFirst();
+                    broadcastState("started",head.job);
+                    worker.execute(head.job);
+                }
+                return;
+            }
+        }
+    }
+
+    /** task-174：取消时把排队请求全部回明确提示，避免它们等 8s 或随进程丢失导致客户端超时。 */
+    private void failPendingForCancel() {
+        synchronized(pending) {
+            while(!pending.isEmpty()) {
+                PendingJob item=pending.pollFirst();
+                if(item!=null) replyBusy(item.job,"当前 Node 脚本正在停止，请稍后重试");
+            }
+        }
+    }
+
+    private void replyBusy(Job job,String message) {
+        if(job==null) return;
+        android.util.Log.w("Node24Service","job busy id="+job.id+" message="+message);
+        try { job.reply(new JSONObject().put("status","BUSY").put("success",false).put("message",message)); }
+        catch(Exception ignored) { }
+    }
+
     @Override public void onCreate() {
         super.onCreate();
         // task-167：主进程任务页「停止」/「停止全部」通过广播下发 cancel/cancelAll（非导出，同一 UID）。
@@ -85,6 +154,75 @@ public final class Node24Service extends Service {
             else registerReceiver(controlReceiver,filter);
         } catch(Throwable error) { android.util.Log.w("Node24Service","register control receiver failed",error); }
     }
+    @Override public int onStartCommand(Intent intent,int flags,int startId){
+        if(intent!=null && ACTION_NODE24_SPIKE.equals(intent.getAction())){
+            new Thread(this::runMultiEngineSpike,"node24-multi-spike").start();
+            return START_NOT_STICKY;
+        }
+        return super.onStartCommand(intent,flags,startId);
+    }
+
+    /**
+     * task-175 spike：在同一进程创建 2 个 Node24Engine 并行执行，并测试第三个的 cancel。
+     * 结果只打 logcat（SPIKE_*），不进入生产执行路径；用于确认 libajsnode24bridge 是否支持多实例。
+     */
+    private void runMultiEngineSpike(){
+        android.util.Log.i("SPIKE","SPIKE_START pid="+android.os.Process.myPid());
+        Node24Engine a=null,b=null,c=null;
+        try {
+            Node24Libraries.load(this);
+            final Node24Engine ea=new Node24Engine(); a=ea;
+            final Node24Engine eb=new Node24Engine(); b=eb;
+            final long[] times=new long[2];
+            final String[] results=new String[2];
+            final long wallStart=android.os.SystemClock.elapsedRealtime();
+            Thread ta=new Thread(()->{
+                long t0=android.os.SystemClock.elapsedRealtime();
+                try {
+                    Node24Engine.Result r=ea.execute(
+                        "\"nodejs\"; const t=Date.now(); setTimeout(()=>{ console.log('SPIKE_A_DONE '+(Date.now()-t)); },3000);",
+                        "/spike-a.js",20000L);
+                    results[0]="exit="+r.exitCode+" cancelled="+r.cancelled+" error="+r.error;
+                } catch(Throwable e){ results[0]="ERROR "+e; }
+                times[0]=android.os.SystemClock.elapsedRealtime()-t0;
+                android.util.Log.i("SPIKE","SPIKE_A_END ms="+times[0]+" "+results[0]);
+            },"spike-a");
+            Thread tb=new Thread(()->{
+                long t0=android.os.SystemClock.elapsedRealtime();
+                try {
+                    Node24Engine.Result r=eb.execute(
+                        "\"nodejs\"; const t=Date.now(); let n=0; const id=setInterval(()=>{ n++; if(n>=6){ clearInterval(id); console.log('SPIKE_B_DONE '+(Date.now()-t)); } },500);",
+                        "/spike-b.js",20000L);
+                    results[1]="exit="+r.exitCode+" cancelled="+r.cancelled+" error="+r.error;
+                } catch(Throwable e){ results[1]="ERROR "+e; }
+                times[1]=android.os.SystemClock.elapsedRealtime()-t0;
+                android.util.Log.i("SPIKE","SPIKE_B_END ms="+times[1]+" "+results[1]);
+            },"spike-b");
+            ta.start(); tb.start();
+            ta.join(25000); tb.join(25000);
+            android.util.Log.i("SPIKE","SPIKE_PARALLEL wall="+(android.os.SystemClock.elapsedRealtime()-wallStart)
+                +" a="+times[0]+" b="+times[1]+" bothEnded="+(ta.isAlive()==false && tb.isAlive()==false));
+            // cancel 测试：单实例长循环，1s 后 cancel。
+            final Node24Engine ec=new Node24Engine(); c=ec;
+            final Node24Engine.Result[] cancelResult=new Node24Engine.Result[1];
+            Thread tc=new Thread(()->{
+                try { cancelResult[0]=ec.execute("\"nodejs\"; setInterval(()=>{},1000);","/spike-c.js",30000L); }
+                catch(Throwable e){ android.util.Log.i("SPIKE","SPIKE_C_ERROR "+e); }
+            },"spike-c");
+            tc.start(); Thread.sleep(1000L); ec.cancel();
+            tc.join(8000);
+            android.util.Log.i("SPIKE","SPIKE_CANCEL alive="+tc.isAlive()
+                +" result="+(cancelResult[0]==null?"null":("cancelled="+cancelResult[0].cancelled+" exit="+cancelResult[0].exitCode)));
+        } catch(Throwable error){
+            android.util.Log.e("SPIKE","SPIKE_FAIL",error);
+        } finally {
+            try{ if(a!=null)a.close(); }catch(Throwable ignored){}
+            try{ if(b!=null)b.close(); }catch(Throwable ignored){}
+            try{ if(c!=null)c.close(); }catch(Throwable ignored){}
+            android.util.Log.i("SPIKE","SPIKE_END");
+        }
+    }
+
     @Override public IBinder onBind(Intent intent) { return messenger.getBinder(); }
     @Override public void onDestroy() {
         try { if(controlReceiver!=null) unregisterReceiver(controlReceiver); } catch(Throwable ignored) { }
@@ -120,8 +258,11 @@ public final class Node24Service extends Service {
                 || filename.length()>1024 || filename.indexOf(0)>=0 || timeout<1 || timeout>60000)
                 throw new IOException("Invalid Node request");
         }
-        void cancel() {
+        synchronized void cancel() {
+            if(cancelled) return;
             cancelled=true;
+            // task-174：取消立即失败掉排队请求（进程即将结束，排队请求不可能再执行）。
+            failPendingForCancel();
             // 先取 engine/host 快照并按顺序取消：先 cancel native（异步，execute 尚未返回时也可调用），
             // 再唤醒可能卡在投屏授权页的宿主线程。反过来先唤醒会让 JS 抢先退出并把 engine 置空，
             // 导致这里错过 native cancel，最终把取消误报成 success。
@@ -129,9 +270,6 @@ public final class Node24Service extends Service {
             Node24HostBridge currentHost=host;
             if(current!=null)try{current.cancel();}catch(IllegalStateException alreadyClosed){}
             if(currentHost!=null) currentHost.cancelPendingProjection();
-            // task-166：先启动"尽早结束进程"的 daemon 线程，再做 UI 清理；
-            // closeUiAfterExecution 内部可能因 Binder/主 Looper 阻塞十几秒，不能挡在 kill 前面。
-            haltSoonOnCancel();
             if(currentHost!=null) {
                 final Node24HostBridge cleanupHost = currentHost;
                 Thread cleanup = new Thread(() -> {
@@ -141,12 +279,26 @@ public final class Node24Service extends Service {
                 cleanup.setDaemon(true);
                 cleanup.start();
             }
-            // native 超过 2.5s 仍未返回时再次兜底结束 :node24 进程。
+            // task-174：所有取消入口（通知栏 cancelAll / 任务页 / Messenger CANCEL）统一硬兜底：
+            // 1.5s 后只要还没有新 job 接手，就结束 :node24 进程。UI 清理/Binder 卡住都不能再拖 11s。
+            Thread forceHalt = new Thread(() -> {
+                try { Thread.sleep(800L); } catch (InterruptedException ignored) { return; }
+                Job running=active.get();
+                if(running!=null && running!=this) return; // 已有新任务接手，不能杀
+                android.util.Log.w("Node24Service","cancel force halt id="+id
+                        +" active="+(active.get()==null?"none":active.get().id));
+                // task-174：必须先杀进程再做任何清理——closeUiAfterExecution 会因 NodeUiActivity/Binder
+                // 阻塞把 kill 永远拖下去（实测通知栏路径 11s 不退）。UI 清理已有独立 cleanup 线程。
+                haltProcess();
+            }, "node24-cancel-forcehalt");
+            forceHalt.setDaemon(true);
+            forceHalt.start();
+            // 2.5s 兜底（避免上面线程被异常吞掉）。
             Thread watchdog = new Thread(() -> {
-                try { Thread.sleep(2500L); } catch (InterruptedException ignored) { return; }
-                if (finished) return;
-                android.util.Log.w("Node24Service","cancel watchdog: job still running, force halt id="+id);
-                try { if(host!=null) closeUiAfterExecution(host); } catch(Throwable ignored) { }
+                try { Thread.sleep(1500L); } catch (InterruptedException ignored) { return; }
+                Job running=active.get();
+                if(running!=null && running!=this) return;
+                android.util.Log.w("Node24Service","cancel watchdog: force halt id="+id);
                 haltProcess();
             }, "node24-cancel-watchdog");
             watchdog.setDaemon(true);
@@ -161,27 +313,19 @@ public final class Node24Service extends Service {
         void finishAndHaltIfCancelled() {
             finished = true;
             if (!cancelled) return;
-            // task-166：用 daemon 线程而不是主 Looper postDelayed，避免停止路径主线程被
-            // Node UI 清理/Binder 阻塞时进程迟迟不退（实测曾延迟 15s）。
             Thread halt = new Thread(() -> {
                 try { Thread.sleep(350L); } catch (InterruptedException ignored) { }
+                // task-174：有排队请求/新 job 接手时不能杀进程。
+                if(active.get()!=null) return;
+                synchronized(pending) { if(!pending.isEmpty()) drainPending(); }
+                if(active.get()!=null) return;
                 haltProcess();
             }, "node24-cancel-halt");
             halt.setDaemon(true);
             halt.start();
         }
 
-        void haltSoonOnCancel() {
-            Thread halt = new Thread(() -> {
-                try { Thread.sleep(800L); } catch (InterruptedException ignored) { }
-                if (finished) return;
-                android.util.Log.w("Node24Service","cancel halt: force exit id="+id);
-                try { if(host!=null) closeUiAfterExecution(host); } catch(Throwable ignored) { }
-                haltProcess();
-            }, "node24-cancel-halt-early");
-            halt.setDaemon(true);
-            halt.start();
-        }
+        // task-174：旧的 800ms halt 已合并进 cancel() 的 forceHalt（1.5s + 新 job 检测）。
         /**
          * uiScript/显式 hold 用 hold 预算作为 native 事件循环寿命；普通非 UI 脚本保持原 timeout。
          * holdMillis 缺失（旧引擎）时按 UI 上限兜底；Node24Client 的等待预算包含该 hold。
@@ -360,6 +504,8 @@ public final class Node24Service extends Service {
                 }
                 engine=null;host=null;active.compareAndSet(this,null);
                 broadcastState(cancelled?"cancelled":"finished",this);
+                // task-174：排队请求在 active 释放后立刻接上（干净停止后 ≤1s 可再跑）。
+                drainPending();
             }
             // 取消竞态兜底：Job.cancel 可能发生在结果收集或 finally 清理期间；最终回复前
             // 统一以 Job.cancelled 为准，取消绝不回报 success。

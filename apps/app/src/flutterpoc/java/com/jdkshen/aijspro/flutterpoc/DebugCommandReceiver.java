@@ -92,6 +92,33 @@ public class DebugCommandReceiver extends BroadcastReceiver {
                 }
                 return;
             }
+            if (intent.getBooleanExtra("node24PoolSpike", false)) {
+                try {
+                    Intent start = new Intent();
+                    start.setClassName(context, "com.jdkshen.aijspro.flutterpoc.scriptproc.ScriptHostService");
+                    context.startService(start);
+                    Intent spike = new Intent("com.jdkshen.aijspro.NODE24_POOL_SPIKE")
+                            .setPackage(context.getPackageName());
+                    context.sendBroadcast(spike);
+                    Log.i(TAG, "debug node24PoolSpike dispatched");
+                } catch (Throwable error) {
+                    Log.e(TAG, "debug node24PoolSpike failed", error);
+                }
+                return;
+            }
+            if (intent.getBooleanExtra("node24Spike", false)) {
+                // task-175 spike：启动 :node24 服务执行同进程双 Node24Engine 并行/取消验证。
+                try {
+                    Intent spike = new Intent();
+                    spike.setClassName(context, "org.autojs.source.engine.android.Node24Service");
+                    spike.setAction("com.jdkshen.aijspro.NODE24_SPIKE");
+                    context.startService(spike);
+                    Log.i(TAG, "debug node24Spike dispatched");
+                } catch (Throwable error) {
+                    Log.e(TAG, "debug node24Spike failed", error);
+                }
+                return;
+            }
             if (intent.getBooleanExtra("taskPageStop", false)) {
                 // task-166 复验：任务页/脚本列表「停止全部」统一入口。
                 try {

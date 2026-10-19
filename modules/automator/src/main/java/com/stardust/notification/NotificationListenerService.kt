@@ -78,6 +78,7 @@ class NotificationListenerService : android.service.notification.NotificationLis
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        android.util.Log.i(TAG, "onNotificationPosted pkg=" + sbn.packageName + " id=" + sbn.id + " nodeSubscribed=" + nodeSubscribed)
         for (listener in mNotificationListeners) {
             listener.onNotification(com.stardust.notification.Notification.create(
                     sbn.notification, sbn.packageName))
@@ -94,6 +95,7 @@ class NotificationListenerService : android.service.notification.NotificationLis
                     .put("text", extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "")
                     .put("ticker", sbn.notification.tickerText?.toString() ?: "")
                     .put("postTime", sbn.postTime)
+            android.util.Log.i(TAG, "forward notification to node: " + payload)
             sendBroadcast(Intent(ACTION_NODE_EVENT)
                     .setPackage(packageName)
                     .putExtra("json", payload.toString()))

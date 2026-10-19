@@ -307,11 +307,15 @@
         if (prop === 'toString') { return function () { return '[JavaPackage ' + pathName + ']'; }; }
         if (typeof prop === 'symbol') { return undefined; }
         var child = pathName + '.' + prop;
-        // 类优先：java.lang.Integer.MAX_VALUE、android.view.LayoutInflater.from(...) 都靠这里
-        if (resolveClass(child)) { return classRef(child); }
-        // task-155 follow-up：未安装类给可 extends 的占位（构造时抛中文错误），
-        // 而不是 `Class extends value ... undefined` 的 TypeError。
-        if (/^[A-Z]/.test(prop)) { return unsupportedClassRef(child); }
+        // task-176：只有末段是「大写开头的类名」才触发类解析；中间 package 段（view/os/io…）
+        // 一律按包处理，绝不对 android.view 这类包名发 class 查询（会被宿主当 ClassNotFound）。
+        if (/^[A-Z]/.test(prop)) {
+          // 类优先：java.lang.Integer.MAX_VALUE、android.view.LayoutInflater.from(...) 都靠这里
+          if (resolveClass(child)) { return classRef(child); }
+          // task-155 follow-up：未安装类给可 extends 的占位（构造时抛中文错误），
+          // 而不是 `Class extends value ... undefined` 的 TypeError。
+          return unsupportedClassRef(child);
+        }
         return packageRef(child);
       },
       apply: function (self, thisArg, args) {
@@ -499,7 +503,19 @@
       io: packageRef('io')
     },
     getClass: function (className) {
-      javaCall({ op: 'class', name: className }); // 校验存在
+      if (typeof className !== 'string' || className.trim() === '') {
+        throw hostError('$java.getClass/findClass 需要类名字符串');
+      }
+      if (className.indexOf('.') < 0) {
+        // task-176：不能省略包名；给出完整类名格式提示。
+        throw hostError('$java.getClass/findClass 需要完整类名（含包名），例如 android.view.KeyEvent；不能省略包名：' + className);
+      }
+      try {
+        javaCall({ op: 'class', name: className }); // 校验存在
+      } catch (error) {
+        throw hostError('找不到 Java 类（已按完整类名解析）：' + className
+          + (error && error.message ? '；' + error.message : ''));
+      }
       // task-136-fix2：必须返回 classRef（construct→newRef→javaObject 句柄），
       // 返回 packageRef 时 new String 会走旧的 new op→toWire 原始值，Proxy construct 报
       // "trap returned non-object"。
@@ -532,22 +548,28 @@
   globalThis.$java = javaApi;
   globalThis.__ajsAutojs = autojs;
 
+  // task-176：Pro 兼容的包链式类访问默认可用（android.view.KeyEvent / java.io.File 等），
+  // 不再要求脚本先 require('rhino').install()。require('rhino').install() 仍可调用（幂等）。
+  function installJavaGlobals() {
+    globalThis.Packages = javaApi.Packages;
+    globalThis.java = packageRef('java');
+    globalThis.javax = packageRef('javax');
+    globalThis.android = packageRef('android');
+    globalThis.androidx = packageRef('androidx');
+    globalThis.com = packageRef('com');
+    globalThis.org = packageRef('org');
+    globalThis.net = packageRef('net');
+    globalThis.io = packageRef('io');
+  }
+  installJavaGlobals();
+
   // Rhino 兼容模块：install() 挂全局 Java 包/类访问（Auto.js Pro 的 require('rhino').install()）。
   var rhinoInstalled = false;
   var rhinoModule = {
     install: function () {
       if (rhinoInstalled) { return rhinoModule; }
       rhinoInstalled = true;
-      var packages = javaApi.Packages;
-      globalThis.Packages = packages;
-      globalThis.java = packageRef('java');
-      globalThis.javax = packageRef('javax');
-      globalThis.android = packageRef('android');
-      globalThis.androidx = packageRef('androidx');
-      globalThis.com = packageRef('com');
-      globalThis.org = packageRef('org');
-      globalThis.net = packageRef('net');
-      globalThis.io = packageRef('io');
+      installJavaGlobals();
       ensurePolling();
       return rhinoModule;
     },
@@ -3840,6 +3862,29 @@
     function ensureListenerEvents() {
       if (listenerEventsInstalled) { return; }
       listenerEventsInstalled = true;
+      // 兜底通路：部分 ROM/应用通知不会触发 NotificationListenerService（或服务被杀），
+      // 此时用无障碍的 notification/toast 事件补齐，保证 listener 能收到逐条事件。
+      on('__ajs_accessibility_event', function (payload) {
+        if (!payload || typeof payload !== 'object') { return; }
+        var kind = String(payload.kind || '');
+        if (kind !== 'notification' && kind !== 'toast') { return; }
+        var text = payload.text ? String(payload.text) : '';
+        var item = {
+          id: 0,
+          packageName: payload.packageName ? String(payload.packageName) : '',
+          title: kind === 'toast' ? 'Toast' : text,
+          text: text,
+          ticker: '',
+          postTime: Number(payload.eventTime || Date.now()),
+          getTitle: function () { return this.title; },
+          getText: function () { return this.text; },
+          getPackageName: function () { return this.packageName; },
+          getTickerText: function () { return ''; },
+          getPostTime: function () { return this.postTime; },
+          toString: function () { return '[notification(' + kind + ') ' + this.packageName + ']'; }
+        };
+        dispatch(notificationListenerHandlers, item);
+      });
       on('__ajs_notification_listener', function (payload) {
         if (!payload || typeof payload !== 'object') { return; }
         var item = {
@@ -3862,6 +3907,7 @@
 
     function requestListeningNotifications(options) {
       ensureListenerEvents();
+      try { hostValue({ kind: 'accessibility', action: 'subscribe' }); } catch (ignored) { }
       hostCall('requestListeningNotifications', options || {});
       var service = {
         on: function (type, handler) {

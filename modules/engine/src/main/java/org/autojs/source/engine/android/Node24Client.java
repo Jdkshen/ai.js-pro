@@ -15,6 +15,7 @@ public final class Node24Client implements AutoCloseable {
      */
     public interface LogListener { void onLog(String line,int index); }
     private final Context context;
+    private final Class<?> serviceClass;
     private final ConcurrentHashMap<String,Pending> active=new ConcurrentHashMap<>();
     // forceStop may arrive before evaluate registers its Pending or binds the service.
     private final ConcurrentHashMap<String,Boolean> cancelledIds=new ConcurrentHashMap<>();
@@ -87,7 +88,12 @@ public final class Node24Client implements AutoCloseable {
         public void onBindingDied(ComponentName name){fail("Node24 service binding died");}
         public void onNullBinding(ComponentName name){fail("Node24 service returned no binder");}
     };
-    public Node24Client(Context context){this.context=context.getApplicationContext();}
+    public Node24Client(Context context){this(context,Node24Service.class);}
+    /** task-175：绑定到指定 Node 宿主进程池槽（每个槽一个 :node24_N 进程）。 */
+    public Node24Client(Context context,Class<?> serviceClass){
+        this.context=context.getApplicationContext();
+        this.serviceClass=serviceClass==null?Node24Service.class:serviceClass;
+    }
     private void fail(String reason){
         failure=reason;connected.countDown();
         for(Pending pending:active.values()){pending.logs.close();pending.done.countDown();}
@@ -95,7 +101,7 @@ public final class Node24Client implements AutoCloseable {
     private synchronized void bind() throws IOException {
         if(closed)throw new IOException("Node client closed");
         if(!bound){
-            Intent intent=new Intent(context,Node24Service.class);
+            Intent intent=new Intent(context,serviceClass);
             if(!context.bindService(intent,connection,Context.BIND_AUTO_CREATE))throw new IOException("Cannot bind Node24 service");
             bound=true;
         }

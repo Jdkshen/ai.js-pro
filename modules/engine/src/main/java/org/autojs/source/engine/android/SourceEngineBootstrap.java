@@ -19,7 +19,11 @@ public final class SourceEngineBootstrap {
             byte[] data = new byte[512];
             int count = input.read(data), end = 0;
             while (end < count && data[end] != 0) ++end;
-            return new String(data, 0, end, StandardCharsets.UTF_8).equals(context.getPackageName()+":node24");
+            String process = new String(data, 0, end, StandardCharsets.UTF_8);
+            // task-175：Node 宿主进程池（:node24_1..N）同样需要加载 Node 原生库；
+            // 每个池进程仍是一个独立 Node 会话，原生桥的"每进程单会话"限制不受影响。
+            String base = context.getPackageName() + ":node24";
+            return process.equals(base) || process.startsWith(base + "_");
         } catch (Exception error) { throw new IllegalStateException("Cannot establish engine process identity", error); }
     }
 }

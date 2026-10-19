@@ -1,7 +1,10 @@
 package com.jdkshen.aijspro.flutterpoc.scriptproc;
 
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -25,6 +28,10 @@ import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
 import com.stardust.autojs.script.JavaScriptFileSource;
 import com.stardust.autojs.script.JavaScriptSource;
+import org.autojs.source.engine.android.Node24Client;
+import org.autojs.source.engine.android.Node24PoolService1;
+import org.autojs.source.engine.android.Node24PoolService2;
+import org.json.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
@@ -79,6 +86,9 @@ import java.util.Map;
  * </ul>
  */
 public class ScriptHostService extends Service {
+    /** task-175：:script 进程内 Node 宿主进程池 spike/编排入口。 */
+    private static final String ACTION_NODE24_POOL_SPIKE = "com.jdkshen.aijspro.NODE24_POOL_SPIKE";
+    private android.content.BroadcastReceiver mNode24PoolSpikeReceiver;
 
     /** 主进程客户端绑定用的固定类名（Phase1-C {@code PocScriptHost} 依赖，不要改）。 */
     public static final String SERVICE_CLASS =
@@ -172,6 +182,136 @@ public class ScriptHostService extends Service {
         // Phase1 P1：标记当前进程是隔离脚本进程，引擎据此把 auto/click/selector/截图代理到主进程
         // （RemoteAutomationBridge + ScriptRuntime/SimpleActionAutomator/Images 的 remote 分支）。
         RemoteAutomationBridge.setIsolationProcess(true);
+        registerNode24PoolSpikeReceiver();
+    }
+
+    /** task-175：接收 debug 广播，在 :script 进程内通过 Node 宿主进程池并行跑两个 Node 脚本。 */
+    private void registerNode24PoolSpikeReceiver() {
+        BroadcastReceiver receiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent != null && ACTION_NODE24_POOL_SPIKE.equals(intent.getAction())) {
+                    runNode24PoolSpike();
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter(ACTION_NODE24_POOL_SPIKE);
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(receiver, filter);
+        }
+        mNode24PoolSpikeReceiver = receiver;
+    }
+
+    private void runNode24PoolSpike() {
+        new Thread(() -> {
+            long wall = android.os.SystemClock.elapsedRealtime();
+            android.util.Log.i(TAG, "NODE_POOL_SPIKE_START pid=" + android.os.Process.myPid());
+            Node24Client[] clients = new Node24Client[2];
+            try {
+                clients[0] = new Node24Client(getApplicationContext(), Node24PoolService1.class);
+                clients[1] = new Node24Client(getApplicationContext(), Node24PoolService2.class);
+                final String[] results = new String[2];
+                final long[] times = new long[2];
+                Thread[] threads = new Thread[2];
+                String[] sources = {
+                    "\"nodejs\"; const t=Date.now(); setTimeout(()=>{ console.log('POOL_A_DONE '+(Date.now()-t)); },3000);",
+                    "\"nodejs\"; const t=Date.now(); let n=0; const id=setInterval(()=>{ n++; if(n>=6){ clearInterval(id); console.log('POOL_B_DONE '+(Date.now()-t)); } },500);"
+                };
+                for (int i = 0; i < 2; i++) {
+                    final int index = i;
+                    final Node24Client client = clients[i];
+                    threads[i] = new Thread(() -> {
+                        long t0 = android.os.SystemClock.elapsedRealtime();
+                        try {
+                            JSONObject req = new JSONObject()
+                                    .put("id", "pool-spike-" + index + "-" + System.nanoTime())
+                                    .put("source", sources[index])
+                                    .put("filename", "/sdcard/脚本/pool-spike-" + index + ".js")
+                                    .put("timeoutMillis", 10000L)
+                                    .put("uiScript", false);
+                            JSONObject result = client.evaluate(req);
+                            results[index] = "status=" + result.optString("status")
+                                    + " exit=" + result.optInt("exitCode")
+                                    + " cancelled=" + result.optBoolean("cancelled");
+                        } catch (Throwable error) {
+                            results[index] = "ERROR " + error;
+                        }
+                        times[index] = android.os.SystemClock.elapsedRealtime() - t0;
+                        android.util.Log.i(TAG, "NODE_POOL_SPIKE_" + (index == 0 ? "A" : "B")
+                                + "_END ms=" + times[index] + " " + results[index]);
+                    }, "pool-spike-" + i);
+                }
+                threads[0].start();
+                threads[1].start();
+                threads[0].join(20000);
+                threads[1].join(20000);
+                android.util.Log.i(TAG, "NODE_POOL_SPIKE_PARALLEL wall="
+                        + (android.os.SystemClock.elapsedRealtime() - wall)
+                        + " a=" + times[0] + " b=" + times[1]);
+                for (Node24Client client : clients) {
+                    try { if (client != null) client.close(); } catch (Throwable ignored) { }
+                }
+                // 停止后立即再跑：验证槽可复用且不再 BUSY。
+                Node24Client reuse = new Node24Client(getApplicationContext(), Node24PoolService1.class);
+                try {
+                    long t0 = android.os.SystemClock.elapsedRealtime();
+                    JSONObject req = new JSONObject()
+                            .put("id", "pool-spike-reuse-" + System.nanoTime())
+                            .put("source", "\"nodejs\"; console.log('POOL_REUSE_OK');")
+                            .put("filename", "/sdcard/脚本/pool-spike-reuse.js")
+                            .put("timeoutMillis", 5000L)
+                            .put("uiScript", false);
+                    JSONObject result = reuse.evaluate(req);
+                    android.util.Log.i(TAG, "NODE_POOL_SPIKE_REUSE ms="
+                            + (android.os.SystemClock.elapsedRealtime() - t0)
+                            + " status=" + result.optString("status")
+                            + " exit=" + result.optInt("exitCode"));
+                } finally {
+                    reuse.close();
+                }
+                // 分别停止：长驻 Node 任务在 PoolService3 上运行，1.2s 后按 id cancel，验证只停一个。
+                Node24Client cancelClient = new Node24Client(getApplicationContext(),
+                        org.autojs.source.engine.android.Node24PoolService3.class);
+                try {
+                    final String cancelId = "pool-spike-cancel-" + System.nanoTime();
+                    final JSONObject[] cancelResult = new JSONObject[1];
+                    Thread longTask = new Thread(() -> {
+                        try {
+                            JSONObject req = new JSONObject()
+                                    .put("id", cancelId)
+                                    .put("source", "\"nodejs\"; setInterval(()=>{},1000);")
+                                    .put("filename", "/sdcard/脚本/pool-spike-cancel.js")
+                                    .put("timeoutMillis", 20000L)
+                                    .put("uiScript", false);
+                            cancelResult[0] = cancelClient.evaluate(req);
+                        } catch (Throwable error) {
+                            android.util.Log.w(TAG, "NODE_POOL_SPIKE_CANCEL_EVAL_FAIL", error);
+                        }
+                    }, "pool-spike-cancel");
+                    long t0 = android.os.SystemClock.elapsedRealtime();
+                    longTask.start();
+                    Thread.sleep(1200L);
+                    boolean cancelSent = cancelClient.cancel(cancelId);
+                    longTask.join(8000);
+                    JSONObject cr = cancelResult[0];
+                    android.util.Log.i(TAG, "NODE_POOL_SPIKE_CANCEL sent=" + cancelSent
+                            + " elapsed=" + (android.os.SystemClock.elapsedRealtime() - t0)
+                            + " status=" + (cr == null ? "null" : cr.optString("status"))
+                            + " cancelled=" + (cr != null && cr.optBoolean("cancelled")));
+                } finally {
+                    cancelClient.close();
+                }
+            } catch (Throwable error) {
+                android.util.Log.e(TAG, "NODE_POOL_SPIKE_FAIL", error);
+            } finally {
+                for (Node24Client client : clients) {
+                    try { if (client != null) client.close(); } catch (Throwable ignored) { }
+                }
+                android.util.Log.i(TAG, "NODE_POOL_SPIKE_END");
+            }
+        }, "node-pool-spike").start();
     }
 
     @Override
@@ -238,6 +378,12 @@ public class ScriptHostService extends Service {
             Log.w(TAG, "停止脚本进程内脚本失败", error);
         }
         ScriptEngineService.setHeadlessUiMode(false);
+        try {
+            if (mNode24PoolSpikeReceiver != null) {
+                unregisterReceiver(mNode24PoolSpikeReceiver);
+                mNode24PoolSpikeReceiver = null;
+            }
+        } catch (Throwable ignored) { }
         super.onDestroy();
     }
 

@@ -203,6 +203,10 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                 Log.d(TAG, "Node24 execution cancelled: " + message);
                 throw new ScriptInterruptedException();
             }
+            if ("BUSY".equals(status) && !message.isEmpty()) {
+                // task-174：排队超时/排队已满时给用户明确中文提示，不暴露裸 BUSY。
+                throw new ScriptException(message);
+            }
             throw new ScriptException(message.isEmpty() ? status : status + ": " + message);
         } catch (ScriptException error) {
             throw error;

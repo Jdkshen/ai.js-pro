@@ -452,6 +452,10 @@
             android:name="org.autojs.source.engine.android.Node24Service"
             android:process=":node24"
             android:exported="false" />
+        <!-- task-175：Node 宿主进程池；每进程单 Node runtime，:script 按 executionId 分配/停止。 -->
+        <service android:name="org.autojs.source.engine.android.Node24PoolService1" android:process=":node24_1" android:exported="false" />
+        <service android:name="org.autojs.source.engine.android.Node24PoolService2" android:process=":node24_2" android:exported="false" />
+        <service android:name="org.autojs.source.engine.android.Node24PoolService3" android:process=":node24_3" android:exported="false" />
         <!-- 跨引擎桥：Node 父引擎可能由主进程或 :script 创建，两处各注册一份同一实现。
              :node24 的 prelude 先查 status，选中真正有活动 Node 引擎的进程并固定；不导出/AIDL。 -->
         <service

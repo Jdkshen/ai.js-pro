@@ -679,6 +679,12 @@ final class PocRuntime {
         for (String id : nativeIdsOf(null)) {
             PocNativeRunner.stop(id);
         }
+        try {
+            // task-174：所有 stopAll 入口（通知栏/任务页/悬浮菜单/调试停止）统一触达 :node24。
+            PocNode24Jobs.cancelAll();
+        } catch (Throwable error) {
+            Log.w(TAG, "取消 Node24 任务失败", error);
+        }
         if (runningScriptCount() == 0) {
             releaseForegroundLeases(com.stardust.app.GlobalAppContext.get());
         }
