@@ -228,3 +228,8 @@ owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-11
 - 双 job：t166keep+floatlog 同时两个 Node overlay（880x1372 + 278x109）；stopPath t166keep 后仅剩 floatlog overlay（count 4→3），未互删。
 结论：dev-1138 正式包 task-192 全部通过。
 证据：`output/flutter-poc/evidence/task192/dev1138-*`。
+## dev-1140 限高修复双端正式复验（task-193/196，2026-10-20 01:23）
+- 新机 DQKF...（dev-1140）：`overlay remeasure screenH=2568 maxAvailable=2520 currentH=1604 contentH=1604 h=unchanged`；frame `[0,352][1040,1956]`，**不再超屏**；按钮中心 tap(896,1823) → `input:`；dragHandle swipe `C-OVERLAY drag anchor=20161210 ... inAnchor=true`、`drag move` 正常。
+- K40 dev-1140：`screenH=2305 maxAvailable=2200 currentH=1372 contentH=1372 h=unchanged`；frame `[0,305][880,1677]`；`input tap 760 1655` → `input:` 日志，按钮中心可达。
+结论：AT_MOST 限高修复双端 PASS；task-193/task-196 完成。
+证据：`output/flutter-poc/evidence/task196/dev1140-*`、`task193/dev1140-*`。

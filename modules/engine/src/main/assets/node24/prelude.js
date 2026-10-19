@@ -717,6 +717,74 @@
     });
   }
 
+  // ------------------------------------------------------------------
+  // task-197：Pro 兼容 —— 第三方 Node 工程会用
+  //   engines.myEngine().executionConfig.projectConfig / getProjectDir()
+  //   engines.myEngine().getClass().getName()
+  // 这里提供 JS 侧 ExecutionConfig 兼容对象（projectConfig 从入口目录 project.json 读取，
+  // 避免走 Gson/setProjectConfig 的 Java 反射路径）。
+  // ------------------------------------------------------------------
+  var projectConfigCache = null;
+  function loadProjectConfigCompat() {
+    if (projectConfigCache !== null) { return projectConfigCache || null; }
+    projectConfigCache = false;
+    try {
+      var dir = projectDir || executionDir || '';
+      if (dir) {
+        var fsModule = require('fs');
+        var pathModule = require('path');
+        var configPath = pathModule.join(dir, 'project.json');
+        if (fsModule.existsSync(configPath)) {
+          projectConfigCache = JSON.parse(fsModule.readFileSync(configPath, 'utf8'));
+        }
+      }
+    } catch (configError) {
+      projectConfigCache = false;
+    }
+    return projectConfigCache || null;
+  }
+
+  function makeExecutionConfigCompat() {
+    var dir = projectDir || executionDir || '';
+    var execConfig = {
+      projectConfig: loadProjectConfigCompat(),
+      projectDir: dir,
+      getProjectDir: function () { return dir; },
+      getProjectConfig: function () { return execConfig.projectConfig; },
+      setProjectConfig: function (project) {
+        execConfig.projectConfig = project;
+        return execConfig;
+      },
+      setProjectDir: function (value) {
+        dir = String(value || '');
+        execConfig.projectDir = dir;
+        return execConfig;
+      },
+      getClass: function () {
+        return {
+          getName: function () { return 'com.stardust.autojs.execution.ExecutionConfig'; },
+          getMethods: function () {
+            function method(name, params) {
+              return {
+                getName: function () { return name; },
+                getParameterTypes: function () { return params || []; }
+              };
+            }
+            var projectClass = null;
+            try { projectClass = javaApi.findClass('com.stardust.autojs.project.ProjectConfig'); }
+            catch (classError) { projectClass = null; }
+            return [
+              method('getProjectConfig'), method('getProjectDir'),
+              method('setProjectConfig', projectClass ? [projectClass] : []),
+              method('setProjectDir')
+            ];
+          }
+        };
+      }
+    };
+    return execConfig;
+  }
+
   function makeEngine(info) {
     if (!info || info.id === undefined || info.id === null) {
       throw hostError('主进程返回的引擎缺少 id');
@@ -725,7 +793,19 @@
     var engine = {
       id: id,
       engine: info.engine || '',
-      execArgv: info.execArgv || {}
+      execArgv: info.execArgv || {},
+      source: scriptFile || '',
+      executionConfig: makeExecutionConfigCompat()
+    };
+    engine.getSource = function () { return scriptFile || ''; };
+    engine.getClass = function () {
+      return {
+        getName: function () { return 'com.stardust.autojs.engine.Node24JavaScriptEngine'; }
+      };
+    };
+    engine.getName = function () { return String(info.engine || 'node24'); };
+    engine.forceStop = function () {
+      try { return engineBridge('stop', { target: id }); } catch (stopError) { return false; }
     };
     engine.on = function (type, handler) {
       if (typeof handler !== 'function') { throw new TypeError('engines.on 的监听必须是函数'); }
@@ -752,9 +832,6 @@
     engine.emit = function (type) {
       var args = Array.prototype.slice.call(arguments, 1);
       return engineBridge('emit', { target: id, event: type, args: args });
-    };
-    engine.forceStop = function () {
-      return engineBridge('stop', { target: id });
     };
     return engine;
   }
