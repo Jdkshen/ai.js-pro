@@ -17,7 +17,6 @@ import java.util.Locale;
 
 public class GlobalConsole extends ConsoleImpl {
     private static final String LOG_tAG = "GlobalConsole";
-    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault());
     private static final Logger LOGGER = Logger.getLogger(GlobalConsole.class);
 
     public GlobalConsole(UiHandler uiHandler) {
@@ -26,8 +25,12 @@ public class GlobalConsole extends ConsoleImpl {
 
     @Override
     public String println(int level, CharSequence charSequence) {
-        String log = String.format(Locale.getDefault(), "%s/%s: %s",
-                DATE_FORMAT.format(new Date()), getLevelChar(level), charSequence.toString());
+        return printlnAt(level, charSequence, System.currentTimeMillis(), "");
+    }
+
+    /** Forwarded logs retain the same timestamp/source as the unified stream. */
+    public String printlnAt(int level, CharSequence charSequence, long time, String source) {
+        String log = ConsoleLogStyle.format(time, level, source, String.valueOf(charSequence));
         LOGGER.log(toLog4jLevel(level), log);
         android.util.Log.d(LOG_tAG, log);
         super.println(level, log);

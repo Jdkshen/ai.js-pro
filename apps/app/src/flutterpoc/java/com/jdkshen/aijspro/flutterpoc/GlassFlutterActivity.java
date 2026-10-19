@@ -35,6 +35,8 @@ public class GlassFlutterActivity extends FlutterActivity {
     /** 事件轮询/异步回调都在主线程。 */
     private Handler mBackHandler;
     private MethodChannel mBackChannel;
+    private BasicMessageChannel<String> mLocalChannel;
+    private ConsoleLogEvents mLogEvents;
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private static final java.util.concurrent.atomic.AtomicBoolean sOrphanCleanupChecked =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -109,6 +111,8 @@ public class GlassFlutterActivity extends FlutterActivity {
         BasicMessageChannel<String> channel = new BasicMessageChannel<>(
                 flutterEngine.getDartExecutor().getBinaryMessenger(),
                 PocBridge.CHANNEL, StringCodec.INSTANCE);
+        mLocalChannel = channel;
+        mLogEvents = new ConsoleLogEvents(flutterEngine.getDartExecutor().getBinaryMessenger());
         channel.setMessageHandler((message, reply) ->
                 PocBridge.handle(this, message, json -> {
                     if (reply != null) {
@@ -131,6 +135,20 @@ public class GlassFlutterActivity extends FlutterActivity {
             }
         });
         Log.i(TAG, "back channel registered on " + BACK_CHANNEL);
+    }
+
+    @Override
+    public void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (mLocalChannel != null) mLocalChannel.send("{\"event\":\"pendingAction\"}");
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (mLogEvents != null) mLogEvents.dispose();
+        mLocalChannel = null;
+        super.onDestroy();
     }
 
     @Override

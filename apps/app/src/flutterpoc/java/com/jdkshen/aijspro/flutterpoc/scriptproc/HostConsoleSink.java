@@ -7,6 +7,9 @@ import android.util.Log;
 
 import com.jdkshen.aijspro.autojs.AutoJs;
 import com.stardust.autojs.core.console.GlobalConsole;
+import com.stardust.autojs.core.console.ConsoleLogStyle;
+import com.stardust.autojs.core.console.ConsoleImpl;
+import com.jdkshen.aijspro.log.ConsoleLogBuffer;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -43,6 +46,7 @@ public final class HostConsoleSink {
     /** 主进程日志监听接口（主线程回调；Flutter 实时日志页/编辑器/原生日志页都可订阅）。 */
     public interface Listener {
         void onConsoleLine(Entry entry);
+        default void onConsoleCleared(long generation) { }
     }
 
     /**
@@ -53,6 +57,7 @@ public final class HostConsoleSink {
      */
     public interface AppendListener {
         void onAppended(Entry entry);
+        default void onCleared(long generation) { }
     }
 
     /** 与 ScriptRunLog / Flutter parseLogItems 一致的统一行格式：HH:mm:ss.SSS [I] name: line。 */
@@ -64,12 +69,7 @@ public final class HostConsoleSink {
         if (name.isEmpty()) {
             name = entry.token == null || entry.token.isEmpty() ? "main" : entry.token;
         }
-        final String time;
-        synchronized (TIME_FORMAT) {
-            time = TIME_FORMAT.format(new java.util.Date(entry.time));
-        }
-        return time + " [" + levelChar(entry.level) + "] "
-                + name + ": " + (entry.line == null ? "" : entry.line);
+        return ConsoleLogStyle.format(entry.time, entry.level, name, entry.line);
     }
 
     private static String levelChar(int level) {
@@ -101,13 +101,13 @@ public final class HostConsoleSink {
         /** 全局自增序号（只增不减，供 Flutter 增量拉取；清空缓冲后仍继续递增）。 */
         public final long seq;
 
-        Entry(String token, String name, String line, int level, long time) {
+        Entry(String token, String name, String line, int level, long time, long seq) {
             this.token = token == null ? "" : token;
             this.name = name == null ? "" : name;
             this.line = line == null ? "" : line;
             this.level = level;
             this.time = time;
-            this.seq = SEQ.incrementAndGet();
+            this.seq = seq;
         }
 
         @Override
@@ -118,13 +118,20 @@ public final class HostConsoleSink {
 
     private static final Object LOCK = new Object();
     /** 行序号发生器：append 时递增，Flutter 实时日志页用 since 增量拉取（只加只读 API，不改缓冲行为）。 */
-    private static final AtomicLong SEQ = new AtomicLong();
-    private static final ArrayDeque<Entry> BUFFER = new ArrayDeque<>();
+    private static final ConsoleLogBuffer<Entry> BUFFER =
+            new ConsoleLogBuffer<>(MAX_BUFFER_LINES, entry -> entry.seq);
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
     /** 语义化的追加订阅（编辑器日志面板/原生统一日志页使用）。 */
     private static final CopyOnWriteArrayList<AppendListener> APPEND_LISTENERS =
             new CopyOnWriteArrayList<>();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static boolean sClearingGlobal;
+    private static final ConsoleImpl.LogListener GLOBAL_CLEAR_LISTENER = new ConsoleImpl.LogListener() {
+        @Override public void onNewLog(ConsoleImpl.LogEntry entry) { }
+        @Override public void onLogClear() {
+            if (!sClearingGlobal) clear();
+        }
+    };
     private static final java.text.SimpleDateFormat TIME_FORMAT =
             new java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US);
 
@@ -158,7 +165,7 @@ public final class HostConsoleSink {
      * @param line  一行或多行文本（多行按 {@code \n} 拆开逐行处理）
      */
     public static void append(final String token, final String name, final int level, final String line) {
-        if (line == null || line.isEmpty()) {
+        if (line == null) {
             return;
         }
         ensureMainConsoleTap();
@@ -177,21 +184,7 @@ public final class HostConsoleSink {
 
     /** 最近 n 行快照（按时间顺序；n&lt;=0 时返回空列表）。 */
     public static List<Entry> snapshot(int maxLines) {
-        ensureMainConsoleTap();
-        List<Entry> result = new ArrayList<>();
-        if (maxLines <= 0) {
-            return result;
-        }
-        synchronized (LOCK) {
-            int skip = Math.max(0, BUFFER.size() - maxLines);
-            int index = 0;
-            for (Entry entry : BUFFER) {
-                if (index++ >= skip) {
-                    result.add(entry);
-                }
-            }
-        }
-        return result;
+        return snapshotSince(0L, maxLines, null);
     }
 
     /** 最近 n 行的纯文本（每行 {@code line}，多行脚本输出已拆行）。 */
@@ -212,8 +205,10 @@ public final class HostConsoleSink {
      */
     public static long version() {
         ensureMainConsoleTap();
-        return SEQ.get();
+        return BUFFER.version();
     }
+
+    public static long generation() { return BUFFER.generation(); }
 
     /**
      * token 过滤：兼容任务页展示形态（{@code script:3} / {@code native:3}）与上游写入的形态。
@@ -284,33 +279,33 @@ public final class HostConsoleSink {
      *                 前缀归一化在前缀侧桥里做）
      */
     public static List<Entry> snapshotSince(long afterSeq, int maxLines, String token) {
+        return pageSince(afterSeq, maxLines, token, -1L).entries;
+    }
+
+    /** Rows and their delivery cursor must come from the same atomic snapshot. */
+    public static ConsoleLogBuffer.Page<Entry> pageSince(long afterSeq, int maxLines,
+                                                         String token, long expectedGeneration) {
         ensureMainConsoleTap();
-        List<Entry> result = new ArrayList<>();
-        if (maxLines <= 0) {
-            return result;
-        }
         String filter = token == null ? "" : token;
-        synchronized (LOCK) {
-            for (Entry entry : BUFFER) {
-                if (entry.seq <= afterSeq) {
-                    continue;
-                }
-                if (!tokenMatches(entry.token, filter)) {
-                    continue;
-                }
-                result.add(entry);
-            }
-        }
-        if (result.size() > maxLines) {
-            return new ArrayList<>(result.subList(result.size() - maxLines, result.size()));
-        }
-        return result;
+        return BUFFER.page(afterSeq, maxLines, entry -> tokenMatches(entry.token, filter), expectedGeneration);
     }
 
     /** 清空环形缓冲（只清本类的缓存，不影响 GlobalConsole 已显示内容）。 */
     public static void clear() {
-        synchronized (LOCK) {
-            BUFFER.clear();
+        if (Looper.myLooper() != Looper.getMainLooper()) { MAIN.post(HostConsoleSink::clear); return; }
+        long generation = BUFFER.clear();
+        sClearingGlobal = true;
+        try {
+            AutoJs autojs = AutoJs.getInstance();
+            if (autojs != null && autojs.getGlobalConsole() != null) autojs.getGlobalConsole().clear();
+        } finally { sClearingGlobal = false; }
+        for (Listener listener : LISTENERS) {
+            try { listener.onConsoleCleared(generation); }
+            catch (Throwable error) { Log.w(TAG, "console clear listener failed", error); }
+        }
+        for (AppendListener listener : APPEND_LISTENERS) {
+            try { listener.onCleared(generation); }
+            catch (Throwable error) { Log.w(TAG, "append clear listener failed", error); }
         }
     }
 
@@ -349,15 +344,9 @@ public final class HostConsoleSink {
         for (String rawLine : lines) {
             // 空行也保留（脚本里 console.log("") 是有效输出，便于看分段），但行尾的 \r 去掉。
             String line = rawLine.endsWith("\r") ? rawLine.substring(0, rawLine.length() - 1) : rawLine;
-            Entry entry = new Entry(token, name, line, level, System.currentTimeMillis());
-            synchronized (LOCK) {
-                BUFFER.addLast(entry);
-                while (BUFFER.size() > MAX_BUFFER_LINES) {
-                    BUFFER.removeFirst();
-                }
-            }
+            Entry entry = BUFFER.append(seq -> new Entry(token, name, line, level, System.currentTimeMillis(), seq));
             if (writeGlobalConsole) {
-                writeToGlobalConsole(level, line);
+                writeToGlobalConsole(entry);
             }
             for (Listener listener : LISTENERS) {
                 try {
@@ -377,7 +366,9 @@ public final class HostConsoleSink {
     }
 
     /** 写主进程 GlobalConsole：原生日志页实时可见（与主进程脚本日志同一套显示）。 */
-    private static void writeToGlobalConsole(int level, String line) {
+    private static void writeToGlobalConsole(Entry entry) {
+        int level = entry.level;
+        String line = entry.line;
         try {
             AutoJs autojs = AutoJs.getInstance();
             if (autojs == null) {
@@ -393,7 +384,8 @@ public final class HostConsoleSink {
             // appender 看到这个标记会直接丢弃（这些行本来就来自脚本进程，已在环里）。
             IN_SINK_WRITE.set(Boolean.TRUE);
             try {
-                console.println(level, line);
+                String name = entry.name.isEmpty() ? entry.token : entry.name;
+                console.printlnAt(level, line, entry.time, name);
             } finally {
                 IN_SINK_WRITE.set(Boolean.FALSE);
             }
@@ -442,6 +434,10 @@ public final class HostConsoleSink {
             org.apache.log4j.Logger logger =
                     org.apache.log4j.Logger.getLogger(GlobalConsole.class);
             logger.addAppender(new GlobalConsoleAppender());
+            AutoJs autojs = AutoJs.getInstance();
+            if (autojs != null && autojs.getGlobalConsole() != null) {
+                autojs.getGlobalConsole().addLogListener(GLOBAL_CLEAR_LISTENER);
+            }
             Log.i(TAG, "main console tap installed (token=main)");
         } catch (Throwable error) {
             Log.w(TAG, "安装主进程 console 统一流失败", error);
@@ -484,7 +480,7 @@ public final class HostConsoleSink {
             // 它们一会儿会以 main token 再进一次历史，这里按「正文 + 出现次数」抵扣，避免重复。
             java.util.Map<String, Integer> existing = new java.util.HashMap<>();
             synchronized (LOCK) {
-                for (Entry entry : BUFFER) {
+                for (Entry entry : BUFFER.page(0, MAX_BUFFER_LINES, null, -1L).entries) {
                     Integer count = existing.get(entry.line);
                     existing.put(entry.line, count == null ? 1 : count + 1);
                 }
@@ -543,7 +539,7 @@ public final class HostConsoleSink {
     /** 主进程行：token/name 固定 "main"，不再写回 GlobalConsole（避免回环）。 */
     private static void appendInternal(String token, String name, int level, String line,
                                        boolean writeGlobalConsole) {
-        if (line == null || line.isEmpty()) {
+        if (line == null) {
             return;
         }
         int safeLevel = normalizeLevel(level);

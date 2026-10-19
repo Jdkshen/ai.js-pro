@@ -168,6 +168,15 @@ final class PocBridge {
             // ---- 统一实时日志流（HostConsoleSink：主进程脚本 + :script + :native）------   // lgtm[comment]
             case "liveLogs":
                 return liveLogs(args);
+            case "logAppearance": {
+                JSONObject dark = new JSONObject(), light = new JSONObject();
+                for (int level = Log.VERBOSE; level <= Log.ASSERT; level++) {
+                    String key = com.stardust.autojs.core.console.ConsoleLogStyle.levelName(level);
+                    dark.put(key, ((long) com.stardust.autojs.core.console.ConsoleLogStyle.color(level, true)) & 0xffffffffL);
+                    light.put(key, ((long) com.stardust.autojs.core.console.ConsoleLogStyle.color(level, false)) & 0xffffffffL);
+                }
+                return new JSONObject().put("dark", dark).put("light", light);
+            }
             case "clearLiveLogs":
                 return clearLiveLogs();
             case "shareLogText":
@@ -837,8 +846,9 @@ final class PocBridge {
             maxLines = HostConsoleSink.MAX_BUFFER_LINES;
         }
         String token = normalizeLiveToken(sanitizeTaskKey(args.optString("token", "")));
-        List<HostConsoleSink.Entry> entries =
-                HostConsoleSink.snapshotSince(since, maxLines, token);
+        com.jdkshen.aijspro.log.ConsoleLogBuffer.Page<HostConsoleSink.Entry> page =
+                HostConsoleSink.pageSince(since, maxLines, token, args.optLong("generation", -1L));
+        List<HostConsoleSink.Entry> entries = page.entries;
         StringBuilder content = new StringBuilder();
         JSONArray structured = new JSONArray();
         try {
@@ -859,8 +869,13 @@ final class PocBridge {
             return new JSONObject()
                     .put("content", content.toString())
                     .put("entries", structured)
-                    .put("count", HostConsoleSink.lineCount())
-                    .put("version", HostConsoleSink.version())
+                    .put("count", page.count)
+                    .put("version", page.version)
+                    .put("generation", page.generation)
+                    .put("headVersion", page.headVersion)
+                    .put("more", page.more)
+                    .put("reset", page.reset)
+                    .put("truncated", page.truncated)
                     .put("running", isAnyScriptRunning())
                     .put("returned", entries.size())
                     .put("token", token);
@@ -874,6 +889,7 @@ final class PocBridge {
         HostConsoleSink.clear();
         try {
             return new JSONObject().put("cleared", true)
+                    .put("generation", HostConsoleSink.generation())
                     .put("version", HostConsoleSink.version());
         } catch (Throwable error) {
             throw new IllegalStateException("清空实时日志失败", error);
@@ -908,12 +924,7 @@ final class PocBridge {
     }
 
     private static String formatLiveLine(HostConsoleSink.Entry entry) {
-        String name = entry.name == null || entry.name.isEmpty() ? "" : entry.name + ": ";
-        String time;
-        synchronized (LIVE_TIME_FORMAT) {
-            time = LIVE_TIME_FORMAT.format(new java.util.Date(entry.time));
-        }
-        return time + " [" + levelChar(entry.level) + "] " + name + entry.line;
+        return HostConsoleSink.formatLine(entry);
     }
 
     private static String levelChar(int level) {
@@ -958,7 +969,8 @@ final class PocBridge {
     private static boolean isAnyScriptRunning() {
         return !runningMainExecutions().isEmpty()
                 || PocScriptHost.runningTasks().length() > 0
-                || PocNativeRunner.runningTasks().length() > 0;
+                || PocNativeRunner.runningTasks().length() > 0
+                || PocNode24Jobs.snapshot().length() > 0;
     }
 
     /** 主进程里正在跑的脚本执行（数量少，遍历一次没开销）。 */

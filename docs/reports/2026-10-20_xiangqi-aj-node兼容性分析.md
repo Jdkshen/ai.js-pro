@@ -321,3 +321,173 @@ probe（Node24，K40）结果：
 - `.artifacts/task205-verify/n205-capture.png`（captureScreen 实帧 1080×2400）
 - `.artifacts/task205-verify/yolo2.txt`（YOLO detect 2070B 结果）
 - `.artifacts/task205-verify/locate.png`、`locate2.png`（定位操作后界面）
+
+---
+
+## 15. task-206：pageAction 投递根因 + capture null 崩溃加固（dev-1153）
+
+### 15.1 ② pageAction 静默丢弃根因（已修）
+
+工程 `src/ui/aj-node-main.node.js` 的 action()：
+```js
+if (["START","RELOCATE","RECOGNIZE","CAPTURE_SCREEN"].includes(command)) {
+  if (!app.launch("com.tencent.qqgame.xq")) { this.notice("请先打开游戏棋盘"); return; }
+  this.moveTaskToBack(true);
+}
+runtime.controller.action(command);
+```
+我们的 Node 宿主 `app.launch` 原先实现为 `return appCall('startActivity')`，宿主 startActivity 返回 void/null → **falsy** → 所有页面按钮动作在 controller.action 之前就被静默 return，`bus-command-floaty.json` 永远为空、lastPageAction 不更新。
+
+修复（prelude，dev-1153）：`app.launch(pkg)` 调用 startActivity 后返回 true（Auto.js 语义 boolean）。
+验证：dev-1153 Node 探针 `app.launch('com.tencent.qqgame.xq')` → **ret=true, type=boolean**。
+
+### 15.2 ① capture null 错误加固
+
+工程副本（output/xiangqi-aj-node-stage 与设备 /sdcard/脚本/xiangqi-aj-node）已打防御补丁：
+- `src/app/panel/start-flow.js:98`：`String(error.message || error)` → `String((error && error.message) || error || "未知错误（null）")`；
+- `src/app/panel/bus.js`：`captureScreenPreview()` 整体 try/catch，异常返回 `{ok:false, reason:"获取屏幕异常：…"}`，不再让后台崩溃。
+
+用 bus 直接注入 pageAction `CAPTURE_SCREEN`（targetReadyAt 匹配 backend）验证：backend 正常执行并写 `lastPageAction`，**后台存活**；本次失败原因是截图通道：
+`截图失败：shell）：Error: 没有 Shizuku/root，无法用 shell 截图（screencap 需要 shell 身份）`
+→ `captureBackend=shell` 在 app 进程内不可用（adb root 只给 shell，不是 app）；需要 MediaProjection（auto/screen）或 Shizuku。直接 QuickJS 探针的 MediaProjection 授权+取帧已验证可用。
+
+### 15.3 结论 / 下一步
+
+- ② 根因已修：app.launch 返回 true（dev-1153）；bus 注入 CAPTURE_SCREEN 证明 backend pageAction→bus→执行链路正常；
+- ① 崩溃已加固，后台不再因 capture null 错误退出；但面板 capture 仍需可用通道：
+  - 推荐 autorun captureBackend=auto（MediaProjection），首次弹窗完成“共享屏幕/应用”授权（dev-1149 直接探针已验证可授权取帧）；或安装 Shizuku 用 shell 通道；
+- 全链路「获取屏幕→定位→识别→算棋」尚未完成：需要在干净面板会话下用 MediaProjection 授权后点按钮（或继续 bus 注入）验证；NativeEngine/YOLO 本身已通（§13/§14）；
+- 工程脚本改动无需新 dev 构建；dev-1153 已含 app.launch 修复。
+
+### 15.4 证据
+
+- `.artifacts/task206-verify/n206-launch.node.js` / logcat N206L（app.launch ret=true）；
+- `.artifacts/task206-verify/cmd-capture.json`（bus 注入命令）+ bus-state lastPageAction/失败原因；
+- 工程补丁文件：`output/xiangqi-aj-node-stage/src/app/panel/{bus.js,start-flow.js}`。
+
+---
+
+## 16. task-207：面板 MediaProjection 截图 + 定位/识别/算棋（dev-1153）
+
+### 16.1 MediaProjection 截图（PASS）
+
+- autorun 设 `captureBackend:"auto"`，重启面板（backend 重新加载后 glyph 模板可用）；
+- bus 注入 / UI pageAction `CAPTURE_SCREEN` → 系统「要与 AI.js Pro 共享屏幕吗？」→ 下一步 → 选择「天天象棋」应用 → 授权完成；
+- backend（QuickJS 子引擎）实际取帧成功：`lastPageAction CAPTURE_SCREEN ok=true`，`screenPreview` 保存 1080×2400 PNG，日志「已获取屏幕：1080×2400」；无 null 崩溃（§15 防御补丁生效）；
+- 结论：MediaProjection 通道可用，Node24CaptureRelay/ScreenCaptureRequestActivity 现有实现在 backend 子引擎下可走通。
+
+### 16.2 模板资源缺失（补充后定位 PASS）
+
+设备工程 `assets/glyph-tpl`、`assets/game-over` 只有 README（模板 PNG 未随工程副本导出）；从 `samples/象棋自动走棋/assets` 推送 11 个 `tpl_*.png` + `share/replay.png` 后：
+- `RELOCATE` → `ok=true`，`gridVersion=1`；
+- 日志：`字形识别已启用（11 模板）`、`棋子圆心校验：找到 32 个圆`、`校准完成：几何 v1 偏移(0,0) 未知格 0 用时 286ms｜定位方式 canny-hough`、局面 FEN `rnbakabnr/9/1c5c1/...`；
+- 即 **定位/识别链路已打通**（32 子、未知 0）。
+
+### 16.3 pageAction / 识别 / 算棋
+
+- pageAction 投递已验证：frontend 发起 START 的 `lastPageAction.id=0:1792435094424:1`，与 bus 注入 RELOCATE 都能让 backend 执行；
+- 运行中识别正常：驱动日志 `字形识别：触子 32｜未知 0｜验证 过`、状态 `WAIT_STABLE｜几何就绪（v1）`；RECOGNIZE 单独调用时返回「帧不稳定（还缺一帧）」是因为驱动已在连续识别，属正常防抖；
+- 算棋：stop → setConfig mode=advice → START，`running=true`；但 worker 引擎失败：
+  `worker 算棋异常：Cannot find module: /storage/emulated/0/脚本/xiangqi-aj-node/../../src/runtime/task-service.js`（QuickJS-Thread.js）。
+  原因待查：QuickJS worker 线程拿到的 `__args.dir` 或 module 解析路径多出 `/../..`（疑似 threads.start 参数/模块根解析差异）；修复后可跑 Pikafish 算棋。
+
+### 16.4 证据
+
+- `.artifacts/task207-verify/perm*.png`（MediaProjection 授权流程）
+- `.artifacts/task207-verify/preview.png`（backend 截取的棋盘帧 1080×2400）
+- `.artifacts/task207-verify/final-state.json`、`final.png`（gridVersion=1、running=true、advice）
+- `.artifacts/task207-verify/cmd-*.json`（bus 注入命令）
+
+---
+
+## 17. task-208：worker 算棋路径修复 + 全链路跑通（dev-1153）
+
+### 17.1 根因
+
+工程 `src/automation/auto-driver.js:416`：
+```js
+driverState.projectDir = driverState.opts.projectDir || (typeof __dirname === "string" ? __dirname + "/../.." : ".");
+```
+而模块顶部（auto-driver.js:20）在 `globalThis.__xiangqiProjectDir` 未定义时把 `__dirname` 覆盖成 `files.cwd()`：
+```js
+var __dirname = typeof globalThis.__xiangqiProjectDir === 'string' ? globalThis.__xiangqiProjectDir + "/src/automation" : files.cwd();
+```
+`AJ后台.js` 之前只设了局部 `baseDir`，没有设置 `globalThis.__xiangqiProjectDir`；于是 backend QuickJS 子引擎里：
+- `__dirname = files.cwd()`（工程根目录）
+- `projectDir = files.cwd() + "/../.."`
+- 传给 worker 的 `__args.dir` 变成 `<project>/../..`
+- worker 里 `require(<project>/../../src/runtime/task-service.js)` → Cannot find module（错误里的 /../.. 即由此而来）
+
+### 17.2 修复（工程侧，无需 dev 构建）
+
+`output/xiangqi-aj-node-stage/AJ后台.js` 在算出 `baseDir` 后加一行：
+```js
+globalThis.__xiangqiProjectDir = baseDir;
+```
+并推送到设备 `/sdcard/脚本/xiangqi-aj-node/AJ后台.js`。这样所有工程模块（含 auto-driver）都用正确工程根推导 `__dirname`，worker `__args.dir` 正确。
+
+### 17.3 验证（K40 dev-1153，全链路 PASS）
+
+- MediaProjection 授权后 CAPTURE_SCREEN ok=true，screenPreview 1080×2400；
+- RELOCATE ok=true、gridVersion=1、32 子未知 0；
+- START（advice）running=true；worker 正常加载 task-service，无 Cannot find module；
+- 面板截图显示：
+  `已停止｜观察 13 次｜未知格 0｜本帧 674ms`
+  `轮次 标准开局｜红先｜算棋 建议 g3g4 30 d0`
+  `截图 自动 · 无障碍 就绪 · 落子 自动选择`
+- 日志：`计划：g3g4（深度 0，评分 30，NEW）`、`状态 SUGGESTED｜建议着法 g3g4（本模式不点击）`
+
+### 17.4 结论 / 构建
+
+- QuickJS threads worker 本身与 `__args` 注入是正确的（探针：主/worker 模块 __dirname 正确、`argsdir` 正确、worker 能 require task-service）；**根因是工程 auto-driver 在 QuickJS 下把 `__dirname` 退化成 files.cwd() 再拼 /../..**；
+- 修复采用工程侧兜底，**不需要新的 dev 构建**；建议把 `AJ后台.js` 这一行纳入正式工程副本/发布包；
+- 全链路「获取屏幕→定位→识别→算棋/建议」在 K40 dev-1153 跑通。
+
+### 17.5 证据
+
+- `.artifacts/task208-verify/n208-dir.js`、`dir-probe.txt`（threads worker __args/模块路径探针）
+- `.artifacts/task208-verify/state-run.json`（running=true、gridVersion=1、advice、建议 g3g4）
+- `.artifacts/task208-verify/final.png`（面板显示「算棋 建议 g3g4」）
+
+---
+
+## 18. task-209：可用版打包 + 干净安装验证（K40 dev-1153）
+
+### 18.1 交付包
+
+- `output/dist/xiangqi-aj-node-0.6.80-fixed.zip`（约 65.05 MB）
+- 根目录：`xiangqi-aj-node-0.6.80-fixed/`，含：
+  - `project.json`、`AJ-Node启动.node.js`、`main.js`、`AJ后台.js`、`AJ启动.js`、`AndroidManifest.xml`；
+  - `res/`（9 个文件，含 `layout/xiangqi_main.xml`、`xiangqi_floaty.xml`、drawable/color/menu/values）；
+  - `assets/glyph-tpl/`（11 个 `tpl_*.png` + README）、`assets/game-over/`（share/replay.png）；
+  - `assets/aj-runtime/`（NativeEngine.dex、arm64-v8a/libxiangqi_engine.so、pikafish.nnue、WindowDrag.dex、yolo/NativeYolo.dex + libonnxruntime.so + libxiangqi_yolo.so）、`assets/models/chessai_160x320_v5r.onnx`、`assets/board-sift/`；
+  - `src/` 全量工程源码；
+  - `README-使用说明.md`（Node 入口、权限、截图授权、main.js 备用、依赖）。
+- 已修正内容：`AJ后台.js` 的 `globalThis.__xiangqiProjectDir = baseDir`（worker 算棋路径）、`start-flow.js`/`bus.js` 防御补丁、补齐 res 与模板。
+
+### 18.2 K40 干净安装
+
+- 清空 `/sdcard/脚本/xiangqi-aj-node`；推送 zip 到 `/sdcard/脚本/`，设备 `/system/bin/unzip` 解压后改名为 `xiangqi-aj-node`；
+- 校验通过：`res/layout` 2 个布局、`assets/glyph-tpl` 11 个 png、game-over share/replay、`AJ后台.js` 含 `__xiangqiProjectDir = baseDir`、bus/start-flow 防御标记均在。
+
+### 18.3 干净包全链路验证（PASS）
+
+- 打开 Auto.js Pro → 运行 `AJ-Node启动.node.js` → 面板「已连接后台引擎 1，Node.js v24.22.0」；
+- 无障碍 adb 开启后 `accessibilityReady=true`；
+- 「获取屏幕」→ 系统共享屏幕授权（选择天天象棋）→ `CAPTURE_SCREEN ok=true`、`screenPreview 1080×2400`；
+- 「定位棋盘」→ `RELOCATE ok=true`、`gridVersion=1`、32 子未知 0、输出 FEN；
+- 「着法建议」+ START → running=true；DECLARE_TURN 后引擎给出建议 `计划 h0g2（深度 20，评分 -1）`，状态 `SUGGESTED｜建议着法 h0g2`；
+- 面板截图：`★ 已给出建议（本模式不点击）｜观察 33 次｜未知格 0｜本帧 660ms`、`截图 自动 · 无障碍 就绪 · 落子 自动选择`、运行中/停止。
+
+### 18.4 说明
+
+- 包内不含 APK（需配合 dev-1153+ 宿主）；`main.js` 为 QuickJS 工作台备用入口；
+- 首次使用需授权悬浮窗、无障碍、系统截屏（共享屏幕选「天天象棋」）；
+- 已知限制：MediaProjection 首次需手动授权；不同皮肤需重采 glyph 模板（本包为 K40 浅木皮肤模板）。
+
+### 18.5 证据
+
+- `output/dist/xiangqi-aj-node-0.6.80-fixed.zip`、`README-使用说明.md`
+- `.artifacts/task209-verify/state1.json`（面板连接/readyAt/a11y）
+- `.artifacts/task209-verify/perm.xml`（MediaProjection 授权）
+- `.artifacts/task209-verify/final.png`（干净包面板建议 h0g2、观察 33 次、未知格 0）

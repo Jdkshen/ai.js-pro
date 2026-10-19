@@ -601,8 +601,14 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     private void attachUnifiedLog() {
         if (!mUnifiedLogActive || mUnifiedLogListener != null) return;
-        mUnifiedLogListener = line -> {
-            if (line.level >= mLogLevel) appendUnifiedLogLine(line, true);
+        mUnifiedLogListener = new UnifiedConsoleLogBridge.Listener() {
+            @Override public void onLine(UnifiedConsoleLogBridge.Line line) {
+                if (line.level >= mLogLevel) appendUnifiedLogLine(line, true);
+            }
+            @Override public void onClear(long generation) {
+                if (mUnifiedLogBuffer != null) mUnifiedLogBuffer.clear();
+                if (mUnifiedLogText != null) mUnifiedLogText.setText("");
+            }
         };
         UnifiedConsoleLogBridge.addListener(mUnifiedLogListener);
         renderUnifiedLogSnapshot();
@@ -672,21 +678,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     /** 等级色（V/D/I/W/E/A）：与 Flutter 运行日志页/ConsoleView 的默认观感一致。 */
     private int logLevelColor(int level) {
-        switch (level) {
-            case Log.VERBOSE:
-                return 0xFF9E9E9E;
-            case Log.DEBUG:
-                return 0xFF64B5F6;
-            case Log.WARN:
-                return 0xFFFFB74D;
-            case Log.ERROR:
-                return 0xFFEF5350;
-            case Log.ASSERT:
-                return 0xFFBA68C8;
-            case Log.INFO:
-            default:
-                return 0xFF81C784;
-        }
+        return com.stardust.autojs.core.console.ConsoleLogStyle.color(level, mPalette.isDark);
     }
 
     private void showLogLevelMenu() {

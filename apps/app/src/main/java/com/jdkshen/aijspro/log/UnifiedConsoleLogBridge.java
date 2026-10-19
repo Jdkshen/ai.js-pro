@@ -1,4 +1,5 @@
 package com.jdkshen.aijspro.log;
+import com.stardust.autojs.core.console.ConsoleLogStyle;
 
 import android.util.Log;
 
@@ -55,18 +56,15 @@ public final class UnifiedConsoleLogBridge {
 
         /** 统一格式：HH:mm:ss.SSS [I] name: line（与 Flutter 运行日志页一致）。 */
         public String formatted() {
-            final String timeText;
-            synchronized (TIME_FORMAT) {
-                timeText = TIME_FORMAT.format(new Date(time));
-            }
             String displayName = name.isEmpty()
                     ? (token.isEmpty() ? "main" : token) : name;
-            return timeText + " [" + levelChar(level) + "] " + displayName + ": " + text;
+            return ConsoleLogStyle.format(time, level, displayName, text);
         }
     }
 
     public interface Listener {
         void onLine(Line line);
+        default void onClear(long generation) { }
     }
 
     private static final SimpleDateFormat TIME_FORMAT =
@@ -186,6 +184,19 @@ public final class UnifiedConsoleLogBridge {
                         new Class<?>[]{sListenerClass}, new InvocationHandler() {
                             @Override
                             public Object invoke(Object proxy, Method method, Object[] args) {
+                                if (method.getDeclaringClass() == Object.class) {
+                                    if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+                                    if ("equals".equals(method.getName())) return args != null && args[0] == proxy;
+                                    return "UnifiedConsoleLogBridge.Listener";
+                                }
+                                if ("onConsoleCleared".equals(method.getName())) {
+                                    long generation = args == null ? 0 : ((Number) args[0]).longValue();
+                                    for (Listener user : USER_LISTENERS) {
+                                        try { user.onClear(generation); }
+                                        catch (Throwable error) { Log.w(TAG, "clear listener failed", error); }
+                                    }
+                                    return null;
+                                }
                                 if ("onConsoleLine".equals(method.getName())
                                         && args != null && args.length == 1) {
                                     Line line = toLine(args[0]);

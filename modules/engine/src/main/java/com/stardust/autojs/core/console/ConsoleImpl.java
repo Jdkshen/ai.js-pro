@@ -69,6 +69,8 @@ public class ConsoleImpl extends AbstractConsole {
     private ResizableExpandableFloatyWindow mFloatyWindow;
     private ConsoleFloaty mConsoleFloaty;
     private WeakReference<LogListener> mLogListener;
+    private final java.util.concurrent.CopyOnWriteArrayList<WeakReference<LogListener>> mObservers =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
     private UiHandler mUiHandler;
     private BlockingQueue<String> mInput = new ArrayBlockingQueue<>(1);
     private WeakReference<ConsoleView> mConsoleView;
@@ -102,7 +104,7 @@ public class ConsoleImpl extends AbstractConsole {
 
     public void setConsoleView(ConsoleView consoleView) {
         mConsoleView = new WeakReference<>(consoleView);
-        setLogListener(consoleView);
+        addLogListener(consoleView);
         synchronized (this) {
             this.notify();
         }
@@ -111,6 +113,37 @@ public class ConsoleImpl extends AbstractConsole {
 
     public void setLogListener(LogListener logListener) {
         mLogListener = new WeakReference<>(logListener);
+    }
+
+    /** Views subscribe independently; a new console must not steal another view's updates. */
+    public synchronized void addLogListener(LogListener listener) {
+        if (listener == null) return;
+        for (WeakReference<LogListener> ref : mObservers) {
+            LogListener existing = ref.get();
+            if (existing == listener) return;
+            if (existing == null) mObservers.remove(ref);
+        }
+        mObservers.add(new WeakReference<>(listener));
+    }
+
+    public void removeLogListener(LogListener listener) {
+        for (WeakReference<LogListener> ref : mObservers) {
+            if (ref.get() == null || ref.get() == listener) mObservers.remove(ref);
+        }
+    }
+
+    private void notifyLogListeners(LogEntry entry) {
+        LogListener legacy = mLogListener == null ? null : mLogListener.get();
+        if (legacy != null) {
+            if (entry == null) legacy.onLogClear(); else legacy.onNewLog(entry);
+        }
+        for (WeakReference<LogListener> ref : mObservers) {
+            LogListener listener = ref.get();
+            if (listener == null) mObservers.remove(ref);
+            else if (listener != legacy) {
+                if (entry == null) listener.onLogClear(); else listener.onNewLog(entry);
+            }
+        }
     }
 
     public ArrayList<LogEntry> getAllLogs() {
@@ -143,9 +176,7 @@ public class ConsoleImpl extends AbstractConsole {
         if (mGlobalConsole != null) {
             mGlobalConsole.println(level, charSequence);
         }
-        if (mLogListener != null && mLogListener.get() != null) {
-            mLogListener.get().onNewLog(logEntry);
-        }
+        notifyLogListeners(logEntry);
         return null;
     }
 
@@ -161,9 +192,7 @@ public class ConsoleImpl extends AbstractConsole {
         synchronized (mLogEntries) {
             mLogEntries.clear();
         }
-        if (mLogListener != null && mLogListener.get() != null) {
-            mLogListener.get().onLogClear();
-        }
+        notifyLogListeners(null);
     }
 
     @Override

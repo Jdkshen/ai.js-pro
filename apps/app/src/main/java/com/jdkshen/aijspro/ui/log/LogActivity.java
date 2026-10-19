@@ -71,6 +71,10 @@ public class LogActivity extends BaseActivity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (com.jdkshen.aijspro.log.UnifiedLogNavigation.open(this)) {
+            finish();
+            return;
+        }
         if (!UnifiedConsoleLogBridge.isAvailable() || !UnifiedConsoleLogBridge.isMainProcess()) {
             // task-177：Miuix 运行日志页已随源集退役。普通构建没有统一日志源、
             // :script/:native 进程里统一环为空（103 都转发到主进程）：直接结束并明确提示，
@@ -82,10 +86,11 @@ public class LogActivity extends BaseActivity {
         mPalette = AppThemeRepository.get(this).getPalette();
         buildUi();
         UnifiedConsoleLogBridge.ensureMainTap();
-        mListener = line -> {
-            if (line.level >= mLevel) {
-                appendLine(line, true);
+        mListener = new UnifiedConsoleLogBridge.Listener() {
+            @Override public void onLine(UnifiedConsoleLogBridge.Line line) {
+                if (line.level >= mLevel) appendLine(line, true);
             }
+            @Override public void onClear(long generation) { renderSnapshot(); }
         };
         UnifiedConsoleLogBridge.addListener(mListener);
         renderSnapshot();
@@ -234,21 +239,7 @@ public class LogActivity extends BaseActivity {
     }
 
     private int levelColor(int level) {
-        switch (level) {
-            case Log.VERBOSE:
-                return 0xFF9E9E9E;
-            case Log.DEBUG:
-                return 0xFF64B5F6;
-            case Log.WARN:
-                return 0xFFFFB74D;
-            case Log.ERROR:
-                return 0xFFEF5350;
-            case Log.ASSERT:
-                return 0xFFBA68C8;
-            case Log.INFO:
-            default:
-                return 0xFF81C784;
-        }
+        return com.stardust.autojs.core.console.ConsoleLogStyle.color(level, mPalette.isDark);
     }
 
     /** 复制当前显示的全部行（与 Flutter 日志页的复制行为一致）。 */

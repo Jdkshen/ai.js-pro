@@ -67,6 +67,12 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     private int mMinimumLogLevel = Log.VERBOSE;
     /** 0 表示用布局默认字号（见 setTextSize）。 */
     private float mTextSizeSp = 0f;
+    private final java.util.concurrent.atomic.AtomicBoolean mRefreshPending =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private final Runnable mRefresh = () -> {
+        mRefreshPending.set(false);
+        if (!mShouldStopRefresh) refreshLog();
+    };
 
     public ConsoleView(Context context) {
         super(context);
@@ -92,6 +98,12 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
 
     private void init(AttributeSet attrs) {
         inflate(getContext(), R.layout.console_view, this);
+        boolean dark = (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        for (int level = Log.VERBOSE; level <= Log.ASSERT; level++) {
+            mColors.put(level, ConsoleLogStyle.color(level, dark));
+        }
         if (attrs != null) {
             TypedArray typedArray = getContext().obtainStyledAttributes(attrs, R.styleable.ConsoleView);
             for (Map.Entry<Integer, Integer> attr : ATTRS.entrySet()) {
@@ -99,6 +111,7 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
                 int logLevel = attr.getValue();
                 mColors.put(logLevel, typedArray.getColor(styleable, mColors.get(logLevel)));
             }
+            typedArray.recycle();
         }
         mLogListRecyclerView = findViewById(R.id.log_list);
         LinearLayoutManager manager = new LinearLayoutManager(getContext());
@@ -140,8 +153,10 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     }
 
     public void setConsole(ConsoleImpl console) {
+        if (mConsole != null && mConsole != console) mConsole.removeLogListener(this);
         mConsole = console;
         mConsole.setConsoleView(this);
+        onLogClear();
     }
 
     /**
@@ -265,28 +280,26 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
 
     @Override
     public void onNewLog(ConsoleImpl.LogEntry logEntry) {
-
+        if (mRefreshPending.compareAndSet(false, true)) postDelayed(mRefresh, 16L);
     }
 
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         mShouldStopRefresh = false;
-        postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                refreshLog();
-                if (!mShouldStopRefresh) {
-                    postDelayed(this, REFRESH_INTERVAL);
-                }
-            }
-        }, REFRESH_INTERVAL);
+        if (mConsole != null) mConsole.addLogListener(this);
+        removeCallbacks(mRefresh);
+        mRefreshPending.set(false);
+        onNewLog(null);
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         mShouldStopRefresh = true;
+        removeCallbacks(mRefresh);
+        mRefreshPending.set(false);
+        if (mConsole != null) mConsole.removeLogListener(this);
     }
 
 
@@ -296,18 +309,25 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
             mLogEntries.clear();
             mFilteredEntries.clear();
             mSeenLogCount = 0;
+            appendNewLogs();
+            rebuildFiltered();
             mLogListRecyclerView.getAdapter().notifyDataSetChanged();
         });
     }
 
     private void refreshLog() {
+        boolean follow = true;
+        LinearLayoutManager manager = (LinearLayoutManager) mLogListRecyclerView.getLayoutManager();
+        if (manager != null && !mFilteredEntries.isEmpty()) {
+            follow = manager.findLastVisibleItemPosition() >= mFilteredEntries.size() - 2;
+        }
         int oldVisibleSize = mFilteredEntries.size();
         appendNewLogs();
         rebuildFiltered();
         int inserted = mFilteredEntries.size() - oldVisibleSize;
         if (inserted > 0) {
             mLogListRecyclerView.getAdapter().notifyDataSetChanged();
-            mLogListRecyclerView.scrollToPosition(mFilteredEntries.size() - 1);
+            if (follow) mLogListRecyclerView.scrollToPosition(mFilteredEntries.size() - 1);
         }
     }
 
