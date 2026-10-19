@@ -332,7 +332,8 @@ public class NodeUiBridgeService extends Service {
                     String id = request.optString("overlayId", "");
                     int viewId = request.optInt("viewId", 0);
                     android.view.View content = OVERLAY_CONTENTS.get(id);
-                    android.view.View target = content == null || viewId == 0 ? null : content.findViewById(viewId);
+                    android.view.View target = content == null || viewId == 0 ? null
+                            : com.stardust.autojs.engine.node24.NodeUiHost.findInlineViewById(content, viewId);
                     if (target == null) throw new IllegalStateException("找不到浮窗控件：" + viewId);
                     String command = request.optString("command", "");
                     org.json.JSONObject commandResult = new org.json.JSONObject().put("ok", true);

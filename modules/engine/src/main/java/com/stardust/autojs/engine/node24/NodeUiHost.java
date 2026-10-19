@@ -525,7 +525,7 @@ public final class NodeUiHost {
         if (viewId == 0) {
             viewId = bundle.idOf("id", viewName);
         }
-        View pagerView = viewId == 0 ? null : content.findViewById(viewId);
+        View pagerView = viewId == 0 ? null : findInlineViewById(content, viewId);
         if (!(pagerView instanceof ViewPager)) {
             return activityError("找不到 ViewPager（view=" + viewName + "）");
         }
@@ -572,7 +572,7 @@ public final class NodeUiHost {
                 viewId = bundle.idOf("id", "grid");
             }
         }
-        View target = viewId == 0 ? null : content.findViewById(viewId);
+        View target = viewId == 0 ? null : findInlineViewById(content, viewId);
         if (!(target instanceof RecyclerView)) {
             return activityError("找不到 RecyclerView（view=" + viewName + "）");
         }
@@ -1050,6 +1050,35 @@ public final class NodeUiHost {
         return "<text" + cleaned + " android:text=\"[NodeUI 暂不支持 " + label + "]\"/>";
     }
 
+    /**
+     * task-190：按 id 查找 XML 控件时跳过 ConsoleView/globalconsole 的内部控件。
+     * 示例 <globalconsole> 内部自带 @+id/input，与脚本 XML 的 <input id="input"> 同名；
+     * 普通 findViewById 会先命中 console 内部（GONE 后也不应作为 binding 目标）。
+     */
+    public static View findInlineViewById(View root, int id) {
+        if (root == null || id == 0) {
+            return null;
+        }
+        if (root.getId() == id) {
+            return root;
+        }
+        if (!(root instanceof android.view.ViewGroup)) {
+            return null;
+        }
+        // 不进入 ConsoleView/globalconsole 的内部视图树，避免同名 id 抢到控制台 input/submit。
+        if (root instanceof com.stardust.autojs.core.console.ConsoleView) {
+            return null;
+        }
+        android.view.ViewGroup group = (android.view.ViewGroup) root;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View found = findInlineViewById(group.getChildAt(i), id);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
     /** 字符串布局 inflate 后按 XML 里的 @+id 建 name→viewId；供 binding 真实查找。 */
     public static JSONObject buildInlineViews(View content, String xml) {
         JSONObject views = new JSONObject();
@@ -1062,7 +1091,7 @@ public final class NodeUiHost {
                     continue;
                 }
                 int id = Ids.parse(name);
-                if (id != 0 && content.findViewById(id) != null) {
+                if (id != 0 && findInlineViewById(content, id) != null) {
                     views.put(name, id);
                 }
             }
@@ -1437,7 +1466,7 @@ public final class NodeUiHost {
                     if (viewId == 0 && sShownViews != null) {
                         viewId = sShownViews.optInt(viewName, 0);
                     }
-                    View pagerView = viewId == 0 ? null : content.findViewById(viewId);
+                    View pagerView = viewId == 0 ? null : findInlineViewById(content, viewId);
                     if (!(pagerView instanceof ViewPager)) {
                         throw new IllegalStateException("找不到 ViewPager（view=" + viewName + ", viewId=" + viewId + "）");
                     }

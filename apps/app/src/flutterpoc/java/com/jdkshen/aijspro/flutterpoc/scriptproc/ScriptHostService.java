@@ -558,9 +558,18 @@ public class ScriptHostService extends Service {
         @Override
         public void onException(ScriptExecution execution, Throwable e) {
             try {
-                // task-191 P1：用户停止/关闭 UI 也只在这里静默打结束行；错误堆栈随后由引擎 console 转发。
+                // task-191 P1：用户停止/关闭 UI 也只在这里静默打结束行。
                 forwardGlobalLine(mState, formatFinishedLine(mState, execution));
-                finish(mState, e);
+                // 引擎 GLOBAL_LISTENER 在本监听器之后才打印错误堆栈；延后 250ms 收尾，
+                // 让 ERROR 行经 console 转发（103）到主日志页后再发 102（Pro：结束行→ERROR→Toast）。
+                final Throwable failure = e;
+                mConsoleHandler.postDelayed(() -> {
+                    try {
+                        finish(mState, failure);
+                    } catch (Throwable finishError) {
+                        Log.w(TAG, "上报 ERROR 失败：" + mState.token, finishError);
+                    }
+                }, 250L);
             } catch (Throwable error) {
                 Log.w(TAG, "上报 ERROR 失败：" + mState.token, error);
             }
