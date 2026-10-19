@@ -9,6 +9,11 @@ import org.json.JSONObject;
 
 /** Same-UID Binder/Messenger client; execute only on a worker thread. */
 public final class Node24Client implements AutoCloseable {
+    /**
+     * task-168：evaluate 阻塞等待 RESULT 期间，逐行接收 :node24 捕获的 stdout/stderr。
+     * index 是该行在最终 {@code logs} 数组中的下标；实现方应只显示一次。
+     */
+    public interface LogListener { void onLog(String line,int index); }
     private final Context context;
     private final ConcurrentHashMap<String,Pending> active=new ConcurrentHashMap<>();
     // forceStop may arrive before evaluate registers its Pending or binds the service.
@@ -19,14 +24,60 @@ public final class Node24Client implements AutoCloseable {
     private static final class Pending {
         final CountDownLatch done=new CountDownLatch(1);volatile JSONObject result;
         boolean sent;volatile boolean cancelled;
+        final LiveLogState logs;
+        Pending(LogListener listener){logs=new LiveLogState(listener);}
+    }
+    /**
+     * 单次 job 的实时日志窗口：按 seq 去重/保序，RESULT 之前先 close。
+     * close() 返回后不会再触发 onLog，因此 evaluate 返回时引擎的去重状态是稳定的。
+     */
+    static final class LiveLogState {
+        private final LogListener listener;
+        private boolean closed;
+        private int lastIndex=-1;
+        private int delivered;
+        LiveLogState(LogListener listener){this.listener=listener;}
+        boolean offer(String line,int index) {
+            LogListener callback;
+            int acceptedIndex;
+            synchronized(this) {
+                if(closed)return false;
+                if(index<0)index=lastIndex+1;
+                else if(index<=lastIndex)return false;
+                lastIndex=index;delivered++;
+                callback=listener;acceptedIndex=index;
+                if(callback==null)return true;
+                // 回调放在锁内：close() 会等正在执行的回调结束，保证 RESULT 之后不再有实时行。
+                try {callback.onLog(line==null?"":line,acceptedIndex);}
+                catch(Throwable ignored) { }
+                return true;
+            }
+        }
+        synchronized void close(){closed=true;}
+        synchronized int delivered(){return delivered;}
     }
     private final Messenger replies=new Messenger(new Handler(Looper.getMainLooper()) {
         @Override public void handleMessage(Message message) {
+            if(message.what==Node24Service.LOG) {
+                try {
+                    Bundle data=message.getData();
+                    String id=data.getString("id");
+                    if(id==null)return;
+                    Pending pending=active.get(id);
+                    if(pending!=null) pending.logs.offer(data.getString("line"),data.getInt("seq",-1));
+                } catch(Throwable error) { android.util.Log.w("Node24Client","Invalid log",error); }
+                return;
+            }
             if(message.what!=Node24Service.RESULT)return;
             try {
                 JSONObject result=new JSONObject(message.getData().getString("payload"));
                 Pending pending=active.get(result.getString("id"));
-                if(pending!=null){pending.result=result;pending.done.countDown();}
+                if(pending!=null){
+                    // 先关实时窗口再发布结果：之后到达/迟到的 LOG 一律丢弃，由 result.logs 回填。
+                    pending.logs.close();
+                    pending.result=result;
+                    pending.done.countDown();
+                }
             }catch(Exception error){android.util.Log.w("Node24Client","Invalid result",error);}
         }
     });
@@ -37,7 +88,10 @@ public final class Node24Client implements AutoCloseable {
         public void onNullBinding(ComponentName name){fail("Node24 service returned no binder");}
     };
     public Node24Client(Context context){this.context=context.getApplicationContext();}
-    private void fail(String reason){failure=reason;connected.countDown();for(Pending pending:active.values())pending.done.countDown();}
+    private void fail(String reason){
+        failure=reason;connected.countDown();
+        for(Pending pending:active.values()){pending.logs.close();pending.done.countDown();}
+    }
     private synchronized void bind() throws IOException {
         if(closed)throw new IOException("Node client closed");
         if(!bound){
@@ -46,10 +100,18 @@ public final class Node24Client implements AutoCloseable {
             bound=true;
         }
     }
+    /** 兼容旧调用方：不订阅实时日志，仍从返回结果的 logs 读取全部输出。 */
     public JSONObject evaluate(JSONObject request) throws Exception {
+        return evaluate(request,null);
+    }
+    /**
+     * task-168：等待期间通过 listener 实时收到 stdout/stderr 行；返回结果里的 logs 仍是完整
+     * 兜底数组。listener 只在当前 job 的 Pending 上生效，不跨 job/全局共享。
+     */
+    public JSONObject evaluate(JSONObject request,LogListener listener) throws Exception {
         if(Looper.myLooper()==Looper.getMainLooper())throw new IllegalStateException("Evaluate Node on a worker thread");
         if(request.toString().length()>196608)throw new IOException("Node request exceeds Binder payload limit");
-        String id=request.getString("id");Pending pending=new Pending();
+        String id=request.getString("id");Pending pending=new Pending(listener);
         if(active.putIfAbsent(id,pending)!=null)throw new IOException("Duplicate Node execution id");
         try {
             if(isCancelled(id,pending))return cancelledResult(id);
@@ -84,7 +146,11 @@ public final class Node24Client implements AutoCloseable {
             // Do this before active.remove: an interrupted outer :script execution must
             // still cancel its nested Node task instead of leaving it running alone.
             cancel(id);Thread.currentThread().interrupt();throw interrupted;
-        }finally{active.remove(id,pending);cancelledIds.remove(id);}
+        }finally{
+            // 超时/中断/断连路径也要关窗口：返回前完成正在执行的回调，之后到达的 LOG 不再显示。
+            pending.logs.close();
+            active.remove(id,pending);cancelledIds.remove(id);
+        }
     }
     private boolean isCancelled(String id,Pending pending) {
         return pending.cancelled||cancelledIds.containsKey(id);

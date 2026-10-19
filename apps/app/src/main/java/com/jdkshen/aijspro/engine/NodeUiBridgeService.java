@@ -236,6 +236,9 @@ public class NodeUiBridgeService extends Service {
                                     ? android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                                     : android.view.WindowManager.LayoutParams.TYPE_PHONE,
                             android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    // task-168：浮窗是辅助窗，不能让遮挡区域把 AI 球/菜单的触摸吞掉；
+                                    // 即使 JS focusableOnTouch 移除 NOT_FOCUSABLE，也保持非模态。
+                                    | android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                                     | android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                             android.graphics.PixelFormat.TRANSLUCENT);
                     params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;

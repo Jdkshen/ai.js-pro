@@ -14,6 +14,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.BitSet;
 import java.util.UUID;
 
 /**
@@ -189,8 +190,10 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                     .put("holdMillis", holdMillis)
                     .put("uiScript", uiScript)
                     .put("features", features);
-            JSONObject result = client.evaluate(request);
-            mirrorLogs(result.optJSONArray("logs"));
+            // task-168：evaluate 等待期间就把 stdout/stderr 行写进运行控制台；返回后只补缺失行。
+            LiveLogSink liveLogs = new LiveLogSink();
+            JSONObject result = client.evaluate(request, liveLogs);
+            mirrorLogs(result.optJSONArray("logs"), liveLogs);
             String status = result.optString("status");
             if ("SUCCESS".equals(status)) {
                 return result;
@@ -295,13 +298,65 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                 || script.contains("nodejs ui");
     }
 
-    private void mirrorLogs(JSONArray logs) {
+    /**
+     * 当前 evaluate 的实时日志窗口：index 与最终 logs 数组下标一致。
+     * 直接在回调里 console.log（不攒到脚本结束），并记住已显示的下标供兜底回填去重。
+     */
+    private final class LiveLogSink implements Node24Client.LogListener {
+        private final BitSet delivered = new BitSet();
+        @Override public void onLog(String line, int index) {
+            if (index >= 0) {
+                synchronized (delivered) {
+                    if (delivered.get(index)) return;
+                }
+            }
+            boolean shown = false;
+            try {
+                Console console = runtimeConsole();
+                if (console != null) {
+                    console.log(line == null ? "" : line);
+                    shown = true;
+                }
+            } catch (Throwable error) {
+                Log.w(TAG, "live Node console line failed", error);
+            }
+            if (shown && index >= 0) {
+                synchronized (delivered) { delivered.set(index); }
+            }
+        }
+        boolean isDelivered(int index) {
+            synchronized (delivered) { return delivered.get(index); }
+        }
+    }
+
+    private Console runtimeConsole() {
+        try {
+            return getRuntime() == null ? null : getRuntime().console;
+        } catch (Throwable error) {
+            return null;
+        }
+    }
+
+    /**
+     * 兜底回填：只显示实时窗口没有成功写出的行。没有 listener/一行都没实时显示时
+     * delivered 为空，等价于旧的“结束后统一 mirror”，不会丢日志。
+     */
+    private void mirrorLogs(JSONArray logs, LiveLogSink liveLogs) {
         if (logs == null || logs.length() == 0) {
             return;
         }
-        Console console = getRuntime().console;
+        Console console = runtimeConsole();
+        if (console == null) {
+            Log.w(TAG, "Node console unavailable; drop " + logs.length() + " result logs");
+            return;
+        }
         for (int i = 0; i < logs.length(); i++) {
-            console.log(logs.optString(i));
+            if (liveLogs != null && liveLogs.isDelivered(i)) continue;
+            try {
+                console.log(logs.optString(i));
+            } catch (Throwable error) {
+                Log.w(TAG, "mirror Node console line failed", error);
+            }
         }
     }
 

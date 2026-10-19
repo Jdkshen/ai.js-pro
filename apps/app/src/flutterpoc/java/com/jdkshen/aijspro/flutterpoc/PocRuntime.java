@@ -147,6 +147,8 @@ final class PocRuntime {
     static {
         // Phase1 第一批兜底：:script 报「暂存失败」时回退主进程旧路径执行（由 PocScriptHost 回调）。
         PocScriptHost.setLegacyRunner(PocRuntime::runLegacyInMainProcess);
+        // task-167：主进程登记 :node24 的 uiScript 任务（广播推送），任务页/停止全部要能看到并停掉。
+        PocNode24Jobs.installIfNeeded(com.stardust.app.GlobalAppContext.get());
     }
 
     /** AUTO 脚本是否也路由到 :script（默认 false 保持 Phase1 第一批行为；P1 验收后打开）。 */
@@ -478,6 +480,16 @@ final class PocRuntime {
         } catch (Throwable error) {
             Log.w(TAG, "读取隔离进程任务失败", error);
         }
+        try {
+            // task-167：Node UI/overlay（uiScript）真正跑在 :node24，:script 宿主 RUN 已结束，
+            // 任务页靠主进程登记表补上（token 前缀 node24:）。
+            JSONArray node24Tasks = PocNode24Jobs.snapshot();
+            for (int i = 0; i < node24Tasks.length(); i++) {
+                running.put(node24Tasks.get(i));
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "读取 Node24 任务失败", error);
+        }
         JSONArray scheduled = new JSONArray();
         try {
             TimedTaskManager manager = TimedTaskManager.getInstance();
@@ -527,6 +539,11 @@ final class PocRuntime {
             if (token.startsWith(PocNativeRunner.TOKEN_PREFIX)) {
                 // "native:<id>"：Phase0 :native 兜底任务的旧 token，继续兼容。
                 PocNativeRunner.stop(token.substring(PocNativeRunner.TOKEN_PREFIX.length()));
+                continue;
+            }
+            if (token.startsWith(PocNode24Jobs.TOKEN_PREFIX)) {
+                // "node24:<id>"：运行在 :node24 的 Node UI/overlay 任务（task-167）。
+                PocNode24Jobs.cancel(token);
                 continue;
             }
             stopToken(token);
@@ -641,6 +658,13 @@ final class PocRuntime {
             com.jdkshen.aijspro.engine.NodeUiActivity.closeAll();
         } catch (Throwable ignored) {
             // 非 flutterPoc/其它构建没有该入口时忽略。
+        }
+        try {
+            // task-167：Node UI/overlay 脚本实际在 :node24 keep-alive，必须单独下发 cancelAll，
+            // Node24Service 取消后会关 overlay 并结束 :node24 进程。
+            PocNode24Jobs.cancelAll();
+        } catch (Throwable error) {
+            Log.w(TAG, "取消 Node24 任务失败", error);
         }
         releaseForegroundLeases(context);
     }

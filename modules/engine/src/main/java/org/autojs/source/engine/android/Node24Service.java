@@ -2,7 +2,10 @@
 package org.autojs.source.engine.android;
 
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.*;
 import android.system.Os;
 import java.io.*;
@@ -15,7 +18,14 @@ import org.json.JSONObject;
 
 /** Non-exported, one-active-run service in :node24. No legacy application boot. */
 public final class Node24Service extends Service {
-    public static final int EXECUTE=1,RESULT=2,CANCEL=3,EVENT=4;
+    public static final int EXECUTE=1,RESULT=2,CANCEL=3,EVENT=4,LOG=5;
+    // task-167：主进程 -> :node24 的任务状态广播/控制通道（主进程任务页要能看到 uiScript keep-alive 任务）。
+    public static final String ACTION_NODE24_STATE="com.jdkshen.aijspro.NODE24_STATE";
+    public static final String ACTION_NODE24_CONTROL="com.jdkshen.aijspro.NODE24_CONTROL";
+    public static final String EXTRA_STATE="state",EXTRA_COMMAND="command",EXTRA_ID="id",
+        EXTRA_FILENAME="filename",EXTRA_SOURCE="source",EXTRA_UI_SCRIPT="uiScript",
+        EXTRA_STARTED_AT="startedAt",EXTRA_CANCELLED="cancelled";
+    private BroadcastReceiver controlReceiver;
     /** uiScript/显式 hold 的 native 事件循环寿命上限；与 Node24Client 的等待预算一致。 */
     private static final long UI_HOLD_FALLBACK_MS=600_000L;
     /** UI 已关闭后给 JS 清理（destroy 回调/stopRunning）的宽限；超时则取消 native 执行。 */
@@ -26,6 +36,9 @@ public final class Node24Service extends Service {
     private static final long UI_REPLACEMENT_WINDOW_MS=10_000L;
     /** UI 生命周期轮询间隔（独立 daemon 线程，不在主线程/Binder 线程）。 */
     private static final long UI_WATCH_INTERVAL_MS=200L;
+    /** 实时控制台与最终 logs 桶共用 64 KiB 预算；另限消息条数，避免逐行 Binder 消息打满事务队列。 */
+    private static final int LIVE_LOG_BUDGET_BYTES=65536;
+    private static final int LIVE_LOG_MAX_LINES=4096;
     private final AtomicReference<Job> active=new AtomicReference<>();
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private final Messenger messenger=new Messenger(new Handler(Looper.getMainLooper()) {
@@ -47,17 +60,57 @@ public final class Node24Service extends Service {
                 JSONObject request=new JSONObject(message.getData().getString("payload"));
                 Job job=new Job(request,message.replyTo);
                 if(!active.compareAndSet(null,job)) { job.reply(new JSONObject().put("status","BUSY").put("success",false));return; }
+                broadcastState("started",job);
                 worker.execute(job);
             } catch(Exception error) { android.util.Log.e("Node24Service","Invalid engine request",error); }
         }
     });
+    @Override public void onCreate() {
+        super.onCreate();
+        // task-167：主进程任务页「停止」/「停止全部」通过广播下发 cancel/cancelAll（非导出，同一 UID）。
+        try {
+            controlReceiver=new BroadcastReceiver() {
+                @Override public void onReceive(Context context,Intent intent) {
+                    if(intent==null)return;
+                    Job job=active.get();
+                    if(job==null)return;
+                    String command=intent.getStringExtra(EXTRA_COMMAND);
+                    if("cancelAll".equals(command)) job.cancel();
+                    else if("cancel".equals(command) && job.id.equals(intent.getStringExtra(EXTRA_ID))) job.cancel();
+                    else if("query".equals(command)) broadcastState("started",job);
+                }
+            };
+            IntentFilter filter=new IntentFilter(ACTION_NODE24_CONTROL);
+            if(Build.VERSION.SDK_INT>=33) registerReceiver(controlReceiver,filter,Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(controlReceiver,filter);
+        } catch(Throwable error) { android.util.Log.w("Node24Service","register control receiver failed",error); }
+    }
     @Override public IBinder onBind(Intent intent) { return messenger.getBinder(); }
     @Override public void onDestroy() {
+        try { if(controlReceiver!=null) unregisterReceiver(controlReceiver); } catch(Throwable ignored) { }
+        controlReceiver=null;
         Job job=active.get();if(job!=null)job.cancel();worker.shutdown();super.onDestroy();
+    }
+    /** 任务状态广播：started/finished/cancelled + id/filename/uiScript/startedAt，供主进程任务页登记。 */
+    private void broadcastState(String state,Job job) {
+        if(job==null)return;
+        try {
+            Intent intent=new Intent(ACTION_NODE24_STATE).setPackage(getPackageName());
+            intent.putExtra(EXTRA_STATE,state).putExtra(EXTRA_ID,job.id)
+                .putExtra(EXTRA_FILENAME,job.filename).putExtra(EXTRA_SOURCE,job.source)
+                .putExtra(EXTRA_UI_SCRIPT,job.uiScript).putExtra(EXTRA_STARTED_AT,job.startedAt)
+                .putExtra(EXTRA_CANCELLED,job.cancelled);
+            sendBroadcast(intent);
+        } catch(Throwable error) { android.util.Log.w("Node24Service","broadcast state failed",error); }
     }
     private final class Job implements Runnable {
         final String id,source,filename;final long timeout;final long holdMillis;final boolean uiScript;final Messenger reply;
+        final long startedAt=System.currentTimeMillis();
         volatile boolean cancelled;volatile boolean finished;volatile Node24Engine engine;volatile Node24HostBridge host;
+        /** 实时日志只由 node24-output 线程写入；锁同时保护 seq/delivered 与 64 KiB/条数预算。 */
+        private final Object logLock=new Object();
+        private int logSeq,logBytes,logLines,deliveredLogs;
+        private boolean logStreamStopped;
         Job(JSONObject request,Messenger reply) throws Exception {
             this.reply=reply;id=request.getString("id");source=request.getString("source");
             filename=request.getString("filename");timeout=request.getLong("timeoutMillis");
@@ -176,6 +229,37 @@ public final class Node24Service extends Service {
                 Message response=Message.obtain(null,RESULT);Bundle data=new Bundle();data.putString("payload",result.toString());response.setData(data);reply.send(response);
             } catch(Exception error) { android.util.Log.w("Node24Service","Client disconnected",error); }
         }
+        /**
+         * task-168：把 OutputCapture 的一行实时送给主进程。seq 与该行在最终 logs 数组中的下标一致，
+         * 客户端因此可以只回填没有实时投递的行。发送量有界；一旦超限/失败/取消就永久停止实时流，
+         * 剩余内容仍由 RESULT.logs 兜底，不会无界刷 Binder。
+         */
+        void sendLog(String line) {
+            if(line==null || line.isEmpty() || reply==null) return;
+            synchronized(logLock) {
+                if(logStreamStopped) return;
+                if(cancelled) { logStreamStopped=true; return; }
+                int size=line.getBytes(StandardCharsets.UTF_8).length;
+                if(logLines>=LIVE_LOG_MAX_LINES || size>LIVE_LOG_BUDGET_BYTES-logBytes) {
+                    logStreamStopped=true; return;
+                }
+                int seq=logSeq;
+                try {
+                    Message message=Message.obtain(null,LOG);
+                    Bundle data=new Bundle();
+                    data.putString("id",id);
+                    data.putString("line",line);
+                    data.putInt("seq",seq);
+                    message.setData(data);
+                    reply.send(message);
+                    logSeq++;logBytes+=size;logLines++;deliveredLogs++;
+                } catch(Throwable error) {
+                    logStreamStopped=true;
+                    android.util.Log.w("Node24Service","live log send failed id="+id,error);
+                }
+            }
+        }
+        int deliveredLogs() { synchronized(logLock) { return deliveredLogs; } }
         @Override public void run() {
             long start=SystemClock.elapsedRealtime();JSONObject result=new JSONObject();
             // task-65：stage 记录当前步骤；外层 catch 打 Log.e，任何一步异常都能定位。
@@ -197,7 +281,7 @@ public final class Node24Service extends Service {
                 android.util.Log.i("Node24Service","host bridge ready id="+id+" "+bridge.describeState());
                 // task-164：清掉上一次运行残留的 floating overlay/Node UI。
                 try { bridge.closeUiOverlay(); } catch(Throwable ignored) { }
-                try (Node24Engine current=new Node24Engine(); OutputCapture output=new OutputCapture()) {
+                try (Node24Engine current=new Node24Engine(); OutputCapture output=new OutputCapture(this::sendLog)) {
                     UiLifecycleWatcher watcher=null;
                     try {
                         stage="execute";
@@ -239,7 +323,8 @@ public final class Node24Service extends Service {
                         String state=wasCancelled?"CANCELLED":value.timedOut?"TIMEOUT":value.succeeded()?"SUCCESS":"SCRIPT_ERROR";
                         result.put("status",state).put("success",!wasCancelled&&value.succeeded()).put("exitCode",value.exitCode)
                             .put("cancelled",wasCancelled).put("timedOut",value.timedOut).put("message",value.error)
-                            .put("logs",output.lines()).put("engineVersion","Node 24.22.0").put("sourceName",filename)
+                            .put("logs",output.lines()).put("logsDelivered",deliveredLogs())
+                            .put("engineVersion","Node 24.22.0").put("sourceName",filename)
                             .put("uid",android.os.Process.myUid()).put("pid",android.os.Process.myPid())
                             .put("process",getPackageName()+":node24").put("runtimeDirectory",runtime.getPath())
                             .put("heldMillis",0L).put("nativeTimeoutMillis",nativeTimeout)
@@ -274,6 +359,7 @@ public final class Node24Service extends Service {
                     }
                 }
                 engine=null;host=null;active.compareAndSet(this,null);
+                broadcastState(cancelled?"cancelled":"finished",this);
             }
             // 取消竞态兜底：Job.cancel 可能发生在结果收集或 finally 清理期间；最终回复前
             // 统一以 Job.cancelled 为准，取消绝不回报 success。
@@ -389,12 +475,17 @@ public final class Node24Service extends Service {
 
     /** Capture C/Node stdout+stderr in this dedicated process, with a bounded buffer. */
     static final class OutputCapture implements AutoCloseable {
+        /** 每读到一行（EOF 时的尾行也算）回调一次；用简单接口保持最小 SDK 兼容。 */
+        interface LineSink { void onLine(String line); }
         private final FileDescriptor originalOut,originalErr;
         private final ParcelFileDescriptor[] pipe;
         private final ByteArrayOutputStream bytes=new ByteArrayOutputStream();
         private final ByteArrayOutputStream lineBuffer=new ByteArrayOutputStream();
+        private final LineSink liveSink;
         private final Thread reader;private boolean closed;
-        OutputCapture() throws Exception {
+        OutputCapture() throws Exception { this(null); }
+        OutputCapture(LineSink liveSink) throws Exception {
+            this.liveSink=liveSink;
             originalOut=Os.dup(FileDescriptor.out);originalErr=Os.dup(FileDescriptor.err);
             pipe=ParcelFileDescriptor.createPipe();
             reader=new Thread(()->{
@@ -405,7 +496,7 @@ public final class Node24Service extends Service {
                             int keep=Math.min(size,65536-bytes.size());if(keep>0)bytes.write(buffer,0,keep);
                         }
                         // follow-up(task-155)：console.log 在 UI 脚本运行期间也要可观测。
-                        // 按行转发到 logcat（Node24Console），job 结束仍会汇总 logs 给主进程控制台。
+                        // task-168：每行同时经 LineSink 实时送回主进程；logcat 仍保留用于诊断。
                         for (int i = 0; i < size; i++) {
                             byte b = buffer[i];
                             if (b == '\n') {
@@ -417,7 +508,7 @@ public final class Node24Service extends Service {
                             }
                         }
                     }
-                }catch(IOException ignored){}
+                }catch(IOException ignored){} finally { flushConsoleLine(); }
             },"node24-output");reader.setDaemon(true);reader.start();
             try { Os.dup2(pipe[1].getFileDescriptor(),1);Os.dup2(pipe[1].getFileDescriptor(),2); }
             catch(Exception error) { close();throw error; }
@@ -439,6 +530,9 @@ public final class Node24Service extends Service {
             }
             if (line.isEmpty()) return;
             try { android.util.Log.i("Node24Console", line); } catch (Throwable ignored) { }
+            LineSink sink=liveSink;
+            if(sink!=null) try { sink.onLine(line); }
+            catch(Throwable error) { android.util.Log.w("Node24Service","live log sink failed",error); }
         }
 
         JSONArray lines() { synchronized(bytes) {
