@@ -4583,6 +4583,41 @@
   autojs.shell = shellModule;
   autojs.sensors = sensorsModule;
 
+  // task-198：Pro Node 环境常见 host 对象兼容（第三方工程用于动态 dex / classloader）。
+  (function installProHostShim() {
+    if (typeof globalThis.host !== 'undefined') { return; }
+    try {
+      var hostShim = {
+        java: {
+          lang: {
+            Class: {
+              forName: function (name, initialize, loader) {
+                // 我们的 findClass 已包含动态 dex classloader，loader 参数仅作签名兼容。
+                return javaApi.findClass(String(name));
+              }
+            }
+          }
+        },
+        runtime: {
+          getAndroidClassLoader: function () {
+            return globalThis.$autojs.androidContext.getClassLoader();
+          },
+          loadDex: function (path) {
+            var result = hostValue({ kind: 'runtime', action: 'loadDex', args: { path: String(path) } });
+            return result === true || (result && result.ok === true);
+          }
+        },
+        Packages: javaApi.Packages,
+        __xiangqiProjectDir: projectDir
+      };
+      Object.defineProperty(hostShim, 'context', {
+        configurable: true,
+        get: function () { return globalThis.$autojs.androidContext; }
+      });
+      globalThis.host = hostShim;
+    } catch (hostShimError) { /* 不阻断脚本 */ }
+  })();
+
   globalThis.__ajsModuleFactories = moduleFactories;
   globalThis.__ajsModules = moduleCache;
 

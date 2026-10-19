@@ -125,6 +125,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
     /** 当前任务注册的 Android 传感器监听器：token -> registration（close 时统一注销）。 */
     private final Map<Integer, SensorRegistration> mSensorRegistrations = new HashMap<>();
     private int mNextSensorToken = 1;
+    /** task-198：host.runtime.loadDex 加载的动态 dex classloader（插件类优先从这里解析）。 */
+    private volatile ClassLoader mRuntimeClassLoader;
+
     /** task-195：prelude 记录 process.exit 请求（exit(0) 强制成功，非 0 保留 code）。 */
     private volatile boolean mExitRequested;
     private volatile int mExitRequestedCode = -1;
@@ -304,6 +307,19 @@ public final class Node24HostBridge implements Node24Engine.Host {
                         return ok(mExitRequestedCode);
                     }
                     return error("lifecycle 不支持：" + lifecycleAction);
+                }
+                case "runtime": {
+                    // task-198：第三方 Node 工程的 host.runtime.getAndroidClassLoader/loadDex 兼容。
+                    String runtimeAction = request.optString("action", "");
+                    JSONObject runtimeArgs = request.optJSONObject("args");
+                    if ("classLoader".equals(runtimeAction)) {
+                        return ok(mContext.getClassLoader());
+                    }
+                    if ("loadDex".equals(runtimeAction)) {
+                        String dexPath = runtimeArgs == null ? "" : runtimeArgs.optString("path", "");
+                        return ok(loadRuntimeDex(dexPath));
+                    }
+                    return error("runtime 不支持：" + runtimeAction);
                 }
                 case "ui": {
                     // B 的 ui.js 约定：kind:"ui" 的返回必须是 NodeUiHost 原始 JSON（内含 {ok:true,...}），
@@ -878,8 +894,36 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Class<?> findClass(String name) throws ClassNotFoundException {
+        // task-198：host.runtime.loadDex 加载的插件类优先从动态 classloader 解析。
+        ClassLoader runtime = mRuntimeClassLoader;
+        if (runtime != null) {
+            try {
+                return Class.forName(name, false, runtime);
+            } catch (ClassNotFoundException ignored) {
+                // 非插件类继续走应用 classloader / 反射缓存。
+            }
+        }
         // 成功解析的类按 job 缓存；缺失/失败不缓存，插件类晚加载时仍会重试。
         return mReflectionCache.findClass(name, mContext.getClassLoader());
+    }
+
+    /** task-198：动态加载 dex（插件 NativeEngine/WindowDrag/NativeYolo 等）。 */
+    private boolean loadRuntimeDex(String path) throws Exception {
+        if (path == null || path.isEmpty()) {
+            throw new IllegalArgumentException("runtime.loadDex 需要 dex 路径");
+        }
+        java.io.File dex = new java.io.File(path);
+        if (!dex.isFile()) {
+            throw new IllegalStateException("runtime.loadDex 文件不存在：" + path);
+        }
+        ClassLoader parent = mContext.getClassLoader();
+        java.io.File outputDir = new java.io.File(mContext.getCodeCacheDir(), "node24-dex");
+        if (!outputDir.isDirectory() && !outputDir.mkdirs()) {
+            throw new IllegalStateException("无法创建 dex 优化目录：" + outputDir);
+        }
+        mRuntimeClassLoader = new dalvik.system.DexClassLoader(
+                dex.getAbsolutePath(), outputDir.getAbsolutePath(), null, parent);
+        return true;
     }
 
     private Constructor<?> findConstructor(Class<?> type, Object[] args) {

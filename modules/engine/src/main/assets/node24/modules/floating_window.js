@@ -142,6 +142,19 @@
   };
   FloatingWindowImpl.prototype.setText = function (text) { this._text = String(text); return this; };
   FloatingWindowImpl.prototype.getText = function () { return this._text; };
+  /**
+   * task-198：Pro floating_window.setView(View) 兼容。
+   * 当前浮窗由主进程 NodeUiBridgeService 按 XML/文本渲染，:node24 进程里的真实 View
+   * 不能跨进程挂载；字符串/带 XML 的包装对象走 setViewFromXml，其余明确降级提示。
+   */
+  FloatingWindowImpl.prototype.setView = function (view) {
+    if (typeof view === 'string') { return this.setViewFromXml(view); }
+    if (view && typeof view === 'object' && typeof view.xml === 'string') { return this.setViewFromXml(view.xml); }
+    if (view && typeof view === 'object' && typeof view.__ajsXml === 'string') { return this.setViewFromXml(view.__ajsXml); }
+    throw apiError('floating_window.setView(原生 View) 暂不支持：当前浮窗由主进程按 XML/文本渲染，'
+      + ':node24 里的真实 View 无法跨进程挂载；请改用 window.setViewFromXml(xml)，'
+      + '或把该界面放到 ui.Activity / NodeUiActivity 中显示');
+  };
   FloatingWindowImpl.prototype.setViewFromXml = function (xml) {
     if (typeof xml !== 'string' || xml.trim() === '') { throw new TypeError('[Auto.js] setViewFromXml 需要非空 XML 字符串'); }
     this._xml = String(xml);
