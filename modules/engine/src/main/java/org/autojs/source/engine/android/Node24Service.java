@@ -246,6 +246,9 @@ public class Node24Service extends Service {
         final long startedAt=System.currentTimeMillis();
         volatile boolean cancelled;volatile boolean finished;volatile boolean executeReturned;volatile Node24Engine engine;volatile Node24HostBridge host;
         /** 实时日志只由 node24-output 线程写入；锁同时保护 seq/delivered 与 64 KiB/条数预算。 */
+        private final java.util.concurrent.atomic.AtomicBoolean cleanupStarted=
+                new java.util.concurrent.atomic.AtomicBoolean();
+        private volatile Thread cleanupThread;
         private final Object logLock=new Object();
         private int logSeq,logBytes,logLines,deliveredLogs;
         private boolean logStreamStopped;
@@ -270,15 +273,7 @@ public class Node24Service extends Service {
             Node24HostBridge currentHost=host;
             if(current!=null)try{current.cancel();}catch(IllegalStateException alreadyClosed){}
             if(currentHost!=null) currentHost.cancelPendingProjection();
-            if(currentHost!=null) {
-                final Node24HostBridge cleanupHost = currentHost;
-                Thread cleanup = new Thread(() -> {
-                    try { closeUiAfterExecution(cleanupHost); }
-                    catch(Throwable ignored) { }
-                }, "node24-cancel-cleanup");
-                cleanup.setDaemon(true);
-                cleanup.start();
-            }
+            if(currentHost!=null) startCleanup(currentHost);
             // task-181：池进程（:node24_1..N）取消只取消 native，不 800ms 杀进程；
             // 给 2.5s 宽限让 execute 正常以 CANCELLED 返回，超时仍未返回才 kill/invalidate。
             final boolean poolProcess = isPoolProcess();
@@ -382,6 +377,29 @@ public class Node24Service extends Service {
             } catch(Throwable closeError) {
                 android.util.Log.w("Node24Service","close NodeUiActivity failed",closeError);
             }
+        }
+        /** task-186：UI/Binder 清理放到独立线程，Job 只做有界等待，避免阻塞重跑窗口。 */
+        void startCleanup(Node24HostBridge bridge) {
+            if(bridge==null || !cleanupStarted.compareAndSet(false,true)) return;
+            Thread cleanup=new Thread(() -> {
+                long t0=SystemClock.elapsedRealtime();
+                try { closeUiAfterExecution(bridge); }
+                catch(Throwable ignored) { }
+                long t1=SystemClock.elapsedRealtime();
+                try { bridge.close(); }
+                catch(Throwable ignored) { }
+                android.util.Log.i("Node24Service","cleanup done id="+id
+                        +" uiClose="+(t1-t0)+"ms bridgeClose="+(SystemClock.elapsedRealtime()-t1)+"ms");
+            }, "node24-cleanup");
+            cleanup.setDaemon(true);
+            cleanupThread=cleanup;
+            cleanup.start();
+        }
+        void awaitCleanup(long millis) {
+            Thread cleanup=cleanupThread;
+            if(cleanup==null) return;
+            try { cleanup.join(millis); }
+            catch(InterruptedException interrupted) { Thread.currentThread().interrupt(); }
         }
         void postEvent(Bundle data) {
             Node24HostBridge bridge=host;
@@ -518,14 +536,11 @@ public class Node24Service extends Service {
                             android.util.Log.w("Node24Service","early reply failed id="+id,replyError);
                         }
                     } finally {
-                        // 先停轮询线程，再关 UI / engine；避免 watcher 在 engine.close() 后仍 cancel 或读 bridge。
+                        // 先停轮询线程，再启动异步清理；最多等 600ms 保证 BACK 后 ≤1s 可重跑，
+                        // 清理未完成的部分在后台继续（bridge 是旧任务实例，不影响新任务）。
                         if(watcher!=null) watcher.stop();
-                        closeUiAfterExecution(bridge);
-                        // 每个 job 结束都必须释放图片 Bitmap 句柄、投屏和自动化 Binder 连接。
-                        try { bridge.close(); }
-                        catch(Throwable closeError) {
-                            android.util.Log.w("Node24Service","close host bridge failed id="+id,closeError);
-                        }
+                        startCleanup(bridge);
+                        awaitCleanup(600L);
                         engine=null;host=null;
                     }
                 }
@@ -537,12 +552,7 @@ public class Node24Service extends Service {
                 catch(Exception ignored) {}
             } finally {
                 // 覆盖 runtime-load/Node24Engine 构造失败等未进入内层 finally 的路径。
-                if(bridge!=null) {
-                    try { bridge.close(); }
-                    catch(Throwable closeError) {
-                        android.util.Log.w("Node24Service","close host bridge failed id="+id,closeError);
-                    }
-                }
+                if(bridge!=null) startCleanup(bridge);
                 engine=null;host=null;active.compareAndSet(this,null);
                 broadcastState(cancelled?"cancelled":"finished",this);
                 // task-174：排队请求在 active 释放后立刻接上（干净停止后 ≤1s 可再跑）。

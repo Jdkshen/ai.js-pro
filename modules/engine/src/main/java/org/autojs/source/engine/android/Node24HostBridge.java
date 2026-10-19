@@ -1167,9 +1167,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
         // task-164：floating_window 的 overlay 由主进程 NodeUiBridgeService 管理（不在 NodeUiHost.sOverlayView），
         // close op 清不到它；这里显式下发 floatingWindow closeAll，脚本结束/取消/启动前都清干净。
         try {
-            JSONObject floating = new JSONObject().put("kind", "ui").put("op", "floatingWindow")
-                    .put("action", "closeAll").put("owner", mOverlayOwner);
-            handleUiJson(floating);
+            // task-186：清理阶段用 fire-and-forget 关闭浮窗；NodeUiHost.overlay 会同步等待
+            // 主进程 reply（最长 15s），BACK 关 UI 后主进程正在收尾，同步等待会把清理拖到 15s。
+            com.stardust.autojs.engine.node24.NodeUiActivityClient.get().closeOverlaysIfBound();
         } catch (Throwable error) {
             Log.w(TAG, "close floating overlays failed", error);
         }
