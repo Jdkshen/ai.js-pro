@@ -15,6 +15,9 @@ import android.os.Build;
 import android.os.PowerManager;
 import android.os.Vibrator;
 import android.provider.Settings;
+import android.util.DisplayMetrics;
+import android.util.Log;
+import android.graphics.Point;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import android.telephony.TelephonyManager;
@@ -40,9 +43,22 @@ import ezy.assist.compat.SettingsCompat;
 
 public class Device {
 
-    public static final int width = ScreenMetrics.getDeviceScreenWidth();
+    private static final String DEVICE_LOG_TAG = "C-DEVICE";
 
-    public static final int height = ScreenMetrics.getDeviceScreenHeight();
+    /**
+     * task-88：屏幕尺寸不再用 static final 在类加载时定死。
+     *
+     * <p>原因：新机型 / :script 隔离进程里类加载早于 Display/Resources 就绪，
+     * ScreenMetrics 静态初始化可能拿到 0 并且永久缓存 0，导致 device.width/height=0。
+     * 现在改为 volatile 可变值 + Device 构造时刷新（WindowManager.getRealSize/getRealMetrics，
+     * 再回退 ActivityThread 当前 Application 的 DisplayMetrics），只在拿到 >0 的值时更新，避免 0 值缓存。
+     */
+    public static volatile int width = ScreenMetrics.getDeviceScreenWidth();
+
+    public static volatile int height = ScreenMetrics.getDeviceScreenHeight();
+
+    private static volatile String sScreenSizeSource = "static:ScreenMetrics";
+    private static volatile boolean sScreenSizeLogged = false;
 
     public static final String buildId = Build.ID;
 
@@ -95,6 +111,108 @@ public class Device {
 
     public Device(Context context) {
         mContext = context;
+        refreshScreenSize(context);
+    }
+
+    /**
+     * task-88：刷新 device.width/height（可重复调用，非 0 才覆盖）。
+     *
+     * @param context 任意 Context（:script 进程用 application context 即可）
+     * @return 是否拿到了有效尺寸
+     */
+    public static synchronized boolean refreshScreenSize(Context context) {
+        int newWidth = 0;
+        int newHeight = 0;
+        String source = null;
+        // 1) WindowManager Display.getRealSize（API 17+，含刘海屏的真实像素）
+        if (context != null) {
+            try {
+                WindowManager windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+                if (windowManager != null && windowManager.getDefaultDisplay() != null) {
+                    android.view.Display display = windowManager.getDefaultDisplay();
+                    Point size = new Point();
+                    try {
+                        display.getRealSize(size);
+                        if (size.x > 0 && size.y > 0) {
+                            newWidth = size.x;
+                            newHeight = size.y;
+                            source = "windowManager.getRealSize";
+                        }
+                    } catch (Throwable ignored) {
+                        // 继续 getRealMetrics
+                    }
+                    if (newWidth <= 0 || newHeight <= 0) {
+                        DisplayMetrics metrics = new DisplayMetrics();
+                        display.getRealMetrics(metrics);
+                        if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                            newWidth = metrics.widthPixels;
+                            newHeight = metrics.heightPixels;
+                            source = "windowManager.getRealMetrics";
+                        }
+                    }
+                }
+            } catch (Throwable error) {
+                Log.w(DEVICE_LOG_TAG, "refreshScreenSize: WindowManager 读取失败", error);
+            }
+        }
+        // 2) :script 等隔离进程兜底：ActivityThread.currentApplication().getResources()
+        if (newWidth <= 0 || newHeight <= 0) {
+            try {
+                Class<?> activityThread = Class.forName("android.app.ActivityThread");
+                Object app = activityThread.getMethod("currentApplication").invoke(null);
+                if (app instanceof Context) {
+                    DisplayMetrics metrics = ((Context) app).getResources().getDisplayMetrics();
+                    if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                        newWidth = metrics.widthPixels;
+                        newHeight = metrics.heightPixels;
+                        source = "activityThread.currentApplication.resources";
+                    }
+                }
+            } catch (Throwable ignored) {
+                // 继续 context/Resources 兜底
+            }
+        }
+        // 3) 传入 Context 的 resources（application context）
+        if (newWidth <= 0 || newHeight <= 0) {
+            try {
+                if (context != null) {
+                    DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+                    if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                        newWidth = metrics.widthPixels;
+                        newHeight = metrics.heightPixels;
+                        source = "context.resources";
+                    }
+                }
+            } catch (Throwable ignored) {
+                // 继续 Resources.getSystem 兜底
+            }
+        }
+        // 4) 系统 resources（最后兜底）
+        if (newWidth <= 0 || newHeight <= 0) {
+            try {
+                DisplayMetrics metrics = android.content.res.Resources.getSystem().getDisplayMetrics();
+                if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                    newWidth = metrics.widthPixels;
+                    newHeight = metrics.heightPixels;
+                    source = "Resources.getSystem";
+                }
+            } catch (Throwable error) {
+                Log.w(DEVICE_LOG_TAG, "refreshScreenSize: Resources.getSystem 读取失败", error);
+            }
+        }
+        if (newWidth > 0 && newHeight > 0) {
+            boolean changed = newWidth != width || newHeight != height;
+            width = newWidth;
+            height = newHeight;
+            sScreenSizeSource = source;
+            Log.i(DEVICE_LOG_TAG, "width=" + width + " height=" + height
+                    + " source=" + sScreenSizeSource + (changed ? " (updated)" : ""));
+            sScreenSizeLogged = true;
+            return true;
+        }
+        Log.w(DEVICE_LOG_TAG, "refreshScreenSize 未拿到有效尺寸，保留旧值 width=" + width
+                + " height=" + height + " source=" + sScreenSizeSource);
+        return false;
     }
 
     @SuppressLint("HardwareIds")

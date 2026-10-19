@@ -29,13 +29,22 @@
         <activity
             android:name="com.stardust.autojs.core.image.capture.ScreenCaptureRequestActivity"
             android:excludeFromRecents="true"
-            android:taskAffinity="com.stardust.autojs.runtime.api.image.ScreenCaptureRequestActivity"
             android:theme="@style/ScriptTheme.Transparent"/>
 
         <activity
             android:name="com.stardust.autojs.core.image.capture.AutoCapturePermissionActivity"
             android:exported="false"
             android:excludeFromRecents="true"
+            android:theme="@style/ScriptTheme.Transparent"/>
+
+        <!-- Node24 投屏授权页：必须和 Node24Service 同进程，结果回调才在本进程内闭环。
+             targetSdk=28，无需前台服务类型；页面非导出、无历史记录，只接受 job-scoped token。 -->
+        <activity
+            android:name="org.autojs.source.engine.android.Node24CaptureConsentActivity"
+            android:process=":node24"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/ScriptTheme.Transparent"/>
 
         <service

@@ -1,6 +1,5 @@
-// @engine rhino
 "auto";
-
+"rhino";
 setScreenMetrics(1080, 1920);
 
 //如果你使用的是MIUI，此脚本运行后会出现桌面多屏幕编辑

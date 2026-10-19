@@ -7,15 +7,18 @@ import androidx.annotation.Nullable;
 import com.stardust.autojs.core.graphics.ScriptCanvasView;
 import com.stardust.autojs.core.ui.inflater.CompiledProjectResources;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
+import com.stardust.autojs.core.ui.inflater.ProjectResourceBundle;
 import com.stardust.autojs.core.ui.inflater.ProjectResources;
 import com.stardust.autojs.core.ui.inflater.ResourceParser;
 import com.stardust.autojs.core.ui.inflater.inflaters.CanvasViewInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.JsGridViewInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.JsImageViewInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.JsListViewInflater;
+import com.stardust.autojs.core.ui.inflater.inflaters.JsWebViewInflater;
 import com.stardust.autojs.core.ui.widget.JsGridView;
 import com.stardust.autojs.core.ui.widget.JsImageView;
 import com.stardust.autojs.core.ui.widget.JsListView;
+import com.stardust.autojs.core.ui.widget.JsWebView;
 import com.stardust.autojs.rhino.ProxyObject;
 import com.stardust.autojs.project.ProjectConfig;
 import com.stardust.autojs.runtime.ScriptRuntime;
@@ -65,6 +68,9 @@ public class UI extends ProxyObject {
                 new JsGridViewInflater(mResourceParser, runtime));
         mDynamicLayoutInflater.registerViewAttrSetter(ScriptCanvasView.class.getName(),
                 new CanvasViewInflater(mResourceParser, runtime));
+        // <webview> 需要脚本运行时才能提供 $ui.web.events / $ui.web.jsBridge（Pro 兼容层）。
+        mDynamicLayoutInflater.registerViewAttrSetter(JsWebView.class.getName(),
+                new JsWebViewInflater<JsWebView>(mResourceParser, runtime));
         mProperties.put("layoutInflater", this.mDynamicLayoutInflater);
     }
 
@@ -138,15 +144,14 @@ public class UI extends ProxyObject {
         if (androidResources == null) {
             return AndroidResourcesInfo.notProject("project.json 里没有 androidResources 字段");
         }
-        ProjectResources resources = ProjectResources.load(dir, androidResources.getResDir());
-        if (resources == null) {
-            return AndroidResourcesInfo.notProject("找不到资源目录："
-                    + new File(dir, androidResources.getResDir()).getPath());
+        // 与 Node UI（:node24 宿主桥的 NodeUiHost）共用同一条资源加载链路：
+        // ProjectResourceBundle 负责 project.json/androidResources、合成 id 表、project-res.apk 真 id、
+        // .codecache/*.dex 动态类；Rhino 的 ui.R / inflater / activity 垫片都从这里拿数据。
+        ProjectResourceBundle bundle = ProjectResourceBundle.load(mContext, dir);
+        if (bundle.getError() != null) {
+            return AndroidResourcesInfo.notProject(bundle.getError());
         }
-        // 有 PC aapt2 编好的资源包就挂上（ui.R 拿真 id，AnimationUtils/theme/Resources 都原生可用）。
-        resources.setCompiled(CompiledProjectResources.load(mContext,
-                new File(dir, COMPILED_RES_DIR + File.separator + COMPILED_RES_NAME)));
-        return new AndroidResourcesInfo(resources, null);
+        return new AndroidResourcesInfo(bundle.getResources(), null);
     }
 
     /** {@code ui.__androidResources__} 的形状：{@code resources} 为 null 时看 {@code error}。 */

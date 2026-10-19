@@ -6,6 +6,7 @@ import android.widget.TextView;
 
 import com.google.android.material.appbar.AppBarLayout;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.stardust.autojs.core.ui.inflater.ResourceParser;
 
@@ -29,6 +30,8 @@ public class ViewAttributesFactory {
         sViewAttributesCreators.put(TextView.class, TextViewAttributes::new);
         sViewAttributesCreators.put(CardView.class, CardAttributes::new);
         sViewAttributesCreators.put(FloatingActionButton.class, FabViewAttributes::new);
+        // dev-1017：MaterialButton（ExtendedFAB 继承它）的 app:icon/iconTint/… + 无法 framework 应用的 style 手工解释
+        sViewAttributesCreators.put(MaterialButton.class, MaterialButtonAttributes::new);
         // Material 布局里的 appcompat Toolbar / BottomNavigationView
         // （以前没人管，app:title / app:menu 被静默丢掉）
         sViewAttributesCreators.put(Toolbar.class, ToolbarAttributes::new);

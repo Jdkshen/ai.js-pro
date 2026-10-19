@@ -1,6 +1,6 @@
 # 象棋自动走棋：YOLO + OCR + 红黑分离视觉架构重构方案
 
-> 目标平台：AI.js Pro QuickJS 新引擎、Redmi K40（1080×2400，Android 13/MIUI）  
+> 目标平台：AI.js Pro QuickJS 引擎、Redmi K40（1080×2400，Android 13/MIUI）  
 > 运行方式：完全本地，不访问云端，不依赖网络  
 > 文档用途：可直接作为 DeepSeek 或其他开发人员的实施任务书
 

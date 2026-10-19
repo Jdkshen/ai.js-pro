@@ -1,5 +1,5 @@
-// @engine rhino
-convert("/sdcard/1.txt", "utf-8", "/sdcard/2.txt", "gbk");
+"rhino";
+convert("./sample-text.txt", "utf-8", "./converted-gbk-lines.txt", "gbk");
 
 /**
  * fromFile: 源文件路径
@@ -10,10 +10,15 @@ convert("/sdcard/1.txt", "utf-8", "/sdcard/2.txt", "gbk");
 function convert(fromFile, fromEncoding, toFile, toEncoding) {
     fromFile = open(fromFile, "r", fromEncoding);
     toFile = open(toFile, "w", toEncoding);
-    while (true) {
-        var line = fromFile.readline();
-        if (!line)
-            break;
-        toFile.writeline(line);
+    try {
+        while (true) {
+            var line = fromFile.readline();
+            if (line === null)
+                break;
+            toFile.writeline(line);
+        }
+    } finally {
+        fromFile.close();
+        toFile.close();
     }
 }

@@ -39,7 +39,7 @@ import static org.junit.Assert.assertTrue;
  */
 public class DshClientSamplePackagingTest {
 
-    private static final String SAMPLE_ASSET_DIR = "sample/QuickJS 新引擎/项目与打包/dsh 手机客户端";
+    private static final String SAMPLE_ASSET_DIR = "sample/QuickJS 引擎/项目与打包/dsh 手机客户端";
     private static final String OUT_APK_NAME = "dsh-phone-client-quickjs.apk";
     private static final String PACKAGE_NAME = "com.dsh.aijsclient.quickjs";
 

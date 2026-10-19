@@ -24,6 +24,13 @@ public class Pref {
     private static final String KEY_SERVER_ADDRESS = "KEY_SERVER_ADDRESS";
     private static final String KEY_SHOULD_SHOW_ANNUNCIATION = "KEY_SHOULD_SHOW_ANNUNCIATION";
     private static final String KEY_FLOATING_MENU_SHOWN = "KEY_FLOATING_MENU_SHOWN";
+    /**
+     * task-54：用户「曾经开过无障碍」的意图记录。
+     * 覆盖安装/系统重置/授权清理后仍记得，用于启动时提示重新开启或 Shizuku 自动恢复。
+     */
+    private static final String KEY_A11Y_USER_ENABLED = "poc_a11y_user_enabled";
+    /** task-54：悬浮窗权限被系统撤销时只提示一次，避免每次冷启动都弹。 */
+    private static final String KEY_OVERLAY_REVOKED_PROMPTED = "poc_overlay_revoked_prompted";
     private static final String KEY_EDITOR_THEME = "editor.theme";
     private static final String KEY_EDITOR_TEXT_SIZE = "editor.textSize";
     /** `$settings.setEnabled('not_show_console', …)` 的落盘键（文档原名）。 */
@@ -194,6 +201,24 @@ public class Pref {
 
     public static void setFloatingMenuShown(boolean checked) {
         def().edit().putBoolean(KEY_FLOATING_MENU_SHOWN, checked).apply();
+    }
+
+    /** task-54：用户曾开启过无障碍服务（用于启动恢复提示/Shizuku 自动恢复）。 */
+    public static boolean isAccessibilityUserEnabled() {
+        return def().getBoolean(KEY_A11Y_USER_ENABLED, false);
+    }
+
+    public static void setAccessibilityUserEnabled(boolean enabled) {
+        def().edit().putBoolean(KEY_A11Y_USER_ENABLED, enabled).apply();
+    }
+
+    /** task-54：悬浮窗权限被撤销后是否已经提示过（避免重复弹）。 */
+    public static boolean isOverlayRevokedPrompted() {
+        return def().getBoolean(KEY_OVERLAY_REVOKED_PROMPTED, false);
+    }
+
+    public static void setOverlayRevokedPrompted(boolean prompted) {
+        def().edit().putBoolean(KEY_OVERLAY_REVOKED_PROMPTED, prompted).apply();
     }
 
     public static String getCurrentTheme() {

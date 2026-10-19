@@ -21,6 +21,14 @@ class LogActivity : AppCompatActivity() {
         reportLaunchFailure()
         if (intent.getBooleanExtra(EXTRA_LAUNCH_SCRIPT, false)) {
             try {
+                if (InrtScriptHostBridge.initialize(this)
+                        && InrtScriptHostBridge.postOnScriptThread(Runnable {
+                            GlobalProjectLauncher.launch(this)
+                        })) {
+                    android.util.Log.i(TAG, "C-INRT: log activity launch posted on script thread")
+                    return
+                }
+                android.util.Log.w(TAG, "C-INRT: fallback: log activity direct launch")
                 GlobalProjectLauncher.launch(this)
             } catch (e: Throwable) {
                 // 同 SplashActivity：密钥/签名问题抛的是 Error，不能让它直接闪退。

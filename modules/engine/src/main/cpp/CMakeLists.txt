@@ -56,6 +56,7 @@ target_compile_options(quickjs PRIVATE
         -Wno-missing-field-initializers)
 target_link_options(quickjs PRIVATE
         "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
 target_link_libraries(quickjs PRIVATE log m)
 
@@ -80,9 +81,16 @@ target_compile_definitions(quickjs_jni PRIVATE IMGUI_IMPL_OPENGL_ES3)
 if(TARGET opencv_features AND TARGET opencv_geometry AND TARGET opencv_flann)
     target_compile_definitions(quickjs_jni PRIVATE AIJS_HAS_SIFT=1)
 endif()
-target_compile_options(quickjs_jni PRIVATE -fPIC -Wall -Wextra)
+# ImGui 的 C++ 符号（如 ImGui::Button）默认是 default visibility。第三方脚本自带的 native 库
+# 常通过 dlsym(RTLD_DEFAULT) 按符号名找 ImGui 函数；若本库先加载，它们会解析到我们这版
+# （另一套 ImGuiContext），调用时直接 SIGSEGV。JNI 入口都带 JNIEXPORT（visibility default），
+# 所以这里把其余符号默认隐藏，避免污染进程全局符号表。
+target_compile_options(quickjs_jni PRIVATE
+        -fPIC -Wall -Wextra
+        -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_options(quickjs_jni PRIVATE
         "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
 target_link_libraries(quickjs_jni PRIVATE quickjs ${OPENCV_LIBS} log dl GLESv3)
 
@@ -93,6 +101,7 @@ target_compile_features(aijscrypto PRIVATE c_std_11)
 target_compile_options(aijscrypto PRIVATE -fPIC -Wall -Wextra)
 target_link_options(aijscrypto PRIVATE
         "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
 target_link_libraries(aijscrypto PRIVATE log dl)
 
@@ -139,6 +148,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     # PP-OCR 的识别阶段会开工作线程，ncnn 内部单线程；这里沿用仓库统一的 16KB page 与 strip 约定。
     target_link_options(ppocr PRIVATE
             "-Wl,-z,max-page-size=16384"
+            "-Wl,-z,common-page-size=16384"
             "$<$<CONFIG:Release>:-Wl,--strip-all>")
     target_link_libraries(ppocr PRIVATE ncnn ${PPOCR_OPENCV_LIBS} jnigraphics android log dl z m)
 endif()

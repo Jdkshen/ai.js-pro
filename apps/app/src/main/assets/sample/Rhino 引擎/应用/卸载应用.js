@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 //输入应用名称
 var appName = rawInput('请输入要卸载的应用名称');
 //获取应用包名

@@ -20,7 +20,7 @@ module.exports = function(runtime, global){
         return runtime.isStopped();
     }
 
-    global.isShuttingDown = global.isShopped;
+    global.isShuttingDown = global.isStopped;
 
     global.notStopped = function(){
         return !isStopped();

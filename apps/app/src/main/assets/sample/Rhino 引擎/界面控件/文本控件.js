@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <vertical padding="16">
         <text textSize="40sp">大字</text>

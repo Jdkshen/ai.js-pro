@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 //忽略不支持的传感器，即使有传感器不支持也不抛出异常
 sensors.ignoresUnsupportedSensor = true;
 

@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var storage = storages.create("Auto.js例子:复杂数据");
 var arr = [1, 4, 2, 5];
 var obj = {

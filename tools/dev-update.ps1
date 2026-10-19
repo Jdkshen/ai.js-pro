@@ -337,8 +337,8 @@ $ReleaseNotes += "`nXiangqi $($chessRelease.version) / source $($chessRelease.so
 
 $stagingDir = Join-Path $projectRoot '.artifacts\release-staging'
 New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
-$stagedName = $apk.BaseName -replace '-debug$', ''
-$stagedName += "-dev-$newCode-no-usb-debug.apk"
+# 发布包命名：AI.js Pro（玻璃界面）dev-版本号 —— 便于用户识别界面版本
+$stagedName = "AI-js-Pro-Flutter-dev-$newCode.apk"
 $stagedPath = Join-Path $stagingDir $stagedName
 Copy-Item -LiteralPath $apk.FullName -Destination $stagedPath -Force
 $publishApk = Get-Item -LiteralPath $stagedPath

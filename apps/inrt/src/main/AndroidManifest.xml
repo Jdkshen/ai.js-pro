@@ -15,6 +15,12 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <!-- task-160：打包产物定时任务 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE"/>
 
 
     <!-- 非AI.js Pro运行必需，不会主动申请，某些脚本可以自行申请-->
@@ -33,9 +39,21 @@
         tools:ignore="GoogleAppIndexingWarning"
         tools:replace="android:label, android:allowBackup"
         tools:targetApi="m">
-        <activity android:name=".LogActivity">
+        <!-- task-112：脚本执行/日志/UI 全部放 :script 独立进程（Pro 模型），
+             避免 ImGui 等原生桥在主进程初始化后崩溃。 -->
+        <activity
+            android:name=".LogActivity"
+            android:process=":script" />
 
-        </activity>
+        <activity
+            android:name=".InrtScriptActivity"
+            android:process=":script"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- 引擎 UI 模式 Activity 也放 :script（脚本 UI 与引擎同进程）。 -->
+        <activity
+            android:name="com.stardust.autojs.execution.ScriptExecuteActivity"
+            android:process=":script" />
 
         <activity
             android:name=".SplashActivity"
@@ -47,7 +65,37 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".SettingsActivity"/>
+        <activity android:name=".SettingsActivity" android:process=":script"/>
+
+        <!-- task-160：定时任务到点广播（显式 PendingIntent，exported=false） -->
+        <receiver
+            android:name=".timing.InrtTaskReceiver"
+            android:exported="false"/>
+        <!-- task-160：开机/应用更新后恢复持久化定时任务 -->
+        <receiver
+            android:name=".timing.InrtBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
+        <!-- task-162：:script 新增/删除广播 Intent 任务后通知主进程注册 -->
+        <receiver
+            android:name=".timing.InrtIntentTaskCommandReceiver"
+            android:exported="false"/>
+        <!-- task-162：精确闹钟未授权时的用户引导 -->
+        <receiver
+            android:name=".timing.InrtExactAlarmPromptReceiver"
+            android:exported="false"/>
+
+        <!-- task-160：到点后在 :script 进程用前台服务 headless 运行打包工程 -->
+        <service
+            android:name=".timing.InrtTaskService"
+            android:exported="false"
+            android:process=":script"
+            android:foregroundServiceType="shortService"/>
 
         <service
             android:name="com.stardust.notification.NotificationListenerService"

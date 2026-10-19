@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 requestScreenCapture();
 console.show();
 events.observeTouch();

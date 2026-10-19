@@ -11,6 +11,7 @@ import android.view.ViewGroup;
 
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.AutoJs;
+import com.jdkshen.aijspro.external.HostScripts;
 import com.jdkshen.aijspro.ui.main.ViewPagerFragment;
 import com.jdkshen.aijspro.ui.widget.SimpleAdapterDataObserver;
 
@@ -75,6 +76,8 @@ public class TaskManagerFragment extends ViewPagerFragment {
 
     @Override
     protected void onFabClick(FloatingActionButton fab) {
+        // Phase1：任务页 ✕ = 停掉所有脚本，宿主进程（:script/:native）里的也要停。
+        HostScripts.stopAllHostScripts();
         AutoJs.getInstance().getScriptEngineService().stopAll();
     }
 

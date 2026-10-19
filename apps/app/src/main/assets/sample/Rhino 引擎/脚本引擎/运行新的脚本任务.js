@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var script = "toast('Hello, Auto.js');" +
     "sleep(3000);" +
     "toast('略略略');";

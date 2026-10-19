@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 auto();
 
 threads.start(function() {

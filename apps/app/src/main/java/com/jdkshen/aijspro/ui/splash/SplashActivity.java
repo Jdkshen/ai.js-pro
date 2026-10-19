@@ -81,7 +81,24 @@ public class SplashActivity extends BaseActivity {
             return;
         }
         mAlreadyEnterNextActivity = true;
-        startActivity(new android.content.Intent(this, MainActivity.class));
+        android.content.Intent next = null;
+        // Flutter 玻璃界面主入口（-PflutterPoc 的调试源集把该资源置为 true）。
+        // 常规构建里资源为 false，行为与原来完全一致；类名用字符串是为了让
+        // 生产源集不依赖只在 POC 调试源集里存在的 GlassFlutterActivity。
+        if (getResources().getBoolean(R.bool.flutter_main_entry)) {
+            next = new android.content.Intent().setClassName(this,
+                    "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity");
+        }
+        try {
+            if (next != null) {
+                startActivity(next);
+            } else {
+                startActivity(new android.content.Intent(this, MainActivity.class));
+            }
+        } catch (android.content.ActivityNotFoundException e) {
+            // POC 源集缺失时不能把应用留在空白 Splash：退回原生主界面。
+            startActivity(new android.content.Intent(this, MainActivity.class));
+        }
         finish();
     }
 

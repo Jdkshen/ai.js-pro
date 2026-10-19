@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var superMario = images.read("./super_mario.jpg");
 var block = images.read("./block.png");
 var points = images.matchTemplate(superMario, block, {
@@ -14,9 +14,9 @@ points.forEach(point => {
     canvas.drawRect(point.x, point.y, point.x + block.width, point.y + block.height, paint);
 });
 var image = canvas.toImage();
-images.save(image, "/sdcard/tmp.png");
+images.save(image, files.path("./matches.png"));
 
-app.viewFile("/sdcard/tmp.png");
+app.viewFile(files.path("./matches.png"));
 
 superMario.recycle();
 block.recycle();

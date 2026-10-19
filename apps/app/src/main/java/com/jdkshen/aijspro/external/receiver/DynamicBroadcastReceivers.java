@@ -63,9 +63,15 @@ public class DynamicBroadcastReceivers {
         ReceiverRegistry receiverRegistry = new ReceiverRegistry(newActions, local);
         receiverRegistry.register();
         mReceiverRegistries.add(receiverRegistry);
+        mActions.addAll(newActions);
     }
 
     public synchronized void unregister(String action) {
+        // Several intent tasks can share one action. Removing one task must not
+        // disconnect the remaining tasks from future broadcasts.
+        for (IntentTask task : com.jdkshen.aijspro.timing.TimedTaskManager.getInstance().getAllIntentTasksAsList()) {
+            if (action.equals(task.getAction())) return;
+        }
         if (!mActions.contains(action)) {
             return;
         }
@@ -90,6 +96,7 @@ public class DynamicBroadcastReceivers {
             registry.unregister();
         }
         mReceiverRegistries.clear();
+        mActions.clear();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             mContext.unregisterReceiver(mDefaultActionReceiver);
             mContext.unregisterReceiver(mPackageActionReceiver);

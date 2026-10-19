@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var releaseNotes = "版本 v7.7.7\n" +
     "更新日志:\n" +
     "* 新增 若干Bug\n";

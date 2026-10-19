@@ -42,6 +42,7 @@ import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.autojs.AutoJs;
+import com.jdkshen.aijspro.external.HostScripts;
 import com.jdkshen.aijspro.external.foreground.ForegroundService;
 import com.jdkshen.aijspro.model.explorer.Explorers;
 import com.jdkshen.aijspro.tool.AccessibilityServiceTool;
@@ -117,6 +118,13 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // POC：旧的 Miuix 主页不再作为默认入口，直接进入 Flutter 玻璃界面。
+        if (savedInstanceState == null && isGlassFlutterPocAvailable()) {
+            startActivity(new android.content.Intent()
+                    .setClassName(this, "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity"));
+            finish();
+            return;
+        }
         checkPermissions();
         showAccessibilitySettingPromptIfDisabled();
         mVersionGuard = new VersionGuard(this);
@@ -131,6 +139,15 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         // Match the familiar Auto.js Pro startup flow: scripts are the primary
         // workspace. The service dashboard remains available from the drawer.
         showPage(0);
+    }
+
+    private boolean isGlassFlutterPocAvailable() {
+        try {
+            Class.forName("com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity", false, getClassLoader());
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private void bindViews() {
@@ -639,6 +656,8 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         FloatyWindowManger.hideCircularMenu();
         ForegroundService.stop(this);
         stopService(new Intent(this, FloatyService.class));
+        // Phase1：脚本默认在 :script 宿主进程里跑，退出 App 不能只停主进程引擎，否则脚本还在后台跑。
+        HostScripts.stopAllHostScripts();
         AutoJs.getInstance().getScriptEngineService().stopAll();
     }
 

@@ -45,7 +45,7 @@ toast("这是 QuickJS 脚本");
 
 QuickJS 的 `ui.board` 与浮窗 `window.board` 支持 `on('draw', callback)`、once、增删监听和 setMaxFps。回调收到 ScriptCanvas 和对应控件，在所属 JS 线程执行；Android Paint/Path 可通过 Java 桥创建。反引号布局可直接使用，无需改成其他绘图库。
 
-两引擎均在离屏 Bitmap 绘制完成帧，然后提交到 TextureView。QuickJS 在 JS 事件循环调度回调，Rhino 保持独立绘制线程；Surface 锁仅包围提交，避免窗口销毁与脚本绘图竞争，允许 Rhino 回调调用 ui.run。正常复用两个 Bitmap，窗口关闭、QuickJS UI 替换和引擎退出回收。示例：`apps/app/src/main/assets/sample/QuickJS 新引擎/画布/悬浮画布.js`。
+两引擎均在离屏 Bitmap 绘制完成帧，然后提交到 TextureView。QuickJS 在 JS 事件循环调度回调，Rhino 保持独立绘制线程；Surface 锁仅包围提交，避免窗口销毁与脚本绘图竞争，允许 Rhino 回调调用 ui.run。正常复用两个 Bitmap，窗口关闭、QuickJS UI 替换和引擎退出回收。示例：`apps/app/src/main/assets/sample/QuickJS 引擎/画布/悬浮画布.js`。
 
 ## 3. 当前 QuickJS 能力
 
@@ -122,7 +122,7 @@ QuickJS 的 `ui.board` 与浮窗 `window.board` 支持 `on('draw', callback)`、
 | Java 互操作 | 已接入（完整反射） | `Packages`/`importClass`/`importPackage`/`Java.type`；类与实例统一 long 句柄 + JS 侧 Proxy：静态/实例方法、字段读写、JavaBean 属性（`file.path`）、**嵌套类**（`android.os.Build.VERSION.SDK_INT`、`java.lang.Thread.State.NEW`）、`new` 构造、自动重载解析（整数值优先 int/long）、JS 数组↔ Java 数组/可变参数、Java 异常转脚本 Error、`obj.getClass()` 返回可用 `java.lang.Class` 对象；`context` 即真实 Android Context，并预导入 Rhino 的 `Intent`/`Paint`/`Shell`/`KeyEvent`/`MutableOkHttp`/`Canvas`/`Image`/`RootAutomator`/`Input`/`Module`。**注意：与 Rhino 一致开放任意反射，白名单桥不再是安全边界（用户拍板）** |
 | continuation | 部分接入 | `delay(millis)` = 阻塞 `sleep`；`enabled` 恒为 `false`，`await/create` 与 `Promise.prototype.await` 明确报错引导到 `await` 语法 |
 
-全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 新引擎/`：根目录保留入口脚本（`新模块快速上手.js`、`QuickJS 模块示例.js`、`QuickJS运行环境测试.js`），其余按分类存放——`悬浮窗/`、`图色处理/`、`YOLO目标检测/`、`引擎与线程/`、`界面与交互/`、`系统与设备/`、`文件与网络/`、`图像与视觉/`、`回归测试/`。
+全部 QuickJS 示例统一位于 `apps/app/src/main/assets/sample/QuickJS 引擎/`：根目录保留入口脚本（`新模块快速上手.js`、`QuickJS 模块示例.js`、`QuickJS运行环境测试.js`），其余按分类存放——`悬浮窗/`、`图色处理/`、`YOLO目标检测/`、`引擎与线程/`、`界面与交互/`、`系统与设备/`、`文件与网络/`、`图像与视觉/`、`回归测试/`。
 
 ### Native Frame 用法
 
@@ -154,7 +154,7 @@ try {
 }
 ```
 
-`NativeFrame` 在 JS 中只保存句柄和尺寸信息；完整像素始终留在 C++ 内存。默认截图立即采用当前最新缓存，不会在静止页面无限等待；`fresh: true` 用于等待新帧，`timeout` 默认 100ms，超时后回退最近有效帧。`captureScreen()` 或 `{ mode: 'full' }` 保持原分辨率和像素精度；`{ mode: 'fast', size: 720 }` 与 `size: 640` 在 Native 创建帧时直接缩放。快速帧的 `pixel`、找色、多点找色、模板匹配、YOLO 区域和检测框统一使用原屏幕坐标，桥接层自动完成双向映射。长循环必须用 `try/finally` 调用 `recycle()`，防止在单个长时间脚本内积压截图。可直接运行 `apps/app/src/main/assets/sample/QuickJS 新引擎/图色处理/01-图色 API 自动回归.js`、`05-全分辨率与视觉加速对比.js` 与 `07-截图首帧与稳定耗时测试.js` 检查整条链路。
+`NativeFrame` 在 JS 中只保存句柄和尺寸信息；完整像素始终留在 C++ 内存。默认截图立即采用当前最新缓存，不会在静止页面无限等待；`fresh: true` 用于等待新帧，`timeout` 默认 100ms，超时后回退最近有效帧。`captureScreen()` 或 `{ mode: 'full' }` 保持原分辨率和像素精度；`{ mode: 'fast', size: 720 }` 与 `size: 640` 在 Native 创建帧时直接缩放。快速帧的 `pixel`、找色、多点找色、模板匹配、YOLO 区域和检测框统一使用原屏幕坐标，桥接层自动完成双向映射。长循环必须用 `try/finally` 调用 `recycle()`，防止在单个长时间脚本内积压截图。可直接运行 `apps/app/src/main/assets/sample/QuickJS 引擎/图色处理/01-图色 API 自动回归.js`、`05-全分辨率与视觉加速对比.js` 与 `07-截图首帧与稳定耗时测试.js` 检查整条链路。
 
 ### OpenCV 直连（与 Rhino 写法一致）
 
@@ -199,7 +199,7 @@ try {
 
 ```javascript
 // @engine quickjs
-const root = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
+const root = 'asset://sample/QuickJS 引擎/YOLO目标检测/DNN/models/';
 const detector = yolo.load({
     backend: 'dnn',
     model: root + 'yolo26_160.onnx',   // 发布包内置默认模型（160×160）
@@ -220,7 +220,7 @@ try {
 }
 ```
 
-可直接运行 `apps/app/src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/` 中的 OpenCV 5.0 DNN 案例，包括环境测试、单帧、实时、持续识别、ROI 区域检测与基准脚本。`yolo.load({ backend: "dnn", model: ..., ... })` 加载 ONNX 模型，对 JS 暴露 `detect` / `close` / `isClosed`。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟约 100ms 中止；`detect` 支持 `region: [x, y, w, h]` 区域检测，检测框坐标会自动回移到全屏坐标系。
+可直接运行 `apps/app/src/main/assets/sample/QuickJS 引擎/YOLO目标检测/DNN/` 中的 OpenCV 5.0 DNN 案例，包括环境测试、单帧、实时、持续识别、ROI 区域检测与基准脚本。`yolo.load({ backend: "dnn", model: ..., ... })` 加载 ONNX 模型，对 JS 暴露 `detect` / `close` / `isClosed`。持续识别脚本用可中断 `sleep` 分片控制帧率，任务列表停止时最迟约 100ms 中止；`detect` 支持 `region: [x, y, w, h]` 区域检测，检测框坐标会自动回移到全屏坐标系。
 
 **OpenCV 引擎实测结论（小米 K40，骁龙870；2026-09-12 以 640 模型重测）**：
 - **640 基线（官方构建，3 预热 + 30 帧）**：`inputSize=640, threads=4` 时 load 47.6ms、预处理 **1.64ms**、推理 **80.48ms**、总计 **82.11ms（12.2 FPS）**；同一台机 320 为 22.55ms（44.4 FPS），代价约 3.6×。

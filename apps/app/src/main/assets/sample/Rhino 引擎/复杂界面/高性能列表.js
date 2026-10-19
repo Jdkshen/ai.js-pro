@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 $ui.layout(
     <vertical>
         <horizontal>
@@ -30,7 +29,7 @@ $ui.layout(
 let items = [];
 
 // 重要！
-// 第二个参数传入 false 禁用自动数组监听模式
+// 第二个参数传入false禁用自动数组监听模式
 // 所有数组操作需要手动通知列表变化
 $ui.list.setDataSource(items, false);
 
@@ -48,23 +47,21 @@ $ui.list.on("item_bind", function (itemView, itemHolder) {
     });
 });
 
-// 注意：回调统一写成 function，不要用箭头函数 ——
-// Rhino 1.7.7 的 ArrowFunction 不能转成 Java 接口（threads.start/ui.post 要的是 Runnable）。
-$ui.add.on("click", function () {
+$ui.add.on("click", () => {
     // 在位置5处插入一条数据
     items.splice(5, 0, { name: "新数据", id: -1 });
     // 通知列表在该位置有一条新数据
     $ui.list.adapter.notifyItemInserted(5);
 });
 
-$ui.remove.on("click", function () {
+$ui.remove.on("click", () => {
     // 删除前100条数据
     items.splice(0, 100);
     // 通知列表在位置0有100条数据被删除
     $ui.list.adapter.notifyItemRangeRemoved(0, 100);
 });
 
-$ui.upate.on("click", function () {
+$ui.upate.on("click", () => {
     // 更新第1条数据
     items[0].id++;
     items[0].name = "新名称: " + items[0].id;
@@ -73,26 +70,26 @@ $ui.upate.on("click", function () {
     // 如果有批量更新则需要用notifyItemRangeChanged(position, itemCount)
 });
 
-$ui.scrollToStart.on("click", function () {
+$ui.scrollToStart.on("click", () => {
     $ui.list.scrollToPosition(0);
 });
 
-$ui.scrollToEnd.on("click", function () {
+$ui.scrollToEnd.on("click", () => {
     $ui.list.smoothScrollToPosition(items.length - 1);
 });
 
-$threads.start(function () {
+$threads.start(() => {
     // 生成10000条数据
-    var data = [];
-    for (var i = 0; i < 10000; i++) {
+    let data = [];
+    for (let i = 0; i < 10000; i++) {
         data.push({
-            name: '第' + i + '个',
+            name: `第${i}个`,
             id: i,
         });
     }
     // 在UI线程插入数据
-    $ui.post(function () {
-        var index = items.length;
+    $ui.post(() => {
+        let index = items.length;
         Array.prototype.push.apply(items, data);
         // 通知列表从位置index开始，有data.length个数据插入
         $ui.list.adapter.notifyItemRangeInserted(index, data.length);

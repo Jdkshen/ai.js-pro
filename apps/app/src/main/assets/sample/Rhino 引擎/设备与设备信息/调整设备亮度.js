@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <vertical padding="16">
         <checkbox id="auto" text="自动亮度"/>

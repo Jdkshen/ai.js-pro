@@ -1,6 +1,8 @@
-// @engine rhino
-// 搜索路径为内置存储
-var dir = files.getSdcardPath();
+"rhino";
+// 默认只预览本示例旁演示目录中的 APK；确认列表后才启用重命名。
+var RENAME = false;
+var dir = files.path("./apk-rename-demo");
+files.ensureDir(dir + "/");
 listDir(dir);
 
 
@@ -26,6 +28,8 @@ function listDir(dir) {
 function rename(dir, file, apkInfo) {
     let newName = apkInfo.applicationInfo.label + "_v" + apkInfo.versionName + "_" +
         apkInfo.packageName + ".apk";
-    files.rename(file, newName);
-    console.info("重命名: %s => %s", file, newName);
+    if (RENAME) {
+        if (!files.rename(file, newName)) throw new Error("重命名失败：" + file);
+    }
+    console.info((RENAME ? "重命名: " : "预览: ") + "%s => %s", file, newName);
 }

@@ -1,8 +1,8 @@
-// @engine rhino
+"rhino";
 console.setGlobalLogConfig({
-    file: "/sdcard/log.txt"
+    file: files.path("./sample-log.txt")
 });
 console.log(1);
 console.log(2);
 console.error(3);
-app.viewFile("/sdcard/log.txt");
+app.viewFile(files.path("./sample-log.txt"));

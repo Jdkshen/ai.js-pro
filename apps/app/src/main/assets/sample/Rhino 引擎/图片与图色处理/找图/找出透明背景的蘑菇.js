@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 let superMario = images.read("./super_mario.jpg");
 let mushroom = images.read("./mushroom.png");
 let point = images.matchTemplate(superMario, mushroom, {

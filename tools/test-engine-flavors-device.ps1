@@ -86,11 +86,11 @@ $compatApk = Join-Path $projectRoot `
 $liteApk = Join-Path $projectRoot `
     'apps\app\build\outputs\apk\miuixLite\debug\app-miuix-lite-arm64-v8a-debug.apk'
 $quickJsScript = Join-Path $projectRoot `
-    'apps\app\src\main\assets\sample\QuickJS 新引擎\QuickJS 全模块回归测试.js'
+    'apps\app\src\main\assets\sample\QuickJS 引擎\回归测试\QuickJS 全模块回归测试.js'
 $rhinoScript = Join-Path $projectRoot `
-    'apps\app\src\main\assets\sample\Rhino 引擎\全模块回归测试.js'
+    'tools\verify-rhino-api-device.js'
 $uiFloatyScript = Join-Path $projectRoot `
-    'apps\app\src\main\assets\sample\QuickJS 新引擎\QuickJS UI Floaty 回归测试.js'
+    'apps\app\src\main\assets\sample\QuickJS 引擎\界面与交互\QuickJS UI Floaty 回归测试.js'
 
 try {
     if (-not $SkipBuild) {
@@ -109,7 +109,7 @@ try {
     Install-Apk $compatApk
     Invoke-ScriptCheck $quickJsScript 'quickjs-full.js' 'QUICKJS_REGRESSION_OK'
     Invoke-ScriptCheck $uiFloatyScript 'quickjs-ui-floaty.js' 'QUICKJS_UI_FLOATY_OK'
-    Invoke-ScriptCheck $rhinoScript 'zz_regress_rhino.js' 'Rhino 回归完成: 23 pass, 0 fail'
+    Invoke-ScriptCheck $rhinoScript 'zz_regress_rhino.js' 'RHINO_API_REGRESSION_OK'
 
     Write-Host '=== lite: QuickJS + controlled Rhino rejection ===' -ForegroundColor Cyan
     Install-Apk $liteApk

@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var path = "./test.js";
 if (!files.exists(path)) {
     toast("脚本文件不存在: " + path);

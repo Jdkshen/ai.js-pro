@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 auto();
 events.observeNotification();
 events.onNotification(function(notification) {

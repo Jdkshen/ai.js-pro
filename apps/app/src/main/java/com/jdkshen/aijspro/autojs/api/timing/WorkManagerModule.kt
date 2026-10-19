@@ -33,7 +33,7 @@ class WorkManagerModule {
         val date = prop(options, "date")
             ?: throw IllegalArgumentException("date 不能为空，支持毫秒时间戳或 2019-10-1T20:00:00 这样的字符串")
         val task = TimedTask.disposableTask(toLocalDateTime(date), path, ExecutionConfig())
-        TimedTaskManager.getInstance().addTask(task)
+        TimedTaskManager.getInstance().addTaskSync(task)
         return task
     }
 
@@ -41,7 +41,7 @@ class WorkManagerModule {
         val path = requirePath(options)
         val time = requireString(options, "time", "time 不能为空，格式示例：13:00")
         val task = TimedTask.dailyTask(parseLocalTime(time), path, ExecutionConfig())
-        TimedTaskManager.getInstance().addTask(task)
+        TimedTaskManager.getInstance().addTaskSync(task)
         return task
     }
 
@@ -58,7 +58,7 @@ class WorkManagerModule {
             throw IllegalArgumentException("daysOfWeek 没有有效值，示例：['一', '三', '五']")
         }
         val task = TimedTask.weeklyTask(parseLocalTime(time), timeFlag, path, ExecutionConfig())
-        TimedTaskManager.getInstance().addTask(task)
+        TimedTaskManager.getInstance().addTaskSync(task)
         return task
     }
 
@@ -76,7 +76,7 @@ class WorkManagerModule {
         if (dataType != null) {
             task.dataType = dataType
         }
-        TimedTaskManager.getInstance().addTask(task)
+        TimedTaskManager.getInstance().addTaskSync(task)
         return task
     }
 
@@ -92,7 +92,7 @@ class WorkManagerModule {
 
     fun removeTimedTask(id: Number): Boolean {
         val task = TimedTaskManager.getInstance().getTimedTask(id.toLong()) ?: return false
-        TimedTaskManager.getInstance().removeTask(task)
+        TimedTaskManager.getInstance().removeTaskSync(task)
         return true
     }
 
@@ -100,7 +100,7 @@ class WorkManagerModule {
 
     fun removeIntentTask(id: Number): Boolean {
         val task = TimedTaskManager.getInstance().getIntentTask(id.toLong()) ?: return false
-        TimedTaskManager.getInstance().removeTask(task)
+        TimedTaskManager.getInstance().removeTaskSync(task)
         return true
     }
 
@@ -135,6 +135,7 @@ class WorkManagerModule {
         return when (options) {
             null -> null
             is Map<*, *> -> options[name]
+            is org.json.JSONObject -> options.opt(name).takeUnless { it == org.json.JSONObject.NULL }
             is Scriptable -> {
                 val value = ScriptableObject.getProperty(options, name)
                 if (value == Scriptable.NOT_FOUND) null else value
@@ -156,6 +157,7 @@ class WorkManagerModule {
         val value = when (options) {
             null -> null
             is Map<*, *> -> options[key]
+            is org.json.JSONObject -> options.opt(key.toString()).takeUnless { it == org.json.JSONObject.NULL }
             is Scriptable -> {
                 val v = if (key is String) ScriptableObject.getProperty(options, key) else Scriptable.NOT_FOUND
                 if (v == Scriptable.NOT_FOUND) null else v
@@ -176,6 +178,9 @@ class WorkManagerModule {
     private fun toList(value: Any?): List<Any>? {
         if (value == null) {
             return null
+        }
+        if (value is org.json.JSONArray) {
+            return (0 until value.length()).mapNotNull { value.opt(it).takeUnless { it == org.json.JSONObject.NULL } }
         }
         if (value is List<*>) {
             return value.filterNotNull()

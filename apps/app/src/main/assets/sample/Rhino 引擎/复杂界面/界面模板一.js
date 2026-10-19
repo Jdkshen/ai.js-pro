@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 var color = "#009688";
 
 ui.layout(

@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 // 获取当前脚本的路径
 let path = $engines.myEngine().source.toString();
 // 获取当前时间后10分钟的时间戳

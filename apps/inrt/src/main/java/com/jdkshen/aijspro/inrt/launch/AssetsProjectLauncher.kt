@@ -6,13 +6,16 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
+import android.util.Log
 
 import com.jdkshen.aijspro.inrt.BuildConfig
 import com.jdkshen.aijspro.inrt.LogActivity
 import com.jdkshen.aijspro.inrt.Pref
 import com.jdkshen.aijspro.inrt.autojs.AutoJs
+import com.jdkshen.aijspro.inrt.script.InrtScriptThreadHost
 import com.stardust.autojs.engine.encryption.ScriptEncryption
 import com.stardust.autojs.execution.ExecutionConfig
+import com.stardust.autojs.execution.ScriptExecutionTask
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.project.AppSignature
 import com.stardust.autojs.project.ProjectConfig
@@ -22,6 +25,7 @@ import com.stardust.autojs.script.EncryptedScripts
 import com.stardust.autojs.script.JavaScriptFileSource
 import com.stardust.autojs.script.JavaScriptSource
 import com.stardust.autojs.script.ScriptSource
+import com.stardust.autojs.script.StringScriptSource
 import com.stardust.pio.PFiles
 import com.stardust.pio.UncheckedIOException
 import com.stardust.util.MD5
@@ -46,6 +50,50 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
 
     init {
         prepare()
+        // task-113 B：工程解压后、在脚本线程上把工程 dex/native 清单准备好（Pro 顺序 dex->so）。
+        prepareProjectRuntime()
+    }
+
+    private fun prepareProjectRuntime() {
+        try {
+            if (InrtScriptThreadHost.isInitialized() && InrtScriptThreadHost.isScriptThread()) {
+                InrtScriptThreadHost.prepareProjectOnScriptThread(mActivity)
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "C-INRT: prepareProjectOnScriptThread failed (continue)", e)
+        }
+    }
+
+    /** task-160：定时任务/前台服务里直接运行工程入口脚本（无 Activity）。 */
+    fun launchHeadless() {
+        launchHeadlessScript(null)
+    }
+
+    /** task-162：按任务 path 执行工程内具体脚本；null/空/main 时仍执行工程入口。 */
+    fun launchHeadlessScript(scriptPath: String?) {
+        // 定时任务每次独立执行；LogActivity 可能已持有上一次 ScriptExecution，
+        // 不复位会被 runScript 的 isDestroyed 守卫直接 return，导致到点"拉起"实际没跑。
+        mScriptExecution = null
+        val normalized = scriptPath?.trim().orEmpty()
+        if (normalized.isEmpty() || normalized == mProjectConfig.mainScriptFile) {
+            runScript(null)
+            return
+        }
+        try {
+            val file = File(normalized).let { if (it.isAbsolute) it else File(mProjectDir, normalized) }
+            if (!file.isFile) {
+                AutoJs.instance?.globalConsole?.error("[task] 找不到任务脚本：" + file.absolutePath)
+                return
+            }
+            Log.i(TAG, "C-INRT: run task script=" + file.absolutePath)
+            val source = JavaScriptFileSource("task", file)
+            val config = ExecutionConfig(
+                workingDirectory = mProjectDir,
+                scriptConfig = mProjectConfig.getScriptConfig(normalized))
+            mScriptExecution = executeSource(source, config)
+        } catch (error: Throwable) {
+            AutoJs.instance?.globalConsole?.error(error)
+        }
     }
 
     fun launch(activity: Activity) {
@@ -93,11 +141,130 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             } else {
                 activity?.finish()
             }
-            mScriptExecution = AutoJs.instance.scriptEngineService.execute(source, config)
+            mScriptExecution = executeSource(source, config)
+            // task-115：ui.layout 项目改由 :script 内的 ScriptExecuteActivity 承载，透明 trampoline
+            // 退场（否则脚本结束/失败后露出空白底）。headless 的 ImGui/浮窗项目保持 trampoline 存活。
+            if (InrtScriptThreadHost.isScriptThread() && wantsScriptExecuteActivity(source)) {
+                activity?.finish()
+            }
         } catch (e: Exception) {
             AutoJs.instance.globalConsole.error(e)
         }
 
+    }
+
+    /**
+     * task-113 B：:script 进程里把引擎初始化/执行放到脚本线程（= :script 进程主 Looper）。
+     *
+     * <p>在 :script 进程内用引擎的 executeUiOnMainThread（等价于 Pro 打包运行时里跑在脚本进程
+     * 主线程的脚本宿主，但不启动 Activity）：engine.init()、工程 dex/so、第三方 native
+     * （libImGuiBridge.so 的 JNI_OnLoad / ImGui context）与脚本执行因此全部同线程，GImGui 不会跨线程。
+     * 主进程/旧入口（非脚本线程）保持原来的后台线程执行路径。
+     */
+    private fun executeSource(source: ScriptSource, config: ExecutionConfig): ScriptExecution {
+        val service = AutoJs.instance.scriptEngineService
+        val process = InrtScriptThreadHost.getProcessName(mActivity)
+        val thread = Thread.currentThread()
+        val uiMode = isUiModeScript(source)
+        val route = when {
+            !InrtScriptThreadHost.isScriptThread() -> "legacy"
+            wantsScriptExecuteActivity(source) -> "ScriptExecuteActivity"
+            else -> "headless"
+        }
+        Log.i(TAG, "C-INRT: route=" + route + " process=" + process + " thread=" + thread.name + "/" + thread.id
+                + " engine=" + source.engineName + " uiMode=" + uiMode
+                + " uiLayout=" + hasUiLayoutCall(source) + " resLayout=" + hasLayoutResources())
+        if (route == "ScriptExecuteActivity") {
+            // task-115：:script 内启动引擎 UI 宿主（inrt manifest 已把 ScriptExecuteActivity 挂 :script）。
+            // ui.layout 的布局由 Activity 承载，引擎按引擎原路径在 Activity 自己的线程执行（与主进程
+            // 旧 inrt 路径一致）；不能走 headless main Looper，否则没有 content view 会白屏。
+            return service.execute(source, config)
+        }
+        if (route == "headless") {
+            try {
+                return service.executeUiOnMainThread(ScriptExecutionTask(source, null, config))
+            } catch (e: Throwable) {
+                Log.w(TAG, "C-INRT: headless execute failed, fallback background execution", e)
+            }
+        }
+        return service.execute(source, config)
+    }
+
+    private fun isUiModeScript(source: ScriptSource): Boolean {
+        return source is JavaScriptSource &&
+                (source.executionMode and JavaScriptSource.EXECUTION_MODE_UI) != 0
+    }
+
+    /**
+     * 是否需要 ScriptExecuteActivity 承载 UI。
+     *
+     * <p>不能只看 executionMode：ImGui/浮窗项目同样写 {@code "ui";}（例如 AutoJS_ImGui 的
+     * main.js），但它们必须留在 :script 脚本线程 headless 执行，否则 ImGui context 又跨线程。
+     * 判据是主脚本正文里是否调用 ui.layout / ui.layoutFile / ui.inflate（模块里的调用不算）；
+     * 文本不可读（Rhino 编译类 / QuickJS 字节码）时退化为工程特征：带 ImGui 原生库的一律
+     * headless，有 res/layout 资源的才当 ui.layout 项目。
+     */
+    private fun wantsScriptExecuteActivity(source: ScriptSource): Boolean {
+        if (!isUiModeScript(source)) {
+            return false
+        }
+        val text = readScriptText(source)
+        if (text != null) {
+            return UI_LAYOUT_PATTERN.containsMatchIn(text)
+        }
+        if (hasImGuiMarker()) {
+            return false
+        }
+        return hasLayoutResources()
+    }
+
+    private fun hasUiLayoutCall(source: ScriptSource): Boolean {
+        val text = readScriptText(source) ?: return false
+        return UI_LAYOUT_PATTERN.containsMatchIn(text)
+    }
+
+    private fun readScriptText(source: ScriptSource): String? {
+        return when (source) {
+            is StringScriptSource -> source.script
+            is JavaScriptFileSource -> try {
+                source.file?.readText(Charsets.UTF_8)
+            } catch (e: Exception) {
+                Log.w(TAG, "C-INRT: read main script text failed", e)
+                null
+            }
+            else -> null
+        }
+    }
+
+    private fun hasLayoutResources(): Boolean {
+        val layoutDir = File(mProjectDir, "res/layout")
+        if (!layoutDir.isDirectory) {
+            return false
+        }
+        return layoutDir.listFiles()?.any { it.isFile && it.name.endsWith(".xml") } == true
+    }
+
+    /** ImGui/浮窗类项目的特征文件（工程 lib 下）。 */
+    private fun hasImGuiMarker(): Boolean {
+        return findProjectFile(File(mProjectDir), 0, setOf("libImGuiBridge.so", "ImGuiBridge.dex"))
+    }
+
+    private fun findProjectFile(dir: File, depth: Int, names: Set<String>): Boolean {
+        if (depth > 4 || !dir.isDirectory) {
+            return false
+        }
+        val children = dir.listFiles() ?: return false
+        for (child in children) {
+            if (child.isFile && names.contains(child.name)) {
+                return true
+            }
+        }
+        for (child in children) {
+            if (child.isDirectory && findProjectFile(child, depth + 1, names)) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun prepare() {
@@ -196,6 +363,14 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             e.printStackTrace()
         }
 
+    }
+
+    companion object {
+        private const val TAG = "C-INRT"
+
+        /** 主脚本里的 ui.layout / ui.layoutFile / ui.inflate 调用（ImGui 模块里的不算）。 */
+        private val UI_LAYOUT_PATTERN =
+                Regex("""\bui\s*\.\s*(?:layout|inflate)[A-Za-z_]*\s*\(""")
     }
 
 }

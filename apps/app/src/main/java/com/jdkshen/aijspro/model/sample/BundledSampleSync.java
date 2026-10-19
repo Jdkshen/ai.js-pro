@@ -50,6 +50,23 @@ public final class BundledSampleSync {
     /** 记录「上次同步写下的每个文件的内容 md5」，用来区分「用户改过」和「只是版本旧」。 */
     private static final String STATE_FILE = "sample-sync-state.txt";
     private static final String BACKUP_DIR = "sample-backup";
+    /**
+     * 历史版本用过、现在已经不存在的示例目录（相对 files/sample）。
+     * 升级到三引擎树（dev-928）后旧的「QuickJS 新引擎」「Rhino 引擎/中文」等
+     * 目录不能只靠 pruneRemoved：同步记录丢失/首次同步时它不知道该删哪些，
+     * 目录就会一直留在示例页里。这里显式清理，内容与当前内置示例一致的直接删，
+     * 用户改过的先备份到 sample-backup/legacy/ 再删。
+     */
+    private static final String[] LEGACY_DIRS = {
+            "QuickJS 新引擎",
+            "QuickJS新引擎",
+            "QuickJS 引擎/中文",
+            "Rhino 引擎/中文",
+            "Rhino 引擎/English",
+            "Node 引擎/中文",
+            "Node 引擎/English",
+            "pro-samples",
+    };
 
     private BundledSampleSync() {
     }
@@ -60,11 +77,12 @@ public final class BundledSampleSync {
         public int updated;
         public int unchanged;
         public int backedUp;
+        public int removed;
 
         @Override
         public String toString() {
-            return "新增 " + created + "，更新 " + updated
-                    + "，已是最新 " + unchanged + "，备份用户改动 " + backedUp;
+            return "新增 " + created + "，更新 " + updated + "，已是最新 " + unchanged
+                    + "，备份用户改动 " + backedUp + "，清理下架示例 " + removed;
         }
     }
 
@@ -104,8 +122,96 @@ public final class BundledSampleSync {
         Map<String, String> next = new HashMap<>();
         Result result = new Result();
         syncDir(context, assets, SAMPLE_ASSET, root, "", state, next, result);
+        pruneRemoved(context, root, state, next, result);
+        removeLegacyDirs(context, root, next, result);
         writeState(stateFile, next);
         return result;
+    }
+
+    /**
+     * 清理「新版 APK 里已下架/改名」的示例：上次同步记录里有、这次内置清单里没有的文件，
+     * 磁盘上没被用户改过就直接删；用户改过的先备份到 {@code files/sample-backup/} 再删。
+     *
+     * <p>这是示例集从「两棵自定义树」重排成「Rhino/QuickJS/Node 三引擎树」时必须的一步 ——
+     * 只做新增/覆盖的话旧目录会一直留在手机上。
+     */
+    private static void pruneRemoved(Context context, File root, Map<String, String> previous,
+                                     Map<String, String> next, Result result) {
+        for (Map.Entry<String, String> entry : previous.entrySet()) {
+            if (next.containsKey(entry.getKey())) {
+                continue;
+            }
+            File file = new File(root, entry.getKey());
+            if (!file.isFile()) {
+                continue;
+            }
+            if (!entry.getValue().equals(md5(file))) {
+                backup(context, file, entry.getKey());
+            }
+            if (file.delete()) {
+                result.removed++;
+            }
+        }
+        deleteEmptyDirs(root);
+    }
+
+    /** 清理历史版本遗留的示例目录（见 {@link #LEGACY_DIRS}）。 */
+    private static void removeLegacyDirs(Context context, File root, Map<String, String> next,
+                                         Result result) {
+        java.util.Set<String> bundled = new java.util.HashSet<>(next.values());
+        for (String relative : LEGACY_DIRS) {
+            File legacy = new File(root, relative);
+            if (legacy.isDirectory()) {
+                deleteLegacyTree(context, legacy, relative, bundled, result);
+            } else if (legacy.isFile()) {
+                removeLegacyFile(context, legacy, relative, bundled, result);
+            }
+        }
+        deleteEmptyDirs(root);
+    }
+
+    private static void deleteLegacyTree(Context context, File dir, String relative,
+                                         java.util.Set<String> bundled, Result result) {
+        File[] children = dir.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                String childRelative = relative + "/" + child.getName();
+                if (child.isDirectory()) {
+                    deleteLegacyTree(context, child, childRelative, bundled, result);
+                } else {
+                    removeLegacyFile(context, child, childRelative, bundled, result);
+                }
+            }
+        }
+        dir.delete();
+    }
+
+    private static void removeLegacyFile(Context context, File file, String relative,
+                                        java.util.Set<String> bundled, Result result) {
+        if (!bundled.contains(md5(file))) {
+            backup(context, file, "legacy/" + relative);
+        }
+        if (file.delete()) {
+            result.removed++;
+        }
+    }
+
+    /** 递归删除示例目录内的空目录（示例根目录本身保留）。 */
+    private static void deleteEmptyDirs(File dir) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (!child.isDirectory()) {
+                continue;
+            }
+            deleteEmptyDirs(child);
+            File[] rest = child.listFiles();
+            if (rest != null && rest.length == 0) {
+                child.delete();
+            }
+        }
     }
 
     private static void syncDir(Context context, AssetManager assets, String assetPath, File dir,

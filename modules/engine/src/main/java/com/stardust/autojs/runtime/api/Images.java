@@ -46,6 +46,8 @@ import com.stardust.autojs.core.opencv.OpenCVHelper;
 import com.stardust.autojs.core.ui.inflater.util.Drawables;
 import com.stardust.autojs.core.util.ScriptPromiseAdapter;
 import com.stardust.autojs.runtime.ScriptRuntime;
+import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
+import com.stardust.autojs.runtime.exception.ScriptException;
 import com.stardust.concurrent.VolatileDispose;
 import com.stardust.pio.UncheckedIOException;
 import com.stardust.util.ScreenMetrics;
@@ -55,6 +57,7 @@ import org.opencv.core.Rect;
 import org.opencv.imgproc.Imgproc;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -129,6 +132,10 @@ public class Images {
      */
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ScriptPromiseAdapter requestScreenCapture(int orientation, int width, int height, boolean async) {
+        if (RemoteAutomationBridge.isActive()) {
+            throw new ScriptException("隔离进程暂不支持投屏截图（requestScreenCapture）；"
+                    + "请改用无障碍截图 images.captureScreen() / automator.takeScreenshot()");
+        }
         ScriptRuntime.requiresApi(21);
         if (mSharedCapture != null) releaseScreenCapturer();
         mScreenCaptureOrientation = orientation;
@@ -555,6 +562,10 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized Image captureScreenRaw(boolean fresh, long timeoutMillis) {
+        if (RemoteAutomationBridge.isActive()) {
+            throw new ScriptException("隔离进程暂不支持 captureScreenRaw()（需要本地投屏帧）；"
+                    + "请改用 images.captureScreen()");
+        }
         ScriptRuntime.requiresApi(21);
         if (mSharedCapture != null) throw new IllegalStateException("共享截图必须使用独立图片，不能获取内部原始帧");
         if (mScreenCapturer == null) {
@@ -565,12 +576,18 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen() {
+        if (RemoteAutomationBridge.isActive()) {
+            return captureScreenRemote();
+        }
         return captureScreen(false, mAccessibilityCapture || mAutoCapturePolicy != null || mSharedCapture != null
                 ? 2000 : ScreenCapturer.DEFAULT_CAPTURE_TIMEOUT_MILLIS);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen(boolean fresh, long timeoutMillis) {
+        if (RemoteAutomationBridge.isActive()) {
+            return captureScreenRemote();
+        }
         ScriptRuntime.requiresApi(21);
         if (mSharedCapture != null) {
             ImageWrapper image = mSharedCapture.use(backend -> backend.capture(fresh, timeoutMillis));
@@ -616,6 +633,33 @@ public class Images {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Phase1 P1：:script 进程里的截图走主进程 {@code AutomationHostService.screenshot()}：
+     * 主进程把 PNG 写到 :script 的缓存目录（同一 uid 可读），这里解码成 ImageWrapper 返回，
+     * 使 {@code images.captureScreen() / images.save() / captureScreen(path)} 保持原 API 形状。
+     */
+    private ImageWrapper captureScreenRemote() {
+        RemoteAutomationBridge.Backend backend = RemoteAutomationBridge.requireBackend();
+        File cache = new File(mContext.getCacheDir(),
+                "remote-capture-" + SystemClock.elapsedRealtime() + ".png");
+        String savedPath = backend.screenshot(cache.getAbsolutePath());
+        File file = (savedPath == null || savedPath.trim().isEmpty())
+                ? cache : new File(savedPath.trim());
+        try {
+            Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
+            if (bitmap == null) {
+                throw new ScriptException("隔离进程截图失败：主进程返回的图片无法解码（路径：" + file.getAbsolutePath() + "）");
+            }
+            return ImageWrapper.ofBitmap(bitmap);
+        } finally {
+            // 临时文件及时清理；解码后的 bitmap 已独立于文件。
+            if (file.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+        }
     }
 
     public ImageWrapper copy(ImageWrapper image) {

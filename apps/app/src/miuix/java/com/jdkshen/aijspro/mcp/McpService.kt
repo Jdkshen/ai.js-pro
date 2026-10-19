@@ -8,7 +8,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.Pref
@@ -22,51 +25,102 @@ class McpService : Service() {
     private var server: McpHttpServer? = null
     private var tools: McpTools? = null
     private lateinit var history: McpHistoryStore
+    private val heartbeatHandler = Handler(Looper.getMainLooper())
+    private var heartbeatRunnable: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
         history = McpHistoryStore(applicationContext)
-        startForeground(NOTIFICATION_ID, notification("正在启动脚本 MCP"))
+        McpStateStore.saveStarting(this)
+        startForeground(NOTIFICATION_ID, notification("正在启动本地 MCP"))
         try {
             val router = McpTools(applicationContext, ::record)
-            val endpoint = McpHttpServer(if (McpSettings.lanEnabled(this)) "0.0.0.0" else "127.0.0.1",
-                McpSettings.port(this), McpSettings.token(this), McpSettings.localCompatibility(this),
-                allowUnauthenticatedLan = McpSettings.allowLanWithoutToken(this),
-                handler = { request ->
-                    requestCount++
-                    lastRequestAt = System.currentTimeMillis()
-                    val method = request.get("method")?.asString.orEmpty()
-                    if (method.isNotEmpty()) record("请求 · $method")
-                    router.handle(request)
-                },
-                pageProvider = {
-                    statusPage(router, McpSettings.port(this), McpSettings.lanEnabled(this), McpSettings.token(this))
-                })
-            endpoint.start()
+            val requestedPort = McpSettings.port(this)
+            var startedEndpoint: McpHttpServer? = null
+            var boundPort = 0
+            var lastFailure: String? = null
+            // task-105：对齐 Pro：默认 8765，被占用时 8765..8795 顺延；始终绑 0.0.0.0（仍保留 token 鉴权）。
+            val portEnd = if (requestedPort in McpSettings.MIN_PORT..McpSettings.MAX_PORT) {
+                McpSettings.MAX_PORT
+            } else {
+                requestedPort
+            }
+            for (candidate in requestedPort..portEnd) {
+                var endpoint: McpHttpServer? = null
+                try {
+                    endpoint = McpHttpServer("0.0.0.0", candidate, McpSettings.token(this),
+                        McpSettings.localCompatibility(this),
+                        allowUnauthenticatedLan = McpSettings.allowLanWithoutToken(this),
+                        handler = { request ->
+                            requestCount++
+                            lastRequestAt = System.currentTimeMillis()
+                            val method = request.get("method")?.asString.orEmpty()
+                            if (method.isNotEmpty()) record("请求 · $method")
+                            router.handle(request)
+                        },
+                        pageProvider = {
+                            statusPage(router, candidate, true, McpSettings.token(this))
+                        })
+                    endpoint.start()
+                    startedEndpoint = endpoint
+                    boundPort = candidate
+                    Log.i(LOG_TAG, "C-MCP: bind ok port=" + candidate + " host=0.0.0.0")
+                    break
+                } catch (bindError: Exception) {
+                    lastFailure = bindError.localizedMessage ?: bindError.javaClass.simpleName
+                    Log.w(LOG_TAG, "C-MCP: bind failed port=" + candidate + ": " + lastFailure)
+                    runCatching { endpoint?.stop() }
+                }
+            }
+            if (startedEndpoint == null) {
+                val message = "端口 " + requestedPort + ".." + McpSettings.MAX_PORT + " 均被占用" +
+                    (lastFailure?.let { "（" + it + "）" } ?: "")
+                lastError = message
+                McpStateStore.saveError(this, message)
+                record("启动失败 · " + message)
+                stopSelf()
+                return
+            }
+            if (boundPort != requestedPort) {
+                McpSettings.setPort(this, boundPort)
+                record("端口 " + requestedPort + " 被占用，已顺延到 " + boundPort)
+            }
             tools = router
-            server = endpoint
+            server = startedEndpoint
+            val localUrl = "http://127.0.0.1:" + boundPort + "/mcp"
+            val lanUrl = lanAddress(boundPort)
+            McpStateStore.saveRunning(this, boundPort, localUrl, lanUrl)
             running = true
             lastError = null
             // 恢复持久化的授权（记住上次开启状态）
             allowWrite = McpSettings.writeAllowed(this)
             allowExecution = McpSettings.executionAllowed(this)
+            startHeartbeat()
             val auto = if (autoStarted) " · 自动" else ""
             autoStarted = false
-            record("服务已启动 · ${if (McpSettings.lanEnabled(this)) "局域网" else "仅本机"}$auto" + if (allowWrite || allowExecution) " · 已恢复授权" else "")
-            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(localAddress(this)))
+            record("服务已启动 · 局域网 · 端口 " + boundPort + auto + (if (allowWrite || allowExecution) " · 已恢复授权" else ""))
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(localUrl))
+            Log.i(LOG_TAG, "C-MCP: state=running port=" + boundPort + " localUrl=" + localUrl + " lanUrl=" + lanUrl)
         } catch (error: Exception) {
             lastError = error.localizedMessage ?: "端口启动失败"
-            record("启动失败 · $lastError")
+            McpStateStore.saveError(this, lastError!!)
+            record("启动失败 · " + lastError)
             stopSelf()
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) stopSelf()
-        return START_NOT_STICKY
+        if (intent?.action == ACTION_STOP) {
+            McpStateStore.saveStopped(this)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // task-105：对齐 Pro，进程被系统回收后 START_STICKY 重建服务（onCreate 会重新绑定端口）。
+        return START_STICKY
     }
 
     override fun onDestroy() {
+        stopHeartbeat()
         running = false
         allowWrite = false
         allowExecution = false
@@ -74,10 +128,35 @@ class McpService : Service() {
         tools = null
         server?.stop()
         server = null
+        McpStateStore.saveStopped(this, lastError)
         record(if (autoStopped) "服务已停止 · 自动" else "服务已停止")
         autoStopped = false
         stopForeground(true)
+        Log.i(LOG_TAG, "C-MCP: state=stopped")
         super.onDestroy()
+    }
+
+    private fun lanAddress(port: Int): String =
+        lanAddresses(this, port).firstOrNull().orEmpty()
+
+    private fun startHeartbeat() {
+        if (heartbeatRunnable != null) return
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!running) return
+                val port = server?.localPort?.takeIf { it > 0 } ?: McpSettings.port(this@McpService)
+                val localUrl = "http://127.0.0.1:" + port + "/mcp"
+                McpStateStore.saveHeartbeat(this@McpService, port, localUrl, lanAddress(port))
+                heartbeatHandler.postDelayed(this, McpStateStore.HEARTBEAT_INTERVAL_MS)
+            }
+        }
+        heartbeatRunnable = runnable
+        heartbeatHandler.postDelayed(runnable, McpStateStore.HEARTBEAT_INTERVAL_MS)
+    }
+
+    private fun stopHeartbeat() {
+        heartbeatRunnable?.let { heartbeatHandler.removeCallbacks(it) }
+        heartbeatRunnable = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -125,7 +204,8 @@ class McpService : Service() {
 
     private fun notification(text: String): Notification {
         if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(CHANNEL, "脚本 MCP", NotificationManager.IMPORTANCE_LOW).apply {
+            // task-105：对齐 Pro：渠道 autojs_mcp / 名称「本地 MCP」/ IMPORTANCE_LOW。
+            val channel = NotificationChannel(CHANNEL, "本地 MCP", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "AI.js Pro 本地脚本开发连接"
                 setShowBadge(false)
             }
@@ -138,7 +218,7 @@ class McpService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or immutable)
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_ai_js_pro_notification)
-            .setContentTitle("AI.js Pro · 脚本 MCP")
+            .setContentTitle("AI.js Pro · 本地 MCP")
             .setContentText(text)
             .setOngoing(true)
             .setContentIntent(content)
@@ -147,8 +227,9 @@ class McpService : Service() {
     }
 
     companion object {
-        private const val CHANNEL = "aijs_mcp_service"
-        private const val NOTIFICATION_ID = 8788
+        private const val LOG_TAG = "McpService"
+        private const val CHANNEL = "autojs_mcp"
+        private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "com.jdkshen.aijspro.mcp.STOP"
         @Volatile var running = false
             private set
@@ -169,13 +250,40 @@ class McpService : Service() {
             if (Build.VERSION.SDK_INT >= 26) context.applicationContext.startForegroundService(intent)
             else context.applicationContext.startService(intent)
         }
-        fun stop(context: Context) { context.applicationContext.stopService(Intent(context, McpService::class.java)) }
-        fun localAddress(context: Context) = "http://127.0.0.1:${McpSettings.port(context)}/mcp"
-        fun lanAddresses(context: Context): List<String> = try {
-            Collections.list(NetworkInterface.getNetworkInterfaces()).flatMap { network ->
-                Collections.list(network.inetAddresses).filter { !it.isLoopbackAddress && it.hostAddress?.contains(':') == false }
-                    .map { "http://${it.hostAddress}:${McpSettings.port(context)}/mcp" }
-            }.distinct().sorted()
+        fun stop(context: Context) {
+            McpStateStore.saveStopped(context)
+            context.applicationContext.stopService(Intent(context, McpService::class.java))
+        }
+
+        // task-105：状态以持久化 + 心跳为准（UI 不再只信 running 内存布尔）。
+        fun readState(context: Context): McpStateStore.State = McpStateStore.read(context)
+        fun isRunningFresh(context: Context): Boolean = McpStateStore.freshRunning(context)
+        fun activePort(context: Context): Int =
+            readState(context).port.takeIf { it > 0 } ?: McpSettings.port(context)
+        fun localAddress(context: Context) = "http://127.0.0.1:" + activePort(context) + "/mcp"
+        fun lanAddresses(context: Context): List<String> = lanAddresses(context, activePort(context))
+        fun lanAddresses(context: Context, port: Int): List<String> = try {
+            // 只收真实 LAN：排除 down/回环、蜂窝、VPN、P2P 和虚拟网卡；优先 WiFi/热点/有线。
+            val excludedPrefixes = listOf("rmnet", "ccmni", "p2p", "tun", "dummy")
+            Collections.list(NetworkInterface.getNetworkInterfaces())
+                .filter { network -> network.isUp && !network.isLoopback }
+                .filter { network ->
+                    val name = network.name?.lowercase(java.util.Locale.ROOT).orEmpty()
+                    excludedPrefixes.none { prefix -> name.startsWith(prefix) }
+                }
+                .flatMap { network ->
+                    val name = network.name?.lowercase(java.util.Locale.ROOT).orEmpty()
+                    val preferred = name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("eth")
+                    Collections.list(network.inetAddresses).mapNotNull { address ->
+                        val host = address.hostAddress ?: return@mapNotNull null
+                        if (address !is java.net.Inet4Address || address.isLoopbackAddress ||
+                            address.isLinkLocalAddress || !address.isSiteLocalAddress) return@mapNotNull null
+                        Pair(preferred, host)
+                    }
+                }
+                .sortedWith(compareByDescending<Pair<Boolean, String>> { it.first }.thenBy { it.second })
+                .distinctBy { it.second }
+                .map { "http://" + it.second + ":" + port + "/mcp" }
         } catch (_: Exception) { emptyList() }
         fun recentEvents(): List<String> = events.toList().takeLast(30).reversed()
         fun history(context: Context): List<McpHistoryStore.Entry> = McpHistoryStore(context).list()

@@ -12,6 +12,8 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 
+import com.google.android.material.appbar.AppBarLayout;
+
 
 import com.stardust.autojs.core.ui.ViewExtras;
 import com.stardust.autojs.core.ui.attribute.ViewAttributes;
@@ -172,6 +174,17 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
                     return setLayoutGravity(parent, view, Gravities.parse(value));
                 }
                 break;
+            case "layout_scrollFlags": {
+                // dev-1032：AppBarLayout 子的 app:layout_scrollFlags（XML 里通常写成
+                // scroll|enterAlways、none 或数值）。动态 inflater 必须显式套，
+                // 否则漏掉用户声明的 flags（缺省值由 DynamicLayoutInflater 还原成 XML 的 0）。
+                int scrollFlags = parseScrollFlags(value);
+                if (scrollFlags < 0 || !(layoutParams instanceof AppBarLayout.LayoutParams)) {
+                    return false;
+                }
+                ((AppBarLayout.LayoutParams) layoutParams).setScrollFlags(scrollFlags);
+                break;
+            }
             case "layout_weight":
                 if (parent instanceof LinearLayout) {
                     ((LinearLayout.LayoutParams) layoutParams).weight = Float.parseFloat(value);
@@ -289,6 +302,18 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
             case "background":
                 getDrawables().setupWithViewBackground(view, value);
                 break;
+            case "icon":
+                // dev-1016：MaterialButton / ExtendedFAB 的 app:icon（工程 res 里 card 的 ❤️/● 图标）。
+                if (setViewIcon(view, value)) {
+                    break;
+                }
+                return false;
+            case "checkable":
+                // dev-1016：MaterialCardView 的 android:checkable（卡片可勾选态）。
+                if (setViewCheckable(view, value)) {
+                    break;
+                }
+                return false;
             case "accessibilityLiveRegion":
             case "accessibilityTraversalAfter":
             case "accessibilityTraversalBefore":
@@ -617,6 +642,63 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
         }
     }
 
+    /**
+     * dev-1032：解析 {@code app:layout_scrollFlags} 的 XML 取值。
+     * 支持 {@code none}/{@code noScroll}、符号组合（{@code scroll|enterAlways|...}）
+     * 以及十进制/0x 数值。无法识别的 token 返回 -1，让调用方保留现有 flags，
+     * 而不是静默改成 0（显式声明应优先于缺省值）。
+     */
+    private static int parseScrollFlags(String value) {
+        if (value == null) {
+            return -1;
+        }
+        String text = value.trim();
+        if (text.isEmpty()) {
+            return -1;
+        }
+        if (text.startsWith("0x") || text.startsWith("0X")) {
+            try {
+                return Integer.parseInt(text.substring(2), 16);
+            } catch (NumberFormatException ignored) {
+                return -1;
+            }
+        }
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException ignored) {
+            // 不是数字，按 XML flags 名称解析。
+        }
+        int flags = 0;
+        for (String token : text.split("\\|")) {
+            switch (token.trim()) {
+                case "none":
+                case "noScroll":
+                    break;
+                case "scroll":
+                    flags |= AppBarLayout.LayoutParams.SCROLL_FLAG_SCROLL;
+                    break;
+                case "exitUntilCollapsed":
+                    flags |= AppBarLayout.LayoutParams.SCROLL_FLAG_EXIT_UNTIL_COLLAPSED;
+                    break;
+                case "enterAlways":
+                    flags |= AppBarLayout.LayoutParams.SCROLL_FLAG_ENTER_ALWAYS;
+                    break;
+                case "enterAlwaysCollapsed":
+                    flags |= AppBarLayout.LayoutParams.SCROLL_FLAG_ENTER_ALWAYS_COLLAPSED;
+                    break;
+                case "snap":
+                    flags |= AppBarLayout.LayoutParams.SCROLL_FLAG_SNAP;
+                    break;
+                case "snapMargins":
+                    flags |= AppBarLayout.LayoutParams.SCROLL_FLAG_SNAP_MARGINS;
+                    break;
+                default:
+                    return -1;
+            }
+        }
+        return flags;
+    }
+
     @Override
     public boolean setAttr(V view, String ns, String attrName, String value, ViewGroup parent, Map<String, String> attrs) {
         // 动态 inflate 里 android:xxx 与 app:xxx（res-auto）没有区别：属性名本来就是本地名，
@@ -624,6 +706,39 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
         // 以前 app: 直接 return false，于是 Material 布局必备的 app:title / app:menu / app:srcCompat
         // 这些属性全被静默丢掉 —— 原生布局的 Toolbar 空白、底部导航为空都是这个原因。
         return setAttr(view, attrName, value, parent, attrs);
+    }
+
+    /**
+     * dev-1016：给带 {@code setIcon(Drawable)} 的控件设置图标（MaterialButton / ExtendedFAB 等）。
+     *
+     * <p>Material 控件没有 4 参构造器，androidResources 的 app:icon 无法走 framework；
+     * 这里用工程已有的 {@link Drawables} 解析值（支持 @drawable / file:// / 颜色等），再反射调用 setIcon。
+     * 失败只 W 并返回 false，不影响整个 inflate。
+     */
+    private boolean setViewIcon(View view, String value) {
+        try {
+            android.graphics.drawable.Drawable drawable = getDrawables().parse(view.getContext(), value);
+            if (drawable == null) {
+                return false;
+            }
+            Method setIcon = view.getClass().getMethod("setIcon", android.graphics.drawable.Drawable.class);
+            setIcon.invoke(view, drawable);
+            return true;
+        } catch (Throwable error) {
+            Log.w("BaseViewInflater", "设置 icon 失败（继续）：" + value + " view=" + view.getClass().getName(), error);
+            return false;
+        }
+    }
+
+    /** dev-1016：给带 {@code setCheckable(boolean)} 的控件设置可勾选（MaterialCardView 等）。 */
+    private boolean setViewCheckable(View view, String value) {
+        try {
+            Method setCheckable = view.getClass().getMethod("setCheckable", boolean.class);
+            setCheckable.invoke(view, Boolean.parseBoolean(value));
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private boolean setGravity(V view, String g) {

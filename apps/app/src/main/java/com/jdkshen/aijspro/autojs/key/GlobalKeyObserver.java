@@ -9,6 +9,7 @@ import com.stardust.autojs.core.inputevent.ShellKeyObserver;
 import com.stardust.event.EventDispatcher;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.autojs.AutoJs;
+import com.jdkshen.aijspro.external.HostScripts;
 import com.stardust.view.accessibility.AccessibilityService;
 import com.stardust.view.accessibility.OnKeyListener;
 
@@ -54,8 +55,19 @@ public class GlobalKeyObserver implements OnKeyListener, ShellKeyObserver.KeyLis
 
     public void onVolumeUp() {
         Log.d(LOG_TAG, "onVolumeUp at " + System.currentTimeMillis());
-        if (Pref.isRunningVolumeControlEnabled()) {
-            AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
+        // Phase1：脚本默认在 :script 宿主进程里跑，主进程引擎的 stopAll 停不到它们。
+        // 全局按键通道只在主进程无障碍/root 里，所以保留主进程监听，先停宿主进程任务
+        // （:script + Phase0 :native），再停主进程旧引擎任务兜底（toast 计数只反映后者）。
+        // 音量上键停止宿主任务不依赖"音量键控制运行"设置（默认关闭），否则 Phase1 下按键无效；
+        // 旧主进程引擎的停止仍尊重该设置（避免改变原行为）。
+        // 音量上键 = 停止全部脚本：宿主进程（:script + :native）和主进程引擎（Rhino/UI 脚本，
+        // 如 ScriptExecuteActivity）都要停，且不依赖「音量键控制运行」设置（默认关闭）。
+        HostScripts.stopAllHostScripts();
+        try {
+            int stopped = AutoJs.getInstance().getScriptEngineService().stopAll();
+            Log.d(LOG_TAG, "stopAll main scripts: " + stopped);
+        } catch (Throwable error) {
+            Log.w(LOG_TAG, "stop main scripts failed", error);
         }
     }
 

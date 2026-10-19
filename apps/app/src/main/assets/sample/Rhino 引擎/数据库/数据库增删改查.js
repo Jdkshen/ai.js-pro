@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 // 创建或打开一个数据库文件，在当前目录的data.db文件
 let db = sqlite.open("./data.db", {
     version: 1

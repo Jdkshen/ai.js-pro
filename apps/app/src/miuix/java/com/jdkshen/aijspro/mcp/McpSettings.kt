@@ -18,15 +18,21 @@ object McpSettings {
     private const val KEY_AUTO_START = "auto_start"
     const val USB_HOST_PORT = 18790
 
+    /** task-105：对齐 Pro：默认端口 8765，占用时 8765..8795 顺延。 */
+    const val DEFAULT_PORT = 8765
+    const val MIN_PORT = 8765
+    const val MAX_PORT = 8795
+
     private fun prefs(context: Context) = context.applicationContext
         .getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
-    fun port(context: Context): Int = prefs(context).getInt(KEY_PORT, 8788).coerceIn(1024, 65535)
+    fun port(context: Context): Int = prefs(context).getInt(KEY_PORT, DEFAULT_PORT).coerceIn(1024, 65535)
     fun setPort(context: Context, value: Int) {
         require(value in 1024..65535)
         prefs(context).edit().putInt(KEY_PORT, value).apply()
     }
-    fun lanEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_LAN, false)
+    /** task-105：对齐 Pro，局域网默认开启（仍保留 Bearer 令牌鉴权）。 */
+    fun lanEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_LAN, true)
     fun setLanEnabled(context: Context, value: Boolean) = prefs(context).edit().putBoolean(KEY_LAN, value).apply()
 
     /** 危险选项：开启后局域网请求不再校验 Bearer 令牌（仅建议纯私网临时使用）。 */

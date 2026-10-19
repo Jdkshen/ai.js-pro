@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- POC 调试源集覆盖：主入口启动 Flutter 玻璃界面。 -->
+    <bool name="flutter_main_entry">true</bool>
+</resources>

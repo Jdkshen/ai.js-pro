@@ -30,6 +30,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.jdkshen.aijspro.Pref
 import com.jdkshen.aijspro.mcp.McpService
 import com.jdkshen.aijspro.mcp.McpSettings
+import com.jdkshen.aijspro.mcp.McpStateStore
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
 import com.jdkshen.aijspro.theme.isAijsDarkTheme
@@ -74,7 +75,18 @@ class MiuixMcpActivity : ComponentActivity() {
         Toast.makeText(this, "已复制$label", Toast.LENGTH_SHORT).show()
     }
     private data class Status(val running: Boolean, val writes: Boolean, val execution: Boolean, val count: Int, val error: String?)
-    private fun status() = Status(McpService.running, McpService.allowWrite, McpService.allowExecution, McpService.requestCount, McpService.lastError)
+
+    /** task-105：运行状态以持久化 + 10s 心跳为准，避免进程被回收后 UI 仍显示「运行中」。 */
+    private fun status(): Status {
+        val state = McpStateStore.read(this)
+        val fresh = state.fresh()
+        val error = when {
+            fresh -> McpService.lastError
+            state.error.isNotEmpty() -> state.error
+            else -> McpService.lastError
+        }
+        return Status(fresh, McpService.allowWrite, McpService.allowExecution, McpService.requestCount, error)
+    }
 
     @Composable private fun McpPage() {
         var current by remember { mutableStateOf(status()) }
@@ -121,7 +133,7 @@ class MiuixMcpActivity : ComponentActivity() {
                 SmallTitle("连接")
                 Card(Modifier.fillMaxWidth()) {
                     SuperArrow(title = "本机地址", summary = McpService.localAddress(this@MiuixMcpActivity), onClick = { copy("本机地址", McpService.localAddress(this@MiuixMcpActivity)) })
-                    SuperArrow(title = "USB Host 转发", summary = "adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpSettings.port(this@MiuixMcpActivity)}", rightText = McpSettings.USB_HOST_PORT.toString(), onClick = { copy("ADB 命令", "adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpSettings.port(this@MiuixMcpActivity)}") })
+                    SuperArrow(title = "USB Host 转发", summary = "adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpService.activePort(this@MiuixMcpActivity)}", rightText = McpSettings.USB_HOST_PORT.toString(), onClick = { copy("ADB 命令", "adb forward tcp:${McpSettings.USB_HOST_PORT} tcp:${McpService.activePort(this@MiuixMcpActivity)}") })
                     if (McpSettings.lanEnabled(this@MiuixMcpActivity)) {
                         if (addresses.isEmpty()) BasicComponent(title = "局域网地址", summary = "未找到可用 IPv4 地址")
                         addresses.forEach { address -> SuperArrow(title = "局域网地址", summary = address, onClick = { copy("局域网地址", address) }) }
@@ -155,6 +167,8 @@ class MiuixMcpActivity : ComponentActivity() {
                 }
                 Text("操作目录：${operationDisplay()}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary, modifier = Modifier.padding(horizontal = 4.dp))
                 Text("仅连接可信客户端。局域网 HTTP 未加密，请勿公网暴露或分享令牌。授权开启后会被记住，重启服务自动恢复；可随时在此关闭。", fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceSecondary, modifier = Modifier.padding(horizontal = 4.dp))
+                Text("与 Pro 的差异：Pro 无令牌、默认对局域网开放；本 App 保留 Bearer 令牌鉴权，默认端口 8765（被占用时 8765–8795 顺延），运行状态按 10 秒心跳判定。", fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onSurfaceSecondary, modifier = Modifier.padding(horizontal = 4.dp).padding(bottom = 18.dp))
             }
         }

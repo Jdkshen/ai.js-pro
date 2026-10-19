@@ -8725,6 +8725,12 @@ const char kBootstrapScript[] = R"JS(
                     return undefined;
                 }
                 if (uiViewId <= 0) return undefined;
+                // task-149：先读 ViewAttributes（ui.title.text 必须返回字符串）。
+                // 不能先探 JavaBean：TextView.getText 会让 .text 返回函数。
+                var attrValue = __aiNativeUiGetAttr(uiViewId, id, prop);
+                if (attrValue !== '' && attrValue !== undefined && attrValue !== null) {
+                    return attrValue;
+                }
                 // 控件的 Java 成员（ui.wv.loadUrl(...) / getSettings() 这类）：探到方法或
                 // JavaBean 属性就返回可调用包装，参数/返回值走与 java.* 相同的编码。
                 var member = String(__aiNativeUiViewProbe(uiViewId, id, prop));
@@ -10552,10 +10558,42 @@ const char kBootstrapScript[] = R"JS(
                 var value = JSON.parse(json, decodeValue);
                 return method === 'rawQuery' ? cursorFrom(value) : value && value.rows ? resultFrom(value) : value;
             }
+            // task-151：按分号拆分多语句（跳过字符串/注释里的分号），exec('DROP; CREATE') 不再静默 no-op。
+            function splitSqlStatements(sql) {
+                var parts = [], start = 0, quote = null, lineComment = false, blockComment = false;
+                for (var i = 0; i < sql.length; i++) {
+                    var ch = sql.charAt(i), next = i + 1 < sql.length ? sql.charAt(i + 1) : '';
+                    if (lineComment) { if (ch === '\n' || ch === '\r') lineComment = false; continue; }
+                    if (blockComment) { if (ch === '*' && next === '/') { blockComment = false; i++; } continue; }
+                    if (quote) { if (ch === '\\') { i++; continue; } if (ch === quote) quote = null; continue; }
+                    if (ch === '-' && next === '-') { lineComment = true; i++; continue; }
+                    if (ch === '/' && next === '*') { blockComment = true; i++; continue; }
+                    if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; continue; }
+                    if (ch === ';') { var part = sql.substring(start, i).trim(); if (part.length > 0) parts.push(part); start = i + 1; }
+                }
+                var tail = sql.substring(start).trim();
+                if (tail.length > 0) parts.push(tail);
+                return parts;
+            }
+
             var db = {
                 handle: handle,
                 __callbackIds: callbackIds,
-                exec: function (sql, args) { return call('exec', [String(sql), sqlArgs(args)]); },
+                exec: function (sql, args) {
+                    var text = String(sql);
+                    var statements = splitSqlStatements(text);
+                    if (statements.length > 1) {
+                        if (args !== undefined && args !== null) {
+                            throw new Error('db.exec 的多语句不支持绑定参数，请拆成多次调用或改用 execSQL/select');
+                        }
+                        for (var i = 0; i < statements.length; i++) { call('execSQL', [statements[i]]); }
+                        return null;
+                    }
+                    if (statements.length === 0) {
+                        throw new Error('db.exec 的 SQL 为空');
+                    }
+                    return call('exec', [text, sqlArgs(args)]);
+                },
                 execSQL: function (sql, args) { call('execSQL', [String(sql), sqlArgs(args)]); },
                 executeSql: function (sql, args) { call('execSQL', [String(sql), sqlArgs(args)]); },
                 select: function (sql, args) { return call('select', [String(sql), sqlArgs(args)]); },
@@ -10611,7 +10649,12 @@ const char kBootstrapScript[] = R"JS(
                 call('begin', [nonExclusive === true || second === false]);
                 occur('begin', tx);
                 try { action(tx); if (!ended) { committed = true; tx.end(); } }
-                catch (error) { occur('error', error); committed = false; tx.end(); }
+                catch (error) {
+                    occur('error', error); committed = false; tx.end();
+                    occur('rollback', tx); occur('end', tx);
+                    if (typeof second === 'function') emitter.on('error', second);
+                    throw error; // task-149：事务异常必须传播给调用方，不能静默回滚
+                }
                 occur(committed ? 'commit' : 'rollback', tx); occur('end', tx);
                 if (typeof second === 'function') emitter.on('error', second);
                 if (typeof third === 'function') emitter.on('commit', third);

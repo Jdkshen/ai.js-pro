@@ -200,7 +200,9 @@ class McpWorkspaceStore private constructor(
 
     /** 在真实脚本目录下创建目录（需写入授权，由调用方校验）。 */
     @Synchronized fun makeDirectory(path: String): String {
-        val clean = path.replace('\\', '/').trim('/')
+        // Keep a leading slash so it is treated as an absolute path and must still be inside
+        // scriptRoot. Stripping both ends used to silently turn "/elsewhere" into "elsewhere".
+        val clean = path.replace('\\', '/').trimEnd('/')
         if (clean.isEmpty()) throw IllegalArgumentException("目录路径不能为空")
         val dir = resolveScript(clean)
         if (dir.isFile) throw IllegalArgumentException("同名文件已存在：${dir.relativeTo(scriptRoot).invariantSeparatorsPath}")
@@ -343,17 +345,11 @@ class McpWorkspaceStore private constructor(
         if (!id.matches(Regex("ws-[a-f0-9]{8}"))) throw IllegalArgumentException("工作区 ID 无效")
         return File(root, id).also { if (!File(it, META).isFile) throw IllegalArgumentException("工作区不存在") }
     }
-    private fun resolveScript(path: String): File {
-        if (path.indexOf('\u0000') >= 0) throw IllegalArgumentException("路径无效")
-        val file = File(scriptRoot, path).canonicalFile
-        if (!inside(scriptRoot, file)) throw IllegalArgumentException("路径超出脚本目录")
-        return file
-    }
+    private fun resolveScript(path: String): File =
+        McpPathRules.resolve(scriptRoot, path, "路径超出脚本目录")
     private fun resolveWorkspace(base: File, path: String): File {
-        if (path.isBlank() || path.indexOf('\u0000') >= 0) throw IllegalArgumentException("路径无效")
-        val file = File(base, path).canonicalFile
-        if (!inside(base.canonicalFile, file)) throw IllegalArgumentException("路径超出工作区")
-        return file
+        if (path.isBlank()) throw IllegalArgumentException("路径无效")
+        return McpPathRules.resolve(base, path, "路径超出工作区")
     }
     /** 工作区里的入口文件：优先 entryPath，旧工作区回退到 targetPath。 */
     private fun entryPathOf(meta: JSONObject): String =
@@ -416,8 +412,12 @@ class McpWorkspaceStore private constructor(
     private fun clientPath(meta: JSONObject, path: String): String {
         if (!meta.optBoolean("targetIsFile")) return path
         val entry = entryPathOf(meta)
-        val normalized = path.replace('\\', '/').trim('/')
-        if (normalized == entry || normalized == File(entry).name) return entry
+        val resolved = McpPathRules.resolve(scriptRoot, path, "路径超出脚本目录")
+        if (resolved.relativeTo(scriptRoot.canonicalFile).invariantSeparatorsPath == entry) return entry
+        // Legacy clients may send just the basename. Only a single plain segment qualifies;
+        // traversal/absolute inputs never fall back to matching the entry filename.
+        val normalizedInput = path.replace('\\', '/')
+        if (!normalizedInput.contains('/') && normalizedInput == File(entry).name) return entry
         throw IllegalArgumentException("单文件工作区（$entry）只能编辑该文件，收到：$path；子目录文件请用 workspace_open('$path') 单独打开")
     }
     private fun inside(base: File, child: File) = child == base || child.path.startsWith(base.path + File.separator)

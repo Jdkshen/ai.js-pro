@@ -1,7 +1,5 @@
-// @engine rhino
-// ⚠ 需要 Auto.js Pro 专属 API：项目模式（project.json 配置）（当前引擎暂未实现，直接运行会报错）
 "ui";
-
+"rhino";
 // 要使用Android Resources的特性，需要在project.json中加上androidResources属性
 // 之后将推出项目模块功能，可以轻松地使用项目模块创建
 

@@ -109,6 +109,46 @@ class McpWorkspaceStoreTest {
     }
 
     @Test
+    fun singleFileWorkspaceAcceptsBackslashAndRootAbsolutePaths() {
+        val root = temporaryFolder.newFolder("scripts")
+        File(root, "dir").mkdirs()
+        File(root, "dir/a.js").writeText("a")
+        val store = store(root)
+        val absolute = File(root, "dir/a.js").absolutePath
+        val workspace = store.open(absolute)
+        assertEquals("dir/a.js", workspace.targetPath)
+
+        assertEquals("a", String(store.read(workspace.id, "dir\\a.js")))
+        assertEquals("a", String(store.read(workspace.id, absolute)))
+        store.write(workspace.id, absolute, "updated".toByteArray())
+        store.applyAuthorized(workspace.id)
+        assertEquals("updated", File(root, "dir/a.js").readText())
+    }
+
+    @Test
+    fun directoryWorkspaceAndMkdirRejectEscapesButAcceptAbsoluteInsideRoot() {
+        val root = temporaryFolder.newFolder("scripts")
+        File(root, "project").mkdirs()
+        File(root, "project/a.js").writeText("a")
+        val outside = temporaryFolder.newFolder("outside")
+        File(outside, "secret.js").writeText("secret")
+        val store = store(root)
+        val workspace = store.open("project")
+
+        listOf("../outside/secret.js", outside.absolutePath, "a.js\u0000").forEach { path ->
+            val error = runCatching { store.read(workspace.id, path) }.exceptionOrNull()
+            assertTrue("$path -> $error", error is IllegalArgumentException)
+        }
+        listOf("../outside-dir", outside.absolutePath, "/outside-${System.nanoTime()}").forEach { path ->
+            val error = runCatching { store.makeDirectory(path) }.exceptionOrNull()
+            assertTrue("$path -> $error", error is IllegalArgumentException)
+        }
+        val absoluteDir = File(root, "absolute-dir").absolutePath
+        assertEquals("absolute-dir", store.makeDirectory(absoluteDir))
+        assertTrue(File(root, "absolute-dir").isDirectory)
+    }
+
+    @Test
     fun createIsIdempotentAndCreatesParentDirectories() {
         val root = temporaryFolder.newFolder("scripts")
         File(root, "existing.js").writeText("keep")

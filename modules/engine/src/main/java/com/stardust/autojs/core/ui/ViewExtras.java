@@ -22,7 +22,7 @@ public class ViewExtras {
     public static ViewExtras get(View view) {
         ViewExtras extras;
         Object tag = view.getTag(R.id.view_tag_view_extras);
-        Log.d(LOG_TAG, "view = " + view + ", tag = " + tag);
+        // 热路径（每次取 extras/绘制回调都会走到）：不能打日志，logcat 洪泛会把整机拖卡。
         if (tag instanceof ViewExtras) {
             extras = (ViewExtras) tag;
         } else {

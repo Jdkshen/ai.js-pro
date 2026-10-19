@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var storage = storages.create("Auto.js例子:简单数据");
 var a = 1234;
 var b = true;

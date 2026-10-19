@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
+import android.util.Log;
 
 import com.stardust.autojs.core.image.ImageWrapper;
 import com.stardust.autojs.runtime.ScriptRuntime;
@@ -25,8 +26,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>和 {@link Ocr}（ML Kit 后端）**接口完全同形**：{@code detect(image, max, detectRotation, region)}
  * 返回 {@link OCRResult}[]，因此脚本层可以按 {@code options.backend} 无缝切换。
  *
- * <p>引擎是 ncnn 版 **PP-OCRv6 tiny**（det + rec），模型随包在 {@code assets/models/ppocrv6/}，
- * 首次使用时复制到应用私有目录再交给原生侧。识别产物与 PaddleOCR 同为「行」粒度。
+ * <p>引擎是 ncnn 版 **PP-OCRv6 tiny**（det + rec）。模型（两个 {@code .param} + 字典 + 两个
+ * {@code .ncnn.bin}，共约 15.6 MB）**随包**在 {@code assets/models/ppocrv6/}：首次使用时直接从
+ * APK assets 释放到 {@code files/models/ppocrv6/}，**不联网、不下载**（用户要求彻底禁用下载）。
+ * 安装包没有内置模型（assets 不完整）时直接抛中文错误并提示更新安装包，绝不发起网络请求。
+ * 识别产物与 PaddleOCR 同为「行」粒度。
  *
  * <p>⚠️ 与 ML Kit 的差异：
  * <ul>
@@ -37,6 +41,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class PPOcr implements AutoCloseable, OcrSession {
 
+    private static final String TAG = "PPOcr";
+
     /** 随包模型所在 assets 子目录。 */
     private static final String ASSET_DIR = "models/ppocrv6";
     /** 必须成套存在的模型文件（字典文件名是原生侧写死的，不能改）。 */
@@ -46,6 +52,14 @@ public class PPOcr implements AutoCloseable, OcrSession {
             "PP_OCRv6_tiny_rec.ncnn.param",
             "PP_OCRv6_tiny_rec.ncnn.bin",
             "ppocr_keys_v6_tiny.txt",
+    };
+    /** 与 MODEL_FILES 一一对应的大小（assets 完整性校验 / 释放后校验用）。 */
+    private static final long[] MODEL_SIZES = {
+            19_306L,
+            4_929_604L,
+            13_853L,
+            10_562_152L,
+            74_949L,
     };
     private static final String DET_PARAM = "PP_OCRv6_tiny_det.ncnn.param";
     private static final String DET_MODEL = "PP_OCRv6_tiny_det.ncnn.bin";
@@ -78,6 +92,8 @@ public class PPOcr implements AutoCloseable, OcrSession {
     private static int sNativeUsers = 0;
     /** 当前原生引擎已加载的配置（变了就重新 init）。 */
     private static String sLoadedConfig = null;
+    /** 当前进程内已准备好的模型目录（assets 释放或下载兜底），避免每次 detect 重复复制/校验。 */
+    private static volatile String sModelsDirCache = null;
 
     public static int liveCount() {
         return sLiveCount.get();
@@ -216,11 +232,11 @@ public class PPOcr implements AutoCloseable, OcrSession {
         }
     }
 
-    /** 需要时把模型从 assets 复制到私有目录，并（配置变了就）让原生侧加载。 */
+    /** 需要时准备模型目录（随包 assets 释放，缺权重才下载兜底），并（配置变了就）让原生侧加载。 */
     private void ensureEngineLoaded() {
         String dir = mModelsDir;
         if (dir == null) {
-            dir = materializeBundledModels();
+            dir = preparedModelsDir();
         }
         String config = dir + "|" + mTargetSize + "|" + mCpuPowerMode + "|" + (mUseFp16 ? 1 : 0)
                 + "|" + mRecMaxWidth;
@@ -248,33 +264,117 @@ public class PPOcr implements AutoCloseable, OcrSession {
         sLoadedConfig = config;
     }
 
-    /** 把随包模型复制到 {@code filesDir/models/ppocrv6/}（大小一致就跳过）。 */
-    private String materializeBundledModels() {
+    /**
+     * 准备 {@code filesDir/models/ppocrv6/} 并返回目录。
+     *
+     * <p>用户决定（2026-10-18）：**权重随包、彻底禁用下载**。assets 里 5 个文件齐全时直接从
+     * APK assets 释放到私有目录——不联网、不发任何网络请求；assets 不完整（安装包被裁剪 /
+     * 模板包没带权重）时**直接抛中文错误**提示更新安装包，不会尝试下载。
+     */
+    private static String ensureModels(Context context) {
+        if (bundledAssetsComplete(context)) {
+            String dir = materializeBundledModels(context);
+            Log.i(TAG, "PP-OCR models source=assets dir=" + dir);
+            return dir;
+        }
+        StringBuilder missing = new StringBuilder();
+        for (String name : MODEL_FILES) {
+            try (InputStream in = context.getAssets().open(ASSET_DIR + "/" + name)) {
+                if (in.available() <= 0) {
+                    missing.append(name).append(' ');
+                }
+            } catch (Exception error) {
+                missing.append(name).append(' ');
+            }
+        }
+        String detail = missing.length() == 0 ? "" : "（缺少：" + missing.toString().trim() + "）";
+        Log.e(TAG, "PP-OCR bundled assets incomplete, no built-in models" + detail);
+        throw new IllegalStateException("此版本未内置 OCR 模型，请更新安装包后重试" + detail);
+    }
+
+    /** 进程内复用模型目录：第一次从 assets 释放后，后续 detect 只做低成本存在性检查。 */
+    private static String preparedModelsDir() {
+        String cached = sModelsDirCache;
+        if (cached != null && modelFilesPresent(cached)) {
+            return cached;
+        }
         Context context = ScriptRuntime.getApplicationContext();
         if (context == null) {
-            throw new IllegalStateException("PP-OCR 无法取得 Context，无法释放随包模型");
+            throw new IllegalStateException("PP-OCR 无法取得 Context，无法准备模型");
         }
+        String dir = ensureModels(context);
+        sModelsDirCache = dir;
+        return dir;
+    }
+
+    private static boolean modelFilesPresent(String dir) {
+        File base = new File(dir);
+        for (String name : MODEL_FILES) {
+            File file = new File(base, name);
+            if (!file.isFile() || file.length() <= 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** assets 里 5 个模型文件是否齐全且大小正确（只读 APK 内资源，不联网）。 */
+    private static boolean bundledAssetsComplete(Context context) {
+        AssetManager assets = context.getAssets();
+        byte[] buffer = new byte[16384];
+        for (int i = 0; i < MODEL_FILES.length; i++) {
+            try (InputStream in = assets.open(ASSET_DIR + "/" + MODEL_FILES[i])) {
+                int available = in.available();
+                if (available > 0) {
+                    if (available != (int) MODEL_SIZES[i]) {
+                        return false;
+                    }
+                    continue;
+                }
+                // 少数实现下压缩 assets 的 available() 不可靠：读一遍计数（只在首次准备时发生）。
+                long total = 0L;
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    total += read;
+                }
+                if (total != MODEL_SIZES[i]) {
+                    return false;
+                }
+            } catch (Exception error) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 把随包 assets 的 5 个模型文件释放到 {@code filesDir/models/ppocrv6/}（大小一致就跳过）。 */
+    private static String materializeBundledModels(Context context) {
         File dir = new File(context.getFilesDir(), ASSET_DIR);
         if (!dir.isDirectory() && !dir.mkdirs()) {
             throw new IllegalStateException("无法创建模型目录：" + dir);
         }
         AssetManager assets = context.getAssets();
-        byte[] buffer = new byte[16384];
-        for (String name : MODEL_FILES) {
+        byte[] buffer = new byte[65536];
+        for (int i = 0; i < MODEL_FILES.length; i++) {
+            String name = MODEL_FILES[i];
             File out = new File(dir, name);
-            try (InputStream in = assets.open(ASSET_DIR + "/" + name)) {
-                int expected = in.available();
-                if (out.isFile() && out.length() > 0 && expected > 0 && out.length() == expected) {
-                    continue;
+            if (out.isFile() && out.length() == MODEL_SIZES[i]) {
+                continue;
+            }
+            try (InputStream in = assets.open(ASSET_DIR + "/" + name);
+                 FileOutputStream fos = new FileOutputStream(out)) {
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    fos.write(buffer, 0, read);
                 }
-                try (FileOutputStream fos = new FileOutputStream(out)) {
-                    int n;
-                    while ((n = in.read(buffer)) > 0) {
-                        fos.write(buffer, 0, n);
-                    }
-                }
-            } catch (Exception e) {
-                throw new IllegalStateException("释放随包模型失败（" + name + "）：" + e.getMessage(), e);
+            } catch (Exception error) {
+                String message = error.getMessage();
+                throw new IllegalStateException("释放随包模型失败（" + name + "）："
+                        + (message == null || message.isEmpty() ? error.getClass().getSimpleName() : message),
+                        error);
+            }
+            if (out.length() != MODEL_SIZES[i]) {
+                throw new IllegalStateException("释放随包模型失败（" + name + "）：大小不符");
             }
         }
         return dir.getAbsolutePath();

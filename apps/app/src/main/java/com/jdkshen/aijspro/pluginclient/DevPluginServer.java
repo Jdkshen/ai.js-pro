@@ -29,11 +29,17 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.BindException;
+import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
+import java.net.NoRouteToHostException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -78,6 +84,12 @@ import io.reactivex.schedulers.Schedulers;
  * answered with real data; the extension gates those on the advertised
  * {@code app_version_code} (>= 80100 / 80800) which this app intentionally never
  * reaches, and a command that has no handler still receives an empty response.
+ *
+ * <p>States mirror Pro's {@code DebugService}: {@link ServerState} for the 9317
+ * listener and {@link ClientState} for the phone → computer link. A failed client
+ * dial is retried after 1 s, at most 3 times (initial attempt + 3 retries); the
+ * failure reason is then kept in {@link #getClientError()} for the UI. All client
+ * lifecycle logs are prefixed with {@code C-CONN:}.
  */
 public final class DevPluginServer {
 
@@ -98,8 +110,18 @@ public final class DevPluginServer {
     private static final String KEY_COMPUTER_HOST = "computer_host";
     // The installed Pro extension's LegacyDeviceClient accepts device-initiated TCP here.
     private static final int COMPUTER_PORT = 8327;
+    /** 回连失败后按 Pro 的节奏重试：间隔 1 秒，最多 3 次（加首次共 4 次尝试）。 */
+    private static final int CLIENT_CONNECT_TIMEOUT_MS = 3000;
+    private static final int CLIENT_RETRY_DELAY_MS = 1000;
+    private static final int CLIENT_MAX_RETRIES = 3;
     /** How many archive frames may wait for their announcing json (the extension sends bytes first). */
     private static final int MAX_BUFFERED_ARCHIVES = 4;
+
+    /** 监听端状态，命名与 Pro 的 DebugService.ServerState 一致。 */
+    public enum ServerState { DISCONNECTED, CONNECTING, LISTENING }
+
+    /** 电脑连接（手机 → 电脑）状态，命名与 Pro 的 DebugService.ClientState 一致。 */
+    public enum ClientState { DISCONNECTED, CONNECTING, CONNECTED }
 
     /** 文件类命令（list_files / read_file / write_file）的读写线程：别堵主线程与协议读线程。 */
     private static final ExecutorService FILE_WORKER = Executors.newSingleThreadExecutor(runnable -> {
@@ -122,13 +144,64 @@ public final class DevPluginServer {
     private DevPluginResponseHandler mResponseHandler;
     private ScheduledExecutorService mReconnectWorker;
     private Socket mConnectingSocket;
-    private volatile long mNextReconnect;
-    private int mReconnectFailures;
+    /** 下一次回连尝试的时间（SystemClock.elapsedRealtime），受 mLock 保护。 */
+    private long mNextClientRetry;
+    /** 当前一轮回连已经用掉的重试次数，受 mLock 保护。 */
+    private int mClientRetries;
+    private volatile ServerState mServerState = ServerState.DISCONNECTED;
+    private volatile ClientState mClientState = ClientState.DISCONNECTED;
+    private volatile String mServerError = "";
+    private volatile String mClientError = "";
+    /** 电脑端 VS Code 插件最近一次 hello 里报告的 client_version。 */
+    private volatile int mClientVersion;
     private ConnectivityManager.NetworkCallback mNetworkCallback;
 
     public String getReconnectHost() {
         return GlobalAppContext.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(KEY_COMPUTER_HOST, "");
+    }
+
+    public ServerState getServerState() {
+        return mServerState;
+    }
+
+    public ClientState getClientState() {
+        return mClientState;
+    }
+
+    /** Provider 的 {@code state} 列用 ordinal（0/1/2），与 Pro 的 ContentProvider 一致。 */
+    public int getServerStateOrdinal() {
+        return mServerState.ordinal();
+    }
+
+    public int getClientStateOrdinal() {
+        return mClientState.ordinal();
+    }
+
+    /** 监听端启动失败的原因（如端口被占用）；空串表示没有错误。 */
+    public String getServerError() {
+        return mServerError;
+    }
+
+    /** 最近一次回连电脑失败的原因；空串表示没有错误。 */
+    public String getClientError() {
+        return mClientError;
+    }
+
+    /** 启动前清掉上一次的监听错误，避免 UI 读到已过期的失败原因。 */
+    public void clearServerError() {
+        mServerError = "";
+    }
+
+    /** 最近一次失败原因（优先客户端），供 UI 一行提示使用。 */
+    public String getLastError() {
+        if (!mClientError.isEmpty()) return mClientError;
+        return mServerError;
+    }
+
+    /** 电脑端 VS Code 插件报告的 client_version；0 表示还没握手。 */
+    public int getClientVersion() {
+        return mClientVersion;
     }
 
     private DevPluginServer() {
@@ -154,18 +227,26 @@ public final class DevPluginServer {
     /** Binds the port synchronously so callers can report "port in use" right away. */
     public void start() throws IOException {
         synchronized (mLock) {
-            if (isRunning()) {
+            if (mServerState != ServerState.DISCONNECTED) {
                 return;
             }
+            mServerState = ServerState.CONNECTING;
+            mServerError = "";
+            mClientError = "";
+            mClientVersion = 0;
             ServerSocket serverSocket = new ServerSocket();
             try {
                 serverSocket.setReuseAddress(true);
                 serverSocket.bind(new InetSocketAddress(PORT), 8);
-            } catch (IOException e) {
-                serverSocket.close();
-                throw e;
+            } catch (IOException error) {
+                try { serverSocket.close(); } catch (IOException ignored) { }
+                mServerState = ServerState.DISCONNECTED;
+                mServerError = describeBindError(error);
+                Log.w(LOG_TAG, mServerError, error);
+                throw new IOException(mServerError, error);
             }
             mServerSocket = serverSocket;
+            mServerState = ServerState.LISTENING;
             if (mResponseHandler == null) {
                 mResponseHandler = new DevPluginResponseHandler(
                         new File(GlobalAppContext.get().getCacheDir(), "remote_project"));
@@ -173,14 +254,25 @@ public final class DevPluginServer {
             Thread acceptThread = new Thread(() -> acceptLoop(serverSocket), "dev-plugin-server");
             acceptThread.setDaemon(true);
             acceptThread.start();
-            mReconnectFailures = 0;
-            mNextReconnect = 0;
+            mClientRetries = 0;
+            mNextClientRetry = 0;
+            if (!getReconnectHost().isEmpty()) {
+                mClientState = ClientState.CONNECTING;
+            }
             mReconnectWorker = Executors.newSingleThreadScheduledExecutor(runnable -> {
                 Thread thread = new Thread(runnable, "dev-plugin-reconnect");
                 thread.setDaemon(true);
                 return thread;
             });
-            mReconnectWorker.scheduleWithFixedDelay(() -> reconnect(serverSocket), 2, 3, TimeUnit.SECONDS);
+            // 每 500 ms 检查一次；真正的重试间隔由 mNextClientRetry 控制（1 s × 3）。
+            mReconnectWorker.scheduleWithFixedDelay(() -> {
+                try {
+                    clientTick();
+                } catch (Throwable error) {
+                    // 调度线程一旦抛出异常就不会再执行，必须兜住。
+                    Log.w(LOG_TAG, "C-CONN: 回连调度异常", error);
+                }
+            }, 0, 500, TimeUnit.MILLISECONDS);
             watchNetwork(serverSocket);
             Log.i(LOG_TAG, "dev plugin server listening on port " + PORT);
         }
@@ -188,8 +280,10 @@ public final class DevPluginServer {
 
     public void stop() {
         synchronized (mLock) {
+            boolean wasListening = mServerState == ServerState.LISTENING;
             ServerSocket serverSocket = mServerSocket;
             mServerSocket = null;
+            mServerState = ServerState.DISCONNECTED;
             if (mReconnectWorker != null) {
                 mReconnectWorker.shutdownNow();
                 mReconnectWorker = null;
@@ -206,6 +300,15 @@ public final class DevPluginServer {
             }
             for (Session session : mSessions) session.close();
             mSessions.clear();
+            mClientState = ClientState.DISCONNECTED;
+            mClientRetries = CLIENT_MAX_RETRIES + 1;
+            mNextClientRetry = 0;
+            // 启动失败时 stop() 会被服务 onDestroy 调用；保留错误供 UI 读取。
+            mClientVersion = 0;
+            if (wasListening) {
+                mServerError = "";
+                mClientError = "";
+            }
             if (serverSocket != null) Log.i(LOG_TAG, "dev plugin server stopped");
         }
     }
@@ -215,6 +318,10 @@ public final class DevPluginServer {
         try { socket.close(); } catch (IOException ignored) { }
     }
 
+    private boolean isRunningLocked() {
+        return mServerSocket != null && !mServerSocket.isClosed();
+    }
+
     private boolean hasSessionFor(String host) {
         for (Session session : mSessions) {
             if (!session.mClosed && host.equals(session.mSocket.getInetAddress().getHostAddress())) return true;
@@ -222,67 +329,138 @@ public final class DevPluginServer {
         return false;
     }
 
-    private void reconnect(ServerSocket owner) {
-        Socket socket = null;
-        try {
-            String host = getReconnectHost();
-            synchronized (mLock) {
-                if (mServerSocket != owner || owner.isClosed() || host.isEmpty()
-                        || hasSessionFor(host) || mConnectingSocket != null
-                        || SystemClock.elapsedRealtime() < mNextReconnect) return;
-                // Quiet bounded retries while the computer/extension is offline.
-                mNextReconnect = SystemClock.elapsedRealtime() + Math.min(30000L, 2000L << Math.min(mReconnectFailures++, 4));
-                socket = new Socket();
-                mConnectingSocket = socket;
+    /**
+     * 「手机 → 电脑」回连：失败后等待 1 秒重试，一轮最多 3 次；仍失败则停止自动回连
+     * 并把原因留在 {@link #getClientError()} 里。日志统一带 {@code C-CONN:} 前缀。
+     */
+    private void clientTick() {
+        final String host;
+        final Socket socket;
+        final int attempt;
+        synchronized (mLock) {
+            if (!isRunningLocked() || mConnectingSocket != null) return;
+            if (getClientCount() > 0) {
+                mClientState = ClientState.CONNECTED;
+                return;
             }
-            socket.connect(new InetSocketAddress(host, COMPUTER_PORT), 3000);
+            host = getReconnectHost();
+            if (host.isEmpty()) {
+                mClientState = ClientState.DISCONNECTED;
+                return;
+            }
+            // 电脑已经主动连进来了（或正在等 hello），不要同时再拨一条。
+            if (hasSessionFor(host)) return;
+            if (mClientRetries > CLIENT_MAX_RETRIES) return;
+            if (SystemClock.elapsedRealtime() < mNextClientRetry) return;
+            mClientState = ClientState.CONNECTING;
+            attempt = mClientRetries + 1;
+            socket = new Socket();
+            mConnectingSocket = socket;
+        }
+        try {
+            Log.i(LOG_TAG, "C-CONN: 正在连接电脑 " + host + ":" + COMPUTER_PORT
+                    + "（第 " + attempt + "/" + (CLIENT_MAX_RETRIES + 1) + " 次尝试）");
+            socket.connect(new InetSocketAddress(host, COMPUTER_PORT), CLIENT_CONNECT_TIMEOUT_MS);
             synchronized (mLock) {
-                if (mServerSocket != owner || hasSessionFor(host)) {
+                if (!isRunningLocked() || mConnectingSocket != socket) {
                     closeSocket(socket);
                     return;
                 }
-                Session session = new Session(socket);
+                mConnectingSocket = null;
+                if (hasSessionFor(host) || getReconnectHost().isEmpty()) {
+                    closeSocket(socket);
+                    return;
+                }
+                Session session = new Session(socket, true);
                 mSessions.add(session);
                 session.start();
-                Log.i(LOG_TAG, "reconnecting to computer " + host + ":" + COMPUTER_PORT);
+                mClientState = ClientState.CONNECTING;
+                Log.i(LOG_TAG, "C-CONN: 已建立到电脑 " + host + ":" + COMPUTER_PORT
+                        + " 的 TCP 连接，等待电脑端调试插件 hello");
             }
         } catch (IOException | RuntimeException error) {
-            closeSocket(socket);
-            Log.d(LOG_TAG, "computer not available: " + error.getMessage());
-        } finally {
             synchronized (mLock) {
                 if (mConnectingSocket == socket) mConnectingSocket = null;
-            }
-        }
-    }
-
-    private ConnectivityManager connectivity() {
-        return (ConnectivityManager) GlobalAppContext.get().getSystemService(Context.CONNECTIVITY_SERVICE);
-    }
-
-    private void watchNetwork(ServerSocket owner) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
-        mNetworkCallback = new ConnectivityManager.NetworkCallback() {
-            @Override public void onAvailable(Network network) { mNextReconnect = 0; }
-            @Override public void onLost(Network network) {
-                synchronized (mLock) {
-                    if (mServerSocket != owner) return;
-                    // A dead Wi-Fi socket may otherwise stay "connected" for minutes.
-                    for (Session session : mSessions) {
-                        if (!session.mSocket.getInetAddress().isLoopbackAddress()) session.close();
-                    }
-                    closeSocket(mConnectingSocket);
-                    mNextReconnect = 0;
+                closeSocket(socket);
+                if (!isRunningLocked()) return;
+                if (getReconnectHost().isEmpty()) {
+                    mClientState = ClientState.DISCONNECTED;
+                    return;
                 }
+                onClientAttemptFailed(host, error);
             }
-        };
-        try { connectivity().registerDefaultNetworkCallback(mNetworkCallback); }
-        catch (RuntimeException error) {
-            mNetworkCallback = null;
-            Log.w(LOG_TAG, "network change monitoring unavailable", error);
         }
     }
 
+    /** 调用方需持有 mLock。 */
+    private void onClientAttemptFailed(String host, Throwable error) {
+        String message = describeConnectError(host, error);
+        mClientError = message;
+        if (mClientRetries < CLIENT_MAX_RETRIES) {
+            mClientRetries++;
+            mNextClientRetry = SystemClock.elapsedRealtime() + CLIENT_RETRY_DELAY_MS;
+            mClientState = ClientState.CONNECTING;
+            Log.w(LOG_TAG, "C-CONN: " + message + "（第 " + mClientRetries + "/"
+                    + CLIENT_MAX_RETRIES + " 次重试，1 秒后重试）");
+        } else {
+            mClientState = ClientState.DISCONNECTED;
+            mNextClientRetry = 0;
+            Log.w(LOG_TAG, "C-CONN: " + message + "（已重试 " + CLIENT_MAX_RETRIES
+                    + " 次，暂停自动回连；修改地址或网络变化后会重新开始）");
+        }
+    }
+
+    /** 一条会话结束（任方向）后同步电脑连接状态，并按需安排回连。 */
+    private void onSessionClosed(Session session) {
+        synchronized (mLock) {
+            if (mServerSocket == null) {
+                if (getClientCount() == 0) mClientState = ClientState.DISCONNECTED;
+                return;
+            }
+            if (getClientCount() > 0) {
+                mClientState = ClientState.CONNECTED;
+                return;
+            }
+            String host = getReconnectHost();
+            if (host.isEmpty()) {
+                mClientState = ClientState.DISCONNECTED;
+                return;
+            }
+            if (session.mOutgoing) {
+                if (session.isAttached()) {
+                    // 已握手后掉线：重新开始一轮 1 s × 3 回连。
+                    mClientRetries = 0;
+                    mClientError = "";
+                    mClientState = ClientState.CONNECTING;
+                    mNextClientRetry = SystemClock.elapsedRealtime() + CLIENT_RETRY_DELAY_MS;
+                    Log.i(LOG_TAG, "C-CONN: 与电脑的连接已断开，1 秒后重连");
+                } else {
+                    onClientAttemptFailed(host, new IOException("电脑端接受了连接但没有完成 hello 握手"));
+                }
+            } else {
+                // 电脑主动连入后断开：保留上次错误，按相同节奏回连。
+                mClientRetries = 0;
+                mClientState = ClientState.CONNECTING;
+                mNextClientRetry = SystemClock.elapsedRealtime() + CLIENT_RETRY_DELAY_MS;
+                Log.i(LOG_TAG, "C-CONN: 电脑主动连接已断开，1 秒后回连");
+            }
+        }
+    }
+
+    /** 电脑端 hello 完成：记录版本、清掉错误、进入 CONNECTED。 */
+    private void onSessionAttached(Session session) {
+        synchronized (mLock) {
+            mClientVersion = (int) session.mClientVersion;
+            mClientState = ClientState.CONNECTED;
+            mClientError = "";
+            mClientRetries = 0;
+            mNextClientRetry = 0;
+        }
+        Log.i(LOG_TAG, "C-CONN: 电脑端握手完成（client_version=" + session.mClientVersion
+                + "，方向=" + (session.mOutgoing ? "手机→电脑" : "电脑→手机") + "）");
+    }
+
+    /** 记住/更新电脑地址，供之后自动回连；USB 回环地址不记。 */
     private void rememberComputer(Socket socket) {
         InetAddress address = socket.getInetAddress();
         // USB forwards report loopback: never remember it as a LAN computer.
@@ -293,7 +471,126 @@ public final class DevPluginServer {
                     .putString(KEY_COMPUTER_HOST, host).apply();
             Log.i(LOG_TAG, "remembered computer " + host);
         }
-        synchronized (mLock) { mReconnectFailures = 0; }
+    }
+
+    /** 主动连接电脑：写地址并清零重试计数，下一次 tick 立即尝试。 */
+    public void connectClient(String host) {
+        String target = host == null ? "" : host.trim();
+        synchronized (mLock) {
+            GlobalAppContext.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                    .putString(KEY_COMPUTER_HOST, target).apply();
+            mClientRetries = 0;
+            mNextClientRetry = 0;
+            mClientError = "";
+            mClientVersion = 0;
+            mClientState = target.isEmpty() ? ClientState.DISCONNECTED : ClientState.CONNECTING;
+        }
+        if (!target.isEmpty()) {
+            Log.i(LOG_TAG, "C-CONN: 准备主动连接电脑 " + target + ":" + COMPUTER_PORT);
+        }
+    }
+
+    /** 关闭「手机 → 电脑」模式：清掉记住的地址、取消重试并真正断开已建立的出站会话。 */
+    public void disconnectClient() {
+        synchronized (mLock) {
+            GlobalAppContext.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                    .remove(KEY_COMPUTER_HOST).apply();
+            mClientRetries = CLIENT_MAX_RETRIES + 1;
+            mNextClientRetry = 0;
+            mClientError = "";
+            mClientVersion = 0;
+            closeSocket(mConnectingSocket);
+            mConnectingSocket = null;
+            for (Session session : mSessions) {
+                if (session.mOutgoing) session.close();
+            }
+            if (getClientCount() == 0) mClientState = ClientState.DISCONNECTED;
+        }
+        Log.i(LOG_TAG, "C-CONN: 客户端模式已关闭，断开与电脑的连接");
+    }
+
+    private static String describeBindError(IOException error) {
+        String raw = error.getMessage() == null ? error.toString() : error.getMessage();
+        if (error instanceof BindException
+                || raw.contains("Address already in use")
+                || raw.contains("EADDRINUSE")) {
+            return "端口 " + PORT + " 已被占用：请关闭占用该端口的应用（或停止另一个调试服务器）后重试开启";
+        }
+        return "无法在端口 " + PORT + " 启动调试服务：" + raw + "。请检查网络权限后重试";
+    }
+
+    private static String describeConnectError(String host, Throwable error) {
+        String target = host + ":" + COMPUTER_PORT;
+        if (error instanceof SocketTimeoutException) {
+            return "连接电脑 " + target + " 超时：请确认电脑已启动 VS Code 调试插件、与手机在同一局域网，且电脑防火墙放行 "
+                    + COMPUTER_PORT + " 端口";
+        }
+        if (error instanceof UnknownHostException) {
+            return "找不到电脑地址 " + host + "：请检查 IP 是否填写正确";
+        }
+        if (error instanceof NoRouteToHostException) {
+            return "无法到达电脑 " + target + "：请确认手机与电脑在同一 WiFi，且电脑防火墙放行 "
+                    + COMPUTER_PORT + " 端口";
+        }
+        if (error instanceof ConnectException) {
+            String raw = error.getMessage() == null ? "" : error.getMessage();
+            if (raw.contains("refused") || raw.contains("拒绝")) {
+                return "电脑 " + target + " 拒绝连接：请确认电脑已启动 VS Code 调试插件并监听 "
+                        + COMPUTER_PORT + " 端口";
+            }
+            return "无法连接电脑 " + target + "：请确认电脑已启动调试插件、与手机在同一局域网";
+        }
+        if (error instanceof SocketException) {
+            String raw = error.getMessage() == null ? error.toString() : error.getMessage();
+            return "连接电脑 " + target + " 失败：" + raw + "。请确认手机网络已连接后重试";
+        }
+        String raw = error.getMessage() == null ? error.toString() : error.getMessage();
+        return "连接电脑 " + target + " 失败：" + raw + "。请确认电脑已启动 VS Code 调试插件、与手机同一局域网，且防火墙放行 "
+                + COMPUTER_PORT + " 端口";
+    }
+
+    private ConnectivityManager connectivity() {
+        return (ConnectivityManager) GlobalAppContext.get().getSystemService(Context.CONNECTIVITY_SERVICE);
+    }
+
+    private void watchNetwork(ServerSocket owner) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+        mNetworkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) {
+                synchronized (mLock) {
+                    if (mServerSocket != owner || getReconnectHost().isEmpty()) return;
+                    // 网络恢复：立刻重新开始一轮 1 s × 3 回连。
+                    mClientRetries = 0;
+                    mNextClientRetry = 0;
+                    if (getClientCount() == 0) {
+                        mClientState = ClientState.CONNECTING;
+                    }
+                }
+                Log.i(LOG_TAG, "C-CONN: 网络可用，准备回连电脑");
+            }
+            @Override public void onLost(Network network) {
+                synchronized (mLock) {
+                    if (mServerSocket != owner) return;
+                    // A dead Wi-Fi socket may otherwise stay "connected" for minutes.
+                    for (Session session : mSessions) {
+                        if (!session.mSocket.getInetAddress().isLoopbackAddress()) session.close();
+                    }
+                    closeSocket(mConnectingSocket);
+                    mConnectingSocket = null;
+                    mClientRetries = 0;
+                    mNextClientRetry = 0;
+                    if (!getReconnectHost().isEmpty()) {
+                        mClientState = ClientState.CONNECTING;
+                        mClientError = "网络已断开：请检查手机 WiFi/热点，恢复后会自动回连电脑";
+                    }
+                }
+            }
+        };
+        try { connectivity().registerDefaultNetworkCallback(mNetworkCallback); }
+        catch (RuntimeException error) {
+            mNetworkCallback = null;
+            Log.w(LOG_TAG, "network change monitoring unavailable", error);
+        }
     }
 
     /** Mirrors this app's script console to every attached VS Code client ("log" frames). */
@@ -340,7 +637,7 @@ public final class DevPluginServer {
             try {
                 synchronized (mLock) {
                     if (mServerSocket != serverSocket) { closeSocket(socket); return; }
-                    Session session = new Session(socket);
+                    Session session = new Session(socket, false);
                     mSessions.add(session);
                     session.start();
                 }
@@ -393,12 +690,15 @@ public final class DevPluginServer {
         /** Frames are produced on the main thread but written off it (StrictMode forbids writes there). */
         private final ExecutorService mWriter;
 
+        /** true = 这条连接是手机主动拨电脑（客户端模式），false = 电脑拨手机。 */
+        private final boolean mOutgoing;
         private volatile boolean mClosed;
         private volatile boolean mAttached;
         private long mClientVersion;
 
-        Session(Socket socket) throws IOException {
+        Session(Socket socket, boolean outgoing) throws IOException {
             mSocket = socket;
+            mOutgoing = outgoing;
             socket.setTcpNoDelay(true);
             socket.setKeepAlive(true);
             socket.setSoTimeout(10000); // An unavailable or non-Pro peer must not block retries forever.
@@ -433,6 +733,7 @@ public final class DevPluginServer {
             } catch (IOException ignored) {
             }
             mSessions.remove(this);
+            onSessionClosed(this);
             Log.i(LOG_TAG, "client disconnected: " + mSocket.getRemoteSocketAddress());
         }
 
@@ -522,6 +823,7 @@ public final class DevPluginServer {
                     catch (IOException error) { close(); break; }
                     mAttached = true;
                     rememberComputer(mSocket);
+                    onSessionAttached(this);
                     Log.i(LOG_TAG, "client hello: version=" + mClientVersion);
                     break;
                 case "command": {

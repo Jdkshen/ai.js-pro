@@ -60,7 +60,7 @@ matcher 创建后可回收模板源图；场景图片仍由调用者回收。clo
 
 ## 应用入口
 
-- QuickJS：示例 → QuickJS 新引擎 → 图色处理 → SIFT特征匹配 → main.js。
+- QuickJS：示例 → QuickJS 引擎 → 图色处理 → SIFT特征匹配 → main.js。
 - Rhino：示例 → Rhino 引擎 → 图片与图色处理 → 找图 → SIFT特征匹配 → main.js。
 - 两个目录都有缓存模板重复匹配.js。原 Rhino「特征匹配(全分辨率找图).js」同样调用新 API，scale: 1，结果在找图目录 output/feature_match.jpg。
 

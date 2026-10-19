@@ -467,6 +467,37 @@ public class ProjectResources {
         return file == null ? null : file.getAbsolutePath();
     }
 
+    /**
+     * 合成 id → {@code "type/name"}（诊断/反查用）；未知 id 返回 {@code null}。
+     *
+     * <p>Node UI（:node24 宿主桥）把 {@code ui.R.layout.activity_main} 的 id 交给引擎后，需要靠它
+     * 反查出对应的 res 文件；Rhino 路径走 {@code ui.layoutFile("main")} 按名字查，不需要这一步。
+     */
+    public String nameOfId(int id) {
+        return mKeys.get(id);
+    }
+
+    /** id → 对应资源文件（layout/menu/drawable/anim/…）；不是文件型资源或未知 id 时返回 {@code null}。 */
+    public File fileById(int id) {
+        String key = mKeys.get(id);
+        return key == null ? null : mFiles.get(key);
+    }
+
+    /** 布局 id → 绝对路径（Node UI {@code ui.Activity.layoutId} → inflate 用）；不是布局时返回 {@code null}。 */
+    public String layoutFileById(int id) {
+        File file = fileById(id);
+        return file == null ? null : file.getAbsolutePath();
+    }
+
+    /** 布局 id → 资源名（{@code @layout/activity_main} 的 {@code activity_main}）；不是布局时返回 {@code null}。 */
+    public String layoutNameOfId(int id) {
+        String key = nameOfId(id);
+        if (key == null || !key.startsWith(TYPE_LAYOUT + "/")) {
+            return null;
+        }
+        return key.substring(TYPE_LAYOUT.length() + 1);
+    }
+
     private static String typeOfKey(String key) {
         int i = key.indexOf('/');
         return i < 0 ? key : key.substring(0, i);

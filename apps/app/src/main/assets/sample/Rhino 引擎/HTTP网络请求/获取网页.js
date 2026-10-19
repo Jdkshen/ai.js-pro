@@ -1,5 +1,5 @@
-// @engine rhino
-var url = "www.baidu.com";
+"rhino";
+var url = "https://www.baidu.com";
 var res = http.get(url);
 if (res.statusCode == 200) {
     toast("请求成功");

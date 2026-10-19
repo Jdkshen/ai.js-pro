@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 /**
  * By Da Zhang
  * 本脚本仅为娱乐，没有任何破坏性质

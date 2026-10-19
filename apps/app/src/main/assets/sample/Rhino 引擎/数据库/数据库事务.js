@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 // 需要先运行过"数据库增删改查"脚本再运行此脚本
 let db = sqlite.open("./data.db");
 

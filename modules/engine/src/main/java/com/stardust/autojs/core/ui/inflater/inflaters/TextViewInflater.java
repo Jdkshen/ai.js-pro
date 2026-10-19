@@ -406,6 +406,11 @@ public class TextViewInflater<V extends TextView> extends BaseViewInflater<V> {
 
 
     private void setDrawables(V view) {
+        if (mDrawableLeft == null && mDrawableTop == null && mDrawableRight == null && mDrawableBottom == null) {
+            // No explicit compound drawable was requested. Do not call setCompoundDrawables:
+            // it clears relative start/end drawables, including a MaterialButton icon set via setIcon().
+            return;
+        }
         Drawable[] drawables = view.getCompoundDrawables();
         view.setCompoundDrawables(
                 mDrawableLeft != null ? mDrawableLeft : drawables[0],

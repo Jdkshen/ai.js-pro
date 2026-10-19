@@ -1,9 +1,0 @@
-{
-  "name": "SIFT特征匹配",
-  "main": "main.js",
-  "packageName": "com.example.siftmatch",
-  "versionName": "1.0.0",
-  "versionCode": 1,
-  "features": [],
-  "build": {"removeOpenCv": false}
-}

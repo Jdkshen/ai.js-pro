@@ -1,10 +1,17 @@
 package com.stardust.autojs;
 
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.MessageQueue;
+import android.util.Log;
+
 import androidx.annotation.Nullable;
 
+import com.stardust.autojs.core.console.ScriptRunLog;
 import com.stardust.autojs.engine.EngineFallbacks;
 import com.stardust.autojs.engine.JavaScriptEngine;
+import com.stardust.autojs.engine.LoopBasedJavaScriptEngine;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
 import com.stardust.autojs.engine.TemplateLiteralPreprocessor;
@@ -19,6 +26,7 @@ import com.stardust.autojs.execution.ScriptExecutionTask;
 import com.stardust.autojs.execution.SimpleScriptExecutionListener;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.Console;
+import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
 import com.stardust.autojs.script.JavaScriptSource;
 import com.stardust.autojs.script.ScriptSource;
 import com.stardust.lang.ThreadCompat;
@@ -27,6 +35,7 @@ import com.stardust.util.UiHandler;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -41,6 +50,29 @@ import static com.stardust.autojs.runtime.exception.ScriptInterruptedException.c
 public class ScriptEngineService {
 
     private static final String LOG_TAG = "ScriptEngineService";
+
+    /**
+     * 无界面执行模式：为 {@code true} 时，带 {@code "ui";} 声明的脚本不再交给
+     * {@link ScriptExecuteActivity}，而是落到普通执行分支。
+     *
+     * <p>只给 {@code :native} 隔离进程用（见 NativeScriptService）：那里没有 Activity
+     * 可以承载脚本界面，起 Activity 会直接失败/闪烁。该进程的 RUN 会在设置本开关后优先走
+     * {@link #executeUiOnMainThread(ScriptExecutionTask)}（主线程 Looper 宿主，模拟 Pro 打包
+     * 运行时）；QuickJS 等 UI 模式脚本仍落到 {@link #execute(ScriptExecutionTask)} 的普通路径时，
+     * 这里也保证它走后台执行分支而不是启 Activity。Node24 的 UI 由 NodeUiHost 承载，与此开关无关。
+     */
+    private static volatile boolean sHeadlessUiMode;
+
+    /** 见 {@link #sHeadlessUiMode}。 */
+    public static void setHeadlessUiMode(boolean headlessUiMode) {
+        sHeadlessUiMode = headlessUiMode;
+    }
+
+    /** 见 {@link #sHeadlessUiMode}。 */
+    public static boolean isHeadlessUiMode() {
+        return sHeadlessUiMode;
+    }
+
     private static final EventBus EVENT_BUS = new EventBus();
     private static final ScriptExecutionListener GLOBAL_LISTENER = new SimpleScriptExecutionListener() {
         @Override
@@ -104,6 +136,8 @@ public class ScriptEngineService {
     };
     private ScriptExecutionObserver mScriptExecutionObserver = new ScriptExecutionObserver();
     private LinkedHashMap<Integer, ScriptExecution> mScriptExecutions = new LinkedHashMap<>();
+    /** 只为启动时记录一次 Node24 UI 路由；不放在执行热路径上反复打日志。 */
+    private boolean mLoggedNode24UiRoute;
 
     ScriptEngineService(ScriptEngineServiceBuilder builder) {
         mUiHandler = builder.mUiHandler;
@@ -153,19 +187,33 @@ public class ScriptEngineService {
         }
         ScriptSource source = task.getSource();
         switchEngineWhenTheChosenOneCannotParse(source);
-        boolean isQuickJs = source instanceof JavaScriptSource
-                && JavaScriptSource.ENGINE_QUICKJS.equals(source.getEngineName());
-        // 带 `"ui";` 声明的脚本（Rhino / QuickJS 一样）跑在专用的 ScriptExecuteActivity 里：
+        String engineName = source instanceof JavaScriptSource ? source.getEngineName() : null;
+        // QuickJS 与 Node24 的事件循环都不在本执行线程上（Node24 在 :node24 进程），
+        // 两者都走 RunnableScriptExecution；Rhino 仍走 LoopBased。Node24 的 UI 也走这里：
+        // 界面由 NodeUiHost（:node24 进程 -> 主进程 NodeUiActivity）承载，不能再套通用 Activity。
+        boolean isAsyncJs = JavaScriptSource.ENGINE_QUICKJS.equals(engineName)
+                || JavaScriptSource.ENGINE_NODE24.equals(engineName);
+        boolean isNode24 = JavaScriptSource.ENGINE_NODE24.equals(engineName);
+        // 带 `"ui";` 声明的 Rhino / QuickJS 脚本仍跑在专用 ScriptExecuteActivity 里：
         // 界面是 Activity 的内容视图，按 Home 会退到后台、返回键才结束。以前 QuickJS 分支
         // 被排除在这条路之外，于是 ui.layout 只能挂系统悬浮窗——退到桌面后还盖在上面。
+        // Node24 例外：它自己的 NodeUiActivity 才是 UI 宿主；这里若再起一个空
+        // ScriptExecuteActivity，Node UI 关闭后就会先露出白页，用户需要再按一次返回。
         if (source instanceof JavaScriptSource) {
             int mode = ((JavaScriptSource) source).getExecutionMode();
-            if ((mode & JavaScriptSource.EXECUTION_MODE_UI) != 0) {
+            boolean uiMode = (mode & JavaScriptSource.EXECUTION_MODE_UI) != 0;
+            if (uiMode && !sHeadlessUiMode && isNode24 && !mLoggedNode24UiRoute) {
+                mLoggedNode24UiRoute = true;
+                Log.i(LOG_TAG, "Node24 UI 由 NodeUiHost 承载，跳过 ScriptExecuteActivity");
+            }
+            // :native 隔离进程里没有 Activity（见 sHeadlessUiMode），此时 UI 模式脚本
+            // 不走 ScriptExecuteActivity，直接落到下面的普通执行分支。
+            if (uiMode && !sHeadlessUiMode && !isNode24) {
                 return ScriptExecuteActivity.execute(mContext, mScriptEngineManager, task);
             }
         }
         RunnableScriptExecution r;
-        if (source instanceof JavaScriptSource && !isQuickJs) {
+        if (source instanceof JavaScriptSource && !isAsyncJs) {
             r = new LoopedBasedJavaScriptExecution(mScriptEngineManager, task);
         } else {
             r = new RunnableScriptExecution(mScriptEngineManager, task);
@@ -183,6 +231,73 @@ public class ScriptEngineService {
     }
 
     /**
+     * 在调用线程（必须是主线程）上执行 UI 模式脚本，不启动任何 Activity。
+     *
+     * <p>为什么需要它：Pro 打包运行时的脚本进程里，UI 模式脚本跑在脚本进程主线程的 Looper 上，
+     * 于是 {@code SurfaceView} 的 surfaceCreated（主线程回调）里调用的 {@code nativeInit} 和脚本
+     * 渲染循环里的 Button 等控件调用是同一个线程；而普通后台线程执行时两者不同线程（第三方
+     * ImGui 桥就因此出现 GImGui 为空崩溃）。{@code :native} 隔离进程没有 Activity，这里用同样的
+     * 主线程模型把引擎跑在进程主 Looper 上，但只用 Application Context，不启动 Activity。
+     *
+     * <p>机制照搬 {@link ScriptExecuteActivity}（Rhino UI 模式宿主）：
+     * {@link LoopBasedJavaScriptEngine#execute(ScriptSource, LoopBasedJavaScriptEngine.ExecuteCallback)}
+     * 把脚本体 post 到主 Looper；{@link ScriptRunLog#attach} 挂运行日志；listener 的
+     * onStart/onSuccess/onException 照常回传。顶层脚本返回后不立刻结束（UI 脚本通常只是搭界面，
+     * 定时器/事件/悬浮窗随后才工作），而是在主 Looper 空闲时检查还有没有未完成的工作
+     * （timer / 脚本线程 / 悬浮窗），没有才结束。
+     *
+     * <p>只支持 Rhino 循环引擎：QuickJS / Node24 没有主线程 Looper 语义，遇到时退回普通后台执行。
+     * 停止请用 {@link #stopExecution(ScriptExecution)} 或 {@link #stopAll()}，直接 forceStop 引擎
+     * 无法完成主线程执行的收尾。
+     *
+     * @return 本次执行，可用 {@link #stopExecution(ScriptExecution)} 停止
+     */
+    public ScriptExecution executeUiOnMainThread(ScriptExecutionTask task) {
+        if (task == null) {
+            throw new IllegalArgumentException("task == null");
+        }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            throw new IllegalStateException("executeUiOnMainThread() 必须在主线程调用");
+        }
+        ScriptSource source = task.getSource();
+        switchEngineWhenTheChosenOneCannotParse(source);
+        if (!(source instanceof JavaScriptSource) || isAsyncEngine((JavaScriptSource) source)) {
+            // QuickJS / Node24 的事件循环不依赖调用线程，退回原来的后台执行路径。
+            return execute(task);
+        }
+        if (task.getListener() != null) {
+            task.setExecutionListener(new ScriptExecutionObserver.Wrapper(mScriptExecutionObserver, task.getListener()));
+        } else {
+            task.setExecutionListener(mScriptExecutionObserver);
+        }
+        MainThreadUiExecution execution = new MainThreadUiExecution(task);
+        mScriptExecutions.put(execution.getId(), execution);
+        execution.start();
+        return execution;
+    }
+
+    /**
+     * 停止一个执行。主线程 UI 执行需要走它自己的收尾（通知 listener、销毁引擎、关闭运行日志），
+     * 只 forceStop 引擎会让主 Looper 上的执行状态留在半路；普通后台执行返回 false，
+     * 由调用方按原逻辑 forceStop 引擎。
+     *
+     * @return true 表示已处理（主线程 UI 执行），false 表示不是主线程执行
+     */
+    public boolean stopExecution(ScriptExecution execution) {
+        if (execution instanceof MainThreadUiExecution) {
+            ((MainThreadUiExecution) execution).forceStop();
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isAsyncEngine(JavaScriptSource source) {
+        String engineName = source.getEngineName();
+        return JavaScriptSource.ENGINE_QUICKJS.equals(engineName)
+                || JavaScriptSource.ENGINE_NODE24.equals(engineName);
+    }
+
+    /**
      * 两个引擎各有一处「对方能跑、它连解析都过不去」的死角（详见 {@link EngineFallbacks}）。
      * 与其只丢一句 {@code illegal character} / {@code unexpected token '<'}，不如换到能跑的
      * 那个引擎，并在控制台把原因写清楚。
@@ -194,6 +309,10 @@ public class ScriptEngineService {
             return;
         }
         JavaScriptSource scriptSource = (JavaScriptSource) source;
+        if (JavaScriptSource.ENGINE_NODE24.equals(scriptSource.getEngineName())) {
+            // Node24 是三引擎之一，不参与 Rhino/QuickJS 的解析兜底互换。
+            return;
+        }
         String script = scriptSource.getScript();
         String name = scriptSource.toString();
         if (JavaScriptSource.ENGINE_QUICKJS.equals(scriptSource.getEngineName())) {
@@ -232,7 +351,17 @@ public class ScriptEngineService {
     }
 
     public int stopAll() {
-        return mScriptEngineManager.stopAll();
+        int count = 0;
+        // 主线程 UI 执行跑在进程主 Looper 上：只 forceStop 引擎既停不干净也没人收尾，
+        // 必须走它们自己的 forceStop（通知 listener / 销毁引擎 / 关运行日志）。
+        for (ScriptExecution execution : new ArrayList<>(mScriptExecutions.values())) {
+            if (execution instanceof MainThreadUiExecution) {
+                ((MainThreadUiExecution) execution).forceStop();
+                count++;
+            }
+        }
+        count += mScriptEngineManager.stopAll();
+        return count;
     }
 
 
@@ -240,6 +369,58 @@ public class ScriptEngineService {
         int n = stopAll();
         if (n > 0)
             mUiHandler.toast(String.format(mContext.getString(R.string.text_already_stop_n_scripts), n));
+    }
+
+    // ------------------------------------------------------------------
+    // 音量上键停止全部脚本（窗口聚焦路径，不依赖无障碍/root 全局按键监听）
+    // ------------------------------------------------------------------
+
+    /**
+     * 宿主层「停止全部脚本」hook（App 层注入，通常是 {@code HostScripts::stopAllHostScripts}）。
+     *
+     * <p>为什么放在引擎层：全局音量键监听依赖无障碍/root 键事件，HyperOS 上无障碍设置
+     * （{@code enabled_accessibility_services}）会被系统重置，物理音量上键就收不到。但脚本自己
+     * 的窗口（{@link ScriptExecuteActivity} / QuickJS overlay）聚焦时能直接收到
+     * {@code KEYCODE_VOLUME_UP}，那里通过 {@link #stopAllByVolumeUp()} 先停宿主进程
+     * （{@code :script} / {@code :native}）再停主进程引擎任务。
+     */
+    public static volatile Runnable volumeUpStopAllHook;
+
+    public static void setVolumeUpStopAllHook(Runnable hook) {
+        volumeUpStopAllHook = hook;
+    }
+
+    /**
+     * 音量上键统一停止入口：先执行宿主 hook（停 :script/:native），再停主进程引擎任务。
+     * 任一环节失败只记日志，不向调用方（键事件/窗口）抛异常。
+     *
+     * @return 主进程引擎停止数量（宿主进程任务数量不在这里统计）
+     */
+    public static int stopAllByVolumeUp() {
+        Runnable hook = volumeUpStopAllHook;
+        if (hook != null) {
+            try {
+                hook.run();
+                Log.i(LOG_TAG, "volume-up stop-all hook executed");
+            } catch (Throwable error) {
+                Log.w(LOG_TAG, "volume-up stop-all hook failed", error);
+            }
+        } else {
+            Log.w(LOG_TAG, "volume-up stop-all hook is not installed");
+        }
+        ScriptEngineService service = sInstance;
+        if (service == null) {
+            Log.w(LOG_TAG, "volume-up stopAll skipped: service instance is null");
+            return 0;
+        }
+        try {
+            int stopped = service.stopAll();
+            Log.i(LOG_TAG, "volume-up stopAll main-process engines: " + stopped);
+            return stopped;
+        } catch (Throwable error) {
+            Log.w(LOG_TAG, "volume-up stopAll main-process engines failed", error);
+            return 0;
+        }
     }
 
     public Set<ScriptEngine> getEngines() {
@@ -267,6 +448,274 @@ public class ScriptEngineService {
 
     public static ScriptEngineService getInstance() {
         return sInstance;
+    }
+
+
+    /**
+     * 主线程 UI 模式执行 —— 不启动 Activity 的 {@link ScriptExecuteActivity} 等价物。
+     *
+     * <p>生命周期：
+     * <ol>
+     *   <li>{@link #start()} 把「创建引擎 + init + 挂运行日志」post 到主 Looper，不阻塞调用方；</li>
+     *   <li>onStart 通知之后调用 {@code LoopBasedJavaScriptEngine.execute(source, callback)}，
+     *       脚本体在主 Looper 上执行（与 Pro 打包运行时的脚本进程主线程模型一致）；</li>
+     *   <li>顶层脚本返回后不结束：主 Looper 空闲时检查 timer / 脚本线程 / 悬浮窗，还有活就继续
+     *       养着，没活才 onSuccess；异常或 forceStop 走 onException；</li>
+     *   <li>收尾顺序：先通知 listener，再销毁引擎（触发 {@code runtime.onExit()}：关悬浮窗、
+     *       清定时器、清 interrupt 状态），最后收尾 {@link ScriptRunLog}。</li>
+     * </ol>
+     */
+    private final class MainThreadUiExecution extends ScriptExecution.AbstractScriptExecution implements MessageQueue.IdleHandler {
+
+        private final Object mLock = new Object();
+        private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+        private final Runnable mStartRunnable = new Runnable() {
+            @Override
+            public void run() {
+                startOnMainThread();
+            }
+        };
+        private volatile ScriptEngine mEngine;
+        private ScriptRunLog mRunLog;
+        private boolean mStarted;
+        private boolean mFinished;
+        private boolean mStopRequested;
+        private boolean mWatchingIdle;
+
+        MainThreadUiExecution(ScriptExecutionTask task) {
+            super(task);
+        }
+
+        void start() {
+            mMainHandler.post(mStartRunnable);
+        }
+
+        @Override
+        public ScriptEngine getEngine() {
+            return mEngine;
+        }
+
+        /** 主线程：创建引擎、初始化 runtime、挂运行日志、通知 onStart，并把脚本体放进主 Looper。 */
+        private void startOnMainThread() {
+            synchronized (mLock) {
+                if (mFinished) {
+                    return;
+                }
+                if (mStopRequested) {
+                    finishOnMainThread(new ScriptInterruptedException());
+                    return;
+                }
+                mStarted = true;
+            }
+            try {
+                ScriptEngine engine = mScriptEngineManager.createEngineOfSourceOrThrow(getSource(), getId());
+                mEngine = engine;
+                engine.setTag(ExecutionConfig.getTag(), getConfig());
+                // 与 RunnableScriptExecution 的顺序一致：先挂运行日志，再 init / 执行。
+                mRunLog = ScriptRunLog.attach(engine, getSource(), mContext);
+                engine.setTag(ScriptEngine.TAG_WORKING_DIRECTORY, getConfig().getWorkingDirectory());
+                engine.setTag(ScriptEngine.TAG_ENV_PATH, getConfig().getPath());
+                engine.init();
+                engine.setTag(ScriptEngine.TAG_SOURCE, getSource());
+                getListener().onStart(this);
+                ((LoopBasedJavaScriptEngine) engine).execute(getSource(),
+                        new LoopBasedJavaScriptEngine.ExecuteCallback() {
+                            @Override
+                            public void onResult(Object result) {
+                                onTopLevelFinished(null);
+                            }
+
+                            @Override
+                            public void onException(Exception error) {
+                                onTopLevelFinished(error);
+                            }
+                        });
+            } catch (Throwable error) {
+                Log.w(LOG_TAG, "主线程 UI 脚本启动失败", error);
+                finishOnMainThread(error);
+            }
+        }
+
+        /** 主线程：脚本体跑完了（error 为 null 表示正常返回）。 */
+        private void onTopLevelFinished(Throwable error) {
+            if (error != null) {
+                finishOnMainThread(error);
+                return;
+            }
+            synchronized (mLock) {
+                if (mFinished || mWatchingIdle) {
+                    return;
+                }
+                if (mStopRequested) {
+                    finishOnMainThread(new ScriptInterruptedException());
+                    return;
+                }
+                mWatchingIdle = true;
+            }
+            // UI 脚本顶层通常只是搭界面/起渲染循环，真正的活（定时器、事件、悬浮窗）在顶层返回后
+            // 才开始；所以先不结束，等主 Looper 空闲再看还有没有要做的事。
+            Looper.myQueue().addIdleHandler(this);
+        }
+
+        @Override
+        public boolean queueIdle() {
+            synchronized (mLock) {
+                if (mFinished) {
+                    return false;
+                }
+            }
+            ScriptEngine engine = mEngine;
+            if (engine == null) {
+                finishOnMainThread(null);
+                return false;
+            }
+            Throwable uncaught = engine.getUncaughtException();
+            if (uncaught != null) {
+                // 定时器/事件回调里的异常：JS runtime 会记到引擎 uncaughtException 并要求停止。
+                finishOnMainThread(uncaught);
+                return false;
+            }
+            boolean stopRequested;
+            synchronized (mLock) {
+                stopRequested = mStopRequested;
+            }
+            if (stopRequested) {
+                finishOnMainThread(new ScriptInterruptedException());
+                return false;
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                // 脚本自己 exit()：主线程模式下 runtime 不抛异常，只置 interrupt；按正常退出处理。
+                finishOnMainThread(null);
+                return false;
+            }
+            if (hasPendingWork(engine)) {
+                return true;
+            }
+            // UI 脚本的顶层返回不等于脚本结束：悬浮窗/第三方 native UI（如 ImGui 渲染循环）
+            // 可能靠 Looper 上的延迟消息继续活着。这里保持引擎存活，只有用户停止/服务销毁
+            // 才走 finishOnMainThread → engine.destroy()（触发 runtime.onExit 的 nativeShutdown），
+            // 避免把第三方 native UI 正在使用的 ImGui/EGL 上下文提前销毁。
+            return true;
+        }
+
+        private boolean hasPendingWork(ScriptEngine engine) {
+            if (!(engine instanceof JavaScriptEngine)) {
+                return false;
+            }
+            ScriptRuntime runtime = ((JavaScriptEngine) engine).getRuntime();
+            if (runtime == null) {
+                return false;
+            }
+            if (runtime.timers != null && runtime.timers.hasPendingCallbacks()) {
+                return true;
+            }
+            if (runtime.threads != null && runtime.threads.hasRunningThreads()) {
+                return true;
+            }
+            return hasOpenFloatyWindows(runtime);
+        }
+
+        /** 停止：可从任意线程调用。主线程上直接收尾；后台线程调用则 post 到主线程收尾。 */
+        void forceStop() {
+            boolean started;
+            synchronized (mLock) {
+                if (mFinished) {
+                    return;
+                }
+                mStopRequested = true;
+                started = mStarted;
+            }
+            mMainHandler.removeCallbacks(mStartRunnable);
+            boolean onMainThread = Looper.myLooper() == Looper.getMainLooper();
+            ScriptEngine engine = mEngine;
+            if (started && engine != null && !onMainThread) {
+                // 只有从后台线程调用时才需要打断脚本（脚本可能正阻塞在主 Looper 上）；
+                // 主线程调用时脚本必然没在跑，直接销毁引擎收尾即可 —— 别去 interrupt 主线程
+                // （Pro 的 LoopBasedJavaScriptEngine 在主线程模式同样跳过这种打断）。
+                try {
+                    engine.forceStop();
+                } catch (Throwable error) {
+                    Log.w(LOG_TAG, "停止主线程 UI 脚本失败", error);
+                }
+            }
+            if (onMainThread) {
+                finishOnMainThread(new ScriptInterruptedException());
+            } else {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        finishOnMainThread(new ScriptInterruptedException());
+                    }
+                });
+            }
+        }
+
+        /** 主线程收尾：通知 listener -> 销毁引擎（runtime.onExit）-> 关闭运行日志。 */
+        private void finishOnMainThread(Throwable error) {
+            ScriptEngine engine;
+            ScriptRunLog runLog;
+            synchronized (mLock) {
+                if (mFinished) {
+                    return;
+                }
+                mFinished = true;
+                engine = mEngine;
+                runLog = mRunLog;
+                mRunLog = null;
+            }
+            mMainHandler.removeCallbacks(mStartRunnable);
+            Looper.myQueue().removeIdleHandler(this);
+            try {
+                ScriptExecutionListener listener = getListener();
+                if (error == null) {
+                    listener.onSuccess(this, null);
+                } else {
+                    listener.onException(this, error);
+                }
+            } catch (Throwable notifyError) {
+                Log.w(LOG_TAG, "通知主线程 UI 脚本结束失败", notifyError);
+            }
+            if (engine != null) {
+                try {
+                    engine.destroy();
+                } catch (Throwable destroyError) {
+                    Log.w(LOG_TAG, "销毁主线程 UI 脚本引擎失败", destroyError);
+                }
+            }
+            if (runLog != null) {
+                runLog.finish(error);
+            }
+            mScriptExecutions.remove(getId());
+        }
+    }
+
+    /**
+     * Floaty 没有公开的「还有几个窗口」API，而「脚本顶层返回但悬浮窗还开着」是 UI 模式的常见形态
+     * （脚本靠窗口 + 事件活着），所以这里读一次 Floaty 内部的窗口集合来判断要不要继续养着引擎。
+     * 读取失败按「没有窗口」处理，绝不能因为观测失败反过来把脚本干掉。
+     */
+    private static java.lang.reflect.Field sFloatyWindowsField;
+    private static boolean sFloatyWindowsFieldResolved;
+
+    private static boolean hasOpenFloatyWindows(ScriptRuntime runtime) {
+        try {
+            if (!sFloatyWindowsFieldResolved) {
+                sFloatyWindowsFieldResolved = true;
+                try {
+                    sFloatyWindowsField = runtime.floaty.getClass().getDeclaredField("mWindows");
+                    sFloatyWindowsField.setAccessible(true);
+                } catch (Throwable ignored) {
+                    sFloatyWindowsField = null;
+                }
+            }
+            if (sFloatyWindowsField == null) {
+                return false;
+            }
+            Object windows = sFloatyWindowsField.get(runtime.floaty);
+            return windows instanceof Collection && !((Collection<?>) windows).isEmpty();
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
 

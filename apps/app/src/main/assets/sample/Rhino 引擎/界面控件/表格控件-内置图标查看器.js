@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <vertical>
         <linear>

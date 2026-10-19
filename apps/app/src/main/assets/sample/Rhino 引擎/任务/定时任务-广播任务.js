@@ -1,6 +1,6 @@
-// @engine rhino
+"rhino";
 let task = $work_manager.addBroadcastIntentTask({
-    path: '/sdcard/脚本/电量变化时.js',
+    path: files.path('./任务逻辑.js'),
     action: 'android.intent.action.BATTERY_CHANGED'
 });
 toastLog("广播任务设置成功: " + task);

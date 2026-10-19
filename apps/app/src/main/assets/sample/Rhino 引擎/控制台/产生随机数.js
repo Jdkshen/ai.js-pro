@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 console.show();
 
 log("将产生5个1到100的随机数");

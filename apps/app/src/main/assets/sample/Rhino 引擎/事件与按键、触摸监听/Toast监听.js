@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 auto();
 events.observeToast();
 events.onToast(function(toast) {

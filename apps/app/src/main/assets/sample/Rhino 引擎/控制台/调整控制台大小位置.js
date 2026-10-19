@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 console.show();
 console.log("调整大小...");
 console.setSize(1000, 1000);

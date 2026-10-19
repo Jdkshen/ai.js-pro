@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 let message = "未加密字符串";
 log("明文: ", message);
 // 密钥，由于AES等算法要求是16位的倍数，我们这里用一个16位的密钥
@@ -24,7 +24,7 @@ log("AES/CBC解密: ", $crypto.decrypt(aesCbc, key, "AES/CBC/PKCS5padding", {
 
 // RSA加密
 // 生成RSA密钥
-let keyPair = $crypto.generateKeyPair("RSA");
+let keyPair = $crypto.generateKeyPair("RSA", 2048);
 log("密钥对: ", keyPair);
 // 使用私钥加密
 let rsa = $crypto.encrypt(message, keyPair.privateKey, "RSA/ECB/PKCS1padding");

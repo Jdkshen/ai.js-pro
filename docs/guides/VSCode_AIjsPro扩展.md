@@ -79,7 +79,7 @@ code --install-extension aijspro-vscode-0.3.0.vsix
 模板图片放在工作区里，用「推送并运行整个工程」同步到手机即可（智能相对路径，相对于手机上的工程目录）。
 截图可用「重新截图」重拉、用「截图另存到工作区」存成 PNG。
 
-插入的代码**写法对齐官方图色示例**（`sample/QuickJS 新引擎/图色处理/`）：
+插入的代码**写法对齐官方图色示例**（`sample/QuickJS 引擎/图色处理/`）：
 `requestScreenCapture('portrait')` 授权（优先无障碍通道，不弹授权）、`captureScreen({ mode: 'full' })` 取帧、
 `JSON.stringify(point)` 输出、结束 `screen.recycle()`；找色/多点自带取样点附近的 `region`（±100px，按需调整）
 与示例阈值（24 / 20），颜色写作 `#RRGGBB`。直接 F5 就能跑；已有授权/想换区域的自行改那几行。

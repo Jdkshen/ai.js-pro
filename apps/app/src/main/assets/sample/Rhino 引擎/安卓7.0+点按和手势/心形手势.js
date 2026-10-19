@@ -1,6 +1,5 @@
-// @engine rhino
 "auto";
-
+"rhino";
 toast("开启开发者选项-指针位置或者在画画软件才能查看效果");
 
 setScreenMetrics(1080, 1920);

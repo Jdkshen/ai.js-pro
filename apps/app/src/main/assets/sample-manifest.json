@@ -1,0 +1,28 @@
+{
+    "version":  1,
+    "generatedAt":  "2026-10-18T16:28:14+08:00",
+    "units":  [
+                  {
+                      "id":  "quickjs-yolo",
+                      "name":  "YOLO目标检测",
+                      "title":  "YOLO 目标检测",
+                      "description":  "DNN 目标检测 / 姿态 / 光标示例，含 yolo26_160.onnx 模型",
+                      "path":  "QuickJS 引擎/YOLO目标检测",
+                      "zip":  "samples/quickjs-yolo.zip",
+                      "bytes":  8672880,
+                      "sha256":  "2088cbb5a0d72c65379ff400d71782e32e3126f6cf2705ed7c359be06f1bc0c8",
+                      "files":  14
+                  },
+                  {
+                      "id":  "quickjs-sift",
+                      "name":  "SIFT特征匹配",
+                      "title":  "SIFT 特征匹配",
+                      "description":  "SIFT 全分辨率找图示例，含大图 / 小图样张",
+                      "path":  "QuickJS 引擎/图色处理/SIFT特征匹配",
+                      "zip":  "samples/quickjs-sift.zip",
+                      "bytes":  1662578,
+                      "sha256":  "9a5a2ff53e2993c1902469cd7ecddfe0cb0e1a4b7814de81aa8abe0ec2060d3c",
+                      "files":  6
+                  }
+              ]
+}

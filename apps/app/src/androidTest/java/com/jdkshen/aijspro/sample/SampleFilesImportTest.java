@@ -34,7 +34,7 @@ public class SampleFilesImportTest {
             "sample/Rhino 引擎/图片与图色处理/找图/找出马里奥.js";
     /** 目录里有 project.json + jar/xml（QuickJS 工程示例）。 */
     private static final String JAR_PROJECT_SAMPLE =
-            "sample/QuickJS 新引擎/项目与打包/dsh 手机客户端/main.js";
+            "sample/QuickJS 引擎/项目与打包/dsh 手机客户端/main.js";
     /** 普通示例：所在目录没有 project.json，也没有伴生资源。 */
     private static final String PLAIN_SAMPLE =
             "sample/Rhino 引擎/文字识别(OCR)/截图并识别文字(MLKitOCR).js";

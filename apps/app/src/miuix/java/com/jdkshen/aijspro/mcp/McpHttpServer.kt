@@ -118,6 +118,7 @@ class McpHttpServer(
     }
 
     private fun serve(socket: Socket) {
+        var corsOrigin: String? = null
         try {
             val input = BufferedInputStream(socket.getInputStream())
             val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(READ_TIMEOUT_MS.toLong())
@@ -138,15 +139,29 @@ class McpHttpServer(
                     throw HttpError(400, "Bad Request")
                 }
             }
-            if (headers.containsKey("origin")) throw HttpError(403, "Forbidden")
+            val origin = headers["origin"]
+            corsOrigin = McpCors.allowedOrigin(origin)
+            if (origin != null && corsOrigin == null) throw HttpError(403, "Forbidden")
             if (!validHost(headers["host"], socket)) throw HttpError(403, "Forbidden")
+            val path = requestLine[1].substringBefore('?')
+            if (requestLine[0] == "OPTIONS") {
+                // Only a valid browser preflight gets the auth bypass. It never reaches the
+                // handler, and an origin-less OPTIONS keeps the legacy 405 response.
+                if (path != "/mcp") throw HttpError(404, "Not Found")
+                val allowedOrigin = corsOrigin ?: throw HttpError(405, "Method Not Allowed")
+                if (headers["access-control-request-method"] != McpCors.ALLOW_METHODS ||
+                    !McpCors.allowsRequestHeaders(headers["access-control-request-headers"])) {
+                    throw HttpError(405, "Method Not Allowed")
+                }
+                respondPreflight(socket, allowedOrigin)
+                return
+            }
             val authorization = headers["authorization"].orEmpty()
             val candidate = if (authorization.startsWith("Bearer ", ignoreCase = true)) authorization.substring(7) else ""
             val authenticated = MessageDigest.isEqual(tokenDigest, sha256(candidate))
             val localCompatibility = allowUnauthenticatedLoopback && authorization.isEmpty() && socket.inetAddress.isLoopbackAddress
             val lanCompatibility = allowUnauthenticatedLan && authorization.isEmpty() && !socket.inetAddress.isLoopbackAddress
             if (!authenticated && !localCompatibility && !lanCompatibility) throw HttpError(401, "Unauthorized")
-            val path = requestLine[1].substringBefore('?')
             if (path != "/mcp" && path != "/") throw HttpError(404, "Not Found")
             if (requestLine[0] == "GET") {
                 // MCP Streamable HTTP 客户端会先 GET /mcp(Accept: text/event-stream) 探测 SSE；
@@ -155,7 +170,7 @@ class McpHttpServer(
                 if (headers["accept"].orEmpty().contains("text/event-stream", ignoreCase = true)) {
                     throw HttpError(405, "Method Not Allowed")
                 }
-                respondHtml(socket, pageProvider?.invoke() ?: defaultStatusPage())
+                respondHtml(socket, pageProvider?.invoke() ?: defaultStatusPage(), corsOrigin)
                 return
             }
             if (path != "/mcp") throw HttpError(404, "Not Found")
@@ -181,21 +196,21 @@ class McpHttpServer(
                     .decode(ByteBuffer.wrap(body)).toString()
                 parseJson(text)
             } catch (_: Exception) {
-                respondJson(socket, 400, rpcError(null, -32700, "Parse error"))
+                respondJson(socket, 400, rpcError(null, -32700, "Parse error"), corsOrigin)
                 return
             }
             if (!message.isJsonObject || !validRequest(message.asJsonObject)) {
-                respondJson(socket, 400, rpcError(null, -32600, "Invalid Request"))
+                respondJson(socket, 400, rpcError(null, -32600, "Invalid Request"), corsOrigin)
                 return
             }
             val request = message.asJsonObject
             if (!request.has("id")) {
                 try {
                     handler(request)
-                    respond(socket, 202, "Accepted")
+                    respond(socket, 202, "Accepted", origin = corsOrigin)
                 } catch (_: Exception) {
                     // Notifications never receive a JSON-RPC response, even on handler failure.
-                    respond(socket, 500, "Internal Server Error")
+                    respond(socket, 500, "Internal Server Error", origin = corsOrigin)
                 }
                 return
             }
@@ -204,11 +219,11 @@ class McpHttpServer(
             } catch (_: Exception) {
                 rpcError(request.get("id"), -32603, "Internal error")
             }
-            respondJson(socket, 200, response)
+            respondJson(socket, 200, response, corsOrigin)
         } catch (e: HttpError) {
-            runCatching { respond(socket, e.status, e.reason) }
+            runCatching { respond(socket, e.status, e.reason, origin = corsOrigin) }
         } catch (_: SocketTimeoutException) {
-            runCatching { respond(socket, 408, "Request Timeout") }
+            runCatching { respond(socket, 408, "Request Timeout", origin = corsOrigin) }
         } catch (_: IOException) {
             // The peer may disconnect or the service may stop while a request is active.
         }
@@ -385,15 +400,25 @@ class McpHttpServer(
         add("error", JsonObject().apply { addProperty("code", code); addProperty("message", message) })
     }
 
-    private fun respondJson(socket: Socket, status: Int, body: JsonObject) {
-        respond(socket, status, if (status == 200) "OK" else "Bad Request", body.toString().toByteArray(Charsets.UTF_8))
+    private fun respondJson(socket: Socket, status: Int, body: JsonObject, origin: String?) {
+        respond(socket, status, if (status == 200) "OK" else "Bad Request",
+            body.toString().toByteArray(Charsets.UTF_8), origin)
     }
 
-    private fun respondHtml(socket: Socket, body: String) {
+    private fun respondPreflight(socket: Socket, origin: String) {
+        respond(socket, 204, "No Content", origin = origin, extraHeaders = listOf(
+            "Access-Control-Allow-Methods" to McpCors.ALLOW_METHODS,
+            "Access-Control-Allow-Headers" to McpCors.ALLOW_HEADERS,
+            "Access-Control-Max-Age" to "600"
+        ))
+    }
+
+    private fun respondHtml(socket: Socket, body: String, origin: String?) {
         val bytes = body.toByteArray(Charsets.UTF_8)
         val header = buildString {
             append("HTTP/1.1 200 OK\r\n")
             append("Content-Length: ${bytes.size}\r\nConnection: close\r\nCache-Control: no-store\r\n")
+            if (origin != null) append("Access-Control-Allow-Origin: $origin\r\nVary: Origin\r\n")
             append("Content-Type: text/html; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\n\r\n")
         }.toByteArray(Charsets.US_ASCII)
         socket.getOutputStream().apply { write(header); write(bytes); flush() }
@@ -422,11 +447,20 @@ class McpHttpServer(
 </div>
 </body></html>"""
 
-    private fun respond(socket: Socket, status: Int, reason: String, body: ByteArray = ByteArray(0)) {
+    private fun respond(
+        socket: Socket,
+        status: Int,
+        reason: String,
+        body: ByteArray = ByteArray(0),
+        origin: String? = null,
+        extraHeaders: List<Pair<String, String>> = emptyList()
+    ) {
         val header = buildString {
             append("HTTP/1.1 $status $reason\r\n")
             append("Content-Length: ${body.size}\r\nConnection: close\r\nCache-Control: no-store\r\n")
             append("X-Content-Type-Options: nosniff\r\n")
+            if (origin != null) append("Access-Control-Allow-Origin: $origin\r\nVary: Origin\r\n")
+            extraHeaders.forEach { (name, value) -> append("$name: $value\r\n") }
             if (body.isNotEmpty()) append("Content-Type: application/json; charset=utf-8\r\n")
             if (status == 401) append("WWW-Authenticate: Bearer realm=\"AI.js Pro MCP\"\r\n")
             if (status == 405) append("Allow: POST\r\n")
@@ -451,5 +485,71 @@ class McpHttpServer(
         // modern POST endpoint. The message shapes used here are compatible with all three.
         private val SUPPORTED_VERSIONS = setOf("2024-11-05", "2025-03-26", "2025-06-18")
         private fun sha256(value: String): ByteArray = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+    }
+}
+
+/**
+ * Strict, stateless CORS policy for the Streamable HTTP endpoint.
+ *
+ * Only browser Origins whose host is literally a loopback name/address are accepted. The
+ * original header value is echoed unchanged, so no wildcard or arbitrary reflection is possible.
+ */
+internal object McpCors {
+    val ALLOW_METHODS = "POST"
+    val ALLOW_HEADERS = "Authorization, Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id"
+    private val allowedHeaderNames = ALLOW_HEADERS.split(',').map { it.trim().lowercase(Locale.ROOT) }.toSet()
+    private const val MAX_ORIGIN_LENGTH = 256
+
+    fun allowedOrigin(value: String?): String? {
+        if (value.isNullOrEmpty() || value.length > MAX_ORIGIN_LENGTH) return null
+        // Origin is a serialized ASCII tuple. Reject whitespace, controls and non-ASCII instead
+        // of trying to repair malformed values.
+        if (value.any { it.code < 0x21 || it.code > 0x7e }) return null
+        val schemeEnd = value.indexOf("://")
+        if (schemeEnd <= 0) return null
+        val scheme = value.substring(0, schemeEnd).lowercase(Locale.ROOT)
+        if (scheme != "http" && scheme != "https") return null
+        val authority = value.substring(schemeEnd + 3)
+        if (authority.isEmpty()) return null
+        if (authority.any { it == '/' || it == '\\' || it == '?' || it == '#' || it == '@' || it == ',' || it == ';' }) return null
+
+        val host: String
+        val port: String?
+        if (authority.startsWith('[')) {
+            val close = authority.indexOf(']')
+            if (close < 0) return null
+            host = authority.substring(1, close)
+            if (host != "::1") return null
+            val suffix = authority.substring(close + 1)
+            if (suffix.isEmpty()) {
+                port = null
+            } else {
+                if (!suffix.startsWith(':')) return null
+                port = suffix.substring(1)
+            }
+        } else {
+            if (authority.count { it == ':' } > 1) return null
+            val separator = authority.indexOf(':')
+            host = if (separator >= 0) authority.substring(0, separator) else authority
+            port = if (separator >= 0) authority.substring(separator + 1) else null
+            if (!host.equals("localhost", ignoreCase = true) && !isLoopbackIpv4(host)) return null
+        }
+        if (port != null && (!port.matches(Regex("[1-9][0-9]{0,4}")) || port.toInt() !in 1..65535)) return null
+        return value
+    }
+
+    /** Requested headers are optional in a preflight, but every requested name must be allowed. */
+    fun allowsRequestHeaders(value: String?): Boolean {
+        if (value == null) return true
+        val names = value.split(',').map { it.trim().lowercase(Locale.ROOT) }
+        return names.isNotEmpty() && names.all { it.isNotEmpty() && it in allowedHeaderNames }
+    }
+
+    private fun isLoopbackIpv4(host: String): Boolean {
+        val parts = host.split('.')
+        if (parts.size != 4 || parts[0].toIntOrNull() != 127) return false
+        return parts.all { part ->
+            part.matches(Regex("[0-9]{1,3}")) && part.toIntOrNull()?.let { it in 0..255 } == true
+        }
     }
 }

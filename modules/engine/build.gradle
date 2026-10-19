@@ -55,6 +55,7 @@ dependencies {
         exclude group: 'com.android.support', module: 'support-annotations'
     })
     testImplementation 'junit:junit:4.12'
+    testImplementation 'org.json:json:20240303'
     api fileTree(dir: 'libs', include: ['*.jar'])
     api 'org.greenrobot:eventbus:3.0.0'
     api 'net.lingala.zip4j:zip4j:1.3.2'
@@ -83,6 +84,11 @@ dependencies {
     // Rhino execution is packaged by the optional :engine-rhino module.
     // Core still compiles against its types while legacy APIs are being isolated.
     // SPIKE(2026-10-05): 升级试验——官方 Rhino 1.7.15.1（Android 兼容；回退改回 rhino-1.7.7.2.jar 即可）
+    // Rhino 的 loadJar 用 D8 把 Java 11/17 的 jar（class major 55/61）转成 dex；
+    // 旧 dx（modules/engine/libs/dx.jar，1.11）实测只支持到 class major 51（Java 7）。
+    // 8.5.35 与 AGP 8.6.1 使用的 R8 版本一致；该依赖会进入 APK（dex 后约 7.7MB），
+    // 且 D8 的 java.nio.file API 要求 Android 8.0（API 26）以上，低版本回退 dx。
+    implementation 'com.android.tools:r8:8.5.35'
     compileOnly files('../rhino-language/libs/rhino-1.7.15.1.jar')
     testImplementation files('../rhino-language/libs/rhino-1.7.15.1.jar')
     api project(path: ':common')

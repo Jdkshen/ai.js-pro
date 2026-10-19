@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <vertical padding="16">
         <button text="普通按钮" w="auto"/>

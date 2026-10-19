@@ -1,6 +1,5 @@
-// @engine rhino
 "auto";
-
+"rhino";
 events.observeKey();
 
 var interval = 5000;

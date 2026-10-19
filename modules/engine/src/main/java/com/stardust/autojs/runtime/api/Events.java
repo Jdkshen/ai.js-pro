@@ -79,6 +79,16 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     private boolean mListeningNotification = false;
     private boolean mListeningGesture = false;
     private boolean mListeningToast = false;
+
+    // ---- task-163：:script 隔离进程的远程无障碍事件订阅 ----
+    /** 远程事件类型（Pro 语义：events.on('accessibility_event'/'view_clicked'/…） */
+    private static final java.util.Set<String> REMOTE_ACCESSIBILITY_EVENT_TYPES =
+            new java.util.HashSet<>(java.util.Arrays.asList(
+                    "accessibility_event", "view_clicked", "view_long_clicked",
+                    "windows_changed", "window_state_changed", "window_content_changed",
+                    "toast", "notification"));
+    private com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener
+            mRemoteAccessibilityListener;
     private ScriptRuntime mScriptRuntime;
     private volatile boolean mInterceptsAllKey = false;
     private KeyInterceptor mKeyInterceptor;
@@ -123,6 +133,70 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
 
     public EventEmitter emitter(MainThreadProxy mainThreadProxy) {
         return new EventEmitter(mBridges, mScriptRuntime.timers.getMainTimer());
+    }
+
+    /**
+     * task-163：:script 进程里第一次订阅无障碍事件时，经 RemoteAutomationBridge 向主进程注册回调。
+     * 主进程事件 -> JSON -> 这里 emit('accessibility_event' + kind 事件)。
+     */
+    private void maybeSubscribeRemoteAccessibility(String eventName) {
+        if (eventName == null || !REMOTE_ACCESSIBILITY_EVENT_TYPES.contains(eventName)) {
+            return;
+        }
+        ensureRemoteAccessibilityEvents();
+    }
+
+    private void ensureRemoteAccessibilityEvents() {
+        if (mRemoteAccessibilityListener != null) {
+            return;
+        }
+        if (!com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.isActive()) {
+            return;
+        }
+        final com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener
+                listener = new com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener() {
+            @Override
+            public void onAccessibilityEvent(String eventJson) {
+                postRemoteAccessibilityEvent(eventJson);
+            }
+
+            @Override
+            public void onServiceStateChanged(boolean ready) {
+                ensureHandler();
+                mHandler.post(() -> emit("accessibility_service_state_changed", ready));
+            }
+        };
+        if (com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge
+                .subscribeAccessibilityEvents(listener)) {
+            mRemoteAccessibilityListener = listener;
+        }
+    }
+
+    private void postRemoteAccessibilityEvent(String eventJson) {
+        final com.stardust.autojs.runtime.api.remote.RemoteAccessibilityEvent event =
+                com.stardust.autojs.runtime.api.remote.RemoteAccessibilityEvent.fromJson(eventJson);
+        if (event == null) {
+            return;
+        }
+        ensureHandler();
+        mHandler.post(() -> {
+            emit("accessibility_event", event);
+            String kind = event.getKind();
+            if (kind != null && !kind.isEmpty() && !"accessibility_event".equals(kind)) {
+                emit(kind, event);
+            }
+        });
+    }
+
+    private void releaseRemoteAccessibilityEvents() {
+        com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener
+                listener = mRemoteAccessibilityListener;
+        if (listener == null) {
+            return;
+        }
+        mRemoteAccessibilityListener = null;
+        com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge
+                .unsubscribeAccessibilityEvents(listener);
     }
 
     public void observeKey() {
@@ -382,6 +456,7 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     public EventEmitter on(String eventName, Object listener) {
         super.on(eventName, listener);
         updateClipListener(eventName);
+        maybeSubscribeRemoteAccessibility(eventName);
         return this;
     }
 
@@ -389,6 +464,7 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     public EventEmitter once(String eventName, Object listener) {
         super.once(eventName, listener);
         updateClipListener(eventName);
+        maybeSubscribeRemoteAccessibility(eventName);
         return this;
     }
 
@@ -396,6 +472,7 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     public EventEmitter prependListener(String eventName, Object listener) {
         super.prependListener(eventName, listener);
         updateClipListener(eventName);
+        maybeSubscribeRemoteAccessibility(eventName);
         return this;
     }
 
@@ -403,6 +480,7 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     public EventEmitter prependOnceListener(String eventName, Object listener) {
         super.prependOnceListener(eventName, listener);
         updateClipListener(eventName);
+        maybeSubscribeRemoteAccessibility(eventName);
         return this;
     }
 
@@ -429,6 +507,7 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
 
 
     public void recycle() {
+        releaseRemoteAccessibilityEvents();
         stopObservingFingerprintGesture();
         broadcast.unregister();
         removePrimaryClipChangedListener();

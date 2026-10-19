@@ -9,6 +9,7 @@ import com.jdkshen.aijspro.inrt.Pref
 import com.jdkshen.aijspro.inrt.R
 import com.jdkshen.aijspro.inrt.SettingsActivity
 import com.jdkshen.aijspro.inrt.autojs.api.SettingsModule
+import com.jdkshen.aijspro.inrt.autojs.api.InrtWorkManagerModule
 import com.stardust.autojs.runtime.ScriptRuntime
 import com.stardust.autojs.runtime.api.AppUtils
 import com.stardust.autojs.runtime.exception.ScriptException
@@ -96,6 +97,8 @@ class AutoJs private constructor(application: Application) : com.stardust.autojs
         runtime.putProperty("class.console", LogActivity::class.java)
         // Auto.js Pro 的 $settings（应用设置开关，PDF §2.28）：引擎 init.js 负责暴露成全局
         runtime.putProperty("settings", SettingsModule())
+        // task-160：打包运行时的 $work_manager（inrt 自己的 SharedPreferences + AlarmManager）
+        runtime.putProperty("work_manager", InrtWorkManagerModule())
         return runtime
     }
 

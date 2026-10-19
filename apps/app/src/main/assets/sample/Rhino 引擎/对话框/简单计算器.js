@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var num1 = parseInt(dialogs.rawInput("请输入第一个数字"));
 var op = dialogs.singleChoice("请选择运算", ["加", "减", "乘", "除", "幂"]);
 var num2 = parseInt(dialogs.rawInput("请输入第二个数字"));

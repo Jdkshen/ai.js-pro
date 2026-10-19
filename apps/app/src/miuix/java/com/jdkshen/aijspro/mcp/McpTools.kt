@@ -61,21 +61,33 @@ internal class McpTools(private val context: Context, private val event: (String
         val method = request.get("method")?.asString.orEmpty()
         if (!request.has("id")) return null
         val id = request.get("id")
+        // Unknown methods remain -32601; parameter shape is only inspected for supported methods.
+        if (!McpRpcValidation.isSupportedMethod(method)) return rpcError(id, -32601, "Method not found")
         var eventName = method
         return try {
+            val params = request.get("params")
             val result = when (method) {
-                "initialize" -> initialize(request.getAsJsonObject("params"))
-                "ping" -> JsonObject()
-                "tools/list" -> listTools()
-                "tools/call" -> {
-                    val params = request.getAsJsonObject("params") ?: JsonObject()
-                    eventName = params.stringOr("name", "tools/call")
-                    call(params)
+                "initialize" -> initialize(McpRpcValidation.optionalParams(params))
+                "ping" -> {
+                    McpRpcValidation.optionalParams(params)
+                    JsonObject()
                 }
-                else -> return rpcError(id, -32601, "Method not found")
+                "tools/list" -> {
+                    McpRpcValidation.optionalParams(params)
+                    listTools()
+                }
+                "tools/call" -> {
+                    val invocation = McpRpcValidation.parseToolCall(params)
+                    eventName = invocation.requestedName
+                    call(invocation)
+                }
+                else -> error("unreachable supported method")
             }
             event("$eventName · 成功")
             rpcResult(id, result)
+        } catch (e: McpInvalidParamsException) {
+            event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
+            rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolError) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
             if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "工具调用失败", true))
@@ -169,9 +181,9 @@ internal class McpTools(private val context: Context, private val event: (String
         })
     }
 
-    private fun call(params: JsonObject): JsonObject {
-        val name = McpToolCatalog.canonicalName(params.string("name"))
-        val args = params.getAsJsonObject("arguments") ?: JsonObject()
+    private fun call(invocation: McpToolCall): JsonObject {
+        val name = invocation.canonicalName
+        val args = invocation.arguments
         return when (name) {
             "get_status" -> toolJson(JsonObject().apply {
                 addProperty("scriptRoot", root.path); addProperty("writeAllowed", McpService.allowWrite)
@@ -259,7 +271,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("removed", removed)
                 addProperty("remaining", workspaces.list().size)
             })
-            else -> throw ToolError("未知工具：$name")
+            else -> throw McpInvalidParamsException("未知工具：$name")
         }
     }
 
@@ -648,13 +660,8 @@ internal class McpTools(private val context: Context, private val event: (String
         cursors.entries.removeAll { it.value.createdAt < cutoff }
     }
 
-    private fun resolveScript(path: String): File {
-        if (path.indexOf('\u0000') >= 0) throw ToolError("路径无效")
-        val raw = File(path)
-        val file = (if (raw.isAbsolute) raw else File(root, path)).canonicalFile
-        if (file != root && !file.path.startsWith(root.path + File.separator)) throw ToolError("路径超出脚本目录")
-        return file
-    }
+    private fun resolveScript(path: String): File =
+        McpPathRules.resolve(root, path, "路径超出脚本目录")
     private fun listFiles(dir: File, offset: Int, limit: Int, recursive: Boolean = false): JsonObject {
         if (!dir.isDirectory) throw ToolError("目录不存在：${dir.relativeTo(root).invariantSeparatorsPath}")
         // 枚举统一走 ScriptRepository（含隐藏——MCP 与文件页的可见性语义不同）。

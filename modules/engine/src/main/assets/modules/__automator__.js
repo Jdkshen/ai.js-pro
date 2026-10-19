@@ -1,6 +1,16 @@
 
 module.exports = function(runtime, global){
     var automator = {};
+    // task-159：:script 远程模式判定（RemoteAccessibilityBridge.isRemote）。
+    function __isRemote__() {
+        try {
+            return !!(runtime.accessibilityBridge && typeof runtime.accessibilityBridge.isRemote === 'function'
+                && runtime.accessibilityBridge.isRemote());
+        } catch (e) { return false; }
+    }
+    function __remoteSelector__() {
+        return new com.stardust.autojs.runtime.api.remote.RemoteUiSelector();
+    }
 
     function performAction(action, args){
         if(args.length == 4){
@@ -178,15 +188,74 @@ module.exports = function(runtime, global){
     }
 
     auto.__defineGetter__("service", function() {
-        return runtime.accessibilityBridge.getService();
+        var service = runtime.accessibilityBridge.getService();
+        if (service != null) {
+            return service;
+        }
+        // task-163：:script 进程没有本地 AccessibilityService，返回远程代理对象（非 null）。
+        // 代理只覆盖常用面：enabled / 无障碍事件订阅 / openSettings；平台 Service 的
+        // getWindows()、getServiceInfo() 等系统 binder 能力无法跨进程伪造（见报告"无法对齐项"）。
+        if (__isRemote__()) {
+            if (!auto.__remoteServiceProxy) {
+                var proxy = {
+                    __remoteProxy: true,
+                    get enabled() {
+                        try {
+                            return com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge
+                                .isAccessibilityReady();
+                        } catch (error) {
+                            return false;
+                        }
+                    },
+                    isEnabled: function() {
+                        return proxy.enabled;
+                    },
+                    on: function(type, listener) {
+                        runtime.events.on(type, listener);
+                        return proxy;
+                    },
+                    once: function(type, listener) {
+                        runtime.events.once(type, listener);
+                        return proxy;
+                    },
+                    off: function(type, listener) {
+                        runtime.events.removeListener(type, listener);
+                        return proxy;
+                    },
+                    removeListener: function(type, listener) {
+                        return proxy.off(type, listener);
+                    },
+                    openSettings: function() {
+                        try {
+                            app.startActivity({ action: 'android.settings.ACCESSIBILITY_SETTINGS' });
+                            return true;
+                        } catch (error) {
+                            return false;
+                        }
+                    },
+                    disableSelf: function() {
+                        return false;
+                    },
+                    getServiceInfo: function() {
+                        return { eventTypes: 0, flags: 0, notificationTimeout: 0 };
+                    }
+                };
+                auto.__remoteServiceProxy = proxy;
+            }
+            return auto.__remoteServiceProxy;
+        }
+        return null;
     });
 
     auto.__defineGetter__("windows", function() {
+        // task-159：主进程 dump 只有活动窗口，多窗口列表暂不可对齐（auto.windowRoots 可用）。
+        if (__isRemote__()) { return []; }
         var service = auto.service;
         return service == null ? [] : util.java.toJsArray(service.getWindows(), true);
     });
 
     auto.__defineGetter__("root", function() {
+        if (__isRemote__()) { return __remoteSelector__().root(); }
         var root = runtime.accessibilityBridge.getRootInCurrentWindow();
         if(root == null){
             return null;
@@ -195,6 +264,7 @@ module.exports = function(runtime, global){
     });
 
     auto.__defineGetter__("rootInActiveWindow", function() {
+        if (__isRemote__()) { return __remoteSelector__().root(); }
         var root = runtime.accessibilityBridge.getRootInActiveWindow();
         if(root == null){
             return null;
@@ -203,6 +273,12 @@ module.exports = function(runtime, global){
     });
 
     auto.__defineGetter__("windowRoots", function() {
+        if (__isRemote__()) {
+            var collection = __remoteSelector__().windowRoots();
+            var roots = [];
+            for (var i = 0; i < collection.size(); i++) { roots.push(collection.get(i)); }
+            return roots;
+        }
         return util.java.toJsArray(runtime.accessibilityBridge.windowRoots(), false)
             .map(root => com.stardust.automator.UiObject.Companion.createRoot(root));
     });
@@ -216,6 +292,31 @@ module.exports = function(runtime, global){
 
     global.__asGlobal__(runtime.automator, ['back', 'home', 'powerDialog', 'notifications', 'quickSettings', 'recents', 'splitScreen']);
     global.__asGlobal__(automator, ['click', 'longClick', 'press', 'swipe', 'gesture', 'gestures', 'gestureAsync', 'gesturesAsync', 'scrollDown', 'scrollUp', 'input', 'setText']);
+
+    // task-159：远程选择器链（text/desc/id/... -> RemoteUiSelector -> 主进程 findNodes）。
+    if (__isRemote__()) {
+        var remoteSelectorMethods = ['text', 'textContains', 'textStartsWith', 'textEndsWith', 'textMatches',
+            'desc', 'descContains', 'descStartsWith', 'descEndsWith', 'descMatches',
+            'id', 'idContains', 'idStartsWith', 'idEndsWith', 'idMatches',
+            'className', 'classNameContains', 'classNameStartsWith', 'classNameEndsWith', 'classNameMatches',
+            'packageName', 'packageNameContains', 'packageNameStartsWith', 'packageNameEndsWith', 'packageNameMatches',
+            'clickable', 'enabled', 'scrollable', 'depth', 'bounds', 'algorithm'];
+        global.selector = function () { return __remoteSelector__(); };
+        remoteSelectorMethods.forEach(function (method) {
+            global[method] = function () {
+                var selector = __remoteSelector__();
+                if (typeof selector[method] === 'function') {
+                    var value = selector[method].apply(selector, arguments);
+                    return value === undefined ? selector : value;
+                }
+                return selector;
+            };
+        });
+        global.$remoteAccessibility = {
+            isRemote: function () { return true; },
+            screenshot: function (path) { return runtime.accessibilityBridge.screenshotTo(String(path)); }
+        };
+    }
 
     return automator;
 }

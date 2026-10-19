@@ -1,5 +1,5 @@
-// @engine rhino
-var path = "/sdcard/脚本/test.js";
+"rhino";
+var path = files.path("./test.js");
 if (!files.exists(path)) {
     toast("脚本文件不存在: " + path);
     exit();

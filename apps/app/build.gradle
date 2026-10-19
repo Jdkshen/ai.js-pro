@@ -17,6 +17,16 @@ def releaseSigningReady = releaseSigningValues.values().every { it != null && !i
 // 扩展里「输入设备IP地址」的 LAN 连接路径不受影响）。
 def devPluginUsbDiscovery = findProperty('devPluginUsbDiscovery') != 'false'
 
+// ---- Flutter 玻璃界面 POC（可行性评估 §9） ---------------------------------
+// -PflutterPoc=true 时把 output/flutter-poc/payload（Flutter 3.3.4 引擎 + 预编译 AOT +
+// flutter_assets + embedding jar）挂进 debug 变体，并提供 GlassFlutterActivity 调试入口。
+// 产物由 output/flutter-poc/build-aot.ps1 生成；不带该参数时构建与发布完全不受影响。
+def flutterPocEnabled = findProperty('flutterPoc') == 'true'
+def flutterPocPayload = rootProject.file('output/flutter-poc/payload')
+if (flutterPocEnabled && !flutterPocPayload.isDirectory()) {
+    throw new GradleException("flutterPoc: payload 缺失，先运行 output/flutter-poc/build-aot.ps1（期望目录: " + flutterPocPayload + "）")
+}
+
 android {
     namespace 'com.jdkshen.aijspro'
     compileSdkVersion versions.compile
@@ -24,6 +34,9 @@ android {
     buildFeatures {
         buildConfig true
         compose true
+        // Phase1：:script 进程的 AIDL 骨架（apps/app/src/main/aidl/com/stardust/autojs/host/）。
+        // 仓库此前没有 AIDL，这里显式开启，不依赖 AGP 版本默认值（buildConfig 同理）。
+        aidl true
     }
     defaultConfig {
         applicationId "com.jdkshen.aijspro"
@@ -78,6 +91,16 @@ android {
         disable 'MissingTranslation'
         disable 'ExtraTranslation'
     }
+    packagingOptions {
+        // com.android.tools:r8 是「脚本里的 Kotlin/Java 源码 → dex」的运行期依赖
+        // （见 modules/engine/.../rhino/D8JarDexer，只调用 D8 的公开 API）。
+        // r8-8.5.35.jar 里带一份 6.5 MB 的 R8 内部 API 数据库
+        // resources/new_api_database.ser，运行期 D8 不会读取它；排除后 APK 少约 2.9 MB。
+        // 若将来真的要跑 R8（shrink/API modeling），删掉这条 exclude。
+        resources {
+            excludes += ['resources/new_api_database.ser']
+        }
+    }
 
     configurations.all {
         resolutionStrategy.force 'com.google.code.findbugs:jsr305:3.0.1'
@@ -121,6 +144,17 @@ android {
             dimension "engine"
             buildConfigField 'boolean', 'RHINO_COMPAT', 'false'
             versionNameSuffix '-lite'
+        }
+    }
+    sourceSets {
+        if (flutterPocEnabled) {
+            debug {
+                java.srcDir 'src/flutterpoc/java'
+                res.srcDir 'src/flutterpoc/res'
+                manifest.srcFile 'src/flutterpoc/AndroidManifest.xml'
+                assets.srcDir new File(flutterPocPayload, 'assets')
+                jniLibs.srcDir new File(flutterPocPayload, 'jniLibs')
+            }
         }
     }
 }
@@ -188,6 +222,54 @@ tasks.register('verifyImGuiFontSubset', Exec) {
 
 
 
+
+// ---- 16 KB 页对齐守卫（P0） -------------------------------------------------
+// 检查 arm64 .so 的 PT_LOAD p_align 与 PT_GNU_RELRO 末尾是否满足 16 KB 页口径。
+// 默认不挂到日常 assemble；只有 -Pverify16kb=true 时才在 debug 包构建完成后自动跑。
+// 单独执行：.\gradlew.bat :app:verify16kbAlignment
+// 指定现有产物：.\gradlew.bat :app:verify16kbAlignment -Pverify16kbApk=<apk>
+// 严格 RELRO：加 -Pverify16kbStrictRelro=true（非白名单库 RELRO 不圆整即失败）。
+def verify16kbOnAssemble = findProperty('verify16kb') == 'true'
+def verify16kbStrictRelro = findProperty('verify16kbStrictRelro') == 'true'
+
+tasks.register('verify16kbAlignment', Exec) {
+    group = 'verification'
+    description = '检查 arm64 .so 的 PT_LOAD / PT_GNU_RELRO 是否满足 16 KB 页对齐。'
+    def requestedApk = findProperty('verify16kbApk')
+    def apkPath = (requestedApk
+            ? rootProject.file(requestedApk.toString()).absolutePath
+            : layout.buildDirectory.file('outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk').get().asFile.absolutePath)
+    def scriptPath = rootProject.file('tools/verify-16kb-alignment.ps1').absolutePath
+    def scriptArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Apk', apkPath]
+    if (verify16kbStrictRelro) {
+        scriptArgs += '-StrictRelro'
+    }
+    workingDir rootProject.projectDir
+    commandLine(['powershell'] + scriptArgs)
+    ignoreExitValue = true
+    doFirst {
+        if (!new File(apkPath).isFile()) {
+            throw new GradleException("16KB 对齐校验找不到 APK：${apkPath}\n" +
+                    '请先构建 :app:assembleMiuixCompatDebug，或用 -Pverify16kbApk=<apk 路径> 指定已有产物。')
+        }
+        println "16KB 对齐校验：${apkPath}"
+    }
+    doLast {
+        def exitCode = executionResult.get().exitValue
+        if (exitCode != 0) {
+            throw new GradleException("16KB 对齐守卫未通过（退出码 ${exitCode}）。" +
+                    '请查看上方表格：非白名单库的 LOAD p_align 必须 >= 0x4000；' +
+                    'RELRO 末尾未圆整默认只提示，加 -Pverify16kbStrictRelro=true 可按严格口径拦截。')
+        }
+    }
+}
+
+if (verify16kbOnAssemble) {
+    tasks.matching { it.name == 'assembleMiuixCompatDebug' }.configureEach {
+        // 用 finalizedBy 而不是 dependsOn：要校验的是刚打出来的 APK。
+        finalizedBy tasks.named('verify16kbAlignment')
+    }
+}
 
 repositories {
     flatDir {
@@ -284,11 +366,21 @@ dependencies {
     liteImplementation project(':rhino-language')
     implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')
+    if (flutterPocEnabled) {
+        // Flutter 3.3.4 embedding（classes-only jar；libflutter.so / libapp.so 走 jniLibs）。
+        debugImplementation files(new File(flutterPocPayload, 'flutter_embedding_3.3.4.jar'))
+        // FlutterView 构造时无条件创建 WindowInfoRepositoryCallbackAdapterWrapper，
+        // 需要 androidx.window 的 Java 适配器（window 本体已在依赖图中，1.3.0）。
+        debugImplementation 'androidx.window:window-java:1.3.0'
+    }
 }
 
 def bundledSampleDir = file('src/main/assets/sample')
-def bundledQuickJsSampleDir = file('src/main/assets/sample/QuickJS 新引擎')
-def bundledYoloSampleDir = file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测')
+def bundledQuickJsSampleDir = file('src/main/assets/sample/QuickJS 引擎')
+def bundledYoloSampleDir = file('src/main/assets/sample/QuickJS 引擎/YOLO目标检测')
+// 示例集按引擎分三棵：Rhino 引擎 / QuickJS 引擎 / Node 引擎（前两棵来自本仓库既有示例，
+// Rhino/Node 两棵的语料来自 Auto.js Pro 原包示例集；Node 引擎下允许 nodejs 入口）。
+def bundledNodeSampleDir = file('src/main/assets/sample/Node 引擎')
 
 // 象棋工程源码的版本指纹：project.json 是唯一版本源，清单里是逐文件 SHA-256。
 // 工程本身不随宿主 APK 打包（宿主带的是 plugins/xiangqi-plugin），
@@ -309,13 +401,27 @@ tasks.register('verifyBundledSamplesNoNode') {
 
     doLast {
         def forbiddenPaths = fileTree(bundledSampleDir).files.findAll { sample ->
-            bundledSampleDir.toPath().relativize(sample.toPath()).any { segment ->
+            def relative = bundledSampleDir.toPath().relativize(sample.toPath())
+            if (relative.iterator().hasNext()
+                    && relative.iterator().next().toString() == 'Node 引擎') {
+                return false
+            }
+            relative.any { segment ->
                 segment.toString() ==~ /(?i)node_modules|nodejs.*|node\.js/
             }
         }
+        // Node 引擎目录是「Auto.js Pro 原包示例集」的 Node.js 部分，允许 nodejs 入口；
+        // 其余示例目录仍然禁止 Node 入口（历史约定：普通示例必须 Rhino/QuickJS 可跑）。
         def nodeEntries = fileTree(bundledSampleDir) {
             include '**/*.js'
         }.files.findAll { sample ->
+            def relative = bundledSampleDir.toPath().relativize(sample.toPath()).toString()
+            def firstSegment = relative.contains(File.separator)
+                    ? relative.substring(0, relative.indexOf(File.separator))
+                    : relative
+            if (firstSegment == 'Node 引擎') {
+                return false
+            }
             def source = sample.getText('UTF-8').replaceFirst(/^\uFEFF/, '').trim()
             source ==~ /(?s)^["']nodejs["'];?\s*.*/
         }
@@ -336,8 +442,8 @@ tasks.register('verifyBundledYoloSamples') {
 
     doLast {
         def expectedAssets = [
-                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/models/yolo26_160.onnx'),
-                file('src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/DNN/models/labels.txt')
+                file('src/main/assets/sample/QuickJS 引擎/YOLO目标检测/DNN/models/yolo26_160.onnx'),
+                file('src/main/assets/sample/QuickJS 引擎/YOLO目标检测/DNN/models/labels.txt')
         ]
         def missingAssets = expectedAssets.findAll { !it.isFile() }
         def staleReferences = fileTree(bundledYoloSampleDir) {
@@ -373,7 +479,12 @@ tasks.register('verifyQuickJsSamplesMarked') {
         }.files.findAll { sample ->
             def source = sample.getText('UTF-8').replaceFirst(/^\uFEFF/, '')
             def firstLine = source.readLines().find { !it.trim().isEmpty() }
-            firstLine == null || !firstLine.trim().equalsIgnoreCase('// @engine quickjs')
+            if (firstLine == null) {
+                return true
+            }
+            def line = firstLine.trim().toLowerCase()
+            // 两种写法都认：引擎字符串指令（"quickjs";）或旧注释指令（// @engine quickjs）
+            !line.contains('quickjs')
         }
         if (!offenders.isEmpty()) {
             throw new GradleException('QuickJS sample is missing the first-line engine marker:\n' +
@@ -550,4 +661,86 @@ tasks.register('assembleCommonDebug') {
 tasks.register('testMiuixDebugUnitTest') {
     group = 'verification'
     dependsOn 'testMiuixCompatDebugUnitTest'
+}
+
+
+// task-107/109/119：瘦身打包模板校验（assets/template.apk 无 lib/ + runtime assets 二次瘦身 + excluded 清单齐全 + AXML 包名检测）
+tasks.register("verifySlimPackagingTemplate") {
+    doLast {
+        def assetsDir = file("src/main/assets")
+        def template = new File(assetsDir, "template.apk")
+        if (!template.isFile()) {
+            throw new GradleException("缺少瘦身打包模板：apps/app/src/main/assets/template.apk（运行 inrt 瘦身模板生成步骤）")
+        }
+        long size = template.length()
+        // task-119：剔除 source-engine-upgrade（libnode 97MB 未压缩）与 new_api_database.ser 后约 16.4MB；
+        // 允许 6~20MB（下限给未来再瘦身留余量，上限防止把全量 lib/ 模板误带回来）。
+        if (size < 6L * 1024 * 1024 || size > 20L * 1024 * 1024) {
+            throw new GradleException("瘦身模板体积异常：" + size + " 字节（预期 6-20MB，不含 lib/）")
+        }
+        def excluded = new File(assetsDir, "excluded-zip-files.json")
+        if (!excluded.isFile()) {
+            throw new GradleException("缺少 excluded-zip-files.json（记录从宿主 APK 补齐的 lib 清单）")
+        }
+        def json = new groovy.json.JsonSlurper().parse(excluded)
+        ["general", "opencv", "v8"].each { key ->
+            if (!(json[key] instanceof List)) {
+                throw new GradleException("excluded-zip-files.json 缺少数组字段：" + key)
+            }
+        }
+        if (json.general.isEmpty() && json.opencv.isEmpty()) {
+            throw new GradleException("excluded-zip-files.json 的 general/opencv 不能同时为空")
+        }
+        def zip = new java.util.zip.ZipFile(template)
+        try {
+            def names = new ArrayList<String>()
+            def entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                def entry = entries.nextElement()
+                names.add(entry.name)
+                if (entry.name.startsWith("lib/")) {
+                    throw new GradleException("瘦身模板不能包含 lib/ 条目：" + entry.name)
+                }
+            }
+            ["AndroidManifest.xml", "classes.dex", "resources.arsc"].each { required ->
+                if (!names.contains(required)) {
+                    throw new GradleException("瘦身模板缺少必需条目：" + required)
+                }
+            }
+            // task-109：AXML 是二进制，不能整段按 UTF-16 文本搜；在原始字节里按 AXML 字符串池
+            // 的两种编码（UTF-8 / UTF-16LE）分别搜包名，找不到只 warn 不阻断（大小/条目已硬校验）。
+            def manifestBytes = zip.getInputStream(zip.getEntry("AndroidManifest.xml")).getBytes()
+            def containsBytes = { byte[] data, byte[] needle ->
+                if (needle.length == 0 || data.length < needle.length) return false
+                for (int i = 0; i <= data.length - needle.length; i++) {
+                    boolean match = true
+                    for (int j = 0; j < needle.length; j++) {
+                        if (data[i + j] != needle[j]) { match = false; break }
+                    }
+                    if (match) return true
+                }
+                return false
+            }
+            def name = "com.stardust.autojs.inrt"
+            boolean packageFound = containsBytes(manifestBytes, name.getBytes("UTF-8"))
+                    || containsBytes(manifestBytes, name.getBytes("UTF-16LE"))
+            if (!packageFound) {
+                // ASCII 日志：Windows 控制台/构建日志编码可能是 GBK，中文 warn 会乱码；
+                // 包名找不到只 warn 不阻断（大小/entry/lib 已硬校验），中文原因留在异常里。
+                logger.warn("C-PKG: package name not found in AXML string pool, skip package check; "
+                        + "size/entries/lib checks passed")
+            }
+            logger.lifecycle("C-PKG: slim template OK size=" + size + " entries=" + names.size()
+                    + " package=" + (packageFound ? name : "unverified")
+                    + " general=" + json.general.size() + " opencv=" + json.opencv.size()
+                    + " v8=" + json.v8.size())
+        } finally {
+            zip.close()
+        }
+    }
+}
+tasks.configureEach { t ->
+    if (t.name == "preBuild") {
+        t.dependsOn("verifySlimPackagingTemplate")
+    }
 }

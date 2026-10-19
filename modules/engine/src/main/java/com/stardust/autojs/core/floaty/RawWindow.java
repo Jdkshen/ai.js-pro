@@ -50,6 +50,11 @@ public class RawWindow extends FloatyWindow {
     protected View onCreateView(Context context) {
         ViewGroup windowView = (ViewGroup) View.inflate(context, R.layout.raw_window, null);
         mContentView = mRawFloaty.inflateWindowView(context, windowView);
+        // ImGui 类 native 项目：把窗口里的原生 SurfaceView 换成「回调投递到脚本线程」的版本，
+        // 让 nativeInit/帧循环/shutdown 在同一线程串行（修 EGL_BAD_ACCESS 与 DestroyContext 竞态）。
+        // 窗口创建发生在 main 线程，但脚本线程此时还阻塞在 waitForCreation()，尚未拿到 view 引用，
+        // 所以替换后脚本按 id 找到的就是新实例。
+        FloatySurfaceThreading.rebindSurfaceViews(windowView);
         return windowView;
     }
 
@@ -79,6 +84,15 @@ public class RawWindow extends FloatyWindow {
                 PixelFormat.TRANSLUCENT);
         layoutParams.gravity = Gravity.TOP | Gravity.START;
         return layoutParams;
+    }
+
+    @Override
+    public void close() {
+        // C 侧 STOP 顺序：closeAll（本方法）→ stopExecution → engine.destroy。这里同步释放
+        // Surface 回调投递（早于 removeView 的异步 detach），确保 destroy 后队列里不再执行脚本回调。
+        FloatySurfaceThreading.releaseSurfaceViews(getWindowView());
+        FloatySurfaceThreading.releaseSurfaceViews(getContentView());
+        super.close();
     }
 
     public void disableWindowFocus() {

@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var superMario = images.read("./super_mario.jpg");
 var block = images.read("./block.png");
 

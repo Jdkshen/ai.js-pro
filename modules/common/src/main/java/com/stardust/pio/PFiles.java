@@ -4,6 +4,7 @@ import android.app.NativeActivity;
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.os.Environment;
+import android.os.Build;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -22,6 +23,7 @@ import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.Charset;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Locale;
 
 /**
@@ -449,6 +451,11 @@ public class PFiles {
 
     public static String[] listDir(String path) {
         File file = new File(path);
+        // File.list() aborts in Android's JNI when a directory contains malformed
+        // UTF-8 names. This cannot be caught as a Java exception (MI8 SIGABRT).
+        if (Build.VERSION.SDK_INT >= 26) {
+            return SafeDirectoryLister.list(file);
+        }
         return wrapNonNull(file.list());
     }
 
@@ -459,6 +466,13 @@ public class PFiles {
     }
 
     public static String[] listDir(String path, final Func1<String, Boolean> filter) {
+        if (Build.VERSION.SDK_INT >= 26) {
+            ArrayList<String> result = new ArrayList<>();
+            for (String name : listDir(path)) {
+                if (filter.call(name)) result.add(name);
+            }
+            return result.toArray(new String[0]);
+        }
         final File file = new File(path);
         return wrapNonNull(file.list(new FilenameFilter() {
             @Override

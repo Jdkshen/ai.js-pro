@@ -17,7 +17,9 @@ import com.bumptech.glide.request.transition.Transition
 import com.evernote.android.job.JobRequest
 import com.flurry.android.FlurryAgent
 import com.squareup.leakcanary.LeakCanary
+import com.jdkshen.aijspro.external.HostScripts
 import com.stardust.app.GlobalAppContext
+import com.stardust.autojs.ScriptEngineService
 import com.stardust.autojs.core.ui.inflater.ImageLoader
 import com.stardust.autojs.core.ui.inflater.util.Drawables
 import com.stardust.autojs.core.opencv.OpenCVHelper
@@ -43,6 +45,19 @@ import java.util.*
 class App : MultiDexApplication() {
     lateinit var dynamicBroadcastReceivers: DynamicBroadcastReceivers
         private set
+
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        // Android 9+ forbids sharing a WebView data directory across processes.
+        // Configure before providers/onCreate can initialize WebView, including
+        // QuickJS :script and Node :node24. Keep the main process's existing data.
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            val process = getProcessName()
+            if (process != base.packageName) {
+                android.webkit.WebView.setDataDirectorySuffix(process.replace(':', '_'))
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -92,9 +107,24 @@ class App : MultiDexApplication() {
     private fun init() {
         ThemeColorManagerCompat.init(this, ThemeColor(resources.getColor(R.color.colorPrimary), resources.getColor(R.color.colorPrimaryDark), resources.getColor(R.color.colorAccent)))
         AutoJs.initInstance(this)
+        // 音量上键在脚本窗口（ScriptExecuteActivity / QuickJS overlay）聚焦时的停止入口：
+        // 宿主层停 :script/:native 的任务；主进程引擎的 stopAll 由 ScriptEngineService 补。
+        // 不依赖无障碍/root 的全局按键监听（HyperOS 上无障碍设置可能被系统重置）。
+        ScriptEngineService.setVolumeUpStopAllHook { HostScripts.stopAllHostScripts() }
         OpenCVHelper.initIfNeeded(applicationContext) {
             AutoJs.getInstance().globalConsole.info(OpenCVHelper.getVersionInfo())
         }
+        // Phase0 隔离脚本进程（:native）：只需要引擎本身。定时任务调度、动态广播、
+        // 示例同步、无障碍监控这些都是主进程职责，在隔离进程里再跑一遍会重复触发。
+        if (isNativeIsolationProcess()) {
+            return
+        }
+        // task-111：冷启动先清理孤儿 floaty（含 :script 残留），再恢复悬浮菜单；顺序保证清理不误杀 circular menu。
+        cleanupOrphanFloatiesBeforeRestore()
+        // task-54：记住并恢复「悬浮窗显示意图 / 无障碍曾开启」状态。
+        // 悬浮窗：权限还在就自动显示；权限被覆盖安装清掉时，Shizuku 已授权则 appops 自动恢复。
+        // 无障碍：Shizuku 已授权时后台自动恢复，否则给非阻塞提示（不伪造绕过系统权限）。
+        com.jdkshen.aijspro.tool.StartupPermissionRestore.restoreOnStartup(this)
         if (Pref.isRunningVolumeControlEnabled()) {
             GlobalKeyObserver.init()
         }
@@ -104,6 +134,36 @@ class App : MultiDexApplication() {
         // 升级后把内置示例对齐到新版本：示例目录是懒拷贝，内容被改过的示例
         // 不会自己刷新（旧版本已修好的示例在手机上升级后仍然是旧的）。
         BundledSampleSync.syncIfNeeded(this)
+    }
+
+    /** task-111：反射调用 flutterPoc 源集的 FloatyOrphanCleanup（普通构建没有该类，静默跳过）。 */
+    private fun cleanupOrphanFloatiesBeforeRestore() {
+        try {
+            val cls = Class.forName("com.jdkshen.aijspro.flutterpoc.FloatyOrphanCleanup")
+            val method = cls.getDeclaredMethod("cleanup", String::class.java)
+            method.isAccessible = true
+            method.invoke(null, "app-cold-start-before-restore")
+        } catch (_: Throwable) {
+            // 非 flutterPoc 构建或类被裁剪：忽略
+        }
+    }
+
+    /**
+     * 是否运行在隔离脚本进程：Phase0 的 ":native" 或 Phase1 的 ":script"。
+     * 这些进程只需要引擎本身，主进程职责（定时任务调度/动态广播/示例同步/音量键监听）不能重复执行。
+     */
+    private fun isNativeIsolationProcess(): Boolean {
+        val scriptName = "$packageName:script"
+        val processName = if (android.os.Build.VERSION.SDK_INT >= 28) {
+            getProcessName()
+        } else {
+            try {
+                java.io.File("/proc/self/cmdline").readText().trimEnd('\u0000')
+            } catch (e: Throwable) {
+                ""
+            }
+        }
+        return processName == scriptName || processName == "$packageName:native"
     }
 
     @SuppressLint("CheckResult")

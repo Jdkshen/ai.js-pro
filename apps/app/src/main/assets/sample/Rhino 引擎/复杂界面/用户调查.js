@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <vertical>
         <text textSize="18sp" textColor="#000000" margin="20" textStyle="bold">

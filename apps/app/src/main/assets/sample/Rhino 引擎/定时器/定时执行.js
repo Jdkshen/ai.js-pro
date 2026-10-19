@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 toast("静等20秒，你会看到想看的...");
 
 var i = 0;

@@ -1,9 +1,5 @@
-// @engine rhino
-// ⚠ 本项目用的 Rhino(1.7.7) 不支持把 ES6 箭头函数转成 Java 接口监听器
-//   （例如 setOnCheckedChangeListener(v => ...) 会报 "Cannot convert ArrowFunction to ..."），
-//   请把箭头函数改成 function(){} 再运行。
 "ui";
-
+"rhino";
 $ui.layout(
     <vertical padding="16">
         <checkbox id="cb1" text="复选框"/>

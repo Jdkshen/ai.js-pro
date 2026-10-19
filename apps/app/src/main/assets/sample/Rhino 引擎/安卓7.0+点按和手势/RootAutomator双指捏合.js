@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 let ra = new RootAutomator();
 sleep(2000);
 

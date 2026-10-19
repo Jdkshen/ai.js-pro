@@ -76,8 +76,15 @@ class McpHttpServerTest {
 
     @Test
     fun originAndUntrustedHostsAreRejectedWithoutDnsResolution() {
-        for (origin in listOf("https://example.com", "null", "")) {
-            assertEquals(403, post(INITIALIZE, overrides = mapOf("Origin" to origin)).status)
+        for (origin in listOf(
+            "https://example.com", "null", "",
+            "http://localhost.evil", "http://127.0.0.1.evil", "http://evil@localhost",
+            "http://localhost/path", "http://localhost?x", "http://localhost#x",
+            "http://[::2]", "http://0.0.0.0", "http://127.0.0.1:0", "http://127.0.0.1:65536"
+        )) {
+            val response = post(INITIALIZE, overrides = mapOf("Origin" to origin))
+            assertEquals(origin, 403, response.status)
+            assertFalse(response.headers.containsKey("access-control-allow-origin"))
         }
         for (host in listOf("attacker.invalid", "deadbeef", "127.0.0.1.attacker.invalid", "0.0.0.0")) {
             assertEquals(403, post(INITIALIZE, overrides = mapOf("Host" to host)).status)
@@ -87,6 +94,113 @@ class McpHttpServerTest {
         assertEquals(200, post(INITIALIZE, overrides = mapOf("Host" to "localhost:${server.localPort}")).status)
         assertEquals(200, post(INITIALIZE, overrides = mapOf("Host" to "127.0.0.1:18788")).status)
         assertEquals(403, post(INITIALIZE, overrides = mapOf("Host" to "127.0.0.1:0")).status)
+    }
+
+    @Test
+    fun allowedLoopbackOriginsAreEchoedExactlyWithVaryAndNoCredentials() {
+        val origins = listOf(
+            "http://localhost",
+            "https://localhost:8443",
+            "http://127.0.0.1:${server.localPort}",
+            "http://127.8.9.10",
+            "https://[::1]:5173"
+        )
+        origins.forEach { origin ->
+            val response = post(INITIALIZE, overrides = mapOf("Origin" to origin))
+            assertEquals(origin, 200, response.status)
+            assertEquals(origin, response.headers["access-control-allow-origin"])
+            assertEquals("Origin", response.headers["vary"])
+            assertFalse(response.headers.containsKey("access-control-allow-credentials"))
+        }
+        val withoutOrigin = post(INITIALIZE)
+        assertEquals(200, withoutOrigin.status)
+        assertFalse(withoutOrigin.headers.containsKey("access-control-allow-origin"))
+        assertFalse(withoutOrigin.headers.containsKey("vary"))
+        assertEquals(origins.size + 1, calls.get())
+    }
+
+    @Test
+    fun validCorsPreflightSkipsBearerAndHandler() {
+        val origin = "http://localhost:5173"
+        val response = post(
+            "", method = "OPTIONS", overrides = mapOf(
+                "Origin" to origin,
+                "Access-Control-Request-Method" to "POST",
+                "Access-Control-Request-Headers" to "authorization, content-type, mcp-protocol-version, mcp-session-id",
+                "Authorization" to null
+            )
+        )
+
+        assertEquals(204, response.status)
+        assertEquals("", response.body)
+        assertEquals("0", response.headers["content-length"])
+        assertEquals(origin, response.headers["access-control-allow-origin"])
+        assertEquals("Origin", response.headers["vary"])
+        assertEquals("POST", response.headers["access-control-allow-methods"])
+        val allowHeaders = response.headers["access-control-allow-headers"].orEmpty()
+        listOf("Authorization", "Content-Type", "MCP-Protocol-Version", "MCP-Session-Id").forEach {
+            assertTrue("Missing $it in $allowHeaders", allowHeaders.contains(it, ignoreCase = true))
+        }
+        assertFalse(response.headers.containsKey("access-control-allow-credentials"))
+        assertFalse(response.headers.containsKey("www-authenticate"))
+        assertEquals(0, calls.get())
+    }
+
+    @Test
+    fun invalidOrOriginlessOptionsStayRejectedWithoutReachingHandler() {
+        val origin = "http://localhost:5173"
+        assertEquals(405, post("", method = "OPTIONS").status)
+        assertEquals(405, post("", method = "OPTIONS", overrides = mapOf("Origin" to origin)).status)
+        assertEquals(405, post("", method = "OPTIONS", overrides = mapOf(
+            "Origin" to origin, "Access-Control-Request-Method" to "GET"
+        )).status)
+        assertEquals(405, post("", method = "OPTIONS", overrides = mapOf(
+            "Origin" to origin,
+            "Access-Control-Request-Method" to "POST",
+            "Access-Control-Request-Headers" to "x-not-allowed"
+        )).status)
+        val badHost = post("", method = "OPTIONS", overrides = mapOf(
+            "Origin" to origin,
+            "Access-Control-Request-Method" to "POST",
+            "Host" to "127.0.0.1.evil"
+        ))
+        assertEquals(403, badHost.status)
+        assertEquals(origin, badHost.headers["access-control-allow-origin"])
+        assertEquals(0, calls.get())
+    }
+
+    @Test
+    fun unauthorizedAndRpcErrorsKeepAllowedOriginCorsHeaders() {
+        val origin = "http://127.0.0.1:${server.localPort}"
+        val unauthorized = post(INITIALIZE, overrides = mapOf(
+            "Origin" to origin, "Authorization" to "Bearer wrong"
+        ))
+        assertEquals(401, unauthorized.status)
+        assertEquals(origin, unauthorized.headers["access-control-allow-origin"])
+        assertEquals("Origin", unauthorized.headers["vary"])
+        assertTrue(unauthorized.headers.containsKey("www-authenticate"))
+
+        val parseError = post("{", overrides = mapOf("Origin" to origin))
+        assertEquals(400, parseError.status)
+        assertEquals(origin, parseError.headers["access-control-allow-origin"])
+        assertEquals("Origin", parseError.headers["vary"])
+        assertEquals(-32700, parseError.json().getAsJsonObject("error").get("code").asInt)
+
+        val invalidRequest = post("{}", overrides = mapOf("Origin" to origin))
+        assertEquals(400, invalidRequest.status)
+        assertEquals(origin, invalidRequest.headers["access-control-allow-origin"])
+        assertEquals(-32600, invalidRequest.json().getAsJsonObject("error").get("code").asInt)
+        assertEquals(0, calls.get())
+
+        val internalError = post(
+            """{"jsonrpc":"2.0","id":"request-1","method":"fail"}""",
+            overrides = mapOf("Origin" to origin)
+        )
+        assertEquals(200, internalError.status)
+        assertEquals(origin, internalError.headers["access-control-allow-origin"])
+        assertEquals("Origin", internalError.headers["vary"])
+        assertEquals(-32603, internalError.json().getAsJsonObject("error").get("code").asInt)
+        assertEquals(1, calls.get())
     }
 
     @Test

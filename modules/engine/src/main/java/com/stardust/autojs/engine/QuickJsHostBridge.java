@@ -43,6 +43,11 @@ import com.stardust.autojs.core.database.DatabaseResultSet;
 import com.stardust.autojs.core.image.ImageWrapper;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
+import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
+import com.stardust.autojs.runtime.api.remote.RemoteUiObject;
+import com.stardust.autojs.runtime.api.remote.RemoteUiObjectCollection;
+import com.stardust.autojs.runtime.api.remote.RemoteUiSelector;
+import com.stardust.autojs.runtime.exception.ScriptException;
 import com.stardust.autojs.runtime.api.OcrSession;
 import com.stardust.autojs.runtime.api.OCRResult;
 import com.stardust.autojs.runtime.api.PPOcr;
@@ -1129,7 +1134,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (!isAssetPath(path)) {
             throw new IllegalArgumentException("Bundled image path must start with asset://");
         }
-        try (InputStream input = mRuntime.uiHandler.getContext().getAssets().open(stripAssetPrefix(path));
+        try (InputStream input = getAssets().open(resolveBundledAssetName(stripAssetPrefix(path)));
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
             int count;
@@ -1159,9 +1164,17 @@ final class QuickJsHostBridge implements AutoCloseable,
         String normalized = normalizeQuickJsBackend(backend);
         AutoCloseable detector;
         if ("opencv".equals(normalized)) {
-            detector = isAssetPath(modelPath)
-                    ? mRuntime.yolo.createOpenCvFromAssets(stripAssetPrefix(modelPath), inputWidth, inputHeight, threads)
-                    : mRuntime.yolo.createOpenCv(mRuntime.files.path(modelPath), inputWidth, inputHeight, threads);
+            if (isAssetPath(modelPath)) {
+                try {
+                    // task-118：老脚本可能还引用已改名的示例根目录（QuickJS 新引擎 → QuickJS 引擎）。
+                    String assetName = resolveBundledAssetName(stripAssetPrefix(modelPath));
+                    detector = mRuntime.yolo.createOpenCvFromAssets(assetName, inputWidth, inputHeight, threads);
+                } catch (IOException error) {
+                    throw new IllegalArgumentException("无法读取 YOLO 模型: " + modelPath, error);
+                }
+            } else {
+                detector = mRuntime.yolo.createOpenCv(mRuntime.files.path(modelPath), inputWidth, inputHeight, threads);
+            }
         } else {
             throw new IllegalArgumentException("QuickJS YOLO 不支持的 backend: " + normalized);
         }
@@ -1764,7 +1777,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     public String readYoloLabels(String path) {
         try (InputStream input = isAssetPath(path)
-                ? mRuntime.uiHandler.getContext().getAssets().open(stripAssetPrefix(path))
+                ? getAssets().open(resolveBundledAssetName(stripAssetPrefix(path)))
                 : new FileInputStream(mRuntime.files.path(path));
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
@@ -3767,8 +3780,21 @@ final class QuickJsHostBridge implements AutoCloseable,
             mTextView = new android.widget.TextView(mContext);
             mTextView.setText(c.optString("text", ""));
             if (c.has("textSize")) {
-                mTextView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
-                        (float) c.optDouble("textSize", 14));
+                // 兼容 textSize: 14（数字=SP）与 textSize: "22sp"/"12dp"/"100px"（字符串走尺寸解析）；
+                // 非法值忽略并打中文提示，不让浮窗创建因 NumberFormatException 失败。
+                Object rawTextSize = c.opt("textSize");
+                float textSizePx = Float.NaN;
+                if (rawTextSize instanceof Number) {
+                    textSizePx = android.util.TypedValue.applyDimension(
+                            android.util.TypedValue.COMPLEX_UNIT_SP,
+                            ((Number) rawTextSize).floatValue(), displayMetrics(mContext));
+                } else if (rawTextSize != null) {
+                    textSizePx = parseUiDimensionPx(String.valueOf(rawTextSize),
+                            android.util.TypedValue.COMPLEX_UNIT_SP, mContext, "textSize");
+                }
+                if (!Float.isNaN(textSizePx)) {
+                    mTextView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, textSizePx);
+                }
             }
             if (c.has("textColor")) {
                 try {
@@ -4809,6 +4835,16 @@ final class QuickJsHostBridge implements AutoCloseable,
     // ---- ui (Activity 承载 / fullscreen overlay 两种形态) ----
     private com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater mUiInflater;
     private volatile View mUiRoot;
+    /** overlay 窗口的根容器（UiOverlayRoot，包着内容视图和右上角关闭按钮）；Activity 模式为 null。 */
+    private volatile View mUiWindowRoot;
+    /** 用户主动关闭 overlay 的防抖标记（返回键 + ✕ 可能连续触发，只处理一次）。 */
+    private volatile boolean mUiCloseRequested;
+    /**
+     * 进程内最近一次 QuickJS overlay UI 的根视图：新的 {@code ui.layout} 会先把它摘掉。
+     * 真机出现过「界面叠在一起」：上一次脚本/另一个 UI 示例的覆盖窗还开着时，新脚本又
+     * addView 了一个 MATCH_PARENT 窗口，看起来就是标题/按钮互相重叠。
+     */
+    private static volatile View sUiOverlayRoot;
     private volatile boolean mUiShown;
     private volatile int mUiWindowId;
     /** `"ui"` 模式（跑在 ScriptExecuteActivity 里）注入的宿主 Activity；其余场景为 null。 */
@@ -4899,9 +4935,564 @@ final class QuickJsHostBridge implements AutoCloseable,
         return measured;
     }
 
+    /**
+     * QuickJS UI 的尺寸字符串解析（{@code attr("textSize", "22sp")}、浮窗配置等入口共用）。
+     *
+     * <p>支持 px / dp / dip / sp / pt / in / mm 单位，以及纯数字、正负号、小数；无单位时用
+     * {@code defaultUnit}（textSize 传 SP，与 XML {@code textSize="16sp"} 以及浮窗
+     * {@code textSize: 14}（数字按 SP）的语义一致）。换算用
+     * {@link android.util.TypedValue#applyDimension}：SP 自动走 scaledDensity（字体缩放），
+     * DP 走 density。
+     *
+     * <p>非法值/未知单位<b>不抛异常</b>：记录中文提示并返回 {@link Float#NaN}，调用方按
+     * 「忽略该属性」处理。以前 textSize 直接 {@code Float.parseFloat("22sp")} 会抛
+     * NumberFormatException，把整段 UI 脚本带崩（QuickJS UI 示例回归问题）。
+     */
+    private static final Pattern UI_DIMENSION_PATTERN = Pattern.compile(
+            "([+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+))\\s*([a-zA-Z]*)");
+
+    static float parseUiDimensionPx(String raw, int defaultUnit, Context context, String attributeName) {
+        if (raw == null) {
+            return Float.NaN;
+        }
+        String text = raw.trim();
+        if (text.isEmpty()) {
+            Log.w("QuickJsHostBridge", "控件属性 " + attributeName + " 的尺寸为空，已忽略");
+            return Float.NaN;
+        }
+        java.util.regex.Matcher matcher = UI_DIMENSION_PATTERN.matcher(text);
+        if (!matcher.matches()) {
+            Log.w("QuickJsHostBridge", "控件属性 " + attributeName + " 的尺寸「" + raw
+                    + "」无法解析，已忽略（支持 px/dp/dip/sp/pt/in/mm 或纯数字）");
+            return Float.NaN;
+        }
+        int unit = defaultUnit;
+        String unitText = matcher.group(2) == null ? "" : matcher.group(2).toLowerCase(Locale.US);
+        if (!unitText.isEmpty()) {
+            switch (unitText) {
+                case "px":
+                    unit = android.util.TypedValue.COMPLEX_UNIT_PX;
+                    break;
+                case "dp":
+                case "dip":
+                    unit = android.util.TypedValue.COMPLEX_UNIT_DIP;
+                    break;
+                case "sp":
+                    unit = android.util.TypedValue.COMPLEX_UNIT_SP;
+                    break;
+                case "pt":
+                    unit = android.util.TypedValue.COMPLEX_UNIT_PT;
+                    break;
+                case "in":
+                    unit = android.util.TypedValue.COMPLEX_UNIT_IN;
+                    break;
+                case "mm":
+                    unit = android.util.TypedValue.COMPLEX_UNIT_MM;
+                    break;
+                default:
+                    Log.w("QuickJsHostBridge", "控件属性 " + attributeName + " 的尺寸单位「" + unitText
+                            + "」不支持，已忽略（支持 px/dp/dip/sp/pt/in/mm）");
+                    return Float.NaN;
+            }
+        }
+        final float number;
+        try {
+            number = Float.parseFloat(matcher.group(1));
+        } catch (NumberFormatException error) {
+            Log.w("QuickJsHostBridge", "控件属性 " + attributeName + " 的尺寸数值「" + raw + "」非法，已忽略");
+            return Float.NaN;
+        }
+        return android.util.TypedValue.applyDimension(unit, number, displayMetrics(context));
+    }
+
+    /** 当前屏幕 DisplayMetrics（优先控件 Context；拿不到时退回系统资源）。 */
+    private static android.util.DisplayMetrics displayMetrics(Context context) {
+        try {
+            if (context != null && context.getResources() != null) {
+                return context.getResources().getDisplayMetrics();
+            }
+        } catch (Throwable ignored) {
+        }
+        return android.content.res.Resources.getSystem().getDisplayMetrics();
+    }
+
+    // ------------------------------------------------------------------
+    // 常用布局属性（单位/枚举解析，失败只警告）
+    // ------------------------------------------------------------------
+
+    /**
+     * 常用布局属性写入。命中返回 true/false（false = 已识别但当前控件/父布局不支持，已警告），
+     * 未命中返回 null 交给 ViewAttributes / 控件方法兜底。
+     */
+    private static Boolean writeQuickJsCommonAttribute(View view, String name, String value) {
+        if (value != null) {
+            String trimmed = value.trim();
+            // 资源引用（@dimen/x、?attr/x）与百分比（50%）交给 ViewAttributes/Dimensions 处理，
+            // 本层只做单位换算与布局参数兜底，避免把原本能用的写法拦掉。
+            if (trimmed.startsWith("@") || trimmed.startsWith("?") || trimmed.contains("%")) {
+                return null;
+            }
+        }
+        switch (name) {
+            case "visibility": {
+                Integer visibility = parseQuickJsVisibility(value);
+                if (visibility == null) {
+                    Log.w("QuickJsHostBridge", "控件属性 visibility=" + value
+                            + " 无效，已忽略（可用 0/4/8 或 visible/invisible/gone）");
+                    return false;
+                }
+                view.setVisibility(visibility);
+                return true;
+            }
+            case "width":
+            case "layout_width":
+            case "w":
+                return applyQuickJsViewSize(view, true, value, name);
+            case "height":
+            case "layout_height":
+            case "h":
+                return applyQuickJsViewSize(view, false, value, name);
+            case "minWidth":
+            case "minHeight": {
+                Integer pixels = parseQuickJsDimension(value, view, name);
+                if (pixels == null) {
+                    return false;
+                }
+                if ("minWidth".equals(name)) {
+                    view.setMinimumWidth(pixels);
+                } else {
+                    view.setMinimumHeight(pixels);
+                }
+                view.requestLayout();
+                return true;
+            }
+            case "maxWidth":
+            case "maxHeight": {
+                if (!(view instanceof android.widget.TextView)) {
+                    Log.w("QuickJsHostBridge", "控件属性 " + name + " 只支持文本控件，已忽略");
+                    return false;
+                }
+                Integer pixels = parseQuickJsDimension(value, view, name);
+                if (pixels == null) {
+                    return false;
+                }
+                if ("maxWidth".equals(name)) {
+                    ((android.widget.TextView) view).setMaxWidth(pixels);
+                } else {
+                    ((android.widget.TextView) view).setMaxHeight(pixels);
+                }
+                view.requestLayout();
+                return true;
+            }
+            case "padding":
+                return applyQuickJsPadding(view, "padding", value);
+            case "paddingLeft":
+            case "paddingTop":
+            case "paddingRight":
+            case "paddingBottom":
+                return applyQuickJsPadding(view, name, value);
+            case "margin":
+            case "layout_margin":
+                return applyQuickJsMargin(view, "margin", value);
+            case "marginLeft":
+            case "marginTop":
+            case "marginRight":
+            case "marginBottom":
+            case "layout_marginLeft":
+            case "layout_marginTop":
+            case "layout_marginRight":
+            case "layout_marginBottom":
+            case "layout_marginStart":
+            case "layout_marginEnd":
+                return applyQuickJsMargin(view, name, value);
+            case "layout_weight":
+                return applyQuickJsLayoutWeight(view, value);
+            case "gravity":
+                return applyQuickJsGravity(view, false, value);
+            case "layout_gravity":
+                return applyQuickJsGravity(view, true, value);
+            default:
+                return null;
+        }
+    }
+
+    /** 数字或名称的可见性：0/4/8 与 visible/invisible/gone（大小写不敏感）。 */
+    private static Integer parseQuickJsVisibility(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String text = raw.trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        switch (text.toLowerCase(Locale.US)) {
+            case "0":
+            case "visible":
+            case "show":
+                return android.view.View.VISIBLE;
+            case "4":
+            case "invisible":
+                return android.view.View.INVISIBLE;
+            case "8":
+            case "gone":
+            case "hide":
+            case "hidden":
+                return android.view.View.GONE;
+            default:
+                return null;
+        }
+    }
+
+    /** 尺寸字符串 -> 像素（默认单位 DIP，与 XML 的 w/h 一致）；非法返回 null 并警告。 */
+    private static Integer parseQuickJsDimension(String raw, View view, String attrName) {
+        float pixels = parseUiDimensionPx(raw,
+                android.util.TypedValue.COMPLEX_UNIT_DIP, view.getContext(), attrName);
+        if (Float.isNaN(pixels)) {
+            return null;
+        }
+        return Math.round(pixels);
+    }
+
+    /** width/height：支持 match_parent/fill_parent/wrap_content 与带单位尺寸（默认 dp）。 */
+    private static boolean applyQuickJsViewSize(View view, boolean width, String raw, String attrName) {
+        String text = raw == null ? "" : raw.trim();
+        int size;
+        switch (text.toLowerCase(Locale.US)) {
+            case "match_parent":
+            case "fill_parent":
+                size = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+                break;
+            case "wrap_content":
+                size = android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
+                break;
+            default: {
+                Integer pixels = parseQuickJsDimension(text, view, attrName);
+                if (pixels == null) {
+                    return false;
+                }
+                size = pixels;
+                break;
+            }
+        }
+        android.view.ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params == null) {
+            params = new android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        if (width) {
+            params.width = size;
+        } else {
+            params.height = size;
+        }
+        view.setLayoutParams(params);
+        view.requestLayout();
+        return true;
+    }
+
+    /** padding[/Left/Top/Right/Bottom]：支持 1~4 个带单位值（默认 dp）。 */
+    private static boolean applyQuickJsPadding(View view, String attrName, String raw) {
+        if ("padding".equals(attrName)) {
+            Integer[] pixels = parseQuickJsDimensionArray(raw, view, attrName);
+            if (pixels == null) {
+                return false;
+            }
+            view.setPadding(pixels[0], pixels[1], pixels[2], pixels[3]);
+            view.requestLayout();
+            return true;
+        }
+        Integer pixels = parseQuickJsDimension(raw, view, attrName);
+        if (pixels == null) {
+            return false;
+        }
+        int left = view.getPaddingLeft();
+        int top = view.getPaddingTop();
+        int right = view.getPaddingRight();
+        int bottom = view.getPaddingBottom();
+        switch (attrName) {
+            case "paddingLeft":
+                left = pixels;
+                break;
+            case "paddingTop":
+                top = pixels;
+                break;
+            case "paddingRight":
+                right = pixels;
+                break;
+            case "paddingBottom":
+                bottom = pixels;
+                break;
+            default:
+                return false;
+        }
+        view.setPadding(left, top, right, bottom);
+        view.requestLayout();
+        return true;
+    }
+
+    /** margin[/layout_margin] 与各方向 margin：支持 1~4 个带单位值（默认 dp）。 */
+    private static boolean applyQuickJsMargin(View view, String attrName, String raw) {
+        android.view.ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (!(params instanceof android.view.ViewGroup.MarginLayoutParams)) {
+            Log.w("QuickJsHostBridge", "控件属性 " + attrName
+                    + " 需要控件已加入支持 margin 的父布局，已忽略");
+            return false;
+        }
+        android.view.ViewGroup.MarginLayoutParams marginParams =
+                (android.view.ViewGroup.MarginLayoutParams) params;
+        if ("margin".equals(attrName) || "layout_margin".equals(attrName)) {
+            Integer[] pixels = parseQuickJsDimensionArray(raw, view, attrName);
+            if (pixels == null) {
+                return false;
+            }
+            marginParams.setMargins(pixels[0], pixels[1], pixels[2], pixels[3]);
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                marginParams.setMarginStart(pixels[0]);
+                marginParams.setMarginEnd(pixels[2]);
+            }
+        } else {
+            Integer pixels = parseQuickJsDimension(raw, view, attrName);
+            if (pixels == null) {
+                return false;
+            }
+            switch (attrName) {
+                case "marginLeft":
+                case "layout_marginLeft":
+                    marginParams.leftMargin = pixels;
+                    break;
+                case "marginTop":
+                case "layout_marginTop":
+                    marginParams.topMargin = pixels;
+                    break;
+                case "marginRight":
+                case "layout_marginRight":
+                    marginParams.rightMargin = pixels;
+                    break;
+                case "marginBottom":
+                case "layout_marginBottom":
+                    marginParams.bottomMargin = pixels;
+                    break;
+                case "layout_marginStart":
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                        marginParams.setMarginStart(pixels);
+                    } else {
+                        marginParams.leftMargin = pixels;
+                    }
+                    break;
+                case "layout_marginEnd":
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                        marginParams.setMarginEnd(pixels);
+                    } else {
+                        marginParams.rightMargin = pixels;
+                    }
+                    break;
+                default:
+                    return false;
+            }
+        }
+        view.setLayoutParams(marginParams);
+        view.requestLayout();
+        return true;
+    }
+
+    /** layout_weight：只对线性布局子控件生效（多列行靠它平分宽度，否则控件会挤在一起/重叠）。 */
+    private static boolean applyQuickJsLayoutWeight(View view, String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            Log.w("QuickJsHostBridge", "控件属性 layout_weight 为空，已忽略");
+            return false;
+        }
+        final float weight;
+        try {
+            weight = Float.parseFloat(raw.trim());
+        } catch (NumberFormatException error) {
+            Log.w("QuickJsHostBridge", "控件属性 layout_weight=" + raw + " 不是数字，已忽略");
+            return false;
+        }
+        android.view.ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (!(params instanceof android.widget.LinearLayout.LayoutParams)) {
+            Log.w("QuickJsHostBridge", "控件属性 layout_weight 需要父布局为线性布局，已忽略");
+            return false;
+        }
+        ((android.widget.LinearLayout.LayoutParams) params).weight = weight;
+        view.setLayoutParams(params);
+        view.requestLayout();
+        return true;
+    }
+
+    /** gravity / layout_gravity：名称（center|center_vertical|left|right|top|bottom…）或数字。 */
+    private static boolean applyQuickJsGravity(View view, boolean layoutGravity, String raw) {
+        Integer gravity = parseQuickJsGravity(raw);
+        if (gravity == null) {
+            Log.w("QuickJsHostBridge", "控件属性 " + (layoutGravity ? "layout_gravity" : "gravity")
+                    + "=" + raw + " 无效，已忽略");
+            return false;
+        }
+        if (!layoutGravity) {
+            try {
+                java.lang.reflect.Method setGravity =
+                        view.getClass().getMethod("setGravity", int.class);
+                setGravity.invoke(view, gravity);
+                view.requestLayout();
+                return true;
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "控件 " + view.getClass().getName()
+                        + " 不支持 gravity，已忽略");
+                return false;
+            }
+        }
+        android.view.ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params instanceof android.widget.LinearLayout.LayoutParams) {
+            ((android.widget.LinearLayout.LayoutParams) params).gravity = gravity;
+        } else if (params instanceof android.widget.FrameLayout.LayoutParams) {
+            ((android.widget.FrameLayout.LayoutParams) params).gravity = gravity;
+        } else if (params != null) {
+            try {
+                java.lang.reflect.Field field = params.getClass().getField("gravity");
+                field.setInt(params, gravity);
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "控件属性 layout_gravity 当前父布局不支持，已忽略");
+                return false;
+            }
+        } else {
+            Log.w("QuickJsHostBridge", "控件属性 layout_gravity 需要控件已加入父布局，已忽略");
+            return false;
+        }
+        view.setLayoutParams(params);
+        view.requestLayout();
+        return true;
+    }
+
+    /** 解析 gravity 名称（'|'、空格或下划线组合）或数字；无法识别返回 null。 */
+    private static Integer parseQuickJsGravity(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String text = raw.trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException ignored) {
+        }
+        int gravity = 0;
+        boolean recognized = false;
+        for (String part : text.toLowerCase(Locale.US).split("[|\\s]+")) {
+            switch (part) {
+                case "":
+                    break;
+                case "center":
+                    gravity |= android.view.Gravity.CENTER;
+                    recognized = true;
+                    break;
+                case "center_horizontal":
+                case "centerhorizontal":
+                    gravity |= android.view.Gravity.CENTER_HORIZONTAL;
+                    recognized = true;
+                    break;
+                case "center_vertical":
+                case "centervertical":
+                    gravity |= android.view.Gravity.CENTER_VERTICAL;
+                    recognized = true;
+                    break;
+                case "left":
+                case "start":
+                    gravity |= android.view.Gravity.LEFT;
+                    recognized = true;
+                    break;
+                case "right":
+                case "end":
+                    gravity |= android.view.Gravity.RIGHT;
+                    recognized = true;
+                    break;
+                case "top":
+                    gravity |= android.view.Gravity.TOP;
+                    recognized = true;
+                    break;
+                case "bottom":
+                    gravity |= android.view.Gravity.BOTTOM;
+                    recognized = true;
+                    break;
+                case "fill":
+                    gravity |= android.view.Gravity.FILL;
+                    recognized = true;
+                    break;
+                case "fill_horizontal":
+                case "fillhorizontal":
+                    gravity |= android.view.Gravity.FILL_HORIZONTAL;
+                    recognized = true;
+                    break;
+                case "fill_vertical":
+                case "fillvertical":
+                    gravity |= android.view.Gravity.FILL_VERTICAL;
+                    recognized = true;
+                    break;
+                default:
+                    return null;
+            }
+        }
+        return recognized ? gravity : null;
+    }
+
+    /** 1~4 个尺寸值 -> 左上右下像素（同 XML padding/margin 语法）。非法返回 null。 */
+    private static Integer[] parseQuickJsDimensionArray(String raw, View view, String attrName) {
+        if (raw == null || raw.trim().isEmpty()) {
+            Log.w("QuickJsHostBridge", "控件属性 " + attrName + " 的尺寸为空，已忽略");
+            return null;
+        }
+        String[] parts = raw.trim().split("\\s+");
+        if (parts.length != 1 && parts.length != 2 && parts.length != 4) {
+            Log.w("QuickJsHostBridge", "控件属性 " + attrName + " 需要 1/2/4 个尺寸值，已忽略："
+                    + raw);
+            return null;
+        }
+        Integer[] pixels = new Integer[]{0, 0, 0, 0};
+        for (int i = 0; i < parts.length; i++) {
+            Integer pixel = parseQuickJsDimension(parts[i], view, attrName);
+            if (pixel == null) {
+                return null;
+            }
+            pixels[i] = pixel;
+        }
+        if (parts.length == 1) {
+            pixels[1] = pixels[2] = pixels[3] = pixels[0];
+        } else if (parts.length == 2) {
+            pixels[2] = pixels[0];
+            pixels[3] = pixels[1];
+        }
+        return pixels;
+    }
+
+    /**
+     * 写控件属性（{@code ui.<id>.attr(name, value)}、{@code uiSetConfig}、浮窗控件共用）。
+     *
+     * <p>处理顺序：
+     * <ol>
+     *   <li>常用布局属性（{@link #writeQuickJsCommonAttribute}）：visibility 数字/名称、
+     *       width/height/w/h（含 match_parent/wrap_content 与 sp/dp/px 等单位）、
+     *       min/maxWidth/Height、padding/margin 系列、layout_weight、gravity/layout_gravity。
+     *       这一层用 {@link #parseUiDimensionPx} 解析单位，早于 ViewAttributes 执行，
+     *       所以 {@code visibility=8} 这种数字值不会再触发 ViewAttributes 的 InflateException 警告；</li>
+     *   <li>其余属性交给 ViewAttributes（与 Rhino NativeView 同一套）；</li>
+     *   <li>最后是常用控件方法兜底（text/hint/textColor/backgroundColor…）。</li>
+     * </ol>
+     *
+     * <p><b>任何单个属性失败都只记警告并返回 false，绝不向脚本抛异常</b>：属性设置是
+     * 「尽力而为」，一个控件写失败不能影响其它控件，更不能让 UI 脚本中断。
+     */
     static boolean writeViewAttribute(View view, String name, String value,
                                       com.stardust.autojs.core.ui.inflater.ResourceParser parser) {
         if (view == null || name == null) {
+            return false;
+        }
+        try {
+            Boolean handled = writeQuickJsCommonAttribute(view, name, value);
+            if (handled != null) {
+                return handled;
+            }
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "控件属性 " + name + "=" + value
+                    + " 设置失败（已忽略）：" + error.getMessage(), error);
             return false;
         }
         try {
@@ -4912,7 +5503,10 @@ final class QuickJsHostBridge implements AutoCloseable,
                 return true;
             }
         } catch (Throwable error) {
-            Log.w("QuickJsHostBridge", "Cannot set view attribute " + name, error);
+            // 例如 attr("width","abc") 这类非法尺寸：ViewAttributes 会抛 InflateException；
+            // 这里给中文提示并继续走下方常用属性兜底，不让它变成脚本崩溃。
+            Log.w("QuickJsHostBridge", "控件属性 " + name + "=" + value
+                    + " 设置失败，已尝试兜底：" + error.getMessage(), error);
         }
         try {
             switch (name) {
@@ -4920,11 +5514,18 @@ final class QuickJsHostBridge implements AutoCloseable,
                     if (!(view instanceof android.widget.TextView)) return false;
                     ((android.widget.TextView) view).setText(value == null ? "" : value);
                     return true;
-                case "textSize":
+                case "textSize": {
                     if (!(view instanceof android.widget.TextView)) return false;
+                    // 支持 "22sp"/"12dp"/"100px"/纯数字（纯数字按 SP），非法值忽略并打中文提示。
+                    float textSizePx = parseUiDimensionPx(value,
+                            android.util.TypedValue.COMPLEX_UNIT_SP, view.getContext(), "textSize");
+                    if (Float.isNaN(textSizePx)) {
+                        return false;
+                    }
                     ((android.widget.TextView) view).setTextSize(
-                            android.util.TypedValue.COMPLEX_UNIT_SP, Float.parseFloat(value));
+                            android.util.TypedValue.COMPLEX_UNIT_PX, textSizePx);
                     return true;
+                }
                 case "textColor":
                     if (!(view instanceof android.widget.TextView)) return false;
                     ((android.widget.TextView) view).setTextColor(android.graphics.Color.parseColor(value));
@@ -5415,6 +6016,162 @@ final class QuickJsHostBridge implements AutoCloseable,
         return inflater;
     }
 
+    /**
+     * overlay 根视图没有背景时补一个「脚本窗口主题」的背景（windowBackground）。
+     *
+     * <p>为什么必须补：直接 addView 到 WindowManager 的根 View 如果**没有背景**，窗口 surface
+     * 在没有任何 View 绘制的区域不会每帧清屏，于是上一帧（初始布局/上一版文本）的像素会残留在
+     * 屏幕上，看起来就是「两层界面叠在一起」——QuickJS 真机回归里「控件代理示例」标题两层、
+     * YOLO 列表行和按钮列错位都是这个鬼影。
+     *
+     * <p>Rhino 的 ui.layout 走 Activity，DecorView 自带 windowBackground，所以没有这个问题；
+     * 这里按同样的 ScriptTheme windowBackground 补上，视觉也与 Rhino 的脚本界面一致。
+     * 脚本自己在 XML 根节点写了 {@code bg} 时保留脚本的背景，不覆盖。
+     */
+    private static void ensureOverlayRootBackground(View root, android.content.Context themedContext) {
+        if (root == null || root.getBackground() != null) {
+            return;
+        }
+        try {
+            android.util.TypedValue value = new android.util.TypedValue();
+            if (themedContext != null && themedContext.getTheme().resolveAttribute(
+                    android.R.attr.windowBackground, value, true)) {
+                if (value.resourceId != 0) {
+                    root.setBackgroundResource(value.resourceId);
+                    return;
+                }
+                if (value.type >= android.util.TypedValue.TYPE_FIRST_COLOR_INT
+                        && value.type <= android.util.TypedValue.TYPE_LAST_COLOR_INT) {
+                    root.setBackgroundColor(value.data);
+                    return;
+                }
+            }
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot resolve window background for UI overlay", error);
+        }
+        // ScriptTheme 是 AppCompat.Light：兜底白色，至少保证整窗每帧被绘制、不再残留鬼影。
+        root.setBackgroundColor(android.graphics.Color.WHITE);
+    }
+
+    /**
+     * overlay 窗口根容器：接返回键 + 承载右上角关闭按钮。
+     *
+     * <p>为什么需要：QuickJS 的 ui.layout 是系统悬浮窗（不是 Activity），BACK 不会被任何
+     * Activity 的默认行为处理；全屏 UI 又没有关闭入口时，用户只能 stopAll/杀进程退出
+     * （dev-972 真机回归）。这里让根容器可获焦并在 {@link #dispatchKeyEvent} 里吃掉 BACK，
+     * 关闭窗口并结束脚本。
+     */
+    private final class UiOverlayRoot extends android.widget.FrameLayout {
+
+        UiOverlayRoot(android.content.Context context) {
+            super(context);
+            // 可获焦：WindowManager 只把按键派发给有焦点的窗口；根 View 不可获焦时 BACK 收不到。
+            setFocusable(true);
+            setFocusableInTouchMode(true);
+        }
+
+        @Override
+        public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+            int keyCode = event.getKeyCode();
+            if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+                if (event.getAction() == android.view.KeyEvent.ACTION_UP && !event.isCanceled()) {
+                    // 音量上键 = 停止全部脚本：窗口聚焦路径不依赖无障碍/root（HyperOS 上无障碍
+                    // 设置会被系统重置，全局监听收不到键）。先跑宿主停止 hook + 主进程 stopAll，
+                    // 再关闭 overlay（requestUiOverlayClose 里的 forceStop 幂等）。
+                    Log.i("QuickJsHostBridge", "UI overlay volume-up: stop all scripts");
+                    try {
+                        com.stardust.autojs.ScriptEngineService.stopAllByVolumeUp();
+                    } catch (Throwable error) {
+                        Log.w("QuickJsHostBridge", "UI overlay volume-up stop-all failed", error);
+                    }
+                    requestUiOverlayClose("volume");
+                }
+                // 按下/抬起都吃掉，避免同时改变系统音量。
+                return true;
+            }
+            if (keyCode == android.view.KeyEvent.KEYCODE_BACK
+                    || keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
+                if (event.getAction() == android.view.KeyEvent.ACTION_UP && !event.isCanceled()) {
+                    requestUiOverlayClose(keyCode == android.view.KeyEvent.KEYCODE_BACK
+                            ? "back" : "escape");
+                }
+                // 按下/抬起都吃掉：避免 BACK 继续传给下层窗口/系统（以前按返回键毫无反应）。
+                return true;
+            }
+            return super.dispatchKeyEvent(event);
+        }
+    }
+
+    /** 状态栏高度（拿不到时按 24dp 估）：overlay 是 FLAG_LAYOUT_IN_SCREEN，关闭按钮要避开状态栏。 */
+    private static int statusBarHeight(android.content.Context context) {
+        try {
+            if (context != null) {
+                int id = context.getResources().getIdentifier(
+                        "status_bar_height", "dimen", "android");
+                if (id > 0) {
+                    return context.getResources().getDimensionPixelSize(id);
+                }
+            }
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot resolve status bar height", error);
+        }
+        return Math.round(displayMetrics(context).density * 24);
+    }
+
+    /** 右上角默认关闭按钮（脚本 XML 自带的关闭按钮照旧保留；这只是保底退出通道）。 */
+    private android.widget.TextView createOverlayCloseButton(android.content.Context context) {
+        android.widget.TextView button = new android.widget.TextView(context);
+        button.setText("✕");
+        button.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18);
+        button.setTextColor(0xFF444444);
+        button.setGravity(android.view.Gravity.CENTER);
+        button.setContentDescription("关闭脚本界面");
+        android.graphics.drawable.GradientDrawable background =
+                new android.graphics.drawable.GradientDrawable();
+        background.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        background.setColor(0xE6FFFFFF);
+        background.setStroke(Math.max(1, Math.round(displayMetrics(context).density)),
+                0x66000000);
+        button.setBackground(background);
+        button.setOnClickListener(v -> requestUiOverlayClose("button"));
+        return button;
+    }
+
+    /**
+     * 用户主动关闭 overlay（返回键 / 右上角 ✕）：<b>先关窗口，再结束脚本</b>。
+     *
+     * <p>等价于 Rhino 的 {@code ui.finish()}（关界面 = 结束脚本）：QuickJS overlay 没有
+     * Activity，所以实现成 uiClose() + 引擎 forceStop()——和 stopAll/通知栏「停止」同一条
+     * 链路（forceStop -> doExecution 中断 -> engine.destroy -> bridge.close -> uiClose，
+     * uiClose 幂等），保证既不会残留窗口、也不会留下后台脚本继续跑。
+     */
+    private void requestUiOverlayClose(String reason) {
+        Log.i("QuickJsHostBridge", "UI overlay close requested: " + reason);
+        if (mUiCloseRequested) {
+            return;
+        }
+        mUiCloseRequested = true;
+        uiClose();
+        try {
+            mRuntime.uiHandler.toast("已关闭脚本界面");
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot toast UI close", error);
+        }
+        mDialogHandler.post(() -> {
+            try {
+                JavaScriptEngine engine = mRuntime.engines.myEngine();
+                if (engine != null) {
+                    engine.forceStop();
+                } else {
+                    // 极端情况（引擎尚未注册完成）：直接走 runtime 的退出逻辑兜底。
+                    mRuntime.exit();
+                }
+            } catch (Throwable error) {
+                Log.w("QuickJsHostBridge", "Cannot stop script after UI close", error);
+            }
+        });
+    }
+
     public String uiInflate(String xml) {
         // `"ui"` 模式的脚本跑在 ScriptExecuteActivity 里：界面就是 Activity 的内容视图
         // （按 Home 退到后台、返回键才结束），也不需要「显示在其他应用上层」权限。
@@ -5464,13 +6221,55 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
         final CountDownLatch latch = new CountDownLatch(1);
         final String[] result = new String[1];
+        // 与 Rhino 的 __ui__.js 保持一致：没有 Activity 时用 ScriptTheme 作为 inflate 上下文
+        // （控件默认样式/文字颜色/窗口背景都按脚本 UI 主题走，而不是 App 的 Flutter 主题）。
+        final android.content.Context overlayContext = new android.view.ContextThemeWrapper(
+                appContext, com.stardust.autojs.R.style.ScriptTheme);
         mDialogHandler.post(() -> {
             try {
-                View root = uiInflater().inflate(xml);
-                closeCanvasViews(mUiRoot);
+                View content = uiInflaterFor(overlayContext).inflate(xml);
                 WindowManager windowManager =
                         (WindowManager) mRuntime.uiHandler.getContext()
                                 .getSystemService(Context.WINDOW_SERVICE);
+                // 旧的覆盖层先摘掉：以前这里直接 addView 新根视图，重复 ui.layout（或上一次脚本
+                // 的窗口还没关）时两个窗口叠在一起，看起来就是「标题/按钮互相重叠」。
+                View previous = mUiWindowRoot;
+                if (previous != null && mUiShown) {
+                    try {
+                        windowManager.removeViewImmediate(previous);
+                    } catch (Throwable error) {
+                        Log.w("QuickJsHostBridge", "Cannot remove previous UI layout", error);
+                    }
+                }
+                // 跨脚本/跨 run 的遗留覆盖窗一起摘掉（同一时刻只保留最新一次 QuickJS UI overlay）。
+                View staleOverlay = sUiOverlayRoot;
+                if (staleOverlay != null && staleOverlay != previous) {
+                    try {
+                        windowManager.removeViewImmediate(staleOverlay);
+                    } catch (Throwable error) {
+                        Log.w("QuickJsHostBridge", "Cannot remove stale UI layout", error);
+                    }
+                }
+                closeCanvasViews(previous);
+                closeCanvasViews(staleOverlay);
+                // overlay 窗口根：整窗主题背景（防首帧残影）+ 返回键处理 + 右上角关闭按钮。
+                // 内容视图单独放里面，uiFind/ui.<id> 仍以内容视图为根，控件代理不受影响。
+                UiOverlayRoot container = new UiOverlayRoot(overlayContext);
+                ensureOverlayRootBackground(container, overlayContext);
+                container.addView(content, new android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+                android.widget.TextView closeButton = createOverlayCloseButton(overlayContext);
+                float density = displayMetrics(overlayContext).density;
+                int closeSize = Math.round(density * 44);
+                int closeMargin = Math.round(density * 8);
+                android.widget.FrameLayout.LayoutParams closeParams =
+                        new android.widget.FrameLayout.LayoutParams(closeSize, closeSize,
+                                android.view.Gravity.TOP | android.view.Gravity.END);
+                // overlay 窗口是 FLAG_LAYOUT_IN_SCREEN 的，y=0 会被状态栏盖住；标到状态栏下方。
+                closeParams.topMargin = closeMargin + statusBarHeight(overlayContext);
+                closeParams.rightMargin = closeMargin;
+                container.addView(closeButton, closeParams);
                 WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                         WindowManager.LayoutParams.MATCH_PARENT,
                         WindowManager.LayoutParams.MATCH_PARENT,
@@ -5483,10 +6282,20 @@ final class QuickJsHostBridge implements AutoCloseable,
                 params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
                 params.x = 0;
                 params.y = 0;
-                windowManager.addView(root, params);
-                mUiRoot = root;
+                windowManager.addView(container, params);
+                mUiWindowRoot = container;
+                mUiRoot = content;
+                sUiOverlayRoot = container;
                 mUiShown = true;
+                mUiCloseRequested = false;
                 mUiWindowId++;
+                Log.i("QuickJsHostBridge", "UI overlay added: root="
+                        + container.getClass().getName() + ", background="
+                        + (container.getBackground() != null)
+                        + ", children=" + container.getChildCount()
+                        + ", closeButton=true");
+                // overlay 窗口默认焦点在关闭按钮/容器上，返回键事件才能进 dispatchKeyEvent。
+                container.requestFocus();
                 result[0] = String.valueOf(mUiWindowId);
             } catch (Throwable error) {
                 Log.w("QuickJsHostBridge", "Cannot inflate UI layout", error);
@@ -5539,6 +6348,22 @@ final class QuickJsHostBridge implements AutoCloseable,
         try {
             View root = uiInflaterFor(host).inflate(xml);
             closeCanvasViews(mUiRoot);
+            // 脚本从 overlay 模式切到 Activity UI（或上一次 run 的覆盖窗还在）：先摘掉旧窗口，
+            // 否则覆盖窗会盖在 Activity 内容上，看起来就是两层界面重叠。
+            View staleOverlay = sUiOverlayRoot;
+            if (staleOverlay != null && staleOverlay != mUiWindowRoot) {
+                try {
+                    WindowManager windowManager = (WindowManager) host
+                            .getSystemService(Context.WINDOW_SERVICE);
+                    windowManager.removeViewImmediate(staleOverlay);
+                } catch (Throwable error) {
+                    Log.w("QuickJsHostBridge", "Cannot remove stale overlay layout", error);
+                }
+                closeCanvasViews(staleOverlay);
+            }
+            sUiOverlayRoot = null;
+            mUiWindowRoot = null;
+            mUiCloseRequested = false;
             mUiViewHandles.clear();
             host.setContentView(root);
             mUiRoot = root;
@@ -5584,15 +6409,31 @@ final class QuickJsHostBridge implements AutoCloseable,
             return;
         }
         mDialogHandler.post(() -> {
+            // overlay 模式下窗口根是 UiOverlayRoot（含关闭按钮），内容视图只是它的子 View；
+            // removeViewImmediate 必须摘窗口根，否则会不生效/抛出「View not attached」。
+            View closingWindowRoot = mUiWindowRoot;
+            View closingContentRoot = mUiRoot;
             try {
-                if (mUiRoot != null && mUiShown) {
+                if (closingWindowRoot != null && mUiShown) {
                     WindowManager windowManager =
                             (WindowManager) mRuntime.uiHandler.getContext()
                                     .getSystemService(Context.WINDOW_SERVICE);
-                    windowManager.removeViewImmediate(mUiRoot);
+                    windowManager.removeViewImmediate(closingWindowRoot);
+                } else if (closingContentRoot != null && mUiShown) {
+                    // 兼容：窗口根还没赋值的极端情况（例如 addView 前出错）。
+                    WindowManager windowManager =
+                            (WindowManager) mRuntime.uiHandler.getContext()
+                                    .getSystemService(Context.WINDOW_SERVICE);
+                    windowManager.removeViewImmediate(closingContentRoot);
                 }
             } catch (Throwable ignored) {
             }
+            if (sUiOverlayRoot == closingWindowRoot || sUiOverlayRoot == closingContentRoot) {
+                sUiOverlayRoot = null;
+            }
+            closeCanvasViews(closingContentRoot);
+            closeCanvasViews(closingWindowRoot);
+            mUiWindowRoot = null;
             mUiRoot = null;
             mUiShown = false;
             mUiEvents.clear();
@@ -5852,6 +6693,11 @@ final class QuickJsHostBridge implements AutoCloseable,
     private final Map<String, Method> mAutomatorMethods = new ConcurrentHashMap<>();
 
     public long selectorCreate() {
+        if (RemoteAutomationBridge.isActive()) {
+            // task-153：:script 进程的 QuickJS 选择器链走主进程 RemoteAutomationBridge，
+            // 与 Rhino 的 ScriptRuntime.selector() -> RemoteUiSelector 同一条链路。
+            return putAutomatorHandle(new RemoteUiSelector());
+        }
         mRuntime.accessibilityBridge.ensureServiceEnabled();
         return putAutomatorHandle(new UiSelector(mRuntime.accessibilityBridge));
     }
@@ -5901,6 +6747,16 @@ final class QuickJsHostBridge implements AutoCloseable,
             throw new IllegalStateException("自动控制句柄已失效：" + handle);
         }
         JSONArray args = new JSONArray(argsJson == null || argsJson.isEmpty() ? "[]" : argsJson);
+        // task-153：远程自动化（:script）节点/集合与本地类型不同，走 remote 适配分支。
+        if (target instanceof RemoteUiSelector) {
+            return callRemoteSelector((RemoteUiSelector) target, method, args);
+        }
+        if (target instanceof RemoteUiObject) {
+            return callRemoteObject((RemoteUiObject) target, method, args);
+        }
+        if (target instanceof RemoteUiObjectCollection) {
+            return callRemoteCollection((RemoteUiObjectCollection) target, method, args);
+        }
         if (target instanceof UiObjectCollection) {
             return callCollection((UiObjectCollection) target, method, args);
         }
@@ -5911,6 +6767,118 @@ final class QuickJsHostBridge implements AutoCloseable,
             return callSelector((UiGlobalSelector) target, method, args);
         }
         throw new IllegalStateException("未知的自动控制句柄类型");
+    }
+
+    // ---- task-153：RemoteUiSelector / RemoteUiObject / 集合适配（:script 进程） ----
+    private Object remoteHandleArg(JSONArray args, int index) throws Exception {
+        if (args.length() <= index || args.isNull(index)) return null;
+        Object value = args.get(index);
+        if (value instanceof Number) return mAutomatorHandles.get(((Number) value).longValue());
+        return value;
+    }
+
+    private String callRemoteSelector(RemoteUiSelector selector, String method, JSONArray args) throws Exception {
+        if (namesContain(SELECTOR_STRING_FILTERS, method)) {
+            invokeAutomator(selector, method, new Class<?>[]{ String.class }, new Object[]{ args.getString(0) });
+            return AUTOMATOR_VOID_RESULT;
+        }
+        if (namesContain(SELECTOR_INT_FILTERS, method)) {
+            invokeAutomator(selector, method, new Class<?>[]{ int.class }, new Object[]{ args.getInt(0) });
+            return AUTOMATOR_VOID_RESULT;
+        }
+        if (namesContain(SELECTOR_BOOL_FILTERS, method)) {
+            if (args.length() > 0 && !args.isNull(0)) {
+                invokeAutomator(selector, method, new Class<?>[]{ boolean.class }, new Object[]{ args.getBoolean(0) });
+            } else {
+                invokeAutomator(selector, method, NO_PARAMS, NO_ARGS);
+            }
+            return AUTOMATOR_VOID_RESULT;
+        }
+        if (namesContain(SELECTOR_BOUNDS_FILTERS, method)) {
+            invokeAutomator(selector, method, new Class<?>[]{ int.class, int.class, int.class, int.class },
+                    new Object[]{ args.getInt(0), args.getInt(1), args.getInt(2), args.getInt(3) });
+            return AUTOMATOR_VOID_RESULT;
+        }
+        switch (method) {
+            case "find":
+                return encodeAutomatorResult(args.length() > 0 && !args.isNull(0)
+                        ? selector.find(args.getInt(0)) : selector.find());
+            case "findOnce":
+                return encodeAutomatorResult(args.length() > 0 && !args.isNull(0)
+                        ? selector.findOnce(args.getInt(0)) : selector.findOnce());
+            case "findOne":
+                if (args.length() == 0 || args.isNull(0)) return encodeAutomatorResult(selector.findOne());
+                if (args.length() == 1) return encodeAutomatorResult(selector.findOne(args.getLong(0)));
+                return encodeAutomatorResult(selector.findOne(args.getLong(0), args.getLong(1)));
+            case "untilFindOne":
+                return encodeAutomatorResult(selector.untilFindOne());
+            case "untilFind":
+                if (args.length() == 0 || args.isNull(0)) return encodeAutomatorResult(selector.untilFind());
+                if (args.length() == 1) return encodeAutomatorResult(selector.untilFind(args.getLong(0)));
+                return encodeAutomatorResult(selector.untilFind(args.getLong(0), args.getLong(1)));
+            case "exists":
+                return encodeAutomatorResult(selector.exists());
+            case "waitFor":
+                selector.waitFor();
+                return AUTOMATOR_VOID_RESULT;
+            case "click":
+                return encodeAutomatorResult(selector.click());
+            case "longClick":
+                return encodeAutomatorResult(selector.longClick());
+            case "setText":
+                return encodeAutomatorResult(selector.setText(args.getString(0)));
+            case "scrollForward":
+                return encodeAutomatorResult(selector.scrollForward());
+            case "scrollBackward":
+                return encodeAutomatorResult(selector.scrollBackward());
+            case "toString":
+                return encodeAutomatorResult(selector.toString());
+            default:
+                throw new IllegalArgumentException("远程选择器不支持的方法：" + method);
+        }
+    }
+
+    private String callRemoteObject(RemoteUiObject object, String method, JSONArray args) throws Exception {
+        switch (method) {
+            case "text": return encodeAutomatorResult(object.text());
+            case "desc": return encodeAutomatorResult(object.desc());
+            case "id": return encodeAutomatorResult(object.id());
+            case "className": return encodeAutomatorResult(object.className());
+            case "packageName": return encodeAutomatorResult(object.packageName());
+            case "clickable": return encodeAutomatorResult(object.clickable());
+            case "enabled": return encodeAutomatorResult(object.enabled());
+            case "scrollable": return encodeAutomatorResult(object.scrollable());
+            case "depth": return encodeAutomatorResult(object.depth());
+            case "indexInParent": return encodeAutomatorResult(object.indexInParent());
+            case "childCount": return encodeAutomatorResult(object.childCount());
+            case "bounds": return encodeAutomatorResult(object.bounds());
+            case "exists": return encodeAutomatorResult(object.exists());
+            case "click": return encodeAutomatorResult(object.click());
+            case "longClick": return encodeAutomatorResult(object.longClick());
+            case "setText": return encodeAutomatorResult(object.setText(args.getString(0)));
+            case "scrollForward": return encodeAutomatorResult(object.scrollForward());
+            case "scrollBackward": return encodeAutomatorResult(object.scrollBackward());
+            case "parent": return encodeAutomatorResult(object.parent());
+            case "child": return encodeAutomatorResult(object.child(args.getInt(0)));
+            case "find": return encodeAutomatorResult(object.find((RemoteUiSelector) remoteHandleArg(args, 0)));
+            case "findOne": return encodeAutomatorResult(object.findOne((RemoteUiSelector) remoteHandleArg(args, 0)));
+            case "toString": return encodeAutomatorResult(object.toString());
+            default: throw new IllegalArgumentException("远程控件不支持的方法：" + method);
+        }
+    }
+
+    private String callRemoteCollection(RemoteUiObjectCollection collection, String method, JSONArray args) throws Exception {
+        switch (method) {
+            case "size": return encodeAutomatorResult(collection.size());
+            case "empty": return encodeAutomatorResult(collection.empty());
+            case "nonEmpty": return encodeAutomatorResult(collection.nonEmpty());
+            case "get": return encodeAutomatorResult(collection.get(args.getInt(0)));
+            case "toString": return encodeAutomatorResult(collection.toString());
+            case "click": { boolean any = false; for (RemoteUiObject item : collection) any |= item.click(); return encodeAutomatorResult(any); }
+            case "longClick": { boolean any = false; for (RemoteUiObject item : collection) any |= item.longClick(); return encodeAutomatorResult(any); }
+            case "setText": { boolean any = false; for (RemoteUiObject item : collection) any |= item.setText(args.getString(0)); return encodeAutomatorResult(any); }
+            default: throw new IllegalArgumentException("远程控件集合不支持的方法：" + method);
+        }
     }
 
     private String callSelector(UiGlobalSelector selector, String method, JSONArray args) throws Exception {
@@ -6494,6 +7462,12 @@ final class QuickJsHostBridge implements AutoCloseable,
             bounds.put("left", rect.left).put("top", rect.top)
                     .put("right", rect.right).put("bottom", rect.bottom);
             json.put("t", "r").put("v", bounds);
+        } else if (value instanceof RemoteUiSelector) {
+            json.put("t", "v");
+        } else if (value instanceof RemoteUiObjectCollection) {
+            json.put("t", "h").put("k", "c").put("v", putAutomatorHandle(value));
+        } else if (value instanceof RemoteUiObject) {
+            json.put("t", "h").put("k", "o").put("v", putAutomatorHandle(value));
         } else if (value instanceof UiObjectCollection) {
             json.put("t", "h").put("k", "c").put("v", putAutomatorHandle(value));
         } else if (value instanceof java.util.List) {
@@ -6904,6 +7878,9 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     @Override
     public void close() {
+        // 最先关 overlay 窗口：异常/结束路径（engine.destroy -> bridge.close）里这一步必须在
+        // 其它清理之前，保证即使后面的清理抛异常，全屏窗口也不会残留在屏幕上（残留=用户卡死）。
+        uiClose();
         mAccessibilityPixels = null;
         for (String name : new ArrayList<>(mSharedBusSubscriptions)) {
             sharedBusOff(name);
@@ -6917,7 +7894,6 @@ final class QuickJsHostBridge implements AutoCloseable,
         mediaStopMusic();
         sensorsUnregisterAll();
         closeOwnedFloatyWindows();   // 只关本引擎创建的窗口（注册表是进程级的）
-        uiClose();
         releaseAutomatorHandles();
         closeSqliteHandles();
         closeWebSockets();
@@ -7320,6 +8296,46 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     private static boolean isAssetPath(String path) {
         return path != null && path.startsWith("asset://");
+    }
+
+    // ---- task-118：老示例根目录 asset 路径兼容 --------------------------------
+
+    /**
+     * v1044 以前示例根目录叫 {@code sample/QuickJS 新引擎/}，后来改成 {@code sample/QuickJS 引擎/}。
+     * 用户脚本目录里保留的旧示例仍写 {@code asset://sample/QuickJS 新引擎/...}，严格按新资产路径
+     * 打开会 FileNotFoundException；这里做一次只读别名回退（模型/标签/图片都适用），不改用户文件。
+     */
+    private static final String LEGACY_QUICKJS_SAMPLE_ROOT = "sample/QuickJS 新引擎/";
+    private static final String CURRENT_QUICKJS_SAMPLE_ROOT = "sample/QuickJS 引擎/";
+
+    private android.content.res.AssetManager getAssets() {
+        return mRuntime.uiHandler.getContext().getAssets();
+    }
+
+    private String resolveBundledAssetName(String name) throws IOException {
+        if (bundledAssetExists(name)) {
+            return name;
+        }
+        if (name != null && name.startsWith(LEGACY_QUICKJS_SAMPLE_ROOT)) {
+            String candidate = CURRENT_QUICKJS_SAMPLE_ROOT
+                    + name.substring(LEGACY_QUICKJS_SAMPLE_ROOT.length());
+            if (bundledAssetExists(candidate)) {
+                Log.i("QuickJsHostBridge", "asset legacy alias: " + name + " -> " + candidate);
+                return candidate;
+            }
+        }
+        throw new java.io.FileNotFoundException("asset 不存在：" + name);
+    }
+
+    private boolean bundledAssetExists(String name) {
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        try (InputStream ignored = getAssets().open(name)) {
+            return true;
+        } catch (IOException error) {
+            return false;
+        }
     }
 
     private static String stripAssetPrefix(String path) {

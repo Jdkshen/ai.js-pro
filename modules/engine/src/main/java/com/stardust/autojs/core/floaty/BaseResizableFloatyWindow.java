@@ -102,6 +102,13 @@ public class BaseResizableFloatyWindow extends ResizableFloatyWindow {
     }
 
     @Override
+    public void close() {
+        // 同 RawWindow：先同步释放 Surface 回调投递，再摘窗口（C 侧 STOP 顺序 closeAll → destroy）。
+        FloatySurfaceThreading.releaseSurfaceViews(getWindowView());
+        super.close();
+    }
+
+    @Override
     protected void onViewCreated(View view) {
         super.onViewCreated(view);
         mCloseButton = view.findViewById(R.id.close);
@@ -138,6 +145,8 @@ public class BaseResizableFloatyWindow extends ResizableFloatyWindow {
             mRootView = View.inflate(mContext, R.layout.floaty_window, null);
             FrameLayout container = mRootView.findViewById(R.id.container);
             View contentView = mContentViewSupplier.inflate(mContext, container);
+            // 与 RawWindow 相同：floaty 窗口里的原生 SurfaceView 回调改投脚本线程。
+            FloatySurfaceThreading.rebindSurfaceViews(mRootView);
             return mRootView;
         }
 

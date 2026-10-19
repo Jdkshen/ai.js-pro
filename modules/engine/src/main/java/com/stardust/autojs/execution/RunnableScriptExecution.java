@@ -3,6 +3,7 @@ package com.stardust.autojs.execution;
 import android.util.Log;
 
 import com.stardust.autojs.core.console.ScriptRunLog;
+import com.stardust.autojs.engine.JavaScriptEngine;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.engine.ScriptEngineManager;
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
@@ -69,6 +70,15 @@ public class RunnableScriptExecution extends ScriptExecution.AbstractScriptExecu
             return null;
         } finally {
             Log.d(TAG, "Engine destroy");
+            // ImGui 桥修复（B）：先等脚本 Looper 队列里已入队/正在执行的帧回调跑完，
+            // 再销毁引擎。JavaScriptEngine.destroy 里的 onExit 会把 events.emit("exit")
+            // 投递到同一个脚本 Looper 串行执行，避免 exit 监听里的 nativeShutdown/
+            // DestroyContext 插进 nativeNewFrame/nativeRender/nativeButton 之间
+            // （GImGui 变 NULL 的 SIGSEGV，见 docs/reports/2026-10-17_ImGui桥native上下文定位.md §6 #1）。
+            // 有限等待：Looper 已退出/不存在时立即返回，超时只记日志，不阻塞退出流程。
+            if (engine instanceof JavaScriptEngine) {
+                ((JavaScriptEngine) engine).awaitScriptLooperIdle(JavaScriptEngine.SCRIPT_LOOPER_IDLE_TIMEOUT_MS);
+            }
             engine.destroy();
             if (mRunLog != null) {
                 // destroy 之后收尾：destroy 过程里可能还有最后几行控制台输出（如异常堆栈）。

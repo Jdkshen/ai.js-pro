@@ -1,6 +1,6 @@
-// @engine rhino
+"rhino";
 toastLog("定时任务预定成功: ", $work_manager.addWeeklyTask({
-    path: '/sdcard/脚本/定时任务-每周.js',
+    path: files.path('./任务逻辑.js'),
     time: '13:00',
     daysOfWeek: ['日', '一', '三', '五']
 }));

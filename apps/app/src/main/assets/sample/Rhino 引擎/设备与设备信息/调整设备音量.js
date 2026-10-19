@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <vertical padding="16">
         <text textColor="black" textSize="16sp">媒体音量</text>
@@ -25,7 +24,7 @@ ui.music.setOnSeekBarChangeListener({
 });
 
 ui.notification.setMax(device.getNotificationMaxVolume());
-ui.notification.setProgress(device.getAlarmVolume());
+ui.notification.setProgress(device.getNotificationVolume());
 ui.notification.setOnSeekBarChangeListener({
     onProgressChanged: function(seekbar, p, fromUser) {
         if (fromUser) {

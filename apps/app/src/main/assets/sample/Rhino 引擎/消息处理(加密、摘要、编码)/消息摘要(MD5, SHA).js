@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 // 字符串消息摘要
 let message = "Hello, Auto.js Pro 7.0.4";
 // 输出各种消息摘要算法结果的hex值
@@ -20,7 +20,7 @@ log("SHA256 [base64]: ", $crypto.digest(message, "SHA-256", {
 
 
 // 文件消息摘要
-let file = "/sdcard/脚本/_test_for_message_digest.js"
+let file = $files.join($files.cwd(), "_test_for_message_digest.txt");
 // 写入文件内容，提供为后续计算MD5等
 $files.write(file, "Test!");
 log("文件: ", file);

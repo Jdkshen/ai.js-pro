@@ -1,7 +1,5 @@
-// @engine rhino
-// ⚠ 需要 Auto.js Pro 专属 API：项目模式（project.json 配置）（当前引擎暂未实现，直接运行会报错）
 "ui";
-
+"rhino";
 // 自定义启动图需要在project.json中配置"splashLayoutXml"参数
 // 并创建自定义启动图的xml，本项目为splash.xml
 // xml中只能为静态控件等，不能有js代码或list等动态控件

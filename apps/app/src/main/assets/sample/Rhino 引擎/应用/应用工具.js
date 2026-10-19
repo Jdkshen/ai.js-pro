@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var i = dialogs.select("请选择工具", "获取应用包名", "打开应用详情页", "卸载应用");
 
 if (i == -1) {

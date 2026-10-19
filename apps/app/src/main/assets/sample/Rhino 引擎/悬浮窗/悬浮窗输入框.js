@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var window = floaty.window(
     <vertical>
         <input id="input" text="请输入你的名字" textSize="16sp" focusable="true"/>

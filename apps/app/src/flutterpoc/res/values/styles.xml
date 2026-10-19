@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- task-118：Flutter 宿主必须提供 Material/AppCompat 主题属性。
+         原先直接挂 @android:style/Theme.Black.NoTitleBar，文件列表「运行」拉起 QuickJS 脚本时
+         dialogs.select 的 MaterialDialog(md_listitem) 解析不到 colorAccent 等属性，会抛
+         InflateException 把主进程带崩（示例页运行不会走这个坏主题）。窗口底保持深色，避免 Flutter 首帧白闪。 -->
+    <style name="Theme.AiJsPro.GlassFlutter" parent="@style/AppTheme">
+        <item name="android:windowBackground">#0B0D18</item>
+        <item name="android:statusBarColor">#0B0D18</item>
+        <item name="android:navigationBarColor">#0B0D18</item>
+    </style>
+</resources>

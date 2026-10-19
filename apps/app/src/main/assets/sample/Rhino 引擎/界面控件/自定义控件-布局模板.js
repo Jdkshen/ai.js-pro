@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 var InputLayout = (function() {
     //继承至ui.Widget
     util.extend(InputLayout, ui.Widget);

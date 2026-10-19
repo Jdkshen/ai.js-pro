@@ -1,9 +1,11 @@
-// @engine rhino
-var url = "https://pro.autojs.org/images/logo.png";
+"rhino";
+// 保存到当前示例目录；请求失败时不写文件、不误报下载成功。
+var url = "https://httpbin.org/image/png";
+var dest = files.path("./downloaded-image.png");
 var res = http.get(url);
-if (res.statusCode != 200) {
-    toast("请求失败");
+if (res.statusCode !== 200) {
+    throw new Error("下载失败，HTTP " + res.statusCode);
 }
-files.writeBytes("/sdcard/1.png", res.body.bytes());
-toast("下载成功");
-app.viewFile("/sdcard/1.png");
+files.writeBytes(dest, res.body.bytes());
+console.log("下载成功：" + dest);
+app.viewFile(dest);

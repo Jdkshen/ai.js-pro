@@ -1,5 +1,5 @@
-// @engine rhino
 "ui";
+"rhino";
 //ui布局为一块画布
 ui.layout(
     <frame>

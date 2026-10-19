@@ -147,6 +147,59 @@ runtime.init();
             colorsProxy.mapping = ColorMapping;
             scope.$colors = colorsProxy;
         }
+        // task-159：:script 进程没有 AutoJs.putProperty 注入的 work_manager/settings，
+        // 这里直接用同包的 Java 模块兜底；add* 若返回 id=0 则短轮询 DB 回填（异步 insert 或进程隔离时）。
+        (function () {
+            if (!scope.work_manager) {
+                try {
+                    // 主 App 用 app 模块的 WorkManagerModule；inrt 打包运行时用 inrt 自己的实现。
+                    var WMM = null;
+                    try { WMM = com.jdkshen.aijspro.autojs.api.timing.WorkManagerModule; } catch (eMain) { }
+                    if (!WMM || typeof WMM !== 'function') {
+                        try { WMM = com.jdkshen.aijspro.inrt.autojs.api.InrtWorkManagerModule; } catch (eInrt) { }
+                    }
+                    if (!WMM || typeof WMM !== 'function') { throw new Error('work_manager 模块不可用'); }
+                    var real = new WMM();
+                    var wrapper = {};
+                    var methods = ['addDisposableTask', 'addDailyTask', 'addWeeklyTask', 'addBroadcastIntentTask',
+                        'getTimedTask', 'removeTimedTask', 'getIntentTask', 'removeIntentTask',
+                        'queryTimedTasks', 'queryIntentTasks', 'getAllTasks', 'getAllIntentTasks', 'getTaskCount'];
+                    var addMethods = { addDisposableTask: 1, addDailyTask: 1, addWeeklyTask: 1, addBroadcastIntentTask: 1 };
+                    methods.forEach(function (name) {
+                        wrapper[name] = function () {
+                            var result = real[name].apply(real, arguments);
+                            if (addMethods[name] && result && result.getId && result.getId() <= 0) {
+                                var wantPath = result.getScriptPath ? String(result.getScriptPath()) : '';
+                                var deadline = Date.now() + 2000;
+                                while (result.getId() <= 0 && Date.now() < deadline) {
+                                    java.lang.Thread.sleep(50);
+                                    var all = real.getAllTasks();
+                                    for (var i = 0; i < all.size(); i++) {
+                                        var candidate = all.get(i);
+                                        if (candidate.getId() > 0 && (!wantPath || String(candidate.getScriptPath()) === wantPath)) {
+                                            result.setId(candidate.getId());
+                                        }
+                                    }
+                                }
+                            }
+                            return result;
+                        };
+                    });
+                    scope.work_manager = wrapper;
+                    scope.$work_manager = wrapper;
+                } catch (e) {
+                    console.warn('[Auto.js] :script work_manager 初始化失败：' + e);
+                }
+            }
+            if (!scope.settings) {
+                try {
+                    var settingsModule = new com.jdkshen.aijspro.autojs.api.SettingsModule();
+                    scope.settings = settingsModule;
+                    scope.$settings = settingsModule;
+                } catch (e2) { }
+            }
+        })();
+
         // App 模块注入的 Pro 风格模块（如 $work_manager）：由 App 侧 putProperty 注册，这里暴露成全局。
         var injected = ['work_manager', 'settings'];
         for (var k = 0; k < injected.length; k++) {

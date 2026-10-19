@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 let db = sqlite.open("./data.db");
 
 console.show();

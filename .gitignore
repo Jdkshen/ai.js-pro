@@ -23,6 +23,14 @@
 !/tools/publish.ps1
 !/tools/serve-updates.ps1
 !/tools/probe-engine-api.ps1
+# 16 KB 页对齐守卫（P0）：gradle verify16kbAlignment / 发布前置校验共用的静态检查脚本。
+!/tools/verify-16kb-alignment.ps1
+# 原生库 strip 守卫（task-145）：检查 AAR/APK 里没有未 strip 的 .so、R8 API 数据库资源被排除。
+!/tools/verify-native-strip.ps1
+# OpenCV AAR strip 工具（task-145）：重生成 AAR 后跑一次，去掉 native 调试符号。
+!/tools/strip-opencv-aar.ps1
+# Pro ws-rpc 协议核心的 javac + JUnit 自测（不跑 Gradle、不连设备；见脚本头部说明）。
+!/tools/test-pro-rpc.ps1
 !/tools/test-engine-flavors-device.ps1
 !/tools/verify-mcp-alignment-device.py
 !/tools/create-gh-proxy-manifest.py
@@ -88,3 +96,4 @@ npm-install.log
 
 # Required source input for the in-app APK builder (now shipped by the apkbuilder plugin).
 !plugins/apkbuilder-plugin/src/main/assets/template.apk
+javac.*.args

@@ -73,6 +73,10 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            // 诊断日志：HyperOS 上无障碍设置被系统重置时这条日志根本不出现（收不到键）。
+            Log.i(TAG, "onKeyEvent: volume key received, keyCode=" + event.keyCode + ", action=" + event.action)
+        }
         eventExecutor.execute {
             stickOnKeyObserver.onKeyEvent(event.keyCode, event)
             onKeyObserver.onKeyEvent(event.keyCode, event)
@@ -100,6 +104,7 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
 
     override fun onDestroy() {
         Log.v(TAG, "onDestroy: $instance")
+        AccessibilityEventForwarder.detach()
         disconnectFingerprintGestures()
         if (instance === this) instance = null
         mEventExecutor?.shutdownNow()
@@ -111,6 +116,8 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
         Log.v(TAG, "onServiceConnected: " + serviceInfo.toString())
         instance = this
         super.onServiceConnected()
+        AccessibilityEventForwarder.attach(this)
+        ensureKeyEventFiltering()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             fingerprintBackend = FingerprintGestureBackend(this, fingerprintGestureDispatcher).also {
                 fingerprintGestureDispatcher.attach(it)
@@ -123,9 +130,41 @@ open class AccessibilityService : android.accessibilityservice.AccessibilityServ
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        AccessibilityEventForwarder.detach()
         disconnectFingerprintGestures()
         if (instance === this) instance = null
         return super.onUnbind(intent)
+    }
+
+    /**
+     * 运行时补「按键事件过滤」flag（FLAG_REQUEST_FILTER_KEY_EVENTS）。
+     *
+     * 为什么需要：无障碍服务首次开启、或被系统重置过（HyperOS 上 adb 写入的
+     * enabled_accessibility_services 会被清掉）时，serviceInfo.flags 里可能没有这个 flag，
+     * onKeyEvent 就永远收不到音量键——全局音量上键停止脚本因此失效。这里显式补 flag 再
+     * setServiceInfo，并把补之前/之后的 flags 打进日志，便于后续排查。
+     */
+    private fun ensureKeyEventFiltering() {
+        try {
+            val info = serviceInfo ?: run {
+                Log.w(TAG, "ensureKeyEventFiltering: serviceInfo is null")
+                return
+            }
+            val filterKeyEvents =
+                    android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+            val before = info.flags
+            if ((before and filterKeyEvents) == 0) {
+                info.flags = before or filterKeyEvents
+                setServiceInfo(info)
+                Log.i(TAG, "ensureKeyEventFiltering: added FLAG_REQUEST_FILTER_KEY_EVENTS, flags=0x"
+                        + Integer.toHexString(before) + " -> 0x" + Integer.toHexString(info.flags))
+            } else {
+                Log.i(TAG, "ensureKeyEventFiltering: FLAG_REQUEST_FILTER_KEY_EVENTS already present, flags=0x"
+                        + Integer.toHexString(before))
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "ensureKeyEventFiltering failed", error)
+        }
     }
 
     private fun disconnectFingerprintGestures() {

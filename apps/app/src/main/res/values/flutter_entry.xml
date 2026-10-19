@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Flutter 玻璃界面作为主入口：正式/常规构建为 false（Splash -> Miuix）。
+         -PflutterPoc=true 的调试源集把它覆盖为 true（Splash -> Flutter 玻璃首页）。 -->
+    <bool name="flutter_main_entry">false</bool>
+</resources>

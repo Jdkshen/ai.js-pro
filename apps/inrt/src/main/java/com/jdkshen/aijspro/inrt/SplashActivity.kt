@@ -95,6 +95,12 @@ class SplashActivity : AppCompatActivity() {
 
 
     private fun runScript() {
+        // task-112：Pro 模型——Splash 只做权限与进程交接，脚本在 :script 进程执行；
+        // 启动失败（:script 被系统限制/类缺失等）再回退到主进程旧路径。
+        if (handoffToScriptProcess()) {
+            return
+        }
+        android.util.Log.w(TAG, "C-INRT: fallback to main process script execution")
         Thread {
             try {
                 GlobalProjectLauncher.launch(this)
@@ -116,6 +122,26 @@ class SplashActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    /** 把脚本执行交给 :script 进程的 LogActivity / InrtScriptActivity；成功交接返回 true。 */
+    private fun handoffToScriptProcess(): Boolean {
+        return try {
+            val hideLogs = Pref.shouldHideLogs() ||
+                    (launchConfig?.shouldHideLogs() == true)
+            if (hideLogs) {
+                startActivity(Intent(this, InrtScriptActivity::class.java))
+            } else {
+                startActivity(Intent(this, LogActivity::class.java)
+                        .putExtra(LogActivity.EXTRA_LAUNCH_SCRIPT, true))
+            }
+            android.util.Log.i(TAG, "C-INRT: handoff script to :script hideLogs=" + hideLogs)
+            finish()
+            true
+        } catch (e: Throwable) {
+            android.util.Log.w(TAG, "C-INRT: handoff to :script failed: " + e)
+            false
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, @NonNull permissions: Array<String>, @NonNull grantResults: IntArray) {

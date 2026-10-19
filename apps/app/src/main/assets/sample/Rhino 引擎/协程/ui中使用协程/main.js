@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <frame bg="#4fc3f7">
         <text textColor="white" textSize="18sp" layout_gravity="center">

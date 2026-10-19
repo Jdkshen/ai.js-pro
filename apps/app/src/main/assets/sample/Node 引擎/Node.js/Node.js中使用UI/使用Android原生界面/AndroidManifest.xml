@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 资源包名应与当前应用包名 com.boyai.auma 保持一致 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.boyai.auma" >
+
+</manifest>

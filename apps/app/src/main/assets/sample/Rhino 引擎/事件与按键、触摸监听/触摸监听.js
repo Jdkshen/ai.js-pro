@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 events.observeTouch();
 
 events.setTouchEventTimeout(30);

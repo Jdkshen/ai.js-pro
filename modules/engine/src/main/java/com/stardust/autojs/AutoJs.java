@@ -18,6 +18,7 @@ import com.stardust.autojs.core.image.capture.ScreenCaptureRequestActivity;
 import com.stardust.autojs.core.image.capture.ScreenCaptureRequester;
 import com.stardust.autojs.core.record.accessibility.AccessibilityActionRecorder;
 import com.stardust.autojs.core.util.Shell;
+import com.stardust.autojs.engine.Node24JavaScriptEngine;
 import com.stardust.autojs.engine.QuickJsJavaScriptEngine;
 import com.stardust.autojs.engine.RhinoEngineLoader;
 import com.stardust.autojs.engine.RootAutomatorEngine;
@@ -120,6 +121,11 @@ public abstract class AutoJs {
         }
         mScriptEngineManager.registerEngine(JavaScriptSource.ENGINE_QUICKJS, () -> {
             QuickJsJavaScriptEngine engine = new QuickJsJavaScriptEngine();
+            engine.setRuntime(createRuntime());
+            return engine;
+        });
+        mScriptEngineManager.registerEngine(JavaScriptSource.ENGINE_NODE24, () -> {
+            Node24JavaScriptEngine engine = new Node24JavaScriptEngine(mContext);
             engine.setRuntime(createRuntime());
             return engine;
         });

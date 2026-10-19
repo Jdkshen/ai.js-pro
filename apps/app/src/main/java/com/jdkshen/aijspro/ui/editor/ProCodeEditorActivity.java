@@ -15,7 +15,10 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -61,7 +64,9 @@ import com.jdkshen.aijspro.model.indices.Property;
 import com.jdkshen.aijspro.model.script.ScriptFile;
 import com.jdkshen.aijspro.model.script.Scripts;
 import com.jdkshen.aijspro.model.script.ProjectSharing;
+import com.jdkshen.aijspro.external.HostScripts;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
+import com.jdkshen.aijspro.log.UnifiedConsoleLogBridge;
 import com.jdkshen.aijspro.ui.common.MiuixHintDialog;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.edit.ClassSearchDialogBuilder;
@@ -134,6 +139,13 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private View mSaveTool;
     private ConsoleImpl mConsole;
     private ConsoleView mConsoleView;
+    /** 统一日志源（主进程 + :script + :native）的渲染控件；仅 flutterPoc 构建启用。 */
+    private TextView mUnifiedLogText;
+    private ScrollView mUnifiedLogScroll;
+    private SpannableStringBuilder mUnifiedLogBuffer;
+    private UnifiedConsoleLogBridge.Listener mUnifiedLogListener;
+    private boolean mUnifiedLogActive;
+    private static final int UNIFIED_LOG_MAX_LINES = 2000;
     private TextView mLogLevelView;
     private EditorTab mActiveTab;
     private File mWorkspaceRoot;
@@ -241,6 +253,79 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         mExecutionFinishedReceiverRegistered = true;
         restoreSessionAndOpen(initial);
     }
+
+    /**
+     * launchMode=singleTop（task-45）：连续点「编辑器」时系统复用本实例、把新 Intent 送到这里。
+     *
+     * <p>复用前要做的两件事：
+     * <ol>
+     *   <li>用 {@link #setIntent(Intent)} 换掉当前 intent，后续「另存为/刷新路径」仍读这次的文件；</li>
+     *   <li>把新文件真的打开（已有 tab 就选中它，没有就新开 tab），否则会出现「已有编辑器实例，
+     *       再点别的文件却停在旧文件」的假单例 bug。</li>
+     * </ol>
+     * 没有有效路径的重复点击（同一入口连点）只保持当前编辑状态，不新增实例也不弹错误。
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent == null) {
+            return;
+        }
+        setIntent(intent);
+        Uri data = intent.getData();
+        if (data != null && "content".equals(data.getScheme())) {
+            reopenExternalDocument(data);
+            return;
+        }
+        String path = intent.getStringExtra(EXTRA_PATH);
+        File file = canonical(path == null ? null : new File(path));
+        if (file == null || !file.isFile()) {
+            return;
+        }
+        String sampleAssetPath = intent.getStringExtra(EXTRA_SAMPLE_ASSET_PATH);
+        if (!TextUtils.isEmpty(sampleAssetPath)) {
+            int slash = sampleAssetPath.lastIndexOf('/');
+            mSampleAssetDirectory = slash > 0 ? sampleAssetPath.substring(0, slash) : "sample";
+        } else {
+            mSampleAssetDirectory = null;
+        }
+        // 新文件在另一个工作区：先切文件树/抽屉根，避免右栏还是旧目录（tab 本身由 openFile 打开）。
+        if (mWorkspaceRoot == null || !isWithin(file, mWorkspaceRoot)) {
+            File workspace = canonical(new File(Pref.getScriptDirPath()));
+            mWorkspaceRoot = workspace != null && isWithin(file, workspace)
+                    ? workspace : file.getParentFile();
+            if (mWorkspaceRoot != null) {
+                mProjectRoot = findProjectRoot(file.getParentFile());
+                switchWorkspace(mWorkspaceRoot);
+            }
+        }
+        openFile(file);
+    }
+
+    /** singleTop 复用实例时再收到外部 content：读一次并切到该文件（保存仍按外部文件写回）。 */
+    private void reopenExternalDocument(Uri data) {
+        if (mExternalUri != null && mExternalUri.equals(data)
+                && mExternalFile != null && mExternalFile.isFile()) {
+            openFile(mExternalFile);
+            return;
+        }
+        mExternalUri = data;
+        mExternalDraftDirty = false;
+        new Thread(() -> {
+            try {
+                File file = ExternalEditorDocument.read(getApplicationContext(), data);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    mExternalFile = file;
+                    openFile(file);
+                    toast("外部文件：保存将写回原文件；无写入权限时可在菜单中另存为");
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> toast("打开失败：" + error.getMessage()));
+            }
+        }, "external-editor-reopen").start();
+    }
+
 
     private void resolveWorkspace(File initial) {
         File scriptRoot = canonical(new File(Pref.getScriptDirPath()));
@@ -462,7 +547,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         header.addView(mLogLevelView, new LinearLayout.LayoutParams(0, dp(42), 1f));
         header.addView(smallIconAction(R.drawable.ic_pro_editor_stop, "停止", v -> stopCurrentExecution()),
                 new LinearLayout.LayoutParams(dp(42), dp(42)));
-        header.addView(smallIconAction(R.drawable.ic_pro_editor_delete, "清空日志", v -> mConsole.clear()),
+        header.addView(smallIconAction(R.drawable.ic_pro_editor_delete, "清空日志", v -> clearLogPanel()),
                 new LinearLayout.LayoutParams(dp(42), dp(42)));
         header.addView(smallIconAction(R.drawable.ic_pro_editor_minimize, "收起日志", v -> hideLogPanel()),
                 new LinearLayout.LayoutParams(dp(42), dp(42)));
@@ -471,15 +556,138 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         panel.addView(header, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
         mConsole = AutoJs.getInstance().getGlobalConsole();
-        mConsoleView = new ConsoleView(this);
-        ConsoleThemeHelper.apply(mConsoleView, mPalette);
-        mConsoleView.setConsole(mConsole);
-        mConsoleView.setMinimumLogLevel(mLogLevel);
-        View input = mConsoleView.findViewById(R.id.input_container);
-        if (input != null) input.setVisibility(View.GONE);
-        panel.addView(mConsoleView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        if (UnifiedConsoleLogBridge.isAvailable()) {
+            // 统一日志源（主进程 + :script + :native）：不再只盯主进程 GlobalConsole，
+            // 宿主进程脚本的实时日志也在同一份环里。flutterPoc 构建才有 HostConsoleSink。
+            mUnifiedLogActive = true;
+            UnifiedConsoleLogBridge.ensureMainTap();
+            mUnifiedLogBuffer = new SpannableStringBuilder();
+            mUnifiedLogText = new TextView(this);
+            mUnifiedLogText.setTextSize(12f);
+            mUnifiedLogText.setTypeface(Typeface.MONOSPACE);
+            mUnifiedLogText.setTextColor(mPalette.textPrimary);
+            mUnifiedLogText.setTextIsSelectable(true);
+            mUnifiedLogText.setPadding(dp(10), dp(6), dp(10), dp(6));
+            mUnifiedLogScroll = new ScrollView(this);
+            mUnifiedLogScroll.setFillViewport(true);
+            mUnifiedLogScroll.addView(mUnifiedLogText,
+                    new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT));
+            panel.addView(mUnifiedLogScroll, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            attachUnifiedLog();
+        } else {
+            mConsoleView = new ConsoleView(this);
+            ConsoleThemeHelper.apply(mConsoleView, mPalette);
+            mConsoleView.setConsole(mConsole);
+            mConsoleView.setMinimumLogLevel(mLogLevel);
+            View input = mConsoleView.findViewById(R.id.input_container);
+            if (input != null) input.setVisibility(View.GONE);
+            panel.addView(mConsoleView, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        }
         return panel;
+    }
+
+    /** 清空日志面板：统一流清环 + 清本地缓冲；非统一模式退回旧的 GlobalConsole.clear()。 */
+    private void clearLogPanel() {
+        if (mUnifiedLogActive) {
+            UnifiedConsoleLogBridge.clear();
+            if (mUnifiedLogBuffer != null) mUnifiedLogBuffer.clear();
+            if (mUnifiedLogText != null) mUnifiedLogText.setText("");
+        } else if (mConsole != null) {
+            mConsole.clear();
+        }
+    }
+
+    private void attachUnifiedLog() {
+        if (!mUnifiedLogActive || mUnifiedLogListener != null) return;
+        mUnifiedLogListener = line -> {
+            if (line.level >= mLogLevel) appendUnifiedLogLine(line, true);
+        };
+        UnifiedConsoleLogBridge.addListener(mUnifiedLogListener);
+        renderUnifiedLogSnapshot();
+    }
+
+    private void detachUnifiedLog() {
+        if (mUnifiedLogListener != null) {
+            UnifiedConsoleLogBridge.removeListener(mUnifiedLogListener);
+            mUnifiedLogListener = null;
+        }
+    }
+
+    /** 先渲染最近 2000 行历史（按当前等级过滤），之后靠 listener 实时追加。 */
+    private void renderUnifiedLogSnapshot() {
+        if (!mUnifiedLogActive || mUnifiedLogBuffer == null || mUnifiedLogText == null) return;
+        mUnifiedLogBuffer.clear();
+        for (UnifiedConsoleLogBridge.Line line : UnifiedConsoleLogBridge.snapshot(UNIFIED_LOG_MAX_LINES)) {
+            if (line.level >= mLogLevel) appendUnifiedLogLine(line, false);
+        }
+        mUnifiedLogText.setText(mUnifiedLogBuffer);
+        scrollUnifiedLogToBottom();
+    }
+
+    /** 追加一行：统一格式 HH:mm:ss.SSS [I] name: line，按等级上色，自动跟随底部。 */
+    private void appendUnifiedLogLine(UnifiedConsoleLogBridge.Line line, boolean mayScroll) {
+        if (mUnifiedLogBuffer == null) return;
+        boolean follow = mayScroll && isUnifiedLogFollowingBottom();
+        if (mUnifiedLogBuffer.length() > 0) mUnifiedLogBuffer.append('\n');
+        int start = mUnifiedLogBuffer.length();
+        String text = line.formatted();
+        mUnifiedLogBuffer.append(text);
+        mUnifiedLogBuffer.setSpan(new ForegroundColorSpan(logLevelColor(line.level)),
+                start, mUnifiedLogBuffer.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        trimUnifiedLogBuffer();
+        if (mUnifiedLogText != null) mUnifiedLogText.setText(mUnifiedLogBuffer);
+        if (follow) scrollUnifiedLogToBottom();
+    }
+
+    private boolean isUnifiedLogFollowingBottom() {
+        if (mUnifiedLogScroll == null) return true;
+        View child = mUnifiedLogScroll.getChildAt(0);
+        if (child == null) return true;
+        return child.getBottom() - (mUnifiedLogScroll.getHeight()
+                + mUnifiedLogScroll.getScrollY()) < dp(48);
+    }
+
+    private void scrollUnifiedLogToBottom() {
+        if (mUnifiedLogScroll == null) return;
+        mUnifiedLogScroll.post(() -> {
+            if (mUnifiedLogScroll != null) mUnifiedLogScroll.fullScroll(View.FOCUS_DOWN);
+        });
+    }
+
+    private void trimUnifiedLogBuffer() {
+        if (mUnifiedLogBuffer == null) return;
+        int lines = 0;
+        for (int i = 0; i < mUnifiedLogBuffer.length(); i++) {
+            if (mUnifiedLogBuffer.charAt(i) == '\n') lines++;
+        }
+        while (lines > UNIFIED_LOG_MAX_LINES) {
+            int cut = mUnifiedLogBuffer.toString().indexOf('\n');
+            if (cut < 0) break;
+            mUnifiedLogBuffer.delete(0, cut + 1);
+            lines--;
+        }
+    }
+
+    /** 等级色（V/D/I/W/E/A）：与 Flutter 运行日志页/ConsoleView 的默认观感一致。 */
+    private int logLevelColor(int level) {
+        switch (level) {
+            case Log.VERBOSE:
+                return 0xFF9E9E9E;
+            case Log.DEBUG:
+                return 0xFF64B5F6;
+            case Log.WARN:
+                return 0xFFFFB74D;
+            case Log.ERROR:
+                return 0xFFEF5350;
+            case Log.ASSERT:
+                return 0xFFBA68C8;
+            case Log.INFO:
+            default:
+                return 0xFF81C784;
+        }
     }
 
     private void showLogLevelMenu() {
@@ -488,7 +696,11 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         showAnchoredMenu(mLogLevelView, names, null, which -> {
                     mLogLevel = levels[which];
                     mLogLevelView.setText(names[which] + " ▾");
-                    mConsoleView.setMinimumLogLevel(mLogLevel);
+                    if (mUnifiedLogActive) {
+                        renderUnifiedLogSnapshot();
+                    } else {
+                        mConsoleView.setMinimumLogLevel(mLogLevel);
+                    }
                 });
     }
 
@@ -1449,7 +1661,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         showAnchoredMenu(anchor, items, null, which -> {
             if (activeEditor() == null) return;
             if (which == 0) stopCurrentExecution();
-            else if (which == 1) AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
+            else if (which == 1) {
+                HostScripts.stopAllHostScripts();
+                AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
+            }
             else if (which == 2) activeEditor().addOrRemoveBreakpointAtCurrentLine();
             else if (which == 3) startDebugger();
             else if (which == 4) {
@@ -1574,6 +1789,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void floatingRun() {
         saveActiveThen(false, () -> {
             boolean shown = FloatyWindowManger.showCircularMenu();
+            // 复用 runSavedCurrent：先走 HostScripts/PocRuntime 统一路由（task-46），
+            // 宿主不可用时它内部回退旧的 Scripts 主进程路径，悬浮运行与列表运行行为一致。
             runSavedCurrent();
             if (shown) moveTaskToBack(true);
             else toast("悬浮窗权限未开启，脚本已在当前界面运行");
@@ -1902,9 +2119,45 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         saveActiveThen(false, this::runSavedCurrent);
     }
 
-    private void runSavedCurrent() {
+    /**
+     * 与列表「运行」走同一条路由：优先交给 {@link HostScripts#runScript}（flutterPoc 构建下
+     * 转 PocRuntime 统一路由：native 项目 → :native、auto → 主进程、UI 模式 → 主进程
+     * ScriptExecuteActivity、其余 → :script 宿主进程）。
+     *
+     * @return true 表示已被宿主链路接管（含 PocRuntime 内部回退）；false 表示调用方应回退旧路径
+     */
+    private boolean runThroughHost(File file) {
+        if (file == null || !file.isFile()) {
+            return false;
+        }
         try {
-            mExecution = Scripts.INSTANCE.runWithBroadcastSender(mActiveTab.file);
+            return HostScripts.runScript(this, file.getPath());
+        } catch (Throwable error) {
+            // 门面自身异常绝不能阻断编辑器的旧路径。
+            Log.w("ProCodeEditor", "宿主链路执行失败，回退旧运行路径", error);
+            return false;
+        }
+    }
+
+    private void runSavedCurrent() {
+        EditorTab tab = mActiveTab;
+        if (tab == null) {
+            return;
+        }
+        // 先走列表同款路由（task-46）；宿主/统一路由接管后不再持有编辑器的旧主进程执行对象。
+        if (runThroughHost(tab.file)) {
+            mExecution = null;
+            // 若有调试会话/调试条还开着，清掉旧状态，避免状态文案继续显示“调试运行中”误导。
+            if (mDebugBar != null && mDebugBar.getVisibility() == View.VISIBLE) {
+                finishDebugSession(false);
+            }
+            toast("已交由脚本宿主进程运行");
+            showLogPanel();
+            return;
+        }
+        // 非 flutterPoc 构建 / 宿主不可用：保持原来的 Pro 主进程路径。
+        try {
+            mExecution = Scripts.INSTANCE.runWithBroadcastSender(tab.file);
             if (mExecution != null) {
                 toast("脚本已启动");
                 showLogPanel();
@@ -2203,6 +2456,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         if (mFunctionsPanel != null) mFunctionsPanel.setBackgroundColor(palette.surfaceSecondary);
         if (mFunctionsKeyboard != null) mFunctionsKeyboard.setEditorPalette(palette);
         if (mConsoleView != null) ConsoleThemeHelper.apply(mConsoleView, palette);
+        if (mUnifiedLogText != null) mUnifiedLogText.setTextColor(palette.textPrimary);
 
         Theme editorTheme = Theme.fromAssetsJson(this, palette.isDark
                 ? "editor/theme/dark_plus.json" : "editor/theme/light_plus.json");
@@ -2284,6 +2538,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     @Override
     protected void onDestroy() {
+        detachUnifiedLog();
         if (mExecutionFinishedReceiverRegistered) {
             unregisterReceiver(mExecutionFinishedReceiver);
             mExecutionFinishedReceiverRegistered = false;

@@ -211,6 +211,15 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
 
     private inner class WrapFactory : org.mozilla.javascript.WrapFactory() {
 
+        init {
+            // 与 Pro 的 RhinoJavaScriptEngine.WrapFactory 对齐（Pro 构造函数第一行即
+            // setJavaPrimitiveWrap(false)）。默认 true 时，「返回类型声明为 Object」的反射结果
+            // （如 java.lang.reflect.Method.invoke）会把 Boolean/Integer 包成 Java 对象，
+            // JS 里 if (javaBoolean) 恒为 true：ImGui 项目 _invoke 走反射 → ImGui.Button
+            // 每帧返回 true（无触摸幽灵按下）→ 每帧 events.emit("exit") / 窗口立刻关闭。
+            setJavaPrimitiveWrap(false)
+        }
+
         override fun wrap(cx: Context, scope: Scriptable, obj: Any?, staticType: Class<*>?): Any? {
             return when {
                 obj is String -> runtime.bridges.toString(obj.toString())

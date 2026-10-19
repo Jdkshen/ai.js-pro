@@ -1,6 +1,6 @@
-// @engine rhino
+"rhino";
 //文件路径
-var path = "/sdcard/1.txt";
+var path = "./sample-text.txt";
 //打开文件
 var file = open(path);
 //读取文件的所有内容

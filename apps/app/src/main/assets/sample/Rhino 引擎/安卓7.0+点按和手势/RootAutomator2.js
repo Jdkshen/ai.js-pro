@@ -1,5 +1,4 @@
-// @engine rhino
-// ⚠ 需要 Auto.js Pro 专属 API：RootAutomator2（当前引擎暂未实现，直接运行会报错）
+"rhino";
 let screenWidth = $device.width;
 let screenHeight = $device.height;
 

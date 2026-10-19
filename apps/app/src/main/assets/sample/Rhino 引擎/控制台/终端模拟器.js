@@ -1,5 +1,5 @@
-// @engine rhino
-var sh = new Shell();
+"rhino";
+var sh = new Shell(false);
 sh.setCallback({
     onOutput: function(str) {
         print(str);

@@ -13,6 +13,9 @@ import com.bumptech.glide.request.transition.Transition
 import com.stardust.app.GlobalAppContext
 import com.jdkshen.aijspro.inrt.autojs.AutoJs
 import com.jdkshen.aijspro.inrt.autojs.GlobalKeyObserver
+import com.jdkshen.aijspro.inrt.timing.InrtIntentTaskRegistry
+import com.jdkshen.aijspro.inrt.script.InrtScriptThreadHost
+import com.jdkshen.aijspro.inrt.timing.InrtTimedTaskScheduler
 import com.stardust.autojs.core.ui.inflater.ImageLoader
 import com.stardust.autojs.core.ui.inflater.util.Drawables
 
@@ -26,6 +29,12 @@ class App : Application() {
         super.onCreate()
         GlobalAppContext.set(this)
         AutoJs.initInstance(this)
+        // task-160：初始化定时任务上下文；主进程恢复持久化任务，:script 进程供 work_manager 排任务。
+        InrtTimedTaskScheduler.init(this)
+        // task-162：广播 Intent 任务只在主进程注册动态 receiver。
+        if (!InrtScriptThreadHost.getProcessName(this).endsWith(":script")) {
+            InrtIntentTaskRegistry.init(this)
+        }
         GlobalKeyObserver.init()
         Drawables.setDefaultImageLoader(object : ImageLoader {
             override fun loadInto(imageView: ImageView, uri: Uri) {

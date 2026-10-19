@@ -1,0 +1,25 @@
+{
+    "general":  [
+                    "lib/arm64-v8a/libaijscrypto.so",
+                    "lib/arm64-v8a/libc++_shared.so",
+                    "lib/arm64-v8a/libmlkit_google_ocr_pipeline.so",
+                    "lib/arm64-v8a/libpikafish.so",
+                    "lib/arm64-v8a/libppocr.so",
+                    "lib/arm64-v8a/libquickjs.so",
+                    "lib/arm64-v8a/libquickjs_jni.so"
+                ],
+    "opencv":  [
+                   "lib/arm64-v8a/libopencv_core.so",
+                   "lib/arm64-v8a/libopencv_dnn.so",
+                   "lib/arm64-v8a/libopencv_features.so",
+                   "lib/arm64-v8a/libopencv_flann.so",
+                   "lib/arm64-v8a/libopencv_geometry.so",
+                   "lib/arm64-v8a/libopencv_imgcodecs.so",
+                   "lib/arm64-v8a/libopencv_imgproc.so",
+                   "lib/arm64-v8a/libopencv_java5.so",
+                   "lib/arm64-v8a/libtbb.so"
+               ],
+    "v8":  [
+
+           ]
+}

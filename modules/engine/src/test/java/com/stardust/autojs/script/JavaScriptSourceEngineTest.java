@@ -37,6 +37,47 @@ public class JavaScriptSourceEngineTest {
     }
 
     @Test
+    public void proNodeStringDirectiveSelectsNode24() {
+        StringScriptSource source = new StringScriptSource(
+                "\"nodejs\";\nconsole.log(process.version);"
+        );
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+    }
+
+    @Test
+    public void proNodeUiCombinedStringDirectiveSelectsNode24() {
+        StringScriptSource source = new StringScriptSource(
+                "\"nodejs ui\";\nrequire('fs');"
+        );
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+    }
+
+    @Test
+    public void proRhinoStringDirectiveSelectsRhino() {
+        StringScriptSource source = new StringScriptSource(
+                "\"rhino\";\nconsole.log(Packages);"
+        );
+        source.setPreferredEngine("quickjs");
+        assertEquals(JavaScriptSource.ENGINE_RHINO, source.getEngineName());
+    }
+
+    @Test
+    public void proQuickJsStringDirectiveSelectsQuickJs() {
+        StringScriptSource source = new StringScriptSource(
+                "\"quickjs\";\nconsole.log(Java);"
+        );
+        assertEquals(JavaScriptSource.ENGINE_QUICKJS, source.getEngineName());
+    }
+
+    @Test
+    public void uiModeLineBeforeEngineMarkerKeepsUiMode() {
+        StringScriptSource source = new StringScriptSource(
+                "\"ui\";\n\"rhino\";\nui.layout(\"console\");"
+        );
+        assertEquals(JavaScriptSource.ENGINE_RHINO, source.getEngineName());
+    }
+
+    @Test
     public void laterDirectiveDoesNotSilentlyChangeEngine() {
         StringScriptSource source = new StringScriptSource(
                 "console.log('still Rhino');\n// @engine quickjs"

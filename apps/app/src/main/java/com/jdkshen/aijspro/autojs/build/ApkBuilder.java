@@ -1,7 +1,10 @@
 package com.jdkshen.aijspro.autojs.build;
 
+import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.util.Log;
 
 import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity;
 import com.stardust.autojs.apkbuilder.ApkPackager;
@@ -39,12 +42,17 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Arrays;
+import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 /**
@@ -135,6 +143,254 @@ public class ApkBuilder {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    // ---- task-108：瘦身模板从宿主 APK 补 lib/arm64-v8a -----------------
+
+    private static final String HOST_LIB_PREFIX = "lib/arm64-v8a/";
+    /** 兜底（无 excluded-zip-files.json 时）只补 inrt 运行时真正需要的 so，避免把 Flutter/MLKit 库也塞进产物。 */
+    private static final String[] RUNTIME_LIB_NAMES = {
+            "libaijscrypto.so", "libquickjs.so", "libquickjs_jni.so", "libppocr.so",
+            "libmlkit_google_ocr_pipeline.so", "libc++_shared.so", "libpikafish.so"
+    };
+    private static final String[] RUNTIME_LIB_PREFIXES = {"libopencv_", "libtbb", "libv8"};
+    /** 模板自带的补全清单（A 的 gradle/inrt 会把它打进模板 assets；也兼容主程序 assets）。 */
+    private static final String[] EXCLUDED_LIST_PATHS = {
+            "assets/template/excluded-zip-files.json",
+            "assets/excluded-zip-files.json"
+    };
+    private static final String[] EXCLUDED_LIST_ASSETS = {
+            "template/excluded-zip-files.json",
+            "excluded-zip-files.json"
+    };
+
+    /**
+     * task-108：把瘦身模板缺少的 lib/arm64-v8a/*.so 从宿主 APK 补进打包工作区。
+     *
+     * <p>清单来源优先级：模板自身 assets/template/excluded-zip-files.json →
+     * 主程序同名 assets → 兜底扫描宿主 APK 全部 arm64 so。旧全量模板（已带 lib）
+     * 直接跳过并打 C-PKG: template libs already present。失败抛中文 IOException。
+     *
+     * @return 本次补入的 so 数量；旧模板跳过返回 0
+     */
+    public static int ensureTemplateLibs(Context context, File workspace) throws IOException {
+        if (context == null || workspace == null) {
+            throw new IOException("补全模板 lib 失败：缺少 Context 或工作区");
+        }
+        File abiDir = new File(workspace, HOST_LIB_PREFIX);
+        File[] existing = abiDir.isDirectory()
+                ? abiDir.listFiles((dir, name) -> name != null && name.endsWith(".so")) : null;
+        if (existing != null && existing.length > 0) {
+            Log.i("C-PKG", "template libs already present count=" + existing.length
+                    + " (旧全量模板，跳过从宿主补齐)");
+            return 0;
+        }
+        File hostApk = hostApkFile(context);
+        List<String> wanted = loadExcludedLibNames(context, workspace);
+        boolean fallbackAll = wanted.isEmpty();
+        int added = 0;
+        int general = 0;
+        int opencv = 0;
+        int v8 = 0;
+        ZipFile zip;
+        try {
+            zip = new ZipFile(hostApk);
+        } catch (IOException error) {
+            throw new IOException("打开宿主 APK 失败：" + hostApk + "（" + error.getMessage() + "）", error);
+        }
+        try {
+            if (fallbackAll) {
+                wanted = listHostArm64Libs(zip);
+                if (wanted.isEmpty()) {
+                    throw new IOException("补全模板 lib 失败：宿主 APK 里没有 lib/arm64-v8a/*.so：" + hostApk);
+                }
+                Log.i("C-PKG", "excluded-zip-files.json 不可用，兜底扫描宿主 APK libs=" + wanted.size());
+            }
+            for (String entryName : wanted) {
+                ZipEntry entry = zip.getEntry(entryName);
+                if (entry == null || entry.isDirectory()) {
+                    Log.w("C-PKG", "C-PKG: host lib missing entry=" + entryName);
+                    continue;
+                }
+                File out = new File(workspace, entryName);
+                if (out.isFile() && out.length() > 0) {
+                    continue;
+                }
+                File parent = out.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("无法创建模板 lib 目录：" + parent);
+                }
+                try (InputStream input = zip.getInputStream(entry);
+                     FileOutputStream output = new FileOutputStream(out)) {
+                    StreamUtils.write(input, output);
+                }
+                added++;
+                String lower = entryName.toLowerCase(Locale.ROOT);
+                if (lower.contains("opencv") || lower.contains("tbb")) {
+                    opencv++;
+                } else if (lower.contains("v8")) {
+                    v8++;
+                } else {
+                    general++;
+                }
+            }
+        } finally {
+            zip.close();
+        }
+        if (added <= 0) {
+            throw new IOException("补全模板 lib 失败：清单中的 so 在宿主 APK 中均不存在（"
+                    + hostApk + "）");
+        }
+        Log.i("C-PKG", "template slim=true hostApk=" + hostApk.getPath()
+                + " added=" + added + " (general=" + general + " opencv=" + opencv + " v8=" + v8
+                + (fallbackAll ? " fallback=all" : " list=excluded-zip-files.json") + ")");
+        return added;
+    }
+
+    private static File hostApkFile(Context context) throws IOException {
+        try {
+            ApplicationInfo info = context.getPackageManager()
+                    .getApplicationInfo(context.getPackageName(), 0);
+            String path = info == null ? null : info.sourceDir;
+            if (path == null || path.isEmpty()) {
+                throw new IOException("PackageManager 没有返回宿主 APK 路径");
+            }
+            File apk = new File(path);
+            if (!apk.isFile()) {
+                throw new IOException("宿主 APK 不存在：" + apk);
+            }
+            return apk;
+        } catch (IOException error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new IOException("读取宿主 APK 失败：" + error.getMessage(), error);
+        }
+    }
+
+    /** 读 excluded-zip-files.json（模板内/主程序 assets），返回标准化后的 lib entry 列表。 */
+    private static List<String> loadExcludedLibNames(Context context, File workspace) {
+        Set<String> result = new LinkedHashSet<>();
+        String text = null;
+        for (String path : EXCLUDED_LIST_PATHS) {
+            File file = new File(workspace, path);
+            if (file.isFile()) {
+                try {
+                    text = new String(readAll(file), "UTF-8");
+                    Log.i("C-PKG", "excluded list from template workspace: " + path);
+                    break;
+                } catch (Throwable error) {
+                    Log.w("C-PKG", "读取模板 excluded list 失败：" + path, error);
+                }
+            }
+        }
+        if (text == null) {
+            for (String asset : EXCLUDED_LIST_ASSETS) {
+                try (InputStream input = context.getAssets().open(asset)) {
+                    java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    while ((read = input.read(buffer)) > 0) {
+                        output.write(buffer, 0, read);
+                    }
+                    text = new String(output.toByteArray(), "UTF-8");
+                    Log.i("C-PKG", "excluded list from app assets: " + asset);
+                    break;
+                } catch (Throwable ignored) {
+                    // 继续下一个候选
+                }
+            }
+        }
+        if (text == null) {
+            return new ArrayList<>(result);
+        }
+        try {
+            JSONObject json = new JSONObject(text);
+            for (String key : new String[]{"general", "opencv", "v8"}) {
+                collectLibNames(json.opt(key), result);
+            }
+            if (result.isEmpty()) {
+                // 兜底：有些清单直接是数组，或键名不同
+                if (text.trim().startsWith("[")) {
+                    collectLibNames(new JSONArray(text), result);
+                } else {
+                    for (java.util.Iterator<String> it = json.keys(); it.hasNext(); ) {
+                        collectLibNames(json.opt(it.next()), result);
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            Log.w("C-PKG", "解析 excluded-zip-files.json 失败，改用兜底扫描", error);
+        }
+        return new ArrayList<>(result);
+    }
+
+    private static void collectLibNames(Object value, Set<String> out) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value;
+            for (int i = 0; i < array.length(); i++) {
+                collectLibNames(array.opt(i), out);
+            }
+            return;
+        }
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            for (java.util.Iterator<String> it = object.keys(); it.hasNext(); ) {
+                collectLibNames(object.opt(it.next()), out);
+            }
+            return;
+        }
+        if (!(value instanceof String)) {
+            return;
+        }
+        String name = ((String) value).trim().replace('\\', '/');
+        if (name.isEmpty()) {
+            return;
+        }
+        if (name.startsWith("lib/")) {
+            if (name.startsWith(HOST_LIB_PREFIX) && name.endsWith(".so")) {
+                out.add(name);
+            }
+            return;
+        }
+        if (name.contains("/")) {
+            return;
+        }
+        if (!name.endsWith(".so")) {
+            name = name + ".so";
+        }
+        out.add(HOST_LIB_PREFIX + name);
+    }
+
+    private static List<String> listHostArm64Libs(ZipFile zip) {
+        List<String> result = new ArrayList<>();
+        Enumeration<? extends ZipEntry> entries = zip.entries();
+        while (entries.hasMoreElements()) {
+            ZipEntry entry = entries.nextElement();
+            String name = entry.getName();
+            if (!entry.isDirectory() && name.startsWith(HOST_LIB_PREFIX) && name.endsWith(".so")
+                    && isRuntimeLibrary(name.substring(HOST_LIB_PREFIX.length()))) {
+                result.add(name);
+            }
+        }
+        return result;
+    }
+
+    /** 无清单时的兜底过滤：general/opencv/v8 相关；排除 Flutter/MLKit/androidx 等无关库。 */
+    private static boolean isRuntimeLibrary(String fileName) {
+        for (String prefix : RUNTIME_LIB_PREFIXES) {
+            if (fileName.startsWith(prefix)) {
+                return true;
+            }
+        }
+        for (String exact : RUNTIME_LIB_NAMES) {
+            if (exact.equals(fileName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public ApkBuilder prepare() throws IOException {
@@ -713,9 +969,69 @@ public class ApkBuilder {
     }
 
     private void buildArsc() {
-        // The bundled template already carries a matching resources.arsc; the package
-        // rename is applied through the manifest/axml path. Kept for API compatibility.
+        try {
+            File arsc = new File(mWorkspacePath, "resources.arsc");
+            if (mArscPackageName == null || mArscPackageName.isEmpty() || !arsc.isFile()) {
+                Log.i("C-PKG", "arsc rewrite skipped package=" + mArscPackageName + " exists=" + arsc.isFile());
+                return;
+            }
+            byte[] data = readAll(arsc);
+            int offset = 12; // ResTable_header: type(2) headerSize(2) size(4) packageCount(4)
+            boolean rewritten = false;
+            while (offset + 12 <= data.length) {
+                int type = readU16(data, offset);
+                int headerSize = readU16(data, offset + 2);
+                long chunkSize = readU32(data, offset + 4);
+                if (chunkSize <= 0 || offset + chunkSize > data.length) break;
+                if (type == 0x0200) { // RES_TABLE_PACKAGE_TYPE
+                    // package header: ... id(4) name[128 UTF-16LE](256)
+                    int nameOffset = offset + 12;
+                    byte[] name = mArscPackageName.getBytes("UTF-16LE");
+                    int max = Math.min(name.length, 254);
+                    for (int i = 0; i < 256; i++) {
+                        data[nameOffset + i] = i < max ? name[i] : 0;
+                    }
+                    rewritten = true;
+                    break;
+                }
+                offset += (int) chunkSize;
+            }
+            if (!rewritten) {
+                Log.w("C-PKG", "arsc package chunk not found; suppress package rewrite");
+                return;
+            }
+            writeAll(arsc, data);
+            Log.i("C-PKG", "arsc package=" + mArscPackageName + " rewritten bytes=" + data.length);
+        } catch (Throwable error) {
+            Log.w("C-PKG", "arsc rewrite failed", error);
+        }
     }
+
+    private static int readU16(byte[] data, int offset) {
+        return (data[offset] & 0xff) | ((data[offset + 1] & 0xff) << 8);
+    }
+
+    private static long readU32(byte[] data, int offset) {
+        return (data[offset] & 0xffL) | ((data[offset + 1] & 0xffL) << 8)
+                | ((data[offset + 2] & 0xffL) << 16) | ((data[offset + 3] & 0xffL) << 24);
+    }
+
+    private static byte[] readAll(File file) throws Exception {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.io.FileInputStream input = new java.io.FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) > 0) out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
+    }
+
+    private static void writeAll(File file, byte[] data) throws Exception {
+        try (java.io.FileOutputStream output = new java.io.FileOutputStream(file)) {
+            output.write(data);
+        }
+    }
+
 
     /**
      * 工程目录里属于「打包产物」的子目录（默认 `build/`）不能进 assets：

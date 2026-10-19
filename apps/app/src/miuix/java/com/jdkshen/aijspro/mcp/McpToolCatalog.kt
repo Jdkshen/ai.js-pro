@@ -37,6 +37,11 @@ internal object McpToolCatalog {
         "get_mcp_log"
     )
 
+    /**
+     * Pro compatibility names advertised by tools/list. The list size must stay 39.
+     * [learnAutoJsSkill] keeps the original Pro spelling ("AutoJs"); its deterministic
+     * camelCase dispatch form is "learnAutojsSkill". Both are accepted by tools/call.
+     */
     val aliases = linkedMapOf(
         "getUiLayout" to "get_ui_layout",
         "captureScreen" to "capture_screen",
@@ -46,6 +51,35 @@ internal object McpToolCatalog {
         "stopAllScripts" to "stop_all_scripts",
         "getMcpLog" to "get_mcp_log"
     )
+
+    /**
+     * Dispatch-only aliases: every canonical tool gets its deterministic camelCase spelling.
+     * They are accepted by tools/call but deliberately are not added to [names]/tools/list.
+     */
+    val dispatchAliases: Map<String, String> = canonicalNames.associateWith { canonical ->
+        canonical.split('_').mapIndexed { index, part ->
+            if (index == 0) part else part.replaceFirstChar { it.uppercaseChar() }
+        }.joinToString("")
+    }
+
+    private val canonicalByAlias: Map<String, String> =
+        dispatchAliases.entries.associate { entry -> entry.value to entry.key } + aliases
+
     val names = canonicalNames + aliases.keys
-    fun canonicalName(name: String): String = aliases[name] ?: name
+
+    init {
+        check(dispatchAliases.size == canonicalNames.size)
+        check(dispatchAliases.values.toSet().size == canonicalNames.size)
+        // Pro aliases may keep their historical spelling (learnAutoJsSkill); every
+        // accepted alias must dispatch to a canonical tool, but it does not have to
+        // equal the automatically generated camelCase spelling.
+        check(aliases.all { (_, canonical) -> canonical in canonicalNames })
+        check(canonicalNames.all { canonical ->
+            canonicalByAlias[dispatchAliases.getValue(canonical)] == canonical
+        })
+        check(aliases.all { (alias, canonical) -> canonicalByAlias[alias] == canonical })
+        check(names.size == 39 && names.toSet().size == names.size)
+    }
+
+    fun canonicalName(name: String): String = canonicalByAlias[name] ?: name
 }

@@ -2,6 +2,7 @@ package com.stardust.autojs.runtime;
 
 import android.content.Context;
 import android.os.Build;
+import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
@@ -29,6 +30,9 @@ import com.stardust.autojs.runtime.api.Floaty;
 import com.stardust.autojs.core.looper.Loopers;
 import com.stardust.autojs.runtime.api.Media;
 import com.stardust.autojs.runtime.api.MemoryLeakDetector;
+import com.stardust.autojs.runtime.api.remote.RemoteAccessibilityBridge;
+import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
+import com.stardust.autojs.runtime.api.remote.RemoteUiSelector;
 import com.stardust.autojs.runtime.api.Plugins;
 import com.stardust.autojs.runtime.api.PowerManager;
 import com.stardust.autojs.runtime.api.Sensors;
@@ -71,6 +75,9 @@ import java.io.StringWriter;
 import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 
 /**
@@ -80,6 +87,18 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ScriptRuntime {
 
     private static final String TAG = "ScriptRuntime";
+
+    /**
+     * 把 {@code events.emit("exit")} 投递到脚本 Looper 并等待执行完的最长时间。
+     * 超时只记录日志并继续退出清理（exit 监听可能自己很慢），避免脚本故意/无意
+     * 写死循环把整个应用退出流程卡死。
+     * 注：等待线程是 Android 主线程时会被进一步压到 {@link #MAX_MAIN_THREAD_WAIT_MS}，
+     * 避免退出清理把主线程卡到 ANR。
+     */
+    private static final long EXIT_EMIT_TIMEOUT_MS = 2000L;
+
+    /** 主线程上单次等待脚本 Looper 的上限（防止退出流程把主线程卡到 ANR）。 */
+    public static final long MAX_MAIN_THREAD_WAIT_MS = 1000L;
 
 
     public static class Builder {
@@ -241,7 +260,14 @@ public class ScriptRuntime {
         Context context = uiHandler.getContext();
         app = builder.mAppUtils;
         console = builder.mConsole;
-        accessibilityBridge = builder.mAccessibilityBridge;
+        AccessibilityBridge accessibilityBridge = builder.mAccessibilityBridge;
+        // Phase1 P1：:script 进程里 AccessibilityService 只在主进程，把本地桥包装成远程桥，
+        // 让 auto()/auto.waitFor() 等可用性检查走主进程（见 RemoteAccessibilityBridge）。
+        if (RemoteAutomationBridge.isIsolationProcess() && accessibilityBridge != null
+                && GlobalAppContext.get() != null) {
+            accessibilityBridge = new RemoteAccessibilityBridge(accessibilityBridge);
+        }
+        this.accessibilityBridge = accessibilityBridge;
         mShellSupplier = builder.mShellSupplier;
         ui = new UI(context, this);
         $ui = ui;
@@ -269,6 +295,11 @@ public class ScriptRuntime {
     public void init() {
         if (loopers != null)
             throw new IllegalStateException("already initialized");
+        if (RemoteAutomationBridge.isIsolationProcess()) {
+            // :script 进程：自动化 API 走主进程 AIDL 代理（RemoteAutomationBridge + AutomationHostClient）。
+            Log.i(TAG, "isolated script process, remote automation active="
+                    + RemoteAutomationBridge.isActive());
+        }
         threads = new Threads(this);
         timers = new Timers(this);
         loopers = new Loopers(this);
@@ -358,7 +389,17 @@ public class ScriptRuntime {
         return ProcessShell.execCommand(cmd, root != 0);
     }
 
-    public UiSelector selector() {
+    /**
+     * 脚本选择器入口（Rhino {@code __selector__.js} 会把返回对象的方法安装成全局选择器函数）。
+     *
+     * <p>Phase1 P1：:script 进程里无障碍在主进程，返回 {@link RemoteUiSelector}（节点查询/动作走
+     * 主进程 AIDL）；主进程/本地模式仍返回原来的 {@link UiSelector}。返回类型改为 Object 是为了
+     * 兼容两种实现，调用方都是动态脚本侧，不涉及 Java 静态类型。
+     */
+    public Object selector() {
+        if (RemoteAutomationBridge.isActive()) {
+            return new RemoteUiSelector();
+        }
         return new UiSelector(accessibilityBridge);
     }
 
@@ -405,9 +446,9 @@ public class ScriptRuntime {
         mThread.interrupt();
         engines.myEngine().forceStop();
         threads.exit();
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            throw new ScriptInterruptedException();
-        }
+        // task-162：headless 脚本在主 Looper 上执行时也必须中止后续代码（原来主线程分支
+        // 只 interrupt/forceStop 不抛异常，exit() 之后的代码会继续跑）。
+        throw new ScriptInterruptedException();
     }
 
     public void exit(Throwable e) {
@@ -433,39 +474,239 @@ public class ScriptRuntime {
         accessibilityBridge.ensureServiceEnabled();
     }
 
+    /**
+     * 隔离脚本进程里的 UI 脚本（第三方 native UI/ImGui）不要自动发 exit 事件：
+     * 它们的 exit 监听常做 nativeShutdown，会把正在渲染的 native 上下文销毁。
+     * 只由用户停止/服务销毁时的显式清理负责。
+     */
+    public static volatile boolean suppressExitEvent;
+
     public void onExit() {
-        Log.d(TAG, "on exit");
+        Log.d(TAG, "on exit suppressExitEvent=" + suppressExitEvent
+                + " thread=" + Thread.currentThread().getName());
         //清除interrupt状态
         ThreadCompat.interrupted();
         //悬浮窗需要第一时间关闭以免出现恶意脚本全屏悬浮窗屏蔽屏幕并且在exit中写死循环的问题
         ignoresException(floaty::closeAll);
+        // 对话框也必须尽早关：它们可能盖住后续脚本/选择器，且比悬浮窗更常见。
+        // 放在 timers/events 回收之前，对话框自身的 dismiss 事件/用户回调仍能正常发出
+        // （Dialogs.close() 只 dismiss 本 runtime 创建的窗口，不会误关其它引擎窗口）。
+        // Dialogs 也注册了 cleanable，close() 幂等；末尾 closeCleanables() 会再兜底一次。
+        ignoresException(dialogs::close);
         ignoresException(ColorMapping::recycleSingleton);
         // 图片泄露检测的开关/日志出口是进程级 static，退出时回置到默认值
         // （日志出口抱着本 runtime，不回置会让下个脚本把日志发到已退出的 runtime 上）
         ignoresException(() -> MemoryLeakDetector.reset(Debug.isPackagedApp()));
-        try {
-            events.emit("exit");
-        } catch (Throwable e) {
-            console.error("exception on exit: ", e);
+        // 注意：timers/threads/events/loopers/sensors 只有 runtime.init() 之后才存在。
+        // Node24 等「不调用 runtime.init 的引擎」在 destroy 时这些字段仍是 null：老代码
+        // ignoresException(timers::recycle) 会在**捕获方法引用**阶段直接 NPE（onExit:482），
+        // 顺着 Node24JavaScriptEngine.destroy -> ScriptExecuteActivity.onDestroy 把主进程
+        // 带崩（FATAL: Unable to destroy activity）。这里逐个判空：未初始化的 runtime 只做
+        // 构造期字段的收尾，绝不因为缺初始化而抛异常。
+        // 先停掉所有定时器/帧回调，再触发 exit 监听：第三方 native UI 桥（如自带
+        // EGL/ImGui 的 So）常在 exit 里做 nativeShutdown，如果此时渲染帧还在执行，
+        // 会把它正在使用的 ImGui/EGL 上下文销毁掉（异常崩溃：GImGui 变 NULL）。
+        ignoresException(() -> {
+            if (timers != null) timers.recycle();
+        });
+        if (suppressExitEvent) {
+            Log.d(TAG, "skip events.emit(exit): suppressExitEvent");
+            // :script 进程不自动发 exit；但脚本自己手动 emit(exit) 的监听已改为投递到下一
+            // Looper tick，若引擎在 tick 之前销毁，pending 会丢（nativeShutdown 漏执行）或在
+            // Rhino 销毁后才跑。这里取消 pending 并在脚本 Looper 上同步补发一次：
+            // 只补「脚本主动 emit」的语义，不触发自动 exit，保持 suppress 的既有意图。
+            final Events manualEvents = events;
+            if (manualEvents != null) {
+                final boolean[] hadPending = new boolean[1];
+                ignoresException(() -> hadPending[0] = manualEvents.cancelPendingEmitAsync());
+                if (hadPending[0]) {
+                    Log.d(TAG, "flush pending manual events.emit(exit) listeners before destroy");
+                    postAndWaitOnScriptLooper(() -> {
+                        try {
+                            manualEvents.emitSync("exit");
+                        } catch (Throwable e) {
+                            console.error("exception on manual exit: ", e);
+                        }
+                    }, EXIT_EMIT_TIMEOUT_MS, "manual events.emit(exit) flush");
+                }
+            }
+        } else if (events != null) {
+            final Events exitEvents = events;
+            // 脚本自己在帧回调里 emit(exit) 的监听已改为投递到下一 Looper tick（EventEmitter），
+            // 可能还排在脚本 Looper 上。这里（suppress=false，会统一 emitSync 一次）先取消待执行
+            // 派发：否则它们会在 destroy 之后才执行（Rhino 上下文已销毁），或与屏障里的 emitSync
+            // 重复执行 nativeShutdown。
+            // suppress=true 的进程（:script）见下面的分支：同样先取消，但如果确实取消了 pending
+            // 派发，会在屏障里 emitSync 补发一次（不触发自动 exit，只补脚本手动 emit 的清理）。
+            // 说明（语义小差异，已与 B 确认可接受）：脚本在 destroy 前多次 emit(exit) 的 N 个
+            // pending 派发会收敛成一次 flush；cleanup/nativeShutdown 通常幂等，不影响正确性。
+            ignoresException(() -> exitEvents.cancelPendingEmitAsync());
+            Runnable emitExit = () -> {
+                // 在脚本 Looper 线程上再清一次定时器：把“投递屏障之前”刚被重新排队的
+                // 延迟帧回调也清掉，保证 exit 监听执行后不会再触发 nativeNewFrame/nativeRender。
+                recycleTimersQuietly();
+                try {
+                    // 用 emitSync：exit 监听在退出屏障里同步执行完（emit 会把 exit 投递到
+                    // 下一 tick，B 的 destroy 清理来不及等它）。
+                    exitEvents.emitSync("exit");
+                } catch (Throwable e) {
+                    console.error("exception on exit: ", e);
+                }
+            };
+            // 把 exit 监听投递到脚本 Looper 串行执行并等待其完成：第三方 native UI 桥
+            // （如自带 EGL/ImGui 的 .so）的 exit 监听常做 nativeShutdown；如果 exit 与
+            // nativeNewFrame/nativeRender/nativeButton 并发，会销毁正在使用的上下文
+            // （GImGui 变 NULL 的 SIGSEGV，见 docs/reports/2026-10-17_ImGui桥native上下文定位.md §3.4/§6 #1）。
+            Log.d(TAG, "emit(exit) serialized on script looper, timeout=" + EXIT_EMIT_TIMEOUT_MS + "ms");
+            postAndWaitOnScriptLooper(emitExit, EXIT_EMIT_TIMEOUT_MS, "events.emit(exit)");
         }
-        ignoresException(threads::shutDownAll);
-        ignoresException(events::recycle);
+        ignoresException(() -> {
+            if (threads != null) threads.shutDownAll();
+        });
+        ignoresException(() -> {
+            if (events != null) events.recycle();
+        });
         ignoresException(media::recycle);
         // Exit listeners can finish database writes before registered resources are closed.
         ignoresException(this::closeCleanables);
         ignoresException(yolo::close);
-        ignoresException(loopers::recycle);
+        ignoresException(() -> {
+            if (loopers != null) loopers.recycle();
+        });
         ignoresException(() -> {
             if (mRootShell != null) mRootShell.exit();
             mRootShell = null;
             mShellSupplier = null;
         });
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            ignoresException(images::releaseScreenCapturer);
+            ignoresException(() -> {
+                if (images != null) images.releaseScreenCapturer();
+            });
         }
-        ignoresException(sensors::unregisterAll);
-        ignoresException(timers::recycle);
+        ignoresException(() -> {
+            if (sensors != null) sensors.unregisterAll();
+        });
         ignoresException(ui::recycle);
+    }
+
+    /** 在脚本 Looper 上再清一次定时器；runtime 未 init（Node24）时 timers 可能为 null。 */
+    private void recycleTimersQuietly() {
+        try {
+            if (timers != null) {
+                timers.recycle();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 等脚本 Looper 队列空闲：向脚本 Looper 投递一个空 Runnable 并等待它执行完。
+     * Looper 是 FIFO 的，因此这个屏障执行完 = 当前正在执行/已入队的帧回调都已经结束。
+     * 没有脚本 Looper 或已经处于脚本 Looper 上时立即返回 true。
+     */
+    public boolean awaitScriptLooperIdle(long timeoutMs) {
+        return postAndWaitOnScriptLooper(() -> {
+        }, timeoutMs, "await script looper idle");
+    }
+
+    /**
+     * 把 runnable 投递到脚本 Looper 执行并等待完成，用于把 exit 清理与渲染帧串行化。
+     *
+     * <p>等待策略（避免死锁/语义回归）：
+     * <ul>
+     *   <li>没有脚本 Looper（Node24 等未 init 的 runtime）或当前已在脚本 Looper 上
+     *       → 直接同步执行（本来就是串行的）；</li>
+     *   <li>Looper 已经 quit（LoopBasedJavaScriptEngine.destroy 会先 quit 脚本 Looper）
+     *       → Handler.post 返回 false，回退为同步执行，保持旧行为；</li>
+     *   <li>等待超时且任务尚未开始 → 回退同步执行（不能漏掉 exit 清理）；</li>
+     *   <li>等待超时但任务已经开始（exit 监听自己很慢）→ 不重复执行（避免 exit 回调执行两次），
+     *       只记日志后继续后续清理。</li>
+     * </ul>
+     *
+     * <p>绝不无限等待：超时后一定返回，防止脚本在 exit 里写死循环把应用退出卡死。
+     *
+     * @return true 表示 runnable 已经执行完；false 表示已开始但超时仍在执行
+     */
+    private boolean postAndWaitOnScriptLooper(final Runnable runnable, long timeoutMs, String what) {
+        final Looper scriptLooper = getScriptLooper();
+        if (scriptLooper == null || Looper.myLooper() == scriptLooper) {
+            runnable.run();
+            return true;
+        }
+        long effectiveTimeout = timeoutMs;
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            effectiveTimeout = Math.min(timeoutMs, MAX_MAIN_THREAD_WAIT_MS);
+        }
+        final Handler handler = new Handler(scriptLooper);
+        final CountDownLatch done = new CountDownLatch(1);
+        final Object gate = new Object();
+        final AtomicBoolean started = new AtomicBoolean(false);
+        final AtomicBoolean canceled = new AtomicBoolean(false);
+        Runnable task = () -> {
+            synchronized (gate) {
+                if (canceled.get()) {
+                    // 调用方已回退为同步执行：本任务作废，绝不能把 exit 等清理跑第二次。
+                    done.countDown();
+                    return;
+                }
+                started.set(true);
+            }
+            try {
+                runnable.run();
+            } finally {
+                done.countDown();
+            }
+        };
+        boolean posted;
+        try {
+            posted = handler.post(task);
+        } catch (Throwable error) {
+            Log.w(TAG, what + ": post to script looper failed, run inline", error);
+            posted = false;
+        }
+        if (!posted) {
+            Log.d(TAG, what + ": script looper is quitting, run inline");
+            runnable.run();
+            return true;
+        }
+        try {
+            if (done.await(effectiveTimeout, TimeUnit.MILLISECONDS)) {
+                return true;
+            }
+        } catch (InterruptedException e) {
+            ThreadCompat.interrupted();
+            Log.w(TAG, what + ": interrupted while waiting for script looper");
+        }
+        boolean runInline = false;
+        synchronized (gate) {
+            if (!started.get()) {
+                canceled.set(true);
+                runInline = true;
+            }
+        }
+        if (runInline) {
+            // 任务还没开始 → 从 Looper 队列移除并在当前线程执行（保持旧行为，且保证只执行一次）。
+            handler.removeCallbacks(task);
+            Log.w(TAG, what + ": timeout/interrupted before task started, run inline");
+            runnable.run();
+            return true;
+        }
+        Log.w(TAG, what + ": still running after " + effectiveTimeout + "ms, continue without waiting");
+        return false;
+    }
+
+    /** 当前脚本 Looper；runtime 未 init 或拿不到时返回 null。 */
+    private Looper getScriptLooper() {
+        Loopers scriptLoopers = loopers;
+        if (scriptLoopers == null) {
+            return null;
+        }
+        try {
+            return scriptLoopers.getMainLooper();
+        } catch (Throwable error) {
+            Log.w(TAG, "get script looper failed", error);
+            return null;
+        }
     }
 
     private void ignoresException(Runnable r) {

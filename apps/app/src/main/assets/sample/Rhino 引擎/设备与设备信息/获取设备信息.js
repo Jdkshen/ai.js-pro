@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 console.show();
 
 var str = "";

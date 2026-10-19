@@ -1,5 +1,4 @@
-// @engine rhino
-
+"rhino";
 // 设置所有对话框默认为自适应前台对话框，包括alert, $dialogs.build()等
 $dialogs.setDefaultDialogType("foreground-or-overlay");
 

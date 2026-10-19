@@ -4,8 +4,11 @@
             android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jdkshen.aijspro.ui.mcp.MiuixMcpHistoryActivity"
             android:exported="false" android:configChanges="orientation|screenSize|keyboardHidden" />
+        <!-- task-105：对齐 Pro：前台服务类型、划掉任务不停服（START_STICKY）。 -->
         <service android:name="com.jdkshen.aijspro.mcp.McpService"
-            android:exported="false" android:stopWithTask="true" />
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync|connectedDevice" />
         <activity android:name="com.jdkshen.aijspro.ui.service.MiuixServiceActivity"
             android:exported="false" />
         <activity android:name="com.jdkshen.aijspro.ui.settings.MiuixSettingsActivity"

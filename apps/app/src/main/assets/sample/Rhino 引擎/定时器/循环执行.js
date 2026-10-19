@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var i = 0;
 
 setInterval(function() {

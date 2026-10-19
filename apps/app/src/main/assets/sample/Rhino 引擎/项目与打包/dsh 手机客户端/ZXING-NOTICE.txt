@@ -1,6 +1,0 @@
-ZXing core 3.4.1
-Copyright ZXing authors. Licensed under the Apache License, Version 2.0.
-Source: https://github.com/zxing/zxing/tree/zxing-3.4.1/core
-Artifact: com.google.zxing:core:3.4.1
-The original JAR was converted to a classes.dex JAR with Android SDK d8, min-api 24.
-The ZXing source code was not modified.

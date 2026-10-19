@@ -7,7 +7,7 @@
 
 ## 1. 本阶段唯一目标
 
-先把 QuickJS 新引擎的以下链路做到**可重复、可度量、可长时间稳定测试**：
+先把 QuickJS 引擎的以下链路做到**可重复、可度量、可长时间稳定测试**：
 
 1. 屏幕截图；
 2. 找色与多点找色；
@@ -79,8 +79,8 @@
 | YOLO 对外 API | `modules/engine/src/main/java/com/stardust/autojs/runtime/api/Yolo.java` |
 | OpenCV YOLO | `modules/engine/src/main/java/com/stardust/autojs/runtime/api/OpenCvYoloDetector.java` |
 | YOLO JS 模块 | `modules/engine/src/main/assets/modules/__yolo__.js` |
-| QuickJS 图色案例 | `apps/app/src/main/assets/sample/QuickJS 新引擎/图色处理/` |
-| QuickJS YOLO 案例 | `apps/app/src/main/assets/sample/QuickJS 新引擎/YOLO目标检测/opencv/` |
+| QuickJS 图色案例 | `apps/app/src/main/assets/sample/QuickJS 引擎/图色处理/` |
+| QuickJS YOLO 案例 | `apps/app/src/main/assets/sample/QuickJS 引擎/YOLO目标检测/opencv/` |
 
 当前已有能力包括：
 
@@ -292,7 +292,7 @@ try {
 // @engine quickjs
 
 const backend = 'opencv';
-const modelRoot = 'asset://sample/QuickJS 新引擎/YOLO目标检测/DNN/models/';
+const modelRoot = 'asset://sample/QuickJS 引擎/YOLO目标检测/DNN/models/';
 const detector = yolo.load({
     backend: backend,
     model: modelRoot + 'yolo26_640.onnx',

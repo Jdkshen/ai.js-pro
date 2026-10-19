@@ -20,4 +20,36 @@ class McpToolCatalogTest {
             assertEquals(canonical, McpToolCatalog.canonicalName(alias))
         }
     }
+
+    @Test
+    fun learnAutoJsSkillKeepsProSpellingAndAlsoAcceptsDeterministicCamelCase() {
+        assertEquals("learn_autojs_skill", McpToolCatalog.canonicalName("learnAutoJsSkill"))
+        assertEquals("learn_autojs_skill", McpToolCatalog.canonicalName("learnAutojsSkill"))
+        assertTrue("learnAutoJsSkill" in McpToolCatalog.names)
+        assertTrue("learnAutojsSkill" !in McpToolCatalog.names)
+        assertEquals(39, McpToolCatalog.names.size)
+        assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
+    }
+
+    @Test
+    fun everyCanonicalToolHasADeterministicCamelCaseDispatchAliasWithoutGrowingTheList() {
+        assertEquals(32, McpToolCatalog.dispatchAliases.size)
+        McpToolCatalog.canonicalNames.forEach { canonical ->
+            val alias = McpToolCatalog.dispatchAliases.getValue(canonical)
+            assertEquals(camelCase(canonical), alias)
+            assertTrue(alias.matches(Regex("[a-z][a-zA-Z0-9]*")))
+            assertEquals(canonical, McpToolCatalog.canonicalName(alias))
+            assertEquals(canonical, McpToolCatalog.canonicalName(canonical))
+        }
+        assertEquals("getStatus", McpToolCatalog.dispatchAliases.getValue("get_status"))
+        assertEquals("workspaceRequestApply", McpToolCatalog.dispatchAliases.getValue("workspace_request_apply"))
+        // Dispatch-only aliases must not appear a second time in tools/list.
+        val extraDispatchNames = McpToolCatalog.dispatchAliases.values.toSet() - McpToolCatalog.aliases.keys
+        assertTrue(extraDispatchNames.isNotEmpty())
+        assertTrue(extraDispatchNames.none { it in McpToolCatalog.names })
+    }
+
+    private fun camelCase(name: String) = name.split('_').mapIndexed { index, part ->
+        if (index == 0) part else part.replaceFirstChar { it.uppercaseChar() }
+    }.joinToString("")
 }

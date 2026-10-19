@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 var PrefCheckBox = require('./自定义控件-模块-配置勾选框.js');
 
 ui.layout(

@@ -8,10 +8,17 @@ import android.os.Environment;
 import android.util.Log;
 
 import java.io.File;
+import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.lang.reflect.Method;
 
 /**
@@ -37,6 +44,8 @@ public class ApkBuilderPluginHelper {
     /** 历史 Auto.js ApkBuilder 插件：只保留探测能力，兼容旧装机环境。 */
     private static final String LEGACY_PLUGIN_PACKAGE_NAME = "org.autojs.apk_builder.plugin";
     private static final String TEMPLATE_APK_PATH = "template.apk";
+    /** task-107：瘦身模板需要从宿主 APK 补齐的条目清单（general/opencv/v8）。 */
+    private static final String EXCLUDED_ZIP_ASSET = "excluded-zip-files.json";
     /** 模板小于这个大小一律当成截断/坏文件（真实模板 ~43MB）。 */
     private static final long TEMPLATE_MIN_BYTES = 20L * 1024 * 1024;
     /** 插件缓存目录名（在宿主 files 下）。 */
@@ -67,6 +76,13 @@ public class ApkBuilderPluginHelper {
         if (isUsableTemplate(manual)) {
             Log.i(TAG, "Using manual template " + manual);
             return new FileInputStream(manual);
+        }
+        // task-107：主 APK 内置瘦身模板（无 lib/），运行时从宿主 APK 补齐 excluded 清单里的 lib。
+        File mergedBundled = mergedBundledTemplate(context);
+        if (isUsableTemplate(mergedBundled)) {
+            Log.i(TAG, "Using merged bundled slim template " + mergedBundled
+                    + " size=" + mergedBundled.length());
+            return new FileInputStream(mergedBundled);
         }
         File cached = cachedTemplateFile(context);
         if (isUsableTemplate(cached)) {
@@ -168,8 +184,100 @@ public class ApkBuilderPluginHelper {
 
     // ------------------------------------------------------------------ 内部
 
+    /** task-106：模板缓存按宿主 versionCode 分目录，升级后不会用旧模板。 */
+    /** 把 assets/template.apk（瘦身、无 lib）与宿主 APK 的 excluded 条目合成完整模板。 */
+    private static File mergedBundledTemplate(Context context) {
+        File out = cachedTemplateFile(context);
+        try {
+            InputStream slim = context.getAssets().open(TEMPLATE_APK_PATH);
+            File parent = out.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                slim.close();
+                return null;
+            }
+            File tmp = new File(out.getPath() + ".tmp");
+            int copied = 0;
+            int added = 0;
+            try (java.util.zip.ZipInputStream input = new java.util.zip.ZipInputStream(slim);
+                 java.util.zip.ZipOutputStream output = new java.util.zip.ZipOutputStream(
+                         new java.io.FileOutputStream(tmp))) {
+                Set<String> present = new HashSet<>();
+                java.util.zip.ZipEntry entry;
+                byte[] buffer = new byte[8192];
+                while ((entry = input.getNextEntry()) != null) {
+                    if (entry.isDirectory()) continue;
+                    present.add(entry.getName());
+                    output.putNextEntry(new java.util.zip.ZipEntry(entry.getName()));
+                    int read;
+                    while ((read = input.read(buffer)) > 0) output.write(buffer, 0, read);
+                    output.closeEntry();
+                    copied++;
+                }
+                try (java.util.zip.ZipFile host = new java.util.zip.ZipFile(
+                        new File(context.getPackageCodePath()))) {
+                    for (String name : readExcludedEntries(context)) {
+                        if (present.contains(name)) continue;
+                        java.util.zip.ZipEntry hostEntry = host.getEntry(name);
+                        if (hostEntry == null || hostEntry.isDirectory()) {
+                            Log.w(TAG, "excluded entry missing in host APK: " + name);
+                            continue;
+                        }
+                        output.putNextEntry(new java.util.zip.ZipEntry(name));
+                        try (InputStream source = host.getInputStream(hostEntry)) {
+                            int read;
+                            while ((read = source.read(buffer)) > 0) output.write(buffer, 0, read);
+                        }
+                        output.closeEntry();
+                        added++;
+                    }
+                }
+            }
+            if (!tmp.renameTo(out)) {
+                tmp.delete();
+                return null;
+            }
+            Log.i(TAG, "C-PKG: merged slim template bytes=" + out.length()
+                    + " baseEntries=" + copied + " hostLibs=" + added);
+            return out;
+        } catch (IOException error) {
+            Log.w(TAG, "merge bundled slim template failed", error);
+            return null;
+        }
+    }
+
+    private static List<String> readExcludedEntries(Context context) {
+        List<String> result = new ArrayList<>();
+        try (InputStream input = context.getAssets().open(EXCLUDED_ZIP_ASSET)) {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int read;
+            while ((read = input.read(chunk)) > 0) buffer.write(chunk, 0, read);
+            JSONObject json = new JSONObject(new String(buffer.toByteArray(), "UTF-8"));
+            for (String key : new String[]{"general", "opencv", "v8"}) {
+                JSONArray array = json.optJSONArray(key);
+                if (array == null) continue;
+                for (int i = 0; i < array.length(); i++) {
+                    String name = array.optString(i, "");
+                    if (!name.isEmpty()) result.add(name);
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "read " + EXCLUDED_ZIP_ASSET + " failed", error);
+        }
+        return result;
+    }
+
     private static File cacheDir(Context context) {
-        return new File(context.getFilesDir(), CACHE_DIR_NAME);
+        return new File(new File(context.getFilesDir(), CACHE_DIR_NAME),
+                String.valueOf(hostVersionCode(context)));
+    }
+
+    private static int hostVersionCode(Context context) {
+        try {
+            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionCode;
+        } catch (Throwable error) {
+            return 0;
+        }
     }
 
     private static File cacheVersionMarker(Context context) {

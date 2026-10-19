@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var w = floaty.rawWindow(
     <frame gravity="center" bg="#44ffcc00"/>
 );

@@ -1,7 +1,7 @@
-// @engine rhino
+"rhino";
 if (!requestScreenCapture()) {
     toast("请求截图失败");
-    exit
+    exit();
 }
 sleep(2000);
 var x = 760;

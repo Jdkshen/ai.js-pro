@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 let i = threads.atomic();
 threads.start(function() {
     while (i.incrementAndGet() < 100);

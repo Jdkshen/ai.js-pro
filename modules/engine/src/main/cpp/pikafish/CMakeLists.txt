@@ -47,6 +47,7 @@ target_compile_features(pikafish PRIVATE cxx_std_17)
 
 target_link_options(pikafish PRIVATE
         "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
 
 target_link_libraries(pikafish PRIVATE log m)

@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 showLoginUI();
 ui.statusBarColor("#000000")
 

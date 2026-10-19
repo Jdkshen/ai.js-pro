@@ -1,6 +1,6 @@
-// @engine rhino
+"rhino";
 //文件路径
-var path = "/sdcard/1.txt";
+var path = "./sample-text.txt";
 //要写入的文件内容
 var text = "Hello, AutoJs";
 //以写入模式打开文件

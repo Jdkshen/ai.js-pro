@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 var ColoredButton = (function() {
     //继承ui.Widget
     util.extend(ColoredButton, ui.Widget);

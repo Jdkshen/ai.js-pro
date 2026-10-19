@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var handsome = confirm("你帅吗？");
 if (handsome) {
     toast("真不要脸！");

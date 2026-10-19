@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var window = floaty.window(
     <frame gravity="center">
         <text id="text" text="点击可调整位置" textSize="16sp"/>

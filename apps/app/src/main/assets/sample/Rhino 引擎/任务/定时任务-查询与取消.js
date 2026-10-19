@@ -1,10 +1,10 @@
-// @engine rhino
+"rhino";
 console.show();
 
 // 预定一个任务
 let task = $work_manager.addDisposableTask({
     path: '/sdcard/脚本/随便预定一个任务.js',
-    date: '2019-10-1T20:00:00'
+    date: Date.now() + 10 * 60 * 1000
 });
 log("预定成功:", task);
 // 获取任务id
@@ -24,7 +24,12 @@ log("所有意图任务: ", $work_manager.queryIntentTasks({}));
 $work_manager.queryTimedTasks({
     path: '/sdcard/脚本/随便预定一个任务.js'
 }, tasks => {
-    log("按路径查询任务: ", tasks);
+    // 查询结果是 Java List，不是 JS 原生数组；用 size()/get() 转成数组，后续可直接用 length/forEach
+    let taskArray = [];
+    for (let i = 0; i < tasks.size(); i++) {
+        taskArray.push(tasks.get(i));
+    }
+    log("按路径查询任务: ", taskArray, "数量: ", taskArray.length);
 });
 
 // 按意图Action查询任务

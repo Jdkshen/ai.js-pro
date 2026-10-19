@@ -1,6 +1,5 @@
-// @engine rhino
-// 注意：continuation 是本引擎 Rhino 默认开启的能力（continuation.enabled 为 true），
-// 不需要像 Auto.js Pro 那样在 project.json 里配置 features。
+"rhino";
+// 注意，要使用协程这个特性，必须使用项目功能，并且在project.json配置好features属性
 
 
 // delay不同于sleep，不会阻塞当前线程

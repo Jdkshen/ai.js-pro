@@ -1,5 +1,4 @@
-// @engine rhino
-// ⚠ 需要 Auto.js Pro 专属 API：Pro 插件商店插件、ES6 模板字符串（当前 Rhino 1.7.7 不支持，请改成字符串拼接）（当前引擎暂未实现，直接运行会报错）
+"rhino";
 $dialogs.setDefaultDialogType('app');
 
 // 获取Intent参数，用于获取要处理的文件路径等参数
@@ -57,10 +56,10 @@ function handleIntent(intent) {
     }
     const mp3Path = path + ".mp3";
     // 使用ffmpeg提取文件为mp3，参见https://www.baidu.com/s?wd=ffmpeg%20%E8%A7%86%E9%A2%91%E6%8F%90%E5%8F%96mp3
-    const result = ffmpeg.inProcess.exec('-i "' + path + '" "' + mp3Path + '"');
+    const result = ffmpeg.inProcess.exec(`-i "${path}" "${mp3Path}"`);
     console.log(result);
     if (result.code === 0) {
-        alert("提取mp3成功", '文件路径' + mp3Path + '，已复制到剪贴板');
+        alert("提取mp3成功", `文件路径${mp3Path}，已复制到剪贴板`);
         setClip(mp3Path);
         $app.viewFile(mp3Path);
     } else {

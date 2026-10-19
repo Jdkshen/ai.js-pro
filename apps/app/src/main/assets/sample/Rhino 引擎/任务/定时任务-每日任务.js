@@ -1,6 +1,6 @@
-// @engine rhino
+"rhino";
 let task = $work_manager.addDailyTask({
-    path: '/sdcard/脚本/每日任务.js',
+    path: files.path('./任务逻辑.js'),
     time: '10:00'
 });
 toastLog("定时任务预定成功: " + task);

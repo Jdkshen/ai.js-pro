@@ -23,6 +23,7 @@ public abstract class JavaScriptSource extends ScriptSource {
     public static final String ENGINE = "com.stardust.autojs.script.JavaScriptSource.Engine";
     public static final String ENGINE_RHINO = ENGINE;
     public static final String ENGINE_QUICKJS = ENGINE + ".QuickJS";
+    public static final String ENGINE_NODE24 = ENGINE + ".Node24";
 
     /**
      * 脚本首行写上这个指令可以显式指定引擎。没有任何配置时保持旧行为（Rhino 兼容引擎），
@@ -31,6 +32,7 @@ public abstract class JavaScriptSource extends ScriptSource {
      */
     public static final String QUICKJS_ENGINE_DIRECTIVE = "// @engine quickjs";
     public static final String RHINO_ENGINE_DIRECTIVE = "// @engine rhino";
+    public static final String NODE24_ENGINE_DIRECTIVE = "// @engine node24";
 
     public static final String EXECUTION_MODE_UI_PREFIX = "\"ui\";";
 
@@ -141,6 +143,56 @@ public abstract class JavaScriptSource extends ScriptSource {
         return ENGINE_QUICKJS.equals(engineFromDirective(script));
     }
 
+    /**
+     * Auto.js Pro 风格的首行字符串引擎指令：
+     * {@code "nodejs";}、{@code "nodejs ui";}、{@code "quickjs";}。
+     * 只认「整行就是一个字符串表达式」；{@code "ui";}/{@code "auto";} 返回 null 交给调用方继续扫。
+     */
+    @Nullable
+    private static String engineFromProDirective(String line) {
+        if (line.length() < 3) {
+            return null;
+        }
+        char quote = line.charAt(0);
+        if (quote != '"' && quote != '\'') {
+            return null;
+        }
+        int end = line.indexOf(quote, 1);
+        if (end < 0) {
+            return null;
+        }
+        String rest = line.substring(end + 1).trim();
+        if (!rest.isEmpty() && !rest.equals(";")) {
+            return null;
+        }
+        String content = line.substring(1, end).trim();
+        if (content.isEmpty()) {
+            return null;
+        }
+        boolean node = false;
+        boolean quickjs = false;
+        boolean rhino = false;
+        for (String word : content.split("\\s+")) {
+            if ("nodejs".equalsIgnoreCase(word) || "node".equalsIgnoreCase(word)) {
+                node = true;
+            } else if ("quickjs".equalsIgnoreCase(word)) {
+                quickjs = true;
+            } else if ("rhino".equalsIgnoreCase(word) || "rhinojs".equalsIgnoreCase(word)) {
+                rhino = true;
+            }
+        }
+        if (node) {
+            return ENGINE_NODE24;
+        }
+        if (quickjs) {
+            return ENGINE_QUICKJS;
+        }
+        if (rhino) {
+            return ENGINE_RHINO;
+        }
+        return null;
+    }
+
     @Nullable
     public static String engineFromDirective(String script) {
         if (script == null || script.isEmpty()) {
@@ -163,12 +215,21 @@ public abstract class JavaScriptSource extends ScriptSource {
                 if (RHINO_ENGINE_DIRECTIVE.equalsIgnoreCase(line)) {
                     return ENGINE_RHINO;
                 }
+                if (NODE24_ENGINE_DIRECTIVE.equalsIgnoreCase(line) || "// @engine node".equalsIgnoreCase(line)) {
+                    return ENGINE_NODE24;
+                }
                 // 「"ui";」「"auto";」这类执行模式声明按惯例写在脚本最前面，
                 // 可以出现在引擎指令之前——跳过它继续找引擎指令。
                 if (line.equals("\"ui\";") || line.equals("'ui';")
                         || line.equals("\"auto\";") || line.equals("'auto';")) {
                     offset = lineEnd + 1;
                     continue;
+                }
+                // Auto.js Pro 的写法：首行字符串指令，如 "nodejs"; / "nodejs ui"; / "quickjs";
+                // 没写注释指令时按它选引擎（只有 ui/auto 的继续往下找引擎指令）。
+                String proEngine = engineFromProDirective(line);
+                if (proEngine != null) {
+                    return proEngine;
                 }
                 return null;
             }
@@ -203,6 +264,9 @@ public abstract class JavaScriptSource extends ScriptSource {
         }
         if ("rhino".equalsIgnoreCase(normalized) || ENGINE_RHINO.equals(normalized)) {
             return ENGINE_RHINO;
+        }
+        if ("node24".equalsIgnoreCase(normalized) || "node".equalsIgnoreCase(normalized) || ENGINE_NODE24.equals(normalized)) {
+            return ENGINE_NODE24;
         }
         throw new IllegalArgumentException("Unsupported JavaScript engine: " + engine);
     }

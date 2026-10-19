@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 //启动一个线程
 threads.start(function() {
     //在线程中每隔1秒打印"线程1"

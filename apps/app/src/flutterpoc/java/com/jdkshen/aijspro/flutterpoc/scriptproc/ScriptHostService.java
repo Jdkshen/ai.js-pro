@@ -1,0 +1,806 @@
+package com.jdkshen.aijspro.flutterpoc.scriptproc;
+
+import android.app.Service;
+import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.Message;
+import android.os.Messenger;
+import android.os.RemoteException;
+import android.util.Log;
+
+import com.jdkshen.aijspro.autojs.AutoJs;
+import com.stardust.autojs.ScriptEngineService;
+import com.stardust.autojs.core.console.ConsoleImpl;
+import com.stardust.autojs.engine.JavaScriptEngine;
+import com.stardust.autojs.engine.ScriptEngine;
+import com.stardust.autojs.execution.ExecutionConfig;
+import com.stardust.autojs.execution.ScriptExecution;
+import com.stardust.autojs.execution.ScriptExecutionListener;
+import com.stardust.autojs.execution.ScriptExecutionTask;
+import com.stardust.autojs.runtime.ScriptRuntime;
+import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
+import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
+import com.stardust.autojs.script.JavaScriptFileSource;
+import com.stardust.autojs.script.JavaScriptSource;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * {@code :script} 进程里的通用脚本宿主服务（Phase 1-B）。
+ *
+ * <p>与 Phase0 的 {@code :native}（{@code NativeScriptService}）的关系：
+ * <ul>
+ *   <li>协议<b>逐字一致</b>：RUN=1{path,workDir,token} + replyTo、STOP=2{token}、
+ *       100 STARTED{token,name}、101 FINISHED{token}、102 ERROR{token,message}；
+ *       token 为 String 原样回显；用户主动停止固定回 102 + message「脚本已停止」；</li>
+ *   <li>区别只在「宿主策略」：本服务接<b>所有脚本</b>（不再由 NativeProjectDetector 决定），
+ *       统一先暂存到私有目录（{@link ScriptHostStaging}），普通脚本后台线程执行、
+ *       {@code "ui";} 脚本走进程主 Looper（{@link ScriptEngineService#executeUiOnMainThread}）；</li>
+ *   <li>Phase0 的 {@code NativeScriptService} 保留不动，作为回退路径；两个服务各自一个进程
+ *       （{@code :native} / {@code :script}），暂存根目录也分开，互不踩踏。</li>
+ * </ul>
+ *
+ * <p>进程声明（由 Phase1-D 在 {@code apps/app/src/flutterpoc/AndroidManifest.xml} 注册）：
+ * {@code android:name="com.jdkshen.aijspro.flutterpoc.scriptproc.ScriptHostService"}、
+ * {@code android:process=":script"}、{@code android:exported="false"}。
+ * 主进程客户端是 Phase1-C 的 {@code PocScriptHost}，按 {@link #SERVICE_CLASS} 固定字符串绑定。
+ *
+ * <p>刻意保留的 Phase0 取舍：
+ * <ul>
+ *   <li><b>不起 Activity</b>：进程里没有界面；UI 模式脚本由引擎的主线程 Looper 宿主承载，
+ *       不会走 {@code ScriptExecuteActivity}（headless 开关兜底，QuickJS/Node24 退回后台执行）；</li>
+ *   <li><b>实时 console 转发（what=103）</b>：每次 RUN 在 onStart 时给本次引擎的
+ *       {@code ConsoleImpl} 挂 {@code LogListener}，脚本的每段 console 输出先进
+ *       {@link ConsoleBatch} 批量缓冲（200ms 定时 / 40 行 / 8KB 触发），再以
+ *       what=103 CONSOLE{token,line,level} 回给 {@code PocScriptHost}；主进程
+ *       {@code HostConsoleSink} 写主进程 GlobalConsole（原生日志页实时可见）+ 环形缓冲。
+ *       脚本结束/服务销毁时解挂并 flush。运行日志文件仍由引擎自动 ScriptRunLog 负责落盘，
+ *       这里不重复 attach（避免多出永不收尾的日志文件）；</li>
+ *   <li><b>统一 staging</b>：所有脚本从私有目录执行，避免可写 dex 限制与运行时原目录被改动；
+ *       暂存失败直接 102，不退回原目录「将就跑」；</li>
+ *   <li><b>不弥补无障碍/自动化能力</b>：{@code :script} 里 auto/click/selector 仍不可用，
+ *       Phase1 后续由 AIDL 自动化代理（task-15 骨架 / spec 对齐后）补；</li>
+ *   <li><b>不主动自杀</b>：还有脚本在跑时不 stopSelf；客户端全部解绑且没有运行中脚本时才停。</li>
+ * </ul>
+ *
+ * <p>待统一对齐（不在本任务写作用域，报告里已标给 Lead）：
+ * <ul>
+ *   <li>{@code App.onCreate} 目前只对 {@code :native} 做重初始化跳过
+ *       （{@code App.isNativeIsolationProcess()}），{@code :script} 进程会重复初始化定时任务/
+ *       动态广播/示例同步等主进程职责，需要统一改成「隔离脚本进程」判断；</li>
+ *   <li>FloatService 等辅助服务是否需要 {@code android:process=":script"}，等 Phase1-A spec。</li>
+ * </ul>
+ */
+public class ScriptHostService extends Service {
+
+    /** 主进程客户端绑定用的固定类名（Phase1-C {@code PocScriptHost} 依赖，不要改）。 */
+    public static final String SERVICE_CLASS =
+            "com.jdkshen.aijspro.flutterpoc.scriptproc.ScriptHostService";
+
+    /** 客户端 -&gt; 服务：启动一个脚本。data: path/workDir/token，msg.replyTo 必填。 */
+    public static final int MSG_RUN = 1;
+    /** 客户端 -&gt; 服务：停止 token 对应的脚本。data: token。 */
+    public static final int MSG_STOP = 2;
+
+    /** 服务 -&gt; 客户端：脚本已经开始执行。data: token/name。 */
+    public static final int REPLY_STARTED = 100;
+    /** 服务 -&gt; 客户端：脚本正常结束。data: token。 */
+    public static final int REPLY_FINISHED = 101;
+    /** 服务 -&gt; 客户端：脚本异常 / 被停止 / 无法启动。data: token/message。 */
+    public static final int REPLY_ERROR = 102;
+    /**
+     * 服务 -&gt; 客户端：脚本控制台实时输出（Phase1 日志转发）。
+     * data: {@link #KEY_TOKEN token} / {@link #KEY_LINE line}（可含多行，用 {@code \n} 分隔）/
+     * {@link #KEY_LEVEL level}（android.util.Log 等级，批次取最高等级）。
+     *
+     * <p>批量/节流：每次 RUN 挂 {@code ConsoleImpl.LogListener}，输出先进 {@link ConsoleBatch}，
+     * 200ms 定时 flush，或累计 40 行/8KB 立即 flush，避免每行一条 Binder 消息。脚本结束前
+     * 会把剩余内容 flush 掉再发 101/102，保证控制台顺序正确。
+     */
+    public static final int REPLY_CONSOLE = 103;
+
+    public static final String KEY_PATH = "path";
+    public static final String KEY_WORK_DIR = "workDir";
+    public static final String KEY_TOKEN = "token";
+    public static final String KEY_NAME = "name";
+    public static final String KEY_MESSAGE = "message";
+    /** what=103 CONSOLE 的行内容键（可含多行，{@code \n} 分隔）。 */
+    public static final String KEY_LINE = "line";
+    /** what=103 CONSOLE 的等级键（android.util.Log 等级；批次取最高等级）。 */
+    public static final String KEY_LEVEL = "level";
+
+    /** 用户主动 STOP 时 102 的固定文案：主进程靠它区分「用户停止」和「脚本报错」。 */
+    public static final String MESSAGE_STOPPED = "脚本已停止";
+
+    /** console 转发的定时 flush 间隔：批量回传，避免每行一条 Binder 消息。 */
+    private static final long CONSOLE_FLUSH_INTERVAL_MS = 200L;
+
+    private static final String TAG = "ScriptHostService";
+
+    private final Object mLock = new Object();
+    /** token -&gt; 这次运行的状态；只在主线程/脚本线程的同步块里读写。 */
+    private final Map<String, RunState> mRuns = new LinkedHashMap<>();
+    private int mBoundClients = 0;
+
+    /** Phase1 P1：:script -> 主进程自动化代理（引用计数：RUN 增加、脚本结束时减少）。 */
+    private final Object mAutomationLock = new Object();
+    private int mAutomationUsers = 0;
+    private AutomationHostClient mAutomationClient;
+
+    private final Handler mIpcHandler = new Handler(Looper.getMainLooper(), new Handler.Callback() {
+        @Override
+        public boolean handleMessage(Message msg) {
+            switch (msg.what) {
+                case MSG_RUN:
+                    handleRun(msg);
+                    return true;
+                case MSG_STOP:
+                    handleStop(msg);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    });
+
+    /** console 转发 flush 用的主线程 Handler（与 IPC 分开，避免互相影响）。 */
+    private final Handler mConsoleHandler = new Handler(Looper.getMainLooper());
+
+    private final Messenger mMessenger = new Messenger(mIpcHandler);
+
+    // ------------------------------------------------------------------
+    // Service 生命周期
+    // ------------------------------------------------------------------
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        // Phase1 P1：标记当前进程是隔离脚本进程，引擎据此把 auto/click/selector/截图代理到主进程
+        // （RemoteAutomationBridge + ScriptRuntime/SimpleActionAutomator/Images 的 remote 分支）。
+        RemoteAutomationBridge.setIsolationProcess(true);
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        synchronized (mLock) {
+            mBoundClients++;
+        }
+        return mMessenger.getBinder();
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        synchronized (mLock) {
+            if (mBoundClients > 0) {
+                mBoundClients--;
+            }
+        }
+        stopIfIdle();
+        return false;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // 真正的命令都走 Messenger；这里只是让进程在「客户端 startService 之后、bind 之前」
+        // 以及脚本运行期间有个存活的锚点。进程被系统回收后不自动重启（START_NOT_STICKY），
+        // 下次运行由主进程重新 startService + bindService（见 PocScriptHost）。
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        // Phase1 P1：进程退出前解除远程自动化后端（避免 AIDL 绑定泄漏）。
+        try {
+            synchronized (mAutomationLock) {
+                RemoteAutomationBridge.uninstall(mAutomationClient);
+                if (mAutomationClient != null) {
+                    mAutomationClient.disconnect();
+                    mAutomationClient = null;
+                }
+                mAutomationUsers = 0;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "释放远程自动化后端失败", error);
+        }
+        // Phase1 日志转发：先 flush 并解挂所有 console 监听，否则最后的批量日志会丢。
+        RunState[] runs;
+        synchronized (mLock) {
+            runs = mRuns.values().toArray(new RunState[0]);
+        }
+        for (RunState run : runs) {
+            try {
+                detachConsoleForwarder(run);
+            } catch (Throwable error) {
+                Log.w(TAG, "解挂 console 转发失败：" + run.token, error);
+            }
+        }
+        // 服务/进程被回收时尽力把还在跑的脚本停掉，别留下半截引擎线程。
+        try {
+            ScriptEngineService engineService = getEngineService();
+            if (engineService != null) {
+                engineService.stopAll();
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "停止脚本进程内脚本失败", error);
+        }
+        ScriptEngineService.setHeadlessUiMode(false);
+        super.onDestroy();
+    }
+
+    // ------------------------------------------------------------------
+    // 客户端 -> 服务
+    // ------------------------------------------------------------------
+
+    private void handleRun(Message msg) {
+        Bundle data = msg.getData();
+        Messenger replyTo = msg.replyTo;
+        String token = tokenKey(data);
+        String path = data.getString(KEY_PATH);
+        String workDir = data.getString(KEY_WORK_DIR);
+        if (replyTo == null) {
+            // 没有 replyTo 就永远回不了话，只能记 logcat。
+            Log.w(TAG, "RUN 缺少 replyTo，忽略：path=" + path);
+            return;
+        }
+        RunState state = new RunState(token, replyTo);
+        if (token.isEmpty()) {
+            replyError(state, "RUN 缺少 token");
+            return;
+        }
+        boolean duplicated;
+        synchronized (mLock) {
+            duplicated = mRuns.containsKey(token);
+            if (!duplicated) {
+                mRuns.put(token, state);
+            }
+        }
+        if (duplicated) {
+            // 主进程的 token 是自增的，正常不会撞；撞了说明两端状态不一致，直接报错让上层可见。
+            replyError(state, "token 已被占用：" + token);
+            return;
+        }
+
+        try {
+            ScriptEngineService engineService = requireEngineService();
+            File file = new File(path == null ? "" : path).getCanonicalFile();
+            if (!file.isFile()) {
+                throw new IllegalStateException("脚本文件不存在：" + (path == null ? "" : path));
+            }
+            // 所有脚本统一从私有目录执行（.so/.dex 可写目录限制 + 运行时原目录稳定性），
+            // Phase0 只在 native 项目做的那套 staging 现在对普通脚本也生效。
+            File workDirFile = (workDir != null && !workDir.trim().isEmpty())
+                    ? new File(workDir.trim()) : null;
+            ScriptHostStaging.Staged staged;
+            try {
+                staged = ScriptHostStaging.stageIfNeeded(getApplicationContext(), file, workDirFile);
+            } catch (IOException error) {
+                String detail = messageOf(error);
+                throw new IOException(detail.startsWith("脚本暂存失败")
+                        ? detail : "脚本暂存到应用私有目录失败：" + detail, error);
+            }
+
+            JavaScriptFileSource source = new JavaScriptFileSource(staged.scriptFile);
+            state.name = source.getName();
+
+            ExecutionConfig config = ExecutionConfig.getDefault();
+            config.setWorkingDirectory(staged.workingDirectory.getAbsolutePath());
+
+            // Phase1 P1：注入主进程自动化后端（AIDL）；脚本里 auto/click/selector/screenshot 走主进程。
+            retainAutomationBackend();
+            state.automationRetained = true;
+
+            // 脚本进程里没有 Activity：UI 模式脚本不走 ScriptExecuteActivity。
+            ScriptEngineService.setHeadlessUiMode(true);
+            // 监听器负责把开始/结束/异常回给主进程。
+            ScriptExecutionListener listener = new RunListener(state);
+            ScriptExecution execution;
+            if (isUiMode(source) && ScriptEngineService.isHeadlessUiMode()) {
+                // UI 模式脚本跑在 :script 进程的主 Looper 上（对齐 Pro 打包运行时）：这样
+                // SurfaceView 的 surfaceCreated 主线程回调与脚本里的 Button 等控件调用同线程。
+                // 非 Rhino 引擎由引擎服务内部自动退回后台执行路径。
+                // 与 Phase0 一致：隔离进程里 UI 脚本的 onExit 不自动发 exit 事件，
+                // 免得第三方 native UI 桥在渲染中自毁上下文（见 ScriptRuntime.suppressExitEvent）。
+                ScriptRuntime.suppressExitEvent = true;
+                execution = engineService.executeUiOnMainThread(
+                        new ScriptExecutionTask(source, listener, config));
+            } else {
+                // 普通脚本仍由引擎在后台线程执行。
+                execution = engineService.execute(source, listener, config);
+            }
+
+            boolean stopNow;
+            synchronized (mLock) {
+                state.execution = execution;
+                stopNow = state.stopRequested && !state.finished;
+            }
+            if (stopNow) {
+                // STOP 在 execute() 返回前就到了：引擎对象刚拿到，补停一次。
+                forceStop(state);
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "启动脚本失败：" + path, error);
+            failRun(state, error);
+        }
+    }
+
+    private void handleStop(Message msg) {
+        String token = tokenKey(msg.getData());
+        if (token.isEmpty()) {
+            Log.w(TAG, "STOP 缺少 token，忽略");
+            return;
+        }
+        RunState state;
+        boolean stopNow;
+        synchronized (mLock) {
+            state = mRuns.get(token);
+            if (state == null) {
+                // 已经结束/尚未开始：主进程收到 101/102 后会自己移除，这里静默即可。
+                Log.w(TAG, "STOP 找不到运行中的脚本：" + token);
+                return;
+            }
+            state.stopRequested = true;
+            stopNow = state.execution != null && !state.finished;
+        }
+        if (stopNow) {
+            forceStop(state);
+        }
+        // execution 还没赋值的情况由 handleRun 在 execute() 返回后补停（见上面的 stopNow）。
+    }
+
+    // ------------------------------------------------------------------
+    // 执行结果 -> 客户端
+    // ------------------------------------------------------------------
+
+    /** 引擎回调：监听一次运行的开始/成功/异常。回调线程不固定（脚本线程/引擎 looper）。 */
+    private final class RunListener implements ScriptExecutionListener {
+
+        private final RunState mState;
+
+        RunListener(RunState state) {
+            mState = state;
+        }
+
+        @Override
+        public void onStart(ScriptExecution execution) {
+            try {
+                reply(mState.replyTo, REPLY_STARTED, mState, mState.name, null);
+                // onStart 时引擎已创建、脚本还没开始跑，正好挂 console 监听（每行实时回主进程）。
+                attachConsoleForwarder(mState, execution);
+                boolean stopNow;
+                synchronized (mLock) {
+                    stopNow = mState.stopRequested && !mState.finished;
+                }
+                if (stopNow) {
+                    forceStop(mState);
+                }
+            } catch (Throwable error) {
+                Log.w(TAG, "上报 STARTED 失败：" + mState.token, error);
+            }
+        }
+
+        @Override
+        public void onSuccess(ScriptExecution execution, Object result) {
+            try {
+                finish(mState, null);
+            } catch (Throwable error) {
+                Log.w(TAG, "上报 FINISHED 失败：" + mState.token, error);
+            }
+        }
+
+        @Override
+        public void onException(ScriptExecution execution, Throwable e) {
+            try {
+                finish(mState, e);
+            } catch (Throwable error) {
+                Log.w(TAG, "上报 ERROR 失败：" + mState.token, error);
+            }
+        }
+    }
+
+    private void finish(RunState state, Throwable error) {
+        synchronized (mLock) {
+            if (state.finished) {
+                return;
+            }
+            state.finished = true;
+            mRuns.remove(state.token);
+        }
+        // 先 flush + 解挂 console 监听，保证 103 日志先于 101/102 到达主进程（顺序不乱）。
+        detachConsoleForwarder(state);
+        if (error == null) {
+            reply(state.replyTo, REPLY_FINISHED, state, null, null);
+        } else {
+            replyError(state, describeError(error));
+        }
+        releaseAutomationBackendIfNeeded(state);
+        stopIfIdle();
+    }
+
+    private void failRun(RunState state, Throwable error) {
+        synchronized (mLock) {
+            if (state.finished) {
+                return;
+            }
+            state.finished = true;
+            mRuns.remove(state.token);
+        }
+        detachConsoleForwarder(state);
+        replyError(state, describeError(error));
+        releaseAutomationBackendIfNeeded(state);
+        stopIfIdle();
+    }
+
+    /**
+     * Phase1 P1：为本次 RUN 注入主进程自动化后端（引用计数；第一个 RUN 时 install，最后一个结束时 uninstall）。
+     *
+     * <p>这里只 install、不做同步 bind：AIDL 客户端在脚本线程第一次调用时懒绑定（最多等 2s），
+     * 避免阻塞本服务的主线程 Looper（handleRun 就在主线程）。
+     */
+    private void retainAutomationBackend() {
+        synchronized (mAutomationLock) {
+            if (mAutomationUsers++ > 0) {
+                return;
+            }
+            mAutomationClient = AutomationHostClient.getInstance(getApplicationContext());
+            RemoteAutomationBridge.install(mAutomationClient);
+            Log.i(TAG, "remote automation backend installed for :script process");
+        }
+    }
+
+    /** 脚本结束：最后一个运行时解除注入并断开 AIDL 绑定。 */
+    private void releaseAutomationBackendIfNeeded(RunState state) {
+        if (state == null || !state.automationRetained) {
+            return;
+        }
+        state.automationRetained = false;
+        synchronized (mAutomationLock) {
+            if (mAutomationUsers <= 0) {
+                return;
+            }
+            if (--mAutomationUsers > 0) {
+                return;
+            }
+            RemoteAutomationBridge.uninstall(mAutomationClient);
+            if (mAutomationClient != null) {
+                mAutomationClient.disconnect();
+                mAutomationClient = null;
+            }
+            Log.i(TAG, "remote automation backend uninstalled (no running scripts)");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Phase1 日志转发：:script console -> 主进程（what=103）
+    // ------------------------------------------------------------------
+
+    /** 给本次运行的引擎挂 console 监听（onStart 时调用；重复调用无副作用）。 */
+    private void attachConsoleForwarder(RunState state, ScriptExecution execution) {
+        if (state == null || execution == null) {
+            return;
+        }
+        try {
+            ScriptEngine engine = execution.getEngine();
+            if (!(engine instanceof JavaScriptEngine)) {
+                return;
+            }
+            ScriptRuntime runtime = ((JavaScriptEngine) engine).getRuntime();
+            if (runtime == null || !(runtime.console instanceof ConsoleImpl)) {
+                return;
+            }
+            ConsoleForwarder forwarder;
+            synchronized (mLock) {
+                if (state.finished || state.consoleForwarder != null) {
+                    return;
+                }
+                forwarder = new ConsoleForwarder(state, (ConsoleImpl) runtime.console);
+                state.consoleForwarder = forwarder;
+            }
+            forwarder.attach();
+            Log.i(TAG, "console 转发已挂接：" + state.token);
+        } catch (Throwable error) {
+            Log.w(TAG, "挂接 console 转发失败：" + state.token, error);
+        }
+    }
+
+    /** 解挂 console 监听并 flush 剩余内容（finish/failRun/onDestroy 调用；可重复调用）。 */
+    private void detachConsoleForwarder(RunState state) {
+        if (state == null) {
+            return;
+        }
+        ConsoleForwarder forwarder;
+        synchronized (mLock) {
+            forwarder = state.consoleForwarder;
+            state.consoleForwarder = null;
+        }
+        if (forwarder != null) {
+            forwarder.close();
+        }
+    }
+
+    /** 把一批 console 文本以 what=103 回给主进程。 */
+    private void replyConsole(RunState state, String line, int level) {
+        if (state == null || state.replyTo == null || line == null || line.isEmpty()) {
+            return;
+        }
+        try {
+            Message reply = Message.obtain(null, REPLY_CONSOLE);
+            Bundle data = new Bundle();
+            data.putString(KEY_TOKEN, state.token);
+            data.putString(KEY_LINE, line);
+            data.putInt(KEY_LEVEL, normalizeConsoleLevel(level));
+            reply.setData(data);
+            state.replyTo.send(reply);
+        } catch (RemoteException error) {
+            Log.w(TAG, "客户端已断开，console 转发失败（token=" + state.token + "）", error);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "console 转发组包失败（token=" + state.token + "）", error);
+        }
+    }
+
+    private static int normalizeConsoleLevel(int level) {
+        if (level < Log.VERBOSE || level > Log.ASSERT) {
+            return Log.INFO;
+        }
+        return level;
+    }
+
+    /**
+     * 一次运行的 console 监听：收到 {@link ConsoleImpl} 的每段输出后先进 {@link ConsoleBatch}，
+     * 200ms 定时 flush，或达到 40 行/8KB 立即 flush；通过 what=103 批量回给主进程。
+     *
+     * <p>回调可能来自脚本线程（后台脚本）或主线程（UI 模式脚本）：缓冲与调度在本类加锁处理，
+     * 真正的 Binder 发送在 flush 里（定时走 :script 主线程 Handler；阈值溢出时在当前线程直接发，
+     * 避免本轮输出再等 200ms）。
+     */
+    private final class ConsoleForwarder implements ConsoleImpl.LogListener {
+
+        private final RunState mState;
+        private final ConsoleImpl mConsole;
+        private final ConsoleBatch mBatch = new ConsoleBatch();
+        private final Runnable mFlushRunnable = new Runnable() {
+            @Override
+            public void run() {
+                flush();
+            }
+        };
+        private boolean mFlushScheduled;
+        private boolean mClosed;
+
+        ConsoleForwarder(RunState state, ConsoleImpl console) {
+            mState = state;
+            mConsole = console;
+        }
+
+        void attach() {
+            mConsole.setLogListener(this);
+            synchronized (this) {
+                if (mClosed) {
+                    // close() 与 attach 竞态：关闭后不要把监听又挂回去。
+                    try {
+                        mConsole.setLogListener(null);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }
+
+        @Override
+        public void onNewLog(ConsoleImpl.LogEntry logEntry) {
+            if (logEntry == null || logEntry.content == null) {
+                return;
+            }
+            ConsoleBatch.Batch overflow = null;
+            boolean cancelTimer = false;
+            synchronized (this) {
+                if (mClosed) {
+                    return;
+                }
+                overflow = mBatch.append(normalizeConsoleLevel(logEntry.level), logEntry.content);
+                if (overflow != null) {
+                    if (mFlushScheduled) {
+                        mFlushScheduled = false;
+                        cancelTimer = true;
+                    }
+                } else if (!mFlushScheduled) {
+                    mFlushScheduled = true;
+                    mConsoleHandler.postDelayed(mFlushRunnable, CONSOLE_FLUSH_INTERVAL_MS);
+                }
+            }
+            if (overflow != null) {
+                if (cancelTimer) {
+                    mConsoleHandler.removeCallbacks(mFlushRunnable);
+                }
+                replyConsole(mState, overflow.text, overflow.level);
+            }
+        }
+
+        @Override
+        public void onLogClear() {
+            // console.clear() 不转发：主进程 GlobalConsole 里已有日志不跟着清，避免误清主界面输出。
+        }
+
+        private void flush() {
+            ConsoleBatch.Batch batch;
+            synchronized (this) {
+                mFlushScheduled = false;
+                batch = mBatch.drain();
+            }
+            if (batch != null) {
+                replyConsole(mState, batch.text, batch.level);
+            }
+        }
+
+        /** 解挂并 flush 剩余内容（只执行一次）。 */
+        void close() {
+            ConsoleBatch.Batch rest;
+            synchronized (this) {
+                if (mClosed) {
+                    return;
+                }
+                mClosed = true;
+                mFlushScheduled = false;
+                mConsoleHandler.removeCallbacks(mFlushRunnable);
+                rest = mBatch.drain();
+            }
+            try {
+                mConsole.setLogListener(null);
+            } catch (Throwable error) {
+                Log.w(TAG, "解挂 console 监听失败：" + mState.token, error);
+            }
+            if (rest != null) {
+                replyConsole(mState, rest.text, rest.level);
+            }
+        }
+    }
+
+    private void forceStop(RunState state) {
+        ScriptExecution execution;
+        synchronized (mLock) {
+            execution = state.execution;
+        }
+        if (execution == null) {
+            return;
+        }
+        try {
+            // 主线程 Looper 上的 UI 执行需要走它自己的收尾（通知 listener / 销毁引擎 / 关运行日志），
+            // 只 forceStop 引擎会让执行状态留在半路。
+            ScriptEngineService engineService = getEngineService();
+            if (engineService != null && engineService.stopExecution(execution)) {
+                return;
+            }
+            ScriptEngine engine = execution.getEngine();
+            if (engine != null) {
+                engine.forceStop();
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "停止脚本失败：" + state.token, error);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 辅助
+    // ------------------------------------------------------------------
+
+    private ScriptEngineService requireEngineService() {
+        ScriptEngineService engineService = getEngineService();
+        if (engineService == null) {
+            throw new IllegalStateException(
+                    "脚本引擎尚未初始化（:script 进程 Application 未完成启动？）");
+        }
+        return engineService;
+    }
+
+    /** App.onCreate 在每个进程都会执行 AutoJs.initInstance，所以 :script 里也能直接拿单例。 */
+    private ScriptEngineService getEngineService() {
+        try {
+            AutoJs autojs = AutoJs.getInstance();
+            return autojs == null ? null : autojs.getScriptEngineService();
+        } catch (Throwable error) {
+            Log.w(TAG, "读取引擎服务失败", error);
+            return null;
+        }
+    }
+
+    /** 所有回复都在这里统一组包；单个回复失败不能影响脚本本身，所以吞掉异常只记 logcat。 */
+    private void reply(Messenger replyTo, int what, RunState state, String name, String message) {
+        if (replyTo == null) {
+            return;
+        }
+        try {
+            Message reply = Message.obtain(null, what);
+            Bundle data = new Bundle();
+            // 主进程固定按 String 解包（见 PocScriptHost）；输入兼容数值，输出统一字符串。
+            data.putString(KEY_TOKEN, state == null ? "" : state.token);
+            if (name != null) {
+                data.putString(KEY_NAME, name);
+            }
+            if (message != null) {
+                data.putString(KEY_MESSAGE, message);
+            }
+            reply.setData(data);
+            replyTo.send(reply);
+        } catch (RemoteException error) {
+            Log.w(TAG, "客户端已断开，回复失败（what=" + what + "）", error);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "组包回复失败（what=" + what + "）", error);
+        }
+    }
+
+    private void replyError(RunState state, String message) {
+        reply(state.replyTo, REPLY_ERROR, state, null, message);
+    }
+
+    /** 异常 -> 给主进程看的一句话（用户主动停止走固定文案，主进程不会弹成错误）。 */
+    private static String describeError(Throwable error) {
+        if (ScriptInterruptedException.causedByInterrupted(error)) {
+            return MESSAGE_STOPPED;
+        }
+        return messageOf(error);
+    }
+
+    /** 脚本是否声明了 {@code "ui";}（UI 模式：走主线程 Looper 宿主）。 */
+    private static boolean isUiMode(JavaScriptSource source) {
+        return (source.getExecutionMode() & JavaScriptSource.EXECUTION_MODE_UI) != 0;
+    }
+
+    /** 取异常消息：staging 抛出的 IOException 已经是中文，直接透传给主进程。 */
+    private static String messageOf(Throwable error) {
+        if (error == null) {
+            return "未知错误";
+        }
+        String message = error.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            return error.getClass().getSimpleName();
+        }
+        return message;
+    }
+
+    /** token 约定是字符串；这里对少数按数值传来的写法也兼容一下，避免两端类型不符就静默丢任务。 */
+    private static String tokenKey(Bundle data) {
+        if (data == null) {
+            return "";
+        }
+        String token = data.getString(KEY_TOKEN);
+        if (token != null) {
+            return token.trim();
+        }
+        int intToken = data.getInt(KEY_TOKEN, Integer.MIN_VALUE);
+        return intToken == Integer.MIN_VALUE ? "" : String.valueOf(intToken);
+    }
+
+    /** 客户端全部解绑且没有运行中脚本时才停服务，避免 :script 进程常驻。 */
+    private void stopIfIdle() {
+        boolean idle;
+        synchronized (mLock) {
+            idle = mBoundClients <= 0 && mRuns.isEmpty();
+        }
+        if (idle) {
+            stopSelf();
+        }
+    }
+
+    /** 一次运行的状态。execution 由 handleRun 在 execute() 返回后填；监听器与 STOP 都走同一把锁。 */
+    private static final class RunState {
+        final String token;
+        final Messenger replyTo;
+        volatile String name = "";
+        ScriptExecution execution;
+        boolean stopRequested;
+        boolean finished;
+        /** Phase1 P1：本次 RUN 是否已经注入过远程自动化后端（结束时释放一次）。 */
+        boolean automationRetained;
+        /** Phase1 日志转发：本次运行的 console 监听（结束后解挂并 flush）。 */
+        ConsoleForwarder consoleForwarder;
+
+        RunState(String token, Messenger replyTo) {
+            this.token = token;
+            this.replyTo = replyTo;
+        }
+    }
+}

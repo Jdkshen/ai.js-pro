@@ -1,6 +1,5 @@
-// @engine rhino
 "auto";
-
+"rhino";
 var 长按间隔 = 1500;
 
 var curPackage = null;

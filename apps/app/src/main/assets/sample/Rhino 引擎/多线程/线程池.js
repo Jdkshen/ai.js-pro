@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 // 建立一个核心线程数为2，最大线程数为5的线程池
 let pool = $threads.pool({
     corePoolSize: 2,

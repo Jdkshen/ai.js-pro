@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 ui.layout(
     <vertical padding="16">
          <text text="输入框" textColor="black" textSize="16sp" marginTop="16"/>

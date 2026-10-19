@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 var window = floaty.window(
     <frame gravity="center">
         <text id="text" textSize="16sp" textColor="#f44336"/>

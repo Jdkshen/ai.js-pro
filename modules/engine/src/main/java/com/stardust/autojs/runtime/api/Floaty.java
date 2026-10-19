@@ -157,7 +157,14 @@ public class Floaty {
         }
         mUiHandler.post(() -> {
             startFloatyService(context);
-            FloatyService.addWindow(window);
+            if (FloatyService.isCreated()) {
+                FloatyService.addWindow(window);
+            } else {
+                // 隔离脚本进程（android:process=":native"）里 FloatyService 还没创建时，
+                // 直接在主 looper 上就地建窗，避免脚本线程永久阻塞在 waitForCreation()。
+                window.onCreate(context, (WindowManager) context.getSystemService(Context.WINDOW_SERVICE));
+                FloatyService.registerWindow(window);
+            }
         });
     }
 

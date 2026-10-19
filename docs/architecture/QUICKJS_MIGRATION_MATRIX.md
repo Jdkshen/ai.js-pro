@@ -49,7 +49,7 @@
 
 ## 样例约束
 
-- `QuickJS 新引擎` 目录下的每个 `.js` 必须以 `// @engine quickjs` 作为第一条非空行。
+- `QuickJS 引擎` 目录下的每个 `.js` 必须以 `// @engine quickjs` 作为第一条非空行。
 - 每个样例统一头部：`// @engine quickjs` → 标题 → `// 用途：…` → `// 前置：…`（权限/依赖）→ `// 覆盖：…`（涉及的模块，由规范化脚本按内容生成）。
 - 依赖 E4X、旧 `"ui"` 模式或 Rhino 对象代理的样例归入 `Rhino 引擎`（QuickJS 已支持任意 Java 反射，但仍无反式写法）。
 - Gradle `verifyQuickJsSamplesMarked` 在每次 `preBuild` 阶段阻止未标记样例再次混入。

@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 //显示控制台
 console.show();
 

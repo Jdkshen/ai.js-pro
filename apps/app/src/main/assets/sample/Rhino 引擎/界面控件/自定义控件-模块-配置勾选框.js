@@ -1,4 +1,4 @@
-// @engine rhino
+"rhino";
 //这个自定义控件是一个勾选框checkbox，能够保存自己的勾选状态，在脚本重新启动时能恢复状态
 var PrefCheckBox = (function() {
     //继承至ui.Widget

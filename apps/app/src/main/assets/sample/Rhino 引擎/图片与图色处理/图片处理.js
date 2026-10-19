@@ -1,7 +1,7 @@
-// @engine rhino
 "ui";
-
-var url = "https://homepages.cae.wisc.edu/~ece533/images/lena.png";
+"rhino";
+var imagePath = files.path("./找图/super_mario.jpg");
+var url = "file://" + imagePath;
 var logo = null;
 var currentImg = null;
 
@@ -57,7 +57,7 @@ var imgProcess = threads.start(function() {
 function processImg(process) {
     imgProcess.setTimeout(() => {
         if (logo == null) {
-            logo = images.load(url);
+            logo = images.read(imagePath);
         }
         //处理图片
         var result = process(logo);

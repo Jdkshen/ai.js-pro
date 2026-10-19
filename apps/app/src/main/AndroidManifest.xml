@@ -45,6 +45,7 @@
     <application
         xmlns:tools="http://schemas.android.com/tools"
         android:name=".App"
+        android:extractNativeLibs="true"
         android:allowBackup="false"
         android:icon="@drawable/ai_js_pro_logo"
         android:label="@string/app_name"
@@ -83,10 +84,14 @@
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"
             android:label="终端"
             android:windowSoftInputMode="adjustResize"/>
+        <!-- task-45：编辑器单实例。singleTop 让连续点「编辑器」复用同一实例（onNewIntent 里
+             打开新文件），不再每点一次叠一个 Activity；返回一次只会回到来源页。
+             用 singleTop 而不是 singleTask：不改变现有任务/返回栈语义。 -->
         <activity
             android:name=".ui.editor.ProCodeEditorActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
             android:label="代码编辑器"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize"/>
         <activity
             android:name=".external.shortcut.ShortcutActivity"
@@ -110,16 +115,31 @@
                 android:resource="@xml/provider_paths"/>
         </provider>
 
-        <!-- Auto.js Pro 扩展用 adb 执行 content query（debug-server 路径）判断服务器是否开启；
-             authority 是扩展里写死的，state=2 时它才 adb forward 并连接 9317。
-             与真 Auto.js Pro 同机安装时用 -PdevPluginUsbDiscovery=false 构建，
-             构建脚本会注入一个 tools:node="remove" 的清单覆盖层去掉它。 -->
+        <!-- Auto.js Pro 扩展用 adb 执行 content query
+             （content://<authority>/debug-server）判断调试服务器是否开启。两个 authority 都注册，
+             一个 <provider> 同时服务两条协议通道（DebugServerProvider 里按 authority 分流）：
+               - org.autojs.autojspro.debug.provider：旧包/自研扩展，state=2 + type=legacy + 9317；
+               - com.boyai.auma.debug.provider：Pro 9.3.11 电脑端（ws-rpc），state 为
+                 ServerState ordinal(0/1/2) + type=ws-rpc + ws-rpc 的真实动态端口，
+                 端口来自 ProRpcServer（优先 adb/USB，局域网走 mDNS）。
+             与真 Auto.js Pro 同机安装会 provider 冲突，用 -PdevPluginUsbDiscovery=false
+             构建（构建脚本注入 tools:node="remove" 覆盖层，两个 authority 一起去掉）。 -->
         <provider
             android:name=".pluginclient.DebugServerProvider"
-            android:authorities="org.autojs.autojspro.debug.provider"
+            android:authorities="org.autojs.autojspro.debug.provider;com.boyai.auma.debug.provider"
             android:exported="true"
             android:grantUriPermissions="false"
             tools:ignore="ExportedContentProvider"/>
+
+        <!-- Pro 电脑端（ws-rpc）第一次连入时弹的授权确认框：显示 md5(token) 的 6 段确认码，
+             用户在电脑上比对后点「允许」；20 秒超时/返回键按拒绝处理。 -->
+        <activity
+            android:name=".pluginclient.ProRpcAuthActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.DeviceDefault.Dialog.Alert"/>
 
         <!-- Receives the Shizuku binder. The permission prevents ordinary apps from
              calling this exported provider directly. -->
@@ -422,6 +442,26 @@
             </intent-filter>
         </service>
 
+        <!-- 工程试验：跑导入的 Auto.js Pro 完整示例集做兼容性分诊，不属于产品功能面 -->
+        <activity
+            android:name=".samples.ProSampleSweepActivity"
+            android:exported="true" />
+
+        <!-- Node24 第三引擎：独立 :node24 进程，只接受同 UID 的 Binder 请求，不导出 -->
+        <service
+            android:name="org.autojs.source.engine.android.Node24Service"
+            android:process=":node24"
+            android:exported="false" />
+        <!-- 跨引擎桥：Node 父引擎可能由主进程或 :script 创建，两处各注册一份同一实现。
+             :node24 的 prelude 先查 status，选中真正有活动 Node 引擎的进程并固定；不导出/AIDL。 -->
+        <service
+            android:name="com.stardust.autojs.engine.node24.NodeEngineBridgeService"
+            android:exported="false" />
+        <service
+            android:name="com.stardust.autojs.engine.node24.NodeEngineBridgeScriptService"
+            android:process=":script"
+            android:exported="false" />
+
         <receiver
             android:name=".external.widget.ScriptWidget"
             android:exported="true">
@@ -442,6 +482,27 @@
             </intent-filter>
         </receiver>
 
+        <!-- 定时任务 API 在 :script 进程执行，而 TimedTaskScheduler/JobManager 只在主进程
+             初始化。脚本进程在 SQLite 提交后用应用内显式广播把调度/取消/动态广播注册
+             交给这个主进程 receiver（不声明 android:process，因此固定为主进程）。 -->
+        <receiver
+            android:name=".timing.TaskSchedulerBridgeReceiver"
+            android:exported="false" />
+
+    
+        <!-- task-76：Node UI 真 Activity（主进程） -->
+        <activity
+            android:name="com.jdkshen.aijspro.engine.NodeUiActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
+        <!-- task-141：Node dialogs 主进程弹窗（透明） -->
+        <activity
+            android:name="com.jdkshen.aijspro.engine.NodeUiDialogActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <service
+            android:name="com.jdkshen.aijspro.engine.NodeUiBridgeService"
+            android:exported="false" />
     </application>
 
 </manifest>

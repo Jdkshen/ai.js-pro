@@ -24,6 +24,15 @@ public class Gravities {
                 case "textEnd":
                     gravity = gravity | Gravity.RIGHT;
                     break;
+                // dev-993：Android 的 layout_gravity 大量使用 start/end（DrawerLayout 的
+                // NavigationView layout_gravity="start"）。以前没这两个分支 → 返回 0，
+                // NavigationView attach 时 isDrawerOpen 判不出 drawer 直接 FATAL。
+                case "start":
+                    gravity = gravity | Gravity.START;
+                    break;
+                case "end":
+                    gravity = gravity | Gravity.END;
+                    break;
                 case "top":
                     gravity = gravity | Gravity.TOP;
                     break;

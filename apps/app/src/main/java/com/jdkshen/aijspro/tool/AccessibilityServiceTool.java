@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.provider.Settings;
 import android.text.TextUtils;
 
@@ -209,5 +210,74 @@ public class AccessibilityServiceTool {
 
     public static boolean isAccessibilityServiceEnabled(Context context) {
         return AccessibilityServiceUtils.INSTANCE.isAccessibilityServiceEnabled(context, sAccessibilityServiceClass);
+    }
+
+    /** task-54：当前是否允许悬浮窗（SYSTEM_ALERT_WINDOW / OVERLAY）。 */
+    public static boolean canDrawOverlays(Context context) {
+        if (context == null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true;
+        }
+        try {
+            return Settings.canDrawOverlays(context);
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * task-54：Shizuku 已授权时，用 shell 身份执行
+     * {@code appops set <pkg> SYSTEM_ALERT_WINDOW allow} 恢复悬浮窗权限，并以系统真实状态复查。
+     *
+     * <p>只在 Shizuku 已运行且 App 已授权时执行（不触发授权对话框）；失败返回 false，调用方回退提示。
+     */
+    public static boolean enableOverlayByShizukuAndVerify() {
+        if (!ShizukuShell.isAvailable() || !ShizukuShell.hasPermission()) {
+            return false;
+        }
+        Context context = GlobalAppContext.get();
+        if (context == null) {
+            return false;
+        }
+        try {
+            String packageName = context.getPackageName();
+            ShizukuShell.Result result = ShizukuShell.execute(
+                    "appops set '" + packageName + "' SYSTEM_ALERT_WINDOW allow", 5_000, 4_096);
+            if (result == null || result.code != 0) {
+                return false;
+            }
+        } catch (Throwable error) {
+            return false;
+        }
+        // MIUI 上 appops 写入后 canDrawOverlays 可能有一小段延迟，最多重试 3 次。
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (canDrawOverlays(context)) {
+                return true;
+            }
+            try {
+                Thread.sleep(120L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * task-54：后台无提示地尝试用 Shizuku 恢复无障碍（不触发授权对话框；未授权直接返回 false）。
+     * 调用方负责放到工作线程。
+     */
+    public static boolean restoreAccessibilityByShizukuIfAuthorized(long waitTimeout) {
+        if (!ShizukuShell.isAvailable() || !ShizukuShell.hasPermission()) {
+            return false;
+        }
+        try {
+            return enableAccessibilityServiceByShizukuAndWaitFor(waitTimeout, false);
+        } catch (Throwable error) {
+            return false;
+        }
     }
 }

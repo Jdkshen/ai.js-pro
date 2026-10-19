@@ -1,5 +1,4 @@
-// @engine rhino
-// ⚠ 需要 Auto.js Pro 专属 API：requestScreenCapture 新参数（async 等）（当前引擎暂未实现，直接运行会报错）
+"rhino";
 requestScreenCapture({
     async: true
 });

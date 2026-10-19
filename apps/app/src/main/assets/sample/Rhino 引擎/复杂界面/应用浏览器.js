@@ -1,6 +1,5 @@
-// @engine rhino
 "ui";
-
+"rhino";
 let pm = context.getPackageManager();
 let iconCache = {};
 

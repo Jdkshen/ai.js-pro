@@ -3,10 +3,12 @@ package com.stardust.autojs.core.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -19,6 +21,8 @@ import com.stardust.autojs.core.image.capture.AccessibilityScreenCapturer
 import com.stardust.autojs.core.util.ProcessShell
 import com.stardust.autojs.runtime.ScriptRuntime
 import com.stardust.autojs.runtime.accessibility.AccessibilityConfig
+import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge
+import com.stardust.autojs.runtime.exception.ScriptException
 import com.stardust.autojs.runtime.api.ShizukuShell
 import com.stardust.automator.GlobalActionAutomator
 import com.stardust.automator.UiObject
@@ -27,6 +31,11 @@ import com.stardust.automator.simple_action.ActionTarget
 import com.stardust.automator.simple_action.SimpleAction
 import com.stardust.util.DeveloperUtils
 import com.stardust.util.ScreenMetrics
+
+import org.json.JSONArray
+import org.json.JSONObject
+
+import java.io.File
 
 /**
  * Created by Stardust on 2017/4/2.
@@ -175,18 +184,27 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     @ScriptInterface
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun gesture(start: Long, duration: Long, vararg points: IntArray): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            return RemoteAutomationBridge.gesture(strokesJson(start, duration, points))
+        }
         prepareForGesture()
         return mGlobalActionAutomator.gesture(start, duration, *points)
     }
 
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun gestureAsync(start: Long, duration: Long, vararg points: IntArray) {
+        if (RemoteAutomationBridge.isActive()) {
+            throw ScriptException("隔离进程暂不支持 automator.gestureAsync()，请改用 gesture()")
+        }
         prepareForGesture()
         mGlobalActionAutomator.gestureAsync(start, duration, *points)
     }
 
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun gestures(strokes: Any): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            throw ScriptException("隔离进程暂不支持 automator.gestures(strokes)，请改用 gesture(start, duration, points)")
+        }
         prepareForGesture()
         @Suppress("UNCHECKED_CAST")
         return mGlobalActionAutomator.gestures(*strokes as Array<GestureDescription.StrokeDescription>)
@@ -195,6 +213,9 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     //如果这里用GestureDescription.StrokeDescription[]为参数，安卓7.0以下会因为找不到这个类而报错
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun gesturesAsync(strokes: Any) {
+        if (RemoteAutomationBridge.isActive()) {
+            throw ScriptException("隔离进程暂不支持 automator.gesturesAsync(strokes)，请改用 gesture(start, duration, points)")
+        }
         prepareForGesture()
         @Suppress("UNCHECKED_CAST")
         mGlobalActionAutomator.gesturesAsync(*strokes as Array<GestureDescription.StrokeDescription>)
@@ -214,6 +235,10 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     @ScriptInterface
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun click(x: Int, y: Int): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            // AIDL 坐标约定=设备像素；脚本坐标先按 ScreenMetrics 换算（与本地 GlobalActionAutomator 一致）。
+            return RemoteAutomationBridge.click(scaleRemoteX(x), scaleRemoteY(y))
+        }
         prepareForGesture()
         return mGlobalActionAutomator.click(x, y)
     }
@@ -221,6 +246,10 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     @ScriptInterface
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun press(x: Int, y: Int, delay: Int): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            // AIDL 契约只有 longClick；按下时长差异（delay）批一不透传，统一按长按处理。
+            return RemoteAutomationBridge.longClick(scaleRemoteX(x), scaleRemoteY(y))
+        }
         prepareForGesture()
         return mGlobalActionAutomator.press(x, y, delay)
     }
@@ -228,6 +257,9 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     @ScriptInterface
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun longClick(x: Int, y: Int): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            return RemoteAutomationBridge.longClick(scaleRemoteX(x), scaleRemoteY(y))
+        }
         prepareForGesture()
         return mGlobalActionAutomator.longClick(x, y)
     }
@@ -235,11 +267,27 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     @ScriptInterface
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, delay: Int): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            return RemoteAutomationBridge.swipe(
+                    scaleRemoteX(x1), scaleRemoteY(y1),
+                    scaleRemoteX(x2), scaleRemoteY(y2), delay.toLong())
+        }
         prepareForGesture()
         return mGlobalActionAutomator.swipe(x1, y1, x2, y2, delay.toLong())
     }
 
     private fun performGlobalAction(action: Int): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            return when (action) {
+                AccessibilityService.GLOBAL_ACTION_BACK -> RemoteAutomationBridge.back()
+                AccessibilityService.GLOBAL_ACTION_HOME -> RemoteAutomationBridge.home()
+                AccessibilityService.GLOBAL_ACTION_RECENTS -> RemoteAutomationBridge.recents()
+                AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS -> RemoteAutomationBridge.notifications()
+                else -> throw ScriptException(
+                        "隔离进程暂不支持该全局动作（action=" + action
+                                + "），批一只代理 back/home/recents/notifications")
+            }
+        }
         ensureAccessibilityServiceEnabled()
         val service = mAccessibilityBridge.service ?: return false
         return service.performGlobalAction(action)
@@ -253,6 +301,9 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     @ScriptInterface
     @RequiresApi(api = Build.VERSION_CODES.R)
     fun takeScreenshot(): ImageWrapper {
+        if (RemoteAutomationBridge.isActive()) {
+            return captureRemoteScreenshot()
+        }
         ensureAccessibilityServiceEnabled()
         return ImageWrapper.ofBitmap(AccessibilityScreenCapturer().capture(SCREENSHOT_TIMEOUT_MILLIS))
     }
@@ -361,10 +412,20 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
     }
 
     private fun ensureAccessibilityServiceEnabled() {
+        if (RemoteAutomationBridge.isActive()) {
+            // Phase1 P1：:script 进程里无障碍服务在主进程，走远程可用性检查（中文错误同主进程版语义）。
+            RemoteAutomationBridge.ensureAccessibility()
+            return
+        }
         mAccessibilityBridge.ensureServiceEnabled()
     }
 
     private fun performAction(simpleAction: SimpleAction): Boolean {
+        if (RemoteAutomationBridge.isActive()) {
+            throw ScriptException(
+                    "隔离进程暂不支持 automator 的 ActionTarget 形式（如 click(\"文本\")/scrollForward(target)）；"
+                            + "请改用选择器链，如 text(\"文本\").findOne().click()")
+        }
         ensureAccessibilityServiceEnabled()
         if (AccessibilityConfig.isUnintendedGuardEnabled() && isRunningPackageSelf) {
             return false
@@ -381,6 +442,43 @@ class SimpleActionAutomator(private val mAccessibilityBridge: AccessibilityBridg
 
     fun setScreenMetrics(metrics: ScreenMetrics) {
         mScreenMetrics = metrics
+    }
+
+    // ---- Phase1 P1 远程自动化辅助（:script 进程 -> 主进程 AutomationHostService） ------
+
+    /** AIDL 坐标=设备像素：脚本坐标按 ScreenMetrics 换算（与本地 GlobalActionAutomator 的规则一致）。 */
+    private fun scaleRemoteX(x: Int): Int = mScreenMetrics?.scaleX(x) ?: x
+
+    private fun scaleRemoteY(y: Int): Int = mScreenMetrics?.scaleY(y) ?: y
+
+    /** 把 gesture(start, duration, points) 转成 IAutomationHost 契约的 strokesJson（单条 stroke）。 */
+    private fun strokesJson(start: Long, duration: Long, points: Array<out IntArray>): String {
+        val stroke = JSONArray()
+        val count = points.size
+        for (i in 0 until count) {
+            val point = points[i]
+            val x = scaleRemoteX(if (point.isNotEmpty()) point[0] else 0)
+            val y = scaleRemoteY(if (point.size > 1) point[1] else 0)
+            val t = if (count <= 1) start else start + duration * i / (count - 1)
+            stroke.put(JSONObject().put("x", x).put("y", y).put("t", t))
+        }
+        return JSONArray().put(stroke).toString()
+    }
+
+    /** 远程截图：主进程把 PNG 落盘到 :script 缓存目录，这里解码成与 takeScreenshot 同型的 ImageWrapper。 */
+    private fun captureRemoteScreenshot(): ImageWrapper {
+        val context = GlobalAppContext.get()
+                ?: throw ScriptException("隔离进程截图失败：应用上下文不可用")
+        val target = File(context.cacheDir, "remote-shot-" + SystemClock.elapsedRealtime() + ".png")
+        val saved = RemoteAutomationBridge.screenshot(target.absolutePath)
+        val file = if (saved.isNullOrEmpty()) target else File(saved)
+        return try {
+            val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+                    ?: throw ScriptException("隔离进程截图失败：主进程返回的图片无法解码")
+            ImageWrapper.ofBitmap(bitmap)
+        } finally {
+            file.delete()
+        }
     }
 
     private companion object {

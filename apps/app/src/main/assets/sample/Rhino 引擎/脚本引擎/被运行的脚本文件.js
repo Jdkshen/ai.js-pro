@@ -1,2 +1,2 @@
-// @engine rhino
+"rhino";
 toastLog("Hello, engines!");
