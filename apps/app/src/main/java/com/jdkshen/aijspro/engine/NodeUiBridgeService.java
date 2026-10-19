@@ -396,6 +396,8 @@ public class NodeUiBridgeService extends Service {
                     Log.i(TAG, "overlay show id=" + overlayId + " xml=" + !xml.isEmpty() + " views=" + viewsJson);
                 } else if ("viewCommand".equals(action)) {
                     String id = request.optString("overlayId", "");
+                    Log.i(TAG, "C-OVERLAY viewCommand overlay=" + id + " command=" + request.optString("command", "")
+                            + " viewId=" + request.optInt("viewId", 0));
                     int viewId = request.optInt("viewId", 0);
                     android.view.View content = OVERLAY_CONTENTS.get(id);
                     android.view.View target = content == null || viewId == 0 ? null
@@ -411,7 +413,16 @@ public class NodeUiBridgeService extends Service {
                             commandResult.put("value", target instanceof android.widget.TextView
                                     ? String.valueOf(((android.widget.TextView) target).getText()) : "");
                             break;
-                        case "setVisibility": target.setVisibility(request.optInt("value", 0)); break;
+                        case "setVisibility":
+                            target.setVisibility(request.optInt("value", 0));
+                            // task-200：详情展开等高度变化后让 overlay 重新量高/relayout。
+                            try {
+                                android.view.View root = OVERLAYS.get(id);
+                                android.view.View contentView = OVERLAY_CONTENTS.get(id);
+                                if (root != null) { root.requestLayout(); }
+                                if (contentView != null) { contentView.requestLayout(); }
+                            } catch (Throwable ignored) { }
+                            break;
                         case "setClickable":
                             target.setClickable(request.optBoolean("value", true));
                             break;
@@ -429,6 +440,8 @@ public class NodeUiBridgeService extends Service {
                     result = commandResult.toString();
                 } else if ("enableDrag".equals(action)) {
                     OVERLAY_DRAG_ANCHORS.put(request.optString("overlayId", ""), request.optInt("viewId", 0));
+                    Log.i(TAG, "C-OVERLAY enableDrag overlay=" + request.optString("overlayId", "")
+                            + " viewId=" + request.optInt("viewId", 0));
                     result = new org.json.JSONObject().put("ok", true).toString();
                 } else if ("move".equals(action)) {
                     String id = request.optString("overlayId", "");
@@ -582,8 +595,13 @@ public class NodeUiBridgeService extends Service {
                         int hit = findClickableViewId(content, rawX, rawY);
                         if (hit == 0) hit = findClickableViewId(content, down[0], down[1]);
                         if (hit != 0) {
+                            Log.i(TAG, "C-OVERLAY click overlay=" + overlayId + " hitView=" + hit
+                                    + " raw=" + rawXInt + "," + rawYInt);
                             queue.addLast(new org.json.JSONObject().put("type", "click")
                                     .put("overlayId", overlayId).put("viewId", hit).put("x", rawX).put("y", rawY));
+                        } else {
+                            Log.i(TAG, "C-OVERLAY click miss overlay=" + overlayId
+                                    + " raw=" + rawXInt + "," + rawYInt);
                         }
                     }
                 }

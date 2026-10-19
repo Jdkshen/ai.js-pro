@@ -118,3 +118,39 @@ execute returned exitCode=0
 - `.artifacts/task198-verify/runtime-probe.txt`（host.runtime PASS）
 - `.artifacts/task198-verify/aj-run.txt`（setView 明确降级、主界面渲染）
 - `.artifacts/task198-verify/main-ui.png`
+
+---
+
+## 9. task-199：浮窗真实 View → 工程布局 XML 回退（dev-1145~1148）
+
+### 9.1 实现
+
+1. `ui.js` 访问 `ui.R.layout.<name>` 时记录 `__ajsLastLayoutName`；
+2. `floating_window.setView(real View)`：真实 View 无法跨进程挂载，自动读取工程 `res/layout/<name>.xml` 并走现有主进程 XML overlay（views/binding/触摸/click/enableDrag 全链路复用）；
+3. `window.view` 根视图补 `setVisibility/getWidth/getHeight/getLocationOnScreen` 安全兼容（setVisibility 纯记录，不重入 show/hide，避免与刚完成的 show 竞态 15s 超时）；
+4. NodeUiBridgeService overlay XML 分支主题从 `Theme_Material_Light_NoActionBar` 改为 `NodeUiHost.wrapThemedContext(this,null)`（Material3），修复 MaterialCardView InflateException。
+
+### 9.2 K40 验证（dev-1148）
+
+- 面板 start 不再报 `floating_window 命令超时`；
+- **浮窗成功出现**：`overlay show id=overlay-1`，C-VIEWS 全量 id（dragHandle/expand/status/start/stop/details/locate/recognize/captureScreen/tap/mode/side/searchMode/searchBudget/newSession/openMain/feedback/logs/close），黑色面板显示「象棋助手/等待连接/后台连接中…/开始/停止/更多」，主 Activity 同步显示完整象棋助手页；
+- 触摸链路已确认：`C-OVERLAY touch overlay=overlay-1 action=0/1 raw=...`（adb tap/swipe 均进入 overlay）；
+- 工程样式（@style/XiangqiTonalButton 等）在 inline inflater 下有 fallback 警告，但控件正常创建。
+
+### 9.3 下一个阻塞点
+
+1. 浮窗按钮/拖动尚未生效：触摸已进入 overlay，但点击未在 JS 侧看到对应动作（更多按钮点击后面板不展开/不变），拖动帧不动。下一步排查：
+   - main 侧 `findClickableViewId` 命中 id 与 C-VIEWS 的合成 id 是否一致；
+   - prelude `pollEvents` 是否把 click 事件派发到 `_viewHandlers`（需要临时日志确认）；
+   - `enableDrag` 的 OVERLAY_DRAG_ANCHORS 是否在 show 后正确设置（拖动起始点需落在 dragHandle 行内）；
+   - 内容高度变化（详情展开）时 overlay window 未 relayout/remeasure；
+2. 面板 JS 已进入前端逻辑（「后台连接中…」），但后台 Rhino `AJ后台.js` 尚未启动/连接（工程 panel-bus 协议），下一步需要串起后台引擎/文件总线；
+3. 后台启动后才会进入 NativeEngine JNI/SO、YOLO dex/SO、@style/@color 完整解析等。
+
+### 9.4 证据
+
+- `.artifacts/task199-verify/dev1148-run.txt`（start 无超时、overlay show、C-VIEWS）
+- `.artifacts/task199-verify/dev1148-screen.png`（浮窗面板 + 主界面）
+- `.artifacts/task199-verify/w3.txt`（overlay frame [36,280][861,695]，fl=NOT_FOCUSABLE/NOT_TOUCH_MODAL 可触摸）
+- `.artifacts/task199-verify/after-more2.png`、`after-start.png`（按钮点击后截图）
+

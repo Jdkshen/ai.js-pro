@@ -200,6 +200,7 @@
     }, this);
     if (this._pendingDragName) {
       var pendingId = this._views[this._pendingDragName] || 0;
+      try { console.log('[floating_window] enableDrag pending name=' + this._pendingDragName + ' viewId=' + pendingId); } catch (ignored) { }
       if (pendingId) {
         this._dragAnchor = pendingId;
         this._pendingDragName = null;
@@ -415,6 +416,9 @@
           try { response = overlayCall('pollEvents', { overlayId: window._overlayId }); } catch (error) { return; }
           var events = response && response.events ? response.events : [];
           for (var i = 0; i < events.length; i++) {
+            if (events[i] && events[i].type === 'click') {
+              try { console.log('[floating_window] click event viewId=' + events[i].viewId); } catch (ignored) { }
+            }
             try { dispatchOverlayEvent(window, events[i]); }
             catch (dispatchError) {
               try {
