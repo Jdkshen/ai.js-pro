@@ -80,7 +80,7 @@ public class Themes {
     }
 
     public static Observable<Theme> getCurrent(Context context) {
-        String currentTheme = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(context)
+        String currentTheme = com.jdkshen.aijspro.theme.AppThemeRepository.get(context).isDark()
                 ? DARK_THEME : Pref.getCurrentTheme();
         if (currentTheme == null)
             return getDefault(context);

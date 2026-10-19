@@ -1,21 +1,20 @@
 package com.jdkshen.aijspro.ui.user;
 
-import android.content.Intent;
 import android.os.Bundle;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
 
 /**
- * 注册页入口：界面已统一到 Miuix（{@link MiuixRegisterActivity}），本类只做转发。
+ * 注册页入口（历史壳）。
  *
- * <p>旧 XML 实现（{@code activity_register} + UserService 回调）已随 UI 统一删除。
+ * <p>task-177：Flutter 玻璃界面没有注册页（功能对等审计里标注为缺口），
+ * Miuix 的 {@code MiuixRegisterActivity} 已从构建排除。保留壳仅为兼容旧 Intent。
  */
 public class RegisterActivity extends BaseActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        startActivity(new Intent(this, MiuixRegisterActivity.class));
         finish();
     }
 }

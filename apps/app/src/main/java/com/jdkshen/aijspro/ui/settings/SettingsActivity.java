@@ -6,18 +6,17 @@ import android.os.Bundle;
 import com.jdkshen.aijspro.ui.BaseActivity;
 
 /**
- * 设置页入口：界面已统一到 Miuix（{@link MiuixSettingsActivity}），本类只做转发。
+ * 设置页入口（历史壳）。
  *
- * <p>旧实现（{@code activity_settings} + {@code preferences.xml} 的 PreferenceFragment、
- * 以及 {@code selectThemeColor} 那套旧主题色选择器）已随 UI 统一删除 ——
- * Miuix 设置页直接读写同一份 SharedPreferences，行为一致。
+ * <p>task-177「去掉 Miuix，统一 Flutter 界面」：设置页已统一到 Flutter 玻璃设置页
+ * （{@code GeneralSettingsPage}），Miuix 的 {@code MiuixSettingsActivity} 已从构建排除。
+ * 保留这个壳只是为了外部 Intent / 旧代码不编译报错；打开时不再跳转任何原生设置页。
  */
 public class SettingsActivity extends BaseActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        startActivity(new Intent(this, MiuixSettingsActivity.class));
         finish();
     }
 }

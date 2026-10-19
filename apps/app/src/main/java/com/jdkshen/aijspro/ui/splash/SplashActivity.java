@@ -9,7 +9,6 @@ import androidx.annotation.Nullable;
 
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.ui.BaseActivity;
-import com.jdkshen.aijspro.ui.main.MainActivity;
 
 /**
  * Created by Stardust on 2017/7/7.
@@ -81,23 +80,19 @@ public class SplashActivity extends BaseActivity {
             return;
         }
         mAlreadyEnterNextActivity = true;
-        android.content.Intent next = null;
-        // Flutter 玻璃界面主入口（-PflutterPoc 的调试源集把该资源置为 true）。
-        // 常规构建里资源为 false，行为与原来完全一致；类名用字符串是为了让
-        // 生产源集不依赖只在 POC 调试源集里存在的 GlassFlutterActivity。
-        if (getResources().getBoolean(R.bool.flutter_main_entry)) {
-            next = new android.content.Intent().setClassName(this,
-                    "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity");
-        }
+        // task-177「去掉 Miuix，统一 Flutter 界面」：唯一界面线，冷启动无条件直达 Flutter
+        // 玻璃界面，不再按开关回退 MainActivity/Miuix 主界面。
+        // 类名用字符串是为了让 main 源集不编译依赖只在 -PflutterPoc 调试源集里存在的
+        // GlassFlutterActivity；缺少 Flutter 源集的构建给明确提示，而不是回到 Miuix。
+        android.content.Intent next = new android.content.Intent().setClassName(this,
+                "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity");
         try {
-            if (next != null) {
-                startActivity(next);
-            } else {
-                startActivity(new android.content.Intent(this, MainActivity.class));
-            }
+            startActivity(next);
         } catch (android.content.ActivityNotFoundException e) {
-            // POC 源集缺失时不能把应用留在空白 Splash：退回原生主界面。
-            startActivity(new android.content.Intent(this, MainActivity.class));
+            // 不带 -PflutterPoc=true 的构建没有 Flutter 源集：明确告知，不留空白 Splash。
+            android.widget.Toast.makeText(this,
+                    "当前构建未包含 Flutter 界面（需要 -PflutterPoc=true）",
+                    android.widget.Toast.LENGTH_LONG).show();
         }
         finish();
     }

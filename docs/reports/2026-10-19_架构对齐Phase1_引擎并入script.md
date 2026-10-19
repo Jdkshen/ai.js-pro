@@ -114,3 +114,13 @@
 
 **待办**：需构建 **dev-1126** 后正式复验 ①任务页 2 行、②分别停止、③stopAll、④<1s 再跑、⑤kill 恢复、⑥legacy 回退。
 证据：`dev1125-duplicate-task-rows.png`、`dedupe-after-fix.png`。
+## dev-1126 正式包复验 PASS（2026-10-19 K40）
+
+- ① 两个 Node 脚本：slot0/slot1 同时 job start，任务页 **2 行**、无 Node UI 重复（截图 dev1126-task-page-2-rows.png）。
+- ② 任务页单任务 ×：只取消该 token（execute returned cancelled=true、release 对应 slot），另一个继续。
+- ③ taskPageStop：两条 execute returned cancelled=true、release slot0/1，PocScriptHost 停止 1/2。
+- ④ 停止后立即再跑：STOP_MS→RUN_MS **272ms**；stop cancel 23:47:34.504 → new job start 23:47:34.648 = **0.14s**（首次立即重跑与在途 taskPageStop 竞争被取消，下一次运行成功）。
+- ⑤ kill -9 :node24_1：`Node24Pool invalidate slot=0`，运行任务标记失败 `Node24 service disconnected`；下一次 acquire 新进程并成功。
+- ⑥ legacy flag（SharedPreferences `node24_pool.legacy=true`）：probe 实际运行在旧 `:node24` 进程（pid 7583），PocNode24Jobs 正常登记/清理。
+
+证据：`output/flutter-poc/evidence/task175/dev1126-formal.log`、`dev1126-task-page-2-rows.png`。

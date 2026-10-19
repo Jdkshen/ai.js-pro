@@ -61,7 +61,7 @@ public abstract class BaseActivity extends AppCompatActivity {
             if (Build.VERSION.SDK_INT >= 23) {
                 int flags = com.jdkshen.aijspro.theme.AppThemePalette
                         .withoutHiddenSystemBars(getWindow().getDecorView().getSystemUiVisibility());
-                if (com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this)) {
+                if (com.jdkshen.aijspro.theme.AppThemeRepository.get(this).isDark()) {
                     getWindow().getDecorView().setSystemUiVisibility(flags & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
                 } else {
                     getWindow().getDecorView().setSystemUiVisibility(flags | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
@@ -134,7 +134,7 @@ public abstract class BaseActivity extends AppCompatActivity {
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
         if (mShouldApplyDayNightModeForOptionsMenu
-                && com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this)) {
+                && com.jdkshen.aijspro.theme.AppThemeRepository.get(this).isDark()) {
             for (int i = 0; i < menu.size(); i++) {
                 Drawable drawable = menu.getItem(i).getIcon();
                 if (drawable != null) {

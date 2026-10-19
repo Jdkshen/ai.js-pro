@@ -23,17 +23,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 旧 Miuix 主页不再作为入口：禁用后桌面只保留 Flutter 玻璃界面一个图标。 -->
-        <activity
-            android:name=".ui.main.MainActivity"
-            android:enabled="false"
-            android:label="AI.js Pro（Miuix 回退）"
-            tools:replace="android:label">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-        </activity>
+        <!-- task-177：Miuix 回退入口已删除，桌面只剩 Flutter 玻璃界面一个图标（Splash → 本 Activity）。 -->
 
         <!-- Phase0：脚本执行的隔离进程。主进程（PocNativeRunner）通过 bindService + Messenger
              驱动它，在 :native 进程内 headless 执行需要原生库的脚本，不依赖任何 Activity。 -->

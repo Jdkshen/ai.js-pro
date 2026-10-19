@@ -29,10 +29,9 @@ public final class AijsSystemBars {
     private AijsSystemBars() {
     }
 
-    /** 当前是否深色（跟随系统或应用内开关，判定与 Compose 主题完全同一份）。 */
+    /** 当前是否深色（跟随系统或应用内开关；task-177 去 Miuix 后统一走 AppThemeRepository）。 */
     public static boolean isDark(Activity activity) {
-        AijsMiuixThemeKt.ensureMiuixThemeStateLoaded();
-        return AijsMiuixThemeKt.isAijsDarkThemeResolved(activity);
+        return AppThemeRepository.get(activity).isDark();
     }
 
     /** 当前主题下该用的状态栏颜色。 */

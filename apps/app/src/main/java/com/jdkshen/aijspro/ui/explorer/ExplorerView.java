@@ -382,7 +382,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
 
     /** Repaint cached rows without reloading the directory or losing scroll position. */
     public void applyThemeColors() {
-        boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(getContext());
+        boolean dark = com.jdkshen.aijspro.theme.AppThemeRepository.get(getContext()).isDark();
         setBackgroundColor(dark ? 0xFF000000 : 0xFFF7F7F7);
         mProjectToolbar.setCardBackgroundColor(dark ? 0xFF1C1B1F : 0xFFFFFFFF);
         TextView projectName = mProjectToolbar.findViewById(R.id.project_name);
@@ -396,7 +396,7 @@ public class ExplorerView extends ThemeColorSwipeRefreshLayout implements SwipeR
     }
 
     private void applyRowTheme(View row, boolean category) {
-        boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(getContext());
+        boolean dark = com.jdkshen.aijspro.theme.AppThemeRepository.get(getContext()).isDark();
         int primary = dark ? 0xFFE6E6E6 : 0xFF212121;
         int secondary = dark ? 0xFFBDBDBD : 0xFF616161;
         if (category) row.setBackgroundColor(dark ? 0xFF1C1B1F : 0xFFFFFFFF);

@@ -42,7 +42,7 @@ public class ThemeColorManagerCompat {
 
     /** Apply the same persisted choice to native resources and Compose surfaces. */
     public static void applyThemeMode() {
-        com.jdkshen.aijspro.theme.AijsMiuixThemeKt.ensureMiuixThemeStateLoaded();
+        // task-177：Miuix 主题源集已退役，深色判定统一走 AppThemeRepository（同一份偏好）。
         int requestedMode = com.jdkshen.aijspro.Pref.isFollowSystemThemeEnabled()
                 ? AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
                 : com.jdkshen.aijspro.Pref.isNightModeEnabled()

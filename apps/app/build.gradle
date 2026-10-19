@@ -147,6 +147,20 @@ android {
         }
     }
     sourceSets {
+        // ---- task-177：去掉 Miuix，统一 Flutter 界面 ---------------------------------
+        // miuix flavor 对应目录 src/miuix 的 UI 页面（Compose/Miuix 组件、Activity、Fragment）
+        // 不再编入构建；非 UI 逻辑（com.jdkshen.aijspro.mcp 包、PermissionCatalog、
+        // PlatformPermissions）已 git mv 到 src/main，MCP 服务因此继续可用。
+        // 源码仍完整留在磁盘上（先排除不物理删），回退方式见
+        // docs/reports/2026-10-19_去Miuix统一Flutter.md。
+        miuix {
+            java.srcDirs = []
+            resources.srcDirs = []
+            assets.srcDirs = []
+        }
+        testMiuix {
+            java.srcDirs = []
+        }
         if (flutterPocEnabled) {
             testDebug {
                 java.srcDir 'src/flutterpocTest/java'
@@ -283,10 +297,7 @@ repositories {
 dependencies {
     // The app-wide Compose compiler also runs for the non-pilot variants.
     implementation 'androidx.compose.runtime:runtime:1.7.6'
-    miuixImplementation 'top.yukonga.miuix.kmp:miuix-android:0.3.1'
-    miuixImplementation 'androidx.compose.foundation:foundation:1.7.6'
-    miuixImplementation 'androidx.compose.ui:ui:1.7.6'
-    miuixImplementation 'com.google.zxing:core:3.5.4'
+    // task-177：Miuix / zxing 依赖随 miuix 源集退役（zxing 只被 MiuixMcpActivity 的二维码用）。
     androidTestImplementation('androidx.test.espresso:espresso-core:3.1.1-alpha01', {
         exclude group: 'com.android.support', module: 'support-annotations'
     })

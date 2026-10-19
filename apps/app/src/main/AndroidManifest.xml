@@ -19,6 +19,10 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- task-177：内置 MCP 服务从 src/miuix 源集搬到 main 后仍以 dataSync|connectedDevice
+         前台服务运行（Android 14+ 需要对应类型权限）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -203,6 +207,12 @@
 
 
         <service android:name=".external.foreground.ForegroundService"/>
+        <!-- task-177：内置 MCP HTTP 服务（原声明在 src/miuix/AndroidManifest.xml）。
+             对齐 Pro：前台服务类型 dataSync|connectedDevice、划掉任务不停服（START_STICKY）。 -->
+        <service android:name="com.jdkshen.aijspro.mcp.McpService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync|connectedDevice" />
         <!-- VS Code「Auto.js Pro 扩展」（hyb1996.auto-js-pro-ext）的调试服务器：9317 端口，
              抽屉「Pro 扩展服务器」开关控制；DebugServerProvider 只在它运行时回报 state=2。 -->
         <service

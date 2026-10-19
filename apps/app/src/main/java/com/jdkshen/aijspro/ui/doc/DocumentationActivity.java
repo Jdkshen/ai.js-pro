@@ -1,17 +1,18 @@
 package com.jdkshen.aijspro.ui.doc;
 
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
+import android.text.TextUtils;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
 
 /**
- * 文档页入口：界面已统一到 Miuix（{@link MiuixDocumentationActivity}），本类只做转发。
+ * 文档页入口（历史壳）。
  *
- * <p>保留这个壳是因为外部（主界面、使用手册等）仍按 {@code DocumentationActivity} 启动；
- * 转发带 {@code SINGLE_TOP}：目标页已在前台时走它的 {@code onNewIntent} 换页，而不是再叠一层。
- *
- * <p>旧 XML 实现（{@code activity_documentation} + EWebView）已随 UI 统一删除。
+ * <p>task-177：task-177 去 Miuix 后不再有原生的 {@code MiuixDocumentationActivity}。
+ * 带 url 的调用改为系统浏览器打开；其余调用直接结束（Flutter 侧「使用手册」页由
+ * {@code GuidePage} 自己承载）。
  */
 public class DocumentationActivity extends BaseActivity {
 
@@ -31,13 +32,15 @@ public class DocumentationActivity extends BaseActivity {
     }
 
     private void forward() {
-        Intent target = new Intent(this, MiuixDocumentationActivity.class);
-        target.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         Intent from = getIntent();
-        if (from != null && from.hasExtra(EXTRA_URL)) {
-            target.putExtra(EXTRA_URL, from.getStringExtra(EXTRA_URL));
+        String url = from == null ? null : from.getStringExtra(EXTRA_URL);
+        if (!TextUtils.isEmpty(url)) {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (Throwable error) {
+                android.util.Log.w("MiuixRetired", "无法打开文档链接：" + url, error);
+            }
         }
-        startActivity(target);
         finish();
     }
 }
