@@ -531,6 +531,13 @@ public class NodeUiBridgeService extends Service {
     private void recordOverlayTouch(String overlayId, android.view.MotionEvent ev, android.view.View root, android.view.View content) {
         try {
             if (root == null || content == null) return;
+            // task-199 调试：确认 overlay 是否收到触摸（drag/click 事件链路）。
+            if (ev.getActionMasked() == android.view.MotionEvent.ACTION_DOWN
+                    || ev.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                Log.i(TAG, "C-OVERLAY touch overlay=" + overlayId + " action=" + ev.getActionMasked()
+                        + " raw=" + Math.round(ev.getRawX()) + "," + Math.round(ev.getRawY())
+                        + " flags=" + (root.getWindowToken() == null ? "no-token" : "ok"));
+            }
             java.util.ArrayDeque<org.json.JSONObject> queue = OVERLAY_EVENTS.get(overlayId);
             if (queue == null) return;
             int action = ev.getActionMasked();
