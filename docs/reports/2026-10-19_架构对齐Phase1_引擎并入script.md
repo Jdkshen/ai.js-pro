@@ -202,3 +202,10 @@ owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-11
 
 证据：`output/flutter-poc/evidence/task190/floatlog-one-confirm.png`。
 待正式包：请构建下一个 dev（含本改动）后 K40/MI8 复验。
+### task-190 回归修复：globalconsole 内部 input 不再参与 binding（2026-10-20）
+- 现象：dev-1135 隐藏 console 输入区后，示例 `window.view.binding.input` 报 apiError（疑似 console_view 内部 `@+id/input` 与示例 `<input id="input">` 同名，`findViewById` 命中 console 内部 GONE 控件）。
+- 修复：`NodeUiHost.findInlineViewById(View,int)` 递归查找时**跳过 ConsoleView 内部视图树**；`buildInlineViews` 与 `NodeUiBridgeService.viewCommand` 统一改用它。
+- K40 debug 验证：custom probe XML `globalconsole + input/ok`：`PROBE_INPUT_ID=20161211`、`setText/getText=hello190` 正常；悬浮日志示例仅一组确定，无 apiError。
+- 待 dev-1136 正式包复验。
+
+证据：`output/flutter-poc/evidence/task190/floatlog-one-confirm-after-binding-fix.png`。
