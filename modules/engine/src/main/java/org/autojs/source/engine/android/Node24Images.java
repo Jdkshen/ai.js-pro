@@ -1376,7 +1376,7 @@ public final class Node24Images implements AutoCloseable {
                 int r = (pixel >> 16) & 0xFF;
                 int g = (pixel >> 8) & 0xFF;
                 int b = pixel & 0xFF;
-                raw[i] = (byte) Math.round(0.299d * r + 0.587d * g + 0.114d * b);
+                raw[i] = (byte) openCvGray(r, g, b);
             }
         }
         return new JSONObject()
@@ -1599,6 +1599,19 @@ public final class Node24Images implements AutoCloseable {
         return true;
     }
 
+    /**
+     * OpenCV {@code COLOR_RGBA2GRAY} 的定点公式（yuv_shift=14）逐位复刻：
+     * {@code Y = (R*4899 + G*9617 + B*1868 + 8192) >> 14}。
+     *
+     * <p>task-21（frame-bench R4 真实帧）：pixelsToFile/getPixels 的 gray 分支原来用
+     * {@code Math.round(0.299R+0.587G+0.114B)} 浮点四舍五入，在真实帧颜色上与 C2 的 V8 定点式
+     * 不一致（thresholdHits 差 0.093%）；grayscale action 走 Imgproc.cvtColor，本身就是这个定点公式，
+     * 对齐后 pixelsToFile(gray) 与 grayscale(action) 逐位一致。
+     */
+    private static int openCvGray(int r, int g, int b) {
+        return (r * 4899 + g * 9617 + b * 1868 + 8192) >> 14;
+    }
+
     // ------------------------------------------------------------------
     // 文件式像素交换（pixelsToFile）
     // ------------------------------------------------------------------
@@ -1681,7 +1694,7 @@ public final class Node24Images implements AutoCloseable {
                         int r = (pixel >> 16) & 0xFF;
                         int g = (pixel >> 8) & 0xFF;
                         int b = pixel & 0xFF;
-                        block[offset++] = (byte) Math.round(0.299d * r + 0.587d * g + 0.114d * b);
+                        block[offset++] = (byte) openCvGray(r, g, b);
                     }
                 }
                 output.write(block, 0, rows * rowBytes);

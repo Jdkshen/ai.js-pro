@@ -2148,6 +2148,11 @@
     return imageMatchSiftSync(this, template, options);
   };
   Image.prototype.matchSiftSync = Image.prototype.matchSift;
+  // matchSift 快速预设：先成对 0.5 缩放，未匹配自动回退全分辨率重试一次。
+  Image.prototype.matchSiftFast = function (template, options) {
+    return imageMatchSiftFastSync(this, template, options);
+  };
+  Image.prototype.matchSiftFastSync = Image.prototype.matchSiftFast;
   // task-172：计算图片特征（Pro image 模块 Image.detectAndComputeFeatures）。
   // 返回 Promise；宿主保存特征对象，Node 只拿句柄（用完 recycle()）。
   Image.prototype.detectAndComputeFeatures = function (options) {
@@ -2984,6 +2989,29 @@
     return { image: wrapImage(value), owned: false };
   }
 
+  /** task-20：宿主 FeatureMatcher.defaultScale 的自动缩放阈值（>1M px → 0.5，否则 1.0）。 */
+  var SIFT_AUTO_PAIR_PIXELS = 1000000;
+
+  /**
+   * task-20：复算 scene 的宿主自动缩放因子。
+   *
+   * <p>宿主 FeatureMatcher.detect 先按 region 裁剪出 source，再
+   * {@code defaultScale(source.width, source.height)}：>1M px → 0.5，否则 1.0；
+   * 而模板的自动缩放总按模板自身宽高（小模板通常 1.0）。于是大 scene + 小模板时
+   * 两侧比例不一致（scene 0.5 / template 1.0）导致 matchSift 默认路径失败。
+   * 这里用与宿主相同的 region 归一化（normalizeImageRegion，含越界校验）算出同一因子。
+   */
+  function siftSceneAutoScale(scene, region) {
+    var width = scene._width;
+    var height = scene._height;
+    var rect = normalizeImageRegion(region, scene);
+    if (rect) {
+      width = rect[2];
+      height = rect[3];
+    }
+    return (width * height > SIFT_AUTO_PAIR_PIXELS) ? 0.5 : 1.0;
+  }
+
   /**
    * SIFT 便捷入口（无新增 Java action）：在兼容后端上组合
    * Image.prototype.detectAndComputeFeatures + image.matchFeatures，
@@ -3006,6 +3034,14 @@
     var sceneFeatures = null;
     var templateFeatures = null;
     try {
+      // task-20：scale/templateScale 都未显式传时，让模板跟随 scene 的宿主自动缩放因子（成对缩放）；
+      // 显式传任一参数时保持旧行为（用户控制）。自动因子=1.0 时继续不传 templateScale（≤1M 逐位不变）。
+      // 放在 try 内：region 非法时也能走到 finally 回收路径读入的图片句柄。
+      var autoPairScale = (options.scale == null && options.templateScale == null)
+        ? siftSceneAutoScale(sceneInput.image, options.region)
+        : null;
+      var templateScaleOption = autoPairScale != null && autoPairScale !== 1.0
+        ? autoPairScale : options.templateScale;
       sceneFeatures = imageDetectFeaturesSync(sceneInput.image, {
         scale: options.scale,
         grayscale: options.grayscale,
@@ -3013,7 +3049,7 @@
         region: options.region
       });
       templateFeatures = imageDetectFeaturesSync(templateInput.image, {
-        scale: options.templateScale,
+        scale: templateScaleOption,
         grayscale: options.grayscale,
         method: options.method
       });
@@ -3079,6 +3115,48 @@
         try { sceneInput.image.recycle(); } catch (ignored) { }
       }
     }
+  }
+
+  /** 拷贝 options 并设置 matchSiftFast 单轮尝试的缩放参数（scale=null 表示删除，交给宿主默认）。 */
+  function siftFastAttemptOptions(options, scale) {
+    var attempt = {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) { attempt[key] = options[key]; }
+    }
+    if (scale == null) {
+      delete attempt.scale;
+      delete attempt.templateScale;
+    } else {
+      attempt.scale = scale;
+      attempt.templateScale = scale;
+    }
+    return attempt;
+  }
+
+  /**
+   * matchSift 快速预设（task-18）：先用成对 0.5 缩放（scene scale=0.5 + templateScale=0.5）
+   * 跑 matchSift 的 detectAndComputeFeatures + matchFeatures 链路；未匹配（matched=false 或
+   * count=0）时自动回退全分辨率（scale=1 / templateScale=1）重试一次。
+   *
+   * <p>返回 matchSift 结果对象，并附加 {fast:true, fallback:<是否发生回退>, totalMs:<两轮总耗时>}。
+   * 除 scale/templateScale 外 options（region/ratio/threshold/grayscale/method/drawMatches）两轮共用；
+   * 不改 matchSift 本身行为（matchSift 仍按调用方参数单轮执行）。
+   */
+  function imageMatchSiftFastSync(scene, template, options) {
+    var startedAt = Date.now();
+    options = normalizeImageOptions(options);
+    var result = imageMatchSiftSync(scene, template, siftFastAttemptOptions(options, 0.5));
+    var fallback = !(result && result.matched && result.count > 0);
+    if (fallback) {
+      result = imageMatchSiftSync(scene, template, siftFastAttemptOptions(options, 1));
+    }
+    if (!result) {
+      result = { matched: false, count: 0, matchCount: 0, corners: null, center: null };
+    }
+    result.fast = true;
+    result.fallback = fallback;
+    result.totalMs = Math.max(0, Date.now() - startedAt);
+    return result;
   }
 
   // task-172：特征对象（detectAndComputeFeatures 返回值）与 matchFeatures。
@@ -3400,6 +3478,8 @@
     countColorSync: imageCountColorSync,
     matchSift: promiseCall(imageMatchSiftSync),
     matchSiftSync: imageMatchSiftSync,
+    matchSiftFast: promiseCall(imageMatchSiftFastSync),
+    matchSiftFastSync: imageMatchSiftFastSync,
     matchFeatures: imageMatchFeatures,
     matchFeaturesSync: imageMatchFeaturesSync,
     detectsColor: imageDetectsColor,
