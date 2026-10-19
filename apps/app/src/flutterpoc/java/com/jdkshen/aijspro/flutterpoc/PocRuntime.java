@@ -3,12 +3,16 @@ package com.jdkshen.aijspro.flutterpoc;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.widget.Toast;
 
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.autojs.AutoJs;
+import com.jdkshen.aijspro.external.HostScripts;
 import com.jdkshen.aijspro.external.ScriptIntents;
+import com.jdkshen.aijspro.external.foreground.ForegroundService;
 import com.jdkshen.aijspro.flutterpoc.nativeproc.NativeProjectDetector;
 import com.jdkshen.aijspro.flutterpoc.nativeproc.PocNativeRunner;
 import com.jdkshen.aijspro.flutterpoc.scriptproc.PocScriptHost;
@@ -34,6 +38,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 运行桥：运行脚本/项目、运行中与定时任务列表、停止/取消任务、读取运行日志、
@@ -60,6 +65,84 @@ final class PocRuntime {
      * {@link #setAutoInScriptEnabled(boolean)} 切换做调试）。
      */
     private static volatile boolean sAutoInScriptEnabled = true; // task-159：Rhino :script 无障碍代理接入后默认启用
+
+    // ---- task-165：Flutter 触发的脚本运行也保持前台通知（带「停止脚本」按钮） ----
+    private static final AtomicInteger sForegroundLeases = new AtomicInteger();
+    private static Handler sForegroundHandler;
+    private static final long FOREGROUND_CHECK_INTERVAL_MS = 3000L;
+
+    /** 脚本运行前调用：首个 lease 会拉起 ForegroundService（通知内容区带停止脚本按钮）。 */
+    private static void acquireForegroundLease(Context context) {
+        if (context == null) {
+            return;
+        }
+        Context app = context.getApplicationContext();
+        if (app == null) {
+            app = context;
+        }
+        try {
+            if (ForegroundService.acquireExecutionLease(app)) {
+                sForegroundLeases.incrementAndGet();
+                scheduleForegroundLeaseCheck(app);
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "获取前台通知 lease 失败", error);
+        }
+    }
+
+    private static void releaseForegroundLeases(Context context) {
+        int leases = sForegroundLeases.getAndSet(0);
+        if (leases <= 0 || context == null) {
+            return;
+        }
+        Context app = context.getApplicationContext();
+        if (app == null) {
+            app = context;
+        }
+        for (int i = 0; i < leases; i++) {
+            try {
+                ForegroundService.releaseExecutionLease(app);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 轮询宿主进程任务数：脚本自然结束后主动收掉通知，避免「没在跑却一直提示运行中」。 */
+    private static void scheduleForegroundLeaseCheck(Context context) {
+        if (sForegroundLeases.get() <= 0) {
+            return;
+        }
+        if (sForegroundHandler == null) {
+            sForegroundHandler = new Handler(Looper.getMainLooper());
+        }
+        sForegroundHandler.postDelayed(() -> {
+            if (sForegroundLeases.get() <= 0) {
+                return;
+            }
+            if (runningScriptCount() == 0) {
+                releaseForegroundLeases(context);
+            } else {
+                scheduleForegroundLeaseCheck(context);
+            }
+        }, FOREGROUND_CHECK_INTERVAL_MS);
+    }
+
+    /** 宿主进程（:script + :native）里正在跑的脚本数；主进程引擎自己的脚本由 ScriptExecutionGlobalListener 管 lease。 */
+    private static int runningScriptCount() {
+        int count = 0;
+        try {
+            count += PocScriptHost.runningTasks().length();
+        } catch (Throwable error) {
+            Log.w(TAG, "读取 :script 任务数失败", error);
+        }
+        try {
+            count += PocNativeRunner.runningTasks().length();
+        } catch (Throwable error) {
+            Log.w(TAG, "读取 :native 任务数失败", error);
+        }
+        return count;
+    }
+
 
     static {
         // Phase1 第一批兜底：:script 报「暂存失败」时回退主进程旧路径执行（由 PocScriptHost 回调）。
@@ -95,6 +178,9 @@ final class PocRuntime {
                 return stopTasks(args.optJSONArray("tokens"));
             case "cancelTask":
                 return stopTasks(new JSONArray().put(args.getString("token")));
+            case "stopAllScripts":
+                stopAllScripts(activity);
+                return Boolean.TRUE;
             case "logs":
                 return logs(activity, args);
             case "timedTask":
@@ -176,6 +262,9 @@ final class PocRuntime {
      *                    NativeProjectDetector 递归判定
      */
     private static void runFile(Context context, File file, File workDir, boolean projectMode) throws IOException {
+        // task-165：Flutter/悬浮条/宿主链路触发的运行统一拉前台通知（带停止脚本入口）。
+        // 路由失败/脚本秒退时由 scheduleForegroundLeaseCheck 在 3s 内收掉。
+        acquireForegroundLease(context);
         // "ui"; 文档优先：ui.layout/ui.inflate 需要 Activity 承载，而 :native 隔离进程没有 UI 模式
         // （进 :native 会报「需要在ui模式下运行才能使用该函数」）。带 .so 的 UI 项目（如 ImGui demo）
         // 因此回主进程 ScriptExecuteActivity；native 隔离只留给真正的 headless native 脚本。
@@ -526,6 +615,36 @@ final class PocRuntime {
         return stopped;
     }
 
+    /**
+     * task-165：「停止全部脚本」统一入口（任务页按钮 / 通知栏停止 / UI 兜底）。
+     *
+     * <p>宿主进程（:script/:native）+ 主进程旧引擎 + 前台通知一起收掉；调用方不需要先取任务列表，
+     * 因此任务页列表过期/为空时也能停干净。
+     */
+    static void stopAllScripts(Context context) {
+        try {
+            HostScripts.stopAllHostScripts();
+        } catch (Throwable error) {
+            Log.w(TAG, "停止宿主进程脚本失败", error);
+        }
+        try {
+            AutoJs autojs = AutoJs.getInstance();
+            if (autojs != null && autojs.getScriptEngineService() != null) {
+                autojs.getScriptEngineService().stopAll();
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "停止主进程脚本失败", error);
+        }
+        try {
+            // Node 悬浮窗（floating_window）跑在宿主进程；停脚本后 overlay 由 Node 侧清理。
+            // 这里再清一次主进程侧的 Node UI 覆盖 Activity（若存在）兜底。
+            com.jdkshen.aijspro.engine.NodeUiActivity.closeAll();
+        } catch (Throwable ignored) {
+            // 非 flutterPoc/其它构建没有该入口时忽略。
+        }
+        releaseForegroundLeases(context);
+    }
+
     /** 停止所有宿主进程脚本（悬浮条 ⏹ 用；主进程引擎的 stopAll 由悬浮条自己兜底）。 */
     static void stopAllHostScripts() {
         try {
@@ -535,6 +654,9 @@ final class PocRuntime {
         }
         for (String id : nativeIdsOf(null)) {
             PocNativeRunner.stop(id);
+        }
+        if (runningScriptCount() == 0) {
+            releaseForegroundLeases(com.stardust.app.GlobalAppContext.get());
         }
     }
 

@@ -44,6 +44,7 @@ public final class HostScripts {
     private static volatile boolean sResolved;
     private static Method sRunScript;
     private static Method sStopAllHostScripts;
+    private static Method sStopAllScripts;
     private static Method sIsEnabled;
 
     private HostScripts() {
@@ -119,6 +120,27 @@ public final class HostScripts {
         }
     }
 
+    /**
+     * task-165：「停止全部脚本」统一入口（通知栏停止 / 任务页按钮 / 悬浮条 ⏹）。
+     *
+     * <p>优先调 PocRuntime.stopAllScripts(Context)：宿主进程 + 主进程引擎 + Node UI 覆盖 Activity +
+     * 前台通知 lease 一起收掉；旧构建没有该方法时退回 {@link #stopAllHostScripts()}。
+     */
+    public static void stopAllScripts(Context context) {
+        resolve();
+        Method method = sStopAllScripts;
+        if (method != null && context != null) {
+            try {
+                method.invoke(null, context.getApplicationContext() == null
+                        ? context : context.getApplicationContext());
+                return;
+            } catch (Throwable error) {
+                Log.w(TAG, "停止全部脚本失败，回退宿主进程停止", error);
+            }
+        }
+        stopAllHostScripts();
+    }
+
     /** 一次性解析反射入口；解析失败（普通构建）只记一条日志，后续调用不再重试。 */
     private static void resolve() {
         if (sResolved) {
@@ -134,6 +156,12 @@ public final class HostScripts {
                 sRunScript = accessible(runtime.getDeclaredMethod(
                         "runScript", Context.class, String.class));
                 sStopAllHostScripts = accessible(runtime.getDeclaredMethod("stopAllHostScripts"));
+                try {
+                    sStopAllScripts = accessible(runtime.getDeclaredMethod(
+                            "stopAllScripts", Context.class));
+                } catch (NoSuchMethodException ignored) {
+                    // 旧版 PocRuntime：退回只停宿主进程。
+                }
             } catch (Throwable error) {
                 Log.i(TAG, "宿主运行桥不可用（非 flutterPoc 构建？）：" + error);
             }

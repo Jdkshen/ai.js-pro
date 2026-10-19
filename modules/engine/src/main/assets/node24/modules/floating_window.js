@@ -114,6 +114,7 @@
     this._views = Object.create(null);
     this._viewHandlers = Object.create(null);
     this._bindingCache = Object.create(null);
+    this._clickNames = Object.create(null);
     this._dragAnchor = 0;
     this._dragOptions = null;
   }
@@ -149,7 +150,7 @@
   };
   FloatingWindowImpl.prototype._showNow = function () {
     if (this._closed) { throw apiError('floating_window 已关闭，不能再次 show'); }
-    var fields = { text: this._text, x: this._x, y: this._y };
+    var fields = { text: this._text, x: this._x, y: this._y, flags: this._flags || 0 };
     if (this._xml) { fields.xml = this._xml; }
     if (this._width > 0) { fields.width = this._width; }
     if (this._height > 0) { fields.height = this._height; }
@@ -158,6 +159,12 @@
     this._views = Object.create(null);
     var rawViews = showResult.views && typeof showResult.views === 'object' ? showResult.views : {};
     for (var viewName in rawViews) { if (Object.prototype.hasOwnProperty.call(rawViews, viewName)) { this._views[viewName] = Number(rawViews[viewName]); } }
+    Object.keys(this._clickNames).forEach(function (name) {
+      var id = this._views[name];
+      if (id) {
+        try { overlayCall('viewCommand', { overlayId: this._overlayId, viewId: id, command: 'setClickable', value: true }); } catch (ignored) { }
+      }
+    }, this);
     if (this._pendingDragName) {
       var pendingId = this._views[this._pendingDragName] || 0;
       if (pendingId) {
@@ -250,6 +257,11 @@
         if (typeof handler !== 'function') { throw new TypeError('click 监听需要一个函数'); }
         window._viewHandlers[name] = window._viewHandlers[name] || [];
         window._viewHandlers[name].push(handler);
+        window._clickNames[name] = true;
+        // task-164：<img> 等非 clickable 控件，绑定了 click 后要让宿主的 hit-test 能命中。
+        if (window._overlayId && window._views[name]) {
+          try { overlayCall('viewCommand', { overlayId: window._overlayId, viewId: window._views[name], command: 'setClickable', value: true }); } catch (ignored) { }
+        }
         return binding;
       },
       setOnClickListener: function (handler) { return binding.on('click', handler); },
@@ -301,9 +313,25 @@
     if (this._overlayId) { overlayCall('enableDrag', { overlayId: this._overlayId, viewId: viewId }); }
     return this;
   };
-  FloatingWindowImpl.prototype.addFlags = function (flags) { this._flags |= requireInt(flags, 'flags', 0); return this; };
-  FloatingWindowImpl.prototype.removeFlags = function (flags) { this._flags &= ~requireInt(flags, 'flags', 0); return this; };
-  FloatingWindowImpl.prototype.setFlags = function (flags) { this._flags = requireInt(flags, 'flags', 0); return this; };
+  FloatingWindowImpl.prototype.addFlags = function (flags) {
+    this._flags |= requireInt(flags, 'flags', 0);
+    this._applyFlags('addFlags', requireInt(flags, 'flags', 0));
+    return this;
+  };
+  FloatingWindowImpl.prototype.removeFlags = function (flags) {
+    this._flags &= ~requireInt(flags, 'flags', 0);
+    this._applyFlags('removeFlags', requireInt(flags, 'flags', 0));
+    return this;
+  };
+  FloatingWindowImpl.prototype.setFlags = function (flags) {
+    this._flags = requireInt(flags, 'flags', 0);
+    this._applyFlags('setFlags', this._flags);
+    return this;
+  };
+  FloatingWindowImpl.prototype._applyFlags = function (action, flags) {
+    if (!this._overlayId) { return; }
+    try { overlayCall(action, { overlayId: this._overlayId, flags: flags }); } catch (ignored) { }
+  };
   FloatingWindowImpl.prototype.getFlags = function () { return this._flags; };
 
   // task-157：触摸/点击/拖拽事件轮询（overlay 主进程队列 -> JS handler）。

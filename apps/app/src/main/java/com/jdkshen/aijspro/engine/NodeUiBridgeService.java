@@ -239,6 +239,7 @@ public class NodeUiBridgeService extends Service {
                                     | android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                             android.graphics.PixelFormat.TRANSLUCENT);
                     params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+                    params.flags |= request.optInt("flags", 0);
                     params.x = request.optInt("x", 100);
                     params.y = request.optInt("y", 200);
                     manager.addView(view, params);
@@ -267,6 +268,9 @@ public class NodeUiBridgeService extends Service {
                                     ? String.valueOf(((android.widget.TextView) target).getText()) : "");
                             break;
                         case "setVisibility": target.setVisibility(request.optInt("value", 0)); break;
+                        case "setClickable":
+                            target.setClickable(request.optBoolean("value", true));
+                            break;
                         case "setEnabled": target.setEnabled(request.optBoolean("value", true)); break;
                         case "setChecked":
                             if (target instanceof android.widget.CompoundButton) ((android.widget.CompoundButton) target).setChecked(request.optBoolean("value", false));
@@ -288,6 +292,18 @@ public class NodeUiBridgeService extends Service {
                     if (params != null) {
                         params.x = request.optInt("x", params.x);
                         params.y = request.optInt("y", params.y);
+                        android.view.View view = OVERLAYS.get(id);
+                        if (view != null) manager.updateViewLayout(view, params);
+                    }
+                    result = new org.json.JSONObject().put("ok", true).toString();
+                } else if ("addFlags".equals(action) || "removeFlags".equals(action) || "setFlags".equals(action)) {
+                    String id = request.optString("overlayId", "");
+                    android.view.WindowManager.LayoutParams params = OVERLAY_PARAMS.get(id);
+                    int bits = request.optInt("flags", 0);
+                    if (params != null) {
+                        if ("addFlags".equals(action)) params.flags |= bits;
+                        else if ("removeFlags".equals(action)) params.flags &= ~bits;
+                        else params.flags = bits;
                         android.view.View view = OVERLAYS.get(id);
                         if (view != null) manager.updateViewLayout(view, params);
                     }
@@ -385,19 +401,29 @@ public class NodeUiBridgeService extends Service {
         } catch (Throwable ignored) { }
     }
 
+    /** task-164：优先返回可点击 view；没有可点击节点时回退到命中区域内最深的带 id view。
+     * 示例里的 <img id="close"> 不是 clickable（ImageView 默认 false），旧实现永远返回 0，
+     * 导致 binding.close.on("click") 收不到事件。 */
     private static int findClickableViewId(android.view.View root, float rawX, float rawY) {
+        int clickable = findViewIdAt(root, rawX, rawY, true);
+        return clickable != 0 ? clickable : findViewIdAt(root, rawX, rawY, false);
+    }
+
+    private static int findViewIdAt(android.view.View root, float rawX, float rawY, boolean requireClickable) {
         if (root == null || !root.isShown()) return 0;
         int[] location = new int[2];
         root.getLocationOnScreen(location);
         if (rawX < location[0] || rawY < location[1]
                 || rawX > location[0] + root.getWidth() || rawY > location[1] + root.getHeight()) return 0;
-        if (root.getVisibility() == android.view.View.VISIBLE && root.isClickable() && root.getId() != android.view.View.NO_ID) {
+        if (root.getVisibility() == android.view.View.VISIBLE
+                && root.getId() != android.view.View.NO_ID
+                && (!requireClickable || root.isClickable())) {
             return root.getId();
         }
         if (root instanceof android.view.ViewGroup) {
             android.view.ViewGroup group = (android.view.ViewGroup) root;
             for (int i = group.getChildCount() - 1; i >= 0; i--) {
-                int hit = findClickableViewId(group.getChildAt(i), rawX, rawY);
+                int hit = findViewIdAt(group.getChildAt(i), rawX, rawY, requireClickable);
                 if (hit != 0) return hit;
             }
         }
@@ -457,6 +483,18 @@ public class NodeUiBridgeService extends Service {
     }
 
     @Override public void onDestroy() {
+        // task-164：服务销毁时清掉所有 floating overlay，避免 :node24 异常退出后浮窗常驻。
+        try {
+            android.view.WindowManager manager = (android.view.WindowManager)
+                    getSystemService(android.content.Context.WINDOW_SERVICE);
+            for (Map.Entry<String, android.view.View> entry : OVERLAYS.entrySet()) {
+                try { manager.removeView(entry.getValue()); } catch (Throwable ignored) { }
+            }
+            OVERLAYS.clear(); OVERLAY_PARAMS.clear(); OVERLAY_CONTENTS.clear();
+            OVERLAY_EVENTS.clear(); OVERLAY_DRAG_ANCHORS.clear();
+        } catch (Throwable error) {
+            Log.w(TAG, "onDestroy clear overlays failed", error);
+        }
         mWork.shutdown();
         sInstance = null;
         super.onDestroy();

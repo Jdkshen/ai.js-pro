@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- task-165：前台「脚本运行中」通知的自定义内容，保证 MIUI/HyperOS 折叠态也能看到「停止脚本」按钮。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notif_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
+
+    <TextView
+        android:id="@+id/notif_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFFFF"
+        android:text="@string/foreground_notification_title" />
+
+    <TextView
+        android:id="@+id/notif_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:textSize="13sp"
+        android:textColor="#FFD0D8E8"
+        android:text="@string/foreground_notification_text" />
+
+    <TextView
+        android:id="@+id/notif_stop"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginTop="10dp"
+        android:gravity="center"
+        android:background="#FFE5484D"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFFFF"
+        android:text="@string/notification_stop_script" />
+</LinearLayout>

@@ -152,6 +152,7 @@ final class PocBridge {
             case "runProject":
             case "floatRun":
             case "tasks":
+            case "stopAllScripts":
             case "stopTasks":
             case "cancelTask":
             case "timedTask":

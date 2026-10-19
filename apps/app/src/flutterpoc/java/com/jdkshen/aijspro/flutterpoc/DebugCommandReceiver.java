@@ -92,6 +92,39 @@ public class DebugCommandReceiver extends BroadcastReceiver {
                 }
                 return;
             }
+            if (intent.getBooleanExtra("taskPageStop", false)) {
+                // task-166 复验：任务页/脚本列表「停止全部」统一入口。
+                try {
+                    PocRuntime.stopAllScripts(context.getApplicationContext());
+                    Log.i(TAG, "debug taskPageStop dispatched");
+                } catch (Throwable error) {
+                    Log.e(TAG, "debug taskPageStop failed", error);
+                }
+                return;
+            }
+            if (intent.getBooleanExtra("notificationStop", false)) {
+                // task-166 复验：模拟通知栏「停止」PendingIntent 的 action（ForegroundService）。
+                try {
+                    Intent stopIntent = new Intent(context,
+                            com.jdkshen.aijspro.external.foreground.ForegroundService.class)
+                            .setAction(com.jdkshen.aijspro.external.foreground.ForegroundService.ACTION_STOP_ALL_SCRIPTS);
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        context.startForegroundService(stopIntent);
+                    } else {
+                        context.startService(stopIntent);
+                    }
+                    Log.i(TAG, "debug notificationStop dispatched");
+                } catch (Throwable error) {
+                    Log.e(TAG, "debug notificationStop failed", error);
+                }
+                return;
+            }
+            if (intent.getBooleanExtra("floatingStop", false)) {
+                // task-166 复验：悬浮菜单 ⏹ 停止入口。
+                PocFloatingBar.debugStopAll();
+                Log.i(TAG, "debug floatingStop dispatched");
+                return;
+            }
             if (intent.getBooleanExtra("autoInScript", false)) {
                 PocRuntime.setAutoInScriptEnabled(true);
                 Log.i(TAG, "debug autoInScript=true");

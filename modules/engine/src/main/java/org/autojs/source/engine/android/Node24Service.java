@@ -57,7 +57,7 @@ public final class Node24Service extends Service {
     }
     private final class Job implements Runnable {
         final String id,source,filename;final long timeout;final long holdMillis;final boolean uiScript;final Messenger reply;
-        volatile boolean cancelled;volatile Node24Engine engine;volatile Node24HostBridge host;
+        volatile boolean cancelled;volatile boolean finished;volatile Node24Engine engine;volatile Node24HostBridge host;
         Job(JSONObject request,Messenger reply) throws Exception {
             this.reply=reply;id=request.getString("id");source=request.getString("source");
             filename=request.getString("filename");timeout=request.getLong("timeoutMillis");
@@ -76,6 +76,58 @@ public final class Node24Service extends Service {
             Node24HostBridge currentHost=host;
             if(current!=null)try{current.cancel();}catch(IllegalStateException alreadyClosed){}
             if(currentHost!=null) currentHost.cancelPendingProjection();
+            // task-166：先启动"尽早结束进程"的 daemon 线程，再做 UI 清理；
+            // closeUiAfterExecution 内部可能因 Binder/主 Looper 阻塞十几秒，不能挡在 kill 前面。
+            haltSoonOnCancel();
+            if(currentHost!=null) {
+                final Node24HostBridge cleanupHost = currentHost;
+                Thread cleanup = new Thread(() -> {
+                    try { closeUiAfterExecution(cleanupHost); }
+                    catch(Throwable ignored) { }
+                }, "node24-cancel-cleanup");
+                cleanup.setDaemon(true);
+                cleanup.start();
+            }
+            // native 超过 2.5s 仍未返回时再次兜底结束 :node24 进程。
+            Thread watchdog = new Thread(() -> {
+                try { Thread.sleep(2500L); } catch (InterruptedException ignored) { return; }
+                if (finished) return;
+                android.util.Log.w("Node24Service","cancel watchdog: job still running, force halt id="+id);
+                try { if(host!=null) closeUiAfterExecution(host); } catch(Throwable ignored) { }
+                haltProcess();
+            }, "node24-cancel-watchdog");
+            watchdog.setDaemon(true);
+            watchdog.start();
+        }
+
+        private void haltProcess() {
+            try { stopSelf(); } catch(Throwable ignored) { }
+            try { android.os.Process.killProcess(android.os.Process.myPid()); } catch(Throwable ignored) { }
+        }
+
+        void finishAndHaltIfCancelled() {
+            finished = true;
+            if (!cancelled) return;
+            // task-166：用 daemon 线程而不是主 Looper postDelayed，避免停止路径主线程被
+            // Node UI 清理/Binder 阻塞时进程迟迟不退（实测曾延迟 15s）。
+            Thread halt = new Thread(() -> {
+                try { Thread.sleep(350L); } catch (InterruptedException ignored) { }
+                haltProcess();
+            }, "node24-cancel-halt");
+            halt.setDaemon(true);
+            halt.start();
+        }
+
+        void haltSoonOnCancel() {
+            Thread halt = new Thread(() -> {
+                try { Thread.sleep(800L); } catch (InterruptedException ignored) { }
+                if (finished) return;
+                android.util.Log.w("Node24Service","cancel halt: force exit id="+id);
+                try { if(host!=null) closeUiAfterExecution(host); } catch(Throwable ignored) { }
+                haltProcess();
+            }, "node24-cancel-halt-early");
+            halt.setDaemon(true);
+            halt.start();
         }
         /**
          * uiScript/显式 hold 用 hold 预算作为 native 事件循环寿命；普通非 UI 脚本保持原 timeout。
@@ -91,14 +143,14 @@ public final class Node24Service extends Service {
             boolean overlay=false,activity=false;
             try { overlay=bridge.hasUiOverlay(); } catch(Throwable ignored) { }
             try { activity=bridge.hasNodeUiActivity(); } catch(Throwable ignored) { }
-            if(overlay || activity) {
-                try {
-                    boolean closed=bridge.closeUiOverlay();
-                    android.util.Log.i("Node24Service","post-execute ui close id="+id
-                            +" overlay="+overlay+" activity="+activity+" requested="+closed);
-                } catch(Throwable error) {
-                    android.util.Log.w("Node24Service","post-execute ui close failed id="+id,error);
-                }
+            // task-164：floating overlay 不在 NodeUiHost.hasOverlay 状态里；只要 job 结束就无条件 closeAll，
+            // 避免脚本结束/取消后浮窗常驻、多次运行叠加。
+            try {
+                boolean closed=bridge.closeUiOverlay();
+                android.util.Log.i("Node24Service","post-execute ui close id="+id
+                        +" overlay="+overlay+" activity="+activity+" requested="+closed);
+            } catch(Throwable error) {
+                android.util.Log.w("Node24Service","post-execute ui close failed id="+id,error);
             }
             // task-94：主进程 NodeUiActivity 也在这里关闭（在 active 清空前，避免误关下一任务的 session）。
             try {
@@ -143,6 +195,8 @@ public final class Node24Service extends Service {
                 bridge=new Node24HostBridge(Node24Service.this,
                         Node24Prelude.projectDir(filename));
                 android.util.Log.i("Node24Service","host bridge ready id="+id+" "+bridge.describeState());
+                // task-164：清掉上一次运行残留的 floating overlay/Node UI。
+                try { bridge.closeUiOverlay(); } catch(Throwable ignored) { }
                 try (Node24Engine current=new Node24Engine(); OutputCapture output=new OutputCapture()) {
                     UiLifecycleWatcher watcher=null;
                     try {
@@ -229,6 +283,7 @@ public final class Node24Service extends Service {
             }
             try {result.put("elapsedMillis",SystemClock.elapsedRealtime()-start);}catch(Exception ignored){}
             reply(result);
+            finishAndHaltIfCancelled();
         }
     }
 

@@ -2366,7 +2366,7 @@ public final class NodeUiHost {
     }
 
     private static Object closeOverlay() throws Exception {
-        runOnMain(new Runnable() {
+        final Runnable remove = new Runnable() {
             @Override
             public void run() {
                 boolean hadOverlay = sOverlayView != null;
@@ -2379,7 +2379,17 @@ public final class NodeUiHost {
                     notifyOverlayClosed();
                 }
             }
-        });
+        };
+        // task-166：停止路径不能阻塞/在主线程等主线程。主线程直接执行；其它线程只 post 不等待，
+        // 返回 ok 让 Node24Service 的取消/清理继续（floating overlay 由主进程 closeAll 同步关闭）。
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            remove.run();
+        } else {
+            boolean posted = MAIN.post(remove);
+            if (!posted) {
+                remove.run();
+            }
+        }
         return new JSONObject().put("ok", true);
     }
 

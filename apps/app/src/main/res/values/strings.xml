@@ -489,6 +489,9 @@
     <string name="foreground_notification_channel_name">前台服务通知</string>
     <string name="foreground_notification_title">AI.js Pro保持运行中</string>
     <string name="foreground_notification_text">点击进入主界面</string>
+    <!-- task-165：通知栏「停止脚本」按钮（自定义 RemoteViews，MIUI 折叠态也可见） -->
+    <string name="notification_stop_script">停止脚本</string>
+    <string name="notification_running_text">脚本正在运行 · 点此停止并关闭悬浮窗</string>
     <string name="text_run_on_other_broadcast">其他事件(广播)</string>
     <string name="text_broadcast_action">广播Action</string>
     <string name="text_broadcast_action_prefix">android.intent.action.</string>

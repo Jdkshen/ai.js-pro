@@ -45,6 +45,22 @@ public class NodeUiActivity extends AppCompatActivity {
 
     private static final String TAG = "NodeUiActivity";
 
+    /** task-165：「停止全部脚本」时关闭主进程侧的 Node UI 覆盖 Activity（overlay 兜底清理）。 */
+    public static void closeAll() {
+        NodeUiActivity current = getCurrent();
+        if (current == null) {
+            return;
+        }
+        current.runOnUiThread(() -> {
+            try {
+                if (!current.isFinishing() && !current.isDestroyed()) {
+                    current.finish();
+                }
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
     /** 主进程 service 注册的关闭回调（onDestroy 时回调一次）。 */
     public interface CloseListener {
         void onNodeUiActivityClosed(String sessionId);

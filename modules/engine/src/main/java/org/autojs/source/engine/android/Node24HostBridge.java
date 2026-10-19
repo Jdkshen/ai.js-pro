@@ -1168,6 +1168,15 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     /** 退出时清理 overlay：优先走 NodeUiHost 的 close op，其次 close/closeAll 静态方法。 */
     public boolean closeUiOverlay() {
+        // task-164：floating_window 的 overlay 由主进程 NodeUiBridgeService 管理（不在 NodeUiHost.sOverlayView），
+        // close op 清不到它；这里显式下发 floatingWindow closeAll，脚本结束/取消/启动前都清干净。
+        try {
+            JSONObject floating = new JSONObject().put("kind", "ui").put("op", "floatingWindow")
+                    .put("action", "closeAll");
+            handleUiJson(floating);
+        } catch (Throwable error) {
+            Log.w(TAG, "close floating overlays failed", error);
+        }
         try {
             JSONObject request = new JSONObject().put("kind", "ui").put("op", "close")
                     .put("projectDir", mProjectDir == null ? "" : mProjectDir);

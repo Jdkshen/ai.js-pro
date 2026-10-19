@@ -440,7 +440,17 @@ final class PocFloatingBar {
     }
 
     /** ⏹ 停止全部：宿主进程（:script/:native）里的任务 + 旧主进程引擎任务一起停。 */
+    /** task-165：悬浮条 ⏹ 1.2s 防抖，避免连点重复触发停止/通知栏反复刷新。 */
+    private static long sLastStopAllAt;
+
     private static void stopAll() {
+        long now = System.currentTimeMillis();
+        if (now - sLastStopAllAt < 1200L) {
+            return;
+        }
+        sLastStopAllAt = now;
+        // task-165：统一停止入口（宿主进程 + 主进程 + Node UI overlay + 前台通知）。
+        PocRuntime.stopAllScripts(appContext);
         execution = null;
         try {
             PocRuntime.stopAllHostScripts();
@@ -453,6 +463,11 @@ final class PocFloatingBar {
             Log.w(TAG, "停止全部脚本失败", error);
         }
         updateLabel();
+    }
+
+    /** task-166：调试广播复验悬浮菜单停止入口（仅 flutterPoc debug）。 */
+    static void debugStopAll() {
+        stopAll();
     }
 
     /** 收起/展开：对齐原厂控制条——收起时隐藏标题与整排按钮，只留箭头。 */
