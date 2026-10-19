@@ -55,18 +55,8 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     private static final String TAG = "MyScriptListFragment";
 
     /**
-     * 文件页列表实现开关。
-     *
-     * 历史上是"S2 实验开关、默认关闭"；**现已默认开启**（Compose 版为默认实现）。
-     * 保留这个 key 与分支只是为了出问题时能一键回退旧实现：
-     *
-     *   adb shell am force-stop com.jdkshen.aijspro
-     *   # 需要回退时把该布尔写成 false（debug 包可 run-as 改 shared_prefs）
-     *
-     * 之所以敢默认开启：`MiuixScriptListHost` 已逐项对齐旧 `ExplorerView` 的全部可触达动作
-     * （14 个 explorer 动作、面包屑、排序、项目菜单、状态保存/恢复、返回键），
-     * 且 `mExplorerView` 为 null 的路径全部做过判空（本文件 `ScriptOperations` 的
-     * view 参数允许 null，`showMessageWithoutThreadSwitch` 见 null 即退化为 Toast）。
+     * 历史「S2 实验开关」的偏好键（task-177 去 Miuix 后列表统一用原生 `ExplorerView`）。
+     * 键名保留，避免旧版共享偏好/回退脚本读取时找不到键；新构建不再读它。
      */
     public static final String PREF_MIUIX_FILE_LIST = "aijspro.experimental.miuix_file_list";
 
@@ -76,16 +66,8 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     ExplorerView mExplorerView;
 
-    private com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost mMiuixHost;
-    private static final String STATE_MIUIX_FILE_LIST = "miuix_file_list_state";
-    private Bundle mMiuixSavedState;
     private static final String STATE_LEGACY_FILE_LIST = "legacy_file_list_state";
     private Bundle mLegacySavedState;
-
-    private boolean useMiuixFileList() {
-        return getContext() == null || PreferenceManager.getDefaultSharedPreferences(getContext())
-                .getBoolean(PREF_MIUIX_FILE_LIST, true);
-    }
 
     private FloatingActionMenu mFloatingActionMenu;
 
@@ -93,7 +75,6 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (savedInstanceState != null) {
-            mMiuixSavedState = savedInstanceState.getBundle(STATE_MIUIX_FILE_LIST);
             mLegacySavedState = savedInstanceState.getBundle(STATE_LEGACY_FILE_LIST);
         }
         EventBus.getDefault().register(this);
@@ -102,22 +83,7 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     @NonNull
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        if (useMiuixFileList()) {
-            mMiuixHost = new com.jdkshen.aijspro.ui.explorer.MiuixScriptListHost(this, mMiuixSavedState);
-            // 滚动时收起主界面悬浮按钮。旧实现把这条接在 ExplorerView 上（setUpViews 里），
-            // 而 Miuix 模式下 setUpViews() 不执行 —— 这里补同一条联动，否则 FAB 一直挡着列表。
-            // 注意：Kotlin 的 (Boolean) -> Unit 在 Java 侧是 Function1<Boolean, Unit>，
-            // lambda 必须显式返回 Unit.INSTANCE，否则类型推断失败。
-            mMiuixHost.setListScrollStateListener(scrolling -> {
-                if (getActivity() instanceof MainActivity) {
-                    ((MainActivity) getActivity()).onMainListScrollStateChanged(scrolling);
-                }
-                return kotlin.Unit.INSTANCE;
-            });
-            View view = mMiuixHost.createView();
-            mMiuixHost.reload();
-            return view;
-        }
+        // task-177：Miuix 文件列表宿主已从构建排除，历史主界面统一用原生 ExplorerView。
         View view = inflater.inflate(R.layout.fragment_my_script_list, container, false);
         mExplorerView = view.findViewById(R.id.script_file_list);
         setUpViews();
@@ -190,13 +156,6 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     @Override
     public boolean onBackPressed(Activity activity) {
-        if (mMiuixHost != null) {
-            if (mMiuixHost.canGoBack()) {
-                mMiuixHost.goBack();
-                return true;
-            }
-            return false;
-        }
         if (mFloatingActionMenu != null && mFloatingActionMenu.isExpanded()) {
             mFloatingActionMenu.collapse();
             return true;
@@ -220,29 +179,19 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
         }
     }
 
-    /** Used by the Miuix search overlay to return to and reveal a selected file or directory. */
+    /** 搜索浮层选中文件/目录后回到列表并定位（task-177：只剩原生 ExplorerView 一条路径）。 */
     public boolean revealFileFromSearch(String path) {
-        if (mMiuixHost != null) {
-            return mMiuixHost.revealFile(path);
-        }
         return mExplorerView != null && mExplorerView.revealFile(path);
     }
 
     /** 资源页「打开文件夹」：进入该目录本身（不是只高亮它所在的行）。 */
     public boolean openDirectoryFromSearch(String path) {
-        if (mMiuixHost != null) {
-            return mMiuixHost.openDirectory(path);
-        }
         return mExplorerView != null && mExplorerView.openDirectory(path);
     }
 
     @Subscribe
     public void onQuerySummit(QueryEvent event) {
         if (!isShown()) {
-            return;
-        }
-        if (mMiuixHost != null) {
-            mMiuixHost.setQuery(event == QueryEvent.CLEAR ? null : event.getQuery());
             return;
         }
         if (event == QueryEvent.CLEAR) {
@@ -271,19 +220,12 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
     @Override
     public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
-        Bundle state = mMiuixHost == null ? mMiuixSavedState : mMiuixHost.saveState();
-        if (state != null) outState.putBundle(STATE_MIUIX_FILE_LIST, state);
         Bundle legacy = mExplorerView == null ? mLegacySavedState : mExplorerView.saveBrowserState();
         if (legacy != null) outState.putBundle(STATE_LEGACY_FILE_LIST, legacy);
     }
 
     @Override
     public void onDestroyView() {
-        if (mMiuixHost != null) {
-            mMiuixSavedState = mMiuixHost.saveState();
-            mMiuixHost.dispose();
-            mMiuixHost = null;
-        }
         if (mExplorerView != null) {
             mLegacySavedState = mExplorerView.saveBrowserState();
             mExplorerView.setOnScrollStateChangedCallback(null);
@@ -306,8 +248,7 @@ public class MyScriptListFragment extends ViewPagerFragment implements FloatingA
 
     @Override
     public void onClick(FloatingActionButton button, int pos) {
-        ExplorerPage page = mMiuixHost != null ? mMiuixHost.getCurrentPage()
-                : mExplorerView != null ? mExplorerView.getCurrentPage() : null;
+        ExplorerPage page = mExplorerView != null ? mExplorerView.getCurrentPage() : null;
         if (page == null || getContext() == null)
             return;
         switch (pos) {

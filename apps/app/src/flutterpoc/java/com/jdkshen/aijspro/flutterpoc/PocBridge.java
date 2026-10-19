@@ -64,12 +64,12 @@ final class PocBridge {
     };
     private static final String[] RUNTIME_STRINGS = {"key_npm_registry", "key_script_dir_path"};
 
-    private static final String MAIN_ACTIVITY = "com.jdkshen.aijspro.ui.main.MainActivity";
+    /** task-177 去 Miuix 后唯一界面线；Flutter 页面互跳仍用它。 */
+    private static final String GLASS_ACTIVITY = "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity";
     /** AI.js Pro 新版多文件脚本工作区（Ace 编辑器，含文件树/标签/日志面板）。 */
     private static final String EDITOR_ACTIVITY = "com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity";
     private static final String EDITOR_PREFS = "pro_code_editor";
     private static final String LOG_ACTIVITY = "com.jdkshen.aijspro.ui.log.LogActivity";
-    private static final String SETTINGS_ACTIVITY = "com.jdkshen.aijspro.ui.settings.MiuixSettingsActivity";
     private static final String TERMINAL_ACTIVITY = "com.jdkshen.aijspro.ui.terminal.EmbeddedTerminalActivity";
 
     private PocBridge() {
@@ -197,8 +197,8 @@ final class PocBridge {
                 launch(activity, LOG_ACTIVITY, null);
                 return Boolean.TRUE;
             case "engineSettings":
-                launch(activity, SETTINGS_ACTIVITY, null);
-                return Boolean.TRUE;
+                // task-177：Miuix 设置页已退役；设置已全部在 Flutter 设置页，没有原生页可开。
+                throw new IOException("设置已统一到 Flutter 设置页");
             case "openTerminal": {
                 String path = args.optString("path", "").trim();
                 File dir = path.isEmpty() ? new File(Pref.getScriptDirPath()) : new File(path);
@@ -215,7 +215,9 @@ final class PocBridge {
                     activity.startActivity(new Intent().setClassName(activity, EDITOR_ACTIVITY)
                             .putExtra("path", target.getAbsolutePath()));
                 } else {
-                    launch(activity, MAIN_ACTIVITY,
+                    // task-177：没有可恢复文件时不再退回已退役的 Miuix 主界面，
+                    // 直接把 Flutter 玻璃首页带回前台（用户从文件列表选文件）。
+                    launch(activity, GLASS_ACTIVITY,
                             Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 }
                 return Boolean.TRUE;

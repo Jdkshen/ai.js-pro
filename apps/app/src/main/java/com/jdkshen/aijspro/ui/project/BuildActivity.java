@@ -6,13 +6,16 @@ import android.os.Bundle;
 import androidx.annotation.Nullable;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
+import com.jdkshen.aijspro.ui.FlutterGlassEntry;
 
 /**
- * 打包页入口：界面已统一到 Miuix（{@link MiuixBuildActivity}），本类只做转发。
+ * 打包页入口。
  *
- * <p>外部（编辑器菜单、快捷方式、示例页）用 {@link #EXTRA_SOURCE} 传脚本路径，
- * 这里原样转交给 Miuix 页面，因此常量与键名都不能改。
- * 旧 XML 实现（{@code activity_build} 与其中的 ApkBuilder 调用）已随 UI 统一删除。
+ * <p>task-177「去掉 Miuix，统一 Flutter 界面」：打包界面统一到 Flutter 玻璃
+ * {@code ProjectPage}。本类只把源文件路径写进 {@code native_packaging_request} 并拉起
+ * Flutter 界面（{@link FlutterGlassEntry#requestPackaging}），不再转发到已退役的
+ * Miuix 打包页。{@link #EXTRA_SOURCE} 的键名/取值来自调用方（原生 Ace 编辑器、外部
+ * Intent、快捷方式），不能改。
  */
 public class BuildActivity extends BaseActivity {
 
@@ -22,12 +25,9 @@ public class BuildActivity extends BaseActivity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        Intent target = new Intent(this, MiuixBuildActivity.class);
         Intent from = getIntent();
-        if (from != null && from.hasExtra(EXTRA_SOURCE)) {
-            target.putExtra(EXTRA_SOURCE, from.getStringExtra(EXTRA_SOURCE));
-        }
-        startActivity(target);
+        String source = from == null ? null : from.getStringExtra(EXTRA_SOURCE);
+        FlutterGlassEntry.requestPackaging(this, source);
         finish();
     }
 }

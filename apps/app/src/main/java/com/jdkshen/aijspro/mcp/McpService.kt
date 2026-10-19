@@ -15,7 +15,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.jdkshen.aijspro.R
 import com.jdkshen.aijspro.Pref
-import com.jdkshen.aijspro.ui.mcp.MiuixMcpActivity
 import java.io.File
 import java.net.NetworkInterface
 import java.util.Collections
@@ -212,7 +211,13 @@ class McpService : Service() {
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
         val immutable = if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
-        val content = PendingIntent.getActivity(this, 11, Intent(this, MiuixMcpActivity::class.java),
+        // task-177：Miuix MCP 页已从构建排除；通知点击改为打开 Flutter 玻璃界面，
+        // 用户从设置/抽屉进入 Flutter 的 MCP 页面（DeviceSettingsPage）。
+        val glassEntry = Intent()
+            .setClassName(this, "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val content = PendingIntent.getActivity(this, 11, glassEntry,
             PendingIntent.FLAG_UPDATE_CURRENT or immutable)
         val stop = PendingIntent.getService(this, 12, Intent(this, McpService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or immutable)

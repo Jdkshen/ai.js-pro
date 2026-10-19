@@ -28,7 +28,6 @@ public class UpdateCheckDialog {
     private static final long MIN_SHOW_DURATION_MS = 400;
 
     private MaterialDialog mProgress;
-    private Object mMiuixHandle;
     private Context mContext;
     private long mShownAtMs;
     private final android.os.Handler mHandler =
@@ -40,20 +39,14 @@ public class UpdateCheckDialog {
 
     public void show() {
         mShownAtMs = android.os.SystemClock.uptimeMillis();
-        // Miuix（Compose）提示框：旧 Material 进度框在网络很快时会一闪而过且风格不搭。
-        // miuix 源集已是唯一界面线，这里直接调用；只有拿不到 Activity 时才回退 Material。
-        if (mContext instanceof Activity) {
-            mMiuixHandle = com.jdkshen.aijspro.ui.update.MiuixUpdateCheckDialog.show(
-                    (Activity) mContext, mContext.getString(R.string.text_checking_update));
-        }
-        if (mMiuixHandle == null) {
-            mProgress = new MaterialDialog.Builder(mContext)
-                    .progress(true, 0)
-                    .content(R.string.text_checking_update)
-                    .cancelable(false)
-                    .build();
-            mProgress.show();
-        }
+        // task-177：Miuix 提示框已退役，更新检查提示统一用 MaterialDialog
+        // （最短显示时间 MIN_SHOW_DURATION_MS 仍然保留，避免一闪而过）。
+        mProgress = new MaterialDialog.Builder(mContext)
+                .progress(true, 0)
+                .content(R.string.text_checking_update)
+                .cancelable(false)
+                .build();
+        mProgress.show();
         VersionService.getInstance()
                 .checkForUpdates(mContext)
                 .observeOn(AndroidSchedulers.mainThread())
@@ -108,10 +101,7 @@ public class UpdateCheckDialog {
     }
 
     private void dismissProgressNow() {
-        if (mMiuixHandle != null) {
-            com.jdkshen.aijspro.ui.update.MiuixUpdateCheckDialog.dismiss(mMiuixHandle);
-            mMiuixHandle = null;
-        } else if (mProgress != null) {
+        if (mProgress != null) {
             mProgress.dismiss();
             mProgress = null;
         }

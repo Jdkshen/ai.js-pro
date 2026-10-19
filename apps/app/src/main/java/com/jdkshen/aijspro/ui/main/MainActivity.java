@@ -134,8 +134,8 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         setContentView(R.layout.activity_main);
         bindViews();
         setUpViews();
-        installMiuixNavigationIfNeeded();
-        installMiuixFabIfNeeded();
+        // task-177：Miuix 顶部导航/FAB 宿主已从构建排除，主界面保留原生 Toolbar + FAB 作为
+        // 历史兜底（Flutter 才是唯一入口，正常不会被走到）。
         // Match the familiar Auto.js Pro startup flow: scripts are the primary
         // workspace. The service dashboard remains available from the drawer.
         showPage(0);
@@ -244,42 +244,14 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         });
     }
 
-    /** Installs the Compose/Miuix bar while keeping the native pager and lists. */
+    /** task-177：Miuix 顶部导航宿主已从构建排除，历史主界面直接使用原生 Toolbar。 */
     private void installMiuixNavigationIfNeeded() {
-        try {
-            View bar = com.jdkshen.aijspro.ui.main.MiuixMainNavigationHost.createView(this);
-            AppBarLayout appBar = findViewById(R.id.app_bar);
-            Toolbar toolbar = findViewById(R.id.toolbar);
-            toolbar.setVisibility(View.GONE);
-            // Match AijsMiuixTheme backgrounds (light #F7F7F7 / dark black)
-            // so the status bar and tab strip blend with the Miuix navigation bar.
-            //
-            // ⚠️ 必须跟 Compose 主题**共用同一份判定**，不要在这里自己读 Pref 重算：
-            // 两边各算一次就会不一致 —— 真机（新机 Android 16，系统深色 + 应用内跟随系统）
-            // 上出现过：这里算出 dark 把状态栏刷成纯黑，而页面走 AijsMiuixThemeState 的旧值
-            // 仍按浅色画，结果就是「黑状态栏配白页面」。
-            applyMainNavigationTheme();
-            appBar.addView(bar, 0, new AppBarLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            // The Miuix shell stays fixed; only the file RecyclerView should scroll.
-            for (int i = 0; i < appBar.getChildCount(); i++) {
-                View child = appBar.getChildAt(i);
-                if (child.getLayoutParams() instanceof AppBarLayout.LayoutParams) {
-                    AppBarLayout.LayoutParams params = (AppBarLayout.LayoutParams) child.getLayoutParams();
-                    params.setScrollFlags(0);
-                    child.setLayoutParams(params);
-                }
-            }
-            appBar.setExpanded(true, false);
-        } catch (Throwable error) {
-            // A broken pilot must fall back to the proven toolbar, not break startup.
-            android.util.Log.e(LOG_TAG, "Unable to install Miuix main navigation", error);
-        }
+        // no-op：保留方法名给历史调用点/子类，不再安装 Compose 导航。
     }
 
     private void applyMainNavigationTheme() {
         if (mTabLayout == null) return;
-        boolean dark = com.jdkshen.aijspro.theme.AijsMiuixThemeKt.isAijsDarkThemeResolved(this);
+        boolean dark = com.jdkshen.aijspro.theme.AppThemeRepository.get(this).isDark();
         int surface = dark ? android.graphics.Color.BLACK : 0xFFF7F7F7;
         int normal = dark ? 0xAAFFFFFF : 0x82000000;
         mTabLayout.setBackgroundColor(surface);
@@ -316,29 +288,9 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         }
     }
 
+    /** task-177：Miuix FAB 宿主已从构建排除，mMiuixFab 保持 null（各处已有空判断）。 */
     private void installMiuixFabIfNeeded() {
-        try {
-            mMiuixFab = com.jdkshen.aijspro.ui.main.MiuixMainFabHost.createView(this);
-            ViewGroup parent = (ViewGroup) mFab.getParent();
-            androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams params =
-                    new androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            params.gravity = Gravity.END | Gravity.BOTTOM;
-            int margin = (int) (16 * getResources().getDisplayMetrics().density);
-            params.setMargins(margin, margin, margin, margin);
-            parent.addView(mMiuixFab, params);
-            // Remove the legacy FAB entirely in pilot mode: ViewPagerFragment.onPageShow
-            // calls mFab.show() on every page switch, which would bring the old blue FAB
-            // back on top of the Miuix one.
-            ViewGroup fabParent = (ViewGroup) mFab.getParent();
-            if (fabParent != null) {
-                fabParent.removeView(mFab);
-            }
-            mFab.setVisibility(View.GONE);
-            mFab.setAlpha(0f);
-        } catch (Throwable error) {
-            android.util.Log.e(LOG_TAG, "Unable to install Miuix FAB", error);
-        }
+        mMiuixFab = null;
     }
 
     public void performMainFabClickFromMiuix() {
@@ -526,11 +478,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private ViewPagerFragment createManageFragment() {
-        try {
-            return new com.jdkshen.aijspro.ui.task.MiuixTaskManagerFragment();
-        } catch (Throwable error) {
-            android.util.Log.e(LOG_TAG, "Unable to create Miuix manage page", error);
-        }
+        // task-177：Miuix 管理页已从构建排除，历史主界面用原生任务管理页。
         return new TaskManagerFragment();
     }
 
@@ -561,29 +509,17 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
     }
 
     private ViewPagerFragment createTutorialFragment() {
-        try {
-            return new com.jdkshen.aijspro.ui.sample.MiuixSampleFragment();
-        } catch (Throwable error) {
-            android.util.Log.e(LOG_TAG, "Unable to create Miuix sample page", error);
-        }
+        // task-177：Miuix 示例页已从构建排除，历史主界面用原生文档页。
         return new DocsFragment();
     }
 
     private ViewPagerFragment createMarketFragment() {
-        try {
-            return new com.jdkshen.aijspro.ui.plugin.MiuixPluginFragment();
-        } catch (Throwable error) {
-            android.util.Log.e(LOG_TAG, "Unable to create Miuix plugin page", error);
-        }
+        // task-177：Miuix 插件市场页已从构建排除，历史主界面用原生市场页。
         return new MarketFragment();
     }
 
     private ViewPagerFragment createCommunityFragment() {
-        try {
-            return new com.jdkshen.aijspro.ui.resource.MiuixResourceFragment();
-        } catch (Throwable error) {
-            android.util.Log.e(LOG_TAG, "Unable to create Miuix resource page", error);
-        }
+        // task-177：Miuix 资源页已从构建排除，历史主界面用原生社区页。
         return new CommunityFragment();
     }
 

@@ -67,7 +67,6 @@ import com.jdkshen.aijspro.model.script.ProjectSharing;
 import com.jdkshen.aijspro.external.HostScripts;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
 import com.jdkshen.aijspro.log.UnifiedConsoleLogBridge;
-import com.jdkshen.aijspro.ui.common.MiuixHintDialog;
 import com.jdkshen.aijspro.ui.common.NotAskAgainDialog;
 import com.jdkshen.aijspro.ui.edit.ClassSearchDialogBuilder;
 import com.jdkshen.aijspro.ui.edit.debug.DebuggerSingleton;
@@ -2202,50 +2201,81 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         }
     }
 
+    /**
+     * 另存为：task-177 去 Miuix 后改用旧的 Material 文件选择器（{@code FileChooserDialogBuilder}）
+     * 选目录，再用 MaterialDialog 输入文件名；保存逻辑与原 Compose 弹窗版完全一致。
+     */
     private void saveActiveAs() {
         final EditorTab tab = mActiveTab;
         if (tab == null) return;
-        com.jdkshen.aijspro.ui.common.MiuixFileChooserDialog.showDirectory(this, "选择另存位置",
-                android.os.Environment.getExternalStorageDirectory().getPath(), Pref.getScriptDirPath(), directory ->
-                com.jdkshen.aijspro.ui.common.MiuixInputDialog.show(this, "另存为", "文件名（包含扩展名）",
-                        tab.file.getName(), null, false, (name, checked) -> {
-                            if (!name.equals(ExternalEditorDocument.safeName(name))) return "请输入有效的文件名";
-                            return new File(directory, name).exists() ? "文件已存在，请更换名称" : null;
-                        }, "保存", "取消", (name, checked) -> {
-                          tab.editor.withSnapshot(() -> {
-                            if (!mTabs.contains(tab) || isFinishing()) return;
-                            File target = new File(directory, name);
-                            boolean created = false;
-                            try {
-                                if (!target.createNewFile()) throw new IOException("文件已存在");
-                                created = true;
-                                String source = expandedText(tab);
-                                FileUtils.writeStringToFile(target, source, "UTF-8");
-                                if (tab.file.equals(mExternalFile)) {
-                                    mExternalUri = null;
-                                    mExternalFile = null;
-                                    mExternalDraftDirty = false;
-                                    getIntent().setData(null);
-                                }
-                                tab.file = target;
-                                tab.savedText = source;
-                                tab.dirtyMarkerShown = false;
-                                tab.editor.markTextAsSaved(source);
-                                getIntent().putExtra(EXTRA_PATH, target.getPath());
-                                switchWorkspace(target.getParentFile());
-                                mProjectRoot = findProjectRoot(target.getParentFile());
-                                tab.editor.setDocument(target, mWorkspaceRoot);
-                                refreshTabs();
-                                updateToolbarState();
-                                com.jdkshen.aijspro.model.explorer.Explorers.workspace().notifyChildrenChanged(
-                                        new com.jdkshen.aijspro.model.explorer.ExplorerDirPage(target.getParentFile(), null));
-                                toast("已另存：" + target.getPath());
-                            } catch (IOException error) {
-                                if (created) target.delete();
-                                toast("另存失败：" + error.getMessage());
-                            }
-                          });
-                        }));
+        new com.jdkshen.aijspro.ui.filechooser.FileChooserDialogBuilder(this)
+                .dir(android.os.Environment.getExternalStorageDirectory().getPath(), Pref.getScriptDirPath())
+                .chooseDir()
+                .singleChoice(directory -> showSaveActiveAsNameDialog(tab, directory.getPath()))
+                .title("选择另存位置")
+                .show();
+    }
+
+    private void showSaveActiveAsNameDialog(final EditorTab tab, final String directoryPath) {
+        final File directory = new File(directoryPath);
+        new MaterialDialog.Builder(this)
+                .title("另存为")
+                .inputType(android.text.InputType.TYPE_CLASS_TEXT)
+                .alwaysCallInputCallback()
+                .input("文件名（包含扩展名）", tab.file.getName(), false, (dialog, input) -> {
+                    String name = input == null ? "" : input.toString().trim();
+                    boolean valid = !name.isEmpty()
+                            && name.equals(ExternalEditorDocument.safeName(name))
+                            && !new File(directory, name).exists();
+                    dialog.getActionButton(
+                            com.afollestad.materialdialogs.DialogAction.POSITIVE)
+                            .setEnabled(valid);
+                })
+                .positiveText("保存")
+                .negativeText("取消")
+                .onPositive((dialog, which) -> {
+                    String name = dialog.getInputEditText() == null ? ""
+                            : dialog.getInputEditText().getText().toString().trim();
+                    if (name.isEmpty()) return;
+                    saveActiveAsTo(tab, directory, name);
+                })
+                .show();
+    }
+
+    private void saveActiveAsTo(final EditorTab tab, final File directory, final String name) {
+        tab.editor.withSnapshot(() -> {
+            if (!mTabs.contains(tab) || isFinishing()) return;
+            File target = new File(directory, name);
+            boolean created = false;
+            try {
+                if (!target.createNewFile()) throw new IOException("文件已存在");
+                created = true;
+                String source = expandedText(tab);
+                FileUtils.writeStringToFile(target, source, "UTF-8");
+                if (tab.file.equals(mExternalFile)) {
+                    mExternalUri = null;
+                    mExternalFile = null;
+                    mExternalDraftDirty = false;
+                    getIntent().setData(null);
+                }
+                tab.file = target;
+                tab.savedText = source;
+                tab.dirtyMarkerShown = false;
+                tab.editor.markTextAsSaved(source);
+                getIntent().putExtra(EXTRA_PATH, target.getPath());
+                switchWorkspace(target.getParentFile());
+                mProjectRoot = findProjectRoot(target.getParentFile());
+                tab.editor.setDocument(target, mWorkspaceRoot);
+                refreshTabs();
+                updateToolbarState();
+                com.jdkshen.aijspro.model.explorer.Explorers.workspace().notifyChildrenChanged(
+                        new com.jdkshen.aijspro.model.explorer.ExplorerDirPage(target.getParentFile(), null));
+                toast("已另存：" + target.getPath());
+            } catch (IOException error) {
+                if (created) target.delete();
+                toast("另存失败：" + error.getMessage());
+            }
+        });
     }
 
     @Override
@@ -2386,20 +2416,12 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void onTabLongPress() {
         AceCodeEditor editor = activeEditor();
         if (editor == null) return;
-        // Miuix 皮肤下走 Compose 提示弹窗（与设置/更新弹窗同一套视觉）；
-        // 宿主不支持时回退旧的 MaterialDialog 实现，两者共用同一 pref key。
-        boolean handled = MiuixHintDialog.show(this,
-                getString(R.string.text_alert),
-                getString(R.string.hint_long_press_tab_beautify),
-                "确定",
-                "pro_editor.tab_long_press_beautify");
-        if (!handled) {
-            new NotAskAgainDialog.Builder(this, "pro_editor.tab_long_press_beautify")
-                    .title(R.string.text_alert)
-                    .content(R.string.hint_long_press_tab_beautify)
-                    .positiveText("确定")
-                    .show();
-        }
+        // task-177：Miuix 提示弹窗已随源集退役，长按 TAB 说明统一用 NotAskAgainDialog。
+        new NotAskAgainDialog.Builder(this, "pro_editor.tab_long_press_beautify")
+                .title(R.string.text_alert)
+                .content(R.string.hint_long_press_tab_beautify)
+                .positiveText("确定")
+                .show();
         editor.beautifyCode();
     }
 

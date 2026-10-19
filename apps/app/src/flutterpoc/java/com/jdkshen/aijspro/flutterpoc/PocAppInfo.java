@@ -29,14 +29,14 @@ import java.io.IOException;
  *       （{@code ""} 表示清空恢复内置源，非空只接受 http:// 或 https:// 开头）
  *       → {@code {"url":"..."}}（写入后回读的生效值）。</li>
  *   <li>{@code openIssueReport}：浏览器打开仓库 issues 页（无参）→ {@code true}。</li>
- *   <li>{@code openAbout}：启动 Miuix 关于页（无参）→ {@code true}。</li>
- *   <li>{@code openLicenses}：启动 Miuix 许可页（无参）→ {@code true}。</li>
+ *   <li>{@code openAbout} / {@code openLicenses}：task-177 去 Miuix 后由 Flutter 自己展示
+ *       AboutDialog / LicensePage，桥方法保留但只回 {@code true}（兼容旧 AOT，不启动原生页）。</li>
  *   <li>{@code editorSettings}：无 {@code textSize} 参数读字号；带 {@code textSize}
  *       （8..40，JSON number 即可）写入并回读 → {@code {"textSize":14.0}}。</li>
  * </ul>
  *
- * <p>两个 Miuix 设置页用类名字符串启动：POC 调试源集会被挂进所有 debug 变体，
- * 这样不产生对 miuix 源集的编译期依赖（与 {@link PocBridge} 启动原生页的写法一致）。
+ * <p>task-177「去掉 Miuix，统一 Flutter 界面」：Miuix 的关于/许可两个 Activity 已从构建
+ * 排除，这里不再持有它们的类名；关于/许可的展示移到 Flutter 设置页。
  */
 final class PocAppInfo {
 
@@ -46,12 +46,6 @@ final class PocAppInfo {
     private static final float DEFAULT_TEXT_SIZE_SP = 14f;
     private static final float MIN_TEXT_SIZE_SP = 8f;
     private static final float MAX_TEXT_SIZE_SP = 40f;
-
-    /** Miuix 源集里的设置页（manifest 已声明，同应用显式 Intent 无需 exported）。 */
-    private static final String ABOUT_ACTIVITY =
-            "com.jdkshen.aijspro.ui.settings.MiuixAboutActivity";
-    private static final String LICENSES_ACTIVITY =
-            "com.jdkshen.aijspro.ui.settings.MiuixLicensesActivity";
 
     private PocAppInfo() {
     }
@@ -65,9 +59,9 @@ final class PocAppInfo {
             case "openIssueReport":
                 return openIssueReport(activity);
             case "openAbout":
-                return openActivity(activity, ABOUT_ACTIVITY);
             case "openLicenses":
-                return openActivity(activity, LICENSES_ACTIVITY);
+                // Flutter 设置页自己展示 AboutDialog / LicensePage（task-177 去 Miuix）。
+                return Boolean.TRUE;
             case "editorSettings":
                 return editorSettings(activity, args);
             default:
@@ -110,12 +104,6 @@ final class PocAppInfo {
     /** 问题反馈：用系统浏览器打开仓库 issues 页（my_github + "/issues"）。 */
     private static Object openIssueReport(Activity activity) {
         IntentTool.browse(activity, activity.getString(R.string.my_github) + "/issues");
-        return Boolean.TRUE;
-    }
-
-    /** 按类名启动同应用内的设置页（Miuix 关于/许可）。 */
-    private static Object openActivity(Activity activity, String className) {
-        activity.startActivity(new Intent().setClassName(activity, className));
         return Boolean.TRUE;
     }
 

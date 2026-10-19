@@ -72,14 +72,11 @@ public class LogActivity extends BaseActivity {
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (!UnifiedConsoleLogBridge.isAvailable() || !UnifiedConsoleLogBridge.isMainProcess()) {
-            // 普通构建没有统一日志源；:script/:native 进程里统一环是空的（103 都转发到主进程）。
-            // 这两种情况都保持旧行为（Miuix 运行日志页），避免 console.show() 显示空页面。
+            // task-177：Miuix 运行日志页已随源集退役。普通构建没有统一日志源、
+            // :script/:native 进程里统一环为空（103 都转发到主进程）：直接结束并明确提示，
+            // 不再回退 Miuix 页面；Flutter 构建的日志入口都走 Flutter LogPage。
+            Toast.makeText(this, "统一日志源未就绪，请从 Flutter 界面打开运行日志", Toast.LENGTH_SHORT).show();
             finish();
-            try {
-                startActivity(new android.content.Intent(this, MiuixLogActivity.class));
-            } catch (Throwable error) {
-                Log.w(TAG, "Cannot open Miuix log page", error);
-            }
             return;
         }
         mPalette = AppThemeRepository.get(this).getPalette();

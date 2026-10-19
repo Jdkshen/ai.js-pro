@@ -93,8 +93,16 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     @NonNull
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        mMiuixDrawerView = MiuixDrawerHost.createView(this);
-        return mMiuixDrawerView;
+        // task-177：Miuix 抽屉宿主已从构建排除，旧的 XML 抽屉此前也已删除。
+        // 历史主界面不再可达（唯一入口是 Flutter 玻璃界面），这里返回一个占位空容器，
+        // 保证仍被实例化时不会崩溃 / 不会去加载已退役的 Compose 界面。
+        android.widget.FrameLayout placeholder = new android.widget.FrameLayout(inflater.getContext());
+        android.widget.TextView notice = new android.widget.TextView(inflater.getContext());
+        notice.setText("旧抽屉已退役，请使用 Flutter 玻璃界面");
+        notice.setGravity(android.view.Gravity.CENTER);
+        placeholder.addView(notice);
+        mMiuixDrawerView = placeholder;
+        return placeholder;
     }
 
     @Override

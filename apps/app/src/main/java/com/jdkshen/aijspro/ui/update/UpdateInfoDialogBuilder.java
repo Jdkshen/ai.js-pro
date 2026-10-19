@@ -102,39 +102,11 @@ public class UpdateInfoDialogBuilder extends MaterialDialog.Builder {
         if (mSharedPreferences.getBoolean(KEY_DO_NOT_ASK_AGAIN_FOR_VERSION + mVersionInfo.versionCode, false)) {
             return null;
         }
-        if (showWithMiuix()) {
-            return null;
-        }
+        // task-177：Miuix 版「发现新版本」对话框已随 miuix 源集退役，统一走 Material 实现。
         if (mView == null) {
             buildView();
         }
         return super.show();
-    }
-
-    /** Miuix 版：「发现新版本」走 Compose 对话框；拿不到 Activity 时回退 Material 实现。 */
-    private boolean showWithMiuix() {
-        if (!(getContext() instanceof android.app.Activity)) {
-            return false;
-        }
-        // 历史更新：只传展示用的字符串，main 源集不需要依赖 miuix 的任何类型。
-        List<VersionInfo.OldVersion> history = mVersionInfo.historyForDialog();
-        String[] historyTitles = new String[history.size()];
-        String[] historyNotes = new String[history.size()];
-        for (int i = 0; i < history.size(); i++) {
-            VersionInfo.OldVersion entry = history.get(i);
-            historyTitles[i] = entry.displayTitle();
-            historyNotes[i] = entry.issues == null ? "" : entry.issues;
-        }
-        return com.jdkshen.aijspro.ui.update.MiuixUpdateDialog.show(
-                (android.app.Activity) getContext(),
-                getContext().getString(R.string.text_new_version) + " " + mVersionInfo.versionName,
-                mVersionInfo.releaseNotes,
-                mVersionInfo.versionCode,
-                mShowDoNotAskAgain,
-                KEY_DO_NOT_ASK_AGAIN_FOR_VERSION,
-                (Runnable) () -> directlyDownload(mVersionInfo),
-                historyTitles,
-                historyNotes);
     }
 
     private void setCurrentVersionIssues(View view, VersionInfo info) {

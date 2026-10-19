@@ -113,29 +113,9 @@ public class DownloadManager {
     }
 
     /**
-     * 下载进度 UI：Miuix（Compose）优先，context 不是 Activity（或挂不上对话框）时回退 Material。
-     * miuix 源集已是唯一界面线，这里直接调用，不再需要反射包装。
+     * 下载进度 UI：task-177 去 Miuix 后统一用 MaterialDialog（Miuix 进度框已随源集退役）。
      */
     private ProgressUi createDownloadProgressUi(Context context, String url, String fileName) {
-        if (context instanceof Activity) {
-            Object handle = com.jdkshen.aijspro.ui.update.MiuixDownloadProgressDialog.show(
-                    (Activity) context, "正在下载更新", fileName,
-                    () -> DownloadManager.getInstance().cancelDownload(url));
-            if (handle != null) {
-                return new ProgressUi() {
-                    @Override
-                    public void setProgress(int progress) {
-                        com.jdkshen.aijspro.ui.update.MiuixDownloadProgressDialog
-                                .setProgress(handle, progress);
-                    }
-
-                    @Override
-                    public void dismiss() {
-                        com.jdkshen.aijspro.ui.update.MiuixDownloadProgressDialog.dismiss(handle);
-                    }
-                };
-            }
-        }
         MaterialDialog dialog = new MaterialDialog.Builder(context)
                 .progress(false, 100)
                 .title(fileName)

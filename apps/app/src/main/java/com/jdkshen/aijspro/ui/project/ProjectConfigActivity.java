@@ -2,17 +2,20 @@ package com.jdkshen.aijspro.ui.project;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
+import com.jdkshen.aijspro.ui.FlutterGlassEntry;
 
 /**
- * 新建/编辑项目页入口：界面已统一到 Miuix（{@link MiuixProjectConfigActivity}），本类只做转发。
+ * 项目配置页入口。
  *
- * <p>调用方（文件列表 FAB「项目」、编辑器菜单、项目工具条）用 EXTRA_PARENT_DIRECTORY /
- * EXTRA_NEW_PROJECT / EXTRA_DIRECTORY 传参，这里原样转交给 Miuix 页面，因此常量与键名都不能改。
- * 旧 XML 实现（{@code activity_project_config}）已随 UI 统一删除。
+ * <p>task-177「去掉 Miuix，统一 Flutter 界面」：项目配置/打包已统一到 Flutter 玻璃
+ * {@code ProjectPage}。带 {@link #EXTRA_DIRECTORY}（已有项目目录，原生编辑器菜单传入）时
+ * 直接请求 Flutter 打开该项目的打包/配置页；「新建项目」只拿到父目录、还没有 project.json，
+ * 交给 Flutter 文件页的新建项目流程（先打开 Flutter 界面并提示），不再转发 Miuix 页面。
  */
 public class ProjectConfigActivity extends BaseActivity {
 
@@ -25,22 +28,14 @@ public class ProjectConfigActivity extends BaseActivity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        Intent target = new Intent(this, MiuixProjectConfigActivity.class);
         Intent from = getIntent();
-        if (from != null) {
-            if (from.hasExtra(EXTRA_PARENT_DIRECTORY)) {
-                target.putExtra(EXTRA_PARENT_DIRECTORY, from.getStringExtra(EXTRA_PARENT_DIRECTORY));
-            }
-            if (from.hasExtra(EXTRA_DIRECTORY)) {
-                target.putExtra(EXTRA_DIRECTORY, from.getStringExtra(EXTRA_DIRECTORY));
-            }
-            if (from.hasExtra(EXTRA_NEW_PROJECT)) {
-                target.putExtra(EXTRA_NEW_PROJECT, from.getBooleanExtra(EXTRA_NEW_PROJECT, false));
-            }
+        String directory = from == null ? null : from.getStringExtra(EXTRA_DIRECTORY);
+        if (directory != null && !directory.trim().isEmpty()) {
+            FlutterGlassEntry.requestPackaging(this, directory);
+        } else {
+            Toast.makeText(this, "请在 Flutter 文件页使用「新建项目」", Toast.LENGTH_SHORT).show();
+            FlutterGlassEntry.open(this);
         }
-        startActivity(target);
         finish();
     }
 }
-
-
