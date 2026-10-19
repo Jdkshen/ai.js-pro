@@ -23,6 +23,9 @@ object AccessibilityEventForwarder {
     const val ACTION_SUBSCRIBE = "com.jdkshen.aijspro.NODE_ACCESSIBILITY_SUBSCRIBE"
     const val ACTION_UNSUBSCRIBE = "com.jdkshen.aijspro.NODE_ACCESSIBILITY_UNSUBSCRIBE"
     const val ACTION_EVENT = "com.jdkshen.aijspro.NODE_ACCESSIBILITY_EVENT"
+    // task-171：Node accessibility.enableKeyEvents / lockScreen
+    const val ACTION_KEY_EVENTS = "com.jdkshen.aijspro.NODE_ACCESSIBILITY_KEY_EVENTS"
+    const val ACTION_LOCK_SCREEN = "com.jdkshen.aijspro.NODE_ACCESSIBILITY_LOCK_SCREEN"
     private const val TAG = "AccEventForwarder"
     private const val PRIORITY = 9101
 
@@ -68,6 +71,8 @@ object AccessibilityEventForwarder {
             val filter = IntentFilter().apply {
                 addAction(ACTION_SUBSCRIBE)
                 addAction(ACTION_UNSUBSCRIBE)
+                addAction(ACTION_KEY_EVENTS)
+                addAction(ACTION_LOCK_SCREEN)
             }
             val r = object : BroadcastReceiver() {
                 override fun onReceive(receiverContext: Context?, intent: Intent?) {
@@ -80,6 +85,8 @@ object AccessibilityEventForwarder {
                             subscribed = false
                             Log.i(TAG, "accessibility event forwarding disabled")
                         }
+                        ACTION_KEY_EVENTS -> setKeyEvents(intent?.getBooleanExtra("enabled", true) == true)
+                        ACTION_LOCK_SCREEN -> lockScreen()
                     }
                 }
             }
@@ -112,6 +119,43 @@ object AccessibilityEventForwarder {
             receiver = null
             context = null
             AccessibilityService.addDelegate(PRIORITY, noopDelegate)
+        }
+    }
+
+    /** task-171：通过主进程 AccessibilityService 的 serviceInfo flags 开关按键事件。 */
+    private fun setKeyEvents(enabled: Boolean) {
+        try {
+            val service = com.stardust.view.accessibility.AccessibilityService.instance
+            if (service == null) {
+                Log.w(TAG, "enableKeyEvents ignored: accessibility service not running")
+                return
+            }
+            val info = service.serviceInfo ?: return
+            val flag = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+            info.flags = if (enabled) info.flags or flag else info.flags and flag.inv()
+            service.serviceInfo = info
+            Log.i(TAG, "accessibility key events enabled=" + enabled)
+        } catch (error: Throwable) {
+            Log.w(TAG, "set accessibility key events failed", error)
+        }
+    }
+
+    /** task-171：GLOBAL_ACTION_LOCK_SCREEN（API 28+）。 */
+    private fun lockScreen() {
+        try {
+            val service = com.stardust.view.accessibility.AccessibilityService.instance
+            if (service == null) {
+                Log.w(TAG, "lockScreen ignored: accessibility service not running")
+                return
+            }
+            if (Build.VERSION.SDK_INT >= 28) {
+                val ok = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
+                Log.i(TAG, "lockScreen global action result=" + ok)
+            } else {
+                Log.w(TAG, "lockScreen requires API 28")
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "lockScreen failed", error)
         }
     }
 

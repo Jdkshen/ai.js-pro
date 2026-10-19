@@ -7,6 +7,8 @@ import android.os.Build;
 import android.system.Os;
 import android.util.Log;
 
+import com.stardust.autojs.core.image.FeatureMatcher;
+import com.stardust.autojs.core.image.ImageFeatures;
 import com.stardust.autojs.core.image.TemplateMatching;
 import com.stardust.autojs.core.opencv.Mat;
 import com.stardust.autojs.core.opencv.OpenCVHelper;
@@ -23,6 +25,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -56,7 +59,10 @@ public final class Node24Images implements AutoCloseable {
     private final long mMaxImagePixels;
     private final long mMaxTotalPixels;
     private final Map<Integer, Bitmap> mBitmaps = new LinkedHashMap<>();
+    // task-172：特征对象（detectAndComputeFeatures）— 与图片句柄 id 分开编号。
+    private final Map<Integer, FeatureState> mFeatures = new LinkedHashMap<>();
     private int mNextId = 1;
+    private int mNextFeatureId = 1;
     private long mLivePixels;
     private boolean mClosed;
     /** 进程内 OpenCV 只初始化一次；失败后仍允许下次重试。 */
@@ -99,13 +105,21 @@ public final class Node24Images implements AutoCloseable {
                     return ok(detectsColor(request, false));
                 case "detectsMultiColors":
                     return ok(detectsColor(request, true));
+                case "detectAndComputeFeatures":
+                    return ok(detectFeatures(request));
+                case "matchFeatures":
+                    return ok(matchFeatures(request));
+                case "recycleFeatures":
+                    recycleFeatures(request.optInt("id", -1));
+                    return ok(Boolean.TRUE);
                 case "recycle":
                     recycle(request.optInt("id", -1));
                     return ok(Boolean.TRUE);
                 default:
                     return error("image 不支持的操作：" + action
                             + "（支持 read/write/pixel/findColor/findMultiColors/"
-                            + "findImage/detectsColor/detectsMultiColors/recycle）");
+                            + "findImage/detectsColor/detectsMultiColors/recycle/detectAndComputeFeatures/"
+                            + "matchFeatures/recycleFeatures）");
             }
         } catch (Throwable failure) {
             Log.w(TAG, "image action failed: " + request, failure);
@@ -363,6 +377,126 @@ public final class Node24Images implements AutoCloseable {
         }
     }
 
+    /**
+     * task-172：计算图片特征（复用 Rhino/QuickJS 同款的 FeatureMatcher ORB-lite 实现）。
+     * 特征对象保存在宿主，Node 只拿到句柄 id；用完后 ImageFeatures.recycle() 释放。
+     */
+    private JSONObject detectFeatures(JSONObject request) throws Exception {
+        ensureOpen();
+        int imageId = requireId(request);
+        Bitmap bitmap = requireBitmap(imageId);
+        double scale = request.optDouble("scale", -1d);
+        boolean grayscale = request.optBoolean("grayscale", true);
+        String method = request.optString("method", "SIFT");
+        Region region = parseRegion(request.opt("region"), bitmap.getWidth(), bitmap.getHeight());
+        ensureOpenCv();
+        Mat rgba = new Mat();
+        Utils.bitmapToMat(bitmap, rgba);
+        try {
+            Rect rect = new Rect(region.x, region.y, region.width, region.height);
+            ImageFeatures features = FeatureMatcher.detect(rgba, scale, grayscale, method, rect);
+            features.sourceMat = rgba;
+            int featureId = mNextFeatureId++;
+            mFeatures.put(featureId, new FeatureState(features, rgba));
+            return new JSONObject()
+                    .put("id", featureId)
+                    .put("count", features.count)
+                    .put("width", features.originalWidth)
+                    .put("height", features.originalHeight)
+                    .put("scale", features.scale)
+                    .put("method", features.method);
+        } catch (Throwable error) {
+            OpenCVHelper.release(rgba);
+            throw error;
+        }
+    }
+
+    /** task-172：特征匹配，返回四边形中心/四角（场景原图坐标）或 null（未匹配）。 */
+    private JSONObject matchFeatures(JSONObject request) throws Exception {
+        ensureOpen();
+        ensureOpenCv();
+        FeatureState scene = requireFeatures(request.optInt("sceneId", -1));
+        FeatureState object = requireFeatures(request.optInt("objectId", -1));
+        double ratio = request.optDouble("ratio", 0.7d);
+        if (!Double.isFinite(ratio) || ratio <= 0d || ratio >= 1d) {
+            throw new IllegalArgumentException("ratio 必须在 0..1 之间：" + ratio);
+        }
+        List<double[]> pairs = FeatureMatcher.match(scene.features, object.features, ratio);
+        Point[] corners = FeatureMatcher.estimateFrameCorners(pairs,
+                object.features.scaledWidth, object.features.scaledHeight);
+        if (corners == null) {
+            return null;
+        }
+        // 场景「缩放后」坐标 -> 原图坐标（与 Rhino Images.matchFeatures 一致）。
+        double inverse = scene.features.scale == 0 ? 1d : 1d / scene.features.scale;
+        Point[] original = new Point[4];
+        for (int i = 0; i < 4; i++) {
+            original[i] = new Point(corners[i].x * inverse, corners[i].y * inverse);
+        }
+        double centerX = (original[0].x + original[1].x + original[2].x + original[3].x) / 4d;
+        double centerY = (original[0].y + original[1].y + original[2].y + original[3].y) / 4d;
+        String drawPath = request.optString("drawMatches", "");
+        if (!drawPath.isEmpty() && scene.features.sourceMat != null) {
+            try {
+                File drawFile = new File(drawPath);
+                File parent = drawFile.getParentFile();
+                if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                    Log.w(TAG, "create drawMatches parent failed: " + parent);
+                }
+                FeatureMatcher.drawMatches(scene.features.sourceMat, pairs, corners, drawPath);
+            } catch (Throwable error) {
+                Log.w(TAG, "drawMatches failed: " + drawPath, error);
+            }
+        }
+        return new JSONObject()
+                .put("center", pointD(centerX, centerY))
+                .put("topLeft", pointD(original[0].x, original[0].y))
+                .put("topRight", pointD(original[1].x, original[1].y))
+                .put("bottomRight", pointD(original[2].x, original[2].y))
+                .put("bottomLeft", pointD(original[3].x, original[3].y))
+                .put("matches", pairs.size())
+                .put("sceneWidth", scene.features.originalWidth)
+                .put("sceneHeight", scene.features.originalHeight)
+                .put("objectWidth", object.features.originalWidth)
+                .put("objectHeight", object.features.originalHeight);
+    }
+
+    private FeatureState requireFeatures(int id) {
+        FeatureState state = mFeatures.get(id);
+        if (state == null) {
+            throw new IllegalArgumentException("特征句柄不存在或已回收：" + id);
+        }
+        state.features.ensureUsable();
+        return state;
+    }
+
+    private void recycleFeatures(int id) {
+        FeatureState state = mFeatures.remove(id);
+        if (state == null) {
+            return;
+        }
+        try {
+            state.features.recycle();
+        } catch (Throwable error) {
+            Log.w(TAG, "recycle features failed: " + id, error);
+        }
+        OpenCVHelper.release(state.sourceMat);
+    }
+
+    private static JSONObject pointD(double x, double y) throws JSONException {
+        return new JSONObject().put("x", x).put("y", y);
+    }
+
+    private static final class FeatureState {
+        final ImageFeatures features;
+        final Mat sourceMat;
+
+        FeatureState(ImageFeatures features, Mat sourceMat) {
+            this.features = features;
+            this.sourceMat = sourceMat;
+        }
+    }
+
     /** OpenCV 在 Node 线程按需同步初始化；失败时明确抛错，不进入 JNI 崩溃路径。 */
     private static void ensureOpenCv() {
         if (sOpenCvReady || OpenCVHelper.isInitialized()) {
@@ -449,6 +583,19 @@ public final class Node24Images implements AutoCloseable {
             }
         }
         mLivePixels = 0L;
+        for (Iterator<Map.Entry<Integer, FeatureState>> iterator = mFeatures.entrySet().iterator();
+             iterator.hasNext(); ) {
+            FeatureState state = iterator.next().getValue();
+            iterator.remove();
+            if (state == null) {
+                continue;
+            }
+            try {
+                state.features.recycle();
+            } catch (Throwable ignored) {
+            }
+            OpenCVHelper.release(state.sourceMat);
+        }
     }
 
     // ------------------------------------------------------------------

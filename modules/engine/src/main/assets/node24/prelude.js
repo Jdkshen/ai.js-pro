@@ -1933,6 +1933,15 @@
     return imageFindImageSync(this, template, options);
   };
   Image.prototype.findImageSync = Image.prototype.findImage;
+  // task-172：计算图片特征（Pro image 模块 Image.detectAndComputeFeatures）。
+  // 返回 Promise；宿主保存特征对象，Node 只拿句柄（用完 recycle()）。
+  Image.prototype.detectAndComputeFeatures = function (options) {
+    var self = this;
+    return Promise.resolve().then(function () { return imageDetectFeaturesSync(self, options); });
+  };
+  Image.prototype.detectAndComputeFeaturesSync = function (options) {
+    return imageDetectFeaturesSync(this, options);
+  };
   Image.prototype.recycle = function () {
     if (this._recycled) { return true; }
     var value = imageHostCall('recycle', { id: this._id });
@@ -2138,6 +2147,137 @@
     return normalizeImagePoint(hostValue(request), 'findImage');
   }
 
+  // task-172：特征对象（detectAndComputeFeatures 返回值）与 matchFeatures。
+  var featureHandles = Object.create(null);
+  var recycledFeatureIds = Object.create(null);
+
+  function featureDescriptor(value) {
+    if (!value || typeof value !== 'object') {
+      throw hostError('宿主返回了非法特征句柄：' + String(value));
+    }
+    if (!isIntegerValue(value.id) || value.id < 0) {
+      throw hostError('宿主返回的特征句柄 id 非法：' + String(value.id));
+    }
+    return {
+      id: value.id,
+      count: isIntegerValue(value.count) ? value.count : 0,
+      width: isIntegerValue(value.width) ? value.width : 0,
+      height: isIntegerValue(value.height) ? value.height : 0,
+      scale: typeof value.scale === 'number' && Number.isFinite(value.scale) ? value.scale : 1,
+      method: typeof value.method === 'string' ? value.method : 'SIFT'
+    };
+  }
+
+  function ImageFeatures(descriptor) {
+    if (!(this instanceof ImageFeatures)) { return new ImageFeatures(descriptor); }
+    var info = featureDescriptor(descriptor);
+    if (recycledFeatureIds[info.id]) {
+      throw hostError('特征句柄已回收：id=' + info.id);
+    }
+    if (featureHandles[info.id]) { return featureHandles[info.id]; }
+    this._id = info.id;
+    this._count = info.count;
+    this._width = info.width;
+    this._height = info.height;
+    this._scale = info.scale;
+    this._method = info.method;
+    this._recycled = false;
+    featureHandles[info.id] = this;
+  }
+
+  Object.defineProperties(ImageFeatures.prototype, {
+    id: { enumerable: true, get: function () { return this._id; } },
+    count: { enumerable: true, get: function () { return this._count; } },
+    width: { enumerable: true, get: function () { return this._width; } },
+    height: { enumerable: true, get: function () { return this._height; } },
+    scale: { enumerable: true, get: function () { return this._scale; } },
+    method: { enumerable: true, get: function () { return this._method; } }
+  });
+
+  ImageFeatures.prototype.assertOpen = function () {
+    if (this._recycled) {
+      throw hostError('特征对象已回收：id=' + this._id);
+    }
+    return this;
+  };
+  ImageFeatures.prototype.isRecycled = function () { return !!this._recycled; };
+  ImageFeatures.prototype.getCount = function () { return this._count; };
+  ImageFeatures.prototype.recycle = function () {
+    if (this._recycled) { return true; }
+    var value = imageHostCall('recycleFeatures', { id: this._id });
+    if (value !== true) {
+      throw hostError('回收特征对象失败：宿主返回 ' + String(value) + '（id=' + this._id + '）');
+    }
+    this._recycled = true;
+    recycledFeatureIds[this._id] = true;
+    if (featureHandles[this._id] === this) { delete featureHandles[this._id]; }
+    return true;
+  };
+  ImageFeatures.prototype.close = function () { return this.recycle(); };
+  ImageFeatures.prototype.toJSON = function () {
+    this.assertOpen();
+    return {
+      id: this._id, count: this._count, width: this._width, height: this._height,
+      scale: this._scale, method: this._method
+    };
+  };
+
+  function wrapImageFeatures(value) {
+    if (value instanceof ImageFeatures) { return value.assertOpen(); }
+    return new ImageFeatures(value);
+  }
+
+  function imageDetectFeaturesSync(image, options) {
+    var frame = wrapImage(image);
+    options = normalizeImageOptions(options);
+    var request = {
+      kind: 'image',
+      action: 'detectAndComputeFeatures',
+      id: frame._id,
+      grayscale: options.grayscale === false ? false : true
+    };
+    if (options.scale != null) {
+      if (typeof options.scale !== 'number' || !Number.isFinite(options.scale) || options.scale <= 0) {
+        throw apiRangeError('detectAndComputeFeatures 的 scale 必须是大于 0 的数字');
+      }
+      request.scale = options.scale;
+    }
+    if (options.method != null) { request.method = String(options.method); }
+    var region = normalizeImageRegion(options.region, frame);
+    if (region) { request.region = region; }
+    return new ImageFeatures(imageHostCall('detectAndComputeFeatures', request));
+  }
+
+  function imageMatchFeaturesSync(sceneFeatures, objectFeatures, options) {
+    var scene = wrapImageFeatures(sceneFeatures);
+    var object = wrapImageFeatures(objectFeatures);
+    options = normalizeImageOptions(options);
+    var raw = options.thredshold === undefined ? options.threshold : options.thredshold;
+    var ratio = raw === undefined ? 0.7 : Number(raw);
+    if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) {
+      throw apiRangeError('matchFeatures 的 thredshold/threshold 必须在 0..1 之间');
+    }
+    var request = {
+      kind: 'image',
+      action: 'matchFeatures',
+      sceneId: scene._id,
+      objectId: object._id,
+      ratio: ratio
+    };
+    if (options.drawMatches != null) {
+      request.drawMatches = resolveImagePath(String(options.drawMatches), 'drawMatches');
+    }
+    var value = hostValue(request);
+    if (value == null) { return null; }
+    return value;
+  }
+
+  function imageMatchFeatures(sceneFeatures, objectFeatures, options) {
+    return Promise.resolve().then(function () {
+      return imageMatchFeaturesSync(sceneFeatures, objectFeatures, options);
+    });
+  }
+
   function isMultiColorTarget(value) {
     return !!(value && typeof value === 'object' && !Array.isArray(value)
       && Object.prototype.hasOwnProperty.call(value, 'firstColor'));
@@ -2283,6 +2423,7 @@
 
   var imageModule = {
     Image: Image,
+    ImageFeatures: ImageFeatures,
     readImage: promiseCall(imageRead),
     readImageSync: imageRead,
     writeImage: promiseCall(imageWrite),
@@ -2295,6 +2436,8 @@
     findMultiColorsSync: imageFindMultiColorsSync,
     findImage: promiseCall(imageFindImageSync),
     findImageSync: imageFindImageSync,
+    matchFeatures: imageMatchFeatures,
+    matchFeaturesSync: imageMatchFeaturesSync,
     detectsColor: imageDetectsColor,
     detectsMultiColors: imageDetectsMultiColors,
     recycle: function (image) {
@@ -2593,6 +2736,29 @@
     });
   }
 
+  /** task-171：通过 :node24 宿主广播到主进程 AccessibilityService。 */
+  function accessibilityHostAction(action, fields) {
+    var request = { kind: 'accessibility', action: action };
+    if (fields) {
+      for (var key in fields) {
+        if (Object.prototype.hasOwnProperty.call(fields, key)) { request[key] = fields[key]; }
+      }
+    }
+    var value = hostValue(request);
+    if (value !== true) {
+      throw hostError('accessibility.' + action + ' 失败：宿主返回 ' + String(value));
+    }
+    return true;
+  }
+
+  function accessibilityEnableKeyEvents(enabled) {
+    return accessibilityHostAction('enableKeyEvents', { enabled: enabled !== false });
+  }
+
+  function accessibilityLockScreen() {
+    return accessibilityHostAction('lockScreen');
+  }
+
   function accessibilityBack() { return runAccessibilityAction('back'); }
   function accessibilityHome() { return runAccessibilityAction('home'); }
   function accessibilityRecents() { return runAccessibilityAction('recents'); }
@@ -2701,6 +2867,8 @@
     status: accessibilityStatus,
     statusSync: accessibilityStatus,
     openSettings: promiseCall(accessibilityOpenSettings),
+    enableKeyEvents: accessibilityEnableKeyEvents,
+    lockScreen: accessibilityLockScreen,
     click: promiseCall(accessibilityClick),
     longClick: promiseCall(accessibilityLongClick),
     press: promiseCall(accessibilityPress),
@@ -3642,6 +3810,8 @@
     // 内容/按钮点击经同 UID 广播进入 Node 轮询队列；这里做 API 与回调分发。
     var clickHandlers = [];
     var actionHandlers = [];
+    var notificationListenerHandlers = [];
+    var listenerEventsInstalled = false;
     var eventsInstalled = false;
     var lastOptions = Object.create(null);
 
@@ -3665,6 +3835,50 @@
       for (var i = 0; i < list.length; i++) {
         try { list[i](event); } catch (error) { console.error('[Auto.js] notification 监听异常：', error); }
       }
+    }
+
+    function ensureListenerEvents() {
+      if (listenerEventsInstalled) { return; }
+      listenerEventsInstalled = true;
+      on('__ajs_notification_listener', function (payload) {
+        if (!payload || typeof payload !== 'object') { return; }
+        var item = {
+          id: Number(payload.id || 0),
+          packageName: payload.packageName ? String(payload.packageName) : '',
+          title: payload.title ? String(payload.title) : '',
+          text: payload.text ? String(payload.text) : '',
+          ticker: payload.ticker ? String(payload.ticker) : '',
+          postTime: Number(payload.postTime || 0),
+          getTitle: function () { return this.title; },
+          getText: function () { return this.text; },
+          getPackageName: function () { return this.packageName; },
+          getTickerText: function () { return this.ticker; },
+          getPostTime: function () { return this.postTime; },
+          toString: function () { return '[notification ' + this.packageName + ' ' + this.title + ']'; }
+        };
+        dispatch(notificationListenerHandlers, item);
+      });
+    }
+
+    function requestListeningNotifications(options) {
+      ensureListenerEvents();
+      hostCall('requestListeningNotifications', options || {});
+      var service = {
+        on: function (type, handler) {
+          if (type !== 'notification' && type !== 'notifications') {
+            throw apiError('notificationListener.on 只支持 notification，收到：' + type);
+          }
+          if (typeof handler !== 'function') { throw new TypeError('notificationListener.on 的监听必须是函数'); }
+          notificationListenerHandlers.push(handler);
+          return service;
+        },
+        off: function (type, handler) {
+          var index = notificationListenerHandlers.indexOf(handler);
+          if (index >= 0) { notificationListenerHandlers.splice(index, 1); }
+          return service;
+        }
+      };
+      return Promise.resolve(service);
     }
 
     function ensureEvents() {
@@ -3720,6 +3934,8 @@
 
     return {
       notify: notify,
+      requestListeningNotifications: requestListeningNotifications,
+      stopListeningNotifications: function () { return hostCall('stopListeningNotifications', {}); },
       update: function (id, options) { return notify(id, options); },
       addAction: function (id, title) {
         var stored = lastOptions[Number(id)];

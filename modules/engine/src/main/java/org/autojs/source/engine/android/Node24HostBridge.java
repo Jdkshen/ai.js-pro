@@ -148,6 +148,18 @@ public final class Node24HostBridge implements Node24Engine.Host {
             "com.jdkshen.aijspro.NODE_ACCESSIBILITY_UNSUBSCRIBE";
     private static final String ACTION_NODE_ACCESSIBILITY_EVENT =
             "com.jdkshen.aijspro.NODE_ACCESSIBILITY_EVENT";
+    // task-171：低版本补全 API
+    private static final String ACTION_NODE_ACCESSIBILITY_KEY_EVENTS =
+            "com.jdkshen.aijspro.NODE_ACCESSIBILITY_KEY_EVENTS";
+    private static final String ACTION_NODE_ACCESSIBILITY_LOCK_SCREEN =
+            "com.jdkshen.aijspro.NODE_ACCESSIBILITY_LOCK_SCREEN";
+    private static final String ACTION_NODE_NOTIFICATION_LISTENER_EVENT =
+            "com.jdkshen.aijspro.NODE_NOTIFICATION_LISTENER_EVENT";
+    private static final String ACTION_NODE_NOTIFICATION_LISTENER_SUBSCRIBE =
+            "com.jdkshen.aijspro.NODE_NOTIFICATION_LISTENER_SUBSCRIBE";
+    private static final String ACTION_NODE_NOTIFICATION_LISTENER_UNSUBSCRIBE =
+            "com.jdkshen.aijspro.NODE_NOTIFICATION_LISTENER_UNSUBSCRIBE";
+    private static final String EVENT_NODE_NOTIFICATION_LISTENER = "__ajs_notification_listener";
     private static final String ACTION_NODE_NOTIFICATION_EVENT =
             "com.jdkshen.aijspro.NODE_NOTIFICATION_EVENT";
     private static final String EVENT_NODE_ACCESSIBILITY = "__ajs_accessibility_event";
@@ -155,6 +167,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private static final String NODE_NOTIFICATION_CHANNEL = "node24";
     private android.content.BroadcastReceiver mAccessibilityEventReceiver;
     private android.content.BroadcastReceiver mNotificationEventReceiver;
+    private android.content.BroadcastReceiver mNotificationListenerReceiver;
     private int mNotificationPendingSeq = 1000;
 
     // --- task-158：media 播放/音量/扫描（本进程 MediaPlayer，audio focus 由系统处理） ---
@@ -1982,12 +1995,24 @@ public final class Node24HostBridge implements Node24Engine.Host {
         if (path.isEmpty()) {
             throw new IllegalArgumentException("media.play 需要 path");
         }
-        final File file = new File(path);
-        if (!file.isAbsolute()) {
-            throw new IllegalArgumentException("media.play 需要绝对路径：" + path);
+        // task-171：支持 http(s) URL / file:// 与本地绝对路径；远程媒体由 MediaPlayer 直接拉流。
+        final boolean remote = path.startsWith("http://") || path.startsWith("https://");
+        final String mediaPath;
+        if (remote) {
+            mediaPath = path;
+        } else if (path.startsWith("file://")) {
+            mediaPath = path.substring("file://".length());
+        } else {
+            mediaPath = path;
         }
-        if (!file.isFile()) {
-            throw new IllegalArgumentException("音频文件不存在：" + path);
+        if (!remote) {
+            final File file = new File(mediaPath);
+            if (!file.isAbsolute()) {
+                throw new IllegalArgumentException("media.play 需要绝对路径或 http(s) URL：" + path);
+            }
+            if (!file.isFile()) {
+                throw new IllegalArgumentException("音频文件不存在：" + path);
+            }
         }
         final float volume = (float) Math.max(0d, Math.min(1d, request.optDouble("volume", 1d)));
         final boolean looping = request.optBoolean("looping", false);
@@ -1997,19 +2022,19 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 releaseMusicPlayerOnThread();
                 android.media.MediaPlayer player = new android.media.MediaPlayer();
                 try {
-                    player.setDataSource(path);
+                    player.setDataSource(mediaPath);
                     player.setVolume(volume, volume);
                     player.setLooping(looping);
                     player.prepare();
                     player.start();
                 } catch (Throwable error) {
                     try { player.release(); } catch (Throwable ignored) { }
-                    throw new IllegalStateException("创建 MediaPlayer 失败："
+                    throw new IllegalStateException("创建 MediaPlayer 失败（" + mediaPath + "）："
                             + (error.getMessage() == null ? error.toString() : error.getMessage()), error);
                 }
                 mMusicPlayer = player;
-                mMusicPath = path;
-                return new JSONObject().put("playing", true).put("path", path)
+                mMusicPath = mediaPath;
+                return new JSONObject().put("playing", true).put("path", mediaPath)
                         .put("duration", player.getDuration()).put("looping", looping);
             }
         });
@@ -2375,6 +2400,23 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 mContext.sendBroadcast(new Intent(ACTION_NODE_ACCESSIBILITY_UNSUBSCRIBE)
                         .setPackage(mContext.getPackageName()));
                 return true;
+            case "enableKeyEvents": {
+                boolean enabled = request.optBoolean("enabled", true);
+                mContext.sendBroadcast(new Intent(ACTION_NODE_ACCESSIBILITY_KEY_EVENTS)
+                        .setPackage(mContext.getPackageName()).putExtra("enabled", enabled));
+                Log.i(TAG, "accessibility key events requested enabled=" + enabled);
+                return true;
+            }
+            case "lockScreen": {
+                if (android.os.Build.VERSION.SDK_INT < 28) {
+                    throw new IllegalStateException("accessibility.lockScreen 需要 Android 9 (API 28) 及以上；当前 API "
+                            + android.os.Build.VERSION.SDK_INT);
+                }
+                mContext.sendBroadcast(new Intent(ACTION_NODE_ACCESSIBILITY_LOCK_SCREEN)
+                        .setPackage(mContext.getPackageName()));
+                Log.i(TAG, "accessibility lock screen requested");
+                return true;
+            }
             default:
                 throw new IllegalArgumentException("accessibility 不支持 action：" + action);
         }
@@ -2427,6 +2469,27 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 return true;
             case "cancelAll":
                 manager.cancelAll();
+                return true;
+            case "requestListeningNotifications": {
+                if (!hasNotificationListenerAccess()) {
+                    try {
+                        Intent settings = new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        mContext.startActivity(settings);
+                    } catch (Throwable error) {
+                        Log.w(TAG, "open notification listener settings failed", error);
+                    }
+                    throw new IllegalStateException("尚未开启通知使用权：已打开系统设置，请授权 AI.js Pro 的通知使用权后重试");
+                }
+                ensureNotificationListenerReceiver();
+                mContext.sendBroadcast(new Intent(ACTION_NODE_NOTIFICATION_LISTENER_SUBSCRIBE)
+                        .setPackage(mContext.getPackageName()));
+                Log.i(TAG, "notification listener subscribed");
+                return new JSONObject().put("listening", true);
+            }
+            case "stopListeningNotifications":
+                mContext.sendBroadcast(new Intent(ACTION_NODE_NOTIFICATION_LISTENER_UNSUBSCRIBE)
+                        .setPackage(mContext.getPackageName()));
                 return true;
             default:
                 throw new IllegalArgumentException("notification 不支持 action：" + action);
@@ -2544,6 +2607,48 @@ public final class Node24HostBridge implements Node24Engine.Host {
             mContext.registerReceiver(receiver, filter);
         }
         mNotificationEventReceiver = receiver;
+    }
+
+    /** task-171：当前 app 是否出现在系统通知使用权列表里。 */
+    private boolean hasNotificationListenerAccess() {
+        try {
+            String enabled = android.provider.Settings.Secure.getString(mContext.getContentResolver(),
+                    "enabled_notification_listeners");
+            return enabled != null && enabled.contains(mContext.getPackageName());
+        } catch (Throwable error) {
+            Log.w(TAG, "read notification listener access failed", error);
+            return false;
+        }
+    }
+
+    /** 主进程 NotificationListenerService 转发来的通知 -> Node 轮询队列。 */
+    private void ensureNotificationListenerReceiver() {
+        if (mNotificationListenerReceiver != null) {
+            return;
+        }
+        android.content.BroadcastReceiver receiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) {
+                    return;
+                }
+                try {
+                    String json = intent.getStringExtra("json");
+                    JSONObject payload = json == null ? new JSONObject() : new JSONObject(json);
+                    enqueueEvent(EVENT_NODE_NOTIFICATION_LISTENER, payload);
+                } catch (Throwable error) {
+                    Log.w(TAG, "bad notification listener event", error);
+                }
+            }
+        };
+        android.content.IntentFilter filter =
+                new android.content.IntentFilter(ACTION_NODE_NOTIFICATION_LISTENER_EVENT);
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            mContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            mContext.registerReceiver(receiver, filter);
+        }
+        mNotificationListenerReceiver = receiver;
     }
 
     // ------------------------------------------------------------------

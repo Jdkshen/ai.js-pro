@@ -1078,9 +1078,8 @@
     openNotifications: legacy.openNotifications || legacy.notifications,
     takeScreenshot: legacy.takeScreenshot,
     StrokeDescription: legacy.StrokeDescription,
-    lockScreen: function () {
-      throw apiError('accessibility.lockScreen 暂未支持（宿主没有锁屏动作，不会伪造成成功）');
-    }
+    enableKeyEvents: legacy.enableKeyEvents,
+    lockScreen: legacy.lockScreen
   });
   extended.accessibility = extended;
   var uiSelectorModule = {

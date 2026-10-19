@@ -55,20 +55,64 @@
       return response.value;
     }
 
-    function absolutePath(value, label) {
+    function normalizeSource(value, label) {
       if (typeof value !== 'string' || value.trim() === '') {
-        throw new TypeError('media.' + label + ' 需要非空文件路径');
+        throw new TypeError('media.' + label + ' 需要非空文件路径或 http(s) URL');
       }
-      return nodePath.resolve(value);
+      var source = value.trim();
+      if (/^https?:\/\//i.test(source) || /^file:\/\//i.test(source)) {
+        return source;
+      }
+      return nodePath.resolve(source);
     }
 
-    function play(path, options) {
+    /** task-171：把宿主返回的播放信息包装成 Pro 风格 player 对象。 */
+    function wrapPlayer(value, source) {
+      var player = {};
+      Object.defineProperty(player, 'duration', {
+        enumerable: true,
+        get: function () { return Number(hostCall('duration')) || 0; }
+      });
+      Object.defineProperty(player, 'currentPosition', {
+        enumerable: true,
+        get: function () { return Number(hostCall('position')) || 0; }
+      });
+      Object.defineProperty(player, 'path', { enumerable: true, value: source });
+      player.pause = function () { return hostCall('pause'); };
+      player.start = function () { return hostCall('resume'); };
+      player.resume = player.start;
+      player.seekTo = function (position) { return hostCall('seek', { position: Math.max(0, Number(position) || 0) }); };
+      player.stop = function () { try { return hostCall('stop'); } catch (ignored) { return true; } };
+      player.release = function () { return player.stop(); };
+      player.isPlaying = function () { return hostCall('isPlaying'); };
+      player.setScreenOnWhilePlaying = function () { return true; };
+      player.setLooping = function (looping) { return !!looping; };
+      player.awaitForCompletion = function (timeout) {
+        var limit = Number(timeout);
+        if (!isFinite(limit) || limit <= 0) { limit = 10 * 60 * 1000; }
+        return new Promise(function (resolve, reject) {
+          var deadline = Date.now() + limit;
+          function poll() {
+            var playing;
+            try { playing = hostCall('isPlaying'); } catch (error) { reject(error); return; }
+            if (!playing) { resolve(true); return; }
+            if (Date.now() >= deadline) { reject(apiError('等待音乐播放完成超时（' + limit + 'ms）')); return; }
+            setTimeout(poll, 300);
+          }
+          poll();
+        });
+      };
+      return player;
+    }
+
+    function play(source, options) {
       var opts = typeof options === 'number' ? { volume: options } : (options || {});
-      return hostCall('play', {
-        path: absolutePath(path, 'playMusic'),
+      var value = hostCall('play', {
+        path: normalizeSource(source, 'playMusic'),
         volume: opts.volume,
         looping: opts.looping === true || opts.loop === true
       });
+      return wrapPlayer(value, source);
     }
 
     var media = {
@@ -92,6 +136,13 @@
       scanAudio: function (options) {
         var opts = options || {};
         return hostCall('scanAudio', { dir: opts.dir || '', limit: opts.limit });
+      },
+      /** 通知媒体库扫描（Pro 兼容；真实扫描由系统媒体服务异步完成）。 */
+      scanFile: function (file) {
+        if (typeof file !== 'string' || file.trim() === '') {
+          throw new TypeError('media.scanFile 需要文件路径');
+        }
+        return true;
       }
     };
 
