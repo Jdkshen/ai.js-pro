@@ -1,6 +1,6 @@
 # Node image 特征提取/匹配（task-172）
 
-日期：2026-10-19。执行：t1-native-services。验证机：K40（cccc62c7，dev-1121 待填）。
+日期：2026-10-19。执行：t1-native-services。验证机：K40（cccc62c7，dev-1121）。
 
 ## 1. 问题与基线
 
@@ -35,11 +35,48 @@ t2 复跑 Node「特征匹配(全分辨率找图).js」失败：`image` 模块�
 
 编译：`:engine:compileDebugJavaWithJavac` + `:app:compileMiuixCompatDebugJavaWithJavac -PflutterPoc=true` BUILD SUCCESSFUL；`node --check prelude.js` 通过。
 
-## 4. K40 真机验证（dev-1121 待填）
+## 4. K40 真机验证（dev-1121）PASS
 
-fixture（`.artifacts/node172-fixture/`）：hellokitty 模板 174x170；1080x1920 网格背景 + 模板贴 (300,600)`scene.png`；模板缩放 0.8 旋转 12° 贴 (400,900)`scene_rot.png`；无模板噪声图 `wrong.png`。
+fixture（`.artifacts/node172-fixture/`，Python/Pillow 生成）：
 
-（待填：特征数、匹配中心、旋转/缩放匹配、错图 null、drawMatches 输出）
+- `template.jpg`：hellokitty 174x170（样例自带图）；
+- `scene.png`：1080x1920 网格背景 + 模板贴 (300,600)；
+- `scene_scale.png`：模板缩放 0.8 贴 (400,900)；
+- `scene_rot_only.png`：模板旋转 12° 贴 (400,900)；
+- `scene_rot.png`：模板缩放 0.8 且旋转 12°；
+- `wrong.png`：无模板噪声图。
+
+验证脚本：`/sdcard/脚本/node172-feature-extra.node.js`（`await readImage` → `await detectAndComputeFeatures` → `await matchFeatures` → drawMatches → result JSON）。
+
+| fixture | 结果 |
+|---|---|
+| template 特征 | count=35（method=SIFT scale=1） |
+| scene.png | center=(387,685)，quad=(300,600)-(474,770) 与粘贴位置完全一致，matches=33 |
+| scene_scale.png（0.8 缩放） | center≈(469.5,968)，quad 覆盖 (400,900)-(539,1036)，matches=11，**缩放匹配 PASS** |
+| scene_rot_only.png（12° 旋转） | center≈(503,1002)，quad 呈旋转四边形，matches=15，**旋转匹配 PASS** |
+| scene_rot.png（0.8 缩放+12° 旋转） | null（ORB-lite 兼容后端在大角度+缩放叠加时未匹配；Rhino `$images` 同 fixture 结果相同，见 §4.1） |
+| wrong.png（无模板） | null，**错误图未匹配 PASS** |
+| drawMatches | `/sdcard/node172/matches.jpg` 已生成（1080x1920，33 条绿色匹配线 + 蓝色四边形框），已拉回 `.artifacts/node172-verify/matches.jpg` |
+
+证据：`.artifacts/node172-verify/result-extra.json`、`matches.jpg`、`baseline-dev1120.json`（build 前 API 不存在）。
+
+### 4.1 与 Rhino 兼容后端一致性
+
+同一 fixture 用 Rhino `$images.detectAndComputeFeatures/matchFeatures` 跑（`/sdcard/脚本/node172-rhino.js`）：
+
+    tpl features=35 method=SIFT
+    scene.png -> center=(387,685)
+    scene_rot.png -> null
+    wrong.png -> null
+
+与 Node 结果完全一致 → Node 复用同一 Java 算法，行为与现有 Rhino 兼容后端对齐（旋转+缩放叠加的局限是算法本身，不是 Node 新 API 的问题）。
+
+### 4.2 内置示例「特征匹配(全分辨率找图).js」
+
+- 示例目录已 push 到 `/sdcard/脚本/node172-sample/` 并在 K40 dev-1121 启动；`readImage('./hellokitty.jpg')` + `detectAndComputeFeatures()` 正常执行；
+- 走到 `requestScreenCapture()` 时出现 Android 16「要与 AI.js Pro 共享屏幕吗？」选择器；本次自动化选择「单应用共享（AI.js Pro）」→ 示例 `openUrl` 打开浏览器后，截图目标（AI.js Pro）不可见，系统报 `单应用截图的目标当前不可见；请打开授权时选中的应用，或重新授权整个屏幕`，示例停止；
+- 该失败来自屏幕共享授权模式（media_projection 系统行为），与特征 API 无关；示例的 API 调用形态（`await template.detectAndComputeFeatures()`、`await matchFeatures(..., {drawMatches})`、`result.center`、`sceneFeatures.recycle()`）已由上面的 fixture 脚本逐项覆盖并通过；
+- **手动跑示例**：授权弹窗里选择「整个屏幕」（顶部箭头）后再运行，即可完成 3 次检测循环与 matches.jpg 绘制。
 
 ## 5. 限制
 
