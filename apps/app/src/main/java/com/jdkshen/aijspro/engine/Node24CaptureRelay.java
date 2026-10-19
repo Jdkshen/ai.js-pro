@@ -24,6 +24,23 @@ public final class Node24CaptureRelay extends BroadcastReceiver {
     public static final String EXTRA_TOKEN = "org.autojs.source.engine.android.NODE24_CAPTURE_TOKEN";
     private static final String CONSENT_ACTIVITY =
             "org.autojs.source.engine.android.Node24CaptureConsentActivity";
+    /** :node24 池进程的授权页子类（:node24_1/_2/_3 各一个，保证与请求进程同进程）。 */
+    private static final String EXTRA_ACTIVITY =
+            "org.autojs.source.engine.android.NODE24_CAPTURE_ACTIVITY";
+    private static final String[] ALLOWED_ACTIVITIES = {
+            CONSENT_ACTIVITY,
+            CONSENT_ACTIVITY + "1",
+            CONSENT_ACTIVITY + "2",
+            CONSENT_ACTIVITY + "3"
+    };
+
+    private static boolean isAllowedActivity(String name) {
+        if (name == null || name.isEmpty()) return false;
+        for (String allowed : ALLOWED_ACTIVITIES) {
+            if (allowed.equals(name)) return true;
+        }
+        return false;
+    }
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -36,8 +53,12 @@ public final class Node24CaptureRelay extends BroadcastReceiver {
         }
         Context app = context.getApplicationContext() == null
                 ? context : context.getApplicationContext();
+        String activity = intent.getStringExtra(EXTRA_ACTIVITY);
+        if (!isAllowedActivity(activity)) {
+            activity = CONSENT_ACTIVITY;
+        }
         Intent target = new Intent()
-                .setClassName(app.getPackageName(), CONSENT_ACTIVITY)
+                .setClassName(app.getPackageName(), activity)
                 .putExtra(EXTRA_TOKEN, token)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         try {

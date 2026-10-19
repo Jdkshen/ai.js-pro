@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Activity 不导出（manifest {@code exported=false}），同进程静态表只接受带随机 token 的
  * 请求；旧 token 请求、重复结果、进程重建后的孤儿结果都不会被采用。
  */
-public final class Node24CaptureConsentActivity extends Activity {
+public class Node24CaptureConsentActivity extends Activity {
 
     private static final String TAG = "Node24Capture";
 
@@ -227,7 +227,10 @@ public final class Node24CaptureConsentActivity extends Activity {
                 }
             }
 
-            Intent intent = new Intent(context, Node24CaptureConsentActivity.class)
+            // task-180：授权 Activity 必须与请求进程同进程（Session/PENDING 是进程内静态表），
+            // dev-1129 起 Node 引擎跑在 :node24_1/_2/_3 池进程，需选对应池的授权页子类。
+            String consentClass = consentActivityClassForCurrentProcess(context);
+            Intent intent = new Intent().setClassName(context.getPackageName(), consentClass)
                     .putExtra(EXTRA_TOKEN, token)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
             // task-180：:node24 是后台进程，直接 startActivity 会被后台启动限制拦下；
@@ -236,7 +239,8 @@ public final class Node24CaptureConsentActivity extends Activity {
             try {
                 Intent relay = new Intent("com.jdkshen.aijspro.NODE24_CAPTURE_CONSENT")
                         .setPackage(context.getPackageName())
-                        .putExtra(EXTRA_TOKEN, token);
+                        .putExtra(EXTRA_TOKEN, token)
+                        .putExtra("org.autojs.source.engine.android.NODE24_CAPTURE_ACTIVITY", consentClass);
                 context.sendBroadcast(relay);
                 relayed = true;
             } catch (Throwable relayError) {
@@ -522,6 +526,43 @@ public final class Node24CaptureConsentActivity extends Activity {
     // ------------------------------------------------------------------
     // 纯逻辑（单测覆盖）
     // ------------------------------------------------------------------
+
+    /** 当前 :node24 池进程对应的授权页类；非池进程用基类。 */
+    private static String consentActivityClassForCurrentProcess(Context context) {
+        String process = currentProcessName(context);
+        if (process != null) {
+            if (process.endsWith(":node24_1")) return Node24CaptureConsentActivity1.class.getName();
+            if (process.endsWith(":node24_2")) return Node24CaptureConsentActivity2.class.getName();
+            if (process.endsWith(":node24_3")) return Node24CaptureConsentActivity3.class.getName();
+        }
+        return Node24CaptureConsentActivity.class.getName();
+    }
+
+    private static String currentProcessName(Context context) {
+        try {
+            byte[] raw = java.nio.file.Files.readAllBytes(
+                    new java.io.File("/proc/self/cmdline").toPath());
+            String name = new String(raw, java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (!name.isEmpty()) return name;
+        } catch (Throwable ignored) {
+        }
+        try {
+            android.app.ActivityManager manager = (android.app.ActivityManager)
+                    context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager != null) {
+                int pid = android.os.Process.myPid();
+                java.util.List<android.app.ActivityManager.RunningAppProcessInfo> list =
+                        manager.getRunningAppProcesses();
+                if (list != null) {
+                    for (android.app.ActivityManager.RunningAppProcessInfo info : list) {
+                        if (info != null && info.pid == pid) return info.processName;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
 
     static String newToken() {
         return UUID.randomUUID().toString();

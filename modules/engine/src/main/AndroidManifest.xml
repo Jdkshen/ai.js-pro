@@ -46,6 +46,27 @@
             android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/ScriptTheme.Transparent"/>
+        <activity
+            android:name="org.autojs.source.engine.android.Node24CaptureConsentActivity3"
+            android:process=":node24_3"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/ScriptTheme.Transparent"/>
+        <activity
+            android:name="org.autojs.source.engine.android.Node24CaptureConsentActivity2"
+            android:process=":node24_2"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/ScriptTheme.Transparent"/>
+        <activity
+            android:name="org.autojs.source.engine.android.Node24CaptureConsentActivity1"
+            android:process=":node24_1"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/ScriptTheme.Transparent"/>
 
         <service
             android:name="com.google.android.accessibility.selecttospeak.SelectToSpeakService"

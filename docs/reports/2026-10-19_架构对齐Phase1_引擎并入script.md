@@ -140,3 +140,9 @@
 
 **待正式包验证**：dev-1129（或下一个 dev）包含本修复后，在 K40 复验返回键 cancel 任务显示取消、池进程仍在、可立即再跑。
 证据：`output/flutter-poc/evidence/task181/pool-cancel-semantics.log`。
+### dev-1129 正式包复验（task-181，K40 2026-10-20 00:07）
+- 任务页停止运行中的 Node UI 脚本：`execute returned ... cancelled=true`；`PocScriptHost 脚本进程任务已停止：4`；`Node24Pool release slot=0 healthy=true`；**无 force halt / invalidate / disconnected**；池进程 pid 14052 仍存活。
+- 立即再跑：STOP_MS→RUN_MS 后 `acquire slot=0` 于 00:07:58.313、`job start` 00:07:58.321（**16ms**）、`PROBE DONE` 00:07:58.717，成功。
+- 返回键关闭 Node UI overlay：池进程仍存活，无 IOException/failed（本机 overlay 返回键路径该次未产生 cancel，任务页停止路径已验证取消语义）。
+结论：dev-1129 池进程 cancel 语义 PASS。
+证据：`output/flutter-poc/evidence/task181/dev1129-k40-cancel.log`。
