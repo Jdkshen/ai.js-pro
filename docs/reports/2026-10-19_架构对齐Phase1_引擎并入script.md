@@ -124,3 +124,19 @@
 - ⑥ legacy flag（SharedPreferences `node24_pool.legacy=true`）：probe 实际运行在旧 `:node24` 进程（pid 7583），PocNode24Jobs 正常登记/清理。
 
 证据：`output/flutter-poc/evidence/task175/dev1126-formal.log`、`dev1126-task-page-2-rows.png`。
+
+## task-181 池进程取消语义修复（2026-10-20）
+
+**问题**：task-174 的 `Job.cancel()` 里无条件起 800ms `forceHalt` + 1500ms watchdog，对 `:node24_*` 池进程也生效；Node UI 返回键 cancel 后 800ms 杀进程，任务以 `IOException: Node24 service disconnected` 失败。
+
+**修复**：`Node24Service.Job.cancel()` 区分进程类型：
+- **池进程（:node24_1..N）**：只 `nativeCancel`；不启动 800ms force halt；watchdog 改为 **2500ms**，且 `finished==true` 时直接返回（正常取消）；只有 2.5s 仍未返回才 kill/invalidate。
+- **legacy :node24**：保持原 800ms force halt + 1500ms watchdog 不变。
+
+**本地验证（MI8 debug 465）**：
+- `taskPageStop` 取消运行中的 Node UI 脚本：`PocScriptHost 脚本进程任务已停止：1`、`Node24Pool release slot=0`；无 force halt/invalidate/disconnected；池进程 pid 仍存活。
+- 立即再跑：`Node24Pool acquire slot=0` → `job start` → `PROBE DONE`，正常完成。
+- Node UI 返回键关闭 overlay 后池进程仍存活（本机该次脚本自然 exitCode=0；无 IOException/failed）。
+
+**待正式包验证**：dev-1129（或下一个 dev）包含本修复后，在 K40 复验返回键 cancel 任务显示取消、池进程仍在、可立即再跑。
+证据：`output/flutter-poc/evidence/task181/pool-cancel-semantics.log`。
