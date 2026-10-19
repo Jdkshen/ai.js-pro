@@ -220,3 +220,11 @@ owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-11
 - K40 验证：remeasure h=1372，窗口 frame `[0,305][880,1677]`；`input tap 760 1655` 触发 `input:` 日志（Node24Console/GlobalConsole），按钮中心已落在框内。
 - 验证后 K40 恢复 dev-1137。
 证据：`output/flutter-poc/evidence/task192/frame-after-remeasure.txt`、`tap-760-1655-after-remeasure.png`。
+### dev-1138 正式包复验（task-192，K40 2026-10-20 01:03）
+- frame：Node overlay `mAttrs=(0,200)(wrapx1372)`，`frame=[0,305][880,1677]`，完整覆盖「确定」按钮（中心≈1655）。
+- 点击：`input tap 760 1655` → Node24Console/GlobalConsole `input: ` 日志，按钮中心已可达。
+- ✕：初始位置/拖动后位置点 ✕ 均 `execute returned exitCode=0`、`C-UI overlay_close`。
+- 拖动：dragHandle swipe 后 `mAttrs (0,200)→(0,600)`、frame `[0,705][880,2077]`，拖动链路正常。
+- 双 job：t166keep+floatlog 同时两个 Node overlay（880x1372 + 278x109）；stopPath t166keep 后仅剩 floatlog overlay（count 4→3），未互删。
+结论：dev-1138 正式包 task-192 全部通过。
+证据：`output/flutter-poc/evidence/task192/dev1138-*`。

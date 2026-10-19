@@ -510,9 +510,16 @@ public class Node24Service extends Service {
                         // Job.cancel 可能发生在 native 返回之后（例如唤醒授权等待后 JS 正常退出），
                         // 以 Job 标记为准合并，避免把取消回报成 success。
                         boolean wasCancelled=cancelled||value.cancelled;
-                        String state=wasCancelled?"CANCELLED":value.timedOut?"TIMEOUT":value.succeeded()?"SUCCESS":"SCRIPT_ERROR";
-                        result.put("status",state).put("success",!wasCancelled&&value.succeeded()).put("exitCode",value.exitCode)
-                            .put("cancelled",wasCancelled).put("timedOut",value.timedOut).put("message",value.error)
+                        // task-194：process.exit()/exit(0) 视为成功（exitCode==0），即使 native 带回
+                        // 非空 error 文本（关闭窗口时的 pending host 回调等）也不报 SCRIPT_ERROR；
+                        // 非 0 才失败，并给出 exitCode 便于诊断。
+                        boolean succeeded=!wasCancelled && !value.timedOut && value.exitCode==0;
+                        String state=wasCancelled?"CANCELLED":value.timedOut?"TIMEOUT":succeeded?"SUCCESS":"SCRIPT_ERROR";
+                        String message=value.error;
+                        if(!succeeded && (message==null || message.isEmpty()))
+                            message="Node 脚本异常退出，exitCode="+value.exitCode;
+                        result.put("status",state).put("success",succeeded).put("exitCode",value.exitCode)
+                            .put("cancelled",wasCancelled).put("timedOut",value.timedOut).put("message",message)
                             .put("logs",output.lines()).put("logsDelivered",deliveredLogs())
                             .put("engineVersion","Node 24.22.0").put("sourceName",filename)
                             .put("uid",android.os.Process.myUid()).put("pid",android.os.Process.myPid())

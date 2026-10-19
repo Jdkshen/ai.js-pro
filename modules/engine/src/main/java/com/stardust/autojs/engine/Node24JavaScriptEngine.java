@@ -234,7 +234,12 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                 // task-174：排队超时/排队已满时给用户明确中文提示，不暴露裸 BUSY。
                 throw new ScriptException(message);
             }
-            throw new ScriptException(message.isEmpty() ? status : status + ": " + message);
+            // task-194：无 message 时带上 exitCode，避免只剩泛化的 SCRIPT_ERROR。
+            int exitCode = result.optInt("exitCode", 0);
+            String detail = message.isEmpty()
+                    ? status + (exitCode != 0 ? "（exitCode=" + exitCode + "）" : "")
+                    : status + ": " + message;
+            throw new ScriptException(detail);
         } catch (ScriptException error) {
             throw error;
         } catch (Throwable error) {

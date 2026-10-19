@@ -132,7 +132,9 @@
                 throw new TypeError('click 监听需要一个函数');
             }
             if (!state.viewId) {
-                throw new Error('无法绑定 click：view "' + (state.viewName || '') + '" 没有 id');
+                // task-194：Adapter item 探测/动态视图可能没有 id，click 绑定降级为 no-op，
+                // 不再抛错（否则示例会打出「无法绑定 click」warning）。
+                return false;
             }
             state.clickHandlers = state.clickHandlers || [];
             state.clickHandlers.push(handler);
@@ -423,7 +425,11 @@
                     adapter.onCreateViewHolder(markerObject('ViewGroup', {views: {}}), 0);
                 }
             } catch (error) {
-                console.warn('[ui] 探测 item 布局失败：', error);
+                // task-194：item 探测允许失败（无 id/非 View 的 marker），降级为调试输出。
+                if (typeof console !== 'undefined' && console.debug) {
+                    console.debug('[ui] 探测 item 布局失败（可忽略）：'
+                            + ((error && error.message) || String(error)));
+                }
             }
             return lastInflate.layoutId || 0;
         }

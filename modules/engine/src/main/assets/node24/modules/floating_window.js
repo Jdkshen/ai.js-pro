@@ -186,7 +186,15 @@
   };
   FloatingWindowImpl.prototype._hideNow = function (emitEvent) {
     if (!this._visible) { return this; }
-    overlayCall('close', { overlayId: this._overlayId });
+    try {
+      // task-194：关闭是幂等操作；宿主已移除/窗口已关闭时不能抛异常，
+      // 否则示例的 close 回调会在 process.exit() 前抛错，被报成 SCRIPT_ERROR。
+      overlayCall('close', { overlayId: this._overlayId });
+    } catch (closeError) {
+      if (typeof console !== 'undefined' && console.debug) {
+        console.debug('[floating_window] close ignored: ' + ((closeError && closeError.message) || closeError));
+      }
+    }
     this._overlayId = null;
     this._visible = false;
     if (emitEvent) { this._emit('hide'); }

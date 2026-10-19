@@ -321,8 +321,11 @@ public class NodeUiBridgeService extends Service {
                     params.x = request.optInt("x", 100);
                     params.y = request.optInt("y", 200);
                     manager.addView(view, params);
-                    // task-192：addView 后按真实内容重新测量并补偿窗口高度，避免底部按钮中心在 frame 外。
-                    view.post(() -> {
+                    // task-193：首次 measure 可能恰好等于旧高度，但子控件（按钮）实际 bottom 已溢出；
+                    // 等真实布局完成后按内容 bottom 重新计算窗口高度，持续补偿到覆盖所有子控件。
+                    final java.util.concurrent.atomic.AtomicBoolean remeasured = new java.util.concurrent.atomic.AtomicBoolean(false);
+                    final Runnable remeasure = () -> {
+                        if (!remeasured.compareAndSet(false, true)) return;
                         try {
                             int maxWidth = getResources().getDisplayMetrics().widthPixels;
                             int widthSpec = android.view.View.MeasureSpec.makeMeasureSpec(
@@ -330,16 +333,29 @@ public class NodeUiBridgeService extends Service {
                             int heightSpec = android.view.View.MeasureSpec.makeMeasureSpec(
                                     0, android.view.View.MeasureSpec.UNSPECIFIED);
                             view.measure(widthSpec, heightSpec);
-                            int measuredHeight = view.getMeasuredHeight();
-                            if (measuredHeight > 0 && measuredHeight > params.height) {
-                                params.height = measuredHeight;
+                            int contentBottom = maxContentBottom(view);
+                            int needed = Math.max(view.getMeasuredHeight(), contentBottom);
+                            if (needed > 0 && needed > params.height) {
+                                params.height = needed;
                                 manager.updateViewLayout(view, params);
-                                Log.i(TAG, "overlay remeasure id=" + overlayId + " h=" + measuredHeight);
+                                Log.i(TAG, "overlay remeasure id=" + overlayId
+                                        + " measured=" + view.getMeasuredHeight()
+                                        + " contentBottom=" + contentBottom + " h=" + needed);
                             }
                         } catch (Throwable error) {
                             Log.w(TAG, "overlay remeasure failed id=" + overlayId, error);
                         }
-                    });
+                    };
+                    view.post(remeasure);
+                    view.getViewTreeObserver().addOnGlobalLayoutListener(
+                            new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                                @Override public void onGlobalLayout() {
+                                    try {
+                                        view.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                                    } catch (Throwable ignored) { }
+                                    remeasure.run();
+                                }
+                            });
                     OVERLAYS.put(overlayId, view);
                     OVERLAY_PARAMS.put(overlayId, params);
                     OVERLAY_OWNERS.put(overlayId, request.optString("owner", ""));
@@ -456,6 +472,21 @@ public class NodeUiBridgeService extends Service {
     }
 
     /** task-157：触摸/点击/拖拽事件回传（JSON 队列，pollEvents 拉取）。 */
+    /** task-193：root 内所有后代相对 root 的最大 bottom（包含超出 root 已测量高度的子控件）。 */
+    private int maxContentBottom(android.view.View view) {
+        if (view == null) return 0;
+        int max = view.getBottom();
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                android.view.View child = group.getChildAt(i);
+                if (child == null || child.getVisibility() == android.view.View.GONE) continue;
+                max = Math.max(max, child.getTop() + maxContentBottom(child));
+            }
+        }
+        return max;
+    }
+
     private void recordOverlayTouch(String overlayId, android.view.MotionEvent ev, android.view.View root, android.view.View content) {
         try {
             if (root == null || content == null) return;
