@@ -36,18 +36,22 @@ public class ConsoleImpl extends AbstractConsole {
         public int level;
         public CharSequence content;
         public boolean newLine = false;
+        public final long time;
 
         public LogEntry(int id, int level, CharSequence content) {
-            this.id = id;
-            this.level = level;
-            this.content = content;
+            this(id, level, content, false);
         }
 
         public LogEntry(int id, int level, CharSequence content, boolean newLine) {
+            this(id, level, content, newLine, System.currentTimeMillis());
+        }
+
+        public LogEntry(int id, int level, CharSequence content, boolean newLine, long time) {
             this.id = id;
             this.level = level;
             this.content = content;
             this.newLine = newLine;
+            this.time = time;
         }
 
         @Override
@@ -135,19 +139,31 @@ public class ConsoleImpl extends AbstractConsole {
     private void notifyLogListeners(LogEntry entry) {
         LogListener legacy = mLogListener == null ? null : mLogListener.get();
         if (legacy != null) {
-            if (entry == null) legacy.onLogClear(); else legacy.onNewLog(entry);
+            notifyLogListener(legacy, entry);
         }
         for (WeakReference<LogListener> ref : mObservers) {
             LogListener listener = ref.get();
             if (listener == null) mObservers.remove(ref);
             else if (listener != legacy) {
-                if (entry == null) listener.onLogClear(); else listener.onNewLog(entry);
+                notifyLogListener(listener, entry);
             }
+        }
+    }
+
+    private static void notifyLogListener(LogListener listener, LogEntry entry) {
+        try {
+            if (entry == null) listener.onLogClear(); else listener.onNewLog(entry);
+        } catch (Throwable error) {
+            android.util.Log.w("Console", "log observer failed", error);
         }
     }
 
     public ArrayList<LogEntry> getAllLogs() {
         return mLogEntries;
+    }
+
+    public ArrayList<LogEntry> snapshotLogs() {
+        synchronized (mLogEntries) { return new ArrayList<>(mLogEntries); }
     }
 
     /** 挂上落盘日志；只给「这次运行自己的控制台」挂（见 {@link ScriptRunLog#attach}）。 */
@@ -165,11 +181,15 @@ public class ConsoleImpl extends AbstractConsole {
 
     @Override
     public String println(int level, CharSequence charSequence) {
+        return printLine(level, charSequence, System.currentTimeMillis());
+    }
+
+    protected String printLine(int level, CharSequence charSequence, long time) {
         ScriptRunLog runLog = mRunLog;
         if (runLog != null) {
             runLog.line(level, charSequence);
         }
-        LogEntry logEntry = new LogEntry(mIdCounter.getAndIncrement(), level, charSequence, true);
+        LogEntry logEntry = new LogEntry(mIdCounter.getAndIncrement(), level, charSequence, true, time);
         synchronized (mLogEntries) {
             mLogEntries.add(logEntry);
         }

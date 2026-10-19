@@ -10,13 +10,14 @@ public final class UnifiedLogNavigation {
 
     public static boolean open(Context context) {
         try {
-            String activity = "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity";
-            Class.forName(activity, false, context.getClassLoader());
-            boolean saved = context.getSharedPreferences("flutter-glass", Context.MODE_PRIVATE)
-                    .edit().putString("pending_action", "{\"action\":\"log\"}").commit();
-            if (!saved) return false;
+            Class<?> main = Class.forName("com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity",
+                    false, context.getClassLoader());
+            if (Boolean.TRUE.equals(main.getMethod("revealLogsIfVisible").invoke(null))) return true;
+            String activity = "com.jdkshen.aijspro.flutterpoc.UnifiedLogFlutterActivity";
+            int flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP;
+            if (!(context instanceof android.app.Activity)) flags |= Intent.FLAG_ACTIVITY_NEW_TASK;
             context.startActivity(new Intent().setClassName(context, activity).addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP));
+                    flags));
             return true;
         } catch (Throwable error) {
             Log.w("UnifiedLogNavigation", "open logs failed", error);

@@ -203,7 +203,9 @@ final class PocBridge {
 
             // ---- 原生页兜底（Flutter 侧入口切过来后，这些是“去原生页”的唯一出口）----
             case "openLog":
-                launch(activity, LOG_ACTIVITY, null);
+                if (!com.jdkshen.aijspro.log.UnifiedLogNavigation.open(activity)) {
+                    throw new IOException("无法打开统一日志页");
+                }
                 return Boolean.TRUE;
             case "engineSettings":
                 // task-177：Miuix 设置页已退役；设置已全部在 Flutter 设置页，没有原生页可开。
@@ -823,7 +825,6 @@ final class PocBridge {
     private static final java.text.SimpleDateFormat LIVE_TIME_FORMAT =
             new java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.getDefault());
 
-    private static boolean sGlobalConsoleTapped;
 
     /**
      * 实时统一流：从 {@link HostConsoleSink} 取最近/增量行（主进程脚本 + :script + :native 汇总）。
@@ -837,7 +838,7 @@ final class PocBridge {
      * parseLogItems 可直接解析（等级着色/6 档过滤/搜索照旧）；{@code version} 传回下次 since。
      */
     private static Object liveLogs(JSONObject args) {
-        ensureGlobalConsoleTap();
+        HostConsoleSink.ensureMainConsoleTap();
         long since = Math.max(0L, args.optLong("since", 0L));
         int maxLines = args.has("maxLines")
                 ? args.optInt("maxLines", 800) : args.optInt("window", 800);
@@ -989,107 +990,15 @@ final class PocBridge {
         }
     }
 
-    /**
-     * 一次安装 GlobalConsole 的「被动采集」：主进程脚本的 console 会走 GlobalConsole，
-     * 用 log4j Appender 旁路抄一份进 HostConsoleSink，让统一实时流也能看到主进程脚本。
-     *
-     * <p>用 Appender 而不是 ConsoleImpl.setLogListener：后者是单槽位，会覆盖原生日志页监听。
-     * HostConsoleSink 把 :script 行写 GlobalConsole 时也会经过这里，按「buffer 最后一行 + 时间」
-     * 去重，避免 :script 行在统一流里出现两次。
-     */
-    private static synchronized void ensureGlobalConsoleTap() {
-        if (sGlobalConsoleTapped) {
-            return;
-        }
-        try {
-            org.apache.log4j.Logger logger = org.apache.log4j.Logger.getLogger("GlobalConsole");
-            logger.addAppender(new GlobalConsoleTap());
-            sGlobalConsoleTapped = true;
-        } catch (Throwable error) {
-            Log.w(TAG, "无法把 GlobalConsole 接入实时日志流", error);
-        }
-    }
-
-    /** log4j 被动采集：GlobalConsole.println 的行格式是 {@code HH:mm:ss.SSS/L: 正文}。 */
-    private static final class GlobalConsoleTap extends org.apache.log4j.AppenderSkeleton {
-
-        private static final java.util.regex.Pattern LINE = java.util.regex.Pattern.compile(
-                "^\\d{2}:\\d{2}:\\d{2}\\.\\d{3}/([VDIWEAF]): (.*)$");
-
-        @Override
-        protected void append(org.apache.log4j.spi.LoggingEvent event) {
-            try {
-                Object message = event == null ? null : event.getMessage();
-                String text = message == null ? "" : message.toString();
-                java.util.regex.Matcher matcher = LINE.matcher(text);
-                if (!matcher.matches()) {
-                    return;
-                }
-                String body = matcher.group(2) == null ? "" : matcher.group(2);
-                if (body.isEmpty()) {
-                    return;
-                }
-                // :script/:native 行已由 HostConsoleSink.append 先写入缓冲：跳过重复行。
-                List<HostConsoleSink.Entry> last = HostConsoleSink.snapshot(1, null);
-                if (!last.isEmpty()) {
-                    HostConsoleSink.Entry previous = last.get(last.size() - 1);
-                    if (previous.line.equals(body)
-                            && Math.abs(System.currentTimeMillis() - previous.time) < 1500L) {
-                        return;
-                    }
-                }
-                HostConsoleSink.append(LIVE_TOKEN_MAIN, mainScriptName(),
-                        levelOf(matcher.group(1)), body);
-            } catch (Throwable ignored) {
-                // 被动采集失败绝不能影响脚本/日志本身。
-            }
-        }
-
-        @Override
-        public void close() {
-        }
-
-        @Override
-        public boolean requiresLayout() {
-            return false;
-        }
-
-        private static int levelOf(String ch) {
-            if ("V".equals(ch)) {
-                return Log.VERBOSE;
-            }
-            if ("D".equals(ch)) {
-                return Log.DEBUG;
-            }
-            if ("W".equals(ch)) {
-                return Log.WARN;
-            }
-            if ("E".equals(ch)) {
-                return Log.ERROR;
-            }
-            if ("A".equals(ch)) {
-                return Log.ASSERT;
-            }
-            return Log.INFO;
-        }
-    }
-
-    /** 主进程当前脚本名（只有一个在跑时用于统一流显示；否则留空）。 */
     private static String mainScriptName() {
-        try {
-            List<ScriptExecution> executions = runningMainExecutions();
-            if (executions.size() != 1) {
-                return "";
-            }
-            com.stardust.autojs.script.ScriptSource source = executions.get(0).getSource();
-            String name = source == null ? null : source.getName();
-            if (name == null) {
-                return "";
-            }
-            int dot = name.lastIndexOf('.');
-            return dot > 0 ? name.substring(0, dot) : name;
-        } catch (Throwable error) {
-            return "";
-        }
+        List<ScriptExecution> executions = runningMainExecutions();
+        if (executions.size() != 1) return "";
+        com.stardust.autojs.script.ScriptSource source = executions.get(0).getSource();
+        String name = source == null ? "" : source.getName();
+        if (name == null) return "";
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
     }
+
+
 }

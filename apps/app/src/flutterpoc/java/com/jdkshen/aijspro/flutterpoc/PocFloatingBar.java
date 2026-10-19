@@ -536,22 +536,7 @@ final class PocFloatingBar {
      * 不再直接启动原生日志 Activity。
      */
     private static void openLog() {
-        if (appContext == null) {
-            return;
-        }
-        try {
-            JSONObject pending = new JSONObject().put("action", "log");
-            appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putString(KEY_PENDING_ACTION, pending.toString()).apply();
-            Intent intent = new Intent()
-                    .setClassName(appContext, GLASS_ACTIVITY)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            appContext.startActivity(intent);
-        } catch (Throwable error) {
-            Log.w(TAG, "打开 Flutter 运行日志失败", error);
-        }
+        if (appContext != null) com.jdkshen.aijspro.log.UnifiedLogNavigation.open(appContext);
     }
 
     private static void close() {

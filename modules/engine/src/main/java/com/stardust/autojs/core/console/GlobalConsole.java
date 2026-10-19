@@ -31,9 +31,13 @@ public class GlobalConsole extends ConsoleImpl {
     /** Forwarded logs retain the same timestamp/source as the unified stream. */
     public String printlnAt(int level, CharSequence charSequence, long time, String source) {
         String log = ConsoleLogStyle.format(time, level, source, String.valueOf(charSequence));
-        LOGGER.log(toLog4jLevel(level), log);
+        Priority priority = toLog4jLevel(level);
+        if (LOGGER.isEnabledFor(priority)) {
+            LOGGER.callAppenders(new org.apache.log4j.spi.LoggingEvent(
+                    GlobalConsole.class.getName(), LOGGER, time, priority, log, null));
+        }
         android.util.Log.d(LOG_tAG, log);
-        super.println(level, log);
+        super.printLine(level, log, time);
         return log;
     }
 

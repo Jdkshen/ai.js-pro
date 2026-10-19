@@ -16,6 +16,14 @@
 
         <!-- 主入口默认解析优先级：有两个 LAUNCHER 时让系统（安装器「打开」、通知等
              getLaunchIntentForPackage 调用）优先解析到 Splash -> Flutter。 -->
+        <activity
+            android:name="com.jdkshen.aijspro.flutterpoc.UnifiedLogFlutterActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.AiJsPro.GlassFlutter"
+            android:windowSoftInputMode="adjustResize"/>
         <activity android:name=".ui.splash.SplashActivity">
             <intent-filter android:priority="10">
                 <action android:name="android.intent.action.MAIN"/>

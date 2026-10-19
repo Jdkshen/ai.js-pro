@@ -132,6 +132,7 @@ public class ScriptHostService extends Service {
     public static final String KEY_CONSOLE_TEXTS = "consoleTexts";
     /** what=103 CONSOLE 的逐段等级键（int[]，每段原始 android.util.Log 等级）。 */
     public static final String KEY_CONSOLE_LEVELS = "consoleLevels";
+    public static final String KEY_CONSOLE_TIMES = "consoleTimes";
 
     /** 用户主动 STOP 时 102 的固定文案：主进程靠它区分「用户停止」和「脚本报错」。 */
     public static final String MESSAGE_STOPPED = "脚本已停止";
@@ -548,6 +549,7 @@ public class ScriptHostService extends Service {
         public void onSuccess(ScriptExecution execution, Object result) {
             try {
                 // task-191 P0/P1：结束行（6 位小数）先于任何错误/收尾写入主日志页。
+                flushConsoleBeforeFinish(mState);
                 forwardGlobalLine(mState, formatFinishedLine(mState, execution));
                 finish(mState, null);
             } catch (Throwable error) {
@@ -559,6 +561,7 @@ public class ScriptHostService extends Service {
         public void onException(ScriptExecution execution, Throwable e) {
             try {
                 // task-191 P1：用户停止/关闭 UI 也只在这里静默打结束行。
+                flushConsoleBeforeFinish(mState);
                 forwardGlobalLine(mState, formatFinishedLine(mState, execution));
                 // 引擎 GLOBAL_LISTENER 在本监听器之后才打印错误堆栈；延后 250ms 收尾，
                 // 让 ERROR 行经 console 转发（103）到主日志页后再发 102（Pro：结束行→ERROR→Toast）。
@@ -574,6 +577,12 @@ public class ScriptHostService extends Service {
                 Log.w(TAG, "上报 ERROR 失败：" + mState.token, error);
             }
         }
+    }
+
+    private void flushConsoleBeforeFinish(RunState state) {
+        ConsoleForwarder forwarder;
+        synchronized (mLock) { forwarder = state.consoleForwarder; }
+        if (forwarder != null) forwarder.flush();
     }
 
     private void finish(RunState state, Throwable error) {
@@ -709,6 +718,7 @@ public class ScriptHostService extends Service {
             data.putInt(KEY_LEVEL, Log.VERBOSE);
             data.putStringArray(KEY_CONSOLE_TEXTS, new String[]{text});
             data.putIntArray(KEY_CONSOLE_LEVELS, new int[]{Log.VERBOSE});
+            data.putLongArray(KEY_CONSOLE_TIMES, new long[]{System.currentTimeMillis()});
             reply.setData(data);
             state.replyTo.send(reply);
         } catch (RemoteException error) {
@@ -754,6 +764,7 @@ public class ScriptHostService extends Service {
             // 新客户端：逐段文本/等级（drain 时已做快照，数组不再变化）。
             data.putStringArray(KEY_CONSOLE_TEXTS, batch.segmentTexts);
             data.putIntArray(KEY_CONSOLE_LEVELS, batch.segmentLevels);
+            data.putLongArray(KEY_CONSOLE_TIMES, batch.segmentTimes);
             reply.setData(data);
             state.replyTo.send(reply);
         } catch (RemoteException error) {
@@ -821,7 +832,7 @@ public class ScriptHostService extends Service {
                 if (mClosed) {
                     return;
                 }
-                overflow = mBatch.append(normalizeConsoleLevel(logEntry.level), logEntry.content);
+                overflow = mBatch.append(normalizeConsoleLevel(logEntry.level), logEntry.content, logEntry.time);
                 if (overflow != null) {
                     if (mFlushScheduled) {
                         mFlushScheduled = false;
@@ -831,12 +842,10 @@ public class ScriptHostService extends Service {
                     mFlushScheduled = true;
                     mConsoleHandler.postDelayed(mFlushRunnable, CONSOLE_FLUSH_INTERVAL_MS);
                 }
-            }
-            if (overflow != null) {
-                if (cancelTimer) {
-                    mConsoleHandler.removeCallbacks(mFlushRunnable);
+                if (overflow != null) {
+                    if (cancelTimer) mConsoleHandler.removeCallbacks(mFlushRunnable);
+                    replyConsole(mState, overflow);
                 }
-                replyConsole(mState, overflow);
             }
         }
 
@@ -845,15 +854,10 @@ public class ScriptHostService extends Service {
             // console.clear() 不转发：主进程 GlobalConsole 里已有日志不跟着清，避免误清主界面输出。
         }
 
-        private void flush() {
-            ConsoleBatch.Batch batch;
-            synchronized (this) {
-                mFlushScheduled = false;
-                batch = mBatch.drain();
-            }
-            if (batch != null) {
-                replyConsole(mState, batch);
-            }
+        private synchronized void flush() {
+            mFlushScheduled = false;
+            ConsoleBatch.Batch batch = mBatch.drain();
+            if (batch != null) replyConsole(mState, batch);
         }
 
         /** 解挂并 flush 剩余内容（只执行一次）。 */

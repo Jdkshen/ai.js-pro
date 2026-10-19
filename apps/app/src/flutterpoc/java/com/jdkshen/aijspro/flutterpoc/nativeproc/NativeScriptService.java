@@ -128,6 +128,7 @@ public class NativeScriptService extends Service {
     public static final String KEY_CONSOLE_TEXTS = "consoleTexts";
     /** what=103 CONSOLE 的逐段等级键（int[]，每段原始 android.util.Log 等级）。 */
     public static final String KEY_CONSOLE_LEVELS = "consoleLevels";
+    public static final String KEY_CONSOLE_TIMES = "consoleTimes";
 
     /** 用户主动 STOP 时 102 的固定文案：主进程靠它区分「用户停止」和「脚本报错」。 */
     static final String MESSAGE_STOPPED = "脚本已停止";
@@ -538,6 +539,7 @@ public class NativeScriptService extends Service {
             // 新客户端：逐段文本/等级（drain 时已做快照，数组不再变化）。
             data.putStringArray(KEY_CONSOLE_TEXTS, batch.segmentTexts);
             data.putIntArray(KEY_CONSOLE_LEVELS, batch.segmentLevels);
+            data.putLongArray(KEY_CONSOLE_TIMES, batch.segmentTimes);
             reply.setData(data);
             state.replyTo.send(reply);
         } catch (RemoteException error) {
@@ -605,7 +607,7 @@ public class NativeScriptService extends Service {
                 if (mClosed) {
                     return;
                 }
-                overflow = mBatch.append(normalizeConsoleLevel(logEntry.level), logEntry.content);
+                overflow = mBatch.append(normalizeConsoleLevel(logEntry.level), logEntry.content, logEntry.time);
                 if (overflow != null) {
                     if (mFlushScheduled) {
                         mFlushScheduled = false;
@@ -615,12 +617,10 @@ public class NativeScriptService extends Service {
                     mFlushScheduled = true;
                     mConsoleHandler.postDelayed(mFlushRunnable, CONSOLE_FLUSH_INTERVAL_MS);
                 }
-            }
-            if (overflow != null) {
-                if (cancelTimer) {
-                    mConsoleHandler.removeCallbacks(mFlushRunnable);
+                if (overflow != null) {
+                    if (cancelTimer) mConsoleHandler.removeCallbacks(mFlushRunnable);
+                    replyConsole(mState, overflow);
                 }
-                replyConsole(mState, overflow);
             }
         }
 
@@ -629,15 +629,10 @@ public class NativeScriptService extends Service {
             // console.clear() 不转发：主进程 GlobalConsole 里已有日志不跟着清，避免误清主界面输出。
         }
 
-        private void flush() {
-            ConsoleBatch.Batch batch;
-            synchronized (this) {
-                mFlushScheduled = false;
-                batch = mBatch.drain();
-            }
-            if (batch != null) {
-                replyConsole(mState, batch);
-            }
+        private synchronized void flush() {
+            mFlushScheduled = false;
+            ConsoleBatch.Batch batch = mBatch.drain();
+            if (batch != null) replyConsole(mState, batch);
         }
 
         /** 解挂并 flush 剩余内容（只执行一次）。 */

@@ -60,7 +60,7 @@ public final class HostConsoleSink {
         default void onCleared(long generation) { }
     }
 
-    /** 与 ScriptRunLog / Flutter parseLogItems 一致的统一行格式：HH:mm:ss.SSS [I] name: line。 */
+    /** 统一显示格式：HH:mm:ss.SSS/I: name: line；历史文件格式由前端兼容解析。 */
     public static String formatLine(Entry entry) {
         if (entry == null) {
             return "";
@@ -165,18 +165,23 @@ public final class HostConsoleSink {
      * @param line  一行或多行文本（多行按 {@code \n} 拆开逐行处理）
      */
     public static void append(final String token, final String name, final int level, final String line) {
+        append(token, name, level, line, System.currentTimeMillis());
+    }
+
+    public static void append(final String token, final String name, final int level,
+                              final String line, final long time) {
         if (line == null) {
             return;
         }
         ensureMainConsoleTap();
         final int safeLevel = normalizeLevel(level);
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            dispatch(token, name, safeLevel, line, true);
+            dispatch(token, name, safeLevel, line, true, time);
         } else {
             MAIN.post(new Runnable() {
                 @Override
                 public void run() {
-                    dispatch(token, name, safeLevel, line, true);
+                    dispatch(token, name, safeLevel, line, true, time);
                 }
             });
         }
@@ -274,7 +279,7 @@ public final class HostConsoleSink {
      * 增量 + 按 token 过滤的快照：只返回 seq &gt; afterSeq 且 token 匹配的行（时间顺序）。
      *
      * @param afterSeq 上次拿到的 version（0 = 从现在缓冲里取最近 maxLines 行）
-     * @param maxLines 最多返回行数（超出时保留最新的）
+     * @param maxLines 最多返回行数（首次保留最新窗口；增量按最早未读顺序返回）
      * @param token    脚本 token 过滤（null/空 = 全部；比较的是 {@link Entry#token} 原始值，
      *                 前缀归一化在前缀侧桥里做）
      */
@@ -290,9 +295,22 @@ public final class HostConsoleSink {
         return BUFFER.page(afterSeq, maxLines, entry -> tokenMatches(entry.token, filter), expectedGeneration);
     }
 
-    /** 清空环形缓冲（只清本类的缓存，不影响 GlobalConsole 已显示内容）。 */
+    /** 清空统一实时流和 GlobalConsole，并通知所有视图；保留磁盘历史文件。 */
     public static void clear() {
-        if (Looper.myLooper() != Looper.getMainLooper()) { MAIN.post(HostConsoleSink::clear); return; }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            java.util.concurrent.FutureTask<Void> clear = new java.util.concurrent.FutureTask<>(() -> {
+                clear();
+                return null;
+            });
+            MAIN.post(clear);
+            try { clear.get(5, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (Exception error) {
+                clear.cancel(false);
+                if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+                throw new IllegalStateException("清空实时日志失败", error);
+            }
+            return;
+        }
         long generation = BUFFER.clear();
         sClearingGlobal = true;
         try {
@@ -338,13 +356,13 @@ public final class HostConsoleSink {
     // ------------------------------------------------------------------
 
     private static void dispatch(String token, String name, int level, String text,
-                                 boolean writeGlobalConsole) {
+                                 boolean writeGlobalConsole, long time) {
         String payload = text.length() > MAX_INPUT_CHARS ? text.substring(0, MAX_INPUT_CHARS) : text;
         String[] lines = payload.split("\n", -1);
         for (String rawLine : lines) {
             // 空行也保留（脚本里 console.log("") 是有效输出，便于看分段），但行尾的 \r 去掉。
             String line = rawLine.endsWith("\r") ? rawLine.substring(0, rawLine.length() - 1) : rawLine;
-            Entry entry = BUFFER.append(seq -> new Entry(token, name, line, level, System.currentTimeMillis(), seq));
+            Entry entry = BUFFER.append(seq -> new Entry(token, name, line, level, time, seq));
             if (writeGlobalConsole) {
                 writeToGlobalConsole(entry);
             }
@@ -486,7 +504,7 @@ public final class HostConsoleSink {
                 }
             }
             java.util.List<com.stardust.autojs.core.console.ConsoleImpl.LogEntry> logs =
-                    new java.util.ArrayList<>(console.getAllLogs());
+                    console.snapshotLogs();
             for (com.stardust.autojs.core.console.ConsoleImpl.LogEntry log : logs) {
                 if (log == null || log.content == null) {
                     continue;
@@ -497,7 +515,7 @@ public final class HostConsoleSink {
                     existing.put(parsed.text, count - 1);
                     continue;
                 }
-                appendInternal("main", "main", log.level, parsed.text, false);
+                appendInternal("main", "main", log.level, parsed.text, false, log.time);
             }
         } catch (Throwable error) {
             Log.w(TAG, "灌入主进程 console 历史失败", error);
@@ -538,15 +556,15 @@ public final class HostConsoleSink {
 
     /** 主进程行：token/name 固定 "main"，不再写回 GlobalConsole（避免回环）。 */
     private static void appendInternal(String token, String name, int level, String line,
-                                       boolean writeGlobalConsole) {
+                                       boolean writeGlobalConsole, long time) {
         if (line == null) {
             return;
         }
         int safeLevel = normalizeLevel(level);
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            dispatch(token, name, safeLevel, line, writeGlobalConsole);
+            dispatch(token, name, safeLevel, line, writeGlobalConsole, time);
         } else {
-            MAIN.post(() -> dispatch(token, name, safeLevel, line, writeGlobalConsole));
+            MAIN.post(() -> dispatch(token, name, safeLevel, line, writeGlobalConsole, time));
         }
     }
 
@@ -573,7 +591,7 @@ public final class HostConsoleSink {
                     return;
                 }
                 MainLine parsed = parseGlobalConsoleLine(message);
-                appendInternal("main", "main", parsed.level, parsed.text, false);
+                appendInternal("main", "main", parsed.level, parsed.text, false, event.timeStamp);
             } catch (Throwable error) {
                 Log.w(TAG, "主进程 console appender 处理失败", error);
             }

@@ -64,7 +64,7 @@ public class ConsoleBatchLevelTest {
         // 第二次 drain 必须为空，新一批不能串进上一批。
         assertNull(batch.drain());
         assertNull(batch.append(INFO, ""));
-        assertNull(batch.drain());
+        assertArrayEquals(new String[]{""}, batch.drain().segmentTexts);
 
         assertNull(batch.append(ERROR, "second"));
         ConsoleBatch.Batch second = batch.drain();
@@ -193,5 +193,83 @@ public class ConsoleBatchLevelTest {
         // 沿用原触发语义：单次 append 后检查阈值，故整批上界由单段截断保证（约 2×8KB）。
         assertTrue(overflow.text.length() <= 2 * ConsoleBatch.MAX_CHARS);
         assertNull(batch.drain());
+    }
+
+    @Test
+    public void sameLevelDifferentTimesKeepBothSourceTimesAfterDrain() {
+        ConsoleBatch batch = new ConsoleBatch();
+        long firstTime = 1_700_000_000_001L;
+        long secondTime = 1_700_000_000_999L;
+
+        assertNull(batch.append(INFO, "first", firstTime));
+        assertNull(batch.append(INFO, "second", secondTime));
+
+        ConsoleBatch.Batch out = batch.drain();
+        assertNotNull(out);
+        // 同等级、不同时间：不得合并，也不得在 flush 时统一成 drain 时刻。
+        assertEquals("first\nsecond", out.text);
+        assertArrayEquals(new String[]{"first", "second"}, out.segmentTexts);
+        assertArrayEquals(new int[]{INFO, INFO}, out.segmentLevels);
+        assertArrayEquals(new long[]{firstTime, secondTime}, out.segmentTimes);
+        assertNull(batch.drain());
+    }
+
+    @Test
+    public void segmentTimesStayIndexedWithTextsAndLevels() {
+        ConsoleBatch batch = new ConsoleBatch();
+        long[] times = {10L, 20L, 30L};
+
+        assertNull(batch.append(VERBOSE, "v", times[0]));
+        assertNull(batch.append(WARN, "w", times[1]));
+        assertNull(batch.append(ERROR, "e", times[2]));
+
+        ConsoleBatch.Batch out = batch.drain();
+        assertNotNull(out);
+        assertArrayEquals(new String[]{"v", "w", "e"}, out.segmentTexts);
+        assertArrayEquals(new int[]{VERBOSE, WARN, ERROR}, out.segmentLevels);
+        assertArrayEquals(times, out.segmentTimes);
+        assertEquals(out.segmentTexts.length, out.segmentLevels.length);
+        assertEquals(out.segmentTexts.length, out.segmentTimes.length);
+        assertEquals(ERROR, out.level);
+    }
+
+    @Test
+    public void defaultAppendRecordsCurrentTime() {
+        ConsoleBatch batch = new ConsoleBatch();
+        long before = System.currentTimeMillis();
+        assertNull(batch.append(INFO, "now"));
+        ConsoleBatch.Batch out = batch.drain();
+        long after = System.currentTimeMillis();
+
+        assertNotNull(out);
+        assertEquals(1, out.segmentTimes.length);
+        assertTrue(out.segmentTimes[0] >= before);
+        assertTrue(out.segmentTimes[0] <= after);
+    }
+
+    @Test
+    public void blankLogsKeepTheirLevelAndTime() {
+        ConsoleBatch batch = new ConsoleBatch();
+        batch.append(INFO, "", 10L);
+        batch.append(WARN, "", 20L);
+        batch.append(ERROR, "last", 30L);
+        ConsoleBatch.Batch out = batch.drain();
+        assertTrue(!out.isEmpty());
+        assertArrayEquals(new String[]{"", "", "last"}, out.segmentTexts);
+        assertArrayEquals(new int[]{INFO, WARN, ERROR}, out.segmentLevels);
+        assertArrayEquals(new long[]{10L, 20L, 30L}, out.segmentTimes);
+        assertEquals("\n\nlast", out.text);
+    }
+
+    @Test
+    public void truncationDoesNotSplitAnEmoji() {
+        ConsoleBatch batch = new ConsoleBatch();
+        StringBuilder content = new StringBuilder();
+        for (int i = 0; i < ConsoleBatch.MAX_CHARS - 1; i++) content.append('x');
+        content.append("\uD83D\uDE00tail");
+        ConsoleBatch.Batch out = batch.append(INFO, content);
+        assertNotNull(out);
+        assertEquals('\n', out.text.charAt(ConsoleBatch.MAX_CHARS - 1));
+        assertTrue(!out.text.contains("\uD83D"));
     }
 }

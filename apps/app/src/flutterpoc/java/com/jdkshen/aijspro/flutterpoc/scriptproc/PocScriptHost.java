@@ -105,6 +105,7 @@ public final class PocScriptHost {
     private static final String KEY_CONSOLE_TEXTS = "consoleTexts";
     /** 新服务端附带的逐段等级（int[]）；与 consoleTexts 等长同序。 */
     private static final String KEY_CONSOLE_LEVELS = "consoleLevels";
+    private static final String KEY_CONSOLE_TIMES = "consoleTimes";
 
     /** 任务列表里 :script 任务的 token 前缀；去掉后就是协议里的 token。 */
     public static final String TOKEN_PREFIX = "script:";
@@ -400,7 +401,8 @@ public final class PocScriptHost {
                             data == null ? null : data.getString(KEY_CONSOLE_LINE),
                             data == null ? Log.INFO : data.getInt(KEY_CONSOLE_LEVEL, Log.INFO),
                             data == null ? null : data.getStringArray(KEY_CONSOLE_TEXTS),
-                            data == null ? null : data.getIntArray(KEY_CONSOLE_LEVELS));
+                            data == null ? null : data.getIntArray(KEY_CONSOLE_LEVELS),
+                            data == null ? null : data.getLongArray(KEY_CONSOLE_TIMES));
                     break;
                 default:
                     // 将来可能继续加回执：不认识的一律忽略，别打断脚本。
@@ -480,7 +482,7 @@ public final class PocScriptHost {
      * :script / :native 的协议 token 各自从 1 计数，裸 token 会撞号，导致「按任务查看日志」混行。
      */
     private static void onConsole(String token, String line, int level,
-                                  String[] texts, int[] levels) {
+                                  String[] texts, int[] levels, long[] times) {
         String name = "";
         if (token != null) {
             synchronized (LOCK) {
@@ -494,7 +496,9 @@ public final class PocScriptHost {
         if (isValidConsoleBatch(texts, levels)) {
             // 新服务端：每段带自己的原等级，按 append 顺序逐段走原 HostConsoleSink 落点。
             for (int i = 0; i < texts.length; i++) {
-                appendConsole(logToken, name, texts[i], levels[i]);
+                long time = times != null && times.length == texts.length && times[i] > 0
+                        ? times[i] : System.currentTimeMillis();
+                appendConsole(logToken, name, texts[i], levels[i], time);
             }
             return;
         }
@@ -509,7 +513,7 @@ public final class PocScriptHost {
             return false;
         }
         for (int i = 0; i < texts.length; i++) {
-            if (texts[i] == null || texts[i].isEmpty()
+            if (texts[i] == null
                     || levels[i] < Log.VERBOSE || levels[i] > Log.ASSERT) {
                 return false;
             }
@@ -518,11 +522,15 @@ public final class PocScriptHost {
     }
 
     private static void appendConsole(String logToken, String name, String line, int level) {
-        if (line == null || line.isEmpty()) {
+        appendConsole(logToken, name, line, level, System.currentTimeMillis());
+    }
+
+    private static void appendConsole(String logToken, String name, String line, int level, long time) {
+        if (line == null) {
             return;
         }
         try {
-            HostConsoleSink.append(logToken, name, level, line);
+            HostConsoleSink.append(logToken, name, level, line, time);
         } catch (Throwable error) {
             Log.w(TAG, "转发脚本 console 失败（token=" + logToken + "）", error);
         }

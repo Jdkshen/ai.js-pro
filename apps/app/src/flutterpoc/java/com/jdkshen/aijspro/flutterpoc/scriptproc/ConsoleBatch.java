@@ -24,8 +24,10 @@ import java.util.Locale;
  *   <li>{@link Batch#text} + {@link Batch#level} 是旧客户端兼容字段：整批拼接文本 + 批次内最高等级
  *       （android.util.Log 数值越大越严重）；只按它给整批着色会把 V/D/I/W/E/A 混批全部染成最高级，
  *       所以新协议另带逐段快照；</li>
- *   <li>{@link Batch#segmentTexts} / {@link Batch#segmentLevels} 按 append 顺序记录每段文本及其原始
- *       等级（等长），主进程据此逐段落日志；段文本可能本身含多行；</li>
+ *   <li>{@link Batch#segmentTexts} / {@link Batch#segmentLevels} / {@link Batch#segmentTimes}
+ *       按 append 顺序记录每段文本、原始等级与源时间（等长），主进程据此逐段落日志；段文本可能本身含多行；</li>
+ *   <li>源时间在 append 时确定（未显式传入则取 {@link System#currentTimeMillis()}），随段保存，
+ *       drain 时不会统一成 flush 时刻；同一等级不同时间也必须各成一段；</li>
  *   <li>单段文本超过 {@value #MAX_CHARS} 时截断并加中文提示，保证单条 Binder 消息不会超事务上限。</li>
  * </ul>
  */
@@ -38,7 +40,7 @@ public final class ConsoleBatch {
     /** 单批最大段数：每段至少占一行，所以不会超过 40（供主进程校验可选 metadata）。 */
     public static final int MAX_SEGMENTS = MAX_LINES;
 
-    /** 一次 flush 出来的批量文本和逐段等级（跨包复用，字段只读；数组是 drain 时的快照）。 */
+    /** 一次 flush 出来的批量文本、逐段等级与源时间（跨包复用，字段只读；数组是 drain 时的快照）。 */
     public static final class Batch {
         /** 旧客户端兼容：整批拼接文本（多行用 {@code \n} 分隔）。 */
         public final String text;
@@ -48,49 +50,73 @@ public final class ConsoleBatch {
         public final String[] segmentTexts;
         /** 每段对应的原始等级（与 {@link #segmentTexts} 等长同序）。 */
         public final int[] segmentLevels;
+        /** 每段 append 的源时间（Unix 毫秒；与 {@link #segmentTexts} 等长同序，不是 flush 时刻）。 */
+        public final long[] segmentTimes;
 
-        Batch(String text, int level, String[] segmentTexts, int[] segmentLevels) {
+        Batch(String text, int level, String[] segmentTexts, int[] segmentLevels, long[] segmentTimes) {
             this.text = text;
             this.level = level;
             this.segmentTexts = segmentTexts;
             this.segmentLevels = segmentLevels;
+            this.segmentTimes = segmentTimes;
         }
 
         public boolean isEmpty() {
-            return text == null || text.isEmpty();
+            return segmentTexts == null || segmentTexts.length == 0;
         }
     }
 
     private final StringBuilder mBuffer = new StringBuilder();
     private final List<String> mSegmentTexts = new ArrayList<>();
     private final List<Integer> mSegmentLevels = new ArrayList<>();
+    private final List<Long> mSegmentTimes = new ArrayList<>();
     private int mLines;
     private int mLevel;
 
     /**
-     * 追加一段 console 输出。
+     * 追加一段 console 输出，源时间取当前系统时间。
+     *
+     * <p>等价于 {@link #append(int, CharSequence, long)} 并传入
+     * {@link System#currentTimeMillis()}；每次 append 都记录自己的时间，不会使用 flush 时刻。
      *
      * @param level   android.util.Log 等级（可已归一化，也可传原始值；本类只取最大值）
      * @param content 输出文本（可为多行）
      * @return 达到阈值时返回「应立即发送」的批次（缓冲已被取走）；未达阈值返回 null（等定时 flush）
      */
     public synchronized Batch append(int level, CharSequence content) {
+        return append(level, content, System.currentTimeMillis());
+    }
+
+    /**
+     * 追加一段带明确源时间的 console 输出。
+     *
+     * <p>{@code time} 在该段 append 时写入 {@link Batch#segmentTimes}；drain 只复制快照，不会把整批
+     * 改成 flush 时刻。即使两段等级相同，只要时间不同也各自成段、各自保留时间。
+     *
+     * @param level   android.util.Log 等级（可已归一化，也可传原始值；本类只取最大值）
+     * @param content 输出文本（可为多行）
+     * @param time    源时间，Unix 毫秒（与 {@link System#currentTimeMillis()} 同基准）
+     * @return 达到阈值时返回「应立即发送」的批次（缓冲已被取走）；未达阈值返回 null（等定时 flush）
+     */
+    public synchronized Batch append(int level, CharSequence content, long time) {
         if (content == null) {
             return null;
         }
         String text = content.toString();
-        if (text.isEmpty()) {
-            return null;
-        }
         if (text.length() > MAX_CHARS) {
-            text = text.substring(0, MAX_CHARS) + "\n…（单条日志过长，已截断）";
+            int end = MAX_CHARS;
+            if (Character.isHighSurrogate(text.charAt(end - 1))
+                    && Character.isLowSurrogate(text.charAt(end))) end--;
+            text = text.substring(0, end) + "\n…（单条日志过长，已截断）";
         }
-        if (mBuffer.length() > 0 && mBuffer.charAt(mBuffer.length() - 1) != '\n') {
+        if (!mSegmentTexts.isEmpty()
+                && !mSegmentTexts.get(mSegmentTexts.size() - 1).endsWith("\n")) {
             mBuffer.append('\n');
         }
         mBuffer.append(text);
         mSegmentTexts.add(text);
         mSegmentLevels.add(level);
+        mSegmentTimes.add(time);
         mLines += 1 + countNewlines(text);
         mLevel = Math.max(mLevel, level);
         if (mBuffer.length() >= MAX_CHARS || mLines >= MAX_LINES) {
@@ -105,7 +131,7 @@ public final class ConsoleBatch {
     }
 
     private Batch drainLocked() {
-        if (mBuffer.length() == 0) {
+        if (mSegmentTexts.isEmpty()) {
             clearLocked();
             return null;
         }
@@ -116,14 +142,19 @@ public final class ConsoleBatch {
         for (int i = 0; i < segmentLevels.length; i++) {
             segmentLevels[i] = mSegmentLevels.get(i);
         }
+        long[] segmentTimes = new long[mSegmentTimes.size()];
+        for (int i = 0; i < segmentTimes.length; i++) {
+            segmentTimes[i] = mSegmentTimes.get(i);
+        }
         clearLocked();
-        return new Batch(text, level, segmentTexts, segmentLevels);
+        return new Batch(text, level, segmentTexts, segmentLevels, segmentTimes);
     }
 
     private void clearLocked() {
         mBuffer.setLength(0);
         mSegmentTexts.clear();
         mSegmentLevels.clear();
+        mSegmentTimes.clear();
         mLines = 0;
         mLevel = 0;
     }

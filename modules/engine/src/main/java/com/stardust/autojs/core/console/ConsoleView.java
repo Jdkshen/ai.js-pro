@@ -101,6 +101,14 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
         boolean dark = (getResources().getConfiguration().uiMode
                 & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
                 == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        try {
+            Class<?> theme = Class.forName("com.jdkshen.aijspro.theme.AppThemeRepository");
+            Object repository = theme.getMethod("get", Context.class).invoke(null, getContext());
+            Object palette = theme.getMethod("getPalette").invoke(repository);
+            dark = palette.getClass().getField("isDark").getBoolean(palette);
+        } catch (ReflectiveOperationException ignored) {
+            // Standalone runtimes use the Android theme.
+        }
         for (int level = Log.VERBOSE; level <= Log.ASSERT; level++) {
             mColors.put(level, ConsoleLogStyle.color(level, dark));
         }
@@ -114,6 +122,7 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
             typedArray.recycle();
         }
         mLogListRecyclerView = findViewById(R.id.log_list);
+        mLogListRecyclerView.setBackgroundColor(dark ? 0xff14181d : 0xfff5f7f9);
         LinearLayoutManager manager = new LinearLayoutManager(getContext());
         mLogListRecyclerView.setLayoutManager(manager);
         mLogListRecyclerView.setAdapter(new Adapter());

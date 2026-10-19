@@ -37,6 +37,28 @@ public class GlassFlutterActivity extends FlutterActivity {
     private MethodChannel mBackChannel;
     private BasicMessageChannel<String> mLocalChannel;
     private ConsoleLogEvents mLogEvents;
+    private static java.lang.ref.WeakReference<GlassFlutterActivity> sVisible =
+            new java.lang.ref.WeakReference<>(null);
+
+    public static boolean revealLogsIfVisible() {
+        GlassFlutterActivity activity = sVisible.get();
+        if (activity == null || activity.isFinishing() || activity.mLocalChannel == null) return false;
+        if (activity instanceof UnifiedLogFlutterActivity) return true;
+        activity.getSharedPreferences("flutter-glass", MODE_PRIVATE).edit()
+                .putString("pending_action", "{\"action\":\"log\"}").apply();
+        activity.mLocalChannel.send("{\"event\":\"pendingAction\"}");
+        return true;
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        sVisible = new java.lang.ref.WeakReference<>(this);
+    }
+
+    @Override protected void onPause() {
+        if (sVisible.get() == this) sVisible.clear();
+        super.onPause();
+    }
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private static final java.util.concurrent.atomic.AtomicBoolean sOrphanCleanupChecked =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -55,7 +77,9 @@ public class GlassFlutterActivity extends FlutterActivity {
         } catch (Throwable ignored) {
         }
         // task-86：启动时清理上次进程/脚本留下的孤儿浮窗（十字坐标线等）。
-        new Thread(() -> FloatyOrphanCleanup.cleanup("activity-create"), "floaty-orphan-start").start();
+        if (!(this instanceof UnifiedLogFlutterActivity)) {
+            new Thread(() -> FloatyOrphanCleanup.cleanup("activity-create"), "floaty-orphan-start").start();
+        }
     }
 
     /** task-92：pref 开启过 + overlay 权限在 → 恢复悬浮控制条；从未开启则不弹。 */
