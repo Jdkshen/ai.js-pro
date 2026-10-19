@@ -267,12 +267,22 @@ public final class NodeUiActivityClient {
 
     /** 脚本结束/取消时清理所有 overlay（未绑定则忽略）。 */
     public void closeOverlaysIfBound() {
+        closeOverlaysIfBound(null);
+    }
+
+    /**
+     * task-188：清理本 owner 的 overlay；owner 为空保持旧语义（全部清理，向后兼容）。
+     * 并行 Node job 各自一个 owner，停一个不能清掉另一个的浮窗。
+     */
+    public void closeOverlaysIfBound(String owner) {
         Messenger service = mService;
         if (service == null) return;
         try {
             Message message = Message.obtain(null, NodeUiProtocol.MSG_OVERLAY);
             Bundle data = new Bundle();
-            data.putString(NodeUiProtocol.K_REQUEST, "{\"action\":\"closeAll\"}");
+            org.json.JSONObject request = new org.json.JSONObject().put("action", "closeAll");
+            if (owner != null && !owner.isEmpty()) request.put("owner", owner);
+            data.putString(NodeUiProtocol.K_REQUEST, request.toString());
             message.setData(data);
             service.send(message);
         } catch (Throwable ignored) { }

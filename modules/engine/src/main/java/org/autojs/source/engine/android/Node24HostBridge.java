@@ -1169,7 +1169,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
         try {
             // task-186：清理阶段用 fire-and-forget 关闭浮窗；NodeUiHost.overlay 会同步等待
             // 主进程 reply（最长 15s），BACK 关 UI 后主进程正在收尾，同步等待会把清理拖到 15s。
-            com.stardust.autojs.engine.node24.NodeUiActivityClient.get().closeOverlaysIfBound();
+            // task-188：带上本 host owner，避免停掉一个并行 job 时清掉其它 job 的浮窗。
+            com.stardust.autojs.engine.node24.NodeUiActivityClient.get()
+                    .closeOverlaysIfBound(mOverlayOwner);
         } catch (Throwable error) {
             Log.w(TAG, "close floating overlays failed", error);
         }
