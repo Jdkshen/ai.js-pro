@@ -319,6 +319,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
                         String dexPath = runtimeArgs == null ? "" : runtimeArgs.optString("path", "");
                         return ok(loadRuntimeDex(dexPath));
                     }
+                    if ("methods".equals(runtimeAction) || "fields".equals(runtimeAction)) {
+                        String className = runtimeArgs == null ? "" : runtimeArgs.optString("name", "");
+                        return ok(reflectMembers(className, "methods".equals(runtimeAction)));
+                    }
                     return error("runtime 不支持：" + runtimeAction);
                 }
                 case "ui": {
@@ -722,6 +726,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
      */
     private String handleUiJson(JSONObject request) {
         try {
+            // task-201：:node24 进程内 overlay；大 XML 不再跨进程 show，失败自动回退主进程。
+            JSONObject localOverlay = Node24LocalOverlay.handle(mContext, mProjectDir, request);
+            if (localOverlay != null) {
+                return localOverlay.toString();
+            }
             // task-183：floatingWindow 请求带上 owner，主进程 NodeUiBridgeService 按 owner 关闭/清理。
             if (request != null && "floatingWindow".equals(request.optString("op", ""))) {
                 request.put("owner", mOverlayOwner);
@@ -905,6 +914,33 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
         // 成功解析的类按 job 缓存；缺失/失败不缓存，插件类晚加载时仍会重试。
         return mReflectionCache.findClass(name, mContext.getClassLoader());
+    }
+
+    /** task-203：列动态 dex 类的 public 方法/字段签名（第三方探针/兼容检查用）。 */
+    private org.json.JSONArray reflectMembers(String className, boolean wantMethods) throws Exception {
+        if (className == null || className.isEmpty()) {
+            throw new IllegalArgumentException("runtime." + (wantMethods ? "methods" : "fields") + " 需要类名");
+        }
+        Class<?> clazz = findClass(className);
+        org.json.JSONArray result = new org.json.JSONArray();
+        if (wantMethods) {
+            java.lang.reflect.Method[] members = clazz.getMethods();
+            for (java.lang.reflect.Method method : members) {
+                StringBuilder signature = new StringBuilder(method.getName()).append('(');
+                Class<?>[] parameters = method.getParameterTypes();
+                for (int i = 0; i < parameters.length; i++) {
+                    if (i > 0) signature.append(',');
+                    signature.append(parameters[i].getSimpleName());
+                }
+                signature.append(')');
+                result.put(signature.toString());
+            }
+        } else {
+            for (java.lang.reflect.Field field : clazz.getFields()) {
+                result.put(field.getName() + ":" + field.getType().getSimpleName());
+            }
+        }
+        return result;
     }
 
     /** task-198：动态加载 dex（插件 NativeEngine/WindowDrag/NativeYolo 等）。 */
@@ -1208,6 +1244,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     /** B(task-63) 提供的 NodeUiHost.hasOverlay() 等静态查询（类/方法缺失时返回 false）。 */
     public boolean hasUiOverlay() {
         try {
+            if (Node24LocalOverlay.hasOverlay()) return true;
             Object value = invokeStaticUiHost(new String[]{"hasOverlay", "isOverlayShowing", "isVisible", "isShowing"});
             return value instanceof Boolean && (Boolean) value;
         } catch (Throwable error) {
@@ -1234,6 +1271,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     /** 退出时清理 overlay：优先走 NodeUiHost 的 close op，其次 close/closeAll 静态方法。 */
     public boolean closeUiOverlay() {
+        // task-201：先清 :node24 本地 overlay，再清主进程回退 overlay。
+        try { Node24LocalOverlay.closeAll(); } catch (Throwable error) {
+            Log.w(TAG, "close local overlays failed", error);
+        }
         // task-164：floating_window 的 overlay 由主进程 NodeUiBridgeService 管理（不在 NodeUiHost.sOverlayView），
         // close op 清不到它；这里显式下发 floatingWindow closeAll，脚本结束/取消/启动前都清干净。
         try {

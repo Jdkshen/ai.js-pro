@@ -233,3 +233,9 @@ owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-11
 - K40 dev-1140：`screenH=2305 maxAvailable=2200 currentH=1372 contentH=1372 h=unchanged`；frame `[0,305][880,1677]`；`input tap 760 1655` → `input:` 日志，按钮中心可达。
 结论：AT_MOST 限高修复双端 PASS；task-193/task-196 完成。
 证据：`output/flutter-poc/evidence/task196/dev1140-*`、`task193/dev1140-*`。
+## task-201 :node24 进程内 floatingWindow overlay（2026-10-20 K40 debug）
+- 新增 `Node24LocalOverlay`：在 :node24 进程内 inflate XML（app theme）+ WindowManager `TYPE_APPLICATION_OVERLAY`，本地 click/touch/drag、本地 pollEvents，不再走主进程 show；`Node24HostBridge.handleUiJson` 先本地，任何失败返回 null 回退原主进程 NodeUiBridgeService。
+- 大 XML（xiangqi 8275 字符）本地路径：logcat `C-LOCAL inflate theme=0x7f13000e xmlLen=8275`、`C-LOCAL drag anchor=20161210`；无 `NodeUiBridgeService overlay show`，show 不再跨进程 15s。
+- K40 实操：点「更多」→ 面板展开（按钮变「收起」、显示完整设置/日志）；点「开始」→ feedback 由「后台异常退出」变「后台尚未就绪」（按钮回调生效）；拖动标题 → `C-LOCAL drag move` 面板移动；悬浮日志示例点确定仍触发 `input:`（本地 touch/click 回归正常）。
+- 注：本地 overlay 忽略项目下发的 `FLAG_NOT_TOUCHABLE`（本地无主进程触摸转发，否则面板永远点不到）；隐藏/回退语义仍保留主进程路径。
+证据：`output/flutter-poc/evidence/task201/xiangqi-local-panel-initial.png`、`xiangqi-more-expanded.png`、`xiangqi-start-feedback.png`、`local-overlay.log`。

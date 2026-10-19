@@ -8522,7 +8522,9 @@ const char kBootstrapScript[] = R"JS(
             return proxy;
     }
 
-    global.floaty = Object.freeze(floaty);
+    // task-203：第三方 Node 后端（xiangqi）在 host-compat/headless-window 里会覆盖
+    // global.floaty.window / rawWindow 做逻辑窗口；保持与 Rhino 一致，floaty 可写。
+    global.floaty = floaty;
 
     // Key codes for floaty on("key") listeners, mirroring Rhino's keys table.
     global.keys = Object.freeze({

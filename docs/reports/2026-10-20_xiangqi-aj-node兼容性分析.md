@@ -154,3 +154,65 @@ execute returned exitCode=0
 - `.artifacts/task199-verify/w3.txt`（overlay frame [36,280][861,695]，fl=NOT_FOCUSABLE/NOT_TOUCH_MODAL 可触摸）
 - `.artifacts/task199-verify/after-more2.png`、`after-start.png`（按钮点击后截图）
 
+
+---
+
+## 10. task-200：浮窗交互诊断（dev-1149/1150）
+
+### 10.1 诊断结果
+
+- 点击命中 id 正确：`C-OVERLAY click overlay=overlay-1 hitView=20161263`（expand）、`hitView=20161215`（start），与 `C-VIEWS` 的合成 id 完全一致；
+- 触摸链路正确：`C-OVERLAY touch action=0/1`；
+- 但工程大 XML（xiangqi_floaty.xml，含 MaterialCardView/MaterialButton/ScrollView）的 `window.show()` 会在 **15s 后抛 `floating_window 命令超时`**，同时 main 已打出 `overlay show` 且浮窗可见；
+- 因 show 超时，`_showNow` 后续的 `enableDrag` 和 `clickNames setClickable` 未执行 → 没有 `C-OVERLAY enableDrag`/`viewCommand` 日志，所以「更多/开始」无 JS 反应、拖动无效；
+- 对照悬浮日志示例（小 XML）：show → viewCommand setClickable → enableDrag 全链路正常，说明问题集中在**工程大 XML overlay 的 show 回复/latch 超时**（main 已创建窗口，client 未收到回复）。
+
+### 10.2 已尝试修复
+
+- 增加 `LAST_OVERLAY_INFO` + overlay action `info`：show 超时后 prelude 用 `overlayCall('info')` 找回 overlayId/views；
+- 实测 `info` 同样会 15s 超时（同一 reply/latch 问题），panel.start 仍走 catch，enableDrag/click 预处理仍不执行。
+
+### 10.3 下一个阻塞点 / 建议
+
+1. 需要让工程 XML overlay 的 show/命令不依赖 15s 同步 reply：
+   - 方案 A：overlay show/viewCommand 改为**异步命令**（main 处理完写共享文件/EventBus，prelude 轮询文件取 views/结果）；
+   - 方案 B：把工程 XML overlay 移到 `:node24` 进程内自建（同进程可拿到真实 View，无跨进程 latch）；
+   - 方案 C：定位 NodeUiActivityClient reply 丢包（工程 XML 特有，可能是 show 处理耗时/回复线程阻塞），修 client 侧；
+2. 交互打通后：Rhino `AJ后台.js`/panel-bus、NativeEngine JNI/SO、YOLO dex/SO、@style/@color 完整解析。
+
+### 10.4 证据
+
+- `.artifacts/task200-verify/dev1149-run.txt`（click hitView 与 C-VIEWS 一致、show 超时）；
+- `.artifacts/task200-verify/dev1150-start.txt`、`dev1150-late.png`；
+- `.artifacts/task200-verify/floatlog-test.txt`（小 XML 示例全链路正常）。
+
+---
+
+## 11. task-202：Rhino 后台 / NativeEngine 探针（dev-1150）
+
+### 11.1 Rhino 后台 / panel-bus
+
+- Node UI 的启动方式（工程 `aj-node-panel.node.js:349`）：`engines.execScriptFile(root + '/AJ后台.js', {arguments:{nodeFrontendId, projectDir, nodeHeadless:true}})`；
+- 实测我们的 Node 端 `engines.execScriptFile` 会按脚本头 `// @engine quickjs` 启动 **QuickJS 子引擎**：
+  `QuickJsEngine ... TypeError: 'window' is read-only` at `AJ后台.js:15`（`node-headless-window.js install` 给全局 `window` 赋值），后台立即结束；
+- `engines.all()` 只看到当前 Node 引擎（id=0），QuickJS 子引擎未出现在 all 里（API 差异）；
+- `.aijspro-floaty/bus-state-floaty.json` / `node-backend.log` 里只有 **2026-10-14 旧设备/旧工程** 的数据，说明 panel-bus 文件总线本身格式存在、但本次后台从未成功连上；
+- **阻塞点**：需要让 `AJ后台.js` 跑在 QuickJS 子引擎时 `window` 可写（我们的 QuickJS prelude 把 window 设为只读），或提供 Rhino/QuickJS 子引擎选择；否则 panel 「已连接/定位/识别/算棋」都不会发生。
+
+### 11.2 NativeEngine / NativeYolo / WindowDrag dex+SO
+
+probe（Node24，K40）结果：
+- `host.runtime.loadDex(NativeEngine.dex)` → true；`Class.forName('com.jdkshen.xiangqi.plugin.NativeEngine')` OK，`bridgeVersion()=2`；
+- `NativeEngine.loadProject(dir, codeCache, filesDir, 'arm64-v8a', soSha, nnueSha)` → **true**；`libraryPath=/data/user/0/.../code_cache/xiangqi-engine/<sha>/arm64-v8a/libxiangqi_engine.so`，`nativeloader` 日志确认 SO 用 isolated clns 加载成功；`evalPath=.../files/xiangqi-engine/<sha>/pikafish.nnue` 拷贝成功；
+- `WindowDrag.dex` 加载 + `com.jdkshen.xiangqi.ui.WindowDrag` Class OK；
+- `NativeYolo.dex` 加载 + `com.jdkshen.xiangqi.yolo.NativeYolo` Class OK，`bridgeVersion()=1`；`nativeloader` 确认 `libonnxruntime.so`、`libxiangqi_yolo.so` 均加载成功；
+- **阻塞点 1**：`NativeEngine.nativeAnalyze(...)` 在 loadProject 后直接调用返回 `error: engine-not-started`；dex 方法表含 `nativeStart/nativeStop/nativeQuit/nativeIsRunning/nativeConfiguredThreads/nativeOptions`，需先调 `nativeStart()`（本次 probe 因反射 Class 列表失败未验证到 start 后分析）；
+- **阻塞点 2**：`NativeYolo.loadProject(...)` 返回 false 且无 `loadError()` 方法（dex 只有 bridgeVersion/loadProject/nativeCreate/nativeDetect/nativeClose/loadedIdentity/runtimeVersion）；需在 loadProject 后读 `runtimeVersion()/loadedIdentity()` 判断真实状态，或 nativeCreate 时传 onnx 路径；
+- **阻塞点 3**：Java 反射辅助不足：`host.java.lang.Class.forName` 返回 classRef 代理，不能调 `getMethods`；用 `loader.loadClass` 走的是应用 classloader，找不到动态 dex 类。需要新 bridge API（如 `runtime.methods(className)`）来列出 NativeEngine/NativeYolo 方法签名，验证 `nativeStart` 参数。
+
+### 11.3 证据
+
+- `.artifacts/task202-verify/native-probe.txt`（NativeEngine loadProject + SO/nnue + engine-not-started）
+- `.artifacts/task202-verify/backend-probe2.txt`（QuickJS 子引擎 window read-only、bus 旧状态）
+- `.artifacts/task202-verify/engine-probe.txt`（execScriptFile QuickJS 选择）
+- `.artifacts/task202-verify/n202-native-probe2.node.js`（反射/start 探针，待 bridge API 补齐）
