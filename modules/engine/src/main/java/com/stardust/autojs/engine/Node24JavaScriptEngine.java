@@ -36,6 +36,7 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
     private static final long UI_HOLD_MILLIS = 10 * 60 * 1000L;
     private final Context mContext;
     private volatile Node24Client mClient;
+    private volatile org.autojs.source.engine.android.Node24Pool.Slot mPoolSlot;
     private volatile String mRunningId;
     private volatile boolean mStopRequested;
     /** 主进程侧当前正在跑的 Node24 引擎（同时只有一个 Node 任务），供宿主投递 UI 事件。 */
@@ -152,6 +153,21 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
 
     @Override
     public void init() {
+        // task-175：默认使用 :node24_1..3 进程池（每进程单 Node runtime），
+        // 只有显式 legacy 开关/池不可用时才回退旧单进程 :node24。
+        if (!org.autojs.source.engine.android.Node24Pool.legacyEnabled(mContext)) {
+            try {
+                mPoolSlot = org.autojs.source.engine.android.Node24Pool.acquire(mContext);
+                mClient = mPoolSlot.client();
+                Log.i(TAG, "Node24 pool slot=" + mPoolSlot.index());
+                return;
+            } catch (Throwable error) {
+                Log.w(TAG, "Node24 pool unavailable, fallback deprecated :node24", error);
+            }
+        } else {
+            Log.w(TAG, "Node24 legacy flag enabled: using deprecated :node24 process");
+        }
+        // :node24 旧通道（deprecated）：池不可用/显式回退时仍保证脚本可跑。
         mClient = new Node24Client(mContext);
     }
 
@@ -192,7 +208,18 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                     .put("features", features);
             // task-168：evaluate 等待期间就把 stdout/stderr 行写进运行控制台；返回后只补缺失行。
             LiveLogSink liveLogs = new LiveLogSink();
-            JSONObject result = client.evaluate(request, liveLogs);
+            JSONObject result;
+            try {
+                result = client.evaluate(request, liveLogs);
+            } catch (Throwable evaluateError) {
+                // 进程崩溃/断连：作废当前槽，下一次运行重新拉起宿主进程。
+                if (mPoolSlot != null) {
+                    org.autojs.source.engine.android.Node24Pool.invalidate(mPoolSlot);
+                    mPoolSlot = null;
+                    mClient = null;
+                }
+                throw evaluateError;
+            }
             mirrorLogs(result.optJSONArray("logs"), liveLogs);
             String status = result.optString("status");
             if ("SUCCESS".equals(status)) {
@@ -234,13 +261,18 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
     public synchronized void destroy() {
         Node24Client client = mClient;
         mClient = null;
-        if (client != null) {
+        // 池客户端跨脚本复用：正常结束时只释放槽，不关闭 Binder；失败时由 invalidate 关闭。
+        if (client != null && mPoolSlot == null) {
             try {
                 client.close();
             } catch (Throwable error) {
                 // 关闭 Node 进程的 Binder 客户端失败不能阻断下面的引擎销毁（主进程稳定性优先）。
                 Log.w(TAG, "close Node24 client failed", error);
             }
+        }
+        if (mPoolSlot != null) {
+            org.autojs.source.engine.android.Node24Pool.release(mPoolSlot, true);
+            mPoolSlot = null;
         }
         // super.destroy() -> JavaScriptEngine.destroy() -> ScriptRuntime.onExit()：
         // Node24 不调用 runtime.init()，onExit 里 timers/threads/events/loopers 等为 null，

@@ -194,6 +194,8 @@ public final class Node24Client implements AutoCloseable {
             message.setData(data);target.send(message);return true;
         } catch(RemoteException error) {fail(error.toString());return false;}
     }
+    /** task-175：池健康检查；Binder 失败/已关闭时返回 false。 */
+    public boolean isAlive() { return !closed && failure == null && remote != null; }
     @Override public synchronized void close() {
         if(closed)return;for(String id:active.keySet())cancel(id);closed=true;
         if(bound){context.unbindService(connection);bound=false;}fail("Node client closed");

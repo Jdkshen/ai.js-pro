@@ -305,6 +305,20 @@ public class Node24Service extends Service {
             watchdog.start();
         }
 
+        /** task-175：池进程（:node24_1..N）取消后保持 warm，下一次运行可 <1s 复用；旧 :node24 继续退出。 */
+        private boolean isPoolProcess() {
+            try (java.io.FileInputStream input = new java.io.FileInputStream("/proc/self/cmdline")) {
+                byte[] data = new byte[512];
+                int count = input.read(data);
+                int end = 0;
+                while (end < count && data[end] != 0) ++end;
+                String name = new String(data, 0, end, java.nio.charset.StandardCharsets.UTF_8);
+                return name.contains(":node24_");
+            } catch (Throwable ignored) {
+                return false;
+            }
+        }
+
         private void haltProcess() {
             try { stopSelf(); } catch(Throwable ignored) { }
             try { android.os.Process.killProcess(android.os.Process.myPid()); } catch(Throwable ignored) { }
@@ -312,7 +326,7 @@ public class Node24Service extends Service {
 
         void finishAndHaltIfCancelled() {
             finished = true;
-            if (!cancelled) return;
+            if (!cancelled || isPoolProcess()) return;
             Thread halt = new Thread(() -> {
                 try { Thread.sleep(350L); } catch (InterruptedException ignored) { }
                 // task-174：有排队请求/新 job 接手时不能杀进程。

@@ -481,11 +481,18 @@ final class PocRuntime {
             Log.w(TAG, "读取隔离进程任务失败", error);
         }
         try {
-            // task-167：Node UI/overlay（uiScript）真正跑在 :node24，:script 宿主 RUN 已结束，
-            // 任务页靠主进程登记表补上（token 前缀 node24:）。
-            JSONArray node24Tasks = PocNode24Jobs.snapshot();
-            for (int i = 0; i < node24Tasks.length(); i++) {
-                running.put(node24Tasks.get(i));
+            // task-175：Node 已迁到 :node24_1..3 池，任务由 :script 的 PocScriptHost token 统一登记；
+            // 只有显式 legacy 回退 :node24 时才合并旧的 PocNode24Jobs 登记，避免任务页出现重复行。
+            boolean legacyNode = false;
+            try {
+                legacyNode = org.autojs.source.engine.android.Node24Pool.legacyEnabled(
+                        com.stardust.app.GlobalAppContext.get());
+            } catch (Throwable ignored) { }
+            if (legacyNode) {
+                JSONArray node24Tasks = PocNode24Jobs.snapshot();
+                for (int i = 0; i < node24Tasks.length(); i++) {
+                    running.put(node24Tasks.get(i));
+                }
             }
         } catch (Throwable error) {
             Log.w(TAG, "读取 Node24 任务失败", error);

@@ -38,3 +38,79 @@
 
 ## 待决策
 请 Lead 确认选 A（子进程池）还是 C（改原生 bridge）；未确认前不硬上迁移代码。
+## 方案 A 垂直切片（2026-10-19 23:35，MI8 debug 465）
+
+已落地：
+- manifest 新增 Node 宿主进程池：`Node24PoolService1/2/3`，进程 `:node24_1/2/3`（每进程单 Node24Engine）；
+- `Node24Service` 改为可继承；`Node24Client` 新增 `Class<?> serviceClass` 构造器，可绑定指定池槽；
+- `SourceEngineBootstrap.isNodeProcess` 允许 `:node24` 及 `:node24_*` 池进程加载原生库；
+- `ScriptHostService`（:script）新增进程池编排 spike：并行启动 2 个 Node24Client（Pool1/Pool2），复用一个槽，按 executionId cancel 单个任务。
+
+实测（日志见证据）：
+```
+10-19 23:35:51.857  8700  8727 I ScriptHostService: NODE_POOL_SPIKE_START pid=8700
+10-19 23:35:57.712  8731  8787 I Node24Console: AJSLOG1:D:POOL_B_DONE 3028
+10-19 23:35:57.810  8700  8729 I ScriptHostService: NODE_POOL_SPIKE_B_END ms=5949 status=SUCCESS exit=0 cancelled=false
+10-19 23:35:57.837  8730  8793 I Node24Console: AJSLOG1:D:POOL_A_DONE 3007
+10-19 23:35:57.936  8700  8728 I ScriptHostService: NODE_POOL_SPIKE_A_END ms=6076 status=SUCCESS exit=0 cancelled=false
+10-19 23:35:57.937  8700  8727 I ScriptHostService: NODE_POOL_SPIKE_PARALLEL wall=6081 a=6076 b=5949
+10-19 23:35:58.466  8730  8805 I Node24Console: AJSLOG1:D:POOL_REUSE_OK
+10-19 23:35:58.532  8700  8727 I ScriptHostService: NODE_POOL_SPIKE_REUSE ms=590 status=SUCCESS exit=0
+10-19 23:35:59.749  8700  8727 I ScriptHostService: NODE_POOL_SPIKE_CANCEL sent=true elapsed=1212 status=CANCELLED cancelled=true
+10-19 23:35:59.750  8700  8727 I ScriptHostService: NODE_POOL_SPIKE_END
+```
+
+结论：**方案 A 可行**：从 :script 进程编排，两个 Node 脚本在不同宿主进程真正并行（A/B 均 SUCCESS，wall≈6.1s，各自 runtime 加载）；槽可立即复用（590ms SUCCESS）；单任务 cancel 生效（status=CANCELLED, cancelled=true）。
+
+## 尚未完成（生产迁移）
+- 主进程任务列表/STOP 尚未统一到执行 map：当前 spike 的 Node 任务不是主进程 `PocRuntime.tasks()` 的登记项，任务页看不到；
+- `Node24JavaScriptEngine`（主进程 Node 入口）仍连 `:node24`/旧客户端，未改为经 ScriptHostService 池执行；
+- `ScriptHostService` 的 Node 执行尚未接入其 RUN/STOP/console 协议（尚未按 token 登记/转发日志/按 id stop）；
+- `:node24` deprecated 回退 flag 未加；生产池分配/上限/健康检查未实现。
+
+## 下一步
+1) 在 ScriptHostService 增加 executionId→(poolSlot, client, id) map，RUN 识别 Node 源后分配空闲槽，日志/101/102 走现有 ConsoleForwarder；STOP 按 token cancel + 释放槽；
+2) 主进程 `Node24JavaScriptEngine` 改走 ScriptHostService（或统一 PocScriptHost RUN），任务页 token 自然出现；
+3) `:node24` 加 deprecated fallback flag，默认关；
+4) dev-1125 上验证双 Node 并行/分别停止/立即再跑 + 任务页两个 running。
+## 生产迁移落地（2026-10-19 23:42，MI8 debug 465）
+
+### 已完成
+- **manifest 进程池**：`Node24PoolService1/2/3` → `:node24_1/2/3`；`Node24Service` 可继承；池进程名允许加载 Node 原生库。
+- **ScriptHostService 执行注册**：沿用已有 `mRuns`（token→RunState）+ console 转发；Node 源仍走 `PocScriptHost` token，任务页直接看到，无重复行。
+- **主进程 Node 路由**：`Node24JavaScriptEngine` 改为通过 `Node24Pool.acquire()` 分配池槽；`PocScriptHost`/`PocRuntime` 无需改 AIDL，RUN/STOP/stopAll 均按 token 生效。
+- **多脚本并存**：Node24Engine 每实例占一个独立池进程；池 3 槽，满时等待 ≤8s 并给中文错误，不再 BUSY。
+- **按 id 停止**：任务页单任务 × / STOP → `PocScriptHost.stop(token)` → ScriptHostService → `Node24JavaScriptEngine.forceStop()` → 仅该槽 client.cancel；其余 Node 任务继续。
+- **stopAll 统一**：任务页/通知栏/悬浮菜单最终走 `PocRuntime.stopAllScripts` → `PocScriptHost.stopAll`，两个 Node 任务同时 cancelled 并释放槽。
+- **池进程崩溃恢复**：kill -9 `:node24_1` 后该任务报 `Node24 service disconnected`（任务页 failed），`Node24Pool.invalidate(slot)`；下一次运行自动新起进程并成功（0.63s 内 job start 复用热槽场景）。
+- **:node24 deprecated 回退**：`Node24Pool.legacyEnabled(context)`（SharedPreferences `node24_pool.legacy=true` 或 `-Dautojs.node24.legacy=true`）→ 使用旧 `Node24Client(:node24)`；否则默认池。
+- **取消后池进程保持 warm**：池进程不执行 post-cancel kill，只有旧 `:node24` 继续退出；实测停止后 0.63s job start。
+
+### 验证（MI8，本机构建 465）
+- 两 Node 脚本并行：slot0+slot1 同时 job start；任务页显示 **2** 个运行中任务（截图 task-page-two-node-running.png）。
+- 任务页单任务 ×：token1 停止 cancelled=true、token2 继续；再点 token2 停止 cancelled=true，槽 release。
+- `taskPageStop` 统一停止两任务：两条 execute returned cancelled=true、release slot0/1、PocScriptHost 停止 1/2。
+- 停止后立即再跑：cancel 23:40:51.476 → 新 job start 23:40:52.110（**0.63s**），PROBE DONE 成功。
+- kill -9 池进程：任务 failed（明确 disconnected），invalidate 后下一次 acquire 新进程成功。
+
+### 编译
+`:app:assembleMiuixCompatDebug -PflutterPoc=true -PdevPluginUsbDiscovery=false` BUILD SUCCESSFUL。
+
+### 待正式包验证
+- 请构建 **dev-1125**；当前 MI8 装本机 debug 465，K40 仍 dev-1123（未操作）。
+- 尚未单独验证 `legacy` flag 运行时回退；代码路径已存在。
+- 池上限 3；超过时排队 8s 后中文错误（不 BUSY）。
+
+证据：`output/flutter-poc/evidence/task175/production-migration.log`、`task-page-two-node-running.png`
+## dev-1125 正式包复验发现（2026-10-19 23:43 K40）
+
+**问题**：两个 Node 脚本确实并行（slot1/slot2 同时 job start），但任务页显示 **6 行**：3 条 `脚本进程` token（t166keep/悬浮日志/floatlog）+ 3 条旧 `Node UI` 登记（`PocNode24Jobs`，token 前缀 node24:）；即 task-167 的旧 Node24 登记与 task-175 的 :script token 重复。
+
+**修复**：`PocRuntime.tasks()` 默认（进程池模式）不再合并 `PocNode24Jobs.snapshot()`；只有 `Node24Pool.legacyEnabled(context)` 为 true（显式回退 :node24）时才合并旧登记。
+
+**本地验证（MI8 debug 465）**：修复后任务页只剩脚本进程行，无 Node UI 重复行（截图 `dedupe-after-fix.png`）；同页出现 colored-button 是自动 self-heal 的独立任务，不是重复登记。
+
+编译：`:app:assembleMiuixCompatDebug -PflutterPoc=true -PdevPluginUsbDiscovery=false` BUILD SUCCESSFUL。
+
+**待办**：需构建 **dev-1126** 后正式复验 ①任务页 2 行、②分别停止、③stopAll、④<1s 再跑、⑤kill 恢复、⑥legacy 回退。
+证据：`dev1125-duplicate-task-rows.png`、`dedupe-after-fix.png`。
