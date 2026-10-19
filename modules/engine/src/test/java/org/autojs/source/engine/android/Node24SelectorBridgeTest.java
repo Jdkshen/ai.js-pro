@@ -487,5 +487,14 @@ public class Node24SelectorBridgeTest {
         @Override public String screenshot(String targetPath) {
             return "";
         }
+
+        @Override public boolean subscribeAccessibilityEvents(
+                RemoteAutomationBridge.AccessibilityEventListener listener) {
+            return false;
+        }
+
+        @Override public void unsubscribeAccessibilityEvents(
+                RemoteAutomationBridge.AccessibilityEventListener listener) {
+        }
     }
 }
