@@ -337,8 +337,10 @@
           // 会与刚完成的 show 竞态（主进程 overlay 命令可能 15s 超时），这里先记录状态不立即 close，
           // 浮窗保持可见（后续可见性由 hide/show 显式调用控制）。
           setVisibility: function (value) {
+            // task-199：start 阶段工程会调 setVisibility(8) 隐藏根视图；此时窗口刚 show 完，
+            // 不能再触发 show/hide（会与主进程 overlay 命令竞态 15s 超时）。overlay 可见性
+            // 由显式 window.show()/hide() 控制，这里只记录，不重入。
             window._rootVisibility = Number(value);
-            if (Number(value) === 0 && !window._visible) { window.show(); }
             return window._bindingView;
           },
           getWidth: function () { return Number(window._lastWidth) || 0; },
