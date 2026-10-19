@@ -506,7 +506,8 @@
       if (typeof className !== 'string' || className.trim() === '') {
         throw hostError('$java.getClass/findClass 需要类名字符串');
       }
-      if (className.indexOf('.') < 0) {
+      var isArrayDescriptor = className.charAt(0) === '[';
+      if (!isArrayDescriptor && className.indexOf('.') < 0) {
         // task-176：不能省略包名；给出完整类名格式提示。
         throw hostError('$java.getClass/findClass 需要完整类名（含包名），例如 android.view.KeyEvent；不能省略包名：' + className);
       }

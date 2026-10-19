@@ -755,6 +755,17 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private Object newInstance(JSONObject request) throws Exception {
         Class<?> type = findClass(request.optString("cls", ""));
         Object[] args = arguments(request.optJSONArray("args"));
+        // task-197：Java 数组（如 int[] -> "[I"）没有构造器，按长度分配。
+        if (type.isArray()) {
+            if (args == null || args.length != 1 || !(args[0] instanceof Number)) {
+                throw new IllegalArgumentException("Java 数组构造需要且只需要一个长度参数：" + type.getName());
+            }
+            int length = ((Number) args[0]).intValue();
+            if (length < 0) {
+                throw new IllegalArgumentException("Java 数组长度不能为负数：" + length);
+            }
+            return java.lang.reflect.Array.newInstance(type.getComponentType(), length);
+        }
         Constructor<?> constructor = findConstructor(type, args);
         if (constructor == null) {
             throw new NoSuchMethodException("找不到构造器 " + type.getName() + "(" + describe(args)

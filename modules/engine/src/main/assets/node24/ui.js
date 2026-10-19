@@ -683,6 +683,10 @@
             }
             // task-69：示例 onCreate/onContentViewSet 会调这些真实 Activity API；第一阶段用 marker 容错，
             // 不能 throw，否则后面的 _setupGrid 不会执行、卡片区永远为空。
+            // task-197：Pro/AndroidX 示例会用 insetsController 设置系统栏外观；第一阶段给 no-op 兼容。
+            get insetsController() {
+                return markerObject('WindowInsetsControllerCompat');
+            }
             getWindow() { return markerObject('Window'); }
             getTheme() { return markerObject('Theme'); }
             setSupportActionBar() { return markerObject('ActionBar'); }
