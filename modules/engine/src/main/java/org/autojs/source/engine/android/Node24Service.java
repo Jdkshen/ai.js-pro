@@ -279,26 +279,32 @@ public class Node24Service extends Service {
                 cleanup.setDaemon(true);
                 cleanup.start();
             }
-            // task-174：所有取消入口（通知栏 cancelAll / 任务页 / Messenger CANCEL）统一硬兜底：
-            // 1.5s 后只要还没有新 job 接手，就结束 :node24 进程。UI 清理/Binder 卡住都不能再拖 11s。
-            Thread forceHalt = new Thread(() -> {
-                try { Thread.sleep(800L); } catch (InterruptedException ignored) { return; }
-                Job running=active.get();
-                if(running!=null && running!=this) return; // 已有新任务接手，不能杀
-                android.util.Log.w("Node24Service","cancel force halt id="+id
-                        +" active="+(active.get()==null?"none":active.get().id));
-                // task-174：必须先杀进程再做任何清理——closeUiAfterExecution 会因 NodeUiActivity/Binder
-                // 阻塞把 kill 永远拖下去（实测通知栏路径 11s 不退）。UI 清理已有独立 cleanup 线程。
-                haltProcess();
-            }, "node24-cancel-forcehalt");
-            forceHalt.setDaemon(true);
-            forceHalt.start();
-            // 2.5s 兜底（避免上面线程被异常吞掉）。
+            // task-181：池进程（:node24_1..N）取消只取消 native，不 800ms 杀进程；
+            // 给 2.5s 宽限让 execute 正常以 CANCELLED 返回，超时仍未返回才 kill/invalidate。
+            final boolean poolProcess = isPoolProcess();
+            if (!poolProcess) {
+                // legacy :node24 保持原行为：800ms 硬兜底（task-174）。
+                Thread forceHalt = new Thread(() -> {
+                    try { Thread.sleep(800L); } catch (InterruptedException ignored) { return; }
+                    Job running=active.get();
+                    if(running!=null && running!=this) return;
+                    android.util.Log.w("Node24Service","cancel force halt id="+id
+                            +" active="+(active.get()==null?"none":active.get().id));
+                    haltProcess();
+                }, "node24-cancel-forcehalt");
+                forceHalt.setDaemon(true);
+                forceHalt.start();
+            }
             Thread watchdog = new Thread(() -> {
-                try { Thread.sleep(1500L); } catch (InterruptedException ignored) { return; }
+                try { Thread.sleep(poolProcess ? 2500L : 1500L); } catch (InterruptedException ignored) { return; }
                 Job running=active.get();
                 if(running!=null && running!=this) return;
-                android.util.Log.w("Node24Service","cancel watchdog: force halt id="+id);
+                if (poolProcess && finished) {
+                    android.util.Log.i("Node24Service","cancel pool graceful: finished id="+id);
+                    return;
+                }
+                android.util.Log.w("Node24Service","cancel watchdog: force halt id="+id
+                        +" pool="+poolProcess+" finished="+finished);
                 haltProcess();
             }, "node24-cancel-watchdog");
             watchdog.setDaemon(true);
