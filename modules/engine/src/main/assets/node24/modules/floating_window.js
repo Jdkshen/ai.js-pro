@@ -187,7 +187,23 @@
     if (this._xml) { fields.xml = this._xml; }
     if (this._width > 0) { fields.width = this._width; }
     if (this._height > 0) { fields.height = this._height; }
-    var showResult = overlayCall('show', fields);
+    var showResult;
+    try {
+      showResult = overlayCall('show', fields);
+    } catch (showError) {
+      var message = String((showError && showError.message) || showError);
+      if (message.indexOf('超时') >= 0) {
+        // task-200：show 已成功创建窗口但回复丢失时，用 info 找回结果，避免整段 start 失败。
+        try {
+          showResult = overlayCall('info', {});
+          try { console.log('[floating_window] show reply lost, recovered via info id=' + showResult.overlayId); } catch (ignored) { }
+        } catch (infoError) {
+          throw showError;
+        }
+      } else {
+        throw showError;
+      }
+    }
     this._overlayId = String(showResult.overlayId || '');
     this._views = Object.create(null);
     var rawViews = showResult.views && typeof showResult.views === 'object' ? showResult.views : {};

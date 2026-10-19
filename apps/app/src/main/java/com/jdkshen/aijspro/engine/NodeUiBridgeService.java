@@ -60,6 +60,8 @@ public class NodeUiBridgeService extends Service {
     private static final Map<String, android.view.View> OVERLAY_CONTENTS = new ConcurrentHashMap<>();
     private static final Map<String, java.util.ArrayDeque<org.json.JSONObject>> OVERLAY_EVENTS = new ConcurrentHashMap<>();
     private static final Map<String, Integer> OVERLAY_DRAG_ANCHORS = new ConcurrentHashMap<>();
+    /** task-200：最近一次 overlay show 结果（show 回复丢失时客户端可找回 overlayId/views）。 */
+    private static volatile org.json.JSONObject LAST_OVERLAY_INFO;
     private static final Map<String, float[]> OVERLAY_DOWN = new ConcurrentHashMap<>();
     private static volatile NodeUiBridgeService sInstance;
     /** task-178：Node job 状态广播接收器（onCreate 注册，onDestroy 注销）。 */
@@ -393,7 +395,13 @@ public class NodeUiBridgeService extends Service {
                     result = new org.json.JSONObject().put("ok", true).put("overlayId", overlayId)
                             .put("text", text).put("x", params.x).put("y", params.y)
                             .put("views", viewsJson).toString();
+                    try { LAST_OVERLAY_INFO = new org.json.JSONObject(result); } catch (Throwable ignored) { }
                     Log.i(TAG, "overlay show id=" + overlayId + " xml=" + !xml.isEmpty() + " views=" + viewsJson);
+                } else if ("info".equals(action)) {
+                    // task-200：show 的 15s 超时竞态下，客户端用 info 找回最近 overlay 结果。
+                    org.json.JSONObject info = LAST_OVERLAY_INFO;
+                    if (info == null) throw new IllegalStateException("还没有 overlay show 结果");
+                    result = info.toString();
                 } else if ("viewCommand".equals(action)) {
                     String id = request.optString("overlayId", "");
                     Log.i(TAG, "C-OVERLAY viewCommand overlay=" + id + " command=" + request.optString("command", "")
