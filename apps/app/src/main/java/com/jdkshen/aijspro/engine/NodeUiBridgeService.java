@@ -44,6 +44,38 @@ public class NodeUiBridgeService extends Service {
     private static final Map<String, float[]> OVERLAY_DOWN = new ConcurrentHashMap<>();
     private static volatile NodeUiBridgeService sInstance;
     private final Handler mMain = new Handler(Looper.getMainLooper());
+
+    /**
+     * task-169：AI 球菜单展开/收起时切换 Node 浮窗触摸能力。
+     * 菜单展开期间浮窗置 FLAG_NOT_TOUCHABLE，菜单按钮（含 ⏹ 停止全部）永远优先收到点击；
+     * 菜单收起后恢复，浮窗内 ✕/确定/console 照常可点。
+     */
+    public static void setOverlaysTouchable(final boolean touchable) {
+        Runnable task = () -> {
+            for (Map.Entry<String, android.view.WindowManager.LayoutParams> entry : OVERLAY_PARAMS.entrySet()) {
+                android.view.WindowManager.LayoutParams params = entry.getValue();
+                if (params == null) continue;
+                if (touchable) {
+                    params.flags &= ~android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                } else {
+                    params.flags |= android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                }
+                android.view.View view = OVERLAYS.get(entry.getKey());
+                if (view != null) {
+                    try {
+                        android.view.WindowManager manager = (android.view.WindowManager) view.getContext()
+                                .getSystemService(Context.WINDOW_SERVICE);
+                        if (manager != null) manager.updateViewLayout(view, params);
+                    } catch (Throwable ignored) { }
+                }
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            task.run();
+        } else {
+            new Handler(Looper.getMainLooper()).post(task);
+        }
+    }
     private final java.util.concurrent.ExecutorService mWork = java.util.concurrent.Executors.newSingleThreadExecutor();
 
     private final Messenger mMessenger = new Messenger(new Handler(Looper.getMainLooper()) {
@@ -243,6 +275,12 @@ public class NodeUiBridgeService extends Service {
                             android.graphics.PixelFormat.TRANSLUCENT);
                     params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
                     params.flags |= request.optInt("flags", 0);
+                    // task-169：AI 球菜单已展开时，新浮窗默认不可触摸，触摸让给菜单（防止 Node 浮窗叠在上层吞 ⏹）。
+                    try {
+                        if (com.jdkshen.aijspro.ui.floating.CircularMenuWindow.isNodeOverlayMenuExpanded()) {
+                            params.flags |= android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                        }
+                    } catch (Throwable ignored) { }
                     params.x = request.optInt("x", 100);
                     params.y = request.optInt("y", 200);
                     manager.addView(view, params);

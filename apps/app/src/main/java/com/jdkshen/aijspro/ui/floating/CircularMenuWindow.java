@@ -24,6 +24,9 @@ public class CircularMenuWindow extends FloatyWindow {
     protected CircularActionMenu mCircularActionMenu;
     protected View mCircularActionView;
     protected BounceDragGesture mDragGesture;
+    /** task-169：AI 球菜单是否展开（Node 浮窗在菜单展开期间必须让出触摸，否则叠在菜单上层会吞 ⏹）。 */
+    private static volatile boolean sNodeOverlayMenuExpanded;
+
     protected OrientationAwareWindowBridge mActionViewWindowBridge;
     protected WindowBridge mMenuWindowBridge;
     protected WindowManager.LayoutParams mActionViewWindowLayoutParams;
@@ -130,12 +133,16 @@ public class CircularMenuWindow extends FloatyWindow {
         mCircularActionMenu.addOnStateChangeListener(new CircularActionMenu.OnStateChangeListenerAdapter() {
             @Override
             public void onExpanding(CircularActionMenu menu) {
+                sNodeOverlayMenuExpanded = true;
+                com.jdkshen.aijspro.engine.NodeUiBridgeService.setOverlaysTouchable(false);
                 mDragGesture.setEnabled(false);
                 mCircularActionView.setAlpha(mActiveAlpha);
                 setMenuWindowTouchable(true);
             }
 
             public void onCollapsed(CircularActionMenu menu) {
+                sNodeOverlayMenuExpanded = false;
+                com.jdkshen.aijspro.engine.NodeUiBridgeService.setOverlaysTouchable(true);
                 mDragGesture.setEnabled(!mTemporarilyHidden);
                 mCircularActionView.setAlpha(mInactiveAlpha);
                 setMenuWindowTouchable(false);
@@ -190,6 +197,11 @@ public class CircularMenuWindow extends FloatyWindow {
 
     public boolean isExpanded() {
         return mCircularActionMenu.isExpanded();
+    }
+
+    /** task-169：供 NodeUiBridgeService 判断当前是否应让出触摸。 */
+    public static boolean isNodeOverlayMenuExpanded() {
+        return sNodeOverlayMenuExpanded;
     }
 
     private void setMenuPositionAtActionView() {
