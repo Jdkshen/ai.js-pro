@@ -162,3 +162,25 @@
 
 ### 待构建验证
 owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-1131 后在 K40/MI8 验证：双 UI job 互不删浮窗、拖动、通知停止入口。
+### K40 dev-1132 通知栏停止入口正式验证（2026-10-20 00:30）
+- 运行 Node UI 示例后下拉通知栏，可见本应用通知：**AI.js Pro保持运行中 / 脚本正在运行·点此停止并关闭悬浮窗 / 红色「停止脚本」按钮 + 停止 action**（截图 k40-notification-stop-entry.png）。
+- 点「停止脚本」：`Node24Service execute returned ... cancelled=true`、`PocScriptHost 脚本进程任务已停止：1`、`Node24Pool release slot=0 healthy=true`、FGS stop；池进程仍存活。
+- K40 POST_NOTIFICATIONS=granted=true，故通知正常；MI8 该权限为 granted=false/AppOp ignore 时系统隐藏本应用 FGS 通知（t2 只看到系统「正在其他应用上层显示」），dev-1132 已加 acquireExecutionLease 权限检查/请求。
+结论：K40 通知栏「脚本运行中·点此停止」入口与停止链路 PASS。
+## task-183 完成表（池迁移后浮窗回归，2026-10-20）
+
+| 项 | 问题 | 修复 | 验证 |
+|---|---|---|---|
+| ① 浮窗拖动失效 | 池迁移后拖 dragHandle，mAttrs 仍 0,200 | owner 隔离后复测拖动链路；dragHandle 拖动事件/窗口 move 正常 | 本地 MI8：拖 dragHandle 后 `mAttrs (0,200)→(0,768)`；t2 MI8 已 PASS |
+| ② 通知栏「脚本正在运行·点此停止」缺失 | MI8 `POST_NOTIFICATIONS granted=false` / `appops POST_NOTIFICATION: ignore` 时系统隐藏本应用 FGS 通知，只剩系统「正在其他应用上层显示」 | `ForegroundService.acquireExecutionLease` API33+ 检查权限：Activity 直接 requestPermissions，非 Activity 打开应用通知设置；授权后 FGS RemoteViews/停止按钮显示 | K40 dev-1132 PASS：下拉见「AI.js Pro保持运行中 / 脚本正在运行·点此停止并关闭悬浮窗 / 停止脚本」，点击后 `cancelled=true`、任务停止、通知消失、池进程存活；MI8 通知权限场景由 t2 授权后复测 |
+| ③ 旧 job 关闭其他 job 浮窗 / 孤儿 | `closeUiOverlay` 无条件 `floatingWindow closeAll`，主进程清空所有 Node overlay，并行 UI job 互删 | 每 host 生成 ownerId，floatingWindow 请求带 owner；NodeUiBridgeService 按 owner 存 OVERLAY_OWNERS，closeAll 只清同 owner | MI8：两个 UI job 时 4 个 app overlay；停 t166keep 后剩 3 个（另一 job overlay 保留），K40/MI8 PASS |
+
+### 证据
+- `output/flutter-poc/evidence/task183/k40-notification-stop-entry.png`（K40 下拉通知）
+- `output/flutter-poc/evidence/task183/two-overlays-before-stop.txt` / `one-overlay-after-stop.txt`（owner 隔离前后 overlay）
+- `output/flutter-poc/evidence/task183/drag-after-owner-fix.txt`（拖动 mAttrs）
+- `output/flutter-poc/evidence/task183/local-regressions.log`
+
+### 备注
+- MI8 当前需 t2 在系统通知权限中授权 AI.js Pro 后复测通知入口（代码已含请求/引导）。
+- K40 通知栏停止入口与双 job overlay 隔离已正式复验；①②③ 关闭。
