@@ -1835,6 +1835,8 @@
   var MAX_IMAGE_PIXEL_FETCH_BYTES = 256 * 1024;
   // matchTemplateMulti 单次最多模板数，与 Java 侧 MAX_MULTI_TEMPLATES 一致。
   var MAX_IMAGE_MULTI_TEMPLATES = 64;
+  // matchMany 单次最多窗口数，与 Java 侧 MAX_MANY_WINDOWS 一致。
+  var MAX_IMAGE_MANY_WINDOWS = 256;
   // exportPixels/pixelsToFile 单次点数上限与 region 原始字节上限，与 Java 侧一致。
   var MAX_IMAGE_PIXEL_FILE_POINTS = 1024 * 1024;
   var MAX_IMAGE_PIXEL_FILE_BYTES = 64 * 1024 * 1024;
@@ -2133,6 +2135,11 @@
     return imageMatchTemplateMultiSync(this, templates, options);
   };
   Image.prototype.matchTemplateMultiSync = Image.prototype.matchTemplateMulti;
+  // 跨窗口批量匹配（一次调用 = windows × templates，宿主管线内并行）。
+  Image.prototype.matchMany = function (windows, templates, options) {
+    return imageMatchManySync(this, windows, templates, options);
+  };
+  Image.prototype.matchManySync = Image.prototype.matchMany;
   // 帧预处理批量入口（一次调用完成 grayscale(+resize)+size）。
   Image.prototype.prepFrame = function (options) { return imagePrepFrameSync(this, options); };
   Image.prototype.prepFrameSync = Image.prototype.prepFrame;
@@ -2861,6 +2868,102 @@
     });
   }
 
+  /**
+   * 跨窗口批量匹配（task-12）：一次宿主调用完成 windows × templates 的模板匹配。
+   * 两种调用形态：
+   *   image.matchManySync(img, windows, templates, options?)
+   *   image.matchManySync(img, {windows, templates|templateIds, threshold, weakThreshold, level, limit, threads})
+   * windows 元素：[x,y,w,h] / [x,y] / {x,y,width,height} / {region:[x,y,w,h] 或 {x,y,width,height}}；
+   * templates 元素：Image/descriptor（也接受数字句柄 id）。
+   * 返回 results[windowIndex][templateIndex] = [{point:{x,y}, x, y, similarity}, ...]，
+   * 坐标是源图坐标系（宿主已加窗口偏移），顺序与 windows/templates 一致。
+   */
+  function imageMatchManySync(image, windows, templates, options) {
+    var frame = wrapImage(image);
+    if (windows && !Array.isArray(windows) && typeof windows === 'object') {
+      // 单对象形态：{windows, templates|templateIds, threshold, weakThreshold, level, limit, threads}
+      options = windows;
+      templates = windows.templates != null ? windows.templates : windows.templateIds;
+      windows = windows.windows;
+    } else {
+      options = normalizeImageOptions(options);
+    }
+    if (!Array.isArray(windows) || windows.length === 0) {
+      throw apiTypeError('matchMany 需要非空的 windows 数组');
+    }
+    if (windows.length > MAX_IMAGE_MANY_WINDOWS) {
+      throw apiRangeError('matchMany 窗口过多：' + windows.length
+        + '（上限 ' + MAX_IMAGE_MANY_WINDOWS + '）');
+    }
+    for (var w = 0; w < windows.length; w++) {
+      var win = windows[w];
+      if (!Array.isArray(win) && (!win || typeof win !== 'object')) {
+        throw apiTypeError('windows[' + w + '] 必须是数组或 {x,y,width,height}/{region} 对象');
+      }
+    }
+    if (!Array.isArray(templates) || templates.length === 0) {
+      throw apiTypeError('matchMany 需要非空的 templates 数组');
+    }
+    if (templates.length > MAX_IMAGE_MULTI_TEMPLATES) {
+      throw apiRangeError('matchMany 模板过多：' + templates.length
+        + '（上限 ' + MAX_IMAGE_MULTI_TEMPLATES + '）');
+    }
+    var ids = [];
+    for (var i = 0; i < templates.length; i++) {
+      var item = templates[i];
+      if (typeof item === 'number') {
+        ids.push(requireInt(item, 'templates[' + i + ']', 0));
+      } else {
+        ids.push(wrapImage(item)._id);
+      }
+    }
+    var threshold = imageSimilarityThreshold(options.threshold, DEFAULT_IMAGE_SIMILARITY, 'threshold');
+    var weakThreshold = imageSimilarityThreshold(
+      options.weakThreshold, DEFAULT_IMAGE_WEAK_SIMILARITY, 'weakThreshold');
+    var level = imageMatchLevel(options.level);
+    var limit = options.limit == null
+      ? 32 : Math.max(1, Math.min(4096, Math.round(Number(options.limit) || 32)));
+    var request = {
+      kind: 'image',
+      action: 'matchMany',
+      id: frame._id,
+      windows: windows,
+      templateIds: ids,
+      threshold: threshold,
+      weakThreshold: weakThreshold,
+      level: level,
+      limit: limit
+    };
+    // 并行度：宿主默认 min(6, cores)；threads:1 串行做 A/B。
+    if (options.threads != null) {
+      request.threads = requireInt(options.threads, 'threads', 1, 8);
+    }
+    var value = hostValue(request);
+    var results = value && value.results;
+    if (!Array.isArray(results) || results.length !== windows.length) {
+      throw hostError('matchMany 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    return results.map(function (perWindow) {
+      if (!Array.isArray(perWindow) || perWindow.length !== ids.length) {
+        throw hostError('matchMany 返回格式非法：期望 ' + windows.length + ' 个窗口 x '
+          + ids.length + ' 个模板');
+      }
+      return perWindow.map(function (list) {
+        if (!Array.isArray(list)) {
+          throw hostError('matchMany 单个窗口×模板结果不是数组');
+        }
+        return list.map(function (match) {
+          return {
+            point: { x: match.x, y: match.y },
+            x: match.x,
+            y: match.y,
+            similarity: match.similarity
+          };
+        });
+      });
+    });
+  }
+
   /** SIFT/matchSift 的坐标归一化。 */
   function normalizeSiftPoint(value) {
     if (!value) { return null; }
@@ -3271,6 +3374,8 @@
     matchTemplateSync: imageMatchTemplateSync,
     matchTemplateMulti: promiseCall(imageMatchTemplateMultiSync),
     matchTemplateMultiSync: imageMatchTemplateMultiSync,
+    matchMany: promiseCall(imageMatchManySync),
+    matchManySync: imageMatchManySync,
     getPixels: promiseCall(imageGetPixelsSync),
     getPixelsSync: imageGetPixelsSync,
     samplePixels: promiseCall(imageSamplePixelsSync),

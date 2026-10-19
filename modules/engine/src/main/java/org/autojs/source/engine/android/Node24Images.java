@@ -107,6 +107,22 @@ public final class Node24Images implements AutoCloseable {
             Math.min(3, Runtime.getRuntime().availableProcessors() / 2));
 
     // ------------------------------------------------------------------
+    // matchMany（task-12）：跨窗口批量匹配
+    // ------------------------------------------------------------------
+    /** matchMany 单次最多窗口数与「窗口×模板」任务数上限（限制 OpenCV 工作量与结果 JSON 大小）。 */
+    private static final int MAX_MANY_WINDOWS = 256;
+    private static final long MAX_MANY_TASKS = 8192;
+    /** matchMany 全部窗口 clone 后总像素上限（4B/px，16M px ≈ 64MB，避免多窗口 clone 撑爆内存）。 */
+    private static final long MAX_MANY_WINDOW_PIXELS = 16_000_000L;
+    /** matchMany 协议并行度上限 8；默认 min(6, cores)（K40=6，覆盖 4 大核 + 2 小核）。 */
+    private static final int MATCH_POOL_MAX_THREADS = 8;
+    private static final int DEFAULT_MANY_THREADS = Math.max(2,
+            Math.min(6, Runtime.getRuntime().availableProcessors()));
+    /** 共享 worker 池实际大小：同时服务 multi（默认 3）与 matchMany（默认 6），按最大需求建池。 */
+    private static final int MATCH_POOL_THREADS = Math.max(2, Math.min(MATCH_POOL_MAX_THREADS,
+            Math.max(DEFAULT_MATCH_THREADS, DEFAULT_MANY_THREADS)));
+
+    // ------------------------------------------------------------------
     // 文件式像素交换（pixelsToFile，task-2 / node-smem）
     // ------------------------------------------------------------------
     /** pixelsToFile scratch 子目录（位于 getCacheDir() 下，按进程 pid 复用同一个文件）。 */
@@ -198,6 +214,8 @@ public final class Node24Images implements AutoCloseable {
                     return ok(matchTemplate(request));
                 case "matchTemplateMulti":
                     return ok(matchTemplateMulti(request));
+                case "matchMany":
+                    return ok(matchMany(request));
                 case "prepFrame":
                     return ok(prepFrame(request));
                 case "grayscale":
@@ -235,7 +253,7 @@ public final class Node24Images implements AutoCloseable {
                 default:
                     return error("image 不支持的操作：" + action
                             + "（支持 read/write/pixel/findColor/findMultiColors/"
-                            + "findImage/matchTemplate/matchTemplateMulti/prepFrame/"
+                            + "findImage/matchTemplate/matchTemplateMulti/matchMany/prepFrame/"
                             + "grayscale/clip/threshold/resize/sizeOf/countColor/"
                             + "getPixels/samplePixels/pixelsToFile/detectsColor/detectsMultiColors/recycle/"
                             + "detectAndComputeFeatures/matchFeatures/recycleFeatures）");
@@ -764,7 +782,7 @@ public final class Node24Images implements AutoCloseable {
     /** 懒创建的多模板匹配 worker 池；daemon 线程、空闲 30s 回收，close() 时 shutdownNow。 */
     private synchronized ThreadPoolExecutor matchExecutor() {
         if (mMatchExecutor == null) {
-            int size = Math.max(2, Math.min(MATCH_MAX_THREADS, DEFAULT_MATCH_THREADS));
+            int size = MATCH_POOL_THREADS;
             mMatchExecutor = new ThreadPoolExecutor(size, size, 30L, TimeUnit.SECONDS,
                     new LinkedBlockingQueue<Runnable>(), runnable -> {
                         Thread thread = new Thread(runnable, "node24-match");
@@ -809,34 +827,41 @@ public final class Node24Images implements AutoCloseable {
                     }
                 }));
             }
-            for (Future<?> future : futures) {
-                try {
-                    future.get();
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("多模板匹配被中断", interrupted);
-                } catch (ExecutionException wrapped) {
-                    if (failure.get() == null) {
-                        failure.set(wrapped.getCause());
-                    }
-                }
-            }
-            Throwable error = failure.get();
-            if (error != null) {
-                if (error instanceof IllegalArgumentException) {
-                    throw (IllegalArgumentException) error;
-                }
-                if (error instanceof IllegalStateException) {
-                    throw (IllegalStateException) error;
-                }
-                throw new IllegalStateException("多模板匹配失败：" + describe(error), error);
-            }
+            awaitFutures(futures, failure, "多模板匹配");
         }
         JSONArray results = new JSONArray();
         for (JSONArray slot : slots) {
             results.put(slot == null ? new JSONArray() : slot);
         }
         return results;
+    }
+
+    /** 等待并行任务结束，并把首个失败按原异常类型抛回（IllegalArgumentException 保持原样）。 */
+    private static void awaitFutures(List<Future<?>> futures, AtomicReference<Throwable> failure,
+            String what) throws Exception {
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(what + "被中断", interrupted);
+            } catch (ExecutionException wrapped) {
+                if (failure.get() == null) {
+                    failure.set(wrapped.getCause());
+                }
+            }
+        }
+        Throwable error = failure.get();
+        if (error == null) {
+            return;
+        }
+        if (error instanceof IllegalArgumentException) {
+            throw (IllegalArgumentException) error;
+        }
+        if (error instanceof IllegalStateException) {
+            throw (IllegalStateException) error;
+        }
+        throw new IllegalStateException(what + "失败：" + describe(error), error);
     }
 
     /** 单个模板匹配 + 结果 JSON（只读 search/templateMat，可多线程并发调用）。 */
@@ -853,6 +878,238 @@ public final class Node24Images implements AutoCloseable {
                     .put("similarity", match.similarity));
         }
         return array;
+    }
+
+    /**
+     * 跨窗口批量模板匹配（task-12）：一次宿主调用完成「多窗口 × 多模板」匹配，
+     * 用于把「逐格 clip + 逐格 matchTemplateMulti」的 N 次桥往返 / N 张中间 Bitmap 合并成 1 次。
+     *
+     * <p>请求：{@code id},
+     * {@code windows:[[x,y,w,h] | {x,y,width,height} | {region:[x,y,w,h] | {x,y,width,height}},...]},
+     * {@code templateIds:[int,...]}（也接受 {@code templates}，元素为 id 数字或 {@code {id}}）,
+     * {@code threshold/weakThreshold/level/limit}, {@code threads:1..8}。
+     * <p>返回 {@code {results:[perWindow:[[{x,y,similarity}...],...],...]}}；坐标已加窗口偏移
+     * （源图坐标系），窗口/模板顺序与请求一致。
+     *
+     * <p>实现：源图 bitmapToMat 走 T5 缓存只做一次；每个窗口只建一次 ROI 并 clone 成连续 Mat
+     * （避免 fastTemplateMatching 对 ROI 做整源 UMat 映射）；任务粒度 = 窗口×模板，
+     * 共享线程池交叉分配。窗口非法/模板大于窗口/数量超限都直接报错（带下标）。
+     */
+    private JSONObject matchMany(JSONObject request) throws Exception {
+        ensureOpen();
+        int sourceId = requireId(request);
+        JSONArray windows = request.optJSONArray("windows");
+        if (windows == null || windows.length() == 0) {
+            throw new IllegalArgumentException("matchMany 缺少非空的 windows");
+        }
+        int windowCount = windows.length();
+        if (windowCount > MAX_MANY_WINDOWS) {
+            throw new IllegalArgumentException("matchMany 窗口过多：" + windowCount
+                    + "（上限 " + MAX_MANY_WINDOWS + "）");
+        }
+        JSONArray templateIds = parseManyTemplateIds(request);
+        int templateCount = templateIds.length();
+        if (templateCount > MAX_MULTI_TEMPLATES) {
+            throw new IllegalArgumentException("matchMany 模板过多：" + templateCount
+                    + "（上限 " + MAX_MULTI_TEMPLATES + "）");
+        }
+        long taskCount = (long) windowCount * (long) templateCount;
+        if (taskCount > MAX_MANY_TASKS) {
+            throw new IllegalArgumentException("matchMany 任务过多：" + windowCount + " 窗口 x "
+                    + templateCount + " 模板 = " + taskCount + "（上限 " + MAX_MANY_TASKS + "）");
+        }
+        Bitmap source = requireBitmap(sourceId);
+        int sourceWidth = source.getWidth();
+        int sourceHeight = source.getHeight();
+        // 先完成全部参数/句柄校验，任何非法输入都在碰 OpenCV 前失败（不产生半成品 Mat）。
+        Region[] regions = new Region[windowCount];
+        for (int i = 0; i < windowCount; i++) {
+            regions[i] = parseManyWindow(windows.opt(i), i, sourceWidth, sourceHeight);
+        }
+        long windowPixels = 0L;
+        for (Region region : regions) {
+            windowPixels += (long) region.width * (long) region.height;
+        }
+        if (windowPixels > MAX_MANY_WINDOW_PIXELS) {
+            throw new IllegalArgumentException("matchMany 窗口总像素过大：" + windowPixels
+                    + "（上限 " + MAX_MANY_WINDOW_PIXELS + "，请减少窗口或缩小窗口尺寸）");
+        }
+        Bitmap[] templates = new Bitmap[templateCount];
+        int[] templateIdValues = new int[templateCount];
+        for (int i = 0; i < templateCount; i++) {
+            templateIdValues[i] = templateIds.optInt(i, -1);
+            templates[i] = requireBitmap(templateIdValues[i]);
+        }
+        for (int w = 0; w < windowCount; w++) {
+            for (int t = 0; t < templateCount; t++) {
+                if (templates[t].getWidth() > regions[w].width
+                        || templates[t].getHeight() > regions[w].height) {
+                    throw new IllegalArgumentException("模板 " + t + " "
+                            + templates[t].getWidth() + "x" + templates[t].getHeight()
+                            + " 大于 windows[" + w + "] "
+                            + regions[w].width + "x" + regions[w].height);
+                }
+            }
+        }
+        double threshold = parseSimilarity(request, "threshold", 0.9d);
+        double weakThreshold = parseSimilarity(request, "weakThreshold", 0.6d);
+        int level = parseMatchLevel(request);
+        int limit = Math.max(1, Math.min(4096, request.optInt("limit", 32)));
+        int threads = parseManyThreads(request, (int) taskCount);
+        ensureOpenCv();
+        List<MatLease> temporaryLeases = new ArrayList<>();
+        List<Mat> windowMats = new ArrayList<>(windowCount);
+        try {
+            MatLease sourceLease = acquireSourceMat(sourceId, source);
+            if (!sourceLease.cached) {
+                temporaryLeases.add(sourceLease);
+            }
+            Mat[] templateMats = new Mat[templateCount];
+            for (int t = 0; t < templateCount; t++) {
+                MatLease lease = acquireTemplateMat(templateIdValues[t], templates[t]);
+                templateMats[t] = lease.mat;
+                if (!lease.cached) {
+                    temporaryLeases.add(lease);
+                }
+            }
+            int[] offsetsX = new int[windowCount];
+            int[] offsetsY = new int[windowCount];
+            for (int w = 0; w < windowCount; w++) {
+                Region region = regions[w];
+                Mat roi = new Mat(sourceLease.mat, new Rect(region.x, region.y,
+                        region.width, region.height));
+                try {
+                    // ROI 只是 header（data != datastart）：fastTemplateMatching 内部 getUMat 会为
+                    // 整张源图建映射，实测比先 clip 更慢；clone 成连续小 Mat 后走快路径。
+                    windowMats.add(roi.clone());
+                } finally {
+                    OpenCVHelper.release(roi);
+                }
+                offsetsX[w] = region.x;
+                offsetsY[w] = region.y;
+            }
+            JSONArray results = matchWindowsInParallel(windowMats, offsetsX, offsetsY,
+                    templateMats, (float) weakThreshold, (float) threshold, level, limit, threads);
+            return new JSONObject().put("results", results);
+        } catch (IllegalArgumentException error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new IllegalStateException("批量匹配失败：" + describe(error), error);
+        } finally {
+            for (Mat windowMat : windowMats) {
+                OpenCVHelper.release(windowMat);
+            }
+            for (MatLease lease : temporaryLeases) {
+                OpenCVHelper.release(lease.mat);
+            }
+        }
+    }
+
+    /** matchMany 的模板列表：templateIds:[int] 为主协议，也接受 templates:[int | {id}]。 */
+    static JSONArray parseManyTemplateIds(JSONObject request) {
+        JSONArray raw = request.optJSONArray("templateIds");
+        if (raw == null) {
+            raw = request.optJSONArray("templates");
+        }
+        if (raw == null || raw.length() == 0) {
+            throw new IllegalArgumentException("matchMany 缺少非空的 templateIds（或 templates）");
+        }
+        JSONArray ids = new JSONArray();
+        for (int i = 0; i < raw.length(); i++) {
+            Object item = raw.opt(i);
+            Object id = item;
+            if (item instanceof JSONObject) {
+                id = ((JSONObject) item).opt("id");
+            }
+            if (!(id instanceof Number)) {
+                throw new IllegalArgumentException("templateIds[" + i + "] 必须是图片句柄 id");
+            }
+            ids.put(((Number) id).intValue());
+        }
+        return ids;
+    }
+
+    /**
+     * matchMany 窗口条目：数组 / {x,y,width,height} / {region:[...] 或 {x,y,width,height}}，
+     * 统一复用 parseRegion 做越界校验；错误信息带 windows 下标。
+     */
+    static Region parseManyWindow(Object raw, int index, int imageWidth, int imageHeight) {
+        Object region = raw;
+        if (raw instanceof JSONObject && ((JSONObject) raw).has("region")) {
+            region = ((JSONObject) raw).opt("region");
+        }
+        if (region == null || region == JSONObject.NULL) {
+            throw new IllegalArgumentException("windows[" + index + "] 不能为空");
+        }
+        try {
+            return parseRegion(region, imageWidth, imageHeight);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("windows[" + index + "] " + error.getMessage(), error);
+        }
+    }
+
+    /** matchMany 并行度：默认 min(6, cores)；threads=1 串行（A/B）；上限取共享池大小。 */
+    static int parseManyThreads(JSONObject request, int taskCount) {
+        int threads = request.has("threads")
+                ? request.optInt("threads", DEFAULT_MANY_THREADS) : DEFAULT_MANY_THREADS;
+        threads = Math.max(1, Math.min(MATCH_POOL_THREADS, threads));
+        return Math.max(1, Math.min(threads, taskCount));
+    }
+
+    /**
+     * 窗口×模板并行匹配：任务下标 task = windowIndex * templateCount + templateIndex，
+     * worker 取 task = offset, offset+threads, ... 交叉分配（同一窗口的 11 个模板分散到不同
+     * worker，两个“重模板”不会挤在同一个线程）；结果写入 slots[window][template]，
+     * 组装时保持 windows/templateIds 原顺序。任一任务失败停止其余任务并按原异常抛回。
+     */
+    private JSONArray matchWindowsInParallel(final List<Mat> windowMats, final int[] offsetsX,
+            final int[] offsetsY, final Mat[] templateMats, final float weakThreshold,
+            final float strictThreshold, final int level, final int limit, final int threads)
+            throws Exception {
+        final int windowCount = windowMats.size();
+        final int templateCount = templateMats.length;
+        final int taskTotal = windowCount * templateCount;
+        final JSONArray[][] slots = new JSONArray[windowCount][templateCount];
+        if (threads <= 1 || taskTotal <= 3) {
+            for (int w = 0; w < windowCount; w++) {
+                for (int t = 0; t < templateCount; t++) {
+                    slots[w][t] = matchOneTemplate(windowMats.get(w), offsetsX[w], offsetsY[w],
+                            templateMats[t], weakThreshold, strictThreshold, level, limit);
+                }
+            }
+        } else {
+            final AtomicReference<Throwable> failure = new AtomicReference<>();
+            List<Future<?>> futures = new ArrayList<>(threads);
+            final ThreadPoolExecutor executor = matchExecutor();
+            for (int worker = 0; worker < threads; worker++) {
+                final int offset = worker;
+                futures.add(executor.submit(() -> {
+                    try {
+                        for (int task = offset; task < taskTotal && failure.get() == null;
+                             task += threads) {
+                            int windowIndex = task / templateCount;
+                            int templateIndex = task % templateCount;
+                            slots[windowIndex][templateIndex] = matchOneTemplate(
+                                    windowMats.get(windowIndex), offsetsX[windowIndex],
+                                    offsetsY[windowIndex], templateMats[templateIndex],
+                                    weakThreshold, strictThreshold, level, limit);
+                        }
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                    }
+                }));
+            }
+            awaitFutures(futures, failure, "批量匹配");
+        }
+        JSONArray results = new JSONArray();
+        for (int w = 0; w < windowCount; w++) {
+            JSONArray perWindow = new JSONArray();
+            for (int t = 0; t < templateCount; t++) {
+                perWindow.put(slots[w][t] == null ? new JSONArray() : slots[w][t]);
+            }
+            results.put(perWindow);
+        }
+        return results;
     }
 
     /**
