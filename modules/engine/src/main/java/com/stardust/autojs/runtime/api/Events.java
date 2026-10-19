@@ -153,6 +153,13 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         if (!com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.isActive()) {
             return;
         }
+        // 订阅发生在脚本线程：先建好脚本线程的 Handler，主进程回调从 binder 线程 post 回来，
+        // 保证 emit 在脚本线程执行（回调线程没有 Looper，不能在那里 new Handler）。
+        try {
+            ensureHandler();
+        } catch (Throwable ignored) {
+            // 脚本线程没有 Looper 时回退到主 Looper（见 postRemoteEvent）。
+        }
         final com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener
                 listener = new com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener() {
             @Override
@@ -162,8 +169,7 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
 
             @Override
             public void onServiceStateChanged(boolean ready) {
-                ensureHandler();
-                mHandler.post(() -> emit("accessibility_service_state_changed", ready));
+                postRemoteEvent(() -> emit("accessibility_service_state_changed", ready));
             }
         };
         if (com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge
@@ -178,14 +184,26 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         if (event == null) {
             return;
         }
-        ensureHandler();
-        mHandler.post(() -> {
+        postRemoteEvent(() -> {
             emit("accessibility_event", event);
             String kind = event.getKind();
             if (kind != null && !kind.isEmpty() && !"accessibility_event".equals(kind)) {
                 emit(kind, event);
             }
         });
+    }
+
+    /** 远程回调线程没有 Looper：优先用脚本线程 Handler；没有时退回主 Looper。 */
+    private void postRemoteEvent(Runnable runnable) {
+        android.os.Handler handler = mHandler;
+        if (handler == null) {
+            try {
+                handler = new android.os.Handler(android.os.Looper.getMainLooper());
+            } catch (Throwable error) {
+                return;
+            }
+        }
+        handler.post(runnable);
     }
 
     private void releaseRemoteAccessibilityEvents() {
