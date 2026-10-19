@@ -209,3 +209,14 @@ owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-11
 - 待 dev-1136 正式包复验。
 
 证据：`output/flutter-poc/evidence/task190/floatlog-one-confirm-after-binding-fix.png`。
+## task-192 悬浮日志「确定」按钮触摸确认（2026-10-20 K40 dev-1137）
+- 手动验证两种路径均可达：①先点 console 聚焦→点确定；②直接首次点确定（无预聚焦）。两次 logcat 均出现 `input: `（Node24Console/GlobalConsole），按钮 click 回调正常。
+- 按钮 raw 坐标约 (755,1605)（K40 1080x2400，overlay 初始位置 0,200）；globalconsole 隐藏输入区使用 GONE，示例 input/ok 行仍可见、未被 console 布局覆盖；未见 removeFlags 导致 ACTION_UP 丢失。
+- 结论：按钮触摸链路正常，无需改代码；t2 自动化无响应更可能是使用了隐藏 console 输入区旧坐标/截图 hash 比对未覆盖输入行。建议自动化用当前截图重新标定确定按钮坐标（并确认点击后日志 `input:`）。
+证据：`output/flutter-poc/evidence/task192/overlay-initial.png`、`after-focus-then-ok.png`、`after-first-tap-ok.png`。
+### task-192 重开修复：浮窗高度溢出（2026-10-20 K40）
+- 根因：`NodeUiBridgeService` 给 XML 内容加 `FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)`，首次 WRAP_CONTENT 测量按旧高度截断；窗口 frame 底边 1649，而「确定」按钮中心≈1655，落在窗口外被丢弃。
+- 修复：内容 LayoutParams 高度改为 WRAP_CONTENT；addView 后 `post` 按屏幕宽度/UNSPECIFIED 高度重新 `measure`，测得高度 > 当前 params.height 时 `updateViewLayout` 补偿。
+- K40 验证：remeasure h=1372，窗口 frame `[0,305][880,1677]`；`input tap 760 1655` 触发 `input:` 日志（Node24Console/GlobalConsole），按钮中心已落在框内。
+- 验证后 K40 恢复 dev-1137。
+证据：`output/flutter-poc/evidence/task192/frame-after-remeasure.txt`、`tap-760-1655-after-remeasure.png`。

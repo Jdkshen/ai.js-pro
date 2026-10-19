@@ -263,9 +263,11 @@ public class NodeUiBridgeService extends Service {
                             }
                         };
                         rootHolder[0] = root;
+                        // task-192：内容高度必须由内容自己决定；若给 MATCH_PARENT，首次 WRAP 测量
+                        // 会按旧窗口高度截断，底部 input/ok 行落在窗口外点不到。
                         root.addView(content, new android.widget.FrameLayout.LayoutParams(
                                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+                                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
                         view = root;
                         try {
                             Object views = com.stardust.autojs.engine.node24.NodeUiHost.buildInlineViews(content, xml);
@@ -319,6 +321,25 @@ public class NodeUiBridgeService extends Service {
                     params.x = request.optInt("x", 100);
                     params.y = request.optInt("y", 200);
                     manager.addView(view, params);
+                    // task-192：addView 后按真实内容重新测量并补偿窗口高度，避免底部按钮中心在 frame 外。
+                    view.post(() -> {
+                        try {
+                            int maxWidth = getResources().getDisplayMetrics().widthPixels;
+                            int widthSpec = android.view.View.MeasureSpec.makeMeasureSpec(
+                                    maxWidth, android.view.View.MeasureSpec.AT_MOST);
+                            int heightSpec = android.view.View.MeasureSpec.makeMeasureSpec(
+                                    0, android.view.View.MeasureSpec.UNSPECIFIED);
+                            view.measure(widthSpec, heightSpec);
+                            int measuredHeight = view.getMeasuredHeight();
+                            if (measuredHeight > 0 && measuredHeight > params.height) {
+                                params.height = measuredHeight;
+                                manager.updateViewLayout(view, params);
+                                Log.i(TAG, "overlay remeasure id=" + overlayId + " h=" + measuredHeight);
+                            }
+                        } catch (Throwable error) {
+                            Log.w(TAG, "overlay remeasure failed id=" + overlayId, error);
+                        }
+                    });
                     OVERLAYS.put(overlayId, view);
                     OVERLAY_PARAMS.put(overlayId, params);
                     OVERLAY_OWNERS.put(overlayId, request.optString("owner", ""));
