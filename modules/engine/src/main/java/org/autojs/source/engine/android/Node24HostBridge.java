@@ -111,6 +111,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private final Context mContext;
+    /** task-183：每个 Node 执行宿主一个 owner；overlay 关闭/清理只作用于本 owner，避免并行 job 互相关闭浮窗。 */
+    private final String mOverlayOwner = "node24-" + java.util.UUID.randomUUID().toString();
     /** 当前脚本项目目录（prelude 注入给 __ajsProjectDir，B 的 ui 模块用）。 */
     private final String mProjectDir;
     /** 对象句柄：id -> Java 对象（强引用；实例随一次 Node 执行回收）。 */
@@ -689,6 +691,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
      */
     private String handleUiJson(JSONObject request) {
         try {
+            // task-183：floatingWindow 请求带上 owner，主进程 NodeUiBridgeService 按 owner 关闭/清理。
+            if (request != null && "floatingWindow".equals(request.optString("op", ""))) {
+                request.put("owner", mOverlayOwner);
+            }
             Class<?> host = Class.forName("com.stardust.autojs.engine.node24.NodeUiHost",
                     false, mContext.getClassLoader());
             Object result;
@@ -1162,7 +1168,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         // close op 清不到它；这里显式下发 floatingWindow closeAll，脚本结束/取消/启动前都清干净。
         try {
             JSONObject floating = new JSONObject().put("kind", "ui").put("op", "floatingWindow")
-                    .put("action", "closeAll");
+                    .put("action", "closeAll").put("owner", mOverlayOwner);
             handleUiJson(floating);
         } catch (Throwable error) {
             Log.w(TAG, "close floating overlays failed", error);

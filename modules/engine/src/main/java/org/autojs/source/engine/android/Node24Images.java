@@ -424,7 +424,22 @@ public final class Node24Images implements AutoCloseable {
         List<double[]> pairs = FeatureMatcher.match(scene.features, object.features, ratio);
         Point[] corners = FeatureMatcher.estimateFrameCorners(pairs,
                 object.features.scaledWidth, object.features.scaledHeight);
+        String drawPath = request.optString("drawMatches", "");
         if (corners == null) {
+            // task-184：未匹配时也写 drawMatches 调试图（只画场景特征点，不画四边形）。
+            // Pro 示例会无条件 viewFile('./matches.jpg')，若这里不写文件就报“文件不存在”。
+            if (!drawPath.isEmpty() && scene.features.sourceMat != null) {
+                try {
+                    File drawFile = new File(drawPath);
+                    File parent = drawFile.getParentFile();
+                    if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                        Log.w(TAG, "create drawMatches parent failed: " + parent);
+                    }
+                    FeatureMatcher.drawMatches(scene.features.sourceMat, pairs, null, drawPath);
+                } catch (Throwable error) {
+                    Log.w(TAG, "drawMatches(no match) failed: " + drawPath, error);
+                }
+            }
             return null;
         }
         // 场景「缩放后」坐标 -> 原图坐标（与 Rhino Images.matchFeatures 一致）。
@@ -435,7 +450,6 @@ public final class Node24Images implements AutoCloseable {
         }
         double centerX = (original[0].x + original[1].x + original[2].x + original[3].x) / 4d;
         double centerY = (original[0].y + original[1].y + original[2].y + original[3].y) / 4d;
-        String drawPath = request.optString("drawMatches", "");
         if (!drawPath.isEmpty() && scene.features.sourceMat != null) {
             try {
                 File drawFile = new File(drawPath);

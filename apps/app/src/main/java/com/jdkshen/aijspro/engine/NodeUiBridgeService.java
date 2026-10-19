@@ -52,6 +52,8 @@ public class NodeUiBridgeService extends Service {
     private static final Map<String, Messenger> DIALOG_SESSIONS = new ConcurrentHashMap<>();
     private static volatile NodeUiBridgeService sDialogInstance;
     private static final Map<String, android.view.View> OVERLAYS = new ConcurrentHashMap<>();
+    /** task-183：overlayId -> owner（Node 执行宿主）；closeAll 只清本 owner，避免并行 job 互删浮窗。 */
+    private static final Map<String, String> OVERLAY_OWNERS = new ConcurrentHashMap<>();
     private static final Map<String, android.view.WindowManager.LayoutParams> OVERLAY_PARAMS = new ConcurrentHashMap<>();
     private static int sOverlaySeq = 1;
     // task-157：XML overlay 内容/触摸事件/拖拽
@@ -319,6 +321,7 @@ public class NodeUiBridgeService extends Service {
                     manager.addView(view, params);
                     OVERLAYS.put(overlayId, view);
                     OVERLAY_PARAMS.put(overlayId, params);
+                    OVERLAY_OWNERS.put(overlayId, request.optString("owner", ""));
                     OVERLAY_CONTENTS.put(overlayId, content);
                     OVERLAY_EVENTS.put(overlayId, new java.util.ArrayDeque<>());
                     result = new org.json.JSONObject().put("ok", true).put("overlayId", overlayId)
@@ -401,11 +404,21 @@ public class NodeUiBridgeService extends Service {
                     result = new org.json.JSONObject().put("ok", true).put("closed", view != null).toString();
                 } else if ("closeAll".equals(action)) {
                     int closed = 0;
-                    for (Map.Entry<String, android.view.View> entry : OVERLAYS.entrySet()) {
-                        try { manager.removeView(entry.getValue()); closed++; } catch (Throwable ignored) { }
+                    String owner = request.optString("owner", "");
+                    java.util.List<String> ids = new java.util.ArrayList<>(OVERLAYS.keySet());
+                    for (String id : ids) {
+                        String overlayOwner = OVERLAY_OWNERS.get(id);
+                        if (!owner.isEmpty() && overlayOwner != null && !owner.equals(overlayOwner)) {
+                            continue; // task-183：只关闭本 owner 的 overlay
+                        }
+                        android.view.View v = OVERLAYS.remove(id);
+                        if (v != null) { try { manager.removeView(v); closed++; } catch (Throwable ignored) { } }
+                        OVERLAY_PARAMS.remove(id);
+                        OVERLAY_CONTENTS.remove(id);
+                        OVERLAY_EVENTS.remove(id);
+                        OVERLAY_DRAG_ANCHORS.remove(id);
+                        OVERLAY_OWNERS.remove(id);
                     }
-                    OVERLAYS.clear(); OVERLAY_PARAMS.clear(); OVERLAY_CONTENTS.clear();
-                    OVERLAY_EVENTS.clear(); OVERLAY_DRAG_ANCHORS.clear();
                     result = new org.json.JSONObject().put("ok", true).put("closed", closed).toString();
                 } else {
                     throw new IllegalArgumentException("overlay 不支持：action=" + action);

@@ -56,6 +56,12 @@ public class DebugCommandReceiver extends BroadcastReceiver {
             return;
         }
         try {
+            String debugStopPath = intent.getStringExtra("stopPath");
+            if (debugStopPath != null && !debugStopPath.isEmpty()) {
+                boolean stopped = com.jdkshen.aijspro.flutterpoc.scriptproc.PocScriptHost.stopByPath(debugStopPath);
+                Log.i(TAG, "debug stopPath: " + debugStopPath + " stopped=" + stopped);
+                return;
+            }
             if (intent.getBooleanExtra("volumeUp", false)) {
             // 调试用：模拟物理音量上键（adb 注入按键不会进入无障碍过滤键通道，只能这样验证停止链路）
             try {

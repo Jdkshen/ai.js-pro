@@ -146,3 +146,19 @@
 - 返回键关闭 Node UI overlay：池进程仍存活，无 IOException/failed（本机 overlay 返回键路径该次未产生 cancel，任务页停止路径已验证取消语义）。
 结论：dev-1129 池进程 cancel 语义 PASS。
 证据：`output/flutter-poc/evidence/task181/dev1129-k40-cancel.log`。
+## task-183 池迁移后浮窗回归（2026-10-20）
+
+### ③ 旧 job 关闭其他 job 浮窗 / 孤儿（已修）
+- 根因：`Node24HostBridge.closeUiOverlay()` 结束/取消时下发 `floatingWindow closeAll`，主进程 `NodeUiBridgeService` 无条件清空**所有** Node overlay；并行 UI job 会互删浮窗，旧 job 结束导致新 job 无 overlay。
+- 修复：每个 `Node24HostBridge` 生成 ownerId，所有 floatingWindow 请求带 `owner`；`NodeUiBridgeService` 按 owner 存 `OVERLAY_OWNERS`，`closeAll` 只清同 owner overlay（无 owner 时保持旧全清语义）。
+- 验证（MI8 debug 465）：两个 UI job 时 4 个 app overlay；`stopPath t166keep` 后剩 3 个（floatlog 未受影响），旧 owner closeAll 未删他人 overlay。
+
+### ① 浮窗拖动（本地未复现，附证据）
+- 当前构建 owner 修复后，拖动 dragHandle：`mAttrs (0,200)→(0,768)`，窗口位置真实改变；建议 t2 确认 swipe 起点在 dragHandle（示例 `enableDrag(dragHandle)` 只接受该控件起手）。
+
+### ② 通知栏「脚本运行中」缺失（本地未复现）
+- K40 dev-1129 Node 脚本运行时：`ForegroundService isForeground=true foregroundNoti=... FOREGROUND_SERVICE ... actions=1`，contentView=`notification_running_script` 含 `notif_stop` 停止按钮；未见缺失。
+- 可能差异：`startForegroundService` 被系统静默/通知权限/后台启动限制，或 t2 看的是系统「正在其他应用上层显示」通知。需要 t2 提供复现场景（入口、dev 版本、dumpsys notification 截图）。
+
+### 待构建验证
+owner 修复 + debug stopPath 已编译（BUILD SUCCESSFUL）；请构建 dev-1131 后在 K40/MI8 验证：双 UI job 互不删浮窗、拖动、通知停止入口。
