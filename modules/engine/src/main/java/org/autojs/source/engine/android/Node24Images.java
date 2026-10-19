@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Build;
 import android.system.Os;
+import android.util.Base64;
 import android.util.Log;
 
 import com.stardust.autojs.core.image.FeatureMatcher;
@@ -23,6 +24,8 @@ import org.opencv.core.Rect;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -53,6 +56,8 @@ public final class Node24Images implements AutoCloseable {
     static final long DEFAULT_MAX_TOTAL_PIXELS = 64_000_000L;
     private static final long MAX_FILE_BYTES = 256L * 1024 * 1024;
     private static final int MAX_PATH_CHARS = 4096;
+    /** getPixels 单次返回的原始字节上限（Binder/JSON 传输安全线）。 */
+    private static final int MAX_PIXEL_FETCH_BYTES = 4 * 1024 * 1024;
     private static final int MAX_OFFSET_COLORS = 1024;
 
     private final int mMaxLiveImages;
@@ -101,6 +106,10 @@ public final class Node24Images implements AutoCloseable {
                     return ok(findColor(request, true));
                 case "findImage":
                     return ok(findImage(request));
+                case "matchTemplate":
+                    return ok(matchTemplate(request));
+                case "getPixels":
+                    return ok(getPixels(request));
                 case "detectsColor":
                     return ok(detectsColor(request, false));
                 case "detectsMultiColors":
@@ -118,7 +127,7 @@ public final class Node24Images implements AutoCloseable {
                 default:
                     return error("image 不支持的操作：" + action
                             + "（支持 read/write/pixel/findColor/findMultiColors/"
-                            + "findImage/detectsColor/detectsMultiColors/recycle/detectAndComputeFeatures/"
+                            + "findImage/matchTemplate/getPixels/detectsColor/detectsMultiColors/recycle/detectAndComputeFeatures/"
                             + "matchFeatures/recycleFeatures）");
             }
         } catch (Throwable failure) {
@@ -377,6 +386,106 @@ public final class Node24Images implements AutoCloseable {
         }
     }
 
+    /**
+     * 多结果模板匹配：与 Rhino/QuickJS 的 images.matchTemplate 同一算法
+     * （TM_CCOEFF_NORMED + 金字塔快速匹配），返回 [{x,y,similarity}]。
+     */
+    private JSONObject matchTemplate(JSONObject request) throws Exception {
+        ensureOpen();
+        int sourceId = requireId(request);
+        int templateId = requireInt(request, "templateId");
+        Bitmap source = requireBitmap(sourceId);
+        Bitmap template = requireBitmap(templateId);
+        double threshold = parseSimilarity(request, "threshold", 0.9d);
+        double weakThreshold = parseSimilarity(request, "weakThreshold", 0.6d);
+        int level = parseMatchLevel(request);
+        int limit = Math.max(1, Math.min(4096, request.optInt("limit", 32)));
+        Region region = parseRegion(request.opt("region"), source.getWidth(), source.getHeight());
+        if (template.getWidth() > region.width || template.getHeight() > region.height) {
+            throw new IllegalArgumentException("Template " + template.getWidth() + "x" + template.getHeight()
+                    + " is larger than source/search region " + region.width + "x" + region.height);
+        }
+        ensureOpenCv();
+        Mat sourceMat = new Mat();
+        Mat templateMat = new Mat();
+        Mat regionMat = null;
+        try {
+            Utils.bitmapToMat(source, sourceMat);
+            Utils.bitmapToMat(template, templateMat);
+            Mat search = sourceMat;
+            if (region.x != 0 || region.y != 0 || region.width != source.getWidth()
+                    || region.height != source.getHeight()) {
+                regionMat = new Mat(sourceMat, new Rect(region.x, region.y, region.width, region.height));
+                search = regionMat;
+            }
+            List<TemplateMatching.Match> matches = TemplateMatching.fastTemplateMatching(
+                    search, templateMat, TemplateMatching.MATCHING_METHOD_DEFAULT,
+                    (float) weakThreshold, (float) threshold, level, limit, false);
+            JSONArray array = new JSONArray();
+            for (TemplateMatching.Match match : matches) {
+                array.put(new JSONObject()
+                        .put("x", region.x + (int) Math.round(match.point.x))
+                        .put("y", region.y + (int) Math.round(match.point.y))
+                        .put("similarity", match.similarity));
+            }
+            return new JSONObject().put("matches", array);
+        } catch (IllegalArgumentException error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new IllegalStateException("模板匹配失败：" + describe(error), error);
+        } finally {
+            if (regionMat != null) {
+                OpenCVHelper.release(regionMat);
+            }
+            OpenCVHelper.release(templateMat);
+            OpenCVHelper.release(sourceMat);
+        }
+    }
+
+    /**
+     * 批量像素：一次调用取回整块区域，避免「每像素一次跨进程调用」。
+     * format=argb（默认，小端 4 字节/像素）或 gray（1 字节/像素，BT.601）。
+     */
+    private JSONObject getPixels(JSONObject request) throws Exception {
+        ensureOpen();
+        int imageId = requireId(request);
+        Bitmap bitmap = requireBitmap(imageId);
+        Region region = parseRegion(request.opt("region"), bitmap.getWidth(), bitmap.getHeight());
+        String format = request.optString("format", "argb");
+        if (!"argb".equals(format) && !"gray".equals(format)) {
+            throw new IllegalArgumentException("getPixels 的 format 仅支持 argb/gray：" + format);
+        }
+        boolean argb = "argb".equals(format);
+        long bytes = (long) region.width * (long) region.height * (argb ? 4L : 1L);
+        if (bytes > MAX_PIXEL_FETCH_BYTES) {
+            throw new IllegalArgumentException("getPixels 区域过大：" + region.width + "x" + region.height
+                    + "（单次上限 " + (MAX_PIXEL_FETCH_BYTES / 1024 / 1024) + "MB，请分块读取）");
+        }
+        int[] pixels = new int[region.width * region.height];
+        bitmap.getPixels(pixels, 0, region.width, region.x, region.y, region.width, region.height);
+        byte[] raw;
+        if (argb) {
+            raw = new byte[pixels.length * 4];
+            ByteBuffer buffer = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+            for (int pixel : pixels) {
+                buffer.putInt(pixel);
+            }
+        } else {
+            raw = new byte[pixels.length];
+            for (int i = 0; i < pixels.length; i++) {
+                int pixel = pixels[i];
+                int r = (pixel >> 16) & 0xFF;
+                int g = (pixel >> 8) & 0xFF;
+                int b = pixel & 0xFF;
+                raw[i] = (byte) Math.round(0.299d * r + 0.587d * g + 0.114d * b);
+            }
+        }
+        return new JSONObject()
+                .put("width", region.width)
+                .put("height", region.height)
+                .put("format", format)
+                .put("data", Base64.encodeToString(raw, Base64.NO_WRAP));
+    }
     /**
      * task-172：计算图片特征（复用 Rhino/QuickJS 同款的 FeatureMatcher ORB-lite 实现）。
      * 特征对象保存在宿主，Node 只拿到句柄 id；用完后 ImageFeatures.recycle() 释放。

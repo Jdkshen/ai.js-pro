@@ -2072,6 +2072,16 @@
     return imageFindImageSync(this, template, options);
   };
   Image.prototype.findImageSync = Image.prototype.findImage;
+  // 多结果模板匹配（与 Rhino/QuickJS images.matchTemplate 同语义）。
+  Image.prototype.matchTemplate = function (template, options) {
+    return imageMatchTemplateSync(this, template, options);
+  };
+  Image.prototype.matchTemplateSync = Image.prototype.matchTemplate;
+  // 批量像素：一次调用取回整块区域（argb 小端 4B/像素或 gray 1B/像素）。
+  Image.prototype.getPixels = function (options) {
+    return imageGetPixelsSync(this, options);
+  };
+  Image.prototype.getPixelsSync = Image.prototype.getPixels;
   // task-172：计算图片特征（Pro image 模块 Image.detectAndComputeFeatures）。
   // 返回 Promise；宿主保存特征对象，Node 只拿句柄（用完 recycle()）。
   Image.prototype.detectAndComputeFeatures = function (options) {
@@ -2284,6 +2294,80 @@
       region: region
     };
     return normalizeImagePoint(hostValue(request), 'findImage');
+  }
+
+  /**
+   * 批量像素：一次宿主调用取回整块区域，返回 {width,height,format,data:Uint8Array}。
+   * 这是「全 Node 化」的关键 API：把逐像素 pixel() 调用压成一次调用。
+   */
+  function imageGetPixelsSync(image, options) {
+    var frame = wrapImage(image);
+    options = normalizeImageOptions(options);
+    var region = normalizeImageRegion(options.region, frame);
+    if (!region) { region = [0, 0, frame._width, frame._height]; }
+    var format = options.format == null ? 'argb' : String(options.format);
+    if (format !== 'argb' && format !== 'gray') {
+      throw new TypeError('getPixels 的 format 仅支持 argb/gray：' + format);
+    }
+    var value = hostValue({
+      kind: 'image',
+      action: 'getPixels',
+      id: frame._id,
+      region: region,
+      format: format
+    });
+    if (!value || typeof value !== 'object' || typeof value.data !== 'string'
+      || !isIntegerValue(value.width) || !isIntegerValue(value.height)) {
+      throw hostError('getPixels 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    var buffer = Buffer.from(value.data, 'base64');
+    return {
+      width: value.width,
+      height: value.height,
+      format: value.format || format,
+      data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+    };
+  }
+
+  /** 多结果模板匹配：返回 [{x,y,similarity,point:{x,y}}]，按相似度降序。 */
+  function imageMatchTemplateSync(image, template, options) {
+    var frame = wrapImage(image);
+    var target = wrapImage(template);
+    options = normalizeImageOptions(options);
+    var threshold = imageSimilarityThreshold(options.threshold, DEFAULT_IMAGE_SIMILARITY, 'threshold');
+    var weakThreshold = imageSimilarityThreshold(
+      options.weakThreshold, DEFAULT_IMAGE_WEAK_SIMILARITY, 'weakThreshold');
+    var level = imageMatchLevel(options.level);
+    var limit = options.limit == null ? 32 : Math.max(1, Math.min(4096, Math.round(Number(options.limit) || 32)));
+    var region = normalizeImageRegion(options.region, frame);
+    if (!region) { region = [0, 0, frame._width, frame._height]; }
+    if (target._width > region[2] || target._height > region[3]) {
+      throw apiRangeError('模板 ' + target._width + 'x' + target._height
+        + ' 大于搜索区域 ' + region[2] + 'x' + region[3]);
+    }
+    var value = hostValue({
+      kind: 'image',
+      action: 'matchTemplate',
+      id: frame._id,
+      templateId: target._id,
+      threshold: threshold,
+      weakThreshold: weakThreshold,
+      level: level,
+      limit: limit,
+      region: region
+    });
+    var matches = value && value.matches;
+    if (!Array.isArray(matches)) {
+      throw hostError('matchTemplate 返回格式非法：' + JSON.stringify(value).slice(0, 120));
+    }
+    return matches.map(function (match) {
+      return {
+        point: { x: match.x, y: match.y },
+        x: match.x,
+        y: match.y,
+        similarity: match.similarity
+      };
+    });
   }
 
   // task-172：特征对象（detectAndComputeFeatures 返回值）与 matchFeatures。
@@ -2575,6 +2659,10 @@
     findMultiColorsSync: imageFindMultiColorsSync,
     findImage: promiseCall(imageFindImageSync),
     findImageSync: imageFindImageSync,
+    matchTemplate: promiseCall(imageMatchTemplateSync),
+    matchTemplateSync: imageMatchTemplateSync,
+    getPixels: promiseCall(imageGetPixelsSync),
+    getPixelsSync: imageGetPixelsSync,
     matchFeatures: imageMatchFeatures,
     matchFeaturesSync: imageMatchFeaturesSync,
     detectsColor: imageDetectsColor,
