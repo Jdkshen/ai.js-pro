@@ -1458,12 +1458,78 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     /** task-133 P1：device/files/storages/events/engines/threads 能力域。 */
+    /**
+     * task-179：PowerManager.wakeUp；非系统应用通常没有 DEVICE_POWER，SecurityException 时回退
+     * ACQUIRE_CAUSES_WAKEUP 的短时 wake lock（需要 WAKE_LOCK 普通权限），失败给明确中文。
+     */
+    private Object deviceWakeUp() throws Exception {
+        android.os.PowerManager power = (android.os.PowerManager)
+                mContext.getSystemService(Context.POWER_SERVICE);
+        if (power == null) {
+            throw new IllegalStateException("唤醒屏幕失败：PowerManager 不可用");
+        }
+        boolean hasWakeLockPermission = mContext.checkSelfPermission(
+                android.Manifest.permission.WAKE_LOCK) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        JSONObject result = new JSONObject();
+        String firstError = null;
+        try {
+            // wakeUp 在公开 SDK stub 里不可见（编译期找不到符号），只能运行期反射：
+            // 优先双参 (long, String)，其次单参 (long)；任何失败都回退 wake lock。
+            java.lang.reflect.Method wakeUpMethod = null;
+            try {
+                wakeUpMethod = android.os.PowerManager.class
+                        .getMethod("wakeUp", long.class, String.class);
+            } catch (NoSuchMethodException ignore) {
+            }
+            if (wakeUpMethod == null) {
+                wakeUpMethod = android.os.PowerManager.class.getMethod("wakeUp", long.class);
+            }
+            Object[] params = wakeUpMethod.getParameterTypes().length == 2
+                    ? new Object[]{android.os.SystemClock.uptimeMillis(), "AutoJsPro:node24:wakeUp"}
+                    : new Object[]{android.os.SystemClock.uptimeMillis()};
+            wakeUpMethod.invoke(power, params);
+            result.put("method", "wakeUp");
+        } catch (Throwable wakeError) {
+            Throwable cause = wakeError instanceof java.lang.reflect.InvocationTargetException
+                    && wakeError.getCause() != null ? wakeError.getCause() : wakeError;
+            firstError = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+            if (!hasWakeLockPermission) {
+                throw new IllegalStateException("唤醒屏幕失败：缺少 WAKE_LOCK 权限（请在应用信息/权限中允许「保持唤醒」后重试）；系统错误：" + firstError);
+            }
+            try {
+                int flags = android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK
+                        | android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+                        | android.os.PowerManager.ON_AFTER_RELEASE;
+                android.os.PowerManager.WakeLock lock = power.newWakeLock(flags, "AutoJsPro:node24:wakeUp");
+                lock.acquire(3000L);
+                result.put("method", "wakeLock");
+            } catch (Throwable lockError) {
+                String lockMessage = lockError.getMessage() == null ? lockError.toString() : lockError.getMessage();
+                throw new IllegalStateException("唤醒屏幕失败：系统拒绝 PowerManager.wakeUp（" + firstError
+                        + "），备用 wake lock 也失败（" + lockMessage
+                        + "）；Android 12+ 后台唤醒可能受限，请在前台运行或允许「保持唤醒」");
+            }
+        }
+        result.put("wakeUp", true).put("screenOn", power.isInteractive())
+                .put("viaWakeLockPermission", hasWakeLockPermission);
+        return result;
+    }
+
     private Object domainAction(String kind, JSONObject request) throws Exception {
         String action = request.optString("action", "");
         JSONObject args = request.optJSONObject("args");
         if (args == null) args = new JSONObject();
         switch (kind) {
             case "device": {
+                // task-179：power_manager 宿主动作。
+                if ("wakeUp".equals(action)) {
+                    return deviceWakeUp();
+                }
+                if ("isScreenOn".equals(action)) {
+                    android.os.PowerManager power = (android.os.PowerManager)
+                            mContext.getSystemService(Context.POWER_SERVICE);
+                    return power != null && power.isInteractive();
+                }
                 JSONObject value = new JSONObject();
                 android.util.DisplayMetrics metrics = mContext.getResources().getDisplayMetrics();
                 value.put("width", metrics.widthPixels).put("height", metrics.heightPixels)

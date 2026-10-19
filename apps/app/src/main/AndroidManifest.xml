@@ -466,6 +466,14 @@
         <service android:name="org.autojs.source.engine.android.Node24PoolService1" android:process=":node24_1" android:exported="false" />
         <service android:name="org.autojs.source.engine.android.Node24PoolService2" android:process=":node24_2" android:exported="false" />
         <service android:name="org.autojs.source.engine.android.Node24PoolService3" android:process=":node24_3" android:exported="false" />
+        <!-- task-180：主进程中继 :node24 截图授权 Activity 的启动（BAL 豁免） -->
+        <receiver
+            android:name="com.jdkshen.aijspro.engine.Node24CaptureRelay"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.jdkshen.aijspro.NODE24_CAPTURE_CONSENT" />
+            </intent-filter>
+        </receiver>
         <!-- 跨引擎桥：Node 父引擎可能由主进程或 :script 创建，两处各注册一份同一实现。
              :node24 的 prelude 先查 status，选中真正有活动 Node 引擎的进程并固定；不导出/AIDL。 -->
         <service

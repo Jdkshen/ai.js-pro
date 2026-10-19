@@ -93,6 +93,8 @@ public class NodeUiActivity extends AppCompatActivity {
     private boolean mInlineLayout;
     /** 主进程 click 事件队列，NodeUiHost.pollEvents 通过 drainViewEvents 拉走。 */
     private final java.util.ArrayDeque<JSONObject> mViewEvents = new java.util.ArrayDeque<>();
+    /** task-178：返回键只处理一次；防系统/预测返回重复回调导致重复 stop。 */
+    private boolean mBackStopRequested;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -653,6 +655,33 @@ public class NodeUiActivity extends AppCompatActivity {
 
     private static String escape(String text) {
         return text == null ? "" : text.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * task-178：Node UI 返回键语义与 Pro 的 Rhino UI 宿主一致——返回 = 结束对应脚本 execution，
+     * 而不只是把 Activity finish 掉（旧实现只 finish，Node 事件循环继续跑到 Node24Service
+     * 的 UI close 宽限/keep-alive 超时，用户看到「返回了脚本还在跑」）。
+     *
+     * <p>Activity 本身不知道 :script 的 token；由主进程 NodeUiBridgeService 按 session/projectDir
+     * 关联 :node24 正在运行的 Node job（广播 started 的 id），下发 Node24Service 的 cancel 控制，
+     * Node24JavaScriptEngine 的 evaluate 收到 CANCELLED 后 :script 宿主 token 收尾。Activity
+     * 随即 finish，onDestroy 再走原有 CloseListener→MSG_EVENT(destroy) 链路清 overlay。
+     */
+    @Override
+    public void onBackPressed() {
+        if (mBackStopRequested) {
+            super.onBackPressed();
+            return;
+        }
+        mBackStopRequested = true;
+        Log.i(TAG, "NodeUiActivity: C-BACK pressed session=" + mSessionId
+                + " project=" + mProjectDir);
+        try {
+            NodeUiBridgeService.requestStopForBack(mSessionId, mProjectDir);
+        } catch (Throwable error) {
+            Log.w(TAG, "NodeUiActivity: requestStopForBack failed", error);
+        }
+        super.onBackPressed();
     }
 
     @Override

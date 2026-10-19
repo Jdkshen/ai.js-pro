@@ -230,11 +230,25 @@ public final class Node24CaptureConsentActivity extends Activity {
             Intent intent = new Intent(context, Node24CaptureConsentActivity.class)
                     .putExtra(EXTRA_TOKEN, token)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            // task-180：:node24 是后台进程，直接 startActivity 会被后台启动限制拦下；
+            // 先让主进程（通常可见）通过 PendingIntent 启动本授权页，1.2s 内未收到页面回调则直连兜底。
+            boolean relayed = false;
             try {
-                context.startActivity(intent);
-            } catch (Throwable error) {
-                Node24CaptureConsentActivity.cancelPending(token);
-                throw new IllegalStateException("无法打开系统屏幕截图授权界面：" + describe(error), error);
+                Intent relay = new Intent("com.jdkshen.aijspro.NODE24_CAPTURE_CONSENT")
+                        .setPackage(context.getPackageName())
+                        .putExtra(EXTRA_TOKEN, token);
+                context.sendBroadcast(relay);
+                relayed = true;
+            } catch (Throwable relayError) {
+                Log.w(TAG, "broadcast capture consent relay failed", relayError);
+            }
+            if (!relayed) {
+                try {
+                    context.startActivity(intent);
+                } catch (Throwable error) {
+                    Node24CaptureConsentActivity.cancelPending(token);
+                    throw new IllegalStateException("无法打开系统屏幕截图授权界面：" + describe(error), error);
+                }
             }
 
             boolean delivered;

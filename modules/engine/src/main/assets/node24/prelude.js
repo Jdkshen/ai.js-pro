@@ -1639,17 +1639,25 @@
     isIgnoringBatteryOptimizations: function () { try { return true; } catch (e) { return false; } },
     requestIgnoreBatteryOptimizations: function () { console.log('[Auto.js] requestIgnoreBatteryOptimizations 暂未实现'); },
     isScreenOn: function () {
+      try { return domain('device', 'isScreenOn') === true; } catch (e) { }
       try {
         var pm = contextService('power');
         return pm ? pm.isInteractive() : true;
       } catch (e) { return true; }
     },
+    // task-179：宿主 PowerManager.wakeUp（失败时回退短时 ACQUIRE_CAUSES_WAKEUP wake lock）；
+    // 权限/系统受限时由宿主抛中文错误，不静默吞掉。
     wakeUp: function () {
-      try { console.log('[Auto.js] wakeUp 暂未实现（需要 WAKE_LOCK/权限）'); } catch (e) { }
+      var result = domain('device', 'wakeUp');
+      return !!(result && result.wakeUp === true);
     }
   };
   var axiosModule = (function () {
+    var MAX_REDIRECTS = 5;
     function request(method, url, data, config) {
+      return requestWithRedirects(method, url, data, config, MAX_REDIRECTS);
+    }
+    function requestWithRedirects(method, url, data, config, redirectsLeft) {
       return new Promise(function (resolve, reject) {
         var parsed;
         try { parsed = new URL(String(url)); } catch (e) { reject(new Error('axios URL 非法：' + url)); return; }
@@ -1670,6 +1678,19 @@
           rejectUnauthorized: false
         };
         var req = transport.request(options, function (res) {
+          // task-179：跟随 3xx 重定向（等同真实 axios 的 follow-redirects）；
+          // 网易云音乐链接会 302 到实际 mp3，不跟随会得到 0 字节文件。
+          var status = res.statusCode;
+          if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+            res.resume();
+            var next;
+            try { next = new URL(res.headers.location, parsed).toString(); }
+            catch (redirectError) { reject(new Error('axios 重定向地址非法：' + res.headers.location)); return; }
+            var nextMethod = (status === 301 || status === 302 || status === 303) ? 'GET' : method;
+            var nextData = (nextMethod === 'GET') ? undefined : data;
+            requestWithRedirects(nextMethod, next, nextData, config, redirectsLeft - 1).then(resolve, reject);
+            return;
+          }
           var responseType = config && config.responseType;
           if (responseType === 'stream') {
             resolve({ status: res.statusCode, headers: res.headers, data: res });
@@ -1692,11 +1713,15 @@
         req.end();
       });
     }
-    return {
+    var axios = {
       get: function (url, config) { return request('GET', url, undefined, config); },
       post: function (url, data, config) { return request('POST', url, data, config); },
       request: function (config) { return request((config && config.method) || 'GET', config && config.url, config && config.data, config); }
     };
+    // task-179：ESM/TS 默认导入 interop——Auto.js Pro 内置 axios 支持 require('axios').default。
+    axios.default = axios;
+    axios.__esModule = true;
+    return axios;
   })();
   // ------------------------------------------------------------------
   // 基础自动化 API（accessibility / image / color / media_projection）

@@ -2,8 +2,11 @@ package com.jdkshen.aijspro.engine;
 
 import android.app.Activity;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -16,8 +19,10 @@ import android.util.Log;
 import com.stardust.autojs.engine.node24.NodeUiActivityClient;
 import com.stardust.autojs.engine.node24.NodeUiProtocol;
 
+import org.autojs.source.engine.android.Node24Service;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,11 +32,23 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>协议见 {@link NodeUiProtocol}：MSG_SHOW 启动 NodeUiActivity；MSG_UPDATE 转 Activity.handleUpdate；
  * MSG_CLOSE 关闭；Activity 关闭经 CloseListener 以 MSG_EVENT(type=destroy) 回 :node24。
+ *
+ * <p>task-178：NodeUiActivity 返回键需要结束对应 Node execution。Activity 只知道 session/projectDir，
+ * 本服务通过 {@link Node24Service#ACTION_NODE24_STATE} 跟踪 :node24/_1..3 的 active job id（含
+ * UI script 标记与 filename），把 session/projectDir 映射到 job id；返回时下发
+ * {@link Node24Service#ACTION_NODE24_CONTROL} cancel(id)，Node24Service 取消 native 执行、关 UI 并结束
+ * 进程（池进程保持 warm），Node24JavaScriptEngine 收到 CANCELLED 后 :script 宿主 token 收尾。
  */
 public class NodeUiBridgeService extends Service {
 
     private static final String TAG = "NodeUiBridgeService";
     private static final Map<String, Messenger> SESSIONS = new ConcurrentHashMap<>();
+    /** task-178：:node24 当前运行 job（key=job id，state 广播维护）。 */
+    private static final Map<String, NodeJob> NODE_JOBS = new ConcurrentHashMap<>();
+    /** task-178：session -> Activity 的 projectDir，用于广播晚到/映射兜底。 */
+    private static final Map<String, String> SESSION_PROJECTS = new ConcurrentHashMap<>();
+    /** task-178：session -> Node24 job id（show 时或 started 广播到达后绑定）。 */
+    private static final Map<String, String> SESSION_JOBS = new ConcurrentHashMap<>();
     private static final Map<String, Messenger> DIALOG_SESSIONS = new ConcurrentHashMap<>();
     private static volatile NodeUiBridgeService sDialogInstance;
     private static final Map<String, android.view.View> OVERLAYS = new ConcurrentHashMap<>();
@@ -43,7 +60,23 @@ public class NodeUiBridgeService extends Service {
     private static final Map<String, Integer> OVERLAY_DRAG_ANCHORS = new ConcurrentHashMap<>();
     private static final Map<String, float[]> OVERLAY_DOWN = new ConcurrentHashMap<>();
     private static volatile NodeUiBridgeService sInstance;
+    /** task-178：Node job 状态广播接收器（onCreate 注册，onDestroy 注销）。 */
+    private BroadcastReceiver mNodeStateReceiver;
     private final Handler mMain = new Handler(Looper.getMainLooper());
+
+    /** task-178：Node24 状态广播里的一条活动 job；只保存返回键取消需要的字段。 */
+    private static final class NodeJob {
+        final String id;
+        final String filename;
+        final boolean uiScript;
+        final long startedAt;
+        NodeJob(String id, String filename, boolean uiScript, long startedAt) {
+            this.id = id;
+            this.filename = filename == null ? "" : filename;
+            this.uiScript = uiScript;
+            this.startedAt = startedAt;
+        }
+    }
 
     /**
      * task-169：AI 球菜单展开/收起时切换 Node 浮窗触摸能力。
@@ -516,6 +549,8 @@ public class NodeUiBridgeService extends Service {
         super.onCreate();
         sInstance = this;
         sDialogInstance = this;
+        installNodeJobReceiver();
+        queryNodeJobs();
         try {
             NodeUiActivity.setCloseListener(session -> dispatchClosed(session));
         } catch (Throwable error) {
@@ -524,6 +559,7 @@ public class NodeUiBridgeService extends Service {
     }
 
     @Override public void onDestroy() {
+        uninstallNodeJobReceiver();
         // task-164：服务销毁时清掉所有 floating overlay，避免 :node24 异常退出后浮窗常驻。
         try {
             android.view.WindowManager manager = (android.view.WindowManager)
@@ -560,6 +596,12 @@ public class NodeUiBridgeService extends Service {
                         reply(replyTo, NodeUiProtocol.MSG_RESULT, session, true, null, new Bundle());
                         return;
                     }
+                }
+                if (session != null) {
+                    SESSION_PROJECTS.put(session, projectDir == null ? "" : projectDir);
+                    SESSION_JOBS.remove(session);
+                    String jobId = findNodeJobForProject(projectDir);
+                    if (jobId != null) SESSION_JOBS.put(session, jobId);
                 }
                 Intent intent = new Intent();
                 intent.setClassName(NodeUiBridgeService.this, NodeUiProtocol.ACTIVITY_CLASS);
@@ -664,6 +706,192 @@ public class NodeUiBridgeService extends Service {
 
     private static String escape(String text) {
         return text == null ? "" : text.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    // ------------------------------------------------------------------
+    // task-178：Node UI 返回键 = 结束对应 Node execution
+    // ------------------------------------------------------------------
+
+    /**
+     * NodeUiActivity.onBackPressed 的同进程入口：先按 session/projectDir 找到 :node24 的 active job，
+     * 再下发 cancel；Activity 随后正常 finish，onDestroy 的 CloseListener 继续负责 destroy 事件。
+     */
+    public static void requestStopForBack(String session, String projectDir) {
+        NodeUiBridgeService service = sInstance;
+        if (service == null) {
+            Log.w(TAG, "C-BACK: bridge service 不存在，无法 cancel Node job（Activity 仍会关闭）");
+            return;
+        }
+        service.mMain.post(() -> service.stopNodeJobForBack(session, projectDir));
+    }
+
+    private void stopNodeJobForBack(String session, String projectDir) {
+        String jobId = resolveNodeJobForBack(session, projectDir);
+        if (jobId == null) {
+            // show 时 started 广播可能尚未到主进程：主动 query 一次，短延迟后重试。
+            queryNodeJobs();
+            final String retrySession = session;
+            final String retryProject = projectDir;
+            mMain.postDelayed(() -> {
+                String retry = resolveNodeJobForBack(retrySession, retryProject);
+                if (retry != null) {
+                    cancelNodeJob(retry, retrySession);
+                } else {
+                    Log.w(TAG, "C-BACK: 未找到对应 Node job（session=" + retrySession
+                            + " project=" + retryProject + "），依赖 Node24Service UI close 兜底");
+                }
+            }, 350L);
+            return;
+        }
+        cancelNodeJob(jobId, session);
+    }
+
+    private String resolveNodeJobForBack(String session, String projectDir) {
+        String mapped = session == null ? null : SESSION_JOBS.get(session);
+        if (mapped != null && NODE_JOBS.containsKey(mapped)) {
+            return mapped;
+        }
+        String dir = projectDir;
+        if ((dir == null || dir.isEmpty()) && session != null) {
+            dir = SESSION_PROJECTS.get(session);
+        }
+        String found = findNodeJobForProject(dir);
+        if (found != null && session != null) {
+            SESSION_JOBS.put(session, found);
+        }
+        return found;
+    }
+
+    /** 按 projectDir 匹配 filename 的父目录，选最近启动的 uiScript job；匹配不到时宁可不 cancel 也不误杀。 */
+    private static String findNodeJobForProject(String projectDir) {
+        NodeJob best = null;
+        for (NodeJob job : NODE_JOBS.values()) {
+            if (job == null || !job.uiScript) {
+                continue;
+            }
+            boolean matched = projectDir == null || projectDir.isEmpty()
+                    || matchesProject(job.filename, projectDir);
+            if (matched && (best == null || job.startedAt > best.startedAt)) {
+                best = job;
+            }
+        }
+        return best == null ? null : best.id;
+    }
+
+    private static boolean matchesProject(String filename, String projectDir) {
+        if (filename == null || filename.isEmpty() || projectDir == null || projectDir.isEmpty()) {
+            return false;
+        }
+        try {
+            File script = new File(filename).getCanonicalFile();
+            File project = new File(projectDir).getCanonicalFile();
+            File parent = script.getParentFile();
+            return parent != null && (parent.equals(project)
+                    || parent.getPath().startsWith(project.getPath() + File.separator));
+        } catch (Throwable ignored) {
+            return filename.startsWith(projectDir);
+        }
+    }
+
+    private void cancelNodeJob(String jobId, String session) {
+        if (jobId == null || jobId.isEmpty()) {
+            return;
+        }
+        if (session != null) {
+            SESSION_JOBS.remove(session);
+        }
+        NODE_JOBS.remove(jobId);
+        Intent intent = new Intent(Node24Service.ACTION_NODE24_CONTROL)
+                .setPackage(getPackageName());
+        intent.putExtra(Node24Service.EXTRA_COMMAND, "cancel");
+        intent.putExtra(Node24Service.EXTRA_ID, jobId);
+        try {
+            sendBroadcast(intent);
+            Log.i(TAG, "C-BACK: cancel Node job id=" + jobId + " session=" + session);
+        } catch (Throwable error) {
+            Log.w(TAG, "C-BACK: send Node cancel failed id=" + jobId, error);
+        }
+    }
+
+    private void queryNodeJobs() {
+        try {
+            Context context = getApplicationContext();
+            if (context == null) {
+                return;
+            }
+            Intent intent = new Intent(Node24Service.ACTION_NODE24_CONTROL)
+                    .setPackage(context.getPackageName());
+            intent.putExtra(Node24Service.EXTRA_COMMAND, "query");
+            context.sendBroadcast(intent);
+        } catch (Throwable error) {
+            Log.w(TAG, "C-BACK: query Node jobs failed", error);
+        }
+    }
+
+    /** 广播维护 registry；晚到的 started 会补绑已有 session（show 早于广播时仍能按返回取消）。 */
+    private void installNodeJobReceiver() {
+        if (mNodeStateReceiver != null) {
+            return;
+        }
+        mNodeStateReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                if (intent == null) {
+                    return;
+                }
+                String state = intent.getStringExtra(Node24Service.EXTRA_STATE);
+                String id = intent.getStringExtra(Node24Service.EXTRA_ID);
+                if (state == null || id == null || id.isEmpty()) {
+                    return;
+                }
+                if ("started".equals(state)) {
+                    NodeJob job = new NodeJob(id,
+                            intent.getStringExtra(Node24Service.EXTRA_FILENAME),
+                            intent.getBooleanExtra(Node24Service.EXTRA_UI_SCRIPT, false),
+                            intent.getLongExtra(Node24Service.EXTRA_STARTED_AT,
+                                    System.currentTimeMillis()));
+                    NODE_JOBS.put(id, job);
+                    for (Map.Entry<String, String> entry : SESSION_PROJECTS.entrySet()) {
+                        if (!SESSION_JOBS.containsKey(entry.getKey())
+                                && matchesProject(job.filename, entry.getValue())) {
+                            SESSION_JOBS.put(entry.getKey(), id);
+                        }
+                    }
+                    Log.i(TAG, "C-BACK: node job started id=" + id
+                            + " uiScript=" + job.uiScript + " file=" + job.filename);
+                } else {
+                    NODE_JOBS.remove(id);
+                    for (Map.Entry<String, String> entry : SESSION_JOBS.entrySet()) {
+                        if (id.equals(entry.getValue())) {
+                            SESSION_JOBS.remove(entry.getKey());
+                        }
+                    }
+                    Log.i(TAG, "C-BACK: node job removed id=" + id + " state=" + state);
+                }
+            }
+        };
+        try {
+            IntentFilter filter = new IntentFilter(Node24Service.ACTION_NODE24_STATE);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(mNodeStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(mNodeStateReceiver, filter);
+            }
+            Log.i(TAG, "C-BACK: Node job registry installed");
+        } catch (Throwable error) {
+            Log.w(TAG, "C-BACK: register Node state receiver failed", error);
+            mNodeStateReceiver = null;
+        }
+    }
+
+    private void uninstallNodeJobReceiver() {
+        if (mNodeStateReceiver == null) {
+            return;
+        }
+        try {
+            unregisterReceiver(mNodeStateReceiver);
+        } catch (Throwable ignored) {
+        }
+        mNodeStateReceiver = null;
     }
 
     public static void startInMain(Context context) {
