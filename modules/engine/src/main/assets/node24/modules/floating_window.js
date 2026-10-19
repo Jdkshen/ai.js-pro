@@ -199,6 +199,7 @@
     this._visible = false;
     if (emitEvent) { this._emit('hide'); }
     activeWindows.delete(this);
+    if (activeWindows.size === 0) { stopOverlayPolling(); }
     return this;
   };
   FloatingWindowImpl.prototype.hide = function () { return this._hideNow(true); };
@@ -345,22 +346,45 @@
   // task-157：触摸/点击/拖拽事件轮询（overlay 主进程队列 -> JS handler）。
   var activeWindows = new Set();
   var overlayPollTimer = null;
+  function stopOverlayPolling() {
+    if (overlayPollTimer != null) {
+      clearInterval(overlayPollTimer);
+      overlayPollTimer = null;
+    }
+  }
   function ensureOverlayPolling() {
     if (overlayPollTimer != null) { return; }
     overlayPollTimer = setInterval(function () {
-      if (activeWindows.size === 0) {
-        clearInterval(overlayPollTimer); overlayPollTimer = null; return;
+      // task-195：关闭/宿主失效瞬间 polling 可能抛错；整个 tick 兜住，
+      // 不能让未处理异常改变 Node 退出码。
+      try {
+        if (activeWindows.size === 0) { stopOverlayPolling(); return; }
+        activeWindows.forEach(function (window) {
+          if (!window._visible || !window._overlayId || window._closed) { return; }
+          var response;
+          try { response = overlayCall('pollEvents', { overlayId: window._overlayId }); } catch (error) { return; }
+          var events = response && response.events ? response.events : [];
+          for (var i = 0; i < events.length; i++) {
+            try { dispatchOverlayEvent(window, events[i]); }
+            catch (dispatchError) {
+              try {
+                console.error('[floating_window] 事件分发异常：'
+                  + ((dispatchError && dispatchError.message) || dispatchError));
+              } catch (ignored) { }
+            }
+          }
+        });
+      } catch (tickError) {
+        try {
+          console.error('[floating_window] polling 异常（已忽略）：'
+            + ((tickError && tickError.message) || tickError));
+        } catch (ignored) { }
       }
-      activeWindows.forEach(function (window) {
-        if (!window._visible || !window._overlayId) { return; }
-        var response;
-        try { response = overlayCall('pollEvents', { overlayId: window._overlayId }); } catch (error) { return; }
-        var events = response && response.events ? response.events : [];
-        for (var i = 0; i < events.length; i++) { dispatchOverlayEvent(window, events[i]); }
-      });
     }, 100);
     if (overlayPollTimer.unref) { overlayPollTimer.unref(); }
   }
+  // 允许 prelude 的 process.exit 包装在退出前停止轮询。
+  globalThis.__ajsStopOverlayPolling = stopOverlayPolling;
   function dispatchOverlayEvent(window, event) {
     if (!event || !event.type) { return; }
     if (event.type === 'touch') {

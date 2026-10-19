@@ -125,6 +125,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
     /** 当前任务注册的 Android 传感器监听器：token -> registration（close 时统一注销）。 */
     private final Map<Integer, SensorRegistration> mSensorRegistrations = new HashMap<>();
     private int mNextSensorToken = 1;
+    /** task-195：prelude 记录 process.exit 请求（exit(0) 强制成功，非 0 保留 code）。 */
+    private volatile boolean mExitRequested;
+    private volatile int mExitRequestedCode = -1;
+
     /** task-63：prelude 的 $autojs.keepRunning()/stopRunning() 通过 host op kind=keepalive 置位。 */
     private volatile boolean mKeepRunning;
     /** task-64 兜底：最近一次 kind=ui / kind=keepalive 请求时间（elapsedRealtime），用于时序兜底。 */
@@ -290,6 +294,17 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 case "keepalive":
                     mKeepRunning = request.optBoolean("running", true);
                     return ok(mKeepRunning);
+                case "lifecycle": {
+                    // task-195：prelude 的 process.exit 记录正常退出请求。
+                    String lifecycleAction = request.optString("action", "");
+                    if ("exitRequested".equals(lifecycleAction)) {
+                        JSONObject lifecycleArgs = request.optJSONObject("args");
+                        mExitRequestedCode = lifecycleArgs == null ? 0 : lifecycleArgs.optInt("code", 0);
+                        mExitRequested = true;
+                        return ok(mExitRequestedCode);
+                    }
+                    return error("lifecycle 不支持：" + lifecycleAction);
+                }
                 case "ui": {
                     // B 的 ui.js 约定：kind:"ui" 的返回必须是 NodeUiHost 原始 JSON（内含 {ok:true,...}），
                     // 不能再包一层 {ok,value}。
@@ -1231,8 +1246,14 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
     }
 
+    /** task-195：进程内记录的正常退出请求 code；未请求返回 -1。 */
+    public int exitRequestedCode() {
+        return mExitRequested ? mExitRequestedCode : -1;
+    }
+
     /** task-65：给 Service 日志用的安全状态串（逐项 try/catch，任何一项失败都不影响 hold 判定）。 */
     public String describeState() {
+
         StringBuilder builder = new StringBuilder(96);
         builder.append("keepRunning=");
         try { builder.append(isKeepRunning()); } catch (Throwable error) { builder.append("ERR"); }

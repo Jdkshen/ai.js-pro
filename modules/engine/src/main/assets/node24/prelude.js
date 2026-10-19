@@ -4508,6 +4508,80 @@
   globalThis.__ajsModuleFactories = moduleFactories;
   globalThis.__ajsModules = moduleCache;
 
+  // task-195：process.exit 语义收口。
+  // - 记录 exit 请求（引擎侧据此把 exit(0) 强制 SUCCESS/exitCode=0，避免 polling/宿主关闭
+  //   竞态导致原生 exitCode=1 被误报 SCRIPT_ERROR）；
+  // - exit/beforeExit 钩子抛错不能改变退出码（否则 Node 会以 1 退出）；
+  // - 退出前停止 overlay 轮询和 keepalive，避免关闭瞬间再打宿主桥。
+  (function installGracefulExit() {
+    try {
+      if (typeof process === 'undefined' || !process || process.__ajsExitPatched) { return; }
+      var nativeExit = process.exit;
+      if (typeof nativeExit !== 'function') { return; }
+      process.__ajsExitPatched = true;
+      function wrapExitHook(listener) {
+        return function () {
+          try { return listener.apply(this, arguments); }
+          catch (hookError) {
+            try {
+              console.error('[Auto.js] exit hook failed: '
+                + ((hookError && hookError.message) || hookError));
+            } catch (ignored) { }
+          }
+        };
+      }
+      try {
+        var originalOn = process.on;
+        var originalOnce = process.once;
+        if (typeof originalOn === 'function') {
+          process.on = function (event, listener) {
+            if ((event === 'exit' || event === 'beforeExit') && typeof listener === 'function') {
+              listener = wrapExitHook(listener);
+            }
+            return originalOn.call(process, event, listener);
+          };
+        }
+        if (typeof originalOnce === 'function') {
+          process.once = function (event, listener) {
+            if ((event === 'exit' || event === 'beforeExit') && typeof listener === 'function') {
+              listener = wrapExitHook(listener);
+            }
+            return originalOnce.call(process, event, listener);
+          };
+        }
+        // 已注册过的 hook 也包一层（dialog/sensors/ui 等在 prelude 前段注册）。
+        try {
+          var events = ['exit', 'beforeExit'];
+          for (var e = 0; e < events.length; e++) {
+            var eventName = events[e];
+            var existing = typeof process.listeners === 'function' ? process.listeners(eventName) : [];
+            if (existing && existing.length && typeof process.removeAllListeners === 'function') {
+              process.removeAllListeners(eventName);
+              for (var i = 0; i < existing.length; i++) {
+                process.on(eventName, wrapExitHook(existing[i]));
+              }
+            }
+          }
+        } catch (wrapExistingError) { }
+      } catch (hookInstallError) { }
+      process.exit = function (code) {
+        var value = (code === undefined || code === null) ? 0 : Number(code);
+        if (!isFinite(value)) { value = 0; }
+        value = value | 0;
+        try {
+          hostValue({ kind: 'lifecycle', action: 'exitRequested', args: { code: value } });
+        } catch (ignored) { }
+        try { $autojs.stopRunning(); } catch (ignored) { }
+        try {
+          if (typeof globalThis.__ajsStopOverlayPolling === 'function') {
+            globalThis.__ajsStopOverlayPolling();
+          }
+        } catch (ignored) { }
+        return nativeExit.call(process, value);
+      };
+    } catch (ignored) { }
+  })();
+
   // ------------------------------------------------------------------
   // require 包装：只拦截内置/注册模块，其它交给 Node 原生解析。
   // ------------------------------------------------------------------

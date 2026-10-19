@@ -510,16 +510,21 @@ public class Node24Service extends Service {
                         // Job.cancel 可能发生在 native 返回之后（例如唤醒授权等待后 JS 正常退出），
                         // 以 Job 标记为准合并，避免把取消回报成 success。
                         boolean wasCancelled=cancelled||value.cancelled;
-                        // task-194：process.exit()/exit(0) 视为成功（exitCode==0），即使 native 带回
-                        // 非空 error 文本（关闭窗口时的 pending host 回调等）也不报 SCRIPT_ERROR；
-                        // 非 0 才失败，并给出 exitCode 便于诊断。
-                        boolean succeeded=!wasCancelled && !value.timedOut && value.exitCode==0;
+                        // task-194/195：process.exit() 语义收口。
+                        // - prelude 显式记录了 exit 请求：exit(0) 强制成功/exitCode=0（即使 native
+                        //   因关闭竞态返回 1）；非 0 保留失败并带 code；
+                        // - 没有记录时退回 native 结果（exitCode==0 即成功，非 0 失败）。
+                        int requestedExit = bridge == null ? -1 : bridge.exitRequestedCode();
+                        boolean succeeded = !wasCancelled && !value.timedOut
+                                && (requestedExit >= 0 ? requestedExit == 0 : value.exitCode == 0);
+                        int effectiveExitCode = requestedExit >= 0 ? requestedExit : value.exitCode;
                         String state=wasCancelled?"CANCELLED":value.timedOut?"TIMEOUT":succeeded?"SUCCESS":"SCRIPT_ERROR";
                         String message=value.error;
                         if(!succeeded && (message==null || message.isEmpty()))
-                            message="Node 脚本异常退出，exitCode="+value.exitCode;
-                        result.put("status",state).put("success",succeeded).put("exitCode",value.exitCode)
+                            message="Node 脚本异常退出，exitCode="+effectiveExitCode;
+                        result.put("status",state).put("success",succeeded).put("exitCode",effectiveExitCode)
                             .put("cancelled",wasCancelled).put("timedOut",value.timedOut).put("message",message)
+                            .put("exitRequested",requestedExit)
                             .put("logs",output.lines()).put("logsDelivered",deliveredLogs())
                             .put("engineVersion","Node 24.22.0").put("sourceName",filename)
                             .put("uid",android.os.Process.myUid()).put("pid",android.os.Process.myPid())

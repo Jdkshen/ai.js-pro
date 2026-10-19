@@ -31,9 +31,31 @@
 
 编译：`:engine:compileDebugJavaWithJavac` + `:app:compileMiuixCompatDebugJavaWithJavac -PflutterPoc=true` BUILD SUCCESSFUL（15s）；prelude ui.js/floating_window.js `node --check` 通过。
 
-## 5. K40 验证（dev-1139 待填）
+## 5. K40 验证（dev-1139）PASS
 
-（待填：悬浮日志 ✕ 关闭 exitCode=0 无 SCRIPT_ERROR；process.exit(0) SUCCESS；process.exit(3) 报错带 exitCode=3；main.js 无「无法绑定 click」warning）
+设备 K40 cccc62c7，dev-1139。
+
+### 5.1 悬浮日志 ✕ 关闭
+
+连测 2 次：点 ✕ 后 `execute returned exitCode=0 cancelled=false`，主日志页只有结束行（4.704000 秒 / 5.145000 秒），**无 SCRIPT_ERROR、无 ScriptException、无错误 Toast**。
+
+### 5.2 process.exit(0)
+
+`n194-exit0.node.js`：`EXIT0_BEFORE` → `execute returned exitCode=0` → 结束行（0.139000 秒），无 SCRIPT_ERROR/错误日志（SUCCESS）。
+
+### 5.3 process.exit(3)
+
+`n194-exit3.node.js`：`execute returned exitCode=3` → `ScriptException: SCRIPT_ERROR: Node 脚本异常退出，exitCode=3`（结束行在错误前）→ Toast 仅一条「错误: SCRIPT_ERROR: Node 脚本异常退出，exitCode=3」；host 不再重复「脚本运行失败」。
+
+### 5.4 使用Android原生界面 main.js（Adapter item 探测）
+
+- 日志中 **无** `无法绑定 click：view "" 没有 id`、**无** `探测 item 布局失败` warning；
+- `[ui] setAdapter -> host: view=grid viewId=... items=8 itemLayoutId=... spanCount=2` 正常，NodeUiActivity handleUpdate setAdapter result ok；
+- grid 8 items 正常显示。
+
+### 5.5 结论
+
+✕ 关闭/`process.exit(0)` 视为成功并静默；非 0 exit 才报错且带 exitCode；Adapter item 探测 warning 已清理。
 
 ## 6. 限制
 

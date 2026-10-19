@@ -296,6 +296,7 @@ public class NodeUiBridgeService extends Service {
                         content = textView;
                         view = textView;
                     }
+                    final android.view.View overlayContent = content;
                     int width = request.optInt("width", 0);
                     int height = request.optInt("height", 0);
                     android.view.WindowManager.LayoutParams params = new android.view.WindowManager.LayoutParams(
@@ -327,33 +328,59 @@ public class NodeUiBridgeService extends Service {
                     final Runnable remeasure = () -> {
                         if (!remeasured.compareAndSet(false, true)) return;
                         try {
+                            int screenHeight = getResources().getDisplayMetrics().heightPixels;
+                            int maxAvailable = screenHeight - params.y;
+                            try {
+                                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                                    android.view.WindowManager wm = (android.view.WindowManager)
+                                            getSystemService(android.content.Context.WINDOW_SERVICE);
+                                    android.view.WindowMetrics metrics = wm.getCurrentWindowMetrics();
+                                    android.graphics.Insets insets = metrics.getWindowInsets()
+                                            .getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars()
+                                                    | android.view.WindowInsets.Type.displayCutout());
+                                    maxAvailable = metrics.getBounds().height() - params.y - insets.bottom;
+                                }
+                            } catch (Throwable ignored) { }
+                            if (maxAvailable < 200) {
+                                maxAvailable = Math.max(200, screenHeight - params.y - 80);
+                            }
                             int maxWidth = getResources().getDisplayMetrics().widthPixels;
                             int widthSpec = android.view.View.MeasureSpec.makeMeasureSpec(
                                     maxWidth, android.view.View.MeasureSpec.AT_MOST);
+                            // task-193/196：不能 UNSPECIFIED（新机把内容测成 3052 高，窗口大半在屏外）；
+                            // 用 AT_MOST(可用屏高) 量，最终 h = min(内容需要, 屏内可用)。
                             int heightSpec = android.view.View.MeasureSpec.makeMeasureSpec(
-                                    0, android.view.View.MeasureSpec.UNSPECIFIED);
-                            view.measure(widthSpec, heightSpec);
-                            int contentBottom = maxContentBottom(view);
-                            int needed = Math.max(view.getMeasuredHeight(), contentBottom);
-                            if (needed > 0 && needed > params.height) {
+                                    maxAvailable, android.view.View.MeasureSpec.AT_MOST);
+                            overlayContent.measure(widthSpec, heightSpec);
+                            int contentHeight = overlayContent.getMeasuredHeight();
+                            int currentHeight = view.getHeight();
+                            int needed = Math.min(Math.max(currentHeight, contentHeight), maxAvailable);
+                            if (needed > 0 && needed != currentHeight) {
                                 params.height = needed;
+                                view.requestLayout();
                                 manager.updateViewLayout(view, params);
                                 Log.i(TAG, "overlay remeasure id=" + overlayId
-                                        + " measured=" + view.getMeasuredHeight()
-                                        + " contentBottom=" + contentBottom + " h=" + needed);
+                                        + " screenH=" + screenHeight + " maxAvailable=" + maxAvailable
+                                        + " currentH=" + currentHeight + " contentH=" + contentHeight
+                                        + " h=" + needed);
+                            } else {
+                                Log.i(TAG, "overlay remeasure id=" + overlayId
+                                        + " screenH=" + screenHeight + " maxAvailable=" + maxAvailable
+                                        + " currentH=" + currentHeight + " contentH=" + contentHeight
+                                        + " h=unchanged");
                             }
                         } catch (Throwable error) {
                             Log.w(TAG, "overlay remeasure failed id=" + overlayId, error);
                         }
                     };
-                    view.post(remeasure);
+                    view.postDelayed(remeasure, 250L);
                     view.getViewTreeObserver().addOnGlobalLayoutListener(
                             new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
                                 @Override public void onGlobalLayout() {
                                     try {
                                         view.getViewTreeObserver().removeOnGlobalLayoutListener(this);
                                     } catch (Throwable ignored) { }
-                                    remeasure.run();
+                                    view.postDelayed(remeasure, 60L);
                                 }
                             });
                     OVERLAYS.put(overlayId, view);
@@ -472,16 +499,28 @@ public class NodeUiBridgeService extends Service {
     }
 
     /** task-157：触摸/点击/拖拽事件回传（JSON 队列，pollEvents 拉取）。 */
-    /** task-193：root 内所有后代相对 root 的最大 bottom（包含超出 root 已测量高度的子控件）。 */
-    private int maxContentBottom(android.view.View view) {
-        if (view == null) return 0;
-        int max = view.getBottom();
+    /**
+     * task-193：按屏幕实际坐标计算所有非 ConsoleView 后代的 bottom（相对 root 顶部）。
+     * 不再递归 getTop/getBottom（weighted ConsoleView 会把行推到异常高度），
+     * 而是跳过 console 子树后取真实绘制位置，得到按钮底部的 52px 溢出。
+     */
+    private int maxNonConsoleContentBottom(android.view.View root) {
+        if (root == null) return 0;
+        int[] rootLoc = new int[2];
+        root.getLocationOnScreen(rootLoc);
+        return maxNonConsoleBottom(root, rootLoc[1]);
+    }
+
+    private int maxNonConsoleBottom(android.view.View view, int rootTop) {
+        if (view == null || view.getVisibility() == android.view.View.GONE) return 0;
+        if (view instanceof com.stardust.autojs.core.console.ConsoleView) return 0;
+        int[] loc = new int[2];
+        view.getLocationOnScreen(loc);
+        int max = loc[1] - rootTop + view.getHeight();
         if (view instanceof android.view.ViewGroup) {
             android.view.ViewGroup group = (android.view.ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
-                android.view.View child = group.getChildAt(i);
-                if (child == null || child.getVisibility() == android.view.View.GONE) continue;
-                max = Math.max(max, child.getTop() + maxContentBottom(child));
+                max = Math.max(max, maxNonConsoleBottom(group.getChildAt(i), rootTop));
             }
         }
         return max;
@@ -502,13 +541,18 @@ public class NodeUiBridgeService extends Service {
                     .put("overlayId", overlayId).put("action", type)
                     .put("x", rawX).put("y", rawY).put("time", ev.getEventTime());
             Integer anchorId = OVERLAY_DRAG_ANCHORS.get(overlayId);
+            int rawXInt = Math.round(rawX), rawYInt = Math.round(rawY);
             if (action == android.view.MotionEvent.ACTION_DOWN) {
                 OVERLAY_DOWN.put(overlayId, new float[]{rawX, rawY, ev.getEventTime()});
                 int hit = findClickableViewId(content, rawX, rawY);
                 if (hit != 0) event.put("viewId", hit);
             } else if (action == android.view.MotionEvent.ACTION_MOVE && anchorId != null && anchorId != 0) {
                 float[] down = OVERLAY_DOWN.get(overlayId);
-                if (down != null && inViewBounds(content, anchorId, down[0], down[1])) {
+                boolean inAnchor = down != null && inViewBounds(content, anchorId, down[0], down[1]);
+                Log.i(TAG, "C-OVERLAY drag anchor=" + anchorId + " raw=" + rawXInt + "," + rawYInt
+                        + " down=" + (down == null ? "null" : (Math.round(down[0]) + "," + Math.round(down[1])))
+                        + " inAnchor=" + inAnchor);
+                if (inAnchor) {
                     android.view.WindowManager.LayoutParams params = OVERLAY_PARAMS.get(overlayId);
                     android.view.WindowManager manager = (android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE);
                     if (params != null) {
@@ -518,6 +562,7 @@ public class NodeUiBridgeService extends Service {
                         android.view.View view = OVERLAYS.get(overlayId);
                         if (view != null) manager.updateViewLayout(view, params);
                         event.put("type", "drag").put("x", params.x).put("y", params.y);
+                        Log.i(TAG, "C-OVERLAY drag move x=" + params.x + " y=" + params.y);
                     }
                 }
             } else if (action == android.view.MotionEvent.ACTION_UP) {
