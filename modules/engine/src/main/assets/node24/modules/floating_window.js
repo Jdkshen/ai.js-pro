@@ -333,8 +333,12 @@
             }
           }),
           // task-199：工程会直接对根 View 调这些方法；overlay 主进程渲染时给安全兼容。
+          // 注意：start 阶段工程会把“前台时隐藏浮窗”落实为 setVisibility(8)；若立即 close
+          // 会与刚完成的 show 竞态（主进程 overlay 命令可能 15s 超时），这里先记录状态不立即 close，
+          // 浮窗保持可见（后续可见性由 hide/show 显式调用控制）。
           setVisibility: function (value) {
-            if (Number(value) === 0) { window.show(); } else { window.hide(); }
+            window._rootVisibility = Number(value);
+            if (Number(value) === 0 && !window._visible) { window.show(); }
             return window._bindingView;
           },
           getWidth: function () { return Number(window._lastWidth) || 0; },
