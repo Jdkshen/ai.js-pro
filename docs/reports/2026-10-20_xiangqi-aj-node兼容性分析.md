@@ -73,3 +73,48 @@ else window.setViewFromXml(layout());
 - `.artifacts/task197-aj-node/run2-logcat.txt`（res 推送后主界面渲染 + insetsController/数组类错误）
 - `.artifacts/task197-aj-node/run3-logcat.txt`（dev-1142 主界面完整渲染 + setView 阻塞）
 - `.artifacts/task197-aj-node/main-ui.png`（象棋助手主界面截图）
+
+---
+
+## 8. task-198 续：host.runtime 与 setView 降级（dev-1143）
+
+### 8.1 host.runtime（已实现，PASS）
+
+prelude 注入全局 `host` 兼容对象：
+- `host.java.lang.Class.forName(name, initialize, loader)`（走我们的 findClass）；
+- `host.runtime.getAndroidClassLoader()` → 应用 classloader；
+- `host.runtime.loadDex(path)` → Node24HostBridge 用 `dalvik.system.DexClassLoader` 动态加载 dex，并让后续 findClass 优先从动态 loader 解析插件类；
+- `host.context` / `host.Packages` / `host.__xiangqiProjectDir`。
+
+K40 dev-1143 probe（n198-host-runtime.node.js）结果：
+```
+HOST_TYPE object / RUNTIME_TYPE object
+LOADER ok:dalvik.system.PathClassLoader
+LOADDEX_WINDOWDRAG true
+CLASS_WINDOWDRAG_OK com.jdkshen.xiangqi.ui.WindowDrag
+LOADDEX_NATIVEENGINE true
+CLASS_NATIVEENGINE_OK com.jdkshen.xiangqi.plugin.NativeEngine
+execute returned exitCode=0
+```
+
+### 8.2 floating_window.setView（明确降级）
+
+- 字符串/带 `xml` 的对象 → `setViewFromXml`；
+- 真实原生 View（包内 `LayoutInflater.inflate(ui.R.layout.xiangqi_floaty)` 得到的 :node24 View）→ 明确中文错误：
+  `floating_window.setView(原生 View) 暂不支持：当前浮窗由主进程按 XML/文本渲染，:node24 里的真实 View 无法跨进程挂载；请改用 window.setViewFromXml(xml)，或把该界面放到 ui.Activity / NodeUiActivity 中显示`；
+- 不再抛 TypeError；`MainActivity.connect().catch` 捕获后主界面继续可用。
+
+### 8.3 当前状态 / 下一个阻塞点
+
+- Node 原生主界面仍正常渲染（NodeUiActivity layout=xiangqi_main，标题象棋助手）；
+- 下一个阻塞点仍是浮窗：**不能把 :node24 的真实 View 挂到主进程 overlay**。可行方向（按工作量）：
+  1. 工程改用 `setViewFromXml`（本项目 overlay 已支持 XML inflate + 控件 id/binding + touch/click 事件）；
+  2. 拦截 `ui.R.layout.*` / `LayoutInflater.inflate` 返回布局描述（layout 名），宿主 overlay 读取工程 `res/layout/*.xml` 在**主进程** inflate（复用 NodeUiActivity 的 dynamic inflater）——推荐的中期方案；
+  3. 在 `:node24` 进程内自建 WindowManager overlay 直接 attach 真实 View（需重写事件/poll/几何/关闭生命周期，工作量最大）。
+- 若浮窗打通，后续仍会出现：`window.view` 真实 View 几何命令（getLocationOnScreen/measure）、NativeEngine JNI dex/SO 初始化、project res 样式完整度。
+
+### 8.4 证据
+
+- `.artifacts/task198-verify/runtime-probe.txt`（host.runtime PASS）
+- `.artifacts/task198-verify/aj-run.txt`（setView 明确降级、主界面渲染）
+- `.artifacts/task198-verify/main-ui.png`

@@ -489,6 +489,9 @@
                             const resName = String(name);
                             try {
                                 if (typeName === 'layout') {
+                                    // task-199：记录最近请求的工程布局名，供 floating_window.setView(真实 View)
+                                    // 回退到对应 res/layout XML（主进程 overlay 按 XML inflate）。
+                                    globalThis.__ajsLastLayoutName = resName;
                                     const value = hostCall({op: 'layoutId', name: resName});
                                     return typeof value.id === 'number' ? value.id : 0;
                                 }

@@ -151,9 +151,29 @@
     if (typeof view === 'string') { return this.setViewFromXml(view); }
     if (view && typeof view === 'object' && typeof view.xml === 'string') { return this.setViewFromXml(view.xml); }
     if (view && typeof view === 'object' && typeof view.__ajsXml === 'string') { return this.setViewFromXml(view.__ajsXml); }
+    // task-199：真实 View（:node24 内 LayoutInflater 结果）无法跨进程挂载；
+    // 若刚通过 ui.R.layout.<name> 请求过工程布局，则读 res/layout/<name>.xml 交给主进程按 XML inflate。
+    try {
+      var layoutName = globalThis.__ajsLastLayoutName;
+      var baseDir = globalThis.__ajsProjectDir
+        || (globalThis.$autojs && globalThis.$autojs.projectDir) || '';
+      if (layoutName && baseDir) {
+        var fs = require('fs'), path = require('path');
+        var xmlPath = path.join(baseDir, 'res', 'layout', String(layoutName) + '.xml');
+        if (fs.existsSync(xmlPath)) {
+          var xml = fs.readFileSync(xmlPath, 'utf8');
+          this._layoutName = String(layoutName);
+          this.setViewFromXml(xml);
+          try { console.log('[floating_window] setView(real View) 回退工程布局 XML：' + xmlPath); } catch (ignored) { }
+          return this;
+        }
+      }
+    } catch (fallbackError) {
+      try { console.debug('[floating_window] setView real View 回退失败：' + fallbackError); } catch (ignored) { }
+    }
     throw apiError('floating_window.setView(原生 View) 暂不支持：当前浮窗由主进程按 XML/文本渲染，'
-      + ':node24 里的真实 View 无法跨进程挂载；请改用 window.setViewFromXml(xml)，'
-      + '或把该界面放到 ui.Activity / NodeUiActivity 中显示');
+      + ':node24 里的真实 View 无法跨进程挂载，且未找到对应工程 res/layout XML；'
+      + '请改用 window.setViewFromXml(xml)，或把该界面放到 ui.Activity / NodeUiActivity 中显示');
   };
   FloatingWindowImpl.prototype.setViewFromXml = function (xml) {
     if (typeof xml !== 'string' || xml.trim() === '') { throw new TypeError('[Auto.js] setViewFromXml 需要非空 XML 字符串'); }
@@ -312,6 +332,17 @@
               return bindingFor(window, String(prop));
             }
           }),
+          // task-199：工程会直接对根 View 调这些方法；overlay 主进程渲染时给安全兼容。
+          setVisibility: function (value) {
+            if (Number(value) === 0) { window.show(); } else { window.hide(); }
+            return window._bindingView;
+          },
+          getWidth: function () { return Number(window._lastWidth) || 0; },
+          getHeight: function () { return Number(window._lastHeight) || 0; },
+          getLocationOnScreen: function (intArray) {
+            // 主进程 overlay 没有真实 View 句柄；保持数组原值，不抛错（几何由 NodeUiBridge 的窗口坐标为准）。
+            return undefined;
+          },
           on: function (eventName, handler) { return window.on(eventName, handler); },
           toString: function () { return '[Node24OverlayRoot]'; }
         };
