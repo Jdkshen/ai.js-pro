@@ -174,6 +174,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private static final int OCR_IMAGE_MAX_PIXELS = 16_000_000;
     private final java.util.concurrent.atomic.AtomicBoolean mClosed =
             new java.util.concurrent.atomic.AtomicBoolean(false);
+    /**
+     * 本次 Node job 独占的反射元数据缓存（容量 256 类 + 256 方法候选，close 清空）。
+     * 不能做成 static：否则会跨 job 强引用插件 Class/ClassLoader。
+     */
+    private final Node24ReflectionCache mReflectionCache = new Node24ReflectionCache();
 
     public Node24HostBridge(Context context) {
         this(context, null);
@@ -828,26 +833,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Class<?> findClass(String name) throws ClassNotFoundException {
-        String clean = name == null ? "" : name.trim();
-        if (clean.isEmpty()) {
-            throw new ClassNotFoundException("类名为空");
-        }
-        // Java 内部类支持两种写法：com.x.Outer$Inner 与 com.x.Outer.Inner
-        try {
-            return Class.forName(clean, false, mContext.getClassLoader());
-        } catch (ClassNotFoundException ignored) {
-            int dot = clean.length();
-            while ((dot = clean.lastIndexOf('.', dot - 1)) > 0) {
-                String candidate = clean.substring(0, dot) + "$" + clean.substring(dot + 1);
-                try {
-                    return Class.forName(candidate, false, mContext.getClassLoader());
-                } catch (ClassNotFoundException ignoredAgain) {
-                    // 继续尝试更靠前的点
-                }
-            }
-            throw new ClassNotFoundException("找不到 Java 类：" + name
-                    + "（请检查完整包名；Android 类不能省略包名）");
-        }
+        // 成功解析的类按 job 缓存；缺失/失败不缓存，插件类晚加载时仍会重试。
+        return mReflectionCache.findClass(name, mContext.getClassLoader());
     }
 
     private Constructor<?> findConstructor(Class<?> type, Object[] args) {
@@ -871,29 +858,19 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Method findMethod(Class<?> type, String name, Object[] args, boolean staticOnly) {
+        // 缓存只保存“类+方法名+static 模式”的候选数组（保持原遍历顺序与重复项），
+        // 每次调用仍按本次 args 做 compatible/better，绝不缓存最终重载。
+        Method[] candidates = mReflectionCache.candidateMethods(type, name, staticOnly);
         Method best = null;
-        Class<?> current = type;
-        while (current != null) {
-            for (Method method : current.getMethods()) {
-                if (!method.getName().equals(name)) {
-                    continue;
-                }
-                if (staticOnly && !Modifier.isStatic(method.getModifiers())) {
-                    continue;
-                }
-                if (!staticOnly && Modifier.isStatic(method.getModifiers())) {
-                    continue;
-                }
-                if (args == null) {
-                    return method;
-                }
-                if (compatible(method.getParameterTypes(), args)) {
-                    if (best == null || better(method.getParameterTypes(), best.getParameterTypes(), args)) {
-                        best = method;
-                    }
+        for (Method method : candidates) {
+            if (args == null) {
+                return method;
+            }
+            if (compatible(method.getParameterTypes(), args)) {
+                if (best == null || better(method.getParameterTypes(), best.getParameterTypes(), args)) {
+                    best = method;
                 }
             }
-            current = current.getSuperclass();
         }
         return best;
     }
@@ -1321,6 +1298,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
             mImages.close();
         } catch (Throwable error) {
             Log.w(TAG, "close images failed", error);
+        }
+        try {
+            mReflectionCache.close();
+        } catch (Throwable error) {
+            Log.w(TAG, "close reflection cache failed", error);
         }
     }
 

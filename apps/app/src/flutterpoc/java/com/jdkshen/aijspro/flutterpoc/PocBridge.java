@@ -170,6 +170,9 @@ final class PocBridge {
                 return liveLogs(args);
             case "clearLiveLogs":
                 return clearLiveLogs();
+            case "shareLogText":
+                com.jdkshen.aijspro.ui.log.LogShare.show(activity, args.optString("text", ""));
+                return Boolean.TRUE;
 
             // ---- 文件增删改 / 回收站 / 分享（PocWorkspace）----------------------
             case "createFile":

@@ -14,6 +14,7 @@ import android.os.RemoteException;
 import android.util.Log;
 import android.widget.Toast;
 
+import com.jdkshen.aijspro.flutterpoc.scriptproc.ConsoleBatch;
 import com.jdkshen.aijspro.flutterpoc.scriptproc.HostConsoleSink;
 
 import org.json.JSONArray;
@@ -41,10 +42,12 @@ import java.util.Map;
  *   <li>服务 -> 客户端：{@code what=100 STARTED}（data {@code token}/{@code name}）、
  *       {@code what=101 FINISHED}（data {@code token}）、
  *       {@code what=102 ERROR}（data {@code token}/{@code message}）；
- *       {@code what=103 CONSOLE}（data {@code token}/{@code line}，多行用 {@code \n} 分隔，
- *       {@code level} 为 android.util.Log 等级）：:native 脚本 console 的实时批量回传，
- *       收到后交给 {@link HostConsoleSink}（与 :script 的 103 同一落点：主进程 GlobalConsole
- *       + 环形缓冲，Flutter 实时日志页/原生日志页统一一条流）。</li>
+ *       {@code what=103 CONSOLE}（data {@code token}/{@code line}（整批拼接文本，多行用
+ *       {@code \n} 分隔）/{@code level}（整批最高等级），新版另带可选
+ *       {@code consoleTexts}/{@code consoleLevels}（逐段文本/等级，等长同序））：
+ *       :native 脚本 console 的实时批量回传，收到后交给 {@link HostConsoleSink}（与 :script 的
+ *       103 同一落点：主进程 GlobalConsole + 环形缓冲，Flutter 实时日志页/原生日志页统一一条流）；
+ *       两数组齐全合法时按各段原等级逐段转发，缺失/畸形时回退 {@code line}/{@code level}。</li>
  * </ul>
  *
  * <p>对外任务列表 token 格式为 {@code "native:<协议 token>"}，与 {@code PocRuntime} 普通脚本的
@@ -83,6 +86,10 @@ public final class PocNativeRunner {
     // ---- console 转发消息的 data 键（与 NativeScriptService 的 KEY_LINE/KEY_LEVEL 一致）----
     private static final String KEY_CONSOLE_LINE = "line";
     private static final String KEY_CONSOLE_LEVEL = "level";
+    /** 新服务端附带的逐段文本（String[]）；旧服务端没有，按 line/level 回退。 */
+    private static final String KEY_CONSOLE_TEXTS = "consoleTexts";
+    /** 新服务端附带的逐段等级（int[]）；与 consoleTexts 等长同序。 */
+    private static final String KEY_CONSOLE_LEVELS = "consoleLevels";
 
     /** 任务列表里 native 任务的 token 前缀；去掉后就是协议里的 token。 */
     public static final String TOKEN_PREFIX = "native:";
@@ -269,7 +276,9 @@ public final class PocNativeRunner {
                 case WHAT_CONSOLE:
                     onConsole(token,
                             data == null ? null : data.getString(KEY_CONSOLE_LINE),
-                            data == null ? Log.INFO : data.getInt(KEY_CONSOLE_LEVEL, Log.INFO));
+                            data == null ? Log.INFO : data.getInt(KEY_CONSOLE_LEVEL, Log.INFO),
+                            data == null ? null : data.getStringArray(KEY_CONSOLE_TEXTS),
+                            data == null ? null : data.getIntArray(KEY_CONSOLE_LEVELS));
                     break;
                 default:
                     Log.w(TAG, "未知的隔离进程回执：what=" + msg.what);
@@ -400,16 +409,17 @@ public final class PocNativeRunner {
      * 处理服务端 103 CONSOLE：把 :native 脚本的实时 console 输出交给 {@link HostConsoleSink}
      * （写主进程 GlobalConsole + 环形缓冲，与 :script 的日志同一落点、同一条统一流）。
      *
+     * <p>新版 103 带 {@code consoleTexts}/{@code consoleLevels} 时逐段按原等级转发（避免整批被最高等级
+     * 染色）；缺失/畸形回退 {@code line}/{@code level}，兼容旧服务端。
+     *
      * <p>在 REPLY_HANDLER（主线程）里执行，不会阻塞脚本进程；token 可能对应已结束的任务
      * （FINISHED/ERROR 之后仍有在途批次），这里不丢，照常转发，name 取不到就用空。
      *
      * <p>统一日志流的 token 加进程命名空间（{@code native:<token>}，与任务页对外 token 一致）：
      * :script / :native 的协议 token 各自从 1 计数，裸 token 会撞号，导致「按任务查看日志」混行。
      */
-    private static void onConsole(String token, String line, int level) {
-        if (line == null || line.isEmpty()) {
-            return;
-        }
+    private static void onConsole(String token, String line, int level,
+                                  String[] texts, int[] levels) {
         String name = "";
         if (token != null) {
             synchronized (LOCK) {
@@ -420,10 +430,40 @@ public final class PocNativeRunner {
             }
         }
         String logToken = token == null ? "" : TOKEN_PREFIX + token;
+        if (isValidConsoleBatch(texts, levels)) {
+            // 新服务端：每段带自己的原等级，按 append 顺序逐段走原 HostConsoleSink 落点。
+            for (int i = 0; i < texts.length; i++) {
+                appendConsole(logToken, name, texts[i], levels[i]);
+            }
+            return;
+        }
+        // 旧服务端 / 畸形 metadata：回退整批 text + 最高 level，保持修复前行为。
+        appendConsole(logToken, name, line, level);
+    }
+
+    /** 两数组齐全、等长、数量合理（不超过单批段数上限）且每段文本/等级合法才逐段转发。 */
+    private static boolean isValidConsoleBatch(String[] texts, int[] levels) {
+        if (texts == null || levels == null || texts.length != levels.length
+                || texts.length <= 0 || texts.length > ConsoleBatch.MAX_SEGMENTS) {
+            return false;
+        }
+        for (int i = 0; i < texts.length; i++) {
+            if (texts[i] == null || texts[i].isEmpty()
+                    || levels[i] < Log.VERBOSE || levels[i] > Log.ASSERT) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void appendConsole(String logToken, String name, String line, int level) {
+        if (line == null || line.isEmpty()) {
+            return;
+        }
         try {
             HostConsoleSink.append(logToken, name, level, line);
         } catch (Throwable error) {
-            Log.w(TAG, "转发隔离进程 console 失败（token=" + token + "）", error);
+            Log.w(TAG, "转发隔离进程 console 失败（token=" + logToken + "）", error);
         }
     }
 

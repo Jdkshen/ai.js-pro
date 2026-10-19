@@ -1,5 +1,7 @@
 package com.jdkshen.aijspro.flutterpoc.scriptproc;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -19,7 +21,11 @@ import java.util.Locale;
  * <ul>
  *   <li>每次 {@link #append} 是一段文本；与上一段之间补一个换行（上一段已以换行结尾则不补），
  *       多条 console 输出拼成一段多行文本，一次 Binder 消息传完；</li>
- *   <li>{@code level} 取批次内最高等级（android.util.Log 数值越大越严重），主进程按它给整批着色/写日志；</li>
+ *   <li>{@link Batch#text} + {@link Batch#level} 是旧客户端兼容字段：整批拼接文本 + 批次内最高等级
+ *       （android.util.Log 数值越大越严重）；只按它给整批着色会把 V/D/I/W/E/A 混批全部染成最高级，
+ *       所以新协议另带逐段快照；</li>
+ *   <li>{@link Batch#segmentTexts} / {@link Batch#segmentLevels} 按 append 顺序记录每段文本及其原始
+ *       等级（等长），主进程据此逐段落日志；段文本可能本身含多行；</li>
  *   <li>单段文本超过 {@value #MAX_CHARS} 时截断并加中文提示，保证单条 Binder 消息不会超事务上限。</li>
  * </ul>
  */
@@ -29,15 +35,25 @@ public final class ConsoleBatch {
     static final int MAX_CHARS = 8000;
     /** 单批最大行数。 */
     static final int MAX_LINES = 40;
+    /** 单批最大段数：每段至少占一行，所以不会超过 40（供主进程校验可选 metadata）。 */
+    public static final int MAX_SEGMENTS = MAX_LINES;
 
-    /** 一次 flush 出来的批量文本（跨包复用，字段只读）。 */
+    /** 一次 flush 出来的批量文本和逐段等级（跨包复用，字段只读；数组是 drain 时的快照）。 */
     public static final class Batch {
+        /** 旧客户端兼容：整批拼接文本（多行用 {@code \n} 分隔）。 */
         public final String text;
+        /** 旧客户端兼容：批次内最高等级（android.util.Log 数值）。 */
         public final int level;
+        /** 每段 append 的文本（与原始 content 相同，可含多行；按 append 顺序，非 null）。 */
+        public final String[] segmentTexts;
+        /** 每段对应的原始等级（与 {@link #segmentTexts} 等长同序）。 */
+        public final int[] segmentLevels;
 
-        Batch(String text, int level) {
+        Batch(String text, int level, String[] segmentTexts, int[] segmentLevels) {
             this.text = text;
             this.level = level;
+            this.segmentTexts = segmentTexts;
+            this.segmentLevels = segmentLevels;
         }
 
         public boolean isEmpty() {
@@ -46,6 +62,8 @@ public final class ConsoleBatch {
     }
 
     private final StringBuilder mBuffer = new StringBuilder();
+    private final List<String> mSegmentTexts = new ArrayList<>();
+    private final List<Integer> mSegmentLevels = new ArrayList<>();
     private int mLines;
     private int mLevel;
 
@@ -71,6 +89,8 @@ public final class ConsoleBatch {
             mBuffer.append('\n');
         }
         mBuffer.append(text);
+        mSegmentTexts.add(text);
+        mSegmentLevels.add(level);
         mLines += 1 + countNewlines(text);
         mLevel = Math.max(mLevel, level);
         if (mBuffer.length() >= MAX_CHARS || mLines >= MAX_LINES) {
@@ -86,16 +106,26 @@ public final class ConsoleBatch {
 
     private Batch drainLocked() {
         if (mBuffer.length() == 0) {
-            mLines = 0;
-            mLevel = 0;
+            clearLocked();
             return null;
         }
         String text = mBuffer.toString();
         int level = mLevel;
+        String[] segmentTexts = mSegmentTexts.toArray(new String[0]);
+        int[] segmentLevels = new int[mSegmentLevels.size()];
+        for (int i = 0; i < segmentLevels.length; i++) {
+            segmentLevels[i] = mSegmentLevels.get(i);
+        }
+        clearLocked();
+        return new Batch(text, level, segmentTexts, segmentLevels);
+    }
+
+    private void clearLocked() {
         mBuffer.setLength(0);
+        mSegmentTexts.clear();
+        mSegmentLevels.clear();
         mLines = 0;
         mLevel = 0;
-        return new Batch(text, level);
     }
 
     private static int countNewlines(String text) {
@@ -111,7 +141,7 @@ public final class ConsoleBatch {
     /** 仅用于日志调试。 */
     @Override
     public synchronized String toString() {
-        return String.format(Locale.US, "ConsoleBatch{chars=%d, lines=%d, level=%d}",
-                mBuffer.length(), mLines, mLevel);
+        return String.format(Locale.US, "ConsoleBatch{chars=%d, lines=%d, segments=%d, level=%d}",
+                mBuffer.length(), mLines, mSegmentTexts.size(), mLevel);
     }
 }

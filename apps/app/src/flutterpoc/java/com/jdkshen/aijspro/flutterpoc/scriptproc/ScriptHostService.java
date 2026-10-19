@@ -58,8 +58,9 @@ import java.util.Map;
  *   <li><b>实时 console 转发（what=103）</b>：每次 RUN 在 onStart 时给本次引擎的
  *       {@code ConsoleImpl} 挂 {@code LogListener}，脚本的每段 console 输出先进
  *       {@link ConsoleBatch} 批量缓冲（200ms 定时 / 40 行 / 8KB 触发），再以
- *       what=103 CONSOLE{token,line,level} 回给 {@code PocScriptHost}；主进程
- *       {@code HostConsoleSink} 写主进程 GlobalConsole（原生日志页实时可见）+ 环形缓冲。
+ *       what=103 CONSOLE{token,line,level,consoleTexts,consoleLevels} 回给 {@code PocScriptHost}；
+ *       主进程按逐段等级分别写 {@code HostConsoleSink}（GlobalConsole 原生日志页实时可见）+ 环形缓冲，
+ *       旧客户端忽略新增数组、仍按 line/level 整批显示。
  *       脚本结束/服务销毁时解挂并 flush。运行日志文件仍由引擎自动 ScriptRunLog 负责落盘，
  *       这里不重复 attach（避免多出永不收尾的日志文件）；</li>
  *   <li><b>统一 staging</b>：所有脚本从私有目录执行，避免可写 dex 限制与运行时原目录被改动；
@@ -96,8 +97,11 @@ public class ScriptHostService extends Service {
     public static final int REPLY_ERROR = 102;
     /**
      * 服务 -&gt; 客户端：脚本控制台实时输出（Phase1 日志转发）。
-     * data: {@link #KEY_TOKEN token} / {@link #KEY_LINE line}（可含多行，用 {@code \n} 分隔）/
-     * {@link #KEY_LEVEL level}（android.util.Log 等级，批次取最高等级）。
+     * data: {@link #KEY_TOKEN token} / {@link #KEY_LINE line}（可含多行，整批拼接文本）/
+     * {@link #KEY_LEVEL level}（整批最高等级，旧客户端兼容）/ {@link #KEY_CONSOLE_TEXTS consoleTexts}
+     * （String[]，每段 append 的文本，可含多行）/ {@link #KEY_CONSOLE_LEVELS consoleLevels}
+     * （int[]，与 consoleTexts 等长同序的原始等级）。新客户端逐段按自己的等级落日志；旧客户端
+     * 只读 line/level，整批仍按最高等级显示。
      *
      * <p>批量/节流：每次 RUN 挂 {@code ConsoleImpl.LogListener}，输出先进 {@link ConsoleBatch}，
      * 200ms 定时 flush，或累计 40 行/8KB 立即 flush，避免每行一条 Binder 消息。脚本结束前
@@ -112,8 +116,12 @@ public class ScriptHostService extends Service {
     public static final String KEY_MESSAGE = "message";
     /** what=103 CONSOLE 的行内容键（可含多行，{@code \n} 分隔）。 */
     public static final String KEY_LINE = "line";
-    /** what=103 CONSOLE 的等级键（android.util.Log 等级；批次取最高等级）。 */
+    /** what=103 CONSOLE 的等级键（android.util.Log 等级；批次取最高等级，旧客户端兼容）。 */
     public static final String KEY_LEVEL = "level";
+    /** what=103 CONSOLE 的逐段文本键（String[]，与 {@link #KEY_CONSOLE_LEVELS} 等长同序）。 */
+    public static final String KEY_CONSOLE_TEXTS = "consoleTexts";
+    /** what=103 CONSOLE 的逐段等级键（int[]，每段原始 android.util.Log 等级）。 */
+    public static final String KEY_CONSOLE_LEVELS = "consoleLevels";
 
     /** 用户主动 STOP 时 102 的固定文案：主进程靠它区分「用户停止」和「脚本报错」。 */
     public static final String MESSAGE_STOPPED = "脚本已停止";
@@ -523,17 +531,21 @@ public class ScriptHostService extends Service {
         }
     }
 
-    /** 把一批 console 文本以 what=103 回给主进程。 */
-    private void replyConsole(RunState state, String line, int level) {
-        if (state == null || state.replyTo == null || line == null || line.isEmpty()) {
+    /** 把一批 console 文本以 what=103 回给主进程（旧 line/level + 新逐段数组）。 */
+    private void replyConsole(RunState state, ConsoleBatch.Batch batch) {
+        if (state == null || state.replyTo == null || batch == null || batch.isEmpty()) {
             return;
         }
         try {
             Message reply = Message.obtain(null, REPLY_CONSOLE);
             Bundle data = new Bundle();
             data.putString(KEY_TOKEN, state.token);
-            data.putString(KEY_LINE, line);
-            data.putInt(KEY_LEVEL, normalizeConsoleLevel(level));
+            // 旧客户端兼容：整批拼接文本 + 批次最高等级。
+            data.putString(KEY_LINE, batch.text);
+            data.putInt(KEY_LEVEL, normalizeConsoleLevel(batch.level));
+            // 新客户端：逐段文本/等级（drain 时已做快照，数组不再变化）。
+            data.putStringArray(KEY_CONSOLE_TEXTS, batch.segmentTexts);
+            data.putIntArray(KEY_CONSOLE_LEVELS, batch.segmentLevels);
             reply.setData(data);
             state.replyTo.send(reply);
         } catch (RemoteException error) {
@@ -616,7 +628,7 @@ public class ScriptHostService extends Service {
                 if (cancelTimer) {
                     mConsoleHandler.removeCallbacks(mFlushRunnable);
                 }
-                replyConsole(mState, overflow.text, overflow.level);
+                replyConsole(mState, overflow);
             }
         }
 
@@ -632,7 +644,7 @@ public class ScriptHostService extends Service {
                 batch = mBatch.drain();
             }
             if (batch != null) {
-                replyConsole(mState, batch.text, batch.level);
+                replyConsole(mState, batch);
             }
         }
 
@@ -654,7 +666,7 @@ public class ScriptHostService extends Service {
                 Log.w(TAG, "解挂 console 监听失败：" + mState.token, error);
             }
             if (rest != null) {
-                replyConsole(mState, rest.text, rest.level);
+                replyConsole(mState, rest);
             }
         }
     }

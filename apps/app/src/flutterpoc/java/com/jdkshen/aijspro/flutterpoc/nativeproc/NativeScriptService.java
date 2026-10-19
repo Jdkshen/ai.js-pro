@@ -57,9 +57,11 @@ import java.util.Map;
  *   <li>服务 -&gt; 客户端：{@code what=102 ERROR}，data: token / {@link #KEY_MESSAGE message}
  *       （脚本异常、被 STOP、或启动前校验失败）；</li>
  *   <li>服务 -&gt; 客户端：{@code what=103 CONSOLE}，data: token / {@link #KEY_LINE line}
- *       （多行用 {@code \n} 分隔）/ {@link #KEY_LEVEL level}（android.util.Log 等级）：
- *       脚本 console 的实时批量回传，主进程 {@code PocNativeRunner} 收到后交给
- *       {@code HostConsoleSink}（与 :script 同一落点：主进程 GlobalConsole + 环形缓冲）。</li>
+ *       （整批拼接文本，多行用 {@code \n} 分隔）/ {@link #KEY_LEVEL level}（整批最高等级）+
+ *       可选 {@link #KEY_CONSOLE_TEXTS consoleTexts}/{@link #KEY_CONSOLE_LEVELS consoleLevels}
+ *       （逐段文本/等级，等长同序）：脚本 console 的实时批量回传，主进程 {@code PocNativeRunner}
+ *       逐段按原等级交给 {@code HostConsoleSink}（与 :script 同一落点：主进程 GlobalConsole +
+ *       环形缓冲）；旧客户端忽略新增数组，仍按 line/level 整批显示。</li>
  * </ul>
  *
  * <p>几个刻意为之的取舍：
@@ -105,8 +107,11 @@ public class NativeScriptService extends Service {
     public static final int REPLY_ERROR = 102;
     /**
      * 服务 -&gt; 客户端：脚本控制台实时输出（Phase1 日志统一，与 :script 的 103 逐字一致）。
-     * data: {@link #KEY_TOKEN token} / {@link #KEY_LINE line}（可多行，{@code \n} 分隔）/
-     * {@link #KEY_LEVEL level}（android.util.Log 等级，批次取最高等级）。
+     * data: {@link #KEY_TOKEN token} / {@link #KEY_LINE line}（可多行，整批拼接文本）/
+     * {@link #KEY_LEVEL level}（整批最高等级，旧客户端兼容）/ {@link #KEY_CONSOLE_TEXTS consoleTexts}
+     * （String[]，每段 append 的文本，可含多行）/ {@link #KEY_CONSOLE_LEVELS consoleLevels}
+     * （int[]，与 consoleTexts 等长同序的原始等级）。新客户端逐段按自己的等级落日志；旧客户端
+     * 只读 line/level，整批仍按最高等级显示。
      */
     public static final int REPLY_CONSOLE = 103;
 
@@ -117,8 +122,12 @@ public class NativeScriptService extends Service {
     public static final String KEY_MESSAGE = "message";
     /** what=103 CONSOLE 的行内容键（可含多行，{@code \n} 分隔）。 */
     public static final String KEY_LINE = "line";
-    /** what=103 CONSOLE 的等级键（android.util.Log 等级；批次取最高等级）。 */
+    /** what=103 CONSOLE 的等级键（android.util.Log 等级；批次取最高等级，旧客户端兼容）。 */
     public static final String KEY_LEVEL = "level";
+    /** what=103 CONSOLE 的逐段文本键（String[]，与 {@link #KEY_CONSOLE_LEVELS} 等长同序）。 */
+    public static final String KEY_CONSOLE_TEXTS = "consoleTexts";
+    /** what=103 CONSOLE 的逐段等级键（int[]，每段原始 android.util.Log 等级）。 */
+    public static final String KEY_CONSOLE_LEVELS = "consoleLevels";
 
     /** 用户主动 STOP 时 102 的固定文案：主进程靠它区分「用户停止」和「脚本报错」。 */
     static final String MESSAGE_STOPPED = "脚本已停止";
@@ -514,17 +523,21 @@ public class NativeScriptService extends Service {
         }
     }
 
-    /** 把一批 console 文本以 what=103 回给主进程（与 :script 的 103 消息结构一致）。 */
-    private void replyConsole(RunState state, String line, int level) {
-        if (state == null || state.replyTo == null || line == null || line.isEmpty()) {
+    /** 把一批 console 文本以 what=103 回给主进程（与 :script 一致：旧 line/level + 新逐段数组）。 */
+    private void replyConsole(RunState state, ConsoleBatch.Batch batch) {
+        if (state == null || state.replyTo == null || batch == null || batch.isEmpty()) {
             return;
         }
         try {
             Message reply = Message.obtain(null, REPLY_CONSOLE);
             Bundle data = new Bundle();
             data.putString(KEY_TOKEN, state.token);
-            data.putString(KEY_LINE, line);
-            data.putInt(KEY_LEVEL, normalizeConsoleLevel(level));
+            // 旧客户端兼容：整批拼接文本 + 批次最高等级。
+            data.putString(KEY_LINE, batch.text);
+            data.putInt(KEY_LEVEL, normalizeConsoleLevel(batch.level));
+            // 新客户端：逐段文本/等级（drain 时已做快照，数组不再变化）。
+            data.putStringArray(KEY_CONSOLE_TEXTS, batch.segmentTexts);
+            data.putIntArray(KEY_CONSOLE_LEVELS, batch.segmentLevels);
             reply.setData(data);
             state.replyTo.send(reply);
         } catch (RemoteException error) {
@@ -607,7 +620,7 @@ public class NativeScriptService extends Service {
                 if (cancelTimer) {
                     mConsoleHandler.removeCallbacks(mFlushRunnable);
                 }
-                replyConsole(mState, overflow.text, overflow.level);
+                replyConsole(mState, overflow);
             }
         }
 
@@ -623,7 +636,7 @@ public class NativeScriptService extends Service {
                 batch = mBatch.drain();
             }
             if (batch != null) {
-                replyConsole(mState, batch.text, batch.level);
+                replyConsole(mState, batch);
             }
         }
 
@@ -645,7 +658,7 @@ public class NativeScriptService extends Service {
                 Log.w(TAG, "解挂 console 监听失败：" + mState.token, error);
             }
             if (rest != null) {
-                replyConsole(mState, rest.text, rest.level);
+                replyConsole(mState, rest);
             }
         }
     }

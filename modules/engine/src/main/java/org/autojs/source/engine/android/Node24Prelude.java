@@ -48,7 +48,8 @@ public final class Node24Prelude {
             "node24/modules/zip.js",
             "node24/modules/ocr.js",
             "node24/modules/media.js",
-            "node24/modules/plugins.js"
+            "node24/modules/plugins.js",
+            "node24/modules/console.js"
     };
 
     private static volatile String sPreludeCache;

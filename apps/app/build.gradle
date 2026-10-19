@@ -148,6 +148,9 @@ android {
     }
     sourceSets {
         if (flutterPocEnabled) {
+            testDebug {
+                java.srcDir 'src/flutterpocTest/java'
+            }
             debug {
                 java.srcDir 'src/flutterpoc/java'
                 res.srcDir 'src/flutterpoc/res'

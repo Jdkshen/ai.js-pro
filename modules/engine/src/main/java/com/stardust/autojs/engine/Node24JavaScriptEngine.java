@@ -314,7 +314,9 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
             try {
                 Console console = runtimeConsole();
                 if (console != null) {
-                    console.log(line == null ? "" : line);
+                    org.autojs.source.engine.android.Node24ConsoleLine decoded =
+                            org.autojs.source.engine.android.Node24ConsoleLine.decode(line);
+                    console.println(decoded.level, decoded.text);
                     shown = true;
                 }
             } catch (Throwable error) {
@@ -353,7 +355,9 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
         for (int i = 0; i < logs.length(); i++) {
             if (liveLogs != null && liveLogs.isDelivered(i)) continue;
             try {
-                console.log(logs.optString(i));
+                org.autojs.source.engine.android.Node24ConsoleLine decoded =
+                        org.autojs.source.engine.android.Node24ConsoleLine.decode(logs.optString(i));
+                console.println(decoded.level, decoded.text);
             } catch (Throwable error) {
                 Log.w(TAG, "mirror Node console line failed", error);
             }
