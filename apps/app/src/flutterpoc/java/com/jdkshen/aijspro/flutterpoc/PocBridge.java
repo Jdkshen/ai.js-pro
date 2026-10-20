@@ -310,12 +310,7 @@ final class PocBridge {
                 return Boolean.TRUE;
             }
             case "storagePermission":
-                try {
-                    activity.startActivity(storagePermissionIntent(activity));
-                } catch (Throwable t) {
-                    // 部分 ROM 的权限编辑器组件名不同，直接退回应用详情页
-                    activity.startActivity(appDetailsIntent(activity));
-                }
+                requestStoragePermission(activity);
                 return Boolean.TRUE;
             // ---- 系统服务（Shizuku / 修复无障碍 / 悬浮菜单，PocServices）----------
             case "shizukuState":
@@ -353,29 +348,46 @@ final class PocBridge {
         }
     }
 
-    /** 优先直接打开「文件管理/存储权限」授权页，失败再退回应用详情页。 */
-    private static Intent storagePermissionIntent(Activity activity) {
-        String pkg = activity.getPackageName();
-        try {
-            // 隐式 action 由 ROM 自行解析（各 MIUI 版本组件名不同，避免 explicit 找不到）
-            Intent miui = new Intent("miui.intent.action.APP_PERM_EDITOR");
-            miui.putExtra("extra_pkgname", pkg);
-            if (miui.resolveActivity(activity.getPackageManager()) != null) {
-                return miui;
-            }
-        } catch (Throwable ignored) {
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                Intent allFiles = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                        Uri.parse("package:" + pkg));
-                if (allFiles.resolveActivity(activity.getPackageManager()) != null) {
-                    return allFiles;
+    private static final int STORAGE_PERMISSION_REQUEST = 0x53A7;
+
+    /**
+     * 申请存储权限。
+     *
+     * <p>本应用 targetSdk=28，Android 11+ 仍是 legacy storage（安装后 LEGACY_STORAGE allow）。
+     * 这种情况下系统设置里的「所有文件访问」页面对 target&lt;30 的应用是不可授予的，
+     * 真正需要的是运行时 READ/WRITE_EXTERNAL_STORAGE 授权；拿到后 legacy 模式下即可读写
+     * /sdcard 任意目录。所以这里优先弹系统运行时授权框，而不是把用户带进死胡同。
+     */
+    private static void requestStoragePermission(Activity activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            boolean readGranted = activity.checkSelfPermission(
+                    Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+            // Android 13+ 的 WRITE_EXTERNAL_STORAGE 已废弃，不再要求。
+            boolean writeGranted = Build.VERSION.SDK_INT >= 33 || activity.checkSelfPermission(
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+            boolean dirReadable = new File(Pref.getScriptDirPath()).canRead();
+            if ((!readGranted || !writeGranted) && !dirReadable) {
+                try {
+                    activity.requestPermissions(new String[]{
+                            Manifest.permission.READ_EXTERNAL_STORAGE,
+                            Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    }, STORAGE_PERMISSION_REQUEST);
+                    Log.i(TAG, "request storage runtime permission");
+                    return;
+                } catch (Throwable error) {
+                    Log.w(TAG, "request storage permission failed", error);
                 }
-            } catch (Throwable ignored) {
             }
         }
-        return appDetailsIntent(activity);
+        if (hasStorageAccess(activity)) {
+            return;
+        }
+        // 兜底：打开应用详情页（权限 → 文件和媒体），不再进不可用的「所有文件访问」页。
+        try {
+            activity.startActivity(appDetailsIntent(activity));
+        } catch (Throwable ignored) {
+            // 没有可打开的设置页时保持静默，界面会按未授权展示。
+        }
     }
 
     private static JSONObject bootstrap(Activity activity) throws Exception {
@@ -400,7 +412,7 @@ final class PocBridge {
         boolean granted = new File(Pref.getScriptDirPath()).canRead();
         if (!granted) {
             try {
-                granted = activity.checkCallingOrSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                granted = activity.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
                         == PackageManager.PERMISSION_GRANTED;
             } catch (Throwable ignored) {
                 granted = false;
