@@ -19,7 +19,6 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
-import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
@@ -39,7 +38,6 @@ class McpHttpServer(
     val allowUnauthenticatedLan: Boolean = false,
     val handler: (JsonObject) -> JsonObject?
 ) {
-    private val tokenDigest = sha256(token)
     private val connections = ConcurrentHashMap.newKeySet<Socket>()
     @Volatile private var listener: ServerSocket? = null
     private var workers: ThreadPoolExecutor? = null
@@ -156,12 +154,10 @@ class McpHttpServer(
                 respondPreflight(socket, allowedOrigin)
                 return
             }
-            val authorization = headers["authorization"].orEmpty()
-            val candidate = if (authorization.startsWith("Bearer ", ignoreCase = true)) authorization.substring(7) else ""
-            val authenticated = MessageDigest.isEqual(tokenDigest, sha256(candidate))
-            val localCompatibility = allowUnauthenticatedLoopback && authorization.isEmpty() && socket.inetAddress.isLoopbackAddress
-            val lanCompatibility = allowUnauthenticatedLan && authorization.isEmpty() && !socket.inetAddress.isLoopbackAddress
-            if (!authenticated && !localCompatibility && !lanCompatibility) throw HttpError(401, "Unauthorized")
+            // dev-1176：用户要求 MCP 完全免令牌（本机 + 局域网一致）。
+            // 不再校验 Authorization（客户端可继续带 Bearer，但内容被忽略），
+            // 安全边界依赖 MCP 只在本机/可信局域网开启；token 字段仍保留用于兼容配置。
+            // 若未来要恢复：改回 MessageDigest.isEqual(tokenDigest, sha256(candidate)) 即可。
             if (path != "/mcp" && path != "/") throw HttpError(404, "Not Found")
             if (requestLine[0] == "GET") {
                 // MCP Streamable HTTP 客户端会先 GET /mcp(Accept: text/event-stream) 探测 SSE；
@@ -484,7 +480,6 @@ class McpHttpServer(
         // Some desktop bridges still send the last pre-Streamable-HTTP version while using the
         // modern POST endpoint. The message shapes used here are compatible with all three.
         private val SUPPORTED_VERSIONS = setOf("2024-11-05", "2025-03-26", "2025-06-18")
-        private fun sha256(value: String): ByteArray = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
     }
 }
 

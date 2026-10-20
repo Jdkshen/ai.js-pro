@@ -38,7 +38,8 @@ class McpService : Service() {
             var startedEndpoint: McpHttpServer? = null
             var boundPort = 0
             var lastFailure: String? = null
-            // task-105：对齐 Pro：默认 8765，被占用时 8765..8795 顺延；始终绑 0.0.0.0（仍保留 token 鉴权）。
+            // task-105：对齐 Pro：默认 8765，被占用时 8765..8795 顺延；始终绑 0.0.0.0。
+            // dev-1176：用户要求完全免令牌，本机/局域网请求都不再校验 Bearer。
             val portEnd = if (requestedPort in McpSettings.MIN_PORT..McpSettings.MAX_PORT) {
                 McpSettings.MAX_PORT
             } else {
@@ -92,7 +93,7 @@ class McpService : Service() {
             running = true
             lastError = null
             // task-118：MCP 由用户手动/自动开启即视为完整授权——不再要求额外打开「编辑/运行授权」开关。
-            // 安全边界仍在网络层：局域网请求必须带 Bearer token（本机 loopback 免 token）。
+            // dev-1176：按用户要求，网络层也完全免令牌（局域网客户端只需 URL，不再需要 Bearer）。
             allowWrite = true
             allowExecution = true
             startHeartbeat()
@@ -175,7 +176,7 @@ class McpService : Service() {
         val names = runCatching { tools.toolNames() }.getOrDefault(emptyList())
         val items = names.joinToString("") { "<li><code>${it.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</code></li>" }
         val mode = if (lan) "局域网（0.0.0.0）" else "仅本机（127.0.0.1）"
-        val tokenHint = if (lan) token.take(8) + "…" else "本机访问免认证，局域网需 Bearer"
+        val tokenHint = "已完全免令牌：本机与局域网客户端都只需填写 URL，无需 Bearer"
         return """<!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

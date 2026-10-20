@@ -131,7 +131,7 @@ internal class McpTools(private val context: Context, private val event: (String
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
         add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.3.0") })
-        addProperty("instructions", "MCP 服务开启即拥有读写与运行权限（局域网访问仍需 Bearer token）。客户端可创建/修改私有工作区，并调用 workspace_request_apply 直接应用到真实脚本；应用时会校验原文件未被外部改动并保留备份，可在手机历史页回退。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
+        addProperty("instructions", "MCP 服务开启即拥有读写与运行权限（dev-1176 起完全免令牌：本机与局域网客户端都只需 URL，无需 Bearer）。客户端可创建/修改私有工作区，并调用 workspace_request_apply 直接应用到真实脚本；应用时会校验原文件未被外部改动并保留备份，可在手机历史页回退。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
     }
 
     private fun listTools() = JsonObject().apply {

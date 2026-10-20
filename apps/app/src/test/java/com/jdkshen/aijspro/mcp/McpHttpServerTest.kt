@@ -52,26 +52,26 @@ class McpHttpServerTest {
     }
 
     @Test
-    fun missingOrIncorrectTokenCannotReachHandler() {
+    fun tokenIsIgnoredAndRequestsAlwaysReachHandler() {
+        // dev-1176：用户要求 MCP 完全免令牌（本机/局域网一致），Authorization 内容一律忽略。
         for (authorization in listOf(null, "Bearer wrong", "Basic $token")) {
             val response = post(INITIALIZE, overrides = mapOf("Authorization" to authorization))
-            assertEquals(401, response.status)
-            assertTrue(response.headers.containsKey("www-authenticate"))
-            assertFalse(response.body.contains(token))
+            assertEquals(200, response.status)
+            assertFalse(response.headers.containsKey("www-authenticate"))
         }
-        assertEquals(0, calls.get())
+        assertEquals(3, calls.get())
     }
 
     @Test
-    fun optionalLoopbackCompatibilityAcceptsMissingButNotWrongCredentials() {
+    fun compatibilityFlagsNoLongerGateAuthentication() {
         server.stop()
         server = McpHttpServer("127.0.0.1", 0, token, true) { request ->
             calls.incrementAndGet()
             JsonObject().apply { addProperty("jsonrpc", "2.0"); add("id", request.get("id")); add("result", JsonObject()) }
         }.also { it.start() }
         assertEquals(200, post(INITIALIZE, overrides = mapOf("Authorization" to null)).status)
-        assertEquals(401, post(INITIALIZE, overrides = mapOf("Authorization" to "Bearer wrong")).status)
-        assertEquals(1, calls.get())
+        assertEquals(200, post(INITIALIZE, overrides = mapOf("Authorization" to "Bearer wrong")).status)
+        assertEquals(2, calls.get())
     }
 
     @Test
@@ -170,15 +170,16 @@ class McpHttpServerTest {
     }
 
     @Test
-    fun unauthorizedAndRpcErrorsKeepAllowedOriginCorsHeaders() {
+    fun authlessRequestsAndRpcErrorsKeepAllowedOriginCorsHeaders() {
         val origin = "http://127.0.0.1:${server.localPort}"
         val unauthorized = post(INITIALIZE, overrides = mapOf(
             "Origin" to origin, "Authorization" to "Bearer wrong"
         ))
-        assertEquals(401, unauthorized.status)
+        // 免令牌后，带错误 Bearer 也直接进入 handler，且 CORS 头保持精确回显。
+        assertEquals(200, unauthorized.status)
         assertEquals(origin, unauthorized.headers["access-control-allow-origin"])
         assertEquals("Origin", unauthorized.headers["vary"])
-        assertTrue(unauthorized.headers.containsKey("www-authenticate"))
+        assertFalse(unauthorized.headers.containsKey("www-authenticate"))
 
         val parseError = post("{", overrides = mapOf("Origin" to origin))
         assertEquals(400, parseError.status)
@@ -190,7 +191,7 @@ class McpHttpServerTest {
         assertEquals(400, invalidRequest.status)
         assertEquals(origin, invalidRequest.headers["access-control-allow-origin"])
         assertEquals(-32600, invalidRequest.json().getAsJsonObject("error").get("code").asInt)
-        assertEquals(0, calls.get())
+        assertEquals(1, calls.get())
 
         val internalError = post(
             """{"jsonrpc":"2.0","id":"request-1","method":"fail"}""",
@@ -200,7 +201,7 @@ class McpHttpServerTest {
         assertEquals(origin, internalError.headers["access-control-allow-origin"])
         assertEquals("Origin", internalError.headers["vary"])
         assertEquals(-32603, internalError.json().getAsJsonObject("error").get("code").asInt)
-        assertEquals(1, calls.get())
+        assertEquals(2, calls.get())
     }
 
     @Test

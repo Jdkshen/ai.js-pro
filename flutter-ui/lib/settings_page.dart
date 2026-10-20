@@ -929,7 +929,7 @@ class _GlassAboutPageState extends State<GlassAboutPage> {
             title: const Text('隐私政策'),
             content: const Text('本应用不收集任何个人数据。脚本、日志、配置与运行记录都保存在本机；'
                 '无障碍、截图、悬浮窗等权限仅在系统授权后由本机使用。'
-                'MCP 与电脑连接只在你主动开启时监听本机/局域网，局域网访问需要 Access Token。'),
+                'MCP 与电脑连接只在你主动开启时监听本机/局域网；服务完全免令牌，客户端只需填写地址。'),
             actions: [
               TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(),

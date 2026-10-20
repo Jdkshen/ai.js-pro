@@ -20,7 +20,7 @@ AI.js Pro 是从 Auto.js 4.4.1 演进而来的 Android JavaScript IDE 与自动�
 - **三引擎并存**：Rhino（旧 Auto.js 兼容，默认）、QuickJS（首行 `// @engine quickjs`）、Node24（`"nodejs";` 入口，真实 Node v24.22.0 / ABI 137，运行在独立的 `:node24` 进程）。
 - **多进程执行**：Flutter POC 把普通脚本放进 `:script` 进程（`ScriptHostService`/`PocScriptHost`），带 `lib/*.so` 或 `.dex` 的 native 项目放进 `:native` 进程（`NativeScriptService`）；主进程只做 UI 与 IPC，脚本崩溃不再带崩主 App。
 - **ImGui**：旧 ImGui 工作台已彻底删除；现有 ImGui 只作为 QuickJS 可调用的独立悬浮窗 API，不恢复旧主界面。
-- **MCP 已接入脚本开发与调试**：默认端口 **8765**（被占用时 8765–8795 顺延，绑 `0.0.0.0`，仍保留 Bearer 令牌），支持脚本/示例读取、搜索分页、任务状态、异常与 APK 日志、工作区 Diff/应用/回退。
+- **MCP 已接入脚本开发与调试**：默认端口 **8765**（被占用时 8765–8795 顺延，绑 `0.0.0.0`，**dev-1176 起完全免令牌**），支持脚本/示例读取、搜索分页、任务状态、异常与 APK 日志、工作区 Diff/应用/回退。
 - **小米无障碍快速开启**：首次通过 Shizuku、ADB 或 Root 授予 `WRITE_SECURE_SETTINGS`，以后直接写入安全设置；不可用时才回退系统设置。
 - **插件化**：象棋识别/棋规/算棋在 `plugins/xiangqi-plugin`，打包模板在 `plugins/apkbuilder-plugin`；主 APK 不再内嵌这两部分。
 
@@ -192,7 +192,7 @@ adb -s cccc62c7 install -r -d `
 - 三引擎回归（dev-1103，后续版本增量复验）：QuickJS **227/227**、Rhino **22/22**、Node **21/21**、Node 颜色 **6/6**、Node UI basic **8 steps**，0 失败 0 跳过；
 - dev-1111/1112 新增：Rhino `:script` 无障碍反向通道（`auto.service` 远程代理、事件订阅；K40 收到 accessibility 46 条 / view_clicked 4 条 / toast 1 条）；inrt 定时任务补全（广播 Intent 任务、按 path 执行、headless `exit()` 中止、exact alarm 引导）；
 - K40 `cccc62c7`、Mi8 `ce4d2bdb`；RustDesk 与 AI.js Pro 无障碍可共存，重装后需重新授权；
-- MCP 默认 **8765**（8765–8795 顺延，绑 `0.0.0.0`，保留 Bearer）；
+- MCP 默认 **8765**（8765–8795 顺延，绑 `0.0.0.0`，dev-1176 起完全免令牌）；
 - 当前分支 `main`（HEAD `45fae285`）已与 `origin/main` 同步。
 
 已知限制（详见 [REMAINING_WORK](REMAINING_WORK.md) §0）：Rhino/QuickJS 的 `:script` 自动化是常用面子集（无 `AccessibilityEvent`/`event.source`，状态变更非实时）；Node24 的真实 Java 继承与部分模块仍有缺口；inrt 的 `addActivityIntentTask` 未实现；`plugins/apkbuilder-plugin/assets/template.apk` 仍是 70MB 旧全量，尚未用新 inrt release 重建。

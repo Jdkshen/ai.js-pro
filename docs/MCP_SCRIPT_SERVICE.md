@@ -4,14 +4,13 @@
 
 入口：AI.js Pro 左上角菜单 → 开发 → MCP 服务。
 
-默认地址为 `http://127.0.0.1:8765/mcp`（端口被占用时在 **8765–8795** 顺延，以页面显示为准），传输类型选择 **Streamable HTTP**。服务默认绑 `0.0.0.0`，仍保留 Bearer 令牌鉴权。
+默认地址为 `http://127.0.0.1:8765/mcp`（端口被占用时在 **8765–8795** 顺延，以页面显示为准），传输类型选择 **Streamable HTTP**。服务默认绑 `0.0.0.0`，**完全免令牌**（dev-1176 起本机与局域网客户端都无需 Authorization/Bearer）。
 
-同一手机上的 MT 客户端直接填写该地址。默认开启“本机客户端兼容”，loopback 请求可不填写自定义请求头；MT 的自定义请求头列表不能保留名称为空的行，否则 OkHttp 会在发包前抛出 `name is empty`。
+同一手机上的 MT 客户端直接填写该地址即可。所有连接（本机 / USB 转发 / 局域网）都不需要 Authorization 自定义请求头；客户端若仍配置了 Bearer 也会被忽略，不会返回 401。MT 的自定义请求头列表不要保留名称为空的行，否则 OkHttp 会在发包前抛出 `name is empty`。
 
-关闭本机兼容，或通过局域网连接时，发送：
+需要显式设置请求头时，只保留 MCP 协议相关的即可（Authorization 可省略）：
 
 ```text
-Authorization: Bearer <在 MCP 页面复制的访问令牌>
 Accept: application/json, text/event-stream
 Content-Type: application/json
 MCP-Protocol-Version: 2025-06-18

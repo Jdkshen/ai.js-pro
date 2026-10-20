@@ -6,7 +6,7 @@
 - **界面双轨**：dev 通道自 dev-905 起以 **Flutter 玻璃界面**为主入口（`-PflutterPoc=true`，`GlassFlutterActivity`），桌面保留「AI.js Pro（Miuix 回退）」；仓库默认构建仍是 Miuix + 原生 View。
 - **三引擎**：Rhino（默认旧脚本兼容）、QuickJS（`// @engine quickjs`）、Node24（`"nodejs";`，真实 Node v24.22.0，独立 `:node24` 进程）。
 - **多进程**：普通脚本 `:script`（ScriptHostService/PocScriptHost），带 `lib/*.so` 或 `.dex` 的项目 `:native`（NativeScriptService），Node 脚本 `:node24`；主进程只做 UI/IPC，脚本进程崩溃不再带崩主 App。
-- **MCP**：默认端口 **8765**（8765–8795 顺延，绑 `0.0.0.0`，保留 Bearer）；USB 转发用 `adb forward tcp:18790 tcp:8765`。
+- **MCP**：默认端口 **8765**（8765–8795 顺延，绑 `0.0.0.0`，**dev-1176 起完全免令牌**：本机与局域网客户端只需 URL，无需 Bearer）；USB 转发用 `adb forward tcp:18790 tcp:8765`。
 - **最近验证（dev-1103~1112）**：QuickJS 227/227、Rhino 22/22、Node 21/21、Node 颜色 6/6、Node UI basic 8 steps；Rhino `:script` 无障碍反向通道（`auto.service` 代理 + 事件订阅）K40 PASS；inrt 定时任务补全 K40 PASS。
 - **已知限制**：`:script` 自动化仅常用面子集（无完整 `AccessibilityEvent`/`event.source`，状态变更非实时）；Node24 真实 Java 继承与部分模块仍有缺口；inrt `addActivityIntentTask` 未实现；`plugins/apkbuilder-plugin/assets/template.apk` 仍是 70MB 旧全量，待用新 inrt release 重建。
 - 最新逐条记录见 [`docs/reports/2026-10-18_收尾交接_给Codex_v2.md`](reports/2026-10-18_收尾交接_给Codex_v2.md) 末尾「2026-10-19 20:30 更新（dev-1112）」；当前剩余项见 [`docs/REMAINING_WORK.md`](REMAINING_WORK.md) §0。
