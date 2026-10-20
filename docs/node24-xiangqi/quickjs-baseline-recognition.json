@@ -1,0 +1,736 @@
+{
+  "probe": "r5-quickjs-baseline",
+  "purpose": "QuickJS 象棋识别链路基线（离线真实帧）：棋盘定位→棋子识别→FEN 布局，供 Node24 移植对照",
+  "environment": {
+    "hostApp": "com.jdkshen.aijspro（dev-1153）",
+    "engine": "QuickJS（脚本头 // @engine quickjs）",
+    "device": "K40 cccc62c7 1080x2400",
+    "runMode": "adb 外部 intent：am start -n com.jdkshen.aijspro/.external.open.RunIntentActivity --es path <probe>",
+    "offline": true,
+    "needsCaptureOrFloaty": false,
+    "bundle": "/sdcard/Download/three-engine-bench/r5-chess（旧仓库 src/experiments/assets 的最小拷贝）",
+    "oldRepo": "C:\\Users\\18101\\Documents\\AutoJsPro-本地工程-20261008\\参考开源工程\\AI.jsPro\\apps\\app\\src\\main\\assets\\sample\\QuickJS 新引擎\\项目与打包\\象棋自动走棋",
+    "projectVersion": "0.6.80",
+    "model": "assets/models/chessai_160x320_v5r.onnx",
+    "modelSha256": "6a695f00a845705e4b8f26aa6e991b5fb2ab1a7bb81fd2bcbf8b89a6ef84becb",
+    "modelBytes": 9662434,
+    "probe": "output/three-engine-bench/r5-chess/r5-baseline-probe.js（同 quickjs-baseline-probe.js）",
+    "capturedAt": "2026-10-20T08:04:51"
+  },
+  "inputs": [
+    {
+      "id": "f01",
+      "label": "real-frame-f01",
+      "path": "/sdcard/Download/three-engine-bench/r4-frames/f01.png",
+      "exists": true,
+      "ok": true,
+      "stage": null,
+      "reason": "",
+      "method": "canny-hough",
+      "columns": 9,
+      "rows": 10,
+      "grid": {
+        "originX": 84.565,
+        "originY": 699.2,
+        "stepX": 114.63,
+        "stepY": 114.39999999999999,
+        "orientation": "RED_BOTTOM",
+        "version": 2
+      },
+      "boardBbox": {
+        "x": 27,
+        "y": 642,
+        "width": 1032,
+        "height": 1144
+      },
+      "layout": "rn1akabn1/3?5/2c1c2?1/p1p1p1p1p/9/2P6/P3P1P1P/CC7/9/1NBAKABNR",
+      "fenPlacement": "rn1akabn1/3?5/2c1c2?1/p1p1p1p1p/9/2P6/P3P1P1P/CC7/9/1NBAKABNR",
+      "chars": [
+        "r",
+        "n",
+        null,
+        "a",
+        "k",
+        "a",
+        "b",
+        "n",
+        null,
+        null,
+        null,
+        null,
+        "?",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "c",
+        null,
+        "c",
+        null,
+        null,
+        "?",
+        null,
+        "p",
+        null,
+        "p",
+        null,
+        "p",
+        null,
+        "p",
+        null,
+        "p",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "P",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "P",
+        null,
+        null,
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        "P",
+        "C",
+        "C",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "N",
+        "B",
+        "A",
+        "K",
+        "A",
+        "B",
+        "N",
+        "R"
+      ],
+      "boardRows": [
+        "rn.akabn.",
+        "...?.....",
+        "..c.c..?.",
+        "p.p.p.p.p",
+        ".........",
+        "..P......",
+        "P...P.P.P",
+        "CC.......",
+        ".........",
+        ".NBAKABNR"
+      ],
+      "boardText": " 0  r  n  .  a  k  a  b  n  . \n 1  .  .  .  ?  .  .  .  .  . \n 2  .  .  c  .  c  .  .  ?  . \n 3  p  .  p  .  p  .  p  .  p \n 4  .  .  .  .  .  .  .  .  . \n 5  .  .  P  .  .  .  .  .  . \n 6  P  .  .  .  P  .  P  .  P \n 7  C  C  .  .  .  .  .  .  . \n 8  .  .  .  .  .  .  .  .  . \n 9  .  N  B  A  K  A  B  N  R ",
+      "unknownCells": 2,
+      "detectionCount": 34,
+      "stats": {
+        "detected": 34,
+        "placed": 31,
+        "merged": 32,
+        "conflicts": 0,
+        "sameGlyphConflicts": 0,
+        "conflictCells": [],
+        "unknown": 0,
+        "outOfBoard": 0,
+        "lowQuality": 0,
+        "weak": 3,
+        "sideUnknown": 0,
+        "sideRed": 15,
+        "sideBlack": 16,
+        "sideReasons": {},
+        "unknownCells": 2,
+        "unknownBeforeRepair": 0,
+        "pieceCells": 29,
+        "emptyCells": 59,
+        "invalidCells": 0,
+        "stateCounts": {
+          "total": 90,
+          "pieces": 29,
+          "empty": 59,
+          "unknown": 2,
+          "invalid": [],
+          "ok": true,
+          "reason": ""
+        },
+        "autoAlign": {
+          "dx": 3,
+          "dy": 3,
+          "tried": 169,
+          "unknown": 0,
+          "outOfBoard": 0,
+          "conflicts": 0,
+          "sameGlyphConflicts": 0,
+          "conflictCells": [],
+          "residual": 0.628500707069909,
+          "costBefore": 1.3255,
+          "costAfter": 0.5538,
+          "gain": 0.5822,
+          "gainAccepted": true,
+          "meanDistance": 0.0201,
+          "boxes": 34,
+          "pieceDelta": 0,
+          "moved": true,
+          "refused": null,
+          "applied": true,
+          "minApply": 3,
+          "maxApply": 6,
+          "minGain": 0.15,
+          "versionBefore": 1,
+          "versionAfter": 2,
+          "suspect": false
+        }
+      },
+      "timing": {
+        "cropMs": 0,
+        "detectMs": 19,
+        "sideMs": 113,
+        "totalMs": 146
+      },
+      "locatedTiming": {
+        "captureMs": 47,
+        "locateMs": 103,
+        "totalMs": 150,
+        "samples": 0,
+        "regionTries": 0,
+        "attempts": 1
+      },
+      "region": {
+        "x": 11,
+        "y": 629,
+        "width": 1057,
+        "height": 1160
+      },
+      "native": {
+        "preprocessMs": 0.8142189979553223,
+        "inferenceMs": 17.05531120300293,
+        "totalMs": 17.869530200958252,
+        "count": 34
+      },
+      "model": {
+        "backend": "dnn",
+        "inputSize": 160,
+        "threads": 4,
+        "inputWidth": 160,
+        "inputHeight": 320,
+        "modelPath": "/sdcard/Download/three-engine-bench/r5-chess/assets/models/chessai_160x320_v5r.onnx",
+        "labels": "/sdcard/Download/three-engine-bench/r5-chess/assets/models/chessai_160x320_v5r.txt"
+      },
+      "modelSource": "脚本目录解析",
+      "sideStats": {
+        "red": 15,
+        "black": 16,
+        "unknown": 0
+      },
+      "runs": [
+        {
+          "run": 1,
+          "wallMs": 367,
+          "ok": true,
+          "layout": "rn1akabn1/3?5/2c1c2?1/p1p1p1p1p/9/2P6/P3P1P1P/CC7/9/1NBAKABNR",
+          "unknownCells": 2,
+          "grid": {
+            "originX": 84.565,
+            "originY": 699.2,
+            "stepX": 114.63,
+            "stepY": 114.39999999999999,
+            "orientation": "RED_BOTTOM",
+            "version": 2
+          },
+          "timing": {
+            "cropMs": 0,
+            "detectMs": 19,
+            "sideMs": 113,
+            "totalMs": 146
+          },
+          "locatedTiming": {
+            "captureMs": 47,
+            "locateMs": 103,
+            "totalMs": 150,
+            "samples": 0,
+            "regionTries": 0,
+            "attempts": 1
+          },
+          "native": {
+            "preprocessMs": 0.8142189979553223,
+            "inferenceMs": 17.05531120300293,
+            "totalMs": 17.869530200958252,
+            "count": 34
+          }
+        },
+        {
+          "run": 2,
+          "wallMs": 380,
+          "ok": true,
+          "layout": "rn1akabn1/3?5/2c1c2?1/p1p1p1p1p/9/2P6/P3P1P1P/CC7/9/1NBAKABNR",
+          "unknownCells": 2,
+          "grid": {
+            "originX": 84.565,
+            "originY": 699.2,
+            "stepX": 114.63,
+            "stepY": 114.39999999999999,
+            "orientation": "RED_BOTTOM",
+            "version": 2
+          },
+          "timing": {
+            "cropMs": 0,
+            "detectMs": 18,
+            "sideMs": 113,
+            "totalMs": 145
+          },
+          "locatedTiming": {
+            "captureMs": 48,
+            "locateMs": 118,
+            "totalMs": 166,
+            "samples": 0,
+            "regionTries": 0,
+            "attempts": 1
+          },
+          "native": {
+            "preprocessMs": 0.7875000238418579,
+            "inferenceMs": 16.713333129882812,
+            "totalMs": 17.50083315372467,
+            "count": 34
+          }
+        }
+      ],
+      "deterministic": {
+        "sameLayout": true,
+        "sameGrid": true,
+        "sameUnknown": true,
+        "runWalls": [
+          367,
+          380
+        ]
+      }
+    },
+    {
+      "id": "skin-a",
+      "label": "skin-a",
+      "path": "/sdcard/Download/three-engine-bench/skin-a.png",
+      "exists": true,
+      "ok": true,
+      "stage": null,
+      "reason": "",
+      "method": "canny-hough",
+      "columns": 9,
+      "rows": 10,
+      "grid": {
+        "originX": 80.565,
+        "originY": 669.155,
+        "stepX": 114.88,
+        "stepY": 114.31,
+        "orientation": "RED_BOTTOM",
+        "version": 2
+      },
+      "boardBbox": {
+        "x": 23,
+        "y": 612,
+        "width": 1034,
+        "height": 1143
+      },
+      "layout": "Rnbakab1R/9/3C2cC1/P1P1P1P1P/9/9/P1P1P1P1P/2N1C2C1/9/r1BAKABNR",
+      "fenPlacement": "Rnbakab1R/9/3C2cC1/P1P1P1P1P/9/9/P1P1P1P1P/2N1C2C1/9/r1BAKABNR",
+      "chars": [
+        "R",
+        "n",
+        "b",
+        "a",
+        "k",
+        "a",
+        "b",
+        null,
+        "R",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "C",
+        null,
+        null,
+        "c",
+        "C",
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        "P",
+        null,
+        null,
+        "N",
+        null,
+        "C",
+        null,
+        null,
+        "C",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "r",
+        null,
+        "B",
+        "A",
+        "K",
+        "A",
+        "B",
+        "N",
+        "R"
+      ],
+      "boardRows": [
+        "Rnbakab.R",
+        ".........",
+        "...C..cC.",
+        "P.P.P.P.P",
+        ".........",
+        ".........",
+        "P.P.P.P.P",
+        "..N.C..C.",
+        ".........",
+        "r.BAKABNR"
+      ],
+      "boardText": " 0  R  n  b  a  k  a  b  .  R \n 1  .  .  .  .  .  .  .  .  . \n 2  .  .  .  C  .  .  c  C  . \n 3  P  .  P  .  P  .  P  .  P \n 4  .  .  .  .  .  .  .  .  . \n 5  .  .  .  .  .  .  .  .  . \n 6  P  .  P  .  P  .  P  .  P \n 7  .  .  N  .  C  .  .  C  . \n 8  .  .  .  .  .  .  .  .  . \n 9  r  .  B  A  K  A  B  N  R ",
+      "unknownCells": 0,
+      "detectionCount": 32,
+      "stats": {
+        "detected": 32,
+        "placed": 32,
+        "merged": 32,
+        "conflicts": 0,
+        "sameGlyphConflicts": 0,
+        "conflictCells": [],
+        "unknown": 0,
+        "outOfBoard": 0,
+        "lowQuality": 0,
+        "weak": 0,
+        "sideUnknown": 0,
+        "sideRed": 30,
+        "sideBlack": 2,
+        "sideReasons": {},
+        "unknownCells": 0,
+        "unknownBeforeRepair": 0,
+        "pieceCells": 32,
+        "emptyCells": 58,
+        "invalidCells": 0,
+        "stateCounts": {
+          "total": 90,
+          "pieces": 32,
+          "empty": 58,
+          "unknown": 0,
+          "invalid": [],
+          "ok": true,
+          "reason": ""
+        },
+        "autoAlign": {
+          "dx": 0,
+          "dy": 3,
+          "tried": 169,
+          "unknown": 0,
+          "outOfBoard": 0,
+          "conflicts": 0,
+          "sameGlyphConflicts": 0,
+          "conflictCells": [],
+          "residual": 0.5842409596077044,
+          "costBefore": 1.0106,
+          "costAfter": 0.5294,
+          "gain": 0.4762,
+          "gainAccepted": true,
+          "meanDistance": 0.0183,
+          "boxes": 32,
+          "pieceDelta": 0,
+          "moved": true,
+          "refused": null,
+          "applied": true,
+          "minApply": 3,
+          "maxApply": 6,
+          "minGain": 0.15,
+          "versionBefore": 1,
+          "versionAfter": 2,
+          "suspect": false
+        }
+      },
+      "timing": {
+        "cropMs": 0,
+        "detectMs": 17,
+        "sideMs": 117,
+        "totalMs": 147
+      },
+      "locatedTiming": {
+        "captureMs": 46,
+        "locateMs": 101,
+        "totalMs": 147,
+        "samples": 0,
+        "regionTries": 0,
+        "attempts": 1
+      },
+      "region": {
+        "x": 11,
+        "y": 599,
+        "width": 1057,
+        "height": 1159
+      },
+      "native": {
+        "preprocessMs": 0.7760940194129944,
+        "inferenceMs": 15.253957748413086,
+        "totalMs": 16.03005176782608,
+        "count": 32
+      },
+      "model": {
+        "backend": "dnn",
+        "inputSize": 160,
+        "threads": 4,
+        "inputWidth": 160,
+        "inputHeight": 320,
+        "modelPath": "/sdcard/Download/three-engine-bench/r5-chess/assets/models/chessai_160x320_v5r.onnx",
+        "labels": "/sdcard/Download/three-engine-bench/r5-chess/assets/models/chessai_160x320_v5r.txt"
+      },
+      "modelSource": "脚本目录解析",
+      "sideStats": {
+        "red": 30,
+        "black": 2,
+        "unknown": 0
+      },
+      "runs": [
+        {
+          "run": 1,
+          "wallMs": 364,
+          "ok": true,
+          "layout": "Rnbakab1R/9/3C2cC1/P1P1P1P1P/9/9/P1P1P1P1P/2N1C2C1/9/r1BAKABNR",
+          "unknownCells": 0,
+          "grid": {
+            "originX": 80.565,
+            "originY": 669.155,
+            "stepX": 114.88,
+            "stepY": 114.31,
+            "orientation": "RED_BOTTOM",
+            "version": 2
+          },
+          "timing": {
+            "cropMs": 0,
+            "detectMs": 17,
+            "sideMs": 117,
+            "totalMs": 147
+          },
+          "locatedTiming": {
+            "captureMs": 46,
+            "locateMs": 101,
+            "totalMs": 147,
+            "samples": 0,
+            "regionTries": 0,
+            "attempts": 1
+          },
+          "native": {
+            "preprocessMs": 0.7760940194129944,
+            "inferenceMs": 15.253957748413086,
+            "totalMs": 16.03005176782608,
+            "count": 32
+          }
+        },
+        {
+          "run": 2,
+          "wallMs": 363,
+          "ok": true,
+          "layout": "Rnbakab1R/9/3C2cC1/P1P1P1P1P/9/9/P1P1P1P1P/2N1C2C1/9/r1BAKABNR",
+          "unknownCells": 0,
+          "grid": {
+            "originX": 80.565,
+            "originY": 669.155,
+            "stepX": 114.88,
+            "stepY": 114.31,
+            "orientation": "RED_BOTTOM",
+            "version": 2
+          },
+          "timing": {
+            "cropMs": 0,
+            "detectMs": 18,
+            "sideMs": 116,
+            "totalMs": 148
+          },
+          "locatedTiming": {
+            "captureMs": 49,
+            "locateMs": 96,
+            "totalMs": 145,
+            "samples": 0,
+            "regionTries": 0,
+            "attempts": 1
+          },
+          "native": {
+            "preprocessMs": 0.7652080059051514,
+            "inferenceMs": 16.633228302001953,
+            "totalMs": 17.398436307907104,
+            "count": 32
+          }
+        }
+      ],
+      "deterministic": {
+        "sameLayout": true,
+        "sameGrid": true,
+        "sameUnknown": true,
+        "runWalls": [
+          364,
+          363
+        ]
+      }
+    }
+  ],
+  "determinism": {
+    "f01": {
+      "layouts": [
+        "rn1akabn1/3?5/2c1c2?1/p1p1p1p1p/9/2P6/P3P1P1P/CC7/9/1NBAKABNR",
+        "rn1akabn1/3?5/2c1c2?1/p1p1p1p1p/9/2P6/P3P1P1P/CC7/9/1NBAKABNR"
+      ],
+      "grids": [
+        {
+          "originX": 84.565,
+          "originY": 699.2,
+          "stepX": 114.63,
+          "stepY": 114.39999999999999,
+          "orientation": "RED_BOTTOM",
+          "version": 2
+        },
+        {
+          "originX": 84.565,
+          "originY": 699.2,
+          "stepX": 114.63,
+          "stepY": 114.39999999999999,
+          "orientation": "RED_BOTTOM",
+          "version": 2
+        }
+      ],
+      "unknown": [
+        2,
+        2
+      ]
+    },
+    "skin-a": {
+      "layouts": [
+        "Rnbakab1R/9/3C2cC1/P1P1P1P1P/9/9/P1P1P1P1P/2N1C2C1/9/r1BAKABNR",
+        "Rnbakab1R/9/3C2cC1/P1P1P1P1P/9/9/P1P1P1P1P/2N1C2C1/9/r1BAKABNR"
+      ],
+      "grids": [
+        {
+          "originX": 80.565,
+          "originY": 669.155,
+          "stepX": 114.88,
+          "stepY": 114.31,
+          "orientation": "RED_BOTTOM",
+          "version": 2
+        },
+        {
+          "originX": 80.565,
+          "originY": 669.155,
+          "stepX": 114.88,
+          "stepY": 114.31,
+          "orientation": "RED_BOTTOM",
+          "version": 2
+        }
+      ],
+      "unknown": [
+        0,
+        0
+      ]
+    }
+  },
+  "hostApiSummary": {
+    "hostApisRequired": [
+      "yolo.load({backend:'dnn', model, labels, threads, inputWidth:160, inputHeight:320}) + detector.detect(image,{confidence,nms,region})（ONNX Runtime 推理）",
+      "images.analyzeXiangqiBoard(frame)（原生 Canny/Hough 9×10 棋盘几何；本帧实际 method=canny-hough）",
+      "images.read(path) + files.*（读图/落盘/模型路径解析）",
+      "images.pixel(image,x,y) + colors.red/green/blue(pixel)（逐子红黑判色）"
+    ],
+    "notRequired": [
+      "requestScreenCapture / 截图",
+      "floaty 浮窗",
+      "无障碍/点击"
+    ],
+    "note": "对 Node24 移植：yolo.load/detect 与 images.analyzeXiangqiBoard 是当前 Node24 宿主缺口（见 R5.1 矩阵）；其余为常规 image/files/colors 能力。"
+  },
+  "notes": [
+    "识别入口：旧仓库 experiments/vision/recognize-board.js 的 recognizeImage(path)（离线读图，不截图、不依赖浮窗）。",
+    "FEN：layout 为 FEN 布局字段（placement）；f01 有 2 个未知格（'?'），不能直接当合法 FEN；skin-a 0 未知可作合法 placement。轮次未知故不附 w/b。",
+    "棋盘几何来自 Canny/Hough 检测（9 竖线/10 横线 + 32 圆点）；f01 的 Canny bbox (27,642,1032,1144) 与 frame-bench 的 color-threshold bbox (12,632,1056,1160) 独立对照 IoU=0.964（两套完全独立的方法互证）。",
+    "计时为真机单次运行（每帧 2 轮，layout/grid 完全一致；wall ~370ms，locate ~100-120ms + detect ~16-18ms + 判色 ~115ms）。"
+  ],
+  "artifacts": {
+    "probe": "quickjs-baseline-probe.js（需放在 r5-chess/ 工程根运行）",
+    "bundle": "r5-chess/（旧仓库最小拷贝：src + experiments + assets/models(v5r) + assets/glyph-tpl + assets/board-sift + project.json）",
+    "rawRuns": [
+      "r5-baseline-raw-run1.json",
+      "r5-baseline-raw-run2.json"
+    ]
+  }
+}
