@@ -2,7 +2,7 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
-> **当前状态（2026-10-19，dev-1112）**：HEAD `45fae285`；dev 更新通道 **dev-1112**（Flutter 构建，约 132.1 MB，K40 已装）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24`；MCP 默认端口 **8765**。当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
+> **当前状态（2026-10-20，dev-1154）**：HEAD `b7877e05`；dev 更新通道 **dev-1154**（Flutter-only 构建，约 127.3 MB）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24_1..3`（Node 进程池）；UI 统一 Flutter，Miuix 已移出构建；MCP 默认端口 **8765**。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
 
 ## 当前状态
 
