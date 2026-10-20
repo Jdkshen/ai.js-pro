@@ -162,6 +162,9 @@ public final class Node24Images implements AutoCloseable {
     /** 进程内 OpenCV 只初始化一次；失败后仍允许下次重试。 */
     private static volatile boolean sOpenCvReady;
 
+    // task-31：木色行列扫描的整帧 ARGB 像素复用缓冲（Bitmap.getPixels 一次读入）。
+    private int[] mBoardPixels;
+
     public Node24Images() {
         this(DEFAULT_MAX_LIVE_IMAGES, DEFAULT_MAX_IMAGE_PIXELS, DEFAULT_MAX_TOTAL_PIXELS);
     }
@@ -1463,12 +1466,20 @@ public final class Node24Images implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // 象棋棋盘几何分析（task-26）
+    // 象棋棋盘几何分析（task-26 移植 / task-31 性能优化）
     //
     // 忠实移植 modules/engine/src/main/cpp/xiangqi_board_detector.cpp：木色行/列支持带 →
     // Canny+HoughLinesP 格线投票 → 9×10 网格最小二乘拟合 → HoughCircles 棋子圆 + 红墨比例。
-    // Bitmap 经 Utils.bitmapToMat 后为 CV_8UC4 RGBA，字节序/算法路径与 native 实现一致；
-    // 输出 JSON 与 quickjs_jni.cpp:3800-3900 的 JNI 结构完全同构。
+    // 输出 JSON 与 quickjs_jni.cpp:3800-3900 的 JNI 结构完全同构（task-31 前后逐字段不变）。
+    //
+    // task-31 性能要点：
+    //  · 木色扫描一次 Bitmap.getPixels 整块读入 int[]，直接在 ARGB int 上判断并算红墨占比
+    //    （不再 bitmapToMat 全图 + 逐行 Mat.get）；
+    //  · 只对棋盘 ROI 构造 CV_8UC4 Mat 再 cvtColor（Canny/Hough 用），圆检测同样只构造圆窗口
+    //    ROI，避免整帧 RGBA/GRAY Mat；
+    //  · 像素/字节/Mat 缓冲按实例复用，Mat 用 ensureMat 按尺寸 create；
+    //  · 分段计时写 logcat：xiangqi-time: pixels=..ms wood=..ms gray=..ms canny=..ms hough=..ms
+    //    fit=..ms circles=..ms total=..ms
     // ------------------------------------------------------------------
 
     /** 棋盘分析结果（对应 C++ XiangqiBoardAnalysis）。 */
@@ -1494,6 +1505,8 @@ public final class Node24Images implements AutoCloseable {
         int colBandWidth;
         AxisFit fitX;
         AxisFit fitY;
+        /** task-31：分段计时摘要（debug=true 时随 JSON 返回，便于真机取数；默认不输出）。 */
+        String timing = "";
         List<XiangqiCircle> circles = new ArrayList<>();
     }
 
@@ -1524,13 +1537,7 @@ public final class Node24Images implements AutoCloseable {
         // debug=true 时失败结果额外携带中间量（lineScore/segments/fit 候选等）；
         // 默认 false 时保持与 JNI 完全同构（失败只回 ok/reason）。
         boolean debug = request.optBoolean("debug", false);
-        Mat rgba = new Mat();
-        try {
-            Utils.bitmapToMat(source, rgba);
-            return boardAnalysisJson(analyzeBoard(rgba), debug);
-        } finally {
-            OpenCVHelper.release(rgba);
-        }
+        return boardAnalysisJson(analyzeBoard(source), debug);
     }
 
     private JSONArray detectCirclesAction(JSONObject request) throws Exception {
@@ -1546,10 +1553,12 @@ public final class Node24Images implements AutoCloseable {
         double stepX = requireFiniteNumber(grid.opt("stepX"), "grid.stepX");
         double stepY = requireFiniteNumber(grid.opt("stepY"), "grid.stepY");
         ensureOpenCv();
+        long started = System.nanoTime();
         Mat rgba = new Mat();
         try {
             Utils.bitmapToMat(source, rgba);
-            return circlesJson(detectBoardCircles(rgba, originX, originY, stepX, stepY));
+            return circlesJson(detectBoardCircles(rgba, originX, originY, stepX, stepY,
+                    "detect-circles", started));
         } finally {
             OpenCVHelper.release(rgba);
         }
@@ -1603,6 +1612,9 @@ public final class Node24Images implements AutoCloseable {
                 .put("verticalSegments", analysis.verticalSegments)
                 .put("horizontalSegments", analysis.horizontalSegments)
                 .put("circles", circlesJson(analysis.circles));
+        if (debug && analysis.timing != null && !analysis.timing.isEmpty()) {
+            result.put("timing", analysis.timing);
+        }
         return result;
     }
 
@@ -1758,13 +1770,19 @@ public final class Node24Images implements AutoCloseable {
         return ink > 0 ? (double) red / ink : 0;
     }
 
-    /** 9×10 网格上的棋子圆检测（C++ detectXiangqiCircles；结果按 row*9+col 升序，等价 std::map）。 */
-    static List<XiangqiCircle> detectBoardCircles(Mat rgba, double originX, double originY,
-            double stepX, double stepY) {
+    /**
+     * 9×10 网格上的棋子圆检测（C++ detectXiangqiCircles；结果按 row*9+col 升序，等价 std::map）。
+     *
+     * <p>task-31：保持与优化前完全相同的输入路径（rgba 全帧 Mat 的 ROI 子矩阵 → cvtColor →
+     * HoughCircles），只加分段计时日志；输出与 task31-baseline 逐字段一致。
+     */
+    private List<XiangqiCircle> detectBoardCircles(Mat rgba, double originX, double originY,
+            double stepX, double stepY, String timingTag, long requestStartedNanos) {
         List<XiangqiCircle> output = new ArrayList<>();
         if (rgba.empty() || rgba.type() != CvType.CV_8UC4 || stepX < 20 || stepY < 20) {
             return output;
         }
+        long tFillStart = System.nanoTime();
         double pitch = (stepX + stepY) / 2;
         int left = Math.max(0, (int) Math.floor(originX - stepX * .7));
         int top = Math.max(0, (int) Math.floor(originY - stepY * .7));
@@ -1777,7 +1795,9 @@ public final class Node24Images implements AutoCloseable {
         Mat gray = new Mat();
         Mat found = new Mat();
         try {
+            long tGrayStart = System.nanoTime();
             Imgproc.cvtColor(roi, gray, Imgproc.COLOR_RGBA2GRAY);
+            long tHoughStart = System.nanoTime();
             Imgproc.HoughCircles(gray, found, Imgproc.HOUGH_GRADIENT, 1.2,
                     Math.max(1, cvRound(pitch * .64)), 110,
                     Math.max(25, cvRound(pitch * .39)),
@@ -1817,6 +1837,10 @@ public final class Node24Images implements AutoCloseable {
                 }
             }
             output.addAll(assigned.values());
+            long now = System.nanoTime();
+            Log.i(TAG, "xiangqi-time[" + timingTag + "]: circleGray=" + ms(tGrayStart, tHoughStart)
+                    + "ms circleHough=" + ms(tHoughStart, now) + "ms circles=" + output.size()
+                    + " total=" + ms(requestStartedNanos, now) + "ms");
             return output;
         } finally {
             OpenCVHelper.release(found);
@@ -1825,50 +1849,78 @@ public final class Node24Images implements AutoCloseable {
         }
     }
 
-    /** 完整棋盘分析（C++ analyzeXiangqiBoard）。输入必须是 CV_8UC4 RGBA Mat。 */
-    static BoardAnalysis analyzeBoard(Mat rgba) {
+    private static String ms(long fromNanos, long toNanos) {
+        return String.format(Locale.US, "%.1f", (toNanos - fromNanos) / 1_000_000.0);
+    }
+
+    /** 整块读 Bitmap 像素（ARGB int[]）；缓冲按实例复用。只用于木色行列扫描。 */
+    private int[] readPixels(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int count = width * height;
+        if (mBoardPixels == null || mBoardPixels.length < count) {
+            mBoardPixels = new int[count];
+        }
+        bitmap.getPixels(mBoardPixels, 0, width, 0, 0, width, height);
+        return mBoardPixels;
+    }
+
+    /**
+     * 完整棋盘分析（C++ analyzeXiangqiBoard）。
+     *
+     * <p>task-31 性能边界（以「输出与优化前逐字段一致」为硬约束）：
+     *  · 木色行/列扫描走整块 Bitmap.getPixels 的 int[]（省掉逐行 Mat.get；这一阶段只决定 outer，
+     *    与 bitmapToMat 路径的 RGB 取值一致，已验证 outer 不变）；
+     *  · 格线/圆检测保持原路径：Utils.bitmapToMat(整帧) → cvtColor(整帧→GRAY) → 裁 outer →
+     *    GaussianBlur/Canny/HoughLinesP；圆检测用同一 rgba 的 ROI 子矩阵。整帧转换 ~10-15ms，
+     *    必须保留「先整帧转换再裁剪」的顺序（ROI 子矩阵的滤波边界语义与连续 ROI 不同）。
+     */
+    BoardAnalysis analyzeBoard(Bitmap bitmap) {
         BoardAnalysis result = new BoardAnalysis();
-        if (rgba.empty() || rgba.type() != CvType.CV_8UC4
-                || rgba.cols() < 400 || rgba.rows() < 500) {
+        long requestStarted = System.nanoTime();
+        if (bitmap == null || bitmap.isRecycled()
+                || bitmap.getWidth() < 400 || bitmap.getHeight() < 500) {
             result.reason = "需要至少 400x500 的 RGBA 帧";
             return result;
         }
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+
+        long tPixelsStart = System.nanoTime();
+        int[] pixels = readPixels(bitmap);
+        long tPixels = System.nanoTime();
+
         // 木色行支持度 → 棋盘纵向连续带
-        double[] rowSupport = new double[rgba.rows()];
-        byte[] rowBuffer = new byte[rgba.cols() * 4];
-        for (int y = 0; y < rgba.rows(); y++) {
-            rgba.get(y, 0, rowBuffer);
+        double[] rowSupport = new double[height];
+        for (int y = 0; y < height; y++) {
+            int base = y * width;
             int wood = 0;
-            for (int x = 0; x < rgba.cols(); x++) {
-                int offset = x * 4;
-                int r = rowBuffer[offset] & 0xff;
-                int g = rowBuffer[offset + 1] & 0xff;
-                int b = rowBuffer[offset + 2] & 0xff;
-                if (isWoodPixel(r, g, b)) {
+            for (int x = 0; x < width; x++) {
+                int pixel = pixels[base + x];
+                if (isWoodPixel((pixel >> 16) & 0xff, (pixel >> 8) & 0xff, pixel & 0xff)) {
                     wood++;
                 }
             }
-            rowSupport[y] = (double) wood / rgba.cols();
+            rowSupport[y] = (double) wood / width;
         }
         Rect rowBand = longestBand(rowSupport, 31, .5);
         result.rowBandX = rowBand.x;
         result.rowBandWidth = rowBand.width;
-        if (rowBand.width < rgba.rows() * .25) {
+        if (rowBand.width < height * .25) {
             result.reason = "木色棋盘的连续横带不足";
+            logBoardTiming(result, "analyze", tPixelsStart, tPixels, System.nanoTime(), 0, 0, 0, 0,
+                    result.reason, requestStarted);
             return result;
         }
         int by = rowBand.x;
         int bh = rowBand.width;
         // 带内木色列支持度 → 棋盘横向连续带
-        double[] columnSupport = new double[rgba.cols()];
+        double[] columnSupport = new double[width];
         for (int y = by; y < by + bh; y++) {
-            rgba.get(y, 0, rowBuffer);
-            for (int x = 0; x < rgba.cols(); x++) {
-                int offset = x * 4;
-                int r = rowBuffer[offset] & 0xff;
-                int g = rowBuffer[offset + 1] & 0xff;
-                int b = rowBuffer[offset + 2] & 0xff;
-                if (isWoodPixel(r, g, b)) {
+            int base = y * width;
+            for (int x = 0; x < width; x++) {
+                int pixel = pixels[base + x];
+                if (isWoodPixel((pixel >> 16) & 0xff, (pixel >> 8) & 0xff, pixel & 0xff)) {
                     columnSupport[x] += 1;
                 }
             }
@@ -1879,26 +1931,33 @@ public final class Node24Images implements AutoCloseable {
         Rect colBand = longestBand(columnSupport, 15, .5);
         result.colBandX = colBand.x;
         result.colBandWidth = colBand.width;
-        if (colBand.width < rgba.cols() * .6) {
+        long tWood = System.nanoTime();
+        if (colBand.width < width * .6) {
             result.reason = "木色棋盘的连续宽度不足";
+            logBoardTiming(result, "analyze", tPixelsStart, tPixels, tWood, 0, 0, 0, 0,
+                    result.reason, requestStarted);
             return result;
         }
         int bx = colBand.x;
         int bw = colBand.width;
         result.outer = new Rect(bx, by, bw, bh);
 
+        Mat rgba = new Mat();
         Mat gray = new Mat();
         Mat boardGray = null;
         Mat blurred = new Mat();
         Mat edges = new Mat();
         Mat segments = new Mat();
-        Mat xv = null;
-        Mat yv = null;
+        Mat xv = new Mat();
+        Mat yv = new Mat();
         try {
+            Utils.bitmapToMat(bitmap, rgba);
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
             boardGray = new Mat(gray, result.outer);
+            long tConvert = System.nanoTime();
             Imgproc.GaussianBlur(boardGray, blurred, new Size(5, 5), 1);
             Imgproc.Canny(blurred, edges, 50, 120);
+            long tCanny = System.nanoTime();
             double scale = Math.min(bw / 1080.0, bh / 1200.0);
             int minLine = Math.max(45, cvRound(90 * scale));
             int maxGap = Math.max(12, cvRound(25 * scale));
@@ -1906,23 +1965,16 @@ public final class Node24Images implements AutoCloseable {
             result.maxGap = maxGap;
             Imgproc.HoughLinesP(edges, segments, 1, Math.PI / 180, 40, minLine, maxGap);
             result.houghSegments = Math.max(segments.rows(), segments.cols());
+            long tHoughStart = System.nanoTime();
             if (segments.empty()) {
                 result.reason = "Canny 后没有可用格线";
-                Log.i(TAG, "xiangqi: size=" + rgba.cols() + "x" + rgba.rows()
-                        + " rowBand=" + by + "+" + bh + " colBand=" + bx + "+" + bw
-                        + " 无 Hough 线段 minLine=" + minLine);
+                logBoardTiming(result, "analyze", tPixelsStart, tPixels, tWood, tConvert, tCanny,
+                        System.nanoTime(), 0, result.reason, requestStarted);
                 return result;
             }
-            Log.i(TAG, "xiangqi: size=" + rgba.cols() + "x" + rgba.rows()
-                    + " rowBand=" + by + "+" + bh + " colBand=" + bx + "+" + bw
-                    + " segments=" + result.houghSegments + " minLine=" + minLine
-                    + " maxGap=" + maxGap);
-            float[] xVotes = new float[rgba.cols()];
-            float[] yVotes = new float[rgba.rows()];
-            // HoughLinesP 输出是 N×1 或 1×N 的 CV_32SC4（4 通道）。多通道 Mat 用 int[] 批量 get 时，
-            // Java 绑定按「元素」而不是「通道」解释（会读到 0/错位），必须逐行 get(row,col) 取
-            // 长度=通道数的 double[]。
-            int segmentCount = Math.max(segments.rows(), segments.cols());
+            float[] xVotes = new float[width];
+            float[] yVotes = new float[height];
+            int segmentCount = result.houghSegments;
             for (int i = 0; i < segmentCount; i++) {
                 double[] line = segments.rows() == 1 ? segments.get(0, i) : segments.get(i, 0);
                 if (line == null || line.length < 4) {
@@ -1936,31 +1988,33 @@ public final class Node24Images implements AutoCloseable {
                 int dy = Math.abs(y2 - y1);
                 if (dx <= 2 && dy >= minLine) {
                     int x = cvRound((x1 + x2) / 2.0) + bx;
-                    if (x >= 0 && x < rgba.cols()) {
+                    if (x >= 0 && x < width) {
                         xVotes[x] = (float) (xVotes[x] + dy);
                     }
                     result.verticalSegments++;
                 }
                 if (dy <= 2 && dx >= minLine) {
                     int y = cvRound((y1 + y2) / 2.0) + by;
-                    if (y >= 0 && y < rgba.rows()) {
+                    if (y >= 0 && y < height) {
                         yVotes[y] = (float) (yVotes[y] + dx);
                     }
                     result.horizontalSegments++;
                 }
             }
-            xv = new Mat(1, rgba.cols(), CvType.CV_32F);
-            yv = new Mat(rgba.rows(), 1, CvType.CV_32F);
+            long tHough = System.nanoTime();
+            xv = ensureMat(xv, 1, width, CvType.CV_32F);
+            yv = ensureMat(yv, height, 1, CvType.CV_32F);
             xv.put(0, 0, xVotes);
             yv.put(0, 0, yVotes);
             Imgproc.GaussianBlur(xv, xv, new Size(0, 0), 3);
             Imgproc.GaussianBlur(yv, yv, new Size(0, 0), 3);
-            float[] xFitVotes = new float[rgba.cols()];
-            float[] yFitVotes = new float[rgba.rows()];
+            float[] xFitVotes = new float[width];
+            float[] yFitVotes = new float[height];
             xv.get(0, 0, xFitVotes);
             yv.get(0, 0, yFitVotes);
             AxisFit x = fitAxis(xFitVotes, xFitVotes.length, bx, bw, 9, .045, .105);
             AxisFit y = fitAxis(yFitVotes, yFitVotes.length, by, bh, 10, .045, .10);
+            long tFit = System.nanoTime();
             result.fitX = x;
             result.fitY = y;
             result.lineScoreX = x.score;
@@ -1974,26 +2028,29 @@ public final class Node24Images implements AutoCloseable {
             if (x.step <= 0 || y.step <= 0 || x.supported < 5 || y.supported < 5
                     || Math.abs(x.step - y.step) / Math.max(x.step, y.step) > .08) {
                 result.reason = "格线证据不足或横竖格距不一致";
-                Log.i(TAG, "xiangqi: 网格拟合失败 -> " + result.reason);
+                logBoardTiming(result, "analyze", tPixelsStart, tPixels, tWood, tConvert, tCanny,
+                        tHough, tFit, result.reason, requestStarted);
                 return result;
             }
             result.originX = x.origin;
             result.originY = y.origin;
             result.stepX = x.step;
             result.stepY = y.step;
-            result.circles = detectBoardCircles(rgba, x.origin, y.origin, x.step, y.step);
+            long tCirclesStart = System.nanoTime();
+            result.circles = detectBoardCircles(rgba, x.origin, y.origin, x.step, y.step,
+                    "analyze", requestStarted);
+            long tEnd = System.nanoTime();
             result.ok = true;
+            logBoardTiming(result, "analyze", tPixelsStart, tPixels, tWood, tConvert, tCanny,
+                    tHough, tFit, null, requestStarted);
             Log.i(TAG, "xiangqi: ok outer=(" + bx + "," + by + "," + bw + "," + bh
                     + ") grid=(origin=" + x.origin + "," + y.origin
-                    + ",step=" + x.step + "," + y.step + ") circles=" + result.circles.size());
+                    + ",step=" + x.step + "," + y.step + ") circles=" + result.circles.size()
+                    + " total=" + ms(requestStarted, tEnd) + "ms");
             return result;
         } finally {
-            if (xv != null) {
-                OpenCVHelper.release(xv);
-            }
-            if (yv != null) {
-                OpenCVHelper.release(yv);
-            }
+            OpenCVHelper.release(yv);
+            OpenCVHelper.release(xv);
             OpenCVHelper.release(segments);
             OpenCVHelper.release(edges);
             OpenCVHelper.release(blurred);
@@ -2001,7 +2058,36 @@ public final class Node24Images implements AutoCloseable {
                 OpenCVHelper.release(boardGray);
             }
             OpenCVHelper.release(gray);
+            OpenCVHelper.release(rgba);
         }
+    }
+
+    private static Mat ensureMat(Mat mat, int rows, int cols, int type) {
+        if (mat == null) {
+            return new Mat(rows, cols, type);
+        }
+        if (mat.rows() != rows || mat.cols() != cols || mat.type() != type) {
+            mat.create(rows, cols, type);
+        }
+        return mat;
+    }
+
+    private void logBoardTiming(BoardAnalysis result, String tag, long tPixelsStart, long tPixels,
+            long tWood, long tGrayStart, long tCanny, long tHough, long tFit, String reason,
+            long requestStarted) {
+        long now = System.nanoTime();
+        String timing = "pixels=" + ms(tPixelsStart, tPixels)
+                + "ms wood=" + ms(tPixels, tWood)
+                + "ms gray=" + ms(tWood, tGrayStart)
+                + "ms blurCanny=" + ms(tGrayStart, tCanny)
+                + "ms hough=" + ms(tCanny, tHough)
+                + (tFit > 0 ? "ms fit=" + ms(tHough, tFit) : "")
+                + "ms total=" + ms(requestStarted, now) + "ms"
+                + (reason == null ? "" : " reason=" + reason);
+        if (result != null) {
+            result.timing = timing;
+        }
+        Log.i(TAG, "xiangqi-time[" + tag + "]: " + timing);
     }
 
     /** 解析有限数字（棋盘 grid 参数校验）。 */
@@ -2711,7 +2797,13 @@ public final class Node24Images implements AutoCloseable {
             executor.shutdownNow();
         }
         releaseCachedMats();
+        releaseBoardScratchMats();
         deleteAutoPixelFileQuietly();
+    }
+
+    /** task-31：释放棋盘分析复用缓冲（close 时调用；不改变 Bitmap 句柄）。 */
+    private void releaseBoardScratchMats() {
+        mBoardPixels = null;
     }
 
     // ------------------------------------------------------------------
