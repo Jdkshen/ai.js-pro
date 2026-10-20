@@ -2,9 +2,10 @@
 
 给 AI 助手 / 自动化 agent 的项目约定。dsh（DeepSeek Harness）、Codex、Copilot、Claude Code 都会读这个文件。
 
-> **接手当前进度看这里**：[`docs/reports/2026-10-18_收尾交接_给Codex_v2.md`](docs/reports/2026-10-18_收尾交接_给Codex_v2.md)
-> 末尾的「2026-10-19 20:30 更新（dev-1112）」。当前 HEAD `45fae285`，dev 更新通道 **dev-1112**
->（Flutter 构建，约 132.1 MB，K40 已装），三引擎 Rhino / QuickJS / Node24，多进程 `:script` / `:native` / `:node24`。
+> **接手总纲（先读这个）**：[`docs/HANDOFF_AI.md`](docs/HANDOFF_AI.md) —— 主架构图、构建/发布、真机测试套路、已知缺口、分支策略。
+> 最新进度：[`docs/reports/2026-10-18_收尾交接_给Codex_v2.md`](docs/reports/2026-10-18_收尾交接_给Codex_v2.md)
+> 当前基线：**dev-1154**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
+> 主架构已冻结，实验/垂直业务走 `sandbox/*` 分支（见 HANDOFF_AI §8）。
 > 当前剩余项见 [`docs/REMAINING_WORK.md`](docs/REMAINING_WORK.md) §0；旧接手指南
 > [`docs/reports/2026-09-12_接手指南_Codex.md`](docs/reports/2026-09-12_接手指南_Codex.md) 仅作历史参考。
 
