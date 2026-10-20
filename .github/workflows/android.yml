@@ -40,6 +40,7 @@ jobs:
       - name: Test and build Miuix compat/lite APKs
         run: |
           chmod +x ./gradlew
+          set -o pipefail
           ./gradlew \
             :app:testMiuixCompatDebugUnitTest \
             :app:testMiuixLiteDebugUnitTest \
@@ -47,7 +48,20 @@ jobs:
             :app:assembleMiuixCompatDebug \
             :app:assembleMiuixLiteDebug \
             :apkbuilder-plugin:assembleDebug \
-            --no-daemon
+            --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle-verify.log"
+
+      - name: Emit Gradle failure context
+        if: failure()
+        run: |
+          LOG="$RUNNER_TEMP/gradle-verify.log"
+          if [ -f "$LOG" ]; then
+            echo "=== gradle tail ==="
+            tail -n 150 "$LOG" || true
+            echo "=== failure lines (annotations) ==="
+            grep -n -i -E "error:|FAILED|What went wrong|Caused by:|Exception|BUILD FAILED|Could not|OutOfMemory" "$LOG" | tail -n 25 | while IFS= read -r line; do echo "::error::$line"; done
+          else
+            echo "::error::gradle log missing"
+          fi
 
       - name: Upload debug APKs
         uses: actions/upload-artifact@v4
