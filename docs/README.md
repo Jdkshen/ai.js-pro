@@ -6,6 +6,7 @@
 
 ## 当前状态
 
+- **[新环境编译问题与原作者补充清单（上游更新，2026-10-20）](reports/2026-10-20_新环境编译问题与补充清单_上游更新.md)**：回应外部新电脑编译反馈的 P0/P1（Flutter 外置源、AOT/payload 路径、Python 构建脚本、瘦身模板、3 个失败单测、文档/错误处理）现状，并给出「新环境从零编译步骤」；外部原文作为附录保留。
 - **[dev-1112 收尾交接（2026-10-19）](reports/2026-10-18_收尾交接_给Codex_v2.md)**：从 dev-1073 到 dev-1112 的逐版记录；末尾「2026-10-19 20:30 更新（dev-1112）」是当前最新进度：Rhino `:script` 无障碍反向通道、inrt 定时任务补全、三引擎回归全绿。
 - **[三引擎 API 与示例核对（2026-10-19）](reports/2026-10-19_三引擎API与示例核对.md)**：全量枚举 377 个示例文件，Rhino 150 / QuickJS 84 / Node 49 编译通过；QuickJS 227/227、Rhino 22/22、Node 21/21 真机回归；列出 QuickJS `:script`、Node 引擎/UI/模块、Rhino 跨进程等核心缺口。
 - [Rhino `:script` 无障碍事件回调（2026-10-19）](reports/2026-10-19_Rhino_script无障碍事件回调.md)：`IAutomationHostCallback` oneway AIDL + 主进程 delegate 转发；`auto.service` 远程代理；K40 收到 accessibility 46 条 / view_clicked 4 条 / toast 1 条。
