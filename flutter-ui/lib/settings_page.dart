@@ -864,6 +864,8 @@ class _TrashPageState extends State<TrashPage> {
 }
 
 
+
+
 /// 关于页（对齐高级版「关于项目与开发者」）：图标、名称/版本、作者/最近提交与链接。
 class GlassAboutPage extends StatefulWidget {
   const GlassAboutPage({super.key});
@@ -874,7 +876,9 @@ class GlassAboutPage extends StatefulWidget {
 
 class _GlassAboutPageState extends State<GlassAboutPage> {
   static const String _repoUrl = 'https://github.com/Jdkshen/ai.js-pro';
-  static const String _licenseUrl = 'https://github.com/Jdkshen/ai.js-pro/blob/main/LICENSE.md';
+  static const String _releasesUrl = 'https://github.com/Jdkshen/ai.js-pro/releases';
+  static const String _licenseUrl =
+      'https://github.com/Jdkshen/ai.js-pro/blob/main/LICENSE.md';
   Map<String, dynamic>? _info;
 
   @override
@@ -933,6 +937,12 @@ class _GlassAboutPageState extends State<GlassAboutPage> {
             ]));
   }
 
+  Widget _link(String label, IconData icon, VoidCallback onTap) => ListTile(
+        leading: Icon(icon),
+        title: Text(label),
+        onTap: onTap,
+      );
+
   @override
   Widget build(BuildContext context) {
     final muted = Theme.of(context).colorScheme.onSurface.withOpacity(.6);
@@ -945,9 +955,11 @@ class _GlassAboutPageState extends State<GlassAboutPage> {
     final commit = _text('gitCommit', '');
     final commitDate = _text('gitDate', '');
     final commitSubject = _text('gitSubject', '');
-    final commitTrailing = commit.isEmpty
-        ? '未知'
-        : <String>[commit, if (commitDate.isNotEmpty) commitDate].join(' · ');
+    final commitLine = [
+      '最近提交：' + (commit.isEmpty ? '未知' : commit),
+      if (commitDate.isNotEmpty) commitDate,
+      if (commitSubject.isNotEmpty) commitSubject,
+    ].join(' · ');
 
     return GlassBackground(
         child: Scaffold(
@@ -955,74 +967,97 @@ class _GlassAboutPageState extends State<GlassAboutPage> {
                 systemOverlayStyle: utilitySystemBars(context),
                 foregroundColor: Theme.of(context).colorScheme.onSurface,
                 title: const Text('关于')),
-            body: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  const SizedBox(height: 16),
-                  Center(
-                      child: ClipOval(
-                          child: Image.asset('assets/brand/icon_ai_js_pro.png',
-                              width: 96, height: 96, fit: BoxFit.cover))),
-                  const SizedBox(height: 16),
-                  const Text('AI.js Pro',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 26, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 6),
-                  Text('自动化工作流 JavaScript IDE',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 14, color: muted)),
-                  const SizedBox(height: 6),
-                  Text(versionLabel,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13, color: muted)),
-                  const SizedBox(height: 24),
-                  GlassSurface(
-                      blur: false,
-                      padding: EdgeInsets.zero,
-                      child: Column(children: [
-                        ListTile(
-                            leading: const Icon(Icons.person_outline),
-                            title: const Text('作者'),
-                            trailing: Text(author,
-                                style: TextStyle(fontSize: 14, color: muted))),
-                        ListTile(
-                            leading: const Icon(Icons.commit_outlined),
-                            title: const Text('最近提交'),
-                            subtitle: commitSubject.isEmpty
-                                ? null
-                                : Text(commitSubject,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
-                            trailing: Text(commitTrailing,
-                                style: TextStyle(fontSize: 12, color: muted))),
-                        const Divider(height: 1),
-                        ListTile(
-                            leading: const Icon(Icons.code),
-                            title: const Text('Github 仓库'),
-                            trailing: const Icon(Icons.chevron_right, size: 20),
-                            onTap: () => _openUrl(_repoUrl)),
-                        ListTile(
-                            leading: const Icon(Icons.bug_report_outlined),
-                            title: const Text('问题反馈 / 联系我们'),
-                            trailing: const Icon(Icons.chevron_right, size: 20),
-                            onTap: _issueReport),
-                        ListTile(
-                            leading: const Icon(Icons.article_outlined),
-                            title: const Text('开放源代码许可'),
-                            trailing: const Icon(Icons.chevron_right, size: 20),
-                            onTap: () => _openUrl(_licenseUrl)),
-                      ])),
-                  const SizedBox(height: 16),
-                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    TextButton(
-                        onPressed: () => _openUrl(_licenseUrl),
-                        child: const Text('《软件许可与服务协议》',
-                            style: TextStyle(fontSize: 12))),
-                    TextButton(
-                        onPressed: _showPrivacy,
-                        child: const Text('《隐私政策》',
-                            style: TextStyle(fontSize: 12))),
-                  ]),
-                ]))));
+            body: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                    child: ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                            child: Column(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        const SizedBox(height: 16),
+                                        Center(
+                                            child: ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(28),
+                                                child: Image.asset(
+                                                    'assets/brand/icon_ai_js_pro.png',
+                                                    width: 104,
+                                                    height: 104,
+                                                    fit: BoxFit.cover))),
+                                        const SizedBox(height: 16),
+                                        const Text('AI.js Pro',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                                fontSize: 24,
+                                                fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 6),
+                                        Text('自动化工作流 JavaScript IDE',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                                fontSize: 14, color: muted)),
+                                        const SizedBox(height: 6),
+                                        Text(versionLabel,
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                                fontSize: 13, color: muted)),
+                                        const SizedBox(height: 12),
+                                        Text('作者：$author',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                                fontSize: 12, color: muted)),
+                                        const SizedBox(height: 2),
+                                        Text(commitLine,
+                                            textAlign: TextAlign.center,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                                fontSize: 12, color: muted)),
+                                        const SizedBox(height: 24),
+                                        GlassSurface(
+                                            blur: false,
+                                            padding: EdgeInsets.zero,
+                                            child: Column(children: [
+                                              _link('Github 仓库', Icons.code,
+                                                  () => _openUrl(_repoUrl)),
+                                              _link(
+                                                  '更新日志',
+                                                  Icons.history,
+                                                  () => _openUrl(
+                                                      _releasesUrl)),
+                                              _link(
+                                                  '问题反馈 / 联系我们',
+                                                  Icons.bug_report_outlined,
+                                                  _issueReport),
+                                              _link(
+                                                  '开放源代码许可',
+                                                  Icons.article_outlined,
+                                                  () => _openUrl(
+                                                      _licenseUrl)),
+                                            ])),
+                                      ]),
+                                  Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        TextButton(
+                                            onPressed: () =>
+                                                _openUrl(_licenseUrl),
+                                            child: const Text(
+                                                '《软件许可与服务协议》',
+                                                style:
+                                                    TextStyle(fontSize: 12))),
+                                        TextButton(
+                                            onPressed: _showPrivacy,
+                                            child: const Text('《隐私政策》',
+                                                style:
+                                                    TextStyle(fontSize: 12))),
+                                      ]),
+                                ])))))));
   }
 }
