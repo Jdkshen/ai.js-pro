@@ -102,6 +102,22 @@ function Quote-PathForShell {
     $safe = $Path.Replace([string][char]39, '')
     return [string][char]39 + $safe + [string][char]39
 }
+function Push-Tree {
+    # Push every file individually: adb push of a CJK/space local directory into an
+    # existing remote dir flattens it on Windows, which breaks __dirname-relative reads.
+    param([string]$LocalDir, [string]$RemoteDir)
+    Invoke-Adb @('shell', 'mkdir', '-p', (Quote-PathForShell $RemoteDir)) | Out-Null
+    $items = @(Get-ChildItem -LiteralPath $LocalDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\node_modules\\' -and $_.FullName -notmatch '\\.git\\' })
+    foreach ($item in $items) {
+        $rel = Get-RelativePath -Base $LocalDir -Full $item.FullName
+        $dest = $RemoteDir + '/' + $rel
+        $destParent = ''
+        if ($dest.Contains('/')) { $destParent = $dest.Substring(0, $dest.LastIndexOf('/')) }
+        if (-not [string]::IsNullOrWhiteSpace($destParent)) { Invoke-Adb @('shell', 'mkdir', '-p', (Quote-PathForShell $destParent)) | Out-Null }
+        Invoke-Adb @('push', $item.FullName, $dest) | Out-Null
+    }
+}
 function Get-ProjectRootFor {
     param([System.IO.FileInfo]$File)
     $d = $File.Directory
@@ -205,6 +221,10 @@ if ($ListOnly) {
 }
 
 New-Item -ItemType Directory -Force -Path $outRoot, $logDir | Out-Null
+
+# 唤醒屏幕并解除锁屏，避免设备休眠导致 am start 后应用不前台。
+Invoke-Adb @('shell', 'input', 'keyevent', '224') -AllowFailure | Out-Null
+Invoke-Adb @('shell', 'wm', 'dismiss-keyguard') -AllowFailure | Out-Null
 Invoke-Adb @('shell', 'rm', '-rf', $remoteRoot) -AllowFailure | Out-Null
 Invoke-Adb @('shell', 'mkdir', '-p', $remoteRoot) | Out-Null
 
@@ -231,14 +251,24 @@ foreach ($record in $records) {
     $record.Index = $executed
     try {
         if ($null -ne $record.ProjectRoot) {
-            Invoke-Adb @('push', $record.ProjectRoot, ($remoteRoot + '/')) | Out-Null
             $projBase = Split-Path -Leaf $record.ProjectRoot
+            $projRemoteDir = $remoteRoot + '/' + $projBase
+            Push-Tree -LocalDir $record.ProjectRoot -RemoteDir $projRemoteDir
             $relInProj = $record.LocalPath.Substring($record.ProjectRoot.Length).TrimStart('\').Replace('\', '/')
-            $record.RemotePath = $remoteRoot + '/' + $projBase + '/' + $relInProj
+            $record.RemotePath = $projRemoteDir + '/' + $relInProj
         } else {
-            $parentRel = Split-Path -Parent $record.RelativePath
+            $parentRel = ''
+            if ($record.RelativePath.Contains('/')) { $parentRel = $record.RelativePath.Substring(0, $record.RelativePath.LastIndexOf('/')) }
             if (-not [string]::IsNullOrWhiteSpace($parentRel)) { Invoke-Adb @('shell', 'mkdir', '-p', (Quote-PathForShell ($remoteRoot + '/' + $parentRel))) | Out-Null }
             Invoke-Adb @('push', $record.LocalPath, ($remoteRoot + '/' + $record.RelativePath)) | Out-Null
+            # 同层非 .js 资产（png/jpg/jpeg/webp/json 等）一并推送，避免图片/模板/棋盘类示例缺资源。
+            $localParent = Split-Path -Parent $record.LocalPath
+            $siblingAssets = @(Get-ChildItem -LiteralPath $localParent -File -ErrorAction SilentlyContinue |
+                Where-Object { -not $_.Name.ToLowerInvariant().EndsWith('.js') })
+            foreach ($asset in $siblingAssets) {
+                $assetRel = Get-RelativePath -Base $samplesRoot -Full $asset.FullName
+                Invoke-Adb @('push', $asset.FullName, ($remoteRoot + '/' + $assetRel)) | Out-Null
+            }
             $record.RemotePath = $remoteRoot + '/' + $record.RelativePath
         }
         Invoke-Adb @('shell', 'am', 'force-stop', $packageName) -AllowFailure | Out-Null
@@ -274,9 +304,9 @@ foreach ($record in $records) {
         $logText | Set-Content -LiteralPath $logFile -Encoding UTF8
         $record.LogFile = $logFile
         $hasScriptError = $logText -match 'SCRIPT_ERROR|ScriptException: SCRIPT_ERROR'
-        if ($consentSeen -and -not $finished -and -not $AllowScreenCapture) {
+        if ($consentSeen -and -not $finished) {
             $record.Verdict = 'SKIP'
-            $record.Reason = '需要用户授权截图（检测到截图授权 Activity；可加 -AllowScreenCapture）'
+            $record.Reason = '需要用户授权截图（检测到录屏/截图授权流程但未自动通过；交互类可人工点允许）'
             $record.Evidence = Get-MatchingLines -Text $logText -Pattern 'CaptureConsent|MediaProjection|requestScreenCapture' -Limit 3
             $skipCount++
         } elseif ($null -ne $exitCode) {
