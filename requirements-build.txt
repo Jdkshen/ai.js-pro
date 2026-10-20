@@ -1,0 +1,3 @@
+# Build-time Python dependencies (used by Gradle verify/prepare tasks and tools).
+# Install before building: python3 -m pip install -r requirements-build.txt
+fonttools>=4.40

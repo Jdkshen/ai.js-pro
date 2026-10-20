@@ -29,6 +29,14 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build-time Python deps
+        run: python3 -m pip install -r requirements-build.txt
+
       - name: Test and build Miuix compat/lite APKs
         run: |
           chmod +x ./gradlew
