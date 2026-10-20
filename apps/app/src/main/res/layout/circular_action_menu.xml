@@ -63,7 +63,7 @@
         android:background="@drawable/circular_menu_item_stop"
         android:padding="11dp"
         android:src="@drawable/ic_close_white_48dp"
-        android:tint="@android:color/white"/>
+        app:tint="@android:color/white"/>
 
 
     <ImageView

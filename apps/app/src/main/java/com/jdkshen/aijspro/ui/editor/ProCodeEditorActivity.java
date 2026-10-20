@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.ui.editor;
 
+import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.BroadcastReceiver;
@@ -2520,6 +2521,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         }
     }
 
+    // 自定义返回：先关面板/抽屉/日志，再按是否有未保存修改弹确认；handleBackPressed 内部才调 super。
+    @SuppressLint("MissingSuperCall")
     @Override
     public void onBackPressed() {
         withAllSnapshots(new ArrayList<>(mTabs), 0, this::handleBackPressed);
