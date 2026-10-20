@@ -32,6 +32,8 @@
 # Pro ws-rpc 协议核心的 javac + JUnit 自测（不跑 Gradle、不连设备；见脚本头部说明）。
 !/tools/test-pro-rpc.ps1
 !/tools/test-engine-flavors-device.ps1
+# Node 示例真机回归工具（task-216）：自动发现/push/运行/判定 Node 示例，结果写 output/。
+!/tools/test-node-samples-device.ps1
 !/tools/verify-mcp-alignment-device.py
 !/tools/create-gh-proxy-manifest.py
 !/tools/observe-filelist.ps1
