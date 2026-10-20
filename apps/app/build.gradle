@@ -39,7 +39,7 @@ android {
         aidl true
     }
     defaultConfig {
-        applicationId "com.jdkshen.aijspro"
+        applicationId "com.jdkshen.aijspro.nodebench" // 实验旁路包名：不覆盖 dev-1153
         minSdkVersion versions.mini
         targetSdkVersion versions.target
         versionCode versions.appVersionCode
