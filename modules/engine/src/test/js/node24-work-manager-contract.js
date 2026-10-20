@@ -1,0 +1,34 @@
+'use strict';
+const assert = require('assert');
+const path = require('path');
+let result;
+globalThis.__autojsHostRaw = raw => {
+  const request = JSON.parse(raw);
+  if (request.kind === 'ui' && request.op === 'timedTask') return JSON.stringify({ok: true, value: result});
+  return JSON.stringify({ok: true, value: null});
+};
+require(path.resolve(__dirname, '../../main/assets/node24/prelude.js'));
+const work = $autojs.work_manager;
+(async () => {
+  result = {id: 42, scriptPath: '/weekly.js', millis: 46800000, daysOfWeek: [1, 3, 5, 7]};
+  const weekly = await work.addWeeklyTask({path: '/weekly.js', time: '13:00', daysOfWeek: ['日', '一', '三', '五']});
+  assert.deepStrictEqual(weekly.daysOfWeek, [0, 1, 3, 5]);
+  assert.strictEqual(weekly.path, '/weekly.js');
+  assert.strictEqual(weekly.type, 'TimedTask');
+  assert.strictEqual(weekly.action, null);
+  assert(weekly.dateTime instanceof Date);
+  assert.strictEqual(weekly.dateTime.getTime(), 46800000);
+  result = [{id: 43, scriptPath: '/daily.js', millis: 36000000, daysOfWeek: [1, 2, 3, 4, 5, 6, 7]}];
+  assert.deepStrictEqual((await work.queryTimedTasks())[0].daysOfWeek, [0, 1, 2, 3, 4, 5, 6]);
+  result = {id: 44, scriptPath: '/intent.js', action: 'probe.ACTION'};
+  const intent = await work.getIntentTask(44);
+  assert.strictEqual(intent.type, 'IntentTask');
+  assert.strictEqual(intent.action, 'probe.ACTION');
+  assert.strictEqual(intent.dateTime.getTime(), 0);
+  assert.deepStrictEqual(intent.daysOfWeek, []);
+  result = true;
+  assert.strictEqual(await work.removeTimedTask(42), true);
+  result = null;
+  assert.strictEqual(await work.getTimedTask(42), null);
+  console.log('PASS work_manager Task: real id, path, Date, ISO weekdays to Pro weekdays, query arrays, intent, booleans and null');
+})().catch(error => {console.error(error); process.exitCode = 1;});

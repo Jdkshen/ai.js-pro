@@ -291,6 +291,10 @@ public final class NodeUiHost {
                             .put("error", "work_manager 失败：" + error.getMessage());
                 }
             }
+            case "settings": {
+                request.put("domain", "settings");
+                return NodeUiActivityClient.get().work(context, request);
+            }
             case "floatingWindow": {
                 try {
                     return NodeUiActivityClient.get().overlay(context, request);

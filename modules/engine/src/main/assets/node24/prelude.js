@@ -1937,19 +1937,27 @@
     return { createDatastore: createDatastore };
   })();
   var settingsModule = (function () {
-    var known = {};
-    return new Proxy({}, {
-      get: function (target, prop) {
-        if (typeof prop === 'symbol') { return undefined; }
-        if (!known[prop]) {
-          known[prop] = {
-            get value() { try { return $autojs.storages.get('settings.' + prop, 'settings') === 'true'; } catch (e) { return false; } },
-            set value(v) { try { $autojs.storages.put('settings.' + prop, String(!!v), 'settings'); } catch (e) { } }
-          };
-        }
-        return known[prop];
+    var settings = {};
+    var keys = {stableMode: 'key_stable_mode',
+      enableAccessibilityServiceByRoot: 'key_enable_accessibility_service_by_root',
+      stopAllOnVolumeUp: 'key_use_volume_control_running', noConsoleOnLaunch: 'key_dont_show_main_activity',
+      foregroundService: 'key_foreground_service'};
+    function call(action, name, value) {
+      var request = {kind: 'ui', op: 'settings', domain: 'settings', action: action, name: name};
+      if (action === 'set') {
+        if (typeof value !== 'boolean') throw new TypeError('settings.' + name + '.value 需要 boolean');
+        request.value = value;
       }
+      var response = JSON.parse(globalThis.__autojsHostRaw(JSON.stringify(request)));
+      if (!response || response.ok !== true) throw apiError(response && response.error || 'settings 命令失败');
+      if (typeof response.value !== 'boolean') throw apiError('settings 宿主没有返回 boolean');
+      return response.value;
+    }
+    Object.keys(keys).forEach(function (name) {
+      settings[name] = {key: keys[name], get value() {return call('get', name);},
+        set value(value) {call('set', name, value);}};
     });
+    return settings;
   })();
   var powerManagerModule = {
     isIgnoringBatteryOptimizations: function () { try { return true; } catch (e) { return false; } },
@@ -5697,6 +5705,20 @@
 
   // task-144：真实 work_manager（主进程 TimedTaskManager/DB），经 kind:ui op:timedTask 桥。
   var workManagerReal = (function () {
+    function taskValue(value) {
+      if (Array.isArray(value)) return value.map(taskValue);
+      if (!value || typeof value !== 'object' || typeof value.id !== 'number') return value;
+      // The host scheduler uses ISO weekdays (Monday=1, Sunday=7); the Pro Node
+      // Task API exposes Sunday=0 and JS Date/path properties.
+      var task = Object.assign({}, value);
+      task.path = value.scriptPath;
+      task.type = typeof value.action === 'string' ? 'IntentTask' : 'TimedTask';
+      task.action = typeof value.action === 'string' ? value.action : null;
+      task.dateTime = new Date(Number(value.millis) || 0);
+      task.daysOfWeek = (value.daysOfWeek || []).map(function (day) { return day === 7 ? 0 : day; })
+        .sort(function (a, b) { return a - b; });
+      return task;
+    }
     function call(action, options, id) {
       var request = { kind: 'ui', op: 'timedTask', action: action };
       if (options !== undefined && options !== null) { request.options = options; }
@@ -5704,7 +5726,7 @@
       var raw = globalThis.__autojsHostRaw(JSON.stringify(request));
       var response = JSON.parse(raw);
       if (!response || response.ok !== true) { throw apiError((response && response.error) || 'work_manager 命令失败'); }
-      return response.value;
+      return taskValue(response.value);
     }
     function asyncCall(action, options, id) { return Promise.resolve().then(function () { return call(action, options, id); }); }
     return {

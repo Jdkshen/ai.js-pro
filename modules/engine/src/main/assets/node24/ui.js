@@ -777,6 +777,7 @@
             mainActivity = null;
             realActivity = null;
             realImageLoader = null;
+            if (globalThis.__ajsBindJavaView === realViewBinding) delete globalThis.__ajsBindJavaView;
             mainViews = {};
             Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
             Object.keys(viewBindings).forEach(function (key) { delete viewBindings[key]; });
@@ -1022,21 +1023,45 @@
             };
         }
         function uiFindViewById(idOrName) {
+            if (realUiMode) {
+                const activity = requireRealActivity();
+                const id = typeof idOrName === 'number' ? idOrName : javaSession().viewId(String(idOrName));
+                return id ? activity.findViewById(id) : null;
+            }
             var id = typeof idOrName === 'number' ? idOrName : 0;
             var name = typeof idOrName === 'string' ? idOrName : '';
             return uiWrapHandle(uiRequestView('findViewById', {id: id, name: name}));
         }
         function uiSetContentView(layoutOrView) {
+            if (realUiMode) {
+                requireRealActivity();
+                const view = layoutOrView && layoutOrView.__ajsJavaObject__ === true
+                    ? layoutOrView : uiInflate(layoutOrView);
+                javaSession().setContentView(view);
+                return view;
+            }
             var name = '';
             if (typeof layoutOrView === 'string') { name = layoutOrView; }
             else if (layoutOrView && layoutOrView.__layoutName) { name = layoutOrView.__layoutName; }
             return uiWrapHandle(uiRequestView('setContentView', {name: name}));
         }
         function uiInflate(layoutName) {
+            if (realUiMode) {
+                const activity = requireRealActivity();
+                const layout = layoutOf(layoutName);
+                const id = layout.layoutId || (layout.name && R.layout[layout.name]);
+                if (!id) throw new Error('未找到布局资源：' + String(layoutName));
+                return activity.getLayoutInflater().inflate(id, null);
+            }
             return uiWrapHandle(uiRequestView('inflate', {name: String(layoutName || '')}));
         }
-        function uiCurrentActivity() { return markerObject('Activity'); }
+        function requireRealActivity() {
+            if (!realActivity) throw new Error('当前没有运行中的 Node UI Activity');
+            return realActivity;
+        }
+        function uiCurrentActivity() { return realUiMode ? realActivity : markerObject('Activity'); }
         function uiGetWindow() {
+            if (realUiMode) return requireRealActivity().getWindow();
             return {
                 __nodeUiMarker: 'Window',
                 setStatusBarColor: function (color) { try { hostCall({op: 'setStatusBarColor', color: color}); } catch (error) { } return this; },

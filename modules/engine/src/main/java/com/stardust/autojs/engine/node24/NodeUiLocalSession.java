@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 /** Real Views and Java callbacks share an existing Node pool process. */
 public final class NodeUiLocalSession {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final Object STATE = new Object();
     private static volatile Pending pending;
     private static volatile Activity activity;
     private static volatile View content;
@@ -37,64 +38,84 @@ public final class NodeUiLocalSession {
     }
 
     public static JSONObject show(Context context, String projectDir, JSONObject request) throws Exception {
-        if (activity != null) throw new IllegalStateException("请先关闭当前 Node UI");
         Pending opening = new Pending();
-        pending = opening;
-        console = null;
-        callbacks = null;
-        synchronized (EVENTS) { EVENTS.clear(); }
-        String process = null;
-        ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-        java.util.List<ActivityManager.RunningAppProcessInfo> processes = manager.getRunningAppProcesses();
-        if (processes != null) for (ActivityManager.RunningAppProcessInfo info : processes) {
-            if (info.pid == android.os.Process.myPid()) process = info.processName;
+        synchronized (STATE) {
+            if (pending != null || activity != null) throw new IllegalStateException("请先关闭当前 Node UI");
+            pending = opening;
+            console = null;
+            callbacks = null;
+            synchronized (EVENTS) { EVENTS.clear(); }
         }
-        String suffix = process == null ? "" : process.substring(process.lastIndexOf(':') + 1);
-        if (!suffix.matches("node24_[123]")) {
-            pending = null;
-            throw new IllegalStateException("原生 Node UI 需要现有 Node 池进程，当前进程：" + process);
+        boolean opened = false;
+        try {
+            String process = null;
+            ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            java.util.List<ActivityManager.RunningAppProcessInfo> processes = manager.getRunningAppProcesses();
+            if (processes != null) for (ActivityManager.RunningAppProcessInfo info : processes) {
+                if (info.pid == android.os.Process.myPid()) process = info.processName;
+            }
+            String suffix = process == null ? "" : process.substring(process.lastIndexOf(':') + 1);
+            if (!suffix.matches("node24_[123]")) {
+                throw new IllegalStateException("原生 Node UI 需要现有 Node 池进程，当前进程：" + process);
+            }
+            Intent intent = new Intent().setClassName(context.getPackageName(),
+                    "com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot" + suffix.substring(suffix.length() - 1));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+            intent.putExtra("projectDir", projectDir);
+            intent.putExtra("layoutId", request.optInt("layoutId"));
+            intent.putExtra("layoutXml", request.optString("layoutXml"));
+            intent.putExtra("token", opening.token);
+            intent.putExtra("javaClassOwner", request.optString("javaClassOwner"));
+            context.startActivity(intent);
+            if (!opening.ready.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Node 进程内 Activity 加载超时");
+            }
+            synchronized (STATE) {
+                if (opening.error != null) throw new IllegalStateException(opening.error);
+                if (pending != opening || activity == null) throw new IllegalStateException("Node UI 启动已取消");
+                opened = true;
+                return new JSONObject().put("ok", true).put("mode", "local_activity")
+                        .put("views", views == null ? new JSONObject() : views);
+            }
+        } finally {
+            // Also invalidate launches whose await was interrupted or whose startActivity failed.
+            if (!opened) closeOpening(opening);
         }
-        Intent intent = new Intent().setClassName(context.getPackageName(),
-                "com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot" + suffix.substring(suffix.length() - 1));
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
-        intent.putExtra("projectDir", projectDir);
-        intent.putExtra("layoutId", request.optInt("layoutId"));
-        intent.putExtra("layoutXml", request.optString("layoutXml"));
-        intent.putExtra("token", opening.token);
-        intent.putExtra("javaClassOwner", request.optString("javaClassOwner"));
-        context.startActivity(intent);
-        if (!opening.ready.await(10, TimeUnit.SECONDS)) {
-            if (pending == opening) pending = null;
-            throw new IllegalStateException("Node 进程内 Activity 加载超时");
-        }
-        if (opening.error != null) throw new IllegalStateException(opening.error);
-        return new JSONObject().put("ok", true).put("mode", "local_activity")
-                .put("views", views == null ? new JSONObject() : views);
     }
 
     public static boolean attach(Activity source, String token, View root, JSONObject ids) {
-        Pending opening = pending;
-        if (opening == null || !opening.token.equals(token)) return false;
-        activity = source;
-        content = root;
-        views = ids;
-        event("create"); event("start"); event("resume"); event("content_view_set");
-        opening.ready.countDown();
-        return true;
+        synchronized (STATE) {
+            Pending opening = pending;
+            if (opening == null || opening.error != null || !opening.token.equals(token)) return false;
+            activity = source;
+            content = root;
+            views = ids;
+            event("create"); event("start"); event("resume"); event("content_view_set");
+            opening.ready.countDown();
+            return true;
+        }
     }
     public static void failed(String token, Throwable failure) {
-        Pending opening = pending;
-        if (opening != null && opening.token.equals(token)) {
-            opening.error = String.valueOf(failure);
-            opening.ready.countDown();
+        synchronized (STATE) {
+            Pending opening = pending;
+            if (opening != null && opening.token.equals(token)) {
+                opening.error = String.valueOf(failure);
+                opening.ready.countDown();
+            }
         }
     }
     public static void destroyed(Activity source) {
-        if (activity != source) return;
-        activity = null; content = null; pending = null; callbacks = null;
-        event("pause"); event("stop"); event("destroy");
-        views = null;
-        console = null;
+        synchronized (STATE) {
+            if (activity != source) return;
+            if (pending != null) {
+                pending.error = "Node UI 已关闭";
+                pending.ready.countDown();
+            }
+            activity = null; content = null; pending = null; callbacks = null;
+            event("pause"); event("stop"); event("destroy");
+            views = null;
+            console = null;
+        }
     }
     public static void event(String type) {
         try {
@@ -108,10 +129,24 @@ public final class NodeUiLocalSession {
         synchronized (EVENTS) { while (!EVENTS.isEmpty()) result.put(EVENTS.removeFirst()); }
         return result;
     }
-    public static boolean isShowing() { return activity != null; }
+    public static boolean isShowing() { return pending != null || activity != null; }
     public static Activity getActivity() { return activity; }
     public static View getContentView() { return content; }
-    public static int viewId(String name) { return views == null ? 0 : views.optInt(name); }
+    public static void setContentView(View root) {
+        if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("setContentView 需要主线程");
+        Activity owner = activity;
+        if (owner == null || owner.isFinishing()) throw new IllegalStateException("Node UI 已关闭");
+        owner.setContentView(root);
+        synchronized (STATE) {
+            if (activity != owner) return;
+            content = root;
+            event("content_view_set");
+        }
+    }
+    public static int viewId(String name) {
+        JSONObject ids = views;
+        return ids == null ? 0 : ids.optInt(name);
+    }
     public static ImageLoader getImageLoader() { return IMAGE_LOADER; }
     public interface ActivityCallbacks {
         boolean onCreateOptionsMenu(android.view.Menu menu);
@@ -143,8 +178,27 @@ public final class NodeUiLocalSession {
         current.println(line.level, line.text);
     }
     public static void close() {
-        Activity closing = activity;
-        pending = null;
+        closeOpening(null);
+    }
+    private static void closeOpening(Pending expected) {
+        final Activity closing;
+        synchronized (STATE) {
+            if (expected != null && pending != expected) return;
+            Pending opening = pending;
+            closing = activity;
+            pending = null;
+            activity = null;
+            content = null;
+            views = null;
+            callbacks = null;
+            console = null;
+            if (opening != null) {
+                opening.error = "Node UI 启动或运行已取消";
+                opening.ready.countDown();
+            }
+        }
+        // A later attach must see the invalidated token and finish itself. An already
+        // attached Activity is captured here so its destroy cannot clear a newer session.
         if (closing != null) MAIN.post(() -> { if (!closing.isFinishing()) closing.finish(); });
     }
 

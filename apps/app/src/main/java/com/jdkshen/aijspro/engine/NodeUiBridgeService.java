@@ -141,6 +141,15 @@ public class NodeUiBridgeService extends Service {
 
     /** task-144：主进程真实 work_manager（反射 app 的 WorkManagerModule，TimedTaskManager 持久化+调度）。 */
     private void handleWork(final String requestJson, final Messenger replyTo) {
+        org.json.JSONObject settingsRequest = settingsRequestOrNull(requestJson);
+        if (settingsRequest != null) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                handleSettings(settingsRequest, replyTo);
+            } else {
+                new Handler(Looper.getMainLooper()).post(() -> handleSettings(settingsRequest, replyTo));
+            }
+            return;
+        }
         mWork.execute(() -> {
             String result;
             try {
@@ -183,6 +192,33 @@ public class NodeUiBridgeService extends Service {
             bundle.putString(NodeUiProtocol.K_RESULT, result);
             reply(replyTo, NodeUiProtocol.MSG_WORK, "", true, null, bundle);
         });
+    }
+
+    /** domain=settings 的请求走 Pref 读写；其余请求保持原 work_manager 分支。 */
+    private static org.json.JSONObject settingsRequestOrNull(String requestJson) {
+        try {
+            org.json.JSONObject request = new org.json.JSONObject(requestJson == null ? "{}" : requestJson);
+            return NodeSettingsBridge.DOMAIN.equals(request.optString("domain", "")) ? request : null;
+        } catch (org.json.JSONException ignored) {
+            return null;
+        }
+    }
+
+    /** 必须在主线程执行：前台服务启停与 Pref 监听器初始化依赖主线程。 */
+    private void handleSettings(org.json.JSONObject request, Messenger replyTo) {
+        String result;
+        try {
+            result = NodeSettingsBridge.execute(request).toString();
+        } catch (Throwable error) {
+            Log.w(TAG, "settings command failed", error);
+            try {
+                result = new org.json.JSONObject().put("ok", false)
+                        .put("error", String.valueOf(error.getCause() == null ? error.getMessage() : error.getCause().getMessage())).toString();
+            } catch (Throwable ignored) { result = "{\"ok\":false,\"error\":\"settings 失败\"}"; }
+        }
+        Bundle bundle = new Bundle();
+        bundle.putString(NodeUiProtocol.K_RESULT, result);
+        reply(replyTo, NodeUiProtocol.MSG_WORK, "", true, null, bundle);
     }
 
     private static Object invokeModule(Object module, String method, Object arg) throws Exception {
