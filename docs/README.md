@@ -2,10 +2,11 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
-> **当前状态（2026-10-20，dev-1158）**：HEAD `3bba18c7`；dev 更新通道 **dev-1158**（Flutter-only 构建，约 128.0 MB）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24_1..3`（Node 进程池）；UI 统一 Flutter，Miuix 已移出构建；CI `Android CI and Release / verify` 全绿；MCP 默认端口 **8765**。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
+> **当前状态（2026-10-20，dev-1159）**：HEAD `f1dc0ddb`；dev 更新通道 **dev-1159**（Flutter-only 构建，约 128.0 MB）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24_1..3`（Node 进程池）；UI 统一 Flutter，Miuix 已移出构建；CI `Android CI and Release / verify` 全绿；MCP 默认端口 **8765**。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
 
 ## 当前状态
 
+- **[关于页对齐高级版（2026-10-20，dev-1159）](reports/2026-10-20_关于页对齐高级版.md)**：设置 → 关于改为独立页面，对齐高级版「关于项目与开发者」：图标/名称/版本/作者/最近提交 + Github/问题反馈/许可/隐私链接。
 - **[新环境编译问题与原作者补充清单（上游更新，2026-10-20）](reports/2026-10-20_新环境编译问题与补充清单_上游更新.md)**：回应外部新电脑编译反馈的 P0/P1（Flutter 外置源、AOT/payload 路径、Python 构建脚本、瘦身模板、3 个失败单测、文档/错误处理）现状，并给出「新环境从零编译步骤」；外部原文作为附录保留。
 - **[dev-1112 收尾交接（2026-10-19）](reports/2026-10-18_收尾交接_给Codex_v2.md)**：从 dev-1073 到 dev-1112 的逐版记录；末尾「2026-10-19 20:30 更新（dev-1112）」是当前最新进度：Rhino `:script` 无障碍反向通道、inrt 定时任务补全、三引擎回归全绿。
 - **[三引擎 API 与示例核对（2026-10-19）](reports/2026-10-19_三引擎API与示例核对.md)**：全量枚举 377 个示例文件，Rhino 150 / QuickJS 84 / Node 49 编译通过；QuickJS 227/227、Rhino 22/22、Node 21/21 真机回归；列出 QuickJS `:script`、Node 引擎/UI/模块、Rhino 跨进程等核心缺口。

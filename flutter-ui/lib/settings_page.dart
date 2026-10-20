@@ -239,59 +239,10 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage>
     }
   }
 
-  /// 关于：task-177 去 Miuix 后由 Flutter 自己展示（原 MiuixAboutActivity 已退役）。
-  /// 版本 / 作者 / 最近提交都由原生 aboutInfo 桥返回，APK 每版自动更新。
-  Future<void> openAboutPage() async {
-    Map<String, dynamic>? info;
-    try {
-      final result = await LocalBridge.call('aboutInfo');
-      if (result is Map) {
-        info = result.map((key, value) => MapEntry('$key', value));
-      }
-    } catch (_) {
-      // 桥不可用时仍展示静态关于页，不阻塞用户。
-    }
-    if (!mounted) return;
-    String textOf(String key, String fallback) {
-      final value = info?[key];
-      final text = value == null ? '' : '$value'.trim();
-      return (text.isEmpty || text == 'unknown') ? fallback : text;
-    }
-
-    final versionName = textOf('versionName', '');
-    final versionCode = textOf('versionCode', '');
-    final versionLabel = versionName.isEmpty
-        ? '未知'
-        : (versionCode.isEmpty ? versionName : '$versionName ($versionCode)');
-    final author = textOf('author', 'Jdkshen');
-    final commit = textOf('gitCommit', '');
-    final commitAuthor = textOf('gitAuthor', '');
-    final commitDate = textOf('gitDate', '');
-    final subject = textOf('gitSubject', '');
-    final commitParts = <String>[
-      if (commit.isNotEmpty) commit,
-      if (commitAuthor.isNotEmpty) commitAuthor,
-      if (commitDate.isNotEmpty) commitDate,
-    ];
-
-    showAboutDialog(
-        context: context,
-        applicationName: 'AI.js Pro',
-        applicationVersion: versionLabel,
-        applicationIcon: const Icon(Icons.code, size: 40),
-        applicationLegalese: 'AI.js Pro · 本地脚本运行器',
-        children: <Widget>[
-          const SizedBox(height: 12),
-          Text('作者：$author'),
-          const SizedBox(height: 4),
-          Text(commitParts.isEmpty ? '最近提交：未知' : '最近提交：${commitParts.join(' · ')}'),
-          if (subject.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text('提交说明：$subject'),
-          ],
-          const SizedBox(height: 12),
-          const Text('Flutter 玻璃界面版本。第三方开源组件的许可见「开源许可」。'),
-        ]);
+  /// 关于：对齐高级版「关于项目与开发者」——独立页面（图标 / 名称 / 版本 / 作者 / 最近提交 / 链接）。
+  void openAboutPage() {
+    Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const GlassAboutPage()));
   }
 
   /// 开源许可：Flutter 自带 LicensePage，读取 main.dart 里注册的 LicenseRegistry。
@@ -910,4 +861,168 @@ class _TrashPageState extends State<TrashPage> {
                                           onTap: loading || restoring != null ? null : () => restore(record))));
                             })))
           ])));
+}
+
+
+/// 关于页（对齐高级版「关于项目与开发者」）：图标、名称/版本、作者/最近提交与链接。
+class GlassAboutPage extends StatefulWidget {
+  const GlassAboutPage({super.key});
+
+  @override
+  State<GlassAboutPage> createState() => _GlassAboutPageState();
+}
+
+class _GlassAboutPageState extends State<GlassAboutPage> {
+  static const String _repoUrl = 'https://github.com/Jdkshen/ai.js-pro';
+  static const String _licenseUrl = 'https://github.com/Jdkshen/ai.js-pro/blob/main/LICENSE.md';
+  Map<String, dynamic>? _info;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    Map<String, dynamic>? info;
+    try {
+      final result = await LocalBridge.call('aboutInfo');
+      if (result is Map) {
+        info = result.map((key, value) => MapEntry('$key', value));
+      }
+    } catch (_) {
+      // 桥不可用时仍展示静态关于页。
+    }
+    if (mounted) setState(() => _info = info);
+  }
+
+  String _text(String key, String fallback) {
+    final value = _info?[key];
+    final text = value == null ? '' : '$value'.trim();
+    return (text.isEmpty || text == 'unknown') ? fallback : text;
+  }
+
+  Future<void> _openUrl(String url) async {
+    try {
+      await LocalBridge.call('openUrl', {'url': url});
+    } catch (e) {
+      if (mounted) message(context, '打开链接失败：$e');
+    }
+  }
+
+  Future<void> _issueReport() async {
+    try {
+      await LocalBridge.call('openIssueReport');
+    } catch (e) {
+      if (mounted) message(context, '$e');
+    }
+  }
+
+  void _showPrivacy() {
+    showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+            title: const Text('隐私政策'),
+            content: const Text('本应用不收集任何个人数据。脚本、日志、配置与运行记录都保存在本机；'
+                '无障碍、截图、悬浮窗等权限仅在系统授权后由本机使用。'
+                'MCP 与电脑连接只在你主动开启时监听本机/局域网，局域网访问需要 Access Token。'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('关闭'))
+            ]));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.onSurface.withOpacity(.6);
+    final versionName = _text('versionName', '');
+    final versionCode = _text('versionCode', '');
+    final versionLabel = versionName.isEmpty
+        ? '版本未知'
+        : (versionCode.isEmpty ? versionName : '$versionName ($versionCode)');
+    final author = _text('author', 'Jdkshen');
+    final commit = _text('gitCommit', '');
+    final commitDate = _text('gitDate', '');
+    final commitSubject = _text('gitSubject', '');
+    final commitTrailing = commit.isEmpty
+        ? '未知'
+        : <String>[commit, if (commitDate.isNotEmpty) commitDate].join(' · ');
+
+    return GlassBackground(
+        child: Scaffold(
+            appBar: AppBar(
+                systemOverlayStyle: utilitySystemBars(context),
+                foregroundColor: Theme.of(context).colorScheme.onSurface,
+                title: const Text('关于')),
+            body: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  const SizedBox(height: 16),
+                  Center(
+                      child: ClipOval(
+                          child: Image.asset('assets/brand/icon_ai_js_pro.png',
+                              width: 96, height: 96, fit: BoxFit.cover))),
+                  const SizedBox(height: 16),
+                  const Text('AI.js Pro',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 26, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Text('自动化工作流 JavaScript IDE',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 14, color: muted)),
+                  const SizedBox(height: 6),
+                  Text(versionLabel,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: muted)),
+                  const SizedBox(height: 24),
+                  GlassSurface(
+                      blur: false,
+                      padding: EdgeInsets.zero,
+                      child: Column(children: [
+                        ListTile(
+                            leading: const Icon(Icons.person_outline),
+                            title: const Text('作者'),
+                            trailing: Text(author,
+                                style: TextStyle(fontSize: 14, color: muted))),
+                        ListTile(
+                            leading: const Icon(Icons.commit_outlined),
+                            title: const Text('最近提交'),
+                            subtitle: commitSubject.isEmpty
+                                ? null
+                                : Text(commitSubject,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                            trailing: Text(commitTrailing,
+                                style: TextStyle(fontSize: 12, color: muted))),
+                        const Divider(height: 1),
+                        ListTile(
+                            leading: const Icon(Icons.code),
+                            title: const Text('Github 仓库'),
+                            trailing: const Icon(Icons.chevron_right, size: 20),
+                            onTap: () => _openUrl(_repoUrl)),
+                        ListTile(
+                            leading: const Icon(Icons.bug_report_outlined),
+                            title: const Text('问题反馈 / 联系我们'),
+                            trailing: const Icon(Icons.chevron_right, size: 20),
+                            onTap: _issueReport),
+                        ListTile(
+                            leading: const Icon(Icons.article_outlined),
+                            title: const Text('开放源代码许可'),
+                            trailing: const Icon(Icons.chevron_right, size: 20),
+                            onTap: () => _openUrl(_licenseUrl)),
+                      ])),
+                  const SizedBox(height: 16),
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    TextButton(
+                        onPressed: () => _openUrl(_licenseUrl),
+                        child: const Text('《软件许可与服务协议》',
+                            style: TextStyle(fontSize: 12))),
+                    TextButton(
+                        onPressed: _showPrivacy,
+                        child: const Text('《隐私政策》',
+                            style: TextStyle(fontSize: 12))),
+                  ]),
+                ]))));
+  }
 }
