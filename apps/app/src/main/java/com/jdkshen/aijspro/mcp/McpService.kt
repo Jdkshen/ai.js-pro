@@ -91,13 +91,14 @@ class McpService : Service() {
             McpStateStore.saveRunning(this, boundPort, localUrl, lanUrl)
             running = true
             lastError = null
-            // 恢复持久化的授权（记住上次开启状态）
-            allowWrite = McpSettings.writeAllowed(this)
-            allowExecution = McpSettings.executionAllowed(this)
+            // task-118：MCP 由用户手动/自动开启即视为完整授权——不再要求额外打开「编辑/运行授权」开关。
+            // 安全边界仍在网络层：局域网请求必须带 Bearer token（本机 loopback 免 token）。
+            allowWrite = true
+            allowExecution = true
             startHeartbeat()
             val auto = if (autoStarted) " · 自动" else ""
             autoStarted = false
-            record("服务已启动 · 局域网 · 端口 " + boundPort + auto + (if (allowWrite || allowExecution) " · 已恢复授权" else ""))
+            record("服务已启动 · 局域网 · 端口 " + boundPort + auto + " · 已授权读写/运行")
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(localUrl))
             Log.i(LOG_TAG, "C-MCP: state=running port=" + boundPort + " localUrl=" + localUrl + " lanUrl=" + lanUrl)
         } catch (error: Exception) {

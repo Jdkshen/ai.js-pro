@@ -131,7 +131,7 @@ internal class McpTools(private val context: Context, private val event: (String
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
         add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.3.0") })
-        addProperty("instructions", "默认只读。用户在手机端开启编辑授权后，客户端可创建/修改私有工作区，并调用 workspace_request_apply 直接应用到真实脚本；工具名为兼容旧客户端保留。应用时会校验原文件未被外部改动并保留备份，可在手机历史页回退。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
+        addProperty("instructions", "MCP 服务开启即拥有读写与运行权限（局域网访问仍需 Bearer token）。客户端可创建/修改私有工作区，并调用 workspace_request_apply 直接应用到真实脚本；应用时会校验原文件未被外部改动并保留备份，可在手机历史页回退。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
     }
 
     private fun listTools() = JsonObject().apply {
@@ -147,7 +147,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("get_execution", "读取任务状态、结果、异常或运行日志", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
-            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一）；需运行授权；支持双引擎、工作目录、config、等待及任务专属日志", McpToolSchema.runSchema()))
+            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一）；支持双引擎、工作目录、config、等待及任务专属日志", McpToolSchema.runSchema()))
             add(tool("list_engine_api", "枚举指定引擎（quickjs/rhino）当前可用的全局 API 名称列表", objSchema("engine")))
             add(tool("probe_engine_api", "探测指定引擎中某个全局 API 的类型与成员（object/function 及 Object.keys）", objSchema("engine", "name", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比 Rhino 与 QuickJS 的全局 API 差异（common/onlyRhino/onlyQuickJs），用于迁移对照"))
@@ -155,18 +155,18 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("workspace_open", "从真实脚本创建（或复用）私有工作区快照；create=true 为幂等：不存在则创建（自动建父目录）、已存在则直接打开；子目录文件请传完整相对路径", objSchema("path", "create", required = arrayOf("path"))))
             add(tool("workspace_list", "列出工作区及待确认状态"))
             add(tool("workspace_read", "读取工作区文件", objSchema("workspaceId", "path", "offset", "maxBytes", required = arrayOf("workspaceId", "path"))))
-            add(tool("workspace_write", "修改工作区，不会直接覆盖真实脚本；需写入授权", objSchema("workspaceId", "path", "content", required = arrayOf("workspaceId", "path", "content"))))
-            add(tool("workspace_delete", "在工作区中标记删除文件；需写入授权", objSchema("workspaceId", "path", required = arrayOf("workspaceId", "path"))))
+            add(tool("workspace_write", "修改工作区，不会直接覆盖真实脚本", objSchema("workspaceId", "path", "content", required = arrayOf("workspaceId", "path", "content"))))
+            add(tool("workspace_delete", "在工作区中标记删除文件", objSchema("workspaceId", "path", required = arrayOf("workspaceId", "path"))))
             add(tool("workspace_diff", "查看工作区与创建时快照的 Diff", objSchema("workspaceId", required = arrayOf("workspaceId"))))
-            add(tool("workspace_request_apply", "在手机已开启编辑授权时直接应用工作区；校验原文件、自动备份并支持历史回退（工具名为兼容保留）", objSchema("workspaceId", required = arrayOf("workspaceId"))))
-            add(tool("workspace_mkdir", "在真实脚本目录下创建目录（含多级），需写入授权", objSchema("path", required = arrayOf("path"))))
+            add(tool("workspace_request_apply", "直接应用工作区到真实脚本；校验原文件、自动备份并支持历史回退（工具名为兼容保留）", objSchema("workspaceId", required = arrayOf("workspaceId"))))
+            add(tool("workspace_mkdir", "在真实脚本目录下创建目录（含多级）", objSchema("path", required = arrayOf("path"))))
             add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_cleanup", "清理无用的工作区私有副本：默认只删无修改的 OPEN 与已回退的；applied=true 时连已应用的也删（默认保留 keepAppliedHours=24 小时以便回退）", objSchema("applied", "olderThanHours", "keepAppliedHours")))
-            add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需运行授权与无障碍服务", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
-            add(tool("capture_screen", "返回原图或缩小截图的 MCP 图像内容；支持 png/jpg、quality、dataUri；需运行授权和 Android 11+ 无障碍截图权限", objSchema("format", "quality", "dataUri", "maxWidth", "timeoutMillis")))
+            add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需无障碍服务", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
+            add(tool("capture_screen", "返回原图或缩小截图的 MCP 图像内容；支持 png/jpg、quality、dataUri；需 Android 11+ 无障碍截图权限", objSchema("format", "quality", "dataUri", "maxWidth", "timeoutMillis")))
             add(tool("check_syntax", "按 Rhino/QuickJS 只编译检查源码，不执行任何脚本；返回 valid、错误行列和转换说明", objSchema("code", "engine", "name", required = arrayOf("code"))))
             add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 使用说明、双引擎规则、权限和实际支持范围"))
-            add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本），需运行授权；普通任务应使用 stop_script"))
+            add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本）；普通任务应使用 stop_script"))
             add(tool("get_mcp_log", "读取脚本日志尾部或 MCP 服务请求记录；executionId 可限制为指定任务；maxChars 默认 20000，最大 200000", objSchema("maxChars", "executionId", "channel")))
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
@@ -463,7 +463,6 @@ internal class McpTools(private val context: Context, private val event: (String
     }
 
     private fun engineProbe(engine: String, source: String, timeout: Int = 30): String {
-        if (!McpService.allowExecution) throw ToolError("运行授权未开启")
         requireRhinoCompat(engine)
         val probe = McpEngineProbe(engine, source)
         // 用内存源码执行；不会覆盖用户文件，并发探针也不会争用同一个临时文件。
@@ -490,7 +489,6 @@ internal class McpTools(private val context: Context, private val event: (String
     }
 
     private fun stopScript(args: JsonObject): JsonObject {
-        if (!McpService.allowExecution) throw ToolError("运行授权未开启")
         val record = runs[args.string("executionId")] ?: throw ToolError("找不到此 MCP 任务")
         if (record.status !in ACTIVE_STATES) throw ToolError("任务已结束：${record.status}")
         record.stopRequested = true; record.stopReason = "user_stopped"
@@ -556,7 +554,8 @@ internal class McpTools(private val context: Context, private val event: (String
         } }
     }
 
-    private fun requireExecution() { if (!McpService.allowExecution) throw ToolError("运行授权未开启") }
+    /** task-118：MCP 服务开启即授权读写/运行（安全边界在网络层：局域网需 Bearer token）。 */
+    private fun requireExecution() { /* no-op：不再要求额外运行授权 */ }
 
     private fun stopAllScripts(): JsonObject {
         requireExecution()
@@ -722,7 +721,8 @@ internal class McpTools(private val context: Context, private val event: (String
         addProperty("updatedAt", ws.updatedAt); addProperty("state", ws.state); addProperty("pendingApproval", ws.pendingApproval)
         addProperty("changedFiles", ws.changedFiles)
     }
-    private fun requireWrite() { if (!McpService.allowWrite) throw ToolError("写入授权未开启") }
+    /** task-118：MCP 服务开启即授权读写/运行。 */
+    private fun requireWrite() { /* no-op：不再要求额外写入授权 */ }
     private fun logLevel(level: Int) = when (level) { Log.VERBOSE -> "VERBOSE"; Log.DEBUG -> "DEBUG"; Log.INFO -> "INFO"; Log.WARN -> "WARN"; Log.ERROR -> "ERROR"; Log.ASSERT -> "ASSERT"; else -> level.toString() }
     private fun <T> page(all: List<T>, offset: Int, limit: Int, convert: (T) -> JsonElement) = JsonObject().apply {
         val start = offset.coerceIn(0, all.size); val size = limit.coerceIn(1, 200); val end = (start + size).coerceAtMost(all.size)
