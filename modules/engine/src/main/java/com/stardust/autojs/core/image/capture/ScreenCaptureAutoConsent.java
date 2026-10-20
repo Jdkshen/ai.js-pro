@@ -17,13 +17,15 @@ public final class ScreenCaptureAutoConsent {
 
     private static final String TAG = "MediaProjectionAutoConsent";
     private static final long POLL_MS = 350L;
-    private static final long DEADLINE_MS = 8_000L;
+    // App 冷启动后无障碍服务重连可能晚于授权框出现，给足 30s（宿主截图等待是 55s）。
+    private static final long DEADLINE_MS = 30_000L;
     private static boolean sArmed;
     private static long sArmedAt;
+    private static long sLastWaitLog;
 
     private ScreenCaptureAutoConsent() { }
 
-    /** 在 startActivityForResult(createScreenCaptureIntent()) 之前调用。 */
+    /** 在 startActivityForResult(ScreenCaptureIntents.create(...)) 之前调用。 */
     public static synchronized void arm() {
         sArmed = true;
         sArmedAt = System.currentTimeMillis();
@@ -31,9 +33,13 @@ public final class ScreenCaptureAutoConsent {
         Handler handler = new Handler(Looper.getMainLooper());
         handler.postDelayed(ScreenCaptureAutoConsent::tick, POLL_MS);
         // 读不到系统节点时的坐标兜底（仅授权窗口存在期间有效；结果返回会立刻 sArmed=false 取消）。
+        // 只点「开始共享」类确认按钮；不再点应用列表（单应用模式会让切 App 后黑帧）。
         final android.util.DisplayMetrics metrics = armDisplayMetrics();
-        handler.postDelayed(() -> blindTap(metrics, 0.80f, 0.708f), 1300L);
-        handler.postDelayed(() -> blindTap(metrics, 0.12f, 0.589f), 2600L);
+        // Android 15 确认按钮「共享屏幕」在右下方（实测 1080x2400 约 (872,1645)）。
+        handler.postDelayed(() -> blindTap(metrics, 0.807f, 0.685f), 1300L);
+        handler.postDelayed(() -> blindTap(metrics, 0.807f, 0.685f), 3000L);
+        handler.postDelayed(() -> blindTap(metrics, 0.807f, 0.685f), 6000L);
+        handler.postDelayed(() -> blindTap(metrics, 0.807f, 0.685f), 10000L);
     }
 
     private static android.util.DisplayMetrics armDisplayMetrics() {
@@ -78,23 +84,35 @@ public final class ScreenCaptureAutoConsent {
             return;
         }
         AccessibilityService service = com.stardust.view.accessibility.AccessibilityService.Companion.getInstance();
-        AccessibilityNodeInfo root = service == null ? null : service.getRootInActiveWindow();
+        if (service == null) {
+            long now = System.currentTimeMillis();
+            if (now - sLastWaitLog > 2000L) {
+                sLastWaitLog = now;
+                Log.i(TAG, "waiting accessibility service");
+            }
+            new Handler(Looper.getMainLooper()).postDelayed(ScreenCaptureAutoConsent::tick, POLL_MS);
+            return;
+        }
+        AccessibilityNodeInfo root = service.getRootInActiveWindow();
         boolean didSomething = false;
         if (root != null) {
             String pkg = String.valueOf(root.getPackageName());
-            if (pkg.contains("systemui") || pkg.contains("permission")) {
-                if (clickText(root, "下一步") || clickText(root, "开始共享") || clickText(root, "立即开始")) {
+            boolean systemDialog = pkg.contains("systemui") || pkg.contains("permission")
+                    || pkg.contains("launcher");
+            if (systemDialog) {
+                // 1) 先点确认按钮（精确匹配，避免命中说明段落）：整屏是默认范围，直接确认即可。
+                if (clickExactText(root, "共享屏幕") || clickExactText(root, "开始共享")
+                        || clickExactText(root, "开始录制") || clickExactText(root, "立即共享")
+                        || clickExactText(root, "立即开始") || clickExactText(root, "允许")) {
                     didSomething = true;
-                    Log.i(TAG, "clicked next/share in " + pkg);
-                } else if (clickText(root, "天天象棋")) {
+                    Log.i(TAG, "clicked confirm in " + pkg);
+                } else if (clickExactText(root, "共享整个屏幕") || clickExactText(root, "整个屏幕")) {
+                    // 2) 旧版/部分 ROM 的选择页：显式选整屏，再等确认按钮。
                     didSomething = true;
-                    Log.i(TAG, "selected app in " + pkg);
-                }
-            }
-            if (!didSomething && (pkg.contains("systemui") || pkg.contains("launcher"))) {
-                if (clickText(root, "共享整个屏幕")) {
+                    Log.i(TAG, "selected entire screen in " + pkg);
+                } else if (clickText(root, "下一步")) {
                     didSomething = true;
-                    Log.i(TAG, "switched to entire screen");
+                    Log.i(TAG, "clicked next in " + pkg);
                 }
             }
             root.recycle();
@@ -105,6 +123,40 @@ public final class ScreenCaptureAutoConsent {
     public static synchronized void disarm() {
         if (sArmed) Log.i(TAG, "disarmed");
         sArmed = false;
+    }
+
+    /** 精确匹配文案再点击（findAccessibilityNodeInfosByText 是子串匹配，会命中说明段落）。 */
+    private static boolean clickExactText(AccessibilityNodeInfo root, String text) {
+        List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByText(text);
+        if (nodes == null) return false;
+        for (AccessibilityNodeInfo node : nodes) {
+            if (node == null) continue;
+            CharSequence value = node.getText();
+            boolean exact = value != null && text.contentEquals(value);
+            if (!exact) {
+                node.recycle();
+                continue;
+            }
+            if (node.isClickable()) {
+                boolean ok = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                node.recycle();
+                if (ok) return true;
+                continue;
+            }
+            AccessibilityNodeInfo parent = node.getParent();
+            node.recycle();
+            while (parent != null) {
+                if (parent.isClickable()) {
+                    boolean ok = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    parent.recycle();
+                    return ok;
+                }
+                AccessibilityNodeInfo next = parent.getParent();
+                parent.recycle();
+                parent = next;
+            }
+        }
+        return false;
     }
 
     private static boolean clickText(AccessibilityNodeInfo root, String text) {

@@ -107,8 +107,12 @@ public class Node24CaptureConsentActivity extends Activity {
             return;
         }
         try {
-            com.stardust.autojs.core.image.capture.ScreenCaptureAutoConsent.arm();
-            startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_PROJECTION);
+            // :node24 里没有无障碍服务实例：让主进程代持自动点击（整屏授权框）。
+            CaptureConsentBridge.arm(this);
+            // 与主进程一致：API 34+ 强制整屏授权，避免单应用模式切 App 黑帧。
+            startActivityForResult(
+                    com.stardust.autojs.core.image.capture.ScreenCaptureIntents.create(manager),
+                    REQUEST_PROJECTION);
             if (pending.delivered.get()) {
                 finish();
                 return;
@@ -130,7 +134,7 @@ public class Node24CaptureConsentActivity extends Activity {
         if (mHandler != null) {
             mHandler.removeCallbacks(mTimeout);
         }
-        com.stardust.autojs.core.image.capture.ScreenCaptureAutoConsent.disarm();
+        CaptureConsentBridge.disarm(this);
         complete(mToken, resultCode, data, false);
         finish();
     }

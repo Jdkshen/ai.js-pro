@@ -68,6 +68,15 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/ScriptTheme.Transparent"/>
 
+        <!-- :node24 进程没有无障碍服务实例，截图授权自动点击由主进程代持（见 CaptureConsentBridge）。 -->
+        <receiver
+            android:name="org.autojs.source.engine.android.CaptureAutoConsentReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.autojs.source.engine.CAPTURE_AUTO_CONSENT"/>
+            </intent-filter>
+        </receiver>
+
         <service
             android:name="com.google.android.accessibility.selecttospeak.SelectToSpeakService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

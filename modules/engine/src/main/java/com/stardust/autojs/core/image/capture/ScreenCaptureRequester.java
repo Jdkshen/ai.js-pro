@@ -70,9 +70,9 @@ public interface ScreenCaptureRequester {
         public void request() {
             MediaProjectionManager manager = (MediaProjectionManager)
                     mActivity.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-            // Keep the system's single-app / entire-screen choice. ScreenCapturer follows
-            // the actual captured-content bounds on Android 14+, including app windows.
-            Intent intent = manager.createScreenCaptureIntent();
+            // 自动化必须拿整屏：单应用模式切换 App 后会黑帧（真机实测），
+            // API 34+ 明确请求 defaultDisplay 范围，避免用户/自动授权误选单应用。
+            Intent intent = ScreenCaptureIntents.create(manager);
             // 自动化场景：系统「共享屏幕」授权条自动点掉（只命中已知文案才点）。
             ScreenCaptureAutoConsent.arm();
             mActivity.startActivityForResult(intent, REQUEST_CODE_MEDIA_PROJECTION);
