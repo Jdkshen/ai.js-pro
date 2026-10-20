@@ -71,11 +71,11 @@ docs/                   架构、指南、报告；接手总纲 docs/HANDOFF_AI.
 ```powershell
 . .\tools\jdk17.ps1 | Out-Null      # 默认 JDK 是 8，构建前必须切 JDK17
 
-# 日常调试构建（Flutter 唯一 UI）
-.\gradlew.bat :app:assembleMiuixCompatDebug -PflutterPoc=true --no-daemon
+# 日常调试构建（Flutter 唯一 UI；同机有正版 Auto.js Pro 时加 -PdevPluginUsbDiscovery=false）
+.\gradlew.bat :app:assembleMiuixCompatDebug -PflutterPoc=true -PdevPluginUsbDiscovery=false --no-daemon
 
 # dev 通道：构建 + 发布到本地更新源（版本号 = max(仓库/已发布/在线设备)+1）
-& output\flutter-poc\publish-poc-build.ps1 -VersionCode N -VersionName "dev-N"
+& tools\flutter-poc\publish-poc-build.ps1 -VersionCode N -VersionName "dev-N"
 .\tools\publish.ps1 -ReleaseNotes "..." -SkipBuild -PcHost 192.168.10.7 -AllowMultiDevice -DeviceId cccc62c7
 
 # 只计算下一版本、不发布
@@ -83,7 +83,7 @@ docs/                   架构、指南、报告；接手总纲 docs/HANDOFF_AI.
 ```
 
 Debug APK 输出到 `apps/app/build/outputs/apk/miuixCompat/debug/`，arm64 设备装 `app-miuix-compat-arm64-v8a-debug.apk`。
-完整环境要求与踩坑见 [编译指南](docs/guides/编译指南.md) 与 [AGENTS.md](AGENTS.md)。
+完整环境要求（真实工具链版本、原生 `.so` 何时复用/重编、AOT/payload、本地安装 vs dev 发布）与踩坑见 [编译指南](docs/guides/编译指南.md) 与 [AGENTS.md](AGENTS.md)。
 
 ## 文档
 

@@ -60,7 +60,7 @@
 ## 指南
 
 - [液态玻璃导航：实现、接入与优化](guides/液态玻璃导航_实现接入与优化.md)：顶部胶囊的进度联动、AGSL 折射、完整 Java 源码、接入与性能优化，含当前验证范围。
-- [编译指南](guides/编译指南.md)：环境要求、原生构建、Gradle 组装、输出位置和常见问题。
+- [编译指南（2026-10-20 更新）](guides/编译指南.md)：工具链真实版本（JDK17 / Gradle 8.9 / AGP 8.6.1 / Kotlin 2.1.0 / Flutter 3.3.4 / Python+fonttools / NDK r27c / CMake≥3.18.1 / Ninja 1.13.2）、原生 `.so` 复用/重编规则、Flutter AOT/payload、本地 Debug 安装与 dev 发布三套命令、输出路径修正与常见问题。
 - [象棋引擎插件（Auto.js 插件 APK）](guides/象棋插件_打包与使用.md)：把象棋识别/棋规/算棋打包成可独立安装的插件（自带 Pikafish + NNUE），含两个引擎的加载差异、权重解析顺序与真机验证记录。
 - [安装包瘦身：插件化与子集](guides/安装包瘦身_插件与子集.md)：把运行时模板、象棋工程与 NNUE 权重移出主 APK、ImGui 字体子集，以及各自的验证方式与回退开关；当前 dev-1112 约 132.1 MB，打包模板约 16.4 MB。
 - [双引擎 API 与 UI 性能验证](guides/ENGINE_API_AND_PERFORMANCE.md)：可重复的 JVM 测试、API 差异生成和真机帧耗时流程。
@@ -152,3 +152,4 @@
 ## 本地产物
 
 构建包、日志、截图、录屏和工具检查产物统一放在 `.artifacts/`，该目录被 Git 忽略。重组前 APK 的原路径、大小和 SHA-256 位于 `.artifacts/releases/pre-reorg/MANIFEST.json`。
+

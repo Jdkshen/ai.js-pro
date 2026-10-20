@@ -51,11 +51,13 @@ git log --oneline -10                             # 最近改动
 - 出包脚本会自动临时改写 `project-versions.json` 注入 versionCode/Name，构建结束后恢复——**不要手工改它**。
 - 关于页：Flutter 通过桥方法 `aboutInfo` 读真实版本/作者/git 提交；git 信息由 `apps/app/build.gradle` 构建时注入
   `BuildConfig.GIT_*`（无 git 环境回退 unknown）。
-- 构建命令必须带 `-PflutterPoc=true`；同机装有正版 Auto.js Pro 时还要加 `-PdevPluginUsbDiscovery=false`（否则
-  provider authority 冲突，install 报 `INSTALL_FAILED_CONFLICTING_PROVIDER`）。
-- 出包脚本会自动临时改写 `project-versions.json` 注入 versionCode/Name，构建结束后恢复——**不要手工改它**。
-- 关于页：Flutter 通过桥方法 `aboutInfo` 读真实版本/作者/git 提交；git 信息由 `apps/app/build.gradle` 构建时注入
-  `BuildConfig.GIT_*`（无 git 环境回退 unknown）。
+
+- **`miuixCompat` 只是保留的 Gradle 变体名**（不代表 UI 还是 Miuix）；完整可安装包必须带 `-PflutterPoc=true`，
+  不带该参数的构建只适合引擎/单测等非 UI 验证。
+- **本地 Debug 安装 vs dev 发布是两套命令**：本地用 `gradlew :app:assembleMiuixCompatDebug -PflutterPoc=true ...` + `adb install`；
+  dev 发版用 `tools/flutter-poc/publish-poc-build.ps1 -VersionCode N -VersionName "dev-N"` → `tools/publish.ps1 -SkipBuild ...`。
+  完整命令、真实工具链版本（JDK17 / Gradle 8.9 / AGP 8.6.1 / Kotlin 2.1.0 / Flutter 3.3.4 / Python+fonttools /
+  NDK r27c / CMake≥3.18.1 / Ninja 1.13.2）与原生 `.so` 复用/重编规则见 [`docs/guides/编译指南.md`](guides/编译指南.md)（2026-10-20 固化）。
 
 ---
 
@@ -103,6 +105,7 @@ git log --oneline -10                             # 最近改动
 
 关键设计决定（**不要再回退**）：
 1. **UI 只有 Flutter**，Miuix 页面已排除构建（`src/miuix` 仅保留非 UI 逻辑；不要重新引入）。
+   Gradle 变体名 `miuixCompat` 只是历史命名，**不要据此判断 UI 仍是 Miuix**。
 2. **Node 引擎在独立池进程**（每进程单 runtime；同进程多实例不可行，原生桥单会话）。多脚本并行走池分配；池满排队；stop 按 token 定点；池进程崩溃 invalidate + 自动重拉；`:node24` legacy 通道保留做回退 flag。
 3. **Node 浮窗走进程内 overlay**（`Node24LocalOverlay`），不再依赖主进程跨进程 show（大 XML 会丢 reply/超时）。
 4. 任务页/通知栏/悬浮菜单/stopAll 统一走 `:script` 的 token 注册表（`PocScriptHost` / `PocNode24Jobs`），不要新增第二套任务登记。
@@ -187,7 +190,7 @@ git log --oneline -10                             # 最近改动
 | QuickJS | `modules/engine/src/main/cpp/quickjs_jni.cpp`、`assets/modules/qjs-*.js` |
 | UI 桥 | `engine/NodeUiActivity.java`、`NodeUiBridgeService.java`、`NodeUiDialogActivity.java` |
 | 自动化 | `modules/automator/`、`AccessibilityEventForwarder.kt` |
-| 打包 | `PocPackaging.java`、`apps/inrt/`、`output/flutter-poc/rebuild-inrt-template.ps1` |
+| 打包 | `PocPackaging.java`、`apps/inrt/`（生成插件模板）；主 APK 瘦身模板 `apps/app/src/main/assets/template.apk`（LFS 预编译资产，存在时 `verifySlimPackagingTemplate` 严格校验） |
 | 更新/发布 | `tools/publish.ps1`、`tools/dev-update.ps1`、`tools/flutter-poc/publish-poc-build.ps1` |
 | Flutter AOT | `tools/flutter-poc/build-aot.ps1`；Dart 源码 `flutter-ui/`；payload 基础 `flutter-payload-base/` |
 | 关于页/构建信息 | `apps/app/build.gradle`（GIT_* BuildConfig）、`PocAppInfo.aboutInfo`、外部 `lib/settings_page.dart` |
