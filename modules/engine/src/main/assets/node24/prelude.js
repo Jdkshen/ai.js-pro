@@ -2153,6 +2153,13 @@
     return imageMatchSiftFastSync(this, template, options);
   };
   Image.prototype.matchSiftFastSync = Image.prototype.matchSiftFast;
+  // task-26：象棋棋盘几何分析（C++ xiangqi_board_detector 的 Node24 宿主移植）。
+  Image.prototype.analyzeXiangqiBoard = function (options) {
+    return imageAnalyzeXiangqiBoardSync(this, options);
+  };
+  Image.prototype.analyzeXiangqiBoardSync = Image.prototype.analyzeXiangqiBoard;
+  Image.prototype.detectXiangqiCircles = function (grid) { return imageDetectXiangqiCirclesSync(this, grid); };
+  Image.prototype.detectXiangqiCirclesSync = Image.prototype.detectXiangqiCircles;
   // task-172：计算图片特征（Pro image 模块 Image.detectAndComputeFeatures）。
   // 返回 Promise；宿主保存特征对象，Node 只拿句柄（用完 recycle()）。
   Image.prototype.detectAndComputeFeatures = function (options) {
@@ -3426,6 +3433,55 @@
     return value;
   }
 
+  // ------------------------------------------------------------------
+  // task-26：象棋棋盘几何分析（移植自 modules/engine/src/main/cpp/xiangqi_board_detector.cpp）
+  //
+  // 返回结构与 QuickJS images.analyzeXiangqiBoard 完全同构：
+  //   {ok,reason,outer{x,y,width,height},grid{originX,originY,stepX,stepY},
+  //    lineScoreX,lineScoreY,verticalSegments,horizontalSegments,
+  //    circles:[{x,y,radius,redFraction,error,col,row,color}]}
+  // detectXiangqiCircles 返回同样的 circle 数组（按 row*9+col 升序）。
+  // ------------------------------------------------------------------
+  function imageAnalyzeXiangqiBoardSync(image, options) {
+    var frame = wrapImage(image);
+    var request = { id: frame._id };
+    // debug=true 时宿主在失败结果里附带 lineScore/segments/fit 候选等诊断字段；
+    // 默认不传，成功/失败 JSON 与 QuickJS JNI 保持完全同构。
+    if (options && options.debug === true) { request.debug = true; }
+    var value = imageHostCall('analyzeXiangqiBoard', request);
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.ok !== 'boolean') {
+      throw hostError('analyzeXiangqiBoard 返回格式非法：' + JSON.stringify(value).slice(0, 160));
+    }
+    return value;
+  }
+
+  function boardGridNumber(value, name) {
+    if (typeof value !== 'number' || !isFinite(value)) {
+      throw apiTypeError('detectXiangqiCircles 的 ' + name + ' 必须是有限数字');
+    }
+    return value;
+  }
+
+  function imageDetectXiangqiCirclesSync(image, grid) {
+    var frame = wrapImage(image);
+    if (!grid || typeof grid !== 'object' || Array.isArray(grid)) {
+      throw apiTypeError('detectXiangqiCircles 需要 grid {originX,originY,stepX,stepY}');
+    }
+    var value = imageHostCall('detectXiangqiCircles', {
+      id: frame._id,
+      grid: {
+        originX: boardGridNumber(grid.originX, 'grid.originX'),
+        originY: boardGridNumber(grid.originY, 'grid.originY'),
+        stepX: boardGridNumber(grid.stepX, 'grid.stepX'),
+        stepY: boardGridNumber(grid.stepY, 'grid.stepY')
+      }
+    });
+    if (!Array.isArray(value)) {
+      throw hostError('detectXiangqiCircles 返回格式非法：' + JSON.stringify(value).slice(0, 160));
+    }
+    return value;
+  }
+
   function promiseCall(fn) {
     return function () {
       var args = arguments;
@@ -3480,6 +3536,11 @@
     matchSiftSync: imageMatchSiftSync,
     matchSiftFast: promiseCall(imageMatchSiftFastSync),
     matchSiftFastSync: imageMatchSiftFastSync,
+    // task-26：象棋棋盘分析（与 QuickJS images.analyzeXiangqiBoard/detectXiangqiCircles 同构）。
+    analyzeXiangqiBoard: promiseCall(imageAnalyzeXiangqiBoardSync),
+    analyzeXiangqiBoardSync: imageAnalyzeXiangqiBoardSync,
+    detectXiangqiCircles: promiseCall(imageDetectXiangqiCirclesSync),
+    detectXiangqiCirclesSync: imageDetectXiangqiCirclesSync,
     matchFeatures: imageMatchFeatures,
     matchFeaturesSync: imageMatchFeaturesSync,
     detectsColor: imageDetectsColor,
@@ -5448,6 +5509,302 @@
   // Preserve Node's real EventEmitter alongside Auto.js event helpers.
   eventsModule.EventEmitter = require('node:events').EventEmitter;
 
+  // ------------------------------------------------------------------
+  // task-26：yolo（复用宿主 Java com.stardust.autojs.runtime.api.Yolo/OpenCvYoloDetector，
+  // 与 QuickJS yolo 模块同构：load/create → detector {detect(image[,options]), release()}）。
+  //
+  //   var yolo = require('yolo');
+  //   var det = yolo.load({backend:'dnn', model:'model.onnx', labels:['红车', ...],
+  //                        threads:4, inputWidth:160, inputHeight:320});  // modelPath/onnx 同义
+  //   var list = det.detect(image, {confidence:0.25, nms:0.45, region:[x,y,w,h]});
+  //   // list[i]={classId,label,score,bounds:{left,top,right,bottom,width,height,centerX,centerY}}
+  //   // list.preprocessMs / inferenceMs / totalMs（与 QuickJS 一致）
+  //   det.release();
+  // ------------------------------------------------------------------
+  var yoloModule = (function () {
+    function yoloError(message) {
+      var error = new Error('[Auto.js] ' + message);
+      error.name = 'AutoJsYoloError';
+      return error;
+    }
+
+    function yoloBackend(backend) {
+      var normalized = String(backend == null || backend === '' ? 'opencv' : backend)
+        .trim().toLowerCase();
+      if (normalized === 'cpu' || normalized === 'dnn' || normalized === 'opencv-dnn'
+        || normalized === 'opencv5') {
+        return 'opencv';
+      }
+      return normalized;
+    }
+
+    function yoloHostCall(action, fields) {
+      var request = { kind: 'yolo', action: action };
+      if (fields) {
+        for (var key in fields) {
+          if (Object.prototype.hasOwnProperty.call(fields, key)) { request[key] = fields[key]; }
+        }
+      }
+      return hostValue(request);
+    }
+
+    function yoloNumber(value, name, fallback, min, max) {
+      if (value == null) { return fallback; }
+      if (typeof value !== 'number' || !isFinite(value)) {
+        throw apiTypeError('yolo ' + name + ' 必须是数字');
+      }
+      if (min != null && value < min) { throw apiRangeError('yolo ' + name + ' 必须 >= ' + min); }
+      if (max != null && value > max) { throw apiRangeError('yolo ' + name + ' 必须 <= ' + max); }
+      return value;
+    }
+
+    function yoloLabels(labels) {
+      if (labels == null) { return []; }
+      if (Array.isArray(labels)) {
+        var array = [];
+        for (var i = 0; i < labels.length; i++) { array.push(String(labels[i])); }
+        return array;
+      }
+      if (typeof labels !== 'string' || labels.trim() === '') {
+        throw apiTypeError('yolo labels 必须是字符串数组或 labels 文本文件路径');
+      }
+      // 象棋适配层传的是 labels 文本文件路径（一行一个类别）；读不到时回退 classId，
+      // 不阻断检测（QuickJS 链路里类别字母不参与识别，YOLO 只负责「哪儿有子」）。
+      try {
+        var path = resolveImagePath(labels, 'yolo labels');
+        var content = require('fs').readFileSync(path, 'utf8');
+        var lines = String(content).split(/\r?\n/);
+        var result = [];
+        for (var k = 0; k < lines.length; k++) {
+          var line = lines[k].trim();
+          if (line !== '') { result.push(line); }
+        }
+        return result;
+      } catch (ignored) {
+        return [];
+      }
+    }
+
+    /**
+     * 与 QuickJS pixelRegionOf 同语义的 region 归一化：先按整数像素 floor/ceil 夹到帧内。
+     * 象棋 detectionStage 用「棋盘外框扩 0.75 格距」算检测窗口时可能越界（例如 x=-6、
+     * 右边界 1085 > 1080），QuickJS 原生侧会 clamp；Node24 这里同样 clamp 后再交给宿主，
+     * 保证两引擎传入 YOLO 的区域完全一致（而不是抛 region 越界错误）。
+     */
+    function clampYoloRegion(region, frame) {
+      if (region == null) { return null; }
+      var x;
+      var y;
+      var width;
+      var height;
+      if (Array.isArray(region)) {
+        if (region.length !== 2 && region.length !== 4) {
+          throw apiTypeError('yolo region 数组必须是 [x,y] 或 [x,y,width,height]');
+        }
+        x = region[0];
+        y = region[1];
+        width = region.length === 4 ? region[2] : frame._width - x;
+        height = region.length === 4 ? region[3] : frame._height - y;
+      } else if (typeof region === 'object') {
+        x = region.x;
+        y = region.y;
+        width = region.width;
+        height = region.height;
+      } else {
+        throw apiTypeError('yolo region 必须是 [x,y]、[x,y,width,height] 或 {x,y,width,height}');
+      }
+      if (typeof x !== 'number' || !isFinite(x) || typeof y !== 'number' || !isFinite(y)
+        || typeof width !== 'number' || !isFinite(width)
+        || typeof height !== 'number' || !isFinite(height)) {
+        throw apiTypeError('yolo region 必须由有限数字组成');
+      }
+      // QuickJS pixelRegionOf：left/top = max(0, floor(起点))，right/bottom = min(帧宽高, ceil(终点))。
+      var left = Math.max(0, Math.floor(x));
+      var top = Math.max(0, Math.floor(y));
+      var right = Math.min(frame._width, Math.ceil(x + width));
+      var bottom = Math.min(frame._height, Math.ceil(y + height));
+      return [left, top, Math.max(1, right - left), Math.max(1, bottom - top)];
+    }
+
+    function YoloDetector(modelId, labels, created) {
+      this.modelId = modelId;
+      this.labels = labels || [];
+      this.backend = created.backend;
+      this.inputWidth = created.inputWidth;
+      this.inputHeight = created.inputHeight;
+      this.threads = created.threads;
+      this.version = created.version;
+      this.model = created.model;
+      this._closed = false;
+    }
+
+    YoloDetector.prototype.detect = function (image, options) {
+      if (this._closed) { throw yoloError('YOLO detector 已关闭'); }
+      var frame = wrapImage(image);
+      options = options == null ? {} : options;
+      if (typeof options !== 'object' || Array.isArray(options)) {
+        throw apiTypeError('yolo.detect options 必须是对象');
+      }
+      var request = {
+        kind: 'yolo',
+        action: 'detect',
+        modelId: this.modelId,
+        imageId: frame._id,
+        confidence: yoloNumber(options.confidence, 'confidence', 0.25, 0, 1),
+        nms: yoloNumber(options.nms, 'nms', 0.45, 0, 1)
+      };
+      // QuickJS 的 region 会 clamp 到帧边界（见 clampYoloRegion 注释）；保持同语义。
+      var region = clampYoloRegion(options.region, frame);
+      if (region) { request.region = region; }
+      var value = hostValue(request);
+      if (!value || typeof value.data !== 'string') {
+        throw hostError('yolo.detect 返回格式非法：' + JSON.stringify(value).slice(0, 160));
+      }
+      var buffer = Buffer.from(value.data, 'base64');
+      // Buffer 池分配不保证 4 字节对齐：先 slice 成独立 ArrayBuffer 再构造 Float32Array。
+      var packed = new Float32Array(
+        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+
+      // 与 QuickJS yolo 相同的打包 v2 解码：[preMs, infMs, cols, 每行 cols 个]
+      // cols=6 为检测；6+3K 为姿态（行尾 K 个 (x,y,score)）。
+      var stride = 6;
+      var start = 2;
+      if (packed.length >= 9) {
+        var cols = Math.round(Number(packed[2]));
+        if (cols >= 6 && cols <= 306 && cols % 3 === 0 && Number(packed[2]) === cols
+          && (packed.length - 3) % cols === 0) {
+          stride = cols;
+          start = 3;
+        }
+      }
+      var result = [];
+      for (var i = start; i + stride - 1 < packed.length; i += stride) {
+        var left = Number(packed[i]);
+        var top = Number(packed[i + 1]);
+        var right = Number(packed[i + 2]);
+        var bottom = Number(packed[i + 3]);
+        var classId = Math.round(Number(packed[i + 5]));
+        var item = {
+          classId: classId,
+          label: this.labels[classId] === undefined ? String(classId) : this.labels[classId],
+          score: Number(packed[i + 4]),
+          bounds: {
+            left: left,
+            top: top,
+            right: right,
+            bottom: bottom,
+            width: right - left,
+            height: bottom - top,
+            centerX: (left + right) / 2,
+            centerY: (top + bottom) / 2
+          }
+        };
+        if (stride > 6) {
+          var keypoints = [];
+          for (var k = i + 6; k + 2 < i + stride; k += 3) {
+            keypoints.push({
+              x: Number(packed[k]),
+              y: Number(packed[k + 1]),
+              score: Number(packed[k + 2])
+            });
+          }
+          item.keypoints = keypoints;
+        }
+        result.push(item);
+      }
+      result.preprocessMs = packed.length >= 2 ? Number(packed[0]) : 0;
+      result.inferenceMs = packed.length >= 2 ? Number(packed[1]) : 0;
+      result.totalMs = result.preprocessMs + result.inferenceMs;
+      return result;
+    };
+
+    YoloDetector.prototype.release = function () {
+      if (this._closed) { return false; }
+      this._closed = true;
+      return yoloHostCall('release', { modelId: this.modelId }) === true;
+    };
+    YoloDetector.prototype.close = YoloDetector.prototype.release;
+    YoloDetector.prototype.isClosed = function () { return this._closed; };
+
+    function load(options) {
+      options = options == null ? {} : options;
+      if (typeof options !== 'object' || Array.isArray(options)) {
+        throw apiTypeError('yolo.load options 必须是对象');
+      }
+      var backend = yoloBackend(options.backend);
+      if (backend !== 'opencv') {
+        throw yoloError('不支持的 YOLO 后端：' + options.backend
+          + '（Node24 目前仅支持 opencv/dnn）');
+      }
+      var available = yoloHostCall('available', { backend: backend });
+      if (!available || available.available !== true) {
+        throw yoloError('YOLO 不可用：'
+          + (available && available.reason ? available.reason : '未知原因'));
+      }
+      var inputWidth;
+      var inputHeight;
+      if (options.inputWidth != null || options.inputHeight != null) {
+        inputWidth = requireInt(options.inputWidth, 'yolo inputWidth', 16, 4096);
+        inputHeight = requireInt(options.inputHeight, 'yolo inputHeight', 16, 4096);
+      } else {
+        var inputSize = requireInt(options.inputSize == null ? 640 : options.inputSize,
+          'yolo inputSize', 16, 4096);
+        inputWidth = inputSize;
+        inputHeight = inputSize;
+      }
+      var threads = yoloNumber(options.threads, 'threads', null, 1, 8);
+      var model = options.model != null ? options.model
+        : (options.modelPath != null ? options.modelPath : options.onnx);
+      var modelAsset = null;
+      var modelPath = null;
+      if (options.modelAsset != null) {
+        modelAsset = String(options.modelAsset);
+      } else if (typeof model === 'string' && model.indexOf('asset://') === 0) {
+        modelAsset = model.substring('asset://'.length);
+      } else if (model != null) {
+        modelPath = resolveImagePath(model, 'yolo 模型路径');
+      }
+      if ((modelPath == null || modelPath === '')
+        && (modelAsset == null || modelAsset.trim() === '')) {
+        throw apiTypeError('yolo.load 需要 model/modelPath（ONNX 模型路径）或 modelAsset');
+      }
+      var labels = yoloLabels(options.labels);
+      var request = {
+        kind: 'yolo',
+        action: 'create',
+        backend: backend,
+        inputWidth: inputWidth,
+        inputHeight: inputHeight
+      };
+      if (modelPath) { request.model = modelPath; }
+      if (modelAsset) { request.modelAsset = modelAsset; }
+      if (threads != null) { request.threads = threads; }
+      var created = hostValue(request);
+      if (!created || !isIntegerValue(created.modelId)) {
+        throw hostError('yolo.create 返回格式非法：' + JSON.stringify(created).slice(0, 160));
+      }
+      return new YoloDetector(created.modelId, labels, created);
+    }
+
+    return {
+      load: load,
+      create: load,
+      isAvailable: function (backend) {
+        var value = yoloHostCall('available', { backend: yoloBackend(backend) });
+        return !!(value && value.available === true);
+      },
+      getVersion: function (backend) {
+        var value = yoloHostCall('available', { backend: yoloBackend(backend) });
+        return value && value.version ? value.version : 'unavailable';
+      },
+      getUnavailableReason: function (backend) {
+        var value = yoloHostCall('available', { backend: yoloBackend(backend) });
+        return value && value.reason ? value.reason : '';
+      },
+      Detector: YoloDetector
+    };
+  })();
+
   globalThis.__ajsBuiltinModules = {
     rhino: rhinoModule,
     app: appModule,
@@ -5474,7 +5831,8 @@
     notification: notificationModule,
     work_manager: workManagerReal,
     shell: shellModule,
-    sensors: sensorsModule
+    sensors: sensorsModule,
+    yolo: yoloModule
   };
   // task-133-fix：模块变量在 $autojs 早期赋值时还未声明（var 提升为 undefined），这里统一补挂。
   autojs.device = deviceModule;
@@ -5501,6 +5859,9 @@
   autojs.work_manager = workManagerReal;
   autojs.shell = shellModule;
   autojs.sensors = sensorsModule;
+  autojs.yolo = yoloModule;
+  // 第三方象棋工程的适配层直接用全局 yolo.load(...)，这里补全局别名（等价 Pro 的 yolo）。
+  globalThis.yolo = yoloModule;
 
   // task-198：Pro Node 环境常见 host 对象兼容（第三方工程用于动态 dex / classloader）。
   (function installProHostShim() {

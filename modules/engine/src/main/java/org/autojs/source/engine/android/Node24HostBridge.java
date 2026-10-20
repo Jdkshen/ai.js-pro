@@ -12,6 +12,7 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.net.Uri;
 import android.os.Looper;
+import android.util.Base64;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -21,6 +22,8 @@ import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.Ocr;
 import com.stardust.autojs.runtime.api.OcrSession;
 import com.stardust.autojs.runtime.api.OCRResult;
+import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
+import com.stardust.autojs.runtime.api.Yolo;
 import com.stardust.autojs.runtime.api.PPOcr;
 import com.stardust.util.IntentUtil;
 
@@ -28,6 +31,8 @@ import org.autojs.source.engine.Node24Engine;
 import org.json.JSONArray;
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -149,6 +154,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
     /** Node24 require('ocr') 的真实内置 OCR 会话（PP-OCR / ML Kit 同形，close 统一释放）。 */
     private final Map<Integer, OcrSession> mOcrSessions = new ConcurrentHashMap<>();
     private final AtomicInteger mNextOcrHandle = new AtomicInteger(1);
+    /** task-26：YOLO 模型会话（kind:"yolo"）；与 OCR 一样借 Node24Images 的 Bitmap。 */
+    private final Map<Integer, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
+    private final AtomicInteger mNextYoloModel = new AtomicInteger(1);
+    private Yolo mYolo;
 
     // --- task-156：通知 action 点击 + 无障碍事件订阅（同 UID 跨进程广播） ---
     private static final String ACTION_NODE_ACCESSIBILITY_SUBSCRIBE =
@@ -303,6 +312,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
                     return Node24CaptureConsentActivity.handle(mContext, mProjection, mImages, request);
                 case "ocr":
                     return handleOcr(request);
+                case "yolo":
+                    return ok(handleYolo(request));
                 case "poll":
                     return ok(pollEvents());
                 case "sensors":
@@ -728,6 +739,261 @@ public final class Node24HostBridge implements Node24Engine.Host {
         OcrBitmap(Bitmap bitmap, boolean owned) {
             this.bitmap = bitmap;
             this.owned = owned;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // task-26：YOLO（kind:"yolo"）
+    //
+    // 复用 com.stardust.autojs.runtime.api.Yolo + OpenCvYoloDetector（与 QuickJS 同一条
+    // OpenCV DNN 推理链）。detect 从 Node24Images 借 Bitmap → copyPixelsToBuffer 得到
+    // RGBA DirectByteBuffer → OpenCvYoloDetector.detectRgba（原生支持 region 并回移坐标）。
+    // 返回 packed v2 float32（小端，base64），与 QuickJS yolo 完全同构：
+    //   [preprocessMs, inferenceMs, cols, (x1,y1,x2,y2,score,classId[,kx,ky,kc...])...]
+    // ------------------------------------------------------------------
+
+    private static final int YOLO_IMAGE_MAX_PIXELS = 16_000_000;
+
+    private Yolo yolo() {
+        if (mYolo == null) {
+            mYolo = new Yolo(mContext);
+        }
+        return mYolo;
+    }
+
+    private Object handleYolo(JSONObject request) throws Exception {
+        String action = request.optString("action", "");
+        switch (action) {
+            case "available":
+                return availableYolo(request);
+            case "create":
+                return createYolo(request);
+            case "detect":
+                return detectYolo(request);
+            case "release":
+                return releaseYolo(request);
+            case "liveCount":
+                return mYoloSessions.size();
+            default:
+                throw new IllegalArgumentException("yolo 不支持的操作：" + action
+                        + "（支持 available/create/detect/release/liveCount）");
+        }
+    }
+
+    private static String normalizeYoloBackend(String backend) {
+        String normalized = backend == null ? "" : backend.trim().toLowerCase(Locale.US);
+        if (normalized.isEmpty() || "cpu".equals(normalized) || "dnn".equals(normalized)
+                || "opencv".equals(normalized) || "opencv-dnn".equals(normalized)
+                || "opencv5".equals(normalized)) {
+            return "opencv";
+        }
+        return normalized;
+    }
+
+    private JSONObject availableYolo(JSONObject request) throws JSONException {
+        String backend = normalizeYoloBackend(request.optString("backend", ""));
+        Yolo yolo = yolo();
+        String openCvError = "";
+        try {
+            Node24Images.ensureOpenCvReady();
+        } catch (Throwable error) {
+            openCvError = describeCause(error);
+        }
+        boolean available = openCvError.isEmpty() && yolo.isAvailable(backend);
+        String reason = available ? ""
+                : (openCvError.isEmpty() ? yolo.getUnavailableReason(backend)
+                        : "OpenCV 初始化失败：" + openCvError);
+        return new JSONObject()
+                .put("backend", backend)
+                .put("available", available)
+                .put("reason", reason)
+                .put("version", yolo.getVersion(backend))
+                .put("liveCount", mYoloSessions.size());
+    }
+
+    private JSONObject createYolo(JSONObject request) throws Exception {
+        String backend = normalizeYoloBackend(request.optString("backend", ""));
+        if (!"opencv".equals(backend)) {
+            throw new IllegalArgumentException("不支持的 YOLO 后端："
+                    + request.optString("backend", "") + "（Node24 目前仅支持 opencv/dnn）");
+        }
+        // OpenCvYoloDetector 构造前必须先初始化 OpenCV（它会立即创建 Mat 并读 ONNX）。
+        Node24Images.ensureOpenCvReady();
+        Yolo yolo = yolo();
+        if (!yolo.isAvailable(backend)) {
+            throw new IllegalStateException("YOLO " + backend + " 后端不可用："
+                    + yolo.getUnavailableReason(backend));
+        }
+        int inputWidth;
+        int inputHeight;
+        if (request.has("inputWidth") || request.has("inputHeight")) {
+            inputWidth = request.optInt("inputWidth", 0);
+            inputHeight = request.optInt("inputHeight", 0);
+        } else {
+            int inputSize = request.optInt("inputSize", 640);
+            inputWidth = inputSize;
+            inputHeight = inputSize;
+        }
+        if (inputWidth < 16 || inputHeight < 16 || inputWidth > 4096 || inputHeight > 4096) {
+            throw new IllegalArgumentException("YOLO inputWidth/inputHeight 必须在 16..4096 之间："
+                    + inputWidth + "x" + inputHeight);
+        }
+        int defaultThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
+        int threads = request.has("threads") ? request.optInt("threads", defaultThreads) : defaultThreads;
+        threads = Math.max(1, Math.min(8, threads));
+        String model = request.optString("model", request.optString("modelPath",
+                request.optString("onnx", ""))).trim();
+        String modelAsset = request.optString("modelAsset", "").trim();
+        if (model.startsWith("asset://")) {
+            modelAsset = model.substring("asset://".length());
+            model = "";
+        }
+        if (model.isEmpty() && modelAsset.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "yolo.create 需要 model/modelPath（ONNX 模型路径）或 modelAsset");
+        }
+        OpenCvYoloDetector detector;
+        try {
+            detector = modelAsset.isEmpty()
+                    ? yolo.createOpenCv(model, inputWidth, inputHeight, threads)
+                    : yolo.createOpenCvFromAssets(modelAsset, inputWidth, inputHeight, threads);
+        } catch (IllegalArgumentException invalid) {
+            throw invalid;
+        } catch (Throwable error) {
+            throw new IllegalStateException("YOLO 模型加载失败：" + describeCause(error), error);
+        }
+        int modelId = mNextYoloModel.getAndIncrement();
+        String modelRef = modelAsset.isEmpty() ? model : "asset://" + modelAsset;
+        mYoloSessions.put(modelId, new YoloSession(detector, backend, inputWidth, inputHeight,
+                threads, modelRef));
+        return new JSONObject()
+                .put("modelId", modelId)
+                .put("backend", backend)
+                .put("inputWidth", inputWidth)
+                .put("inputHeight", inputHeight)
+                .put("threads", threads)
+                .put("model", modelRef)
+                .put("version", yolo.getVersion(backend));
+    }
+
+    private JSONObject detectYolo(JSONObject request) throws Exception {
+        int modelId = request.optInt("modelId", -1);
+        YoloSession session = mYoloSessions.get(modelId);
+        if (session == null) {
+            throw new IllegalStateException("YOLO detector 不存在或已关闭（modelId=" + modelId + "）");
+        }
+        Bitmap bitmap = mImages.borrowBitmap(request.optInt("imageId", -1));
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        if ((long) width * height > YOLO_IMAGE_MAX_PIXELS) {
+            throw new IllegalArgumentException("YOLO detect 图片过大：" + width + "x" + height);
+        }
+        int regionX = 0;
+        int regionY = 0;
+        int regionWidth = width;
+        int regionHeight = height;
+        JSONArray region = request.optJSONArray("region");
+        if (region != null) {
+            if (region.length() != 4) {
+                throw new IllegalArgumentException("YOLO region 必须是 [x,y,width,height]");
+            }
+            regionX = region.optInt(0, 0);
+            regionY = region.optInt(1, 0);
+            regionWidth = region.optInt(2, 0);
+            regionHeight = region.optInt(3, 0);
+            if (regionX < 0 || regionY < 0 || regionWidth <= 0 || regionHeight <= 0
+                    || regionX + regionWidth > width || regionY + regionHeight > height) {
+                throw new IllegalArgumentException("region [x,y,w,h] 超出画面范围："
+                        + regionX + "," + regionY + "," + regionWidth + "," + regionHeight
+                        + "，图片 " + width + "x" + height);
+            }
+        }
+        float confidence = (float) parseYoloThreshold(request, "confidence", 0.25);
+        float nms = (float) parseYoloThreshold(request, "nms", 0.45);
+        if (bitmap.getConfig() != Bitmap.Config.ARGB_8888) {
+            throw new IllegalArgumentException("YOLO detect 需要 ARGB_8888 图片（当前 "
+                    + bitmap.getConfig() + "）");
+        }
+        int rowStride = width * 4;
+        // 复用每个模型会话的 DirectByteBuffer：1080×2400 每帧约 10MB，逐帧 new 会造成
+        // native 内存与 GC 压力（detectRgba 要求 DirectByteBuffer）。
+        ByteBuffer rgba;
+        synchronized (session) {
+            int required = rowStride * height;
+            if (session.rgbaBuffer == null || session.rgbaBuffer.capacity() < required) {
+                session.rgbaBuffer = ByteBuffer.allocateDirect(required);
+            }
+            rgba = session.rgbaBuffer;
+            rgba.clear();
+        }
+        bitmap.copyPixelsToBuffer(rgba);
+        rgba.rewind();
+        float[] packed;
+        try {
+            packed = session.detector.detectRgba(rgba, width, height, rowStride,
+                    regionX, regionY, regionWidth, regionHeight, confidence, nms);
+        } catch (Throwable error) {
+            throw new IllegalStateException("YOLO 推理失败：" + describeCause(error), error);
+        }
+        byte[] raw = new byte[packed.length * 4];
+        ByteBuffer out = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+        for (float value : packed) {
+            out.putFloat(value);
+        }
+        return new JSONObject()
+                .put("modelId", modelId)
+                .put("length", packed.length)
+                .put("data", Base64.encodeToString(raw, Base64.NO_WRAP));
+    }
+
+    private boolean releaseYolo(JSONObject request) {
+        int modelId = request.optInt("modelId", -1);
+        YoloSession session = mYoloSessions.remove(modelId);
+        if (session == null) {
+            return false;
+        }
+        try {
+            session.detector.close();
+        } catch (Throwable error) {
+            Log.w(TAG, "close YOLO detector failed", error);
+        }
+        return true;
+    }
+
+    private static double parseYoloThreshold(JSONObject request, String name, double fallback) {
+        if (!request.has(name) || request.isNull(name)) {
+            return fallback;
+        }
+        Object raw = request.opt(name);
+        if (!(raw instanceof Number)) {
+            throw new IllegalArgumentException(name + " 必须是 0..1 的数字");
+        }
+        double value = ((Number) raw).doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value) || value < 0 || value > 1) {
+            throw new IllegalArgumentException(name + " 必须在 0..1 之间，收到：" + value);
+        }
+        return value;
+    }
+
+    /** 一个 YOLO 模型会话（OpenCvYoloDetector；close 时逐个关闭）。 */
+    private static final class YoloSession {
+        final OpenCvYoloDetector detector;
+        final String backend;
+        final int inputWidth;
+        final int inputHeight;
+        final int threads;
+        final String model;
+        /** detect 复用缓冲区（按图片尺寸增长，不逐帧分配）。 */
+        ByteBuffer rgbaBuffer;
+
+        YoloSession(OpenCvYoloDetector detector, String backend, int inputWidth, int inputHeight,
+                int threads, String model) {
+            this.detector = detector;
+            this.backend = backend;
+            this.inputWidth = inputWidth;
+            this.inputHeight = inputHeight;
+            this.threads = threads;
+            this.model = model;
         }
     }
 
@@ -1466,6 +1732,25 @@ public final class Node24HostBridge implements Node24Engine.Host {
             }
         } finally {
             mOcrSessions.clear();
+        }
+        try {
+            for (YoloSession session : new ArrayList<>(mYoloSessions.values())) {
+                try {
+                    session.detector.close();
+                } catch (Throwable error) {
+                    Log.w(TAG, "close YOLO detector failed", error);
+                }
+            }
+        } finally {
+            mYoloSessions.clear();
+        }
+        try {
+            if (mYolo != null) {
+                mYolo.close();
+                mYolo = null;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "close YOLO runtime failed", error);
         }
         try {
             mImages.close();

@@ -22,8 +22,11 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.opencv.android.Utils;
+import org.opencv.core.CvType;
+import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.core.Point;
 import org.opencv.core.Rect;
+import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 
@@ -38,6 +41,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -216,6 +220,10 @@ public final class Node24Images implements AutoCloseable {
                     return ok(matchTemplateMulti(request));
                 case "matchMany":
                     return ok(matchMany(request));
+                case "analyzeXiangqiBoard":
+                    return ok(analyzeXiangqiBoard(request));
+                case "detectXiangqiCircles":
+                    return ok(detectCirclesAction(request));
                 case "prepFrame":
                     return ok(prepFrame(request));
                 case "grayscale":
@@ -254,6 +262,7 @@ public final class Node24Images implements AutoCloseable {
                     return error("image 不支持的操作：" + action
                             + "（支持 read/write/pixel/findColor/findMultiColors/"
                             + "findImage/matchTemplate/matchTemplateMulti/matchMany/prepFrame/"
+                            + "analyzeXiangqiBoard/detectXiangqiCircles/"
                             + "grayscale/clip/threshold/resize/sizeOf/countColor/"
                             + "getPixels/samplePixels/pixelsToFile/detectsColor/detectsMultiColors/recycle/"
                             + "detectAndComputeFeatures/matchFeatures/recycleFeatures）");
@@ -319,6 +328,115 @@ public final class Node24Images implements AutoCloseable {
         }
     }
 
+    private static final int ICC_PROFILE_PROBE_BYTES = 256 * 1024;
+
+    /** 文件头里是否带 ICC 色彩配置（PNG iCCP / JPEG APP2 ICC_PROFILE）。 */
+    private static boolean hasEmbeddedIccProfile(File file) {
+        long length = file.length();
+        if (length <= 0L) {
+            return false;
+        }
+        int probe = (int) Math.min(length, ICC_PROFILE_PROBE_BYTES);
+        byte[] head = new byte[probe];
+        try (java.io.FileInputStream input = new java.io.FileInputStream(file)) {
+            int read = 0;
+            while (read < probe) {
+                int count = input.read(head, read, probe - read);
+                if (count < 0) {
+                    break;
+                }
+                read += count;
+            }
+            return indexOfBytes(head, read, "iCCP") >= 0
+                    || indexOfBytes(head, read, "ICC_PROFILE") >= 0;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    private static int indexOfBytes(byte[] haystack, int length, String needle) {
+        byte[] pattern = needle.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        int limit = length - pattern.length;
+        outer:
+        for (int i = 0; i <= limit; i++) {
+            for (int k = 0; k < pattern.length; k++) {
+                if (haystack[i + k] != pattern[k]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    /**
+     * 按 QuickJS（cv::imread IMREAD_UNCHANGED）口径解码：忽略 ICC，返回 ARGB_8888 Bitmap。
+     *
+     * <p>OpenCV 返回 BGR/BGRA/GRAY；按通道还原成 Android ARGB int（R/G/B/A 直通），
+     * 与 QuickJS 原生帧 toRgba → pixel() 的 ARGB 结果一致。深度不是 8 位或通道数异常时
+     * 返回 null，让调用方回退 BitmapFactory。
+     */
+    private Bitmap decodeIgnoringIcc(String path) throws Exception {
+        ensureOpenCv();
+        org.opencv.core.Mat decoded = null;
+        try {
+            decoded = Imgcodecs.imread(path, Imgcodecs.IMREAD_UNCHANGED);
+            if (decoded == null || decoded.empty() || decoded.depth() != CvType.CV_8U) {
+                return null;
+            }
+            int channels = decoded.channels();
+            if (channels != 1 && channels != 3 && channels != 4) {
+                return null;
+            }
+            int width = decoded.cols();
+            int height = decoded.rows();
+            if (width <= 0 || height <= 0) {
+                return null;
+            }
+            checkDimensions(width, height);
+            checkRegisterBudget(width, height);
+            Bitmap bitmap;
+            try {
+                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            } catch (OutOfMemoryError memory) {
+                throw new IOException("图片解码内存不足（" + width + "x" + height + "）：" + path, memory);
+            }
+            int[] rowPixels = new int[width];
+            byte[] rowBytes = new byte[width * channels];
+            for (int y = 0; y < height; y++) {
+                decoded.get(y, 0, rowBytes);
+                for (int x = 0; x < width; x++) {
+                    int offset = x * channels;
+                    int b;
+                    int g;
+                    int r;
+                    int a = 255;
+                    if (channels == 4) {
+                        b = rowBytes[offset] & 0xff;
+                        g = rowBytes[offset + 1] & 0xff;
+                        r = rowBytes[offset + 2] & 0xff;
+                        a = rowBytes[offset + 3] & 0xff;
+                    } else if (channels == 3) {
+                        b = rowBytes[offset] & 0xff;
+                        g = rowBytes[offset + 1] & 0xff;
+                        r = rowBytes[offset + 2] & 0xff;
+                    } else {
+                        r = rowBytes[offset] & 0xff;
+                        g = r;
+                        b = r;
+                    }
+                    rowPixels[x] = (a << 24) | (r << 16) | (g << 8) | b;
+                }
+                bitmap.setPixels(rowPixels, 0, width, 0, y, width, 1);
+            }
+            return bitmap;
+        } finally {
+            if (decoded != null) {
+                decoded.release();
+            }
+        }
+    }
+
     private JSONObject read(String path) throws Exception {
         ensureOpen();
         File file = safeFile(path);
@@ -342,6 +460,24 @@ public final class Node24Images implements AutoCloseable {
         checkDimensions(bounds.outWidth, bounds.outHeight);
         // 解码前先占用预算检查：句柄已满/总像素会超限时不要先分配一张 ARGB_8888。
         checkRegisterBudget(bounds.outWidth, bounds.outHeight);
+
+        // task-28：Color-managed PNG/JPEG 的 ICC 差异。QuickJS 的 images.read 走
+        // cv::imread(IMREAD_UNCHANGED)，libpng/libjpeg 不应用 ICC；而 BitmapFactory 会按内嵌
+        // ICC 转 sRGB（f01 实测 R+5.4 / G-1.3 / B-5.0），导致两引擎同一张图像素不一致。
+        // 带 ICC 的图改走 OpenCV 解码 + ARGB 还原，与 QuickJS 逐像素对齐；其余仍走
+        // BitmapFactory（已用 1090 点验证与 QuickJS 0 diff，且更快、格式支持更全）。
+        Bitmap iccBitmap = null;
+        if (hasEmbeddedIccProfile(file)) {
+            try {
+                iccBitmap = decodeIgnoringIcc(path);
+            } catch (Throwable error) {
+                Log.w(TAG, "忽略 ICC 的 OpenCV 解码失败，回退 BitmapFactory：" + path, error);
+                iccBitmap = null;
+            }
+        }
+        if (iccBitmap != null) {
+            return register(iccBitmap);
+        }
 
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = false;
@@ -1326,6 +1462,560 @@ public final class Node24Images implements AutoCloseable {
         return count;
     }
 
+    // ------------------------------------------------------------------
+    // 象棋棋盘几何分析（task-26）
+    //
+    // 忠实移植 modules/engine/src/main/cpp/xiangqi_board_detector.cpp：木色行/列支持带 →
+    // Canny+HoughLinesP 格线投票 → 9×10 网格最小二乘拟合 → HoughCircles 棋子圆 + 红墨比例。
+    // Bitmap 经 Utils.bitmapToMat 后为 CV_8UC4 RGBA，字节序/算法路径与 native 实现一致；
+    // 输出 JSON 与 quickjs_jni.cpp:3800-3900 的 JNI 结构完全同构。
+    // ------------------------------------------------------------------
+
+    /** 棋盘分析结果（对应 C++ XiangqiBoardAnalysis）。 */
+    static final class BoardAnalysis {
+        boolean ok;
+        String reason = "";
+        Rect outer = new Rect(0, 0, 0, 0);
+        double originX;
+        double originY;
+        double stepX;
+        double stepY;
+        double lineScoreX;
+        double lineScoreY;
+        int verticalSegments;
+        int horizontalSegments;
+        /** 诊断：HoughLinesP 原始线段数 / 参数（失败时也能定位是哪一步）。 */
+        int houghSegments;
+        int minLine;
+        int maxGap;
+        int rowBandX;
+        int rowBandWidth;
+        int colBandX;
+        int colBandWidth;
+        AxisFit fitX;
+        AxisFit fitY;
+        List<XiangqiCircle> circles = new ArrayList<>();
+    }
+
+    /** 棋子圆（对应 C++ XiangqiCircle；x/y/radius/error/redFraction 为 float 与 native 输出一致）。 */
+    static final class XiangqiCircle {
+        float x;
+        float y;
+        float radius;
+        float redFraction;
+        float error;
+        int col;
+        int row;
+        String color;
+    }
+
+    /** 轴向拟合结果（对应 C++ AxisFit）。 */
+    static final class AxisFit {
+        double origin;
+        double step;
+        double score = -1;
+        int supported;
+    }
+
+    private JSONObject analyzeXiangqiBoard(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap source = requireBitmap(requireId(request));
+        ensureOpenCv();
+        // debug=true 时失败结果额外携带中间量（lineScore/segments/fit 候选等）；
+        // 默认 false 时保持与 JNI 完全同构（失败只回 ok/reason）。
+        boolean debug = request.optBoolean("debug", false);
+        Mat rgba = new Mat();
+        try {
+            Utils.bitmapToMat(source, rgba);
+            return boardAnalysisJson(analyzeBoard(rgba), debug);
+        } finally {
+            OpenCVHelper.release(rgba);
+        }
+    }
+
+    private JSONArray detectCirclesAction(JSONObject request) throws Exception {
+        ensureOpen();
+        Bitmap source = requireBitmap(requireId(request));
+        JSONObject grid = request.optJSONObject("grid");
+        if (grid == null) {
+            throw new IllegalArgumentException(
+                    "detectXiangqiCircles 缺少 grid {originX,originY,stepX,stepY}");
+        }
+        double originX = requireFiniteNumber(grid.opt("originX"), "grid.originX");
+        double originY = requireFiniteNumber(grid.opt("originY"), "grid.originY");
+        double stepX = requireFiniteNumber(grid.opt("stepX"), "grid.stepX");
+        double stepY = requireFiniteNumber(grid.opt("stepY"), "grid.stepY");
+        ensureOpenCv();
+        Mat rgba = new Mat();
+        try {
+            Utils.bitmapToMat(source, rgba);
+            return circlesJson(detectBoardCircles(rgba, originX, originY, stepX, stepY));
+        } finally {
+            OpenCVHelper.release(rgba);
+        }
+    }
+
+    private static JSONObject boardAnalysisJson(BoardAnalysis analysis) throws JSONException {
+        return boardAnalysisJson(analysis, false);
+    }
+
+    private static JSONObject boardAnalysisJson(BoardAnalysis analysis, boolean debug) throws JSONException {
+        JSONObject result = new JSONObject()
+                .put("ok", analysis.ok)
+                .put("reason", analysis.reason == null ? "" : analysis.reason);
+        if (!analysis.ok) {
+            if (debug) {
+                result.put("outer", new JSONObject()
+                        .put("x", analysis.outer.x).put("y", analysis.outer.y)
+                        .put("width", analysis.outer.width).put("height", analysis.outer.height));
+                result.put("lineScoreX", analysis.lineScoreX)
+                        .put("lineScoreY", analysis.lineScoreY)
+                        .put("verticalSegments", analysis.verticalSegments)
+                        .put("horizontalSegments", analysis.horizontalSegments)
+                        .put("houghSegments", analysis.houghSegments)
+                        .put("minLine", analysis.minLine)
+                        .put("maxGap", analysis.maxGap)
+                        .put("rowBand", new JSONObject().put("x", analysis.rowBandX)
+                                .put("width", analysis.rowBandWidth))
+                        .put("colBand", new JSONObject().put("x", analysis.colBandX)
+                                .put("width", analysis.colBandWidth));
+                if (analysis.fitX != null) {
+                    result.put("xfit", axisFitJson(analysis.fitX));
+                }
+                if (analysis.fitY != null) {
+                    result.put("yfit", axisFitJson(analysis.fitY));
+                }
+            }
+            return result;
+        }
+        result.put("outer", new JSONObject()
+                .put("x", analysis.outer.x)
+                .put("y", analysis.outer.y)
+                .put("width", analysis.outer.width)
+                .put("height", analysis.outer.height));
+        result.put("grid", new JSONObject()
+                .put("originX", analysis.originX)
+                .put("originY", analysis.originY)
+                .put("stepX", analysis.stepX)
+                .put("stepY", analysis.stepY));
+        result.put("lineScoreX", analysis.lineScoreX)
+                .put("lineScoreY", analysis.lineScoreY)
+                .put("verticalSegments", analysis.verticalSegments)
+                .put("horizontalSegments", analysis.horizontalSegments)
+                .put("circles", circlesJson(analysis.circles));
+        return result;
+    }
+
+    private static JSONObject axisFitJson(AxisFit fit) throws JSONException {
+        return new JSONObject()
+                .put("origin", fit.origin)
+                .put("step", fit.step)
+                .put("supported", fit.supported)
+                .put("score", fit.score);
+    }
+
+    private static JSONArray circlesJson(List<XiangqiCircle> circles) throws JSONException {
+        JSONArray array = new JSONArray();
+        for (XiangqiCircle circle : circles) {
+            array.put(new JSONObject()
+                    .put("x", (double) circle.x)
+                    .put("y", (double) circle.y)
+                    .put("radius", (double) circle.radius)
+                    .put("redFraction", (double) circle.redFraction)
+                    .put("error", (double) circle.error)
+                    .put("col", circle.col)
+                    .put("row", circle.row)
+                    .put("color", circle.color));
+        }
+        return array;
+    }
+
+    /** 与 OpenCV cvRound 一致的「四舍六入五成双」取整（C++ 移植保真）。 */
+    private static int cvRound(double value) {
+        return (int) Math.rint(value);
+    }
+
+    private static boolean isWoodPixel(int r, int g, int b) {
+        return r > 130 && g > 105 && 100 * r > 106 * g && 100 * g > 107 * b;
+    }
+
+    /** 平滑一维支持度后取最长连续带（C++ longestBand 的逐行移植）。 */
+    static Rect longestBand(double[] support, int window, double threshold) {
+        if (support == null || support.length == 0) {
+            return new Rect(0, 0, 0, 0);
+        }
+        int half = window / 2;
+        double[] prefix = new double[support.length + 1];
+        for (int i = 0; i < support.length; i++) {
+            prefix[i + 1] = prefix[i] + support[i];
+        }
+        int bestStart = 0;
+        int bestLength = 0;
+        int start = -1;
+        for (int i = 0; i <= support.length; i++) {
+            boolean on = false;
+            if (i < support.length) {
+                int lo = Math.max(0, i - half);
+                int hi = Math.min(support.length, i + half + 1);
+                // 与 C++ 注释一致：np.convolve('same') 在边界仍除以 window，不是实际核长度。
+                on = (prefix[hi] - prefix[lo]) / window > threshold;
+            }
+            if (on && start < 0) {
+                start = i;
+            }
+            if (!on && start >= 0) {
+                if (i - start > bestLength) {
+                    bestStart = start;
+                    bestLength = i - start;
+                }
+                start = -1;
+            }
+        }
+        return new Rect(bestStart, 0, bestLength, 1);
+    }
+
+    /**
+     * 投票数组的线性插值（C++ interpolated）。
+     *
+     * <p>用 Java float[] 而不是 Mat：fitAxis 会做约 10 万次插值，逐次 Mat.get 的 JNI 开销会
+     * 把一次棋盘分析拖到几十毫秒（C++ 侧是连续内存直接读；这里一次性把 CV_32F 拷成 float[]）。
+     */
+    private static double interpolated(float[] votes, int length, double coordinate) {
+        if (coordinate < 0 || coordinate >= length - 1) {
+            return 0;
+        }
+        int lo = (int) coordinate;
+        double fraction = coordinate - lo;
+        double left = votes[lo];
+        double right = votes[lo + 1];
+        return left * (1 - fraction) + right * fraction;
+    }
+
+    /** 网格轴拟合（C++ fitAxis）：在候选 origin/step 里最大化 log1p(vote) 总和并统计票数。 */
+    static AxisFit fitAxis(float[] votes, int length, int boardStart, int boardLength, int count,
+            double originMin, double originMax) {
+        AxisFit best = new AxisFit();
+        for (double origin = boardStart + boardLength * originMin;
+                origin < boardStart + boardLength * originMax; origin += 1) {
+            for (double step = boardLength * .09; step < boardLength * .12; step += .25) {
+                if (origin + (count - 1) * step >= length) {
+                    continue;
+                }
+                double score = 0;
+                int supported = 0;
+                for (int i = 0; i < count; i++) {
+                    double vote = interpolated(votes, length, origin + i * step);
+                    score += Math.log1p(vote);
+                    if (vote >= 2) {
+                        supported++;
+                    }
+                }
+                if (score > best.score) {
+                    best.origin = origin;
+                    best.step = step;
+                    best.score = score;
+                    best.supported = supported;
+                }
+            }
+        }
+        return best;
+    }
+
+    /** 圆内红墨占比（C++ redInkFraction；按 BT.601 灰度过滤亮像素后统计红字）。 */
+    private static double redInkFraction(Mat rgba, double circleX, double circleY, double circleRadius) {
+        int centerX = cvRound(circleX);
+        int centerY = cvRound(circleY);
+        int radius = Math.max(5, cvRound(circleRadius * .52));
+        double limit = Math.pow(radius * .85, 2);
+        int red = 0;
+        int ink = 0;
+        byte[] row = new byte[rgba.cols() * 4];
+        for (int dy = -radius; dy <= radius; dy++) {
+            int y = centerY + dy;
+            if (y < 0 || y >= rgba.rows()) {
+                continue;
+            }
+            rgba.get(y, 0, row);
+            for (int dx = -radius; dx <= radius; dx++) {
+                int x = centerX + dx;
+                if (x < 0 || x >= rgba.cols() || dx * dx + dy * dy >= limit) {
+                    continue;
+                }
+                int offset = x * 4;
+                int r = row[offset] & 0xff;
+                int g = row[offset + 1] & 0xff;
+                int b = row[offset + 2] & 0xff;
+                int gray = (77 * r + 150 * g + 29 * b) >> 8;
+                if (gray >= 150) {
+                    continue;
+                }
+                ink++;
+                if (100 * r > 125 * g && 100 * r > 145 * b) {
+                    red++;
+                }
+            }
+        }
+        return ink > 0 ? (double) red / ink : 0;
+    }
+
+    /** 9×10 网格上的棋子圆检测（C++ detectXiangqiCircles；结果按 row*9+col 升序，等价 std::map）。 */
+    static List<XiangqiCircle> detectBoardCircles(Mat rgba, double originX, double originY,
+            double stepX, double stepY) {
+        List<XiangqiCircle> output = new ArrayList<>();
+        if (rgba.empty() || rgba.type() != CvType.CV_8UC4 || stepX < 20 || stepY < 20) {
+            return output;
+        }
+        double pitch = (stepX + stepY) / 2;
+        int left = Math.max(0, (int) Math.floor(originX - stepX * .7));
+        int top = Math.max(0, (int) Math.floor(originY - stepY * .7));
+        int right = Math.min(rgba.cols(), (int) Math.ceil(originX + stepX * 8.7));
+        int bottom = Math.min(rgba.rows(), (int) Math.ceil(originY + stepY * 9.7));
+        if (right <= left || bottom <= top) {
+            return output;
+        }
+        Mat roi = new Mat(rgba, new Rect(left, top, right - left, bottom - top));
+        Mat gray = new Mat();
+        Mat found = new Mat();
+        try {
+            Imgproc.cvtColor(roi, gray, Imgproc.COLOR_RGBA2GRAY);
+            Imgproc.HoughCircles(gray, found, Imgproc.HOUGH_GRADIENT, 1.2,
+                    Math.max(1, cvRound(pitch * .64)), 110,
+                    Math.max(25, cvRound(pitch * .39)),
+                    cvRound(pitch * .30), cvRound(pitch * .49));
+            TreeMap<Integer, XiangqiCircle> assigned = new TreeMap<>();
+            int circleCount = Math.max(found.rows(), found.cols());
+            for (int i = 0; i < circleCount; i++) {
+                double[] local = found.rows() == 1 ? found.get(0, i) : found.get(i, 0);
+                if (local == null || local.length < 3) {
+                    continue;
+                }
+                float centerX = (float) (local[0] + left);
+                float centerY = (float) (local[1] + top);
+                int col = cvRound((centerX - originX) / stepX);
+                int row = cvRound((centerY - originY) / stepY);
+                if (col < 0 || col > 8 || row < 0 || row > 9) {
+                    continue;
+                }
+                double errorX = Math.abs(centerX - (originX + col * stepX)) / stepX;
+                double errorY = Math.abs(centerY - (originY + row * stepY)) / stepY;
+                if (errorX > .27 || errorY > .27) {
+                    continue;
+                }
+                XiangqiCircle circle = new XiangqiCircle();
+                circle.x = centerX;
+                circle.y = centerY;
+                circle.radius = (float) local[2];
+                circle.col = col;
+                circle.row = row;
+                circle.error = (float) (errorX + errorY);
+                circle.redFraction = (float) redInkFraction(rgba, centerX, centerY, local[2]);
+                circle.color = circle.redFraction > .5 ? "red" : "black";
+                int key = row * 9 + col;
+                XiangqiCircle previous = assigned.get(key);
+                if (previous == null || circle.error < previous.error) {
+                    assigned.put(key, circle);
+                }
+            }
+            output.addAll(assigned.values());
+            return output;
+        } finally {
+            OpenCVHelper.release(found);
+            OpenCVHelper.release(gray);
+            OpenCVHelper.release(roi);
+        }
+    }
+
+    /** 完整棋盘分析（C++ analyzeXiangqiBoard）。输入必须是 CV_8UC4 RGBA Mat。 */
+    static BoardAnalysis analyzeBoard(Mat rgba) {
+        BoardAnalysis result = new BoardAnalysis();
+        if (rgba.empty() || rgba.type() != CvType.CV_8UC4
+                || rgba.cols() < 400 || rgba.rows() < 500) {
+            result.reason = "需要至少 400x500 的 RGBA 帧";
+            return result;
+        }
+        // 木色行支持度 → 棋盘纵向连续带
+        double[] rowSupport = new double[rgba.rows()];
+        byte[] rowBuffer = new byte[rgba.cols() * 4];
+        for (int y = 0; y < rgba.rows(); y++) {
+            rgba.get(y, 0, rowBuffer);
+            int wood = 0;
+            for (int x = 0; x < rgba.cols(); x++) {
+                int offset = x * 4;
+                int r = rowBuffer[offset] & 0xff;
+                int g = rowBuffer[offset + 1] & 0xff;
+                int b = rowBuffer[offset + 2] & 0xff;
+                if (isWoodPixel(r, g, b)) {
+                    wood++;
+                }
+            }
+            rowSupport[y] = (double) wood / rgba.cols();
+        }
+        Rect rowBand = longestBand(rowSupport, 31, .5);
+        result.rowBandX = rowBand.x;
+        result.rowBandWidth = rowBand.width;
+        if (rowBand.width < rgba.rows() * .25) {
+            result.reason = "木色棋盘的连续横带不足";
+            return result;
+        }
+        int by = rowBand.x;
+        int bh = rowBand.width;
+        // 带内木色列支持度 → 棋盘横向连续带
+        double[] columnSupport = new double[rgba.cols()];
+        for (int y = by; y < by + bh; y++) {
+            rgba.get(y, 0, rowBuffer);
+            for (int x = 0; x < rgba.cols(); x++) {
+                int offset = x * 4;
+                int r = rowBuffer[offset] & 0xff;
+                int g = rowBuffer[offset + 1] & 0xff;
+                int b = rowBuffer[offset + 2] & 0xff;
+                if (isWoodPixel(r, g, b)) {
+                    columnSupport[x] += 1;
+                }
+            }
+        }
+        for (int x = 0; x < columnSupport.length; x++) {
+            columnSupport[x] /= bh;
+        }
+        Rect colBand = longestBand(columnSupport, 15, .5);
+        result.colBandX = colBand.x;
+        result.colBandWidth = colBand.width;
+        if (colBand.width < rgba.cols() * .6) {
+            result.reason = "木色棋盘的连续宽度不足";
+            return result;
+        }
+        int bx = colBand.x;
+        int bw = colBand.width;
+        result.outer = new Rect(bx, by, bw, bh);
+
+        Mat gray = new Mat();
+        Mat boardGray = null;
+        Mat blurred = new Mat();
+        Mat edges = new Mat();
+        Mat segments = new Mat();
+        Mat xv = null;
+        Mat yv = null;
+        try {
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+            boardGray = new Mat(gray, result.outer);
+            Imgproc.GaussianBlur(boardGray, blurred, new Size(5, 5), 1);
+            Imgproc.Canny(blurred, edges, 50, 120);
+            double scale = Math.min(bw / 1080.0, bh / 1200.0);
+            int minLine = Math.max(45, cvRound(90 * scale));
+            int maxGap = Math.max(12, cvRound(25 * scale));
+            result.minLine = minLine;
+            result.maxGap = maxGap;
+            Imgproc.HoughLinesP(edges, segments, 1, Math.PI / 180, 40, minLine, maxGap);
+            result.houghSegments = Math.max(segments.rows(), segments.cols());
+            if (segments.empty()) {
+                result.reason = "Canny 后没有可用格线";
+                Log.i(TAG, "xiangqi: size=" + rgba.cols() + "x" + rgba.rows()
+                        + " rowBand=" + by + "+" + bh + " colBand=" + bx + "+" + bw
+                        + " 无 Hough 线段 minLine=" + minLine);
+                return result;
+            }
+            Log.i(TAG, "xiangqi: size=" + rgba.cols() + "x" + rgba.rows()
+                    + " rowBand=" + by + "+" + bh + " colBand=" + bx + "+" + bw
+                    + " segments=" + result.houghSegments + " minLine=" + minLine
+                    + " maxGap=" + maxGap);
+            float[] xVotes = new float[rgba.cols()];
+            float[] yVotes = new float[rgba.rows()];
+            // HoughLinesP 输出是 N×1 或 1×N 的 CV_32SC4（4 通道）。多通道 Mat 用 int[] 批量 get 时，
+            // Java 绑定按「元素」而不是「通道」解释（会读到 0/错位），必须逐行 get(row,col) 取
+            // 长度=通道数的 double[]。
+            int segmentCount = Math.max(segments.rows(), segments.cols());
+            for (int i = 0; i < segmentCount; i++) {
+                double[] line = segments.rows() == 1 ? segments.get(0, i) : segments.get(i, 0);
+                if (line == null || line.length < 4) {
+                    continue;
+                }
+                int x1 = (int) line[0];
+                int y1 = (int) line[1];
+                int x2 = (int) line[2];
+                int y2 = (int) line[3];
+                int dx = Math.abs(x2 - x1);
+                int dy = Math.abs(y2 - y1);
+                if (dx <= 2 && dy >= minLine) {
+                    int x = cvRound((x1 + x2) / 2.0) + bx;
+                    if (x >= 0 && x < rgba.cols()) {
+                        xVotes[x] = (float) (xVotes[x] + dy);
+                    }
+                    result.verticalSegments++;
+                }
+                if (dy <= 2 && dx >= minLine) {
+                    int y = cvRound((y1 + y2) / 2.0) + by;
+                    if (y >= 0 && y < rgba.rows()) {
+                        yVotes[y] = (float) (yVotes[y] + dx);
+                    }
+                    result.horizontalSegments++;
+                }
+            }
+            xv = new Mat(1, rgba.cols(), CvType.CV_32F);
+            yv = new Mat(rgba.rows(), 1, CvType.CV_32F);
+            xv.put(0, 0, xVotes);
+            yv.put(0, 0, yVotes);
+            Imgproc.GaussianBlur(xv, xv, new Size(0, 0), 3);
+            Imgproc.GaussianBlur(yv, yv, new Size(0, 0), 3);
+            float[] xFitVotes = new float[rgba.cols()];
+            float[] yFitVotes = new float[rgba.rows()];
+            xv.get(0, 0, xFitVotes);
+            yv.get(0, 0, yFitVotes);
+            AxisFit x = fitAxis(xFitVotes, xFitVotes.length, bx, bw, 9, .045, .105);
+            AxisFit y = fitAxis(yFitVotes, yFitVotes.length, by, bh, 10, .045, .10);
+            result.fitX = x;
+            result.fitY = y;
+            result.lineScoreX = x.score;
+            result.lineScoreY = y.score;
+            Log.i(TAG, "xiangqi: verticalSegments=" + result.verticalSegments
+                    + " horizontalSegments=" + result.horizontalSegments
+                    + " xfit=(origin=" + x.origin + ",step=" + x.step
+                    + ",supported=" + x.supported + ",score=" + x.score + ")"
+                    + " yfit=(origin=" + y.origin + ",step=" + y.step
+                    + ",supported=" + y.supported + ",score=" + y.score + ")");
+            if (x.step <= 0 || y.step <= 0 || x.supported < 5 || y.supported < 5
+                    || Math.abs(x.step - y.step) / Math.max(x.step, y.step) > .08) {
+                result.reason = "格线证据不足或横竖格距不一致";
+                Log.i(TAG, "xiangqi: 网格拟合失败 -> " + result.reason);
+                return result;
+            }
+            result.originX = x.origin;
+            result.originY = y.origin;
+            result.stepX = x.step;
+            result.stepY = y.step;
+            result.circles = detectBoardCircles(rgba, x.origin, y.origin, x.step, y.step);
+            result.ok = true;
+            Log.i(TAG, "xiangqi: ok outer=(" + bx + "," + by + "," + bw + "," + bh
+                    + ") grid=(origin=" + x.origin + "," + y.origin
+                    + ",step=" + x.step + "," + y.step + ") circles=" + result.circles.size());
+            return result;
+        } finally {
+            if (xv != null) {
+                OpenCVHelper.release(xv);
+            }
+            if (yv != null) {
+                OpenCVHelper.release(yv);
+            }
+            OpenCVHelper.release(segments);
+            OpenCVHelper.release(edges);
+            OpenCVHelper.release(blurred);
+            if (boardGray != null) {
+                OpenCVHelper.release(boardGray);
+            }
+            OpenCVHelper.release(gray);
+        }
+    }
+
+    /** 解析有限数字（棋盘 grid 参数校验）。 */
+    static double requireFiniteNumber(Object raw, String name) {
+        if (!(raw instanceof Number)) {
+            throw new IllegalArgumentException(name + " 必须是数字");
+        }
+        double value = ((Number) raw).doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            throw new IllegalArgumentException(name + " 必须是有限数字");
+        }
+        return value;
+    }
+
     /** Mat → 独立 ARGB_8888 Bitmap；转换失败时回收已分配的 Bitmap，避免泄漏登记预算外的内存。 */
     private static Bitmap matToBitmap(Mat mat) {
         Bitmap bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888);
@@ -2032,6 +2722,21 @@ public final class Node24Images implements AutoCloseable {
         if (mClosed) {
             throw new IllegalStateException("本次 Node 任务的图片资源已释放");
         }
+    }
+
+    /**
+     * 供同域宿主（yolo/OCR）借用 Bitmap：不转移所有权，调用方只读、不要 recycle。
+     * 与 {@link #requireBitmap(int)} 共用句柄校验（不存在/已回收抛中文错误）。
+     */
+    Bitmap borrowBitmap(int id) {
+        synchronized (this) {
+            return requireBitmap(id);
+        }
+    }
+
+    /** 供同域宿主（yolo）确保 OpenCV 已初始化；失败时抛中文异常（与 image 动作一致）。 */
+    static void ensureOpenCvReady() {
+        ensureOpenCv();
     }
 
     private Bitmap requireBitmap(int id) {
