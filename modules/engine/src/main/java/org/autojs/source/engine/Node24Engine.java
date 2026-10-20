@@ -23,6 +23,21 @@ public final class Node24Engine implements AutoCloseable {
         public boolean succeeded() { return exitCode == 0 && !cancelled && error.isEmpty(); }
     }
     public static String compiledVersion() { return nativeCompiledVersion(); }
+    /** Called by generated Java overrides; native dispatch retains Node thread ownership. */
+    public static String invokeCallback(long session, String request) {
+        try { return nativeInvokeCallback(session, request); }
+        catch (IllegalStateException failure) {
+            String message = failure.getMessage();
+            if ("Node session is closed".equals(message) || "Node callback session closed".equals(message)
+                    || "Node callback timed out".equals(message)) {
+                throw new CallbackClosedException(message);
+            }
+            throw failure;
+        }
+    }
+    public static final class CallbackClosedException extends IllegalStateException {
+        CallbackClosedException(String message) { super(message); }
+    }
     public interface Host { String invoke(String request) throws Exception; }
     /** Host-backed task; zero timeout runs until the event loop ends or cancelled. */
     public Result execute(String source,String filename,long timeoutMs,Host host) {
@@ -48,4 +63,5 @@ public final class Node24Engine implements AutoCloseable {
     private static native void nativeCancel(long handle);
     private static native void nativeClose(long handle);
     private static native String nativeCompiledVersion();
+    private static native String nativeInvokeCallback(long session, String request);
 }

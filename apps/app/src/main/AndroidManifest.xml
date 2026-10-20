@@ -519,6 +519,9 @@
             android:exported="false"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
         <!-- task-141：Node dialogs 主进程弹窗（透明） -->
+        <activity android:name="com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot1" android:process=":node24_1" android:exported="false" android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
+        <activity android:name="com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot2" android:process=":node24_2" android:exported="false" android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
+        <activity android:name="com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot3" android:process=":node24_3" android:exported="false" android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
         <activity
             android:name="com.jdkshen.aijspro.engine.NodeUiDialogActivity"
             android:exported="false"

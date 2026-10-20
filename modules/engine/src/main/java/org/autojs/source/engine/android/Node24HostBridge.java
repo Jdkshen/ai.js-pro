@@ -44,6 +44,9 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -69,8 +72,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * wire: null | boolean | number | string | {"$obj":id,"$class":"..."} | {"$arr":[...]}
  * </pre>
  *
- * <p>限制（与预编译 native 桥的能力一致）：只有 Node→Java 同步调用，没有 Java→Node 反向回调，
- * 所以无法在 Java 侧保存 JS 函数再回调（defineClass / 事件监听器由 prelude 层给中文降级提示）。
+ * <p>生成的 Java 子类通过原生回调队列返回 Node；所有 V8 执行保持在 Node 线程。
  * 每个 Node 执行任务创建一个实例；对象句柄只在本次任务内有效，任务结束随实例回收。
  */
 public final class Node24HostBridge implements Node24Engine.Host {
@@ -121,17 +123,27 @@ public final class Node24HostBridge implements Node24Engine.Host {
     /** 当前脚本项目目录（prelude 注入给 __ajsProjectDir，B 的 ui 模块用）。 */
     private final String mProjectDir;
     /** 对象句柄：id -> Java 对象（强引用；实例随一次 Node 执行回收）。 */
-    private final Map<Integer, Object> mObjects = new HashMap<>();
-    private final Map<Object, Integer> mObjectIds = new HashMap<>();
+    private final Map<Integer, Object> mObjects = new ConcurrentHashMap<>();
+    private final Map<Object, Integer> mObjectIds = new IdentityHashMap<>();
     private int mNextObjectId = 1;
     /** task-58 轮询式反向事件通道：Java（B 的 UI/生命周期）投递、Node 定时 poll 取走同步派发。 */
     private static final int MAX_EVENTS = 256;
     private final ConcurrentLinkedQueue<JSONObject> mEvents = new ConcurrentLinkedQueue<>();
+    // Promise completions cannot share the lossy sensor/event buffer: dropping
+    // one leaves its JS Promise pending forever under a large Promise.all().
+    private final ConcurrentLinkedQueue<JSONObject> mJavaResults = new ConcurrentLinkedQueue<>();
     /** 当前任务注册的 Android 传感器监听器：token -> registration（close 时统一注销）。 */
     private final Map<Integer, SensorRegistration> mSensorRegistrations = new HashMap<>();
     private int mNextSensorToken = 1;
     /** task-198：host.runtime.loadDex 加载的动态 dex classloader（插件类优先从这里解析）。 */
     private volatile ClassLoader mRuntimeClassLoader;
+    private final Map<String, Class<?>> mGeneratedClasses = new ConcurrentHashMap<>();
+    private final Map<Integer, NodeJsCallback> mJavaCallbacks = new ConcurrentHashMap<>();
+    private final ThreadLocal<Boolean> mConstructingFromJs = new ThreadLocal<>();
+    private final java.util.concurrent.ExecutorService mJavaExecutor =
+            java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+                Thread thread = new Thread(r, "node24-java-io"); thread.setDaemon(true); return thread;
+            });
 
     /** task-195：prelude 记录 process.exit 请求（exit(0) 强制成功，非 0 保留 code）。 */
     private volatile boolean mExitRequested;
@@ -372,18 +384,68 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private JSONObject handleJava(JSONObject request) throws Exception {
         String op = request.optString("op", "");
         switch (op) {
+            case "isInterface":
+                return ok(findClass(request.getString("name")).isInterface());
+            case "proxyInterface": {
+                Object callback = fromWire(request.get("callback"));
+                return ok(toWire(((NodeJsCallback) callback).asInterface(findClass(request.getString("cls")))));
+            }
+            case "defineClass":
+                return ok(defineJavaClass(request));
+            case "asyncCall": {
+                final JSONObject call = request.getJSONObject("call");
+                final int id = request.getInt("id");
+                Runnable work = () -> {
+                    JSONObject result = new JSONObject();
+                    try {
+                        result.put("id", id);
+                        if (mClosed.get()) throw new IllegalStateException("脚本已结束");
+                        result.put("value", toWire(call.has("cls") ? staticCall(call) : instanceCall(call)));
+                    } catch (Throwable failure) {
+                        try { result.put("error", describeCause(failure)); } catch (JSONException ignored) {}
+                    }
+                    if (!mClosed.get()) enqueueEvent("__ajs_java_result", result);
+                };
+                if ("ui".equals(request.optString("mode"))) new android.os.Handler(Looper.getMainLooper()).post(work);
+                else mJavaExecutor.execute(work);
+                return ok(null);
+            }
+            case "uiCall": {
+                java.util.concurrent.FutureTask<Object> task = new java.util.concurrent.FutureTask<>(
+                        () -> {
+                            if (mClosed.get()) throw new IllegalStateException("脚本已结束");
+                            return request.has("cls") ? staticCall(request) : instanceCall(request);
+                        });
+                if (Looper.myLooper() == Looper.getMainLooper()) task.run();
+                else new android.os.Handler(Looper.getMainLooper()).post(task);
+                try { return ok(toWire(task.get(10, java.util.concurrent.TimeUnit.SECONDS))); }
+                finally { if (!task.isDone()) task.cancel(false); }
+            }
             case "ping":
                 return ok(new JSONObject().put("bridge", "node24-host").put("version", 1));
             case "class":
                 return ok(new JSONObject().put("$class", findClass(request.optString("name", "")).getName()));
+            case "classObject":
+                return ok(new JSONObject().put("$obj", objectId(findClass(request.optString("name", ""))))
+                        .put("$class", "java.lang.Class"));
+            case "arrayGet":
+                return ok(toWire(Array.get(objectOf(request), request.getInt("index"))));
+            case "arraySet": {
+                Object array = objectOf(request);
+                Array.set(array, request.getInt("index"), coerce(array.getClass().getComponentType(),
+                        fromWire(request.opt("value"))));
+                return ok(null);
+            }
             case "new":
                 return ok(toWire(newInstance(request)));
             case "newRef": {
                 // task-136-fix：始终返回对象句柄（避免 String 等被 toWire 成原始值后无法调方法）。
                 Object created = newInstance(request);
                 if (created == null) return ok(null);
+                if (created.getClass().isArray()) return ok(toWire(created));
                 return ok(new JSONObject().put("$obj", objectId(created))
-                        .put("$class", created.getClass().getName()));
+                        .put("$class", created.getClass().getName())
+                        .put("$view", created instanceof android.view.View));
             }
             case "static":
                 return ok(toWire(staticCall(request)));
@@ -1005,6 +1067,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
      */
     private String handleUiJson(JSONObject request) {
         try {
+            request.put("owner", mOverlayOwner);
+            if (!mGeneratedClasses.isEmpty() || request.optBoolean("realJava")) request.put("javaClassOwner", mOverlayOwner);
             // task-201：:node24 进程内 overlay；大 XML 不再跨进程 show，失败自动回退主进程。
             JSONObject localOverlay = Node24LocalOverlay.handle(mContext, mProjectDir, request);
             if (localOverlay != null) {
@@ -1076,8 +1140,118 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
     }
 
+    private JSONObject defineJavaClass(JSONObject request) throws Exception {
+        final String name = request.getString("name");
+        if (!name.matches("[\\p{L}_$][\\p{L}\\p{N}_$]*(\\.[\\p{L}_$][\\p{L}\\p{N}_$]*)*")) {
+            throw new IllegalArgumentException("无效的 Java 类名：" + name);
+        }
+        if (mGeneratedClasses.containsKey(name)) throw new IllegalArgumentException("Java 类已经定义：" + name);
+        final int classId = request.getInt("classId");
+        final long session = request.getLong("session");
+        Class<?> parent = findClass(request.getString("superclass"));
+        JSONArray interfaceNames = request.optJSONArray("interfaces");
+        Class<?>[] interfaces = new Class<?>[interfaceNames == null ? 0 : interfaceNames.length()];
+        for (int i = 0; i < interfaces.length; i++) interfaces[i] = findClass(interfaceNames.getString(i));
+        Set<String> methods = new HashSet<>();
+        JSONArray names = request.getJSONArray("methods");
+        for (int i = 0; i < names.length(); i++) methods.add(names.getString(i));
+        ClassLoader previous = mRuntimeClassLoader == null ? mContext.getClassLoader() : mRuntimeClassLoader;
+        File cache = new File(mContext.getCodeCacheDir(), mOverlayOwner + "/class-" + classId);
+        com.stardust.autojs.rhino.AndroidClassLoader loader =
+                new com.stardust.autojs.rhino.AndroidClassLoader(previous, cache);
+        Class<?> generated = loader.defineClass(name, Node24ClassGenerator.generate(name, parent, interfaces, methods));
+        generated.getField("__dispatcher").set(null, new Node24ClassGenerator.Dispatcher() {
+            @Override public Object invoke(Object receiver, String method, Object[] args) {
+                return callback(receiver, method, args);
+            }
+            @Override public void construct(Object receiver, Object[] args) {
+                if (!Boolean.TRUE.equals(mConstructingFromJs.get())) callback(receiver, "<init>", args);
+            }
+            private Object callback(Object receiver, String method, Object[] args) {
+                if (mClosed.get()) return closedJavaCallback(receiver, method, args);
+                try {
+                    JSONArray values = new JSONArray();
+                    for (Object value : args) values.put(toWire(value));
+                    JSONObject call = new JSONObject().put("classId", classId).put("className", name)
+                            .put("method", method).put("receiver", toWire(receiver)).put("args", values);
+                    JSONObject result = new JSONObject(Node24Engine.invokeCallback(session, call.toString()));
+                    if (!result.optBoolean("ok")) throw new IllegalStateException(result.optString("error"));
+                    return fromWire(result.opt("value"));
+                } catch (Node24Engine.CallbackClosedException closed) {
+                    return closedJavaCallback(receiver, method, args);
+                } catch (RuntimeException failure) { throw failure; }
+                catch (Exception failure) { throw new IllegalStateException("Java→Node 回调失败：" + method, failure); }
+            }
+        });
+        mGeneratedClasses.put(name, generated);
+        mRuntimeClassLoader = loader;
+        Node24GeneratedClasses.register(mOverlayOwner, loader);
+        mNoArgCalls.clear();
+        Set<String> superNames = new HashSet<>();
+        for (Method method : generated.getDeclaredMethods()) {
+            if (method.getName().startsWith("super$")) superNames.add(method.getName().substring(6));
+        }
+        return new JSONObject().put("name", name).put("superMethods", new JSONArray(superNames));
+    }
+
+    private Object closedJavaCallback(Object receiver, String name, Object[] args) {
+        if ("<init>".equals(name)) return null;
+        try {
+            Method parent = findMethod(receiver.getClass(), "super$" + name, args, false);
+            if (parent != null) return invokeMethod(parent, receiver, args);
+            Method method = findMethod(receiver.getClass(), name, args, false);
+            if (method != null && method.getReturnType().isPrimitive()) {
+                Class<?> type = method.getReturnType();
+                if (type == boolean.class) return false;
+                if (type == char.class) return (char) 0;
+                if (type != void.class) return coerce(type, 0);
+            }
+        } catch (Exception failure) { Log.w(TAG, "closed callback super failed: " + name, failure); }
+        return null;
+    }
+
+    private final class NodeJsCallback implements Node24JavaArguments.Callback {
+        private final int id;
+        private final long session;
+        private final Map<Class<?>, Object> proxies = new ConcurrentHashMap<>();
+        NodeJsCallback(int id, long session) { this.id = id; this.session = session; }
+        @Override public Object asInterface(Class<?> type) {
+            if (!type.isInterface()) throw new IllegalArgumentException("Java 回调需要接口：" + type.getName());
+            return proxies.computeIfAbsent(type, iface -> java.lang.reflect.Proxy.newProxyInstance(
+                    iface.getClassLoader(), new Class<?>[]{iface}, (proxy, method, args) -> {
+                        if (method.getDeclaringClass() == Object.class) {
+                            if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+                            if ("equals".equals(method.getName())) return proxy == args[0];
+                            if ("toString".equals(method.getName())) return "[NodeJavaCallback " + iface.getName() + "#" + id + "]";
+                        }
+                        if (mClosed.get()) return defaultJavaValue(method.getReturnType());
+                        try {
+                            JSONArray values = new JSONArray();
+                            if (args != null) for (Object value : args) values.put(toWire(value));
+                            JSONObject request = new JSONObject().put("callbackId", id)
+                                    .put("method", method.getName()).put("args", values);
+                            JSONObject result = new JSONObject(Node24Engine.invokeCallback(session, request.toString()));
+                            if (!result.optBoolean("ok")) throw new IllegalStateException(result.optString("error"));
+                            return coerce(method.getReturnType(), fromWire(result.opt("value")));
+                        } catch (Node24Engine.CallbackClosedException closed) {
+                            return defaultJavaValue(method.getReturnType());
+                        }
+                    }));
+        }
+    }
+
+    private static Object defaultJavaValue(Class<?> type) {
+        if (type == boolean.class) return false;
+        if (type == char.class) return (char) 0;
+        return type.isPrimitive() && type != void.class ? coerce(type, 0) : null;
+    }
+
     private Object newInstance(JSONObject request) throws Exception {
         Class<?> type = findClass(request.optString("cls", ""));
+        if (com.stardust.autojs.engine.node24.NodeUiLocalSession.isShowing()
+                && Looper.myLooper() != Looper.getMainLooper() && isUiType(type)) {
+            return onUi(() -> newInstance(request));
+        }
         Object[] args = arguments(request.optJSONArray("args"));
         // task-197：Java 数组（如 int[] -> "[I"）没有构造器，按长度分配。
         if (type.isArray()) {
@@ -1097,7 +1271,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
         try {
             constructor.setAccessible(true);
-            return constructor.newInstance(coerce(constructor.getParameterTypes(), args));
+            Boolean previous = mConstructingFromJs.get();
+            if (request.optBoolean("fromJs")) mConstructingFromJs.set(true);
+            try { return constructor.newInstance(coerce(constructor.getParameterTypes(), args)); }
+            finally {
+                if (previous == null) mConstructingFromJs.remove(); else mConstructingFromJs.set(previous);
+            }
         } catch (InvocationTargetException error) {
             throw new RuntimeException("Java 构造器抛出异常：" + describeCause(error), error.getCause());
         }
@@ -1130,7 +1309,49 @@ public final class Node24HostBridge implements Node24Engine.Host {
         return invokeMethod(method, target, args);
     }
 
+    private static boolean isUiType(Class<?> type) {
+        return android.view.View.class.isAssignableFrom(type)
+                || android.app.Activity.class.isAssignableFrom(type)
+                || android.app.Dialog.class.isAssignableFrom(type)
+                || android.view.LayoutInflater.class.isAssignableFrom(type)
+                || android.view.Window.class.isAssignableFrom(type)
+                || android.view.Menu.class.isAssignableFrom(type)
+                || android.view.MenuItem.class.isAssignableFrom(type)
+                || android.view.MenuInflater.class.isAssignableFrom(type)
+                || type.getName().startsWith("androidx.appcompat.app.ActionBar")
+                || type.getName().startsWith("androidx.core.view.WindowInsetsController")
+                || type.getName().startsWith("com.google.android.material.dialog.")
+                || androidx.recyclerview.widget.RecyclerView.Adapter.class.isAssignableFrom(type)
+                || androidx.recyclerview.widget.RecyclerView.LayoutManager.class.isAssignableFrom(type);
+    }
+
+    private static boolean needsUiThread(Object target, Method method, Object[] args) {
+        if (isUiType(target == null ? method.getDeclaringClass() : target.getClass())) return true;
+        // Static helpers such as WindowCompat and Snackbar operate on their View/Window arguments.
+        if (java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+            for (Object arg : args) if (arg != null && isUiType(arg.getClass())) return true;
+        }
+        return false;
+    }
+
+    private <T> T onUi(java.util.concurrent.Callable<T> work) throws Exception {
+        java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<>(() -> {
+            if (mClosed.get()) throw new IllegalStateException("脚本已结束");
+            return work.call();
+        });
+        new android.os.Handler(Looper.getMainLooper()).post(task);
+        try { return task.get(10, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (java.util.concurrent.ExecutionException failure) {
+            if (failure.getCause() instanceof Exception) throw (Exception) failure.getCause();
+            throw new RuntimeException(failure.getCause());
+        } finally { if (!task.isDone()) task.cancel(false); }
+    }
+
     private Object invokeMethod(Method method, Object target, Object[] args) throws Exception {
+        if (com.stardust.autojs.engine.node24.NodeUiLocalSession.isShowing()
+                && Looper.myLooper() != Looper.getMainLooper() && needsUiThread(target, method, args)) {
+            return onUi(() -> invokeMethod(method, target, args));
+        }
         try {
             method.setAccessible(true);
             return method.invoke(target, coerce(method.getParameterTypes(), args));
@@ -1202,6 +1423,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Class<?> findClass(String name) throws ClassNotFoundException {
+        Class<?> generated = mGeneratedClasses.get(name);
+        if (generated != null) return generated;
         // task-198：host.runtime.loadDex 加载的插件类优先从动态 classloader 解析。
         ClassLoader runtime = mRuntimeClassLoader;
         if (runtime != null) {
@@ -1337,11 +1560,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private static boolean compatible(Class<?> type, Object value) {
-        if (value == null) {
-            return !type.isPrimitive();
-        }
-        Class<?> boxed = box(type);
-        return boxed.isInstance(value) || (Number.class.isAssignableFrom(boxed) && value instanceof Number);
+        return Node24JavaArguments.compatible(type, value);
     }
 
     private static boolean better(Class<?>[] candidate, Class<?>[] current, Object[] args) {
@@ -1381,7 +1600,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     // wire <-> Java
     // ------------------------------------------------------------------
 
-    private Object[] arguments(JSONArray array) {
+    private Object[] arguments(JSONArray array) throws ClassNotFoundException {
         if (array == null) {
             return new Object[0];
         }
@@ -1392,14 +1611,21 @@ public final class Node24HostBridge implements Node24Engine.Host {
         return values;
     }
 
-    private Object fromWire(Object wire) {
+    private Object fromWire(Object wire) throws ClassNotFoundException {
         if (wire == null || wire == JSONObject.NULL) {
             return null;
         }
         if (wire instanceof JSONObject) {
             JSONObject object = (JSONObject) wire;
+            if (object.has("$callback")) {
+                int id = object.optInt("$callback");
+                return mJavaCallbacks.computeIfAbsent(id, ignored -> new NodeJsCallback(id, object.optLong("session")));
+            }
             if (object.has("$obj")) {
                 return mObjects.get(object.optInt("$obj"));
+            }
+            if (object.has("$class")) {
+                return findClass(object.optString("$class"));
             }
             if (object.has("$arr")) {
                 JSONArray array = object.optJSONArray("$arr");
@@ -1425,18 +1651,16 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return value.toString();
         }
         if (value.getClass().isArray()) {
-            int length = Array.getLength(value);
-            JSONArray array = new JSONArray();
-            for (int i = 0; i < length; i++) {
-                array.put(toWire(Array.get(value, i)));
-            }
-            return new JSONObject().put("$arr", array);
+            return new JSONObject().put("$obj", objectId(value))
+                    .put("$class", value.getClass().getName()).put("$length", Array.getLength(value));
         }
         if (value instanceof Class) {
             return new JSONObject().put("$class", ((Class<?>) value).getName());
         }
         int id = objectId(value);
-        return new JSONObject().put("$obj", id).put("$class", value.getClass().getName());
+        JSONObject descriptor = new JSONObject().put("$obj", id).put("$class", value.getClass().getName());
+        if (value instanceof android.view.View) descriptor.put("$view", true);
+        return descriptor;
     }
 
     private JSONObject ok(Object value) throws Exception {
@@ -1454,7 +1678,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
     }
 
-    private int objectId(Object value) {
+    private synchronized int objectId(Object value) {
         Integer existing = mObjectIds.get(value);
         if (existing != null) {
             return existing;
@@ -1685,6 +1909,14 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return;
         }
         mNoArgCalls.close();
+        mJavaExecutor.shutdownNow();
+        Node24GeneratedClasses.remove(mOverlayOwner);
+        for (Class<?> generated : mGeneratedClasses.values()) {
+            try { generated.getField("__dispatcher").set(null, null); }
+            catch (ReflectiveOperationException failure) { Log.w(TAG, "clear generated dispatcher", failure); }
+        }
+        mGeneratedClasses.clear();
+        mJavaCallbacks.clear();
         try {
             shutdownMediaThread();
         } catch (Throwable error) {
@@ -2393,36 +2625,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private static Object coerce(Class<?> type, Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (type.isArray() && value instanceof Object[]) {
-            Object[] source = (Object[]) value;
-            Class<?> component = type.getComponentType();
-            Object array = Array.newInstance(component, source.length);
-            for (int i = 0; i < source.length; i++) {
-                Array.set(array, i, coerce(component, source[i]));
-            }
-            return array;
-        }
-        if (value instanceof Number) {
-            Number number = (Number) value;
-            if (type == int.class || type == Integer.class) return number.intValue();
-            if (type == long.class || type == Long.class) return number.longValue();
-            if (type == double.class || type == Double.class) return number.doubleValue();
-            if (type == float.class || type == Float.class) return number.floatValue();
-            if (type == short.class || type == Short.class) return number.shortValue();
-            if (type == byte.class || type == Byte.class) return number.byteValue();
-            if (type == char.class || type == Character.class) return (char) number.intValue();
-        }
-        if (type == String.class && !(value instanceof String)) {
-            return String.valueOf(value);
-        }
-        if ((type == char.class || type == Character.class) && value instanceof String
-                && ((String) value).length() == 1) {
-            return ((String) value).charAt(0);
-        }
-        return value;
+        return Node24JavaArguments.coerce(type, value);
     }
 
     // ------------------------------------------------------------------
@@ -3168,12 +3371,17 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     /** Java 侧（B 的 UI/生命周期桥、主进程 host 桥）投递事件到本 Node 执行的任务队列。 */
     public void enqueueEvent(String type, JSONObject payload) {
-        if (type == null || type.isEmpty()) {
+        if (mClosed.get() || type == null || type.isEmpty()) {
             return;
         }
         try {
-            mEvents.offer(new JSONObject().put("type", type)
-                    .put("payload", payload == null ? JSONObject.NULL : payload));
+            JSONObject event = new JSONObject().put("type", type)
+                    .put("payload", payload == null ? JSONObject.NULL : payload);
+            if ("__ajs_java_result".equals(type)) {
+                mJavaResults.offer(event);
+                return;
+            }
+            mEvents.offer(event);
             while (mEvents.size() > MAX_EVENTS) {
                 mEvents.poll();
             }
@@ -3186,11 +3394,14 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private JSONObject pollEvents() {
         JSONArray events = new JSONArray();
         JSONObject event;
+        while (events.length() < 64 && (event = mJavaResults.poll()) != null) {
+            events.put(event);
+        }
         while (events.length() < 64 && (event = mEvents.poll()) != null) {
             events.put(event);
         }
         try {
-            return new JSONObject().put("$events", events).put("$more", !mEvents.isEmpty());
+            return new JSONObject().put("$events", events).put("$more", !mEvents.isEmpty() || !mJavaResults.isEmpty());
         } catch (Exception ignored) {
             return new JSONObject();
         }
@@ -3198,7 +3409,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     /** 当前队列里待派发事件数（测试/诊断用）。 */
     public int pendingEventCount() {
-        return mEvents.size();
+        return mEvents.size() + mJavaResults.size();
     }
 
     private static String describe(Object[] args) {

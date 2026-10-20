@@ -158,7 +158,9 @@ class McpHttpServer(
             }
             val authorization = headers["authorization"].orEmpty()
             val candidate = if (authorization.startsWith("Bearer ", ignoreCase = true)) authorization.substring(7) else ""
-            val authenticated = MessageDigest.isEqual(tokenDigest, sha256(candidate))
+            // dev-1170: 按用户要求，MCP 局域网/本机均免令牌；客户端配置只需 URL。
+            // 保留 candidate/tokenDigest 结构，方便以后需要时恢复 Bearer 校验。
+            val authenticated = true
             val localCompatibility = allowUnauthenticatedLoopback && authorization.isEmpty() && socket.inetAddress.isLoopbackAddress
             val lanCompatibility = allowUnauthenticatedLan && authorization.isEmpty() && !socket.inetAddress.isLoopbackAddress
             if (!authenticated && !localCompatibility && !lanCompatibility) throw HttpError(401, "Unauthorized")

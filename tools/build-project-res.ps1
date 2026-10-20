@@ -102,19 +102,25 @@ try {
     if ($LASTEXITCODE -ne 0) { Fail "aapt2 compile 退出码 $LASTEXITCODE" }
 
     Write-Step 'aapt2 link'
-    # --package-id 0x81：**必须与 app 的 0x7f 分开**。
+    # --package-id 0x7e：与宿主 0x7f 分开，且保持正 int，避免 View.findViewById 拒绝负数 id。
     #   资源包与 app 同包 id 时，按名字查得到、按 id 查不到（framework 按包 id 解析时只会落到 app 那个包，
     #   实测 getDrawable(0x7f030001) 直接 NotFoundException）—— 而 framework 内部全是按 id 查的。
     #   引擎里的按名字查找已改成跨包搜索（getIdentifier(name, type, "")），所以包名是啥都无所谓。
     & $aapt2 link -o $workApk -I $androidJar -I $AppApk --manifest $workManifest `
-        --package-id 0x81 `
+        --package-id 0x7e --allow-reserved-package-id `
         --min-sdk-version 21 --target-sdk-version 28 `
         $compiledZip
     if ($LASTEXITCODE -ne 0) { Fail "aapt2 link 退出码 $LASTEXITCODE" }
 
     Copy-Item -Force $workApk $outApk
 } finally {
-    Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+    $cleanupTarget = [IO.Path]::GetFullPath($work)
+    $cleanupParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $cleanupTarget.StartsWith($cleanupParent, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($cleanupTarget) -notmatch '^aijspro-res-[0-9a-f]{8}$') {
+        throw "拒绝清理非预期临时目录：$cleanupTarget"
+    }
+    Remove-Item -LiteralPath $cleanupTarget -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $size = (Get-Item $outApk).Length

@@ -739,6 +739,7 @@ public class Node24Service extends Service {
             }
             if (line.isEmpty()) return;
             try { android.util.Log.i("Node24Console", line); } catch (Throwable ignored) { }
+            com.stardust.autojs.engine.node24.NodeUiLocalSession.onConsoleLine(line);
             LineSink sink=liveSink;
             if(sink!=null) try { sink.onLine(line); }
             catch(Throwable error) { android.util.Log.w("Node24Service","live log sink failed",error); }

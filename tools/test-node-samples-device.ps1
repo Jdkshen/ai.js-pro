@@ -39,6 +39,7 @@
 [CmdletBinding()]
 param(
     [string]$DeviceId = '',
+    [string]$SamplesRoot = '',
     [string]$Filter = '',
     [int]$TimeoutSeconds = 20,
     [string]$SkipPatterns = '悬浮窗|悬浮日志|无障碍|按键监听|选择器|坐标点击|模拟点击|模拟按键|电量优化|设备唤醒|锁屏|播放音乐|插件|MCP|http-server|axios|定时任务|对话框|通知与Toast|root-automator2|shell命令|文字识别|任务\.js|本地存储|设置\.js|floating_window',
@@ -46,6 +47,7 @@ param(
     [string]$SkipListFile = '',
     [switch]$AllowScreenCapture,
     [switch]$IncludeProject,
+    [switch]$IncludeInteractive,
     [int]$MaxSamples = 0,
     [switch]$ListOnly,
     [switch]$KeepScripts
@@ -53,9 +55,13 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+. (Join-Path $projectRoot 'tools/node-sample-log-verdict.ps1')
 $packageName = 'com.jdkshen.aijspro'
 $runner = $packageName + '/.external.open.RunIntentActivity'
-$samplesRoot = Join-Path $projectRoot 'apps\app\src\main\assets\sample\Node 引擎'
+if ([string]::IsNullOrWhiteSpace($SamplesRoot)) {
+    $SamplesRoot = Join-Path $projectRoot 'apps\app\src\main\assets\sample\Node 引擎'
+}
+$samplesRoot = (Resolve-Path -LiteralPath $SamplesRoot -ErrorAction Stop).Path
 $remoteRoot = '/sdcard/脚本/_node_samples_regress_'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outRoot = Join-Path $projectRoot ('output\node-samples-regress-' + $stamp)
@@ -131,6 +137,7 @@ function Get-ProjectRootFor {
 
 $appVersion = 'list-only'
 if (-not $ListOnly) {
+    $appVersion = 'unknown'
     if ([string]::IsNullOrWhiteSpace($DeviceId)) {
         $online = & $adb devices | Select-String '^(\S+)\s+device$'
         if ($online.Count -ne 1) {
@@ -172,9 +179,9 @@ $ignoredCount = 0
 foreach ($file in $files) {
     $rel = Get-RelativePath -Base $samplesRoot -Full $file.FullName
     $fullText = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
-    $headLines = @($fullText -split $nl | Select-Object -First 14)
+    $headLines = @($fullText -split '\r?\n' | Select-Object -First 14)
     $head = $headLines -join $nl
-    $isNode = $head.Contains($dq + 'nodejs' + $dq) -or $head.Contains($dq + 'ui-thread' + $dq)
+    $isNode = $file.Name.EndsWith('.node.js') -or $head -match '["''](?:nodejs(?:\s+ui)?|ui\s+nodejs|ui-thread|ui)["'']\s*;?'
     if (-not $isNode) { $ignoredCount++; continue }
     if (-not [string]::IsNullOrWhiteSpace($Filter)) {
         if ($rel -notmatch $Filter) { $ignoredCount++; continue }
@@ -182,9 +189,9 @@ foreach ($file in $files) {
     $projRoot = Get-ProjectRootFor -File $file
     $isMain = $file.Name -match '^(main|index)\.node\.js$|^main\.js$'
     $skipReason = $null
-    if ($head -match 'device-test:\s*skip') { $skipReason = 'header: device-test: skip' }
-    elseif ($isMain) { $skipReason = 'project entry (main.js/main.node.js)' }
-    elseif ($fullText -match 'keepRunning\s*\(') { $skipReason = 'keeps running (keepRunning)' }
+    if (-not $IncludeInteractive -and $head -match 'device-test:\s*skip') { $skipReason = 'header: device-test: skip' }
+    elseif ($isMain -and -not $IncludeProject -and [string]::IsNullOrWhiteSpace($Filter)) { $skipReason = 'project entry (use -IncludeProject)' }
+    elseif (-not $IncludeInteractive -and $fullText -match 'keepRunning\s*\(') { $skipReason = 'keeps running (use -IncludeInteractive)' }
     elseif ($null -ne $projRoot -and -not $IncludeProject -and [string]::IsNullOrWhiteSpace($Filter)) { $skipReason = 'project-context (use -IncludeProject)' }
     if ($null -eq $skipReason) {
         foreach ($re in $skipRegexes) { if ($rel -match $re) { $skipReason = 'whitelist: ' + $re; break } }
@@ -195,6 +202,7 @@ foreach ($file in $files) {
         Index = 0
         RelativePath = $rel
         LocalPath = $file.FullName
+        SourceSha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         ProjectRoot = $projRoot
         SkipReason = $skipReason
         RemotePath = $null
@@ -230,6 +238,7 @@ Invoke-Adb @('shell', 'mkdir', '-p', $remoteRoot) | Out-Null
 
 $previousAppOp = $null
 if ($AllowScreenCapture) {
+    $previousAppOp = 'default'
     $opRaw = (Invoke-Adb @('shell', 'cmd', 'appops', 'get', $packageName, 'PROJECT_MEDIA') -AllowFailure) | Out-String
     $opMatch = [regex]::Match($opRaw, 'PROJECT_MEDIA:\s*(\w+)')
     if ($opMatch.Success) { $previousAppOp = $opMatch.Groups[1].Value }
@@ -286,16 +295,27 @@ foreach ($record in $records) {
             Start-Sleep -Seconds 1
             $elapsed = [int]((Get-Date) - $startedAt).TotalSeconds
             $logText = Get-LogcatText
-            $exitMatch = [regex]::Match($logText, 'execute returned[^\n]*exitCode=(-?\d+)')
+            # The first launched job is the requested entry. Child engines may
+            # finish first; their exit code cannot prove the entry completed.
+            $startMatch = [regex]::Match($logText, 'Node24Service[^\n]*job start[^\n]*id=([\w-]+)')
+            $exitPattern = 'execute returned[^\n]*exitCode=(-?\d+)'
+            if ($startMatch.Success) {
+                $exitPattern = 'execute returned id=' + [regex]::Escape($startMatch.Groups[1].Value) + '\s+exitCode=(-?\d+)'
+            }
+            $exitMatch = [regex]::Match($logText, $exitPattern)
             if ($exitMatch.Success) {
                 $exitCode = [int]$exitMatch.Groups[1].Value
-                $finished = $true
-                break
+                $cleanupPattern = 'cleanup done id=' + [regex]::Escape($startMatch.Groups[1].Value)
+                if (-not $startMatch.Success -or $logText -match $cleanupPattern) {
+                    $finished = $true
+                    break
+                }
             }
             if ($logText -match 'Node24CaptureConsentActivity|MediaProjection|requestScreenCapture') { $consentSeen = $true }
-            if ($logText -match '运行结束') { $finished = $true; break }
+            if (-not $startMatch.Success -and $logText -match '运行结束') { $finished = $true; break }
             if ($logText -match 'FATAL EXCEPTION') { break }
-            if ($consentSeen -and $elapsed -ge 6) { break }
+            # Successful capture also logs MediaProjection/requestScreenCapture;
+            # keep waiting for completion instead of treating those logs as a skip.
         }
         $record.DurationSeconds = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
         $record.ExitCode = $exitCode
@@ -303,24 +323,26 @@ foreach ($record in $records) {
         $logFile = Join-Path $logDir (('{0:d3}' -f $executed) + '-' + $safeName + '.log')
         $logText | Set-Content -LiteralPath $logFile -Encoding UTF8
         $record.LogFile = $logFile
-        $hasScriptError = $logText -match 'SCRIPT_ERROR|ScriptException: SCRIPT_ERROR'
-        if ($consentSeen -and -not $finished) {
-            $record.Verdict = 'SKIP'
-            $record.Reason = '需要用户授权截图（检测到录屏/截图授权流程但未自动通过；交互类可人工点允许）'
-            $record.Evidence = Get-MatchingLines -Text $logText -Pattern 'CaptureConsent|MediaProjection|requestScreenCapture' -Limit 3
-            $skipCount++
+        $scriptIssues = @(Get-NodeSampleLogIssues -Text $logText)
+        $hasScriptError = $scriptIssues.Count -gt 0
+        if ($hasScriptError) {
+            $record.Verdict = 'FAIL'; $record.Reason = 'script error or failed API assertion'
+            $record.Evidence = @($scriptIssues | Select-Object -First 3)
+            $failCount++
         } elseif ($null -ne $exitCode) {
-            if ($exitCode -eq 0 -and -not $hasScriptError) {
+            if (-not $finished) {
+                $record.Verdict = 'FAIL'; $record.Reason = 'native returned but job cleanup did not complete'; $failCount++
+            } elseif ($exitCode -eq 0 -and -not $hasScriptError) {
                 $record.Verdict = 'PASS'; $record.Reason = 'exitCode=0'; $passCount++
             } else {
                 $record.Verdict = 'FAIL'; $record.Reason = 'exitCode=' + $exitCode + ', scriptError=' + $hasScriptError
-                $record.Evidence = Get-MatchingLines -Text $logText -Pattern 'SCRIPT_ERROR|ScriptException|Error:' -Limit 3
+                $record.Evidence = @($scriptIssues | Select-Object -First 3)
                 $failCount++
             }
         } elseif ($finished) {
             if ($hasScriptError) {
                 $record.Verdict = 'FAIL'; $record.Reason = 'SCRIPT_ERROR'
-                $record.Evidence = Get-MatchingLines -Text $logText -Pattern 'SCRIPT_ERROR|ScriptException' -Limit 3
+                $record.Evidence = @($scriptIssues | Select-Object -First 3)
                 $failCount++
             } else {
                 $record.Verdict = 'PASS'; $record.Reason = '运行结束（无 exitCode 标记）'; $passCount++
@@ -333,16 +355,10 @@ foreach ($record in $records) {
             $windowDump = (Invoke-Adb @('shell', 'dumpsys', 'window', 'windows') -AllowFailure) | Out-String
             $activityDump = (Invoke-Adb @('shell', 'dumpsys', 'activity', 'activities') -AllowFailure) | Out-String
             $consentWindow = ($windowDump -match 'ProjectionPermission|MediaProjectionPermission|CaptureConsent') -or ($activityDump -match 'MediaProjectionPermissionActivity|CaptureConsent')
-            $otherAppTop = ($activityDump -match 'topResumedActivity=') -and ($activityDump -notmatch 'topResumedActivity=[^\n]*com\.jdkshen\.aijspro')
             if ($consentWindow) {
                 $record.Verdict = 'SKIP'
                 $record.Reason = '等待系统录屏授权弹窗（需用户交互；可加 -AllowScreenCapture 尝试自动授权）'
                 $record.Evidence = @('timeout=' + $TimeoutSeconds + 's', 'windowDump matched projection consent')
-                $skipCount++
-            } elseif ($otherAppTop) {
-                $record.Verdict = 'SKIP'
-                $record.Reason = '运行期间前台被其它 App 抢占，无法判定（勿在共享测试机上并发跑真机用例）'
-                $record.Evidence = Get-MatchingLines -Text $activityDump -Pattern 'topResumedActivity=' -Limit 2
                 $skipCount++
             } else {
                 $record.Verdict = 'TIMEOUT'; $record.Reason = 'wait >' + $TimeoutSeconds + 's'

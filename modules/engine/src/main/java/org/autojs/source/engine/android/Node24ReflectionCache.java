@@ -129,13 +129,26 @@ final class Node24ReflectionCache {
 
     private static Class<?> resolveClass(String clean, String requestedName, ClassLoader loader)
             throws ClassNotFoundException {
+        switch (clean) {
+            case "boolean": return boolean.class;
+            case "byte": return byte.class;
+            case "short": return short.class;
+            case "int": return int.class;
+            case "long": return long.class;
+            case "float": return float.class;
+            case "double": return double.class;
+            case "char": return char.class;
+            case "void": return void.class;
+            default: break;
+        }
         try {
             return Class.forName(clean, false, loader);
         } catch (ClassNotFoundException ignored) {
             // Android/Java 内部类支持 com.x.Outer.Inner，也支持 com.x.Outer$Inner。
             int dot = clean.length();
-            while ((dot = clean.lastIndexOf('.', dot - 1)) > 0) {
-                String candidate = clean.substring(0, dot) + "$" + clean.substring(dot + 1);
+            String candidate = clean;
+            while ((dot = candidate.lastIndexOf('.', dot - 1)) > 0) {
+                candidate = candidate.substring(0, dot) + "$" + candidate.substring(dot + 1);
                 try {
                     return Class.forName(candidate, false, loader);
                 } catch (ClassNotFoundException ignoredAgain) {

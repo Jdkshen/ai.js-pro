@@ -66,7 +66,9 @@ public final class Node24Images implements AutoCloseable {
     private static final String TAG = "Node24Images";
 
     /** 同时存活的图片句柄上限。 */
-    static final int DEFAULT_MAX_LIVE_IMAGES = 64;
+    // dev-1172: 64 → 256，象棋 glyph 多尺度识别一帧会创建 ~200 个派生图；
+    // Node24 由 JS 显式 recycle，64 会把正常识别链卡在句柄上限。总像素预算仍为 64M 兜底。
+    static final int DEFAULT_MAX_LIVE_IMAGES = 256;
     /** 单张图片像素上限（16M：覆盖 4K 截图与常见平板，仍能限制异常大图）。 */
     static final long DEFAULT_MAX_IMAGE_PIXELS = 16_000_000L;
     /** 全部存活图片总像素上限（256MB ARGB 量级）。 */

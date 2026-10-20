@@ -89,6 +89,18 @@
   // wire <-> JS
   // ------------------------------------------------------------------
   var JAVA_OBJECT_MARK = '__ajsJavaObject__';
+  var generatedClasses = Object.create(null);
+  var generatedInstances = Object.create(null);
+  var nextGeneratedClass = 1;
+  var constructingJavaReceiver = null;
+  var javaThreadModes = Object.create(null);
+  var javaDefaultThreadModes = Object.create(null);
+  var javaPending = Object.create(null);
+  var javaNextRequest = 1;
+  var javaPendingTimer = null;
+  var javaCallbacks = Object.create(null);
+  var javaCallbackIds = new WeakMap();
+  var nextJavaCallback = 1;
 
   function isJavaObject(value) {
     return !!(value && typeof value === 'object' && value[JAVA_OBJECT_MARK] === true);
@@ -98,8 +110,14 @@
     if (value === null || value === undefined) { return null; }
     if (typeof value !== 'object') { return value; }
     if (value === true || value === 0) { return value; }
+    if (Object.prototype.hasOwnProperty.call(value, '$length')) {
+      return javaArray(value.$obj, value.$class, value.$length);
+    }
     if (Object.prototype.hasOwnProperty.call(value, '$obj')) {
-      return javaObject(value.$obj, value.$class);
+      return javaObject(value.$obj, value.$class, value.$view === true);
+    }
+    if (Object.prototype.hasOwnProperty.call(value, '$class')) {
+      return classRef(value.$class);
     }
     if (Object.prototype.hasOwnProperty.call(value, '$arr')) {
       var list = value.$arr || [];
@@ -114,7 +132,9 @@
     if (value === null || value === undefined) { return null; }
     var type = typeof value;
     if (type === 'string' || type === 'number' || type === 'boolean') { return value; }
+    if (type === 'function' && value.__classRef === true) { return { $class: value.__className }; }
     if (type === 'function') {
+      if (typeof globalThis.__ajsEnableJavaCallbacks === 'function') { return registerJavaCallback(value); }
       throw hostError('暂不支持把 JS 函数传给 Java：预编译 native 桥只有 Node→Java 单向调用，'
         + '回调/onClickListener 请用 __autojsOn() 或 __ajsRegisterModule 由宿主投递事件。');
     }
@@ -135,6 +155,13 @@
     var list = [];
     for (var i = 0; i < args.length; i++) { list.push(toWire(args[i])); }
     return list;
+  }
+
+  function registerJavaCallback(value) {
+    if (typeof globalThis.__ajsEnableJavaCallbacks !== 'function') { throw hostError('当前原生桥缺少 Java 回调能力'); }
+    var id = javaCallbackIds.get(value);
+    if (!id) { id = nextJavaCallback++; javaCallbackIds.set(value, id); javaCallbacks[id] = value; }
+    return { $callback: id, session: globalThis.__ajsEnableJavaCallbacks() };
   }
 
   function wrapJavaResult(value) {
@@ -189,6 +216,13 @@
         var prefix = JSON.stringify(request).slice(0, -1) + ',"args":';
         var noArgs = prefix + '[]}';
         info.invoke = function () {
+          var mode = target.cls ? javaDefaultThreadModes[target.cls] : javaThreadModes[target.obj];
+          if (mode && mode !== 'current') {
+            if (mode === 'ui-sync') {
+              return javaCall(Object.assign({}, request, { op: 'uiCall', args: toWireArray(arguments) }));
+            }
+            return javaAsyncCall(request, toWireArray(arguments), mode);
+          }
           var payload = arguments.length === 0 ? noArgs
             : prefix + JSON.stringify(toWireArray(arguments)) + '}';
           return wrapJavaResult(okValue(hostValue(payload)));
@@ -196,20 +230,31 @@
       }
       return info.invoke;
     }
-    if (info && info.kind === 'field') { return okValue(info.value); }
+    if (info && info.kind === 'field') {
+      // Cache metadata, never a mutable field's value (Integer.TYPE is a Class too).
+      return javaCall(Object.assign({ op: 'field', name: name }, target.cls
+        ? { cls: target.cls } : { obj: target.obj }));
+    }
     return undefined;
   }
 
-  function javaObject(handle, className) {
+  function javaObject(handle, className, isView) {
+    var generated = generatedClasses[className];
+    if (generatedInstances[handle]) { return generatedInstances[handle]; }
     var target = {};
     target[JAVA_OBJECT_MARK] = true;
     target.__handle = handle;
     target.__class = className;
-    return new Proxy(target, {
+    if (generated) { Object.setPrototypeOf(target, generated.jsClass.prototype); }
+    var proxy = new Proxy(target, {
       get: function (self, prop) {
         if (prop === JAVA_OBJECT_MARK) { return true; }
         if (prop === '__handle') { return handle; }
         if (prop === '__class') { return className; }
+        if (prop === 'binding' && isView && typeof globalThis.__ajsBindJavaView === 'function') {
+          return globalThis.__ajsBindJavaView(proxy);
+        }
+        if (generated && prop in self) { return Reflect.get(self, prop); }
         if (prop === 'toString') {
           return function () {
             try {
@@ -224,13 +269,46 @@
         return memberAccess({ obj: handle }, prop);
       },
       set: function (self, prop, value) {
+        if (generated && memberInfo({ obj: handle }, prop).kind !== 'field') {
+          return Reflect.set(self, prop, value);
+        }
         javaCall({ op: 'setField', obj: handle, name: prop, value: toWire(value) });
         return true;
       }
     });
+    generatedInstances[handle] = proxy;
+    return proxy;
+  }
+
+  function javaArray(handle, className, length) {
+    if (generatedInstances[handle]) { return generatedInstances[handle]; }
+    var array = new Array(length).fill(null);
+    var proxy = new Proxy(array, {
+      get: function (self, prop, receiver) {
+        if (prop === JAVA_OBJECT_MARK) { return true; }
+        if (prop === '__handle') { return handle; }
+        if (prop === '__class') { return className; }
+        if (typeof prop === 'string' && /^(0|[1-9]\d*)$/.test(prop)) {
+          var index = Number(prop);
+          return index < length ? javaCall({ op: 'arrayGet', obj: handle, index: index }) : undefined;
+        }
+        if (prop in self || typeof prop === 'symbol') { return Reflect.get(self, prop, receiver); }
+        return memberAccess({ obj: handle }, prop);
+      },
+      set: function (self, prop, value) {
+        if (typeof prop !== 'string' || !/^(0|[1-9]\d*)$/.test(prop) || Number(prop) >= length) {
+          throw hostError('Java 数组长度固定，不能写入属性：' + String(prop));
+        }
+        javaCall({ op: 'arraySet', obj: handle, index: Number(prop), value: toWire(value) });
+        return true;
+      }
+    });
+    generatedInstances[handle] = proxy;
+    return proxy;
   }
 
   var classCache = Object.create(null);
+  var classRefCache = Object.create(null);
 
   /** name 是否是可解析的 Java 类（带缓存，避免每次属性访问都打一次宿主桥）。 */
   function resolveClass(name) {
@@ -250,40 +328,72 @@
 
   /** Java 类代理：支持 new / 静态方法 / 静态字段。 */
   function classRef(className) {
+    if (classRefCache[className]) { return classRefCache[className]; }
     var fn = function () { };
+    var reflectedClass = null;
+    var interfaceClass;
     fn.__classRef = true;
     fn.__className = className;
-    return new Proxy(fn, {
+    var generated = generatedClasses[className];
+    if (generated) {
+      generated.superMethods.forEach(function (name) {
+        Object.defineProperty(fn.prototype, name, { configurable: true, value: function () {
+          return javaCall({ op: 'call', obj: this.__handle, method: 'super$' + name,
+            args: toWireArray(arguments) });
+        }});
+      });
+    }
+    var proxy = new Proxy(fn, {
       get: function (self, prop) {
         if (prop === '__classRef') { return true; }
         if (prop === '__className') { return className; }
+        if (prop === 'class') { return classRef(className); }
         // 真实 Java 类代理也要能作为 extends 基类：返回代理目标函数的 prototype 对象。
         if (prop === 'prototype') { return self.prototype; }
         if (prop === 'getName') { return function () { return className; }; }
         if (prop === 'toString') { return function () { return '[JavaClass ' + className + ']'; }; }
         if (typeof prop === 'symbol') { return undefined; }
-        return memberAccess({ cls: className }, prop);
+        var member = memberAccess({ cls: className }, prop);
+        if (member !== undefined) { return member; }
+        if (/^[A-Z]/.test(prop) && resolveClass(className + '$' + prop)) {
+          return classRef(className + '$' + prop);
+        }
+        if (!reflectedClass) { reflectedClass = javaCall({ op: 'classObject', name: className }); }
+        return memberAccess({ obj: reflectedClass.__handle }, prop);
       },
       apply: function (self, thisArg, args) {
         // 极少数写法把类当函数调用（Pro 里可用），按静态方法无法确定，直接给出明确提示。
         throw hostError('Java 类不能直接调用：' + className + '（请用 new 构造或调用具体静态方法）');
       },
       construct: function (self, args) {
-        var value = javaCall({ op: 'newRef', cls: className, args: toWireArray(args) });
+        if (constructingJavaReceiver && constructingJavaReceiver.className === className) {
+          return constructingJavaReceiver.receiver;
+        }
+        if (args.length === 1 && args[0] && !isJavaObject(args[0])
+            && (typeof args[0] === 'function' || typeof args[0] === 'object') && !Array.isArray(args[0])) {
+          if (interfaceClass === undefined) { interfaceClass = javaCall({ op: 'isInterface', name: className }); }
+          if (interfaceClass) {
+            return javaCall({ op: 'proxyInterface', cls: className, callback: registerJavaCallback(args[0]) });
+          }
+        }
+        var value = javaCall({ op: 'newRef', cls: className, args: toWireArray(args), fromJs: true });
+        if (value && value.__handle && javaDefaultThreadModes[className]) {
+          javaThreadModes[value.__handle] = javaDefaultThreadModes[className];
+        }
         if (value && value.$obj) { return javaObject(value.$obj, value.$class); }
         return value;
       }
     });
+    classRefCache[className] = proxy;
+    return proxy;
   }
 
   /**
    * 未安装/无法解析的 Java 类占位：允许 `class X extends android.foo.Bar` 语法先通过，
-   * 但任何构造/静态调用都抛中文错误，提示 Node24 暂不支持继承 Java 类（defineClass 需反向通道）。
+   * 构造/静态调用报告具体缺失类；可解析的类使用真实 defineClass 回调桥。
    */
   function unsupportedClassRef(className) {
-    var message = '未安装/无法解析的 Java 类：' + className + '。'
-      + 'Node24 暂不支持继承 Java 类或自定义 View（$java.defineClass 需要 Java→Node 反向回调，当前 native 桥只有单向调用）；'
-      + '请改用 Node UI 的 ui.Widget + layoutXml，或把自定义 View 放到宿主 Java 侧。';
+    var message = '未安装/无法解析的 Java 类：' + className + '。请检查完整类名、嵌套类名称和提供该类的依赖。';
     var fn = function () { throw hostError(message); };
     fn.__classRef = true;
     fn.__className = className;
@@ -291,7 +401,8 @@
     return new Proxy(fn, {
       get: function (self, prop) {
         if (prop === '__classRef') { return true; }
-        if (prop === '__className' || prop === '__unsupportedClass') { return true; }
+        if (prop === '__className') { return className; }
+        if (prop === '__unsupportedClass') { return true; }
         if (prop === 'prototype') { return {}; }
         if (prop === 'toString') { return function () { return '[UnsupportedJavaClass ' + className + ']'; }; }
         if (typeof prop === 'symbol') { return undefined; }
@@ -364,6 +475,19 @@
 
   function dispatchEvent(event) {
     if (!event || !event.type) { return; }
+    if (event.type === '__ajs_java_result') {
+      var result = event.payload;
+      var pending = javaPending[result.id];
+      if (pending) {
+        delete javaPending[result.id];
+        if (result.error) { pending.reject(hostError(result.error)); }
+        else { pending.resolve(wrapJavaResult(okValue(result.value))); }
+        if (Object.keys(javaPending).length === 0 && javaPendingTimer) {
+          clearInterval(javaPendingTimer); javaPendingTimer = null;
+        }
+      }
+      return;
+    }
     var handlers = listeners[event.type];
     if (!handlers || handlers.length === 0) { return; }
     for (var i = 0; i < handlers.length; i++) {
@@ -404,6 +528,24 @@
       }
     }, POLL_INTERVAL);
     if (pollTimer.unref) { pollTimer.unref(); }
+  }
+
+  function javaAsyncCall(request, args, mode) {
+    var id = javaNextRequest++;
+    return new Promise(function (resolve, reject) {
+      javaPending[id] = { resolve: resolve, reject: reject };
+      if (!javaPendingTimer) { javaPendingTimer = setInterval(pollOnce, POLL_INTERVAL); }
+      try {
+        hostValue({ kind: 'java', op: 'asyncCall', id: id, mode: mode,
+          call: Object.assign({}, request, { args: args }) });
+      } catch (error) {
+        delete javaPending[id];
+        if (Object.keys(javaPending).length === 0 && javaPendingTimer) {
+          clearInterval(javaPendingTimer); javaPendingTimer = null;
+        }
+        reject(error);
+      }
+    });
   }
 
   function on(type, handler) {
@@ -496,10 +638,56 @@
   var contextCache = null;
 
   var javaApi = {
-    defineClass: function () {
-      return Promise.reject(hostError('$autojs.java.defineClass 暂不支持：JS 继承 Java 类并覆盖方法需要'
-        + ' Java→Node 反向回调，而预编译 native 桥只有单向调用。'
-        + '可选替代：用 __autojsOn() 接收宿主投递的事件，或把逻辑放到宿主侧 Java 类里。'));
+    setThreadMode: function (object, mode) {
+      if (!isJavaObject(object)) { throw hostError('setThreadMode 需要 Java 对象'); }
+      if (!/^(current|io|compute|ui|ui-sync)$/.test(mode)) { throw hostError('未知 Java 线程模式：' + mode); }
+      javaThreadModes[object.__handle] = mode;
+    },
+    setDefaultThreadMode: function (clazz, mode) {
+      if (!clazz || clazz.__classRef !== true) { throw hostError('setDefaultThreadMode 需要 Java 类'); }
+      if (!/^(current|io|compute|ui|ui-sync)$/.test(mode)) { throw hostError('未知 Java 线程模式：' + mode); }
+      javaDefaultThreadModes[clazz.__className] = mode;
+    },
+    boxInt: function (value) { return new (classRef('java.lang.Integer'))(Number(value)); },
+    boxLong: function (value) { return new (classRef('java.lang.Long'))(Number(value)); },
+    boxShort: function (value) { return new (classRef('java.lang.Short'))(Number(value)); },
+    boxByte: function (value) { return new (classRef('java.lang.Byte'))(Number(value)); },
+    boxFloat: function (value) { return new (classRef('java.lang.Float'))(Number(value)); },
+    boxDouble: function (value) { return new (classRef('java.lang.Double'))(Number(value)); },
+    boxBoolean: function (value) { return new (classRef('java.lang.Boolean'))(Boolean(value)); },
+    boxChar: function (value) { return new (classRef('java.lang.Character'))(value); },
+    defineClass: async function (jsClass, options) {
+      options = options || {};
+      if (typeof jsClass !== 'function' || !jsClass.name) { throw hostError('defineClass 需要具名 JS 类'); }
+      var base = jsClass;
+      var methods = new Set();
+      while (base && !Object.prototype.hasOwnProperty.call(base, '__classRef')) {
+        if (!base.prototype) { throw hostError('defineClass 的父类必须是 Java 类'); }
+        Object.getOwnPropertyNames(base.prototype).forEach(function (name) {
+          var descriptor = Object.getOwnPropertyDescriptor(base.prototype, name);
+          if (name !== 'constructor' && typeof descriptor.value === 'function') { methods.add(name); }
+        });
+        base = Object.getPrototypeOf(base);
+      }
+      if (!base || base.__classRef !== true) { throw hostError('defineClass 的父类必须是 Java 类'); }
+      if (typeof globalThis.__ajsEnableJavaCallbacks !== 'function') {
+        throw hostError('当前原生 Node 桥缺少 Java 回调能力，请更新应用');
+      }
+      var name = (options.packageName ? options.packageName + '.' : '') + jsClass.name;
+      if (generatedClasses[name]) { throw hostError('当前脚本已定义 Java 类：' + name); }
+      var metadata = { id: nextGeneratedClass++, jsClass: jsClass, superMethods: [] };
+      var result = javaCall({ op: 'defineClass', classId: metadata.id, name: name,
+        superclass: base.__className, interfaces: (options.implements || []).map(function (it) { return it.__className; }),
+        methods: Array.from(methods), session: globalThis.__ajsEnableJavaCallbacks() });
+      metadata.superMethods = result.superMethods || [];
+      generatedClasses[name] = metadata;
+      classCache[name] = true;
+      delete classRefCache[name];
+      var generatedClass = classRef(name);
+      Object.setPrototypeOf(jsClass, generatedClass);
+      Object.setPrototypeOf(jsClass.prototype, generatedClass.prototype);
+      globalThis.__ajsHasGeneratedJavaClasses = true;
+      return jsClass;
     },
     Packages: {
       java: packageRef('java'),
@@ -516,7 +704,8 @@
         throw hostError('$java.getClass/findClass 需要类名字符串');
       }
       var isArrayDescriptor = className.charAt(0) === '[';
-      if (!isArrayDescriptor && className.indexOf('.') < 0) {
+      if (!isArrayDescriptor && !/^(boolean|byte|short|int|long|float|double|char|void)$/.test(className)
+          && className.indexOf('.') < 0) {
         // task-176：不能省略包名；给出完整类名格式提示。
         throw hostError('$java.getClass/findClass 需要完整类名（含包名），例如 android.view.KeyEvent；不能省略包名：' + className);
       }
@@ -533,6 +722,41 @@
     },
     findClass: function (className) {
       return javaApi.getClass(className);
+    }
+  };
+
+  globalThis.__ajsDispatchJavaCallback = function (text) {
+    try {
+      var request = JSON.parse(text);
+      if (request.callbackId) {
+        var target = javaCallbacks[request.callbackId];
+        var fn = typeof target === 'function' ? target : target && target[request.method];
+        if (typeof fn !== 'function') { throw hostError('缺少 Java 接口回调：' + request.method); }
+        var returned = fn.apply(target, (request.args || []).map(function (it) { return wrapJavaResult(okValue(it)); }));
+        if (returned && typeof returned.then === 'function') { throw hostError('Java 接口同步回调不能返回 Promise'); }
+        return JSON.stringify({ ok: true, value: toWire(returned) });
+      }
+      var metadata = generatedClasses[request.className];
+      if (!metadata || metadata.id !== request.classId) { throw hostError('Java 回调所属脚本已结束'); }
+      var receiver = okValue(request.receiver);
+      var args = (request.args || []).map(function (it) { return wrapJavaResult(okValue(it)); });
+      var result;
+      if (request.method === '<init>') {
+        var previous = constructingJavaReceiver;
+        constructingJavaReceiver = { className: request.className, receiver: receiver };
+        try { Reflect.construct(metadata.jsClass, args); }
+        finally { constructingJavaReceiver = previous; }
+      } else {
+        var method = receiver[request.method];
+        if (typeof method !== 'function') { throw hostError('缺少 Java 覆盖方法：' + request.method); }
+        result = method.apply(receiver, args);
+        if (result && typeof result.then === 'function') {
+          throw hostError('Java 同步覆盖方法不能返回 Promise：' + request.method);
+        }
+      }
+      return JSON.stringify({ ok: true, value: toWire(result) });
+    } catch (error) {
+      return JSON.stringify({ ok: false, error: String(error && error.stack || error) });
     }
   };
 
@@ -5805,6 +6029,24 @@
     };
   })();
 
+  // Pro's image examples import this value type from @autojs/opencv. Image
+  // operations still execute in the existing Java/OpenCV host; a rectangle
+  // carries coordinates only and does not require a Node-16 native addon.
+  function OpenCvRect(x, y, width, height) {
+    if (!(this instanceof OpenCvRect)) { throw apiTypeError('Rect 必须通过 new 构造'); }
+    if (arguments.length !== 0 && arguments.length !== 4) {
+      throw apiTypeError('Rect 需要零个参数或 x,y,width,height 四个参数');
+    }
+    var values = arguments.length === 0 ? [0, 0, 0, 0] : [x, y, width, height];
+    ['x', 'y', 'width', 'height'].forEach(function (key, index) {
+      var value = values[index];
+      if (typeof value !== 'number' || !Number.isFinite(value)) { throw apiTypeError('Rect.' + key + ' 必须是有限数字'); }
+      value = Math.trunc(value);
+      if (value < -2147483648 || value > 2147483647) { throw apiRangeError('Rect.' + key + ' 超出 int32 范围'); }
+      Object.defineProperty(this, key, {value: value, enumerable: true});
+    }, this);
+  }
+
   globalThis.__ajsBuiltinModules = {
     rhino: rhinoModule,
     app: appModule,
@@ -5824,6 +6066,7 @@
     axios: axiosModule,
     accessibility: accessibilityModule,
     image: imageModule,
+    '@autojs/opencv': {Rect: OpenCvRect},
     color: colorModule,
     media_projection: mediaProjectionModule,
     dialogs: dialogsModule,

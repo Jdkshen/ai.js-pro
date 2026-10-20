@@ -1,5 +1,11 @@
 # @autojs/opencv 评估（task-146 ④，不强行实现）
 
+> 2026-10-20 更新：下文为历史方案评估。当前 `require('image')` 已通过 Java/OpenCV
+> 实现模板/特征匹配，`ocr` 已接内置 PP-OCRv6 与 MLKit。本批为高级版原始找色
+> 示例补了 `require('@autojs/opencv').Rect` 的零参数/四参数构造与只读坐标，
+> 可直接传入 image API 的 region；不代表完整 OpenCV addon 已兼容，Rect 的
+> and/or/pad/rescale 等方法也尚未实现。不能把下文的“本批不实现”当作当前 API 清单。
+
 ## Pro 现状（反编译依据）
 
 - `assets/v8/built_in_modules/@autojs/opencv.js` + `node_modules/@autojs/opencv/`：JS 封装 + `prebuilt/opencv4autojs.arm.node`（1.6MB）与 `opencv4autojs.arm64.node`（3.5MB）两个 **Node 原生插件**，另有 `lib/typings/*` 大量 d.ts、haarcascade 数据。

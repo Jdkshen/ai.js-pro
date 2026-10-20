@@ -10,7 +10,7 @@
  * 第二阶段（task-69/70）：
  *  - Java 类标记：prelude 的 rhino.install() 把 android/androidx/com 等装成真实 Java 包代理；
  *    ui.js 在 require("ui") 时把它们换成 UI 标记包代理（可 new/extends、方法 no-op 返回 marker），
- *    并包装 $autojs.java.defineClass：返回原 class（不再 Promise.reject）；
+ *    defineClass 由 prelude 的真实 Java 类生成桥提供；存在生成类时保留真实包代理。
  *  - view.binding.<name> 用宿主 show 返回的 views 映射生成 View marker；
  *  - marker.setAdapter(adapter) 拦截：从 adapter 实例取 data、捕获 grid_item layoutId，
  *    发 {kind:"ui",op:"setAdapter"} 让宿主构建原生 RecyclerView.Adapter 显示卡片。
@@ -65,12 +65,34 @@
         // task-69：Java 类/对象标记（无真实 Java 回调，只做 UI 占位与数据提取）
         // ------------------------------------------------------------------
         const lastInflate = {layoutId: 0};
+        let realUiMode = false;
+        let realActivity = null;
+        let realSession = null;
+        let realImageLoader = null;
+        const realBindings = new WeakMap();
+        function javaSession() {
+            if (!realSession) realSession = globalThis.$autojs.java.findClass('com.stardust.autojs.engine.node24.NodeUiLocalSession');
+            return realSession;
+        }
+        function realViewBinding(view) {
+            let bindings = realBindings.get(view);
+            if (!bindings) {
+                bindings = new Proxy({}, {get: function (_target, name) {
+                    if (typeof name === 'symbol' || name === 'then' || name === 'toJSON') return undefined;
+                    const id = javaSession().viewId(String(name));
+                    if (!id) throw new Error('未找到 View 资源 id：' + String(name));
+                    const child = view.findViewById(id);
+                    if (!child) throw new Error('当前 View 中未找到：' + String(name));
+                    return child;
+                }});
+                realBindings.set(view, bindings);
+            }
+            return bindings;
+        }
         const markState = typeof WeakMap === 'function' ? new WeakMap() : null;
         // Lead 约束（task-69/70）：全局包代理替换延迟到真正进入 UI（setMainActivity/show 前），
         // 保存原始引用，close/出错/进程 exit 时恢复；不 require('ui') 的纯 Node 脚本不受影响。
         let originalGlobals = null;
-        let originalJavaDefineClass = null;
-        let originalRhinoDefineClass = null;
         let exitRestoreInstalled = false;
 
         function markerStateOf(value) {
@@ -296,6 +318,13 @@
                 this.__ajsMarkerName = name;
                 this.__ajsArgs = Array.prototype.slice.call(arguments);
             };
+            // UI's facade must retain its represented Java class identity.
+            // defineClass reads these own properties and generates a real JVM
+            // subclass; returning the JS specification as a fake class is unsafe.
+            Object.defineProperties(ctor, {
+                __classRef: {value: true},
+                __className: {value: name}
+            });
             try {
                 Object.defineProperty(ctor, 'name', {value: name.split('.').pop()});
             } catch (ignored) { /* noop */ }
@@ -322,6 +351,8 @@
                 get: function (_t, prop) {
                     if (typeof prop === 'symbol' || prop === 'then' || prop === 'toJSON') return undefined;
                     const key = String(prop);
+                    if (key === '__classRef') return true;
+                    if (key === '__className') return name;
                     if (key === 'prototype') return prototypeFallback;
                     if (key === '__ajsMarkerName') return name;
                     if (key === '__ajsClass') return true;
@@ -353,6 +384,7 @@
 
         /** 把 rhino.install() 装的真实 Java 包代理换成 UI marker（延迟到进入 UI 前，保存原引用）。 */
         function patchJavaGlobals() {
+            if (globalThis.__ajsHasGeneratedJavaClasses) return;
             if (globalThis.__ajsUiGlobalsPatched) return;
             globalThis.__ajsUiGlobalsPatched = true;
             originalGlobals = Object.create(null);
@@ -365,20 +397,6 @@
                     console.warn('[ui] 替换包代理失败：' + name, error);
                 }
             });
-            try {
-                const autojs = globalThis.$autojs;
-                if (autojs && autojs.java && typeof autojs.java === 'object') {
-                    originalJavaDefineClass = autojs.java.defineClass;
-                    autojs.java.defineClass = function (spec) { return Promise.resolve(spec); };
-                }
-                const rhino = globalThis.__ajsBuiltinModules && globalThis.__ajsBuiltinModules.rhino;
-                if (rhino) {
-                    originalRhinoDefineClass = rhino.defineClass;
-                    rhino.defineClass = function (spec) { return Promise.resolve(spec); };
-                }
-            } catch (error) {
-                console.warn('[ui] 包装 defineClass 失败：', error);
-            }
             // 脚本结束/异常退出时恢复（close() 也会主动恢复）；exit 回调里只做纯赋值，安全。
             if (!exitRestoreInstalled && typeof process !== 'undefined' && process && typeof process.once === 'function') {
                 exitRestoreInstalled = true;
@@ -386,7 +404,7 @@
             }
         }
 
-        /** 恢复全局包代理与 defineClass（可重复调用）。 */
+        /** 恢复全局包代理（可重复调用）。 */
         function restoreJavaGlobals() {
             if (!globalThis.__ajsUiGlobalsPatched) return;
             globalThis.__ajsUiGlobalsPatched = false;
@@ -395,12 +413,6 @@
                     try { globalThis[name] = originalGlobals[name]; } catch (ignored) { /* noop */ }
                 });
             }
-            try {
-                const autojs = globalThis.$autojs;
-                if (autojs && autojs.java && originalJavaDefineClass) autojs.java.defineClass = originalJavaDefineClass;
-                const rhino = globalThis.__ajsBuiltinModules && globalThis.__ajsBuiltinModules.rhino;
-                if (rhino && originalRhinoDefineClass) rhino.defineClass = originalRhinoDefineClass;
-            } catch (ignored) { /* noop */ }
         }
 
         function extractItems(adapter) {
@@ -666,6 +678,15 @@
             constructor() {
                 this.__ajsNodeUiActivity = true;
                 this.__ajsHandlers = Object.create(null);
+                if (realUiMode) {
+                    return new Proxy(this, {get: function (target, prop, receiver) {
+                        if (prop === '__ajsJavaObject__') return realActivity != null;
+                        if (prop === '__handle') return realActivity && realActivity.__handle;
+                        if (prop in target || typeof prop === 'symbol') return Reflect.get(target, prop, receiver);
+                        if (!realActivity) return undefined;
+                        return realActivity[prop];
+                    }});
+                }
             }
             get layoutId() { return null; }
             onCreate() {}
@@ -688,13 +709,15 @@
             // 不能 throw，否则后面的 _setupGrid 不会执行、卡片区永远为空。
             // task-197：Pro/AndroidX 示例会用 insetsController 设置系统栏外观；第一阶段给 no-op 兼容。
             get insetsController() {
+                if (realActivity) return globalThis.$autojs.java.findClass('androidx.core.view.WindowCompat')
+                    .getInsetsController(realActivity.getWindow(), realActivity.getWindow().getDecorView());
                 return markerObject('WindowInsetsControllerCompat');
             }
-            getWindow() { return markerObject('Window'); }
-            getTheme() { return markerObject('Theme'); }
-            setSupportActionBar() { return markerObject('ActionBar'); }
-            getMenuInflater() { return markerObject('MenuInflater'); }
-            getApplicationContext() { return markerObject('Context'); }
+            getWindow() { return realActivity ? realActivity.getWindow() : markerObject('Window'); }
+            getTheme() { return realActivity ? realActivity.getTheme() : markerObject('Theme'); }
+            setSupportActionBar(toolbar) { return realActivity ? realActivity.setSupportActionBar(toolbar) : markerObject('ActionBar'); }
+            getMenuInflater() { return realActivity ? realActivity.getMenuInflater() : markerObject('MenuInflater'); }
+            getApplicationContext() { return realActivity ? realActivity.getApplicationContext() : markerObject('Context'); }
         }
 
         // ------------------------------------------------------------------
@@ -721,6 +744,7 @@
         };
 
         function makeViewProxy(event) {
+            if (realUiMode) return javaSession().getContentView();
             const views = (event && event.views) || mainViews || {};
             globalThis.__ajsUiViews = views || {};
             return markerObject('View', {views: views, rootId: (event && event.rootId) || 0});
@@ -751,6 +775,8 @@
                 console.warn('[ui] $autojs.stopRunning() 调用失败：', error);
             }
             mainActivity = null;
+            realActivity = null;
+            realImageLoader = null;
             mainViews = {};
             Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
             Object.keys(viewBindings).forEach(function (key) { delete viewBindings[key]; });
@@ -834,12 +860,15 @@
 
         function loadAndroidResources() {
             return Promise.resolve().then(function () {
-                return hostCall({op: 'loadAndroidResources'});
+                const result = hostCall({op: 'loadAndroidResources'});
+                realUiMode = result.compiled === true && typeof globalThis.__ajsEnableJavaCallbacks === 'function';
+                return result;
             });
         }
 
         function layoutOf(rawLayout) {
-            if (typeof rawLayout === 'number' && rawLayout > 0) {
+            // Android package ids >= 0x80 are signed negative int32 values.
+            if (typeof rawLayout === 'number' && Number.isInteger(rawLayout) && rawLayout !== 0) {
                 return {layoutId: rawLayout};
             }
             if (rawLayout && typeof rawLayout === 'object' && rawLayout.__ajsLayout) {
@@ -853,8 +882,8 @@
             if (typeof Ctor !== 'function') {
                 throw new TypeError('ui.setMainActivity 需要一个 Activity 子类');
             }
-            // Lead 约束：进入 UI 前才替换全局 Java 包代理/defineClass；失败恢复后抛出。
-            patchJavaGlobals();
+            // 进入 UI 前按需切换包代理；生成类场景始终使用真实 Java 包代理。
+            if (!realUiMode) patchJavaGlobals();
             let instance;
             let layout;
             let layoutXml = '';
@@ -885,6 +914,11 @@
                     + '（get layoutId() 返回 ui.R.layout.xxx，或 get layoutXml() 返回 XML 字符串）');
             }
             const request = {op: 'show', className: Ctor.name || 'MainActivity'};
+            if (realUiMode) {
+                globalThis.__ajsEnableJavaCallbacks();
+                globalThis.__ajsBindJavaView = realViewBinding;
+                request.realJava = true;
+            }
             if (layoutXml) {
                 // 字符串布局入口：不要求工程 res/build，宿主动态 inflate 并返回真实 views 映射。
                 request.layoutXml = layoutXml;
@@ -897,6 +931,7 @@
             let result;
             try {
                 result = hostCall(request);
+                if (realUiMode) realActivity = javaSession().getActivity();
             } catch (error) {
                 restoreJavaGlobals();
                 throw error;
@@ -919,6 +954,13 @@
                 console.warn('[ui] $autojs.keepRunning() 调用失败：', error);
             }
             pollEvents();
+            if (realUiMode) {
+                const callbacks = globalThis.$autojs.java.findClass('com.stardust.autojs.engine.node24.NodeUiLocalSession$ActivityCallbacks');
+                javaSession().setActivityCallbacks(new callbacks({
+                    onCreateOptionsMenu: function (menu) { return !!instance.onCreateOptionsMenu(menu); },
+                    onOptionsItemSelected: function (item) { return !!instance.onOptionsItemSelected(item); }
+                }));
+            }
             return {instance: instance, layout: layout, host: result};
         }
 
@@ -1033,6 +1075,14 @@
         function uiGetCurrentActivity() { return uiCurrentActivity(); }
 
         const ui = {
+            imageLoader: {loadImageInto: function (view, address) {
+                if (!realUiMode) return Promise.reject(new Error('imageLoader 需要原生 Java UI'));
+                if (!realImageLoader) {
+                    realImageLoader = javaSession().getImageLoader();
+                    globalThis.$autojs.java.setThreadMode(realImageLoader, 'io');
+                }
+                return realImageLoader.loadImageInto(view, String(address));
+            }},
             Activity: Activity,
             Widget: Widget,
             run: uiRun,

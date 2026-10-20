@@ -241,6 +241,10 @@ public final class NodeUiHost {
      */
     public static void closeOverlayFromEngine() {
         try {
+            if (NodeUiLocalSession.isShowing()) {
+                NodeUiLocalSession.close();
+                return;
+            }
             if (sActivityMode || sUiMode == UI_MODE_ACTIVITY) {
                 closeCurrent();
                 return;
@@ -275,7 +279,10 @@ public final class NodeUiHost {
                 return setPager(app, dir, request);
             case "pollEvents":
                 pollActivityViewEvents();
-                return new JSONObject().put("ok", true).put("events", drainEvents());
+                JSONArray events = drainEvents();
+                JSONArray local = NodeUiLocalSession.drainEvents();
+                for (int i = 0; i < local.length(); i++) events.put(local.get(i));
+                return new JSONObject().put("ok", true).put("events", events);
             case "timedTask": {
                 try {
                     return NodeUiActivityClient.get().work(context, request);
@@ -345,7 +352,7 @@ public final class NodeUiHost {
 
     /** 当前是否有主进程 NodeUiActivity 显示（A 的 keep-alive 可反射使用）。 */
     public static boolean hasNodeUiActivity() {
-        return sActivityMode && sUiMode == UI_MODE_ACTIVITY;
+        return NodeUiLocalSession.isShowing() || (sActivityMode && sUiMode == UI_MODE_ACTIVITY);
     }
 
     private static void ensureActivityListener() {
@@ -476,6 +483,10 @@ public final class NodeUiHost {
     }
 
     private static Object closeCurrent() throws Exception {
+        if (NodeUiLocalSession.isShowing()) {
+            NodeUiLocalSession.close();
+            return new JSONObject().put("ok", true);
+        }
         if (sActivityMode) {
             Log.i(TAG, "C-ACTIVITY close: " + sActivitySession);
             try {
@@ -728,9 +739,17 @@ public final class NodeUiHost {
     // ------------------------------------------------------------------
 
     private static Object show(final Context context, final String projectDir, JSONObject request) throws Exception {
+        if (request.optBoolean("realJava")) {
+            synchronized (LOCK) { EVENTS.clear(); }
+            clearCloseRequested();
+            return NodeUiLocalSession.show(context, projectDir, request);
+        }
         final ProjectResourceBundle bundle = bundleOf(context, projectDir);
         final String inlineXml = request.optString("layoutXml", "").trim();
         final boolean inline = !inlineXml.isEmpty();
+        final String javaClassOwner = request.optString("javaClassOwner", "");
+        final ClassLoader runtimeClasses = org.autojs.source.engine.android.Node24GeneratedClasses.loader(
+                javaClassOwner, context.getClassLoader());
         if (!inline) {
             if (bundle == null) {
                 return new JSONObject().put("ok", false).put("error", "工程目录为空：" + projectDir);
@@ -781,7 +800,7 @@ public final class NodeUiHost {
         sShownLayout = shownName;
         final String displayLayout = inline ? "inline" : "layout/" + shownName;
         // task-95：Activity 已显示 → 复用，绝不再创建 overlay（单通道互斥）。
-        if (sActivityMode && sUiMode == UI_MODE_ACTIVITY) {
+        if (javaClassOwner.isEmpty() && sActivityMode && sUiMode == UI_MODE_ACTIVITY) {
             Log.i(TAG, "C-UI: mode=activity reuse session=" + sActivitySession);
             return new JSONObject().put("ok", true)
                     .put("mode", "activity")
@@ -816,7 +835,7 @@ public final class NodeUiHost {
         }
         // task-76：默认尝试主进程真 Activity；失败（A 服务未就绪/绑超时）回退 overlay。
         ensureActivityListener();
-        if (tryActivityMode(context, projectDir, shownName, shownId, className, xml)) {
+        if (javaClassOwner.isEmpty() && tryActivityMode(context, projectDir, shownName, shownId, className, xml)) {
             JSONObject views = new JSONObject();
             if (inline) {
                 JSONObject applied = forwardToActivity("setContentViewXml",
@@ -882,13 +901,13 @@ public final class NodeUiHost {
                     View content;
                     try {
                         content = inline
-                                ? inflateInlineLayout(themed, xml)
+                                ? inflateInlineLayout(themed, xml, runtimeClasses)
                                 : bundle.newLayoutInflater(themed).inflate(xml);
                     } catch (Throwable first) {
                         Log.w(TAG, "C-THEME: Material 主题 inflate 失败，回退 App 主题重试: " + describe(first));
                         Context fallback = fallbackContextFor(context);
                         content = inline
-                                ? inflateInlineLayout(fallback, xml)
+                                ? inflateInlineLayout(fallback, xml, runtimeClasses)
                                 : bundle.newLayoutInflater(fallback).inflate(xml);
                     }
                     // task-69：保存内容视图/主题/资源包，并采集 id 名 → viewId 映射给 JS binding。
@@ -967,6 +986,10 @@ public final class NodeUiHost {
      * 带原 id 的 text 占位，保证同屏基础控件仍能显示/绑定，限制见 layout-xml-fix.md。
      */
     public static View inflateInlineLayout(Context themed, String xml) {
+        return inflateInlineLayout(themed, xml, themed == null ? null : themed.getClassLoader());
+    }
+
+    public static View inflateInlineLayout(Context themed, String xml, ClassLoader loader) {
         if (themed == null) {
             throw new IllegalArgumentException("layoutXml 缺少主题 Context");
         }
@@ -974,7 +997,9 @@ public final class NodeUiHost {
             throw new IllegalArgumentException("layoutXml 为空");
         }
         String normalized = normalizeInlineLayoutXml(xml);
-        return newInlineLayoutInflater(themed).inflate(normalized);
+        DynamicLayoutInflater inflater = newInlineLayoutInflater(themed);
+        if (loader != null) inflater.setClassLoader(loader);
+        return inflater.inflate(normalized);
     }
 
     private static DynamicLayoutInflater newInlineLayoutInflater(Context context) {
