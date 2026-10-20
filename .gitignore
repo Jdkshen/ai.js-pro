@@ -40,6 +40,10 @@
 !/tools/test-sift-chess-device.js
 !/tools/sift-chess-pipeline.js
 !/tools/test-sift-chess-pipeline-device.js
+!/tools/xiangqi-release.py
+!/tools/imgui-font-subset.py
+# Gradle 构建直接调用的生成脚本（prepareXiangqiRelease / verifyImGuiFontSubset）：
+# 曾被 /tools/* 静默忽略，导致全新 clone 与 CI 在第一个 gradle 任务就失败。
 
 # CodeGraph local index (regenerate with `codegraph init`)
 /.codegraph/
@@ -96,4 +100,7 @@ npm-install.log
 
 # Required source input for the in-app APK builder (now shipped by the apkbuilder plugin).
 !plugins/apkbuilder-plugin/src/main/assets/template.apk
+# 主 APK 内置的瘦身打包模板（verifySlimPackagingTemplate / 打包页运行时需要）：
+# 仍属生成物，但必须入库（约 16.6MB，走 LFS），否则全新 clone/CI 缺失会让构建失败。
+!/apps/app/src/main/assets/template.apk
 javac.*.args

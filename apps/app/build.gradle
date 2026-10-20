@@ -10,6 +10,9 @@ def releaseSigningValues = [
 ]
 def releaseSigningReady = releaseSigningValues.values().every { it != null && !it.trim().isEmpty() }
 
+// CI（ubuntu）通常只装了 python3，Windows 本机是 python；构建期调用生成脚本时按平台选解释器。
+def pythonExecutable = org.gradle.internal.os.OperatingSystem.current().isWindows() ? 'python' : 'python3'
+
 // VS Code「Auto.js Pro 扩展」的 USB 自动发现要求本应用声明一个与真 Auto.js Pro
 // 相同 authority 的 provider（org.autojs.autojspro.debug.provider），代价是：
 // 同机安装了真 Auto.js Pro 的设备无法安装/更新本应用（INSTALL_FAILED_CONFLICTING_PROVIDER）。
@@ -260,7 +263,7 @@ tasks.register('verifyImGuiFontSubset', Exec) {
     group = 'verification'
     description = 'Ensure the bundled ImGui CJK font still covers every glyph ImGui can ask for.'
     workingDir rootProject.projectDir
-    commandLine 'python', rootProject.file('tools/imgui-font-subset.py').absolutePath, '--check'
+    commandLine pythonExecutable, rootProject.file('tools/imgui-font-subset.py').absolutePath, '--check'
 }
 
 
@@ -428,7 +431,7 @@ def bundledNodeSampleDir = file('src/main/assets/sample/Node 引擎')
 tasks.register('prepareXiangqiRelease', Exec) {
     group = 'build'
     workingDir rootProject.projectDir
-    commandLine 'python', rootProject.file('tools/xiangqi-release.py').absolutePath, 'prepare'
+    commandLine pythonExecutable, rootProject.file('tools/xiangqi-release.py').absolutePath, 'prepare'
 }
 tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
     dependsOn tasks.named('prepareXiangqiRelease')

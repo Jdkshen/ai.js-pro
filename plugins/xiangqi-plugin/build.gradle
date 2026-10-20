@@ -1,5 +1,8 @@
 apply plugin: 'com.android.application'
 
+// CI（ubuntu）只有 python3，Windows 本机是 python；按平台选择解释器。
+def pythonExecutable = org.gradle.internal.os.OperatingSystem.current().isWindows() ? 'python' : 'python3'
+
 // Auto.js 插件（plugin）是一个可独立安装的第三方 APK：宿主脚本用
 //   $plugins.load("com.jdkshen.xiangqi.plugin")
 // 加载它，拿到象棋识别/算棋能力。因此它必须自包含——不能 link 宿主 :engine 的类，
@@ -81,7 +84,7 @@ def pluginNnueDir = file("$buildDir/generated/xiangqi-plugin-nnue")
 // 逐文件核对插件 APK，所以两边必须来自同一次生成。
 def prepareXiangqiProject = tasks.register('prepareXiangqiProject', Exec) {
     workingDir rootProject.projectDir
-    commandLine 'python', rootProject.file('tools/xiangqi-release.py').absolutePath, 'prepare'
+    commandLine pythonExecutable, rootProject.file('tools/xiangqi-release.py').absolutePath, 'prepare'
 }
 
 // 整个工程都进插件（含 tools/tests/reports）：装机后 installProject() 才能还原出与宿主
