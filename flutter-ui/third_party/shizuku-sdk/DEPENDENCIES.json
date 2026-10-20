@@ -1,0 +1,22 @@
+{
+  "version": "13.1.5",
+  "source": "https://github.com/RikkaApps/Shizuku-API",
+  "license": "MIT",
+  "artifacts": [
+    {
+      "file": "api-13.1.5.aar",
+      "sha256": "4def9bde498ef8626614c2fc5db9af4749c86f16f6c33e3f5658d35e70bab59b",
+      "url": "https://repo.maven.apache.org/maven2/dev/rikka/shizuku/api/13.1.5/api-13.1.5.aar"
+    },
+    {
+      "file": "aidl-13.1.5.aar",
+      "sha256": "33fe7191cdd69fcb66d649264f3b0c47acb2f3d6343afc05b98dbbff6f221963",
+      "url": "https://repo.maven.apache.org/maven2/dev/rikka/shizuku/aidl/13.1.5/aidl-13.1.5.aar"
+    },
+    {
+      "file": "shared-13.1.5.aar",
+      "sha256": "4659642c9339be0a26e9c65bb8648f7ad6d8f4a465f557993ccbc78802381635",
+      "url": "https://repo.maven.apache.org/maven2/dev/rikka/shizuku/shared/13.1.5/shared-13.1.5.aar"
+    }
+  ]
+}

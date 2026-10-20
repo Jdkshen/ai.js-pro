@@ -32,20 +32,25 @@ git log --oneline -10                             # 最近改动
 - **版本号必须等于** `max(仓库 project-versions, 已发布, 设备版本)+1`，否则 `publish.ps1` 会校验失败。
 - 设备安装：`adb -s cccc62c7 install -r <apk>`（新机 `DQKFJB59596L45BI`、MI8 `ce4d2bdb`）。
 
-⚠️ 雷区（详细原因见 `AGENTS.md`）：不要用管道过滤 gradle 输出；`.ps1` 保留 UTF-8 BOM（含中文路径的脚本必须带 BOM，否则 PS5.1 按 GBK 解码会把中文路径读坏）；Dart 改动要写外置重建源并重建 AOT；不要裸跑 `dev-update.ps1`。
+⚠️ 雷区（详细原因见 `AGENTS.md`）：不要用管道过滤 gradle 输出；`.ps1` 保留 UTF-8 BOM（含中文路径的脚本必须带 BOM，否则 PS5.1 按 GBK 解码会把中文路径读坏）；Dart 改动改 `flutter-ui/` 后必须重建 AOT；不要裸跑 `dev-update.ps1`。
 
-### Flutter AOT / dev 包流水线（2026-10-20 重建，踩过坑）
+### Flutter AOT / dev 包流水线（2026-10-20 重建 + 源码入库）
 
-- Dart 源码唯一真源在**外部重建线**：`C:\Users\18101\Documents\AutoJsPro-本地工程-20261008\工程\output\autojs-pro-flutter-rebuild\lib`；
-  APK 里的 Flutter UI 由这里编译的 AOT `libapp.so` 提供（仓库不跟踪 AOT 产物）。
+- **Dart 源码已入库**（2026-10-20 起）：`flutter-ui/`（`lib/`、`pubspec.yaml/lock`、`third_party/`、pubspec 引用的 `assets/`）。
+  不再依赖个人电脑上的外部重建线（历史路径仅作背景）。
+- **payload 基础已入库**：`flutter-payload-base/`（`jniLibs/arm64-v8a/libflutter.so`、`flutter_embedding_3.3.4.jar`、
+  `assets/flutter_assets/`，LFS + 普通 git；不含生成的 `libapp.so`）。这是 Flutter 3.3.4 引擎 + 基线资源。
 - 流水线脚本：`tools/flutter-poc/build-aot.ps1` + `tools/flutter-poc/publish-poc-build.ps1`（仓库内跟踪）；
-  运行时同步副本在 `output/flutter-poc/`（gitignore）。
-- AOT 构建：把重建线 `lib/assets/third_party/pubspec.*` 同步到 ASCII 路径 `output/flutter-poc/src` → `flutter pub get --offline` →
+  运行时工作目录 `output/flutter-poc/`（gitignore，删除后可自动重建）。
+- AOT 构建：`flutter-ui/{lib,assets,third_party,pubspec*}` 同步到 `output/flutter-poc/src` → `flutter pub get`（默认在线；`-Offline` 可选）→
   `flutter assemble --output build --define=BuildMode=release --define=TargetPlatform=android-arm64 android_aot_bundle_release_android-arm64`
-  → `build/arm64-v8a/app.so` 复制为 `output/flutter-poc/payload/jniLibs/arm64-v8a/libapp.so`。
-- Flutter SDK 固定在 `C:\Android\flutter-3.3.4`（不在 PATH 上）。
-- payload 组成：`jniLibs/arm64-v8a/{libapp.so,libflutter.so}` + `assets/flutter_assets/` + `flutter_embedding_3.3.4.jar`（取自 SDK）。
-  若 payload 丢失，可从 `apps/app/build/intermediates/merged_jni_libs|merged_assets` 里找回上一版产物，再重建 libapp.so。
+  → `build/arm64-v8a/app.so` 复制为 `payload/jniLibs/arm64-v8a/libapp.so`；payload 的其余文件从 `flutter-payload-base/` 自动补齐。
+- Flutter SDK 固定 Flutter **3.3.4**（本机 `C:\Android\flutter-3.3.4`，不在 PATH 上；换机需安装同版本）。
+- 构建命令必须带 `-PflutterPoc=true`；同机装有正版 Auto.js Pro 时还要加 `-PdevPluginUsbDiscovery=false`（否则
+  provider authority 冲突，install 报 `INSTALL_FAILED_CONFLICTING_PROVIDER`）。
+- 出包脚本会自动临时改写 `project-versions.json` 注入 versionCode/Name，构建结束后恢复——**不要手工改它**。
+- 关于页：Flutter 通过桥方法 `aboutInfo` 读真实版本/作者/git 提交；git 信息由 `apps/app/build.gradle` 构建时注入
+  `BuildConfig.GIT_*`（无 git 环境回退 unknown）。
 - 构建命令必须带 `-PflutterPoc=true`；同机装有正版 Auto.js Pro 时还要加 `-PdevPluginUsbDiscovery=false`（否则
   provider authority 冲突，install 报 `INSTALL_FAILED_CONFLICTING_PROVIDER`）。
 - 出包脚本会自动临时改写 `project-versions.json` 注入 versionCode/Name，构建结束后恢复——**不要手工改它**。
@@ -64,6 +69,8 @@ git log --oneline -10                             # 最近改动
 | `modules/engine-rhino` / `common` | Rhino 运行时 / 公共库 |
 | `apps/inrt` | 打包运行时模板（输出到插件 assets 的 `template.apk`） |
 | `plugins/` | apkbuilder 打包插件、xiangqi 象棋插件（引擎/识别） |
+| `flutter-ui/` | Flutter Glass UI 的 Dart 源码（唯一真源，AOT 由它编译） |
+| `flutter-payload-base/` | Flutter 3.3.4 payload 基础（libflutter.so / embedding jar / flutter_assets，LFS） |
 | `samples/` | 大型示例工程（象棋自动走棋等） |
 | `docs/` | 架构/指南/报告；`docs/HANDOFF_AI.md` 即本文 |
 | `tools/` | 构建/发布/真机脚本 |
@@ -182,7 +189,7 @@ git log --oneline -10                             # 最近改动
 | 自动化 | `modules/automator/`、`AccessibilityEventForwarder.kt` |
 | 打包 | `PocPackaging.java`、`apps/inrt/`、`output/flutter-poc/rebuild-inrt-template.ps1` |
 | 更新/发布 | `tools/publish.ps1`、`tools/dev-update.ps1`、`tools/flutter-poc/publish-poc-build.ps1` |
-| Flutter AOT | `tools/flutter-poc/build-aot.ps1`；外部 Dart 真源 `...\autojs-pro-flutter-rebuild\lib` |
+| Flutter AOT | `tools/flutter-poc/build-aot.ps1`；Dart 源码 `flutter-ui/`；payload 基础 `flutter-payload-base/` |
 | 关于页/构建信息 | `apps/app/build.gradle`（GIT_* BuildConfig）、`PocAppInfo.aboutInfo`、外部 `lib/settings_page.dart` |
 
 ---

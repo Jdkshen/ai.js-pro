@@ -14,3 +14,4 @@ apps/app/src/main/assets/editor/ace/** -text
 *.otf filter=lfs diff=lfs merge=lfs -text
 apps/app/src/main/assets/template.apk filter=lfs diff=lfs merge=lfs -text
 plugins/apkbuilder-plugin/src/main/assets/template.apk filter=lfs diff=lfs merge=lfs -text
+flutter-payload-base/flutter_embedding_3.3.4.jar filter=lfs diff=lfs merge=lfs -text

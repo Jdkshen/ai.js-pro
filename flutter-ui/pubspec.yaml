@@ -1,0 +1,28 @@
+name: autojs_glass
+description: Local Flutter frontend for the repaired Auto.js Pro Android runtime.
+publish_to: none
+version: 0.1.0+1
+environment:
+  sdk: '>=2.18.2 <3.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  # Material 组件中文化（关于/许可对话框按钮等）
+  flutter_localizations:
+    sdk: flutter
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+flutter:
+  uses-material-design: true
+  assets:
+    - third_party/aijs-editor/LICENSE.md
+    - third_party/aijs-editor/NOTICE.md
+    - third_party/shizuku-sdk/LICENSE
+    - third_party/shizuku-sdk/NOTICE.md
+    - assets/brand/icon_ai_js_pro.png
+    # MCP learnAutoJsSkill 优先读这一份：工具接口说明按本工程的实际实现更新过。
+    # 打进 APK 后路径是 assets/flutter_assets/assets/skills/…，Java 侧按该路径打开。
+    - assets/skills/Auto.js-AIAgentSkills.md
+  shaders:
+    - assets/shaders/glass_refraction.frag
