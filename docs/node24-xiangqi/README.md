@@ -15,6 +15,7 @@
 | `decode-parity.md` / `yolo-parity.md` | 解码与 YOLO 逐项等价证据 |
 | `r5-perf-report.md` / `r5-node24-port-notes.md` / `r5-recognition-parity.md` | 性能、移植笔记、最终 parity 报告 |
 | `R5最终报告-Node24识别移植.md` | 里程碑总结 |
+| `m2a-product-integration.md` | **M2a 产品集成**：QuickJS 面板→Node24 识别全链路 + 同帧 parity + 自动走棋实跑（PASS） |
 
 ## 前置
 - 设备已装含 Node24 桥的构建（本仓库 `applications/` 构建产物，或旁路包 `com.jdkshen.aijspro.nodebench`）
