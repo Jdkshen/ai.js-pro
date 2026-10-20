@@ -73,11 +73,14 @@ public interface ScreenCaptureRequester {
             // Keep the system's single-app / entire-screen choice. ScreenCapturer follows
             // the actual captured-content bounds on Android 14+, including app windows.
             Intent intent = manager.createScreenCaptureIntent();
+            // 自动化场景：系统「共享屏幕」授权条自动点掉（只命中已知文案才点）。
+            ScreenCaptureAutoConsent.arm();
             mActivity.startActivityForResult(intent, REQUEST_CODE_MEDIA_PROJECTION);
         }
 
         @Override
         public void onActivityResult(int requestCode, int resultCode, Intent data) {
+            ScreenCaptureAutoConsent.disarm();
             mResult = data;
             mMediator.removeDelegate(this);
             onResult(resultCode, data);

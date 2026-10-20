@@ -107,6 +107,7 @@ public class Node24CaptureConsentActivity extends Activity {
             return;
         }
         try {
+            com.stardust.autojs.core.image.capture.ScreenCaptureAutoConsent.arm();
             startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_PROJECTION);
             if (pending.delivered.get()) {
                 finish();
@@ -129,6 +130,7 @@ public class Node24CaptureConsentActivity extends Activity {
         if (mHandler != null) {
             mHandler.removeCallbacks(mTimeout);
         }
+        com.stardust.autojs.core.image.capture.ScreenCaptureAutoConsent.disarm();
         complete(mToken, resultCode, data, false);
         finish();
     }

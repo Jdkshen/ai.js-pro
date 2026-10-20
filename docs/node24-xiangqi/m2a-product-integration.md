@@ -44,3 +44,21 @@
 - 工程包：`.artifacts/xiangqi-aj-node-075/xiangqi-aj-node-0.6.82-node24.zip`（69,252,190 B；sha256 `d9e54905…3ce2a04`；255 条目；含 worker 路径修复）
 - 校验：`release-082-node24-check.json`（`node24识别.node.js` 首行正确、shim 与源逐字节相同、forward slash、哈希与 build manifest 一致）
 - 验证报告：`output/three-engine-bench/m2a-final-verification.md/.json` + `m2a-ui-device/` 证据（21 件）
+## 8. 投屏自动授权（无障碍点击，已真机验证）
+Android 15 每次新进程都要确认「共享屏幕」；本实现用**无障碍节点点击**自动走完授权：
+- `ScreenCaptureAutoConsent`（新增）：`arm()` 后每 350ms 轮询 `getRootInActiveWindow()`，命中 systemui 授权页时按文案点击「下一步 / 开始共享 / 立即开始」，在选择页点击「天天象棋」；8s 超时；结果返回 `disarm()`。另有 1.3s/2.6s 两个比例坐标兜底（仅授权期间有效）。
+- 接到两条请求路径：`ScreenCaptureRequester.ActivityScreenCaptureRequester.request()` 与 `Node24CaptureConsentActivity`（:node24 的 projection 授权）。
+- 工程侧（旧仓库，无 git）：`src/runtime/aijs-adapter.js` 在 `requestScreenCapture` 前用 `engines.execScriptFile` 拉起 `tools/auto-consent.quickjs.js` 助手（JS 兜底，独立引擎轮询 `currentActivity()` 并按比例坐标点击；`press(x,y,30)`）。
+
+真机日志（K40，面板「开始」，全程零手动点击）：
+```
+[xiangqi][capture] 自动同意投屏助手已启动
+MediaProjectionAutoConsent: armed
+AUTO_CONSENT_ACT com.android.systemui.statusbar.phone.AlertDialogWithDelegate
+MediaProjectionAutoConsent: clicked next/share in com.android.systemui
+MediaProjectionAutoConsent: selected app in com.android.systemui
+MediaProjectionAutoConsent: disarmed
+AUTO_CONSENT_ACT com.tencent.qqgame.xq.AppActivity
+```
+结果：授权自动通过 → 面板进入运行 → 观察 7 次、未知格 0、开局库 b0c2、CONFIRMED（自动走棋继续）。
+设备侧配置：`/sdcard/.aijspro-floaty/floaty-autorun.json` 增加 `"autoConsent": {"enabled": true, "taps": [...]}`。
