@@ -2,10 +2,11 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
-> **当前状态（2026-10-20，dev-1167）**：HEAD `435a3dbd`；dev 更新通道 **dev-1159**（Flutter-only 构建，约 128.0 MB）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24_1..3`（Node 进程池）；UI 统一 Flutter，Miuix 已移出构建；CI `Android CI and Release / verify` 全绿；MCP 默认端口 **8765**。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
+> **当前状态（2026-10-20，dev-1169）**：HEAD `cd116d42`；dev 更新通道 **dev-1159**（Flutter-only 构建，约 128.0 MB）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24_1..3`（Node 进程池）；UI 统一 Flutter，Miuix 已移出构建；CI `Android CI and Release / verify` 全绿；MCP 默认端口 **8765**。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
 
 ## 当前状态
 
+- **[存储权限申请修复（2026-10-20，dev-1169）](reports/2026-10-20_存储权限申请修复.md)**：targetSdk 28 legacy storage 下「所有文件访问」页不可授予，改为运行时 READ/WRITE 授权；K40/MI8 实机验证。
 - **[截图授权修复：强制整屏 + 自动授权跨进程（2026-10-20，dev-1167）](reports/2026-10-20_截图授权整屏修复.md)**：单应用模式切 App 黑帧的两个根因与修复、K40 零点击授权 + 切 App 帧亮度证据。
 - **[关于页对齐高级版·细节对比（2026-10-20，dev-1161）](reports/2026-10-20_关于页对齐高级版_细节对比.md)**：逐项对比 Pro「关于项目与开发者」，含 dev-1159→1161 的 6 处细节调整与保留差异。
 - **[关于页对齐高级版（2026-10-20，dev-1159）](reports/2026-10-20_关于页对齐高级版.md)**：设置 → 关于改为独立页面，对齐高级版「关于项目与开发者」：图标/名称/版本/作者/最近提交 + Github/问题反馈/许可/隐私链接。
