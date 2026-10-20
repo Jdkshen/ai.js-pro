@@ -1,5 +1,8 @@
 # AI.js Pro
 
+[![Android CI and Release](https://github.com/Jdkshen/ai.js-pro/actions/workflows/android.yml/badge.svg)](https://github.com/Jdkshen/ai.js-pro/actions/workflows/android.yml)
+
+
 AI.js Pro 是一个运行在 Android 上、支持无障碍自动化的 JavaScript IDE 和脚本运行时。兼容传统 Auto.js 脚本，提供 **Rhino / QuickJS / Node24** 三引擎；界面已统一为 **Flutter（Glass UI）**，旧 Miuix/Compose 界面已从构建中移除。
 
 > **接手开发先读**：[docs/HANDOFF_AI.md](docs/HANDOFF_AI.md) —— 主架构图、构建/发布、真机测试套路、已知缺口、分支策略（面向所有 AI/人类接手者）。
