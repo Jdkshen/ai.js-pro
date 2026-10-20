@@ -2,7 +2,7 @@
 
 > 面向所有接手的 AI（Codex / Claude / Copilot / Cursor / dsh 等）。
 > 先读本文，再读 `AGENTS.md`（构建与踩坑细节）和 `docs/reports/2026-10-18_收尾交接_给Codex_v2.md`（最新进度）。
-> 最后更新：2026-10-20，基线 dev-1154，分支 `main`。
+> 最后更新：2026-10-20，基线 dev-1156，分支 `main`。
 
 ---
 
@@ -26,11 +26,31 @@ git log --oneline -10                             # 最近改动
 ```
 
 - 构建产物：`apps/app/build/outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk`
-- 出 dev 包并发布：`output/flutter-poc/publish-poc-build.ps1 -VersionCode N -VersionName "dev-N"` → `tools/publish.ps1 -ReleaseNotes "..." -SkipBuild -PcHost 192.168.10.7 -AllowMultiDevice -DeviceId cccc62c7`
+- Flutter AOT + dev 包：`tools/flutter-poc/build-aot.ps1`（生成 `output/flutter-poc/payload` 的 libapp.so）→
+  `tools/flutter-poc/publish-poc-build.ps1 -VersionCode N -VersionName "dev-N"`（自动 AOT + gradle 构建，产物在标准路径；
+  带 `-SkipAot` 复用上次 AOT）→ `tools/publish.ps1 -ReleaseNotes "..." -SkipBuild -PcHost 192.168.10.7 -AllowMultiDevice -DeviceId cccc62c7`
 - **版本号必须等于** `max(仓库 project-versions, 已发布, 设备版本)+1`，否则 `publish.ps1` 会校验失败。
 - 设备安装：`adb -s cccc62c7 install -r <apk>`（新机 `DQKFJB59596L45BI`、MI8 `ce4d2bdb`）。
 
-⚠️ 雷区（详细原因见 `AGENTS.md`）：不要用管道过滤 gradle 输出；`.ps1` 保留 UTF-8 BOM；Dart 改动要写外置重建源并重建 AOT；不要裸跑 `dev-update.ps1`。
+⚠️ 雷区（详细原因见 `AGENTS.md`）：不要用管道过滤 gradle 输出；`.ps1` 保留 UTF-8 BOM（含中文路径的脚本必须带 BOM，否则 PS5.1 按 GBK 解码会把中文路径读坏）；Dart 改动要写外置重建源并重建 AOT；不要裸跑 `dev-update.ps1`。
+
+### Flutter AOT / dev 包流水线（2026-10-20 重建，踩过坑）
+
+- Dart 源码唯一真源在**外部重建线**：`C:\Users\18101\Documents\AutoJsPro-本地工程-20261008\工程\output\autojs-pro-flutter-rebuild\lib`；
+  APK 里的 Flutter UI 由这里编译的 AOT `libapp.so` 提供（仓库不跟踪 AOT 产物）。
+- 流水线脚本：`tools/flutter-poc/build-aot.ps1` + `tools/flutter-poc/publish-poc-build.ps1`（仓库内跟踪）；
+  运行时同步副本在 `output/flutter-poc/`（gitignore）。
+- AOT 构建：把重建线 `lib/assets/third_party/pubspec.*` 同步到 ASCII 路径 `output/flutter-poc/src` → `flutter pub get --offline` →
+  `flutter assemble --output build --define=BuildMode=release --define=TargetPlatform=android-arm64 android_aot_bundle_release_android-arm64`
+  → `build/arm64-v8a/app.so` 复制为 `output/flutter-poc/payload/jniLibs/arm64-v8a/libapp.so`。
+- Flutter SDK 固定在 `C:\Android\flutter-3.3.4`（不在 PATH 上）。
+- payload 组成：`jniLibs/arm64-v8a/{libapp.so,libflutter.so}` + `assets/flutter_assets/` + `flutter_embedding_3.3.4.jar`（取自 SDK）。
+  若 payload 丢失，可从 `apps/app/build/intermediates/merged_jni_libs|merged_assets` 里找回上一版产物，再重建 libapp.so。
+- 构建命令必须带 `-PflutterPoc=true`；同机装有正版 Auto.js Pro 时还要加 `-PdevPluginUsbDiscovery=false`（否则
+  provider authority 冲突，install 报 `INSTALL_FAILED_CONFLICTING_PROVIDER`）。
+- 出包脚本会自动临时改写 `project-versions.json` 注入 versionCode/Name，构建结束后恢复——**不要手工改它**。
+- 关于页：Flutter 通过桥方法 `aboutInfo` 读真实版本/作者/git 提交；git 信息由 `apps/app/build.gradle` 构建时注入
+  `BuildConfig.GIT_*`（无 git 环境回退 unknown）。
 
 ---
 
@@ -83,7 +103,7 @@ git log --oneline -10                             # 最近改动
 
 ---
 
-## 4. 当前状态（dev-1154）
+## 4. 当前状态（dev-1156）
 
 | 领域 | 状态 |
 |---|---|
@@ -161,7 +181,9 @@ git log --oneline -10                             # 最近改动
 | UI 桥 | `engine/NodeUiActivity.java`、`NodeUiBridgeService.java`、`NodeUiDialogActivity.java` |
 | 自动化 | `modules/automator/`、`AccessibilityEventForwarder.kt` |
 | 打包 | `PocPackaging.java`、`apps/inrt/`、`output/flutter-poc/rebuild-inrt-template.ps1` |
-| 更新/发布 | `tools/publish.ps1`、`tools/dev-update.ps1`、`output/flutter-poc/publish-poc-build.ps1` |
+| 更新/发布 | `tools/publish.ps1`、`tools/dev-update.ps1`、`tools/flutter-poc/publish-poc-build.ps1` |
+| Flutter AOT | `tools/flutter-poc/build-aot.ps1`；外部 Dart 真源 `...\autojs-pro-flutter-rebuild\lib` |
+| 关于页/构建信息 | `apps/app/build.gradle`（GIT_* BuildConfig）、`PocAppInfo.aboutInfo`、外部 `lib/settings_page.dart` |
 
 ---
 

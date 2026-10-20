@@ -23,6 +23,28 @@ def devPluginUsbDiscovery = findProperty('devPluginUsbDiscovery') != 'false'
 // 产物由 output/flutter-poc/build-aot.ps1 生成；不带该参数时构建与发布完全不受影响。
 def flutterPocEnabled = findProperty('flutterPoc') == 'true'
 def flutterPocPayload = rootProject.file('output/flutter-poc/payload')
+
+// ---- 关于页构建信息：构建时注入 git 提交（作者/日期/说明），无 git 时回退 unknown ----
+def gitValue = { List<String> args ->
+    try {
+        def out = new ByteArrayOutputStream()
+        project.exec {
+            commandLine(['git'] + args)
+            standardOutput = out
+            errorOutput = new ByteArrayOutputStream()
+            ignoreExitValue = true
+        }
+        def text = out.toString('UTF-8').trim()
+        return text.isEmpty() ? 'unknown' : text
+    } catch (Exception ignored) {
+        return 'unknown'
+    }
+}
+def gitCommit = gitValue(['rev-parse', '--short', 'HEAD'])
+def gitAuthor = gitValue(['log', '-1', '--pretty=%an'])
+def gitDate = gitValue(['log', '-1', '--date=format:%Y-%m-%d', '--pretty=%ad'])
+def gitSubject = gitValue(['log', '-1', '--pretty=%s'])
+def gradleEscape = { String value -> value.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'") }
 if (flutterPocEnabled && !flutterPocPayload.isDirectory()) {
     throw new GradleException("flutterPoc: payload 缺失，先运行 output/flutter-poc/build-aot.ps1（期望目录: " + flutterPocPayload + "）")
 }
@@ -46,6 +68,10 @@ android {
         versionName versions.appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled true
+        buildConfigField "String", "GIT_COMMIT", '"' + gradleEscape(gitCommit) + '"'
+        buildConfigField "String", "GIT_AUTHOR", '"' + gradleEscape(gitAuthor) + '"'
+        buildConfigField "String", "GIT_DATE", '"' + gradleEscape(gitDate) + '"'
+        buildConfigField "String", "GIT_SUBJECT", '"' + gradleEscape(gitSubject) + '"'
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments = [resourcePackageName: "com.jdkshen.aijspro"]

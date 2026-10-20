@@ -331,6 +331,7 @@ final class PocBridge {
             case "openAbout":
             case "openLicenses":
             case "editorSettings":
+            case "aboutInfo":
                 return PocAppInfo.execute(activity, method, args);
 
             case "computerPluginState":

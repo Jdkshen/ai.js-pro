@@ -4,8 +4,10 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
 import android.os.Looper;
 
+import com.jdkshen.aijspro.BuildConfig;
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.network.VersionService;
@@ -62,6 +64,9 @@ final class PocAppInfo {
             case "openLicenses":
                 // Flutter 设置页自己展示 AboutDialog / LicensePage（task-177 去 Miuix）。
                 return Boolean.TRUE;
+            case "aboutInfo":
+                // 关于页展示用：真实安装版本 + 作者 + 最近一次构建对应的 git 提交。
+                return aboutInfo(activity);
             case "editorSettings":
                 return editorSettings(activity, args);
             default:
@@ -142,5 +147,31 @@ final class PocAppInfo {
             }
         }
         throw new IOException("编辑器字号需在 8-40 之间");
+    }
+
+    /**
+     * 关于页展示数据：真实安装版本 + 作者 + 本次构建对应的 git 提交。
+     *
+     * <p>git 信息由 {@code apps/app/build.gradle} 在构建时注入 {@link BuildConfig}；
+     * 无 git 环境时为 "unknown"，Flutter 侧按空/unknown 降级显示。
+     */
+    private static Object aboutInfo(Activity activity) throws Exception {
+        JSONObject info = new JSONObject();
+        try {
+            PackageInfo packageInfo = activity.getPackageManager()
+                    .getPackageInfo(activity.getPackageName(), 0);
+            info.put("versionName", packageInfo.versionName == null ? "" : packageInfo.versionName);
+            info.put("versionCode", packageInfo.versionCode);
+        } catch (Exception e) {
+            info.put("versionName", "");
+            info.put("versionCode", 0);
+        }
+        info.put("author", "Jdkshen");
+        info.put("gitCommit", BuildConfig.GIT_COMMIT);
+        info.put("gitAuthor", BuildConfig.GIT_AUTHOR);
+        info.put("gitDate", BuildConfig.GIT_DATE);
+        info.put("gitSubject", BuildConfig.GIT_SUBJECT);
+        info.put("flutterUi", true);
+        return info;
     }
 }
