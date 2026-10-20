@@ -104,3 +104,8 @@ npm-install.log
 # 仍属生成物，但必须入库（约 16.6MB，走 LFS），否则全新 clone/CI 缺失会让构建失败。
 !/apps/app/src/main/assets/template.apk
 javac.*.args
+
+# Flutter 工程本地缓存（flutter-ui 是源码目录，不提交 .dart_tool/build）
+flutter-ui/.dart_tool/
+flutter-ui/build/
+flutter-payload-base/.dart_tool/
