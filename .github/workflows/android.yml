@@ -15,6 +15,10 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      # GitHub runner 上 compat/lite/inrt 叠加构建会超过默认 2g daemon 堆（曾报
+      # OutOfMemoryError: Java heap space）；放宽堆并降低并发 worker 数。
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=2"
 
     steps:
       - name: Check out source and LFS assets
