@@ -225,7 +225,7 @@ class AijsproDebugSession implements vscode.DebugAdapter {
         }
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      throw new Error(`连接 ${host} 超时（请确认手机侧已打开「Pro 扩展服务器」）`);
+      throw new Error(`连接 ${host} 超时（请确认手机侧已打开「电脑连接 → 服务器模式」）`);
     }
     const picked = await this.manager.pickConnection();
     if (!picked?.attached) {

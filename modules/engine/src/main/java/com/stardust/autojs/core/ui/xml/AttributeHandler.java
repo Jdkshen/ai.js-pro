@@ -52,14 +52,14 @@ public interface AttributeHandler {
                 // 这类 Android 原生布局，原样保留：补前缀会写成 android:android:xxx，
                 // 走名字/取值映射也会把原生取值改坏。
                 layoutXml.append(attrName).append("=\"")
-                        .append(attr.getNodeValue()).append("\"\n");
+                        .append(XmlConverter.escapeAttribute(attr.getNodeValue())).append("\"\n");
                 return true;
             }
             if (!attrName.equals("style")) {
                 layoutXml.append("android:");
             }
             layoutXml.append(mapAttrName(nodeName, attrName))
-                    .append("=\"").append(mapAttrValue(nodeName, attrName, attr.getNodeValue())).append("\"\n");
+                    .append("=\"").append(XmlConverter.escapeAttribute(mapAttrValue(nodeName, attrName, attr.getNodeValue()))).append("\"\n");
             return true;
         }
 

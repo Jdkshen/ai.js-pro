@@ -33,10 +33,6 @@ public class DevPluginServerService extends Service {
     private static final int NOTIFICATION_ID = 0x9317;
     private static final String CHANNEL_ID = "dev_plugin_server";
 
-    /** 「手机回连电脑」（Pro ws-rpc 客户端模式）的启动参数：电脑地址与端口（默认 21029）。 */
-    public static final String EXTRA_PRO_COMPUTER_HOST = "pro_computer_host";
-    public static final String EXTRA_PRO_COMPUTER_PORT = "pro_computer_port";
-
     public static void start(Context context) {
         Intent intent = new Intent(context, DevPluginServerService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -48,23 +44,6 @@ public class DevPluginServerService extends Service {
 
     public static void stop(Context context) {
         context.stopService(new Intent(context, DevPluginServerService.class));
-    }
-
-    /**
-     * 拉起服务并让手机主动回连电脑的 ws-rpc 服务（{@code ws://host:21029}）。
-     *
-     * <p>给「已知电脑地址」的入口用（adb / 以后的 UI 开关）；不传端口时用
-     * {@link ProRpcServer#PRO_COMPUTER_DEFAULT_PORT}。
-     */
-    public static void startWithProComputer(Context context, String host, int port) {
-        Intent intent = new Intent(context, DevPluginServerService.class)
-                .putExtra(EXTRA_PRO_COMPUTER_HOST, host)
-                .putExtra(EXTRA_PRO_COMPUTER_PORT, port);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent);
-        } else {
-            context.startService(intent);
-        }
     }
 
     @Override
@@ -86,29 +65,16 @@ public class DevPluginServerService extends Service {
             stopSelf();
             return;
         }
-        // 同一个开关同时拉起 Pro 电脑端用的 ws-rpc 通道（动态端口 + mDNS）。
-        // 它失败不应该影响 legacy 9317：只在日志里留痕，让用户仍能用旧扩展。
-        try {
-            ProRpcServer.getInstance().start();
-        } catch (IOException error) {
-            Log.w(TAG, "ws-rpc 调试通道启动失败", error);
-        }
+
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String host = intent == null ? null : intent.getStringExtra(EXTRA_PRO_COMPUTER_HOST);
-        if (host != null && !host.trim().isEmpty()) {
-            int port = intent.getIntExtra(EXTRA_PRO_COMPUTER_PORT,
-                    ProRpcServer.PRO_COMPUTER_DEFAULT_PORT);
-            ProRpcServer.getInstance().connectToComputer(host, port);
-        }
         return START_NOT_STICKY;
     }
 
     @Override
     public void onDestroy() {
-        ProRpcServer.getInstance().stop();
         DevPluginServer.getInstance().stop();
         stopForeground(true);
         super.onDestroy();
@@ -130,12 +96,15 @@ public class DevPluginServerService extends Service {
         CharSequence text = address == null
                 ? getString(R.string.dev_plugin_server_notification_text)
                 : getString(R.string.format_dev_plugin_server_listening, address + ":9317");
-        String computer = DevPluginServer.getInstance().getReconnectHost();
+        String computer = DevPluginServer.getInstance().getComputerAddress();
         if (!computer.isEmpty()) text = getString(R.string.format_dev_plugin_server_auto, computer);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
-                new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+                new Intent().setClassName(this, "com.jdkshen.aijspro.flutterpoc.GlassFlutterActivity")
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle(getString(R.string.dev_plugin_server_notification_title))
+                .setContentTitle("AI.js Pro · 电脑连接")
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_ai_js_pro_notification)
                 .setWhen(System.currentTimeMillis())
@@ -151,7 +120,7 @@ public class DevPluginServerService extends Service {
         if (manager == null) {
             return;
         }
-        CharSequence name = getString(R.string.dev_plugin_server_notification_channel_name);
+        CharSequence name = "AI.js Pro 电脑连接";
         NotificationChannel channel = new NotificationChannel(CHANNEL_ID, name,
                 NotificationManager.IMPORTANCE_LOW);
         manager.createNotificationChannel(channel);

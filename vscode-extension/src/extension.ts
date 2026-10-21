@@ -10,6 +10,8 @@ import { createDebugAdapterFactory, createDebugConfigurationProvider } from './d
 import { isScriptEditor, pickScriptEditor, trackScriptEditors } from './editor-tracker';
 import { deviceFileKind, isRunnableDeviceFile } from './filePolicy';
 import { DeviceManager, savedDevices } from './manager';
+import { UsbDevices } from './adb';
+import { selectDevice } from './devicePicker';
 import { DeviceFileProvider, ExplorerNode, FileNode } from './tree';
 import { createZip, ZipInput } from './zip';
 
@@ -17,6 +19,7 @@ const PUSH_MANIFEST_PREFIX = 'aijspro.pushManifest';
 
 let channel: vscode.OutputChannel;
 let manager: DeviceManager;
+let usbDevices: UsbDevices;
 let treeProvider: DeviceFileProvider;
 let statusBar: vscode.StatusBarItem;
 
@@ -26,6 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
   e2eLog('[ext] activated');
 
   manager = new DeviceManager((message) => channel.appendLine(message));
+  usbDevices = new UsbDevices(() => vscode.workspace.getConfiguration('aijspro').get<string>('adbPath', ''));
   treeProvider = new DeviceFileProvider(manager);
   trackScriptEditors(context);
   const colorAssistant = new ColorAssistant(context, manager, (message) => {
@@ -33,20 +37,19 @@ export function activate(context: vscode.ExtensionContext): void {
     e2eLog(message);
   });
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 90);
-  statusBar.command = 'aijspro.showLogs';
+  statusBar.command = 'aijspro.selectDevice';
   statusBar.show();
   let connectionLogShown = false;
 
   const updateStatus = () => {
     const conn = manager.activeConnection;
     if (conn?.attached) {
-      const address = conn.socket.remoteAddress?.replace(/^::ffff:/, '') || conn.label;
-      statusBar.text = `$(radio-tower) AI.js Pro ${address}`;
-      statusBar.tooltip = `${conn.deviceName} · ${conn.label}\n点击查看连接与运行日志`;
+      statusBar.text = `$(radio-tower) AI.js Pro ${conn.deviceName}`;
+      statusBar.tooltip = `${conn.deviceName} · ${conn.deviceAddress || conn.label}\n点击切换设备`;
       statusBar.backgroundColor = undefined;
     } else {
       statusBar.text = '$(debug-disconnect) AI.js Pro: 未连接';
-      statusBar.tooltip = '打开手机侧「Pro 扩展服务器」，或点击连接设备';
+      statusBar.tooltip = '点击选择设备（支持 USB 和局域网）；手机侧需开启“电脑连接 → 服务器模式”';
       statusBar.backgroundColor = undefined;
     }
   };
@@ -60,7 +63,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
   manager.on('deviceLog', (conn: DeviceConnection, line: string) => {
-    channel.appendLine(`[${conn.deviceName}] ${line}`);
+    // Android log records may contain a record separator; it is not display text.
+    const clean = line.replace(/\x1e/g, '').replace(/\r\n/g, '\n');
+    for (const entry of clean.split('\n')) {
+      if (entry.length > 0) channel.appendLine(`[${conn.deviceName}] ${entry}`);
+    }
   });
   updateStatus();
 
@@ -134,8 +141,9 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   manager?.dispose();
+  await usbDevices?.dispose();
 }
 
 // ---- 命令实现 ----
@@ -145,7 +153,7 @@ async function connectCommand(): Promise<void> {
   const picked = await vscode.window.showQuickPick(
     [...remembered.map((host) => ({ label: host })), { label: '$(edit) 输入地址…' },
       { label: '$(trash) 删除已记住的设备…' }],
-    { placeHolder: '选择要连接的设备（手机侧需打开「Pro 扩展服务器」）' },
+    { placeHolder: '选择要连接的设备（手机侧需打开「电脑连接 → 服务器模式」）' },
   );
   if (!picked) {
     return;
@@ -244,11 +252,14 @@ async function withNodeConnection<T>(node: FileNode, action: (conn: DeviceConnec
 
 async function promptConnect(): Promise<void> {
   const choice = await vscode.window.showInformationMessage(
-    'AI.js Pro: 还没有已连接的设备。',
+    'AI.js Pro: 请先选择并连接要使用的设备。',
+    '选择设备…',
     '连接设备…',
     '显示日志',
   );
-  if (choice === '连接设备…') {
+  if (choice === '选择设备…') {
+    await vscode.commands.executeCommand('aijspro.selectDevice');
+  } else if (choice === '连接设备…') {
     await vscode.commands.executeCommand('aijspro.connect');
   } else if (choice === '显示日志') {
     channel.show(true);
@@ -584,16 +595,14 @@ function sanitize(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, '_');
 }
 
-// ---- 与官方 Auto.js Pro 扩展对齐的补充命令 ----
+// ---- AI.js Pro 项目与调试命令 ----
 
 function rerunKey(conn: DeviceConnection): string {
   return `aijspro.lastRun.${conn.key}`;
 }
 
 function hostOf(conn: DeviceConnection): string {
-  const label = conn.label;
-  const index = label.lastIndexOf(':');
-  return index > 0 ? label.slice(0, index) : label;
+  return conn.deviceAddress ?? conn.label;
 }
 
 async function helpCommand(context: vscode.ExtensionContext): Promise<void> {
@@ -604,23 +613,13 @@ async function helpCommand(context: vscode.ExtensionContext): Promise<void> {
 }
 
 async function selectDeviceCommand(): Promise<void> {
-  const conn = await manager.pickConnection();
-  if (!conn) {
-    await promptConnect();
-    return;
-  }
-  manager.setActive(conn);
-  vscode.window.setStatusBarMessage(`AI.js Pro: 当前设备 ${conn.deviceName}`, 3000);
+  await selectDevice(manager, usbDevices, connectCommand);
 }
 
-function scanDevicesCommand(): void {
+async function scanDevicesCommand(): Promise<void> {
   const tried = manager.scanNow();
-  vscode.window.setStatusBarMessage(
-    tried > 0
-      ? `AI.js Pro: 正在重连 ${tried} 个已记住的设备…`
-      : 'AI.js Pro: 没有需要重连的设备（手机侧开启「Pro 扩展服务器」后会自动回连）',
-    4000,
-  );
+  channel.appendLine(`扫描设备：已发起 ${tried} 个已记住地址的连接，正在读取 USB 手机列表`);
+  await selectDevice(manager, usbDevices, connectCommand);
 }
 
 async function runFilePickerCommand(context: vscode.ExtensionContext): Promise<void> {

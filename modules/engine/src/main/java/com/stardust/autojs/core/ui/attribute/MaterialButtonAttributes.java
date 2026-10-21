@@ -35,7 +35,7 @@ import com.stardust.autojs.core.ui.inflater.util.ResIds;
  * </ol>
  * 关键日志统一为 {@code C-ICON:} 前缀，便于 dev-1017 真机 grep。
  */
-public class MaterialButtonAttributes extends ViewAttributes {
+public class MaterialButtonAttributes extends TextViewAttributes {
 
     private static final String TAG = "C-ICON";
 

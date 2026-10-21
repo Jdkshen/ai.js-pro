@@ -411,17 +411,14 @@ final class PocRuntime {
         if (!config.isFile()) {
             throw new IOException("项目缺少 project.json");
         }
-        String main = "main.js";
+        JSONObject projectConfig;
         try {
-            JSONObject json = new JSONObject(readSmall(config));
-            main = json.optString("main", "main.js");
+            projectConfig = new JSONObject(readSmall(config));
         } catch (Exception error) {
             throw new IOException("project.json 无法解析：" + error.getMessage());
         }
-        File mainFile = new File(project, main);
-        if (!mainFile.isFile()) {
-            throw new IOException("项目入口文件不存在：" + main);
-        }
+        File mainFile = PocProjectEntry.resolve(project, projectConfig);
+        Log.i(TAG, "运行项目入口：" + mainFile.getPath());
         // 项目运行（有 project.json）：允许 native 递归检测。
         // 路由：auto → 主进程；native 项目 → :native；其余 → :script（失败回退主进程）。
         runFile(activity, mainFile, project, true);

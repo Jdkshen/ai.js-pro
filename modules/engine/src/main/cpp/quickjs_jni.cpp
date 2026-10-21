@@ -6603,19 +6603,29 @@ const char kBootstrapScript[] = R"JS(
     global.pikafish = pikafish;   // 与 $ocr/ocr 一样保留两个名字
 
     const timerIds = new Set();
-    function makeTimer(repeat, callback, millis) {
+    function makeTimer(repeat, callback, millis, args) {
         if (typeof callback !== 'function') {
             throw new TypeError('Timer callback must be a function');
         }
         const delay = Math.max(0, Number(millis) || 0);
+        // Rhino's Timer.callFunction passes the extra setTimeout/setInterval
+        // arguments to the callback. Native timers only own (callback, delay),
+        // so keep that storage unchanged and close over the extra arguments.
+        const target = args && args.length > 0
+            ? function () { return callback.apply(null, args); }
+            : callback;
         const id = repeat
-            ? __aiNativeSetInterval(callback, delay)
-            : __aiNativeSetTimeout(callback, delay);
+            ? __aiNativeSetInterval(target, delay)
+            : __aiNativeSetTimeout(target, delay);
         timerIds.add(id);
         return id;
     }
-    global.setTimeout = function (callback, millis) { return makeTimer(false, callback, millis); };
-    global.setInterval = function (callback, millis) { return makeTimer(true, callback, millis); };
+    global.setTimeout = function (callback, millis) {
+        return makeTimer(false, callback, millis, Array.prototype.slice.call(arguments, 2));
+    };
+    global.setInterval = function (callback, millis) {
+        return makeTimer(true, callback, millis, Array.prototype.slice.call(arguments, 2));
+    };
     function clearTimer(id) {
         id = Number(id);
         if (!timerIds.has(id)) return false;
@@ -6643,7 +6653,16 @@ const char kBootstrapScript[] = R"JS(
         create: function (path) { return __aiNativeFilesCreate(filePath(path)); },
         createWithDirs: function (path) { return __aiNativeFilesCreate(filePath(path)); },
         ensureDir: function (path) { return __aiNativeFilesEnsureDir(filePath(path)); },
-        listDir: function (path) { return JSON.parse(__aiNativeFilesListDir(filePath(path))); },
+        listDir: function (path, filter) {
+            var names = JSON.parse(__aiNativeFilesListDir(filePath(path)));
+            if (filter === undefined || filter === null) return names;
+            if (typeof filter !== 'function') {
+                throw new TypeError('files.listDir filter must be a function');
+            }
+            // Rhino's PFiles.listDir(path, filter) filters bare entry names,
+            // not absolute paths; keep the same contract here.
+            return names.filter(function (name) { return filter(name); });
+        },
         remove: function (path) { return __aiNativeFilesRemove(filePath(path)); },
         rename: function (path, newName) { return __aiNativeFilesRename(filePath(path), String(newName)); },
         copy: function (source, target) { return __aiNativeFilesCopy(filePath(source), filePath(target)); },
@@ -6707,7 +6726,15 @@ const char kBootstrapScript[] = R"JS(
             close: function () { closed = true; }
         };
         if (textMode === 'r') {
-            var content = files.exists(resolved) ? files.read(resolved) : '';
+            // Rhino's PFiles.open('r') constructs a FileInputStream: a missing
+            // path or a directory throws instead of producing a fake empty file.
+            if (!files.exists(resolved)) {
+                throw new Error('File not found: ' + resolved);
+            }
+            if (!files.isFile(resolved)) {
+                throw new Error('Not a file: ' + resolved);
+            }
+            var content = files.read(resolved);
             var offset = 0;
             // read 与 readline 共用同一游标：readline 读进来的半个缓冲区记在 pendingLine 里，
             // 之后 read() 会先吐出这部分，混用两种读法也不会丢内容（与文本流一致）。
@@ -10126,7 +10153,11 @@ const char kBootstrapScript[] = R"JS(
         return function () { return func.apply(this, arguments); };
     };
 
-    global.setImmediate = function (callback) { return setTimeout(callback, 0); };
+    global.setImmediate = function (callback) {
+        var args = Array.prototype.slice.call(arguments);
+        args.splice(1, 0, 0);
+        return global.setTimeout.apply(null, args);
+    };
     global.clearImmediate = function (id) { return clearTimeout(id); };
     global.timers = Object.freeze({
         setTimeout: global.setTimeout,

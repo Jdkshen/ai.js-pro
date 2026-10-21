@@ -49,6 +49,23 @@ class _ServiceDrawerState extends State<ServiceDrawer>
   bool debugExpanded = false, moreExpanded = false;
 
   bool get observing => widget.active && foreground;
+
+  bool get mcpRunning => state?['running'] == true;
+
+  bool get mcpStale =>
+      state?['stale'] == true || state?['state'] == 'stale';
+
+  bool get mcpLiveRunning => state?['liveRunning'] == true;
+
+  int get mcpPort {
+    final value = state?['port'];
+    if (value is num) {
+      final parsed = value.toInt();
+      if (parsed > 0) return parsed;
+    }
+    return _mcpDefaultPort;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -103,8 +120,6 @@ class _ServiceDrawerState extends State<ServiceDrawer>
     return request;
   }
 
-  static const developerTutorialUrl =
-      'https://boys.intcl.top/2022/10/15/vscode-debug-v9//';
   DateTime? lastExitPressed;
 
   Future<void> exitApplication() async {
@@ -246,43 +261,35 @@ class _ServiceDrawerState extends State<ServiceDrawer>
     await saveDrawerPreferences();
   }
 
-  Future<void> openDeveloperTutorial() async {
-    try {
-      await LocalBridge.call('openUrl', {'url': developerTutorialUrl});
-    } catch (error) {
-      if (mounted) message(context, '无法打开连接教程：$error');
-    }
-  }
-
   Future<void> showDevPluginTips() async {
     if (devPluginTipDismissed) {
-      message(context, '已设置不再提示 VSCode 调试插件介绍');
+      message(context, '已设置不再提示 AI.js Pro VS Code 扩展介绍');
       return;
     }
     final choice = await showDialog<String>(
         context: context,
         builder: (dialog) => AlertDialog(
-                title: const Text('VSCode调试插件9.0版本，全新体验！'),
+                title: const Text('AI.js Pro VS Code 扩展'),
                 content: const SingleChildScrollView(
-                    child: Text('🔗 智能自动连接设备，无需手动输入\n'
-                        '🚀 极大优化运行和文件同步效率\n'
-                        '📱 可直接浏览、管理和编辑手机文件\n'
-                        '🖥 远程终端无需adb即可运行命令\n'
-                        '🔥 更多功能和优化等你体验')),
+                    child: Text('在 VS Code 中安装并启用 AI.js Pro 扩展后，可以：\n'
+                        '🔗 连接手机，查看设备状态\n'
+                        '📁 浏览、同步手机脚本文件\n'
+                        '🖥 打开手机终端并执行命令\n'
+                        '⚡ 配合 MCP 使用脚本、文件和任务工具')),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(dialog, 'never'),
                       child: const Text('不再提示')),
                   TextButton(
                       onPressed: () => Navigator.pop(dialog, 'docs'),
-                      child: const Text('查看文字/视频教程'))
+                      child: const Text('查看连接教程'))
                 ]));
     if (!mounted) return;
     if (choice == 'never') {
       setState(() => devPluginTipDismissed = true);
       await saveDrawerPreferences();
     } else if (choice == 'docs') {
-      await openDeveloperTutorial();
+      page(const GuidePage());
     }
   }
 
@@ -539,20 +546,28 @@ class _ServiceDrawerState extends State<ServiceDrawer>
 
   /// 抽屉里的 ServerState/ClientState 摘要：不再只说“允许/连上”两个布尔态。
   String get _debugGroupSubtitle {
-    if (!debugServerKnown) return 'VSCode 调试插件 9.0';
+    if (!debugServerKnown) return 'AI.js Pro VS Code 扩展';
     final server = computerServerStateLabel(
         debugServerState ?? ComputerServerState.unknown);
     final client = computerClientStateLabel(debugClientKnown
         ? (debugClientState ?? ComputerClientState.unknown)
         : ComputerClientState.unknown);
     final protocol = debugProtocol;
-    return '服务器$server · 电脑$client${protocol == null ? '' : ' · $protocol'}';
+    return '服务器$server · 电脑$client'
+        '${protocol == null ? '' : ' · ${computerProtocolDescription(protocol)}'}';
   }
 
   @override
   Widget build(BuildContext context) {
-    final running = state?['running'] == true;
+    final running = mcpRunning;
+    final stale = mcpStale;
+    final liveRunning = mcpLiveRunning;
+    final switchOn = running || (stale && liveRunning);
     final known = state?['running'] is bool;
+    final port = mcpPort;
+    final stateError = state?['error']?.toString().trim() ?? '';
+    final mcpError =
+        operationError ?? error ?? (stateError.isEmpty ? null : stateError);
     return Drawer(
         width: 304,
         backgroundColor: Theme.of(context).brightness == Brightness.dark
@@ -621,12 +636,18 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                           ? '正在启动，等待实际状态…'
                           : '正在停止，等待实际状态…'
                       : error != null
-                          ? '状态未确认'
+                          ? '状态未确认 · 打开管理页'
                           : !known
                               ? '正在读取状态'
-                              : running
-                                  ? '服务运行中'
-                                  : '服务已停止',
+                              : stale
+                                  ? (liveRunning
+                                      ? '心跳过期 · 进程仍在 · 0.0.0.0:$port'
+                                      : '心跳过期 · 服务可能已停止')
+                                  : running
+                                      ? '运行中 · 0.0.0.0:$port · 免令牌'
+                                      : '已停止 · 默认 $_mcpDefaultPort',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 14)),
               trailing: known
                   ? Semantics(
@@ -634,26 +655,33 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                       child: Switch(
                           key: const ValueKey('drawer-mcp'),
                           activeColor: const Color(0xff008f91),
-                          value: running,
+                          value: switchOn,
                           onChanged:
                               pending || error != null ? null : toggleMcp))
                   : const SizedBox(
                       width: 48,
                       child: Center(
                           child: Text('未知', style: TextStyle(fontSize: 14))))),
-          if (error != null || operationError != null)
+          if (mcpError != null)
             Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
                 child: Row(children: [
                   Expanded(
-                      child: Text(operationError ?? error!,
+                      child: Text(mcpError,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                               fontSize: 11,
                               color: Theme.of(context).colorScheme.error))),
                   TextButton(
-                      onPressed: pending ? null : refresh,
+                      onPressed: pending
+                          ? null
+                          : () async {
+                              final ok = await refresh();
+                              if (mounted && !ok) {
+                                message(context, '刷新 MCP 状态失败，请稍后重试');
+                              }
+                            },
                       child: const Text('刷新 MCP'))
                 ])),
           groupTile(
@@ -680,7 +708,8 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.cable_outlined, size: 22),
                 title: const Text('允许远程调试', style: TextStyle(fontSize: 17)),
-                subtitle: Text('手机开服务器 · 动态端口 · ${debugProtocol ?? 'ws-rpc'}',
+                subtitle: Text(
+                    '手机服务器 $computerLegacyPort · 电脑扩展 $computerDefaultClientPort',
                     style: const TextStyle(fontSize: 13)),
                 value: remoteDebug,
                 onChanged: debugServerPending ? null : setRemoteDebug),
@@ -704,9 +733,9 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                 title: const Text('主动连接电脑', style: TextStyle(fontSize: 17)),
                 subtitle: Text(
                     remoteDebug
-                        ? '手机回连电脑 · 21029'
+                        ? '手机回连电脑 · $computerDefaultClientPort'
                             '${debugClientKnown ? ' · ${computerClientStateLabel(debugClientState ?? ComputerClientState.unknown)}' : ''}'
-                        : '需先开启“允许远程调试”（回连电脑默认 21029）',
+                        : '需先开启“允许远程调试”（电脑扩展默认 $computerDefaultClientPort）',
                     style: const TextStyle(fontSize: 14)),
                 onTap: remoteDebug
                     ? () {
@@ -726,7 +755,8 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                 title: const Text('前台时保持屏幕常亮', style: TextStyle(fontSize: 17)),
                 value: keepScreenOn,
                 onChanged: setKeepScreenOn),
-            link(Icons.menu_book_outlined, '连接教程', openDeveloperTutorial),
+            link(Icons.menu_book_outlined, '连接教程',
+                () => page(const GuidePage())),
           ],
           link(Icons.terminal, '终端', terminal),
           heading('其他'),

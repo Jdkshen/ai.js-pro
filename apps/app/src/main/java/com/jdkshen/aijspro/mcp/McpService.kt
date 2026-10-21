@@ -34,6 +34,7 @@ class McpService : Service() {
         startForeground(NOTIFICATION_ID, notification("正在启动本地 MCP"))
         try {
             val router = McpTools(applicationContext, ::record)
+            toolCount = router.toolNames().size
             val requestedPort = McpSettings.port(this)
             var startedEndpoint: McpHttpServer? = null
             var boundPort = 0
@@ -52,11 +53,26 @@ class McpService : Service() {
                         McpSettings.localCompatibility(this),
                         allowUnauthenticatedLan = McpSettings.allowLanWithoutToken(this),
                         handler = { request ->
-                            requestCount++
-                            lastRequestAt = System.currentTimeMillis()
+                            synchronized(events) {
+                                requestCount++
+                                lastRequestAt = System.currentTimeMillis()
+                            }
                             val method = request.get("method")?.asString.orEmpty()
-                            if (method.isNotEmpty()) record("请求 · $method")
-                            router.handle(request)
+                            val name = if (method == "tools/call") {
+                                request.get("params")?.takeIf { it.isJsonObject }?.asJsonObject
+                                    ?.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: method
+                            } else method
+                            val started = System.nanoTime()
+                            try {
+                                val response = router.handle(request)
+                                val failed = response?.has("error") == true ||
+                                    response?.getAsJsonObject("result")?.get("isError")?.asBoolean == true
+                                if (request.has("id")) record("$name · ${if (failed) "调用失败" else "完成"} · ${(System.nanoTime() - started) / 1_000_000} ms")
+                                response
+                            } catch (error: Exception) {
+                                record("$name · 调用失败 · ${(System.nanoTime() - started) / 1_000_000} ms · ${error.localizedMessage}")
+                                throw error
+                            }
                         },
                         pageProvider = {
                             statusPage(router, candidate, true, McpSettings.token(this))
@@ -162,7 +178,7 @@ class McpService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun record(message: String) {
+    @Synchronized private fun record(message: String) {
         val stamped = "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())}  $message"
         events.add(stamped)
         while (events.size > 50) events.removeAt(0)
@@ -245,6 +261,8 @@ class McpService : Service() {
         @Volatile var allowWrite = false
         @Volatile var allowExecution = false
         @Volatile var requestCount = 0
+            private set
+        @Volatile var toolCount = 0
             private set
         @Volatile var autoStarted = false   // 本次启动是否为自动触发（App 回前台）
         @Volatile var autoStopped = false   // 本次停止是否为自动触发（退后台超时）

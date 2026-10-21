@@ -33,7 +33,7 @@ function fakeHost(requestJson) {
     case 'list':
       return JSON.stringify({ ok: true, value: [
         { id: 42, engine: 'Node24JavaScriptEngine', execArgv: { serverEngineId: 7 } },
-        { id: 7, engine: 'RhinoJavaScriptEngine', execArgv: { serverEngineId: 42 } }
+        { id: 7, engine: 'RhinoJavaScriptEngine', source: '/child.js', className: 'com.stardust.autojs.engine.RhinoJavaScriptEngine', execArgv: { serverEngineId: 42 } }
       ] });
     case 'exec':
       execCount++;
@@ -85,6 +85,17 @@ assert.strictEqual(typeof engines.all, 'function');
   const all = engines.getRunningEngines();
   assert.deepStrictEqual(all.map(e => e.id), [42, 7]);
   assert.strictEqual(engines.all().find(e => e.id === 7).engine, 'RhinoJavaScriptEngine');
+  assert.strictEqual(engines.all().find(e => e.id === 7).getSource(), '/child.js');
+  assert.strictEqual(engines.all().find(e => e.id === 7).getClass().getName(), 'com.stardust.autojs.engine.RhinoJavaScriptEngine');
+  let onceCount=0, siblingCount=0;
+  my.once('once-test', () => { onceCount++; });
+  my.on('once-test', () => { siblingCount++; });
+  for(let i=0;i<2;i++) {
+    hostEvents.push({type:'__ajs_engine_event',payload:{engineId:42,event:'once-test',args:[]}});
+    globalThis.__autojsPoll();
+  }
+  assert.strictEqual(onceCount,1);
+  assert.strictEqual(siblingCount,2);
 
   let parentEvent = null;
   // Rhino→Node 的 command 可能比脚本的 on() 早到（冷启动），必须缓冲补发。

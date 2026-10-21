@@ -96,7 +96,7 @@ export class DeviceFileProvider implements vscode.TreeDataProvider<ExplorerNode>
     if (!node) {
       const connections = this.manager.all;
       if (connections.length === 0) {
-        return [{ kind: 'info', label: '未连接：打开手机侧「Pro 扩展服务器」，或在命令面板执行「AI.js Pro: 连接设备…」' }];
+        return [{ kind: 'info', label: '未连接：打开手机侧「电脑连接 → 服务器模式」，再执行「AI.js Pro: 连接到新设备」' }];
       }
       return connections.map((conn) => ({ kind: 'device', conn }) as DeviceNode);
     }

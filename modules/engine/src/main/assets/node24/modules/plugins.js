@@ -7,7 +7,9 @@
  *   plugins.list()                 -> [{packageName,label,versionName,versionCode,launcher,exportedServices}]
  *   plugins.isInstalled(pkg)       -> boolean
  *   plugins.info(pkg)              -> 插件信息；未安装抛中文提示
- *   plugins.load(pkg)              -> 已装插件的信息（与 info 相同）；下面这个固定包名除外
+ *   plugins.load(pkg)              -> Promise<插件入口 module.exports 的返回值>（真实 APK）
+ *   plugins.unload(pkg)            -> 卸载插件并清理 require 缓存
+ *   plugins.unloadAll()            -> 卸载全部插件
  *   plugins.launch(pkg)            -> 启动插件界面；没有 launcher 的能力插件抛中文提示
  *
  * 内置兼容别名（只有一个固定包名，不伪装成已安装 APK）：
@@ -20,7 +22,9 @@
  *   即宿主随包离线 ML Kit，不是 fake/模拟识别结果）。构造器本身惰性：new 不创建会话，
  *   第一次 detect 才创建；并发 detect 共享同一个底层会话；release() 幂等，若在会话创建
  *   完成前 release，则创建完成后立即释放，避免泄漏。识别/创建/释放的真实后端错误原样向外抛。
- *   其它包名的 load()、以及 list/isInstalled/info/launch 的原有语义完全不变。
+ *   其它包名的 load() 走通用 Node24PluginLoader：宿主必须返回真实 mainScriptPath 和
+ *   javaObject，这里再 require 插件入口并调用 module.exports(plugin)；不再返回 package info。
+ *   list/isInstalled/info/launch 的原有语义不变。
  */
 (function () {
   'use strict';
@@ -212,6 +216,46 @@
 
     var builtInMlkitOcr = mlkitOcrConstructor();
 
+    // Pass the actual APK Java object through the existing engine bridge.
+    var loadedMainScripts = Object.create(null);
+    async function loadNativePlugin(packageName) {
+      var record = hostCall('load', { packageName: packageName });
+      try {
+        if (!record || typeof record.mainScriptPath !== 'string' || !record.javaObject) {
+          throw apiError('宿主没有返回真实插件入口和 Java 对象：' + packageName);
+        }
+        loadedMainScripts[packageName] = record.mainScriptPath;
+        var index = require(record.mainScriptPath);
+        if (typeof index !== 'function') throw apiError('插件入口 module.exports 必须是函数');
+        var javaObject = api.wrapJavaValue(record.javaObject);
+        // Legacy factories accept the host Plugin wrapper (unwrap + entry path),
+        // while Node factories call the SDK object directly. Forward Java members
+        // and its bridge identity, and provide the two host wrapper methods.
+        var argument = new Proxy(javaObject, {
+          get: function (target, property) {
+            if (property === 'unwrap') return function () { return javaObject; };
+            if (property === 'getMainScriptPath') return function () { return record.mainScriptPath; };
+            if (property === 'mainScriptPath') return record.mainScriptPath;
+            return Reflect.get(target, property);
+          }
+        });
+        return await index(argument);
+      } catch (error) {
+        clearPluginRequireCache(packageName);
+        try { hostCall('unload', { packageName: packageName }); } catch (cleanupError) { }
+        throw error;
+      }
+    }
+    function clearPluginRequireCache(packageName) {
+      var entry = loadedMainScripts[packageName];
+      if (!entry) return;
+      var directory = require('path').dirname(entry) + require('path').sep;
+      Object.keys(require.cache).forEach(function (file) {
+        if (file === entry || file.indexOf(directory) === 0) delete require.cache[file];
+      });
+      delete loadedMainScripts[packageName];
+    }
+
     var plugins = {
       list: function () { return hostCall('list'); },
       all: function () { return plugins.list(); },
@@ -222,11 +266,24 @@
         return hostCall('info', { packageName: requirePackageName(packageName, 'info') });
       },
       load: function (packageName) {
+        requirePackageName(packageName, 'load');
         // 仅此一个官方 Pro 包名走内置适配器；不做宿主元数据查询，也不表示 APK 已安装。
         if (packageName === MLKIT_OCR_PACKAGE) {
           return builtInMlkitOcr;
         }
-        return plugins.info(packageName);
+        return Promise.resolve().then(function () {
+          return loadNativePlugin(packageName);
+        });
+      },
+      unload: function (packageName) {
+        requirePackageName(packageName, 'unload');
+        clearPluginRequireCache(packageName);
+        var result = hostCall('unload', { packageName: packageName });
+        return !!(result && (result.unloaded === undefined ? result : result.unloaded));
+      },
+      unloadAll: function () {
+        Object.keys(loadedMainScripts).forEach(clearPluginRequireCache);
+        hostCall('unloadAll');
       },
       launch: function (packageName) {
         return hostCall('launch', { packageName: requirePackageName(packageName, 'launch') });

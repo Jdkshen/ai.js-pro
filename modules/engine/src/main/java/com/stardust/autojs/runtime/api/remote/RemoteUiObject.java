@@ -103,9 +103,26 @@ public final class RemoteUiObject {
         return array == null ? "[]" : array.toString();
     }
 
-    /** UiObject 兼容：节点一定存在（快照里的节点），恒 true。 */
+    /** Revalidate the node against the live window instead of treating a snapshot as live. */
     public boolean exists() {
-        return true;
+        try {
+            String raw;
+            JSONArray path = mNode.optJSONArray("path");
+            if (path != null) {
+                JSONObject selector = new JSONObject().put("path", path);
+                for (String key : new String[]{"id", "className", "packageName"}) {
+                    if (!mNode.optString(key, "").isEmpty()) selector.put(key, mNode.getString(key));
+                }
+                if (mNode.optString("id", "").isEmpty()) {
+                    if (mNode.has("text")) selector.put("text", mNode.optString("text", ""));
+                    if (mNode.has("desc")) selector.put("desc", mNode.optString("desc", ""));
+                }
+                raw = mBackend.getNodeInfo(selector.toString(), 0);
+            } else if (mProxyableSelector) {
+                raw = mBackend.getNodeInfo(mSelectorJson, mIndex);
+            } else return false;
+            return raw != null && !raw.isEmpty() && !"null".equals(raw) && new JSONObject(raw).length() > 0;
+        } catch (Throwable error) { throw wrap("exists", error); }
     }
 
     // ---- 动作 ------------------------------------------------------------

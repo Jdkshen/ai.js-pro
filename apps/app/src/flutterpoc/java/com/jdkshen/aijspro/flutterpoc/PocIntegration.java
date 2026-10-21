@@ -300,7 +300,8 @@ final class PocIntegration {
         Class<?> settings = Class.forName("com.jdkshen.aijspro.mcp.McpSettings");
         Object instance = settings.getField("INSTANCE").get(null);
         int settingsPort = (Integer) settings.getMethod("port", Context.class).invoke(instance, activity);
-        boolean lan = (Boolean) settings.getMethod("lanEnabled", Context.class).invoke(instance, activity);
+        // McpService listens on 0.0.0.0; report the effective network mode.
+        boolean lan = true;
         boolean autoStart = (Boolean) settings.getMethod("autoStart", Context.class).invoke(instance, activity);
         // task-105：运行状态以持久化状态 + 10s 心跳为准，避免进程被回收/服务异常后仍显示「运行中」。
         boolean stateKnown = false;
@@ -353,7 +354,17 @@ final class PocIntegration {
                 + " autoStart=" + autoStart + " localUrl=" + localUrl
                 + " lanUrl=" + (lanUrl.isEmpty() ? "<empty>" : lanUrl)
                 + " error=" + (error.isEmpty() ? "<none>" : error));
-        return new JSONObject()
+        JSONObject diagnostics = new JSONObject();
+        try {
+            Class<?> service = Class.forName("com.jdkshen.aijspro.mcp.McpService");
+            Object companion = service.getField("Companion").get(null);
+            Class<?> type = companion.getClass();
+            diagnostics.put("toolCount", type.getMethod("getToolCount").invoke(companion))
+                    .put("requestCount", type.getMethod("getRequestCount").invoke(companion))
+                    .put("lastRequestAt", type.getMethod("getLastRequestAt").invoke(companion))
+                    .put("recentEvents", new JSONArray((java.util.Collection<?>) type.getMethod("recentEvents").invoke(companion)));
+        } catch (ReflectiveOperationException ignored) { }
+        return diagnostics.put("bindHost", "0.0.0.0")
                 .put("running", running)
                 .put("enabled", running)
                 .put("liveRunning", liveRunning)

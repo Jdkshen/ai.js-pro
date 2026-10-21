@@ -20,6 +20,14 @@ import javax.xml.parsers.ParserConfigurationException;
  * Created by Stardust on 2017/5/14.
  */
 public class XmlConverterTest {
+    @Test
+    public void encodedAttributeTextSurvivesConversion() throws Exception {
+        String xml = XmlConverter.convertToAndroidLayout("<text text=\"CheckBox &amp; Radio &quot;x&quot; &lt;ok&gt;\"/>");
+        assertWellFormed(xml);
+        org.w3c.dom.Document parsed = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+                .parse(new ByteArrayInputStream(xml.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assertEquals("CheckBox & Radio \"x\" <ok>", parsed.getDocumentElement().getAttribute("android:text"));
+    }
 
 
     @Test

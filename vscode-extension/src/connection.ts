@@ -18,6 +18,14 @@ interface Pending {
   resolve: (value: any) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  command: string;
+}
+
+interface ByteWaiter {
+  resolve: (value: Buffer) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  command: string;
 }
 
 export interface FileEntry {
@@ -45,7 +53,7 @@ export class DeviceConnection extends EventEmitter {
   private nextMessageId = 1;
   private readonly pending = new Map<number, Pending>();
   private readonly bufferedBytes = new Map<string, Buffer>();
-  private readonly byteWaiters = new Map<string, (data: Buffer) => void>();
+  private readonly byteWaiters = new Map<string, ByteWaiter>();
   private helloAnswered = false;
   private closed = false;
 
@@ -54,14 +62,17 @@ export class DeviceConnection extends EventEmitter {
     /** 用于日志的连接标签（如 `192.168.31.59:46638`）。 */
     public readonly label: string,
     private readonly log: (message: string) => void,
+    /** Device listener address for reconnect/debug configuration. */
+    public readonly deviceAddress?: string,
   ) {
     super();
     this.socket = socket;
     socket.setNoDelay(true);
     socket.on('data', (chunk: Buffer) => this.onData(chunk));
     socket.on('close', () => this.onClosed());
-    socket.on('error', (error: Error) => {
-      this.log(`[连接 ${this.label}] socket 错误：${error.message}`);
+    socket.on('error', (error: NodeJS.ErrnoException) => {
+      const code = error.code ? `${error.code} ` : '';
+      this.log(`[连接 ${this.label}] socket 错误：${code}${error.message}`);
     });
   }
 
@@ -86,37 +97,34 @@ export class DeviceConnection extends EventEmitter {
 
   /** `command`：run / stop / stopAll / save / list_files / read_file / write_file … */
   async sendCommand(data: Record<string, unknown>, timeoutMs = 20000): Promise<any> {
+    const command = commandName(data);
     const id = this.nextMessageId++;
-    this.sendRaw(encodeJsonFrame({ id, type: 'command', data }));
-    return this.awaitResponse(id, timeoutMs);
+    const result = await this.request(id, encodeJsonFrame({ id, type: 'command', data }), timeoutMs, command);
+    return ensureResponseOk(result, command);
   }
 
   async run(name: string, id: string, script: string): Promise<void> {
+    await this.sendCommand({ command: 'run', id, name, script });
+    // 只在设备确认接收后记录，避免 run 失败时 stop 误停上一次脚本。
     this.lastRunId = id;
     this.lastRunKind = 'script';
-    await this.sendCommand({ command: 'run', id, name, script });
   }
 
   async stop(id?: string): Promise<{ stopped: boolean; fallbackStopAll: boolean; stoppedCount?: number }> {
     const target = id ?? this.lastRunId;
     if (!target) {
-      const stoppedCount = await this.stopAll();
-      return { stopped: true, fallbackStopAll: true, stoppedCount };
+      throw new Error('当前连接尚未运行脚本；如需停止设备上的全部任务，请使用“停止全部”');
     }
     const result = await this.sendCommand({ command: 'stop', id: target });
-    // Older phone builds ACK stop with {} even when the project was not tracked.
-    // In that case an explicit stopAll is the only reliable way to stop that run.
-    if (!id && this.lastRunKind === 'project' && result?.stopped === undefined && !result?.error) {
-      const stoppedCount = await this.stopAll();
-      return { stopped: true, fallbackStopAll: true, stoppedCount };
+    // An individual stop must never silently turn into stopAll.
+    if (!id && this.lastRunKind === 'project' && result?.stopped === undefined) {
+      throw new Error('设备未确认停止该工程，请刷新任务状态或明确使用“停止全部”');
     }
-    if (result?.error) throw new Error(String(result.error));
     return { stopped: result?.stopped !== false, fallbackStopAll: false };
   }
 
   async stopAll(): Promise<number> {
     const result = await this.sendCommand({ command: 'stopAll' });
-    if (result?.error) throw new Error(String(result.error));
     return Number(result?.stoppedCount ?? 0);
   }
 
@@ -125,10 +133,7 @@ export class DeviceConnection extends EventEmitter {
   }
 
   async writeFile(path: string, text: string): Promise<void> {
-    const result = await this.sendCommand({ command: 'write_file', path, script: text });
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
+    await this.sendCommand({ command: 'write_file', path, script: text });
   }
 
   async listFiles(path: string, recursive: boolean): Promise<{ files: FileEntry[]; dirs: string[]; truncated: boolean }> {
@@ -136,9 +141,6 @@ export class DeviceConnection extends EventEmitter {
       { command: 'list_files', path, recursive },
       recursive ? 60000 : 20000,
     );
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
     return {
       files: Array.isArray(result?.files) ? result.files : [],
       dirs: Array.isArray(result?.dirs) ? result.dirs : [],
@@ -172,24 +174,27 @@ export class DeviceConnection extends EventEmitter {
     data: Record<string, unknown>,
     timeoutMs: number,
   ): Promise<{ result: any; bytes: Buffer }> {
+    const command = commandName(data);
     const id = this.nextMessageId++;
-    this.sendRaw(encodeJsonFrame({ id, type: 'command', data }));
-    const result = await this.awaitResponse(id, timeoutMs);
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
+    const result = ensureResponseOk(
+      await this.request(id, encodeJsonFrame({ id, type: 'command', data }), timeoutMs, command),
+      command,
+    );
     const md5 = String(result?.md5 ?? '');
+    if (!md5) {
+      throw new Error(`命令 ${command} 的响应缺少文件 md5`);
+    }
     const buffered = this.bufferedBytes.get(md5);
     if (buffered) {
       this.bufferedBytes.delete(md5);
       return { result, bytes: buffered };
     }
-    return { result, bytes: await this.waitForBytes(md5, 5000) };
+    return { result, bytes: await this.waitForBytes(md5, 5000, command) };
   }
 
   /**
-   * `bytes_command`：先发 zip 字节帧再发带 md5 的 json（与官方扩展顺序一致；
-   * 设备端两种顺序都能配对）。
+   * `bytes_command`：先发 zip 字节帧再发带 md5 的 json。
+   * 这是 AI.js Pro 设备端现有的配对顺序，保持帧格式不变。
    */
   async sendBytesCommand(
     command: 'run_project' | 'save_project',
@@ -200,20 +205,29 @@ export class DeviceConnection extends EventEmitter {
   ): Promise<any> {
     const id = this.nextMessageId++;
     const md5 = md5Hex(archive);
-    this.sendRaw(encodeFrame(TYPE_BYTES, archive));
-    this.sendRaw(
-      encodeJsonFrame({
-        id,
-        type: 'bytes_command',
-        md5,
-        data: { command, id: name, name, deletedFiles, override: true },
-      }),
-    );
+    const response = this.awaitResponse(id, timeoutMs, command);
+    try {
+      // 顺序必须保持：bytes 帧在前，带 md5 的 bytes_command 在后（设备端按此顺序配对）。
+      this.sendRaw(encodeFrame(TYPE_BYTES, archive));
+      this.sendRaw(
+        encodeJsonFrame({
+          id,
+          type: 'bytes_command',
+          md5,
+          data: { command, id: name, name, deletedFiles, override: true },
+        }),
+      );
+    } catch (error) {
+      this.cancelPending(id, error as Error);
+      return response;
+    }
+    const result = ensureResponseOk(await response, command);
     if (command === 'run_project') {
+      // 设备真正收下工程后才把 lastRunId 指向它，失败时不污染 stop 目标。
       this.lastRunId = name;
       this.lastRunKind = 'project';
     }
-    return this.awaitResponse(id, timeoutMs);
+    return result;
   }
 
   // ---- 断点调试（Rhino） ----
@@ -233,17 +247,11 @@ export class DeviceConnection extends EventEmitter {
 
   async debugEvaluate(expr: string, frame: number): Promise<string> {
     const result = await this.sendCommand({ command: 'debug_evaluate', expr, frame }, 20000);
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
     return String(result?.result ?? '');
   }
 
   async debugVariables(ref: number): Promise<{ name: string; value: string; ref?: number }[]> {
     const result = await this.sendCommand({ command: 'debug_variables', ref }, 20000);
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
     return Array.isArray(result?.variables) ? result.variables : [];
   }
 
@@ -257,9 +265,29 @@ export class DeviceConnection extends EventEmitter {
 
   // ---- 内部 ----
 
+  /** 发送一条请求并等待对应 response；断线时抛错，绝不能静默等满超时。 */
+  private request(id: number, frame: Buffer, timeoutMs: number, command: string): Promise<any> {
+    // 先挂 pending 再写，避免极快 response（或同步 socket 实现）在 awaitResponse 前到达。
+    const response = this.awaitResponse(id, timeoutMs, command);
+    try {
+      this.sendRaw(frame);
+    } catch (error) {
+      this.cancelPending(id, error as Error);
+    }
+    return response;
+  }
+
+  private cancelPending(id: number, error: Error): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pending.delete(id);
+    pending.reject(error);
+  }
+
   private sendRaw(frame: Buffer): void {
-    if (this.closed) {
-      return;
+    if (this.closed || this.socket.destroyed) {
+      throw new Error(`连接已断开，命令未发送（${this.label}）`);
     }
     this.socket.write(frame);
   }
@@ -274,7 +302,14 @@ export class DeviceConnection extends EventEmitter {
       return;
     }
     for (const frame of frames) {
-      this.dispatch(frame.type, frame.payload);
+      try {
+        this.dispatch(frame.type, frame.payload);
+      } catch (error) {
+        // 坏 gzip / 事件监听异常不能冒泡到 socket 'data'，否则会打穿扩展宿主。
+        this.log(`[连接 ${this.label}] 处理帧失败（type=${frame.type}）：${(error as Error).message}`);
+        this.close();
+        return;
+      }
     }
   }
 
@@ -334,7 +369,7 @@ export class DeviceConnection extends EventEmitter {
         encodeJsonFrame({
           id: this.nextMessageId++,
           type: 'hello',
-          data: { client_version: 4 },
+          data: { client_version: 4, client_name: 'AI.js Pro', extension_version: require('../package.json').version },
         }),
       );
     }
@@ -352,7 +387,8 @@ export class DeviceConnection extends EventEmitter {
     const waiter = this.byteWaiters.get(md5);
     if (waiter) {
       this.byteWaiters.delete(md5);
-      waiter(payload);
+      clearTimeout(waiter.timer);
+      waiter.resolve(payload);
       return;
     }
     this.bufferedBytes.set(md5, payload);
@@ -362,26 +398,26 @@ export class DeviceConnection extends EventEmitter {
     }
   }
 
-  private waitForBytes(md5: string, timeoutMs: number): Promise<Buffer> {
+  private waitForBytes(md5: string, timeoutMs: number, command: string): Promise<Buffer> {
+    if (this.closed || this.socket.destroyed) {
+      return Promise.reject(new Error(`连接已断开（${command} 的文件内容未到达）`));
+    }
     return new Promise<Buffer>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.byteWaiters.delete(md5);
-        reject(new Error('等待文件内容超时（bytes 帧未到达）'));
+        reject(new Error(`等待 ${command} 文件内容超时（${formatTimeout(timeoutMs)}，bytes 帧未到达）`));
       }, timeoutMs);
-      this.byteWaiters.set(md5, (data) => {
-        clearTimeout(timer);
-        resolve(data);
-      });
+      this.byteWaiters.set(md5, { resolve, reject, timer, command });
     });
   }
 
-  private awaitResponse(id: number, timeoutMs: number): Promise<any> {
+  private awaitResponse(id: number, timeoutMs: number, command: string): Promise<any> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`命令响应超时（id=${id}）`));
+        reject(new Error(`命令 ${command} 响应超时（${formatTimeout(timeoutMs)}，id=${id}）`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, command });
     });
   }
 
@@ -392,9 +428,31 @@ export class DeviceConnection extends EventEmitter {
     this.closed = true;
     for (const [, pending] of this.pending) {
       clearTimeout(pending.timer);
-      pending.reject(new Error('连接已断开'));
+      pending.reject(new Error(`连接已断开（命令 ${pending.command} 未完成）`));
     }
     this.pending.clear();
+    for (const [, waiter] of this.byteWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(`连接已断开（等待 ${waiter.command} 的文件内容时连接关闭）`));
+    }
+    this.byteWaiters.clear();
+    this.bufferedBytes.clear();
     this.emit('closed');
   }
+}
+
+function commandName(data: Record<string, unknown>): string {
+  const command = data?.command;
+  return typeof command === 'string' && command ? command : 'command';
+}
+
+function ensureResponseOk(result: any, command: string): any {
+  if (result?.error !== undefined && result?.error !== null && result?.error !== '') {
+    throw new Error(`命令 ${command} 失败：${String(result.error)}`);
+  }
+  return result;
+}
+
+function formatTimeout(timeoutMs: number): string {
+  return timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} 秒` : `${timeoutMs} 毫秒`;
 }

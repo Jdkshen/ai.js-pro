@@ -116,10 +116,18 @@ public final class Node24Client implements AutoCloseable {
      */
     public JSONObject evaluate(JSONObject request,LogListener listener) throws Exception {
         if(Looper.myLooper()==Looper.getMainLooper())throw new IllegalStateException("Evaluate Node on a worker thread");
-        if(request.toString().length()>196608)throw new IOException("Node request exceeds Binder payload limit");
         String id=request.getString("id");Pending pending=new Pending(listener);
         if(active.putIfAbsent(id,pending)!=null)throw new IOException("Duplicate Node execution id");
+        java.io.File sourceFile=null;
         try {
+            JSONObject payload=request;
+            if(request.getString("source").length()>96*1024 || request.toString().length()>196608) {
+                sourceFile=Node24SourceTransport.write(context.getCacheDir(),request.getString("source"));
+                payload=new JSONObject(request.toString());
+                payload.remove("source");
+                payload.put("sourceFile",sourceFile.getAbsolutePath());
+            }
+            if(payload.toString().length()>196608)throw new IOException("Node request metadata exceeds Binder payload limit");
             if(isCancelled(id,pending))return cancelledResult(id);
             bind();
             long connectDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);
@@ -130,19 +138,18 @@ public final class Node24Client implements AutoCloseable {
             if(isCancelled(id,pending))return cancelledResult(id);
             if(failure!=null||remote==null)throw new IOException(failure==null?"Node service unavailable":failure);
             Message message=Message.obtain(null,Node24Service.EXECUTE);Bundle data=new Bundle();
-            data.putString("payload",request.toString());message.setData(data);message.replyTo=replies;
+            data.putString("payload",payload.toString());message.setData(data);message.replyTo=replies;
             // Serialize EXECUTE/CANCEL for this id so a cancel cannot get delivered first
             // and then be lost when EXECUTE is sent after connection establishment.
             synchronized(pending) {
                 if(isCancelled(id,pending))return cancelledResult(id);
                 remote.send(message);pending.sent=true;
             }
-            // task-63：UI/keepRunning 脚本会被 :node24 服务阻塞保活（holdMillis，最长 10 分钟），
-            // 主进程等待上限必须相应放宽，否则脚本还在显示 overlay 时就报 response timeout。
+            // A visible UI is governed by its lifecycle and explicit stop, not elapsed time.
             long holdMillis=request.optLong("holdMillis",0L);
-            if(holdMillis<=0L && request.optBoolean("uiScript",false)) holdMillis=600_000L;
             long waitMillis=request.getLong("timeoutMillis")+holdMillis+15000L;
-            if(!pending.done.await(waitMillis,TimeUnit.MILLISECONDS)) {
+            if(request.optBoolean("uiScript",false)) pending.done.await();
+            else if(!pending.done.await(waitMillis,TimeUnit.MILLISECONDS)) {
                 cancel(id);throw new IOException("Node service response timeout");
             }
             if(isCancelled(id,pending))return cancelledResult(id);
@@ -153,6 +160,7 @@ public final class Node24Client implements AutoCloseable {
             // still cancel its nested Node task instead of leaving it running alone.
             cancel(id);Thread.currentThread().interrupt();throw interrupted;
         }finally{
+            if(sourceFile!=null)sourceFile.delete();
             // 超时/中断/断连路径也要关窗口：返回前完成正在执行的回调，之后到达的 LOG 不再显示。
             pending.logs.close();
             active.remove(id,pending);cancelledIds.remove(id);

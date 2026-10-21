@@ -14,6 +14,7 @@ import com.stardust.autojs.execution.ScriptExecution;
 import com.stardust.autojs.engine.ScriptEngine;
 import com.stardust.autojs.project.ProjectLauncher;
 import com.stardust.autojs.script.JavaScriptFileSource;
+import com.stardust.autojs.script.JavaScriptSource;
 import com.stardust.autojs.script.StringScriptSource;
 import com.stardust.io.Zip;
 import com.stardust.pio.PFiles;
@@ -93,13 +94,10 @@ public class DevPluginResponseHandler implements Handler {
 
     public DevPluginResponseHandler(File cacheDir) {
         mCacheDir = cacheDir;
-        if (cacheDir.exists()) {
-            if (cacheDir.isDirectory()) {
-                PFiles.deleteFilesOfDir(cacheDir);
-            } else {
-                cacheDir.delete();
-                cacheDir.mkdirs();
-            }
+        // Engine processes also construct this handler. Clearing the shared cache here
+        // deleted scripts/projects that another process was in the middle of running.
+        if (!cacheDir.isDirectory() && !cacheDir.mkdirs()) {
+            throw new IllegalStateException("电脑连接缓存目录不可用：" + cacheDir);
         }
     }
 
@@ -157,11 +155,27 @@ public class DevPluginResponseHandler implements Handler {
         }
         if (scriptParent == null || !scriptParent.isDirectory()) {
             Log.w("DevPluginRemote", "C-REMOTE 无法创建暂存目录：" + stagingDir);
-            Toast.makeText(GlobalAppContext.get(), "远程运行暂存目录不可用：" + stagingDir, Toast.LENGTH_LONG).show();
-            return;
+            throw new IllegalStateException("远程运行暂存目录不可用：" + stagingDir);
         }
+        StringScriptSource original = new StringScriptSource(name, script);
+        String engine = original.getEngineName();
+        if (JavaScriptSource.engineFromDirective(script) == null && name != null
+                && name.toLowerCase(java.util.Locale.ROOT).endsWith(".node.js")) {
+            engine = JavaScriptSource.ENGINE_NODE24;
+        }
+        String header = (original.getExecutionMode() & JavaScriptSource.EXECUTION_MODE_UI) != 0 ? "\"ui\";\n" : "";
+        header += "// @engine " + (JavaScriptSource.ENGINE_NODE24.equals(engine) ? "node24"
+                : JavaScriptSource.ENGINE_QUICKJS.equals(engine) ? "quickjs" : "rhino") + "\n";
         String prelude = remoteModulePrelude(scriptFile, requireBase);
-        PFiles.write(scriptFile, prelude + script);
+        if (JavaScriptSource.ENGINE_NODE24.equals(engine)) {
+            // Keep the Node module loader while resolving relative imports in the pushed project.
+            prelude = ";__dirname=" + JSONObject.quote(requireBase.getAbsolutePath()) + ";\n"
+                    + ";(function(){var nativeRequire=require;var base=__dirname;require=function(id){"
+                    + "return nativeRequire(typeof id==='string' && /^\\.{1,2}\\//.test(id) ? "
+                    + "requirePath(id) : id);};Object.assign(require,nativeRequire);"
+                    + "function requirePath(id){return base+'/'+id;}})();\n";
+        }
+        PFiles.write(scriptFile, header + prelude + script);
         Log.i("DevPluginRemote", "C-REMOTE module=" + scriptFile.getAbsolutePath()
                 + " __dirname=" + requireBase.getAbsolutePath()
                 + " requireBase=" + requireBase.getAbsolutePath());
@@ -243,8 +257,7 @@ public class DevPluginResponseHandler implements Handler {
                     .launch(AutoJs.getInstance().getScriptEngineService());
             mScriptExecutions.put(viewId, execution);
         } catch (Exception e) {
-            e.printStackTrace();
-            GlobalAppContext.toast(R.string.text_invalid_project);
+            throw new IllegalArgumentException("工程无法运行：" + e.getMessage(), e);
         }
     }
 

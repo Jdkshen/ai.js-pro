@@ -50,6 +50,8 @@ public class NodeUiLocalActivity extends AppCompatActivity {
         if (projectTheme != 0) setTheme(projectTheme);
         super.onCreate(state);
         try {
+            // 必须在任何 WebView 创建前设置本进程独立的数据目录后缀。
+            com.stardust.autojs.engine.node24.NodeWebView.prepareProcess(getApplicationContext());
             String xml = getIntent().getStringExtra("layoutXml");
             View root;
             if (xml != null && !xml.trim().isEmpty()) {
@@ -61,9 +63,18 @@ public class NodeUiLocalActivity extends AppCompatActivity {
                 }
                 root = getLayoutInflater().inflate(layoutId, null);
             }
+            // 编译布局的 <webview> 仍是 JsWebView；换成 NodeWebView，页面才能使用 $autojs 与
+            // jsBridge 的真实回调（inline 布局已在 NodeUiHost 里换过，这里幂等）。
+            root = com.stardust.autojs.engine.node24.NodeWebView.replaceJsWebViews(root);
             setContentView(root);
-            org.json.JSONObject ids = new org.json.JSONObject(bundle.getRJson()).optJSONObject("id");
-            if (ids == null) ids = NodeUiHost.buildViewsForScale(root, bundle);
+            org.json.JSONObject ids;
+            if (xml != null && !xml.trim().isEmpty()) {
+                // inline 没有 project-res.apk 的 R 表；从 XML 的 id="name" 建 binding。
+                ids = NodeUiHost.buildInlineViews(root, xml);
+            } else {
+                ids = new org.json.JSONObject(bundle.getRJson()).optJSONObject("id");
+                if (ids == null) ids = NodeUiHost.buildViewsForScale(root, bundle);
+            }
             if (!NodeUiLocalSession.attach(this, token, root, ids)) finish();
         } catch (Throwable failure) {
             android.util.Log.e("NodeUiLocalActivity", "inflate failed", failure);
@@ -71,9 +82,11 @@ public class NodeUiLocalActivity extends AppCompatActivity {
             finish();
         }
     }
-    /** 返回键直接关闭 Node 原生 UI（不进系统默认派发，避免残留 overlay）。 */
+    /** 返回键：脚本覆盖 onBackPressed 时只派发事件，由脚本决定关闭；否则直接关闭。 */
     @SuppressLint("MissingSuperCall")
-    @Override public void onBackPressed() { finish(); }
+    @Override public void onBackPressed() {
+        if (NodeUiLocalSession.onBackPressed(this)) finish();
+    }
     @Override public boolean onCreateOptionsMenu(android.view.Menu menu) {
         return NodeUiLocalSession.createOptionsMenu(menu) || super.onCreateOptionsMenu(menu);
     }

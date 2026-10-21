@@ -35,9 +35,19 @@
 产物：`<工程>/build/project-res.apk` + `project-res.json`（sidecar）。
 手机上要落在 `脚本目录/<工程目录名>/build/`。
 
-⚠️ **每次重装 app 后必须重跑**：aapt2 的 `-I` 会把 app 侧资源 id 编进引用里，宿主换版本后 id 可能漂移；
-引擎比对 sidecar 里的 `appApkSize`，不符就忽略资源包并打日志提示重编（此时自动回落合成 id 路线）。
+宿主资源表改变时需要重编：aapt2 的 `-I` 会把 app 侧资源 id 编进引用里。
+新 sidecar 的 `appResourcesSha256` 是宿主 ZIP 内未压缩 `resources.arsc` 的 SHA-256；
+这个摘要一致时，签名、压缩或原生库造成的 APK 大小变化不会使资源包失效。
+摘要不符则忽略并提示重编；旧 sidecar 没有摘要时仍兼容 `appApkSize` 校验。
+摘要按宿主文件路径、大小和修改时间缓存，属性读取不会重复扫描 APK。
 不想用真 id 就删掉 `build/` —— 什么都不用改，脚本照跑。
+
+内置 Node / Rhino 原生界面工程由 `:app:compile<Variant>SampleResources` 自动编译。
+任务使用当前变体 `process<Variant>Resources` 生成的 `.ap_`，通过
+`tools/build-bundled-project-res.py` 把资源包和摘要写入生成的 assets，再交给 `mergeAssets`。
+因此不依赖上一版 APK，也不手改示例源码。升级时 `BundledSampleSync` 负责同步；
+用户改过的旧文件仍按原策略备份。Node 显式 `loadAndroidResources()` 会刷新进程池中的资源缓存，
+工程从合成资源切换到刚编好的真实资源包时无需重启应用。
 
 ## 踩过的坑（改这块之前先读）
 
@@ -46,9 +56,10 @@
 2. **`app:` 属性以前被整块丢掉**（`BaseViewInflater.setAttr(ns,…)` 里 `app` 直接 `return false`），
    `app:title` / `app:menu` / `app:srcCompat` 全都失效；现在 `android:` 与 `app:` 一视同仁。
 3. **按名字查资源要试两个包名**（app 的 + 资源包的），见 `util/ResIds`。
-   `getIdentifier(name, type, "")` **不跨包**（实测恒 0）；`--package-id 0x81` 时 aapt2 会把包名
+   `getIdentifier(name, type, "")` **不跨包**（实测恒 0）；`--package-id 0x7e` 时 aapt2 会把包名
    改成 `<app 包名>.feature`，包名由 sidecar 提供。
-4. **资源包必须用独立包 id（0x81）**：与 app 同 0x7f 时会「按名字查得到、按 id 查不到」
+4. **资源包必须用独立包 id（0x7e）**：避免与 app 的 0x7f 冲突，同时保持 View ID 为正整数。
+   与 app 同 0x7f 时会「按名字查得到、按 id 查不到」
    （`getDrawable(0x7f030001)` 直接 NotFoundException）。
 5. **菜单项 id 必须与 `ui.R.id.*` 同源**，所以 `app:menu` 不用 framework 的 `inflateMenu(真id)`
    （那样 item id 由 MenuInflater 给，脚本里 `ids.indexOf(item.itemId)` 会失效），仍由引擎自己建项。

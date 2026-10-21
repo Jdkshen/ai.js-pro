@@ -163,6 +163,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final Node24CaptureConsentActivity.Session mProjection;
     /** 跨引擎能力：:node24 → 主进程真实 ScriptEngineService（懒绑定，close 时解绑）。 */
     private final NodeEngineBridgeClient mEngineBridge;
+    private final Node24PluginLoader mPluginLoader;
+    private final java.util.Set<Integer> mShellGroups = ConcurrentHashMap.newKeySet();
     /** Node24 require('ocr') 的真实内置 OCR 会话（PP-OCR / ML Kit 同形，close 统一释放）。 */
     private final Map<Integer, OcrSession> mOcrSessions = new ConcurrentHashMap<>();
     private final AtomicInteger mNextOcrHandle = new AtomicInteger(1);
@@ -230,12 +232,17 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     public Node24HostBridge(Context context, String projectDir) {
+        this(context, projectDir, -1);
+    }
+
+    public Node24HostBridge(Context context, String projectDir, int ownerEngineId) {
         mContext = context.getApplicationContext();
         mProjectDir = projectDir;
         mImages = new Node24Images();
         mAutomation = new Node24AutomationBridge(mContext, mImages);
         mProjection = new Node24CaptureConsentActivity.Session();
-        mEngineBridge = new NodeEngineBridgeClient(mContext);
+        mEngineBridge = new NodeEngineBridgeClient(mContext, ownerEngineId);
+        mPluginLoader = new Node24PluginLoader(mContext);
     }
 
     @Override
@@ -306,6 +313,22 @@ public final class Node24HostBridge implements Node24Engine.Host {
                     return ok(handleMedia(request));
                 case "plugins":
                     return ok(handlePlugins(request));
+                case "shell": {
+                    int pid = request.getInt("pid");
+                    if ("register".equals(request.getString("action"))) {
+                        try {
+                            String stat = new String(java.nio.file.Files.readAllBytes(
+                                    new File("/proc/" + pid + "/stat").toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                            String[] fields = stat.substring(stat.lastIndexOf(')') + 2).split(" ");
+                            if (pid <= 1 || Integer.parseInt(fields[1]) != android.os.Process.myPid()
+                                    || Integer.parseInt(fields[2]) != pid) throw new IllegalArgumentException("不是当前任务的 Shell 进程组");
+                            mShellGroups.add(pid);
+                        } catch (java.nio.file.NoSuchFileException alreadyExited) { }
+                    } else if ("release".equals(request.getString("action"))) {
+                        if (mShellGroups.remove(pid)) killShellGroup(pid);
+                    } else throw new IllegalArgumentException("Unknown shell action");
+                    return ok(true);
+                }
                 case "engines":
                     // 真实跨进程引擎注册表在主进程：不能在这里伪造 Node 侧引擎对象。
                     return handleEngineRequest(request);
@@ -470,7 +493,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 return ok(pollEvents());
             case "post": {
                 // 预留给测试/宿主自测：{"op":"post","type":"ui:click","payload":{...}}
-                enqueueEvent(request.optString("type", ""), request.optJSONObject("payload"));
+                enqueueEventValue(request.optString("type", ""), request.opt("payload"));
                 return ok(true);
             }
             default:
@@ -1160,6 +1183,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         com.stardust.autojs.rhino.AndroidClassLoader loader =
                 new com.stardust.autojs.rhino.AndroidClassLoader(previous, cache);
         Class<?> generated = loader.defineClass(name, Node24ClassGenerator.generate(name, parent, interfaces, methods));
+        Node24DexLifetime.track(generated.getClassLoader());
         generated.getField("__dispatcher").set(null, new Node24ClassGenerator.Dispatcher() {
             @Override public Object invoke(Object receiver, String method, Object[] args) {
                 return callback(receiver, method, args);
@@ -1435,7 +1459,13 @@ public final class Node24HostBridge implements Node24Engine.Host {
             }
         }
         // 成功解析的类按 job 缓存；缺失/失败不缓存，插件类晚加载时仍会重试。
-        return mReflectionCache.findClass(name, mContext.getClassLoader());
+        try {
+            return mReflectionCache.findClass(name, mContext.getClassLoader());
+        } catch (ClassNotFoundException missing) {
+            Class<?> pluginClass = mPluginLoader.findClass(name);
+            if (pluginClass != null) return pluginClass;
+            throw missing;
+        }
     }
 
     /** task-203：列动态 dex 类的 public 方法/字段签名（第三方探针/兼容检查用）。 */
@@ -1630,6 +1660,18 @@ public final class Node24HostBridge implements Node24Engine.Host {
             if (object.has("$arr")) {
                 JSONArray array = object.optJSONArray("$arr");
                 Object[] values = arguments(array);
+                return values;
+            }
+            if (object.has("$map")) {
+                JSONObject source = object.optJSONObject("$map");
+                Map<String, Object> values = new java.util.LinkedHashMap<>();
+                if (source != null) {
+                    java.util.Iterator<String> keys = source.keys();
+                    while (keys.hasNext()) {
+                        String key = keys.next();
+                        values.put(key, fromWire(source.opt(key)));
+                    }
+                }
                 return values;
             }
             if (object.has("$null")) {
@@ -1909,7 +1951,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return;
         }
         mNoArgCalls.close();
+        for (Integer pid : mShellGroups) killShellGroup(pid);
+        mShellGroups.clear();
         mJavaExecutor.shutdownNow();
+        mPluginLoader.unloadAll();
         Node24GeneratedClasses.remove(mOverlayOwner);
         for (Class<?> generated : mGeneratedClasses.values()) {
             try { generated.getField("__dispatcher").set(null, null); }
@@ -1933,6 +1978,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
             }
         } catch (Throwable error) {
             Log.w(TAG, "close task-156 receivers failed", error);
+        }
+        if (mNotificationListenerReceiver != null) {
+            try { mContext.unregisterReceiver(mNotificationListenerReceiver); }
+            catch (Throwable error) { Log.w(TAG, "close notification listener receiver failed", error); }
+            mNotificationListenerReceiver = null;
         }
         try {
             mEngineBridge.close();
@@ -1993,6 +2043,13 @@ public final class Node24HostBridge implements Node24Engine.Host {
             mReflectionCache.close();
         } catch (Throwable error) {
             Log.w(TAG, "close reflection cache failed", error);
+        }
+    }
+
+    private static void killShellGroup(int pid) {
+        try { android.system.Os.kill(-pid, android.system.OsConstants.SIGKILL); }
+        catch (android.system.ErrnoException absent) {
+            if (absent.errno != android.system.OsConstants.ESRCH) Log.w(TAG, "close owned shell group " + pid, absent);
         }
     }
 
@@ -2253,7 +2310,6 @@ public final class Node24HostBridge implements Node24Engine.Host {
                         return stat;
                     }
                     case "readText":
-                        if (!file.isFile()) return "";
                         return new String(java.nio.file.Files.readAllBytes(file.toPath()),
                                 java.nio.charset.StandardCharsets.UTF_8);
                     case "writeText": {
@@ -2266,7 +2322,6 @@ public final class Node24HostBridge implements Node24Engine.Host {
                         return true;
                     }
                     case "read": {
-                        if (!file.isFile()) return "";
                         return new String(java.nio.file.Files.readAllBytes(file.toPath()),
                                 java.nio.charset.StandardCharsets.UTF_8);
                     }
@@ -2277,21 +2332,19 @@ public final class Node24HostBridge implements Node24Engine.Host {
             }
             case "storages": {
                 String name = args.optString("name", "default");
-                android.content.SharedPreferences prefs = mContext.getSharedPreferences(
-                        "node24.storage." + name, Context.MODE_PRIVATE);
-                switch (action) {
-                    case "get": return prefs.contains(args.optString("key", ""))
-                            ? prefs.getString(args.optString("key", ""), "") : null;
-                    case "put": prefs.edit().putString(args.optString("key", ""),
-                            args.optString("value", "")).apply(); return true;
-                    case "remove": prefs.edit().remove(args.optString("key", "")).apply(); return true;
-                    case "clear": prefs.edit().clear().apply(); return true;
-                    default: throw new IllegalArgumentException("storages 暂不支持：" + action);
-                }
+                android.os.Bundle values = new android.os.Bundle();
+                values.putString("key", args.optString("key", ""));
+                values.putString("value", args.optString("value", ""));
+                android.os.Bundle result = mContext.getContentResolver().call(
+                        android.net.Uri.parse("content://" + mContext.getPackageName() + ".node24.storage"),
+                        action, name, values);
+                if (result == null) throw new IllegalStateException("Node storage provider unavailable");
+                if ("get".equals(action)) return result.getString("value");
+                return result.getBoolean("ok", false);
             }
             case "events":
                 if ("emit".equals(action)) {
-                    enqueueEvent(args.optString("type", ""), args.optJSONObject("payload"));
+                    enqueueEventValue(args.optString("type", ""), args.opt("payload"));
                     return true;
                 }
                 throw new IllegalArgumentException("events.emit 支持 type/payload");
@@ -3010,11 +3063,23 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 return listPlugins(pm);
             case "isInstalled":
                 return pluginInfo(pm, request.optString("packageName", ""), false) != null;
-            case "info":
-            case "load": {
+            case "info": {
                 JSONObject info = pluginInfo(pm, request.optString("packageName", ""), true);
                 return info;
             }
+            case "load": {
+                JSONObject record = mPluginLoader.load(request.getString("packageName"));
+                record.put("javaObject", toWire(mPluginLoader.instance(request.getString("packageName"))));
+                return record;
+            }
+            case "unload":
+                mNoArgCalls.close();
+                mReflectionCache.close();
+                return new JSONObject().put("unloaded", mPluginLoader.unload(request.getString("packageName")));
+            case "unloadAll":
+                mNoArgCalls.close();
+                mReflectionCache.close();
+                return new JSONObject().put("unloaded", mPluginLoader.unloadAll());
             case "launch":
                 return launchPlugin(pm, request.optString("packageName", ""));
             default:
@@ -3371,6 +3436,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     /** Java 侧（B 的 UI/生命周期桥、主进程 host 桥）投递事件到本 Node 执行的任务队列。 */
     public void enqueueEvent(String type, JSONObject payload) {
+        enqueueEventValue(type, payload);
+    }
+
+    private void enqueueEventValue(String type, Object payload) {
         if (mClosed.get() || type == null || type.isEmpty()) {
             return;
         }

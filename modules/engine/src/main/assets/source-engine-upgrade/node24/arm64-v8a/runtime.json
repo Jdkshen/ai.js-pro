@@ -1,5 +1,5 @@
 {
-  "libnode.so": "50cfa7b076ffe3c24446ce8722ff332266f2467acc3df1075a6b888548226c23",
+  "libnode.so": "d2165091a8360066bfb27ebfe381e3e509d38c7d0d4d778f9f44ece9345f7274",
   "libc++_shared.so": "8dfbd800f0d4b8ff2b664b0e5012a4a5f08794668dccfaa29b8b1c2cdcdc18b3",
-  "libajsnode24bridge.so": "f6275f6a8e78ae52d3aa5352704b75a5d26a54e0475b4032b2552aaa461fd2de"
+  "libajsnode24bridge.so": "24456e4231c9c70daae62c19cdd5f2f23c786006ef6d7feab8f02b5f31fef274"
 }

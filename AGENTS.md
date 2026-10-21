@@ -3,8 +3,13 @@
 给 AI 助手 / 自动化 agent 的项目约定。dsh（DeepSeek Harness）、Codex、Copilot、Claude Code 都会读这个文件。
 
 > **接手总纲（先读这个）**：[`docs/HANDOFF_AI.md`](docs/HANDOFF_AI.md) —— 主架构图、构建/发布、真机测试套路、已知缺口、分支策略。
-> 最新进度：[`docs/reports/2026-10-18_收尾交接_给Codex_v2.md`](docs/reports/2026-10-18_收尾交接_给Codex_v2.md)
-> 当前基线：**dev-1154**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
+> 最新进度：[`docs/reports/2026-10-21_Node_Dex插件WebUI与K40修复.md`](docs/reports/2026-10-21_Node_Dex插件WebUI与K40修复.md)
+> 示例目录入口补充：[`docs/reports/2026-10-21_示例目录运行入口修复.md`](docs/reports/2026-10-21_示例目录运行入口修复.md)（React / Vue3 外部运行按钮均已真机重测）。
+> 自定义组件/重复窗口补充：[`docs/reports/2026-10-21_Node自定义组件与重复窗口修复.md`](docs/reports/2026-10-21_Node自定义组件与重复窗口修复.md)。
+> MCP/传统界面补充：[`docs/reports/2026-10-21_MCP三引擎与Node传统UI修复.md`](docs/reports/2026-10-21_MCP三引擎与Node传统UI修复.md)。
+> 本轮优化：[`docs/reports/2026-10-21_MCP界面电脑连接与日志优化.md`](docs/reports/2026-10-21_MCP界面电脑连接与日志优化.md)。电脑连接使用自家 VS Code 扩展 0.3.3；旧 Pro ws-rpc 不再启动。
+> 最新核对：[三引擎细节与 Pikafish 原生闪退修复](docs/reports/2026-10-21_三引擎细节复核与原生闪退修复.md)：非法局面/历史原来会触发原生 `exit(1)`，与 RenderThread destroyed-mutex 表现一起复现；已补语义校验。插件 APK 1.0.1 / 2。
+> 当前发布：**dev-1194**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
 > 主架构已冻结，实验/垂直业务走 `sandbox/*` 分支（见 HANDOFF_AI §8）。
 > 当前剩余项见 [`docs/REMAINING_WORK.md`](docs/REMAINING_WORK.md) §0；旧接手指南
 > [`docs/reports/2026-09-12_接手指南_Codex.md`](docs/reports/2026-09-12_接手指南_Codex.md) 仅作历史参考。

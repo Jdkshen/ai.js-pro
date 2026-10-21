@@ -34,6 +34,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.inflater.ProjectResourceBundle;
 import com.stardust.autojs.core.ui.inflater.ResourceParser;
+import com.stardust.autojs.core.ui.inflater.inflaters.BaseViewInflater;
 import com.stardust.autojs.core.ui.inflater.util.Drawables;
 import com.stardust.autojs.core.ui.inflater.util.Ids;
 
@@ -673,6 +674,12 @@ public final class NodeUiHost {
     // ------------------------------------------------------------------
 
     private static Object loadAndroidResources(Context context, String projectDir) throws Exception {
+        // Explicit loads start a fresh resource snapshot. A project can be rebuilt/pushed while
+        // the pooled Node process stays alive; retaining its old synthetic R table makes the
+        // Activity and the script disagree even after a valid compiled APK has arrived.
+        synchronized (LOCK) {
+            BUNDLE_CACHE.remove(projectDir);
+        }
         ProjectResourceBundle bundle = bundleOf(context, projectDir);
         if (bundle == null) {
             return new JSONObject().put("ok", false).put("error", "工程目录为空：" + projectDir);
@@ -703,13 +710,14 @@ public final class NodeUiHost {
     }
 
     private static Object resourceId(Context context, String projectDir, JSONObject request) throws Exception {
-        ProjectResourceBundle bundle = bundleOf(context, projectDir);
-        if (bundle == null || bundle.getError() != null) {
-            // 资源表没加载好时不阻断属性读取：返回 -1，由 JS 侧决定展示/报错。
-            return new JSONObject().put("ok", true).put("id", -1);
-        }
         String type = request.optString("type", "");
         String name = request.optString("name", "");
+        ProjectResourceBundle bundle = bundleOf(context, projectDir);
+        if (bundle == null || bundle.getError() != null) {
+            // Inline UI can use the host's bundled icons/styles without a project resource table.
+            return new JSONObject().put("ok", true).put("id",
+                    context.getResources().getIdentifier(name, type, context.getPackageName()));
+        }
         return new JSONObject().put("ok", true).put("id", bundle.idOf(type, name));
     }
 
@@ -902,6 +910,7 @@ public final class NodeUiHost {
                     // 2) 基底用反射解析到的 MaterialComponents 主题，回退 android.R.style.Theme_Material_Light_NoActionBar；
                     // 3) 仍失败时用 App 主题 inflate 一次兜底，错误保留中文返回。
                     Context themed = themedContextFor(context, bundle);
+                    NodeWebView.prepareProcess(context.getApplicationContext());
                     View content;
                     try {
                         content = inline
@@ -914,6 +923,7 @@ public final class NodeUiHost {
                                 ? inflateInlineLayout(fallback, xml, runtimeClasses)
                                 : bundle.newLayoutInflater(fallback).inflate(xml);
                     }
+                    content = NodeWebView.replaceJsWebViews(content);
                     // task-69：保存内容视图/主题/资源包，并采集 id 名 → viewId 映射给 JS binding。
                     sThemedContext = themed;
                     sShownBundle = bundle;
@@ -986,8 +996,8 @@ public final class NodeUiHost {
      *
      * <p>入口不加载 project.json/res/project-res.apk，因此工程资源引用（@drawable/@color…）
      * 不可用；基础框架控件、material 控件与 Auto.js 简称（column/row/text/button/input…）可用。
-     * grid/list/canvas 需要 ScriptRuntime 才能构造，Node 宿主路径无法真实创建：这里替换为
-     * 带原 id 的 text 占位，保证同屏基础控件仍能显示/绑定，限制见 layout-xml-fix.md。
+     * grid/list/canvas 使用不依赖 ScriptRuntime 的 NodeUi* 真实控件（RecyclerView/View），
+     * item 数据由 Node 侧 setItemTemplate/setDataSource 填充。
      */
     public static View inflateInlineLayout(Context themed, String xml) {
         return inflateInlineLayout(themed, xml, themed == null ? null : themed.getClassLoader());
@@ -1000,16 +1010,26 @@ public final class NodeUiHost {
         if (xml == null || xml.trim().isEmpty()) {
             throw new IllegalArgumentException("layoutXml 为空");
         }
+        NodeWebView.prepareProcess(themed.getApplicationContext());
         String normalized = normalizeInlineLayoutXml(xml);
         DynamicLayoutInflater inflater = newInlineLayoutInflater(themed);
         if (loader != null) inflater.setClassLoader(loader);
-        return inflater.inflate(normalized);
+        View root = inflater.inflate(normalized);
+        // 兜底：若工程自定义 ClassLoader/旧路径仍产出 JsWebView，也换成带 Node 桥的真实 WebView。
+        return NodeWebView.replaceJsWebViews(root);
     }
 
     private static DynamicLayoutInflater newInlineLayoutInflater(Context context) {
         ResourceParser parser = new ResourceParser(new Drawables());
         DynamicLayoutInflater inflater = new DynamicLayoutInflater(parser);
         inflater.setContext(context);
+        // Node 原生 grid/list/canvas：不依赖 ScriptRuntime 的真实控件。
+        inflater.registerViewAttrSetter(NodeUiGridView.class.getName(),
+                new NodeUiRecyclerViewInflater(parser, true));
+        inflater.registerViewAttrSetter(NodeUiListView.class.getName(),
+                new NodeUiRecyclerViewInflater(parser, false));
+        inflater.registerViewAttrSetter(NodeUiCanvasView.class.getName(),
+                new BaseViewInflater<NodeUiCanvasView>(parser));
         try {
             if (context.getClassLoader() != null) {
                 inflater.setClassLoader(context.getClassLoader());
@@ -1021,62 +1041,48 @@ public final class NodeUiHost {
     }
 
     /**
-     * Auto.js 简称 → XmlConverter 认识的标签；grid/list/canvas 在无 ScriptRuntime 的 Node 宿主
-     * 里无法实例化，替换成可显示/可绑定 id 的文本占位，而不是让整页 inflate 失败。
+     * Auto.js 简称 → XmlConverter 认识的标签。grid/list/canvas 换成 Node 的轻量真实控件
+     * （NodeUiGridView/NodeUiListView/NodeUiCanvasView），不再用 Text 占位。
      */
     private static String normalizeInlineLayoutXml(String xml) {
         String normalized = renameInlineTag(xml, "column", "vertical");
         normalized = renameInlineTag(normalized, "row", "horizontal");
-        normalized = replaceUnsupportedInlineWidget(normalized, "grid", "grid（表格）");
-        normalized = replaceUnsupportedInlineWidget(normalized, "list", "list（列表）");
-        normalized = replaceUnsupportedInlineWidget(normalized, "canvas", "canvas（画布）");
+        // Node UI 的 <webview> 必须是带 Node 桥的真实 WebView；先换成完整类名，避免
+        // 默认 JsWebView 先注入一套依赖 ScriptRuntime 的页面 SDK。
+        normalized = renameInlineTag(normalized, "webview", NodeWebView.class.getName());
+        normalized = renameInlineTag(normalized, "grid", NodeUiGridView.class.getName());
+        normalized = renameInlineTag(normalized, "list", NodeUiListView.class.getName());
+        normalized = renameInlineTag(normalized, "canvas", NodeUiCanvasView.class.getName());
         return normalized;
+    }
+
+    /**
+     * item 模板的 Node 化：column/row/materialcard/switch 换成可直接 inflate 的控件。
+     * 保留 {@code {{this.xxx}}}，由 NodeUiRecyclerView 在 bind 时用当前 item 求值。
+     */
+    public static String normalizeItemTemplateXml(String xml) {
+        if (xml == null) return "";
+        String normalized = renameInlineTag(xml, "column", "vertical");
+        normalized = renameInlineTag(normalized, "row", "horizontal");
+        normalized = renameInlineTag(normalized, "materialcard",
+                "com.google.android.material.card.MaterialCardView");
+        normalized = renameInlineTag(normalized, "switch", "androidx.appcompat.widget.SwitchCompat");
+        return normalized;
+    }
+
+    /** item 模板 inflate（主线程，由 NodeUiRecyclerView.onBindViewHolder 调用）。 */
+    public static View inflateItemTemplate(Context context, String xml, ViewGroup parent) {
+        DynamicLayoutInflater inflater = newInlineLayoutInflater(context);
+        if (context.getClassLoader() != null) {
+            inflater.setClassLoader(context.getClassLoader());
+        }
+        return inflater.inflate(xml, parent, false);
     }
 
     private static String renameInlineTag(String xml, String from, String to) {
         String open = "(?i)<\\s*" + Pattern.quote(from) + "(?=\\s|/|>)";
         String close = "(?i)<\\s*/\\s*" + Pattern.quote(from) + "\\s*>";
         return xml.replaceAll(open, "<" + to).replaceAll(close, "</" + to + ">");
-    }
-
-    private static String replaceUnsupportedInlineWidget(String xml, String tag, String label) {
-        String quotedTag = Pattern.quote(tag);
-        int count = 0;
-        // 成对标签（有子节点）：整段替换为占位，子节点不再 inflate（本来也无法构造）。
-        Pattern paired = Pattern.compile("(?is)<\\s*" + quotedTag + "\\b([^>]*)>.*?<\\s*/\\s*"
-                + quotedTag + "\\s*>");
-        Matcher pairedMatcher = paired.matcher(xml);
-        StringBuffer pairedOut = new StringBuffer();
-        while (pairedMatcher.find()) {
-            pairedMatcher.appendReplacement(pairedOut,
-                    Matcher.quoteReplacement(inlinePlaceholder(tag, label, pairedMatcher.group(1))));
-            count++;
-        }
-        pairedMatcher.appendTail(pairedOut);
-        String result = pairedOut.toString();
-        // 自闭合标签：<grid id="grid" spanCount="2"/>
-        Pattern selfClosing = Pattern.compile("(?is)<\\s*" + quotedTag + "\\b([^>]*?)/\\s*>");
-        Matcher selfMatcher = selfClosing.matcher(result);
-        StringBuffer selfOut = new StringBuffer();
-        while (selfMatcher.find()) {
-            selfMatcher.appendReplacement(selfOut,
-                    Matcher.quoteReplacement(inlinePlaceholder(tag, label, selfMatcher.group(1))));
-            count++;
-        }
-        selfMatcher.appendTail(selfOut);
-        result = selfOut.toString();
-        if (count > 0) {
-            Log.i(TAG, "C-INLINE: " + tag + " 需要 ScriptRuntime，Node 宿主暂不支持，已替换为 "
-                    + count + " 个占位控件");
-        }
-        return result;
-    }
-
-    private static String inlinePlaceholder(String tag, String label, String attrs) {
-        String cleaned = attrs == null ? "" : attrs;
-        cleaned = cleaned.replaceAll("(?is)\\s+text\\s*=\\s*[\"'][^\"']*[\"']", "");
-        cleaned = cleaned.replaceAll("(?is)\\s+spanCount\\s*=\\s*[\"'][^\"']*[\"']", "");
-        return "<text" + cleaned + " android:text=\"[NodeUI 暂不支持 " + label + "]\"/>";
     }
 
     /**
@@ -1304,9 +1310,6 @@ public final class NodeUiHost {
     private static Object setAdapter(final Context context, final String projectDir, final JSONObject request) throws Exception {
         if (sActivityMode) {
             return forwardToActivity("setAdapter", request);
-        }
-        if (INLINE_LAYOUT_TOKEN.equals(sShownLayout)) {
-            return viewError("layoutXml 模式暂不支持 setAdapter：grid/list 已替换为占位控件，未真实创建 RecyclerView");
         }
         final AtomicReference<Throwable> failure = new AtomicReference<>();
         final int[] applied = new int[1];
@@ -2470,6 +2473,11 @@ public final class NodeUiHost {
     }
 
     private static void removeOverlayLocked() {
+        if (sContentView != null) {
+            // overlay 里的 NodeWebView 不归 NodeUiLocalSession 管；移除窗口前显式释放，
+            // 否则关闭脚本后页面/JS 回调会继续存活。
+            NodeWebView.destroyInTree(sContentView);
+        }
         if (sOverlayView != null && sWindowManager != null) {
             try {
                 sWindowManager.removeView(sOverlayView);

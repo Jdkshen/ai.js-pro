@@ -30,7 +30,8 @@ public final class DevPluginAutoStart implements Application.ActivityLifecycleCa
         }
         // 手动关掉开关时 DevPluginPrefs 已置 false，这里不会被重新拉起；
         // 服务其实还活着（如刚启动完成）时也不重复 start。
-        if (DevPluginPrefs.isServerEnabled(mApp) && !DevPluginServer.getInstance().isRunning()) {
+        if ((DevPluginPrefs.isServerEnabled(mApp) || !DevPluginServer.getInstance().getReconnectHost().isEmpty())
+                && !DevPluginServer.getInstance().isRunning()) {
             DevPluginServerService.start(mApp);
         }
     }

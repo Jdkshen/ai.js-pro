@@ -66,29 +66,413 @@
         // ------------------------------------------------------------------
         const lastInflate = {layoutId: 0};
         let realUiMode = false;
+        let realInlineMode = false;
+        let resourceCompiled = false;
         let realActivity = null;
         let realSession = null;
         let realImageLoader = null;
+        let suppressAllDestroyed = false;
         const realBindings = new WeakMap();
+        let realViewExtras = new WeakMap();
+        function viewExtras(view) {
+            let extras = realViewExtras.get(view);
+            if (!extras) {
+                extras = {events: new (require('events').EventEmitter)(), bound: Object.create(null), widget: null};
+                realViewExtras.set(view, extras);
+            }
+            return extras;
+        }
+        function isNodeUiView(view, classNamePart) {
+            try {
+                return String(view && view.__class || '').indexOf(classNamePart) >= 0;
+            } catch (ignored) {
+                return false;
+            }
+        }
+
+        /** holder.position/data 必须是「访问时」的最新值，不能是创建时快照。 */
+        function itemHolderFacade(holder) {
+            return {
+                get position() {
+                    try { return Number(holder.getPosition()); } catch (error) { return -1; }
+                },
+                get data() {
+                    try { return JSON.parse(String(holder.getDataJson() || '{}')); } catch (error) { return null; }
+                },
+                getPosition: function () { return this.position; },
+                getData: function () { return this.data; }
+            };
+        }
+
+        function ensureItemCreatedListener(view, extras) {
+            if (extras.itemCreatedBound) return;
+            const Listener = globalThis.$autojs.java.findClass(
+                'com.stardust.autojs.engine.node24.NodeUiRecyclerView$ItemCreatedListener');
+            view.setItemCreatedListener(new Listener({
+                onItemCreated: function (itemView, holder) {
+                    try {
+                        extras.events.emit('item_created', itemView, itemHolderFacade(holder));
+                    } catch (error) {
+                        console.error('[ui] item_created 回调异常：', error);
+                    }
+                }
+            }));
+            extras.itemCreatedBound = true;
+        }
+
+        function ensureDrawListener(view, extras) {
+            if (extras.drawBound) return;
+            const Listener = globalThis.$autojs.java.findClass(
+                'com.stardust.autojs.engine.node24.NodeUiCanvasView$DrawListener');
+            view.setDrawListener(new Listener({
+                onDraw: function (canvas) {
+                    try {
+                        extras.events.emit('draw', canvas);
+                    } catch (error) {
+                        console.error('[ui] draw 回调异常：', error);
+                    }
+                }
+            }));
+            extras.drawBound = true;
+        }
+
+        function requireNodeView(view, feature) {
+            if (!isNodeUiView(view, 'NodeUiRecyclerView') && !isNodeUiView(view, 'NodeUiGridView') && !isNodeUiView(view, 'NodeUiListView')) {
+                throw new Error(feature + ' 需要 Node 原生 grid/list（当前：'
+                    + String(view && view.__class || 'unknown') + '）');
+            }
+        }
+
+        function callAdapterNative(view, method, args, fallback) {
+            if (typeof view[method] === 'function') {
+                view[method].apply(view, args);
+                return;
+            }
+            if (typeof fallback === 'function') {
+                fallback();
+                return;
+            }
+            throw new Error('当前 grid/list 缺少适配器方法：' + method);
+        }
+
+        // Extend the existing Java proxy, so binding/findViewById/native callbacks all
+        // keep the same View identity and Java method/argument conversion.
+        function realViewMember(view, name) {
+            const extras = viewExtras(view);
+            if (name === 'attr') return function (attribute, value) {
+                if (attribute && typeof attribute === 'object') {
+                    Object.keys(attribute).forEach(function (key) { view.attr(key, attribute[key]); });
+                    return view;
+                }
+                const key = String(attribute);
+                const widget = extras.widget;
+                const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
+                if (arguments.length < 2) {
+                    if (descriptor && descriptor.get) return descriptor.get.call(widget);
+                    if (descriptor && descriptor.set) return widget.attrs[key];
+                    return javaSession().viewAttribute(view, key, '', false);
+                }
+                if (descriptor && descriptor.set) {
+                    descriptor.set.call(widget, value);
+                    widget.attrs[key] = value;
+                } else {
+                    javaSession().viewAttribute(view, key, String(value), true);
+                }
+                return view;
+            };
+            if (name === 'removeAllListeners') return function (event) {
+                if (arguments.length) extras.events.removeAllListeners(String(event));
+                else extras.events.removeAllListeners();
+                return view;
+            };
+            // 传统界面示例：这些属性需 prelude 白名单放行（见交付说明）。未放行时
+            // Java 侧的 setItemTemplate/setDataSource 仍可直接工作（数据同步有限）。
+            if (name === 'setItemTemplate') return function (xml) {
+                requireNodeView(view, 'setItemTemplate');
+                extras.itemTemplate = String(xml);
+                view.nativeSetItemTemplate(String(xml));
+                return view;
+            };
+            if (name === 'setDataSource') return function (data) {
+                requireNodeView(view, 'setDataSource');
+                extras.itemData = data;
+                view.nativeSetDataSource(data);
+                return view;
+            };
+            if (name === 'getAdapter' && !isNodeUiView(view, 'NodeUiGridView') && !isNodeUiView(view, 'NodeUiListView')
+                && !isNodeUiView(view, 'NodeUiRecyclerView')) return undefined;
+            if (name === 'getAdapter') return function () {
+                requireNodeView(view, 'getAdapter');
+                const data = function () {
+                    const current = extras.itemData;
+                    return Array.isArray(current) ? current : [];
+                };
+                return {
+                    getItemCount: function () { return data().length; },
+                    notifyItemInserted: function (index) {
+                        callAdapterNative(view, 'nativeNotifyItemInserted', [data(), Number(index) || 0]);
+                    },
+                    notifyItemRemoved: function (index) {
+                        callAdapterNative(view, 'nativeNotifyItemRemoved', [data(), Number(index) || 0]);
+                    },
+                    notifyItemChanged: function (index) {
+                        callAdapterNative(view, 'nativeNotifyItemChanged', [data(), Number(index) || 0]);
+                    },
+                    notifyDataSetChanged: function () {
+                        callAdapterNative(view, 'nativeNotifyDataSetChanged', [data()]);
+                    },
+                    notifyItemRangeInserted: function (start, count) {
+                        callAdapterNative(view, 'nativeNotifyDataSetChanged', [data()]);
+                    },
+                    notifyItemRangeRemoved: function (start, count) {
+                        callAdapterNative(view, 'nativeNotifyDataSetChanged', [data()]);
+                    },
+                    notifyItemRangeChanged: function (start, count) {
+                        callAdapterNative(view, 'nativeNotifyDataSetChanged', [data()]);
+                    }
+                };
+            };
+            return function (event, handler) {
+                event = String(event);
+                if (name === 'off' || name === 'removeListener') {
+                    extras.events.removeListener(event, handler);
+                    return view;
+                }
+                if (typeof handler !== 'function') throw new TypeError('View.on/once 需要函数');
+                if (!extras.bound[event]) {
+                    if (event === 'item_created') {
+                        requireNodeView(view, 'item_created');
+                        ensureItemCreatedListener(view, extras);
+                    } else if (event === 'draw') {
+                        if (!isNodeUiView(view, 'NodeUiCanvasView')) {
+                            throw new Error('draw 事件需要 Node 原生 canvas（当前：'
+                                + String(view && view.__class || 'unknown') + '）');
+                        }
+                        ensureDrawListener(view, extras);
+                    } else {
+                        let listenerClass, method;
+                        if (event === 'click') {
+                            listenerClass = 'android.view.View$OnClickListener'; method = 'setOnClickListener';
+                        } else if (event === 'long_click') {
+                            listenerClass = 'android.view.View$OnLongClickListener'; method = 'setOnLongClickListener';
+                        } else {
+                            throw new Error('Node View 事件暂不支持：' + event);
+                        }
+                        const Listener = globalThis.$autojs.java.findClass(listenerClass);
+                        const callbacks = {};
+                        callbacks[event === 'click' ? 'onClick' : 'onLongClick'] = function (source) {
+                            try { return extras.events.emit(event, source); }
+                            catch (error) { console.error('[ui] ' + event + ' 回调异常：', error); return false; }
+                        };
+                        view[method](new Listener(callbacks));
+                    }
+                    extras.bound[event] = true;
+                }
+                extras.events[name === 'once' ? 'once' : 'on'](event, handler);
+                return view;
+            };
+        }
+        // WebView 的 JS 门面与宿主 webId 一一对应；cleanup 时必须整体清掉，
+        // 否则上一脚本的 page handler/console 监听会串到下一次运行。
+        const webFacadeByHandle = Object.create(null);
+        const webStateById = Object.create(null);
         function javaSession() {
             if (!realSession) realSession = globalThis.$autojs.java.findClass('com.stardust.autojs.engine.node24.NodeUiLocalSession');
             return realSession;
         }
+        function resolveViewId(name) {
+            let id = Number(javaSession().viewId(String(name)) || 0);
+            if (!id) {
+                // item 模板里的 id 不在 Activity 的 views 表里；Ids.parse 是 inflater
+                // 设置 id 时的同一张全局表，按名字取回稳定数值。
+                try {
+                    id = Number(globalThis.$autojs.java.findClass(
+                        'com.stardust.autojs.core.ui.inflater.util.Ids').parse(String(name)));
+                } catch (ignored) {
+                    id = 0;
+                }
+            }
+            return id;
+        }
+
         function realViewBinding(view) {
             let bindings = realBindings.get(view);
             if (!bindings) {
                 bindings = new Proxy({}, {get: function (_target, name) {
                     if (typeof name === 'symbol' || name === 'then' || name === 'toJSON') return undefined;
-                    const id = javaSession().viewId(String(name));
+                    const id = resolveViewId(name);
                     if (!id) throw new Error('未找到 View 资源 id：' + String(name));
                     const child = view.findViewById(id);
                     if (!child) throw new Error('当前 View 中未找到：' + String(name));
-                    return child;
+                    return isWebViewObject(child) ? webViewFacade(child) : child;
                 }});
                 realBindings.set(view, bindings);
             }
             return bindings;
         }
+
+        function isWebViewObject(value) {
+            if (!value) return false;
+            try {
+                const className = String(value.__class || '');
+                return className.indexOf('WebView') >= 0;
+            } catch (ignored) {
+                return false;
+            }
+        }
+
+        function realContentView() {
+            const root = javaSession().getContentView();
+            if (!root) return root;
+            return new Proxy(root, {
+                get: function (target, prop, receiver) {
+                    if (prop === 'findView') {
+                        return function (name) { return findRealViewByName(name); };
+                    }
+                    return Reflect.get(target, prop, receiver);
+                }
+            });
+        }
+
+        function findRealViewByName(name) {
+            if (name == null) return null;
+            const root = javaSession().getContentView();
+            if (!root) return null;
+            if (typeof name === 'number') {
+                const byId = root.findViewById(name);
+                return byId ? (isWebViewObject(byId) ? webViewFacade(byId) : byId) : null;
+            }
+            const id = javaSession().viewId(String(name));
+            if (!id) throw new Error('未找到 View 资源 id：' + String(name));
+            const child = root.findViewById(id);
+            if (!child) throw new Error('当前 View 中未找到：' + String(name));
+            return isWebViewObject(child) ? webViewFacade(child) : child;
+        }
+
+        function parseHostJson(text, fallback) {
+            try {
+                return JSON.parse(String(text == null ? '' : text));
+            } catch (error) {
+                return fallback;
+            }
+        }
+
+        function webErrorText(error) {
+            return String(error && error.message ? error.message : error);
+        }
+
+        /**
+         * 真实 WebView 门面：loadUrl/on 走宿主主线程，jsBridge 走 Java <-> Node 的真实
+         * 请求-响应链（不是 marker，也不是假 HTML）。
+         */
+        function webViewFacade(javaView) {
+            const handle = String(javaView.__handle || '');
+            if (handle && webFacadeByHandle[handle]) return webFacadeByHandle[handle];
+            let webId;
+            try {
+                webId = Number(javaSession().webAttach(javaView, projectDir));
+            } catch (error) {
+                throw new Error('WebView 绑定失败：' + webErrorText(error));
+            }
+            if (!(webId > 0)) throw new Error('WebView 绑定失败：宿主没有返回 webId');
+            const state = {
+                view: javaView,
+                webId: webId,
+                events: Object.create(null),
+                bridgeHandlers: Object.create(null),
+                bridgeEvents: Object.create(null)
+            };
+            function ensureAlive() {
+                if (uiClosed) throw new Error('Node UI 已关闭');
+                return javaSession();
+            }
+            const facade = {
+                __webView: true,
+                webId: webId,
+                loadUrl: function (url) {
+                    ensureAlive().webLoadUrl(webId, String(url));
+                    return facade;
+                },
+                reload: function () {
+                    const current = parseHostJson(ensureAlive().webEval(webId,
+                        'window.location.href', 3000), null);
+                    ensureAlive().webLoadUrl(webId, String(current || 'about:blank'));
+                    return facade;
+                },
+                on: function (eventName, handler) {
+                    const name = String(eventName);
+                    (state.events[name] = state.events[name] || []).push(handler);
+                    return facade;
+                },
+                once: function (eventName, handler) {
+                    const name = String(eventName);
+                    const wrapped = function () {
+                        facade.off(name, wrapped);
+                        return handler.apply(null, arguments);
+                    };
+                    return facade.on(name, wrapped);
+                },
+                off: function (eventName, handler) {
+                    const list = state.events[String(eventName)];
+                    if (Array.isArray(list)) {
+                        const index = list.indexOf(handler);
+                        if (index >= 0) list.splice(index, 1);
+                    }
+                    return facade;
+                },
+                jsBridge: {
+                    handle: function (channel, handler) {
+                        if (typeof handler !== 'function') throw new TypeError('jsBridge.handle 需要函数');
+                        state.bridgeHandlers[String(channel == null ? '' : channel)] = handler;
+                        return facade.jsBridge;
+                    },
+                    on: function (eventName, handler) {
+                        const name = String(eventName);
+                        (state.bridgeEvents[name] = state.bridgeEvents[name] || []).push(handler);
+                        return facade.jsBridge;
+                    },
+                    off: function (eventName, handler) {
+                        const list = state.bridgeEvents[String(eventName)];
+                        if (Array.isArray(list)) {
+                            const index = list.indexOf(handler);
+                            if (index >= 0) list.splice(index, 1);
+                        }
+                        return facade.jsBridge;
+                    },
+                    invoke: function (channel) {
+                        const args = Array.prototype.slice.call(arguments, 1);
+                        // Keep Node's event loop free: a page handler may call Node again.
+                        return ensureAlive().webInvokePage.invoke(null,
+                            [webId, String(channel), JSON.stringify(args), 10000], 'io').then(function (raw) {
+                            const result = parseHostJson(raw, {ok: false, error: '页面返回非法 JSON：' + raw});
+                            if (!result || result.ok !== true) {
+                                throw new Error((result && result.error) || ('页面请求失败：' + channel));
+                            }
+                            return result.value;
+                        });
+                    },
+                    send: function (eventName) {
+                        const args = Array.prototype.slice.call(arguments, 1);
+                        ensureAlive().webSend(webId, String(eventName), JSON.stringify(args));
+                        return facade.jsBridge;
+                    },
+                    eval: function (script) {
+                        const expression = '(function(){try{return {ok:true,value:(0,eval)('
+                            + JSON.stringify(String(script)) + ')};}catch(e){return {ok:false,error:String(e)}}})()';
+                        return ensureAlive().webEval.invoke(null, [webId, expression, 5000], 'io').then(function (raw) {
+                            const result = parseHostJson(raw, null);
+                            if (!result || !result.ok) throw new Error(result && result.error || '页面求值失败');
+                            return result.value;
+                        });
+                    }
+                },
+                __state: state
+            };
+            if (handle) webFacadeByHandle[handle] = facade;
+            webStateById[String(webId)] = state;
+            return facade;
+        }
+
         const markState = typeof WeakMap === 'function' ? new WeakMap() : null;
         // Lead 约束（task-69/70）：全局包代理替换延迟到真正进入 UI（setMainActivity/show 前），
         // 保存原始引用，close/出错/进程 exit 时恢复；不 require('ui') 的纯 Node 脚本不受影响。
@@ -581,6 +965,8 @@
         Widget.of = function (view) {
             if (view == null) return null;
             try {
+                const extras = realViewExtras.get(view);
+                if (extras && extras.widget) return extras.widget;
                 const widget = view.__ajsWidget;
                 return widget && widget.__ajsNodeUiWidget ? widget : null;
             } catch (error) { return null; }
@@ -648,20 +1034,21 @@
                 if (!widget || !idName) return;
                 const viewId = views && typeof views[idName] === 'number' ? views[idName] : 0;
                 const key = viewId > 0 ? ('id:' + viewId) : ('name:' + idName);
-                let binding = viewBindings[key];
+                let binding = realUiMode ? findRealViewByName(idName) : viewBindings[key];
                 if (!binding) {
                     binding = markerObject('View', {viewName: idName, viewId: viewId, views: views});
                     viewBindings[key] = binding;
                 }
-                try { binding.__ajsWidget = widget; } catch (ignored) { /* noop */ }
+                if (realUiMode) viewExtras(binding).widget = widget;
+                else binding.__ajsWidget = widget;
                 widget.view = binding;
-                Object.keys(record.attrs || {}).forEach(function (name) {
+                Object.keys(widget.attrs || {}).forEach(function (name) {
                     if (name === 'id') return;
                     const setterName = 'attr$' + name;
                     const descriptor = findPropertyDescriptor(widget, setterName);
                     if (!descriptor || !descriptor.set) return;
                     try {
-                        widget[setterName] = record.attrs[name];
+                        widget[setterName] = widget.attrs[name];
                     } catch (error) {
                         console.warn('[ui] Widget 属性设置失败 ' + record.tag + '.' + name + '：', error);
                     }
@@ -678,7 +1065,7 @@
             constructor() {
                 this.__ajsNodeUiActivity = true;
                 this.__ajsHandlers = Object.create(null);
-                if (realUiMode) {
+                {
                     return new Proxy(this, {get: function (target, prop, receiver) {
                         if (prop === '__ajsJavaObject__') return realActivity != null;
                         if (prop === '__handle') return realActivity && realActivity.__handle;
@@ -715,9 +1102,26 @@
             }
             getWindow() { return realActivity ? realActivity.getWindow() : markerObject('Window'); }
             getTheme() { return realActivity ? realActivity.getTheme() : markerObject('Theme'); }
+            /** 传统界面示例用 this.contentView 作 Snackbar 的父 View。 */
+            get contentView() {
+                if (realUiMode) return realContentView();
+                return markerObject('View', {views: mainViews});
+            }
             setSupportActionBar(toolbar) { return realActivity ? realActivity.setSupportActionBar(toolbar) : markerObject('ActionBar'); }
             getMenuInflater() { return realActivity ? realActivity.getMenuInflater() : markerObject('MenuInflater'); }
             getApplicationContext() { return realActivity ? realActivity.getApplicationContext() : markerObject('Context'); }
+            /**
+             * 参考示例的 WebActivity 用 this.finish()（LoadingActivity 等）关闭 Node UI。
+             * 不依赖真实 Activity 代理，inline/非编译资源模式也能工作。
+             */
+            finish() {
+                // 只关闭仍然属于当前 Node UI 的实例；旧 LoadingActivity 晚到的 finish()
+                // 不能把 startActivity 打开的 WebActivity 关掉。
+                if (mainActivity === this) close();
+                return this;
+            }
+            isFinishing() { return !realUiMode || uiClosed; }
+            startActivity(Ctor, options) { return startActivity(Ctor, options); }
         }
 
         // ------------------------------------------------------------------
@@ -744,7 +1148,11 @@
         };
 
         function makeViewProxy(event) {
-            if (realUiMode) return javaSession().getContentView();
+            if (realUiMode) {
+                // 编译资源布局返回真实 Java View 代理本身（保留 M3 身份断言）；inline
+                // 布局才用薄代理补 Pro 的 contentView.findView(name) 语义。
+                return realInlineMode ? realContentView() : javaSession().getContentView();
+            }
             const views = (event && event.views) || mainViews || {};
             globalThis.__ajsUiViews = views || {};
             return markerObject('View', {views: views, rootId: (event && event.rootId) || 0});
@@ -755,7 +1163,7 @@
          * 清掉 120ms 轮询、释放 $autojs.keepRunning 的保活、清主界面引用并恢复 Java 全局代理。
          * 可重复调用；destroy 回调里若打开了替换界面（mainActivity 已变），不能清掉新界面。
          */
-        function cleanupUiLifecycle(instance) {
+        function cleanupUiLifecycle(instance, suppressLifecycle) {
             if (instance && mainActivity && mainActivity !== instance) {
                 return false;
             }
@@ -778,10 +1186,15 @@
             realActivity = null;
             realImageLoader = null;
             if (globalThis.__ajsBindJavaView === realViewBinding) delete globalThis.__ajsBindJavaView;
+            if (globalThis.__ajsJavaViewMember === realViewMember) delete globalThis.__ajsJavaViewMember;
+            realViewExtras = new WeakMap();
             mainViews = {};
             Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
             Object.keys(viewBindings).forEach(function (key) { delete viewBindings[key]; });
+            Object.keys(webFacadeByHandle).forEach(function (key) { delete webFacadeByHandle[key]; });
+            Object.keys(webStateById).forEach(function (key) { delete webStateById[key]; });
             restoreJavaGlobals();
+            if (!suppressLifecycle && !suppressAllDestroyed) emitActivityLifecycle('all_activities_destroyed');
             return true;
         }
 
@@ -799,6 +1212,150 @@
             });
         }
 
+        // ------------------------------------------------------------------
+        // WebView 事件（与生命周期事件共用 120ms pollEvents 队列）
+        // ------------------------------------------------------------------
+        function dispatchWebEvent(event) {
+            const webId = String(event && event.webId);
+            const state = webStateById[webId];
+            if (!state) return;
+            const type = String(event.type || '');
+            if (type === 'webview_console') {
+                const message = {
+                    sourceId: function () { return String(event.sourceId == null ? '' : event.sourceId); },
+                    lineNumber: function () { return Number(event.lineNumber) || 0; },
+                    message: function () { return String(event.message == null ? '' : event.message); },
+                    level: function () { return String(event.level || ''); }
+                };
+                emitWebLocal(state, 'console_message', [message]);
+                return;
+            }
+            if (type === 'webview_page_started' || type === 'webview_page_finished') {
+                emitWebLocal(state, type === 'webview_page_started' ? 'page_started' : 'page_finished',
+                    [{url: String(event.url || '')}]);
+                return;
+            }
+            if (type === 'webview_event') {
+                const args = parseHostJson(event.argsJson, []);
+                emitWebLocal(state, String(event.name || ''), Array.isArray(args) ? args : [args]);
+                return;
+            }
+            if (type === 'webview_request') {
+                handleWebRequest(state, event);
+            }
+        }
+
+        function emitWebLocal(state, eventName, args) {
+            const listeners = state.events[eventName];
+            if (Array.isArray(listeners)) {
+                const event = {name: eventName, arguments: args || [], consumed: false};
+                listeners.slice().forEach(function (handler) {
+                    try { handler.apply(null, [event].concat(args || [])); }
+                    catch (error) { console.error('[ui] webview 事件处理异常：', error); }
+                });
+            }
+            const bridgeListeners = state.bridgeEvents[eventName];
+            if (Array.isArray(bridgeListeners)) {
+                bridgeListeners.slice().forEach(function (handler) {
+                    try { handler.apply(null, [{name: eventName, arguments: args || []}].concat(args || [])); }
+                    catch (error) { console.error('[ui] jsBridge 事件处理异常：', error); }
+                });
+            }
+        }
+
+        function respondWebRequest(state, requestId, ok, value) {
+            let payload;
+            try {
+                payload = ok ? JSON.stringify(value === undefined ? null : value)
+                    : JSON.stringify({error: String(value == null ? '页面请求失败' : value)});
+            } catch (error) {
+                payload = JSON.stringify({error: '页面返回值无法序列化：' + webErrorText(error)});
+                ok = false;
+            }
+            try {
+                javaSession().webBridgeRespond(state.webId, String(requestId || ''), !!ok, payload);
+            } catch (error) {
+                console.warn('[ui] WebView 响应发送失败（界面可能已关闭）：', error);
+            }
+        }
+
+        function handleWebRequest(state, event) {
+            const channel = String(event.channel || '');
+            const handler = state.bridgeHandlers[channel] || state.bridgeHandlers[''];
+            const args = parseHostJson(event.argsJson, []);
+            const requestArgs = Array.isArray(args) ? args : [args];
+            const requestEvent = {name: channel, arguments: requestArgs, consumed: false};
+            if (typeof handler !== 'function') {
+                respondWebRequest(state, event.requestId, false, 'no handler for action: ' + channel);
+                return;
+            }
+            let result;
+            try {
+                result = handler.apply(null, [requestEvent].concat(requestArgs));
+            } catch (error) {
+                respondWebRequest(state, event.requestId, false, webErrorText(error));
+                return;
+            }
+            Promise.resolve(result).then(function (value) {
+                respondWebRequest(state, event.requestId, true, value);
+            }, function (error) {
+                respondWebRequest(state, event.requestId, false, webErrorText(error));
+            });
+        }
+
+
+        // ------------------------------------------------------------------
+        // ui.activityLifecycle：至少覆盖 all_activities_destroyed（Pro 示例用它退出进程）
+        // ------------------------------------------------------------------
+        const activityLifecycleHandlers = Object.create(null);
+
+        function emitActivityLifecycle(name) {
+            const listeners = activityLifecycleHandlers[name];
+            if (!Array.isArray(listeners)) return;
+            listeners.slice().forEach(function (handler) {
+                try {
+                    handler();
+                } catch (error) {
+                    console.error('[ui] activityLifecycle.' + name + ' 回调异常：', error);
+                }
+            });
+        }
+
+        function onActivityLifecycle(name, handler, once) {
+            if (typeof handler !== 'function') throw new TypeError('activityLifecycle.on 需要函数');
+            const key = String(name);
+            const listeners = activityLifecycleHandlers[key] || (activityLifecycleHandlers[key] = []);
+            if (once) {
+                const wrapped = function () {
+                    const index = listeners.indexOf(wrapped);
+                    if (index >= 0) listeners.splice(index, 1);
+                    handler();
+                };
+                listeners.push(wrapped);
+            } else {
+                listeners.push(handler);
+            }
+        }
+
+        const activityLifecycle = {
+            on: function (name, handler) {
+                onActivityLifecycle(name, handler, false);
+                return activityLifecycle;
+            },
+            once: function (name, handler) {
+                onActivityLifecycle(name, handler, true);
+                return activityLifecycle;
+            },
+            off: function (name, handler) {
+                const listeners = activityLifecycleHandlers[String(name)];
+                if (Array.isArray(listeners)) {
+                    const index = listeners.indexOf(handler);
+                    if (index >= 0) listeners.splice(index, 1);
+                }
+                return activityLifecycle;
+            }
+        };
+
         function dispatch(event) {
             const instance = mainActivity;
             if (!instance || !event) return;
@@ -813,10 +1370,6 @@
             try {
                 if (method && typeof instance[method] === 'function') {
                     try {
-                        if (name === 'content_view_set') {
-                            console.log('[ui] dispatch content_view_set, binding keys='
-                                + Object.keys((event && event.views) || mainViews || {}).join(','));
-                        }
                         instance[method](argument);
                     } catch (error) {
                         console.error('[ui] ' + method + ' 回调异常：', error);
@@ -856,13 +1409,22 @@
                 return;
             }
             const events = Array.isArray(value.events) ? value.events : [];
-            events.forEach(dispatch);
+            events.forEach(function (event) {
+                if (event && String(event.type || '').indexOf('webview_') === 0) {
+                    dispatchWebEvent(event);
+                } else {
+                    dispatch(event);
+                }
+            });
         }
 
         function loadAndroidResources() {
             return Promise.resolve().then(function () {
                 const result = hostCall({op: 'loadAndroidResources'});
-                realUiMode = result.compiled === true && typeof globalThis.__ajsEnableJavaCallbacks === 'function';
+                resourceCompiled = result.compiled === true;
+                if (resourceCompiled && typeof globalThis.__ajsEnableJavaCallbacks === 'function') {
+                    realUiMode = true;
+                }
                 return result;
             });
         }
@@ -879,11 +1441,11 @@
             return {name: String(rawLayout || '')};
         }
 
-        function setMainActivity(Ctor) {
+        function setMainActivity(Ctor, options) {
             if (typeof Ctor !== 'function') {
                 throw new TypeError('ui.setMainActivity 需要一个 Activity 子类');
             }
-            // 进入 UI 前按需切换包代理；生成类场景始终使用真实 Java 包代理。
+            // 进入 UI 前按需切换包代理；inline 布局会走真实 Activity，发现后立即恢复真实 Java 包。
             if (!realUiMode) patchJavaGlobals();
             let instance;
             let layout;
@@ -905,6 +1467,16 @@
                 }
                 // layoutXml 优先：不要再为了 layoutId 去查不存在的工程 R 表。
                 layout = layoutXml ? {inline: true} : layoutOf(instance.layoutId);
+                // 非编译资源 + layoutXml 也可以走真实 Activity（不依赖 project-res.apk）；
+                // 只有原生 layoutId 在 compiled=false 时继续明确 unsupported（overlay/marker）。
+                const callbacksAvailable = typeof globalThis.__ajsEnableJavaCallbacks === 'function';
+                if (callbacksAvailable && (!!layoutXml || resourceCompiled)) {
+                    if (!realUiMode) {
+                        restoreJavaGlobals();
+                        realUiMode = true;
+                    }
+                    realInlineMode = !!layoutXml;
+                }
             } catch (error) {
                 restoreJavaGlobals();
                 throw error;
@@ -915,10 +1487,15 @@
                     + '（get layoutId() 返回 ui.R.layout.xxx，或 get layoutXml() 返回 XML 字符串）');
             }
             const request = {op: 'show', className: Ctor.name || 'MainActivity'};
+            if (options && options.flags != null) {
+                request.flags = Number(options.flags) || 0;
+            }
             if (realUiMode) {
                 globalThis.__ajsEnableJavaCallbacks();
                 globalThis.__ajsBindJavaView = realViewBinding;
+                globalThis.__ajsJavaViewMember = realViewMember;
                 request.realJava = true;
+                request.backHandled = instance.onBackPressed !== Activity.prototype.onBackPressed;
             }
             if (layoutXml) {
                 // 字符串布局入口：不要求工程 res/build，宿主动态 inflate 并返回真实 views 映射。
@@ -932,7 +1509,10 @@
             let result;
             try {
                 result = hostCall(request);
-                if (realUiMode) realActivity = javaSession().getActivity();
+                if (realUiMode) {
+                    realActivity = javaSession().getActivity();
+                    if (instance.initialStatusBar) javaSession().configureStatusBar(JSON.stringify(instance.initialStatusBar));
+                }
             } catch (error) {
                 restoreJavaGlobals();
                 throw error;
@@ -962,11 +1542,58 @@
                     onOptionsItemSelected: function (item) { return !!instance.onOptionsItemSelected(item); }
                 }));
             }
-            return {instance: instance, layout: layout, host: result};
+            return {instance: instance, layout: layout, host: result, real: realUiMode, inline: realInlineMode};
         }
 
-        function close() {
+        /**
+         * ui.startActivity(WebActivity,{flags})：单 Node Activity 会话模型下先关闭当前本地
+         * Activity，再启动新的 NodeUiLocalActivity；旧 Activity 的 destroy 不会清掉新会话。
+         * 返回 Promise<instance>，同时保留 Pro 示例的 fire-and-forget 用法。
+         */
+        function startActivity(Ctor, options) {
+            if (typeof Ctor !== 'function') {
+                throw new TypeError('ui.startActivity 需要一个 Activity 子类');
+            }
+            if (!realUiMode) {
+                throw new Error('ui.startActivity 需要真实 Node Activity（请先 setMainActivity / loadAndroidResources）');
+            }
+            return Promise.resolve().then(async function () {
+                suppressAllDestroyed = true;
+                try {
+                    if (mainActivity != null) {
+                        close({suppressLifecycle: true});
+                        await delayUntil(function () {
+                            try { return !javaSession().isShowing(); } catch (error) { return true; }
+                        }, 2500);
+                    }
+                } finally {
+                    // 旧 Activity 的关闭已经处理完；新 Activity 随后的 close 必须照常发
+                    // all_activities_destroyed，不能被这里的过渡标记吞掉。
+                    suppressAllDestroyed = false;
+                }
+                const result = setMainActivity(Ctor, options || {});
+                return result ? result.instance : null;
+            });
+        }
+
+        function delayUntil(predicate, timeoutMs) {
+            return new Promise(function (resolve) {
+                const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+                (function check() {
+                    let ready = false;
+                    try { ready = !!predicate(); } catch (error) { ready = true; }
+                    if (ready || Date.now() >= deadline) {
+                        resolve(ready);
+                        return;
+                    }
+                    setTimeout(check, 30);
+                })();
+            });
+        }
+
+        function close(options) {
             const instance = mainActivity;
+            const suppress = !!(options && options.suppressLifecycle);
             // 收到当前 Activity 的 destroy 时宿主已在关闭流程里，不能再 hostCall close（避免递归 destroy）；
             // 若 destroy 回调已经打开了替换界面，则显式 close 仍应关闭那个新界面。
             const closingReceivedDestroy = dispatchingDestroy && instance != null
@@ -978,7 +1605,7 @@
                     console.warn('[ui] close 失败：', error);
                 }
             }
-            cleanupUiLifecycle(instance);
+            cleanupUiLifecycle(instance, suppress);
         }
 
         // task-134：第二批 UI API（基于现有 host 能力，能真实工作的先落地；
@@ -1026,7 +1653,10 @@
             if (realUiMode) {
                 const activity = requireRealActivity();
                 const id = typeof idOrName === 'number' ? idOrName : javaSession().viewId(String(idOrName));
-                return id ? activity.findViewById(id) : null;
+                if (!id) return null;
+                const view = activity.findViewById(id);
+                if (!view) return null;
+                return isWebViewObject(view) ? webViewFacade(view) : view;
             }
             var id = typeof idOrName === 'number' ? idOrName : 0;
             var name = typeof idOrName === 'string' ? idOrName : '';
@@ -1120,6 +1750,8 @@
             getWindow: uiGetWindow,
             currentActivity: uiCurrentActivity,
             getCurrentActivity: uiGetCurrentActivity,
+            activityLifecycle: activityLifecycle,
+            startActivity: startActivity,
             isUiThread: uiIsUiThread,
             get uiThread() { return uiIsUiThread(); },
             R: R,

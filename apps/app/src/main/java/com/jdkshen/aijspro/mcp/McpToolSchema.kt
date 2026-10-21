@@ -10,7 +10,13 @@ internal object McpToolSchema {
         "olderThanHours", "keepAppliedHours", "maxNodes", "maxDepth", "windowId", "timeoutMillis",
         "quality", "maxWidth", "maxChars"
     )
-    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri")
+    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited")
+    fun callApiSchema(): JsonObject = objectSchema("engine", "module", "name", "timeoutSeconds",
+        required = arrayOf("engine", "name")).apply {
+        getAsJsonObject("properties").add("args", JsonObject().apply {
+            addProperty("type", "array")
+        })
+    }
 
     fun runSchema(): JsonObject = objectSchema(
         "path", "file", "source", "engine", "wait", "timeoutSeconds", "name", "workingDirectory"

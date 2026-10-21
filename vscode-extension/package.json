@@ -2,7 +2,7 @@
   "name": "aijspro-vscode",
   "displayName": "AI.js Pro",
   "description": "连接 AI.js Pro（Android）：运行当前文件/整个工程、实时日志、Rhino 断点调试、保存自动推送、设备文件浏览与拉取。",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "publisher": "jdkshen",
   "license": "MIT",
   "engines": {
@@ -234,12 +234,12 @@
             "type": "string"
           },
           "default": [],
-          "description": "已记住的设备地址（IP 或 IP:端口）。手机侧「Pro 扩展服务器」打开后会自动回连本机 8327 端口，这里主要用于电脑主动连接手机 9317 的场景。"
+          "description": "已记住的设备地址（IP、IP:端口或 [IPv6]:端口）。手机侧打开「AI.js Pro 电脑连接」后会自动回连本机 8327 端口，这里主要用于电脑主动连接手机 9317 的场景。"
         },
         "aijspro.listenPort": {
           "type": "number",
           "default": 8327,
-          "description": "接收手机主动回连的监听端口（与官方扩展一致，默认 8327）。"
+          "description": "接收手机主动回连的监听端口，默认 8327；手机端回连端口也需与此一致。"
         },
         "aijspro.autoConnect": {
           "type": "boolean",
@@ -248,7 +248,9 @@
         },
         "aijspro.ignoredDevices": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "已删除设备的地址：停止自动连接并忽略手机主动回连。删除命令维护此列表，手动连接对应地址时自动解除。"
         },
@@ -276,6 +278,11 @@
             "build"
           ],
           "description": "推送整个工程时忽略的目录/文件名。"
+        },
+        "aijspro.adbPath": {
+          "type": "string",
+          "default": "",
+          "description": "USB 设备扫描使用的 adb 可执行文件路径。留空时查找 Android SDK 和系统 PATH。"
         }
       }
     },
@@ -330,7 +337,9 @@
     ]
   },
   "scripts": {
+    "test": "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs",
     "test:devices": "node --test test/manager.test.cjs",
+    "test:connection": "node --test test/connection.test.cjs",
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
     "watch": "npm run build -- --watch",
     "typecheck": "tsc --noEmit",

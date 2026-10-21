@@ -147,6 +147,11 @@
     if (value && value.__packageRef === true) {
       return resolvePackageValue(value.__path);
     }
+    if (Object.prototype.toString.call(value) === '[object Object]') {
+      var map = Object.create(null);
+      Object.keys(value).forEach(function (key) { map[key] = toWire(value[key]); });
+      return { $map: map };
+    }
     throw hostError('不能把普通 JS 对象传给 Java（' + Object.prototype.toString.call(value) + '）；'
       + '请用 Java 类/对象或基本类型。');
   }
@@ -227,6 +232,16 @@
             : prefix + JSON.stringify(toWireArray(arguments)) + '}';
           return wrapJavaResult(okValue(hostValue(payload)));
         };
+        info.invoke.invoke = function (receiver, args, mode) {
+          if (!Array.isArray(args)) throw new TypeError('Java method.invoke 需要参数数组');
+          var call = Object.assign({}, request);
+          if (!target.cls && isJavaObject(receiver)) call.obj = receiver.__handle;
+          mode = mode || 'io';
+          if (!/^(current|io|compute|ui|ui-sync)$/.test(mode)) throw hostError('未知 Java 线程模式：' + mode);
+          if (mode === 'current') return javaCall(Object.assign(call, { args: toWireArray(args) }));
+          if (mode === 'ui-sync') return javaCall(Object.assign(call, { op: 'uiCall', args: toWireArray(args) }));
+          return javaAsyncCall(call, toWireArray(args), mode);
+        };
       }
       return info.invoke;
     }
@@ -253,6 +268,25 @@
         if (prop === '__class') { return className; }
         if (prop === 'binding' && isView && typeof globalThis.__ajsBindJavaView === 'function') {
           return globalThis.__ajsBindJavaView(proxy);
+        }
+        if (isView && typeof globalThis.__ajsJavaViewMember === 'function'
+            && ['on', 'once', 'off', 'removeListener', 'removeAllListeners', 'attr', 'setItemTemplate', 'setDataSource', 'getAdapter'].includes(prop)) {
+          var extra = globalThis.__ajsJavaViewMember(proxy, prop);
+          if (extra !== undefined) return extra;
+        }
+        if (isView && (prop === 'setOnClickListener' || prop === 'setOnCheckedChangeListener')) {
+          var nativeMethod = memberAccess({obj: handle}, prop);
+          var listenerSetter = function (listener) {
+            if (typeof listener === 'function') {
+              var callback = {}, click = prop === 'setOnClickListener';
+              callback[click ? 'onClick' : 'onCheckedChanged'] = listener;
+              var Listener = classRef(click ? 'android.view.View$OnClickListener' : 'android.widget.CompoundButton$OnCheckedChangeListener');
+              listener = new Listener(callback);
+            }
+            return nativeMethod(listener);
+          };
+          listenerSetter.invoke = nativeMethod && nativeMethod.invoke;
+          return listenerSetter;
         }
         if (generated && prop in self) { return Reflect.get(self, prop); }
         if (prop === 'toString') {
@@ -590,6 +624,33 @@
     if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
   }
 
+  /**
+   * 真正结束当前 Node 任务运行时。
+   *
+   * Auto.js 的 exit()/currentThread().interrupt() 语义是「终止脚本」，不是只关闭
+   * keepalive；只停 keepalive 时脚本里其它 interval/socket 会继续把事件循环撑住，
+   * 宿主只能等超时或用户停止。这里走 Node 自己的 process.exit：:node24 是独立任务
+   * 进程/嵌入运行时，结束的是本任务 Node 运行时，不调用 Java System.exit，也不会
+   * 退出主 App。process.exit 已由 installGracefulExit 包装为记录 lifecycle、清理
+   * overlay 轮询后再 nativeExit；这里先停 keepalive 以便任何兜底路径也不再保活。
+   */
+  function terminateTask(code) {
+    var value = (code === undefined || code === null) ? 0 : Number(code);
+    if (!isFinite(value)) { value = 0; }
+    value = value | 0;
+    try { stopRunning(); } catch (ignored) { }
+    try {
+      if (typeof process !== 'undefined' && process && typeof process.exit === 'function') {
+        process.exit(value);
+      }
+    } catch (ignored) { }
+    // process.exit 理论上不会返回；极端 mock/宿主缺失时至少把退出码落下来，
+    // 不把 exit() 静默降级成「继续执行」。
+    try {
+      if (typeof process !== 'undefined' && process) { process.exitCode = value; }
+    } catch (ignored) { }
+  }
+
   // ------------------------------------------------------------------
   // 模块系统
   // ------------------------------------------------------------------
@@ -604,12 +665,18 @@
   }
   globalThis.__ajsRegisterModule = registerModule;
   globalThis.__autojsRegisterModule = registerModule; // 兼容旧提案命名
+  globalThis.__ajsListModules = function () {
+    var names = Object.keys(moduleFactories).concat(Object.keys(globalThis.__ajsBuiltinModules || {}));
+    if (typeof require === 'function') names = names.concat(require('module').builtinModules);
+    return Array.from(new Set(names)).sort();
+  };
 
   function moduleApi() {
     return {
       // B 的 ui.js 会优先用 globalThis.__autojsHost（string 契约），api.host 作为兼容备选也返回 string。
       host: hostRaw,
       java: javaApi,
+      wrapJavaValue: okValue,
       packages: packageRef,
       projectDir: projectDir,
       scriptFile: scriptFile,
@@ -874,9 +941,47 @@
     remove: function (key, name) { return domain('storages', 'remove', { key: key, name: name || 'default' }); },
     clear: function (name) { return domain('storages', 'clear', { name: name || 'default' }); }
   };
-  var eventsModule = {
-    emit: function (type, payload) { return domain('events', 'emit', { type: type, payload: payload || {} }); }
+  // require('events') 必须同时满足两套契约：
+  //   1) Node 原生 `const EventEmitter = require('events')` / `events.once(...)` 等完整构造器与静态面；
+  //   2) Auto.js 旧代码的模块级 `events.emit(type, payload)`（经 kind:"events" 转给宿主）。
+  // 用 Proxy 包住原生模块，而不是把原生函数替换成普通对象，也不修改 node:events 单例：
+  // 实例的 emit 仍走 EventEmitter.prototype，只有模块级 emit 被接管。
+  var nativeEventsModule = require('node:events');
+  var eventsDomainEmit = function (type, payload) {
+    // 0 / false / "" 都是合法载荷；只有省略参数时才保留旧的 {} 默认值。
+    return domain('events', 'emit', {
+      type: type,
+      payload: payload === undefined ? {} : payload
+    });
   };
+  var eventsModule = new Proxy(nativeEventsModule, {
+    get: function (target, prop) {
+      if (prop === 'emit') { return eventsDomainEmit; }
+      // Native module semantics: require('events').EventEmitter === require('events').
+      if (prop === 'EventEmitter') { return eventsModule; }
+      return Reflect.get(target, prop, target);
+    },
+    has: function (target, prop) {
+      return prop === 'emit' || Reflect.has(target, prop);
+    },
+    ownKeys: function (target) {
+      var keys = Reflect.ownKeys(target);
+      if (keys.indexOf('emit') < 0) { keys.push('emit'); }
+      return keys;
+    },
+    getOwnPropertyDescriptor: function (target, prop) {
+      if (prop === 'emit') {
+        return { value: eventsDomainEmit, writable: true, enumerable: true, configurable: true };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    set: function (target, prop, value) {
+      // Replacing the legacy helper is allowed; it must not become an own
+      // property of the shared node:events module.
+      if (prop === 'emit') { eventsDomainEmit = value; return true; }
+      return Reflect.set(target, prop, value, target);
+    }
+  });
   // ------------------------------------------------------------------
   // 跨引擎（真实主进程 ScriptEngineService，经 kind:"engines" 同步桥）
   // 只在这一能力域内建 Node 侧句柄；引擎身份来自主进程，不在 :node24 伪造。
@@ -918,6 +1023,7 @@
       if (queue.length < 64) { queue.push({ args: args || [] }); }
       return;
     }
+    list = list.slice();
     for (var i = 0; i < list.length; i++) {
       try {
         list[i].apply(null, args || []);
@@ -963,6 +1069,23 @@
   // 这里提供 JS 侧 ExecutionConfig 兼容对象（projectConfig 从入口目录 project.json 读取，
   // 避免走 Gson/setProjectConfig 的 Java 反射路径）。
   // ------------------------------------------------------------------
+  function projectConfigCompat(config) {
+    if (!config || !config.buildInfo || typeof config.buildInfo !== 'object') return config;
+    var raw = config.buildInfo;
+    if (typeof raw.isRelease === 'function') return config;
+    var release = raw.isRelease === true || raw.is_release === true || raw.release === true;
+    var info = Object.assign({}, raw);
+    Object.defineProperties(info, {
+      isRelease: {value: function () { return release; }},
+      setRelease: {value: function (value) { release = !!value; }},
+      getBuildId: {value: function () { return raw.buildId || raw.build_id || ''; }},
+      getBuildNumber: {value: function () { return Number(raw.buildNumber || raw.build_number) || 0; }},
+      getBuildTime: {value: function () { return Number(raw.buildTime || raw.build_time) || 0; }},
+      toJSON: {value: function () { return Object.assign({}, raw, {isRelease: release}); }}
+    });
+    config.buildInfo = info;
+    return config;
+  }
   var projectConfigCache = null;
   function loadProjectConfigCompat() {
     if (projectConfigCache !== null) { return projectConfigCache || null; }
@@ -974,7 +1097,7 @@
         var pathModule = require('path');
         var configPath = pathModule.join(dir, 'project.json');
         if (fsModule.existsSync(configPath)) {
-          projectConfigCache = JSON.parse(fsModule.readFileSync(configPath, 'utf8'));
+          projectConfigCache = projectConfigCompat(JSON.parse(fsModule.readFileSync(configPath, 'utf8')));
         }
       }
     } catch (configError) {
@@ -991,7 +1114,7 @@
       getProjectDir: function () { return dir; },
       getProjectConfig: function () { return execConfig.projectConfig; },
       setProjectConfig: function (project) {
-        execConfig.projectConfig = project;
+        execConfig.projectConfig = projectConfigCompat(project);
         return execConfig;
       },
       setProjectDir: function (value) {
@@ -1033,13 +1156,13 @@
       id: id,
       engine: info.engine || '',
       execArgv: info.execArgv || {},
-      source: scriptFile || '',
+      source: info.source === undefined ? (scriptFile || '') : String(info.source),
       executionConfig: makeExecutionConfigCompat()
     };
-    engine.getSource = function () { return scriptFile || ''; };
+    engine.getSource = function () { return engine.source; };
     engine.getClass = function () {
       return {
-        getName: function () { return 'com.stardust.autojs.engine.Node24JavaScriptEngine'; }
+        getName: function () { return info.className || ('com.stardust.autojs.engine.' + (info.engine || 'Node24JavaScriptEngine')); }
       };
     };
     engine.getName = function () { return String(info.engine || 'node24'); };
@@ -1054,11 +1177,11 @@
       return engine;
     };
     engine.once = function (type, handler) {
-      var off = null;
-      off = engine.on(type, function () {
-        engine.off(type, off);
+      var onceHandler = function () {
+        engine.off(type, onceHandler);
         return handler.apply(engine, arguments);
-      });
+      };
+      engine.on(type, onceHandler);
       return engine;
     };
     engine.off = function (type, handler) {
@@ -1144,6 +1267,7 @@
         return;
       }
       var callArgs = execution._callbackArgs(event, args || []);
+      handlers = handlers.slice();
       for (var i = 0; i < handlers.length; i++) {
         try {
           handlers[i].apply(execution, callArgs);
@@ -1171,11 +1295,11 @@
       return execution;
     };
     execution.once = function (event, handler) {
-      var off = null;
-      off = execution.on(event, function () {
-        execution.off(event, off);
+      var onceHandler = function () {
+        execution.off(event, onceHandler);
         return handler.apply(execution, arguments);
-      });
+      };
+      execution.on(event, onceHandler);
       return execution;
     };
     execution.off = function (event, handler) {
@@ -1207,7 +1331,7 @@
             latestEngineId = Number(info.engineId);
             if (info.engine) { latestEngineName = String(info.engine); }
             if (!latestEngine) {
-              latestEngine = makeEngine({ id: latestEngineId, engine: latestEngineName });
+              latestEngine = makeEngine(Object.assign({}, info, { id: latestEngineId, engine: latestEngineName }));
             }
             resolve(latestEngine);
             return;
@@ -1229,12 +1353,13 @@
     Object.defineProperty(execution, 'engineOrNull', {
       enumerable: true,
       get: function () {
-        if (latestEngineId === null && !done) {
+        if (!latestEngine && !done) {
           try {
             var info = engineBridge('execution', { token: token });
             if (info && info.engineId !== undefined && info.engineId !== null) {
               latestEngineId = Number(info.engineId);
               if (info.engine) { latestEngineName = String(info.engine); }
+              latestEngine = makeEngine(Object.assign({}, info, { id: latestEngineId, engine: latestEngineName }));
             }
           } catch (ignored) { /* 执行记录已回收时保持 null */ }
         }
@@ -1273,7 +1398,7 @@
       } else {
         workingDirectory = nodePath.dirname(absolute);
       }
-      var token = 'node-engine-' + Date.now() + '-' + (++executionSeq);
+      var token = 'node-engine-' + myEngineInfo().id + '-' + Date.now() + '-' + (++executionSeq);
       var execution = makeExecution(token);
       executionRegistry[token] = execution;
       ensureEngineEvents();
@@ -1345,6 +1470,9 @@
         '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, Number(ms) || 0));',
         '};',
         'function writeResult(payload) {',
+        '  // First terminal result wins. process.exit/uncaught handlers may run after',
+        '  // the task already returned a value.',
+        '  if (Atomics.load(state, 0) !== 0) { return; }',
         '  try {',
         '    let text;',
         '    try { text = JSON.stringify(payload); } catch (error) { text = JSON.stringify({ ok: false, error: String(error && error.message || error) }); }',
@@ -1358,6 +1486,21 @@
         '  Atomics.store(state, 0, 1);',
         '  Atomics.notify(state, 0);',
         '}',
+        '// A Worker can end before the task promise settles: process.exit() inside the',
+        '// task, or an uncaught timer/promise failure. Node runs the process exit hook',
+        '// synchronously, so publish a terminal result before the worker disappears;',
+        '// otherwise the parent join() blocks forever on a state word that stays 0.',
+        'process.on("exit", function (code) {',
+        '  writeResult({ ok: false, error: "线程在回传结果前退出（exitCode=" + code + "）" });',
+        '});',
+        'process.on("uncaughtException", function (error) {',
+        '  writeResult({ ok: false, error: "线程未捕获异常：" + String(error && error.stack || error) });',
+        '  process.exit(1);',
+        '});',
+        'process.on("unhandledRejection", function (error) {',
+        '  writeResult({ ok: false, error: "线程未处理的 Promise rejection：" + String(error && error.stack || error) });',
+        '  process.exit(1);',
+        '});',
         'let run;',
         'try {',
         '  const fn = (0, eval)("(" + workerData.fnSource + ")");',
@@ -1419,7 +1562,11 @@
             var final = finalState();
             if (final === STATE_INTERRUPTED) {
               info.result = undefined;
-              info.error = '线程被中断/终止';
+              // Keep the precise parent-side reason when it was already recorded
+              // (Worker error/exit); only use the generic text for interrupt().
+              if (info.error === null || info.error === undefined) {
+                info.error = info.interrupted ? '线程被中断/终止' : '线程在回传结果前异常退出';
+              }
             } else {
               var parsed = decodeResult(sab);
               info.result = parsed && parsed.ok ? parsed.value : undefined;
@@ -1433,6 +1580,7 @@
           if (!info.decoded) { void thread.result; }
           return info.error;
         },
+        getError: function () { return thread.error; },
         on: function (event, handler) {
           if (event !== 'exit' || typeof handler !== 'function') {
             throw new TypeError('thread.on 目前只支持 "exit" 事件与函数监听');
@@ -1442,15 +1590,24 @@
         },
         off: function () { return thread; }
       };
-      worker.on('exit', function () {
+      worker.on('exit', function (code, signal) {
         info.done = true;
+        // Fallback for exits that bypassed the worker-side exit hook (e.g. a
+        // native crash). JS-controlled exits already published a result, so
+        // this must not overwrite it.
+        if (!finished()) {
+          info.error = '线程在回传结果前退出（exitCode=' + code
+            + (signal ? '，signal=' + signal : '') + '）';
+          Atomics.store(state, 0, STATE_INTERRUPTED);
+          Atomics.notify(state, 0);
+        }
         var index = liveThreads.indexOf(thread);
         if (index >= 0) { liveThreads.splice(index, 1); }
       });
       worker.on('error', function (error) {
         info.done = true;
-        info.error = String(error && error.stack || error);
         if (!finished()) {
+          info.error = String(error && error.stack || error);
           Atomics.store(state, 0, STATE_INTERRUPTED);
           Atomics.notify(state, 0);
         }
@@ -1484,7 +1641,9 @@
       name: 'main',
       isAlive: function () { return true; },
       interrupt: function () {
-        try { $autojs.stopRunning(); } catch (ignored) { }
+        // 主线程被 interrupt 等价于脚本被要求结束；必须真正退出本任务运行时，
+        // 不能只停 keepalive 后让其它定时器继续运行。
+        terminateTask(0);
         return mainThread;
       },
       join: function () { return true; },
@@ -1530,7 +1689,29 @@
     showToast: function (text) { try { appModule.toast(String(text)); } catch (e) { console.log(String(text)); } },
     toast: function (text) { toastModule.showToast(text); }
   };
+  function Deferred(keepAlive) {
+    if (!(this instanceof Deferred)) throw new TypeError('Deferred 必须用 new 创建');
+    var self = this;
+    self.finished = false;
+    self._value = undefined;
+    var hold = keepAlive === false ? null : setInterval(function () {}, 1000);
+    self._promise = new Promise(function (resolve, reject) {
+      function settle(fn, value) {
+        if (self.finished) return false;
+        self.finished = true;
+        self._value = value;
+        if (hold !== null) clearInterval(hold);
+        fn(value);
+        return true;
+      }
+      self.resolve = function (value) { return settle(resolve, value); };
+      self.reject = function (error) { return settle(reject, error); };
+    });
+  }
+  Deferred.prototype.promise = function () { return this._promise; };
+  Object.defineProperty(Deferred.prototype, 'value', {get: function () { return this._value; }});
   var langModule = {
+    Deferred: Deferred,
     delay: function (ms) { return new Promise(function (resolve) { setTimeout(resolve, Math.max(0, Number(ms) || 0)); }); },
     sleep: function (ms) {
       try {
@@ -1538,7 +1719,10 @@
         Atomics.wait(new Int32Array(sab), 0, 0, Math.max(0, Number(ms) || 0));
       } catch (e) { var end = Date.now() + (Number(ms) || 0); while (Date.now() < end) { } }
     },
-    exit: function (code) { try { $autojs.stopRunning(); } catch (e) { } console.log('[Auto.js] exit(' + (code || 0) + ')'); }
+    exit: function (code) {
+      console.log('[Auto.js] exit(' + (code || 0) + ')');
+      terminateTask(code);
+    }
   };
   var deviceModule = (function () {
     var info = {};
@@ -5664,33 +5848,124 @@
     };
   })();
   var shellOptions = {};
-  function shellExec(command, options) {
-    var childProcess = require('child_process');
-    var opts = Object.assign({ encoding: 'utf8', timeout: 30000 }, shellOptions, options || {});
-    try {
-      var stdout = childProcess.execSync(String(command), opts);
-      return { code: 0, result: String(stdout == null ? '' : stdout) };
-    } catch (error) {
-      return {
-        code: typeof error.status === 'number' ? error.status : 1,
-        result: String((error.stdout || '') + (error.stderr || error.message || ''))
-      };
+  var shellTools = null;
+  var shellJobs = new Set();
+  function shellQuote(value) { return "'" + String(value).replace(/'/g, "'\\''") + "'"; }
+  function prepareShellTools(cwd) {
+    if (process.platform !== 'android' || !rawHost) return;
+    if (!shellTools) {
+      shellTools = JSON.parse(javaApi.findClass('org.autojs.source.engine.android.Node24Tools')
+        .prepare(autojs.androidContext));
+      process.execPath = shellTools.node;
+      var fs = require('fs'), path = require('path');
+      var bin = path.join(shellTools.root, 'bin');
+      fs.mkdirSync(bin, {recursive:true});
+      function wrapper(name, command) {
+        fs.writeFileSync(path.join(bin, name), '#!/system/bin/sh\nexec ' + command + ' "$@"\n', {mode:0o700});
+      }
+      wrapper('node', shellQuote(shellTools.node));
+      wrapper('npm', shellQuote(shellTools.node) + ' ' + shellQuote(shellTools.npm));
+      wrapper('npx', shellQuote(shellTools.node) + ' ' + shellQuote(path.join(path.dirname(shellTools.npm), 'npx-cli.js')));
+      process.env.PATH = bin + ':' + (process.env.PATH || '/system/bin');
+      process.env.npm_config_cache = shellTools.cache;
+      process.env.npm_config_prefix = shellTools.root;
+      process.env.npm_config_update_notifier = 'false';
+      process.env.BROWSER = process.env.BROWSER || 'none';
     }
+    // Shared storage cannot execute .bin symlinks. Use private executable wrappers
+    // for the actual package-declared JS entrypoints (--no-bin-links installations).
+    var fs = require('fs'), path = require('path');
+    var project = path.resolve(cwd || process.cwd());
+    var modules = path.join(project,'node_modules');
+    if (!fs.existsSync(modules)) return;
+    var bin = path.join(shellTools.root,'project-bin',require('crypto').createHash('sha256').update(project).digest('hex'));
+    fs.mkdirSync(bin,{recursive:true});
+    function scan(directory, config) {
+      if (!config) {try { config = JSON.parse(fs.readFileSync(path.join(directory,'package.json'),'utf8')); } catch(e) { return; }}
+      var bins = config.bin;
+      if (typeof bins === 'string') { var one = {}; one[String(config.name).split('/').pop()] = bins; bins = one; }
+      if (!bins || typeof bins !== 'object') return;
+      Object.keys(bins).forEach(function(name) {
+        if (!/^[A-Za-z0-9_.-]+$/.test(name) || typeof bins[name] !== 'string') return;
+        var entry = path.resolve(directory,bins[name]);
+        if (!fs.existsSync(entry)) return;
+        fs.writeFileSync(path.join(bin,name), '#!/system/bin/sh\nexec ' + shellQuote(shellTools.node) + ' '
+          + shellQuote(entry) + ' "$@"\n', {mode:0o700});
+      });
+    }
+    var lock;
+    try {lock = JSON.parse(fs.readFileSync(path.join(project,'package-lock.json'),'utf8'));} catch(e) {}
+    if (lock && lock.packages) {
+      // npm already records declared bin entries. Reading one lockfile avoids
+      // thousands of synchronous package.json reads on Android shared storage.
+      Object.keys(lock.packages).forEach(function(location) {
+        if (!/^node_modules\/(?:@[^/]+\/)?[^/]+$/.test(location)) return;
+        var config = lock.packages[location];
+        if (config.bin) scan(path.join(project,location),Object.assign({name:location.split('/').pop()},config));
+      });
+    } else {
+      var config={};
+      try {config=JSON.parse(fs.readFileSync(path.join(project,'package.json'),'utf8'));} catch(e) {}
+      Object.keys(Object.assign({},config.dependencies,config.devDependencies,config.optionalDependencies))
+        .forEach(function(name) {scan(path.join(modules,name));});
+    }
+    if ((process.env.PATH || '').split(':').indexOf(bin) < 0) process.env.PATH = bin + ':' + process.env.PATH;
   }
-  var shellModule = {
-    exec: shellExec,
-    createShell: function (options) {
-      var closed = false;
-      var emitter = new (require('node:events').EventEmitter)();
-      emitter.exec = function (command, perCommand) {
-        if (closed) { return Promise.reject(apiError('Shell 已关闭')); }
-        return Promise.resolve().then(function () {
-          var result = shellExec(command, Object.assign({}, options || {}, perCommand || {}));
-          String(result.result || '').split(/\r?\n/).filter(Boolean).forEach(function (line) { emitter.emit('line', line); });
-          return result;
+  function runShell(command, options, emitter) {
+    options = Object.assign({}, shellOptions, options || {});
+    prepareShellTools(options.cwd);
+    return new Promise(function(resolve,reject) {
+      var child, timer, result = '', error = '';
+      var android = process.platform === 'android';
+      try {
+        var executable = options.shell || (android ? '/system/bin/sh' : process.platform === 'win32' ? process.env.ComSpec : '/bin/sh');
+        var args = process.platform === 'win32' && /cmd(?:\.exe)?$/i.test(executable)
+          ? ['/d','/s','/c',String(command)] : ['-c',String(command)];
+        child = require('child_process').spawn(executable, args, {cwd:options.cwd || process.cwd(),env:options.env
+            ? Object.assign({},process.env,options.env) : process.env,detached:process.platform !== 'win32',stdio:[emitter ? 'pipe' : 'ignore','pipe','pipe']});
+      } catch(e) {reject(e);return;}
+      var job = {child:child, emitter:emitter, kill:function() {
+        try { if(process.platform !== 'win32') process.kill(-child.pid,'SIGTERM'); else child.kill(); } catch(e) { }
+      }};
+      shellJobs.add(job);
+      if (android && child.pid) hostValue({kind:'shell',action:'register',pid:child.pid});
+      function stream(source, stderr) {
+        var buffer = '';
+        source.setEncoding('utf8');
+        source.on('data',function(chunk) {
+          if(stderr) error=(error+chunk).slice(-4*1024*1024); else result=(result+chunk).slice(-4*1024*1024);
+          buffer+=chunk; var lines=buffer.split(/\r?\n/); buffer=lines.pop();
+          lines.forEach(function(line){if(emitter) emitter.emit('line',line);});
         });
+        source.on('end',function(){if(buffer && emitter) emitter.emit('line',buffer);});
+      }
+      stream(child.stdout,false); stream(child.stderr,true);
+      if(Number(options.timeout)>0) timer=setTimeout(job.kill,Number(options.timeout));
+      child.on('error',reject);
+      child.on('close',function(code,signal) {
+        if(timer) clearTimeout(timer);
+        shellJobs.delete(job);
+        if(android && child.pid) {try {hostValue({kind:'shell',action:'release',pid:child.pid});}catch(e) {}}
+        resolve({code:typeof code === 'number' ? code : 1,result:result,error:error,signal:signal || null});
+      });
+    });
+  }
+  process.once('exit',function(){shellJobs.forEach(function(job){job.kill();});});
+  var shellModule = {
+    exec: function(command, options) {return runShell(command,options || {});},
+    createShell: function(options) {
+      var closed=false, queue=Promise.resolve();
+      var emitter=new (require('node:events').EventEmitter)();
+      emitter.exec=function(command,perCommand) {
+        queue=queue.catch(function(){}).then(function(){
+          if(closed) throw apiError('Shell 已关闭');
+          return runShell(command,Object.assign({},options || {},perCommand || {}),emitter);
+        });
+        return queue;
       };
-      emitter.exit = function () { closed = true; emitter.removeAllListeners(); return Promise.resolve(0); };
+      emitter.exit=function() {closed=true; shellJobs.forEach(function(job){
+        if(job.emitter === emitter) job.kill();
+      }); return Promise.resolve(0);};
       return emitter;
     },
     checkAccess: function () { return false; },
@@ -5752,8 +6027,8 @@
     };
   })();
 
-  // Preserve Node's real EventEmitter alongside Auto.js event helpers.
-  eventsModule.EventEmitter = require('node:events').EventEmitter;
+  // require('events') already exposes the native EventEmitter and its statics;
+  // do not copy or mutate node:events here (see the Proxy above).
 
   // ------------------------------------------------------------------
   // task-26：yolo（复用宿主 Java com.stardust.autojs.runtime.api.Yolo/OpenCvYoloDetector，
@@ -6127,6 +6402,156 @@
   autojs.yolo = yoloModule;
   // 第三方象棋工程的适配层直接用全局 yolo.load(...)，这里补全局别名（等价 Pro 的 yolo）。
   globalThis.yolo = yoloModule;
+
+  // ------------------------------------------------------------------
+  // task-16：Pikafish Node24 异步引擎（$autojs.pikafish，无需全局 $pikafish）。
+  //   $autojs.pikafish.{start,analyze,analyzePosition,stop,quit,isRunning,available}
+  // 全部返回 Promise：host 的 Java 异步调用（asyncCall + poll）把桥类静态方法投到
+  // 宿主线程池执行，native 阻塞搜索不再卡住 Node 事件循环；结果形状与 QuickJS 宿主
+  // $pikafish.analyze 一致（ok/move/scoreCp/mate/depth/pv/candidates/raw）。
+  // 懒加载：脚本不碰 $autojs.pikafish 时不会加载桥类。
+  // ------------------------------------------------------------------
+  (function installPikafishModule() {
+    var BRIDGE_CLASS = 'com.stardust.autojs.engine.PikafishNativeBridge';
+    var bridgeClass = null;
+    var FEN_RE = /^(?:[rnbakcpRNBAKCP1-9]+\/){9}[rnbakcpRNBAKCP1-9]+ [wb] - - [0-9]+ [1-9][0-9]*$/;
+    var POSITION_RE = /^position fen (?:[rnbakcpRNBAKCP1-9]+\/){9}[rnbakcpRNBAKCP1-9]+ [wb] - - [0-9]+ [1-9][0-9]*(?: moves(?: [a-i][0-9][a-i][0-9]){1,512})?$/;
+    function cls() {
+      if (bridgeClass) { return bridgeClass; }
+      var value = javaApi.getClass(BRIDGE_CLASS);
+      javaApi.setDefaultThreadMode(value, 'compute');
+      bridgeClass = value;
+      return value;
+    }
+    function fsExists(path) {
+      try { return require('fs').existsSync(path); } catch (error) { return false; }
+    }
+    function defaultNnue() {
+      var candidates = [];
+      try {
+        candidates.push(autojs.androidContext.getFilesDir().getAbsolutePath() + '/pikafish.nnue');
+        var external = autojs.androidContext.getExternalFilesDir(null);
+        if (external) { candidates.push(external.getAbsolutePath() + '/pikafish.nnue'); }
+      } catch (error) { /* 非 Android 环境忽略 */ }
+      candidates.push('/sdcard/xiangqi-p4/pikafish.nnue');
+      candidates.push('/storage/emulated/0/xiangqi-p4/pikafish.nnue');
+      for (var i = 0; i < candidates.length; i++) { if (fsExists(candidates[i])) { return candidates[i]; } }
+      return candidates[candidates.length - 1];
+    }
+    function intOf(value, fallback) {
+      var number = Number(value);
+      return isFinite(number) ? Math.trunc(number) : fallback;
+    }
+    function optsOf(args, index) {
+      var first = args[index];
+      if (first && typeof first === 'object') { return first; }
+      return { movetime: first, timeout: args[index + 1], multiPv: args[index + 2], depth: args[index + 3] };
+    }
+    function parseInfoLine(line) {
+      var info = { multipv: 1, pv: [] };
+      var match = /\bmultipv (\d+)/.exec(line); if (match) { info.multipv = parseInt(match[1], 10); }
+      match = /\bdepth (\d+)/.exec(line); if (match) { info.depth = parseInt(match[1], 10); }
+      match = /\bseldepth (\d+)/.exec(line); if (match) { info.seldepth = parseInt(match[1], 10); }
+      match = /\bnodes (\d+)/.exec(line); if (match) { info.nodes = parseInt(match[1], 10); }
+      match = /\btime (\d+)/.exec(line); if (match) { info.timeMs = parseInt(match[1], 10); }
+      match = /\bscore (cp|mate) (-?\d+)/.exec(line);
+      if (match) { if (match[1] === 'cp') { info.scoreCp = parseInt(match[2], 10); } else { info.mate = parseInt(match[2], 10); } }
+      match = /\bpv ([a-i][0-9][a-i][0-9](?: [a-i][0-9][a-i][0-9])*)/.exec(line);
+      if (match) { info.pv = match[1].split(' '); info.move = info.pv[0]; }
+      return info.move ? info : null;
+    }
+    function mapCandidate(info) {
+      var out = { multipv: info.multipv, move: info.move, pv: info.pv || [] };
+      ['scoreCp', 'mate', 'depth', 'seldepth', 'nodes', 'timeMs'].forEach(function (key) {
+        if (info[key] !== undefined) { out[key] = info[key]; }
+      });
+      return out;
+    }
+    function parseUci(raw) {
+      raw = raw == null ? '' : String(raw);
+      var bestmove = null;
+      var byPv = {};
+      raw.split('\n').forEach(function (line) {
+        line = line.trim();
+        if (line.indexOf('bestmove') === 0) {
+          var parts = line.split(/\s+/);
+          if (parts.length >= 2) { bestmove = parts[1]; }
+          return;
+        }
+        if (line.indexOf('info ') !== 0) { return; }
+        var info = parseInfoLine(line);
+        if (info) { byPv[info.multipv] = info; }
+      });
+      var keys = Object.keys(byPv).map(Number).sort(function (a, b) { return a - b; });
+      if (keys.length === 0 && (!bestmove || bestmove === '(none)')) {
+        return { ok: false, error: raw.length ? raw : '引擎没有输出' };
+      }
+      var candidates = keys.length ? keys.map(function (key) { return mapCandidate(byPv[key]); })
+        : [{ multipv: 1, move: bestmove, pv: [] }];
+      var top = candidates[0];
+      var result = { ok: true, move: (bestmove && bestmove !== '(none)') ? bestmove : top.move, candidates: candidates, raw: raw };
+      ['scoreCp', 'mate', 'depth', 'seldepth', 'nodes', 'timeMs'].forEach(function (key) {
+        if (top[key] !== undefined) { result[key] = top[key]; }
+      });
+      result.pv = top.pv;
+      return result;
+    }
+    function borrow(action) {
+      try { return action(); } catch (error) { return Promise.reject(error); }
+    }
+    var api = {
+      start: function (options) {
+        return borrow(function () {
+          var opts = typeof options === 'string' ? { evalFile: options } : (options || {});
+          var evalFile = opts.evalFile ? String(opts.evalFile) : defaultNnue();
+          var threads = intOf(opts.threads, 2);
+          var hashMb = intOf(opts.hashMb != null ? opts.hashMb : opts.hash, 64);
+          var contempt = intOf(opts.contempt, 0);
+          return cls().nativeStart(evalFile, threads, hashMb, contempt).then(function (ok) {
+            if (!ok) { return { ok: false, error: 'Pikafish 原生启动失败（evalFile=' + evalFile + '）', evalFile: evalFile }; }
+            return Promise.all([cls().nativeIsRunning(), cls().nativeConfiguredThreads(), cls().nativeOptions()])
+              .then(function (all) {
+                return { ok: true, running: !!all[0], evalFile: evalFile, threads: all[1], hashMb: hashMb,
+                  contempt: contempt, options: String(all[2] == null ? '' : all[2]).split('\n').filter(function (line) { return line.trim().length > 0; }) };
+              });
+          });
+        });
+      },
+      analyze: function (fen) {
+        return borrow(function () {
+          var opts = optsOf(arguments, 1);
+          if (typeof fen !== 'string' || !FEN_RE.test(fen)) {
+            return Promise.resolve({ ok: false, error: '无效 FEN：缺 走棋方/回合 字段（应带「 w - - 0 1」）' });
+          }
+          var movetime = intOf(opts.movetime != null ? opts.movetime : opts.movetimeMs, 1000);
+          var timeout = intOf(opts.timeout != null ? opts.timeout : opts.timeoutMs, Math.max(8000, movetime + 5000));
+          return cls().nativeAnalyze(fen, movetime, timeout, intOf(opts.multiPv, 1), intOf(opts.depth, 0)).then(parseUci);
+        });
+      },
+      analyzePosition: function (command) {
+        return borrow(function () {
+          var opts = optsOf(arguments, 1);
+          if (typeof command !== 'string' || !POSITION_RE.test(command)) {
+            return Promise.resolve({ ok: false, error: '无效的 Pikafish 局面历史命令' });
+          }
+          var movetime = intOf(opts.movetime != null ? opts.movetime : opts.movetimeMs, 1000);
+          var timeout = intOf(opts.timeout != null ? opts.timeout : opts.timeoutMs, Math.max(8000, movetime + 5000));
+          return cls().nativeAnalyzePosition(command, movetime, timeout, intOf(opts.multiPv, 1), intOf(opts.depth, 0)).then(parseUci);
+        });
+      },
+      stop: function () { return borrow(function () { return cls().nativeStop().then(function () { return true; }); }); },
+      quit: function () { return borrow(function () { return cls().nativeQuit().then(function () { return true; }); }); },
+      isRunning: function () { return borrow(function () { return cls().nativeIsRunning(); }); },
+      available: function () {
+        try {
+          return cls().isAvailable().then(function (ok) {
+            return ok ? { available: true } : { available: false, error: String(cls().loadError()) };
+          });
+        } catch (error) { return Promise.resolve({ available: false, error: String(error) }); }
+      }
+    };
+    Object.defineProperty(autojs, 'pikafish', { configurable: true, enumerable: true, get: function () { return api; } });
+  })();
 
   // task-198：Pro Node 环境常见 host 对象兼容（第三方工程用于动态 dex / classloader）。
   (function installProHostShim() {

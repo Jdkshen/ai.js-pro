@@ -11,9 +11,9 @@ internal class McpEngineProbe(engine: String, body: String) {
     val source: String
 
     init {
-        require(engine == "quickjs" || engine == "rhino") { "engine 必须是 quickjs 或 rhino" }
+        require(engine in McpEngines.names) { "未知探针引擎" }
         require(body.contains(RESULT_MARKER)) { "探针缺少结果标记" }
-        source = "// @engine $engine\n" + body.replace(RESULT_MARKER, marker)
+        source = McpEngines.directive(engine) + "\n" + body.replace(RESULT_MARKER, marker)
     }
 
     fun result(logs: Iterable<JsonObject>): String? = logs.firstNotNullOfOrNull { log ->

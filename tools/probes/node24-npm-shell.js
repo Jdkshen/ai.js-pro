@@ -1,0 +1,26 @@
+"nodejs";
+const assert=require('assert'), fs=require('fs'),path=require('path');
+(async()=>{
+ const shell=require('shell');
+ const version=await shell.exec('node --version && npm --version');
+ assert.strictEqual(version.code,0,JSON.stringify(version));
+ assert.match(version.result,/v24\.22\.0/); assert.match(version.result,/11\.13\.0/);
+ const failed=await shell.exec('node -e '+"'throw new Error(\"NODE_CLI_STDERR_PROBE\")'");
+ assert.notStrictEqual(failed.code,0); assert.match(failed.error,/NODE_CLI_STDERR_PROBE/);
+ const stream=await shell.createShell(); let early=false, done=false;
+ stream.on('line',line=>{if(line==='early') early=!done;});
+ const command='node -e '+"'console.log(\"early\"); setTimeout(()=>console.log(\"later\"),800)'";
+ const result=await stream.exec(command); done=true;
+ assert.strictEqual(result.code,0,JSON.stringify(result)); assert.strictEqual(early,true);
+ const cwd=path.join(__dirname,'npm-bin-fixture');
+ fs.mkdirSync(path.join(cwd,'node_modules/test-bin'),{recursive:true});
+ fs.writeFileSync(path.join(cwd,'package.json'),JSON.stringify({name:'node24-tools-probe',version:'1.0.0',dependencies:{'test-bin':'1.0.0'},scripts:{probe:'test-bin'}}));
+ fs.writeFileSync(path.join(cwd,'node_modules/test-bin/package.json'),JSON.stringify({name:'test-bin',version:'1.0.0',bin:{'test-bin':'main.js'}}));
+ fs.writeFileSync(path.join(cwd,'node_modules/test-bin/main.js'),'console.log("REAL_NPM_BIN_RUN")');
+ const run=await shell.exec('npm run probe',{cwd});
+ assert.strictEqual(run.code,0,JSON.stringify(run)); assert.match(run.result,/REAL_NPM_BIN_RUN/);
+ const pending=stream.exec('node -e '+"'setInterval(()=>{},1000)'");
+ await new Promise(r=>setTimeout(r,250)); await stream.exit();
+ assert.notStrictEqual((await pending).code,0);
+ console.log('NODE_NPM_SHELL_RESULT '+JSON.stringify({ok:true,versions:version.result.trim(),nativeStderr:true,streaming:true,privateBin:true,stop:true}));
+})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});

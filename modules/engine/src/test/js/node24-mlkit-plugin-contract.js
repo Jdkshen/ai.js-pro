@@ -215,8 +215,8 @@ globalThis.__ajsRegisterModule = function (name, factory) {
         };
         assertDeepEqual(plugins.info(OTHER_PACKAGE), hostState.info[OTHER_PACKAGE],
             'generic plugins.info must still query and return host metadata');
-        assertDeepEqual(plugins.load(OTHER_PACKAGE), hostState.info[OTHER_PACKAGE],
-            'generic plugins.load must keep returning plugin metadata');
+        await assertRejects(plugins.load(OTHER_PACKAGE), /unexpected plugin action: load/,
+            'generic plugins.load must load an APK rather than return metadata');
         assertEqual(ocrState.createCalls.length, 0, 'generic plugin load must not touch OCR');
         assertEqual(ocrState.requireCount, 0, 'generic plugin load must not load OCR');
 

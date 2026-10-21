@@ -2815,7 +2815,8 @@ final class QuickJsHostBridge implements AutoCloseable,
         EngineResultState resultState = new EngineResultState();
         mEngineResults.put(handle, resultState);
         try {
-            com.stardust.autojs.execution.ExecutionConfig config = buildExecConfig(configJson);
+            com.stardust.autojs.execution.ExecutionConfig config =
+                    buildExecConfig(configJson, scriptParentDirectory(path));
             com.stardust.autojs.execution.ScriptExecution execution =
                     mRuntime.engines.execScriptFile(path, config,
                             createEngineResultListener(resultState));
@@ -2879,14 +2880,24 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public String enginesAll() {
+        JSONArray arr = new JSONArray();
         try {
-            JSONArray arr = new JSONArray();
             arr.put(new JSONObject(enginesMyEngineId()));
-            for (Map.Entry<Long, com.stardust.autojs.execution.ScriptExecution> entry
-                    : mEngineSessions.entrySet()) {
-                com.stardust.autojs.execution.ScriptExecution execution = entry.getValue();
+        } catch (Throwable error) {
+            // 当前引擎信息序列化失败也不应抹掉下面仍在运行的子引擎。
+            Log.w("QuickJsHostBridge", "Cannot describe current engine", error);
+        }
+        for (Map.Entry<Long, com.stardust.autojs.execution.ScriptExecution> entry
+                : new ArrayList<>(mEngineSessions.entrySet())) {
+            com.stardust.autojs.execution.ScriptExecution execution = entry.getValue();
+            if (execution == null) continue;
+            try {
                 com.stardust.autojs.engine.ScriptEngine engine = execution.getEngine();
-                if (engine != null && engine.isDestroyed()) {
+                if (engine == null) {
+                    // 尚未挂上 / 已拆除的空槽位只跳过自己，不能把整个 engines.all() 变成 []。
+                    continue;
+                }
+                if (engine.isDestroyed()) {
                     mEngineSessions.remove(entry.getKey(), execution);
                     continue;
                 }
@@ -2896,10 +2907,25 @@ final class QuickJsHostBridge implements AutoCloseable,
                 obj.put("source", String.valueOf(execution.getSource()));
                 obj.put("engineName", engine.getClass().getSimpleName());
                 obj.put("destroyed", false);
+                JSONObject execArgv = new JSONObject();
+                Object configTag = engine.getTag(
+                        com.stardust.autojs.execution.ExecutionConfig.getTag());
+                if (configTag instanceof com.stardust.autojs.execution.ExecutionConfig) {
+                    try {
+                        execArgv = new JSONObject(
+                                ((com.stardust.autojs.execution.ExecutionConfig) configTag)
+                                        .getArguments());
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+                obj.put("execArgv", execArgv);
                 arr.put(obj);
+            } catch (Throwable error) {
+                // 单条目异常（例如引擎并发销毁）只跳过该条目。
+                Log.w("QuickJsHostBridge", "Cannot describe engine " + entry.getKey(), error);
             }
-            return arr.toString();
-        } catch (Throwable e) { return "[]"; }
+        }
+        return arr.toString();
     }
 
     public int enginesStopAll() {
@@ -2954,16 +2980,111 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     private com.stardust.autojs.execution.ExecutionConfig buildExecConfig(String configJson) {
-        com.stardust.autojs.execution.ExecutionConfig config = new com.stardust.autojs.execution.ExecutionConfig();
-        if (configJson == null || configJson.isEmpty()) return config;
+        return buildExecConfig(configJson, currentWorkingDirectory());
+    }
+
+    private String currentWorkingDirectory() {
+        try {
+            String cwd = mRuntime.files.cwd();
+            return cwd == null ? "" : cwd;
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    /** execScriptFile 未显式给 path 时，以脚本自身目录作为模块搜索路径。 */
+    private String scriptParentDirectory(String path) {
+        try {
+            String resolved = mRuntime.files.path(path);
+            String parent = resolved == null ? null : new File(resolved).getParent();
+            if (parent != null && !parent.isEmpty()) return parent;
+        } catch (Throwable ignored) {
+        }
+        return currentWorkingDirectory();
+    }
+
+    /**
+     * Rhino 的 __engines__.js 会把 config.path（string 或 Array）写进
+     * ExecutionConfig.path，并把第一个元素设为 workingDirectory；config.arguments
+     * 则逐项写进 ExecutionConfig.arguments。QuickJS 以前只认 string path 且整段
+     * 丢弃 arguments，这里按同一契约补齐（嵌套对象/数组保持 JSON 结构）。
+     */
+    private com.stardust.autojs.execution.ExecutionConfig buildExecConfig(
+            String configJson, String fallbackWorkingDirectory) {
+        com.stardust.autojs.execution.ExecutionConfig config =
+                new com.stardust.autojs.execution.ExecutionConfig();
+        String fallback = fallbackWorkingDirectory == null ? "" : fallbackWorkingDirectory;
+        if (configJson == null || configJson.isEmpty()) {
+            applyFallbackPath(config, fallback);
+            return config;
+        }
         try {
             JSONObject json = new JSONObject(configJson);
             if (json.has("delay")) config.setDelay(json.optLong("delay", 0));
             if (json.has("interval")) config.setInterval(json.optLong("interval", 0));
             if (json.has("loopTimes")) config.setLoopTimes(json.optInt("loopTimes", 1));
-            if (json.has("path")) config.setWorkingDirectory(json.optString("path", ""));
-        } catch (JSONException ignored) {}
+            applyArguments(config, json);
+            if (!applyPath(config, json)) applyFallbackPath(config, fallback);
+        } catch (JSONException ignored) {
+            applyFallbackPath(config, fallback);
+        }
         return config;
+    }
+
+    private void applyFallbackPath(
+            com.stardust.autojs.execution.ExecutionConfig config, String fallback) {
+        if (fallback == null || fallback.isEmpty()) return;
+        config.setWorkingDirectory(fallback);
+        config.setPath(new String[]{fallback});
+    }
+
+    /**
+     * 接受 string 或 Array 两种 path。Rhino 对空/缺省的 path 回退到 files.cwd()；
+     * execScriptFile 的 fallback 是脚本父目录（与 Node 引擎一致）。
+     */
+    private boolean applyPath(
+            com.stardust.autojs.execution.ExecutionConfig config, JSONObject json) {
+        Object raw = json.opt("path");
+        List<String> paths = new ArrayList<>();
+        if (raw instanceof JSONArray) {
+            JSONArray array = (JSONArray) raw;
+            for (int i = 0; i < array.length(); i++) {
+                Object item = array.opt(i);
+                if (item == null || item == JSONObject.NULL) continue;
+                String value = String.valueOf(item);
+                if (!value.isEmpty()) paths.add(value);
+            }
+        } else if (raw != null && raw != JSONObject.NULL && !(raw instanceof JSONObject)) {
+            String value = String.valueOf(raw);
+            if (!value.isEmpty()) paths.add(value);
+        }
+        if (paths.isEmpty()) return false;
+        config.setPath(paths.toArray(new String[0]));
+        config.setWorkingDirectory(paths.get(0));
+        return true;
+    }
+
+    private void applyArguments(
+            com.stardust.autojs.execution.ExecutionConfig config, JSONObject json) {
+        Object raw = json.opt("arguments");
+        JSONObject arguments = null;
+        if (raw instanceof JSONObject) {
+            arguments = (JSONObject) raw;
+        } else if (raw instanceof String && !((String) raw).isEmpty()) {
+            try {
+                arguments = new JSONObject((String) raw);
+            } catch (JSONException ignored) {
+            }
+        }
+        if (arguments == null) return;
+        java.util.Iterator<String> keys = arguments.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            Object value = arguments.opt(key);
+            // Kotlin 的 setArgument(key, Any) 不接受 null；JSON null 用 JSONObject.NULL
+            // 保留键，后续 new JSONObject(arguments) 仍会序列化为 null。
+            config.setArgument(key, value == null ? JSONObject.NULL : value);
+        }
     }
 
     // ---- media (audio volume / music player) ----

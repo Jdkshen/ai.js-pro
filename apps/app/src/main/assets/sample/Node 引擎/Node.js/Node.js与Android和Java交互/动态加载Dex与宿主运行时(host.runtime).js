@@ -38,7 +38,13 @@ try {
     // loadDex 可选：/sdcard/脚本/_probe 下放 dex 才真正加载；没有就只打印用法，保证示例可独立结束。
     const dexDir = '/sdcard/脚本/_probe';
     let dexFiles = [];
-    try { if (files.isDir(dexDir)) { dexFiles = files.list(dexDir).filter(function (p) { return /\.dex$/i.test(String(p)); }); } } catch (ignored) { }
+    try {
+        if (files.isDir(dexDir)) {
+            dexFiles = files.list(dexDir)
+                .filter(function (name) { return /\.dex$/i.test(String(name)); })
+                .map(function (name) { return require('path').join(dexDir, String(name)); });
+        }
+    } catch (ignored) { }
     if (dexFiles.length > 0) {
         try { out.loadDex = { path: dexFiles[0], ok: host.runtime.loadDex(dexFiles[0]) }; }
         catch (error) { out.loadDex = { path: dexFiles[0], ok: false, error: String(error && error.message || error) }; }

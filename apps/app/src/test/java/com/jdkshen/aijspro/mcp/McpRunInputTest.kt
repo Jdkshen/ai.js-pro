@@ -25,7 +25,7 @@ class McpRunInputTest {
     }
     @Test fun rejectsWrongTypesAndFractionalOrOutOfRangeConfig() {
         listOf("""{"source":true}""", """{"source":"","wait":"true"}""",
-            """{"source":"","engine":"nodejs"}""", """{"source":"","config":{"loopTimes":1.5}}""",
+            """{"source":"","engine":"unsupported"}""", """{"source":"","config":{"loopTimes":1.5}}""",
             """{"source":"","config":{"delay":-1}}""", """{"source":"","config":{"path":[1]}}""",
             """{"source":"","config":{"unknown":1}}""").forEach {
             assertTrue(it, runCatching { parse(it) }.exceptionOrNull() is IllegalArgumentException)
@@ -39,6 +39,13 @@ class McpRunInputTest {
         assertEquals("测试", (array[2] as Map<*, *>) ["text"])
         assertEquals(42, (values["n"] as Number).toInt())
         assertTrue(values["n"] is Double)
+    }
+    @Test fun supportsNodeAliasesAndConfigEngineOverride() {
+        listOf("node", "node24", "nodejs", "NODEJS").forEach {
+            assertEquals("nodejs", parse("""{"source":"", "engine":"$it"}""").engine)
+        }
+        assertEquals("nodejs", parse("""{"source":"", "config":{"engine":"node24"}}""").engine)
+        assertEquals("rhino", parse("""{"source":"", "engine":"rhino", "config":{"engine":"nodejs"}}""").engine)
     }
     @Test fun rejectsArgumentsOutsideFiniteJsNumberRange() {
         val json = JsonParser().parse("""{"nested":[1e500]}""")

@@ -425,6 +425,41 @@ def bundledYoloSampleDir = file('src/main/assets/sample/QuickJS 引擎/YOLO目�
 // Rhino/Node 两棵的语料来自 Auto.js Pro 原包示例集；Node 引擎下允许 nodejs 入口）。
 def bundledNodeSampleDir = file('src/main/assets/sample/Node 引擎')
 
+// Compile Android resource projects from the same linked table that will be packaged in
+// this variant. Doing this before mergeAssets avoids a dependency on a previously built
+// APK and keeps the sample's real resource IDs valid on a fresh install or an update.
+android.applicationVariants.all { variant ->
+    def capitalized = variant.name.capitalize()
+    def generated = layout.buildDirectory.dir("generated/project-sample-assets/${variant.name}")
+    def linked = layout.buildDirectory.dir(
+            "intermediates/linked_resources_binary_format/${variant.name}/process${capitalized}Resources")
+    def compileSamples = tasks.register("compile${capitalized}SampleResources", Exec) {
+        group = 'build'
+        dependsOn "process${capitalized}Resources"
+        workingDir rootProject.projectDir
+        inputs.dir(bundledSampleDir)
+        inputs.dir(linked)
+        inputs.file(rootProject.file('tools/build-bundled-project-res.py'))
+        outputs.dir(generated)
+        doFirst {
+            def archives = fileTree(linked).matching { include '*.ap_' }.files.sort { it.name }
+            def host = archives.find { it.name.contains('Arm64-v8a') } ?: archives.find()
+            if (host == null) {
+                throw new GradleException("No linked host resource archive for ${variant.name}")
+            }
+            def suffix = org.gradle.internal.os.OperatingSystem.current().isWindows() ? '.exe' : ''
+            commandLine pythonExecutable, rootProject.file('tools/build-bundled-project-res.py'),
+                    '--aapt2', new File(android.sdkDirectory, "build-tools/${android.buildToolsVersion}/aapt2${suffix}"),
+                    '--android-jar', new File(android.sdkDirectory, "platforms/${android.compileSdkVersion}/android.jar"),
+                    '--host-res', host,
+                    '--samples', bundledSampleDir,
+                    '--output', generated.get().asFile
+        }
+    }
+    android.sourceSets.maybeCreate(variant.name).assets.srcDir(generated)
+    variant.mergeAssetsProvider.configure { dependsOn compileSamples }
+}
+
 // 象棋工程源码的版本指纹：project.json 是唯一版本源，清单里是逐文件 SHA-256。
 // 工程本身不随宿主 APK 打包（宿主带的是 plugins/xiangqi-plugin），
 // 这里生成清单是为了让插件构建与发布校验都能核对「打出去的那份工程代码 = 源码」。

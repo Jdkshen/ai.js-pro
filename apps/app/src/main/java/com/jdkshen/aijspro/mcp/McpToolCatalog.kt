@@ -34,11 +34,13 @@ internal object McpToolCatalog {
         "check_syntax",
         "learn_autojs_skill",
         "stop_all_scripts",
-        "get_mcp_log"
+        "get_mcp_log",
+        "list_engines",
+        "call_engine_api"
     )
 
     /**
-     * Pro compatibility names advertised by tools/list. The list size must stay 39.
+     * Pro compatibility names advertised by tools/list, alongside the engine tools.
      * [learnAutoJsSkill] keeps the original Pro spelling ("AutoJs"); its deterministic
      * camelCase dispatch form is "learnAutojsSkill". Both are accepted by tools/call.
      */
@@ -78,7 +80,7 @@ internal object McpToolCatalog {
             canonicalByAlias[dispatchAliases.getValue(canonical)] == canonical
         })
         check(aliases.all { (alias, canonical) -> canonicalByAlias[alias] == canonical })
-        check(names.size == 39 && names.toSet().size == names.size)
+        check(names.toSet().size == names.size)
     }
 
     fun canonicalName(name: String): String = canonicalByAlias[name] ?: name

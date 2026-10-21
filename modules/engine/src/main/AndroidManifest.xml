@@ -14,6 +14,10 @@
 
     <application
         >
+        <provider
+            android:name="org.autojs.source.engine.android.Node24StorageProvider"
+            android:authorities="${applicationId}.node24.storage"
+            android:exported="false"/>
         <activity
             android:name=".execution.ScriptExecuteActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"

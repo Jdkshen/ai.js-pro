@@ -29,6 +29,31 @@ $ErrorActionPreference = 'Stop'
 function Write-Step($text) { Write-Host "==> $text" }
 function Fail($text) { Write-Host "失败：$text" -ForegroundColor Red; exit 1 }
 
+# 只算宿主 APK 里 resources.arsc 条目的 SHA-256（解压后的资源表字节），不哈希整个 APK。
+# 引擎侧按同一个摘要判断资源包是否对应当前宿主；APK 大小因签名/压缩/原生库变化时不再误判。
+function Get-ApkResourcesSha256([string]$ApkPath) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    $zip = [IO.Compression.ZipFile]::OpenRead($ApkPath)
+    try {
+        $entry = $zip.GetEntry('resources.arsc')
+        if (-not $entry) { Fail "宿主 APK 里没有 resources.arsc：$ApkPath" }
+        $entryStream = $entry.Open()
+        try {
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+                $hashBytes = $sha.ComputeHash($entryStream)
+            } finally {
+                $sha.Dispose()
+            }
+        } finally {
+            $entryStream.Dispose()
+        }
+        return ([BitConverter]::ToString($hashBytes) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 $projectRoot = (Resolve-Path $ProjectDir).Path
 $resRoot = Join-Path $projectRoot $ResDir
 if (-not (Test-Path $resRoot)) { Fail "找不到资源目录：$resRoot" }
@@ -133,18 +158,22 @@ Write-Host "SHA256: $sha"
 # （aapt2 的 -I 会把 app 侧的资源 id 一起编进引用里，宿主换版本后 id 可能漂移），
 # 以及资源包在资源表里的**包名**（独立包 id 时 aapt2 会命名成 <app 包名>.feature，
 # 按名字查资源要连它一起试 —— 见引擎里的 ResIds）。
+# appResourcesSha256 只覆盖 resources.arsc：它才是资源 id 的来源；APK 其它字节变了不影响。
 $dump = & $aapt2 dump resources $outApk 2>$null | Select-String -Pattern 'Package name=(\S+)\s+id='
 if ($dump -and $dump.ToString() -match 'Package name=(\S+)\s+id=') {
     $resourcePackageName = $matches[1]
 } else {
     $resourcePackageName = "$PackageName.feature"
 }
+$appResourcesSha256 = Get-ApkResourcesSha256 $AppApk
+Write-Step "宿主 resources.arsc SHA256：$appResourcesSha256"
 $sidecar = Join-Path $OutDir 'project-res.json'
 $sidecarJson = [ordered]@{
     packageName         = $PackageName
     resourcePackageName = $resourcePackageName
     appApk              = $AppApk
     appApkSize          = (Get-Item $AppApk).Length
+    appResourcesSha256  = $appResourcesSha256
     generatedAt         = (Get-Date).ToString('s')
 } | ConvertTo-Json
 [IO.File]::WriteAllText($sidecar, $sidecarJson, (New-Object Text.UTF8Encoding($false)))

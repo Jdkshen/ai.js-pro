@@ -339,7 +339,8 @@ public final class RemoteUiSelector {
             if (timeout > 0 && now - start > timeout) {
                 return null;
             }
-            sleep(POLL_INTERVAL_MILLIS);
+            sleep(timeout > 0 ? Math.min(interval > 0 ? interval : POLL_INTERVAL_MILLIS,
+                    Math.max(1, timeout - (now - start))) : (interval > 0 ? interval : POLL_INTERVAL_MILLIS));
         }
     }
 
@@ -352,6 +353,10 @@ public final class RemoteUiSelector {
     }
 
     public RemoteUiObjectCollection untilFind(long timeout) {
+        return untilFind(timeout, POLL_INTERVAL_MILLIS);
+    }
+
+    public RemoteUiObjectCollection untilFind(long timeout, long interval) {
         ensureNonUiThread();
         long start = SystemClock.elapsedRealtime();
         while (true) {
@@ -364,12 +369,9 @@ public final class RemoteUiSelector {
             if (timeout > 0 && now - start > timeout) {
                 return nodes;
             }
-            sleep(POLL_INTERVAL_MILLIS);
+            sleep(timeout > 0 ? Math.min(interval > 0 ? interval : POLL_INTERVAL_MILLIS,
+                    Math.max(1, timeout - (now - start))) : (interval > 0 ? interval : POLL_INTERVAL_MILLIS));
         }
-    }
-
-    public RemoteUiObjectCollection untilFind(long timeout, long interval) {
-        return untilFind(timeout);
     }
 
     public boolean exists() {

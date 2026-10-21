@@ -7,6 +7,18 @@ import static org.junit.Assert.assertEquals;
 public class JavaScriptSourceEngineTest {
 
     @Test
+    public void nodeFileExtensionRoutesOriginalUiEntryWithoutEditingItsHeader() {
+        JavaScriptFileSource source = new JavaScriptFileSource(new java.io.File("main.node.js")) {
+            @Override public String getScript() { return "\"ui\";\nclass WebActivity {}"; }
+        };
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+        source.setPreferredEngine("quickjs");
+        assertEquals(JavaScriptSource.ENGINE_QUICKJS, source.getEngineName());
+        source.setForcedEngine("rhino");
+        assertEquals(JavaScriptSource.ENGINE_RHINO, source.getEngineName());
+    }
+
+    @Test
     public void oldScriptsUseRhinoByDefault() {
         StringScriptSource source = new StringScriptSource("console.log('legacy');");
         assertEquals(JavaScriptSource.ENGINE, source.getEngineName());

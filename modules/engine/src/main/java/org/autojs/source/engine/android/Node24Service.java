@@ -235,7 +235,8 @@ public class Node24Service extends Service {
         try {
             Intent intent=new Intent(ACTION_NODE24_STATE).setPackage(getPackageName());
             intent.putExtra(EXTRA_STATE,state).putExtra(EXTRA_ID,job.id)
-                .putExtra(EXTRA_FILENAME,job.filename).putExtra(EXTRA_SOURCE,job.source)
+                .putExtra(EXTRA_FILENAME,job.filename).putExtra(EXTRA_SOURCE,
+                    job.source.length()>4096 ? job.source.substring(0,4096) : job.source)
                 .putExtra(EXTRA_UI_SCRIPT,job.uiScript).putExtra(EXTRA_STARTED_AT,job.startedAt)
                 .putExtra(EXTRA_CANCELLED,job.cancelled);
             sendBroadcast(intent);
@@ -243,6 +244,7 @@ public class Node24Service extends Service {
     }
     private final class Job implements Runnable {
         final String id,source,filename;final long timeout;final long holdMillis;final boolean uiScript;final Messenger reply;
+        final int ownerEngineId;
         final long startedAt=System.currentTimeMillis();
         volatile boolean cancelled;volatile boolean finished;volatile boolean executeReturned;volatile Node24Engine engine;volatile Node24HostBridge host;
         /** 实时日志只由 node24-output 线程写入；锁同时保护 seq/delivered 与 64 KiB/条数预算。 */
@@ -253,11 +255,15 @@ public class Node24Service extends Service {
         private int logSeq,logBytes,logLines,deliveredLogs;
         private boolean logStreamStopped;
         Job(JSONObject request,Messenger reply) throws Exception {
-            this.reply=reply;id=request.getString("id");source=request.getString("source");
+            this.reply=reply;id=request.getString("id");
+            ownerEngineId=request.optInt("ownerEngineId",-1);
+            source=request.has("sourceFile")
+                ? Node24SourceTransport.read(getCacheDir(),request.getString("sourceFile"))
+                : request.getString("source");
             filename=request.getString("filename");timeout=request.getLong("timeoutMillis");
             holdMillis=Math.max(0L,Math.min(600_000L,request.optLong("holdMillis",0L)));
             uiScript=request.optBoolean("uiScript",false);
-            if(!id.matches("[A-Za-z0-9_-]{1,64}") || source.length()>131072 || !filename.startsWith("/")
+            if(!id.matches("[A-Za-z0-9_-]{1,64}") || source.length()>Node24SourceTransport.MAX_BYTES || !filename.startsWith("/")
                 || filename.length()>1024 || filename.indexOf(0)>=0 || timeout<1 || timeout>60000)
                 throw new IOException("Invalid Node request");
         }
@@ -347,10 +353,10 @@ public class Node24Service extends Service {
 
         // task-174：旧的 800ms halt 已合并进 cancel() 的 forceHalt（1.5s + 新 job 检测）。
         /**
-         * uiScript/显式 hold 用 hold 预算作为 native 事件循环寿命；普通非 UI 脚本保持原 timeout。
-         * holdMillis 缺失（旧引擎）时按 UI 上限兜底；Node24Client 的等待预算包含该 hold。
+         * Visible UI lives until closed or explicitly stopped. Ordinary scripts retain their budget.
          */
         long nativeTimeoutMillis() {
+            if(uiScript) return 0L;
             if(!uiScript && holdMillis<=0L) return timeout;
             long budget=holdMillis>0L?holdMillis:UI_HOLD_FALLBACK_MS;
             return Math.max(1L,Math.min(UI_HOLD_FALLBACK_MS,budget));
@@ -465,7 +471,7 @@ public class Node24Service extends Service {
                 String prepared=Node24Prelude.wrap(Node24Service.this,source,filename);
                 stage="host-bridge";
                 bridge=new Node24HostBridge(Node24Service.this,
-                        Node24Prelude.projectDir(filename));
+                        Node24Prelude.projectDir(filename), ownerEngineId);
                 android.util.Log.i("Node24Service","host bridge ready id="+id+" "+bridge.describeState());
                 // task-164：清掉上一次运行残留的 floating overlay/Node UI。
                 try { bridge.closeUiOverlay(); } catch(Throwable ignored) { }

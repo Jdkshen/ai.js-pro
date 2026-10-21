@@ -39,9 +39,15 @@ public final class NodeEngineBridgeClient implements AutoCloseable {
     private final List<Candidate> mCandidates = new ArrayList<>(2);
     private volatile Candidate mOwner;
     private volatile boolean mClosed;
+    private final int mOwnerEngineId;
 
     public NodeEngineBridgeClient(Context context) {
+        this(context, -1);
+    }
+
+    public NodeEngineBridgeClient(Context context, int ownerEngineId) {
         mContext = context.getApplicationContext();
+        mOwnerEngineId = ownerEngineId;
         // 只枚举真实存在的两个 app-private 服务类；不是虚拟进程 id，也不是硬编码 :script。
         mCandidates.add(new Candidate("主进程", NodeEngineBridgeService.class));
         mCandidates.add(new Candidate(":script", NodeEngineBridgeScriptService.class));
@@ -63,6 +69,7 @@ public final class NodeEngineBridgeClient implements AutoCloseable {
                     ? "Node 引擎桥 owner 不可用"
                     : owner.label + " 的引擎桥已断开；本次 Node 任务的 owner 已固定，不会切换进程");
         }
+        request.put("ownerEngineId", mOwnerEngineId);
         return transact(binder, request, owner.label);
     }
 
@@ -139,8 +146,9 @@ public final class NodeEngineBridgeClient implements AutoCloseable {
         }
     }
 
-    private static JSONObject statusRequest() throws Exception {
+    private JSONObject statusRequest() throws Exception {
         return new JSONObject()
+                .put("ownerEngineId", mOwnerEngineId)
                 .put("action", NodeEngineBridgeProtocol.OP_STATUS)
                 .put("args", new JSONObject());
     }

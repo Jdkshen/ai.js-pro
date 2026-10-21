@@ -66,6 +66,12 @@ public class JavaScriptFileSource extends JavaScriptSource {
     }
 
     @Override
+    protected String getDefaultEngine() {
+        return mFile.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".node.js")
+                ? ENGINE_NODE24 : super.getDefaultEngine();
+    }
+
+    @Override
     public String toString() {
         if (mCustomsName) {
             return super.toString();

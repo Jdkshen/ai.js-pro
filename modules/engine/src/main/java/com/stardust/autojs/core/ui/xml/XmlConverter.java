@@ -185,7 +185,12 @@ public class XmlConverter {
             return;
         }
         if (nodeName.equals("text") || nodeName.equals("button") || nodeName.equals("input"))
-            layoutXml.append("android:text=\"").append(textContent).append("\"\n");
+            layoutXml.append("android:text=\"").append(escapeAttribute(textContent)).append("\"\n");
+    }
+
+    static String escapeAttribute(String value) {
+        return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;")
+                .replace("\r", "&#13;").replace("\n", "&#10;");
     }
 
     private static void handleChildren(NodeList nodes, StringBuilder layoutXml) {

@@ -277,7 +277,7 @@ module.exports = function (runtime, scope) {
         images.detectsMultiColors = function (img, x, y, firstColor, colors, options) {
             options = options || {};
             var threshold;
-            if (options.similarity) {
+            if (options.similarity !== undefined) {
                 threshold = parseInt(255 * (1 - options.similarity));
             } else {
                 threshold = options.threshold == undefined ? defaultColorThreshold : options.threshold;
@@ -462,10 +462,10 @@ module.exports = function (runtime, scope) {
             color = parseColor(color);
             options = options || {};
             var region = options.region || [];
-            if (options.similarity) {
+            if (options.similarity !== undefined) {
                 var threshold = parseInt(255 * (1 - options.similarity));
             } else {
-                var threshold = options.threshold || defaultColorThreshold;
+                var threshold = options.threshold === undefined ? defaultColorThreshold : options.threshold;
             }
             if (options.region) {
                 return colorFinder.findColor(img, color, threshold, buildRegion(options.region, img));
@@ -492,10 +492,10 @@ module.exports = function (runtime, scope) {
             initIfNeeded();
             color = parseColor(color);
             options = options || {};
-            if (options.similarity) {
+            if (options.similarity !== undefined) {
                 var threshold = parseInt(255 * (1 - options.similarity));
             } else {
-                var threshold = options.threshold || defaultColorThreshold;
+                var threshold = options.threshold === undefined ? defaultColorThreshold : options.threshold;
             }
             if (options.region) {
                 return toPointArray(colorFinder.findAllPointsForColor(img, color, threshold, buildRegion(options.region, img)));

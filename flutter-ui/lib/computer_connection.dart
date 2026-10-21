@@ -1,16 +1,16 @@
 part of 'main.dart';
 
-/// Pro 9.x 的服务器模式状态机（DebugService.ServerState）：
+/// AI.js Pro 手机连接服务状态：
 /// 手机开服务器（电脑连手机）时，不再用一个布尔糊弄所有状态。
 enum ComputerServerState { disconnected, connecting, listening, unknown }
 
-/// Pro 9.x 的“手机回连电脑”状态机（DebugService.ClientState）。
+/// 手机主动连接电脑的状态。
 enum ComputerClientState { disconnected, connecting, connected, unknown }
 
-/// Pro 9.x 手机回连电脑的默认端口（反编译 y2.smali：const/16 0x5225）。
-const int computerDefaultClientPort = 21029;
+/// AI.js Pro VS Code 扩展的电脑监听端口。
+const int computerDefaultClientPort = 8327;
 
-/// 本 POC 自研调试服务器的旧默认端口；仅 legacy 通道使用，Pro 本身用动态端口。
+/// AI.js Pro 手机监听端口。
 const int computerLegacyPort = 9317;
 
 /// Pro 9.x 的局域网发现服务类型（NSD / mDNS）。
@@ -89,8 +89,8 @@ ComputerServerState computerServerStateOf(Map<String, dynamic>? state) {
       (enumValue ?? state['state'] ?? '').toString().trim().toUpperCase();
   if (raw.isNotEmpty && raw != 'UNKNOWN') {
     if (raw.contains('LISTEN')) return ComputerServerState.listening;
-    if (raw.contains('CONNECT')) return ComputerServerState.connecting;
     if (raw.contains('DISCONNECT')) return ComputerServerState.disconnected;
+    if (raw.contains('CONNECT')) return ComputerServerState.connecting;
   }
   final listening = state['listening'];
   if (listening is bool) {
@@ -168,6 +168,7 @@ String? computerProtocolTypeOf(Map<String, dynamic>? state) {
   ]) {
     final text = state[key]?.toString().trim().toLowerCase() ?? '';
     if (text.isEmpty) continue;
+    if (text == 'aijs') return 'AI.js Pro';
     if (text.contains('ws-rpc') || text == 'wsrpc' || text == 'ws_rpc') {
       return 'ws-rpc';
     }
@@ -180,7 +181,7 @@ String? computerProtocolTypeOf(Map<String, dynamic>? state) {
   }
   if (state['legacy'] == true) return 'legacy';
   // 现有 POC 宿主（DevPluginServer）没有 type 字段，走的是自研 hello 协议。
-  return 'legacy';
+  return 'AI.js Pro';
 }
 
 /// 发现方式：provider（ContentProvider / adb / USB）与 mDNS（NSD 局域网）。
@@ -230,6 +231,7 @@ List<String> computerDiscoveryMethodsOf(Map<String, dynamic>? state) {
 }
 
 String computerProtocolDescription(String? protocol) {
+  if (protocol == 'AI.js Pro') return 'AI.js Pro VS Code 扩展 · TCP';
   if (protocol == 'ws-rpc') return 'ws-rpc（JSON-RPC over WebSocket）';
   if (protocol == 'legacy') return 'legacy（自研 hello 协议）';
   return '未上报';
@@ -290,11 +292,11 @@ String computerFailureMessage(String reason,
       lower.contains('timed out') ||
       text.contains('超时')) {
     return '连接 $target 超时$suffix：电脑端未在预期时间内响应。'
-        '请确认电脑已启动 VSCode 调试插件、与手机在同一局域网，并放行该端口后重试。';
+        '请确认电脑已启动 VS Code 的 AI.js Pro 扩展、与手机在同一局域网，并放行该端口后重试。';
   }
   if (lower.contains('version') || text.contains('版本')) {
     return '连接 $target 失败$suffix：电脑插件版本不匹配。'
-        '请安装/切换到 9.0 调试插件后重试（原始原因：$text）。';
+        '请更新 AI.js Pro VS Code 扩展后重试（原始原因：$text）。';
   }
   if (lower.contains('refused') ||
       lower.contains('econnrefused') ||
@@ -477,8 +479,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
   }
 
   String get _activeConnectSubtitle {
-    if (clientPort == computerDefaultClientPort) return '手机连电脑 · 默认端口 21029';
-    return '手机连电脑 · 当前端口 $clientPort（Pro 默认 21029）';
+    return '手机连电脑 · VS Code 扩展监听 $clientPort';
   }
 
   /// 监听中的手机地址：端口还没分配时只显示 IP，不拼出 “ip:null”。
@@ -494,8 +495,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
       return computerFailureMessage(reason,
           target: _hostAndPort, version: clientVersionLabel);
     }
-    return '未能连接电脑（$_hostAndPort）：请确认电脑已安装并启动 VSCode 调试插件（9.0，'
-        '${clientVersionLabel ?? '版本未上报'}）、与手机处于同一局域网，'
+    return '未能连接电脑（$_hostAndPort）：请确认 VS Code 已启用 AI.js Pro 扩展、与手机处于同一局域网，'
         '且电脑防火墙放行该调试端口。';
   }
 
@@ -518,7 +518,10 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
     if (!awaitingConnection) return;
     final elapsed = DateTime.now().difference(attemptStarted!).inMilliseconds;
     if (isConnected) return;
-    if (stateKnown && clientReason != null && elapsed >= 2000) {
+    if (stateKnown &&
+        clientState == ComputerClientState.disconnected &&
+        clientReason != null &&
+        elapsed >= 2000) {
       awaitingConnection = false;
       connectionHint = null;
       operationError = _connectionFailureMessage;
@@ -538,7 +541,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
       awaitingConnection = false;
       connectionHint = null;
       operationError = clientState == ComputerClientState.connecting
-          ? '连接 $_hostAndPort 超时：电脑端没有响应。请确认电脑已启动 VSCode 调试插件、'
+          ? '连接 $_hostAndPort 超时：电脑端没有响应。请确认电脑已启动 VS Code 的 AI.js Pro 扩展、'
               '与手机同一局域网，且电脑防火墙允许该端口后重试。'
           : '连接超时，请检查手机与电脑的网络和电脑端调试服务后重试。';
     }
@@ -676,10 +679,6 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
           'computerPluginSet', {'mode': 1, 'enabled': false});
       if (result is! Map) throw StateError('断开结果暂时不可用，请刷新重试');
       final value = Map<String, dynamic>.from(result);
-      if (value['clientStateKnown'] != true ||
-          computerClientStateOf(value) != ComputerClientState.disconnected) {
-        throw StateError('断开结果尚未确认：电脑插件状态未知或仍在连接，请刷新重试');
-      }
       if (mounted)
         setState(() {
           awaitingConnection = false;
@@ -706,12 +705,23 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
   }
 
   Future<void> openTutorial() async {
-    try {
-      await LocalBridge.call(
-          'openUrl', {'url': _ServiceDrawerState.developerTutorialUrl});
-    } catch (failure) {
-      if (mounted) message(context, '无法打开连接教程：$failure');
-    }
+    await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+              title: const Text('连接 AI.js Pro VS Code'),
+              content: const SingleChildScrollView(
+                  child: Text(
+                      '1. 在电脑 VS Code 中安装并启用 AI.js Pro 扩展（jdkshen.aijspro-vscode）。\n\n'
+                      '2. 电脑连手机：开启本页“服务器模式”，在 VS Code 运行“AI.js Pro: 连接设备”，输入手机地址，默认端口 9317。\n\n'
+                      '3. 手机连电脑：保持 VS Code 扩展运行，在本页“主动连接电脑”填写电脑 IP，默认端口 8327。两种连接方式任选一种。\n\n'
+                      '4. USB 连接：电脑执行 adb forward tcp:19317 tcp:9317，再在扩展中连接 127.0.0.1:19317。多设备时在 adb 后加 -s 设备编号。\n\n'
+                      '连接后可运行文件、推送工程、查看日志、截图与分析控件。手机和电脑通过局域网连接时，请确认防火墙放行所用端口。')),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('知道了'))
+              ],
+            ));
   }
 
   /// “打开插件页”：优先用外层给的入口；插件页自己打开时退回本机插件页。
@@ -766,7 +776,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
       return '电脑端调试插件版本不匹配'
           '${version == null ? '' : '（当前 $version）'}'
           '${required == null ? '' : '，需要 v$required'}，'
-          '请安装 9.0 调试插件后重试。';
+          '请更新 AI.js Pro VS Code 扩展后重试。';
     }
     if (connected) return null;
     final reason = clientReason;
@@ -775,8 +785,8 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
           target: _hostAndPort, version: clientVersionLabel);
     }
     if (!stateKnown) {
-      return '请在电脑的 VSCode 中安装并启动 9.0 调试插件后，再回到本页连接。'
-          '可点下方“安装/连接教程”或“打开插件页”。';
+      return '请在电脑的 VSCode 中安装并启动 AI.js Pro 扩展后，再回到本页连接。'
+          '可点下方“安装/连接教程”。';
     }
     if (state?['pluginReady'] == false) return '电脑端插件尚未就绪，可先查看安装/连接教程。';
     if (clientState == ComputerClientState.connecting) return '正在连接电脑插件…';
@@ -786,7 +796,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
     if (lastHostAddress.isNotEmpty) {
       return '上次连接的电脑：$_hostAndPort。确认电脑端插件已启动后，点“主动连接电脑”重试。';
     }
-    return '在电脑的 VSCode 中安装调试插件后，用下方地址连接本机。';
+    return '在电脑的 VS Code 中启用 AI.js Pro 扩展后，用下方地址连接本机。';
   }
 
   /// “安装/连接教程 + 打开插件页”入口：只在还没连上电脑时出现。
@@ -829,11 +839,6 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                   onPressed: openTutorial,
                   icon: const Icon(Icons.download_outlined, size: 18),
                   label: const Text('安装/连接教程')),
-              TextButton.icon(
-                  key: const ValueKey('computer-plugin-open-page'),
-                  onPressed: openPluginPageEntry,
-                  icon: const Icon(Icons.extension_outlined, size: 18),
-                  label: const Text('打开插件页')),
             ])),
     ]);
   }
@@ -901,33 +906,17 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
 
   /// 枚举状态 + 协议类型 + 发现方式 + 插件版本：把“布尔状态”补成可诊断的明细。
   Widget connectionDetails() {
-    final value = state;
-    if (value == null || error != null) return const SizedBox.shrink();
-    final protocol = protocolType;
-    final discovery = discoveryMethods;
+    if (state == null || error != null) return const SizedBox.shrink();
+    final count = state?['clients'] ?? 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _detailRow(
-          '服务器状态',
-          '${computerServerStateName(serverState)}'
-              '（${computerServerStateLabel(serverState)}）',
+      _detailRow('手机服务', computerServerStateLabel(serverState),
           key: const ValueKey('computer-plugin-server-state')),
       _detailRow(
-          '电脑连接',
-          '${computerClientStateName(clientState)}'
-              '（${computerClientStateLabel(clientState)}）',
+          '电脑连接', '${computerClientStateLabel(clientState)} · $count 个连接',
           key: const ValueKey('computer-plugin-client-state')),
-      _detailRow('协议类型', protocol ?? '未上报',
-          key: const ValueKey('computer-plugin-protocol'),
-          hint: protocol == null
-              ? '宿主未上报协议类型'
-              : computerProtocolDescription(protocol)),
-      _detailRow('发现方式', discovery.isEmpty ? '未上报' : discovery.join(' + '),
-          key: const ValueKey('computer-plugin-discovery'),
-          hint: discovery.contains('mDNS')
-              ? 'provider 走 adb/USB；mDNS 走局域网自动发现（$computerMdnsServiceType）。'
-              : 'mDNS 未启用：当前可用 provider（adb/USB）或手动输入电脑 IP。'),
-      _detailRow('插件版本', clientVersionLabel ?? '未上报',
-          key: const ValueKey('computer-plugin-version')),
+      if (connected && clientVersionLabel != null)
+        _detailRow('扩展版本', clientVersionLabel!,
+            key: const ValueKey('computer-plugin-version')),
     ]);
   }
 
@@ -957,10 +946,9 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                         : server == ComputerServerState.unknown
                             ? '服务器状态未知 · 请刷新重试'
                             : '服务器模式未开启';
-    final protocol = protocolType ?? 'legacy';
     final serverSubtitle = listening
-        ? '手机开服务器 · 动态端口 ${state?['port'] ?? '未分配'} · $protocol'
-        : '手机开服务器（电脑连手机）· 动态端口 · $protocol';
+        ? '电脑连手机 · 端口 ${state?['port'] ?? computerLegacyPort}'
+        : '电脑连手机 · 端口 $computerLegacyPort';
     return AlertDialog(
       key: const ValueKey('computer-plugin-sheet'),
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -969,7 +957,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
         const Icon(Icons.desktop_windows_outlined, color: Color(0xff008f91)),
         const SizedBox(width: 10),
         Expanded(
-            child: Text(widget.activeConnectOnly ? '服务器IP地址' : '设备连接信息',
+            child: Text(widget.activeConnectOnly ? '主动连接电脑' : '电脑连接',
                 style: const TextStyle(fontSize: 20))),
         IconButton(
             tooltip: '刷新连接状态',
@@ -999,9 +987,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                     decoration: InputDecoration(
                         labelText: '电脑 IP 地址',
                         hintText: '例如 192.168.1.100',
-                        helperText: clientPortValue == computerDefaultClientPort
-                            ? '默认端口 21029，也可填写 IP:端口'
-                            : '默认端口 $clientPortValue（Pro 默认 21029），也可填写 IP:端口',
+                        helperText: 'VS Code 扩展端口 $clientPortValue，可填写 IP:端口',
                         errorText: hostEdited ? hostError : null,
                         border: const OutlineInputBorder())),
                 const SizedBox(height: 16),
@@ -1046,7 +1032,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                 const SizedBox(height: 16),
                 Text(
                     listening
-                        ? '在 VSCode 中输入以下地址连接手机（动态端口 ${state?['port'] ?? '未分配'}）：'
+                        ? '在 AI.js Pro VS Code 扩展中输入以下手机地址：'
                         : '手机 IP 地址（开启服务器模式后显示完整连接地址）：',
                     style: muted),
                 const SizedBox(height: 6),
@@ -1090,10 +1076,10 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
           ))),
       actions: [
         TextButton(onPressed: openTutorial, child: const Text('连接教程')),
-        if (widget.activeConnectOnly && connected)
+        if (widget.activeConnectOnly && state?['outboundEnabled'] == true)
           TextButton(
               onPressed: busy ? null : disconnectComputer,
-              child: const Text('断开连接')),
+              child: const Text('停止主动连接')),
         TextButton(
             onPressed: () => Navigator.pop(context), child: const Text('关闭')),
         if (widget.activeConnectOnly && !connected)

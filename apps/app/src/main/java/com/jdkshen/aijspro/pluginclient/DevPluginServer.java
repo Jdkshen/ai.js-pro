@@ -61,35 +61,10 @@ import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.schedulers.Schedulers;
 
 /**
- * Device-side server for the VS Code extension "Auto.js Pro"
- * ({@code hyb1996.auto-js-pro-ext}, protocol family of Pro 9.2 and earlier).
- *
- * <p>The extension either dials the device on {@link #PORT} directly ("输入设备IP地址")
- * or, over USB, runs
- * {@code adb shell content query --uri content://org.autojs.autojspro.debug.provider/debug-server}
- * (served by {@link DebugServerProvider}), forwards a local port to this one and
- * connects to {@code 127.0.0.1:<forwarded>}. Once connected the device speaks
- * first: it sends the {@code hello} frame, the extension answers with its own
- * {@code hello}, then pushes {@code command} / {@code bytes_command} frames
- * (run/save/stop/stopAll plus run_project/save_project with a zipped project).
- *
- * <p>The wire format and message vocabulary are decoded from the extension's
- * bundled {@code dist/extension.js} (webpack module 8012, class {@code LegacyDevice});
- * the command semantics are shared with the old Auto.js 4.x protocol that
- * {@link DevPluginResponseHandler} already implements, so that handler is reused
- * as-is.
- *
- * <p>Only the run/save/stop subset is implemented. The extension's
- * {@code browse_files} / {@code inspect_layout} / {@code debug} commands are not
- * answered with real data; the extension gates those on the advertised
- * {@code app_version_code} (>= 80100 / 80800) which this app intentionally never
- * reaches, and a command that has no handler still receives an empty response.
- *
- * <p>States mirror Pro's {@code DebugService}: {@link ServerState} for the 9317
- * listener and {@link ClientState} for the phone → computer link. A failed client
- * dial is retried after 1 s, at most 3 times (initial attempt + 3 retries); the
- * failure reason is then kept in {@link #getClientError()} for the UI. All client
- * lifecycle logs are prefixed with {@code C-CONN:}.
+ * AI.js Pro VS Code TCP link. The device listens on 9317 or connects to the
+ * computer on 8327 (custom ports supported). Only completed hello handshakes
+ * count as connected. Runs, files, screenshots, layout and Rhino debugging use
+ * the same framed connection; console logs are streamed to attached clients.
  */
 public final class DevPluginServer {
 
@@ -109,7 +84,8 @@ public final class DevPluginServer {
     private static final String KEY_DEVICE_ID = "device_id";
     private static final String KEY_COMPUTER_HOST = "computer_host";
     // The installed Pro extension's LegacyDeviceClient accepts device-initiated TCP here.
-    private static final int COMPUTER_PORT = 8327;
+    public static final int COMPUTER_PORT = AiJsComputerAddress.DEFAULT_PORT;
+    private static final String KEY_COMPUTER_PORT = "computer_port";
     /** 回连失败后按 Pro 的节奏重试：间隔 1 秒，最多 3 次（加首次共 4 次尝试）。 */
     private static final int CLIENT_CONNECT_TIMEOUT_MS = 3000;
     private static final int CLIENT_RETRY_DELAY_MS = 1000;
@@ -154,12 +130,25 @@ public final class DevPluginServer {
     private volatile String mClientError = "";
     /** 电脑端 VS Code 插件最近一次 hello 里报告的 client_version。 */
     private volatile int mClientVersion;
+    private volatile String mClientVersionName = "";
     private ConnectivityManager.NetworkCallback mNetworkCallback;
 
     public String getReconnectHost() {
         return GlobalAppContext.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(KEY_COMPUTER_HOST, "");
     }
+
+    public int getReconnectPort() {
+        return GlobalAppContext.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(KEY_COMPUTER_PORT, COMPUTER_PORT);
+    }
+
+    public String getComputerAddress() {
+        String host = getReconnectHost();
+        return host.isEmpty() ? "" : (host.contains(":") ? "[" + host + "]" : host) + ":" + getReconnectPort();
+    }
+
+    public String getClientVersionName() { return mClientVersionName; }
 
     public ServerState getServerState() {
         return mServerState;
@@ -234,6 +223,7 @@ public final class DevPluginServer {
             mServerError = "";
             mClientError = "";
             mClientVersion = 0;
+            mClientVersionName = "";
             ServerSocket serverSocket = new ServerSocket();
             try {
                 serverSocket.setReuseAddress(true);
@@ -305,6 +295,7 @@ public final class DevPluginServer {
             mNextClientRetry = 0;
             // 启动失败时 stop() 会被服务 onDestroy 调用；保留错误供 UI 读取。
             mClientVersion = 0;
+            mClientVersionName = "";
             if (wasListening) {
                 mServerError = "";
                 mClientError = "";
@@ -335,6 +326,7 @@ public final class DevPluginServer {
      */
     private void clientTick() {
         final String host;
+        final int port;
         final Socket socket;
         final int attempt;
         synchronized (mLock) {
@@ -344,6 +336,7 @@ public final class DevPluginServer {
                 return;
             }
             host = getReconnectHost();
+            port = getReconnectPort();
             if (host.isEmpty()) {
                 mClientState = ClientState.DISCONNECTED;
                 return;
@@ -358,9 +351,9 @@ public final class DevPluginServer {
             mConnectingSocket = socket;
         }
         try {
-            Log.i(LOG_TAG, "C-CONN: 正在连接电脑 " + host + ":" + COMPUTER_PORT
+            Log.i(LOG_TAG, "C-CONN: 正在连接电脑 " + host + ":" + port
                     + "（第 " + attempt + "/" + (CLIENT_MAX_RETRIES + 1) + " 次尝试）");
-            socket.connect(new InetSocketAddress(host, COMPUTER_PORT), CLIENT_CONNECT_TIMEOUT_MS);
+            socket.connect(new InetSocketAddress(host, port), CLIENT_CONNECT_TIMEOUT_MS);
             synchronized (mLock) {
                 if (!isRunningLocked() || mConnectingSocket != socket) {
                     closeSocket(socket);
@@ -375,26 +368,28 @@ public final class DevPluginServer {
                 mSessions.add(session);
                 session.start();
                 mClientState = ClientState.CONNECTING;
-                Log.i(LOG_TAG, "C-CONN: 已建立到电脑 " + host + ":" + COMPUTER_PORT
+                Log.i(LOG_TAG, "C-CONN: 已建立到电脑 " + host + ":" + port
                         + " 的 TCP 连接，等待电脑端调试插件 hello");
             }
         } catch (IOException | RuntimeException error) {
             synchronized (mLock) {
-                if (mConnectingSocket == socket) mConnectingSocket = null;
+                // A canceled dial must not overwrite a newer target's state/error.
+                if (mConnectingSocket != socket) { closeSocket(socket); return; }
+                mConnectingSocket = null;
                 closeSocket(socket);
                 if (!isRunningLocked()) return;
                 if (getReconnectHost().isEmpty()) {
                     mClientState = ClientState.DISCONNECTED;
                     return;
                 }
-                onClientAttemptFailed(host, error);
+                onClientAttemptFailed(host, port, error);
             }
         }
     }
 
     /** 调用方需持有 mLock。 */
-    private void onClientAttemptFailed(String host, Throwable error) {
-        String message = describeConnectError(host, error);
+    private void onClientAttemptFailed(String host, int port, Throwable error) {
+        String message = describeConnectError(host, port, error);
         mClientError = message;
         if (mClientRetries < CLIENT_MAX_RETRIES) {
             mClientRetries++;
@@ -403,6 +398,7 @@ public final class DevPluginServer {
             Log.w(LOG_TAG, "C-CONN: " + message + "（第 " + mClientRetries + "/"
                     + CLIENT_MAX_RETRIES + " 次重试，1 秒后重试）");
         } else {
+            mClientRetries = CLIENT_MAX_RETRIES + 1;
             mClientState = ClientState.DISCONNECTED;
             mNextClientRetry = 0;
             Log.w(LOG_TAG, "C-CONN: " + message + "（已重试 " + CLIENT_MAX_RETRIES
@@ -435,7 +431,7 @@ public final class DevPluginServer {
                     mNextClientRetry = SystemClock.elapsedRealtime() + CLIENT_RETRY_DELAY_MS;
                     Log.i(LOG_TAG, "C-CONN: 与电脑的连接已断开，1 秒后重连");
                 } else {
-                    onClientAttemptFailed(host, new IOException("电脑端接受了连接但没有完成 hello 握手"));
+                    onClientAttemptFailed(host, getReconnectPort(), new IOException("电脑端接受了连接但没有完成 hello 握手"));
                 }
             } else {
                 // 电脑主动连入后断开：保留上次错误，按相同节奏回连。
@@ -451,6 +447,7 @@ public final class DevPluginServer {
     private void onSessionAttached(Session session) {
         synchronized (mLock) {
             mClientVersion = (int) session.mClientVersion;
+            mClientVersionName = session.mClientVersionName;
             mClientState = ClientState.CONNECTED;
             mClientError = "";
             mClientRetries = 0;
@@ -468,25 +465,31 @@ public final class DevPluginServer {
         String host = address.getHostAddress();
         if (!host.equals(getReconnectHost())) {
             GlobalAppContext.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                    .putString(KEY_COMPUTER_HOST, host).apply();
+                    .putString(KEY_COMPUTER_HOST, host).putInt(KEY_COMPUTER_PORT, COMPUTER_PORT).apply();
             Log.i(LOG_TAG, "remembered computer " + host);
         }
     }
 
     /** 主动连接电脑：写地址并清零重试计数，下一次 tick 立即尝试。 */
     public void connectClient(String host) {
+        connectClient(host, COMPUTER_PORT);
+    }
+
+    public void connectClient(String host, int port) {
+        if (port < 1 || port > 65535) throw new IllegalArgumentException("端口应在 1 到 65535 之间");
         String target = host == null ? "" : host.trim();
         synchronized (mLock) {
             GlobalAppContext.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                    .putString(KEY_COMPUTER_HOST, target).apply();
+                    .putString(KEY_COMPUTER_HOST, target).putInt(KEY_COMPUTER_PORT, port).apply();
             mClientRetries = 0;
             mNextClientRetry = 0;
             mClientError = "";
             mClientVersion = 0;
+            mClientVersionName = "";
             mClientState = target.isEmpty() ? ClientState.DISCONNECTED : ClientState.CONNECTING;
         }
         if (!target.isEmpty()) {
-            Log.i(LOG_TAG, "C-CONN: 准备主动连接电脑 " + target + ":" + COMPUTER_PORT);
+            Log.i(LOG_TAG, "C-CONN: 准备主动连接电脑 " + target + ":" + port);
         }
     }
 
@@ -499,6 +502,7 @@ public final class DevPluginServer {
             mNextClientRetry = 0;
             mClientError = "";
             mClientVersion = 0;
+            mClientVersionName = "";
             closeSocket(mConnectingSocket);
             mConnectingSocket = null;
             for (Session session : mSessions) {
@@ -519,24 +523,24 @@ public final class DevPluginServer {
         return "无法在端口 " + PORT + " 启动调试服务：" + raw + "。请检查网络权限后重试";
     }
 
-    private static String describeConnectError(String host, Throwable error) {
-        String target = host + ":" + COMPUTER_PORT;
+    private static String describeConnectError(String host, int port, Throwable error) {
+        String target = host + ":" + port;
         if (error instanceof SocketTimeoutException) {
-            return "连接电脑 " + target + " 超时：请确认电脑已启动 VS Code 调试插件、与手机在同一局域网，且电脑防火墙放行 "
-                    + COMPUTER_PORT + " 端口";
+            return "连接电脑 " + target + " 超时：请确认电脑已启动 VS Code 的 AI.js Pro 扩展、与手机在同一局域网，且电脑防火墙放行 "
+                    + port + " 端口";
         }
         if (error instanceof UnknownHostException) {
             return "找不到电脑地址 " + host + "：请检查 IP 是否填写正确";
         }
         if (error instanceof NoRouteToHostException) {
             return "无法到达电脑 " + target + "：请确认手机与电脑在同一 WiFi，且电脑防火墙放行 "
-                    + COMPUTER_PORT + " 端口";
+                    + port + " 端口";
         }
         if (error instanceof ConnectException) {
             String raw = error.getMessage() == null ? "" : error.getMessage();
             if (raw.contains("refused") || raw.contains("拒绝")) {
-                return "电脑 " + target + " 拒绝连接：请确认电脑已启动 VS Code 调试插件并监听 "
-                        + COMPUTER_PORT + " 端口";
+                return "电脑 " + target + " 拒绝连接：请确认电脑已启动 VS Code 的 AI.js Pro 扩展并监听 "
+                        + port + " 端口";
             }
             return "无法连接电脑 " + target + "：请确认电脑已启动调试插件、与手机在同一局域网";
         }
@@ -545,8 +549,8 @@ public final class DevPluginServer {
             return "连接电脑 " + target + " 失败：" + raw + "。请确认手机网络已连接后重试";
         }
         String raw = error.getMessage() == null ? error.toString() : error.getMessage();
-        return "连接电脑 " + target + " 失败：" + raw + "。请确认电脑已启动 VS Code 调试插件、与手机同一局域网，且防火墙放行 "
-                + COMPUTER_PORT + " 端口";
+        return "连接电脑 " + target + " 失败：" + raw + "。请确认电脑已启动 VS Code 的 AI.js Pro 扩展、与手机同一局域网，且防火墙放行 "
+                + port + " 端口";
     }
 
     private ConnectivityManager connectivity() {
@@ -695,6 +699,7 @@ public final class DevPluginServer {
         private volatile boolean mClosed;
         private volatile boolean mAttached;
         private long mClientVersion;
+        private String mClientVersionName = "";
 
         Session(Socket socket, boolean outgoing) throws IOException {
             mSocket = socket;
@@ -818,11 +823,13 @@ public final class DevPluginServer {
             switch (type) {
                 case "hello":
                     mClientVersion = asLong(message.getAsJsonObject("data"), "client_version");
+                    String versionName = asString(message.getAsJsonObject("data"), "extension_version");
+                    mClientVersionName = versionName == null ? "" : versionName;
                     if (mClientVersion < 1) { close(); break; }
                     try { mSocket.setSoTimeout(0); }
                     catch (IOException error) { close(); break; }
                     mAttached = true;
-                    rememberComputer(mSocket);
+                    if (!mOutgoing) rememberComputer(mSocket);
                     onSessionAttached(this);
                     Log.i(LOG_TAG, "client hello: version=" + mClientVersion);
                     break;
@@ -861,7 +868,9 @@ public final class DevPluginServer {
                             } else if ("stopAll".equals(command)) {
                                 result.addProperty("stoppedCount", mResponseHandler.stopAllScripts());
                             } else {
-                                mResponseHandler.handle(message);
+                                if (!mResponseHandler.handle(message)) {
+                                    result.addProperty("error", "不支持的电脑连接命令：" + command);
+                                }
                             }
                         } catch (Throwable t) {
                             Log.w(LOG_TAG, "command failed", t);
@@ -936,14 +945,18 @@ public final class DevPluginServer {
                         JsonObject data = command.getAsJsonObject("data");
                         data.addProperty("dir", dir.getPath());
                         try {
-                            mResponseHandler.handle(command);
+                            if (!mResponseHandler.handle(command)) {
+                                throw new IllegalArgumentException("不支持的工程命令");
+                            }
                         } catch (Throwable t) {
                             Log.w(LOG_TAG, "bytes command failed", t);
+                            respondError(id, t.getMessage());
+                            return;
                         }
                         respond(id, new JsonObject());
                     }, error -> {
                         Log.w(LOG_TAG, "cannot unzip project", error);
-                        respond(id, new JsonObject());
+                        respondError(id, "工程解压或推送失败：" + error.getMessage());
                     });
         }
 
@@ -1186,6 +1199,7 @@ public final class DevPluginServer {
             message.addProperty("id", mMessageId.incrementAndGet());
             message.addProperty("type", "hello");
             JsonObject data = new JsonObject();
+            data.addProperty("product", "AI.js Pro");
             data.addProperty("device_name", Build.BRAND + " " + Build.MODEL);
             data.addProperty("app_version", BuildConfig.VERSION_NAME);
             data.addProperty("app_version_code", BuildConfig.VERSION_CODE);

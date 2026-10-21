@@ -25,6 +25,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -162,6 +163,10 @@ class LineSink: public std::streambuf {
                 const char c = data[i];
                 if (c == '\n' || c == '\r') {
                     if (!partial_.empty()) {
+                        if (partial_.find("CRITICAL ERROR:") != std::string::npos
+                                || partial_.compare(0, 6, "ERROR:") == 0) {
+                            __android_log_print(ANDROID_LOG_ERROR, kLogTag, "%s", partial_.c_str());
+                        }
                         lines_.push_back(partial_);
                         partial_.clear();
                     }
@@ -436,6 +441,33 @@ bool looksLikeCompleteFen(const std::string& fen) {
     return true;
 }
 
+// The command-line UCI loop calls std::exit(1) when set_position rejects a
+// semantic FEN error or an illegal history move. In an embedded library that
+// exits the entire Android app; global destructors may then race live threads
+// and cause "pthread_mutex_lock called on a destroyed mutex" aborts.
+// Validate with the same Position/move parser before touching the live session.
+std::string validatePositionInput(const std::string& input, bool fullPositionCommand) {
+    std::string fen = input;
+    std::string moves;
+    if (fullPositionCommand) {
+        const auto movesAt = input.find(" moves");
+        fen = input.substr(13, movesAt == std::string::npos ? std::string::npos : movesAt - 13);
+        if (movesAt != std::string::npos) moves = input.substr(movesAt + 6);
+    }
+    Position position;
+    std::deque<StateInfo> states(1);
+    if (auto error = position.set(fen, &states.back())) return error->what();
+    std::istringstream history(moves);
+    std::string text;
+    while (history >> text) {
+        const auto move = UCIEngine::to_move(position, text);
+        if (move == Move::none()) return "Illegal move: " + text;
+        states.emplace_back();
+        position.do_move(move, states.back());
+    }
+    return {};
+}
+
 // 返回 "info ... pv ...\n…\nbestmove ..."：所有带 pv 的 info 行 + bestmove 行。
 // multiPv>1 时先设置 MultiPV，再照常搜索（上层从多行里按 multipv 序号挑候选）。
 // 出错时返回 "error: ..."（上层识别前缀）。
@@ -463,6 +495,13 @@ std::string analyze(JNIEnv* env, jstring fen, jlong movetimeMs, jlong timeoutMs,
             return "error: invalid-fen";
     } else if (!looksLikeCompleteFen(input)) {
         return "error: invalid-fen";
+    }
+
+    const std::string invalid = validatePositionInput(input, fullPositionCommand);
+    if (!invalid.empty()) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "rejected position: %s; input=%.512s",
+                            invalid.c_str(), input.c_str());
+        return "error: invalid-position: " + invalid;
     }
 
     std::lock_guard<std::mutex> call(session->callMutex);

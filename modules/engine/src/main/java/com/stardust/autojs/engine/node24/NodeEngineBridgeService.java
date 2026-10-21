@@ -91,16 +91,18 @@ public class NodeEngineBridgeService extends Service {
         super.onDestroy();
     }
 
-    private void stopOwnedExecutions() {
-        // One Node job owns this connection. Its children must not outlive a
-        // cancelled parent or leave overlay windows over the next sample.
-        for (ExecutionRecord record : EXECUTIONS.values()) {
+    private void stopOwnedExecutions() { stopOwnedExecutions(-1); }
+
+    public static void stopOwnedExecutions(int ownerId) {
+        for (Map.Entry<String, ExecutionRecord> entry : EXECUTIONS.entrySet()) {
+            ExecutionRecord record = entry.getValue();
+            if (ownerId >= 0 && record.ownerId != ownerId) continue;
+            if (!EXECUTIONS.remove(entry.getKey(), record)) continue;
             ScriptEngine child = record.execution == null ? null : record.execution.getEngine();
             try {
                 if (child != null && !child.isDestroyed()) child.forceStop();
             } catch (Throwable error) { Log.w(TAG, "Cannot stop owned child", error); }
         }
-        EXECUTIONS.clear();
     }
 
     private JSONObject handle(JSONObject request) throws Exception {
@@ -110,21 +112,22 @@ public class NodeEngineBridgeService extends Service {
             args = new JSONObject();
         }
         ScriptEngineService service = ScriptEngineService.getInstance();
+        int ownerId = request.optInt("ownerEngineId", -1);
         if (NodeEngineBridgeProtocol.OP_STATUS.equals(action)) {
             // 发现阶段必须能回答「本进程有没有活动 Node 引擎」，即使 ScriptEngineService
             // 尚未初始化也不能抛错，否则客户端无法区分「不是 owner」与「进程坏了」。
-            return ok(engineStatus());
+            return ok(engineStatus(ownerId));
         }
         if (service == null) {
             throw new IllegalStateException("ScriptEngineService 尚未初始化");
         }
         switch (action) {
             case NodeEngineBridgeProtocol.OP_MY:
-                return ok(myEngine(service));
+                return ok(myEngine(ownerId));
             case NodeEngineBridgeProtocol.OP_LIST:
                 return ok(listEngines(service));
             case NodeEngineBridgeProtocol.OP_EXEC:
-                return ok(exec(service, args));
+                return ok(exec(service, args, myEngine(ownerId).getInt("id")));
             case NodeEngineBridgeProtocol.OP_EXECUTION:
                 return ok(executionState(args.optString("token", "")));
             case NodeEngineBridgeProtocol.OP_EMIT:
@@ -142,8 +145,8 @@ public class NodeEngineBridgeService extends Service {
      * 本进程的 owner 状态：是否有活动 Node 引擎、真实 engine id、启动时刻（elapsedRealtime）。
      * 这是客户端在多个候选进程之间做选择的唯一依据，不包含任何虚拟 id。
      */
-    private JSONObject engineStatus() throws Exception {
-        Node24JavaScriptEngine engine = Node24JavaScriptEngine.getRunningEngine();
+    private JSONObject engineStatus(int ownerId) throws Exception {
+        Node24JavaScriptEngine engine = Node24JavaScriptEngine.getRunningEngine(ownerId);
         JSONObject value = new JSONObject();
         value.put("process", processName());
         value.put("pid", android.os.Process.myPid());
@@ -152,7 +155,7 @@ public class NodeEngineBridgeService extends Service {
         if (engine != null) {
             value.put("engineId", engine.getId());
             value.put("engine", engine.getClass().getSimpleName());
-            value.put("startedAt", Node24JavaScriptEngine.getRunningStartedAt());
+            value.put("startedAt", engine.getStartedAt());
         }
         return value;
     }
@@ -193,8 +196,8 @@ public class NodeEngineBridgeService extends Service {
      * 当前 Node 任务的真实主进程引擎 id / execArgv。id 就是 ScriptEngineService 里的
      * Node24JavaScriptEngine id，因此 Rhino 的 engines.all() 能按同一 id 找到父引擎。
      */
-    private JSONObject myEngine(ScriptEngineService service) throws Exception {
-        Node24JavaScriptEngine engine = Node24JavaScriptEngine.getRunningEngine();
+    private JSONObject myEngine(int ownerId) throws Exception {
+        Node24JavaScriptEngine engine = Node24JavaScriptEngine.getRunningEngine(ownerId);
         if (engine == null) {
             throw new IllegalStateException("当前没有正在运行的 Node 引擎");
         }
@@ -217,6 +220,11 @@ public class NodeEngineBridgeService extends Service {
         JSONObject value = new JSONObject();
         value.put("id", engine.getId());
         value.put("engine", engine.getClass().getSimpleName());
+        value.put("className", engine.getClass().getName());
+        if (engine instanceof JavaScriptEngine) {
+            Object source = ((JavaScriptEngine) engine).getSource();
+            value.put("source", source == null ? "" : source.toString());
+        }
         Object configTag = engine.getTag(ExecutionConfig.getTag());
         JSONObject arguments = new JSONObject();
         if (configTag instanceof ExecutionConfig) {
@@ -229,7 +237,7 @@ public class NodeEngineBridgeService extends Service {
         return value;
     }
 
-    private JSONObject exec(ScriptEngineService service, JSONObject args) throws Exception {
+    private JSONObject exec(ScriptEngineService service, JSONObject args, int ownerId) throws Exception {
         String token = args.optString("token", "");
         if (token.isEmpty()) {
             throw new IllegalArgumentException("execScriptFile 缺少 token");
@@ -263,7 +271,9 @@ public class NodeEngineBridgeService extends Service {
         JavaScriptFileSource source = new JavaScriptFileSource(file);
         // 先登记 token 再 execute：子执行线程可能在 execute() 返回前就触发 onStart，
         // 否则会丢掉 engineId，Node 侧 execution.engine() 将永远等不到。
-        ExecutionRecord record = new ExecutionRecord(null);
+        ExecutionRecord record = new ExecutionRecord(null, ownerId);
+        record.source = file.getAbsolutePath();
+        record.arguments = arguments;
         EXECUTIONS.put(token, record);
         ScriptExecution execution;
         try {
@@ -276,7 +286,7 @@ public class NodeEngineBridgeService extends Service {
                     record.engineName = engine.getClass().getSimpleName();
                 }
                 record.engineId = engineId;
-                postToNode(NodeEngineBridgeProtocol.executionEvent(
+                postToNode(ownerId, NodeEngineBridgeProtocol.executionEvent(
                         token, "start", engineId, new JSONArray()));
             }
 
@@ -285,7 +295,7 @@ public class NodeEngineBridgeService extends Service {
                 record.done = true;
                 record.success = true;
                 record.error = null;
-                postToNode(NodeEngineBridgeProtocol.executionEvent(
+                postToNode(ownerId, NodeEngineBridgeProtocol.executionEvent(
                         token, "success", null, new JSONArray()));
             }
 
@@ -298,7 +308,7 @@ public class NodeEngineBridgeService extends Service {
                 record.error = message;
                 JSONArray eventArgs = new JSONArray();
                 eventArgs.put(message);
-                postToNode(NodeEngineBridgeProtocol.executionEvent(
+                postToNode(ownerId, NodeEngineBridgeProtocol.executionEvent(
                         token, "exception", null, eventArgs));
             }
             }, config);
@@ -325,7 +335,10 @@ public class NodeEngineBridgeService extends Service {
         }
         if (record.engineName != null) {
             value.put("engine", record.engineName);
+            value.put("className", "com.stardust.autojs.engine." + record.engineName);
         }
+        value.put("source", record.source);
+        value.put("execArgv", record.arguments == null ? new JSONObject() : record.arguments);
         value.put("done", record.done);
         // 子执行结束状态如实回报：成功/异常都是真实 listener 回调，不把「已结束」伪装成仍在运行。
         if (record.done) {
@@ -402,10 +415,10 @@ public class NodeEngineBridgeService extends Service {
         return null;
     }
 
-    private static void postToNode(JSONObject payload) {
+    private static void postToNode(int ownerId, JSONObject payload) {
         try {
-            Node24JavaScriptEngine.postEventToRunning(
-                    NodeEngineBridgeProtocol.EVENT_ENGINE, payload);
+            Node24JavaScriptEngine owner = Node24JavaScriptEngine.getRunningEngine(ownerId);
+            if (owner != null) owner.postEvent(NodeEngineBridgeProtocol.EVENT_ENGINE, payload);
         } catch (Throwable error) {
             Log.w(TAG, "post execution event to Node failed", error);
         }
@@ -458,6 +471,9 @@ public class NodeEngineBridgeService extends Service {
     }
 
     private static final class ExecutionRecord {
+        final int ownerId;
+        String source;
+        JSONObject arguments;
         volatile ScriptExecution execution;
         volatile Integer engineId;
         volatile String engineName;
@@ -465,8 +481,9 @@ public class NodeEngineBridgeService extends Service {
         volatile boolean success;
         volatile String error;
 
-        ExecutionRecord(ScriptExecution execution) {
+        ExecutionRecord(ScriptExecution execution, int ownerId) {
             this.execution = execution;
+            this.ownerId = ownerId;
         }
     }
 }

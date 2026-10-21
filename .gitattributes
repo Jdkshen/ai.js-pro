@@ -5,6 +5,9 @@
 # Preserve vendored Ace bytes and dependency checksums across platforms.
 apps/app/src/main/assets/editor/ace/** -text
 
+# Preserve the upstream Node/ICU license verbatim, including its original indentation.
+modules/engine/src/main/assets/node24/tools/NODE-LICENSE.txt -text -whitespace
+
 # Large binary dependencies and runtime assets
 *.aar filter=lfs diff=lfs merge=lfs -text
 *.so filter=lfs diff=lfs merge=lfs -text

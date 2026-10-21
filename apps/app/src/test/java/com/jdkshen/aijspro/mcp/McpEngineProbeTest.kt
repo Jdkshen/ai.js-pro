@@ -16,7 +16,8 @@ class McpEngineProbeTest {
 
     @Test
     fun selectsQuickJsAndRhinoExplicitlyInTheRealScriptSource() {
-        mapOf("quickjs" to JavaScriptSource.ENGINE_QUICKJS, "rhino" to JavaScriptSource.ENGINE_RHINO)
+        mapOf("quickjs" to JavaScriptSource.ENGINE_QUICKJS, "rhino" to JavaScriptSource.ENGINE_RHINO,
+            "nodejs" to JavaScriptSource.ENGINE_NODE24)
             .forEach { (engine, expected) ->
                 val probe = McpEngineProbe(engine, body)
                 val source = StringScriptSource(probe.name, probe.source).apply {
@@ -56,7 +57,7 @@ class McpEngineProbeTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun rejectsUnknownEngines() {
-        McpEngineProbe("nodejs", body)
+        McpEngineProbe("unknown", body)
     }
 
     private fun log(content: String) = JsonObject().apply { addProperty("content", content) }

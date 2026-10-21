@@ -136,8 +136,10 @@ public abstract class JavaScriptSource extends ScriptSource {
         //      // @engine quickjs 显式选择新引擎，不做静默切换。
         return directiveEngine != null
                 ? directiveEngine
-                : (mPreferredEngine == null ? ENGINE_RHINO : mPreferredEngine);
+                : (mPreferredEngine == null ? getDefaultEngine() : mPreferredEngine);
     }
+
+    protected String getDefaultEngine() { return ENGINE_RHINO; }
 
     public static boolean requestsQuickJs(String script) {
         return ENGINE_QUICKJS.equals(engineFromDirective(script));

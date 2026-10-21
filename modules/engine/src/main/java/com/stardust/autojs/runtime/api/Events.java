@@ -541,11 +541,15 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         }
         if (mListeningNotification) {
             mAccessibilityBridge.getNotificationObserver().removeNotificationListener(this);
-            mAccessibilityBridge.getNotificationObserver().removeToastListener(this);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2
                     && NotificationListenerService.Companion.getInstance() != null) {
                 NotificationListenerService.Companion.getInstance().removeListener(this);
             }
+            mListeningNotification = false;
+        }
+        if (mListeningToast) {
+            mAccessibilityBridge.getNotificationObserver().removeToastListener(this);
+            mListeningToast = false;
         }
         if (mKeyInterceptor != null) {
             AccessibilityService service = mAccessibilityBridge.getService();

@@ -30,8 +30,7 @@ internal class McpRunInput(args: JsonObject) {
         } ?: JsonObject()
         val allowed = setOf("path", "workingDirectory", "engine", "delay", "interval", "loopTimes", "arguments")
         require(config.keySet().all { it in allowed }) { "config 包含不支持的字段" }
-        engine = (string(args, "engine") ?: string(config, "engine")).orEmpty().lowercase()
-        require(engine.isEmpty() || engine == "rhino" || engine == "quickjs") { "engine 必须是 quickjs 或 rhino" }
+        engine = McpEngines.normalize((string(args, "engine") ?: string(config, "engine")).orEmpty())
         name = string(args, "name") ?: "mcp-source"
         require(name.matches(Regex("[\\p{L}\\p{N}_.-]{1,80}")) && name != "." && name != "..") { "name 必须是 1～80 个字母、数字、下划线、点或横线" }
         val configPath = config.get("path")

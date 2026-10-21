@@ -126,8 +126,12 @@ public final class HostConsoleSink {
             new CopyOnWriteArrayList<>();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static boolean sClearingGlobal;
-    private static final ConsoleImpl.LogListener GLOBAL_CLEAR_LISTENER = new ConsoleImpl.LogListener() {
-        @Override public void onNewLog(ConsoleImpl.LogEntry entry) { }
+    private static final ConsoleImpl.LogListener GLOBAL_CONSOLE_LISTENER = new ConsoleImpl.LogListener() {
+        @Override public void onNewLog(ConsoleImpl.LogEntry entry) {
+            if (entry == null || entry.content == null || Boolean.TRUE.equals(IN_SINK_WRITE.get())) return;
+            MainLine parsed = parseGlobalConsoleLine(entry.content.toString());
+            appendInternal("main", "main", entry.level, parsed.text, false, entry.time);
+        }
         @Override public void onLogClear() {
             if (!sClearingGlobal) clear();
         }
@@ -135,11 +139,11 @@ public final class HostConsoleSink {
     private static final java.text.SimpleDateFormat TIME_FORMAT =
             new java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US);
 
-    /** 主进程 GlobalConsole 的 log4j appender 是否已挂上（每进程只挂一次）。 */
+    /** 主进程 GlobalConsole 的独立监听器是否已挂上（每进程只挂一次）。 */
     private static volatile boolean sMainTapInstalled;
     /**
      * 主进程 GlobalConsole 的行 -> HostConsoleSink 的回流标记，防止死循环：
-     * 本类把 :script/:native 行写进 GlobalConsole 时置 true，appender 收到这些事件时直接丢弃
+     * 本类把 :script/:native 行写进 GlobalConsole 时置 true，监听器收到这些事件时直接丢弃
      * （它们本来就已经在环里了）。
      */
     private static final ThreadLocal<Boolean> IN_SINK_WRITE = new ThreadLocal<Boolean>() {
@@ -398,8 +402,8 @@ public final class HostConsoleSink {
                 Log.i(TAG, line);
                 return;
             }
-            // 防止「写 GlobalConsole 又被主进程 log4j appender 抓回来」造成回环/重复：
-            // appender 看到这个标记会直接丢弃（这些行本来就来自脚本进程，已在环里）。
+            // 防止「写 GlobalConsole 又被主进程监听器抓回来」造成回环/重复：
+            // 监听器看到这个标记会直接丢弃（这些行本来就来自脚本进程，已在环里）。
             IN_SINK_WRITE.set(Boolean.TRUE);
             try {
                 String name = entry.name.isEmpty() ? entry.token : entry.name;
@@ -419,25 +423,14 @@ public final class HostConsoleSink {
     }
 
     // ------------------------------------------------------------------
-    // 主进程日志接入统一流：GlobalConsole 的 log4j appender（不抢 ConsoleView 的 LogListener 槽位）
-    // ------------------------------------------------------------------
+    // 主进程控制台直接接入统一流，独立订阅不抢占其他日志视图。
+    // 不经 log4j：文件日志级别不得过滤实时控制台的 Verbose/Debug 行。
 
-    /**
-     * 确保主进程 GlobalConsole 的每一行都进统一环（token=main）。
-     *
-     * <p>为什么用 log4j appender 而不是 {@code ConsoleImpl.setLogListener}：那个槽位是单个
-     * WeakReference，ConsoleView/原生日志页/编辑器都在用；抢过来会把它们的实时刷新弄坏。
-     * GlobalConsole.println 同时写 log4j（{@code LOGGER.log}）和 android Log，这里给 logger 加
-     * appender 就能旁路拿到所有主进程 console 行（含主进程脚本、UI 控制台消息），互不影响。
-     *
-     * <p>首次安装时会把 GlobalConsole 已有历史（{@code getAllLogs()}）灌进环，保证打开日志 UI
-     * 就能看到本进程启动以来的主进程日志；之后按新行追加。只在本进程是主进程时安装。
-     * 多进程构建里 :script/:native 不安装（避免各自一份 main 流互相污染）。
-     */
     public static void ensureMainConsoleTap() {
         if (sMainTapInstalled) {
             return;
         }
+        if (AutoJs.getInstance() == null || AutoJs.getInstance().getGlobalConsole() == null) return;
         if (!isMainProcess()) {
             return;
         }
@@ -449,15 +442,15 @@ public final class HostConsoleSink {
         }
         try {
             seedFromGlobalConsole();
-            org.apache.log4j.Logger logger =
-                    org.apache.log4j.Logger.getLogger(GlobalConsole.class);
-            logger.addAppender(new GlobalConsoleAppender());
+            // ConsoleImpl supports independent observers. The log4j path is level
+            // filtered, so using it here silently lost Verbose/Debug console rows.
             AutoJs autojs = AutoJs.getInstance();
             if (autojs != null && autojs.getGlobalConsole() != null) {
-                autojs.getGlobalConsole().addLogListener(GLOBAL_CLEAR_LISTENER);
+                autojs.getGlobalConsole().addLogListener(GLOBAL_CONSOLE_LISTENER);
             }
             Log.i(TAG, "main console tap installed (token=main)");
         } catch (Throwable error) {
+            sMainTapInstalled = false;
             Log.w(TAG, "安装主进程 console 统一流失败", error);
         }
     }
@@ -575,35 +568,6 @@ public final class HostConsoleSink {
         MainLine(int level, String text) {
             this.level = level;
             this.text = text == null ? "" : text;
-        }
-    }
-
-    /** GlobalConsole 的 log4j appender：把主进程 console 行旁路进统一环。 */
-    private static final class GlobalConsoleAppender extends org.apache.log4j.AppenderSkeleton {
-        @Override
-        protected void append(org.apache.log4j.spi.LoggingEvent event) {
-            if (event == null || Boolean.TRUE.equals(IN_SINK_WRITE.get())) {
-                return;
-            }
-            try {
-                String message = event.getRenderedMessage();
-                if (message == null || message.isEmpty()) {
-                    return;
-                }
-                MainLine parsed = parseGlobalConsoleLine(message);
-                appendInternal("main", "main", parsed.level, parsed.text, false, event.timeStamp);
-            } catch (Throwable error) {
-                Log.w(TAG, "主进程 console appender 处理失败", error);
-            }
-        }
-
-        @Override
-        public void close() {
-        }
-
-        @Override
-        public boolean requiresLayout() {
-            return false;
         }
     }
 

@@ -242,6 +242,9 @@ const logMaxLines = 10000;
 /// 原版 console_initial_read_file_size 默认 256 KB（最小 4 KB）。
 const logWindowBytes = 256 * 1024;
 
+/// reverse 列表里 offset≈0 就是最新一行；小于该阈值视为仍跟随最新日志。
+const double _logFollowThreshold = 24;
+
 /// 照着原版 addLog + parseLog 把一段日志文本切成要显示的条目。
 ///
 /// 三条规则，全部来自 smali：
@@ -350,6 +353,15 @@ class _LogPageState extends State<LogPage>
   ModalRoute<dynamic>? route;
   final scroll = ScrollController();
 
+  /// 是否跟随最新日志：reverse 列表 offset=0 时新行自然停在底部；
+  /// 用户上翻后不再抢滚动，改由右下角按钮提示“有新日志/回到最新”。
+  bool followTail = true;
+  bool unseenLogs = false;
+
+  /// 历史文件/任务日志“清空显示”后暂停自动重读，直到手动刷新或切模式；
+  /// 否则任务历史模式 500ms 轮询会把刚清掉的文件内容立刻刷回来。
+  bool historySuppressed = false;
+
   /// 非空 = 任务维度日志（任务页「查看日志」）：只显示该 token 的统一实时流。
   String? get taskToken {
     final value = widget.token;
@@ -421,13 +433,15 @@ class _LogPageState extends State<LogPage>
   /// 级别过滤：null = 全部（Pro 默认 TRACE=Verbose）；否则显示该级别及以上。
   String? levelFilter;
 
-  bool get observing =>
-      foreground && currentRoute && (route?.isCurrent ?? true);
+  // RouteAware can run before Navigator updates isCurrent. Use the live route
+  // value so an early cached false cannot leave an on-screen log page frozen.
+  bool get observing => foreground && (route?.isCurrent ?? currentRoute);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    scroll.addListener(_onLogScroll);
     logSubscription = LocalBridge.logEvents.listen((event) {
       if (!mounted || !observing || historyMode || clearingLive) return;
       if (event is Map && event['version'] == liveVersion &&
@@ -439,7 +453,7 @@ class _LogPageState extends State<LogPage>
     });
     loadLogAppearance();
     final lifecycle = WidgetsBinding.instance.lifecycleState;
-    foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    foreground = lifecycle != AppLifecycleState.paused && lifecycle != AppLifecycleState.detached;
     // 首帧后兜底：正常路径是 didChangeDependencies -> routeVisibility -> observe -> load；
     // 但如果 RouteAware/生命周期事件晚到或当前 route 判定瞬间不 current，旧实现会一直停在
     // 「无内容也无错误」的空白页（刷新按钮也会被 observing 挡住）。这里再主动触发一次，
@@ -487,7 +501,7 @@ class _LogPageState extends State<LogPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState value) {
-    final active = value == AppLifecycleState.resumed;
+    final active = value != AppLifecycleState.paused && value != AppLifecycleState.detached;
     if (active == foreground) return;
     foreground = active;
     observe();
@@ -502,16 +516,30 @@ class _LogPageState extends State<LogPage>
       return;
     }
     if (historyMode) {
+      // 清空历史显示后保持空态，但计时器继续跑；手动刷新解除抑制后会自然恢复轮询。
+      if (historySuppressed) {
+        timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+          if (historySuppressed) return;
+          if (taskMode) {
+            loadLive(silent: true);
+          } else {
+            load(silent: true);
+          }
+        });
+        return;
+      }
       if (taskMode) {
         // 任务维度的历史：一次性读该任务的运行日志文件（logs 桥按 token 过滤），刷新可重读。
         loadLive(fresh: true);
-        timer = Timer.periodic(const Duration(milliseconds: 500), (_) => loadLive(silent: true));
+        timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+          if (!historySuppressed) loadLive(silent: true);
+        });
         return;
       }
       // 普通日志页的历史：沿用原有文件增量读取 + 轮询，行为与旧版一致（含加载更早）。
       load(silent: tail.isNotEmpty, fresh: true);
       timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-        load(silent: true);
+        if (!historySuppressed) load(silent: true);
       });
       return;
     }
@@ -522,6 +550,44 @@ class _LogPageState extends State<LogPage>
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       loadLive(silent: true);
     });
+  }
+
+  /// reverse 列表的 offset 越小越靠近最新；只有回到阈值内才恢复跟随。
+  void _onLogScroll() {
+    if (!mounted || !scroll.hasClients) return;
+    final atLatest = scroll.offset <= _logFollowThreshold;
+    if (atLatest == followTail && (!atLatest || !unseenLogs)) return;
+    setState(() {
+      followTail = atLatest;
+      if (atLatest) unseenLogs = false;
+    });
+  }
+
+  /// 新内容到达且用户仍在底部时，把 reverse 列表钉回 offset=0；
+  /// 用户上翻期间不抢滚动，只标记有新行。
+  ///
+  /// 除了可见条数增长，也用 [contentChanged] 兜底：环形缓冲到 10000 行上限后
+  /// 新行会挤掉旧行，条数不变但确实有新日志到达。
+  void _noteIncoming(int previousVisible, {bool contentChanged = false}) {
+    final grew = parsed.length > previousVisible;
+    if (!grew && !(contentChanged && parsed.isNotEmpty)) return;
+    if (!followTail) {
+      unseenLogs = true;
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !followTail || !scroll.hasClients) return;
+      if (scroll.offset <= 0.5) return;
+      scroll.jumpTo(0);
+    });
+  }
+
+  void _jumpToLatest() {
+    setState(() {
+      followTail = true;
+      unseenLogs = false;
+    });
+    if (scroll.hasClients) scroll.jumpTo(0);
   }
 
   @override
@@ -555,6 +621,7 @@ class _LogPageState extends State<LogPage>
 
   Future<void> load(
       {bool silent = false, bool fresh = false, bool force = false}) {
+    if (historySuppressed && !force) return Future.value();
     if (!observing && !force) return Future.value();
     if (reading != null) {
       if (fresh) reread = true;
@@ -576,7 +643,9 @@ class _LogPageState extends State<LogPage>
   /// 首次无 from → 读尾部窗口；之后带 from → 只取新增字节（Pro seek(lastFileSize)）。
   Future<void> read(int epoch,
       {required bool silent, bool force = false}) async {
-    final showLoading = !silent || tail.isEmpty;
+    // 空文件也读过一次后 loaded=true；静默轮询不要再每 500ms 亮一次 loading。
+    // 已报错且没有内容时同样不闪 loading，错误条本身就是反馈。
+    final showLoading = !silent || (!loaded && error == null);
     if (showLoading) setState(() => loading = true);
     try {
       final incremental = readOffset > 0;
@@ -627,7 +696,10 @@ class _LogPageState extends State<LogPage>
       fileLength = nextLength;
       readOffset = nextEnd;
       if (nextEnd == 0) readOffset = nextStart;
+      final previousVisible = parsed.length;
       reparseIfNeeded();
+      // 历史文件增量只会在末尾追加，用户上翻时不要被新行拽走。
+      _noteIncoming(previousVisible, contentChanged: appended);
       setState(() {
         truncated = nextTruncated || earlierFrom > 0;
         loaded = true;
@@ -652,13 +724,17 @@ class _LogPageState extends State<LogPage>
   Future<void> loadLive(
       {bool silent = false, bool fresh = false, bool force = false}) {
     if (clearingLive) return Future.value();
+    // 历史/任务历史模式里“清空显示”之后，轮询不要再把文件内容刷回来；
+    // 手动刷新或切换实时/历史会清掉这个抑制标记。
+    if (historySuppressed && !force && !fresh) return Future.value();
     if (!observing && !force) return Future.value();
     if (liveReading != null) {
       if (fresh) liveReread = true;
       return liveReading!;
     }
     final epoch = observationEpoch;
-    final showLoading = !silent || (!loaded && liveText.isEmpty);
+    final showLoading =
+        !silent || (!loaded && liveText.isEmpty && error == null);
     if (showLoading) setState(() => loading = true);
     late Future<void> request;
     request = (historyMode
@@ -749,6 +825,13 @@ class _LogPageState extends State<LogPage>
       applyLiveText();
     } catch (e) {
       if (!mounted || epoch != observationEpoch) return;
+      final failure = e.toString();
+      // 轮询偶发失败时不能把已经显示的行清空（旧实现会整页变空），先保留内容并报错。
+      if (liveText.isNotEmpty) {
+        liveHint = '实时日志刷新失败，保留当前内容';
+        if (error != failure) setState(() => error = failure);
+        return;
+      }
       // 桥未实现/旧构建时不要整页报错：回退运行日志文件，再不行给空态提示。
       final file = await readRunLogFile(epoch);
       if (!mounted || epoch != observationEpoch) return;
@@ -756,10 +839,13 @@ class _LogPageState extends State<LogPage>
       liveShowingFile = file != null;
       if (file != null) {
         liveHint = taskMode ? '实时日志通道不可用，显示运行日志文件' : '实时日志通道不可用，显示最近一次运行日志文件';
+        applyLiveText();
       } else {
         liveHint = '实时日志通道不可用，暂无日志';
+        // 保留 error 避免下一轮同一错误时 applyLiveText 先清空再设回造成闪动。
+        applyLiveText(clearError: false);
+        if (error != failure) setState(() => error = failure);
       }
-      applyLiveText();
     }
   }
 
@@ -785,9 +871,15 @@ class _LogPageState extends State<LogPage>
       applyLiveText();
     } catch (e) {
       if (!mounted || epoch != observationEpoch) return;
+      final failure = e.toString();
+      if (liveText.isNotEmpty) {
+        liveHint = '历史日志刷新失败，保留当前内容';
+        if (error != failure) setState(() => error = failure);
+        return;
+      }
       liveText = '';
-      applyLiveText();
-      setState(() => error = e.toString());
+      applyLiveText(clearError: false);
+      if (error != failure) setState(() => error = failure);
     }
   }
 
@@ -856,24 +948,30 @@ class _LogPageState extends State<LogPage>
   }
 
   /// 把实时流/回退文件的原始文本交给既有解析/过滤/渲染管线（复用 6 档过滤/搜索/等级着色）。
-  void applyLiveText() {
+  ///
+  /// [clearError] 为 false 时保留上一轮错误（调用方随后按需设置），避免轮询失败时
+  /// “先清空再设回”导致每秒重建两次。
+  void applyLiveText({bool clearError = true}) {
     // 实时流每 500ms 轮询一次，没有新行时不要 setState 整页重刷。
+    final contentChanged = tail != liveText && liveText.isNotEmpty;
     final unchanged = loaded &&
         tail == liveText &&
         earlier.isEmpty &&
-        error == null &&
+        (clearError ? error == null : true) &&
         appliedLiveHint == liveHint;
+    final previousVisible = parsed.length;
     tail = liveText;
     earlier = '';
     earlierFrom = 0;
     truncated = false;
     reparseIfNeeded();
+    _noteIncoming(previousVisible, contentChanged: contentChanged);
     if (unchanged) return;
     appliedLiveHint = liveHint;
     if (mounted) {
       setState(() {
         loaded = true;
-        error = null;
+        if (clearError) error = null;
       });
     }
   }
@@ -893,6 +991,7 @@ class _LogPageState extends State<LogPage>
   /// 切换时把实时增量位置与文件读取位置一起复位，再按新模式重新加载。
   void toggleHistory() {
     historyMode = !historyMode;
+    historySuppressed = false;
     liveText = '';
     liveVersion = 0;
     liveGeneration = null;
@@ -900,6 +999,8 @@ class _LogPageState extends State<LogPage>
     liveSuppressFallback = false;
     liveHint = null;
     liveReread = false;
+    followTail = true;
+    unseenLogs = false;
     // 历史模式的文件增量状态（普通页用；任务页历史是一次性读文件，同样复位更稳）。
     tail = '';
     earlier = '';
@@ -915,6 +1016,9 @@ class _LogPageState extends State<LogPage>
     loaded = false;
     setState(() {});
     observe();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && scroll.hasClients) scroll.jumpTo(0);
+    });
   }
 
   /// 往前翻一屏（Pro 用 SwipeRefreshLayout 重载首屏，这里保留 task-22 的增量加载）。
@@ -992,7 +1096,7 @@ class _LogPageState extends State<LogPage>
   Widget _levelButton() {
     final effective = levelFilter ?? 'TRACE';
     return PopupMenuButton<String>(
-      tooltip: '日志级别（Pro 6 档：Verbose/Debug/Info/Warn/Error/Assert）',
+      tooltip: '日志级别（6 档：Verbose/Debug/Info/Warn/Error/Assert）',
       initialValue: effective,
       onSelected: _setLevel,
       itemBuilder: (context) {
@@ -1025,8 +1129,9 @@ class _LogPageState extends State<LogPage>
   }
 
   void _setLevel(String level) {
-    // Pro 的默认档 TRACE 等价于「全部」，UI 上仍显示 Verbose。
+    // 默认档 TRACE 等价于「全部」，UI 上仍显示 Verbose。
     levelFilter = level == 'TRACE' ? null : level;
+    unseenLogs = false;
     reparseIfNeeded();
     setState(() {});
   }
@@ -1042,19 +1147,21 @@ class _LogPageState extends State<LogPage>
   }
 
   Future<void> _clearDisplay() async {
-    // 对齐 Pro LogView 的「清空」：只清显示中的内存列表，不删日志文件；读取位置保持不变。
+    // 只清显示，不删日志文件：实时模式清统一缓冲；历史/任务历史模式只清本地列表。
     if (!historyMode) {
       ++observationEpoch;
       clearingLive = true;
       try {
         final result = await LocalBridge.call('clearLiveLogs');
         if (!mounted) return;
-        if (result is Map) {
-          liveVersion = (result['version'] as num?)?.toInt() ?? liveVersion;
-          liveGeneration = (result['generation'] as num?)?.toInt() ?? liveGeneration;
+        if (result is! Map || result['cleared'] != true) {
+          throw StateError('清空结果未确认');
         }
-      } catch (error) {
-        if (mounted) message(context, '清空日志失败：$error');
+        liveVersion = (result['version'] as num?)?.toInt() ?? liveVersion;
+        liveGeneration =
+            (result['generation'] as num?)?.toInt() ?? liveGeneration;
+      } catch (e) {
+        if (mounted) message(context, '清空日志失败：$e');
         return;
       } finally {
         clearingLive = false;
@@ -1065,36 +1172,63 @@ class _LogPageState extends State<LogPage>
       liveShowingFile = false;
       liveSuppressFallback = true;
       liveHint = null;
+    } else {
+      // 任务历史模式每 500ms 会重读运行日志文件；不暂停的话清空后会立刻刷回来。
+      historySuppressed = true;
+      liveHint = '已清空显示（日志文件未删除）；下拉刷新可重新读取';
     }
     setState(() {
+      followTail = true;
+      unseenLogs = false;
+      appliedLiveHint = null;
       tail = '';
       earlier = '';
       earlierFrom = 0;
+      tailStart = 0;
+      readOffset = 0;
+      fileLength = 0;
+      truncated = false;
+      loadingEarlier = false;
       parsedFrom = '';
       parsed = const [];
       reparseIfNeeded();
     });
     if (!historyMode) loadLive(silent: true);
+    if (mounted) {
+      message(context,
+          historyMode ? '已清空显示（日志文件未删除）' : '已清空日志显示（不删除日志文件）');
+    }
   }
 
   Future<void> _refresh() {
+    historySuppressed = false;
     if (!historyMode) return loadLive(fresh: true, force: true);
     if (taskMode) return loadLive(fresh: true, force: true);
     return load(fresh: true, force: true);
   }
 
   Future<void> _copyAll() async {
+    if (visibleLines.isEmpty) {
+      if (mounted) message(context, '当前没有可复制的日志');
+      return;
+    }
     try {
       await Clipboard.setData(ClipboardData(text: _visibleText));
-      if (mounted) message(context, '日志已复制');
+      if (mounted) {
+        message(context, '已复制 ${visibleLines.length} 条显示日志');
+      }
     } catch (e) {
-      if (mounted) message(context, e.toString());
+      if (mounted) message(context, '复制日志失败：$e');
     }
   }
 
   String get _visibleText => visibleLines.map((item) => item.text).join('\n');
 
   Future<void> _shareLogs() async {
+    if (visibleLines.isEmpty) {
+      if (mounted) message(context, '当前没有可分享的日志');
+      return;
+    }
     try {
       await LocalBridge.call('shareLogText', {'text': _visibleText});
     } catch (e) {
@@ -1112,7 +1246,7 @@ class _LogPageState extends State<LogPage>
           PopupMenuItem<String>(
               value: 'copy',
               enabled: visibleLines.isNotEmpty,
-              child: const Text('复制显示日志')),
+              child: Text('复制显示日志（${visibleLines.length} 条）')),
           PopupMenuItem<String>(
               value: 'refresh', enabled: !loading, child: const Text('刷新日志')),
         ],
@@ -1137,6 +1271,7 @@ class _LogPageState extends State<LogPage>
       onChanged: (value) {
         setState(() {
           searchText = value.isEmpty ? null : value;
+          unseenLogs = false;
           reparseIfNeeded();
         });
       },
@@ -1240,6 +1375,13 @@ class _LogPageState extends State<LogPage>
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                                 fontSize: 12, color: palette.secondaryText))),
+                    if (ready && visibleLines.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Text('${visibleLines.length} 条',
+                          key: const ValueKey('log-visible-count'),
+                          style: TextStyle(
+                              fontSize: 11, color: palette.secondaryText)),
+                    ],
                     const SizedBox(width: 2),
                     ActionIcon(
                         tooltip: historyMode ? '切换到实时日志' : '切换到运行日志文件（历史）',
@@ -1252,7 +1394,22 @@ class _LogPageState extends State<LogPage>
               Expanded(
                   key: const ValueKey('log-content-area'),
                   child: _buildContent(context, palette)),
-            ])));
+            ]),
+            // 上翻查看旧日志时新行不抢滚动；按钮提示有新日志并一键回到底部。
+            floatingActionButton: !followTail && visibleLines.isNotEmpty
+                ? FloatingActionButton.extended(
+                    key: const ValueKey('log-follow-latest'),
+                    heroTag: 'log-follow-latest',
+                    tooltip: unseenLogs ? '有新日志，回到最新' : '回到最新日志',
+                    backgroundColor: palette.refreshBackground,
+                    foregroundColor: palette.refreshIndicator,
+                    elevation: 2,
+                    onPressed: _jumpToLatest,
+                    icon: const Icon(Icons.arrow_downward, size: 18),
+                    label: Text(unseenLogs ? '有新日志' : '回到最新',
+                        style: const TextStyle(fontSize: 12)),
+                  )
+                : null));
   }
 
   // ---- 内容渲染（调色板 + 搜索高亮） ------------------------------------
@@ -1281,8 +1438,11 @@ class _LogPageState extends State<LogPage>
                 textAlign: TextAlign.center,
                 style: TextStyle(color: palette.secondaryText)));
       }
-      return _stateView(palette,
-          Text('暂无运行日志', style: TextStyle(color: palette.secondaryText)));
+      return _stateView(
+          palette,
+          Text(liveHint ?? '暂无运行日志',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: palette.secondaryText)));
     }
     if (visibleLines.isEmpty) {
       return _stateView(
@@ -1418,13 +1578,13 @@ class GuidePage extends StatelessWidget {
             _GuideEntry('设备权限',
                 '权限开关会进入系统设置，返回后同步真实授权状态。设备连接页的“Shizuku 启动无障碍”可通过已启动的 Shizuku 授权并开启本应用的无障碍服务；首次使用在 Shizuku 弹窗中允许，拒绝时不会修改无障碍设置。'),
             _GuideEntry('MCP 服务',
-                '侧栏“开发”里的 MCP 开关控制本应用的自建服务。点击“MCP 服务”打开管理页，可复制本机、局域网地址和客户端配置；默认端口为 8766。升级后默认关闭，开启时默认仅本机访问；局域网需单独开启。客户端直接填写地址即可，无需访问令牌。脚本执行和语法检查使用本机引擎，读取控件和截屏需要无障碍服务。'),
+                '侧栏“开发”里的 MCP 开关控制本应用的自建服务。点击“MCP 服务”打开管理页，可查看真实运行状态、实际端口、心跳和错误，并复制本机/局域网地址与客户端配置。默认端口 8765，被占用时自动顺延到 8795，实际端口以管理页为准；服务开启后监听 0.0.0.0，没有单独的局域网开关，且完全免令牌，请只在可信 WiFi 使用。客户端填写 http://…/mcp 即可；公开 41 个工具（34 个标准名 + 7 个兼容名）。脚本执行和语法检查使用本机引擎，读取控件和截屏需要无障碍服务。'),
             _GuideEntry('连接电脑',
-                '插件页的电脑图标打开“设备连接信息”，开启服务器模式后，把手机地址填入 VSCode。侧栏“主动连接电脑”则直接填写电脑 IP，由手机连接电脑端调试服务；默认端口 21029。两种方式都要求手机和电脑的网络互通，连接状态会自动刷新。'),
+                '电脑连接使用 AI.js Pro 自家的 VS Code 扩展：电脑端扩展监听 8327，手机端服务器使用 9317。两端需网络互通，电脑防火墙要放行对应端口；连接状态以设备连接页显示为准。'),
             _GuideEntry('任务管理',
                 '第五个导航图标打开管理页。列表显示正在运行的 Rhino、Node.js 脚本，以及已有的定时和意图任务，可搜索、折叠分组、查看路径、停止脚本或取消计划。右下角按钮停止确认时的全部运行脚本。管理页右上角也可打开设备连接。'),
             _GuideEntry('运行日志',
-                '工具栏、设置页和悬浮条都打开同一个 Flutter「运行日志」页：默认显示统一实时流（主进程 + :script + :native），可切「实时/历史」；支持 6 档等级过滤、搜索、清空、复制。任务页每个运行中任务的日志图标会带上任务 token，只显示该任务的输出。读取失败保留上次日志并可重试。'),
+                '工具栏、设置页和悬浮条都打开同一个 Flutter「运行日志」页：默认显示统一实时流（主进程 + :script + :native），可切「实时/历史」；支持 6 档等级过滤、搜索、复制和清空。任务页每个运行中任务的日志图标会带上任务 token，只显示该任务的输出。上翻查看旧日志时不会被新日志拽回，右下角“有新日志/回到最新”可回到最新；清空只清显示，不删日志文件。读取失败保留上次日志并可重试。'),
             _GuideEntry('导航',
                 '点击图标选择页面，或按住导航横向拖动。拖动距离控制页面进度，松手后停在最近一页。内容区域也支持左右滑动，目录和列表滚动位置会保留。')
           ])));

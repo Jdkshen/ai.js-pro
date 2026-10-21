@@ -5,6 +5,9 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __commonJS = (cb, mod) => function __require() {
+  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -27,6 +30,368 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// package.json
+var require_package = __commonJS({
+  "package.json"(exports2, module2) {
+    module2.exports = {
+      name: "aijspro-vscode",
+      displayName: "AI.js Pro",
+      description: "\u8FDE\u63A5 AI.js Pro\uFF08Android\uFF09\uFF1A\u8FD0\u884C\u5F53\u524D\u6587\u4EF6/\u6574\u4E2A\u5DE5\u7A0B\u3001\u5B9E\u65F6\u65E5\u5FD7\u3001Rhino \u65AD\u70B9\u8C03\u8BD5\u3001\u4FDD\u5B58\u81EA\u52A8\u63A8\u9001\u3001\u8BBE\u5907\u6587\u4EF6\u6D4F\u89C8\u4E0E\u62C9\u53D6\u3002",
+      version: "0.3.3",
+      publisher: "jdkshen",
+      license: "MIT",
+      engines: {
+        vscode: "^1.85.0"
+      },
+      categories: [
+        "Programming Languages",
+        "Other"
+      ],
+      icon: "images/icon.png",
+      main: "./dist/extension.js",
+      activationEvents: [
+        "onStartupFinished"
+      ],
+      contributes: {
+        commands: [
+          {
+            command: "aijspro.help",
+            title: "AI.js Pro: \u4F7F\u7528\u6559\u7A0B(Help)",
+            icon: "$(book)"
+          },
+          {
+            command: "aijspro.connect",
+            title: "AI.js Pro: \u8FDE\u63A5\u5230\u65B0\u8BBE\u5907(Connect)",
+            icon: "$(plug)"
+          },
+          {
+            command: "aijspro.selectDevice",
+            title: "AI.js Pro: \u9009\u62E9\u8BBE\u5907(Select Device)",
+            icon: "$(device-mobile)"
+          },
+          {
+            command: "aijspro.scanDevices",
+            title: "AI.js Pro: \u91CD\u65B0\u626B\u63CF\u8BBE\u5907(Scan Devices)",
+            icon: "$(sync)"
+          },
+          {
+            command: "aijspro.forgetDevices",
+            title: "AI.js Pro: \u5220\u9664\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907(Delete Devices)",
+            icon: "$(trash)"
+          },
+          {
+            command: "aijspro.run",
+            title: "AI.js Pro: \u8FD0\u884C(Run)",
+            icon: "$(run)"
+          },
+          {
+            command: "aijspro.runFile",
+            title: "AI.js Pro: \u8FD0\u884C\u5355\u6587\u4EF6(Run File)",
+            icon: "$(play)"
+          },
+          {
+            command: "aijspro.runProject",
+            title: "AI.js Pro: \u8FD0\u884C\u9879\u76EE(Run Project)",
+            icon: "$(cloud-upload)"
+          },
+          {
+            command: "aijspro.rerun",
+            title: "AI.js Pro: \u91CD\u65B0\u8FD0\u884C(Rerun)",
+            icon: "$(debug-restart)"
+          },
+          {
+            command: "aijspro.stop",
+            title: "AI.js Pro: \u505C\u6B62\u5F53\u524D\u811A\u672C(Stop)",
+            icon: "$(debug-stop)"
+          },
+          {
+            command: "aijspro.stopAll",
+            title: "AI.js Pro: \u505C\u6B62\u6240\u6709\u811A\u672C(Stop All)",
+            icon: "$(stop-circle)"
+          },
+          {
+            command: "aijspro.inspectLayout",
+            title: "AI.js Pro: \u5E03\u5C40\u5206\u6790(Inspect Layout)",
+            icon: "$(list-tree)"
+          },
+          {
+            command: "aijspro.pickColor",
+            title: "AI.js Pro: \u56FE\u8272\u52A9\u624B(Screenshot & Pick Color)",
+            icon: "$(symbol-color)"
+          },
+          {
+            command: "aijspro.browseFiles",
+            title: "AI.js Pro: \u6D4F\u89C8\u8BBE\u5907\u6587\u4EF6(Browse Device Files)",
+            icon: "$(folder-opened)"
+          },
+          {
+            command: "aijspro.saveFile",
+            title: "AI.js Pro: \u4FDD\u5B58\u5F53\u524D\u6587\u4EF6(Save)",
+            icon: "$(save)"
+          },
+          {
+            command: "aijspro.saveProject",
+            title: "AI.js Pro: \u4FDD\u5B58\u9879\u76EE(Save Project)",
+            icon: "$(archive)"
+          },
+          {
+            command: "aijspro.newRhinoProject",
+            title: "AI.js Pro: \u65B0\u5EFA\u7B2C\u4E00\u4EE3API\u9879\u76EE(Rhino)",
+            icon: "$(new-folder)"
+          },
+          {
+            command: "aijspro.newQuickJsProject",
+            title: "AI.js Pro: \u65B0\u5EFA\u7B2C\u4E8C\u4EE3API\u9879\u76EE(QuickJS)",
+            icon: "$(new-folder)"
+          },
+          {
+            command: "aijspro.newRhinoProjectInWorkspace",
+            title: "AI.js Pro: \u5728\u5DE5\u4F5C\u533A\u5EFA\u7ACB\u7B2C\u4E00\u4EE3API\u9879\u76EE(Rhino)"
+          },
+          {
+            command: "aijspro.newQuickJsProjectInWorkspace",
+            title: "AI.js Pro: \u5728\u5DE5\u4F5C\u533A\u5EFA\u7ACB\u7B2C\u4E8C\u4EE3API\u9879\u76EE(QuickJS)"
+          },
+          {
+            command: "aijspro.debug",
+            title: "AI.js Pro: \u8C03\u8BD5\u5F53\u524D\u6587\u4EF6(Debug File)",
+            icon: "$(debug-alt)"
+          },
+          {
+            command: "aijspro.addDebugConfig",
+            title: "AI.js Pro: \u589E\u52A0\u8C03\u8BD5\u8BBE\u5907\u914D\u7F6E(Add Debug Config)",
+            icon: "$(gear)"
+          },
+          {
+            command: "aijspro.disconnect",
+            title: "AI.js Pro: \u65AD\u5F00\u6240\u6709\u8FDE\u63A5(Disconnect)",
+            icon: "$(debug-disconnect)"
+          },
+          {
+            command: "aijspro.refreshFiles",
+            title: "AI.js Pro: \u5237\u65B0\u6587\u4EF6(Refresh Directory)",
+            icon: "$(refresh)"
+          },
+          {
+            command: "aijspro.showLogs",
+            title: "AI.js Pro: \u663E\u793A\u65E5\u5FD7(Show Logs)",
+            icon: "$(output)"
+          },
+          {
+            command: "aijspro.togglePushOnSave",
+            title: "AI.js Pro: \u5F00\u5173\u300C\u4FDD\u5B58\u65F6\u81EA\u52A8\u63A8\u9001\u300D(Toggle Push On Save)"
+          },
+          {
+            command: "aijspro.menu",
+            title: "AI.js Pro: \u529F\u80FD\u83DC\u5355",
+            icon: {
+              light: "images/icon.png",
+              dark: "images/icon.png"
+            }
+          },
+          {
+            command: "aijspro.pushFile",
+            title: "AI.js Pro: \u63A8\u9001\u5F53\u524D\u6587\u4EF6\u5230\u624B\u673A",
+            icon: "$(save-all)"
+          },
+          {
+            command: "aijspro.openDeviceFile",
+            title: "\u6253\u5F00"
+          },
+          {
+            command: "aijspro.downloadFile",
+            title: "\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A"
+          },
+          {
+            command: "aijspro.runDeviceFile",
+            title: "\u5728\u624B\u673A\u4E0A\u8FD0\u884C"
+          }
+        ],
+        menus: {
+          "editor/title": [
+            {
+              command: "aijspro.menu",
+              when: "resourceExtname == .js || editorLangId == javascript",
+              group: "navigation@9"
+            }
+          ],
+          "view/item/context": [
+            {
+              command: "aijspro.openDeviceFile",
+              when: "view == aijsproFiles && (viewItem == aijspro.file || viewItem == aijspro.script)",
+              group: "inline@1"
+            },
+            {
+              command: "aijspro.runDeviceFile",
+              when: "view == aijsproFiles && viewItem == aijspro.script",
+              group: "aijspro@1"
+            },
+            {
+              command: "aijspro.downloadFile",
+              when: "view == aijsproFiles && (viewItem == aijspro.file || viewItem == aijspro.script)",
+              group: "aijspro@2"
+            },
+            {
+              command: "aijspro.refreshFiles",
+              when: "view == aijsproFiles",
+              group: "navigation@1"
+            }
+          ],
+          commandPalette: [
+            {
+              command: "aijspro.openDeviceFile",
+              when: "false"
+            },
+            {
+              command: "aijspro.downloadFile",
+              when: "false"
+            },
+            {
+              command: "aijspro.runDeviceFile",
+              when: "false"
+            }
+          ]
+        },
+        views: {
+          explorer: [
+            {
+              id: "aijsproFiles",
+              name: "AI.js Pro \u8BBE\u5907\u6587\u4EF6"
+            }
+          ]
+        },
+        configuration: {
+          title: "AI.js Pro",
+          properties: {
+            "aijspro.devices": {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              default: [],
+              description: "\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907\u5730\u5740\uFF08IP\u3001IP:\u7AEF\u53E3\u6216 [IPv6]:\u7AEF\u53E3\uFF09\u3002\u624B\u673A\u4FA7\u6253\u5F00\u300CAI.js Pro \u7535\u8111\u8FDE\u63A5\u300D\u540E\u4F1A\u81EA\u52A8\u56DE\u8FDE\u672C\u673A 8327 \u7AEF\u53E3\uFF0C\u8FD9\u91CC\u4E3B\u8981\u7528\u4E8E\u7535\u8111\u4E3B\u52A8\u8FDE\u63A5\u624B\u673A 9317 \u7684\u573A\u666F\u3002"
+            },
+            "aijspro.listenPort": {
+              type: "number",
+              default: 8327,
+              description: "\u63A5\u6536\u624B\u673A\u4E3B\u52A8\u56DE\u8FDE\u7684\u76D1\u542C\u7AEF\u53E3\uFF0C\u9ED8\u8BA4 8327\uFF1B\u624B\u673A\u7AEF\u56DE\u8FDE\u7AEF\u53E3\u4E5F\u9700\u4E0E\u6B64\u4E00\u81F4\u3002"
+            },
+            "aijspro.autoConnect": {
+              type: "boolean",
+              default: true,
+              description: "\u542F\u52A8\u65F6\u81EA\u52A8\u8FDE\u63A5\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907\uFF0C\u5E76\u5728\u6389\u7EBF\u540E\u91CD\u8BD5\u3002"
+            },
+            "aijspro.ignoredDevices": {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              default: [],
+              description: "\u5DF2\u5220\u9664\u8BBE\u5907\u7684\u5730\u5740\uFF1A\u505C\u6B62\u81EA\u52A8\u8FDE\u63A5\u5E76\u5FFD\u7565\u624B\u673A\u4E3B\u52A8\u56DE\u8FDE\u3002\u5220\u9664\u547D\u4EE4\u7EF4\u62A4\u6B64\u5217\u8868\uFF0C\u624B\u52A8\u8FDE\u63A5\u5BF9\u5E94\u5730\u5740\u65F6\u81EA\u52A8\u89E3\u9664\u3002"
+            },
+            "aijspro.showLogsOnConnect": {
+              type: "boolean",
+              default: true,
+              description: "\u9996\u6B21\u8FDE\u63A5\u5230\u624B\u673A\u65F6\u81EA\u52A8\u5207\u6362\u5230 AI.js Pro \u8F93\u51FA\u65E5\u5FD7\uFF0C\u5E76\u5728\u72B6\u6001\u680F\u663E\u793A\u8BBE\u5907 IP\u3002"
+            },
+            "aijspro.pushOnSave": {
+              type: "boolean",
+              default: false,
+              description: "\u4FDD\u5B58\u6587\u4EF6\u65F6\u81EA\u52A8\u628A\u8BE5\u6587\u4EF6\u63A8\u9001\u5230\u624B\u673A\u7684\u811A\u672C\u76EE\u5F55\uFF08\u5DE5\u7A0B\u76EE\u5F55\u4E0B\u6309\u300C\u5DE5\u7A0B\u540D/\u76F8\u5BF9\u8DEF\u5F84\u300D\u5B58\u653E\uFF09\u3002"
+            },
+            "aijspro.exclude": {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              default: [
+                "node_modules",
+                ".git",
+                ".vscode",
+                ".artifacts",
+                "dist",
+                "build"
+              ],
+              description: "\u63A8\u9001\u6574\u4E2A\u5DE5\u7A0B\u65F6\u5FFD\u7565\u7684\u76EE\u5F55/\u6587\u4EF6\u540D\u3002"
+            },
+            "aijspro.adbPath": {
+              type: "string",
+              default: "",
+              description: "USB \u8BBE\u5907\u626B\u63CF\u4F7F\u7528\u7684 adb \u53EF\u6267\u884C\u6587\u4EF6\u8DEF\u5F84\u3002\u7559\u7A7A\u65F6\u67E5\u627E Android SDK \u548C\u7CFB\u7EDF PATH\u3002"
+            }
+          }
+        },
+        debuggers: [
+          {
+            type: "aijspro",
+            label: "AI.js Pro\uFF08Rhino \u65AD\u70B9\u8C03\u8BD5\uFF09",
+            languages: [
+              "javascript"
+            ],
+            configurationAttributes: {
+              launch: {
+                required: [],
+                properties: {
+                  program: {
+                    type: "string",
+                    description: "\u8981\u8C03\u8BD5\u7684\u811A\u672C\u6587\u4EF6\uFF08\u9ED8\u8BA4\u5F53\u524D\u6253\u5F00\u7684\u6587\u4EF6\uFF09\u3002"
+                  },
+                  host: {
+                    type: "string",
+                    description: "\u624B\u673A\u5730\u5740\uFF08\u9ED8\u8BA4\u4F7F\u7528\u5DF2\u8FDE\u63A5/\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907\uFF09\u3002"
+                  },
+                  trace: {
+                    type: "boolean",
+                    description: "\u6253\u5370\u8C03\u8BD5\u534F\u8BAE\u7EC6\u8282\u5230\u300CAI.js Pro\u300D\u8F93\u51FA\u9762\u677F\u3002",
+                    default: false
+                  }
+                }
+              }
+            },
+            initialConfigurations: [
+              {
+                type: "aijspro",
+                request: "launch",
+                name: "AI.js Pro: \u8C03\u8BD5\u5F53\u524D\u6587\u4EF6\uFF08Rhino\uFF09",
+                program: "${file}"
+              }
+            ],
+            configurationSnippets: [
+              {
+                label: "AI.js Pro: \u8C03\u8BD5\u5F53\u524D\u6587\u4EF6\uFF08Rhino\uFF09",
+                description: "\u628A\u5F53\u524D\u6587\u4EF6\u53D1\u9001\u5230\u624B\u673A\uFF0C\u7528 Rhino \u8C03\u8BD5\u5668\u65AD\u70B9\u8C03\u8BD5",
+                body: {
+                  type: "aijspro",
+                  request: "launch",
+                  name: "AI.js Pro: \u8C03\u8BD5\u5F53\u524D\u6587\u4EF6\uFF08Rhino\uFF09",
+                  program: '^"\\${file}^"'
+                }
+              }
+            ]
+          }
+        ]
+      },
+      scripts: {
+        test: "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs",
+        "test:devices": "node --test test/manager.test.cjs",
+        "test:connection": "node --test test/connection.test.cjs",
+        build: "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
+        watch: "npm run build -- --watch",
+        typecheck: "tsc --noEmit",
+        "vscode:prepublish": "npm run build",
+        package: "vsce package --no-dependencies"
+      },
+      devDependencies: {
+        "@types/node": "^22.10.0",
+        "@types/vscode": "^1.85.0",
+        "@vscode/vsce": "^3.2.1",
+        esbuild: "^0.24.0",
+        typescript: "^5.6.3"
+      }
+    };
+  }
+});
+
 // src/extension.ts
 var extension_exports = {};
 __export(extension_exports, {
@@ -34,11 +399,11 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var fs3 = __toESM(require("fs"));
+var fs4 = __toESM(require("fs"));
 var import_crypto = require("crypto");
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 var import_util = require("util");
-var vscode6 = __toESM(require("vscode"));
+var vscode7 = __toESM(require("vscode"));
 
 // src/color.ts
 var fs = __toESM(require("fs"));
@@ -1335,7 +1700,7 @@ var AijsproDebugSession = class {
         }
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      throw new Error(`\u8FDE\u63A5 ${host} \u8D85\u65F6\uFF08\u8BF7\u786E\u8BA4\u624B\u673A\u4FA7\u5DF2\u6253\u5F00\u300CPro \u6269\u5C55\u670D\u52A1\u5668\u300D\uFF09`);
+      throw new Error(`\u8FDE\u63A5 ${host} \u8D85\u65F6\uFF08\u8BF7\u786E\u8BA4\u624B\u673A\u4FA7\u5DF2\u6253\u5F00\u300C\u7535\u8111\u8FDE\u63A5 \u2192 \u670D\u52A1\u5668\u6A21\u5F0F\u300D\uFF09`);
     }
     const picked = await this.manager.pickConnection();
     if (!picked?.attached) {
@@ -1678,16 +2043,18 @@ var FrameDecoder = class {
 
 // src/connection.ts
 var DeviceConnection = class extends import_events.EventEmitter {
-  constructor(socket, label, log) {
+  constructor(socket, label, log, deviceAddress) {
     super();
     this.label = label;
     this.log = log;
+    this.deviceAddress = deviceAddress;
     this.socket = socket;
     socket.setNoDelay(true);
     socket.on("data", (chunk) => this.onData(chunk));
     socket.on("close", () => this.onClosed());
     socket.on("error", (error) => {
-      this.log(`[\u8FDE\u63A5 ${this.label}] socket \u9519\u8BEF\uFF1A${error.message}`);
+      const code = error.code ? `${error.code} ` : "";
+      this.log(`[\u8FDE\u63A5 ${this.label}] socket \u9519\u8BEF\uFF1A${code}${error.message}`);
     });
   }
   socket;
@@ -1720,51 +2087,42 @@ var DeviceConnection = class extends import_events.EventEmitter {
   // ---- 命令 ----
   /** `command`：run / stop / stopAll / save / list_files / read_file / write_file … */
   async sendCommand(data, timeoutMs = 2e4) {
+    const command = commandName(data);
     const id = this.nextMessageId++;
-    this.sendRaw(encodeJsonFrame({ id, type: "command", data }));
-    return this.awaitResponse(id, timeoutMs);
+    const result = await this.request(id, encodeJsonFrame({ id, type: "command", data }), timeoutMs, command);
+    return ensureResponseOk(result, command);
   }
   async run(name, id, script) {
+    await this.sendCommand({ command: "run", id, name, script });
     this.lastRunId = id;
     this.lastRunKind = "script";
-    await this.sendCommand({ command: "run", id, name, script });
   }
   async stop(id) {
     const target = id ?? this.lastRunId;
     if (!target) {
-      const stoppedCount = await this.stopAll();
-      return { stopped: true, fallbackStopAll: true, stoppedCount };
+      throw new Error("\u5F53\u524D\u8FDE\u63A5\u5C1A\u672A\u8FD0\u884C\u811A\u672C\uFF1B\u5982\u9700\u505C\u6B62\u8BBE\u5907\u4E0A\u7684\u5168\u90E8\u4EFB\u52A1\uFF0C\u8BF7\u4F7F\u7528\u201C\u505C\u6B62\u5168\u90E8\u201D");
     }
     const result = await this.sendCommand({ command: "stop", id: target });
-    if (!id && this.lastRunKind === "project" && result?.stopped === void 0 && !result?.error) {
-      const stoppedCount = await this.stopAll();
-      return { stopped: true, fallbackStopAll: true, stoppedCount };
+    if (!id && this.lastRunKind === "project" && result?.stopped === void 0) {
+      throw new Error("\u8BBE\u5907\u672A\u786E\u8BA4\u505C\u6B62\u8BE5\u5DE5\u7A0B\uFF0C\u8BF7\u5237\u65B0\u4EFB\u52A1\u72B6\u6001\u6216\u660E\u786E\u4F7F\u7528\u201C\u505C\u6B62\u5168\u90E8\u201D");
     }
-    if (result?.error) throw new Error(String(result.error));
     return { stopped: result?.stopped !== false, fallbackStopAll: false };
   }
   async stopAll() {
     const result = await this.sendCommand({ command: "stopAll" });
-    if (result?.error) throw new Error(String(result.error));
     return Number(result?.stoppedCount ?? 0);
   }
   async save(name, script) {
     await this.sendCommand({ command: "save", id: name, name, script });
   }
-  async writeFile(path5, text) {
-    const result = await this.sendCommand({ command: "write_file", path: path5, script: text });
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
+  async writeFile(path6, text) {
+    await this.sendCommand({ command: "write_file", path: path6, script: text });
   }
-  async listFiles(path5, recursive) {
+  async listFiles(path6, recursive) {
     const result = await this.sendCommand(
-      { command: "list_files", path: path5, recursive },
+      { command: "list_files", path: path6, recursive },
       recursive ? 6e4 : 2e4
     );
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
     return {
       files: Array.isArray(result?.files) ? result.files : [],
       dirs: Array.isArray(result?.dirs) ? result.dirs : [],
@@ -1772,8 +2130,8 @@ var DeviceConnection = class extends import_events.EventEmitter {
     };
   }
   /** 读取设备文件：内容走 bytes 帧，response 里带 md5 用于配对。 */
-  async readFile(path5, timeoutMs = 3e4) {
-    return (await this.readBytesVia({ command: "read_file", path: path5 }, timeoutMs)).bytes;
+  async readFile(path6, timeoutMs = 3e4) {
+    return (await this.readBytesVia({ command: "read_file", path: path6 }, timeoutMs)).bytes;
   }
   /** 布局分析：无障碍捕获当前窗口，返回 XML 文本（无障碍未开启时 reject）。 */
   async inspectLayout(timeoutMs = 2e4) {
@@ -1791,41 +2149,51 @@ var DeviceConnection = class extends import_events.EventEmitter {
   }
   /** 发一条返回 bytes（配 md5）的命令：read_file / inspect_layout / screenshot 共用。 */
   async readBytesVia(data, timeoutMs) {
+    const command = commandName(data);
     const id = this.nextMessageId++;
-    this.sendRaw(encodeJsonFrame({ id, type: "command", data }));
-    const result = await this.awaitResponse(id, timeoutMs);
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
+    const result = ensureResponseOk(
+      await this.request(id, encodeJsonFrame({ id, type: "command", data }), timeoutMs, command),
+      command
+    );
     const md5 = String(result?.md5 ?? "");
+    if (!md5) {
+      throw new Error(`\u547D\u4EE4 ${command} \u7684\u54CD\u5E94\u7F3A\u5C11\u6587\u4EF6 md5`);
+    }
     const buffered = this.bufferedBytes.get(md5);
     if (buffered) {
       this.bufferedBytes.delete(md5);
       return { result, bytes: buffered };
     }
-    return { result, bytes: await this.waitForBytes(md5, 5e3) };
+    return { result, bytes: await this.waitForBytes(md5, 5e3, command) };
   }
   /**
-   * `bytes_command`：先发 zip 字节帧再发带 md5 的 json（与官方扩展顺序一致；
-   * 设备端两种顺序都能配对）。
+   * `bytes_command`：先发 zip 字节帧再发带 md5 的 json。
+   * 这是 AI.js Pro 设备端现有的配对顺序，保持帧格式不变。
    */
   async sendBytesCommand(command, name, archive, deletedFiles, timeoutMs = 18e4) {
     const id = this.nextMessageId++;
     const md5 = md5Hex(archive);
-    this.sendRaw(encodeFrame(TYPE_BYTES, archive));
-    this.sendRaw(
-      encodeJsonFrame({
-        id,
-        type: "bytes_command",
-        md5,
-        data: { command, id: name, name, deletedFiles, override: true }
-      })
-    );
+    const response = this.awaitResponse(id, timeoutMs, command);
+    try {
+      this.sendRaw(encodeFrame(TYPE_BYTES, archive));
+      this.sendRaw(
+        encodeJsonFrame({
+          id,
+          type: "bytes_command",
+          md5,
+          data: { command, id: name, name, deletedFiles, override: true }
+        })
+      );
+    } catch (error) {
+      this.cancelPending(id, error);
+      return response;
+    }
+    const result = ensureResponseOk(await response, command);
     if (command === "run_project") {
       this.lastRunId = name;
       this.lastRunKind = "project";
     }
-    return this.awaitResponse(id, timeoutMs);
+    return result;
   }
   // ---- 断点调试（Rhino） ----
   /** 启动调试会话：断点行号 1-based；事件通过 `debugEvent` 事件抛出。 */
@@ -1840,16 +2208,10 @@ var DeviceConnection = class extends import_events.EventEmitter {
   }
   async debugEvaluate(expr, frame) {
     const result = await this.sendCommand({ command: "debug_evaluate", expr, frame }, 2e4);
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
     return String(result?.result ?? "");
   }
   async debugVariables(ref) {
     const result = await this.sendCommand({ command: "debug_variables", ref }, 2e4);
-    if (result?.error) {
-      throw new Error(String(result.error));
-    }
     return Array.isArray(result?.variables) ? result.variables : [];
   }
   async debugTerminate() {
@@ -1859,9 +2221,26 @@ var DeviceConnection = class extends import_events.EventEmitter {
     }
   }
   // ---- 内部 ----
+  /** 发送一条请求并等待对应 response；断线时抛错，绝不能静默等满超时。 */
+  request(id, frame, timeoutMs, command) {
+    const response = this.awaitResponse(id, timeoutMs, command);
+    try {
+      this.sendRaw(frame);
+    } catch (error) {
+      this.cancelPending(id, error);
+    }
+    return response;
+  }
+  cancelPending(id, error) {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pending.delete(id);
+    pending.reject(error);
+  }
   sendRaw(frame) {
-    if (this.closed) {
-      return;
+    if (this.closed || this.socket.destroyed) {
+      throw new Error(`\u8FDE\u63A5\u5DF2\u65AD\u5F00\uFF0C\u547D\u4EE4\u672A\u53D1\u9001\uFF08${this.label}\uFF09`);
     }
     this.socket.write(frame);
   }
@@ -1875,7 +2254,13 @@ var DeviceConnection = class extends import_events.EventEmitter {
       return;
     }
     for (const frame of frames) {
-      this.dispatch(frame.type, frame.payload);
+      try {
+        this.dispatch(frame.type, frame.payload);
+      } catch (error) {
+        this.log(`[\u8FDE\u63A5 ${this.label}] \u5904\u7406\u5E27\u5931\u8D25\uFF08type=${frame.type}\uFF09\uFF1A${error.message}`);
+        this.close();
+        return;
+      }
     }
   }
   dispatch(type, payload) {
@@ -1931,7 +2316,7 @@ var DeviceConnection = class extends import_events.EventEmitter {
         encodeJsonFrame({
           id: this.nextMessageId++,
           type: "hello",
-          data: { client_version: 4 }
+          data: { client_version: 4, client_name: "AI.js Pro", extension_version: require_package().version }
         })
       );
     }
@@ -1947,7 +2332,8 @@ var DeviceConnection = class extends import_events.EventEmitter {
     const waiter = this.byteWaiters.get(md5);
     if (waiter) {
       this.byteWaiters.delete(md5);
-      waiter(payload);
+      clearTimeout(waiter.timer);
+      waiter.resolve(payload);
       return;
     }
     this.bufferedBytes.set(md5, payload);
@@ -1956,25 +2342,25 @@ var DeviceConnection = class extends import_events.EventEmitter {
       this.bufferedBytes.delete(oldest);
     }
   }
-  waitForBytes(md5, timeoutMs) {
+  waitForBytes(md5, timeoutMs, command) {
+    if (this.closed || this.socket.destroyed) {
+      return Promise.reject(new Error(`\u8FDE\u63A5\u5DF2\u65AD\u5F00\uFF08${command} \u7684\u6587\u4EF6\u5185\u5BB9\u672A\u5230\u8FBE\uFF09`));
+    }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.byteWaiters.delete(md5);
-        reject(new Error("\u7B49\u5F85\u6587\u4EF6\u5185\u5BB9\u8D85\u65F6\uFF08bytes \u5E27\u672A\u5230\u8FBE\uFF09"));
+        reject(new Error(`\u7B49\u5F85 ${command} \u6587\u4EF6\u5185\u5BB9\u8D85\u65F6\uFF08${formatTimeout(timeoutMs)}\uFF0Cbytes \u5E27\u672A\u5230\u8FBE\uFF09`));
       }, timeoutMs);
-      this.byteWaiters.set(md5, (data) => {
-        clearTimeout(timer);
-        resolve(data);
-      });
+      this.byteWaiters.set(md5, { resolve, reject, timer, command });
     });
   }
-  awaitResponse(id, timeoutMs) {
+  awaitResponse(id, timeoutMs, command) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`\u547D\u4EE4\u54CD\u5E94\u8D85\u65F6\uFF08id=${id}\uFF09`));
+        reject(new Error(`\u547D\u4EE4 ${command} \u54CD\u5E94\u8D85\u65F6\uFF08${formatTimeout(timeoutMs)}\uFF0Cid=${id}\uFF09`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, command });
     });
   }
   onClosed() {
@@ -1984,15 +2370,36 @@ var DeviceConnection = class extends import_events.EventEmitter {
     this.closed = true;
     for (const [, pending] of this.pending) {
       clearTimeout(pending.timer);
-      pending.reject(new Error("\u8FDE\u63A5\u5DF2\u65AD\u5F00"));
+      pending.reject(new Error(`\u8FDE\u63A5\u5DF2\u65AD\u5F00\uFF08\u547D\u4EE4 ${pending.command} \u672A\u5B8C\u6210\uFF09`));
     }
     this.pending.clear();
+    for (const [, waiter] of this.byteWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(`\u8FDE\u63A5\u5DF2\u65AD\u5F00\uFF08\u7B49\u5F85 ${waiter.command} \u7684\u6587\u4EF6\u5185\u5BB9\u65F6\u8FDE\u63A5\u5173\u95ED\uFF09`));
+    }
+    this.byteWaiters.clear();
+    this.bufferedBytes.clear();
     this.emit("closed");
   }
 };
+function commandName(data) {
+  const command = data?.command;
+  return typeof command === "string" && command ? command : "command";
+}
+function ensureResponseOk(result, command) {
+  if (result?.error !== void 0 && result?.error !== null && result?.error !== "") {
+    throw new Error(`\u547D\u4EE4 ${command} \u5931\u8D25\uFF1A${String(result.error)}`);
+  }
+  return result;
+}
+function formatTimeout(timeoutMs) {
+  return timeoutMs >= 1e3 ? `${Math.round(timeoutMs / 1e3)} \u79D2` : `${timeoutMs} \u6BEB\u79D2`;
+}
 
 // src/manager.ts
 var HANDSHAKE_TIMEOUT_MS = 12e3;
+var DEFAULT_LISTEN_PORT = 8327;
+var DEFAULT_DEVICE_PORT = 9317;
 var DeviceManager = class extends import_events2.EventEmitter {
   constructor(log) {
     super();
@@ -2011,37 +2418,69 @@ var DeviceManager = class extends import_events2.EventEmitter {
   configurationWrites = Promise.resolve();
   /** 最近一次完成握手的连接 = “当前设备”。 */
   active;
+  selectedDeviceKey;
   get all() {
     return [...this.connections];
   }
   get activeConnection() {
+    if (this.selectedDeviceKey) {
+      return this.all.find((conn) => conn.key === this.selectedDeviceKey && conn.attached && !conn.isClosed());
+    }
     return this.active && !this.active.isClosed() ? this.active : this.connections.values().next().value;
   }
-  /** 启动 8327 监听（手机记住电脑后会主动回连到这里）。 */
+  /** 启动 8327 监听（可在 `aijspro.listenPort` 自定义；手机记住电脑后会主动回连到这里）。 */
   startListening() {
-    const port = vscode4.workspace.getConfiguration("aijspro").get("listenPort", 8327);
-    const server = net.createServer((socket) => {
-      if (this.ignoredHosts.has(deviceHost(shortHost(socket.remoteAddress)))) {
-        socket.destroy();
-        return;
+    const rawPort = vscode4.workspace.getConfiguration("aijspro").get("listenPort", DEFAULT_LISTEN_PORT);
+    let port;
+    try {
+      port = parsePort(String(rawPort), "aijspro.listenPort");
+    } catch (error) {
+      this.log(`\u76D1\u542C\u7AEF\u53E3\u914D\u7F6E\u65E0\u6548\uFF1A${error.message}\uFF1B\u5DF2\u8DF3\u8FC7\u76D1\u542C\uFF0C\u624B\u673A\u5C06\u65E0\u6CD5\u4E3B\u52A8\u56DE\u8FDE\uFF08\u4ECD\u53EF\u624B\u52A8\u8FDE\u63A5\uFF09`);
+    }
+    if (port !== void 0) {
+      const listenPort = port;
+      const server = net.createServer((socket) => {
+        const host = shortHost(socket.remoteAddress);
+        const origin = formatHostPort(host, socket.remotePort ?? 0);
+        if (this.ignoredHosts.has(deviceHost(host))) {
+          this.log(`\u5FFD\u7565\u5DF2\u5220\u9664\u8BBE\u5907\u7684\u56DE\u8FDE\uFF1A${origin}`);
+          socket.destroy();
+          return;
+        }
+        this.log(`\u624B\u673A\u56DE\u8FDE\uFF1A${origin}`);
+        this.adopt(socket, origin, true);
+      });
+      server.on("error", (error) => {
+        const code = error.code ? `${error.code} ` : "";
+        this.log(`\u76D1\u542C ${listenPort} \u5931\u8D25\uFF1A${code}${error.message}\uFF08\u624B\u673A\u4E3B\u52A8\u56DE\u8FDE\u4F1A\u53D7\u5F71\u54CD\uFF0C\u4ECD\u53EF\u624B\u52A8\u8FDE\u63A5\uFF09`);
+      });
+      try {
+        server.listen(listenPort, () => {
+          const kind = listenPort === DEFAULT_LISTEN_PORT ? "\u9ED8\u8BA4" : "\u81EA\u5B9A\u4E49";
+          this.log(`\u6B63\u5728\u76D1\u542C ${listenPort}\uFF08${kind}\u624B\u673A\u56DE\u8FDE\u7AEF\u53E3\uFF0C\u53EF\u5728 aijspro.listenPort \u4FEE\u6539\uFF09\u2026`);
+        });
+        this.server = server;
+      } catch (error) {
+        this.log(`\u76D1\u542C ${listenPort} \u5931\u8D25\uFF1A${error.message}\uFF08\u624B\u673A\u4E3B\u52A8\u56DE\u8FDE\u4F1A\u53D7\u5F71\u54CD\uFF0C\u4ECD\u53EF\u624B\u52A8\u8FDE\u63A5\uFF09`);
+        try {
+          server.close();
+        } catch {
+        }
       }
-      this.log(`\u624B\u673A\u56DE\u8FDE\uFF1A${socket.remoteAddress}:${socket.remotePort}`);
-      this.adopt(socket, `${shortHost(socket.remoteAddress)}:${socket.remotePort}`, true);
-    });
-    server.on("error", (error) => {
-      this.log(`\u76D1\u542C ${port} \u5931\u8D25\uFF1A${error.message}\uFF08\u624B\u673A\u4E3B\u52A8\u56DE\u8FDE\u4F1A\u53D7\u5F71\u54CD\uFF0C\u4ECD\u53EF\u624B\u52A8\u8FDE\u63A5\uFF09`);
-    });
-    server.listen(port, () => this.log(`\u6B63\u5728\u76D1\u542C ${port}\uFF0C\u7B49\u5F85\u624B\u673A\u56DE\u8FDE\u2026`));
-    this.server = server;
+    }
     this.autoConnectEnabled = vscode4.workspace.getConfiguration("aijspro").get("autoConnect", true);
     if (this.autoConnectEnabled) {
       this.retrySavedDevices();
       this.scheduleRetry(5e3);
     }
   }
-  /** 主动连接设备（host 可带端口，默认 9317）。 */
+  /**
+   * 主动连接设备（host 可带端口，默认 9317；IPv6 写 `[地址]:端口`）。
+   * 只发起 TCP 连接，hello 握手完成由 `connected` 事件通知；调用方无需等待握手。
+   */
   async connectTo(host) {
-    const ip = deviceHost(host);
+    const target = splitHost(host, DEFAULT_DEVICE_PORT);
+    const ip = normalizeHost(target.ip);
     const intent = (this.deviceIntents.get(ip) ?? 0) + 1;
     this.deviceIntents.set(ip, intent);
     await this.writeConfiguration(async () => {
@@ -2053,15 +2492,17 @@ var DeviceManager = class extends import_events2.EventEmitter {
     this.dialDevice(host);
   }
   dialDevice(host) {
-    if (this.disposed || this.ignoredHosts.has(deviceHost(host))) return;
-    const { ip, port } = splitHost(host, 9317);
-    if (this.isConnectedTo(ip)) {
-      this.log(`${host} \u5DF2\u7ECF\u8FDE\u63A5\uFF0C\u5FFD\u7565\u91CD\u590D\u8FDE\u63A5`);
+    if (this.disposed) return;
+    const { ip, port } = splitHost(host, DEFAULT_DEVICE_PORT);
+    const address = formatHostPort(ip, port);
+    if (this.ignoredHosts.has(normalizeHost(ip))) return;
+    if (this.isConnectedTo(ip, port)) {
+      this.log(`${address} \u5DF2\u7ECF\u8FDE\u63A5\uFF0C\u5FFD\u7565\u91CD\u590D\u8FDE\u63A5`);
       return;
     }
-    this.log(`\u6B63\u5728\u8FDE\u63A5 ${ip}:${port}\u2026`);
+    this.log(`\u6B63\u5728\u8FDE\u63A5\u624B\u673A ${address}\u2026`);
     const socket = net.createConnection({ host: ip, port });
-    this.adopt(socket, `${ip}:${port}`, false, host.trim());
+    this.adopt(socket, address, false, host.trim());
   }
   /** 删除记住的地址、关闭该手机的连接并阻止自动拨号/回连；手动连接可重新启用。 */
   async forgetDevices(hosts) {
@@ -2072,8 +2513,15 @@ var DeviceManager = class extends import_events2.EventEmitter {
       this.deviceIntents.set(ip, (this.deviceIntents.get(ip) ?? 0) + 1);
     }
     for (const conn of [...this.connections]) {
-      const address = conn.socket.remoteAddress || splitHost(conn.label, 9317).ip;
-      if (ips.has(deviceHost(shortHost(address)))) conn.close();
+      let address = conn.socket.remoteAddress;
+      if (!address) {
+        try {
+          address = splitHost(conn.label, DEFAULT_DEVICE_PORT).ip;
+        } catch {
+          address = void 0;
+        }
+      }
+      if (address && ips.has(deviceHost(address))) conn.close();
     }
     await this.writeConfiguration(async () => {
       await this.updateAddressList("devices", (list) => list.filter((host) => !ips.has(deviceHost(host))));
@@ -2095,6 +2543,7 @@ var DeviceManager = class extends import_events2.EventEmitter {
   }
   /** 「选择设备(Select Device)」：把某个已连接设备设为当前设备。 */
   setActive(conn) {
+    this.selectedDeviceKey = conn.key;
     this.active = conn;
     this.emit("changed");
   }
@@ -2102,11 +2551,11 @@ var DeviceManager = class extends import_events2.EventEmitter {
   scanNow() {
     let tried = 0;
     for (const host of this.retryDevices()) {
-      const { ip } = splitHost(host, 9317);
-      if (this.isConnectedTo(ip)) {
-        continue;
-      }
       try {
+        const { ip, port } = splitHost(host, DEFAULT_DEVICE_PORT);
+        if (this.isConnectedTo(ip, port)) {
+          continue;
+        }
         this.dialDevice(host);
         tried++;
       } catch (error) {
@@ -2132,6 +2581,7 @@ var DeviceManager = class extends import_events2.EventEmitter {
     if (list.length === 0) {
       return void 0;
     }
+    if (this.selectedDeviceKey) return list.find((conn) => conn.key === this.selectedDeviceKey);
     if (list.length === 1) {
       return list[0];
     }
@@ -2146,10 +2596,17 @@ var DeviceManager = class extends import_events2.EventEmitter {
     return picked?.conn;
   }
   adopt(socket, label, inbound, dialedHost) {
+    const startedAt = Date.now();
     socket.setTimeout(HANDSHAKE_TIMEOUT_MS, () => {
-      socket.destroy(new Error("\u63E1\u624B\u8D85\u65F6"));
+      this.log(`[\u8FDE\u63A5 ${label}] \u7B49\u5F85\u624B\u673A hello \u8D85\u65F6\uFF08${Math.round(HANDSHAKE_TIMEOUT_MS / 1e3)} \u79D2\uFF09\uFF0C\u4E3B\u52A8\u65AD\u5F00`);
+      socket.destroy();
     });
-    const conn = new DeviceConnection(socket, label, this.log);
+    const conn = new DeviceConnection(
+      socket,
+      label,
+      this.log,
+      inbound ? formatHostPort(shortHost(socket.remoteAddress), DEFAULT_DEVICE_PORT) : dialedHost
+    );
     this.connections.add(conn);
     conn.once("connected", () => {
       const host = inbound ? shortHost(socket.remoteAddress) : dialedHost;
@@ -2157,12 +2614,12 @@ var DeviceManager = class extends import_events2.EventEmitter {
         conn.close();
         return;
       }
-      this.active = conn;
+      if (!this.selectedDeviceKey || conn.key === this.selectedDeviceKey) this.active = conn;
       if (host) {
         this.rememberDevice(host);
       }
       this.log(
-        `\u5DF2\u8FDE\u63A5\uFF1A${conn.deviceName}\uFF08${conn.label}\uFF0Capp ${conn.hello?.app_version ?? "?"}\uFF0C\u534F\u8BAE v${conn.hello?.server_version ?? "?"}\uFF09`
+        `\u5DF2\u8FDE\u63A5\uFF1A${conn.deviceName}\uFF08${conn.label}\uFF0Capp ${conn.hello?.app_version ?? "?"}\uFF0C\u534F\u8BAE v${conn.hello?.server_version ?? "?"}\uFF0C\u63E1\u624B ${Date.now() - startedAt}ms\uFF09`
       );
       this.emit("changed");
       if (this.autoConnectEnabled) this.scheduleRetry(3e4);
@@ -2172,32 +2629,59 @@ var DeviceManager = class extends import_events2.EventEmitter {
       if (this.active === conn) {
         this.active = void 0;
       }
-      this.log(`\u5DF2\u65AD\u5F00\uFF1A${conn.deviceName}\uFF08${conn.label}\uFF09`);
+      if (conn.attached) {
+        this.log(`\u5DF2\u65AD\u5F00\uFF1A${conn.deviceName}\uFF08${conn.label}\uFF0C\u8FDE\u63A5 ${formatDuration(Date.now() - startedAt)}\uFF09`);
+      } else {
+        this.log(`\u8FDE\u63A5\u5931\u8D25\uFF1A${conn.label}\uFF08\u672A\u5B8C\u6210 hello \u63E1\u624B\uFF0C${formatDuration(Date.now() - startedAt)}\uFF09`);
+      }
       this.emit("changed");
       if (this.autoConnectEnabled) this.scheduleRetry(3e3);
     });
     conn.on("log", (line) => this.emit("deviceLog", conn, line));
   }
-  isConnectedTo(ip) {
+  /** An adb forward is identified by host AND port; multiple phones share 127.0.0.1. */
+  connectionAt(address) {
+    try {
+      const { ip, port } = splitHost(address, DEFAULT_DEVICE_PORT);
+      return this.all.find((conn) => conn.attached && !conn.isClosed() && this.matchesEndpoint(conn, ip, port));
+    } catch {
+      return void 0;
+    }
+  }
+  matchesEndpoint(conn, ip, port) {
+    try {
+      const target = splitHost(conn.deviceAddress || conn.label, DEFAULT_DEVICE_PORT);
+      return normalizeHost(target.ip) === normalizeHost(ip) && target.port === port;
+    } catch {
+      return false;
+    }
+  }
+  isConnectedTo(ip, port) {
     for (const conn of this.connections) {
-      if (this.matchesHost(conn, ip)) {
+      if (!conn.isClosed() && this.matchesEndpoint(conn, ip, port)) {
         return true;
       }
     }
     return false;
   }
   matchesHost(conn, ip) {
-    return conn.label.startsWith(`${ip}:`) || shortHost(conn.socket.remoteAddress) === ip;
+    const target = normalizeHost(ip);
+    if (normalizeHost(shortHost(conn.socket.remoteAddress)) === target) return true;
+    try {
+      return normalizeHost(splitHost(conn.label, DEFAULT_DEVICE_PORT).ip) === target;
+    } catch {
+      return false;
+    }
   }
   retrySavedDevices() {
     for (const host of this.retryDevices()) {
-      const { ip } = splitHost(host, 9317);
-      if (!this.isConnectedTo(ip)) {
-        try {
+      try {
+        const { ip, port } = splitHost(host, DEFAULT_DEVICE_PORT);
+        if (!this.isConnectedTo(ip, port)) {
           this.dialDevice(host);
-        } catch (error) {
-          this.log(`\u81EA\u52A8\u8FDE\u63A5 ${host} \u5931\u8D25\uFF1A${error.message}`);
         }
+      } catch (error) {
+        this.log(`\u81EA\u52A8\u8FDE\u63A5 ${host} \u5931\u8D25\uFF1A${error.message}`);
       }
     }
   }
@@ -2211,27 +2695,45 @@ var DeviceManager = class extends import_events2.EventEmitter {
       if (!this.autoConnectEnabled) return;
       this.retrySavedDevices();
       const allRememberedConnected = this.retryDevices().every((host) => {
-        const { ip } = splitHost(host, 9317);
-        return this.all.some((conn) => conn.attached && this.matchesHost(conn, ip));
+        try {
+          return !!this.connectionAt(host);
+        } catch {
+          return false;
+        }
       });
       this.scheduleRetry(allRememberedConnected ? 3e4 : 5e3);
     }, delayMs);
   }
   rememberDevice(host) {
-    const ip = deviceHost(host);
-    if (!host || ip === "127.0.0.1" || host === "::1" || ip === "localhost") {
+    let target;
+    try {
+      target = splitHost(host, DEFAULT_DEVICE_PORT);
+    } catch {
       return;
     }
+    const ip = normalizeHost(target.ip);
+    if (!ip || isLoopbackHost(ip)) {
+      return;
+    }
+    const savedHost = formatHostPort(ip, target.port);
     void this.writeConfiguration(async () => {
-      if (this.ignoredHosts.has(deviceHost(host))) return;
+      if (this.ignoredHosts.has(ip)) return;
       const list = savedDevices();
-      if (list.includes(host)) return;
-      await vscode4.workspace.getConfiguration("aijspro").update("devices", [...list, host], vscode4.ConfigurationTarget.Global);
-      this.log(`\u5DF2\u8BB0\u4F4F\u8BBE\u5907\u5730\u5740\uFF1A${host}`);
+      if (list.some((item) => isSameAddress(item, ip, target.port))) return;
+      await vscode4.workspace.getConfiguration("aijspro").update("devices", [...list, savedHost], vscode4.ConfigurationTarget.Global);
+      this.log(`\u5DF2\u8BB0\u4F4F\u8BBE\u5907\u5730\u5740\uFF1A${savedHost}`);
     }).catch((error) => this.log(`\u4FDD\u5B58\u8BBE\u5907\u5730\u5740\u5931\u8D25\uFF1A${error.message}`));
   }
   retryDevices() {
-    return savedDevices().filter((host) => !this.ignoredHosts.has(deviceHost(host)));
+    return savedDevices().filter((host) => {
+      if (this.ignoredHosts.has(deviceHost(host))) return false;
+      try {
+        splitHost(host, DEFAULT_DEVICE_PORT);
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
   writeConfiguration(action) {
     const operation = this.configurationWrites.then(action);
@@ -2256,28 +2758,279 @@ var DeviceManager = class extends import_events2.EventEmitter {
   }
 };
 function deviceHost(host) {
-  return shortHost(splitHost(host, 9317).ip).toLowerCase();
+  try {
+    return normalizeHost(splitHost(host, DEFAULT_DEVICE_PORT).ip);
+  } catch {
+    return normalizeHost(host);
+  }
 }
 function savedDevices() {
   return vscode4.workspace.getConfiguration("aijspro").get("devices", []);
 }
 function splitHost(host, defaultPort) {
-  const trimmed = host.trim();
-  const match = /^(.*):(\d+)$/.exec(trimmed);
-  if (match && match[1]) {
-    return { ip: match[1], port: Number(match[2]) };
+  const trimmed = (host ?? "").trim();
+  if (!trimmed) {
+    throw new Error("\u8BBE\u5907\u5730\u5740\u4E3A\u7A7A");
   }
-  return { ip: trimmed, port: defaultPort };
+  let ip = trimmed;
+  let rawPort;
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end < 0) {
+      throw new Error(`\u8BBE\u5907\u5730\u5740\u683C\u5F0F\u65E0\u6548\uFF1A${trimmed}\uFF08IPv6 \u8BF7\u5199\u6210 [\u5730\u5740]:\u7AEF\u53E3\uFF09`);
+    }
+    ip = trimmed.slice(1, end).trim();
+    const rest = trimmed.slice(end + 1);
+    if (rest) {
+      if (!rest.startsWith(":")) {
+        throw new Error(`\u8BBE\u5907\u5730\u5740\u683C\u5F0F\u65E0\u6548\uFF1A${trimmed}\uFF08IPv6 \u8BF7\u5199\u6210 [\u5730\u5740]:\u7AEF\u53E3\uFF09`);
+      }
+      rawPort = rest.slice(1);
+    }
+    if (net.isIP(ip) !== 6) {
+      throw new Error(`IPv6 \u5730\u5740\u65E0\u6548\uFF1A${ip}`);
+    }
+  } else if (trimmed.includes(":")) {
+    const colonCount = trimmed.split(":").length - 1;
+    if (colonCount > 1) {
+      if (net.isIP(trimmed) !== 6) {
+        throw new Error(`\u8BBE\u5907\u5730\u5740\u683C\u5F0F\u65E0\u6548\uFF1A${trimmed}\uFF08\u5E26\u7AEF\u53E3\u7684 IPv6 \u8BF7\u5199\u6210 [\u5730\u5740]:\u7AEF\u53E3\uFF09`);
+      }
+      ip = trimmed;
+    } else {
+      const index = trimmed.lastIndexOf(":");
+      ip = trimmed.slice(0, index).trim();
+      rawPort = trimmed.slice(index + 1);
+    }
+  }
+  if (!ip || /\s/.test(ip)) {
+    throw new Error(`\u8BBE\u5907\u5730\u5740\u683C\u5F0F\u65E0\u6548\uFF1A${trimmed}`);
+  }
+  const port = rawPort === void 0 ? defaultPort : parsePort(rawPort, trimmed);
+  return { ip, port };
+}
+function parsePort(value, source) {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`\u7AEF\u53E3\u65E0\u6548\uFF1A${value}\uFF08${source}\uFF0C\u7AEF\u53E3\u5E94\u4E3A 1-65535\uFF09`);
+  }
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`\u7AEF\u53E3\u65E0\u6548\uFF1A${value}\uFF08${source}\uFF0C\u7AEF\u53E3\u5E94\u4E3A 1-65535\uFF09`);
+  }
+  return port;
+}
+function formatHostPort(host, port) {
+  const clean = stripBrackets(host);
+  return `${clean.includes(":") ? `[${clean}]` : clean}:${port}`;
 }
 function shortHost(address) {
   if (!address) {
     return "";
   }
-  return address.startsWith("::ffff:") ? address.slice(7) : address;
+  const clean = stripBrackets(address.trim());
+  const mapped = /^::ffff:/i.test(clean) ? clean.slice(7) : clean;
+  return mapped.toLowerCase();
+}
+function normalizeHost(host) {
+  return shortHost(host);
+}
+function stripBrackets(host) {
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+function isLoopbackHost(host) {
+  const value = normalizeHost(host);
+  return value === "localhost" || value === "::1" || value === "0:0:0:0:0:0:0:1" || value.startsWith("127.");
+}
+function isSameAddress(host, ip, port) {
+  try {
+    const target = splitHost(host, DEFAULT_DEVICE_PORT);
+    return normalizeHost(target.ip) === normalizeHost(ip) && target.port === port;
+  } catch {
+    return false;
+  }
+}
+function formatDuration(milliseconds) {
+  const seconds = Math.max(0, Math.round(milliseconds / 1e3));
+  return seconds < 60 ? `${seconds} \u79D2` : `${Math.floor(seconds / 60)} \u5206 ${seconds % 60} \u79D2`;
+}
+
+// src/adb.ts
+var import_child_process = require("child_process");
+var fs3 = __toESM(require("fs"));
+var path4 = __toESM(require("path"));
+function parseAdbDevices(output) {
+  return output.split(/\r?\n/).flatMap((line) => {
+    const match = /^(\S+)\s+(device|unauthorized|offline)\b(.*)$/.exec(line.trim());
+    if (!match) return [];
+    const model = /\bmodel:(\S+)/.exec(match[3])?.[1];
+    return [{ serial: match[1], state: match[2], name: model?.replace(/_/g, " ") || match[1] }];
+  });
+}
+var UsbDevices = class {
+  constructor(configuredPath = () => "") {
+    this.configuredPath = configuredPath;
+  }
+  forwards = /* @__PURE__ */ new Map();
+  disposed = false;
+  async adbPath() {
+    const configured = this.configuredPath().trim();
+    if (configured) return configured;
+    const name = process.platform === "win32" ? "adb.exe" : "adb";
+    const roots = [
+      process.env.ANDROID_SDK_ROOT,
+      process.env.ANDROID_HOME,
+      process.env.LOCALAPPDATA && path4.join(process.env.LOCALAPPDATA, "Android", "Sdk"),
+      process.platform === "win32" ? "C:/Android" : void 0
+    ];
+    for (const root of roots) {
+      if (!root) continue;
+      const candidate = path4.join(root, "platform-tools", name);
+      if (fs3.existsSync(candidate)) return candidate;
+    }
+    return name;
+  }
+  run(adb, args) {
+    return new Promise((resolve, reject) => {
+      (0, import_child_process.execFile)(adb, args, { timeout: 8e3, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+        if (error) {
+          const code = error.code;
+          reject(new Error(code === "ENOENT" ? "\u627E\u4E0D\u5230 adb\uFF0C\u8BF7\u5728 aijspro.adbPath \u8BBE\u7F6E Android platform-tools \u7684 adb \u8DEF\u5F84" : String(stderr).trim() || error.message));
+        } else resolve(String(stdout).trim());
+      });
+    });
+  }
+  async list() {
+    return parseAdbDevices(await this.run(await this.adbPath(), ["devices", "-l"]));
+  }
+  addressFor(serial) {
+    const value = this.forwards.get(serial);
+    return value ? `127.0.0.1:${value.port}` : void 0;
+  }
+  async connectAddress(serial) {
+    if (this.disposed) throw new Error("USB \u8FDE\u63A5\u7BA1\u7406\u5668\u5DF2\u5173\u95ED");
+    const existing = this.forwards.get(serial);
+    if (existing) return `127.0.0.1:${existing.port}`;
+    const adb = await this.adbPath();
+    const value = await this.run(adb, ["-s", serial, "forward", "tcp:0", "tcp:9317"]);
+    const port = Number(value);
+    if (!/^\d+$/.test(value) || port < 1 || port > 65535) throw new Error(`USB \u7AEF\u53E3\u8F6C\u53D1\u5931\u8D25\uFF1A${value}`);
+    if (this.disposed) {
+      await this.run(adb, ["-s", serial, "forward", "--remove", `tcp:${port}`]);
+      throw new Error("USB \u8FDE\u63A5\u5DF2\u53D6\u6D88");
+    }
+    this.forwards.set(serial, { adb, port });
+    return `127.0.0.1:${port}`;
+  }
+  async dispose() {
+    this.disposed = true;
+    const entries = [...this.forwards];
+    this.forwards.clear();
+    await Promise.all(entries.map(([serial, { adb, port }]) => this.run(adb, ["-s", serial, "forward", "--remove", `tcp:${port}`]).catch(() => {
+    })));
+  }
+};
+
+// src/devicePicker.ts
+var vscode5 = __toESM(require("vscode"));
+async function selectDevice(manager2, usb, connectNew) {
+  for (; ; ) {
+    const rows = [];
+    const online = manager2.all.filter((conn) => conn.attached && !conn.isClosed());
+    for (const conn of online) rows.push({
+      label: `$(device-mobile) ${conn.deviceName}`,
+      description: manager2.activeConnection === conn ? "\u5DF2\u8FDE\u63A5 \xB7 \u5F53\u524D\u8BBE\u5907" : "\u5DF2\u8FDE\u63A5",
+      detail: conn.deviceAddress || conn.label,
+      conn
+    });
+    const known = savedDevices().filter((host) => !manager2.connectionAt(host));
+    for (const host of known) rows.push({ label: `$(history) ${host}`, description: "\u5DF2\u8BB0\u4F4F \xB7 \u70B9\u51FB\u8FDE\u63A5", host });
+    const items = usb.list().then((devices) => {
+      for (const device of devices) {
+        const address = usb.addressFor(device.serial);
+        if (address && manager2.connectionAt(address)) continue;
+        rows.push({
+          label: `$(plug) ${device.name}`,
+          description: device.state === "device" ? "USB \u624B\u673A" : device.state === "unauthorized" ? "USB \xB7 \u7B49\u5F85\u624B\u673A\u6388\u6743" : "USB \xB7 \u79BB\u7EBF",
+          detail: device.serial,
+          usb: device
+        });
+      }
+      return rows;
+    }, (error) => {
+      rows.push({ label: "$(info) USB \u626B\u63CF\u4E0D\u53EF\u7528", description: "\u914D\u7F6E adb \u8DEF\u5F84", detail: error.message, action: "adb" });
+      return rows;
+    }).then((list) => [
+      ...list,
+      { label: "$(add) \u8F93\u5165\u624B\u673A\u5730\u5740\u8FDE\u63A5\u2026", action: "connect" },
+      { label: "$(refresh) \u5237\u65B0\u8BBE\u5907\u5217\u8868", action: "refresh" }
+    ]);
+    const picked = await vscode5.window.showQuickPick(items, {
+      title: "\u9009\u62E9 AI.js Pro \u8BBE\u5907",
+      placeHolder: "\u9009\u62E9\u5DF2\u8FDE\u63A5\u3001USB \u6216\u5DF2\u8BB0\u4F4F\u7684\u624B\u673A\uFF1BEsc \u53D6\u6D88",
+      matchOnDescription: true,
+      matchOnDetail: true
+    });
+    if (!picked) return;
+    if (picked.action === "refresh") continue;
+    if (picked.action === "adb") {
+      await vscode5.commands.executeCommand("workbench.action.openSettings", "aijspro.adbPath");
+      return;
+    }
+    if (picked.action === "connect") {
+      await connectNew();
+      return;
+    }
+    if (picked.usb && picked.usb.state !== "device") {
+      await vscode5.window.showWarningMessage(picked.usb.state === "unauthorized" ? "\u8BF7\u5728\u624B\u673A\u4E0A\u5141\u8BB8 USB \u8C03\u8BD5\u6388\u6743\uFF0C\u518D\u5237\u65B0\u8BBE\u5907\u5217\u8868\u3002" : "USB \u8BBE\u5907\u79BB\u7EBF\uFF0C\u8BF7\u91CD\u65B0\u8FDE\u63A5\u6570\u636E\u7EBF\u540E\u5237\u65B0\u3002");
+      continue;
+    }
+    try {
+      let conn = picked.conn;
+      if (!conn?.attached || conn.isClosed()) {
+        conn = await vscode5.window.withProgress({
+          location: vscode5.ProgressLocation.Notification,
+          title: `AI.js Pro: \u6B63\u5728\u8FDE\u63A5 ${picked.usb?.name || picked.host || picked.label}\u2026`
+        }, async () => {
+          const address = picked.usb ? await usb.connectAddress(picked.usb.serial) : picked.host || picked.conn?.deviceAddress;
+          if (!address) throw new Error("\u8BBE\u5907\u5DF2\u65AD\u5F00\uFF0C\u8BF7\u5237\u65B0\u5217\u8868\u540E\u91CD\u9009");
+          await manager2.connectTo(address);
+          return waitForConnection(manager2, address);
+        });
+      }
+      manager2.setActive(conn);
+      vscode5.window.setStatusBarMessage(`AI.js Pro: \u5F53\u524D\u8BBE\u5907 ${conn.deviceName}`, 4e3);
+      return;
+    } catch (error) {
+      await vscode5.window.showErrorMessage(`AI.js Pro: ${error.message}\u3002\u8BF7\u786E\u8BA4\u624B\u673A\u5DF2\u5F00\u542F\u201C\u7535\u8111\u8FDE\u63A5 \u2192 \u670D\u52A1\u5668\u6A21\u5F0F\u201D\u3002`);
+    }
+  }
+}
+function waitForConnection(manager2, address) {
+  const ready = manager2.connectionAt(address);
+  if (ready) return Promise.resolve(ready);
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      manager2.off("changed", check);
+    };
+    const check = () => {
+      const conn = manager2.connectionAt(address);
+      if (conn) {
+        cleanup();
+        resolve(conn);
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`\u8FDE\u63A5 ${address} \u8D85\u65F6`));
+    }, 12e3);
+    manager2.on("changed", check);
+    check();
+  });
 }
 
 // src/tree.ts
-var vscode5 = __toESM(require("vscode"));
+var vscode6 = __toESM(require("vscode"));
 function baseName(p) {
   const index = p.lastIndexOf("/");
   return index >= 0 ? p.slice(index + 1) : p;
@@ -2287,7 +3040,7 @@ var DeviceFileProvider = class {
     this.manager = manager2;
     manager2.on("changed", () => this.refresh());
   }
-  emitter = new vscode5.EventEmitter();
+  emitter = new vscode6.EventEmitter();
   onDidChangeTreeData = this.emitter.event;
   cache = /* @__PURE__ */ new Map();
   refresh() {
@@ -2297,22 +3050,22 @@ var DeviceFileProvider = class {
   getTreeItem(node) {
     switch (node.kind) {
       case "device": {
-        const item = new vscode5.TreeItem(node.conn.deviceName, vscode5.TreeItemCollapsibleState.Expanded);
+        const item = new vscode6.TreeItem(node.conn.deviceName, vscode6.TreeItemCollapsibleState.Expanded);
         item.description = node.conn.label;
-        item.iconPath = new vscode5.ThemeIcon("device-mobile");
+        item.iconPath = new vscode6.ThemeIcon("device-mobile");
         return item;
       }
       case "dir": {
-        const item = new vscode5.TreeItem(baseName(node.path) || node.path, vscode5.TreeItemCollapsibleState.Collapsed);
+        const item = new vscode6.TreeItem(baseName(node.path) || node.path, vscode6.TreeItemCollapsibleState.Collapsed);
         item.contextValue = "aijspro.dir";
-        item.iconPath = vscode5.ThemeIcon.Folder;
+        item.iconPath = vscode6.ThemeIcon.Folder;
         return item;
       }
       case "file": {
-        const item = new vscode5.TreeItem(baseName(node.path), vscode5.TreeItemCollapsibleState.None);
+        const item = new vscode6.TreeItem(baseName(node.path), vscode6.TreeItemCollapsibleState.None);
         item.description = formatSize(node.size);
         item.contextValue = isRunnableDeviceFile(node.path) ? "aijspro.script" : "aijspro.file";
-        item.iconPath = new vscode5.ThemeIcon(
+        item.iconPath = new vscode6.ThemeIcon(
           isRunnableDeviceFile(node.path) ? "file-code" : deviceFileKind(node.path) === "image" ? "file-media" : "file"
         );
         item.command = {
@@ -2323,8 +3076,8 @@ var DeviceFileProvider = class {
         return item;
       }
       default: {
-        const item = new vscode5.TreeItem(node.label, vscode5.TreeItemCollapsibleState.None);
-        item.iconPath = new vscode5.ThemeIcon("info");
+        const item = new vscode6.TreeItem(node.label, vscode6.TreeItemCollapsibleState.None);
+        item.iconPath = new vscode6.ThemeIcon("info");
         return item;
       }
     }
@@ -2333,7 +3086,7 @@ var DeviceFileProvider = class {
     if (!node) {
       const connections = this.manager.all;
       if (connections.length === 0) {
-        return [{ kind: "info", label: "\u672A\u8FDE\u63A5\uFF1A\u6253\u5F00\u624B\u673A\u4FA7\u300CPro \u6269\u5C55\u670D\u52A1\u5668\u300D\uFF0C\u6216\u5728\u547D\u4EE4\u9762\u677F\u6267\u884C\u300CAI.js Pro: \u8FDE\u63A5\u8BBE\u5907\u2026\u300D" }];
+        return [{ kind: "info", label: "\u672A\u8FDE\u63A5\uFF1A\u6253\u5F00\u624B\u673A\u4FA7\u300C\u7535\u8111\u8FDE\u63A5 \u2192 \u670D\u52A1\u5668\u6A21\u5F0F\u300D\uFF0C\u518D\u6267\u884C\u300CAI.js Pro: \u8FDE\u63A5\u5230\u65B0\u8BBE\u5907\u300D" }];
       }
       return connections.map((conn) => ({ kind: "device", conn }));
     }
@@ -2345,12 +3098,12 @@ var DeviceFileProvider = class {
     }
     return [];
   }
-  async list(conn, path5) {
-    const cacheKey = `${conn.key}|${path5}`;
+  async list(conn, path6) {
+    const cacheKey = `${conn.key}|${path6}`;
     let listing = this.cache.get(cacheKey);
     if (!listing) {
       try {
-        listing = await conn.listFiles(path5, false);
+        listing = await conn.listFiles(path6, false);
       } catch (error) {
         return [{ kind: "info", label: `\u8BFB\u53D6\u76EE\u5F55\u5931\u8D25\uFF1A${error.message}` }];
       }
@@ -2471,90 +3224,94 @@ function createZip(entries) {
 var PUSH_MANIFEST_PREFIX = "aijspro.pushManifest";
 var channel;
 var manager;
+var usbDevices;
 var treeProvider;
 var statusBar;
 function activate(context) {
-  channel = vscode6.window.createOutputChannel("AI.js Pro", { log: true });
+  channel = vscode7.window.createOutputChannel("AI.js Pro", { log: true });
   channel.appendLine("AI.js Pro \u6269\u5C55\u5DF2\u542F\u52A8");
   e2eLog("[ext] activated");
   manager = new DeviceManager((message) => channel.appendLine(message));
+  usbDevices = new UsbDevices(() => vscode7.workspace.getConfiguration("aijspro").get("adbPath", ""));
   treeProvider = new DeviceFileProvider(manager);
   trackScriptEditors(context);
   const colorAssistant = new ColorAssistant(context, manager, (message) => {
     channel.appendLine(message);
     e2eLog(message);
   });
-  statusBar = vscode6.window.createStatusBarItem(vscode6.StatusBarAlignment.Left, 90);
-  statusBar.command = "aijspro.showLogs";
+  statusBar = vscode7.window.createStatusBarItem(vscode7.StatusBarAlignment.Left, 90);
+  statusBar.command = "aijspro.selectDevice";
   statusBar.show();
   let connectionLogShown = false;
   const updateStatus = () => {
     const conn = manager.activeConnection;
     if (conn?.attached) {
-      const address = conn.socket.remoteAddress?.replace(/^::ffff:/, "") || conn.label;
-      statusBar.text = `$(radio-tower) AI.js Pro ${address}`;
-      statusBar.tooltip = `${conn.deviceName} \xB7 ${conn.label}
-\u70B9\u51FB\u67E5\u770B\u8FDE\u63A5\u4E0E\u8FD0\u884C\u65E5\u5FD7`;
+      statusBar.text = `$(radio-tower) AI.js Pro ${conn.deviceName}`;
+      statusBar.tooltip = `${conn.deviceName} \xB7 ${conn.deviceAddress || conn.label}
+\u70B9\u51FB\u5207\u6362\u8BBE\u5907`;
       statusBar.backgroundColor = void 0;
     } else {
       statusBar.text = "$(debug-disconnect) AI.js Pro: \u672A\u8FDE\u63A5";
-      statusBar.tooltip = "\u6253\u5F00\u624B\u673A\u4FA7\u300CPro \u6269\u5C55\u670D\u52A1\u5668\u300D\uFF0C\u6216\u70B9\u51FB\u8FDE\u63A5\u8BBE\u5907";
+      statusBar.tooltip = "\u70B9\u51FB\u9009\u62E9\u8BBE\u5907\uFF08\u652F\u6301 USB \u548C\u5C40\u57DF\u7F51\uFF09\uFF1B\u624B\u673A\u4FA7\u9700\u5F00\u542F\u201C\u7535\u8111\u8FDE\u63A5 \u2192 \u670D\u52A1\u5668\u6A21\u5F0F\u201D";
       statusBar.backgroundColor = void 0;
     }
   };
   manager.on("changed", () => {
     updateStatus();
     treeProvider.refresh();
-    if (!connectionLogShown && manager.activeConnection?.attached && vscode6.workspace.getConfiguration("aijspro").get("showLogsOnConnect", true)) {
+    if (!connectionLogShown && manager.activeConnection?.attached && vscode7.workspace.getConfiguration("aijspro").get("showLogsOnConnect", true)) {
       connectionLogShown = true;
       channel.show(true);
     }
   });
   manager.on("deviceLog", (conn, line) => {
-    channel.appendLine(`[${conn.deviceName}] ${line}`);
+    const clean = line.replace(/\x1e/g, "").replace(/\r\n/g, "\n");
+    for (const entry of clean.split("\n")) {
+      if (entry.length > 0) channel.appendLine(`[${conn.deviceName}] ${entry}`);
+    }
   });
   updateStatus();
   context.subscriptions.push(
     channel,
     statusBar,
-    vscode6.window.registerTreeDataProvider("aijsproFiles", treeProvider),
-    vscode6.commands.registerCommand("aijspro.help", () => helpCommand(context)),
-    vscode6.commands.registerCommand("aijspro.connect", () => connectCommand()),
-    vscode6.commands.registerCommand("aijspro.selectDevice", () => selectDeviceCommand()),
-    vscode6.commands.registerCommand("aijspro.scanDevices", () => scanDevicesCommand()),
-    vscode6.commands.registerCommand("aijspro.forgetDevices", () => forgetDevicesCommand()),
-    vscode6.commands.registerCommand("aijspro.run", () => runActiveFileCommand(context)),
-    vscode6.commands.registerCommand("aijspro.runFile", () => runFilePickerCommand(context)),
-    vscode6.commands.registerCommand("aijspro.runProject", () => runProjectCommand(context)),
-    vscode6.commands.registerCommand("aijspro.rerun", () => rerunCommand(context)),
-    vscode6.commands.registerCommand("aijspro.stop", () => stopCurrentCommand()),
-    vscode6.commands.registerCommand("aijspro.stopAll", () => stopAllCommand()),
-    vscode6.commands.registerCommand("aijspro.inspectLayout", () => inspectLayoutCommand()),
-    vscode6.commands.registerCommand("aijspro.pickColor", () => colorAssistant.open()),
-    vscode6.commands.registerCommand("aijspro.browseFiles", () => vscode6.commands.executeCommand("aijsproFiles.focus")),
-    vscode6.commands.registerCommand("aijspro.saveFile", () => pushFileCommand()),
-    vscode6.commands.registerCommand("aijspro.pushFile", () => pushFileCommand()),
-    vscode6.commands.registerCommand("aijspro.saveProject", () => saveProjectCommand()),
-    vscode6.commands.registerCommand("aijspro.newRhinoProject", () => createDeviceProjectCommand("rhino")),
-    vscode6.commands.registerCommand("aijspro.newQuickJsProject", () => createDeviceProjectCommand("quickjs")),
-    vscode6.commands.registerCommand("aijspro.newRhinoProjectInWorkspace", () => createWorkspaceProjectCommand("rhino")),
-    vscode6.commands.registerCommand("aijspro.newQuickJsProjectInWorkspace", () => createWorkspaceProjectCommand("quickjs")),
-    vscode6.commands.registerCommand("aijspro.addDebugConfig", () => addDebugConfigCommand()),
-    vscode6.commands.registerCommand("aijspro.debug", () => debugFileCommand()),
-    vscode6.debug.registerDebugAdapterDescriptorFactory(
+    vscode7.window.registerTreeDataProvider("aijsproFiles", treeProvider),
+    vscode7.commands.registerCommand("aijspro.help", () => helpCommand(context)),
+    vscode7.commands.registerCommand("aijspro.connect", () => connectCommand()),
+    vscode7.commands.registerCommand("aijspro.selectDevice", () => selectDeviceCommand()),
+    vscode7.commands.registerCommand("aijspro.scanDevices", () => scanDevicesCommand()),
+    vscode7.commands.registerCommand("aijspro.forgetDevices", () => forgetDevicesCommand()),
+    vscode7.commands.registerCommand("aijspro.run", () => runActiveFileCommand(context)),
+    vscode7.commands.registerCommand("aijspro.runFile", () => runFilePickerCommand(context)),
+    vscode7.commands.registerCommand("aijspro.runProject", () => runProjectCommand(context)),
+    vscode7.commands.registerCommand("aijspro.rerun", () => rerunCommand(context)),
+    vscode7.commands.registerCommand("aijspro.stop", () => stopCurrentCommand()),
+    vscode7.commands.registerCommand("aijspro.stopAll", () => stopAllCommand()),
+    vscode7.commands.registerCommand("aijspro.inspectLayout", () => inspectLayoutCommand()),
+    vscode7.commands.registerCommand("aijspro.pickColor", () => colorAssistant.open()),
+    vscode7.commands.registerCommand("aijspro.browseFiles", () => vscode7.commands.executeCommand("aijsproFiles.focus")),
+    vscode7.commands.registerCommand("aijspro.saveFile", () => pushFileCommand()),
+    vscode7.commands.registerCommand("aijspro.pushFile", () => pushFileCommand()),
+    vscode7.commands.registerCommand("aijspro.saveProject", () => saveProjectCommand()),
+    vscode7.commands.registerCommand("aijspro.newRhinoProject", () => createDeviceProjectCommand("rhino")),
+    vscode7.commands.registerCommand("aijspro.newQuickJsProject", () => createDeviceProjectCommand("quickjs")),
+    vscode7.commands.registerCommand("aijspro.newRhinoProjectInWorkspace", () => createWorkspaceProjectCommand("rhino")),
+    vscode7.commands.registerCommand("aijspro.newQuickJsProjectInWorkspace", () => createWorkspaceProjectCommand("quickjs")),
+    vscode7.commands.registerCommand("aijspro.addDebugConfig", () => addDebugConfigCommand()),
+    vscode7.commands.registerCommand("aijspro.debug", () => debugFileCommand()),
+    vscode7.debug.registerDebugAdapterDescriptorFactory(
       "aijspro",
       createDebugAdapterFactory(manager, channel)
     ),
-    vscode6.debug.registerDebugConfigurationProvider("aijspro", createDebugConfigurationProvider()),
-    vscode6.commands.registerCommand("aijspro.disconnect", () => manager.disconnectAll()),
-    vscode6.commands.registerCommand("aijspro.showLogs", () => channel.show(true)),
-    vscode6.commands.registerCommand("aijspro.refreshFiles", () => treeProvider.refresh()),
-    vscode6.commands.registerCommand("aijspro.togglePushOnSave", () => togglePushOnSave()),
-    vscode6.commands.registerCommand("aijspro.menu", () => menuCommand()),
-    vscode6.commands.registerCommand("aijspro.openDeviceFile", (node) => openDeviceFile(node, context)),
-    vscode6.commands.registerCommand("aijspro.runDeviceFile", (node) => runDeviceFile(node)),
-    vscode6.commands.registerCommand("aijspro.downloadFile", (node) => downloadFile(node)),
-    vscode6.workspace.onDidSaveTextDocument((document) => pushOnSave(document)),
+    vscode7.debug.registerDebugConfigurationProvider("aijspro", createDebugConfigurationProvider()),
+    vscode7.commands.registerCommand("aijspro.disconnect", () => manager.disconnectAll()),
+    vscode7.commands.registerCommand("aijspro.showLogs", () => channel.show(true)),
+    vscode7.commands.registerCommand("aijspro.refreshFiles", () => treeProvider.refresh()),
+    vscode7.commands.registerCommand("aijspro.togglePushOnSave", () => togglePushOnSave()),
+    vscode7.commands.registerCommand("aijspro.menu", () => menuCommand()),
+    vscode7.commands.registerCommand("aijspro.openDeviceFile", (node) => openDeviceFile(node, context)),
+    vscode7.commands.registerCommand("aijspro.runDeviceFile", (node) => runDeviceFile(node)),
+    vscode7.commands.registerCommand("aijspro.downloadFile", (node) => downloadFile(node)),
+    vscode7.workspace.onDidSaveTextDocument((document) => pushOnSave(document)),
     { dispose: () => manager.dispose() }
   );
   manager.startListening();
@@ -2571,18 +3328,19 @@ function activate(context) {
     void autoColorForE2E(colorAssistant);
   }
 }
-function deactivate() {
+async function deactivate() {
   manager?.dispose();
+  await usbDevices?.dispose();
 }
 async function connectCommand() {
   const remembered = savedDevices();
-  const picked = await vscode6.window.showQuickPick(
+  const picked = await vscode7.window.showQuickPick(
     [
       ...remembered.map((host2) => ({ label: host2 })),
       { label: "$(edit) \u8F93\u5165\u5730\u5740\u2026" },
       { label: "$(trash) \u5220\u9664\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907\u2026" }
     ],
-    { placeHolder: "\u9009\u62E9\u8981\u8FDE\u63A5\u7684\u8BBE\u5907\uFF08\u624B\u673A\u4FA7\u9700\u6253\u5F00\u300CPro \u6269\u5C55\u670D\u52A1\u5668\u300D\uFF09" }
+    { placeHolder: "\u9009\u62E9\u8981\u8FDE\u63A5\u7684\u8BBE\u5907\uFF08\u624B\u673A\u4FA7\u9700\u6253\u5F00\u300C\u7535\u8111\u8FDE\u63A5 \u2192 \u670D\u52A1\u5668\u6A21\u5F0F\u300D\uFF09" }
   );
   if (!picked) {
     return;
@@ -2593,7 +3351,7 @@ async function connectCommand() {
     return;
   }
   if (host.startsWith("$(edit)")) {
-    const input = await vscode6.window.showInputBox({
+    const input = await vscode7.window.showInputBox({
       prompt: "\u8F93\u5165\u624B\u673A\u5730\u5740\uFF08\u5982 192.168.31.59 \u6216 192.168.31.59:9317\uFF09"
     });
     if (!input) {
@@ -2604,18 +3362,18 @@ async function connectCommand() {
   try {
     await manager.connectTo(host);
   } catch (error) {
-    vscode6.window.showErrorMessage(`AI.js Pro: \u8FDE\u63A5\u5931\u8D25\uFF1A${error.message}`);
+    vscode7.window.showErrorMessage(`AI.js Pro: \u8FDE\u63A5\u5931\u8D25\uFF1A${error.message}`);
     return;
   }
-  vscode6.window.setStatusBarMessage(`AI.js Pro: \u6B63\u5728\u8FDE\u63A5 ${host}\u2026`, 4e3);
+  vscode7.window.setStatusBarMessage(`AI.js Pro: \u6B63\u5728\u8FDE\u63A5 ${host}\u2026`, 4e3);
 }
 async function forgetDevicesCommand() {
   const remembered = savedDevices();
   if (remembered.length === 0) {
-    vscode6.window.showInformationMessage("AI.js Pro: \u6CA1\u6709\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907");
+    vscode7.window.showInformationMessage("AI.js Pro: \u6CA1\u6709\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907");
     return;
   }
-  const selected = await vscode6.window.showQuickPick(
+  const selected = await vscode7.window.showQuickPick(
     remembered.map((host) => ({ label: host })),
     {
       canPickMany: true,
@@ -2626,9 +3384,9 @@ async function forgetDevicesCommand() {
   if (!selected?.length) return;
   try {
     await manager.forgetDevices(selected.map((item) => item.label));
-    vscode6.window.showInformationMessage(`AI.js Pro: \u5DF2\u5220\u9664 ${selected.length} \u4E2A\u8BBE\u5907\u5730\u5740\uFF0C\u5DF2\u505C\u6B62\u81EA\u52A8\u91CD\u8FDE`);
+    vscode7.window.showInformationMessage(`AI.js Pro: \u5DF2\u5220\u9664 ${selected.length} \u4E2A\u8BBE\u5907\u5730\u5740\uFF0C\u5DF2\u505C\u6B62\u81EA\u52A8\u91CD\u8FDE`);
   } catch (error) {
-    vscode6.window.showErrorMessage(`AI.js Pro: \u5F53\u524D\u8FDE\u63A5\u5DF2\u53D6\u6D88\uFF0C\u4F46\u5220\u9664\u8BBE\u5907\u8BBE\u7F6E\u5931\u8D25\uFF1A${error.message}`);
+    vscode7.window.showErrorMessage(`AI.js Pro: \u5F53\u524D\u8FDE\u63A5\u5DF2\u53D6\u6D88\uFF0C\u4F46\u5220\u9664\u8BBE\u5907\u8BBE\u7F6E\u5931\u8D25\uFF1A${error.message}`);
   }
 }
 async function withConnection(action) {
@@ -2640,7 +3398,7 @@ async function withConnection(action) {
   try {
     return await action(conn);
   } catch (error) {
-    vscode6.window.showErrorMessage(`AI.js Pro: ${error.message}`);
+    vscode7.window.showErrorMessage(`AI.js Pro: ${error.message}`);
     return void 0;
   }
 }
@@ -2649,7 +3407,7 @@ async function stopCurrentCommand() {
     const result = await conn.stop();
     const message = result.fallbackStopAll ? "\u65E0\u6CD5\u53EF\u9760\u5B9A\u4F4D\u5F53\u524D\u811A\u672C\uFF0C\u5DF2\u53D1\u9001\u201C\u505C\u6B62\u6240\u6709\u811A\u672C\u201D" : "\u5DF2\u53D1\u9001\u505C\u6B62\u5F53\u524D\u811A\u672C";
     channel.appendLine(`[${conn.deviceName}] ${message}`);
-    vscode6.window.setStatusBarMessage(`AI.js Pro: ${message}`, 5e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: ${message}`, 5e3);
   });
 }
 async function stopAllCommand() {
@@ -2657,30 +3415,33 @@ async function stopAllCommand() {
     const count = await conn.stopAll();
     const message = count > 0 ? `\u5DF2\u505C\u6B62 ${count} \u4E2A\u811A\u672C` : "\u5DF2\u53D1\u9001\u505C\u6B62\u6240\u6709\u811A\u672C";
     channel.appendLine(`[${conn.deviceName}] ${message}`);
-    vscode6.window.setStatusBarMessage(`AI.js Pro: ${message}`, 5e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: ${message}`, 5e3);
   });
 }
 async function withNodeConnection(node, action) {
   const conn = node?.conn;
   if (!conn?.attached || conn.isClosed()) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u6B64\u6587\u4EF6\u6240\u5C5E\u8BBE\u5907\u5DF2\u65AD\u5F00\uFF0C\u8BF7\u5237\u65B0\u8BBE\u5907\u6587\u4EF6\u6811");
+    vscode7.window.showWarningMessage("AI.js Pro: \u6B64\u6587\u4EF6\u6240\u5C5E\u8BBE\u5907\u5DF2\u65AD\u5F00\uFF0C\u8BF7\u5237\u65B0\u8BBE\u5907\u6587\u4EF6\u6811");
     return void 0;
   }
   try {
     return await action(conn);
   } catch (error) {
-    vscode6.window.showErrorMessage(`AI.js Pro: ${error.message}`);
+    vscode7.window.showErrorMessage(`AI.js Pro: ${error.message}`);
     return void 0;
   }
 }
 async function promptConnect() {
-  const choice = await vscode6.window.showInformationMessage(
-    "AI.js Pro: \u8FD8\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684\u8BBE\u5907\u3002",
+  const choice = await vscode7.window.showInformationMessage(
+    "AI.js Pro: \u8BF7\u5148\u9009\u62E9\u5E76\u8FDE\u63A5\u8981\u4F7F\u7528\u7684\u8BBE\u5907\u3002",
+    "\u9009\u62E9\u8BBE\u5907\u2026",
     "\u8FDE\u63A5\u8BBE\u5907\u2026",
     "\u663E\u793A\u65E5\u5FD7"
   );
-  if (choice === "\u8FDE\u63A5\u8BBE\u5907\u2026") {
-    await vscode6.commands.executeCommand("aijspro.connect");
+  if (choice === "\u9009\u62E9\u8BBE\u5907\u2026") {
+    await vscode7.commands.executeCommand("aijspro.selectDevice");
+  } else if (choice === "\u8FDE\u63A5\u8BBE\u5907\u2026") {
+    await vscode7.commands.executeCommand("aijspro.connect");
   } else if (choice === "\u663E\u793A\u65E5\u5FD7") {
     channel.show(true);
   }
@@ -2688,22 +3449,22 @@ async function promptConnect() {
 async function runActiveFileCommand(context) {
   const editor = pickScriptEditor();
   if (!editor) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u6CA1\u6709\u53EF\u8FD0\u884C\u7684\u811A\u672C\u6587\u4EF6\uFF08\u5148\u6253\u5F00\u6216\u70B9\u4E00\u4E0B .js \u6587\u4EF6\uFF09");
+    vscode7.window.showWarningMessage("AI.js Pro: \u6CA1\u6709\u53EF\u8FD0\u884C\u7684\u811A\u672C\u6587\u4EF6\uFF08\u5148\u6253\u5F00\u6216\u70B9\u4E00\u4E0B .js \u6587\u4EF6\uFF09");
     return;
   }
-  const active = vscode6.window.activeTextEditor;
+  const active = vscode7.window.activeTextEditor;
   if (active && !isScriptEditor(active)) {
-    vscode6.window.setStatusBarMessage("AI.js Pro: \u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668\u4E0A\uFF0C\u5DF2\u6539\u7528\u6700\u8FD1\u7F16\u8F91\u7684\u811A\u672C", 4e3);
+    vscode7.window.setStatusBarMessage("AI.js Pro: \u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668\u4E0A\uFF0C\u5DF2\u6539\u7528\u6700\u8FD1\u7F16\u8F91\u7684\u811A\u672C", 4e3);
   }
   const document = editor.document;
-  const name = path4.basename(document.isUntitled ? "untitled.js" : document.fileName);
+  const name = path5.basename(document.isUntitled ? "untitled.js" : document.fileName);
   const id = relativeToWorkspace(document) ?? name;
   const script = document.getText();
   await withConnection(async (conn) => {
     await conn.run(name, id, script);
     await context.workspaceState.update(rerunKey(conn), { kind: "script", name, id, script });
     channel.appendLine(`[${conn.deviceName}] \u25B6 ${name}`);
-    vscode6.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u53D1\u9001 ${name}`, 3e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u53D1\u9001 ${name}`, 3e3);
   });
 }
 async function runProjectCommand(context) {
@@ -2711,28 +3472,28 @@ async function runProjectCommand(context) {
   if (!folder) {
     return;
   }
-  const options = vscode6.workspace.getConfiguration("aijspro");
+  const options = vscode7.workspace.getConfiguration("aijspro");
   const exclude = new Set(options.get("exclude", []));
   const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
   if (entries.length === 0) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u63A8\u9001\u7684\u6587\u4EF6");
+    vscode7.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u63A8\u9001\u7684\u6587\u4EF6");
     return;
   }
   const zipInputs = [];
   for (const entry of entries) {
     zipInputs.push({
       path: entry.relative,
-      data: await fs3.promises.readFile(entry.absolute)
+      data: await fs4.promises.readFile(entry.absolute)
     });
   }
   const archive = createZip(zipInputs);
   if (archive.length > 200 * 1024 * 1024) {
-    vscode6.window.showErrorMessage(
+    vscode7.window.showErrorMessage(
       `AI.js Pro: \u5DE5\u7A0B\u6253\u5305\u540E ${(archive.length / 1024 / 1024).toFixed(0)} MB\uFF0C\u8D85\u8FC7\u534F\u8BAE\u4E0A\u9650\uFF08256MB\uFF09\uFF0C\u8BF7\u7528 aijspro.exclude \u6392\u9664\u5927\u6587\u4EF6`
     );
     return;
   }
-  const projectName = path4.basename(folder.uri.fsPath);
+  const projectName = path5.basename(folder.uri.fsPath);
   await withConnection(async (conn) => {
     const manifestKey = `${PUSH_MANIFEST_PREFIX}.${conn.key}.${folder.uri.fsPath}`;
     const previous = context.globalState.get(manifestKey, []);
@@ -2751,30 +3512,30 @@ async function runProjectCommand(context) {
     channel.appendLine(
       `[${conn.deviceName}] \u25B6 \u5DE5\u7A0B ${projectName}\uFF08${entries.length} \u4E2A\u6587\u4EF6\uFF0C${(archive.length / 1024).toFixed(0)} KB\uFF0C\u5220\u9664 ${deletedFiles.length}\uFF09`
     );
-    vscode6.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u63A8\u9001\u5E76\u8FD0\u884C ${projectName}`, 4e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u63A8\u9001\u5E76\u8FD0\u884C ${projectName}`, 4e3);
   });
 }
 async function pushFileCommand() {
-  const editor = vscode6.window.activeTextEditor;
+  const editor = vscode7.window.activeTextEditor;
   if (!editor) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u6CA1\u6709\u6253\u5F00\u7684\u6587\u4EF6");
+    vscode7.window.showWarningMessage("AI.js Pro: \u6CA1\u6709\u6253\u5F00\u7684\u6587\u4EF6");
     return;
   }
   const devicePath = devicePathForDocument(editor.document);
   if (!devicePath) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u8BE5\u6587\u4EF6\u4E0D\u5728\u5DE5\u4F5C\u533A\u5185\uFF0C\u65E0\u6CD5\u786E\u5B9A\u63A8\u9001\u8DEF\u5F84");
+    vscode7.window.showWarningMessage("AI.js Pro: \u8BE5\u6587\u4EF6\u4E0D\u5728\u5DE5\u4F5C\u533A\u5185\uFF0C\u65E0\u6CD5\u786E\u5B9A\u63A8\u9001\u8DEF\u5F84");
     return;
   }
   await withConnection(async (conn) => {
     await conn.writeFile(devicePath, editor.document.getText());
-    vscode6.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u63A8\u9001 ${devicePath}`, 4e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u63A8\u9001 ${devicePath}`, 4e3);
   });
 }
 async function openDeviceFile(node, context) {
   const kind = deviceFileKind(node.path);
   if (kind === "download") {
-    const choice = await vscode6.window.showInformationMessage(
-      `AI.js Pro: ${path4.posix.basename(node.path)} \u4E0D\u80FD\u76F4\u63A5\u9884\u89C8\uFF0C\u53EF\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A\u540E\u7528\u5408\u9002\u7684\u5E94\u7528\u6253\u5F00\u3002`,
+    const choice = await vscode7.window.showInformationMessage(
+      `AI.js Pro: ${path5.posix.basename(node.path)} \u4E0D\u80FD\u76F4\u63A5\u9884\u89C8\uFF0C\u53EF\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A\u540E\u7528\u5408\u9002\u7684\u5E94\u7528\u6253\u5F00\u3002`,
       "\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A"
     );
     if (choice === "\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A") await downloadFile(node);
@@ -2783,12 +3544,12 @@ async function openDeviceFile(node, context) {
   await withNodeConnection(node, async (conn) => {
     const data = await conn.readFile(node.path);
     if (kind === "image") {
-      const previewDir = vscode6.Uri.joinPath(context.globalStorageUri, "device-previews");
-      await vscode6.workspace.fs.createDirectory(previewDir);
+      const previewDir = vscode7.Uri.joinPath(context.globalStorageUri, "device-previews");
+      await vscode7.workspace.fs.createDirectory(previewDir);
       const hash = (0, import_crypto.createHash)("sha256").update(`${conn.key}|${node.path}`).digest("hex").slice(0, 16);
-      const preview = vscode6.Uri.joinPath(previewDir, `${hash}-${sanitize(path4.posix.basename(node.path))}`);
-      await vscode6.workspace.fs.writeFile(preview, data);
-      await vscode6.commands.executeCommand("vscode.open", preview, { preview: true });
+      const preview = vscode7.Uri.joinPath(previewDir, `${hash}-${sanitize(path5.posix.basename(node.path))}`);
+      await vscode7.workspace.fs.writeFile(preview, data);
+      await vscode7.commands.executeCommand("vscode.open", preview, { preview: true });
       return;
     }
     let content;
@@ -2796,28 +3557,28 @@ async function openDeviceFile(node, context) {
       if (data.includes(0)) throw new Error("binary");
       content = new import_util.TextDecoder("utf-8", { fatal: true }).decode(data);
     } catch {
-      vscode6.window.showWarningMessage(`AI.js Pro: ${node.path} \u4E0D\u662F\u6709\u6548 UTF-8 \u6587\u672C\uFF0C\u8BF7\u7528\u201C\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A\u201D\u4FDD\u5B58\u539F\u6587\u4EF6`);
+      vscode7.window.showWarningMessage(`AI.js Pro: ${node.path} \u4E0D\u662F\u6709\u6548 UTF-8 \u6587\u672C\uFF0C\u8BF7\u7528\u201C\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A\u201D\u4FDD\u5B58\u539F\u6587\u4EF6`);
       return;
     }
-    const document = await vscode6.workspace.openTextDocument({
+    const document = await vscode7.workspace.openTextDocument({
       content,
       language: languageOf(node.path)
     });
-    await vscode6.window.showTextDocument(document, { preview: true });
+    await vscode7.window.showTextDocument(document, { preview: true });
   });
 }
 async function runDeviceFile(node) {
   if (!isRunnableDeviceFile(node.path)) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u53EA\u6709 .js \u548C .auto \u811A\u672C\u53EF\u4EE5\u76F4\u63A5\u8FD0\u884C");
+    vscode7.window.showWarningMessage("AI.js Pro: \u53EA\u6709 .js \u548C .auto \u811A\u672C\u53EF\u4EE5\u76F4\u63A5\u8FD0\u884C");
     return;
   }
   await withNodeConnection(node, async (conn) => {
     const data = await conn.readFile(node.path);
-    const name = path4.basename(node.path);
+    const name = path5.basename(node.path);
     const script = new import_util.TextDecoder("utf-8", { fatal: true }).decode(data);
     await conn.run(name, node.path, script);
     channel.appendLine(`[${conn.deviceName}] \u25B6 ${node.path}`);
-    vscode6.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u5728\u624B\u673A\u4E0A\u8FD0\u884C ${name}`, 4e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u5728\u624B\u673A\u4E0A\u8FD0\u884C ${name}`, 4e3);
   });
 }
 async function downloadFile(node) {
@@ -2826,29 +3587,29 @@ async function downloadFile(node) {
     const folder = await pickWorkspaceFolder() ?? void 0;
     let target;
     if (folder) {
-      target = path4.join(
+      target = path5.join(
         folder.uri.fsPath,
         "device-export",
         sanitize(conn.deviceName),
         ...node.path.split("/")
       );
     } else {
-      const picked = await vscode6.window.showSaveDialog({
-        defaultUri: vscode6.Uri.file(data ? path4.basename(node.path) : node.path)
+      const picked = await vscode7.window.showSaveDialog({
+        defaultUri: vscode7.Uri.file(data ? path5.basename(node.path) : node.path)
       });
       if (!picked) {
         return;
       }
       target = picked.fsPath;
     }
-    await fs3.promises.mkdir(path4.dirname(target), { recursive: true });
-    await fs3.promises.writeFile(target, data);
-    const choice = await vscode6.window.showInformationMessage(
+    await fs4.promises.mkdir(path5.dirname(target), { recursive: true });
+    await fs4.promises.writeFile(target, data);
+    const choice = await vscode7.window.showInformationMessage(
       `AI.js Pro: \u5DF2\u4E0B\u8F7D\u5230 ${target}`,
       "\u6253\u5F00\u6587\u4EF6"
     );
     if (choice === "\u6253\u5F00\u6587\u4EF6") {
-      await vscode6.commands.executeCommand("vscode.open", vscode6.Uri.file(target));
+      await vscode7.commands.executeCommand("vscode.open", vscode7.Uri.file(target));
     }
   });
 }
@@ -2881,20 +3642,20 @@ async function menuCommand() {
     { label: "\u663E\u793A\u65E5\u5FD7 (Show Logs)", command: "aijspro.showLogs" },
     { label: "\u5F00\u5173\u4FDD\u5B58\u65F6\u81EA\u52A8\u63A8\u9001", command: "aijspro.togglePushOnSave" }
   ];
-  const picked = await vscode6.window.showQuickPick(actions, { placeHolder: "AI.js Pro \u529F\u80FD\u83DC\u5355" });
-  if (picked) await vscode6.commands.executeCommand(picked.command);
+  const picked = await vscode7.window.showQuickPick(actions, { placeHolder: "AI.js Pro \u529F\u80FD\u83DC\u5355" });
+  if (picked) await vscode7.commands.executeCommand(picked.command);
 }
 async function togglePushOnSave() {
-  const config = vscode6.workspace.getConfiguration("aijspro");
+  const config = vscode7.workspace.getConfiguration("aijspro");
   const next = !config.get("pushOnSave", false);
-  await config.update("pushOnSave", next, vscode6.ConfigurationTarget.Global);
-  vscode6.window.setStatusBarMessage(
+  await config.update("pushOnSave", next, vscode7.ConfigurationTarget.Global);
+  vscode7.window.setStatusBarMessage(
     next ? "AI.js Pro: \u4FDD\u5B58\u65F6\u81EA\u52A8\u63A8\u9001\u5DF2\u5F00\u542F" : "AI.js Pro: \u4FDD\u5B58\u65F6\u81EA\u52A8\u63A8\u9001\u5DF2\u5173\u95ED",
     3e3
   );
 }
 async function pushOnSave(document) {
-  if (!vscode6.workspace.getConfiguration("aijspro").get("pushOnSave", false)) {
+  if (!vscode7.workspace.getConfiguration("aijspro").get("pushOnSave", false)) {
     return;
   }
   const conn = manager.activeConnection;
@@ -2913,41 +3674,41 @@ async function pushOnSave(document) {
   }
 }
 function devicePathForDocument(document) {
-  const folder = vscode6.workspace.getWorkspaceFolder(document.uri);
+  const folder = vscode7.workspace.getWorkspaceFolder(document.uri);
   if (!folder) {
     return void 0;
   }
-  const relative2 = path4.relative(folder.uri.fsPath, document.uri.fsPath);
-  if (relative2.startsWith("..") || path4.isAbsolute(relative2)) {
+  const relative2 = path5.relative(folder.uri.fsPath, document.uri.fsPath);
+  if (relative2.startsWith("..") || path5.isAbsolute(relative2)) {
     return void 0;
   }
-  return `${path4.basename(folder.uri.fsPath)}/${relative2.split(path4.sep).join("/")}`;
+  return `${path5.basename(folder.uri.fsPath)}/${relative2.split(path5.sep).join("/")}`;
 }
 function relativeToWorkspace(document) {
-  const folder = vscode6.workspace.getWorkspaceFolder(document.uri);
+  const folder = vscode7.workspace.getWorkspaceFolder(document.uri);
   if (!folder) {
     return void 0;
   }
-  return path4.relative(folder.uri.fsPath, document.uri.fsPath).split(path4.sep).join("/");
+  return path5.relative(folder.uri.fsPath, document.uri.fsPath).split(path5.sep).join("/");
 }
 async function pickWorkspaceFolder() {
-  const folders = vscode6.workspace.workspaceFolders ?? [];
+  const folders = vscode7.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
-    const editor = vscode6.window.activeTextEditor;
+    const editor = vscode7.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === "file") {
       return {
-        uri: vscode6.Uri.file(path4.dirname(editor.document.fileName)),
-        name: path4.basename(path4.dirname(editor.document.fileName)),
+        uri: vscode7.Uri.file(path5.dirname(editor.document.fileName)),
+        name: path5.basename(path5.dirname(editor.document.fileName)),
         index: 0
       };
     }
-    vscode6.window.showWarningMessage("AI.js Pro: \u9700\u8981\u6253\u5F00\u4E00\u4E2A\u6587\u4EF6\u5939\u5DE5\u4F5C\u533A");
+    vscode7.window.showWarningMessage("AI.js Pro: \u9700\u8981\u6253\u5F00\u4E00\u4E2A\u6587\u4EF6\u5939\u5DE5\u4F5C\u533A");
     return void 0;
   }
   if (folders.length === 1) {
     return folders[0];
   }
-  const picked = await vscode6.window.showQuickPick(
+  const picked = await vscode7.window.showQuickPick(
     folders.map((folder) => ({ label: folder.name, folder })),
     { placeHolder: "\u9009\u62E9\u8981\u63A8\u9001\u7684\u5DE5\u7A0B" }
   );
@@ -2956,16 +3717,16 @@ async function pickWorkspaceFolder() {
 async function collectProjectFiles(root, exclude) {
   const result = [];
   const walk = async (dir) => {
-    const children = await fs3.promises.readdir(dir, { withFileTypes: true });
+    const children = await fs4.promises.readdir(dir, { withFileTypes: true });
     for (const child of children) {
       if (exclude.has(child.name)) {
         continue;
       }
-      const absolute = path4.join(dir, child.name);
+      const absolute = path5.join(dir, child.name);
       if (child.isDirectory()) {
         await walk(absolute);
       } else if (child.isFile()) {
-        result.push({ relative: path4.relative(root, absolute).split(path4.sep).join("/"), absolute });
+        result.push({ relative: path5.relative(root, absolute).split(path5.sep).join("/"), absolute });
       }
     }
   };
@@ -2973,7 +3734,7 @@ async function collectProjectFiles(root, exclude) {
   return result;
 }
 function languageOf(devicePath) {
-  const extension = path4.extname(devicePath).toLowerCase();
+  const extension = path5.extname(devicePath).toLowerCase();
   switch (extension) {
     case ".js":
       return "javascript";
@@ -2994,73 +3755,63 @@ function rerunKey(conn) {
   return `aijspro.lastRun.${conn.key}`;
 }
 function hostOf(conn) {
-  const label = conn.label;
-  const index = label.lastIndexOf(":");
-  return index > 0 ? label.slice(0, index) : label;
+  return conn.deviceAddress ?? conn.label;
 }
 async function helpCommand(context) {
-  await vscode6.commands.executeCommand(
+  await vscode7.commands.executeCommand(
     "markdown.showPreview",
-    vscode6.Uri.joinPath(context.extensionUri, "README.md")
+    vscode7.Uri.joinPath(context.extensionUri, "README.md")
   );
 }
 async function selectDeviceCommand() {
-  const conn = await manager.pickConnection();
-  if (!conn) {
-    await promptConnect();
-    return;
-  }
-  manager.setActive(conn);
-  vscode6.window.setStatusBarMessage(`AI.js Pro: \u5F53\u524D\u8BBE\u5907 ${conn.deviceName}`, 3e3);
+  await selectDevice(manager, usbDevices, connectCommand);
 }
-function scanDevicesCommand() {
+async function scanDevicesCommand() {
   const tried = manager.scanNow();
-  vscode6.window.setStatusBarMessage(
-    tried > 0 ? `AI.js Pro: \u6B63\u5728\u91CD\u8FDE ${tried} \u4E2A\u5DF2\u8BB0\u4F4F\u7684\u8BBE\u5907\u2026` : "AI.js Pro: \u6CA1\u6709\u9700\u8981\u91CD\u8FDE\u7684\u8BBE\u5907\uFF08\u624B\u673A\u4FA7\u5F00\u542F\u300CPro \u6269\u5C55\u670D\u52A1\u5668\u300D\u540E\u4F1A\u81EA\u52A8\u56DE\u8FDE\uFF09",
-    4e3
-  );
+  channel.appendLine(`\u626B\u63CF\u8BBE\u5907\uFF1A\u5DF2\u53D1\u8D77 ${tried} \u4E2A\u5DF2\u8BB0\u4F4F\u5730\u5740\u7684\u8FDE\u63A5\uFF0C\u6B63\u5728\u8BFB\u53D6 USB \u624B\u673A\u5217\u8868`);
+  await selectDevice(manager, usbDevices, connectCommand);
 }
 async function runFilePickerCommand(context) {
   const folder = await pickWorkspaceFolder();
   if (!folder) {
     return;
   }
-  const exclude = new Set(vscode6.workspace.getConfiguration("aijspro").get("exclude", []));
+  const exclude = new Set(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
   const entries = (await collectProjectFiles(folder.uri.fsPath, exclude)).filter(
     (entry) => entry.relative.endsWith(".js")
   );
   if (entries.length === 0) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u5DE5\u4F5C\u533A\u91CC\u6CA1\u6709 .js \u6587\u4EF6");
+    vscode7.window.showWarningMessage("AI.js Pro: \u5DE5\u4F5C\u533A\u91CC\u6CA1\u6709 .js \u6587\u4EF6");
     return;
   }
-  const picked = await vscode6.window.showQuickPick(
+  const picked = await vscode7.window.showQuickPick(
     entries.map((entry) => entry.relative),
     { placeHolder: "\u9009\u62E9\u8981\u8FD0\u884C\u7684\u811A\u672C" }
   );
   if (!picked) {
     return;
   }
-  const absolute = path4.join(folder.uri.fsPath, ...picked.split("/"));
+  const absolute = path5.join(folder.uri.fsPath, ...picked.split("/"));
   let script;
   try {
-    script = await fs3.promises.readFile(absolute, "utf8");
+    script = await fs4.promises.readFile(absolute, "utf8");
   } catch (error) {
-    vscode6.window.showErrorMessage(`AI.js Pro: \u8BFB\u53D6 ${picked} \u5931\u8D25\uFF1A${error.message}`);
+    vscode7.window.showErrorMessage(`AI.js Pro: \u8BFB\u53D6 ${picked} \u5931\u8D25\uFF1A${error.message}`);
     return;
   }
-  const name = path4.basename(picked);
+  const name = path5.basename(picked);
   await withConnection(async (conn) => {
     await conn.run(name, picked, script);
     await context.workspaceState.update(rerunKey(conn), { kind: "script", name, id: picked, script });
     channel.appendLine(`[${conn.deviceName}] \u25B6 ${picked}`);
-    vscode6.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u53D1\u9001 ${name}`, 3e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u53D1\u9001 ${name}`, 3e3);
   });
 }
 async function inspectLayoutCommand() {
   await withConnection(async (conn) => {
     const xml = await conn.inspectLayout();
-    const document = await vscode6.workspace.openTextDocument({ content: xml, language: "xml" });
-    await vscode6.window.showTextDocument(document, { preview: true });
+    const document = await vscode7.workspace.openTextDocument({ content: xml, language: "xml" });
+    await vscode7.window.showTextDocument(document, { preview: true });
     channel.appendLine(`[${conn.deviceName}] \u5E03\u5C40\u5206\u6790\uFF1A${xml.length} \u5B57\u7B26`);
   });
 }
@@ -3069,29 +3820,29 @@ async function saveProjectCommand() {
   if (!folder) {
     return;
   }
-  const exclude = new Set(vscode6.workspace.getConfiguration("aijspro").get("exclude", []));
+  const exclude = new Set(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
   const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
   if (entries.length === 0) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u4FDD\u5B58\u7684\u6587\u4EF6");
+    vscode7.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u4FDD\u5B58\u7684\u6587\u4EF6");
     return;
   }
   const zipInputs = [];
   for (const entry of entries) {
-    zipInputs.push({ path: entry.relative, data: await fs3.promises.readFile(entry.absolute) });
+    zipInputs.push({ path: entry.relative, data: await fs4.promises.readFile(entry.absolute) });
   }
   const archive = createZip(zipInputs);
-  const projectName = path4.basename(folder.uri.fsPath);
+  const projectName = path5.basename(folder.uri.fsPath);
   await withConnection(async (conn) => {
     await conn.sendBytesCommand("save_project", projectName, archive, []);
     channel.appendLine(`[${conn.deviceName}] \u21E7 \u5DE5\u7A0B ${projectName} \u5DF2\u4FDD\u5B58\u5230\u624B\u673A\uFF08${entries.length} \u4E2A\u6587\u4EF6\uFF09`);
-    vscode6.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u4FDD\u5B58\u5DE5\u7A0B ${projectName} \u5230\u624B\u673A`, 4e3);
+    vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u4FDD\u5B58\u5DE5\u7A0B ${projectName} \u5230\u624B\u673A`, 4e3);
   });
 }
 async function rerunCommand(context) {
   await withConnection(async (conn) => {
     const last = context.workspaceState.get(rerunKey(conn));
     if (!last) {
-      vscode6.window.showInformationMessage("AI.js Pro: \u8FD8\u6CA1\u6709\u53EF\u91CD\u65B0\u8FD0\u884C\u7684\u4EFB\u52A1");
+      vscode7.window.showInformationMessage("AI.js Pro: \u8FD8\u6CA1\u6709\u53EF\u91CD\u65B0\u8FD0\u884C\u7684\u4EFB\u52A1");
       return;
     }
     if (last.kind === "script") {
@@ -3099,11 +3850,11 @@ async function rerunCommand(context) {
       channel.appendLine(`[${conn.deviceName}] \u21BB ${last.name}`);
       return;
     }
-    const exclude = new Set(vscode6.workspace.getConfiguration("aijspro").get("exclude", []));
+    const exclude = new Set(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
     const entries = await collectProjectFiles(last.folder, exclude);
     const zipInputs = [];
     for (const entry of entries) {
-      zipInputs.push({ path: entry.relative, data: await fs3.promises.readFile(entry.absolute) });
+      zipInputs.push({ path: entry.relative, data: await fs4.promises.readFile(entry.absolute) });
     }
     await conn.sendBytesCommand("run_project", last.name, createZip(zipInputs), []);
     channel.appendLine(`[${conn.deviceName}] \u21BB \u5DE5\u7A0B ${last.name}`);
@@ -3130,7 +3881,7 @@ function engineOf(kind) {
 }
 async function createDeviceProjectCommand(kind) {
   const title = kind === "rhino" ? "\u7B2C\u4E00\u4EE3API\u9879\u76EE(Rhino)" : "\u7B2C\u4E8C\u4EE3API\u9879\u76EE(QuickJS)";
-  const name = await vscode6.window.showInputBox({
+  const name = await vscode7.window.showInputBox({
     prompt: `\u65B0\u5EFA${title}\uFF1A\u9879\u76EE\u540D\uFF08\u521B\u5EFA\u5728\u624B\u673A\u811A\u672C\u76EE\u5F55\u4E0B\uFF09`,
     value: kind === "rhino" ? "rhino-project" : "quickjs-project"
   });
@@ -3139,19 +3890,19 @@ async function createDeviceProjectCommand(kind) {
   }
   const safe = sanitize(name.trim());
   if (!safe) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u9879\u76EE\u540D\u4E0D\u5408\u6CD5");
+    vscode7.window.showWarningMessage("AI.js Pro: \u9879\u76EE\u540D\u4E0D\u5408\u6CD5");
     return;
   }
   await withConnection(async (conn) => {
     await conn.writeFile(`${safe}/project.json`, projectJson(safe, kind));
     await conn.writeFile(`${safe}/main.js`, engineOf(kind).template);
     channel.appendLine(`[${conn.deviceName}] \uFF0B \u5DF2\u521B\u5EFA\u9879\u76EE ${safe}\uFF08${title}\uFF09`);
-    const choice = await vscode6.window.showInformationMessage(
+    const choice = await vscode7.window.showInformationMessage(
       `AI.js Pro: \u5DF2\u5728\u624B\u673A\u521B\u5EFA\u9879\u76EE ${safe}`,
       "\u5237\u65B0\u8BBE\u5907\u6587\u4EF6"
     );
     if (choice === "\u5237\u65B0\u8BBE\u5907\u6587\u4EF6") {
-      await vscode6.commands.executeCommand("aijspro.refreshFiles");
+      await vscode7.commands.executeCommand("aijspro.refreshFiles");
     }
   });
 }
@@ -3161,7 +3912,7 @@ async function createWorkspaceProjectCommand(kind) {
   if (!folder) {
     return;
   }
-  const name = await vscode6.window.showInputBox({
+  const name = await vscode7.window.showInputBox({
     prompt: `\u5728\u5DE5\u4F5C\u533A\u5EFA\u7ACB${title}\uFF1A\u76EE\u5F55\u540D`,
     value: kind === "rhino" ? "rhino-project" : "quickjs-project"
   });
@@ -3170,26 +3921,26 @@ async function createWorkspaceProjectCommand(kind) {
   }
   const safe = sanitize(name.trim());
   if (!safe) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u76EE\u5F55\u540D\u4E0D\u5408\u6CD5");
+    vscode7.window.showWarningMessage("AI.js Pro: \u76EE\u5F55\u540D\u4E0D\u5408\u6CD5");
     return;
   }
-  const dir = path4.join(folder.uri.fsPath, safe);
-  if (fs3.existsSync(dir)) {
-    vscode6.window.showWarningMessage(`AI.js Pro: ${safe} \u5DF2\u5B58\u5728`);
+  const dir = path5.join(folder.uri.fsPath, safe);
+  if (fs4.existsSync(dir)) {
+    vscode7.window.showWarningMessage(`AI.js Pro: ${safe} \u5DF2\u5B58\u5728`);
     return;
   }
-  await fs3.promises.mkdir(dir, { recursive: true });
-  await fs3.promises.writeFile(path4.join(dir, "project.json"), projectJson(safe, kind), "utf8");
-  const mainPath = path4.join(dir, "main.js");
-  await fs3.promises.writeFile(mainPath, engineOf(kind).template, "utf8");
-  await vscode6.window.showTextDocument(vscode6.Uri.file(mainPath));
+  await fs4.promises.mkdir(dir, { recursive: true });
+  await fs4.promises.writeFile(path5.join(dir, "project.json"), projectJson(safe, kind), "utf8");
+  const mainPath = path5.join(dir, "main.js");
+  await fs4.promises.writeFile(mainPath, engineOf(kind).template, "utf8");
+  await vscode7.window.showTextDocument(vscode7.Uri.file(mainPath));
   channel.appendLine(`\uFF0B \u5DF2\u5EFA\u7ACB ${title}\uFF1A${mainPath}`);
 }
 async function addDebugConfigCommand() {
   const conn = await manager.pickConnection();
   let host = conn ? hostOf(conn) : void 0;
   if (!host) {
-    host = await vscode6.window.showInputBox({
+    host = await vscode7.window.showInputBox({
       prompt: "\u8BBE\u5907\u5730\u5740\uFF08\u5199\u5165\u5DE5\u4F5C\u533A .vscode/settings.json \u7684 aijspro.devices\uFF09"
     });
     host = host?.trim();
@@ -3197,16 +3948,16 @@ async function addDebugConfigCommand() {
   if (!host) {
     return;
   }
-  const folder = vscode6.workspace.workspaceFolders?.[0];
+  const folder = vscode7.workspace.workspaceFolders?.[0];
   if (!folder) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u9700\u8981\u6253\u5F00\u4E00\u4E2A\u6587\u4EF6\u5939\u5DE5\u4F5C\u533A");
+    vscode7.window.showWarningMessage("AI.js Pro: \u9700\u8981\u6253\u5F00\u4E00\u4E2A\u6587\u4EF6\u5939\u5DE5\u4F5C\u533A");
     return;
   }
-  const vscodeDir = path4.join(folder.uri.fsPath, ".vscode");
-  const settingsPath = path4.join(vscodeDir, "settings.json");
+  const vscodeDir = path5.join(folder.uri.fsPath, ".vscode");
+  const settingsPath = path5.join(vscodeDir, "settings.json");
   let json = {};
   try {
-    json = JSON.parse(await fs3.promises.readFile(settingsPath, "utf8"));
+    json = JSON.parse(await fs4.promises.readFile(settingsPath, "utf8"));
   } catch {
     json = {};
   }
@@ -3215,13 +3966,13 @@ async function addDebugConfigCommand() {
     devices.push(host);
   }
   json["aijspro.devices"] = devices;
-  await fs3.promises.mkdir(vscodeDir, { recursive: true });
-  await fs3.promises.writeFile(settingsPath, `${JSON.stringify(json, null, 2)}
+  await fs4.promises.mkdir(vscodeDir, { recursive: true });
+  await fs4.promises.writeFile(settingsPath, `${JSON.stringify(json, null, 2)}
 `, "utf8");
-  const launchPath = path4.join(vscodeDir, "launch.json");
+  const launchPath = path5.join(vscodeDir, "launch.json");
   let launch = { version: "0.2.0", configurations: [] };
   try {
-    launch = JSON.parse(await fs3.promises.readFile(launchPath, "utf8"));
+    launch = JSON.parse(await fs4.promises.readFile(launchPath, "utf8"));
   } catch {
     launch = { version: "0.2.0", configurations: [] };
   }
@@ -3237,26 +3988,26 @@ async function addDebugConfigCommand() {
       program: "${file}",
       host
     });
-    await fs3.promises.writeFile(launchPath, `${JSON.stringify(launch, null, 2)}
+    await fs4.promises.writeFile(launchPath, `${JSON.stringify(launch, null, 2)}
 `, "utf8");
   }
-  vscode6.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u5199\u5165 ${host} \u4E0E\u8C03\u8BD5\u914D\u7F6E`, 4e3);
+  vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u5199\u5165 ${host} \u4E0E\u8C03\u8BD5\u914D\u7F6E`, 4e3);
 }
 async function debugFileCommand() {
-  const editor = vscode6.window.activeTextEditor;
+  const editor = vscode7.window.activeTextEditor;
   if (!editor || editor.document.uri.scheme !== "file") {
-    vscode6.window.showWarningMessage("AI.js Pro: \u8BF7\u5148\u6253\u5F00\u8981\u8C03\u8BD5\u7684 .js \u6587\u4EF6");
+    vscode7.window.showWarningMessage("AI.js Pro: \u8BF7\u5148\u6253\u5F00\u8981\u8C03\u8BD5\u7684 .js \u6587\u4EF6");
     return;
   }
-  const folder = vscode6.workspace.getWorkspaceFolder(editor.document.uri);
-  const started = await vscode6.debug.startDebugging(folder, {
+  const folder = vscode7.workspace.getWorkspaceFolder(editor.document.uri);
+  const started = await vscode7.debug.startDebugging(folder, {
     type: "aijspro",
     request: "launch",
     name: "AI.js Pro: \u8C03\u8BD5\u5F53\u524D\u6587\u4EF6\uFF08Rhino\uFF09",
     program: editor.document.fileName
   });
   if (!started) {
-    vscode6.window.showWarningMessage("AI.js Pro: \u8C03\u8BD5\u4F1A\u8BDD\u672A\u80FD\u542F\u52A8\uFF08\u8BE6\u89C1\u300CAI.js Pro\u300D\u8F93\u51FA\uFF09");
+    vscode7.window.showWarningMessage("AI.js Pro: \u8C03\u8BD5\u4F1A\u8BDD\u672A\u80FD\u542F\u52A8\uFF08\u8BE6\u89C1\u300CAI.js Pro\u300D\u8F93\u51FA\uFF09");
   }
 }
 function e2eLog(message) {
@@ -3265,7 +4016,7 @@ function e2eLog(message) {
     return;
   }
   try {
-    fs3.appendFileSync(sink, `${message}
+    fs4.appendFileSync(sink, `${message}
 `, "utf8");
   } catch {
   }
@@ -3282,7 +4033,7 @@ async function autoDebugForE2E(line) {
     e2eLog("[e2e] no device connection");
     return;
   }
-  const folder = vscode6.workspace.workspaceFolders?.[0];
+  const folder = vscode7.workspace.workspaceFolders?.[0];
   if (!folder) {
     channel.appendLine("[e2e] \u6CA1\u6709\u5DE5\u4F5C\u533A\uFF0C\u81EA\u52A8\u8C03\u8BD5\u653E\u5F03");
     e2eLog("[e2e] no workspace");
@@ -3294,14 +4045,14 @@ async function autoDebugForE2E(line) {
     e2eLog("[e2e] no js file");
     return;
   }
-  const document = await vscode6.workspace.openTextDocument(target);
-  const position = new vscode6.Position(Math.max(0, (Number.isFinite(line) ? line : 1) - 1), 0);
-  vscode6.debug.addBreakpoints([
-    new vscode6.SourceBreakpoint(new vscode6.Location(document.uri, position))
+  const document = await vscode7.workspace.openTextDocument(target);
+  const position = new vscode7.Position(Math.max(0, (Number.isFinite(line) ? line : 1) - 1), 0);
+  vscode7.debug.addBreakpoints([
+    new vscode7.SourceBreakpoint(new vscode7.Location(document.uri, position))
   ]);
   channel.appendLine(`[e2e] \u5DF2\u4E0B\u65AD\u70B9 ${target}:${line}\uFF0C\u542F\u52A8\u8C03\u8BD5`);
   e2eLog(`[e2e] breakpoint set ${target}:${line}`);
-  const started = await vscode6.debug.startDebugging(folder, {
+  const started = await vscode7.debug.startDebugging(folder, {
     type: "aijspro",
     request: "launch",
     name: "AI.js Pro E2E",
@@ -3350,18 +4101,18 @@ async function findFirstScript(dir, depth) {
   }
   let children;
   try {
-    children = await fs3.promises.readdir(dir, { withFileTypes: true });
+    children = await fs4.promises.readdir(dir, { withFileTypes: true });
   } catch {
     return void 0;
   }
   for (const child of children) {
     if (child.isFile() && child.name.endsWith(".js")) {
-      return path4.join(dir, child.name);
+      return path5.join(dir, child.name);
     }
   }
   for (const child of children) {
     if (child.isDirectory() && child.name !== "node_modules" && !child.name.startsWith(".")) {
-      const found = await findFirstScript(path4.join(dir, child.name), depth - 1);
+      const found = await findFirstScript(path5.join(dir, child.name), depth - 1);
       if (found) {
         return found;
       }

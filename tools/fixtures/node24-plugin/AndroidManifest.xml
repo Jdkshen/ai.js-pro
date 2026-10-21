@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.aijsprobe.nodeplugin">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28"/>
+  <application android:label="Node plugin compatibility probe" android:hasCode="true" android:debuggable="true" android:extractNativeLibs="true">
+    <meta-data android:name="org.autojs.plugin.sdk.registry" android:value="org.aijsprobe.nodeplugin.Registry"/>
+  <service android:name=".ProbeService" android:exported="true" android:process=":remote"/></application>
+</manifest>

@@ -39,8 +39,11 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
     private volatile org.autojs.source.engine.android.Node24Pool.Slot mPoolSlot;
     private volatile String mRunningId;
     private volatile boolean mStopRequested;
-    /** 主进程侧当前正在跑的 Node24 引擎（同时只有一个 Node 任务），供宿主投递 UI 事件。 */
+    /** Legacy UI fallback. API requests use the explicit per-job owner registry below. */
     private static volatile Node24JavaScriptEngine sRunning;
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, Node24JavaScriptEngine> RUNNING =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile long mStartedAt;
     /** 当前 Node 任务开始时刻（elapsedRealtime）；:node24 的桥用它区分多个候选进程的归属。 */
     private static volatile long sRunningStartedAt;
     /**
@@ -57,6 +60,12 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
     public static Node24JavaScriptEngine getRunningEngine() {
         return sRunning;
     }
+
+    public static Node24JavaScriptEngine getRunningEngine(int ownerId) {
+        return ownerId >= 0 ? RUNNING.get(ownerId) : sRunning;
+    }
+
+    public long getStartedAt() { return mStartedAt; }
 
     /** 当前 Node 任务开始时刻（elapsedRealtime，毫秒）；没有在跑时返回 0。 */
     public static long getRunningStartedAt() {
@@ -179,8 +188,10 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
         }
         String id = UUID.randomUUID().toString();
         mRunningId = id;
-        sRunningStartedAt = android.os.SystemClock.elapsedRealtime();
+        mStartedAt = android.os.SystemClock.elapsedRealtime();
+        sRunningStartedAt = mStartedAt;
         sRunning = this;
+        RUNNING.put(getId(), this);
         try {
             if (mStopRequested) {
                 throw new ScriptInterruptedException();
@@ -190,7 +201,9 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
             // task-132 P0④：解析 type=node / features.nodejs / 位 flags（ui/auto/nodejs/ui-thread/rhino），
             // 同时供脚本内 globalThis.__ajsFeatures 与宿主保活策略使用。
             JSONObject features = parseFeatures(script, filename);
-            boolean uiScript = features.optBoolean("ui", false) || shouldHoldAlive(script);
+            boolean uiScript = (scriptSource.getExecutionMode() & JavaScriptSource.EXECUTION_MODE_UI) != 0
+                    || features.optBoolean("ui", false) || shouldHoldAlive(script);
+            features.put("ui", uiScript);
             long holdMillis = uiScript ? UI_HOLD_MILLIS : 0L;
             if (script != null) {
                 // task-132-fix：直接注入 JS 对象字面量（之前 JSONObject.quote 会变成字符串）。
@@ -200,6 +213,7 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                     + " scriptLen=" + (script == null ? 0 : script.length()));
             JSONObject request = new JSONObject()
                     .put("id", id)
+                    .put("ownerEngineId", getId())
                     .put("source", script)
                     .put("filename", absoluteFilename(scriptSource))
                     .put("timeoutMillis", DEFAULT_TIMEOUT_MILLIS)
@@ -245,6 +259,8 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
         } catch (Throwable error) {
             throw new ScriptException(error);
         } finally {
+            RUNNING.remove(getId(), this);
+            com.stardust.autojs.engine.node24.NodeEngineBridgeService.stopOwnedExecutions(getId());
             mRunningId = null;
             if (sRunning == this) {
                 sRunning = null;
