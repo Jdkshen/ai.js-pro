@@ -166,3 +166,20 @@ adb forward tcp:18790 tcp:8765
 - MCP 默认只读。手机端开启编辑授权后，客户端可直接应用工作区；回退仍在手机历史页执行。关闭授权会立即阻止后续写入和应用。
 - 文件工具的读写限制在操作目录内。停止单任务仅接受本 MCP 的 executionId；全体停止单独需要执行与设备操作授权。
 - 执行脚本会继承 AI.js Pro 已有的手机权限，开启执行前必须确认连接的是可信客户端。
+
+## 让 AI 客户端少报错（MCP 使用要点）
+
+MCP 的 `initialize.instructions` 现在带常用调用示例；首次连接还应调用 `learn_autojs_skill` 读取完整说明（包含“常见错误与修法”和可复制的接入提示）。
+
+客户端最常见的错误集中在参数与流程：
+
+- `run_script` 的 `path/file/source` 三选一：`source` 是源码字符串，`path/file` 是相对操作目录路径；
+- 需要结果/异常/日志必须 `wait:true`（或事后 `wait_execution`），超时 `timedOut=true` 不等于成功；
+- 修改真实脚本必须 `workspace_open → workspace_write → workspace_diff → workspace_request_apply`；
+- 布尔/数字使用 JSON 原生类型，不要字符串 `"true"`/`"100"`；
+- `get_ui_layout` 需要无障碍；`capture_screen` 缩小图要按 `sourceWidth/scale` 换算点击坐标。
+
+把下面这段作为客户端系统提示可直接减少误用：
+
+> 你已连接 AI.js Pro MCP。首次先调用 learn_autojs_skill；参数以 tools/list 的 inputSchema 为准。JSON 布尔/数字用原生类型；path 用相对操作目录；run_script 的 path/file/source 三选一；要结果必须 wait:true；修改真实文件必须走 workspace_open→write→diff→request_apply；失败先看 error 再调用 get_execution/wait_execution/get_mcp_log。
+

@@ -2,6 +2,14 @@
 
 本说明对应本项目的 Rhino / QuickJS / Node.js 三引擎和当前公开工具。先调用 list_engines 确认可用引擎。
 
+## 快速开始（AI 客户端必读）
+
+1. 先调用一次 learn_autojs_skill，再调用 get_status / list_scripts / list_engines 了解现场。
+2. 只读：list_scripts → read_script / search_scripts；不要猜文件是否存在。
+3. 运行：run_script 的 path/file/source 三选一；需要结果与错误日志必须 wait:true（timeoutSeconds 建议 30~120）。
+4. 改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply（workspace_write 本身不落盘）。
+5. 任何失败：先看返回的 error/status，再调用 get_execution / wait_execution / get_mcp_log；不要重复猜参数。
+
 ## 高级版兼容入口
 
 | 高级版名称 | 本项目名称 | 参数与结果 |
@@ -89,3 +97,22 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 - list_executions/get_execution/wait_execution/stop_script：管理本 MCP 服务启动的任务。
 
 不要把工作区写入当作已修改真实文件；必须完成 workspace_request_apply，并检查返回结果。
+
+## 常见错误与修法
+
+| 返回/现象 | 常见原因 | 正确做法 |
+|---|---|---|
+| 路径超出操作目录 / 文件不存在 | 传了 /sdcard 绝对路径或路径写错 | path 用相对操作目录的路径；先 list_scripts 看实际文件 |
+| 必须提供 path/file/source 之一 | run_script 三个入口都没给 | path/file 是相对路径字符串；source 直接放源码字符串 |
+| engine 无效 | 传了 node / node24 / 大小写错误 | 可用 rhino、quickjs、nodejs（node24 是 nodejs 别名） |
+| run_script 成功但拿不到 result/logs | 没传 wait:true | 加 wait:true, timeoutSeconds:60；或事后 wait_execution |
+| wait=true 返回 timedOut=true | 脚本还在跑/死循环 | 不能当成成功；继续 wait_execution 或 stop_script |
+| workspace_write 后真实脚本没变 | 只改了私有工作区 | 继续调用 workspace_request_apply 并检查应用结果 |
+| get_ui_layout 返回空/失败 | 无障碍未开启或页面受保护 | 先确认无障碍；用 capture_screen 截图确认页面；看 diagnostics |
+| capture_screen 后点击坐标不对 | 截图被 maxWidth 缩小 | 用 sourceWidth/sourceHeight/scale 换算回原图坐标 |
+| 参数类型错误 | 布尔/数字传成了字符串 | JSON 原生类型：true/false、数字；不要 "true"/"100" |
+
+## 给 AI 客户端的接入提示（可复制）
+
+> 你已连接 AI.js Pro MCP。首次先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。JSON 布尔/数字用原生类型；path 用相对操作目录；run_script 的 path/file/source 三选一；要结果必须 wait:true；修改真实文件必须走 workspace_open→write→diff→request_apply；失败先看 error 再调用 get_execution/wait_execution/get_mcp_log，禁止猜字段和猜文件路径。
+

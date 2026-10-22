@@ -130,42 +130,60 @@ internal class McpTools(private val context: Context, private val event: (String
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
-        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.4.0") })
-        addProperty("instructions", "MCP 服务开启即拥有读写与运行权限（dev-1176 起完全免令牌：本机与局域网客户端都只需 URL，无需 Bearer）。客户端可创建/修改私有工作区，并调用 workspace_request_apply 直接应用到真实脚本；应用时会校验原文件未被外部改动并保留备份，可在手机历史页回退。\n脚本错误处理：run_script 加 wait=true（或调用 wait_execution）会等待脚本结束并返回 status/result/error(type,message,stack)/logs；脚本未结束前可用 get_execution 轮询。")
+        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.5.0") })
+        addProperty("instructions", listOf(
+            "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
+            "",
+            "通用规则：",
+            "- JSON 的布尔/数字用原生类型（true / 100，不要字符串 \"true\" / \"100\"）。",
+            "- path 是相对操作目录的路径，不要写 /sdcard 绝对路径；先用 list_scripts 查看。",
+            "- run_script 的 path/file/source 三选一；要结果和错误日志必须 wait:true，timeoutSeconds 建议 30~120。",
+            "- wait 超时返回 timedOut=true，任务仍可能在跑：用 wait_execution/get_execution 继续，不要当成成功。",
+            "- 修改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply；workspace_write 不会直接落盘。",
+            "- 读取控件/截图需无障碍服务；capture_screen 缩小后坐标按 sourceWidth/scale 换算。",
+            "",
+            "常用示例：",
+            "run_script 内存脚本：{\"name\":\"run_script\",\"arguments\":{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}}",
+            "run_script 现有文件：{\"name\":\"run_script\",\"arguments\":{\"file\":\"main.js\",\"wait\":true,\"timeoutSeconds\":60}}",
+            "查看文件：{\"name\":\"list_scripts\",\"arguments\":{}}；{\"name\":\"read_script\",\"arguments\":{\"path\":\"main.js\",\"maxBytes\":65536}}",
+            "语法检查：{\"name\":\"check_syntax\",\"arguments\":{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}}",
+            "",
+            "调用失败时先看错误指出的参数名/类型，再调用 learn_autojs_skill 查对应章节；不要猜字段。",
+        ).joinToString("\n"))
     }
 
     private fun listTools() = JsonObject().apply {
         add("tools", JsonArray().apply {
             add(tool("get_status", "读取 MCP、脚本目录、任务和工作区状态"))
-            add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）", objSchema("path", "offset", "limit", "recursive")))
-            add(tool("read_script", "分块读取脚本目录中的文本文件", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
+            add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）；示例：{\"path\":\"\",\"recursive\":true}", objSchema("path", "offset", "limit", "recursive")))
+            add(tool("read_script", "分块读取脚本目录中的文本文件；示例：{\"path\":\"main.js\",\"maxBytes\":65536}", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
             add(tool("search_scripts", "递归搜索脚本文件名与内容，结果可继续分页", objSchema("query", "path", "limit", required = arrayOf("query"))))
             add(tool("continue_result", "使用 cursor 继续获取搜索或大结果的下一页", objSchema("cursor", "limit", required = arrayOf("cursor"))))
             add(tool("list_samples", "列出内置示例", objSchema("path", "offset", "limit")))
             add(tool("read_sample", "分块读取内置示例", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
             add(tool("list_executions", "列出本 MCP 发起的脚本任务状态"))
             add(tool("get_execution", "读取任务状态、结果、异常或运行日志", objSchema("executionId", required = arrayOf("executionId"))))
-            add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
+            add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据；示例：{\"executionId\":\"mcp-1\",\"timeoutSeconds\":60}", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
-            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一）；支持 Rhino/QuickJS/Node.js、工作目录、config、等待及任务专属日志", McpToolSchema.runSchema()))
+            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一；source 传源码字符串）；需要结果/错误日志时 wait=true。示例：{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}", McpToolSchema.runSchema()))
             add(tool("list_engine_api", "枚举三引擎实际全局或 require(module) 的 API；Node 同时返回实际内置模块目录", objSchema("engine", "module")))
             add(tool("probe_engine_api", "探测三引擎 API 的类型、成员和函数 arity；module 可选，includeInherited 默认 true；不执行 getter", objSchema("engine", "module", "name", "includeInherited", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比三个引擎的全局 API；保留旧 Rhino/QuickJS 字段，增加 Node 与三引擎交集"))
             add(tool("stop_script", "停止本 MCP 发起的运行任务", objSchema("executionId", required = arrayOf("executionId"))))
-            add(tool("workspace_open", "从真实脚本创建（或复用）私有工作区快照；create=true 为幂等：不存在则创建（自动建父目录）、已存在则直接打开；子目录文件请传完整相对路径", objSchema("path", "create", required = arrayOf("path"))))
+            add(tool("workspace_open", "从真实脚本创建（或复用）私有工作区快照；create=true 为幂等：不存在则创建（自动建父目录）、已存在则直接打开；子目录文件请传完整相对路径；示例：{\"path\":\"main.js\",\"create\":true}", objSchema("path", "create", required = arrayOf("path"))))
             add(tool("workspace_list", "列出工作区及待确认状态"))
             add(tool("workspace_read", "读取工作区文件", objSchema("workspaceId", "path", "offset", "maxBytes", required = arrayOf("workspaceId", "path"))))
-            add(tool("workspace_write", "修改工作区，不会直接覆盖真实脚本", objSchema("workspaceId", "path", "content", required = arrayOf("workspaceId", "path", "content"))))
+            add(tool("workspace_write", "修改工作区，不会直接覆盖真实脚本；示例：{\"workspaceId\":\"...\",\"path\":\"main.js\",\"content\":\"...\"}", objSchema("workspaceId", "path", "content", required = arrayOf("workspaceId", "path", "content"))))
             add(tool("workspace_delete", "在工作区中标记删除文件", objSchema("workspaceId", "path", required = arrayOf("workspaceId", "path"))))
             add(tool("workspace_diff", "查看工作区与创建时快照的 Diff", objSchema("workspaceId", required = arrayOf("workspaceId"))))
-            add(tool("workspace_request_apply", "直接应用工作区到真实脚本；校验原文件、自动备份并支持历史回退（工具名为兼容保留）", objSchema("workspaceId", required = arrayOf("workspaceId"))))
+            add(tool("workspace_request_apply", "直接应用工作区到真实脚本；校验原文件、自动备份并支持历史回退（工具名为兼容保留）；示例：{\"workspaceId\":\"...\"}", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_mkdir", "在真实脚本目录下创建目录（含多级）", objSchema("path", required = arrayOf("path"))))
             add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_cleanup", "清理无用的工作区私有副本：默认只删无修改的 OPEN 与已回退的；applied=true 时连已应用的也删（默认保留 keepAppliedHours=24 小时以便回退）", objSchema("applied", "olderThanHours", "keepAppliedHours")))
-            add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需无障碍服务", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
-            add(tool("capture_screen", "返回原图或缩小截图的 MCP 图像内容；支持 png/jpg、quality、dataUri；需 Android 11+ 无障碍截图权限", objSchema("format", "quality", "dataUri", "maxWidth", "timeoutMillis")))
-            add(tool("check_syntax", "按 Rhino/QuickJS/Node.js 只编译检查源码，不执行任何脚本；Node 使用同版本真实编译器", objSchema("code", "engine", "name", required = arrayOf("code"))))
-            add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 使用说明、三引擎规则、权限和实际支持范围"))
+            add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需无障碍服务；示例：{\"maxNodes\":300,\"maxDepth\":64}", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
+            add(tool("capture_screen", "返回原图或缩小截图的 MCP 图像内容；支持 png/jpg、quality、dataUri；需 Android 11+ 无障碍截图权限；示例：{\"format\":\"jpg\",\"maxWidth\":720,\"quality\":80}", objSchema("format", "quality", "dataUri", "maxWidth", "timeoutMillis")))
+            add(tool("check_syntax", "按 Rhino/QuickJS/Node.js 只编译检查源码，不执行任何脚本；Node 使用同版本真实编译器；示例：{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}", objSchema("code", "engine", "name", required = arrayOf("code"))))
+            add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 完整使用说明、三引擎规则、权限和实际支持范围；首次连接或调用报错前先调用一次"))
             add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本）；普通任务应使用 stop_script"))
             add(tool("get_mcp_log", "读取脚本日志尾部或 MCP 服务请求记录；executionId 可限制为指定任务；maxChars 默认 20000，最大 200000", objSchema("maxChars", "executionId", "channel")))
             add(tool("list_engines", "列出三个引擎与 MCP 支持的运行、查询、调用及语法检查能力"))
