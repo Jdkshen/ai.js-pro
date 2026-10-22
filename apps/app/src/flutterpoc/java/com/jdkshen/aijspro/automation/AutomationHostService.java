@@ -482,6 +482,7 @@ public class AutomationHostService extends android.app.Service {
         @Override
         public ParcelFileDescriptor screenshotPixels(int maxWidth, int maxHeight, int format) {
             if (!isTrustedCaller()) return null;
+            final long splitStart = SystemClock.elapsedRealtime();
             if (format != RawScreenshotFormat.FORMAT_ARGB_8888) {
                 Log.w(TAG, "screenshotPixels: 不支持的 format=" + format);
                 return null;
@@ -497,12 +498,16 @@ public class AutomationHostService extends android.app.Service {
                     Log.w(TAG, "screenshotPixels: 当前设备/系统不支持无障碍截图");
                     return null;
                 }
+                long captureStart = SystemClock.elapsedRealtime();
                 try {
-                    bitmap = new AccessibilityScreenCapturer().capture(SCREENSHOT_TIMEOUT_MS);
+                    // A：缩略回读（max<=0 时等价旧全分辨率路径）；正常路径不再做二次缩放。
+                    bitmap = new AccessibilityScreenCapturer().capture(
+                            SCREENSHOT_TIMEOUT_MS, maxWidth, maxHeight);
                 } catch (Throwable error) {
                     Log.w(TAG, "screenshotPixels: 系统截图失败", error);
                     return null;
                 }
+                long captureMs = SystemClock.elapsedRealtime() - captureStart;
                 if (bitmap == null) return null;
                 int width = bitmap.getWidth();
                 int height = bitmap.getHeight();
@@ -511,9 +516,13 @@ public class AutomationHostService extends android.app.Service {
                     bitmap.recycle();
                     return null;
                 }
+                // A：缩略已在 AccessibilityScreenCapturer 内完成；正常路径不再 createScaledBitmap。
+                // 这里只保留尺寸安全判断（capturer 回退/异常时仍可能超限）。
                 int limitWidth = maxWidth > 0 ? maxWidth : width;
                 int limitHeight = maxHeight > 0 ? maxHeight : height;
                 if (width > limitWidth || height > limitHeight) {
+                    Log.w(TAG, "screenshotPixels: 缩略回读尺寸仍超限 " + width + "x" + height
+                            + "，执行安全缩放");
                     float scale = Math.min(limitWidth / (float) width, limitHeight / (float) height);
                     int scaledWidth = Math.max(1, Math.round(width * scale));
                     int scaledHeight = Math.max(1, Math.round(height * scale));
@@ -522,6 +531,8 @@ public class AutomationHostService extends android.app.Service {
                         bitmap.recycle();
                         bitmap = scaled;
                     }
+                    width = bitmap.getWidth();
+                    height = bitmap.getHeight();
                 }
                 // copyPixelsToBuffer 要求 ARGB_8888 且紧凑 stride；无障碍截图通常已是软件 ARGB_8888。
                 if (bitmap.getConfig() != Bitmap.Config.ARGB_8888
@@ -538,6 +549,10 @@ public class AutomationHostService extends android.app.Service {
                     bitmap.recycle();
                     bitmap = converted;
                 }
+                Log.i("A11Y_SPLIT", "host capture=" + captureMs + "ms total="
+                        + (SystemClock.elapsedRealtime() - splitStart) + "ms size="
+                        + bitmap.getWidth() + "x" + bitmap.getHeight()
+                        + " max=" + maxWidth + "x" + maxHeight);
                 ParcelFileDescriptor[] pipe;
                 try {
                     pipe = ParcelFileDescriptor.createPipe();

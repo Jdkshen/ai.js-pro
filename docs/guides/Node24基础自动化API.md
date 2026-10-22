@@ -50,7 +50,7 @@ const { viewFile } = require('app');
 | `accessibility.performGesture(points,duration,delay?)` / `gesture(...)` | `gesture` | Promise\<boolean\> |
 | `accessibility.performGestures(strokes)` | `gesture` | Promise\<boolean\> |
 | `accessibility.back/home/recents/notifications()` | 同名 action | Promise\<boolean\> |
-| `accessibility.takeScreenshot()` | `takeScreenshot` | Promise\<Image\> |
+| `accessibility.takeScreenshot(options?)` | `takeScreenshot` | Promise\<Image\>；`options.maxWidth/maxHeight` 可选（0=全分辨率，dev-1208+，宿主尽量缩略回读） |
 
 - **动作都是 Promise**；宿主返回 `false` 时原样 resolve `false`（例如系统拒绝点击），宿主错误
   一律 reject，不吞掉、不伪造成功。

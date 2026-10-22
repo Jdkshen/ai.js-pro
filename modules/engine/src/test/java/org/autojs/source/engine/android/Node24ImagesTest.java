@@ -347,6 +347,91 @@ public class Node24ImagesTest {
         assertThrows(IOException.class, () -> Node24Images.readRawPixelBytes(input, pixels));
     }
 
+    // ------------------------------------------------------------------
+    // Phase E：Raw 像素 direct buffer 单槽复用（纯 JVM）
+    // ------------------------------------------------------------------
+
+    @Test public void rawPixelBufferSlotReusesBufferAndResetsSlice() {
+        Node24Images.RawPixelBufferSlot slot = new Node24Images.RawPixelBufferSlot();
+        ByteBuffer first = slot.acquire(1024);
+        assertTrue(first.isDirect());
+        assertEquals(1024, first.capacity());
+        assertEquals(0, first.position());
+        assertEquals(1024, first.limit());
+        first.put((byte) 0x5A); // 模拟已读入部分像素
+
+        ByteBuffer smaller = slot.acquire(512);
+        assertSame(first, smaller); // 同尺寸/更小尺寸复用同一块 direct buffer
+        assertEquals(0, smaller.position());
+        assertEquals(512, smaller.limit());
+        assertEquals(1024, slot.cachedCapacity());
+
+        ByteBuffer again = slot.acquire(1024);
+        assertSame(first, again);
+        assertEquals(0, again.position());
+        assertEquals(1024, again.limit());
+    }
+
+    @Test public void rawPixelBufferSlotReallocatesOnlyForLargerFrame() {
+        Node24Images.RawPixelBufferSlot slot = new Node24Images.RawPixelBufferSlot();
+        ByteBuffer small = slot.acquire(1024);
+        ByteBuffer large = slot.acquire(4096);
+        assertNotSame(small, large);
+        assertTrue(large.isDirect());
+        assertEquals(4096, large.capacity());
+        assertEquals(4096, slot.cachedCapacity());
+        // 更大的缓存继续服务后续更小的帧
+        assertSame(large, slot.acquire(2048));
+        assertEquals(2048, slot.acquire(2048).limit());
+    }
+
+    @Test public void rawPixelBufferSlotSkipsOversizedFramesAndReleases() {
+        Node24Images.RawPixelBufferSlot slot = new Node24Images.RawPixelBufferSlot(1024);
+        assertTrue(slot.caches(1024));
+        assertFalse(slot.caches(1025));
+        assertFalse(slot.caches(0));
+        assertFalse(slot.caches(-1));
+
+        ByteBuffer oversized = slot.acquire(2048); // 超出注入上限：不缓存
+        assertTrue(oversized.isDirect());
+        assertEquals(2048, oversized.capacity());
+        assertEquals(0, slot.cachedCapacity());
+
+        slot.acquire(512); // 预算内 → 缓存
+        assertEquals(512, slot.cachedCapacity());
+        slot.acquire(2048); // 再遇超大帧：旧缓存也放掉，避免「缓存 + 超大临时 buffer」叠加
+        assertEquals(0, slot.cachedCapacity());
+
+        slot.release();
+        assertEquals(0, slot.cachedCapacity());
+        assertThrows(IllegalArgumentException.class, () -> slot.acquire(0));
+    }
+
+    @Test public void rawPixelBufferSlotDefaultLimitCoversFullScreenAnd4k() {
+        Node24Images.RawPixelBufferSlot slot = new Node24Images.RawPixelBufferSlot();
+        assertTrue(slot.caches(1280 * 4 * 2772)); // 本机全屏 13.53MiB
+        assertTrue(slot.caches(1080 * 4 * 2160)); // 小米 8 8.90MiB
+        assertTrue(slot.caches(3840 * 4 * 2160)); // 4K ≈ 31.6MiB
+        assertTrue(slot.caches(Node24Images.RawPixelBufferSlot.MAX_CACHED_BYTES));
+        assertFalse(slot.caches(Node24Images.RawPixelBufferSlot.MAX_CACHED_BYTES + 1));
+    }
+
+    @Test public void rawPixelAllocationReusesSlotAcrossFramesAndReleasesOnClose() throws Exception {
+        Node24Images images = new Node24Images(2, 1000, 2000);
+        RawScreenshotFormat.Header header = Node24Images.parseRawHeader(rawHeader(100, 50));
+        long pixelBytes = RawScreenshotFormat.pixelBytes(header);
+
+        ByteBuffer first = images.allocateRawPixels(header, pixelBytes, "单测");
+        ByteBuffer second = images.allocateRawPixels(header, pixelBytes, "单测");
+        assertSame(first, second); // readRawFile/readRawStream 共用同一块 direct buffer
+        assertEquals(0, second.position());
+        assertEquals(pixelBytes, second.limit());
+        assertEquals(pixelBytes, images.rawPixelBufferCapacity());
+
+        images.close();
+        assertEquals(0, images.rawPixelBufferCapacity()); // close() 必须释放缓存
+    }
+
     private static byte[] rawHeader(int width, int height) {
         ByteBuffer header = RawScreenshotFormat.newHeader(width, height);
         byte[] bytes = new byte[RawScreenshotFormat.HEADER_BYTES];

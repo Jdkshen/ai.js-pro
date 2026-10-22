@@ -4199,8 +4199,30 @@
     });
   }
 
-  function accessibilityTakeScreenshot() {
-    return wrapImage(hostValue({ kind: 'automation', action: 'takeScreenshot' }));
+  /** task-226：截图尺寸上限归一化；无参/非法值按 0=全分辨率，保持旧调用语义。 */
+  function screenshotLimit(value) {
+    var number = Number(value);
+    if (!isFinite(number) || number <= 0) {
+      return 0;
+    }
+    if (number > 2147483647) {
+      return 2147483647;
+    }
+    return Math.floor(number);
+  }
+
+  /**
+   * 无障碍截图，options 可传 { maxWidth, maxHeight } 请求宿主缩放（0=全分辨率）。
+   * 完全无参时行为与旧版一致；宿主内部再做一次 clamp 防御。
+   */
+  function accessibilityTakeScreenshot(options) {
+    var opts = options && typeof options === 'object' ? options : {};
+    return wrapImage(hostValue({
+      kind: 'automation',
+      action: 'takeScreenshot',
+      maxWidth: screenshotLimit(opts.maxWidth),
+      maxHeight: screenshotLimit(opts.maxHeight)
+    }));
   }
 
   function waitForAccessibilityReady(timeout, interval) {

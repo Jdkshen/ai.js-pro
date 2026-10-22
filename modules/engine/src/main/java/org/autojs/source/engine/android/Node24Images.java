@@ -174,6 +174,9 @@ public final class Node24Images implements AutoCloseable {
     // task-31：木色行列扫描的整帧 ARGB 像素复用缓冲（Bitmap.getPixels 一次读入）。
     private int[] mBoardPixels;
 
+    /** Phase E：Raw 截图像素 direct buffer 单槽复用（不计入 Bitmap 预算；close() 释放）。 */
+    private final RawPixelBufferSlot mRawPixels = new RawPixelBufferSlot();
+
     public Node24Images() {
         this(DEFAULT_MAX_LIVE_IMAGES, DEFAULT_MAX_IMAGE_PIXELS, DEFAULT_MAX_TOTAL_PIXELS);
     }
@@ -407,12 +410,95 @@ public final class Node24Images implements AutoCloseable {
         return pixelBytes;
     }
 
-    private ByteBuffer allocateRawPixels(RawScreenshotFormat.Header header, long pixelBytes, String source)
+    /**
+     * Phase E：Raw 像素不每帧 allocateDirect，而是复用 single-slot direct buffer
+     * （readRawFile/readRawStream 共用；行为与预算不变，只省分配/GC 抖动）。
+     */
+    ByteBuffer allocateRawPixels(RawScreenshotFormat.Header header, long pixelBytes, String source)
             throws IOException {
         try {
-            return ByteBuffer.allocateDirect((int) pixelBytes);
+            return mRawPixels.acquire((int) pixelBytes);
         } catch (OutOfMemoryError memory) {
             throw new IOException("Raw 截图内存不足（" + header.width + "x" + header.height + "）：" + source, memory);
+        }
+    }
+
+    /** 纯 JVM 测试/诊断：当前 Raw 像素 direct buffer 缓存容量（0 = 无缓存；close 后应为 0）。 */
+    int rawPixelBufferCapacity() {
+        return mRawPixels.cachedCapacity();
+    }
+
+    /**
+     * Phase E：Raw 截图像素 direct buffer 的单槽复用（规格 2026-10-22 §3.E）。
+     *
+     * <p>以前 {@code readRawFile/readRawStream} 每帧 {@code ByteBuffer.allocateDirect(pixelBytes)}：
+     * 8~14MB direct buffer 的分配/释放（Cleaner）带来分配开销与 GC 抖动。这里按"需要的字节数"
+     * 复用同一块 buffer：同一台设备帧尺寸固定时只有首帧分配，后续 clear 后改 limit 直接用。
+     *
+     * <p>约束：
+     * <ul>
+     *   <li>缓存容量上限 {@link #MAX_CACHED_BYTES}（32MB，覆盖 4K 单帧 3840×2160×4B）；
+     *       超出上限的帧不缓存、用完即弃，避免大帧长期占内存，也避免「旧缓存 + 超大临时 buffer」
+     *       叠加超预算；</li>
+     *   <li>不计入 {@code checkRegisterBudget} 的图片像素预算（缓存是 direct buffer，不是
+     *       Bitmap 句柄，图片预算语义不变）；</li>
+     *   <li>返回 buffer 的 {@code position=0、limit=需要的字节数}，调用方读满后自行 flip；</li>
+     *   <li>仅在 Node24Images 的 synchronized 方法内使用，{@link Node24Images#close()} 时
+     *       {@link #release()} 释放。</li>
+     * </ul>
+     */
+    static final class RawPixelBufferSlot {
+
+        /** 缓存容量上限：32MB（约 8M ARGB 像素，覆盖 4K 单帧；超出即不缓存）。 */
+        static final int MAX_CACHED_BYTES = 32 * 1024 * 1024;
+
+        private final int mMaxCachedBytes;
+        private ByteBuffer mBuffer;
+
+        RawPixelBufferSlot() {
+            this(MAX_CACHED_BYTES);
+        }
+
+        /** 测试可注入更小的上限，避免单测真的分配 32MB direct buffer。 */
+        RawPixelBufferSlot(int maxCachedBytes) {
+            mMaxCachedBytes = Math.max(1, maxCachedBytes);
+        }
+
+        /** 纯 JVM 决策：该字节数是否进入缓存（超大帧不缓存）。 */
+        boolean caches(int bytes) {
+            return bytes > 0 && bytes <= mMaxCachedBytes;
+        }
+
+        /** 取 position=0、limit=bytes 的 direct buffer；容量不足时重分配并替换缓存。 */
+        synchronized ByteBuffer acquire(int bytes) {
+            if (bytes <= 0) {
+                throw new IllegalArgumentException("Raw 像素字节数无效：" + bytes);
+            }
+            if (!caches(bytes)) {
+                // 超大帧不缓存：先放掉旧缓存，避免「缓存 + 超大临时 buffer」叠加占内存。
+                mBuffer = null;
+                return ByteBuffer.allocateDirect(bytes);
+            }
+            ByteBuffer buffer = mBuffer;
+            if (buffer == null || buffer.capacity() < bytes) {
+                buffer = ByteBuffer.allocateDirect(bytes);
+                mBuffer = buffer;
+            } else {
+                buffer.clear();
+            }
+            buffer.limit(bytes);
+            return buffer;
+        }
+
+        /** close() 释放缓存；JVM 的 direct buffer 由 Cleaner 回收，这里只丢掉强引用。 */
+        synchronized void release() {
+            mBuffer = null;
+        }
+
+        /** 当前缓存容量（0 = 无缓存；纯 JVM 测试用）。 */
+        synchronized int cachedCapacity() {
+            ByteBuffer buffer = mBuffer;
+            return buffer == null ? 0 : buffer.capacity();
         }
     }
 
@@ -3008,6 +3094,7 @@ public final class Node24Images implements AutoCloseable {
         }
         releaseCachedMats();
         releaseBoardScratchMats();
+        mRawPixels.release(); // Phase E：Raw 像素 direct buffer 复用缓存（close 后不得长期占用）
         deleteAutoPixelFileQuietly();
     }
 

@@ -439,6 +439,15 @@ public class Node24AutomationBridgeTest {
     // Phase B：PFD 像素管道优先 + Phase A/PNG 回退（纯 JVM）
     // ------------------------------------------------------------------
 
+    @Test public void screenshotLimitNormalizesNegativeAndOversizedValues() {
+        assertEquals(0, Node24AutomationBridge.normalizeScreenshotLimit(Integer.MIN_VALUE));
+        assertEquals(0, Node24AutomationBridge.normalizeScreenshotLimit(-1));
+        assertEquals(0, Node24AutomationBridge.normalizeScreenshotLimit(0));
+        assertEquals(1280, Node24AutomationBridge.normalizeScreenshotLimit(1280));
+        assertEquals(Node24AutomationBridge.MAX_SCREENSHOT_LIMIT,
+                Node24AutomationBridge.normalizeScreenshotLimit(Integer.MAX_VALUE));
+    }
+
     @Test public void screenshotFallbackUsesPixelsWithoutTouchingFiles() throws Exception {
         AtomicInteger fileCalls = new AtomicInteger();
         JSONObject result = Node24AutomationBridge.takeScreenshotWithFallback(new File("unused"),

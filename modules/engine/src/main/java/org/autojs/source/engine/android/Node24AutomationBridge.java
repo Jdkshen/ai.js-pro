@@ -107,7 +107,8 @@ public final class Node24AutomationBridge implements AutoCloseable {
                 case "notifications":
                     return ok(requireReady().notifications());
                 case "takeScreenshot":
-                    return ok(takeScreenshot());
+                    return ok(takeScreenshot(request.optInt("maxWidth", 0),
+                            request.optInt("maxHeight", 0)));
                 case "findNodes":
                 case "getLatestNodeDump":
                 case "getNodeInfo":
@@ -546,17 +547,31 @@ public final class Node24AutomationBridge implements AutoCloseable {
      * </ol>
      * 任何一级失败都静默落到下一级，对外错误提示保持 PNG 历史文案。
      */
-    private JSONObject takeScreenshot() throws Exception {
+    private JSONObject takeScreenshot(int maxWidth, int maxHeight) throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw new IllegalStateException("无障碍截图需要 Android 11（API 30）及以上");
         }
+        // task-226：Node 侧可传 maxWidth/maxHeight；0=全分辨率，负数/超大值先归一化。
+        final int widthLimit = normalizeScreenshotLimit(maxWidth);
+        final int heightLimit = normalizeScreenshotLimit(maxHeight);
         RemoteAutomationBridge.Backend backend = requireReady();
         File directory = mContext.getCacheDir();
         if (directory == null) {
             directory = mContext.getFilesDir();
         }
-        return takeScreenshotWithFallback(directory, () -> readScreenshotPixels(backend),
+        return takeScreenshotWithFallback(directory,
+                () -> readScreenshotPixels(backend, widthLimit, heightLimit),
                 backend::screenshot, mImages::readRawFile, mImages::readFile);
+    }
+
+    /** 无障碍截图尺寸上限：0=全分辨率；负数/0 归 0，超大值 clamp，避免异常尺寸/内存请求。 */
+    static final int MAX_SCREENSHOT_LIMIT = 16384;
+
+    static int normalizeScreenshotLimit(int value) {
+        if (value <= 0) {
+            return 0;
+        }
+        return Math.min(value, MAX_SCREENSHOT_LIMIT);
     }
 
     /**
@@ -567,10 +582,11 @@ public final class Node24AutomationBridge implements AutoCloseable {
      * Bitmap 解码/注册），读完关闭 readEnd；外层 try-with-resources 再兜底关闭 pfd。
      * 管道为 null、写端提前关闭、截断等都会抛异常，交给回退链。
      */
-    private JSONObject readScreenshotPixels(RemoteAutomationBridge.Backend backend) throws Exception {
+    private JSONObject readScreenshotPixels(RemoteAutomationBridge.Backend backend,
+            int maxWidth, int maxHeight) throws Exception {
         // maxWidth/maxHeight = 0 表示全分辨率（坐标与 PNG/Phase A 路径一致）；format 复用 Phase A 常量。
         try (ParcelFileDescriptor pfd = backend.screenshotPixels(
-                0, 0, RawScreenshotFormat.FORMAT_ARGB_8888)) {
+                maxWidth, maxHeight, RawScreenshotFormat.FORMAT_ARGB_8888)) {
             if (pfd == null) {
                 throw new IllegalStateException(SCREENSHOT_PIXELS_NULL_MESSAGE);
             }
