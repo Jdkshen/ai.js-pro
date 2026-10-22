@@ -37,7 +37,7 @@ var require_package = __commonJS({
       name: "aijspro-vscode",
       displayName: "AI.js Pro",
       description: "\u8FDE\u63A5 AI.js Pro\uFF08Android\uFF09\uFF1A\u8FD0\u884C\u5F53\u524D\u6587\u4EF6/\u6574\u4E2A\u5DE5\u7A0B\u3001\u5B9E\u65F6\u65E5\u5FD7\u3001Rhino \u65AD\u70B9\u8C03\u8BD5\u3001\u4FDD\u5B58\u81EA\u52A8\u63A8\u9001\u3001\u8BBE\u5907\u6587\u4EF6\u6D4F\u89C8\u4E0E\u62C9\u53D6\u3002",
-      version: "0.3.4",
+      version: "0.3.5",
       publisher: "jdkshen",
       license: "MIT",
       engines: {
@@ -372,7 +372,7 @@ var require_package = __commonJS({
         ]
       },
       scripts: {
-        test: "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs",
+        test: "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs test/projectRoot.test.cjs",
         "test:devices": "node --test test/manager.test.cjs",
         "test:connection": "node --test test/connection.test.cjs",
         build: "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
@@ -399,9 +399,9 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var fs4 = __toESM(require("fs"));
+var fs5 = __toESM(require("fs"));
 var import_crypto = require("crypto");
-var path5 = __toESM(require("path"));
+var path6 = __toESM(require("path"));
 var import_util = require("util");
 var vscode7 = __toESM(require("vscode"));
 
@@ -2115,12 +2115,12 @@ var DeviceConnection = class extends import_events.EventEmitter {
   async save(name, script) {
     await this.sendCommand({ command: "save", id: name, name, script });
   }
-  async writeFile(path6, text) {
-    await this.sendCommand({ command: "write_file", path: path6, script: text });
+  async writeFile(path7, text) {
+    await this.sendCommand({ command: "write_file", path: path7, script: text });
   }
-  async listFiles(path6, recursive) {
+  async listFiles(path7, recursive) {
     const result = await this.sendCommand(
-      { command: "list_files", path: path6, recursive },
+      { command: "list_files", path: path7, recursive },
       recursive ? 6e4 : 2e4
     );
     return {
@@ -2130,8 +2130,8 @@ var DeviceConnection = class extends import_events.EventEmitter {
     };
   }
   /** 读取设备文件：内容走 bytes 帧，response 里带 md5 用于配对。 */
-  async readFile(path6, timeoutMs = 3e4) {
-    return (await this.readBytesVia({ command: "read_file", path: path6 }, timeoutMs)).bytes;
+  async readFile(path7, timeoutMs = 3e4) {
+    return (await this.readBytesVia({ command: "read_file", path: path7 }, timeoutMs)).bytes;
   }
   /** 布局分析：无障碍捕获当前窗口，返回 XML 文本（无障碍未开启时 reject）。 */
   async inspectLayout(timeoutMs = 2e4) {
@@ -3098,12 +3098,12 @@ var DeviceFileProvider = class {
     }
     return [];
   }
-  async list(conn, path6) {
-    const cacheKey = `${conn.key}|${path6}`;
+  async list(conn, path7) {
+    const cacheKey = `${conn.key}|${path7}`;
     let listing = this.cache.get(cacheKey);
     if (!listing) {
       try {
-        listing = await conn.listFiles(path6, false);
+        listing = await conn.listFiles(path7, false);
       } catch (error) {
         return [{ kind: "info", label: `\u8BFB\u53D6\u76EE\u5F55\u5931\u8D25\uFF1A${error.message}` }];
       }
@@ -3340,6 +3340,30 @@ function createExcludeMatcher(patterns) {
       return rules.some((rule) => fileMatches(rule, relativePath));
     }
   };
+}
+
+// src/projectRoot.ts
+var fs4 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
+function findProjectRoot(workspaceRoot) {
+  if (fs4.existsSync(path5.join(workspaceRoot, "project.json"))) {
+    return workspaceRoot;
+  }
+  const candidates = [];
+  try {
+    for (const entry of fs4.readdirSync(workspaceRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") {
+        continue;
+      }
+      const candidate = path5.join(workspaceRoot, entry.name);
+      if (fs4.existsSync(path5.join(candidate, "project.json"))) {
+        candidates.push(candidate);
+      }
+    }
+  } catch {
+    return void 0;
+  }
+  return candidates.length === 1 ? candidates[0] : void 0;
 }
 
 // src/extension.ts
@@ -3579,7 +3603,7 @@ async function runActiveFileCommand(context) {
     vscode7.window.setStatusBarMessage("AI.js Pro: \u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668\u4E0A\uFF0C\u5DF2\u6539\u7528\u6700\u8FD1\u7F16\u8F91\u7684\u811A\u672C", 4e3);
   }
   const document = editor.document;
-  const name = path5.basename(document.isUntitled ? "untitled.js" : document.fileName);
+  const name = path6.basename(document.isUntitled ? "untitled.js" : document.fileName);
   const id = relativeToWorkspace(document) ?? name;
   const script = document.getText();
   await withConnection(async (conn) => {
@@ -3596,7 +3620,14 @@ async function runProjectCommand(context) {
   }
   const options = vscode7.workspace.getConfiguration("aijspro");
   const exclude = createExcludeMatcher(options.get("exclude", []));
-  const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
+  const projectRoot = findProjectRoot(folder.uri.fsPath);
+  if (!projectRoot) {
+    vscode7.window.showErrorMessage(
+      "AI.js Pro: \u5DE5\u4F5C\u533A\u91CC\u6CA1\u6709\u627E\u5230 project.json\u3002\u8BF7\u6253\u5F00 AI.js Pro \u5DE5\u7A0B\u76EE\u5F55\uFF0C\u6216\u53EA\u5305\u542B\u4E00\u4E2A\u5DE5\u7A0B\u7684\u7236\u76EE\u5F55\u3002"
+    );
+    return;
+  }
+  const entries = await collectProjectFiles(projectRoot, exclude);
   if (entries.length === 0) {
     vscode7.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u63A8\u9001\u7684\u6587\u4EF6");
     return;
@@ -3605,7 +3636,7 @@ async function runProjectCommand(context) {
   for (const entry of entries) {
     zipInputs.push({
       path: entry.relative,
-      data: await fs4.promises.readFile(entry.absolute)
+      data: await fs5.promises.readFile(entry.absolute)
     });
   }
   const archive = createZip(zipInputs);
@@ -3615,9 +3646,12 @@ async function runProjectCommand(context) {
     );
     return;
   }
-  const projectName = path5.basename(folder.uri.fsPath);
+  const projectName = path6.basename(projectRoot);
+  if (projectRoot !== folder.uri.fsPath) {
+    channel.appendLine(`\u5DE5\u4F5C\u533A\u6839\u76EE\u5F55\u6CA1\u6709 project.json\uFF0C\u4F7F\u7528\u5B50\u5DE5\u7A0B\uFF1A${projectName}`);
+  }
   await withConnection(async (conn) => {
-    const manifestKey = `${PUSH_MANIFEST_PREFIX}.${conn.key}.${folder.uri.fsPath}`;
+    const manifestKey = `${PUSH_MANIFEST_PREFIX}.${conn.key}.${projectRoot}`;
     const previous = context.globalState.get(manifestKey, []);
     const current = new Set(entries.map((entry) => entry.relative));
     const deletedFiles = previous.filter((relative2) => !current.has(relative2));
@@ -3629,7 +3663,7 @@ async function runProjectCommand(context) {
     await context.workspaceState.update(rerunKey(conn), {
       kind: "project",
       name: projectName,
-      folder: folder.uri.fsPath
+      folder: projectRoot
     });
     channel.appendLine(
       `[${conn.deviceName}] \u25B6 \u5DE5\u7A0B ${projectName}\uFF08${entries.length} \u4E2A\u6587\u4EF6\uFF0C${(archive.length / 1024).toFixed(0)} KB\uFF0C\u5220\u9664 ${deletedFiles.length}\uFF09`
@@ -3657,7 +3691,7 @@ async function openDeviceFile(node, context) {
   const kind = deviceFileKind(node.path);
   if (kind === "download") {
     const choice = await vscode7.window.showInformationMessage(
-      `AI.js Pro: ${path5.posix.basename(node.path)} \u4E0D\u80FD\u76F4\u63A5\u9884\u89C8\uFF0C\u53EF\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A\u540E\u7528\u5408\u9002\u7684\u5E94\u7528\u6253\u5F00\u3002`,
+      `AI.js Pro: ${path6.posix.basename(node.path)} \u4E0D\u80FD\u76F4\u63A5\u9884\u89C8\uFF0C\u53EF\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A\u540E\u7528\u5408\u9002\u7684\u5E94\u7528\u6253\u5F00\u3002`,
       "\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A"
     );
     if (choice === "\u4E0B\u8F7D\u5230\u5DE5\u4F5C\u533A") await downloadFile(node);
@@ -3669,7 +3703,7 @@ async function openDeviceFile(node, context) {
       const previewDir = vscode7.Uri.joinPath(context.globalStorageUri, "device-previews");
       await vscode7.workspace.fs.createDirectory(previewDir);
       const hash = (0, import_crypto.createHash)("sha256").update(`${conn.key}|${node.path}`).digest("hex").slice(0, 16);
-      const preview = vscode7.Uri.joinPath(previewDir, `${hash}-${sanitize(path5.posix.basename(node.path))}`);
+      const preview = vscode7.Uri.joinPath(previewDir, `${hash}-${sanitize(path6.posix.basename(node.path))}`);
       await vscode7.workspace.fs.writeFile(preview, data);
       await vscode7.commands.executeCommand("vscode.open", preview, { preview: true });
       return;
@@ -3696,7 +3730,7 @@ async function runDeviceFile(node) {
   }
   await withNodeConnection(node, async (conn) => {
     const data = await conn.readFile(node.path);
-    const name = path5.basename(node.path);
+    const name = path6.basename(node.path);
     const script = new import_util.TextDecoder("utf-8", { fatal: true }).decode(data);
     await conn.run(name, node.path, script);
     channel.appendLine(`[${conn.deviceName}] \u25B6 ${node.path}`);
@@ -3709,7 +3743,7 @@ async function downloadFile(node) {
     const folder = await pickWorkspaceFolder() ?? void 0;
     let target;
     if (folder) {
-      target = path5.join(
+      target = path6.join(
         folder.uri.fsPath,
         "device-export",
         sanitize(conn.deviceName),
@@ -3717,15 +3751,15 @@ async function downloadFile(node) {
       );
     } else {
       const picked = await vscode7.window.showSaveDialog({
-        defaultUri: vscode7.Uri.file(data ? path5.basename(node.path) : node.path)
+        defaultUri: vscode7.Uri.file(data ? path6.basename(node.path) : node.path)
       });
       if (!picked) {
         return;
       }
       target = picked.fsPath;
     }
-    await fs4.promises.mkdir(path5.dirname(target), { recursive: true });
-    await fs4.promises.writeFile(target, data);
+    await fs5.promises.mkdir(path6.dirname(target), { recursive: true });
+    await fs5.promises.writeFile(target, data);
     const choice = await vscode7.window.showInformationMessage(
       `AI.js Pro: \u5DF2\u4E0B\u8F7D\u5230 ${target}`,
       "\u6253\u5F00\u6587\u4EF6"
@@ -3800,18 +3834,18 @@ function devicePathForDocument(document) {
   if (!folder) {
     return void 0;
   }
-  const relative2 = path5.relative(folder.uri.fsPath, document.uri.fsPath);
-  if (relative2.startsWith("..") || path5.isAbsolute(relative2)) {
+  const relative2 = path6.relative(folder.uri.fsPath, document.uri.fsPath);
+  if (relative2.startsWith("..") || path6.isAbsolute(relative2)) {
     return void 0;
   }
-  return `${path5.basename(folder.uri.fsPath)}/${relative2.split(path5.sep).join("/")}`;
+  return `${path6.basename(folder.uri.fsPath)}/${relative2.split(path6.sep).join("/")}`;
 }
 function relativeToWorkspace(document) {
   const folder = vscode7.workspace.getWorkspaceFolder(document.uri);
   if (!folder) {
     return void 0;
   }
-  return path5.relative(folder.uri.fsPath, document.uri.fsPath).split(path5.sep).join("/");
+  return path6.relative(folder.uri.fsPath, document.uri.fsPath).split(path6.sep).join("/");
 }
 async function pickWorkspaceFolder() {
   const folders = vscode7.workspace.workspaceFolders ?? [];
@@ -3819,8 +3853,8 @@ async function pickWorkspaceFolder() {
     const editor = vscode7.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === "file") {
       return {
-        uri: vscode7.Uri.file(path5.dirname(editor.document.fileName)),
-        name: path5.basename(path5.dirname(editor.document.fileName)),
+        uri: vscode7.Uri.file(path6.dirname(editor.document.fileName)),
+        name: path6.basename(path6.dirname(editor.document.fileName)),
         index: 0
       };
     }
@@ -3838,11 +3872,11 @@ async function pickWorkspaceFolder() {
 }
 async function collectProjectFiles(root, exclude) {
   const result = [];
-  const relativeOf = (absolute) => path5.relative(root, absolute).split(path5.sep).join("/");
+  const relativeOf = (absolute) => path6.relative(root, absolute).split(path6.sep).join("/");
   const walk = async (dir) => {
-    const children = await fs4.promises.readdir(dir, { withFileTypes: true });
+    const children = await fs5.promises.readdir(dir, { withFileTypes: true });
     for (const child of children) {
-      const absolute = path5.join(dir, child.name);
+      const absolute = path6.join(dir, child.name);
       const relative2 = relativeOf(absolute);
       if (child.isDirectory()) {
         if (exclude.ignoresDirectory(relative2)) {
@@ -3861,7 +3895,7 @@ async function collectProjectFiles(root, exclude) {
   return result;
 }
 function languageOf(devicePath) {
-  const extension = path5.extname(devicePath).toLowerCase();
+  const extension = path6.extname(devicePath).toLowerCase();
   switch (extension) {
     case ".js":
       return "javascript";
@@ -3918,15 +3952,15 @@ async function runFilePickerCommand(context) {
   if (!picked) {
     return;
   }
-  const absolute = path5.join(folder.uri.fsPath, ...picked.split("/"));
+  const absolute = path6.join(folder.uri.fsPath, ...picked.split("/"));
   let script;
   try {
-    script = await fs4.promises.readFile(absolute, "utf8");
+    script = await fs5.promises.readFile(absolute, "utf8");
   } catch (error) {
     vscode7.window.showErrorMessage(`AI.js Pro: \u8BFB\u53D6 ${picked} \u5931\u8D25\uFF1A${error.message}`);
     return;
   }
-  const name = path5.basename(picked);
+  const name = path6.basename(picked);
   await withConnection(async (conn) => {
     await conn.run(name, picked, script);
     await context.workspaceState.update(rerunKey(conn), { kind: "script", name, id: picked, script });
@@ -3948,17 +3982,24 @@ async function saveProjectCommand() {
     return;
   }
   const exclude = createExcludeMatcher(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
-  const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
+  const projectRoot = findProjectRoot(folder.uri.fsPath);
+  if (!projectRoot) {
+    vscode7.window.showErrorMessage(
+      "AI.js Pro: \u5DE5\u4F5C\u533A\u91CC\u6CA1\u6709\u627E\u5230 project.json\u3002\u8BF7\u6253\u5F00 AI.js Pro \u5DE5\u7A0B\u76EE\u5F55\uFF0C\u6216\u53EA\u5305\u542B\u4E00\u4E2A\u5DE5\u7A0B\u7684\u7236\u76EE\u5F55\u3002"
+    );
+    return;
+  }
+  const entries = await collectProjectFiles(projectRoot, exclude);
   if (entries.length === 0) {
     vscode7.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u4FDD\u5B58\u7684\u6587\u4EF6");
     return;
   }
   const zipInputs = [];
   for (const entry of entries) {
-    zipInputs.push({ path: entry.relative, data: await fs4.promises.readFile(entry.absolute) });
+    zipInputs.push({ path: entry.relative, data: await fs5.promises.readFile(entry.absolute) });
   }
   const archive = createZip(zipInputs);
-  const projectName = path5.basename(folder.uri.fsPath);
+  const projectName = path6.basename(projectRoot);
   await withConnection(async (conn) => {
     await conn.sendBytesCommand("save_project", projectName, archive, []);
     channel.appendLine(`[${conn.deviceName}] \u21E7 \u5DE5\u7A0B ${projectName} \u5DF2\u4FDD\u5B58\u5230\u624B\u673A\uFF08${entries.length} \u4E2A\u6587\u4EF6\uFF09`);
@@ -3981,7 +4022,7 @@ async function rerunCommand(context) {
     const entries = await collectProjectFiles(last.folder, exclude);
     const zipInputs = [];
     for (const entry of entries) {
-      zipInputs.push({ path: entry.relative, data: await fs4.promises.readFile(entry.absolute) });
+      zipInputs.push({ path: entry.relative, data: await fs5.promises.readFile(entry.absolute) });
     }
     await conn.sendBytesCommand("run_project", last.name, createZip(zipInputs), []);
     channel.appendLine(`[${conn.deviceName}] \u21BB \u5DE5\u7A0B ${last.name}`);
@@ -4051,15 +4092,15 @@ async function createWorkspaceProjectCommand(kind) {
     vscode7.window.showWarningMessage("AI.js Pro: \u76EE\u5F55\u540D\u4E0D\u5408\u6CD5");
     return;
   }
-  const dir = path5.join(folder.uri.fsPath, safe);
-  if (fs4.existsSync(dir)) {
+  const dir = path6.join(folder.uri.fsPath, safe);
+  if (fs5.existsSync(dir)) {
     vscode7.window.showWarningMessage(`AI.js Pro: ${safe} \u5DF2\u5B58\u5728`);
     return;
   }
-  await fs4.promises.mkdir(dir, { recursive: true });
-  await fs4.promises.writeFile(path5.join(dir, "project.json"), projectJson(safe, kind), "utf8");
-  const mainPath = path5.join(dir, "main.js");
-  await fs4.promises.writeFile(mainPath, engineOf(kind).template, "utf8");
+  await fs5.promises.mkdir(dir, { recursive: true });
+  await fs5.promises.writeFile(path6.join(dir, "project.json"), projectJson(safe, kind), "utf8");
+  const mainPath = path6.join(dir, "main.js");
+  await fs5.promises.writeFile(mainPath, engineOf(kind).template, "utf8");
   await vscode7.window.showTextDocument(vscode7.Uri.file(mainPath));
   channel.appendLine(`\uFF0B \u5DF2\u5EFA\u7ACB ${title}\uFF1A${mainPath}`);
 }
@@ -4080,11 +4121,11 @@ async function addDebugConfigCommand() {
     vscode7.window.showWarningMessage("AI.js Pro: \u9700\u8981\u6253\u5F00\u4E00\u4E2A\u6587\u4EF6\u5939\u5DE5\u4F5C\u533A");
     return;
   }
-  const vscodeDir = path5.join(folder.uri.fsPath, ".vscode");
-  const settingsPath = path5.join(vscodeDir, "settings.json");
+  const vscodeDir = path6.join(folder.uri.fsPath, ".vscode");
+  const settingsPath = path6.join(vscodeDir, "settings.json");
   let json = {};
   try {
-    json = JSON.parse(await fs4.promises.readFile(settingsPath, "utf8"));
+    json = JSON.parse(await fs5.promises.readFile(settingsPath, "utf8"));
   } catch {
     json = {};
   }
@@ -4093,13 +4134,13 @@ async function addDebugConfigCommand() {
     devices.push(host);
   }
   json["aijspro.devices"] = devices;
-  await fs4.promises.mkdir(vscodeDir, { recursive: true });
-  await fs4.promises.writeFile(settingsPath, `${JSON.stringify(json, null, 2)}
+  await fs5.promises.mkdir(vscodeDir, { recursive: true });
+  await fs5.promises.writeFile(settingsPath, `${JSON.stringify(json, null, 2)}
 `, "utf8");
-  const launchPath = path5.join(vscodeDir, "launch.json");
+  const launchPath = path6.join(vscodeDir, "launch.json");
   let launch = { version: "0.2.0", configurations: [] };
   try {
-    launch = JSON.parse(await fs4.promises.readFile(launchPath, "utf8"));
+    launch = JSON.parse(await fs5.promises.readFile(launchPath, "utf8"));
   } catch {
     launch = { version: "0.2.0", configurations: [] };
   }
@@ -4115,7 +4156,7 @@ async function addDebugConfigCommand() {
       program: "${file}",
       host
     });
-    await fs4.promises.writeFile(launchPath, `${JSON.stringify(launch, null, 2)}
+    await fs5.promises.writeFile(launchPath, `${JSON.stringify(launch, null, 2)}
 `, "utf8");
   }
   vscode7.window.setStatusBarMessage(`AI.js Pro: \u5DF2\u5199\u5165 ${host} \u4E0E\u8C03\u8BD5\u914D\u7F6E`, 4e3);
@@ -4143,7 +4184,7 @@ function e2eLog(message) {
     return;
   }
   try {
-    fs4.appendFileSync(sink, `${message}
+    fs5.appendFileSync(sink, `${message}
 `, "utf8");
   } catch {
   }
@@ -4228,18 +4269,18 @@ async function findFirstScript(dir, depth) {
   }
   let children;
   try {
-    children = await fs4.promises.readdir(dir, { withFileTypes: true });
+    children = await fs5.promises.readdir(dir, { withFileTypes: true });
   } catch {
     return void 0;
   }
   for (const child of children) {
     if (child.isFile() && child.name.endsWith(".js")) {
-      return path5.join(dir, child.name);
+      return path6.join(dir, child.name);
     }
   }
   for (const child of children) {
     if (child.isDirectory() && child.name !== "node_modules" && !child.name.startsWith(".")) {
-      const found = await findFirstScript(path5.join(dir, child.name), depth - 1);
+      const found = await findFirstScript(path6.join(dir, child.name), depth - 1);
       if (found) {
         return found;
       }

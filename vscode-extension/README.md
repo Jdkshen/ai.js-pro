@@ -1,5 +1,9 @@
 # AI.js Pro（VS Code 扩展）
 
+## 0.3.5：自动识别子工程目录
+
+打开「父目录 + 单个工程子目录」的工作区时（例如 `Downloads/xiangqi-draw` 里面才是含 `project.json` 的 `xiangqi-draw`），运行/保存工程会自动定位到子工程，推送根目录就是子工程本身。此前会把父目录整体打包，手机端 `project.json` 不在解压根目录，报「工程无法运行：Attempt to invoke ... on a null object reference」。
+
 ## 0.3.4：aijspro.exclude 支持 glob
 
 `aijspro.exclude` 现在支持 `*.apk`、`assets/**`、`**/node_modules/**`、`out/*.log`、`cache/` 等 glob；无 `/` 的模式仍按任意层级的目录/文件名匹配（兼容旧配置）。工程 zip 超过 200MB 会被拦截；大资源建议排除后单独 adb push 到手机工程目录。

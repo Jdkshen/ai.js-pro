@@ -15,6 +15,7 @@ import { selectDevice } from './devicePicker';
 import { DeviceFileProvider, ExplorerNode, FileNode } from './tree';
 import { createZip, ZipInput } from './zip';
 import { createExcludeMatcher, ExcludeMatcher } from './exclude';
+import { findProjectRoot } from './projectRoot';
 
 const PUSH_MANIFEST_PREFIX = 'aijspro.pushManifest';
 
@@ -298,7 +299,16 @@ async function runProjectCommand(context: vscode.ExtensionContext): Promise<void
   const options = vscode.workspace.getConfiguration('aijspro');
   // aijspro.exclude 支持 glob：*.apk / assets/** / `**/node_modules/**`（按相对路径匹配）。
   const exclude = createExcludeMatcher(options.get<string[]>('exclude', []));
-  const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
+  // 工作区可能是「父目录 + 单个工程子目录」；工程根目录必须包含 project.json，否则手机会报
+  // 「工程无法运行：Attempt to invoke ... on a null object reference」。
+  const projectRoot = findProjectRoot(folder.uri.fsPath);
+  if (!projectRoot) {
+    vscode.window.showErrorMessage(
+      'AI.js Pro: 工作区里没有找到 project.json。请打开 AI.js Pro 工程目录，或只包含一个工程的父目录。',
+    );
+    return;
+  }
+  const entries = await collectProjectFiles(projectRoot, exclude);
   if (entries.length === 0) {
     vscode.window.showWarningMessage('AI.js Pro: 工程目录里没有可推送的文件');
     return;
@@ -317,10 +327,13 @@ async function runProjectCommand(context: vscode.ExtensionContext): Promise<void
     );
     return;
   }
-  const projectName = path.basename(folder.uri.fsPath);
+  const projectName = path.basename(projectRoot);
+  if (projectRoot !== folder.uri.fsPath) {
+    channel.appendLine(`工作区根目录没有 project.json，使用子工程：${projectName}`);
+  }
 
   await withConnection(async (conn) => {
-    const manifestKey = `${PUSH_MANIFEST_PREFIX}.${conn.key}.${folder.uri.fsPath}`;
+    const manifestKey = `${PUSH_MANIFEST_PREFIX}.${conn.key}.${projectRoot}`;
     const previous = context.globalState.get<string[]>(manifestKey, []);
     const current = new Set(entries.map((entry) => entry.relative));
     const deletedFiles = previous.filter((relative) => !current.has(relative));
@@ -332,7 +345,7 @@ async function runProjectCommand(context: vscode.ExtensionContext): Promise<void
     await context.workspaceState.update(rerunKey(conn), {
       kind: 'project',
       name: projectName,
-      folder: folder.uri.fsPath,
+      folder: projectRoot,
     });
     channel.appendLine(
       `[${conn.deviceName}] ▶ 工程 ${projectName}（${entries.length} 个文件，` +
@@ -681,7 +694,14 @@ async function saveProjectCommand(): Promise<void> {
     return;
   }
   const exclude = createExcludeMatcher(vscode.workspace.getConfiguration('aijspro').get<string[]>('exclude', []));
-  const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
+  const projectRoot = findProjectRoot(folder.uri.fsPath);
+  if (!projectRoot) {
+    vscode.window.showErrorMessage(
+      'AI.js Pro: 工作区里没有找到 project.json。请打开 AI.js Pro 工程目录，或只包含一个工程的父目录。',
+    );
+    return;
+  }
+  const entries = await collectProjectFiles(projectRoot, exclude);
   if (entries.length === 0) {
     vscode.window.showWarningMessage('AI.js Pro: 工程目录里没有可保存的文件');
     return;
@@ -691,7 +711,7 @@ async function saveProjectCommand(): Promise<void> {
     zipInputs.push({ path: entry.relative, data: await fs.promises.readFile(entry.absolute) });
   }
   const archive = createZip(zipInputs);
-  const projectName = path.basename(folder.uri.fsPath);
+  const projectName = path.basename(projectRoot);
   await withConnection(async (conn) => {
     await conn.sendBytesCommand('save_project', projectName, archive, []);
     channel.appendLine(`[${conn.deviceName}] ⇧ 工程 ${projectName} 已保存到手机（${entries.length} 个文件）`);

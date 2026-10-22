@@ -22,6 +22,10 @@
 | 多设备 | 保存多个地址（`aijspro.devices`），连接多个设备时命令面板/状态栏可切换 |
 
 
+## 自动识别子工程（0.3.5+）
+
+如果打开的是「父目录 + 单个工程子目录」（如 `Downloads/xiangqi-draw` 里面才是含 `project.json` 的 `xiangqi-draw`），运行/保存工程会自动使用子工程作为推送根目录与 `projectName`；不会再出现手机端 `project.json` 不在解压根目录而报「工程无法运行：Attempt to invoke ... on a null object reference」。父目录下存在多个工程子目录时仍要求明确打开其中一个。
+
 ## 排除大文件（aijspro.exclude，0.3.4+）
 
 「推送并运行整个工程」会把工作区打成一个 zip 帧发送，扩展在压缩包 **200MB** 时就拦截（给手机协议单帧 256MB 留余量）。在工程 `.vscode/settings.json` 或用户设置里配置排除项：
