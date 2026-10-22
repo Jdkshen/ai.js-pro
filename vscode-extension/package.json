@@ -2,7 +2,7 @@
   "name": "aijspro-vscode",
   "displayName": "AI.js Pro",
   "description": "连接 AI.js Pro（Android）：运行当前文件/整个工程、实时日志、Rhino 断点调试、保存自动推送、设备文件浏览与拉取。",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "jdkshen",
   "license": "MIT",
   "engines": {
@@ -277,7 +277,7 @@
             "dist",
             "build"
           ],
-          "description": "推送整个工程时忽略的目录/文件名。"
+          "description": "推送整个工程时忽略的目录/文件。支持 * ? ** glob：*.apk、assets/**、**/node_modules/**；无 / 的模式按任意层级名称匹配，以 / 结尾只匹配目录，相对路径以工程根为基准。"
         },
         "aijspro.adbPath": {
           "type": "string",
@@ -337,7 +337,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs",
+    "test": "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs",
     "test:devices": "node --test test/manager.test.cjs",
     "test:connection": "node --test test/connection.test.cjs",
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",

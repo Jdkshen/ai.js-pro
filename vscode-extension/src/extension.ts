@@ -14,6 +14,7 @@ import { UsbDevices } from './adb';
 import { selectDevice } from './devicePicker';
 import { DeviceFileProvider, ExplorerNode, FileNode } from './tree';
 import { createZip, ZipInput } from './zip';
+import { createExcludeMatcher, ExcludeMatcher } from './exclude';
 
 const PUSH_MANIFEST_PREFIX = 'aijspro.pushManifest';
 
@@ -295,7 +296,8 @@ async function runProjectCommand(context: vscode.ExtensionContext): Promise<void
     return;
   }
   const options = vscode.workspace.getConfiguration('aijspro');
-  const exclude = new Set(options.get<string[]>('exclude', []));
+  // aijspro.exclude 支持 glob：*.apk / assets/** / `**/node_modules/**`（按相对路径匹配）。
+  const exclude = createExcludeMatcher(options.get<string[]>('exclude', []));
   const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
   if (entries.length === 0) {
     vscode.window.showWarningMessage('AI.js Pro: 工程目录里没有可推送的文件');
@@ -311,7 +313,7 @@ async function runProjectCommand(context: vscode.ExtensionContext): Promise<void
   const archive = createZip(zipInputs);
   if (archive.length > 200 * 1024 * 1024) {
     vscode.window.showErrorMessage(
-      `AI.js Pro: 工程打包后 ${(archive.length / 1024 / 1024).toFixed(0)} MB，超过协议上限（256MB），请用 aijspro.exclude 排除大文件`,
+      `AI.js Pro: 工程打包后 ${(archive.length / 1024 / 1024).toFixed(0)} MB，超过协议上限（256MB），请用 aijspro.exclude 排除大文件（现在支持 *.apk、assets/**、**/node_modules/** 等 glob）`,
     );
     return;
   }
@@ -554,20 +556,25 @@ async function pickWorkspaceFolder(): Promise<vscode.WorkspaceFolder | undefined
 
 async function collectProjectFiles(
   root: string,
-  exclude: Set<string>,
+  exclude: ExcludeMatcher,
 ): Promise<{ relative: string; absolute: string }[]> {
   const result: { relative: string; absolute: string }[] = [];
+  const relativeOf = (absolute: string): string => path.relative(root, absolute).split(path.sep).join('/');
   const walk = async (dir: string): Promise<void> => {
     const children = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const child of children) {
-      if (exclude.has(child.name)) {
-        continue;
-      }
       const absolute = path.join(dir, child.name);
+      const relative = relativeOf(absolute);
       if (child.isDirectory()) {
+        if (exclude.ignoresDirectory(relative)) {
+          continue;
+        }
         await walk(absolute);
       } else if (child.isFile()) {
-        result.push({ relative: path.relative(root, absolute).split(path.sep).join('/'), absolute });
+        if (exclude.ignoresFile(relative)) {
+          continue;
+        }
+        result.push({ relative, absolute });
       }
     }
   };
@@ -627,7 +634,7 @@ async function runFilePickerCommand(context: vscode.ExtensionContext): Promise<v
   if (!folder) {
     return;
   }
-  const exclude = new Set(vscode.workspace.getConfiguration('aijspro').get<string[]>('exclude', []));
+  const exclude = createExcludeMatcher(vscode.workspace.getConfiguration('aijspro').get<string[]>('exclude', []));
   const entries = (await collectProjectFiles(folder.uri.fsPath, exclude)).filter((entry) =>
     entry.relative.endsWith('.js'),
   );
@@ -673,7 +680,7 @@ async function saveProjectCommand(): Promise<void> {
   if (!folder) {
     return;
   }
-  const exclude = new Set(vscode.workspace.getConfiguration('aijspro').get<string[]>('exclude', []));
+  const exclude = createExcludeMatcher(vscode.workspace.getConfiguration('aijspro').get<string[]>('exclude', []));
   const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
   if (entries.length === 0) {
     vscode.window.showWarningMessage('AI.js Pro: 工程目录里没有可保存的文件');
@@ -705,7 +712,7 @@ async function rerunCommand(context: vscode.ExtensionContext): Promise<void> {
       return;
     }
     // kind === 'project'：按当前工作区内容重新打包推送。
-    const exclude = new Set(vscode.workspace.getConfiguration('aijspro').get<string[]>('exclude', []));
+    const exclude = createExcludeMatcher(vscode.workspace.getConfiguration('aijspro').get<string[]>('exclude', []));
     const entries = await collectProjectFiles(last.folder, exclude);
     const zipInputs: ZipInput[] = [];
     for (const entry of entries) {

@@ -37,7 +37,7 @@ var require_package = __commonJS({
       name: "aijspro-vscode",
       displayName: "AI.js Pro",
       description: "\u8FDE\u63A5 AI.js Pro\uFF08Android\uFF09\uFF1A\u8FD0\u884C\u5F53\u524D\u6587\u4EF6/\u6574\u4E2A\u5DE5\u7A0B\u3001\u5B9E\u65F6\u65E5\u5FD7\u3001Rhino \u65AD\u70B9\u8C03\u8BD5\u3001\u4FDD\u5B58\u81EA\u52A8\u63A8\u9001\u3001\u8BBE\u5907\u6587\u4EF6\u6D4F\u89C8\u4E0E\u62C9\u53D6\u3002",
-      version: "0.3.3",
+      version: "0.3.4",
       publisher: "jdkshen",
       license: "MIT",
       engines: {
@@ -312,7 +312,7 @@ var require_package = __commonJS({
                 "dist",
                 "build"
               ],
-              description: "\u63A8\u9001\u6574\u4E2A\u5DE5\u7A0B\u65F6\u5FFD\u7565\u7684\u76EE\u5F55/\u6587\u4EF6\u540D\u3002"
+              description: "\u63A8\u9001\u6574\u4E2A\u5DE5\u7A0B\u65F6\u5FFD\u7565\u7684\u76EE\u5F55/\u6587\u4EF6\u3002\u652F\u6301 * ? ** glob\uFF1A*.apk\u3001assets/**\u3001**/node_modules/**\uFF1B\u65E0 / \u7684\u6A21\u5F0F\u6309\u4EFB\u610F\u5C42\u7EA7\u540D\u79F0\u5339\u914D\uFF0C\u4EE5 / \u7ED3\u5C3E\u53EA\u5339\u914D\u76EE\u5F55\uFF0C\u76F8\u5BF9\u8DEF\u5F84\u4EE5\u5DE5\u7A0B\u6839\u4E3A\u57FA\u51C6\u3002"
             },
             "aijspro.adbPath": {
               type: "string",
@@ -372,7 +372,7 @@ var require_package = __commonJS({
         ]
       },
       scripts: {
-        test: "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs",
+        test: "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs",
         "test:devices": "node --test test/manager.test.cjs",
         "test:connection": "node --test test/connection.test.cjs",
         build: "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
@@ -3220,6 +3220,128 @@ function createZip(entries) {
   return Buffer.concat([...localParts, ...centralParts, eocd]);
 }
 
+// src/exclude.ts
+function hasGlobChars(value) {
+  return value.includes("*") || value.includes("?");
+}
+function escapeRegExp(value) {
+  const special = "\\^$.*+?()[]{}|";
+  let out = "";
+  for (const ch of value) {
+    out += special.includes(ch) ? "\\" + ch : ch;
+  }
+  return out;
+}
+function globToRegExpSource(glob, nameOnly) {
+  let source = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob.charAt(i);
+    if (ch === "*") {
+      if (!nameOnly && glob.charAt(i + 1) === "*") {
+        if (glob.charAt(i + 2) === "/") {
+          source += "(?:[^/]+/)*";
+          i += 2;
+        } else {
+          source += ".*";
+          i += 1;
+        }
+      } else {
+        source += nameOnly ? ".*" : "[^/]*";
+        if (!nameOnly && glob.charAt(i + 1) === "*") {
+          i += 1;
+        }
+      }
+    } else if (ch === "?") {
+      source += nameOnly ? "." : "[^/]";
+    } else if (ch === "/") {
+      source += "/";
+    } else {
+      source += escapeRegExp(ch);
+    }
+  }
+  return "^" + source + "$";
+}
+function normalizePattern(pattern) {
+  let value = pattern.trim().replace(/\\/g, "/");
+  while (value.startsWith("./")) {
+    value = value.slice(2);
+  }
+  while (value.startsWith("/")) {
+    value = value.slice(1);
+  }
+  return value;
+}
+function compileRule(raw) {
+  let pattern = normalizePattern(raw);
+  if (!pattern || pattern === ".") {
+    return null;
+  }
+  const directoryOnly = pattern.endsWith("/");
+  if (directoryOnly) {
+    pattern = pattern.slice(0, -1);
+  }
+  if (!pattern) {
+    return null;
+  }
+  if (!pattern.includes("/")) {
+    const source = hasGlobChars(pattern) ? globToRegExpSource(pattern, true) : "^" + escapeRegExp(pattern) + "$";
+    return { directoryOnly, namePattern: new RegExp(source) };
+  }
+  return { directoryOnly, pathPattern: new RegExp(globToRegExpSource(pattern, false)) };
+}
+function splitRelative(relativePath) {
+  return relativePath.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+function nameOf(relativePath) {
+  const normalized = splitRelative(relativePath);
+  const index = normalized.lastIndexOf("/");
+  return index < 0 ? normalized : normalized.slice(index + 1);
+}
+function createExcludeMatcher(patterns) {
+  const rules = [];
+  for (const pattern of patterns) {
+    const rule = compileRule(pattern);
+    if (rule) {
+      rules.push(rule);
+    }
+  }
+  if (rules.length === 0) {
+    return { ignoresDirectory: () => false, ignoresFile: () => false };
+  }
+  const directoryMatches = (rule, relativePath) => {
+    if (rule.namePattern && !rule.namePattern.test(nameOf(relativePath))) {
+      return false;
+    }
+    if (rule.pathPattern) {
+      const withSlash = splitRelative(relativePath) + "/";
+      if (!rule.pathPattern.test(withSlash)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const fileMatches = (rule, relativePath) => {
+    if (rule.directoryOnly) {
+      return false;
+    }
+    if (rule.namePattern && !rule.namePattern.test(nameOf(relativePath))) {
+      return false;
+    }
+    if (rule.pathPattern && !rule.pathPattern.test(splitRelative(relativePath))) {
+      return false;
+    }
+    return true;
+  };
+  return {
+    ignoresDirectory(relativePath) {
+      return rules.some((rule) => directoryMatches(rule, relativePath));
+    },
+    ignoresFile(relativePath) {
+      return rules.some((rule) => fileMatches(rule, relativePath));
+    }
+  };
+}
+
 // src/extension.ts
 var PUSH_MANIFEST_PREFIX = "aijspro.pushManifest";
 var channel;
@@ -3473,7 +3595,7 @@ async function runProjectCommand(context) {
     return;
   }
   const options = vscode7.workspace.getConfiguration("aijspro");
-  const exclude = new Set(options.get("exclude", []));
+  const exclude = createExcludeMatcher(options.get("exclude", []));
   const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
   if (entries.length === 0) {
     vscode7.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u63A8\u9001\u7684\u6587\u4EF6");
@@ -3489,7 +3611,7 @@ async function runProjectCommand(context) {
   const archive = createZip(zipInputs);
   if (archive.length > 200 * 1024 * 1024) {
     vscode7.window.showErrorMessage(
-      `AI.js Pro: \u5DE5\u7A0B\u6253\u5305\u540E ${(archive.length / 1024 / 1024).toFixed(0)} MB\uFF0C\u8D85\u8FC7\u534F\u8BAE\u4E0A\u9650\uFF08256MB\uFF09\uFF0C\u8BF7\u7528 aijspro.exclude \u6392\u9664\u5927\u6587\u4EF6`
+      `AI.js Pro: \u5DE5\u7A0B\u6253\u5305\u540E ${(archive.length / 1024 / 1024).toFixed(0)} MB\uFF0C\u8D85\u8FC7\u534F\u8BAE\u4E0A\u9650\uFF08256MB\uFF09\uFF0C\u8BF7\u7528 aijspro.exclude \u6392\u9664\u5927\u6587\u4EF6\uFF08\u73B0\u5728\u652F\u6301 *.apk\u3001assets/**\u3001**/node_modules/** \u7B49 glob\uFF09`
     );
     return;
   }
@@ -3716,17 +3838,22 @@ async function pickWorkspaceFolder() {
 }
 async function collectProjectFiles(root, exclude) {
   const result = [];
+  const relativeOf = (absolute) => path5.relative(root, absolute).split(path5.sep).join("/");
   const walk = async (dir) => {
     const children = await fs4.promises.readdir(dir, { withFileTypes: true });
     for (const child of children) {
-      if (exclude.has(child.name)) {
-        continue;
-      }
       const absolute = path5.join(dir, child.name);
+      const relative2 = relativeOf(absolute);
       if (child.isDirectory()) {
+        if (exclude.ignoresDirectory(relative2)) {
+          continue;
+        }
         await walk(absolute);
       } else if (child.isFile()) {
-        result.push({ relative: path5.relative(root, absolute).split(path5.sep).join("/"), absolute });
+        if (exclude.ignoresFile(relative2)) {
+          continue;
+        }
+        result.push({ relative: relative2, absolute });
       }
     }
   };
@@ -3776,7 +3903,7 @@ async function runFilePickerCommand(context) {
   if (!folder) {
     return;
   }
-  const exclude = new Set(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
+  const exclude = createExcludeMatcher(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
   const entries = (await collectProjectFiles(folder.uri.fsPath, exclude)).filter(
     (entry) => entry.relative.endsWith(".js")
   );
@@ -3820,7 +3947,7 @@ async function saveProjectCommand() {
   if (!folder) {
     return;
   }
-  const exclude = new Set(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
+  const exclude = createExcludeMatcher(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
   const entries = await collectProjectFiles(folder.uri.fsPath, exclude);
   if (entries.length === 0) {
     vscode7.window.showWarningMessage("AI.js Pro: \u5DE5\u7A0B\u76EE\u5F55\u91CC\u6CA1\u6709\u53EF\u4FDD\u5B58\u7684\u6587\u4EF6");
@@ -3850,7 +3977,7 @@ async function rerunCommand(context) {
       channel.appendLine(`[${conn.deviceName}] \u21BB ${last.name}`);
       return;
     }
-    const exclude = new Set(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
+    const exclude = createExcludeMatcher(vscode7.workspace.getConfiguration("aijspro").get("exclude", []));
     const entries = await collectProjectFiles(last.folder, exclude);
     const zipInputs = [];
     for (const entry of entries) {

@@ -1,5 +1,9 @@
 # AI.js Pro（VS Code 扩展）
 
+## 0.3.4：aijspro.exclude 支持 glob
+
+`aijspro.exclude` 现在支持 `*.apk`、`assets/**`、`**/node_modules/**`、`out/*.log`、`cache/` 等 glob；无 `/` 的模式仍按任意层级的目录/文件名匹配（兼容旧配置）。工程 zip 超过 200MB 会被拦截；大资源建议排除后单独 adb push 到手机工程目录。
+
 ## 0.3.3：设备选择
 
 功能菜单中的“选择设备”始终弹出列表，显示已连接手机、USB 手机和已记住的地址。选择后，运行命令使用当前选中的手机；该手机断开后不会自动改用另一台。
