@@ -4,9 +4,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 
 import static org.junit.Assert.*;
+import static org.autojs.source.engine.android.JvmTestAssertions.assertThrows;
 
 /**
  * Pure-JVM checks for Node24Images protocol parsing/search rules. Bitmap decoding itself is an
@@ -199,5 +203,162 @@ public class Node24ImagesTest {
         assertTrue(response.optBoolean("value"));
         images.close();
         images.close();
+    }
+
+    // ------------------------------------------------------------------
+    // Phase A Raw 截图（.n24r）：纯 JVM 头/长度/预算校验（不依赖 Android Bitmap）
+    // ------------------------------------------------------------------
+
+    @Test public void rawHeaderAcceptsValidLayoutAndPixelLength() {
+        byte[] header = rawHeader(1280, 2772);
+        long expected = RawScreenshotFormat.HEADER_BYTES + (long) (1280 * 4) * 2772;
+        RawScreenshotFormat.Header parsed = Node24Images.validateRawHeader(header, expected);
+        assertEquals(1280, parsed.width);
+        assertEquals(2772, parsed.height);
+        assertEquals(1280 * 4, parsed.rowBytes);
+        assertEquals(RawScreenshotFormat.FORMAT_ARGB_8888, parsed.format);
+    }
+
+    @Test public void rawHeaderRejectsBadMagicVersionRowBytesAndDimensions() {
+        byte[] good = rawHeader(100, 50);
+        long expected = RawScreenshotFormat.HEADER_BYTES + (long) (100 * 4) * 50;
+        // magic(0) / version(4) / format(20)
+        for (int offset : new int[]{0, 4, 20}) {
+            byte[] broken = good.clone();
+            broken[offset] = (byte) (broken[offset] + 1);
+            assertThrows(IllegalArgumentException.class,
+                    () -> Node24Images.validateRawHeader(broken, expected));
+        }
+        // rowBytes != width*4（offset 16..19，小端 400 -> 401）
+        byte[] rowBytes = good.clone();
+        rowBytes[16] = (byte) 0x01;
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(rowBytes, expected));
+        // width = 0
+        byte[] zeroWidth = good.clone();
+        for (int i = 8; i <= 11; i++) {
+            zeroWidth[i] = 0;
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(zeroWidth, expected));
+        // height = -1
+        byte[] negativeHeight = good.clone();
+        for (int i = 12; i <= 15; i++) {
+            negativeHeight[i] = (byte) 0xFF;
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(negativeHeight, expected));
+        // width 溢出：width=0x40000000，rowBytes 同时写成 0（int 乘法溢出后自洽），由 Node24Images 显式挡掉。
+        byte[] overflow = good.clone();
+        overflow[8] = 0;
+        overflow[9] = 0;
+        overflow[10] = 0;
+        overflow[11] = 0x40;
+        for (int i = 16; i <= 19; i++) {
+            overflow[i] = 0;
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(overflow, expected));
+    }
+
+    @Test public void rawHeaderRejectsTruncatedOrOversizedFileLength() {
+        byte[] good = rawHeader(100, 50);
+        long expected = RawScreenshotFormat.HEADER_BYTES + (long) (100 * 4) * 50;
+        Node24Images.validateRawHeader(good, expected); // 精确长度合法
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(good, expected - 1));
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(good, expected + 1));
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(good, RawScreenshotFormat.HEADER_BYTES));
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.validateRawHeader(new byte[RawScreenshotFormat.HEADER_BYTES], expected));
+    }
+
+    @Test public void rawDimensionsRespectImageAndTotalPixelBudgets() {
+        Node24Images images = new Node24Images(2, 100, 200);
+        images.checkDimensions(10, 10); // 100 像素，正好等于单图上限
+        assertThrows(IllegalArgumentException.class, () -> images.checkDimensions(11, 10));
+        images.checkRegisterBudget(10, 10); // 总预算 200，仍可行
+        // 单图预算 100 已过 checkDimensions，这里直接测总像素预算（220 > 200）。
+        assertThrows(IllegalStateException.class, () -> images.checkRegisterBudget(20, 11));
+    }
+
+    @Test public void rawScreenshotPathRequiresAbsoluteN24rPath() {
+        String temp = System.getProperty("java.io.tmpdir");
+        File ok = new File(temp, "node24-shot.n24r");
+        assertEquals(ok, Node24Images.validateRawScreenshotPath(ok.getAbsolutePath()));
+        for (String invalid : new String[]{"relative.n24r", "", temp + File.separator + "shot.png",
+                ok.getAbsolutePath() + "\0bad"}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> Node24Images.validateRawScreenshotPath(invalid));
+        }
+    }
+
+    @Test public void rawDimensionsAboveDefaultBudgetAreRejectedBeforeAllocation() {
+        byte[] header = rawHeader(5000, 4000); // 20M 像素 > 默认 16M 上限
+        long expected = RawScreenshotFormat.HEADER_BYTES + (long) (5000 * 4) * 4000;
+        RawScreenshotFormat.Header parsed = Node24Images.validateRawHeader(header, expected);
+        Node24Images images = new Node24Images();
+        assertThrows(IllegalArgumentException.class,
+                () -> images.checkDimensions(parsed.width, parsed.height));
+    }
+
+    // ------------------------------------------------------------------
+    // Phase B：readRawStream(InputStream) 纯 JVM 用例（ByteArrayInputStream，不创建 Bitmap）
+    // ------------------------------------------------------------------
+
+    @Test public void rawStreamHeaderAndPixelsAreReadFully() throws Exception {
+        byte[] raw = rawBytes(100, 50);
+        ByteArrayInputStream input = new ByteArrayInputStream(raw);
+        RawScreenshotFormat.Header header = Node24Images.readRawStreamHeader(input);
+        assertEquals(100, header.width);
+        assertEquals(50, header.height);
+        assertEquals(100 * 4, header.rowBytes);
+        ByteBuffer pixels = ByteBuffer.allocate(100 * 4 * 50);
+        Node24Images.readRawPixelBytes(input, pixels);
+        assertEquals(0, pixels.remaining());
+        assertEquals(-1, input.read()); // 恰好读到流末尾，没有多余数据
+    }
+
+    @Test public void rawStreamRejectsShortHeaderAndEmptyStream() {
+        assertThrows(IOException.class,
+                () -> Node24Images.readRawStreamHeader(new ByteArrayInputStream(new byte[0])));
+        assertThrows(IOException.class,
+                () -> Node24Images.readRawStreamHeader(new ByteArrayInputStream(new byte[31])));
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.readRawStreamHeader(null));
+    }
+
+    @Test public void rawStreamRejectsBadMagic() {
+        byte[] badMagic = rawBytes(100, 50);
+        badMagic[0] = (byte) (badMagic[0] + 1);
+        assertThrows(IllegalArgumentException.class,
+                () -> Node24Images.readRawStreamHeader(new ByteArrayInputStream(badMagic)));
+    }
+
+    @Test public void rawStreamRejectsTruncatedPixelData() throws Exception {
+        byte[] header = rawHeader(100, 50);
+        byte[] truncated = new byte[RawScreenshotFormat.HEADER_BYTES + 100];
+        System.arraycopy(header, 0, truncated, 0, header.length);
+        ByteArrayInputStream input = new ByteArrayInputStream(truncated);
+        Node24Images.readRawStreamHeader(input); // 头合法
+        ByteBuffer pixels = ByteBuffer.allocate(100 * 4 * 50);
+        assertThrows(IOException.class, () -> Node24Images.readRawPixelBytes(input, pixels));
+    }
+
+    private static byte[] rawHeader(int width, int height) {
+        ByteBuffer header = RawScreenshotFormat.newHeader(width, height);
+        byte[] bytes = new byte[RawScreenshotFormat.HEADER_BYTES];
+        header.get(bytes);
+        return bytes;
+    }
+
+    /** 构造「32B 头 + 全零 ARGB 像素」的完整 Raw 字节流。 */
+    private static byte[] rawBytes(int width, int height) {
+        ByteBuffer header = RawScreenshotFormat.newHeader(width, height);
+        byte[] bytes = new byte[RawScreenshotFormat.HEADER_BYTES + width * 4 * height];
+        header.get(bytes, 0, RawScreenshotFormat.HEADER_BYTES);
+        return bytes;
     }
 }

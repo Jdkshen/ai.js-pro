@@ -31,10 +31,15 @@ import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
+import java.nio.channels.ReadableByteChannel;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -74,6 +79,8 @@ public final class Node24Images implements AutoCloseable {
     /** 全部存活图片总像素上限（256MB ARGB 量级）。 */
     static final long DEFAULT_MAX_TOTAL_PIXELS = 64_000_000L;
     private static final long MAX_FILE_BYTES = 256L * 1024 * 1024;
+    /** Phase A 无障碍截图 Raw 像素临时文件后缀（32B 小端头 + ARGB_8888）。 */
+    private static final String RAW_SCREENSHOT_SUFFIX = ".n24r";
     private static final int MAX_PATH_CHARS = 4096;
     /**
      * getPixels 单次返回的原始字节上限。
@@ -282,6 +289,207 @@ public final class Node24Images implements AutoCloseable {
         return read(path);
     }
 
+    /**
+     * 读取宿主无障碍截图 Phase A 的 Raw 像素文件（{@code .n24r}：32B 小端头 + ARGB_8888）。
+     *
+     * <p>与 {@link #readFile(String)} 并列：路径只允许应用私有目录（getFilesDir/getCacheDir）
+     * 下的 .n24r；先校验头/文件长度/尺寸/预算，再分配 Bitmap，失败立即 recycle。
+     */
+    public synchronized JSONObject readRawFile(String path) throws Exception {
+        ensureOpen();
+        File file = rawScreenshotFile(path);
+        long fileLength = file.length();
+        if (fileLength <= RawScreenshotFormat.HEADER_BYTES) {
+            throw new IOException("Raw 截图文件不完整（" + fileLength + " 字节）：" + path);
+        }
+        if (fileLength > MAX_FILE_BYTES) {
+            throw new IOException("Raw 截图文件过大（" + fileLength + " 字节，上限 " + MAX_FILE_BYTES + "）：" + path);
+        }
+        try (FileInputStream input = new FileInputStream(file)) {
+            byte[] headerBytes = readRawHeaderBytes(input);
+            RawScreenshotFormat.Header header = validateRawHeader(headerBytes, fileLength);
+            checkDimensions(header.width, header.height);
+            checkRegisterBudget(header.width, header.height);
+            long pixelBytes = validateRawPixelBytes(header, path);
+            ByteBuffer pixels = allocateRawPixels(header, pixelBytes, path);
+            FileChannel channel = input.getChannel();
+            channel.position(RawScreenshotFormat.HEADER_BYTES);
+            while (pixels.hasRemaining()) {
+                int count = channel.read(pixels);
+                if (count < 0) {
+                    throw new IOException("Raw 截图像素数据不完整：" + path);
+                }
+            }
+            pixels.flip();
+            return registerRawPixels(header, pixels, path);
+        }
+    }
+
+    /**
+     * Phase B：读取 Raw 像素流（{@code ParcelFileDescriptor} 管道或 XML pipe 等 InputStream）。
+     *
+     * <p>格式与 readRawFile 相同（32B 小端头 + ARGB_8888 连续像素），但不预知总长度：
+     * 头通过 {@link RawScreenshotFormat#parseHeader(byte[])} 校验，像素必须读满 header 声明的字节数，
+     * 提前 EOF 视为截断（IOException）。流由调用方负责关闭（本方法不 close）。
+     */
+    public synchronized JSONObject readRawStream(InputStream input) throws Exception {
+        ensureOpen();
+        if (input == null) {
+            throw new IllegalArgumentException("Raw 截图数据流为空");
+        }
+        RawScreenshotFormat.Header header = readRawStreamHeader(input);
+        checkDimensions(header.width, header.height);
+        checkRegisterBudget(header.width, header.height);
+        long pixelBytes = validateRawPixelBytes(header, "数据流");
+        ByteBuffer pixels = allocateRawPixels(header, pixelBytes, "数据流");
+        readRawPixelBytes(input, pixels);
+        pixels.flip();
+        return registerRawPixels(header, pixels, "数据流");
+    }
+
+    /**
+     * 纯 JVM：解析 + 校验 32B Raw 头（magic/version/width/height/rowBytes/format），
+     * 并挡掉 width*4 的 int 溢出（避免“溢出后仍自洽”的头骗过后续校验）。
+     */
+    static RawScreenshotFormat.Header parseRawHeader(byte[] headerBytes) {
+        RawScreenshotFormat.Header header = RawScreenshotFormat.parseHeader(headerBytes);
+        if ((long) header.width * 4L > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Raw 截图宽度过大：" + header.width);
+        }
+        return header;
+    }
+
+    /** 纯 JVM：校验 32 字节 Raw 头 + 文件总长度（readRawFile 分配内存前调用）。 */
+    static RawScreenshotFormat.Header validateRawHeader(byte[] headerBytes, long totalBytes) {
+        RawScreenshotFormat.Header header = parseRawHeader(headerBytes);
+        RawScreenshotFormat.validateLength(header, totalBytes);
+        return header;
+    }
+
+    /** 纯 JVM：从流读满 32B 头并解析校验（readRawStream / 单测入口；不预知流总长度）。 */
+    static RawScreenshotFormat.Header readRawStreamHeader(InputStream input) throws IOException {
+        if (input == null) {
+            throw new IllegalArgumentException("Raw 截图数据流为空");
+        }
+        return parseRawHeader(readRawHeaderBytes(input));
+    }
+
+    /** 读满 32B 头；EOF/短头抛 IOException（不能拿半截头去 parse）。 */
+    static byte[] readRawHeaderBytes(InputStream input) throws IOException {
+        byte[] headerBytes = new byte[RawScreenshotFormat.HEADER_BYTES];
+        int read = 0;
+        while (read < headerBytes.length) {
+            int count = input.read(headerBytes, read, headerBytes.length - read);
+            if (count < 0) {
+                throw new IOException("Raw 截图数据流头不完整（" + read + "/" + headerBytes.length + " 字节）");
+            }
+            read += count;
+        }
+        return headerBytes;
+    }
+
+    /** 读满整个 direct ByteBuffer；流提前 EOF 抛 IOException（管道写端异常/截断）。 */
+    static void readRawPixelBytes(InputStream input, ByteBuffer pixels) throws IOException {
+        ReadableByteChannel channel = Channels.newChannel(input);
+        while (pixels.hasRemaining()) {
+            int count = channel.read(pixels);
+            if (count < 0) {
+                throw new IOException("Raw 截图像素数据流被截断（还差 " + pixels.remaining() + " 字节）");
+            }
+        }
+    }
+
+    private long validateRawPixelBytes(RawScreenshotFormat.Header header, String source) throws IOException {
+        long pixelBytes = RawScreenshotFormat.pixelBytes(header);
+        if (pixelBytes <= 0L || pixelBytes > Integer.MAX_VALUE - 8L) {
+            throw new IOException("Raw 截图像素数据大小无效（" + pixelBytes + " 字节）：" + source);
+        }
+        return pixelBytes;
+    }
+
+    private ByteBuffer allocateRawPixels(RawScreenshotFormat.Header header, long pixelBytes, String source)
+            throws IOException {
+        try {
+            return ByteBuffer.allocateDirect((int) pixelBytes);
+        } catch (OutOfMemoryError memory) {
+            throw new IOException("Raw 截图内存不足（" + header.width + "x" + header.height + "）：" + source, memory);
+        }
+    }
+
+    /** Raw 像素 → Bitmap → register；失败时立即 recycle（register 自己也会回收失败入参）。 */
+    private JSONObject registerRawPixels(RawScreenshotFormat.Header header, ByteBuffer pixels, String source) throws Exception {
+        Bitmap bitmap = null;
+        boolean registered = false;
+        try {
+            try {
+                bitmap = Bitmap.createBitmap(header.width, header.height, Bitmap.Config.ARGB_8888);
+            } catch (OutOfMemoryError memory) {
+                throw new IOException("Raw 截图内存不足（" + header.width + "x" + header.height + "）：" + source, memory);
+            }
+            if (bitmap == null) {
+                throw new IOException("Raw 截图无法创建 Bitmap（" + header.width + "x" + header.height + "）：" + source);
+            }
+            bitmap.copyPixelsFromBuffer(pixels);
+            JSONObject response = register(bitmap);
+            registered = true;
+            return response;
+        } finally {
+            if (!registered) {
+                recycleQuietly(bitmap);
+            }
+        }
+    }
+
+    /** 纯路径语法校验（不依赖 Android Context）：非空、无 NUL、绝对路径、.n24r 后缀。 */
+    static File validateRawScreenshotPath(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            throw new IllegalArgumentException("Raw 截图路径不能为空");
+        }
+        String trimmed = path.trim();
+        if (trimmed.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("Raw 截图路径包含 NUL 字符");
+        }
+        if (trimmed.length() > MAX_PATH_CHARS) {
+            throw new IllegalArgumentException("Raw 截图路径过长（上限 " + MAX_PATH_CHARS + " 字符）");
+        }
+        if (!trimmed.toLowerCase(Locale.US).endsWith(RAW_SCREENSHOT_SUFFIX)) {
+            throw new IllegalArgumentException("Raw 截图路径必须以 " + RAW_SCREENSHOT_SUFFIX + " 结尾：" + path);
+        }
+        File file = new File(trimmed);
+        if (!file.isAbsolute()) {
+            throw new IllegalArgumentException("Raw 截图路径必须是绝对路径：" + path);
+        }
+        return file;
+    }
+
+    private File rawScreenshotFile(String path) throws IOException {
+        File canonical = validateRawScreenshotPath(path).getCanonicalFile();
+        checkRawScreenshotPathAllowed(canonical);
+        if (!canonical.isFile()) {
+            throw new IOException("Raw 截图文件不存在：" + path);
+        }
+        return canonical;
+    }
+
+    /** canonical 后必须落在 getFilesDir()/getCacheDir() 之内（与 pixelsToFile 同一套私有目录根）。 */
+    private void checkRawScreenshotPathAllowed(File canonical) throws IOException {
+        if (!canonical.getName().toLowerCase(Locale.US).endsWith(RAW_SCREENSHOT_SUFFIX)) {
+            throw new IllegalArgumentException("Raw 截图路径必须以 " + RAW_SCREENSHOT_SUFFIX + " 结尾：" + canonical);
+        }
+        String target = canonical.getPath();
+        for (File root : privateRoots()) {
+            String rootPath = root.getCanonicalFile().getPath();
+            if (target.equals(rootPath)) {
+                throw new IllegalArgumentException("Raw 截图路径不能是目录：" + target);
+            }
+            String prefix = rootPath.endsWith(File.separator) ? rootPath : rootPath + File.separator;
+            if (target.startsWith(prefix)) {
+                return;
+            }
+        }
+        throw new IllegalArgumentException(
+                "Raw 截图路径必须位于应用私有目录（getFilesDir()/getCacheDir()）之下：" + target);
+    }
     /**
      * 登记一个已经解码的 Bitmap（无障碍截图 / 投屏帧）。超过上限时由本方法负责回收入参，
      * 调用方不需要再次 recycle；除 null/已回收外，任何校验或硬件位图转换失败也由本方法回收。

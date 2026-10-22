@@ -8,6 +8,7 @@
  */
 package com.stardust.autojs.host;
 
+import android.os.ParcelFileDescriptor;
 import com.stardust.autojs.host.IAutomationHostCallback;
 
 interface IAutomationHost {
@@ -28,6 +29,13 @@ interface IAutomationHost {
     boolean recents();
     boolean notifications();
     String screenshot(String targetPath);
+
+    /**
+     * 直传截图原始像素（32B Raw header + ARGB_8888）。
+     * 返回只读端；写端由主进程线程负责，关闭写端后调用方读到 EOF。
+     * format=1（RawScreenshotFormat.FORMAT_ARGB_8888）；maxWidth/maxHeight=0 表示全分辨率。
+     */
+    ParcelFileDescriptor screenshotPixels(int maxWidth, int maxHeight, int format);
 
     // task-163：主进程 -> :script 的无障碍事件反向通道
     void registerEventListener(IAutomationHostCallback callback);

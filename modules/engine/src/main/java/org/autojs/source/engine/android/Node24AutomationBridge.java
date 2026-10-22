@@ -4,6 +4,7 @@ package org.autojs.source.engine.android;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -533,8 +534,17 @@ public final class Node24AutomationBridge implements AutoCloseable {
     }
 
     /**
-     * 无障碍截图：主进程 {@code AutomationHostService} 截图到临时 PNG，解码成图片句柄后立即删除。
-     * 不把临时文件路径暴露给 JS，也不复用上一次截图授权/文件。
+     * 无障碍截图：PFD 像素管道优先 → Phase A Raw 文件 → PNG 回退；解码成图片句柄后立即清理。
+     * 不把临时文件路径暴露给 JS，也不复用上一次截图授权/文件/管道。
+     *
+     * <p>回退链（规格 2026-10-22 Phase A/B）：
+     * <ol>
+     *   <li>Phase B：主进程 {@code screenshotPixels} 通过 {@link ParcelFileDescriptor}
+     *       管道直传 32B 头 + ARGB_8888 原始像素，省掉 14MB 临时文件中转；</li>
+     *   <li>Phase A：主进程按 {@code .n24r} 后缀直写 Raw 临时文件；</li>
+     *   <li>原 PNG 临时文件（历史兼容路径）。</li>
+     * </ol>
+     * 任何一级失败都静默落到下一级，对外错误提示保持 PNG 历史文案。
      */
     private JSONObject takeScreenshot() throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
@@ -545,25 +555,139 @@ public final class Node24AutomationBridge implements AutoCloseable {
         if (directory == null) {
             directory = mContext.getFilesDir();
         }
-        File temporary = new File(directory, "node24-shot-" + UUID.randomUUID() + ".png");
+        return takeScreenshotWithFallback(directory, () -> readScreenshotPixels(backend),
+                backend::screenshot, mImages::readRawFile, mImages::readFile);
+    }
+
+    /**
+     * Phase B：主进程读写端分离的像素管道。
+     *
+     * <p>{@code screenshotPixels} 立即返回 readEnd，writeEnd 由主进程后台线程写 header + 像素。
+     * 这里用 AutoCloseInputStream 读满整帧（{@code readRawStream} 负责 header 校验/预算/
+     * Bitmap 解码/注册），读完关闭 readEnd；外层 try-with-resources 再兜底关闭 pfd。
+     * 管道为 null、写端提前关闭、截断等都会抛异常，交给回退链。
+     */
+    private JSONObject readScreenshotPixels(RemoteAutomationBridge.Backend backend) throws Exception {
+        // maxWidth/maxHeight = 0 表示全分辨率（坐标与 PNG/Phase A 路径一致）；format 复用 Phase A 常量。
+        try (ParcelFileDescriptor pfd = backend.screenshotPixels(
+                0, 0, RawScreenshotFormat.FORMAT_ARGB_8888)) {
+            if (pfd == null) {
+                throw new IllegalStateException(SCREENSHOT_PIXELS_NULL_MESSAGE);
+            }
+            try (ParcelFileDescriptor.AutoCloseInputStream pixels =
+                         new ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
+                return mImages.readRawStream(pixels);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 截图临时文件 / Raw 优先回退（纯 JVM 单测覆盖）
+    // ------------------------------------------------------------------
+
+    /** 主进程截图调用（{@code backend.screenshot} 的最小抽象，便于纯 JVM 单测）。 */
+    interface ScreenshotCapture {
+        String screenshot(String targetPath) throws Exception;
+    }
+
+    /** 图片解码（{@code Node24Images.readRawFile/readFile} 的最小抽象，便于纯 JVM 单测）。 */
+    interface ScreenshotDecoder {
+        JSONObject decode(String path) throws Exception;
+    }
+
+    /** Phase B 像素管道读取（{@code screenshotPixels + readRawStream} 的最小抽象，便于纯 JVM 单测）。 */
+    interface ScreenshotPixelsReader {
+        JSONObject read() throws Exception;
+    }
+
+    /** 历史 PNG 路径的两句错误提示：回退后的对外错误必须保持原样。 */
+    static final String SCREENSHOT_MISSING_FILE_MESSAGE =
+            "无障碍截图失败：主进程未返回截图文件（请确认无障碍服务已开启且系统支持截图）";
+    static final String SCREENSHOT_EMPTY_FILE_MESSAGE =
+            "无障碍截图失败：主进程截图文件不存在或为空";
+    /** Phase B 管道为空时的内部错误：只在 suppressed 里出现，对外仍是 PNG 历史文案。 */
+    static final String SCREENSHOT_PIXELS_NULL_MESSAGE =
+            "无障碍截图失败：主进程未返回像素管道";
+
+    private static final String SCREENSHOT_FILE_PREFIX = "node24-shot-";
+    private static final String RAW_SCREENSHOT_SUFFIX = ".n24r";
+    private static final String PNG_SCREENSHOT_SUFFIX = ".png";
+
+    /** 每次尝试都用新 UUID 的临时文件名，避免复用上一次的半写文件。 */
+    static File screenshotTemporaryFile(File directory, UUID id, boolean raw) {
+        return new File(directory, SCREENSHOT_FILE_PREFIX + id
+                + (raw ? RAW_SCREENSHOT_SUFFIX : PNG_SCREENSHOT_SUFFIX));
+    }
+
+    /** 主进程返回的截图文件必须存在且非空（缺失 / 0 字节 / 半写都算失败）。 */
+    static boolean isUsableScreenshotFile(File file) {
+        return file != null && file.isFile() && file.length() > 0L;
+    }
+
+    /**
+     * 单次截图尝试（Raw 或 PNG）：新 UUID 临时文件 → 主进程写文件 → 校验 → 解码。
+     * 无论成功失败，finally 都删除临时文件与主进程返回的 saved 文件（防半写/泄漏）。
+     */
+    static JSONObject captureScreenshotOnce(File directory, boolean raw,
+            ScreenshotCapture capture, ScreenshotDecoder decoder) throws Exception {
+        File temporary = screenshotTemporaryFile(directory, UUID.randomUUID(), raw);
         File saved = null;
         try {
-            String path = backend.screenshot(temporary.getAbsolutePath());
+            String path = capture.screenshot(temporary.getAbsolutePath());
             if (path == null || path.trim().isEmpty()) {
-                throw new IllegalStateException("无障碍截图失败：主进程未返回截图文件"
-                        + "（请确认无障碍服务已开启且系统支持截图）");
+                throw new IllegalStateException(SCREENSHOT_MISSING_FILE_MESSAGE);
             }
             saved = new File(path);
-            if (!saved.isFile() || saved.length() <= 0L) {
-                throw new IllegalStateException("无障碍截图失败：主进程截图文件不存在或为空");
+            if (!isUsableScreenshotFile(saved)) {
+                throw new IllegalStateException(SCREENSHOT_EMPTY_FILE_MESSAGE);
             }
-            return mImages.readFile(saved.getAbsolutePath());
+            return decoder.decode(saved.getAbsolutePath());
         } finally {
-            // 真实临时资源不能留着；无论解码成功与否都删。
+            // 真实临时资源不能留着；无论解码成功与否都删（主进程失败时的半写文件也在这里清）。
             deleteQuietly(temporary);
             if (saved != null && !saved.equals(temporary)) {
                 deleteQuietly(saved);
             }
+        }
+    }
+
+    /**
+     * 截图三级回退链，优先级从高到低：
+     * <ol>
+     *   <li>Phase B：ParcelFileDescriptor 像素管道（{@code screenshotPixels + readRawStream}）；</li>
+     *   <li>Phase A：{@code .n24r} Raw 临时文件（主进程直写像素）；</li>
+     *   <li>原 PNG 临时文件（历史兼容路径）。</li>
+     * </ol>
+     * 每次尝试使用独立资源、失败各自清理；只回退 {@link Exception}（含 RuntimeException/
+     * IOException/JSONException），OOM 等 Error 直接上抛。三级都失败时抛出 PNG 路径的异常
+     * （对外错误提示保持历史文案），PFD/Raw 的失败原因依次挂到 {@code suppressed} 便于排查。
+     */
+    static JSONObject takeScreenshotWithFallback(File directory,
+            ScreenshotPixelsReader pixelsReader,
+            ScreenshotCapture capture, ScreenshotDecoder rawDecoder, ScreenshotDecoder pngDecoder)
+            throws Exception {
+        Exception pixelsFailure = null;
+        try {
+            return pixelsReader.read();
+        } catch (Exception failure) {
+            pixelsFailure = failure;
+        }
+        Exception rawFailure = null;
+        try {
+            return captureScreenshotOnce(directory, true, capture, rawDecoder);
+        } catch (Exception failure) {
+            rawFailure = failure;
+        }
+        try {
+            return captureScreenshotOnce(directory, false, capture, pngDecoder);
+        } catch (Exception pngFailure) {
+            if (pixelsFailure != null) {
+                pngFailure.addSuppressed(pixelsFailure);
+            }
+            if (rawFailure != null) {
+                pngFailure.addSuppressed(rawFailure);
+            }
+            throw pngFailure;
         }
     }
 

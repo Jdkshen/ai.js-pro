@@ -5,6 +5,7 @@ import android.accessibilityservice.GestureDescription;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.os.Binder;
@@ -12,6 +13,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.RemoteCallbackList;
 import android.view.accessibility.AccessibilityEvent;
@@ -26,6 +28,7 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import com.stardust.autojs.core.image.capture.AccessibilityScreenCapturer;
 import com.stardust.autojs.host.IAutomationHost;
 import com.stardust.autojs.host.IAutomationHostCallback;
+import org.autojs.source.engine.android.RawScreenshotFormat;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -33,8 +36,12 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -399,6 +406,56 @@ public class AutomationHostService extends android.app.Service {
                     bitmap.recycle();
                     return "";
                 }
+                // task-220：.n24r 走 Raw 像素临时文件（32B 小端头 + ARGB_8888 连续像素），其它路径保持 PNG。
+                if (target.getName().toLowerCase(Locale.ROOT).endsWith(".n24r")) {
+                    boolean rawWritten = false;
+                    try {
+                        int width = bitmap.getWidth();
+                        int height = bitmap.getHeight();
+                        if (width <= 0 || height <= 0) {
+                            Log.w(TAG, "screenshot: Raw 截图尺寸无效 " + width + "x" + height);
+                            return "";
+                        }
+                        // copyPixelsToBuffer 要求 ARGB_8888 且紧凑 stride；无障碍截图通常是软件 ARGB_8888，
+                        // 非该配置时只在这里做一次必要的转换（不复制整帧到额外数组）。
+                        Bitmap rawBitmap = bitmap;
+                        if (rawBitmap.getConfig() != Bitmap.Config.ARGB_8888
+                                || rawBitmap.getRowBytes() != width * 4) {
+                            Bitmap converted = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                            try {
+                                converted.setDensity(rawBitmap.getDensity());
+                                new Canvas(converted).drawBitmap(rawBitmap, 0f, 0f, null);
+                            } catch (Throwable convertError) {
+                                converted.recycle();
+                                throw convertError;
+                            }
+                            bitmap.recycle();
+                            bitmap = converted;
+                            rawBitmap = converted;
+                        }
+                        ByteBuffer header = RawScreenshotFormat.newHeader(width, height);
+                        RawScreenshotFormat.Header format = RawScreenshotFormat.parseHeader(header.array());
+                        long pixelBytes = RawScreenshotFormat.pixelBytes(format);
+                        RawScreenshotFormat.validateLength(format, RawScreenshotFormat.HEADER_BYTES + pixelBytes);
+                        if (pixelBytes <= 0L || pixelBytes > Integer.MAX_VALUE) {
+                            Log.w(TAG, "screenshot: Raw 像素过大 " + pixelBytes);
+                            return "";
+                        }
+                        ByteBuffer pixels = ByteBuffer.allocateDirect((int) pixelBytes);
+                        rawBitmap.copyPixelsToBuffer(pixels);
+                        pixels.flip();
+                        try (FileOutputStream rawOutput = new FileOutputStream(target)) {
+                            FileChannel channel = rawOutput.getChannel();
+                            while (header.hasRemaining()) channel.write(header);
+                            while (pixels.hasRemaining()) channel.write(pixels);
+                        }
+                        rawWritten = true;
+                        return target.getAbsolutePath();
+                    } finally {
+                        bitmap.recycle();
+                        if (!rawWritten) target.delete();
+                    }
+                }
                 FileOutputStream output = null;
                 try {
                     output = new FileOutputStream(target);
@@ -419,6 +476,115 @@ public class AutomationHostService extends android.app.Service {
             } catch (Throwable error) {
                 Log.w(TAG, "screenshot 失败", error);
                 return "";
+            }
+        }
+
+        @Override
+        public ParcelFileDescriptor screenshotPixels(int maxWidth, int maxHeight, int format) {
+            if (!isTrustedCaller()) return null;
+            if (format != RawScreenshotFormat.FORMAT_ARGB_8888) {
+                Log.w(TAG, "screenshotPixels: 不支持的 format=" + format);
+                return null;
+            }
+            Bitmap bitmap = null;
+            try {
+                AccessibilityService service = accessibilityService();
+                if (service == null) {
+                    Log.w(TAG, "screenshotPixels: 无障碍服务未连接");
+                    return null;
+                }
+                if (!AccessibilityScreenCapturer.isAvailable()) {
+                    Log.w(TAG, "screenshotPixels: 当前设备/系统不支持无障碍截图");
+                    return null;
+                }
+                try {
+                    bitmap = new AccessibilityScreenCapturer().capture(SCREENSHOT_TIMEOUT_MS);
+                } catch (Throwable error) {
+                    Log.w(TAG, "screenshotPixels: 系统截图失败", error);
+                    return null;
+                }
+                if (bitmap == null) return null;
+                int width = bitmap.getWidth();
+                int height = bitmap.getHeight();
+                if (width <= 0 || height <= 0) {
+                    Log.w(TAG, "screenshotPixels: 截图尺寸无效 " + width + "x" + height);
+                    bitmap.recycle();
+                    return null;
+                }
+                int limitWidth = maxWidth > 0 ? maxWidth : width;
+                int limitHeight = maxHeight > 0 ? maxHeight : height;
+                if (width > limitWidth || height > limitHeight) {
+                    float scale = Math.min(limitWidth / (float) width, limitHeight / (float) height);
+                    int scaledWidth = Math.max(1, Math.round(width * scale));
+                    int scaledHeight = Math.max(1, Math.round(height * scale));
+                    Bitmap scaled = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true);
+                    if (scaled != bitmap) {
+                        bitmap.recycle();
+                        bitmap = scaled;
+                    }
+                }
+                // copyPixelsToBuffer 要求 ARGB_8888 且紧凑 stride；无障碍截图通常已是软件 ARGB_8888。
+                if (bitmap.getConfig() != Bitmap.Config.ARGB_8888
+                        || bitmap.getRowBytes() != bitmap.getWidth() * 4) {
+                    Bitmap converted = Bitmap.createBitmap(bitmap.getWidth(), bitmap.getHeight(),
+                            Bitmap.Config.ARGB_8888);
+                    try {
+                        converted.setDensity(bitmap.getDensity());
+                        new Canvas(converted).drawBitmap(bitmap, 0f, 0f, null);
+                    } catch (Throwable convertError) {
+                        converted.recycle();
+                        throw convertError;
+                    }
+                    bitmap.recycle();
+                    bitmap = converted;
+                }
+                ParcelFileDescriptor[] pipe;
+                try {
+                    pipe = ParcelFileDescriptor.createPipe();
+                } catch (Throwable error) {
+                    Log.w(TAG, "screenshotPixels: createPipe 失败", error);
+                    bitmap.recycle();
+                    return null;
+                }
+                final ParcelFileDescriptor read = pipe[0];
+                final ParcelFileDescriptor write = pipe[1];
+                final Bitmap writerBitmap = bitmap;
+                bitmap = null; // 所有权移交给写线程
+                try {
+                    Thread writer = new Thread(() -> {
+                        try (ParcelFileDescriptor.AutoCloseOutputStream out =
+                                     new ParcelFileDescriptor.AutoCloseOutputStream(write)) {
+                            writeRawHeaderAndPixels(out.getChannel(), writerBitmap);
+                        } catch (Throwable error) {
+                            Log.w(TAG, "screenshotPixels write failed", error);
+                        } finally {
+                            writerBitmap.recycle();
+                            try {
+                                write.close();
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    }, "n24-screenshot-writer");
+                    writer.setDaemon(true);
+                    writer.start();
+                    return read;
+                } catch (Throwable startError) {
+                    Log.w(TAG, "screenshotPixels: 启动写线程失败", startError);
+                    writerBitmap.recycle();
+                    try {
+                        write.close();
+                    } catch (Throwable ignored) {
+                    }
+                    try {
+                        read.close();
+                    } catch (Throwable ignored) {
+                    }
+                    return null;
+                }
+            } catch (Throwable error) {
+                Log.w(TAG, "screenshotPixels 失败", error);
+                if (bitmap != null) bitmap.recycle();
+                return null;
             }
         }
 
@@ -458,6 +624,27 @@ public class AutomationHostService extends android.app.Service {
                 return service.performGlobalAction(action);
             });
         }
+    }
+
+    /**
+     * Phase B：把 32B 小端头 + ARGB_8888 连续像素写入管道通道。
+     * 调用方（独立写线程）负责关闭写端与回收 bitmap；这里只写一次 direct 像素缓冲。
+     */
+    private static void writeRawHeaderAndPixels(FileChannel channel, Bitmap bitmap) throws IOException {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        ByteBuffer header = RawScreenshotFormat.newHeader(width, height);
+        RawScreenshotFormat.Header parsed = RawScreenshotFormat.parseHeader(header.array());
+        long pixelBytes = RawScreenshotFormat.pixelBytes(parsed);
+        RawScreenshotFormat.validateLength(parsed, RawScreenshotFormat.HEADER_BYTES + pixelBytes);
+        if (pixelBytes <= 0L || pixelBytes > Integer.MAX_VALUE) {
+            throw new IOException("Raw 截图像素过大：" + pixelBytes);
+        }
+        ByteBuffer pixels = ByteBuffer.allocateDirect((int) pixelBytes);
+        bitmap.copyPixelsToBuffer(pixels);
+        pixels.flip();
+        while (header.hasRemaining()) channel.write(header);
+        while (pixels.hasRemaining()) channel.write(pixels);
     }
 
     // ------------------------------------------------------------------

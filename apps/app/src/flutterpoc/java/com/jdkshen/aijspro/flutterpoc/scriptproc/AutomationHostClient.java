@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.Log;
@@ -419,6 +420,16 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
         } catch (Throwable error) {
             onCallFailed("screenshot", error);
             return "";
+        }
+    }
+
+    @Override
+    public ParcelFileDescriptor screenshotPixels(int maxWidth, int maxHeight, int format) {
+        try {
+            return requireService().screenshotPixels(maxWidth, maxHeight, format);
+        } catch (Throwable error) {
+            onCallFailed("screenshotPixels", error);
+            return null;
         }
     }
 

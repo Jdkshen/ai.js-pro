@@ -1,5 +1,6 @@
 package com.stardust.autojs.runtime.api.remote;
 
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import com.stardust.autojs.runtime.exception.ScriptException;
@@ -84,6 +85,16 @@ public final class RemoteAutomationBridge {
 
         /** 保存 PNG 到 targetPath；成功返回实际路径，失败返回空串。 */
         String screenshot(String targetPath);
+
+        /**
+         * 直传 Raw 截图：返回只读 PFD；写端由主进程线程负责，关闭后调用方读到 EOF。
+         * format=1（RawScreenshotFormat.FORMAT_ARGB_8888）；maxWidth/maxHeight=0 表示全分辨率。
+         *
+         * <p>默认实现返回 null（兼容旧测试/旧 backend）；AutomationHostClient 会覆盖。
+         */
+        default ParcelFileDescriptor screenshotPixels(int maxWidth, int maxHeight, int format) {
+            return null;
+        }
 
         // ---- task-163：主进程无障碍事件反向通道（仅 :script 隔离进程用） ----
 
@@ -259,6 +270,13 @@ public final class RemoteAutomationBridge {
     /** 截图到文件；返回实际路径，失败抛中文异常。 */
     public static String screenshot(String targetPath) {
         return action("screenshot", backend -> backend.screenshot(targetPath), "");
+    }
+
+    /** 直传 Raw 截图 PFD；失败抛中文异常（空值表示主进程未返回）。 */
+    public static ParcelFileDescriptor screenshotPixels(int maxWidth, int maxHeight, int format) {
+        return action("screenshotPixels",
+                backend -> backend.screenshotPixels(maxWidth, maxHeight, format),
+                (ParcelFileDescriptor) null);
     }
 
     /**
