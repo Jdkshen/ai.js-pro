@@ -2,7 +2,11 @@
 
 > 面向所有接手的 AI（Codex / Claude / Copilot / Cursor / dsh 等）。
 > 先读本文，再读 `AGENTS.md`（构建与踩坑细节）和 `docs/reports/2026-10-18_收尾交接_给Codex_v2.md`（最新进度）。
-> 最后更新：2026-10-22；更新源 **dev-1202**，最新 [示例目录懒加载与插件发现优化](reports/2026-10-22_示例目录懒加载与插件发现优化.md)：离屏页不扫描、切页复用目录、刷新/重试保留；目录/插件发现移至后台线程并缓存 assets；小米 8 验证切页与运行入口。K40 业务运行中保留 dev-1199。
+> 最后更新：2026-10-23；更新源 **dev-1210**（canvas 原生场景绘制 + Flutter UI 重新打包；Xiangqi 0.6.73 / source 850b79948007）。
+> 最新：dev-1210 在 [无障碍截图 maxWidth 优化](reports/2026-10-22_无障碍截图maxWidth优化.md) 基础上合入 canvas 场景绘制：NodeUiCanvasView.setScene/clearScene 接收图元 JSON 后由原生 draw 批量绘制，脚本不再逐帧回调 JS。
+> 此前 [无障碍截图宿主直传像素](reports/2026-10-22_无障碍截图宿主直传像素.md)：dev-1206 Raw `.n24r` / dev-1207 PFD 管道 + 三级回退，小米 8 20 帧 p50 169→122ms。
+> 此前 [三引擎浮窗统一注册与清理](reports/2026-10-22_三引擎浮窗统一注册与清理.md)：OverlayRegistry + MCP list_overlays/close_overlays/overlayCount，三引擎 stop 后 0 残留。
+> 此前 [示例目录懒加载与插件发现优化](reports/2026-10-22_示例目录懒加载与插件发现优化.md)：离屏页不扫描、切页复用目录、刷新/重试保留。K40 业务运行中保留 dev-1199。
 > 此前 [选择器运行后编辑器卡顿修复](reports/2026-10-22_选择器运行后编辑器卡顿修复.md)：主线程日志全量扫描/逐行排版改为批量刷新，节点日志摘要化；小米 8 2000 行日志打开由约 5 秒降到 319–731ms，原始示例三轮及日志/编辑保存通过。K40 业务运行中保留 dev-1199。
 > 此前 [DotJumpLoading 原生组件修复](reports/2026-10-22_DotJumpLoading原生组件修复.md)：原生 View render 与初始化顺序，小米 8 实测 19 + 9 + 9 + 2 项通过。
 > 此前 [APK 开关/按钮颜色统一](reports/2026-10-22_APK开关与按钮颜色统一.md)及[三引擎 API 首批对齐](reports/2026-10-22_三引擎API统一与高级版全量契约.md)保持。dev-1199 的 12 Flutter / 693 JVM / QuickJS 225 项通过，7 组共用示例和 MCP 直接调用双机通过，高级版全量 API 仍未全部实现。
