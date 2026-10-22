@@ -10,7 +10,8 @@
 > 本轮优化：[`docs/reports/2026-10-21_MCP界面电脑连接与日志优化.md`](docs/reports/2026-10-21_MCP界面电脑连接与日志优化.md)。电脑连接使用自家 VS Code 扩展 0.3.3；旧 Pro ws-rpc 不再启动。
 > 最新核对：[三引擎细节与 Pikafish 原生闪退修复](docs/reports/2026-10-21_三引擎细节复核与原生闪退修复.md)：非法局面/历史原来会触发原生 `exit(1)`，与 RenderThread destroyed-mutex 表现一起复现；已补语义校验。插件 APK 1.0.1 / 2。
 > 最新升级：[Flutter 3.47.7 / Dart 3.13.5 与 16KB 修复](docs/reports/2026-10-22_Flutter升级与16KB兼容修复.md)：engine/embedding/AOT 成套锁定，Node libc++ 更新，发布强制无白名单 22 ELF 校验；真实 16KB 内核仍待验收。
-> 当前发布：**dev-1201**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
+> 当前发布：**dev-1205**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
+> 最新修复：[三引擎浮窗统一注册与清理](docs/reports/2026-10-22_三引擎浮窗统一注册与清理.md)：OverlayRegistry + MCP `list_overlays`/`close_overlays`/`overlayCount`，dev-1205 小米 8 三引擎 stop 后 0 残留、滑动穿透验证。
 > 最新修复：[选择器运行后编辑器卡顿](docs/reports/2026-10-22_选择器运行后编辑器卡顿修复.md)：主线程日志全量扫描/逐行排版已改为批处理，Node 节点日志摘要化；小米 8 满 2000 行打开由约 5 秒降到 319–731ms，三轮原始示例及编辑保存通过。K40 业务运行中保留 dev-1199。
 > 此前修复：[DotJumpLoading 原生组件](docs/reports/2026-10-22_DotJumpLoading原生组件修复.md)：Rhino Widget.render 返回 Android View，补齐属性前的 onViewCreated；原包/修正版动画操作真机通过。
 > 本轮：[APK 开关/按钮颜色统一](docs/reports/2026-10-22_APK开关与按钮颜色统一.md)已发布；[三引擎 API / 高级版全量契约](docs/reports/2026-10-22_三引擎API统一与高级版全量契约.md)首批 7 组示例双机通过，全部高级版 API 仍有缺口。

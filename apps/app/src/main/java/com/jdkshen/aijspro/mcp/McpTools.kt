@@ -13,6 +13,7 @@ import com.jdkshen.aijspro.model.script.ScriptFile
 import com.jdkshen.aijspro.model.script.ScriptRepository
 import com.stardust.autojs.core.console.ConsoleImpl
 import com.stardust.autojs.engine.JavaScriptEngine
+import com.stardust.autojs.overlay.OverlayRegistry
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.execution.ScriptExecutionListener
@@ -121,6 +122,7 @@ internal class McpTools(private val context: Context, private val event: (String
             record.logs = runLogs(record)
             runCatching { record.execution?.engine?.forceStop() }
         }
+        OverlayRegistry.closeAll("mcp_service_stop")
     }
 
     fun toolNames(): List<String> = listTools().getAsJsonArray("tools")
@@ -188,6 +190,8 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("get_mcp_log", "读取脚本日志尾部或 MCP 服务请求记录；executionId 可限制为指定任务；maxChars 默认 20000，最大 200000", objSchema("maxChars", "executionId", "channel")))
             add(tool("list_engines", "列出三个引擎与 MCP 支持的运行、查询、调用及语法检查能力"))
             add(tool("call_engine_api", "在指定真实引擎调用全局或模块函数，支持 JSON args 和 Promise；回调、UI、Java 对象组合使用 run_script", McpToolSchema.callApiSchema()))
+            add(tool("list_overlays", "列出各进程登记中的浮窗（pid/ownerEngineId/engine/kind/touchable/ageMs），用于诊断 stop 后是否有 View 残留"))
+            add(tool("close_overlays", "关闭浮窗：指定 executionId 等同 stop_script；省略则等同 stop_all_scripts；返回剩余 overlayCount", objSchema("executionId")))
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {
@@ -211,6 +215,8 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("activeMcpRuns", runs.values.count { it.status in ACTIVE_STATES })
                 addProperty("retainedExecutions", runs.size); addProperty("workspaces", workspaces.list().size)
                 addProperty("pendingWorkspaceApprovals", workspaces.list().count { it.pendingApproval })
+                addProperty("overlayCount", OverlayStateReader.countAggregated(context))
+                addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
             })
             "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
             "read_script" -> toolJson(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
@@ -236,6 +242,8 @@ internal class McpTools(private val context: Context, private val event: (String
                 }) }
             }) })
             "call_engine_api" -> callEngineApi(args)
+            "list_overlays" -> listOverlays()
+            "close_overlays" -> closeOverlays(args)
             "list_engine_api" -> listEngineApi(args)
             "probe_engine_api" -> probeEngineApi(args)
             "engine_api_diff" -> engineApiDiff()
@@ -529,13 +537,16 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun stopScript(args: JsonObject): JsonObject {
         val record = runs[args.string("executionId")] ?: throw ToolError("找不到此 MCP 任务")
         if (record.status !in ACTIVE_STATES) throw ToolError("任务已结束：${record.status}")
+        val engineId = record.execution?.engine?.id ?: -1
         record.stopRequested = true; record.stopReason = "user_stopped"
         record.status = "STOPPED"; record.finishedAt = System.currentTimeMillis()
         record.errorType = ""; record.errorMessage = ""; record.errorStack = ""
         record.logs = runLogs(record)
         record.execution?.engine?.forceStop()
-        event("${record.id} · stopped · ${record.path}")
-        return toolJson(runJson(record))
+        // 本进程兜底；其它进程由各自 engine.destroy()/closeUiAfterExecution() 清理。
+        val overlayClosed = if (engineId >= 0) OverlayRegistry.closeByOwner(engineId, "mcp_stop_script") else 0
+        event("${record.id} · stopped · ${record.path} · overlay=$overlayClosed")
+        return toolJson(runJson(record).apply { addProperty("overlayClosed", overlayClosed) })
     }
 
     /** 中止类异常（QuickJS 的 interrupted / Rhino 的 ScriptInterruptedException）。 */
@@ -595,6 +606,32 @@ internal class McpTools(private val context: Context, private val event: (String
     /** task-118：MCP 服务开启即授权读写/运行（安全边界在网络层：局域网需 Bearer token）。 */
     private fun requireExecution() { /* no-op：不再要求额外运行授权 */ }
 
+    private fun listOverlays(): JsonObject = toolJson(OverlayStateReader.toJson(context))
+
+    private fun closeOverlays(args: JsonObject): JsonObject {
+        val executionId = args.stringOr("executionId", "")
+        var stopped = 0
+        if (executionId.isNotEmpty()) {
+            val record = runs[executionId] ?: throw ToolError("找不到此 MCP 任务")
+            val engineId = record.execution?.engine?.id ?: -1
+            if (record.status in ACTIVE_STATES) {
+                stopScript(JsonObject().apply { addProperty("executionId", executionId) })
+                stopped = 1
+            }
+            if (engineId >= 0) OverlayRegistry.closeByOwner(engineId, "mcp_close_overlays")
+        } else {
+            stopped = stopAllScripts().get("stopped")?.asInt ?: 0
+        }
+        try { Thread.sleep(400) } catch (_: InterruptedException) {}
+        val remaining = OverlayStateReader.countAggregated(context)
+        return toolJson(JsonObject().apply {
+            addProperty("success", true)
+            addProperty("stopped", stopped)
+            addProperty("overlayCount", remaining)
+            add("overlays", OverlayStateReader.toJson(context))
+        })
+    }
+
     private fun stopAllScripts(): JsonObject {
         requireExecution()
         runs.values.filter { it.status in ACTIVE_STATES }.forEach { record ->
@@ -604,8 +641,11 @@ internal class McpTools(private val context: Context, private val event: (String
         }
         com.jdkshen.aijspro.external.HostScripts.stopAllHostScripts()
         val stopped = AutoJs.getInstance().scriptEngineService.stopAll()
-        event("stop_all_scripts · 停止全部脚本 · $stopped")
-        return toolJson(JsonObject().apply { addProperty("success", true); addProperty("stopped", stopped); addProperty("scope", "all_scripts") })
+        val overlayClosed = OverlayRegistry.closeAll("mcp_stop_all")
+        try { Thread.sleep(300) } catch (_: InterruptedException) {}
+        val overlayCount = OverlayStateReader.countAggregated(context)
+        event("stop_all_scripts · 停止全部脚本 · $stopped · overlay=$overlayClosed/$overlayCount")
+        return toolJson(JsonObject().apply { addProperty("success", true); addProperty("stopped", stopped); addProperty("scope", "all_scripts"); addProperty("overlayClosed", overlayClosed); addProperty("overlayCount", overlayCount) })
     }
 
     private fun getMcpLog(args: JsonObject): JsonObject {

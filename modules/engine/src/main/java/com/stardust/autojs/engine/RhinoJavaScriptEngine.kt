@@ -12,6 +12,7 @@ import com.stardust.autojs.rhino.AndroidClassLoader
 import com.stardust.autojs.rhino.PreferIntJavaObject
 import com.stardust.autojs.rhino.RhinoAndroidHelper
 import com.stardust.autojs.rhino.TopLevelScope
+import com.stardust.autojs.overlay.OverlayRegistry
 import com.stardust.autojs.runtime.ScriptRuntime
 import com.stardust.autojs.script.CompiledJavaScriptSource
 import com.stardust.autojs.script.JavaScriptSource
@@ -160,6 +161,7 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     @Synchronized
     override fun destroy() {
         super.destroy()
+        OverlayRegistry.closeByOwner(id, "rhino_destroy")
         Log.d(LOG_TAG, "on destroy")
         sContextEngineMap.remove(context)
         Context.exit()
@@ -167,6 +169,7 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
 
     override fun init() {
         thread = Thread.currentThread()
+        runtime?.setEngineId(id)
         ScriptableObject.putProperty(mScriptable, "__engine__", this)
         initRequireBuilder(context, mScriptable)
         try {

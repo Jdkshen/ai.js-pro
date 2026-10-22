@@ -37,6 +37,7 @@ import com.stardust.autojs.core.ui.inflater.ResourceParser;
 import com.stardust.autojs.core.ui.inflater.inflaters.BaseViewInflater;
 import com.stardust.autojs.core.ui.inflater.util.Drawables;
 import com.stardust.autojs.core.ui.inflater.util.Ids;
+import com.stardust.autojs.overlay.OverlayRegistry;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -106,6 +107,10 @@ public final class NodeUiHost {
 
     private static volatile WindowManager sWindowManager;
     private static volatile View sOverlayView;
+    // task-218：overlay 的 owner/touchable（Node24HostBridge 注入 request）。
+    private static volatile int sOverlayOwnerEngineId = -1;
+    private static volatile String sOverlayOwnerTag = "";
+    private static volatile boolean sOverlayTouchable = true;
     private static volatile String sShownProjectDir;
     private static volatile String sShownLayout;
     /** task-63：overlay 被右上角关闭/停止关闭时的通知（A 的 keep-alive 用它提前结束等待）。 */
@@ -751,6 +756,10 @@ public final class NodeUiHost {
     // ------------------------------------------------------------------
 
     private static Object show(final Context context, final String projectDir, JSONObject request) throws Exception {
+        // task-218：owner 由 Node24HostBridge 注入；touchable 默认 true，绘制型入口显式传 false。
+        sOverlayOwnerEngineId = request.optInt("engineId", request.optInt("ownerEngineId", -1));
+        sOverlayOwnerTag = request.optString("owner", "");
+        sOverlayTouchable = request.optBoolean("touchable", true);
         if (request.optBoolean("realJava")) {
             synchronized (LOCK) { EVENTS.clear(); }
             clearCloseRequested();
@@ -936,7 +945,17 @@ public final class NodeUiHost {
                     sOverlayView = buildOverlay(themed, content);
                     WindowManager manager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
                     sWindowManager = manager;
-                    manager.addView(sOverlayView, overlayParams());
+                    if (!sOverlayTouchable) {
+                        // 绘制型 UI：不拦截触摸（规格 3.2）。
+                        sOverlayView.setClickable(false);
+                        sOverlayView.setFocusable(false);
+                        sOverlayView.setFocusableInTouchMode(false);
+                    }
+                    manager.addView(sOverlayView, overlayParams(sOverlayTouchable));
+                    // task-218：统一登记，引擎结束/owner 清理时可 closeByOwner。
+                    OverlayRegistry.register(sOverlayOwnerEngineId, sOverlayOwnerTag,
+                            "nodejs", OverlayRegistry.Kind.NODE_UI,
+                            sOverlayView, manager, sOverlayTouchable);
                     final View overlayForFocus = sOverlayView;
                     overlayForFocus.postDelayed(new Runnable() {
                         @Override
@@ -2235,7 +2254,7 @@ public final class NodeUiHost {
         Log.i(TAG, "C-CLOSE: fallback=✕ installed");
     }
 
-    private static WindowManager.LayoutParams overlayParams() {
+    private static WindowManager.LayoutParams overlayParams(boolean touchable) {
         int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
@@ -2248,6 +2267,12 @@ public final class NodeUiHost {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 android.graphics.PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
+        if (!touchable) {
+            // 绘制型不交互：与 LocalOverlay 一致带齐 NOT_FOCUSABLE/NOT_TOUCHABLE；
+            // 交互型保持原行为（可接收返回键/焦点）。
+            params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        }
         return params;
     }
 
@@ -2473,6 +2498,9 @@ public final class NodeUiHost {
     }
 
     private static void removeOverlayLocked() {
+        if (sOverlayView != null) {
+            try { OverlayRegistry.unregister(sOverlayView); } catch (Throwable ignored) { }
+        }
         if (sContentView != null) {
             // overlay 里的 NodeWebView 不归 NodeUiLocalSession 管；移除窗口前显式释放，
             // 否则关闭脚本后页面/JS 回调会继续存活。

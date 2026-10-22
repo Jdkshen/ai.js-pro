@@ -41,6 +41,7 @@ import com.stardust.autojs.core.io.ScriptFileObserver;
 import com.stardust.autojs.core.database.Database;
 import com.stardust.autojs.core.database.DatabaseResultSet;
 import com.stardust.autojs.core.image.ImageWrapper;
+import com.stardust.autojs.overlay.OverlayRegistry;
 import com.stardust.autojs.runtime.api.Images;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
@@ -78,6 +79,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -114,6 +116,8 @@ final class QuickJsHostBridge implements AutoCloseable,
         com.stardust.autojs.core.web.QuickJsWebScriptHost {
 
     private final ScriptRuntime mRuntime;
+    /** 本引擎在进程内的 id（ScriptEngine.getId()），浮窗注册表按 owner 清理用。 */
+    private volatile int mOwnerEngineId;
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
     private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
     /** QuickJS 的 `$ocr.create()` 会话（Rhino 的 __ocr__.js 也是「每次调用一个新对象」）。 */
@@ -285,6 +289,16 @@ final class QuickJsHostBridge implements AutoCloseable,
     QuickJsHostBridge(ScriptRuntime runtime) {
         mRuntime = runtime;
         QuickJsApiExtensions.install(runtime, this);
+    }
+
+    /** engine.init() 里注入：bridge 的生命周期早于/独立于 ScriptEngine.setId。 */
+    void setOwnerEngineId(int engineId) {
+        mOwnerEngineId = engineId;
+    }
+
+    /** 浮窗注册表 ownerTag：qjs-<native handle>（同一脚本的宿主/worker 可区分）。 */
+    private String overlayOwnerTag() {
+        return "qjs-" + mEngineHandle;
     }
 
     void attachEngine(long engineHandle) {
@@ -3539,6 +3553,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     public void floatyCloseAllGlobal() {
         for (QuickJsFloatyWindow window : new ArrayList<>(mFloatyWindows.values())) {
             window.close();
+            window.unregisterOverlay();
         }
         mFloatyWindows.clear();
     }
@@ -3548,6 +3563,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         for (QuickJsFloatyWindow window : new ArrayList<>(mFloatyWindows.values())) {
             if (window.isOwnedBy(mEngineHandle)) {
                 window.close();
+                window.unregisterOverlay();
                 mFloatyWindows.remove(window.id());
             }
         }
@@ -3577,7 +3593,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             Context context = mRuntime.uiHandler.getContext();
             QuickJsFloatyWindow window = new QuickJsFloatyWindow(
                     context, id, config, uiInflater(), mRuntime.ui.getResourceParser(),
-                    mFloatyEvents::add, mEngineHandle);
+                    mFloatyEvents::add, mEngineHandle, mOwnerEngineId, overlayOwnerTag());
             mFloatyWindows.put(id, window);
             if (config.optBoolean("visible", true)) {
                 if (!window.show()) {
@@ -3798,6 +3814,8 @@ final class QuickJsHostBridge implements AutoCloseable,
         private final Context mContext;
         private final int mId;
         private final long mOwnerEngine;
+        private final int mOwnerEngineId;
+        private final String mOwnerTag;
         private final WindowManager mWindowManager;
         private final android.widget.FrameLayout mRoot;
         private final com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater mInflater;
@@ -3845,10 +3863,13 @@ final class QuickJsHostBridge implements AutoCloseable,
         QuickJsFloatyWindow(Context context, int id, JSONObject config,
                             com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater inflater,
                             com.stardust.autojs.core.ui.inflater.ResourceParser resourceParser,
-                            FloatyEventSink eventSink, long ownerEngine) {
+                            FloatyEventSink eventSink, long ownerEngine,
+                            int ownerEngineId, String ownerTag) {
             mContext = context;
             mId = id;
             mOwnerEngine = ownerEngine;
+            mOwnerEngineId = ownerEngineId;
+            mOwnerTag = ownerTag;
             mConfig = config;
             mInflater = inflater;
             mResourceParser = resourceParser;
@@ -4396,6 +4417,8 @@ final class QuickJsHostBridge implements AutoCloseable,
                 prepareNow();
                 mWindowManager.addView(mRoot, mParams);
                 mShown = true;
+                OverlayRegistry.register(mOwnerEngineId, mOwnerTag, "quickjs",
+                        OverlayRegistry.Kind.QUICKJS_FLOATY, mRoot, mWindowManager, mTouchable);
                 mRoot.setVisibility(mContentVisibility);
                 applyWindowTransform();
                 emitLifecycle("attached");
@@ -4418,6 +4441,7 @@ final class QuickJsHostBridge implements AutoCloseable,
                 Log.w("QuickJsFloatyWindow", "removeView failed", error);
             }
             mShown = false;
+            OverlayRegistry.unregister(mRoot);
             emitLifecycle("detached");
             return true;
         }
@@ -4597,6 +4621,8 @@ final class QuickJsHostBridge implements AutoCloseable,
                         mTouchable = c.optBoolean("touchable", true);
                         applyTouchableFlag();
                         if (mShown) {
+                            OverlayRegistry.register(mOwnerEngineId, mOwnerTag, "quickjs",
+                                    OverlayRegistry.Kind.QUICKJS_FLOATY, mRoot, mWindowManager, mTouchable);
                             try {
                                 mWindowManager.updateViewLayout(mRoot, mParams);
                             } catch (Throwable ignored) {
@@ -4628,6 +4654,11 @@ final class QuickJsHostBridge implements AutoCloseable,
                 closeCanvasViews(mRoot);
                 return Boolean.TRUE;
             }, Boolean.FALSE);
+        }
+
+        /** closeOwnedFloatyWindows 兜底：窗口从未 show / hideNow 异常时也要反注册。 */
+        void unregisterOverlay() {
+            OverlayRegistry.unregister(mRoot);
         }
 
         // ---- view access (Auto.js-style window.<id> proxies) ----
@@ -8018,6 +8049,10 @@ final class QuickJsHostBridge implements AutoCloseable,
         mediaStopMusic();
         sensorsUnregisterAll();
         closeOwnedFloatyWindows();   // 只关本引擎创建的窗口（注册表是进程级的）
+        if (mOwnerEngineId > 0) {
+            // 兜底：ui/draw/floaty 中间路径漏掉的窗口按 owner 统一关闭（幂等）。
+            OverlayRegistry.closeByOwner(mOwnerEngineId, "quickjs_close");
+        }
         releaseAutomatorHandles();
         closeSqliteHandles();
         closeWebSockets();
@@ -8109,6 +8144,7 @@ final class QuickJsHostBridge implements AutoCloseable,
                     new com.stardust.autojs.core.graphics.ImGuiDrawingOverlay(context);
             if (!overlay.show()) { overlay.close(); return false; }
             mImGuiOverlay = overlay;
+            registerImGuiDrawingOverlay(overlay);
             return true;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
@@ -8119,7 +8155,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             // force-stopped before the host bridge closes. Make the overlay unique:
             // reap every previous overlay before creating the new one.
             QuickJsOverlay.closeAll();
-            mOverlay = new QuickJsOverlay(context);
+            mOverlay = new QuickJsOverlay(context, mOwnerEngineId, overlayOwnerTag());
             if (!mOverlay.show()) {
                 mOverlay = null;
                 return false;
@@ -8163,10 +8199,97 @@ final class QuickJsHostBridge implements AutoCloseable,
     public void drawClose() {
         com.stardust.autojs.core.graphics.ImGuiDrawingOverlay nativeOverlay = mImGuiOverlay;
         mImGuiOverlay = null;
-        if (nativeOverlay != null) nativeOverlay.close();
+        if (nativeOverlay != null) {
+            unregisterImGuiDrawingOverlay(nativeOverlay);
+            nativeOverlay.close();
+        }
         QuickJsOverlay overlay = mOverlay;
         mOverlay = null;
         if (overlay != null) overlay.close();
+    }
+
+    /**
+     * ImGuiDrawingOverlay 没有公开根 View / WindowManager 访问器（且不在本次改造的写入范围），
+     * 这里通过反射取得它的 Surface/WindowManager 登记为 QUICKJS_DRAW；失败只记日志、不影响绘制。
+     */
+    private void registerImGuiDrawingOverlay(com.stardust.autojs.core.graphics.ImGuiDrawingOverlay overlay) {
+        View view = imGuiOverlayView(overlay);
+        if (view == null) {
+            return;
+        }
+        WindowManager windowManager = imGuiOverlayWindowManager(overlay);
+        view.setClickable(false);
+        view.setFocusable(false);
+        view.setFocusableInTouchMode(false);
+        forceOverlayNotTouchable(view, windowManager);
+        OverlayRegistry.register(mOwnerEngineId, overlayOwnerTag(), "quickjs",
+                OverlayRegistry.Kind.QUICKJS_DRAW, view, windowManager, false);
+    }
+
+    private void unregisterImGuiDrawingOverlay(com.stardust.autojs.core.graphics.ImGuiDrawingOverlay overlay) {
+        View view = imGuiOverlayView(overlay);
+        if (view != null) {
+            OverlayRegistry.unregister(view);
+        }
+    }
+
+    private static View imGuiOverlayView(com.stardust.autojs.core.graphics.ImGuiDrawingOverlay overlay) {
+        try {
+            Field field = com.stardust.autojs.core.graphics.ImGuiDrawingOverlay.class
+                    .getDeclaredField("view");
+            field.setAccessible(true);
+            Object value = field.get(overlay);
+            return value instanceof View ? (View) value : null;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot resolve ImGui drawing overlay view", error);
+            return null;
+        }
+    }
+
+    private static WindowManager imGuiOverlayWindowManager(
+            com.stardust.autojs.core.graphics.ImGuiDrawingOverlay overlay) {
+        try {
+            Field field = com.stardust.autojs.core.graphics.ImGuiDrawingOverlay.class
+                    .getDeclaredField("manager");
+            field.setAccessible(true);
+            Object value = field.get(overlay);
+            return value instanceof WindowManager ? (WindowManager) value : null;
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot resolve ImGui drawing overlay WindowManager", error);
+            return null;
+        }
+    }
+
+    /** 绘制层必须不可触摸：兜底把被外部改掉的窗口 flags 改回 NOT_TOUCHABLE（主线程执行）。 */
+    private static void forceOverlayNotTouchable(View view, WindowManager windowManager) {
+        try {
+            if (!(view.getLayoutParams() instanceof WindowManager.LayoutParams)) {
+                return;
+            }
+            final WindowManager.LayoutParams params = (WindowManager.LayoutParams) view.getLayoutParams();
+            if ((params.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0) {
+                return;
+            }
+            params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+            Runnable update = () -> {
+                try {
+                    if (windowManager != null) {
+                        windowManager.updateViewLayout(view, params);
+                    }
+                } catch (Throwable error) {
+                    Log.w("QuickJsHostBridge", "Cannot enforce not-touchable draw overlay", error);
+                }
+            };
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                update.run();
+            } else {
+                new Handler(Looper.getMainLooper()).post(update);
+            }
+        } catch (Throwable error) {
+            Log.w("QuickJsHostBridge", "Cannot enforce not-touchable draw overlay", error);
+        }
     }
 
     private static final class Detection {
@@ -8210,11 +8333,19 @@ final class QuickJsHostBridge implements AutoCloseable,
         private final WindowManager mWindowManager;
         private final OverlayView mView;
         private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+        private final int mOwnerEngineId;
+        private final String mOwnerTag;
         private volatile boolean mShown;
 
-        QuickJsOverlay(Context context) {
+        QuickJsOverlay(Context context, int ownerEngineId, String ownerTag) {
             mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
             mView = new OverlayView(context);
+            // 只绘制、不交互：即使窗口参数被外部改动也不接收触摸/焦点。
+            mView.setClickable(false);
+            mView.setFocusable(false);
+            mView.setFocusableInTouchMode(false);
+            mOwnerEngineId = ownerEngineId;
+            mOwnerTag = ownerTag;
             sAllOverlays.add(this);
         }
 
@@ -8239,6 +8370,7 @@ final class QuickJsHostBridge implements AutoCloseable,
                                     : WindowManager.LayoutParams.TYPE_PHONE,
                             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                     | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                                     | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                                     | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                             android.graphics.PixelFormat.TRANSLUCENT);
@@ -8252,8 +8384,14 @@ final class QuickJsHostBridge implements AutoCloseable,
                     // Anchor explicitly to the top-left so the overlay always starts
                     // at (0,0) and spans the whole screen even with multiple overlays.
                     params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+                    // 绘制层强制不可触摸：不因 UI 兼容逻辑变成可触摸。
+                    params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
                     mWindowManager.addView(mView, params);
                     mShown = true;
+                    OverlayRegistry.register(mOwnerEngineId, mOwnerTag, "quickjs",
+                            OverlayRegistry.Kind.QUICKJS_DRAW, mView, mWindowManager, false);
                     Log.i(TAG, "Overlay window added");
                 } catch (Throwable error) {
                     Log.e(TAG, "addView failed", error);
@@ -8269,6 +8407,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
         void close() {
             sAllOverlays.remove(this);
+            OverlayRegistry.unregister(mView);
             mMainHandler.post(() -> {
                 try {
                     if (mShown) {

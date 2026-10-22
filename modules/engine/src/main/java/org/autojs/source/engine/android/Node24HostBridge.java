@@ -25,6 +25,7 @@ import com.stardust.autojs.runtime.api.OCRResult;
 import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
 import com.stardust.autojs.runtime.api.Yolo;
 import com.stardust.autojs.runtime.api.PPOcr;
+import com.stardust.autojs.overlay.OverlayRegistry;
 import com.stardust.util.IntentUtil;
 
 import org.autojs.source.engine.Node24Engine;
@@ -120,6 +121,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final Context mContext;
     /** task-183：每个 Node 执行宿主一个 owner；overlay 关闭/清理只作用于本 owner，避免并行 job 互相关闭浮窗。 */
     private final String mOverlayOwner = "node24-" + java.util.UUID.randomUUID().toString();
+    /** task-218：主进程引擎 id（脚本任务 owner），用于 OverlayRegistry 精确清理。 */
+    private final int mOwnerEngineId;
+    /** 最近一次 closeUiOverlay 的 direct View 清理数量（Node24Service 日志用）。 */
+    private volatile int mLastDirectOverlayCount;
     /** 当前脚本项目目录（prelude 注入给 __ajsProjectDir，B 的 ui 模块用）。 */
     private final String mProjectDir;
     /** 对象句柄：id -> Java 对象（强引用；实例随一次 Node 执行回收）。 */
@@ -240,6 +245,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     public Node24HostBridge(Context context, String projectDir, int ownerEngineId) {
         mContext = context.getApplicationContext();
         mProjectDir = projectDir;
+        mOwnerEngineId = ownerEngineId;
         mImages = new Node24Images();
         mAutomation = new Node24AutomationBridge(mContext, mImages);
         mProjection = new Node24CaptureConsentActivity.Session();
@@ -1093,6 +1099,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private String handleUiJson(JSONObject request) {
         try {
             request.put("owner", mOverlayOwner);
+            request.put("engineId", mOwnerEngineId);
             if (!mGeneratedClasses.isEmpty() || request.optBoolean("realJava")) request.put("javaClassOwner", mOverlayOwner);
             // task-201：:node24 进程内 overlay；大 XML 不再跨进程 show，失败自动回退主进程。
             JSONObject localOverlay = Node24LocalOverlay.handle(mContext, mProjectDir, request);
@@ -1854,6 +1861,19 @@ public final class Node24HostBridge implements Node24Engine.Host {
         } catch (Throwable error) {
             Log.w(TAG, "close floating overlays failed", error);
         }
+        // task-218：脚本/第三方工程直接 WindowManager.addView 的 Node View 不在两套 overlay 管理里，
+        // 这里反射 WindowManagerGlobal.mViews 清掉 NodeUiCanvasView / tag=node-port-overlay。
+        try {
+            mLastDirectOverlayCount = Node24DirectOverlayCleanup.closeAllInProcess();
+        } catch (Throwable error) {
+            Log.w(TAG, "close direct overlays failed", error);
+        }
+        // OverlayRegistry 里可能还有本 owner 的 NODE_UI/NODE_TEXT 等登记项，按 owner 统一关闭。
+        try {
+            OverlayRegistry.closeByOwner(mOwnerEngineId, "node24_close_ui");
+        } catch (Throwable error) {
+            Log.w(TAG, "close registry overlays failed", error);
+        }
         try {
             JSONObject request = new JSONObject().put("kind", "ui").put("op", "close")
                     .put("projectDir", mProjectDir == null ? "" : mProjectDir);
@@ -1869,6 +1889,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
             }
         }
         return false;
+    }
+
+    /** task-218：Node24Service 在 post-execute 日志里打印 direct 清理数量。 */
+    public int getLastDirectOverlayCount() {
+        return mLastDirectOverlayCount;
     }
 
     private Object invokeStaticUiHost(String[] names) {

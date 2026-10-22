@@ -252,8 +252,18 @@ public class ScriptRuntime {
     private Supplier<AbstractShell> mShellSupplier;
     private ScreenMetrics mScreenMetrics = new ScreenMetrics();
     private Thread mThread;
+    /** 当前脚本引擎 id，用于浮窗注册/清理（OverlayRegistry）。 */
+    private int mEngineId = -1;
     private TopLevelScope mTopLevelScope;
 
+
+    public int getEngineId() {
+        return mEngineId;
+    }
+
+    public void setEngineId(int engineId) {
+        mEngineId = engineId;
+    }
 
     protected ScriptRuntime(Builder builder) {
         uiHandler = builder.mUiHandler;

@@ -9,7 +9,8 @@
  * 没有 update/touch 事件通道。因此：
  * - 位置/尺寸：通过 close+show 重建实现（可用但有闪烁，后续宿主支持 update 后可去掉）；
  * - on('touch'|'drag'|'click') / enableDrag：明确抛错（需要主进程 overlay 触摸事件 -> Java→Node 反向通道）；
- * - addFlags/removeFlags/setFlags 保留 API 形状但当前宿主忽略（不会静默声称生效）。
+ * - addFlags/removeFlags/setFlags 保留 API 形状但当前宿主忽略（不会静默声称生效）；
+ * - show({touchable:false}) / setViewFromXml(xml,{touchable:false}) 支持不可触摸绘制型浮窗（默认 true）。
  *
  * 本文件是独立 IIFE，可由 Node24Prelude 在 prelude 之后拼接加载（见同目录 REGISTER-PATCH.md）。
  */
@@ -105,6 +106,8 @@
     this._height = size.height == null ? 0 : requireInt(size.height, 'initialSize.height', 0);
     this._text = opts.text == null ? 'Node24' : String(opts.text);
     this._layoutNoLimit = !!opts.layoutNoLimit;
+    // task-218：touchable 默认 true；绘制型 overlay 显式 touchable:false 才加 NOT_TOUCHABLE。
+    this._touchable = opts.touchable === false ? false : true;
     this._overlayId = null;
     this._visible = false;
     this._closed = false;
@@ -141,6 +144,12 @@
     return this;
   };
   FloatingWindowImpl.prototype.setText = function (text) { this._text = String(text); return this; };
+  FloatingWindowImpl.prototype.setTouchable = function (touchable) {
+    this._touchable = touchable !== false;
+    if (this._visible) { this._reShow(); }
+    return this;
+  };
+  FloatingWindowImpl.prototype.isTouchable = function () { return this._touchable !== false; };
   FloatingWindowImpl.prototype.getText = function () { return this._text; };
   /**
    * task-198：Pro floating_window.setView(View) 兼容。
@@ -175,15 +184,17 @@
       + ':node24 里的真实 View 无法跨进程挂载，且未找到对应工程 res/layout XML；'
       + '请改用 window.setViewFromXml(xml)，或把该界面放到 ui.Activity / NodeUiActivity 中显示');
   };
-  FloatingWindowImpl.prototype.setViewFromXml = function (xml) {
+  FloatingWindowImpl.prototype.setViewFromXml = function (xml, options) {
     if (typeof xml !== 'string' || xml.trim() === '') { throw new TypeError('[Auto.js] setViewFromXml 需要非空 XML 字符串'); }
     this._xml = String(xml);
+    if (options && typeof options.touchable === 'boolean') { this._touchable = options.touchable; }
     try { this._text = extractTextFromXml(xml); } catch (error) { this._text = 'Node24'; }
     return this;
   };
   FloatingWindowImpl.prototype._showNow = function () {
     if (this._closed) { throw apiError('floating_window 已关闭，不能再次 show'); }
-    var fields = { text: this._text, x: this._x, y: this._y, flags: this._flags || 0 };
+    var fields = { text: this._text, x: this._x, y: this._y, flags: this._flags || 0,
+      touchable: this._touchable !== false };
     if (this._xml) { fields.xml = this._xml; }
     if (this._width > 0) { fields.width = this._width; }
     if (this._height > 0) { fields.height = this._height; }
@@ -228,7 +239,8 @@
     this._visible = true;
     return this;
   };
-  FloatingWindowImpl.prototype.show = function () {
+  FloatingWindowImpl.prototype.show = function (options) {
+    if (options && typeof options.touchable === 'boolean') { this._touchable = options.touchable; }
     if (this._visible) { return this; }
     this._showNow();
     this._emit('show', this._overlayId);

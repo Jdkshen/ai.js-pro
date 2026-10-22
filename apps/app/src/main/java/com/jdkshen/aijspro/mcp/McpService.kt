@@ -142,6 +142,7 @@ class McpService : Service() {
         allowWrite = false
         allowExecution = false
         tools?.stopRuns()
+        com.stardust.autojs.overlay.OverlayRegistry.closeAll("mcp_service_stop")
         tools = null
         server?.stop()
         server = null
@@ -276,6 +277,7 @@ class McpService : Service() {
             else context.applicationContext.startService(intent)
         }
         fun stop(context: Context) {
+            com.stardust.autojs.overlay.OverlayRegistry.closeAll("mcp_service_stop")
             McpStateStore.saveStopped(context)
             context.applicationContext.stopService(Intent(context, McpService::class.java))
         }

@@ -36,7 +36,9 @@ internal object McpToolCatalog {
         "stop_all_scripts",
         "get_mcp_log",
         "list_engines",
-        "call_engine_api"
+        "call_engine_api",
+        "list_overlays",
+        "close_overlays"
     )
 
     /**
@@ -51,7 +53,9 @@ internal object McpToolCatalog {
         "runScript" to "run_script",
         "learnAutoJsSkill" to "learn_autojs_skill",
         "stopAllScripts" to "stop_all_scripts",
-        "getMcpLog" to "get_mcp_log"
+        "getMcpLog" to "get_mcp_log",
+        "listOverlays" to "list_overlays",
+        "closeOverlays" to "close_overlays"
     )
 
     /**

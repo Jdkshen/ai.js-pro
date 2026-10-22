@@ -370,8 +370,10 @@ public class Node24Service extends Service {
             // 避免脚本结束/取消后浮窗常驻、多次运行叠加。
             try {
                 boolean closed=bridge.closeUiOverlay();
+                // task-218：direct = WindowManagerGlobal.mViews 里直接挂载的 Node overlay 清理数。
+                int direct=bridge.getLastDirectOverlayCount();
                 android.util.Log.i("Node24Service","post-execute ui close id="+id
-                        +" overlay="+overlay+" activity="+activity+" requested="+closed);
+                        +" overlay="+overlay+" activity="+activity+" direct="+direct+" requested="+closed);
             } catch(Throwable error) {
                 android.util.Log.w("Node24Service","post-execute ui close failed id="+id,error);
             }

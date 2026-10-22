@@ -270,6 +270,8 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
 
     @Override
     public void forceStop() {
+        // task-218/4.3.5：主进程只 cancel 本次 evaluate；:node24 的 View 清理在
+        // Node24HostBridge.closeUiOverlay()（direct cleanup + OverlayRegistry）里完成。
         mStopRequested = true;
         Node24Client client = mClient;
         String id = mRunningId;
@@ -282,6 +284,11 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
     public synchronized void destroy() {
         Node24Client client = mClient;
         mClient = null;
+        // task-218/4.3.5：destroy 保持跨引擎执行记录收尾（幂等）；真正的 direct View 清理在 :node24。
+        try {
+            com.stardust.autojs.engine.node24.NodeEngineBridgeService.stopOwnedExecutions(getId());
+        } catch (Throwable ignored) {
+        }
         // 池客户端跨脚本复用：正常结束时只释放槽，不关闭 Binder；失败时由 invalidate 关闭。
         if (client != null && mPoolSlot == null) {
             try {

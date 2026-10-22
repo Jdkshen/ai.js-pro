@@ -15,11 +15,13 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import com.stardust.autojs.engine.node24.NodeUiHost;
+import com.stardust.autojs.overlay.OverlayRegistry;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -83,7 +85,8 @@ public final class Node24LocalOverlay {
     }
 
     public static void closeAll() {
-        for (Overlay overlay : OVERLAYS.values()) {
+        // 快照遍历：close() 会从 OVERLAYS 移除自身。
+        for (Overlay overlay : new ArrayList<>(OVERLAYS.values())) {
             overlay.close();
         }
         OVERLAYS.clear();
@@ -108,13 +111,18 @@ public final class Node24LocalOverlay {
         final int width = request.optInt("width", 0);
         final int height = request.optInt("height", 0);
         final int flags = request.optInt("flags", 0);
+        // task-218：owner 由 Node24HostBridge 注入；touchable 默认 true，绘制型显式 false。
+        final int ownerEngineId = request.optInt("engineId", request.optInt("ownerEngineId", -1));
+        final String ownerTag = request.optString("owner", "");
+        final boolean touchable = request.optBoolean("touchable", true);
         final Object result = runOnMain(() -> {
             try {
                 Context app = context.getApplicationContext();
                 WindowManager wm = (WindowManager) app.getSystemService(Context.WINDOW_SERVICE);
                 if (wm == null) return null;
-                Overlay overlay = new Overlay(app, wm, "local-" + SEQ.incrementAndGet());
-                overlay.build(xml, text, x, y, width, height, flags);
+                Overlay overlay = new Overlay(app, wm, "local-" + SEQ.incrementAndGet(),
+                        ownerEngineId, ownerTag, touchable);
+                overlay.build(xml, text, x, y, width, height, flags, touchable);
                 OVERLAYS.put(overlay.id, overlay);
                 return overlay.info();
             } catch (Throwable error) {
@@ -155,6 +163,9 @@ public final class Node24LocalOverlay {
         final Context context;
         final WindowManager wm;
         final String id;
+        final int ownerEngineId;
+        final String ownerTag;
+        final boolean touchable;
         final ArrayDeque<JSONObject> events = new ArrayDeque<>();
         FrameLayout root;
         View content;
@@ -166,13 +177,18 @@ public final class Node24LocalOverlay {
         int downViewId;
         boolean dragCandidate;
 
-        Overlay(Context context, WindowManager wm, String id) {
+        Overlay(Context context, WindowManager wm, String id, int ownerEngineId, String ownerTag,
+                boolean touchable) {
             this.context = context;
             this.wm = wm;
             this.id = id;
+            this.ownerEngineId = ownerEngineId;
+            this.ownerTag = ownerTag == null ? "" : ownerTag;
+            this.touchable = touchable;
         }
 
-        void build(String xml, String text, int x, int y, int width, int height, int flags) throws Exception {
+        void build(String xml, String text, int x, int y, int width, int height, int flags,
+                   boolean touchable) throws Exception {
             root = new FrameLayout(context) {
                 @Override public boolean dispatchTouchEvent(MotionEvent ev) {
                     onTouch(ev);
@@ -213,12 +229,26 @@ public final class Node24LocalOverlay {
                             | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     PixelFormat.TRANSLUCENT);
             params.gravity = Gravity.TOP | Gravity.START;
-            // task-201：本地 overlay 自己处理触摸；项目可能为「前台不挡 App」加 NOT_TOUCHABLE，
-            // 但本进程 overlay 没有主进程那套触摸转发，必须保持可触摸才能点按钮/拖动。
-            params.flags |= (flags & ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+            // task-218：touchable 语义显式化；绘制型 overlay 传 touchable=false 才加 NOT_TOUCHABLE，
+            // 交互型默认去掉，不再无条件强制可触摸。
+            params.flags |= flags;
+            if (touchable) {
+                params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            } else {
+                params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            }
+            if (!touchable) {
+                // 绘制型 overlay：不接收点击/焦点（规格 3.2）。
+                root.setClickable(false);
+                root.setFocusable(false);
+                root.setFocusableInTouchMode(false);
+            }
             params.x = x;
             params.y = y;
             wm.addView(root, params);
+            // task-218：所有本地 overlay 统一登记，脚本结束/引擎清理时可 closeByOwner。
+            OverlayRegistry.register(ownerEngineId, ownerTag, "nodejs",
+                    OverlayRegistry.Kind.NODE_UI, root, wm, touchable);
             // 大 XML/weighted 布局首次测量可能偏小；在本地进程内补一次限高 remeasure。
             root.post(() -> {
                 try {
@@ -260,16 +290,18 @@ public final class Node24LocalOverlay {
                     return ok();
                 }
                 case "addFlags":
-                    params.flags |= (request.optInt("flags", 0) & ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+                    params.flags |= request.optInt("flags", 0);
+                    if (!touchable) params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
                     break;
                 case "removeFlags":
                     params.flags &= ~request.optInt("flags", 0);
                     break;
                 case "setFlags":
-                    params.flags = (request.optInt("flags", 0) & ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+                    params.flags = request.optInt("flags", 0)
                             | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                             | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+                    if (!touchable) params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
                     break;
                 case "pollEvents": {
                     JSONArray array = new JSONArray();
@@ -439,6 +471,7 @@ public final class Node24LocalOverlay {
 
         void close() {
             OVERLAYS.remove(id);
+            try { OverlayRegistry.unregister(root); } catch (Throwable ignored) { }
             runOnMain(() -> {
                 try { if (root != null) wm.removeView(root); } catch (Throwable ignored) { }
                 return null;

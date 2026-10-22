@@ -16,6 +16,7 @@ import com.stardust.autojs.core.graphics.ScriptCanvasView;
 import com.stardust.autojs.core.ui.JsViewHelper;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.Exceptions;
+import com.stardust.autojs.overlay.OverlayRegistry;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
 import com.stardust.autojs.util.FloatingPermission;
@@ -127,6 +128,21 @@ public class Floaty {
         }
     }
 
+    private void registerOverlay(View view, WindowManager wm, boolean touchable) {
+        try {
+            OverlayRegistry.register(mRuntime.getEngineId(), "", "rhino",
+                    OverlayRegistry.Kind.RHINO_FLOATY, view, wm, touchable);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void unregisterOverlay(View view) {
+        try {
+            OverlayRegistry.unregister(view);
+        } catch (Throwable ignored) {
+        }
+    }
+
     private synchronized void addWindow(JsWindow window) {
         mWindows.add(window);
     }
@@ -199,6 +215,9 @@ public class Floaty {
             if (exception != Exceptions.NO_EXCEPTION && exception != null) {
                 throw exception;
             }
+            boolean touchable = (mWindow.getWindowLayoutParams().flags
+                    & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) == 0;
+            registerOverlay(mWindow.getWindowView(), mWindow.getWindowManager(), touchable);
         }
 
         public View findView(String id) {
@@ -272,6 +291,7 @@ public class Floaty {
                 return;
             }
             runWithWindow(() -> {
+                unregisterOverlay(mWindow.getWindowView());
                 closeCanvases(mWindow.getContentView());
                 mWindow.close();
                 mWindow = null;
@@ -299,6 +319,9 @@ public class Floaty {
             if (exception != Exceptions.NO_EXCEPTION && exception != null) {
                 throw exception;
             }
+            boolean touchable = (mWindow.getWindowLayoutParams().flags
+                    & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) == 0;
+            registerOverlay(mWindow.getRootView(), mWindow.getWindowManager(), touchable);
             mWindow.setOnCloseButtonClickListener(v -> close());
             //setSize(mWindow.getWindowBridge().getScreenWidth() / 2, mWindow.getWindowBridge().getScreenHeight() / 2);
         }
@@ -379,6 +402,7 @@ public class Floaty {
                 return;
             }
             runWithWindow(() -> {
+                unregisterOverlay(mWindow.getRootView());
                 closeCanvases(mView);
                 mWindow.close();
                 mWindow = null;

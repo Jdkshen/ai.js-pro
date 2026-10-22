@@ -4,6 +4,7 @@ import android.util.Log;
 import android.os.Process;
 
 import com.stardust.autojs.core.looper.LooperHelper;
+import com.stardust.autojs.overlay.OverlayRegistry;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.script.JavaScriptSource;
 import com.stardust.autojs.script.QuickJsBytecodeSource;
@@ -60,6 +61,7 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         ScriptRuntime runtime = getRuntime();
         runtime.init();
         QuickJsHostBridge hostBridge = new QuickJsHostBridge(runtime);
+        hostBridge.setOwnerEngineId(getId());
         mHostBridge = hostBridge;
         long handle = QuickJsNativeBridge.create(
                 hostBridge,
@@ -173,6 +175,8 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         if (hostBridge != null) {
             hostBridge.close();
         }
+        // 兜底：bridge 为空/部分初始化时也要按 owner 清理残留浮窗（幂等）。
+        OverlayRegistry.closeByOwner(getId(), "quickjs_destroy");
         if (thread != null) {
             LooperHelper.quitForThread(thread);
         }
