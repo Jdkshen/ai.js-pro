@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'app_theme.dart';
 import 'glass.dart';
 
 /// AI.js Pro's GlassTabLayout interaction: relative drag, continuous page,
@@ -143,8 +144,7 @@ class _GlassNavigationState extends State<GlassNavigation> {
     final RenderObject? object =
         materialKey.currentContext?.findRenderObject();
     if (object is! RenderRepaintBoundary) return;
-    final String signature = '${Theme.of(context).brightness ==
-            Brightness.dark ? 'd' : 'l'}|'
+    final String signature = '${Theme.of(context).brightness == Brightness.dark ? 'd' : 'l'}|'
         '${object.size.width.round()}x${object.size.height.round()}|'
         '${currentPage().round()}|${widget.selected}';
     if (signature == materialSignature) return;
@@ -309,7 +309,7 @@ void _paintGlyph(Canvas canvas, Size size, IconData icon, double x,
               package: icon.fontPackage,
               fontSize: 22,
               color: highlight
-                  ? const Color(0xff008f91)
+                  ? AppTheme.primaryFor(dark)
                   : (dark
                       ? const Color(0xffa5afb2)
                       : const Color(0xff858c95)))));

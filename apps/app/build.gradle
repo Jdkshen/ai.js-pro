@@ -21,9 +21,9 @@ def pythonExecutable = org.gradle.internal.os.OperatingSystem.current().isWindow
 def devPluginUsbDiscovery = findProperty('devPluginUsbDiscovery') != 'false'
 
 // ---- Flutter 玻璃界面 POC（可行性评估 §9） ---------------------------------
-// -PflutterPoc=true 时把 output/flutter-poc/payload（Flutter 3.3.4 引擎 + 预编译 AOT +
+// -PflutterPoc=true 时把 output/flutter-poc/payload（锁定版本的引擎 + 预编译 AOT +
 // flutter_assets + embedding jar）挂进 debug 变体，并提供 GlassFlutterActivity 调试入口。
-// 产物由 output/flutter-poc/build-aot.ps1 生成；不带该参数时构建与发布完全不受影响。
+// 产物由 tools/flutter-poc/build-aot.ps1 生成。
 def flutterPocEnabled = findProperty('flutterPoc') == 'true'
 def flutterPocPayload = rootProject.file('output/flutter-poc/payload')
 
@@ -269,15 +269,32 @@ tasks.register('verifyImGuiFontSubset', Exec) {
 
 
 
+if (flutterPocEnabled) {
+    def verifyFlutterPayload = tasks.register('verifyFlutterPayload') {
+        group = 'verification'
+        doLast {
+            def readRuntime = { File file -> new groovy.json.JsonSlurper().parseText(file.getText('UTF-8').replace('\uFEFF', '')) }
+            def expected = readRuntime(rootProject.file('flutter-payload-base/runtime.json'))
+            def actual = readRuntime(new File(flutterPocPayload, 'runtime.json'))
+            ['frameworkVersion', 'frameworkRevision', 'engineRevision', 'dartSdkVersion'].each { key ->
+                if (actual[key] != expected[key]) throw new GradleException("Flutter payload mismatch: ${key}; rebuild tools/flutter-poc/build-aot.ps1")
+            }
+            def sha = { File file -> java.security.MessageDigest.getInstance('SHA-256').digest(file.bytes).encodeHex().toString() }
+            expected.artifacts.each { name, pin ->
+                if (sha(new File(flutterPocPayload, name)) != pin.sha256) throw new GradleException("Flutter payload hash mismatch: ${name}")
+            }
+            if (sha(new File(flutterPocPayload, 'jniLibs/arm64-v8a/libapp.so')) != actual.aotSha256) throw new GradleException('Flutter AOT hash mismatch; rebuild payload')
+        }
+    }
+    tasks.named('preBuild').configure { dependsOn verifyFlutterPayload }
+}
+
 // ---- 16 KB 页对齐守卫（P0） -------------------------------------------------
-// 检查 arm64 .so 的 PT_LOAD p_align 与 PT_GNU_RELRO 末尾是否满足 16 KB 页口径。
+// 无白名单；同时检查 Node runtime/CLI 资产、RELRO 和未压缩 native 的 ZIP 偏移。
 // 默认不挂到日常 assemble；只有 -Pverify16kb=true 时才在 debug 包构建完成后自动跑。
 // 单独执行：.\gradlew.bat :app:verify16kbAlignment
 // 指定现有产物：.\gradlew.bat :app:verify16kbAlignment -Pverify16kbApk=<apk>
-// 严格 RELRO：加 -Pverify16kbStrictRelro=true（非白名单库 RELRO 不圆整即失败）。
 def verify16kbOnAssemble = findProperty('verify16kb') == 'true'
-def verify16kbStrictRelro = findProperty('verify16kbStrictRelro') == 'true'
-
 tasks.register('verify16kbAlignment', Exec) {
     group = 'verification'
     description = '检查 arm64 .so 的 PT_LOAD / PT_GNU_RELRO 是否满足 16 KB 页对齐。'
@@ -285,13 +302,9 @@ tasks.register('verify16kbAlignment', Exec) {
     def apkPath = (requestedApk
             ? rootProject.file(requestedApk.toString()).absolutePath
             : layout.buildDirectory.file('outputs/apk/miuixCompat/debug/app-miuix-compat-arm64-v8a-debug.apk').get().asFile.absolutePath)
-    def scriptPath = rootProject.file('tools/verify-16kb-alignment.ps1').absolutePath
-    def scriptArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Apk', apkPath]
-    if (verify16kbStrictRelro) {
-        scriptArgs += '-StrictRelro'
-    }
+    def scriptPath = rootProject.file('tools/check-android-16kb.py').absolutePath
     workingDir rootProject.projectDir
-    commandLine(['powershell'] + scriptArgs)
+    commandLine(pythonExecutable, scriptPath, apkPath)
     ignoreExitValue = true
     doFirst {
         if (!new File(apkPath).isFile()) {
@@ -304,8 +317,7 @@ tasks.register('verify16kbAlignment', Exec) {
         def exitCode = executionResult.get().exitValue
         if (exitCode != 0) {
             throw new GradleException("16KB 对齐守卫未通过（退出码 ${exitCode}）。" +
-                    '请查看上方表格：非白名单库的 LOAD p_align 必须 >= 0x4000；' +
-                    'RELRO 末尾未圆整默认只提示，加 -Pverify16kbStrictRelro=true 可按严格口径拦截。')
+                    '请查看上方逐库结果；所有 64 位运行库都必须通过，无第三方白名单。')
         }
     }
 }
@@ -410,8 +422,12 @@ dependencies {
     implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')
     if (flutterPocEnabled) {
-        // Flutter 3.3.4 embedding（classes-only jar；libflutter.so / libapp.so 走 jniLibs）。
-        debugImplementation files(new File(flutterPocPayload, 'flutter_embedding_3.3.4.jar'))
+        // Embedding and engine are pinned together in flutter-payload-base/runtime.json.
+        debugImplementation files(new File(flutterPocPayload, 'flutter_embedding_release.jar'))
+        debugImplementation 'com.getkeepsafe.relinker:relinker:1.4.5'
+        debugImplementation 'androidx.tracing:tracing:1.2.0'
+        debugImplementation 'androidx.exifinterface:exifinterface:1.4.1'
+        debugImplementation 'androidx.lifecycle:lifecycle-process:2.7.0'
         // FlutterView 构造时无条件创建 WindowInfoRepositoryCallbackAdapterWrapper，
         // 需要 androidx.window 的 Java 适配器（window 本体已在依赖图中，1.3.0）。
         debugImplementation 'androidx.window:window-java:1.3.0'
@@ -546,6 +562,29 @@ tasks.register('verifyBundledYoloSamples') {
     }
 }
 
+tasks.register('verifyCommonEngineSamples') {
+    group = 'verification'
+    description = 'Verify that the three engines ship identical generated common API examples.'
+    def commonSource = rootProject.file('samples/engine-common')
+    inputs.dir(commonSource)
+    inputs.dir(bundledSampleDir)
+    doLast {
+        def sources = fileTree(commonSource) { include '*.js' }.files
+        if (sources.isEmpty()) throw new GradleException('Common engine API examples are missing')
+        def engines = ['Rhino': 'rhino', 'QuickJS': 'quickjs', 'Node': 'nodejs']
+        sources.each { source ->
+            def body = source.getText('UTF-8').replace('\r\n', '\n')
+            engines.each { label, directive ->
+                def target = new File(bundledSampleDir, "${label} 引擎/三引擎统一示例/${source.name}")
+                def expected = '"' + directive + '";\n' + body
+                if (!target.isFile() || target.getText('UTF-8').replace('\r\n', '\n') != expected) {
+                    throw new GradleException("Common sample differs: ${target}. Run tools/sync-common-engine-samples.py")
+                }
+            }
+        }
+    }
+}
+
 tasks.register('verifyQuickJsSamplesMarked') {
     group = 'verification'
     description = 'Require every script shown under QuickJS samples to select QuickJS explicitly.'
@@ -642,6 +681,7 @@ tasks.matching { it.name == 'preBuild' }.configureEach {
     dependsOn tasks.named('verifyBundledSamplesNoNode')
     dependsOn tasks.named('verifyBundledYoloSamples')
     dependsOn tasks.named('verifyQuickJsSamplesMarked')
+    dependsOn tasks.named('verifyCommonEngineSamples')
     dependsOn tasks.named('verifyBundledFindImageAssets')
     dependsOn tasks.named('verifyQuickJsNativeLibrariesFresh')
     dependsOn tasks.named('verifyImGuiFontSubset')

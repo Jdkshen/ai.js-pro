@@ -2,9 +2,16 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
-> **当前状态（2026-10-20，dev-1177）**：HEAD `184eb542`；dev 更新通道 **dev-1175**（Flutter-only 构建，约 128.0 MB）；三引擎 Rhino / QuickJS / Node24；多进程 `:script` / `:native` / `:node24_1..3`（Node 进程池）；UI 统一 Flutter，Miuix 已移出构建；CI `Android CI and Release / verify` 全绿；MCP 默认端口 **8765**。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) §0 为准；`reports/` 均为时点快照。
+> **当前状态（2026-10-22，dev-1202）**：HEAD `41ad7317`，本轮改动已提交（dev-1202）；Flutter **3.47.7 / Dart 3.13.5**，包 144.81 MiB；新增示例目录懒加载/插件发现后台化；修复选择器运行后编辑器日志阻塞，保留 Rhino 原生 View 自定义组件、开关/按钮统一色及三引擎公共 API 首批对齐；现有 `:script` / Node 进程池架构，MCP 默认 **8765**。高级版全量 API 尚有缺口；22 个 64 位 ELF 检查通过，真正 16KB 内核仍待验收。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) 最新补充为准；旧 `reports/` 保留时点记录。
 
 ## 当前状态
+
+- **[选择器运行后编辑器卡顿修复（2026-10-22，dev-1201）](reports/2026-10-22_选择器运行后编辑器卡顿修复.md)**：主线程日志堆栈、满 2000 行打开耗时前后对比、原始示例三轮、三引擎日志与编辑保存真机记录。
+
+- **[DotJumpLoading 原生组件修复（2026-10-22，dev-1200）](reports/2026-10-22_DotJumpLoading原生组件修复.md)**：原生 View render、生命周期、原包运行证据和单独修正版 ZIP。
+- **[APK 开关与按钮颜色统一（2026-10-22，dev-1199）](reports/2026-10-22_APK开关与按钮颜色统一.md)**：共享主题、开关与按钮各状态、深浅主题、页面覆盖和实机证据。
+- **[三引擎 API 与高级版全量契约（2026-10-22，进行中）](reports/2026-10-22_三引擎API统一与高级版全量契约.md)**：高级版声明清单、首批公共适配、7 组统一示例与双机/MCP 证据，明确其余缺口。
+- **[Flutter 升级与 16KB 兼容修复（2026-10-22，dev-1197）](reports/2026-10-22_Flutter升级与16KB兼容修复.md)**：配套 engine/embedding/AOT、现代 shader、Node C++ 运行库；无白名单发布硬门，双机回归与剩余验收边界。
 
 - **[存储权限申请修复（2026-10-20，dev-1169）](reports/2026-10-20_存储权限申请修复.md)**：targetSdk 28 legacy storage 下「所有文件访问」页不可授予，改为运行时 READ/WRITE 授权；K40/MI8 实机验证。
 - **[截图授权修复：强制整屏 + 自动授权跨进程（2026-10-20，dev-1167）](reports/2026-10-20_截图授权整屏修复.md)**：单应用模式切 App 黑帧的两个根因与修复、K40 零点击授权 + 切 App 帧亮度证据。
@@ -66,7 +73,7 @@
 ## 指南
 
 - [液态玻璃导航：实现、接入与优化](guides/液态玻璃导航_实现接入与优化.md)：顶部胶囊的进度联动、AGSL 折射、完整 Java 源码、接入与性能优化，含当前验证范围。
-- [编译指南（2026-10-20 更新）](guides/编译指南.md)：工具链真实版本（JDK17 / Gradle 8.9 / AGP 8.6.1 / Kotlin 2.1.0 / Flutter 3.3.4 / Python+fonttools / NDK r27c / CMake≥3.18.1 / Ninja 1.13.2）、原生 `.so` 复用/重编规则、Flutter AOT/payload、本地 Debug 安装与 dev 发布三套命令、输出路径修正与常见问题。
+- [编译指南（2026-10-22 更新）](guides/编译指南.md)：JDK17 / Gradle 8.9 / AGP 8.6.1 / Kotlin 2.1.0 / Flutter 3.47.7 与 Dart 3.13.5；原生复用、配套 AOT/payload、16KB 发布硬门、本地安装和发布流程。
 - [象棋引擎插件（Auto.js 插件 APK）](guides/象棋插件_打包与使用.md)：把象棋识别/棋规/算棋打包成可独立安装的插件（自带 Pikafish + NNUE），含两个引擎的加载差异、权重解析顺序与真机验证记录。
 - [安装包瘦身：插件化与子集](guides/安装包瘦身_插件与子集.md)：把运行时模板、象棋工程与 NNUE 权重移出主 APK、ImGui 字体子集，以及各自的验证方式与回退开关；当前 dev-1112 约 132.1 MB，打包模板约 16.4 MB。
 - [双引擎 API 与 UI 性能验证](guides/ENGINE_API_AND_PERFORMANCE.md)：可重复的 JVM 测试、API 差异生成和真机帧耗时流程。

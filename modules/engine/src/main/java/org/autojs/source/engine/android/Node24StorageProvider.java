@@ -8,23 +8,33 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 
-/** Single-process owner for Node storage shared by the three runtime pool slots. */
+/** Single-process owner for storage shared by script and Node pool processes. */
 public final class Node24StorageProvider extends ContentProvider {
     @Override public boolean onCreate() { return true; }
 
     @Override public synchronized Bundle call(String method, String name, Bundle args) {
         if (args == null) throw new IllegalArgumentException("storage arguments missing");
+        boolean legacy = "legacy".equals(args.getString("namespace"));
         SharedPreferences prefs = getContext().getSharedPreferences(
-                "node24.storage." + (name == null ? "default" : name), Context.MODE_PRIVATE);
+                (legacy ? "autojs.localstorage." : "node24.storage.")
+                        + (name == null ? "default" : name), Context.MODE_PRIVATE);
         String key = args.getString("key", "");
         Bundle result = new Bundle();
+        String type = args.getString("type", "string");
         switch (method) {
             case "get":
-                result.putString("value", prefs.getString(key, null));
+                if ("number".equals(type)) result.putLong("value", prefs.getLong(key, args.getLong("default")));
+                else if ("boolean".equals(type)) result.putBoolean("value", prefs.getBoolean(key, args.getBoolean("default")));
+                else result.putString("value", prefs.getString(key, args.getString("default")));
                 return result;
             case "put":
-                requireCommit(prefs.edit().putString(key, args.getString("value", "")).commit());
+                SharedPreferences.Editor editor = prefs.edit();
+                if ("number".equals(type)) editor.putLong(key, args.getLong("value"));
+                else if ("boolean".equals(type)) editor.putBoolean(key, args.getBoolean("value"));
+                else editor.putString(key, args.getString("value"));
+                requireCommit(editor.commit());
                 break;
+            case "contains": result.putBoolean("value", prefs.contains(key)); return result;
             case "remove": requireCommit(prefs.edit().remove(key).commit()); break;
             case "clear": requireCommit(prefs.edit().clear().commit()); break;
             default: throw new IllegalArgumentException("Unsupported storage action: " + method);

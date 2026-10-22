@@ -72,9 +72,20 @@ public class Files {
     }
 
     private final ScriptRuntime mRuntime;
+    private final android.content.Context mContext;
+    private final String mWorkingDirectory;
 
     public Files(ScriptRuntime runtime) {
         mRuntime = runtime;
+        mContext = runtime == null ? null : runtime.getUiHandler().getContext();
+        mWorkingDirectory = null;
+    }
+
+    /** The Node bridge shares the file implementation without creating a Rhino runtime. */
+    public Files(android.content.Context context, String workingDirectory) {
+        mRuntime = null;
+        mContext = context;
+        mWorkingDirectory = workingDirectory;
     }
 
     /**
@@ -83,6 +94,7 @@ public class Files {
      * @return 支持 `on(event, callback)` / `stopWatching()` / `startWatching()` 的监听对象
      */
     public com.stardust.autojs.core.io.ScriptFileObserver observe(String path) {
+        if (mRuntime == null) throw new IllegalStateException("File observation requires the engine event adapter");
         return new com.stardust.autojs.core.io.ScriptFileObserver(mRuntime, path(path));
     }
 
@@ -107,7 +119,7 @@ public class Files {
     }
 
     public String cwd() {
-        return mRuntime.engines.myEngine().cwd();
+        return mRuntime == null ? mWorkingDirectory : mRuntime.engines.myEngine().cwd();
     }
 
     /**
@@ -215,7 +227,7 @@ public class Files {
 
     public String readAssets(String path, String encoding) {
         try {
-            return PFiles.read(mRuntime.getUiHandler().getContext().getAssets().open(path), encoding);
+            return PFiles.read(mContext.getAssets().open(path), encoding);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

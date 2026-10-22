@@ -42,7 +42,7 @@ public final class Node24Prelude {
      * 数组顺序即生产加载顺序；zip/ocr 放在最后，不改变已有模块的注册顺序。
      */
     private static final String[] MODULE_ASSETS = {
-            "node24/modules/color.js",
+            "modules/common-color.js",
             "node24/modules/floating_window.js",
             "node24/modules/accessibility_extra.js",
             "node24/modules/zip.js",
@@ -50,7 +50,11 @@ public final class Node24Prelude {
             "node24/modules/media.js",
             "node24/modules/plugins.js",
             "node24/modules/root_automator.js",
-            "node24/modules/console.js"
+            "node24/modules/console.js",
+            "modules/common-api.js",
+            "modules/common-device.js",
+            "modules/common-lang.js",
+            "node24/modules/legacy-runtime.js"
     };
 
     private static volatile String sPreludeCache;
@@ -91,6 +95,10 @@ public final class Node24Prelude {
         // task-146：按 modules/REGISTER-PATCH.md 方式 A，在 prelude/ui 之后、用户源码之前逐个加载可选模块。
         for (String moduleAsset : MODULE_ASSETS) {
             String moduleCode = optionalAsset(context, moduleAsset);
+            if (moduleCode == null && (moduleAsset.startsWith("modules/common-")
+                    || moduleAsset.equals("node24/modules/legacy-runtime.js"))) {
+                throw new IllegalStateException("Required engine API asset missing: " + moduleAsset);
+            }
             if (moduleCode != null && !moduleCode.isEmpty()) {
                 builder.append(moduleCode).append("\n;\n");
             }

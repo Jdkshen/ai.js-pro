@@ -65,6 +65,9 @@ final class PocCatalog {
 
     /** project.json 读取上限。 */
     private static final int MAX_PROJECT_JSON_BYTES = 64 * 1024;
+    // APK assets cannot change during this process's lifetime. Keep the built
+    // catalogue read-only; installing a new APK starts a fresh process/cache.
+    private static JSONArray cachedResourceItems;
 
     /** 已知插件包名：与 plugins 下各模块 applicationId 一致（查询后仍要确认 registry 非空）。 */
     private static final String[] KNOWN_PLUGIN_PACKAGES = {
@@ -96,7 +99,8 @@ final class PocCatalog {
 
     // ---- 本地资源（assets/sample）---------------------------------------
 
-    private static JSONArray resourceItems(Activity activity) {
+    private static synchronized JSONArray resourceItems(Activity activity) {
+        if (cachedResourceItems != null) return cachedResourceItems;
         List<JSONObject> items = new ArrayList<>();
         try {
             scanResourceDir(activity.getAssets(), SAMPLE_ROOT, 0, items);
@@ -119,6 +123,7 @@ final class PocCatalog {
         for (JSONObject item : items) {
             array.put(item);
         }
+        cachedResourceItems = array;
         return array;
     }
 
@@ -327,9 +332,11 @@ final class PocCatalog {
         List<PluginRegistry.InstalledApp> adapted = new ArrayList<>();
         for (ApplicationInfo app : apps) {
             try {
-                adapted.add(new PluginRegistry.InstalledApp(app.packageName, labelOf(pm, app),
-                        versionNameOf(pm, app.packageName), versionCodeOf(pm, app.packageName),
-                        registryClassOf(app)));
+                // Discovery only needs package names and registry metadata.
+                // Keep every name for the existing per-package fallback, while
+                // resolving labels/versions only for confirmed plugin entries.
+                adapted.add(new PluginRegistry.InstalledApp(app.packageName, app.packageName,
+                        "", 0, registryClassOf(app)));
             } catch (Throwable error) {
                 Log.w(TAG, "跳过已安装应用：" + app.packageName, error);
             }
@@ -396,7 +403,9 @@ final class PocCatalog {
             }
         }
         String summary = entry.getSummary();
-        if (summary == null || summary.trim().isEmpty()) {
+        if (installed && !versionName.isEmpty()) {
+            summary = "已安装 · " + versionName;
+        } else if (summary == null || summary.trim().isEmpty()) {
             summary = installed ? "已安装" + (versionName.isEmpty() ? "" : " · " + versionName)
                     : "未安装";
         }

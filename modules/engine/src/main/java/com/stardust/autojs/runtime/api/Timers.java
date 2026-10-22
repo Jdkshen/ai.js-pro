@@ -112,9 +112,14 @@ public class Timers {
     }
 
     public boolean hasPendingCallbacks() {
-        //如果是脚本主线程，则检查所有子线程中的定时回调。mFutureCallbackUptimeMillis用来记录所有子线程中定时最久的一个。
+        // Main execution waits for actual callbacks owned by this runtime, including child timers.
         if (mThreads.getMainThread() == Thread.currentThread()) {
-            return mMaxCallbackUptimeMillisForAllThreads.get() > SystemClock.uptimeMillis();
+            if (mMainTimer.hasPendingCallbacks() || mUiTimer.hasPendingCallbacks()) return true;
+            for (WeakReference<Timer> reference : mTimers.values()) {
+                Timer timer = reference.get();
+                if (timer != null && timer.hasPendingCallbacks()) return true;
+            }
+            return false;
         }
         // 否则检查当前线程的定时回调
         Timer timer = getTimerForCurrentThread();

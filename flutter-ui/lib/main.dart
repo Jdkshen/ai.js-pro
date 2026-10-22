@@ -12,6 +12,7 @@ import 'glass_navigation.dart';
 import 'workspace_models.dart';
 import 'code_editing.dart';
 import 'mono_font.dart';
+import 'app_theme.dart';
 part 'browser.dart';
 part 'utility_pages.dart';
 part 'task_page.dart';
@@ -225,26 +226,13 @@ class _GlassAppState extends State<GlassApp> {
   }
 
   ThemeData theme(bool isDark) {
-    final scheme = ColorScheme.fromSeed(
-        seedColor: const Color(0xff008f91),
-        brightness: isDark ? Brightness.dark : Brightness.light);
-    return ThemeData(
-        brightness: scheme.brightness,
-        colorScheme: scheme,
-        scaffoldBackgroundColor: Colors.transparent,
-        fontFamily: 'sans-serif',
-        iconTheme: IconThemeData(
-            color: isDark ? const Color(0xffa5afb2) : const Color(0xff8d97ac)),
-        appBarTheme: const AppBarTheme(
-            backgroundColor: Colors.transparent, elevation: 0),
-        snackBarTheme:
-            const SnackBarThemeData(behavior: SnackBarBehavior.floating));
+    return AppTheme.create(isDark);
   }
 
   @override
   Widget build(BuildContext context) {
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
+      statusBarColor: GlassBackground.colourFor(dark),
       statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
       systemNavigationBarColor:
           dark ? const Color(0xff1c2022) : const Color(0xfff7f7f8),
@@ -554,8 +542,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   void refreshVisiblePage(int index) {
     if (index == 0) scriptBrowser.currentState?.load();
     if (index == 1) sampleBrowser.currentState?.load();
-    if (index == 2) resources.currentState?.load();
-    if (index == 3) plugins.currentState?.load();
+    // CatalogPage loads on activation/revision changes. Re-loading here would
+    // duplicate its first request in the middle of the PageView animation.
   }
 
   @override
@@ -813,11 +801,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                                     child: CatalogPage(
                                         key: resources,
                                         plugin: false,
+                                        active: tab == 2,
                                         revision: revision)),
                                 _WorkspacePage(
                                     child: CatalogPage(
                                         key: plugins,
                                         plugin: true,
+                                        active: tab == 3,
                                         revision: revision)),
                                 _WorkspacePage(
                                     child: TaskPage(

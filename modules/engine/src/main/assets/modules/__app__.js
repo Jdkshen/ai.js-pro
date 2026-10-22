@@ -30,7 +30,7 @@ module.exports = function (runtime, global) {
         }
         if (i.category) {
             if (i.category instanceof Array) {
-                for (var j = 0; i < i.category.length; j++) {
+                for (var j = 0; j < i.category.length; j++) {
                     intent.addCategory(i.category[j]);
                 }
             } else {
@@ -140,7 +140,7 @@ module.exports = function (runtime, global) {
         }
         let arr = util.java.array("string", arg.length);
         for (let i = 0; i < arg.length; i++) {
-            arr[i] = arg;
+            arr[i] = arg[i];
         }
         return arr;
     }
@@ -234,7 +234,7 @@ module.exports = function (runtime, global) {
         }
         if (i.category) {
             if (i.category instanceof Array) {
-                for (var j = 0; i < i.category.length; j++) {
+                for (var j = 0; j < i.category.length; j++) {
                     addOption('c', i.category[j], false);
                 }
             } else {

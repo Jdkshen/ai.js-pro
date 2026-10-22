@@ -817,7 +817,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                 : Icons.desktop_windows_outlined,
             size: 18,
             color: connected
-                ? const Color(0xff008f91)
+                ? Theme.of(context).colorScheme.primary
                 : Theme.of(context).colorScheme.onSurface.withOpacity(.6)),
         const SizedBox(width: 8),
         Expanded(
@@ -862,7 +862,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
         Icon(success ? Icons.check_circle_outline : Icons.info_outline,
             size: 18,
             color: success
-                ? const Color(0xff008f91)
+                ? Theme.of(context).colorScheme.primary
                 : Theme.of(context).colorScheme.onSurface.withOpacity(.6)),
         const SizedBox(width: 8),
         Expanded(
@@ -954,7 +954,8 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: Row(children: [
-        const Icon(Icons.desktop_windows_outlined, color: Color(0xff008f91)),
+        Icon(Icons.desktop_windows_outlined,
+            color: Theme.of(context).colorScheme.primary),
         const SizedBox(width: 10),
         Expanded(
             child: Text(widget.activeConnectOnly ? '主动连接电脑' : '电脑连接',
@@ -1015,7 +1016,6 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                       label: '服务器模式开关',
                       child: Switch(
                           key: const ValueKey('computer-plugin-server'),
-                          activeColor: const Color(0xff008f91),
                           value: listening,
                           onChanged: busy ||
                                   connecting ||

@@ -187,7 +187,11 @@ setTimeout(()=>console.log('NODE_LIFECYCLE_RESULT='+JSON.stringify({total:3,pass
                 rows.append(audit.run(filename[:-3],engine,(ROOT/'tools/probes'/filename).read_text(encoding='utf8'),marker,20))
         elif args.mode == 'quickjs-full':
             source=(ROOT/'apps/app/src/main/assets/sample/QuickJS 引擎/回归测试/QuickJS 全模块回归测试.js').read_text(encoding='utf8')
-            source=source.rsplit('exit();',1)[0]+'\nconsole.log("QUICKJS_FULL_RESULT="+JSON.stringify({total:pass+fail,passed:pass,failed:fail,skipped:skipped}));\nexit();'
+            source=source.replace('var pass = 0, fail = 0, skipped = 0;', 'var pass = 0, fail = 0, skipped = 0, failedNames = [];')
+            source=source.replace("else { fail++; console.error('❌ ' + name); }", "else { fail++; failedNames.push(name); console.error('❌ ' + name); }")
+            # console.clear() in the sample removes earlier failure messages.
+            # Preserve the names before its final throw without changing pass/fail.
+            source=source.replace('if (fail > 0) {', '\nconsole.log("QUICKJS_FULL_RESULT="+JSON.stringify({total:pass+fail,passed:pass,failed:fail,names:failedNames,skipped:skipped}));\nif (fail > 0) {')
             rows.append(audit.run('quickjs-full','quickjs',source,'QUICKJS_FULL_RESULT=',50))
         elif args.mode == 'legacy':
             for engine in ['rhino']:

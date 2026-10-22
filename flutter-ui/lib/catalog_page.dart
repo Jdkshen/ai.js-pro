@@ -7,9 +7,11 @@ part of 'main.dart';
 class CatalogPage extends StatefulWidget {
   final bool plugin;
   final int revision;
+  final bool active;
   final Future<List<dynamic>> Function(bool plugin)? loader;
   const CatalogPage(
-      {Key? key, required this.plugin, required this.revision, this.loader})
+      {Key? key, required this.plugin, required this.revision,
+      this.active = true, this.loader})
       : super(key: key);
   @override
   State<CatalogPage> createState() => _CatalogPageState();
@@ -32,6 +34,10 @@ class _CatalogPageState extends State<CatalogPage> {
   String? pluginStateError;
   final togglingPlugins = <String>{};
   int pluginStateRequestId = 0;
+  bool reloadWhenActive = true;
+  Future<void>? pendingLoad;
+  bool? pendingPlugin;
+  int? pendingRevision;
 
   void changed() => WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) contentRevision.value++;
@@ -251,7 +257,7 @@ class _CatalogPageState extends State<CatalogPage> {
   @override
   void initState() {
     super.initState();
-    load();
+    if (widget.active) load();
   }
 
   @override
@@ -273,7 +279,10 @@ class _CatalogPageState extends State<CatalogPage> {
       togglingPlugins.clear();
       changed();
     }
-    if (old.revision != widget.revision || old.plugin != widget.plugin) load();
+    if (old.revision != widget.revision || old.plugin != widget.plugin) {
+      reloadWhenActive = true;
+    }
+    if (widget.active && reloadWhenActive) load();
   }
 
   @override
@@ -309,6 +318,22 @@ class _CatalogPageState extends State<CatalogPage> {
   }
 
   Future<void> load() async {
+    reloadWhenActive = false;
+    final previous = pendingLoad;
+    if (previous != null && pendingPlugin == widget.plugin &&
+        pendingRevision == widget.revision) return previous;
+    final operation = loadCatalog();
+    pendingLoad = operation;
+    pendingPlugin = widget.plugin;
+    pendingRevision = widget.revision;
+    try {
+      await operation;
+    } finally {
+      if (identical(pendingLoad, operation)) pendingLoad = null;
+    }
+  }
+
+  Future<void> loadCatalog() async {
     final token = ++requestId;
     final plugin = widget.plugin;
     setState(() => refreshing = true);
@@ -712,7 +737,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                   color: pluginDisabled(item)
                                       ? Theme.of(context).disabledColor
                                       : isInstalled
-                                          ? const Color(0xff008f91)
+                                          ? Theme.of(context).colorScheme.primary
                                           : Theme.of(context)
                                               .colorScheme
                                               .onSurface
@@ -725,7 +750,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                   fontSize: 12,
                                   color: Theme.of(context)
                                       .textTheme
-                                      .caption
+                                      .bodySmall
                                       ?.color)),
                         ])),
                     if (canRetryPlugin(item))
@@ -811,7 +836,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                   fontSize: 11,
                                   color: Theme.of(context)
                                       .textTheme
-                                      .caption
+                                      .bodySmall
                                       ?.color)),
                           const Spacer(),
                           Row(children: [
@@ -827,7 +852,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                 color: pluginDisabled(item)
                                     ? Theme.of(context).disabledColor
                                     : installed(item) == true
-                                        ? const Color(0xff008f91)
+                                        ? Theme.of(context).colorScheme.primary
                                         : null),
                             const SizedBox(width: 4),
                             Expanded(
@@ -839,7 +864,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                         color: pluginDisabled(item)
                                             ? Theme.of(context).disabledColor
                                             : installed(item) == true
-                                                ? const Color(0xff008f91)
+                                                ? Theme.of(context).colorScheme.primary
                                                 : null))),
                             if (canRetryPlugin(item))
                               IconButton(
@@ -885,7 +910,6 @@ class _CatalogPageState extends State<CatalogPage> {
                     key: ValueKey(
                         '${detail ? 'plugin-detail-enable' : 'plugin-enable'}-${package(item)}'),
                     value: !pluginDisabled(item),
-                    activeColor: const Color(0xff008f91),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     onChanged: busy || pluginStateError != null
                         ? null
@@ -903,10 +927,11 @@ class _CatalogPageState extends State<CatalogPage> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
               child: Row(children: [
                 // 对齐 MiuixResourceFragment.kt:742 —— 图标位 38（原为 36）
-                const SizedBox(
+                SizedBox(
                     width: 38,
                     child:
-                        Icon(Icons.code, size: 25, color: Color(0xff008f91))),
+                        Icon(Icons.code, size: 25,
+                            color: Theme.of(context).colorScheme.primary)),
                 const SizedBox(width: 10),
                 Expanded(
                     child: Column(
@@ -1205,8 +1230,10 @@ class _CatalogPageState extends State<CatalogPage> {
                                   child: FloatingActionButton(
                                       heroTag: 'import-resource',
                                       tooltip: '导入脚本 / ZIP',
-                                      backgroundColor: const Color(0xff008f91),
-                                      foregroundColor: Colors.white,
+                                      backgroundColor: AppTheme.actionBackground(
+                                          context, enabled: !importing),
+                                      foregroundColor: AppTheme.actionForeground(
+                                          context, enabled: !importing),
                                       onPressed: importing ? null : importFile,
                                       child: Icon(importing
                                           ? Icons.hourglass_empty

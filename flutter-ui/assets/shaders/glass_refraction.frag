@@ -1,4 +1,5 @@
-#version 320 es
+#version 460 core
+#include <flutter/runtime_effect.glsl>
 
 // Glass navigation pixel refraction.
 //
@@ -8,14 +9,8 @@
 // split at the edge. The source is a snapshot of the navigation bar itself, so
 // the effect is real pixel displacement, not a painted gradient.
 //
-// Uniform layout follows the runtime-effect contract of this toolchain
-// (Flutter 3.3.4 / Dart 2.18.2); the in-SDK reference shader this mirrors is
-// packages/flutter/lib/src/material/shaders/ink_sparkle.frag:
-//   * "#version 320 es" + "precision highp float;"
-//   * float uniforms addressed with layout(location = N)
-//   * sampler uniforms continue the same location space, after the floats
-//     (impellerc rejects an overlapping sampler location)
-//   * the fragment output is layout(location = 0) out vec4.
+// Float uniforms use declaration order; image samplers have their own indices.
+// FlutterFragCoord provides consistent local coordinates on Skia and Impeller.
 //
 // Both axes are scaled by the same factor about the lens centre, so a backend
 // that hands out a vertically flipped gl_FragCoord can only mirror the lens
@@ -23,23 +18,21 @@
 // handedness and is verified by test/glass_refraction_test.dart on this engine
 // (Skia): gl_FragCoord.y grows downward with the origin at the paint's top-left.
 
-precision highp float;
+uniform vec2 u_lens_size; // lens rect size, logical px
+uniform vec2 u_lens_origin; // lens rect top-left in paint space
+uniform vec2 u_texture_size; // snapshot size, px
+uniform float u_zoom; // centre magnification, >= 1
+uniform float u_bend; // rim compression, 0 = flat glass
+uniform float u_dispersion; // chromatic split at the rim
+uniform float u_rim; // rim sheen gain
+uniform float u_flip; // +1 = y grows downward, -1 = upward
 
-layout(location = 0) uniform vec2 u_lens_size; // lens rect size, logical px
-layout(location = 1) uniform vec2 u_lens_origin; // lens rect top-left in paint space
-layout(location = 2) uniform vec2 u_texture_size; // snapshot size, px
-layout(location = 3) uniform float u_zoom; // centre magnification, >= 1
-layout(location = 4) uniform float u_bend; // rim compression, 0 = flat glass
-layout(location = 5) uniform float u_dispersion; // chromatic split at the rim
-layout(location = 6) uniform float u_rim; // rim sheen gain
-layout(location = 7) uniform float u_flip; // +1 = y grows downward, -1 = upward
+uniform sampler2D u_source;
 
-layout(location = 8) uniform sampler2D u_source;
-
-layout(location = 0) out vec4 fragColor;
+out vec4 fragColor;
 
 void main() {
-  vec2 local = gl_FragCoord.xy - u_lens_origin;
+  vec2 local = FlutterFragCoord().xy - u_lens_origin;
   if (u_flip < 0.0) {
     local.y = u_lens_size.y - local.y;
   }

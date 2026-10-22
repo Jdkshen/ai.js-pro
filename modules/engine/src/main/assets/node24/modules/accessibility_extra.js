@@ -611,6 +611,36 @@
   Node.prototype.indexInParent = function () { return indexInParentOf(this._raw); };
   Node.prototype.path = function () { return rawPath(this._raw).slice(); };
   Node.prototype.toString = function () { return 'UiObject(' + this.className() + ', text=' + this.text() + ')'; };
+  // A queried node retains its shared tree for parent/children navigation. Node's
+  // console must not expand that same tree again for every result in an array.
+  // Explicit raw()/tree() access remains available for full diagnostics.
+  var inspectNode = Symbol.for('nodejs.util.inspect.custom');
+  function nodePreview(raw) {
+    function preview(value) {
+      value = value == null ? '' : String(value);
+      if (value.length <= 200) { return value; }
+      var end = 200;
+      var last = value.charCodeAt(end - 1);
+      if (last >= 0xD800 && last <= 0xDBFF) { end--; }
+      return value.slice(0, end) + '…';
+    }
+    return {
+      className: rawString(raw, 'className'),
+      id: rawString(raw, 'id'),
+      text: preview(raw.text),
+      desc: preview(raw.desc),
+      bounds: raw.bounds,
+      path: rawPath(raw).slice(),
+      clickable: rawBoolean(raw, 'clickable'),
+      childCount: rawInt(raw, 'childCount', null)
+    };
+  }
+  Object.defineProperty(NodeView.prototype, inspectNode, {
+    value: function () { return 'NodeView ' + JSON.stringify(nodePreview(this._raw)); }
+  });
+  Object.defineProperty(Node.prototype, inspectNode, {
+    value: function () { return 'UiObject ' + JSON.stringify(nodePreview(this._raw)); }
+  });
   Node.prototype.parent = function () {
     var path = rawPath(this._raw);
     if (path.length === 0) { return null; }

@@ -9,6 +9,9 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Trace;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
 import android.util.Log;
@@ -35,6 +38,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * POC 桥（-PflutterPoc=true 才编译进 debug 变体）。
@@ -52,6 +57,12 @@ final class PocBridge {
     static final String CHANNEL = "autojs.local.bridge";
     private static final String PREFS_GLASS = "flutter-glass";
     private static final int MAX_ENTRIES = 5000;
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final ExecutorService CATALOG_READER = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "poc-catalog-reader");
+        thread.setDaemon(true);
+        return thread;
+    });
     /** 运行设置键：与重建线 RuntimePreferences 的契约一致（settings_page.dart 会校验）。 */
     private static final String[] RUNTIME_NUMERIC = {
             "consoleMaxLogCount", "logMaxFileSize", "logMaxBackups", "consoleInitialReadFileSize"
@@ -91,6 +102,27 @@ final class PocBridge {
                 args = new JSONObject();
             }
             final String resolvedMethod = method;
+            // Asset traversal and PackageManager/icon decoding can take hundreds
+            // of milliseconds. A Future in Dart does not move this handler off
+            // Android's main thread; only the completed JSON reply belongs there.
+            if ("localCatalog".equals(method) || "pluginIcon".equals(method)) {
+                final JSONObject catalogArgs = args;
+                CATALOG_READER.execute(() -> {
+                    String response;
+                    Trace.beginSection("AJS.catalog." + resolvedMethod);
+                    try {
+                        response = replyJson(execute(activity, resolvedMethod, catalogArgs), null);
+                    } catch (Throwable error) {
+                        Log.w(TAG, "bridge failure: " + resolvedMethod, error);
+                        response = replyJson(null, error);
+                    } finally {
+                        Trace.endSection();
+                    }
+                    final String json = response;
+                    MAIN.post(() -> replier.reply(json));
+                });
+                return;
+            }
             if (PocServices.isAsync(method)) {
                 PocServices.startAsync(activity, method, args, (data, error) -> {
                     if (error != null) {
@@ -546,6 +578,9 @@ final class PocBridge {
     private static Object setTheme(Activity activity, JSONObject args) {
         boolean dark = args.optBoolean("dark", false);
         AppThemeRepository.get(activity).setThemeMode(dark ? 2 : 1);
+        if (activity instanceof GlassFlutterActivity) {
+            ((GlassFlutterActivity) activity).updateWindowBackground(dark);
+        }
         return Boolean.TRUE;
     }
 

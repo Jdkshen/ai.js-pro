@@ -185,7 +185,8 @@ class _PermissionGuideDialogState extends State<_PermissionGuideDialog>
         padding: const EdgeInsets.only(top: 14),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Icon(icon,
-              size: 22, color: ready ? const Color(0xff008f91) : onSurface),
+              size: 22,
+              color: ready ? Theme.of(context).colorScheme.primary : onSurface),
           const SizedBox(width: 12),
           Expanded(
               child: Column(
@@ -201,10 +202,10 @@ class _PermissionGuideDialogState extends State<_PermissionGuideDialog>
               ])),
           const SizedBox(width: 8),
           if (ready)
-            const Padding(
-                padding: EdgeInsets.only(top: 2),
+            Padding(
+                padding: const EdgeInsets.only(top: 2),
                 child: Icon(Icons.check_circle,
-                    size: 20, color: Color(0xff008f91)))
+                    size: 20, color: Theme.of(context).colorScheme.primary))
           else
             TextButton(
                 onPressed: busyRow ? null : () => open(kind),
@@ -234,7 +235,8 @@ class _PermissionGuideDialogState extends State<_PermissionGuideDialog>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(children: [
-                    const Icon(Icons.shield_outlined, color: Color(0xff008f91)),
+                    Icon(Icons.shield_outlined,
+                        color: Theme.of(context).colorScheme.primary),
                     const SizedBox(width: 10),
                     Expanded(
                         child: Text('完善首次使用权限',

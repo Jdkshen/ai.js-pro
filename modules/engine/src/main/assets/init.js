@@ -224,6 +224,11 @@ runtime.init();
     Canvas = com.stardust.autojs.core.graphics.ScriptCanvas;
     Image = com.stardust.autojs.core.image.ImageWrapper;
 
+    require('common-api.js');
+    require('common-device.js');
+    require('common-color.js');
+    require('common-lang.js');
+
     //重定向require以便支持相对路径和npm模块
     Module = require("jvm-npm.js");
     require = Module.require;

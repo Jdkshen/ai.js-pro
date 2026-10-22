@@ -134,6 +134,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final ConcurrentLinkedQueue<JSONObject> mJavaResults = new ConcurrentLinkedQueue<>();
     /** 当前任务注册的 Android 传感器监听器：token -> registration（close 时统一注销）。 */
     private final Map<Integer, SensorRegistration> mSensorRegistrations = new HashMap<>();
+    private final Map<Integer, android.os.FileObserver> mFileObservers = new HashMap<>();
+    private int mNextFileObserver = 1;
     private int mNextSensorToken = 1;
     /** task-198：host.runtime.loadDex 加载的动态 dex classloader（插件类优先从这里解析）。 */
     private volatile ClassLoader mRuntimeClassLoader;
@@ -1951,6 +1953,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return;
         }
         mNoArgCalls.close();
+        synchronized (mFileObservers) {
+            for (android.os.FileObserver observer : mFileObservers.values()) observer.stopWatching();
+            mFileObservers.clear();
+        }
         for (Integer pid : mShellGroups) killShellGroup(pid);
         mShellGroups.clear();
         mJavaExecutor.shutdownNow();
@@ -2282,6 +2288,36 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 String raw = args.optString("path", "");
                 File file = resolveFile(raw);
                 switch (action) {
+                    case "observe": {
+                        if (!file.exists()) throw new java.io.FileNotFoundException(file.getPath());
+                        synchronized (mFileObservers) {
+                            if (mFileObservers.size() >= 128) throw new IllegalStateException("Too many file observers");
+                            final int token = mNextFileObserver++;
+                            android.os.FileObserver observer = new android.os.FileObserver(file.getPath(), android.os.FileObserver.ALL_EVENTS) {
+                                @Override public void onEvent(int event, String path) {
+                                    if (mClosed.get()) return;
+                                    for (String name : com.stardust.autojs.core.io.ScriptFileObserver.eventNames(event)) {
+                                        try {
+                                            enqueueEventValue("file_observer:" + token,
+                                                    new JSONObject().put("event", name).put("path", path == null ? JSONObject.NULL : path));
+                                        } catch (org.json.JSONException error) { Log.w(TAG, "file observer event", error); }
+                                    }
+                                }
+                            };
+                            mFileObservers.put(token, observer);
+                            observer.startWatching();
+                            return token;
+                        }
+                    }
+                    case "startWatching":
+                    case "stopWatching":
+                        synchronized (mFileObservers) {
+                            android.os.FileObserver observer = mFileObservers.get(args.optInt("token", -1));
+                            if (observer == null) throw new IllegalArgumentException("Unknown file observer");
+                            if ("startWatching".equals(action)) observer.startWatching();
+                            else observer.stopWatching();
+                            return true;
+                        }
                     case "exists": return file.exists();
                     case "isFile": return file.isFile();
                     case "isDir": return file.isDirectory();

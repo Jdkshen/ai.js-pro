@@ -334,10 +334,18 @@ module.exports = function (runtime, global) {
             if(ui.__widgets__.hasOwnProperty(viewName)){
                 let Widget = ui.__widgets__[viewName];
                 let widget = new Widget();
+                let rendered = widget.renderInternal();
+                if (rendered instanceof android.view.View) {
+                    // Pro widgets may return an existing native/JavaAdapter View.
+                    // beforeCreateView bypasses the normal afterCreateView callback.
+                    // Bind methods/delegates before the outer attributes are applied.
+                    context.put("widget", widget);
+                    return this.afterCreateView(context, rendered, node, viewName, parent, attrs);
+                }
                 let ctx = layoutInflater.newInflateContext();
                 ctx.put("root", widget);
                 ctx.put("widget", widget);
-                let view = ui.__inflate__(ctx, widget.renderInternal(), parent, false);
+                let view = ui.__inflate__(ctx, rendered, parent, false);
                 return view;
             };
             return null;

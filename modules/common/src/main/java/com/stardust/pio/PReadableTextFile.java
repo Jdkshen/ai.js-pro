@@ -51,10 +51,13 @@ public class PReadableTextFile implements Closeable, PFileInterface {
     }
 
     public String read() {
+        ensureBufferReader();
         try {
-            byte[] data = new byte[mFileInputStream.available()];
-            mFileInputStream.read(data);
-            return new String(data, mEncoding);
+            StringBuilder text = new StringBuilder();
+            char[] buffer = new char[4096];
+            int count;
+            while ((count = mBufferedReader.read(buffer)) != -1) text.append(buffer, 0, count);
+            return text.toString();
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -65,7 +68,7 @@ public class PReadableTextFile implements Closeable, PFileInterface {
         try {
             char[] chars = new char[size];
             int len = mBufferedReader.read(chars);
-            return new String(chars, 0, len);
+            return len <= 0 ? "" : new String(chars, 0, len);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -84,9 +87,8 @@ public class PReadableTextFile implements Closeable, PFileInterface {
         ensureBufferReader();
         List<String> lines = new ArrayList<>();
         try {
-            while (mBufferedReader.ready()) {
-                lines.add(mBufferedReader.readLine());
-            }
+            String line;
+            while ((line = mBufferedReader.readLine()) != null) lines.add(line);
             return lines.toArray(new String[lines.size()]);
         } catch (IOException e) {
             throw new UncheckedIOException(e);

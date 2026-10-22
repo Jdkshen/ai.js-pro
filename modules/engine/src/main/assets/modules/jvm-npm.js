@@ -66,6 +66,9 @@ module = (typeof module === 'undefined') ? {} : module;
   };
 
   function Require(id, parent) {
+    if (global.__aiModernModules && Object.prototype.hasOwnProperty.call(global.__aiModernModules, id)) {
+      return global.__aiModernModules[id];
+    }
     var normalizePath = normalizeName(id);
     if (builtInModules.indexOf(normalizePath) >= 0 && !files.exists(normalizePath)) {
       return NativeRequire.require(normalizePath);

@@ -7,6 +7,7 @@ import android.os.Looper;
 import android.util.Log;
 
 import com.jdkshen.aijspro.Pref;
+import com.jdkshen.aijspro.theme.AppThemeRepository;
 import com.jdkshen.aijspro.external.HostScripts;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>入口：SplashActivity 读 {@code R.bool.flutter_main_entry}（POC 调试源集覆盖为 true）
  * 后跳到本 Activity；Miuix 主界面保留为桌面第二个图标。
  *
- * <p>加载 3.3.4 引擎（libflutter.so）+ 预编译 AOT（libapp.so）+ flutter_assets，
+ * <p>加载 runtime.json 锁定的引擎（libflutter.so）+ 配套 AOT（libapp.so）+ flutter_assets，
  * 注册 {@code autojs.local.bridge} 这一条 JSON 通道。
  */
 public class GlassFlutterActivity extends FlutterActivity {
@@ -52,6 +53,7 @@ public class GlassFlutterActivity extends FlutterActivity {
 
     @Override protected void onResume() {
         super.onResume();
+        updateWindowBackground(AppThemeRepository.get(this).isDark());
         sVisible = new java.lang.ref.WeakReference<>(this);
     }
 
@@ -72,14 +74,22 @@ public class GlassFlutterActivity extends FlutterActivity {
         }
         super.onCreate(savedInstanceState);
         try {
-            getWindow().setBackgroundDrawable(new ColorDrawable(Color.rgb(0x0B, 0x0D, 0x18)));
-            getWindow().getDecorView().setBackgroundColor(Color.rgb(0x0B, 0x0D, 0x18));
+            updateWindowBackground(AppThemeRepository.get(this).isDark());
         } catch (Throwable ignored) {
         }
         // task-86：启动时清理上次进程/脚本留下的孤儿浮窗（十字坐标线等）。
         if (!(this instanceof UnifiedLogFlutterActivity)) {
             new Thread(() -> FloatyOrphanCleanup.cleanup("activity-create"), "floaty-orphan-start").start();
         }
+    }
+
+    // Flutter can leave the system-bar area outside its surface. Match that
+    // window area to the active theme as well as updating Dart's overlay style.
+    void updateWindowBackground(boolean dark) {
+        int color = dark ? Color.rgb(0x1c, 0x20, 0x22) : Color.rgb(0xf7, 0xf7, 0xf8);
+        getWindow().setBackgroundDrawable(new ColorDrawable(color));
+        getWindow().getDecorView().setBackgroundColor(color);
+        getWindow().setStatusBarColor(color);
     }
 
     /** task-92：pref 开启过 + overlay 权限在 → 恢复悬浮控制条；从未开启则不弹。 */

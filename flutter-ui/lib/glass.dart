@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'dart:ui';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -76,7 +75,7 @@ class GlassBackground extends StatelessWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return AnnotatedRegion<SystemUiOverlayStyle>(
         value: SystemUiOverlayStyle(
-          statusBarColor: Colors.transparent,
+          statusBarColor: colourFor(dark),
           statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
           systemNavigationBarColor: colourFor(dark),
           systemNavigationBarIconBrightness:
@@ -178,12 +177,7 @@ class GlassRefraction {
   }
 
   static Future<ui.FragmentProgram?> _loadShaderAsset() async {
-    final ByteData data = await rootBundle.load(shaderAsset);
-    // data 可能是大缓冲区的视图，必须按 offset/length 截取后再交给编译器，
-    // 否则会把多余字节当成 SPIR-V 指令喂进去。
-    final Uint8List bytes =
-        Uint8List.fromList(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
-    return ui.FragmentProgram.compile(spirv: bytes.buffer);
+    return ui.FragmentProgram.fromAsset(shaderAsset);
   }
 
   /// 取一帧导航条自身的像素作为折射素材；任何失败都返回 null（回落）。
@@ -195,7 +189,13 @@ class GlassRefraction {
         failure = '没有可截图的边界';
         return null;
       }
-      return await boundary.toImage(pixelRatio: snapshotPixelRatio);
+      if (!boundary.attached || !boundary.hasSize || boundary.layer == null) {
+        failure = '导航材质尚未绘制';
+        return null;
+      }
+      final image = await boundary.toImage(pixelRatio: snapshotPixelRatio);
+      failure = null;
+      return image;
     } catch (error) {
       // 静默回落会让设备上的失败无从判断；原因记在 failure 里并由调用方打日志。
       failure = error.toString();
@@ -216,7 +216,7 @@ class GlassRefraction {
 }
 
 /// 折射镜片的着色器装配。uniform 顺序与
-/// assets/shaders/glass_refraction.frag 的 layout(location) 一一对应；
+/// assets/shaders/glass_refraction.frag 的声明顺序一一对应；
 /// 改动任何一边都必须同时改另一边，test/glass_refraction_test.dart 会盯着。
 class GlassRefractionLens {
   GlassRefractionLens._();
@@ -234,16 +234,9 @@ class GlassRefractionLens {
   /// 边缘色散：红蓝通道按采样半径错开的比例。
   static const double dispersion = .035;
 
-  /// flutter_tester（Skia）像素采样验证：gl_FragCoord.y 向下增长。
+  /// FlutterFragCoord 在 Skia / Impeller 上统一使用局部绘制坐标。
   /// 取反只会让镜片素材垂直镜像，不会位移，见着色器里的说明。
   static const double flipY = 1.0;
-
-  static final Float64List _identity = Float64List.fromList(<double>[
-    1, 0, 0, 0, //
-    0, 1, 0, 0, //
-    0, 0, 1, 0, //
-    0, 0, 0, 1, //
-  ]);
 
   static double zoomFor(double stretch) => zoomBase + zoomStretch * stretch;
 
@@ -277,10 +270,10 @@ class GlassRefractionLens {
         rect.bottom > paintSize.height + .5) {
       return false;
     }
-    final Shader shader;
+    ui.FragmentShader? shader;
     try {
-      shader = program.shader(
-          floatUniforms: Float32List.fromList(<double>[
+      shader = program.fragmentShader();
+      final uniforms = <double>[
             size.width,
             size.height,
             rect.left,
@@ -292,18 +285,20 @@ class GlassRefractionLens {
             dispersion,
             rimFor(dark),
             flipY,
-          ]),
-          samplerUniforms: <ui.ImageShader>[
-            ui.ImageShader(source, TileMode.clamp, TileMode.clamp, _identity,
-                filterQuality: FilterQuality.low)
-          ]);
+          ];
+      for (var i = 0; i < uniforms.length; i++) {
+        shader.setFloat(i, uniforms[i]);
+      }
+      shader.setImageSampler(0, source);
     } catch (_) {
+      shader?.dispose();
       return false;
     }
     canvas.save();
     canvas.clipRRect(lens);
     canvas.drawRect(rect, Paint()..shader = shader);
     canvas.restore();
+    shader.dispose();
     return true;
   }
 }

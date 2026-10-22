@@ -15,6 +15,8 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
@@ -146,6 +148,17 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private UnifiedConsoleLogBridge.Listener mUnifiedLogListener;
     private boolean mUnifiedLogActive;
     private static final int UNIFIED_LOG_MAX_LINES = 2000;
+    /** 防止单条超长日志/密集长行把整个日志面板撑爆：只保留末尾 256KiB。 */
+    private static final int UNIFIED_LOG_MAX_CHARS = 256 * 1024;
+    private static final long UNIFIED_LOG_FLUSH_DELAY_MS = 100L;
+    private final Handler mUnifiedLogHandler = new Handler(Looper.getMainLooper());
+    private final List<UnifiedConsoleLogBridge.Line> mPendingUnifiedLogLines = new ArrayList<>();
+    private boolean mUnifiedLogFlushScheduled;
+    /** 上次收起面板时是否跟随底部；打开面板时沿用，避免用户查看历史后被强行拉到底。 */
+    private boolean mUnifiedLogFollowOnOpen = true;
+    /** 当前 mUnifiedLogBuffer 的显示行数（含行内换行；用于裁剪时避免逐行扫描）。 */
+    private int mUnifiedLogLineCount;
+    private final Runnable mUnifiedLogFlush = this::flushUnifiedLog;
     private TextView mLogLevelView;
     private EditorTab mActiveTab;
     private File mWorkspaceRoot;
@@ -593,8 +606,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void clearLogPanel() {
         if (mUnifiedLogActive) {
             UnifiedConsoleLogBridge.clear();
-            if (mUnifiedLogBuffer != null) mUnifiedLogBuffer.clear();
-            if (mUnifiedLogText != null) mUnifiedLogText.setText("");
+            // onClear 回调通常已经清过；这里兜底统一源未回调的情况。
+            clearUnifiedLogState();
         } else if (mConsole != null) {
             mConsole.clear();
         }
@@ -604,11 +617,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         if (!mUnifiedLogActive || mUnifiedLogListener != null) return;
         mUnifiedLogListener = new UnifiedConsoleLogBridge.Listener() {
             @Override public void onLine(UnifiedConsoleLogBridge.Line line) {
-                if (line.level >= mLogLevel) appendUnifiedLogLine(line, true);
+                if (line.level >= mLogLevel) queueUnifiedLogLine(line);
             }
             @Override public void onClear(long generation) {
-                if (mUnifiedLogBuffer != null) mUnifiedLogBuffer.clear();
-                if (mUnifiedLogText != null) mUnifiedLogText.setText("");
+                clearUnifiedLogState();
             }
         };
         UnifiedConsoleLogBridge.addListener(mUnifiedLogListener);
@@ -622,30 +634,110 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         }
     }
 
-    /** 先渲染最近 2000 行历史（按当前等级过滤），之后靠 listener 实时追加。 */
-    private void renderUnifiedLogSnapshot() {
-        if (!mUnifiedLogActive || mUnifiedLogBuffer == null || mUnifiedLogText == null) return;
-        mUnifiedLogBuffer.clear();
-        for (UnifiedConsoleLogBridge.Line line : UnifiedConsoleLogBridge.snapshot(UNIFIED_LOG_MAX_LINES)) {
-            if (line.level >= mLogLevel) appendUnifiedLogLine(line, false);
-        }
-        mUnifiedLogText.setText(mUnifiedLogBuffer);
-        scrollUnifiedLogToBottom();
+    /** 是否正在显示日志面板；buildLogPanel 内 attach 时 mLogPanel 尚未赋值，按隐藏处理。 */
+    private boolean isUnifiedLogPanelVisible() {
+        return mLogPanel != null && mLogPanel.getVisibility() == View.VISIBLE;
     }
 
-    /** 追加一行：统一格式 HH:mm:ss.SSS [I] name: line，按等级上色，自动跟随底部。 */
-    private void appendUnifiedLogLine(UnifiedConsoleLogBridge.Line line, boolean mayScroll) {
-        if (mUnifiedLogBuffer == null) return;
-        boolean follow = mayScroll && isUnifiedLogFollowingBottom();
+    /**
+     * 先渲染最近 2000 行历史（按当前等级过滤），之后靠 listener 合并追加。
+     * 快照只在本地 buffer 里构造一次；面板隐藏时只留缓冲，打开面板时再一次性发布。
+     */
+    private void renderUnifiedLogSnapshot() {
+        if (!mUnifiedLogActive || mUnifiedLogBuffer == null || mUnifiedLogText == null) return;
+        cancelUnifiedLogFlush();
+        mUnifiedLogBuffer.clear();
+        mUnifiedLogLineCount = 0;
+        for (UnifiedConsoleLogBridge.Line line : UnifiedConsoleLogBridge.snapshot(UNIFIED_LOG_MAX_LINES)) {
+            if (line.level >= mLogLevel) appendUnifiedLogLineToBuffer(line);
+        }
+        trimUnifiedLogBuffer();
+        if (isUnifiedLogPanelVisible()) {
+            mUnifiedLogText.setText(mUnifiedLogBuffer);
+            scrollUnifiedLogToBottom();
+        }
+    }
+
+    /**
+     * 实时行先入队，约 100ms 合并一次 setText/滑动，避免每行都重排整个 TextView。
+     * 统一源保证 onLine 在主线程回调，快照与实时合并都在主线程，无需额外同步。
+     */
+    private void queueUnifiedLogLine(UnifiedConsoleLogBridge.Line line) {
+        if (line == null || mUnifiedLogBuffer == null) return;
+        mPendingUnifiedLogLines.add(line);
+        if (mUnifiedLogFlushScheduled) return;
+        mUnifiedLogFlushScheduled = true;
+        mUnifiedLogHandler.postDelayed(mUnifiedLogFlush, UNIFIED_LOG_FLUSH_DELAY_MS);
+    }
+
+    private void flushUnifiedLog() {
+        mUnifiedLogFlushScheduled = false;
+        if (!mUnifiedLogActive || mUnifiedLogBuffer == null) {
+            mPendingUnifiedLogLines.clear();
+            return;
+        }
+        if (mPendingUnifiedLogLines.isEmpty()) return;
+        boolean visible = isUnifiedLogPanelVisible();
+        boolean follow = visible && isUnifiedLogFollowingBottom();
+        for (UnifiedConsoleLogBridge.Line line : mPendingUnifiedLogLines) {
+            appendUnifiedLogLineToBuffer(line);
+        }
+        mPendingUnifiedLogLines.clear();
+        trimUnifiedLogBuffer();
+        if (visible && mUnifiedLogText != null) {
+            mUnifiedLogText.setText(mUnifiedLogBuffer);
+            if (follow) scrollUnifiedLogToBottom();
+        }
+    }
+
+    /** 面板刚打开：立即合并待刷新行并发布一次；原先在底部时才贴底。 */
+    private void flushUnifiedLogOnShow(boolean follow) {
+        if (!mUnifiedLogActive || mUnifiedLogBuffer == null || mUnifiedLogText == null) return;
+        mUnifiedLogHandler.removeCallbacks(mUnifiedLogFlush);
+        mUnifiedLogFlushScheduled = false;
+        if (!mPendingUnifiedLogLines.isEmpty()) {
+            for (UnifiedConsoleLogBridge.Line line : mPendingUnifiedLogLines) {
+                appendUnifiedLogLineToBuffer(line);
+            }
+            mPendingUnifiedLogLines.clear();
+            trimUnifiedLogBuffer();
+        }
+        mUnifiedLogText.setText(mUnifiedLogBuffer);
+        if (follow) scrollUnifiedLogToBottom();
+    }
+
+    private void cancelUnifiedLogFlush() {
+        mUnifiedLogHandler.removeCallbacks(mUnifiedLogFlush);
+        mUnifiedLogFlushScheduled = false;
+        mPendingUnifiedLogLines.clear();
+    }
+
+    /** 清空本地显示/待刷新行；面板隐藏时只清缓冲，打开时会发布空内容。 */
+    private void clearUnifiedLogState() {
+        cancelUnifiedLogFlush();
+        if (mUnifiedLogBuffer != null) mUnifiedLogBuffer.clear();
+        mUnifiedLogLineCount = 0;
+        if (isUnifiedLogPanelVisible() && mUnifiedLogText != null) {
+            mUnifiedLogText.setText("");
+        }
+    }
+
+    /** 追加一行到缓冲（不发布、不滚动）：调用方批量结束后统一 setText。 */
+    private void appendUnifiedLogLineToBuffer(UnifiedConsoleLogBridge.Line line) {
+        if (mUnifiedLogBuffer == null || line == null) return;
         if (mUnifiedLogBuffer.length() > 0) mUnifiedLogBuffer.append('\n');
+        mUnifiedLogLineCount++;
         int start = mUnifiedLogBuffer.length();
         String text = line.formatted();
         mUnifiedLogBuffer.append(text);
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') mUnifiedLogLineCount++;
+        }
         mUnifiedLogBuffer.setSpan(new ForegroundColorSpan(logLevelColor(line.level)),
                 start, mUnifiedLogBuffer.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        trimUnifiedLogBuffer();
-        if (mUnifiedLogText != null) mUnifiedLogText.setText(mUnifiedLogBuffer);
-        if (follow) scrollUnifiedLogToBottom();
+        // 快照可能一次塞入很多行：到达高水位就先裁一次，避免临时占用过大；
+        // 实时批次在 flush 末尾统一裁剪。
+        if (mUnifiedLogBuffer.length() > UNIFIED_LOG_MAX_CHARS * 2) trimUnifiedLogBuffer();
     }
 
     private boolean isUnifiedLogFollowingBottom() {
@@ -659,22 +751,52 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private void scrollUnifiedLogToBottom() {
         if (mUnifiedLogScroll == null) return;
         mUnifiedLogScroll.post(() -> {
-            if (mUnifiedLogScroll != null) mUnifiedLogScroll.fullScroll(View.FOCUS_DOWN);
+            if (mUnifiedLogScroll != null && isUnifiedLogPanelVisible()) {
+                mUnifiedLogScroll.fullScroll(View.FOCUS_DOWN);
+            }
         });
     }
 
+    /**
+     * 裁剪到最近 2000 行 / 256KiB：从头部单次前进扫描找切点（每个字符只访问一次），
+     * 不再每追加一行就扫描整个 buffer。
+     */
     private void trimUnifiedLogBuffer() {
         if (mUnifiedLogBuffer == null) return;
-        int lines = 0;
-        for (int i = 0; i < mUnifiedLogBuffer.length(); i++) {
-            if (mUnifiedLogBuffer.charAt(i) == '\n') lines++;
+        int length = mUnifiedLogBuffer.length();
+        if (length == 0) {
+            mUnifiedLogLineCount = 0;
+            return;
         }
-        while (lines > UNIFIED_LOG_MAX_LINES) {
-            int cut = mUnifiedLogBuffer.toString().indexOf('\n');
-            if (cut < 0) break;
-            mUnifiedLogBuffer.delete(0, cut + 1);
-            lines--;
+        if (mUnifiedLogLineCount <= UNIFIED_LOG_MAX_LINES && length <= UNIFIED_LOG_MAX_CHARS) return;
+        int cut = 0;
+        int removedLines = 0;
+        while (cut < length
+                && (mUnifiedLogLineCount - removedLines > UNIFIED_LOG_MAX_LINES
+                    || length - cut > UNIFIED_LOG_MAX_CHARS)) {
+            int newline = -1;
+            for (int i = cut; i < length; i++) {
+                if (mUnifiedLogBuffer.charAt(i) == '\n') {
+                    newline = i;
+                    break;
+                }
+            }
+            if (newline < 0) break;
+            cut = newline + 1;
+            removedLines++;
         }
+        // 只有一条超长行（其内部没有换行）时按字符硬截，至少保住上限内的末尾内容。
+        int hardCut = length - UNIFIED_LOG_MAX_CHARS;
+        if (hardCut > cut) {
+            for (int i = cut; i < hardCut; i++) {
+                if (mUnifiedLogBuffer.charAt(i) == '\n') removedLines++;
+            }
+            cut = hardCut;
+        }
+        if (cut <= 0) return;
+        mUnifiedLogBuffer.delete(0, cut);
+        mUnifiedLogLineCount = mUnifiedLogBuffer.length() == 0 ? 0
+                : Math.max(1, mUnifiedLogLineCount - removedLines);
     }
 
     /** 等级色（V/D/I/W/E/A）：与 Flutter 运行日志页/ConsoleView 的默认观感一致。 */
@@ -2058,6 +2180,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
         mShortcutBar.setVisibility(View.GONE);
         setToolSelected(mLogTool, true);
         mLogPanel.setVisibility(View.VISIBLE);
+        // 隐藏期间只累积缓冲；打开时把待刷新行合并进来并一次性排版，原先在底部才贴底。
+        if (mUnifiedLogActive) flushUnifiedLogOnShow(mUnifiedLogFollowOnOpen);
         // While the log console is open, block all interaction with the editor above
         // (like Auto.js Pro): a translucent shield consumes touches over the editor area.
         if (mEditorShield.getParent() == null && mEditorContainer != null) {
@@ -2069,6 +2193,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
 
     private void hideLogPanel() {
         mLogExpanded = false;
+        if (mUnifiedLogActive) mUnifiedLogFollowOnOpen = isUnifiedLogFollowingBottom();
         if (mEditorShield.getParent() instanceof ViewGroup) {
             ((ViewGroup) mEditorShield.getParent()).removeView(mEditorShield);
         }
@@ -2556,6 +2681,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     @Override
     protected void onDestroy() {
         detachUnifiedLog();
+        // Activity 销毁后不再合并日志/排版，避免 Runnable 持有已销毁界面。
+        cancelUnifiedLogFlush();
         if (mExecutionFinishedReceiverRegistered) {
             unregisterReceiver(mExecutionFinishedReceiver);
             mExecutionFinishedReceiverRegistered = false;

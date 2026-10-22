@@ -293,7 +293,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     public String modernModulesScript() {
         StringBuilder scripts = new StringBuilder();
-        String[] assets = { "modules/qjs-console-compat.js", "modules/qjs-dialogs-compat.js", "modules/pro-modern-compat.js", "modules/pro-modern-platform.js", "modules/qjs-touch-capture.js", "modules/qjs-canvas.js", "modules/qjs-plugins.js", "modules/sift-api.js", "modules/ui-accessibility.js" };
+        String[] assets = { "modules/qjs-console-compat.js", "modules/qjs-dialogs-compat.js", "modules/pro-modern-compat.js", "modules/pro-modern-platform.js", "modules/qjs-touch-capture.js", "modules/qjs-canvas.js", "modules/qjs-plugins.js", "modules/sift-api.js", "modules/ui-accessibility.js", "modules/common-api.js", "modules/common-device.js", "modules/common-color.js", "modules/common-lang.js" };
         for (String path : assets) {
             try (InputStream input = mRuntime.uiHandler.getContext().getAssets().open(path);
                  ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {

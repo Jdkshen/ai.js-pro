@@ -537,10 +537,11 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
         color: Theme.of(context).colorScheme.onSurface.withOpacity(.6));
     return GlassSurface(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: const [
-        Icon(Icons.extension_outlined, color: Color(0xff008f91)),
-        SizedBox(width: 10),
-        Expanded(
+      Row(children: [
+        Icon(Icons.extension_outlined,
+            color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 10),
+        const Expanded(
             child: Text('接入 AI 客户端',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500))),
       ]),
@@ -648,7 +649,8 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                 Row(children: [
-                  const Icon(Icons.hub_outlined, color: Color(0xff008f91)),
+                  Icon(Icons.hub_outlined,
+                      color: Theme.of(context).colorScheme.primary),
                   const SizedBox(width: 10),
                   const Expanded(
                       child: Text('MCP 服务',
@@ -671,7 +673,6 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                         label: 'MCP 服务开关',
                         child: Switch(
                             key: const ValueKey('device-mcp-toggle'),
-                            activeColor: const Color(0xff008f91),
                             value: switchOn,
                             onChanged: busy || manualRefreshing || error != null
                                 ? null
@@ -781,7 +782,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                                   ComputerClientState.connected
                           ? Icons.desktop_windows
                           : Icons.desktop_windows_outlined,
-                      color: const Color(0xff008f91)),
+                      color: Theme.of(context).colorScheme.primary),
                   title: const Text('电脑连接', style: TextStyle(fontSize: 16)),
                   subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,

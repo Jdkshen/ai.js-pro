@@ -17,6 +17,7 @@ public class Timer {
     private static final String LOG_TAG = "Timer";
 
     private SparseArray<Runnable> mHandlerCallbacks = new SparseArray<>();
+    private final java.util.Set<Runnable> mDirectCallbacks = new java.util.HashSet<>();
     private int mCallbackMaxId = 0;
     private final int mTimerId;
     private ScriptRuntime mRuntime;
@@ -51,7 +52,7 @@ public class Timer {
             synchronized (Timer.this) { mHandlerCallbacks.remove(id); }
         };
         mHandlerCallbacks.put(id, r);
-        postDelayed(r, delay);
+        schedule(r, delay);
         return TimerId.encode(mTimerId, id);
     }
 
@@ -82,16 +83,27 @@ public class Timer {
                 }
                 callFunction(listener, null, args);
                 synchronized (Timer.this) {
-                    if (mHandlerCallbacks.get(id) != null) postDelayed(this, interval);
+                    if (mHandlerCallbacks.get(id) != null) schedule(this, interval);
                 }
             }
         };
         mHandlerCallbacks.put(id, r);
-        postDelayed(r, interval);
+        schedule(r, interval);
         return TimerId.encode(mTimerId, id);
     }
 
-    public void postDelayed(Runnable r, long interval) {
+    public synchronized void postDelayed(Runnable r, long interval) {
+        Runnable tracked = new Runnable() {
+            @Override public void run() {
+                try { r.run(); }
+                finally { synchronized (Timer.this) { mDirectCallbacks.remove(this); } }
+            }
+        };
+        mDirectCallbacks.add(tracked);
+        schedule(tracked, interval);
+    }
+
+    private void schedule(Runnable r, long interval) {
         long uptime = SystemClock.uptimeMillis() + interval;
         mHandler.postAtTime(r, uptime);
         mMaxCallbackUptimeMillis = Math.max(mMaxCallbackUptimeMillis, uptime);
@@ -116,7 +128,7 @@ public class Timer {
             synchronized (Timer.this) { mHandlerCallbacks.remove(id); }
         };
         mHandlerCallbacks.put(id, r);
-        postDelayed(r, 0);
+        schedule(r, 0);
         return TimerId.encode(mTimerId, id);
     }
 
@@ -134,13 +146,15 @@ public class Timer {
         return false;
     }
 
-    public boolean hasPendingCallbacks() {
-        return mMaxCallbackUptimeMillis > SystemClock.uptimeMillis();
+    public synchronized boolean hasPendingCallbacks() {
+        // A canceled far-future callback must not keep an idle looper alive.
+        return mHandlerCallbacks.size() > 0 || !mDirectCallbacks.isEmpty();
     }
 
     public synchronized void removeAllCallbacks() {
         mHandler.removeCallbacksAndMessages(null);
         mHandlerCallbacks.clear();
+        mDirectCallbacks.clear();
     }
 
 }

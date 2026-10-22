@@ -1444,7 +1444,9 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
     final choosing = selecting;
     final chosen = selected.contains(full);
     return Material(
-        color: choosing ? const Color(0x1A008F91) : Colors.transparent,
+        color: choosing
+            ? Theme.of(context).colorScheme.primary.withValues(alpha: .10)
+            : Colors.transparent,
         child: Column(children: [
           InkWell(
               onTap: () => selecting ? toggleSelection(file) : open(file),
@@ -1549,7 +1551,9 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                                       ? Icons.check_circle
                                       : Icons.radio_button_unchecked,
                                   size: 22,
-                                  color: const Color(0xff008f91)))
+                                  color: choosing
+                                      ? Theme.of(context).colorScheme.primary
+                                      : Theme.of(context).colorScheme.outline))
                         else if (pending)
                           pendingSampleAction(file)
                         else ...[
@@ -1688,7 +1692,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                         size: 21,
                         color: options.allCategories && !options.showHidden
                             ? null
-                            : const Color(0xff008f91)),
+                            : Theme.of(context).colorScheme.primary),
                     onPressed: filterDialog),
                 ActionIcon(
                     tooltip: loading ? '停止等待' : '刷新文件',
@@ -1818,8 +1822,10 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                     child: FloatingActionButton(
                         heroTag: 'create-script',
                         tooltip: createExpanded ? '收起新建菜单' : '新建菜单',
-                        backgroundColor: const Color(0xff008f91),
-                        foregroundColor: Colors.white,
+                        backgroundColor: AppTheme.actionBackground(context,
+                            enabled: !busy),
+                        foregroundColor: AppTheme.actionForeground(context,
+                            enabled: !busy),
                         onPressed: busy
                             ? null
                             : () => setState(

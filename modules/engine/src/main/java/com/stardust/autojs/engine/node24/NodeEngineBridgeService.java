@@ -15,6 +15,7 @@ import com.stardust.autojs.execution.ExecutionConfig;
 import com.stardust.autojs.execution.ScriptExecution;
 import com.stardust.autojs.execution.SimpleScriptExecutionListener;
 import com.stardust.autojs.script.JavaScriptFileSource;
+import com.stardust.autojs.script.ScriptSource;
 import com.stardust.autojs.script.StringScriptSource;
 
 import org.json.JSONArray;
@@ -237,42 +238,68 @@ public class NodeEngineBridgeService extends Service {
         return value;
     }
 
+    /**
+     * execScript 的 source 与 execScriptFile 的 path 共用一个执行入口：
+     * - source 模式使用 {@link StringScriptSource}，不落临时文件；
+     * - path 模式保持 {@link JavaScriptFileSource}，由脚本自身的引擎指令决定路由；
+     * - delay/interval/loopTimes/path/workingDirectory/arguments 全部写入真实
+     *   {@link ExecutionConfig}，由 ScriptEngineService 的现有执行循环生效。
+     */
     private JSONObject exec(ScriptEngineService service, JSONObject args, int ownerId) throws Exception {
         String token = args.optString("token", "");
         if (token.isEmpty()) {
-            throw new IllegalArgumentException("execScriptFile 缺少 token");
+            throw new IllegalArgumentException("子执行缺少 token");
         }
-        String path = args.optString("path", "");
-        if (path.isEmpty()) {
-            throw new IllegalArgumentException("execScriptFile 路径不能为空");
-        }
-        File file = new File(path);
-        if (!file.isAbsolute()) {
-            throw new IllegalArgumentException("execScriptFile 必须是绝对路径：" + path);
-        }
-        if (!file.isFile()) {
-            throw new IllegalArgumentException("脚本不存在：" + path);
-        }
-        ExecutionConfig config = new ExecutionConfig();
-        String workingDirectory = args.optString("workingDirectory", "");
-        if (workingDirectory.isEmpty()) {
-            workingDirectory = file.getParent();
-        }
-        config.setWorkingDirectory(workingDirectory == null ? "" : workingDirectory);
-        config.setPath(new String[]{workingDirectory == null ? "" : workingDirectory});
-        JSONObject arguments = args.optJSONObject("arguments");
-        if (arguments != null) {
-            java.util.Iterator<String> keys = arguments.keys();
-            while (keys.hasNext()) {
-                String key = keys.next();
-                config.setArgument(key, javaValue(arguments.opt(key)));
+        boolean sourceMode = args.has("source") && !args.isNull("source");
+        String script = sourceMode ? args.optString("source", "") : "";
+        String name = args.optString("name", "");
+        File file = null;
+        if (!sourceMode) {
+            String path = args.optString("path", "");
+            if (path.isEmpty()) {
+                throw new IllegalArgumentException("execScriptFile 路径不能为空");
+            }
+            file = new File(path);
+            if (!file.isAbsolute()) {
+                throw new IllegalArgumentException("execScriptFile 必须是绝对路径：" + path);
+            }
+            if (!file.isFile()) {
+                throw new IllegalArgumentException("脚本不存在：" + path);
             }
         }
-        JavaScriptFileSource source = new JavaScriptFileSource(file);
+
+        String workingDirectory = args.optString("workingDirectory", "");
+        String[] configPath = readConfigPath(args);
+        if (workingDirectory.isEmpty() && configPath.length > 0) {
+            workingDirectory = configPath[0];
+        }
+        if (!sourceMode && workingDirectory.isEmpty() && file.getParent() != null) {
+            workingDirectory = file.getParent();
+        }
+        ExecutionConfig config = new ExecutionConfig();
+        config.setWorkingDirectory(workingDirectory);
+        if (configPath.length > 0) {
+            config.setPath(configPath);
+        } else if (!workingDirectory.isEmpty()) {
+            // 与旧 execScriptFile 行为一致：未显式给 path 时以 workingDirectory 作为模块搜索路径。
+            config.setPath(new String[]{workingDirectory});
+        } else {
+            config.setPath(new String[0]);
+        }
+        config.setDelay(args.optLong("delay", 0));
+        config.setInterval(args.optLong("interval", 0));
+        config.setLoopTimes(args.optInt("loopTimes", 1));
+        JSONObject arguments = args.optJSONObject("arguments");
+        applyArguments(config, arguments);
+
+        ScriptSource source = sourceMode
+                ? new StringScriptSource(name.isEmpty() ? "Tmp" : name, script)
+                : new JavaScriptFileSource(file);
         // 先登记 token 再 execute：子执行线程可能在 execute() 返回前就触发 onStart，
         // 否则会丢掉 engineId，Node 侧 execution.engine() 将永远等不到。
         ExecutionRecord record = new ExecutionRecord(null, ownerId);
-        record.source = file.getAbsolutePath();
+        record.source = sourceMode
+                ? (name.isEmpty() ? "Tmp" : name) : file.getAbsolutePath();
         record.arguments = arguments;
         EXECUTIONS.put(token, record);
         ScriptExecution execution;
@@ -318,6 +345,50 @@ public class NodeEngineBridgeService extends Service {
         }
         record.execution = execution;
         return new JSONObject().put("token", token).put("executionId", execution.getId());
+    }
+
+    /**
+     * ExecutionConfig.path 接受字符串或字符串数组；wire 字段叫 configPath，
+     * 以便和 execScriptFile 自己的脚本文件字段 path 区分。
+     */
+    private static String[] readConfigPath(JSONObject args) throws Exception {
+        Object raw = args.opt("configPath");
+        if (raw == null || raw == JSONObject.NULL) {
+            return new String[0];
+        }
+        List<String> values = new ArrayList<>();
+        if (raw instanceof JSONArray) {
+            JSONArray array = (JSONArray) raw;
+            for (int i = 0; i < array.length(); i++) {
+                Object item = array.opt(i);
+                if (item == null || item == JSONObject.NULL) {
+                    continue;
+                }
+                String value = String.valueOf(item);
+                if (!value.isEmpty()) {
+                    values.add(value);
+                }
+            }
+        } else if (!(raw instanceof JSONObject)) {
+            String value = String.valueOf(raw);
+            if (!value.isEmpty()) {
+                values.add(value);
+            }
+        }
+        return values.toArray(new String[0]);
+    }
+
+    private static void applyArguments(ExecutionConfig config, JSONObject arguments)
+            throws Exception {
+        if (arguments == null) {
+            return;
+        }
+        java.util.Iterator<String> keys = arguments.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            Object value = javaValue(arguments.opt(key));
+            config.setArgument(key, value);
+        }
     }
 
     private JSONObject executionState(String token) throws Exception {

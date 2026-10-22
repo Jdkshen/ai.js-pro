@@ -1344,8 +1344,7 @@ class _LogPageState extends State<LogPage>
                                   fontSize: 12, color: palette.errorText))),
                       TextButton(
                           onPressed: _refresh,
-                          child: Text('重试',
-                              style: TextStyle(color: palette.cursorColor))),
+                          child:  const Text('重试')),
                     ])),
               if (truncated)
                 Padding(
@@ -1360,8 +1359,7 @@ class _LogPageState extends State<LogPage>
                                   fontSize: 12, color: palette.secondaryText))),
                       TextButton(
                           onPressed: loadingEarlier ? null : loadEarlier,
-                          child: Text(loadingEarlier ? '读取中…' : '加载更早',
-                              style: TextStyle(color: palette.cursorColor))),
+                          child: Text(loadingEarlier ? '读取中…' : '加载更早')),
                     ])),
               // 窄屏 360dp 下 AppBar 放不下第 6 个 action（5 项 = task-25 真机验证可放下）：
               // 实时/历史切换挪到内容区上方，普通页与任务页都常显；回退/空态提示合并到同一行。
@@ -1401,8 +1399,6 @@ class _LogPageState extends State<LogPage>
                     key: const ValueKey('log-follow-latest'),
                     heroTag: 'log-follow-latest',
                     tooltip: unseenLogs ? '有新日志，回到最新' : '回到最新日志',
-                    backgroundColor: palette.refreshBackground,
-                    foregroundColor: palette.refreshIndicator,
                     elevation: 2,
                     onPressed: _jumpToLatest,
                     icon: const Icon(Icons.arrow_downward, size: 18),

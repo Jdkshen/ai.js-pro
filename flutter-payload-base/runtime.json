@@ -1,0 +1,18 @@
+{
+  "frameworkVersion": "3.47.7",
+  "frameworkRevision": "abaf9c523780a608bd46686fd5e53740a07077f8",
+  "engineRevision": "deb287481e3ce9468f3434937ced4240a70539ca",
+  "dartSdkVersion": "3.13.5",
+  "channel": "stable",
+  "source": "Flutter SDK android-arm64-release/flutter.jar (matched engine and embedding)",
+  "artifacts": {
+    "jniLibs/arm64-v8a/libflutter.so": {
+      "bytes": 11747864,
+      "sha256": "34f4113ae93b2c7069030f0bcfede18e7c83ed548b71a75c9ebb749403d3a060"
+    },
+    "flutter_embedding_release.jar": {
+      "bytes": 717139,
+      "sha256": "c6f43878c1237ba9043b86c8c68efaab664dfc3f01f27163ba5f54434b282d1a"
+    }
+  }
+}

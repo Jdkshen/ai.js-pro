@@ -5,11 +5,11 @@
  * 兼容 prelude 基础别名（parseColor/argb/rgb/alpha/red/green/blue/isSimilar）与 Color.toInt()；
  * Color.parse 字符串失败返回 null，严格 module.parseColor 对无效输入抛 TypeError。
  * 本文件是独立 IIFE，可由 Node24Prelude 在 prelude 之后拼接加载（见同目录 REGISTER-PATCH.md），
- * 或由测试工程 require 后手动注册。不修改 prelude.js。
+ * All three engines load this asset; modern `color` and legacy `colors` keep
+ * their respective object/int return contracts.
  */
-(function () {
+(function (g) {
   'use strict';
-  if (typeof globalThis.__ajsRegisterModule !== 'function') { return; }
   var UINT32 = 4294967296;
   var INT32_MAX = 0x7fffffff;
   var INT32_MIN = -0x80000000;
@@ -267,7 +267,64 @@
         && Math.abs(a.blue - b.blue) <= threshold;
     }
   };
-  globalThis.__ajsRegisterModule('color', function () { return colorModule; });
-  if (globalThis.__ajsBuiltinModules) { globalThis.__ajsBuiltinModules.color = colorModule; }
-  if (globalThis.$autojs) { globalThis.$autojs.color = colorModule; }
-})();
+  function javaType(name) {
+    if (g.$autojs && g.$autojs.java) return g.$autojs.java.findClass(name);
+    if (g.Java && g.Java.type) return g.Java.type(name);
+    var value = g.Packages;
+    name.split('.').forEach(function (key) { value = value[key]; });
+    return value;
+  }
+  var colors = g.colors ? Object.create(g.colors) : {};
+  function own(name, value) { Object.defineProperty(colors, name, {value: value, configurable: true, enumerable: true, writable: true}); }
+  function add(name, fn) { if (typeof colors[name] === 'undefined') own(name, fn); }
+  function colorInt(value) {
+    if (typeof value === 'string') return Number(javaType('android.graphics.Color').parseColor(value));
+    return value instanceof Color ? value.value : Number(value) | 0;
+  }
+  ['alpha', 'red', 'green', 'blue'].forEach(function (name) { own(name, function (value) { return new Color(colorInt(value))[name]; }); });
+  own('parseColor', colorInt);
+  own('argb', function (a, r, green, b) { return Color.fromARGB(a, r, green, b).value; });
+  own('rgb', function (r, green, b) { return Color.fromRGB(r, green, b).value; });
+  var constants = {BLACK: 0xff000000, DKGRAY: 0xff444444, GRAY: 0xff888888, LTGRAY: 0xffcccccc,
+    WHITE: 0xffffffff, RED: 0xffff0000, GREEN: 0xff00ff00, BLUE: 0xff0000ff, YELLOW: 0xffffff00,
+    CYAN: 0xff00ffff, MAGENTA: 0xffff00ff, TRANSPARENT: 0};
+  Object.keys(constants).forEach(function (name) { add(name, constants[name] | 0); });
+  own('HSVToColor', function (alpha, hsv) {
+    if (hsv === undefined) { hsv = alpha; alpha = 255; }
+    return HSVColor.fromAHSV(alpha / 255, Number(hsv[0]), Number(hsv[1]), Number(hsv[2])).toColor().value;
+  });
+  own('colorToHSV', function (color, output) {
+    var hsv = HSVColor.fromColor(new Color(colorInt(color)));
+    var result = output || [];
+    result[0] = hsv.hue; result[1] = hsv.saturation; result[2] = hsv.value;
+    return result;
+  });
+  own('RGBToHSV', function (r, green, b, output) { return colors.colorToHSV(colors.rgb(r, green, b), output); });
+  add('luminance', function (color) {
+    var rgb = new Color(colorInt(color));
+    function linear(n) { n /= 255; return n <= 0.04045 ? n / 12.92 : Math.pow((n + 0.055) / 1.055, 2.4); }
+    return 0.2126 * linear(rgb.red) + 0.7152 * linear(rgb.green) + 0.0722 * linear(rgb.blue);
+  });
+  add('isSimilar', function (first, second, threshold, algorithm) {
+    var names = {equal: 'EqualityDetector', diff: 'DifferenceDetector', rgb: 'RGBDistanceDetector', 'rgb+': 'WeightedRGBDistanceDetector', hs: 'HSDistanceDetector'};
+    algorithm = algorithm === undefined ? 'diff' : algorithm;
+    if (!Object.prototype.hasOwnProperty.call(names, algorithm)) throw new TypeError('Unknown color algorithm: ' + algorithm);
+    var Detector = javaType('com.stardust.autojs.core.image.ColorDetector$' + names[algorithm]);
+    var detector = algorithm === 'equal' ? new Detector(colorInt(first)) : new Detector(colorInt(first), threshold === undefined ? 4 : threshold);
+    var color = new Color(colorInt(second));
+    return Boolean(detector.detectsColor(color.red, color.green, color.blue));
+  });
+  // QuickJS's frozen object does not own toString; Rhino already supplies the formatter.
+  own('toString', function (value) { return '#' + ('00000000' + (colorInt(value) >>> 0).toString(16)).slice(-8); });
+  if (g.$colors && g.$colors.mapping) colors.mapping = g.$colors.mapping;
+  g.colors = colors;
+  g.$colors = colors;
+  if (typeof g.__ajsRegisterModule === 'function') {
+    g.__ajsRegisterModule('color', function () { return colorModule; });
+    if (g.__ajsBuiltinModules) { g.__ajsBuiltinModules.color = colorModule; }
+    if (g.$autojs) { g.$autojs.color = colorModule; }
+  } else {
+    var modules = g.__aiModernModules || (g.__aiModernModules = Object.create(null));
+    modules.color = colorModule;
+  }
+})(typeof globalThis === 'object' ? globalThis : global);

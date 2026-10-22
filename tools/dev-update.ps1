@@ -314,6 +314,12 @@ if ($LASTEXITCODE -ne 0 -or $manifestDump -match 'org\.autojs\.autojspro\.debug\
     throw 'APK still declares the Auto.js Pro debug provider; refusing to publish a conflicting APK'
 }
 
+# Validate before copying any live update files, including the -SkipBuild path.
+if ($Abi -in @('arm64-v8a', 'x86_64')) {
+    & python (Join-Path $PSScriptRoot 'check-android-16kb.py') $apk.FullName --abi $Abi
+    if ($LASTEXITCODE -ne 0) { throw 'APK failed the 16KB ELF/RELRO/ZIP gate; no update published' }
+}
+
 # A versioned URL prevents old failed downloads from being reused by a browser
 # or proxy. The staged copy contains the same signed APK; it is not rebuilt.
 # Compare source files (including new/deleted modules), not only version strings.

@@ -275,6 +275,9 @@ void waitForNextTimer(EngineState *state) {
                 next = std::min(next, entry.second->deadlineMs - now);
             }
         }
+        // The last callback can cancel the final repeating timer. Return to the
+        // pending-count check instead of waiting forever for a nonexistent timer.
+        if (next == std::numeric_limits<int64_t>::max()) return;
         if (next <= 0) {
             return;
         }
@@ -6701,7 +6704,7 @@ const char kBootstrapScript[] = R"JS(
             var id = Number(__aiNativeFileObserverNew(String(resolved)));
             if (!(id > 0)) throw new Error('无法监听路径: ' + resolved);
             __aiFileWatcherBags.set(id, { path: resolved, watching: true });
-            ensureSystemEventTimer();
+            ensureSystemEventTimer('files');
             return __aiCreateFileWatcher(id, resolved);
         }
     };
@@ -6838,7 +6841,7 @@ const char kBootstrapScript[] = R"JS(
                 if (!bag.watching) {
                     __aiNativeFileObserverStart(id);
                     bag.watching = true;
-                    ensureSystemEventTimer();
+                    ensureSystemEventTimer('files');
                 }
                 return watcher;
             },
@@ -6846,6 +6849,15 @@ const char kBootstrapScript[] = R"JS(
                 if (bag.watching) {
                     __aiNativeFileObserverStop(id);
                     bag.watching = false;
+                    var active = false;
+                    __aiFileWatcherBags.forEach(function (entry) { if (entry.watching) active = true; });
+                    if (!active) {
+                        systemEventConsumers.delete('files');
+                        if (systemEventConsumers.size === 0 && systemEventTimer !== null) {
+                            clearInterval(systemEventTimer);
+                            systemEventTimer = null;
+                        }
+                    }
                 }
                 return watcher;
             },

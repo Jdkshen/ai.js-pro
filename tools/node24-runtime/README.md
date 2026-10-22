@@ -14,6 +14,7 @@ export NODE24_ARCHIVE=/downloads/node-v24.22.0.tar.xz
 export NODE24_SOURCE_DIR=/build/node24-full-icu
 export NODE24_OUTPUT_DIR=/artifacts/node24-full-icu
 export NODE24_JSON_CLANGXX=/usr/bin/clang++
+export NODE24_CXX_RUNTIME=/opt/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so
 bash tools/node24-runtime/build-linux.sh
 ```
 
@@ -24,6 +25,14 @@ Android arm64 shared with ICU enabled. Source pins are still checked.
 The script produces the stripped core, matching configuration/makefile, NDK
 libc++ runtime, Node license (including ICU notices), and ELF evidence. It does
 not install an APK or overwrite bundled runtime assets.
+
+Since dev-1197, the deployed libc++ is the 16KB-aligned NDK r27c runtime. The
+previous r26d runtime was only 4KB-aligned even though the Node core was aligned.
+All 218 libc++ exports required by the deployed core/bridge remain available;
+embedded Node, workers, concurrency and real UI/plugin regressions passed on
+K40 and Mi8. Keep the core's pinned r26d build headers; `NODE24_CXX_RUNTIME`
+selects the separately validated deployment library. The build script and
+release gate reject an unaligned runtime, including libraries in APK assets.
 
 Integration order:
 
@@ -40,8 +49,10 @@ Integration order:
 The verified core uses full ICU (78.3 / Unicode 17.0), shared Android arm64/API24,
 no Node startup snapshot/code cache, no OpenSSL assembly, strict undefined-symbol
 link checking, and 16 KB max page size. The JSON unit retains clang 17 C++ ABI
-compatibility and the same NDK sysroot/libc++.
+compatibility and the same NDK compile headers/sysroot. Deployment uses the
+separately verified r27c libc++ described above.
 
-The repository script was run against the completed independent source tree;
-its stripped output matched the integrated core byte for byte. A clean source
-build takes substantially longer than an incremental check.
+Before this upgrade, the completed independent source tree matched the deployed
+core byte for byte. This upgrade keeps that core and changes its deployment
+libc++; the script also tightens future linker flags and validates the selected
+runtime. A fresh core rebuild with those new flags was not run in this upgrade.

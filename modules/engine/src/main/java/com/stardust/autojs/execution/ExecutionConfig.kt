@@ -17,9 +17,9 @@ data class ExecutionConfig(var workingDirectory: String = "",
                            var scriptConfig: ScriptConfig = ScriptConfig()) : Parcelable {
 
 
-    private val mArguments = HashMap<String, Any>()
+    private val mArguments = HashMap<String, Any?>()
 
-    val arguments: Map<String, Any>
+    val arguments: Map<String, Any?>
         get() = mArguments
 
     constructor(parcel: Parcel) : this(
@@ -30,7 +30,7 @@ data class ExecutionConfig(var workingDirectory: String = "",
             parcel.readLong(),
             parcel.readInt())
 
-    fun setArgument(key: String, `object`: Any) {
+    fun setArgument(key: String, `object`: Any?) {
         mArguments[key] = `object`
     }
 

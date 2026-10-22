@@ -2,7 +2,12 @@
 
 > 面向所有接手的 AI（Codex / Claude / Copilot / Cursor / dsh 等）。
 > 先读本文，再读 `AGENTS.md`（构建与踩坑细节）和 `docs/reports/2026-10-18_收尾交接_给Codex_v2.md`（最新进度）。
-> 最后更新：2026-10-21；更新源 **dev-1194**，最新 [三引擎细节及 Pikafish 原生闪退修复](reports/2026-10-21_三引擎细节复核与原生闪退修复.md)。非法局面/历史可触发 `exit(1)` 和 destroyed-mutex，已独立复现并修复；象棋插件 APK 1.0.1 / 2。三引擎仍有明确能力差异，原 `.4` 象棋设备长期对局待验收。工作区尚未提交。
+> 最后更新：2026-10-22；更新源 **dev-1202**，最新 [示例目录懒加载与插件发现优化](reports/2026-10-22_示例目录懒加载与插件发现优化.md)：离屏页不扫描、切页复用目录、刷新/重试保留；目录/插件发现移至后台线程并缓存 assets；小米 8 验证切页与运行入口。K40 业务运行中保留 dev-1199。
+> 此前 [选择器运行后编辑器卡顿修复](reports/2026-10-22_选择器运行后编辑器卡顿修复.md)：主线程日志全量扫描/逐行排版改为批量刷新，节点日志摘要化；小米 8 2000 行日志打开由约 5 秒降到 319–731ms，原始示例三轮及日志/编辑保存通过。K40 业务运行中保留 dev-1199。
+> 此前 [DotJumpLoading 原生组件修复](reports/2026-10-22_DotJumpLoading原生组件修复.md)：原生 View render 与初始化顺序，小米 8 实测 19 + 9 + 9 + 2 项通过。
+> 此前 [APK 开关/按钮颜色统一](reports/2026-10-22_APK开关与按钮颜色统一.md)及[三引擎 API 首批对齐](reports/2026-10-22_三引擎API统一与高级版全量契约.md)保持。dev-1199 的 12 Flutter / 693 JVM / QuickJS 225 项通过，7 组共用示例和 MCP 直接调用双机通过，高级版全量 API 仍未全部实现。
+> 此前 [Flutter 升级与 16KB 修复](reports/2026-10-22_Flutter升级与16KB兼容修复.md) 保持：Flutter 3.47.7 / Dart 3.13.5，engine/embedding/AOT 配套，发布无白名单检查全部 22 个 64 位 ELF；真正 16KB 内核仍待验收。
+> 此前 [三引擎及 Pikafish 修复](reports/2026-10-21_三引擎细节复核与原生闪退修复.md) 保持；象棋插件 APK 1.0.1 / 2。原 `.4` 象棋设备长期对局待验收。工作区尚未提交。
 > 电脑端扩展已更新 **0.3.3**：[设备选择修复](reports/2026-10-21_VSCode设备选择修复.md)，显式设备列表、USB 扫描与双机转发已验证。
 > dev-1186 [自定义组件与重复窗口修复](reports/2026-10-21_Node自定义组件与重复窗口修复.md)：colored-button 真实事件/属性、统一应用任务与单次返回。
 > dev-1184 的 [示例目录运行入口修复](reports/2026-10-21_示例目录运行入口修复.md)：React / Vue3 在尚无 dist 时从开发源码运行，19 个内置工程入口已检查。
@@ -43,14 +48,14 @@ git log --oneline -10                             # 最近改动
 
 - **Dart 源码已入库**（2026-10-20 起）：`flutter-ui/`（`lib/`、`pubspec.yaml/lock`、`third_party/`、pubspec 引用的 `assets/`）。
   不再依赖个人电脑上的外部重建线（历史路径仅作背景）。
-- **payload 基础已入库**：`flutter-payload-base/`（`jniLibs/arm64-v8a/libflutter.so`、`flutter_embedding_3.3.4.jar`、
-  `assets/flutter_assets/`，LFS + 普通 git；不含生成的 `libapp.so`）。这是 Flutter 3.3.4 引擎 + 基线资源。
+- **payload 基础已入库**：`flutter-payload-base/`（`jniLibs/arm64-v8a/libflutter.so`、`flutter_embedding_release.jar`、
+  `runtime.json` 版本/SHA 锁定；LFS + 普通 git；不含生成的 `libapp.so`）。引擎与 embedding 来自同一 SDK。
 - 流水线脚本：`tools/flutter-poc/build-aot.ps1` + `tools/flutter-poc/publish-poc-build.ps1`（仓库内跟踪）；
   运行时工作目录 `output/flutter-poc/`（gitignore，删除后可自动重建）。
 - AOT 构建：`flutter-ui/{lib,assets,third_party,pubspec*}` 同步到 `output/flutter-poc/src` → `flutter pub get`（默认在线；`-Offline` 可选）→
   `flutter assemble --output build --define=BuildMode=release --define=TargetPlatform=android-arm64 android_aot_bundle_release_android-arm64`
-  → `build/arm64-v8a/app.so` 复制为 `payload/jniLibs/arm64-v8a/libapp.so`；payload 的其余文件从 `flutter-payload-base/` 自动补齐。
-- Flutter SDK 固定 Flutter **3.3.4**（本机 `C:\Android\flutter-3.3.4`，不在 PATH 上；换机需安装同版本）。
+  → `build/arm64-v8a/app.so` 复制为 `payload/jniLibs/arm64-v8a/libapp.so`；engine / embedding 从 `flutter-payload-base/` 补齐；assets 来自本次 `build/flutter_assets`，不再复用旧基线资产。
+- Flutter SDK 固定 Flutter **3.47.7 / Dart 3.13.5**（本机 `C:\Android\flutter-3.47.7`，不在 PATH 上；换机需安装同版本）。
 - 构建命令必须带 `-PflutterPoc=true`；同机装有正版 Auto.js Pro 时还要加 `-PdevPluginUsbDiscovery=false`（否则
   provider authority 冲突，install 报 `INSTALL_FAILED_CONFLICTING_PROVIDER`）。
 - 出包脚本会自动临时改写 `project-versions.json` 注入 versionCode/Name，构建结束后恢复——**不要手工改它**。
@@ -61,7 +66,7 @@ git log --oneline -10                             # 最近改动
   不带该参数的构建只适合引擎/单测等非 UI 验证。
 - **本地 Debug 安装 vs dev 发布是两套命令**：本地用 `gradlew :app:assembleMiuixCompatDebug -PflutterPoc=true ...` + `adb install`；
   dev 发版用 `tools/flutter-poc/publish-poc-build.ps1 -VersionCode N -VersionName "dev-N"` → `tools/publish.ps1 -SkipBuild ...`。
-  完整命令、真实工具链版本（JDK17 / Gradle 8.9 / AGP 8.6.1 / Kotlin 2.1.0 / Flutter 3.3.4 / Python+fonttools /
+  完整命令、真实工具链版本（JDK17 / Gradle 8.9 / AGP 8.6.1 / Kotlin 2.1.0 / Flutter 3.47.7 / Python+fonttools /
   NDK r27c / CMake≥3.18.1 / Ninja 1.13.2）与原生 `.so` 复用/重编规则见 [`docs/guides/编译指南.md`](guides/编译指南.md)（2026-10-20 固化）。
 
 ---
@@ -77,7 +82,7 @@ git log --oneline -10                             # 最近改动
 | `apps/inrt` | 打包运行时模板（输出到插件 assets 的 `template.apk`） |
 | `plugins/` | apkbuilder 打包插件、xiangqi 象棋插件（引擎/识别） |
 | `flutter-ui/` | Flutter Glass UI 的 Dart 源码（唯一真源，AOT 由它编译） |
-| `flutter-payload-base/` | Flutter 3.3.4 payload 基础（libflutter.so / embedding jar / flutter_assets，LFS） |
+| `flutter-payload-base/` | Flutter 3.47.7 payload 基础（libflutter.so / embedding jar / runtime.json，LFS） |
 | `samples/` | 大型示例工程（象棋自动走棋等） |
 | `docs/` | 架构/指南/报告；`docs/HANDOFF_AI.md` 即本文 |
 | `tools/` | 构建/发布/真机脚本 |

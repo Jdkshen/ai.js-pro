@@ -284,9 +284,10 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
           VoidCallback toggle) =>
       ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 18),
-          leading: Icon(icon, size: 24, color: const Color(0xff008f91)),
+          leading: Icon(icon, size: 24, color: Theme.of(context).colorScheme.primary),
           title: Text(title,
-              style: const TextStyle(fontSize: 20, color: Color(0xff008f91))),
+              style: TextStyle(fontSize: 20,
+                  color: Theme.of(context).colorScheme.primary)),
           trailing: Row(mainAxisSize: MainAxisSize.min, children: [
             if (count > 0) Text('$count', style: const TextStyle(fontSize: 13)),
             const SizedBox(width: 10),
@@ -472,16 +473,21 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
                     child: FloatingActionButton(
                         heroTag: 'task-stop-all',
                         tooltip: '停止全部脚本',
-                        backgroundColor: const Color(0xff008f91),
+                        backgroundColor: AppTheme.actionBackground(context,
+                            enabled: loaded && error == null && !changing),
+                        foregroundColor: AppTheme.actionForeground(context,
+                            enabled: loaded && error == null && !changing),
                         onPressed:
                             loaded && error == null && !changing ? stopAll : null,
                         child: changing
-                            ? const SizedBox(
+                            ? SizedBox(
                                 width: 22,
                                 height: 22,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white))
-                            : const Icon(Icons.close, color: Colors.white))))));
+                                    strokeWidth: 2,
+                                    color: AppTheme.actionForeground(context,
+                                        enabled: false)))
+                            : const Icon(Icons.close))))));
   }
 }
 

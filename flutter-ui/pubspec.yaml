@@ -3,7 +3,7 @@ description: Local Flutter frontend for the repaired Auto.js Pro Android runtime
 publish_to: none
 version: 0.1.0+1
 environment:
-  sdk: '>=2.18.2 <3.0.0'
+  sdk: '>=3.13.0 <4.0.0'
 dependencies:
   flutter:
     sdk: flutter

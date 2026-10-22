@@ -523,7 +523,6 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                 label: '$label开关',
                 child: Switch(
                     key: ValueKey('service-$key'),
-                    activeColor: const Color(0xff008f91),
                     value: checked,
                     onChanged: enabled
                         ? (value) => toggle
@@ -654,7 +653,6 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                       label: '侧栏 MCP 服务开关',
                       child: Switch(
                           key: const ValueKey('drawer-mcp'),
-                          activeColor: const Color(0xff008f91),
                           value: switchOn,
                           onChanged:
                               pending || error != null ? null : toggleMcp))
