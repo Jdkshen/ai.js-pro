@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <vector>
 #include "node24_callbacks.h"
+#include "java_fast_v8.h"
 
 static_assert(NODE_MAJOR_VERSION == 24 && NODE_MINOR_VERSION == 22 && NODE_PATCH_VERSION == 0,
               "This bridge must be reviewed against the pinned Node 24.22.0 headers");
@@ -220,6 +221,11 @@ jobject execute(JNIEnv* jni,const std::shared_ptr<Session>& session,const std::s
       auto function=v8::Function::New(setup->context(),hostCall,data).ToLocalChecked();
       if(!setup->context()->Global()->Set(setup->context(),v8::String::NewFromUtf8Literal(setup->isolate(),"__autojsHost"),function).FromMaybe(false))
         throw std::runtime_error("Cannot install Android host function");
+      if(host->host.javaFast) {
+        auto typed=v8::Function::New(setup->context(),javaFastCall,data).ToLocalChecked();
+        if(!setup->context()->Global()->Set(setup->context(),v8::String::NewFromUtf8Literal(setup->isolate(),"__ajsJavaFastCall"),typed).FromMaybe(false))
+          throw std::runtime_error("Cannot install typed Java host function");
+      }
     }
     node::SetProcessExitHandler(setup->env(),[session](node::Environment* env,int exitCode) {
       session->exitRequested.store(true); session->exitCode.store(exitCode);

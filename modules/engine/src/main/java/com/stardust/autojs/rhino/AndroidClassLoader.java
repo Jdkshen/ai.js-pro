@@ -43,7 +43,7 @@ public class AndroidClassLoader extends ClassLoader implements GeneratedClassLoa
 
     private static final String LOG_TAG = "AndroidClassLoader";
     private final ClassLoader parent;
-    private final List<DexClassLoader> mDexClassLoaders = new ArrayList<>();
+    private final List<ClassLoader> mDexClassLoaders = new ArrayList<>();
     private final File mCacheDir;
 
     /**
@@ -70,6 +70,26 @@ public class AndroidClassLoader extends ClassLoader implements GeneratedClassLoa
     @Override
     public Class<?> defineClass(String name, byte[] data) {
         return defineClass(name, data, false);
+    }
+
+    /** Already assembled DEX needs no classfile, JAR or bytecode compiler. */
+    public Class<?> defineDex(String name, byte[] dex) throws IOException, ClassNotFoundException {
+        if (dex == null || dex.length < 8 || dex[0] != 'd' || dex[1] != 'e' || dex[2] != 'x')
+            throw new IllegalArgumentException("Invalid generated dex");
+        ClassLoader loader;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            loader = new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(dex), parent);
+        } else {
+            File file = new File(mCacheDir, name.replace('.', '_') + ".dex");
+            try (java.io.FileOutputStream output = new java.io.FileOutputStream(file)) {
+                output.write(dex);
+            }
+            if (!file.setReadOnly()) throw new IOException("Cannot protect generated dex: " + file);
+            loader = new DexClassLoader(file.getPath(), mCacheDir.getPath(), appNativeLibraryDir(), parent);
+        }
+        Class<?> generated = loader.loadClass(name);
+        mDexClassLoaders.add(loader);
+        return generated;
     }
 
     /** Node's ClassFileWriter emits legacy bytecode without Java 8 desugaring.
@@ -451,11 +471,9 @@ public class AndroidClassLoader extends ClassLoader implements GeneratedClassLoa
             throws ClassNotFoundException {
         Class<?> loadedClass = findLoadedClass(name);
         if (loadedClass == null) {
-            for (DexClassLoader dex : mDexClassLoaders) {
-                loadedClass = dex.loadClass(name);
-                if (loadedClass != null) {
-                    break;
-                }
+            for (ClassLoader dex : mDexClassLoaders) {
+                try { loadedClass = dex.loadClass(name); break; }
+                catch (ClassNotFoundException ignored) { /* Try another generated dex, then parent. */ }
             }
             if (loadedClass == null) {
                 loadedClass = parent.loadClass(name);

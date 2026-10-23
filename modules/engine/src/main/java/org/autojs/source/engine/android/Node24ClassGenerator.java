@@ -25,6 +25,9 @@ import java.util.Set;
  * {@code AndroidClassLoader.defineClass}；生成器只使用普通虚调用和装拆箱，
  * 显式输出 major 51 以使用轻量 dx，失败时仍可回退 D8。
  *
+ * <p>Android 端可直接调用 {@link Node24DirectDexGenerator#generateDex}，两条路径
+ * 共享 {@link #plan} 的校验、构造器、覆写/桥接与 {@code super$} 选择结果。
+ *
  * <p>契约：
  * <ul>
  *   <li>生成类包含 {@code public static Dispatcher __dispatcher;} 与
@@ -54,14 +57,14 @@ public final class Node24ClassGenerator {
 
     // 用 class literal 而不是写死 binary name：release 若启用 R8，混淆后的
     // Dispatcher 名称仍与实际运行时类一致。
-    private static final String DISPATCHER_INTERNAL =
+    static final String DISPATCHER_INTERNAL =
             Dispatcher.class.getName().replace('.', '/');
-    private static final String DISPATCHER_DESCRIPTOR = "L" + DISPATCHER_INTERNAL + ";";
-    private static final String STATIC_DISPATCHER = "__dispatcher";
-    private static final String INSTANCE_DISPATCHER = "__instanceDispatcher";
-    private static final String INVOKE_DESCRIPTOR =
+    static final String DISPATCHER_DESCRIPTOR = "L" + DISPATCHER_INTERNAL + ";";
+    static final String STATIC_DISPATCHER = "__dispatcher";
+    static final String INSTANCE_DISPATCHER = "__instanceDispatcher";
+    static final String INVOKE_DESCRIPTOR =
             "(Ljava/lang/Object;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;";
-    private static final String CONSTRUCT_DESCRIPTOR =
+    static final String CONSTRUCT_DESCRIPTOR =
             "(Ljava/lang/Object;[Ljava/lang/Object;)V";
 
     // ClassFileWriter 没有导出这两个 flag；JVM 规范值固定。
@@ -94,6 +97,42 @@ public final class Node24ClassGenerator {
 
     public static byte[] generate(String className, Class<?> superClass, Class<?>[] interfaces,
                                   Set<String> jsMethods) {
+        GenerationPlan plan = plan(className, superClass, interfaces, jsMethods);
+        ClassFileWriter cw = new ClassFileWriter(plan.owner, plan.superOwner, null);
+        cw.setFlags((short) (ClassFileWriter.ACC_PUBLIC | ClassFileWriter.ACC_SUPER));
+        for (Class<?> iface : plan.explicitInterfaces) {
+            cw.addInterface(internalName(iface));
+        }
+
+        cw.addField(STATIC_DISPATCHER, DISPATCHER_DESCRIPTOR,
+                (short) (ClassFileWriter.ACC_PUBLIC | ClassFileWriter.ACC_STATIC));
+        cw.addField(INSTANCE_DISPATCHER, DISPATCHER_DESCRIPTOR,
+                (short) (ClassFileWriter.ACC_PRIVATE | ClassFileWriter.ACC_FINAL));
+
+        for (Constructor<?> constructor : plan.constructors) {
+            emitConstructor(cw, plan.owner, plan.superOwner, constructor);
+        }
+        for (Candidate candidate : plan.candidates) {
+            emitCandidate(cw, plan.owner, plan.superOwner, candidate);
+        }
+        byte[] bytecode = cw.toByteArray();
+        // This generator emits ordinary constructors, boxing and virtual calls,
+        // with no Java 8 classfile features. Rhino defaults to major 52; target
+        // Java 7 explicitly so these small adapters can use the lightweight dx
+        // path. General user jars retain their own version and the D8 path.
+        bytecode[6] = 0;
+        bytecode[7] = 51;
+        return bytecode;
+    }
+
+    /**
+     * Validates the inputs and resolves exactly which members a generated subclass
+     * must contain. Both the classfile and the direct-DEX generators consume this
+     * plan, so constructors, overrides, bridge methods and {@code super$} helpers
+     * cannot drift between the two output formats.
+     */
+    static GenerationPlan plan(String className, Class<?> superClass, Class<?>[] interfaces,
+                               Set<String> jsMethods) {
         validateClassName(className);
         if (superClass == null) {
             throw new IllegalArgumentException("superClass == null");
@@ -145,32 +184,28 @@ public final class Node24ClassGenerator {
                 return left.key.compareTo(right.key);
             }
         });
+        return new GenerationPlan(owner, superOwner,
+                Collections.unmodifiableList(new ArrayList<>(explicitInterfaces)),
+                Collections.unmodifiableList(constructors),
+                Collections.unmodifiableList(ordered));
+    }
 
-        ClassFileWriter cw = new ClassFileWriter(owner, superOwner, null);
-        cw.setFlags((short) (ClassFileWriter.ACC_PUBLIC | ClassFileWriter.ACC_SUPER));
-        for (Class<?> iface : explicitInterfaces) {
-            cw.addInterface(internalName(iface));
-        }
+    /** Immutable output of {@link #plan}; shared by both bytecode backends. */
+    static final class GenerationPlan {
+        final String owner;
+        final String superOwner;
+        final List<Class<?>> explicitInterfaces;
+        final List<Constructor<?>> constructors;
+        final List<Candidate> candidates;
 
-        cw.addField(STATIC_DISPATCHER, DISPATCHER_DESCRIPTOR,
-                (short) (ClassFileWriter.ACC_PUBLIC | ClassFileWriter.ACC_STATIC));
-        cw.addField(INSTANCE_DISPATCHER, DISPATCHER_DESCRIPTOR,
-                (short) (ClassFileWriter.ACC_PRIVATE | ClassFileWriter.ACC_FINAL));
-
-        for (Constructor<?> constructor : constructors) {
-            emitConstructor(cw, owner, superOwner, constructor);
+        GenerationPlan(String owner, String superOwner, List<Class<?>> explicitInterfaces,
+                       List<Constructor<?>> constructors, List<Candidate> candidates) {
+            this.owner = owner;
+            this.superOwner = superOwner;
+            this.explicitInterfaces = explicitInterfaces;
+            this.constructors = constructors;
+            this.candidates = candidates;
         }
-        for (Candidate candidate : ordered) {
-            emitCandidate(cw, owner, superOwner, candidate);
-        }
-        byte[] bytecode = cw.toByteArray();
-        // This generator emits ordinary constructors, boxing and virtual calls,
-        // with no Java 8 classfile features. Rhino defaults to major 52; target
-        // Java 7 explicitly so these small adapters can use the lightweight dx
-        // path. General user jars retain their own version and the D8 path.
-        bytecode[6] = 0;
-        bytecode[7] = 51;
-        return bytecode;
     }
 
     private static void validateClassName(String className) {
@@ -400,7 +435,7 @@ public final class Node24ClassGenerator {
         }
     }
 
-    private static boolean isReferenceCovariant(Class<?> primary, Class<?> other) {
+    static boolean isReferenceCovariant(Class<?> primary, Class<?> other) {
         return !primary.isPrimitive() && !other.isPrimitive() && other.isAssignableFrom(primary);
     }
 
@@ -597,7 +632,7 @@ public final class Node24ClassGenerator {
         return locals;
     }
 
-    private static int words(Class<?> type) {
+    static int words(Class<?> type) {
         return type == long.class || type == double.class ? 2 : 1;
     }
 
@@ -620,7 +655,7 @@ public final class Node24ClassGenerator {
         return ByteCode.ARETURN;
     }
 
-    private static String wrapperInternalName(Class<?> primitiveType) {
+    static String wrapperInternalName(Class<?> primitiveType) {
         if (primitiveType == boolean.class) {
             return "java/lang/Boolean";
         }
@@ -648,7 +683,7 @@ public final class Node24ClassGenerator {
         throw new IllegalArgumentException("not a primitive type: " + primitiveType);
     }
 
-    private static String unboxMethodName(Class<?> primitiveType) {
+    static String unboxMethodName(Class<?> primitiveType) {
         if (primitiveType == boolean.class) {
             return "booleanValue";
         }
@@ -680,7 +715,7 @@ public final class Node24ClassGenerator {
         return binaryName.replace('.', '/');
     }
 
-    private static String internalName(Class<?> type) {
+    static String internalName(Class<?> type) {
         return internalName(type.getName());
     }
 
@@ -693,7 +728,7 @@ public final class Node24ClassGenerator {
         return builder.append(')').toString();
     }
 
-    private static String methodDescriptor(Class<?> returnType, Class<?>[] parameterTypes) {
+    static String methodDescriptor(Class<?> returnType, Class<?>[] parameterTypes) {
         StringBuilder builder = new StringBuilder(parameterTypes.length * 8 + 8);
         builder.append('(');
         for (Class<?> parameterType : parameterTypes) {
@@ -702,7 +737,7 @@ public final class Node24ClassGenerator {
         return builder.append(')').append(typeDescriptor(returnType)).toString();
     }
 
-    private static String typeDescriptor(Class<?> type) {
+    static String typeDescriptor(Class<?> type) {
         if (type == void.class) {
             return "V";
         }
@@ -736,7 +771,7 @@ public final class Node24ClassGenerator {
         return "L" + internalName(type) + ";";
     }
 
-    private static final class Candidate {
+    static final class Candidate {
         final String key;
         final String name;
         final Class<?>[] parameterTypes;

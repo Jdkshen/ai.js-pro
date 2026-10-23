@@ -10,12 +10,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.ValueCallback;
 import android.widget.ImageView;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,8 +33,6 @@ public final class NodeUiLocalSession {
     private static volatile JSONObject views;
     private static volatile com.stardust.autojs.core.console.ConsoleImpl console;
     private static volatile ActivityCallbacks callbacks;
-    /** 当前 Node 执行生成类（$java.defineClass）的 ClassLoader；ui.inflate 需用它解析 m3ui.NativeView 等。 */
-    private static volatile ClassLoader generatedClassLoader;
     private static final java.util.ArrayDeque<JSONObject> EVENTS = new java.util.ArrayDeque<>();
     private static final ImageLoader IMAGE_LOADER = new ImageLoader();
     /** 当前 Activity 会话的真实 NodeWebView；webId 由本会话分配，销毁时统一释放。 */
@@ -47,6 +41,7 @@ public final class NodeUiLocalSession {
     private static volatile boolean backHandled;
     private NodeUiLocalSession() {}
     private static final class Pending {
+        String javaClassOwner;
         final CountDownLatch ready = new CountDownLatch(1);
         final String token = java.util.UUID.randomUUID().toString();
         volatile String error;
@@ -68,21 +63,14 @@ public final class NodeUiLocalSession {
 
     public static JSONObject show(Context context, String projectDir, JSONObject request) throws Exception {
         setApplicationContext(context);
-        String javaClassOwner = request == null ? "" : request.optString("javaClassOwner", "");
-        try {
-            generatedClassLoader = javaClassOwner.isEmpty() ? null
-                    : Node24GeneratedClasses.loader(javaClassOwner, context.getClassLoader());
-        } catch (Throwable ignored) {
-            generatedClassLoader = null;
-        }
         Pending opening = new Pending();
+        opening.javaClassOwner = request == null ? "" : request.optString("javaClassOwner", "");
         opening.backHandled = request != null && request.optBoolean("backHandled", false);
         synchronized (STATE) {
             if (pending != null || activity != null) throw new IllegalStateException("请先关闭当前 Node UI");
             pending = opening;
             console = null;
             callbacks = null;
-            generatedClassLoader = null;
             backHandled = false;
             destroyWebViewsLocked();
             synchronized (EVENTS) { EVENTS.clear(); }
@@ -133,6 +121,7 @@ public final class NodeUiLocalSession {
             Pending opening = pending;
             if (opening == null || opening.error != null || !opening.token.equals(token)) return false;
             boolean recreated = opening.recreating || opening.recreated || opening.attached;
+            if (activity != source) IMAGE_LOADER.reset();
             activity = source;
             content = root;
             views = ids;
@@ -238,7 +227,7 @@ public final class NodeUiLocalSession {
         final View[] result = new View[1];
         runOnMainAndWait(() -> {
             Context themed = resolveInflateContext(parent);
-            ClassLoader loader = generatedClassLoader != null ? generatedClassLoader : themed.getClassLoader();
+            ClassLoader loader = resolveGeneratedClassLoader(themed);
             result[0] = NodeUiHost.inflateInlineLayout(themed, xml, loader, parent, attachToParent);
         }, 10_000L, "inflate");
         return result[0];
@@ -275,7 +264,11 @@ public final class NodeUiLocalSession {
                     throw new IllegalStateException("inflateLayoutBatch 需要 Activity 或非空 parent 的 Context");
                 }
                 try {
-                    android.view.LayoutInflater inflater = android.view.LayoutInflater.from(inflaterContext);
+                    final ClassLoader loader = resolveGeneratedClassLoader(inflaterContext);
+                    Context wrapped = new android.content.ContextWrapper(inflaterContext) {
+                        @Override public ClassLoader getClassLoader() { return loader; }
+                    };
+                    android.view.LayoutInflater inflater = android.view.LayoutInflater.from(inflaterContext).cloneInContext(wrapped);
                     for (int i = 0; i < count; i++) {
                         result[i] = inflater.inflate(layoutId, parent, false);
                     }
@@ -304,7 +297,7 @@ public final class NodeUiLocalSession {
         runOnMainAndWait(new Runnable() {
             @Override public void run() {
                 final Context themed = resolveInflateContext(parent);
-                final ClassLoader loader = generatedClassLoader != null ? generatedClassLoader : themed.getClassLoader();
+                final ClassLoader loader = resolveGeneratedClassLoader(themed);
                 try {
                     for (int i = 0; i < count; i++) {
                         result[i] = NodeUiHost.inflateInlineLayout(
@@ -322,6 +315,14 @@ public final class NodeUiLocalSession {
         if (count < 1 || count > 256) {
             throw new IllegalArgumentException("inflateBatch 的 count 必须在 1..256 之间，收到：" + count);
         }
+    }
+
+    private static ClassLoader resolveGeneratedClassLoader(Context context) {
+        Pending owner = pending;
+        ClassLoader fallback = context.getClassLoader();
+        // Classes may be defined after Activity.show; fetch the latest loader chain.
+        return owner == null || owner.javaClassOwner == null || owner.javaClassOwner.isEmpty()
+                ? fallback : Node24GeneratedClasses.loader(owner.javaClassOwner, fallback);
     }
 
     private static Context resolveInflateContext(ViewGroup parent) {
@@ -622,6 +623,7 @@ public final class NodeUiLocalSession {
     }
 
     private static void destroyWebViewsLocked() {
+        IMAGE_LOADER.reset();
         if (WEB_VIEWS.isEmpty()) return;
         List<NodeWebView> closing = new ArrayList<>(WEB_VIEWS.values());
         WEB_VIEWS.clear();
@@ -724,30 +726,23 @@ public final class NodeUiLocalSession {
 
     /** Invoked on the Java IO executor, then publishes on Android's UI thread. */
     public static final class ImageLoader {
-        private final java.util.Map<ImageView, Object> requests = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
-        public boolean loadImageInto(ImageView view, String address) throws Exception {
-            Activity owner = activity;
-            if (owner == null) throw new IllegalStateException("Node UI 已关闭");
-            Object token = new Object();
-            requests.put(view, token);
-            URL url = new URL(address);
-            if (!"http".equals(url.getProtocol()) && !"https".equals(url.getProtocol())) {
-                throw new IllegalArgumentException("图片 URL 需要 http 或 https");
-            }
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(10000); connection.setReadTimeout(10000);
-            Bitmap image;
-            try (java.io.InputStream stream = connection.getInputStream()) {
-                image = BitmapFactory.decodeStream(stream);
-                if (image == null) throw new java.io.IOException("无法解码图片：" + address);
-            } finally { connection.disconnect(); }
-            FutureTask<Boolean> apply = new FutureTask<>(() -> {
-                if (activity != owner || owner.isFinishing() || requests.get(view) != token) { image.recycle(); return false; }
-                view.setImageBitmap(image);
-                return true;
+        private NodeUiImageLoader delegate;
+        private synchronized NodeUiImageLoader current() {
+            Pending owner = pending;
+            if (owner == null || activity == null) throw new IllegalStateException("Node UI 已关闭");
+            if (delegate == null) delegate = new NodeUiImageLoader(new NodeUiImageLoader.Owner() {
+                @Override public Activity getActivity() { return pending == owner ? activity : null; }
+                @Override public boolean isActive() { return pending == owner; }
             });
-            MAIN.post(apply);
-            return apply.get(10, TimeUnit.SECONDS);
+            return delegate;
+        }
+        synchronized void reset() {
+            NodeUiImageLoader previous = delegate;
+            delegate = null;
+            if (previous != null) previous.close();
+        }
+        public boolean loadImageInto(ImageView view, String address) throws Exception {
+            return current().loadImageInto(view, address);
         }
     }
 }

@@ -1,10 +1,12 @@
 /*
  * Node24 prelude（task-58/59 冻结接口）。
  *
- * native 桥（libajsnode24bridge.so）只提供单向同步回调：
+ * native 桥（libajsnode24bridge.so）的通用同步入口：
  *   Node: globalThis.__autojsHost(JSON.stringify(request)) -> JSON string
  * Java: Node24Engine.Host.invoke(String) -> String
- * 没有 Java→Node 反向调用，所以事件用「轮询」补：
+ * 普通事件通过轮询投递；Java 同步回调由独立原生队列在 Node 线程派发。
+ * 支持新 ABI 时，标量/对象引用方法调用走 __ajsJavaFastCall 类型化 JNI。
+ * 普通事件：
  *   1) Java 侧（Node24HostBridge.enqueueEvent / B 的 NodeUiHost）把事件放队列；
  *   2) Node 侧 setInterval 调 __autojsPoll() -> {kind:"poll"} 取走事件，同步派发给 JS 监听。
  *
@@ -115,7 +117,7 @@
       return javaArray(value.$obj, value.$class, value.$length);
     }
     if (Object.prototype.hasOwnProperty.call(value, '$obj')) {
-      return javaObject(value.$obj, value.$class, value.$view === true);
+      return javaObject(value.$obj, value.$class, value.$view === true, value.$type);
     }
     if (Object.prototype.hasOwnProperty.call(value, '$class')) {
       return classRef(value.$class);
@@ -182,7 +184,7 @@
     // okValue already converts wire object descriptors into Java proxies. Reading
     // $obj/$arr/$class on that proxy would perform unrelated reflected lookups.
     if (isJavaObject(value)) { return value; }
-    if (value.$obj !== undefined) { return javaObject(value.$obj, value.$class); }
+    if (value.$obj !== undefined) { return javaObject(value.$obj, value.$class, value.$view === true, value.$type); }
     if (Array.isArray(value.$arr)) {
       var wrapped = [];
       for (var i = 0; i < value.$arr.length; i++) { wrapped.push(wrapJavaResult(value.$arr[i])); }
@@ -202,6 +204,28 @@
   // Java 对象代理（RhinoJavaObject 等价物）
   // ------------------------------------------------------------------
   var memberCache = Object.create(null);
+  var objectTypes = Object.create(null);
+  var typeMemberCache = Object.create(null);
+
+  // The typed JNI lane accepts only scalars and existing Java object references.
+  // Complex maps/arrays/classes/listeners retain their established conversion path.
+  function fastJavaArgs(args) {
+    var result = [];
+    for (var i = 0; i < args.length; i++) {
+      var value = args[i], type = typeof value;
+      if (value == null || type === 'undefined') result.push(null);
+      else if (type === 'string' || type === 'boolean') result.push(value);
+      else if (type === 'number') {
+        // JSON's shortest decimal spelling can differ from an unsafe integer's
+        // binary value. Retain that established Long conversion via the fallback.
+        if (Number.isInteger(value) && !Number.isSafeInteger(value)) return null;
+        result.push(Number.isFinite(value) ? value : null);
+      }
+      else if (isJavaObject(value)) result.push({ $obj: value.__handle });
+      else return null;
+    }
+    return result;
+  }
 
   function memberPrefix(target) {
     if (target.cls) { return 'class:' + target.cls; }
@@ -211,9 +235,16 @@
   function memberInfo(target, name) {
     var key = memberPrefix(target) + '#' + name;
     if (!Object.prototype.hasOwnProperty.call(memberCache, key)) {
+      var typeKey = !target.cls && objectTypes[target.obj] > 0 ? objectTypes[target.obj] + '#' + name : null;
+      if (typeKey && Object.prototype.hasOwnProperty.call(typeMemberCache, typeKey)) {
+        // Callables capture their receiver; share metadata, never the closure.
+        memberCache[key] = Object.assign({}, typeMemberCache[typeKey]);
+        return memberCache[key];
+      }
       var request = { op: 'member', name: name };
       if (target.cls) { request.cls = target.cls; } else { request.obj = target.obj; }
       memberCache[key] = javaCall(request);
+      if (typeKey && memberCache[key]) typeMemberCache[typeKey] = Object.assign({}, memberCache[key]);
     }
     return memberCache[key];
   }
@@ -235,6 +266,12 @@
               return javaCall(Object.assign({}, request, { op: 'uiCall', args: toWireArray(arguments) }));
             }
             return javaAsyncCall(request, toWireArray(arguments), mode);
+          }
+          if (info.$method > 0 && typeof globalThis.__ajsJavaFastCall === 'function') {
+            var fastArgs = fastJavaArgs(arguments);
+            if (fastArgs !== null) {
+              return wrapJavaResult(okValue(globalThis.__ajsJavaFastCall(info.$method, target.obj || 0, fastArgs)));
+            }
           }
           var payload = arguments.length === 0 ? noArgs
             : prefix + JSON.stringify(toWireArray(arguments)) + '}';
@@ -261,7 +298,8 @@
     return undefined;
   }
 
-  function javaObject(handle, className, isView) {
+  function javaObject(handle, className, isView, typeId) {
+    if (typeId > 0) objectTypes[handle] = typeId;
     var generated = generatedClasses[className];
     if (generatedInstances[handle]) { return generatedInstances[handle]; }
     var target = {};

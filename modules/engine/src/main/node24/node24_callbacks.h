@@ -8,6 +8,7 @@
 // reflected Java calls on its original thread (important for Canvas/View calls).
 struct Node24HostTask {
   std::u16string request;
+  std::function<AjsHost::Reply()> action;
   AjsHost::Reply reply{u"Java host stopped", true};
   bool done = false;
   std::mutex mutex;
@@ -94,7 +95,7 @@ struct Node24Callbacks {
 
   void finishHost(const std::shared_ptr<Node24HostTask>& task) {
     AjsHost::Reply reply;
-    try { reply = host.call(task->request); }
+    try { reply = task->action ? task->action() : host.call(task->request); }
     catch (const std::exception&) { reply = {u"Java callback host failed", true}; }
     {
       std::lock_guard<std::mutex> lock(task->mutex);
@@ -106,6 +107,17 @@ struct Node24Callbacks {
   AjsHost::Reply call(const std::u16string& request) {
     if (!enabled) return host.call(request); // preserve the fast path for ordinary scripts
     auto task = std::make_shared<Node24HostTask>(); task->request = request;
+    return submit(task);
+  }
+
+  AjsHost::Reply callJava(int member,int receiver,std::vector<JavaFastValue> args) {
+    if (!enabled) return host.callJava(member,receiver,args);
+    auto task = std::make_shared<Node24HostTask>();
+    task->action = [this,member,receiver,args=std::move(args)] { return host.callJava(member,receiver,args); };
+    return submit(task);
+  }
+
+  AjsHost::Reply submit(const std::shared_ptr<Node24HostTask>& task) {
     if (currentCallback) {
       {
         std::lock_guard<std::mutex> lock(currentCallback->mutex);

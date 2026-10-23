@@ -235,6 +235,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
      */
     private final Node24ReflectionCache mReflectionCache = new Node24ReflectionCache();
     private final Node24NoArgCallCache mNoArgCalls = new Node24NoArgCallCache();
+    private final Node24JavaMemberTable mJavaMembers = new Node24JavaMemberTable();
     private static final Object[] NO_ARGUMENTS = new Object[0];
 
     public Node24HostBridge(Context context) {
@@ -1222,7 +1223,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
         File cache = new File(mContext.getCodeCacheDir(), mOverlayOwner + "/class-" + classId);
         com.stardust.autojs.rhino.AndroidClassLoader loader =
                 new com.stardust.autojs.rhino.AndroidClassLoader(previous, cache);
-        Class<?> generated = loader.defineClass(name, Node24ClassGenerator.generate(name, parent, interfaces, methods), true);
+        Class<?> generated = loader.defineDex(name,
+                Node24DirectDexGenerator.generateDex(name, parent, interfaces, methods));
         Node24DexLifetime.track(generated.getClassLoader());
         if (mClosed.get()) throw new IllegalStateException("脚本已结束");
         generated.getField("__dispatcher").set(null, new Node24ClassGenerator.Dispatcher() {
@@ -1379,6 +1381,57 @@ public final class Node24HostBridge implements Node24Engine.Host {
         return invokeMethod(method, target, args);
     }
 
+    /** Typed JNI boundary for primitive/reference arguments. No JSON is built or parsed.
+     * Member IDs identify an overload set; choose again for every call's actual values.
+     * Native callback dispatch still services this call on the original Java thread.
+     */
+    @androidx.annotation.Keep
+    public Object[] invokeJava(int memberId, int receiverId, Object[] args, int[] references) {
+        try {
+            if (mClosed.get()) throw new IllegalStateException("本次 Node 任务的宿主桥已结束");
+            Node24JavaMemberTable.Member member = mJavaMembers.get(memberId);
+            if (member == null) throw new IllegalArgumentException("无效的 Java 方法 ID：" + memberId);
+            if (args == null || references == null || args.length != references.length)
+                throw new IllegalArgumentException("Java 参数与引用数量不一致");
+            for (int i = 0; i < references.length; i++) {
+                if (references[i] != 0) {
+                    args[i] = mObjects.get(references[i]);
+                    if (args[i] == null) throw new IllegalArgumentException("Java 对象引用已失效：" + references[i]);
+                }
+            }
+            Object target = member.isStatic ? null : mObjects.get(receiverId);
+            if (!member.isStatic && (target == null || !member.type.isInstance(target)))
+                throw new IllegalArgumentException("Java 方法接收对象不匹配");
+            Object value;
+            if (member.type == Class.class && member.isStatic && "forName".equals(member.name)
+                    && args.length == 1 && args[0] instanceof String) {
+                value = Node24JavaArguments.initializeClass(findClass((String) args[0]));
+            } else {
+                Method method = args.length == 0 ? member.zeroArgumentMethod : null;
+                if (method == null) method = findMethod(member.type, member.name, args, member.isStatic);
+                if (method == null) throw new NoSuchMethodException("找不到方法 " + member.type.getName()
+                        + "." + member.name + "(" + describe(args) + ")");
+                if (args.length == 0) member.zeroArgumentMethod = method;
+                value = invokeMethod(method, target, args);
+            }
+            if (value == null) return new Object[] {0, null};
+            if (value instanceof Boolean) return new Object[] {1, value};
+            if (value instanceof Number) {
+                if (!Double.isFinite(((Number) value).doubleValue()))
+                    throw new IllegalArgumentException("Java 返回了非有限数值");
+                return new Object[] {2, value};
+            }
+            if (value instanceof String || value instanceof Character) return new Object[] {3, value.toString()};
+            if (value instanceof Class) return new Object[] {5, ((Class<?>) value).getName()};
+            int handle = objectId(value);
+            if (value.getClass().isArray()) return new Object[] {6, handle, value.getClass().getName(), Array.getLength(value), mJavaMembers.typeId(value.getClass())};
+            return new Object[] {value instanceof View ? 7 : 4, handle, value.getClass().getName(), 0, mJavaMembers.typeId(value.getClass())};
+        } catch (Throwable failure) {
+            String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+            return new Object[] {-1, message};
+        }
+    }
+
     private static boolean isUiType(Class<?> type) {
         return android.view.View.class.isAssignableFrom(type)
                 || android.app.Activity.class.isAssignableFrom(type)
@@ -1454,12 +1507,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
         if (!isStatic) {
             Method method = findMethod(type, name, null, false);
             if (method != null) {
-                return ok(new JSONObject().put("kind", "method"));
+                return ok(new JSONObject().put("kind", "method").put("$method", mJavaMembers.bind(type, name, false)));
             }
         } else {
             Method method = findMethod(type, name, null, true);
             if (method != null) {
-                return ok(new JSONObject().put("kind", "method"));
+                return ok(new JSONObject().put("kind", "method").put("$method", mJavaMembers.bind(type, name, true)));
             }
         }
         Field field = findField(type, name, isStatic);
@@ -1784,6 +1837,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
         int id = objectId(value);
         JSONObject descriptor = new JSONObject().put("$obj", id).put("$class", value.getClass().getName());
+        descriptor.put("$type", mJavaMembers.typeId(value.getClass()));
         if (value instanceof android.view.View) descriptor.put("$view", true);
         return descriptor;
     }
@@ -2054,6 +2108,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return;
         }
         mNoArgCalls.close();
+        mJavaMembers.close();
         synchronized (mFileObservers) {
             for (android.os.FileObserver observer : mFileObservers.values()) observer.stopWatching();
             mFileObservers.clear();
