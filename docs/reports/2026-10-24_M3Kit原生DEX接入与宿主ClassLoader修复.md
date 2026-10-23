@@ -39,3 +39,11 @@
 - MI8 重装后无障碍被关闭，capture_screen/get_ui_layout 不可用，未取得最终截图；native 类验证来自脚本日志；
 - 尚未在 `.4` 重跑 M3Kit 500ms 基准；需 dev-1232 + 无障碍开启后补测；
 - 二次生成类继承（`class B extends A`）兼容缺口仍是独立问题。
+
+## 6. 第五轮补充：交互控件 facade（2026-10-24）
+
+- NativeView 增加 switch/nav/segmented/slider 公开状态 API 与子 View tag；
+- native.js `wrap` 为 native View 提供 M3Kit 兼容 facade；`ui.Widget.of` patch 后 M3Kit app 可直接把原生控件当 JS Widget；
+- MI8 dev-1232 诊断：chip/nav/segmented/slider/textField 均为 `m3ui.NativeView`，facade 事件正常，slider setValue/getValue、textField setText/getText 通过；
+- main.node.js 默认 `setNativeAll(true)`：冷启动 page ready 671ms，同进程第二次 641ms；
+- 注意：中断/强停后再启动若出现挂起，是旧进程/Activity 残留，重启 app 后可恢复；旧宿主 .4/dev-1231 会自动回退 JS。
