@@ -10,6 +10,7 @@
  * - setPosition/setSize 默认走 move/resize，不再 close+show 重建视图（legacyRebuild:true 可回退旧行为）；
  * - on('touch'|'drag'|'click')、enableDrag、getSize/getLocationOnScreen、binding 常用样式命令可用；
  * - binding.raw()/raw(id) 可取真实 View（任意 Java View API）；hide/show 复用同一视图保留状态；
+ * - reload(xml) 运行期热替换视图树（overlayId/位置/尺寸不变）；enableDrag 支持多锚点数组；
  * - addFlags/removeFlags/setFlags 走本地 overlay flags；
  * - show({touchable:false}) / setViewFromXml(xml,{touchable:false}) 支持不可触摸绘制型浮窗（默认 true）。
  *
@@ -122,6 +123,9 @@
     this._bindingCache = Object.create(null);
     this._clickNames = Object.create(null);
     this._dragAnchor = 0;
+    this._dragAnchors = [];
+    this._dragAnchorNames = [];
+    this._pendingDragNames = [];
     this._dragOptions = null;
     this._legacyRebuild = opts.legacyRebuild === true || legacyRebuild;
     this._hidden = false;
@@ -204,6 +208,49 @@
     try { this._text = extractTextFromXml(xml); } catch (error) { this._text = 'Node24'; }
     return this;
   };
+  FloatingWindowImpl.prototype._applyViewMap = function (result) {
+    this._views = Object.create(null);
+    var rawViews = result && result.views && typeof result.views === 'object' ? result.views : {};
+    for (var viewName in rawViews) {
+      if (Object.prototype.hasOwnProperty.call(rawViews, viewName)) { this._views[viewName] = Number(rawViews[viewName]); }
+    }
+    this._bindingCache = Object.create(null);
+    Object.keys(this._clickNames).forEach(function (name) {
+      var id = this._views[name];
+      if (id) {
+        try { overlayCall('viewCommand', { overlayId: this._overlayId, viewId: id, command: 'setClickable', value: true }); } catch (ignored) { }
+      }
+    }, this);
+    if (!this._dragAnchorNames.length && this._pendingDragNames.length) {
+      this._dragAnchorNames = this._pendingDragNames.slice();
+    }
+    var ids = [];
+    (this._dragAnchorNames || []).forEach(function (name) {
+      var id = this._views[name] || 0;
+      if (id) ids.push(id);
+    }, this);
+    this._dragAnchors = ids;
+    this._dragAnchor = ids.length ? ids[0] : 0;
+    this._dragAnchorNames = (this._dragAnchorNames || []).filter(function (name) { return !!this._views[name]; }, this);
+    this._pendingDragNames = [];
+    if (ids.length && this._overlayId) {
+      try { overlayCall('enableDrag', { overlayId: this._overlayId, viewId: ids[0], viewIds: ids }); } catch (ignored) { }
+    }
+  };
+
+  // 运行期热替换 XML：原生在同一 root 上换 content，位置/可见性/overlayId 不变。
+  FloatingWindowImpl.prototype.reload = function (xml, options) {
+    if (typeof xml !== 'string' || xml.trim() === '') { throw new TypeError('[Auto.js] reload 需要非空 XML 字符串'); }
+    this._xml = String(xml);
+    if (options && typeof options.touchable === 'boolean') { this._touchable = options.touchable; }
+    try { this._text = extractTextFromXml(xml); } catch (error) { this._text = 'Node24'; }
+    if (!this._overlayId) { this._applyViewMap({ views: {} }); return this; }
+    var result = overlayCall('reload', { overlayId: this._overlayId, xml: String(xml) });
+    this._applyViewMap(result);
+    this._emit('reload', { overlayId: this._overlayId });
+    return this;
+  };
+
   FloatingWindowImpl.prototype._showNow = function () {
     if (this._closed) { throw apiError('floating_window 已关闭，不能再次 show'); }
     if (this._overlayId) {
@@ -239,24 +286,7 @@
       }
     }
     this._overlayId = String(showResult.overlayId || '');
-    this._views = Object.create(null);
-    var rawViews = showResult.views && typeof showResult.views === 'object' ? showResult.views : {};
-    for (var viewName in rawViews) { if (Object.prototype.hasOwnProperty.call(rawViews, viewName)) { this._views[viewName] = Number(rawViews[viewName]); } }
-    Object.keys(this._clickNames).forEach(function (name) {
-      var id = this._views[name];
-      if (id) {
-        try { overlayCall('viewCommand', { overlayId: this._overlayId, viewId: id, command: 'setClickable', value: true }); } catch (ignored) { }
-      }
-    }, this);
-    if (this._pendingDragName) {
-      var pendingId = this._views[this._pendingDragName] || 0;
-      try { console.log('[floating_window] enableDrag pending name=' + this._pendingDragName + ' viewId=' + pendingId); } catch (ignored) { }
-      if (pendingId) {
-        this._dragAnchor = pendingId;
-        this._pendingDragName = null;
-        overlayCall('enableDrag', { overlayId: this._overlayId, viewId: pendingId });
-      }
-    }
+    this._applyViewMap(showResult);
     activeWindows.add(this);
     ensureOverlayPolling();
     this._hidden = false;
@@ -502,18 +532,28 @@
   });
 
   FloatingWindowImpl.prototype.enableDrag = function (viewOrName, options) {
-    var name = typeof viewOrName === 'string' ? viewOrName : (viewOrName && viewOrName.__name);
-    if (!name) { throw new TypeError('[Auto.js] enableDrag(view, options) 需要浮窗控件或 id 名'); }
-    var viewId = this._views[name] || 0;
-    this._dragOptions = options || {};
-    if (!viewId) {
-      // sample 会在 show() 之前调用 enableDrag：等 show 拿到 views 后再补发。
-      this._pendingDragName = name;
-      return this;
+    var list = Array.isArray(viewOrName) ? viewOrName : [viewOrName];
+    var names = [];
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      if (typeof item === 'string' && item) { names.push(item); }
+      else if (item && item.__name) { names.push(String(item.__name)); }
     }
-    this._dragAnchor = viewId;
-    this._pendingDragName = null;
-    if (this._overlayId) { overlayCall('enableDrag', { overlayId: this._overlayId, viewId: viewId }); }
+    if (!names.length) { throw new TypeError('[Auto.js] enableDrag(view|view[], options) 需要浮窗控件或 id 名'); }
+    this._dragOptions = options || {};
+    this._dragAnchorNames = names;
+    var ids = [];
+    var pending = [];
+    names.forEach(function (name) {
+      var id = this._views[name] || 0;
+      if (id) ids.push(id); else pending.push(name);
+    }, this);
+    this._pendingDragNames = pending;
+    this._dragAnchors = ids;
+    this._dragAnchor = ids.length ? ids[0] : 0;
+    if (ids.length && this._overlayId) {
+      overlayCall('enableDrag', { overlayId: this._overlayId, viewId: ids[0], viewIds: ids });
+    }
     return this;
   };
   FloatingWindowImpl.prototype.addFlags = function (flags) {
@@ -616,7 +656,8 @@
           try { handler({ x: event.x, y: event.y, viewId: viewId }); } catch (error) { console.error('[floating_window] click handler 异常：', error); }
         });
       });
-      if (window._dragOptions && window._dragOptions.onClick && Number(window._dragAnchor) === viewId) {
+      if (window._dragOptions && window._dragOptions.onClick
+          && (Number(window._dragAnchor) === viewId || (window._dragAnchors || []).indexOf(viewId) >= 0)) {
         try { window._dragOptions.onClick({ x: event.x, y: event.y }); } catch (error) { console.error('[floating_window] drag onClick 异常：', error); }
       }
       window._emit('click', { x: event.x, y: event.y, viewId: viewId });
@@ -639,7 +680,7 @@
   }
 
   var module = Object.assign({}, legacy, {
-    version: '1.1.0',
+    version: '1.2.0',
     createWindow: createWindow,
     rawWindow: rawWindow,
     FloatingWindow: FloatingWindowImpl,

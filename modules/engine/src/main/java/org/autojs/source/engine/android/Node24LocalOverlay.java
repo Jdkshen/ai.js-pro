@@ -24,6 +24,7 @@ import org.json.JSONObject;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -181,6 +182,7 @@ public final class Node24LocalOverlay {
         View content;
         WindowManager.LayoutParams params;
         JSONObject views = new JSONObject();
+        final LinkedHashSet<Integer> dragAnchors = new LinkedHashSet<>();
         int dragAnchor;
         int downX, downY, lastX, lastY;
         boolean moved;
@@ -287,14 +289,52 @@ public final class Node24LocalOverlay {
             return response;
         }
 
+        JSONObject reloadOnMain(String xml) throws Exception {
+            if (xml == null || xml.trim().isEmpty()) {
+                return new JSONObject().put("ok", false).put("error", "reload 需要非空 XML");
+            }
+            if (root == null) {
+                return new JSONObject().put("ok", false).put("error", "浮窗尚未创建");
+            }
+            int themeRes = context.getApplicationInfo().theme;
+            if (themeRes == 0) themeRes = android.R.style.Theme_Material_Light_NoActionBar;
+            android.view.ContextThemeWrapper themed = new android.view.ContextThemeWrapper(context, themeRes);
+            View newContent = NodeUiHost.inflateInlineLayout(themed, xml);
+            if (newContent == null) throw new IllegalStateException("reload inflate returned null");
+            JSONObject newViews = new JSONObject();
+            Object rawViews = NodeUiHost.buildInlineViews(newContent, xml);
+            if (rawViews instanceof JSONObject) newViews = (JSONObject) rawViews;
+            root.removeAllViews();
+            root.addView(newContent, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+            content = newContent;
+            views = newViews;
+            dragAnchors.clear();
+            dragAnchor = 0;
+            root.requestLayout();
+            Log.i(TAG, "C-LOCAL reload xmlLen=" + xml.length() + " views=" + views.length());
+            return new JSONObject().put("ok", true).put("overlayId", id).put("views", views);
+        }
+
         JSONObject handle(String action, JSONObject request) throws Exception {
             switch (action) {
                 case "viewCommand":
                     return viewCommand(request);
-                case "enableDrag":
-                    dragAnchor = request.optInt("viewId", 0);
-                    Log.i(TAG, "C-LOCAL drag anchor=" + dragAnchor);
+                case "enableDrag": {
+                    dragAnchors.clear();
+                    int one = request.optInt("viewId", 0);
+                    if (one > 0) dragAnchors.add(one);
+                    JSONArray many = request.optJSONArray("viewIds");
+                    if (many != null) {
+                        for (int i = 0; i < many.length(); i++) {
+                            int value = many.optInt(i, 0);
+                            if (value > 0) dragAnchors.add(value);
+                        }
+                    }
+                    dragAnchor = dragAnchors.isEmpty() ? 0 : dragAnchors.iterator().next();
+                    Log.i(TAG, "C-LOCAL drag anchors=" + dragAnchors);
                     return ok();
+                }
                 case "move": {
                     final int nx = request.optInt("x", params.x);
                     final int ny = request.optInt("y", params.y);
@@ -325,6 +365,11 @@ public final class Node24LocalOverlay {
                         return null;
                     }, 2000L);
                     return ok();
+                }
+                case "reload": {
+                    Object reloadResult = runOnMain(() -> reloadOnMain(request.optString("xml", "")), 5000L);
+                    return reloadResult instanceof JSONObject ? (JSONObject) reloadResult
+                            : new JSONObject().put("ok", false).put("error", "本地 reload 超时");
                 }
                 case "resize": {
                     final int newWidth = request.optInt("width", 0);
@@ -522,7 +567,7 @@ public final class Node24LocalOverlay {
                 moved = false;
                 downViewId = findViewIdAt(root, x, y, true);
                 if (downViewId == 0) downViewId = findViewIdAt(root, x, y, false);
-                dragCandidate = dragAnchor != 0 && contains(dragAnchor, x, y);
+                dragCandidate = isDragAnchorAt(x, y);
                 Log.i(TAG, "C-LOCAL touch down raw=" + x + "," + y + " viewId=" + downViewId
                         + " dragCandidate=" + dragCandidate + " root=" + root.getWidth() + "x" + root.getHeight());
                 enqueueTouch("down", x, y);
@@ -570,6 +615,13 @@ public final class Node24LocalOverlay {
             target.getLocationOnScreen(loc);
             return screenX >= loc[0] && screenX < loc[0] + target.getWidth()
                     && screenY >= loc[1] && screenY < loc[1] + target.getHeight();
+        }
+
+        boolean isDragAnchorAt(int screenX, int screenY) {
+            for (Integer anchor : dragAnchors) {
+                if (anchor != null && anchor > 0 && contains(anchor, screenX, screenY)) return true;
+            }
+            return false;
         }
 
         int findViewIdAt(View view, int screenX, int screenY, boolean clickable) {
