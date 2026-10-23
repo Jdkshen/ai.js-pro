@@ -218,6 +218,22 @@ function create(sdk) {
     var lastStartError = "";
     return {
         DEFAULTS: DEFAULTS,
+        /** Installed UCI process + bundled NNUE; available independently of host JNI. */
+        uciInfo: function () {
+            return tryCall(sdk, "uciInfo", []) || { ok: false, error: "请更新象棋引擎插件至 1.1.0" };
+        },
+        /** Node-only asynchronous session: start/analyze/beginPonder/finishPonder/stop/quit/status. */
+        createUci: function (options) {
+            if (typeof process === "undefined" || !process.versions || !process.versions.node) {
+                throw new Error("createUci 需要 Node 引擎；原同步算棋接口仍可使用");
+            }
+            var info = call(sdk, "uciInfo", []);
+            if (!info || info.ok !== true) { throw new Error(info && info.error || "插件预算引擎不可用"); }
+            var opts = Object.assign({}, options || {}, { binary: info.binary });
+            if (opts.compatible === true) { opts.binary = info.compatibleBinary || info.binary; }
+            if (!opts.evalFile) { opts.evalFile = info.evalFile; }
+            return require("./uci-client.js").create(opts);
+        },
         /** 插件的原生引擎在不在（.so 是否加载成功）。 */
         available: function () {
             return safeBoolean(tryCall(sdk, "engineAvailable", []));

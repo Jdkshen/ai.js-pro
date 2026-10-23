@@ -50,7 +50,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Plugin engine CMake configuration failed'
 }
 
-& $CMakePath --build $buildDirectory --config $Configuration 2>$null
+& $CMakePath --build $buildDirectory --config $Configuration --parallel 8
 if ($LASTEXITCODE -ne 0) {
     throw 'Plugin engine native build failed'
 }
@@ -62,4 +62,14 @@ if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
 
 $targetPath = Join-Path $jniDirectory 'libxiangqi_engine.so'
 Copy-Item -LiteralPath $libraryPath -Destination $targetPath -Force
+$uciPath = Join-Path $buildDirectory 'libxiangqi_uci.so'
+if (-not (Test-Path -LiteralPath $uciPath -PathType Leaf)) {
+    throw "Plugin UCI executable was not produced: $uciPath"
+}
+Copy-Item -LiteralPath $uciPath -Destination (Join-Path $jniDirectory 'libxiangqi_uci.so') -Force
+$optimizedPath = Join-Path $buildDirectory 'libxiangqi_uci_dotprod.so'
+if (-not (Test-Path -LiteralPath $optimizedPath -PathType Leaf)) {
+    throw "Plugin optimized UCI executable was not produced: $optimizedPath"
+}
+Copy-Item -LiteralPath $optimizedPath -Destination (Join-Path $jniDirectory 'libxiangqi_uci_dotprod.so') -Force
 Get-Item -LiteralPath $targetPath | Select-Object FullName, Length, LastWriteTime

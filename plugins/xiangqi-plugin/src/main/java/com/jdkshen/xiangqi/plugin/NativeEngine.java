@@ -68,4 +68,7 @@ public final class NativeEngine {
     public static native void nativeQuit();
 
     public static native boolean nativeIsRunning();
+
+    /** Kernel-advertised CPU feature; false/absent means use baseline ARMv8. */
+    public static native boolean nativeSupportsDotprod();
 }

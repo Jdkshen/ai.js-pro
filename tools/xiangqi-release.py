@@ -20,7 +20,7 @@ PROJECT = REPO / RELATIVE
 APK_PREFIX = "assets/scripts/"
 GENERATED = {"release-manifest.json", "src/app/version.js"}
 # 插件 APK 在工程文件之外还有自己的一层入口脚本（宿主加载插件时先跑 index.js）。
-PLUGIN_SCRIPTS = {"index.js", "engine.js", "library.js"}
+PLUGIN_SCRIPTS = {"index.js", "engine.js", "library.js", "uci-client.js", "uci-parser.js"}
 IGNORED_PARTS = {".artifacts", ".floaty-panel", "__pycache__", "node_modules"}
 
 

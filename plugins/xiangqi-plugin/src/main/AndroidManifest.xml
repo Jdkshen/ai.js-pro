@@ -9,6 +9,7 @@
 
     <application
         android:allowBackup="false"
+        android:extractNativeLibs="true"
         android:label="象棋引擎插件"
         android:hasCode="true">
 

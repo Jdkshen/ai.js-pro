@@ -24,6 +24,7 @@ list(FILTER PIKAFISH_ENGINE_SOURCES EXCLUDE REGEX "/universal/")
 list(FILTER PIKAFISH_ENGINE_SOURCES EXCLUDE REGEX "/main\\.cpp$")
 
 add_library(xiangqi_engine SHARED
+        device_features.cpp
         ${PIKAFISH_JNI_DIR}/pikafish_jni.cpp
         ${PIKAFISH_ENGINE_SOURCES})
 
@@ -57,3 +58,26 @@ target_link_options(xiangqi_engine PRIVATE
         "$<$<CONFIG:Release>:-Wl,--strip-all>")
 
 target_link_libraries(xiangqi_engine PRIVATE log m)
+
+# Install the PIE command-line engine through Android's native-library directory.
+# Node spawns it as a process (never dlopen); no executable is copied to writable
+# app data. Baseline ARMv8 NEON keeps this usable without dot-product extensions.
+add_executable(xiangqi_uci ${PIKAFISH_ENGINE_SOURCES} "${PIKAFISH_SRC}/main.cpp")
+set_target_properties(xiangqi_uci PROPERTIES OUTPUT_NAME "libxiangqi_uci" SUFFIX ".so")
+target_include_directories(xiangqi_uci PRIVATE "${PIKAFISH_SRC}")
+target_compile_features(xiangqi_uci PRIVATE cxx_std_17)
+target_compile_definitions(xiangqi_uci PRIVATE USE_NEON=8 USE_POPCNT IS_64BIT NNUE_EMBEDDING_OFF)
+target_compile_options(xiangqi_uci PRIVATE -O3 -fno-exceptions -march=armv8-a)
+target_link_options(xiangqi_uci PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384"
+    "$<$<CONFIG:Release>:-Wl,--strip-all>")
+target_link_libraries(xiangqi_uci PRIVATE log m)
+
+add_executable(xiangqi_uci_dotprod ${PIKAFISH_ENGINE_SOURCES} "${PIKAFISH_SRC}/main.cpp")
+set_target_properties(xiangqi_uci_dotprod PROPERTIES OUTPUT_NAME "libxiangqi_uci_dotprod" SUFFIX ".so")
+target_include_directories(xiangqi_uci_dotprod PRIVATE "${PIKAFISH_SRC}")
+target_compile_features(xiangqi_uci_dotprod PRIVATE cxx_std_17)
+target_compile_definitions(xiangqi_uci_dotprod PRIVATE USE_NEON=8 USE_NEON_DOTPROD USE_POPCNT IS_64BIT NNUE_EMBEDDING_OFF)
+target_compile_options(xiangqi_uci_dotprod PRIVATE -O3 -fno-exceptions -march=armv8.2-a+dotprod)
+target_link_options(xiangqi_uci_dotprod PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384"
+    "$<$<CONFIG:Release>:-Wl,--strip-all>")
+target_link_libraries(xiangqi_uci_dotprod PRIVATE log m)

@@ -178,6 +178,11 @@ static_assert(sizeof(Cluster) == 32, "Suboptimal Cluster size");
 // Transposition table consists of clusters and each cluster consists
 // of ClusterSize number of TTEntry.
 void TranspositionTable::resize(usize mbSize, ThreadPool& threads) {
+    // Keep accumulated ponder analysis when only changing the idle worker pool.
+    // Clear Hash still explicitly discards the table.
+    const usize requestedCount = mbSize * 1024 * 1024 / sizeof(Cluster);
+    if (table && clusterCount == requestedCount)
+        return;
     aligned_large_pages_free(table);
 
     clusterCount  = mbSize * 1024 * 1024 / sizeof(Cluster);

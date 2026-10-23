@@ -121,6 +121,17 @@ void update_correction_history(const Position& pos,
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
 Value value_draw(usize nodes) { return VALUE_DRAW - 1 + Value(nodes & 0x2); }
+
+// Contempt is expressed from the root side's point of view: a positive value
+// makes a confirmed draw worse for the root side, a negative one better.
+// ss->ply is relative to the root and advances on null moves as well, so its
+// parity identifies the side to move at this node even in null-move subtrees.
+// Only confirmed draws are adjusted; aborted/MAX_PLY fallbacks keep their
+// original values and must not be mistaken for a new position evaluation.
+Value contempt_draw_value(int ply, const OptionsMap& options, Value base) {
+    const Value contempt = Value(options[std::string("Contemp") + "t"]);
+    return base + ((ply & 1) ? contempt : -contempt);
+}
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r60c);
 void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus);
@@ -749,9 +760,7 @@ Value Search::Worker::search(
         Value result = VALUE_NONE;
         if (pos.rule_judge(result, ss->ply))
             return result == VALUE_DRAW
-                     ? value_draw(nodes)
-                         + (pos.side_to_move() == rootPos.side_to_move() ? -Value(options[std::string("Contemp") + "t"])
-                                                                         : Value(options[std::string("Contemp") + "t"]))
+                     ? contempt_draw_value(ss->ply, options, value_draw(nodes))
                      : result;
         if (result != VALUE_NONE)
         {
@@ -767,12 +776,10 @@ Value Search::Worker::search(
                 beta = std::min(beta, VALUE_DRAW + 1);
         }
 
+        // A stop or maximum-ply fallback is not a confirmed draw: return the
+        // original unbiased value instead of applying Contempt to it.
         if (threads.stop.load(std::memory_order_relaxed) || ss->ply >= MAX_PLY)
-            return (ss->ply >= MAX_PLY && !ss->inCheck)
-                     ? evaluate(pos)
-                     : value_draw(nodes)
-                         + (pos.side_to_move() == rootPos.side_to_move() ? -Value(options[std::string("Contemp") + "t"])
-                                                                         : Value(options[std::string("Contemp") + "t"]));
+            return (ss->ply >= MAX_PLY && !ss->inCheck) ? evaluate(pos) : value_draw(nodes);
 
         // Step 3. Mate distance pruning. Even if we mate at the next move our score
         // would be at best mate_in(ss->ply + 1), but if alpha is already bigger because
@@ -1622,7 +1629,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // Step 2. Check for repetition or maximum ply reached
     Value result = VALUE_NONE;
     if (pos.rule_judge(result, ss->ply))
-        return result;
+        return result == VALUE_DRAW ? contempt_draw_value(ss->ply, options, VALUE_DRAW)
+                                    : result;
     if (result != VALUE_NONE)
     {
         assert(result != VALUE_DRAW);

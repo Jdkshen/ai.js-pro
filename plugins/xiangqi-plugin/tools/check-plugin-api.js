@@ -84,6 +84,8 @@ function fakeSdk(state) {
         engineQuit: function () { state.running = false; },
         resolveNnue: function () { return "/data/user/0/com.jdkshen.xiangqi.plugin/files/pikafish.nnue"; },
         nnuePath: function () { return "/data/user/0/com.jdkshen.xiangqi.plugin/files/pikafish.nnue"; },
+        uciInfo: function () { return JSON.stringify({ ok: true, protocol: "uci", ponder: true,
+            binary: "/data/app/plugin/lib/arm64/libxiangqi_uci.so", evalFile: "/data/user/0/host/files/pikafish.nnue" }); },
         scriptDir: function () { return PROJECT_DIR; }
     };
 }
@@ -130,6 +132,16 @@ check("available()/isRunning() 直通 SDK", function () {
     assert.strictEqual(good.engine.isRunning(), false);
     good.engine.start({ threads: 4, hashMb: 256, contempt: 0 });
     assert.strictEqual(good.engine.isRunning(), true);
+});
+check("预算使用安装目录的独立引擎，与同步 JNI 会话独立", function () {
+    const info = good.engine.uciInfo();
+    assert.strictEqual(info.ponder, true);
+    assert.strictEqual(info.binary, "/data/app/plugin/lib/arm64/libxiangqi_uci.so");
+    const uci = good.engine.createUci({ threads: 2, hashMb: 64 });
+    assert.strictEqual(typeof uci.beginPonder, "function");
+    assert.strictEqual(typeof uci.finishPonder, "function");
+    assert.strictEqual(uci.status().running, false);
+    assert.strictEqual(uci.status().phase, "idle");
 });
 check("start() 只把基本类型传给 Java（越界值夹到引擎接受的区间）", function () {
     assert.strictEqual(good.engine.DEFAULTS.threads, 2);

@@ -90,6 +90,7 @@ public final class XiangqiPlugin {
         result.put("engineLoadError", NativeEngine.loadError());
         result.put("nnue", resolveNnue(null));
         result.put("nnueError", mNnueError);
+        result.put("uci", new JSONObject(uciInfo()));
         // 宿主把 runtime/scope 传进来没有：官方 SDK 的插件靠它做更深桥接，这里只作为兼容性事实记录。
         result.put("hostRuntime", mRuntime == null ? "" : mRuntime.getClass().getName());
         result.put("hostScope", mScope == null ? "" : mScope.getClass().getName());
@@ -196,6 +197,36 @@ public final class XiangqiPlugin {
     /** 解析（必要时解包）后的 NNUE 权重绝对路径；空串 = 找不到。 */
     public String nnuePath() {
         return resolveNnue(null);
+    }
+
+    /** Node may spawn this installed PIE without a dependency on host JNI APIs. */
+    public String uciInfo() throws JSONException {
+        JSONObject result = new JSONObject();
+        String directory = mPluginContext.getApplicationInfo().nativeLibraryDir;
+        File compatible = directory == null ? null : new File(directory, "libxiangqi_uci.so");
+        File optimized = directory == null ? null : new File(directory, "libxiangqi_uci_dotprod.so");
+        boolean dotprod = false;
+        try { dotprod = NativeEngine.isAvailable() && NativeEngine.nativeSupportsDotprod(); }
+        catch (Throwable ignored) { /* An older loaded JNI library safely uses baseline. */ }
+        boolean useOptimized = dotprod && optimized != null && optimized.isFile() && optimized.canExecute();
+        File binary = useOptimized ? optimized : compatible;
+        String nnue = resolveNnue(null);
+        boolean executable = binary != null && binary.isFile() && binary.canExecute();
+        result.put("ok", executable && !nnue.isEmpty());
+        result.put("apiVersion", 1);
+        result.put("protocol", "uci");
+        result.put("ponder", true);
+        result.put("variant", useOptimized ? "armv8-dotprod" : "armv8-neon");
+        result.put("dotprodSupported", dotprod);
+        result.put("compatibleBinary", compatible == null ? "" : compatible.getAbsolutePath());
+        result.put("binary", binary == null ? "" : binary.getAbsolutePath());
+        result.put("evalFile", nnue);
+        if (!executable) {
+            result.put("error", "插件预算引擎没有安装为可执行文件（需 arm64-v8a）：" + binary);
+        } else if (nnue.isEmpty()) {
+            result.put("error", "找不到预算引擎权重：" + nnueError());
+        }
+        return result.toString();
     }
 
     /**

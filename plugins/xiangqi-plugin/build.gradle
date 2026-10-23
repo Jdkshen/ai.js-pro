@@ -121,13 +121,21 @@ tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.con
 // 原生库是外部脚本编译的（src/main/cpp/CMakeLists.txt + src/main/cpp/build-native.ps1），
 // 与 :app 的 libpikafish.so 同一份 Pikafish 源码；漏编时这里给出明确提示而不是只在真机上崩。
 def pluginNativeLibrary = file('src/main/jniLibs/arm64-v8a/libxiangqi_engine.so')
+def pluginUciExecutable = file('src/main/jniLibs/arm64-v8a/libxiangqi_uci.so')
+def pluginOptimizedUciExecutable = file('src/main/jniLibs/arm64-v8a/libxiangqi_uci_dotprod.so')
 tasks.register('verifyPluginNativeLibrary') {
     group = 'verification'
     description = 'Require the plugin native engine before packaging the plugin APK.'
     inputs.file(pluginNativeLibrary)
+    inputs.file(pluginUciExecutable)
+    inputs.file(pluginOptimizedUciExecutable)
     doLast {
         if (!pluginNativeLibrary.isFile()) {
             throw new GradleException('Plugin native engine is missing. Run ' +
+                    'plugins/xiangqi-plugin/src/main/cpp/build-native.ps1 before packaging.')
+        }
+        if (!pluginUciExecutable.isFile() || !pluginOptimizedUciExecutable.isFile()) {
+            throw new GradleException('Plugin ponder engine is missing. Run ' +
                     'plugins/xiangqi-plugin/src/main/cpp/build-native.ps1 before packaging.')
         }
     }
