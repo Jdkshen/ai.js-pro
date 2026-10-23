@@ -53,7 +53,7 @@ public final class Node24LocalOverlay {
             return null;
         }
         String action = request.optString("action", "show");
-        if ("show".equals(action)) {
+        if ("show".equals(action) && request.optString("overlayId", "").isEmpty()) {
             try {
                 return show(context, projectDir, request);
             } catch (Throwable error) {

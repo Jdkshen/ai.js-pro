@@ -639,6 +639,7 @@
   }
 
   var module = Object.assign({}, legacy, {
+    version: '1.1.0',
     createWindow: createWindow,
     rawWindow: rawWindow,
     FloatingWindow: FloatingWindowImpl,
