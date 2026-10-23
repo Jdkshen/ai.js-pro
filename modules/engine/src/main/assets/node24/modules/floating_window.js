@@ -5,11 +5,11 @@
  *   createWindow / rawWindow / canDrawOverlays / manageDrawOverlays / FLAG_*
  *   window.setText/setViewFromXml/show/hide/close/setPosition/getPosition/setSize/getSize/on/addFlags/removeFlags
  *
- * 说明：当前 :node24 宿主（kind:ui op:floatingWindow）只支持 show(text,x,y,width,height)/close/closeAll，
- * 没有 update/touch 事件通道。因此：
- * - 位置/尺寸：通过 close+show 重建实现（可用但有闪烁，后续宿主支持 update 后可去掉）；
- * - on('touch'|'drag'|'click') / enableDrag：明确抛错（需要主进程 overlay 触摸事件 -> Java→Node 反向通道）；
- * - addFlags/removeFlags/setFlags 保留 API 形状但当前宿主忽略（不会静默声称生效）；
+ * 说明：:node24 进程内 Node24LocalOverlay 已支持 XML inflate、updateViewLayout 移动/缩放、
+ * 本地触摸/拖动事件（native 16ms 节流，JS 在有 touch/drag 监听时 16ms 轮询，否则 100ms）与常用 View 命令。
+ * - setPosition/setSize 默认走 move/resize，不再 close+show 重建视图（legacyRebuild:true 可回退旧行为）；
+ * - on('touch'|'drag'|'click')、enableDrag、getSize/getLocationOnScreen 与 binding 常用样式命令可用；
+ * - addFlags/removeFlags/setFlags 走本地 overlay flags；
  * - show({touchable:false}) / setViewFromXml(xml,{touchable:false}) 支持不可触摸绘制型浮窗（默认 true）。
  *
  * 本文件是独立 IIFE，可由 Node24Prelude 在 prelude 之后拼接加载（见同目录 REGISTER-PATCH.md）。
@@ -120,6 +120,9 @@
     this._clickNames = Object.create(null);
     this._dragAnchor = 0;
     this._dragOptions = null;
+    this._legacyRebuild = opts.legacyRebuild === true;
+    this._lastWidth = 0;
+    this._lastHeight = 0;
   }
   FloatingWindowImpl.prototype._emit = function (event) {
     var handlers = this._listeners[event];
@@ -146,7 +149,15 @@
   FloatingWindowImpl.prototype.setText = function (text) { this._text = String(text); return this; };
   FloatingWindowImpl.prototype.setTouchable = function (touchable) {
     this._touchable = touchable !== false;
-    if (this._visible) { this._reShow(); }
+    if (this._legacyRebuild) {
+      if (this._visible) { this._reShow(); }
+      return this;
+    }
+    if (this._visible && this._overlayId) {
+      try {
+        overlayCall('setTouchable', { overlayId: this._overlayId, touchable: this._touchable });
+      } catch (ignored) { }
+    }
     return this;
   };
   FloatingWindowImpl.prototype.isTouchable = function () { return this._touchable !== false; };
@@ -280,7 +291,15 @@
   FloatingWindowImpl.prototype.setPosition = function (x, y) {
     this._x = requireInt(x, 'x', 0);
     this._y = requireInt(y, 'y', 0);
-    this._reShow();
+    if (!this._legacyRebuild && this._visible && this._overlayId) {
+      try {
+        overlayCall('move', { overlayId: this._overlayId, x: this._x, y: this._y });
+      } catch (error) {
+        if (this._legacyRebuild) { this._reShow(); }
+      }
+    } else if (this._legacyRebuild) {
+      this._reShow();
+    }
     this._emit('position', { x: this._x, y: this._y });
     return this;
   };
@@ -289,11 +308,30 @@
   FloatingWindowImpl.prototype.setSize = function (width, height) {
     this._width = requireInt(width, 'width', 0);
     this._height = requireInt(height, 'height', 0);
-    this._reShow();
+    if (!this._legacyRebuild && this._visible && this._overlayId) {
+      try {
+        overlayCall('resize', { overlayId: this._overlayId, width: this._width, height: this._height });
+      } catch (ignored) { }
+    } else if (this._legacyRebuild) {
+      this._reShow();
+    }
     this._emit('size', { width: this._width, height: this._height });
     return this;
   };
-  FloatingWindowImpl.prototype.getSize = function () { return { width: this._width, height: this._height }; };
+  FloatingWindowImpl.prototype._metrics = function () {
+    if (!this._visible || !this._overlayId) { return null; }
+    try {
+      var response = overlayCall('metrics', { overlayId: this._overlayId });
+      this._lastWidth = Number(response.width || 0);
+      this._lastHeight = Number(response.height || 0);
+      return response;
+    } catch (ignored) { return null; }
+  };
+  FloatingWindowImpl.prototype.getSize = function () {
+    var metrics = this._metrics();
+    if (metrics) { return { width: this._lastWidth, height: this._lastHeight }; }
+    return { width: this._lastWidth || this._width, height: this._lastHeight || this._height };
+  };
   FloatingWindowImpl.prototype.isShowing = function () { return this._visible; };
   function wrapTouchEvent(event) {
     var actionMap = { down: 0, up: 1, move: 2, cancel: 3, outside: 4 };
@@ -343,6 +381,32 @@
       setEnabled: function (value) { overlayViewCommand(window, name, 'setEnabled', !!value); return binding; },
       setChecked: function (value) { overlayViewCommand(window, name, 'setChecked', !!value); return binding; },
       getChecked: function () { return !!overlayViewCommand(window, name, 'getChecked'); },
+      setAlpha: function (value) { overlayViewCommand(window, name, 'setAlpha', Number(value)); return binding; },
+      setBackgroundColor: function (value) { overlayViewCommand(window, name, 'setBackgroundColor', Number(value)); return binding; },
+      setTextColor: function (value) { overlayViewCommand(window, name, 'setTextColor', Number(value)); return binding; },
+      setPadding: function (left, top, right, bottom) {
+        if (window._overlayId && window._views[name]) {
+          try { overlayCall('viewCommand', { overlayId: window._overlayId, viewId: window._views[name], command: 'setPadding', left: Number(left || 0), top: Number(top || 0), right: Number(right || 0), bottom: Number(bottom || 0) }); } catch (ignored) { }
+        }
+        return binding;
+      },
+      setLayoutParams: function (width, height) {
+        if (window._overlayId && window._views[name]) {
+          try { overlayCall('viewCommand', { overlayId: window._overlayId, viewId: window._views[name], command: 'setLayoutParams', width: Number(width || 0), height: Number(height || 0) }); } catch (ignored) { }
+        }
+        return binding;
+      },
+      getWidth: function () { return Number(overlayViewCommand(window, name, 'getWidth') || 0); },
+      getHeight: function () { return Number(overlayViewCommand(window, name, 'getHeight') || 0); },
+      getLocationOnScreen: function (intArray) {
+        var response = null;
+        if (window._overlayId && window._views[name]) {
+          try { response = overlayCall('viewCommand', { overlayId: window._overlayId, viewId: window._views[name], command: 'getLocationOnScreen' }); } catch (ignored) { }
+        }
+        if (!response) { return undefined; }
+        try { intArray[0] = Number(response.x || 0); intArray[1] = Number(response.y || 0); } catch (ignored) { }
+        return undefined;
+      },
       getViewId: function () { return window._views[name] || 0; },
       toString: function () { return '[Node24OverlayView ' + name + ']'; }
     };
@@ -372,10 +436,12 @@
             window._rootVisibility = Number(value);
             return window._bindingView;
           },
-          getWidth: function () { return Number(window._lastWidth) || 0; },
-          getHeight: function () { return Number(window._lastHeight) || 0; },
+          getWidth: function () { var metrics = window._metrics(); return metrics ? Number(metrics.width || 0) : (Number(window._lastWidth) || 0); },
+          getHeight: function () { var metrics = window._metrics(); return metrics ? Number(metrics.height || 0) : (Number(window._lastHeight) || 0); },
           getLocationOnScreen: function (intArray) {
-            // 主进程 overlay 没有真实 View 句柄；保持数组原值，不抛错（几何由 NodeUiBridge 的窗口坐标为准）。
+            var metrics = window._metrics();
+            if (!metrics) { return undefined; }
+            try { intArray[0] = Number(metrics.x || 0); intArray[1] = Number(metrics.y || 0); } catch (ignored) { }
             return undefined;
           },
           on: function (eventName, handler) { return window.on(eventName, handler); },
@@ -425,14 +491,27 @@
   // task-157：触摸/点击/拖拽事件轮询（overlay 主进程队列 -> JS handler）。
   var activeWindows = new Set();
   var overlayPollTimer = null;
+  var overlayPollInterval = 0;
   function stopOverlayPolling() {
     if (overlayPollTimer != null) {
       clearInterval(overlayPollTimer);
       overlayPollTimer = null;
     }
+    overlayPollInterval = 0;
+  }
+  function wantsFastPointerPolling() {
+    var fast = false;
+    activeWindows.forEach(function (window) {
+      if (window._listeners.touch && window._listeners.touch.length) { fast = true; }
+      if (window._listeners.drag && window._listeners.drag.length) { fast = true; }
+    });
+    return fast;
   }
   function ensureOverlayPolling() {
-    if (overlayPollTimer != null) { return; }
+    var interval = wantsFastPointerPolling() ? 16 : 100;
+    if (overlayPollTimer != null && overlayPollInterval === interval) { return; }
+    stopOverlayPolling();
+    overlayPollInterval = interval;
     overlayPollTimer = setInterval(function () {
       // task-195：关闭/宿主失效瞬间 polling 可能抛错；整个 tick 兜住，
       // 不能让未处理异常改变 Node 退出码。
@@ -462,7 +541,7 @@
             + ((tickError && tickError.message) || tickError));
         } catch (ignored) { }
       }
-    }, 100);
+    }, interval);
     if (overlayPollTimer.unref) { overlayPollTimer.unref(); }
   }
   // 允许 prelude 的 process.exit 包装在退出前停止轮询。

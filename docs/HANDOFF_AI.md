@@ -2,9 +2,10 @@
 
 > 面向所有接手的 AI（Codex / Claude / Copilot / Cursor / dsh 等）。
 > 先读本文，再读 `AGENTS.md`（构建与踩坑细节）和 `docs/reports/2026-10-18_收尾交接_给Codex_v2.md`（最新进度）。
-> 最后更新：2026-10-23 19:44；更新源 **dev-1213**（悬浮窗主线程退出回调崩溃修复；APK SHA-256 `af7e597f59cd9324dbdf07dc732906cb2a375f6956b50ea6755f65aaf0c1e386`）。
+> 最后更新：2026-10-23 21:06；更新源 **dev-1215**（Node 浮窗移动/缩放零重建 + 60fps 跟手拖动 + getSize 真实尺寸；APK SHA-256 `b8dca5d2f28b9ff0d14eaac3e2da86a91dc3d3071a10f7474cb0f8097c16aed3`）。
 > 插件更新：**象棋引擎插件1.1.0/code3**，通用/优化ARM64预算引擎及Node异步API已发布为下载附件；K40完整链路通过，新手机仍未连接。见[本轮记录](reports/2026-10-23_象棋引擎插件预算升级.md)。
 > 插件修复：**1.1.1/code4** 已在K40更新，修复Contempt反向奖励部分重复和棋；原始失败用例与新包双版本30项分析通过。见[拒和评分修复](reports/2026-10-23_象棋引擎拒和评分修复.md)。宿主更新源仍dev-1210，未改主APK。
+> 浮窗底层优化：**dev-1215** 已发布，[Node 浮窗移动/缩放零重建](reports/2026-10-23_Node悬浮窗底层优化.md)：setPosition/setSize 改 updateViewLayout（不重建）、touch/drag 16ms 跟手、getSize/getLocationOnScreen 真实值；小米 8 验收 ALL_PASS。
 > 宿主已发布：**dev-1213**（dev-1211 修复的发布版），[悬浮窗退出崩溃修复](reports/2026-10-23_悬浮窗主线程退出崩溃修复.md)：709 JVM、17 真机回调场景、Aurora 原脚本通过。MI8 已装 dev-1213，更新源 1213；Redmi Android 16 未连接待验，K40 象棋保持运行（dev-1199）。MCP wait 超时仅返回状态，不会自动停止脚本。
 > 最新：dev-1210 在 [无障碍截图 maxWidth 优化](reports/2026-10-22_无障碍截图maxWidth优化.md) 基础上合入 canvas 场景绘制：NodeUiCanvasView.setScene/clearScene 接收图元 JSON 后由原生 draw 批量绘制，脚本不再逐帧回调 JS。
 > 此前 [无障碍截图宿主直传像素](reports/2026-10-22_无障碍截图宿主直传像素.md)：dev-1206 Raw `.n24r` / dev-1207 PFD 管道 + 三级回退，小米 8 20 帧 p50 169→122ms。

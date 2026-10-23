@@ -5,6 +5,7 @@ import android.graphics.PixelFormat;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -165,7 +166,7 @@ public final class Node24LocalOverlay {
         final String id;
         final int ownerEngineId;
         final String ownerTag;
-        final boolean touchable;
+        boolean touchable;
         final ArrayDeque<JSONObject> events = new ArrayDeque<>();
         FrameLayout root;
         View content;
@@ -176,6 +177,8 @@ public final class Node24LocalOverlay {
         boolean moved;
         int downViewId;
         boolean dragCandidate;
+        long lastMoveForwardAt;
+        long lastDragForwardAt;
 
         Overlay(Context context, WindowManager wm, String id, int ownerEngineId, String ownerTag,
                 boolean touchable) {
@@ -289,6 +292,38 @@ public final class Node24LocalOverlay {
                     runOnMain(() -> { params.x = nx; params.y = ny; wm.updateViewLayout(root, params); return null; }, 2000L);
                     return ok();
                 }
+                case "resize": {
+                    final int newWidth = request.optInt("width", 0);
+                    final int newHeight = request.optInt("height", 0);
+                    runOnMain(() -> {
+                        if (newWidth > 0) params.width = newWidth;
+                        if (newHeight > 0) params.height = newHeight;
+                        wm.updateViewLayout(root, params);
+                        return null;
+                    }, 2000L);
+                    return ok();
+                }
+                case "setTouchable": {
+                    final boolean nextTouchable = request.optBoolean("touchable", true);
+                    runOnMain(() -> {
+                        touchable = nextTouchable;
+                        if (nextTouchable) {
+                            params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                        } else {
+                            params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                        }
+                        if (root != null) {
+                            root.setClickable(nextTouchable);
+                            root.setFocusable(nextTouchable);
+                            root.setFocusableInTouchMode(nextTouchable);
+                        }
+                        wm.updateViewLayout(root, params);
+                        return null;
+                    }, 2000L);
+                    return ok();
+                }
+                case "metrics":
+                    return metrics();
                 case "addFlags":
                     params.flags |= request.optInt("flags", 0);
                     if (!touchable) params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
@@ -322,6 +357,31 @@ public final class Node24LocalOverlay {
             }
             runOnMain(() -> { wm.updateViewLayout(root, params); return null; }, 2000L);
             return ok();
+        }
+
+        JSONObject metrics() throws Exception {
+            Object result = runOnMain(() -> {
+                JSONObject response = new JSONObject().put("ok", true).put("overlayId", id);
+                int[] location = new int[2];
+                int width = 0;
+                int height = 0;
+                if (root != null) {
+                    root.getLocationOnScreen(location);
+                    width = root.getWidth();
+                    height = root.getHeight();
+                    if (width <= 0 || height <= 0) {
+                        width = root.getMeasuredWidth();
+                        height = root.getMeasuredHeight();
+                    }
+                }
+                response.put("x", location[0]).put("y", location[1]);
+                response.put("width", width).put("height", height);
+                response.put("contentWidth", content == null ? 0 : content.getWidth());
+                response.put("contentHeight", content == null ? 0 : content.getHeight());
+                response.put("visible", root != null && root.isShown());
+                return response;
+            }, 2000L);
+            return result instanceof JSONObject ? (JSONObject) result : new JSONObject().put("ok", false);
         }
 
         JSONObject viewCommand(JSONObject request) throws Exception {
@@ -370,6 +430,46 @@ public final class Node24LocalOverlay {
             if ("getChecked".equals(command)) {
                 return new JSONObject().put("ok", true).put("value", false);
             }
+            if ("setAlpha".equals(command)) {
+                target.setAlpha((float) request.optDouble("value", 1d));
+                return new JSONObject().put("ok", true).put("value", true);
+            }
+            if ("setBackgroundColor".equals(command)) {
+                target.setBackgroundColor(request.optInt("value", 0));
+                return new JSONObject().put("ok", true).put("value", true);
+            }
+            if ("setTextColor".equals(command)) {
+                if (target instanceof TextView) ((TextView) target).setTextColor(request.optInt("value", 0));
+                return new JSONObject().put("ok", true).put("value", true);
+            }
+            if ("setPadding".equals(command)) {
+                target.setPadding(request.optInt("left", 0), request.optInt("top", 0),
+                        request.optInt("right", 0), request.optInt("bottom", 0));
+                return new JSONObject().put("ok", true).put("value", true);
+            }
+            if ("setLayoutParams".equals(command)) {
+                ViewGroup.LayoutParams layoutParams = target.getLayoutParams();
+                if (layoutParams != null) {
+                    int width = request.optInt("width", layoutParams.width);
+                    int height = request.optInt("height", layoutParams.height);
+                    if (width >= 0) layoutParams.width = width;
+                    if (height >= 0) layoutParams.height = height;
+                    target.setLayoutParams(layoutParams);
+                    target.requestLayout();
+                }
+                return new JSONObject().put("ok", true).put("value", true);
+            }
+            if ("getWidth".equals(command)) {
+                return new JSONObject().put("ok", true).put("value", target.getWidth());
+            }
+            if ("getHeight".equals(command)) {
+                return new JSONObject().put("ok", true).put("value", target.getHeight());
+            }
+            if ("getLocationOnScreen".equals(command)) {
+                int[] location = new int[2];
+                target.getLocationOnScreen(location);
+                return new JSONObject().put("ok", true).put("x", location[0]).put("y", location[1]);
+            }
             return new JSONObject().put("ok", false).put("error", "不支持 command=" + command);
         }
 
@@ -397,13 +497,21 @@ public final class Node24LocalOverlay {
                         params.x += dx;
                         params.y += dy;
                         try { wm.updateViewLayout(root, params); } catch (Throwable ignored) { }
-                        enqueueDrag(params.x, params.y);
+                        long nowDrag = SystemClock.uptimeMillis();
+                        if (nowDrag - lastDragForwardAt >= 16L) {
+                            lastDragForwardAt = nowDrag;
+                            enqueueDrag(params.x, params.y);
+                        }
                         Log.i(TAG, "C-LOCAL drag move x=" + params.x + " y=" + params.y);
                     }
                     lastX = x; lastY = y;
                     return;
                 }
-                enqueueTouch("move", x, y);
+                long nowMove = SystemClock.uptimeMillis();
+                if (nowMove - lastMoveForwardAt >= 16L) {
+                    lastMoveForwardAt = nowMove;
+                    enqueueTouch("move", x, y);
+                }
                 return;
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
