@@ -85,6 +85,15 @@ public final class Node24LocalOverlay {
         return !OVERLAYS.isEmpty();
     }
 
+    /** 供 Node24HostBridge 把真实 View 注册成 Java 对象句柄（binding.raw()）。 */
+    public static View findRawView(String overlayId, int viewId) {
+        if (overlayId == null || overlayId.isEmpty()) return null;
+        Overlay overlay = OVERLAYS.get(overlayId);
+        if (overlay == null) return null;
+        Object result = runOnMain(() -> overlay.rawView(viewId), 2000L);
+        return result instanceof View ? (View) result : null;
+    }
+
     public static void closeAll() {
         // 快照遍历：close() 会从 OVERLAYS 移除自身。
         for (Overlay overlay : new ArrayList<>(OVERLAYS.values())) {
@@ -289,7 +298,32 @@ public final class Node24LocalOverlay {
                 case "move": {
                     final int nx = request.optInt("x", params.x);
                     final int ny = request.optInt("y", params.y);
-                    runOnMain(() -> { params.x = nx; params.y = ny; wm.updateViewLayout(root, params); return null; }, 2000L);
+                    runOnMain(() -> {
+                        params.x = nx; params.y = ny;
+                        try { if (root != null && root.getParent() != null) wm.updateViewLayout(root, params); } catch (Throwable ignored) { }
+                        return null;
+                    }, 2000L);
+                    return ok();
+                }
+                case "hide": {
+                    runOnMain(() -> {
+                        try { if (root != null && root.getParent() != null) wm.removeView(root); } catch (Throwable ignored) { }
+                        return null;
+                    }, 2000L);
+                    return ok();
+                }
+                case "show": {
+                    final int sx = request.optInt("x", params.x);
+                    final int sy = request.optInt("y", params.y);
+                    final int sw = request.optInt("width", params.width);
+                    final int sh = request.optInt("height", params.height);
+                    runOnMain(() -> {
+                        params.x = sx; params.y = sy;
+                        if (sw > 0) params.width = sw;
+                        if (sh > 0) params.height = sh;
+                        try { if (root != null && root.getParent() == null) wm.addView(root, params); } catch (Throwable error) { Log.w(TAG, "local overlay re-show failed", error); }
+                        return null;
+                    }, 2000L);
                     return ok();
                 }
                 case "resize": {
@@ -298,7 +332,7 @@ public final class Node24LocalOverlay {
                     runOnMain(() -> {
                         if (newWidth > 0) params.width = newWidth;
                         if (newHeight > 0) params.height = newHeight;
-                        wm.updateViewLayout(root, params);
+                        try { if (root != null && root.getParent() != null) wm.updateViewLayout(root, params); } catch (Throwable ignored) { }
                         return null;
                     }, 2000L);
                     return ok();
@@ -357,6 +391,11 @@ public final class Node24LocalOverlay {
             }
             runOnMain(() -> { wm.updateViewLayout(root, params); return null; }, 2000L);
             return ok();
+        }
+
+        View rawView(int viewId) {
+            if (viewId <= 0) return content != null ? content : root;
+            return NodeUiHost.findInlineViewById(content, viewId);
         }
 
         JSONObject metrics() throws Exception {

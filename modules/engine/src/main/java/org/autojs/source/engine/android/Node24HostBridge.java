@@ -3,6 +3,7 @@ package org.autojs.source.engine.android;
 
 import android.content.Context;
 import android.content.Intent;
+import android.view.View;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Rect;
@@ -1108,6 +1109,16 @@ public final class Node24HostBridge implements Node24Engine.Host {
             request.put("owner", mOverlayOwner);
             request.put("engineId", mOwnerEngineId);
             if (!mGeneratedClasses.isEmpty() || request.optBoolean("realJava")) request.put("javaClassOwner", mOverlayOwner);
+            // binding.raw()：把本地 overlay 的真实 View 注册成 Java 对象句柄返回给 JS（$obj wire）。
+            if (request != null && "floatingWindow".equals(request.optString("op", ""))
+                    && "rawView".equals(request.optString("action", ""))) {
+                View rawView = Node24LocalOverlay.findRawView(
+                        request.optString("overlayId", ""), request.optInt("viewId", 0));
+                if (rawView == null) {
+                    return new JSONObject().put("ok", false).put("error", "找不到浮窗 View").toString();
+                }
+                return new JSONObject().put("ok", true).put("value", toWire(rawView)).toString();
+            }
             // task-201：:node24 进程内 overlay；大 XML 不再跨进程 show，失败自动回退主进程。
             JSONObject localOverlay = Node24LocalOverlay.handle(mContext, mProjectDir, request);
             if (localOverlay != null) {

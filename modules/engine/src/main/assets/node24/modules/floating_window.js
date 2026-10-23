@@ -8,7 +8,8 @@
  * 说明：:node24 进程内 Node24LocalOverlay 已支持 XML inflate、updateViewLayout 移动/缩放、
  * 本地触摸/拖动事件（native 16ms 节流，JS 在有 touch/drag 监听时 16ms 轮询，否则 100ms）与常用 View 命令。
  * - setPosition/setSize 默认走 move/resize，不再 close+show 重建视图（legacyRebuild:true 可回退旧行为）；
- * - on('touch'|'drag'|'click')、enableDrag、getSize/getLocationOnScreen 与 binding 常用样式命令可用；
+ * - on('touch'|'drag'|'click')、enableDrag、getSize/getLocationOnScreen、binding 常用样式命令可用；
+ * - binding.raw()/raw(id) 可取真实 View（任意 Java View API）；hide/show 复用同一视图保留状态；
  * - addFlags/removeFlags/setFlags 走本地 overlay flags；
  * - show({touchable:false}) / setViewFromXml(xml,{touchable:false}) 支持不可触摸绘制型浮窗（默认 true）。
  *
@@ -29,6 +30,8 @@
   var FLAG_FULLSCREEN = 1024;
   var FLAG_SECURE = 8192;
   var FLAG_WATCH_OUTSIDE_TOUCH = 0x40000;
+  // floating.legacyRebuild = true 时恢复旧的 close+show 重建路径（兼容/回退）。
+  var legacyRebuild = false;
 
   function apiError(message) {
     var error = new Error('[Auto.js] ' + message);
@@ -120,7 +123,8 @@
     this._clickNames = Object.create(null);
     this._dragAnchor = 0;
     this._dragOptions = null;
-    this._legacyRebuild = opts.legacyRebuild === true;
+    this._legacyRebuild = opts.legacyRebuild === true || legacyRebuild;
+    this._hidden = false;
     this._lastWidth = 0;
     this._lastHeight = 0;
   }
@@ -153,10 +157,8 @@
       if (this._visible) { this._reShow(); }
       return this;
     }
-    if (this._visible && this._overlayId) {
-      try {
-        overlayCall('setTouchable', { overlayId: this._overlayId, touchable: this._touchable });
-      } catch (ignored) { }
+    if (this._overlayId) {
+      try { overlayCall('setTouchable', { overlayId: this._overlayId, touchable: this._touchable }); } catch (ignored) { }
     }
     return this;
   };
@@ -204,6 +206,16 @@
   };
   FloatingWindowImpl.prototype._showNow = function () {
     if (this._closed) { throw apiError('floating_window 已关闭，不能再次 show'); }
+    if (this._overlayId) {
+      // hide() 之后复显：同一个 root View 重新 addView，不重新 inflate。
+      overlayCall('show', { overlayId: this._overlayId, x: this._x, y: this._y,
+        width: this._width, height: this._height });
+      this._hidden = false;
+      this._visible = true;
+      activeWindows.add(this);
+      ensureOverlayPolling();
+      return this;
+    }
     var fields = { text: this._text, x: this._x, y: this._y, flags: this._flags || 0,
       touchable: this._touchable !== false };
     if (this._xml) { fields.xml = this._xml; }
@@ -247,6 +259,7 @@
     }
     activeWindows.add(this);
     ensureOverlayPolling();
+    this._hidden = false;
     this._visible = true;
     return this;
   };
@@ -259,16 +272,23 @@
   };
   FloatingWindowImpl.prototype._hideNow = function (emitEvent) {
     if (!this._visible) { return this; }
-    try {
-      // task-194：关闭是幂等操作；宿主已移除/窗口已关闭时不能抛异常，
-      // 否则示例的 close 回调会在 process.exit() 前抛错，被报成 SCRIPT_ERROR。
-      overlayCall('close', { overlayId: this._overlayId });
-    } catch (closeError) {
-      if (typeof console !== 'undefined' && console.debug) {
-        console.debug('[floating_window] close ignored: ' + ((closeError && closeError.message) || closeError));
-      }
+    var hidden = false;
+    if (this._overlayId) {
+      try {
+        overlayCall('hide', { overlayId: this._overlayId });
+        hidden = true;
+      } catch (hideError) { hidden = false; }
     }
-    this._overlayId = null;
+    if (!hidden) {
+      // 宿主不支持 hide（或主进程 overlay 回退）：退回旧的关闭语义，避免 API 失效。
+      if (this._overlayId) {
+        try { overlayCall('close', { overlayId: this._overlayId }); } catch (ignored) { }
+      }
+      this._overlayId = null;
+      this._hidden = false;
+    } else {
+      this._hidden = true;
+    }
     this._visible = false;
     if (emitEvent) { this._emit('hide'); }
     activeWindows.delete(this);
@@ -278,27 +298,36 @@
   FloatingWindowImpl.prototype.hide = function () { return this._hideNow(true); };
   FloatingWindowImpl.prototype.close = function () {
     if (this._closed) { return true; }
-    this._hideNow(false);
+    if (this._overlayId) {
+      try { overlayCall('close', { overlayId: this._overlayId }); } catch (ignored) { }
+    }
+    this._overlayId = null;
+    this._visible = false;
+    this._hidden = false;
+    activeWindows.delete(this);
+    if (activeWindows.size === 0) { stopOverlayPolling(); }
     this._closed = true;
     this._emit('close');
     return true;
   };
   FloatingWindowImpl.prototype._reShow = function () {
-    if (!this._visible) { return; }
-    this._hideNow(false);
+    // 仅供 legacyRebuild 回退：关闭当前 overlay 后重新 show（会重新 inflate）。
+    if (this._overlayId) {
+      try { overlayCall('close', { overlayId: this._overlayId }); } catch (ignored) { }
+    }
+    this._overlayId = null;
+    this._hidden = false;
+    this._visible = false;
+    activeWindows.delete(this);
     this._showNow();
   };
   FloatingWindowImpl.prototype.setPosition = function (x, y) {
     this._x = requireInt(x, 'x', 0);
     this._y = requireInt(y, 'y', 0);
-    if (!this._legacyRebuild && this._visible && this._overlayId) {
-      try {
-        overlayCall('move', { overlayId: this._overlayId, x: this._x, y: this._y });
-      } catch (error) {
-        if (this._legacyRebuild) { this._reShow(); }
-      }
-    } else if (this._legacyRebuild) {
+    if (this._legacyRebuild) {
       this._reShow();
+    } else if (this._overlayId) {
+      try { overlayCall('move', { overlayId: this._overlayId, x: this._x, y: this._y }); } catch (ignored) { }
     }
     this._emit('position', { x: this._x, y: this._y });
     return this;
@@ -308,18 +337,16 @@
   FloatingWindowImpl.prototype.setSize = function (width, height) {
     this._width = requireInt(width, 'width', 0);
     this._height = requireInt(height, 'height', 0);
-    if (!this._legacyRebuild && this._visible && this._overlayId) {
-      try {
-        overlayCall('resize', { overlayId: this._overlayId, width: this._width, height: this._height });
-      } catch (ignored) { }
-    } else if (this._legacyRebuild) {
+    if (this._legacyRebuild) {
       this._reShow();
+    } else if (this._overlayId) {
+      try { overlayCall('resize', { overlayId: this._overlayId, width: this._width, height: this._height }); } catch (ignored) { }
     }
     this._emit('size', { width: this._width, height: this._height });
     return this;
   };
   FloatingWindowImpl.prototype._metrics = function () {
-    if (!this._visible || !this._overlayId) { return null; }
+    if (!this._overlayId) { return null; }
     try {
       var response = overlayCall('metrics', { overlayId: this._overlayId });
       this._lastWidth = Number(response.width || 0);
@@ -355,6 +382,17 @@
     if (value !== undefined) { fields.value = value; }
     var response = overlayCall('viewCommand', fields);
     return response ? response.value : undefined;
+  }
+
+  function overlayRawView(window, viewId) {
+    if (!window._overlayId) { throw apiError('浮窗尚未 show，无法取真实 View'); }
+    var raw = globalThis.__autojsHostRaw(JSON.stringify({ kind: 'ui', op: 'floatingWindow',
+      action: 'rawView', overlayId: window._overlayId, viewId: Number(viewId) || 0 }));
+    var response;
+    try { response = JSON.parse(raw); } catch (error) { throw apiError('rawView 返回非法 JSON'); }
+    if (!response || response.ok !== true) { throw apiError((response && response.error) || 'rawView 失败'); }
+    if (typeof globalThis.__ajsRawValue !== 'function') { throw apiError('当前宿主不支持 Java View 句柄'); }
+    return globalThis.__ajsRawValue(response.value);
   }
 
   function bindingFor(window, name) {
@@ -407,6 +445,7 @@
         try { intArray[0] = Number(response.x || 0); intArray[1] = Number(response.y || 0); } catch (ignored) { }
         return undefined;
       },
+      raw: function () { return overlayRawView(window, window._views[name] || 0); },
       getViewId: function () { return window._views[name] || 0; },
       toString: function () { return '[Node24OverlayView ' + name + ']'; }
     };
@@ -422,6 +461,12 @@
           binding: new Proxy({}, {
             get: function (_target, prop) {
               if (typeof prop === 'symbol' || prop === 'then') { return undefined; }
+              if (prop === 'raw') {
+                return function (id) {
+                  var viewId = id == null ? 0 : (window._views[String(id)] || Number(id) || 0);
+                  return overlayRawView(window, viewId);
+                };
+              }
               return bindingFor(window, String(prop));
             }
           }),
@@ -443,6 +488,10 @@
             if (!metrics) { return undefined; }
             try { intArray[0] = Number(metrics.x || 0); intArray[1] = Number(metrics.y || 0); } catch (ignored) { }
             return undefined;
+          },
+          raw: function (id) {
+            var viewId = id == null ? 0 : (window._views[String(id)] || Number(id) || 0);
+            return overlayRawView(window, viewId);
           },
           on: function (eventName, handler) { return window.on(eventName, handler); },
           toString: function () { return '[Node24OverlayRoot]'; }
@@ -605,6 +654,10 @@
     FLAG_FULLSCREEN: FLAG_FULLSCREEN,
     FLAG_SECURE: FLAG_SECURE,
     FLAG_WATCH_OUTSIDE_TOUCH: FLAG_WATCH_OUTSIDE_TOUCH
+  });
+  Object.defineProperty(module, 'legacyRebuild', {
+    get: function () { return legacyRebuild; },
+    set: function (value) { legacyRebuild = value === true; }
   });
   globalThis.__ajsRegisterModule('floating_window', function () { return module; });
   if (globalThis.__ajsBuiltinModules) { globalThis.__ajsBuiltinModules.floating_window = module; }

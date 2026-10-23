@@ -127,6 +127,8 @@
     }
     return value;
   }
+  // 供内置模块把宿主返回的 wire 值（如 {"$obj":id}）转换成 Java 对象代理。
+  globalThis.__ajsRawValue = okValue;
 
   function toWire(value) {
     if (value === null || value === undefined) { return null; }

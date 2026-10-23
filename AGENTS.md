@@ -11,10 +11,10 @@
 > 最新核对：[三引擎细节与 Pikafish 原生闪退修复](docs/reports/2026-10-21_三引擎细节复核与原生闪退修复.md)：非法局面/历史原来会触发原生 `exit(1)`，与 RenderThread destroyed-mutex 表现一起复现；已补语义校验。插件 APK 1.0.1 / 2。
 > 插件最新：[象棋引擎预算升级](docs/reports/2026-10-23_象棋引擎插件预算升级.md)：**1.1.0/code3**，自带通用/优化 ARM64 UCI 进程，HWCAP 自动选择，Node createUci 支持 ponder/ponderhit；K40 已验，新手机仍离线待验。只更新插件附件，主程序仍 dev-1210。
 > 拒和修复：[象棋引擎拒和评分修复](docs/reports/2026-10-23_象棋引擎拒和评分修复.md)：**1.1.1/code4**，修正原地递归走子导致的根方评分错误，search/qsearch统一；通用/优化版各15项真机分析通过。K40已更新，宿主发布源未变。
-> 浮窗底层优化：[Node 浮窗移动/缩放零重建](docs/reports/2026-10-23_Node悬浮窗底层优化.md)：**dev-1215** 已发布；setPosition/setSize 改 updateViewLayout、touch/drag 16ms 跟手、getSize 真实尺寸、binding 样式命令；小米 8 验收脚本 ALL_PASS，K40 未动。
+> 浮窗底层交付：[Node 浮窗底层修复](docs/reports/2026-10-23_Node悬浮窗底层优化.md)：**dev-1217** 已发布；移动/缩放零重建、MOVE/拖动 16ms 跟手、binding.raw()/raw(id) 真 View、hide/show 同视图、getSize 真实值；小米8 验收 ALL_PASS，APK 已交付 /sdcard/脚本 两个目录。
 > 宿主已发布：**dev-1213**（2026-10-23 19:44 更新源，SHA-256 `af7e597f…`）[悬浮窗主线程退出崩溃修复](docs/reports/2026-10-23_悬浮窗主线程退出崩溃修复.md)：Timer/View/弹窗/浮窗/Node24 Java 回调边界捕获二次停止异常、保留嵌套 JS 中止语义；Node ui.R 缺失资源返回 0；709 JVM + MI8 17 项回调与 Aurora 通过。Redmi Android 16 待验，K40 保持 dev-1199。
 > 最新升级：[Flutter 3.47.7 / Dart 3.13.5 与 16KB 修复](docs/reports/2026-10-22_Flutter升级与16KB兼容修复.md)：engine/embedding/AOT 成套锁定，Node libc++ 更新，发布强制无白名单 22 ELF 校验；真实 16KB 内核仍待验收。
-> 当前发布：**dev-1215**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
+> 当前发布：**dev-1217**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
 > 本轮：dev-1209/1210 **canvas 原生场景绘制**（NodeUiCanvasView.setScene/clearScene，图元 JSON 原生批量绘制，脚本不再逐帧回调 JS）+ Flutter UI 重新打包；APK 144.73MB。
 > 最新优化：[无障碍截图 maxWidth](docs/reports/2026-10-22_无障碍截图maxWidth优化.md)：dev-1208 透传 maxWidth + 缩略回读/CPU 回退 + A11Y_SPLIT；MI8 同轮全屏 p50 239 → 640宽 181ms（-24%），Canvas HARDWARE 缩略回读不支持待 `.4` 复测。
 > 最新修复：[无障碍截图宿主直传像素](docs/reports/2026-10-22_无障碍截图宿主直传像素.md)：dev-1206 Raw `.n24r` / dev-1207 PFD 管道 + 三级回退；小米 8 20 帧 p50 169→122ms（p95 163/180，`.4` 待复测）。
