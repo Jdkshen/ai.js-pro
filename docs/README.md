@@ -6,6 +6,8 @@
 
 ## 当前状态
 
+- **[布局与绑定桥批量优化（2026-10-24，dev-1239）](reports/2026-10-24_布局与绑定桥批量优化.md)**：binding name→id/子 View 缓存、`view.attr({...})` 单次宿主批量；M3 探针 Java 快调用 93→72，整页仍受原生 ViewPager/Drawer/Grid/Console setup 限制。
+
 - **[Node M3 四项底层优化（2026-10-24）](reports/2026-10-24_Node_M3四项底层优化.md)**：类型化 JNI/方法 ID、直接 Smali→DEX、Glide 图片缓存和原生 XML 最新 ClassLoader；测试包与真机性能记录见报告；**dev-1237 已发布**（SHA-256 `b1356ab8…`），MI8 已安装并完成回归/冒烟。
 
 - **[高级版 M3 框架与加载路径对比（2026-10-24）](reports/2026-10-24_高级版M3框架与加载路径对比.md)**：已安装高级版 APK 核对原生 Material3、J2V8 方法 ID/引用桥、异步 Smali/Dex 和 Glide；对比通用 Java UI 与 dev-1232 M3Kit，未混算静态证据和性能数字。
