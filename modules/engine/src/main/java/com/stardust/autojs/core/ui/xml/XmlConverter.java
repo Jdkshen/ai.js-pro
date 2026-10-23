@@ -1,5 +1,6 @@
 package com.stardust.autojs.core.ui.xml;
 
+import androidx.appcompat.widget.SwitchCompat;
 import androidx.appcompat.widget.Toolbar;
 import androidx.cardview.widget.CardView;
 import androidx.drawerlayout.widget.DrawerLayout;
@@ -75,6 +76,8 @@ public class XmlConverter {
                     .map("radio", RadioButton.class.getName())
                     .map("radiogroup", RadioGroup.class.getName())
                     .map("checkbox", CheckBox.class.getName())
+                    // Java 关键字大小写：android.widget.switch 不存在，所有引擎统一用兼容性更好的 SwitchCompat。
+                    .map("switch", SwitchCompat.class.getName())
                     .map("scroll", ScrollView.class.getName())
                     .map("toolbar", JsToolbar.class.getName())
                     .map("canvas", ScriptCanvasView.class.getName())

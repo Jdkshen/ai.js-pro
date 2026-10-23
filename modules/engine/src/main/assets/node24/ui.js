@@ -72,6 +72,7 @@
         let realSession = null;
         let realImageLoader = null;
         let suppressAllDestroyed = false;
+        const inlineBindingNames = new Set();
         const realBindings = new WeakMap();
         let realViewExtras = new WeakMap();
         function viewExtras(view) {
@@ -298,13 +299,27 @@
         function realViewBinding(view) {
             let bindings = realBindings.get(view);
             if (!bindings) {
+                const names = function () {
+                    return Array.from(new Set(Object.keys(mainViews).concat(Array.from(inlineBindingNames))))
+                        .filter(function (name) { const id = resolveViewId(name); return id && view.findViewById(id); });
+                };
                 bindings = new Proxy({}, {get: function (_target, name) {
                     if (typeof name === 'symbol' || name === 'then' || name === 'toJSON') return undefined;
                     const id = resolveViewId(name);
-                    if (!id) throw new Error('未找到 View 资源 id：' + String(name));
+                    if (!id) return undefined;
                     const child = view.findViewById(id);
-                    if (!child) throw new Error('当前 View 中未找到：' + String(name));
+                    if (!child) return undefined;
                     return isWebViewObject(child) ? webViewFacade(child) : child;
+                }, has: function (_target, name) {
+                    if (typeof name !== 'string') return false;
+                    const id = resolveViewId(name);
+                    return !!(id && view.findViewById(id));
+                }, ownKeys: names, getOwnPropertyDescriptor: function (_target, name) {
+                    if (typeof name === 'string' && (inlineBindingNames.has(name)
+                            || Object.prototype.hasOwnProperty.call(mainViews, name))) {
+                        const id = resolveViewId(name);
+                        if (id && view.findViewById(id)) return {configurable: true, enumerable: true};
+                    }
                 }});
                 realBindings.set(view, bindings);
             }
@@ -342,7 +357,7 @@
                 const byId = root.findViewById(name);
                 return byId ? (isWebViewObject(byId) ? webViewFacade(byId) : byId) : null;
             }
-            const id = javaSession().viewId(String(name));
+            const id = resolveViewId(String(name));
             if (!id) throw new Error('未找到 View 资源 id：' + String(name));
             const child = root.findViewById(id);
             if (!child) throw new Error('当前 View 中未找到：' + String(name));
@@ -504,6 +519,12 @@
                         viewBindings[key] = binding;
                     }
                     return binding;
+                },
+                ownKeys: function () { return Object.keys(state.views || {}); },
+                getOwnPropertyDescriptor: function (_t, name) {
+                    if (Object.prototype.hasOwnProperty.call(state.views || {}, name)) {
+                        return {configurable: true, enumerable: true};
+                    }
                 }
             });
         }
@@ -975,7 +996,57 @@
             } catch (error) { return null; }
         };
 
-        function expandOneWidget(tag, attrText, records, selfClosing) {
+        // Read element boundaries without splitting quoted '>' characters, comments or CDATA.
+        function xmlElements(xml) {
+            const roots = [], stack = [];
+            const tokens = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<(?:(?:"[^"]*"|'[^']*'|[^'">])*)>/g;
+            let match;
+            while ((match = tokens.exec(xml))) {
+                const text = match[0];
+                if (/^<[!?]/.test(text)) continue;
+                if (/^<\//.test(text)) {
+                    const node = stack.pop();
+                    const tag = /^<\/\s*([^\s>]+)/.exec(text);
+                    if (!node || !tag || tag[1] !== node.tag) throw new Error('XML 标签未匹配：' + text);
+                    node.close = match.index; node.end = tokens.lastIndex;
+                    continue;
+                }
+                const opening = /^<\s*([^\s/>]+)([\s\S]*?)(\/?>)$/.exec(text);
+                if (!opening) continue;
+                const node = {tag: opening[1], attrs: opening[2], start: match.index,
+                    openEnd: tokens.lastIndex, end: tokens.lastIndex, children: [], selfClosing: /\/\s*>$/.test(text)};
+                (stack.length ? stack[stack.length - 1].children : roots).push(node);
+                if (!node.selfClosing) stack.push(node);
+            }
+            if (stack.length) throw new Error('XML 标签未关闭：' + stack[stack.length - 1].tag);
+            return roots;
+        }
+
+        function appendWidgetContent(xml, children, slotName) {
+            if (!children || !children.trim()) return xml;
+            const roots = xmlElements(xml);
+            if (roots.length !== 1) throw new Error('Widget.render() 必须包含一个根节点');
+            const queue = roots.slice();
+            let target = roots[0], found = false;
+            while (queue.length) {
+                const node = queue.shift();
+                const attrs = parseXmlAttributes(node.attrs);
+                const id = String(attrs.id || attrs['android:id'] || '').replace(/^@\+?id\//, '');
+                if (slotName ? id === slotName : (id === 'content' || id === 'slot')) {
+                    target = node; found = true; break;
+                }
+                queue.push.apply(queue, node.children);
+            }
+            if (slotName && !found) throw new Error('Widget contentSlot 不存在：' + slotName);
+            if (target.selfClosing) {
+                const open = xml.slice(target.start, target.openEnd).replace(/\/\s*>$/, '>');
+                return xml.slice(0, target.start) + open + children + '</' + target.tag + '>' + xml.slice(target.end);
+            }
+            return xml.slice(0, target.close) + children + xml.slice(target.close);
+        }
+
+        let nextWidgetId = 1;
+        function expandOneWidget(tag, attrText, records, children) {
             const Ctor = widgetRegistry[tag];
             if (typeof Ctor !== 'function') return '<' + tag + attrText + (selfClosing ? '/>' : '>');
             const attrs = parseXmlAttributes(attrText);
@@ -991,7 +1062,13 @@
             }
             let rootAttrs = rootMatch[3] || '';
             let extra = '';
-            const idValue = attrs.id ? String(attrs.id).replace(/^@\+?id\//, '') : '';
+            const renderedAttrs = parseXmlAttributes(rootAttrs);
+            const idValue = String(attrs.id || renderedAttrs.id || renderedAttrs['android:id']
+                || ('__node_widget_' + nextWidgetId++)).replace(/^@\+?id\//, '');
+            if (attrs.id && /(?:^|\s)(?:android:)?id\s*=/.test(rootAttrs)) {
+                rootAttrs = rootAttrs.replace(/((?:^|\s)(?:android:)?id\s*=)("[^"]*"|'[^']*')/,
+                    '$1"' + xmlEscape(idValue) + '"');
+            }
             if (idValue && !/\bid\s*=/.test(rootAttrs)) {
                 extra += ' id="' + xmlEscape(idValue) + '"';
             }
@@ -1002,47 +1079,55 @@
                 extra += ' ' + name + '="' + xmlEscape(attrs[name]) + '"';
             });
             const newRoot = rootMatch[1] + rootMatch[2] + rootAttrs + extra + rootMatch[4];
-            const expanded = rendered.replace(rendered.slice(0, rootMatch[0].length), newRoot);
+            const expanded = appendWidgetContent(
+                rendered.replace(rendered.slice(0, rootMatch[0].length), newRoot), children,
+                widget.contentSlot ? String(widget.contentSlot) : '');
             records.push({ tag: tag, id: idValue, attrs: attrs, widget: widget, rendered: expanded });
             return expanded;
         }
 
         function expandCustomWidgetsInXml(xml) {
-            let output = String(xml || '');
             const records = [];
-            for (let depth = 0; depth < 4; depth++) {
-                let changed = false;
-                Object.keys(widgetRegistry).forEach(function (tag) {
-                    const quoted = escapeRegExp(tag);
-                    const paired = new RegExp('<\\s*' + quoted + '\\b([^>]*)>([\\s\\S]*?)<\\s*/\\s*' + quoted + '\\s*>', 'gi');
-                    output = output.replace(paired, function (_all, attrText) {
-                        changed = true;
-                        return expandOneWidget(tag, attrText, records, false);
+            function expand(input, depth) {
+                if (depth > 32) throw new Error('Widget 嵌套或 render() 递归超过 32 层');
+                function render(node) {
+                    let children = '', cursor = node.openEnd;
+                    node.children.forEach(function (child) {
+                        children += input.slice(cursor, child.start) + render(child); cursor = child.end;
                     });
-                    const selfClosing = new RegExp('<\\s*' + quoted + '\\b([^>]*?)/\\s*>', 'gi');
-                    output = output.replace(selfClosing, function (_all, attrText) {
-                        changed = true;
-                        return expandOneWidget(tag, attrText, records, true);
-                    });
+                    if (!node.selfClosing) children += input.slice(cursor, node.close);
+                    const tag = normalizeWidgetTag(node.tag);
+                    if (widgetRegistry[tag]) return expand(expandOneWidget(tag, node.attrs, records, children), depth + 1);
+                    return input.slice(node.start, node.openEnd) + children
+                        + (node.selfClosing ? '' : input.slice(node.close, node.end));
+                }
+                let output = '', cursor = 0;
+                xmlElements(input).forEach(function (node) {
+                    output += input.slice(cursor, node.start) + render(node); cursor = node.end;
                 });
-                if (!changed) break;
+                return output + input.slice(cursor);
             }
+            const output = expand(String(xml || ''), 0);
+            const ids = /(?:\s)(?:android:)?id\s*=\s*["'](?:@\+?id\/)?([A-Za-z_][A-Za-z0-9_]*)["']/g;
+            let id;
+            while ((id = ids.exec(output))) inlineBindingNames.add(id[1]);
             return {xml: output, records: records};
         }
 
-        function attachCustomWidgets(records, views) {
+        function attachCustomWidgets(records, views, root) {
             (records || []).forEach(function (record) {
                 const widget = record.widget;
                 const idName = record.id;
                 if (!widget || !idName) return;
                 const viewId = views && typeof views[idName] === 'number' ? views[idName] : 0;
                 const key = viewId > 0 ? ('id:' + viewId) : ('name:' + idName);
-                let binding = realUiMode ? findRealViewByName(idName) : viewBindings[key];
+                let binding = root ? root.findViewById(resolveViewId(idName))
+                    : (realUiMode ? findRealViewByName(idName) : viewBindings[key]);
                 if (!binding) {
                     binding = markerObject('View', {viewName: idName, viewId: viewId, views: views});
                     viewBindings[key] = binding;
                 }
-                if (realUiMode) viewExtras(binding).widget = widget;
+                if (realUiMode || root) viewExtras(binding).widget = widget;
                 else binding.__ajsWidget = widget;
                 widget.view = binding;
                 Object.keys(widget.attrs || {}).forEach(function (name) {
@@ -1122,6 +1207,13 @@
                 // 不能把 startActivity 打开的 WebActivity 关掉。
                 if (mainActivity === this) close();
                 return this;
+            }
+            recreate() {
+                if (mainActivity !== this || uiClosed || !realUiMode) throw new Error('当前 Activity 已关闭');
+                const xml = typeof this.layoutXml === 'string' ? this.layoutXml : '';
+                const expanded = xml ? expandCustomWidgetsInXml(xml) : {xml: '', records: []};
+                pendingWidgets = expanded.records;
+                javaSession().recreate(expanded.xml);
             }
             isFinishing() { return !realUiMode || uiClosed; }
             startActivity(Ctor, options) { return startActivity(Ctor, options); }
@@ -1363,6 +1455,16 @@
             const instance = mainActivity;
             if (!instance || !event) return;
             const name = String(event.type || '');
+            if (realUiMode && name === 'create') {
+                // recreate replaces the Android object while keeping the JS Activity/session alive.
+                realActivity = javaSession().getActivity();
+                if (instance.initialStatusBar) javaSession().configureStatusBar(JSON.stringify(instance.initialStatusBar));
+            }
+            if (event.views) mainViews = event.views;
+            if (realUiMode && name === 'content_view_set' && pendingWidgets.length) {
+                attachCustomWidgets(pendingWidgets, mainViews);
+                pendingWidgets = [];
+            }
             const method = EVENT_METHODS[name];
             const argument = name === 'content_view_set' ? makeViewProxy(event) : (event.savedInstanceState || null);
             const isDestroy = name === 'destroy';
@@ -1415,6 +1517,12 @@
             events.forEach(function (event) {
                 if (event && String(event.type || '').indexOf('webview_') === 0) {
                     dispatchWebEvent(event);
+                } else if (realUiMode && event) {
+                    // Java's main-thread Runnable supplies the callback's host-call
+                    // context. V8 remains on Node; nested View/Looper calls run on main.
+                    uiRunOnUiThread(function () { dispatch(event); }).catch(function (error) {
+                        console.error('[ui] Activity 回调调度失败：', error);
+                    });
                 } else {
                     dispatch(event);
                 }
@@ -1613,8 +1721,8 @@
 
         // task-134：第二批 UI API（基于现有 host 能力，能真实工作的先落地；
         // setContentView/inflate/layout 依赖宿主 View 句柄，先给明确中文错误并在 probe 中标记）。
-        // 注意：ui.run/ui.post 只保证「调用兼容」，回调始终在 Node 线程执行；真正的 View 命令
-        // 由 uiRequestView -> 宿主 Binder 切到 Android UI 线程，不能把 Node 回调误当成 main。
+        // JS stays on the Node thread. Reflected View operations are marshalled to
+        // Android main by the host; isUiThread reports the actual Looper, never a logical scope.
         function uiRun(fn) {
             if (typeof fn !== 'function') { throw new TypeError('ui.run 需要一个函数'); }
             return fn();
@@ -1623,6 +1731,22 @@
             if (typeof fn !== 'function') { throw new TypeError('ui.post 需要一个函数'); }
             return setTimeout(function () { try { fn(); } catch (error) { console.error('[ui] post 回调异常', error); } },
                 Math.max(0, Number(delay) || 0));
+        }
+        function uiRunOnUiThread(fn) {
+            if (typeof fn !== 'function') return Promise.reject(new TypeError('ui.runOnUiThread 需要一个函数'));
+            return new Promise(function (resolve, reject) {
+                try {
+                    globalThis.__ajsEnableJavaCallbacks();
+                    const java = globalThis.$autojs.java;
+                    const Handler = java.findClass('android.os.Handler');
+                    const Looper = java.findClass('android.os.Looper');
+                    const Runnable = java.findClass('java.lang.Runnable');
+                    const task = new Runnable({run: function () {
+                        try { resolve(fn()); } catch (error) { reject(error); }
+                    }});
+                    if (!(new Handler(Looper.getMainLooper())).post(task)) reject(new Error('Android UI 队列已关闭'));
+                } catch (error) { reject(error); }
+            });
         }
         function uiRequestView(op, extra) {
             var request = {};
@@ -1666,6 +1790,12 @@
             return uiWrapHandle(uiRequestView('findViewById', {id: id, name: name}));
         }
         function uiSetContentView(layoutOrView) {
+            if (!realUiMode && typeof layoutOrView === 'string' && layoutOrView.trim().charAt(0) === '<'
+                    && typeof globalThis.__ajsEnableJavaCallbacks === 'function') {
+                class InlineActivity extends Activity { get layoutXml() { return layoutOrView; } }
+                setMainActivity(InlineActivity);
+                return realContentView();
+            }
             if (realUiMode) {
                 requireRealActivity();
                 const view = layoutOrView && layoutOrView.__ajsJavaObject__ === true
@@ -1678,13 +1808,24 @@
             else if (layoutOrView && layoutOrView.__layoutName) { name = layoutOrView.__layoutName; }
             return uiWrapHandle(uiRequestView('setContentView', {name: name}));
         }
-        function uiInflate(layoutName) {
+        function uiInflate(layoutName, parent, attachToParent) {
+            if (typeof layoutName === 'string' && layoutName.trim().charAt(0) === '<') {
+                if (typeof globalThis.__ajsEnableJavaCallbacks !== 'function') {
+                    throw new Error('XML 字符串 inflate 需要原生 Node Java 桥');
+                }
+                globalThis.__ajsEnableJavaCallbacks();
+                hostCall({op: 'ping'}); // seed application Context for offscreen inflation
+                const expanded = expandCustomWidgetsInXml(layoutName);
+                const view = javaSession().inflateXml(expanded.xml, parent || null, !!attachToParent);
+                attachCustomWidgets(expanded.records, mainViews, view);
+                return view;
+            }
             if (realUiMode) {
                 const activity = requireRealActivity();
                 const layout = layoutOf(layoutName);
                 const id = layout.layoutId || (layout.name && R.layout[layout.name]);
                 if (!id) throw new Error('未找到布局资源：' + String(layoutName));
-                return activity.getLayoutInflater().inflate(id, null);
+                return activity.getLayoutInflater().inflate(id, parent || null, !!attachToParent);
             }
             return uiWrapHandle(uiRequestView('inflate', {name: String(layoutName || '')}));
         }
@@ -1732,6 +1873,9 @@
         }
         function uiGetCurrentActivity() { return uiCurrentActivity(); }
 
+        globalThis.__ajsBindJavaView = realViewBinding;
+        globalThis.__ajsJavaViewMember = realViewMember;
+
         const ui = {
             imageLoader: {loadImageInto: function (view, address) {
                 if (!realUiMode) return Promise.reject(new Error('imageLoader 需要原生 Java UI'));
@@ -1745,11 +1889,11 @@
             Widget: Widget,
             run: uiRun,
             post: uiPost,
-            runOnUiThread: uiPost,
+            runOnUiThread: uiRunOnUiThread,
             findViewById: uiFindViewById,
             setContentView: uiSetContentView,
             inflate: uiInflate,
-            layout: uiInflate,
+            layout: uiSetContentView,
             getWindow: uiGetWindow,
             currentActivity: uiCurrentActivity,
             getCurrentActivity: uiGetCurrentActivity,

@@ -69,6 +69,12 @@ public class AndroidClassLoader extends ClassLoader implements GeneratedClassLoa
      */
     @Override
     public Class<?> defineClass(String name, byte[] data) {
+        return defineClass(name, data, false);
+    }
+
+    /** Node's ClassFileWriter emits legacy bytecode without Java 8 desugaring.
+     * Avoid booting D8 for these tiny callback adapters; general jars still use D8. */
+    public Class<?> defineClass(String name, byte[] data, boolean preferDx) {
         Log.d(LOG_TAG, "defineClass: name = " + name + " data.length = " + data.length);
         File classFile = null;
         try {
@@ -78,7 +84,8 @@ public class AndroidClassLoader extends ClassLoader implements GeneratedClassLoa
             parameters.setFileNameInZip(name.replace('.', '/') + ".class");
             parameters.setSourceExternalStream(true);
             zipFile.addStream(new ByteArrayInputStream(data), parameters);
-            return dexJar(classFile, null).loadClass(name);
+            boolean legacy = data.length >= 8 && (data[6] & 0xff) == 0 && (data[7] & 0xff) <= 51;
+            return dexJar(classFile, null, preferDx && legacy).loadClass(name);
         } catch (IOException | ZipException | ClassNotFoundException e) {
             throw new FatalLoadingException(e);
         } finally {
@@ -183,11 +190,24 @@ public class AndroidClassLoader extends ClassLoader implements GeneratedClassLoa
     }
 
     private DexClassLoader dexJar(File classFile, File dexFile) throws IOException {
+        return dexJar(classFile, dexFile, false);
+    }
+
+    private DexClassLoader dexJar(File classFile, File dexFile, boolean preferDx) throws IOException {
         boolean isTmpDex = dexFile == null;
         if (isTmpDex) {
             dexFile = generateTempDexFile("dex-" + classFile.getPath());
         }
         try {
+            if (preferDx) {
+                try {
+                    dexWithDx(classFile, dexFile);
+                    return loadDex(dexFile);
+                } catch (Exception | LinkageError failure) {
+                    Log.w(LOG_TAG, "Generated class dx failed, retry with D8: " + classFile, failure);
+                    deleteQuietly(dexFile);
+                }
+            }
             // 1) 优先 D8：支持 Java 11/17 的 class（major 55/61）。
             // D8 依赖 java.nio.file，Android 8.0（API 26）以下不能加载。
             Throwable d8Error = null;

@@ -90,6 +90,7 @@
   // ------------------------------------------------------------------
   var JAVA_OBJECT_MARK = '__ajsJavaObject__';
   var generatedClasses = Object.create(null);
+  var pendingGeneratedClasses = new Set();
   var generatedInstances = Object.create(null);
   var nextGeneratedClass = 1;
   var constructingJavaReceiver = null;
@@ -151,7 +152,12 @@
     }
     if (Object.prototype.toString.call(value) === '[object Object]') {
       var map = Object.create(null);
-      Object.keys(value).forEach(function (key) { map[key] = toWire(value[key]); });
+      Object.keys(value).forEach(function (key) {
+        var member = value[key];
+        // Listener methods retain their object receiver when a $map is adapted
+        // to a multi-method Java interface by the host.
+        map[key] = toWire(typeof member === 'function' && member.__classRef !== true ? member.bind(value) : member);
+      });
       return { $map: map };
     }
     throw hostError('不能把普通 JS 对象传给 Java（' + Object.prototype.toString.call(value) + '）；'
@@ -391,6 +397,7 @@
         if (typeof prop === 'symbol') { return undefined; }
         var member = memberAccess({ cls: className }, prop);
         if (member !== undefined) { return member; }
+        // Lowercase nested resource classes are resolved by the host member lookup.
         if (/^[A-Z]/.test(prop) && resolveClass(className + '$' + prop)) {
           return classRef(className + '$' + prop);
         }
@@ -725,6 +732,17 @@
     boxDouble: function (value) { return new (classRef('java.lang.Double'))(Number(value)); },
     boxBoolean: function (value) { return new (classRef('java.lang.Boolean'))(Boolean(value)); },
     boxChar: function (value) { return new (classRef('java.lang.Character'))(value); },
+    implement: function (iface, implementation) {
+      if (Array.isArray(iface)) {
+        if (iface.length !== 1) throw hostError('implement 当前需要一个 Java 接口');
+        iface = iface[0];
+      }
+      if (!iface || iface.__classRef !== true) throw hostError('implement 需要 Java 接口类');
+      if (!implementation || (typeof implementation !== 'object' && typeof implementation !== 'function')) {
+        throw hostError('implement 需要 JS 对象或函数');
+      }
+      return javaCall({op: 'proxyInterface', cls: iface.__className, callback: registerJavaCallback(implementation)});
+    },
     defineClass: async function (jsClass, options) {
       options = options || {};
       if (typeof jsClass !== 'function' || !jsClass.name) { throw hostError('defineClass 需要具名 JS 类'); }
@@ -743,11 +761,18 @@
         throw hostError('当前原生 Node 桥缺少 Java 回调能力，请更新应用');
       }
       var name = (options.packageName ? options.packageName + '.' : '') + jsClass.name;
-      if (generatedClasses[name]) { throw hostError('当前脚本已定义 Java 类：' + name); }
+      if (generatedClasses[name] || pendingGeneratedClasses.has(name)) { throw hostError('当前脚本已定义 Java 类：' + name); }
       var metadata = { id: nextGeneratedClass++, jsClass: jsClass, superMethods: [] };
-      var result = javaCall({ op: 'defineClass', classId: metadata.id, name: name,
-        superclass: base.__className, interfaces: (options.implements || []).map(function (it) { return it.__className; }),
-        methods: Array.from(methods), session: globalThis.__ajsEnableJavaCallbacks() });
+      pendingGeneratedClasses.add(name);
+      var result;
+      try {
+        // Classfile -> Dex compilation must not block the original Java UI callback.
+        result = await javaAsyncCall({ op: 'defineClass', classId: metadata.id, name: name,
+          superclass: base.__className, interfaces: (options.implements || []).map(function (it) { return it.__className; }),
+          methods: Array.from(methods), session: globalThis.__ajsEnableJavaCallbacks() }, [], 'io');
+      } finally {
+        pendingGeneratedClasses.delete(name);
+      }
       metadata.superMethods = result.superMethods || [];
       generatedClasses[name] = metadata;
       classCache[name] = true;

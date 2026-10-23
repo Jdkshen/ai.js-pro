@@ -267,6 +267,8 @@ public final class NodeUiHost {
         if (app == null) {
             return new JSONObject().put("ok", false).put("error", "Node UI 缺少 Context");
         }
+        // Activity 之外调用 ui.inflate 时的最后兜底 Context；每次 ui 宿主调用都刷新一次。
+        NodeUiLocalSession.setApplicationContext(app);
         String dir = resolveProjectDir(projectDir, request);
         switch (op) {
             case "ping":
@@ -1023,19 +1025,53 @@ public final class NodeUiHost {
     }
 
     public static View inflateInlineLayout(Context themed, String xml, ClassLoader loader) {
+        return inflateInlineLayout(themed, xml, loader, null, false);
+    }
+
+    /**
+     * ui.inflate(xml, parent, attachToParent) 的底层实现。
+     *
+     * <p>parent 非空时 DynamicLayoutInflater 会按 parent 的真实类型生成 LayoutParams
+     * （LinearLayout/FrameLayout/DrawerLayout…），attachToParent=true 时再 addView；
+     * 这样 layout_margin/layout_gravity/weight 等属性不会在挂载时丢失。
+     */
+    public static View inflateInlineLayout(Context themed, String xml, ClassLoader loader,
+                                           ViewGroup parent, boolean attachToParent) {
         if (themed == null) {
             throw new IllegalArgumentException("layoutXml 缺少主题 Context");
         }
         if (xml == null || xml.trim().isEmpty()) {
             throw new IllegalArgumentException("layoutXml 为空");
         }
+        if (attachToParent && parent == null) {
+            throw new IllegalArgumentException("attachToParent=true 需要非空 parent");
+        }
         NodeWebView.prepareProcess(themed.getApplicationContext());
         String normalized = normalizeInlineLayoutXml(xml);
         DynamicLayoutInflater inflater = newInlineLayoutInflater(themed);
         if (loader != null) inflater.setClassLoader(loader);
-        View root = inflater.inflate(normalized);
+        // 没有 parent 时 root 的 layout_width/layout_height/layout_margin 也需要一个 LP 宿主；
+        // 用一个不挂窗口的临时 FrameLayout 生成 LP（attachToParent 必须为 false），
+        // 否则这些属性会被 BaseViewInflater 在 layoutParams==null 时跳过。
+        ViewGroup inflationParent = parent;
+        if (inflationParent == null) {
+            inflationParent = new FrameLayout(themed);
+        }
+        View root = inflater.inflate(normalized, inflationParent, attachToParent);
+        if (root == null) {
+            return null;
+        }
         // 兜底：若工程自定义 ClassLoader/旧路径仍产出 JsWebView，也换成带 Node 桥的真实 WebView。
-        return NodeWebView.replaceJsWebViews(root);
+        View replaced = NodeWebView.replaceJsWebViews(root);
+        if (replaced != root && attachToParent && parent != null && root.getParent() == parent) {
+            // 根节点本身是 JsWebView 时 replace 会新建实例；已经挂载的旧根必须原位换掉。
+            int index = parent.indexOfChild(root);
+            ViewGroup.LayoutParams params = root.getLayoutParams();
+            parent.removeView(root);
+            if (params != null) parent.addView(replaced, index, params);
+            else parent.addView(replaced, index);
+        }
+        return replaced;
     }
 
     private static DynamicLayoutInflater newInlineLayoutInflater(Context context) {
@@ -1069,6 +1105,9 @@ public final class NodeUiHost {
         // Node UI 的 <webview> 必须是带 Node 桥的真实 WebView；先换成完整类名，避免
         // 默认 JsWebView 先注入一套依赖 ScriptRuntime 的页面 SDK。
         normalized = renameInlineTag(normalized, "webview", NodeWebView.class.getName());
+        // <switch> 在 Java 里是关键字大小写敏感问题（android.widget.switch 不存在）；
+        // XmlConverter 已统一映射到 SwitchCompat，这里再显式一次，保证 Node inline 路径不依赖它。
+        normalized = renameInlineTag(normalized, "switch", "androidx.appcompat.widget.SwitchCompat");
         normalized = renameInlineTag(normalized, "grid", NodeUiGridView.class.getName());
         normalized = renameInlineTag(normalized, "list", NodeUiListView.class.getName());
         normalized = renameInlineTag(normalized, "canvas", NodeUiCanvasView.class.getName());

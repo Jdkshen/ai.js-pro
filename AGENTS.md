@@ -14,7 +14,7 @@
 > 浮窗底层交付：[Node 浮窗底层修复](docs/reports/2026-10-23_Node悬浮窗底层优化.md)：**dev-1221** 已发布；新增 reload(xml) 热替换与多锚点拖动，模块 floating_window@1.2.0；移动/raw/hide-show/getSize/reload 17 项断言 ALL_PASS，APK 交付手机两个目录。
 > 宿主已发布：**dev-1213**（2026-10-23 19:44 更新源，SHA-256 `af7e597f…`）[悬浮窗主线程退出崩溃修复](docs/reports/2026-10-23_悬浮窗主线程退出崩溃修复.md)：Timer/View/弹窗/浮窗/Node24 Java 回调边界捕获二次停止异常、保留嵌套 JS 中止语义；Node ui.R 缺失资源返回 0；709 JVM + MI8 17 项回调与 Aurora 通过。Redmi Android 16 待验，K40 保持 dev-1199。
 > 最新升级：[Flutter 3.47.7 / Dart 3.13.5 与 16KB 修复](docs/reports/2026-10-22_Flutter升级与16KB兼容修复.md)：engine/embedding/AOT 成套锁定，Node libc++ 更新，发布强制无白名单 22 ELF 校验；真实 16KB 内核仍待验收。
-> 当前发布：**dev-1221**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`），
+> 当前发布：**dev-1227**（Flutter-only UI + Rhino/QuickJS/Node24 三引擎 + Node 进程池 `:node24_1..3`）；[Node24 动态 UI 底层修复](docs/reports/2026-10-23_Node24动态UI底层修复.md)：**dev-1227**（SHA-256 `23714441…`）已发布；补 binding 缺失 id 返回 undefined、setContentView 非 UI 线程自动 post；官方 28 项设备探针（20 轮带日志构建/4 代 recreate/Widget/多方法接口/线程/日志）通过，Android 16 原机待复测。
 > 本轮：dev-1209/1210 **canvas 原生场景绘制**（NodeUiCanvasView.setScene/clearScene，图元 JSON 原生批量绘制，脚本不再逐帧回调 JS）+ Flutter UI 重新打包；APK 144.73MB。
 > 最新优化：[无障碍截图 maxWidth](docs/reports/2026-10-22_无障碍截图maxWidth优化.md)：dev-1208 透传 maxWidth + 缩略回读/CPU 回退 + A11Y_SPLIT；MI8 同轮全屏 p50 239 → 640宽 181ms（-24%），Canvas HARDWARE 缩略回读不支持待 `.4` 复测。
 > 最新修复：[无障碍截图宿主直传像素](docs/reports/2026-10-22_无障碍截图宿主直传像素.md)：dev-1206 Raw `.n24r` / dev-1207 PFD 管道 + 三级回退；小米 8 20 帧 p50 169→122ms（p95 163/180，`.4` 待复测）。

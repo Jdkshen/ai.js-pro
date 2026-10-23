@@ -72,6 +72,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *      {"op":"ping"}
  * 响应 {"ok":true,"value":wire} 或 {"ok":false,"error":"中文说明"}
  * wire: null | boolean | number | string | {"$obj":id,"$class":"..."} | {"$arr":[...]}
+ *       | {"$jsInterface":{"$callback":id,"session":s}}   // 多方法 JS 对象实现接口
  * </pre>
  *
  * <p>生成的 Java 子类通过原生回调队列返回 Node；所有 V8 执行保持在 Node 线程。
@@ -145,6 +146,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private int mNextSensorToken = 1;
     /** task-198：host.runtime.loadDex 加载的动态 dex classloader（插件类优先从这里解析）。 */
     private volatile ClassLoader mRuntimeClassLoader;
+    private final Object mJavaClassLock = new Object();
     private final Map<String, Class<?>> mGeneratedClasses = new ConcurrentHashMap<>();
     private final Map<Integer, NodeJsCallback> mJavaCallbacks = new ConcurrentHashMap<>();
     private final ThreadLocal<Boolean> mConstructingFromJs = new ThreadLocal<>();
@@ -152,7 +154,6 @@ public final class Node24HostBridge implements Node24Engine.Host {
             java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
                 Thread thread = new Thread(r, "node24-java-io"); thread.setDaemon(true); return thread;
             });
-
     /** task-195：prelude 记录 process.exit 请求（exit(0) 强制成功，非 0 保留 code）。 */
     private volatile boolean mExitRequested;
     private volatile int mExitRequestedCode = -1;
@@ -426,8 +427,13 @@ public final class Node24HostBridge implements Node24Engine.Host {
             case "isInterface":
                 return ok(findClass(request.getString("name")).isInterface());
             case "proxyInterface": {
+                Class<?> iface = findClass(request.getString("cls"));
                 Object callback = fromWire(request.get("callback"));
-                return ok(toWire(((NodeJsCallback) callback).asInterface(findClass(request.getString("cls")))));
+                Object proxy = Node24JavaArguments.coerce(iface, callback);
+                if (!iface.isInstance(proxy)) {
+                    throw new IllegalArgumentException("Java 回调需要接口实现：" + iface.getName());
+                }
+                return ok(toWire(proxy));
             }
             case "defineClass":
                 return ok(defineJavaClass(request));
@@ -439,26 +445,24 @@ public final class Node24HostBridge implements Node24Engine.Host {
                     try {
                         result.put("id", id);
                         if (mClosed.get()) throw new IllegalStateException("脚本已结束");
-                        result.put("value", toWire(call.has("cls") ? staticCall(call) : instanceCall(call)));
+                        result.put("value", "defineClass".equals(call.optString("op"))
+                                ? defineJavaClass(call)
+                                : toWire(call.has("cls") ? staticCall(call) : instanceCall(call)));
                     } catch (Throwable failure) {
                         try { result.put("error", describeCause(failure)); } catch (JSONException ignored) {}
                     }
                     if (!mClosed.get()) enqueueEvent("__ajs_java_result", result);
                 };
-                if ("ui".equals(request.optString("mode"))) new android.os.Handler(Looper.getMainLooper()).post(work);
+                if (!"defineClass".equals(call.optString("op")) && "ui".equals(request.optString("mode")))
+                    new android.os.Handler(Looper.getMainLooper()).post(work);
                 else mJavaExecutor.execute(work);
                 return ok(null);
             }
             case "uiCall": {
-                java.util.concurrent.FutureTask<Object> task = new java.util.concurrent.FutureTask<>(
-                        () -> {
-                            if (mClosed.get()) throw new IllegalStateException("脚本已结束");
-                            return request.has("cls") ? staticCall(request) : instanceCall(request);
-                        });
-                if (Looper.myLooper() == Looper.getMainLooper()) task.run();
-                else new android.os.Handler(Looper.getMainLooper()).post(task);
-                try { return ok(toWire(task.get(10, java.util.concurrent.TimeUnit.SECONDS))); }
-                finally { if (!task.isDone()) task.cancel(false); }
+                return ok(toWire(onUi(() -> {
+                    if (mClosed.get()) throw new IllegalStateException("脚本已结束");
+                    return request.has("cls") ? staticCall(request) : instanceCall(request);
+                })));
             }
             case "ping":
                 return ok(new JSONObject().put("bridge", "node24-host").put("version", 1));
@@ -1191,6 +1195,15 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private JSONObject defineJavaClass(JSONObject request) throws Exception {
+        // Each generated loader extends the previous one. Serialize this chain with
+        // loadDex and close, including when Promise.all defines several classes.
+        synchronized (mJavaClassLock) {
+            if (mClosed.get()) throw new IllegalStateException("脚本已结束");
+            return defineJavaClassLocked(request);
+        }
+    }
+
+    private JSONObject defineJavaClassLocked(JSONObject request) throws Exception {
         final String name = request.getString("name");
         if (!name.matches("[\\p{L}_$][\\p{L}\\p{N}_$]*(\\.[\\p{L}_$][\\p{L}\\p{N}_$]*)*")) {
             throw new IllegalArgumentException("无效的 Java 类名：" + name);
@@ -1209,8 +1222,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
         File cache = new File(mContext.getCodeCacheDir(), mOverlayOwner + "/class-" + classId);
         com.stardust.autojs.rhino.AndroidClassLoader loader =
                 new com.stardust.autojs.rhino.AndroidClassLoader(previous, cache);
-        Class<?> generated = loader.defineClass(name, Node24ClassGenerator.generate(name, parent, interfaces, methods));
+        Class<?> generated = loader.defineClass(name, Node24ClassGenerator.generate(name, parent, interfaces, methods), true);
         Node24DexLifetime.track(generated.getClassLoader());
+        if (mClosed.get()) throw new IllegalStateException("脚本已结束");
         generated.getField("__dispatcher").set(null, new Node24ClassGenerator.Dispatcher() {
             @Override public Object invoke(Object receiver, String method, Object[] args) {
                 return callback(receiver, method, args);
@@ -1292,15 +1306,14 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private static Object defaultJavaValue(Class<?> type) {
-        if (type == boolean.class) return false;
-        if (type == char.class) return (char) 0;
-        return type.isPrimitive() && type != void.class ? coerce(type, 0) : null;
+        return Node24JavaArguments.defaultValue(type);
     }
 
     private Object newInstance(JSONObject request) throws Exception {
         Class<?> type = findClass(request.optString("cls", ""));
-        if (com.stardust.autojs.engine.node24.NodeUiLocalSession.isShowing()
-                && Looper.myLooper() != Looper.getMainLooper() && isUiType(type)) {
+        // View construction must happen on the UI thread even when no Node UI
+        // session is showing (offscreen views, dialogs, later attach).
+        if (Looper.myLooper() != Looper.getMainLooper() && isUiType(type)) {
             return onUi(() -> newInstance(request));
         }
         Object[] args = arguments(request.optJSONArray("args"));
@@ -1337,6 +1350,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
         Class<?> type = findClass(request.optString("cls", ""));
         String name = request.optString("method", "");
         Object[] args = arguments(request.optJSONArray("args"));
+        // P2-2: Class.forName(String) resolves with the caller frame's loader and
+        // misses Material/plugin classes. Mirror $java.findClass's host loaders.
+        if (type == Class.class && "forName".equals(name) && args != null
+                && args.length == 1 && args[0] instanceof String) {
+            return Node24JavaArguments.initializeClass(findClass((String) args[0]));
+        }
         Method method = findMethod(type, name, args, true);
         if (method == null) {
             throw new NoSuchMethodException("找不到静态方法 " + type.getName() + "." + name
@@ -1386,6 +1405,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private <T> T onUi(java.util.concurrent.Callable<T> work) throws Exception {
+        // Native Node24Callbacks.call() pumps nested callbacks while waiting. Keep
+        // listener return values synchronous; do not defer them or substitute defaults.
+        if (Looper.myLooper() == Looper.getMainLooper()) return work.call();
         java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<>(() -> {
             if (mClosed.get()) throw new IllegalStateException("脚本已结束");
             return work.call();
@@ -1399,8 +1421,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Object invokeMethod(Method method, Object target, Object[] args) throws Exception {
-        if (com.stardust.autojs.engine.node24.NodeUiLocalSession.isShowing()
-                && Looper.myLooper() != Looper.getMainLooper() && needsUiThread(target, method, args)) {
+        if (Looper.myLooper() != Looper.getMainLooper() && needsUiThread(target, method, args)) {
             return onUi(() -> invokeMethod(method, target, args));
         }
         try {
@@ -1447,15 +1468,30 @@ public final class Node24HostBridge implements Node24Engine.Host {
             Object value = isStatic ? field.get(null) : field.get(objectOf(request));
             return ok(new JSONObject().put("kind", "field").put("value", toWire(value)));
         }
+        if (isStatic) {
+            // android.R.color / android.R.attr are Java nested classes, not fields.
+            // Report them as a field whose value is the class, so the existing
+            // prelude turns Owner.name into a classRef and `.system_accent1_500`
+            // reads the nested class's static field.
+            Class<?> nested = Node24JavaArguments.nestedClass(type, name);
+            if (nested != null) {
+                return ok(new JSONObject().put("kind", "field").put("value", toWire(nested)));
+            }
+        }
         return ok(new JSONObject().put("kind", "unknown"));
     }
 
     private Object readField(JSONObject request) throws Exception {
         boolean isStatic = request.has("cls") && !request.has("obj");
+        String name = request.optString("name", "");
         Class<?> type = isStatic ? findClass(request.optString("cls", "")) : objectOf(request).getClass();
-        Field field = findField(type, request.optString("name", ""), isStatic);
+        Field field = findField(type, name, isStatic);
         if (field == null) {
-            throw new NoSuchFieldException("找不到字段 " + type.getName() + "." + request.optString("name", ""));
+            if (isStatic) {
+                Class<?> nested = Node24JavaArguments.nestedClass(type, name);
+                if (nested != null) return nested;
+            }
+            throw new NoSuchFieldException("找不到字段 " + type.getName() + "." + name);
         }
         field.setAccessible(true);
         return isStatic ? field.get(null) : field.get(objectOf(request));
@@ -1463,10 +1499,14 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     private void writeField(JSONObject request) throws Exception {
         boolean isStatic = request.has("cls") && !request.has("obj");
+        String name = request.optString("name", "");
         Class<?> type = isStatic ? findClass(request.optString("cls", "")) : objectOf(request).getClass();
-        Field field = findField(type, request.optString("name", ""), isStatic);
+        Field field = findField(type, name, isStatic);
         if (field == null) {
-            throw new NoSuchFieldException("找不到字段 " + type.getName() + "." + request.optString("name", ""));
+            if (isStatic && Node24JavaArguments.nestedClass(type, name) != null) {
+                throw new IllegalArgumentException("不能写入嵌套类：" + type.getName() + "." + name);
+            }
+            throw new NoSuchFieldException("找不到字段 " + type.getName() + "." + name);
         }
         field.setAccessible(true);
         Object value = fromWire(request.opt("value"));
@@ -1536,9 +1576,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
         if (!outputDir.isDirectory() && !outputDir.mkdirs()) {
             throw new IllegalStateException("无法创建 dex 优化目录：" + outputDir);
         }
-        mRuntimeClassLoader = new dalvik.system.DexClassLoader(
-                dex.getAbsolutePath(), outputDir.getAbsolutePath(), null, parent);
-        mNoArgCalls.clear();
+        synchronized (mJavaClassLock) {
+            if (mClosed.get()) throw new IllegalStateException("脚本已结束");
+            mRuntimeClassLoader = new dalvik.system.DexClassLoader(
+                    dex.getAbsolutePath(), outputDir.getAbsolutePath(), null, parent);
+            mNoArgCalls.clear();
+        }
         return true;
     }
 
@@ -1674,6 +1717,19 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
         if (wire instanceof JSONObject) {
             JSONObject object = (JSONObject) wire;
+            // New explicit interface-object marker. The prelude registers the whole
+            // JS object as one callback (so `this` inside methods is the object);
+            // a method map is also accepted for hand-written/test requests.
+            if (object.has("$jsInterface")) {
+                Object decoded = fromWire(object.opt("$jsInterface"));
+                if (decoded instanceof NodeJsCallback) return decoded;
+                if (decoded instanceof Map) {
+                    final Map<?, ?> methods = (Map<?, ?>) decoded;
+                    return (Node24JavaArguments.Callback) type ->
+                            Node24JavaArguments.interfaceFromCallbacks(type, methods);
+                }
+                throw new IllegalArgumentException("$jsInterface 需要 $callback 或方法映射：" + object);
+            }
             if (object.has("$callback")) {
                 int id = object.optInt("$callback");
                 return mJavaCallbacks.computeIfAbsent(id, ignored -> new NodeJsCallback(id, object.optLong("session")));
@@ -2006,12 +2062,14 @@ public final class Node24HostBridge implements Node24Engine.Host {
         mShellGroups.clear();
         mJavaExecutor.shutdownNow();
         mPluginLoader.unloadAll();
-        Node24GeneratedClasses.remove(mOverlayOwner);
-        for (Class<?> generated : mGeneratedClasses.values()) {
-            try { generated.getField("__dispatcher").set(null, null); }
-            catch (ReflectiveOperationException failure) { Log.w(TAG, "clear generated dispatcher", failure); }
+        synchronized (mJavaClassLock) {
+            Node24GeneratedClasses.remove(mOverlayOwner);
+            for (Class<?> generated : mGeneratedClasses.values()) {
+                try { generated.getField("__dispatcher").set(null, null); }
+                catch (ReflectiveOperationException failure) { Log.w(TAG, "clear generated dispatcher", failure); }
+            }
+            mGeneratedClasses.clear();
         }
-        mGeneratedClasses.clear();
         mJavaCallbacks.clear();
         try {
             shutdownMediaThread();

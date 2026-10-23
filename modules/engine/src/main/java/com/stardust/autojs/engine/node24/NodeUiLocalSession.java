@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.ValueCallback;
 import android.widget.ImageView;
 import android.graphics.Bitmap;
@@ -29,6 +30,7 @@ public final class NodeUiLocalSession {
     private static final Object STATE = new Object();
     private static volatile Pending pending;
     private static volatile Activity activity;
+    private static volatile Context applicationContext;
     private static volatile View content;
     private static volatile JSONObject views;
     private static volatile com.stardust.autojs.core.console.ConsoleImpl console;
@@ -45,9 +47,23 @@ public final class NodeUiLocalSession {
         final String token = java.util.UUID.randomUUID().toString();
         volatile String error;
         volatile boolean backHandled;
+        /** 首次 attach 完成后，后续 attach 都是 Activity 重建（显式 recreate 或系统 config change）。 */
+        volatile boolean attached;
+        /** Activity 正在被重建；destroy 时必须保留 token/callbacks/keep-alive。 */
+        volatile boolean recreating;
+        /** 已经历过一次重建（用于给新 Activity 的事件打 recreated=true）。 */
+        volatile boolean recreated;
+    }
+
+    /** 记录 application Context，供 Activity 之外（只有 parent 甚至没有 parent）的 ui.inflate 兜底。 */
+    public static void setApplicationContext(Context context) {
+        if (context == null) return;
+        Context app = context.getApplicationContext();
+        applicationContext = app != null ? app : context;
     }
 
     public static JSONObject show(Context context, String projectDir, JSONObject request) throws Exception {
+        setApplicationContext(context);
         Pending opening = new Pending();
         opening.backHandled = request != null && request.optBoolean("backHandled", false);
         synchronized (STATE) {
@@ -104,11 +120,21 @@ public final class NodeUiLocalSession {
         synchronized (STATE) {
             Pending opening = pending;
             if (opening == null || opening.error != null || !opening.token.equals(token)) return false;
+            boolean recreated = opening.recreating || opening.recreated || opening.attached;
             activity = source;
             content = root;
             views = ids;
             backHandled = opening.backHandled;
-            event("create"); event("start"); event("resume"); event("content_view_set");
+            opening.attached = true;
+            opening.recreating = false;
+            opening.recreated = recreated;
+            // 系统重建时旧 Activity 的 destroy 可能晚于新 Activity 的 onCreate；
+            // 新根之外的旧 WebView 必须在这里释放，不能把旧页面的 webId 留给新页面。
+            destroyWebViewsOutsideLocked(root);
+            enqueueEvent("create", recreated);
+            enqueueEvent("start", recreated);
+            enqueueEvent("resume", recreated);
+            enqueueEvent("content_view_set", recreated);
             opening.ready.countDown();
             return true;
         }
@@ -116,30 +142,58 @@ public final class NodeUiLocalSession {
     public static void failed(String token, Throwable failure) {
         synchronized (STATE) {
             Pending opening = pending;
-            if (opening != null && opening.token.equals(token)) {
-                opening.error = String.valueOf(failure);
-                opening.ready.countDown();
-            }
+            if (opening == null || !opening.token.equals(token)) return;
+            opening.error = String.valueOf(failure);
+            opening.ready.countDown();
+            if (!opening.attached) return;
+            // 已经显示过的会话在重建时失败：新 Activity 不会再来 attach，
+            // 必须补终态 destroy，否则 pending/isShowing/keep-alive 会永久保留。
+            pending = null;
+            activity = null; content = null; views = null; callbacks = null;
+            backHandled = false;
+            destroyWebViewsLocked();
+            enqueueEvent("pause", false); enqueueEvent("stop", false); enqueueEvent("destroy", false);
+            console = null;
         }
     }
     public static void destroyed(Activity source) {
         synchronized (STATE) {
             if (activity != source) return;
-            if (pending != null) {
-                pending.error = "Node UI 已关闭";
-                pending.ready.countDown();
+            Pending opening = pending;
+            boolean recreation = !source.isFinishing()
+                    && (source.isChangingConfigurations() || (opening != null && opening.recreating));
+            if (recreation && opening != null) {
+                // Activity 重建（显式 recreate 或旋转/字体/深色模式等系统 config change）：
+                // 保留 pending token、callbacks、console(isShowing/keep-alive)，不投终态 destroy。
+                // 新 Activity 会用同一个 token attach，并补 create/start/resume/content_view_set。
+                opening.recreating = true;
+                opening.recreated = true;
+                activity = null;
+                content = null;
+                destroyWebViewsLocked();
+                enqueueEvent("pause", false);
+                enqueueEvent("stop", false);
+                return;
+            }
+            if (opening != null) {
+                opening.error = "Node UI 已关闭";
+                opening.ready.countDown();
             }
             activity = null; content = null; pending = null; callbacks = null;
             backHandled = false;
             destroyWebViewsLocked();
-            event("pause"); event("stop"); event("destroy");
+            enqueueEvent("pause", false); enqueueEvent("stop", false); enqueueEvent("destroy", false);
             views = null;
             console = null;
         }
     }
     public static void event(String type) {
+        enqueueEvent(type, false);
+    }
+    private static void enqueueEvent(String type, boolean recreated) {
         try {
             JSONObject event = new JSONObject().put("type", type);
+            if (recreated) event.put("recreated", true);
             if ("content_view_set".equals(type)) event.put("views", views);
             synchronized (EVENTS) { EVENTS.addLast(event); }
         } catch (org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
@@ -152,6 +206,106 @@ public final class NodeUiLocalSession {
     public static boolean isShowing() { return pending != null || activity != null; }
     public static Activity getActivity() { return activity; }
     public static View getContentView() { return content; }
+
+    /**
+     * ui.inflate(XML 字符串, parent, attachToParent) 的 Node24 入口。
+     *
+     * <p>Context 优先级固定为：当前 Node UI Activity → parent.getContext() → application Context。
+     * 真正 inflate 始终在主线程完成（在 Node 线程调用会同步等主线程结果，但主线程调用绝不反向等待
+     * Node 线程）；LayoutParams 由 DynamicLayoutInflater 按 parent 类型生成，attach 时不会丢掉
+     * layout_margin/layout_gravity 等属性。id 仍由 inflater 的 IdHandler 写入，并按 XML 中的名字
+     * 走 Ids.parse（与 ui.js 的 binding fallback 同一张表）。
+     */
+    public static View inflateXml(String xml, ViewGroup parent, boolean attachToParent) {
+        if (xml == null || xml.trim().isEmpty()) {
+            throw new IllegalArgumentException("ui.inflate 需要非空 XML 字符串");
+        }
+        if (attachToParent && parent == null) {
+            throw new IllegalArgumentException("attachToParent=true 需要非空 parent");
+        }
+        final View[] result = new View[1];
+        runOnMainAndWait(() -> {
+            Context themed = resolveInflateContext(parent);
+            result[0] = NodeUiHost.inflateInlineLayout(themed, xml,
+                    themed.getClassLoader(), parent, attachToParent);
+        }, 10_000L, "inflate");
+        return result[0];
+    }
+
+    private static Context resolveInflateContext(ViewGroup parent) {
+        Activity current = activity;
+        if (current != null) {
+            try {
+                if (!current.isFinishing() && !current.isDestroyed()) return current;
+            } catch (Throwable ignored) {
+                // Activity 已经 detach：继续尝试 parent / application。
+            }
+        }
+        if (parent != null && parent.getContext() != null) {
+            return parent.getContext();
+        }
+        Context app = applicationContext;
+        if (app != null) {
+            return NodeUiHost.wrapThemedContext(app, null);
+        }
+        throw new IllegalStateException("ui.inflate 需要 Activity、parent 或 application Context");
+    }
+
+    /**
+     * 显式重建当前 Node UI Activity（Activity.recreate 的标准语义）。
+     *
+     * <p>调用方（ui.js）已在主线程外重读 layoutXml 并展开自定义 Widget，把最终的 expandedXml
+     * 传进来。这里只做主线程的两件事：更新当前 Activity Intent 的 layoutXml，然后 Activity.recreate。
+     * 不等待新 Activity attach —— 新 Activity 的 onCreate 会在主线程走 attach，等待它会造成主线程死锁。
+     */
+    public static void recreate(final String expandedXml) {
+        if (expandedXml == null || expandedXml.trim().isEmpty()) {
+            throw new IllegalArgumentException("recreate 需要非空 layoutXml");
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            recreateOnMain(expandedXml);
+        } else {
+            runOnMainAndWait(() -> recreateOnMain(expandedXml), 5_000L, "recreate");
+        }
+    }
+
+    private static void recreateOnMain(String expandedXml) {
+        final Activity current;
+        final Pending opening;
+        synchronized (STATE) {
+            opening = pending;
+            current = activity;
+            if (opening == null || opening.error != null) {
+                throw new IllegalStateException("Node UI 未显示，无法 recreate");
+            }
+            if (current == null) {
+                throw new IllegalStateException("Node UI Activity 正在重建或尚未 attach，无法 recreate");
+            }
+            if (current.isFinishing() || current.isDestroyed()) {
+                throw new IllegalStateException("Node UI Activity 已关闭，无法 recreate");
+            }
+            opening.recreating = true;
+        }
+        Intent intent = current.getIntent();
+        if (intent == null) {
+            resetRecreating(opening);
+            throw new IllegalStateException("Node UI Activity 缺少 Intent，无法更新 layoutXml");
+        }
+        intent.putExtra("layoutXml", expandedXml);
+        try {
+            current.recreate();
+        } catch (Throwable error) {
+            resetRecreating(opening);
+            if (error instanceof RuntimeException) throw (RuntimeException) error;
+            throw new IllegalStateException("Activity.recreate 失败：" + error.getMessage(), error);
+        }
+    }
+
+    private static void resetRecreating(Pending opening) {
+        synchronized (STATE) {
+            if (pending == opening) opening.recreating = false;
+        }
+    }
     /** Pro View.attr uses the same real attribute handlers as XML inflation, on main. */
     public static String viewAttribute(View view, String name, String value, boolean write) {
         if (view == null) throw new IllegalArgumentException("View 不能为空");
@@ -188,7 +342,11 @@ public final class NodeUiLocalSession {
         }, 5000L, "initialStatusBar");
     }
     public static void setContentView(View root) {
-        if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("setContentView 需要主线程");
+        // setTimeout/Node 回调里调用时自动切主线程，避免静默不刷新（兼容旧脚本的同步语义）。
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnMainAndWait(() -> setContentView(root), 5000L, "setContentView");
+            return;
+        }
         Activity owner = activity;
         if (owner == null || owner.isFinishing()) throw new IllegalStateException("Node UI 已关闭");
         owner.setContentView(root);
@@ -436,13 +594,13 @@ public final class NodeUiLocalSession {
         try {
             future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.TimeoutException timeout) {
-            throw new IllegalStateException("WebView " + label + " 超时");
+            throw new IllegalStateException("Node UI " + label + " 超时");
         } catch (java.util.concurrent.ExecutionException failure) {
             Throwable cause = failure.getCause() == null ? failure : failure.getCause();
-            throw new IllegalStateException("WebView " + label + " 失败：" + cause.getMessage(), cause);
+            throw new IllegalStateException("Node UI " + label + " 失败：" + cause.getMessage(), cause);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("等待 WebView " + label + " 被中断");
+            throw new IllegalStateException("等待 Node UI " + label + " 被中断");
         }
     }
     public static void close() {

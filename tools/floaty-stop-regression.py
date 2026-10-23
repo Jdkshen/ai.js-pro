@@ -3,6 +3,7 @@ import argparse
 import datetime
 import json
 import pathlib
+import re
 import subprocess
 import time
 import urllib.request
@@ -48,6 +49,10 @@ if status.get("activeMcpRuns") or overlays.get("count"):
 pid = adb("shell", "pidof", "com.jdkshen.aijspro")
 if not pid:
     raise SystemExit("Host process is not running")
+def installed_version():
+    package = adb("shell", "dumpsys", "package", "com.jdkshen.aijspro")
+    return int(re.search(r"versionCode=(\d+)", package).group(1))
+version = installed_version()
 root = "/sdcard/脚本/_floaty_stop_regression/" + args.engine + "-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "/"
 def marker(rel):
     value = call("read_script", {"path": root + rel, "maxBytes": 4096})
@@ -95,7 +100,10 @@ if args.engine != "rhino":
         window = "var w=floaty.rawWindow(" + json.dumps(xml) + ",{x:100,y:500});w.setSize(300,260);w.setPosition(100,500);"
         click = "w.quit.on('click',action);"
         touch = "w.quit.on('touch',function(e){if(e.getAction()===1)action();});"
-        trigger = "w.quit.javaView.performClick();"
+        # Raw Android View methods must run on Android's UI thread. Calling
+        # performClick directly from the QuickJS script thread tests Android's
+        # wrong-thread rejection instead of the script callback exit boundary.
+        trigger = "runOnMainThread(function(){w.quit.javaView.performClick();});"
         close = "w.exitOnClose();setTimeout(function(){mark('entered');w.close();mark('after');},200);"
     else:
         window = "var w=require('floating_window').createWindow({});w.setViewFromXml(" + json.dumps(xml) + ");w.setPosition(100,500);w.setSize(300,260);w.show();"
@@ -130,7 +138,8 @@ if args.engine != "rhino":
             ("ui-post-only-exit", "ui.post(action,100);"),
             ("promise-exit", "Promise.resolve().then(action);")
         ])
-out = {"serial": args.serial, "engine": args.engine, "pid": pid, "root": root, "ok": False, "cases": []}
+out = {"serial": args.serial, "engine": args.engine, "versionCode": version,
+       "pid": pid, "root": root, "ok": False, "cases": []}
 current = None
 try:
     for name, body in cases:
@@ -183,6 +192,9 @@ try:
         print(json.dumps({"case": name, "status": item.get("status"), "pid": pid, "overlays": 0}), flush=True)
         current = None
         (args.output / "result.json").write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    out["versionCodeAfter"] = installed_version()
+    if out["versionCodeAfter"] != version:
+        raise RuntimeError("Installed APK changed while the regression was running")
     out["ok"] = True
 except Exception as error:
     out["error"] = str(error)
