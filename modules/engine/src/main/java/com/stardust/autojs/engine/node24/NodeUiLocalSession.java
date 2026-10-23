@@ -415,6 +415,24 @@ public final class NodeUiLocalSession {
         }, 5000L, "View.attr");
         return result[0];
     }
+    /** task-236：一次桥调用应用多个 View 属性，减少布局/绑定阶段的细碎 attr 往返。 */
+    public static void viewAttributes(View view, String json) throws org.json.JSONException {
+        if (view == null) throw new IllegalArgumentException("View 不能为空");
+        final org.json.JSONObject values = new org.json.JSONObject(json == null ? "{}" : json);
+        runOnMainAndWait(() -> {
+            com.stardust.autojs.core.ui.attribute.ViewAttributes attributes =
+                    com.stardust.autojs.core.ui.ViewExtras.getViewAttributes(view,
+                            new com.stardust.autojs.core.ui.inflater.ResourceParser(
+                                    new com.stardust.autojs.core.ui.inflater.util.Drawables()));
+            java.util.Iterator<String> keys = values.keys();
+            while (keys.hasNext()) {
+                String name = keys.next();
+                com.stardust.autojs.core.ui.attribute.ViewAttributes.Attribute attribute = attributes.get(name);
+                if (attribute == null) throw new IllegalArgumentException("未知 View 属性：" + name);
+                attribute.set(values.optString(name));
+            }
+        }, 5000L, "View.attrBatch");
+    }
     public static void configureStatusBar(String json) throws org.json.JSONException {
         JSONObject settings = new JSONObject(json);
         Activity owner = activity;

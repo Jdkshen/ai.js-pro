@@ -162,8 +162,18 @@
             const extras = viewExtras(view);
             if (name === 'attr') return function (attribute, value) {
                 if (attribute && typeof attribute === 'object') {
-                    Object.keys(attribute).forEach(function (key) { view.attr(key, attribute[key]); });
-                    return view;
+                    // task-236：多属性一次宿主调用；旧宿主无 viewAttributes 时逐项回退。
+                    try {
+                        javaSession().viewAttributes(view, JSON.stringify(attribute));
+                        return view;
+                    } catch (error) {
+                        // 只有旧宿主缺少批量方法时才逐项回退；属性值错误必须原样抛出。
+                        const text = String(error && error.message || error);
+                        if (text.indexOf('找不到方法') < 0 && text.indexOf('NoSuchMethod') < 0
+                                && text.indexOf('viewAttributes') < 0) throw error;
+                        Object.keys(attribute).forEach(function (key) { view.attr(key, attribute[key]); });
+                        return view;
+                    }
                 }
                 const key = String(attribute);
                 const widget = extras.widget;
@@ -282,17 +292,22 @@
             return realSession;
         }
         function resolveViewId(name) {
-            let id = Number(javaSession().viewId(String(name)) || 0);
+            const key = String(name);
+            if (Object.prototype.hasOwnProperty.call(viewIdCache, key)) return viewIdCache[key];
+            // show 已经返回过 name→id；先用它，避免每个 binding 属性多一次 Java viewId 调用。
+            let id = Number(mainViews[key]) || 0;
+            if (!id) id = Number(javaSession().viewId(key) || 0);
             if (!id) {
                 // item 模板里的 id 不在 Activity 的 views 表里；Ids.parse 是 inflater
                 // 设置 id 时的同一张全局表，按名字取回稳定数值。
                 try {
                     id = Number(globalThis.$autojs.java.findClass(
-                        'com.stardust.autojs.core.ui.inflater.util.Ids').parse(String(name)));
+                        'com.stardust.autojs.core.ui.inflater.util.Ids').parse(key));
                 } catch (ignored) {
                     id = 0;
                 }
             }
+            viewIdCache[key] = id;
             return id;
         }
 
@@ -303,22 +318,26 @@
                     return Array.from(new Set(Object.keys(mainViews).concat(Array.from(inlineBindingNames))))
                         .filter(function (name) { const id = resolveViewId(name); return id && view.findViewById(id); });
                 };
+                const childCache = Object.create(null);
+                const getChild = function (name) {
+                    if (Object.prototype.hasOwnProperty.call(childCache, name)) return childCache[name];
+                    const id = resolveViewId(name);
+                    const child = id ? view.findViewById(id) : null;
+                    childCache[name] = child || null;
+                    return child || null;
+                };
                 bindings = new Proxy({}, {get: function (_target, name) {
                     if (typeof name === 'symbol' || name === 'then' || name === 'toJSON') return undefined;
-                    const id = resolveViewId(name);
-                    if (!id) return undefined;
-                    const child = view.findViewById(id);
+                    const child = getChild(String(name));
                     if (!child) return undefined;
                     return isWebViewObject(child) ? webViewFacade(child) : child;
                 }, has: function (_target, name) {
                     if (typeof name !== 'string') return false;
-                    const id = resolveViewId(name);
-                    return !!(id && view.findViewById(id));
+                    return !!getChild(name);
                 }, ownKeys: names, getOwnPropertyDescriptor: function (_target, name) {
                     if (typeof name === 'string' && (inlineBindingNames.has(name)
                             || Object.prototype.hasOwnProperty.call(mainViews, name))) {
-                        const id = resolveViewId(name);
-                        if (id && view.findViewById(id)) return {configurable: true, enumerable: true};
+                        if (getChild(name)) return {configurable: true, enumerable: true};
                     }
                 }});
                 realBindings.set(view, bindings);
@@ -1224,6 +1243,8 @@
         // ------------------------------------------------------------------
         let mainActivity = null;
         let mainViews = {};
+        // task-236：name→viewId 与 binding 子 View 句柄缓存；binding 属性访问不再每次走 Java 桥。
+        let viewIdCache = Object.create(null);
         // 真实 View binding 的 click 监听：Activity/overlay 只回传 viewId，这里按 id 找到
         // 注册过 handler 的 binding 状态。每个 ui 模块实例独立，close 时清空。
         const clickStates = Object.create(null);
@@ -1284,6 +1305,7 @@
             if (globalThis.__ajsJavaViewMember === realViewMember) delete globalThis.__ajsJavaViewMember;
             realViewExtras = new WeakMap();
             mainViews = {};
+            viewIdCache = Object.create(null);
             Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
             Object.keys(viewBindings).forEach(function (key) { delete viewBindings[key]; });
             Object.keys(webFacadeByHandle).forEach(function (key) { delete webFacadeByHandle[key]; });
@@ -1460,7 +1482,7 @@
                 realActivity = javaSession().getActivity();
                 if (instance.initialStatusBar) javaSession().configureStatusBar(JSON.stringify(instance.initialStatusBar));
             }
-            if (event.views) mainViews = event.views;
+            if (event.views) { mainViews = event.views; viewIdCache = Object.create(null); }
             if (realUiMode && name === 'content_view_set' && pendingWidgets.length) {
                 attachCustomWidgets(pendingWidgets, mainViews);
                 pendingWidgets = [];
@@ -1630,6 +1652,7 @@
             }
             mainActivity = instance;
             mainViews = result.views && typeof result.views === 'object' ? result.views : {};
+            viewIdCache = Object.create(null);
             Object.keys(viewBindings).forEach(function (key) { delete viewBindings[key]; });
             Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
             uiClosed = false;
