@@ -24,6 +24,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
+import org.autojs.source.engine.android.Node24GeneratedClasses;
+
 /** Real Views and Java callbacks share an existing Node pool process. */
 public final class NodeUiLocalSession {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -35,6 +37,8 @@ public final class NodeUiLocalSession {
     private static volatile JSONObject views;
     private static volatile com.stardust.autojs.core.console.ConsoleImpl console;
     private static volatile ActivityCallbacks callbacks;
+    /** 当前 Node 执行生成类（$java.defineClass）的 ClassLoader；ui.inflate 需用它解析 m3ui.NativeView 等。 */
+    private static volatile ClassLoader generatedClassLoader;
     private static final java.util.ArrayDeque<JSONObject> EVENTS = new java.util.ArrayDeque<>();
     private static final ImageLoader IMAGE_LOADER = new ImageLoader();
     /** 当前 Activity 会话的真实 NodeWebView；webId 由本会话分配，销毁时统一释放。 */
@@ -64,6 +68,13 @@ public final class NodeUiLocalSession {
 
     public static JSONObject show(Context context, String projectDir, JSONObject request) throws Exception {
         setApplicationContext(context);
+        String javaClassOwner = request == null ? "" : request.optString("javaClassOwner", "");
+        try {
+            generatedClassLoader = javaClassOwner.isEmpty() ? null
+                    : Node24GeneratedClasses.loader(javaClassOwner, context.getClassLoader());
+        } catch (Throwable ignored) {
+            generatedClassLoader = null;
+        }
         Pending opening = new Pending();
         opening.backHandled = request != null && request.optBoolean("backHandled", false);
         synchronized (STATE) {
@@ -71,6 +82,7 @@ public final class NodeUiLocalSession {
             pending = opening;
             console = null;
             callbacks = null;
+            generatedClassLoader = null;
             backHandled = false;
             destroyWebViewsLocked();
             synchronized (EVENTS) { EVENTS.clear(); }
@@ -226,8 +238,8 @@ public final class NodeUiLocalSession {
         final View[] result = new View[1];
         runOnMainAndWait(() -> {
             Context themed = resolveInflateContext(parent);
-            result[0] = NodeUiHost.inflateInlineLayout(themed, xml,
-                    themed.getClassLoader(), parent, attachToParent);
+            ClassLoader loader = generatedClassLoader != null ? generatedClassLoader : themed.getClassLoader();
+            result[0] = NodeUiHost.inflateInlineLayout(themed, xml, loader, parent, attachToParent);
         }, 10_000L, "inflate");
         return result[0];
     }
@@ -292,10 +304,11 @@ public final class NodeUiLocalSession {
         runOnMainAndWait(new Runnable() {
             @Override public void run() {
                 final Context themed = resolveInflateContext(parent);
+                final ClassLoader loader = generatedClassLoader != null ? generatedClassLoader : themed.getClassLoader();
                 try {
                     for (int i = 0; i < count; i++) {
                         result[i] = NodeUiHost.inflateInlineLayout(
-                                themed, xml, themed.getClassLoader(), parent, false);
+                                themed, xml, loader, parent, false);
                     }
                 } catch (RuntimeException error) {
                     throw new IllegalStateException("inflateXmlBatch 失败：" + error.getMessage(), error);
