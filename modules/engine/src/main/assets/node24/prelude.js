@@ -6613,6 +6613,23 @@
   globalThis.__ajsModuleFactories = moduleFactories;
   globalThis.__ajsModules = moduleCache;
 
+  // Observe fatal script errors without handling them or changing Node's exit
+  // policy. Native stderr can bypass the per-execution output pipe on Android.
+  (function installUnhandledErrorReporting() {
+    try {
+      if (typeof process === 'undefined' || process.__ajsErrorMonitorPatched) { return; }
+      process.__ajsErrorMonitorPatched = true;
+      process.on('uncaughtExceptionMonitor', function (error, origin) {
+        try {
+          var detail = String(error && error.stack || error);
+          hostValue({ kind: 'lifecycle', action: 'scriptError', args: {
+            detail: detail.slice(0, 16384), origin: String(origin || '')
+          } });
+        } catch (ignored) { }
+      });
+    } catch (ignored) { }
+  })();
+
   // task-195：process.exit 语义收口。
   // - 记录 exit 请求（引擎侧据此把 exit(0) 强制 SUCCESS/exitCode=0，避免 polling/宿主关闭
   //   竞态导致原生 exitCode=1 被误报 SCRIPT_ERROR）；

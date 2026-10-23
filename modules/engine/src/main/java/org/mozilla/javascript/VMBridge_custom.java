@@ -3,6 +3,7 @@ package org.mozilla.javascript;
 import android.os.Looper;
 import android.util.Log;
 
+import com.stardust.autojs.core.looper.MainThreadCallback;
 import com.stardust.autojs.engine.RhinoJavaScriptEngine;
 
 // SPIKE(2026-10-05): 官方 Rhino 1.7.14.1 中 jdk15.VMBridge_jdk15 已更名为 jdk18.VMBridge_jdk18（钩子名 VMBridge_custom 不变）
@@ -53,12 +54,14 @@ public class VMBridge_custom extends VMBridge_jdk18 {
                     return castReturnValue(method, result);
                 } catch (ContinuationPending pending) {
                     return defaultValue(method.getReturnType());
-                } catch (Throwable e) {
+                } catch (Exception e) {
                     e.printStackTrace();
                     // notify the script thread to exit
                     com.stardust.autojs.runtime.ScriptRuntime runtime = engine.getRuntime();
                     Log.d(LOG_TAG, "runtime = " + runtime);
-                    runtime.exit(e);
+                    // exit() throws again after stopping the engine; contain only that
+                    // second throw at the UI boundary. Host defects still propagate.
+                    MainThreadCallback.terminate(e, runtime::exit);
                     // even if we caught the exception, we must return a value to for the method call.
                     return defaultValue(method.getReturnType());
                 }

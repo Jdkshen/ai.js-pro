@@ -9,6 +9,7 @@ import android.view.View;
 import android.widget.CompoundButton;
 
 import com.stardust.autojs.core.eventloop.EventEmitter;
+import com.stardust.autojs.core.looper.MainThreadCallback;
 import com.stardust.autojs.core.ui.BaseEvent;
 import com.stardust.autojs.core.ui.attribute.ViewAttributes;
 import com.stardust.autojs.core.ui.widget.JsListView;
@@ -28,10 +29,12 @@ public class ViewPrototype {
     private final Set<String> mRegisteredEvents = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final Scriptable mScope;
     private final ViewAttributes mViewAttributes;
+    private final ScriptRuntime mRuntime;
     private Object mWidget;
 
     public ViewPrototype(View view, ViewAttributes viewAttributes, Scriptable scope, ScriptRuntime runtime) {
         mView = view;
+        mRuntime = runtime;
         mViewAttributes = viewAttributes;
         mEventEmitter = runtime.events.emitter();
         mScope = scope;
@@ -124,6 +127,7 @@ public class ViewPrototype {
             case "touch": {
                 mView.setOnTouchListener((v, event) -> {
                     BaseEvent e = new BaseEvent(mScope, event, event.getClass());
+                    dispatch(() -> {
                     //Log.d(LOG_TAG, "this = " + NativeView.this + ", emitter = " + mEventEmitter + ", view = " + mView);
                     if (event.getAction() == MotionEvent.ACTION_DOWN) {
                         emit("touch_down", e, v);
@@ -133,18 +137,19 @@ public class ViewPrototype {
                         emit("touch_move", e, v);
                     }
                     emit("touch", e, v);
+                    });
                     return e.isConsumed();
                 });
             }
             return true;
             case "click": {
-                mView.setOnClickListener(v -> emit("click", v));
+                mView.setOnClickListener(v -> dispatch(() -> emit("click", v)));
             }
             return true;
             case "long_click": {
                 mView.setOnLongClickListener(v -> {
                     BaseEvent e = new BaseEvent(mScope, new NativeView.LongClickEvent(v));
-                    emit("long_click", e, v);
+                    dispatch(() -> emit("long_click", e, v));
                     return e.isConsumed();
                 });
             }
@@ -152,12 +157,14 @@ public class ViewPrototype {
             case "key": {
                 mView.setOnKeyListener((v, keyCode, event) -> {
                     BaseEvent e = new BaseEvent(mScope, event, event.getClass());
+                    dispatch(() -> {
                     if (event.getAction() == MotionEvent.ACTION_DOWN) {
                         emit("key_down", keyCode, e, v);
                     } else if (event.getAction() == MotionEvent.ACTION_UP) {
                         emit("key_up", keyCode, e, v);
                     }
                     emit("key", keyCode, e, v);
+                    });
                     return e.isConsumed();
                 });
             }
@@ -166,7 +173,7 @@ public class ViewPrototype {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     mView.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
                         BaseEvent e = new BaseEvent(mScope, new NativeView.ScrollEvent(scrollX, scrollY, oldScrollX, oldScrollY));
-                        emit("scroll_change", e, v);
+                        dispatch(() -> emit("scroll_change", e, v));
                     });
                     return true;
                 }
@@ -175,7 +182,7 @@ public class ViewPrototype {
             case "check": {
                 if (mView instanceof CompoundButton) {
                     ((CompoundButton) mView).setOnCheckedChangeListener((buttonView, isChecked) ->
-                            emit("check", isChecked, buttonView));
+                            dispatch(() -> emit("check", isChecked, buttonView)));
                 }
             }
             case "item_click":
@@ -184,13 +191,13 @@ public class ViewPrototype {
                     ((JsListView) mView).setOnItemTouchListener(new JsListView.OnItemTouchListener() {
                         @Override
                         public void onItemClick(JsListView listView, View itemView, Object item, int pos) {
-                            emit("item_click", item, pos, itemView, listView);
+                            dispatch(() -> emit("item_click", item, pos, itemView, listView));
                         }
 
                         @Override
                         public boolean onItemLongClick(JsListView listView, View itemView, Object item, int pos) {
                             BaseEvent e = new BaseEvent(mScope, new NativeView.LongClickEvent(itemView));
-                            emit("item_long_click", e, item, pos, itemView, listView);
+                            dispatch(() -> emit("item_long_click", e, item, pos, itemView, listView));
                             return e.isConsumed();
                         }
                     });
@@ -204,6 +211,14 @@ public class ViewPrototype {
 
     public boolean emit(String eventName, Object... args) {
         return mEventEmitter.emit(eventName, args);
+    }
+
+    private void dispatch(Runnable callback) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            MainThreadCallback.run(callback, mRuntime::exit);
+        } else {
+            callback.run();
+        }
     }
 
     public String[] eventNames() {

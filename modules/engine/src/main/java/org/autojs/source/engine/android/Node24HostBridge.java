@@ -226,6 +226,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private static final int OCR_IMAGE_MAX_PIXELS = 16_000_000;
     private final java.util.concurrent.atomic.AtomicBoolean mClosed =
             new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile String mScriptError = "";
     /**
      * 本次 Node job 独占的反射元数据缓存（容量 256 类 + 256 方法候选，close 清空）。
      * 不能做成 static：否则会跨 job 强引用插件 Class/ClassLoader。
@@ -367,6 +368,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 case "lifecycle": {
                     // task-195：prelude 的 process.exit 记录正常退出请求。
                     String lifecycleAction = request.optString("action", "");
+                    if ("scriptError".equals(lifecycleAction)) {
+                        JSONObject lifecycleArgs = request.optJSONObject("args");
+                        String detail = lifecycleArgs == null ? "" : lifecycleArgs.optString("detail", "");
+                        mScriptError = detail.length() > 16384 ? detail.substring(0, 16384) : detail;
+                        return ok(true);
+                    }
                     if ("exitRequested".equals(lifecycleAction)) {
                         JSONObject lifecycleArgs = request.optJSONObject("args");
                         mExitRequestedCode = lifecycleArgs == null ? 0 : lifecycleArgs.optInt("code", 0);
@@ -1939,6 +1946,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     public int exitRequestedCode() {
         return mExitRequested ? mExitRequestedCode : -1;
     }
+
+    public String scriptError() { return mScriptError; }
 
     /** task-65：给 Service 日志用的安全状态串（逐项 try/catch，任何一项失败都不影响 hold 判定）。 */
     public String describeState() {

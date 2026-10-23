@@ -889,12 +889,15 @@
                                     // 回退到对应 res/layout XML（主进程 overlay 按 XML inflate）。
                                     globalThis.__ajsLastLayoutName = resName;
                                     const value = hostCall({op: 'layoutId', name: resName});
-                                    return typeof value.id === 'number' ? value.id : 0;
+                                    return typeof value.id === 'number' && value.id !== -1 ? value.id : 0;
                                 }
                                 const value = hostCall({op: 'resourceId', type: typeName, name: resName});
-                                return typeof value.id === 'number' ? value.id : 0;
+                                return typeof value.id === 'number' && value.id !== -1 ? value.id : 0;
                             } catch (error) {
-                                return typeName === 'layout' ? 0 : -1;
+                                // Android treats 0 as "no resource". A -1 icon
+                                // is loaded later by AppCompat on the UI thread
+                                // and crashes outside the script's try/catch.
+                                return 0;
                             }
                         }
                     });

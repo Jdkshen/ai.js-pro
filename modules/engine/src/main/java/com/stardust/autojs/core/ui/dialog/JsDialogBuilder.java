@@ -1,6 +1,7 @@
 package com.stardust.autojs.core.ui.dialog;
 
 import android.content.Context;
+import android.os.Looper;
 
 
 import android.widget.EditText;
@@ -12,6 +13,7 @@ import com.afollestad.materialdialogs.StackingBehavior;
 import com.afollestad.materialdialogs.Theme;
 import com.stardust.autojs.core.eventloop.EventEmitter;
 import com.stardust.autojs.core.looper.Loopers;
+import com.stardust.autojs.core.looper.MainThreadCallback;
 import com.stardust.autojs.core.looper.Timer;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.util.UiHandler;
@@ -26,12 +28,14 @@ public class JsDialogBuilder extends MaterialDialog.Builder {
     private final UiHandler mUiHandler;
     private final Timer mTimer;
     private final Loopers mLoopers;
+    private final ScriptRuntime mRuntime;
     private JsDialog mDialog;
     private volatile int mWaitId = -1;
 
 
     public JsDialogBuilder(Context context, ScriptRuntime runtime) {
         super(context);
+        mRuntime = runtime;
         mTimer = runtime.timers.getTimerForCurrentThread();
         mLoopers = runtime.loopers;
         mEmitter = new EventEmitter(runtime.bridges);
@@ -40,8 +44,8 @@ public class JsDialogBuilder extends MaterialDialog.Builder {
     }
 
     private void setUpEvents() {
-        showListener(dialog -> emit("show", dialog));
-        onAny((dialog, which) -> {
+        showListener(dialog -> dispatch(() -> emit("show", dialog)));
+        onAny((dialog, which) -> dispatch(() -> {
             switch (which) {
                 case NEUTRAL:
                     emit("neutral", dialog);
@@ -60,12 +64,20 @@ public class JsDialogBuilder extends MaterialDialog.Builder {
                     emit("any", "positive", dialog);
                     break;
             }
-        });
-        dismissListener(dialog -> {
+        }));
+        dismissListener(dialog -> dispatch(() -> {
             mTimer.postDelayed(() -> mLoopers.doNotWaitWhenIdle(mWaitId), 0);
             emit("dismiss", dialog);
-        });
-        cancelListener(dialog -> emit("cancel", dialog));
+        }));
+        cancelListener(dialog -> dispatch(() -> emit("cancel", dialog)));
+    }
+
+    private void dispatch(Runnable callback) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            MainThreadCallback.run(callback, mRuntime::exit);
+        } else {
+            callback.run();
+        }
     }
 
     public void onShowCalled() {

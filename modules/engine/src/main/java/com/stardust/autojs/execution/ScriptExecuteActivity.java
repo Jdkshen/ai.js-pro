@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
 import android.os.Bundle;
+import android.os.Looper;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -18,6 +19,7 @@ import com.stardust.autojs.ScriptEngineService;
 import com.stardust.autojs.core.console.ScriptRunLog;
 import com.stardust.autojs.core.eventloop.EventEmitter;
 import com.stardust.autojs.core.eventloop.SimpleEvent;
+import com.stardust.autojs.core.looper.MainThreadCallback;
 import com.stardust.autojs.core.ui.inflater.CompiledProjectResources;
 import com.stardust.autojs.engine.JavaScriptEngine;
 import com.stardust.autojs.engine.LoopBasedJavaScriptEngine;
@@ -395,7 +397,15 @@ public class ScriptExecuteActivity extends AppCompatActivity {
         try {
             mEventEmitter.emit(event, (Object[]) args);
         } catch (Exception e) {
-            if (mRuntime != null) {
+            if (mRuntime == null) {
+                return;
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                // exit() throws again after stopping the engine. Contain that second
+                // throw only at the Android UI callback boundary; host defects propagate.
+                MainThreadCallback.terminate(e, mRuntime::exit);
+            } else {
+                // Background callers still need the exit exception to unwind their script thread.
                 mRuntime.exit(e);
             }
         }

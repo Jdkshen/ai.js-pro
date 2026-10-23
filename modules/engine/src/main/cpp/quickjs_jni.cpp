@@ -531,6 +531,8 @@ void pumpJavaJsTasks(const std::shared_ptr<EngineState> &state, JSContext *conte
         return;
     }
     for (int processed = 0; processed < 64; ++processed) {
+        if (state->exitRequested.load(std::memory_order_relaxed)
+                || state->interrupted.load(std::memory_order_relaxed)) break;
         if (env->CallIntMethod(state->host, countMethod) <= 0) {
             break;
         }
@@ -562,6 +564,9 @@ void pumpJavaJsTasks(const std::shared_ptr<EngineState> &state, JSContext *conte
             report = "QuickJS 未安装任务分发函数 __aiRunJsTask";
         }
         JS_FreeValue(context, runner);
+        // runJsCallback encodes thrown errors as JSON. An exit request must
+        // still end this batch, rather than being logged and running more JS.
+        if (state->exitRequested.load(std::memory_order_relaxed)) break;
         if (!report.empty() && reportMethod != nullptr) {
             jstring javaReport = toJavaString(env, report);
             env->CallVoidMethod(state->host, reportMethod, javaReport);
@@ -1432,6 +1437,11 @@ JSValue nativeSleep(JSContext *context, JSValueConst, int argc, JSValueConst *ar
         }
         // 跨线程回调（如 WebView 注入完成）也在 sleep 期间落地。
         pumpJavaJsTasks(findEngine(state->handle), context);
+        if (state->exitRequested.load(std::memory_order_relaxed)) {
+            // Unwind the JS that called sleep(), too. evaluate() owns consuming
+            // this signal as normal completion after the entire stack unwinds.
+            return JS_ThrowInternalError(context, "__AIJS_EXIT__");
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(slice));
         millis -= slice;
     }
@@ -8925,8 +8935,9 @@ const char kBootstrapScript[] = R"JS(
         /** 跨线程回调通路：延迟 delay 毫秒后在脚本引擎线程执行 fn。 */
         post: function (fn, delay) {
             if (typeof fn !== 'function') throw new TypeError('ui.post 需要函数');
-            var callbackId = global.__aiRegisterCallback(fn);
-            __aiNativePostJsCallbackAsync(callbackId, Math.max(0, Number(delay) || 0));
+            // JS callbacks execute on the engine thread. A native timer also
+            // keeps the engine alive until this delayed callback has run.
+            return setTimeout(fn, Math.max(0, Number(delay) || 0));
         },
         statusBarColor: function (color) { __aiNativeStatusBarColor(String(color)); },
         setText: function (id, text) { uiSet(id, { text: String(text == null ? '' : text) }); },
@@ -11337,9 +11348,23 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
 // 执行收尾：跑完挂起的 job、把定时器事件循环转完，再把结果转成 Java 对象。
 // evaluate() 与 evaluateBytecode() 共用，避免两套收尾逻辑逐渐跑偏。
 static jobject finishExecution(JNIEnv *env, const std::shared_ptr<EngineState> &state, JSValue result) {
+    auto finishRequestedExit = [&]() {
+        if (!state->exitRequested.exchange(false, std::memory_order_relaxed)) return false;
+        JS_FreeValue(state->context, result);
+        return true;
+    };
+    if (finishRequestedExit()) return nullptr;
     JSContext *pendingContext = nullptr;
     int pendingResult;
     while ((pendingResult = JS_ExecutePendingJob(state->runtime, &pendingContext)) > 0) {
+    }
+    if (state->exitRequested.load(std::memory_order_relaxed)) {
+        if (pendingResult < 0) {
+            JSContext *failedContext = pendingContext == nullptr ? state->context : pendingContext;
+            JSValue ignored = JS_GetException(failedContext);
+            JS_FreeValue(failedContext, ignored);
+        }
+        if (finishRequestedExit()) return nullptr;
     }
     if (pendingResult < 0) {
         const std::string message = quickJsException(pendingContext == nullptr ? state->context : pendingContext);
@@ -11367,6 +11392,7 @@ static jobject finishExecution(JNIEnv *env, const std::shared_ptr<EngineState> &
             return nullptr;
         }
         pumpJavaJsTasks(state, state->context);
+        if (finishRequestedExit()) return nullptr;
         waitForNextTimer(state.get());
     }
 

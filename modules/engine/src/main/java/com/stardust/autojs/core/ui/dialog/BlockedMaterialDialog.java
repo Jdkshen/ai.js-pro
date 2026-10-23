@@ -14,6 +14,7 @@ import com.afollestad.materialdialogs.DialogAction;
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.afollestad.materialdialogs.Theme;
 import com.stardust.autojs.rhino.continuation.Continuation;
+import com.stardust.autojs.core.looper.MainThreadCallback;
 import com.stardust.autojs.runtime.ScriptBridges;
 import com.stardust.autojs.runtime.ScriptRuntime;
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException;
@@ -64,10 +65,12 @@ public class BlockedMaterialDialog extends MaterialDialog {
         private UiHandler mUiHandler;
         private Object mCallback;
         private ScriptBridges mScriptBridges;
+        private final ScriptRuntime mRuntime;
         private boolean mNotified = false;
 
         public Builder(Context context, ScriptRuntime runtime, Object callback) {
             super(context);
+            mRuntime = runtime;
             super.theme(Theme.LIGHT);
             mUiHandler = runtime.uiHandler;
             mScriptBridges = runtime.bridges;
@@ -89,7 +92,7 @@ public class BlockedMaterialDialog extends MaterialDialog {
             }
             mNotified = true;
             if (mCallback != null) {
-                mScriptBridges.callFunction(mCallback, null, new Object[]{r});
+                callCallback(new Object[]{r});
             }
             if (mResultBox != null) {
                 mResultBox.setAndNotify(r);
@@ -102,7 +105,7 @@ public class BlockedMaterialDialog extends MaterialDialog {
             }
             mNotified = true;
             if (mCallback != null) {
-                mScriptBridges.callFunction(mCallback, null, new int[]{r});
+                callCallback(new int[]{r});
             }
             if (mResultBox != null) {
                 mResultBox.setAndNotify(r);
@@ -115,7 +118,7 @@ public class BlockedMaterialDialog extends MaterialDialog {
             }
             mNotified = true;
             if (mCallback != null) {
-                mScriptBridges.callFunction(mCallback, null, new boolean[]{r});
+                callCallback(new boolean[]{r});
             }
             if (mResultBox != null) {
                 mResultBox.setAndNotify(r);
@@ -126,6 +129,14 @@ public class BlockedMaterialDialog extends MaterialDialog {
             dismissListener(dialog -> setAndNotify(null));
             onAny((dialog, which) -> setAndNotify(null));
             return this;
+        }
+
+        private void callCallback(Object args) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                MainThreadCallback.run(() -> mScriptBridges.callFunction(mCallback, null, args), mRuntime::exit);
+            } else {
+                mScriptBridges.callFunction(mCallback, null, args);
+            }
         }
 
         public Builder confirm() {

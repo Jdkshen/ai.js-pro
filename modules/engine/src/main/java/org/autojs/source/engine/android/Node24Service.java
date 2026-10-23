@@ -528,6 +528,9 @@ public class Node24Service extends Service {
                         int effectiveExitCode = requestedExit >= 0 ? requestedExit : value.exitCode;
                         String state=wasCancelled?"CANCELLED":value.timedOut?"TIMEOUT":succeeded?"SUCCESS":"SCRIPT_ERROR";
                         String message=value.error;
+                        String scriptError=bridge == null ? "" : bridge.scriptError();
+                        if(!succeeded && !wasCancelled && !value.timedOut && !scriptError.isEmpty())
+                            message=scriptError;
                         if(!succeeded && (message==null || message.isEmpty()))
                             message="Node 脚本异常退出，exitCode="+effectiveExitCode;
                         result.put("status",state).put("success",succeeded).put("exitCode",effectiveExitCode)

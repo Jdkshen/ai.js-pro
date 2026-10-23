@@ -13,6 +13,7 @@ import com.stardust.autojs.annotation.ScriptInterface;
 import com.stardust.autojs.core.floaty.BaseResizableFloatyWindow;
 import com.stardust.autojs.core.floaty.RawWindow;
 import com.stardust.autojs.core.graphics.ScriptCanvasView;
+import com.stardust.autojs.core.looper.MainThreadCallback;
 import com.stardust.autojs.core.ui.JsViewHelper;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.Exceptions;
@@ -259,11 +260,13 @@ public class Floaty {
                 r.run();
                 return;
             }
-            mUiHandler.post(() -> {
+            // Only the posted callback is an Android UI boundary. The in-place main-thread
+            // path above must keep exit() throwing so window.close() stops following JS.
+            mUiHandler.post(() -> MainThreadCallback.run(() -> {
                 if (mWindow == null)
                     return;
                 r.run();
-            });
+            }, failure -> mRuntime.exit(failure)));
         }
 
         public void setPosition(int x, int y) {
@@ -322,7 +325,8 @@ public class Floaty {
             boolean touchable = (mWindow.getWindowLayoutParams().flags
                     & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) == 0;
             registerOverlay(mWindow.getRootView(), mWindow.getWindowManager(), touchable);
-            mWindow.setOnCloseButtonClickListener(v -> close());
+            // The native decoration button is another outer Android callback.
+            mWindow.setOnCloseButtonClickListener(v -> MainThreadCallback.run(this::close, mRuntime::exit));
             //setSize(mWindow.getWindowBridge().getScreenWidth() / 2, mWindow.getWindowBridge().getScreenHeight() / 2);
         }
 
@@ -362,11 +366,12 @@ public class Floaty {
                 r.run();
                 return;
             }
-            mUiHandler.post(() -> {
+            // Same boundary as JsRawWindow: contain only the posted UI callback's exit().
+            mUiHandler.post(() -> MainThreadCallback.run(() -> {
                 if (mWindow == null)
                     return;
                 r.run();
-            });
+            }, failure -> mRuntime.exit(failure)));
         }
 
         public void setPosition(int x, int y) {

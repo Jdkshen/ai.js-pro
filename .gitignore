@@ -35,6 +35,7 @@
 # Node 示例真机回归工具（task-216）：自动发现/push/运行/判定 Node 示例，结果写 output/。
 !/tools/test-node-samples-device.ps1
 !/tools/verify-mcp-alignment-device.py
+!/tools/floaty-stop-regression.py
 !/tools/create-gh-proxy-manifest.py
 !/tools/observe-filelist.ps1
 # Reproducible SIFT/chess device evaluation sources.

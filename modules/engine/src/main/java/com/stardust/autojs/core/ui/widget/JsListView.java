@@ -1,9 +1,11 @@
 package com.stardust.autojs.core.ui.widget;
 
 import android.content.Context;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 
+import com.stardust.autojs.core.looper.MainThreadCallback;
 import com.stardust.autojs.core.ui.ViewExtras;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.nativeview.NativeView;
@@ -132,7 +134,12 @@ public class JsListView extends RecyclerView {
         Object item = null;
 
         public ViewHolder(View itemView) {
+            this(itemView, true);
+        }
+
+        private ViewHolder(View itemView, boolean bindEvents) {
             super(itemView);
+            if (!bindEvents) return;
             itemView.setOnClickListener(v -> {
                 if (mOnItemTouchListener != null) {
                     int pos = getAdapterPosition();
@@ -156,15 +163,29 @@ public class JsListView extends RecyclerView {
     }
 
     private class Adapter extends RecyclerView.Adapter<ViewHolder> {
+        private boolean mTerminated;
+
+        private void terminate(Exception failure) {
+            mTerminated = true;
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                MainThreadCallback.terminate(failure, mScriptRuntime::exit);
+            } else {
+                mScriptRuntime.exit(failure);
+            }
+        }
 
         @Override
         public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            if (mTerminated) return new ViewHolder(new View(parent.getContext()), false);
             try {
                 mDynamicLayoutInflater.setInflateFlags(DynamicLayoutInflater.FLAG_IGNORES_DYNAMIC_ATTRS);
                 return new ViewHolder(mDynamicLayoutInflater.inflate(mDynamicLayoutInflater.newInflateContext(), mItemTemplate, parent, false));
             } catch (Exception e) {
-                mScriptRuntime.exit(e);
-                return new ViewHolder(new View(parent.getContext()));
+                // exit() throws again after stopping the engine; contain that second
+                // throw here so the placeholder holder can still be returned.
+                terminate(e);
+                // A placeholder must not re-enter the failed item_bind listener.
+                return new ViewHolder(new View(parent.getContext()), false);
             } finally {
                 mDynamicLayoutInflater.setInflateFlags(DynamicLayoutInflater.FLAG_DEFAULT);
             }
@@ -172,17 +193,22 @@ public class JsListView extends RecyclerView {
 
         @Override
         public void onBindViewHolder(ViewHolder holder, int position) {
+            if (mTerminated) return;
+            Object oldCtx = mScriptRuntime.ui.getBindingContext();
             try {
-                Object oldCtx = mScriptRuntime.ui.getBindingContext();
                 Object item = mDataSourceAdapter.getItem(mDataSource, position);
                 holder.item = item;
                 mScriptRuntime.ui.setBindingContext(item);
                 mDynamicLayoutInflater.setInflateFlags(DynamicLayoutInflater.FLAG_JUST_DYNAMIC_ATTRS);
                 applyDynamicAttrs(mItemTemplate, holder.itemView, JsListView.this);
-                mScriptRuntime.ui.setBindingContext(oldCtx);
             } catch (Exception e) {
-                mScriptRuntime.exit(e);
+                // exit() throws again after stopping the engine; contain that second
+                // throw here. Host defects still propagate.
+                terminate(e);
             } finally {
+                // Restore the previous binding context even when termination unwinds the
+                // attribute pass, otherwise the next binding sees a stale item.
+                mScriptRuntime.ui.setBindingContext(oldCtx);
                 mDynamicLayoutInflater.setInflateFlags(DynamicLayoutInflater.FLAG_DEFAULT);
             }
         }

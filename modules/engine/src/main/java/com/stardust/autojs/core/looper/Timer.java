@@ -48,8 +48,9 @@ public class Timer {
         if (mCallbackMaxId == Integer.MAX_VALUE) throw new IllegalStateException("Too many callbacks");
         final int id = ++mCallbackMaxId;
         Runnable r = () -> {
-            callFunction(callback, null, args);
-            synchronized (Timer.this) { mHandlerCallbacks.remove(id); }
+            synchronized (Timer.this) { if (mHandlerCallbacks.get(id) == null) return; }
+            try { callFunction(callback, null, args); }
+            finally { synchronized (Timer.this) { mHandlerCallbacks.remove(id); } }
         };
         mHandlerCallbacks.put(id, r);
         schedule(r, delay);
@@ -57,14 +58,19 @@ public class Timer {
     }
 
     private void callFunction(Object callback, Object thiz, Object[] args) {
-        if(Looper.myLooper() == Looper.getMainLooper()){
-            try {
-                mRuntime.bridges.callFunction(callback, thiz, args);
-            }catch (Exception e){
-                mRuntime.exit(e);
-            }
-        }else {
-            mRuntime.bridges.callFunction(callback, thiz, args);
+        dispatch(() -> mRuntime.bridges.callFunction(callback, thiz, args));
+    }
+
+    private void dispatch(Runnable callback) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            MainThreadCallback.run(callback, failure -> {
+                removeAllCallbacks();
+                mRuntime.exit(failure);
+            });
+        } else {
+            // A script's own Looper still needs the exception to unwind its
+            // execution. Only Android's shared UI callback boundary consumes it.
+            callback.run();
         }
     }
 
@@ -95,7 +101,8 @@ public class Timer {
     public synchronized void postDelayed(Runnable r, long interval) {
         Runnable tracked = new Runnable() {
             @Override public void run() {
-                try { r.run(); }
+                synchronized (Timer.this) { if (!mDirectCallbacks.contains(this)) return; }
+                try { dispatch(r); }
                 finally { synchronized (Timer.this) { mDirectCallbacks.remove(this); } }
             }
         };
@@ -124,8 +131,9 @@ public class Timer {
         if (mCallbackMaxId == Integer.MAX_VALUE) throw new IllegalStateException("Too many callbacks");
         final int id = ++mCallbackMaxId;
         Runnable r = () -> {
-            callFunction(listener, null, args);
-            synchronized (Timer.this) { mHandlerCallbacks.remove(id); }
+            synchronized (Timer.this) { if (mHandlerCallbacks.get(id) == null) return; }
+            try { callFunction(listener, null, args); }
+            finally { synchronized (Timer.this) { mHandlerCallbacks.remove(id); } }
         };
         mHandlerCallbacks.put(id, r);
         schedule(r, 0);
