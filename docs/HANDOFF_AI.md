@@ -2,7 +2,7 @@
 
 > 面向所有接手的 AI（Codex / Claude / Copilot / Cursor / dsh 等）。
 > 先读本文，再读 `AGENTS.md`（构建与踩坑细节）和 `docs/reports/2026-10-18_收尾交接_给Codex_v2.md`（最新进度）。
-> 最后更新：2026-10-23；更新源 **dev-1232**（[Node M3 启动性能优化](reports/2026-10-23_Node_M3启动性能优化.md)；APK SHA-256 `40a1e743…`），MI8 已安装且哈希一致，K40 保留 dev-1199。750 JVM / 19 组 Node 契约，发布包 28 项 UI、三次重建、两轮构建、7 项动态类及 M3 滚动/切页/一次返回通过，本轮未新增 crash 条目。
+> 最后更新：2026-10-24；更新源 **dev-1232**（SHA-256 `8c8e16cdc22c467887204fb6675a3fd094516413150398254cb0a2a52e06471e`，151,787,766 字节）：[M3Kit 原生 DEX 接入与宿主 ClassLoader 修复](reports/2026-10-24_M3Kit原生DEX接入与宿主ClassLoader修复.md) 已发布；ui.inflate 使用生成类 ClassLoader，M3Kit 交互 facade + 默认 NATIVE_ALL，MI8 all-native page ready 641–671ms；MI8 已装 dev-1232，.4 待升级，K40 保持 dev-1199。
 > 同日发布复核：[dev-1221 发布核验](reports/2026-10-23_dev1221发布核验.md)：MI8 已装包与更新源哈希一致，冷启动后三引擎退出回归 47 项通过、主 PID 不变、浮窗清理为 0、crash buffer 为空；本机 VS Code 扩展为 0.3.5。下列旧版装机/更新源描述均为对应时点记录，当前状态以本条及 PROJECT_STATUS 为准。
 > 前一版本：[Node24 动态 UI 底层修复](reports/2026-10-23_Node24动态UI底层修复.md)，dev-1227 已发布并装 MI8；此前 749 JVM、18 组 Node 契约、候选版 20 轮构建及退出回归保留为对应版本证据。当前发布及装机状态以上方 dev-1232 条目为准；Android 16 原问题设备未连接。
 > 插件更新：**象棋引擎插件1.1.0/code3**，通用/优化ARM64预算引擎及Node异步API已发布为下载附件；K40完整链路通过，新手机仍未连接。见[本轮记录](reports/2026-10-23_象棋引擎插件预算升级.md)。
