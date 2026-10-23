@@ -30,7 +30,7 @@ class Batch extends ui.Activity{
    state.ok=true;
    console.log('BINDING_BATCH_ALL_PASS',JSON.stringify(state));
   }catch(e){state.error=String(e.stack||e);console.error('BINDING_BATCH_FAILED',state.error);process.exitCode=1;}
-  process.exit(0);
+  setTimeout(function(){ try { ui.close(); } catch (ignored) {} }, 1500);
  }
 }
 ui.setMainActivity(Batch);

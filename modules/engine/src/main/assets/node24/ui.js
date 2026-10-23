@@ -355,6 +355,25 @@
             }
         }
 
+        /** task-237：首帧后再执行重型原生 setup；view.post 保证 attach/布局后再排队，定时器兜底。 */
+        function afterFirstFrame(view, callback) {
+            if (typeof callback !== 'function') throw new TypeError('ui.afterFirstFrame 需要函数');
+            let done = false;
+            const run = function () {
+                if (done) return;
+                done = true;
+                setTimeout(function () {
+                    try { callback(); } catch (error) { console.error('[ui] afterFirstFrame 回调失败：', error); }
+                }, 0);
+            };
+            try {
+                view.post(new java.lang.Runnable({run: function () { run(); }}));
+            } catch (ignored) {
+                setTimeout(run, 32);
+            }
+            setTimeout(run, 250);
+        }
+
         function realContentView() {
             const root = javaSession().getContentView();
             if (!root) return root;
@@ -1990,6 +2009,7 @@
         globalThis.__ajsJavaViewMember = realViewMember;
 
         const ui = {
+            afterFirstFrame: afterFirstFrame,
             imageLoader: {loadImageInto: function (view, address) {
                 if (!realUiMode) return Promise.reject(new Error('imageLoader 需要原生 Java UI'));
                 if (!realImageLoader) {

@@ -118,6 +118,9 @@ class MainActivity extends ui.Activity {
         ];
         // task-231：防止 onContentViewSet 重复触发时重复建列表/控制台。
         this._deferredSetupStarted = false;
+        this._consoleReady = false;
+        this._consoleView = null;
+        this._consoleToggle = null;
     }
 
     onCreate(savedInstanceState) {
@@ -130,6 +133,8 @@ class MainActivity extends ui.Activity {
     onContentViewSet(view) {
         // task-234：首帧回调只保留 fab 等极轻量设置；ViewPager/Drawer/Grid/Console 全部
         // 移到 _setupDeferred，避免 onContentViewSet 同步做 100ms+ 的原生 setup。
+        this._consoleView = view.binding.console;
+        this._consoleToggle = view.binding.toggleButton;
         view.binding.fab.setOnClickListener(() => {
             console.log('已勾选卡片:', this.cardList.filter(item => item.checked));
             const Snackbar = com.google.android.material.snackbar.Snackbar;
@@ -148,9 +153,10 @@ class MainActivity extends ui.Activity {
             return;
         }
         this._deferredSetupStarted = true;
-        setTimeout(() => {
+        // task-237：首帧后再做 ViewPager/Drawer/Grid/Console 的重型原生 setup，避免挡住首屏。
+        ui.afterFirstFrame(view, () => {
             this._setupDeferred(view).catch(console.error);
-        }, 0);
+        });
     }
 
     async _setupDeferred(view) {
@@ -171,8 +177,16 @@ class MainActivity extends ui.Activity {
         } catch (error) {
             console.error('M3 列表初始化失败', error);
         }
+    }
+
+    /** 控制台只在用户切到控制台页时初始化，避免占用首屏后的 setup。 */
+    _setupConsoleLazy() {
+        if (this._consoleReady) {
+            return;
+        }
+        this._consoleReady = true;
         try {
-            this._setupConsole(view.binding.console, view.binding.toggleButton);
+            this._setupConsole(this._consoleView, this._consoleToggle);
         } catch (error) {
             console.error('M3 控制台初始化失败', error);
         }
@@ -215,6 +229,7 @@ class MainActivity extends ui.Activity {
             onPageScrolled: (position, positionOffset, positionOffsetPixels) => {
             },
             onPageSelected: (position) => {
+                if (position === 1) this._setupConsoleLazy();
                 navigation.setSelectedItemId(bottomNavigationIds[position])
             },
             onPageScrollStateChanged: (state) => {
