@@ -446,7 +446,7 @@ public class Node24ClassGeneratorTest {
         byte[] bytes = Node24ClassGenerator.generate(className, superClass, interfaces, names);
         assertEquals(0xCAFEBABE, ((bytes[0] & 0xff) << 24) | ((bytes[1] & 0xff) << 16)
                 | ((bytes[2] & 0xff) << 8) | (bytes[3] & 0xff));
-        assertEquals(52, ((bytes[6] & 0xff) << 8) | (bytes[7] & 0xff));
+        assertEquals(51, ((bytes[6] & 0xff) << 8) | (bytes[7] & 0xff));
         return new ByteLoader(className, bytes).define();
     }
 

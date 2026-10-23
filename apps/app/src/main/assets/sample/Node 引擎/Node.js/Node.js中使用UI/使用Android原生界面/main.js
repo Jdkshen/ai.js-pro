@@ -7,10 +7,92 @@ const app = require('app');
 const $java = $autojs.java;
 
 // 要使用Android原生界面&资源的特性，需要在project.json中加上androidResources属性
+//
+// task-231（M3 初始化拆批）：
+// 两个 $java.defineClass 不再放在 onContentViewSet -> _setupGrid 里串行编译；
+// loadAndroidResources 完成后立即启动，与 setMainActivity / Activity show 并行。
+// onContentViewSet 只做轻量 chrome；列表/控制台初始化延后到 setTimeout(0)，再 await 已启动的 Promise。
+let gridViewHolderClass = null;
+let gridHolderClassPromise = null;
+let gridAdapterClassPromise = null;
+
+/**
+ * 并行启动 MyViewHolder/MyAdapter 的 defineClass。
+ * Adapter 方法体里的 gridViewHolderClass 是模块级延迟引用：两个 defineClass 可以同时开始，
+ * 等 _setupGrid 同时 await 两个 Promise 时 Holder 已赋值，再实例化 Adapter。
+ */
+function startGridClassCompilation() {
+    if (gridHolderClassPromise) {
+        return;
+    }
+    gridHolderClassPromise = $java.defineClass(
+        class MyViewHolder extends androidx.recyclerview.widget.RecyclerView.ViewHolder {
+            constructor(itemView) {
+                super(itemView);
+                itemView.setOnClickListener(() => {
+                    const checked = !itemView.isChecked();
+                    itemView.setChecked(checked);
+                    this.item.checked = checked;
+                });
+                this.title = itemView.binding.title;
+                this.image = itemView.binding.image;
+            }
+
+            bind(item, position) {
+                this.title.setText(item.title);
+                ui.imageLoader.loadImageInto(this.image, item.url).catch(console.error);
+                this.itemView.setChecked(item.checked ?? false);
+                this.item = item;
+            }
+        }
+    );
+    // 如果页面在极短时间内完成，_setupGrid 会 await 并看到真实错误；这里先挂 no-op
+    // 防止 setMainActivity 之前 Promise reject 冒成 unhandledRejection。
+    gridHolderClassPromise = gridHolderClassPromise.then((holderClass) => {
+        gridViewHolderClass = holderClass;
+        return holderClass;
+    });
+    gridHolderClassPromise.catch(() => {});
+    // 与 Holder 并行启动 Adapter defineClass（definition 只读 prototype 方法，不执行方法体）。
+    gridAdapterClassPromise = $java.defineClass(
+        class MyAdapter extends androidx.recyclerview.widget.RecyclerView.Adapter {
+            constructor(data, preInflatedViews) {
+                super();
+                this.data = data;
+                // task-233：优先消费 ui.inflateBatch 预生成的 itemView；耗尽后回退 LayoutInflater。
+                this.preInflatedViews = Array.isArray(preInflatedViews) ? preInflatedViews : [];
+            }
+
+            onCreateViewHolder(parent, viewType) {
+                const preInflated = this.preInflatedViews.length > 0
+                    ? this.preInflatedViews.shift() : null;
+                if (preInflated) {
+                    return new gridViewHolderClass(preInflated);
+                }
+                // 预生成 View 取完（或批量失败）时保持逐条 LayoutInflater 回退。
+                return new gridViewHolderClass(android.view.LayoutInflater.from(parent.getContext())
+                    .inflate(ui.R.layout.grid_item, parent, false));
+            }
+
+            onBindViewHolder(holder, position) {
+                holder.bind(this.data[position]);
+            }
+
+            getItemCount() {
+                return this.data.length;
+            }
+        }
+    );
+    gridAdapterClassPromise.catch(() => {});
+}
+
 async function main() {
     // 加载Android资源
     await ui.loadAndroidResources();
-    ui.setMainActivity(MainActivity)
+    // task-231：先同步启动两个 defineClass（Holder/Adapter 并行），再 setMainActivity；
+    // defineClass 的异步编译与 Activity show 重叠，不再等 onContentViewSet 才串行执行。
+    startGridClassCompilation();
+    ui.setMainActivity(MainActivity);
 }
 main().catch(console.error);
 
@@ -34,6 +116,8 @@ class MainActivity extends ui.Activity {
             { title: '功能7', url: 'https://pic.rmb.bdstatic.com/bjh/791d0f965a41243b994f47247e84d722.jpeg' },
             { title: '功能8', url: 'https://picsum.photos/800' },
         ];
+        // task-231：防止 onContentViewSet 重复触发时重复建列表/控制台。
+        this._deferredSetupStarted = false;
     }
 
     onCreate(savedInstanceState) {
@@ -44,10 +128,8 @@ class MainActivity extends ui.Activity {
     }
 
     onContentViewSet(view) {
-        this._setupViewPager(view.binding.viewPager, view.binding.navigation);
-        this._setupDrawer(view.binding.drawer, view.binding.toolbar, view.binding.drawerNavigation);
-        this._setupGrid(view.binding.grid);
-        this._setupConsole(view.binding.console, view.binding.toggleButton);
+        // task-234：首帧回调只保留 fab 等极轻量设置；ViewPager/Drawer/Grid/Console 全部
+        // 移到 _setupDeferred，避免 onContentViewSet 同步做 100ms+ 的原生 setup。
         view.binding.fab.setOnClickListener(() => {
             console.log('已勾选卡片:', this.cardList.filter(item => item.checked));
             const Snackbar = com.google.android.material.snackbar.Snackbar;
@@ -57,6 +139,43 @@ class MainActivity extends ui.Activity {
                     console.log('已取消');
                 }).show()
         });
+        this._scheduleDeferredSetup(view);
+    }
+
+    /** 延迟初始化 ViewPager/Drawer/列表/控制台；onContentViewSet 多次触发时单 flag 只初始化一次。 */
+    _scheduleDeferredSetup(view) {
+        if (this._deferredSetupStarted) {
+            return;
+        }
+        this._deferredSetupStarted = true;
+        setTimeout(() => {
+            this._setupDeferred(view).catch(console.error);
+        }, 0);
+    }
+
+    async _setupDeferred(view) {
+        // task-234：顺序固定 Pager → Drawer → Grid → Console；单项失败记录后继续，保证底部
+        // 页签/导航/列表/控制台最终都尽量完成。
+        try {
+            this._setupViewPager(view.binding.viewPager, view.binding.navigation);
+        } catch (error) {
+            console.error('M3 ViewPager 初始化失败', error);
+        }
+        try {
+            this._setupDrawer(view.binding.drawer, view.binding.toolbar, view.binding.drawerNavigation);
+        } catch (error) {
+            console.error('M3 Drawer 初始化失败', error);
+        }
+        try {
+            await this._setupGrid(view.binding.grid);
+        } catch (error) {
+            console.error('M3 列表初始化失败', error);
+        }
+        try {
+            this._setupConsole(view.binding.console, view.binding.toggleButton);
+        } catch (error) {
+            console.error('M3 控制台初始化失败', error);
+        }
     }
 
     _setupDrawer(drawer, toolbar, navigation) {
@@ -104,54 +223,24 @@ class MainActivity extends ui.Activity {
     }
 
     async _setupGrid(grid) {
-        // 自定义ViewHolder
-        const MyViewHolder = await $java.defineClass(
-            class MyViewHolder extends androidx.recyclerview.widget.RecyclerView.ViewHolder {
-                constructor(itemView) {
-                    super(itemView);
-                    itemView.setOnClickListener(() => {
-                        const checked = !itemView.isChecked();
-                        itemView.setChecked(checked);
-                        this.item.checked = checked;
-                    });
-                    this.title = itemView.binding.title;
-                    this.image = itemView.binding.image;
-                }
-
-                bind(item, position) {
-                    this.title.setText(item.title);
-                    ui.imageLoader.loadImageInto(this.image, item.url).catch(console.error);
-                    this.itemView.setChecked(item.checked ?? false);
-                    this.item = item;
-                }
-            }
-        );
-        // 自定义Adapter
-        const MyAdapter = await $java.defineClass(
-            class MyAdapter extends androidx.recyclerview.widget.RecyclerView.Adapter {
-                constructor(data) {
-                    super();
-                    this.data = data;
-                }
-
-                onCreateViewHolder(parent, viewType) {
-                    return new MyViewHolder(android.view.LayoutInflater.from(parent.getContext())
-                        .inflate(ui.R.layout.grid_item, parent, false));
-                }
-
-                onBindViewHolder(holder, position) {
-                    holder.bind(this.data[position]);
-                }
-
-                getItemCount() {
-                    return this.data.length;
-                }
-            }
-        );
+        // task-231：defineClass 已在 main() 里提前启动，这里只等待；不在内容回调里编译。
+        if (!gridAdapterClassPromise) {
+            startGridClassCompilation();
+        }
+        // 两个 defineClass 已在 main() 启动；这里同时等待，不串行编译。
+        const MyAdapter = (await Promise.all([gridAdapterClassPromise, gridHolderClassPromise]))[0];
         // 设置为表格布局，列数为2
         const layoutManager = new androidx.recyclerview.widget.GridLayoutManager(this, 2);
         grid.setLayoutManager(layoutManager);
-        grid.setAdapter(new MyAdapter(this.cardList));
+        // task-233：Adapter 类就绪后一次批量预 inflate 全部 grid_item（减少逐条 LayoutInflater/渲染回调）。
+        // 失败时不阻断列表：预生成数组留空，MyAdapter 自动回退 LayoutInflater。
+        let preInflatedViews = [];
+        try {
+            preInflatedViews = ui.inflateBatch(ui.R.layout.grid_item, this.cardList.length, grid);
+        } catch (error) {
+            console.error('M3 grid_item 批量预 inflate 失败，回退逐条 LayoutInflater', error);
+        }
+        grid.setAdapter(new MyAdapter(this.cardList, preInflatedViews));
     }
 
     _setupConsole(consoleView, toggleButton) {

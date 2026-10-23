@@ -1020,6 +1020,16 @@ public final class NodeUiHost {
      * grid/list/canvas 使用不依赖 ScriptRuntime 的 NodeUi* 真实控件（RecyclerView/View），
      * item 数据由 Node 侧 setItemTemplate/setDataSource 填充。
      */
+    /** task-230：批量 inflate 的 Node 侧统一入口（Delegate 到持有 Activity 的 NodeUiLocalSession）。 */
+    public static View[] inflateLayoutBatch(int layoutId, int count, ViewGroup parent) {
+        return NodeUiLocalSession.inflateLayoutBatch(layoutId, count, parent);
+    }
+
+    /** task-230：批量 XML inflate 的 Node 侧统一入口（Delegate 到 NodeUiLocalSession）。 */
+    public static View[] inflateXmlBatch(String xml, int count, ViewGroup parent) {
+        return NodeUiLocalSession.inflateXmlBatch(xml, count, parent);
+    }
+
     public static View inflateInlineLayout(Context themed, String xml) {
         return inflateInlineLayout(themed, xml, themed == null ? null : themed.getClassLoader());
     }

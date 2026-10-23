@@ -2,11 +2,13 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
-> **当前状态（2026-10-23，dev-1223）**：HEAD `9b3a4f00`；本轮 Node24 动态 UI 源码、回归工具和核验文档尚未提交。Flutter **3.47.7 / Dart 3.13.5**，包 144.75 MiB。动态 XML、Widget 容器、接口监听及 layoutXml 重建修复已发布，MI8 已装包；749 JVM、18 组 Node 契约及候选版完整回归通过，实际发布包另做 26 项功能断言/三次重建/两轮构建。签名/哈希/22 个 ELF64 对齐检查通过。现有 `:script` / Node 进程池架构，MCP 默认 **8765**；高级版全量 API、真正 16KB 内核和 Android 16 原机仍待专项验收。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) 为准；旧 `reports/` 保留时点记录。
+> **当前状态（2026-10-23，dev-1229）**：HEAD `75748b1d`，M3 最终生成器和新增回归尚在工作树。Flutter **3.47.7 / Dart 3.13.5**，包 144.75 MiB。Node M3 真异步/轻量编译优化已发布并装 MI8；750 JVM、19 组 Node 契约，发布包 28 项 UI/三次重建/两轮构建及 7 项动态类通过，M3 滚动/切页/一次返回正常。签名、安装哈希和全部 22 个 ELF64 对齐检查通过。现有 `:script` / Node 进程池架构，MCP 默认 **8765**；高级版全量 API、真正 16KB 内核和 Android 16 原机仍待专项验收。接手先读 [HANDOFF_AI.md](HANDOFF_AI.md)；当前结论以 [PROJECT_STATUS](PROJECT_STATUS.md) 与 [REMAINING_WORK](REMAINING_WORK.md) 为准；旧 `reports/` 保留时点记录。
 
 ## 当前状态
 
-- **[Node24 动态 UI 底层修复（2026-10-23，dev-1223 已发布）](reports/2026-10-23_Node24动态UI底层修复.md)**：用户问题报告逐项处理；749 JVM、18 组 Node 契约、候选版 26 项断言/三次重建/20 轮复杂构建通过，发布包另有 MI8 装机证据；Android 16 原机待复测。
+- **[Node M3 启动性能优化（2026-10-23，dev-1229 已发布）](reports/2026-10-23_Node_M3启动性能优化.md)**：defineClass 真异步、major 51 / dx 与停止清理；候选 MI8 列表安装一冷两暖 1460/1270/1253 ms，发布包 1437 ms；28 项 UI、7 项动态类及候选编译中停止恢复通过。
+
+- **[Node24 动态 UI 底层修复（2026-10-23，前序 dev-1227）](reports/2026-10-23_Node24动态UI底层修复.md)**：动态 XML/Widget/监听/重建，后补 binding 缺失 id 及 setContentView 线程处理；原 20 轮复杂构建为相应版本证据，Android 16 原机待复测。
 
 - **[dev-1221 发布核验（2026-10-23）](reports/2026-10-23_dev1221发布核验.md)**：发布包/已安装包一致性、手机更新源、冷启动后三引擎 47 项退出回归、22 个 ELF64 对齐检查及 VS Code 插件本地位置。
 - **[Node 悬浮窗底层优化（2026-10-23，dev-1221）](reports/2026-10-23_Node悬浮窗底层优化.md)**：floating_window 1.2.0、reload 热替换、多锚点拖动及此前移动/raw/hide-show 验收。

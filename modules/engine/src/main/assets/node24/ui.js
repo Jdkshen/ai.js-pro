@@ -1829,6 +1829,96 @@
             }
             return uiWrapHandle(uiRequestView('inflate', {name: String(layoutName || '')}));
         }
+        /**
+         * 批量 inflate 子 View：把 count 次 inflate 合并成一次宿主调用（减少 JNI/回调与逐条 render）。
+         *
+         * 典型用途：RecyclerView item / 重复卡片 / 列表行等需要一次性生成多个同结构 View 的场景。
+         * 返回普通 JS 数组，元素是真实 Java View。
+         *
+         * @param {number|string} layoutOrXml ui.R.layout.* 数字 id（调 inflateLayoutBatch）
+         *        或 XML 字符串（调 inflateXmlBatch；需以 &lt; 开头，自定义 ui.Widget 标签不支持）
+         * @param {number} count 生成数量，1..256
+         * @param {object|null} [parent] 可选 ViewGroup（可作为 attach 目标；null 表示不挂到父容器）
+         * @returns {Array<object>} 真实 Java View 的 JS 数组
+         *
+         * @example
+         *   const views = ui.inflateBatch(ui.R.layout.grid_item, 12, parent);
+         *   const rows = ui.inflateBatch('&lt;TextView .../&gt;', 32, null);
+         */
+        function uiInflateBatch(layoutOrXml, count, parent) {
+            const n = Number(count);
+            if (!Number.isInteger(n) || n < 1 || n > 256) {
+                throw new RangeError('ui.inflateBatch count 必须是 1..256 的整数，收到：' + String(count));
+            }
+            if (parent != null && typeof parent !== 'object') {
+                throw new TypeError('ui.inflateBatch parent 必须是 ViewGroup 或 null');
+            }
+            const parentArg = parent == null ? null : parent;
+            const isLayoutId = typeof layoutOrXml === 'number';
+            const isXml = typeof layoutOrXml === 'string';
+            if (!isLayoutId && !isXml) {
+                throw new TypeError('ui.inflateBatch 第一个参数必须是 ui.R.layout.* 数字 id 或 XML 字符串，收到：'
+                        + Object.prototype.toString.call(layoutOrXml));
+            }
+            if (isLayoutId && (!Number.isInteger(layoutOrXml) || layoutOrXml <= 0)) {
+                throw new TypeError('ui.inflateBatch 布局 id 必须是正整数（如 ui.R.layout.grid_item；Java 侧要求 > 0），收到：'
+                        + String(layoutOrXml));
+            }
+            if (isXml) {
+                const xml = layoutOrXml;
+                if (!xml || xml.trim().length === 0) {
+                    throw new TypeError('ui.inflateBatch XML 字符串不能为空');
+                }
+                if (xml.trim().charAt(0) !== '<') {
+                    throw new TypeError('ui.inflateBatch 的字符串参数必须是 XML（以 "<" 开头）；布局请传 ui.R.layout.* 数字 id');
+                }
+                const registeredTags = Object.keys(widgetRegistry);
+                for (let i = 0; i < registeredTags.length; i++) {
+                    const tag = registeredTags[i];
+                    if (new RegExp('<\\s*' + escapeRegExp(tag) + '(?=\\s|/|>)', 'i').test(xml)) {
+                        throw new Error('ui.inflateBatch 的 XML 暂不支持 ui.Widget 自定义标签：' + tag + '（请改用普通控件标签）');
+                    }
+                }
+            }
+            if (typeof globalThis.__ajsEnableJavaCallbacks !== 'function') {
+                throw new Error('ui.inflateBatch 需要原生 Node Java 桥（当前 Node24 宿主未启用 Java 回调）');
+            }
+            // 与 ui.inflate 的 XML 路径一致：先 seed application Context，再调用宿主批量 inflate。
+            try { globalThis.__ajsEnableJavaCallbacks(); } catch (ignored) { }
+            try { hostCall({op: 'ping'}); } catch (ignored) { }
+            let batch;
+            try {
+                if (isLayoutId) {
+                    if (typeof javaSession().inflateLayoutBatch !== 'function') {
+                        throw new Error('宿主暂未提供 NodeUiLocalSession.inflateLayoutBatch()（Java 侧批量 inflate 尚未合入/编译）');
+                    }
+                    batch = javaSession().inflateLayoutBatch(layoutOrXml, n, parentArg);
+                } else {
+                    if (typeof javaSession().inflateXmlBatch !== 'function') {
+                        throw new Error('宿主暂未提供 NodeUiLocalSession.inflateXmlBatch()（Java 侧批量 inflate 尚未合入/编译）');
+                    }
+                    batch = javaSession().inflateXmlBatch(layoutOrXml, n, parentArg);
+                }
+            } catch (error) {
+                const wrapped = new Error('ui.inflateBatch 失败（' + (isLayoutId ? 'layout' : 'xml')
+                        + ' count=' + n + '）：' + (error && error.message ? error.message : String(error)));
+                wrapped.cause = error;
+                throw wrapped;
+            }
+            if (batch == null) {
+                throw new Error('ui.inflateBatch 宿主返回空（Java 侧 inflate*Batch 未实现或失败）');
+            }
+            const views = Array.prototype.slice.call(batch);
+            if (!Array.isArray(views) || views.length !== n) {
+                throw new Error('ui.inflateBatch 宿主返回数量不符：期望 ' + n + '，实际 '
+                        + (views && views.length != null ? views.length : '未知'));
+            }
+            if (n > 0 && !(views[0] && views[0].__ajsJavaObject__ === true)) {
+                throw new Error('ui.inflateBatch 返回的元素不是 Java View');
+            }
+            return views;
+        }
+
         function requireRealActivity() {
             if (!realActivity) throw new Error('当前没有运行中的 Node UI Activity');
             return realActivity;
@@ -1893,6 +1983,7 @@
             findViewById: uiFindViewById,
             setContentView: uiSetContentView,
             inflate: uiInflate,
+            inflateBatch: uiInflateBatch,
             layout: uiSetContentView,
             getWindow: uiGetWindow,
             currentActivity: uiCurrentActivity,

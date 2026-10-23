@@ -232,6 +232,85 @@ public final class NodeUiLocalSession {
         return result[0];
     }
 
+    /**
+     * ui.inflateBatch(layoutId, count, parent) 的 Node24 入口。
+     *
+     * <p>批量 inflate 必须全部在主线程完成：count 次 LayoutInflater.inflate 对同一 parent 反复
+     * 读资源/构造 View，放到 Node 线程会触发 Android View 线程校验。这里沿用
+     * {@link #runOnMainAndWait}：Node 线程调用会同步等主线程，主线程调用直接执行，不会反向等 Node。
+     *
+     * <p>LayoutInflater 的 Context 优先级按接口约定固定为：parent.getContext() → 当前 Node UI
+     * Activity。parent 可为 null，但此时必须有 Activity，否则明确抛错；每个 View 都以
+     * attachToRoot=false inflate，由 JS 侧决定是否 addView，避免 256 个 View 意外挂到同一 parent。
+     */
+    public static android.view.View[] inflateLayoutBatch(final int layoutId, final int count,
+                                                          final ViewGroup parent) {
+        if (layoutId <= 0) {
+            throw new IllegalArgumentException("inflateLayoutBatch 需要 layoutId > 0");
+        }
+        validateInflateBatchCount(count);
+        final android.view.View[] result = new android.view.View[count];
+        runOnMainAndWait(new Runnable() {
+            @Override public void run() {
+                Context inflaterContext = parent != null ? parent.getContext() : null;
+                if (inflaterContext == null) {
+                    Activity current = activity;
+                    if (current != null && !current.isFinishing() && !current.isDestroyed()) {
+                        inflaterContext = current;
+                    }
+                }
+                if (inflaterContext == null) {
+                    throw new IllegalStateException("inflateLayoutBatch 需要 Activity 或非空 parent 的 Context");
+                }
+                try {
+                    android.view.LayoutInflater inflater = android.view.LayoutInflater.from(inflaterContext);
+                    for (int i = 0; i < count; i++) {
+                        result[i] = inflater.inflate(layoutId, parent, false);
+                    }
+                } catch (RuntimeException error) {
+                    throw new IllegalStateException("inflateLayoutBatch 失败：" + error.getMessage(), error);
+                }
+            }
+        }, 30_000L, "inflateLayoutBatch");
+        return result;
+    }
+
+    /**
+     * ui.inflateBatch(xml, count, parent) 的 Node24 入口。
+     *
+     * <p>与现有 {@link #inflateXml} 使用同一个 inflater/主题/Context 解析顺序与
+     * {@link NodeUiHost#inflateInlineLayout} 实现；区别只是 count 个独立 View、全部主线程执行、
+     * attachToRoot=false。parent 仅用于生成正确的 LayoutParams，不把 View 挂上去。
+     */
+    public static android.view.View[] inflateXmlBatch(final String xml, final int count,
+                                                       final ViewGroup parent) {
+        if (xml == null || xml.trim().isEmpty()) {
+            throw new IllegalArgumentException("inflateXmlBatch 需要非空 XML 字符串");
+        }
+        validateInflateBatchCount(count);
+        final android.view.View[] result = new android.view.View[count];
+        runOnMainAndWait(new Runnable() {
+            @Override public void run() {
+                final Context themed = resolveInflateContext(parent);
+                try {
+                    for (int i = 0; i < count; i++) {
+                        result[i] = NodeUiHost.inflateInlineLayout(
+                                themed, xml, themed.getClassLoader(), parent, false);
+                    }
+                } catch (RuntimeException error) {
+                    throw new IllegalStateException("inflateXmlBatch 失败：" + error.getMessage(), error);
+                }
+            }
+        }, 30_000L, "inflateXmlBatch");
+        return result;
+    }
+
+    private static void validateInflateBatchCount(int count) {
+        if (count < 1 || count > 256) {
+            throw new IllegalArgumentException("inflateBatch 的 count 必须在 1..256 之间，收到：" + count);
+        }
+    }
+
     private static Context resolveInflateContext(ViewGroup parent) {
         Activity current = activity;
         if (current != null) {

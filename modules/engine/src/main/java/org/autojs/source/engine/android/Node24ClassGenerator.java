@@ -22,8 +22,8 @@ import java.util.Set;
  *
  * <p>生成类不依赖 Android API，只依赖 Rhino 自带的
  * {@link ClassFileWriter}；可在普通 JVM 上直接定义和验证。生成结果交给
- * {@code AndroidClassLoader.defineClass} 走 D8 即可，class 版本由 Rhino jar
- * 自身决定（当前为 major 52，满足 minSdk 26 的 D8）。
+ * {@code AndroidClassLoader.defineClass}；生成器只使用普通虚调用和装拆箱，
+ * 显式输出 major 51 以使用轻量 dx，失败时仍可回退 D8。
  *
  * <p>契约：
  * <ul>
@@ -163,7 +163,14 @@ public final class Node24ClassGenerator {
         for (Candidate candidate : ordered) {
             emitCandidate(cw, owner, superOwner, candidate);
         }
-        return cw.toByteArray();
+        byte[] bytecode = cw.toByteArray();
+        // This generator emits ordinary constructors, boxing and virtual calls,
+        // with no Java 8 classfile features. Rhino defaults to major 52; target
+        // Java 7 explicitly so these small adapters can use the lightweight dx
+        // path. General user jars retain their own version and the D8 path.
+        bytecode[6] = 0;
+        bytecode[7] = 51;
+        return bytecode;
     }
 
     private static void validateClassName(String className) {
