@@ -76,3 +76,6 @@ $size = (Get-Item (Join-Path $payload 'jniLibs\arm64-v8a\libapp.so')).Length
 $hash = (Get-FileHash (Join-Path $payload 'jniLibs\arm64-v8a\libapp.so') -Algorithm SHA256).Hash
 Write-Output ("AOT libapp.so: " + $size + " bytes sha256=" + $hash)
 Write-Output ("payload: " + $payload)
+# robocopy uses exit code 1 for successful copies. Do not leak that status to
+# callers after Flutter assemble and payload verification have succeeded.
+exit 0

@@ -12,6 +12,12 @@ const $java = $autojs.java;
 // 两个 $java.defineClass 不再放在 onContentViewSet -> _setupGrid 里串行编译；
 // loadAndroidResources 完成后立即启动，与 setMainActivity / Activity show 并行。
 // onContentViewSet 只做轻量 chrome；列表/控制台初始化延后到 setTimeout(0)，再 await 已启动的 Promise。
+//
+// task-238（M3 首屏/重建）：
+// - afterFirstFrame 后按「可见内容优先」执行：控制台监听 -> Grid -> 下一拍 Drawer；
+// - console/toggle 的 binding、Drawer 菜单项与点击监听都推迟到真正需要时；
+// - 显式绑定底部导航与 ViewPager，兼容未自动连线的本地 Activity；同页跳转不重复触发；
+// - 以 contentView 身份做幂等，Activity 重建时用新 view 重新 setup，旧 view 的回调丢弃。
 let gridViewHolderClass = null;
 let gridHolderClassPromise = null;
 let gridAdapterClassPromise = null;
@@ -116,25 +122,53 @@ class MainActivity extends ui.Activity {
             { title: '功能7', url: 'https://pic.rmb.bdstatic.com/bjh/791d0f965a41243b994f47247e84d722.jpeg' },
             { title: '功能8', url: 'https://picsum.photos/800' },
         ];
-        // task-231：防止 onContentViewSet 重复触发时重复建列表/控制台。
-        this._deferredSetupStarted = false;
+        // task-238：按 contentView 身份做幂等；Activity 重建会换新 view，不能沿用旧 flag。
+        this._setupView = null;
+        this._closed = false;
         this._consoleReady = false;
-        this._consoleView = null;
-        this._consoleToggle = null;
+        this._drawerMenuReady = false;
     }
 
     onCreate(savedInstanceState) {
+        // 重建时旧 view 的延迟 setup 必须失效；真正的关闭由 onDestroy 置 _closed。
+        this._closed = false;
+        this._setupView = null;
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(this.getWindow(), false);
         // 应用主题
         this.getTheme().applyStyle(ui.R.style.MainTheme, true);
         super.onCreate(savedInstanceState);
     }
 
+    onDestroy() {
+        // 宿主在 Activity 重建时只发 pause/stop，不发 destroy；这里只处理真正关闭。
+        this._closed = true;
+        this._setupView = null;
+        this._consoleReady = false;
+        this._drawerMenuReady = false;
+        super.onDestroy();
+    }
+
+    onBackPressed() {
+        const view = this._setupView;
+        if (view && this._isCurrentView(view)) {
+            const drawer = view.binding.drawer;
+            if (drawer.isDrawerVisible(android.view.Gravity.START)) {
+                drawer.closeDrawers();
+                return;
+            }
+        }
+        this.finish();
+    }
+
     onContentViewSet(view) {
-        // task-234：首帧回调只保留 fab 等极轻量设置；ViewPager/Drawer/Grid/Console 全部
-        // 移到 _setupDeferred，避免 onContentViewSet 同步做 100ms+ 的原生 setup。
-        this._consoleView = view.binding.console;
-        this._consoleToggle = view.binding.toggleButton;
+        // task-238：同一 contentView 的重复回调直接忽略；重建的新 view 重新走完整调度。
+        if (this._closed || this._setupView === view) {
+            return;
+        }
+        this._setupView = view;
+        this._consoleReady = false;
+        this._drawerMenuReady = false;
+        // task-234：首帧前只做 fab；console/toggle 的 binding 留到用户真正切到控制台页再取。
         view.binding.fab.setOnClickListener(() => {
             console.log('已勾选卡片:', this.cardList.filter(item => item.checked));
             const Snackbar = com.google.android.material.snackbar.Snackbar;
@@ -147,46 +181,75 @@ class MainActivity extends ui.Activity {
         this._scheduleDeferredSetup(view);
     }
 
-    /** 延迟初始化 ViewPager/Drawer/列表/控制台；onContentViewSet 多次触发时单 flag 只初始化一次。 */
+    _isCurrentView(view) {
+        return !this._closed && this._setupView === view && !this.isFinishing();
+    }
+
+    /** 延迟初始化 ViewPager/列表/抽屉；同一个 contentView 只调度一次，旧 view 的回调按身份丢弃。 */
     _scheduleDeferredSetup(view) {
-        if (this._deferredSetupStarted) {
-            return;
-        }
-        this._deferredSetupStarted = true;
-        // task-237：首帧后再做 ViewPager/Drawer/Grid/Console 的重型原生 setup，避免挡住首屏。
+        // task-237/238：首帧后再做重型原生 setup，避免挡住首屏。
         ui.afterFirstFrame(view, () => {
+            if (!this._isCurrentView(view)) {
+                return;
+            }
             this._setupDeferred(view).catch(console.error);
         });
     }
 
     async _setupDeferred(view) {
-        // task-234：顺序固定 Pager → Drawer → Grid → Console；单项失败记录后继续，保证底部
-        // 页签/导航/列表/控制台最终都尽量完成。
+        // task-238：可见内容优先。先绑定底部导航与控制台懒加载监听；
+        // 然后建首屏 Grid；Drawer 离屏，放到下一拍，给 grid 的 requestLayout/首帧留出时间。
+        // 单项失败记录后继续，保证导航/列表/抽屉最终都尽量完成。
         try {
-            this._setupViewPager(view.binding.viewPager, view.binding.navigation);
+            this._setupViewPager(view);
         } catch (error) {
             console.error('M3 ViewPager 初始化失败', error);
+        }
+        if (!this._isCurrentView(view)) {
+            return;
+        }
+        try {
+            await this._setupGrid(view.binding.grid, view);
+        } catch (error) {
+            console.error('M3 列表初始化失败', error);
+        }
+        if (!this._isCurrentView(view)) {
+            return;
+        }
+        // 让 grid setAdapter 之后的布局/绘制先跑完，再执行离屏 Drawer 的原生 setup。
+        await new Promise(resolve => setTimeout(resolve, 0));
+        if (!this._isCurrentView(view)) {
+            return;
         }
         try {
             this._setupDrawer(view.binding.drawer, view.binding.toolbar, view.binding.drawerNavigation);
         } catch (error) {
             console.error('M3 Drawer 初始化失败', error);
         }
-        try {
-            await this._setupGrid(view.binding.grid);
-        } catch (error) {
-            console.error('M3 列表初始化失败', error);
-        }
     }
 
-    /** 控制台只在用户切到控制台页时初始化，避免占用首屏后的 setup。 */
-    _setupConsoleLazy() {
-        if (this._consoleReady) {
+    /** 控制台只在用户切到控制台页时初始化；按 contentView 重置，Activity 重建后仍会执行。 */
+    _setupConsoleLazy(view) {
+        if (this._consoleReady || !this._isCurrentView(view)) {
             return;
         }
+        let consoleView;
+        let toggleButton;
+        try {
+            consoleView = view.binding.console;
+            toggleButton = view.binding.toggleButton;
+        } catch (error) {
+            console.error('M3 控制台 View 获取失败', error);
+            return;
+        }
+        if (!consoleView || !toggleButton) {
+            console.error('M3 控制台 View 缺失');
+            return;
+        }
+        // 先置位再注册，避免 setup 失败重试时重复 addOnButtonCheckedListener。
         this._consoleReady = true;
         try {
-            this._setupConsole(this._consoleView, this._consoleToggle);
+            this._setupConsole(consoleView, toggleButton);
         } catch (error) {
             console.error('M3 控制台初始化失败', error);
         }
@@ -194,10 +257,37 @@ class MainActivity extends ui.Activity {
 
     _setupDrawer(drawer, toolbar, navigation) {
         this.setSupportActionBar(toolbar);
-        // 配置ToolBar左上角点击时打开侧拉菜单
+        // 抽屉图标/开合动画仍由 ActionBarDrawerToggle 负责；菜单内容延后到首次滑出。
         const toggle = new androidx.appcompat.app.ActionBarDrawerToggle(this, drawer, toolbar, 0, 0);
         toggle.syncState();
         drawer.addDrawerListener(toggle);
+        // task-238：邮件标题与菜单点击只在抽屉第一次可见时配置，避免首屏后的 eager setup。
+        drawer.addDrawerListener(new androidx.drawerlayout.widget.DrawerLayout.DrawerListener({
+            onDrawerSlide: (drawerView, slideOffset) => {
+                if (slideOffset > 0) this._setupDrawerMenu(navigation);
+            },
+            onDrawerOpened: () => this._setupDrawerMenu(navigation),
+            onDrawerClosed: () => {
+            },
+            onDrawerStateChanged: (newState) => {
+            },
+        }));
+        // 用户可能在 Drawer setup 完成前就点开/滑开了抽屉；补一次状态检查。
+        try {
+            if (drawer.isDrawerOpen(android.view.Gravity.START) || drawer.isDrawerVisible(navigation)) {
+                this._setupDrawerMenu(navigation);
+            }
+        } catch (ignored) {
+            // 查询不可用时退回一次配置，避免抽屉已经打开却没有菜单监听。
+            this._setupDrawerMenu(navigation);
+        }
+    }
+
+    _setupDrawerMenu(navigation) {
+        if (this._drawerMenuReady) {
+            return;
+        }
+        this._drawerMenuReady = true;
         // 设置侧拉菜单中邮件Item的标题
         navigation.getMenu().findItem(ui.R.id.item_email).setTitle('pro@autojs.org');
         // 侧拉菜单点击监听
@@ -217,33 +307,47 @@ class MainActivity extends ui.Activity {
         });
     }
 
-    _setupViewPager(viewPager, navigation) {
-        const bottomNavigationIds = [ui.R.id.navigation_dashboard, ui.R.id.navigation_log, ui.R.id.navigation_settings];
+    _setupViewPager(view) {
+        const viewPager = view.binding.viewPager;
+        const navigation = view.binding.navigation;
+        const ids = [ui.R.id.navigation_dashboard, ui.R.id.navigation_log, ui.R.id.navigation_settings];
         viewPager.initAdapterFromChildren();
-        // ViewPager和底部导航栏同步
-        navigation.setOnItemSelectedListener((item) => {
-            viewPager.setCurrentItem(bottomNavigationIds.indexOf(item.getItemId()));
+        // setOnItemSelectedListener replaces any previous listener. Local Activity resource
+        // layouts are not guaranteed to have host wiring, so keep the explicit binding.
+        navigation.setOnItemSelectedListener(item => {
+            if (!this._isCurrentView(view)) return false;
+            const position = ids.indexOf(item.getItemId());
+            if (position < 0) return false;
+            if (viewPager.getCurrentItem() !== position) viewPager.setCurrentItem(position);
             return true;
-        })
+        });
         viewPager.addOnPageChangeListener(new androidx.viewpager.widget.ViewPager.OnPageChangeListener({
             onPageScrolled: (position, positionOffset, positionOffsetPixels) => {
             },
             onPageSelected: (position) => {
-                if (position === 1) this._setupConsoleLazy();
-                navigation.setSelectedItemId(bottomNavigationIds[position])
+                if (!this._isCurrentView(view)) return;
+                if (position === 1) this._setupConsoleLazy(view);
+                if (position >= 0 && position < ids.length) navigation.setSelectedItemId(ids[position]);
             },
             onPageScrollStateChanged: (state) => {
             },
         }));
+        // 重建/恢复时 ViewPager 可能已经停在控制台页，补一次检查。
+        if (viewPager.getCurrentItem() === 1) {
+            this._setupConsoleLazy(view);
+        }
     }
 
-    async _setupGrid(grid) {
+    async _setupGrid(grid, view = this._setupView) {
         // task-231：defineClass 已在 main() 里提前启动，这里只等待；不在内容回调里编译。
         if (!gridAdapterClassPromise) {
             startGridClassCompilation();
         }
         // 两个 defineClass 已在 main() 启动；这里同时等待，不串行编译。
         const MyAdapter = (await Promise.all([gridAdapterClassPromise, gridHolderClassPromise]))[0];
+        if (!this._isCurrentView(view)) {
+            return;
+        }
         // 设置为表格布局，列数为2
         const layoutManager = new androidx.recyclerview.widget.GridLayoutManager(this, 2);
         grid.setLayoutManager(layoutManager);
@@ -255,7 +359,9 @@ class MainActivity extends ui.Activity {
         } catch (error) {
             console.error('M3 grid_item 批量预 inflate 失败，回退逐条 LayoutInflater', error);
         }
-        grid.setAdapter(new MyAdapter(this.cardList, preInflatedViews));
+        if (this._isCurrentView(view)) {
+            grid.setAdapter(new MyAdapter(this.cardList, preInflatedViews));
+        }
     }
 
     _setupConsole(consoleView, toggleButton) {

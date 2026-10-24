@@ -4,12 +4,16 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.webkit.MimeTypeMap;
 
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider;
 import com.jdkshen.aijspro.model.sample.SampleFiles;
+import com.jdkshen.aijspro.model.script.ProjectArchive;
+import com.jdkshen.aijspro.model.script.ProjectSharing;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -27,8 +31,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 文件桥：新建/改名/删除（本地回收站）/回收站列表与恢复/分享/其他应用打开/在编辑器打开。
@@ -45,6 +50,14 @@ final class PocWorkspace {
     private static final String KEY_CLIPBOARD = "workspace.clipboard";
     private static final String EDITOR_ACTIVITY = "com.jdkshen.aijspro.ui.editor.ProCodeEditorActivity";
     private static final int MAX_NAME = 128;
+    private static final long MAX_SHARE_ARCHIVE_BYTES = 128L * 1024 * 1024;
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final AtomicBoolean SHARE_PREPARING = new AtomicBoolean();
+    private static final ExecutorService SHARE_WORKER = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "workspace-share");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private final Activity activity;
     private final File scripts;
@@ -56,6 +69,84 @@ final class PocWorkspace {
         this.scripts = new File(Pref.getScriptDirPath()).getCanonicalFile();
         this.samples = SampleFiles.sampleRoot(activity).getCanonicalFile();
         this.records = new File(activity.getFilesDir(), "workspace-trash-records").getCanonicalFile();
+    }
+
+    static boolean isAsync(String method) {
+        return "share".equals(method) || "shareFile".equals(method);
+    }
+
+    /** Keep compression and provider path resolution off the Flutter/UI thread. */
+    static void startAsync(Activity activity, String method, JSONObject args,
+                           PocIntegration.Callback callback) {
+        if (!isAsync(method)) {
+            replyShare(callback, null, new IllegalArgumentException("未知异步文件操作：" + method));
+            return;
+        }
+        if (!SHARE_PREPARING.compareAndSet(false, true)) {
+            replyShare(callback, null, new IOException("正在准备分享，请稍候"));
+            return;
+        }
+        final String path = args.optString("path", "");
+        try {
+            SHARE_WORKER.execute(() -> {
+                File archive = null;
+                try {
+                    PocWorkspace workspace = new PocWorkspace(activity);
+                    File source = workspace.readable(path);
+                    File file;
+                    if (source.isDirectory()) {
+                        archive = workspace.zipForShare(source);
+                        file = archive;
+                    } else if (source.isFile()) {
+                        file = source;
+                    } else {
+                        throw new IOException("分享文件不存在或无法读取");
+                    }
+                    Intent send = ProjectSharing.createSendIntent(activity, file);
+                    final File preparedArchive = archive;
+                    MAIN.post(() -> {
+                        Exception failure = null;
+                        try {
+                            if (activity.isFinishing() || activity.isDestroyed()) {
+                                throw new IOException("页面已关闭，请重新分享");
+                            }
+                            activity.startActivity(Intent.createChooser(send, "分享"));
+                        } catch (Exception error) {
+                            discardShareArchive(preparedArchive);
+                            failure = error;
+                        }
+                        SHARE_PREPARING.set(false);
+                        replyShare(callback, failure == null ? Boolean.TRUE : null, failure);
+                    });
+                } catch (Exception error) {
+                    discardShareArchive(archive);
+                    MAIN.post(() -> {
+                        SHARE_PREPARING.set(false);
+                        replyShare(callback, null, error);
+                    });
+                }
+            });
+        } catch (RuntimeException error) {
+            SHARE_PREPARING.set(false);
+            replyShare(callback, null, error);
+        }
+    }
+
+    private static void replyShare(PocIntegration.Callback callback, Object data, Throwable error) {
+        try {
+            callback.reply(data, error);
+        } catch (RuntimeException deliveryError) {
+            // A Flutter engine can disappear while a large archive is being prepared.
+            Log.w("GlassFlutterPoc", "Unable to deliver share result", deliveryError);
+        }
+    }
+
+    /** Only called with a newly created private archive, never with the source file. */
+    private static void discardShareArchive(File archive) {
+        if (archive == null) return;
+        File parent = archive.getParentFile();
+        archive.delete();
+        if (parent != null) parent.delete();
     }
 
     Object execute(String method, JSONObject args) throws Exception {
@@ -84,7 +175,7 @@ final class PocWorkspace {
                 return directoryContext(new File(args.getString("path")));
             case "share":
             case "shareFile":
-                return share(args);
+                throw new IllegalStateException("分享必须通过后台文件操作执行");
             case "openWith":
                 return openWith(args);
             case "aceOpenFile":
@@ -459,16 +550,6 @@ final class PocWorkspace {
                 .put("exists", true).put("directory", false);
     }
 
-    private Object share(JSONObject args) throws Exception {
-        File file = readable(args.getString("path"));
-        if (file.isFile()) {
-            shareUri(file, mimeOf(file.getName()));
-        } else {
-            shareUri(zipForShare(file), "application/zip");
-        }
-        return Boolean.TRUE;
-    }
-
     private Object openWith(JSONObject args) throws Exception {
         File file = readable(args.getString("path"));
         if (!file.isFile()) {
@@ -481,56 +562,13 @@ final class PocWorkspace {
         return Boolean.TRUE;
     }
 
-    private void shareUri(File file, String mime) {
-        Uri uri = AppFileProvider.getUriForFile(activity, file);
-        Intent intent = new Intent(Intent.ACTION_SEND)
-                .setType(mime)
-                .putExtra(Intent.EXTRA_STREAM, uri)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-        activity.startActivity(Intent.createChooser(intent, "分享"));
-    }
-
     private File zipForShare(File directory) throws IOException {
         File cache = new File(activity.getCacheDir(), "workspace-share");
-        if (!cache.isDirectory() && !cache.mkdirs()) {
-            throw new IOException("无法创建分享缓存目录");
+        try {
+            return ProjectArchive.create(directory, cache, MAX_SHARE_ARCHIVE_BYTES);
+        } catch (ProjectArchive.ArchiveTooLargeException error) {
+            throw new IOException("目录压缩包超过 128MB，请进入子目录后分享文件", error);
         }
-        File zip = new File(cache, directory.getName() + "-" + token() + ".zip");
-        try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zip))) {
-            zipTree(directory, directory.getName(), out, 0);
-        }
-        if (zip.length() > 128L * 1024 * 1024) {
-            zip.delete();
-            throw new IOException("目录超过 128MB，请进入子目录后分享文件");
-        }
-        return zip;
-    }
-
-    private void zipTree(File file, String path, ZipOutputStream zip, int depth) throws IOException {
-        if (depth > 32) {
-            throw new IOException("目录层级过深");
-        }
-        if (file.isDirectory()) {
-            File[] children = file.listFiles();
-            if (children == null) {
-                throw new IOException("无法读取目录：" + file.getName());
-            }
-            zip.putNextEntry(new ZipEntry(path + "/"));
-            zip.closeEntry();
-            for (File child : children) {
-                zipTree(child, path + "/" + child.getName(), zip, depth + 1);
-            }
-            return;
-        }
-        zip.putNextEntry(new ZipEntry(path));
-        try (InputStream in = new FileInputStream(file)) {
-            byte[] buffer = new byte[8192];
-            int count;
-            while ((count = in.read(buffer)) != -1) {
-                zip.write(buffer, 0, count);
-            }
-        }
-        zip.closeEntry();
     }
 
     private String mimeOf(String name) {

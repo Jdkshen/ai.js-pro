@@ -123,6 +123,15 @@ final class PocBridge {
                 });
                 return;
             }
+            if (PocWorkspace.isAsync(method)) {
+                PocWorkspace.startAsync(activity, method, args, (data, error) -> {
+                    if (error != null) {
+                        Log.w(TAG, "bridge failure: " + resolvedMethod, error);
+                    }
+                    replier.reply(replyJson(data, error));
+                });
+                return;
+            }
             if (PocServices.isAsync(method)) {
                 PocServices.startAsync(activity, method, args, (data, error) -> {
                     if (error != null) {

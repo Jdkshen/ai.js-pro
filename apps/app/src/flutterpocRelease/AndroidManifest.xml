@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Flutter release 叠加清单：
+  - 正式 release 不注册仅供 adb 调试的 DebugCommandReceiver；
+  - 该类同时被 apps/app/build.gradle 的 release Java 源集排除；
+  - 最终清单由 processMiuixCompatReleaseMainManifest/verifyReleaseManifestPolicy 再检查。
+  不要在这里加业务组件；这里只做 release 专属的“移除/收紧”。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <receiver
+            android:name="com.jdkshen.aijspro.flutterpoc.DebugCommandReceiver"
+            tools:node="remove"/>
+    </application>
+</manifest>

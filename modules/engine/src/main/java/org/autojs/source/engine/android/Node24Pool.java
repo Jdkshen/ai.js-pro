@@ -27,6 +27,16 @@ public final class Node24Pool {
         public int index() { return index; }
     }
 
+    /** 槽位已满（3/3 运行中）且等待超时；调用方不得把它当成池启动失败去回退 legacy。 */
+    public static final class PoolBusyException extends IllegalStateException {
+        public PoolBusyException(String message) { super(message); }
+    }
+
+    /** 等待槽位时线程被取消/中断；调用方不得回退 legacy。 */
+    public static final class PoolInterruptedException extends IllegalStateException {
+        public PoolInterruptedException(String message) { super(message); }
+    }
+
     private static final Slot[] sSlots = new Slot[SLOTS];
     static {
         for (int i = 0; i < SLOTS; i++) sSlots[i] = new Slot(i);
@@ -36,6 +46,9 @@ public final class Node24Pool {
 
     /** 分配一个空闲槽；全部忙时等待释放（≤8s），超时给明确中文错误。 */
     public static synchronized Slot acquire(Context context) throws Exception {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new PoolInterruptedException("等待 Node 执行槽已被取消");
+        }
         long deadline = System.currentTimeMillis() + ACQUIRE_TIMEOUT_MS;
         while (true) {
             for (Slot slot : sSlots) {
@@ -52,14 +65,43 @@ public final class Node24Pool {
             }
             long remain = deadline - System.currentTimeMillis();
             if (remain <= 0) {
-                throw new IllegalStateException("Node 执行槽已满（" + SLOTS + " 个），请先停止一个 Node 脚本");
+                throw new PoolBusyException("Node 执行槽已满（" + SLOTS + " 个），请先停止一个 Node 脚本");
             }
             try { Node24Pool.class.wait(Math.min(remain, 250L)); }
             catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
-                throw new IllegalStateException("等待 Node 执行槽被中断");
+                throw new PoolInterruptedException("等待 Node 执行槽被取消");
             }
         }
+    }
+
+    /** 池容量（诊断/测试用）。 */
+    public static int capacity() {
+        return SLOTS;
+    }
+
+    /**
+     * 只有真正的池启动故障才允许回退旧 :node24。槽位忙/等待被取消属于正常调度结果，
+     * 回退会绕开池容量并让调用方误以为任务已开始，因此明确禁止。
+     */
+    public static boolean shouldFallbackToLegacy(Throwable error, boolean interrupted) {
+        if (interrupted) return false;
+        int depth = 0;
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (++depth > 32 || current instanceof Error
+                    || current instanceof InterruptedException
+                    || current instanceof java.util.concurrent.CancellationException
+                    || current instanceof PoolBusyException || current instanceof PoolInterruptedException) {
+                return false;
+            }
+            if (current.getCause() == current) break;
+        }
+        return true;
+    }
+
+    /** 诊断/调用方判断是否为可识别的繁忙或取消。 */
+    public static boolean isBusyOrCancelled(Throwable error) {
+        return !shouldFallbackToLegacy(error, false);
     }
 
     /** 释放槽；healthy=false 时关闭客户端，下次重建（进程崩溃恢复）。 */
@@ -85,7 +127,7 @@ public final class Node24Pool {
         Log.w(TAG, "invalidate slot=" + slot.index);
     }
 
-    /** 当前池占用数（诊断/任务页用）。 */
+    /** 当前进程的池占用数（仅本进程可见；跨 :script/:node24_N 不能当全局值）。 */
     public static synchronized int busyCount() {
         int count = 0;
         for (Slot slot : sSlots) if (slot.busy) count++;

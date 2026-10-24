@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Auto.js 插件 APK：没有界面，宿主通过 <meta-data> 里的注册类反射加载。
+  Auto.js 插件 APK：插件能力本身没有界面，宿主通过 <meta-data> 里的注册类反射加载；
+  额外提供一个「使用教程」Activity，安装后可从桌面图标打开查看用法/接口/排错。
 
   ⚠️ org.autojs.plugin.sdk.registry 是 Auto.js 插件 SDK 约定的键名，
   官方 Auto.js Pro 与本仓库（AI.js Pro）都按它找注册类，所以这个插件两边都能装。
@@ -10,12 +11,24 @@
     <application
         android:allowBackup="false"
         android:extractNativeLibs="true"
+        android:icon="@drawable/ic_xiangqi"
         android:label="象棋引擎插件"
         android:hasCode="true">
 
         <meta-data
             android:name="org.autojs.plugin.sdk.registry"
             android:value="com.jdkshen.xiangqi.plugin.PluginRegistry" />
+
+        <activity
+            android:name=".UsageActivity"
+            android:exported="true"
+            android:label="象棋引擎插件 · 使用教程"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>

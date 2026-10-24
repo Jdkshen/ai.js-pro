@@ -6,11 +6,14 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Random;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -104,6 +107,78 @@ public class ProjectArchiveTest {
         expectIOException(() -> ProjectArchive.create(file, cache));
         expectIOException(() -> ProjectArchive.create(new File(temporary.getRoot(), "missing"), cache));
         assertEquals(0, cache.list().length);
+    }
+
+    @Test
+    public void streamsEightyThreeMiBWithoutBufferingTheWholeFile() throws Exception {
+        File project = temporary.newFolder("large-project");
+        File cache = temporary.newFolder("large-cache");
+        File resource = new File(project, "model.bin");
+        byte[] buffer = new byte[32 * 1024];
+        Random random = new Random(20261024);
+        CRC32 expected = new CRC32();
+        long size = 83L * 1024 * 1024;
+        try (FileOutputStream output = new FileOutputStream(resource)) {
+            for (long written = 0; written < size; written += buffer.length) {
+                random.nextBytes(buffer);
+                output.write(buffer);
+                expected.update(buffer);
+            }
+        }
+
+        File archive = ProjectArchive.create(project, cache, 128L * 1024 * 1024);
+        try (ZipFile zip = new ZipFile(archive)) {
+            ZipEntry entry = zip.getEntry("large-project/model.bin");
+            assertNotNull(entry);
+            assertEquals(size, entry.getSize());
+            assertEquals(expected.getValue(), entry.getCrc());
+            CRC32 actual = new CRC32();
+            long read = 0;
+            try (InputStream input = zip.getInputStream(entry)) {
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    actual.update(buffer, 0, count);
+                    read += count;
+                }
+            }
+            assertEquals(size, read);
+            assertEquals(expected.getValue(), actual.getValue());
+        }
+        assertEquals(size, resource.length());
+    }
+
+    @Test
+    public void enforcesLimitWhileWritingAndCleansFailedArchive() throws Exception {
+        File project = temporary.newFolder("limited-project");
+        File cache = temporary.newFolder("limited-cache");
+        byte[] bytes = new byte[256 * 1024];
+        new Random(17).nextBytes(bytes);
+        write(project, "resource.bin", bytes);
+
+        try {
+            ProjectArchive.create(project, cache, 16 * 1024);
+            fail("Expected streaming archive limit");
+        } catch (ProjectArchive.ArchiveTooLargeException expected) {
+            assertEquals(0, cache.list().length);
+            assertArrayEquals(bytes, Files.readAllBytes(new File(project, "resource.bin").toPath()));
+        }
+    }
+
+    @Test
+    public void limitIncludesCentralDirectoryAndAllowsExactCompletedSize() throws Exception {
+        File project = temporary.newFolder("boundary-project");
+        File cache = temporary.newFolder("boundary-cache");
+        write(project, "main.js", "console.log('share');".getBytes(StandardCharsets.UTF_8));
+        File first = ProjectArchive.create(project, cache);
+        File exact = ProjectArchive.create(project, cache, first.length());
+        assertEquals(first.length(), exact.length());
+
+        try {
+            ProjectArchive.create(project, cache, first.length() - 1);
+            fail("Expected limit on the completed ZIP");
+        } catch (ProjectArchive.ArchiveTooLargeException expected) {
+            assertEquals(2, cache.list().length);
+        }
     }
 
     private static void write(File root, String relativePath, byte[] data) throws IOException {

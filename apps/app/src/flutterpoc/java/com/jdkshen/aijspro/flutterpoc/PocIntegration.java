@@ -364,6 +364,14 @@ final class PocIntegration {
                     .put("lastRequestAt", type.getMethod("getLastRequestAt").invoke(companion))
                     .put("recentEvents", new JSONArray((java.util.Collection<?>) type.getMethod("recentEvents").invoke(companion)));
         } catch (ReflectiveOperationException ignored) { }
+        try {
+            Object engineJson = Class.forName("com.jdkshen.aijspro.mcp.McpEngineDiagnostics")
+                    .getMethod("snapshotJson", Context.class).invoke(null, activity);
+            diagnostics.put("engineDiagnostics", new JSONObject(String.valueOf(engineJson)));
+        } catch (ReflectiveOperationException | org.json.JSONException unavailable) {
+            diagnostics.put("engineDiagnostics", new JSONObject()
+                    .put("schemaVersion", 1).put("unavailable", true));
+        }
         return diagnostics.put("bindHost", "0.0.0.0")
                 .put("running", running)
                 .put("enabled", running)

@@ -46,7 +46,7 @@ public final class ProjectSharing {
         if (!file.isFile()) throw new IllegalArgumentException("Shared file does not exist: " + file);
         Uri uri = AppFileProvider.getUriForFile(context, file);
         String mime = file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".zip")
-                ? "application/zip" : MimeTypes.fromFileOr(file.getPath(), "text/plain");
+                ? "application/zip" : MimeTypes.fromFileOr(file.getPath(), "application/octet-stream");
         Intent intent = new Intent(Intent.ACTION_SEND)
                 .setType(mime)
                 .putExtra(Intent.EXTRA_STREAM, uri)

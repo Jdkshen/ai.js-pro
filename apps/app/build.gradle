@@ -20,12 +20,112 @@ def pythonExecutable = org.gradle.internal.os.OperatingSystem.current().isWindow
 // 扩展里「输入设备IP地址」的 LAN 连接路径不受影响）。
 def devPluginUsbDiscovery = findProperty('devPluginUsbDiscovery') != 'false'
 
-// ---- Flutter 玻璃界面 POC（可行性评估 §9） ---------------------------------
+// ---- Flutter 玻璃界面（可行性评估 §9） ---------------------------------------
 // -PflutterPoc=true 时把 output/flutter-poc/payload（锁定版本的引擎 + 预编译 AOT +
-// flutter_assets + embedding jar）挂进 debug 变体，并提供 GlassFlutterActivity 调试入口。
-// 产物由 tools/flutter-poc/build-aot.ps1 生成。
+// flutter_assets + embedding jar）挂进 debug，并且为真正的 release 变体提供同一套
+// Java/res/assets/jniLibs/embedding。产物由 tools/flutter-poc/build-aot.ps1 生成。
+// 默认（不带 -PflutterPoc）仍是不含 Flutter 的 debug/release，与旧行为一致。
 def flutterPocEnabled = findProperty('flutterPoc') == 'true'
 def flutterPocPayload = rootProject.file('output/flutter-poc/payload')
+
+// Flutter payload 目前只有 arm64-v8a。release 若继续按全局 split 打 x86/v7a，会产出
+// 缺 libflutter/libapp 的“能安装但打不开”包，所以 release 输出默认只启用 arm64；
+// -PflutterPocAbi 可显式收窄/覆盖，release 任务还会校验期望 ABI 在 payload 里真实存在
+// （见 verifyFlutterReleaseAbiSupport）。debug split 在未传参时仍是三 ABI。
+def flutterSupportedAbis = ['arm64-v8a', 'armeabi-v7a', 'x86']
+def flutterPocAbi = findProperty('flutterPocAbi')?.toString()?.trim()
+if (flutterPocAbi != null && flutterPocAbi.isEmpty()) {
+    throw new GradleException('flutterPocAbi 不能为空；例如 -PflutterPocAbi=arm64-v8a')
+}
+def flutterRequestedAbis = flutterSupportedAbis
+if (flutterPocAbi != null) {
+    if (!flutterPocEnabled) {
+        throw new GradleException('flutterPocAbi 只在 -PflutterPoc=true 时有意义')
+    }
+    flutterRequestedAbis = flutterPocAbi.split(',').collect { it.trim() }.findAll { !it.isEmpty() }
+    if (flutterRequestedAbis.isEmpty()) {
+        throw new GradleException('flutterPocAbi 未解析出任何 ABI')
+    }
+    def unknownAbis = flutterRequestedAbis.findAll { !flutterSupportedAbis.contains(it) }
+    if (!unknownAbis.isEmpty()) {
+        throw new GradleException('不支持的 flutterPocAbi: ' + unknownAbis.join(', ') +
+                '；可选值: ' + flutterSupportedAbis.join(', '))
+    }
+}
+// release 默认只保留 payload 实际支持的 arm64；debug 仍按上面的三 ABI split 不变。
+// 这样直接跑 assembleRelease 也不会产出缺 libflutter/libapp 的 x86/v7a 包。
+def flutterReleaseAbis = flutterPocAbi != null ? flutterRequestedAbis : ['arm64-v8a']
+
+// ---- 正式 release 的分阶段 R8/资源裁剪开关 ----------------------------------
+// 默认保持 minify/shrink 关闭，先产出可签名的完整 release 候选；确认运行面后再逐级打开。
+// -PreleaseR8=true                  R8 代码裁剪（保留规则见 proguard-rules.pro）
+// -PreleaseR8Optimize=true          允许 R8 优化（默认保守，仅 shrink，加 -dontoptimize）
+// -PreleaseShrinkResources=true     资源裁剪；必须同时 -PreleaseR8=true
+def releaseR8 = findProperty('releaseR8') == 'true'
+def releaseR8Optimize = findProperty('releaseR8Optimize') == 'true'
+def releaseShrinkResources = findProperty('releaseShrinkResources') == 'true'
+if (releaseR8Optimize && !releaseR8) {
+    throw new GradleException('releaseR8Optimize=true 需要同时传 -PreleaseR8=true')
+}
+if (releaseShrinkResources && !releaseR8) {
+    throw new GradleException('releaseShrinkResources=true 需要同时传 -PreleaseR8=true；' +
+            '资源裁剪依赖 R8 的代码引用分析')
+}
+if (releaseShrinkResources) {
+    logger.warn('releaseShrinkResources=true：资源裁剪是显式实验开关。宿主/脚本存在按名字 ' +
+            'getIdentifier 的动态资源访问，正式发布前必须用 res/raw/keep.xml（tools:keep）' +
+            '覆盖这些资源并做真机回归；默认关闭。')
+}
+
+// 正式签名仍只认 AIJSPRO_*。本地 debug 测试签名必须显式 -PflutterReleaseTestSigning=true，
+// 绝不因为没配 AIJSPRO 就自动退回 debug 签名。
+def flutterReleaseTestSigning = findProperty('flutterReleaseTestSigning') == 'true'
+def useFlutterReleaseTestSigning = flutterReleaseTestSigning && !releaseSigningReady
+if (flutterReleaseTestSigning && releaseSigningReady) {
+    logger.warn('flutterReleaseTestSigning=true 与 AIJSPRO_* 同时存在：正式签名优先，忽略测试签名。')
+}
+if (useFlutterReleaseTestSigning) {
+    logger.warn('flutterReleaseTestSigning=true：release 将使用本机 debug keystore 签名，' +
+            '仅用于本地验收，禁止发布。')
+}
+
+// R8 默认的优化/inline/class merge 对旧反射代码风险更高；未显式 -PreleaseR8Optimize=true
+// 时只 shrink，不 optimize。生成物放 .artifacts，不递归清理任何未知目录。
+def releaseConservativeProguardFile = null
+if (releaseR8 && !releaseR8Optimize) {
+    // 放在 .artifacts（不是 build/），否则同一次 `clean assembleRelease` 会在配置后
+    // 删掉 build/generated 里的文件，R8 读不到规则。
+    releaseConservativeProguardFile = rootProject.file(
+            '.artifacts/generated/r8/release-conservative.pro')
+    releaseConservativeProguardFile.parentFile.mkdirs()
+    releaseConservativeProguardFile.setText(
+            '# 由 apps/app/build.gradle 生成：保守 R8 模式（仅 shrink，不 optimize）。\n' +
+                    '-dontoptimize\n', 'UTF-8')
+}
+
+// 版本号默认仍读 project-versions.json；构建候选时可用 -PappVersionCode/-PappVersionName
+// 注入，避免为了试版本去改仓库版本文件（发布源本身仍使用仓库版本文件）。
+def effectiveVersionCode = versions.appVersionCode
+def injectedVersionCode = findProperty('appVersionCode')
+if (injectedVersionCode != null) {
+    def text = injectedVersionCode.toString().trim()
+    if (!(text ==~ /[0-9]+/)) {
+        throw new GradleException('appVersionCode 必须是正整数: ' + injectedVersionCode)
+    }
+    effectiveVersionCode = text.toInteger()
+    if (effectiveVersionCode < 1 || effectiveVersionCode > 2100000000) {
+        throw new GradleException('appVersionCode 必须在 1..2100000000 之间')
+    }
+}
+def effectiveVersionName = versions.appVersionName
+def injectedVersionName = findProperty('appVersionName')
+if (injectedVersionName != null) {
+    def text = injectedVersionName.toString().trim()
+    if (text.isEmpty() || text ==~ /.*\s+.*/) {
+        throw new GradleException('appVersionName 不能为空或包含空白字符: ' + injectedVersionName)
+    }
+    effectiveVersionName = text
+}
 
 // ---- 关于页构建信息：构建时注入 git 提交（作者/日期/说明），无 git 时回退 unknown ----
 def gitValue = { List<String> args ->
@@ -67,8 +167,8 @@ android {
         applicationId "com.jdkshen.aijspro"
         minSdkVersion versions.mini
         targetSdkVersion versions.target
-        versionCode versions.appVersionCode
-        versionName versions.appVersionName
+        versionCode effectiveVersionCode
+        versionName effectiveVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled true
         buildConfigField "String", "GIT_COMMIT", '"' + gradleEscape(gitCommit) + '"'
@@ -102,11 +202,18 @@ android {
         release {
             if (releaseSigningReady) {
                 signingConfig signingConfigs.release
+            } else if (useFlutterReleaseTestSigning) {
+                // 仅显式 -PflutterReleaseTestSigning=true 时使用 AGP 的本机 debug keystore。
+                // verifyReleaseConfiguration 会再次拦截“既没有正式签名、也没有显式测试签名”的 release。
+                signingConfig signingConfigs.getByName('debug')
             }
-            // Keep shrinking disabled until reflection/JNI entry points have release coverage.
-            shrinkResources false
-            minifyEnabled false
+            // 默认关闭；由显式 -PreleaseR8 / -PreleaseShrinkResources 分阶段打开。
+            shrinkResources releaseShrinkResources
+            minifyEnabled releaseR8
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseConservativeProguardFile != null) {
+                proguardFiles releaseConservativeProguardFile
+            }
         }
     }
     compileOptions {
@@ -151,7 +258,12 @@ android {
             reset()
 
             // Specifies a list of ABIs that Gradle should create APKs for.
-            include "x86", "armeabi-v7a", "arm64-v8a"
+            // Flutter 只在显式 -PflutterPocAbi 时收窄；默认 debug/release 仍保持三 ABI。
+            if (flutterPocAbi != null) {
+                include(*flutterRequestedAbis)
+            } else {
+                include "x86", "armeabi-v7a", "arm64-v8a"
+            }
 
             // Specifies that we do not want to also generate a universal APK that includes all ABIs.
             universalApk false
@@ -201,13 +313,59 @@ android {
                 assets.srcDir new File(flutterPocPayload, 'assets')
                 jniLibs.srcDir new File(flutterPocPayload, 'jniLibs')
             }
+            release {
+                // 真正的 release 复用同一套 Flutter/POC 宿主类，但把仅供本机 adb 调试的
+                // DebugCommandReceiver 排除出编译产物；清单层的 tools:node=remove 是第二道保险。
+                java.srcDir 'src/flutterpoc/java'
+                java.filter.exclude '**/DebugCommandReceiver.java'
+                res.srcDir 'src/flutterpoc/res'
+                // 以 flutterpoc 清单为底，src/release 的权限策略和 flutterpocRelease 的
+                // Receiver 移除作为显式 overlay 追加（见下方 androidComponents，防止设了
+                // manifest.srcFile 后丢掉 src/release 的 WRITE_SECURE_SETTINGS 移除）。
+                manifest.srcFile 'src/flutterpoc/AndroidManifest.xml'
+                assets.srcDir new File(flutterPocPayload, 'assets')
+                jniLibs.srcDir new File(flutterPocPayload, 'jniLibs')
+            }
         }
     }
 }
 
-// 打包运行时模板已随「APK 打包插件」（plugins/apkbuilder-plugin）分发：
-// 宿主 APK 不再包含 assets/template.apk，所以这里也不再需要依赖 :inrt:buildApkPlugin
-// （模板的刷新改由那个插件模块的 mergeAssets 触发，见它的 build.gradle）。
+// 打包运行时模板仍由「APK 打包插件」（plugins/apkbuilder-plugin）维护/分发；宿主
+// apps/app/src/main/assets/template.apk 也仍是 verifySlimPackagingTemplate 的构建硬门输入
+// （缺失、体积或条目异常都会失败）。模板刷新由那个插件模块的 mergeAssets 触发，见它的
+// build.gradle；不要按旧注释把它当成已移除文件删掉。
+if (flutterPocEnabled) {
+    // release 以 flutterpoc 清单为底后，必须显式补回 src/release 的权限策略，并移除
+    // 仅供 adb 调试的 DebugCommandReceiver。合并完成后 verifyReleaseManifestPolicy 还会
+    // 再检查最终清单，防止任何 overlay 失效。
+    def releasePermissionPolicy = file('src/release/AndroidManifest.xml')
+    def flutterPocReleaseOverlay = file('src/flutterpocRelease/AndroidManifest.xml')
+    if (!releasePermissionPolicy.isFile()) {
+        throw new GradleException('缺少 release 权限策略清单: ' + releasePermissionPolicy)
+    }
+    if (!flutterPocReleaseOverlay.isFile()) {
+        throw new GradleException('缺少 Flutter release 清单覆盖: ' + flutterPocReleaseOverlay)
+    }
+    androidComponents {
+        onVariants(selector().withBuildType('debug')) { variant ->
+            variant.sources.manifests?.addStaticManifestFile(
+                    file('src/flutterpocDebug/AndroidManifest.xml').absolutePath)
+        }
+        onVariants(selector().withBuildType('release')) { variant ->
+            variant.sources.manifests?.addStaticManifestFile(releasePermissionPolicy.absolutePath)
+            variant.sources.manifests?.addStaticManifestFile(flutterPocReleaseOverlay.absolutePath)
+            // release 只启用 payload 支持的 ABI；debug 的 split 列表保持三 ABI 不变。
+            variant.outputs.each { output ->
+                def abiFilter = output.filters.find { filter ->
+                    filter.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI
+                }
+                if (abiFilter != null && !flutterReleaseAbis.contains(abiFilter.identifier)) {
+                    output.enabled.set(false)
+                }
+            }
+        }
+    }
+}
 
 // With -PdevPluginUsbDiscovery=false a manifest overlay removes the debug-server
 // provider through the merger (tools:node="remove"). Manifest source directories
@@ -270,9 +428,24 @@ tasks.register('verifyImGuiFontSubset', Exec) {
 
 
 if (flutterPocEnabled) {
+    def flutterPocManifest = file('src/flutterpoc/AndroidManifest.xml')
+    def flutterPocReleaseManifest = file('src/flutterpocRelease/AndroidManifest.xml')
     def verifyFlutterPayload = tasks.register('verifyFlutterPayload') {
         group = 'verification'
         doLast {
+            def requiredEntries = [
+                    'runtime.json',
+                    'flutter_embedding_release.jar',
+                    'assets/flutter_assets/AssetManifest.bin',
+                    'jniLibs/arm64-v8a/libflutter.so',
+                    'jniLibs/arm64-v8a/libapp.so'
+            ]
+            def missing = requiredEntries.findAll { !new File(flutterPocPayload, it).isFile() }
+            if (!missing.isEmpty()) {
+                throw new GradleException('Flutter payload 缺少必需文件：\n' +
+                        missing.collect { ' - ' + it }.join('\n') +
+                        '\n先运行 tools/flutter-poc/build-aot.ps1 生成完整 payload。')
+            }
             def readRuntime = { File file -> new groovy.json.JsonSlurper().parseText(file.getText('UTF-8').replace('\uFEFF', '')) }
             def expected = readRuntime(rootProject.file('flutter-payload-base/runtime.json'))
             def actual = readRuntime(new File(flutterPocPayload, 'runtime.json'))
@@ -284,9 +457,97 @@ if (flutterPocEnabled) {
                 if (sha(new File(flutterPocPayload, name)) != pin.sha256) throw new GradleException("Flutter payload hash mismatch: ${name}")
             }
             if (sha(new File(flutterPocPayload, 'jniLibs/arm64-v8a/libapp.so')) != actual.aotSha256) throw new GradleException('Flutter AOT hash mismatch; rebuild payload')
+            // 只校验存在与哈希还不够：release 需要 embedding 里真的有 Flutter Activity/Engine，
+            // 否则会到运行期才 NoClassDefFoundError。
+            def embeddingJar = new java.util.zip.ZipFile(new File(flutterPocPayload, 'flutter_embedding_release.jar'))
+            try {
+                ['io/flutter/embedding/android/FlutterActivity.class',
+                 'io/flutter/embedding/engine/FlutterEngine.class'].each { entry ->
+                    if (embeddingJar.getEntry(entry) == null) {
+                        throw new GradleException('Flutter embedding 缺少类：' + entry + '；payload 不是完整 embedding jar')
+                    }
+                }
+            } finally {
+                embeddingJar.close()
+            }
         }
     }
-    tasks.named('preBuild').configure { dependsOn verifyFlutterPayload }
+
+    def verifyFlutterManifests = tasks.register('verifyFlutterPocManifests') {
+        group = 'verification'
+        description = '校验 debug 调试广播的权限门与 release 清单中的 Receiver 移除。'
+        inputs.file(flutterPocManifest)
+        inputs.file(file('src/flutterpocDebug/AndroidManifest.xml'))
+        inputs.file(flutterPocReleaseManifest)
+        doLast {
+            // XmlSlurper(false, false) keeps prefixed attribute names as strings
+            // ("android:name"), not QNames. Using QName here silently matches nothing.
+            def androidName = 'android:name'
+            def androidPermission = 'android:permission'
+            def toolsNode = 'tools:node'
+            def receiverClass = 'com.jdkshen.aijspro.flutterpoc.DebugCommandReceiver'
+
+            def sharedManifest = new XmlSlurper(false, false).parse(flutterPocManifest)
+            if (sharedManifest.application.receiver.any { it.attributes()[androidName] == receiverClass }) {
+                throw new GradleException('调试 Receiver 不能放在 debug/release 共用的 Flutter 清单中。')
+            }
+            def debugManifest = new XmlSlurper(false, false).parse(file('src/flutterpocDebug/AndroidManifest.xml'))
+            def debugReceiver = debugManifest.application.receiver.find {
+                it.attributes()[androidName] == receiverClass
+            }
+            if (debugReceiver.size() == 0) {
+                throw new GradleException('flutterPoc 清单缺少调试广播 Receiver: ' + receiverClass)
+            }
+            def permission = debugReceiver.attributes()[androidPermission]
+            if (permission != 'android.permission.DUMP') {
+                throw new GradleException('调试广播必须由 android.permission.DUMP 保护（当前: ' +
+                        (permission ?: '<none>') + '）；否则普通第三方应用也能触发脚本运行/停止。')
+            }
+
+            def releaseManifest = new XmlSlurper(false, false).parse(flutterPocReleaseManifest)
+            def releaseRemoval = releaseManifest.application.receiver.find {
+                it.attributes()[androidName] == receiverClass
+            }
+            if (releaseRemoval.size() == 0 || releaseRemoval.attributes()[toolsNode] != 'remove') {
+                throw new GradleException('flutterpocRelease 清单必须用 tools:node="remove" 排除 ' +
+                        receiverClass)
+            }
+        }
+    }
+
+    def verifyFlutterReleaseAbiSupport = tasks.register('verifyFlutterReleaseAbiSupport') {
+        group = 'verification'
+        description = '校验 release 期望的 ABI 在 Flutter payload 中都有 libflutter/libapp。'
+        doLast {
+            def jniRoot = new File(flutterPocPayload, 'jniLibs')
+            def payloadAbis = jniRoot.listFiles({ File f -> f.isDirectory() } as FileFilter)
+                    ?.collect { it.name }?.sort() ?: []
+            def missing = flutterReleaseAbis.findAll { !payloadAbis.contains(it) }
+            if (!missing.isEmpty()) {
+                throw new GradleException('Flutter payload 没有 release ABI: ' + missing.join(', ') +
+                        '；现有: ' + payloadAbis.join(', ') +
+                        '。release 只会启用 -PflutterPocAbi 指定/默认 arm64 的 ABI。')
+            }
+            flutterReleaseAbis.each { abi ->
+                ['libflutter.so', 'libapp.so'].each { lib ->
+                    if (!new File(jniRoot, abi + '/' + lib).isFile()) {
+                        throw new GradleException('Flutter payload 缺少 ' + abi + '/' + lib)
+                    }
+                }
+            }
+        }
+    }
+
+    tasks.named('preBuild').configure {
+        dependsOn verifyFlutterPayload
+        dependsOn verifyFlutterManifests
+    }
+    tasks.matching {
+        it.name in ['assembleMiuixCompatRelease', 'assembleMiuixLiteRelease',
+                    'preMiuixCompatReleaseBuild', 'preMiuixLiteReleaseBuild']
+    }.configureEach {
+        dependsOn verifyFlutterReleaseAbiSupport
+    }
 }
 
 // ---- 16 KB 页对齐守卫（P0） -------------------------------------------------
@@ -423,14 +684,24 @@ dependencies {
     implementation project(':apkbuilder')
     if (flutterPocEnabled) {
         // Embedding and engine are pinned together in flutter-payload-base/runtime.json.
-        debugImplementation files(new File(flutterPocPayload, 'flutter_embedding_release.jar'))
+        // release 也必须是同一份 classes-only embedding + 同一套运行时依赖；只在 debug
+        // 接入会让 assembleRelease 编译不出 Flutter Activity，或运行到 NoClassDefFoundError。
+        def flutterEmbeddingJar = files(new File(flutterPocPayload, 'flutter_embedding_release.jar'))
+        debugImplementation flutterEmbeddingJar
+        releaseImplementation flutterEmbeddingJar
+        // 明确写两遍，避免在 dependencies 闭包里用嵌套 each 依赖 Groovy 的 delegate 解析。
         debugImplementation 'com.getkeepsafe.relinker:relinker:1.4.5'
+        releaseImplementation 'com.getkeepsafe.relinker:relinker:1.4.5'
         debugImplementation 'androidx.tracing:tracing:1.2.0'
+        releaseImplementation 'androidx.tracing:tracing:1.2.0'
         debugImplementation 'androidx.exifinterface:exifinterface:1.4.1'
+        releaseImplementation 'androidx.exifinterface:exifinterface:1.4.1'
         debugImplementation 'androidx.lifecycle:lifecycle-process:2.7.0'
+        releaseImplementation 'androidx.lifecycle:lifecycle-process:2.7.0'
         // FlutterView 构造时无条件创建 WindowInfoRepositoryCallbackAdapterWrapper，
         // 需要 androidx.window 的 Java 适配器（window 本体已在依赖图中，1.3.0）。
         debugImplementation 'androidx.window:window-java:1.3.0'
+        releaseImplementation 'androidx.window:window-java:1.3.0'
     }
 }
 
@@ -472,8 +743,16 @@ android.applicationVariants.all { variant ->
                     '--output', generated.get().asFile
         }
     }
-    android.sourceSets.maybeCreate(variant.name).assets.srcDir(generated)
+    android.sourceSets.maybeCreate(variant.name).assets.srcDir(
+            project.files(generated).builtBy(compileSamples))
     variant.mergeAssetsProvider.configure { dependsOn compileSamples }
+    // Lint also reads asset roots. Preserve the producer edge on incremental
+    // release builds instead of letting Lint read stale generated project IDs.
+    tasks.matching { candidate ->
+        candidate.name.contains(capitalized) &&
+                (candidate.name.startsWith('lint') ||
+                        (candidate.name.startsWith('generate') && candidate.name.contains('Lint')))
+    }.configureEach { dependsOn compileSamples }
 }
 
 // 象棋工程源码的版本指纹：project.json 是唯一版本源，清单里是逐文件 SHA-256。
@@ -689,13 +968,21 @@ tasks.matching { it.name == 'preBuild' }.configureEach {
 
 tasks.register('verifyReleaseConfiguration') {
     group = 'verification'
-    description = 'Require private signing inputs before building a distributable release.'
+    description = 'Require official signing (or an explicit local test-signing opt-in) for release.'
     doLast {
-        if (!releaseSigningReady) {
-            throw new GradleException('Release signing is not configured. Set AIJSPRO_KEYSTORE, AIJSPRO_STORE_PASSWORD, AIJSPRO_KEY_ALIAS and AIJSPRO_KEY_PASSWORD.')
+        if (!releaseSigningReady && !flutterReleaseTestSigning) {
+            throw new GradleException('Release signing is not configured. Set AIJSPRO_KEYSTORE, ' +
+                    'AIJSPRO_STORE_PASSWORD, AIJSPRO_KEY_ALIAS and AIJSPRO_KEY_PASSWORD. ' +
+                    'For local-only verification you may explicitly pass -PflutterReleaseTestSigning=true ' +
+                    '(debug keystore; never publish that artifact).')
         }
-        if (!file(releaseSigningValues.storeFile).isFile()) {
-            throw new GradleException('AIJSPRO_KEYSTORE does not point to a readable keystore file.')
+        if (releaseSigningReady) {
+            if (!file(releaseSigningValues.storeFile).isFile()) {
+                throw new GradleException('AIJSPRO_KEYSTORE does not point to a readable keystore file.')
+            }
+        } else {
+            logger.warn('Release configuration accepted with explicit flutterReleaseTestSigning=true; ' +
+                    'this APK is signed with the local debug keystore and must not be published.')
         }
     }
 }
@@ -712,13 +999,11 @@ tasks.register('verifyReleaseManifestPolicy') {
             throw new GradleException('Missing release manifest permission policy: ' + releaseManifestPolicyFile)
         }
         def policy = new XmlSlurper(false, false).parse(releaseManifestPolicyFile)
-        def androidNamespace = new groovy.xml.Namespace('http://schemas.android.com/apk/res/android', 'android')
-        def toolsNamespace = new groovy.xml.Namespace('http://schemas.android.com/tools', 'tools')
         def secureSettingsRemoval = policy.'uses-permission'.find { permission ->
-            permission.attributes()[androidNamespace.name] == 'android.permission.WRITE_SECURE_SETTINGS' &&
-                    permission.attributes()[toolsNamespace.node] == 'remove'
+            permission.attributes()['android:name'] == 'android.permission.WRITE_SECURE_SETTINGS' &&
+                    permission.attributes()['tools:node'] == 'remove'
         }
-        if (secureSettingsRemoval == null) {
+        if (secureSettingsRemoval.size() == 0) {
             throw new GradleException('Release builds must remove android.permission.WRITE_SECURE_SETTINGS.')
         }
     }
@@ -740,24 +1025,33 @@ tasks.matching { it.name in reviewedReleaseManifestTasks }.configureEach { manif
         if (mergedManifests.isEmpty()) {
             throw new GradleException('Cannot locate merged release AndroidManifest.xml for ' + manifestTask.name)
         }
-        def androidNamespace = new groovy.xml.Namespace('http://schemas.android.com/apk/res/android', 'android')
         def forbiddenPermissions = ['android.permission.WRITE_SECURE_SETTINGS'] as Set
+        def forbiddenReceivers = ['com.jdkshen.aijspro.flutterpoc.DebugCommandReceiver'] as Set
         def violations = mergedManifests.collectMany { manifest ->
             def merged = new XmlSlurper(false, false).parse(manifest)
-            merged.'uses-permission'.findAll { permission ->
-                forbiddenPermissions.contains(permission.attributes()[androidNamespace.name])
+            def permissionViolations = merged.'uses-permission'.findAll { permission ->
+                forbiddenPermissions.contains(permission.attributes()['android:name'])
             }.collect { permission ->
-                manifest.toString() + ': ' + permission.attributes()[androidNamespace.name]
+                manifest.toString() + ': ' + permission.attributes()['android:name']
             }
+            def receiverViolations = merged.application.receiver.findAll { receiver ->
+                forbiddenReceivers.contains(receiver.attributes()['android:name'])
+            }.collect { receiver ->
+                manifest.toString() + ': receiver ' + receiver.attributes()['android:name']
+            }
+            permissionViolations + receiverViolations
         }
         if (!violations.isEmpty()) {
-            throw new GradleException('Forbidden privileged permission found in merged release manifest:\n' +
+            throw new GradleException('Forbidden privileged permission or debug receiver found in merged release manifest:\n' +
                     violations.collect { ' - ' + it }.join('\n'))
         }
     }
 }
 
-tasks.matching { it.name in ['assembleMiuixCompatRelease', 'assembleMiuixLiteRelease'] }.configureEach {
+tasks.matching {
+    it.name in ['assembleMiuixCompatRelease', 'assembleMiuixLiteRelease',
+                'preMiuixCompatReleaseBuild', 'preMiuixLiteReleaseBuild']
+}.configureEach {
     dependsOn tasks.named('verifyReleaseConfiguration')
     dependsOn tasks.named('verifyReleaseManifestPolicy')
 }

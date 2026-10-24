@@ -169,7 +169,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
             add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一；source 传源码字符串）；需要结果/错误日志时 wait=true。示例：{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}", McpToolSchema.runSchema()))
             add(tool("list_engine_api", "枚举三引擎实际全局或 require(module) 的 API；Node 同时返回实际内置模块目录", objSchema("engine", "module")))
-            add(tool("probe_engine_api", "探测三引擎 API 的类型、成员和函数 arity；module 可选，includeInherited 默认 true；不执行 getter", objSchema("engine", "module", "name", "includeInherited", required = arrayOf("engine", "name"))))
+            add(tool("probe_engine_api", "按 descriptor/shape 探测三引擎 API 的 present/accessor/missing/unverified、成员和函数 arity；module 可选，includeInherited 默认 true；探针不执行 getter（call_engine_api 才真实求值与调用）", objSchema("engine", "module", "name", "includeInherited", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比三个引擎的全局 API；保留旧 Rhino/QuickJS 字段，增加 Node 与三引擎交集"))
             add(tool("stop_script", "停止本 MCP 发起的运行任务", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("workspace_open", "从真实脚本创建（或复用）私有工作区快照；create=true 为幂等：不存在则创建（自动建父目录）、已存在则直接打开；子目录文件请传完整相对路径；示例：{\"path\":\"main.js\",\"create\":true}", objSchema("path", "create", required = arrayOf("path"))))
@@ -217,6 +217,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("pendingWorkspaceApprovals", workspaces.list().count { it.pendingApproval })
                 addProperty("overlayCount", OverlayStateReader.countAggregated(context))
                 addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
+                add("engineDiagnostics", engineDiagnostics())
             })
             "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
             "read_script" -> toolJson(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
@@ -239,6 +240,8 @@ internal class McpTools(private val context: Context, private val event: (String
                     addProperty("engine", engine)
                     addProperty("available", engine != "rhino" || com.jdkshen.aijspro.BuildConfig.RHINO_COMPAT)
                     addProperty("run", true); addProperty("apiQuery", true); addProperty("apiCall", true); addProperty("syntaxCheck", true)
+                    addProperty("probeEvidence", "shape")
+                    addProperty("behaviorStatus", "unverified")
                 }) }
             }) })
             "call_engine_api" -> callEngineApi(args)
@@ -370,7 +373,10 @@ internal class McpTools(private val context: Context, private val event: (String
                               cleanup: () -> Unit = {}): JsonObject {
         val key = "mcp-${nextRun.getAndIncrement()}"
         if (runs.size >= 100) runs.values.filter { it.status !in ACTIVE_STATES }.minByOrNull { it.createdAt }?.let { runs.remove(it.id) }
-        val record = RunRecord(key, path, System.currentTimeMillis())
+        val record = RunRecord(key, path, System.currentTimeMillis()).apply {
+            // init (including pool admission) can fail before onStart is called.
+            engine = (source as? JavaScriptSource)?.let { McpEngines.actual(it) }.orEmpty()
+        }
         runs[key] = record
         val listener = object : ScriptExecutionListener {
             override fun onStart(execution: ScriptExecution) {
@@ -415,7 +421,10 @@ internal class McpTools(private val context: Context, private val event: (String
                     record.errorStack = Log.getStackTraceString(error).take(16 * 1024)
                     record.finishedAt = System.currentTimeMillis()
                     record.logs = runLogs(record, execution)
-                    if (record.status != "STOPPED") record.status = "FAILED"
+                    if (record.status != "STOPPED") {
+                        record.status = "FAILED"
+                        McpEngineDiagnostics.recordFailure(record.engine, record.id, record.finishedAt, record.errorType)
+                    }
                     event("$key · ${record.status.lowercase()} · ${record.errorMessage.take(100)}")
                 } finally { cleanup() }
             }
@@ -429,6 +438,7 @@ internal class McpTools(private val context: Context, private val event: (String
             record.status = "FAILED"; record.finishedAt = System.currentTimeMillis()
             record.errorType = error.javaClass.name; record.errorMessage = error.localizedMessage.orEmpty()
             record.errorStack = Log.getStackTraceString(error).take(16 * 1024)
+            McpEngineDiagnostics.recordFailure(record.engine, record.id, record.finishedAt, record.errorType)
             throw ToolError("脚本启动失败：${record.errorMessage}")
         }
         if (wait) return toolJson(waitFor(record, timeoutSeconds))
@@ -457,13 +467,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val source = McpEngineApi.probe(args.stringOr("module", ""), name, args.booleanOr("includeInherited", true))
         val resultText = engineProbe(engine, source)
         val obj = com.google.gson.JsonParser().parse(resultText).asJsonObject
-        return toolJson(JsonObject().apply {
-            addProperty("engine", engine)
-            addProperty("name", obj.get("name").asString)
-            addProperty("type", obj.get("type").asString)
-            add("keys", obj.getAsJsonArray("keys"))
-            add("members", obj.getAsJsonArray("members")); add("arity", obj.get("arity")); add("module", obj.get("module"))
-        })
+        return toolJson(obj.deepCopy().apply { addProperty("engine", engine) })
     }
 
     private fun callEngineApi(args: JsonObject): JsonObject {
@@ -526,6 +530,16 @@ internal class McpTools(private val context: Context, private val event: (String
         val logs = run.getAsJsonArray("logs") ?: JsonArray()
         return probe.result(logs.map { it.asJsonObject })
             ?: throw ToolError("探针无输出（未捕获到本次请求的结果日志）")
+    }
+
+    private fun engineDiagnostics(): JsonObject = runCatching {
+        com.google.gson.JsonParser().parse(McpEngineDiagnostics.snapshotJson(context)).asJsonObject
+    }.getOrElse {
+        JsonObject().apply {
+            addProperty("schemaVersion", McpEngineDiagnostics.SCHEMA_VERSION)
+            addProperty("capturedAt", System.currentTimeMillis())
+            addProperty("unavailable", true)
+        }
     }
 
     private fun requireRhinoCompat(engine: String) {

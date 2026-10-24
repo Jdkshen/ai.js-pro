@@ -40,6 +40,28 @@ class McpEngineApiTest {
             assertEquals(0.0, Context.toNumber(scope.get("calls", scope)), 0.0)
         } finally { Context.exit() }
     }
+    @Test fun probeMarksMissingAndAccessorExplicitlyWithoutReadingGetter() {
+        val cx = Context.enter()
+        try {
+            cx.languageVersion = Context.VERSION_ES6
+            val scope = cx.initStandardObjects()
+            cx.evaluateString(scope, "var output='';var console={log:function(s){output=s;}};var calls=0;" +
+                "var fixture={nested:{ok:true},get value(){calls++;return 3;}};", "fixture", 1, null)
+            cx.evaluateString(scope, McpEngineApi.probe("", "fixture.value", false), "probe", 1, null)
+            val accessor = result(scope)
+            assertEquals("accessor", accessor.get("presence").asString)
+            assertTrue(accessor.get("present").asBoolean)
+            assertEquals(0.0, Context.toNumber(scope.get("calls", scope)), 0.0)
+
+            cx.evaluateString(scope, McpEngineApi.probe("", "fixture.missing", false), "probe", 1, null)
+            val missing = result(scope)
+            assertEquals("missing", missing.get("presence").asString)
+            assertFalse(missing.get("present").asBoolean)
+            assertEquals("undefined", missing.get("type").asString)
+        } finally { Context.exit() }
+    }
+    private fun result(scope: org.mozilla.javascript.Scriptable) =
+        JsonParser().parse(scope.get("output", scope).toString().substringAfter("MCP_API_PROBE_RESULT=")).asJsonObject
     @Test fun rejectsMemberExpressionInjection() {
         assertTrue(runCatching { McpEngineApi.probe("", "x);exit();//", true) }.isFailure)
     }

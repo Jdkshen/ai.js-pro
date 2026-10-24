@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Flutter 玻璃界面 POC：只在 -PflutterPoc=true 时由 app/build.gradle 挂进 debug 变体。 -->
+<!-- Shared Flutter components for debug/release. Debug-only commands are declared
+     separately in src/flutterpocDebug/AndroidManifest.xml. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
     <application>
@@ -53,13 +54,5 @@
         <service
             android:name="com.jdkshen.aijspro.automation.AutomationHostService"
             android:exported="false"/>
-        <!-- 仅 POC/调试：adb 广播触发脚本运行/停止/AUTO 门控，便于真机回归（正式构建不含本变体）。 -->
-        <receiver
-            android:name="com.jdkshen.aijspro.flutterpoc.DebugCommandReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.jdkshen.aijspro.flutterpoc.DEBUG_RUN"/>
-            </intent-filter>
-        </receiver>
     </application>
 </manifest>

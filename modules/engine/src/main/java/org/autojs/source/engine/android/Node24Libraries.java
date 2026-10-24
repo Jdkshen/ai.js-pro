@@ -2,9 +2,10 @@
 package org.autojs.source.engine.android;
 
 import android.content.Context;
+import android.content.pm.PackageInfo;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import java.util.Map;
 import org.json.JSONObject;
 
 /** Own, hash-pinned Node runtime; loaded only in the dedicated process. */
@@ -40,36 +41,55 @@ public final class Node24Libraries {
 
     /** 旧版 APK（assets 里仍打包 runtime）的兼容路径。 */
     private static File prepareFromAssets(Context context, String prefix, InputStream runtimeInput) throws Exception {
+        long started = System.nanoTime();
         JSONObject pin;
         try (InputStream input = runtimeInput) {
             pin = new JSONObject(new String(read(input), StandardCharsets.UTF_8));
         }
-        String expectedCore = pin.getString("libnode.so");
-        if (!expectedCore.matches("[0-9a-f]{64}")) throw new IOException("Invalid Node runtime pin");
-        directory = new File(context.getDir("node24-runtime", 0), expectedCore.substring(0, 16));
-        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create Node runtime directory");
-        try (RandomAccessFile lockFile = new RandomAccessFile(new File(directory, ".extract.lock"), "rw");
-             java.nio.channels.FileLock lock = lockFile.getChannel().lock()) {
-            for (String name : new String[]{"libc++_shared.so", "libnode.so", "libajsnode24bridge.so"}) {
-                String expected = pin.getString(name);
-                File target = new File(directory, name);
-                if (!target.isFile() || !digest(target).equals(expected)) {
-                    File temporary = new File(directory, name + ".part");
-                    if (temporary.exists() && !temporary.delete()) throw new IOException("Cannot remove incomplete runtime file");
-                    try (InputStream input = context.getAssets().open(prefix + name);
-                         FileOutputStream output = new FileOutputStream(temporary)) {
-                        byte[] buffer = new byte[65536];
-                        int size;
-                        while ((size = input.read(buffer)) != -1) output.write(buffer, 0, size);
-                        output.getFD().sync();
-                    }
-                    if (!digest(temporary).equals(expected)) throw new IOException("Node runtime hash mismatch: " + name);
-                    if (!temporary.setReadOnly()) throw new IOException("Cannot make runtime read-only");
-                    if (!temporary.renameTo(target)) throw new IOException("Cannot commit runtime: " + name);
-                }
-            }
+        Map<String, String> pins = Node24RuntimeFileCache.pinsFromJson(pin);
+        long runtimeJsonMs = elapsedMs(started);
+        String expectedCore = pins.get("libnode.so");
+        File requestedDirectory = new File(context.getDir("node24-runtime", 0),
+                expectedCore.substring(0, 16));
+
+        long prepareStarted = System.nanoTime();
+        Node24RuntimeFileCache.Result result = Node24RuntimeFileCache.prepare(
+                requestedDirectory, appIdentity(context), pins,
+                name -> context.getAssets().open(prefix + name));
+        long prepareFilesMs = elapsedMs(prepareStarted);
+        directory = result.directory;
+        android.util.Log.i("C-NODE24", "runtime cache " + result.stats.summary()
+                + " runtimeJsonMs=" + runtimeJsonMs
+                + " prepareFilesMs=" + prepareFilesMs
+                + " totalMs=" + elapsedMs(started));
+        if (result.stats.stateCommitFailed) {
+            android.util.Log.w("C-NODE24",
+                    "runtime cache state not committed; next process will full-verify");
         }
         return directory;
+    }
+
+    /**
+     * 安装身份：版本和 PackageManager 的安装/更新时间一起变化。缓存把完整 pins 和这个身份绑定，
+     * 覆盖安装后第一个 Node 进程会完整校验全部三个文件，而不是只相信 libnode 的哈希目录名。
+     */
+    @SuppressWarnings("deprecation") // versionCode is the API 26-compatible install identity.
+    private static String appIdentity(Context context) throws IOException {
+        String packageName = context.getPackageName();
+        try {
+            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
+            return packageName
+                    + ":" + info.versionCode
+                    + ":" + String.valueOf(info.versionName)
+                    + ":" + info.firstInstallTime
+                    + ":" + info.lastUpdateTime;
+        } catch (Exception error) {
+            throw new IOException("Cannot read app install identity for Node runtime cache", error);
+        }
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1000000L;
     }
 
     static String maps() throws IOException {
@@ -79,13 +99,5 @@ public final class Node24Libraries {
         ByteArrayOutputStream output=new ByteArrayOutputStream();byte[] buffer=new byte[16384];int size;
         while ((size=input.read(buffer))!=-1) output.write(buffer,0,size);
         return output.toByteArray();
-    }
-    private static String digest(File file) throws Exception {
-        MessageDigest hash=MessageDigest.getInstance("SHA-256");
-        try (InputStream input=new FileInputStream(file)) {
-            byte[] buffer=new byte[65536];int size;while((size=input.read(buffer))!=-1)hash.update(buffer,0,size);
-        }
-        StringBuilder text=new StringBuilder();for(byte value:hash.digest())text.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
-        return text.toString();
     }
 }

@@ -40,6 +40,10 @@ param(
     # 构建已由调用方完成，这里只做发布 + 验证。
     [switch]$SkipBuild,
 
+    # 显式发布已验证的 APK（包括 Flutter release），避免误选 debug 目录的旧产物。
+    # 仅与 -SkipBuild 同用；沿用当前开发通道签名校验，插件附件保持原样。
+    [string]$ApkPath = '',
+
     # 多设备时也允许发布，但仍需满足下方第 0 节的两个前提。
     [switch]$AllowMultiDevice,
 
@@ -85,6 +89,10 @@ function Done([string]$message) {
     Write-Host "日志：$LogFile" -ForegroundColor DarkGray
     if ($transcriptActive) { Stop-Transcript | Out-Null }
     exit 0
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ApkPath) -and -not $SkipBuild) {
+    Fail '-ApkPath 必须与 -SkipBuild 同用；先构建并验证目标 APK。'
 }
 
 # --- 0. 前置：目标设备在线；多设备需显式放行 ---------------------------------
@@ -137,7 +145,12 @@ Write-Host "[1/5] baseline: repo=$repoVersion published=$publishedVersion device
 
 # --- 2. 读手机更新源（只读，不改手机）----------------------------------------
 $prefsPath = "/data/data/$packageName/shared_prefs/${packageName}_preferences.xml"
-$prefs = ((& $adb -s $DeviceId shell run-as $packageName cat $prefsPath) 2>&1) -join "`n"
+$previousPrefsAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    # Android release 不允许 run-as；这是只读的可选信息，不能阻止发布。
+    $prefs = ((& $adb -s $DeviceId shell run-as $packageName cat $prefsPath) 2>&1) -join "`n"
+} finally { $ErrorActionPreference = $previousPrefsAction }
 $sourceUrl = [regex]::Match($prefs, 'key_update_source_url">([^<]+)<').Groups[1].Value
 # 仅本地 update.json 跟随手机的主机；GitHub/代理源不指向这次发布的本地目录。
 $verifyHost = $PcHost
@@ -190,8 +203,52 @@ try {
         ReleaseNotes = $ReleaseNotes
     }
     if ($SkipBuild) { $devUpdateArgs['SkipBuild'] = $true }
-    & (Join-Path $PSScriptRoot 'dev-update.ps1') @devUpdateArgs
-    $devUpdateExit = $LASTEXITCODE
+    if ([string]::IsNullOrWhiteSpace($ApkPath)) {
+        & (Join-Path $PSScriptRoot 'dev-update.ps1') @devUpdateArgs
+        $devUpdateExit = $LASTEXITCODE
+    } else {
+        $inputApk = Get-Item -LiteralPath $ApkPath -ErrorAction Stop
+        if ($inputApk.Name -match '-unsigned\.apk$') { throw '不能发布 unsigned APK。' }
+        $aaptTool = Get-ChildItem 'C:\Android\build-tools\*\aapt.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1
+        $signerTool = Join-Path $aaptTool.DirectoryName 'apksigner.bat'
+        $badging = (& $aaptTool.FullName dump badging $inputApk.FullName) -join "`n"
+        if ($LASTEXITCODE -ne 0 -or
+                $badging -notmatch "package: name='com\.jdkshen\.aijspro' versionCode='$expected' versionName='dev-$expected'") {
+            throw "显式 APK 的包名/版本必须是 com.jdkshen.aijspro / dev-$expected。"
+        }
+        $tree = (& $aaptTool.FullName dump xmltree $inputApk.FullName 'AndroidManifest.xml') -join "`n"
+        if ($LASTEXITCODE -ne 0 -or $tree -match 'org\.autojs\.autojspro\.debug\.provider') {
+            throw 'APK 清单检查失败或仍包含冲突 provider。'
+        }
+        $certs = (& $signerTool verify --print-certs $inputApk.FullName 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw '显式 APK 签名校验失败。' }
+        $newSigner = @([regex]::Matches($certs, 'certificate SHA-256 digest: ([0-9a-fA-F]+)') |
+            ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() })
+        $previousFeed = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $previousAsset = @($previousFeed.assets)[0]
+        $previousApk = Join-Path $updatesDir ([string]$previousAsset.name)
+        $oldCerts = (& $signerTool verify --print-certs $previousApk 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw '无法核对当前开发通道签名，拒绝覆盖更新源。' }
+        $oldSigner = @([regex]::Matches($oldCerts, 'certificate SHA-256 digest: ([0-9a-fA-F]+)') |
+            ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() })
+        if ($newSigner.Count -ne 1 -or $oldSigner.Count -ne 1 -or $newSigner[0] -ne $oldSigner[0]) {
+            throw '新 APK 与当前开发通道签名不一致。'
+        }
+        & python (Join-Path $PSScriptRoot 'check-android-16kb.py') $inputApk.FullName --abi $Abi
+        if ($LASTEXITCODE -ne 0) { throw '16KB ELF/RELRO/ZIP 校验未通过。' }
+        . (Join-Path $PSScriptRoot 'jdk17.ps1') | Out-Null
+        & python (Join-Path $PSScriptRoot 'check-apk-retrofit.py') $inputApk.FullName
+        if ($LASTEXITCODE -ne 0) { throw 'Retrofit APK signature audit failed; refusing publication.' }
+        $staging = Join-Path $projectRoot '.artifacts\release-staging'
+        New-Item -ItemType Directory -Force -Path $staging | Out-Null
+        $stagedApk = Join-Path $staging "AI-js-Pro-Flutter-dev-$expected.apk"
+        Copy-Item -LiteralPath $inputApk.FullName -Destination $stagedApk -Force
+        # 直接交给现有更新源写入器；不重选/替换其他工作项正在维护的插件附件。
+        & (Join-Path $PSScriptRoot 'serve-updates.ps1') -Apk $stagedApk -Dir $updatesDir `
+            -VersionCode $expected -VersionName "dev-$expected" -ReleaseNotes $ReleaseNotes -NoServe
+        $devUpdateExit = $LASTEXITCODE
+    }
 } finally {
     $ErrorActionPreference = $previousErrorAction
 }

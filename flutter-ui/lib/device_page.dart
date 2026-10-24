@@ -770,6 +770,12 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                               color: Theme.of(context).colorScheme.error))),
               ])),
           const SizedBox(height: 6),
+          GlassSurface(
+              blur: false,
+              child: EngineDiagnosticsPanel(
+                  data: state['engineDiagnostics'],
+                  stale: mcpStale || error != null)),
+          const SizedBox(height: 6),
           // 电脑连接（VSCode / 旧版开发者插件）：不进抽屉也能看到真实状态并管理。
           GlassSurface(
               blur: false,

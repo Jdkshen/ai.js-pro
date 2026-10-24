@@ -94,7 +94,10 @@ public class DownloadManager {
 
     public Observable<Integer> download(String url, String path) {
         DownloadTask task = new DownloadTask(url, path);
-        task.setRequest(mDownloadApi.download(url)
+        // Retrofit can throw while parsing the service method, before a request
+        // exists. Deliver that failure through progress(), so the UI dismisses
+        // its dialog instead of being stranded at 0%.
+        task.setRequest(Observable.defer(() -> mDownloadApi.download(url))
                 .subscribeOn(Schedulers.io())
                 .subscribe(task::start, task::fail));
         return task.progress();
@@ -220,9 +223,9 @@ public class DownloadManager {
                 body.close();
                 return;
             }
-            try {
+            try (ResponseBody response = body) {
                 PFiles.ensureDir(mPath);
-                startImpl(body);
+                startImpl(response);
             } catch (Exception e) {
                 fail(e);
             }

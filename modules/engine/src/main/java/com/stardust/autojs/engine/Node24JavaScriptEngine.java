@@ -163,7 +163,7 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
     @Override
     public void init() {
         // task-175：默认使用 :node24_1..3 进程池（每进程单 Node runtime），
-        // 只有显式 legacy 开关/池不可用时才回退旧单进程 :node24。
+        // 只有显式 legacy 开关/池真正启动失败时才回退旧单进程 :node24。
         if (!org.autojs.source.engine.android.Node24Pool.legacyEnabled(mContext)) {
             try {
                 mPoolSlot = org.autojs.source.engine.android.Node24Pool.acquire(mContext);
@@ -171,12 +171,22 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                 Log.i(TAG, "Node24 pool slot=" + mPoolSlot.index());
                 return;
             } catch (Throwable error) {
-                Log.w(TAG, "Node24 pool unavailable, fallback deprecated :node24", error);
+                // 槽位满 / 等待被取消是正常调度结果，不是池启动故障：
+                // 回退 legacy 会绕开池容量并让调用方误以为任务已经启动。
+                if (!org.autojs.source.engine.android.Node24Pool.shouldFallbackToLegacy(
+                        error, Thread.currentThread().isInterrupted())) {
+                    Log.w(TAG, "Node24 pool busy/cancelled; legacy :node24 is not used", error);
+                    if (error instanceof RuntimeException) {
+                        throw (RuntimeException) error;
+                    }
+                    throw new IllegalStateException("Node24 进程池等待被取消，未启用 legacy :node24", error);
+                }
+                Log.w(TAG, "Node24 pool startup failed, fallback deprecated :node24", error);
             }
         } else {
             Log.w(TAG, "Node24 legacy flag enabled: using deprecated :node24 process");
         }
-        // :node24 旧通道（deprecated）：池不可用/显式回退时仍保证脚本可跑。
+        // :node24 旧通道（deprecated）：池启动失败/显式回退时仍保证脚本可跑。
         mClient = new Node24Client(mContext);
     }
 

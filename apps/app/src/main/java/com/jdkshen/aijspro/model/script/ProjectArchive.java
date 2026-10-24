@@ -5,7 +5,9 @@ import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FilterOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -18,6 +20,12 @@ public final class ProjectArchive {
     private ProjectArchive() {}
 
     public static File create(File sourceDirectory, File cacheDirectory) throws IOException {
+        return create(sourceDirectory, cacheDirectory, Long.MAX_VALUE);
+    }
+
+    /** Limits the completed ZIP, including headers and central directory, while streaming. */
+    public static File create(File sourceDirectory, File cacheDirectory, long maxBytes) throws IOException {
+        if (maxBytes <= 0) throw new IllegalArgumentException("Archive limit must be positive");
         File source = sourceDirectory.getCanonicalFile();
         if (!source.isDirectory()) throw new IOException("Project directory does not exist: " + source);
         File cache = cacheDirectory.getCanonicalFile();
@@ -29,7 +37,11 @@ public final class ProjectArchive {
         if (projectName.isEmpty()) projectName = "project";
         File archive = new File(exportDirectory, projectName + ".zip");
         try {
-            try (ZipOutputStream output = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(archive)))) {
+            // Own the file separately: ZIP close/finish may itself fail at the limit.
+            // The descriptor must still close before deleting a partial archive.
+            try (OutputStream fileOutput = new FileOutputStream(archive);
+                 ZipOutputStream output = new ZipOutputStream(new BufferedOutputStream(
+                         new LimitedOutputStream(fileOutput, maxBytes)))) {
                 addEntry(source, source, projectName, output, new HashSet<>(), new byte[8192]);
             }
             return archive;
@@ -37,6 +49,36 @@ public final class ProjectArchive {
             archive.delete();
             exportDirectory.delete();
             throw error;
+        }
+    }
+
+    public static final class ArchiveTooLargeException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        ArchiveTooLargeException(long limit) {
+            super("Archive exceeds " + limit + " bytes");
+        }
+    }
+
+    private static final class LimitedOutputStream extends FilterOutputStream {
+        private final long limit;
+        private long written;
+
+        LimitedOutputStream(OutputStream output, long limit) {
+            super(output);
+            this.limit = limit;
+        }
+
+        @Override public void write(int value) throws IOException {
+            if (written == limit) throw new ArchiveTooLargeException(limit);
+            out.write(value);
+            written++;
+        }
+
+        @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+            if (length > limit - written) throw new ArchiveTooLargeException(limit);
+            out.write(bytes, offset, length);
+            written += length;
         }
     }
 
