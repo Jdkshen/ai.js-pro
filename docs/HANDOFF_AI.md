@@ -3,7 +3,7 @@
 > **2026-10-25 候选验收通过、未发布**：[MCP 手机终端与编译入口](reports/2026-10-25_MCP手机终端与编译入口.md)。既有终端/MCP 共用底层，六项新工具；candidate-1245 已装 MI8，25 项本地、59 次 MCP 调用、6 项界面与真实 D8/Smali 编译通过。131.32 MiB / SHA `f72c0ceb…`，更新源仍 dev-1244，K40 仍 1199。完整 C/C++/Java 源码/Android 工具链另走可选插件，未声称支持端到端 APK 构建。
 
 > **工具链范围（2026-10-25）**：用户决定不做手机端 Java/C/C++/APK 源码编译工具链，只保留 MCP 终端控制与既有 D8/Smali；工具链 A-E 插件/预研已回退。
-> **当前发布 dev-1247（2026-10-25）**：MCP 无障碍 UI 8 项、应用管理 7 项、aijs-ui 终端桥、8 类工具目录；release+R8，SHA `0eac1ef5…`；MI8 已装。
+> **当前发布 dev-1247（2026-10-25，GitHub Release <https://github.com/Jdkshen/ai.js-pro/releases/tag/dev-1247>，SHA `0eac1ef5…`）**：MCP 无障碍 UI 8 项、应用管理 7 项、aijs-ui 终端桥、8 类工具目录；release+R8，SHA `0eac1ef5…`；MI8 已装。
 > **MCP 无障碍 UI（2026-10-25）**：新增 ui_* 8 项、app_* 7 项与 aijs-ui 终端桥；candidate-1246 已装 MI8，未发布；receiver 真机 ping/home/click/swipe 通过，MCP 服务端 E2E 待启动服务后补测。
 > **MCP 工具分类（2026-10-25）**：tools/list 增加 category/categoryTitle 与描述前缀，get_status.toolCategories 计数；指南按 8 类重排。
 > **当前发布 dev-1247（2026-10-24）**：[更新下载修复与发布](reports/2026-10-24_dev1244更新下载修复与发布.md)。修复 R8 泛型丢失导致的内置更新 0%；增加最终 DEX 硬门，15 项网络测试通过。MI8 已装，并经真实 DownloadManager 下载 131.27MiB APK 到 100%、SHA 与实际更新器包校验通过；K40 未动。旧版内置下载器坏，须浏览器首次覆盖升级。下面 1243/1242 等为历史记录。
