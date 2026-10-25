@@ -288,6 +288,12 @@ final class PocBridge {
             }
             case "openUrl": {
                 String url = args.optString("url", "");
+                if (url.startsWith("file:///android_asset/")) {
+                    activity.startActivity(new Intent(activity,
+                            com.jdkshen.aijspro.ui.doc.DocumentationActivity.class)
+                            .putExtra(com.jdkshen.aijspro.ui.doc.DocumentationActivity.EXTRA_URL, url));
+                    return Boolean.TRUE;
+                }
                 if (!url.startsWith("https://") && !url.startsWith("http://")) {
                     throw new IOException("不支持的链接");
                 }

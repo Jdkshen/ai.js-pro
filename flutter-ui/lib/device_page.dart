@@ -240,7 +240,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
   Future<void> openFullGuide() async {
     try {
       await LocalBridge.call('openUrl', {
-        'url': 'https://github.com/Jdkshen/ai.js-pro/blob/main/docs/guides/MCP%E8%BF%9E%E6%8E%A5%E6%8C%87%E5%8D%97.md',
+        'url': 'file:///android_asset/docs/mcp-guide.html',
       });
     } catch (error) {
       if (mounted) message(context, '打开指南失败：$error');

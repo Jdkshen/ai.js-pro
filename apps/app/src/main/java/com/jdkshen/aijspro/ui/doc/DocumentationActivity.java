@@ -4,6 +4,8 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
 
@@ -35,6 +37,10 @@ public class DocumentationActivity extends BaseActivity {
         Intent from = getIntent();
         String url = from == null ? null : from.getStringExtra(EXTRA_URL);
         if (!TextUtils.isEmpty(url)) {
+            if (url.startsWith("file:///android_asset/")) {
+                showLocalDocument(url);
+                return;
+            }
             try {
                 startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
             } catch (Throwable error) {
@@ -42,5 +48,16 @@ public class DocumentationActivity extends BaseActivity {
             }
         }
         finish();
+    }
+
+    /** 本地内置文档用 WebView 直接打开，不经过网络/浏览器。 */
+    private void showLocalDocument(String url) {
+        WebView webView = new WebView(this);
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(false);
+        settings.setAllowFileAccess(true);
+        webView.setBackgroundColor(0xFF101418);
+        webView.loadUrl(url);
+        setContentView(webView);
     }
 }
