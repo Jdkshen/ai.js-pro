@@ -244,6 +244,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("overlayCount", OverlayStateReader.countAggregated(context))
                 addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
                 add("engineDiagnostics", engineDiagnostics())
+                add("toolCategories", JsonObject().apply { McpToolCategories.counts().forEach { (id, count) -> addProperty(id, count) } })
             })
             "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
             "read_script" -> toolJson(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
@@ -894,7 +895,14 @@ internal class McpTools(private val context: Context, private val event: (String
         add("items", JsonArray().apply { all.subList(start, end).forEach { add(convert(it)) } })
         addProperty("nextOffset", end); addProperty("total", all.size); addProperty("hasMore", end < all.size)
     }
-    private fun tool(name: String, description: String, schema: JsonObject = objSchema()) = JsonObject().apply { addProperty("name", name); addProperty("description", description); add("inputSchema", schema) }
+    private fun tool(name: String, description: String, schema: JsonObject = objSchema()) = JsonObject().apply {
+        val category = McpToolCategories.categoryFor(name)
+        addProperty("name", name)
+        addProperty("category", category.id)
+        addProperty("categoryTitle", category.title)
+        addProperty("description", "[" + category.title + "] " + description)
+        add("inputSchema", schema)
+    }
     private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) =
         McpToolSchema.objectSchema(*names, required = required)
     private fun toolJson(json: JsonObject) = toolResult(json.toString()).apply { add("structuredContent", json) }

@@ -2,6 +2,21 @@
 
 本说明对应本项目的 Rhino / QuickJS / Node.js 三引擎和当前公开工具。先调用 list_engines 确认可用引擎。
 
+## 工具分类
+
+tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 开头；get_status 的 toolCategories 返回各类数量。分类只用于导航，不改变工具名、参数和权限。
+
+| 分类 | 工具 |
+|---|---|
+| 状态与诊断 | get_status、read_apk_logs、get_mcp_log |
+| 脚本与执行 | list_scripts、read_script、search_scripts、continue_result、run_script、check_syntax、list_executions、get_execution、wait_execution、stop_script、stop_all_scripts |
+| 工作区 | workspace_open/list/read/write/delete/diff/request_apply/mkdir/cancel/cleanup |
+| 引擎与 API | list_engines、list_engine_api、probe_engine_api、engine_api_diff、call_engine_api |
+| 设备与无障碍 | get_ui_layout、capture_screen、ui_find/click/long_click/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
+| 终端与构建 | terminal_exec/read/write/stop/list、get_build_tools |
+| 悬浮窗 | list_overlays、close_overlays |
+| 示例与帮助 | list_samples、read_sample、learn_autojs_skill |
+
 ## 快速开始（AI 客户端必读）
 
 1. 先调用一次 learn_autojs_skill，再调用 get_status / list_scripts / list_engines 了解现场。
