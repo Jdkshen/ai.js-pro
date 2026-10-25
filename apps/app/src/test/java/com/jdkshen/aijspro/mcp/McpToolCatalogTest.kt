@@ -7,8 +7,8 @@ import org.junit.Test
 class McpToolCatalogTest {
     @Test
     fun publicToolContractContainsCanonicalToolsAndAllProAliases() {
-        assertEquals(42, McpToolCatalog.canonicalNames.size)
-        assertEquals(51, McpToolCatalog.names.size)
+        assertEquals(57, McpToolCatalog.canonicalNames.size)
+        assertEquals(66, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
         assertTrue(McpToolCatalog.names.all { it.matches(Regex("[a-zA-Z][a-zA-Z0-9_]*")) })
         assertEquals("get_status", McpToolCatalog.names.first())
@@ -27,13 +27,13 @@ class McpToolCatalogTest {
         assertEquals("learn_autojs_skill", McpToolCatalog.canonicalName("learnAutojsSkill"))
         assertTrue("learnAutoJsSkill" in McpToolCatalog.names)
         assertTrue("learnAutojsSkill" !in McpToolCatalog.names)
-        assertEquals(51, McpToolCatalog.names.size)
+        assertEquals(66, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
     }
 
     @Test
     fun everyCanonicalToolHasADeterministicCamelCaseDispatchAliasWithoutGrowingTheList() {
-        assertEquals(42, McpToolCatalog.dispatchAliases.size)
+        assertEquals(57, McpToolCatalog.dispatchAliases.size)
         McpToolCatalog.canonicalNames.forEach { canonical ->
             val alias = McpToolCatalog.dispatchAliases.getValue(canonical)
             assertEquals(camelCase(canonical), alias)

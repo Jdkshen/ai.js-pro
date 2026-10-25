@@ -202,6 +202,21 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程；不会停止三个脚本引擎。processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
             add(tool("terminal_list", "列出本 MCP 服务创建的终端任务（最多 3 个并发、保留 16 条，服务停止会终止任务）"))
             add(tool("get_build_tools", "检测手机终端当前 PATH 的 C/C++、Java、Android 编译工具，并说明内置 D8/Smali 入口；不下载安装工具链"))
+            add(tool("app_list", "列出已安装应用（PackageManager，无 root）；query 过滤 label/包名，includeSystem 默认 true，limit 最大 200", McpToolSchema.appListSchema()))
+            add(tool("app_info", "读取单个应用版本、SDK、安装路径与启动入口", McpToolSchema.appInfoSchema()))
+            add(tool("app_launch", "按包名启动应用；activity 可选（.MainActivity 简写）", McpToolSchema.appLaunchSchema()))
+            add(tool("app_open_settings", "打开系统设置首页，或指定 packageName 的应用详情页", McpToolSchema.appSettingsSchema()))
+            add(tool("app_open_url", "用系统浏览器/应用打开 http(s) 链接", McpToolSchema.appUrlSchema()))
+            add(tool("apk_install", "打开系统 APK 安装器（需用户确认，不是静默安装）；path 必须是可读 APK", McpToolSchema.apkInstallSchema()))
+            add(tool("apk_uninstall", "打开系统卸载确认页（需用户确认，不是静默卸载）", McpToolSchema.apkUninstallSchema()))
+            add(tool("ui_find", "按 text/resourceId/contentDesc/className/bounds 或坐标查找无障碍节点；返回 matches（含中心坐标）", McpToolSchema.uiFindSchema()))
+            add(tool("ui_click", "点击匹配节点或坐标；节点 ACTION_CLICK 失败时尝试可点击祖先", McpToolSchema.uiClickSchema()))
+            add(tool("ui_long_click", "长按匹配节点或坐标", McpToolSchema.uiLongClickSchema()))
+            add(tool("ui_input", "向匹配的 editable 节点写入文本；text 为要写入的内容", McpToolSchema.uiInputSchema()))
+            add(tool("ui_swipe", "在屏幕上滑动，坐标单位为屏幕像素", McpToolSchema.uiSwipeSchema()))
+            add(tool("ui_global", "全局动作：back/home/recents/notifications", McpToolSchema.uiGlobalSchema()))
+            add(tool("ui_wait", "等待匹配节点出现（阻塞轮询，上限 15s）", McpToolSchema.uiWaitSchema()))
+            add(tool("ui_scroll", "按 up/down/left/right 执行滑动手势滚动", McpToolSchema.uiScrollSchema()))
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {
@@ -348,7 +363,18 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("removed", removed)
                 addProperty("remaining", workspaces.list().size)
             })
-            else -> throw McpInvalidParamsException("未知工具：$name")
+            "ui_find" -> toolJson(McpUiActions.find(args, args.intOr("limit", 20)))
+            "ui_click" -> toolJson(McpUiActions.click(args))
+            "ui_long_click" -> toolJson(McpUiActions.longClick(args))
+            "ui_input" -> toolJson(McpUiActions.input(args, args.string("text")))
+            "ui_swipe" -> toolJson(McpUiActions.swipe(args))
+            "ui_global" -> toolJson(McpUiActions.global(args.string("action")))
+            "ui_wait" -> toolJson(McpUiActions.waitFor(args, args.intOr("timeoutMillis", 3000), args.intOr("intervalMillis", 100)))
+            "ui_scroll" -> toolJson(McpUiActions.scroll(args))
+            "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url", "apk_install", "apk_uninstall" ->
+                toolJson(McpAppTools.handle(context, name, args) ?: throw McpInvalidParamsException("未知工具：$name"))
+            else -> McpAppTools.handle(context, name, args)?.let { toolJson(it) }
+                ?: throw McpInvalidParamsException("未知工具：$name")
         }
     }
 

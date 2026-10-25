@@ -14,6 +14,7 @@
 !/tools/tests/test_m3_lazy_setup.py
 !/tools/tests/test_apk_size_audit.py
 !/tools/tests/test_mcp_probe_behavior.py
+!/tools/tests/test_aijs_ui.py
 !/tools/audit-apk-size.py
 !/tools/flutter-poc/
 /tools/flutter-poc/*

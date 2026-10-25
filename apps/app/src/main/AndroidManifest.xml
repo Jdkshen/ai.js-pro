@@ -529,6 +529,13 @@
         <service
             android:name="com.jdkshen.aijspro.engine.NodeUiBridgeService"
             android:exported="false" />
+            <receiver
+            android:name=".mcp.AijsUiReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.jdkshen.aijspro.AIJS_UI" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

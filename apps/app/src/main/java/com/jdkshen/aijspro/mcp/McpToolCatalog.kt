@@ -44,7 +44,22 @@ internal object McpToolCatalog {
         "terminal_write",
         "terminal_stop",
         "terminal_list",
-        "get_build_tools"
+        "get_build_tools",
+        "app_list",
+        "app_info",
+        "app_launch",
+        "app_open_settings",
+        "app_open_url",
+        "apk_install",
+        "apk_uninstall",
+        "ui_find",
+        "ui_click",
+        "ui_long_click",
+        "ui_input",
+        "ui_swipe",
+        "ui_global",
+        "ui_wait",
+        "ui_scroll"
     )
 
     /**

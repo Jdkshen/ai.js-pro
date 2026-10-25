@@ -34,6 +34,57 @@
 
 节点树默认最多 3000 个节点、64 层、3000ms；参数上限分别为 10000、128、15000ms。truncated=true 时不能认为已读完整页面。
 
+## 无障碍 UI 自动化（无 root）
+
+需要无障碍服务。以下工具操作当前活动窗口，不会 root、不会执行 shell 命令：
+
+| 工具 | 作用 |
+|---|---|
+| ui_find | 按 text/resourceId/contentDesc/className/bounds 或 x/y 查找节点，返回 matches（含中心坐标） |
+| ui_click | 点击匹配节点；节点不可点击时尝试可点击祖先；也支持只给 x/y |
+| ui_long_click | 长按匹配节点或坐标 |
+| ui_input | 向匹配的 editable 节点写入 text |
+| ui_swipe | 按像素坐标滑动 |
+| ui_global | back / home / recents / notifications |
+| ui_wait | 阻塞等待匹配节点出现（上限 15s） |
+| ui_scroll | 按 up/down/left/right 执行滑动手势 |
+
+选择器示例：
+
+```json
+{"name":"ui_find","arguments":{"text":"安装","limit":10}}
+{"name":"ui_click","arguments":{"text":"安装"}}
+{"name":"ui_input","arguments":{"resourceId":"com.example:id/input","text":"你好"}}
+{"name":"ui_swipe","arguments":{"x1":540,"y1":1800,"x2":540,"y2":600,"durationMillis":300}}
+{"name":"ui_global","arguments":{"action":"back"}}
+```
+
+节点匹配是精确匹配（text/contentDesc/className；className 也接受简单名）；坐标以屏幕像素计。动作失败会返回 success=false 和原因，不要把它当成功。仅遍历当前活动窗口，不覆盖其它窗口/输入法。无障碍截图仍用 capture_screen；先截图+ui_find，再点击，坐标按 sourceWidth/scale 换算。
+
+## 应用管理（无 root）
+
+`app_list`、`app_info`、`app_launch`、`app_open_settings`、`app_open_url` 使用 PackageManager/Intent，无需 root。
+
+`apk_install` 只打开系统 APK 安装器（Android 8+ 可能先要求允许安装未知应用），`apk_uninstall` 只打开系统卸载确认页；两者都必须由用户确认，**不会静默安装/卸载，也不报告“安装成功”**。返回里的 `requiresUserConfirmation=true`、`silentInstall=false`/`silentUninstall=false` 表示界面已打开，最终结果由系统 UI 决定。
+
+```json
+{"name":"app_list","arguments":{"query":"browser","includeSystem":true,"limit":20}}
+{"name":"app_launch","arguments":{"packageName":"com.android.settings"}}
+{"name":"app_open_settings","arguments":{"packageName":"com.example.app"}}
+{"name":"app_open_url","arguments":{"url":"https://example.com"}}
+```
+
+### 终端里的 aijs-ui
+
+手机终端可直接用 `/system/bin/am` 向本应用无障碍桥发命令（不需要 root；新版本 APK 才包含）：
+
+```sh
+am broadcast --user 0 -n com.jdkshen.aijspro/.mcp.AijsUiReceiver \
+  -a com.jdkshen.aijspro.AIJS_UI --es command click --ei x 500 --ei y 900
+```
+
+支持 ping/status/click/tap/longClick/swipe/back/home/recents/notifications/input/settext；结果写入应用私有 `files/aijs-ui/last-result.json`，普通 am broadcast 不展示结果，可用终端读取该文件或看 logcat tag=AijsUi。receiver 不导出，只接受同 UID 显式广播。
+
 ## 检查并执行
 
 ```json

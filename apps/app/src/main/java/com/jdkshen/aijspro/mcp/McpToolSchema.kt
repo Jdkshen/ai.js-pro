@@ -8,9 +8,9 @@ internal object McpToolSchema {
     private val integerParams = setOf(
         "offset", "limit", "maxBytes", "afterId", "timeoutSeconds",
         "olderThanHours", "keepAppliedHours", "maxNodes", "maxDepth", "windowId", "timeoutMillis",
-        "quality", "maxWidth", "maxChars", "waitMillis"
+        "quality", "maxWidth", "maxChars", "waitMillis", "x", "y", "x1", "y1", "x2", "y2", "durationMillis", "index", "intervalMillis", "maxResults"
     )
-    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited", "eof")
+    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited", "eof", "includeSystem", "exact")
 
     fun terminalSchema(): JsonObject = objectSchema("command", "workingDirectory", "timeoutSeconds",
         required = arrayOf("command")).apply {
@@ -58,6 +58,29 @@ internal object McpToolSchema {
         })
     }
 
+    fun uiFindSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+        "limit", "timeoutMillis", "exact")
+    fun uiClickSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+        "x", "y", "index", "timeoutMillis", "exact")
+    fun uiLongClickSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+        "x", "y", "index", "timeoutMillis", "exact")
+    fun uiInputSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+        "index", "timeoutMillis", "exact", required = arrayOf("text"))
+    fun uiSwipeSchema(): JsonObject = objectSchema("x1", "y1", "x2", "y2", "durationMillis",
+        required = arrayOf("x1", "y1", "x2", "y2"))
+    fun uiGlobalSchema(): JsonObject = objectSchema("action", required = arrayOf("action"))
+    fun uiWaitSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+        "timeoutMillis", "intervalMillis", "exact")
+    fun uiScrollSchema(): JsonObject = objectSchema("direction", "text", "resourceId", "contentDesc",
+        "className", "timeoutMillis", "exact")
+    fun appListSchema(): JsonObject = objectSchema("query", "includeSystem", "limit")
+    fun appInfoSchema(): JsonObject = objectSchema("packageName", required = arrayOf("packageName"))
+    fun appLaunchSchema(): JsonObject = objectSchema("packageName", "activity",
+        required = arrayOf("packageName"))
+    fun appSettingsSchema(): JsonObject = objectSchema("packageName")
+    fun appUrlSchema(): JsonObject = objectSchema("url", required = arrayOf("url"))
+    fun apkInstallSchema(): JsonObject = objectSchema("path", required = arrayOf("path"))
+    fun apkUninstallSchema(): JsonObject = objectSchema("packageName", required = arrayOf("packageName"))
     fun objectSchema(vararg names: String, required: Array<String> = emptyArray()) = JsonObject().apply {
         addProperty("type", "object")
         add("properties", JsonObject().apply {
