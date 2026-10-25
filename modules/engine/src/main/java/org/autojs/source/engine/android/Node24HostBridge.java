@@ -1250,7 +1250,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 } catch (Node24Engine.CallbackClosedException closed) {
                     return closedJavaCallback(receiver, method, args);
                 } catch (RuntimeException failure) {
-                    if (mClosed.get() || mCallbacksClosing) return closedJavaCallback(receiver, method, args);
+                    if (shouldContainCallbackError(mClosed.get() || mCallbacksClosing, failure)) {
+                        logContainedCallbackError("generated." + method, failure);
+                        return closedJavaCallback(receiver, method, args);
+                    }
                     throw failure;
                 }
                 catch (Exception failure) { throw new IllegalStateException("Java→Node 回调失败：" + method, failure); }
@@ -1309,11 +1312,31 @@ public final class Node24HostBridge implements Node24Engine.Host {
                         } catch (Node24Engine.CallbackClosedException closed) {
                             return defaultJavaValue(method.getReturnType());
                         } catch (RuntimeException failure) {
-                            if (mClosed.get() || mCallbacksClosing) return defaultJavaValue(method.getReturnType());
+                            if (shouldContainCallbackError(mClosed.get() || mCallbacksClosing, failure)) {
+                                logContainedCallbackError("NodeJsCallback." + method.getName(), failure);
+                                return defaultJavaValue(method.getReturnType());
+                            }
                             throw failure;
                         }
                     }));
         }
+    }
+
+    /**
+     * A JS error in a callback invoked from the Android main thread must not escape
+     * into Looper.loop(): keep the app alive and leave the stack in logcat. Callback
+     * cancellation is also contained; synchronous callbacks from Node threads still
+     * propagate real errors so the script can catch them.
+     */
+    private static boolean shouldContainCallbackError(boolean closing, Throwable failure) {
+        if (closing || Looper.myLooper() == Looper.getMainLooper()) return true;
+        String message = failure == null ? "" : String.valueOf(failure.getMessage());
+        return message.contains("cancelled") || message.contains("canceled");
+    }
+
+    private static void logContainedCallbackError(String context, Throwable failure) {
+        Log.e(TAG, "Node JS callback failed; contained in " + context + ": "
+                + (failure == null ? "unknown" : failure.getMessage()), failure);
     }
 
     private static Object defaultJavaValue(Class<?> type) {
