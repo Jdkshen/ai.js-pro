@@ -3,6 +3,7 @@
 给 AI 助手 / 自动化 agent 的项目约定。dsh（DeepSeek Harness）、Codex、Copilot、Claude Code 都会读这个文件。
 
 > **接手总纲（先读这个）**：[`docs/HANDOFF_AI.md`](docs/HANDOFF_AI.md) —— 主架构图、构建/发布、真机测试套路、已知缺口、分支策略。
+> **MCP 手机终端（2026-10-25，候选已验收、未发布）**：[终端与编译入口](docs/reports/2026-10-25_MCP手机终端与编译入口.md)。candidate-1245 已装 MI8；25 项本地、59 次 MCP 调用、6 项界面、真实 D8/Smali 编译通过。复用原终端，六项新工具；编译器 main 必须走独立 app_process。JCommander 反射校验器需显式 keep，修改后须用 R8 包跑真实编译。完整 C/C++/Java/Android 工具链仍需可选插件；更新源仍 dev-1244，K40 1199 未动。
 > **当前发布 dev-1244（2026-10-24）**：[更新下载修复](docs/reports/2026-10-24_dev1244更新下载修复与发布.md)：R8 网络包装类泛型需显式 keep，`-keepattributes Signature` 单独不够；最终 APK 泛型/注解检查已加入构建和发布硬门，15 项网络回归及 MI8 真实下载器/包校验通过。旧版内置下载器需浏览器首次覆盖升级；K40 保持业务。下方旧版本为历史记录。
 > **当前发布 dev-1243（2026-10-24）**：[大文件分享发布核验](docs/reports/2026-10-24_dev1243发布.md)：后台压缩/URI 准备、流式限额和清理、分享等待修复；AOT 已重建，131.27 MiB / SHA `a2195faf…`，双机清单及 MI8 完整下载通过，未安装。原手机实际分享仍待复测；下方旧版发布描述为历史记录。
 > 最新进度：[`docs/reports/2026-10-21_Node_Dex插件WebUI与K40修复.md`](docs/reports/2026-10-21_Node_Dex插件WebUI与K40修复.md)
