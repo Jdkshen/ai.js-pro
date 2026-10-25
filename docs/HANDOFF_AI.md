@@ -1,5 +1,9 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-25 最新候选 1249、未发布**：[Node 资源 Context 与 UI 进程隔离](reports/2026-10-25_Node资源Context与UI进程隔离.md)。补齐 context.loadResources、编译布局 recreate；每 job 资源独立，旧 Node UI/Dialogs 在 `:nodeui`，work/settings 留主进程。843 JVM + MI8 最终 release/R8 资源/20 轮重建/进程退出重连通过；134.26 MiB，SHA `774ba19e…`。MI8 已装 1249、K40 1199 未动、更新源仍 dev-1247。原听海项目未拿到；Rhino 传统 Activity 还未迁出主进程。
+
+> **2026-10-25 本轮修复，候选 1248、未发布**：[编辑器剪贴板与全进程停止修复](reports/2026-10-25_编辑器剪贴板与全进程停止修复.md)。包含长按 Ace renderer 兼容、原生复制剪切粘贴、主应用三引擎全进程停止、独立 APK 的主进程至 `:script` 停止中继及新模板。小米 8 验证；K40 业务未动，更新源仍 dev-1247。独立 APK 须重新打包才能获得修复。
+
 > **2026-10-25 候选验收通过、未发布**：[MCP 手机终端与编译入口](reports/2026-10-25_MCP手机终端与编译入口.md)。既有终端/MCP 共用底层，六项新工具；candidate-1245 已装 MI8，25 项本地、59 次 MCP 调用、6 项界面与真实 D8/Smali 编译通过。131.32 MiB / SHA `f72c0ceb…`，更新源仍 dev-1244，K40 仍 1199。完整 C/C++/Java 源码/Android 工具链另走可选插件，未声称支持端到端 APK 构建。
 
 > **工具链范围（2026-10-25）**：用户决定不做手机端 Java/C/C++/APK 源码编译工具链，只保留 MCP 终端控制与既有 D8/Smali；工具链 A-E 插件/预研已回退。

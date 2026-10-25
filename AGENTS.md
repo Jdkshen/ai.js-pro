@@ -1,8 +1,11 @@
 # AGENTS.md
 
+> **最新候选 1249（2026-10-25，MI8 已验、未发布）**：[Node 资源 Context 与 UI 进程隔离](docs/reports/2026-10-25_Node资源Context与UI进程隔离.md)。补齐 `$autojs.androidContext.loadResources`、独立资源/主题/inflater、编译 layoutId 的 recreate；旧 Node UI/对话框迁到 `:nodeui`，work/settings 保留主进程。843 JVM、7 组 Node 契约、MI8 资源与 20 轮重建及 renderer 退出隔离通过。最终 R8 包 134.26 MiB、SHA `774ba19e…`，22 ELF16KB/Retrofit DEX 通过；更新源仍 dev-1247，K40 未动。Rhino 传统 UI 仍有主进程路径，原听海项目未取得，不得宣称全部高级版 UI 已等价。
+
 给 AI 助手 / 自动化 agent 的项目约定。dsh（DeepSeek Harness）、Codex、Copilot、Claude Code 都会读这个文件。
 
 > **接手总纲（先读这个）**：[`docs/HANDOFF_AI.md`](docs/HANDOFF_AI.md) —— 主架构图、构建/发布、真机测试套路、已知缺口、分支策略。
+> **候选 1248（2026-10-25，MI8 已验、未发布）**：[编辑器剪贴板与全进程停止修复](docs/reports/2026-10-25_编辑器剪贴板与全进程停止修复.md)。Ace 1.44 长按需 `getClientPosition` 适配；原生复制剪切粘贴、主应用三引擎 / Node 三槽全局停止和独立 APK 停止中继、新 inrt 模板。App 390 / inrt 9 JVM 通过，最终 release/R8 真机回归通过；134.26 MiB，SHA `0aa1c2e4…`。MI8 1248，K40 1199 未动，更新源仍 dev-1247。旧独立 APK 必须重新打包；保持子进程 Glide 初始化，不要随主进程职责一起跳过。
 > **MCP 手机终端（2026-10-25，候选已验收、未发布）**：[终端与编译入口](docs/reports/2026-10-25_MCP手机终端与编译入口.md)。candidate-1245 已装 MI8；25 项本地、59 次 MCP 调用、6 项界面、真实 D8/Smali 编译通过。复用原终端，六项新工具；编译器 main 必须走独立 app_process。JCommander 反射校验器需显式 keep，修改后须用 R8 包跑真实编译。**用户已决定不做 Java/C/C++/APK 源码编译工具链**：只保留 MCP 终端控制与既有 D8/Smali；不要重新引入 buildtools/编译插件。更新源已为 dev-1247；K40 1199 未动。
 > **当前发布 dev-1247（2026-10-25）**：[MCP 无障碍 UI/工具分类](docs/reports/2026-10-25_MCP无障碍UI自动化.md)：ui_* 8 项、app_* 7 项、aijs-ui 终端桥、8 类工具目录；release+R8 测试签名，SHA `0eac1ef5…`；GitHub Release <https://github.com/Jdkshen/ai.js-pro/releases/tag/dev-1247>；MI8 已装，K40 未动。
 > **当前发布 dev-1244（2026-10-24）**：[更新下载修复](docs/reports/2026-10-24_dev1244更新下载修复与发布.md)：R8 网络包装类泛型需显式 keep，`-keepattributes Signature` 单独不够；最终 APK 泛型/注解检查已加入构建和发布硬门，15 项网络回归及 MI8 真实下载器/包校验通过。旧版内置下载器需浏览器首次覆盖升级；K40 保持业务。下方旧版本为历史记录。
