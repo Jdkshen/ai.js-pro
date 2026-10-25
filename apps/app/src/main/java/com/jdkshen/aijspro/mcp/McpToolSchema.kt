@@ -8,9 +8,17 @@ internal object McpToolSchema {
     private val integerParams = setOf(
         "offset", "limit", "maxBytes", "afterId", "timeoutSeconds",
         "olderThanHours", "keepAppliedHours", "maxNodes", "maxDepth", "windowId", "timeoutMillis",
-        "quality", "maxWidth", "maxChars"
+        "quality", "maxWidth", "maxChars", "waitMillis"
     )
-    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited")
+    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited", "eof")
+
+    fun terminalSchema(): JsonObject = objectSchema("command", "workingDirectory", "timeoutSeconds",
+        required = arrayOf("command")).apply {
+        getAsJsonObject("properties").add("env", JsonObject().apply {
+            addProperty("type", "object")
+            add("additionalProperties", JsonObject().apply { addProperty("type", "string") })
+        })
+    }
     fun callApiSchema(): JsonObject = objectSchema("engine", "module", "name", "timeoutSeconds",
         required = arrayOf("engine", "name")).apply {
         getAsJsonObject("properties").add("args", JsonObject().apply {

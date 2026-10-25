@@ -98,6 +98,39 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 不要把工作区写入当作已修改真实文件；必须完成 workspace_request_apply，并检查返回结果。
 
+## 手机终端与编译
+
+MCP 和应用内已有终端复用同一执行底层，使用手机应用 UID，无需占用 Rhino/QuickJS/Node 运行槽。它是管道终端（`pty=false`），支持编译日志和 stdin；全屏编辑器、终端控制序列、Ctrl-C 作业控制不属于本接口。不要把 cwd 校验当成 shell 沙箱：workingDirectory 必须在 MCP 操作目录内，命令仍可访问应用权限允许的其他路径。
+
+1. `get_build_tools` 检测 PATH 中 clang/clang++、javac/java、Gradle、aapt2、zipalign、apksigner 等；`found=true` 仅表示定位到命令，`verified=false` 表示尚未试编译。
+2. `terminal_exec(command, workingDirectory?, env?, timeoutSeconds?)` 异步创建任务，立即返回 jobId。env 是字符串对象。最多 3 个并发，保留最近 16 条。timeoutSeconds 默认 300、范围 1..3600；这是命令执行期限，到期终止进程组。
+3. `terminal_read(jobId, offset?, maxChars?, waitMillis?)` 按上次 nextOffset 继续读合并后的 stdout/stderr。offset/nextOffset 是 UTF-16 字符偏移，默认 0；maxChars 默认 16384、最大 65536；waitMillis 为 0..10000，仅控制等待输出，不会停止任务。每任务保留最近 256Ki 字符；truncated=true 时有旧输出被淘汰，可将完整编译日志重定向到项目文件。
+4. `terminal_write(jobId,input?,eof?)` 排队写 stdin，不自动补换行；eof=true 关闭输入。accepted 只表示入队，读取结果中的 inputError/pendingInput 确认是否写入。
+5. `terminal_stop(jobId)` 只停止该命令及同进程组子进程，`terminal_list` 查询本 MCP 所有终端任务。MCP 服务停止会清理自己的终端，应用界面的终端由界面生命周期独立管理。
+
+状态：STARTING / RUNNING / SUCCEEDED / FAILED / STOPPED / TIMED_OUT。停止后 processActive 可能短暂仍为 true，应继续读取直到清理完成。判断编译成功需状态 SUCCEEDED、exitCode=0，并检查实际产物；服务/应用进程重启后任务记录不保留。后台守护进程自行 setsid 脱离进程组不受本接口管理，不要用于启动守护服务。
+
+```json
+{"name":"terminal_exec","arguments":{"command":"pwd; ls -la","timeoutSeconds":30}}
+```
+
+```json
+{"name":"terminal_read","arguments":{"jobId":"terminal-返回的ID","offset":0,"waitMillis":1000}}
+```
+
+内置已有 D8 和 Smali，通过独立 app_process 执行，编译器 CLI 的退出不会退出宿主。环境变量 AIJS_APK 是当前 APK 路径，AIJS_BUILD_MAIN 是编译入口：
+
+```sh
+# JAR/class → DEX；D8 需 Android 8.0/API26+。Java 源码必须先由 javac/ECJ 编译成 class。
+mkdir -p out && CLASSPATH="$AIJS_APK" app_process /system/bin "$AIJS_BUILD_MAIN" d8 --min-api 26 --output out input.jar
+# Smali → DEX
+CLASSPATH="$AIJS_APK" app_process /system/bin "$AIJS_BUILD_MAIN" smali assemble src -o classes.dex
+```
+
+终端本身不等于完整工具链。主 APK 没有预装 clang、JDK/javac、完整 Android SDK/NDK/Gradle；C/C++、Java 源码、完整 Android 项目需另行配置手机 ABI/Android 兼容工具链。电脑 SDK/NDK 的 Windows/Linux 主机可执行文件不能直接在手机运行，`./gradlew assembleDebug` 也要求兼容 Java 和资源编译器。Android 共享存储通常不能执行 ELF；普通应用还受到可执行文件存储和 SELinux 规则限制。大型工具链应走可选插件，不往主 APK 塞整套 SDK。
+
+应用内终端同步增加实时输出、输入与停止，退出界面会清理自己的命令；其默认执行期限为 1 小时，界面仅保留最近 64Ki 字符。
+
 ## 常见错误与修法
 
 | 返回/现象 | 常见原因 | 正确做法 |

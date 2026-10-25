@@ -6,6 +6,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class McpToolSchemaTest {
+    @Test fun terminalEnvironmentAndPollingHaveNativeJsonTypes() {
+        val schema = McpToolSchema.terminalSchema()
+        val env = schema.getAsJsonObject("properties").getAsJsonObject("env")
+        assertEquals("object", env.get("type").asString)
+        assertEquals("string", env.getAsJsonObject("additionalProperties").get("type").asString)
+        val poll = McpToolSchema.objectSchema("waitMillis", "eof").getAsJsonObject("properties")
+        assertEquals("integer", poll.getAsJsonObject("waitMillis").get("type").asString)
+        assertEquals("boolean", poll.getAsJsonObject("eof").get("type").asString)
+    }
+
     @Test
     fun recursiveListingAndCleanupPublishTheTypesTheirHandlersAccept() {
         val properties = McpToolSchema.objectSchema(

@@ -38,7 +38,13 @@ internal object McpToolCatalog {
         "list_engines",
         "call_engine_api",
         "list_overlays",
-        "close_overlays"
+        "close_overlays",
+        "terminal_exec",
+        "terminal_read",
+        "terminal_write",
+        "terminal_stop",
+        "terminal_list",
+        "get_build_tools"
     )
 
     /**

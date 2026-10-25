@@ -36,6 +36,8 @@ internal class McpTools(private val context: Context, private val event: (String
         if (it != scriptsRoot && !it.path.startsWith(scriptsRoot.path + File.separator)) error("操作目录无效")
     }
     private val workspaces = McpWorkspaceStore(context, root)
+    private val terminalBackend = McpAndroidTerminal(context)
+    private val terminals = McpTerminalJobs(root, terminalBackend::launch)
     private val runs = ConcurrentHashMap<String, RunRecord>()
     private val nextRun = AtomicInteger(1)
     private val cursors = LinkedHashMap<String, CursorPage>()
@@ -116,6 +118,7 @@ internal class McpTools(private val context: Context, private val event: (String
     }
 
     fun stopRuns() {
+        terminals.close()
         runs.values.filter { it.status in ACTIVE_STATES }.forEach { record ->
             record.stopRequested = true; record.stopReason = "service_stopped"
             record.status = "STOPPED"; record.finishedAt = System.currentTimeMillis()
@@ -132,7 +135,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
-        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.5.0") })
+        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.6.0") })
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
             "",
@@ -143,6 +146,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "- wait 超时返回 timedOut=true，任务仍可能在跑：用 wait_execution/get_execution 继续，不要当成成功。",
             "- 修改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply；workspace_write 不会直接落盘。",
             "- 读取控件/截图需无障碍服务；capture_screen 缩小后坐标按 sourceWidth/scale 换算。",
+            "- 手机终端：terminal_exec → terminal_read(offset=nextOffset) → terminal_write/terminal_stop；先 get_build_tools 确认工具链。普通应用 UID、非 PTY；cwd 校验不限制 shell 命令访问其他已授权文件。",
             "",
             "常用示例：",
             "run_script 内存脚本：{\"name\":\"run_script\",\"arguments\":{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}}",
@@ -192,6 +196,12 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("call_engine_api", "在指定真实引擎调用全局或模块函数，支持 JSON args 和 Promise；回调、UI、Java 对象组合使用 run_script", McpToolSchema.callApiSchema()))
             add(tool("list_overlays", "列出各进程登记中的浮窗（pid/ownerEngineId/engine/kind/touchable/ageMs），用于诊断 stop 后是否有 View 残留"))
             add(tool("close_overlays", "关闭浮窗：指定 executionId 等同 stop_script；省略则等同 stop_all_scripts；返回剩余 overlayCount", objSchema("executionId")))
+            add(tool("terminal_exec", "在手机现有终端底层异步运行 shell 命令，立即返回 jobId；普通应用权限，非 PTY，stdout/stderr 合并。workingDirectory 在操作目录内；命令本身可访问应用有权限的文件。env 为字符串对象。timeoutSeconds 默认 300、最大 3600，到期终止进程组；先 get_build_tools 查编译器", McpToolSchema.terminalSchema()))
+            add(tool("terminal_read", "读取终端状态/输出；offset=上次 nextOffset（UTF-16 字符偏移），maxChars 默认 16384/最大 65536；waitMillis=0..10000 长轮询。仅保留最近 256Ki 字符，truncated=true 表示旧输出已淘汰；processActive=false 才表示清理完成", objSchema("jobId", "offset", "maxChars", "waitMillis", required = arrayOf("jobId"))))
+            add(tool("terminal_write", "向运行中的终端排队写入 stdin；input 不自动添加换行，eof=true 关闭输入。返回 accepted 仅表示入队，写入失败见 terminal_read.inputError", objSchema("jobId", "input", "eof", required = arrayOf("jobId"))))
+            add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程；不会停止三个脚本引擎。processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
+            add(tool("terminal_list", "列出本 MCP 服务创建的终端任务（最多 3 个并发、保留 16 条，服务停止会终止任务）"))
+            add(tool("get_build_tools", "检测手机终端当前 PATH 的 C/C++、Java、Android 编译工具，并说明内置 D8/Smali 入口；不下载安装工具链"))
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {
@@ -215,6 +225,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("activeMcpRuns", runs.values.count { it.status in ACTIVE_STATES })
                 addProperty("retainedExecutions", runs.size); addProperty("workspaces", workspaces.list().size)
                 addProperty("pendingWorkspaceApprovals", workspaces.list().count { it.pendingApproval })
+                addProperty("activeTerminalJobs", terminals.list().count { it.get("processActive").asBoolean })
                 addProperty("overlayCount", OverlayStateReader.countAggregated(context))
                 addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
                 add("engineDiagnostics", engineDiagnostics())
@@ -275,6 +286,31 @@ internal class McpTools(private val context: Context, private val event: (String
             "learn_autojs_skill" -> toolResult(context.assets.open("mcp/AIjs-MCP-Guide.md").bufferedReader(Charsets.UTF_8).use { it.readText() })
             "stop_all_scripts" -> stopAllScripts()
             "get_mcp_log" -> toolJson(getMcpLog(args))
+            "terminal_exec" -> {
+                requireExecution()
+                val env = linkedMapOf<String, String>()
+                args.get("env")?.let { element ->
+                    require(element.isJsonObject) { "env 必须是字符串对象" }
+                    element.asJsonObject.entrySet().forEach { (key, value) ->
+                        require(value.isJsonPrimitive && value.asJsonPrimitive.isString) { "env.$key 必须是字符串" }
+                        env[key] = value.asString
+                    }
+                }
+                toolJson(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""), env,
+                    terminalInt(args, "timeoutSeconds", 300)))
+            }
+            "terminal_read" -> toolJson(terminals.read(args.string("jobId"), terminalLong(args, "offset", 0),
+                terminalInt(args, "maxChars", 16384), terminalInt(args, "waitMillis", 0)))
+            "terminal_write" -> {
+                val eof = args.get("eof")?.let {
+                    require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) { "eof 必须是布尔值" }
+                    it.asBoolean
+                } ?: false
+                toolJson(terminals.write(args.string("jobId"), if (args.has("input")) args.string("input") else "", eof))
+            }
+            "terminal_stop" -> toolJson(terminals.stop(args.string("jobId")))
+            "terminal_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { terminals.list().forEach { add(it) } }) })
+            "get_build_tools" -> toolJson(McpBuildTools.inspect(terminalBackend, root))
             "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
             "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
             "workspace_read" -> toolJson(readBytes(workspaces.read(args.string("workspaceId"), args.string("path")), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
@@ -816,6 +852,16 @@ internal class McpTools(private val context: Context, private val event: (String
     }
     /** task-118：MCP 服务开启即授权读写/运行。 */
     private fun requireWrite() { /* no-op：不再要求额外写入授权 */ }
+    private fun terminalLong(args: JsonObject, key: String, fallback: Long): Long {
+        val value = args.get(key) ?: return fallback
+        require(value.isJsonPrimitive && value.asJsonPrimitive.isNumber) { "$key 必须是整数" }
+        return try { value.asBigDecimal.longValueExact() } catch (_: ArithmeticException) { throw IllegalArgumentException("$key 必须是整数且不能超出范围") }
+    }
+    private fun terminalInt(args: JsonObject, key: String, fallback: Int): Int {
+        val value = terminalLong(args, key, fallback.toLong())
+        require(value in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) { "$key 超出范围" }
+        return value.toInt()
+    }
     private fun logLevel(level: Int) = when (level) { Log.VERBOSE -> "VERBOSE"; Log.DEBUG -> "DEBUG"; Log.INFO -> "INFO"; Log.WARN -> "WARN"; Log.ERROR -> "ERROR"; Log.ASSERT -> "ASSERT"; else -> level.toString() }
     private fun <T> page(all: List<T>, offset: Int, limit: Int, convert: (T) -> JsonElement) = JsonObject().apply {
         val start = offset.coerceIn(0, all.size); val size = limit.coerceIn(1, 200); val end = (start + size).coerceAtMost(all.size)
@@ -842,7 +888,7 @@ internal class McpTools(private val context: Context, private val event: (String
     companion object {
         private val SUPPORTED_PROTOCOLS = setOf("2024-11-05", "2025-03-26", "2025-06-18")
         private val ACTIVE_STATES = setOf("QUEUED", "RUNNING")
-        private val TEXT_EXTENSIONS = setOf("js", "json", "txt", "md", "xml", "css", "html")
+        private val TEXT_EXTENSIONS = setOf("js", "json", "txt", "md", "xml", "css", "html", "c", "h", "cc", "cpp", "hpp", "java", "kt", "smali", "gradle", "kts", "properties", "cmake", "sh")
         private const val MAX_READ_FILE_BYTES = 8L * 1024 * 1024
         private const val MAX_SEARCH_FILES = 2000
         private const val MAX_SEARCH_HITS = 2000

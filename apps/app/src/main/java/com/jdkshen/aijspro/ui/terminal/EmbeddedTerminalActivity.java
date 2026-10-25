@@ -9,16 +9,19 @@ import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
+import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.jdkshen.aijspro.theme.AppThemePalette;
 import com.jdkshen.aijspro.theme.AppThemeRepository;
+import com.jdkshen.aijspro.mcp.McpAndroidTerminal;
+import com.jdkshen.aijspro.mcp.McpTerminalJobs;
+import com.google.gson.JsonObject;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
+import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -33,7 +36,10 @@ public final class EmbeddedTerminalActivity extends Activity {
     private EditText mCommand;
     private ScrollView mScrollView;
     private File mWorkingDirectory;
-    private volatile Process mRunningProcess;
+    private McpTerminalJobs mTerminal;
+    private volatile String mJobId;
+    private volatile boolean mRunning;
+    private Button mStop;
     private AppThemePalette mPalette;
     private LinearLayout mRootLayout;
     private final AppThemeRepository.ThemeListener mThemeListener = this::applyThemePalette;
@@ -49,6 +55,8 @@ public final class EmbeddedTerminalActivity extends Activity {
         File requestedDirectory = requestedPath == null ? null : new File(requestedPath);
         mWorkingDirectory = requestedDirectory != null && requestedDirectory.isDirectory()
                 ? requestedDirectory : getFilesDir();
+        McpAndroidTerminal backend = new McpAndroidTerminal(this);
+        mTerminal = new McpTerminalJobs(new File("/"), backend::launch, 1, 4, 256 * 1024);
 
         int padding = Math.round(12f * getResources().getDisplayMetrics().density);
         LinearLayout root = new LinearLayout(this);
@@ -89,9 +97,19 @@ public final class EmbeddedTerminalActivity extends Activity {
         });
         root.addView(mCommand, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        mStop = new Button(this);
+        mStop.setText("停止当前命令");
+        mStop.setEnabled(false);
+        mStop.setOnClickListener(view -> {
+            String id = mJobId;
+            if (id != null) mTerminal.stop(id);
+        });
+        root.addView(mStop, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(root);
         applyWindowSystemUi();
         appendLine("AI.js Pro 终端");
+        appendLine("实时输出 · 输入后发送换行 · 停止会结束当前命令及子进程\n默认超时 1 小时；编译器需单独配置。D8/Smali 可用 $AIJS_APK / $AIJS_BUILD_MAIN 调用。");
         appendPrompt();
         mCommand.requestFocus();
         String initialCommand = getIntent().getStringExtra(EXTRA_INITIAL_COMMAND);
@@ -106,6 +124,14 @@ public final class EmbeddedTerminalActivity extends Activity {
         if (TextUtils.isEmpty(command)) return;
         mCommand.setText("");
         appendLine(command);
+        if (mRunning) {
+            try {
+                String id = mJobId;
+                if (id == null) appendLine("命令启动中，请稍后输入");
+                else mTerminal.write(id, command + "\n", false);
+            } catch (Exception error) { appendLine("输入失败：" + error.getMessage()); }
+            return;
+        }
         if ("clear".equals(command)) {
             mConsole.setText("");
             appendPrompt();
@@ -120,7 +146,8 @@ public final class EmbeddedTerminalActivity extends Activity {
             appendPrompt();
             return;
         }
-        mCommand.setEnabled(false);
+        mRunning = true;
+        mCommand.setHint("向运行中的命令输入…");
         File directory = mWorkingDirectory;
         mExecutor.execute(() -> executeShellCommand(command, directory));
     }
@@ -139,34 +166,49 @@ public final class EmbeddedTerminalActivity extends Activity {
     }
 
     private void executeShellCommand(String command, File directory) {
-        StringBuilder output = new StringBuilder();
         try {
-            ProcessBuilder builder = new ProcessBuilder("/system/bin/sh", "-c", command);
-            builder.directory(directory);
-            builder.redirectErrorStream(true);
-            builder.environment().put("HOME", directory.getAbsolutePath());
-            builder.environment().put("TERM", "dumb");
-            mRunningProcess = builder.start();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(mRunningProcess.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) output.append(line).append('\n');
+            JsonObject state = mTerminal.execute(command, directory.getCanonicalPath(), Collections.emptyMap(), 3600);
+            mJobId = state.get("jobId").getAsString();
+            postTerminal(() -> mStop.setEnabled(true));
+            long offset = 0;
+            do {
+                state = mTerminal.read(mJobId, offset, 16384, 1000);
+                if (state.get("truncated").getAsBoolean()) postTerminal(() -> appendLine("[旧输出已截断；完整编译日志请重定向到文件]"));
+                String text = state.get("output").getAsString();
+                if (!text.isEmpty()) postTerminal(() -> appendOutput(text));
+                offset = state.get("nextOffset").getAsLong();
+                if (state.get("processActive").getAsBoolean() && !text.isEmpty()) Thread.sleep(50);
+            } while (state.get("processActive").getAsBoolean() || state.get("hasMore").getAsBoolean());
+            String status = state.get("status").getAsString();
+            if (!"SUCCEEDED".equals(status)) {
+                String message = "\n[" + status + (state.has("exitCode") ? " 退出码 " + state.get("exitCode").getAsInt() : "")
+                        + (state.has("error") ? " " + state.get("error").getAsString() : "") + "]";
+                postTerminal(() -> appendLine(message));
             }
-            int exitCode = mRunningProcess.waitFor();
-            if (exitCode != 0) output.append("[退出码 ").append(exitCode).append("]\n");
         } catch (Exception error) {
-            output.append(error.getMessage()).append('\n');
+            postTerminal(() -> appendLine(String.valueOf(error.getMessage())));
         } finally {
-            mRunningProcess = null;
+            mJobId = null;
+            mRunning = false;
         }
-        String result = output.toString();
-        runOnUiThread(() -> {
-            if (!result.isEmpty()) appendLine(result.endsWith("\n")
-                    ? result.substring(0, result.length() - 1) : result);
+        postTerminal(() -> {
             appendPrompt();
-            mCommand.setEnabled(true);
+            mCommand.setHint("输入命令…");
+            mStop.setEnabled(false);
             mCommand.requestFocus();
         });
+    }
+
+    private void postTerminal(Runnable action) {
+        runOnUiThread(() -> { if (!isFinishing() && !isDestroyed()) action.run(); });
+    }
+
+    private void appendOutput(String text) {
+        mConsole.append(text);
+        if (mConsole.length() > 65536) {
+            mConsole.setText(mConsole.getText().subSequence(mConsole.length() - 65536, mConsole.length()));
+        }
+        mScrollView.post(() -> mScrollView.fullScroll(ScrollView.FOCUS_DOWN));
     }
 
     private void appendPrompt() {
@@ -174,9 +216,7 @@ public final class EmbeddedTerminalActivity extends Activity {
     }
 
     private void appendLine(String text) {
-        if (mConsole.length() > 0) mConsole.append("\n");
-        mConsole.append(text);
-        mScrollView.post(() -> mScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+        appendOutput((mConsole.length() > 0 ? "\n" : "") + text + "\n");
     }
 
     private static String stripQuotes(String value) {
@@ -198,6 +238,8 @@ public final class EmbeddedTerminalActivity extends Activity {
         mCommand.setTextColor(palette.terminalForeground);
         mCommand.setHintTextColor(palette.textSecondary);
         mCommand.setBackgroundColor(palette.surfaceSecondary);
+        mStop.setTextColor(palette.textPrimary);
+        mStop.setBackgroundTintList(android.content.res.ColorStateList.valueOf(palette.surfaceSecondary));
         getWindow().setStatusBarColor(palette.statusBar);
         getWindow().setNavigationBarColor(palette.navigationBar);
         applyWindowSystemUi();
@@ -241,8 +283,7 @@ public final class EmbeddedTerminalActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        Process process = mRunningProcess;
-        if (process != null) process.destroy();
+        if (mTerminal != null) mTerminal.close();
         mExecutor.shutdownNow();
         super.onDestroy();
     }

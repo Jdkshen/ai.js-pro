@@ -73,6 +73,8 @@
 -keep class com.google.android.material.** { *; }
 -keep class org.opencv.** { *; }
 -keep class org.jf.** { *; }
+# Smali's terminal CLI instantiates annotation-selected validators/converters by reflection.
+-keep class com.beust.jcommander.** { *; }
 # D8 selects a threading provider by class name; these constructors are invisible
 # to R8. Guarded by the Java 17 jar-to-dex release device probe.
 -keep class com.android.tools.r8.threading.** { *; }

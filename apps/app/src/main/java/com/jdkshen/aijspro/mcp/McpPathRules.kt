@@ -18,7 +18,10 @@ internal object McpPathRules {
             normalized.startsWith('/') || File(normalized).isAbsolute -> File(normalized)
             else -> File(canonicalRoot, normalized)
         }.canonicalFile
-        if (candidate != canonicalRoot && !candidate.path.startsWith(canonicalRoot.path + File.separator)) {
+        // A filesystem root already ends in '/', or '\\' on Windows. Appending again
+        // rejects every absolute child (the phone terminal deliberately uses '/' as root).
+        val prefix = canonicalRoot.path.trimEnd(File.separatorChar) + File.separator
+        if (candidate != canonicalRoot && !candidate.path.startsWith(prefix)) {
             throw IllegalArgumentException(outsideMessage)
         }
         return candidate

@@ -12,6 +12,14 @@ class McpPathRulesTest {
     val temporaryFolder = TemporaryFolder()
 
     @Test
+    fun filesystemRootDoesNotGainADoubleSeparator() {
+        val child = temporaryFolder.newFolder("terminal-cwd").canonicalFile
+        val root = child.toPath().root.toFile()
+        assertEquals(child, McpPathRules.resolve(root, child.absolutePath))
+        assertEquals(root.canonicalFile, McpPathRules.resolve(root, ""))
+    }
+
+    @Test
     fun resolvesRelativeBackslashAndRootAbsolutePathsInsideTheRoot() {
         val root = temporaryFolder.newFolder("root")
         val nested = File(root, "a/b").apply { mkdirs() }
