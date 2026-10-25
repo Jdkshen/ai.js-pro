@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-26 当前发布 dev-1255**：[API 文档直接打开](reports/2026-10-26_API文档直接打开与dev1255.md)。主界面顶部「API 文档」直接进入搜索页，不再跳中间指南；一次返回主页。AOT 重建、MI8 最终 R8 包两轮 9 项检查及实际安装哈希通过；GitHub latest/LAN 均1255，135.60 MiB，SHA `3f69dc2e…`。K40 未动，API 运行能力及 756 条索引仍沿用1254。
+
 > **2026-10-26 当前发布 dev-1254**：[API 离线文档与发布验收](reports/2026-10-26_API离线文档与dev1254.md)。新增应用内离线 API 搜索（756 条参考条目）、[三引擎使用手册](guides/API_REFERENCE.md)与 [Node UI/资源接口](guides/NODE_UI_API.md)。397 App JVM、6 文档测试、MI8 文档与最终 R8 包复验通过；135.60 MiB，SHA `664410e2…`。GitHub latest 和 LAN 更新源均已发布1254，MI8已装且已安装 APK 摘要一致，K40未动。包含此前1250/1251/1253修复。文档数量不是高级版兼容率；改指南后运行 `python tools/build-api-reference.py`，preBuild 检查生成资产。下方旧版本状态为历史记录。
 
 > **2026-10-26 当前发布 dev-1253（仅 LAN，SHA `fc9c3312…`）**：更新源 `http://192.168.10.7:8080/update.json` 为 1253，MI8 已装，K40 1199 未动。包含：MCP 连接指南改为 App 内本地 HTML/WebView（`assets/docs/mcp-guide.html`，不联网）、设备连接页完整指南按钮、Rikkahub 红色备注截图；dev-1251 修复 Node 主线程 JS 回调异常逃逸崩溃；dev-1250 含编辑器剪贴板/全进程停止、Node 资源 Context 与 `:nodeui` 隔离。GitHub Release 仍为 dev-1251（用户要求不频繁更新）。详见 [MCP 指南本地化](reports/2026-10-25_MCP连接指南本地化与dev1253.md)、[App 入口](reports/2026-10-25_MCP连接指南入口与dev1252.md)、[回调热修](reports/2026-10-25_Node回调异常逃逸修复.md)。

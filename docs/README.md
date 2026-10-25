@@ -2,9 +2,9 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
-API 文档：**[三引擎使用手册](guides/API_REFERENCE.md)** · **[Node UI 与 Java 资源接口](guides/NODE_UI_API.md)** · [Node 自动化与图色](guides/Node24基础自动化API.md) · [Node 控件选择器](guides/Node24控件选择器API.md)。新版 APK 的「本地使用指南」内可离线搜索，覆盖范围与验证记录见 [本轮报告](reports/2026-10-26_API离线文档与dev1254.md)。
+API 文档：**[三引擎使用手册](guides/API_REFERENCE.md)** · **[Node UI 与 Java 资源接口](guides/NODE_UI_API.md)** · [Node 自动化与图色](guides/Node24基础自动化API.md) · [Node 控件选择器](guides/Node24控件选择器API.md)。新版 APK 点击主界面顶部「API 文档」即可直接离线搜索；入口见 [dev-1255](reports/2026-10-26_API文档直接打开与dev1255.md)，覆盖范围见 [文档报告](reports/2026-10-26_API离线文档与dev1254.md)。
 
-> **当前状态（2026-10-26）**：GitHub latest / LAN 更新源为 **dev-1254**，MI8 已装且实际 APK 摘要一致；新增离线 API 文档与搜索，见[发布验收报告](reports/2026-10-26_API离线文档与dev1254.md)。包含此前 Node 资源 Context、编译布局 recreate、独立 UI 进程、回调异常捕获、剪贴板/停止与 MCP 本地指南。K40 业务未动；Rhino 传统 UI、高级版全量 API 和真实 16KB 内核仍有待办。下方旧版条目记录对应时点。
+> **当前状态（2026-10-26）**：GitHub latest / LAN 更新源为 **dev-1255**，MI8 已装且实际 APK 摘要一致；文档入口已改为顶部一点直达，见[发布验收报告](reports/2026-10-26_API文档直接打开与dev1255.md)。包含离线 API 搜索及此前 Node 资源 Context、编译布局 recreate、独立 UI 进程、回调异常捕获、剪贴板/停止与 MCP 本地指南。K40 业务未动；Rhino 传统 UI、高级版全量 API 和真实 16KB 内核仍有待办。下方旧版条目记录对应时点。
 
 ## 当前状态
 

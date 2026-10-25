@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **当前发布 dev-1255（2026-10-26）**：[API 文档直接打开](docs/reports/2026-10-26_API文档直接打开与dev1255.md)。顶部「API 文档」一点直达离线搜索，不再经过 GuidePage，首次打开后一次返回回主页。Flutter AOT 重建、最终 R8 包 MI8 两轮 9 项检查通过；135.60 MiB，SHA `3f69dc2e…`；GitHub latest/LAN 已发布，MI8 已装且实际 APK 摘要一致，K40 未动。三引擎接口与 756 条索引未变。
+
 > **当前发布 dev-1254（2026-10-26）**：[API 离线文档与发布验收](docs/reports/2026-10-26_API离线文档与dev1254.md)。APK 内「本地使用指南」→「三引擎 API 文档 · 离线搜索」；756 条参考条目，当前使用手册与 Node 专题/传统 Rhino 参考分开标注。397 App JVM、6 文档测试、MI8 文档 11 项及最终 R8 包 11 项复验通过；135.60 MiB，SHA `664410e2…`；GitHub/LAN 已发布，MI8 已装且 base.apk 哈希一致，K40 未动。文档源见 [API_REFERENCE.md](docs/guides/API_REFERENCE.md)、[NODE_UI_API.md](docs/guides/NODE_UI_API.md)。改指南后须运行 `python tools/build-api-reference.py` 并提交生成资产；preBuild 会检查过期。下方旧版状态保留为历史记录。
 
 > **最新候选 1249（2026-10-25，MI8 已验、未发布）**：[Node 资源 Context 与 UI 进程隔离](docs/reports/2026-10-25_Node资源Context与UI进程隔离.md)。补齐 `$autojs.androidContext.loadResources`、独立资源/主题/inflater、编译 layoutId 的 recreate；旧 Node UI/对话框迁到 `:nodeui`，work/settings 保留主进程。843 JVM、7 组 Node 契约、MI8 资源与 20 轮重建及 renderer 退出隔离通过。最终 R8 包 134.26 MiB、SHA `774ba19e…`，22 ELF16KB/Retrofit DEX 通过；更新源仍 dev-1247，K40 未动。Rhino 传统 UI 仍有主进程路径，原听海项目未取得，不得宣称全部高级版 UI 已等价。
