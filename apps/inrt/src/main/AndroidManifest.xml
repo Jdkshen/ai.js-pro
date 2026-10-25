@@ -90,6 +90,13 @@
             android:name=".timing.InrtExactAlarmPromptReceiver"
             android:exported="false"/>
 
+        <!-- 音量上键停止中继：主进程无障碍通道 -> 实际跑脚本的 :script。
+             显式、非导出，只接受同包同 UID 广播；不控制其它应用。 -->
+        <receiver
+            android:name=".autojs.InrtVolumeUpStopReceiver"
+            android:exported="false"
+            android:process=":script"/>
+
         <!-- task-160：到点后在 :script 进程用前台服务 headless 运行打包工程 -->
         <service
             android:name=".timing.InrtTaskService"

@@ -15,6 +15,16 @@ import com.stardust.autojs.core.console.ConsoleImpl
 
 class LogActivity : AppCompatActivity() {
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+            if (event.action == android.view.KeyEvent.ACTION_UP && !event.isCanceled) {
+                com.stardust.autojs.ScriptEngineService.stopAllByVolumeUp()
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupView()

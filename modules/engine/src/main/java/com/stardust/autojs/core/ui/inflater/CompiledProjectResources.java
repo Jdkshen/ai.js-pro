@@ -142,6 +142,57 @@ public class CompiledProjectResources {
         }
     }
 
+    /** A job's private resource table. Never updates the legacy process-wide overlay. */
+    public static CompiledProjectResources loadIsolated(Context context, java.util.List<File> archives)
+            throws Exception {
+        if (archives == null || archives.isEmpty()) throw new IllegalArgumentException("资源包路径为空");
+        String host = context.getApplicationInfo().sourceDir;
+        String resourcePackage = null;
+        for (File archive : archives) {
+            if (!archive.isFile()) throw new IllegalArgumentException("资源包不存在：" + archive);
+            try (ZipFile zip = new ZipFile(archive)) {
+                ZipEntry table = zip.getEntry("resources.arsc");
+                if (table == null || table.getSize() == 0) {
+                    throw new IllegalArgumentException("资源包没有 resources.arsc：" + archive);
+                }
+                try (InputStream input = zip.getInputStream(table)) { resourcePackage = ResourceTablePackage.read(input); }
+            }
+            if (!Sidecar.read(archive).matchesAppApk(host)) {
+                throw new IllegalArgumentException("资源包与宿主资源表不匹配，请重新编译：" + archive);
+            }
+        }
+        AssetManager assets = newAssetManager();
+        if (assets == null) throw new IllegalStateException("无法创建独立 AssetManager");
+        try {
+            if (!addAssetPath(assets, host)) throw new IllegalStateException("无法挂载宿主资源");
+            String[] splits = context.getApplicationInfo().splitSourceDirs;
+            if (splits != null) for (String split : splits) {
+                if (!addAssetPath(assets, split)) throw new IllegalStateException("无法挂载 split 资源：" + split);
+            }
+            for (File archive : archives) {
+                if (!addAssetPath(assets, archive.getPath())) {
+                    throw new IllegalArgumentException("无法挂载资源包：" + archive);
+                }
+            }
+            Resources base = context.getResources();
+            Resources merged = new Resources(assets, base.getDisplayMetrics(), new Configuration(base.getConfiguration()));
+            File latest = archives.get(archives.size() - 1);
+            return new CompiledProjectResources(merged, latest, resourcePackage);
+        } catch (Throwable failure) {
+            assets.close();
+            throw failure;
+        }
+    }
+
+    static String archivePackageName(File archive) throws IOException {
+        if (!archive.isFile()) throw new IOException("资源包不存在：" + archive);
+        try (ZipFile zip = new ZipFile(archive)) {
+            ZipEntry table = zip.getEntry("resources.arsc");
+            if (table == null) throw new IOException("资源包没有 resources.arsc：" + archive);
+            try (InputStream input = zip.getInputStream(table)) { return ResourceTablePackage.read(input); }
+        }
+    }
+
     /** 工具写在资源包旁边的 {@code project-res.json}。 */
     private static final class Sidecar {
 

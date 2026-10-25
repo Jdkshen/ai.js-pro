@@ -1597,6 +1597,12 @@
             if (typeof Ctor !== 'function') {
                 throw new TypeError('ui.setMainActivity 需要一个 Activity 子类');
             }
+            // Advanced projects may call androidContext.loadResources() directly, without ui.loadAndroidResources().
+            if (!resourceCompiled) {
+                try { resourceCompiled = hostCall({op: 'resourceState'}).compiled === true; }
+                catch (_) { /* Older hosts still support ui.loadAndroidResources(). */ }
+                if (resourceCompiled && typeof globalThis.__ajsEnableJavaCallbacks === 'function') realUiMode = true;
+            }
             // 进入 UI 前按需切换包代理；inline 布局会走真实 Activity，发现后立即恢复真实 Java 包。
             if (!realUiMode) patchJavaGlobals();
             let instance;

@@ -136,7 +136,7 @@ public class NodeEngineBridgeService extends Service {
             case NodeEngineBridgeProtocol.OP_STOP:
                 return ok(stop(args));
             case NodeEngineBridgeProtocol.OP_STOP_ALL:
-                return ok(service.stopAll());
+                return ok(ScriptEngineService.stopAllAcrossProcesses());
             default:
                 throw new IllegalArgumentException("不支持 engines." + action);
         }

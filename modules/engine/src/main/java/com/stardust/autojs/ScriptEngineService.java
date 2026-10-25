@@ -399,7 +399,11 @@ public class ScriptEngineService {
                 count++;
             }
         }
-        count += mScriptEngineManager.stopAll();
+        try {
+            count += mScriptEngineManager.stopAll();
+        } finally {
+            com.stardust.autojs.overlay.OverlayRegistry.closeAll("engine_stop_all");
+        }
         return count;
     }
 
@@ -436,6 +440,15 @@ public class ScriptEngineService {
      * @return 主进程引擎停止数量（宿主进程任务数量不在这里统计）
      */
     public static int stopAllByVolumeUp() {
+        return stopAllAcrossProcesses();
+    }
+
+    /** Public API/emergency stop; service teardown still uses the process-local stopAll(). */
+    public static int stopAllAcrossProcesses() {
+        ScriptEngineService service = sInstance;
+        // The app hook also stops this process. Capture its requested count before
+        // invoking the coordinator so public engines.stopAll() does not always return 0.
+        int localCount = service == null ? 0 : service.getEngines().size();
         Runnable hook = volumeUpStopAllHook;
         if (hook != null) {
             try {
@@ -447,7 +460,6 @@ public class ScriptEngineService {
         } else {
             Log.w(LOG_TAG, "volume-up stop-all hook is not installed");
         }
-        ScriptEngineService service = sInstance;
         if (service == null) {
             Log.w(LOG_TAG, "volume-up stopAll skipped: service instance is null");
             return 0;
@@ -455,10 +467,19 @@ public class ScriptEngineService {
         try {
             int stopped = service.stopAll();
             Log.i(LOG_TAG, "volume-up stopAll main-process engines: " + stopped);
-            return stopped;
+            return Math.max(localCount, stopped);
         } catch (Throwable error) {
             Log.w(LOG_TAG, "volume-up stopAll main-process engines failed", error);
             return 0;
+        }
+    }
+
+    public static void stopAllAcrossProcessesAndToast() {
+        int count = stopAllAcrossProcesses();
+        ScriptEngineService service = sInstance;
+        if (count > 0 && service != null) {
+            service.mUiHandler.toast(String.format(
+                    service.mContext.getString(R.string.text_already_stop_n_scripts), count));
         }
     }
 

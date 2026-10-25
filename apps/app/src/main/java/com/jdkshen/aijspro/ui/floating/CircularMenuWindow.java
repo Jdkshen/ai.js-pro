@@ -134,7 +134,7 @@ public class CircularMenuWindow extends FloatyWindow {
             @Override
             public void onExpanding(CircularActionMenu menu) {
                 sNodeOverlayMenuExpanded = true;
-                com.jdkshen.aijspro.engine.NodeUiBridgeService.setOverlaysTouchable(false);
+                com.jdkshen.aijspro.engine.NodeUiRenderService.setOverlaysTouchable(mContext, false);
                 mDragGesture.setEnabled(false);
                 mCircularActionView.setAlpha(mActiveAlpha);
                 setMenuWindowTouchable(true);
@@ -142,7 +142,7 @@ public class CircularMenuWindow extends FloatyWindow {
 
             public void onCollapsed(CircularActionMenu menu) {
                 sNodeOverlayMenuExpanded = false;
-                com.jdkshen.aijspro.engine.NodeUiBridgeService.setOverlaysTouchable(true);
+                com.jdkshen.aijspro.engine.NodeUiRenderService.setOverlaysTouchable(mContext, true);
                 mDragGesture.setEnabled(!mTemporarilyHidden);
                 mCircularActionView.setAlpha(mInactiveAlpha);
                 setMenuWindowTouchable(false);

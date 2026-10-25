@@ -77,8 +77,7 @@ public class TaskManagerFragment extends ViewPagerFragment {
     @Override
     protected void onFabClick(FloatingActionButton fab) {
         // Phase1：任务页 ✕ = 停掉所有脚本，宿主进程（:script/:native）里的也要停。
-        HostScripts.stopAllHostScripts();
-        AutoJs.getInstance().getScriptEngineService().stopAll();
+        HostScripts.stopAllScripts(getContext());
     }
 
     @Override

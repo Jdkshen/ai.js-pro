@@ -716,8 +716,8 @@ internal class McpTools(private val context: Context, private val event: (String
             record.logs = runLogs(record); record.finishedAt = System.currentTimeMillis()
             record.status = "STOPPED"
         }
-        com.jdkshen.aijspro.external.HostScripts.stopAllHostScripts()
-        val stopped = AutoJs.getInstance().scriptEngineService.stopAll()
+        val stopped = AutoJs.getInstance().scriptEngineService.engines.size
+        com.jdkshen.aijspro.external.HostScripts.stopAllScripts(context)
         val overlayClosed = OverlayRegistry.closeAll("mcp_stop_all")
         try { Thread.sleep(300) } catch (_: InterruptedException) {}
         val overlayCount = OverlayStateReader.countAggregated(context)

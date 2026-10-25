@@ -132,6 +132,9 @@ public class Pref {
     public static boolean isRunningVolumeControlEnabled() {
         return def().getBoolean(getString(R.string.key_use_volume_control_running), false);
     }
+    public static boolean isRecordingVolumeControlEnabled() {
+        return def().getBoolean(getString(R.string.key_use_volume_control_record), false);
+    }
 
     public static boolean shouldEnableAccessibilityServiceByRoot() {
         return def().getBoolean(getString(R.string.key_enable_accessibility_service_by_root), false);

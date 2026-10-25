@@ -98,12 +98,14 @@ try {
             throw 'general/opencv 同时为空，:app:verifySlimPackagingTemplate 会失败'
         }
 
-        # task-119/task-213：除 lib/ 外，模板还剔除两个不随打包模板分发的巨型运行时资源：
+        # 除 lib/ 外，模板剔除不随独立运行时分发的开发工具资源：
         #   * assets/source-engine-upgrade/node24/arm64-v8a/libnode.so（97MB 未压缩）
         #   * resources/new_api_database.ser（6.5MB）
         # 否则瘦身模板会超过 :app:verifySlimPackagingTemplate 的 20MB 上限。
         $excludedAssetNames = @(
             'assets/source-engine-upgrade/node24/arm64-v8a/libnode.so',
+            # inrt 没有 Node24Service，也不带 libnode；npm 安装 CLI 留在主应用。
+            'assets/node24/tools/npm.zip',
             'resources/new_api_database.ser'
         )
         $tmpTemplate = "$templateApk.tmp"

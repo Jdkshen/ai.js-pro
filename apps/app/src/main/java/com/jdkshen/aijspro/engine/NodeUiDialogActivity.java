@@ -23,7 +23,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * task-141：主进程透明对话框 Activity（:node24 的 dialogs 模块经 Binder 调用）。
+ * Transparent dialog Activity in :nodeui (:node24 dialogs call it through Binder).
  *
  * <p>两种结果通道：
  * <ul>
@@ -38,6 +38,16 @@ import org.json.JSONObject;
 public class NodeUiDialogActivity extends Activity {
 
     private static final String TAG = "NodeUiDialog";
+    private static final java.util.Set<NodeUiDialogActivity> ACTIVE = java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    public static void closeAll() {
+        for (NodeUiDialogActivity activity : new java.util.ArrayList<>(ACTIVE)) activity.finish();
+    }
+    public static void closeOwner(String owner) {
+        for (NodeUiDialogActivity activity : new java.util.ArrayList<>(ACTIVE)) {
+            if (owner.equals(activity.mOwner)) activity.finish();
+        }
+    }
+    private String mOwner = "";
     private boolean mFinished;
     private String mSession = "";
     private String mToken = "";
@@ -53,6 +63,7 @@ public class NodeUiDialogActivity extends Activity {
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        ACTIVE.add(this);
         mSession = getIntent().getStringExtra(NodeUiProtocol.K_SESSION);
         if (mSession == null) {
             mSession = "";
@@ -60,12 +71,14 @@ public class NodeUiDialogActivity extends Activity {
         String raw = getIntent().getStringExtra(NodeUiProtocol.K_REQUEST);
         try {
             JSONObject request = new JSONObject(raw == null ? "{}" : raw);
+            mOwner = request.optString("owner", "");
             mToken = request.optString("token", "");
             mAsync = request.optBoolean("async", false);
             if (mAsync && mToken.isEmpty()) {
                 throw new IllegalArgumentException("异步对话框缺少 token");
             }
             show(request);
+            if (mDialog != null) mDialog.setOnKeyListener((dialog, keyCode, event) -> stopForVolume(event));
         } catch (Throwable error) {
             Log.w(TAG, "show dialog failed", error);
             fail(error);
@@ -700,6 +713,7 @@ public class NodeUiDialogActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        ACTIVE.remove(this);
         if (mControlReceiver != null) {
             try {
                 unregisterReceiver(mControlReceiver);
@@ -718,5 +732,18 @@ public class NodeUiDialogActivity extends Activity {
             }
         }
         super.onDestroy();
+    }
+
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        return stopForVolume(event) || super.dispatchKeyEvent(event);
+    }
+    private boolean stopForVolume(android.view.KeyEvent event) {
+        if (event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+            if (event.getAction() == android.view.KeyEvent.ACTION_UP && !event.isCanceled()) {
+                com.jdkshen.aijspro.external.HostScripts.stopAllScripts(this);
+            }
+            return true;
+        }
+        return false;
     }
 }

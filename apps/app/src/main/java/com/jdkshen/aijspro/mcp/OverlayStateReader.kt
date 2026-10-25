@@ -23,22 +23,19 @@ internal object OverlayStateReader {
         val files = dir.listFiles { file -> file.isFile && file.name.startsWith("overlay-") && file.name.endsWith(".json") }
             ?: return emptyList()
         val now = System.currentTimeMillis()
+        val live = runCatching {
+            (context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager)
+                ?.runningAppProcesses?.filter { it.uid == android.os.Process.myUid() }
+                ?.associate { it.pid to it.processName }
+        }.getOrNull()
         val result = ArrayList<JsonObject>()
         files.forEach { file ->
             try {
                 val text = file.readText(Charsets.UTF_8)
                 val root = JsonParser().parse(text).asJsonObject
-                val updatedAt = root.get("updatedAt")?.asLong ?: file.lastModified()
-                if (now - updatedAt > MAX_AGE_MS) return@forEach
-                val entries = root.getAsJsonArray("entries") ?: return@forEach
-                for (i in 0 until entries.size()) {
-                    val element = entries.get(i)
-                    if (!element.isJsonObject) continue
-                    val entry = element.asJsonObject.deepCopy()
-                    if (!entry.has("pid")) entry.addProperty("pid", root.get("pid")?.asInt ?: -1)
-                    entry.addProperty("ageMs", (now - updatedAt).coerceAtLeast(0L))
-                    result.add(entry)
-                }
+                val pid = root.get("pid")?.asInt ?: -1
+                if (live == null && !File("/proc/$pid").isDirectory) return@forEach
+                result.addAll(decode(root, now, live))
             } catch (_: Throwable) {
                 // 快照损坏/进程正在写：跳过即可
             }
@@ -47,6 +44,22 @@ internal object OverlayStateReader {
     }
 
     fun countAggregated(context: Context): Int = listAggregated(context).size
+
+    /** Snapshots update on view changes, not a heartbeat. Age alone cannot mean the view is gone. */
+    internal fun decode(root: JsonObject, now: Long, live: Map<Int, String>?): List<JsonObject> {
+        val pid = root.get("pid")?.asInt ?: -1
+        if (pid <= 0 || (live != null && pid !in live)) return emptyList()
+        val updatedAt = root.get("updatedAt")?.asLong ?: now
+        val age = (now - updatedAt).coerceAtLeast(0L)
+        return root.getAsJsonArray("entries")?.filter { it.isJsonObject }?.map { element ->
+            element.asJsonObject.deepCopy().apply {
+                addProperty("pid", pid)
+                addProperty("ageMs", age)
+                addProperty("snapshotOld", age > MAX_AGE_MS)
+                live?.get(pid)?.let { addProperty("process", it) }
+            }
+        } ?: emptyList()
+    }
 
     fun toJson(context: Context): JsonObject {
         val items = listAggregated(context)

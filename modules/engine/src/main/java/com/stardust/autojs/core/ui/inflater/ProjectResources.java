@@ -124,6 +124,12 @@ public class ProjectResources {
         mResDir = resDir;
     }
 
+    static ProjectResources fromCompiled(File projectDir, CompiledProjectResources compiled) {
+        ProjectResources resources = new ProjectResources(new File(projectDir, DEFAULT_RES_DIR));
+        resources.setCompiled(compiled);
+        return resources;
+    }
+
     /**
      * 读工程目录下的资源表。
      *

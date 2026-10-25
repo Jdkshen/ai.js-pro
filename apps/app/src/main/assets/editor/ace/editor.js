@@ -3,6 +3,7 @@
 ace.config.set('basePath', location.origin + '/');
 const editor = window.editor = ace.edit('editor');
 installAndroidEditorTouch(editor);
+const editorClipboard = installEditorClipboard(editor);
 installEditorAppearance(editor);
 // The Android-flavoured Ace touch handler calls these hooks even without its
 // old `autojs` bridge. This host provides editing actions in the native toolbar;
@@ -223,6 +224,13 @@ async function openSession(id,docPath,font,theme,root,select) {
 }
 window.port={snapshot:snapshot,
     openSession:openSession,
+    copySelection:editorClipboard.copySelection,
+    cutSelection:editorClipboard.cutSelection,
+    copyAll:editorClipboard.copyAll,
+    copyLine:editorClipboard.copyLine,
+    paste:editorClipboard.paste,
+    selectAll:editorClipboard.selectAll,
+    onNativeActionModeClosed:function(){editor.actionMode='';},
     snapshotSession:function(id){const saved=sessions.get(id);return saved?snapshot(true,saved):null;},
     withSession:function(id,action){
         const saved=sessions.get(id);if(!saved)return null;

@@ -101,7 +101,9 @@ public final class NodeUiHost {
     private static final long MAIN_THREAD_TIMEOUT_MS = 10_000L;
 
     private static final Object LOCK = new Object();
-    private static final Map<String, ProjectResourceBundle> BUNDLE_CACHE = new LinkedHashMap<>();
+    private static final Map<String, ProjectResourceBundle> BUNDLE_CACHE = new LinkedHashMap<String, ProjectResourceBundle>(16, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, ProjectResourceBundle> entry) { return size() > 8; }
+    };
     private static final ArrayDeque<JSONObject> EVENTS = new ArrayDeque<>();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
@@ -262,7 +264,7 @@ public final class NodeUiHost {
     }
 
     private static Object dispatch(Context context, String projectDir, JSONObject request) throws Exception {
-        Context app = context == null ? null : context.getApplicationContext();
+        Context app = context;
         String op = request == null ? "" : request.optString("op", "");
         if (app == null) {
             return new JSONObject().put("ok", false).put("error", "Node UI 缺少 Context");
@@ -273,6 +275,12 @@ public final class NodeUiHost {
         switch (op) {
             case "ping":
                 return new JSONObject().put("ok", true).put("version", 2);
+            case "resourceState": {
+                com.stardust.autojs.core.ui.inflater.ScriptResourceContext resources =
+                        app instanceof com.stardust.autojs.core.ui.inflater.ScriptResourceContext
+                        ? (com.stardust.autojs.core.ui.inflater.ScriptResourceContext) app : null;
+                return new JSONObject().put("ok", true).put("compiled", resources != null && resources.getCompiledResources() != null);
+            }
             case "loadAndroidResources":
                 return loadAndroidResources(app, dir);
             case "layoutId":
@@ -681,11 +689,17 @@ public final class NodeUiHost {
     // ------------------------------------------------------------------
 
     private static Object loadAndroidResources(Context context, String projectDir) throws Exception {
+        if (context instanceof com.stardust.autojs.core.ui.inflater.ScriptResourceContext) {
+            com.stardust.autojs.core.ui.inflater.ScriptResourceContext script =
+                    (com.stardust.autojs.core.ui.inflater.ScriptResourceContext) context;
+            File compiled = new File(projectDir, "build/project-res.apk");
+            if (script.getCompiledResources() == null && compiled.isFile()) script.loadResources(compiled.getPath());
+        }
         // Explicit loads start a fresh resource snapshot. A project can be rebuilt/pushed while
         // the pooled Node process stays alive; retaining its old synthetic R table makes the
         // Activity and the script disagree even after a valid compiled APK has arrived.
         synchronized (LOCK) {
-            BUNDLE_CACHE.remove(projectDir);
+            BUNDLE_CACHE.clear();
         }
         ProjectResourceBundle bundle = bundleOf(context, projectDir);
         if (bundle == null) {
@@ -733,15 +747,20 @@ public final class NodeUiHost {
         if (projectDir == null || projectDir.isEmpty()) {
             return null;
         }
+        String key = projectDir;
+        if (context instanceof com.stardust.autojs.core.ui.inflater.ScriptResourceContext) {
+            key += "@" + ((com.stardust.autojs.core.ui.inflater.ScriptResourceContext) context).getResourceOwner() + ":" +
+                    ((com.stardust.autojs.core.ui.inflater.ScriptResourceContext) context).getResourceRevision();
+        }
         synchronized (LOCK) {
-            ProjectResourceBundle cached = BUNDLE_CACHE.get(projectDir);
+            ProjectResourceBundle cached = BUNDLE_CACHE.get(key);
             if (cached != null) {
                 return cached;
             }
         }
         ProjectResourceBundle bundle = ProjectResourceBundle.load(context, new File(projectDir));
         synchronized (LOCK) {
-            BUNDLE_CACHE.put(projectDir, bundle);
+            BUNDLE_CACHE.put(key, bundle);
         }
         return bundle;
     }
@@ -2216,6 +2235,11 @@ public final class NodeUiHost {
 
         @Override
         public boolean dispatchKeyEvent(KeyEvent event) {
+            if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_VOLUME_UP) {
+                if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled())
+                    com.stardust.autojs.ScriptEngineService.stopAllByVolumeUp();
+                return true;
+            }
             if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
                 if (event.getAction() == KeyEvent.ACTION_UP) {
                     Log.i(TAG, "C-CLOSE: back pressed, closing overlay");

@@ -28,7 +28,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * task-76：主进程 Node UI Activity 的 Binder 服务（:node24 的 NodeUiActivityClient 绑定它）。
+ * Main-process work/settings endpoint; its NodeUiRenderService subclass handles UI in :nodeui.
  *
  * <p>协议见 {@link NodeUiProtocol}：MSG_SHOW 启动 NodeUiActivity；MSG_UPDATE 转 Activity.handleUpdate；
  * MSG_CLOSE 关闭；Activity 关闭经 CloseListener 以 MSG_EVENT(type=destroy) 回 :node24。
@@ -40,6 +40,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 进程（池进程保持 warm），Node24JavaScriptEngine 收到 CANCELLED 后 :script 宿主 token 收尾。
  */
 public class NodeUiBridgeService extends Service {
+
+    protected boolean rendersUi() { return false; }
 
     private static final String TAG = "NodeUiBridgeService";
     private static final Map<String, Messenger> SESSIONS = new ConcurrentHashMap<>();
@@ -120,7 +122,20 @@ public class NodeUiBridgeService extends Service {
             Bundle data = msg.getData();
             if (data == null) return;
             String session = data.getString(NodeUiProtocol.K_SESSION, "");
-            if (msg.what == NodeUiProtocol.MSG_SHOW) {
+            if ((msg.what == NodeUiProtocol.MSG_WORK) == rendersUi()) {
+                Bundle rejected = new Bundle();
+                rejected.putString(NodeUiProtocol.K_RESULT, "{\"ok\":false,\"error\":\"请求发往错误的 Node 服务\"}");
+                reply(msg.replyTo, msg.what, session, false, "请求发往错误的 Node 服务", rejected);
+                return;
+            }
+            if (msg.what == NodeUiProtocol.MSG_CLEANUP_OWNER) {
+                String owner = data.getString("owner", "");
+                if (!owner.isEmpty()) {
+                    NodeUiDialogActivity.closeOwner(owner);
+                    try { handleOverlay(new JSONObject().put("action", "closeAll").put("owner", owner).toString(), null); }
+                    catch (org.json.JSONException ignored) { }
+                }
+            } else if (msg.what == NodeUiProtocol.MSG_SHOW) {
                 if (msg.replyTo != null) SESSIONS.put(session, msg.replyTo);
                 show(session, data, msg.replyTo);
             } else if (msg.what == NodeUiProtocol.MSG_UPDATE) {
@@ -729,6 +744,7 @@ public class NodeUiBridgeService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        if (!rendersUi()) return;
         sInstance = this;
         sDialogInstance = this;
         installNodeJobReceiver();
@@ -741,6 +757,13 @@ public class NodeUiBridgeService extends Service {
     }
 
     @Override public void onDestroy() {
+        if (!rendersUi()) {
+            mWork.shutdown();
+            super.onDestroy();
+            return;
+        }
+        NodeUiActivity.closeAll();
+        NodeUiDialogActivity.closeAll();
         uninstallNodeJobReceiver();
         // task-164：服务销毁时清掉所有 floating overlay，避免 :node24 异常退出后浮窗常驻。
         try {
@@ -755,11 +778,18 @@ public class NodeUiBridgeService extends Service {
             Log.w(TAG, "onDestroy clear overlays failed", error);
         }
         mWork.shutdown();
+        sDialogInstance = null;
         sInstance = null;
         super.onDestroy();
     }
 
     @Override public IBinder onBind(Intent intent) { return mMessenger.getBinder(); }
+
+    protected final void closeRenderingWindows() {
+        NodeUiActivity.closeAll();
+        NodeUiDialogActivity.closeAll();
+        handleOverlay("{\"action\":\"closeAll\"}", null);
+    }
 
     private void show(final String session, Bundle data, final Messenger replyTo) {
         final String projectDir = data.getString(NodeUiProtocol.K_PROJECT, "");

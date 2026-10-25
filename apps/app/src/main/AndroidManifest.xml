@@ -480,6 +480,7 @@
         <service
             android:name="com.stardust.autojs.engine.node24.NodeEngineBridgeService"
             android:exported="false" />
+        <receiver android:name=".external.StopAllScriptsReceiver" android:exported="false" />
         <service
             android:name="com.stardust.autojs.engine.node24.NodeEngineBridgeScriptService"
             android:process=":script"
@@ -513,9 +514,10 @@
             android:exported="false" />
 
     
-        <!-- task-76：Node UI 真 Activity（主进程） -->
+        <!-- Legacy Node UI and dialogs share the isolated rendering service's process. -->
         <activity
             android:name="com.jdkshen.aijspro.engine.NodeUiActivity"
+            android:process=":nodeui"
             android:exported="false"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
         <!-- task-141：Node dialogs 主进程弹窗（透明） -->
@@ -524,10 +526,15 @@
         <activity android:name="com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot3" android:process=":node24_3" android:exported="false" android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
         <activity
             android:name="com.jdkshen.aijspro.engine.NodeUiDialogActivity"
+            android:process=":nodeui"
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service
             android:name="com.jdkshen.aijspro.engine.NodeUiBridgeService"
+            android:exported="false" />
+        <service
+            android:name="com.jdkshen.aijspro.engine.NodeUiRenderService"
+            android:process=":nodeui"
             android:exported="false" />
             <receiver
             android:name=".mcp.AijsUiReceiver"

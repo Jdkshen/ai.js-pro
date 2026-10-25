@@ -74,6 +74,7 @@ public final class PocNativeRunner {
     private static final int WHAT_RUN = 1;
     /** 客户端 -> 服务：停止指定 token 的脚本。 */
     private static final int WHAT_STOP = 2;
+    private static final int WHAT_STOP_ALL = 3;
     /** 服务 -> 客户端：脚本已开始执行。 */
     private static final int WHAT_STARTED = 100;
     /** 服务 -> 客户端：脚本正常结束。 */
@@ -227,6 +228,20 @@ public final class PocNativeRunner {
             send(target, message);
         }
         // 完全没有连接：隔离进程本就不存在，没有可停的脚本，直接忽略。
+    }
+
+    public static void stopAll() {
+        Messenger target;
+        Message stop = Message.obtain(null, WHAT_STOP_ALL);
+        synchronized (LOCK) {
+            TASKS.clear();
+            java.util.Iterator<Message> iterator = PENDING.iterator();
+            while (iterator.hasNext()) if (iterator.next().what == WHAT_RUN) iterator.remove();
+            target = service;
+            if (target == null && (binding || bound)) PENDING.add(stop);
+        }
+        if (target != null) send(target, stop);
+        if (!binding && bound) scheduleIdleRelease();
     }
 
     /**

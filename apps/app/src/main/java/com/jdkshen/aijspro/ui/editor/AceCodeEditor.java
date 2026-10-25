@@ -221,7 +221,16 @@ public final class AceCodeEditor extends FrameLayout {
     public void moveCursorHorizontal(int delta) { js("editor.navigate" + (delta < 0 ? "Left" : "Right") + "()"); }
     public void moveCursorVertical(int delta) { js("editor.navigate" + (delta < 0 ? "Up" : "Down") + "()"); }
     public void moveCurrentLine(int direction) { js("editor.moveLines" + (direction < 0 ? "Up" : "Down") + "()"); }
-    public void copyLine() { js("EditorBridge.copied(editor.session.getLine(editor.getCursorPosition().row))"); }
+    public void copySelection() { js("port.copySelection()"); }
+    public void cutSelection() { js("port.cutSelection()"); }
+    public void copyAll() { js("port.copyAll()"); }
+    public void copyLine() { js("port.copyLine()"); }
+    public void paste() { js("port.paste()"); }
+    public void selectAll() { js("port.selectAll()"); }
+    void notifyActionModeClosed() {
+        if (destroyed || host.destroyed || host.view == null || !host.ready) return;
+        host.view.evaluateJavascript("port.onNativeActionModeClosed()", null);
+    }
     public void deleteLine() { js("editor.removeLines()"); }
     public void deleteSelectionOrCharacter() { js("editor.remove('right')"); }
     public void toggleFoldAtSelection() { js("port.toggleFold()"); }

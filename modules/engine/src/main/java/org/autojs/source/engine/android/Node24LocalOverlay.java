@@ -204,6 +204,15 @@ public final class Node24LocalOverlay {
         void build(String xml, String text, int x, int y, int width, int height, int flags,
                    boolean touchable) throws Exception {
             root = new FrameLayout(context) {
+                @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+                    if (event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+                        if (event.getAction() == android.view.KeyEvent.ACTION_UP && !event.isCanceled()) {
+                            com.stardust.autojs.ScriptEngineService.stopAllByVolumeUp();
+                        }
+                        return true;
+                    }
+                    return super.dispatchKeyEvent(event);
+                }
                 @Override public boolean dispatchTouchEvent(MotionEvent ev) {
                     onTouch(ev);
                     return super.dispatchTouchEvent(ev);

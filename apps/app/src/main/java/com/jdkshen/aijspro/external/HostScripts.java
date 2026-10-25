@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.external;
 
 import android.content.Context;
+import android.content.Intent;
 import android.util.Log;
 
 import java.lang.reflect.InvocationTargetException;
@@ -127,8 +128,16 @@ public final class HostScripts {
      * 前台通知 lease 一起收掉；旧构建没有该方法时退回 {@link #stopAllHostScripts()}。
      */
     public static void stopAllScripts(Context context) {
+        if (context != null && !HostProcess.isMain(context)) {
+            // The clients' task tables are process-local. Always coordinate through the main app.
+            context.sendBroadcast(new Intent(context, StopAllScriptsReceiver.class)
+                    .setAction(StopAllScriptsReceiver.ACTION));
+            Log.i(TAG, "stop-all relayed from " + HostProcess.name());
+            return;
+        }
         resolve();
         Method method = sStopAllScripts;
+        if (context != null) com.jdkshen.aijspro.engine.NodeUiRenderService.closeAll(context);
         if (method != null && context != null) {
             try {
                 method.invoke(null, context.getApplicationContext() == null
@@ -139,6 +148,12 @@ public final class HostScripts {
             }
         }
         stopAllHostScripts();
+        try {
+            com.stardust.autojs.ScriptEngineService service = com.stardust.autojs.ScriptEngineService.getInstance();
+            if (service != null) service.stopAll();
+        } finally {
+            com.stardust.autojs.overlay.OverlayRegistry.closeAll("host_stop_all_fallback");
+        }
     }
 
     /** 一次性解析反射入口；解析失败（普通构建）只记一条日志，后续调用不再重试。 */

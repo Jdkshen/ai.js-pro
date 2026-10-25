@@ -14,6 +14,16 @@ import com.jdkshen.aijspro.inrt.launch.GlobalProjectLauncher
  */
 class InrtScriptActivity : AppCompatActivity() {
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+            if (event.action == android.view.KeyEvent.ACTION_UP && !event.isCanceled) {
+                com.stardust.autojs.ScriptEngineService.stopAllByVolumeUp()
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         android.util.Log.i(TAG, "C-INRT: script activity start pid=" + android.os.Process.myPid())

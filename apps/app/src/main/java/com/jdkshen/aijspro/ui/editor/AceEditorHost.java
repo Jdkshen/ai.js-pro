@@ -15,7 +15,6 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 import com.jdkshen.aijspro.BuildConfig;
-import com.stardust.util.ClipboardUtil;
 import org.json.JSONException;
 import org.json.JSONObject;
 import java.io.ByteArrayInputStream;
@@ -164,8 +163,40 @@ final class AceEditorHost {
         @JavascriptInterface public void breakpoint(String id, int row, boolean enabled) {
             handler.post(() -> { AceCodeEditor owner = documents.get(id); if (owner != null) owner.breakpointChanged(row, enabled); });
         }
-        @JavascriptInterface public void copied(String text) {
-            handler.post(() -> { if (!destroyed) ClipboardUtil.setClip(context, text); });
+        /**
+         * Clipboard operations stay synchronous on the bridge thread: the editor
+         * reads its current selection and writes it before any focus transition.
+         */
+        @JavascriptInterface public String copyToClipboard(String text) {
+            return EditorClipboard.write(context, text);
+        }
+        @JavascriptInterface public String readClipboard() {
+            return EditorClipboard.readJson(context);
+        }
+        @JavascriptInterface public void showMessage(String message) {
+            handler.post(() -> {
+                if (!destroyed && message != null)
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+            });
+        }
+        @JavascriptInterface public void startActionMode(float left, float top, float right,
+                                                          float bottom, boolean selected,
+                                                          boolean preserve) {
+            // Cursor-only action modes would open on every tap. The native menu is
+            // only useful while a real selection exists.
+            if (!selected) return;
+            AceCodeEditor owner = current;
+            handler.post(() -> {
+                if (destroyed || owner == null || owner != current || !owner.isActive()) return;
+                if (context instanceof ProCodeEditorActivity)
+                    ((ProCodeEditorActivity) context).showEditorSelectionActionMode(owner);
+            });
+        }
+        @JavascriptInterface public void finishActionMode() {
+            handler.post(() -> {
+                if (!destroyed && context instanceof ProCodeEditorActivity)
+                    ((ProCodeEditorActivity) context).finishEditorSelectionActionMode();
+            });
         }
         @JavascriptInterface public void showKeyboard(String id) {
             // Ace focuses its textarea asynchronously. Keep the attached input connection

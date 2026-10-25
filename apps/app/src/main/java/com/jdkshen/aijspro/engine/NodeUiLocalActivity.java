@@ -35,7 +35,10 @@ public class NodeUiLocalActivity extends AppCompatActivity {
     @Override protected void onCreate(Bundle state) {
         token = getIntent().getStringExtra("token");
         String directory = getIntent().getStringExtra("projectDir");
-        ProjectResourceBundle bundle = ProjectResourceBundle.load(getApplicationContext(), new java.io.File(directory));
+        com.stardust.autojs.core.ui.inflater.ScriptResourceContext scriptContext =
+                com.stardust.autojs.core.ui.inflater.ScriptResourceContext.find(getIntent().getStringExtra("javaClassOwner"));
+        ProjectResourceBundle bundle = ProjectResourceBundle.load(scriptContext == null ? getApplicationContext() : scriptContext,
+                new java.io.File(directory));
         if (bundle.isCompiled()) projectResources = bundle.getCompiled().getResources();
         runtimeClasses = Node24GeneratedClasses.loader(getIntent().getStringExtra("javaClassOwner"), super.getClassLoader());
         int projectTheme = bundle.isCompiled() ? bundle.idOf("style", "MainTheme") : 0;
@@ -83,6 +86,16 @@ public class NodeUiLocalActivity extends AppCompatActivity {
         }
     }
     /** 返回键：脚本覆盖 onBackPressed 时只派发事件，由脚本决定关闭；否则直接关闭。 */
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        if (event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+            if (event.getAction() == android.view.KeyEvent.ACTION_UP && !event.isCanceled()) {
+                com.jdkshen.aijspro.external.HostScripts.stopAllScripts(this);
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
     @SuppressLint("MissingSuperCall")
     @Override public void onBackPressed() {
         if (NodeUiLocalSession.onBackPressed(this)) finish();

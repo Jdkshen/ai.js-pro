@@ -66,11 +66,11 @@ public class Engines {
     }
 
     public int stopAll() {
-        return mEngineService.stopAll();
+        return ScriptEngineService.stopAllAcrossProcesses();
     }
 
     public void stopAllAndToast() {
-        mEngineService.stopAllAndToast();
+        ScriptEngineService.stopAllAcrossProcessesAndToast();
     }
 
 

@@ -1,8 +1,9 @@
 package com.stardust.autojs.engine.node24;
 
-/** Node UI 真 Activity 跨进程协议（task-76）：:node24 与主进程 NodeUiBridgeService 共用。 */
+/** UI rendering is isolated in :nodeui; scheduling/settings keep their main-process endpoint. */
 public final class NodeUiProtocol {
-    public static final String SERVICE_CLASS = "com.jdkshen.aijspro.engine.NodeUiBridgeService";
+    public static final String SERVICE_CLASS = "com.jdkshen.aijspro.engine.NodeUiRenderService";
+    public static final String WORK_SERVICE_CLASS = "com.jdkshen.aijspro.engine.NodeUiBridgeService";
     public static final String ACTIVITY_CLASS = "com.jdkshen.aijspro.engine.NodeUiActivity";
     public static final int MSG_SHOW = 1;
     public static final int MSG_CLOSE = 2;
@@ -17,6 +18,7 @@ public final class NodeUiProtocol {
     public static final int MSG_OVERLAY = 8;
     /** task-144：真实定时任务（主进程 TimedTaskScheduler/DB）。 */
     public static final int MSG_WORK = 9;
+    public static final int MSG_CLEANUP_OWNER = 10;
     public static final String K_SESSION = "sessionId";
     public static final String K_PROJECT = "projectDir";
     public static final String K_LAYOUT_NAME = "layoutName";

@@ -14,6 +14,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -23,7 +24,10 @@ import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
 import android.util.Log;
+import android.view.ActionMode;
 import android.view.Gravity;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -41,6 +45,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
+import androidx.annotation.Keep;
 import androidx.core.view.GravityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
@@ -105,7 +110,8 @@ import java.util.Set;
  * 继承 ComponentActivity（不再是裸 Activity）：Miuix 的 Compose 弹窗需要宿主提供
  * ViewTreeLifecycleOwner，ComponentActivity 是挂 ComposeView 弹窗（如长按 TAB 提示）的前提。
  */
-public final class ProCodeEditorActivity extends ComponentActivity implements DebugCallback {
+public final class ProCodeEditorActivity extends ComponentActivity
+        implements DebugCallback, ActionMode.Callback {
 
     private static final String EXTRA_PATH = "path";
     private static final String EXTRA_SAMPLE_ASSET_PATH = "sample_asset_path";
@@ -115,6 +121,10 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private static final String PREF_TEXT_SIZE = "text_size_sp";
     private static final int MAX_RESTORED_TABS = 12;
     private static final int TAB_INDICATOR_COLOR = com.aijs.editor.theme.WorkspaceColors.TAB_INDICATOR;
+    private static final int ACTION_COPY = 0x5345;
+    private static final int ACTION_CUT = 0x5346;
+    private static final int ACTION_PASTE = 0x5347;
+    private static final int ACTION_SELECT_ALL = 0x5348;
     private final List<EditorTab> mTabs = new ArrayList<>();
     private final Set<String> mExpandedDirectories = new HashSet<>();
 
@@ -177,6 +187,8 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     private Debugger mDebugger;
     private ScriptExecution mExecution;
     private boolean mExecutionFinishedReceiverRegistered;
+    private ActionMode mEditorActionMode;
+    private AceCodeEditor mEditorActionModeOwner;
 
     private final BroadcastReceiver mExecutionFinishedReceiver = new BroadcastReceiver() {
         @Override
@@ -1366,6 +1378,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void selectTab(EditorTab tab) {
+        finishEditorSelectionActionMode();
         mActiveTab = tab;
         for (EditorTab candidate : mTabs) candidate.editor.setActive(candidate == tab);
         View sharedView = tab.editor.getEditorView();
@@ -1585,8 +1598,9 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void showEditMenu(View anchor) {
-        String[] items = {"查找/替换", "跳转", "复制", "删除", "移动", "折叠", "格式化代码"};
-        boolean[] submenus = {false, true, true, true, true, true, false};
+        String[] items = {"查找/替换", "跳转", "复制", "剪切", "粘贴", "删除",
+                "移动", "折叠", "格式化代码"};
+        boolean[] submenus = {false, true, true, false, false, true, true, true, false};
         showAnchoredMenu(anchor, items, submenus, which -> {
             AceCodeEditor editor = activeEditor();
             if (editor == null) return;
@@ -1594,10 +1608,12 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
                 case 0: showFindReplace(); break;
                 case 1: showJumpMenu(anchor); break;
                 case 2: showCopyMenu(anchor); break;
-                case 3: showDeleteMenu(anchor); break;
-                case 4: showMoveLineMenu(anchor); break;
-                case 5: showFoldMenu(anchor); break;
-                case 6:
+                case 3: editor.cutSelection(); break;
+                case 4: editor.paste(); break;
+                case 5: showDeleteMenu(anchor); break;
+                case 6: showMoveLineMenu(anchor); break;
+                case 7: showFoldMenu(anchor); break;
+                case 8:
                     editor.unfoldAll();
                     editor.beautifyCode();
                     break;
@@ -1606,25 +1622,107 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
     }
 
     private void showCopyMenu(View anchor) {
-        showAnchoredMenu(anchor, new String[]{"复制", "复制全部", "复制行"}, null,
+        showAnchoredMenu(anchor, new String[]{"复制选中", "剪切选中", "全选", "复制全部", "复制行"}, null,
                 which -> {
-                    if (which == 0) copySelection();
-                    else if (which == 1) {
-                        ClipboardUtil.setClip(this, activeEditor().getText());
-                        toast("已复制全部");
-                    } else activeEditor().copyLine();
+                    AceCodeEditor editor = activeEditor();
+                    if (editor == null) return;
+                    switch (which) {
+                        case 0: editor.copySelection(); break;
+                        case 1: editor.cutSelection(); break;
+                        case 2: editor.selectAll(); break;
+                        case 3: editor.copyAll(); break;
+                        case 4: editor.copyLine(); break;
+                    }
                 });
     }
 
     private void copySelection() {
         AceCodeEditor editor = activeEditor();
-        if (editor == null) return;
-        editor.withSnapshot(() -> {
-            int start = editor.getSelectionStart(), end = editor.getSelectionEnd();
-            if (start == end) { toast("请先选中内容"); return; }
-            ClipboardUtil.setClip(this, editor.getText().substring(start, end));
-            toast("已复制");
-        });
+        if (editor != null) editor.copySelection();
+    }
+
+    /**
+     * Native selection toolbar for long press and selection-handle drags. The
+     * clipboard text is read from Ace when an item is clicked, not from a stale
+     * Java snapshot captured before the menu gained focus.
+     */
+    void showEditorSelectionActionMode(AceCodeEditor owner) {
+        if (owner == null || isFinishing() || isDestroyed() || owner != activeEditor()) return;
+        if (mEditorActionMode != null) return;
+        mEditorActionModeOwner = owner;
+        ActionMode mode;
+        try {
+            mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                    ? startActionMode(this, ActionMode.TYPE_FLOATING)
+                    : startActionMode(this);
+        } catch (RuntimeException error) {
+            mode = null;
+        }
+        if (mode == null) {
+            mEditorActionModeOwner = null;
+            owner.notifyActionModeClosed();
+            return;
+        }
+        mEditorActionMode = mode;
+        mode.setTitleOptionalHint(true);
+    }
+
+    void finishEditorSelectionActionMode() {
+        ActionMode mode = mEditorActionMode;
+        AceCodeEditor owner = mEditorActionModeOwner;
+        mEditorActionMode = null;
+        mEditorActionModeOwner = null;
+        if (mode != null) mode.finish();
+        if (owner != null) owner.notifyActionModeClosed();
+    }
+
+    @Keep
+    @Override
+    public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+        if (mEditorActionModeOwner == null) return false;
+        menu.clear();
+        addEditorAction(menu, ACTION_COPY, "复制", MenuItem.SHOW_AS_ACTION_ALWAYS);
+        addEditorAction(menu, ACTION_CUT, "剪切", MenuItem.SHOW_AS_ACTION_ALWAYS);
+        addEditorAction(menu, ACTION_PASTE, "粘贴", MenuItem.SHOW_AS_ACTION_ALWAYS);
+        addEditorAction(menu, ACTION_SELECT_ALL, "全选", MenuItem.SHOW_AS_ACTION_IF_ROOM);
+        return true;
+    }
+
+    @Keep
+    @Override
+    public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+        return false;
+    }
+
+    @Keep
+    @Override
+    public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+        AceCodeEditor editor = mEditorActionModeOwner;
+        if (editor == null) return false;
+        switch (item.getItemId()) {
+            case ACTION_COPY: editor.copySelection(); break;
+            case ACTION_CUT: editor.cutSelection(); break;
+            case ACTION_PASTE: editor.paste(); break;
+            case ACTION_SELECT_ALL: editor.selectAll(); break;
+            default: return false;
+        }
+        mode.finish();
+        return true;
+    }
+
+    @Keep
+    @Override
+    public void onDestroyActionMode(ActionMode mode) {
+        if (mode != mEditorActionMode) return;
+        AceCodeEditor owner = mEditorActionModeOwner;
+        mEditorActionMode = null;
+        mEditorActionModeOwner = null;
+        if (owner != null) owner.notifyActionModeClosed();
+    }
+
+    private void addEditorAction(Menu menu, int id, String label, int showAsAction) {
+        MenuItem item = menu.add(Menu.NONE, id, Menu.NONE, label);
+        item.setShowAsAction(showAsAction);
     }
 
     private void showDeleteMenu(View anchor) {
@@ -1776,8 +1874,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             if (activeEditor() == null) return;
             if (which == 0) stopCurrentExecution();
             else if (which == 1) {
-                HostScripts.stopAllHostScripts();
-                AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
+                HostScripts.stopAllScripts(this);
             }
             else if (which == 2) activeEditor().addOrRemoveBreakpointAtCurrentLine();
             else if (which == 3) startDebugger();
@@ -2688,6 +2785,7 @@ public final class ProCodeEditorActivity extends ComponentActivity implements De
             mExecutionFinishedReceiverRegistered = false;
         }
         finishDebugSession(true);
+        finishEditorSelectionActionMode();
         for (EditorTab tab : mTabs) tab.editor.destroy();
         super.onDestroy();
     }

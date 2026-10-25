@@ -276,8 +276,8 @@ public class DevPluginResponseHandler implements Handler {
     int stopAllScripts() {
         // Phase1：扩展的「停止全部」同样要覆盖 :script/:native 宿主进程里的任务；
         // stoppedCount 仍只统计主进程旧引擎的脚本（宿主任务数在主进程侧没有同步计数）。
-        HostScripts.stopAllHostScripts();
-        int count = AutoJs.getInstance().getScriptEngineService().stopAll();
+        int count = AutoJs.getInstance().getScriptEngineService().getEngines().size();
+        HostScripts.stopAllScripts(com.stardust.app.GlobalAppContext.get());
         mScriptExecutions.clear();
         return count;
     }

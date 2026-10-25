@@ -98,6 +98,7 @@ public class NativeScriptService extends Service {
     public static final int MSG_RUN = 1;
     /** 客户端 -&gt; 服务：停止 token 对应的脚本。data: token。 */
     public static final int MSG_STOP = 2;
+    public static final int MSG_STOP_ALL = 3;
 
     /** 服务 -&gt; 客户端：脚本已经开始执行。data: token/name。 */
     public static final int REPLY_STARTED = 100;
@@ -165,6 +166,9 @@ public class NativeScriptService extends Service {
                     return true;
                 case MSG_STOP:
                     handleStop(msg);
+                    return true;
+                case MSG_STOP_ALL:
+                    handleStopAll();
                     return true;
                 default:
                     return false;
@@ -363,6 +367,17 @@ public class NativeScriptService extends Service {
             Log.w(TAG, "启动脚本失败：" + path, error);
             failRun(state, error);
         }
+    }
+
+    private void handleStopAll() {
+        RunState[] runs;
+        synchronized (mLock) {
+            runs = mRuns.values().toArray(new RunState[0]);
+            for (RunState run : runs) run.stopRequested = true;
+        }
+        for (RunState run : runs) forceStop(run);
+        // Preserve NativeScriptService's existing per-execution graceful native teardown.
+        com.stardust.autojs.overlay.OverlayRegistry.closeAll("native_host_stop_all");
     }
 
     private void handleStop(Message msg) {

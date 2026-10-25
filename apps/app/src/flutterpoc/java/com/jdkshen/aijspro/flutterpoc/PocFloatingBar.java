@@ -452,16 +452,6 @@ final class PocFloatingBar {
         // task-165：统一停止入口（宿主进程 + 主进程 + Node UI overlay + 前台通知）。
         PocRuntime.stopAllScripts(appContext);
         execution = null;
-        try {
-            PocRuntime.stopAllHostScripts();
-        } catch (Throwable error) {
-            Log.w(TAG, "停止全部宿主进程脚本失败", error);
-        }
-        try {
-            ScriptEngineService.getInstance().stopAll();
-        } catch (Throwable error) {
-            Log.w(TAG, "停止全部脚本失败", error);
-        }
         updateLabel();
     }
 

@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * task-76：:node24 侧访问主进程 NodeUiActivity 的 Binder 客户端（B 的 NodeUiHost 使用）。
+ * Node-side Binder clients: :nodeui for rendering, main process for work/settings.
  *
  * <p>B 只需：show() 成功则Activity 模式；在 Listener.onEvent 里把事件入队到自己的 pollEvents；
  * onClosed 里置 closeRequested（让 A 的 keep-alive 退出）。show 失败时回退 overlay。
@@ -35,7 +35,8 @@ public final class NodeUiActivityClient {
 
     private static final String TAG = "NodeUiActivityClient";
     private static final NodeUiActivityClient INSTANCE = new NodeUiActivityClient();
-    private final CountDownLatch mConnected = new CountDownLatch(1);
+    private static final NodeUiActivityClient WORK_INSTANCE = new NodeUiActivityClient();
+    private volatile CountDownLatch mConnected = new CountDownLatch(1);
     private final AtomicBoolean mBinding = new AtomicBoolean(false);
     private volatile Messenger mService;
     private volatile boolean mBound;
@@ -59,8 +60,17 @@ public final class NodeUiActivityClient {
         @Override public void onServiceDisconnected(ComponentName name) {
             mBound = false;
             mService = null;
+            if (mBinding.getAndSet(false) && mContext != null) {
+                try { mContext.unbindService(this); } catch (Throwable ignored) { }
+            }
+            mShowError = "Node UI 服务进程已断开";
+            mUpdateError = mShowError;
+            mUpdateResult = "{\"ok\":false,\"error\":\"Node UI 服务进程已断开\"}";
+            if (mShowLatch != null) mShowLatch.countDown();
+            if (mUpdateLatch != null) mUpdateLatch.countDown();
             notifyClosed();
         }
+        @Override public void onBindingDied(ComponentName name) { onServiceDisconnected(name); }
     };
 
     private final Messenger mReply = new Messenger(new Handler(Looper.getMainLooper()) {
@@ -125,13 +135,18 @@ public final class NodeUiActivityClient {
             throw new IllegalStateException("Node UI 宿主 context 为空（调用方未提供 Android Context）");
         }
         mContext = context.getApplicationContext();
-        Intent intent = new Intent().setComponent(new ComponentName(mContext.getPackageName(), NodeUiProtocol.SERVICE_CLASS));
-        if (!mContext.bindService(intent, mConnection, Context.BIND_AUTO_CREATE)) {
-            throw new IllegalStateException("主进程 NodeUiBridgeService 不可用（bindService=false）");
+        if (mBinding.compareAndSet(false, true)) {
+            mConnected = new CountDownLatch(1);
+            String serviceClass = this == WORK_INSTANCE ? NodeUiProtocol.WORK_SERVICE_CLASS : NodeUiProtocol.SERVICE_CLASS;
+            Intent intent = new Intent().setComponent(new ComponentName(mContext.getPackageName(), serviceClass));
+            if (!mContext.bindService(intent, mConnection, Context.BIND_AUTO_CREATE)) {
+                mBinding.set(false);
+                throw new IllegalStateException(serviceClass + " 不可用（bindService=false）");
+            }
         }
-        mBinding.set(true);
-        if (!mConnected.await(8, TimeUnit.SECONDS)) {
-            throw new IllegalStateException("主进程 NodeUiBridgeService 绑定超时");
+        if (!mConnected.await(8, TimeUnit.SECONDS) || mService == null) {
+            release(context);
+            throw new IllegalStateException("Node 服务绑定超时或已断开");
         }
     }
 
@@ -288,7 +303,20 @@ public final class NodeUiActivityClient {
         } catch (Throwable ignored) { }
     }
 
+    public void cleanupOwnerIfBound(String owner) {
+        Messenger service = mService;
+        if (service == null || owner == null) return;
+        try {
+            Message message = Message.obtain(null, NodeUiProtocol.MSG_CLEANUP_OWNER);
+            Bundle data = new Bundle();
+            data.putString("owner", owner);
+            message.setData(data);
+            service.send(message);
+        } catch (RemoteException ignored) { }
+    }
+
     public synchronized JSONObject work(Context context, JSONObject request) throws Exception {
+        if (this != WORK_INSTANCE) return WORK_INSTANCE.work(context, request);
         if (mContext == null || !mBound) { bind(context); }
         if (mService == null) throw new IllegalStateException("主进程 NodeUiBridgeService 未绑定");
         mUpdateResult = null;
@@ -324,12 +352,13 @@ public final class NodeUiActivityClient {
     }
 
     public synchronized void release(Context context) {
-        if (mBound && context != null) {
+        if (mBinding.getAndSet(false) && context != null) {
             try { context.getApplicationContext().unbindService(mConnection); } catch (Throwable ignored) { }
         }
         mBound = false;
         mService = null;
         notifyClosed();
+        if (this == INSTANCE) WORK_INSTANCE.release(context);
     }
 
     private void notifyClosed() {

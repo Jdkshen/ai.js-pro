@@ -89,6 +89,7 @@ public final class PocScriptHost {
     private static final int WHAT_RUN = 1;
     /** 客户端 -> 服务：停止指定 token 的脚本。 */
     private static final int WHAT_STOP = 2;
+    private static final int WHAT_STOP_ALL = 3;
     /** 服务 -> 客户端：脚本已开始执行。 */
     private static final int WHAT_STARTED = 100;
     /** 服务 -> 客户端：脚本正常结束。 */
@@ -297,16 +298,16 @@ public final class PocScriptHost {
 
     /** 停止 :script 进程里所有脚本（「停止全部」/悬浮控制条 ⏹ 用）。 */
     public static void stopAll() {
-        List<String> ids = new ArrayList<>();
+        Messenger target;
+        Message stop = Message.obtain(null, WHAT_STOP_ALL);
         synchronized (LOCK) {
-            ids.addAll(TASKS.keySet());
+            TASKS.clear();
+            java.util.Iterator<Message> iterator = PENDING.iterator();
+            while (iterator.hasNext()) if (iterator.next().what == WHAT_RUN) iterator.remove();
+            target = service;
+            if (target == null && (binding || bound)) PENDING.add(stop);
         }
-        for (String id : ids) {
-            stop(id);
-        }
-        if (ids.isEmpty()) {
-            Log.i(TAG, "没有登记在案的 :script 任务，无需发送 STOP");
-        }
+        if (target != null) send(target, stop);
     }
 
     /**

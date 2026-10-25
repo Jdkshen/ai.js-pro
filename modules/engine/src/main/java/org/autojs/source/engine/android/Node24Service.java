@@ -18,6 +18,21 @@ import org.json.JSONObject;
 
 /** Non-exported, one-active-run service in :node24. No legacy application boot. */
 public class Node24Service extends Service {
+    private static volatile String processName;
+    public static String actualProcessName() {
+        String value = processName;
+        if (value != null) return value;
+        if (Build.VERSION.SDK_INT >= 28) value = android.app.Application.getProcessName();
+        if (value == null || value.isEmpty()) {
+            try (java.io.FileInputStream input = new java.io.FileInputStream("/proc/self/cmdline")) {
+                byte[] bytes = new byte[512]; int count = input.read(bytes), end = 0;
+                while (end < count && bytes[end] != 0) end++;
+                value = new String(bytes, 0, end, java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Exception ignored) { value = ""; }
+        }
+        processName = value;
+        return value;
+    }
     public static final int EXECUTE=1,RESULT=2,CANCEL=3,EVENT=4,LOG=5;
     // task-167：主进程 -> :node24 的任务状态广播/控制通道（主进程任务页要能看到 uiScript keep-alive 任务）。
     public static final String ACTION_NODE24_STATE="com.jdkshen.aijspro.NODE24_STATE";
@@ -142,9 +157,12 @@ public class Node24Service extends Service {
                 @Override public void onReceive(Context context,Intent intent) {
                     if(intent==null)return;
                     Job job=active.get();
-                    if(job==null)return;
                     String command=intent.getStringExtra(EXTRA_COMMAND);
-                    if("cancelAll".equals(command)) job.cancel();
+                    if("cancelAll".equals(command)) {
+                        failPendingForCancel();
+                        if(job!=null) job.cancel();
+                    }
+                    else if(job==null)return;
                     else if("cancel".equals(command) && job.id.equals(intent.getStringExtra(EXTRA_ID))) job.cancel();
                     else if("query".equals(command)) broadcastState("started",job);
                 }
@@ -277,6 +295,7 @@ public class Node24Service extends Service {
             // 导致这里错过 native cancel，最终把取消误报成 success。
             Node24Engine current=engine;
             Node24HostBridge currentHost=host;
+            if(currentHost!=null) currentHost.beginCallbackShutdown();
             if(current!=null)try{current.cancel();}catch(IllegalStateException alreadyClosed){}
             if(currentHost!=null) currentHost.cancelPendingProjection();
             if(currentHost!=null) startCleanup(currentHost);
@@ -319,16 +338,7 @@ public class Node24Service extends Service {
 
         /** task-175：池进程（:node24_1..N）取消后保持 warm，下一次运行可 <1s 复用；旧 :node24 继续退出。 */
         private boolean isPoolProcess() {
-            try (java.io.FileInputStream input = new java.io.FileInputStream("/proc/self/cmdline")) {
-                byte[] data = new byte[512];
-                int count = input.read(data);
-                int end = 0;
-                while (end < count && data[end] != 0) ++end;
-                String name = new String(data, 0, end, java.nio.charset.StandardCharsets.UTF_8);
-                return name.contains(":node24_");
-            } catch (Throwable ignored) {
-                return false;
-            }
+            return actualProcessName().contains(":node24_");
         }
 
         private void haltProcess() {
@@ -481,7 +491,7 @@ public class Node24Service extends Service {
                     UiLifecycleWatcher watcher=null;
                     try {
                         stage="execute";
-                        engine=current;host=bridge;if(cancelled)current.cancel();
+                        engine=current;host=bridge;if(cancelled){bridge.beginCallbackShutdown();current.cancel();}
                         watcher=new UiLifecycleWatcher(id,bridge,current);
                         Node24Engine.Result value;
                         try {
@@ -499,6 +509,7 @@ public class Node24Service extends Service {
                                 +" cancelled="+value.cancelled+" timedOut="+value.timedOut
                                 +" uiCloseCancel="+watcher.cancelledByUiClose());
                         stage="post-execute";
+                        bridge.beginCallbackShutdown();
                         // task-65：先无条件打一行，再逐项求值；每项都安全（bridge 内部已 try/catch）。
                         String bridgeState;
                         try { bridgeState=bridge.describeState(); }
@@ -539,7 +550,7 @@ public class Node24Service extends Service {
                             .put("logs",output.lines()).put("logsDelivered",deliveredLogs())
                             .put("engineVersion","Node 24.22.0").put("sourceName",filename)
                             .put("uid",android.os.Process.myUid()).put("pid",android.os.Process.myPid())
-                            .put("process",getPackageName()+":node24").put("runtimeDirectory",runtime.getPath())
+                            .put("process",actualProcessName()).put("runtimeDirectory",runtime.getPath())
                             .put("heldMillis",0L).put("nativeTimeoutMillis",nativeTimeout)
                             .put("uiCloseCancelled",watcher.cancelledByUiClose())
                             .put("prelude",Node24Prelude.describeAssets(Node24Service.this).toString())
@@ -677,6 +688,7 @@ public class Node24Service extends Service {
                             // 与 Job.cancel 相同：先唤醒可能仍在等待投屏授权弹窗的宿主线程，
                             // 否则 UI 已关闭时 job 仍要空等到 55s 授权超时。
                             bridge.cancelPendingProjection();
+                            bridge.beginCallbackShutdown();
                             try { engine.cancel(); }
                             catch(Throwable error) {
                                 android.util.Log.w("Node24Service","ui lifecycle cancel failed id="+id,error);

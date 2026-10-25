@@ -121,6 +121,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private final Context mContext;
+    private final com.stardust.autojs.core.ui.inflater.ScriptResourceContext mAndroidContext;
     /** task-183：每个 Node 执行宿主一个 owner；overlay 关闭/清理只作用于本 owner，避免并行 job 互相关闭浮窗。 */
     private final String mOverlayOwner = "node24-" + java.util.UUID.randomUUID().toString();
     /** task-218：主进程引擎 id（脚本任务 owner），用于 OverlayRegistry 精确清理。 */
@@ -228,6 +229,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private static final int OCR_IMAGE_MAX_PIXELS = 16_000_000;
     private final java.util.concurrent.atomic.AtomicBoolean mClosed =
             new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile boolean mCallbacksClosing;
     private volatile String mScriptError = "";
     /**
      * 本次 Node job 独占的反射元数据缓存（容量 256 类 + 256 方法候选，close 清空）。
@@ -249,6 +251,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     public Node24HostBridge(Context context, String projectDir, int ownerEngineId) {
         mContext = context.getApplicationContext();
         mProjectDir = projectDir;
+        mAndroidContext = new com.stardust.autojs.core.ui.inflater.ScriptResourceContext(mContext, projectDir, mOverlayOwner);
         mOwnerEngineId = ownerEngineId;
         mImages = new Node24Images();
         mAutomation = new Node24AutomationBridge(mContext, mImages);
@@ -507,7 +510,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 return ok(object == null ? null : object.getClass().getName());
             }
             case "context":
-                return ok(toWire(mContext));
+                return ok(toWire(mAndroidContext));
             case "app":
                 return ok(toWire(appAction(request)));
             case "poll":
@@ -1125,7 +1128,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 return new JSONObject().put("ok", true).put("value", toWire(rawView)).toString();
             }
             // task-201：:node24 进程内 overlay；大 XML 不再跨进程 show，失败自动回退主进程。
-            JSONObject localOverlay = Node24LocalOverlay.handle(mContext, mProjectDir, request);
+            JSONObject localOverlay = Node24LocalOverlay.handle(mAndroidContext, mProjectDir, request);
             if (localOverlay != null) {
                 return localOverlay.toString();
             }
@@ -1139,13 +1142,13 @@ public final class Node24HostBridge implements Node24Engine.Host {
             try {
                 Method handleJson = host.getMethod("handleJson", Context.class, String.class, JSONObject.class);
                 Object target = Modifier.isStatic(handleJson.getModifiers()) ? null : host.getConstructor().newInstance();
-                result = handleJson.invoke(target, mContext, mProjectDir, request);
+                result = handleJson.invoke(target, mAndroidContext, mProjectDir, request);
             } catch (NoSuchMethodException noJson) {
                 Method handle;
                 Object[] args;
                 try {
                     handle = host.getMethod("handle", Context.class, String.class, JSONObject.class);
-                    args = new Object[]{mContext, mProjectDir, request};
+                    args = new Object[]{mAndroidContext, mProjectDir, request};
                 } catch (NoSuchMethodException noContext) {
                     handle = host.getMethod("handle", JSONObject.class);
                     args = new Object[]{request};
@@ -1235,7 +1238,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 if (!Boolean.TRUE.equals(mConstructingFromJs.get())) callback(receiver, "<init>", args);
             }
             private Object callback(Object receiver, String method, Object[] args) {
-                if (mClosed.get()) return closedJavaCallback(receiver, method, args);
+                if (mClosed.get() || mCallbacksClosing) return closedJavaCallback(receiver, method, args);
                 try {
                     JSONArray values = new JSONArray();
                     for (Object value : args) values.put(toWire(value));
@@ -1246,7 +1249,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
                     return fromWire(result.opt("value"));
                 } catch (Node24Engine.CallbackClosedException closed) {
                     return closedJavaCallback(receiver, method, args);
-                } catch (RuntimeException failure) { throw failure; }
+                } catch (RuntimeException failure) {
+                    if (mClosed.get() || mCallbacksClosing) return closedJavaCallback(receiver, method, args);
+                    throw failure;
+                }
                 catch (Exception failure) { throw new IllegalStateException("Java→Node 回调失败：" + method, failure); }
             }
         });
@@ -1291,7 +1297,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                             if ("equals".equals(method.getName())) return proxy == args[0];
                             if ("toString".equals(method.getName())) return "[NodeJavaCallback " + iface.getName() + "#" + id + "]";
                         }
-                        if (mClosed.get()) return defaultJavaValue(method.getReturnType());
+                        if (mClosed.get() || mCallbacksClosing) return defaultJavaValue(method.getReturnType());
                         try {
                             JSONArray values = new JSONArray();
                             if (args != null) for (Object value : args) values.put(toWire(value));
@@ -1302,6 +1308,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
                             return coerce(method.getReturnType(), fromWire(result.opt("value")));
                         } catch (Node24Engine.CallbackClosedException closed) {
                             return defaultJavaValue(method.getReturnType());
+                        } catch (RuntimeException failure) {
+                            if (mClosed.get() || mCallbacksClosing) return defaultJavaValue(method.getReturnType());
+                            throw failure;
                         }
                     }));
         }
@@ -2099,15 +2108,21 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
     }
 
+    /** Publish before native cancellation, so an in-flight UI callback cannot throw cancellation into Looper. */
+    public void beginCallbackShutdown() { mCallbacksClosing = true; }
+
     /**
      * 任务结束/取消/异常统一清理：停投屏、释放 OCR 会话、回收 Bitmap 句柄、解绑主进程自动化客户端。
      * 幂等；Service 在 finally 中无条件调用。不触碰进程级 {@code RemoteAutomationBridge}。
      */
     public void close() {
+        beginCallbackShutdown();
         if (!mClosed.compareAndSet(false, true)) {
             return;
         }
         mNoArgCalls.close();
+        com.stardust.autojs.engine.node24.NodeUiActivityClient.get().cleanupOwnerIfBound(mOverlayOwner);
+        mAndroidContext.release();
         mJavaMembers.close();
         synchronized (mFileObservers) {
             for (android.os.FileObserver observer : mFileObservers.values()) observer.stopWatching();

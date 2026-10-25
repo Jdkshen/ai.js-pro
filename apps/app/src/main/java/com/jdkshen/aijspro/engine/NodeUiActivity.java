@@ -32,9 +32,9 @@ import java.lang.ref.WeakReference;
 import java.nio.charset.StandardCharsets;
 
 /**
- * task-76：Node UI 的主进程真实 Activity（替代 overlay 的第一阶段宿主）。
+ * Legacy Node UI Activity, now hosted in :nodeui together with its rendering service.
  *
- * <p>由主进程 NodeUiBridgeService 按 NodeUiProtocol.ACTIVITY_CLASS 启动，extras 使用
+ * <p>由渲染进程 NodeUiRenderService 按 NodeUiProtocol.ACTIVITY_CLASS 启动，extras 使用
  * NodeUiProtocol.K_*；layout 用 engine 的 ProjectResourceBundle + DynamicLayoutInflater inflate，
  * Activity 自带标题栏/系统返回键/生命周期，不再需要 overlay 关闭按钮。
  *
@@ -682,6 +682,15 @@ public class NodeUiActivity extends AppCompatActivity {
             Log.w(TAG, "NodeUiActivity: requestStopForBack failed", error);
         }
         super.onBackPressed();
+    }
+
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        if (event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+            if (event.getAction() == android.view.KeyEvent.ACTION_UP && !event.isCanceled())
+                com.jdkshen.aijspro.external.HostScripts.stopAllScripts(this);
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override

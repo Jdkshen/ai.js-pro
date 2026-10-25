@@ -58,7 +58,8 @@ public final class NodeUiLocalSession {
     public static void setApplicationContext(Context context) {
         if (context == null) return;
         Context app = context.getApplicationContext();
-        applicationContext = app != null ? app : context;
+        applicationContext = context instanceof com.stardust.autojs.core.ui.inflater.ScriptResourceContext
+                ? context : (app != null ? app : context);
     }
 
     public static JSONObject show(Context context, String projectDir, JSONObject request) throws Exception {
@@ -352,9 +353,6 @@ public final class NodeUiLocalSession {
      * 不等待新 Activity attach —— 新 Activity 的 onCreate 会在主线程走 attach，等待它会造成主线程死锁。
      */
     public static void recreate(final String expandedXml) {
-        if (expandedXml == null || expandedXml.trim().isEmpty()) {
-            throw new IllegalArgumentException("recreate 需要非空 layoutXml");
-        }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             recreateOnMain(expandedXml);
         } else {
@@ -384,7 +382,15 @@ public final class NodeUiLocalSession {
             resetRecreating(opening);
             throw new IllegalStateException("Node UI Activity 缺少 Intent，无法更新 layoutXml");
         }
-        intent.putExtra("layoutXml", expandedXml);
+        if (expandedXml == null || expandedXml.trim().isEmpty()) {
+            if (intent.getIntExtra("layoutId", 0) == 0) {
+                resetRecreating(opening);
+                throw new IllegalArgumentException("recreate 需要 layoutXml 或已加载的 layoutId");
+            }
+            intent.removeExtra("layoutXml");
+        } else {
+            intent.putExtra("layoutXml", expandedXml);
+        }
         try {
             current.recreate();
         } catch (Throwable error) {

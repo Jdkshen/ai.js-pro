@@ -77,6 +77,8 @@ public final class ProjectResourceBundle {
         if (projectDir == null) {
             return error(null, "工程目录为空");
         }
+        CompiledProjectResources explicit = context instanceof ScriptResourceContext
+                ? ((ScriptResourceContext) context).getCompiledResources() : null;
         ProjectConfig config;
         try {
             config = ProjectConfig.fromProjectDir(projectDir.getPath());
@@ -84,18 +86,24 @@ public final class ProjectResourceBundle {
             return error(projectDir, "读 project.json 失败：" + error);
         }
         if (config == null) {
+            if (explicit != null) return explicitBundle(context, projectDir, explicit);
             return error(projectDir, "project.json 不存在或格式错误：" + projectDir);
         }
         ProjectConfig.AndroidResources androidResources = config.getAndroidResources();
         if (androidResources == null) {
+            if (explicit != null) return explicitBundle(context, projectDir, explicit);
             return error(projectDir, "project.json 里没有 androidResources 字段：" + projectDir);
         }
         ProjectResources resources = ProjectResources.load(projectDir, androidResources.getResDir());
         if (resources == null) {
+            if (explicit != null) return explicitBundle(context, projectDir, explicit);
             return error(projectDir, "找不到资源目录：" + new File(projectDir, androidResources.getResDir()));
         }
         CompiledProjectResources compiled = null;
-        if (context != null) {
+        if (context instanceof ScriptResourceContext) {
+            compiled = ((ScriptResourceContext) context).getCompiledResources();
+        }
+        if (context != null && compiled == null) {
             compiled = CompiledProjectResources.load(context,
                     new File(projectDir, BUILD_DIR + File.separator + COMPILED_RES_NAME));
         }
@@ -111,6 +119,11 @@ public final class ProjectResourceBundle {
         return new ProjectResourceBundle(projectDir, androidResources.getResDir(),
                 androidResources.getManifest(), resources, compiled, codeCache, flatFiles,
                 projectResApk, null);
+    }
+
+    private static ProjectResourceBundle explicitBundle(Context context, File directory, CompiledProjectResources compiled) {
+        return new ProjectResourceBundle(directory, "res", null, ProjectResources.fromCompiled(directory, compiled),
+                compiled, ProjectCodeCache.load(context, directory), 0, true, null);
     }
 
     /** 纯诊断（不传 Context）：只看 project.json/res/文件系统，不挂资源包、不加载 dex。 */

@@ -659,16 +659,14 @@ final class PocRuntime {
         try {
             // Node 悬浮窗（floating_window）跑在宿主进程；停脚本后 overlay 由 Node 侧清理。
             // 这里再清一次主进程侧的 Node UI 覆盖 Activity（若存在）兜底。
-            com.jdkshen.aijspro.engine.NodeUiActivity.closeAll();
+            com.jdkshen.aijspro.engine.NodeUiRenderService.closeAll(context);
         } catch (Throwable ignored) {
             // 非 flutterPoc/其它构建没有该入口时忽略。
         }
         try {
-            // task-167：Node UI/overlay 脚本实际在 :node24 keep-alive，必须单独下发 cancelAll，
-            // Node24Service 取消后会关 overlay 并结束 :node24 进程。
-            PocNode24Jobs.cancelAll();
+            com.stardust.autojs.overlay.OverlayRegistry.closeAll("global_stop_all");
         } catch (Throwable error) {
-            Log.w(TAG, "取消 Node24 任务失败", error);
+            Log.w(TAG, "关闭主进程脚本悬浮窗失败", error);
         }
         releaseForegroundLeases(context);
     }
@@ -680,8 +678,10 @@ final class PocRuntime {
         } catch (Throwable error) {
             Log.w(TAG, "停止全部脚本进程任务失败", error);
         }
-        for (String id : nativeIdsOf(null)) {
-            PocNativeRunner.stop(id);
+        try {
+            PocNativeRunner.stopAll();
+        } catch (Throwable error) {
+            Log.w(TAG, "停止全部 native 任务失败", error);
         }
         try {
             // task-174：所有 stopAll 入口（通知栏/任务页/悬浮菜单/调试停止）统一触达 :node24。

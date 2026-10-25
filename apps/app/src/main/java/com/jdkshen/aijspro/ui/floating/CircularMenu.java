@@ -325,8 +325,7 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
     void stopAllScripts() {
         mWindow.collapse();
         // Phase1：先停 :script/:native 宿主进程里的任务，再停主进程旧引擎任务兜底（toast 计数只反映后者）。
-        HostScripts.stopAllHostScripts();
-        AutoJs.getInstance().getScriptEngineService().stopAllAndToast();
+        HostScripts.stopAllScripts(mContext);
     }
 
 
