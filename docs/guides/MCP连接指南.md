@@ -85,7 +85,7 @@ http://127.0.0.1:8765/mcp
 
 ## 五、Rikkahub / Rikk 示例（同一台手机）
 
-> **App 内入口**：AI.js Pro 的“设备连接 → 接入 AI 客户端”底部已新增 **查看完整连接指南（含 Rikkahub 截图）** 按钮，点开即本文。
+> **App 内入口**：AI.js Pro 的“设备连接 → 接入 AI 客户端”底部有 **查看完整连接指南（含 Rikkahub 截图）** 按钮；App 内置同一份本地 HTML，点开不联网。
 
 ![App 内指南入口](images/mcp-app-guide-link-red.png)
 
