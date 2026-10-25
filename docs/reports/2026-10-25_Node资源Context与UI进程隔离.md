@@ -88,3 +88,11 @@ MI8 调试包及最终 release/R8 包各通过 20 轮 Handler 回调运行/排�
 - MI8 已覆盖安装最终 1249；宿主资源表与 debug 不同，验收工程已针对最终 APK 重新编译、更新 sidecar，不能复用调试包的资源表摘要。
 - 更新源、`project-versions.json`、GitHub Release 均未改，仍为 **dev-1247**。K40 保持 dev-1199、未停止或安装。
 - 原播放器、原 Android 16/16KB 设备尚未验证；高级版全部 UI/API 的等价性仍不能据此宣称完成。
+
+## 发布 dev-1250（2026-10-25）
+
+- 版本：**dev-1250 / versionCode 1250**；最终 APK `AI-js-Pro-Flutter-dev-1250.apk`，140,785,340 字节（134.26 MiB），SHA-256 `76cfc216e67d6de0b24c5f5ac7fda4ddf36c36fb804024e49b160e32bc32fe38`。
+- 构建：Flutter AOT 复用；release + 保守 R8 + 测试签名；22 ELF 无白名单 16KB、Retrofit 最终 DEX 泛型/注解检查通过；体积预算通过。
+- 发布源：LAN `http://192.168.10.7:8080/update.json` 与 GitHub Release <https://github.com/Jdkshen/ai.js-pro/releases/tag/dev-1250> 均为 dev-1250；GitHub 资产含 APK、update.json、update-gh-proxy.json、SHA256SUMS。
+- GitHub 直连清单：<https://github.com/Jdkshen/ai.js-pro/releases/download/dev-1250/update.json>；加速清单：<https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/dev-1250/update-gh-proxy.json>。
+- MI8 已覆盖安装 dev-1250；K40 未动。
