@@ -236,6 +236,17 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
     }
   }
 
+  /// 打开仓库里的完整 MCP 连接指南（GitHub 页面）。
+  Future<void> openFullGuide() async {
+    try {
+      await LocalBridge.call('openUrl', {
+        'url': 'https://github.com/Jdkshen/ai.js-pro/blob/main/docs/guides/MCP%E8%BF%9E%E6%8E%A5%E6%8C%87%E5%8D%97.md',
+      });
+    } catch (error) {
+      if (mounted) message(context, '打开指南失败：$error');
+    }
+  }
+
   Future<void> openShizuku() async {
     try {
       await LocalBridge.call('shizukuOpen');
@@ -616,6 +627,12 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
               '本机地址配合 USB 转发（adb forward）；局域网地址需电脑与手机在同一 WiFi。'
               '启动后实际端口会显示在此页。',
               style: muted)),
+      const SizedBox(height: 2),
+      TextButton.icon(
+          key: const ValueKey('mcp-full-guide-link'),
+          onPressed: openFullGuide,
+          icon: const Icon(Icons.menu_book_outlined, size: 18),
+          label: const Text('查看完整连接指南（含 Rikkahub 截图）')),
     ]));
   }
 
