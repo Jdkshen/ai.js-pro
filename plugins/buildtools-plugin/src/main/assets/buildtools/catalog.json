@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "note": "Candidate metadata from 2026-10-25 device prototypes; not installed by this plugin and not automatically downloaded.",
+  "candidates": [
+    {
+      "id": "ecj",
+      "capability": "java_source",
+      "version": "3.33.0",
+      "license": "EPL-2.0",
+      "sourceUrl": "https://repo1.maven.org/maven2/org/eclipse/jdt/ecj/3.33.0/ecj-3.33.0.jar",
+      "sourceSha256": "f7686c4960cf70c2ebc5c500a73a8cfc04541b730c18f1c5c21329889b137f45",
+      "sourceBytes": 3160927,
+      "runtimePackage": {
+        "name": "ecj-full.jar",
+        "sha256": "e448aa6c0327d6b19375dbfe8e0599c503c37742786c6c33fcc0b50a1e1a5f82",
+        "bytes": 1583762,
+        "note": "D8 dex + ECJ messages/resources; generated locally"
+      },
+      "requires": [
+        "android-stub",
+        "sourceversion-stub"
+      ],
+      "verifiedOn": "MI8 ce4d2bdb candidate-1245, app UID; compile+jar+D8+app_process output JAVA_SOURCE_DEX_OK 你好，手机编译！ message=42",
+      "constraints": [
+        "app_process CLASSPATH must be app-UID read-only; /sdcard and writable parents fail with Writable dex",
+        "-bootclasspath/-classpath android.jar required",
+        "ECJ resources must be merged back into dex jar",
+        "verified -source 8 only"
+      ]
+    },
+    {
+      "id": "sourceversion-stub",
+      "capability": "java_source",
+      "version": "1",
+      "license": "project",
+      "runtimePackage": {
+        "name": "stub.jar",
+        "sha256": "ad9b0cb77885d822b04950f934f6f8b81d645f203e65d680577a226ec36a27cd",
+        "bytes": 445,
+        "note": "minimal javax.lang.model.SourceVersion stub via Smali"
+      },
+      "verifiedOn": "MI8 candidate-1245"
+    },
+    {
+      "id": "android-stub",
+      "capability": "java_source",
+      "version": "SDK platform 35",
+      "license": "Android SDK License",
+      "sourceSha256": "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b",
+      "sourceBytes": 27092450,
+      "note": "Not redistributed by plugin; user must provide a compatible android.jar/minimal stub",
+      "verifiedOn": "MI8 candidate-1245 compile android.os.Build reference"
+    },
+    {
+      "id": "android-arm64-clang",
+      "capability": "native",
+      "version": "21.1.8-3",
+      "license": [
+        "Apache-2.0 WITH LLVM-exception",
+        "GPL-3.0-or-later",
+        "LGPL-2.1-or-later",
+        "MIT",
+        "BSD-3-Clause",
+        "Zlib",
+        "0BSD"
+      ],
+      "source": {
+        "kind": "termux-apt",
+        "repo": "termux-main/dists/stable/main/binary-aarch64",
+        "indexSha256": "acf53a23b20ab01a0d59eecf21d75464bc7dc667f188b74bc3d1486eeb0e4d2e",
+        "packageCount": 16
+      },
+      "payload": {
+        "name": "payload.tar.gz",
+        "sha256": "6a5f12ab7bc88933ccc120b807d2f46ed38fd7c8458dfc6f449687e5e737dd29",
+        "bytes": 145682354,
+        "debBytes": 89232704,
+        "installedKiB": 537308
+      },
+      "tools": {
+        "clang": "bin/clang-21",
+        "clangxx": "bin/clang++",
+        "lld": "bin/ld.lld",
+        "gnuReadelf": "bin/greadelf",
+        "gnuAr": "bin/gar"
+      },
+      "constraints": [
+        "must execute from app-private path; /sdcard exec denied",
+        "LD_LIBRARY_PATH prefix/lib required",
+        "explicit -isystem/-B/-L required",
+        "targetSdk>=29 blocks app-private exec; do not lower host targetSdk",
+        "arm64 only; static LOAD 0x4000 but real 16KB device not tested"
+      ],
+      "verifiedOn": "MI8 ce4d2bdb candidate-1245, app UID; C_OK 42; CPP_OK STL sum=15 size=5"
+    },
+    {
+      "id": "android-apk-packaging",
+      "capability": "android_apk",
+      "version": "host-built-in prototype",
+      "license": "project/Apache-2.0 components",
+      "source": {
+        "kind": "host-apk-classes",
+        "note": "ManifestEditor + KeyStoreGenerator + KeyStoreApkSigner + pxb AXML + built-in D8/Smali"
+      },
+      "result": {
+        "apkBytes": 304178,
+        "apkSha256": "c09c97f6306f317146ef510084077aa9a476c247df12c4f397a0a6e4d2acb2d8",
+        "installed": true
+      },
+      "constraints": [
+        "no aapt2 on device: no source/resource compilation yet",
+        "no zipalign; targetSdk>=30 arsc alignment unmet",
+        "signature v1+v2 only; no v3/v4",
+        "template manifest provider references break minimal APK startup"
+      ],
+      "verifiedOn": "MI8 candidate-1245; APK installed as com.ai.jspro.pipeline.d, launch not verified"
+    }
+  ]
+}

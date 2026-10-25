@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:label="手机编译工具链">
+        <meta-data
+            android:name="org.autojs.plugin.sdk.registry"
+            android:value="com.jdkshen.buildtools.plugin.BuildToolsPlugin" />
+        <meta-data
+            android:name="org.autojs.buildtools.descriptor"
+            android:value="com.jdkshen.buildtools.plugin.BuildToolsPlugin" />
+    </application>
+</manifest>

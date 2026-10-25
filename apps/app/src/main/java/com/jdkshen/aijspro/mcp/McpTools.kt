@@ -310,7 +310,7 @@ internal class McpTools(private val context: Context, private val event: (String
             }
             "terminal_stop" -> toolJson(terminals.stop(args.string("jobId")))
             "terminal_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { terminals.list().forEach { add(it) } }) })
-            "get_build_tools" -> toolJson(McpBuildTools.inspect(terminalBackend, root))
+            "get_build_tools" -> toolJson(McpBuildTools.inspect(terminalBackend, root, context))
             "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
             "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
             "workspace_read" -> toolJson(readBytes(workspaces.read(args.string("workspaceId"), args.string("path")), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
