@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-26 当前发布 dev-1254**：[API 离线文档与发布验收](reports/2026-10-26_API离线文档与dev1254.md)。新增应用内离线 API 搜索（756 条参考条目）、[三引擎使用手册](guides/API_REFERENCE.md)与 [Node UI/资源接口](guides/NODE_UI_API.md)。397 App JVM、6 文档测试、MI8 文档与最终 R8 包复验通过；135.60 MiB，SHA `664410e2…`。GitHub latest 和 LAN 更新源均已发布1254，MI8已装且已安装 APK 摘要一致，K40未动。包含此前1250/1251/1253修复。文档数量不是高级版兼容率；改指南后运行 `python tools/build-api-reference.py`，preBuild 检查生成资产。下方旧版本状态为历史记录。
+
 > **2026-10-26 当前发布 dev-1253（仅 LAN，SHA `fc9c3312…`）**：更新源 `http://192.168.10.7:8080/update.json` 为 1253，MI8 已装，K40 1199 未动。包含：MCP 连接指南改为 App 内本地 HTML/WebView（`assets/docs/mcp-guide.html`，不联网）、设备连接页完整指南按钮、Rikkahub 红色备注截图；dev-1251 修复 Node 主线程 JS 回调异常逃逸崩溃；dev-1250 含编辑器剪贴板/全进程停止、Node 资源 Context 与 `:nodeui` 隔离。GitHub Release 仍为 dev-1251（用户要求不频繁更新）。详见 [MCP 指南本地化](reports/2026-10-25_MCP连接指南本地化与dev1253.md)、[App 入口](reports/2026-10-25_MCP连接指南入口与dev1252.md)、[回调热修](reports/2026-10-25_Node回调异常逃逸修复.md)。
 
 > **2026-10-25 最新候选 1249、未发布**：[Node 资源 Context 与 UI 进程隔离](reports/2026-10-25_Node资源Context与UI进程隔离.md)。补齐 context.loadResources、编译布局 recreate；每 job 资源独立，旧 Node UI/Dialogs 在 `:nodeui`，work/settings 留主进程。843 JVM + MI8 最终 release/R8 资源/20 轮重建/进程退出重连通过；134.26 MiB，SHA `774ba19e…`。MI8 已装 1249、K40 1199 未动、更新源仍 dev-1247。原听海项目未拿到；Rhino 传统 Activity 还未迁出主进程。
