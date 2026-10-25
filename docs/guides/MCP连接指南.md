@@ -85,6 +85,10 @@ http://127.0.0.1:8765/mcp
 
 ## 五、Rikkahub / Rikk 示例（同一台手机）
 
+> **App 内入口**：AI.js Pro 的“设备连接 → 接入 AI 客户端”底部已新增 **查看完整连接指南（含 Rikkahub 截图）** 按钮，点开即本文。
+
+![App 内指南入口](images/mcp-app-guide-link-red.png)
+
 如果 Rikkahub（包名 `me.rerere.rik`）和 AI.js Pro 在**同一台手机**，不需要 ADB 转发，直接用本机地址：
 
 ```text
@@ -99,9 +103,11 @@ http://127.0.0.1:8765/mcp
 4. 打开 **启用**，点 **保存**。
 5. 回到 MCP 列表，看到 `aijspro`、**Connected**、**66/66 tools** 即连接成功。
 
-![Rikkahub 新建 aijspro](images/rik-aijspro-settings.jpg)
+![Rikkahub 新建 aijspro（红色备注）](images/rik-settings-red.jpg)
 
-![Rikkahub 已连接 66/66 工具](images/rik-mcp-servers.jpg)
+<p style="color:#c62828;font-weight:700">红色备注：① 启用 ② 传输类型 Streamable HTTP ③ URL 填 http://127.0.0.1:8765/mcp ④ 保存；返回列表看到 66/66 tools 即成功。</p>
+
+![Rikkahub 已连接 66/66 工具](images/rik-mcp-servers-red.jpg)
 
 ### 列表里的 Failed 项
 
