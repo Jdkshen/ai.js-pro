@@ -102,7 +102,7 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 MCP 和应用内已有终端复用同一执行底层，使用手机应用 UID，无需占用 Rhino/QuickJS/Node 运行槽。它是管道终端（`pty=false`），支持编译日志和 stdin；全屏编辑器、终端控制序列、Ctrl-C 作业控制不属于本接口。不要把 cwd 校验当成 shell 沙箱：workingDirectory 必须在 MCP 操作目录内，命令仍可访问应用权限允许的其他路径。
 
-1. `get_build_tools` 检测 PATH 中 clang/clang++、javac/java、Gradle、aapt2、zipalign、apksigner 等；`found=true` 仅表示定位到命令，`verified=false` 表示尚未试编译。返回的 `toolchain` 字段读取可选 `com.jdkshen.buildtools.plugin` 的描述/候选组件；`installed=false` 表示未装插件，`candidates` 只是预研元数据，不代表已安装或可用。
+1. `get_build_tools` 检测 PATH 中 clang/clang++、javac/java、Gradle、aapt2、zipalign、apksigner 等；`found=true` 仅表示定位到命令，`verified=false` 表示尚未试编译。
 2. `terminal_exec(command, workingDirectory?, env?, timeoutSeconds?)` 异步创建任务，立即返回 jobId。env 是字符串对象。最多 3 个并发，保留最近 16 条。timeoutSeconds 默认 300、范围 1..3600；这是命令执行期限，到期终止进程组。
 3. `terminal_read(jobId, offset?, maxChars?, waitMillis?)` 按上次 nextOffset 继续读合并后的 stdout/stderr。offset/nextOffset 是 UTF-16 字符偏移，默认 0；maxChars 默认 16384、最大 65536；waitMillis 为 0..10000，仅控制等待输出，不会停止任务。每任务保留最近 256Ki 字符；truncated=true 时有旧输出被淘汰，可将完整编译日志重定向到项目文件。
 4. `terminal_write(jobId,input?,eof?)` 排队写 stdin，不自动补换行；eof=true 关闭输入。accepted 只表示入队，读取结果中的 inputError/pendingInput 确认是否写入。
