@@ -5,6 +5,7 @@
 给 AI 助手 / 自动化 agent 的项目约定。dsh（DeepSeek Harness）、Codex、Copilot、Claude Code 都会读这个文件。
 
 > **接手总纲（先读这个）**：[`docs/HANDOFF_AI.md`](docs/HANDOFF_AI.md) —— 主架构图、构建/发布、真机测试套路、已知缺口、分支策略。
+> **当前发布 dev-1251（2026-10-25，回调异常热修）**：[Node 回调异常逃逸修复](docs/reports/2026-10-25_Node回调异常逃逸修复.md)：主线程/取消中的 Node JS 回调异常改为捕获并 logcat，不再逃逸 Looper 杀应用；release+R8，134.26 MiB，SHA `d1c888ae…`；GitHub <https://github.com/Jdkshen/ai.js-pro/releases/tag/dev-1251>；MI8 已装。
 > **当前发布 dev-1250（2026-10-25）**：[Node 资源 Context 与 UI 进程隔离](docs/reports/2026-10-25_Node资源Context与UI进程隔离.md) + [编辑器剪贴板与全进程停止](docs/reports/2026-10-25_编辑器剪贴板与全进程停止修复.md)：release+R8 测试签名，134.26 MiB，SHA `76cfc216…`；GitHub Release <https://github.com/Jdkshen/ai.js-pro/releases/tag/dev-1250>；MI8 已装，K40 未动。
 > **候选 1248（2026-10-25，MI8 已验、未发布）**：[编辑器剪贴板与全进程停止修复](docs/reports/2026-10-25_编辑器剪贴板与全进程停止修复.md)。Ace 1.44 长按需 `getClientPosition` 适配；原生复制剪切粘贴、主应用三引擎 / Node 三槽全局停止和独立 APK 停止中继、新 inrt 模板。App 390 / inrt 9 JVM 通过，最终 release/R8 真机回归通过；134.26 MiB，SHA `0aa1c2e4…`。MI8 1248，K40 1199 未动，更新源仍 dev-1247。旧独立 APK 必须重新打包；保持子进程 Glide 初始化，不要随主进程职责一起跳过。
 > **MCP 手机终端（2026-10-25，候选已验收、未发布）**：[终端与编译入口](docs/reports/2026-10-25_MCP手机终端与编译入口.md)。candidate-1245 已装 MI8；25 项本地、59 次 MCP 调用、6 项界面、真实 D8/Smali 编译通过。复用原终端，六项新工具；编译器 main 必须走独立 app_process。JCommander 反射校验器需显式 keep，修改后须用 R8 包跑真实编译。**用户已决定不做 Java/C/C++/APK 源码编译工具链**：只保留 MCP 终端控制与既有 D8/Smali；不要重新引入 buildtools/编译插件。更新源已为 dev-1247；K40 1199 未动。
