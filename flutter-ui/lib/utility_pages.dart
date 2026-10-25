@@ -1555,18 +1555,18 @@ class _LogPageState extends State<LogPage>
   }
 }
 
+Future<void> openApiDocumentation(BuildContext context) async {
+  try {
+    await LocalBridge.call('openUrl', {
+      'url': 'file:///android_asset/docs/api-reference.html',
+    });
+  } catch (error) {
+    if (context.mounted) message(context, '打开 API 文档失败：$error');
+  }
+}
+
 class GuidePage extends StatelessWidget {
   const GuidePage({Key? key}) : super(key: key);
-  Future<void> _openApi(BuildContext context) async {
-    try {
-      await LocalBridge.call('openUrl', {
-        'url': 'file:///android_asset/docs/api-reference.html',
-      });
-    } catch (error) {
-      if (context.mounted) message(context, '打开 API 文档失败：$error');
-    }
-  }
-
   @override
   Widget build(BuildContext context) => GlassBackground(
     child: Scaffold(
@@ -1581,7 +1581,7 @@ class GuidePage extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: FilledButton.icon(
-              onPressed: () => _openApi(context),
+              onPressed: () => openApiDocumentation(context),
               icon: const Icon(Icons.menu_book_outlined),
               label: const Text('三引擎 API 文档 · 离线搜索'),
             ),

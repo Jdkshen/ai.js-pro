@@ -742,9 +742,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                               onPressed: () =>
                                   openUtility(const LogPage(), name: 'log')),
                           ActionIcon(
-                              tooltip: '本地使用指南',
+                              tooltip: 'API 文档',
                               icon: const Icon(Icons.bookmark),
-                              onPressed: () => openUtility(const GuidePage())),
+                              onPressed: () => openApiDocumentation(context)),
                           ActionIcon(
                               tooltip: tab == 4 ? '搜索任务' : '搜索文件',
                               icon: const Icon(Icons.search),
