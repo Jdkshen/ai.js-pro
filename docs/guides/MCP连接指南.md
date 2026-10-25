@@ -1,6 +1,10 @@
 # MCP 连接指南（手机 AI.js Pro ↔ 电脑 AI 客户端）
 
-本文对应 **dev-1251+**。目标：让电脑上的 MCP 客户端连接到手机的 AI.js Pro，在电脑上列脚本、跑脚本、读日志、控制手机界面。
+<a id="rik"></a>
+
+本文对应 **dev-1251+**。
+
+> 同一台手机上用 Rikkahub / Rikk 连接：直接用本机地址 `http://127.0.0.1:8765/mcp`，见下文 [Rikkahub 配置示例](#rik)。目标：让电脑上的 MCP 客户端连接到手机的 AI.js Pro，在电脑上列脚本、跑脚本、读日志、控制手机界面。
 
 ## 一、准备
 
@@ -79,7 +83,44 @@ http://127.0.0.1:8765/mcp
 
 如果手机页面显示端口不是 8765，把两处端口一起替换。
 
-## 五、确认连接成功
+## 五、Rikkahub / Rikk 示例（同一台手机）
+
+如果 Rikkahub（包名 `me.rerere.rik`）和 AI.js Pro 在**同一台手机**，不需要 ADB 转发，直接用本机地址：
+
+```text
+http://127.0.0.1:8765/mcp
+```
+
+### 操作步骤
+
+1. 在 Rikkahub 打开 **MCP** 页面，点右上角 **+** 新建服务器。
+2. 名称填 `aijspro`，传输类型选 **Streamable HTTP**。
+3. 服务器地址填 `http://127.0.0.1:8765/mcp`（端口以 AI.js Pro 页面实际显示为准）。
+4. 打开 **启用**，点 **保存**。
+5. 回到 MCP 列表，看到 `aijspro`、**Connected**、**66/66 tools** 即连接成功。
+
+![Rikkahub 新建 aijspro](images/rik-aijspro-settings.jpg)
+
+![Rikkahub 已连接 66/66 工具](images/rik-mcp-servers.jpg)
+
+### 列表里的 Failed 项
+
+截图中的 `MTmpc`、`ajmcp`、`mymcpserver` 显示 `Failed to connect to /127.0.0.1:8787/8766/8899`，是旧配置或其它本地服务，与 AI.js Pro 无关。只保留 `aijspro` 这一项，避免同时启用多个同名/同端口服务。
+
+### Rikkahub 在另一台设备上
+
+- 同一 WiFi：把地址换成 AI.js Pro 页面上的局域网地址，例如 `http://192.168.10.6:8765/mcp`；
+- USB：先在电脑执行 `adb forward tcp:8765 tcp:8765`，再填 `http://127.0.0.1:8765/mcp`；
+- 手机 IP 变化后重新复制地址；Rikkahub 内保存后若仍是 Failed，关闭再启用一次。
+
+### 使用链接
+
+- 在 Rikkahub 中调用 `learn_autojs_skill` 获取完整工具说明；
+- 调 `get_status` / `list_engines` 检查手机端状态；
+- 用 `run_script` 时加 `wait: true` 获取真实输出和错误；
+- 设备工具（`get_ui_layout` / `capture_screen` / `ui_*` / `app_*`）需要 AI.js Pro 无障碍服务。
+
+## 六、确认连接成功
 
 客户端连接后，先调用 `learn_autojs_skill`，再调用：
 
@@ -91,7 +132,7 @@ http://127.0.0.1:8765/mcp
 
 连接正常时 `tools/list` 会返回当前公开工具（本版 66 个名称，实际以客户端显示为准），分为：状态与诊断、脚本与执行、工作区、引擎与 API、设备与无障碍、终端与构建、悬浮窗、示例与帮助。
 
-## 六、常见问题
+## 七、常见问题
 
 ### 电脑打不开地址
 
@@ -116,7 +157,7 @@ MCP 是前台服务；保持 AI.js Pro 后台存活，必要时重新打开应�
 
 MCP 当前免令牌，任何能访问该端口的设备都能控制脚本和部分设备操作。只在可信局域网使用，不要把 8765 端口映射到公网；需要跨网络时用 SSH/VPN 等安全通道。
 
-## 七、当前工具概览
+## 八、当前工具概览
 
 | 分类 | 工具 |
 |---|---|
@@ -129,7 +170,7 @@ MCP 当前免令牌，任何能访问该端口的设备都能控制脚本和部�
 | 悬浮窗 | `list_overlays`、`close_overlays` |
 | 示例与帮助 | `list_samples`、`read_sample`、`learn_autojs_skill` |
 
-## 八、相关文档
+## 九、相关文档
 
 - [MCP 手机终端与编译入口](../reports/2026-10-25_MCP手机终端与编译入口.md)
 - [MCP 无障碍 UI 自动化](../reports/2026-10-25_MCP无障碍UI自动化.md)
