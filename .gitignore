@@ -8,6 +8,8 @@
 /local.properties
 /.vscode/settings.json
 /tools/*
+!/tools/build-api-reference.py
+!/tools/test-api-reference.py
 # Reviewed five-item optimization helpers (keep unrelated local tools ignored).
 !/tools/tests/
 /tools/tests/*

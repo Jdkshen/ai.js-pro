@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>三引擎 API 文档 · AI.js Pro</title>
+  <link rel="stylesheet" href="api-reference.css">
+  <script defer src="api-reference-data.js"></script>
+  <script defer src="api-reference.js"></script>
+</head>
+<body>
+  <header>
+    <h1>API 文档</h1>
+    <p>Rhino · QuickJS · Node.js <span class="offline">离线可用</span></p>
+    <label class="search-label" for="search">搜索方法、参数或示例</label>
+    <input id="search" type="search" placeholder="例如 click、loadResources、截图" autocomplete="off" spellcheck="false">
+    <nav id="engines" aria-label="选择引擎">
+      <button type="button" data-engine="all" aria-pressed="true">全部</button>
+      <button type="button" data-engine="rhino" aria-pressed="false">Rhino</button>
+      <button type="button" data-engine="quickjs" aria-pressed="false">QuickJS</button>
+      <button type="button" data-engine="nodejs" aria-pressed="false">Node.js</button>
+    </nav>
+    <label class="category-label" for="category">专题</label>
+    <select id="category"><option value="">全部专题</option></select>
+  </header>
+  <main>
+    <div class="intro">
+      <p>先选引擎，再查签名、参数、返回值和代码。三引擎指南说明当前入口与差异；传统 API 原文供 Rhino 查阅，QuickJS、Node.js 请核对对应指南。</p>
+      <p class="links"><a href="mcp-guide.html">MCP 连接指南</a><a href="index.html">传统 API 目录</a></p>
+    </div>
+    <p id="status" role="status" aria-live="polite">正在加载本地文档…</p>
+    <div id="results"></div>
+    <p id="empty" hidden>没有找到相关条目。试试方法名的一部分，或切换引擎与专题。</p>
+    <button id="more" type="button" hidden>显示更多</button>
+    <noscript><p>当前查看器未启用文档搜索，可从<a href="index.html">传统 API 目录</a>查阅完整章节。</p></noscript>
+  </main>
+</body>
+</html>

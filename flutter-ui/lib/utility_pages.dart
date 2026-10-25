@@ -1557,33 +1557,79 @@ class _LogPageState extends State<LogPage>
 
 class GuidePage extends StatelessWidget {
   const GuidePage({Key? key}) : super(key: key);
+  Future<void> _openApi(BuildContext context) async {
+    try {
+      await LocalBridge.call('openUrl', {
+        'url': 'file:///android_asset/docs/api-reference.html',
+      });
+    } catch (error) {
+      if (context.mounted) message(context, '打开 API 文档失败：$error');
+    }
+  }
+
   @override
   Widget build(BuildContext context) => GlassBackground(
-      child: Scaffold(
-          appBar: AppBar(
-              systemOverlayStyle: utilitySystemBars(context),
-              foregroundColor: Theme.of(context).colorScheme.onSurface,
-              title: const Text('本地使用指南')),
-          body: ListView(padding: const EdgeInsets.all(16), children: const [
-            _GuideEntry('脚本和示例',
-                '点击名称打开文件，长按或点击右侧更多进行重命名、分享或删除。右下角新建菜单可创建文件、文件夹和 Rhino / Node.js 项目，也可导入文件或 ZIP。删除的内容可在设置的回收站恢复。示例只读，可复制文件或整个目录到脚本目录后修改。'),
-            _GuideEntry('编辑和运行',
-                '顶部 <> 打开工作区，文件树可打开多个文档。切换标签保留各自草稿、光标和撤销记录，可全部保存。运行前保存当前脚本；保存失败会保留内容并显示错误。搜索定位代码，底部符号栏在光标处插入字符。Rhino 和 Node.js 使用本机脚本引擎。'),
-            _GuideEntry('资源和插件',
-                '资源来自本机目录，可搜索、分类、导入脚本或 ZIP；点击保存按钮解包到脚本目录。“我的”显示本机导入记录。同名内容保留，可换名后导入。插件卡片显示本机已安装的 SDK 插件；安装本地 APK 后需完成系统安装确认。'),
-            _GuideEntry('设备权限',
-                '权限开关会进入系统设置，返回后同步真实授权状态。设备连接页的“Shizuku 启动无障碍”可通过已启动的 Shizuku 授权并开启本应用的无障碍服务；首次使用在 Shizuku 弹窗中允许，拒绝时不会修改无障碍设置。'),
-            _GuideEntry('MCP 服务',
-                '侧栏“开发”里的 MCP 开关控制本应用的自建服务。点击“MCP 服务”打开管理页，可查看真实运行状态、实际端口、心跳和错误，并复制本机/局域网地址与客户端配置。默认端口 8765，被占用时自动顺延到 8795，实际端口以管理页为准；服务开启后监听 0.0.0.0，没有单独的局域网开关，且完全免令牌，请只在可信 WiFi 使用。客户端填写 http://…/mcp 即可；公开 41 个工具（34 个标准名 + 7 个兼容名）。脚本执行和语法检查使用本机引擎，读取控件和截屏需要无障碍服务。'),
-            _GuideEntry('连接电脑',
-                '电脑连接使用 AI.js Pro 自家的 VS Code 扩展：电脑端扩展监听 8327，手机端服务器使用 9317。两端需网络互通，电脑防火墙要放行对应端口；连接状态以设备连接页显示为准。'),
-            _GuideEntry('任务管理',
-                '第五个导航图标打开管理页。列表显示正在运行的 Rhino、Node.js 脚本，以及已有的定时和意图任务，可搜索、折叠分组、查看路径、停止脚本或取消计划。右下角按钮停止确认时的全部运行脚本。管理页右上角也可打开设备连接。'),
-            _GuideEntry('运行日志',
-                '工具栏、设置页和悬浮条都打开同一个 Flutter「运行日志」页：默认显示统一实时流（主进程 + :script + :native），可切「实时/历史」；支持 6 档等级过滤、搜索、复制和清空。任务页每个运行中任务的日志图标会带上任务 token，只显示该任务的输出。上翻查看旧日志时不会被新日志拽回，右下角“有新日志/回到最新”可回到最新；清空只清显示，不删日志文件。读取失败保留上次日志并可重试。'),
-            _GuideEntry('导航',
-                '点击图标选择页面，或按住导航横向拖动。拖动距离控制页面进度，松手后停在最近一页。内容区域也支持左右滑动，目录和列表滚动位置会保留。')
-          ])));
+    child: Scaffold(
+      appBar: AppBar(
+        systemOverlayStyle: utilitySystemBars(context),
+        foregroundColor: Theme.of(context).colorScheme.onSurface,
+        title: const Text('本地使用指南'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: FilledButton.icon(
+              onPressed: () => _openApi(context),
+              icon: const Icon(Icons.menu_book_outlined),
+              label: const Text('三引擎 API 文档 · 离线搜索'),
+            ),
+          ),
+          const _GuideEntry(
+            'API 文档',
+            '按 Rhino、QuickJS、Node.js 选择引擎，搜索方法名或用途，展开查看参数、返回值、代码和兼容差异。文档已内置，断网也能使用；传统 API 与 Node 专题分开标注。',
+          ),
+          const _GuideEntry(
+            '脚本和示例',
+            '点击名称打开文件，长按或点击右侧更多进行重命名、分享或删除。右下角新建菜单可创建文件、文件夹和 Rhino / Node.js 项目，也可导入文件或 ZIP。删除的内容可在设置的回收站恢复。示例只读，可复制文件或整个目录到脚本目录后修改。',
+          ),
+          _GuideEntry(
+            '编辑和运行',
+            '顶部 <> 打开工作区，文件树可打开多个文档。切换标签保留各自草稿、光标和撤销记录，可全部保存。运行前保存当前脚本；保存失败会保留内容并显示错误。搜索定位代码，底部符号栏在光标处插入字符。Rhino、QuickJS 和 Node.js 使用本机脚本引擎。',
+          ),
+          _GuideEntry(
+            '资源和插件',
+            '资源来自本机目录，可搜索、分类、导入脚本或 ZIP；点击保存按钮解包到脚本目录。“我的”显示本机导入记录。同名内容保留，可换名后导入。插件卡片显示本机已安装的 SDK 插件；安装本地 APK 后需完成系统安装确认。',
+          ),
+          _GuideEntry(
+            '设备权限',
+            '权限开关会进入系统设置，返回后同步真实授权状态。设备连接页的“Shizuku 启动无障碍”可通过已启动的 Shizuku 授权并开启本应用的无障碍服务；首次使用在 Shizuku 弹窗中允许，拒绝时不会修改无障碍设置。',
+          ),
+          _GuideEntry(
+            'MCP 服务',
+            '侧栏“开发”里的 MCP 开关控制本应用的自建服务。点击“MCP 服务”打开管理页，可查看真实运行状态、实际端口、心跳和错误，并复制本机/局域网地址与客户端配置。默认端口 8765，被占用时自动顺延到 8795，实际端口以管理页为准；服务开启后监听 0.0.0.0，完全免令牌，请只在可信 WiFi 使用。客户端填写 http://…/mcp 即可；可用工具以服务返回的工具目录为准。脚本执行和语法检查使用本机引擎，读取控件和截屏需要无障碍服务。',
+          ),
+          _GuideEntry(
+            '连接电脑',
+            '电脑连接使用 AI.js Pro 自家的 VS Code 扩展：电脑端扩展监听 8327，手机端服务器使用 9317。两端需网络互通，电脑防火墙要放行对应端口；连接状态以设备连接页显示为准。',
+          ),
+          _GuideEntry(
+            '任务管理',
+            '第五个导航图标打开管理页。列表显示正在运行的 Rhino、QuickJS、Node.js 脚本，以及已有的定时和意图任务，可搜索、折叠分组、查看路径、停止脚本或取消计划。右下角按钮停止确认时的全部运行脚本。管理页右上角也可打开设备连接。',
+          ),
+          _GuideEntry(
+            '运行日志',
+            '工具栏、设置页和悬浮条都打开同一个 Flutter「运行日志」页：默认显示统一实时流（主进程 + :script + :native），可切「实时/历史」；支持 6 档等级过滤、搜索、复制和清空。任务页每个运行中任务的日志图标会带上任务 token，只显示该任务的输出。上翻查看旧日志时不会被新日志拽回，右下角“有新日志/回到最新”可回到最新；清空只清显示，不删日志文件。读取失败保留上次日志并可重试。',
+          ),
+          _GuideEntry(
+            '导航',
+            '点击图标选择页面，或按住导航横向拖动。拖动距离控制页面进度，松手后停在最近一页。内容区域也支持左右滑动，目录和列表滚动位置会保留。',
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _GuideEntry extends StatelessWidget {

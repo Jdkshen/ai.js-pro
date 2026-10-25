@@ -2,6 +2,8 @@
 
 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以**仓库根目录**为基准。
 
+API 文档：**[三引擎使用手册](guides/API_REFERENCE.md)** · **[Node UI 与 Java 资源接口](guides/NODE_UI_API.md)** · [Node 自动化与图色](guides/Node24基础自动化API.md) · [Node 控件选择器](guides/Node24控件选择器API.md)。新版 APK 的「本地使用指南」内可离线搜索，覆盖范围与验证记录见 [本轮报告](reports/2026-10-26_API离线文档与dev1254.md)。
+
 > **当前状态（2026-10-25）**：更新源为 **dev-1253**（MCP 连接指南本地 HTML，仅 LAN）；MCP 连接指南见 [guides/MCP连接指南.md](guides/MCP连接指南.md)。补齐 Node context.loadResources、编译布局 recreate，将旧 Node UI/对话框迁到独立进程；见[本轮报告](reports/2026-10-25_Node资源Context与UI进程隔离.md)。此前 1248 的剪贴板/停止修复已包含。K40 业务未动；Rhino 传统 UI、高级版全量 API 和真实 16KB 内核仍有待办。
 
 ## 当前状态

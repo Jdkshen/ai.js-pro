@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Build the offline API search index from maintained guides and bundled legacy docs.
+
+No declaration inventory is treated as runtime support. No network or third-party packages.
+Run with --check in CI to detect stale generated assets.
+"""
+import argparse
+import hashlib
+import html
+from html.parser import HTMLParser
+import json
+from pathlib import Path
+import re
+
+ROOT = Path(__file__).resolve().parents[1]
+ASSETS = ROOT / 'apps/app/src/main/assets/docs'
+GUIDES = [
+    ('docs/guides/API_REFERENCE.md', ['rhino', 'quickjs', 'nodejs'], '三引擎使用手册'),
+    ('docs/guides/NODE_UI_API.md', ['nodejs'], 'Node UI 与 Java 资源'),
+    ('docs/guides/Node24基础自动化API.md', ['nodejs'], 'Node 自动化与图色'),
+    ('docs/guides/Node24控件选择器API.md', ['nodejs'], 'Node 控件选择器'),
+]
+LEGACY = ['app', 'console', 'coordinates-based-automation', 'device', 'dialogs', 'engines',
+          'events', 'floaty', 'files', 'globals', 'http', 'images', 'keys', 'media',
+          'modules', 'widgets-based-automation', 'sensors', 'shell', 'storages',
+          'threads', 'timers', 'ui', 'io', 'plugins', 'canvas']
+
+
+def inline(text):
+    # Protect code spans before processing links/emphasis (types and signatures contain punctuation).
+    spans = []
+    def code(match):
+        spans.append('<code>' + html.escape(match[1]) + '</code>')
+        return '\x00' + str(len(spans) - 1) + '\x00'
+    value = re.sub(r'`([^`]+)`', code, text)
+    value = html.escape(value)
+    value = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', value)
+    # Repository paths are shown as text; only existing bundled documents get local links.
+    value = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1 (<code>\2</code>)', value)
+    return re.sub(r'\x00(\d+)\x00', lambda m: spans[int(m[1])], value)
+
+
+def table_cells(line):
+    cells, current, quoted, escaped = [], '', False, False
+    for char in line.strip().strip('|'):
+        if escaped:
+            current += char; escaped = False
+        elif char == '\\':
+            escaped = True
+        elif char == '`':
+            quoted = not quoted; current += char
+        elif char == '|' and not quoted:
+            cells.append(current.strip()); current = ''
+        else:
+            current += char
+    cells.append(current.strip())
+    return cells
+
+
+def markdown(lines):
+    out, paragraph, table, items = [], [], [], []
+    def flush():
+        if paragraph:
+            out.append('<p>' + inline(' '.join(paragraph)) + '</p>'); paragraph.clear()
+        if items:
+            out.append('<ul>' + ''.join('<li>' + inline(x) + '</li>' for x in items) + '</ul>'); items.clear()
+        if table:
+            rows = [table_cells(x) for x in table]
+            rows = [r for r in rows if not all(re.fullmatch(r'[:\-\s]+', c) for c in r)]
+            out.append('<div class="table-scroll"><table>' + ''.join('<tr>' + ''.join(
+                ('<th>' if i == 0 else '<td>') + inline(c) + ('</th>' if i == 0 else '</td>') for c in r)
+                + '</tr>' for i, r in enumerate(rows)) + '</table></div>'); table.clear()
+    fence = None; code = []
+    for line in lines:
+        if line.lstrip().startswith('```'):
+            flush()
+            if fence is None:
+                fence = line.strip()[3:]; code = []
+            else:
+                out.append('<pre><code>' + html.escape('\n'.join(code)) + '</code></pre>'); fence = None
+            continue
+        if fence is not None:
+            code.append(line); continue
+        if not line.strip(): flush()
+        elif line.lstrip().startswith('|'):
+            if paragraph or items: flush()
+            table.append(line)
+        elif re.match(r'^\s*[-*]\s|^\s*\d+[.)]\s', line):
+            if paragraph or table: flush()
+            items.append(re.sub(r'^\s*(?:[-*]|\d+[.)])\s+', '', line))
+        elif line.startswith('>'):
+            flush(); out.append('<p class="note">' + inline(line.lstrip('> ')) + '</p>')
+        else:
+            if table or items: flush()
+            paragraph.append(line.strip())
+    if fence is not None: raise ValueError('Unclosed Markdown code fence')
+    flush()
+    return ''.join(out)
+
+
+class Text(HTMLParser):
+    def __init__(self): super().__init__(); self.parts = []
+    def handle_data(self, data): self.parts.append(data)
+
+
+def plain(fragment):
+    parser = Text(); parser.feed(fragment)
+    return ' '.join(' '.join(parser.parts).split())
+
+
+class LegacySections(HTMLParser):
+    ALLOWED = {'p', 'code', 'pre', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
+               'em', 'strong', 'b', 'i', 'blockquote', 'br', 'a', 'div', 'span', 'dl', 'dt', 'dd'}
+    def __init__(self, filename):
+        super().__init__(convert_charrefs=False)
+        self.filename = filename; self.rows = []; self.title = []; self.body = []
+        self.heading = None; self.anchor = ''; self.active = False; self.skip = 0
+    def flush(self):
+        title = ' '.join(''.join(self.title).replace('#', '').split())
+        if title and title not in ['目录', 'Table of Contents'] and self.body:
+            self.rows.append((title, ''.join(self.body), self.anchor))
+        self.title = []; self.body = []; self.anchor = ''; self.active = False
+    def handle_starttag(self, tag, attrs):
+        if tag in ['script', 'style', 'nav']:
+            self.skip += 1; return
+        if self.skip: return
+        attrs = dict(attrs)
+        if re.fullmatch(r'h[1-4]', tag):
+            self.flush(); self.heading = tag; self.active = True
+            self.anchor = attrs.get('id', ''); return
+        if self.heading:
+            if attrs.get('id'): self.anchor = attrs['id']
+            return
+        if not self.active or tag not in self.ALLOWED: return
+        rendered = ''
+        if tag == 'a':
+            href = attrs.get('href', '')
+            if href.startswith('#'): href = self.filename + href
+            if href and not href.startswith(('javascript:', 'data:', 'file:', '//')):
+                rendered = ' href="' + html.escape(href, quote=True) + '"'
+        self.body.append('<' + tag + rendered + '>')
+    def handle_endtag(self, tag):
+        if tag in ['script', 'style', 'nav']:
+            self.skip = max(0, self.skip - 1); return
+        if self.skip: return
+        if tag == self.heading: self.heading = None; return
+        if self.active and not self.heading and tag in self.ALLOWED and tag != 'br':
+            self.body.append('</' + tag + '>')
+    def handle_data(self, data):
+        if self.skip: return
+        if self.heading: self.title.append(data)
+        elif self.active: self.body.append(html.escape(data))
+    def handle_entityref(self, name): self.handle_data(html.unescape('&' + name + ';'))
+    def handle_charref(self, name): self.handle_data(html.unescape('&#' + name + ';'))
+
+
+def build():
+    records, sources = [], []
+    for file, engines, category in GUIDES:
+        text = (ROOT / file).read_text(encoding='utf-8-sig')
+        sources.append({'path': file, 'sha256': hashlib.sha256(text.encode()).hexdigest()})
+        title, lines, fence = category, [], False
+        def flush_guide():
+            body = markdown(lines)
+            if plain(body): records.append({'title': title, 'html': body, 'engines': engines,
+                'category': category, 'kind': 'guide', 'source': file, 'link': None})
+        for line in text.splitlines():
+            if line.lstrip().startswith('```'): fence = not fence
+            heading = None if fence else re.match(r'^#{1,4}\s+(.+)', line)
+            if heading:
+                flush_guide(); title = heading[1]; lines = []
+            else: lines.append(line)
+        flush_guide()
+    for name in LEGACY:
+        file = ASSETS / (name + '.html')
+        text = file.read_text(encoding='utf-8-sig')
+        sources.append({'path': file.relative_to(ROOT).as_posix(), 'sha256': hashlib.sha256(text.encode()).hexdigest()})
+        parser = LegacySections(file.name); parser.feed(text); parser.flush()
+        for title, body, anchor in parser.rows:
+            if len(plain(body)) < 8 or title in ['AI.js Pro 4.1.0 文档']: continue
+            records.append({'title': title, 'html': body, 'engines': ['rhino'], 'category': '传统 API · ' + name,
+                'kind': 'legacy', 'source': file.relative_to(ROOT).as_posix(),
+                'link': file.name + ('#' + anchor if anchor else '')})
+    for index, record in enumerate(records):
+        record['id'] = 'api-' + str(index + 1)
+        record['text'] = plain(record['html'])
+        record['search'] = (record['title'] + ' ' + record['category'] + ' ' + record['text']).lower()
+    result = {'schemaVersion': 1, 'sources': sources, 'records': records,
+        'scope': '现行三引擎指南与 Node 专题；传统 API 原文供 Rhino 查询，不能据此推断 QuickJS/Node 全量支持。'}
+    return 'window.AIJS_API_REFERENCE=' + json.dumps(result, ensure_ascii=False, separators=(',', ':')) + ';\n'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument('--check', action='store_true')
+    args = parser.parse_args(); result = build(); target = ASSETS / 'api-reference-data.js'
+    if args.check:
+        if not target.is_file() or target.read_text(encoding='utf-8') != result:
+            raise SystemExit('API reference assets are stale; run python tools/build-api-reference.py')
+    else: target.write_text(result, encoding='utf-8')
+    data = json.loads(result[len('window.AIJS_API_REFERENCE='):-2])
+    print(json.dumps({'records': len(data['records']), 'sources': len(data['sources']), 'bytes': len(result.encode()), 'checked': args.check}))
+
+
+if __name__ == '__main__': main()

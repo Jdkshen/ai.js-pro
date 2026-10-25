@@ -864,6 +864,15 @@ tasks.register('verifyCommonEngineSamples') {
     }
 }
 
+tasks.register('verifyApiReference', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'python', rootProject.file('tools/build-api-reference.py').absolutePath, '--check'
+}
+
+tasks.named('preBuild').configure {
+    dependsOn tasks.named('verifyApiReference')
+}
+
 tasks.register('verifyQuickJsSamplesMarked') {
     group = 'verification'
     description = 'Require every script shown under QuickJS samples to select QuickJS explicitly.'
