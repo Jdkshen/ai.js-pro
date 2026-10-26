@@ -6,6 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class McpToolSchemaTest {
+    @Test fun documentationSchemasPublishRequiredIdFiltersAndBoundedNativeIntegers() {
+        val search = McpToolSchema.searchApiDocsSchema()
+        assertFalse(search.has("required"))
+        val fields = search.getAsJsonObject("properties")
+        assertEquals("integer", fields.getAsJsonObject("limit").get("type").asString)
+        assertEquals(20, fields.getAsJsonObject("limit").get("maximum").asInt)
+        assertTrue(fields.getAsJsonObject("engine").getAsJsonArray("enum").map { it.asString }.contains("nodejs"))
+        val read = McpToolSchema.readApiDocSchema()
+        assertEquals(listOf("id"), read.getAsJsonArray("required").map { it.asString })
+        assertEquals(32000, read.getAsJsonObject("properties").getAsJsonObject("maxChars").get("maximum").asInt)
+        assertFalse(read.get("additionalProperties").asBoolean)
+    }
     @Test fun terminalEnvironmentAndPollingHaveNativeJsonTypes() {
         val schema = McpToolSchema.terminalSchema()
         val env = schema.getAsJsonObject("properties").getAsJsonObject("env")

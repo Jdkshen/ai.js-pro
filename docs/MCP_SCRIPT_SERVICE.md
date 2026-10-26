@@ -1,5 +1,7 @@
 # AI.js Pro 脚本 MCP
 
+> 本文是早期实现记录，以下旧工具数量和引擎范围已过期。dev-1257 的当前说明请读 [MCP 连接指南](guides/MCP连接指南.md) 与 `apps/app/src/main/assets/mcp/AIjs-MCP-Guide.md`：Rhino/QuickJS/Node24 三引擎、59 个规范工具/含别名 68 名称，并支持 `search_api_docs` / `read_api_doc` 同源文档检索。实际工具参数以 tools/list 为准。
+
 ## 入口与连接
 
 入口：AI.js Pro 左上角菜单 → 开发 → MCP 服务。

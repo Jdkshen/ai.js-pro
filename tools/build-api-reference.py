@@ -24,6 +24,12 @@ LEGACY = ['app', 'console', 'coordinates-based-automation', 'device', 'dialogs',
           'events', 'floaty', 'files', 'globals', 'http', 'images', 'keys', 'media',
           'modules', 'widgets-based-automation', 'sensors', 'shell', 'storages',
           'threads', 'timers', 'ui', 'io', 'plugins', 'canvas']
+GUIDE_ENGINE_OVERRIDES = {
+    '6.1 Rhino / QuickJS 传统 UI': ['rhino', 'quickjs'],
+    '6.2 Node `ui.Activity`': ['nodejs'],
+    '6.3 Node `ctx.loadResources` 与 `recreate`': ['nodejs'],
+    '6.4 Node 浮窗与 Java 桥': ['nodejs'],
+}
 
 
 def inline(text):
@@ -108,6 +114,37 @@ def plain(fragment):
     return ' '.join(' '.join(parser.parts).split())
 
 
+class ReadableMarkdown(HTMLParser):
+    """Readable legacy reference for MCP; preserve pre text byte-for-byte as Unicode."""
+    def __init__(self):
+        super().__init__(); self.parts = []; self.code = None
+    def handle_starttag(self, tag, attrs):
+        if tag == 'pre': self.code = []; return
+        if self.code is not None: return
+        if tag in ['p', 'div', 'table', 'ul', 'ol', 'blockquote']: self.parts.append('\n\n')
+        elif tag == 'li': self.parts.append('\n- ')
+        elif tag in ['br', 'tr', 'dt', 'dd']: self.parts.append('\n')
+        elif tag == 'code': self.parts.append('`')
+    def handle_endtag(self, tag):
+        if tag == 'pre' and self.code is not None:
+            code = ''.join(self.code)
+            fence = '`' * max(3, max((len(x) + 1 for x in re.findall(r'`+', code)), default=3))
+            self.parts.append('\n\n' + fence + '\n' + code + ('' if code.endswith('\n') else '\n') + fence + '\n\n')
+            self.code = None; return
+        if self.code is not None: return
+        if tag in ['p', 'div', 'table', 'ul', 'ol', 'blockquote']: self.parts.append('\n\n')
+        elif tag in ['td', 'th']: self.parts.append(' | ')
+        elif tag == 'code': self.parts.append('`')
+    def handle_data(self, data):
+        if self.code is not None: self.code.append(data)
+        else: self.parts.append(re.sub(r'\s+', ' ', data))
+
+
+def readable_markdown(fragment):
+    parser = ReadableMarkdown(); parser.feed(fragment)
+    return ''.join(parser.parts).strip()
+
+
 class LegacySections(HTMLParser):
     ALLOWED = {'p', 'code', 'pre', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
                'em', 'strong', 'b', 'i', 'blockquote', 'br', 'a', 'div', 'span', 'dl', 'dt', 'dd'}
@@ -162,8 +199,10 @@ def build():
         title, lines, fence = category, [], False
         def flush_guide():
             body = markdown(lines)
-            if plain(body): records.append({'title': title, 'html': body, 'engines': engines,
-                'category': category, 'kind': 'guide', 'source': file, 'link': None})
+            section_engines = GUIDE_ENGINE_OVERRIDES.get(title, engines) if file == 'docs/guides/API_REFERENCE.md' else engines
+            if plain(body): records.append({'title': title, 'html': body, 'engines': section_engines,
+                'category': category, 'kind': 'guide', 'source': file, 'link': None,
+                'content': '\n'.join(lines).strip()})
         for line in text.splitlines():
             if line.lstrip().startswith('```'): fence = not fence
             heading = None if fence else re.match(r'^#{1,4}\s+(.+)', line)
@@ -180,12 +219,12 @@ def build():
             if len(plain(body)) < 8 or title in ['AI.js Pro 4.1.0 文档']: continue
             records.append({'title': title, 'html': body, 'engines': ['rhino'], 'category': '传统 API · ' + name,
                 'kind': 'legacy', 'source': file.relative_to(ROOT).as_posix(),
-                'link': file.name + ('#' + anchor if anchor else '')})
+                'link': file.name + ('#' + anchor if anchor else ''), 'content': readable_markdown(body)})
     for index, record in enumerate(records):
         record['id'] = 'api-' + str(index + 1)
         record['text'] = plain(record['html'])
         record['search'] = (record['title'] + ' ' + record['category'] + ' ' + record['text']).lower()
-    result = {'schemaVersion': 1, 'sources': sources, 'records': records,
+    result = {'schemaVersion': 2, 'sources': sources, 'records': records,
         'scope': '现行三引擎指南与 Node 专题；传统 API 原文供 Rhino 查询，不能据此推断 QuickJS/Node 全量支持。'}
     return 'window.AIJS_API_REFERENCE=' + json.dumps(result, ensure_ascii=False, separators=(',', ':')) + ';\n'
 

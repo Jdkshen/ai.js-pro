@@ -4,6 +4,8 @@
 
 本文对应 **dev-1251+**。
 
+**dev-1257 起**：MCP 新增 `search_api_docs` / `read_api_doc`，与 App「API 文档」共用离线索引。更新后在客户端重新连接/刷新工具列表，即可让 AI 先查接口、参数和示例再写代码。
+
 > 同一台手机上用 Rikkahub / Rikk 连接：直接用本机地址 `http://127.0.0.1:8765/mcp`，见下文 [Rikkahub 配置示例](#rik)。目标：让电脑上的 MCP 客户端连接到手机的 AI.js Pro，在电脑上列脚本、跑脚本、读日志、控制手机界面。
 
 ## 一、准备
@@ -101,11 +103,11 @@ http://127.0.0.1:8765/mcp
 2. 名称填 `aijspro`，传输类型选 **Streamable HTTP**。
 3. 服务器地址填 `http://127.0.0.1:8765/mcp`（端口以 AI.js Pro 页面实际显示为准）。
 4. 打开 **启用**，点 **保存**。
-5. 回到 MCP 列表，看到 `aijspro`、**Connected**、**66/66 tools** 即连接成功。
+5. 回到 MCP 列表，看到 `aijspro`、**Connected** 且工具已加载即连接成功；dev-1257 为 **68 个名称**，数量以 `tools/list` 为准。
 
 ![Rikkahub 新建 aijspro（红色备注）](images/rik-settings-red.jpg)
 
-<p style="color:#c62828;font-weight:700">红色备注：① 启用 ② 传输类型 Streamable HTTP ③ URL 填 http://127.0.0.1:8765/mcp ④ 保存；返回列表看到 66/66 tools 即成功。</p>
+<p style="color:#c62828;font-weight:700">红色备注：① 启用 ② 传输类型 Streamable HTTP ③ URL 填 http://127.0.0.1:8765/mcp ④ 保存；Connected 且工具已加载即成功。截图是旧版 66 项，dev-1257 为 68 个名称。</p>
 
 ![Rikkahub 已连接 66/66 工具](images/rik-mcp-servers-red.jpg)
 
@@ -132,11 +134,12 @@ http://127.0.0.1:8765/mcp
 
 - `get_status`：确认 `scriptRoot`、MCP 服务、当前任务状态；
 - `list_engines`：确认 Rhino / QuickJS / Node24 可用；
+- `search_api_docs`（如 `query=loadResources, engine=nodejs`）→ `read_api_doc`（使用返回的 id 和 indexSha256）：查 API 说明与代码；文档标注不代表运行已验证；
 - `list_scripts` / `read_script`：读手机脚本；
 - `run_script`（`wait:true`）：运行脚本并拿真实输出；
 - `get_mcp_log` / `read_apk_logs`：查日志。
 
-连接正常时 `tools/list` 会返回当前公开工具（本版 66 个名称，实际以客户端显示为准），分为：状态与诊断、脚本与执行、工作区、引擎与 API、设备与无障碍、终端与构建、悬浮窗、示例与帮助。
+连接正常时 `tools/list` 会返回当前公开工具（dev-1257 为 59 个规范工具、含兼容别名共 68 个名称，实际以客户端显示为准），分为：状态与诊断、脚本与执行、工作区、引擎与 API、设备与无障碍、终端与构建、悬浮窗、示例与帮助。
 
 ## 七、常见问题
 
@@ -174,7 +177,7 @@ MCP 当前免令牌，任何能访问该端口的设备都能控制脚本和部�
 | 设备与无障碍 | `get_ui_layout`、`capture_screen`、`ui_*`、`app_*`、`apk_*` |
 | 终端与构建 | `terminal_exec/read/write/stop/list`、`get_build_tools` |
 | 悬浮窗 | `list_overlays`、`close_overlays` |
-| 示例与帮助 | `list_samples`、`read_sample`、`learn_autojs_skill` |
+| 示例与帮助 | `search_api_docs`、`read_api_doc`、`list_samples`、`read_sample`、`learn_autojs_skill` |
 
 ## 九、相关文档
 

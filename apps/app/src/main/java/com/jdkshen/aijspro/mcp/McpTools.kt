@@ -41,6 +41,9 @@ internal class McpTools(private val context: Context, private val event: (String
     private val runs = ConcurrentHashMap<String, RunRecord>()
     private val nextRun = AtomicInteger(1)
     private val cursors = LinkedHashMap<String, CursorPage>()
+    private val apiDocs = McpApiDocs {
+        context.assets.open("docs/api-reference-data.js").bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }
 
     private class RunRecord(val id: String, val path: String, val createdAt: Long) {
         @Volatile var status = "QUEUED"
@@ -135,12 +138,13 @@ internal class McpTools(private val context: Context, private val event: (String
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
-        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.6.0") })
+        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.7.0") })
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
             "",
             "通用规则：",
             "- JSON 的布尔/数字用原生类型（true / 100，不要字符串 \"true\" / \"100\"）。",
+            "- 写代码前先 search_api_docs(query,engine) 查接口，再 read_api_doc(id,indexSha256) 读参数/兼容范围/示例；与 App API 文档共用离线索引。传统 Rhino 参考不能当作 QuickJS/Node 的支持证明。",
             "- path 是相对操作目录的路径，不要写 /sdcard 绝对路径；先用 list_scripts 查看。",
             "- run_script 的 path/file/source 三选一；要结果和错误日志必须 wait:true，timeoutSeconds 建议 30~120。",
             "- wait 超时返回 timedOut=true，任务仍可能在跑：用 wait_execution/get_execution 继续，不要当成成功。",
@@ -217,6 +221,8 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("ui_global", "全局动作：back/home/recents/notifications", McpToolSchema.uiGlobalSchema()))
             add(tool("ui_wait", "等待匹配节点出现（阻塞轮询，上限 15s）", McpToolSchema.uiWaitSchema()))
             add(tool("ui_scroll", "按 up/down/left/right 执行滑动手势滚动", McpToolSchema.uiScrollSchema()))
+            add(tool("search_api_docs", "搜索 App 同源离线 API 文档，不启动脚本；query 可省略以浏览目录，engine=all/rhino/quickjs/nodejs（兼容 node/node24），category 精确匹配返回的 categories，kind=all/guide/legacy。offset 默认 0，limit 默认 10/最大 20；返回 id、摘要、来源、引擎标注和 indexSha256；再用 read_api_doc 读说明与示例。文档不是运行验证", McpToolSchema.searchApiDocsSchema()))
+            add(tool("read_api_doc", "读取 search_api_docs 返回的条目 id，返回 Markdown 参数说明和保留缩进/换行的代码示例；建议携带 indexSha256 防止更新后 ID 错位。offset/nextOffset 是 UTF-16 字符偏移，maxChars 默认 16000、范围 128..32000，hasMore=true 时继续读取；不执行示例", McpToolSchema.readApiDocSchema()))
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {
@@ -252,6 +258,8 @@ internal class McpTools(private val context: Context, private val event: (String
             "continue_result" -> toolJson(continueResult(args.string("cursor"), args.intOr("limit", 50)))
             "list_samples" -> toolJson(listAssets(args.stringOr("path", "sample"), args.intOr("offset", 0), args.intOr("limit", 100)))
             "read_sample" -> toolJson(readAsset(args.string("path"), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
+            "search_api_docs" -> toolJson(apiDocs.search(args))
+            "read_api_doc" -> toolJson(apiDocs.read(args))
             "list_executions" -> toolJson(JsonObject().apply { add("items", JsonArray().apply {
                 runs.values.sortedByDescending { it.createdAt }.take(100).forEach { add(runJson(it)) }
             }) })

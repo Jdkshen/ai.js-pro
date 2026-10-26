@@ -17,7 +17,7 @@ internal object McpToolCategories {
         McpToolCategory("device", "设备与无障碍", "UI 读取/点击/输入、应用与安装入口", 5),
         McpToolCategory("terminal", "终端与构建", "MCP 终端任务与 PATH/D8/Smali 检测", 6),
         McpToolCategory("overlay", "悬浮窗", "Node/脚本悬浮窗查询与关闭", 7),
-        McpToolCategory("asset", "示例与帮助", "内置示例与使用说明", 8),
+        McpToolCategory("asset", "示例与帮助", "API 文档检索、内置示例与使用说明", 8),
     )
 
     private val byId = all.associateBy { it.id }
@@ -50,7 +50,7 @@ internal object McpToolCategories {
             "get_build_tools",
         ).forEach { put(it, "terminal") }
         listOf("list_overlays", "close_overlays").forEach { put(it, "overlay") }
-        listOf("list_samples", "read_sample", "learn_autojs_skill").forEach { put(it, "asset") }
+        listOf("list_samples", "read_sample", "learn_autojs_skill", "search_api_docs", "read_api_doc").forEach { put(it, "asset") }
     }
 
     fun categoryFor(toolName: String): McpToolCategory =

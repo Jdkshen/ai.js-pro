@@ -15,7 +15,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 设备与无障碍 | get_ui_layout、capture_screen、ui_find/click/long_click/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
 | 终端与构建 | terminal_exec/read/write/stop/list、get_build_tools |
 | 悬浮窗 | list_overlays、close_overlays |
-| 示例与帮助 | list_samples、read_sample、learn_autojs_skill |
+| 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
 
 ## 快速开始（AI 客户端必读）
 
@@ -24,6 +24,20 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 3. 运行：run_script 的 path/file/source 三选一；需要结果与错误日志必须 wait:true（timeoutSeconds 建议 30~120）。
 4. 改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply（workspace_write 本身不落盘）。
 5. 任何失败：先看返回的 error/status，再调用 get_execution / wait_execution / get_mcp_log；不要重复猜参数。
+
+## API 文档与代码示例（离线）
+
+编写脚本前先用 `search_api_docs` 查接口，再用 `read_api_doc` 阅读参数、返回值、兼容范围及完整示例。两项工具读取与 App「API 文档」完全相同的离线索引，不访问网络、不占用三引擎运行槽、不执行示例。
+
+```json
+{"name":"search_api_docs","arguments":{"query":"loadResources","engine":"nodejs","limit":5}}
+{"name":"read_api_doc","arguments":{"id":"上一步返回的 api-N","indexSha256":"上一步返回的 indexSha256"}}
+```
+
+- 搜索：`query` 可省略（列目录），支持多个空格分隔关键词、不区分大小写；`engine=all/rhino/quickjs/nodejs`（兼容 node/node24/rhinojs），`kind=all/guide/legacy`；`category` 必须精确使用响应 `categories` 中的一项，省略表示全部。`offset=0`、`limit=10`，limit 范围 1..20；用 `nextOffset` 继续搜索页。
+- 读取：`id` 使用搜索结果，推荐同时带 `indexSha256`，App 更新后旧索引会明确报错、要求重搜，避免同一 ID 指向不同内容。返回 `contentFormat=markdown` 的 `content`，代码保留缩进、换行、中文。`offset/nextOffset/contentLength` 是 UTF-16 字符数，`maxChars=16000`、范围 128..32000；`hasMore=true` 时用 `nextOffset` 继续拼接，分页可能经过代码块中间。
+- 每项返回 `kind/source/engines`，`supportEvidence=documentation_only`。`guide` 是现行使用手册/Node 专题，`legacy` 是传统 Rhino 原文，不能推断 QuickJS/Node 支持。真实导出/成员用 `list_engine_api` / `probe_engine_api` 探测；同名函数的行为仍需目标引擎验证。
+- 文档工具是只读能力，不需要脚本执行/写入权限。示例工程仍通过 `list_samples` / `read_sample` 读取；没有搜索结果时不要凭空编造接口。
 
 ## 高级版兼容入口
 

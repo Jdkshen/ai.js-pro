@@ -37,4 +37,16 @@ class ApiReferenceTest(unittest.TestCase):
     def test_unclosed_examples_fail_generation(self):
         with self.assertRaises(ValueError): module.markdown(['```js', 'missing end'])
 
+    def test_mcp_legacy_examples_preserve_whitespace_entities_and_unicode(self):
+        code = 'const x = "中文 😀";\n  if (x < 3 && y > 0) {\n    log(x);\n  }\n'
+        import html
+        value = module.readable_markdown('<p>说明</p><pre><code>' + html.escape(code) + '</code></pre>')
+        self.assertIn('```\n' + code + '```', value)
+        self.assertNotIn('&lt;', value)
+
+    def test_mcp_code_containing_fences_is_not_cut_short(self):
+        value = module.readable_markdown('<pre>const s = "```";</pre>')
+        self.assertTrue(value.startswith('````\n'))
+        self.assertTrue(value.endswith('\n````'))
+
 if __name__ == '__main__': unittest.main()

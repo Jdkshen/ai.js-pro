@@ -57,7 +57,7 @@
   <li>打开“启用” → <b>保存</b></li>
 </ol>
 <img src="mcp/rik-settings-red.jpg" alt="Rikkahub 设置红色备注">
-<p class="note">红色备注：① 开启启用 ② 选 Streamable HTTP ③ 填 127.0.0.1:8765/mcp ④ 保存；返回列表看到 Connected / 66/66 tools 即成功。</p>
+<p class="note">红色备注：① 开启启用 ② 选 Streamable HTTP ③ 填 127.0.0.1:8765/mcp ④ 保存；Connected 且工具已加载即成功。截图为旧版 66 项，dev-1257 为 68 个名称，以 tools/list 为准。</p>
 <img src="mcp/rik-mcp-servers-red.jpg" alt="Rikkahub 服务器列表红色备注">
 <p class="note">只保留 <b>aijspro</b>；MTmpc / ajmcp / mymcpserver 的 Failed 是旧配置或本地其它服务（8787/8766/8899），关闭或忽略。</p>
 <p>如果 Rikkahub 在另一台手机或电脑：同一 WiFi 用局域网地址；USB 用 <code>adb forward</code> 后填 <code>127.0.0.1</code>。</p>
@@ -69,6 +69,7 @@
 <h2>5. 验证与排查</h2>
 <ul>
   <li>连上后先调 <code>learn_autojs_skill</code>，再调 <code>get_status</code> / <code>list_engines</code>。</li>
+  <li>dev-1257 起，用 <code>search_api_docs</code> 查接口，再用 <code>read_api_doc</code> 读取参数和代码示例，与 App「API 文档」共用离线索引。更新后重连客户端/刷新工具列表。</li>
   <li><code>run_script</code> 用 <code>wait: true</code> 才能返回真实输出与错误。</li>
   <li>设备工具 <code>get_ui_layout</code> / <code>capture_screen</code> / <code>ui_*</code> / <code>app_*</code> 需要无障碍服务。</li>
   <li>电脑打不开：确认同一 WiFi、无 AP 隔离/防火墙；USB 方式优先用 <code>adb forward</code>。</li>

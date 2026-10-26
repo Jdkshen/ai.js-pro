@@ -26,6 +26,26 @@ internal object McpToolSchema {
         })
     }
 
+    fun searchApiDocsSchema(): JsonObject = objectSchema("query", "engine", "category", "kind", "offset", "limit").apply {
+        val fields = getAsJsonObject("properties")
+        fields.getAsJsonObject("query").addProperty("maxLength", 256)
+        fields.getAsJsonObject("category").addProperty("maxLength", 128)
+        fields.getAsJsonObject("engine").add("enum", JsonArray().apply {
+            listOf("all", "rhino", "quickjs", "nodejs", "node", "node24", "rhinojs").forEach { add(it) }
+        })
+        fields.getAsJsonObject("kind").add("enum", JsonArray().apply { listOf("all", "guide", "legacy").forEach { add(it) } })
+        fields.getAsJsonObject("offset").apply { addProperty("minimum", 0); addProperty("maximum", Int.MAX_VALUE); addProperty("default", 0) }
+        fields.getAsJsonObject("limit").apply { addProperty("minimum", 1); addProperty("maximum", 20); addProperty("default", 10) }
+    }
+
+    fun readApiDocSchema(): JsonObject = objectSchema("id", "indexSha256", "offset", "maxChars", required = arrayOf("id")).apply {
+        val fields = getAsJsonObject("properties")
+        fields.getAsJsonObject("id").addProperty("pattern", "^api-[1-9][0-9]{0,8}$")
+        fields.getAsJsonObject("indexSha256").apply { addProperty("maxLength", 71); addProperty("pattern", "^(|sha256:[0-9a-f]{64})$") }
+        fields.getAsJsonObject("offset").apply { addProperty("minimum", 0); addProperty("maximum", Int.MAX_VALUE); addProperty("default", 0) }
+        fields.getAsJsonObject("maxChars").apply { addProperty("minimum", 128); addProperty("maximum", 32000); addProperty("default", 16000) }
+    }
+
     fun runSchema(): JsonObject = objectSchema(
         "path", "file", "source", "engine", "wait", "timeoutSeconds", "name", "workingDirectory"
     ).apply {

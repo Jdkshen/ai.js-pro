@@ -59,7 +59,9 @@ internal object McpToolCatalog {
         "ui_swipe",
         "ui_global",
         "ui_wait",
-        "ui_scroll"
+        "ui_scroll",
+        "search_api_docs",
+        "read_api_doc"
     )
 
     /**
