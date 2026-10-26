@@ -10,7 +10,7 @@
 
 API 文档：**[三引擎使用手册](guides/API_REFERENCE.md)** · **[Node UI 与 Java 资源接口](guides/NODE_UI_API.md)** · [Node 自动化与图色](guides/Node24基础自动化API.md) · [Node 控件选择器](guides/Node24控件选择器API.md)。新版 APK 点击主界面顶部「API 文档」即可直接离线搜索；入口见 [dev-1255](reports/2026-10-26_API文档直接打开与dev1255.md)，覆盖范围见 [文档报告](reports/2026-10-26_API离线文档与dev1254.md)。
 
-> **当前状态（2026-10-26）**：更新源为 **dev-1260**（APK 卡顿优化）；GitHub/LAN 已发布，MI8 已装，K40 未动。
+> **当前状态（2026-10-26）**：更新源为 **dev-1261**（Materi-UI 原生兼容）；原 Auto.js Pro 工程无 wrapper 直跑，MI8 已装；GitHub 未更新。
 
 ## 当前状态
 
