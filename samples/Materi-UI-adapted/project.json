@@ -1,0 +1,48 @@
+{
+    "abis": null,
+    "assets": [],
+    "build": {
+        "build_number": 12,
+        "build_time": 1764999531328,
+        "release": false
+    },
+    "encryptLevel": 3,
+    "useFeatures": [],
+    "launchConfig": {
+        "displaySplash": true,
+        "hideLogs": false,
+        "splashText": "Powered by Auto.js Pro",
+        "stableMode": false,
+        "splashIcon": null,
+        "splashLayoutXml": "src/layout/BootPage.xml"
+    },
+    "main": "MainActivity.js",
+    "name": "GoogleMaterial",
+    "optimization": {
+        "removeOpenCv": true,
+        "unusedResources": false,
+        "removeAccessibilityService": false,
+        "obfuscateComponents": true
+    },
+    "packageName": "com.Material.ui",
+    "scripts": {},
+    "versionCode": 1058,
+    "versionName": "23.1.23",
+    "icon": "images/ic_app_logo.png",
+    "publish": null,
+    "signingConfig": null,
+    "androidResources": null,
+    "permissionConfig": {
+        "manifestPermissions": null,
+        "requestListOnStartup": [
+            "android.permission.WRITE_EXTERNAL_STORAGE"
+        ]
+    },
+    "features": {
+        "builtInOCR": null,
+        "activityIntentTasks": false,
+        "nodejs": "auto"
+    },
+    "plugins": null,
+    "type": null
+}
