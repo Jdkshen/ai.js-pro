@@ -363,17 +363,14 @@ class BrandSplash extends StatelessWidget {
   }
 }
 
-/// Holds [BrandSplash] over the first frames. The original `SplashActivity`
-/// finishes in ~130 ms, so its brand layout is never actually seen; keeping it up
-/// for a short, fixed hold makes the launch read as AI.js Pro while the
-/// workspace loads behind it.
+/// Briefly cover the first frames while mounting the workspace immediately.
 class SplashGate extends StatefulWidget {
   final Widget child;
   final Duration hold;
   const SplashGate(
       {Key? key,
       required this.child,
-      this.hold = const Duration(milliseconds: 1200)})
+      this.hold = const Duration(milliseconds: 300)})
       : super(key: key);
   @override
   State<SplashGate> createState() => _SplashGateState();
@@ -398,11 +395,20 @@ class _SplashGateState extends State<SplashGate> {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedSwitcher(
-      duration: const Duration(milliseconds: 220),
-      child: released
-          ? KeyedSubtree(key: const ValueKey('workspace'), child: widget.child)
-          : const BrandSplash(key: ValueKey('brand-splash')));
+  Widget build(BuildContext context) => Stack(fit: StackFit.expand, children: [
+        ExcludeSemantics(
+            excluding: !released,
+            child: IgnorePointer(ignoring: !released, child: widget.child)),
+        IgnorePointer(
+            ignoring: released,
+            child: ExcludeSemantics(
+                excluding: released,
+                child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 160),
+                    child: released
+                        ? const SizedBox.shrink()
+                        : const BrandSplash(key: ValueKey('brand-splash')))))
+      ]);
 }
 
 class Home extends StatefulWidget {
@@ -422,7 +428,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   late final VoidCallback nativePackagingReady = () {
     consumeNativePackaging();
   };
-  int tab = 0, revision = 0;
+  int tab = 0, activeTab = 0, revision = 0;
   final pages = PageController();
   final scaffold = GlobalKey<ScaffoldState>();
   final scriptBrowser = GlobalKey<_FileBrowserState>();
@@ -547,11 +553,17 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
   }
 
-  void refreshVisiblePage(int index) {
-    if (index == 0) scriptBrowser.currentState?.load();
-    if (index == 1) sampleBrowser.currentState?.load();
-    // CatalogPage loads on activation/revision changes. Re-loading here would
-    // duplicate its first request in the middle of the PageView animation.
+  bool onWorkspaceScroll(ScrollNotification event) {
+    if (event.depth != 0 || event.metrics.axis != Axis.horizontal) return false;
+    // onPageChanged fires halfway through a transition. Start scans and polling
+    // only once the PageView has settled, keeping them out of the animation.
+    if (event is ScrollStartNotification && activeTab != -1) {
+      setState(() => activeTab = -1);
+    } else if (event is ScrollEndNotification && pages.hasClients) {
+      final settled = pages.page!.round();
+      if (activeTab != settled) setState(() => activeTab = settled);
+    }
+    return false;
   }
 
   @override
@@ -782,48 +794,54 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                                               onPressed: initialize,
                                               child: const Text('重新连接'))
                                         ])))
-                        : PageView(
+                        : NotificationListener<ScrollNotification>(
+                          onNotification: onWorkspaceScroll,
+                          child: PageView(
                             controller: pages,
                             onPageChanged: (index) {
                               FocusScope.of(context).unfocus();
                               setState(() => tab = index);
-                              refreshVisiblePage(index);
                             },
                             children: [
                                 _WorkspacePage(
+                                    active: tab == 0,
                                     child: FileBrowser(
                                         key: scriptBrowser,
                                         root: boot!['scripts'],
                                         title: '内部存储 · 脚本',
-                                        active: tab == 0,
+                                        active: activeTab == 0 && !drawerOpen,
                                         revision: revision)),
                                 _WorkspacePage(
+                                    active: tab == 1,
                                     child: FileBrowser(
                                         key: sampleBrowser,
                                         root: boot!['samples'],
                                         title: '示例文件',
                                         readOnly: true,
-                                        active: tab == 1,
+                                        active: activeTab == 1 && !drawerOpen,
                                         revision: revision)),
                                 _WorkspacePage(
+                                    active: tab == 2,
                                     child: CatalogPage(
                                         key: resources,
                                         plugin: false,
-                                        active: tab == 2,
+                                        active: activeTab == 2 && !drawerOpen,
                                         revision: revision)),
                                 _WorkspacePage(
+                                    active: tab == 3,
                                     child: CatalogPage(
                                         key: plugins,
                                         plugin: true,
-                                        active: tab == 3,
+                                        active: activeTab == 3 && !drawerOpen,
                                         revision: revision)),
                                 _WorkspacePage(
+                                    active: tab == 4,
                                     child: TaskPage(
                                         key: tasks,
-                                        active: tab == 4,
+                                        active: activeTab == 4 && !drawerOpen,
                                         openDevice: () => openUtility(
                                             const DeviceSettingsPage())))
-                              ]))
+                              ])))
               ])))));
 }
 
@@ -831,7 +849,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 // PageView lazily mounts the other tabs.
 class _WorkspacePage extends StatefulWidget {
   final Widget child;
-  const _WorkspacePage({required this.child});
+  final bool active;
+  const _WorkspacePage({required this.child, required this.active});
   @override
   State<_WorkspacePage> createState() => _WorkspacePageState();
 }
@@ -843,7 +862,9 @@ class _WorkspacePageState extends State<_WorkspacePage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return widget.child;
+    // Kept-alive loading indicators and other animations must not keep producing
+    // frames after their page leaves the viewport.
+    return TickerMode(enabled: widget.active, child: widget.child);
   }
 }
 

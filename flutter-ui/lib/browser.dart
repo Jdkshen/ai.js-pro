@@ -27,6 +27,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
   Timer? searchTimer;
   Timer? refreshTimer;
   bool foreground = true, automaticPending = false;
+  bool optionsReady = false, reloadWhenActive = true;
   int refreshTicks = 0;
   int request = 0, optionsRevision = 0;
   BrowserOptions options = const BrowserOptions();
@@ -37,6 +38,10 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
   bool restoreOffset = false;
   // 示例库按需下载（task-122）：大示例不在 APK 里，未下载时在目录里显示「下载」行。
   List<Map<String, dynamic>> sampleUnits = const [];
+  bool sampleLibraryLoaded = false;
+  List<Map<String, dynamic>>? sortedSource;
+  BrowserOptions? sortedOptions;
+  List<Map<String, dynamic>> sortedFiles = const [];
   final downloading = <String, Map<String, dynamic>>{};
   // 批量选择 / 文件剪贴板（复制、剪切、粘贴）
   bool selecting = false;
@@ -52,10 +57,9 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
     foreground = WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     path = widget.root;
-    load();
     restoreOptions();
     loadClipboard();
-    refreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       // Recursive searches have a larger bounded scan; poll them less often.
       if (options.recursive &&
           search.trim().isNotEmpty &&
@@ -83,6 +87,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
   Future<void> refreshAutomatically() async {
     if (!mounted ||
         !widget.active ||
+        !optionsReady ||
         !foreground ||
         automaticPending ||
         loading ||
@@ -107,16 +112,23 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
       search = '';
       searching = createExpanded = restoreOffset = false;
       files = null;
+      sampleUnits = const [];
+      sampleLibraryLoaded = false;
       error = null;
       directoryOffsets.clear();
       if (old.readOnly != widget.readOnly) {
         options = const BrowserOptions();
         optionsRevision = 0;
+        optionsReady = false;
         restoreOptions();
       }
-      load();
+      reloadWhenActive = true;
     } else if (old.revision != widget.revision) {
-      load();
+      reloadWhenActive = true;
+    }
+    if (widget.active && foreground && optionsReady &&
+        (reloadWhenActive || !old.active)) {
+      load(automatic: files != null);
     }
   }
 
@@ -130,10 +142,14 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
           optionsRevision == 0 &&
           value is Map) {
         setState(() => options = BrowserOptions.fromJson(value));
-        await load();
       }
     } catch (_) {
       /* Keep usable defaults if an older bridge has no preferences. */
+    } finally {
+      if (mounted && requestedProfile == profile) {
+        optionsReady = true;
+        if (widget.active && foreground) load();
+      }
     }
   }
 
@@ -154,6 +170,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
   }
 
   Future<void> load({bool automatic = false}) async {
+    reloadWhenActive = false;
     searchTimer?.cancel();
     final token = ++request;
     final requestedPath = path;
@@ -174,10 +191,13 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
       // 示例页先取「示例库」清单（哪些示例包没下载）；旧桥没有这个方法时保持空，
       // 不影响目录列表本身。自动刷新时沿用已缓存的清单，避免每秒都打一次桥。
       List<dynamic>? library;
-      if (widget.readOnly && (!automatic || sampleUnits.isEmpty)) {
+      if (widget.readOnly && (!automatic || !sampleLibraryLoaded)) {
         try {
           final value = await LocalBridge.call('sampleLibrary');
-          if (value is List) library = value;
+          if (value is List) {
+            library = value;
+            sampleLibraryLoaded = true;
+          }
         } catch (_) {
           /* 旧桥没有示例库清单时保持空。 */
         }
@@ -1617,7 +1637,13 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     // The native worker already applies the query with a time limit. Running
     // the same regular expression on Flutter's UI thread could freeze input.
-    final visible = browserFiles(files ?? [], options, '');
+    // Menu/selection/loading updates do not change the directory order.
+    if (!identical(sortedSource, files) || !identical(sortedOptions, options)) {
+      sortedFiles = browserFiles(files ?? [], options, '');
+      sortedSource = files;
+      sortedOptions = options;
+    }
+    final visible = sortedFiles;
     final currentProject = !widget.readOnly &&
         (files ?? []).any((file) =>
             file['name'] == 'project.json' && file['directory'] != true);

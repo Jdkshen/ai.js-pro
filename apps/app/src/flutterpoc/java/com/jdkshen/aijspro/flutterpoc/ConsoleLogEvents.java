@@ -7,15 +7,16 @@ import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.EventChannel;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Bounded change notifications; clients fetch rows using the atomic cursor API. */
 final class ConsoleLogEvents implements EventChannel.StreamHandler, HostConsoleSink.Listener {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final EventChannel channel;
-    private EventChannel.EventSink sink;
-    private boolean pending;
+    private volatile EventChannel.EventSink sink;
+    private final AtomicBoolean pending = new AtomicBoolean();
     private final Runnable notify = () -> {
-        pending = false;
+        pending.set(false);
         if (sink == null) return;
         Map<String, Object> event = new HashMap<>();
         event.put("version", HostConsoleSink.version());
@@ -37,15 +38,15 @@ final class ConsoleLogEvents implements EventChannel.StreamHandler, HostConsoleS
     @Override public void onCancel(Object arguments) {
         HostConsoleSink.removeListener(this);
         main.removeCallbacks(notify);
-        pending = false;
+        pending.set(false);
         sink = null;
     }
     @Override public void onConsoleLine(HostConsoleSink.Entry entry) { schedule(); }
     @Override public void onConsoleCleared(long generation) { schedule(); }
     private void schedule() {
-        if (pending || sink == null) return;
-        pending = true;
-        main.postDelayed(notify, 50L);
+        if (sink == null || !pending.compareAndSet(false, true)) return;
+        // Batch chatty script output; the cursor API still fetches every row.
+        main.postDelayed(notify, 150L);
     }
     void dispose() {
         onCancel(null);

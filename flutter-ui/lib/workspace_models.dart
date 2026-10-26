@@ -101,8 +101,12 @@ bool editable(Map file) =>
             caseSensitive: false)
         .hasMatch(file['name'].toString());
 
+final _nameParts = RegExp(r'\d+|\D+');
+final _digitsOnly = RegExp(r'^\d+$');
+final _leadingZeroes = RegExp(r'^0+');
+
 int compareNames(String a, String b) {
-  final parts = RegExp(r'\d+|\D+');
+  final parts = _nameParts;
   final left =
       parts.allMatches(a.toLowerCase()).map((x) => x.group(0)!).toList();
   final right =
@@ -110,9 +114,9 @@ int compareNames(String a, String b) {
   for (var i = 0; i < left.length && i < right.length; i++) {
     var x = left[i], y = right[i];
     int result;
-    if (RegExp(r'^\d+$').hasMatch(x) && RegExp(r'^\d+$').hasMatch(y)) {
-      x = x.replaceFirst(RegExp(r'^0+'), '');
-      y = y.replaceFirst(RegExp(r'^0+'), '');
+    if (_digitsOnly.hasMatch(x) && _digitsOnly.hasMatch(y)) {
+      x = x.replaceFirst(_leadingZeroes, '');
+      y = y.replaceFirst(_leadingZeroes, '');
       result = x.length.compareTo(y.length);
       if (result == 0) result = x.compareTo(y);
     } else {

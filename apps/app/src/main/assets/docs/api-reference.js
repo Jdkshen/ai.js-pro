@@ -104,6 +104,9 @@
     });
     if (Array.from(category.options).some(o => o.value === saved.category)) category.value = saved.category;
     buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.engine === engine)));
+    // Reuse formatted bodies across searches/pagination. Bound retained DOM so
+    // browsing the whole reference does not retain every highlighted example.
+    const contentCache = new Map();
     function render(resetScroll = false) {
         const firstRender = results.childElementCount === 0;
         const expanded = new Set(Array.from(results.querySelectorAll('details[open]'), d => d.dataset.id));
@@ -130,6 +133,13 @@
             let loaded = false;
             function load() {
                 if (loaded) return; loaded = true;
+                const cached = contentCache.get(row.id);
+                if (cached) {
+                    contentCache.delete(row.id); contentCache.set(row.id, cached);
+                    cached.querySelectorAll('pre').forEach(pre => pre.classList.toggle('no-wrap', !wrapCodes));
+                    cached.querySelectorAll('.wrap-code').forEach(button => button.setAttribute('aria-pressed', String(wrapCodes)));
+                    detail.appendChild(cached); return;
+                }
                 const body = document.createElement('div'); body.className = 'content';
                 // The build step sanitizes legacy HTML and escapes Markdown. There is no user HTML input.
                 body.innerHTML = row.html;
@@ -146,6 +156,8 @@
                 addCodeTools(body);
                 if (row.link) {const link = document.createElement('a'); link.className = 'chapter'; link.href = row.link; link.textContent = '查看完整章节'; body.appendChild(link);}
                 detail.appendChild(body);
+                contentCache.set(row.id, body);
+                if (contentCache.size > 32) contentCache.delete(contentCache.keys().next().value);
             }
             detail.addEventListener('toggle', () => {if (detail.open) load();});
             if ((query && index === 0 && (resetScroll || firstRender)) || (!resetScroll && expanded.has(row.id))) {

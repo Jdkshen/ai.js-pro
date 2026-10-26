@@ -157,6 +157,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
     private SpannableStringBuilder mUnifiedLogBuffer;
     private UnifiedConsoleLogBridge.Listener mUnifiedLogListener;
     private boolean mUnifiedLogActive;
+    private boolean mUnifiedLogSnapshotPending = true;
     private static final int UNIFIED_LOG_MAX_LINES = 2000;
     /** 防止单条超长日志/密集长行把整个日志面板撑爆：只保留末尾 256KiB。 */
     private static final int UNIFIED_LOG_MAX_CHARS = 256 * 1024;
@@ -629,14 +630,18 @@ public final class ProCodeEditorActivity extends ComponentActivity
         if (!mUnifiedLogActive || mUnifiedLogListener != null) return;
         mUnifiedLogListener = new UnifiedConsoleLogBridge.Listener() {
             @Override public void onLine(UnifiedConsoleLogBridge.Line line) {
-                if (line.level >= mLogLevel) queueUnifiedLogLine(line);
+                if (!isUnifiedLogPanelVisible()) {
+                    // The shared bounded ring already retains these lines. Do
+                    // not format/allocate spans while the editor console is shut.
+                    mUnifiedLogSnapshotPending = true;
+                } else if (line.level >= mLogLevel) queueUnifiedLogLine(line);
             }
             @Override public void onClear(long generation) {
                 clearUnifiedLogState();
             }
         };
         UnifiedConsoleLogBridge.addListener(mUnifiedLogListener);
-        renderUnifiedLogSnapshot();
+        mUnifiedLogSnapshotPending = true;
     }
 
     private void detachUnifiedLog() {
@@ -656,7 +661,16 @@ public final class ProCodeEditorActivity extends ComponentActivity
      * 快照只在本地 buffer 里构造一次；面板隐藏时只留缓冲，打开面板时再一次性发布。
      */
     private void renderUnifiedLogSnapshot() {
+        renderUnifiedLogSnapshot(true);
+    }
+
+    private void renderUnifiedLogSnapshot(boolean follow) {
         if (!mUnifiedLogActive || mUnifiedLogBuffer == null || mUnifiedLogText == null) return;
+        if (!isUnifiedLogPanelVisible()) {
+            mUnifiedLogSnapshotPending = true;
+            return;
+        }
+        mUnifiedLogSnapshotPending = false;
         cancelUnifiedLogFlush();
         mUnifiedLogBuffer.clear();
         mUnifiedLogLineCount = 0;
@@ -666,7 +680,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
         trimUnifiedLogBuffer();
         if (isUnifiedLogPanelVisible()) {
             mUnifiedLogText.setText(mUnifiedLogBuffer);
-            scrollUnifiedLogToBottom();
+            if (follow) scrollUnifiedLogToBottom();
         }
     }
 
@@ -690,6 +704,11 @@ public final class ProCodeEditorActivity extends ComponentActivity
         }
         if (mPendingUnifiedLogLines.isEmpty()) return;
         boolean visible = isUnifiedLogPanelVisible();
+        if (!visible) {
+            mUnifiedLogSnapshotPending = true;
+            mPendingUnifiedLogLines.clear();
+            return;
+        }
         boolean follow = visible && isUnifiedLogFollowingBottom();
         for (UnifiedConsoleLogBridge.Line line : mPendingUnifiedLogLines) {
             appendUnifiedLogLineToBuffer(line);
@@ -2278,7 +2297,10 @@ public final class ProCodeEditorActivity extends ComponentActivity
         setToolSelected(mLogTool, true);
         mLogPanel.setVisibility(View.VISIBLE);
         // 隐藏期间只累积缓冲；打开时把待刷新行合并进来并一次性排版，原先在底部才贴底。
-        if (mUnifiedLogActive) flushUnifiedLogOnShow(mUnifiedLogFollowOnOpen);
+        if (mUnifiedLogActive) {
+            if (mUnifiedLogSnapshotPending) renderUnifiedLogSnapshot(mUnifiedLogFollowOnOpen);
+            else flushUnifiedLogOnShow(mUnifiedLogFollowOnOpen);
+        }
         // While the log console is open, block all interaction with the editor above
         // (like Auto.js Pro): a translucent shield consumes touches over the editor area.
         if (mEditorShield.getParent() == null && mEditorContainer != null) {

@@ -58,6 +58,18 @@ final class PocBridge {
     private static final String PREFS_GLASS = "flutter-glass";
     private static final int MAX_ENTRIES = 5000;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    // Directory polling must never block touch input, stop commands or catalogue
+    // icon requests. Keep its FIFO separate from the catalogue reader.
+    private static final ExecutorService DIRECTORY_READER = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "poc-directory-reader");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private static final ExecutorService LOG_READER = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "poc-log-reader");
+        thread.setDaemon(true);
+        return thread;
+    });
     private static final ExecutorService CATALOG_READER = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "poc-catalog-reader");
         thread.setDaemon(true);
@@ -105,11 +117,14 @@ final class PocBridge {
             // Asset traversal and PackageManager/icon decoding can take hundreds
             // of milliseconds. A Future in Dart does not move this handler off
             // Android's main thread; only the completed JSON reply belongs there.
-            if ("localCatalog".equals(method) || "pluginIcon".equals(method)) {
+            if ("list".equals(method) || "logs".equals(method)
+                    || "localCatalog".equals(method) || "pluginIcon".equals(method)) {
                 final JSONObject catalogArgs = args;
-                CATALOG_READER.execute(() -> {
+                ExecutorService reader = "list".equals(method) ? DIRECTORY_READER
+                        : "logs".equals(method) ? LOG_READER : CATALOG_READER;
+                reader.execute(() -> {
                     String response;
-                    Trace.beginSection("AJS.catalog." + resolvedMethod);
+                    Trace.beginSection("AJS.reader." + resolvedMethod);
                     try {
                         response = replyJson(execute(activity, resolvedMethod, catalogArgs), null);
                     } catch (Throwable error) {
@@ -150,8 +165,13 @@ final class PocBridge {
                 });
                 return;
             }
-            Object data = execute(activity, method, args);
-            replier.reply(replyJson(data, null));
+            Trace.beginSection("AJS.bridge." + method);
+            try {
+                Object data = execute(activity, method, args);
+                replier.reply(replyJson(data, null));
+            } finally {
+                Trace.endSection();
+            }
         } catch (Throwable error) {
             Log.w(TAG, "bridge failure: " + method, error);
             replier.reply(replyJson(null, error));
@@ -695,7 +715,7 @@ final class PocBridge {
         if (children == null) {
             throw new IOException("无法读取目录：" + directory.getName());
         }
-        List<File> files = new ArrayList<>();
+        List<JSONObject> files = new ArrayList<>();
         for (File child : children) {
             String name = child.getName();
             if (name.startsWith(".autojs-glass-") || name.startsWith(".flutter-")) {
@@ -710,24 +730,26 @@ final class PocBridge {
             if (files.size() >= MAX_ENTRIES) {
                 throw new IOException("目录条目超过 " + MAX_ENTRIES + "，请进入子目录后再搜索");
             }
-            files.add(child);
+            // Snapshot metadata once, rather than stat() on every sort comparison.
+            boolean isDirectory = child.isDirectory();
+            files.add(new JSONObject()
+                    .put("name", name)
+                    .put("path", child.getAbsolutePath())
+                    .put("relativePath", child.getAbsolutePath().substring(directory.getPath().length() + 1))
+                    .put("directory", isDirectory)
+                    .put("project", isDirectory && new File(child, "project.json").isFile())
+                    .put("size", child.length())
+                    .put("modified", child.lastModified()));
         }
         Collections.sort(files, (a, b) -> {
-            if (a.isDirectory() != b.isDirectory()) {
-                return a.isDirectory() ? -1 : 1;
+            if (a.optBoolean("directory") != b.optBoolean("directory")) {
+                return a.optBoolean("directory") ? -1 : 1;
             }
-            return a.getName().compareToIgnoreCase(b.getName());
+            return a.optString("name").compareToIgnoreCase(b.optString("name"));
         });
         JSONArray values = new JSONArray();
-        for (File file : files) {
-            values.put(new JSONObject()
-                    .put("name", file.getName())
-                    .put("path", file.getAbsolutePath())
-                    .put("relativePath", file.getAbsolutePath().substring(directory.getPath().length() + 1))
-                    .put("directory", file.isDirectory())
-                    .put("project", file.isDirectory() && new File(file, "project.json").isFile())
-                    .put("size", file.length())
-                    .put("modified", file.lastModified()));
+        for (JSONObject file : files) {
+            values.put(file);
         }
         return values;
     }
@@ -916,14 +938,16 @@ final class PocBridge {
                 HostConsoleSink.pageSince(since, maxLines, token, args.optLong("generation", -1L));
         List<HostConsoleSink.Entry> entries = page.entries;
         StringBuilder content = new StringBuilder();
-        JSONArray structured = new JSONArray();
+        // Older bridge clients retain the structured payload by default. The
+        // Flutter log viewer consumes only text and opts out of duplicate rows.
+        JSONArray structured = args.optBoolean("textOnly", false) ? null : new JSONArray();
         try {
             for (HostConsoleSink.Entry entry : entries) {
                 if (content.length() > 0) {
                     content.append('\n');
                 }
                 content.append(formatLiveLine(entry));
-                structured.put(new JSONObject()
+                if (structured != null) structured.put(new JSONObject()
                         .put("seq", entry.seq)
                         .put("token", entry.token)
                         .put("name", entry.name)

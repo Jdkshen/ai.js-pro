@@ -146,7 +146,7 @@ class _GlassNavigationState extends State<GlassNavigation> {
     if (object is! RenderRepaintBoundary) return;
     final String signature = '${Theme.of(context).brightness == Brightness.dark ? 'd' : 'l'}|'
         '${object.size.width.round()}x${object.size.height.round()}|'
-        '${currentPage().round()}|${widget.selected}';
+        '${currentPage().round()}';
     if (signature == materialSignature) return;
     if (capturing) {
       captureQueued = true;
@@ -270,15 +270,18 @@ class _GlassNavigationState extends State<GlassNavigation> {
                               radius: 24,
                               padding: EdgeInsets.zero,
                               border: false,
+                              // Blurring an opaque solid backdrop adds no detail.
+                              blur: false,
                               child: AnimatedBuilder(
                                   animation: widget.controller,
-                                  builder: (context, _) => CustomPaint(
+                                  child: tabs(),
+                                  builder: (context, child) => CustomPaint(
                                       painter: _NavMaterialPainter(
                                           page: page(),
                                           dark: dark,
                                           rtl: rtl,
                                           icons: widget.icons),
-                                      child: tabs()))))),
+                                      child: child))))),
                   // Lens layer: refracted pixels when the shader is usable,
                   // otherwise the original painted lens.
                   Positioned.fill(
@@ -344,7 +347,7 @@ class _NavMaterialPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_NavMaterialPainter old) =>
-      page != old.page ||
+      page.round() != old.page.round() ||
       dark != old.dark ||
       rtl != old.rtl ||
       icons != old.icons;

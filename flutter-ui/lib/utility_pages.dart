@@ -767,6 +767,7 @@ class _LogPageState extends State<LogPage>
     }
     try {
       final value = await LocalBridge.call('liveLogs', {
+        'textOnly': true,
         // 任务页只订阅该 token 的行；普通日志页不传 token = 主进程/:script/:native 全部行。
         if (taskToken != null) 'token': taskToken,
         if (liveGeneration != null) 'generation': liveGeneration,
