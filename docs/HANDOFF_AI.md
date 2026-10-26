@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-26 当前发布 dev-1262（仅 LAN）**：宿主内置 20 个 Auto.js Pro 图标 + ui.R 无资源回退；原 Materi-UI zip 无 res/androidResources 可直接运行；SHA `945bb18b…`。
+
 > **2026-10-26 当前发布 dev-1261（仅 LAN）**：[Materi-UI 原生兼容](reports/2026-10-26_MateriUI原生兼容与dev1261.md)：DocumentFile、UI prelude ui.R、宿主图标 fallback；原工程无 wrapper 直跑，MI8 通过；135.70 MiB，SHA `0003db6d…`。
 
 > **2026-10-26 当前发布 dev-1260（GitHub/LAN，SHA `2914e61c…`）**：[APK 卡顿优化](reports/2026-10-26_dev1260发布.md)：目录/历史日志后台读取、切页停稳后加载、离屏动画暂停、启动初始化并行、编辑器隐藏日志懒加载、实时日志合并、文档缓存；409 JVM/32 Flutter/59 高亮检查与 MI8 最终包通过；135.70 MiB；MI8 已装，K40 未动。
