@@ -42,10 +42,19 @@ for (const theme of ['light', 'dark']) for (const accent of ['#ffffff', '#000000
 }
 context.AIJS_DOCS_NATIVE = true; context.URL = URL;
 context.location.href = 'file:///android_asset/docs/api-reference.html?theme=dark';
-context.history = {state: {query: 'files.read', visible: 40}, replaceState(state, _, url) {this.state = state; context.location.href = url;}};
+let historyWrites = 0;
+context.history = {state: {query: 'files.read', visible: 40}, replaceState(state, _, url) {
+    this.state = state; context.location.href = url; historyWrites++;
+    assert.ok(historyWrites < 3, 'native page-finished callback must not loop');
+    // Model Android WebView notifying the native finished callback for a history URL write.
+    context.AIJS_DOCS_SET_APPEARANCE({theme: 'light', accent: '#009688'});
+}};
 context.AIJS_DOCS_SET_APPEARANCE({theme: 'light', accent: '#009688'});
 assert.equal(new URL(context.location.href).searchParams.get('theme'), 'light'); checks++;
 assert.equal(context.history.state.query, 'files.read'); checks++;
+assert.equal(historyWrites, 1); checks++;
+context.AIJS_DOCS_SET_APPEARANCE({theme: 'light', accent: '#009688'});
+assert.equal(historyWrites, 1); checks++;
 const css = fs.readFileSync(path.join(root, 'api-reference.css'), 'utf8');
 for (const [theme, colors] of [['light', css.match(/:root\{--syntax-comment:([^}]+)\}/)[1]], ['dark', css.match(/:root\[data-theme=dark\]\{--syntax-comment:([^}]+)\}/)[1]]]) {
     for (const color of colors.match(/#[0-9a-f]{6}/g)) {

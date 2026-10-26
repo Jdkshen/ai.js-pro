@@ -31,7 +31,9 @@
             try {
                 const url = new URL(location.href); url.searchParams.set('theme', theme);
                 if (/^#[0-9a-f]{6}$/i.test(accent || '')) url.searchParams.set('accent', accent);
-                window.history.replaceState(window.history.state, '', url.href);
+                // Android WebView may notify onPageFinished for a history URL update.
+                // Do not keep writing an identical URL from the native finished callback.
+                if (url.href !== location.href) window.history.replaceState(window.history.state, '', url.href);
             } catch (_) { /* Color synchronization still works in restricted viewers. */ }
         }
     };
