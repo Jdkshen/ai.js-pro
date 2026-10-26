@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="host_surface">#1C2022</color>
+    <color name="host_on_surface">#E6EEF0</color>
+    <bool name="host_light_system_bars">false</bool>
+</resources>

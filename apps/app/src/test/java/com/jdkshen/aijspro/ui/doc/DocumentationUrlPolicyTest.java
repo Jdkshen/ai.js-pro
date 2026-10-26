@@ -28,4 +28,23 @@ public class DocumentationUrlPolicyTest {
         assertFalse(DocumentationUrlPolicy.isExternalDocument("intent://other"));
         assertFalse(DocumentationUrlPolicy.isExternalDocument("file:///data/data/secret"));
     }
+    @Test public void clipboardRequiresBothTheRequestAndCurrentPageToBeBundledApi() {
+        String home = DocumentationUrlPolicy.HOME + "?theme=dark";
+        assertTrue(DocumentationUrlPolicy.isCopyRequest(home, home, DocumentationUrlPolicy.COPY_MESSAGE));
+        for (String untrusted : new String[]{null, "file:///android_asset/docs/files.html",
+                "https://example.org/api-reference.html", "file:///sdcard/api-reference.html"}) {
+            assertFalse(DocumentationUrlPolicy.isCopyRequest(untrusted, home, DocumentationUrlPolicy.COPY_MESSAGE));
+            assertFalse(DocumentationUrlPolicy.isCopyRequest(home, untrusted, DocumentationUrlPolicy.COPY_MESSAGE));
+        }
+        assertFalse(DocumentationUrlPolicy.isCopyRequest(home, home, "other"));
+    }
+    @Test public void codeCopiesAreBoundedAndNeverSilentlyTruncated() {
+        assertFalse(DocumentationUrlPolicy.isCopyableCode(null));
+        assertFalse(DocumentationUrlPolicy.isCopyableCode(""));
+        assertTrue(DocumentationUrlPolicy.isCopyableCode("const x = '中文';\n  x();\n"));
+        char[] max = new char[DocumentationUrlPolicy.MAX_COPY_CHARACTERS];
+        java.util.Arrays.fill(max, 'x');
+        assertTrue(DocumentationUrlPolicy.isCopyableCode(new String(max)));
+        assertFalse(DocumentationUrlPolicy.isCopyableCode(new String(max) + "x"));
+    }
 }

@@ -37,15 +37,18 @@
         <item name="windowActionBar">false</item>
     </style>
 
-    <style name="AppTheme.Splash" parent="@android:style/Theme.Light.NoTitleBar">
+    <style name="AppTheme.Splash.Base" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="windowNoTitle">true</item>
         <item name="windowActionBar">false</item>
-        <!-- The splash surface is white, so its status bar is part of that same surface. -->
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        <item name="android:statusBarColor">@android:color/white</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@color/host_surface</item>
+        <item name="android:navigationBarColor">@color/host_surface</item>
+        <item name="android:windowLightStatusBar">@bool/host_light_system_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/host_light_system_bars</item>
+        <item name="android:windowBackground">@color/host_surface</item>
     </style>
+
+    <style name="AppTheme.Splash" parent="AppTheme.Splash.Base"/>
 
     <style name="AppTheme.Settings" parent="AppTheme">
         <item name="android:dividerHeight">6dp</item>

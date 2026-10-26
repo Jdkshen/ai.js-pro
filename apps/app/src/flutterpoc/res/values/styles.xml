@@ -5,8 +5,10 @@
          dialogs.select 的 MaterialDialog(md_listitem) 解析不到 colorAccent 等属性，会抛
          InflateException 把主进程带崩（示例页运行不会走这个坏主题）。窗口底保持深色，避免 Flutter 首帧白闪。 -->
     <style name="Theme.AiJsPro.GlassFlutter" parent="@style/AppTheme">
-        <item name="android:windowBackground">#0B0D18</item>
-        <item name="android:statusBarColor">#0B0D18</item>
-        <item name="android:navigationBarColor">#0B0D18</item>
+        <item name="android:windowBackground">@color/host_surface</item>
+        <item name="android:statusBarColor">@color/host_surface</item>
+        <item name="android:navigationBarColor">@color/host_surface</item>
+        <item name="android:windowLightStatusBar">@bool/host_light_system_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/host_light_system_bars</item>
     </style>
 </resources>

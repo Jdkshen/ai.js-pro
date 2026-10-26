@@ -178,6 +178,8 @@ final class PocBridge {
         switch (method) {
             case "bootstrap":
                 return bootstrap(activity);
+            case "appearance":
+                return new JSONObject().put("dark", AppThemeRepository.get(activity).isDark());
             case "scriptsRoot":
                 return new JSONObject().put("path", Pref.getScriptDirPath());
             case "list":

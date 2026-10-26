@@ -1,14 +1,13 @@
 package com.jdkshen.aijspro.ui.splash;
 
-import android.graphics.Color;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.view.View;
 import androidx.annotation.Nullable;
 
 import com.jdkshen.aijspro.R;
 import com.jdkshen.aijspro.ui.BaseActivity;
+import com.jdkshen.aijspro.theme.AppThemeRepository;
+import com.jdkshen.aijspro.theme.HostUiAppearance;
 
 /**
  * Created by Stardust on 2017/7/7.
@@ -37,24 +36,15 @@ public class SplashActivity extends BaseActivity {
     }
 
     private void syncStatusBarWithSplashSurface() {
-        getWindow().setStatusBarColor(Color.WHITE);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            View decorView = getWindow().getDecorView();
-            decorView.setSystemUiVisibility(
-                    decorView.getSystemUiVisibility() | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
-        }
-        // Older MIUI builds may ignore the standard Android flag during startup.
-        try {
-            getWindow().getClass()
-                    .getMethod("setExtraFlags", int.class, int.class)
-                    .invoke(getWindow(), 0x20, 0x20);
-        } catch (ReflectiveOperationException ignored) {
-            // The standard flag above remains authoritative on non-MIUI devices.
-        }
+        HostUiAppearance.apply(getWindow(), AppThemeRepository.get(this).isDark());
     }
 
     private void init() {
         setContentView(R.layout.activity_splash);
+        boolean dark = AppThemeRepository.get(this).isDark();
+        findViewById(R.id.splash_surface).setBackgroundColor(HostUiAppearance.surface(dark));
+        ((android.widget.TextView) findViewById(R.id.splash_title))
+                .setTextColor(dark ? 0xFFE6EEF0 : 0xFF1C2022);
         mHandler = new Handler();
     }
 
@@ -71,6 +61,11 @@ public class SplashActivity extends BaseActivity {
             mPaused = false;
             enterNextActivity();
         }
+    }
+
+    @Override protected void onDestroy() {
+        if (mHandler != null) mHandler.removeCallbacksAndMessages(null);
+        super.onDestroy();
     }
 
     void enterNextActivity() {

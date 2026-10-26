@@ -103,7 +103,7 @@ class NativeEditorGate {
   static void release() => _opened = false;
 }
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['AI.js Pro 编辑器参考'],
@@ -111,26 +111,35 @@ void main() {
     yield LicenseEntryWithLineBreaks(['Shizuku API'],
         await rootBundle.loadString('third_party/shizuku-sdk/LICENSE'));
   });
-  runApp(const GlassApp());
+  runApp(GlassApp(initialDark: await readInitialAppearance()));
+}
+
+Future<bool> readInitialAppearance() async {
+  try {
+    final value = await LocalBridge.call('appearance')
+        .timeout(const Duration(milliseconds: 800));
+    if (value is Map && value['dark'] is bool) return value['dark'] as bool;
+  } catch (_) { /* Keep startup bounded if the host bridge is unavailable. */ }
+  return WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark;
 }
 
 @pragma('vm:entry-point')
-void logMain() {
+Future<void> logMain() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const GlassApp(logOnly: true));
+  runApp(GlassApp(logOnly: true, initialDark: await readInitialAppearance()));
 }
 
 class GlassApp extends StatefulWidget {
   final bool logOnly;
-  const GlassApp({Key? key, this.logOnly = false}) : super(key: key);
+  final bool initialDark;
+  const GlassApp({Key? key, this.logOnly = false, this.initialDark = true}) : super(key: key);
   @override
   State<GlassApp> createState() => _GlassAppState();
 }
 
 class _GlassAppState extends State<GlassApp> {
-  // 首帧必须是深色：主题偏好是异步桥读回来的（bootstrap），在读到之前若用浅色主题，
-  // 冷启动/Activity 重建（从后台返回）会先闪一帧白底。dark 默认 true、themeLoaded 之前
-  // themeMode 固定 dark，读到偏好后再按用户设置切换（深->浅是正常换肤，不会再白闪）。
+  // A lightweight appearance read completes before runApp; the native window
+  // holds the matching surface until Flutter can draw its first themed frame.
   bool dark = true;
   bool themeLoaded = false;
   bool savingTheme = false;
@@ -147,6 +156,8 @@ class _GlassAppState extends State<GlassApp> {
   @override
   void initState() {
     super.initState();
+    dark = widget.initialDark;
+    themeLoaded = true;
     backChannel.setMethodCallHandler(handleBackCall);
     // 玻璃主题接线：折射着色器在首帧前异步装载。装载/编译失败时
     // GlassRefraction 会让导航镜片回落原有外观，这里不需要额外处理。
@@ -253,22 +264,19 @@ class _GlassAppState extends State<GlassApp> {
         scaffoldMessengerKey: messenger,
         navigatorObservers: [onceRoutes, logRouteObserver],
         debugShowCheckedModeBanner: false,
-        // 两套主题都配好；偏好在桥异步读回前固定 dark，避免冷启动/重建闪白。
+        // The initial appearance is read before runApp, including the brand page.
         theme: theme(false),
         darkTheme: theme(true),
         themeMode: themeLoaded
             ? (dark ? ThemeMode.dark : ThemeMode.light)
             : ThemeMode.dark,
-        // 系统窗口/任务切换器底色也固定深色（与根容器兜底一致）。
-        color: const Color(0xff0B0D18),
-        // 首帧兜底：child 之外/过渡空档由纯色容器铺底，绝不露出白色窗口背景。
-        // 偏好还没读回时用略透明的深色（0xCC0B0D18），之后换成当前主题的玻璃底色。
+        // Keep the task/window fallback and Flutter root on the same opaque surface.
+        color: GlassBackground.colourFor(dark),
+        // Opaque from the first frame; no tinted gap during route transitions.
         builder: (context, child) => ThemePreferenceScope(
             saving: savingTheme,
             child: ColoredBox(
-                color: themeLoaded
-                    ? GlassBackground.colourFor(dark)
-                    : const Color(0xCC0B0D18),
+                color: GlassBackground.colourFor(dark),
                 child: child!)),
         home: widget.logOnly ? const LogPage() : SplashGate(
             child: Home(
@@ -306,10 +314,9 @@ class BrandSplash extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final background = dark ? const Color(0xff1a1c1a) : const Color(0xfffdfdf6);
-    final onBackground =
-        dark ? const Color(0xffe2e3de) : const Color(0xff1a1c1a);
-    final primary = dark ? const Color(0xff7bda98) : const Color(0xff386a20);
+    final background = GlassBackground.colourFor(dark);
+    final onBackground = Theme.of(context).colorScheme.onSurface;
+    final primary = AppTheme.primaryFor(dark);
     return Scaffold(
         backgroundColor: background,
         body: Stack(children: [
@@ -348,9 +355,9 @@ class BrandSplash extends StatelessWidget {
                     const SizedBox(width: 4),
                     // The original reads "检查登录状态"; this build never contacts
                     // a login server, so the label names what actually happens.
-                    const Text('正在准备脚本工作区',
+                    Text('正在准备脚本工作区',
                         style:
-                            TextStyle(fontSize: 12, color: Color(0xff929292)))
+                            TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant))
                   ]))
         ]));
   }

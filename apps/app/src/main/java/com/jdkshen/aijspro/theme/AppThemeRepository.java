@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.ComponentCallbacks;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.app.UiModeManager;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.preference.PreferenceManager;
@@ -38,6 +40,7 @@ public final class AppThemeRepository {
     private static final int DEFAULT_ACCENT = 0xFF009688; // teal
 
     private volatile AppThemePalette mCurrentPalette;
+    private int mPlatformNightMode = Integer.MIN_VALUE;
     private final SharedPreferences.OnSharedPreferenceChangeListener mPreferenceListener = (prefs, key) -> {
         if (KEY_NIGHT_MODE.equals(key) || "follow_system_theme".equals(key)
                 || KEY_ACCENT_COLOR.equals(key)) refreshFromLegacyTheme();
@@ -58,6 +61,7 @@ public final class AppThemeRepository {
             }
             @Override public void onLowMemory() { }
         });
+        syncPlatformAppearance();
     }
 
     public static AppThemeRepository get(Context context) {
@@ -89,6 +93,7 @@ public final class AppThemeRepository {
 
     /** Call when the user picks a new accent color (from ThemeColorManager). */
     public void refreshFromLegacyTheme() {
+        syncPlatformAppearance();
         AppThemePalette palette = buildPalette();
         if (Arrays.equals(mCurrentPalette.toIntArray(), palette.toIntArray())) return;
         mCurrentPalette = palette;
@@ -110,6 +115,7 @@ public final class AppThemeRepository {
         // Preserve the manual choice when enabling follow-system.
         if (mode != 0) editor.putBoolean(KEY_NIGHT_MODE, mode == 2);
         editor.apply();
+        refreshFromLegacyTheme();
     }
 
     /** Set accent color and persist. */
@@ -126,6 +132,7 @@ public final class AppThemeRepository {
                 .remove(KEY_ACCENT_COLOR)
                 .putBoolean("follow_system_theme", true)
                 .apply();
+        syncPlatformAppearance();
         mCurrentPalette = buildPalette();
         notifyListeners();
     }
@@ -154,6 +161,25 @@ public final class AppThemeRepository {
 
     public boolean isDark() {
         return mCurrentPalette.isDark;
+    }
+
+    /** Persist the app override so Android 12+ also themes its own starting window. */
+    private void syncPlatformAppearance() {
+        if (Build.VERSION.SDK_INT < 31) return;
+        int mode = getThemeMode();
+        int platformMode = mode == 2 ? UiModeManager.MODE_NIGHT_YES
+                : mode == 1 ? UiModeManager.MODE_NIGHT_NO : UiModeManager.MODE_NIGHT_AUTO;
+        if (mPlatformNightMode == platformMode) return;
+        try {
+            UiModeManager manager = mAppContext.getSystemService(UiModeManager.class);
+            if (manager != null) {
+                // AUTO clears the per-app override; it does not change the device-wide mode.
+                manager.setApplicationNightMode(platformMode);
+                mPlatformNightMode = platformMode;
+            }
+        } catch (RuntimeException error) {
+            android.util.Log.w("AppTheme", "无法同步系统启动页主题", error);
+        }
     }
 
     // ---- Internal ----

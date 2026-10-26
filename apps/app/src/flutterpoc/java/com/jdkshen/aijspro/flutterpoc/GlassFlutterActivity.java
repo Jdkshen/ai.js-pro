@@ -1,6 +1,5 @@
 package com.jdkshen.aijspro.flutterpoc;
 
-import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.os.Handler;
 import android.os.Looper;
@@ -8,6 +7,7 @@ import android.util.Log;
 
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.theme.AppThemeRepository;
+import com.jdkshen.aijspro.theme.HostUiAppearance;
 import com.jdkshen.aijspro.external.HostScripts;
 import com.jdkshen.aijspro.ui.floating.FloatyWindowManger;
 
@@ -69,7 +69,8 @@ public class GlassFlutterActivity extends FlutterActivity {
     protected void onCreate(android.os.Bundle savedInstanceState) {
         // task-86：首帧前 Android windowBackground 用深色，避免 Flutter 首帧（深色）之前的白闪。
         try {
-            getWindow().setBackgroundDrawable(new ColorDrawable(Color.rgb(0x0B, 0x0D, 0x18)));
+            getWindow().setBackgroundDrawable(new ColorDrawable(
+                    HostUiAppearance.surface(AppThemeRepository.get(this).isDark())));
         } catch (Throwable ignored) {
         }
         super.onCreate(savedInstanceState);
@@ -86,10 +87,7 @@ public class GlassFlutterActivity extends FlutterActivity {
     // Flutter can leave the system-bar area outside its surface. Match that
     // window area to the active theme as well as updating Dart's overlay style.
     void updateWindowBackground(boolean dark) {
-        int color = dark ? Color.rgb(0x1c, 0x20, 0x22) : Color.rgb(0xf7, 0xf7, 0xf8);
-        getWindow().setBackgroundDrawable(new ColorDrawable(color));
-        getWindow().getDecorView().setBackgroundColor(color);
-        getWindow().setStatusBarColor(color);
+        HostUiAppearance.apply(getWindow(), dark);
     }
 
     /** task-92：pref 开启过 + overlay 权限在 → 恢复悬浮控制条；从未开启则不弹。 */
