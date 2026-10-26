@@ -27,10 +27,11 @@ final class ProjectViewCompat {
     private static final Map<String, String> ALIASES = new HashMap<>();
 
     static {
-        // Pro 的 FileConsoleView 在本仓库对应 ConsoleView（ConsoleView 也是 FrameLayout + 日志列表，
-        // 构造函数 (Context) 可用；Pro 示例里它只当显示区用）。
+        // 直接映射到本仓库 FileConsoleView：它继承 ConsoleView，构造时会把 Node UI 的
+        // console 绑定到 NodeUiLocalSession；映射成普通 ConsoleView 时 page_console 没有
+        // attach console，M3/Node UI 日志页会空白。
         ALIASES.put("com.stardust.autojs.core.console.FileConsoleView",
-                "com.stardust.autojs.core.console.ConsoleView");
+                "com.stardust.autojs.core.console.FileConsoleView");
     }
 
     private ProjectViewCompat() {

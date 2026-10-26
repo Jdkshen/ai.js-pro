@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-26 当前发布 dev-1265（仅 LAN）**：修复 `FileConsoleView` 映射导致 M3/Node UI 日志页空白；官方 M3 Demo 日志页实测显示。
+
 > **2026-10-26 当前发布 dev-1264（仅 LAN）**：Auto.js Pro 967 个 ic_*_48dp 全量移植到宿主，原工程无 res 可直跑；SHA `35209091…`；MI8 已装。
 
 > **2026-10-26 当前发布 dev-1262（仅 LAN）**：宿主内置 20 个 Auto.js Pro 图标 + ui.R 无资源回退；原 Materi-UI zip 无 res/androidResources 可直接运行；SHA `945bb18b…`。
