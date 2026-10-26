@@ -14,8 +14,23 @@ module.exports = function (runtime, global) {
     function ensureProjectResources() {
         if (!_projectR || !_projectR.drawable || Object.keys(_projectR.drawable).length === 0) {
             _projectR = null;
-            try { ui.useAndroidResources(); } catch (e) { /* non-project UI */ }
+            try { ui.useAndroidResources(); } catch (e) { if (!_projectR) _projectR = buildHostUiR(); }
         }
+    }
+
+    /** Pro 工程未带资源表时，仍允许 ui.R 使用宿主内置 Auto.js 图标。 */
+    function buildHostUiR() {
+        var R = { drawable: {}, string: {}, layout: {}, id: {} };
+        try {
+            var resources = context.getResources();
+            var names = ["ic_accessibility_black_48dp","ic_account_circle_black_48dp","ic_add_circle_outline_black_48dp","ic_alarm_black_48dp","ic_bug_report_black_48dp","ic_card_giftcard_black_48dp","ic_change_history_black_48dp","ic_clear_all_black_48dp","ic_color_lens_black_48dp","ic_done_all_black_48dp","ic_error_outline_black_48dp","ic_grade_black_48dp","ic_launch_black_48dp","ic_photo_size_select_large_black_48dp","ic_play_arrow_black_48dp","ic_speaker_notes_off_black_48dp","ic_stop_black_48dp","ic_subject_black_48dp","ic_volume_down_black_48dp","ic_whatshot_black_48dp"];
+            for (var i = 0; i < names.length; i++) {
+                var id = resources.getIdentifier(names[i], "drawable", context.getPackageName());
+                if (id) R.drawable[names[i]] = id;
+            }
+        } catch (e) {}
+        R.string.openDrawerContentDesc = 0;
+        return R;
     }
 
     ui.layout = function (xml) {
@@ -179,7 +194,8 @@ module.exports = function (runtime, global) {
             try {
                 ui.useAndroidResources();
             } catch (e) {
-                // 普通脚本没有工程资源：保持 Pro 的 undefined 行为，由脚本自己按需处理。
+                // 普通脚本/原 Pro 工程没有资源表：回退到宿主内置图标，避免 ui.R 为 null。
+                if (!_projectR) _projectR = buildHostUiR();
             }
         }
         return _projectR;
