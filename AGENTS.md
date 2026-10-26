@@ -2,6 +2,7 @@
 
 > **Materi-UI 适配（2026-10-26）**：[Materi-UI 适配与运行](docs/reports/2026-10-26_MateriUI适配运行.md)：用户提供的 MD3 UI 在 dev-1260/Rhino 上跑通；删除不存在的 DocumentFile 导入、`ui.R` 图标/字符串改为系统资源；四页与 BottomNav 实测通过。源码副本在 `samples/Materi-UI-adapted`，手机 `/storage/emulated/0/脚本/Materi-UITest`。
 > **Materi-UI 独立 APK（2026-10-26）**：`C:\Users\18101\Downloads\Materi-UI-original-1.0.0.apk`，包名 `com.materi.ui`，1.0.0；源工程 `samples/Materi-UI-packaged`。
+> **当前发布 dev-1264（2026-10-26，仅 LAN）**：[全量图标移植](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：Auto.js Pro 967 个 `ic_*_48dp` 全部加入宿主，原工程无 res 可直跑；135.71 MiB，SHA `35209091…`；MI8 已装。
 > **当前发布 dev-1262（2026-10-26，仅 LAN）**：[宿主内置图标回退](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：原 zip 无 res/androidResources 也可直接运行 Materi-UI；135.70 MiB，SHA `945bb18b…`；MI8 已装。
 > **当前发布 dev-1261（2026-10-26，仅 LAN）**：[Materi-UI 原生兼容](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：DocumentFile 依赖/keep、UI prelude 自动 ui.R、宿主图标 fallback；原 Materi-UI 工程无 wrapper 直跑，MI8 验证通过；135.70 MiB，SHA `0003db6d…`。
 > **当前发布 dev-1260（2026-10-26）**：[APK 卡顿优化](docs/reports/2026-10-26_dev1260发布.md)：目录/历史日志后台读取、切页停稳后加载、离屏动画暂停、启动初始化并行、编辑器隐藏日志懒加载、实时日志合并、文档缓存；409 JVM/32 Flutter/59 高亮检查与 MI8 最终包通过；135.70 MiB，SHA `2914e61c…`；GitHub/LAN 已发布，MI8 已装，K40 未动。
