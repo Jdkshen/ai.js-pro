@@ -49,4 +49,16 @@ class ApiReferenceTest(unittest.TestCase):
         self.assertTrue(value.startswith('````\n'))
         self.assertTrue(value.endswith('\n````'))
 
+    def test_language_and_structured_examples_preserve_source(self):
+        code = 'const s = "中文 😀 <script> &lt;";\n  log(s);'
+        value = module.markdown(['### 示例', '```js', *code.split('\n'), '```'])
+        self.assertIn('<h3>示例</h3>', value)
+        self.assertIn('class="language-js"', value)
+        self.assertEqual([{'language': 'javascript', 'code': code}], module.code_examples(value))
+
+    def test_detail_section_headings_inside_code_are_not_parsed_as_navigation(self):
+        sections = module.detailed_sections(['### 用途', '读取', '### 示例', '```js', '### not a heading', '```', '### 返回值', '字符串'])
+        self.assertEqual(['用途', '示例', '返回值'], [x['title'] for x in sections])
+        self.assertIn('### not a heading', sections[1]['content'])
+
 if __name__ == '__main__': unittest.main()

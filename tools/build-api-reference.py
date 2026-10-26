@@ -19,6 +19,7 @@ GUIDES = [
     ('docs/guides/NODE_UI_API.md', ['nodejs'], 'Node UI 与 Java 资源'),
     ('docs/guides/Node24基础自动化API.md', ['nodejs'], 'Node 自动化与图色'),
     ('docs/guides/Node24控件选择器API.md', ['nodejs'], 'Node 控件选择器'),
+    ('docs/guides/API_DETAILS.md', ['rhino', 'quickjs', 'nodejs'], 'API 详解与实践'),
 ]
 LEGACY = ['app', 'console', 'coordinates-based-automation', 'device', 'dialogs', 'engines',
           'events', 'floaty', 'files', 'globals', 'http', 'images', 'keys', 'media',
@@ -83,11 +84,17 @@ def markdown(lines):
             if fence is None:
                 fence = line.strip()[3:]; code = []
             else:
-                out.append('<pre><code>' + html.escape('\n'.join(code)) + '</code></pre>'); fence = None
+                language = re.sub(r'[^a-z0-9_-]', '', fence.lower().split(' ')[0])
+                attr = ' class="language-' + language + '"' if language else ''
+                out.append('<pre><code' + attr + '>' + html.escape('\n'.join(code)) + '</code></pre>'); fence = None
             continue
         if fence is not None:
             code.append(line); continue
         if not line.strip(): flush()
+        elif re.match(r'^#{1,6}\s+', line):
+            flush(); heading = re.match(r'^(#{1,6})\s+(.+)', line)
+            level = min(len(heading[1]), 4)
+            out.append('<h' + str(level) + '>' + inline(heading[2]) + '</h' + str(level) + '>')
         elif line.lstrip().startswith('|'):
             if paragraph or items: flush()
             table.append(line)
@@ -145,6 +152,49 @@ def readable_markdown(fragment):
     return ''.join(parser.parts).strip()
 
 
+def language_name(value, code):
+    alias = {'js': 'javascript', 'html': 'markup', 'xml': 'markup', 'sh': 'bash', 'shell': 'bash', 'text': 'plain', 'txt': 'plain'}
+    if value: return alias.get(value, value)
+    if code.lstrip().startswith('<'): return 'markup'
+    if code.lstrip().startswith(('{', '[')):
+        try: json.loads(code); return 'json'
+        except ValueError: pass
+    return 'javascript'
+
+
+class CodeExamples(HTMLParser):
+    def __init__(self):
+        super().__init__(); self.code = None; self.language = ''; self.examples = []
+    def handle_starttag(self, tag, attrs):
+        if tag == 'pre': self.code = []; self.language = ''
+        if self.code is not None:
+            match = re.search(r'(?:language|lang)-([a-z0-9_-]+)', dict(attrs).get('class', ''), re.I)
+            if match: self.language = match[1].lower()
+    def handle_data(self, data):
+        if self.code is not None: self.code.append(data)
+    def handle_endtag(self, tag):
+        if tag == 'pre' and self.code is not None:
+            code = ''.join(self.code)
+            if code.strip(): self.examples.append({'language': language_name(self.language, code), 'code': code})
+            self.code = None
+
+
+def code_examples(fragment):
+    parser = CodeExamples(); parser.feed(fragment); return parser.examples
+
+
+def detailed_sections(lines):
+    sections, title, body, fenced = [], None, [], False
+    def flush():
+        if title is not None and '\n'.join(body).strip(): sections.append({'title': title, 'content': '\n'.join(body).strip()})
+    for line in lines:
+        if line.lstrip().startswith('```'): fenced = not fenced
+        heading = None if fenced else re.match(r'^###\s+(.+)', line)
+        if heading: flush(); title = heading[1]; body = []
+        else: body.append(line)
+    flush(); return sections
+
+
 class LegacySections(HTMLParser):
     ALLOWED = {'p', 'code', 'pre', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
                'em', 'strong', 'b', 'i', 'blockquote', 'br', 'a', 'div', 'span', 'dl', 'dt', 'dd'}
@@ -170,6 +220,9 @@ class LegacySections(HTMLParser):
             return
         if not self.active or tag not in self.ALLOWED: return
         rendered = ''
+        if tag in ['pre', 'code']:
+            language = re.search(r'(?:language|lang)-([a-z0-9_-]+)', attrs.get('class', ''), re.I)
+            if language: rendered = ' class="language-' + language[1].lower() + '"'
         if tag == 'a':
             href = attrs.get('href', '')
             if href.startswith('#'): href = self.filename + href
@@ -200,12 +253,13 @@ def build():
         def flush_guide():
             body = markdown(lines)
             section_engines = GUIDE_ENGINE_OVERRIDES.get(title, engines) if file == 'docs/guides/API_REFERENCE.md' else engines
+            if file == 'docs/guides/API_DETAILS.md' and title.startswith('Node '): section_engines = ['nodejs']
             if plain(body): records.append({'title': title, 'html': body, 'engines': section_engines,
                 'category': category, 'kind': 'guide', 'source': file, 'link': None,
-                'content': '\n'.join(lines).strip()})
+                'content': '\n'.join(lines).strip(), 'sections': detailed_sections(lines)})
         for line in text.splitlines():
             if line.lstrip().startswith('```'): fence = not fence
-            heading = None if fence else re.match(r'^#{1,4}\s+(.+)', line)
+            heading = None if fence else re.match(r'^#{1,2}\s+(.+)' if file == 'docs/guides/API_DETAILS.md' else r'^#{1,4}\s+(.+)', line)
             if heading:
                 flush_guide(); title = heading[1]; lines = []
             else: lines.append(line)
@@ -224,7 +278,9 @@ def build():
         record['id'] = 'api-' + str(index + 1)
         record['text'] = plain(record['html'])
         record['search'] = (record['title'] + ' ' + record['category'] + ' ' + record['text']).lower()
-    result = {'schemaVersion': 2, 'sources': sources, 'records': records,
+        record.setdefault('sections', [])
+        record['examples'] = code_examples(record['html'])
+    result = {'schemaVersion': 3, 'sources': sources, 'records': records,
         'scope': '现行三引擎指南与 Node 专题；传统 API 原文供 Rhino 查询，不能据此推断 QuickJS/Node 全量支持。'}
     return 'window.AIJS_API_REFERENCE=' + json.dumps(result, ensure_ascii=False, separators=(',', ':')) + ';\n'
 

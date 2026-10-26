@@ -17,6 +17,13 @@ class McpApiDocsTest {
                 addProperty("category", if (kind == "guide") "指南" else "传统 API")
                 addProperty("source", "docs/test.md"); addProperty("text", if (id == "api-3") "ctx.loadResources(path)" else "文件说明 files.read(path) 中文")
                 addProperty("content", content); add("engines", JsonArray().apply { engines.forEach { add(it) } })
+                if (id == "api-1") {
+                    add("sections", JsonArray().apply {
+                        add(JsonObject().apply { addProperty("title", "参数"); addProperty("content", "path：文件路径") })
+                        add(JsonObject().apply { addProperty("title", "示例"); addProperty("content", content) })
+                    })
+                    add("examples", JsonArray().apply { add(JsonObject().apply { addProperty("language", "javascript"); addProperty("code", code) }) })
+                }
             }
             add(entry("api-1", "files.read(path)", "legacy", listOf("rhino"), longContent))
             add(entry("api-2", "文件说明", "guide", listOf("rhino", "quickjs", "nodejs"), "files.read(path)"))
@@ -82,6 +89,22 @@ class McpApiDocsTest {
         rejects { docs().read(args("""{"id":"../../etc/passwd"}""")) }
     }
 
+    @Test fun sectionsAndExamplesCanBeReadWithoutLosingCodeOrExceedingPageBoundaries() {
+        val docs = docs()
+        val full = docs.read(args("""{"id":"api-1"}"""))
+        assertEquals(code, full.getAsJsonArray("examples")[0].asJsonObject.get("code").asString)
+        assertEquals(listOf("参数", "示例"), full.getAsJsonArray("sectionTitles").map { it.asString })
+        val parameters = docs.read(args("""{"id":"api-1","section":"参数"}"""))
+        assertEquals("path：文件路径", parameters.get("content").asString)
+        assertEquals(0, parameters.getAsJsonArray("examples").size())
+        assertFalse(docs.read(args("""{"id":"api-1","includeExamples":false}""")).get("examplesIncluded").asBoolean)
+        val page = docs(code.repeat(20)).read(args("""{"id":"api-1","maxChars":128}"""))
+        assertEquals("paged_content", page.get("examplesOmittedReason").asString)
+        assertEquals(0, page.getAsJsonArray("examples").size())
+        rejects { docs.read(args("""{"id":"api-1","section":"没有的章节"}""")) }
+        rejects { docs.read(args("""{"id":"api-1","includeExamples":"true"}""")) }
+    }
+
     @Test fun invalidTypesAndRangesAreRejectedRatherThanSilentlyDefaulted() {
         val docs = docs()
         for (json in listOf("""{"limit":"1"}""", """{"offset":null}""", """{"limit":1.5}""",
@@ -108,8 +131,9 @@ class McpApiDocsTest {
         val docs = McpApiDocs { file.readText(Charsets.UTF_8) }
         val page = docs.search(args("""{"engine":"nodejs","query":"loadResources"}"""))
         assertTrue(page.get("total").asInt > 0)
-        assertEquals(756, page.get("indexedRecords").asInt)
         val raw = com.google.gson.JsonParser().parse(file.readText().removePrefix("window.AIJS_API_REFERENCE=").trim().removeSuffix(";")).asJsonObject
+        assertEquals(raw.getAsJsonArray("records").size(), page.get("indexedRecords").asInt)
+        assertTrue(page.get("indexedRecords").asInt >= 756)
         assertTrue(docs.search(args("""{"engine":"quickjs","query":"6.3 Node"}""")).getAsJsonArray("items").none { it.asJsonObject.get("id").asString == "api-14" })
         raw.getAsJsonArray("records").forEach { element ->
             val entry = element.asJsonObject
@@ -118,7 +142,11 @@ class McpApiDocsTest {
             assertFalse(detail.get("hasMore").asBoolean)
             assertTrue(detail.get("engineNote").asString.isNotEmpty())
             if (entry.get("kind").asString == "legacy") assertEquals(entry.get("link"), detail.get("link"))
+            assertEquals(entry.getAsJsonArray("examples"), detail.getAsJsonArray("examples"))
+            assertTrue(detail.toString().toByteArray(Charsets.UTF_8).size < 131072)
         }
+        val recipes = raw.getAsJsonArray("records").filter { it.asJsonObject.get("source").asString == "docs/guides/API_DETAILS.md" && it.asJsonObject.getAsJsonArray("sections").size() > 0 }
+        assertEquals(7, recipes.size)
         assertTrue(docs.search(args("""{"limit":20}""")).toString().toByteArray(Charsets.UTF_8).size < 65536)
     }
 }

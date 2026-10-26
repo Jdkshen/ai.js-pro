@@ -38,8 +38,10 @@ internal object McpToolSchema {
         fields.getAsJsonObject("limit").apply { addProperty("minimum", 1); addProperty("maximum", 20); addProperty("default", 10) }
     }
 
-    fun readApiDocSchema(): JsonObject = objectSchema("id", "indexSha256", "offset", "maxChars", required = arrayOf("id")).apply {
+    fun readApiDocSchema(): JsonObject = objectSchema("id", "indexSha256", "section", "offset", "maxChars", required = arrayOf("id")).apply {
         val fields = getAsJsonObject("properties")
+        fields.add("includeExamples", JsonObject().apply { addProperty("type", "boolean"); addProperty("default", true) })
+        fields.getAsJsonObject("section").addProperty("maxLength", 80)
         fields.getAsJsonObject("id").addProperty("pattern", "^api-[1-9][0-9]{0,8}$")
         fields.getAsJsonObject("indexSha256").apply { addProperty("maxLength", 71); addProperty("pattern", "^(|sha256:[0-9a-f]{64})$") }
         fields.getAsJsonObject("offset").apply { addProperty("minimum", 0); addProperty("maximum", Int.MAX_VALUE); addProperty("default", 0) }

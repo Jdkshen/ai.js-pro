@@ -14,6 +14,7 @@ import android.webkit.JsPromptResult;
 
 import com.jdkshen.aijspro.ui.BaseActivity;
 import com.jdkshen.aijspro.theme.AppThemeRepository;
+import com.jdkshen.aijspro.theme.AppThemePalette;
 import com.jdkshen.aijspro.theme.HostUiAppearance;
 
 /**
@@ -25,6 +26,7 @@ public class DocumentationActivity extends BaseActivity {
 
     public static final String EXTRA_URL = "url";
     private WebView webView;
+    private final AppThemeRepository.ThemeListener themeListener = this::applyAppearance;
 
     @Override protected boolean shouldApplyThemeColorToStatusBar() { return false; }
 
@@ -100,6 +102,7 @@ public class DocumentationActivity extends BaseActivity {
                 @Override public void onPageFinished(WebView view, String target) {
                     if (DocumentationUrlPolicy.allowsSearchScript(target)) {
                         view.evaluateJavascript("window.AIJS_DOCS_NATIVE=true;", null);
+                        applyAppearance(AppThemeRepository.get(DocumentationActivity.this).getPalette());
                     }
                 }
                 @Override public boolean shouldOverrideUrlLoading(WebView view, String target) {
@@ -118,7 +121,43 @@ public class DocumentationActivity extends BaseActivity {
         webView.setBackgroundColor(background);
         webView.getSettings().setJavaScriptEnabled(DocumentationUrlPolicy.allowsSearchScript(url));
         webView.loadUrl(Uri.parse(url).buildUpon().clearQuery()
-                .appendQueryParameter("theme", dark ? "dark" : "light").build().toString());
+                .appendQueryParameter("theme", dark ? "dark" : "light")
+                .appendQueryParameter("accent", accentHex(AppThemeRepository.get(this).getPalette())).build().toString());
+    }
+
+    private String accentHex(AppThemePalette palette) {
+        return String.format(java.util.Locale.ROOT, "#%06x", palette.accent & 0xffffff);
+    }
+
+    private void applyAppearance(AppThemePalette palette) {
+        HostUiAppearance.apply(getWindow(), palette.isDark);
+        if (webView == null) return;
+        webView.setBackgroundColor(HostUiAppearance.surface(palette.isDark));
+        if (DocumentationUrlPolicy.allowsSearchScript(webView.getUrl())) {
+            // Only native boolean/color values enter the script. No page or user text is evaluated.
+            webView.evaluateJavascript("(function(){var p={theme:'" + (palette.isDark ? "dark" : "light")
+                    + "',accent:'" + accentHex(palette) + "'};window.AIJS_DOCS_APPEARANCE=p;"
+                    + "if(window.AIJS_DOCS_SET_APPEARANCE)window.AIJS_DOCS_SET_APPEARANCE(p);})();", null);
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        repository.addListener(themeListener);
+        applyAppearance(repository.getPalette());
+    }
+
+    @Override protected void onPause() {
+        AppThemeRepository.get(this).removeListener(themeListener);
+        super.onPause();
+    }
+
+    @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        AppThemeRepository repository = AppThemeRepository.get(this);
+        repository.refreshSystemAppearance();
+        applyAppearance(repository.getPalette());
     }
 
     @Override public void onBackPressed() {
@@ -132,6 +171,7 @@ public class DocumentationActivity extends BaseActivity {
         else super.onBackPressed();
     }
     @Override protected void onDestroy() {
+        AppThemeRepository.get(this).removeListener(themeListener);
         if (webView != null) {
             webView.stopLoading();
             if (webView.getParent() instanceof android.view.ViewGroup) {

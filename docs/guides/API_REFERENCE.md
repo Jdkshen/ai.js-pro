@@ -257,6 +257,7 @@ const loader = host.runtime.getAndroidClassLoader();
 - dex：Rhino 暴露 `runtime.loadDex(path)`；QuickJS 示例用 `new dalvik.system.DexClassLoader(...)`；Node 当前实际是 `host.runtime.loadDex(path)`/`getAndroidClassLoader()`。类型声明里写了 `$java.loadDex`，但当前 `prelude.js` 的 `$java` 没有该方法，不能照声明直接调用。动态代码没有额外安全沙箱，只加载可信 dex。
 
 ## 8. MCP 与终端入口
+- 高频入口的用途、参数、返回值、权限和清理说明见 [API 详解与实践](API_DETAILS.md)。MCP 搜索使用同名 category；搜索结果含 sectionTitles/exampleCount，`read_api_doc` 可传 section 精读“参数”等目录项。完整页返回带 language/code 的 examples 数组；分页时不额外返回整段示例，保留原文 content 分页契约。界面上的语法颜色不写入代码或 MCP 内容。
 - MCP 可用 `search_api_docs` 按关键词、引擎、专题和 guide/legacy 搜索本页与同源离线文档，再用 `read_api_doc(id,indexSha256)` 读参数说明及保留缩进的 Markdown 示例。搜索 limit 默认 10、最大 20，用 nextOffset 翻页；读取 maxChars 默认 16000、范围 128..32000，offset/nextOffset 为 UTF-16 字符偏移。索引更新后应重新搜索 ID。两项工具不启动脚本，不执行示例；传统 Rhino 参考不是其它引擎的支持证明。
 - App 内：抽屉 → **MCP 服务**，开启后默认 `0.0.0.0:8765`，占用时在 `8765..8795` 顺延；端点固定 `POST /mcp`（JSON-RPC 2.0，HTTP/Streamable HTTP）。USB 用 `adb forward tcp:8765 tcp:8765`，客户端填 `http://127.0.0.1:8765/mcp`。端口和地址以手机页面为准。
 - 常用工具：`list_engines`、`get_status`、`list_scripts`/`read_script`、`run_script`、`check_syntax`、`call_engine_api`、`probe_engine_api`、`get_ui_layout`、`capture_screen`、`ui_*`、`app_*`、`workspace_*`、`list_overlays`/`close_overlays`、`terminal_*`、`get_build_tools`。工具名/参数以 `tools/list` 为准，不以本文或截图数量为准；`ui_*`/`capture_screen`/`get_ui_layout` 需要无障碍，截图还受 Android 11+/`FLAG_SECURE` 限制。

@@ -138,7 +138,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
-        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.7.0") })
+        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.8.0") })
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
             "",
@@ -222,7 +222,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("ui_wait", "等待匹配节点出现（阻塞轮询，上限 15s）", McpToolSchema.uiWaitSchema()))
             add(tool("ui_scroll", "按 up/down/left/right 执行滑动手势滚动", McpToolSchema.uiScrollSchema()))
             add(tool("search_api_docs", "搜索 App 同源离线 API 文档，不启动脚本；query 可省略以浏览目录，engine=all/rhino/quickjs/nodejs（兼容 node/node24），category 精确匹配返回的 categories，kind=all/guide/legacy。offset 默认 0，limit 默认 10/最大 20；返回 id、摘要、来源、引擎标注和 indexSha256；再用 read_api_doc 读说明与示例。文档不是运行验证", McpToolSchema.searchApiDocsSchema()))
-            add(tool("read_api_doc", "读取 search_api_docs 返回的条目 id，返回 Markdown 参数说明和保留缩进/换行的代码示例；建议携带 indexSha256 防止更新后 ID 错位。offset/nextOffset 是 UTF-16 字符偏移，maxChars 默认 16000、范围 128..32000，hasMore=true 时继续读取；不执行示例", McpToolSchema.readApiDocSchema()))
+            add(tool("read_api_doc", "读取文档 id 的 Markdown、sectionTitles/sections 目录及 examples 代码数组；section 可按目录只读参数/返回值/权限等，includeExamples 默认 true，完整页才返回原文代码和 language；分段时 examplesOmittedReason=paged_content。建议带 indexSha256 防旧 ID 错配；offset/nextOffset 为 UTF-16 字符，maxChars 默认16000、128..32000；不执行示例", McpToolSchema.readApiDocSchema()))
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {

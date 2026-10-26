@@ -10,6 +10,7 @@
 /tools/*
 !/tools/build-api-reference.py
 !/tools/test-api-reference.py
+!/tools/test-api-code.cjs
 # Reviewed five-item optimization helpers (keep unrelated local tools ignored).
 !/tools/tests/
 /tools/tests/*

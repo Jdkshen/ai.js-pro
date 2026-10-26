@@ -36,6 +36,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 
 - 搜索：`query` 可省略（列目录），支持多个空格分隔关键词、不区分大小写；`engine=all/rhino/quickjs/nodejs`（兼容 node/node24/rhinojs），`kind=all/guide/legacy`；`category` 必须精确使用响应 `categories` 中的一项，省略表示全部。`offset=0`、`limit=10`，limit 范围 1..20；用 `nextOffset` 继续搜索页。
 - 读取：`id` 使用搜索结果，推荐同时带 `indexSha256`，App 更新后旧索引会明确报错、要求重搜，避免同一 ID 指向不同内容。返回 `contentFormat=markdown` 的 `content`，代码保留缩进、换行、中文。`offset/nextOffset/contentLength` 是 UTF-16 字符数，`maxChars=16000`、范围 128..32000；`hasMore=true` 时用 `nextOffset` 继续拼接，分页可能经过代码块中间。
+- 详细条目可用 `category="API 详解与实践"` 查询。搜索结果带 `sectionTitles` / `exampleCount`；`read_api_doc` 可传 `section` 精确读取“参数”“返回值”“权限与前置条件”等目录项，省略则读全文。返回 `sections` 目录和 `examples:[{language,code}]` 原文代码数组；只在内容未分页时返回完整 examples，分段时 `examplesOmittedReason=paged_content`。只读说明可设 `includeExamples=false`，必须是 JSON 布尔值。高亮色与 HTML 装饰只供人看，MCP 始终读取纯 Markdown/原文代码。
 - 每项返回 `kind/source/engines`，`supportEvidence=documentation_only`。`guide` 是现行使用手册/Node 专题，`legacy` 是传统 Rhino 原文，不能推断 QuickJS/Node 支持。真实导出/成员用 `list_engine_api` / `probe_engine_api` 探测；同名函数的行为仍需目标引擎验证。
 - 文档工具是只读能力，不需要脚本执行/写入权限。示例工程仍通过 `list_samples` / `read_sample` 读取；没有搜索结果时不要凭空编造接口。
 

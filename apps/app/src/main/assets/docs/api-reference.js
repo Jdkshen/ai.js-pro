@@ -42,6 +42,28 @@
             const block = document.createElement('div'); block.className = 'code-block';
             const tools = document.createElement('div'); tools.className = 'code-tools';
             const label = document.createElement('span'); label.textContent = '示例代码';
+            const originalCode = pre.querySelector('code');
+            const declared = originalCode && ((originalCode.className.match(/(?:language|lang)-([\w-]+)/) || [])[1]);
+            const rendered = window.AIJS_DOCS_CODE && window.AIJS_DOCS_CODE.render(text, declared);
+            const code = document.createElement('code');
+            if (rendered) {
+                code.innerHTML = rendered.html;
+                // Text fidelity always takes priority over colored decoration.
+                if (code.textContent !== text) code.textContent = text;
+                label.textContent = rendered.label + ' · ' + text.split('\n').length + ' 行';
+                code.className = 'language-' + rendered.language;
+            } else code.textContent = text;
+            pre.replaceChildren(code);
+            const actions = document.createElement('div'); actions.className = 'code-actions';
+            const wrap = document.createElement('button'); wrap.type = 'button'; wrap.className = 'wrap-code';
+            wrap.textContent = '换行'; wrap.setAttribute('aria-pressed', String(wrapCodes)); wrap.setAttribute('aria-label', '切换代码自动换行');
+            pre.classList.toggle('no-wrap', !wrapCodes);
+            wrap.addEventListener('click', () => {
+                wrapCodes = !wrapCodes;
+                results.querySelectorAll('.wrap-code').forEach(b => b.setAttribute('aria-pressed', String(wrapCodes)));
+                results.querySelectorAll('.code-block pre').forEach(p => p.classList.toggle('no-wrap', !wrapCodes));
+                try {window.history.replaceState(Object.assign({}, window.history.state, {wrapCodes}), '');} catch (_) { /* Optional viewer state. */ }
+            });
             const button = document.createElement('button'); button.type = 'button';
             button.className = 'copy-code'; button.textContent = '复制代码';
             button.addEventListener('click', async () => {
@@ -53,7 +75,7 @@
                     }
                 } finally {button.disabled = false;}
             });
-            tools.append(label, button); pre.replaceWith(block); block.append(tools, pre);
+            actions.append(wrap, button); tools.append(label, actions); pre.replaceWith(block); block.append(tools, pre);
         });
     }
     function setFilters(open) {
@@ -73,6 +95,7 @@
     const labels = {rhino: 'Rhino', quickjs: 'QuickJS', nodejs: 'Node.js'};
     let saved = {};
     try {saved = window.history.state || {};} catch (_) { /* Older viewers keep the default filters. */ }
+    let wrapCodes = saved.wrapCodes !== false;
     let engine = ['all', 'rhino', 'quickjs', 'nodejs'].includes(saved.engine) ? saved.engine : 'all';
     let pageSize = 20, visible = Math.max(20, Math.min(1000, Number(saved.visible) || 20)), timer;
     search.value = typeof saved.query === 'string' ? saved.query : '';
@@ -89,7 +112,8 @@
         const matches = data.records.filter(row => (engine === 'all' || row.engines.includes(engine))
             && (!category.value || row.category === category.value) && words.every(w => row.search.includes(w)));
         // A method-name hit precedes incidental mentions in a larger chapter.
-        if (query) matches.sort((a, b) => Number(b.title.toLocaleLowerCase().includes(query)) - Number(a.title.toLocaleLowerCase().includes(query)));
+        if (query) matches.sort((a, b) => Number(b.title.toLocaleLowerCase().includes(query)) - Number(a.title.toLocaleLowerCase().includes(query))
+            || Number(b.category === 'API 详解与实践') - Number(a.category === 'API 详解与实践'));
         results.replaceChildren();
         matches.slice(0, visible).forEach((row, index) => {
             const article = document.createElement('article'), detail = document.createElement('details');
@@ -97,7 +121,8 @@
             const summary = document.createElement('summary'), title = document.createElement('span');
             title.className = 'title'; title.textContent = row.title.replace(/`([^`]+)`/g, '$1'); summary.appendChild(title);
             const badge = document.createElement('span'); badge.className = 'badge';
-            badge.textContent = row.kind === 'legacy' ? 'Rhino · 传统 API 参考' : row.category;
+            badge.textContent = row.kind === 'legacy' ? 'Rhino · 传统 API 参考' : row.category + ' · ' + row.engines.map(x => labels[x]).join(' / ');
+            if (row.examples && row.examples.length) badge.textContent += ' · ' + row.examples.length + ' 个示例';
             summary.appendChild(badge);
             const preview = document.createElement('span'); preview.className = 'preview';
             preview.textContent = row.text.slice(0, 90) + '…';
@@ -108,6 +133,16 @@
                 const body = document.createElement('div'); body.className = 'content';
                 // The build step sanitizes legacy HTML and escapes Markdown. There is no user HTML input.
                 body.innerHTML = row.html;
+                const headings = Array.from(body.querySelectorAll('h2,h3,h4'));
+                if (headings.length > 1) {
+                    const outline = document.createElement('div'); outline.className = 'section-links'; outline.setAttribute('aria-label', '本条目录');
+                    headings.forEach((heading, i) => {
+                        heading.id = row.id + '-section-' + i;
+                        const button = document.createElement('button'); button.type = 'button'; button.textContent = heading.textContent;
+                        button.addEventListener('click', () => heading.scrollIntoView({block: 'start', behavior: 'smooth'})); outline.appendChild(button);
+                    });
+                    body.prepend(outline);
+                }
                 addCodeTools(body);
                 if (row.link) {const link = document.createElement('a'); link.className = 'chapter'; link.href = row.link; link.textContent = '查看完整章节'; body.appendChild(link);}
                 detail.appendChild(body);
@@ -122,7 +157,7 @@
         status.textContent = (labels[engine] || '全部') + ' · ' + matches.length + ' 条'
             + (matches.length > visible ? '，已显示 ' + visible + ' 条' : '');
         filterToggle.classList.toggle('active', Boolean(category.value));
-        try {window.history.replaceState({engine, query: search.value, category: category.value, visible}, '');}
+        try {window.history.replaceState({engine, query: search.value, category: category.value, visible, wrapCodes}, '');}
         catch (_) { /* Searching still works when a viewer disallows history state. */ }
         if (resetScroll) window.scrollTo(0, 0);
     }
@@ -130,8 +165,12 @@
     category.addEventListener('change', () => {visible = pageSize; render(true); setFilters(false);});
     buttons.forEach(button => button.addEventListener('click', () => {
         engine = button.dataset.engine; visible = pageSize;
+        if (category.value && !data.records.some(r => r.category === category.value && (engine === 'all' || r.engines.includes(engine)))) category.value = '';
         buttons.forEach(b => b.setAttribute('aria-pressed', String(b === button))); render(true);
     }));
     more.addEventListener('click', () => {visible += pageSize; render();});
+    function measureHeader() {document.documentElement.style.setProperty('--doc-header-height', document.querySelector('header').offsetHeight + 'px');}
+    if (window.ResizeObserver) new ResizeObserver(measureHeader).observe(document.querySelector('header'));
+    measureHeader();
     render();
 })();

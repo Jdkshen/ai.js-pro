@@ -11,6 +11,7 @@ internal class McpApiDocs(private val load: () -> String) {
     private data class Entry(
         val id: String, val title: String, val category: String, val kind: String,
         val source: String, val engines: List<String>, val text: String, val content: String, val link: String?,
+        val sections: JsonArray, val examples: JsonArray,
     ) {
         val search = "$title $category $text".lowercase(Locale.ROOT)
         val lowerTitle = title.lowercase(Locale.ROOT)
@@ -20,9 +21,12 @@ internal class McpApiDocs(private val load: () -> String) {
             addProperty("link", link)
             add("engines", JsonArray().apply { engines.forEach { add(it) } })
             addProperty("supportEvidence", "documentation_only")
+            addProperty("exampleCount", examples.size())
+            add("sectionTitles", JsonArray().apply { sections.forEach { add(it.asJsonObject.get("title").asString) } })
             addProperty("engineNote", when {
                 kind == "legacy" -> "传统 Rhino 参考；不是运行验证"
                 source == "docs/guides/API_REFERENCE.md" -> "使用手册按章节标注范围；章节内各段可能有不同引擎限制，请阅读正文"
+                source == "docs/guides/API_DETAILS.md" -> "按本条声明的引擎范围阅读；源码分析不等于目标手机已验证"
                 else -> "Node 专题；不是运行验证"
             })
         }
@@ -35,13 +39,14 @@ internal class McpApiDocs(private val load: () -> String) {
         check(encoded.startsWith(prefix) && encoded.endsWith(';')) { "API 文档索引格式无效" }
         // Parse JSON only: never evaluate the asset as JavaScript or start an engine.
         val data = JsonParser().parse(encoded.substring(prefix.length, encoded.length - 1)).asJsonObject
-        check(data.get("schemaVersion").asInt == 2) { "API 文档索引版本不支持" }
+        check(data.get("schemaVersion").asInt in 2..3) { "API 文档索引版本不支持" }
         val entries = data.getAsJsonArray("records").map { item ->
             val row = item.asJsonObject
             Entry(row.get("id").asString, row.get("title").asString, row.get("category").asString,
                 row.get("kind").asString, row.get("source").asString,
                 row.getAsJsonArray("engines").map { it.asString }, row.get("text").asString,
-                row.get("content").asString, row.get("link")?.takeUnless { it.isJsonNull }?.asString)
+                row.get("content").asString, row.get("link")?.takeUnless { it.isJsonNull }?.asString,
+                row.getAsJsonArray("sections") ?: JsonArray(), row.getAsJsonArray("examples") ?: JsonArray())
         }
         check(entries.map { it.id }.toSet().size == entries.size) { "API 文档 ID 重复" }
         val hash = MessageDigest.getInstance("SHA-256").digest(asset.toByteArray(Charsets.UTF_8))
@@ -74,7 +79,7 @@ internal class McpApiDocs(private val load: () -> String) {
                 token in entry.lowerTitle -> 40
                 else -> 1
             } }.sum()
-        }.thenBy { if (it.kind == "guide") 0 else 1 })
+        }.thenBy { if (it.source == "docs/guides/API_DETAILS.md") 0 else if (it.kind == "guide") 1 else 2 })
         require(offset <= matches.size) { "offset 超出结果范围（total=${matches.size}）" }
         val end = minOf(offset.toLong() + limit, matches.size.toLong()).toInt()
         return base(data).apply {
@@ -100,7 +105,7 @@ internal class McpApiDocs(private val load: () -> String) {
     }
 
     fun read(args: JsonObject): JsonObject {
-        allowed(args, setOf("id", "indexSha256", "offset", "maxChars"))
+        allowed(args, setOf("id", "indexSha256", "section", "includeExamples", "offset", "maxChars"))
         val id = string(args, "id")
         require(id.matches(Regex("api-[1-9][0-9]{0,8}"))) { "id 必须使用 search_api_docs 返回的 api-N" }
         val expectedHash = string(args, "indexSha256").also {
@@ -108,10 +113,17 @@ internal class McpApiDocs(private val load: () -> String) {
         }
         val offset = integer(args, "offset", 0, 0, Int.MAX_VALUE)
         val maxChars = integer(args, "maxChars", 16000, 128, 32000)
+        val section = string(args, "section").trim().also { require(it.length <= 80) { "section 最多 80 字符" } }
+        val includeExamples = args.get("includeExamples")?.let {
+            require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) { "includeExamples 必须是 JSON 布尔值" }
+            it.asBoolean
+        } ?: true
         val data = index
         require(expectedHash.isEmpty() || expectedHash == data.hash) { "文档索引已变化，请重新 search_api_docs 获取 id/indexSha256" }
         val entry = data.entries.firstOrNull { it.id == id } ?: throw IllegalArgumentException("找不到文档条目：$id")
-        val text = entry.content
+        val text = if (section.isEmpty()) entry.content else entry.sections.firstOrNull {
+            it.asJsonObject.get("title").asString == section
+        }?.asJsonObject?.get("content")?.asString ?: throw IllegalArgumentException("section 不存在；请使用 sectionTitles 返回的名称")
         require(offset <= text.length) { "offset 超出条目范围（contentLength=${text.length}）" }
         require(offset == 0 || offset == text.length || !Character.isLowSurrogate(text[offset]) ||
             !Character.isHighSurrogate(text[offset - 1])) { "offset 不能切开 UTF-16 字符；请使用 nextOffset" }
@@ -122,6 +134,20 @@ internal class McpApiDocs(private val load: () -> String) {
             addProperty("contentLength", text.length); addProperty("offset", offset)
             addProperty("nextOffset", end); addProperty("hasMore", end < text.length)
             addProperty("truncated", offset > 0 || end < text.length)
+            addProperty("selectedSection", section)
+            add("sections", JsonArray().apply { entry.sections.forEach {
+                val row = it.asJsonObject
+                add(JsonObject().apply { addProperty("title", row.get("title").asString); addProperty("contentLength", row.get("content").asString.length) })
+            } })
+            // Partial pages never leak the unbounded full example collection outside maxChars.
+            val complete = offset == 0 && end == text.length
+            addProperty("examplesIncluded", includeExamples && complete)
+            addProperty("examplesOmittedReason", if (!includeExamples) "not_requested" else if (!complete) "paged_content" else "")
+            add("examples", JsonArray().apply {
+                if (includeExamples && complete) entry.examples.filter {
+                    section.isEmpty() || text.contains(it.asJsonObject.get("code").asString)
+                }.forEach { add(it.deepCopy()) }
+            })
         }
     }
 
