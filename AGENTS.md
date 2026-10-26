@@ -2,6 +2,7 @@
 
 > **Materi-UI 适配（2026-10-26）**：[Materi-UI 适配与运行](docs/reports/2026-10-26_MateriUI适配运行.md)：用户提供的 MD3 UI 在 dev-1260/Rhino 上跑通；删除不存在的 DocumentFile 导入、`ui.R` 图标/字符串改为系统资源；四页与 BottomNav 实测通过。源码副本在 `samples/Materi-UI-adapted`，手机 `/storage/emulated/0/脚本/Materi-UITest`。
 > **Materi-UI 独立 APK（2026-10-26）**：`C:\Users\18101\Downloads\Materi-UI-original-1.0.0.apk`，包名 `com.materi.ui`，1.0.0；源工程 `samples/Materi-UI-packaged`。
+> **当前发布 dev-1266（2026-10-26，仅 LAN）**：[Node/M3 历史日志](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：Node UI 日志页回放最近一次运行日志 + 实时 console；M3 Demo 实测历史头/当前输出同屏；135.71 MiB，SHA `19015419…`；MI8 已装。
 > **当前发布 dev-1265（2026-10-26，仅 LAN）**：[Node/M3 日志页修复](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：`FileConsoleView` 误映射到 ConsoleView 导致 M3/Node 日志空白，已修复；M3 Demo 实测显示。
 > **当前发布 dev-1264（2026-10-26，仅 LAN）**：[全量图标移植](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：Auto.js Pro 967 个 `ic_*_48dp` 全部加入宿主，原工程无 res 可直跑；135.71 MiB，SHA `35209091…`；MI8 已装。
 > **当前发布 dev-1262（2026-10-26，仅 LAN）**：[宿主内置图标回退](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：原 zip 无 res/androidResources 也可直接运行 Materi-UI；135.70 MiB，SHA `945bb18b…`；MI8 已装。

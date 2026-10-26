@@ -21,6 +21,15 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
 import org.autojs.source.engine.android.Node24GeneratedClasses;
+import com.stardust.autojs.core.console.ScriptRunLog;
+import com.stardust.autojs.core.console.ConsoleImpl;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Real Views and Java callbacks share an existing Node pool process. */
 public final class NodeUiLocalSession {
@@ -512,9 +521,48 @@ public final class NodeUiLocalSession {
     }
     public static synchronized void bindConsoleView(com.stardust.autojs.core.console.ConsoleView view) {
         if (pending == null && activity == null) return;
-        if (console == null) console = new com.stardust.autojs.core.console.ConsoleImpl(
-                new com.stardust.util.UiHandler(view.getContext().getApplicationContext()));
+        if (console == null) {
+            console = new com.stardust.autojs.core.console.ConsoleImpl(
+                    new com.stardust.util.UiHandler(view.getContext().getApplicationContext()));
+            loadRecentRunLog(view.getContext(), console);
+        }
         view.setConsole(console);
+    }
+
+    /** 把最近一次运行日志文件回放到 Node UI 控制台，进入日志页时能看到历史。 */
+    private static void loadRecentRunLog(Context context, ConsoleImpl target) {
+        try {
+            java.util.List<File> files = ScriptRunLog.listRecent(context, 1);
+            if (files.isEmpty() || target == null) return;
+            File file = files.get(0);
+            Pattern pattern = Pattern.compile("^(\\d{2}:\\d{2}:\\d{2}\\.\\d{3}) \\[([VDIWEA])\\] (.*)$");
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    new FileInputStream(file), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    Matcher matcher = pattern.matcher(line);
+                    if (matcher.matches()) {
+                        target.println(levelOf(matcher.group(2)), matcher.group(3));
+                    } else if (!line.isEmpty()) {
+                        target.println(android.util.Log.INFO, line);
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            android.util.Log.w("NodeUiLocalSession", "load recent run log failed", error);
+        }
+    }
+
+    private static int levelOf(String letter) {
+        switch (letter) {
+            case "V": return android.util.Log.VERBOSE;
+            case "D": return android.util.Log.DEBUG;
+            case "W": return android.util.Log.WARN;
+            case "E": return android.util.Log.ERROR;
+            case "A": return android.util.Log.ASSERT;
+            case "I":
+            default: return android.util.Log.INFO;
+        }
     }
     public static void onConsoleLine(String text) {
         com.stardust.autojs.core.console.ConsoleImpl current = console;
