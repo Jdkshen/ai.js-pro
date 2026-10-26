@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **当前发布 dev-1256（2026-10-26）**：[启动主题与文档复制优化](docs/reports/2026-10-26_启动主题统一与文档复制优化.md)。启动/品牌/主页/文档共用深浅底色；Android12+ 同步本应用夜间模式，系统启动图标无白底/裁切。API 文档更紧凑，代码块一键复制保留原文，搜索复位、分页保留展开、收起和返回完善。399 App JVM、MI8 深浅启动采样及最终 R8 包19项文档检查/三引擎冒烟通过；135.61MiB，SHA `a96ce8ba…`。GitHub latest/LAN已发布、MI8已装且base.apk摘要一致，K40未动。当前网络GitHub原始附件直链超时，GH-Proxy清单实拉正常。下方旧版状态为历史记录。
+
 > **当前发布 dev-1255（2026-10-26）**：[API 文档直接打开](docs/reports/2026-10-26_API文档直接打开与dev1255.md)。顶部「API 文档」一点直达离线搜索，不再经过 GuidePage，首次打开后一次返回回主页。Flutter AOT 重建、最终 R8 包 MI8 两轮 9 项检查通过；135.60 MiB，SHA `3f69dc2e…`；GitHub latest/LAN 已发布，MI8 已装且实际 APK 摘要一致，K40 未动。三引擎接口与 756 条索引未变。
 
 > **当前发布 dev-1254（2026-10-26）**：[API 离线文档与发布验收](docs/reports/2026-10-26_API离线文档与dev1254.md)。APK 内「本地使用指南」→「三引擎 API 文档 · 离线搜索」；756 条参考条目，当前使用手册与 Node 专题/传统 Rhino 参考分开标注。397 App JVM、6 文档测试、MI8 文档 11 项及最终 R8 包 11 项复验通过；135.60 MiB，SHA `664410e2…`；GitHub/LAN 已发布，MI8 已装且 base.apk 哈希一致，K40 未动。文档源见 [API_REFERENCE.md](docs/guides/API_REFERENCE.md)、[NODE_UI_API.md](docs/guides/NODE_UI_API.md)。改指南后须运行 `python tools/build-api-reference.py` 并提交生成资产；preBuild 会检查过期。下方旧版状态保留为历史记录。
