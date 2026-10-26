@@ -1783,17 +1783,38 @@
         function uiRunOnUiThread(fn) {
             if (typeof fn !== 'function') return Promise.reject(new TypeError('ui.runOnUiThread 需要一个函数'));
             return new Promise(function (resolve, reject) {
-                try {
-                    globalThis.__ajsEnableJavaCallbacks();
-                    const java = globalThis.$autojs.java;
-                    const Handler = java.findClass('android.os.Handler');
-                    const Looper = java.findClass('android.os.Looper');
-                    const Runnable = java.findClass('java.lang.Runnable');
-                    const task = new Runnable({run: function () {
-                        try { resolve(fn()); } catch (error) { reject(error); }
-                    }});
-                    if (!(new Handler(Looper.getMainLooper())).post(task)) reject(new Error('Android UI 队列已关闭'));
-                } catch (error) { reject(error); }
+                // JS stays on Node's thread. Holding Android's main thread in a
+                // synchronous Runnable for a large JS page build can ANR and
+                // hit the JNI callback deadline. Marshal each Java operation,
+                // leaving main-Looper turns available for input and drawing.
+                const schedule = typeof setImmediate === 'function' ? setImmediate : setTimeout;
+                schedule(function () {
+                    try {
+                        // Fix the host-worker identity before entering its
+                        // thread-local scope (fn may install Java callbacks).
+                        globalThis.__ajsEnableJavaCallbacks();
+                        hostCall({kind: 'java', op: 'beginUiScope'});
+                        let value, layoutRoot = null;
+                        try {
+                            // Building an attached tree one bridge call at a
+                            // time otherwise repeatedly measures intermediate
+                            // trees. Preserve a caller's existing suppression.
+                            if (realUiMode) {
+                                const root = javaSession().getContentView();
+                                if (root && typeof root.isLayoutSuppressed === 'function'
+                                        && !root.isLayoutSuppressed()) {
+                                    root.suppressLayout(true);
+                                    layoutRoot = root;
+                                }
+                            }
+                            value = fn();
+                        } finally {
+                            try { if (layoutRoot) layoutRoot.suppressLayout(false); }
+                            finally { hostCall({kind: 'java', op: 'endUiScope'}); }
+                        }
+                        resolve(value);
+                    } catch (error) { reject(error); }
+                }, 0);
             });
         }
         function uiRequestView(op, extra) {

@@ -238,6 +238,13 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final Node24ReflectionCache mReflectionCache = new Node24ReflectionCache();
     private final Node24NoArgCallCache mNoArgCalls = new Node24NoArgCallCache();
     private final Node24JavaMemberTable mJavaMembers = new Node24JavaMemberTable();
+    private final Node24UiThreadScope mUiThreadScope = new Node24UiThreadScope();
+    // Synchronous handlers can wait behind ViewRoot traversal barriers on every
+    // individual bridge operation. Async messages still execute on main, without
+    // turning a large programmatic layout into hundreds of frame-sized waits.
+    private final android.os.Handler mUiHandler = android.os.Build.VERSION.SDK_INT >= 28
+            ? android.os.Handler.createAsync(Looper.getMainLooper())
+            : new android.os.Handler(Looper.getMainLooper());
     private static final Object[] NO_ARGUMENTS = new Object[0];
 
     public Node24HostBridge(Context context) {
@@ -427,6 +434,20 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     private JSONObject handleJava(JSONObject request) throws Exception {
         String op = request.optString("op", "");
+        if ("beginUiScope".equals(op)) {
+            mUiThreadScope.enter();
+            return ok(null);
+        }
+        if ("endUiScope".equals(op)) {
+            mUiThreadScope.exit();
+            return ok(null);
+        }
+        // An explicit async call retains its own executor/mode; a UI scope
+        // must not turn background Java work into a main-thread operation.
+        if (mUiThreadScope.isActive() && !"asyncCall".equals(op)
+                && Looper.myLooper() != Looper.getMainLooper()) {
+            return onUi(() -> handleJava(request));
+        }
         switch (op) {
             case "isInterface":
                 return ok(findClass(request.getString("name")).isInterface());
@@ -1421,6 +1442,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
     public Object[] invokeJava(int memberId, int receiverId, Object[] args, int[] references) {
         try {
             if (mClosed.get()) throw new IllegalStateException("本次 Node 任务的宿主桥已结束");
+            if (mUiThreadScope.isActive() && Looper.myLooper() != Looper.getMainLooper()) {
+                return onUi(() -> invokeJava(memberId, receiverId, args, references));
+            }
             Node24JavaMemberTable.Member member = mJavaMembers.get(memberId);
             if (member == null) throw new IllegalArgumentException("无效的 Java 方法 ID：" + memberId);
             if (args == null || references == null || args.length != references.length)
@@ -1497,7 +1521,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
             if (mClosed.get()) throw new IllegalStateException("脚本已结束");
             return work.call();
         });
-        new android.os.Handler(Looper.getMainLooper()).post(task);
+        if (!mUiHandler.post(task)) throw new IllegalStateException("Android UI 队列已关闭");
         try { return task.get(10, java.util.concurrent.TimeUnit.SECONDS); }
         catch (java.util.concurrent.ExecutionException failure) {
             if (failure.getCause() instanceof Exception) throw (Exception) failure.getCause();
@@ -1506,7 +1530,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Object invokeMethod(Method method, Object target, Object[] args) throws Exception {
-        if (Looper.myLooper() != Looper.getMainLooper() && needsUiThread(target, method, args)) {
+        // Parameterless cached JSON calls skip handleJava; keep their UI scope.
+        if (Looper.myLooper() != Looper.getMainLooper()
+                && (mUiThreadScope.isActive() || needsUiThread(target, method, args))) {
             return onUi(() -> invokeMethod(method, target, args));
         }
         try {

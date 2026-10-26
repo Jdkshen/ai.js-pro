@@ -2,6 +2,7 @@
 const assert = require('assert'), fs = require('fs'), path = require('path'), vm = require('vm');
 const source = fs.readFileSync(path.resolve(__dirname, '../../main/assets/node24/ui.js'), 'utf8');
 let ui, shown, replacement, recreated, keepAlive = 0;
+let uiScopeDepth = 0, callbackWorkerEnabled = false;
 const ids = {}, requests = [];
 let sequence = 1;
 function readIds(xml) {
@@ -13,8 +14,10 @@ function readIds(xml) {
 const views = new Map();
 function view(xml) {
     readIds(xml);
+    let suppressed = false;
     return { __ajsJavaObject__: true, __class: 'android.widget.FrameLayout',
-        findViewById: id => views.get(id) || null, getClass: () => 'FrameLayout' };
+        findViewById: id => views.get(id) || null, getClass: () => 'FrameLayout',
+        isLayoutSuppressed: () => suppressed, suppressLayout: value => { suppressed = value; } };
 }
 let currentView;
 const session = {
@@ -27,7 +30,9 @@ const session = {
     recreate: xml => { recreated = xml; }
 };
 const context = vm.createContext({require, console, setTimeout, clearTimeout,
-    setInterval: () => 1, clearInterval() {}, __ajsEnableJavaCallbacks: () => 1,
+    setInterval: () => 1, clearInterval() {}, __ajsEnableJavaCallbacks: () => {
+        callbackWorkerEnabled = true; return 1;
+    },
     $autojs: { keepRunning: () => keepAlive++, stopRunning: () => keepAlive--,
         java: { findClass: name => {
             if (name === 'android.os.Handler') return class Handler {post(task){task.run();return true;}};
@@ -36,6 +41,13 @@ const context = vm.createContext({require, console, setTimeout, clearTimeout,
             return session;
         } } },
     __ajsRegisterModule: (_name, factory) => { ui = factory({host: req => {
+        if (req.kind === 'java') {
+            assert(callbackWorkerEnabled, 'host worker is enabled before entering its UI scope');
+            if (req.op === 'beginUiScope') uiScopeDepth++;
+            else if (req.op === 'endUiScope') uiScopeDepth--;
+            else assert.fail('unexpected scoped operation: ' + req.op);
+            return {ok: true};
+        }
         if (req.op === 'show') {
             shown = req.layoutXml; currentView = view(shown);
             return {ok: true, views: ids};
@@ -76,8 +88,32 @@ assert(replacement, 'ui.layout installs the inflated View');
 p.recreate();
 assert(recreated.includes('id="child"'), 'recreate re-evaluates and expands layoutXml');
 assert(!recreated.replace(/<!--[\s\S]*?-->/g, '').includes('<m3-card'));
-ui.runOnUiThread(() => 42).then(result => {
+;(async function () {
+    let ran = false;
+    const pending = ui.runOnUiThread(() => {
+        ran = true;
+        assert.equal(uiScopeDepth, 1);
+        assert.equal(currentView.isLayoutSuppressed(), true);
+        return 42;
+    });
+    assert.equal(ran, false, 'defer out of a synchronous Java callback before running UI JS');
+    const result = await pending;
     assert.equal(result, 42, 'runOnUiThread has an awaitable result');
+    assert.equal(uiScopeDepth, 0);
+    assert.equal(currentView.isLayoutSuppressed(), false);
+    await assert.rejects(ui.runOnUiThread(() => { throw new Error('user callback'); }), /user callback/);
+    assert.equal(uiScopeDepth, 0, 'throwing callbacks release the host-worker scope');
+    assert.equal(currentView.isLayoutSuppressed(), false, 'throwing callbacks restore layout');
+    currentView.suppressLayout(true);
+    await ui.runOnUiThread(() => 42);
+    assert.equal(currentView.isLayoutSuppressed(), true, 'preserve explicit caller suppression');
+    currentView.suppressLayout(false);
+    assert.equal(await ui.runOnUiThread(() => ui.runOnUiThread(() => {
+        assert.equal(uiScopeDepth, 1, 'a deferred nested callback has its own scope');
+        return 73;
+    })), 73);
+    await assert.rejects(ui.runOnUiThread(null), /需要一个函数/);
+    assert.equal(uiScopeDepth, 0);
     ui.close();
-    console.log('PASS Node24 dynamic UI contract: XML strings, nested Widget children, bindings, layout, recreate and keepalive');
-}).catch(error => {console.error(error); process.exitCode = 1;});
+    console.log('PASS Node24 dynamic UI contract: XML, Widgets, bindings, recreate, keepalive and cooperative UI scopes');
+})().catch(error => {console.error(error); process.exitCode = 1;});

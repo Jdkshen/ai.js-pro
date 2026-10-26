@@ -91,7 +91,7 @@ const colorId = ui.R.color.primary;
 | --- | --- | --- |
 | `ui.run(fn)` | `fn()` 的返回值 | 在当前 JS 调用上下文执行；不代表 JS 已迁移到 Android 主线程 |
 | `ui.post(fn, delayMs?)` | Node 定时器句柄 | 延时执行 JS；异常写日志；可用 `clearTimeout` 取消 |
-| `ui.runOnUiThread(fn)` | `Promise` | 安排 Android UI 回调；resolve 为 fn 返回值，抛错则 reject |
+| `ui.runOnUiThread(fn)` | `Promise` | 延后执行 JS，同步 Java 桥操作逐次调度到 Android 主线程；resolve 为 fn 返回值，抛错则 reject |
 | `ui.isUiThread()` | `boolean` | 检查实际线程状态 |
 
 ```js
@@ -104,6 +104,10 @@ console.log(answer);
 ```
 
 不要在 UI 回调里使用死循环、同步网络请求、长时间 sleep 或等待依赖 UI 自身完成的任务。耗时工作结束后再提交控件更新。
+
+Node 的 JS 始终在 Node 线程执行。`runOnUiThread` 不再用一个阻塞的 Android `Runnable` 包住整段 JS，而是在回调的同步部分将 Java 构造、字段和方法调用逐次交给主线程；主线程在调用之间仍能处理输入与绘制。显式异步 Java 调用保留原有执行器；`await` 之后的 JS 延续不会继承同步调度范围。回调仍然异步执行，应使用 `await` 或 `.catch()` 接收失败，外围同步 `try/catch` 捕获不到 Promise 拒绝。
+
+支持 `ViewGroup.suppressLayout` 的当前内容布局会在同步回调期间合并布局，结束后恢复；已有的显式布局抑制会保留，异常也会恢复状态。这个改动避免了复杂代码布局持续占住主线程并触发 ANR，并减少构建中间树的重复测量；单次耗时的 Java UI 操作依然会阻塞主线程，大型列表仍建议复用控件或分批加载。
 
 ## 6. inflate、批量创建与替换
 

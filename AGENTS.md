@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-10-26 未发布：听海 Node UI 兼容修复**：[定位与验收](docs/reports/2026-10-26_听海NodeUI兼容修复.md)。MI8 原脚本复现 reason=6 ANR；改逐次主线程调度、布局合并并保留 JNI/JSON/异步语义。453 引擎/409 应用 JVM、21 Node 合约和最终真机回归通过；候选 `dev-1266-tinghai-candidate` / SHA `0da7501a…` 已装 MI8，公开版本仍 dev-1266，K40 未动。主脚本修正版约 12.2 秒构建，启动性能仍需优化；Android 16/Mali 尚未复测，MCP ui_input 另有待修问题，详见报告。
+
 > **Materi-UI 适配（2026-10-26）**：[Materi-UI 适配与运行](docs/reports/2026-10-26_MateriUI适配运行.md)：用户提供的 MD3 UI 在 dev-1260/Rhino 上跑通；删除不存在的 DocumentFile 导入、`ui.R` 图标/字符串改为系统资源；四页与 BottomNav 实测通过。源码副本在 `samples/Materi-UI-adapted`，手机 `/storage/emulated/0/脚本/Materi-UITest`。
 > **Materi-UI 独立 APK（2026-10-26）**：`C:\Users\18101\Downloads\Materi-UI-original-1.0.0.apk`，包名 `com.materi.ui`，1.0.0；源工程 `samples/Materi-UI-packaged`。
 > **当前发布 dev-1266（2026-10-26，仅 LAN）**：[Node/M3 历史日志](docs/reports/2026-10-26_MateriUI原生兼容与dev1261.md)：Node UI 日志页回放最近一次运行日志 + 实时 console；M3 Demo 实测历史头/当前输出同屏；135.71 MiB，SHA `19015419…`；MI8 已装。
