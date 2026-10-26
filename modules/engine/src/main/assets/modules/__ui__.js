@@ -5,12 +5,21 @@ module.exports = function (runtime, global) {
 
     var J = util.java;
     var ui = {};
+    var _projectR = null;
 
     ui.__widgets__ = {};
 
     ui.__defineGetter__("emitter", ()=>  activity ? activity.getEventEmitter() : null);
 
+    function ensureProjectResources() {
+        if (!_projectR || !_projectR.drawable || Object.keys(_projectR.drawable).length === 0) {
+            _projectR = null;
+            try { ui.useAndroidResources(); } catch (e) { /* non-project UI */ }
+        }
+    }
+
     ui.layout = function (xml) {
+        ensureProjectResources();
         if(typeof(activity) == 'undefined'){
             throw new Error("需要在ui模式下运行才能使用该函数");
         }
@@ -24,6 +33,7 @@ module.exports = function (runtime, global) {
      * {@code res/layout/main.xml}；其他情况还是「把参数当文件路径读进来」。
      */
     ui.layoutFile = function(file) {
+        ensureProjectResources();
         var path = null;
         if (ui.__projectResources__ && typeof(file) == 'string') {
             path = ui.__projectResources__.layoutFile(file);
@@ -32,6 +42,7 @@ module.exports = function (runtime, global) {
     }
 
     ui.inflate = function(xml, parent, attachToParent){
+        ensureProjectResources();
         if(typeof(xml) == 'xml'){
             xml = xml.toXMLString();
         }
@@ -146,8 +157,8 @@ module.exports = function (runtime, global) {
      * 需要真 id 的 framework 调用点（Resources.getColor、AnimationUtils.loadAnimation）见下面的垫片。
      */
     ui.useAndroidResources = function () {
-        if (ui.R) {
-            return ui.R;
+        if (_projectR) {
+            return _projectR;
         }
         var info = runtime.ui.__androidResources__;
         if (!info || !info.resources) {
@@ -155,10 +166,25 @@ module.exports = function (runtime, global) {
                     + (info && info.error ? '：' + info.error : ''));
         }
         ui.__projectResources__ = info.resources;
-        ui.R = buildProjectR(info.resources);
+        _projectR = buildProjectR(info.resources);
+        ui.R = _projectR;
         installProjectActivityShim(info.resources);
         return ui.R;
     };
+
+    // Auto.js Pro 兼容：工程声明 androidResources 时，第一次读取 ui.R 自动加载资源表。
+    ui.__defineGetter__("R", function () {
+        if (!_projectR || !_projectR.drawable || Object.keys(_projectR.drawable).length === 0) {
+            _projectR = null;
+            try {
+                ui.useAndroidResources();
+            } catch (e) {
+                // 普通脚本没有工程资源：保持 Pro 的 undefined 行为，由脚本自己按需处理。
+            }
+        }
+        return _projectR;
+    });
+    ui.__defineSetter__("R", function (value) { _projectR = value; });
 
     /** 把资源表摊成 Pro 那种 ui.R 形状：{ color: { mainColorPrimary: 0x7e000001 }, ... } */
     function buildProjectR(res) {
@@ -173,6 +199,18 @@ module.exports = function (runtime, global) {
             }
             R[type] = table;
         }
+        // Auto.js Pro compatibility: original projects use host built-in icons via ui.R.drawable.
+        var drawableNames = ["ic_accessibility_black_48dp","ic_account_circle_black_48dp","ic_add_circle_outline_black_48dp","ic_alarm_black_48dp","ic_bug_report_black_48dp","ic_card_giftcard_black_48dp","ic_change_history_black_48dp","ic_clear_all_black_48dp","ic_color_lens_black_48dp","ic_done_all_black_48dp","ic_error_outline_black_48dp","ic_grade_black_48dp","ic_launch_black_48dp","ic_photo_size_select_large_black_48dp","ic_play_arrow_black_48dp","ic_speaker_notes_off_black_48dp","ic_stop_black_48dp","ic_subject_black_48dp","ic_volume_down_black_48dp","ic_whatshot_black_48dp"];
+        if (!R.drawable) R.drawable = {};
+        var hostResources = context.getResources();
+        for (var k = 0; k < drawableNames.length; k++) {
+            if (R.drawable[drawableNames[k]] === undefined) {
+                var hostId = hostResources.getIdentifier(drawableNames[k], "drawable", context.getPackageName());
+                if (hostId) R.drawable[drawableNames[k]] = hostId;
+            }
+        }
+        if (!R.string) R.string = {};
+        if (R.string.openDrawerContentDesc === undefined) R.string.openDrawerContentDesc = 0;
         return R;
     }
 
@@ -564,4 +602,13 @@ module.exports = function (runtime, global) {
 
 
     return proxy;
+}
+
+// Eager Pro resource compatibility: project androidResources should be available to modules too.
+try {
+    if (!_projectR) {
+        ui.useAndroidResources();
+    }
+} catch (e) {
+    // Non-project UI scripts have no resources; keep them running normally.
 }

@@ -82,8 +82,13 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
             // 先读完整份源码再编译：Rhino 只报「illegal character」不说原因，
             // 编译失败时要回头看一眼源码才能给出「是反引号，加 // @engine quickjs」这种提示。
             val text = reader.readText()
+            val preparedText = if ((source.executionMode and JavaScriptSource.EXECUTION_MODE_UI) != 0) {
+                UI_RESOURCE_PRELUDE + "\n" + text
+            } else {
+                text
+            }
             val script = try {
-                context.compileReader(StringReader(text), source.toString(), 1, null)
+                context.compileReader(StringReader(preparedText), source.toString(), 1, null)
             } catch (e: RhinoException) {
                 throw EngineSyntaxHint.decorate(e, text)
             }
@@ -247,6 +252,23 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     companion object {
 
         val SOURCE_NAME_INIT = "<init>"
+
+        private const val UI_RESOURCE_PRELUDE = """
+            "ui";
+            try {
+                if (typeof ui !== "undefined") {
+                    try { if (typeof ui.useAndroidResources === "function") ui.useAndroidResources(); } catch (e) {}
+                    if (ui.R && ui.R.drawable) {
+                        if (ui.R.drawable.ic_home_black_48dp === undefined) ui.R.drawable.ic_home_black_48dp = android.R.drawable.ic_menu_compass;
+                        if (ui.R.drawable.ic_dashboard_black_48dp === undefined) ui.R.drawable.ic_dashboard_black_48dp = android.R.drawable.ic_menu_view;
+                        if (ui.R.drawable.ic_settings_applications_black_48dp === undefined) ui.R.drawable.ic_settings_applications_black_48dp = android.R.drawable.ic_menu_manage;
+                        if (ui.R.drawable.ic_done_all_black_48dp === undefined) ui.R.drawable.ic_done_all_black_48dp = android.R.drawable.ic_menu_add;
+                        if (ui.R.drawable.ic_cancel_black_48dp === undefined) ui.R.drawable.ic_cancel_black_48dp = android.R.drawable.ic_menu_close_clear_cancel;
+                        if (ui.R.string && ui.R.string.openDrawerContentDesc === undefined) ui.R.string.openDrawerContentDesc = 0;
+                    }
+                }
+            } catch (e) {}
+        """
 
         private val LOG_TAG = "RhinoJavaScriptEngine"
 

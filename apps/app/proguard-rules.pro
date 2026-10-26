@@ -261,3 +261,6 @@
 -dontwarn org.joda.convert.FromString
 -dontwarn org.joda.convert.ToString
 -dontwarn org.slf4j.impl.StaticLoggerBinder
+
+# Rhino/Auto.js Pro compatibility: original projects import androidx.documentfile.provider.DocumentFile directly.
+-keep class androidx.documentfile.** { *; }
