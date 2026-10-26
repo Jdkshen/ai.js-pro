@@ -1,5 +1,6 @@
 # AGENTS.md
 
+> **Materi-UI 适配（2026-10-26）**：[Materi-UI 适配与运行](docs/reports/2026-10-26_MateriUI适配运行.md)：用户提供的 MD3 UI 在 dev-1260/Rhino 上跑通；删除不存在的 DocumentFile 导入、`ui.R` 图标/字符串改为系统资源；四页与 BottomNav 实测通过。源码副本在 `samples/Materi-UI-adapted`，手机 `/storage/emulated/0/脚本/Materi-UITest`。
 > **当前发布 dev-1260（2026-10-26）**：[APK 卡顿优化](docs/reports/2026-10-26_dev1260发布.md)：目录/历史日志后台读取、切页停稳后加载、离屏动画暂停、启动初始化并行、编辑器隐藏日志懒加载、实时日志合并、文档缓存；409 JVM/32 Flutter/59 高亮检查与 MI8 最终包通过；135.70 MiB，SHA `2914e61c…`；GitHub/LAN 已发布，MI8 已装，K40 未动。
 > **2026-10-26 最新工作：APK 卡顿优化，本地候选未发布**：[定位与验证报告](docs/reports/2026-10-26_APK卡顿定位与优化.md)。目录/历史日志移到后台、切页停稳后加载、离屏动画暂停、启动遮罩与初始化并行；编辑器隐藏日志懒加载，实时日志合并通知，文档正文缓存。409 JVM、32 Flutter、10 生成/59 高亮检查及 MI8 三引擎并发/页面验证通过；候选 `dev-1259-perf-candidate` / SHA `5c073d3b…`，公开更新仍 dev-1259。K40 未动，具体测量与边界见报告。
 
