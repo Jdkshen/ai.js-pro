@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-10-27 未发布：听海 Node UI 性能版**：[当前交付与验收](docs/reports/2026-10-27_听海NodeUI性能与缓存修复.md)。构造器 newRef 补 `$type`，类方法元数据缓存生效；全五页构建约 12.2→5.1 秒，密度采样和首页优先后首屏三次中位 2.86 秒。页面按需创建、重建/快速返回取消、状态栏统一；真实构造器/字段/接收对象、12 秒忙碌输入、播放暂停/100 切页及重建通过。候选 `dev-1266-tinghai-perf` / SHA `9db5ab1a…` 已装 MI8，未发布；K40 未动，Android 16/Mali 待复测。下方 2026-10-26 候选为历史阶段。
+
 > **2026-10-26 未发布：听海 Node UI 兼容修复**：[定位与验收](docs/reports/2026-10-26_听海NodeUI兼容修复.md)。MI8 原脚本复现 reason=6 ANR；改逐次主线程调度、布局合并并保留 JNI/JSON/异步语义。453 引擎/409 应用 JVM、21 Node 合约和最终真机回归通过；候选 `dev-1266-tinghai-candidate` / SHA `0da7501a…` 已装 MI8，公开版本仍 dev-1266，K40 未动。主脚本修正版约 12.2 秒构建，启动性能仍需优化；Android 16/Mali 尚未复测，MCP ui_input 另有待修问题，详见报告。
 
 > **Materi-UI 适配（2026-10-26）**：[Materi-UI 适配与运行](docs/reports/2026-10-26_MateriUI适配运行.md)：用户提供的 MD3 UI 在 dev-1260/Rhino 上跑通；删除不存在的 DocumentFile 导入、`ui.R` 图标/字符串改为系统资源；四页与 BottomNav 实测通过。源码副本在 `samples/Materi-UI-adapted`，手机 `/storage/emulated/0/脚本/Materi-UITest`。

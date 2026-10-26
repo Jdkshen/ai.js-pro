@@ -513,6 +513,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 if (created.getClass().isArray()) return ok(toWire(created));
                 return ok(new JSONObject().put("$obj", objectId(created))
                         .put("$class", created.getClass().getName())
+                        .put("$type", mJavaMembers.typeId(created.getClass()))
                         .put("$view", created instanceof android.view.View));
             }
             case "static":
