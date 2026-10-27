@@ -30,6 +30,10 @@ param(
 
     [string]$Abi = 'arm64-v8a',
 
+    # A local test candidate may be newer than the connected test phone/feed.
+    # An explicit release code must still be above every observed baseline.
+    [ValidateRange(0,2100000000)][int]$VersionCode = 0,
+
     [string]$DeviceId = 'cccc62c7',
 
     [string]$PcHost = '192.168.10.5',
@@ -141,6 +145,12 @@ if ($deviceVersion -le 0) {
     Fail "读不到 $DeviceId 上 $packageName 的 versionCode（App 没装？）。缺了这项基准会算小版本号。"
 }
 $expected = [Math]::Max([Math]::Max($repoVersion, $publishedVersion), $deviceVersion) + 1
+if ($VersionCode -gt 0) {
+    if ($VersionCode -lt $expected) {
+        Fail "显式版本 $VersionCode 必须至少为 $expected，不能覆盖已发布或已安装版本。"
+    }
+    $expected = $VersionCode
+}
 Write-Host "[1/5] baseline: repo=$repoVersion published=$publishedVersion device=$deviceVersion -> 预期 dev-$expected" -ForegroundColor Green
 
 # --- 2. 读手机更新源（只读，不改手机）----------------------------------------
