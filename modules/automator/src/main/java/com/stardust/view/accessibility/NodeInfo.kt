@@ -23,6 +23,9 @@ class NodeInfo private constructor() {
 
     var parent: NodeInfo? = null
 
+    /** Set when a live capture stopped at a cooperative time/node/depth limit. */
+    var truncated: Boolean = false
+
     private val children = ArrayList<NodeInfo>()
     val boundsInScreen = Rect()
     val boundsInParent = Rect()
@@ -214,6 +217,7 @@ class NodeInfo private constructor() {
             budget.check()
             pending.add(UiObject.createRoot(root) to null)
             var result: NodeInfo? = null
+            try {
             // Pro also uses a queue: deep WebView/provider trees must not exhaust the stack.
             while (pending.isNotEmpty()) {
                 budget.check()
@@ -278,6 +282,13 @@ class NodeInfo private constructor() {
                     }
                     budget.check()
                 }
+            }
+            } catch (limit: NodeCaptureBudget.CaptureLimitException) {
+                if (result != null) {
+                    result.truncated = true
+                    return result
+                }
+                throw limit
             }
             return requireNotNull(result)
         }
