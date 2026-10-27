@@ -1,5 +1,19 @@
 # AI.js Pro（VS Code 扩展）
 
+## 0.3.6：默认快捷键
+
+扩展版本升至 0.3.6，新增以下默认快捷键；它们仅在 JS 编辑器聚焦时生效，不改动 F5 调试和 Ctrl+S 保存：
+
+| 操作 | Windows / Linux | macOS |
+| --- | --- | --- |
+| 运行当前文件 | `F6` | `F6` |
+| 重新运行 | `Shift+F6` | `Shift+F6` |
+| 停止当前脚本 | `Ctrl+F6` | `Cmd+F6` |
+| 停止所有脚本 | `Ctrl+Shift+F6` | `Cmd+Shift+F6` |
+| 运行项目 | `Alt+F6` | `Alt+F6` |
+
+在「键盘快捷方式」中搜索 `aijspro` 即可自定义。若按键已被旧版 AutoJS6 或其它扩展占用，请在用户快捷键（`keybindings.json`）中为对应的 `aijspro.*` 命令明确绑定；冲突时扩展的默认绑定可能不会生效。注意：编辑器标题菜单的「运行单文件」是选择文件后运行，而 `F6` 直接运行当前编辑器中的文件。
+
 ## 0.3.5：自动识别子工程目录
 
 打开「父目录 + 单个工程子目录」的工作区时（例如 `Downloads/xiangqi-draw` 里面才是含 `project.json` 的 `xiangqi-draw`），运行/保存工程会自动定位到子工程，推送根目录就是子工程本身。此前会把父目录整体打包，手机端 `project.json` 不在解压根目录，报「工程无法运行：Attempt to invoke ... on a null object reference」。
@@ -68,4 +82,4 @@ npm run build        # esbuild → dist/extension.js
 npm run package      # 生成 aijspro-vscode-x.y.z.vsix
 ```
 
-安装：`code --install-extension aijspro-vscode-0.3.2.vsix`（或 VS Code 里「从 VSIX 安装」）。更新后执行「开发人员: 重新加载窗口」。
+安装：`code --install-extension aijspro-vscode-0.3.6.vsix`（或 VS Code 里「从 VSIX 安装」）。更新后执行「开发人员: 重新加载窗口」。

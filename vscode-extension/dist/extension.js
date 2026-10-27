@@ -37,7 +37,7 @@ var require_package = __commonJS({
       name: "aijspro-vscode",
       displayName: "AI.js Pro",
       description: "\u8FDE\u63A5 AI.js Pro\uFF08Android\uFF09\uFF1A\u8FD0\u884C\u5F53\u524D\u6587\u4EF6/\u6574\u4E2A\u5DE5\u7A0B\u3001\u5B9E\u65F6\u65E5\u5FD7\u3001Rhino \u65AD\u70B9\u8C03\u8BD5\u3001\u4FDD\u5B58\u81EA\u52A8\u63A8\u9001\u3001\u8BBE\u5907\u6587\u4EF6\u6D4F\u89C8\u4E0E\u62C9\u53D6\u3002",
-      version: "0.3.5",
+      version: "0.3.6",
       publisher: "jdkshen",
       license: "MIT",
       engines: {
@@ -205,6 +205,38 @@ var require_package = __commonJS({
           {
             command: "aijspro.runDeviceFile",
             title: "\u5728\u624B\u673A\u4E0A\u8FD0\u884C"
+          }
+        ],
+        keybindings: [
+          {
+            command: "aijspro.run",
+            key: "f6",
+            mac: "f6",
+            when: "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+          },
+          {
+            command: "aijspro.rerun",
+            key: "shift+f6",
+            mac: "shift+f6",
+            when: "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+          },
+          {
+            command: "aijspro.stop",
+            key: "ctrl+f6",
+            mac: "cmd+f6",
+            when: "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+          },
+          {
+            command: "aijspro.stopAll",
+            key: "ctrl+shift+f6",
+            mac: "cmd+shift+f6",
+            when: "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+          },
+          {
+            command: "aijspro.runProject",
+            key: "alt+f6",
+            mac: "alt+f6",
+            when: "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
           }
         ],
         menus: {

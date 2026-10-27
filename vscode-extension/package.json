@@ -2,7 +2,7 @@
   "name": "aijspro-vscode",
   "displayName": "AI.js Pro",
   "description": "连接 AI.js Pro（Android）：运行当前文件/整个工程、实时日志、Rhino 断点调试、保存自动推送、设备文件浏览与拉取。",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "publisher": "jdkshen",
   "license": "MIT",
   "engines": {
@@ -170,6 +170,38 @@
       {
         "command": "aijspro.runDeviceFile",
         "title": "在手机上运行"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "aijspro.run",
+        "key": "f6",
+        "mac": "f6",
+        "when": "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+      },
+      {
+        "command": "aijspro.rerun",
+        "key": "shift+f6",
+        "mac": "shift+f6",
+        "when": "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+      },
+      {
+        "command": "aijspro.stop",
+        "key": "ctrl+f6",
+        "mac": "cmd+f6",
+        "when": "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+      },
+      {
+        "command": "aijspro.stopAll",
+        "key": "ctrl+shift+f6",
+        "mac": "cmd+shift+f6",
+        "when": "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
+      },
+      {
+        "command": "aijspro.runProject",
+        "key": "alt+f6",
+        "mac": "alt+f6",
+        "when": "editorTextFocus && (editorLangId == javascript || editorLangId == javascriptreact || resourceExtname == .js)"
       }
     ],
     "menus": {
