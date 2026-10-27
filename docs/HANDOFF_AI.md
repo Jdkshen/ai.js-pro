@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-28 当前发布 dev-1278（仅 LAN）**：Node 引擎「三引擎统一示例」补上节点 UiObject 全量示例；长流程上限 1 小时；SHA `f6982433…`。
+
 > **2026-10-28 当前发布 dev-1277（仅 LAN）**：Node24 普通脚本执行上限 60s→1h，长自动化不再 60 秒误杀；SHA `e46ee075…`。
 
 > **2026-10-28 当前发布 dev-1276（仅 LAN）**：Node24 节点 API 全量对齐（通用 nodeAction、属性/遍历/find）、MCP `ui_node_action`、三引擎 UiObject 示例与 API 文档；SHA `33000fa1…`。
