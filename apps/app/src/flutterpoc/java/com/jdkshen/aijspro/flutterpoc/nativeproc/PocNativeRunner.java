@@ -148,6 +148,7 @@ public final class PocNativeRunner {
     private static final class Task {
         final String token;
         final String path;
+        final long startedAt=System.currentTimeMillis();
         String name;
 
         Task(String token, String name, String path) {
@@ -261,6 +262,7 @@ public final class PocNativeRunner {
                             .put("name", task.name)
                             .put("path", task.path)
                             .put("engine", "Rhino")
+                            .put("startedAt", task.startedAt)
                             .put("detail", "隔离进程")
                             .put("nextTime", 0));
                 } catch (Throwable error) {

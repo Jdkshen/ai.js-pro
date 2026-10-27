@@ -47,6 +47,8 @@ public final class HostScripts {
     private static Method sStopAllHostScripts;
     private static Method sStopAllScripts;
     private static Method sIsEnabled;
+    private static Method sRunningNotificationTasks;
+    private static Method sStopNotificationTask;
 
     private HostScripts() {
     }
@@ -156,6 +158,38 @@ public final class HostScripts {
         }
     }
 
+    /** Same live tokens as the task manager; never enumerate scheduled tasks here. */
+    public static org.json.JSONArray runningNotificationTasks() {
+        resolve();
+        if (sRunningNotificationTasks != null) try {
+            return (org.json.JSONArray)sRunningNotificationTasks.invoke(null);
+        } catch (Throwable error) { Log.w(TAG,"运行通知任务查询失败",error); }
+        org.json.JSONArray rows=new org.json.JSONArray();
+        try {
+            com.stardust.autojs.ScriptEngineService service=com.stardust.autojs.ScriptEngineService.getInstance();
+            if(service!=null)for(com.stardust.autojs.execution.ScriptExecution execution:service.getScriptExecutions()){
+                String type=execution.getEngine()==null?"":execution.getEngine().getClass().getSimpleName();
+                String label=type.contains("Node")?"Node":type.contains("Quick")?"QuickJS":"Rhino";
+                rows.put(new org.json.JSONObject().put("token",String.valueOf(execution.getId())).put("name",execution.getSource().getName()).put("engine",label));
+            }
+        } catch(Throwable error){Log.w(TAG,"本地运行任务查询失败",error);}
+        return rows;
+    }
+
+    /** A token targets one live execution, including one Node worker, never a process. */
+    public static boolean stopNotificationTask(String token) {
+        if(token==null||token.isEmpty()||token.startsWith("timed:")||token.startsWith("intent:"))return false;
+        resolve();
+        if(sStopNotificationTask!=null)try{return Boolean.TRUE.equals(sStopNotificationTask.invoke(null,token));}
+        catch(Throwable error){Log.w(TAG,"停止单个通知任务失败",error);return false;}
+        try{
+            com.stardust.autojs.ScriptEngineService service=com.stardust.autojs.ScriptEngineService.getInstance();
+            com.stardust.autojs.execution.ScriptExecution execution=service==null?null:service.getScriptExecution(Integer.parseInt(token));
+            if(execution!=null&&execution.getEngine()!=null){if(!service.stopExecution(execution))execution.getEngine().forceStop();return true;}
+        }catch(Throwable error){Log.w(TAG,"停止本地通知任务失败",error);}
+        return false;
+    }
+
     /** 一次性解析反射入口；解析失败（普通构建）只记一条日志，后续调用不再重试。 */
     private static void resolve() {
         if (sResolved) {
@@ -171,6 +205,10 @@ public final class HostScripts {
                 sRunScript = accessible(runtime.getDeclaredMethod(
                         "runScript", Context.class, String.class));
                 sStopAllHostScripts = accessible(runtime.getDeclaredMethod("stopAllHostScripts"));
+                try {
+                    sRunningNotificationTasks=accessible(runtime.getDeclaredMethod("runningTasksForNotification"));
+                    sStopNotificationTask=accessible(runtime.getDeclaredMethod("stopRunningTaskForNotification",String.class));
+                } catch(NoSuchMethodException ignored) { }
                 try {
                     sStopAllScripts = accessible(runtime.getDeclaredMethod(
                             "stopAllScripts", Context.class));

@@ -187,6 +187,8 @@ public final class PocScriptHost {
         final String path;
         /** 提交给服务端的原始工作目录，回退主进程执行时还原执行环境。 */
         final String workDir;
+        final long startedAt=System.currentTimeMillis();
+        final String engine;
         String name;
 
         Task(String token, String name, String path, String workDir) {
@@ -194,6 +196,7 @@ public final class PocScriptHost {
             this.name = name;
             this.path = path;
             this.workDir = workDir;
+            this.engine = engineOf(path);
         }
     }
 
@@ -368,7 +371,8 @@ public final class PocScriptHost {
                             .put("kind", "script")
                             .put("name", task.name)
                             .put("path", task.path)
-                            .put("engine", engineOf(task.path))
+                            .put("engine", task.engine)
+                            .put("startedAt", task.startedAt)
                             .put("detail", "脚本进程")
                             .put("nextTime", 0));
                 } catch (Throwable error) {

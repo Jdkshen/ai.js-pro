@@ -264,3 +264,6 @@
 
 # Rhino/Auto.js Pro compatibility: original projects import androidx.documentfile.provider.DocumentFile directly.
 -keep class androidx.documentfile.** { *; }
+
+# Main-source running notifications use the optional Flutter runtime by reflection.
+-keep class com.jdkshen.aijspro.flutterpoc.PocRuntime { *; }

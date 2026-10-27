@@ -35,9 +35,7 @@ import com.stardust.util.UiHandler;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -169,12 +167,12 @@ public class ScriptEngineService {
 
         @Override
         public void onEngineRemove(ScriptEngine engine) {
-            mScriptExecutions.remove(engine.getId());
+            mScriptExecutions.unregister(engine.getId());
             super.onEngineRemove(engine);
         }
     };
     private ScriptExecutionObserver mScriptExecutionObserver = new ScriptExecutionObserver();
-    private LinkedHashMap<Integer, ScriptExecution> mScriptExecutions = new LinkedHashMap<>();
+    private final ScriptExecutionRegistry mScriptExecutions = new ScriptExecutionRegistry();
     /** 只为启动时记录一次 Node24 UI 路由；不放在执行热路径上反复打日志。 */
     private boolean mLoggedNode24UiRoute;
 
@@ -213,17 +211,11 @@ public class ScriptEngineService {
     }
 
     public ScriptExecution execute(ScriptExecutionTask task) {
-        ScriptExecution execution = executeInternal(task);
-        mScriptExecutions.put(execution.getId(), execution);
-        return execution;
+        return executeInternal(task);
     }
 
     private ScriptExecution executeInternal(ScriptExecutionTask task) {
-        if (task.getListener() != null) {
-            task.setExecutionListener(new ScriptExecutionObserver.Wrapper(mScriptExecutionObserver, task.getListener()));
-        } else {
-            task.setExecutionListener(mScriptExecutionObserver);
-        }
+        prepareTaskListener(task);
         ScriptSource source = task.getSource();
         switchEngineWhenTheChosenOneCannotParse(source);
         String engineName = source instanceof JavaScriptSource ? source.getEngineName() : null;
@@ -248,7 +240,16 @@ public class ScriptEngineService {
             // :native 隔离进程里没有 Activity（见 sHeadlessUiMode），此时 UI 模式脚本
             // 不走 ScriptExecuteActivity，直接落到下面的普通执行分支。
             if (uiMode && !sHeadlessUiMode && !isNode24) {
-                return ScriptExecuteActivity.execute(mContext, mScriptEngineManager, task);
+                // ScriptExecuteActivity.execute() 先 new ActivityScriptExecution（分配本表 id），
+                // 再 startActivity()。Activity.onCreate 会立刻用该 id 回查本表；如果 startActivity
+                // 返回后才登记，后台线程调 execute() 时 Activity 可能先读到空表而直接 finish。
+                // 这里持同一把锁完成「启动 + 登记」：onCreate 的 getScriptExecution() 会等待锁，
+                // 等价于先登记再让 UI 读取，且不需要改 ScriptExecuteActivity。
+                synchronized (mScriptExecutions) {
+                    ScriptExecution execution = ScriptExecuteActivity.execute(mContext, mScriptEngineManager, task);
+                    mScriptExecutions.register(execution);
+                    return execution;
+                }
             }
         }
         RunnableScriptExecution r;
@@ -257,8 +258,72 @@ public class ScriptEngineService {
         } else {
             r = new RunnableScriptExecution(mScriptEngineManager, task);
         }
-        new ThreadCompat(r).start();
+        // 先登记再启动：脚本可能瞬间结束，engine.destroy() 的 onEngineRemove 会在本方法
+        // 返回前就触发。若先启动再 put，onRemove 先删一个尚不存在的 id，随后 put 会把
+        // 已经结束的执行留成幽灵项，任务列表/超级岛就会多算一个。
+        mScriptExecutions.register(r);
+        try {
+            new ThreadCompat(r).start();
+        } catch (Throwable error) {
+            // 线程都没起来时不会有 engine，也不会再触发 onEngineRemove，按 executionId 清表。
+            mScriptExecutions.unregister(r.getId());
+            throw error;
+        }
         return r;
+    }
+
+    /**
+     * 统一装配执行监听器：用户监听器（若有）→ 全局监听器 → 无引擎收尾兜底。
+     *
+     * <p>兜底必须放在最外层：用户监听器抛异常时前面的 observer 可能没机会执行，但清表
+     * 仍然要做。
+     */
+    private void prepareTaskListener(ScriptExecutionTask task) {
+        if (task.getListener() != null) {
+            task.setExecutionListener(new ScriptExecutionObserver.Wrapper(mScriptExecutionObserver, task.getListener()));
+        } else {
+            task.setExecutionListener(mScriptExecutionObserver);
+        }
+        task.setExecutionListener(new NoEngineExecutionCleanupListener(task.getListener()));
+    }
+
+    /**
+     * 引擎创建失败 / UI 启动被拒绝时，结束回调里的 execution.getEngine() 仍是 null。
+     * 这种执行不会再有 engine 可销毁，也就不会触发 onEngineRemove，必须按 executionId 主动
+     * 清表；否则任务列表和超级岛会一直显示一个实际不存在的任务。
+     *
+     * <p>只要 execution 已经有 engine（包括 UI/Looper 执行），就不在这里删除：成功回调
+     * 不是执行真正结束的信号，必须等 engine.destroy() 触发 onEngineRemove，避免把仍在
+     * 收尾的 UI/Looper 任务提前从运行列表移除。
+     */
+    private final class NoEngineExecutionCleanupListener implements ScriptExecutionListener {
+
+        private final ScriptExecutionListener mDelegate;
+
+        NoEngineExecutionCleanupListener(ScriptExecutionListener delegate) {
+            mDelegate = delegate;
+        }
+
+        @Override
+        public void onStart(ScriptExecution execution) {
+            mDelegate.onStart(execution);
+        }
+
+        @Override
+        public void onSuccess(ScriptExecution execution, Object result) {
+            mDelegate.onSuccess(execution, result);
+        }
+
+        @Override
+        public void onException(ScriptExecution execution, Throwable e) {
+            try {
+                mDelegate.onException(execution, e);
+            } finally {
+                if (execution.getEngine() == null) {
+                    mScriptExecutions.unregister(execution.getId());
+                }
+            }
+        }
     }
 
     public ScriptExecution execute(ScriptSource source, ScriptExecutionListener listener, ExecutionConfig config) {
@@ -304,14 +369,17 @@ public class ScriptEngineService {
             // QuickJS / Node24 的事件循环不依赖调用线程，退回原来的后台执行路径。
             return execute(task);
         }
-        if (task.getListener() != null) {
-            task.setExecutionListener(new ScriptExecutionObserver.Wrapper(mScriptExecutionObserver, task.getListener()));
-        } else {
-            task.setExecutionListener(mScriptExecutionObserver);
-        }
+        prepareTaskListener(task);
         MainThreadUiExecution execution = new MainThreadUiExecution(task);
-        mScriptExecutions.put(execution.getId(), execution);
-        execution.start();
+        // 先登记再 post 启动：否则主 Looper 上的执行可能在登记前就结束并触发 onEngineRemove。
+        mScriptExecutions.register(execution);
+        try {
+            execution.start();
+        } catch (Throwable error) {
+            // post 失败（主 Looper 正在退出）时不会创建 engine，也不会再有 onEngineRemove。
+            mScriptExecutions.unregister(execution.getId());
+            throw error;
+        }
         return execution;
     }
 
@@ -393,7 +461,7 @@ public class ScriptEngineService {
         int count = 0;
         // 主线程 UI 执行跑在进程主 Looper 上：只 forceStop 引擎既停不干净也没人收尾，
         // 必须走它们自己的 forceStop（通知 listener / 销毁引擎 / 关运行日志）。
-        for (ScriptExecution execution : new ArrayList<>(mScriptExecutions.values())) {
+        for (ScriptExecution execution : mScriptExecutions.snapshot()) {
             if (execution instanceof MainThreadUiExecution) {
                 ((MainThreadUiExecution) execution).forceStop();
                 count++;
@@ -487,8 +555,12 @@ public class ScriptEngineService {
         return mScriptEngineManager.getEngines();
     }
 
+    /**
+     * 当前运行中执行的稳定快照。调用方可以在任意线程安全遍历；之后的登记/移除不会
+     * 改变已返回的集合，也不会抛 ConcurrentModificationException。
+     */
     public Collection<ScriptExecution> getScriptExecutions() {
-        return mScriptExecutions.values();
+        return mScriptExecutions.snapshot();
     }
 
     @Nullable
@@ -547,7 +619,9 @@ public class ScriptEngineService {
         }
 
         void start() {
-            mMainHandler.post(mStartRunnable);
+            if (!mMainHandler.post(mStartRunnable)) {
+                throw new IllegalStateException("主线程 Looper 正在退出，无法启动 UI 脚本");
+            }
         }
 
         @Override
@@ -726,26 +800,34 @@ public class ScriptEngineService {
             mMainHandler.removeCallbacks(mStartRunnable);
             Looper.myQueue().removeIdleHandler(this);
             try {
-                ScriptExecutionListener listener = getListener();
-                if (error == null) {
-                    listener.onSuccess(this, null);
-                } else {
-                    listener.onException(this, error);
-                }
-            } catch (Throwable notifyError) {
-                Log.w(LOG_TAG, "通知主线程 UI 脚本结束失败", notifyError);
-            }
-            if (engine != null) {
                 try {
-                    engine.destroy();
-                } catch (Throwable destroyError) {
-                    Log.w(LOG_TAG, "销毁主线程 UI 脚本引擎失败", destroyError);
+                    ScriptExecutionListener listener = getListener();
+                    if (error == null) {
+                        listener.onSuccess(this, null);
+                    } else {
+                        listener.onException(this, error);
+                    }
+                } catch (Throwable notifyError) {
+                    Log.w(LOG_TAG, "通知主线程 UI 脚本结束失败", notifyError);
+                }
+                if (engine != null) {
+                    try {
+                        engine.destroy();
+                    } catch (Throwable destroyError) {
+                        Log.w(LOG_TAG, "销毁主线程 UI 脚本引擎失败", destroyError);
+                    }
+                }
+                if (runLog != null) {
+                    runLog.finish(error);
+                }
+            } finally {
+                // 正常路径只由 engine.destroy() 的 onEngineRemove 清表；这里只兜底
+                // 「从未创建出 engine」和「destroy 没走到 onDestroy」两种不会再有回调的情况。
+                // 成功回调发生时 engine 还活着，不能提前删，否则 UI/Looper 任务会从运行列表消失。
+                if (engine == null || !engine.isDestroyed()) {
+                    mScriptExecutions.unregister(getId());
                 }
             }
-            if (runLog != null) {
-                runLog.finish(error);
-            }
-            mScriptExecutions.remove(getId());
         }
     }
 

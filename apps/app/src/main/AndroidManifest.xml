@@ -208,6 +208,7 @@
         </activity>
 
 
+        <activity android:name=".external.foreground.ScriptStatusActivity" android:launchMode="singleTop" android:exported="false" android:label="脚本运行状态" android:theme="@style/AppTheme" />
         <service android:name=".external.foreground.ForegroundService"/>
         <!-- task-177：内置 MCP HTTP 服务（原声明在 src/miuix/AndroidManifest.xml）。
              对齐 Pro：前台服务类型 dataSync|connectedDevice、划掉任务不停服（START_STICKY）。 -->

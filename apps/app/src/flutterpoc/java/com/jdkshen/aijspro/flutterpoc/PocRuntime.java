@@ -436,7 +436,7 @@ final class PocRuntime {
 
     // ---- 任务列表 / 停止 ------------------------------------------------
 
-    private static Object tasks() throws Exception {
+    static JSONArray runningTasksForNotification() throws Exception {
         JSONArray running = new JSONArray();
         try {
             Collection<ScriptExecution> executions = AutoJs.getInstance()
@@ -448,6 +448,7 @@ final class PocRuntime {
                             ? ((JavaScriptFileSource) source).getFile().getPath() : "";
                     running.put(new JSONObject()
                             .put("token", String.valueOf(execution.getId()))
+                            .put("startedAt", execution.getEngine()!=null&&execution.getEngine().getTag("aijspro.notification.startedAt") instanceof Number?((Number)execution.getEngine().getTag("aijspro.notification.startedAt")).longValue():0)
                             .put("kind", "script")
                             .put("name", source.getName())
                             .put("path", path)
@@ -494,6 +495,17 @@ final class PocRuntime {
         } catch (Throwable error) {
             Log.w(TAG, "读取 Node24 任务失败", error);
         }
+        return running;
+    }
+
+    static boolean stopRunningTaskForNotification(String token) throws Exception {
+        if (token == null || token.isEmpty() || token.startsWith("timed:") || token.startsWith("intent:")) return false;
+        stopTasks(new JSONArray().put(token));
+        return true;
+    }
+
+    private static Object tasks() throws Exception {
+        JSONArray running = runningTasksForNotification();
         JSONArray scheduled = new JSONArray();
         try {
             TimedTaskManager manager = TimedTaskManager.getInstance();
@@ -591,7 +603,7 @@ final class PocRuntime {
                     .getScriptEngineService().getScriptExecution(id);
             if (execution != null) {
                 ScriptEngine engine = execution.getEngine();
-                if (engine != null) {
+                if (engine != null && !AutoJs.getInstance().getScriptEngineService().stopExecution(execution)) {
                     engine.forceStop();
                 }
             }

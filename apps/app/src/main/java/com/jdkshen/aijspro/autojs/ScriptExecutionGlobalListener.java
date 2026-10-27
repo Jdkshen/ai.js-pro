@@ -22,6 +22,8 @@ public class ScriptExecutionGlobalListener implements ScriptExecutionListener {
 
     @Override
     public void onStart(ScriptExecution execution) {
+        if(execution==null)return;
+        if(execution.getEngine()!=null)execution.getEngine().setTag("aijspro.notification.startedAt",System.currentTimeMillis());
         if (mForegroundExecutions.add(execution.getId())
                 && !ForegroundService.acquireExecutionLease(GlobalAppContext.get())) {
             mForegroundExecutions.remove(execution.getId());
@@ -38,6 +40,7 @@ public class ScriptExecutionGlobalListener implements ScriptExecutionListener {
      * （结束行在错误堆栈之前），这里只负责前台执行租约；不要再打第二遍结束行。
      */
     private void onFinish(ScriptExecution execution) {
+        if(execution==null)return;
         if (mForegroundExecutions.remove(execution.getId())) {
             ForegroundService.releaseExecutionLease(GlobalAppContext.get());
         }

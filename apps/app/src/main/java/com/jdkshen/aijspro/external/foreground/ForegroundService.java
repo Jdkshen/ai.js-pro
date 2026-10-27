@@ -28,11 +28,12 @@ public class ForegroundService extends Service {
 
 
     private static final String TAG = "ForegroundService";
-    private static final int NOTIFICATION_ID = 1;
-    private static final String CHANEL_ID = ForegroundService.class.getName() + ".foreground";
+    static final int NOTIFICATION_ID = 1;
+    static final String CHANEL_ID = ForegroundService.class.getName() + ".foreground";
     /** 通知栏「停止」按钮的 action：只停脚本，不动普通的前台保活启动流程。 */
     public static final String ACTION_STOP_ALL_SCRIPTS =
             ForegroundService.class.getName() + ".action.STOP_ALL_SCRIPTS";
+    private RunningScriptNotifications runningNotifications;
     private static final AtomicInteger sExecutionLeases = new AtomicInteger();
 
     public static void start(Context context) {
@@ -118,6 +119,8 @@ public class ForegroundService extends Service {
         super.onCreate();
         try {
             startForeground();
+            runningNotifications=new RunningScriptNotifications(this);
+            runningNotifications.start();
         } catch (Throwable error) {
             // A failing startForeground() (e.g. notification permission on MIUI)
             // triggers ForegroundServiceDidNotStartInTimeException and kills the
@@ -135,6 +138,7 @@ public class ForegroundService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if(runningNotifications!=null&&runningNotifications.handle(intent))return START_STICKY;
         if (intent != null && ACTION_STOP_ALL_SCRIPTS.equals(intent.getAction())) {
             stopAllScriptsFromNotification();
             // 只处理这一次点击：普通启动（acquireExecutionLease / startForegroundService）仍走
@@ -173,12 +177,12 @@ public class ForegroundService extends Service {
         startForeground(NOTIFICATION_ID, buildNotification());
     }
 
-    private Notification buildNotification() {
+    Notification buildNotification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             createNotificationChannel();
         }
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
-                new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+                new Intent(this, ScriptStatusActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stopAllIntent = PendingIntent.getService(this, 1,
                 new Intent(this, ForegroundService.class).setAction(ACTION_STOP_ALL_SCRIPTS),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
@@ -188,13 +192,13 @@ public class ForegroundService extends Service {
         // 因此再给通知加一个自定义 RemoteViews，把「停止脚本」按钮画进通知内容区；
         // Action 仍然保留，AOSP/其它 ROM 走原生按钮。
         RemoteViews contentView = new RemoteViews(getPackageName(), R.layout.notification_running_script);
-        contentView.setTextViewText(R.id.notif_title, getString(R.string.foreground_notification_title));
-        contentView.setTextViewText(R.id.notif_text, getString(R.string.notification_running_text));
+        contentView.setTextViewText(R.id.notif_title, "AI.js Pro");
+        contentView.setTextViewText(R.id.notif_text, "后台服务已开启 · 点击查看运行任务");
         contentView.setOnClickPendingIntent(R.id.notif_root, contentIntent);
         contentView.setOnClickPendingIntent(R.id.notif_stop, stopAllIntent);
         return new NotificationCompat.Builder(this, CHANEL_ID)
-                .setContentTitle(getString(R.string.foreground_notification_title))
-                .setContentText(getString(R.string.notification_running_text))
+                .setContentTitle("AI.js Pro")
+                .setContentText("后台服务已开启 · 点击查看运行任务")
                 .setSmallIcon(R.drawable.ic_ai_js_pro_notification)
                 .setWhen(System.currentTimeMillis())
                 .setContentIntent(contentIntent)
@@ -222,6 +226,7 @@ public class ForegroundService extends Service {
 
     @Override
     public void onDestroy() {
+        if(runningNotifications!=null)runningNotifications.close();
         stopForeground(true);
         super.onDestroy();
 
