@@ -1,5 +1,8 @@
 # AGENTS.md
 
+> **2026-10-27 vivo/iQOO适配候选 dev-1271（未安装/未发布）**：[适配与转交测试](docs/reports/2026-10-27_vivo实况通知适配与测试说明.md)。用户他人vivo Android16已允许并提升标准实况；小米协议0非vivo不支持。分厂商诊断、空闲/故障分离、通道不存在改null；新增自动/文字/ProgressStyle及异常回退，vivo自动尝试进度。436项App JVM、release/R8/16KB/签名通过；APK/三引擎180秒无浮窗测试ZIP/MD在Downloads。仅小米做未发送的标准API对象检查，不等于vivo原子岛验收；需对方桌面运行态反馈。公开仍1269，本机仍1270。
+
+
 > **2026-10-27 超级岛实机修复候选 dev-1270（已装当前USB手机，未发布）**：[证据与验收](docs/reports/2026-10-27_Android16实况通知与超级岛鉴权排查.md)。USB确认旧模板FocusPlugin onAuthFailed；改补Android16标准实况权限/请求/短文案，真实桌面1项/三引擎3项、单停/全停/清理均通过。427项App JVM、release/R8/签名/16KB通过；R2 SHA `1f1f89d5…`，已安装base.apk一致。诊断分用户开关/小米平台注册/实际通知/Native提升；最终标准通道不混用未注册模板，无需Root或播放音乐。公开仍1269；仅DQKFJB59596L45BI（dash/2602BRT18C），K40/MI8未动。
 
 

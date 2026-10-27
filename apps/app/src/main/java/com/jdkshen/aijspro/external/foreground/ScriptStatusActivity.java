@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.external.foreground;
 
 import android.app.Activity;
+import android.app.Dialog;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.ClipData;
@@ -35,13 +36,14 @@ public final class ScriptStatusActivity extends Activity {
     private ScheduledExecutorService worker;
     private TextView status,count;
     private LinearLayout rows;
-    private Button stopAll;
+    private Button stopAll,styleButton;
+    private Dialog styleDialog;
     private AppThemePalette palette;
     private volatile boolean visible;
     private volatile String copied="{}";
     private String rowsKey="";
     private int generation;
-    private XiaomiFocusSupport cachedSupport;
+    private volatile XiaomiFocusSupport cachedSupport;
 
     @Override public void onCreate(Bundle saved){super.onCreate(saved);}
     @Override protected void onResume(){
@@ -52,14 +54,14 @@ public final class ScriptStatusActivity extends Activity {
         worker.scheduleWithFixedDelay(()->refresh(session),0,2,TimeUnit.SECONDS);
         RunningScriptNotifications.refresh();
     }
-    @Override protected void onPause(){visible=false;++generation;if(worker!=null)worker.shutdownNow();main.removeCallbacksAndMessages(null);super.onPause();}
+    @Override protected void onPause(){visible=false;++generation;if(styleDialog!=null){styleDialog.dismiss();styleDialog=null;}if(worker!=null)worker.shutdownNow();main.removeCallbacksAndMessages(null);super.onPause();}
 
     private void build(){
         rowsKey="";LinearLayout content=new LinearLayout(this);content.setOrientation(1);content.setPadding(dp(20),dp(12),dp(20),dp(24));content.setBackgroundColor(palette.surfacePrimary);
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.addView(content);setContentView(scroll);
         button(content,"返回",this::finish);
         text(content,"脚本运行状态",24,palette.textPrimary);
-        status=text(content,"正在检测超级岛与通知权限…",14,palette.textSecondary);
+        status=text(content,"正在检测实况通知与系统展示能力…",14,palette.textSecondary);
         button(content,"打开系统通知设置",()->{
             Intent intent=Build.VERSION.SDK_INT>=26?new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,getPackageName()):new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:"+getPackageName()));
             try{startActivity(intent);}catch(Exception e){Toast.makeText(this,"无法打开通知设置",Toast.LENGTH_SHORT).show();}
@@ -72,11 +74,27 @@ public final class ScriptStatusActivity extends Activity {
                 catch(Exception unavailable){Toast.makeText(this,"此系统未提供通知设置入口",Toast.LENGTH_LONG).show();}
             }
         });
-        button(content,"复制诊断信息",()->{((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("脚本运行与超级岛诊断",copied));Toast.makeText(this,"诊断已复制",Toast.LENGTH_SHORT).show();});
+        if(Build.VERSION.SDK_INT>=36)styleButton=button(content,"实况样式："+NotificationPresentation.styleLabel(LiveUpdateSupport.stylePreference(this)),this::chooseStyle);
+        button(content,"复制诊断信息",()->{((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("脚本运行与实况通知诊断",copied));Toast.makeText(this,"诊断已复制",Toast.LENGTH_SHORT).show();});
         stopAll=button(content,"停止全部脚本",()->submit(()->{HostScripts.stopAllScripts(getApplicationContext());RunningScriptNotifications.refresh();}));
         count=text(content,"正在读取任务…",18,palette.textPrimary);
         rows=new LinearLayout(this);rows.setOrientation(1);content.addView(rows);
-        text(content,"停止当前：停止最近启动的一个脚本。焦点通知用户开关不代表小米平台鉴权；Android 16 实况通知是另一条系统通道，是否显示为岛由系统决定。音乐播放通过媒体会话上岛，与普通脚本通知不同。",13,palette.textSecondary);
+        text(content,"请在脚本运行期间复制诊断，再回桌面观察实况通知或原子岛。本页属于通知所属应用；可先用无悬浮窗脚本排除展示干扰。样式不适合时可在文字状态与运行进度间对照；进度样式不计算脚本完成百分比。",13,palette.textSecondary);
+    }
+
+    private void chooseStyle(){
+        Dialog dialog=new Dialog(this);
+        styleDialog=dialog;dialog.setOnDismissListener(ignored->{if(styleDialog==dialog)styleDialog=null;});
+        LinearLayout choices=new LinearLayout(this);choices.setOrientation(1);choices.setPadding(dp(16),dp(12),dp(16),dp(20));choices.setBackgroundColor(palette.surfacePrimary);
+        text(choices,"实况通知样式",20,palette.textPrimary);
+        String[] modes={"auto","text","progress"};
+        for(String mode:modes)button(choices,NotificationPresentation.styleLabel(mode),()->{
+            LiveUpdateSupport.setStylePreference(this,mode);cachedSupport=null;
+            styleButton.setText("实况样式："+NotificationPresentation.styleLabel(mode));
+            RunningScriptNotifications.refresh();dialog.dismiss();
+        });
+        dialog.setContentView(choices);dialog.show();
+        if(dialog.getWindow()!=null){HostUiAppearance.apply(dialog.getWindow(),palette.isDark);dialog.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(palette.surfacePrimary));dialog.getWindow().setLayout(getResources().getDisplayMetrics().widthPixels-dp(40),-2);}
     }
 
     private void submit(Runnable action){if(worker!=null&&!worker.isShutdown())worker.execute(()->{try{action.run();refresh(generation);}catch(Exception error){main.post(()->{if(visible)Toast.makeText(this,"操作失败："+error.getMessage(),Toast.LENGTH_SHORT).show();});}});}
@@ -87,26 +105,15 @@ public final class ScriptStatusActivity extends Activity {
             XiaomiFocusSupport support=cachedSupport;
             JSONArray raw=HostScripts.runningNotificationTasks();List<RunningTaskState.Task> tasks=state.update(raw,System.currentTimeMillis());
             JSONObject diagnostic=support.toJson().put("runningCount",tasks.size()).put("tasks",raw);
-            boolean channelAllowed=true;
-            if(Build.VERSION.SDK_INT>=26){NotificationChannel c=((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).getNotificationChannel(ForegroundService.CHANEL_ID);channelAllowed=c==null||c.getImportance()!=NotificationManager.IMPORTANCE_NONE;}
+            Boolean channelAllowed=null;boolean channelExists=false;
+            if(Build.VERSION.SDK_INT>=26){NotificationChannel c=((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).getNotificationChannel(ForegroundService.CHANEL_ID);channelExists=c!=null;if(c!=null)channelAllowed=c.getImportance()!=NotificationManager.IMPORTANCE_NONE;}
             JSONObject actual=LiveUpdateSupport.activeNotification(getApplicationContext());
             JSONObject delivery=RunningScriptNotifications.deliveryDiagnostics();
-            diagnostic.put("runningChannelAllowed",channelAllowed).put("actualNotification",actual).put("delivery",delivery);copied=diagnostic.toString(2);
-            JSONObject registration=support.platformDiagnostics.optJSONObject("xiaomiRegistration");
-            JSONObject live=support.platformDiagnostics.optJSONObject("liveUpdates");
-            String message="系统超级岛能力："+(support.islandSupported?"已声明支持":"未声明支持")
-                    +"\n焦点通知协议："+support.protocol+"（3 为超级岛）"
-                    +"\n应用通知："+(support.notificationsAllowed?"已开启":"未开启")
-                    +"\n运行通知通道："+(channelAllowed?"已开启":"已关闭")
-                    +"\n焦点通知用户开关："+(support.focusAllowed==null?"未能查询":support.focusAllowed?"已允许":"未允许")
-                    +"\n小米 App ID："+(registration!=null&&registration.optBoolean("appIdConfigured")?"已配置（平台鉴权未验证）":"未配置，尚未完成官方接入")
-                    +(Build.VERSION.SDK_INT>=36?"\nAndroid 实况通知："+(live!=null&&live.optBoolean("canPostPromotedNotifications")?"系统允许":"当前不允许或接口不可用"):"")
-                    +"\n实际运行通知："+(actual.optBoolean("active")?"存在":"不存在")
-                    +(actual.optBoolean("active")?" / 岛参数"+(actual.optBoolean("focusPayloadAttached")?"已附带":"未附带"):"")
-                    +(actual.optBoolean("liveUpdateRequested")?"\n已请求 Android 实况通知，系统可自行生成岛参数":"")
-                    +(actual.optBoolean("promoted")?"\n系统已提升为实况通知（不等于已确认岛的画面）":"")
-                    +(delivery.optString("lastError").isEmpty()?"":"\n发送错误："+delivery.optString("lastError"))
-                    +(support.queryError.isEmpty()?"":"\n查询说明："+support.queryError);
+            diagnostic.put("runningChannelExists",channelExists).put("runningChannelAllowed",channelAllowed==null?JSONObject.NULL:channelAllowed)
+                    .put("captureContext","app_foreground").put("actualNotification",actual).put("delivery",delivery)
+                    .put("presentation",NotificationPresentation.assessment(tasks.size(),actual,delivery));
+            copied=diagnostic.toString(2);
+            String message=NotificationPresentation.summary(diagnostic);
             String key=raw.toString();
             main.post(()->{
                 if(!visible||session!=generation)return;

@@ -128,7 +128,7 @@ final class RunningScriptNotifications {
             extras.putBundle("miui.focus.actions",actions);extras.putBundle("miui.focus.pics",pictures);
             extras.putString("miui.focus.param",payload);builder.addExtras(extras);
         }
-        return builder.build();
+        return LiveUpdateSupport.applyStyle(owner,builder.build());
     }
     private Notification.Action action(String title,PendingIntent pending,int icon){return new Notification.Action.Builder(icon,title,pending).build();}
     private PendingIntent stopIntent(String action,String token){

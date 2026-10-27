@@ -19,6 +19,37 @@ final class LiveUpdateSupport {
     // Public API 36.1 extras; string keys allow the existing compile SDK and old ROMs to coexist.
     private static final String REQUEST = "android.requestPromotedOngoing";
     private static final String CRITICAL_TEXT = "android.shortCriticalText";
+    private static final String STYLE_PREFS = "running_notification";
+
+    static String stylePreference(Context context) {
+        return context.getSharedPreferences(STYLE_PREFS, Context.MODE_PRIVATE).getString("style", "auto");
+    }
+
+    static void setStylePreference(Context context, String style) {
+        if (!"auto".equals(style) && !"text".equals(style) && !"progress".equals(style)) return;
+        context.getSharedPreferences(STYLE_PREFS, Context.MODE_PRIVATE).edit().putString("style", style).apply();
+    }
+
+    /** Public API 36 style; absence or an OEM rendering exception preserves the original text notification. */
+    static Notification applyStyle(Context context, Notification original) {
+        String preference = stylePreference(context);
+        String selected = NotificationPresentation.style(preference, Build.MANUFACTURER, Build.BRAND, Build.VERSION.SDK_INT);
+        original.extras.putString("aijs.live.stylePreference", preference);
+        original.extras.putString("aijs.live.selectedStyle", selected);
+        original.extras.putCharSequence("aijs.running.details", original.extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
+        if (!"progress".equals(selected)) return original;
+        try {
+            Class<?> type = Class.forName("android.app.Notification$ProgressStyle");
+            Notification.Style progress = (Notification.Style) type.getConstructor().newInstance();
+            type.getMethod("setProgressIndeterminate", boolean.class).invoke(progress, true);
+            Notification rendered = Notification.Builder.recoverBuilder(context, original.clone()).setStyle(progress).build();
+            rendered.extras.remove("androidx.core.app.extra.COMPAT_TEMPLATE");
+            return rendered;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError failure) {
+            original.extras.putString("aijs.live.styleFallbackReason", failure.getClass().getSimpleName());
+            return original;
+        }
+    }
 
     static void request(NotificationCompat.Builder builder, int count) {
         if (Build.VERSION.SDK_INT < 36) return;
@@ -62,14 +93,19 @@ final class LiveUpdateSupport {
             }
             live.put("apiAvailable", api).put("canPostPromotedNotifications", allowed == null ? JSONObject.NULL : allowed)
                     .put("queryError", error);
-            Bundle metadata = pm.getApplicationInfo(context.getPackageName(), PackageManager.GET_META_DATA).metaData;
+            boolean xiaomi = NotificationPresentation.isXiaomi(Build.MANUFACTURER, Build.BRAND);
+            Bundle metadata = xiaomi ? pm.getApplicationInfo(context.getPackageName(), PackageManager.GET_META_DATA).metaData : null;
             Object id = metadata == null ? null : metadata.get("com.xiaomi.xms.APP_ID");
             String appId = id == null ? "" : String.valueOf(id).trim();
             Object debug = metadata == null ? null : metadata.get("com.xiaomi.xms.BUILD_TYPE_DEBUG");
-            result.put("appVersion", info.versionName).put("liveUpdates", live).put("xiaomiRegistration", new JSONObject()
+            String preference = stylePreference(context);
+            result.put("appVersion", info.versionName).put("liveUpdates", live)
+                    .put("stylePreference", preference)
+                    .put("selectedStyle", NotificationPresentation.style(preference, Build.MANUFACTURER, Build.BRAND, Build.VERSION.SDK_INT))
+                    .put("vendorPresentationVerified", false).put("xiaomiRegistration", new JSONObject().put("applicable", xiaomi)
                     .put("appIdConfigured", !appId.isEmpty()).put("appId", appId)
                     .put("debugCertificateMetadata", debug == null ? JSONObject.NULL : debug)
-                    .put("authorizationStatus", appId.isEmpty() ? "missing_app_id" : "not_verified"));
+                    .put("authorizationStatus", !xiaomi ? "not_applicable" : appId.isEmpty() ? "missing_app_id" : "not_verified"));
         } catch (Exception failure) { put(result, "queryError", failure.getClass().getSimpleName()); }
         return result;
     }
@@ -94,6 +130,11 @@ final class LiveUpdateSupport {
                         .put("postedAt", posted.getPostTime()).put("focusPayloadAttached", payload != null)
                         .put("focusPayloadBytes", payload == null ? 0 : payload.getBytes(StandardCharsets.UTF_8).length)
                         .put("focusPayload", payload == null ? JSONObject.NULL : payload)
+                        .put("notificationTemplate", extras.getString(Notification.EXTRA_TEMPLATE, ""))
+                        .put("stylePreference", extras.getString("aijs.live.stylePreference", "auto"))
+                        .put("selectedStyle", extras.getString("aijs.live.selectedStyle", "text"))
+                        .put("styleFallbackReason", extras.getString("aijs.live.styleFallbackReason", ""))
+                        .put("taskDetails", String.valueOf(extras.getCharSequence("aijs.running.details")))
                         .put("liveUpdateRequested", extras.getBoolean(REQUEST, false))
                         .put("promoted", hasFlag(n, "FLAG_PROMOTED_ONGOING"))
                         .put("silent", hasFlag(n, "FLAG_SILENT"));
