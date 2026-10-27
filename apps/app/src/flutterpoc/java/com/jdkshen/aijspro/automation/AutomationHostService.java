@@ -303,6 +303,82 @@ public class AutomationHostService extends android.app.Service {
         }
 
         @Override
+        public boolean nodeAction(String selectorJson, int index, String action, String argumentsJson) {
+            if (!isTrustedCaller()) return false;
+            final SelectorSpec spec;
+            try {
+                spec = SelectorSpec.parse(selectorJson);
+            } catch (Throwable error) {
+                Log.w(TAG, "nodeAction: selectorJson 解析失败", error);
+                return false;
+            }
+            final int position = normalizeIndex(index);
+            final String name = action == null ? "" : action;
+            final JSONArray args;
+            try {
+                args = new JSONArray(argumentsJson == null || argumentsJson.isEmpty() ? "[]" : argumentsJson);
+            } catch (Throwable error) {
+                Log.w(TAG, "nodeAction: arguments 解析失败", error);
+                return false;
+            }
+            int actionId;
+            Bundle arguments = null;
+            try {
+                switch (name) {
+                    case "click": actionId = AccessibilityNodeInfo.ACTION_CLICK; break;
+                    case "longClick": actionId = AccessibilityNodeInfo.ACTION_LONG_CLICK; break;
+                    case "copy": actionId = AccessibilityNodeInfo.ACTION_COPY; break;
+                    case "cut": actionId = AccessibilityNodeInfo.ACTION_CUT; break;
+                    case "paste": actionId = AccessibilityNodeInfo.ACTION_PASTE; break;
+                    case "select": actionId = AccessibilityNodeInfo.ACTION_SELECT; break;
+                    case "collapse": actionId = AccessibilityNodeInfo.ACTION_COLLAPSE; break;
+                    case "expand": actionId = AccessibilityNodeInfo.ACTION_EXPAND; break;
+                    case "dismiss": actionId = AccessibilityNodeInfo.ACTION_DISMISS; break;
+                    case "show": actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId(); break;
+                    case "scrollForward": actionId = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD; break;
+                    case "scrollBackward": actionId = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD; break;
+                    case "scrollUp": actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.getId(); break;
+                    case "scrollDown": actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.getId(); break;
+                    case "scrollLeft": actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.getId(); break;
+                    case "scrollRight": actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.getId(); break;
+                    case "contextClick": actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_CONTEXT_CLICK.getId(); break;
+                    case "focus": actionId = AccessibilityNodeInfo.ACTION_FOCUS; break;
+                    case "clearFocus": actionId = AccessibilityNodeInfo.ACTION_CLEAR_FOCUS; break;
+                    case "accessibilityFocus": actionId = AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS; break;
+                    case "clearAccessibilityFocus": actionId = AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS; break;
+                    case "setSelection":
+                        actionId = AccessibilityNodeInfo.ACTION_SET_SELECTION;
+                        arguments = new Bundle();
+                        arguments.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, args.optInt(0, 0));
+                        arguments.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, args.optInt(1, 0));
+                        break;
+                    case "scrollTo":
+                        actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION.getId();
+                        arguments = new Bundle();
+                        arguments.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, args.optInt(0, 0));
+                        arguments.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_COLUMN_INT, args.optInt(1, 0));
+                        break;
+                    case "setProgress":
+                        actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId();
+                        arguments = new Bundle();
+                        arguments.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,
+                                (float) args.optDouble(0, 0));
+                        break;
+                    default:
+                        Log.w(TAG, "nodeAction: unsupported action " + name);
+                        return false;
+                }
+            } catch (Throwable error) {
+                Log.w(TAG, "nodeAction: action arguments invalid " + name, error);
+                return false;
+            }
+            final int resolvedAction = actionId;
+            final Bundle resolvedArguments = arguments;
+            return onMain(TIMEOUT_MS, false, deadline -> performNodeAction(
+                    spec, position, resolvedAction, resolvedArguments, deadline));
+        }
+
+        @Override
         public boolean click(int x, int y) {
             if (!isTrustedCaller()) return false;
             try {
@@ -956,6 +1032,23 @@ public class AutomationHostService extends android.app.Service {
         json.put("enabled", node.isEnabled());
         json.put("scrollable", node.isScrollable());
         json.put("editable", node.isEditable());
+        json.put("checkable", node.isCheckable());
+        json.put("checked", node.isChecked());
+        json.put("focusable", node.isFocusable());
+        json.put("focused", node.isFocused());
+        json.put("selected", node.isSelected());
+        json.put("longClickable", node.isLongClickable());
+        json.put("visibleToUser", node.isVisibleToUser());
+        json.put("password", node.isPassword());
+        try { json.put("drawingOrder", node.getDrawingOrder()); } catch (Throwable ignored) { }
+        Rect boundsInParent = new Rect();
+        try { node.getBoundsInParent(boundsInParent); } catch (Throwable ignored) { }
+        JSONArray parentJson = new JSONArray();
+        parentJson.put(boundsInParent.left);
+        parentJson.put(boundsInParent.top);
+        parentJson.put(boundsInParent.right);
+        parentJson.put(boundsInParent.bottom);
+        json.put("boundsInParent", parentJson);
         json.put("childCount", node.getChildCount());
         json.put("indexInParent", depth == 0 ? -1 : path[depth - 1]);
         json.put("depth", depth);

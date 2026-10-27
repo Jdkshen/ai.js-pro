@@ -132,6 +132,88 @@ internal object McpUiActions {
         }
     }
 
+    /**
+     * 通用节点动作（与 Pro UiObject 同名）：copy/cut/paste/select/collapse/expand/dismiss/show/
+     * scrollForward/Backward/Up/Down/Left/Right/contextClick/focus/clearFocus/
+     * accessibilityFocus/clearAccessibilityFocus/setSelection/scrollTo/setProgress。
+     */
+    fun nodeAction(selectorArg: JsonObject?, actionArg: String, args: JsonObject? = null): JsonObject {
+        val selector = parseSelector(selectorArg) ?: return fail("选择器参数解析失败")
+        if (selector.isEmpty) return fail("nodeAction 需要选择器条件")
+        val action = actionArg.trim()
+        val service = AccessibilityService.instance ?: return fail("需要开启 AI.js Pro 无障碍服务")
+        val located = try {
+            locateNode(service, selector)
+        } catch (error: Throwable) {
+            return fail("查找节点失败：" + (error.message ?: error.javaClass.simpleName))
+        } ?: return fail("没有找到匹配节点（" + selector.describe() + "）")
+        return try {
+            if (!located.node.isEnabled) return fail("匹配节点不可用（enabled=false）：" + located.snapshot.bounds)
+            var actionId = 0
+            var bundle: Bundle? = null
+            when (action) {
+                "copy" -> actionId = AccessibilityNodeInfo.ACTION_COPY
+                "cut" -> actionId = AccessibilityNodeInfo.ACTION_CUT
+                "paste" -> actionId = AccessibilityNodeInfo.ACTION_PASTE
+                "select" -> actionId = AccessibilityNodeInfo.ACTION_SELECT
+                "collapse" -> actionId = AccessibilityNodeInfo.ACTION_COLLAPSE
+                "expand" -> actionId = AccessibilityNodeInfo.ACTION_EXPAND
+                "dismiss" -> actionId = AccessibilityNodeInfo.ACTION_DISMISS
+                "show" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
+                "scrollForward" -> actionId = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                "scrollBackward" -> actionId = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                "scrollUp" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+                "scrollDown" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
+                "scrollLeft" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id
+                "scrollRight" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id
+                "contextClick" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_CONTEXT_CLICK.id
+                "focus" -> actionId = AccessibilityNodeInfo.ACTION_FOCUS
+                "clearFocus" -> actionId = AccessibilityNodeInfo.ACTION_CLEAR_FOCUS
+                "accessibilityFocus" -> actionId = AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
+                "clearAccessibilityFocus" -> actionId = AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+                "setSelection" -> {
+                    actionId = AccessibilityNodeInfo.ACTION_SET_SELECTION
+                    bundle = Bundle().apply {
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, args?.intOrNull("start") ?: 0)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, args?.intOrNull("end") ?: 0)
+                    }
+                }
+                "scrollTo" -> {
+                    actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION.id
+                    bundle = Bundle().apply {
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, args?.intOrNull("row") ?: 0)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_COLUMN_INT, args?.intOrNull("column") ?: 0)
+                    }
+                }
+                "setProgress" -> {
+                    actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id
+                    bundle = Bundle().apply {
+                        putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,
+                            (args?.get("value")?.let { runCatching { it.asFloat }.getOrNull() } ?: 0f))
+                    }
+                }
+                else -> return fail("nodeAction 不支持 action=" + actionArg
+                    + "；可选 copy/cut/paste/select/collapse/expand/dismiss/show/scroll*/contextClick/focus/accessibilityFocus/setSelection/scrollTo/setProgress")
+            }
+            val performed = try {
+                if (bundle == null) located.node.performAction(actionId) else located.node.performAction(actionId, bundle)
+            } catch (_: Throwable) {
+                false
+            }
+            if (performed) {
+                JsonObject().apply {
+                    addProperty("success", true)
+                    addProperty("action", action)
+                    add("node", snapshotJson(0, located.snapshot))
+                }
+            } else {
+                fail("节点动作失败（" + action + "，performAction 返回 false；节点可能不支持该动作或页面已变化）")
+            }
+        } finally {
+            runCatching { located.node.recycle() }
+        }
+    }
+
     fun input(selectorArg: JsonObject?, text: String): JsonObject {
         val selector = parseSelector(selectorArg) ?: return fail("选择器参数解析失败")
         if (selector.isEmpty) return fail("input 需要可编辑节点的选择器")

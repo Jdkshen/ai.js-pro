@@ -88,6 +88,10 @@ internal object McpToolSchema {
         "x", "y", "index", "timeoutMillis", "exact")
     fun uiInputSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
         "index", "timeoutMillis", "exact", required = arrayOf("text"))
+    fun uiNodeActionSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className",
+        "bounds", "index", "timeoutMillis", "exact", "action", "args", required = arrayOf("action")).apply {
+        getAsJsonObject("properties").add("args", JsonObject().apply { addProperty("type", "object") })
+    }
     fun uiSwipeSchema(): JsonObject = objectSchema("x1", "y1", "x2", "y2", "durationMillis",
         required = arrayOf("x1", "y1", "x2", "y2"))
     fun uiGlobalSchema(): JsonObject = objectSchema("action", required = arrayOf("action"))

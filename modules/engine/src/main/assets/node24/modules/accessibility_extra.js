@@ -549,6 +549,16 @@
     enabled: { enumerable: true, get: function () { return rawBoolean(this._raw, 'enabled'); } },
     scrollable: { enumerable: true, get: function () { return rawBoolean(this._raw, 'scrollable'); } },
     editable: { enumerable: true, get: function () { return rawBoolean(this._raw, 'editable'); } },
+    checkable: { enumerable: true, get: function () { return rawBoolean(this._raw, 'checkable'); } },
+    checked: { enumerable: true, get: function () { return rawBoolean(this._raw, 'checked'); } },
+    focusable: { enumerable: true, get: function () { return rawBoolean(this._raw, 'focusable'); } },
+    focused: { enumerable: true, get: function () { return rawBoolean(this._raw, 'focused'); } },
+    selected: { enumerable: true, get: function () { return rawBoolean(this._raw, 'selected'); } },
+    longClickable: { enumerable: true, get: function () { return rawBoolean(this._raw, 'longClickable'); } },
+    visibleToUser: { enumerable: true, get: function () { return rawBoolean(this._raw, 'visibleToUser'); } },
+    password: { enumerable: true, get: function () { return rawBoolean(this._raw, 'password'); } },
+    drawingOrder: { enumerable: true, get: function () { return rawInt(this._raw, 'drawingOrder', -1); } },
+    boundsInParent: { enumerable: true, get: function () { return boundsFromArray(this._raw.boundsInParent); } },
     depth: { enumerable: true, get: function () { return depthOf(this._raw); } },
     indexInParent: { enumerable: true, get: function () { return indexInParentOf(this._raw); } },
     childCount: { enumerable: true, get: function () { return countChildren(this._raw, this._tree); } },
@@ -607,6 +617,16 @@
   Node.prototype.enabled = function () { return rawBoolean(this._raw, 'enabled'); };
   Node.prototype.scrollable = function () { return rawBoolean(this._raw, 'scrollable'); };
   Node.prototype.editable = function () { return rawBoolean(this._raw, 'editable'); };
+  Node.prototype.checkable = function () { return rawBoolean(this._raw, 'checkable'); };
+  Node.prototype.checked = function () { return rawBoolean(this._raw, 'checked'); };
+  Node.prototype.focusable = function () { return rawBoolean(this._raw, 'focusable'); };
+  Node.prototype.focused = function () { return rawBoolean(this._raw, 'focused'); };
+  Node.prototype.selected = function () { return rawBoolean(this._raw, 'selected'); };
+  Node.prototype.longClickable = function () { return rawBoolean(this._raw, 'longClickable'); };
+  Node.prototype.visibleToUser = function () { return rawBoolean(this._raw, 'visibleToUser'); };
+  Node.prototype.password = function () { return rawBoolean(this._raw, 'password'); };
+  Node.prototype.drawingOrder = function () { return rawInt(this._raw, 'drawingOrder', -1); };
+  Node.prototype.boundsInParent = function () { return boundsFromArray(this._raw.boundsInParent); };
   Node.prototype.depth = function () { return depthOf(this._raw); };
   Node.prototype.indexInParent = function () { return indexInParentOf(this._raw); };
   Node.prototype.path = function () { return rawPath(this._raw).slice(); };
@@ -696,6 +716,29 @@
     };
     return actionBoolean(action, hostValue(request));
   }
+  /** Pro UiObject 的其余无参动作统一走主进程 nodeAction；老宿主返回 false。 */
+  function performGenericAction(node, action) {
+    var request = {
+      kind: 'automation',
+      action: 'nodeAction',
+      selector: identitySelector(node),
+      index: 0,
+      actionName: action,
+      arguments: []
+    };
+    return actionBoolean(action, hostValue(request));
+  }
+  function performGenericActionWithArgs(node, action, args) {
+    var request = {
+      kind: 'automation',
+      action: 'nodeAction',
+      selector: identitySelector(node),
+      index: 0,
+      actionName: action,
+      arguments: args
+    };
+    return actionBoolean(action, hostValue(request));
+  }
   function performSetText(node, text) {
     if (typeof text !== 'string') {
       throw typeError('setText 需要字符串，收到：' + String(text));
@@ -754,18 +797,54 @@
       y: bounds.centerY
     }));
   }
-  Node.prototype.click = function () { return performNodeAction(this, 'clickNode'); };
-  Node.prototype.clickCenter = function () { return performClickCenter(this); };
-  Node.prototype.longClick = function () { return performNodeAction(this, 'longClickNode'); };
-  Node.prototype.setText = function (text) { return performSetText(this, text); };
-  Node.prototype.scrollForward = function () { return performScroll(this, true); };
-  Node.prototype.scrollBackward = function () { return performScroll(this, false); };
-  NodeView.prototype.click = function () { return performNodeAction(this, 'clickNode'); };
-  NodeView.prototype.clickCenter = function () { return performClickCenter(this); };
-  NodeView.prototype.longClick = function () { return performNodeAction(this, 'longClickNode'); };
-  NodeView.prototype.setText = function (text) { return performSetText(this, text); };
-  NodeView.prototype.scrollForward = function () { return performScroll(this, true); };
-  NodeView.prototype.scrollBackward = function () { return performScroll(this, false); };
+  function installNodeActions(proto) {
+    proto.click = function () { return performNodeAction(this, 'clickNode'); };
+    proto.clickCenter = function () { return performClickCenter(this); };
+    proto.longClick = function () { return performNodeAction(this, 'longClickNode'); };
+    proto.setText = function (text) { return performSetText(this, text); };
+    proto.scrollForward = function () { return performGenericAction(this, 'scrollForward'); };
+    proto.scrollBackward = function () { return performGenericAction(this, 'scrollBackward'); };
+    proto.scrollUp = function () { return performGenericAction(this, 'scrollUp'); };
+    proto.scrollDown = function () { return performGenericAction(this, 'scrollDown'); };
+    proto.scrollLeft = function () { return performGenericAction(this, 'scrollLeft'); };
+    proto.scrollRight = function () { return performGenericAction(this, 'scrollRight'); };
+    proto.copy = function () { return performGenericAction(this, 'copy'); };
+    proto.cut = function () { return performGenericAction(this, 'cut'); };
+    proto.paste = function () { return performGenericAction(this, 'paste'); };
+    proto.select = function () { return performGenericAction(this, 'select'); };
+    proto.collapse = function () { return performGenericAction(this, 'collapse'); };
+    proto.expand = function () { return performGenericAction(this, 'expand'); };
+    proto.dismiss = function () { return performGenericAction(this, 'dismiss'); };
+    proto.show = function () { return performGenericAction(this, 'show'); };
+    proto.contextClick = function () { return performGenericAction(this, 'contextClick'); };
+    proto.focus = function () { return performGenericAction(this, 'focus'); };
+    proto.clearFocus = function () { return performGenericAction(this, 'clearFocus'); };
+    proto.accessibilityFocus = function () { return performGenericAction(this, 'accessibilityFocus'); };
+    proto.clearAccessibilityFocus = function () { return performGenericAction(this, 'clearAccessibilityFocus'); };
+    proto.setSelection = function (start, end) {
+      return performGenericActionWithArgs(this, 'setSelection',
+        [requireInt(start, 'setSelection.start', 0), requireInt(end, 'setSelection.end', 0)]);
+    };
+    proto.setProgress = function (value) {
+      if (typeof value !== 'number' || !isFinite(value)) {
+        throw typeError('setProgress 需要有限数字');
+      }
+      return performGenericActionWithArgs(this, 'setProgress', [value]);
+    };
+    proto.scrollTo = function (row, column) {
+      return performGenericActionWithArgs(this, 'scrollTo',
+        [requireInt(row, 'scrollTo.row', 0), requireInt(column, 'scrollTo.column', 0)]);
+    };
+  }
+  installNodeActions(Node.prototype);
+  installNodeActions(NodeView.prototype);
+  function installFindHelpers(proto) {
+    proto.find = function (selector) { return select(selector).from(this).find(); };
+    proto.findOne = function (selector) { return select(selector).from(this).findOnce(0); };
+    proto.findByText = function (text) { return select({ text: String(text) }).from(this).find(); };
+  }
+  installFindHelpers(Node.prototype);
+  installFindHelpers(NodeView.prototype);
 
   /* ----------------------------- 查询执行 -------------------------------- */
   function getDump() {

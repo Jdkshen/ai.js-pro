@@ -115,12 +115,13 @@ public final class Node24AutomationBridge implements AutoCloseable {
                 case "clickNode":
                 case "longClickNode":
                 case "setTextNode":
+                case "nodeAction":
                     return handleNodeAction(action, request);
                 default:
                     return error("automation 不支持的操作：" + action
                             + "（支持 status/openSettings/click/longClick/press/swipe/gesture/"
                             + "back/home/recents/notifications/takeScreenshot/findNodes/"
-                            + "getNodeInfo/getLatestNodeDump/clickNode/longClickNode/setTextNode）");
+                            + "getNodeInfo/getLatestNodeDump/clickNode/longClickNode/setTextNode/nodeAction）");
             }
         } catch (Throwable failure) {
             Log.w(TAG, "automation action failed: " + request, failure);
@@ -256,6 +257,8 @@ public final class Node24AutomationBridge implements AutoCloseable {
                     return ok(longClickNode(request));
                 case "setTextNode":
                     return ok(setTextNode(request));
+                case "nodeAction":
+                    return ok(nodeAction(request));
                 default:
                     return error("automation 不支持的操作：" + action);
             }
@@ -318,6 +321,18 @@ public final class Node24AutomationBridge implements AutoCloseable {
         int index = requireNodeIndex(request);
         String text = requireNodeText(request);
         return requireReady().setTextNode(selectorJson, index, text);
+    }
+
+    private boolean nodeAction(JSONObject request) {
+        String selectorJson = requireSelectorJson(request);
+        int index = requireNodeIndex(request);
+        String action = request.optString("actionName", "");
+        if (action.isEmpty()) {
+            throw new IllegalArgumentException("nodeAction 缺少 actionName");
+        }
+        JSONArray arguments = request.optJSONArray("arguments");
+        return requireReady().nodeAction(selectorJson, index, action,
+                arguments == null ? "[]" : arguments.toString());
     }
 
     /**

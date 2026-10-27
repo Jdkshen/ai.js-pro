@@ -55,6 +55,7 @@ internal object McpToolCatalog {
         "ui_find",
         "ui_click",
         "ui_long_click",
+        "ui_node_action",
         "ui_input",
         "ui_swipe",
         "ui_global",

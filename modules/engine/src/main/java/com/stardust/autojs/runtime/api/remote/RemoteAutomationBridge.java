@@ -66,6 +66,11 @@ public final class RemoteAutomationBridge {
 
         boolean setTextNode(String selectorJson, int index, String text);
 
+        /** Generic node action (copy/cut/paste/scroll/focus/…), implemented by newer hosts. */
+        default boolean nodeAction(String selectorJson, int index, String action, String argumentsJson) {
+            return false;
+        }
+
         boolean click(int x, int y);
 
         boolean longClick(int x, int y);

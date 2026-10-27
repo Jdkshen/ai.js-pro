@@ -333,6 +333,20 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
     }
 
     @Override
+    public boolean nodeAction(String selectorJson, int index, String action, String argumentsJson) {
+        try {
+            return requireService().nodeAction(
+                    selectorJson == null ? "{}" : selectorJson,
+                    index,
+                    action == null ? "" : action,
+                    argumentsJson == null ? "[]" : argumentsJson);
+        } catch (Throwable error) {
+            onCallFailed("nodeAction", error);
+            return false;
+        }
+    }
+
+    @Override
     public boolean click(int x, int y) {
         try {
             return requireService().click(x, y);

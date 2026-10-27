@@ -157,7 +157,9 @@ Node 中最常见的错误是用了旧平铺接口：`$autojs.storages.put(key, 
 
 ### 返回值
 
-`firstOrNull()` 返回 `Promise<NodeView | null>`。`NodeView` 提供 `text/desc/id/className/packageName`（字符串）、`bounds`（`Rect`，含 `left/top/right/bottom/width/height`）、`clickable/enabled/scrollable/editable`（布尔）、`depth/indexInParent/childCount/path`，以及 `parent()/children()/child(index)/tree()/raw()`。`click()/longClick()/setText(string)/scrollForward()/scrollBackward()` 同步返回布尔值；动作按快照的 `path` 加身份字段重新确认，失败返回 `false`，不会自动改用屏幕坐标。
+`firstOrNull()` 返回 `Promise<NodeView | null>`。`NodeView` 提供 `text/desc/id/className/packageName`（字符串）、`bounds/boundsInParent`（`Rect`，含 `left/top/right/bottom/width/height`）、`drawingOrder`、`clickable/enabled/scrollable/editable/checkable/checked/focusable/focused/selected/longClickable/visibleToUser/password`（布尔）、`depth/indexInParent/childCount/path`，以及 `parent()/children()/child(index)/tree()/raw()/find(selector)/findOne(selector)/findByText(text)`。
+
+动作 `click()/clickCenter()/longClick()/setText(string)/copy()/cut()/paste()/select()/collapse()/expand()/dismiss()/show()/scrollForward()/scrollBackward()/scrollUp()/scrollDown()/scrollLeft()/scrollRight()/contextClick()/focus()/clearFocus()/accessibilityFocus()/clearAccessibilityFocus()` 同步返回布尔值；`setSelection(start,end)/scrollTo(row,column)/setProgress(value)` 带参数。通用动作经主进程 `nodeAction` 下发；动作按快照的 `path` 加身份字段重新确认，失败返回 `false`，不会自动改用屏幕坐标。
 
 ### 权限与前置条件
 

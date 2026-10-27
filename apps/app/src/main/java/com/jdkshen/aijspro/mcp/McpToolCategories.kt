@@ -41,7 +41,7 @@ internal object McpToolCategories {
         ).forEach { put(it, "engine") }
         listOf(
             "get_ui_layout", "capture_screen",
-            "ui_find", "ui_click", "ui_long_click", "ui_input", "ui_swipe", "ui_global", "ui_wait", "ui_scroll",
+            "ui_find", "ui_click", "ui_long_click", "ui_node_action", "ui_input", "ui_swipe", "ui_global", "ui_wait", "ui_scroll",
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url",
             "apk_install", "apk_uninstall",
         ).forEach { put(it, "device") }

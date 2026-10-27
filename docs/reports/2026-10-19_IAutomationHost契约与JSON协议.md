@@ -43,3 +43,17 @@ Node StrokeDescription 的延迟通过每条 stroke 第一个点的可选 `start
 - task-19：主进程 AutomationHostService 实现；
 - task-20：:script 引擎侧远程自动化后端 + AutomationHostClient + ScriptHostService 注入 + auto 门控开关（默认关）；
 - task-21：定时任务/通知/音量键停止统一经 PocScriptHost 调度到 :script。
+
+
+## 2026-10-28 扩展：通用节点动作 `nodeAction`
+
+为 Node24 全量对齐 Pro UiObject，`IAutomationHost` 增加：
+
+```java
+boolean nodeAction(String selectorJson, int index, String action, String argumentsJson);
+```
+
+- `action`：`copy/cut/paste/select/collapse/expand/dismiss/show/scrollForward/scrollBackward/scrollUp/scrollDown/scrollLeft/scrollRight/contextClick/focus/clearFocus/accessibilityFocus/clearAccessibilityFocus/setSelection/scrollTo/setProgress`
+- `argumentsJson`：JSON 数组；`setSelection` 用 `[start,end]`，`scrollTo` 用 `[row,column]`，`setProgress` 用 `[value]`，其余 `[]`
+- 返回 `boolean`；主进程按 selector 重新定位第 `index` 个节点后执行 `AccessibilityNodeInfo.performAction`，失败返回 false，不用坐标兜底
+- Node24 的 `select()` 节点方法已接入；MCP 新增 `ui_node_action` 工具使用独立主进程实现

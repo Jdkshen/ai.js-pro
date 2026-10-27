@@ -20,6 +20,8 @@ interface IAutomationHost {
     boolean clickNode(String selectorJson, int index);
     boolean longClickNode(String selectorJson, int index);
     boolean setTextNode(String selectorJson, int index, String text);
+    /** Generic AccessibilityNodeInfo action; action/arguments contract is documented in AutomationHostService. */
+    boolean nodeAction(String selectorJson, int index, String action, String argumentsJson);
     boolean click(int x, int y);
     boolean longClick(int x, int y);
     boolean swipe(int x1, int y1, int x2, int y2, long duration);

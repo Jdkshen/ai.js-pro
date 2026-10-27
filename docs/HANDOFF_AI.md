@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-28 当前发布 dev-1276（仅 LAN）**：Node24 节点 API 全量对齐（通用 nodeAction、属性/遍历/find）、MCP `ui_node_action`、三引擎 UiObject 示例与 API 文档；SHA `33000fa1…`。
+
 > **2026-10-28 当前发布 dev-1274（仅 LAN）**：UiObject.clickCenter 在 Rhino/QuickJS/Node24 统一，越界 bounds 返回 false；抖音三引擎实测通过；SHA `3e133909…`。
 
 > **2026-10-28 当前发布 dev-1273（仅 LAN）**：修复悬浮菜单打开节点分析时捕获自身对话框/空树；抖音实测 748 节点；SHA `4e5c9139…`。

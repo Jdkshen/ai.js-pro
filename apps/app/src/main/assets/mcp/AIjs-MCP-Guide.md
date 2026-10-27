@@ -12,7 +12,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 脚本与执行 | list_scripts、read_script、search_scripts、continue_result、run_script、check_syntax、list_executions、get_execution、wait_execution、stop_script、stop_all_scripts |
 | 工作区 | workspace_open/list/read/write/delete/diff/request_apply/mkdir/cancel/cleanup |
 | 引擎与 API | list_engines、list_engine_api、probe_engine_api、engine_api_diff、call_engine_api |
-| 设备与无障碍 | get_ui_layout、capture_screen、ui_find/click/long_click/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
+| 设备与无障碍 | get_ui_layout、capture_screen、ui_find/click/long_click/node_action/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
 | 终端与构建 | terminal_exec/read/write/stop/list、get_build_tools |
 | 悬浮窗 | list_overlays、close_overlays |
 | 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
@@ -73,6 +73,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | ui_find | 按 text/resourceId/contentDesc/className/bounds 或 x/y 查找节点，返回 matches（含中心坐标） |
 | ui_click | 点击匹配节点；节点不可点击时尝试可点击祖先；也支持只给 x/y |
 | ui_long_click | 长按匹配节点或坐标 |
+| ui_node_action | 对匹配节点执行通用 UiObject 动作：copy/cut/paste/select/collapse/expand/dismiss/show/scroll*/contextClick/focus/accessibilityFocus/setSelection/scrollTo/setProgress；args 为对象 |
 | ui_input | 向匹配的 editable 节点写入 text |
 | ui_swipe | 按像素坐标滑动 |
 | ui_global | back / home / recents / notifications |
@@ -85,6 +86,8 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 {"name":"ui_find","arguments":{"text":"安装","limit":10}}
 {"name":"ui_click","arguments":{"text":"安装"}}
 {"name":"ui_input","arguments":{"resourceId":"com.example:id/input","text":"你好"}}
+{"name":"ui_node_action","arguments":{"text":"推荐","action":"scrollDown"}}
+{"name":"ui_node_action","arguments":{"text":"输入框","action":"setSelection","args":{"start":0,"end":2}}}
 {"name":"ui_swipe","arguments":{"x1":540,"y1":1800,"x2":540,"y2":600,"durationMillis":300}}
 {"name":"ui_global","arguments":{"action":"back"}}
 ```
