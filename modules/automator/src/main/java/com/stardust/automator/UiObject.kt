@@ -177,6 +177,9 @@ open class UiObject(info: Any?, private val allocator: AccessibilityNodeInfoAllo
     fun clickCenter(): Boolean {
         val clicker = coordinateClicker ?: return false
         val b = bounds()
+        // 越界/倒置的 bounds 会触发 GestureDescription "Path bounds must not be negative"；
+        // 这类节点没有可点击中点，按失败处理，不把异常抛给脚本。
+        if (b.left < 0 || b.top < 0 || b.right <= b.left || b.bottom <= b.top) return false
         return clicker(b.centerX(), b.centerY())
     }
 

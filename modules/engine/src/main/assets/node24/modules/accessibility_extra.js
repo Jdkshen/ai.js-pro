@@ -734,12 +734,34 @@
     };
     return actionBoolean('swipe', hostValue(request));
   }
+  function performClickCenter(node) {
+    // Pro 8.8.17: click the center of the CURRENT bounds. Re-resolve the node first;
+    // never fall back to a stale snapshot's coordinates after the page changed.
+    var selector = identitySelector(node);
+    var current = normalizeNode(
+      automation('getNodeInfo', { selector: selector, index: 0 }),
+      'getNodeInfo');
+    if (!current) { return false; }
+    var bounds = boundsFromArray(current.bounds);
+    if (bounds.width <= 0 || bounds.height <= 0
+        || bounds.left < 0 || bounds.top < 0) {
+      return false;
+    }
+    return actionBoolean('click', hostValue({
+      kind: 'automation',
+      action: 'click',
+      x: bounds.centerX,
+      y: bounds.centerY
+    }));
+  }
   Node.prototype.click = function () { return performNodeAction(this, 'clickNode'); };
+  Node.prototype.clickCenter = function () { return performClickCenter(this); };
   Node.prototype.longClick = function () { return performNodeAction(this, 'longClickNode'); };
   Node.prototype.setText = function (text) { return performSetText(this, text); };
   Node.prototype.scrollForward = function () { return performScroll(this, true); };
   Node.prototype.scrollBackward = function () { return performScroll(this, false); };
   NodeView.prototype.click = function () { return performNodeAction(this, 'clickNode'); };
+  NodeView.prototype.clickCenter = function () { return performClickCenter(this); };
   NodeView.prototype.longClick = function () { return performNodeAction(this, 'longClickNode'); };
   NodeView.prototype.setText = function (text) { return performSetText(this, text); };
   NodeView.prototype.scrollForward = function () { return performScroll(this, true); };

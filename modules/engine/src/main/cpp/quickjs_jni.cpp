@@ -9614,7 +9614,7 @@ const char kBootstrapScript[] = R"JS(
         'accessibilityFocused', 'selected', 'clickable', 'longClickable', 'enabled', 'password', 'scrollable',
         'editable', 'contentInvalid', 'contextClickable', 'multiLine', 'dismissable'];
     var AUTOMATOR_BOUNDS_FILTERS = ['bounds', 'boundsInside', 'boundsContains'];
-    var AUTOMATOR_NODE_ACTIONS = ['click', 'longClick', 'accessibilityFocus', 'clearAccessibilityFocus',
+    var AUTOMATOR_NODE_ACTIONS = ['click', 'clickCenter', 'longClick', 'accessibilityFocus', 'clearAccessibilityFocus',
         'focus', 'clearFocus', 'copy', 'paste', 'select', 'cut', 'collapse', 'expand', 'dismiss', 'show',
         'scrollForward', 'scrollBackward', 'scrollUp', 'scrollDown', 'scrollLeft', 'scrollRight', 'contextClick'];
     var AUTOMATOR_STRING_PROPERTIES = ['text', 'desc', 'id', 'className', 'packageName'];

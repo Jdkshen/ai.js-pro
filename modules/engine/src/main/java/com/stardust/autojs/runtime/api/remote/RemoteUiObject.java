@@ -222,6 +222,7 @@ public final class RemoteUiObject {
     /** 点击节点中心（UiObject.clickCenter 的远程版本）。 */
     public boolean clickCenter() {
         Rect rect = bounds();
+        if (rect.left < 0 || rect.top < 0 || rect.right <= rect.left || rect.bottom <= rect.top) return false;
         try {
             return mBackend.click(rect.centerX(), rect.centerY());
         } catch (Throwable error) {

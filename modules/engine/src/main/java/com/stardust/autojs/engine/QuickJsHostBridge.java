@@ -6825,7 +6825,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     /** UiObject / UiObjectCollection 共有的动作（无参、返回布尔）。 */
     private static final String[] NODE_ACTIONS = {
-            "click", "longClick", "accessibilityFocus", "clearAccessibilityFocus", "focus", "clearFocus",
+            "click", "clickCenter", "longClick", "accessibilityFocus", "clearAccessibilityFocus", "focus", "clearFocus",
             "copy", "paste", "select", "cut", "collapse", "expand", "dismiss", "show",
             "scrollForward", "scrollBackward", "scrollUp", "scrollDown", "scrollLeft", "scrollRight",
             "contextClick",
@@ -7009,6 +7009,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             case "bounds": return encodeAutomatorResult(object.bounds());
             case "exists": return encodeAutomatorResult(object.exists());
             case "click": return encodeAutomatorResult(object.click());
+            case "clickCenter": return encodeAutomatorResult(object.clickCenter());
             case "longClick": return encodeAutomatorResult(object.longClick());
             case "setText": return encodeAutomatorResult(object.setText(args.getString(0)));
             case "scrollForward": return encodeAutomatorResult(object.scrollForward());
