@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-28 当前发布 dev-1277（仅 LAN）**：Node24 普通脚本执行上限 60s→1h，长自动化不再 60 秒误杀；SHA `e46ee075…`。
+
 > **2026-10-28 当前发布 dev-1276（仅 LAN）**：Node24 节点 API 全量对齐（通用 nodeAction、属性/遍历/find）、MCP `ui_node_action`、三引擎 UiObject 示例与 API 文档；SHA `33000fa1…`。
 
 > **2026-10-28 当前发布 dev-1274（仅 LAN）**：UiObject.clickCenter 在 Rhino/QuickJS/Node24 统一，越界 bounds 返回 false；抖音三引擎实测通过；SHA `3e133909…`。

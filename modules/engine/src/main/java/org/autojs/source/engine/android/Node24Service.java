@@ -282,8 +282,8 @@ public class Node24Service extends Service {
             holdMillis=Math.max(0L,Math.min(600_000L,request.optLong("holdMillis",0L)));
             uiScript=request.optBoolean("uiScript",false);
             if(!id.matches("[A-Za-z0-9_-]{1,64}") || source.length()>Node24SourceTransport.MAX_BYTES || !filename.startsWith("/")
-                || filename.length()>1024 || filename.indexOf(0)>=0 || timeout<1 || timeout>60000)
-                throw new IOException("Invalid Node request");
+                || filename.length()>1024 || filename.indexOf(0)>=0 || timeout<1 || timeout>3600000)
+                throw new IOException("Invalid Node request (timeout 1..3600000 ms)");
         }
         synchronized void cancel() {
             if(cancelled) return;

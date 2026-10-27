@@ -30,8 +30,11 @@ import java.util.UUID;
 public class Node24JavaScriptEngine extends JavaScriptEngine {
 
     private static final String TAG = "Node24Engine";
-    /** Allow the 55-second system capture consent request to finish within the service budget. */
-    private static final long DEFAULT_TIMEOUT_MILLIS = 60_000L;
+    /**
+     * 普通 Node 脚本的宿主执行上限：60s 会把 watchVideos 等长流程误杀；提高到 1 小时，
+     * 仍保留硬上限，真正的取消走 stop/cancel，不依赖这个 deadline。
+     */
+    private static final long DEFAULT_TIMEOUT_MILLIS = 3_600_000L;
     /** task-63：Node UI/keepRunning 脚本的宿主保活上限（:node24 服务侧 holdAlive 用）。 */
     private static final long UI_HOLD_MILLIS = 10 * 60 * 1000L;
     private final Context mContext;
