@@ -291,16 +291,10 @@ public class CircularMenu implements Recorder.OnStateChangedListener, OperationI
         cancelCaptureWait();
         final long generation = ++mCaptureGeneration;
         final LayoutInspector inspector = AutoJs.getInstance().getLayoutInspector();
-        mCaptureProgress = new ThemeColorMaterialDialogBuilder(mContext)
-                .content(R.string.text_layout_inspector_is_dumping)
-                .canceledOnTouchOutside(false)
-                .cancelable(true)
-                .negativeText(R.string.cancel)
-                .onNegative((dialog, which) -> cancelCaptureWait())
-                .progress(true, 0)
-                .build();
-        mCaptureProgress.setOnCancelListener(dialog -> cancelCaptureWait());
-        DialogUtils.showDialog(mCaptureProgress);
+        // The inspector must capture the app behind the floating menu. A Material progress
+        // dialog would itself become the active window (and on some apps a sparse root),
+        // so keep a non-window toast and give the menu-collapse animation time to finish.
+        Toast.makeText(mContext, R.string.text_layout_inspector_is_dumping, Toast.LENGTH_SHORT).show();
         LayoutInspector.CaptureAvailableListener listener = capture -> mActionViewIcon.post(() -> {
             if (mClosed || generation != mCaptureGeneration) return;
             releaseCaptureUi();
@@ -317,8 +311,11 @@ public class CircularMenu implements Recorder.OnStateChangedListener, OperationI
         });
         mCaptureListener = listener;
         inspector.addCaptureAvailableListener(listener);
-        mCaptureRequest = inspector.captureCurrentWindowRequest();
-        if (mCaptureRequest == null) listener.onCaptureAvailable(null);
+        mActionViewIcon.postDelayed(() -> {
+            if (mClosed || generation != mCaptureGeneration) return;
+            mCaptureRequest = inspector.captureCurrentWindowRequest();
+            if (mCaptureRequest == null) listener.onCaptureAvailable(null);
+        }, 350);
     }
 
     /** Cancels the owned request before dropping its callback; an old result cannot open a window. */
