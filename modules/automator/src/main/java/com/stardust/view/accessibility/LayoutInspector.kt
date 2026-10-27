@@ -7,125 +7,201 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.IdentityHashMap
 import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 import java.text.SimpleDateFormat
 
-/**
- * Created by Stardust on 2017/3/10.
- */
-
+/** Captures bounded offline snapshots without querying providers on the UI thread. */
 class LayoutInspector(private val mContext: Context) {
-    @Volatile
-    var capture: NodeInfo? = null
+    @Volatile var capture: NodeInfo? = null
         private set
     data class CapturedWindow(val id: Int, val type: Int, val active: Boolean,
                               val focused: Boolean, val layer: Int, val root: NodeInfo?)
-    @Volatile
-    var capturedWindows: List<CapturedWindow> = emptyList()
+    @Volatile var capturedWindows: List<CapturedWindow> = emptyList()
         private set
-    @Volatile
-    var isDumping = false
+    @Volatile var isDumping = false
         private set
-    @Volatile
-    var captureLog = "尚未进行节点分析。请打开目标页面后点击悬浮窗的布局分析。"
+    @Volatile var captureLog = "尚未进行节点分析。请打开目标页面后点击悬浮窗的布局分析。"
         private set
-    private val mExecutor = Executors.newSingleThreadExecutor()
+
+    private val gate = CaptureRequestGate()
+    // The gate admits at most one task. A stuck Binder call does not spawn replacements or queue requests.
+    private val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(1),
+        { r -> Thread(r, "layout-capture").apply { isDaemon = true } })
+    private val deadlines = ScheduledThreadPoolExecutor(1,
+        { r -> Thread(r, "layout-capture-deadline").apply { isDaemon = true } }).apply { removeOnCancelPolicy = true }
     private val mCaptureAvailableListeners = CopyOnWriteArrayList<CaptureAvailableListener>()
+    @Volatile private var active: Job? = null
 
-    interface CaptureAvailableListener {
-        fun onCaptureAvailable(capture: NodeInfo?)
+    interface CaptureAvailableListener { fun onCaptureAvailable(capture: NodeInfo?) }
+    interface WindowsAvailableListener { fun onWindowsAvailable(windows: List<CapturedWindow>) }
+    interface CaptureRequest { val id: Long; fun cancel() }
+
+    private data class CaptureResult(val root: NodeInfo?, val windows: List<CapturedWindow>)
+    private inner class Job(val ticket: CaptureRequestGate.Ticket,
+                            val listener: WindowsAvailableListener?,
+                            val listeners: List<CaptureAvailableListener>) : CaptureRequest {
+        override val id: Long get() = ticket.id
+        val budget = NodeCaptureBudget(CAPTURE_TIMEOUT_MS, MAX_CAPTURE_NODES, MAX_CAPTURE_DEPTH)
+        val started = SystemClock.uptimeMillis()
+        val details = StringBuilder("AI.js Pro 节点分析诊断\nrequest=$id kind=${if (listener == null) "CURRENT" else "WINDOWS"}\n")
+        @Volatile var deadline: ScheduledFuture<*>? = null
+        override fun cancel() {
+            budget.cancel()
+            finish(this, null, "CANCELLED")
+        }
+    }
+    private object RejectedRequest : CaptureRequest {
+        override val id = 0L
+        override fun cancel() {}
     }
 
-    interface WindowsAvailableListener {
-        fun onWindowsAvailable(windows: List<CapturedWindow>)
-    }
-
-    /** Refresh the picker independently of the current (possibly imported) layout. */
     fun captureVisibleWindows(listener: WindowsAvailableListener) {
-        mExecutor.execute {
-            val result = ArrayList<CapturedWindow>()
-            val service = AccessibilityService.instance
-            if (service != null) {
-                try {
-                    service.clearNodeCache()
-                    for (window in service.windows) {
-                        try {
-                            val root = window.root ?: continue
-                            if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
-                                root.packageName?.toString() == mContext.packageName) continue
-                            val snapshot = NodeInfo.capture(mContext, root)
-                            result.add(CapturedWindow(window.id, window.type, window.isActive,
-                                window.isFocused, window.layer, snapshot))
-                        } catch (error: RuntimeException) {
-                            Log.d(LOG_TAG, "Window disappeared during picker refresh", error)
-                        }
-                    }
-                } catch (error: RuntimeException) {
-                    Log.w(LOG_TAG, "Window picker refresh failed", error)
-                }
-            }
-            listener.onWindowsAvailable(result.sortedByDescending { it.layer })
-        }
+        captureVisibleWindowsRequest(listener)
     }
 
-    @Synchronized
-    fun captureCurrentWindow(): Boolean {
-        if (isDumping) return false
-        val details = newCaptureLog()
-        trace(details, "status=CAPTURING")
-        val service = AccessibilityService.instance
-        if (service == null) {
-            trace(details, "status=FAILED reason=ACCESSIBILITY_SERVICE_NOT_CONNECTED")
-            capture = null
-            capturedWindows = emptyList()
-            return false
+    /** The returned handle only cancels its own request, never a newer capture. */
+    fun captureVisibleWindowsRequest(listener: WindowsAvailableListener): CaptureRequest {
+        val request = start(listener)
+        if (request == null) {
+            listener.onWindowsAvailable(emptyList())
+            return RejectedRequest
         }
-        capture = null
-        capturedWindows = emptyList()
-        isDumping = true
-        mExecutor.execute {
-            val started = SystemClock.uptimeMillis()
-            var result: NodeInfo? = null
-            try {
+        return request
+    }
+
+    fun captureCurrentWindow(): Boolean = captureCurrentWindowRequest() != null
+
+    fun captureCurrentWindowRequest(): CaptureRequest? = start(null)
+
+    fun cancelCurrentCapture() {
+        val request = active
+        if (request != null && request.listener == null) request.cancel()
+    }
+
+    @Synchronized private fun start(listener: WindowsAvailableListener?): Job? {
+        val ticket = gate.begin()
+        if (ticket == null) {
+            captureLog = "status=BUSY\n上一轮系统节点调用尚未退出。请稍后重试；取消等待不会强杀 Android Binder。"
+            return null
+        }
+        val request = Job(ticket, listener, mCaptureAvailableListeners.toList())
+        active = request
+        if (listener == null) { isDumping = true; capture = null; capturedWindows = emptyList() }
+        trace(request.details, "status=CAPTURING")
+        captureLog = request.details.toString()
+        request.deadline = deadlines.schedule({
+            request.budget.cancel()
+            finish(request, null, "TIMEOUT")
+        }, CAPTURE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        try {
+            worker.execute { execute(request) }
+        } catch (error: RuntimeException) {
+            finish(request, null, "EXECUTOR_REJECTED")
+            synchronized(this) {
+                gate.workerExited(ticket)
+                if (active === request) active = null
+            }
+        }
+        return request
+    }
+
+    private fun execute(request: Job) {
+        try {
+            trace(request.details, newCaptureLog().toString())
+            request.budget.check()
+            val service = AccessibilityService.instance
+                ?: throw IllegalStateException("ACCESSIBILITY_SERVICE_NOT_CONNECTED")
+            if (request.listener != null) {
+                val result = ArrayList<CapturedWindow>()
+                service.clearNodeCache()
+                request.budget.check()
+                for (window in service.windows.take(MAX_WINDOWS)) {
+                    request.budget.check()
+                    try {
+                        val root = window.root ?: continue
+                        if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
+                            root.packageName?.toString() == mContext.packageName) continue
+                        val snapshot = NodeInfo.capture(mContext, root, request.budget)
+                        result.add(CapturedWindow(window.id, window.type, window.isActive,
+                            window.isFocused, window.layer, snapshot))
+                    } catch (error: RuntimeException) {
+                        rethrowBudget(error, request.budget)
+                        Log.d(LOG_TAG, "Window disappeared during picker refresh", error)
+                    }
+                }
+                request.budget.check()
+                finish(request, CaptureResult(null, result.sortedByDescending { it.layer }), "SUCCESS")
+            } else {
                 val info = service.serviceInfo
-                trace(details, "service=${service.javaClass.name} id=${info?.id}")
-                trace(details, "flags=${info?.flags} feedback=${info?.feedbackType} capabilities=${info?.capabilities}")
-                if (Build.VERSION.SDK_INT >= 31) trace(details, "isAccessibilityTool=${info?.isAccessibilityTool}")
-                // Never query a remote app on the floating menu's UI thread.
+                trace(request.details, "service=${service.javaClass.name} id=${info?.id}")
+                trace(request.details, "flags=${info?.flags} feedback=${info?.feedbackType} capabilities=${info?.capabilities}")
+                if (Build.VERSION.SDK_INT >= 31) trace(request.details, "isAccessibilityTool=${info?.isAccessibilityTool}")
+                var result = CaptureResult(null, emptyList())
                 for (attempt in 0..2) {
-                    trace(details, "attempt=${attempt + 1}")
+                    request.budget.check()
+                    trace(request.details, "attempt=${attempt + 1}")
                     service.clearNodeCache()
-                    result = captureApplicationWindow(service, details)
-                    if (result != null) break
+                    result = captureApplicationWindow(service, request.details, request.budget)
+                    if (result.root != null) break
                     if (attempt < 2) SystemClock.sleep(120)
                 }
-            } catch (error: Exception) {
-                trace(details, "exception=${error.javaClass.name}: ${error.message}")
-                error.stackTrace.take(6).forEach { trace(details, "  at $it") }
-                Log.w(LOG_TAG, "Layout capture failed", error)
-            } finally {
-                capture = result
+                request.budget.check()
+                finish(request, result, if (result.root == null) "NO_READABLE_ROOT" else "SUCCESS")
             }
-            trace(details, "status=${if (result == null) "FAILED" else "SUCCESS"} package=${result?.packageName} nodes=${result?.let { countNodes(it) } ?: 0} elapsedMs=${SystemClock.uptimeMillis() - started}")
-            try {
-                for (l in mCaptureAvailableListeners) {
-                    try {
-                        l.onCaptureAvailable(result)
-                    } catch (error: Exception) {
-                        Log.w(LOG_TAG, "Capture listener failed", error)
-                    }
-                }
-            } finally {
-                isDumping = false
+        } catch (error: Exception) {
+            trace(request.details, "exception=${error.javaClass.name}: ${error.message}")
+            error.stackTrace.take(6).forEach { trace(request.details, "  at $it") }
+            finish(request, null, error.message ?: error.javaClass.simpleName)
+            Log.w(LOG_TAG, "Layout capture failed", error)
+        } finally {
+            synchronized(this) {
+                gate.workerExited(request.ticket)
+                if (active === request) active = null
             }
         }
-        return true
+    }
+
+    private fun finish(request: Job, result: CaptureResult?, status: String) {
+        val accepted = synchronized(this) {
+            if (!gate.complete(request.ticket)) false else {
+                request.deadline?.cancel(false)
+                if (request.listener == null) {
+                    capture = result?.root
+                    capturedWindows = result?.windows ?: emptyList()
+                    isDumping = false
+                }
+                trace(request.details, "status=$status elapsedMs=${SystemClock.uptimeMillis() - request.started} visited=${request.budget.visitedCount}")
+                if (status == "TIMEOUT") trace(request.details, "hint=抓取超时，已退出等待；系统节点调用尚未退出时请稍后重试。")
+                captureLog = synchronized(request.details) { request.details.toString() }
+                true
+            }
+        }
+        if (!accepted) return
+        // Listener code runs outside the state lock, so cancellation never waits on a UI callback.
+        if (request.listener != null) {
+            try { request.listener.onWindowsAvailable(result?.windows ?: emptyList()) }
+            catch (error: Exception) { Log.w(LOG_TAG, "Window capture listener failed", error) }
+        } else {
+            for (listener in request.listeners) {
+                if (!mCaptureAvailableListeners.contains(listener)) continue
+                try { listener.onCaptureAvailable(result?.root) }
+                catch (error: Exception) { Log.w(LOG_TAG, "Capture listener failed", error) }
+            }
+        }
+    }
+
+    private fun rethrowBudget(error: RuntimeException, budget: NodeCaptureBudget) {
+        if (error is NodeCaptureBudget.CaptureLimitException) throw error
+        budget.check()
     }
 
     fun addCaptureAvailableListener(l: CaptureAvailableListener) {
@@ -136,7 +212,8 @@ class LayoutInspector(private val mContext: Context) {
         return mCaptureAvailableListeners.remove(l)
     }
 
-    private fun captureApplicationWindow(service: AccessibilityService, details: StringBuilder): NodeInfo? {
+    private fun captureApplicationWindow(service: AccessibilityService, details: StringBuilder, budget: NodeCaptureBudget): CaptureResult {
+        budget.check()
         val activeRoot = service.rootInActiveWindow
         val activePackage = activeRoot?.packageName?.toString()
         trace(details, "activeRoot window=${activeRoot?.windowId} package=$activePackage")
@@ -153,7 +230,8 @@ class LayoutInspector(private val mContext: Context) {
         val windowMetadata = ArrayList<CapturedWindow>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             try {
-                for (window in service.windows) {
+                for (window in service.windows.take(MAX_WINDOWS)) {
+                    budget.check()
                     try {
                         val root = window.root
                         trace(details, "window id=${window.id} type=${window.type} active=${window.isActive} focused=${window.isFocused} layer=${window.layer} package=${root?.packageName} rawChildren=${root?.childCount}")
@@ -164,11 +242,13 @@ class LayoutInspector(private val mContext: Context) {
                         windowMetadata.add(CapturedWindow(window.id, window.type, window.isActive,
                             window.isFocused, window.layer, null))
                     } catch (error: RuntimeException) {
+                    rethrowBudget(error, budget)
                         trace(details, "windowException=${error.javaClass.name}: ${error.message}")
                         Log.d(LOG_TAG, "Window unavailable during capture", error)
                     }
                 }
             } catch (error: RuntimeException) {
+                    rethrowBudget(error, budget)
                 trace(details, "windowsException=${error.javaClass.name}: ${error.message}")
                 Log.d(LOG_TAG, "Window enumeration unavailable", error)
             }
@@ -187,7 +267,7 @@ class LayoutInspector(private val mContext: Context) {
                         trace(details, "skip window=${root.windowId} package=${root.packageName} reason=OTHER_APPLICATION")
                         null
                     } else {
-                        NodeInfo.capture(mContext, root).takeIf { snapshot ->
+                        NodeInfo.capture(mContext, root, budget).takeIf { snapshot ->
                             // A sized FrameLayout with no children or accessible content is only a shell.
                             val readable = snapshot.getChildren().isNotEmpty() || snapshot.text.isNotBlank() ||
                                 !snapshot.desc.isNullOrBlank() || snapshot.clickable || snapshot.longClickable ||
@@ -197,6 +277,7 @@ class LayoutInspector(private val mContext: Context) {
                         }
                     }
                 } catch (error: RuntimeException) {
+                    rethrowBudget(error, budget)
                     trace(details, "rootException=${error.javaClass.name}: ${error.message}")
                     Log.d(LOG_TAG, "Root unavailable during capture", error)
                     null
@@ -207,14 +288,16 @@ class LayoutInspector(private val mContext: Context) {
         val result = snapshots[selected]
         // Keep all windows from this capture, so the picker switches snapshots without Binder
         // queries on the UI thread. Exclude our own inspector/menu overlays.
-        capturedWindows = candidates.mapIndexed { index, candidate ->
+        val windows = candidates.mapIndexed { index, candidate ->
+            budget.check()
             val root = candidate.root
             val snapshot = if (root == null || (!candidate.application && root.packageName?.toString() == mContext.packageName)) null
-                else snapshots[root] ?: try { NodeInfo.capture(mContext, root) }
-                catch (error: RuntimeException) { null }
+                else snapshots[root] ?: try { NodeInfo.capture(mContext, root, budget) }
+                catch (error: RuntimeException) { rethrowBudget(error, budget); null }
             windowMetadata[index].copy(root = snapshot)
         }.filter { it.root != null }.toList()
-        return result
+        budget.check()
+        return CaptureResult(result, windows)
     }
 
     private fun traceRoot(details: StringBuilder, source: String, root: AccessibilityNodeInfo) {
@@ -247,12 +330,13 @@ class LayoutInspector(private val mContext: Context) {
 
     private fun trace(details: StringBuilder, message: String) {
         Log.d(LOG_TAG, message)
-        details.append(message.take(2000)).append('\n')
-        if (details.length > 24000) {
-            details.delete(4000, details.length - 16000)
-            details.insert(4000, "\n[... earlier lines omitted ...]\n")
+        synchronized(details) {
+            details.append(message.take(2000)).append('\n')
+            if (details.length > 24000) {
+                details.delete(4000, details.length - 16000)
+                details.insert(4000, "\n[... earlier lines omitted ...]\n")
+            }
         }
-        captureLog = details.toString()
     }
 
     private fun countNodes(root: NodeInfo): Int {
@@ -267,12 +351,19 @@ class LayoutInspector(private val mContext: Context) {
     }
 
     fun clearCapture() {
-        capture = null
-        capturedWindows = emptyList()
+        cancelCurrentCapture()
+        synchronized(this) {
+            capture = null
+            capturedWindows = emptyList()
+        }
     }
 
     companion object {
 
         private val LOG_TAG = LayoutInspector::class.java.simpleName
+        private const val CAPTURE_TIMEOUT_MS = 8000L
+        private const val MAX_CAPTURE_NODES = 15000
+        private const val MAX_CAPTURE_DEPTH = 256
+        private const val MAX_WINDOWS = 32
     }
 }

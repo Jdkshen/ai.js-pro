@@ -18,8 +18,15 @@ final class InspectorSession {
     Set<String> properties;
     InspectorSession(NodeInfo root) {
         this.root = root;
-        LayoutInspector inspector = AutoJs.getInstance().getLayoutInspector();
-        if (inspector.getCapture() == root) windows.addAll(inspector.getCapturedWindows());
+        if (!InspectorProcessBridge.isRendererProcess(com.stardust.app.GlobalAppContext.get())) {
+            LayoutInspector inspector = AutoJs.getInstance().getLayoutInspector();
+            if (inspector.getCapture() == root) windows.addAll(inspector.getCapturedWindows());
+        }
+        indexRoot();
+    }
+    InspectorSession(NodeInfo root, List<LayoutInspector.CapturedWindow> windows) {
+        this.root = root;
+        this.windows.addAll(windows);
         indexRoot();
     }
     void indexRoot() {

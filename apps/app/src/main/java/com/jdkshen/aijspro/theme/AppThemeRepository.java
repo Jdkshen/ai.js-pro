@@ -75,6 +75,14 @@ public final class AppThemeRepository {
         return sInstance;
     }
 
+    /** Renderer IPC applies the main process palette without changing persisted preferences. */
+    public void applyRemotePalette(boolean dark, int accent) {
+        AppThemePalette palette = dark ? AppThemePalette.dark(accent) : AppThemePalette.light(accent);
+        if (Arrays.equals(mCurrentPalette.toIntArray(), palette.toIntArray())) return;
+        mCurrentPalette = palette;
+        notifyListeners();
+    }
+
     /** Current palette — safe to call from any thread. */
     public AppThemePalette getPalette() {
         return mCurrentPalette;

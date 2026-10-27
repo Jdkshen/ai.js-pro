@@ -63,6 +63,12 @@ class App : MultiDexApplication() {
         super.onCreate()
         GlobalAppContext.set(this)
         instance = WeakReference(this)
+        // The inspector renders offline snapshots only: keep engines, OpenCV and main-process
+        // crash activities out of this process, so a renderer failure cannot take the host down.
+        if (com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorProcessBridge.isRendererProcess(this)) {
+            ThemeColorManagerCompat.init(this, ThemeColor(resources.getColor(R.color.colorPrimary), resources.getColor(R.color.colorPrimaryDark), resources.getColor(R.color.colorAccent)))
+            return
+        }
         setUpStaticsTool()
         setUpDebugEnvironment()
         init()

@@ -34,6 +34,23 @@ public class FloatyWindowManger {
     private static final FloatingMenuVisibility sMenuVisibility = new FloatingMenuVisibility();
 
     public static boolean addWindow(Context context, FloatyWindow window) {
+        if (window instanceof com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorFloatyWindow) {
+            if (com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorProcessBridge.isRendererProcess(context)) {
+                FloatyService.addWindow(window);
+                return true;
+            }
+            // Prefer the isolated renderer, but keep the old in-process path as a fallback
+            // when the snapshot cannot be handed off (e.g. no root / non-main caller), and
+            // let the bridge fall back asynchronously after write/bind/renderer failures.
+            if (((com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorFloatyWindow) window).openIsolated(context)) {
+                return true;
+            }
+        }
+        return addWindowInProcess(context, window);
+    }
+
+    /** Legacy in-process path; also used when the isolated inspector cannot start. */
+    public static boolean addWindowInProcess(Context context, FloatyWindow window) {
         context.startService(new Intent(context, FloatyService.class));
         boolean hasPermission = FloatingPermission.ensurePermissionGranted(context);
         try {

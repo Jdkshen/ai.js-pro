@@ -34,9 +34,15 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import com.jdkshen.aijspro.theme.AppThemePalette;
+import com.jdkshen.aijspro.theme.AppThemeRepository;
 
 /** Shared controls keep search, selection and snapshots consistent in both inspector views. */
-abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
+public abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
     final InspectorSession session;
     final boolean hierarchy;
     Context context;
@@ -54,6 +60,21 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private boolean closed;
     private boolean refreshingWindows;
+    protected AppThemePalette palette;
+    private LayoutInspector.CaptureRequest windowsRequest;
+    private long windowGeneration, searchGeneration;
+    private Runnable windowTimeout;
+    private Future<?> searchTask;
+    private final ThreadPoolExecutor searchWorker = new ThreadPoolExecutor(1, 1, 0,
+            TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1), r -> {
+                Thread thread = new Thread(r, "inspector-search"); thread.setDaemon(true); return thread;
+            }, new ThreadPoolExecutor.DiscardOldestPolicy());
+
+    final boolean isClosedForFallback() { return closed; }
+
+    public final boolean openIsolated(Context owner) {
+        return InspectorProcessBridge.open(owner, session.root, new ArrayList<>(session.windows), hierarchy, this);
+    }
 
     InspectorFloatyWindow(NodeInfo root, boolean hierarchy) { this(new InspectorSession(root), hierarchy); }
     InspectorFloatyWindow(InspectorSession session, boolean hierarchy) {
@@ -65,6 +86,7 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
 
     @Override protected View onCreateView(Context original) {
         context = new ContextThemeWrapper(original, R.style.AppTheme);
+        palette = AppThemeRepository.get(original).getPalette();
         content = new FrameLayout(context) {
             @Override public boolean dispatchKeyEvent(KeyEvent event) {
                 if (event.getKeyCode() == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) {
@@ -127,11 +149,11 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         for (int i = 0; i < items.length; i++) {
             final Runnable callback = callbacks[i];
             TextView item = action(items[i], () -> { menu.dismiss(); callback.run(); });
-            item.setTextSize(13); item.setTextColor(i == items.length - 1 ? 0xffc53939 : Color.DKGRAY);
+            item.setTextSize(13); item.setTextColor(i == items.length - 1 ? palette.danger : palette.textPrimary);
             panel.addView(item, new LinearLayout.LayoutParams(-1, dp(38)));
         }
         ScrollView scroll = new ScrollView(context); scroll.setFillViewport(true); scroll.addView(panel);
-        scroll.setBackground(roundBackground(Color.WHITE, 12)); scroll.setClipToOutline(true);
+        scroll.setBackground(roundBackground(palette.surfaceElevated, 12)); scroll.setClipToOutline(true);
         menu = new PopupWindow(scroll, dp(216), -2, true);
         menu.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT)); menu.setOutsideTouchable(true);
         menu.setElevation(dp(6)); menu.setWindowLayoutType(FloatyWindowManger.getWindowType());
@@ -154,9 +176,11 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
     private void switchView() {
         boolean reopen = searchPanel != null;
         InspectorFloatyWindow next = hierarchy ? new LayoutBoundsFloatyWindow(session) : new LayoutHierarchyFloatyWindow(session);
-        close();
-        session.searchOpen = reopen;
-        FloatyService.addWindow(next);
+        if (InspectorProcessBridge.isRendererProcess(context)
+                && InspectorHostService.replaceInspectorWindow(this, next)) {
+            return;
+        }
+        close(); session.searchOpen = reopen; FloatyService.addWindow(next);
     }
     private void showAdvancedCode() {
         Dialog dialog = new CodeGenerateDialog(context, session.root, selected()).build();
@@ -165,7 +189,7 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
     private void showProperties() {
         NodeInfoView properties = new NodeInfoView(context);
         LinearLayout panel = card(); panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackground(roundBackground(Color.WHITE, 12));
+        panel.setBackground(roundBackground(palette.surfaceElevated, 12));
         Dialog dialog = new Dialog(context); dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout heading = new LinearLayout(context);
         heading.addView(label("控件信息 · #" + session.indices.get(selected()), 12), new LinearLayout.LayoutParams(0, dp(36), 1));
@@ -177,7 +201,7 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         TextView count = label("", 11);
         count.setMaxLines(2);
         footer.addView(count, new LinearLayout.LayoutParams(0, dp(48), 1));
-        TextView copy = pill("复制代码", 0xff198b64, Color.WHITE, () -> {
+        TextView copy = pill("复制代码", palette.accent, palette.fabForeground, () -> {
             String code = properties.getSelectorCode();
             if (code.isEmpty()) { toast("请勾选定位属性"); return; }
             ClipboardUtil.setClip(context, code); toast("已复制定位代码");
@@ -199,18 +223,30 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
     private void showWindows() {
         if (refreshingWindows) return;
         refreshingWindows = true; hideKeyboard();
-        // A full-screen application overlay hides underlying app windows from accessibility.
-        // Temporarily hide it and let WindowManager publish the new visible window set.
+        final long generation = ++windowGeneration;
         content.setVisibility(View.GONE);
-        main.postDelayed(() -> {
-            if (closed) return;
-            AutoJs.getInstance().getLayoutInspector().captureVisibleWindows(windows -> main.post(() -> {
-            refreshingWindows = false;
-            if (closed) return;
+        windowTimeout = () -> {
+            if (closed || generation != windowGeneration) return;
+            ++windowGeneration;
+            if (windowsRequest != null) windowsRequest.cancel();
+            windowsRequest = null; refreshingWindows = false;
             content.setVisibility(View.VISIBLE);
-            if (windows.isEmpty()) { toast("未获取到窗口，请检查无障碍服务后重试"); return; }
-            session.windows.clear(); session.windows.addAll(windows); showWindowPicker();
-            }));
+            toast("窗口刷新超时，已恢复分析界面，可重试");
+        };
+        main.postDelayed(windowTimeout, 20000);
+        main.postDelayed(() -> {
+            if (closed || generation != windowGeneration) return;
+            LayoutInspector.WindowsAvailableListener callback = windows -> main.post(() -> {
+                if (closed || generation != windowGeneration) return;
+                if (windowTimeout != null) main.removeCallbacks(windowTimeout);
+                windowsRequest = null; refreshingWindows = false;
+                content.setVisibility(View.VISIBLE);
+                if (windows.isEmpty()) { toast("未获取到窗口，请检查无障碍服务后重试"); return; }
+                session.windows.clear(); session.windows.addAll(windows); showWindowPicker();
+            });
+            if (InspectorProcessBridge.isRendererProcess(context))
+                windowsRequest = InspectorProcessBridge.refreshWindows(callback);
+            else windowsRequest = AutoJs.getInstance().getLayoutInspector().captureVisibleWindowsRequest(callback);
         }, 180);
     }
     private void showWindowPicker() {
@@ -224,7 +260,7 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         }
         Dialog dialog = new Dialog(context); dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout panel = card(); panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackground(roundBackground(Color.WHITE, 12));
+        panel.setBackground(roundBackground(palette.surfaceElevated, 12));
         LinearLayout heading = new LinearLayout(context);
         heading.addView(label("选择当前窗口", 14), new LinearLayout.LayoutParams(0, dp(40), 1));
         heading.addView(action("×", dialog::dismiss)); panel.addView(heading);
@@ -232,7 +268,7 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         list.setAdapter(new ArrayAdapter<String>(context, android.R.layout.simple_list_item_1, items) {
             @Override public View getView(int position, View convertView, ViewGroup parent) {
                 TextView view = (TextView) super.getView(position, convertView, parent);
-                view.setTextSize(11); view.setTextColor(Color.DKGRAY); view.setPadding(dp(8), dp(10), dp(8), dp(10));
+                view.setTextSize(11); view.setTextColor(palette.textPrimary); view.setPadding(dp(8), dp(10), dp(8), dp(10));
                 return view;
             }
         });
@@ -255,9 +291,9 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         heading.addView(action("×", this::hideSearch));
         searchPanel.addView(heading);
         query = new EditText(context); query.setSingleLine(true); query.setTextSize(13);
-        query.setTextColor(Color.DKGRAY); query.setHintTextColor(0xff777777);
+        query.setTextColor(palette.textPrimary); query.setHintTextColor(palette.textSecondary);
         query.setHint("输入节点关键字");
-        query.setBackground(roundBackground(0xfff0f1f2, 8));
+        query.setBackground(roundBackground(palette.surfaceSecondary, 8));
         query.setPadding(dp(8), 0, dp(8), 0);
         query.setText(session.query);
         query.addTextChangedListener(new TextWatcher() {
@@ -276,23 +312,23 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         searchPanel.addView(query, new LinearLayout.LayoutParams(-1, dp(36)));
         LinearLayout controls = new LinearLayout(context);
         controls.setPadding(0, dp(6), 0, dp(4));
-        TextView previous = pill("上一个", 0xffeeeeee, Color.DKGRAY, () -> cycle(-1));
-        TextView next = pill("下一个", 0xffeeeeee, Color.DKGRAY, () -> cycle(1));
-        TextView find = pill("搜索", 0xff198b64, Color.WHITE, this::search);
+        TextView previous = pill("上一个", palette.surfaceSecondary, palette.textPrimary, () -> cycle(-1));
+        TextView next = pill("下一个", palette.surfaceSecondary, palette.textPrimary, () -> cycle(1));
+        TextView find = pill("搜索", palette.accent, palette.fabForeground, this::search);
         for (TextView button : Arrays.asList(previous, next, find)) {
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(32), 1); p.setMargins(dp(2), 0, dp(2), 0);
             controls.addView(button, p);
         }
         TextView clear = action("清除", () -> { query.setText(""); clearMatches(); setSelectedNode(null); });
-        clear.setTextColor(0xffc53939); controls.addView(clear, new LinearLayout.LayoutParams(dp(48), dp(32)));
+        clear.setTextColor(palette.danger); controls.addView(clear, new LinearLayout.LayoutParams(dp(48), dp(32)));
         searchPanel.addView(controls);
         LinearLayout options = new LinearLayout(context);
         TextView hint = label("文字 / 描述 / id / 类名 / 包名", 10);
         options.addView(hint, new LinearLayout.LayoutParams(0, dp(30), 1));
         matchCase = new CheckBox(context); matchCase.setText("区分大小写"); matchCase.setTextSize(12);
         matchCase.setChecked(session.matchCase);
-        matchCase.setTextColor(Color.DKGRAY);
-        matchCase.setButtonTintList(android.content.res.ColorStateList.valueOf(0xff177653));
+        matchCase.setTextColor(palette.textPrimary);
+        matchCase.setButtonTintList(android.content.res.ColorStateList.valueOf(palette.accent));
         matchCase.setPadding(0, 0, 0, 0); matchCase.setMinHeight(0);
         matchCase.setOnCheckedChangeListener((v, checked) -> { session.matchCase = checked; if (!session.query.trim().isEmpty()) search(); });
         options.addView(matchCase, new LinearLayout.LayoutParams(-2, dp(30)));
@@ -331,22 +367,34 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         });
     }
     private void search() {
-        matches.clear();
-        String value = query.getText().toString();
-        for (NodeInfo node : session.nodes) {
-            if (NodeSelectorCode.matches(value, matchCase.isChecked(), node.getText(), node.getDesc(), node.getId(),
-                    node.getFullId(), node.getClassName(), node.getPackageName())) matches.add(node);
-        }
-        matchIndex = session.matchIndex = -1;
-        refreshResults();
-        if (matches.isEmpty()) { setSelectedNode(null); resultCount.setText("节点搜索 · 0/0 个 · 无匹配"); }
-        else selectMatch(0);
-        searchPanel.post(this::clampSearch);
+        final long generation = ++searchGeneration;
+        if (searchTask != null) searchTask.cancel(true);
+        searchWorker.getQueue().clear();
+        final String value = query.getText().toString();
+        final boolean caseSensitive = matchCase.isChecked();
+        final List<NodeInfo> nodes = new ArrayList<>(session.nodes);
+        matches.clear(); matchIndex = session.matchIndex = -1; refreshResults();
+        if (value.trim().isEmpty()) { setSelectedNode(null); return; }
+        resultCount.setText("节点搜索 · 正在搜索…");
+        searchTask = searchWorker.submit(() -> {
+            List<NodeInfo> found = new ArrayList<>();
+            for (NodeInfo node : nodes) {
+                if (Thread.currentThread().isInterrupted()) return;
+                if (NodeSelectorCode.matches(value, caseSensitive, node.getText(), node.getDesc(), node.getId(),
+                        node.getFullId(), node.getClassName(), node.getPackageName())) found.add(node);
+            }
+            main.post(() -> {
+                if (closed || searchPanel == null || generation != searchGeneration) return;
+                matches.addAll(found); refreshResults();
+                if (matches.isEmpty()) { setSelectedNode(null); resultCount.setText("节点搜索 · 0/0 个 · 无匹配"); }
+                else selectMatch(0);
+                searchPanel.post(this::clampSearch);
+            });
+        });
     }
     private void refreshResults() {
-        List<String> labels = new ArrayList<>();
-        for (NodeInfo node : matches) labels.add(nodeSummary(node));
-        resultList.setAdapter(resultAdapter(labels));
+        if (resultList == null) return;
+        resultList.setAdapter(resultAdapter());
         resultCount.setText("节点搜索 · " + (matchIndex + 1) + "/" + matches.size() + " 个");
     }
     private String nodeSummary(NodeInfo node) {
@@ -372,18 +420,22 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         searchPanel.setY(Math.max(0, Math.min(height - desired, searchPanel.getY())));
         session.searchX = searchPanel.getX(); session.searchY = searchPanel.getY();
     }
-    private ArrayAdapter<String> resultAdapter(List<String> labels) {
-        return new ArrayAdapter<String>(context, android.R.layout.simple_list_item_1, labels) {
+    private ArrayAdapter<NodeInfo> resultAdapter() {
+        return new ArrayAdapter<NodeInfo>(context, android.R.layout.simple_list_item_1, matches) {
             @Override public View getView(int position, View convertView, ViewGroup parent) {
-                TextView view = (TextView) super.getView(position, convertView, parent);
-                view.setTextSize(10); view.setTextColor(Color.DKGRAY);
+                TextView view = convertView instanceof TextView ? (TextView) convertView : new TextView(context);
+                view.setText(nodeSummary(getItem(position)));
+                view.setTextSize(10); view.setTextColor(palette.textPrimary);
                 view.setPadding(dp(6), dp(5), dp(6), dp(5));
-                view.setBackgroundColor(position == matchIndex ? 0xffd8ebe4 : Color.TRANSPARENT);
+                view.setBackgroundColor(position == matchIndex ? palette.accentMuted : Color.TRANSPARENT);
                 return view;
             }
         };
     }
     private void clearMatches() {
+        ++searchGeneration;
+        if (searchTask != null) searchTask.cancel(true);
+        searchWorker.getQueue().clear();
         matches.clear(); matchIndex = session.matchIndex = -1;
         refreshResults(); clampSearch();
     }
@@ -404,6 +456,8 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
         if (content != null) content.requestFocus();
     }
     private void hideSearch() {
+        ++searchGeneration;
+        if (searchTask != null) searchTask.cancel(true);
         if (searchPanel == null) return;
         hideKeyboard(); content.removeView(searchPanel); searchPanel = null; session.searchOpen = false;
         query = null; matchCase = null; selectedDetail = null; resultCount = null; resultList = null;
@@ -438,7 +492,7 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
     private void showFilePicker(File[] entries) {
         Dialog dialog = new Dialog(context); dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout panel = card(); panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackground(roundBackground(Color.WHITE, 12));
+        panel.setBackground(roundBackground(palette.surfaceElevated, 12));
         LinearLayout heading = new LinearLayout(context);
         heading.addView(label("读取布局文件", 14), new LinearLayout.LayoutParams(0, dp(40), 1));
         heading.addView(action("×", dialog::dismiss)); panel.addView(heading);
@@ -455,7 +509,7 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
                     name.setOnClickListener(v -> { dialog.dismiss(); loadLayout(file); });
                     name.setOnLongClickListener(v -> { ClipboardUtil.setClip(context, file.getAbsolutePath()); toast("已复制文件路径"); return true; });
                     row.addView(name, new LinearLayout.LayoutParams(0, dp(56), 1));
-                    row.addView(pill("分享", 0xffeeeeee, Color.DKGRAY, () -> shareLayout(file)),
+                    row.addView(pill("分享", palette.surfaceSecondary, palette.textPrimary, () -> shareLayout(file)),
                             new LinearLayout.LayoutParams(dp(48), dp(32)));
                     return row;
                 }
@@ -500,31 +554,38 @@ abstract class InspectorFloatyWindow extends FullScreenFloatyWindow {
     }
     private void show(Dialog dialog) {
         if (dialog.getWindow() != null) dialog.getWindow().setType(FloatyWindowManger.getWindowType());
+        dialogs.removeIf(existing -> !existing.isShowing());
         dialogs.add(dialog);
-        dialog.setOnDismissListener(d -> dialogs.remove(dialog));
+        // Dialog controllers may own onDismiss for worker cancellation; do not replace it.
         DialogUtils.showDialog(dialog);
     }
     @Override public void close() {
         if (closed) return;
-        closed = true;
+        closed = true; ++windowGeneration; ++searchGeneration;
+        if (windowsRequest != null) windowsRequest.cancel();
+        windowsRequest = null;
+        if (windowTimeout != null) main.removeCallbacks(windowTimeout);
+        searchWorker.shutdownNow();
         if (menu != null) menu.dismiss();
         for (Dialog dialog : new ArrayList<>(dialogs)) dialog.dismiss();
         if (content != null) hideSearch();
-        io.shutdown();
+        io.shutdownNow();
+        main.removeCallbacksAndMessages(null);
         super.close();
+        InspectorHostService.onInspectorWindowClosed(this);
     }
     private LinearLayout card() {
         LinearLayout panel = new LinearLayout(context);
-        panel.setBackground(roundBackground(0xf5ffffff, 12)); panel.setElevation(dp(6)); panel.setPadding(dp(8), 0, dp(8), 0);
+        panel.setBackground(roundBackground(palette.popupBackground, 12)); panel.setElevation(dp(6)); panel.setPadding(dp(8), 0, dp(8), 0);
         panel.setClipToOutline(true);
         return panel;
     }
     private TextView label(String text, int size) {
-        TextView label = new TextView(context); label.setText(text); label.setTextColor(Color.DKGRAY);
+        TextView label = new TextView(context); label.setText(text); label.setTextColor(palette.textPrimary);
         label.setTextSize(size); label.setGravity(Gravity.CENTER_VERTICAL); label.setPadding(dp(6), 0, dp(6), 0); return label;
     }
     private TextView action(String text, Runnable callback) {
-        TextView button = label(text, 13); button.setTextColor(0xff177653);
+        TextView button = label(text, 13); button.setTextColor(palette.accent);
         button.setGravity(Gravity.CENTER); button.setMinWidth(dp(44)); button.setMinHeight(dp(42));
         button.setContentDescription(text); button.setOnClickListener(v -> callback.run()); return button;
     }

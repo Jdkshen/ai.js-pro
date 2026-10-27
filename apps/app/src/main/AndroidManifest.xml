@@ -547,6 +547,9 @@
                 <action android:name="com.jdkshen.aijspro.AIJS_UI" />
             </intent-filter>
         </receiver>
+        <!-- Built-in layout analysis renders offline snapshots away from the app and engines. -->
+        <service android:name="com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorHostService"
+            android:process=":inspector" android:exported="false" />
     </application>
 
 </manifest>

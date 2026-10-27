@@ -13,11 +13,11 @@ public class LayoutHierarchyFloatyWindow extends InspectorFloatyWindow {
     LayoutHierarchyFloatyWindow(InspectorSession session) { super(session, true); }
     @Override View createInspectorView() {
         tree = new LayoutHierarchyView(context);
-        tree.setBackgroundColor(0xddffffff);
+        tree.setBackgroundColor(palette.surfacePrimary);
         tree.setShowClickedNodeBounds(true);
-        tree.setClickedColor(0xffd7eaff);
+        tree.setClickedColor(palette.accentMuted);
         tree.getBoundsPaint().setStrokeWidth(3);
-        tree.getBoundsPaint().setColor(0xffd32f2f);
+        tree.getBoundsPaint().setColor(palette.danger);
         tree.setOnNodeSelectedListener(this::selectionChanged);
         tree.setOnItemLongClickListener((view, node) -> {
             tree.setSelectedNode(node);

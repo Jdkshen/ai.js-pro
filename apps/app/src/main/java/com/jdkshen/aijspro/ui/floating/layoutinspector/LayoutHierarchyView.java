@@ -41,6 +41,7 @@ public class LayoutHierarchyView extends MultiLevelListView {
         void onItemLongClick(View view, NodeInfo nodeInfo);
     }
 
+    private com.jdkshen.aijspro.theme.AppThemePalette palette;
     private Adapter mAdapter;
     private OnItemLongClickListener mOnItemLongClickListener;
     private java.util.function.Consumer<NodeInfo> mOnNodeSelected;
@@ -93,6 +94,8 @@ public class LayoutHierarchyView extends MultiLevelListView {
     }
 
     private void init() {
+        palette = com.jdkshen.aijspro.theme.AppThemeRepository.get(getContext()).getPalette();
+        mClickedColor = palette.accentMuted;
         mAdapter = new Adapter();
         setAdapter(mAdapter);
         setNestType(NestType.MULTIPLE);
@@ -121,7 +124,7 @@ public class LayoutHierarchyView extends MultiLevelListView {
 
     private void initPaint() {
         mPaint = new Paint();
-        mPaint.setColor(Color.DKGRAY);
+        mPaint.setColor(palette.textSecondary);
         mPaint.setStyle(Paint.Style.STROKE);
         mPaint.setAntiAlias(true);
         mPaint.setStrokeWidth(3);
@@ -266,9 +269,11 @@ public class LayoutHierarchyView extends MultiLevelListView {
             }
 
             viewHolder.nameView.setText(nodeInfo.getClassName());
-            viewHolder.nameView.setTextColor(nodeInfo.getChildren().isEmpty() ? Color.DKGRAY : 0xffa63333);
+            viewHolder.nameView.setTextColor(nodeInfo.getChildren().isEmpty() ? palette.textPrimary : palette.accent);
             viewHolder.nodeInfo = nodeInfo;
             viewHolder.infoView.setText(rowDetail(nodeInfo));
+            viewHolder.infoView.setTextColor(palette.textSecondary);
+            viewHolder.arrowView.setColorFilter(palette.iconPrimary);
 
             if (itemInfo.isExpandable() && !isAlwaysExpanded()) {
                 viewHolder.arrowView.setVisibility(View.VISIBLE);

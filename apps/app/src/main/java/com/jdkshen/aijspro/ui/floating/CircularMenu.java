@@ -42,14 +42,12 @@ import com.stardust.view.accessibility.LayoutInspector;
 import com.stardust.view.accessibility.NodeInfo;
 
 import org.greenrobot.eventbus.EventBus;
-import org.jdeferred.Deferred;
-import org.jdeferred.impl.DeferredObject;
 
 /**
  * Created by Stardust on 2017/10/18.
  */
 
-public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInspector.CaptureAvailableListener, OperationItemClickListener, FloatingMenuVisibility.Target {
+public class CircularMenu implements Recorder.OnStateChangedListener, OperationItemClickListener, FloatingMenuVisibility.Target {
 
 
     public static class StateChangeEvent {
@@ -84,7 +82,10 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
     private MaterialDialog mSettingsDialog;
     private MaterialDialog mLayoutInspectDialog;
     private String mRunningPackage, mRunningActivity;
-    private Deferred<NodeInfo, Void, Void> mCaptureDeferred;
+    private LayoutInspector.CaptureRequest mCaptureRequest;
+    private LayoutInspector.CaptureAvailableListener mCaptureListener;
+    private MaterialDialog mCaptureProgress;
+    private long mCaptureGeneration;
     private final boolean mInitiallyHidden;
     private boolean mClosed;
 
@@ -99,7 +100,6 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
         setupListeners();
         mRecorder = GlobalActionRecorder.getSingleton(context);
         mRecorder.addOnStateChangedListener(this);
-        AutoJs.getInstance().getLayoutInspector().addCaptureAvailableListener(this);
     }
 
     /**
@@ -132,10 +132,7 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
             } else if (mWindow.isExpanded()) {
                 mWindow.collapse();
             } else {
-                mCaptureDeferred = new DeferredObject<>();
-                if (!AutoJs.getInstance().getLayoutInspector().captureCurrentWindow()) {
-                    mCaptureDeferred.reject(null);
-                }
+                // Capture only when analysis is requested; expanding the launcher needs no Binder dump.
                 mWindow.expand();
             }
         });
@@ -286,39 +283,64 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
     }
 
     private void inspectLayout(Func1<NodeInfo, FloatyWindow> windowCreator) {
+        if (mClosed) return;
         if (mLayoutInspectDialog != null) {
             mLayoutInspectDialog.dismiss();
             mLayoutInspectDialog = null;
         }
-        if (AccessibilityService.Companion.getInstance() == null) {
-            AutoJs.getInstance().getLayoutInspector().captureCurrentWindow();
-            LayoutInspectorDiagnostics.show(mContext, AutoJs.getInstance().getLayoutInspector());
-            return;
-        }
-        if (mCaptureDeferred == null) {
-            mCaptureDeferred = new DeferredObject<>();
-            if (!AutoJs.getInstance().getLayoutInspector().captureCurrentWindow()) {
-                mCaptureDeferred.reject(null);
-            }
-        }
-        MaterialDialog progress = DialogUtils.showDialog(new ThemeColorMaterialDialogBuilder(mContext)
+        cancelCaptureWait();
+        final long generation = ++mCaptureGeneration;
+        final LayoutInspector inspector = AutoJs.getInstance().getLayoutInspector();
+        mCaptureProgress = new ThemeColorMaterialDialogBuilder(mContext)
                 .content(R.string.text_layout_inspector_is_dumping)
                 .canceledOnTouchOutside(false)
+                .cancelable(true)
+                .negativeText(R.string.cancel)
+                .onNegative((dialog, which) -> cancelCaptureWait())
                 .progress(true, 0)
-                .build());
-        mCaptureDeferred.promise()
-                .then(capture -> {
-                    mActionViewIcon.post(() -> {
-                                if (!progress.isCancelled()) {
-                                    progress.dismiss();
-                                    FloatyService.addWindow(windowCreator.call(capture));
-                                }
-                            }
-                    );
-                }, err -> mActionViewIcon.post(() -> {
-                    progress.dismiss();
-                    LayoutInspectorDiagnostics.show(mContext, AutoJs.getInstance().getLayoutInspector());
-                }));
+                .build();
+        mCaptureProgress.setOnCancelListener(dialog -> cancelCaptureWait());
+        DialogUtils.showDialog(mCaptureProgress);
+        LayoutInspector.CaptureAvailableListener listener = capture -> mActionViewIcon.post(() -> {
+            if (mClosed || generation != mCaptureGeneration) return;
+            releaseCaptureUi();
+            if (capture == null) {
+                LayoutInspectorDiagnostics.show(mContext, inspector);
+                return;
+            }
+            try {
+                FloatyWindowManger.addWindow(mContext, windowCreator.call(capture));
+            } catch (RuntimeException error) {
+                android.util.Log.w("CircularMenu", "Cannot open layout inspector", error);
+                Toast.makeText(mContext, "无法打开节点分析，请重试", Toast.LENGTH_LONG).show();
+            }
+        });
+        mCaptureListener = listener;
+        inspector.addCaptureAvailableListener(listener);
+        mCaptureRequest = inspector.captureCurrentWindowRequest();
+        if (mCaptureRequest == null) listener.onCaptureAvailable(null);
+    }
+
+    /** Cancels the owned request before dropping its callback; an old result cannot open a window. */
+    private void cancelCaptureWait() {
+        ++mCaptureGeneration;
+        LayoutInspector.CaptureRequest request = mCaptureRequest;
+        releaseCaptureUi();
+        if (request != null) request.cancel();
+    }
+
+    private void releaseCaptureUi() {
+        if (mCaptureListener != null) {
+            AutoJs.getInstance().getLayoutInspector().removeCaptureAvailableListener(mCaptureListener);
+            mCaptureListener = null;
+        }
+        mCaptureRequest = null;
+        MaterialDialog progress = mCaptureProgress;
+        mCaptureProgress = null;
+        if (progress != null) {
+            progress.setOnCancelListener(null);
+            progress.dismiss();
+        }
     }
 
 
@@ -326,15 +348,6 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
         mWindow.collapse();
         // Phase1：先停 :script/:native 宿主进程里的任务，再停主进程旧引擎任务兜底（toast 计数只反映后者）。
         HostScripts.stopAllScripts(mContext);
-    }
-
-
-    @Override
-    public void onCaptureAvailable(NodeInfo capture) {
-        if (mCaptureDeferred != null && mCaptureDeferred.isPending()) {
-            if (capture == null) mCaptureDeferred.reject(null);
-            else mCaptureDeferred.resolve(capture);
-        }
     }
 
 
@@ -429,7 +442,7 @@ public class CircularMenu implements Recorder.OnStateChangedListener, LayoutInsp
         EventBus.getDefault().post(new StateChangeEvent(STATE_CLOSED, mState));
         mState = STATE_CLOSED;
         if (mRecorder != null) mRecorder.removeOnStateChangedListener(this);
-        AutoJs.getInstance().getLayoutInspector().removeCaptureAvailableListener(this);
+        cancelCaptureWait();
     }
 
 

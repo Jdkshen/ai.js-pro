@@ -187,23 +187,55 @@ class NodeInfo private constructor() {
         }
 
 
+        /**
+         * Captures a live tree with the legacy safety defaults (8 s, 15000 nodes, 256 levels).
+         *
+         * The timeout is cooperative: it is checked between node operations and cannot interrupt a
+         * Binder call that is already blocked.
+         */
         fun capture(context: Context, root: AccessibilityNodeInfo): NodeInfo {
+            return capture(context, root, NodeCaptureBudget(
+                    NodeCaptureBudget.DEFAULT_TIMEOUT_MILLIS,
+                    NodeCaptureBudget.DEFAULT_MAX_NODES,
+                    NodeCaptureBudget.DEFAULT_MAX_DEPTH))
+        }
+
+        /**
+         * Captures [root] with a caller-provided budget. A budget may be shared across windows so
+         * that [NodeCaptureBudget.getVisitedCount] and the node limit cover the whole capture run.
+         *
+         * [NodeCaptureBudget.CaptureLimitException] is a hard stop and is never treated as a
+         * disappeared node.
+         */
+        fun capture(context: Context, root: AccessibilityNodeInfo, budget: NodeCaptureBudget): NodeInfo {
             val resourcesCache = HashMap<String, Resources?>()
             val pending = ArrayDeque<Pair<UiObject, NodeInfo?>>()
             val visited = HashSet<Any>()
+            budget.check()
             pending.add(UiObject.createRoot(root) to null)
             var result: NodeInfo? = null
             // Pro also uses a queue: deep WebView/provider trees must not exhaust the stack.
             while (pending.isNotEmpty()) {
+                budget.check()
                 val (node, parent) = pending.removeFirst()
-                if (!visited.add(node.unwrap())) continue
+                budget.check()
+                val key = node.unwrap()
+                budget.check()
+                if (!visited.add(key)) continue
+                val nodeDepth = node.depth()
+                budget.check()
+                budget.enter(nodeDepth)
+                budget.check()
                 val snapshot = try {
                     NodeInfo(null, node, parent)
+                } catch (error: NodeCaptureBudget.CaptureLimitException) {
+                    throw error
                 } catch (error: RuntimeException) {
                     if (parent == null) throw error
                     Log.d("NodeInfo", "Node disappeared during capture", error)
                     continue
                 }
+                budget.check()
                 snapshot.resourcesLookup = {
                     val pkg = snapshot.packageName
                     if (pkg == null) null else {
@@ -218,12 +250,33 @@ class NodeInfo private constructor() {
                     }
                 }
                 if (parent == null) result = snapshot else parent.children.add(snapshot)
-                for (index in 0 until node.childCount) {
+                budget.check()
+                val childCount = try {
+                    node.childCount
+                } catch (error: NodeCaptureBudget.CaptureLimitException) {
+                    throw error
+                } catch (error: RuntimeException) {
+                    Log.d("NodeInfo", "Child count unavailable during capture", error)
+                    continue
+                }
+                budget.check()
+                if (childCount < 0) {
+                    Log.d("NodeInfo", "Invalid child count $childCount during capture")
+                    continue
+                }
+                // Providers can report corrupt or enormous child counts. Bound the queue against
+                // the shared node budget before requesting any child, rather than trusting it.
+                budget.checkChildCapacity(pending.size, childCount)
+                for (index in 0 until childCount) {
+                    budget.check()
                     try {
                         node.child(index)?.let { pending.add(it to snapshot) }
+                    } catch (error: NodeCaptureBudget.CaptureLimitException) {
+                        throw error
                     } catch (error: RuntimeException) {
                         Log.d("NodeInfo", "Child unavailable during capture", error)
                     }
+                    budget.check()
                 }
             }
             return requireNotNull(result)
