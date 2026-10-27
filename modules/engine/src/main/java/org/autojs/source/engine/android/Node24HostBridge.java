@@ -132,6 +132,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final String mProjectDir;
     /** 对象句柄：id -> Java 对象（强引用；实例随一次 Node 执行回收）。 */
     private final Map<Integer, Object> mObjects = new ConcurrentHashMap<>();
+    private final Node24ResourceScope mOwnedJavaResources = new Node24ResourceScope();
+    private final Map<String, Object> mOwnedNotificationKeys = new ConcurrentHashMap<>();
     private final Map<Object, Integer> mObjectIds = new IdentityHashMap<>();
     private int mNextObjectId = 1;
     /** task-58 轮询式反向事件通道：Java（B 的 UI/生命周期）投递、Node 定时 poll 取走同步派发。 */
@@ -505,10 +507,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 return ok(null);
             }
             case "new":
-                return ok(toWire(newInstance(request)));
+                return ok(toWire(ownNewInstance(request)));
             case "newRef": {
                 // task-136-fix：始终返回对象句柄（避免 String 等被 toWire 成原始值后无法调方法）。
-                Object created = newInstance(request);
+                Object created = ownNewInstance(request);
                 if (created == null) return ok(null);
                 if (created.getClass().isArray()) return ok(toWire(created));
                 return ok(new JSONObject().put("$obj", objectId(created))
@@ -1530,6 +1532,55 @@ public final class Node24HostBridge implements Node24Engine.Host {
         } finally { if (!task.isDone()) task.cancel(false); }
     }
 
+    private Object ownNewInstance(JSONObject request) throws Exception {
+        Object value = newInstance(request);
+        if (value instanceof android.media.MediaPlayer) {
+            android.media.MediaPlayer player = (android.media.MediaPlayer) value;
+            mOwnedJavaResources.track(player, () -> {
+                try { player.setOnCompletionListener(null); player.setOnPreparedListener(null); }
+                finally { player.release(); }
+            });
+        } else if (value instanceof android.media.session.MediaSession) {
+            android.media.session.MediaSession session = (android.media.session.MediaSession) value;
+            mOwnedJavaResources.track(session, () -> {
+                try { session.setActive(false); session.setCallback(null); }
+                finally { session.release(); }
+            });
+        }
+        return value;
+    }
+
+    private void observeOwnedResourceCall(Object target, String name, Object[] args) {
+        if (target instanceof Context && args.length > 0
+                && args[0] instanceof android.content.BroadcastReceiver) {
+            android.content.BroadcastReceiver receiver = (android.content.BroadcastReceiver) args[0];
+            if ("registerReceiver".equals(name)) {
+                Context context = (Context) target;
+                mOwnedJavaResources.track(receiver, () -> context.unregisterReceiver(receiver));
+            } else if ("unregisterReceiver".equals(name)) {
+                mOwnedJavaResources.forget(receiver);
+            }
+        } else if ((target instanceof android.media.MediaPlayer
+                || target instanceof android.media.session.MediaSession) && "release".equals(name)) {
+            mOwnedJavaResources.forget(target);
+        } else if (target instanceof android.app.NotificationManager && args.length >= 2
+                && args[0] instanceof String && args[1] instanceof Number) {
+            // Explicitly scoped tags only: never capture ordinary app/other-script notification IDs.
+            String tag = (String) args[0];
+            if (!tag.matches("aijs\\.node24\\.[0-9a-fA-F-]{36}")) return;
+            int id = ((Number) args[1]).intValue();
+            String key = tag + ":" + id;
+            if ("notify".equals(name) && args.length == 3) {
+                Object identity = mOwnedNotificationKeys.computeIfAbsent(key, ignored -> new Object());
+                android.app.NotificationManager manager = (android.app.NotificationManager) target;
+                mOwnedJavaResources.track(identity, () -> manager.cancel(tag, id));
+            } else if ("cancel".equals(name)) {
+                Object identity = mOwnedNotificationKeys.remove(key);
+                if (identity != null) mOwnedJavaResources.forget(identity);
+            }
+        }
+    }
+
     private Object invokeMethod(Method method, Object target, Object[] args) throws Exception {
         // Parameterless cached JSON calls skip handleJava; keep their UI scope.
         if (Looper.myLooper() != Looper.getMainLooper()
@@ -1538,7 +1589,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
         try {
             method.setAccessible(true);
-            return method.invoke(target, coerce(method.getParameterTypes(), args));
+            Object result = method.invoke(target, coerce(method.getParameterTypes(), args));
+            observeOwnedResourceCall(target, method.getName(), args);
+            return result;
         } catch (InvocationTargetException error) {
             Throwable cause = error.getCause();
             throw new RuntimeException("Java 方法 " + method.getName() + " 抛出异常：" + describeCause(error), cause);
@@ -2170,6 +2223,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
         if (!mClosed.compareAndSet(false, true)) {
             return;
         }
+        mOwnedJavaResources.close();
+        mOwnedNotificationKeys.clear();
         mNoArgCalls.close();
         com.stardust.autojs.engine.node24.NodeUiActivityClient.get().cleanupOwnerIfBound(mOverlayOwner);
         mAndroidContext.release();
