@@ -37,15 +37,22 @@ final class RunningScriptNotifications {
     private volatile boolean closed;
     private volatile long capabilitiesAt;
     private XiaomiFocusSupport support;
-    private String fingerprint="";
+    private final NotificationDeliveryState delivery=new NotificationDeliveryState();
+    private volatile long lastAttemptAt,lastPostedAt;
+    private volatile String lastError="";
     private boolean hadTasks;
 
     RunningScriptNotifications(ForegroundService owner){this.owner=owner;}
     void start(){active=new WeakReference<>(this);worker.scheduleWithFixedDelay(this::poll,0,2,TimeUnit.SECONDS);}
     static String diagnostics(){return diagnostics;}
-    static void refresh(){RunningScriptNotifications n=active.get();if(n!=null&&!n.closed){n.capabilitiesAt=0;n.submit(n::poll);}}
+    static void refresh(){RunningScriptNotifications n=active.get();if(n!=null&&!n.closed){n.capabilitiesAt=0;n.delivery.invalidate();n.submit(n::poll);}}
+    static JSONObject deliveryDiagnostics(){
+        JSONObject result=new JSONObject();RunningScriptNotifications n=active.get();
+        try{result.put("serviceActive",n!=null&&!n.closed);if(n!=null)result.put("lastAttemptAt",n.lastAttemptAt).put("lastPostedAt",n.lastPostedAt).put("lastError",n.lastError);}catch(Exception ignored){}
+        return result;
+    }
     private void submit(Runnable action){if(!closed)try{worker.execute(action);}catch(java.util.concurrent.RejectedExecutionException ignored){}}
-    void close(){closed=true;worker.shutdownNow();main.removeCallbacksAndMessages(null);if(active.get()==this)active.clear();}
+    void close(){closed=true;delivery.invalidate();worker.shutdownNow();main.removeCallbacksAndMessages(null);if(active.get()==this)active.clear();}
 
     boolean handle(Intent intent){
         if(intent==null||(!STOP_ONE.equals(intent.getAction())&&!STOP_ALL.equals(intent.getAction())))return false;
@@ -57,7 +64,7 @@ final class RunningScriptNotifications {
             state.update(HostScripts.runningNotificationTasks(),System.currentTimeMillis());
             if(STOP_ALL.equals(action))HostScripts.stopAllScripts(owner);
             else if(state.contains(token))HostScripts.stopNotificationTask(token);
-            fingerprint="";poll();
+            delivery.invalidate();poll();
         });
         return true;
     }
@@ -72,23 +79,29 @@ final class RunningScriptNotifications {
             JSONObject info=support.toJson().put("runningCount",tasks.size()).put("engines",state.engines()).put("currentName",tasks.isEmpty()?"":tasks.get(0).name).put("elapsed",elapsed);
             diagnostics=info.toString();
             String next=tasks.isEmpty()?"idle":state.details()+"|"+tasks.get(0).token+"|"+tasks.size()+"|"+((now-start)/10000)+"|"+support.toJson();
-            if(next.equals(fingerprint))return;
-            fingerprint=next;
+            long attempt=delivery.begin(next);
+            if(attempt==0)return;
+            lastAttemptAt=now;
             boolean empty=tasks.isEmpty();
-            Notification notification=empty?owner.buildNotification():build(tasks,start,elapsed);
+            final Notification notification;
+            try{notification=empty?owner.buildNotification():build(tasks,start,elapsed);}
+            catch(Exception failure){delivery.failed(attempt);throw failure;}
             main.post(()->{
-                if(closed)return;
+                if(closed||!delivery.isCurrent(attempt))return;
+                try{
                 if(empty&&hadTasks){
                     // Remove the old focus notification, rather than leaving stale island extras
                     // in SystemUI when "always keep foreground service" is enabled.
                     owner.stopForeground(true);
                     owner.startForeground(ForegroundService.NOTIFICATION_ID,notification);
                 }else ((NotificationManager)owner.getSystemService(Context.NOTIFICATION_SERVICE)).notify(ForegroundService.NOTIFICATION_ID,notification);
+                delivery.succeeded(attempt);lastPostedAt=System.currentTimeMillis();lastError="";
                 if(hadTasks!=!empty)Log.i(TAG,"running="+tasks.size()+" protocol="+support.protocol+" focus="+support.focusAllowed);
                 hadTasks=!empty;
                 if(empty&&!com.jdkshen.aijspro.Pref.isForegroundServiceEnabled())ForegroundService.stop(owner);
+                }catch(Exception failure){delivery.failed(attempt);lastError=failure.getClass().getSimpleName()+": "+failure.getMessage();Log.w(TAG,"运行通知发送失败",failure);}
             });
-        }catch(Exception failure){Log.w(TAG,"运行通知刷新失败",failure);}
+        }catch(Exception failure){lastError=failure.getClass().getSimpleName()+": "+failure.getMessage();Log.w(TAG,"运行通知刷新失败",failure);}
     }
 
     private Notification build(List<RunningTaskState.Task> tasks,long start,String elapsed)throws Exception{
@@ -99,10 +112,13 @@ final class RunningScriptNotifications {
                 .setSmallIcon(R.drawable.ic_ai_js_pro_notification).setContentTitle(tasks.size()+" 个脚本运行中")
                 .setContentText(current.engine+" · "+current.name).setStyle(new NotificationCompat.BigTextStyle().bigText(state.details()))
                 .setSubText("AI.js Pro").setContentIntent(details).setWhen(start).setUsesChronometer(true)
-                .setOngoing(true).setOnlyAlertOnce(true).setSilent(true).setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                .setOngoing(true).setOnlyAlertOnce(true).setSound(null).setVibrate(new long[0]).setCategory(NotificationCompat.CATEGORY_PROGRESS)
                 .addAction(R.drawable.ic_close_white_48dp,"停止当前",stopOne)
                 .addAction(R.drawable.ic_close_white_48dp,"停止全部",stopAll);
-        if(support.acceptsPayload()){
+        // Do not setSilent(true): it injects group/silent semantics on supported ROMs.
+        // Sound remains controlled by the user's existing channel; updates alert only once.
+        LiveUpdateSupport.request(builder,tasks.size());
+        if(support.acceptsPayload()&&!LiveUpdateSupport.usePlatformRoute(support.platformDiagnostics)){
             String payload=XiaomiFocusPayload.build(tasks.size(),current.name,state.engines(),elapsed,state.details());
             Bundle extras=new Bundle(),actions=new Bundle(),pictures=new Bundle();
             actions.putParcelable(XiaomiFocusPayload.ACTION_STOP_CURRENT,action("停止当前",stopOne,R.drawable.ic_close_white_48dp));

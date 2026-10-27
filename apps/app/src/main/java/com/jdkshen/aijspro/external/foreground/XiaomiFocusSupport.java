@@ -14,8 +14,10 @@ public final class XiaomiFocusSupport {
     public final int protocol;
     public final Boolean focusAllowed;
     public final String queryError;
-    private XiaomiFocusSupport(boolean notifications,boolean island,int protocol,Boolean focus,String error){
+    public final JSONObject platformDiagnostics;
+    private XiaomiFocusSupport(boolean notifications,boolean island,int protocol,Boolean focus,String error,JSONObject platform){
         notificationsAllowed=notifications;islandSupported=island;this.protocol=protocol;focusAllowed=focus;queryError=error;
+        platformDiagnostics=platform;
     }
     public boolean acceptsPayload(){return protocol>=2||islandSupported;}
     public static XiaomiFocusSupport detect(Context context){
@@ -29,7 +31,7 @@ public final class XiaomiFocusSupport {
                 if(result!=null&&result.containsKey("canShowFocus"))focus=result.getBoolean("canShowFocus",false);else error="系统未返回焦点通知权限";
             }catch(Exception failure){error=failure.getClass().getSimpleName();}
         }
-        return new XiaomiFocusSupport(notifications,island,protocol,focus,error);
+        return new XiaomiFocusSupport(notifications,island,protocol,focus,error,LiveUpdateSupport.capabilities(context));
     }
-    public JSONObject toJson(){JSONObject j=new JSONObject();try{j.put("manufacturer",Build.MANUFACTURER).put("system",Build.VERSION.RELEASE).put("islandSupported",islandSupported).put("focusProtocol",protocol).put("notificationsAllowed",notificationsAllowed).put("focusAllowed",focusAllowed==null?JSONObject.NULL:focusAllowed).put("queryError",queryError);}catch(Exception ignored){}return j;}
+    public JSONObject toJson(){JSONObject j=new JSONObject();try{j.put("schemaVersion",2).put("manufacturer",Build.MANUFACTURER).put("system",Build.VERSION.RELEASE).put("islandSupported",islandSupported).put("focusProtocol",protocol).put("notificationsAllowed",notificationsAllowed).put("focusAllowed",focusAllowed==null?JSONObject.NULL:focusAllowed).put("queryError",queryError).put("platform",platformDiagnostics);}catch(Exception ignored){}return j;}
 }

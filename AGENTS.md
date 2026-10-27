@@ -1,5 +1,8 @@
 # AGENTS.md
 
+> **2026-10-27 超级岛实机修复候选 dev-1270（已装当前USB手机，未发布）**：[证据与验收](docs/reports/2026-10-27_Android16实况通知与超级岛鉴权排查.md)。USB确认旧模板FocusPlugin onAuthFailed；改补Android16标准实况权限/请求/短文案，真实桌面1项/三引擎3项、单停/全停/清理均通过。427项App JVM、release/R8/签名/16KB通过；R2 SHA `1f1f89d5…`，已安装base.apk一致。诊断分用户开关/小米平台注册/实际通知/Native提升；最终标准通道不混用未注册模板，无需Root或播放音乐。公开仍1269；仅DQKFJB59596L45BI（dash/2602BRT18C），K40/MI8未动。
+
+
 > **2026-10-27 当前发布 dev-1269（LAN/GitHub latest已完成）**：[发布记录](docs/reports/2026-10-27_dev1269发布.md)。三引擎统一运行通知/超级岛载荷与权限检测，任务状态页、单项/全部停止、幽灵计数修复；包含近期Node UI调度/元数据缓存与按执行资源回收。878项JVM通过；release/R8/签名一致/16KB/Retrofit通过，135.73MiB，SHA `324e5b3a…`。MI8完整LAN下载摘要一致但未安装；GitHub远端digest/代理清单通过，当前网络代理大包150秒超时，优先LAN/Downloads；HyperOS3实际显示待用户验证，K40未动。publish可显式指定真实新版本且保留最低版本保护。
 
 
