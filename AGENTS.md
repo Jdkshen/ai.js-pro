@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **当前发布 dev-1281（2026-10-28，仅 LAN）**：[发布记录](docs/reports/2026-10-28_dev1281发布.md)。发布 1280 已验的节点 API 修复，版本递增以便测试机覆盖更新；142,412,154 字节，SHA `60d2130b…`。签名/22 ELF 16KB/Retrofit/手机清单200与完整HTTP下载摘要通过；Downloads 有 APK。按用户要求后续再做功能回归，本轮未安装1281、未动K40；大树分页、BFS组合、跨布局身份仍待完善。
+
 > **2026-10-28 节点 API 后续候选 dev-1280（MI8 已验，未发布）**：[隔离回归与后续对齐](docs/reports/2026-10-28_节点API隔离回归与后续对齐.md)。基于 DP 已提交 1279，补混合筛选晚匹配、Java Pattern 批处理、真实宿主 BFS/DFS、filter/addFilter、范围读数与自身子树查询；原生 QuickJS 保留谓词原始错误，进度参数去宽松转换。1,009 JVM + 50 Node、六入口 150 项、MCP 8 项及三套只读示例真机通过；文档 771 条可由 MCP 读取。APK SHA `54abf19f…`，MI8 已装；LAN 仍 1279，K40 未动。BFS 与本地条件组合、大树完整性/分页和稳定身份仍有边界，不能称全量高级版完全等价。
 
 > **当前发布 dev-1279（2026-10-28，仅 LAN）**：[三引擎节点 API 复核](docs/reports/2026-10-28_三引擎节点API复核与修复.md)：接手 GPT 未提交工作，修复 Rhino UI 线程停止信号、RemoteUiObject/RemoteUiSelector 属性动作/遍历、NodeActionArguments 严格校验、密码脱敏/setText 上限、MCP 嵌套 selector/index/exact；956 JVM + 44 Node 契约通过。142,401,636 字节，SHA `c8c91cfb…`；LAN 已发布，MI8 已装。
