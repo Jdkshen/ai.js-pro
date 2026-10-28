@@ -230,3 +230,26 @@ Rhino、QuickJS 的普通脚本经过 `:script` 时，返回 `RemoteUiObject`，
 ### 仍需按能力区分
 
 自定义 JavaScript 谓词、查询算法、正则选项、Node Promise/方法式返回类型以及集合二次过滤，并不能仅按同名函数判断等价。本轮的跨进程实测结论以报告里的具体用例为准；尚未逐项验证的接口不标记为完全兼容高级版。
+
+
+## 节点 API 后续对齐（dev-1280 候选）
+
+- `getRangeInfo()` 在三引擎均提供 `getMin()/getMax()/getCurrent()/getType()`。Node 还可读取属性式 `node.rangeInfo.min/max/current/type`。非范围控件返回 `null`。它是查询时的快照；执行 `setProgress()` 后重新查询再读取，可核对真正的进度。
+- `filter(fn)/addFilter(fn)` 在 Rhino、QuickJS 的隔离进程补齐，回调收到方法式节点，例如 `n.text()`；Node 的同名方法也接收方法式节点，原有 `where(fn)` 继续接收属性式 `NodeView`。谓词在脚本引擎内对快照运行，不向主进程传递任意 JS 函数；抛错会向调用方传播。
+- `algorithm("BFS"/"DFS")` 大小写不敏感。基本条件查询由宿主真正按层遍历/深度遍历，影响第一个匹配结果。未知算法报错。BFS 暂不能与本地 JS 谓词、JS RegExp、范围快照组合；这些组合会明确报错，不会伪装成 DFS 结果。
+- 宿主条件与本地条件组合、以及 `node.find(...)`，不再先取 500 个全局候选再过滤。`textMatches + where` 使用批量 Java Pattern 完整匹配，保留 `(?i)`、`\Q...\E` 等 Java 语法。每批最多 256 个文本、共 65,536 字符，正则长度最多 32,768 字符。
+- `node.find/findOne/findByText/findByViewId` 的范围包含节点自身，以对齐原生 UiObject；`select(...).from(parent)` 仍只搜索严格后代。
+- Node/QuickJS/MCP 在桥接入口拒绝错误 JSON 参数类型；Rhino 保留 Java 互操作的参数转换。数值范围统一校验：选择区间非负且 start<=end、滚动行列非负、progress 必须为有限 float。QuickJS 不再先把字符串/布尔值转为 progress 数值。
+
+```js
+// Rhino / QuickJS 同步查询；Node 可用 require('accessibility').select().desc(...).
+const slider = desc('音量').findOnce();
+if (slider && slider.setProgress(66)) {
+  const current = desc('音量').findOnce().getRangeInfo();
+  console.log(current ? current.getCurrent() : '目标不提供范围信息');
+}
+```
+
+查询仍受宿主遍历预算约束（节点/深度/5 秒/约 200 KiB JSON；直接查询最多 500 项）。本轮不把极大树的部分快照称为完整结果；有序快照和分页仍待完善。三引擎实测与具体边界见后续复核报告。
+
+三套同名只读示例位于“示例 → 各引擎 → 三引擎统一示例 → 节点查询进阶_只读.js”。它们展示 DFS/BFS、自定义过滤和范围读取，空结果会如实显示，不把没有目标控件当作动作成功。

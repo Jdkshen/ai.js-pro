@@ -192,6 +192,39 @@ public final class RemoteUiObject {
     public boolean accessibilityFocused() { return mNode.optBoolean("accessibilityFocused", false); }
     public boolean contextClickable() { return mNode.optBoolean("contextClickable", false); }
     public boolean contentInvalid() { return mNode.optBoolean("contentInvalid", false); }
+    public RangeInfo getRangeInfo() {
+        if (!mNode.has("rangeInfo") || mNode.isNull("rangeInfo")) return null;
+        try {
+            JSONObject range = mNode.getJSONObject("rangeInfo");
+            Object rawType=range.get("type");
+            if (!(rawType instanceof Number)) throw new IllegalArgumentException("rangeInfo.type 必须是数字");
+            double type=((Number)rawType).doubleValue();
+            if (!Double.isFinite(type) || type < 0 || type > Integer.MAX_VALUE || type != Math.floor(type))
+                throw new IllegalArgumentException("rangeInfo.type 不是非负整数");
+            return new RangeInfo((int)type, rangeNumber(range,"min"), rangeNumber(range,"max"), rangeNumber(range,"current"));
+        } catch (Exception error) { throw new ScriptException("无效 rangeInfo 数据：" + error.getMessage(), error); }
+    }
+    private static float rangeNumber(JSONObject range, String key) throws Exception {
+        Object raw = range.get(key);
+        if (!(raw instanceof Number)) throw new IllegalArgumentException("rangeInfo."+key+" 必须是数字");
+        double value = ((Number)raw).doubleValue();
+        if (!Double.isFinite(value) || Math.abs(value) > Float.MAX_VALUE)
+            throw new IllegalArgumentException("rangeInfo."+key+" 超出有限 float 范围");
+        return (float)value;
+    }
+    /** Snapshot equivalent of AccessibilityNodeInfoCompat.RangeInfoCompat. */
+    public static final class RangeInfo {
+        private final int type;
+        private final float min, max, current;
+        public RangeInfo(int type, float min, float max, float current) {
+            this.type=type; this.min=min; this.max=max; this.current=current;
+        }
+        public int getType() { return type; }
+        public float getMin() { return min; }
+        public float getMax() { return max; }
+        public float getCurrent() { return current; }
+    }
+
     public boolean isHierarchically() { return mNode.optBoolean("isHierarchically", false); }
     public boolean multiLine() { return mNode.optBoolean("multiLine", false); }
     public boolean dismissable() { return mNode.optBoolean("dismissable", false); }

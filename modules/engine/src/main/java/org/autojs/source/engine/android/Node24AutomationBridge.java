@@ -66,6 +66,10 @@ public final class Node24AutomationBridge implements AutoCloseable {
     /** setTextNode 文本上限：JS 字符数 32Ki，UTF-8 编码 64KiB；超限明确报错，不截断。 */
     private static final int MAX_SET_TEXT_CHARS = 32_768;
     private static final int MAX_SET_TEXT_UTF8_BYTES = 64 * 1024;
+    /** matchTextPatternBatch 的 pattern/批次上限；批次是纯计算，不经过 Binder/节点树。 */
+    private static final int MAX_BATCH_PATTERN_CHARS = 32_768;
+    private static final int MAX_BATCH_TEXTS = 256;
+    private static final int MAX_BATCH_TEXT_CHARS = 64 * 1024;
 
     private final Context mContext;
     private final Node24Images mImages;
@@ -114,6 +118,9 @@ public final class Node24AutomationBridge implements AutoCloseable {
                 case "takeScreenshot":
                     return ok(takeScreenshot(request.optInt("maxWidth", 0),
                             request.optInt("maxHeight", 0)));
+                case "matchTextPatternBatch":
+                    // 纯计算：不连接 Backend/A11y；异常/未就绪时也可安全用于本地文本判定。
+                    return matchTextPatternBatch(request);
                 case "findNodes":
                 case "getLatestNodeDump":
                 case "getNodeInfo":
@@ -125,8 +132,9 @@ public final class Node24AutomationBridge implements AutoCloseable {
                 default:
                     return error("automation 不支持的操作：" + action
                             + "（支持 status/openSettings/click/longClick/press/swipe/gesture/"
-                            + "back/home/recents/notifications/takeScreenshot/findNodes/"
-                            + "getNodeInfo/getLatestNodeDump/clickNode/longClickNode/setTextNode/nodeAction）");
+                            + "back/home/recents/notifications/takeScreenshot/matchTextPatternBatch/"
+                            + "findNodes/getNodeInfo/getLatestNodeDump/clickNode/longClickNode/"
+                            + "setTextNode/nodeAction）");
             }
         } catch (Throwable failure) {
             Log.w(TAG, "automation action failed: " + request, failure);
@@ -239,6 +247,84 @@ public final class Node24AutomationBridge implements AutoCloseable {
         } catch (JSONException error) {
             throw new IllegalArgumentException("gesture 参数编码失败：" + error.getMessage(), error);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // matchTextPatternBatch：纯计算，不访问 Backend/A11y/节点树
+    // ------------------------------------------------------------------
+
+    /**
+     * 批量 Java 正则匹配。JS 侧把本地节点 dump 的文本一次送来，这里用同一个编译后的
+     * {@link Pattern} 逐条做完整匹配（{@link java.util.regex.Matcher#matches()}），
+     * 保持 {@code textMatches} 的 Java Pattern 语义，避免逐节点跨进程查询。
+     *
+     * <p>该方法不调用 Backend/AccessibilityService，可在无后端（纯 JVM 测试）时使用；
+     * 参数错误与非法正则都返回现有 error envelope，不伪装成“没有匹配”。
+     */
+    private static JSONObject matchTextPatternBatch(JSONObject request) {
+        try {
+            String source = requireBatchPattern(request);
+            JSONArray texts = requireBatchTexts(request);
+            // 只编译一次；matches() 是完整匹配，不是 contains/find。
+            Pattern pattern = Pattern.compile(source);
+            JSONArray results = new JSONArray();
+            for (int i = 0; i < texts.length(); i++) {
+                // 上面已严格校验每项都是 String；opt 避免为不可达的 get() 声明 JSONException。
+                results.put(pattern.matcher((String) texts.opt(i)).matches());
+            }
+            return ok(results);
+        } catch (PatternSyntaxException failure) {
+            return error("matchTextPatternBatch.pattern 不是合法的 Java 正则表达式："
+                    + describe(failure));
+        } catch (IllegalArgumentException failure) {
+            return error(describe(failure));
+        }
+    }
+
+    private static String requireBatchPattern(JSONObject request) {
+        Object raw = request == null ? null : request.opt("pattern");
+        if (!(raw instanceof String)) {
+            throw new IllegalArgumentException(
+                    "matchTextPatternBatch.pattern 必须是字符串，收到：" + valueType(raw));
+        }
+        String pattern = (String) raw;
+        if (pattern.length() > MAX_BATCH_PATTERN_CHARS) {
+            throw new IllegalArgumentException("matchTextPatternBatch.pattern 过长（"
+                    + pattern.length() + " 字符，上限 " + MAX_BATCH_PATTERN_CHARS + "）");
+        }
+        return pattern;
+    }
+
+    /**
+     * texts 必须是 JSON 数组，最多 {@value #MAX_BATCH_TEXTS} 项，每项必须是 String（不做
+     * 数字/对象/null 的宽松转换），且所有文本字符数之和不超过
+     * {@value #MAX_BATCH_TEXT_CHARS}。
+     */
+    private static JSONArray requireBatchTexts(JSONObject request) {
+        Object raw = request == null ? null : request.opt("texts");
+        if (!(raw instanceof JSONArray)) {
+            throw new IllegalArgumentException(
+                    "matchTextPatternBatch.texts 必须是 JSON 数组，收到：" + valueType(raw));
+        }
+        JSONArray texts = (JSONArray) raw;
+        if (texts.length() > MAX_BATCH_TEXTS) {
+            throw new IllegalArgumentException("matchTextPatternBatch.texts 过长（"
+                    + texts.length() + " 项，上限 " + MAX_BATCH_TEXTS + " 项）");
+        }
+        long totalChars = 0L;
+        for (int i = 0; i < texts.length(); i++) {
+            Object value = texts.opt(i);
+            if (!(value instanceof String)) {
+                throw new IllegalArgumentException("matchTextPatternBatch.texts[" + i
+                        + "] 必须是字符串，收到：" + valueType(value));
+            }
+            totalChars += ((String) value).length();
+        }
+        if (totalChars > MAX_BATCH_TEXT_CHARS) {
+            throw new IllegalArgumentException("matchTextPatternBatch.texts 总长度过长（"
+                    + totalChars + " 字符，上限 " + MAX_BATCH_TEXT_CHARS + "）");
+        }
+        return texts;
     }
 
     /**
@@ -403,6 +489,11 @@ public final class Node24AutomationBridge implements AutoCloseable {
                 case "className":
                 case "packageName":
                     requireString(value, "selector." + key);
+                    break;
+                case "algorithm":
+                    String algorithm=requireString(value,"selector.algorithm");
+                    if (!"BFS".equalsIgnoreCase(algorithm) && !"DFS".equalsIgnoreCase(algorithm))
+                        throw new IllegalArgumentException("selector.algorithm 只支持 BFS/DFS");
                     break;
                 case "textMatches":
                     validateTextMatches(requireString(value, "selector.textMatches"));

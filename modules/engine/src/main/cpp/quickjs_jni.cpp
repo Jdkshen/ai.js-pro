@@ -9584,6 +9584,12 @@ const char kBootstrapScript[] = R"JS(
             case 's': return result.v;
             case 'n': return null;
             case 'r': return wrapAutomatorRect(result.v);
+            case 'g': {
+                var info=result.v;
+                info.getMin=function(){return info.min;};info.getMax=function(){return info.max;};
+                info.getCurrent=function(){return info.current;};info.getType=function(){return info.type;};
+                return Object.freeze(info);
+            }
             case 'a': return result.v.map(function (item) {
                 return item.k === 'c' ? wrapAutomatorCollection(item.v) : wrapAutomatorObject(item.v);
             });
@@ -9663,7 +9669,7 @@ const char kBootstrapScript[] = R"JS(
             return decodeAutomatorResult(automatorCall(handle, 'setSelection', [start, end]));
         };
         selector.setProgress = function (value) {
-            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [Number(value)]));
+            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [value]));
         };
         selector.scrollTo = function (row, column) {
             return decodeAutomatorResult(automatorCall(handle, 'scrollTo', [row, column]));
@@ -9735,6 +9741,7 @@ const char kBootstrapScript[] = R"JS(
             AUTOMATOR_NODE_ACTIONS).forEach(function (name) {
             object[name] = function () { return decodeAutomatorResult(automatorCall(handle, name)); };
         });
+        object.getRangeInfo = function () { return decodeAutomatorResult(automatorCall(handle, 'getRangeInfo')); };
         object.bounds = function () { return decodeAutomatorResult(automatorCall(handle, 'bounds')); };
         object.boundsInParent = function () {
             return decodeAutomatorResult(automatorCall(handle, 'boundsInParent'));
@@ -9746,7 +9753,7 @@ const char kBootstrapScript[] = R"JS(
             return decodeAutomatorResult(automatorCall(handle, 'setSelection', [start, end]));
         };
         object.setProgress = function (value) {
-            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [Number(value)]));
+            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [value]));
         };
         object.scrollTo = function (row, column) {
             return decodeAutomatorResult(automatorCall(handle, 'scrollTo', [row, column]));
@@ -9790,7 +9797,7 @@ const char kBootstrapScript[] = R"JS(
             return decodeAutomatorResult(automatorCall(handle, 'setSelection', [start, end]));
         };
         collection.setProgress = function (value) {
-            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [Number(value)]));
+            return decodeAutomatorResult(automatorCall(handle, 'setProgress', [value]));
         };
         collection.scrollTo = function (row, column) {
             return decodeAutomatorResult(automatorCall(handle, 'scrollTo', [row, column]));

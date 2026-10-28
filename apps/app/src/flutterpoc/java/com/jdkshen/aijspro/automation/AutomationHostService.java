@@ -71,7 +71,7 @@ import java.util.regex.PatternSyntaxException;
  * <p><b>selectorJson</b>（字段与 UiSelector 对齐，AND 组合；未知字段忽略）：
  * {@code id / text / textContains / textStartsWith / textMatches(正则整串匹配) /
  * desc / descContains / className / packageName / clickable / enabled / scrollable /
- * depth / index / bounds{left,top,right,bottom}}。
+ * depth / index / bounds{left,top,right,bottom} / algorithm("BFS"|"DFS"，默认 DFS，大小写不敏感)}。
  *
  * <p><b>实现扩展（不改 AIDL/契约，供 :script 侧按 path 二次定位）</b>：selectorJson 额外支持
  * {@code path} 字段（int 数组，如 {@code {"path":[1,0]}}），语义是「节点在根窗口树里的子下标路径
@@ -94,6 +94,7 @@ import java.util.regex.PatternSyntaxException;
  *
  * <p><b>getLatestNodeDump</b> 返回**拍平的 JSON 数组**（DFS 前序，元素格式同上）：
  * 根窗口节点是 {@code path=[]} 的那个元素；{@code :script} 侧可直接在本地做节点过滤/属性读取。
+ * {@code algorithm} 只影响 findNodes/getNodeInfo/节点动作的遍历顺序，dump 始终为 DFS 前序。
  * 结果按 {@value #NODE_DUMP_TTL_MS}ms 短 TTL 缓存（spec §5），避免一次选择器操作连续拉整棵树。
  *
  * <p><b>坐标约定</b>（spec 附录 C）：AIDL 的 x/y 一律是设备像素；:script 侧负责把脚本逻辑坐标
@@ -883,8 +884,31 @@ public class AutomationHostService extends android.app.Service {
         return null;
     }
 
+    /** BFS 纯遍历辅助的节点访问器；异常语义与下面 DFS 的 try/catch 保持一致。 */
+    private static final SelectorTraversal.Tree<AccessibilityNodeInfo> NODE_TREE =
+            new SelectorTraversal.Tree<AccessibilityNodeInfo>() {
+                @Override
+                public int childCount(AccessibilityNodeInfo node) {
+                    try {
+                        return node.getChildCount();
+                    } catch (Throwable error) {
+                        return 0;
+                    }
+                }
+
+                @Override
+                public AccessibilityNodeInfo child(AccessibilityNodeInfo node, int index) {
+                    try {
+                        return node.getChild(index);
+                    } catch (Throwable error) {
+                        return null;
+                    }
+                }
+            };
+
     /**
-     * DFS 前序遍历匹配节点（与 UiSelector 默认 DFS 顺序一致），最多收集 max 个。
+     * 按 spec 选择的算法遍历匹配节点：默认 DFS 前序（与 UiSelector 默认顺序一致），
+     * algorithm=BFS 时逐层队列遍历；最多收集 max 个。
      * 遍历有节点数/深度/截止时间三重上限，超限返回已收集的部分结果。
      */
     private static List<NodeMatch> findMatches(AccessibilityService service, SelectorSpec spec,
@@ -893,6 +917,16 @@ public class AutomationHostService extends android.app.Service {
         if (max <= 0) return matches;
         AccessibilityNodeInfo root = activeRoot(service);
         if (root == null) return matches;
+        if (spec.bfs) {
+            List<SelectorTraversal.Match<AccessibilityNodeInfo>> found =
+                    SelectorTraversal.findMatches(root, NODE_TREE, spec::matches, max,
+                            MAX_DEPTH, MAX_TRAVERSE_NODES,
+                            () -> SystemClock.uptimeMillis() > deadline);
+            for (SelectorTraversal.Match<AccessibilityNodeInfo> match : found) {
+                matches.add(new NodeMatch(match.node, match.path, match.depth));
+            }
+            return matches;
+        }
         int[] path = new int[MAX_DEPTH];
         traverse(root, 0, -1, path, spec, matches, max, deadline, new int[]{0});
         return matches;
@@ -1047,6 +1081,11 @@ public class AutomationHostService extends android.app.Service {
         json.put("contentInvalid", node.isContentInvalid());
         json.put("multiLine", node.isMultiLine());
         json.put("isHierarchically", node.getCollectionInfo() != null && node.getCollectionInfo().isHierarchical());
+        AccessibilityNodeInfo.RangeInfo range = node.getRangeInfo();
+        if (range != null && Float.isFinite(range.getMin()) && Float.isFinite(range.getMax()) && Float.isFinite(range.getCurrent())) {
+            json.put("rangeInfo", new JSONObject().put("type", range.getType()).put("min", range.getMin())
+                    .put("max", range.getMax()).put("current", range.getCurrent()));
+        } else json.put("rangeInfo", JSONObject.NULL);
         AccessibilityNodeInfo.CollectionItemInfo item = node.getCollectionItemInfo();
         AccessibilityNodeInfo.CollectionInfo collection = node.getCollectionInfo();
         json.put("row", item == null ? -1 : item.getRowIndex());
@@ -1342,6 +1381,8 @@ public class AutomationHostService extends android.app.Service {
         private Rect bounds;
         /** 实现扩展：根窗口树里的子下标路径（getLatestNodeDump/findNodes 的 path 原样回传）。 */
         private int[] path;
+        /** algorithm=BFS 时逐层遍历；默认 false=DFS（保持旧行为）。 */
+        private boolean bfs;
 
         static SelectorSpec parse(String selectorJson) throws JSONException, PatternSyntaxException {
             SelectorSpec spec = new SelectorSpec();
@@ -1385,6 +1426,15 @@ public class AutomationHostService extends android.app.Service {
                     parsedPath[i] = pathJson.getInt(i);
                 }
                 spec.path = parsedPath;
+            }
+            if (json.has("algorithm")) {
+                String algorithm = json.optString("algorithm", null);
+                try {
+                    spec.bfs = SelectorTraversal.ALGORITHM_BFS.equals(
+                            SelectorTraversal.canonicalAlgorithm(algorithm));
+                } catch (IllegalArgumentException error) {
+                    throw new JSONException("selectorJson algorithm 无效：" + algorithm);
+                }
             }
             return spec;
         }
@@ -1435,6 +1485,7 @@ public class AutomationHostService extends android.app.Service {
         public String toString() {
             return "SelectorSpec{id=" + id + ", text=" + text + ", desc=" + desc
                     + ", className=" + className + ", depth=" + depth
+                    + ", algorithm=" + (bfs ? "BFS" : "DFS")
                     + ", path=" + java.util.Arrays.toString(path) + "}";
         }
     }

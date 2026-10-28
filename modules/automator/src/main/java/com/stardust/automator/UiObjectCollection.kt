@@ -176,6 +176,7 @@ class UiObjectCollection private constructor(private val mNodes: List<UiObject?>
     }
 
     fun setSelection(s: Int, e: Int): Boolean {
+        require(s >= 0 && e >= s) { "setSelection requires 0 <= start <= end" }
         return performAction(ACTION_SET_SELECTION,
                 ActionArgument.IntActionArgument(ACTION_ARGUMENT_SELECTION_START_INT, s),
                 ActionArgument.IntActionArgument(ACTION_ARGUMENT_SELECTION_END_INT, e))
@@ -187,12 +188,14 @@ class UiObjectCollection private constructor(private val mNodes: List<UiObject?>
     }
 
     fun setProgress(value: Float): Boolean {
+        require(value.isFinite()) { "setProgress requires a finite float" }
         return performAction(ACTION_SET_PROGRESS.id,
                 ActionArgument.FloatActionArgument(ACTION_ARGUMENT_PROGRESS_VALUE, value))
 
     }
 
     fun scrollTo(row: Int, column: Int): Boolean {
+        require(row >= 0 && column >= 0) { "scrollTo requires non-negative row/column" }
         return performAction(ACTION_SCROLL_TO_POSITION.id,
                 ActionArgument.IntActionArgument(ACTION_ARGUMENT_ROW_INT, row),
                 ActionArgument.IntActionArgument(ACTION_ARGUMENT_COLUMN_INT, column))

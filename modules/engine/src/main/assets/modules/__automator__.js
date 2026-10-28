@@ -300,7 +300,7 @@ module.exports = function(runtime, global){
             'id', 'idContains', 'idStartsWith', 'idEndsWith', 'idMatches',
             'className', 'classNameContains', 'classNameStartsWith', 'classNameEndsWith', 'classNameMatches',
             'packageName', 'packageNameContains', 'packageNameStartsWith', 'packageNameEndsWith', 'packageNameMatches',
-            'clickable', 'enabled', 'scrollable', 'depth', 'bounds', 'algorithm'];
+            'clickable', 'enabled', 'scrollable', 'depth', 'bounds', 'algorithm', 'filter', 'addFilter'];
         global.selector = function () { return __remoteSelector__(); };
         remoteSelectorMethods.forEach(function (method) {
             global[method] = function () {

@@ -22,8 +22,8 @@
   var MAX_TIMER_DELAY = 2147483647;
   var HOST_FIELDS = ['id', 'text', 'textContains', 'textStartsWith', 'textMatches', 'desc',
     'descContains', 'className', 'packageName', 'clickable', 'enabled', 'scrollable',
-    'depth', 'index', 'bounds', 'path'];
-  var ALL_FIELDS = HOST_FIELDS.concat(['childCount', 'editable', 'indexInParent', 'checkable', 'checked', 'focusable', 'focused', 'selected', 'longClickable', 'visibleToUser', 'password', 'accessibilityFocused', 'contextClickable', 'dismissable', 'contentInvalid', 'multiLine', 'drawingOrder', 'row', 'column', 'rowCount', 'columnCount', 'rowSpan', 'columnSpan']);
+    'depth', 'index', 'bounds', 'path', 'algorithm'];
+  var ALL_FIELDS = HOST_FIELDS.concat(['childCount', 'editable', 'indexInParent', 'checkable', 'checked', 'focusable', 'focused', 'selected', 'longClickable', 'visibleToUser', 'password', 'accessibilityFocused', 'contextClickable', 'dismissable', 'contentInvalid', 'multiLine', 'drawingOrder', 'row', 'column', 'rowCount', 'columnCount', 'rowSpan', 'columnSpan', 'isHierarchically']);
   var REGEXP_FIELDS = ['id', 'text', 'desc', 'className', 'packageName'];
   var STRING_FIELDS = ['textContains', 'textStartsWith', 'textMatches', 'descContains'];
   var BOOLEAN_FIELDS = ['clickable', 'enabled', 'scrollable', 'editable', 'checkable', 'checked', 'focusable', 'focused', 'selected', 'longClickable', 'visibleToUser', 'password', 'accessibilityFocused', 'contextClickable', 'dismissable', 'contentInvalid', 'multiLine', 'isHierarchically'];
@@ -306,6 +306,11 @@
     return out;
   }
   function parseSpecField(key, value) {
+    if(key==='algorithm') {
+      if(typeof value!=='string' || !/^(BFS|DFS)$/i.test(value)) throw typeError('algorithm 只支持 BFS/DFS');
+      return value.toUpperCase();
+    }
+
     if (REGEXP_FIELDS.indexOf(key) >= 0) {
       if (typeof value === 'string') { return value; }
       if (isRegExp(value)) { return copyRegExp(value); }
@@ -815,6 +820,22 @@
       y: bounds.centerY
     }));
   }
+  function rangeInfoOf(raw) {
+    if (raw.rangeInfo == null) return null;
+    var r=raw.rangeInfo;
+    if (typeof r !== 'object' || Array.isArray(r)) throw apiError('rangeInfo 数据非法');
+    ['min','max','current','type'].forEach(function(k){
+      if(typeof r[k] !== 'number' || !Number.isFinite(r[k]) || Math.abs(r[k])>3.4028234663852886e38)
+        throw apiError('rangeInfo.'+k+' 必须是有限数字');
+    });
+    if(r.type<0 || r.type>2147483647 || Math.floor(r.type)!==r.type) throw apiError('rangeInfo.type 必须是非负32位整数');
+    var info={min:r.min,max:r.max,current:r.current,type:r.type};
+    info.getMin=function(){return info.min;};info.getMax=function(){return info.max;};
+    info.getCurrent=function(){return info.current;};info.getType=function(){return info.type;};
+    return Object.freeze(info);
+  }
+  Object.defineProperty(NodeView.prototype,'rangeInfo',{enumerable:true,get:function(){return rangeInfoOf(this._raw);}});
+  NodeView.prototype.getRangeInfo=Node.prototype.getRangeInfo=function(){return rangeInfoOf(this._raw);};
   function installNodeActions(proto) {
     proto.click = function () { return performNodeAction(this, 'clickNode'); };
     proto.clickCenter = function () { return performClickCenter(this); };
@@ -862,12 +883,13 @@
   function installFindHelpers(proto) {
     var propertyView = proto === NodeView.prototype;
     proto.find = function (selector) {
-      var query = select(selector).from(this);
-      return propertyView ? nodeCollection(executeAll(snapshotState(query))) : query.find();
+      var state=snapshotState(select(selector).from(this));state.includeFromRoot=true;
+      var nodes=executeAll(state);
+      return nodeCollection(propertyView ? nodes : nodes.map(toNode));
     };
     proto.findOne = function (selector) {
-      var query = select(selector).from(this);
-      return propertyView ? executeAt(snapshotState(query), 0) : query.findOnce(0);
+      var state=snapshotState(select(selector).from(this));state.includeFromRoot=true;
+      var node=executeAt(state,0);return propertyView ? node : node ? toNode(node) : null;
     };
     proto.findByText = function (text) { return this.find({ textContains: String(text) }); };
     proto.findByViewId = function (id) { return this.find({ id: String(id) }); };
@@ -936,27 +958,43 @@
     for (var i = 0; i < parents.length; i++) { paths.push(rawPath(parents[i]._raw).slice()); }
     return paths;
   }
-  function evaluateState(state, dump) {
-    var parentPaths = state.from ? collectParentPaths(state.from, dump) : null;
-    // Java Pattern syntax (e.g. (?i), \Q...\E) must keep the same semantics
-    // when combined with a local predicate or JS RegExp. Intersect by path.
-    var javaPaths = null;
-    if (Object.prototype.hasOwnProperty.call(state.spec, 'textMatches')) {
-      javaPaths = Object.create(null);
-      var javaNodes = normalizeNodes(automation('findNodes', { selector: hostSpec(state.spec) }), 'findNodes');
-      for (var n = 0; n < javaNodes.length; n++) {
-        javaPaths[JSON.stringify(rawPath(javaNodes[n]))] = true;
+  function matchDumpTextPattern(pattern, dump) {
+    var result=[], offset=0;
+    do {
+      var texts=[], chars=0;
+      while(offset+texts.length<dump.length && texts.length<256) {
+        var value=rawString(dump[offset+texts.length],'text');
+        if(value.length>65536) throw rangeError('textMatches 单节点文本超过64K字符');
+        if(texts.length && chars+value.length>65536) break;
+        texts.push(value);chars+=value.length;
       }
-    }
+      var matched=automation('matchTextPatternBatch',{pattern:pattern,texts:texts});
+      if(!Array.isArray(matched) || matched.length!==texts.length) throw apiError('textMatches 批量返回值非法');
+      for(var i=0;i<matched.length;i++) {
+        if(typeof matched[i]!=='boolean') throw apiError('textMatches 批量返回值不是boolean');
+        result.push(matched[i]);
+      }
+      offset+=texts.length;
+    } while(offset<dump.length);
+    return result;
+  }
+  function evaluateState(state, dump) {
+    if(state.spec.algorithm==='BFS') throw apiError('BFS 暂不能与本地谓词、JS正则或范围快照组合；请使用宿主可下发条件');
+
+    var parentPaths = state.from ? collectParentPaths(state.from, dump) : null;
+    // Preserve Java Pattern semantics over the FULL retained snapshot. Host findNodes
+    // caps candidates before local predicates, so intersecting its paths loses late matches.
+    var javaMatches=Object.prototype.hasOwnProperty.call(state.spec,'textMatches')
+      ? matchDumpTextPattern(state.spec.textMatches,dump) : null;
     var result = [];
     for (var i = 0; i < dump.length; i++) {
       var raw = dump[i];
-      if (javaPaths && !javaPaths[JSON.stringify(rawPath(raw))]) { continue; }
-      if (!matchesSpec(raw, state.spec, dump, javaPaths != null)) { continue; }
+      if (javaMatches && !javaMatches[i]) { continue; }
+      if (!matchesSpec(raw, state.spec, dump, javaMatches != null)) { continue; }
       var matchedParent = null;
       if (parentPaths) {
         for (var p = 0; p < parentPaths.length; p++) {
-          if (isStrictDescendant(rawPath(raw), parentPaths[p])) { matchedParent = parentPaths[p]; break; }
+          if (isStrictDescendant(rawPath(raw), parentPaths[p]) || (state.includeFromRoot && pathPrefixMatches(rawPath(raw),parentPaths[p]))) { matchedParent = parentPaths[p]; break; }
         }
         if (!matchedParent) { continue; }
       }
@@ -1152,6 +1190,12 @@
   UiSelector.prototype.atLeast = function (count) {
     this._atLeast = requireInt(count, 'atLeast', 0);
     return this;
+  };
+  UiSelector.prototype.algorithm=function(value) {this._spec.algorithm=parseSpecField('algorithm',value);return this;};
+  // Native-style predicates receive method-style nodes; where() keeps property-style NodeView.
+  UiSelector.prototype.filter=UiSelector.prototype.addFilter=function(fn) {
+    if(typeof fn!=='function') throw typeError('filter/addFilter 需要函数');
+    this._where.push(function(view){return fn(toNode(view))===true;});return this;
   };
   UiSelector.prototype.where = function (fn) {
     if (typeof fn !== 'function') { throw typeError('where(fn) 需要函数'); }

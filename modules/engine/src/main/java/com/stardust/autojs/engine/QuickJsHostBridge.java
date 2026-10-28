@@ -6970,6 +6970,13 @@ final class QuickJsHostBridge implements AutoCloseable,
             return encodeAutomatorResult(selector.setProgress((float) args.getDouble(0)));
         }
         switch (method) {
+            case "filter":
+            case "addFilter": {
+                final long callbackId=args.getLong(0);
+                selector.filter(node -> evaluateJsNodePredicate(callbackId,node));
+                return AUTOMATOR_VOID_RESULT;
+            }
+
             case "find":
                 return encodeAutomatorResult(args.length() > 0 && !args.isNull(0)
                         ? selector.find(args.getInt(0)) : selector.find());
@@ -7033,6 +7040,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             case "scrollForward": return encodeAutomatorResult(object.scrollForward());
             case "scrollBackward": return encodeAutomatorResult(object.scrollBackward());
             case "children": return encodeAutomatorResult(object.children());
+            case "getRangeInfo": return encodeAutomatorResult(object.getRangeInfo());
             case "boundsInParent": return encodeAutomatorResult(object.boundsInParent());
             case "setSelection":
                 NodeActionArguments.validate(method, args);
@@ -7556,7 +7564,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
     }
 
-    private boolean evaluateJsNodePredicate(long callbackId, UiObject node) {
+    private boolean evaluateJsNodePredicate(long callbackId, Object node) {
         try {
             JSONObject argument = new JSONObject();
             argument.put("__node", putAutomatorHandle(node));
@@ -7580,6 +7588,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             case "findByText": return encodeAutomatorResult(UiObjectCollection.Companion.of(object.findByText(args.getString(0))));
             case "findByViewId": return encodeAutomatorResult(UiObjectCollection.Companion.of(object.findByViewId(args.getString(0))));
             case "bounds":
+            case "getRangeInfo":
             case "boundsInParent":
             case "parent":
             case "children":
@@ -7668,6 +7677,14 @@ final class QuickJsHostBridge implements AutoCloseable,
             bounds.put("left", rect.left).put("top", rect.top)
                     .put("right", rect.right).put("bottom", rect.bottom);
             json.put("t", "r").put("v", bounds);
+        } else if (value instanceof androidx.core.view.accessibility.AccessibilityNodeInfoCompat.RangeInfoCompat) {
+            androidx.core.view.accessibility.AccessibilityNodeInfoCompat.RangeInfoCompat r =
+                    (androidx.core.view.accessibility.AccessibilityNodeInfoCompat.RangeInfoCompat)value;
+            return encodeAutomatorResult(new RemoteUiObject.RangeInfo(r.getType(),r.getMin(),r.getMax(),r.getCurrent()));
+        } else if (value instanceof RemoteUiObject.RangeInfo) {
+            RemoteUiObject.RangeInfo r=(RemoteUiObject.RangeInfo)value;
+            json.put("t","g").put("v",new JSONObject().put("type",r.getType()).put("min",r.getMin())
+                    .put("max",r.getMax()).put("current",r.getCurrent()));
         } else if (value instanceof RemoteUiSelector) {
             json.put("t", "v");
         } else if (value instanceof RemoteUiObjectCollection) {
@@ -7700,7 +7717,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             cached = target.getClass().getMethod(method, parameters);
             mAutomatorMethods.put(key, cached);
         }
-        return cached.invoke(target, arguments);
+        return AutomatorInvocation.invoke(cached,target,arguments);
     }
 
     private static String automatorMethodKey(Class<?> type, String method, Class<?>[] parameters) {

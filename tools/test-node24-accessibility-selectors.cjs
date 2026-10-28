@@ -96,6 +96,7 @@ const state = {
   failNodeAction: false,
   setTextResult: null,
   findNodesOverride: null,
+  patternBatchOverride: null,
   getNodeInfoMisses: 0
 };
 
@@ -163,7 +164,7 @@ function checkSelector(selector) {
     state.protocolErrors.push('selector 不是对象: ' + JSON.stringify(selector));
     return false;
   }
-  const allowed = new Set(['id', 'text', 'textContains', 'textStartsWith', 'textMatches',
+  const allowed = new Set(['algorithm', 'id', 'text', 'textContains', 'textStartsWith', 'textMatches',
     'desc', 'descContains', 'className', 'packageName', 'clickable', 'enabled', 'scrollable',
     'depth', 'index', 'bounds', 'path', 'childCount', 'editable', 'indexInParent']);
   for (const key of Object.keys(selector)) {
@@ -197,6 +198,10 @@ function mockHost(raw) {
   switch (action) {
     case 'getLatestNodeDump':
       return reply(deepClone(state.tree));
+    case 'matchTextPatternBatch': {
+      if (state.patternBatchOverride) return reply(state.patternBatchOverride(request));
+      return reply(request.texts.map(t=>new RegExp('^(?:'+request.pattern+')$').test(t)));
+    }
     case 'findNodes': {
       if (!checkSelector(request.selector)) { return failure('bad selector'); }
       if (state.findNodesOverride) return reply(state.findNodesOverride(request.selector));
@@ -278,6 +283,7 @@ function resetState() {
   state.failNodeAction = false;
   state.setTextResult = null;
   state.findNodesOverride = null;
+  state.patternBatchOverride = null;
   state.getNodeInfoMisses = 0;
 }
 function requests(action) {
@@ -706,14 +712,24 @@ test('textMatches 按宿主语义整串匹配', async () => {
   assert.equal(await select({ textMatches: '日' }).firstOrNull(), null);
 });
 
-test('Java 正则与本地谓词组合仍由宿主匹配，不转译成 JS 正则', async () => {
-  state.findNodesOverride = selector => {
-    assert.equal(selector.textMatches, '(?i)\\Q日志\\E');
-    return [deepClone(state.tree.find(n => n.text === '日志'))];
+test('Java 正则与本地谓词组合由批量宿主匹配，不受findNodes上限影响', async () => {
+  state.patternBatchOverride = request => {
+    assert.equal(request.pattern, '(?i)\\Q日志\\E');
+    return request.texts.map(t=>t==='日志');
   };
   const nodes = await select({ textMatches: '(?i)\\Q日志\\E' }).where(n => n.clickable).all();
   assert.deepEqual(nodes.map(n => n.text), ['日志']);
-  assert.equal(requests('findNodes').length, 1);
+  assert.equal(requests('findNodes').length, 0);
+  assert.equal(requests('matchTextPatternBatch').length,1);
+});
+test('Java正则混合筛选可以找到第500项以后的节点，并按批次检查返回类型', async () => {
+  state.tree=Array.from({length:610},(_,i)=>makeNode([i],'android.widget.TextView','target-'+i,{checked:i===609}));
+  state.findNodesOverride=()=>state.tree.slice(0,500);
+  const nodes=await select({textMatches:'target-.*',checked:true}).where(n=>n.text==='target-609').all();
+  assert.equal(nodes.length,1);assert.equal(nodes[0].text,'target-609');
+  assert.equal(requests('findNodes').length,0);assert.equal(requests('matchTextPatternBatch').length,3);
+  state.patternBatchOverride=()=>[1];
+  await assert.rejects(select({textMatches:'x'}).where(()=>true).all(),/返回值/);
 });
 
 test('空文本身份条件不能在动作中丢弃', async () => {
@@ -873,6 +889,42 @@ test('现代all和两种节点children保留Array并提供集合方法', async (
   const children=all.get(0).children();assert.ok(Array.isArray(children));assert.equal(children.size(),2);
   assert.equal(typeof children.get(0).text,'string');
   const legacy=select({id:'panel'}).findOnce().children();assert.equal(legacy.size(),2);assert.equal(typeof legacy.get(0).text,'function');
+});
+
+test('RangeInfo读取保留快照，方法式与属性式一致，非范围节点返回null', async () => {
+  const raw=state.tree.find(n=>n.id==='com.demo:id/title');raw.rangeInfo={type:0,min:0,max:100,current:10.5};
+  const node=select({id:'title'}).findOnce(), view=await select({id:'title'}).firstOrNull();
+  assert.equal(node.getRangeInfo().getCurrent(),10.5);assert.equal(view.rangeInfo.max,100);
+  assert.equal(view.getRangeInfo().getMin(),0);assert.ok(Object.isFrozen(view.rangeInfo));
+  raw.rangeInfo.current=66;assert.equal(node.getRangeInfo().getCurrent(),10.5);
+  assert.equal(select({id:'title'}).findOnce().getRangeInfo().current,66);
+  assert.equal(select({id:'panel'}).findOnce().getRangeInfo(),null);
+});
+test('RangeInfo畸形数据不能默默转换成0', () => {
+  const raw=state.tree.find(n=>n.id==='com.demo:id/title');
+  for(const rangeInfo of [{type:0,min:0,max:100,current:'66'},{type:0.5,min:0,max:100,current:66}]){
+    raw.rangeInfo=rangeInfo;assert.throws(()=>select({id:'title'}).findOnce().getRangeInfo());
+  }
+});
+
+test('BFS/DFS规范化并下发，非法算法及BFS本地谓词明确报错', async () => {
+  select({id:'title'}).algorithm('bfs').findOnce();assert.equal(last('getNodeInfo').selector.algorithm,'BFS');
+  await select({id:'title',algorithm:'dfs'}).all();assert.equal(last('findNodes').selector.algorithm,'DFS');
+  assert.throws(()=>select().algorithm('invalid'),/BFS/);
+  await assert.rejects(select().algorithm('BFS').where(()=>true).all(),/暂不能/);
+});
+test('filter/addFilter接收方法式节点，where保持属性式节点', async () => {
+  const nodes=await select({id:'title'}).filter(n=>n.text()==='日志').addFilter(n=>n.clickable()).all();
+  assert.equal(nodes.length,1);assert.equal(typeof nodes[0].text,'string');
+  assert.equal((await select({id:'title'}).filter(()=>false).all()).length,0);
+  await assert.rejects(select({id:'title'}).filter(()=>{throw Error('predicate-fail');}).all(),/predicate-fail/);
+});
+
+test('node.find包含自身以对齐Native，select.from仍只查后代', async () => {
+  const node=select({id:'title'}).findOnce(),view=await select({id:'title'}).firstOrNull();
+  assert.equal(node.find({id:'title'}).size(),1);assert.equal(view.find({id:'title'}).size(),1);
+  assert.equal(typeof node.findOne({id:'title'}).text,'function');assert.equal(typeof view.findOne({id:'title'}).text,'string');
+  assert.equal((await select({id:'title'}).from(view).all()).length,0);
 });
 
 test('全流程没有反射/Java 宿主请求', async () => {

@@ -465,6 +465,131 @@ public class Node24SelectorBridgeTest {
         } finally { bridge.close(); }
     }
 
+    @Test public void matchTextPatternBatchUsesJavaPatternSemanticsWithoutBackend()
+            throws Exception {
+        // 不注入 backend：成功返回即证明该 action 完全本地计算，不依赖 A11y/主进程。
+        Node24AutomationBridge bridge = newBridge(null);
+        try {
+            JSONObject flags = bridge.handle(batchRequest("(?i)^ok$",
+                    new JSONArray().put("OK").put("ok").put("ok!").put("no")));
+            assertTrue(flags.optBoolean("ok"));
+            JSONArray flagged = flags.getJSONArray("value");
+            assertEquals(4, flagged.length());
+            assertTrue(flagged.getBoolean(0));
+            assertTrue(flagged.getBoolean(1));
+            assertFalse("matches() 必须完整匹配，不能 contains", flagged.getBoolean(2));
+            assertFalse(flagged.getBoolean(3));
+
+            JSONObject quoted = bridge.handle(batchRequest("\\Q[a-z]+\\E",
+                    new JSONArray().put("[a-z]+").put("abc").put("x[a-z]+")));
+            assertTrue(quoted.optBoolean("ok"));
+            JSONArray literals = quoted.getJSONArray("value");
+            assertTrue(literals.getBoolean(0));
+            assertFalse("\\Q..\\E 必须按 Java 字面量解释，不能当 JS 正则", literals.getBoolean(1));
+            assertFalse(literals.getBoolean(2));
+
+            JSONObject full = bridge.handle(batchRequest("abc",
+                    new JSONArray().put("abc").put("xabc").put("abcx").put("ab")));
+            JSONArray fullMatches = full.getJSONArray("value");
+            assertTrue(fullMatches.getBoolean(0));
+            assertFalse(fullMatches.getBoolean(1));
+            assertFalse(fullMatches.getBoolean(2));
+            assertFalse(fullMatches.getBoolean(3));
+
+            JSONObject emptyPattern = bridge.handle(batchRequest("",
+                    new JSONArray().put("").put("x")));
+            assertTrue(emptyPattern.optBoolean("ok"));
+            assertTrue(emptyPattern.getJSONArray("value").getBoolean(0));
+            assertFalse(emptyPattern.getJSONArray("value").getBoolean(1));
+
+            JSONObject emptyBatch = bridge.handle(batchRequest("a+", new JSONArray()));
+            assertTrue(emptyBatch.optBoolean("ok"));
+            assertEquals(0, emptyBatch.getJSONArray("value").length());
+        } finally {
+            bridge.close();
+        }
+    }
+
+    @Test public void matchTextPatternBatchValidatesTypesAndLimits() throws Exception {
+        Node24AutomationBridge bridge = newBridge(null);
+        try {
+            assertError(bridge.handle(new JSONObject()
+                    .put("action", "matchTextPatternBatch")
+                    .put("texts", new JSONArray())), "pattern");
+            for (Object invalid : new Object[]{JSONObject.NULL, 7, true,
+                    new JSONObject().put("regex", "a"), new JSONArray().put("a")}) {
+                assertError(bridge.handle(batchRequest(invalid, new JSONArray())), "pattern");
+            }
+            assertError(bridge.handle(batchRequest(repeat("a", 32_769), new JSONArray())), "过长");
+            JSONObject patternBoundary = bridge.handle(
+                    batchRequest(repeat("a", 32_768), new JSONArray()));
+            assertTrue(patternBoundary.optBoolean("ok"));
+            assertEquals("边界 pattern 应被接受并返回空结果",
+                    0, patternBoundary.getJSONArray("value").length());
+
+            assertError(bridge.handle(new JSONObject()
+                    .put("action", "matchTextPatternBatch")
+                    .put("pattern", "a")), "texts");
+            for (Object invalid : new Object[]{JSONObject.NULL, "a", 3, true,
+                    new JSONObject().put("text", "a")}) {
+                assertError(bridge.handle(batchRequest("a", invalid)), "texts");
+            }
+            for (Object invalid : new Object[]{JSONObject.NULL, 3, true,
+                    new JSONObject().put("text", "a"), new JSONArray().put("a")}) {
+                JSONArray texts = new JSONArray().put("ok").put(invalid);
+                assertError(bridge.handle(batchRequest("a", texts)), "texts[1]");
+            }
+
+            JSONArray tooMany = new JSONArray();
+            for (int i = 0; i < 257; i++) {
+                tooMany.put("");
+            }
+            assertError(bridge.handle(batchRequest("", tooMany)), "上限 256");
+
+            JSONArray maxTexts = new JSONArray();
+            for (int i = 0; i < 256; i++) {
+                maxTexts.put("a");
+            }
+            JSONObject countBoundary = bridge.handle(batchRequest("a", maxTexts));
+            assertTrue(countBoundary.optBoolean("ok"));
+            JSONArray countValues = countBoundary.getJSONArray("value");
+            assertEquals(256, countValues.length());
+            assertTrue(countValues.getBoolean(255));
+
+            assertError(bridge.handle(batchRequest("a", new JSONArray().put(repeat("a", 65_537)))),
+                    "总长度");
+            JSONArray maxTotal = new JSONArray();
+            for (int i = 0; i < 256; i++) {
+                maxTotal.put(repeat("a", 256));
+            }
+            JSONObject totalBoundary = bridge.handle(batchRequest("a+", maxTotal));
+            assertTrue(totalBoundary.optBoolean("ok"));
+            JSONArray totalValues = totalBoundary.getJSONArray("value");
+            assertEquals(256, totalValues.length());
+            for (int i = 0; i < totalValues.length(); i++) {
+                assertTrue(totalValues.getBoolean(i));
+            }
+        } finally {
+            bridge.close();
+        }
+    }
+
+    @Test public void matchTextPatternBatchReportsInvalidJavaRegex() throws Exception {
+        Node24AutomationBridge bridge = newBridge(null);
+        try {
+            JSONObject response = assertError(bridge.handle(batchRequest("(",
+                    new JSONArray().put("x"))), "不是合法的 Java 正则表达式");
+            assertTrue(response.optString("error", "")
+                    .contains("matchTextPatternBatch.pattern"));
+            assertFalse("非法正则不能返回 value", response.has("value"));
+
+            assertError(bridge.handle(batchRequest("[z-a]", new JSONArray())),
+                    "不是合法的 Java 正则表达式");
+        } finally {
+            bridge.close();
+        }
+    }
+
     // ------------------------------------------------------------------
     // Test helpers
     // ------------------------------------------------------------------
@@ -486,6 +611,11 @@ public class Node24SelectorBridgeTest {
 
     private static JSONObject request(String action, JSONObject selector) throws Exception {
         return new JSONObject().put("action", action).put("selector", selector);
+    }
+
+    private static JSONObject batchRequest(Object pattern, Object texts) throws Exception {
+        return new JSONObject().put("action", "matchTextPatternBatch")
+                .put("pattern", pattern).put("texts", texts);
     }
 
     private static JSONObject requestWithIndex(String action, int index) throws Exception {
