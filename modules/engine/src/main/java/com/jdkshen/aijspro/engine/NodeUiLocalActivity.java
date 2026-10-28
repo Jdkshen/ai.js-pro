@@ -1,6 +1,9 @@
 package com.jdkshen.aijspro.engine;
 
 import android.annotation.SuppressLint;
+import android.content.ComponentName;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
 import android.os.Bundle;
@@ -89,11 +92,35 @@ public class NodeUiLocalActivity extends AppCompatActivity {
     @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
         if (event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
             if (event.getAction() == android.view.KeyEvent.ACTION_UP && !event.isCanceled()) {
-                com.jdkshen.aijspro.external.HostScripts.stopAllScripts(this);
+                relayVolumeUpStop();
             }
             return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    /** The Activity runs in a Node process; the owning script is in another process. */
+    private void relayVolumeUpStop() {
+        String[][] receivers = {
+                {"com.jdkshen.aijspro.external.StopAllScriptsReceiver",
+                        "com.jdkshen.aijspro.STOP_ALL_SCRIPT_PROCESSES"},
+                {"com.jdkshen.aijspro.inrt.autojs.InrtVolumeUpStopReceiver",
+                        "com.jdkshen.aijspro.inrt.action.STOP_ALL_SCRIPTS"}
+        };
+        for (String[] receiver : receivers) {
+            ComponentName component = new ComponentName(getPackageName(), receiver[0]);
+            try {
+                getPackageManager().getReceiverInfo(component, 0);
+                sendBroadcast(new Intent(receiver[1]).setComponent(component)
+                        .putExtra("reason", "window_volume_up"));
+                return;
+            } catch (PackageManager.NameNotFoundException ignored) {
+                // This host does not contain this receiver; try the other one.
+            } catch (RuntimeException error) {
+                android.util.Log.w("NodeUiLocalActivity", "stop relay failed: " + receiver[0], error);
+            }
+        }
+        com.stardust.autojs.ScriptEngineService.stopAllByVolumeUp();
     }
 
     @SuppressLint("MissingSuperCall")

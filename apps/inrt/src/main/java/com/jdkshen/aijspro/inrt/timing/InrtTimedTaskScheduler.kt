@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.jdkshen.aijspro.inrt.BuildConfig
+import com.jdkshen.aijspro.inrt.InrtProcessRole
 import java.util.Calendar
 
 /**
@@ -28,7 +29,7 @@ object InrtTimedTaskScheduler {
         appContext = context.applicationContext
         // 每个进程都需要 scheduler 上下文（:script 里的 work_manager 直接排任务）；
         // 但只有主进程负责启动/开机时恢复，避免两个进程同时读写 SharedPreferences。
-        if (!isScriptProcess(context)) {
+        if (!isSecondaryProcess(context)) {
             try {
                 rescheduleAll()
             } catch (error: Throwable) {
@@ -37,9 +38,10 @@ object InrtTimedTaskScheduler {
         }
     }
 
-    private fun isScriptProcess(context: Context): Boolean {
+    private fun isSecondaryProcess(context: Context): Boolean {
         return try {
-            com.jdkshen.aijspro.inrt.script.InrtScriptThreadHost.getProcessName(context).endsWith(":script")
+            val process = com.jdkshen.aijspro.inrt.script.InrtScriptThreadHost.getProcessName(context)
+            !InrtProcessRole.isMain(context.packageName, process)
         } catch (error: Throwable) {
             false
         }

@@ -61,6 +61,9 @@ public class ProjectConfig {
     @SerializedName("engine")
     private String mEngine;
 
+    @SerializedName("type")
+    private String mProjectType;
+
     /**
      * Auto.js Pro 工程模式的 Android 资源声明：
      *
@@ -444,6 +447,8 @@ public class ProjectConfig {
     }
 
     public String getEngine() {
+        if (mEngine != null && !mEngine.trim().isEmpty()) return mEngine;
+        if ("node".equalsIgnoreCase(mProjectType) || "nodejs".equalsIgnoreCase(mProjectType)) return "node";
         return mEngine;
     }
 
@@ -457,7 +462,7 @@ public class ProjectConfig {
                 && !scriptConfig.getEngine().trim().isEmpty()) {
             return scriptConfig.getEngine();
         }
-        return mEngine;
+        return getEngine();
     }
 
     public ScriptConfig getScriptConfig(String path) {

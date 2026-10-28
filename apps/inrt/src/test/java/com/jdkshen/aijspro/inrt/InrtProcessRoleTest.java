@@ -25,6 +25,9 @@ public class InrtProcessRoleTest {
     public void childProcessesAreNotMain() {
         assertFalse(InrtProcessRole.isMain(PKG, PKG + ":script"));
         assertFalse(InrtProcessRole.isMain(PKG, PKG + ":node24"));
+        assertFalse(InrtProcessRole.isMain(PKG, PKG + ":node24_1"));
+        assertFalse(InrtProcessRole.isMain(PKG, PKG + ":node24_2"));
+        assertFalse(InrtProcessRole.isMain(PKG, PKG + ":node24_3"));
         assertFalse(InrtProcessRole.isMain(PKG, "com.example.other"));
     }
 

@@ -162,18 +162,35 @@
             const extras = viewExtras(view);
             if (name === 'attr') return function (attribute, value) {
                 if (attribute && typeof attribute === 'object') {
-                    // task-236：多属性一次宿主调用；旧宿主无 viewAttributes 时逐项回退。
-                    try {
-                        javaSession().viewAttributes(view, JSON.stringify(attribute));
-                        return view;
-                    } catch (error) {
-                        // 只有旧宿主缺少批量方法时才逐项回退；属性值错误必须原样抛出。
-                        const text = String(error && error.message || error);
-                        if (text.indexOf('找不到方法') < 0 && text.indexOf('NoSuchMethod') < 0
-                                && text.indexOf('viewAttributes') < 0) throw error;
-                        Object.keys(attribute).forEach(function (key) { view.attr(key, attribute[key]); });
-                        return view;
+                    // Preserve custom Widget setters and insertion order while batching adjacent
+                    // ordinary attributes. A missing old-host method is the only fallback case.
+                    let pending = Object.create(null);
+                    function flush() {
+                        const keys = Object.keys(pending);
+                        if (!keys.length) return;
+                        try {
+                            javaSession().viewAttributes(view, JSON.stringify(pending));
+                        } catch (error) {
+                            const text = String(error && error.message || error);
+                            const missing = text.indexOf('viewAttributes') >= 0 &&
+                                (text.indexOf('找不到方法') >= 0 || text.indexOf('NoSuchMethod') >= 0 ||
+                                 /viewAttributes\s+is not a function/.test(text));
+                            if (!missing) throw error;
+                            keys.forEach(function (key) { view.attr(key, pending[key]); });
+                        }
+                        pending = Object.create(null);
                     }
+                    Object.keys(attribute).forEach(function (key) {
+                        const widget = extras.widget;
+                        const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
+                        if (descriptor && descriptor.set) {
+                            flush();
+                            descriptor.set.call(widget, attribute[key]);
+                            widget.attrs[key] = attribute[key];
+                        } else pending[key] = attribute[key];
+                    });
+                    flush();
+                    return view;
                 }
                 const key = String(attribute);
                 const widget = extras.widget;
@@ -261,18 +278,24 @@
                         }
                         ensureDrawListener(view, extras);
                     } else {
-                        let listenerClass, method;
+                        let listenerClass, method, callbackName;
                         if (event === 'click') {
-                            listenerClass = 'android.view.View$OnClickListener'; method = 'setOnClickListener';
+                            listenerClass = 'android.view.View$OnClickListener'; method = 'setOnClickListener'; callbackName = 'onClick';
                         } else if (event === 'long_click') {
-                            listenerClass = 'android.view.View$OnLongClickListener'; method = 'setOnLongClickListener';
+                            listenerClass = 'android.view.View$OnLongClickListener'; method = 'setOnLongClickListener'; callbackName = 'onLongClick';
+                        } else if (event === 'check') {
+                            listenerClass = 'android.widget.CompoundButton$OnCheckedChangeListener';
+                            method = 'setOnCheckedChangeListener'; callbackName = 'onCheckedChanged';
                         } else {
                             throw new Error('Node View 事件暂不支持：' + event);
                         }
                         const Listener = globalThis.$autojs.java.findClass(listenerClass);
                         const callbacks = {};
-                        callbacks[event === 'click' ? 'onClick' : 'onLongClick'] = function (source) {
-                            try { return extras.events.emit(event, source); }
+                        callbacks[callbackName] = function (source, checked) {
+                            try {
+                                return event === 'check' ? extras.events.emit(event, !!checked, source)
+                                    : extras.events.emit(event, source);
+                            }
                             catch (error) { console.error('[ui] ' + event + ' 回调异常：', error); return false; }
                         };
                         view[method](new Listener(callbacks));

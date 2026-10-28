@@ -104,7 +104,7 @@ try {
         # 否则瘦身模板会超过 :app:verifySlimPackagingTemplate 的 20MB 上限。
         $excludedAssetNames = @(
             'assets/source-engine-upgrade/node24/arm64-v8a/libnode.so',
-            # inrt 没有 Node24Service，也不带 libnode；npm 安装 CLI 留在主应用。
+            # Node 资源在打包 Node 工程时从宿主补齐，模板本身不包含 npm 安装 CLI。
             'assets/node24/tools/npm.zip',
             'resources/new_api_database.ser'
         )

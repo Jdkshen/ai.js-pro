@@ -36,7 +36,7 @@ class App : Application() {
         // 进程归属只解析一次；:script 里的 App 不是按键/广播任务所有者。
         val processName = InrtScriptThreadHost.getProcessName(this)
         // task-162：广播 Intent 任务只在主进程注册动态 receiver。
-        if (!processName.endsWith(":script")) {
+        if (InrtProcessRole.isMain(packageName, processName)) {
             InrtIntentTaskRegistry.init(this)
         }
         if (InrtProcessRole.isMain(packageName, processName)) {

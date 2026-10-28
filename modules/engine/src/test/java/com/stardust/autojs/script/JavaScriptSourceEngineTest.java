@@ -49,6 +49,21 @@ public class JavaScriptSourceEngineTest {
     }
 
     @Test
+    public void nodejsAliasWorksForProjectAndForcedEngine() {
+        StringScriptSource source = new StringScriptSource("console.log(process.version);");
+        source.setPreferredEngine(" NodeJS ");
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+        source.setForcedEngine("nodejs");
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+    }
+
+    @Test
+    public void nodejsCommentDirectiveSelectsNode() {
+        StringScriptSource source = new StringScriptSource("// @engine nodejs\nconsole.log(process.version);");
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+    }
+
+    @Test
     public void proNodeStringDirectiveSelectsNode24() {
         StringScriptSource source = new StringScriptSource(
                 "\"nodejs\";\nconsole.log(process.version);"

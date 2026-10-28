@@ -217,7 +217,8 @@ public abstract class JavaScriptSource extends ScriptSource {
                 if (RHINO_ENGINE_DIRECTIVE.equalsIgnoreCase(line)) {
                     return ENGINE_RHINO;
                 }
-                if (NODE24_ENGINE_DIRECTIVE.equalsIgnoreCase(line) || "// @engine node".equalsIgnoreCase(line)) {
+                if (NODE24_ENGINE_DIRECTIVE.equalsIgnoreCase(line) || "// @engine node".equalsIgnoreCase(line)
+                        || "// @engine nodejs".equalsIgnoreCase(line)) {
                     return ENGINE_NODE24;
                 }
                 // 「"ui";」「"auto";」这类执行模式声明按惯例写在脚本最前面，
@@ -267,7 +268,8 @@ public abstract class JavaScriptSource extends ScriptSource {
         if ("rhino".equalsIgnoreCase(normalized) || ENGINE_RHINO.equals(normalized)) {
             return ENGINE_RHINO;
         }
-        if ("node24".equalsIgnoreCase(normalized) || "node".equalsIgnoreCase(normalized) || ENGINE_NODE24.equals(normalized)) {
+        if ("node24".equalsIgnoreCase(normalized) || "node".equalsIgnoreCase(normalized)
+                || "nodejs".equalsIgnoreCase(normalized) || ENGINE_NODE24.equals(normalized)) {
             return ENGINE_NODE24;
         }
         throw new IllegalArgumentException("Unsupported JavaScript engine: " + engine);

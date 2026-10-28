@@ -22,6 +22,9 @@ import com.stardust.autojs.script.EmbeddedScriptFooter;
 import com.stardust.autojs.script.ScriptCompiler;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.autojs.script.StringScriptSource;
+import com.stardust.autojs.script.JavaScriptFileSource;
+import com.stardust.autojs.script.JavaScriptSource;
+import com.stardust.app.GlobalAppContext;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
 import com.stardust.util.AdvancedEncryptionStandard;
@@ -551,6 +554,22 @@ public class ApkBuilder {
      * {@code libaijscrypto.so} 尾部（产物里一个脚本文件都没有，见 {@link EmbeddedScriptFooter}）。
      */
     private void writeEntryScript(File source) throws Exception {
+        JavaScriptFileSource entry = new JavaScriptFileSource(source);
+        File projectFile = new File(mWorkspacePath, "assets/project/project.json");
+        ProjectConfig projectConfig = ProjectConfig.fromFile(projectFile.getPath());
+        String preferredEngine = projectConfig == null
+                ? (mAppConfig == null ? null : mAppConfig.engine)
+                : projectConfig.getEngine(mMainScriptFile);
+        entry.setPreferredEngine(preferredEngine);
+        boolean nodeEntry = JavaScriptSource.ENGINE_NODE24.equals(entry.getEngineName());
+        if (nodeEntry && ScriptProtection.shouldCompile(mEncryptLevel)) {
+            throw new IOException("Node.js 暂不支持编译加密，请选择明文或普通加密");
+        }
+        JSONObject project = projectFile.isFile()
+                ? new JSONObject(new String(PFiles.readBytes(projectFile.getPath()), "UTF-8")) : null;
+        if (Node24PackagingAssets.requiresRuntime(nodeEntry, project)) {
+            Node24PackagingAssets.copyFromHost(hostApkFile(GlobalAppContext.get()), new File(mWorkspacePath));
+        }
         File target = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
         if (!ScriptProtection.shouldEncrypt(mEncryptLevel)) {
             // 目录工程时入口脚本已经在工作区里了：自己拷自己会先把目标清空，直接跳过。
@@ -1439,7 +1458,7 @@ public class ApkBuilder {
         }
 
         /**
-         * Script engine of the packaged app: {@code "rhino"} or {@code "quickjs"};
+         * Script engine of the packaged app: {@code "rhino"}, {@code "quickjs"}, or {@code "nodejs"};
          * null keeps the runtime default.
          */
         public AppConfig setEngine(String engine) {
