@@ -2211,8 +2211,16 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
     }
 
-    /** Publish before native cancellation, so an in-flight UI callback cannot throw cancellation into Looper. */
-    public void beginCallbackShutdown() { mCallbacksClosing = true; }
+    /** Detach native UI consumers before publishing cancellation to their callbacks. */
+    public void beginCallbackShutdown() {
+        if (mCallbacksClosing) return;
+        try {
+            com.stardust.autojs.engine.node24.NodeUiLocalSession.closeBeforeCallbackShutdown();
+        } catch (RuntimeException failure) {
+            Log.w(TAG, "close Node UI before callback shutdown failed", failure);
+        }
+        mCallbacksClosing = true;
+    }
 
     /**
      * 任务结束/取消/异常统一清理：停投屏、释放 OCR 会话、回收 Bitmap 句柄、解绑主进程自动化客户端。

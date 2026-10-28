@@ -772,12 +772,40 @@ public final class NodeUiLocalSession {
     public static void close() {
         closeOpening(null);
     }
+
+    /**
+     * Stop native layout consumers while their generated Java callbacks still work.
+     * In particular, an attached RecyclerView must not observe getItemCount()'s
+     * cancellation fallback (zero) with holders from its previous layout.
+     */
+    public static void closeBeforeCallbackShutdown() {
+        runOnMainAndWait(() -> closeOpening(null), 2_000L, "callback shutdown");
+    }
+
+    private static void detachNativeAdapters(View root) {
+        if (root instanceof androidx.recyclerview.widget.RecyclerView) {
+            androidx.recyclerview.widget.RecyclerView list =
+                    (androidx.recyclerview.widget.RecyclerView) root;
+            list.stopScroll();
+            list.setAdapter(null);
+        }
+        // Snapshot the children: adapter detachment may remove/recycle views.
+        if (root instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) root;
+            List<View> children = new ArrayList<>();
+            for (int i = 0; i < group.getChildCount(); i++) children.add(group.getChildAt(i));
+            for (View child : children) detachNativeAdapters(child);
+        }
+    }
+
     private static void closeOpening(Pending expected) {
         final Activity closing;
+        final View closingContent;
         synchronized (STATE) {
             if (expected != null && pending != expected) return;
             Pending opening = pending;
             closing = activity;
+            closingContent = content;
             pending = null;
             activity = null;
             content = null;
@@ -793,7 +821,17 @@ public final class NodeUiLocalSession {
         }
         // A later attach must see the invalidated token and finish itself. An already
         // attached Activity is captured here so its destroy cannot clear a newer session.
-        if (closing != null) MAIN.post(() -> { if (!closing.isFinishing()) closing.finish(); });
+        if (closing != null) {
+            Runnable release = () -> {
+                // finish() alone leaves the old hierarchy attached until a later
+                // lifecycle transaction, so it can still lay out after cancellation.
+                detachNativeAdapters(closingContent);
+                closing.setContentView(new android.widget.FrameLayout(closing));
+                if (!closing.isFinishing()) closing.finish();
+            };
+            if (Looper.myLooper() == Looper.getMainLooper()) release.run();
+            else MAIN.post(release);
+        }
     }
 
     /** Invoked on the Java IO executor, then publishes on Android's UI thread. */
