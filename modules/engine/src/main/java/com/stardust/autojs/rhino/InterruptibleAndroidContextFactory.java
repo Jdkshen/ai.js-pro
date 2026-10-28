@@ -26,6 +26,9 @@ public class InterruptibleAndroidContextFactory extends AndroidContextFactory {
 
     @Override
     protected void observeInstructionCount(Context cx, int instructionCount) {
+        com.stardust.autojs.engine.RhinoJavaScriptEngine engine =
+                com.stardust.autojs.engine.RhinoJavaScriptEngine.Companion.getEngineOfContext(cx);
+        if (engine != null && engine.isStopRequested()) throw new ScriptInterruptedException();
         if (Thread.currentThread().isInterrupted() && Looper.myLooper() != Looper.getMainLooper()) {
             throw new ScriptInterruptedException();
         }

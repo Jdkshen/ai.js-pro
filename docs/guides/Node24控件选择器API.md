@@ -1,6 +1,6 @@
 # Node24 控件查询、点击与文字输入
 
-> 当前验证基线：dev-1112（Node 21/21、Node UI basic 8 steps；`:script` 自动化代理为常用面子集）。
+> 当前实现：dev-1279 节点 API 复核候选。主进程与 `:script` 分开验收；具体测试结果见 `docs/reports/2026-10-28_三引擎节点API复核与修复.md`。
 
 适用主 App 的 flutterPoc 构建。先开启本应用的无障碍服务，再在 Node 引擎中运行脚本。
 
@@ -186,3 +186,47 @@ RESULT=PASS|PARTIAL|FAIL
 
 > Node24 的 `select()` 查询返回 Promise；节点动作返回同步 boolean。示例会在调用前用 `typeof` 检查方法，未实现时输出 SKIP，不伪造 PASS。
 > 动作返回 `true` 只表示宿主接受了动作；控件不支持、窗口变化或权限不足时返回 `false`，这仍是 PASS 的“契约结果”，不是脚本异常。
+
+
+## dev-1279 节点接口复核与约束
+
+Rhino、QuickJS 的普通脚本经过 `:script` 时，返回 `RemoteUiObject`，不等于主进程的 Java `UiObject`。本轮补齐常用属性、节点动作、父子遍历和范围查询；不能再以主进程示例通过推断隔离进程通过。
+
+- 布尔读取补齐 `editable/checkable/checked/focusable/focused/selected/longClickable/visibleToUser/password/accessibilityFocused/contextClickable/dismissable/contentInvalid/multiLine/isHierarchically`；集合字段为 `row/column/rowCount/columnCount/rowSpan/columnSpan`，另有 `drawingOrder`。
+- `parent()/children()/child(i)` 按真实 Android 子节点下标查找；遇到稀疏子节点不会把后面的节点挪到空缺下标。范围查找包括 `find/findOne/findByText/findByViewId`，`findByText` 使用包含匹配。Node 属性式节点的查询结果继续保持属性式。
+- 动作包括点击、中心点击、长按、文本写入、选择范围、进度、行列滚动、复制/剪切/粘贴、选择、展开/收起、关闭/显示、六种滚动、上下文点击、焦点与无障碍焦点。能调用不代表目标支持；`false` 表示目标消失或 Android 拒绝该动作，不是成功。
+- `select(...).find()/all()` 和节点 `children()` 仍返回 Array，同时提供 `size/empty/nonEmpty/get/toArray` 和集合动作。集合动作遍历全部成员，全部返回 `true` 才返回 `true`；空集合的无参动作沿用全部成立语义返回 `true`，不是已操作节点。参数化动作在空集合上也校验参数。
+- Node 传统选择器补齐 `untilFind(timeout?)` 和集合动作快捷入口。`untilFind()` 无参会持续等待；现代异步 `findFirst({timeout})` 更适合需要让出事件循环的脚本。原有 Node 方法式 `findOne(timeout)` 超时抛 `NotFoundError`，默认 10 秒；Rhino/QuickJS 的同步接口语义不同，现有 Node 行为保留。
+- 参数规则：`setSelection(start,end)` 要求非负 32 位整数且 `start <= end`；`scrollTo(row,column)` 要求非负 32 位整数；`setProgress(value)` 要求有限且不超过 float 范围。不能把字符串、小数或溢出值默默变成 0。
+- 动作使用节点路径及身份条件重新定位，过期节点不自动改点旧坐标。`clickCenter()` 使用重新获取的合法边界。读取到的是快照，界面变化后应重新查询；显式保留的树适合离线遍历，不证明节点仍在线。
+- 密码节点的 `text` 为 `""`，写入后也不把明文保存在公开快照或动作身份条件中。
+- Node24 与隔离进程的单次 `setText` 传输上限为 32,768 字符和 65,536 UTF-8 字节，任一超限明确报错，不截断。长文本身份条件、超大树和查询结果仍受既有消息/数量预算限制。
+- 通信断连和主线程请求超时会抛宿主错误；正常未找到仍是空结果，正常不支持的动作仍是 `false`。不要对超时动作盲目自动重试。
+
+### MCP 定位和输入
+
+`index` 是匹配结果中的 **0 起序号**，范围 `0..255`。不写取第一个；不是 `indexInParent`。`exact` 默认 `true`，设为 `false` 时文本和描述使用包含匹配；`x/y` 必须一起给出。错误类型、非法边界和缺失的动作参数会在定位前拒绝。
+
+输入新文本与目标旧文本应分开：
+
+```json
+{"selector":{"className":"android.widget.EditText","text":"旧内容"},"text":"新内容","index":0}
+```
+
+也可用平铺的 `resourceId` 定位，此时顶层 `text` 只表示新值：
+
+```json
+{"resourceId":"search_input","text":"新内容"}
+```
+
+`ui_node_action` 的参数对象示例：
+
+```json
+{"selector":{"resourceId":"search_input"},"action":"setSelection","args":{"start":0,"end":2}}
+```
+
+`setProgress` 使用 `args.value`；`scrollTo` 使用 `args.row/args.column`。嵌套选择器与顶层只能有一处 `index`。MCP schema 同时公开嵌套 selector 和边界格式，避免工具声明与实际解析脱节。
+
+### 仍需按能力区分
+
+自定义 JavaScript 谓词、查询算法、正则选项、Node Promise/方法式返回类型以及集合二次过滤，并不能仅按同名函数判断等价。本轮的跨进程实测结论以报告里的具体用例为准；尚未逐项验证的接口不标记为完全兼容高级版。

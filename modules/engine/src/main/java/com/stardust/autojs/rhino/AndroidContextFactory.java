@@ -46,6 +46,9 @@ public class AndroidContextFactory extends ShellContextFactory {
 
     @Override
     protected void observeInstructionCount(Context cx, int instructionCount) {
+        com.stardust.autojs.engine.RhinoJavaScriptEngine engine =
+                com.stardust.autojs.engine.RhinoJavaScriptEngine.Companion.getEngineOfContext(cx);
+        if (engine != null && engine.isStopRequested()) throw new ScriptInterruptedException();
         if (Thread.currentThread().isInterrupted()) {
             throw new ScriptInterruptedException();
         }

@@ -8,22 +8,7 @@ import com.stardust.autojs.runtime.exception.ScriptException;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/**
- * 远程节点：{@code :script} 进程里由主进程无障碍服务返回的节点快照（JSON 描述）的只读视图。
- *
- * <p>与 {@code com.stardust.automator.UiObject} 的关系：UiObject 要求真实
- * AccessibilityNodeInfo（:script 进程里没有 AccessibilityService，拿不到），所以这里用
- * {@link RemoteUiObject} 承载「节点 JSON + 来源选择器 + 匹配序号」：
- * <ul>
- *   <li>属性读取（text/desc/id/className/packageName/bounds/clickable/enabled/depth）直接读快照；</li>
- *   <li>动作（click/longClick/setText）通过 {@link RemoteAutomationBridge.Backend} 转给主进程，
- *       优先按「选择器 + 序号」调 clickNode/setTextNode（索引稳定），选择器含本地过滤条件时
- *       退化为 bounds 中心坐标点击；</li>
- *   <li>父子/兄弟遍历：批一不支持，调用时抛明确中文异常。</li>
- * </ul>
- *
- * <p>由 {@link RemoteUiSelector} 构造，脚本层只通过选择器链拿到本类实例。
- */
+/** Offline attributes and navigation for isolated scripts; guarded actions re-resolve in the host. */
 public final class RemoteUiObject {
 
     private static final String TAG = "RemoteUiObject";
@@ -49,7 +34,7 @@ public final class RemoteUiObject {
     // ---- 节点属性（与 UiObject 同名，脚本直接调用） --------------------------
 
     public String text() {
-        return mNode.optString("text", "");
+        return password() ? "" : mNode.optString("text", "");
     }
 
     public String desc() {
@@ -105,160 +90,177 @@ public final class RemoteUiObject {
 
     /** Revalidate the node against the live window instead of treating a snapshot as live. */
     public boolean exists() {
-        try {
-            String raw;
-            JSONArray path = mNode.optJSONArray("path");
-            if (path != null) {
-                JSONObject selector = new JSONObject().put("path", path);
-                for (String key : new String[]{"id", "className", "packageName"}) {
-                    if (!mNode.optString(key, "").isEmpty()) selector.put(key, mNode.getString(key));
-                }
-                if (mNode.optString("id", "").isEmpty()) {
-                    if (mNode.has("text")) selector.put("text", mNode.optString("text", ""));
-                    if (mNode.has("desc")) selector.put("desc", mNode.optString("desc", ""));
-                }
-                raw = mBackend.getNodeInfo(selector.toString(), 0);
-            } else if (mProxyableSelector) {
-                raw = mBackend.getNodeInfo(mSelectorJson, mIndex);
-            } else return false;
-            return raw != null && !raw.isEmpty() && !"null".equals(raw) && new JSONObject(raw).length() > 0;
-        } catch (Throwable error) { throw wrap("exists", error); }
+        try { return live(false) != null; }
+        catch (Throwable error) { throw wrap("exists", error); }
     }
 
-    // ---- 动作 ------------------------------------------------------------
-
-    public boolean click() {
-        try {
-            if (mProxyableSelector) {
-                // find→click 之间界面可能变化：主进程用「同 selector + index 重匹配」执行，
-                // 失败重试一次；仍失败则用主进程扩展的 path selector 兜底（task-19 实现）。
-                if (mBackend.clickNode(mSelectorJson, mIndex)) {
-                    return true;
-                }
-                if (mBackend.clickNode(mSelectorJson, mIndex)) {
-                    return true;
-                }
-                return clickNodeByPath();
-            }
-            if (clickNodeByPath()) {
-                return true;
-            }
-            Rect rect = bounds();
-            return mBackend.click(rect.centerX(), rect.centerY());
-        } catch (Throwable error) {
-            throw wrap("click", error);
-        }
-    }
-
-    public boolean longClick() {
-        try {
-            if (mProxyableSelector) {
-                if (mBackend.longClickNode(mSelectorJson, mIndex)) {
-                    return true;
-                }
-                if (mBackend.longClickNode(mSelectorJson, mIndex)) {
-                    return true;
-                }
-                return longClickNodeByPath();
-            }
-            if (longClickNodeByPath()) {
-                return true;
-            }
-            Rect rect = bounds();
-            return mBackend.longClick(rect.centerX(), rect.centerY());
-        } catch (Throwable error) {
-            throw wrap("longClick", error);
-        }
-    }
-
-    public boolean setText(String text) {
-        String value = text == null ? "" : text;
-        try {
-            if (mProxyableSelector) {
-                if (mBackend.setTextNode(mSelectorJson, mIndex, value)) {
-                    return true;
-                }
-                if (mBackend.setTextNode(mSelectorJson, mIndex, value)) {
-                    return true;
-                }
-            }
-            // 含本地过滤条件（或 selector+index 漂移）时用 path selector 兜底。
-            String pathSelector = pathSelectorJson();
-            if (pathSelector != null) {
-                return mBackend.setTextNode(pathSelector, 0, value);
-            }
-            throw new ScriptException(
-                    "隔离进程暂不支持「本地过滤条件 + setText」的组合，请改用可下发主进程的选择器条件");
-        } catch (Throwable error) {
-            throw wrap("setText", error);
-        }
-    }
-
-    /** 主进程扩展：用 dump/findNodes 返回的 path 精确匹配节点后点击（task-19 支持）。 */
-    private boolean clickNodeByPath() {
-        String pathSelector = pathSelectorJson();
-        return pathSelector != null && mBackend.clickNode(pathSelector, 0);
-    }
-
-    private boolean longClickNodeByPath() {
-        String pathSelector = pathSelectorJson();
-        return pathSelector != null && mBackend.longClickNode(pathSelector, 0);
-    }
-
-    /** {@code {"path":[...]}} 选择器；节点没有 path 时返回 null。 */
-    private String pathSelectorJson() {
+    /** Match the original identity, never retry an action against a different path/old coordinates. */
+    private JSONObject identity(boolean strictContent) throws Exception {
         JSONArray path = mNode.optJSONArray("path");
-        if (path == null || path.length() == 0) {
-            return null;
-        }
-        try {
-            return new JSONObject().put("path", path).toString();
-        } catch (Throwable error) {
-            Log.w(TAG, "构造 path 选择器失败", error);
-            return null;
-        }
+        if (path == null) return null;
+        JSONObject selector = new JSONObject().put("path", new JSONArray(path.toString()));
+        for (String key : new String[]{"id", "className", "packageName"})
+            if (!mNode.optString(key, "").isEmpty()) selector.put(key, mNode.getString(key));
+        if (strictContent || mNode.optString("id", "").isEmpty())
+            for (String key : new String[]{"text", "desc"})
+                if (mNode.has(key) && !(key.equals("text") && password())) selector.put(key, mNode.optString(key, ""));
+        return selector;
     }
-
-    /** 点击节点中心（UiObject.clickCenter 的远程版本）。 */
+    private JSONObject live(boolean strict) throws Exception {
+        JSONObject selector = identity(strict);
+        if (selector == null && !mProxyableSelector) return null;
+        String raw = mBackend.getNodeInfo(selector == null ? mSelectorJson : selector.toString(), selector == null ? mIndex : 0);
+        if (raw == null || raw.isEmpty() || "null".equals(raw)) return null;
+        JSONObject value = new JSONObject(raw);
+        return value.length() == 0 ? null : value;
+    }
+    boolean action(String name, Object... values) {
+        try {
+            JSONObject selector = identity(true);
+            if (selector == null) return false;
+            JSONArray args = new JSONArray(); for (Object value : values) args.put(value);
+            return mBackend.nodeAction(selector.toString(), 0, name, args.toString());
+        } catch (Throwable error) { throw wrap(name, error); }
+    }
+    public boolean click() {
+        try { JSONObject selector = identity(true); return selector != null && mBackend.clickNode(selector.toString(), 0); }
+        catch (Throwable error) { throw wrap("click", error); }
+    }
+    public boolean longClick() {
+        try { JSONObject selector = identity(true); return selector != null && mBackend.longClickNode(selector.toString(), 0); }
+        catch (Throwable error) { throw wrap("longClick", error); }
+    }
+    public boolean setText(String text) {
+        try {
+            JSONObject selector = identity(true); String value = text == null ? "" : text;
+            if (selector == null || !mBackend.setTextNode(selector.toString(), 0, value)) return false;
+            mNode.put("text", password() ? "" : value); return true;
+        } catch (Throwable error) { throw wrap("setText", error); }
+    }
     public boolean clickCenter() {
-        Rect rect = bounds();
-        if (rect.left < 0 || rect.top < 0 || rect.right <= rect.left || rect.bottom <= rect.top) return false;
         try {
-            return mBackend.click(rect.centerX(), rect.centerY());
-        } catch (Throwable error) {
-            throw wrap("clickCenter", error);
-        }
+            JSONObject current = live(true); if (current == null) return false;
+            JSONArray bounds = current.optJSONArray("bounds");
+            if (bounds == null || bounds.length() != 4) return false;
+            int left = bounds.getInt(0), top = bounds.getInt(1), right = bounds.getInt(2), bottom = bounds.getInt(3);
+            if (left < 0 || top < 0 || right <= left || bottom <= top) return false;
+            return mBackend.click((int)(((long)left + right) / 2), (int)(((long)top + bottom) / 2));
+        } catch (Throwable error) { throw wrap("clickCenter", error); }
+    }
+    public boolean scrollForward() { return action("scrollForward"); }
+    public boolean scrollBackward() { return action("scrollBackward"); }
+    public boolean scrollUp() { return action("scrollUp"); }
+    public boolean scrollDown() { return action("scrollDown"); }
+    public boolean scrollLeft() { return action("scrollLeft"); }
+    public boolean scrollRight() { return action("scrollRight"); }
+    public boolean copy() { return action("copy"); }
+    public boolean cut() { return action("cut"); }
+    public boolean paste() { return action("paste"); }
+    public boolean select() { return action("select"); }
+    public boolean collapse() { return action("collapse"); }
+    public boolean expand() { return action("expand"); }
+    public boolean dismiss() { return action("dismiss"); }
+    public boolean show() { return action("show"); }
+    public boolean contextClick() { return action("contextClick"); }
+    public boolean focus() { return action("focus"); }
+    public boolean clearFocus() { return action("clearFocus"); }
+    public boolean accessibilityFocus() { return action("accessibilityFocus"); }
+    public boolean clearAccessibilityFocus() { return action("clearAccessibilityFocus"); }
+    public boolean setSelection(int start, int end) {
+        if (start < 0 || end < start) throw new IllegalArgumentException("setSelection 需要 0 <= start <= end");
+        return action("setSelection", start, end);
+    }
+    public boolean setProgress(float value) {
+        if (!Float.isFinite(value)) throw new IllegalArgumentException("setProgress 需要有限数字");
+        return action("setProgress", value);
+    }
+    public boolean scrollTo(int row, int column) {
+        if (row < 0 || column < 0) throw new IllegalArgumentException("scrollTo 行列不能为负数");
+        return action("scrollTo", row, column);
     }
 
-    /** 当前快照不含滚动动作，批一明确抛错而不是静默返回 false。 */
-    public boolean scrollForward() {
-        throw unsupported("scrollForward");
+    // Read-only scalar snapshot attributes; mutations always go through the live host.
+    public boolean editable() { return mNode.optBoolean("editable", false); }
+    public boolean checkable() { return mNode.optBoolean("checkable", false); }
+    public boolean checked() { return mNode.optBoolean("checked", false); }
+    public boolean focusable() { return mNode.optBoolean("focusable", false); }
+    public boolean focused() { return mNode.optBoolean("focused", false); }
+    public boolean selected() { return mNode.optBoolean("selected", false); }
+    public boolean longClickable() { return mNode.optBoolean("longClickable", false); }
+    public boolean visibleToUser() { return mNode.optBoolean("visibleToUser", false); }
+    public boolean password() { return mNode.optBoolean("password", false); }
+    public boolean accessibilityFocused() { return mNode.optBoolean("accessibilityFocused", false); }
+    public boolean contextClickable() { return mNode.optBoolean("contextClickable", false); }
+    public boolean contentInvalid() { return mNode.optBoolean("contentInvalid", false); }
+    public boolean isHierarchically() { return mNode.optBoolean("isHierarchically", false); }
+    public boolean multiLine() { return mNode.optBoolean("multiLine", false); }
+    public boolean dismissable() { return mNode.optBoolean("dismissable", false); }
+    public int drawingOrder() { return mNode.optInt("drawingOrder", 0); }
+    public int row() { return mNode.optInt("row", -1); }
+    public int column() { return mNode.optInt("column", -1); }
+    public int rowCount() { return mNode.optInt("rowCount", 0); }
+    public int columnCount() { return mNode.optInt("columnCount", 0); }
+    public int rowSpan() { return mNode.optInt("rowSpan", 0); }
+    public int columnSpan() { return mNode.optInt("columnSpan", 0); }
+    public Rect boundsInParent() {
+        JSONArray a = mNode.optJSONArray("boundsInParent");
+        return a == null || a.length() < 4 ? new Rect() : new Rect(a.optInt(0), a.optInt(1), a.optInt(2), a.optInt(3));
     }
-
-    public boolean scrollBackward() {
-        throw unsupported("scrollBackward");
+    private java.util.List<RemoteUiObject> relatives(int length, boolean direct) {
+        java.util.List<RemoteUiObject> result = new java.util.ArrayList<>();
+        try {
+            if (live(true) == null) return result;
+            JSONArray path = mNode.optJSONArray("path"); if (path == null) return result;
+            JSONArray all = new JSONArray(mBackend.getLatestNodeDump());
+            for (int i = 0; i < all.length(); i++) {
+                JSONObject raw = all.optJSONObject(i); if (raw == null) continue;
+                JSONArray other = raw.optJSONArray("path"); if (other == null) continue;
+                if (direct && other.length() != length || !direct && other.length() <= path.length()) continue;
+                int common = Math.min(path.length(), other.length()); boolean match = true;
+                for (int j = 0; j < common; j++) if (path.getInt(j) != other.getInt(j)) { match = false; break; }
+                if (match) result.add(new RemoteUiObject(mBackend, "{}", 0, raw, false));
+            }
+            return result;
+        } catch (Throwable error) { throw wrap("遍历", error); }
     }
-
-    // ---- 遍历（批一不支持） ----------------------------------------------
-
     public RemoteUiObject parent() {
-        throw unsupported("parent");
+        JSONArray path = mNode.optJSONArray("path");
+        if (path == null || path.length() == 0) return null;
+        java.util.List<RemoteUiObject> values = relatives(path.length()-1, true);
+        return values.isEmpty() ? null : values.get(0);
     }
-
+    public RemoteUiObjectCollection children() {
+        JSONArray path = mNode.optJSONArray("path");
+        return new RemoteUiObjectCollection(path == null ? java.util.Collections.emptyList() : relatives(path.length()+1, true));
+    }
     public RemoteUiObject child(int index) {
-        throw unsupported("child");
+        if (index < 0) throw new IllegalArgumentException("child.index 不能为负数");
+        for (RemoteUiObject child : children()) if (child.indexInParent() == index) return child;
+        return null;
     }
-
-    public int childCount() {
-        throw unsupported("childCount");
+    public int childCount() { return mNode.has("childCount") ? mNode.optInt("childCount", 0) : children().size(); }
+    public RemoteUiObjectCollection find(RemoteUiSelector selector) {
+        if (selector == null) throw new IllegalArgumentException("find 需要选择器");
+        return selector.findWithin(this);
     }
-
-    public RemoteUiObject find(RemoteUiSelector selector) {
-        throw unsupported("find");
-    }
-
     public RemoteUiObject findOne(RemoteUiSelector selector) {
-        throw unsupported("findOne");
+        RemoteUiObjectCollection result = find(selector); return result.empty() ? null : result.get(0);
+    }
+    public java.util.List<RemoteUiObject> findByText(String text) {
+        java.util.List<RemoteUiObject> values = new java.util.ArrayList<>();
+        for (RemoteUiObject value : find(new RemoteUiSelector().textContains(text))) values.add(value);
+        return values;
+    }
+    public java.util.List<RemoteUiObject> findByViewId(String id) {
+        java.util.List<RemoteUiObject> values = new java.util.ArrayList<>();
+        for (RemoteUiObject value : find(new RemoteUiSelector().id(id))) values.add(value);
+        return values;
+    }
+    boolean isDescendantOf(RemoteUiObject root) {
+        JSONArray parent = root.mNode.optJSONArray("path"), path = mNode.optJSONArray("path");
+        if (parent == null || path == null || path.length() <= parent.length()) return false;
+        for (int i = 0; i < parent.length(); i++) if (parent.optInt(i, -1) != path.optInt(i, -2)) return false;
+        return root.packageName().equals(packageName());
     }
 
     @Override

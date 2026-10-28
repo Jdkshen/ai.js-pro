@@ -82,22 +82,22 @@ internal object McpToolSchema {
 
     fun uiFindSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
         "limit", "timeoutMillis", "exact")
-    fun uiClickSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+    fun uiClickSchema(): JsonObject = uiSelectorSchema("text", "resourceId", "contentDesc", "className", "bounds",
         "x", "y", "index", "timeoutMillis", "exact")
-    fun uiLongClickSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+    fun uiLongClickSchema(): JsonObject = uiSelectorSchema("text", "resourceId", "contentDesc", "className", "bounds",
         "x", "y", "index", "timeoutMillis", "exact")
-    fun uiInputSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+    fun uiInputSchema(): JsonObject = uiSelectorSchema("text", "resourceId", "contentDesc", "className", "bounds",
         "index", "timeoutMillis", "exact", required = arrayOf("text"))
-    fun uiNodeActionSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className",
+    fun uiNodeActionSchema(): JsonObject = uiSelectorSchema("text", "resourceId", "contentDesc", "className",
         "bounds", "index", "timeoutMillis", "exact", "action", "args", required = arrayOf("action")).apply {
         getAsJsonObject("properties").add("args", JsonObject().apply { addProperty("type", "object") })
     }
     fun uiSwipeSchema(): JsonObject = objectSchema("x1", "y1", "x2", "y2", "durationMillis",
         required = arrayOf("x1", "y1", "x2", "y2"))
     fun uiGlobalSchema(): JsonObject = objectSchema("action", required = arrayOf("action"))
-    fun uiWaitSchema(): JsonObject = objectSchema("text", "resourceId", "contentDesc", "className", "bounds",
+    fun uiWaitSchema(): JsonObject = uiSelectorSchema("index", "text", "resourceId", "contentDesc", "className", "bounds",
         "timeoutMillis", "intervalMillis", "exact")
-    fun uiScrollSchema(): JsonObject = objectSchema("direction", "text", "resourceId", "contentDesc",
+    fun uiScrollSchema(): JsonObject = uiSelectorSchema("direction", "text", "resourceId", "contentDesc",
         "className", "timeoutMillis", "exact")
     fun appListSchema(): JsonObject = objectSchema("query", "includeSystem", "limit")
     fun appInfoSchema(): JsonObject = objectSchema("packageName", required = arrayOf("packageName"))
@@ -107,6 +107,25 @@ internal object McpToolSchema {
     fun appUrlSchema(): JsonObject = objectSchema("url", required = arrayOf("url"))
     fun apkInstallSchema(): JsonObject = objectSchema("path", required = arrayOf("path"))
     fun apkUninstallSchema(): JsonObject = objectSchema("packageName", required = arrayOf("packageName"))
+    private fun uiSelectorSchema(vararg names: String, required: Array<String> = emptyArray()): JsonObject =
+        objectSchema(*names, required = required).apply {
+            val properties = getAsJsonObject("properties")
+            val nested = objectSchema("text", "resourceId", "contentDesc", "contentDescription", "className", "bounds", "x", "y", "index", "exact")
+            val bounds = JsonObject().apply {
+                add("oneOf", JsonArray().apply {
+                    add(JsonObject().apply { addProperty("type", "string") })
+                    add(JsonObject().apply {
+                        addProperty("type", "array"); addProperty("minItems", 4); addProperty("maxItems", 4)
+                        add("items", JsonObject().apply { addProperty("type", "integer") })
+                    })
+                    add(JsonObject().apply { addProperty("type", "object") })
+                })
+            }
+            nested.getAsJsonObject("properties").add("bounds", bounds.deepCopy())
+            properties.add("selector", nested)
+            if (properties.has("bounds")) properties.add("bounds", bounds)
+        }
+
     fun objectSchema(vararg names: String, required: Array<String> = emptyArray()) = JsonObject().apply {
         addProperty("type", "object")
         add("properties", JsonObject().apply {

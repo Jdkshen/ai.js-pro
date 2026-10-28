@@ -348,6 +348,12 @@ open class UiObject(info: Any?, private val allocator: AccessibilityNodeInfoAllo
     }
 
 
+    fun editable(): Boolean = isEditable
+    fun contextClickable(): Boolean = isContextClickable
+    fun dismissable(): Boolean = isDismissable
+    fun contentInvalid(): Boolean = isContentInvalid
+    fun multiLine(): Boolean = isMultiLine
+
     open fun scrollable(): Boolean {
         return isScrollable
     }

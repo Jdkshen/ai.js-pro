@@ -14,6 +14,8 @@ import com.stardust.autojs.host.IAutomationHost;
 import com.stardust.autojs.host.IAutomationHostCallback;
 import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * Phase1 P1：{@code :script} 进程 -> 主进程 {@code AutomationHostService} 的 AIDL 客户端。
  *
@@ -42,6 +44,10 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
 
     /** 绑定等待预算：主进程服务是常驻的，正常 <100ms；2s 只是兜底。 */
     private static final long BIND_TIMEOUT_MS = 2000L;
+
+    /** setTextNode 文本上限：JS 字符数 32Ki，UTF-8 编码 64KiB；超限明确报错，不截断。 */
+    private static final int MAX_SET_TEXT_CHARS = 32_768;
+    private static final int MAX_SET_TEXT_UTF8_BYTES = 64 * 1024;
 
     private static volatile AutomationHostClient sInstance;
 
@@ -245,7 +251,36 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
         }
     }
 
-    // ---- RemoteAutomationBridge.Backend 实现（全部同步，失败返回安全默认值） ----
+    /**
+     * 节点查询/动作失败必须抛给引擎侧，不能折叠成 "[]"/""/false：
+     * 否则 Binder 断连会伪装成「没找到节点」或「动作不支持」，脚本无法区分。
+     */
+    private IllegalStateException hostCallFailure(String api, Throwable error) {
+        onCallFailed(api, error);
+        String detail = error == null ? null : error.getMessage();
+        if (detail == null || detail.trim().isEmpty()) {
+            detail = error == null ? "未知错误" : error.getClass().getSimpleName();
+        }
+        return new IllegalStateException(
+                "主进程自动化服务调用失败（" + api + "）：" + detail, error);
+    }
+
+    /** setText 的 Binder/字符集预算：超限直接拒绝，不静默截断或交给 Binder 截断。 */
+    private static void validateSetText(String text) {
+        if (text.length() > MAX_SET_TEXT_CHARS) {
+            throw new IllegalArgumentException("setTextNode.text 过长：" + text.length()
+                    + " 字符（上限 " + MAX_SET_TEXT_CHARS + " 字符 / "
+                    + MAX_SET_TEXT_UTF8_BYTES + " UTF-8 字节）");
+        }
+        int utf8Bytes = text.getBytes(StandardCharsets.UTF_8).length;
+        if (utf8Bytes > MAX_SET_TEXT_UTF8_BYTES) {
+            throw new IllegalArgumentException("setTextNode.text 的 UTF-8 编码过长：" + utf8Bytes
+                    + " 字节（上限 " + MAX_SET_TEXT_CHARS + " 字符 / "
+                    + MAX_SET_TEXT_UTF8_BYTES + " UTF-8 字节）");
+        }
+    }
+
+    // ---- RemoteAutomationBridge.Backend 实现（同步；节点匹配/动作失败抛明确异常，其它保持安全默认值） ----
 
     @Override
     public boolean isReady() {
@@ -273,8 +308,7 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
             String dump = requireService().getLatestNodeDump();
             return dump == null ? "" : dump;
         } catch (Throwable error) {
-            onCallFailed("getLatestNodeDump", error);
-            return "";
+            throw hostCallFailure("getLatestNodeDump", error);
         }
     }
 
@@ -284,8 +318,7 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
             String nodes = requireService().findNodes(selectorJson == null ? "{}" : selectorJson);
             return nodes == null ? "[]" : nodes;
         } catch (Throwable error) {
-            onCallFailed("findNodes", error);
-            return "[]";
+            throw hostCallFailure("findNodes", error);
         }
     }
 
@@ -296,8 +329,7 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
                     selectorJson == null ? "{}" : selectorJson, index);
             return node == null ? "" : node;
         } catch (Throwable error) {
-            onCallFailed("getNodeInfo", error);
-            return "";
+            throw hostCallFailure("getNodeInfo", error);
         }
     }
 
@@ -306,8 +338,7 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
         try {
             return requireService().clickNode(selectorJson == null ? "{}" : selectorJson, index);
         } catch (Throwable error) {
-            onCallFailed("clickNode", error);
-            return false;
+            throw hostCallFailure("clickNode", error);
         }
     }
 
@@ -316,19 +347,19 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
         try {
             return requireService().longClickNode(selectorJson == null ? "{}" : selectorJson, index);
         } catch (Throwable error) {
-            onCallFailed("longClickNode", error);
-            return false;
+            throw hostCallFailure("longClickNode", error);
         }
     }
 
     @Override
     public boolean setTextNode(String selectorJson, int index, String text) {
+        String value = text == null ? "" : text;
+        validateSetText(value);
         try {
             return requireService().setTextNode(
-                    selectorJson == null ? "{}" : selectorJson, index, text == null ? "" : text);
+                    selectorJson == null ? "{}" : selectorJson, index, value);
         } catch (Throwable error) {
-            onCallFailed("setTextNode", error);
-            return false;
+            throw hostCallFailure("setTextNode", error);
         }
     }
 
@@ -341,8 +372,7 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
                     action == null ? "" : action,
                     argumentsJson == null ? "[]" : argumentsJson);
         } catch (Throwable error) {
-            onCallFailed("nodeAction", error);
-            return false;
+            throw hostCallFailure("nodeAction", error);
         }
     }
 

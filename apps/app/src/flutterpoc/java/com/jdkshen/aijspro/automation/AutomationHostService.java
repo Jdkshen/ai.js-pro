@@ -202,7 +202,7 @@ public class AutomationHostService extends android.app.Service {
         @Override
         public String getLatestNodeDump() {
             if (!isTrustedCaller()) return "";
-            return onMain(TIMEOUT_MS, "", deadline -> {
+            return onAutomationMain("nodeDump", deadline -> {
                 long now = SystemClock.uptimeMillis();
                 String cached = mDumpCache;
                 if (cached != null && now - mDumpCacheAt <= NODE_DUMP_TTL_MS) {
@@ -227,7 +227,7 @@ public class AutomationHostService extends android.app.Service {
                 Log.w(TAG, "findNodes: selectorJson 解析失败", error);
                 return "";
             }
-            return onMain(TIMEOUT_MS, "", deadline -> findNodesJson(spec, deadline));
+            return onAutomationMain("nodeQuery", deadline -> findNodesJson(spec, deadline));
         }
 
         @Override
@@ -241,7 +241,7 @@ public class AutomationHostService extends android.app.Service {
                 return "";
             }
             final int position = normalizeIndex(index);
-            return onMain(TIMEOUT_MS, "", deadline -> {
+            return onAutomationMain("nodeQuery", deadline -> {
                 AccessibilityService service = accessibilityService();
                 if (service == null) return "";
                 List<NodeMatch> matches = findMatches(service, spec, position + 1, deadline);
@@ -262,7 +262,7 @@ public class AutomationHostService extends android.app.Service {
                 return false;
             }
             final int position = normalizeIndex(index);
-            return onMain(TIMEOUT_MS, false, deadline ->
+            return onAutomationMain("nodeAction", deadline ->
                     performNodeAction(spec, position, AccessibilityNodeInfo.ACTION_CLICK, null, deadline));
         }
 
@@ -277,7 +277,7 @@ public class AutomationHostService extends android.app.Service {
                 return false;
             }
             final int position = normalizeIndex(index);
-            return onMain(TIMEOUT_MS, false, deadline ->
+            return onAutomationMain("nodeAction", deadline ->
                     performNodeAction(spec, position, AccessibilityNodeInfo.ACTION_LONG_CLICK, null, deadline));
         }
 
@@ -293,7 +293,7 @@ public class AutomationHostService extends android.app.Service {
             }
             final int position = normalizeIndex(index);
             final String value = text == null ? "" : text;
-            return onMain(TIMEOUT_MS, false, deadline -> {
+            return onAutomationMain("nodeAction", deadline -> {
                 Bundle arguments = new Bundle();
                 arguments.putCharSequence(
                         AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
@@ -321,6 +321,7 @@ public class AutomationHostService extends android.app.Service {
                 Log.w(TAG, "nodeAction: arguments 解析失败", error);
                 return false;
             }
+            com.stardust.automator.NodeActionArguments.validate(name, args);
             int actionId;
             Bundle arguments = null;
             try {
@@ -374,7 +375,7 @@ public class AutomationHostService extends android.app.Service {
             }
             final int resolvedAction = actionId;
             final Bundle resolvedArguments = arguments;
-            return onMain(TIMEOUT_MS, false, deadline -> performNodeAction(
+            return onAutomationMain("nodeAction", deadline -> performNodeAction(
                     spec, position, resolvedAction, resolvedArguments, deadline));
         }
 
@@ -1014,7 +1015,7 @@ public class AutomationHostService extends android.app.Service {
             pathJson.put(path[i]);
         }
         json.put("path", pathJson);
-        json.put("text", charSequenceToString(node.getText()));
+        json.put("text", node.isPassword() ? "" : charSequenceToString(node.getText()));
         json.put("desc", charSequenceToString(node.getContentDescription()));
         String fullId = node.getViewIdResourceName();
         json.put("id", fullId == null ? "" : fullId);
@@ -1040,6 +1041,21 @@ public class AutomationHostService extends android.app.Service {
         json.put("longClickable", node.isLongClickable());
         json.put("visibleToUser", node.isVisibleToUser());
         json.put("password", node.isPassword());
+        json.put("accessibilityFocused", node.isAccessibilityFocused());
+        json.put("contextClickable", node.isContextClickable());
+        json.put("dismissable", node.isDismissable());
+        json.put("contentInvalid", node.isContentInvalid());
+        json.put("multiLine", node.isMultiLine());
+        json.put("isHierarchically", node.getCollectionInfo() != null && node.getCollectionInfo().isHierarchical());
+        AccessibilityNodeInfo.CollectionItemInfo item = node.getCollectionItemInfo();
+        AccessibilityNodeInfo.CollectionInfo collection = node.getCollectionInfo();
+        json.put("row", item == null ? -1 : item.getRowIndex());
+        json.put("column", item == null ? -1 : item.getColumnIndex());
+        json.put("rowSpan", item == null ? 0 : item.getRowSpan());
+        json.put("columnSpan", item == null ? 0 : item.getColumnSpan());
+        json.put("rowCount", collection == null ? 0 : collection.getRowCount());
+        json.put("columnCount", collection == null ? 0 : collection.getColumnCount());
+
         try { json.put("drawingOrder", node.getDrawingOrder()); } catch (Throwable ignored) { }
         Rect boundsInParent = new Rect();
         try { node.getBoundsInParent(boundsInParent); } catch (Throwable ignored) { }
@@ -1198,10 +1214,24 @@ public class AutomationHostService extends android.app.Service {
 
     /** 主线程执行 + 超时（binder 线程等待；超时后延迟动作由 cancelled 标记跳过）。 */
     @SuppressWarnings("unchecked")
+    /** Transport/queue failure is not the same outcome as not-found or performAction=false. */
+    private <T> T onAutomationMain(String api, MainCall<T> call) {
+        if (accessibilityService() == null) throw new IllegalStateException(api + ": 无障碍服务未连接");
+        long started = SystemClock.uptimeMillis();
+        T result = onMain(TIMEOUT_MS, null, deadline -> {
+            if (accessibilityService() == null) throw new IllegalStateException("无障碍服务已断开");
+            return call.run(deadline);
+        });
+        if (result == null || SystemClock.uptimeMillis() - started >= TIMEOUT_MS)
+            throw new IllegalStateException(api + ": 主线程自动化请求超时或执行失败，请查看宿主日志");
+        return result;
+    }
+
     private <T> T onMain(long timeoutMs, T fallback, MainCall<T> call) {
+        final long deadline = SystemClock.uptimeMillis() + timeoutMs;
         if (Looper.myLooper() == Looper.getMainLooper()) {
             try {
-                return call.run(SystemClock.uptimeMillis() + timeoutMs);
+                return call.run(deadline);
             } catch (Throwable error) {
                 Log.w(TAG, "主线程执行失败（调用方本身在主线程）", error);
                 return fallback;
@@ -1212,12 +1242,12 @@ public class AutomationHostService extends android.app.Service {
         final Throwable[] failure = new Throwable[1];
         final CountDownLatch latch = new CountDownLatch(1);
         boolean posted = mMainHandler.post(() -> {
-            if (cancelled.get()) {
+            if (cancelled.get() || SystemClock.uptimeMillis() >= deadline) {
                 latch.countDown();
                 return;
             }
             try {
-                result[0] = call.run(SystemClock.uptimeMillis() + timeoutMs);
+                result[0] = call.run(deadline);
             } catch (Throwable error) {
                 failure[0] = error;
             } finally {
@@ -1365,7 +1395,7 @@ public class AutomationHostService extends android.app.Service {
                 if (fullId == null) return false;
                 if (!fullId.equals(id) && !simplifyId(fullId).equals(id)) return false;
             }
-            String nodeText = charSequenceToString(node.getText());
+            String nodeText = node.isPassword() ? "" : charSequenceToString(node.getText());
             if (text != null && !nodeText.equals(text)) return false;
             if (textContains != null && !nodeText.contains(textContains)) return false;
             if (textStartsWith != null && !nodeText.startsWith(textStartsWith)) return false;

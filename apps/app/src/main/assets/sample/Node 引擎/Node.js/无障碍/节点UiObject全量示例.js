@@ -4,7 +4,8 @@
 // 前置：系统设置 → 无障碍 → 本应用服务已开启；脚本在前台运行。
 // 安全：只操作脚本自己弹出的 SAFE_CLOSE 对话框（标题 NODE_API_UI_SURFACE），
 //       不点击真实应用按钮，不读写剪贴板，不修改用户输入；setText 只写自己的输入框并恢复。
-// 输出：逐项 [PASS]/[FAIL]/[SKIP]，末尾 NODE_UI_API_RESULT JSON 与 RESULT 行。
+// 输出：PASS 为接口/类型检查；false 动作记 SKIP；缺少接口记 FAIL。实际效果由对应检查确认。
+// 末尾 NODE_UI_API_RESULT JSON 与 RESULT 行，不能把 PASS 数量当成全部动作已生效。
 //
 // Node24 的 select()/firstOrNull()/findFirst()/all()/root() 是 Promise；节点动作是同步 boolean。
 // 本示例用 typeof 检查每个方法：后端尚未实现的统一动作/属性会明确输出 SKIP，不伪造 PASS。
@@ -156,10 +157,14 @@
     function callMethod(name, node, method, args) {
         if (node === null || node === undefined) { skip(name, '没有节点'); return undefined; }
         const fn = node[method];
-        if (typeof fn !== 'function') { skip(name, method + ' 未定义（Node 后端待实现）'); return undefined; }
+        if (typeof fn !== 'function') { fail(name, method + ' 缺少接口'); return undefined; }
         try {
             const value = fn.apply(node, args || []);
-            if (typeof value === 'boolean') { pass(name, 'return=' + value); return value; }
+            if (typeof value === 'boolean') {
+            if (value) pass(name, 'return=true（接口回报；效果由对应检查确认）');
+            else skip(name, 'return=false：动作未生效，可能不支持/被拒绝/节点过期');
+            return value;
+        }
             fail(name, '返回类型 ' + typeof value + '，期望 boolean');
             return undefined;
         } catch (error) {

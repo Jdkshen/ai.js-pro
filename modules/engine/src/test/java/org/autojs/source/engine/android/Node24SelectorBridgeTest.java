@@ -271,6 +271,147 @@ public class Node24SelectorBridgeTest {
         }
     }
 
+    @Test public void nodeActionRejectsUnknownActionAndBadArgumentsBeforeBackend() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        Node24AutomationBridge bridge = newBridge(backend);
+        try {
+            JSONObject selector = new JSONObject();
+            assertError(bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "scrollDown")), "arguments");
+            assertError(bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "scrollDown").put("arguments", JSONObject.NULL)), "arguments");
+            assertError(bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "scrollDown").put("arguments", new JSONObject())), "arguments");
+            assertError(bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "scrollDown").put("arguments", "[]")), "arguments");
+            assertError(bridge.handle(request("nodeAction", selector)
+                    .put("actionName", 3).put("arguments", new JSONArray())), "actionName");
+            assertError(bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "bogus").put("arguments", new JSONArray())), "不支持");
+            assertNodeActionArgsError(bridge, "scrollDown",
+                    new JSONArray().put(1), "不接受参数");
+
+            assertNodeActionArgsError(bridge, "setSelection", new JSONArray(), "参数");
+            assertNodeActionArgsError(bridge, "setSelection",
+                    new JSONArray().put(0), "参数");
+            assertNodeActionArgsError(bridge, "setSelection",
+                    new JSONArray().put(0).put(1).put(2), "参数");
+            assertNodeActionArgsError(bridge, "setSelection",
+                    new JSONArray().put(-1).put(0), "32 位整数");
+            assertNodeActionArgsError(bridge, "setSelection",
+                    new JSONArray().put(0).put(2_147_483_648L), "32 位整数");
+            assertNodeActionArgsError(bridge, "setSelection",
+                    new JSONArray().put(1.5).put(2), "整数");
+            assertNodeActionArgsError(bridge, "setSelection",
+                    new JSONArray().put("0").put(1), "整数");
+            assertNodeActionArgsError(bridge, "setSelection",
+                    new JSONArray().put(5).put(4), "start <= end");
+
+            assertNodeActionArgsError(bridge, "scrollTo",
+                    new JSONArray().put(-1).put(0), "32 位整数");
+            assertNodeActionArgsError(bridge, "scrollTo",
+                    new JSONArray().put(0).put(2_147_483_648L), "32 位整数");
+            assertNodeActionArgsError(bridge, "scrollTo",
+                    new JSONArray().put(0.5).put(1), "整数");
+            assertNodeActionArgsError(bridge, "scrollTo",
+                    new JSONArray().put(1), "参数");
+
+            assertNodeActionArgsError(bridge, "setProgress", new JSONArray(), "参数");
+            assertNodeActionArgsError(bridge, "setProgress",
+                    new JSONArray().put(0.5).put(1), "参数");
+            assertNodeActionArgsError(bridge, "setProgress",
+                    new JSONArray().put("0.5"), "必须是数字");
+            assertNodeActionArgsError(bridge, "setProgress",
+                    new JSONArray().put(1e39), "float 有限范围");
+
+            assertEquals("非法参数不能调用 backend.nodeAction", 0, backend.nodeActionCalls);
+        } finally {
+            bridge.close();
+        }
+    }
+
+    @Test public void nodeActionForwardsKnownActionsWithExactArguments() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        Node24AutomationBridge bridge = newBridge(backend);
+        try {
+            JSONObject selector = new JSONObject().put("id", "btn");
+            backend.nodeActionResult = false;
+            JSONObject noArgs = bridge.handle(requestWithIndex("nodeAction", 4, selector)
+                    .put("actionName", "scrollDown").put("arguments", new JSONArray()));
+            assertTrue(noArgs.optBoolean("ok"));
+            assertFalse("performAction false 必须原样返回", noArgs.optBoolean("value", true));
+            assertEquals("scrollDown", backend.lastNodeAction);
+            assertEquals("[]", backend.lastNodeActionArguments);
+            assertEquals(4, backend.lastIndex);
+
+            backend.nodeActionResult = true;
+            JSONObject selection = bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "setSelection")
+                    .put("arguments", new JSONArray().put(0).put(4)));
+            assertTrue(selection.optBoolean("ok"));
+            assertTrue(selection.optBoolean("value"));
+            assertEquals("setSelection", backend.lastNodeAction);
+            assertEquals("[0,4]", backend.lastNodeActionArguments);
+
+            JSONObject scrollTo = bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "scrollTo")
+                    .put("arguments", new JSONArray().put(0).put(Integer.MAX_VALUE)));
+            assertTrue(scrollTo.optBoolean("ok"));
+            assertEquals("scrollTo", backend.lastNodeAction);
+            assertEquals("[0,2147483647]", backend.lastNodeActionArguments);
+
+            JSONObject progress = bridge.handle(request("nodeAction", selector)
+                    .put("actionName", "setProgress")
+                    .put("arguments", new JSONArray().put(0.5)));
+            assertTrue(progress.optBoolean("ok"));
+            assertEquals("setProgress", backend.lastNodeAction);
+            assertEquals("[0.5]", backend.lastNodeActionArguments);
+
+            assertEquals("btn", new JSONObject(backend.lastSelectorJson).getString("id"));
+            assertEquals("所有合法动作都必须转发到 backend", 4, backend.nodeActionCalls);
+        } finally {
+            bridge.close();
+        }
+    }
+
+    @Test public void nodeActionBackendFailureReturnsErrorEnvelopeNotFalse() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.nodeActionFailure = new IllegalStateException(
+                "主进程自动化服务调用失败（nodeAction）：Binder 已断开");
+        Node24AutomationBridge bridge = newBridge(backend);
+        try {
+            JSONObject response = bridge.handle(request("nodeAction", new JSONObject())
+                    .put("actionName", "scrollDown").put("arguments", new JSONArray()));
+            assertFalse(response.optBoolean("ok", true));
+            assertFalse("异常不能折叠成 value=false", response.has("value"));
+            assertTrue(response.optString("error", "").contains("Binder 已断开"));
+            assertEquals(1, backend.nodeActionCalls);
+        } finally {
+            bridge.close();
+        }
+    }
+
+    @Test public void setTextNodeRejectsOversizeTextBeforeBackend() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        Node24AutomationBridge bridge = newBridge(backend);
+        try {
+            JSONObject selector = new JSONObject();
+            assertError(bridge.handle(request("setTextNode", selector)
+                    .put("text", repeat("a", 32_769))), "过长");
+            assertError(bridge.handle(request("setTextNode", selector)
+                    .put("text", repeat("中", 21_846))), "UTF-8");
+            assertEquals("超限文本不能调用 backend.setTextNode", 0, backend.setTextNodeCalls);
+
+            JSONObject boundary = bridge.handle(request("setTextNode", selector)
+                    .put("text", repeat("a", 32_768)));
+            assertTrue(boundary.optBoolean("ok"));
+            assertEquals(1, backend.setTextNodeCalls);
+            assertEquals(32_768, backend.lastText.length());
+        } finally {
+            bridge.close();
+        }
+    }
+
     @Test public void notReadyAndClosedActionsReturnHonestErrors() throws Exception {
         FakeBackend backend = new FakeBackend();
         backend.ready = false;
@@ -377,6 +518,14 @@ public class Node24SelectorBridgeTest {
         assertError(bridge.handle(request("findNodes", selector)), fragment);
     }
 
+    private static void assertNodeActionArgsError(Node24AutomationBridge bridge, String action,
+                                                  JSONArray arguments, String fragment)
+            throws Exception {
+        JSONObject request = request("nodeAction", new JSONObject())
+                .put("actionName", action).put("arguments", arguments);
+        assertError(bridge.handle(request), fragment);
+    }
+
     private static JSONObject assertError(JSONObject response, String fragment) {
         assertFalse("expected error response: " + response, response.optBoolean("ok", true));
         String message = response.optString("error", "");
@@ -396,14 +545,19 @@ public class Node24SelectorBridgeTest {
         boolean clickNodeResult = true;
         boolean longClickNodeResult = true;
         boolean setTextNodeResult = true;
+        boolean nodeActionResult = true;
+        RuntimeException nodeActionFailure;
         String lastSelectorJson;
         int lastIndex = -1;
         String lastText;
+        String lastNodeAction;
+        String lastNodeActionArguments;
         int findNodesCalls;
         int getNodeInfoCalls;
         int clickNodeCalls;
         int longClickNodeCalls;
         int setTextNodeCalls;
+        int nodeActionCalls;
 
         @Override public boolean isReady() {
             return ready;
@@ -450,6 +604,19 @@ public class Node24SelectorBridgeTest {
             lastIndex = index;
             lastText = text;
             return setTextNodeResult;
+        }
+
+        @Override public boolean nodeAction(String selectorJson, int index, String action,
+                                            String argumentsJson) {
+            nodeActionCalls++;
+            lastSelectorJson = selectorJson;
+            lastIndex = index;
+            lastNodeAction = action;
+            lastNodeActionArguments = argumentsJson;
+            if (nodeActionFailure != null) {
+                throw nodeActionFailure;
+            }
+            return nodeActionResult;
         }
 
         @Override public boolean click(int x, int y) {

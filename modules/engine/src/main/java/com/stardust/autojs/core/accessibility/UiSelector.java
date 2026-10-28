@@ -366,6 +366,8 @@ public class UiSelector extends UiGlobalSelector {
     }
 
     @ScriptInterface
+    public boolean clickCenter() { return untilFind().clickCenter(); }
+
     public boolean longClick() {
         return performAction(ACTION_LONG_CLICK);
     }

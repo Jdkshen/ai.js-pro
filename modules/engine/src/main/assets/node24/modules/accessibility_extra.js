@@ -23,11 +23,12 @@
   var HOST_FIELDS = ['id', 'text', 'textContains', 'textStartsWith', 'textMatches', 'desc',
     'descContains', 'className', 'packageName', 'clickable', 'enabled', 'scrollable',
     'depth', 'index', 'bounds', 'path'];
-  var ALL_FIELDS = HOST_FIELDS.concat(['childCount', 'editable', 'indexInParent']);
+  var ALL_FIELDS = HOST_FIELDS.concat(['childCount', 'editable', 'indexInParent', 'checkable', 'checked', 'focusable', 'focused', 'selected', 'longClickable', 'visibleToUser', 'password', 'accessibilityFocused', 'contextClickable', 'dismissable', 'contentInvalid', 'multiLine', 'drawingOrder', 'row', 'column', 'rowCount', 'columnCount', 'rowSpan', 'columnSpan']);
   var REGEXP_FIELDS = ['id', 'text', 'desc', 'className', 'packageName'];
   var STRING_FIELDS = ['textContains', 'textStartsWith', 'textMatches', 'descContains'];
-  var BOOLEAN_FIELDS = ['clickable', 'enabled', 'scrollable', 'editable'];
-  var INTEGER_FIELDS = ['depth', 'index', 'indexInParent'];
+  var BOOLEAN_FIELDS = ['clickable', 'enabled', 'scrollable', 'editable', 'checkable', 'checked', 'focusable', 'focused', 'selected', 'longClickable', 'visibleToUser', 'password', 'accessibilityFocused', 'contextClickable', 'dismissable', 'contentInvalid', 'multiLine', 'isHierarchically'];
+  var INTEGER_FIELDS = ['depth', 'index', 'indexInParent', 'drawingOrder', 'row', 'column', 'rowCount', 'columnCount', 'rowSpan', 'columnSpan'];
+  var EXTRA_INTEGER_FIELDS = ['drawingOrder', 'row', 'column', 'rowCount', 'columnCount', 'rowSpan', 'columnSpan'];
   var COMPARISON_OPERATORS = ['>', '>=', '<', '<=', '==', '===', '!=', '!=='];
 
   function apiError(message) {
@@ -103,6 +104,7 @@
     for (var i = 0; i < path.length; i++) { requireInt(path[i], 'node.path[]', 0); }
     out.path = path.slice();
     if (Array.isArray(raw.bounds)) { out.bounds = raw.bounds.slice(); }
+    if (out.password === true) out.text = '';
     return out;
   }
   function normalizeNode(value, label) {
@@ -320,8 +322,9 @@
       return requireBoolean(value, '选择器 ' + key);
     }
     if (INTEGER_FIELDS.indexOf(key) >= 0) {
-      var integer = requireInt(value, '选择器 ' + key, 0);
-      if ((key === 'depth' && integer > 63) || (key !== 'depth' && integer > 8191)) {
+      var constrained = key === 'depth' || key === 'index' || key === 'indexInParent';
+      var integer = requireInt(value, '选择器 ' + key, constrained ? 0 : -2147483648);
+      if ((key === 'depth' && integer > 63) || (constrained && key !== 'depth' && integer > 8191) || integer > 2147483647) {
         throw rangeError('选择器 ' + key + ' 超出宿主范围');
       }
       return integer;
@@ -366,7 +369,7 @@
     for (var key in spec) {
       if (!Object.prototype.hasOwnProperty.call(spec, key)) { continue; }
       if (isRegExp(spec[key])) { return true; }
-      if (key === 'childCount' || key === 'editable' || key === 'indexInParent') { return true; }
+      if (HOST_FIELDS.indexOf(key) < 0) { return true; }
     }
     return false;
   }
@@ -375,7 +378,7 @@
     for (var key in spec) {
       if (!Object.prototype.hasOwnProperty.call(spec, key)) { continue; }
       if (isRegExp(spec[key])) { continue; }
-      if (key === 'childCount' || key === 'editable' || key === 'indexInParent') { continue; }
+      if (HOST_FIELDS.indexOf(key) < 0) { continue; }
       if (key === 'path') { out[key] = spec[key].slice(); }
       else if (key === 'bounds') { out[key] = copyBounds(spec[key]); }
       else { out[key] = spec[key]; }
@@ -464,6 +467,10 @@
       if (Object.prototype.hasOwnProperty.call(spec, key)
         && rawBoolean(raw, key) !== spec[key]) { return false; }
     }
+    for (var scalarIndex = 0; scalarIndex < EXTRA_INTEGER_FIELDS.length; scalarIndex++) {
+      var scalar = EXTRA_INTEGER_FIELDS[scalarIndex];
+      if (Object.prototype.hasOwnProperty.call(spec, scalar) && rawInt(raw, scalar, -1) !== spec[scalar]) return false;
+    }
     if (Object.prototype.hasOwnProperty.call(spec, 'depth')
       && depthOf(raw) !== spec.depth) { return false; }
     if (Object.prototype.hasOwnProperty.call(spec, 'index')
@@ -496,7 +503,7 @@
     seen.push(state);
     if (state.pathOnly) {
       seen.pop();
-      return { pathOnly: state.pathOnly.slice() };
+      return { pathOnly: state.pathOnly.slice(), identity: state.identity ? cloneSpec(state.identity) : null };
     }
     var out = {
       spec: cloneSpec(state.spec || {}),
@@ -581,21 +588,22 @@
   NodeView.prototype.parent = function () {
     var path = rawPath(this._raw);
     if (path.length === 0) { return null; }
-    var tree = this._tree || getDump();
+    var tree = navigationTree(this);
     var raw = findRawByPath(tree, path.slice(0, path.length - 1));
     return raw ? new NodeView({ raw: raw, tree: tree, fromPath: this._fromPath }) : null;
   };
   NodeView.prototype.child = function (index) {
     requireInt(index, 'child.index', 0);
-    var children = this.children();
-    return children[index] || null;
+    var tree = navigationTree(this);
+    var raw = findRawByPath(tree, rawPath(this._raw).concat([index]));
+    return raw ? new NodeView({ raw: raw, tree: tree, fromPath: this._fromPath }) : null;
   };
   NodeView.prototype.children = function () {
-    var tree = this._tree || getDump();
+    var tree = navigationTree(this);
     var path = rawPath(this._raw);
-    return directChildrenRaws(tree, path).map(function (raw) {
+    return nodeCollection(directChildrenRaws(tree, path).map(function (raw) {
       return new NodeView({ raw: raw, tree: tree, fromPath: path });
-    });
+    }));
   };
 
   /* ------------------------------- Node ---------------------------------- */
@@ -664,23 +672,25 @@
   Node.prototype.parent = function () {
     var path = rawPath(this._raw);
     if (path.length === 0) { return null; }
-    var tree = this._tree || getDump();
+    var tree = navigationTree(this);
     var raw = findRawByPath(tree, path.slice(0, path.length - 1));
     return raw ? new Node(raw, { path: rawPath(raw).slice() }, 0, {
       tree: tree, fromPath: this._fromPath
     }) : null;
   };
   Node.prototype.children = function () {
-    var tree = this._tree || getDump();
+    var tree = navigationTree(this);
     var path = rawPath(this._raw);
-    return directChildrenRaws(tree, path).map(function (raw) {
+    return nodeCollection(directChildrenRaws(tree, path).map(function (raw) {
       return new Node(raw, { path: rawPath(raw).slice() }, 0, { tree: tree, fromPath: path });
-    });
+    }));
   };
   Node.prototype.child = function (index) {
     requireInt(index, 'child.index', 0);
-    var children = this.children();
-    return children[index] || null;
+    var tree = navigationTree(this);
+    var raw = findRawByPath(tree, rawPath(this._raw).concat([index]));
+    return raw ? new Node(raw, { path: rawPath(raw).slice() }, 0,
+      { tree: tree, fromPath: this._fromPath }) : null;
   };
   Node.prototype.childCount = function () {
     var explicit = rawInt(this._raw, 'childCount', null);
@@ -695,11 +705,17 @@
     var fields = ['id', 'className', 'packageName', 'text', 'desc'];
     for (var i = 0; i < fields.length; i++) {
       var value = raw[fields[i]];
+      if (fields[i] === 'text' && raw.password === true) continue;
       if (typeof value === 'string' && (fields[i] !== 'id' || value !== '')) {
         selector[fields[i]] = value;
       }
     }
     return selector;
+  }
+  function navigationTree(node) {
+    if (node._tree) return node._tree;
+    var dump = getDump(), current = findRawByPath(dump, rawPath(node._raw));
+    return current && matchesSpec(current, identitySelector(node), dump, true) ? dump : [];
   }
   function actionBoolean(action, value) {
     if (typeof value !== 'boolean') {
@@ -753,7 +769,7 @@
       text: text
     };
     var result = actionBoolean('setTextNode', hostValue(request));
-    if (result) { node._raw.text = text; }
+    if (result) { node._raw.text = node._raw.password === true ? '' : text; }
     return result;
   }
   function performScroll(node, forward) {
@@ -785,6 +801,8 @@
       automation('getNodeInfo', { selector: selector, index: 0 }),
       'getNodeInfo');
     if (!current) { return false; }
+    if (!Array.isArray(current.bounds) || current.bounds.length !== 4
+        || current.bounds.some(function (v) { return typeof v !== 'number' || !Number.isFinite(v) || Math.floor(v) !== v || v < -2147483648 || v > 2147483647; })) return false;
     var bounds = boundsFromArray(current.bounds);
     if (bounds.width <= 0 || bounds.height <= 0
         || bounds.left < 0 || bounds.top < 0) {
@@ -822,29 +840,81 @@
     proto.accessibilityFocus = function () { return performGenericAction(this, 'accessibilityFocus'); };
     proto.clearAccessibilityFocus = function () { return performGenericAction(this, 'clearAccessibilityFocus'); };
     proto.setSelection = function (start, end) {
-      return performGenericActionWithArgs(this, 'setSelection',
-        [requireInt(start, 'setSelection.start', 0), requireInt(end, 'setSelection.end', 0)]);
+      start = requireInt(start, 'setSelection.start', 0); end = requireInt(end, 'setSelection.end', 0);
+      if (start > 2147483647 || end > 2147483647) throw rangeError('setSelection 参数超过 32 位整数');
+      if (end < start) { throw typeError('setSelection 需要 start <= end'); }
+      return performGenericActionWithArgs(this, 'setSelection', [start, end]);
     };
     proto.setProgress = function (value) {
-      if (typeof value !== 'number' || !isFinite(value)) {
+      if (typeof value !== 'number' || !isFinite(value) || Math.abs(value) > 3.4028234663852886e38) {
         throw typeError('setProgress 需要有限数字');
       }
       return performGenericActionWithArgs(this, 'setProgress', [value]);
     };
     proto.scrollTo = function (row, column) {
-      return performGenericActionWithArgs(this, 'scrollTo',
-        [requireInt(row, 'scrollTo.row', 0), requireInt(column, 'scrollTo.column', 0)]);
+      row = requireInt(row, 'scrollTo.row', 0); column = requireInt(column, 'scrollTo.column', 0);
+      if (row > 2147483647 || column > 2147483647) throw rangeError('scrollTo 参数超过 32 位整数');
+      return performGenericActionWithArgs(this, 'scrollTo', [row, column]);
     };
   }
   installNodeActions(Node.prototype);
   installNodeActions(NodeView.prototype);
   function installFindHelpers(proto) {
-    proto.find = function (selector) { return select(selector).from(this).find(); };
-    proto.findOne = function (selector) { return select(selector).from(this).findOnce(0); };
-    proto.findByText = function (text) { return select({ text: String(text) }).from(this).find(); };
+    var propertyView = proto === NodeView.prototype;
+    proto.find = function (selector) {
+      var query = select(selector).from(this);
+      return propertyView ? nodeCollection(executeAll(snapshotState(query))) : query.find();
+    };
+    proto.findOne = function (selector) {
+      var query = select(selector).from(this);
+      return propertyView ? executeAt(snapshotState(query), 0) : query.findOnce(0);
+    };
+    proto.findByText = function (text) { return this.find({ textContains: String(text) }); };
+    proto.findByViewId = function (id) { return this.find({ id: String(id) }); };
   }
   installFindHelpers(Node.prototype);
   installFindHelpers(NodeView.prototype);
+
+  // Scalar getters read the same host snapshot as the Java engines.
+  ["accessibilityFocused", "contextClickable", "dismissable", "contentInvalid", "multiLine", "isHierarchically"].forEach(function (key) {
+    Node.prototype[key] = function () { return rawBoolean(this._raw, key); };
+    Object.defineProperty(NodeView.prototype, key, { enumerable: true, get: function () { return rawBoolean(this._raw, key); } });
+  });
+  EXTRA_INTEGER_FIELDS.forEach(function (key) {
+    if (!Node.prototype[key]) Node.prototype[key] = function () { return rawInt(this._raw, key, key === "row" || key === "column" ? -1 : 0); };
+    if (!Object.getOwnPropertyDescriptor(NodeView.prototype, key))
+      Object.defineProperty(NodeView.prototype, key, { enumerable: true, get: function () { return rawInt(this._raw, key, key === "row" || key === "column" ? -1 : 0); } });
+  });
+
+  function validateCollectionAction(name, args) {
+    if (name === 'setSelection' || name === 'scrollTo') {
+      var first = requireInt(args[0], name + '.first', 0), second = requireInt(args[1], name + '.second', 0);
+      if (first > 2147483647 || second > 2147483647) throw rangeError(name + ' 参数超过 32 位整数');
+      if (name === 'setSelection' && first > second) throw typeError('setSelection 需要 start <= end');
+    } else if (name === 'setProgress') {
+      if (typeof args[0] !== 'number' || !Number.isFinite(args[0]) || Math.abs(args[0]) > 3.4028234663852886e38)
+        throw typeError('setProgress 需要有限数字');
+    }
+  }
+  function nodeCollection(nodes) {
+    function method(name, fn) { Object.defineProperty(nodes, name, {value:fn, configurable:true}); }
+    method('size', function () { return nodes.length; });
+    method('empty', function () { return nodes.length === 0; });
+    method('nonEmpty', function () { return nodes.length > 0; });
+    method('get', function (index) { requireInt(index, 'collection.get.index', 0); return nodes[index] || null; });
+    method('toArray', function () { return nodes.slice(); });
+    ['click','clickCenter','longClick','setText','copy','cut','paste','select','collapse','expand','dismiss','show',
+      'scrollForward','scrollBackward','scrollUp','scrollDown','scrollLeft','scrollRight','contextClick','focus',
+      'clearFocus','accessibilityFocus','clearAccessibilityFocus','setSelection','scrollTo','setProgress'].forEach(function (name) {
+      method(name, function () {
+        var args = arguments, success = true;
+        validateCollectionAction(name, args);
+        for (var i = 0; i < nodes.length; i++) if (nodes[i][name].apply(nodes[i], args) !== true) success = false;
+        return success;
+      });
+    });
+    return nodes;
+  }
 
   /* ----------------------------- 查询执行 -------------------------------- */
   function getDump() {
@@ -856,7 +926,11 @@
     return raw ? new NodeView({ raw: raw, tree: dump, fromPath: null }) : null;
   }
   function collectParentPaths(state, dump) {
-    if (state.pathOnly) { return [state.pathOnly.slice()]; }
+    if (state.pathOnly) {
+      var parent = findRawByPath(dump, state.pathOnly);
+      if (!parent || (state.identity && !matchesSpec(parent, state.identity, dump, true))) return [];
+      return [state.pathOnly.slice()];
+    }
     var parents = evaluateState(state, dump);
     var paths = [];
     for (var i = 0; i < parents.length; i++) { paths.push(rawPath(parents[i]._raw).slice()); }
@@ -1057,6 +1131,7 @@
   for (var fi = 0; fi < ALL_FIELDS.length; fi++) {
     (function (field) {
       UiSelector.prototype[field] = function (value) {
+        if (arguments.length === 0 && BOOLEAN_FIELDS.indexOf(field) >= 0) value = true;
         this._spec[field] = parseSpecField(field, value);
         return this;
       };
@@ -1088,7 +1163,7 @@
     if (parent instanceof UiSelector) {
       this._from = snapshotState(parent, []);
     } else if (parent instanceof Node || parent instanceof NodeView) {
-      this._from = { pathOnly: rawPath(parent._raw).slice() };
+      this._from = { pathOnly: rawPath(parent._raw).slice(), identity: identitySelector(parent) };
     } else if (parent && typeof parent === 'object' && !Array.isArray(parent)
       && isPlainObject(parent)) {
       this._from = snapshotState(new UiSelector(parent), []);
@@ -1100,8 +1175,26 @@
   UiSelector.prototype.spec = function () { return cloneSpec(this._spec); };
   UiSelector.prototype.find = function () {
     var state = snapshotState(this);
-    return executeAll(state).map(toNode);
+    return nodeCollection(executeAll(state).map(toNode));
   };
+  UiSelector.prototype.untilFind = function (timeout) {
+    var limit = timeout == null ? Infinity : requireInt(timeout, 'untilFind.timeout', 0), started = Date.now();
+    for (;;) {
+      var matches = this.find();
+      if (matches.length) return matches;
+      if (Date.now() - started >= limit) throw new NotFoundError('未找到匹配的节点', snapshotState(this).spec);
+      sleepSync(POLL_INTERVAL_MILLIS);
+    }
+  };
+  ['click','clickCenter','longClick','setText','copy','cut','paste','select','collapse','expand','dismiss','show',
+    'scrollForward','scrollBackward','scrollUp','scrollDown','scrollLeft','scrollRight','contextClick','focus',
+    'clearFocus','accessibilityFocus','clearAccessibilityFocus','setSelection','scrollTo','setProgress'].forEach(function (name) {
+      UiSelector.prototype[name] = function () {
+        validateCollectionAction(name, arguments);
+        var nodes = this.untilFind();
+        return nodes[name].apply(nodes, arguments);
+      };
+    });
   UiSelector.prototype.findOnce = function (index) {
     var state = snapshotState(this);
     var position = index == null ? 0 : requireInt(index, 'findOnce.index', 0);
@@ -1141,7 +1234,7 @@
   };
   UiSelector.prototype.all = function () {
     var state = snapshotState(this);
-    return Promise.resolve().then(function () { return pollAll(state); });
+    return Promise.resolve().then(function () { return pollAll(state); }).then(nodeCollection);
   };
   UiSelector.prototype.exists = function () { return this.findOnce(0) != null; };
   UiSelector.prototype.waitFor = function (timeout) {

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> **当前发布 dev-1278（2026-10-28，仅 LAN）**：[Node 节点示例补齐 + 长流程超时修复](docs/reports/2026-10-28_节点分析隔离与大树优化.md#dev-1278-node-统一示例补齐)：Node 的 `节点UiObject全量示例.js` 补到「Node 引擎/三引擎统一示例」；普通 Node 脚本上限 1 小时。142,377,692 字节，SHA `f6982433…`；LAN 已发布，MI8 已装。
+> **当前发布 dev-1279（2026-10-28，仅 LAN）**：[三引擎节点 API 复核](docs/reports/2026-10-28_三引擎节点API复核与修复.md)：接手 GPT 未提交工作，修复 Rhino UI 线程停止信号、RemoteUiObject/RemoteUiSelector 属性动作/遍历、NodeActionArguments 严格校验、密码脱敏/setText 上限、MCP 嵌套 selector/index/exact；956 JVM + 44 Node 契约通过。142,401,636 字节，SHA `c8c91cfb…`；LAN 已发布，MI8 已装。
 
 > **2026-10-27 节点分析与 AJ Pro 高级版静态对照（未改代码/未发布）**：[逆向对照与优化优先级](docs/reports/2026-10-27_节点分析悬浮窗_AJPro高级版逆向对照.md)。指定 com.boyai.auma 9.3.11-0 APK 重新定向反编译；双方服务清单确认 AJ :script、当前主进程，AJ 音量下退出分析当前未接；属性当前31项/AJ28项，搜索/快照/高级生成器已存在。优先抓取预算/取消和恢复、退出、大树性能、隔离与主题。没有双方真机测速或修复通过结论；DP只读超时，主助手核对。
 

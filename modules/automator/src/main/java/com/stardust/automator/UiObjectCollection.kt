@@ -88,6 +88,13 @@ class UiObjectCollection private constructor(private val mNodes: List<UiObject?>
         return performAction(ACTION_CLICK)
     }
 
+    /** Apply coordinate-center clicks to every member, preserving all-success collection semantics. */
+    fun clickCenter(): Boolean {
+        var success = true
+        for (node in mNodes) if (node?.clickCenter() != true) success = false
+        return success
+    }
+
     fun longClick(): Boolean {
         return performAction(ACTION_LONG_CLICK)
     }

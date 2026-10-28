@@ -67,4 +67,12 @@ class McpToolSchemaTest {
         assertFalse(schema.has("required"))
         assertTrue(schema.has("additionalProperties"))
     }
+    @org.junit.Test fun uiSelectorsAdvertiseNestedTargetsAndBoundsShapes() {
+        val input = McpToolSchema.uiInputSchema().getAsJsonObject("properties")
+        org.junit.Assert.assertEquals("object", input.getAsJsonObject("selector").get("type").asString)
+        org.junit.Assert.assertTrue(input.getAsJsonObject("selector").getAsJsonObject("properties").has("text"))
+        org.junit.Assert.assertEquals(3, input.getAsJsonObject("bounds").getAsJsonArray("oneOf").size())
+        org.junit.Assert.assertTrue(McpToolSchema.uiWaitSchema().getAsJsonObject("properties").has("index"))
+    }
+
 }

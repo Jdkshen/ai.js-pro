@@ -31,8 +31,7 @@ import java.util.regex.Pattern;
  * <p>覆盖范围（批一）：id/text/desc/className/packageName 的 equals/contains/startsWith/
  * endsWith/matches、bounds/boundsInside/boundsContains、clickable/enabled/scrollable/depth，
  * 以及 find/findOne/findOnce/untilFind/exists/waitFor/click/longClick/setText/scroll*。
- * 其它 UiSelector 条件（checked/focused/row/column/filter 等）快照里没有对应字段，调用时抛明确
- * 中文异常，不静默返回错误结果。
+ * 布尔状态、集合行列与边界条件在宿主快照上本地匹配，并与下发条件取交集。
  */
 public final class RemoteUiSelector {
 
@@ -109,6 +108,10 @@ public final class RemoteUiSelector {
     public RemoteUiSelector scrollable(boolean value) {
         return putBoolean("scrollable", value);
     }
+
+    public RemoteUiSelector clickable() { return clickable(true); }
+    public RemoteUiSelector enabled() { return enabled(true); }
+    public RemoteUiSelector scrollable() { return scrollable(true); }
 
     public RemoteUiSelector depth(int value) {
         return putInt("depth", value);
@@ -274,6 +277,13 @@ public final class RemoteUiSelector {
         return new RemoteUiObjectCollection(roots);
     }
 
+    /** Intersect the selector result with this live root's strict descendants. */
+    RemoteUiObjectCollection findWithin(RemoteUiObject root) {
+        List<RemoteUiObject> result = new ArrayList<>();
+        if (root.exists()) for (RemoteUiObject node : find()) if (node.isDescendantOf(root)) result.add(node);
+        return new RemoteUiObjectCollection(result);
+    }
+
     public RemoteUiObjectCollection find() {
         return find(Integer.MAX_VALUE);
     }
@@ -285,14 +295,11 @@ public final class RemoteUiSelector {
         String selectorJson = mRemote.toString();
         boolean proxyable = mLocalFilters.isEmpty();
         try {
-            JSONArray nodes;
-            if (proxyable) {
-                // 契约支持的条件全部下发主进程，让主进程用真正的 UiSelector 语义匹配。
-                nodes = new JSONArray(backend.findNodes(selectorJson));
-            } else {
-                // 含本地过滤条件：先取全量快照，:script 侧过滤（避免下发后索引对不上）。
-                nodes = new JSONArray(backend.getLatestNodeDump());
-            }
+            // First apply wire conditions, then local predicates to the SAME result set.
+            // Dumping the whole window here used to silently drop id/text/package filters.
+            JSONArray nodes = mRemote.length() == 0 && !mLocalFilters.isEmpty()
+                    ? new JSONArray(backend.getLatestNodeDump())
+                    : new JSONArray(backend.findNodes(selectorJson));
             for (int i = 0; i < nodes.length() && result.size() < max; i++) {
                 JSONObject node = nodes.optJSONObject(i);
                 if (node == null || !matchesLocal(node)) {
@@ -385,85 +392,78 @@ public final class RemoteUiSelector {
     // ---- 选择器级动作（对第一个匹配节点执行） -----------------------------
 
     public boolean click() {
-        return firstNodeOrThrow("click").click();
+        return untilFind().click();
     }
 
     public boolean longClick() {
-        return firstNodeOrThrow("longClick").longClick();
+        return untilFind().longClick();
     }
 
     public boolean setText(String text) {
-        return firstNodeOrThrow("setText").setText(text);
+        return untilFind().setText(text);
     }
 
     public boolean scrollForward() {
-        throw unsupported("scrollForward");
+        return untilFind().scrollForward();
     }
 
     public boolean scrollBackward() {
-        throw unsupported("scrollBackward");
+        return untilFind().scrollBackward();
     }
 
-    // ---- 其它 UiSelector 条件：批一快照里没有字段，明确抛错 ---------------
+    // ---- Local predicates over the wire-filtered candidate set ---------------
 
-    public RemoteUiSelector checkable(boolean value) {
-        throw unsupportedCondition("checkable");
+    private RemoteUiSelector localBoolean(String key, boolean expected) {
+        mLocalFilters.add(node -> node.optBoolean(key, false) == expected); return this;
     }
-
-    public RemoteUiSelector checkable() {
-        throw unsupportedCondition("checkable");
+    private RemoteUiSelector localInt(String key, int expected) {
+        mLocalFilters.add(node -> node.optInt(key, -1) == expected); return this;
     }
-
-    public RemoteUiSelector checked(boolean value) {
-        throw unsupportedCondition("checked");
-    }
-
-    public RemoteUiSelector checked() {
-        throw unsupportedCondition("checked");
-    }
-
-    public RemoteUiSelector focusable(boolean value) {
-        throw unsupportedCondition("focusable");
-    }
-
-    public RemoteUiSelector focused() {
-        throw unsupportedCondition("focused");
-    }
-
-    public RemoteUiSelector selected(boolean value) {
-        throw unsupportedCondition("selected");
-    }
-
-    public RemoteUiSelector selected() {
-        throw unsupportedCondition("selected");
-    }
-
-    public RemoteUiSelector visibleToUser(boolean value) {
-        throw unsupportedCondition("visibleToUser");
-    }
-
-    public RemoteUiSelector visibleToUser() {
-        throw unsupportedCondition("visibleToUser");
-    }
-
-    public RemoteUiSelector row(int value) {
-        throw unsupportedCondition("row");
-    }
-
-    public RemoteUiSelector column(int value) {
-        throw unsupportedCondition("column");
-    }
-
-    public RemoteUiSelector indexInParent(int value) {
-        throw unsupportedCondition("indexInParent");
-    }
-
+    public RemoteUiSelector checkable(boolean value) { return localBoolean("checkable", value); }
+    public RemoteUiSelector checkable() { return checkable(true); }
+    public RemoteUiSelector checked(boolean value) { return localBoolean("checked", value); }
+    public RemoteUiSelector checked() { return checked(true); }
+    public RemoteUiSelector focusable(boolean value) { return localBoolean("focusable", value); }
+    public RemoteUiSelector focusable() { return focusable(true); }
+    public RemoteUiSelector focused(boolean value) { return localBoolean("focused", value); }
+    public RemoteUiSelector focused() { return focused(true); }
+    public RemoteUiSelector selected(boolean value) { return localBoolean("selected", value); }
+    public RemoteUiSelector selected() { return selected(true); }
+    public RemoteUiSelector visibleToUser(boolean value) { return localBoolean("visibleToUser", value); }
+    public RemoteUiSelector visibleToUser() { return visibleToUser(true); }
+    public RemoteUiSelector editable(boolean value) { return localBoolean("editable", value); }
+    public RemoteUiSelector editable() { return editable(true); }
+    public RemoteUiSelector longClickable(boolean value) { return localBoolean("longClickable", value); }
+    public RemoteUiSelector longClickable() { return longClickable(true); }
+    public RemoteUiSelector password(boolean value) { return localBoolean("password", value); }
+    public RemoteUiSelector password() { return password(true); }
+    public RemoteUiSelector accessibilityFocused(boolean value) { return localBoolean("accessibilityFocused", value); }
+    public RemoteUiSelector accessibilityFocused() { return accessibilityFocused(true); }
+    public RemoteUiSelector contextClickable(boolean value) { return localBoolean("contextClickable", value); }
+    public RemoteUiSelector contextClickable() { return contextClickable(true); }
+    public RemoteUiSelector dismissable(boolean value) { return localBoolean("dismissable", value); }
+    public RemoteUiSelector dismissable() { return dismissable(true); }
+    public RemoteUiSelector contentInvalid(boolean value) { return localBoolean("contentInvalid", value); }
+    public RemoteUiSelector contentInvalid() { return contentInvalid(true); }
+    public RemoteUiSelector multiLine(boolean value) { return localBoolean("multiLine", value); }
+    public RemoteUiSelector multiLine() { return multiLine(true); }
+    public RemoteUiSelector drawingOrder(int value) { return localInt("drawingOrder", value); }
+    public RemoteUiSelector row(int value) { return localInt("row", value); }
+    public RemoteUiSelector column(int value) { return localInt("column", value); }
+    public RemoteUiSelector rowCount(int value) { return localInt("rowCount", value); }
+    public RemoteUiSelector columnCount(int value) { return localInt("columnCount", value); }
+    public RemoteUiSelector rowSpan(int value) { return localInt("rowSpan", value); }
+    public RemoteUiSelector columnSpan(int value) { return localInt("columnSpan", value); }
+    public RemoteUiSelector indexInParent(int value) { return localInt("indexInParent", value); }
     public RemoteUiSelector boundsInside(int left, int top, int right, int bottom) {
-        throw unsupportedCondition("boundsInside");
+        mLocalFilters.add(node -> { JSONArray b = node.optJSONArray("bounds");
+            return b != null && b.length() == 4 && b.optInt(0) >= left && b.optInt(1) >= top
+                && b.optInt(2) <= right && b.optInt(3) <= bottom; }); return this;
     }
-
     public RemoteUiSelector boundsContains(int left, int top, int right, int bottom) {
-        throw unsupportedCondition("boundsContains");
+        mLocalFilters.add(node -> { JSONArray b = node.optJSONArray("bounds");
+            return b != null && b.length() == 4 && b.optInt(0) <= left && b.optInt(1) <= top
+                && b.optInt(2) >= right && b.optInt(3) >= bottom; }); return this;
     }
 
     @Override
@@ -472,6 +472,28 @@ public final class RemoteUiSelector {
     }
 
     // ---- 内部辅助 --------------------------------------------------------
+
+    public boolean clickCenter() { return untilFind().clickCenter(); }
+    public boolean scrollUp() { return untilFind().scrollUp(); }
+    public boolean scrollDown() { return untilFind().scrollDown(); }
+    public boolean scrollLeft() { return untilFind().scrollLeft(); }
+    public boolean scrollRight() { return untilFind().scrollRight(); }
+    public boolean copy() { return untilFind().copy(); }
+    public boolean cut() { return untilFind().cut(); }
+    public boolean paste() { return untilFind().paste(); }
+    public boolean select() { return untilFind().select(); }
+    public boolean collapse() { return untilFind().collapse(); }
+    public boolean expand() { return untilFind().expand(); }
+    public boolean dismiss() { return untilFind().dismiss(); }
+    public boolean show() { return untilFind().show(); }
+    public boolean contextClick() { return untilFind().contextClick(); }
+    public boolean focus() { return untilFind().focus(); }
+    public boolean clearFocus() { return untilFind().clearFocus(); }
+    public boolean accessibilityFocus() { return untilFind().accessibilityFocus(); }
+    public boolean clearAccessibilityFocus() { return untilFind().clearAccessibilityFocus(); }
+    public boolean setSelection(int start, int end) { return untilFind().setSelection(start, end); }
+    public boolean setProgress(float value) { return untilFind().setProgress(value); }
+    public boolean scrollTo(int row, int column) { return untilFind().scrollTo(row, column); }
 
     private RemoteUiObject firstNodeOrThrow(String action) {
         RemoteUiObjectCollection nodes = find(1);
@@ -525,7 +547,7 @@ public final class RemoteUiSelector {
                 case ENDS_WITH:
                     return actual.endsWith(expected);
                 case MATCHES:
-                    return pattern.matcher(actual).find();
+                    return pattern.matcher(actual).matches();
                 default:
                     return false;
             }

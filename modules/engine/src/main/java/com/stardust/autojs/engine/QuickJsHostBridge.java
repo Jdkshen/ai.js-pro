@@ -57,6 +57,7 @@ import com.stardust.autojs.runtime.api.OpenCvYoloDetector;
 import com.stardust.autojs.runtime.api.Files;
 import com.stardust.autojs.runtime.api.ShizukuShell;
 import com.stardust.autojs.runtime.api.Yolo;
+import com.stardust.automator.NodeActionArguments;
 import com.stardust.automator.UiGlobalSelector;
 import com.stardust.automator.UiObject;
 import com.stardust.automator.UiObjectCollection;
@@ -6840,7 +6841,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     private static final String[] OBJECT_BOOL_PROPERTIES = {
             "checkable", "checked", "focusable", "focused", "visibleToUser", "accessibilityFocused", "selected",
-            "clickable", "longClickable", "enabled", "password", "scrollable",
+            "clickable", "longClickable", "enabled", "password", "scrollable", "editable", "contextClickable", "dismissable", "contentInvalid", "multiLine", "isHierarchically",
     };
 
     private final AtomicLong mNextAutomatorHandle = new AtomicLong(1);
@@ -6876,9 +6877,12 @@ final class QuickJsHostBridge implements AutoCloseable,
                 mRuntime.accessibilityBridge.setFlags(value);
                 return AUTOMATOR_VOID_RESULT;
             case "serviceReady":
-                return encodeAutomatorResult(mRuntime.accessibilityBridge.getService() != null);
+                return encodeAutomatorResult(RemoteAutomationBridge.isActive()
+                        ? RemoteAutomationBridge.requireBackend().isReady()
+                        : mRuntime.accessibilityBridge.getService() != null);
             case "rootActive":
             case "rootCurrent": {
+                if (RemoteAutomationBridge.isActive()) return encodeAutomatorResult(new RemoteUiSelector().root());
                 AccessibilityNodeInfo root = "rootActive".equals(method)
                         ? mRuntime.accessibilityBridge.getRootInActiveWindow()
                         : mRuntime.accessibilityBridge.getRootInCurrentWindow();
@@ -6954,6 +6958,17 @@ final class QuickJsHostBridge implements AutoCloseable,
                     new Object[]{ args.getInt(0), args.getInt(1), args.getInt(2), args.getInt(3) });
             return AUTOMATOR_VOID_RESULT;
         }
+        if (namesContain(NODE_ACTIONS, method)) return encodeAutomatorResult(invokeAutomator(selector, method, NO_PARAMS, NO_ARGS));
+        if ("setSelection".equals(method) || "scrollTo".equals(method)) {
+            NodeActionArguments.validate(method, args);
+            return encodeAutomatorResult(invokeAutomator(selector, method,
+                    new Class<?>[]{int.class, int.class},
+                    new Object[]{args.getInt(0), args.getInt(1)}));
+        }
+        if ("setProgress".equals(method)) {
+            NodeActionArguments.validate(method, args);
+            return encodeAutomatorResult(selector.setProgress((float) args.getDouble(0)));
+        }
         switch (method) {
             case "find":
                 return encodeAutomatorResult(args.length() > 0 && !args.isNull(0)
@@ -6994,6 +7009,9 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     private String callRemoteObject(RemoteUiObject object, String method, JSONArray args) throws Exception {
+        if (namesContain(NODE_ACTIONS, method) || namesContain(OBJECT_STRING_PROPERTIES, method)
+                || namesContain(OBJECT_INT_PROPERTIES, method) || namesContain(OBJECT_BOOL_PROPERTIES, method))
+            return encodeAutomatorResult(invokeAutomator(object, method, NO_PARAMS, NO_ARGS));
         switch (method) {
             case "text": return encodeAutomatorResult(object.text());
             case "desc": return encodeAutomatorResult(object.desc());
@@ -7014,6 +7032,19 @@ final class QuickJsHostBridge implements AutoCloseable,
             case "setText": return encodeAutomatorResult(object.setText(args.getString(0)));
             case "scrollForward": return encodeAutomatorResult(object.scrollForward());
             case "scrollBackward": return encodeAutomatorResult(object.scrollBackward());
+            case "children": return encodeAutomatorResult(object.children());
+            case "boundsInParent": return encodeAutomatorResult(object.boundsInParent());
+            case "setSelection":
+                NodeActionArguments.validate(method, args);
+                return encodeAutomatorResult(object.setSelection(args.getInt(0), args.getInt(1)));
+            case "setProgress":
+                NodeActionArguments.validate(method, args);
+                return encodeAutomatorResult(object.setProgress((float) args.getDouble(0)));
+            case "scrollTo":
+                NodeActionArguments.validate(method, args);
+                return encodeAutomatorResult(object.scrollTo(args.getInt(0), args.getInt(1)));
+            case "findByText": return encodeAutomatorResult(new RemoteUiObjectCollection(object.findByText(args.getString(0))));
+            case "findByViewId": return encodeAutomatorResult(new RemoteUiObjectCollection(object.findByViewId(args.getString(0))));
             case "parent": return encodeAutomatorResult(object.parent());
             case "child": return encodeAutomatorResult(object.child(args.getInt(0)));
             case "find": return encodeAutomatorResult(object.find((RemoteUiSelector) remoteHandleArg(args, 0)));
@@ -7024,6 +7055,17 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     private String callRemoteCollection(RemoteUiObjectCollection collection, String method, JSONArray args) throws Exception {
+        if (namesContain(NODE_ACTIONS, method)) return encodeAutomatorResult(invokeAutomator(collection, method, NO_PARAMS, NO_ARGS));
+        if ("setSelection".equals(method) || "scrollTo".equals(method)) {
+            NodeActionArguments.validate(method, args);
+            return encodeAutomatorResult(invokeAutomator(collection, method,
+                    new Class<?>[]{int.class, int.class},
+                    new Object[]{args.getInt(0), args.getInt(1)}));
+        }
+        if ("setProgress".equals(method)) {
+            NodeActionArguments.validate(method, args);
+            return encodeAutomatorResult(collection.setProgress((float) args.getDouble(0)));
+        }
         switch (method) {
             case "size": return encodeAutomatorResult(collection.size());
             case "empty": return encodeAutomatorResult(collection.empty());
@@ -7032,7 +7074,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             case "toString": return encodeAutomatorResult(collection.toString());
             case "click": { boolean any = false; for (RemoteUiObject item : collection) any |= item.click(); return encodeAutomatorResult(any); }
             case "longClick": { boolean any = false; for (RemoteUiObject item : collection) any |= item.longClick(); return encodeAutomatorResult(any); }
-            case "setText": { boolean any = false; for (RemoteUiObject item : collection) any |= item.setText(args.getString(0)); return encodeAutomatorResult(any); }
+            case "setText": return encodeAutomatorResult(collection.setText(args.getString(0)));
             default: throw new IllegalArgumentException("远程控件集合不支持的方法：" + method);
         }
     }
@@ -7070,10 +7112,12 @@ final class QuickJsHostBridge implements AutoCloseable,
                         new Class<?>[]{ String.class }, new Object[]{ args.getString(0) }));
             case "setSelection":
             case "scrollTo":
+                NodeActionArguments.validate(method, args);
                 return encodeAutomatorResult(invokeAutomator(selector, method,
                         new Class<?>[]{ int.class, int.class },
                         new Object[]{ args.getInt(0), args.getInt(1) }));
             case "setProgress":
+                NodeActionArguments.validate(method, args);
                 return encodeAutomatorResult(invokeAutomator(selector, method,
                         new Class<?>[]{ float.class }, new Object[]{ (float) args.getDouble(0) }));
             case "find":
@@ -7533,6 +7577,8 @@ final class QuickJsHostBridge implements AutoCloseable,
             return encodeAutomatorResult(invokeAutomator(object, method, NO_PARAMS, NO_ARGS));
         }
         switch (method) {
+            case "findByText": return encodeAutomatorResult(UiObjectCollection.Companion.of(object.findByText(args.getString(0))));
+            case "findByViewId": return encodeAutomatorResult(UiObjectCollection.Companion.of(object.findByViewId(args.getString(0))));
             case "bounds":
             case "boundsInParent":
             case "parent":
@@ -7546,10 +7592,12 @@ final class QuickJsHostBridge implements AutoCloseable,
                         new Class<?>[]{ String.class }, new Object[]{ args.getString(0) }));
             case "setSelection":
             case "scrollTo":
+                NodeActionArguments.validate(method, args);
                 return encodeAutomatorResult(invokeAutomator(object, method,
                         new Class<?>[]{ int.class, int.class },
                         new Object[]{ args.getInt(0), args.getInt(1) }));
             case "setProgress":
+                NodeActionArguments.validate(method, args);
                 return encodeAutomatorResult(invokeAutomator(object, method,
                         new Class<?>[]{ float.class }, new Object[]{ (float) args.getDouble(0) }));
             case "find":
@@ -7586,10 +7634,12 @@ final class QuickJsHostBridge implements AutoCloseable,
                         new Class<?>[]{ CharSequence.class }, new Object[]{ args.getString(0) }));
             case "setSelection":
             case "scrollTo":
+                NodeActionArguments.validate(method, args);
                 return encodeAutomatorResult(invokeAutomator(collection, method,
                         new Class<?>[]{ int.class, int.class },
                         new Object[]{ args.getInt(0), args.getInt(1) }));
             case "setProgress":
+                NodeActionArguments.validate(method, args);
                 return encodeAutomatorResult(invokeAutomator(collection, method,
                         new Class<?>[]{ float.class }, new Object[]{ (float) args.getDouble(0) }));
             case "toString":

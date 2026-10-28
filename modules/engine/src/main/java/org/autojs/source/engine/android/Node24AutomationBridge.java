@@ -9,6 +9,7 @@ import android.provider.Settings;
 import android.util.Log;
 
 import com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge;
+import com.stardust.automator.NodeActionArguments;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -19,6 +20,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -61,6 +63,9 @@ public final class Node24AutomationBridge implements AutoCloseable {
     private static final String SUPPORTED_SELECTOR_KEYS =
             "id/text/textContains/textStartsWith/textMatches/desc/descContains/className/"
                     + "packageName/clickable/enabled/scrollable/depth/index/path/bounds";
+    /** setTextNode 文本上限：JS 字符数 32Ki，UTF-8 编码 64KiB；超限明确报错，不截断。 */
+    private static final int MAX_SET_TEXT_CHARS = 32_768;
+    private static final int MAX_SET_TEXT_UTF8_BYTES = 64 * 1024;
 
     private final Context mContext;
     private final Node24Images mImages;
@@ -326,13 +331,35 @@ public final class Node24AutomationBridge implements AutoCloseable {
     private boolean nodeAction(JSONObject request) {
         String selectorJson = requireSelectorJson(request);
         int index = requireNodeIndex(request);
-        String action = request.optString("actionName", "");
+        String action = requireNodeActionName(request);
+        JSONArray arguments = requireNodeActionArguments(request);
+        NodeActionArguments.validate(action, arguments);
+        return requireReady().nodeAction(selectorJson, index, action, arguments.toString());
+    }
+
+    /** actionName 必须是字符串且属于主机契约白名单，拒绝 optString 的数字/对象宽松转换。 */
+    private static String requireNodeActionName(JSONObject request) {
+        Object raw = request == null ? null : request.opt("actionName");
+        if (!(raw instanceof String)) {
+            throw new IllegalArgumentException(
+                    "nodeAction.actionName 必须是字符串，收到：" + valueType(raw));
+        }
+        String action = (String) raw;
         if (action.isEmpty()) {
             throw new IllegalArgumentException("nodeAction 缺少 actionName");
         }
-        JSONArray arguments = request.optJSONArray("arguments");
-        return requireReady().nodeAction(selectorJson, index, action,
-                arguments == null ? "[]" : arguments.toString());
+        return action;
+    }
+
+    /** arguments 必须存在且是 JSON 数组；无参动作传 []，缺省/对象/字符串一律拒绝。 */
+    private static JSONArray requireNodeActionArguments(JSONObject request) {
+        Object raw = request == null ? null : request.opt("arguments");
+        if (!(raw instanceof JSONArray)) {
+            throw new IllegalArgumentException(
+                    "nodeAction 需要 arguments 字段且必须是 JSON 数组（无参动作传 []），收到："
+                            + valueType(raw));
+        }
+        return (JSONArray) raw;
     }
 
     /**
@@ -487,7 +514,19 @@ public final class Node24AutomationBridge implements AutoCloseable {
         if (!(raw instanceof String)) {
             throw new IllegalArgumentException("setTextNode.text 必须是字符串，收到：" + valueType(raw));
         }
-        return (String) raw;
+        String text = (String) raw;
+        if (text.length() > MAX_SET_TEXT_CHARS) {
+            throw new IllegalArgumentException("setTextNode.text 过长：" + text.length()
+                    + " 字符（上限 " + MAX_SET_TEXT_CHARS + " 字符 / "
+                    + MAX_SET_TEXT_UTF8_BYTES + " UTF-8 字节）");
+        }
+        int utf8Bytes = text.getBytes(StandardCharsets.UTF_8).length;
+        if (utf8Bytes > MAX_SET_TEXT_UTF8_BYTES) {
+            throw new IllegalArgumentException("setTextNode.text 的 UTF-8 编码过长：" + utf8Bytes
+                    + " 字节（上限 " + MAX_SET_TEXT_CHARS + " 字符 / "
+                    + MAX_SET_TEXT_UTF8_BYTES + " UTF-8 字节）");
+        }
+        return text;
     }
 
     private static String requireString(Object value, String label) {

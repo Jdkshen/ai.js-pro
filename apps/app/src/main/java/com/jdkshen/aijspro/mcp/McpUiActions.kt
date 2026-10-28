@@ -61,12 +61,23 @@ internal object McpUiActions {
     }
 
     fun click(selectorArg: JsonObject?): JsonObject {
-        val selector = parseSelector(selectorArg) ?: return fail("选择器参数解析失败")
+        val selector = try {
+            parseSelector(selectorArg)
+        } catch (error: Throwable) {
+            return fail("选择器参数解析失败：" + (error.message ?: error.javaClass.simpleName))
+        }
         if (selector.isEmpty) return fail("click 需要选择器条件或 x,y 坐标")
+        if (selector.isCoordinateOnly && selector.requestedIndex > 0) {
+            return fail("纯坐标 click 不支持 index>0；index 仅用于节点选择器，请去掉 index 或补充节点条件")
+        }
         val service = AccessibilityService.instance ?: return fail("需要开启 AI.js Pro 无障碍服务")
-        if (selector.isCoordinateOnly) return tapAt(service, selector.x!!, selector.y!!, false)
+        if (selector.isCoordinateOnly) {
+            return tapAt(service, selector.x!!, selector.y!!, false)
+        }
         val located = try {
             locateNode(service, selector)
+        } catch (error: UiLocateException) {
+            return fail(error.message ?: "没有找到匹配节点（" + selector.describe() + "）")
         } catch (error: Throwable) {
             return fail("查找节点失败：" + (error.message ?: error.javaClass.simpleName))
         } ?: return fail("没有找到匹配节点（" + selector.describe() + "）")
@@ -88,7 +99,7 @@ internal object McpUiActions {
                     addProperty("success", true)
                     addProperty("clicked", true)
                     addProperty("method", "accessibility-node")
-                    add("node", snapshotJson(0, located.snapshot))
+                    add("node", snapshotJson(selector.requestedIndex, located.snapshot))
                 }
             }
         } finally {
@@ -97,12 +108,23 @@ internal object McpUiActions {
     }
 
     fun longClick(selectorArg: JsonObject?): JsonObject {
-        val selector = parseSelector(selectorArg) ?: return fail("选择器参数解析失败")
+        val selector = try {
+            parseSelector(selectorArg)
+        } catch (error: Throwable) {
+            return fail("选择器参数解析失败：" + (error.message ?: error.javaClass.simpleName))
+        }
         if (selector.isEmpty) return fail("longClick 需要选择器条件或 x,y 坐标")
+        if (selector.isCoordinateOnly && selector.requestedIndex > 0) {
+            return fail("纯坐标 longClick 不支持 index>0；index 仅用于节点选择器，请去掉 index 或补充节点条件")
+        }
         val service = AccessibilityService.instance ?: return fail("需要开启 AI.js Pro 无障碍服务")
-        if (selector.isCoordinateOnly) return tapAt(service, selector.x!!, selector.y!!, true)
+        if (selector.isCoordinateOnly) {
+            return tapAt(service, selector.x!!, selector.y!!, true)
+        }
         val located = try {
             locateNode(service, selector)
+        } catch (error: UiLocateException) {
+            return fail(error.message ?: "没有找到匹配节点（" + selector.describe() + "）")
         } catch (error: Throwable) {
             return fail("查找节点失败：" + (error.message ?: error.javaClass.simpleName))
         } ?: return fail("没有找到匹配节点（" + selector.describe() + "）")
@@ -124,7 +146,7 @@ internal object McpUiActions {
                     addProperty("success", true)
                     addProperty("longClicked", true)
                     addProperty("method", "accessibility-node")
-                    add("node", snapshotJson(0, located.snapshot))
+                    add("node", snapshotJson(selector.requestedIndex, located.snapshot))
                 }
             }
         } finally {
@@ -136,78 +158,80 @@ internal object McpUiActions {
      * 通用节点动作（与 Pro UiObject 同名）：copy/cut/paste/select/collapse/expand/dismiss/show/
      * scrollForward/Backward/Up/Down/Left/Right/contextClick/focus/clearFocus/
      * accessibilityFocus/clearAccessibilityFocus/setSelection/scrollTo/setProgress。
+     *
+     * setSelection/scrollTo/setProgress 的 args 必须显式提供；缺参、错误类型、32 位溢出和
+     * 非有限 float 会在访问无障碍服务/定位节点之前拒绝，不再静默按 0 执行。
      */
     fun nodeAction(selectorArg: JsonObject?, actionArg: String, args: JsonObject? = null): JsonObject {
-        val selector = parseSelector(selectorArg) ?: return fail("选择器参数解析失败")
+        val selector = try {
+            parseSelector(selectorArg)
+        } catch (error: Throwable) {
+            return fail("选择器参数解析失败：" + (error.message ?: error.javaClass.simpleName))
+        }
         if (selector.isEmpty) return fail("nodeAction 需要选择器条件")
-        val action = actionArg.trim()
+        val plan = try {
+            McpUiNodeActionPlanner.plan(actionArg, args)
+        } catch (error: Throwable) {
+            return fail("nodeAction 参数错误：" + (error.message ?: error.javaClass.simpleName))
+        }
         val service = AccessibilityService.instance ?: return fail("需要开启 AI.js Pro 无障碍服务")
         val located = try {
             locateNode(service, selector)
+        } catch (error: UiLocateException) {
+            return fail(error.message ?: "没有找到匹配节点（" + selector.describe() + "）")
         } catch (error: Throwable) {
             return fail("查找节点失败：" + (error.message ?: error.javaClass.simpleName))
         } ?: return fail("没有找到匹配节点（" + selector.describe() + "）")
         return try {
             if (!located.node.isEnabled) return fail("匹配节点不可用（enabled=false）：" + located.snapshot.bounds)
-            var actionId = 0
-            var bundle: Bundle? = null
-            when (action) {
-                "copy" -> actionId = AccessibilityNodeInfo.ACTION_COPY
-                "cut" -> actionId = AccessibilityNodeInfo.ACTION_CUT
-                "paste" -> actionId = AccessibilityNodeInfo.ACTION_PASTE
-                "select" -> actionId = AccessibilityNodeInfo.ACTION_SELECT
-                "collapse" -> actionId = AccessibilityNodeInfo.ACTION_COLLAPSE
-                "expand" -> actionId = AccessibilityNodeInfo.ACTION_EXPAND
-                "dismiss" -> actionId = AccessibilityNodeInfo.ACTION_DISMISS
-                "show" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
-                "scrollForward" -> actionId = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                "scrollBackward" -> actionId = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                "scrollUp" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
-                "scrollDown" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
-                "scrollLeft" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id
-                "scrollRight" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id
-                "contextClick" -> actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_CONTEXT_CLICK.id
-                "focus" -> actionId = AccessibilityNodeInfo.ACTION_FOCUS
-                "clearFocus" -> actionId = AccessibilityNodeInfo.ACTION_CLEAR_FOCUS
-                "accessibilityFocus" -> actionId = AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
-                "clearAccessibilityFocus" -> actionId = AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
-                "setSelection" -> {
+            val actionId: Int
+            val bundle: Bundle?
+            when (plan) {
+                is UiNodeActionPlan.Simple -> {
+                    actionId = simpleActionId(plan.action)
+                        ?: return fail("nodeAction 不支持 action=" + plan.action
+                            + "；可选 " + McpUiNodeActionPlanner.SUPPORTED_ACTIONS)
+                    bundle = null
+                }
+                is UiNodeActionPlan.SetSelection -> {
                     actionId = AccessibilityNodeInfo.ACTION_SET_SELECTION
                     bundle = Bundle().apply {
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, args?.intOrNull("start") ?: 0)
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, args?.intOrNull("end") ?: 0)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, plan.start)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, plan.end)
                     }
                 }
-                "scrollTo" -> {
+                is UiNodeActionPlan.ScrollTo -> {
                     actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION.id
                     bundle = Bundle().apply {
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, args?.intOrNull("row") ?: 0)
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_COLUMN_INT, args?.intOrNull("column") ?: 0)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, plan.row)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_COLUMN_INT, plan.column)
                     }
                 }
-                "setProgress" -> {
+                is UiNodeActionPlan.SetProgress -> {
                     actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id
                     bundle = Bundle().apply {
-                        putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,
-                            (args?.get("value")?.let { runCatching { it.asFloat }.getOrNull() } ?: 0f))
+                        putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, plan.value)
                     }
                 }
-                else -> return fail("nodeAction 不支持 action=" + actionArg
-                    + "；可选 copy/cut/paste/select/collapse/expand/dismiss/show/scroll*/contextClick/focus/accessibilityFocus/setSelection/scrollTo/setProgress")
             }
             val performed = try {
-                if (bundle == null) located.node.performAction(actionId) else located.node.performAction(actionId, bundle)
+                if (bundle == null) {
+                    located.node.performAction(actionId)
+                } else {
+                    located.node.performAction(actionId, bundle)
+                }
             } catch (_: Throwable) {
                 false
             }
             if (performed) {
                 JsonObject().apply {
                     addProperty("success", true)
-                    addProperty("action", action)
-                    add("node", snapshotJson(0, located.snapshot))
+                    addProperty("action", plan.action)
+                    add("node", snapshotJson(selector.requestedIndex, located.snapshot))
                 }
             } else {
-                fail("节点动作失败（" + action + "，performAction 返回 false；节点可能不支持该动作或页面已变化）")
+                fail("节点动作失败（" + plan.action
+                    + "，performAction 返回 false；节点可能不支持该动作或页面已变化）")
             }
         } finally {
             runCatching { located.node.recycle() }
@@ -215,12 +239,18 @@ internal object McpUiActions {
     }
 
     fun input(selectorArg: JsonObject?, text: String): JsonObject {
-        val selector = parseSelector(selectorArg) ?: return fail("选择器参数解析失败")
+        val selector = try {
+            parseSelector(McpUiSelector.inputTarget(selectorArg))
+        } catch (error: Throwable) {
+            return fail("选择器参数解析失败：" + (error.message ?: error.javaClass.simpleName))
+        }
         if (selector.isEmpty) return fail("input 需要可编辑节点的选择器")
         if (selector.isCoordinateOnly) return fail("input 不能只用坐标；需要 text/resourceId/... 定位可编辑节点")
         val service = AccessibilityService.instance ?: return fail("需要开启 AI.js Pro 无障碍服务")
         val located = try {
             locateNode(service, selector)
+        } catch (error: UiLocateException) {
+            return fail(error.message ?: "没有找到匹配节点（" + selector.describe() + "）")
         } catch (error: Throwable) {
             return fail("查找节点失败：" + (error.message ?: error.javaClass.simpleName))
         } ?: return fail("没有找到匹配节点（" + selector.describe() + "）")
@@ -243,7 +273,7 @@ internal object McpUiActions {
                     addProperty("success", true)
                     addProperty("input", true)
                     addProperty("text", text)
-                    add("node", snapshotJson(0, located.snapshot))
+                    add("node", snapshotJson(selector.requestedIndex, located.snapshot))
                 }
             }
         } finally {
@@ -337,7 +367,11 @@ internal object McpUiActions {
     }
 
     fun waitFor(selectorArg: JsonObject?, timeoutMillis: Int, intervalMillis: Int = 100): JsonObject {
-        val selector = parseSelector(selectorArg) ?: return fail("选择器参数解析失败")
+        val selector = try {
+            parseSelector(selectorArg)
+        } catch (error: Throwable) {
+            return fail("选择器参数解析失败：" + (error.message ?: error.javaClass.simpleName))
+        }
         if (selector.isEmpty) return fail("waitFor 需要至少一个选择器条件")
         val timeout = timeoutMillis.coerceIn(0, 15_000)
         val interval = intervalMillis.coerceIn(20, 1000)
@@ -368,6 +402,7 @@ internal object McpUiActions {
     }
 
     private class Located(val node: AccessibilityNodeInfo, val snapshot: UiNodeSnapshot)
+    private class UiLocateException(message: String) : Exception(message)
 
     private fun collectMatches(root: AccessibilityNodeInfo, selector: McpUiSelector,
                                limit: Int): List<UiNodeSnapshot> {
@@ -405,9 +440,11 @@ internal object McpUiActions {
 
     private fun locateNode(service: AccessibilityService, selector: McpUiSelector): Located? {
         val root = service.rootInActiveWindow ?: return null
+        val cursor = UiMatchCursor(selector.requestedIndex)
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
         var inspected = 0
+        var truncated = false
         try {
             while (queue.isNotEmpty() && inspected < MAX_TRAVERSE_NODES) {
                 val node = queue.removeFirst()
@@ -416,7 +453,7 @@ internal object McpUiActions {
                 var keep = false
                 try {
                     val snapshot = snapshot(node)
-                    if (selector.matches(snapshot)) {
+                    if (selector.matches(snapshot) && cursor.acceptMatch()) {
                         keep = true
                         return Located(node, snapshot)
                     }
@@ -431,11 +468,29 @@ internal object McpUiActions {
                     if (owned && !keep) runCatching { node.recycle() }
                 }
             }
+            truncated = queue.isNotEmpty()
         } finally {
             while (queue.isNotEmpty()) {
                 val leftover = queue.removeFirst()
                 if (leftover !== root) runCatching { leftover.recycle() }
             }
+        }
+        val requested = selector.requestedIndex
+        if (requested > 0 && cursor.matchCount <= requested) {
+            val found = if (cursor.matchCount == 0) {
+                "实际没有匹配节点"
+            } else {
+                "实际只匹配到 " + cursor.matchCount + " 个"
+            }
+            val suffix = if (truncated) {
+                "；已达到遍历上限 " + MAX_TRAVERSE_NODES + "，结果可能不完整"
+            } else {
+                ""
+            }
+            throw UiLocateException(
+                "没有找到第 " + (requested + 1) + " 个匹配节点（index=" + requested +
+                    "，从0开始；" + found + suffix + "；选择器：" + selector.describe() + "）"
+            )
         }
         return null
     }
@@ -530,12 +585,31 @@ internal object McpUiActions {
         }
     }
 
-    private fun parseSelector(selectorArg: JsonObject?): McpUiSelector? {
-        return try {
-            McpUiSelector.parse(selectorFromArgs(selectorArg))
-        } catch (_: Throwable) {
-            null
-        }
+    private fun simpleActionId(action: String): Int? = when (action) {
+        "copy" -> AccessibilityNodeInfo.ACTION_COPY
+        "cut" -> AccessibilityNodeInfo.ACTION_CUT
+        "paste" -> AccessibilityNodeInfo.ACTION_PASTE
+        "select" -> AccessibilityNodeInfo.ACTION_SELECT
+        "collapse" -> AccessibilityNodeInfo.ACTION_COLLAPSE
+        "expand" -> AccessibilityNodeInfo.ACTION_EXPAND
+        "dismiss" -> AccessibilityNodeInfo.ACTION_DISMISS
+        "show" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
+        "scrollForward" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        "scrollBackward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        "scrollUp" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+        "scrollDown" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
+        "scrollLeft" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id
+        "scrollRight" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id
+        "contextClick" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_CONTEXT_CLICK.id
+        "focus" -> AccessibilityNodeInfo.ACTION_FOCUS
+        "clearFocus" -> AccessibilityNodeInfo.ACTION_CLEAR_FOCUS
+        "accessibilityFocus" -> AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
+        "clearAccessibilityFocus" -> AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+        else -> null
+    }
+
+    private fun parseSelector(selectorArg: JsonObject?): McpUiSelector {
+        return McpUiSelector.parse(selectorFromArgs(selectorArg))
     }
 
     private fun snapshot(node: AccessibilityNodeInfo): UiNodeSnapshot {
@@ -546,7 +620,7 @@ internal object McpUiActions {
         val right = maxOf(rect.left, rect.right)
         val bottom = maxOf(rect.top, rect.bottom)
         return UiNodeSnapshot(
-            text = node.text?.toString().orEmpty().take(2048),
+            text = if (node.isPassword) "" else node.text?.toString().orEmpty().take(2048),
             resourceId = node.viewIdResourceName.orEmpty(),
             contentDesc = node.contentDescription?.toString().orEmpty().take(2048),
             className = node.className?.toString().orEmpty(),

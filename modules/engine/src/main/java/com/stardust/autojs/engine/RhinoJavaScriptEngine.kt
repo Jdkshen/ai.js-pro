@@ -35,6 +35,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Context) : JavaScriptEngine() {
 
+    private val stopSignal = RhinoStopSignal()
+    fun isStopRequested(): Boolean = stopSignal.isRequested
+
     val context: Context
     private val mScriptable: TopLevelScope
     lateinit var thread: Thread
@@ -158,8 +161,9 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     }
 
     override fun forceStop() {
-        Log.d(LOG_TAG, "forceStop: interrupt Thread: $thread")
-        thread.interrupt()
+        val target = if (::thread.isInitialized) thread else null
+        Log.d(LOG_TAG, "forceStop: cancel Thread: $target")
+        stopSignal.request(target, android.os.Looper.getMainLooper().thread)
     }
 
 

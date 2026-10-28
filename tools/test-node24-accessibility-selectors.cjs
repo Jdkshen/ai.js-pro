@@ -220,6 +220,12 @@ function mockHost(raw) {
       if (state.failNodeAction || !findGuardedNode(request.selector)) { return reply(false); }
       return reply(true);
     }
+    case 'nodeAction': {
+      if (!checkSelector(request.selector)) return failure('bad selector');
+      const actions = ['copy','cut','paste','select','collapse','expand','dismiss','show','scrollForward','scrollBackward','scrollUp','scrollDown','scrollLeft','scrollRight','contextClick','focus','clearFocus','accessibilityFocus','clearAccessibilityFocus','setSelection','setProgress','scrollTo'];
+      if (!actions.includes(request.actionName) || !Array.isArray(request.arguments)) return failure('bad node action');
+      return reply(!state.failNodeAction && !!findGuardedNode(request.selector));
+    }
     case 'setTextNode': {
       if (!checkSelector(request.selector)) { return failure('bad selector'); }
       if (request.index !== 0) {
@@ -501,7 +507,7 @@ test('NodeView 元数据：childCount/scrollable/editable/indexInParent', async 
 // 严格参数校验
 // ---------------------------------------------------------------------------
 test('非法选择器参数严格拒绝，且不发宿主请求', () => {
-  assert.throws(() => select({ checked: true }), /未知选择器字段/);
+  assert.throws(() => select({ checked: 'true' }), /boolean/);
   assert.throws(() => select({ foo: 1 }), /未知选择器字段/);
   assert.throws(() => select({ clickable: 'true' }), /boolean/);
   assert.throws(() => select({ enabled: 1 }), /boolean/);
@@ -573,21 +579,14 @@ test('页面变化后动作失败返回 false，绝不坐标兜底', async () =>
   assert.equal(last('clickNode').selector.text, '日志');
 });
 
-test('scroll 先按 path+identity 复核节点，页面变化不滑旧坐标', async () => {
-  const list = await select({ id: 'list' }).firstOrNull();
-  const live = state.tree.find((raw) => samePath(raw.path, [2]));
-  live.bounds = [0, 100, 200, 300];
-
+test('scroll 发送原生节点动作并保护身份，失败不伪造手势', async () => {
+  const list = await select({id:'list'}).firstOrNull();
   assert.equal(list.scrollForward(), true);
-  const guard = last('getNodeInfo');
-  assert.deepEqual(guard.selector.path, [2]);
-  assert.equal(guard.selector.id, 'com.demo:id/list');
-  assert.equal(last('swipe').y1, 290, '应使用复核后的当前边界');
-  assert.equal(last('swipe').y2, 110);
-
-  live.className = 'android.widget.Changed';
+  assert.equal(last('nodeAction').actionName, 'scrollForward');
+  assert.deepEqual(last('nodeAction').selector.path, [2]);
+  state.tree.find(raw => samePath(raw.path,[2])).className = 'Changed';
   assert.equal(list.scrollBackward(), false);
-  assert.equal(requests('swipe').length, 1);
+  assert.equal(requests('swipe').length, 0);
 });
 
 test('setText：空串成功并更新 snapshot，非输入控件返回 false', async () => {
@@ -786,6 +785,94 @@ test('节点日志转义换行并限制长文本，属性和raw仍保留完整�
   const emojiNode = await select({ id: 'title' }).firstOrNull();
   const preview = JSON.parse(util.format('%O', emojiNode).slice('NodeView '.length));
   assert.equal(preview.text, 'a'.repeat(199) + '…', '摘要截断不得拆开 UTF-16 代理对');
+});
+
+test('新增节点动作逐个转发且宿主false保持false', async () => {
+  const node = await select({id:'title'}).firstOrNull();
+  for (const method of ['copy','cut','paste','select','collapse','expand','dismiss','show','scrollUp','scrollDown','scrollLeft','scrollRight','contextClick','focus','clearFocus','accessibilityFocus','clearAccessibilityFocus']) {
+    assert.equal(node[method](), true, method);
+    assert.equal(last('nodeAction').actionName,method);
+    assert.deepEqual(last('nodeAction').arguments, []);
+    assert.equal(last('nodeAction').selector.id,'com.demo:id/title');
+  }
+  state.failNodeAction=true;
+  assert.equal(node.focus(),false);
+  state.errorActions.add('nodeAction');
+  assert.throws(()=>node.focus(), /exploded/);
+});
+test('带参数动作完整转发，整数溢出/颠倒选区/非有限进度不得调用宿主', async () => {
+  const node = await select({id:'input'}).firstOrNull();
+  assert.equal(node.setSelection(0,3),true);assert.deepEqual(last('nodeAction').arguments,[0,3]);
+  assert.equal(node.scrollTo(2,3),true);assert.deepEqual(last('nodeAction').arguments,[2,3]);
+  assert.equal(node.setProgress(0.5),true);assert.deepEqual(last('nodeAction').arguments,[0.5]);
+  const before=requests('nodeAction').length;
+  for(const fn of [()=>node.setSelection(4,1),()=>node.setSelection(0,2**32),()=>node.scrollTo(2**32,0),()=>node.setProgress(Infinity),()=>node.setProgress(1e100)])assert.throws(fn);
+  assert.equal(requests('nodeAction').length,before);
+});
+test('NodeView的范围查找保持属性式，legacy保持方法式，findByText使用包含匹配', async () => {
+  const view=await select({id:'panel'}).firstOrNull();
+  assert.equal(typeof view.findOne({id:'p1'}).text,'string');
+  assert.deepEqual(view.findByText('面板').map(n=>n.text),['面板A','面板B']);
+  assert.equal(view.findByViewId('p2')[0].text,'面板B');
+  const node=select({id:'panel'}).findOnce();
+  assert.equal(typeof node.findOne({id:'p1'}).text,'function');
+});
+test('child使用真实下标而非压紧后的数组序号', async () => {
+  state.tree=state.tree.filter(raw=>!samePath(raw.path,[1,0]));
+  const view=await select({id:'symbolBar'}).firstOrNull();
+  assert.equal(view.child(0),null);assert.equal(view.child(1).id,'com.demo:id/btnB');
+  const node=select({id:'symbolBar'}).findOnce();
+  assert.equal(node.child(0),null);assert.equal(node.child(1).id(),'com.demo:id/btnB');
+});
+test('密码节点读取和setText后不泄露文本或把明文放进保护选择器', async () => {
+  const raw=state.tree.find(raw=>raw.editable);raw.password=true;raw.text='before-secret';
+  const node=await select({id:'input'}).firstOrNull();assert.equal(node.text,'');
+  assert.equal(node.setText('after-secret'),true);assert.equal(node.text,'');
+  assert.ok(!Object.hasOwn(last('setTextNode').selector,'text'));
+  assert.ok(!util.format('%O',node).includes('after-secret'));
+});
+test('新增布尔和集合字段可读取/本地过滤，不下发宿主未知字段', async () => {
+  Object.assign(state.tree[2],{accessibilityFocused:true,isHierarchically:true,checked:true,row:2,column:3,rowCount:4,columnCount:5,rowSpan:1,columnSpan:1});
+  const v=await select({checked:true,row:2,column:3}).firstOrNull();assert.equal(v.id,'com.demo:id/title');
+  assert.equal(v.rowCount,4);assert.equal(v.accessibilityFocused,true);assert.equal(v.isHierarchically,true);
+  assert.equal(select({id:"title"}).findOnce().isHierarchically(),true);
+  assert.equal(select().checked().findOnce().row(),2);
+  assert.equal(requests('findNodes').length,0);
+});
+test('未持有完整树时，旧path被其他节点复用不能返回其父/子或范围结果', async () => {
+  const node=await select({id:'title'}).firstOrNull();
+  state.tree[2].id='different';
+  assert.equal(node.parent(),null);assert.deepEqual(node.children(),[]);assert.deepEqual(node.find({}),[]);
+});
+
+test('find集合保留Array并补齐动作，选择器动作执行全部结果', () => {
+  const nodes=select({id:'title'}).find();
+  assert.ok(Array.isArray(nodes));assert.equal(nodes.size(),1);assert.equal(nodes.empty(),false);
+  assert.equal(nodes.get(0).text(),'日志');assert.equal(nodes.get(3),null);
+  assert.equal(nodes.click(),true);assert.equal(select({id:'title'}).click(),true);
+  assert.equal(select({id:'title'}).untilFind(0).size(),1);
+  assert.throws(()=>select({id:'missing'}).untilFind(0), /未找到/);
+});
+test('空集合参数同样校验，非法参数不能伪装动作成功', () => {
+  const empty=select({id:'missing'}).find();assert.equal(empty.size(),0);assert.equal(empty.click(),true);
+  const before=requests('nodeAction').length;
+  for(const fn of [()=>empty.setSelection(3,1),()=>empty.scrollTo(2**32,0),()=>empty.setProgress(1e100),()=>select({id:'missing'}).setSelection(3,1)])assert.throws(fn);
+  assert.equal(requests('nodeAction').length,before);
+});
+test('clickCenter拒绝畸形边界，不把null或字符串转换成坐标0', () => {
+  const node=select({id:'title'}).findOnce();
+  const raw=state.tree.find(raw=>raw.id==='com.demo:id/title');
+  for(const bounds of [[null,0,100,100],['0',0,100,100],[0,0,2**32,100]]){
+    raw.bounds=bounds;assert.equal(node.clickCenter(),false);
+  }
+  assert.equal(requests('click').length,0);
+});
+
+test('现代all和两种节点children保留Array并提供集合方法', async () => {
+  const all=await select({id:'panel'}).all();assert.ok(Array.isArray(all));assert.equal(all.size(),1);
+  const children=all.get(0).children();assert.ok(Array.isArray(children));assert.equal(children.size(),2);
+  assert.equal(typeof children.get(0).text,'string');
+  const legacy=select({id:'panel'}).findOnce().children();assert.equal(legacy.size(),2);assert.equal(typeof legacy.get(0).text,'function');
 });
 
 test('全流程没有反射/Java 宿主请求', async () => {

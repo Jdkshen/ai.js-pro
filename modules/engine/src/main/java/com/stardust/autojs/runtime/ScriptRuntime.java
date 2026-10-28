@@ -414,7 +414,12 @@ public class ScriptRuntime {
     }
 
     public boolean isStopped() {
-        return Thread.currentThread().isInterrupted();
+        if (Thread.currentThread().isInterrupted()) {
+            return true;
+        }
+        Object engine = engines == null ? null : engines.myEngine();
+        return engine instanceof com.stardust.autojs.engine.RhinoJavaScriptEngine
+                && ((com.stardust.autojs.engine.RhinoJavaScriptEngine) engine).isStopRequested();
     }
 
     public static void requiresApi(int i) {

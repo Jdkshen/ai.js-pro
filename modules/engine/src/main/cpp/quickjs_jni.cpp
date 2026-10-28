@@ -9621,7 +9621,7 @@ const char kBootstrapScript[] = R"JS(
     var AUTOMATOR_INT_PROPERTIES = ['depth', 'drawingOrder', 'indexInParent', 'childCount', 'row', 'column',
         'rowSpan', 'columnSpan', 'rowCount', 'columnCount'];
     var AUTOMATOR_BOOL_PROPERTIES = ['checkable', 'checked', 'focusable', 'focused', 'visibleToUser',
-        'accessibilityFocused', 'selected', 'clickable', 'longClickable', 'enabled', 'password', 'scrollable'];
+        'accessibilityFocused', 'selected', 'clickable', 'longClickable', 'enabled', 'password', 'scrollable', 'editable', 'contextClickable', 'dismissable', 'contentInvalid', 'multiLine', 'isHierarchically'];
 
     function wrapAutomatorSelector(handle) {
         var selector = { __handle: handle };
@@ -9756,6 +9756,8 @@ const char kBootstrapScript[] = R"JS(
             return decodeAutomatorResult(automatorCall(handle, 'child', [index]));
         };
         object.children = function () { return decodeAutomatorResult(automatorCall(handle, 'children')); };
+        object.findByText = function (text) { return decodeAutomatorResult(automatorCall(handle, 'findByText', [String(text)])); };
+        object.findByViewId = function (id) { return decodeAutomatorResult(automatorCall(handle, 'findByViewId', [String(id)])); };
         object.find = function (selector) {
             return decodeAutomatorResult(automatorCall(handle, 'find', [automatorHandleOf(selector)]));
         };
