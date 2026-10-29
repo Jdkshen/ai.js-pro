@@ -49,4 +49,18 @@ ui.Widget.register('bad-native', Bad);
 assert(tags.includes('bad-native'), 'registration updates reach the current Java factory');
 assert.throws(() => factory.render(2, 'bad-native', nativeContext, parent), /必须返回/);
 factory.release(2);
+const legacyRoot = {__ajsJavaObject__: true, __class: 'android.widget.TextView', findViewById: () => null};
+class Legacy {
+    render() { return legacyRoot; }
+    get initialAttributes() { return {count: '2', alpha: '0.4'}; }
+    set attr$count(value) { this.count = Number(value); }
+}
+ui.Widget.register('legacy-probe', Legacy);
+factory.render(3, 'legacy-probe', nativeContext, parent);
+factory.rootViewCreated(3, legacyRoot);
+legacyRoot.attr = (name, value) => writes.push([name, value]);
+factory.inflated(3, '{}');
+assert.strictEqual(ui.Widget.of(legacyRoot).count, 2, 'legacy constructors can use custom defaults');
+assert.deepStrictEqual(writes, [['alpha', '0.4']], 'legacy native defaults do not require Widget methods');
+factory.release(3);
 console.log('PASS Node native Widget callbacks: context/parent, lazy defaults, stage attributes and release');

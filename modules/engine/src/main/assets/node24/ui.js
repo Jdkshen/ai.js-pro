@@ -1146,7 +1146,7 @@
                     fallback(value);
                 }
             }
-            render() { throw new Error('ui.Widget.render() 必须返回 XML 字符串'); }
+            render() { throw new Error('ui.Widget.render() 必须返回 XML 或 Android View'); }
         }
         Widget.register = function (name, Ctor) {
             const tag = normalizeWidgetTag(name);
@@ -1260,8 +1260,8 @@
                             && widget.attrs[name] !== undefined) return;
                     if (!descriptor && internal.has(canonicalWidgetAttribute(name))) return;
                     if (!descriptor && initial[name] == null) return;
-                    if (descriptor || widget.hasAttribute(name)) {
-                        widget.setAttribute(name, initial[name], value => record.view.attr(name, value));
+                    if (descriptor || (typeof widget.hasAttribute === 'function' && widget.hasAttribute(name))) {
+                        nativeWidgetCallbacks.setAttribute(token, name, initial[name]);
                     } else record.view.attr(name, initial[name]);
                 });
                 if (typeof widget.inflated === 'function') widget.inflated();

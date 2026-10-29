@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> **2026-10-30 Node Widget 原生生命周期候选 dev-1289（正在独立构建，尚未发布）**：[实现、验收与边界](docs/reports/2026-10-30_Node_Widget原生生命周期.md)。真实 rootViewCreated / inflated、render(Context,parent) 返回 XML 或原生 View、原始自定义属性与 detached weight 已补；516 引擎 JVM、7 组 Node UI 契约、宿主 39+30+32 项、独立 APK 39 项、重建和停止已验。最终包将从源码 d6d9cd98 的独立工作树生成，不包含插件任务的 AutoJs.java 改动。当前 LAN 仍 dev-1288；其他高级版 API、复杂 Widget 别名和 style/theme 组合等边界保留，以下版本为历史记录。
+> **2026-10-30 当前发布 dev-1291（LAN，MI8 已装）**：[Node Widget 原生生命周期与完整验收](docs/reports/2026-10-30_Node_Widget原生生命周期.md)。真实 rootViewCreated/inflated、render(Context,parent) 返回 XML/原生 View、原始自定义属性、旧构造器默认值和 detached weight 已补；516 引擎 JVM、7 组 Node UI 契约、最终宿主 41+30+32 项、独立 APK 41 项、重建/停止、三引擎电脑日志 15 条通过。保留旁线 1290 日志修复，主工作区旁线文件未改。135.94 MiB，SHA 7900689f…，手机完整 LAN 下载摘要一致；Downloads 有包/MD。高级版全量、复杂别名和 style/theme 等仍有边界，以下为历史记录。
 
 > **当前发布 dev-1286（2026-10-29，LAN）**：[架构对齐与完整验收](docs/reports/2026-10-29_dev1286发布与架构对齐验收.md)。三引擎生命周期/资源归属、Node 软停与退役屏障、QuickJS JNI 与 UI 交接、传统 UI/浮窗/无障碍/日志进程隔离、MCP 执行和自动化转发、新独立模板已交付。1,032 JVM、MI8 三引擎并发/单停、17 轮终态停止、独立 Node 节点点击、日志和故障恢复通过；完整手机 HTTP 下载摘要一致。APK 142,528,242 字节，SHA 439b5aaa…。LAN 为 192.168.10.7:8080；Downloads 有包，MI8 已装，K40 只读校验且任务未停。Android36 原机和高级版全量 API 边界见报告；下方为历史记录。
 

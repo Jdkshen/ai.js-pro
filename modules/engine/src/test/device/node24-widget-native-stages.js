@@ -113,6 +113,15 @@ try {
     const named = ui.inflate('<aliased-attributes size="large" caption="&quot;A&amp;B&#x4e2d;&#25991;&quot;"/>');
     check('custom size alias retains original name and value', ui.Widget.of(named).customSize === 'large');
     check('custom attributes decode XML entities exactly once', String(named.getText()) === '"A&B中文"');
+    class Legacy {
+        render() { return '<text/>'; }
+        get initialAttributes() { return {alpha: '0.4', count: '2'}; }
+        set attr$count(value) { this.count = Number(value); this.view.setTag(String(value)); }
+    }
+    ui.Widget.register('legacy-stage', Legacy);
+    const legacy = ui.inflate('<legacy-stage/>');
+    check('legacy constructor applies custom defaults', ui.Widget.of(legacy).count === 2);
+    check('legacy constructor applies native defaults', near(legacy.getAlpha(), 0.4));
     result.ok = true;
 } catch (error) { result.error = String(error.stack || error); console.error(result.error); process.exitCode = 1; }
 finally { result.finishedAt = Date.now(); fs.writeFileSync(evidence, JSON.stringify(result, null, 2)); }
