@@ -19,6 +19,10 @@
 !/tools/tests/test_mcp_probe_behavior.py
 !/tools/tests/test_aijs_ui.py
 !/tools/audit-apk-size.py
+!/tools/check-apk-retrofit.py
+!/tools/apk-audit/
+/tools/apk-audit/*
+!/tools/apk-audit/CheckRetrofitSignatures.java
 !/tools/flutter-poc/
 /tools/flutter-poc/*
 !/tools/flutter-poc/build-release-candidate.ps1
