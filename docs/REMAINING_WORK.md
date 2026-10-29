@@ -1,5 +1,7 @@
 # AI.js Pro 剩余细节审计与收尾清单
 
+> **2026-10-30 当前续修候选 dev-1289（尚未发布）**：[Node Widget 原生生命周期](reports/2026-10-30_Node_Widget原生生命周期.md)。真实根/子树/默认值/外部属性阶段和原生 View render 已实现并通过 MI8 宿主及独立 APK 检查；下方 dev-1288 对这三项的待办说明已被本轮覆盖。高级版全量 API、构造时 style/theme、复杂别名共享根、动态晚注册外部模板和加密打包等仍待专项对齐；最终包正由独立工作树生成，LAN 仍 1288。
+
 > **2026-10-29 当前发布 dev-1288（局域网）**：[Node Widget 属性兼容](reports/2026-10-29_Node_Widget属性兼容续修.md)。补 create/属性访问、子类初始化/默认值、XML 优先级、可写数据属性，以及三引擎共用文字颜色；修复 QuickJS 主线程属性读写约 2 秒等待。宿主和最终独立 APK 各 30 次 Widget 断言、三引擎颜色各 7 项、重建/停止及文档检查通过。**高级版 Node 仍未全部对齐**：真实 rootViewCreated/inflated 阶段、render 返回原生 View、完整 API/插件/Node 加密打包仍有缺口；QuickJS ui.inflate、大树分页/BFS 组合/跨布局身份亦待继续。下方旧版本为历史。
 
 > **2026-10-29 当前发布 dev-1287（局域网）**：[架构与验收](reports/2026-10-29_dev1286发布与架构对齐验收.md)、[Node 原生 View 续修及剩余差距](reports/2026-10-29_Node原生View事件与高级版兼容续修.md)。进程隔离、停止回收和独立 APK 基础链路已有验收；**不能宣称高级版 Node 全部对齐**。本轮补齐 touch/key/scroll/long_click、findView/extras/绑定缓存，宿主与独立 APK 各 32 次断言通过，M3 停止 3 轮及新示例音量上键停止通过；772 条 App/MCP 同源文档。节点大树分页、BFS 组合、跨布局身份、全部控件事件、Node 编译加密和全 API 行为验收仍待完成。下方旧版本段落保留为历史，不能直接当当前待办。

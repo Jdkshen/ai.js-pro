@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-10-30 Node Widget 原生生命周期候选 dev-1289（正在独立构建，尚未发布）**：[实现、验收与边界](docs/reports/2026-10-30_Node_Widget原生生命周期.md)。真实 rootViewCreated / inflated、render(Context,parent) 返回 XML 或原生 View、原始自定义属性与 detached weight 已补；516 引擎 JVM、7 组 Node UI 契约、宿主 39+30+32 项、独立 APK 39 项、重建和停止已验。最终包将从源码 d6d9cd98 的独立工作树生成，不包含插件任务的 AutoJs.java 改动。当前 LAN 仍 dev-1288；其他高级版 API、复杂 Widget 别名和 style/theme 组合等边界保留，以下版本为历史记录。
+
 > **当前发布 dev-1286（2026-10-29，LAN）**：[架构对齐与完整验收](docs/reports/2026-10-29_dev1286发布与架构对齐验收.md)。三引擎生命周期/资源归属、Node 软停与退役屏障、QuickJS JNI 与 UI 交接、传统 UI/浮窗/无障碍/日志进程隔离、MCP 执行和自动化转发、新独立模板已交付。1,032 JVM、MI8 三引擎并发/单停、17 轮终态停止、独立 Node 节点点击、日志和故障恢复通过；完整手机 HTTP 下载摘要一致。APK 142,528,242 字节，SHA 439b5aaa…。LAN 为 192.168.10.7:8080；Downloads 有包，MI8 已装，K40 只读校验且任务未停。Android36 原机和高级版全量 API 边界见报告；下方为历史记录。
 
 > **2026-10-29 高级版停止路径与12份MD架构审阅（无产品代码修改）**：[完整对照和待办](docs/reports/2026-10-29_高级版文档全量审阅与架构对照.md)。用户实际ZIP在 `C:/Users/18101/DownloadsAutoJs_Pro_Analysis(1).zip`，12MD、SHA `ba99d2b0…`；手机高级版com.boyai.auma与output/auma-base.apk摘要e0010eaf一致，另用JADX定向导出8类。已实现M3/Glide/Smali→Dex/方法ID与类型化JNI；高级版外部停止优先process.exit(-9000)，第4次请求升级V8强停，我们仍UI屏障后native cancel。传统Activity/普通Floaty/无障碍/日志仍有主进程组件，API全量行为未完成；ZIP内QuickJS依赖、hash索引与内存计算有错误，无依据性能数字不能采纳。没有启动高级版或变更LAN。
