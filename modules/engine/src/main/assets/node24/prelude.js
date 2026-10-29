@@ -178,6 +178,9 @@
     if (!id) { id = nextJavaCallback++; javaCallbackIds.set(value, id); javaCallbacks[id] = value; }
     return { $callback: id, session: globalThis.__ajsEnableJavaCallbacks() };
   }
+  globalThis.__ajsInstallWidgetFactory = function (names, callbacks) {
+    return javaCall({op: 'widgetFactory', names: names, callback: registerJavaCallback(callbacks)});
+  };
 
   function wrapJavaResult(value) {
     if (!value || typeof value !== 'object') { return value; }

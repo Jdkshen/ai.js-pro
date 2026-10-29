@@ -47,4 +47,8 @@ assert.strictEqual(seek.findView('child'), child);
 seek.clearViewBindingCache();
 assert.strictEqual(extras.invalidated, true);
 assert(views.every(view => view === seek), 'View extensions receive the original Java proxy');
+__ajsInstallWidgetFactory(['probe'], {render() { return 'native widget'; }});
+assert.strictEqual(calls.at(-1).op, 'widgetFactory');
+assert.deepStrictEqual(calls.at(-1).names, ['probe']);
+assert(calls.at(-1).callback.$callback, 'Widget registration uses the existing scoped Java callback protocol');
 console.log('PASS Node24 UI interop: lowercase R classes, callback maps, this receiver and explicit implement');

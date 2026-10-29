@@ -233,6 +233,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final java.util.concurrent.atomic.AtomicBoolean mClosed =
             new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile boolean mCallbacksClosing;
+    private com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Registration mWidgetRegistration;
     private volatile boolean mCleanupIncomplete;
     private volatile String mScriptError = "";
     /**
@@ -458,6 +459,20 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return onUi(() -> handleJava(request));
         }
         switch (op) {
+            case "widgetFactory": {
+                org.json.JSONArray names = request.getJSONArray("names");
+                String[] tags = new String[names.length()];
+                for (int i = 0; i < tags.length; i++) tags[i] = names.getString(i);
+                if (mWidgetRegistration == null) {
+                    Object callback = fromWire(request.get("callback"));
+                    com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Callbacks factory =
+                            (com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Callbacks)
+                            Node24JavaArguments.coerce(com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Callbacks.class, callback);
+                    mWidgetRegistration = com.stardust.autojs.engine.node24.NodeUiLocalSession.registerWidgetFactory(
+                            mOverlayOwner, tags, factory);
+                } else mWidgetRegistration.updateTags(tags);
+                return ok(true);
+            }
             case "isInterface":
                 return ok(findClass(request.getString("name")).isInterface());
             case "proxyInterface": {
@@ -1331,7 +1346,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
                             if ("equals".equals(method.getName())) return proxy == args[0];
                             if ("toString".equals(method.getName())) return "[NodeJavaCallback " + iface.getName() + "#" + id + "]";
                         }
-                        if (mClosed.get() || mCallbacksClosing) return defaultJavaValue(method.getReturnType());
+                        if (mClosed.get() || mCallbacksClosing) {
+                            if (iface == com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Callbacks.class)
+                                throw new IllegalStateException("Widget script callback is closed");
+                            return defaultJavaValue(method.getReturnType());
+                        }
                         try {
                             JSONArray values = new JSONArray();
                             if (args != null) for (Object value : args) values.put(toWire(value));
@@ -1341,9 +1360,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
                             if (!result.optBoolean("ok")) throw new IllegalStateException(result.optString("error"));
                             return coerce(method.getReturnType(), fromWire(result.opt("value")));
                         } catch (Node24Engine.CallbackClosedException closed) {
+                            if (iface == com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Callbacks.class) throw closed;
                             return defaultJavaValue(method.getReturnType());
                         } catch (RuntimeException failure) {
-                            if (shouldContainCallbackError(mClosed.get() || mCallbacksClosing, failure)) {
+                            if (iface != com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Callbacks.class
+                                    && shouldContainCallbackError(mClosed.get() || mCallbacksClosing, failure)) {
                                 logContainedCallbackError("NodeJsCallback." + method.getName(), failure);
                                 return defaultJavaValue(method.getReturnType());
                             }
@@ -2201,6 +2222,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
             return;
         }
         mCallbacksClosing = true;
+        if (mWidgetRegistration != null) mWidgetRegistration.close();
     }
 
     public boolean requiresProcessRecycle() { return mCleanupIncomplete || mOwnedJavaResources.failureCount() != 0; }
@@ -2224,6 +2246,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         if (!mClosed.compareAndSet(false, true)) {
             return;
         }
+        if (mWidgetRegistration != null) { mWidgetRegistration.close(); mWidgetRegistration = null; }
         cleanupStep("owned Java resources", mOwnedJavaResources::close);
         mOwnedNotificationKeys.clear();
         cleanupStep("no-arg cache", mNoArgCalls::close);

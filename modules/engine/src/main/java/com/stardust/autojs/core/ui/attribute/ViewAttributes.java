@@ -551,9 +551,10 @@ public class ViewAttributes {
     }
 
     protected void setLayoutWeight(float weight) {
-        ViewParent parent = mView.getParent();
         ViewGroup.LayoutParams layoutParams = mView.getLayoutParams();
-        if (parent instanceof LinearLayout) {
+        // inflate(..., parent, false) already has parent-specific parameters but
+        // no actual parent yet. Weight must survive until the first attachment.
+        if (layoutParams instanceof LinearLayout.LayoutParams) {
             ((LinearLayout.LayoutParams) layoutParams).weight = weight;
             mView.setLayoutParams(layoutParams);
         }

@@ -191,7 +191,7 @@ public class XmlConverter {
             layoutXml.append("android:text=\"").append(escapeAttribute(textContent)).append("\"\n");
     }
 
-    static String escapeAttribute(String value) {
+    public static String escapeAttribute(String value) {
         return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;")
                 .replace("\r", "&#13;").replace("\n", "&#10;");
     }

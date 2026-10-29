@@ -314,7 +314,7 @@ public class DynamicLayoutInflater {
      * 属性先套一遍（宽度/高度/gravity/margin/weight/RelativeLayout 规则）。attach 之后原来的
      * {@code applyAttributes} 仍会再套一遍（幂等），非 layout 属性语义不变。
      */
-    private void prepareLayoutParamsForAttach(InflateContext context, View view, HashMap<String, String> attrs, @Nullable ViewGroup parent) {
+    protected void prepareLayoutParamsForAttach(InflateContext context, View view, HashMap<String, String> attrs, @Nullable ViewGroup parent) {
         if (parent == null) {
             return;
         }

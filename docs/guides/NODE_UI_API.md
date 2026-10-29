@@ -182,9 +182,11 @@ MotionEvent 是 Android 临时借用的对象，回调结束后不要保存它�
 
 | 接口 / 回调 | 当前行为 |
 | --- | --- |
-| `created()` | 类构造结束后、读取默认属性及 render 前调用；只在布局创建路径调用 |
-| `get initialAttributes()` | 默认属性字典；子类构造和 created 已完成；普通原生属性缺省时进入 XML；null/undefined 原生默认值跳过 |
-| `render()` | 返回一个根节点的 XML；普通原生属性优先级：外部 XML > render 内部值 > initialAttributes |
+| `created()` | 类构造结束后、render 前调用；只在布局创建路径调用 |
+| `render(context, parent)` | 返回一个根节点的 XML，或尚未挂载的 Android View；context 是本次原生 inflater 的真实主题 Context，parent 是实际父布局，顶层可能为 null |
+| `rootViewCreated(view)` | 根 View 已创建、XML 子节点尚未创建时调用；this.view、Widget.of 已可用；render 自己预先创建的子 View 会保留 |
+| `get initialAttributes()` | 在根 View 和子树已创建后读取，可访问 this.view；普通 XML 属性优先级：外部 XML > render 内部值 > initialAttributes；null/undefined 原生默认值跳过 |
+| `inflated()` | 子树和初始属性已应用，外部 XML 属性尚未应用；可查子控件、读取初值 |
 | `mounted(view?)` | 原生 View 和外部属性已可用；可读取 this.view、绑定事件；基类提供空方法，可调用 super.mounted() |
 | `widget.view` | 当前原生根 View；未创建时报 `widget is not mounted` |
 | `hasAttribute(name)` | 检查继承链上的 `attr$name` 描述符或 attrs 中的声明 |
@@ -216,7 +218,9 @@ ui.Widget.register('demo-counter', Counter);
 
 示例入口：Node 引擎 → Node.js → Node.js 中使用 UI → 自定义 Widget 属性。完整可运行的 Activity 包装见内置示例。
 
-此实现仍采用先展开 XML、再原生 inflate 的路径。高级版 `rootViewCreated` 在子节点 inflate 前执行的阶段、`inflated` 在外部属性前执行的阶段，以及 `render(context, parent)` 返回原生 View 的路径仍未对齐。本轮没有用晚到的空回调伪装这两个阶段；当前 initialAttributes 在原生 View 创建前读取，不应在该 getter 中访问 this.view。
+上述阶段由原生 inflater 的真实创建点调用。顺序为 constructor → created → render → rootViewCreated → 子树 → initialAttributes → inflated → 外部 XML 属性 → mounted。`contentSlot` 可指定接收外部 XML 子节点的 ViewGroup ID；未指定时优先 slot/content，再使用根 ViewGroup。返回原生 View 时保留 render 已创建的子树，但该根必须尚无 parent。
+
+回调同步参与 Android 布局创建，避免在其中做长时间网络或计算。界面重建会重新创建 Widget，旧 Widget/旧 View 不应继续更新。旧宿主没有原生工厂时保留 XML 展开兼容路径，该旧路径不提供真实阶段；当前包与内置独立打包模板使用原生工厂。高级版全部 UI/API、外部打包插件模板、构造时 style/theme 的所有组合仍需继续验证。
 
 ## 10. 与旧接口的关系
 

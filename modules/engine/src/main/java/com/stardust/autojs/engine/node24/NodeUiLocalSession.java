@@ -42,6 +42,24 @@ public final class NodeUiLocalSession {
     private static volatile JSONObject views;
     private static volatile com.stardust.autojs.core.console.ConsoleImpl console;
     private static volatile ActivityCallbacks callbacks;
+    private static volatile NodeUiWidgetInflater.Registration widgetRegistration;
+    public static synchronized NodeUiWidgetInflater.Registration registerWidgetFactory(
+            String owner, String[] names, NodeUiWidgetInflater.Callbacks factory) {
+        if (widgetRegistration != null) throw new IllegalStateException("A Widget factory already owns this Node slot");
+        widgetRegistration = new NodeUiWidgetInflater.Registration(owner, names, factory);
+        return widgetRegistration;
+    }
+    static synchronized void clearWidgetRegistration(NodeUiWidgetInflater.Registration registration) {
+        if (widgetRegistration == registration) widgetRegistration = null;
+    }
+    static NodeUiWidgetInflater.Registration widgetRegistration(Context context) {
+        NodeUiWidgetInflater.Registration registration = widgetRegistration;
+        if (registration != null && context instanceof Activity) {
+            String owner = ((Activity) context).getIntent().getStringExtra("javaClassOwner");
+            if (owner != null && !owner.equals(registration.owner)) return null;
+        }
+        return registration;
+    }
     private static final java.util.ArrayDeque<JSONObject> EVENTS = new java.util.ArrayDeque<>();
     private static final ImageLoader IMAGE_LOADER = new ImageLoader();
     /** 当前 Activity 会话的真实 NodeWebView；webId 由本会话分配，销毁时统一释放。 */
@@ -338,6 +356,8 @@ public final class NodeUiLocalSession {
     }
 
     private static Context resolveInflateContext(ViewGroup parent) {
+        Context inflating = NodeUiWidgetInflater.currentContext();
+        if (inflating != null) return inflating;
         Activity current = activity;
         if (current != null) {
             try {

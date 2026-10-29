@@ -33,7 +33,7 @@ try {
     trace.length = 0;
     const view = ui.inflate('<compat-badge id="one" text="external" count="9"/>');
     const badge = ui.Widget.of(view);
-    check('constructor and created order', trace.join(',') === 'constructor,created,initial,render,mounted');
+    check('constructor and created order', trace.join(',') === 'constructor,created,render,initial,mounted');
     check('Widget.of and extras agree', badge instanceof Inherited && view.extras['autojs.widget'] === badge);
     check('external text overrides render', String(view.getText()) === 'external');
     check('native default alpha applied', view.getAlpha() === 0.5);

@@ -1085,6 +1085,9 @@ public final class NodeUiHost {
         ViewGroup inflationParent = parent;
         if (inflationParent == null) {
             inflationParent = new FrameLayout(themed);
+            if (inflater instanceof NodeUiWidgetInflater) {
+                ((NodeUiWidgetInflater) inflater).setSyntheticParent(inflationParent);
+            }
         }
         View root = inflater.inflate(normalized, inflationParent, attachToParent);
         if (root == null) {
@@ -1105,7 +1108,9 @@ public final class NodeUiHost {
 
     private static DynamicLayoutInflater newInlineLayoutInflater(Context context) {
         ResourceParser parser = new ResourceParser(new Drawables());
-        DynamicLayoutInflater inflater = new DynamicLayoutInflater(parser);
+        NodeUiWidgetInflater.Registration widgets = NodeUiLocalSession.widgetRegistration(context);
+        DynamicLayoutInflater inflater = widgets == null ? new DynamicLayoutInflater(parser)
+                : new NodeUiWidgetInflater(parser, widgets);
         inflater.setContext(context);
         // Node 原生 grid/list/canvas：不依赖 ScriptRuntime 的真实控件。
         inflater.registerViewAttrSetter(NodeUiGridView.class.getName(),
@@ -1128,7 +1133,7 @@ public final class NodeUiHost {
      * Auto.js 简称 → XmlConverter 认识的标签。grid/list/canvas 换成 Node 的轻量真实控件
      * （NodeUiGridView/NodeUiListView/NodeUiCanvasView），不再用 Text 占位。
      */
-    private static String normalizeInlineLayoutXml(String xml) {
+    static String normalizeInlineLayoutXml(String xml) {
         String normalized = renameInlineTag(xml, "column", "vertical");
         normalized = renameInlineTag(normalized, "row", "horizontal");
         // Node UI 的 <webview> 必须是带 Node 桥的真实 WebView；先换成完整类名，避免

@@ -1064,8 +1064,8 @@
         // ------------------------------------------------------------------
         // task-155：ui.Widget（自定义组件最小子集）
         //  - Widget.register(name, Ctor)：注册 XML 自定义标签；
-        //  - Activity.layoutXml 中的自定义标签在发宿主前展开为 Ctor.render() 返回的 XML；
-        //  - 宿主 show 成功后把 widget.view 绑定到真实 View binding，并调用 mounted()；
+        //  - 当前宿主在真实 inflater 阶段创建 Widget；旧宿主保留 XML 展开兼容路径；
+        //  - 根 View 创建即绑定 widget.view，子树/默认值/外部属性分别应用；
         //  - Widget.of(view) 从 binding 取回 widget 实例。
         // ------------------------------------------------------------------
         const widgetRegistry = Object.create(null);
@@ -1114,6 +1114,8 @@
                 return this._view;
             }
             created() {}
+            rootViewCreated() {}
+            inflated() {}
             get initialAttributes() { return {}; }
             mounted() {}
             hasAttribute(name) {
@@ -1151,6 +1153,7 @@
             if (!tag) throw new TypeError('ui.Widget.register 需要非空标签名');
             if (typeof Ctor !== 'function') throw new TypeError('ui.Widget.register 需要一个 class');
             widgetRegistry[tag] = Ctor;
+            if (nativeWidgetFactoryInstalled) ensureNativeWidgetFactory();
             return Ctor;
         };
         Widget.of = function (view) {
@@ -1166,6 +1169,144 @@
             const Ctor = widgetRegistry[normalizeWidgetTag(name)];
             return Ctor ? new Ctor() : undefined;
         };
+
+        const nativeWidgetRecords = new Map();
+        let nativeWidgetFactoryInstalled = false, nativeWidgetTags = '';
+        function activateWidget(token) {
+            const record = nativeWidgetRecords.get(Number(token));
+            if (!record) throw new Error('Widget inflation is no longer active: ' + token);
+            if (record.view) {
+                const extras = viewExtras(record.view);
+                extras.widget = record.widget;
+                extras.data['autojs.widget'] = record.widget;
+            }
+            return record;
+        }
+        function canonicalWidgetAttribute(name) {
+            name = String(name).replace(/^android:/, '');
+            const aliases = {w: 'layout_width', width: 'layout_width', h: 'layout_height',
+                height: 'layout_height', margin: 'layout_margin', size: 'textSize', color: 'textColor'};
+            return aliases[name] || name;
+        }
+        const nativeWidgetCallbacks = {
+            prepareXml: function (xml) {
+                xml = String(xml);
+                const lower = xml.toLowerCase();
+                if (!Object.keys(widgetRegistry).some(name => lower.includes('<' + name))) return xml;
+                const edits = [], queue = xmlElements(xml).slice();
+                while (queue.length) {
+                    const node = queue.shift(); queue.push.apply(queue, node.children);
+                    if (!widgetRegistry[normalizeWidgetTag(node.tag)]) continue;
+                    if (node.attrs.replace(/([A-Za-z_][A-Za-z0-9_:.-]*)\s*=\s*("[^"]*"|'[^']*')/g, '').trim()) {
+                        throw new Error('Widget XML 属性格式不正确：' + node.tag);
+                    }
+                    const raw = parseXmlAttributes(node.attrs), attrs = {}, namespaces = [];
+                    Object.keys(raw).forEach(function (name) {
+                        const value = raw[name].replace(/&(?:amp|quot|apos|lt|gt|#x[0-9a-fA-F]+|#[0-9]+);/g, function (entity) {
+                            const named = {'&amp;': '&', '&quot;': '"', '&apos;': "'", '&lt;': '<', '&gt;': '>'};
+                            if (Object.prototype.hasOwnProperty.call(named, entity)) return named[entity];
+                            return String.fromCodePoint(parseInt(entity.slice(entity[2] === 'x' ? 3 : 2, -1), entity[2] === 'x' ? 16 : 10));
+                        });
+                        if (name === 'xmlns' || name.startsWith('xmlns:')) namespaces.push(name + '="' + xmlEscape(value) + '"');
+                        else attrs[name] = value;
+                    });
+                    const open = '<' + node.tag + ' ' + namespaces.join(' ') + ' __aijsWidgetAttrs="'
+                        + xmlEscape(JSON.stringify(attrs)) + '"' + (node.selfClosing ? '/>' : '>');
+                    edits.push({start: node.start, end: node.openEnd, value: open});
+                }
+                edits.sort((a, b) => b.start - a.start).forEach(function (edit) {
+                    xml = xml.slice(0, edit.start) + edit.value + xml.slice(edit.end);
+                });
+                return xml;
+            },
+            render: function (token, name, context, parent) {
+                const widget = Widget.create(name);
+                if (!widget) throw new Error('Widget not registered: ' + name);
+                nativeWidgetRecords.set(Number(token), {widget: widget, view: null});
+                try {
+                    if (typeof widget.created === 'function') widget.created();
+                    const rendered = widget.render(context, parent);
+                    if (typeof rendered === 'string') {
+                        const roots = xmlElements(rendered);
+                        if (roots.length !== 1) throw new Error('Widget.render() 必须包含一个根节点');
+                        const ids = /\b(?:android:)?id\s*=\s*["'](?:@\+?id\/)?([^"']+)["']/g;
+                        let id;
+                        while ((id = ids.exec(rendered))) inlineBindingNames.add(id[1]);
+                    } else if (!rendered || rendered.__ajsJavaObject__ !== true) {
+                        throw new TypeError('Widget.render() 必须返回 XML 或原生 View');
+                    }
+                    return rendered;
+                } catch (error) { nativeWidgetRecords.delete(Number(token)); throw error; }
+            },
+            rootViewCreated: function (token, view) {
+                const record = activateWidget(token);
+                record.view = view;
+                if (record.widget.__ajsNodeUiWidget) record.widget._view = view;
+                else record.widget.view = view;
+                activateWidget(token);
+                if (typeof record.widget.rootViewCreated === 'function') record.widget.rootViewCreated(view);
+            },
+            contentSlot: function (token) { return String(activateWidget(token).widget.contentSlot || ''); },
+            inflated: function (token, internalJson) {
+                const record = activateWidget(token), widget = record.widget;
+                realViewMember(record.view, 'clearViewBindingCache')();
+                const internal = new Set(Object.keys(JSON.parse(String(internalJson))).map(canonicalWidgetAttribute));
+                const initial = widget.initialAttributes || {};
+                Object.keys(initial).forEach(function (name) {
+                    const descriptor = findPropertyDescriptor(widget, 'attr$' + name);
+                    if (descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+                            && descriptor.value !== undefined) return;
+                    if (widget.attrs && Object.prototype.hasOwnProperty.call(widget.attrs, name)
+                            && widget.attrs[name] !== undefined) return;
+                    if (!descriptor && internal.has(canonicalWidgetAttribute(name))) return;
+                    if (!descriptor && initial[name] == null) return;
+                    if (descriptor || widget.hasAttribute(name)) {
+                        widget.setAttribute(name, initial[name], value => record.view.attr(name, value));
+                    } else record.view.attr(name, initial[name]);
+                });
+                if (typeof widget.inflated === 'function') widget.inflated();
+            },
+            hasAttribute: function (token, name) {
+                const widget = activateWidget(token).widget;
+                return typeof widget.hasAttribute === 'function' ? widget.hasAttribute(name)
+                    : !!findPropertyDescriptor(widget, 'attr$' + name);
+            },
+            setAttribute: function (token, name, value) {
+                const record = activateWidget(token);
+                if (typeof record.widget.setAttribute === 'function') {
+                    record.widget.setAttribute(name, value, v => record.view.attr(name, v));
+                } else {
+                    const descriptor = findPropertyDescriptor(record.widget, 'attr$' + name);
+                    if (descriptor && (descriptor.set || descriptor.writable)) {
+                        Reflect.set(record.widget, 'attr$' + name, value);
+                    } else record.view.attr(name, value);
+                }
+            },
+            mounted: function (token) {
+                const record = activateWidget(token);
+                if (typeof record.widget.mounted === 'function') record.widget.mounted(record.view);
+            },
+            release: function (token) { nativeWidgetRecords.delete(Number(token)); }
+        };
+        function ensureNativeWidgetFactory() {
+            if (typeof globalThis.__ajsInstallWidgetFactory !== 'function') return false;
+            const names = Object.keys(widgetRegistry), key = names.slice().sort().join('\n');
+            if (!names.length) return false;
+            globalThis.__ajsBindJavaView = realViewBinding;
+            globalThis.__ajsJavaViewMember = realViewMember;
+            if (!nativeWidgetFactoryInstalled || key !== nativeWidgetTags) {
+                globalThis.__ajsInstallWidgetFactory(names, nativeWidgetCallbacks);
+                nativeWidgetFactoryInstalled = true; nativeWidgetTags = key;
+            }
+            return true;
+        }
+        function prepareWidgetXml(xml) {
+            if (!ensureNativeWidgetFactory()) return expandCustomWidgetsInXml(xml);
+            const ids = /\b(?:android:)?id\s*=\s*["'](?:@\+?id\/)?([^"']+)["']/g;
+            let id;
+            while ((id = ids.exec(xml))) inlineBindingNames.add(id[1]);
+            return {xml: xml, records: []};
+        }
 
         // Read element boundaries without splitting quoted '>' characters, comments or CDATA.
         function xmlElements(xml) {
@@ -1406,7 +1547,7 @@
             recreate() {
                 if (mainActivity !== this || uiClosed || !realUiMode) throw new Error('当前 Activity 已关闭');
                 const xml = typeof this.layoutXml === 'string' ? this.layoutXml : '';
-                const expanded = xml ? expandCustomWidgetsInXml(xml) : {xml: '', records: []};
+                const expanded = xml ? prepareWidgetXml(xml) : {xml: '', records: []};
                 pendingWidgets = expanded.records;
                 javaSession().recreate(expanded.xml);
             }
@@ -1774,7 +1915,7 @@
                 layoutXml = typeof rawLayoutXml === 'string' ? rawLayoutXml.trim() : '';
                 // task-155：自定义 Widget 标签在发宿主前展开（宿主只 inflate 普通控件标签）。
                 if (layoutXml) {
-                    const expanded = expandCustomWidgetsInXml(layoutXml);
+                    const expanded = prepareWidgetXml(layoutXml);
                     layoutXml = expanded.xml;
                     pendingWidgets = expanded.records;
                 } else {
@@ -2041,7 +2182,7 @@
                 }
                 globalThis.__ajsEnableJavaCallbacks();
                 hostCall({op: 'ping'}); // seed application Context for offscreen inflation
-                const expanded = expandCustomWidgetsInXml(layoutName);
+                const expanded = prepareWidgetXml(layoutName);
                 const view = javaSession().inflateXml(expanded.xml, parent || null, !!attachToParent);
                 attachCustomWidgets(expanded.records, mainViews, view);
                 return view;
