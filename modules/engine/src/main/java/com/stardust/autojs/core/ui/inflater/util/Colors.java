@@ -32,7 +32,10 @@ public class Colors {
                     text.substring("@color/".length()), "color"));
         }
         if (text.startsWith("@android:color/")) {
-            return Color.parseColor(text.substring(15));
+            String name = text.substring("@android:color/".length());
+            int id = context.getResources().getIdentifier(name, "color", "android");
+            if (id == 0) throw new Resources.NotFoundException("Android color resource not found: " + name);
+            return context.getResources().getColor(id);
         }
         return Color.parseColor(text);
     }

@@ -182,11 +182,13 @@ img.recycle(); tpl.recycle(); cap.stop();
 "ui";
 ui.layout('<vertical><button id="ok" text="OK"/></vertical>');
 ui.run(() => ui.ok.setText('done'));         // Rhino/QuickJS：切 Android UI 线程
-ui.post(() => { /* UI 线程 */ }, 100);
+ui.post(() => ui.run(() => { /* 更新控件 */ }), 100);
 var w = floaty.window('<frame><text id="t" text="浮窗"/></frame>');
 w.setPosition(100, 300); w.setSize(400, 200); w.close();
 ```
-- Rhino 可直接用 E4X XML 字面量；QuickJS 必须传 XML 字符串。`ui.registerWidget` 可注册自定义控件；`floaty.rawWindow` 返回原始 View 浮窗。`ui.run` 在 Rhino/QuickJS 会阻塞等待 UI 线程，`ui.post` 投递到 UI 线程；浮窗需要悬浮窗权限（`floaty.checkPermission/requestPermission`），普通 `ui` Activity 不需要。
+- Rhino 可直接用 E4X XML 字面量；QuickJS 必须传 XML 字符串。`ui.registerWidget` 可注册自定义控件；`floaty.rawWindow` 返回原始 View 浮窗。`ui.run` 在 Rhino/QuickJS 会阻塞等待 UI 线程。Rhino 的 `ui.post` 投递到 UI 线程；QuickJS 的 `ui.post` 延后在脚本线程执行，需切 UI 时在回调内用 ui.run。浮窗需要悬浮窗权限（`floaty.checkPermission/requestPermission`），普通 `ui` Activity 不需要。
+
+文字控件支持 `view.attr('textColor', value)` / `view.attr('color', value)` 及 `textColorHint`，读取为当前 `#AARRGGBB`。颜色支持十六进制、整数、`@color/name` 和 `@android:color/name`；Node 的原生 View 使用同一颜色处理。QuickJS 在 `ui.run` 内先设置再读取会立即看到新值；获取普通界面控件用 `ui.layout` / `ui.findView`，不要假定它已有 Node/Rhino 的 `ui.inflate`。
 
 ### 6.2 Node `ui.Activity`
 ```js

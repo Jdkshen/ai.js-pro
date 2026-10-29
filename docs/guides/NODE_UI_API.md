@@ -151,7 +151,7 @@ console.log(file.exists(), String(file.getAbsolutePath()));
 | `view.findView(nameOrId)` | 当前 View 子树中的控件；不存在返回 null |
 | `view.extras` | 当前 View 的 JS 附加状态字典；同一个原生 View 多次查找共享字典 |
 | `view.clearViewBindingCache()` | 修改子树后清除绑定缓存；已保存的 `binding` 引用也会重新查找控件 |
-| `ui.Widget.of(view)` | 获取自定义 Widget；也可读取 `view.extras['autojs.widget']`；普通控件返回 null |
+| `ui.Widget.of(view)` | 获取自定义 Widget；也可读取 `view.extras['autojs.widget']`；普通控件返回 undefined（dev-1287 曾返回 null） |
 
 ```js
 "ui"; "nodejs";
@@ -176,7 +176,49 @@ MotionEvent 是 Android 临时借用的对象，回调结束后不要保存它�
 
 示例入口：Node 引擎 → Node.js → Node.js 中使用 UI → 原生 View 事件与状态。现有 `item_created`、Canvas `draw` 仍使用各自的控件接口。本节不代表所有高级版列表事件、自定义事件或第三方 View 的事件已实现；不支持的事件仍明确报错。
 
-## 9. 与旧接口的关系
+## 9. 自定义 Widget 的创建与属性
+
+`ui.Widget.register(name, Class)` 注册自定义 XML 标签。类应继承 `ui.Widget`；`ui.Widget.create(name)` 只构造注册的实例，未知名称返回 undefined，不自动启动界面或调用 inflate 生命周期。
+
+| 接口 / 回调 | 当前行为 |
+| --- | --- |
+| `created()` | 类构造结束后、读取默认属性及 render 前调用；只在布局创建路径调用 |
+| `get initialAttributes()` | 默认属性字典；子类构造和 created 已完成；普通原生属性缺省时进入 XML；null/undefined 原生默认值跳过 |
+| `render()` | 返回一个根节点的 XML；普通原生属性优先级：外部 XML > render 内部值 > initialAttributes |
+| `mounted(view?)` | 原生 View 和外部属性已可用；可读取 this.view、绑定事件；基类提供空方法，可调用 super.mounted() |
+| `widget.view` | 当前原生根 View；未创建时报 `widget is not mounted` |
+| `hasAttribute(name)` | 检查继承链上的 `attr$name` 描述符或 attrs 中的声明 |
+| `getAttribute(name, fallback)` | 优先 getter / JS 数据属性，再读 attrs；未知属性调用 fallback() |
+| `setAttribute(name, value, fallback)` | 优先 setter / 可写 JS 数据属性，再改 attrs；未知或只读属性调用 fallback(value) |
+
+`attr$name` 支持继承的 getter/setter 和可写 JS 数据属性；外部 XML、单属性 `view.attr`、批量 `view.attr({...})` 均可设置。默认值不会覆盖已经初始化的 JS 数据属性。普通 Android 属性用 `view.attr` 更新；`widget.attrs` 是 JS 声明和值字典，直接修改它不等于更新原生控件。
+
+TextView 及其子类可动态设置 `textColor` / `color`、`textColorHint`；读取返回当前 `#AARRGGBB`，也能反映直接 Java setTextColor 后的值。颜色与 XML 共用解析器，支持十六进制、颜色整数、`@color/name` 和 `@android:color/name`。例如 `view.attr('textColor', '@android:color/holo_blue_light')`；此文字颜色处理位于三引擎共用属性层。
+
+```js
+const ui = require('ui');
+class Counter extends ui.Widget {
+  constructor() { super(); this.count = 0; }
+  get initialAttributes() { return {count: '0'}; }
+  get attr$count() { return String(this.count); }
+  set attr$count(value) {
+    this.count = Number(value) || 0;
+    this.view.setText('计数 ' + this.count);
+  }
+  render() { return '<button/>'; }
+  mounted() {
+    this.view.on('click', () => this.view.attr('count', this.count + 1));
+  }
+}
+ui.Widget.register('demo-counter', Counter);
+// 在 Activity 的 layoutXml 中使用：<demo-counter id="counter" count="3"/>
+```
+
+示例入口：Node 引擎 → Node.js → Node.js 中使用 UI → 自定义 Widget 属性。完整可运行的 Activity 包装见内置示例。
+
+此实现仍采用先展开 XML、再原生 inflate 的路径。高级版 `rootViewCreated` 在子节点 inflate 前执行的阶段、`inflated` 在外部属性前执行的阶段，以及 `render(context, parent)` 返回原生 View 的路径仍未对齐。本轮没有用晚到的空回调伪装这两个阶段；当前 initialAttributes 在原生 View 创建前读取，不应在该 getter 中访问 this.view。
+
+## 10. 与旧接口的关系
 
 Node 的 `ui.Activity` 与 Rhino/QuickJS 的传统 `ui.layout` 实现不同。Node 原生界面通常位于当前脚本的 `:node24_1..3` 槽；旧版 Node 兼容界面、对话框和回退浮窗在 `:nodeui`。主应用仍承担权限、设置和定时任务等协调职责。
 

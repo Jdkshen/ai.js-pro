@@ -31,7 +31,7 @@ param(
     [string]$Abi = 'arm64-v8a',
 
     # A local test candidate may be newer than the connected test phone/feed.
-    # An explicit release code must still be above every observed baseline.
+    # Normally an explicit code must be above every observed baseline.
     [ValidateRange(0,2100000000)][int]$VersionCode = 0,
 
     [string]$DeviceId = 'cccc62c7',
@@ -47,6 +47,10 @@ param(
     # 显式发布已验证的 APK（包括 Flutter release），避免误选 debug 目录的旧产物。
     # 仅与 -SkipBuild 同用；沿用当前开发通道签名校验，插件附件保持原样。
     [string]$ApkPath = '',
+
+    # Already device-tested candidate: same installed version and identical APK SHA.
+    # Requires an explicit APK/version; the published/repository baseline must be older.
+    [switch]$AllowInstalledCandidate,
 
     # 多设备时也允许发布，但仍需满足下方第 0 节的两个前提。
     [switch]$AllowMultiDevice,
@@ -98,6 +102,10 @@ function Done([string]$message) {
 if (-not [string]::IsNullOrWhiteSpace($ApkPath) -and -not $SkipBuild) {
     Fail '-ApkPath 必须与 -SkipBuild 同用；先构建并验证目标 APK。'
 }
+if ($AllowInstalledCandidate -and (-not $SkipBuild -or $VersionCode -le 0 -or
+        [string]::IsNullOrWhiteSpace($ApkPath))) {
+    Fail '-AllowInstalledCandidate requires -SkipBuild, -ApkPath and an explicit -VersionCode.'
+}
 
 # --- 0. 前置：目标设备在线；多设备需显式放行 ---------------------------------
 # 多设备时 dev-update.ps1 的 dumpsys 会静默返回 0（把手机已装版本从基准里去掉）。
@@ -105,6 +113,8 @@ if (-not [string]::IsNullOrWhiteSpace($ApkPath) -and -not $SkipBuild) {
 #   1) 目标机（$DeviceId）确实装着 App，且能用 -s 读到 versionCode；
 #   2) 手机上的 versionCode 不高于「仓库版本」与「已发布版本」中的较大者
 #      —— 这样即使漏读也不改变 max()，基准仍正确。
+# 已安装的测试候选可用 -AllowInstalledCandidate：不再依赖漏读推断，读取目标机
+# 版本和 base.apk SHA；要求版本高于仓库/发布源、且候选及暂存 APK 均与实装相同。
 $online = @(& $adb devices | Select-String '^\S+\s+device$')
 if ($online.Count -eq 0) { Fail '没有在线设备。' }
 if ($online.Count -ne 1 -and -not $AllowMultiDevice) {
@@ -145,7 +155,24 @@ if ($deviceVersion -le 0) {
     Fail "读不到 $DeviceId 上 $packageName 的 versionCode（App 没装？）。缺了这项基准会算小版本号。"
 }
 $expected = [Math]::Max([Math]::Max($repoVersion, $publishedVersion), $deviceVersion) + 1
-if ($VersionCode -gt 0) {
+$verifiedCandidateHash = ''
+if ($AllowInstalledCandidate) {
+    if ($VersionCode -ne $deviceVersion -or $VersionCode -le [Math]::Max($repoVersion, $publishedVersion)) {
+        Fail 'Installed candidate must equal the device version and be newer than the published/repository baseline.'
+    }
+    if (-not (Test-Path -LiteralPath $ApkPath -PathType Leaf)) { Fail "Candidate APK not found: $ApkPath" }
+    $installed = ((& $adb -s $DeviceId shell pm path $packageName) -join "`n")
+    $baseMatch = [regex]::Match($installed, '(?m)^package:(.+/base\.apk)\s*$')
+    if ($LASTEXITCODE -ne 0 -or -not $baseMatch.Success) { Fail 'Cannot locate installed base APK for SHA verification.' }
+    $basePath = $baseMatch.Groups[1].Value.Trim()
+    $shaOutput = ((& $adb -s $DeviceId shell sha256sum $basePath) -join "`n")
+    $installedHash = [regex]::Match($shaOutput, '(?im)^([0-9a-f]{64})\s').Groups[1].Value.ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0 -or $installedHash.Length -ne 64) { Fail 'Cannot hash installed APK; refusing installed-candidate mode.' }
+    $verifiedCandidateHash = (Get-FileHash -LiteralPath $ApkPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedHash -ne $verifiedCandidateHash) { Fail 'Installed APK SHA-256 differs from candidate; refusing publication.' }
+    Write-Host "  Installed candidate SHA verified: $verifiedCandidateHash" -ForegroundColor Green
+    $expected = $VersionCode
+} elseif ($VersionCode -gt 0) {
     if ($VersionCode -lt $expected) {
         Fail "显式版本 $VersionCode 必须至少为 $expected，不能覆盖已发布或已安装版本。"
     }
@@ -254,6 +281,10 @@ try {
         New-Item -ItemType Directory -Force -Path $staging | Out-Null
         $stagedApk = Join-Path $staging "AI-js-Pro-Flutter-dev-$expected.apk"
         Copy-Item -LiteralPath $inputApk.FullName -Destination $stagedApk -Force
+        if ($verifiedCandidateHash -and
+                (Get-FileHash -LiteralPath $stagedApk -Algorithm SHA256).Hash.ToLowerInvariant() -ne $verifiedCandidateHash) {
+            throw 'Candidate changed after installed-APK verification; refusing publication.'
+        }
         # 直接交给现有更新源写入器；不重选/替换其他工作项正在维护的插件附件。
         & (Join-Path $PSScriptRoot 'serve-updates.ps1') -Apk $stagedApk -Dir $updatesDir `
             -VersionCode $expected -VersionName "dev-$expected" -ReleaseNotes $ReleaseNotes -NoServe

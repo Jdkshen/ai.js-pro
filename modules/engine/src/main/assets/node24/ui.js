@@ -292,9 +292,10 @@
                     Object.keys(attribute).forEach(function (key) {
                         const widget = extras.widget;
                         const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
-                        if (descriptor && descriptor.set) {
+                        if (descriptor && (descriptor.set || descriptor.writable)) {
                             flush();
-                            descriptor.set.call(widget, attribute[key]);
+                            if (descriptor.set) descriptor.set.call(widget, attribute[key]);
+                            else Reflect.set(widget, 'attr$' + key, attribute[key]);
                             widget.attrs[key] = attribute[key];
                         } else pending[key] = attribute[key];
                     });
@@ -305,12 +306,15 @@
                 const widget = extras.widget;
                 const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
                 if (arguments.length < 2) {
-                    if (descriptor && descriptor.get) return descriptor.get.call(widget);
+                    if (descriptor && (descriptor.get || Object.prototype.hasOwnProperty.call(descriptor, 'value'))) {
+                        return Reflect.get(widget, 'attr$' + key);
+                    }
                     if (descriptor && descriptor.set) return widget.attrs[key];
                     return javaSession().viewAttribute(view, key, '', false);
                 }
-                if (descriptor && descriptor.set) {
-                    descriptor.set.call(widget, value);
+                if (descriptor && (descriptor.set || descriptor.writable)) {
+                    if (descriptor.set) descriptor.set.call(widget, value);
+                    else Reflect.set(widget, 'attr$' + key, value);
                     widget.attrs[key] = value;
                 } else {
                     javaSession().viewAttribute(view, key, String(value), true);
@@ -1096,16 +1100,50 @@
         }
         function hasWidgetAttrSetter(widget, name) {
             const descriptor = findPropertyDescriptor(widget, 'attr$' + name);
-            return !!(descriptor && descriptor.set);
+            return !!(descriptor && (descriptor.set || descriptor.writable));
         }
 
         class Widget {
             constructor() {
-                this.attrs = Object.assign({}, this.initialAttributes || {});
-                this.view = null;
+                this.attrs = {};
+                this._view = null;
                 this.__ajsNodeUiWidget = true;
             }
+            get view() {
+                if (!this._view) throw new Error('widget is not mounted');
+                return this._view;
+            }
+            created() {}
             get initialAttributes() { return {}; }
+            mounted() {}
+            hasAttribute(name) {
+                return !!findPropertyDescriptor(this, 'attr$' + String(name))
+                    || Object.prototype.hasOwnProperty.call(this.attrs, name);
+            }
+            getAttribute(name, fallback) {
+                const descriptor = findPropertyDescriptor(this, 'attr$' + String(name));
+                if (descriptor && (descriptor.get || !descriptor.set)) {
+                    return Reflect.get(this, 'attr$' + String(name));
+                }
+                if (Object.prototype.hasOwnProperty.call(this.attrs, name)) return this.attrs[name];
+                if (typeof fallback !== 'function') throw new TypeError('Widget.getAttribute 缺少默认读取函数');
+                return fallback();
+            }
+            setAttribute(name, value, fallback) {
+                const descriptor = findPropertyDescriptor(this, 'attr$' + String(name));
+                if (descriptor && descriptor.set) {
+                    descriptor.set.call(this, value);
+                    this.attrs[name] = value;
+                } else if (descriptor && descriptor.writable) {
+                    Reflect.set(this, 'attr$' + String(name), value);
+                    this.attrs[name] = value;
+                } else if (!descriptor && Object.prototype.hasOwnProperty.call(this.attrs, name)) {
+                    this.attrs[name] = value;
+                } else {
+                    if (typeof fallback !== 'function') throw new TypeError('Widget.setAttribute 缺少默认写入函数');
+                    fallback(value);
+                }
+            }
             render() { throw new Error('ui.Widget.render() 必须返回 XML 字符串'); }
         }
         Widget.register = function (name, Ctor) {
@@ -1116,13 +1154,17 @@
             return Ctor;
         };
         Widget.of = function (view) {
-            if (view == null) return null;
+            if (view == null) return undefined;
             try {
                 const extras = realViewExtras.get(view);
-                if (extras) return extras.data['autojs.widget'] || null;
+                if (extras) return extras.data['autojs.widget'];
                 const widget = view.__ajsWidget;
-                return widget && widget.__ajsNodeUiWidget ? widget : null;
-            } catch (error) { return null; }
+                return widget && widget.__ajsNodeUiWidget ? widget : undefined;
+            } catch (error) { return undefined; }
+        };
+        Widget.create = function (name) {
+            const Ctor = widgetRegistry[normalizeWidgetTag(name)];
+            return Ctor ? new Ctor() : undefined;
         };
 
         // Read element boundaries without splitting quoted '>' characters, comments or CDATA.
@@ -1180,7 +1222,16 @@
             if (typeof Ctor !== 'function') return '<' + tag + attrText + (selfClosing ? '/>' : '>');
             const attrs = parseXmlAttributes(attrText);
             const widget = new Ctor();
-            widget.attrs = Object.assign({}, widget.initialAttributes || {}, attrs);
+            if (typeof widget.created === 'function') widget.created();
+            // Subclass fields/created() must be initialized before reading defaults.
+            const defaults = Object.assign({}, widget.initialAttributes || {}, widget.attrs || {});
+            Object.keys(defaults).forEach(function (name) {
+                const descriptor = findPropertyDescriptor(widget, 'attr$' + name);
+                if (descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+                        && descriptor.value !== undefined
+                        && !Object.prototype.hasOwnProperty.call(widget.attrs, name)) delete defaults[name];
+            });
+            widget.attrs = Object.assign({}, defaults, attrs);
             const rendered = widget.render();
             if (typeof rendered !== 'string' || rendered.trim() === '') {
                 throw new Error('ui.Widget「' + tag + '」render() 必须返回非空 XML 字符串');
@@ -1192,20 +1243,30 @@
             let rootAttrs = rootMatch[3] || '';
             let extra = '';
             const renderedAttrs = parseXmlAttributes(rootAttrs);
-            const idValue = String(attrs.id || renderedAttrs.id || renderedAttrs['android:id']
+            const idValue = String(attrs.id || attrs['android:id'] || renderedAttrs.id || renderedAttrs['android:id']
                 || ('__node_widget_' + nextWidgetId++)).replace(/^@\+?id\//, '');
-            if (attrs.id && /(?:^|\s)(?:android:)?id\s*=/.test(rootAttrs)) {
+            if ((attrs.id || attrs['android:id']) && /(?:^|\s)(?:android:)?id\s*=/.test(rootAttrs)) {
                 rootAttrs = rootAttrs.replace(/((?:^|\s)(?:android:)?id\s*=)("[^"]*"|'[^']*')/,
                     '$1"' + xmlEscape(idValue) + '"');
             }
             if (idValue && !/\bid\s*=/.test(rootAttrs)) {
                 extra += ' id="' + xmlEscape(idValue) + '"';
             }
-            Object.keys(attrs).forEach(function (name) {
-                if (name === 'id') return;
+            function applyNativeAttribute(name, value, override) {
+                if (name === 'id' || name === 'android:id' || value == null) return;
                 if (hasWidgetAttrSetter(widget, name)) return;
-                if (new RegExp('(^|\\s)' + escapeRegExp(name) + '\\s*=').test(rootAttrs)) return;
-                extra += ' ' + name + '="' + xmlEscape(attrs[name]) + '"';
+                const pattern = new RegExp('((?:^|\\s)(?:android:)?'
+                    + escapeRegExp(name.replace(/^android:/, '')) + '\\s*=)("[^"]*"|\'[^\']*\')');
+                if (pattern.test(rootAttrs)) {
+                    if (override) rootAttrs = rootAttrs.replace(pattern,
+                        (_match, prefix) => prefix + '"' + xmlEscape(value) + '"');
+                } else rootAttrs += ' ' + name + '="' + xmlEscape(value) + '"';
+            }
+            Object.keys(defaults).forEach(function (name) {
+                applyNativeAttribute(name, defaults[name], false);
+            });
+            Object.keys(attrs).forEach(function (name) {
+                applyNativeAttribute(name, attrs[name], true);
             });
             const newRoot = rootMatch[1] + rootMatch[2] + rootAttrs + extra + rootMatch[4];
             const expanded = appendWidgetContent(
@@ -1262,12 +1323,13 @@
                     extras.data['autojs.widget'] = widget;
                 }
                 else binding.__ajsWidget = widget;
-                widget.view = binding;
+                if (widget.__ajsNodeUiWidget) widget._view = binding;
+                else widget.view = binding;
                 Object.keys(widget.attrs || {}).forEach(function (name) {
                     if (name === 'id') return;
                     const setterName = 'attr$' + name;
                     const descriptor = findPropertyDescriptor(widget, setterName);
-                    if (!descriptor || !descriptor.set) return;
+                    if (!descriptor || (!descriptor.set && !descriptor.writable)) return;
                     try {
                         widget[setterName] = widget.attrs[name];
                     } catch (error) {

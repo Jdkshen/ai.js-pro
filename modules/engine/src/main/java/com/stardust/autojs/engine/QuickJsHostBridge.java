@@ -6601,7 +6601,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public void uiSetConfig(int viewId, String id, String configJson) {
-        mDialogHandler.post(() -> {
+        Runnable apply = () -> {
             View view = uiFind(id);
             if (view == null) {
                 return;
@@ -6621,7 +6621,11 @@ final class QuickJsHostBridge implements AutoCloseable,
             } catch (Throwable error) {
                 Log.w("QuickJsHostBridge", "Cannot update UI view " + id, error);
             }
-        });
+        };
+        // ui.run really executes on main. Apply there before an immediate getter;
+        // posting again would leave the old value visible inside the same callback.
+        if (Looper.myLooper() == Looper.getMainLooper()) apply.run();
+        else mDialogHandler.post(apply);
     }
 
     public String uiGetText(int viewId, String id) {
@@ -6725,18 +6729,10 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     public String uiGetAttr(int viewId, String id, String name) {
-        final String[] result = new String[]{""};
-        final CountDownLatch latch = new CountDownLatch(1);
-        mDialogHandler.post(() -> {
+        return runOnMainSync(mDialogHandler, () -> {
             String value = readViewAttribute(uiFind(id), name, mRuntime.ui.getResourceParser());
-            result[0] = value == null ? "" : value;
-            latch.countDown();
-        });
-        try {
-            latch.await(2, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {
-        }
-        return result[0];
+            return value == null ? "" : value;
+        }, "");
     }
 
     private final java.util.concurrent.ConcurrentLinkedQueue<String> mUiEvents =
