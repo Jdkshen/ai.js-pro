@@ -74,11 +74,13 @@
         let suppressAllDestroyed = false;
         const inlineBindingNames = new Set();
         const realBindings = new WeakMap();
+        const realBindingCaches = new WeakMap();
         let realViewExtras = new WeakMap();
         function viewExtras(view) {
             let extras = realViewExtras.get(view);
             if (!extras) {
-                extras = {events: new (require('events').EventEmitter)(), bound: Object.create(null), widget: null};
+                extras = {events: new (require('events').EventEmitter)(), bound: Object.create(null), widget: null,
+                    data: Object.create(null)};
                 realViewExtras.set(view, extras);
             }
             return extras;
@@ -156,10 +158,117 @@
             throw new Error('当前 grid/list 缺少适配器方法：' + method);
         }
 
+        // Match the native View event contract: listener presence/return values do not
+        // consume input. Only event.consumed controls the synchronous Android reply.
+        function inputEvent(nativeEvent, fields) {
+            const state = Object.assign({consumed: false}, fields || {});
+            if (!nativeEvent) return state;
+            return new Proxy(state, {
+                get: function (target, name) {
+                    if (Object.prototype.hasOwnProperty.call(target, name)) return target[name];
+                    const member = nativeEvent[name];
+                    return typeof member === 'function' ? member.bind(nativeEvent) : member;
+                },
+                set: function (target, name, value) {
+                    if (name === 'consumed') { target.consumed = !!value; return true; }
+                    nativeEvent[name] = value;
+                    return true;
+                }
+            });
+        }
+
+        function bindViewEvent(view, extras, event) {
+            const group = /^touch(?:_down|_up|_move)?$/.test(event) ? 'touch'
+                : /^key(?:_down|_up)?$/.test(event) ? 'key' : event;
+            if (extras.bound[group]) return;
+            if (event === 'item_created') {
+                requireNodeView(view, event);
+                ensureItemCreatedListener(view, extras);
+            } else if (event === 'draw') {
+                if (!isNodeUiView(view, 'NodeUiCanvasView')) {
+                    throw new Error('draw 事件需要 Node 原生 canvas（当前：'
+                        + String(view && view.__class || 'unknown') + '）');
+                }
+                ensureDrawListener(view, extras);
+            } else {
+                let listenerClass, method, callbacks;
+                function dispatch(name, args) {
+                    try { return extras.events.emit.apply(extras.events, [name].concat(args)); }
+                    catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); return false; }
+                }
+                switch (group) {
+                    case 'click':
+                        listenerClass = 'android.view.View$OnClickListener'; method = 'setOnClickListener';
+                        callbacks = {onClick: source => { dispatch('click', [source]); }};
+                        break;
+                    case 'check':
+                        listenerClass = 'android.widget.CompoundButton$OnCheckedChangeListener'; method = 'setOnCheckedChangeListener';
+                        callbacks = {onCheckedChanged: (source, checked) => { dispatch('check', [!!checked, source]); }};
+                        break;
+                    case 'long_click':
+                        listenerClass = 'android.view.View$OnLongClickListener'; method = 'setOnLongClickListener';
+                        callbacks = {onLongClick: source => {
+                            const e = inputEvent(null, {view: source});
+                            dispatch('long_click', [e, source]);
+                            return !!e.consumed;
+                        }};
+                        break;
+                    case 'touch':
+                        listenerClass = 'android.view.View$OnTouchListener'; method = 'setOnTouchListener';
+                        callbacks = {onTouch: (source, nativeEvent) => {
+                            const e = inputEvent(nativeEvent, {view: source});
+                            const action = Number(nativeEvent.getAction()) & 255;
+                            const phase = action === 0 ? 'touch_down' : action === 1 ? 'touch_up' : action === 2 ? 'touch_move' : null;
+                            if (phase) dispatch(phase, [e, source]);
+                            dispatch('touch', [e, source]);
+                            return !!e.consumed;
+                        }};
+                        break;
+                    case 'key':
+                        listenerClass = 'android.view.View$OnKeyListener'; method = 'setOnKeyListener';
+                        callbacks = {onKey: (source, keyCode, nativeEvent) => {
+                            const e = inputEvent(nativeEvent, {view: source}), action = Number(nativeEvent.getAction());
+                            if (action === 0 || action === 1) dispatch(action === 0 ? 'key_down' : 'key_up', [keyCode, e, source]);
+                            dispatch('key', [keyCode, e, source]);
+                            return !!e.consumed;
+                        }};
+                        break;
+                    case 'scroll_change':
+                        listenerClass = 'android.view.View$OnScrollChangeListener'; method = 'setOnScrollChangeListener';
+                        callbacks = {onScrollChange: (source, scrollX, scrollY, oldScrollX, oldScrollY) => {
+                            dispatch('scroll_change', [inputEvent(null, {view: source, scrollX, scrollY, oldScrollX, oldScrollY}), source]);
+                        }};
+                        break;
+                    default: throw new Error('Node View 事件暂不支持：' + event);
+                }
+                const Listener = globalThis.$autojs.java.findClass(listenerClass);
+                view[method](new Listener(callbacks));
+            }
+            extras.bound[group] = true;
+        }
+
         // Extend the existing Java proxy, so binding/findViewById/native callbacks all
         // keep the same View identity and Java method/argument conversion.
         function realViewMember(view, name) {
             const extras = viewExtras(view);
+            if (name === 'extras') return extras.data;
+            if (name === 'findView') return function (idOrName) {
+                const id = typeof idOrName === 'number' ? idOrName
+                    : idOrName == null ? 0 : resolveViewId(String(idOrName));
+                const child = id ? view.findViewById(id) : null;
+                return child && isWebViewObject(child) ? webViewFacade(child) : child;
+            };
+            if (name === 'clearViewBindingCache') return function () {
+                const cache = realBindingCaches.get(view);
+                if (cache) Object.keys(cache).forEach(key => { delete cache[key]; });
+            };
+            if (['eventNames', 'listenerCount', 'listeners', 'getMaxListeners', 'emit'].includes(name)) {
+                return extras.events[name].bind(extras.events);
+            }
+            if (name === 'setMaxListeners') return function (count) {
+                extras.events.setMaxListeners(count);
+                return view;
+            };
             if (name === 'attr') return function (attribute, value) {
                 if (attribute && typeof attribute === 'object') {
                     // Preserve custom Widget setters and insertion order while batching adjacent
@@ -267,42 +376,9 @@
                     return view;
                 }
                 if (typeof handler !== 'function') throw new TypeError('View.on/once 需要函数');
-                if (!extras.bound[event]) {
-                    if (event === 'item_created') {
-                        requireNodeView(view, 'item_created');
-                        ensureItemCreatedListener(view, extras);
-                    } else if (event === 'draw') {
-                        if (!isNodeUiView(view, 'NodeUiCanvasView')) {
-                            throw new Error('draw 事件需要 Node 原生 canvas（当前：'
-                                + String(view && view.__class || 'unknown') + '）');
-                        }
-                        ensureDrawListener(view, extras);
-                    } else {
-                        let listenerClass, method, callbackName;
-                        if (event === 'click') {
-                            listenerClass = 'android.view.View$OnClickListener'; method = 'setOnClickListener'; callbackName = 'onClick';
-                        } else if (event === 'long_click') {
-                            listenerClass = 'android.view.View$OnLongClickListener'; method = 'setOnLongClickListener'; callbackName = 'onLongClick';
-                        } else if (event === 'check') {
-                            listenerClass = 'android.widget.CompoundButton$OnCheckedChangeListener';
-                            method = 'setOnCheckedChangeListener'; callbackName = 'onCheckedChanged';
-                        } else {
-                            throw new Error('Node View 事件暂不支持：' + event);
-                        }
-                        const Listener = globalThis.$autojs.java.findClass(listenerClass);
-                        const callbacks = {};
-                        callbacks[callbackName] = function (source, checked) {
-                            try {
-                                return event === 'check' ? extras.events.emit(event, !!checked, source)
-                                    : extras.events.emit(event, source);
-                            }
-                            catch (error) { console.error('[ui] ' + event + ' 回调异常：', error); return false; }
-                        };
-                        view[method](new Listener(callbacks));
-                    }
-                    extras.bound[event] = true;
-                }
-                extras.events[name === 'once' ? 'once' : 'on'](event, handler);
+                bindViewEvent(view, extras, event);
+                const emitterMethod = name === 'addListener' ? 'on' : name;
+                extras.events[emitterMethod](event, handler);
                 return view;
             };
         }
@@ -342,6 +418,7 @@
                         .filter(function (name) { const id = resolveViewId(name); return id && view.findViewById(id); });
                 };
                 const childCache = Object.create(null);
+                realBindingCaches.set(view, childCache);
                 const getChild = function (name) {
                     if (Object.prototype.hasOwnProperty.call(childCache, name)) return childCache[name];
                     const id = resolveViewId(name);
@@ -398,16 +475,7 @@
         }
 
         function realContentView() {
-            const root = javaSession().getContentView();
-            if (!root) return root;
-            return new Proxy(root, {
-                get: function (target, prop, receiver) {
-                    if (prop === 'findView') {
-                        return function (name) { return findRealViewByName(name); };
-                    }
-                    return Reflect.get(target, prop, receiver);
-                }
-            });
+            return javaSession().getContentView();
         }
 
         function findRealViewByName(name) {
@@ -419,9 +487,9 @@
                 return byId ? (isWebViewObject(byId) ? webViewFacade(byId) : byId) : null;
             }
             const id = resolveViewId(String(name));
-            if (!id) throw new Error('未找到 View 资源 id：' + String(name));
+            if (!id) return null;
             const child = root.findViewById(id);
-            if (!child) throw new Error('当前 View 中未找到：' + String(name));
+            if (!child) return null;
             return isWebViewObject(child) ? webViewFacade(child) : child;
         }
 
@@ -1051,7 +1119,7 @@
             if (view == null) return null;
             try {
                 const extras = realViewExtras.get(view);
-                if (extras && extras.widget) return extras.widget;
+                if (extras) return extras.data['autojs.widget'] || null;
                 const widget = view.__ajsWidget;
                 return widget && widget.__ajsNodeUiWidget ? widget : null;
             } catch (error) { return null; }
@@ -1188,7 +1256,11 @@
                     binding = markerObject('View', {viewName: idName, viewId: viewId, views: views});
                     viewBindings[key] = binding;
                 }
-                if (realUiMode || root) viewExtras(binding).widget = widget;
+                if (realUiMode || root) {
+                    const extras = viewExtras(binding);
+                    extras.widget = widget;
+                    extras.data['autojs.widget'] = widget;
+                }
                 else binding.__ajsWidget = widget;
                 widget.view = binding;
                 Object.keys(widget.attrs || {}).forEach(function (name) {

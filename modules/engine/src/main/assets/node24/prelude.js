@@ -316,7 +316,9 @@
           return globalThis.__ajsBindJavaView(proxy);
         }
         if (isView && typeof globalThis.__ajsJavaViewMember === 'function'
-            && ['on', 'once', 'off', 'removeListener', 'removeAllListeners', 'attr', 'setItemTemplate', 'setDataSource', 'getAdapter'].includes(prop)) {
+            && ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener', 'off', 'removeListener',
+              'removeAllListeners', 'eventNames', 'listenerCount', 'listeners', 'setMaxListeners', 'getMaxListeners',
+              'emit', 'attr', 'extras', 'findView', 'clearViewBindingCache', 'setItemTemplate', 'setDataSource', 'getAdapter'].includes(prop)) {
           var extra = globalThis.__ajsJavaViewMember(proxy, prop);
           if (extra !== undefined) return extra;
         }

@@ -130,7 +130,53 @@ console.log(file.exists(), String(file.getAbsolutePath()));
 
 `$autojs.androidContext` 是 Context，不是 Activity。需要窗口、Activity 回调或界面主题时使用当前 UI Activity。Node 自带的 fs/path/http 等仍是 Node API；不能把 JVM 线程当作另一个可任意共享 JS 闭包的 Node 环境。
 
-## 8. 与旧接口的关系
+## 8. 原生 View 的事件、查找和附加状态
+
+以下用于真实 Android View，包括 `root.binding.name`、`findViewById()`、`ui.inflate()` 返回的控件；需要当前版本的 Node 引擎。`view.findView('name')` 只搜索该控件的子树，找不到返回 `null`，不是无障碍选择器。
+
+| 接口 / 事件 | 参数与行为 |
+| --- | --- |
+| `view.on(event, handler)` / `once(event, handler)` | 注册 / 仅执行一次；返回当前 View |
+| `off(event, handler)` / `removeListener(event, handler)` | 移除指定处理器；返回当前 View |
+| `prependListener` / `prependOnceListener` | 优先执行 / 优先执行一次 |
+| `removeAllListeners(event?)` | 清除指定事件或全部 JS 处理器；原生默认行为由 Android 决定 |
+| `eventNames()` / `listenerCount(event)` / `listeners(event)` | 查询已注册的 JS 事件 / 数量 / 处理器副本 |
+| `setMaxListeners(n)` / `getMaxListeners()` | 设置 / 查询 EventEmitter 警告阈值；不限制事件次数 |
+| `click` | `(view)`；点击回调 |
+| `check` | `(checked, view)`；CheckBox、Switch 等 CompoundButton 状态变化 |
+| `long_click` | `(event, view)`；`event.view` 为当前 View，`event.consumed` 默认 false |
+| `touch` / `touch_down` / `touch_up` / `touch_move` | `(event, view)`；事件可调用 `getX()`、`getY()`、`getAction()` 等 MotionEvent 方法；先触发对应阶段，再触发 touch |
+| `key` / `key_down` / `key_up` | `(keyCode, event, view)`；可调用 `event.getKeyCode()` 等 KeyEvent 方法；先阶段，再 key |
+| `scroll_change` | `(event, view)`；`scrollX`、`scrollY`、`oldScrollX`、`oldScrollY`；需要 Android 6 / API 23 以上 |
+| `view.findView(nameOrId)` | 当前 View 子树中的控件；不存在返回 null |
+| `view.extras` | 当前 View 的 JS 附加状态字典；同一个原生 View 多次查找共享字典 |
+| `view.clearViewBindingCache()` | 修改子树后清除绑定缓存；已保存的 `binding` 引用也会重新查找控件 |
+| `ui.Widget.of(view)` | 获取自定义 Widget；也可读取 `view.extras['autojs.widget']`；普通控件返回 null |
+
+```js
+"ui"; "nodejs";
+const ui = require('ui');
+class Main extends ui.Activity {
+  get layoutXml() { return '<vertical padding="16"><button id="button" text="长按我"/></vertical>'; }
+  onContentViewSet(root) {
+    const button = root.findView('button');
+    button.extras.count = 0;
+    button.on('long_click', event => {
+      event.consumed = true; // 同步告诉 Android 已处理；避免继续触发默认长按行为
+      button.setText('已长按 ' + (++button.extras.count) + ' 次');
+    });
+  }
+}
+ui.setMainActivity(Main);
+```
+
+长按、触摸和按键是否被消费，取决于回调同步部分设置的 `event.consumed`。仅注册处理器或 `return true` 不代表已消费；`await` 后设置已来不及影响这次 Android 分发。触摸阶段与通用事件共享同一个事件对象，后执行的处理器可以继续修改 consumed。
+
+MotionEvent 是 Android 临时借用的对象，回调结束后不要保存它继续使用；需要延后处理时，先同步取出坐标、时间等普通值。耗时操作放到异步任务，避免阻塞 Android 输入分发。`scroll_change` 是滚动后的通知，修改 consumed 不会撤销滚动。
+
+示例入口：Node 引擎 → Node.js → Node.js 中使用 UI → 原生 View 事件与状态。现有 `item_created`、Canvas `draw` 仍使用各自的控件接口。本节不代表所有高级版列表事件、自定义事件或第三方 View 的事件已实现；不支持的事件仍明确报错。
+
+## 9. 与旧接口的关系
 
 Node 的 `ui.Activity` 与 Rhino/QuickJS 的传统 `ui.layout` 实现不同。Node 原生界面通常位于当前脚本的 `:node24_1..3` 槽；旧版 Node 兼容界面、对话框和回退浮窗在 `:nodeui`。主应用仍承担权限、设置和定时任务等协调职责。
 

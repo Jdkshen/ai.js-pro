@@ -35,4 +35,16 @@ const callback = calls.at(-1).callback;
 dispatch(callback, 'run');
 assert.equal(implementation.runs, 1);
 assert.throws(() => $java.implement([Runnable, Runnable], implementation), /一个 Java 接口/);
+const extras = {}, child = {}, views = [];
+globalThis.__ajsJavaViewMember = (view, name) => {
+    views.push(view);
+    if (name === 'extras') return extras;
+    if (name === 'findView') return id => id === 'child' ? child : null;
+    if (name === 'clearViewBindingCache') return () => { extras.invalidated = true; };
+};
+assert.strictEqual(seek.extras, extras);
+assert.strictEqual(seek.findView('child'), child);
+seek.clearViewBindingCache();
+assert.strictEqual(extras.invalidated, true);
+assert(views.every(view => view === seek), 'View extensions receive the original Java proxy');
 console.log('PASS Node24 UI interop: lowercase R classes, callback maps, this receiver and explicit implement');
