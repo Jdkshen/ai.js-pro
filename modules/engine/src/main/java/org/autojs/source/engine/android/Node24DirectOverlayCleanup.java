@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.stardust.autojs.engine.ScriptUiTasks;
 
 /**
  * task-218：清理脚本直接 WindowManager.addView 留下的 Node View。
@@ -58,7 +59,7 @@ final class Node24DirectOverlayCleanup {
                         continue;
                     }
                     try {
-                        removeView.invoke(wmg, view, false);
+                        removeView.invoke(wmg, view, true);
                         count.incrementAndGet();
                     } catch (Throwable ignored) {
                         // 单个 View 已被移除/已 detach：继续清理其它 View。
@@ -68,23 +69,7 @@ final class Node24DirectOverlayCleanup {
                 // 反射字段在部分 ROM 不可用：不能让清理步骤影响脚本收尾。
             }
         };
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            task.run();
-        } else {
-            final CountDownLatch latch = new CountDownLatch(1);
-            new Handler(Looper.getMainLooper()).post(() -> {
-                try {
-                    task.run();
-                } finally {
-                    latch.countDown();
-                }
-            });
-            try {
-                latch.await(1500L, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        ScriptUiTasks.runAndWait(task, 1500L);
         Log.i(TAG, "direct overlay cleanup count=" + count.get());
         return count.get();
     }

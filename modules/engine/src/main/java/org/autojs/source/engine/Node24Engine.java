@@ -39,6 +39,15 @@ public final class Node24Engine implements AutoCloseable {
         CallbackClosedException(String message) { super(message); }
     }
     public interface Host { String invoke(String request) throws Exception; }
+
+    /** Runs a stop control message on the owning Node thread, without terminating V8. */
+    public boolean requestExit() {
+        long current = handle;
+        if (current == 0) return false;
+        String reply = invokeCallback(current, "{\"control\":\"requestExit\",\"exitCode\":-9000}");
+        // The control reply is emitted before setImmediate executes the exit hook.
+        return reply != null && reply.contains("\"scheduled\":true");
+    }
     /** Host-backed task; zero timeout runs until the event loop ends or cancelled. */
     public Result execute(String source,String filename,long timeoutMs,Host host) {
         if(filename==null||!filename.startsWith("/")||filename.indexOf('\0')>=0)throw new IllegalArgumentException("Absolute filename required");

@@ -152,6 +152,10 @@ public class ScriptHostService extends Service {
     private final Object mAutomationLock = new Object();
     private int mAutomationUsers = 0;
     private AutomationHostClient mAutomationClient;
+    private final java.util.concurrent.ThreadPoolExecutor mPreparation = new java.util.concurrent.ThreadPoolExecutor(
+            1,2,30L,java.util.concurrent.TimeUnit.SECONDS,new java.util.concurrent.ArrayBlockingQueue<>(32),operation -> {
+                Thread thread=new Thread(operation,"script-request-prepare"); thread.setDaemon(true); return thread;
+            });
 
     private final Handler mIpcHandler = new Handler(Looper.getMainLooper(), new Handler.Callback() {
         @Override
@@ -186,7 +190,7 @@ public class ScriptHostService extends Service {
         super.onCreate();
         // Phase1 P1：标记当前进程是隔离脚本进程，引擎据此把 auto/click/selector/截图代理到主进程
         // （RemoteAutomationBridge + ScriptRuntime/SimpleActionAutomator/Images 的 remote 分支）。
-        RemoteAutomationBridge.setIsolationProcess(true);
+        RemoteAutomationBridge.setIsolationProcess(false);
         registerNode24PoolSpikeReceiver();
     }
 
@@ -348,6 +352,7 @@ public class ScriptHostService extends Service {
 
     @Override
     public void onDestroy() {
+        mPreparation.shutdownNow();
         // Phase1 P1：进程退出前解除远程自动化后端（避免 AIDL 绑定泄漏）。
         try {
             synchronized (mAutomationLock) {
@@ -425,8 +430,22 @@ public class ScriptHostService extends Service {
             return;
         }
 
+        try { mPreparation.execute(() -> prepareRun(state,data,path,workDir)); }
+        catch (RuntimeException rejected) { failRun(state,rejected); }
+    }
+
+    private void prepareRun(RunState state,Bundle data,String path,String workDir) {
         try {
+            if (state.stopRequested) throw new ScriptInterruptedException();
             ScriptEngineService engineService = requireEngineService();
+            com.stardust.autojs.script.JavaScriptSource source;
+            ExecutionConfig config;
+            String requestFile=data.getString("requestFile");
+            if (requestFile!=null) {
+                state.requestPacket=ScriptHostRequest.validatedFile(getApplicationContext(),requestFile);
+                ScriptHostRequest.Loaded loaded=ScriptHostRequest.read(getApplicationContext(),requestFile);
+                source=loaded.source; config=loaded.config; state.actor=true;
+            } else {
             File file = new File(path == null ? "" : path).getCanonicalFile();
             if (!file.isFile()) {
                 throw new IllegalStateException("脚本文件不存在：" + (path == null ? "" : path));
@@ -444,34 +463,24 @@ public class ScriptHostService extends Service {
                         ? detail : "脚本暂存到应用私有目录失败：" + detail, error);
             }
 
-            JavaScriptFileSource source = new JavaScriptFileSource(staged.scriptFile);
-            state.name = source.getName();
-
-            ExecutionConfig config = ExecutionConfig.getDefault();
+            source = new JavaScriptFileSource(staged.scriptFile);
+            config = ExecutionConfig.getDefault();
             config.setWorkingDirectory(staged.workingDirectory.getAbsolutePath());
+            }
+            state.name=source.getName();
+            if (state.stopRequested) throw new ScriptInterruptedException();
 
             // Phase1 P1：注入主进程自动化后端（AIDL）；脚本里 auto/click/selector/screenshot 走主进程。
             retainAutomationBackend();
             state.automationRetained = true;
 
-            // 脚本进程里没有 Activity：UI 模式脚本不走 ScriptExecuteActivity。
-            ScriptEngineService.setHeadlessUiMode(true);
+            // The Activity and execution registry now both belong to :script. This is
+            // per-task policy, so another UI job cannot change a concurrent job's route.
             // 监听器负责把开始/结束/异常回给主进程。
             ScriptExecutionListener listener = new RunListener(state);
-            ScriptExecution execution;
-            if (isUiMode(source) && ScriptEngineService.isHeadlessUiMode()) {
-                // UI 模式脚本跑在 :script 进程的主 Looper 上（对齐 Pro 打包运行时）：这样
-                // SurfaceView 的 surfaceCreated 主线程回调与脚本里的 Button 等控件调用同线程。
-                // 非 Rhino 引擎由引擎服务内部自动退回后台执行路径。
-                // 与 Phase0 一致：隔离进程里 UI 脚本的 onExit 不自动发 exit 事件，
-                // 免得第三方 native UI 桥在渲染中自毁上下文（见 ScriptRuntime.suppressExitEvent）。
-                ScriptRuntime.suppressExitEvent = true;
-                execution = engineService.executeUiOnMainThread(
-                        new ScriptExecutionTask(source, listener, config));
-            } else {
-                // 普通脚本仍由引擎在后台线程执行。
-                execution = engineService.execute(source, listener, config);
-            }
+            // Node's own UI route is selected by ScriptEngineService; it never creates
+            // an empty compatibility Activity around the Node pool Activity.
+            ScriptExecution execution = engineService.execute(source, listener, config);
 
             boolean stopNow;
             synchronized (mLock) {
@@ -541,6 +550,16 @@ public class ScriptHostService extends Service {
         public void onStart(ScriptExecution execution) {
             try {
                 mState.startMillis = System.currentTimeMillis();
+                mState.executionId=execution.getId(); mState.engineId=execution.getEngine().getId();
+                mState.engine=execution.getSource().getEngineName();
+                if (mState.actor && execution.getEngine() instanceof com.stardust.autojs.engine.RhinoJavaScriptEngine) {
+                    Object argv=((com.stardust.autojs.engine.JavaScriptEngine)execution.getEngine()).getExecArgv();
+                    org.mozilla.javascript.Context context=org.mozilla.javascript.Context.getCurrentContext();
+                    if (context!=null && argv instanceof org.mozilla.javascript.Scriptable) {
+                        com.jdkshen.aijspro.mcp.McpRhinoArguments.INSTANCE.install(context,
+                                (org.mozilla.javascript.Scriptable)argv,execution.getConfig().getArguments());
+                    }
+                }
                 synchronized (mLock) {
                     mState.execution = execution;
                 }
@@ -558,41 +577,42 @@ public class ScriptHostService extends Service {
                 }
             } catch (Throwable error) {
                 Log.w(TAG, "上报 STARTED 失败：" + mState.token, error);
+                throw error instanceof RuntimeException ? (RuntimeException)error : new IllegalStateException(error);
             }
         }
 
         @Override
         public void onSuccess(ScriptExecution execution, Object result) {
-            try {
-                // task-191 P0/P1：结束行（6 位小数）先于任何错误/收尾写入主日志页。
-                flushConsoleBeforeFinish(mState);
-                forwardGlobalLine(mState, formatFinishedLine(mState, execution));
-                finish(mState, null);
-            } catch (Throwable error) {
-                Log.w(TAG, "上报 FINISHED 失败：" + mState.token, error);
-            }
+            mState.result=result==null ? null : String.valueOf(result);
+            if (mState.result!=null && mState.result.length()>4096) mState.result=mState.result.substring(0,4096);
+            completeAfterRelease(mState,execution,null);
         }
 
         @Override
         public void onException(ScriptExecution execution, Throwable e) {
-            try {
-                // task-191 P1：用户停止/关闭 UI 也只在这里静默打结束行。
-                flushConsoleBeforeFinish(mState);
-                forwardGlobalLine(mState, formatFinishedLine(mState, execution));
-                // 引擎 GLOBAL_LISTENER 在本监听器之后才打印错误堆栈；延后 250ms 收尾，
-                // 让 ERROR 行经 console 转发（103）到主日志页后再发 102（Pro：结束行→ERROR→Toast）。
-                final Throwable failure = e;
-                mConsoleHandler.postDelayed(() -> {
-                    try {
-                        finish(mState, failure);
-                    } catch (Throwable finishError) {
-                        Log.w(TAG, "上报 ERROR 失败：" + mState.token, finishError);
-                    }
-                }, 250L);
-            } catch (Throwable error) {
-                Log.w(TAG, "上报 ERROR 失败：" + mState.token, error);
-            }
+            completeAfterRelease(mState,execution,e);
         }
+
+    }
+
+    private void completeAfterRelease(RunState state,ScriptExecution execution,Throwable error) {
+        synchronized (mLock) {
+            if (state.finished) return;
+            if (error!=null) state.failure=error;
+            if (state.completing) return;
+            state.completing=true;
+        }
+        mConsoleHandler.post(new Runnable() {
+            @Override public void run() {
+                if (state.finished) return;
+                if (execution.getEngine()!=null && !execution.getEngine().isDestroyed()) {
+                    mConsoleHandler.postDelayed(this,20L); return;
+                }
+                flushConsoleBeforeFinish(state);
+                forwardGlobalLine(state,formatFinishedLine(state,execution));
+                finish(state,state.failure);
+            }
+        });
     }
 
     private void flushConsoleBeforeFinish(RunState state) {
@@ -617,10 +637,12 @@ public class ScriptHostService extends Service {
             replyError(state, describeError(error));
         }
         releaseAutomationBackendIfNeeded(state);
+        if (state.requestPacket!=null) ScriptHostRequest.discard(state.requestPacket);
         stopIfIdle();
     }
 
     private void failRun(RunState state, Throwable error) {
+        state.failure=error;
         synchronized (mLock) {
             if (state.finished) {
                 return;
@@ -631,6 +653,7 @@ public class ScriptHostService extends Service {
         detachConsoleForwarder(state);
         replyError(state, describeError(error));
         releaseAutomationBackendIfNeeded(state);
+        if (state.requestPacket!=null) ScriptHostRequest.discard(state.requestPacket);
         stopIfIdle();
     }
 
@@ -640,37 +663,10 @@ public class ScriptHostService extends Service {
      * <p>这里只 install、不做同步 bind：AIDL 客户端在脚本线程第一次调用时懒绑定（最多等 2s），
      * 避免阻塞本服务的主线程 Looper（handleRun 就在主线程）。
      */
-    private void retainAutomationBackend() {
-        synchronized (mAutomationLock) {
-            if (mAutomationUsers++ > 0) {
-                return;
-            }
-            mAutomationClient = AutomationHostClient.getInstance(getApplicationContext());
-            RemoteAutomationBridge.install(mAutomationClient);
-            Log.i(TAG, "remote automation backend installed for :script process");
-        }
-    }
+    private void retainAutomationBackend() { }
 
-    /** 脚本结束：最后一个运行时解除注入并断开 AIDL 绑定。 */
     private void releaseAutomationBackendIfNeeded(RunState state) {
-        if (state == null || !state.automationRetained) {
-            return;
-        }
-        state.automationRetained = false;
-        synchronized (mAutomationLock) {
-            if (mAutomationUsers <= 0) {
-                return;
-            }
-            if (--mAutomationUsers > 0) {
-                return;
-            }
-            RemoteAutomationBridge.uninstall(mAutomationClient);
-            if (mAutomationClient != null) {
-                mAutomationClient.disconnect();
-                mAutomationClient = null;
-            }
-            Log.i(TAG, "remote automation backend uninstalled (no running scripts)");
-        }
+        if (state != null) state.automationRetained = false;
     }
 
     // ------------------------------------------------------------------
@@ -957,6 +953,18 @@ public class ScriptHostService extends Service {
             Bundle data = new Bundle();
             // 主进程固定按 String 解包（见 PocScriptHost）；输入兼容数值，输出统一字符串。
             data.putString(KEY_TOKEN, state == null ? "" : state.token);
+            if (state!=null) {
+                data.putInt("executionId",state.executionId); data.putInt("engineId",state.engineId);
+                data.putString("engine",state.engine); data.putString("result",state.result);
+                data.putString("process",com.stardust.autojs.execution.ScriptProcessIdentity.name()); data.putInt("pid",android.os.Process.myPid());
+                Throwable failure=state.failure;
+                if (failure!=null) {
+                    data.putBoolean("interrupted",ScriptInterruptedException.causedByInterrupted(failure));
+                    data.putString("errorType",failure.getClass().getName());
+                    String stack=Log.getStackTraceString(failure);
+                    data.putString("errorStack",stack.length()>16384 ? stack.substring(0,16384) : stack);
+                }
+            }
             if (name != null) {
                 data.putString(KEY_NAME, name);
             }
@@ -1030,10 +1038,15 @@ public class ScriptHostService extends Service {
         final String token;
         final Messenger replyTo;
         volatile String name = "";
-        ScriptExecution execution;
+        volatile ScriptExecution execution;
         long startMillis;
-        boolean stopRequested;
-        boolean finished;
+        volatile boolean stopRequested;
+        volatile boolean finished;
+        boolean actor,completing;
+        volatile int executionId=-1,engineId=-1;
+        volatile String engine="",result;
+        volatile Throwable failure;
+        volatile File requestPacket;
         /** Phase1 P1：本次 RUN 是否已经注入过远程自动化后端（结束时释放一次）。 */
         boolean automationRetained;
         /** Phase1 日志转发：本次运行的 console 监听（结束后解挂并 flush）。 */

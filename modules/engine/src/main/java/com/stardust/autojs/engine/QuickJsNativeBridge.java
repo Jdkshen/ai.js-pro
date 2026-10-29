@@ -35,7 +35,7 @@ final class QuickJsNativeBridge {
     static native Object evaluateBytecode(long handle, byte[] code, String sourceName);
 
     /** Java → JS 同步回调：调用脚本里注册的 `__aiInvokeCallback(id, argsJson)`。 */
-    static native String invokeJsCallback(long handle, long callbackId, String argsJson);
+    static native String invokeJsCallback(long handle, long callbackId, String argsJson, boolean mainHandoff);
 
     static native void setGlobal(long handle, String name, Object value);
 

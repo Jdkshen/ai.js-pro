@@ -56,6 +56,10 @@ public class Node24Service extends Service {
     /** 实时控制台与最终 logs 桶共用 64 KiB 预算；另限消息条数，避免逐行 Binder 消息打满事务队列。 */
     private static final int LIVE_LOG_BUDGET_BYTES=65536;
     private static final int LIVE_LOG_MAX_LINES=4096;
+    private static final long SOFT_STOP_GRACE_MS=750L;
+    private static final long NATIVE_STOP_GRACE_MS=2500L;
+    private static final long CLEANUP_DEADLINE_MS=6000L;
+    private static final int FORCE_STOP_REQUESTS=4;
     private final AtomicReference<Job> active=new AtomicReference<>();
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     // task-174：单 job 槽忙时不再立刻 BUSY，而是有界排队（≤8s）；超时才回明确中文提示。
@@ -256,7 +260,8 @@ public class Node24Service extends Service {
                 .putExtra(EXTRA_FILENAME,job.filename).putExtra(EXTRA_SOURCE,
                     job.source.length()>4096 ? job.source.substring(0,4096) : job.source)
                 .putExtra(EXTRA_UI_SCRIPT,job.uiScript).putExtra(EXTRA_STARTED_AT,job.startedAt)
-                .putExtra(EXTRA_CANCELLED,job.cancelled);
+                .putExtra(EXTRA_CANCELLED,job.cancelled)
+                .putExtra("executionState", job.lifecycle.phase().name());
             sendBroadcast(intent);
         } catch(Throwable error) { android.util.Log.w("Node24Service","broadcast state failed",error); }
     }
@@ -264,7 +269,15 @@ public class Node24Service extends Service {
         final String id,source,filename;final long timeout;final long holdMillis;final boolean uiScript;final Messenger reply;
         final int ownerEngineId;
         final long startedAt=System.currentTimeMillis();
+        final com.stardust.autojs.engine.ScriptExecutionLifecycle lifecycle =
+                new com.stardust.autojs.engine.ScriptExecutionLifecycle();
+        final java.util.concurrent.CountDownLatch executionDone = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch retirementDone = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicBoolean hardCancelStarted = new java.util.concurrent.atomic.AtomicBoolean();
         volatile boolean cancelled;volatile boolean finished;volatile boolean executeReturned;volatile Node24Engine engine;volatile Node24HostBridge host;
+        volatile boolean runComplete, cleanupComplete, cleanupFailed;
+        final java.util.concurrent.atomic.AtomicBoolean retirementScheduled = new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicBoolean retirementWatchStarted = new java.util.concurrent.atomic.AtomicBoolean();
         /** 实时日志只由 node24-output 线程写入；锁同时保护 seq/delivered 与 64 KiB/条数预算。 */
         private final java.util.concurrent.atomic.AtomicBoolean cleanupStarted=
                 new java.util.concurrent.atomic.AtomicBoolean();
@@ -285,9 +298,56 @@ public class Node24Service extends Service {
                 || filename.length()>1024 || filename.indexOf(0)>=0 || timeout<1 || timeout>3600000)
                 throw new IOException("Invalid Node request (timeout 1..3600000 ms)");
         }
-        synchronized void cancel() {
-            if(cancelled) return;
-            cancelled=true;
+        void cancel() {
+            final boolean first;
+            final int requests;
+            synchronized (this) {
+                if (finished) return;
+                requests = lifecycle.requestStop();
+                first = !cancelled;
+                cancelled = true;
+            }
+            if (!first) {
+                if (requests >= FORCE_STOP_REQUESTS) startHardCancellation();
+                return;
+            }
+            failPendingForCancel();
+            broadcastState("stopping", this);
+            final Node24Engine current = engine;
+            if (current != null && !executeReturned) {
+                Thread soft = new Thread(() -> {
+                    try {
+                        if (!current.requestExit() && !executeReturned) startHardCancellation();
+                    } catch (Throwable unavailable) {
+                        if (!executeReturned && !finished) startHardCancellation();
+                    }
+                }, "node24-request-exit");
+                soft.setDaemon(true);
+                soft.start();
+            }
+            Thread deadline = new Thread(() -> {
+                try {
+                    if (!executionDone.await(SOFT_STOP_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        startHardCancellation();
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    startHardCancellation();
+                }
+            }, "node24-soft-stop-deadline");
+            deadline.setDaemon(true);
+            deadline.start();
+        }
+
+        private void startHardCancellation() {
+            if (executeReturned || finished || !hardCancelStarted.compareAndSet(false, true)) return;
+            Thread hard = new Thread(this::cancelNativeAndArmWatchdog, "node24-hard-stop");
+            hard.setDaemon(true);
+            hard.start();
+        }
+
+        private void cancelNativeAndArmWatchdog() {
+            lifecycle.cancelling();
             // task-174：取消立即失败掉排队请求（进程即将结束，排队请求不可能再执行）。
             failPendingForCancel();
             // 先取 engine/host 快照并按顺序取消：先 cancel native（异步，execute 尚未返回时也可调用），
@@ -316,7 +376,8 @@ public class Node24Service extends Service {
                 forceHalt.start();
             }
             Thread watchdog = new Thread(() -> {
-                try { Thread.sleep(poolProcess ? 2500L : 1500L); } catch (InterruptedException ignored) { return; }
+                try { executionDone.await(NATIVE_STOP_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS); }
+                catch (InterruptedException ignored) { return; }
                 Job running=active.get();
                 if(running!=null && running!=this) return;
                 if (poolProcess && (finished || executeReturned)) {
@@ -385,6 +446,7 @@ public class Node24Service extends Service {
                 android.util.Log.i("Node24Service","post-execute ui close id="+id
                         +" overlay="+overlay+" activity="+activity+" direct="+direct+" requested="+closed);
             } catch(Throwable error) {
+                cleanupFailed = true;
                 android.util.Log.w("Node24Service","post-execute ui close failed id="+id,error);
             }
             // task-94：主进程 NodeUiActivity 也在这里关闭（在 active 清空前，避免误关下一任务的 session）。
@@ -393,25 +455,79 @@ public class Node24Service extends Service {
                         com.stardust.autojs.engine.node24.NodeUiActivityClient.get();
                 if(client.hasActivity() && !client.isClosed()) client.close();
             } catch(Throwable closeError) {
+                cleanupFailed = true;
                 android.util.Log.w("Node24Service","close NodeUiActivity failed",closeError);
             }
         }
         /** task-186：UI/Binder 清理放到独立线程，Job 只做有界等待，避免阻塞重跑窗口。 */
         void startCleanup(Node24HostBridge bridge) {
             if(bridge==null || !cleanupStarted.compareAndSet(false,true)) return;
+            lifecycle.releasingResources();
             Thread cleanup=new Thread(() -> {
                 long t0=SystemClock.elapsedRealtime();
-                try { closeUiAfterExecution(bridge); }
-                catch(Throwable ignored) { }
-                long t1=SystemClock.elapsedRealtime();
-                try { bridge.close(); }
-                catch(Throwable ignored) { }
-                android.util.Log.i("Node24Service","cleanup done id="+id
-                        +" uiClose="+(t1-t0)+"ms bridgeClose="+(SystemClock.elapsedRealtime()-t1)+"ms");
+                try {
+                    try { closeUiAfterExecution(bridge); }
+                    catch(Throwable error) {
+                        cleanupFailed = true;
+                        android.util.Log.w("Node24Service", "UI cleanup failed id="+id, error);
+                    }
+                    try { bridge.close(); }
+                    catch(Throwable error) {
+                        cleanupFailed = true;
+                        android.util.Log.w("Node24Service", "bridge cleanup failed id="+id, error);
+                    }
+                } finally {
+                    cleanupFailed |= bridge.requiresProcessRecycle();
+                    cleanupComplete = true;
+                    releaseSlotWhenComplete();
+                    android.util.Log.i("Node24Service","cleanup done id="+id
+                            +" elapsed="+(SystemClock.elapsedRealtime()-t0)+"ms");
+                }
             }, "node24-cleanup");
             cleanup.setDaemon(true);
             cleanupThread=cleanup;
             cleanup.start();
+            startRetirementDeadline();
+        }
+
+        private void startRetirementDeadline() {
+            if (!retirementWatchStarted.compareAndSet(false, true)) return;
+            Thread deadline = new Thread(() -> {
+                boolean retired;
+                try { retired = retirementDone.await(CLEANUP_DEADLINE_MS, java.util.concurrent.TimeUnit.MILLISECONDS); }
+                catch (InterruptedException ignored) { return; }
+                if (!retired && active.get() == this) {
+                    android.util.Log.e("Node24Service", "cleanup deadline; recycle unsafe slot id="+id);
+                    failPendingForCancel();
+                    haltProcess();
+                }
+            }, "node24-cleanup-deadline");
+            deadline.setDaemon(true);
+            deadline.start();
+        }
+
+        private void releaseSlotWhenComplete() {
+            if (!runComplete || !cleanupComplete) return;
+            if (cleanupFailed) {
+                if (!retirementScheduled.compareAndSet(false, true)) return;
+                Thread retire = new Thread(() -> {
+                    try { Thread.sleep(350L); }
+                    catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    if (active.get() == this) {
+                        failPendingForCancel();
+                        haltProcess();
+                    }
+                }, "node24-unsafe-slot-retirement");
+                retire.setDaemon(true);
+                retire.start();
+                return;
+            }
+            lifecycle.released();
+            retirementDone.countDown();
+            if (active.compareAndSet(this, null)) {
+                broadcastState(cancelled ? "cancelled" : "finished", this);
+                mainHandler.post(Node24Service.this::drainPending);
+            }
         }
         void awaitCleanup(long millis) {
             Thread cleanup=cleanupThread;
@@ -466,6 +582,7 @@ public class Node24Service extends Service {
         }
         int deliveredLogs() { synchronized(logLock) { return deliveredLogs; } }
         @Override public void run() {
+            lifecycle.running();
             long start=SystemClock.elapsedRealtime();JSONObject result=new JSONObject();
             boolean replied=false;
             // task-65：stage 记录当前步骤；外层 catch 打 Log.e，任何一步异常都能定位。
@@ -492,14 +609,18 @@ public class Node24Service extends Service {
                     try {
                         stage="execute";
                         engine=current;host=bridge;if(cancelled){bridge.beginCallbackShutdown();current.cancel();}
-                        watcher=new UiLifecycleWatcher(id,bridge,current);
+                        watcher=new UiLifecycleWatcher(id,bridge,this::cancel);
                         Node24Engine.Result value;
                         try {
                             watcher.start();
                             value=current.execute(prepared,filename,nativeTimeout,bridge);
                             executeReturned=true;
+                            executionDone.countDown();
+                            startRetirementDeadline();
                         } catch(Throwable executeError) {
                             executeReturned=true;
+                            executionDone.countDown();
+                            startRetirementDeadline();
                             android.util.Log.e("Node24Service","execute threw id="+id,executeError);
                             throw executeError;
                         } finally {
@@ -556,19 +677,7 @@ public class Node24Service extends Service {
                             .put("prelude",Node24Prelude.describeAssets(Node24Service.this).toString())
                             .put("legacyNodeLoaded",Node24Libraries.maps().contains("/libv8.so"))
                             .put("legacyAutoJsApiAvailable",false).put("scopePolicy","isolated_per_evaluation");
-                        // task-185：先回复结果再清理 UI/bridge：Node UI 关闭触发的取消若在清理期间
-                        // 被 watchdog 杀进程，客户端会收到 disconnected 并误报脚本错误。
-                        try {
-                            try {result.put("elapsedMillis",SystemClock.elapsedRealtime()-start);}catch(Exception ignored){}
-                            if(cancelled) {
-                                try {result.put("status","CANCELLED").put("success",false).put("cancelled",true);}
-                                catch(Exception ignored){}
-                            }
-                            reply(result);
-                            replied=true;
-                        } catch(Throwable replyError) {
-                            android.util.Log.w("Node24Service","early reply failed id="+id,replyError);
-                        }
+                        // Deliver only after retirement: a result releases the client pool lease.
                     } finally {
                         // 先停轮询线程，再启动异步清理；最多等 600ms 保证 BACK 后 ≤1s 可重跑，
                         // 清理未完成的部分在后台继续（bridge 是旧任务实例，不影响新任务）。
@@ -587,10 +696,24 @@ public class Node24Service extends Service {
             } finally {
                 // 覆盖 runtime-load/Node24Engine 构造失败等未进入内层 finally 的路径。
                 if(bridge!=null) startCleanup(bridge);
-                engine=null;host=null;active.compareAndSet(this,null);
-                broadcastState(cancelled?"cancelled":"finished",this);
-                // task-174：排队请求在 active 释放后立刻接上（干净停止后 ≤1s 可再跑）。
-                drainPending();
+                engine=null;host=null;
+                executionDone.countDown();
+                if (bridge == null) cleanupComplete = true;
+                runComplete = true;
+                // The runtime result may be delivered early, but its slot cannot
+                // host a new script until all old UI/native owners have released.
+                releaseSlotWhenComplete();
+            }
+            try {
+                if (!retirementDone.await(CLEANUP_DEADLINE_MS + 500L, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    failPendingForCancel();
+                    haltProcess();
+                    return;
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                haltProcess();
+                return;
             }
             // 取消竞态兜底：Job.cancel 可能发生在结果收集或 finally 清理期间；最终回复前
             // 统一以 Job.cancelled 为准，取消绝不回报 success。
@@ -615,7 +738,7 @@ public class Node24Service extends Service {
     private static final class UiLifecycleWatcher implements Runnable {
         private final String id;
         private final Node24HostBridge bridge;
-        private final Node24Engine engine;
+        private final Runnable requestStop;
         private final Thread thread;
         private volatile boolean running=true;
         private volatile boolean cancelledByUiClose;
@@ -624,8 +747,8 @@ public class Node24Service extends Service {
         private long closedAt;
         private long missingSince;
 
-        UiLifecycleWatcher(String id,Node24HostBridge bridge,Node24Engine engine) {
-            this.id=id;this.bridge=bridge;this.engine=engine;
+        UiLifecycleWatcher(String id,Node24HostBridge bridge,Runnable requestStop) {
+            this.id=id;this.bridge=bridge;this.requestStop=requestStop;
             thread=new Thread(this,"node24-ui-lifecycle");thread.setDaemon(true);
         }
         void start() { thread.start(); }
@@ -688,8 +811,7 @@ public class Node24Service extends Service {
                             // 与 Job.cancel 相同：先唤醒可能仍在等待投屏授权弹窗的宿主线程，
                             // 否则 UI 已关闭时 job 仍要空等到 55s 授权超时。
                             bridge.cancelPendingProjection();
-                            bridge.beginCallbackShutdown();
-                            try { engine.cancel(); }
+                            try { requestStop.run(); }
                             catch(Throwable error) {
                                 android.util.Log.w("Node24Service","ui lifecycle cancel failed id="+id,error);
                             }

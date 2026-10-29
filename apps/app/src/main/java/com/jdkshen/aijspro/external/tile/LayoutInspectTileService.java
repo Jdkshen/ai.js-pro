@@ -58,7 +58,7 @@ public abstract class LayoutInspectTileService extends TileService implements La
         } catch (SecurityException error) {
             Log.w(getClass().getName(), "System did not allow collapsing quick settings", error);
         }
-        if (AccessibilityService.Companion.getInstance() == null) {
+        if (!com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(this)) {
             AutoJs.getInstance().getLayoutInspector().captureCurrentWindow();
             LayoutInspectorDiagnostics.show(this, AutoJs.getInstance().getLayoutInspector());
             inactive();

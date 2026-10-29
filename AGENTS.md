@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **当前发布 dev-1286（2026-10-29，LAN）**：[架构对齐与完整验收](docs/reports/2026-10-29_dev1286发布与架构对齐验收.md)。三引擎生命周期/资源归属、Node 软停与退役屏障、QuickJS JNI 与 UI 交接、传统 UI/浮窗/无障碍/日志进程隔离、MCP 执行和自动化转发、新独立模板已交付。1,032 JVM、MI8 三引擎并发/单停、17 轮终态停止、独立 Node 节点点击、日志和故障恢复通过；完整手机 HTTP 下载摘要一致。APK 142,528,242 字节，SHA 439b5aaa…。LAN 为 192.168.10.7:8080；Downloads 有包，MI8 已装，K40 只读校验且任务未停。Android36 原机和高级版全量 API 边界见报告；下方为历史记录。
+
 > **2026-10-29 高级版停止路径与12份MD架构审阅（无产品代码修改）**：[完整对照和待办](docs/reports/2026-10-29_高级版文档全量审阅与架构对照.md)。用户实际ZIP在 `C:/Users/18101/DownloadsAutoJs_Pro_Analysis(1).zip`，12MD、SHA `ba99d2b0…`；手机高级版com.boyai.auma与output/auma-base.apk摘要e0010eaf一致，另用JADX定向导出8类。已实现M3/Glide/Smali→Dex/方法ID与类型化JNI；高级版外部停止优先process.exit(-9000)，第4次请求升级V8强停，我们仍UI屏障后native cancel。传统Activity/普通Floaty/无障碍/日志仍有主进程组件，API全量行为未完成；ZIP内QuickJS依赖、hash索引与内存计算有错误，无依据性能数字不能采纳。没有启动高级版或变更LAN。
 
 > **2026-10-29 Node 列表停止崩溃候选 dev-1285（MI8 50轮通过，未发布）**：[时序修复与验收](docs/reports/2026-10-29_Node原生列表停止崩溃.md)。主线程先解绑原生网格、移除内容，再关闭Node回调。510引擎JVM、四套UI契约、R8/22ELF16KB/签名通过；用户授权自动打开后恢复MCP，MI8 Android35固定网格20轮、M3示例20轮、音量上键10轮全部停止成功，无崩溃；确认30次解绑回调仍可执行。旧1284对照24轮未复现，Android36原机仍待复测。候选SHA `4f80ff33…`，Downloads有包；LAN仍1281，K40象棋未动。

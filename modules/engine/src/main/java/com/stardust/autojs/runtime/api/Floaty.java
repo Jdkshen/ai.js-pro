@@ -187,7 +187,7 @@ public class Floaty {
 
     private static void startFloatyService(Context context) {
         try {
-            context.startService(new Intent(context, FloatyService.class));
+            context.startService(FloatyService.getServiceIntent(context));
         } catch (Throwable ignored) {
             // Android 8+ 后台启动服务可能被拒；窗口创建本身不依赖这里成功。
         }

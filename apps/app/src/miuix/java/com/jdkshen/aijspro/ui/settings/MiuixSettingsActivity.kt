@@ -140,7 +140,7 @@ class MiuixSettingsActivity : ComponentActivity() {
      * 能用快速方式（写安全设置/Shizuku/Root）就直接开，否则跳到系统无障碍设置引导用户。
      */
     private fun ensureVolumeKeyDetectionAvailable() {
-        if (com.stardust.view.accessibility.AccessibilityService.instance != null) {
+        if (com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(this)) {
             return
         }
         if (RootTool.isRootAvailable()) {

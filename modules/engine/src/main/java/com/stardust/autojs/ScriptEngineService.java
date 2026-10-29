@@ -46,6 +46,9 @@ import static com.stardust.autojs.runtime.exception.ScriptInterruptedException.c
  */
 
 public class ScriptEngineService {
+    public interface ExecutionTransport { ScriptExecution execute(ScriptExecutionTask task); }
+    private volatile ExecutionTransport mExecutionTransport;
+    public void setExecutionTransport(ExecutionTransport transport) { mExecutionTransport=transport; }
 
     private static final String LOG_TAG = "ScriptEngineService";
 
@@ -215,6 +218,12 @@ public class ScriptEngineService {
     }
 
     private ScriptExecution executeInternal(ScriptExecutionTask task) {
+        return executeInternal(task, sHeadlessUiMode);
+    }
+
+    private ScriptExecution executeInternal(ScriptExecutionTask task, boolean headlessUi) {
+        ExecutionTransport transport=mExecutionTransport;
+        if (transport!=null && task.getSource() instanceof JavaScriptSource) return transport.execute(task);
         prepareTaskListener(task);
         ScriptSource source = task.getSource();
         switchEngineWhenTheChosenOneCannotParse(source);
@@ -233,13 +242,13 @@ public class ScriptEngineService {
         if (source instanceof JavaScriptSource) {
             int mode = ((JavaScriptSource) source).getExecutionMode();
             boolean uiMode = (mode & JavaScriptSource.EXECUTION_MODE_UI) != 0;
-            if (uiMode && !sHeadlessUiMode && isNode24 && !mLoggedNode24UiRoute) {
+            if (uiMode && !headlessUi && isNode24 && !mLoggedNode24UiRoute) {
                 mLoggedNode24UiRoute = true;
                 Log.i(LOG_TAG, "Node24 UI 由 NodeUiHost 承载，跳过 ScriptExecuteActivity");
             }
             // :native 隔离进程里没有 Activity（见 sHeadlessUiMode），此时 UI 模式脚本
             // 不走 ScriptExecuteActivity，直接落到下面的普通执行分支。
-            if (uiMode && !sHeadlessUiMode && !isNode24) {
+            if (uiMode && !headlessUi && !isNode24) {
                 // ScriptExecuteActivity.execute() 先 new ActivityScriptExecution（分配本表 id），
                 // 再 startActivity()。Activity.onCreate 会立刻用该 id 回查本表；如果 startActivity
                 // 返回后才登记，后台线程调 execute() 时 Activity 可能先读到空表而直接 finish。
@@ -360,6 +369,8 @@ public class ScriptEngineService {
         if (task == null) {
             throw new IllegalArgumentException("task == null");
         }
+        ExecutionTransport transport=mExecutionTransport;
+        if (transport!=null) return transport.execute(task);
         if (Looper.myLooper() != Looper.getMainLooper()) {
             throw new IllegalStateException("executeUiOnMainThread() 必须在主线程调用");
         }
@@ -367,7 +378,7 @@ public class ScriptEngineService {
         switchEngineWhenTheChosenOneCannotParse(source);
         if (!(source instanceof JavaScriptSource) || isAsyncEngine((JavaScriptSource) source)) {
             // QuickJS / Node24 的事件循环不依赖调用线程，退回原来的后台执行路径。
-            return execute(task);
+            return executeInternal(task, true);
         }
         prepareTaskListener(task);
         MainThreadUiExecution execution = new MainThreadUiExecution(task);

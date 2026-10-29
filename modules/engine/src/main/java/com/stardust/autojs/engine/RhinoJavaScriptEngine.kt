@@ -161,6 +161,8 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     }
 
     override fun forceStop() {
+        executionLifecycle().requestStop()
+        executionLifecycle().cancelling()
         val target = if (::thread.isInitialized) thread else null
         Log.d(LOG_TAG, "forceStop: cancel Thread: $target")
         stopSignal.request(target, android.os.Looper.getMainLooper().thread)
@@ -247,8 +249,15 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
                 // Paint 这类同时有 int/long 重载的类：让 JS 的数字参数优先走 int 版本
                 PreferIntJavaObject.supports(javaObject) ->
                     PreferIntJavaObject(scope, javaObject as Any, staticType)
+                ScriptJavaObject.supports(javaObject) ->
+                    ScriptJavaObject(scope, javaObject as Any, staticType, runtime.javaResources)
                 else -> super.wrapAsJavaObject(cx, scope, javaObject, staticType)
             }
+        }
+
+        override fun wrapNewObject(cx: Context, scope: Scriptable, javaObject: Any): Scriptable {
+            runtime.javaResources.constructed(javaObject)
+            return super.wrapNewObject(cx, scope, javaObject)
         }
 
     }

@@ -47,6 +47,26 @@ public final class AccessibilityScreenCapturer {
      * 避免全屏 copy 后再 createScaledBitmap；两者 &lt;= 0（或缩略比不足 0.1%）走全分辨率旧路径。
      */
     public Bitmap capture(long timeoutMillis, int maxWidth, int maxHeight) {
+        if (com.stardust.view.accessibility.AccessibilityService.Companion.getInstance()==null
+                && com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.isActive()) {
+            java.io.File temporary=new java.io.File(com.stardust.app.GlobalAppContext.get().getCacheDir(),
+                    "a11y-remote-"+java.util.UUID.randomUUID()+".png");
+            try {
+                com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.screenshot(temporary.getAbsolutePath());
+                Bitmap bitmap=android.graphics.BitmapFactory.decodeFile(temporary.getAbsolutePath());
+                if (bitmap==null) throw new IllegalStateException("Remote screenshot is unavailable");
+                if (maxWidth>0 && maxHeight>0) {
+                    float ratio=Math.min(1f,Math.min((float)maxWidth/bitmap.getWidth(),(float)maxHeight/bitmap.getHeight()));
+                    if (ratio<1f) {
+                        Bitmap scaled=Bitmap.createScaledBitmap(bitmap,Math.max(1,Math.round(bitmap.getWidth()*ratio)),
+                                Math.max(1,Math.round(bitmap.getHeight()*ratio)),true);
+                        if (scaled!=bitmap) bitmap.recycle();
+                        bitmap=scaled;
+                    }
+                }
+                return bitmap;
+            } finally { temporary.delete(); }
+        }
         try (HardwareFrame frame = captureHardware(timeoutMillis)) {
             long readbackStart = SystemClock.elapsedRealtime();
             Bitmap bitmap = frame.toBitmap(maxWidth, maxHeight);

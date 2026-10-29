@@ -38,6 +38,9 @@ public interface ScriptEngine<S extends ScriptSource> {
 
     boolean isDestroyed();
 
+    /** @hide Backward-compatible for external engine implementations. */
+    default String getExecutionState() { return isDestroyed() ? "RELEASED" : "UNKNOWN"; }
+
     void setTag(String key, Object value);
 
     Object getTag(String key);
@@ -72,6 +75,9 @@ public interface ScriptEngine<S extends ScriptSource> {
         private Map<String, Object> mTags = new ConcurrentHashMap<>();
         private OnDestroyListener mOnDestroyListener;
         private volatile boolean mDestroyed = false;
+        private final java.util.concurrent.atomic.AtomicBoolean mBaseDestroyStarted =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        private final ScriptExecutionLifecycle mLifecycle = new ScriptExecutionLifecycle();
         private Throwable mUncaughtException;
         private volatile AtomicInteger mId = new AtomicInteger(ScriptExecution.NO_ID);
 
@@ -94,13 +100,22 @@ public interface ScriptEngine<S extends ScriptSource> {
             return mDestroyed;
         }
 
+        public final ScriptExecutionLifecycle executionLifecycle() { return mLifecycle; }
+
+        @Override
+        public final String getExecutionState() { return mLifecycle.phase().name(); }
+
         @CallSuper
         @Override
         public void destroy() {
-            if (mOnDestroyListener != null) {
-                mOnDestroyListener.onDestroy(this);
+            if (!mBaseDestroyStarted.compareAndSet(false, true)) return;
+            mLifecycle.releasingResources();
+            try {
+                if (mOnDestroyListener != null) mOnDestroyListener.onDestroy(this);
+            } finally {
+                mDestroyed = true;
+                mLifecycle.released();
             }
-            mDestroyed = true;
         }
 
         public String cwd() {

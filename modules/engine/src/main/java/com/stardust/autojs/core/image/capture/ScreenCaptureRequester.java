@@ -31,24 +31,39 @@ public interface ScreenCaptureRequester {
 
         protected Callback mCallback;
         protected Intent mResult;
+        private long attempt;
+        private boolean completed;
 
         @Override
-        public void setOnActivityResultCallback(Callback callback) {
+        public synchronized void setOnActivityResultCallback(Callback callback) {
+            attempt++;
+            completed = false;
+            mResult = null;
             mCallback = callback;
         }
 
         public void onResult(int resultCode, Intent data) {
-            mResult = data;
-            if (mCallback != null)
-                mCallback.onRequestResult(resultCode, data);
+            callbackForRequest().onRequestResult(resultCode, data);
+        }
+
+        protected synchronized Callback callbackForRequest() {
+            final long expected = attempt;
+            return (resultCode, data) -> {
+                Callback callback;
+                synchronized (AbstractScreenCaptureRequester.this) {
+                    if (expected != attempt || completed) return;
+                    completed = true;
+                    mResult = data;
+                    callback = mCallback;
+                    mCallback = null;
+                }
+                if (callback != null) callback.onRequestResult(resultCode, data);
+            };
         }
 
         @Override
         public void cancel() {
-            if (mResult != null)
-                return;
-            if (mCallback != null)
-                mCallback.onRequestResult(Activity.RESULT_CANCELED, null);
+            onResult(Activity.RESULT_CANCELED, null);
         }
     }
 
@@ -81,7 +96,6 @@ public interface ScreenCaptureRequester {
         @Override
         public void onActivityResult(int requestCode, int resultCode, Intent data) {
             ScreenCaptureAutoConsent.disarm();
-            mResult = data;
             mMediator.removeDelegate(this);
             onResult(resultCode, data);
         }

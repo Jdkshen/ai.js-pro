@@ -267,29 +267,10 @@ final class PocRuntime {
         // task-165：Flutter/悬浮条/宿主链路触发的运行统一拉前台通知（带停止脚本入口）。
         // 路由失败/脚本秒退时由 scheduleForegroundLeaseCheck 在 3s 内收掉。
         acquireForegroundLease(context);
-        // "ui"; 文档优先：ui.layout/ui.inflate 需要 Activity 承载，而 :native 隔离进程没有 UI 模式
-        // （进 :native 会报「需要在ui模式下运行才能使用该函数」）。带 .so 的 UI 项目（如 ImGui demo）
-        // 因此回主进程 ScriptExecuteActivity；native 隔离只留给真正的 headless native 脚本。
+        // UI source, execution registry and Activity must be created together in :script.
+        // A binding/staging failure is reported instead of loading a native UI into the host.
         if (isUiModeScript(file)) {
-            executeFile(file, workDir);
-            return;
-        }
-        // 本机截图/投屏能力：:script 经 RemoteAutomationBridge 只能拿主进程 PNG 回传，
-        // requestScreenCapture/captureScreenNative 也没有本地 MediaProjection；图色性能脚本必须
-        // 保留真实投屏帧和 NativeFrame 零拷贝路径，所以进入 :script 前回主进程。
-        // UI 优先的判定仍在上面；探测失败按普通脚本继续路由，不阻断运行。
-        List<String> captureApis = null;
-        try {
-            captureApis = ScreenCaptureScriptRouting.localCaptureApis(file);
-        } catch (IOException error) {
-            Log.w(TAG, "读取脚本截图能力失败，按普通脚本路由", error);
-        }
-        if (captureApis != null && !captureApis.isEmpty()) {
-            // task-147：截图/投屏脚本必须在主进程（真实 MediaProjection + 系统授权弹窗），
-            // 该判定必须放在 native 项目检测之前：象棋画框等项目带 .so/.dex 会被判为 native，
-            // 先进 :native 就只剩「隔离进程暂不支持投屏截图」。
-            Log.i(TAG, "脚本使用本地截图能力 " + captureApis + "，主进程执行：" + file.getName());
-            executeFile(file, workDir);
+            PocScriptHost.run(context, file, workDir);
             return;
         }
         // native 项目继续保留原有隔离边界，不因入口中的截图调用加载进主进程。
@@ -297,32 +278,8 @@ final class PocRuntime {
             PocNativeRunner.run(context, file, workDir);
             return;
         }
-        // Phase1 P1：auto 模式脚本依赖 Accessibility/Automator。远程自动化代理（task-20）已接好，
-        // 但门控默认关闭（isAutoInScriptEnabled()=false），仍保留主进程旧路径；P1 验收后打开开关
-        // 即可让 auto 脚本和普通脚本一样走 :script，无需再改这里。
-        if (isAutoModeScript(file) && !isAutoInScriptEnabled()) {
-            executeFile(file, workDir);
-            return;
-        }
-        // "ui"; 脚本需要 Activity 承载（ui.layout/ui.inflate 等），而 Phase1 的 :script 宿主目前是
-        // 无 Activity 的主线程 Looper 宿主，进入会报「需要在ui模式下运行才能使用该函数」。第一批先
-        // 回退主进程 ScriptExecuteActivity（与 Phase0 前行为一致）；后续把 ScriptExecuteActivity 声明进
-        // :script 进程（Pro 模型）后再放开到 :script。
-        if (isUiModeScript(file)) {
-            executeFile(file, workDir);
-            return;
-        }
-        if (PocScriptHost.isEnabled()) {
-            try {
-                PocScriptHost.run(context, file, workDir);
-                return;
-            } catch (IOException hostError) {
-                // :script 服务未就绪（manifest 未注册 / 系统不允许绑定）：回退旧路径，别让点击没反应。
-                Log.w(TAG, "脚本宿主进程不可用，回退旧执行路径", hostError);
-                toast(context, "脚本宿主进程不可用，已回退本地执行");
-            }
-        }
-        executeFile(file, workDir);
+        // Accessibility and MediaProjection now belong to the isolated execution process.
+        PocScriptHost.run(context, file, workDir);
     }
 
     /** 非致命提示：Toast 失败不能影响脚本执行主流程。 */

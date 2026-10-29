@@ -23,6 +23,8 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
     private static final long DEFAULT_STACK_LIMIT = 2L * 1024L * 1024L;
 
     private final Map<String, Object> mPendingGlobals = new LinkedHashMap<>();
+    private final java.util.concurrent.atomic.AtomicBoolean mNativeDestroyStarted =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private volatile long mNativeHandle;
     private volatile Thread mThread;
     private volatile QuickJsHostBridge mHostBridge;
@@ -35,6 +37,7 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
 
     @Override
     public synchronized void put(String name, Object value) {
+        if (mNativeDestroyStarted.get()) throw new IllegalStateException("QuickJS engine is closing");
         if (!isSupportedGlobal(value)) {
             Log.d(TAG, "Ignoring non-primitive global for QuickJS: " + name);
             return;
@@ -48,6 +51,9 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
 
     @Override
     public void init() {
+        if (executionLifecycle().stopRequested() || mNativeDestroyStarted.get()) {
+            throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException();
+        }
         mThread = Thread.currentThread();
         try {
             mOriginalThreadPriority = Process.getThreadPriority(Process.myTid());
@@ -62,7 +68,15 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         runtime.init();
         QuickJsHostBridge hostBridge = new QuickJsHostBridge(runtime);
         hostBridge.setOwnerEngineId(getId());
-        mHostBridge = hostBridge;
+        boolean accepted;
+        synchronized (this) {
+            accepted = !mNativeDestroyStarted.get();
+            if (accepted) mHostBridge = hostBridge;
+        }
+        if (!accepted) {
+            hostBridge.close();
+            throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException();
+        }
         long handle = QuickJsNativeBridge.create(
                 hostBridge,
                 DEFAULT_MEMORY_LIMIT,
@@ -71,10 +85,14 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         if (handle == 0) {
             throw new QuickJsException("Unable to create QuickJS runtime");
         }
-        hostBridge.attachEngine(handle);
-        hostBridge.setUiHostActivity(mHostActivity);
-        mNativeHandle = handle;
         synchronized (this) {
+            if (mNativeDestroyStarted.get()) {
+                QuickJsNativeBridge.destroy(handle);
+                throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException();
+            }
+            hostBridge.attachEngine(handle);
+            hostBridge.setUiHostActivity(mHostActivity);
+            mNativeHandle = handle;
             for (Map.Entry<String, Object> entry : mPendingGlobals.entrySet()) {
                 QuickJsNativeBridge.setGlobal(handle, entry.getKey(), entry.getValue());
             }
@@ -88,7 +106,9 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
         if (handle == 0) {
             throw new IllegalStateException("QuickJS engine has not been initialized");
         }
-        mInterruptRequested = false;
+        if (mInterruptRequested || executionLifecycle().stopRequested()) {
+            throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException();
+        }
         try {
             // 打包加密等级 ≥ 2 的产物是 QuickJS 字节码（没有源码文本），走执行字节码。
             if (scriptSource instanceof QuickJsBytecodeSource) {
@@ -118,6 +138,8 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
 
     @Override
     public void forceStop() {
+        executionLifecycle().requestStop();
+        executionLifecycle().cancelling();
         mInterruptRequested = true;
         long handle = mNativeHandle;
         if (handle != 0) {
@@ -148,33 +170,35 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
     }
 
     @Override
-    public synchronized void destroy() {
-        long handle = mNativeHandle;
-        mNativeHandle = 0;
+    public void destroy() {
+        if (!mNativeDestroyStarted.compareAndSet(false, true)) return;
+        executionLifecycle().releasingResources();
+        long handle;
+        QuickJsHostBridge hostBridge;
+        synchronized (this) {
+            handle = mNativeHandle;
+            mNativeHandle = 0;
+            hostBridge = mHostBridge;
+            mHostBridge = null;
+            mPendingGlobals.clear();
+        }
         Thread thread = mThread;
-        if (handle != 0) {
-            // 先请求中断并等脚本线程退出，再释放 JS 运行时。
-            // 脚本线程平时就停在 native 的事件循环里（界面还在就会有定时器在跑），
-            // 直接 destroy 会把 context 从正在执行的线程脚下抽走（use-after-free）——
-            // 「返回键结束 ui 脚本」正好会走到这条路径。
-            QuickJsNativeBridge.requestInterrupt(handle);
-            if (thread != null && thread != Thread.currentThread()) {
-                try {
-                    thread.join(2000);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                }
-                if (thread.isAlive()) {
-                    Log.w(TAG, "script thread did not exit before destroy; releasing runtime anyway");
-                }
+        try {
+            if (handle != 0) QuickJsNativeBridge.requestInterrupt(handle);
+            try {
+                if (getRuntime() != null) getRuntime().javaResources.detachViews();
+            } finally {
+                // Revoke native entries even if an Android window cannot be detached.
+                try { if (handle != 0) QuickJsNativeBridge.destroy(handle); }
+                finally { if (hostBridge != null) hostBridge.close(); }
             }
-            QuickJsNativeBridge.destroy(handle);
+        } finally {
+            finishRuntimeCleanup(thread);
         }
-        QuickJsHostBridge hostBridge = mHostBridge;
-        mHostBridge = null;
-        if (hostBridge != null) {
-            hostBridge.close();
-        }
+    }
+
+    private void finishRuntimeCleanup(Thread thread) {
+        try {
         // 兜底：bridge 为空/部分初始化时也要按 owner 清理残留浮窗（幂等）。
         OverlayRegistry.closeByOwner(getId(), "quickjs_destroy");
         if (thread != null) {
@@ -188,7 +212,9 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
             }
             mPriorityRaised = false;
         }
-        super.destroy();
+        } finally {
+            super.destroy();
+        }
     }
 
     public String getEngineVersion() {

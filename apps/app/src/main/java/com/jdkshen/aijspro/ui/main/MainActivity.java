@@ -592,7 +592,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         FloatyWindowManger.hideCircularMenu();
         com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorProcessBridge.close();
         ForegroundService.stop(this);
-        stopService(new Intent(this, FloatyService.class));
+        stopService(FloatyService.getServiceIntent(this));
         // Phase1：脚本默认在 :script 宿主进程里跑，退出 App 不能只停主进程引擎，否则脚本还在后台跑。
         HostScripts.stopAllScripts(this);
     }

@@ -117,6 +117,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         com.stardust.autojs.core.web.QuickJsWebScriptHost {
 
     private final ScriptRuntime mRuntime;
+    private final java.util.concurrent.atomic.AtomicBoolean mCloseStarted = new java.util.concurrent.atomic.AtomicBoolean();
     /** 本引擎在进程内的 id（ScriptEngine.getId()），浮窗注册表按 owner 清理用。 */
     private volatile int mOwnerEngineId;
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
@@ -289,6 +290,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     QuickJsHostBridge(ScriptRuntime runtime) {
         mRuntime = runtime;
+        mJavaInterop = new QuickJsJavaInterop(runtime.javaResources);
         QuickJsApiExtensions.install(runtime, this);
     }
 
@@ -7207,7 +7209,8 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (engineHandle == 0) {
             throw new IllegalStateException("QuickJS 引擎尚未就绪，无法回调脚本函数");
         }
-        String result = QuickJsNativeBridge.invokeJsCallback(engineHandle, callbackId, argsJson);
+        String result = QuickJsNativeBridge.invokeJsCallback(engineHandle, callbackId, argsJson,
+                Boolean.TRUE.equals(mMainHandoff.get()));
         return result == null ? "{}" : result;
     }
 
@@ -7218,28 +7221,54 @@ final class QuickJsHostBridge implements AutoCloseable,
      * 控件 / View 的 API 只能在主线程调用（否则抛 CalledFromWrongThreadException），
      * `runOnMainThread(fn)` 就是给脚本提供的入口。
      */
+    private final ThreadLocal<Boolean> mMainHandoff = new ThreadLocal<>();
+
     public String runJsCallbackOnMain(long callbackId) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return invokeJsCallback(callbackId, "[]");
         }
         final String[] result = new String[1];
         final CountDownLatch latch = new CountDownLatch(1);
-        mDialogHandler.post(() -> {
+        final Object gate = new Object();
+        final boolean[] state = new boolean[2]; // started, abandoned
+        Runnable operation = () -> {
+            synchronized (gate) {
+                if (state[1]) { latch.countDown(); return; }
+                state[0] = true;
+            }
+            mMainHandoff.set(true);
             try {
                 result[0] = invokeJsCallback(callbackId, "[]");
             } catch (Throwable error) {
                 result[0] = jsonError(describeError(error));
             } finally {
+                mMainHandoff.remove();
                 latch.countDown();
             }
-        });
+        };
+        if (!mDialogHandler.post(operation)) return jsonError("UI looper unavailable");
+        boolean interrupted = false;
+        boolean expired = false;
         try {
-            if (!latch.await(10, TimeUnit.SECONDS)) {
-                return jsonError("主线程执行超时");
-            }
+            expired = !latch.await(10, TimeUnit.SECONDS);
         } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            return jsonError("主线程执行被中断");
+            interrupted = true;
+        }
+        if (expired || interrupted) {
+            boolean started;
+            synchronized (gate) { started=state[0]; if (!started) state[1]=true; }
+            if (!started) mDialogHandler.removeCallbacks(operation);
+            else {
+                // The script thread must never resume while its UI callback still owns JS.
+                long handle=mEngineHandle;
+                if (handle!=0) QuickJsNativeBridge.requestInterrupt(handle);
+                while (latch.getCount()!=0) {
+                    try { latch.await(); }
+                    catch (InterruptedException again) { interrupted=true; }
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+            return jsonError(interrupted ? "主线程执行被中断" : "主线程执行超时");
         }
         return result[0] == null ? "{}" : result[0];
     }
@@ -7476,7 +7505,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     // 都能解析任意类。类与实例统一用 long 句柄跨边界，JS 侧是 Proxy 包装。
     // ------------------------------------------------------------------
 
-    private final QuickJsJavaInterop mJavaInterop = new QuickJsJavaInterop();
+    private final QuickJsJavaInterop mJavaInterop;
 
     /** 解析类名，返回类句柄（0 表示找不到）。 */
     public long javaResolveClass(String name) {
@@ -8101,6 +8130,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     @Override
     public void close() {
+        if (!mCloseStarted.compareAndSet(false, true)) return;
         // 最先关 overlay 窗口：异常/结束路径（engine.destroy -> bridge.close）里这一步必须在
         // 其它清理之前，保证即使后面的清理抛异常，全屏窗口也不会残留在屏幕上（残留=用户卡死）。
         uiClose();

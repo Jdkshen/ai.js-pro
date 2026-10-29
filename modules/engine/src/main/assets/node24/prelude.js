@@ -860,6 +860,15 @@
   globalThis.__ajsDispatchJavaCallback = function (text) {
     try {
       var request = JSON.parse(text);
+      if (request.control === 'requestExit') {
+        if (!globalThis.__ajsExternalStopScheduled) {
+          globalThis.__ajsExternalStopScheduled = true;
+          // Leave the current Java callback stack before invoking exit hooks. Hooks
+          // may close RecyclerViews and must not run inside onBind/getItemCount.
+          setImmediate(function () { process.exit(-9000); });
+        }
+        return JSON.stringify({ ok: true, scheduled: true });
+      }
       if (request.callbackId) {
         var target = javaCallbacks[request.callbackId];
         var fn = typeof target === 'function' ? target : target && target[request.method];
@@ -6704,6 +6713,7 @@
     try {
       if (typeof process === 'undefined' || !process || process.__ajsExitPatched) { return; }
       var nativeExit = process.exit;
+      var preparingExit = false;
       if (typeof nativeExit !== 'function') { return; }
       process.__ajsExitPatched = true;
       function wrapExitHook(listener) {
@@ -6752,6 +6762,9 @@
         } catch (wrapExistingError) { }
       } catch (hookInstallError) { }
       process.exit = function (code) {
+        // A detach callback can reenter JS and call exit while the outer UI barrier
+        // is still running. Let the outer call finish detachment before exiting.
+        if (preparingExit) { return; }
         var value = (code === undefined || code === null) ? 0 : Number(code);
         if (!isFinite(value)) { value = 0; }
         value = value | 0;
@@ -6764,6 +6777,11 @@
             globalThis.__ajsStopOverlayPolling();
           }
         } catch (ignored) { }
+        // Keep callbacks alive while native layout consumers detach. User exit
+        // hooks still have their Java bridge until the runtime actually returns.
+        preparingExit = true;
+        try { hostValue({ kind: 'lifecycle', action: 'prepareExit', args: {} }); }
+        finally { preparingExit = false; }
         return nativeExit.call(process, value);
       };
     } catch (ignored) { }

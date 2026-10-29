@@ -151,7 +151,7 @@ public class AccessibilityServiceTool {
 
     public static boolean enableAccessibilityServiceDirectlyAndWaitFor(long timeOut) {
         if (!enableAccessibilityServiceDirectly(sAccessibilityServiceClass)) return false;
-        return AccessibilityService.Companion.waitForEnabled(timeOut)
+        return com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),timeOut)
                 || isAccessibilityServiceEnabled(GlobalAppContext.get());
     }
 
@@ -189,20 +189,20 @@ public class AccessibilityServiceTool {
         ShizukuShell.Result result = ShizukuShell.execute(
                 grantAndEnableCommand(sAccessibilityServiceClass), 5_000, 8_192);
         if (result.code != 0 || !TextUtils.isEmpty(result.error)) return false;
-        if (AccessibilityService.Companion.waitForEnabled(timeOut)) return true;
+        if (com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),timeOut)) return true;
         // MIUI can publish the secure setting slightly before binding the service.
         return isAccessibilityServiceEnabled(GlobalAppContext.get());
     }
 
     public static boolean enableAccessibilityServiceByRootAndWaitFor(long timeOut) {
         if (enableAccessibilityServiceByRoot(sAccessibilityServiceClass)) {
-            return AccessibilityService.Companion.waitForEnabled(timeOut);
+            return com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),timeOut);
         }
         return false;
     }
 
     public static void enableAccessibilityServiceByRootIfNeeded() {
-        if (AccessibilityService.Companion.getInstance() == null)
+        if (!com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(GlobalAppContext.get()))
             if (Pref.shouldEnableAccessibilityServiceByRoot()) {
                 AccessibilityServiceTool.enableAccessibilityServiceByRoot(sAccessibilityServiceClass);
             }

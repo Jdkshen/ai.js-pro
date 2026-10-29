@@ -71,6 +71,7 @@ import java.util.Map;
  * <p>本类不启动任何 Activity，也不持有 Activity 引用。
  */
 public final class PocScriptHost {
+    private static final java.util.concurrent.ConcurrentHashMap<String,RemoteScriptExecution> ACTORS = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static final String TAG = "PocScriptHost";
 
@@ -188,8 +189,9 @@ public final class PocScriptHost {
         /** 提交给服务端的原始工作目录，回退主进程执行时还原执行环境。 */
         final String workDir;
         final long startedAt=System.currentTimeMillis();
-        final String engine;
+        String engine;
         String name;
+        String state = "starting";
 
         Task(String token, String name, String path, String workDir) {
             this.token = token;
@@ -267,6 +269,35 @@ public final class PocScriptHost {
         throw new IOException("脚本宿主进程不可用（ScriptHostService 未注册或不允许绑定）");
     }
 
+    public static com.stardust.autojs.execution.ScriptExecution execute(Context context,
+            com.stardust.autojs.script.ScriptSource source,
+            com.stardust.autojs.execution.ScriptExecutionListener listener,
+            com.stardust.autojs.execution.ExecutionConfig config) throws IOException {
+        if (!enabled) throw new IOException("脚本宿主进程已关闭");
+        if (ACTORS.size()>=64) throw new IOException("隔离执行请求过多，请先停止部分脚本");
+        attach(context);
+        File packet;
+        try { packet=ScriptHostRequest.write(appContext,source,config); }
+        catch (Exception error) { throw new IOException("无法创建隔离执行请求",error); }
+        String token="actor-"+java.util.UUID.randomUUID();
+        RemoteScriptExecution execution=new RemoteScriptExecution(token,packet,source,config,listener);
+        synchronized (LOCK) {
+            ACTORS.put(token,execution);
+            Task task=new Task(token,source.getName(),source.toString(),config.getWorkingDirectory());
+            String kind=source.getEngineName();
+            task.engine=com.stardust.autojs.script.JavaScriptSource.ENGINE_NODE24.equals(kind) ? "Node"
+                    : com.stardust.autojs.script.JavaScriptSource.ENGINE_QUICKJS.equals(kind) ? "QuickJS" : "Rhino";
+            TASKS.put(token,task);
+        }
+        Message message=Message.obtain(null,WHAT_RUN); Bundle data=new Bundle();
+        data.putString("token",token); data.putString("requestFile",packet.getPath());
+        message.setData(data); message.replyTo=CLIENT;
+        if (dispatch(message)) return execution;
+        synchronized (LOCK) { TASKS.remove(token); PENDING.remove(message); }
+        ACTORS.remove(token); ScriptHostRequest.discard(packet);
+        throw new IOException("隔离执行宿主无法连接");
+    }
+
     /**
      * 停止 :script 进程里指定 token 的脚本。
      *
@@ -278,8 +309,11 @@ public final class PocScriptHost {
         }
         // 先乐观移出列表：任务页/「停止全部」不必等服务的 FINISHED 回执。
         synchronized (LOCK) {
-            TASKS.remove(id);
+            Task task=TASKS.get(id);
+            if (task!=null) task.state="stopping";
         }
+        RemoteScriptExecution actor=ACTORS.get(id);
+        if (actor!=null) actor.markStopRequested();
         Message message = Message.obtain(null, WHAT_STOP);
         Bundle data = new Bundle();
         data.putString("token", id);
@@ -304,12 +338,21 @@ public final class PocScriptHost {
         Messenger target;
         Message stop = Message.obtain(null, WHAT_STOP_ALL);
         synchronized (LOCK) {
-            TASKS.clear();
+            for (Task task:TASKS.values()) task.state="stopping";
             java.util.Iterator<Message> iterator = PENDING.iterator();
-            while (iterator.hasNext()) if (iterator.next().what == WHAT_RUN) iterator.remove();
+            while (iterator.hasNext()) {
+                Message queued=iterator.next();
+                if (queued.what!=WHAT_RUN) continue;
+                String token=queued.getData().getString("token");
+                TASKS.remove(token);
+                RemoteScriptExecution actor=ACTORS.remove(token);
+                if (actor!=null) { actor.markStopRequested(); actor.failed(null,STOP_MESSAGE); }
+                iterator.remove();
+            }
             target = service;
             if (target == null && (binding || bound)) PENDING.add(stop);
         }
+        for (RemoteScriptExecution actor:ACTORS.values()) actor.markStopRequested();
         if (target != null) send(target, stop);
     }
 
@@ -372,8 +415,9 @@ public final class PocScriptHost {
                             .put("name", task.name)
                             .put("path", task.path)
                             .put("engine", task.engine)
+                            .put("state", task.state)
                             .put("startedAt", task.startedAt)
-                            .put("detail", "脚本进程")
+                            .put("detail", "stopping".equals(task.state) ? "正在停止" : "脚本进程")
                             .put("nextTime", 0));
                 } catch (Throwable error) {
                     // 单条序列化失败不能让整个任务页读不出来。
@@ -393,13 +437,13 @@ public final class PocScriptHost {
             String token = data == null ? null : data.getString("token");
             switch (msg.what) {
                 case WHAT_STARTED:
-                    onStarted(token, data == null ? null : data.getString("name"));
+                    onStarted(token, data == null ? null : data.getString("name"),data);
                     break;
                 case WHAT_FINISHED:
-                    onFinished(token);
+                    onFinished(token,data);
                     break;
                 case WHAT_ERROR:
-                    onError(token, data == null ? null : data.getString("message"));
+                    onError(token, data == null ? null : data.getString("message"),data);
                     break;
                 case WHAT_CONSOLE:
                     onConsole(token,
@@ -419,7 +463,7 @@ public final class PocScriptHost {
 
     private static final Messenger CLIENT = new Messenger(REPLY_HANDLER);
 
-    private static void onStarted(String token, String name) {
+    private static void onStarted(String token, String name, Bundle data) {
         if (token == null) {
             return;
         }
@@ -432,12 +476,16 @@ public final class PocScriptHost {
                 // 服务给的 name 是去扩展名的脚本名，和主进程引擎任务列表的展示保持一致。
                 task.name = name;
             }
+            Task current=TASKS.get(token);
+            if (current!=null && !"stopping".equals(current.state)) current.state="running";
             // 服务能正常回消息，说明这一轮连接是好的：恢复自动重连预算。
             consecutiveDeaths = 0;
         }
+        RemoteScriptExecution actor=ACTORS.get(token);
+        if (actor!=null && data!=null) actor.started(new Bundle(data));
     }
 
-    private static void onFinished(String token) {
+    private static void onFinished(String token,Bundle data) {
         if (token == null) {
             return;
         }
@@ -445,9 +493,11 @@ public final class PocScriptHost {
             TASKS.remove(token);
             consecutiveDeaths = 0;
         }
+        RemoteScriptExecution actor=ACTORS.remove(token);
+        if (actor!=null) actor.finished(data==null ? null : new Bundle(data));
     }
 
-    private static void onError(String token, String message) {
+    private static void onError(String token, String message,Bundle data) {
         Task failed = null;
         if (token != null) {
             synchronized (LOCK) {
@@ -455,18 +505,14 @@ public final class PocScriptHost {
                 consecutiveDeaths = 0;
             }
         }
+        RemoteScriptExecution actor=token==null ? null : ACTORS.remove(token);
+        if (actor!=null) { actor.failed(data==null ? null : new Bundle(data),message); return; }
         if (message == null || message.isEmpty()) {
             return;
         }
         if (STOP_MESSAGE.equals(message)) {
             // 用户在任务页点「停止」：不是错误，不弹错误提示（stop() 已经移出列表）。
             Log.i(TAG, "脚本进程任务已停止：" + token);
-            return;
-        }
-        if (failed != null && isStagingFailure(message) && retryLegacy(failed)) {
-            // 暂存失败不是脚本本身的错：主进程旧路径已经接手执行，只提示「回退」。
-            Log.w(TAG, "脚本暂存失败，已回退主进程执行：" + message);
-            showToast("已回退主进程运行");
             return;
         }
         // task-191 P1：引擎侧已有「错误: <message>」Toast（Pro 同款），host 不再重复弹。
@@ -499,16 +545,20 @@ public final class PocScriptHost {
         }
         String logToken = token == null ? "" : TOKEN_PREFIX + token;
         if (isValidConsoleBatch(texts, levels)) {
+            RemoteScriptExecution actor=token==null ? null : ACTORS.get(token);
             // 新服务端：每段带自己的原等级，按 append 顺序逐段走原 HostConsoleSink 落点。
             for (int i = 0; i < texts.length; i++) {
                 long time = times != null && times.length == texts.length && times[i] > 0
                         ? times[i] : System.currentTimeMillis();
                 appendConsole(logToken, name, texts[i], levels[i], time);
+                if (actor!=null) actor.log(texts[i],levels[i],time);
             }
             return;
         }
         // 旧服务端 / 畸形 metadata：回退整批 text + 最高 level，保持修复前行为。
         appendConsole(logToken, name, line, level);
+        RemoteScriptExecution actor=token==null ? null : ACTORS.get(token);
+        if (actor!=null) actor.log(line,level,System.currentTimeMillis());
     }
 
     /** 两数组齐全、等长、数量合理（不超过单批段数上限）且每段文本/等级合法才逐段转发。 */
@@ -554,23 +604,6 @@ public final class PocScriptHost {
      * （超过单文件 64MB / 整树 256MB 上限）时服务端会回 102。主进程执行不需要 staging，能跑就跑，
      * 别让用户直接失败；回退成功后由 {@link #onError} 提示「已回退主进程运行」。
      */
-    private static boolean retryLegacy(Task task) {
-        LegacyRunner runner = legacyRunner;
-        if (runner == null || task == null || task.path.isEmpty()) {
-            Log.w(TAG, "暂存失败，但没有可用的主进程回退执行器");
-            return false;
-        }
-        try {
-            File scriptFile = new File(task.path);
-            File workDir = task.workDir == null || task.workDir.isEmpty() ? null : new File(task.workDir);
-            runner.runLegacy(scriptFile, workDir);
-            return true;
-        } catch (Throwable error) {
-            Log.w(TAG, "回退主进程执行失败：" + task.path, error);
-            return false;
-        }
-    }
-
     // ---- 服务绑定 / 连接生命周期 -----------------------------------------
 
     private static final ServiceConnection CONNECTION = new ServiceConnection() {
@@ -680,6 +713,7 @@ public final class PocScriptHost {
                 if (connectAttempt == attempt) {
                     // 连不上：把排队/已登记的任务清掉，别让任务页永远显示在运行。
                     TASKS.clear();
+                    failActorsLocked("脚本执行进程已断开或未能启动");
                     PENDING.clear();
                 }
             }
@@ -705,6 +739,7 @@ public final class PocScriptHost {
                     if (timedOut) {
                         binding = false;
                         TASKS.clear();
+                    failActorsLocked("脚本执行进程已断开或未能启动");
                         PENDING.clear();
                         needUnbind = bound;
                         bound = false;
@@ -734,6 +769,11 @@ public final class PocScriptHost {
      * <p>关键点：只做状态回收，绝不 {@code System.exit}/{@code killProcess}/{@code finish()}，
      * 主进程继续活着，下一次运行重新绑定即可。
      */
+    private static void failActorsLocked(String message) {
+        for (RemoteScriptExecution actor:ACTORS.values()) actor.failed(null,message);
+        ACTORS.clear();
+    }
+
     private static void onRemoteLost() {
         IBinder binder;
         Context context;
@@ -752,6 +792,7 @@ public final class PocScriptHost {
             // 连接建立失败（binder 为空）这种还没跑过脚本的情况不打扰用户。
             notifyUser = service != null || !TASKS.isEmpty();
             TASKS.clear();
+                    failActorsLocked("脚本执行进程已断开或未能启动");
             PENDING.clear();
             service = null;
             binding = false;

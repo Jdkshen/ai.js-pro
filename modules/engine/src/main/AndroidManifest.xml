@@ -14,14 +14,34 @@
 
     <application
         >
+        <provider android:name="com.jdkshen.aijspro.automation.AutomationStateProvider"
+            android:authorities="${applicationId}.automation.state" android:process=":script" android:exported="false"/>
+        <service android:name="com.jdkshen.aijspro.automation.AutomationHostService"
+            android:process=":script" android:exported="false"/>
         <provider
             android:name="org.autojs.source.engine.android.Node24StorageProvider"
             android:authorities="${applicationId}.node24.storage"
             android:exported="false"/>
         <activity
             android:name=".execution.ScriptExecuteActivity"
+            android:process=":script"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:theme="@style/ScriptTheme"/>
+        <activity android:name=".execution.MainScriptExecuteActivity"
+            android:exported="false" android:configChanges="keyboardHidden|orientation|screenSize"
+            android:theme="@style/ScriptTheme"/>
+        <activity android:name=".execution.NativeScriptExecuteActivity"
+            android:exported="false" android:process=":native"
+            android:configChanges="keyboardHidden|orientation|screenSize" android:theme="@style/ScriptTheme"/>
+        <service android:name="com.stardust.enhancedfloaty.FloatyService" android:process=":script" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$Host" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$Native" android:process=":native" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$Inspector" android:process=":inspector" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$Node" android:process=":node24" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$Node1" android:process=":node24_1" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$Node2" android:process=":node24_2" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$Node3" android:process=":node24_3" android:exported="false"/>
+        <service android:name=".core.floaty.RuntimeFloatyService$NodeUi" android:process=":nodeui" android:exported="false"/>
 
 
         <activity
@@ -32,6 +52,7 @@
 
         <activity
             android:name="com.stardust.autojs.core.image.capture.ScreenCaptureRequestActivity"
+            android:process=":script"
             android:excludeFromRecents="true"
             android:theme="@style/ScriptTheme.Transparent"/>
 
@@ -75,6 +96,7 @@
         <!-- :node24 进程没有无障碍服务实例，截图授权自动点击由主进程代持（见 CaptureConsentBridge）。 -->
         <receiver
             android:name="org.autojs.source.engine.android.CaptureAutoConsentReceiver"
+            android:process=":script"
             android:exported="false">
             <intent-filter>
                 <action android:name="org.autojs.source.engine.CAPTURE_AUTO_CONSENT"/>
@@ -83,6 +105,7 @@
 
         <service
             android:name="com.google.android.accessibility.selecttospeak.SelectToSpeakService"
+            android:process=":script"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService"/>

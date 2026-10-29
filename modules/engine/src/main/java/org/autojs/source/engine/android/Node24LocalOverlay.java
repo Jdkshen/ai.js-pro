@@ -681,7 +681,7 @@ public final class Node24LocalOverlay {
             OVERLAYS.remove(id);
             try { OverlayRegistry.unregister(root); } catch (Throwable ignored) { }
             runOnMain(() -> {
-                try { if (root != null) wm.removeView(root); } catch (Throwable ignored) { }
+                if (root != null && root.isAttachedToWindow()) wm.removeViewImmediate(root);
                 return null;
             }, 2000L);
         }

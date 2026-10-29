@@ -44,11 +44,16 @@ class LayoutInspector(private val mContext: Context) {
     interface CaptureAvailableListener { fun onCaptureAvailable(capture: NodeInfo?) }
     interface WindowsAvailableListener { fun onWindowsAvailable(windows: List<CapturedWindow>) }
     interface CaptureRequest { val id: Long; fun cancel() }
+    interface CaptureTransport {
+        fun capture(windows: Boolean, budget: NodeCaptureBudget): RemoteCapture
+    }
+    data class RemoteCapture(val root: NodeInfo?, val windows: List<CapturedWindow>)
 
     private data class CaptureResult(val root: NodeInfo?, val windows: List<CapturedWindow>)
     private inner class Job(val ticket: CaptureRequestGate.Ticket,
                             val listener: WindowsAvailableListener?,
-                            val listeners: List<CaptureAvailableListener>) : CaptureRequest {
+                            val listeners: List<CaptureAvailableListener>,
+                            val once: CaptureAvailableListener?) : CaptureRequest {
         override val id: Long get() = ticket.id
         val budget = NodeCaptureBudget(CAPTURE_TIMEOUT_MS, MAX_CAPTURE_NODES, MAX_CAPTURE_DEPTH)
         val started = SystemClock.uptimeMillis()
@@ -82,18 +87,22 @@ class LayoutInspector(private val mContext: Context) {
 
     fun captureCurrentWindowRequest(): CaptureRequest? = start(null)
 
+    fun captureCurrentWindowRequest(listener: CaptureAvailableListener): CaptureRequest? = start(null, listener)
+
     fun cancelCurrentCapture() {
         val request = active
         if (request != null && request.listener == null) request.cancel()
     }
 
-    @Synchronized private fun start(listener: WindowsAvailableListener?): Job? {
+    @Synchronized private fun start(listener: WindowsAvailableListener?, once: CaptureAvailableListener? = null): Job? {
         val ticket = gate.begin()
         if (ticket == null) {
             captureLog = "status=BUSY\n上一轮系统节点调用尚未退出。请稍后重试；取消等待不会强杀 Android Binder。"
             return null
         }
-        val request = Job(ticket, listener, mCaptureAvailableListeners.toList())
+        val listeners = mCaptureAvailableListeners.toMutableList()
+        if (once != null && !listeners.contains(once)) listeners.add(once)
+        val request = Job(ticket, listener, listeners, once)
         active = request
         if (listener == null) { isDumping = true; capture = null; capturedWindows = emptyList() }
         trace(request.details, "status=CAPTURING")
@@ -116,6 +125,13 @@ class LayoutInspector(private val mContext: Context) {
 
     private fun execute(request: Job) {
         try {
+            val transport = remoteTransport
+            if (transport != null) {
+                val result = transport.capture(request.listener != null, request.budget)
+                request.budget.check()
+                finish(request, CaptureResult(result.root, result.windows), "SUCCESS")
+                return
+            }
             trace(request.details, newCaptureLog().toString())
             request.budget.check()
             val service = AccessibilityService.instance
@@ -192,7 +208,7 @@ class LayoutInspector(private val mContext: Context) {
             catch (error: Exception) { Log.w(LOG_TAG, "Window capture listener failed", error) }
         } else {
             for (listener in request.listeners) {
-                if (!mCaptureAvailableListeners.contains(listener)) continue
+                if (listener !== request.once && !mCaptureAvailableListeners.contains(listener)) continue
                 try { listener.onCaptureAvailable(result?.root) }
                 catch (error: Exception) { Log.w(LOG_TAG, "Capture listener failed", error) }
             }
@@ -359,6 +375,9 @@ class LayoutInspector(private val mContext: Context) {
     }
 
     companion object {
+
+        @Volatile private var remoteTransport: CaptureTransport? = null
+        @JvmStatic fun setCaptureTransport(transport: CaptureTransport?) { remoteTransport = transport }
 
         private val LOG_TAG = LayoutInspector::class.java.simpleName
         private const val CAPTURE_TIMEOUT_MS = 8000L

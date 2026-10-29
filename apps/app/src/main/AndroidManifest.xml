@@ -188,7 +188,13 @@
             android:name=".ui.project.BuildActivity"
             android:configChanges="orientation|screenSize"/>
         <activity android:name=".ui.project.ProjectConfigActivity"/>
-        <activity android:name=".ui.log.LogActivity"/>
+        <activity android:name=".ui.log.LogActivity" android:process=":script"/>
+        <service android:name=".log.ConsoleLogService" android:exported="false"/>
+        <service android:name=".ui.floating.layoutinspector.InspectorCaptureService"
+            android:process=":script" android:exported="false"/>
+        <receiver android:name=".autojs.key.VolumeKeyRelayReceiver" android:exported="false"/>
+        <provider android:name=".mcp.McpAutomationProvider" android:authorities="${applicationId}.mcp.automation"
+            android:process=":script" android:exported="false"/>
         <activity android:name=".ui.doc.DocumentationActivity"
             android:launchMode="singleTop"
             android:configChanges="uiMode|orientation|screenSize"/>
@@ -542,6 +548,7 @@
             android:exported="false" />
             <receiver
             android:name=".mcp.AijsUiReceiver"
+            android:process=":script"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.jdkshen.aijspro.AIJS_UI" />

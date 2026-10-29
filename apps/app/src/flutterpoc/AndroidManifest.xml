@@ -53,6 +53,7 @@
              exported=false + 调用方 uid 校验，只允许同 uid 的 :script 绑定。 -->
         <service
             android:name="com.jdkshen.aijspro.automation.AutomationHostService"
+            android:process=":script"
             android:exported="false"/>
     </application>
 </manifest>

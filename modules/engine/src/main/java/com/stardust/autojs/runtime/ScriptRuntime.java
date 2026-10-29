@@ -246,8 +246,10 @@ public class ScriptRuntime {
 
     private static WeakReference<Context> applicationContext;
     private Map<String, Object> mProperties = new ConcurrentHashMap<>();
-    private final java.util.Set<AutoCloseable> mCleanables =
-            java.util.Collections.newSetFromMap(new ConcurrentHashMap<AutoCloseable, Boolean>());
+    private final com.stardust.autojs.engine.ScriptResourceScope mCleanables =
+            new com.stardust.autojs.engine.ScriptResourceScope();
+    public final com.stardust.autojs.engine.ScriptJavaResources javaResources =
+            new com.stardust.autojs.engine.ScriptJavaResources();
     private AbstractShell mRootShell;
     private Supplier<AbstractShell> mShellSupplier;
     private ScreenMetrics mScreenMetrics = new ScreenMetrics();
@@ -266,6 +268,8 @@ public class ScriptRuntime {
     }
 
     protected ScriptRuntime(Builder builder) {
+        addCleanable(new ScriptRuntimeGlobals());
+        addCleanable(javaResources);
         uiHandler = builder.mUiHandler;
         Context context = uiHandler.getContext();
         app = builder.mAppUtils;
@@ -494,13 +498,16 @@ public class ScriptRuntime {
      * 它们的 exit 监听常做 nativeShutdown，会把正在渲染的 native 上下文销毁。
      * 只由用户停止/服务销毁时的显式清理负责。
      */
-    public static volatile boolean suppressExitEvent;
+    private volatile boolean suppressExitEvent;
+
+    public void setExitEventSuppressed(boolean value) { suppressExitEvent = value; }
 
     public void onExit() {
         Log.d(TAG, "on exit suppressExitEvent=" + suppressExitEvent
                 + " thread=" + Thread.currentThread().getName());
         //清除interrupt状态
         ThreadCompat.interrupted();
+        ignoresException(javaResources::detachViews);
         //悬浮窗需要第一时间关闭以免出现恶意脚本全屏悬浮窗屏蔽屏幕并且在exit中写死循环的问题
         ignoresException(floaty::closeAll);
         // 对话框也必须尽早关：它们可能盖住后续脚本/选择器，且比悬浮窗更常见。
@@ -508,10 +515,6 @@ public class ScriptRuntime {
         // （Dialogs.close() 只 dismiss 本 runtime 创建的窗口，不会误关其它引擎窗口）。
         // Dialogs 也注册了 cleanable，close() 幂等；末尾 closeCleanables() 会再兜底一次。
         ignoresException(dialogs::close);
-        ignoresException(ColorMapping::recycleSingleton);
-        // 图片泄露检测的开关/日志出口是进程级 static，退出时回置到默认值
-        // （日志出口抱着本 runtime，不回置会让下个脚本把日志发到已退出的 runtime 上）
-        ignoresException(() -> MemoryLeakDetector.reset(Debug.isPackagedApp()));
         // 注意：timers/threads/events/loopers/sensors 只有 runtime.init() 之后才存在。
         // Node24 等「不调用 runtime.init 的引擎」在 destroy 时这些字段仍是 null：老代码
         // ignoresException(timers::recycle) 会在**捕获方法引用**阶段直接 NPE（onExit:482），
@@ -741,23 +744,23 @@ public class ScriptRuntime {
      */
     public void addCleanable(AutoCloseable cleanable) {
         if (cleanable != null) {
-            mCleanables.add(cleanable);
+            mCleanables.track(cleanable, () -> {
+                try { cleanable.close(); }
+                catch (Exception error) { throw new IllegalStateException("Resource cleanup failed", error); }
+            });
         }
     }
 
     public void removeCleanable(AutoCloseable cleanable) {
-        mCleanables.remove(cleanable);
+        mCleanables.forget(cleanable);
     }
 
     private void closeCleanables() {
-        for (AutoCloseable cleanable : mCleanables.toArray(new AutoCloseable[0])) {
-            try {
-                cleanable.close();
-            } catch (Throwable e) {
-                e.printStackTrace();
-            }
+        mCleanables.close();
+        if (mCleanables.firstFailure() != null) {
+            Log.w(TAG, "Resource cleanup failures=" + mCleanables.failureCount(),
+                    mCleanables.firstFailure());
         }
-        mCleanables.clear();
     }
 
     public Object getImages() {

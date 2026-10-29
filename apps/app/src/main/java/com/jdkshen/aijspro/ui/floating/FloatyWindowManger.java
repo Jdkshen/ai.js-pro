@@ -51,7 +51,7 @@ public class FloatyWindowManger {
 
     /** Legacy in-process path; also used when the isolated inspector cannot start. */
     public static boolean addWindowInProcess(Context context, FloatyWindow window) {
-        context.startService(new Intent(context, FloatyService.class));
+        context.startService(FloatyService.getServiceIntent(context));
         boolean hasPermission = FloatingPermission.ensurePermissionGranted(context);
         try {
             FloatyService.addWindow(window);
@@ -85,7 +85,7 @@ public class FloatyWindowManger {
             manageDrawOverlays(GlobalAppContext.get());
             return false;
         } else {
-            GlobalAppContext.get().startService(new Intent(GlobalAppContext.get(), FloatyService.class));
+            GlobalAppContext.get().startService(FloatyService.getServiceIntent(GlobalAppContext.get()));
             CircularMenu menu = new CircularMenu(GlobalAppContext.get(), sMenuVisibility.isSuppressed());
             sCircularMenu = new WeakReference<>(menu);
             sMenuVisibility.attach(menu);

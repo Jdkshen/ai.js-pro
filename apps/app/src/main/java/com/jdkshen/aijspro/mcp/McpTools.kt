@@ -124,7 +124,7 @@ internal class McpTools(private val context: Context, private val event: (String
         terminals.close()
         runs.values.filter { it.status in ACTIVE_STATES }.forEach { record ->
             record.stopRequested = true; record.stopReason = "service_stopped"
-            record.status = "STOPPED"; record.finishedAt = System.currentTimeMillis()
+            record.status = "STOPPING"
             record.logs = runLogs(record)
             runCatching { record.execution?.engine?.forceStop() }
         }
@@ -240,6 +240,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun call(invocation: McpToolCall): JsonObject {
         val name = invocation.canonicalName
         val args = invocation.arguments
+        if (McpAutomationTransport.supports(name)) return McpAutomationTransport.call(context, name, args)
         return when (name) {
             "get_status" -> toolJson(JsonObject().apply {
                 addProperty("scriptRoot", root.path); addProperty("writeAllowed", McpService.allowWrite)
@@ -287,17 +288,6 @@ internal class McpTools(private val context: Context, private val event: (String
             "probe_engine_api" -> probeEngineApi(args)
             "engine_api_diff" -> engineApiDiff()
             "stop_script" -> stopScript(args)
-            "get_ui_layout" -> {
-                requireExecution()
-                toolJson(McpDeviceTools.layout(if (args.has("windowId")) args.intOr("windowId", -1) else null,
-                    args.intOr("maxNodes", 3000), args.intOr("maxDepth", 64), args.intOr("timeoutMillis", 3000)))
-            }
-            "capture_screen" -> {
-                requireExecution()
-                McpDeviceTools.screenshot(args.stringOr("format", "png").lowercase(),
-                    args.intOr("quality", 100), args.booleanOr("dataUri", false),
-                    args.intOr("maxWidth", 0), args.intOr("timeoutMillis", 3000))
-            }
             "check_syntax" -> {
                 val code = args.string("code")
                 val engine = McpEngines.normalize(args.stringOr("engine", "")).ifEmpty {
@@ -373,15 +363,6 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("removed", removed)
                 addProperty("remaining", workspaces.list().size)
             })
-            "ui_find" -> toolJson(McpUiActions.find(args, args.intOr("limit", 20)))
-            "ui_click" -> toolJson(McpUiActions.click(args))
-            "ui_long_click" -> toolJson(McpUiActions.longClick(args))
-            "ui_node_action" -> toolJson(McpUiActions.nodeAction(args, args.string("action"), args.getAsJsonObject("args")))
-            "ui_input" -> toolJson(McpUiActions.input(args, args.string("text")))
-            "ui_swipe" -> toolJson(McpUiActions.swipe(args))
-            "ui_global" -> toolJson(McpUiActions.global(args.string("action")))
-            "ui_wait" -> toolJson(McpUiActions.waitFor(args, args.intOr("timeoutMillis", 3000), args.intOr("intervalMillis", 100)))
-            "ui_scroll" -> toolJson(McpUiActions.scroll(args))
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url", "apk_install", "apk_uninstall" ->
                 toolJson(McpAppTools.handle(context, name, args) ?: throw McpInvalidParamsException("未知工具：$name"))
             else -> McpAppTools.handle(context, name, args)?.let { toolJson(it) }
@@ -445,6 +426,7 @@ internal class McpTools(private val context: Context, private val event: (String
                               config: ExecutionConfig = ExecutionConfig(workingDirectory = workingDirectory),
                               cleanup: () -> Unit = {}): JsonObject {
         val key = "mcp-${nextRun.getAndIncrement()}"
+        if (runs.values.count { it.status in ACTIVE_STATES } >= 16) throw ToolError("活动脚本过多，请先停止部分脚本")
         if (runs.size >= 100) runs.values.filter { it.status !in ACTIVE_STATES }.minByOrNull { it.createdAt }?.let { runs.remove(it.id) }
         val record = RunRecord(key, path, System.currentTimeMillis()).apply {
             // init (including pool admission) can fail before onStart is called.
@@ -454,7 +436,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val listener = object : ScriptExecutionListener {
             override fun onStart(execution: ScriptExecution) {
                 record.execution = execution; record.engineExecutionId = execution.id
-                record.engine = (source as? JavaScriptSource)?.let { McpEngines.actual(it) }.orEmpty()
+                record.engine = (execution.source as? JavaScriptSource)?.let { McpEngines.actual(it) }.orEmpty()
                 if (record.stopRequested) throw ScriptInterruptedException()
                 // Rhino's legacy engines module copies top-level values only. JSON maps/lists
                 // must be native JS containers to support nested property access and Array APIs.
@@ -473,7 +455,7 @@ internal class McpTools(private val context: Context, private val event: (String
                     record.logs = runLogs(record, execution)
                     record.finishedAt = System.currentTimeMillis()
                     // 先保存结果和日志，再发布结束状态，避免等待方拿到空日志。
-                    if (record.status != "STOPPED") record.status = "SUCCEEDED"
+                    record.status = if (record.stopRequested) "STOPPED" else "SUCCEEDED"
                     event("$key · ${record.status.lowercase()} · ${record.path}")
                 } finally { cleanup() }
             }
@@ -489,9 +471,10 @@ internal class McpTools(private val context: Context, private val event: (String
                         event("$key · stopped · ${record.path}")
                         return
                     }
-                    record.errorType = error.javaClass.name
+                    record.errorType = execution.engine.getTag("host.errorType") as? String ?: error.javaClass.name
                     record.errorMessage = error.localizedMessage.orEmpty().take(2000)
-                    record.errorStack = Log.getStackTraceString(error).take(16 * 1024)
+                    record.errorStack = (execution.engine.getTag("host.errorStack") as? String
+                        ?: Log.getStackTraceString(error)).take(16 * 1024)
                     record.finishedAt = System.currentTimeMillis()
                     record.logs = runLogs(record, execution)
                     if (record.status != "STOPPED") {
@@ -503,9 +486,10 @@ internal class McpTools(private val context: Context, private val event: (String
             }
         }
         try {
-            val execution = AutoJs.getInstance().scriptEngineService.execute(
-                source, listener, config)
+            val execution = com.jdkshen.aijspro.external.HostScripts.execute(
+                com.stardust.app.GlobalAppContext.get(), source, listener, config)
             record.execution = execution; record.engineExecutionId = execution.id
+            if (record.stopRequested) execution.engine.forceStop()
         } catch (error: Exception) {
             cleanup()
             record.status = "FAILED"; record.finishedAt = System.currentTimeMillis()
@@ -626,12 +610,13 @@ internal class McpTools(private val context: Context, private val event: (String
         if (record.status !in ACTIVE_STATES) throw ToolError("任务已结束：${record.status}")
         val engineId = record.execution?.engine?.id ?: -1
         record.stopRequested = true; record.stopReason = "user_stopped"
-        record.status = "STOPPED"; record.finishedAt = System.currentTimeMillis()
+        record.status = "STOPPING"
         record.errorType = ""; record.errorMessage = ""; record.errorStack = ""
         record.logs = runLogs(record)
         record.execution?.engine?.forceStop()
         // 本进程兜底；其它进程由各自 engine.destroy()/closeUiAfterExecution() 清理。
-        val overlayClosed = if (engineId >= 0) OverlayRegistry.closeByOwner(engineId, "mcp_stop_script") else 0
+        val overlayClosed = if (engineId >= 0 && record.execution?.engine?.getTag("host.process") == null)
+            OverlayRegistry.closeByOwner(engineId, "mcp_stop_script") else 0
         event("${record.id} · stopped · ${record.path} · overlay=$overlayClosed")
         return toolJson(runJson(record).apply { addProperty("overlayClosed", overlayClosed) })
     }
@@ -650,6 +635,11 @@ internal class McpTools(private val context: Context, private val event: (String
 
     private fun runJson(run: RunRecord, includeLogs: Boolean = false) = JsonObject().apply {
         addProperty("executionId", run.id); addProperty("engineExecutionId", run.engineExecutionId)
+        run.execution?.engine?.let { engine ->
+            addProperty("executionState", engine.executionState)
+            (engine.getTag("host.process") as? String)?.let { addProperty("hostProcess", it) }
+            (engine.getTag("host.pid") as? Number)?.let { addProperty("hostPid", it) }
+        }
         if (run.engine.isNotEmpty()) addProperty("engine", run.engine)
         addProperty("path", run.path); addProperty("status", run.status); addProperty("createdAt", run.createdAt)
         if (run.startedAt > 0) addProperty("startedAt", run.startedAt)
@@ -681,6 +671,15 @@ internal class McpTools(private val context: Context, private val event: (String
 
     private fun console(): ConsoleImpl? = runCatching { AutoJs.getInstance().scriptEngineService.globalConsole as? ConsoleImpl }.getOrNull()
     private fun runLogs(record: RunRecord, execution: ScriptExecution? = record.execution): List<JsonObject> {
+        val remote = execution?.engine?.getTag("host.logs") as? List<*>
+        if (remote != null) return remote.takeLast(MAX_RUN_LOGS).mapNotNull { value ->
+            val row = value as? Map<*, *> ?: return@mapNotNull null
+            JsonObject().apply {
+                addProperty("id", row["id"] as? Number)
+                addProperty("level", logLevel((row["level"] as? Number)?.toInt() ?: Log.INFO))
+                addProperty("content", row["content"]?.toString().orEmpty().take(16 * 1024))
+            }
+        }
         val ownConsole = runCatching { (execution?.engine as? JavaScriptEngine)?.runtime?.console as? ConsoleImpl }.getOrNull()
             ?: return emptyList()
         val all = ownConsole.allLogs
@@ -705,7 +704,8 @@ internal class McpTools(private val context: Context, private val event: (String
                 stopScript(JsonObject().apply { addProperty("executionId", executionId) })
                 stopped = 1
             }
-            if (engineId >= 0) OverlayRegistry.closeByOwner(engineId, "mcp_close_overlays")
+            if (engineId >= 0 && record.execution?.engine?.getTag("host.process") == null)
+                OverlayRegistry.closeByOwner(engineId, "mcp_close_overlays")
         } else {
             stopped = stopAllScripts().get("stopped")?.asInt ?: 0
         }
@@ -723,10 +723,10 @@ internal class McpTools(private val context: Context, private val event: (String
         requireExecution()
         runs.values.filter { it.status in ACTIVE_STATES }.forEach { record ->
             record.stopRequested = true; record.stopReason = "all_scripts_stopped"
-            record.logs = runLogs(record); record.finishedAt = System.currentTimeMillis()
-            record.status = "STOPPED"
+            record.logs = runLogs(record)
+            record.status = "STOPPING"
         }
-        val stopped = AutoJs.getInstance().scriptEngineService.engines.size
+        val stopped = com.jdkshen.aijspro.external.HostScripts.runningNotificationTasks().length()
         com.jdkshen.aijspro.external.HostScripts.stopAllScripts(context)
         val overlayClosed = OverlayRegistry.closeAll("mcp_stop_all")
         try { Thread.sleep(300) } catch (_: InterruptedException) {}
@@ -931,7 +931,7 @@ internal class McpTools(private val context: Context, private val event: (String
 
     companion object {
         private val SUPPORTED_PROTOCOLS = setOf("2024-11-05", "2025-03-26", "2025-06-18")
-        private val ACTIVE_STATES = setOf("QUEUED", "RUNNING")
+        private val ACTIVE_STATES = setOf("QUEUED", "RUNNING", "STOPPING")
         private val TEXT_EXTENSIONS = setOf("js", "json", "txt", "md", "xml", "css", "html", "c", "h", "cc", "cpp", "hpp", "java", "kt", "smali", "gradle", "kts", "properties", "cmake", "sh")
         private const val MAX_READ_FILE_BYTES = 8L * 1024 * 1024
         private const val MAX_SEARCH_FILES = 2000

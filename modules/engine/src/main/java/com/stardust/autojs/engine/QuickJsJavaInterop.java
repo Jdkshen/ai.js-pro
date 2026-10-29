@@ -40,6 +40,15 @@ final class QuickJsJavaInterop {
     private final Map<String, List<Method>> mMethodCache = new ConcurrentHashMap<>();
     private final Map<String, Field> mFieldCache = new ConcurrentHashMap<>();
     private final Map<String, Boolean> mNoFieldCache = new ConcurrentHashMap<>();
+    private final ScriptJavaResources mResources;
+    private final boolean mOwnsResources;
+
+    QuickJsJavaInterop() { this(new ScriptJavaResources(), true); }
+    QuickJsJavaInterop(ScriptJavaResources resources) { this(resources, false); }
+    private QuickJsJavaInterop(ScriptJavaResources resources, boolean ownsResources) {
+        mResources = resources;
+        mOwnsResources = ownsResources;
+    }
 
     // ------------------------------------------------------------------
     // 句柄与类解析
@@ -47,9 +56,7 @@ final class QuickJsJavaInterop {
 
     private long put(Object value) {
         if (mHandles.size() >= MAX_HANDLES) {
-            Log.w(TAG, "Java handle limit reached, dropping stale handles");
-            mHandles.clear();
-            mClassHandles.clear();
+            throw new IllegalStateException("Java handle limit reached; release unused handles before continuing");
         }
         long handle = mNextHandle.getAndIncrement();
         mHandles.put(handle, value);
@@ -200,7 +207,10 @@ final class QuickJsJavaInterop {
                     + "." + name + "(" + rawArgs.size() + " 个参数)");
         }
         // InvocationFailure 直接向上抛：native 会把它转成脚本侧的 Error（消息带 Java 异常类名）。
-        return encode(invoke(method, invocationTarget(receiver), converted));
+        Object target = invocationTarget(receiver);
+        Object result = invoke(method, target, converted);
+        mResources.called(target, name, converted);
+        return encode(result);
     }
 
     public String getField(long handle, String name) throws JSONException {
@@ -263,7 +273,7 @@ final class QuickJsJavaInterop {
                     + "(" + rawArgs.size() + " 个参数)");
         }
         try {
-            return encode(best.newInstance(converted));
+            return encode(mResources.constructed(best.newInstance(converted)));
         } catch (InvocationTargetException error) {
             throw new IllegalStateException(describeTargetError(error));
         } catch (ReflectiveOperationException error) {
@@ -272,6 +282,7 @@ final class QuickJsJavaInterop {
 
     /** 引擎关闭时释放句柄（避免脚本结束后仍持有 Java 对象引用）。 */
     public void clear() {
+        if (mOwnsResources) mResources.close();
         mHandles.clear();
         mClassHandles.clear();
         mMethodCache.clear();

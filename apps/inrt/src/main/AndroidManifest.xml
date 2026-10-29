@@ -113,7 +113,7 @@
         <service android:name="com.stardust.autojs.engine.node24.NodeEngineBridgeService" android:exported="false"/>
         <service android:name="com.stardust.autojs.engine.node24.NodeEngineBridgeScriptService" android:process=":script" android:exported="false"/>
         <!-- 仅限同 UID 的 Node 进程绑定；无障碍服务与此代理都在主进程。 -->
-        <service android:name="com.jdkshen.aijspro.automation.AutomationHostService" android:exported="false"/>
+        <service android:name="com.jdkshen.aijspro.automation.AutomationHostService" android:process=":script" android:exported="false"/>
         <activity android:name="com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot1" android:process=":node24_1" android:exported="false" android:theme="@style/Theme.Material3.DayNight.NoActionBar"/>
         <activity android:name="com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot2" android:process=":node24_2" android:exported="false" android:theme="@style/Theme.Material3.DayNight.NoActionBar"/>
         <activity android:name="com.jdkshen.aijspro.engine.NodeUiLocalActivity$Slot3" android:process=":node24_3" android:exported="false" android:theme="@style/Theme.Material3.DayNight.NoActionBar"/>

@@ -58,6 +58,9 @@ struct EngineState {
     JSContext *context = nullptr;
     std::atomic<bool> interrupted{false};
     std::atomic<bool> exitRequested{false};
+    std::atomic<bool> closing{false};
+    std::recursive_mutex jsMutex;
+    std::atomic<int> mainHandoffs{0};
     NativeFrameStore frames;
     std::mutex timersMutex;
     std::condition_variable timersCv;
@@ -362,6 +365,32 @@ JNIEnv *currentEnv(EngineState *state) {
         return nullptr;
     }
     return env;
+}
+
+// JNI entries retain a shared EngineState. Retiring a handle must not free a context
+// under an evaluation or Java callback which already acquired that state.
+void releaseEngineState(EngineState *state) {
+    state->frames.clear();
+    if (state->context != nullptr) {
+        for (const auto &entry : state->timers) {
+            JS_FreeValue(state->context, entry.second->callback);
+            entry.second->callback = JS_UNDEFINED;
+        }
+        state->timers.clear();
+        JS_FreeContext(state->context);
+    }
+    if (state->runtime != nullptr) JS_FreeRuntime(state->runtime);
+    JNIEnv *env = nullptr;
+    bool attached = false;
+    if (state->host != nullptr && state->vm != nullptr) {
+        const jint status = state->vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+        if (status == JNI_EDETACHED) {
+            attached = state->vm->AttachCurrentThread(&env, nullptr) == JNI_OK;
+        }
+        if (env != nullptr) env->DeleteGlobalRef(state->host);
+        if (attached) state->vm->DetachCurrentThread();
+    }
+    delete state;
 }
 
 std::string jsString(JSContext *context, JSValueConst value) {
@@ -2376,8 +2405,11 @@ JSValue nativeRunOnMain(JSContext *context, JSValueConst, int argc, JSValueConst
     }
     jclass hostClass = env->GetObjectClass(state->host);
     jmethodID method = env->GetMethodID(hostClass, "runJsCallbackOnMain", "(J)Ljava/lang/String;");
+    state->mainHandoffs.fetch_add(1);
     auto result = static_cast<jstring>(env->CallObjectMethod(state->host, method,
             static_cast<jlong>(callbackId)));
+    state->mainHandoffs.fetch_sub(1);
+    JS_UpdateStackTop(state->runtime);
     env->DeleteLocalRef(hostClass);
     if (env->ExceptionCheck()) {
         return throwJavaException(context, env);
@@ -8949,9 +8981,8 @@ const char kBootstrapScript[] = R"JS(
             return __aiNativeUiGetAttr(uiViewId, String(id), String(name));
         },
         run: function (fn) {
-            // View updates already hop to the Java main thread internally, so a
-            // synchronous call keeps Rhino's ui.run(fn) semantics.
-            if (typeof fn === 'function') return fn();
+            // Preserve UI thread identity for raw Java View calls as well as proxies.
+            if (typeof fn === 'function') return runOnMainThread(fn);
         },
         emitter: null,
         activity: null,
@@ -10898,12 +10929,11 @@ std::shared_ptr<const cv::Mat> aijsSiftBorrowFrame(int64_t engine, int64_t frame
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
         JNIEnv *env, jclass, jobject hostBridge, jlong memoryLimitBytes, jlong stackLimitBytes) {
-    auto state = std::make_shared<EngineState>();
+    auto state = std::shared_ptr<EngineState>(new EngineState(), releaseEngineState);
     env->GetJavaVM(&state->vm);
     state->host = env->NewGlobalRef(hostBridge);
     state->runtime = JS_NewRuntime();
     if (state->runtime == nullptr) {
-        env->DeleteGlobalRef(state->host);
         throwQuickJs(env, "Unable to allocate QuickJS runtime");
         return 0;
     }
@@ -10912,8 +10942,6 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     JS_SetInterruptHandler(state->runtime, interruptHandler, state.get());
     state->context = JS_NewContext(state->runtime);
     if (state->context == nullptr) {
-        JS_FreeRuntime(state->runtime);
-        env->DeleteGlobalRef(state->host);
         throwQuickJs(env, "Unable to allocate QuickJS context");
         return 0;
     }
@@ -11214,9 +11242,6 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_create(
     if (JS_IsException(bootstrap)) {
         const std::string message = quickJsException(state->context);
         JS_FreeValue(state->context, bootstrap);
-        JS_FreeContext(state->context);
-        JS_FreeRuntime(state->runtime);
-        env->DeleteGlobalRef(state->host);
         throwQuickJs(env, message);
         return 0;
     }
@@ -11324,7 +11349,11 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluate(
         throwQuickJs(env, "QuickJS runtime is not available");
         return nullptr;
     }
-    state->interrupted.store(false, std::memory_order_relaxed);
+    std::unique_lock<std::recursive_mutex> jsLock(state->jsMutex, std::try_to_lock);
+    if (!jsLock.owns_lock() || state->closing.load(std::memory_order_acquire)) {
+        throwQuickJs(env, "QuickJS context is busy or closing");
+        return nullptr;
+    }
     const std::string script = fromJavaString(env, source);
     const std::string filename = fromJavaString(env, sourceName);
     const std::string displayName = filename.empty() ? "<script>" : filename;
@@ -11479,7 +11508,11 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_evaluateBytecode(
         throwQuickJs(env, "QuickJS runtime is not available");
         return nullptr;
     }
-    state->interrupted.store(false, std::memory_order_relaxed);
+    std::unique_lock<std::recursive_mutex> jsLock(state->jsMutex, std::try_to_lock);
+    if (!jsLock.owns_lock() || state->closing.load(std::memory_order_acquire)) {
+        throwQuickJs(env, "QuickJS context is busy or closing");
+        return nullptr;
+    }
     const std::string filename = fromJavaString(env, sourceName);
     const std::string displayName = filename.empty() ? "<script>" : filename;
     if (!installMainModuleGlobals(state->context, displayName)) {
@@ -11532,6 +11565,11 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_setGlobal(
     if (state == nullptr) {
         return;
     }
+    std::unique_lock<std::recursive_mutex> jsLock(state->jsMutex, std::try_to_lock);
+    if (!jsLock.owns_lock() || state->closing.load(std::memory_order_acquire)) {
+        throwQuickJs(env, "QuickJS globals must be updated on the script thread");
+        return;
+    }
     const std::string propertyName = fromJavaString(env, name);
     JSValue jsValue = JS_NULL;
     if (value != nullptr) {
@@ -11566,11 +11604,18 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_setGlobal(
  */
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_stardust_autojs_engine_QuickJsNativeBridge_invokeJsCallback(
-        JNIEnv *env, jclass, jlong handle, jlong callbackId, jstring argsJson) {
+        JNIEnv *env, jclass, jlong handle, jlong callbackId, jstring argsJson, jboolean mainHandoff) {
     const auto state = findEngine(handle);
     if (state == nullptr) {
         return nullptr;
     }
+    std::unique_lock<std::recursive_mutex> jsLock(state->jsMutex, std::try_to_lock);
+    const bool handoff = mainHandoff == JNI_TRUE && state->mainHandoffs.load() > 0;
+    if ((!jsLock.owns_lock() && !handoff) || state->closing.load(std::memory_order_acquire)) {
+        throwQuickJs(env, "Synchronous QuickJS callbacks must run on the script thread");
+        return nullptr;
+    }
+    if (handoff) JS_UpdateStackTop(state->runtime);
     JSContext *context = state->context;
     JSValue global = JS_GetGlobalObject(context);
     JSValue dispatcher = JS_GetPropertyStr(context, global, "__aiInvokeCallback");
@@ -11619,17 +11664,13 @@ Java_com_stardust_autojs_engine_QuickJsNativeBridge_destroy(
             return;
         }
         state = it->second;
+        state->closing.store(true, std::memory_order_release);
         gEngines.erase(it);
     }
     state->interrupted.store(true, std::memory_order_relaxed);
     state->timersCv.notify_all();
-    state->frames.clear();
-    JS_FreeContext(state->context);
-    JS_FreeRuntime(state->runtime);
-    env->DeleteGlobalRef(state->host);
-    state->context = nullptr;
-    state->runtime = nullptr;
-    state->host = nullptr;
+    // The final in-flight JNI owner invokes releaseEngineState. This call is bounded
+    // even when JS is currently waiting for an Android UI/Binder operation.
 }
 
 extern "C" JNIEXPORT jstring JNICALL

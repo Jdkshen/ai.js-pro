@@ -61,7 +61,7 @@ final class PocNode24Jobs {
                     if (state == null || id == null || id.isEmpty()) {
                         return;
                     }
-                    if ("started".equals(state)) {
+                    if ("started".equals(state) || "stopping".equals(state)) {
                         try {
                             JSONObject task = new JSONObject()
                                     .put("token", TOKEN_PREFIX + id)
@@ -69,8 +69,10 @@ final class PocNode24Jobs {
                                     .put("name", intent.getStringExtra(Node24Service.EXTRA_FILENAME))
                                     .put("path", intent.getStringExtra(Node24Service.EXTRA_FILENAME))
                                     .put("engine", "Node24")
-                                    .put("detail", intent.getBooleanExtra(Node24Service.EXTRA_UI_SCRIPT, false)
-                                            ? "运行中 · Node UI" : "运行中")
+                                    .put("executionState", intent.getStringExtra("executionState"))
+                                    .put("detail", "stopping".equals(state) ? "正在停止"
+                                            : intent.getBooleanExtra(Node24Service.EXTRA_UI_SCRIPT, false)
+                                                ? "运行中 · Node UI" : "运行中")
                                     .put("nextTime", 0)
                                     .put("startedAt", intent.getLongExtra(Node24Service.EXTRA_STARTED_AT,
                                             System.currentTimeMillis()));

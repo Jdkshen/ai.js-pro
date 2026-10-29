@@ -65,20 +65,22 @@ public class LogActivity extends BaseActivity {
     private ScrollView mLogScroll;
     private SpannableStringBuilder mBuffer;
     private UnifiedConsoleLogBridge.Listener mListener;
+    private boolean mRenderPosted, mFollowAfterRender;
+    private final Runnable mRenderTask = () -> {
+        mRenderPosted = false;
+        boolean follow = mFollowAfterRender && isFollowingBottom();
+        mFollowAfterRender = false;
+        if (mLogText != null) mLogText.setText(mBuffer);
+        if (follow) scrollToBottom();
+    };
     private AppThemePalette mPalette;
     private int mLevel = Log.VERBOSE;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (com.jdkshen.aijspro.log.UnifiedLogNavigation.open(this)) {
-            finish();
-            return;
-        }
-        if (!UnifiedConsoleLogBridge.isAvailable() || !UnifiedConsoleLogBridge.isMainProcess()) {
-            // task-177：Miuix 运行日志页已随源集退役。普通构建没有统一日志源、
-            // :script/:native 进程里统一环为空（103 都转发到主进程）：直接结束并明确提示，
-            // 不再回退 Miuix 页面；Flutter 构建的日志入口都走 Flutter LogPage。
+        if (!UnifiedConsoleLogBridge.isAvailable()) {
+            // Flutter owns the shared ring; isolated screens subscribe through its broker.
             Toast.makeText(this, "统一日志源未就绪，请从 Flutter 界面打开运行日志", Toast.LENGTH_SHORT).show();
             finish();
             return;
@@ -206,8 +208,12 @@ public class LogActivity extends BaseActivity {
         mBuffer.setSpan(new ForegroundColorSpan(levelColor(line.level)),
                 start, mBuffer.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         trimBuffer();
-        if (mLogText != null) mLogText.setText(mBuffer);
-        if (follow) scrollToBottom();
+        if (!mayScroll) return;
+        mFollowAfterRender |= follow;
+        if (mLogText != null && !mRenderPosted) {
+            mRenderPosted = true;
+            mLogText.postOnAnimation(mRenderTask);
+        }
     }
 
     private boolean isFollowingBottom() {
@@ -257,6 +263,7 @@ public class LogActivity extends BaseActivity {
 
     @Override
     protected void onDestroy() {
+        if (mLogText != null) mLogText.removeCallbacks(mRenderTask);
         if (mListener != null) {
             UnifiedConsoleLogBridge.removeListener(mListener);
             mListener = null;

@@ -67,12 +67,22 @@ public class GlobalKeyObserver implements OnKeyListener, ShellKeyObserver.KeyLis
     }
 
     public void onVolumeDown() {
+        android.content.Context context=GlobalAppContext.get();
+        if (!com.jdkshen.aijspro.external.HostProcess.isMain(context)) {
+            context.sendBroadcast(new android.content.Intent(context,VolumeKeyRelayReceiver.class)
+                    .putExtra("eventTime",android.os.SystemClock.uptimeMillis()));
+            return;
+        }
         Log.d(LOG_TAG, "onVolumeDown at " + System.currentTimeMillis());
         mVolumeDownEventDispatcher.dispatchEvent(VOLUME_DOWN_EVENT);
     }
 
     public void addVolumeDownListener(OnVolumeDownListener listener) {
         mVolumeDownEventDispatcher.addListener(listener);
+    }
+
+    public void onRelayedVolumeDown(long eventTime) {
+        if (mKeys.accept(KeyEvent.KEYCODE_VOLUME_DOWN,"accessibility",eventTime)) onVolumeDown();
     }
 
     public boolean removeVolumeDownListener(OnVolumeDownListener listener) {

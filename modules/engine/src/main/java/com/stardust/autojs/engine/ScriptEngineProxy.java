@@ -44,6 +44,9 @@ public class ScriptEngineProxy<S extends ScriptSource> implements ScriptEngine<S
     }
 
     @Override
+    public String getExecutionState() { return mScriptEngine.getExecutionState(); }
+
+    @Override
     public void setTag(String key, Object value) {
         mScriptEngine.setTag(key, value);
     }

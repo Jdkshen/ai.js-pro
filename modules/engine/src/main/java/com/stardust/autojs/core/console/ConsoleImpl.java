@@ -249,7 +249,7 @@ public class ConsoleImpl extends AbstractConsole {
 
     private void startFloatyService() {
         Context context = mUiHandler.getContext();
-        context.startService(new Intent(context, FloatyService.class));
+        context.startService(FloatyService.getServiceIntent(context));
     }
 
     @Override

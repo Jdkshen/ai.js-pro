@@ -132,7 +132,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final String mProjectDir;
     /** 对象句柄：id -> Java 对象（强引用；实例随一次 Node 执行回收）。 */
     private final Map<Integer, Object> mObjects = new ConcurrentHashMap<>();
-    private final Node24ResourceScope mOwnedJavaResources = new Node24ResourceScope();
+    private final com.stardust.autojs.engine.ScriptJavaResources mOwnedJavaResources =
+            new com.stardust.autojs.engine.ScriptJavaResources();
     private final Map<String, Object> mOwnedNotificationKeys = new ConcurrentHashMap<>();
     private final Map<Object, Integer> mObjectIds = new IdentityHashMap<>();
     private int mNextObjectId = 1;
@@ -232,6 +233,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private final java.util.concurrent.atomic.AtomicBoolean mClosed =
             new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile boolean mCallbacksClosing;
+    private volatile boolean mCleanupIncomplete;
     private volatile String mScriptError = "";
     /**
      * 本次 Node job 独占的反射元数据缓存（容量 256 类 + 256 方法候选，close 清空）。
@@ -394,6 +396,11 @@ public final class Node24HostBridge implements Node24Engine.Host {
                         mExitRequestedCode = lifecycleArgs == null ? 0 : lifecycleArgs.optInt("code", 0);
                         mExitRequested = true;
                         return ok(mExitRequestedCode);
+                    }
+                    if ("prepareExit".equals(lifecycleAction)) {
+                        mOwnedJavaResources.detachViews();
+                        com.stardust.autojs.engine.node24.NodeUiLocalSession.closeBeforeCallbackShutdown(mOverlayOwner);
+                        return ok(true);
                     }
                     return error("lifecycle 不支持：" + lifecycleAction);
                 }
@@ -1533,37 +1540,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Object ownNewInstance(JSONObject request) throws Exception {
-        Object value = newInstance(request);
-        if (value instanceof android.media.MediaPlayer) {
-            android.media.MediaPlayer player = (android.media.MediaPlayer) value;
-            mOwnedJavaResources.track(player, () -> {
-                try { player.setOnCompletionListener(null); player.setOnPreparedListener(null); }
-                finally { player.release(); }
-            });
-        } else if (value instanceof android.media.session.MediaSession) {
-            android.media.session.MediaSession session = (android.media.session.MediaSession) value;
-            mOwnedJavaResources.track(session, () -> {
-                try { session.setActive(false); session.setCallback(null); }
-                finally { session.release(); }
-            });
-        }
-        return value;
+        return mOwnedJavaResources.constructed(newInstance(request));
     }
 
     private void observeOwnedResourceCall(Object target, String name, Object[] args) {
-        if (target instanceof Context && args.length > 0
-                && args[0] instanceof android.content.BroadcastReceiver) {
-            android.content.BroadcastReceiver receiver = (android.content.BroadcastReceiver) args[0];
-            if ("registerReceiver".equals(name)) {
-                Context context = (Context) target;
-                mOwnedJavaResources.track(receiver, () -> context.unregisterReceiver(receiver));
-            } else if ("unregisterReceiver".equals(name)) {
-                mOwnedJavaResources.forget(receiver);
-            }
-        } else if ((target instanceof android.media.MediaPlayer
-                || target instanceof android.media.session.MediaSession) && "release".equals(name)) {
-            mOwnedJavaResources.forget(target);
-        } else if (target instanceof android.app.NotificationManager && args.length >= 2
+        mOwnedJavaResources.called(target, name, args);
+        if (target instanceof android.app.NotificationManager && args.length >= 2
                 && args[0] instanceof String && args[1] instanceof Number) {
             // Explicitly scoped tags only: never capture ordinary app/other-script notification IDs.
             String tag = (String) args[0];
@@ -2088,7 +2070,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
     public boolean closeUiOverlay() {
         // task-201：先清 :node24 本地 overlay，再清主进程回退 overlay。
         try { Node24LocalOverlay.closeAll(); } catch (Throwable error) {
-            Log.w(TAG, "close local overlays failed", error);
+            cleanupFailure("local overlays", error);
         }
         // task-164：floating_window 的 overlay 由主进程 NodeUiBridgeService 管理（不在 NodeUiHost.sOverlayView），
         // close op 清不到它；这里显式下发 floatingWindow closeAll，脚本结束/取消/启动前都清干净。
@@ -2099,20 +2081,20 @@ public final class Node24HostBridge implements Node24Engine.Host {
             com.stardust.autojs.engine.node24.NodeUiActivityClient.get()
                     .closeOverlaysIfBound(mOverlayOwner);
         } catch (Throwable error) {
-            Log.w(TAG, "close floating overlays failed", error);
+            cleanupFailure("remote overlays", error);
         }
         // task-218：脚本/第三方工程直接 WindowManager.addView 的 Node View 不在两套 overlay 管理里，
         // 这里反射 WindowManagerGlobal.mViews 清掉 NodeUiCanvasView / tag=node-port-overlay。
         try {
             mLastDirectOverlayCount = Node24DirectOverlayCleanup.closeAllInProcess();
         } catch (Throwable error) {
-            Log.w(TAG, "close direct overlays failed", error);
+            cleanupFailure("direct overlays", error);
         }
         // OverlayRegistry 里可能还有本 owner 的 NODE_UI/NODE_TEXT 等登记项，按 owner 统一关闭。
         try {
             OverlayRegistry.closeByOwner(mOwnerEngineId, "node24_close_ui");
         } catch (Throwable error) {
-            Log.w(TAG, "close registry overlays failed", error);
+            cleanupFailure("overlay registry", error);
         }
         try {
             JSONObject request = new JSONObject().put("kind", "ui").put("op", "close")
@@ -2120,13 +2102,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
             handleUiJson(request);
             return true;
         } catch (Throwable error) {
-            Log.w(TAG, "close UI overlay via handle failed", error);
-        }
-        for (String name : new String[]{"closeOverlayFromEngine", "closeAll", "close"}) {
-            Object value = invokeStaticUiHost(new String[]{name});
-            if (value != null) {
-                return true;
-            }
+            cleanupFailure("scoped UI close", error);
         }
         return false;
     }
@@ -2215,11 +2191,27 @@ public final class Node24HostBridge implements Node24Engine.Host {
     public void beginCallbackShutdown() {
         if (mCallbacksClosing) return;
         try {
-            com.stardust.autojs.engine.node24.NodeUiLocalSession.closeBeforeCallbackShutdown();
+            mOwnedJavaResources.detachViews();
+            if (!mOwnedJavaResources.viewsDetached()) {
+                throw new IllegalStateException("Owned window detachment failed", mOwnedJavaResources.firstFailure());
+            }
+            com.stardust.autojs.engine.node24.NodeUiLocalSession.closeBeforeCallbackShutdown(mOverlayOwner);
         } catch (RuntimeException failure) {
-            Log.w(TAG, "close Node UI before callback shutdown failed", failure);
+            cleanupFailure("close Node UI before callback shutdown", failure);
+            return;
         }
         mCallbacksClosing = true;
+    }
+
+    public boolean requiresProcessRecycle() { return mCleanupIncomplete || mOwnedJavaResources.failureCount() != 0; }
+
+    private void cleanupFailure(String stage, Throwable error) {
+        mCleanupIncomplete = true;
+        Log.w(TAG, "Cleanup incomplete: " + stage, error);
+    }
+
+    private void cleanupStep(String stage, Runnable action) {
+        try { action.run(); } catch (Throwable error) { cleanupFailure(stage, error); }
     }
 
     /**
@@ -2228,23 +2220,24 @@ public final class Node24HostBridge implements Node24Engine.Host {
      */
     public void close() {
         beginCallbackShutdown();
+        if (!mCallbacksClosing) return; // Keep callbacks intact until the unsafe process is retired.
         if (!mClosed.compareAndSet(false, true)) {
             return;
         }
-        mOwnedJavaResources.close();
+        cleanupStep("owned Java resources", mOwnedJavaResources::close);
         mOwnedNotificationKeys.clear();
-        mNoArgCalls.close();
-        com.stardust.autojs.engine.node24.NodeUiActivityClient.get().cleanupOwnerIfBound(mOverlayOwner);
-        mAndroidContext.release();
-        mJavaMembers.close();
+        cleanupStep("no-arg cache", mNoArgCalls::close);
+        cleanupStep("remote UI owner", () -> com.stardust.autojs.engine.node24.NodeUiActivityClient.get().cleanupOwnerIfBound(mOverlayOwner));
+        cleanupStep("resource context", mAndroidContext::release);
+        cleanupStep("Java member cache", mJavaMembers::close);
         synchronized (mFileObservers) {
-            for (android.os.FileObserver observer : mFileObservers.values()) observer.stopWatching();
+            for (android.os.FileObserver observer : mFileObservers.values()) cleanupStep("file observer", observer::stopWatching);
             mFileObservers.clear();
         }
         for (Integer pid : mShellGroups) killShellGroup(pid);
         mShellGroups.clear();
-        mJavaExecutor.shutdownNow();
-        mPluginLoader.unloadAll();
+        cleanupStep("Java executor", () -> mJavaExecutor.shutdownNow());
+        cleanupStep("plugins", mPluginLoader::unloadAll);
         synchronized (mJavaClassLock) {
             Node24GeneratedClasses.remove(mOverlayOwner);
             for (Class<?> generated : mGeneratedClasses.values()) {
@@ -2257,7 +2250,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         try {
             shutdownMediaThread();
         } catch (Throwable error) {
-            Log.w(TAG, "close media thread failed", error);
+            cleanupFailure("close media thread failed", error);
         }
         try {
             if (mAccessibilityEventReceiver != null) {
@@ -2269,39 +2262,39 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 mNotificationEventReceiver = null;
             }
         } catch (Throwable error) {
-            Log.w(TAG, "close task-156 receivers failed", error);
+            cleanupFailure("close task-156 receivers failed", error);
         }
         if (mNotificationListenerReceiver != null) {
             try { mContext.unregisterReceiver(mNotificationListenerReceiver); }
-            catch (Throwable error) { Log.w(TAG, "close notification listener receiver failed", error); }
+            catch (Throwable error) { cleanupFailure("close notification listener receiver failed", error); }
             mNotificationListenerReceiver = null;
         }
         try {
             mEngineBridge.close();
         } catch (Throwable error) {
-            Log.w(TAG, "close engine bridge failed", error);
+            cleanupFailure("close engine bridge failed", error);
         }
         try {
             closeSensorEvents();
         } catch (Throwable error) {
-            Log.w(TAG, "close sensors failed", error);
+            cleanupFailure("close sensors failed", error);
         }
         try {
             mProjection.close();
         } catch (Throwable error) {
-            Log.w(TAG, "close projection failed", error);
+            cleanupFailure("close projection failed", error);
         }
         try {
             mAutomation.close();
         } catch (Throwable error) {
-            Log.w(TAG, "close automation failed", error);
+            cleanupFailure("close automation failed", error);
         }
         try {
             for (OcrSession session : new ArrayList<>(mOcrSessions.values())) {
                 try {
                     session.release();
                 } catch (Throwable error) {
-                    Log.w(TAG, "close OCR session failed", error);
+                    cleanupFailure("close OCR session failed", error);
                 }
             }
         } finally {
@@ -2312,7 +2305,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 try {
                     session.detector.close();
                 } catch (Throwable error) {
-                    Log.w(TAG, "close YOLO detector failed", error);
+                    cleanupFailure("close YOLO detector failed", error);
                 }
             }
         } finally {
@@ -2324,17 +2317,17 @@ public final class Node24HostBridge implements Node24Engine.Host {
                 mYolo = null;
             }
         } catch (Throwable error) {
-            Log.w(TAG, "close YOLO runtime failed", error);
+            cleanupFailure("close YOLO runtime failed", error);
         }
         try {
             mImages.close();
         } catch (Throwable error) {
-            Log.w(TAG, "close images failed", error);
+            cleanupFailure("close images failed", error);
         }
         try {
             mReflectionCache.close();
         } catch (Throwable error) {
-            Log.w(TAG, "close reflection cache failed", error);
+            cleanupFailure("close reflection cache failed", error);
         }
     }
 

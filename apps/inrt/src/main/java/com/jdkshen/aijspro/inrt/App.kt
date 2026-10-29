@@ -35,14 +35,13 @@ class App : Application() {
         InrtTimedTaskScheduler.init(this)
         // 进程归属只解析一次；:script 里的 App 不是按键/广播任务所有者。
         val processName = InrtScriptThreadHost.getProcessName(this)
+        InrtStopRelay.installMainVolumeUpHook(this)
         // task-162：广播 Intent 任务只在主进程注册动态 receiver。
         if (InrtProcessRole.isMain(packageName, processName)) {
             InrtIntentTaskRegistry.init(this)
         }
-        if (InrtProcessRole.isMain(packageName, processName)) {
-            // 主进程持有无障碍键通道；窗口聚焦路径 shared stopAllByVolumeUp() 的 hook 也由此
-            // 中继到实际跑脚本的 :script。:script 内 App 不再注册这些主进程职责。
-            InrtStopRelay.installMainVolumeUpHook(this)
+        if (processName == packageName + ":script") {
+            // Accessibility and scripts share their key observer; stop-all still uses the relay.
             GlobalKeyObserver.init(this)
         } else {
             Log.i(TAG, "skip global key/root observer in process=$processName")

@@ -54,13 +54,8 @@ public class CrashHandler extends CrashReport.CrashHandleCallback implements Unc
             }
             return;
         }
-        AccessibilityService service = AccessibilityService.Companion.getInstance();
-        if (service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            Log.d(TAG, "disable service: " + service);
-            service.disableSelf();
-        } else {
-            BuglyLog.d(TAG, "cannot disable service: " + service);
-        }
+        // Keep the system setting enabled: an isolated runtime crash must not revoke
+        // automation permission. Android can rebind the service after process restart.
         if (BuildConfig.DEBUG) {
             mSystemHandler.uncaughtException(thread, ex);
         } else {

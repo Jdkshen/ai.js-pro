@@ -259,7 +259,6 @@ public class NativeScriptService extends Service {
         } catch (Throwable error) {
             Log.w(TAG, "停止隔离进程内脚本失败", error);
         }
-        ScriptRuntime.suppressExitEvent = false;
         ScriptEngineService.setHeadlessUiMode(false);
         super.onDestroy();
     }
@@ -346,7 +345,6 @@ public class NativeScriptService extends Service {
                 // task-50 C：不再永久 suppress exit —— 那会跳过 nativeShutdown，导致 ImGui/EGL
                 // 上下文跨轮次残留（连续运行/停止 10 次的隐患）。停止路径已先停帧/关窗，
                 // B 任务在引擎侧再保证 exit 清理与帧序列串行，因此允许 exit 正常执行清理。
-                ScriptRuntime.suppressExitEvent = false;
                 execution = engineService.executeUiOnMainThread(
                         new ScriptExecutionTask(source, listener, config));
             } else {

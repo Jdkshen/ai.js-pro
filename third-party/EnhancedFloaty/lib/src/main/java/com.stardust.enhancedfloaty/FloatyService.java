@@ -1,8 +1,11 @@
 package com.stardust.enhancedfloaty;
 
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import androidx.annotation.Nullable;
 import android.view.WindowManager;
 
@@ -14,11 +17,29 @@ import java.util.concurrent.CopyOnWriteArraySet;
 
 public class FloatyService extends Service {
 
+    public interface ComponentResolver { Class<? extends FloatyService> component(Context context); }
+    private static volatile ComponentResolver componentResolver;
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+
+    public static void setComponentResolver(ComponentResolver resolver) { componentResolver = resolver; }
+
+    public static Intent getServiceIntent(Context context) {
+        FloatyService active = instance;
+        if (active != null) return new Intent(context, active.getClass());
+        ComponentResolver resolver = componentResolver;
+        return new Intent(context, resolver == null ? FloatyService.class : resolver.component(context));
+    }
+
     private static CopyOnWriteArraySet<FloatyWindow> windows = new CopyOnWriteArraySet<>();
 
     public static void addWindow(FloatyWindow window) {
         if (windows.add(window) && instance != null) {
-            window.onCreate(instance, instance.mWindowManager);
+            FloatyService owner = instance;
+            Runnable create = () -> {
+                if (instance == owner && windows.contains(window) && !window.isCreated()) owner.createWindow(window);
+            };
+            if (Looper.myLooper() == Looper.getMainLooper()) create.run();
+            else MAIN.post(create);
         }
     }
 
@@ -36,19 +57,29 @@ public class FloatyService extends Service {
         windows.add(window);
     }
 
-    private static FloatyService instance;
+    private static volatile FloatyService instance;
     private WindowManager mWindowManager;
 
     @Override
     public void onCreate() {
         super.onCreate();
         mWindowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        instance = this;
         for (FloatyWindow delegate : windows) {
             if (!delegate.isCreated()) {
-                delegate.onCreate(this, mWindowManager);
+                createWindow(delegate);
             }
         }
-        instance = this;
+    }
+
+    private void createWindow(FloatyWindow window) {
+        try { window.onCreate(this, mWindowManager); }
+        catch (RuntimeException error) {
+            windows.remove(window);
+            android.util.Log.e("FloatyService", "Window creation failed", error);
+            try { window.onServiceDestroy(this); }
+            catch (RuntimeException cleanup) { android.util.Log.w("FloatyService", "Window cleanup failed", cleanup); }
+        }
     }
 
     @Nullable
@@ -61,8 +92,11 @@ public class FloatyService extends Service {
     public void onDestroy() {
         super.onDestroy();
         instance = null;
-        for (FloatyWindow delegate : windows) {
-            delegate.onServiceDestroy(this);
+        java.util.ArrayList<FloatyWindow> closing = new java.util.ArrayList<>(windows);
+        windows.clear();
+        for (FloatyWindow delegate : closing) {
+            try { delegate.onServiceDestroy(this); }
+            catch (RuntimeException error) { android.util.Log.w("FloatyService", "Window cleanup failed", error); }
         }
     }
 }

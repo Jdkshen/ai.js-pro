@@ -62,6 +62,10 @@ class App : MultiDexApplication() {
     override fun onCreate() {
         super.onCreate()
         GlobalAppContext.set(this)
+        com.stardust.autojs.core.floaty.RuntimeFloatyService.installRouting()
+        if (com.stardust.autojs.execution.ScriptProcessIdentity.suffix(this) != ":script") {
+            com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorCaptureService.installRemote(this)
+        }
         instance = WeakReference(this)
         // The inspector renders offline snapshots only: keep engines, OpenCV and main-process
         // crash activities out of this process, so a renderer failure cannot take the host down.
@@ -116,6 +120,11 @@ class App : MultiDexApplication() {
     private fun init() {
         ThemeColorManagerCompat.init(this, ThemeColor(resources.getColor(R.color.colorPrimary), resources.getColor(R.color.colorPrimaryDark), resources.getColor(R.color.colorAccent)))
         AutoJs.initInstance(this)
+        if (com.jdkshen.aijspro.external.HostProcess.isMain(this) && HostScripts.isAvailable()) {
+            AutoJs.getInstance().scriptEngineService.setExecutionTransport { task ->
+                HostScripts.execute(this, task.source, task.listener, task.config)
+            }
+        }
         // 音量上键在脚本窗口（ScriptExecuteActivity / QuickJS overlay）聚焦时的停止入口：
         // 宿主层停 :script/:native 的任务；主进程引擎的 stopAll 由 ScriptEngineService 补。
         // 不依赖无障碍/root 的全局按键监听（HyperOS 上无障碍设置可能被系统重置）。
@@ -126,6 +135,9 @@ class App : MultiDexApplication() {
         // Views in script/Node processes still need the shared asynchronous image loader.
         // Only the main-process lifecycle work below is skipped in child processes.
         setupDrawableImageLoader()
+        if (com.stardust.autojs.execution.ScriptProcessIdentity.suffix(this) == ":script") {
+            GlobalKeyObserver.init()
+        }
         // Phase0 隔离脚本进程（:native）：只需要引擎本身。定时任务调度、动态广播、
         // 示例同步、无障碍监控这些都是主进程职责，在隔离进程里再跑一遍会重复触发。
         if (!com.jdkshen.aijspro.external.HostProcess.isMain(this)) {
@@ -137,7 +149,6 @@ class App : MultiDexApplication() {
         // 悬浮窗：权限还在就自动显示；权限被覆盖安装清掉时，Shizuku 已授权则 appops 自动恢复。
         // 无障碍：Shizuku 已授权时后台自动恢复，否则给非阻塞提示（不伪造绕过系统权限）。
         com.jdkshen.aijspro.tool.StartupPermissionRestore.restoreOnStartup(this)
-        GlobalKeyObserver.init()
         TimedTaskScheduler.init(this)
         initDynamicBroadcastReceivers()
         // 升级后把内置示例对齐到新版本：示例目录是懒拷贝，内容被改过的示例

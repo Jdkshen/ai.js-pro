@@ -29,6 +29,7 @@ public abstract class JavaScriptEngine extends ScriptEngine.AbstractScriptEngine
 
     @Override
     public Object execute(JavaScriptSource scriptSource) {
+        executionLifecycle().running();
         if ((scriptSource.getExecutionMode() & JavaScriptSource.EXECUTION_MODE_AUTO) != 0) {
             getRuntime().ensureAccessibilityServiceEnabled();
         }
@@ -93,21 +94,22 @@ public abstract class JavaScriptEngine extends ScriptEngine.AbstractScriptEngine
         if (!mDestroyStarted.compareAndSet(false, true)) {
             return;
         }
-        ScriptRuntime runtime = mRuntime;
-        if (runtime == null) {
-            Log.w(TAG, "destroy before setRuntime: " + this);
+        executionLifecycle().releasingResources();
+        try {
+            ScriptRuntime runtime = mRuntime;
+            if (runtime == null) {
+                Log.w(TAG, "destroy before setRuntime: " + this);
+                return;
+            }
+            awaitScriptThreadIfNeeded(SCRIPT_LOOPER_IDLE_TIMEOUT_MS);
+            boolean idle = runtime.awaitScriptLooperIdle(SCRIPT_LOOPER_IDLE_TIMEOUT_MS);
+            if (!idle) {
+                Log.w(TAG, "script looper not idle after " + SCRIPT_LOOPER_IDLE_TIMEOUT_MS + "ms, destroy anyway");
+            }
+            runtime.onExit();
+        } finally {
             super.destroy();
-            return;
         }
-        awaitScriptThreadIfNeeded(SCRIPT_LOOPER_IDLE_TIMEOUT_MS);
-        boolean idle = runtime.awaitScriptLooperIdle(SCRIPT_LOOPER_IDLE_TIMEOUT_MS);
-        if (!idle) {
-            Log.w(TAG, "script looper not idle after " + SCRIPT_LOOPER_IDLE_TIMEOUT_MS + "ms, destroy anyway");
-        }
-        // onExit 内部会把 events.emit("exit") 投递回脚本 Looper 串行执行并等待（有超时/回退），
-        // 保证 exit 监听里的 nativeShutdown 不会插进渲染帧中间。
-        runtime.onExit();
-        super.destroy();
     }
 
     /**

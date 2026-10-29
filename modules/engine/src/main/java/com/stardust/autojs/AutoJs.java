@@ -52,12 +52,13 @@ public abstract class AutoJs {
     private final UiHandler mUiHandler;
     private final AppUtils mAppUtils;
     private final ActivityInfoProvider mActivityInfoProvider;
-    private final ScreenCaptureRequester mScreenCaptureRequester = new ScreenCaptureRequesterImpl();
     private final ScriptEngineService mScriptEngineService;
     private final GlobalConsole mGlobalConsole;
 
 
     protected AutoJs(final Application application) {
+        com.stardust.autojs.core.floaty.RuntimeFloatyService.installRouting();
+        com.stardust.autojs.runtime.api.remote.ScriptAutomationBootstrap.install(application);
         mContext = application.getApplicationContext();
         mApplication = application;
         mLayoutInspector = new LayoutInspector(mContext);
@@ -135,7 +136,7 @@ public abstract class AutoJs {
     protected ScriptRuntime createRuntime() {
         return new ScriptRuntime.Builder()
                 .setConsole(new ConsoleImpl(mUiHandler, mGlobalConsole))
-                .setScreenCaptureRequester(mScreenCaptureRequester)
+                .setScreenCaptureRequester(new ScreenCaptureRequesterImpl())
                 .setAccessibilityBridge(new AccessibilityBridgeImpl(mUiHandler))
                 .setUiHandler(mUiHandler)
                 .setAppUtils(mAppUtils)
@@ -268,15 +269,8 @@ public abstract class AutoJs {
         @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
         @Override
         public void request() {
-            Activity activity = mAppUtils.getCurrentActivity();
-            if (activity instanceof OnActivityResultDelegate.DelegateHost) {
-                ScreenCaptureRequester requester = new ActivityScreenCaptureRequester(
-                        ((OnActivityResultDelegate.DelegateHost) activity).getOnActivityResultDelegateMediator(), activity);
-                requester.setOnActivityResultCallback(mCallback);
-                requester.request();
-            } else {
-                ScreenCaptureRequestActivity.request(mContext, mCallback);
-            }
+            Callback result = callbackForRequest();
+            ScreenCaptureRequestActivity.request(mContext, result);
         }
     }
 }

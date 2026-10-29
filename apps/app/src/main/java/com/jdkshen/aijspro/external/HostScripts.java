@@ -73,6 +73,25 @@ public final class HostScripts {
         }
     }
 
+    public static com.stardust.autojs.execution.ScriptExecution execute(Context context,
+            com.stardust.autojs.script.ScriptSource source,
+            com.stardust.autojs.execution.ScriptExecutionListener listener,
+            com.stardust.autojs.execution.ExecutionConfig config) {
+        try {
+            Class<?> host=Class.forName(POC_SCRIPT_HOST_CLASS);
+            return (com.stardust.autojs.execution.ScriptExecution)host.getMethod("execute",Context.class,
+                    com.stardust.autojs.script.ScriptSource.class,
+                    com.stardust.autojs.execution.ScriptExecutionListener.class,
+                    com.stardust.autojs.execution.ExecutionConfig.class).invoke(null,context,source,listener,config);
+        } catch (java.lang.reflect.InvocationTargetException error) {
+            Throwable cause=error.getCause();
+            if (cause instanceof RuntimeException) throw (RuntimeException)cause;
+            throw new IllegalStateException("隔离执行请求失败",cause);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalStateException("当前构建缺少隔离执行宿主",error);
+        }
+    }
+
     /**
      * 用与 Flutter 页「运行」完全相同的路由执行一个脚本文件。
      *

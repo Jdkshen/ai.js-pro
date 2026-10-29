@@ -66,6 +66,10 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
     }
 
     private final Context mContext;
+    private static final java.util.concurrent.Executor CONNECTION_EXECUTOR =
+            java.util.concurrent.Executors.newSingleThreadExecutor(operation -> {
+                Thread thread=new Thread(operation,"automation-binding"); thread.setDaemon(true); return thread;
+            });
     private final Object mLock = new Object();
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
@@ -116,7 +120,7 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
     private boolean mBound;
 
     // ---- task-163：主进程 -> :script 无障碍事件回调 ----
-    private RemoteAutomationBridge.AccessibilityEventListener mAccessibilityEventListener;
+    private final java.util.concurrent.CopyOnWriteArraySet<RemoteAutomationBridge.AccessibilityEventListener> mAccessibilityEventListeners = new java.util.concurrent.CopyOnWriteArraySet<>();
     private IAutomationHostCallback.Stub mAccessibilityCallback;
 
     private AutomationHostClient(Context context) {
@@ -132,6 +136,11 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
      */
     public boolean connect() {
         synchronized (mLock) {
+            if (":script".equals(com.stardust.autojs.execution.ScriptProcessIdentity.suffix(mContext))) {
+                mService=com.jdkshen.aijspro.automation.AutomationHostService.localBackend(mContext);
+                mBinder=mService.asBinder();
+                return true;
+            }
             if (mService != null) {
                 return true;
             }
@@ -144,7 +153,11 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
             intent.setComponent(new ComponentName(mContext.getPackageName(), SERVICE_CLASS));
             boolean bound;
             try {
-                bound = mContext.bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    bound = mContext.bindService(intent, Context.BIND_AUTO_CREATE, CONNECTION_EXECUTOR, mConnection);
+                } else {
+                    bound = mContext.bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+                }
             } catch (Throwable error) {
                 Log.w(TAG, "bindService failed: " + SERVICE_CLASS, error);
                 bound = false;
@@ -197,7 +210,7 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
                     Log.w(TAG, "unregister accessibility listener failed", error);
                 }
             }
-            mAccessibilityEventListener = null;
+            mAccessibilityEventListeners.clear();
             mAccessibilityCallback = null;
             if (mBinder != null) {
                 try {
@@ -488,38 +501,28 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
         try {
             IAutomationHost service = requireService();
             synchronized (mLock) {
-                mAccessibilityEventListener = listener;
+                mAccessibilityEventListeners.add(listener);
                 if (mAccessibilityCallback == null) {
                     mAccessibilityCallback = new IAutomationHostCallback.Stub() {
                         @Override
                         public void onAccessibilityEvent(String eventJson) {
-                            RemoteAutomationBridge.AccessibilityEventListener target;
-                            synchronized (mLock) {
-                                target = mAccessibilityEventListener;
-                            }
-                            if (target == null) {
-                                return;
-                            }
+                            for (RemoteAutomationBridge.AccessibilityEventListener target : mAccessibilityEventListeners) {
                             try {
                                 target.onAccessibilityEvent(eventJson);
                             } catch (Throwable error) {
                                 Log.w(TAG, "forward accessibility event failed", error);
                             }
+                            }
                         }
 
                         @Override
                         public void onServiceStateChanged(boolean ready) {
-                            RemoteAutomationBridge.AccessibilityEventListener target;
-                            synchronized (mLock) {
-                                target = mAccessibilityEventListener;
-                            }
-                            if (target == null) {
-                                return;
-                            }
+                            for (RemoteAutomationBridge.AccessibilityEventListener target : mAccessibilityEventListeners) {
                             try {
                                 target.onServiceStateChanged(ready);
                             } catch (Throwable error) {
                                 Log.w(TAG, "forward service state failed", error);
+                            }
                             }
                         }
                     };
@@ -540,7 +543,8 @@ public final class AutomationHostClient implements RemoteAutomationBridge.Backen
         IAutomationHost service;
         IAutomationHostCallback.Stub callback;
         synchronized (mLock) {
-            mAccessibilityEventListener = null;
+            mAccessibilityEventListeners.remove(listener);
+            if (!mAccessibilityEventListeners.isEmpty()) return;
             callback = mAccessibilityCallback;
             mAccessibilityCallback = null;
             service = mService;

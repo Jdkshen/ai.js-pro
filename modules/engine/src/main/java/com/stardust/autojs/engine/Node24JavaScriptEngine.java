@@ -283,6 +283,7 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
 
     @Override
     public void forceStop() {
+        executionLifecycle().requestStop();
         // task-218/4.3.5：主进程只 cancel 本次 evaluate；:node24 的 View 清理在
         // Node24HostBridge.closeUiOverlay()（direct cleanup + OverlayRegistry）里完成。
         mStopRequested = true;

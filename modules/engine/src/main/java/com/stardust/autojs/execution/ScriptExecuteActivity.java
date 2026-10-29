@@ -55,7 +55,13 @@ public class ScriptExecuteActivity extends AppCompatActivity {
 
     public static ActivityScriptExecution execute(Context context, ScriptEngineManager manager, ScriptExecutionTask task) {
         ActivityScriptExecution execution = new ActivityScriptExecution(manager, task);
-        Intent i = new Intent(context, ScriptExecuteActivity.class)
+        String process = ScriptProcessIdentity.suffix(context);
+        Class<? extends ScriptExecuteActivity> activityClass;
+        if (":script".equals(process)) activityClass = ScriptExecuteActivity.class;
+        else if (":native".equals(process)) activityClass = NativeScriptExecuteActivity.class;
+        else if (process.isEmpty()) activityClass = MainScriptExecuteActivity.class;
+        else throw new IllegalStateException("UI execution must be dispatched to :script from " + process);
+        Intent i = new Intent(context, activityClass)
                 .putExtra(EXTRA_EXECUTION_ID, execution.getId())
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .addFlags(task.getConfig().getIntentFlags());

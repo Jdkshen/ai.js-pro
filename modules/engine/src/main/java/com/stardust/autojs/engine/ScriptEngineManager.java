@@ -76,13 +76,21 @@ public class ScriptEngineManager {
     }
 
     public int stopAll() {
+        ScriptEngine[] snapshot;
         synchronized (mEngines) {
-            int n = mEngines.size();
-            for (ScriptEngine engine : mEngines) {
-                engine.forceStop();
-            }
-            return n;
+            snapshot = mEngines.toArray(new ScriptEngine[0]);
         }
+        // Runtime stop may synchronously unregister an engine or perform IPC.
+        RuntimeException firstFailure = null;
+        for (ScriptEngine engine : snapshot) {
+            try { engine.forceStop(); }
+            catch (RuntimeException failure) {
+                if (firstFailure == null) firstFailure = failure;
+                else if (firstFailure != failure) firstFailure.addSuppressed(failure);
+            }
+        }
+        if (firstFailure != null) throw firstFailure;
+        return snapshot.length;
     }
 
 

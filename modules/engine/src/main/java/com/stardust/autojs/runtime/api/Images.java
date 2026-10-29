@@ -132,10 +132,6 @@ public class Images {
      */
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ScriptPromiseAdapter requestScreenCapture(int orientation, int width, int height, boolean async) {
-        if (RemoteAutomationBridge.isActive()) {
-            throw new ScriptException("隔离进程暂不支持投屏截图（requestScreenCapture）；"
-                    + "请改用无障碍截图 images.captureScreen() / automator.takeScreenshot()");
-        }
         ScriptRuntime.requiresApi(21);
         if (mSharedCapture != null) releaseScreenCapturer();
         mScreenCaptureOrientation = orientation;
@@ -161,6 +157,7 @@ public class Images {
             mPreCaptureImage = null;
         }
         mScreenCaptureRequester.setOnActivityResultCallback((result, data) -> {
+            synchronized (Images.this) {
             if (generation != mCaptureGeneration) {
                 promiseAdapter.resolve(false);
                 return;
@@ -176,6 +173,7 @@ public class Images {
                 }
             } else {
                 promiseAdapter.resolve(false);
+            }
             }
         });
         mScreenCaptureRequester.request();
@@ -562,7 +560,7 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized Image captureScreenRaw(boolean fresh, long timeoutMillis) {
-        if (RemoteAutomationBridge.isActive()) {
+        if (RemoteAutomationBridge.isActive() && mScreenCapturer == null) {
             throw new ScriptException("隔离进程暂不支持 captureScreenRaw()（需要本地投屏帧）；"
                     + "请改用 images.captureScreen()");
         }
@@ -576,7 +574,7 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen() {
-        if (RemoteAutomationBridge.isActive()) {
+        if (RemoteAutomationBridge.isActive() && mScreenCapturer == null && mSharedCapture == null) {
             return captureScreenRemote();
         }
         return captureScreen(false, mAccessibilityCapture || mAutoCapturePolicy != null || mSharedCapture != null
@@ -585,7 +583,7 @@ public class Images {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized ImageWrapper captureScreen(boolean fresh, long timeoutMillis) {
-        if (RemoteAutomationBridge.isActive()) {
+        if (RemoteAutomationBridge.isActive() && mScreenCapturer == null && mSharedCapture == null) {
             return captureScreenRemote();
         }
         ScriptRuntime.requiresApi(21);
@@ -813,6 +811,7 @@ public class Images {
 
     public synchronized void releaseScreenCapturer() {
         ++mCaptureGeneration;
+        mScreenCaptureRequester.cancel();
         mAutoCapturePolicy = null;
         mRecordingMonitor = null;
         mPendingProjectionConsent = null;

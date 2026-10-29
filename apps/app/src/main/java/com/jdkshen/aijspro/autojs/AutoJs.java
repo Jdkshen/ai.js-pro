@@ -127,7 +127,7 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
     }
 
     public void ensureAccessibilityServiceEnabled() {
-        if (AccessibilityService.Companion.getInstance() != null) {
+        if (com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(GlobalAppContext.get())) {
             return;
         }
         String errorMessage = null;
@@ -150,7 +150,7 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
 
     @Override
     public void waitForAccessibilityServiceEnabled() {
-        if (AccessibilityService.Companion.getInstance() != null) {
+        if (com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(GlobalAppContext.get())) {
             return;
         }
         String errorMessage = null;
@@ -167,7 +167,7 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
         }
         if (errorMessage != null) {
             AccessibilityServiceTool.goToAccessibilitySetting();
-            if (!AccessibilityService.Companion.waitForEnabled(-1)) {
+            if (!com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),-1)) {
                 throw new ScriptInterruptedException();
             }
         }

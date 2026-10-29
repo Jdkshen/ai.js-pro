@@ -120,6 +120,7 @@ public final class UnifiedConsoleLogBridge {
 
     /** 确保主进程日志已接入统一环（幂等；不可用时什么都不做）。 */
     public static void ensureMainTap() {
+        if (!isMainProcess()) { ConsoleLogService.Remote.get().start(); return; }
         resolve();
         if (sEnsureMethod != null) {
             try {
@@ -132,6 +133,7 @@ public final class UnifiedConsoleLogBridge {
 
     /** 最近 maxLines 行的统一快照（时间顺序；不可用返回空）。 */
     public static List<Line> snapshot(int maxLines) {
+        if (!isMainProcess()) return ConsoleLogService.Remote.get().snapshot(maxLines);
         List<Line> result = new ArrayList<>();
         resolve();
         if (sSnapshotMethod == null) {
@@ -160,6 +162,7 @@ public final class UnifiedConsoleLogBridge {
             return;
         }
         USER_LISTENERS.addIfAbsent(listener);
+        if (!isMainProcess()) { ConsoleLogService.Remote.get().start(); return; }
         ensureSinkProxy();
     }
 
@@ -167,6 +170,7 @@ public final class UnifiedConsoleLogBridge {
     public static void removeListener(Listener listener) {
         if (listener != null) {
             USER_LISTENERS.remove(listener);
+            if (USER_LISTENERS.isEmpty() && !isMainProcess()) ConsoleLogService.Remote.get().stop();
         }
     }
 
@@ -223,6 +227,7 @@ public final class UnifiedConsoleLogBridge {
 
     /** 清空统一环（不影响 GlobalConsole 已显示内容）。 */
     public static void clear() {
+        if (!isMainProcess()) { ConsoleLogService.Remote.get().clear(); return; }
         resolve();
         if (sClearMethod != null) {
             try {
@@ -230,6 +235,20 @@ public final class UnifiedConsoleLogBridge {
             } catch (Throwable error) {
                 Log.w(TAG, "clear failed", error);
             }
+        }
+    }
+
+    static void remoteLine(Line line) {
+        for (Listener listener : USER_LISTENERS) {
+            try { listener.onLine(line); }
+            catch (Throwable error) { Log.w(TAG, "remote line listener failed", error); }
+        }
+    }
+
+    static void remoteClear(long generation) {
+        for (Listener listener : USER_LISTENERS) {
+            try { listener.onClear(generation); }
+            catch (Throwable error) { Log.w(TAG, "remote clear listener failed", error); }
         }
     }
 

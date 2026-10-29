@@ -50,6 +50,7 @@ public final class NodeUiLocalSession {
     private static volatile boolean backHandled;
     private NodeUiLocalSession() {}
     private static final class Pending {
+        String owner;
         String javaClassOwner;
         final CountDownLatch ready = new CountDownLatch(1);
         final String token = java.util.UUID.randomUUID().toString();
@@ -74,6 +75,7 @@ public final class NodeUiLocalSession {
     public static JSONObject show(Context context, String projectDir, JSONObject request) throws Exception {
         setApplicationContext(context);
         Pending opening = new Pending();
+        opening.owner = request == null ? "" : request.optString("owner", "");
         opening.javaClassOwner = request == null ? "" : request.optString("javaClassOwner", "");
         opening.backHandled = request != null && request.optBoolean("backHandled", false);
         synchronized (STATE) {
@@ -767,6 +769,9 @@ public final class NodeUiLocalSession {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("等待 Node UI " + label + " 被中断");
+        } finally {
+            if (!future.isDone()) future.cancel(false);
+            MAIN.removeCallbacks(future);
         }
     }
     public static void close() {
@@ -780,6 +785,19 @@ public final class NodeUiLocalSession {
      */
     public static void closeBeforeCallbackShutdown() {
         runOnMainAndWait(() -> closeOpening(null), 2_000L, "callback shutdown");
+    }
+
+    public static void closeBeforeCallbackShutdown(String owner) {
+        // Always enqueue the barrier, even if pending was already cleared by an
+        // earlier close: its adapter/view detachment may still be running on main.
+        runOnMainAndWait(() -> {
+            Pending expected;
+            synchronized (STATE) {
+                expected = pending;
+                if (expected == null || owner == null || !owner.equals(expected.owner)) return;
+            }
+            closeOpening(expected);
+        }, 2_000L, "owner callback shutdown");
     }
 
     private static void detachNativeAdapters(View root) {
