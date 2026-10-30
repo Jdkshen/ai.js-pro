@@ -222,6 +222,10 @@ ui.Widget.register('demo-counter', Counter);
 
 回调同步参与 Android 布局创建，避免在其中做长时间网络或计算。界面重建会重新创建 Widget，旧 Widget/旧 View 不应继续更新。旧宿主没有原生工厂时保留 XML 展开兼容路径，该旧路径不提供真实阶段；当前包与内置独立打包模板使用原生工厂。高级版全部 UI/API、外部打包插件模板、构造时 style/theme 的所有组合仍需继续验证。
 
+注册名可以覆盖 `button`、`grid`、`row` 等内置简称，实例创建时优先查询 Widget；大小写按注册名统一处理。注册只影响之后创建的控件，不改写已有 View。父 Widget 的 render 中注册外部子标签，以及先设置列表模板、后注册其中的 Widget，均在实际创建/绑定时判断。原始属性（包括 size 等别名、自定义空字符串和 XML 实体）会保留给实例。
+
+覆盖内置简称后，render 应返回完整原生类名或直接创建原生 View，例如 `return '<android.widget.Button/>'`。若返回自己覆盖的 `<button/>` 会递归；嵌套超过 32 层报错。未注册控件继续走原生转换，原生属性转换错误不会被静默当作 Widget 成功。
+
 ## 10. 与旧接口的关系
 
 Node 的 `ui.Activity` 与 Rhino/QuickJS 的传统 `ui.layout` 实现不同。Node 原生界面通常位于当前脚本的 `:node24_1..3` 槽；旧版 Node 兼容界面、对话框和回退浮窗在 `:nodeui`。主应用仍承担权限、设置和定时任务等协调职责。

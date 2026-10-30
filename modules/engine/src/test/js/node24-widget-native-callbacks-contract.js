@@ -24,12 +24,6 @@ class Native extends ui.Widget {
 ui.Widget.register('native-probe', Native);
 ui.inflate('<text/>'); // installs the native callback protocol, not XML macro expansion
 assert(tags.includes('native-probe'));
-const protectedXml = factory.prepareXml('<native-probe size="large" caption="&quot;A&amp;B&#x4e2d;&#25991;&quot;"/>');
-const encoded = /__aijsWidgetAttrs="([^"]+)"/.exec(protectedXml)[1];
-const decoded = JSON.parse(encoded.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&amp;/g, '&'));
-assert.strictEqual(decoded.size, 'large', 'custom aliases retain their original names and values');
-assert.strictEqual(decoded.caption, '"A&B中文"', 'XML entities decode exactly once');
-assert.throws(() => factory.prepareXml('<native-probe size=broken/>'), /属性格式/);
 assert.strictEqual(factory.render(1, 'native-probe', nativeContext, parent), root);
 assert.deepStrictEqual(order, ['created', 'render'], 'initialAttributes must wait for a real View');
 factory.rootViewCreated(1, root);

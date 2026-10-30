@@ -1076,8 +1076,8 @@ public final class NodeUiHost {
             throw new IllegalArgumentException("attachToParent=true 需要非空 parent");
         }
         NodeWebView.prepareProcess(themed.getApplicationContext());
-        String normalized = normalizeInlineLayoutXml(xml);
         DynamicLayoutInflater inflater = newInlineLayoutInflater(themed);
+        String normalized = inflater instanceof NodeUiWidgetInflater ? xml : normalizeInlineLayoutXml(xml);
         if (loader != null) inflater.setClassLoader(loader);
         // 没有 parent 时 root 的 layout_width/layout_height/layout_margin 也需要一个 LP 宿主；
         // 用一个不挂窗口的临时 FrameLayout 生成 LP（attachToParent 必须为 false），
@@ -1134,18 +1134,24 @@ public final class NodeUiHost {
      * （NodeUiGridView/NodeUiListView/NodeUiCanvasView），不再用 Text 占位。
      */
     static String normalizeInlineLayoutXml(String xml) {
-        String normalized = renameInlineTag(xml, "column", "vertical");
-        normalized = renameInlineTag(normalized, "row", "horizontal");
-        // Node UI 的 <webview> 必须是带 Node 桥的真实 WebView；先换成完整类名，避免
-        // 默认 JsWebView 先注入一套依赖 ScriptRuntime 的页面 SDK。
-        normalized = renameInlineTag(normalized, "webview", NodeWebView.class.getName());
-        // <switch> 在 Java 里是关键字大小写敏感问题（android.widget.switch 不存在）；
-        // XmlConverter 已统一映射到 SwitchCompat，这里再显式一次，保证 Node inline 路径不依赖它。
-        normalized = renameInlineTag(normalized, "switch", "androidx.appcompat.widget.SwitchCompat");
-        normalized = renameInlineTag(normalized, "grid", NodeUiGridView.class.getName());
-        normalized = renameInlineTag(normalized, "list", NodeUiListView.class.getName());
-        normalized = renameInlineTag(normalized, "canvas", NodeUiCanvasView.class.getName());
+        String normalized = xml;
+        for (String tag : new String[]{"column", "row", "webview", "switch", "grid", "list", "canvas"})
+            normalized = renameInlineTag(normalized, tag, normalizeInlineTagName(tag));
         return normalized;
+    }
+
+    static String normalizeInlineTagName(String tag) {
+        switch (tag.toLowerCase(java.util.Locale.ROOT)) {
+            case "column": return "vertical";
+            case "row": return "horizontal";
+            case "webview": return NodeWebView.class.getName();
+            case "switch": return "androidx.appcompat.widget.SwitchCompat";
+            case "grid": return NodeUiGridView.class.getName();
+            case "list": return NodeUiListView.class.getName();
+            case "canvas": return NodeUiCanvasView.class.getName();
+            case "materialcard": return "com.google.android.material.card.MaterialCardView";
+            default: return tag;
+        }
     }
 
     /**
@@ -1168,7 +1174,7 @@ public final class NodeUiHost {
         if (context.getClassLoader() != null) {
             inflater.setClassLoader(context.getClassLoader());
         }
-        return inflater.inflate(xml, parent, false);
+        return inflater.inflate(inflater instanceof NodeUiWidgetInflater ? xml : normalizeItemTemplateXml(xml), parent, false);
     }
 
     private static String renameInlineTag(String xml, String from, String to) {

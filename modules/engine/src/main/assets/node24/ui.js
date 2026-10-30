@@ -1189,36 +1189,6 @@
             return aliases[name] || name;
         }
         const nativeWidgetCallbacks = {
-            prepareXml: function (xml) {
-                xml = String(xml);
-                const lower = xml.toLowerCase();
-                if (!Object.keys(widgetRegistry).some(name => lower.includes('<' + name))) return xml;
-                const edits = [], queue = xmlElements(xml).slice();
-                while (queue.length) {
-                    const node = queue.shift(); queue.push.apply(queue, node.children);
-                    if (!widgetRegistry[normalizeWidgetTag(node.tag)]) continue;
-                    if (node.attrs.replace(/([A-Za-z_][A-Za-z0-9_:.-]*)\s*=\s*("[^"]*"|'[^']*')/g, '').trim()) {
-                        throw new Error('Widget XML 属性格式不正确：' + node.tag);
-                    }
-                    const raw = parseXmlAttributes(node.attrs), attrs = {}, namespaces = [];
-                    Object.keys(raw).forEach(function (name) {
-                        const value = raw[name].replace(/&(?:amp|quot|apos|lt|gt|#x[0-9a-fA-F]+|#[0-9]+);/g, function (entity) {
-                            const named = {'&amp;': '&', '&quot;': '"', '&apos;': "'", '&lt;': '<', '&gt;': '>'};
-                            if (Object.prototype.hasOwnProperty.call(named, entity)) return named[entity];
-                            return String.fromCodePoint(parseInt(entity.slice(entity[2] === 'x' ? 3 : 2, -1), entity[2] === 'x' ? 16 : 10));
-                        });
-                        if (name === 'xmlns' || name.startsWith('xmlns:')) namespaces.push(name + '="' + xmlEscape(value) + '"');
-                        else attrs[name] = value;
-                    });
-                    const open = '<' + node.tag + ' ' + namespaces.join(' ') + ' __aijsWidgetAttrs="'
-                        + xmlEscape(JSON.stringify(attrs)) + '"' + (node.selfClosing ? '/>' : '>');
-                    edits.push({start: node.start, end: node.openEnd, value: open});
-                }
-                edits.sort((a, b) => b.start - a.start).forEach(function (edit) {
-                    xml = xml.slice(0, edit.start) + edit.value + xml.slice(edit.end);
-                });
-                return xml;
-            },
             render: function (token, name, context, parent) {
                 const widget = Widget.create(name);
                 if (!widget) throw new Error('Widget not registered: ' + name);

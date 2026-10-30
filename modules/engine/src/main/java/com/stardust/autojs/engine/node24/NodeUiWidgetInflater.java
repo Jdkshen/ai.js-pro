@@ -9,6 +9,7 @@ import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.inflater.InflateContext;
 import com.stardust.autojs.core.ui.inflater.LayoutInflaterDelegate;
 import com.stardust.autojs.core.ui.inflater.ResourceParser;
+import com.stardust.autojs.core.ui.inflater.ShouldCallOnFinishInflate;
 import com.stardust.autojs.core.ui.inflater.ViewInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.ViewGroupInflater;
 import com.stardust.autojs.core.ui.inflater.util.Ids;
@@ -34,7 +35,6 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
     private static final ThreadLocal<Context> CURRENT_CONTEXT = new ThreadLocal<>();
     static Context currentContext() { return CURRENT_CONTEXT.get(); }
     public interface Callbacks {
-        String prepareXml(String xml);
         Object render(long token, String name, Context context, ViewGroup parent);
         void rootViewCreated(long token, View view);
         String contentSlot(long token);
@@ -75,6 +75,7 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
         boolean waitingRoot = true;
     }
     private final Registration registration;
+    private final NodeUiXmlSource source = new NodeUiXmlSource();
     private final ArrayDeque<Frame> frames = new ArrayDeque<>();
     private final IdentityHashMap<View, Frame> roots = new IdentityHashMap<>();
     private ViewGroup syntheticParent;
@@ -88,12 +89,31 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
 
     @Override protected String convertXml(InflateContext context, String xml) {
         registration.checkOpen();
-        // Preserve a custom tag's source attributes until its instance exists;
-        // XML aliases such as size/w/id must not rename custom attr$ setters.
-        return super.convertXml(context, registration.callbacks.prepareXml(xml));
+        try { return source.convert(xml, registration::supports, NodeUiHost::normalizeInlineTagName); }
+        catch (Exception error) { throw new InflateException(error); }
+    }
+
+    @Override public View inflate(InflateContext context, Node node, ViewGroup parent, boolean attach) {
+        registration.checkOpen();
+        NodeUiXmlSource.Input input = source.take(node);
+        String tag = input == null ? node.getNodeName() : input.tag;
+        boolean widget = registration.supports(tag);
+        if (!frames.isEmpty() && frames.peek().waitingRoot && frames.peek().rootNode == null) {
+            frames.peek().rootNode = node;
+            frames.peek().internal = widget ? originalAttributes(node) : getAttributesMap(node);
+        }
+        if (widget) {
+            View view = inflateWidget(context, node, parent, attach, tag);
+            if (view instanceof ShouldCallOnFinishInflate) ((ShouldCallOnFinishInflate) view).onFinishDynamicInflate();
+            return view;
+        }
+        if (input != null && input.conversionError != null) throw new InflateException(input.conversionError);
+        return super.inflate(context, node, parent, attach);
     }
 
     private HashMap<String, String> originalAttributes(Node node) {
+        NodeUiXmlSource.Input input = source.take(node);
+        if (input != null) return new HashMap<>(input.attributes);
         HashMap<String, String> attrs = getAttributesMap(node);
         String encoded = attrs.get("android:__aijsWidgetAttrs");
         if (encoded == null) return attrs;
@@ -121,7 +141,8 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
             if (colon > 0) {
                 String prefix = key.substring(0, colon);
                 if (prefixes.add(prefix)) {
-                    String uri = node.lookupNamespaceURI(prefix);
+                    String uri = original.get("xmlns:" + prefix);
+                    if (uri == null) uri = node.lookupNamespaceURI(prefix);
                     if (uri == null && prefix.equals("app")) uri = "http://schemas.android.com/apk/res-auto";
                     if (uri == null) throw new InflateException("Unbound Widget attribute prefix: " + prefix);
                     xml.append(" xmlns:").append(prefix).append("=\"").append(XmlConverter.escapeAttribute(uri)).append('"');
@@ -140,7 +161,7 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
     @Override public View inflate(InflateContext context, String xml, ViewGroup parent, boolean attach) {
         Context previous = CURRENT_CONTEXT.get();
         CURRENT_CONTEXT.set(getContext());
-        try { return super.inflate(context, NodeUiHost.normalizeInlineLayoutXml(xml), parent, attach); }
+        try { return super.inflate(context, xml, parent, attach); }
         finally { if (previous == null) CURRENT_CONTEXT.remove(); else CURRENT_CONTEXT.set(previous); }
     }
 
@@ -157,7 +178,7 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
         if (!frames.isEmpty() && frames.peek().root == view) roots.put(view, frames.peek());
     }
 
-    private View inflateWidget(InflateContext context, Node node, ViewGroup parent, boolean attach) {
+    private View inflateWidget(InflateContext context, Node node, ViewGroup parent, boolean attach, String tag) {
         registration.checkOpen();
         if (frames.size() >= 32) throw new InflateException("Widget nesting exceeds 32 levels");
         Frame frame = new Frame();
@@ -166,7 +187,7 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
         boolean success = false;
         try {
             HashMap<String, String> original = originalAttributes(node);
-            Object rendered = registration.callbacks.render(frame.token, node.getNodeName(), getContext(),
+            Object rendered = registration.callbacks.render(frame.token, tag, getContext(),
                     parent == syntheticParent ? null : parent);
             registration.checkOpen();
             View root;
@@ -238,14 +259,6 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
     }
 
     private final class Delegate extends LayoutInflaterDelegate.NoOp {
-        @Override public View beforeInflateView(InflateContext context, Node node, ViewGroup parent, boolean attach) {
-            registration.checkOpen();
-            if (!frames.isEmpty() && frames.peek().waitingRoot && frames.peek().rootNode == null) {
-                frames.peek().rootNode = node;
-                frames.peek().internal = originalAttributes(node);
-            }
-            return registration.supports(node.getNodeName()) ? inflateWidget(context, node, parent, attach) : null;
-        }
         @Override public View afterCreateView(InflateContext context, View view, Node node, String name,
                                               ViewGroup parent, HashMap<String, String> attrs) {
             bindPendingRoots(view);

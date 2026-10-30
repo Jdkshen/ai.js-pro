@@ -117,7 +117,9 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
 
     /** 真实 Java 入口；ui.js 若已拿到属性 hook 会改用 nativeSetItemTemplate。 */
     public void setItemTemplate(String xml) {
-        final String normalized = NodeUiHost.normalizeItemTemplateXml(xml);
+        // Keep source names until bind: a script can register a Widget after
+        // setting the template, and row/switch/etc may be custom components.
+        final String normalized = xml == null ? "" : xml;
         runOnMain(() -> {
             itemTemplate = normalized;
             if (adapter != null) adapter.notifyDataSetChanged();

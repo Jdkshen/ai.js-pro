@@ -120,12 +120,28 @@ public class XmlConverter {
     }
 
     public static String convertToAndroidLayout(InputSource source) throws ParserConfigurationException, IOException, SAXException {
+        return convertToAndroidLayout(source, null);
+    }
+
+    /** Optional per-inflation adapter; the shared converter keeps no adapter state. */
+    public interface NodeAdapter {
+        Node prepare(Node source);
+        default Node onFailure(Node source, RuntimeException error) { throw error; }
+    }
+
+    public static String convertToAndroidLayout(String xml, NodeAdapter adapter)
+            throws ParserConfigurationException, IOException, SAXException {
+        return convertToAndroidLayout(new InputSource(new StringReader(xml)), adapter);
+    }
+
+    private static String convertToAndroidLayout(InputSource source, NodeAdapter adapter)
+            throws ParserConfigurationException, IOException, SAXException {
         StringBuilder layoutXml = new StringBuilder();
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         DocumentBuilder builder = factory.newDocumentBuilder();
         Document document = builder.parse(source);
-        Node root = document.getFirstChild();
-        handleNode(root, namespaceDeclarationsOf(root), layoutXml);
+        Node root = document.getDocumentElement();
+        handleNode(root, namespaceDeclarationsOf(root), layoutXml, adapter);
         return layoutXml.toString();
     }
 
@@ -173,14 +189,28 @@ public class XmlConverter {
         return "xmlns".equals(name) || name.startsWith("xmlns:");
     }
 
-    private static void handleNode(Node node, String namespace, StringBuilder layoutXml) {
-        String nodeName = node.getNodeName();
-        String mappedNodeName = NODE_HANDLER.handleNode(node, namespace, layoutXml);
-        handleText(nodeName, node.getTextContent(), layoutXml);
-        handleAttributes(nodeName, node.getAttributes(), layoutXml);
+    private static void handleNode(Node source, String namespace, StringBuilder layoutXml, NodeAdapter adapter) {
+        Node node = adapter == null ? source : adapter.prepare(source);
+        int openingStart = layoutXml.length();
+        String mappedNodeName;
+        try {
+            mappedNodeName = writeOpening(node, source.getTextContent(), namespace, layoutXml);
+        } catch (RuntimeException error) {
+            if (adapter == null) throw error;
+            layoutXml.setLength(openingStart);
+            node = adapter.onFailure(source, error);
+            mappedNodeName = writeOpening(node, source.getTextContent(), namespace, layoutXml);
+        }
         layoutXml.append(">\n");
-        handleChildren(node.getChildNodes(), layoutXml);
+        handleChildren(source.getChildNodes(), layoutXml, adapter);
         layoutXml.append("</").append(mappedNodeName).append(">\n");
+    }
+
+    private static String writeOpening(Node node, String text, String namespace, StringBuilder xml) {
+        String mapped = NODE_HANDLER.handleNode(node, namespace, xml);
+        handleText(node.getNodeName(), text, xml);
+        handleAttributes(node.getNodeName(), node.getAttributes(), xml);
+        return mapped;
     }
 
     private static void handleText(String nodeName, String textContent, StringBuilder layoutXml) {
@@ -196,7 +226,7 @@ public class XmlConverter {
                 .replace("\r", "&#13;").replace("\n", "&#10;");
     }
 
-    private static void handleChildren(NodeList nodes, StringBuilder layoutXml) {
+    private static void handleChildren(NodeList nodes, StringBuilder layoutXml, NodeAdapter adapter) {
         if (nodes == null)
             return;
         int len = nodes.getLength();
@@ -204,7 +234,7 @@ public class XmlConverter {
             Node node = nodes.item(i);
             if (node.getNodeType() != Node.ELEMENT_NODE)
                 continue;
-            handleNode(node, "", layoutXml);
+            handleNode(node, "", layoutXml, adapter);
         }
     }
 
