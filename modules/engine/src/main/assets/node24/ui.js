@@ -806,13 +806,18 @@
                 method = typeof native.setTextChangedListener === 'function' ? 'setTextChangedListener'
                     : (typeof native.addTextChangedListener === 'function' ? 'addTextChangedListener' : null);
                 callbacks = {
-                    onTextChanged: function (source, start, before, count) {
+                    beforeTextChanged: function () { },
+                    // 只在 afterTextChanged 派发一次，避免 onTextChanged+afterTextChanged 双发。
+                    onTextChanged: function () { },
+                    // TextWatcher 的三个方法都必须可调用；缺 afterTextChanged 时
+                    // Java 代理在构造/回调阶段会静默失败（设备 2.15 复现）。
+                    afterTextChanged: function (source) {
                         let value = '';
                         try {
                             value = source && typeof source.getText === 'function' ? String(source.getText())
                                 : (source != null ? String(source) : '');
                         } catch (ignored) { value = ''; }
-                        emit('text_change', value, Number(count) || 0);
+                        emit('text_change', value, 0);
                     }
                 };
             } else if (event === 'item_selected') {
@@ -831,8 +836,18 @@
                 return false;
             }
             if (!method) return false;
-            const Listener = globalThis.$autojs.java.findClass(event === 'text_change'
-                ? 'android.text.TextWatcher' : 'com.google.android.material.navigation.NavigationBarView$OnItemSelectedListener');
+            // 每种事件必须用对应的 Java 监听接口；此前只区分 text_change/item_selected，
+            // click/check 等被套成 NavigationBarView 监听器，导致
+            // "找不到方法 setOnClickListener($ProxyN)"（设备 2.15 复现）。
+            const listenerClassName = event === 'click' ? 'android.view.View$OnClickListener'
+                : event === 'check' ? 'android.widget.CompoundButton$OnCheckedChangeListener'
+                : event === 'long_click' ? 'android.view.View$OnLongClickListener'
+                : event === 'touch' ? 'android.view.View$OnTouchListener'
+                : event === 'key' ? 'android.view.View$OnKeyListener'
+                : event === 'scroll_change' ? 'android.view.View$OnScrollChangeListener'
+                : event === 'text_change' ? 'android.text.TextWatcher'
+                : 'com.google.android.material.navigation.NavigationBarView$OnItemSelectedListener';
+            const Listener = globalThis.$autojs.java.findClass(listenerClassName);
             // prelude 回调对象是函数代理：按接口方法名包一层，保证 Java 侧能回调到（保留逐事件语义）。
             const installed = {};
             Object.keys(callbacks).forEach(function (name) {
