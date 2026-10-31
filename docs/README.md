@@ -1,5 +1,7 @@
 # AI.js Pro 文档索引
 
+> **2026-10-31 当前发布 dev-1299（LAN，MI8 已装）**：[Node UI 回调默认值与工程资源路径](reports/2026-10-31_NodeUI回调默认值与资源路径dev-1299.md)。修 JS 回调 undefined 的基本类型拆箱 NPE、缺少编译资源时显式告警、build-project-res 预处理。
+
 > **2026-10-31 当前发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。click/check/text_change 真机回调、`ui.inflate(layoutId)`、`addView/getParent`、`JsViewPager childCount=3`、BottomNav 监听；SHA 见发布记录。
 
 > **2026-10-31 当前发布 dev-1294（LAN，MI8 已装）**：[节点对齐 R01–R08 集成与发布](reports/2026-10-31_节点对齐R01-R08集成发布.md)。R01 varargs、R02/R03 Widget、R04 QuickJS ui.inflate、R05–R07 节点分页/BFS/身份、R08 Node 等级2 载荷与模板；SHA `f767e404…`。

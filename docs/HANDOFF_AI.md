@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-31 当前发布 dev-1299（LAN，MI8 已装）**：[Node UI 回调默认值与工程资源路径](reports/2026-10-31_NodeUI回调默认值与资源路径dev-1299.md)。JS 回调返回 undefined 时基本类型补默认值；工程缺少 build/project-res.apk 会显式告警；build-project-res.ps1 自动补 dp/对账缺失 attr。
+
 > **发布/推送约定（2026-10-31）**：默认只发 LAN，不逐版本建 GitHub Release/tag；代码提交默认只本地，不自动 push——只有用户明确说「推一次」才推。
 
 > **2026-10-31 当前发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。Node UI listener/text_change 真机回调、inflate layoutId、真实视图树、JsViewPager include、keepRunning 引用计数；已知剩余见报告 §3。

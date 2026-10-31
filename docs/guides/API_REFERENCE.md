@@ -312,7 +312,7 @@ const loader = host.runtime.getAndroidClassLoader();
 | 6.13 | `setOnClickListener` / `setOnCheckedChangeListener` / `view.on('check')` / `addTextChangedListener` 不回调 | ✅ 真机已验证（MI8 dev-1297） | Activity/绑定路径 click/check/text_change 全部回调；真实 ADB 点击也触发 |
 | 2.1 | 输入框无文本变化事件，只能轮询 `getText()` | ✅ 真机已验证（MI8 dev-1297） | `input.setText("abc")` 触发 `on('text_change')`；旧宿主仍轮询兜底 |
 | 2.6 | `JsViewPager.initAdapterFromChildren()` 不识别 `<include>` | ✅ 真机已验证（MI8 dev-1297） | 最小工程：`childCount=3`、`adapterCount=3`、`setCurrentItem(1)` 生效 |
-| 2.7 | `BottomNavigationView` itemId 与 `ui.R.id` 不一致、监听不回调 | ⚠️ 部分真机已验证（MI8 dev-1297） | `menuSize=3`、id 与 `ui.R.id` 同源、itemSelected 回调触发；`setSelectedItemId` 仍抛 NPE，反向同步待修 |
+| 2.7 | `BottomNavigationView` itemId 与 `ui.R.id` 不一致、监听不回调 | ✅ 真机已验证（MI8 dev-1299） | `menuSize=3`、id 与 `ui.R.id` 同源、itemSelected 回调触发；`setSelectedItemId` 的拆箱 NPE 已修（JS 回调 undefined 按基本类型补默认值） |
 | 2.2 | `Handler.postDelayed` 在 `onContentViewSet → _bind` 链里不执行 | ✅ 代码已修（JVM 契约） | 宿主提供主 Looper `postDelayed/removeCallbacks`；JS 侧 `setTimeout` 仍可用 |
 | 2.3 / 6.6 | 工程自建 vector drawable 不进编译资源 | ⚠️ 仅可执行诊断 | 未实现 vector 渲染；按提示跑 `tools/build-project-res.ps1` 或改用内置图标 |
 | 6.3 | `view.findViewById(id)` 返回包装对象，`setText` 会覆盖包装对象本身 | ⚠️ 待真机确认 | 继续用 `view.binding.<id>`；协议句柄已返回真实 viewId |
