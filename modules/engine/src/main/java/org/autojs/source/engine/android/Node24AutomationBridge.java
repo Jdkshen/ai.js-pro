@@ -52,7 +52,19 @@ public final class Node24AutomationBridge implements AutoCloseable {
     private static final long MAX_GESTURE_OFFSET_MS = 60_000L;
     /** 单个 selector JSON 的字符上限（与 Binder/主进程节点协议保持余量）。 */
     private static final int MAX_SELECTOR_CHARS = 32_768;
-    /** getNodeInfo/动作接口的匹配序号上限。 */
+    /**
+     * getNodeInfo/动作接口的匹配序号上限（Node 线协议冻结值 0..255）。
+     *
+     * <p>R07 复核（2026-10-31）：宿主 {@code AutomationHostBackend} 的 findNodes 单次最多
+     * {@code MAX_FIND_RESULTS=500} 项，{@code normalizeIndex} 只夹到遍历上限 4999，所以宿主本身
+     * 能处理更大的序号；但 Node 侧请求契约一直冻结在 255（同级的
+     * {@code Node24SelectorBridgeTest} 把 256/300 判为非法并断言后端不被调用），本轮不放开，
+     * 避免与既有契约和同级测试冲突。
+     *
+     * <p>定位大树里的节点不要靠加大位置序号：插入/删除/列表复用后同一个序号会指向别的节点。
+     * 请使用 path + 身份选择器（{@link com.stardust.autojs.runtime.api.remote.RemoteUiObject}
+     * 的 token/generation，Node 侧 Node/NodeView 的 token/generation/isStale）。
+     */
     private static final int MAX_NODE_INDEX = 255;
     /** selector.index 过滤的是 indexInParent，范围与主进程遍历上限一致。 */
     private static final int MAX_SELECTOR_INDEX = 8191;

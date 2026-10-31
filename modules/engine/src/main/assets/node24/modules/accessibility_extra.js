@@ -549,6 +549,8 @@
     this._raw = cloneRaw(options.raw);
     this._tree = Array.isArray(options.tree) ? options.tree : null;
     this._fromPath = Array.isArray(options.fromPath) ? options.fromPath.slice() : null;
+    // R07：记录该节点来自哪一次宿主快照（树内容代次）。
+    this._generation = typeof options.generation === 'number' ? options.generation : snapshotGeneration;
   }
   Object.defineProperties(NodeView.prototype, {
     text: { enumerable: true, get: function () { return rawString(this._raw, 'text'); } },
@@ -577,6 +579,14 @@
     path: { enumerable: true, get: function () { return rawPath(this._raw).slice(); } }
   });
   NodeView.prototype.raw = function () { return this._raw; };
+  // R07：可判过期的身份 token / 快照代次。
+  Object.defineProperty(NodeView.prototype, 'token', {
+    enumerable: true, get: function () { return nodeToken(this._raw); }
+  });
+  Object.defineProperty(NodeView.prototype, 'generation', {
+    enumerable: true, get: function () { return this._generation; }
+  });
+  NodeView.prototype.isStale = function () { return nodeIsStale(this); };
   NodeView.prototype.toString = function () {
     return 'NodeView(' + this.className + ', text=' + this.text + ')';
   };
@@ -618,6 +628,9 @@
     this._index = index || 0;
     this._tree = context && Array.isArray(context.tree) ? context.tree : null;
     this._fromPath = context && Array.isArray(context.fromPath) ? context.fromPath.slice() : null;
+    // R07：记录该节点来自哪一次宿主快照（树内容代次）。
+    this._generation = context && typeof context.generation === 'number'
+      ? context.generation : snapshotGeneration;
   }
   Node.prototype.raw = function () { return this._raw; };
   Node.prototype.text = function () { return rawString(this._raw, 'text'); };
@@ -644,6 +657,10 @@
   Node.prototype.indexInParent = function () { return indexInParentOf(this._raw); };
   Node.prototype.path = function () { return rawPath(this._raw).slice(); };
   Node.prototype.toString = function () { return 'UiObject(' + this.className() + ', text=' + this.text() + ')'; };
+  // R07：可判过期的身份 token / 快照代次。
+  Node.prototype.token = function () { return nodeToken(this._raw); };
+  Node.prototype.generation = function () { return this._generation; };
+  Node.prototype.isStale = function () { return nodeIsStale(this); };
   // A queried node retains its shared tree for parent/children navigation. Node's
   // console must not expand that same tree again for every result in an array.
   // Explicit raw()/tree() access remains available for full diagnostics.
@@ -716,6 +733,39 @@
       }
     }
     return selector;
+  }
+  /**
+   * R07：由宿主快照字段派生的身份 token。
+   * 同一个节点跨快照 token 相同；列表复用/插入删除后同一个 path 换成别的节点时会不同。
+   * 解析协议没有宿主侧稳定句柄，所以取宿主真正下发的全部身份字段。
+   */
+  function nodeToken(raw) {
+    if (!raw || typeof raw !== 'object') { return ''; }
+    return 'path=' + JSON.stringify(rawPath(raw))
+      + ';id=' + rawString(raw, 'id')
+      + ';class=' + rawString(raw, 'className')
+      + ';pkg=' + rawString(raw, 'packageName')
+      + ';text=' + (rawBoolean(raw, 'password') ? '' : rawString(raw, 'text'))
+      + ';desc=' + rawString(raw, 'desc')
+      + ';bounds=' + JSON.stringify(Array.isArray(raw.bounds) ? raw.bounds : [])
+      + ';depth=' + depthOf(raw)
+      + ';index=' + indexInParentOf(raw)
+      + ';childCount=' + rawInt(raw, 'childCount', -1);
+  }
+  /**
+   * R07：重新向宿主确认节点是否仍存在且身份未变。
+   * 返回 true 表示过期（消失 / 被复用 / 查询失败）；动作本身仍用 path+属性保护选择器重新匹配，
+   * 不会因为过期而误点别的节点。
+   */
+  function nodeIsStale(node) {
+    try {
+      var current = normalizeNode(
+        automation('getNodeInfo', { selector: identitySelector(node), index: 0 }),
+        'getNodeInfo');
+      return !current || nodeToken(current) !== nodeToken(node._raw);
+    } catch (error) {
+      return true;
+    }
   }
   function navigationTree(node) {
     if (node._tree) return node._tree;
@@ -938,9 +988,202 @@
     return nodes;
   }
 
+  /* ----------------------- R05：快照完整性 / 分页 ------------------------ */
+
+  // 树内容代次：指纹不变就不自增，保证同一棵树的游标可以稳定续页。
+  var snapshotGeneration = 0;
+  var lastSnapshotFingerprint = null;
+  var treePageCache = { fingerprint: null, dump: null, analysis: null, generation: 0 };
+  var queryPageCache = { key: null, items: null, generation: 0 };
+
+  function pathKeyOf(path) { return path.join('/'); }
+  function jsonPathOf(key) {
+    return key === '' || key == null ? '[]' : '[' + String(key).split('/').join(',') + ']';
+  }
+  function childKeyOf(parentKey, index) {
+    return parentKey === '' || parentKey == null ? String(index) : parentKey + '/' + index;
+  }
+  function lastIndexOfPath(path) {
+    return Array.isArray(path) && path.length ? path[path.length - 1] : -1;
+  }
+  function snapshotFingerprint(dump) {
+    var hash = 0;
+    for (var i = 0; i < dump.length; i++) {
+      var raw = dump[i];
+      var path = rawPath(raw);
+      hash = (hash * 31 + path.length + lastIndexOfPath(path)
+        + rawString(raw, 'id').length + rawString(raw, 'text').length
+        + rawInt(raw, 'childCount', -1)) | 0;
+    }
+    return dump.length + ':' + hash;
+  }
+  /**
+   * 把宿主 DFS 快照按 path/childCount 重新校验成一棵树。完整快照必须满足
+   * 「每个已出现节点的子节点数 == childCount」，此时才能重建真正的层序；
+   * 任何缺子节点/缺 childCount/重复 path/孤儿节点都判为截断并给出首个缺失 path。
+   */
+  function analyzeSnapshot(dump) {
+    var n = dump.length, byPath = {}, duplicate = false, paths = new Array(n);
+    var i, raw, path, key;
+    for (i = 0; i < n; i++) {
+      raw = dump[i];
+      path = raw && Array.isArray(raw.path) ? raw.path : null;
+      if (!path) { duplicate = true; continue; }
+      paths[i] = path;
+      key = pathKeyOf(path);
+      if (Object.prototype.hasOwnProperty.call(byPath, key)) { duplicate = true; }
+      else { byPath[key] = i; }
+    }
+    var children = {}, rootIndex = -1, orphan = false, firstOrphan = null;
+    for (i = 0; i < n; i++) {
+      path = paths[i];
+      if (!path) { continue; }
+      if (path.length === 0) {
+        if (rootIndex < 0) { rootIndex = i; } else { duplicate = true; }
+        continue;
+      }
+      var parentKey = pathKeyOf(path.slice(0, path.length - 1));
+      if (!Object.prototype.hasOwnProperty.call(byPath, parentKey)) {
+        orphan = true;
+        if (firstOrphan === null) { firstOrphan = jsonPathOf(childKeyOf(parentKey, lastIndexOfPath(path))); }
+        continue;
+      }
+      if (!children[parentKey]) { children[parentKey] = []; }
+      children[parentKey].push(i);
+    }
+    var firstMissing = null, gap = false;
+    Object.keys(children).forEach(function (parent) {
+      var list = children[parent].slice().sort(function (a, b) {
+        return lastIndexOfPath(paths[a]) - lastIndexOfPath(paths[b]);
+      });
+      var expected = 0;
+      for (var k = 0; k < list.length; k++) {
+        var last = lastIndexOfPath(paths[list[k]]);
+        if (last !== expected) {
+          gap = true;
+          if (firstMissing === null) { firstMissing = jsonPathOf(childKeyOf(parent, expected)); }
+          expected = last;
+        }
+        expected = last + 1;
+      }
+    });
+    var unknownChildCount = false, childCountMismatch = false;
+    for (i = 0; i < n; i++) {
+      raw = dump[i]; path = paths[i];
+      if (!path) { continue; }
+      key = pathKeyOf(path);
+      var actual = children[key] ? children[key].length : 0;
+      var declared = raw == null ? null : rawInt(raw, 'childCount', null);
+      if (declared == null) { unknownChildCount = true; continue; }
+      if (declared !== actual) {
+        childCountMismatch = true;
+        if (firstMissing === null) { firstMissing = jsonPathOf(childKeyOf(key, actual)); }
+      }
+    }
+    var complete = !duplicate && !orphan && !gap && !unknownChildCount && !childCountMismatch
+      && (n === 0 || rootIndex >= 0);
+    if (!complete && firstMissing === null && firstOrphan !== null) { firstMissing = firstOrphan; }
+    return {
+      complete: complete,
+      firstMissingPath: complete ? null : firstMissing,
+      nodes: n,
+      children: children,
+      paths: paths,
+      rootIndex: rootIndex
+    };
+  }
+  /** 真正的层序遍历：从根开始按子下标顺序入队；没挂上的节点按原顺序补在末尾，不丢。 */
+  function bfsOrderOf(dump, analysis) {
+    var order = [], visited = {}, queue = [], i;
+    if (analysis.rootIndex >= 0) {
+      queue.push(analysis.rootIndex);
+      visited[analysis.rootIndex] = true;
+      while (queue.length) {
+        var index = queue.shift();
+        order.push(index);
+        var path = analysis.paths[index];
+        var kids = path ? analysis.children[pathKeyOf(path)] : null;
+        if (kids) {
+          var sorted = kids.slice().sort(function (a, b) {
+            return lastIndexOfPath(analysis.paths[a]) - lastIndexOfPath(analysis.paths[b]);
+          });
+          for (var k = 0; k < sorted.length; k++) {
+            if (!visited[sorted[k]]) { visited[sorted[k]] = true; queue.push(sorted[k]); }
+          }
+        }
+      }
+    }
+    for (i = 0; i < dump.length; i++) { if (!visited[i]) { visited[i] = true; order.push(i); } }
+    return order;
+  }
+  function snapshotOfDump(dump) {
+    return dump && dump.__ajsSnapshot ? dump.__ajsSnapshot : analyzeSnapshot(dump);
+  }
+  function generationOfDump(dump) {
+    return dump && typeof dump.__ajsGeneration === 'number' ? dump.__ajsGeneration : snapshotGeneration;
+  }
+  function encodeR05Cursor(generation, offset) { return 'r05:1:' + generation + ':' + offset; }
+  /**
+   * R05 取消：JS 分页是拉取式的（不再取下一页即为取消），另外支持显式
+   * {@code {signal:{aborted:true}}} 让长循环/被停止的脚本立刻放弃分页。
+   */
+  function assertNotCancelled(options, label) {
+    if (!options) { return; }
+    var signal = options.signal;
+    if (signal && signal.aborted === true) {
+      var error = apiError(label + ' 已取消');
+      error.name = 'AutoJsAbortError';
+      throw error;
+    }
+  }
+  function decodeR05Cursor(cursor, label) {
+    var parts = typeof cursor === 'string' ? cursor.split(':') : [];
+    if (parts.length !== 4 || parts[0] !== 'r05' || parts[1] !== '1') {
+      throw apiError(label + ' 分页游标格式无效：' + String(cursor));
+    }
+    var generation = Number(parts[2]), offset = Number(parts[3]);
+    if (!isSafeInteger(generation) || !isSafeInteger(offset) || generation < 0 || offset < 0) {
+      throw apiError(label + ' 分页游标格式无效：' + String(cursor));
+    }
+    return { generation: generation, offset: offset };
+  }
+  function buildTreePage(dump, analysis, generation, offset, limit) {
+    var slice = dump.slice(offset, offset + limit);
+    var nextOffset = offset + slice.length;
+    var complete = nextOffset >= dump.length && analysis.complete;
+    return {
+      nodes: slice.map(function (raw) {
+        return new NodeView({ raw: raw, tree: dump, fromPath: null, generation: generation });
+      }),
+      complete: complete,
+      truncated: !complete,
+      snapshotComplete: analysis.complete,
+      firstMissingPath: analysis.firstMissingPath,
+      generation: generation,
+      seen: slice.length,
+      offset: offset,
+      cursor: complete ? null : encodeR05Cursor(generation, nextOffset)
+    };
+  }
+
   /* ----------------------------- 查询执行 -------------------------------- */
   function getDump() {
-    return normalizeNodes(automation('getLatestNodeDump'), 'getLatestNodeDump');
+    var dump = normalizeNodes(automation('getLatestNodeDump'), 'getLatestNodeDump');
+    var fingerprint = snapshotFingerprint(dump);
+    if (fingerprint !== lastSnapshotFingerprint) {
+      snapshotGeneration += 1;
+      lastSnapshotFingerprint = fingerprint;
+      // 树变了：旧的树分页缓存与过滤分页缓存都过期。
+      treePageCache = { fingerprint: null, dump: null, analysis: null, generation: 0 };
+      queryPageCache = { key: null, items: null, generation: 0 };
+    }
+    Object.defineProperty(dump, '__ajsSnapshot', {
+      value: analyzeSnapshot(dump), configurable: true
+    });
+    Object.defineProperty(dump, '__ajsGeneration', {
+      value: snapshotGeneration, configurable: true
+    });
+    return dump;
   }
   function fetchRootView() {
     var dump = getDump();
@@ -979,15 +1222,28 @@
     return result;
   }
   function evaluateState(state, dump) {
-    if(state.spec.algorithm==='BFS') throw apiError('BFS 暂不能与本地谓词、JS正则或范围快照组合；请使用宿主可下发条件');
-
+    // R06：BFS 与本地条件组合必须建立在完整快照上；截断的 DFS 排序不能冒充完整 BFS。
+    var order = null;
+    if (state.spec.algorithm === 'BFS') {
+      var analysis = snapshotOfDump(dump);
+      if (!analysis.complete) {
+        throw apiError('BFS 需要完整快照：宿主返回的 DFS 树被节点/JSON/时间预算截断'
+          + (analysis.firstMissingPath ? '（首个缺失子节点 ' + analysis.firstMissingPath + '）' : '')
+          + '，截断结果排序无法等价于真正 BFS；请缩小范围、改用默认 DFS，或重试拿到完整树');
+      }
+      order = bfsOrderOf(dump, analysis);
+    }
     var parentPaths = state.from ? collectParentPaths(state.from, dump) : null;
     // Preserve Java Pattern semantics over the FULL retained snapshot. Host findNodes
     // caps candidates before local predicates, so intersecting its paths loses late matches.
     var javaMatches=Object.prototype.hasOwnProperty.call(state.spec,'textMatches')
       ? matchDumpTextPattern(state.spec.textMatches,dump) : null;
     var result = [];
-    for (var i = 0; i < dump.length; i++) {
+    // order=null 保持快照原顺序（DFS）；BFS 时按重建层的层序取节点，
+    // javaMatches 仍按快照下标索引，两者不混用。
+    var orderLength = order ? order.length : dump.length;
+    for (var oi = 0; oi < orderLength; oi++) {
+      var i = order ? order[oi] : oi;
       var raw = dump[i];
       if (javaMatches && !javaMatches[i]) { continue; }
       if (!matchesSpec(raw, state.spec, dump, javaMatches != null)) { continue; }
@@ -1221,6 +1477,42 @@
     var state = snapshotState(this);
     return nodeCollection(executeAll(state).map(toNode));
   };
+  /**
+   * R05：稳定分页查询；返回 {nodes, complete, truncated, snapshotComplete, firstMissingPath,
+   * generation, seen, cursor}。同一快照内不丢不重，cursor 可续页；树变了则明确报“游标已过期”。
+   */
+  UiSelector.prototype.findPage = function (limit, cursor, options) {
+    assertNotCancelled(options, 'findPage');
+    var state = snapshotState(this);
+    if (limit == null) { throw typeError('findPage 需要每页数量'); }
+    var pageSize = requireInt(limit, 'findPage.limit', 1);
+    var key = JSON.stringify(state.spec) + '|' + state.where.length
+      + '|' + (state.from ? 'from' : 'plain');
+    if (cursor != null) {
+      // 先重新取树：指纹变化会让缓存失效，旧代次/旧查询游标必须明确失败。
+      getDump();
+      var decoded = decodeR05Cursor(cursor, 'findPage');
+      if (!queryPageCache.items || decoded.generation !== queryPageCache.generation
+          || queryPageCache.key !== key) {
+        throw apiError('分页游标已过期：查询或树快照已经刷新，请从第一页重新开始');
+      }
+      return buildQueryPage(queryPageCache.items, queryPageCache.analysis,
+        queryPageCache.generation, decoded.offset, pageSize);
+    }
+    var dump = getDump();
+    var analysis = snapshotOfDump(dump);
+    var generation = generationOfDump(dump);
+    var items = evaluateState(state, dump).map(toNode);
+    if (!queryPageCache.items || queryPageCache.key !== key
+        || queryPageCache.generation !== generation) {
+      queryPageCache = { key: key, items: items, analysis: analysis, generation: generation };
+    } else {
+      queryPageCache.items = items;
+      queryPageCache.analysis = analysis;
+    }
+    return buildQueryPage(queryPageCache.items, queryPageCache.analysis,
+      queryPageCache.generation, 0, pageSize);
+  };
   UiSelector.prototype.untilFind = function (timeout) {
     var limit = timeout == null ? Infinity : requireInt(timeout, 'untilFind.timeout', 0), started = Date.now();
     for (;;) {
@@ -1308,6 +1600,67 @@
     var dump = getDump();
     return dump.map(function (raw) { return new NodeView({ raw: raw, tree: dump, fromPath: null }); });
   }
+  /** R05：当前窗口树的完整性预算（complete/truncated/首个缺失 path/代次/节点数）。 */
+  function snapshotInfo() {
+    var dump = getDump();
+    var analysis = snapshotOfDump(dump);
+    return {
+      nodes: dump.length,
+      complete: analysis.complete,
+      truncated: !analysis.complete,
+      firstMissingPath: analysis.firstMissingPath,
+      generation: generationOfDump(dump)
+    };
+  }
+  /**
+   * R05：稳定分页取整棵树；同一快照内不丢不重。
+   * 传上一页的 page.cursor 续页；宿主树变了（代次不同）时明确报“游标已过期”。
+   */
+  function treePage(limit, cursor, options) {
+    assertNotCancelled(options, 'treePage');
+    if (limit == null) { throw typeError('treePage 需要每页数量'); }
+    var pageSize = requireInt(limit, 'treePage.limit', 1);
+    if (cursor != null) {
+      // 先重新取树：指纹变化会让缓存失效，旧代次游标必须明确失败。
+      getDump();
+      var decoded = decodeR05Cursor(cursor, 'treePage');
+      if (treePageCache.dump == null || decoded.generation !== treePageCache.generation) {
+        throw apiError('分页游标已过期：树快照已被新的树刷新覆盖，请从第一页重新开始');
+      }
+      return buildTreePage(treePageCache.dump, treePageCache.analysis,
+        treePageCache.generation, decoded.offset, pageSize);
+    }
+    var dump = getDump();
+    var analysis = snapshotOfDump(dump);
+    var generation = generationOfDump(dump);
+    if (treePageCache.dump == null || treePageCache.generation !== generation) {
+      treePageCache = {
+        fingerprint: lastSnapshotFingerprint, dump: dump, analysis: analysis, generation: generation
+      };
+    } else {
+      treePageCache.dump = dump;
+      treePageCache.analysis = analysis;
+    }
+    return buildTreePage(treePageCache.dump, treePageCache.analysis,
+      treePageCache.generation, 0, pageSize);
+  }
+  function buildQueryPage(items, analysis, generation, offset, limit) {
+    var slice = items.slice(offset, offset + limit);
+    var nextOffset = offset + slice.length;
+    var exhausted = nextOffset >= items.length;
+    var complete = exhausted && analysis.complete;
+    return {
+      nodes: nodeCollection(slice),
+      complete: complete,
+      truncated: !complete,
+      snapshotComplete: analysis.complete,
+      firstMissingPath: analysis.firstMissingPath,
+      generation: generation,
+      seen: slice.length,
+      offset: offset,
+      cursor: complete ? null : encodeR05Cursor(generation, nextOffset)
+    };
+  }
   function dumpNodes() {
     return getDump().map(function (raw) {
       return new Node(raw, { path: rawPath(raw).slice() }, 0, { tree: null, fromPath: null });
@@ -1319,6 +1672,8 @@
     select: select,
     root: root,
     tree: tree,
+    snapshotInfo: snapshotInfo,
+    treePage: treePage,
     waitFor: waitFor,
     UiSelector: UiSelector,
     NodeView: NodeView,
@@ -1357,7 +1712,9 @@
     select: select,
     waitFor: waitFor,
     root: root,
-    tree: tree
+    tree: tree,
+    snapshotInfo: snapshotInfo,
+    treePage: treePage
   };
   var uiObjectModule = {
     Rect: Rect,

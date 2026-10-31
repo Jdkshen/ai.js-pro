@@ -907,11 +907,133 @@ test('RangeInfo畸形数据不能默默转换成0', () => {
   }
 });
 
-test('BFS/DFS规范化并下发，非法算法及BFS本地谓词明确报错', async () => {
+test('BFS/DFS规范化并下发，非法算法拒绝，BFS+本地谓词按真实层序执行', async () => {
   select({id:'title'}).algorithm('bfs').findOnce();assert.equal(last('getNodeInfo').selector.algorithm,'BFS');
   await select({id:'title',algorithm:'dfs'}).all();assert.equal(last('findNodes').selector.algorithm,'DFS');
   assert.throws(()=>select().algorithm('invalid'),/BFS/);
-  await assert.rejects(select().algorithm('BFS').where(()=>true).all(),/暂不能/);
+  // R06：完整快照上 BFS+本地谓词必须真的按层序跑，不是拒绝、也不是对 DFS 结果排序。
+  const bfs=(await select().algorithm('BFS').where(()=>true).all()).map(n=>n.path.join('/'));
+  assert.deepEqual(bfs,['','0','1','2','3','4','5','0/0','1/0','1/1','2/0','2/1','4/0','4/1']);
+  const dfs=(await select().where(()=>true).all()).map(n=>n.path.join('/'));
+  assert.deepEqual(dfs,['','0','0/0','1','1/0','1/1','2','2/0','2/1','3','4','4/0','4/1','5']);
+});
+test('R06：BFS 过滤结果与 DFS 不同，逐项顺序/数量正确', async () => {
+  // title 在深度 2、input 在深度 1：BFS 必须把浅层放前面，DFS 保持前序。
+  const predicate=(v)=>v.desc==='日志标题'||v.id==='com.demo:id/input';
+  const bfs=(await select({clickable:true}).algorithm('BFS').where(predicate).all()).map(n=>n.path.join('/'));
+  assert.deepEqual(bfs,['3','0/0']);
+  const dfs=(await select({clickable:true}).where(predicate).all()).map(n=>n.path.join('/'));
+  assert.deepEqual(dfs,['0/0','3']);
+  // 同一条件集合在两种算法下的数量必须一致，只是顺序不同。
+  assert.equal(bfs.length,dfs.length);
+});
+test('R06：截断快照上的 BFS+本地谓词明确拒绝，不排序冒充', async () => {
+  state.tree=[makeNode([], 'android.widget.FrameLayout', '', {childCount:3}),
+    makeNode([0], 'android.widget.TextView', 'a')];
+  await assert.rejects(select().algorithm('BFS').where(()=>true).all(),/完整快照|截断/);
+  // DFS 仍只返回快照里真实存在的节点，不伪造缺失节点。
+  const dfs=await select().where(()=>true).all();
+  assert.equal(dfs.length,2);
+});
+test('R05：snapshotInfo/treePage 报告完整性并稳定分页，不丢不重', () => {
+  const info=accessibility.snapshotInfo();
+  assert.equal(info.nodes,14);
+  assert.equal(info.complete,true);
+  assert.equal(info.truncated,false);
+  assert.equal(info.firstMissingPath,null);
+  assert.ok(info.generation>=1);
+
+  const page1=accessibility.treePage(5);
+  const page2=accessibility.treePage(5,page1.cursor);
+  const page3=accessibility.treePage(5,page2.cursor);
+  assert.equal(page1.nodes.length,5);
+  assert.equal(page2.nodes.length,5);
+  assert.equal(page3.nodes.length,4);
+  assert.equal(page1.complete,false);assert.equal(page1.truncated,true);assert.ok(page1.cursor);
+  assert.equal(page2.complete,false);assert.ok(page2.cursor);
+  assert.equal(page3.complete,true);assert.equal(page3.cursor,null);
+  const paths=page1.nodes.concat(page2.nodes,page3.nodes).map(n=>n.path.join('/'));
+  assert.deepEqual(paths,['','0','0/0','1','1/0','1/1','2','2/0','2/1','3','4','4/0','4/1','5']);
+  assert.equal(new Set(paths).size,14);
+  assert.equal(accessibility.treePage(100).complete,true);
+
+  // 超过单次上限的树：只返回采到的部分，并明确标记 truncated + 首个缺失子节点。
+  const big=[makeNode([], 'android.widget.FrameLayout', '', {childCount:600})];
+  for(let i=0;i<600;i++)big.push(makeNode([i], 'android.widget.TextView', '节点'+i));
+  state.tree=big;
+  const truncated=accessibility.snapshotInfo();
+  assert.equal(truncated.nodes,601);
+  assert.equal(truncated.complete,true,'childCount 与 path 自洽时是完整快照');
+  state.tree=[makeNode([], 'android.widget.FrameLayout', '', {childCount:3}),
+    makeNode([0], 'android.widget.TextView', 'a')];
+  const cut=accessibility.snapshotInfo();
+  assert.equal(cut.complete,false);
+  assert.equal(cut.truncated,true);
+  assert.equal(cut.firstMissingPath,'[1]');
+  const page=accessibility.treePage(10);
+  assert.equal(page.nodes.length,2);
+  assert.equal(page.snapshotComplete,false);
+  assert.equal(page.complete,false);
+  assert.equal(page.truncated,true);
+  assert.equal(page.firstMissingPath,'[1]');
+  assert.ok(page.cursor);
+});
+test('R05：树变化后旧分页游标明确过期，畸形/非法参数拒绝', () => {
+  const page=accessibility.treePage(4);
+  assert.ok(page.cursor);
+  state.tree=state.tree.slice(0,3);
+  assert.throws(()=>accessibility.treePage(4,page.cursor),/过期/);
+  assert.throws(()=>accessibility.treePage(4,'bogus'),/游标/);
+  assert.throws(()=>accessibility.treePage(0),RangeError);
+  assert.throws(()=>accessibility.treePage(null),TypeError);
+  // 显式取消：aborted 的 signal 让分页立刻放弃（拉取式分页本身也可停止）。
+  assert.throws(()=>accessibility.treePage(2,null,{signal:{aborted:true}}),/已取消/);
+});
+test('R05：findPage 稳定分页过滤结果，游标可续页且过期可判', async () => {
+  const selector=select({className:'android.widget.TextView'}).where(()=>true);
+  const all=selector.find().map(n=>n.path().join('/'));
+  assert.equal(all.length,5,'makeTree 里 TextView 共 5 个');
+  const first=selector.findPage(2);
+  assert.equal(first.nodes.length,2);
+  assert.equal(first.complete,false);
+  assert.equal(first.truncated,true);
+  assert.ok(first.cursor);
+  const second=selector.findPage(2,first.cursor);
+  const third=selector.findPage(2,second.cursor);
+  assert.equal(third.nodes.length,1);
+  assert.equal(third.complete,true);
+  assert.equal(third.cursor,null);
+  const paged=first.nodes.concat(second.nodes,third.nodes).map(n=>n.path().join('/'));
+  assert.deepEqual(paged,all);
+  assert.equal(new Set(paged).size,paged.length);
+  const stale=first.cursor;
+  state.tree=state.tree.slice(0,5);
+  assert.throws(()=>selector.findPage(3,stale),/过期/);
+  assert.throws(()=>select().findPage(0),RangeError);
+  assert.throws(()=>select().findPage(null),TypeError);
+});
+test('R07：token/generation 稳定可视，列表复用后判过期且不误点', async () => {
+  const node=await select({id:'row1'}).firstOrNull();
+  const again=await select({id:'row1'}).firstOrNull();
+  assert.equal(node.token,again.token);
+  assert.ok(node.generation>=1);
+  assert.equal(node.isStale(),false);
+
+  // 列表复用：同一个 path 换成另一个节点。
+  const live=state.tree.find(raw=>samePath(raw.path,[2,0]));
+  live.id='com.demo:id/reused';
+  live.text='复用后';
+  assert.equal(node.isStale(),true);
+  assert.equal(node.click(),false);
+  assert.equal(requests('click').length,0,'过期节点不得退化成坐标点击');
+  assert.equal(select({id:'row1'}).exists(),false);
+  assert.equal(select({id:'row1'}).findOnce(),null);
+});
+test('R07：树内容变化后代次前移，未变化时保持稳定', () => {
+  const before=accessibility.snapshotInfo().generation;
+  assert.equal(accessibility.snapshotInfo().generation,before);
+  state.tree=state.tree.concat([makeNode([6], 'android.widget.TextView', '新增')]);
+  assert.ok(accessibility.snapshotInfo().generation>before);
 });
 test('filter/addFilter接收方法式节点，where保持属性式节点', async () => {
   const nodes=await select({id:'title'}).filter(n=>n.text()==='日志').addFilter(n=>n.clickable()).all();

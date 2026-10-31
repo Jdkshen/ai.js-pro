@@ -10,9 +10,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.mozilla.javascript.regexp.NativeRegExp;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
@@ -29,11 +33,18 @@ import java.util.regex.Pattern;
  *   <li>click()/longClick()/setText() 直接对第一个匹配节点执行（动作经主进程）。</li>
  * </ul>
  *
- * <p>覆盖范围（批一）：id/text/desc/className/packageName 的 equals/contains/startsWith/
- * endsWith/matches、bounds/boundsInside/boundsContains、clickable/enabled/scrollable/depth、
- * algorithm(BFS/DFS)，以及 find/findOne/findOnce/untilFind/exists/waitFor/click/longClick/
- * setText/scroll*。
- * 布尔状态、集合行列与边界条件在宿主快照上本地匹配，并与下发条件取交集。
+ * <p><b>R05 快照完整性/分页</b>：走 {@code getLatestNodeDump} 的查询会把 DFS 快照按
+ * {@code path}/{@code childCount} 重新校验（{@link Snapshot}），结果集合携带
+ * {@code complete/truncated/firstMissingPath/generation/nextCursor/seen}；
+ * {@link #query(int)} 提供稳定分页（同一个快照内不丢不重）与 {@link Query#cancel() 取消}。
+ * 截断的快照永不冒充完整结果。
+ *
+ * <p><b>R06 真正的 BFS</b>：宿主 findNodes 支持原生 BFS，纯可下发条件仍走快通道；
+ * 一旦有本地谓词/RegExp/范围条件，就必须在快照上遍历。此时只有<b>完整</b>快照才能用
+ * path 结构重建真正的层序遍历；截断的 DFS 快照排序会被明确拒绝，不再冒充 BFS。
+ *
+ * <p><b>R07 身份</b>：{@link RemoteUiObject} 携带 token/generation，动作仍用 path+属性保护
+ * 选择器重新定位，永远不做坐标兜底。
  */
 public final class RemoteUiSelector {
 
@@ -42,6 +53,18 @@ public final class RemoteUiSelector {
     /** 与宿主/本地 UiGlobalSelector 对齐的规范算法名。 */
     private static final String ALGORITHM_BFS = "BFS";
     private static final String ALGORITHM_DFS = "DFS";
+    /**
+     * 宿主 findNodes 的单次返回上限（AutomationHostBackend.MAX_FIND_RESULTS）。返回正好触达
+     * 这个数量时无法判断是否被宿主截断，按「未证明完整」处理。
+     */
+    private static final int HOST_FIND_NODE_LIMIT = 500;
+    /** 截断快照上的 BFS 明确拒绝文案（R06：不允许用排序冒充完整 BFS）。 */
+    private static final String TRUNCATED_BFS_MESSAGE =
+            "BFS 需要完整快照：宿主返回的 DFS 树被节点/JSON/时间预算截断（缺少子节点），"
+                    + "截断结果排序无法等价于真正 BFS；请缩小范围、改用默认 DFS，或重试拿到完整树";
+
+    /** 每次向宿主取树自增；跨快照的身份/游标用它判断过期。 */
+    private static final AtomicInteger sGeneration = new AtomicInteger();
 
     /** 可下发给主进程的契约选择器字段（IAutomationHost 文档 §3）。 */
     private final JSONObject mRemote = new JSONObject();
@@ -60,6 +83,14 @@ public final class RemoteUiSelector {
     private interface LocalFilter {
         boolean matches(JSONObject node);
     }
+
+    // ---- R05：最近一次快照的分页缓存（只被 query() 使用） --------------------
+    private JSONArray mCachedNodes;
+    private int[] mCachedOrder;
+    private Snapshot mCachedSnapshot;
+    private int mCachedGeneration;
+    private String mCachedSelectorJson;
+    private Snapshot mLastSnapshot;
 
     public RemoteUiSelector() {
     }
@@ -291,13 +322,14 @@ public final class RemoteUiSelector {
         RemoteAutomationBridge.Backend backend = RemoteAutomationBridge.requireBackend();
         List<RemoteUiObject> roots = new ArrayList<>();
         try {
+            int generation = sGeneration.incrementAndGet();
             JSONArray nodes = new JSONArray(backend.getLatestNodeDump());
             for (int i = 0; i < nodes.length(); i++) {
                 JSONObject node = nodes.optJSONObject(i);
                 if (node == null) { continue; }
                 JSONArray path = node.optJSONArray("path");
                 if (path != null && path.length() == 0) {
-                    roots.add(new RemoteUiObject(backend, "{\"path\":[]}", 0, node, true));
+                    roots.add(new RemoteUiObject(backend, "{\"path\":[]}", 0, node, true, generation));
                 }
             }
         } catch (ScriptException error) {
@@ -320,53 +352,76 @@ public final class RemoteUiSelector {
     public RemoteUiObjectCollection find(int max) {
         return find(max,null);
     }
+
     private RemoteUiObjectCollection find(int max, RemoteUiObject root) {
-        // A BFS query cannot be answered from the host's full dump: that dump is DFS-ordered.
-        // Re-sorting it after the host's 500-node cap (and any future pagination) is not a true
-        // level-order traversal, so fail loudly instead of returning a plausible but wrong order.
-        if ((!mLocalFilters.isEmpty() || !mNodePredicates.isEmpty() || root!=null)
-                && ALGORITHM_BFS.equals(mRemote.optString("algorithm", ALGORITHM_DFS))) {
-            throw new ScriptException("BFS 算法暂不支持本地过滤条件：宿主只提供 DFS 顺序的完整快照，"
-                    + "截断后排序无法等价于真正 BFS；请改用默认 DFS，或去掉本地过滤条件");
-        }
         RemoteAutomationBridge.ensureAccessibility();
         RemoteAutomationBridge.Backend backend = RemoteAutomationBridge.requireBackend();
         List<RemoteUiObject> result = new ArrayList<>();
         String selectorJson = mRemote.toString();
-        boolean proxyable = mLocalFilters.isEmpty() && mNodePredicates.isEmpty() && root==null;
+        boolean local = !mLocalFilters.isEmpty() || !mNodePredicates.isEmpty();
+        boolean bfs = ALGORITHM_BFS.equalsIgnoreCase(mRemote.optString("algorithm", ALGORITHM_DFS));
+        // A BFS query cannot be answered from the host's full dump: that dump is DFS-ordered.
+        // Re-sorting it after the host's 500-node cap (and any future pagination) is not a true
+        // level-order traversal. BFS is answered by the host's native queue traversal when only
+        // wire conditions are present; once a local predicate forces the snapshot path, the
+        // snapshot must be provably complete before it can be re-leveled.
+        boolean proxyable = !local && root == null;
+        boolean snapshotComplete = true;
+        String firstMissing = null;
+        int generation = 0;
+        int seen = 0;
         try {
-            // Wire-only queries keep the host-side fast path. Once a local predicate exists, the
-            // host's findNodes result is not sufficient: it is capped (500 nodes) before local
-            // filtering, so a late node that satisfies both the wire conditions and the local
-            // predicates can be omitted. Dump the full window instead, then apply the wire
-            // predicates locally (same semantics as AutomationHostService.SelectorSpec) and
-            // intersect with the local filters in host traversal order.
             WireMatcher wire = null;
             JSONArray nodes;
+            int[] order;
             if (proxyable) {
                 nodes = new JSONArray(backend.findNodes(selectorJson));
+                generation = sGeneration.incrementAndGet();
+                order = identityOrder(nodes.length());
+                // findNodes 触达宿主上限时无法证明完整；触达本地上限 max 同样不完整。
+                snapshotComplete = nodes.length() < HOST_FIND_NODE_LIMIT;
             } else {
-                wire = new WireMatcher(mRemote);
                 nodes = new JSONArray(backend.getLatestNodeDump());
+                generation = sGeneration.incrementAndGet();
+                Snapshot snapshot = Snapshot.analyze(nodes, generation);
+                mLastSnapshot = snapshot;
+                snapshotComplete = snapshot.complete();
+                firstMissing = snapshot.firstMissingPath();
+                if (bfs && !snapshotComplete) {
+                    throw new ScriptException(TRUNCATED_BFS_MESSAGE);
+                }
+                wire = new WireMatcher(mRemote);
+                order = snapshot.order(bfs);
             }
-            for (int i = 0; i < nodes.length() && result.size() < max; i++) {
+            for (int oi = 0; oi < order.length && result.size() < max; oi++) {
+                int i = order[oi];
+                seen++;
                 JSONObject node = nodes.optJSONObject(i);
                 if (node == null || (wire != null && !wire.matches(node)) || !matchesLocal(node)) {
                     continue;
                 }
-                RemoteUiObject object=new RemoteUiObject(backend, selectorJson,result.size(),node,proxyable);
-                if(root!=null && !object.isDescendantOf(root)
-                        && !(object.path().equals(root.path()) && object.packageName().equals(root.packageName()))) continue;
-                boolean accepted=true;
-                for(NodePredicate predicate:mNodePredicates) if(!predicate.test(object)) {accepted=false;break;}
-                if(accepted) result.add(object);
+                RemoteUiObject object = new RemoteUiObject(
+                        backend, selectorJson, result.size(), node, proxyable, generation);
+                if (root != null && !object.isDescendantOf(root)
+                        && !(object.path().equals(root.path()) && object.packageName().equals(root.packageName()))) {
+                    continue;
+                }
+                boolean accepted = true;
+                for (NodePredicate predicate : mNodePredicates) {
+                    if (!predicate.test(object)) { accepted = false; break; }
+                }
+                if (accepted) result.add(object);
             }
         } catch (ScriptException error) {
             throw error;
         } catch (Throwable error) {
             throw new ScriptException("远程选择器查询失败：" + messageOf(error), error);
         }
-        return new RemoteUiObjectCollection(result);
+        boolean complete = snapshotComplete && result.size() < max;
+        String nextCursor = complete ? null
+                : encodeCursor(generation, selectorJson, seen);
+        return new RemoteUiObjectCollection(result, complete, snapshotComplete, firstMissing,
+                generation, nextCursor, seen);
     }
 
     public RemoteUiObject findOnce() {
@@ -441,6 +496,229 @@ public final class RemoteUiSelector {
 
     public void waitFor() {
         untilFind();
+    }
+
+    // ---- R05：快照预算 / 稳定分页 -----------------------------------------
+
+    /** 最近一次走快照的查询是否拿到了完整树（没有查询过时返回 true）。 */
+    public boolean lastSnapshotComplete() {
+        return mLastSnapshot == null || mLastSnapshot.complete();
+    }
+
+    /** 最近一次快照第一个缺失子节点的 path（JSON 数组字符串）；完整或未查询时为 null。 */
+    public String lastSnapshotFirstMissingPath() {
+        return mLastSnapshot == null ? null : mLastSnapshot.firstMissingPath();
+    }
+
+    /** 最近一次快照的节点数与代次（预算可观察）。 */
+    public int lastSnapshotNodes() {
+        return mLastSnapshot == null ? 0 : mLastSnapshot.nodeCount();
+    }
+
+    public int lastSnapshotGeneration() {
+        return mLastSnapshot == null ? 0 : mLastSnapshot.generation;
+    }
+
+    /** 稳定分页：同一快照内按遍历顺序逐页取，不丢不重；{@link Query#cancel() 可取消}。 */
+    public Query query(int pageSize) {
+        return new Query(pageSize, null);
+    }
+
+    /**
+     * 用上一页拿到的 {@link RemoteUiObjectCollection#nextCursor()} 继续分页。
+     *
+     * <p>游标绑定快照代次；宿主树已经刷新（代次不一致）或换了选择器时明确失败，
+     * 不会把新树上的不同节点当成上一页的延续。
+     */
+    public Query query(int pageSize, String cursor) {
+        return new Query(pageSize, cursor);
+    }
+
+    /** 分页迭代器：每次 next() 返回一页 {@link RemoteUiObjectCollection}。 */
+    public final class Query {
+
+        private final int mPageSize;
+        private final String mCursorInput;
+        private boolean mCaptured;
+        private boolean mCancelled;
+        private boolean mFinished;
+        private JSONArray mNodes;
+        private Snapshot mSnapshot;
+        private int[] mOrder;
+        private int mOffset;
+        private int mSeen;
+        private int mPages;
+        private int mGeneration;
+        private boolean mProxyable;
+        private boolean mSnapshotComplete = true;
+        private String mFirstMissing;
+        private WireMatcher mWire;
+
+        Query(int pageSize, String cursor) {
+            if (pageSize <= 0) {
+                throw new IllegalArgumentException("分页大小必须是正整数");
+            }
+            mPageSize = pageSize;
+            mCursorInput = cursor;
+        }
+
+        public boolean hasNext() {
+            return !mCancelled && !mFinished;
+        }
+
+        public void cancel() {
+            mCancelled = true;
+        }
+
+        public boolean cancelled() {
+            return mCancelled;
+        }
+
+        public int pages() {
+            return mPages;
+        }
+
+        public int seen() {
+            return mSeen;
+        }
+
+        public int generation() {
+            return mGeneration;
+        }
+
+        public boolean snapshotComplete() {
+            return mSnapshotComplete;
+        }
+
+        public String firstMissingPath() {
+            return mFirstMissing;
+        }
+
+        /** 下一页游标；已经取完或取消时为 null。 */
+        public String cursor() {
+            if (mCancelled) { return null; }
+            if (!mCaptured) { capture(); }
+            if (mFinished) { return null; }
+            return encodeCursor(mGeneration, mRemote.toString(), mOffset);
+        }
+
+        public RemoteUiObjectCollection next() {
+            if (mCancelled || mFinished) {
+                return emptyPage();
+            }
+            capture();
+            RemoteAutomationBridge.ensureAccessibility();
+            RemoteAutomationBridge.Backend backend = RemoteAutomationBridge.requireBackend();
+            String selectorJson = mRemote.toString();
+            List<RemoteUiObject> page = new ArrayList<>();
+            while (mOffset < mOrder.length && page.size() < mPageSize) {
+                if (mCancelled || Thread.currentThread().isInterrupted()) {
+                    mCancelled = true;
+                    break;
+                }
+                int i = mOrder[mOffset++];
+                mSeen++;
+                JSONObject node = mNodes.optJSONObject(i);
+                if (node == null || (mWire != null && !mWire.matches(node)) || !matchesLocal(node)) {
+                    continue;
+                }
+                RemoteUiObject object = new RemoteUiObject(
+                        backend, selectorJson, page.size(), node, mProxyable, mGeneration);
+                boolean accepted = true;
+                for (NodePredicate predicate : mNodePredicates) {
+                    if (!predicate.test(object)) { accepted = false; break; }
+                }
+                if (accepted) { page.add(object); }
+            }
+            mPages++;
+            boolean exhausted = mOffset >= mOrder.length;
+            if (exhausted || mCancelled) { mFinished = true; }
+            boolean complete = exhausted && mSnapshotComplete;
+            String nextCursor = complete ? null : encodeCursor(mGeneration, selectorJson, mOffset);
+            return new RemoteUiObjectCollection(page, complete, mSnapshotComplete, mFirstMissing,
+                    mGeneration, nextCursor, mSeen);
+        }
+
+        private RemoteUiObjectCollection emptyPage() {
+            return new RemoteUiObjectCollection(new ArrayList<RemoteUiObject>(), true,
+                    mSnapshotComplete, mFirstMissing, mGeneration, null, mSeen);
+        }
+
+        private void capture() {
+            if (mCaptured) { return; }
+            mCaptured = true;
+            String selectorJson = mRemote.toString();
+            boolean local = !mLocalFilters.isEmpty() || !mNodePredicates.isEmpty();
+            mProxyable = !local;
+            boolean bfs = ALGORITHM_BFS.equalsIgnoreCase(
+                    mRemote.optString("algorithm", ALGORITHM_DFS));
+            if (mCursorInput != null) {
+                int[] parts = decodeCursor(mCursorInput);
+                int selectorHash = selectorJson.hashCode();
+                if (parts[0] != mCachedGeneration || parts[1] != selectorHash
+                        || mCachedOrder == null || !selectorJson.equals(mCachedSelectorJson)) {
+                    throw new ScriptException("分页游标已过期：宿主快照已被新的查询/树刷新覆盖，"
+                            + "请从第一页重新开始");
+                }
+                mNodes = mCachedNodes;
+                mOrder = mCachedOrder;
+                mSnapshot = mCachedSnapshot;
+                mGeneration = parts[0];
+                mOffset = parts[2];
+                mSeen = mOffset;
+                mSnapshotComplete = mSnapshot == null || mSnapshot.complete();
+                mFirstMissing = mSnapshot == null ? null : mSnapshot.firstMissingPath();
+                mWire = mProxyable ? null : buildWireMatcher();
+                return;
+            }
+            RemoteAutomationBridge.ensureAccessibility();
+            RemoteAutomationBridge.Backend backend = RemoteAutomationBridge.requireBackend();
+            try {
+                JSONArray nodes;
+                if (mProxyable) {
+                    nodes = new JSONArray(backend.findNodes(selectorJson));
+                    mGeneration = sGeneration.incrementAndGet();
+                    mOrder = identityOrder(nodes.length());
+                    mSnapshot = null;
+                    mSnapshotComplete = nodes.length() < HOST_FIND_NODE_LIMIT;
+                    mWire = null;
+                } else {
+                    nodes = new JSONArray(backend.getLatestNodeDump());
+                    mGeneration = sGeneration.incrementAndGet();
+                    mSnapshot = Snapshot.analyze(nodes, mGeneration);
+                    mLastSnapshot = mSnapshot;
+                    mSnapshotComplete = mSnapshot.complete();
+                    mFirstMissing = mSnapshot.firstMissingPath();
+                    if (bfs && !mSnapshotComplete) {
+                        throw new ScriptException(TRUNCATED_BFS_MESSAGE);
+                    }
+                    mWire = buildWireMatcher();
+                    mOrder = mSnapshot.order(bfs);
+                }
+                mNodes = nodes;
+                mOffset = 0;
+                mSeen = 0;
+                mCachedNodes = nodes;
+                mCachedOrder = mOrder;
+                mCachedSnapshot = mSnapshot;
+                mCachedGeneration = mGeneration;
+                mCachedSelectorJson = selectorJson;
+            } catch (ScriptException error) {
+                throw error;
+            } catch (Throwable error) {
+                throw new ScriptException("远程选择器分页失败：" + messageOf(error), error);
+            }
+        }
+
+        private WireMatcher buildWireMatcher() {
+            try {
+                return new WireMatcher(mRemote);
+            } catch (ScriptException error) {
+                throw error;
+            } catch (Throwable error) {
+                throw new ScriptException("远程选择器条件无法在快照上应用：" + messageOf(error), error);
+            }
+        }
     }
 
     // ---- 选择器级动作（对第一个匹配节点执行） -----------------------------
@@ -618,6 +896,219 @@ public final class RemoteUiSelector {
         return true;
     }
 
+    // ---- 游标编码（不透明字符串；老调用方不会看到它） ---------------------
+
+    private static String encodeCursor(int generation, String selectorJson, int offset) {
+        return "r05:1:" + generation + ":" + selectorJson.hashCode() + ":" + offset;
+    }
+
+    private static int[] decodeCursor(String cursor) {
+        String[] parts = cursor == null ? new String[0] : cursor.split(":", -1);
+        if (parts.length != 5 || !"r05".equals(parts[0]) || !"1".equals(parts[1])) {
+            throw new ScriptException("分页游标格式无效：" + cursor);
+        }
+        try {
+            return new int[]{Integer.parseInt(parts[2]), Integer.parseInt(parts[3]),
+                    Integer.parseInt(parts[4])};
+        } catch (NumberFormatException error) {
+            throw new ScriptException("分页游标格式无效：" + cursor, error);
+        }
+    }
+
+    // ---- R05/R06：快照完整性分析与真正的层序遍历 -------------------------
+
+    private static int[] identityOrder(int length) {
+        int n = Math.max(0, length);
+        int[] order = new int[n];
+        for (int i = 0; i < n; i++) { order[i] = i; }
+        return order;
+    }
+
+    /**
+     * 把宿主 DFS 快照重新校验成一棵树：path 的父子关系、兄弟下标连续性、childCount 自洽。
+     *
+     * <p>判定依据（与宿主 {@code nodeJson} 契约一致）：DFS 前序快照里每个节点都带
+     * {@code path} 与 {@code childCount}。完整快照满足「每个已出现节点的子节点数 == childCount」，
+     * 此时按 path 重建的树就是真树，可以做真正的层序遍历；任何缺子节点/缺 childCount/重复
+     * path/孤儿节点都判为截断（{@code complete=false}）并给出第一个缺失子节点的 path。
+     */
+    static final class Snapshot {
+
+        private final JSONArray nodes;
+        final int generation;
+        private final boolean complete;
+        private final String firstMissingPath;
+        private final int[] bfsOrder;
+
+        private Snapshot(JSONArray nodes, int generation, boolean complete,
+                         String firstMissingPath, int[] bfsOrder) {
+            this.nodes = nodes;
+            this.generation = generation;
+            this.complete = complete;
+            this.firstMissingPath = firstMissingPath;
+            this.bfsOrder = bfsOrder;
+        }
+
+        boolean complete() {
+            return complete;
+        }
+
+        String firstMissingPath() {
+            return firstMissingPath;
+        }
+
+        int nodeCount() {
+            return nodes == null ? 0 : nodes.length();
+        }
+
+        /** dfs=true 返回快照原顺序；dfs=false 返回重建后的真正层序。 */
+        int[] order(boolean bfs) {
+            return bfs ? bfsOrder : identityOrder(nodeCount());
+        }
+
+        static Snapshot analyze(JSONArray nodes, int generation) {
+            int n = nodes == null ? 0 : nodes.length();
+            int[] identity = identityOrder(n);
+            if (n == 0) {
+                return new Snapshot(nodes, generation, true, null, identity);
+            }
+            JSONArray[] paths = new JSONArray[n];
+            Map<String, Integer> byPath = new HashMap<>();
+            boolean duplicate = false;
+            for (int i = 0; i < n; i++) {
+                JSONObject node = nodes.optJSONObject(i);
+                JSONArray path = node == null ? null : node.optJSONArray("path");
+                if (path == null) { duplicate = true; continue; }
+                paths[i] = path;
+                String key = pathKey(path, path.length());
+                if (byPath.containsKey(key)) { duplicate = true; } else { byPath.put(key, i); }
+            }
+            Map<String, List<Integer>> children = new HashMap<>();
+            int rootIndex = -1;
+            boolean orphan = false;
+            String firstOrphan = null;
+            for (int i = 0; i < n; i++) {
+                JSONArray path = paths[i];
+                if (path == null) { continue; }
+                int length = path.length();
+                if (length == 0) {
+                    if (rootIndex < 0) { rootIndex = i; } else { duplicate = true; }
+                    continue;
+                }
+                String parentKey = pathKey(path, length - 1);
+                if (!byPath.containsKey(parentKey)) {
+                    orphan = true;
+                    if (firstOrphan == null) { firstOrphan = jsonPath(childKey(parentKey, lastIndex(path))); }
+                    continue;
+                }
+                List<Integer> list = children.get(parentKey);
+                if (list == null) { list = new ArrayList<>(); children.put(parentKey, list); }
+                list.add(i);
+            }
+            String firstMissing = null;
+            boolean gap = false;
+            for (Map.Entry<String, List<Integer>> entry : children.entrySet()) {
+                List<Integer> list = entry.getValue();
+                list.sort((a, b) -> Integer.compare(lastIndex(paths[a]), lastIndex(paths[b])));
+                int expected = 0;
+                for (int index : list) {
+                    int last = lastIndex(paths[index]);
+                    if (last != expected) {
+                        gap = true;
+                        if (firstMissing == null) { firstMissing = jsonPath(childKey(entry.getKey(), expected)); }
+                        expected = last;
+                    }
+                    expected = last + 1;
+                }
+            }
+            boolean unknownChildCount = false;
+            boolean childCountMismatch = false;
+            for (int i = 0; i < n; i++) {
+                JSONObject node = nodes.optJSONObject(i);
+                JSONArray path = paths[i];
+                if (node == null || path == null) { continue; }
+                String key = pathKey(path, path.length());
+                int actual = children.containsKey(key) ? children.get(key).size() : 0;
+                if (!node.has("childCount") || node.isNull("childCount")) {
+                    unknownChildCount = true;
+                    continue;
+                }
+                int declared = node.optInt("childCount", -1);
+                if (declared < 0) {
+                    unknownChildCount = true;
+                    continue;
+                }
+                if (declared != actual) {
+                    childCountMismatch = true;
+                    if (firstMissing == null) { firstMissing = jsonPath(childKey(key, actual)); }
+                }
+            }
+            boolean complete = !duplicate && !orphan && !gap && !unknownChildCount
+                    && !childCountMismatch && rootIndex >= 0;
+            if (!complete && firstMissing == null && firstOrphan != null) {
+                firstMissing = firstOrphan;
+            }
+            int[] bfs = buildBfs(n, paths, children, rootIndex);
+            return new Snapshot(nodes, generation, complete, complete ? null : firstMissing, bfs);
+        }
+
+        /** 真正的层序遍历：从根出发按子下标顺序入队；未挂上的节点按原顺序补在末尾（不丢）。 */
+        private static int[] buildBfs(int n, JSONArray[] paths,
+                                      Map<String, List<Integer>> children, int rootIndex) {
+            Integer[] order = new Integer[n];
+            boolean[] visited = new boolean[n];
+            int count = 0;
+            if (rootIndex >= 0) {
+                ArrayDeque<Integer> queue = new ArrayDeque<>();
+                queue.add(rootIndex);
+                visited[rootIndex] = true;
+                while (!queue.isEmpty()) {
+                    int i = queue.poll();
+                    order[count++] = i;
+                    JSONArray path = paths[i];
+                    if (path == null) { continue; }
+                    List<Integer> kids = children.get(pathKey(path, path.length()));
+                    if (kids != null) {
+                        List<Integer> sorted = new ArrayList<>(kids);
+                        sorted.sort((a, b) -> Integer.compare(lastIndex(paths[a]), lastIndex(paths[b])));
+                        for (int kid : sorted) {
+                            if (!visited[kid]) { visited[kid] = true; queue.add(kid); }
+                        }
+                    }
+                }
+            }
+            for (int i = 0; i < n; i++) {
+                if (!visited[i]) { visited[i] = true; order[count++] = i; }
+            }
+            int[] result = new int[n];
+            for (int i = 0; i < n; i++) { result[i] = order[i] == null ? i : order[i]; }
+            return result;
+        }
+    }
+
+    private static int lastIndex(JSONArray path) {
+        return path == null || path.length() == 0 ? -1 : path.optInt(path.length() - 1, -1);
+    }
+
+    private static String pathKey(JSONArray path, int length) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < length; i++) {
+            if (i > 0) { builder.append('/'); }
+            builder.append(path.optInt(i, -1));
+        }
+        return builder.toString();
+    }
+
+    private static String childKey(String parentKey, int index) {
+        return parentKey == null || parentKey.isEmpty() ? String.valueOf(index)
+                : parentKey + "/" + index;
+    }
+
+    private static String jsonPath(String key) {
+        if (key == null || key.isEmpty()) { return "[]"; }
+        return "[" + key.replace('/', ',') + "]";
+    }
+
     /**
      * Snapshot-side equivalent of {@code AutomationHostService.SelectorSpec}: every condition in
      * {@link #mRemote} must be applied to the same node before the local filters run.
@@ -625,6 +1116,9 @@ public final class RemoteUiSelector {
      * <p>Compiled once per query (only when local filters force the snapshot path); the wire
      * {@code textMatches} regex is compiled here, not per node. Unknown wire fields fail loudly
      * instead of being silently ignored.
+     *
+     * <p>{@code algorithm} 只影响遍历顺序，不影响单节点匹配；真正的层序由
+     * {@link Snapshot#order(boolean)} 决定，所以这里不再因为 BFS 而失败（R06）。
      */
     private static final class WireMatcher {
 
@@ -666,11 +1160,6 @@ public final class RemoteUiSelector {
                         if (!ALGORITHM_BFS.equalsIgnoreCase(algorithm)
                                 && !ALGORITHM_DFS.equalsIgnoreCase(algorithm)) {
                             throw new ScriptException("远程选择器 algorithm 取值无效：" + algorithm);
-                        }
-                        // BFS cannot use the DFS-ordered dump; the find() guard normally catches
-                        // this earlier, but keep the matcher itself from silently applying BFS.
-                        if (ALGORITHM_BFS.equalsIgnoreCase(algorithm)) {
-                            throw new ScriptException("BFS 算法无法在 DFS 顺序的宿主快照上应用本地过滤条件");
                         }
                         break;
                     }

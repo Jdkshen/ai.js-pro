@@ -5,18 +5,51 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * {@code :script} 进程里的远程节点集合（替代 {@code com.stardust.automator.UiObjectCollection}）。
+ * {@code :script} 进程里的远程节点集合（替代 {@code com.stardust.autojs.object.UiObjectCollection}）。
  *
  * <p>Rhino/QuickJS 脚本里 {@code text("x").find()} 的返回值常用 {@code size()/get()/empty()/
  * nonEmpty()} 等方法；这里保持与 UiObjectCollection 同名的最小接口，避免脚本拿到
  * {@code java.util.List} 后调用 {@code empty()} 等方法失败。
+ *
+ * <p><b>R05 完整性预算（向后兼容的追加元数据）</b>：集合额外携带这一次查询的快照预算，
+ * 老代码只用 size()/get() 时行为完全不变：
+ * <ul>
+ *   <li>{@link #complete()}：本次结果覆盖快照里全部匹配项，且快照本身没有被宿主预算截断；</li>
+ *   <li>{@link #truncated()}：{@code !complete()}，即结果或快照被截断（存在未取到的节点）；</li>
+ *   <li>{@link #snapshotComplete()}：宿主快照（getLatestNodeDump）本身是否完整；纯下发
+ *       findNodes 的快通道没有完整树语义，返回 {@code true} 仅在未触达宿主返回上限时成立；</li>
+ *   <li>{@link #firstMissingPath()}：快照截断时第一个缺失子节点的 path（JSON 数组字符串），
+ *       完整时为 {@code null}；</li>
+ *   <li>{@link #generation()}：本次快照的代次（每次向宿主取树自增），用于判断身份/游标是否过期；</li>
+ *   <li>{@link #nextCursor()}：稳定分页游标；完整时为 {@code null}，否则可交给下一次分页；</li>
+ *   <li>{@link #seen()}：本次查询实际检查过的快照节点数。</li>
+ * </ul>
  */
 public final class RemoteUiObjectCollection implements Iterable<RemoteUiObject> {
 
     private final List<RemoteUiObject> mNodes;
+    private final boolean mComplete;
+    private final boolean mSnapshotComplete;
+    private final String mFirstMissingPath;
+    private final int mGeneration;
+    private final String mNextCursor;
+    private final int mSeen;
 
+    /** 旧构造器：无预算信息的历史查询，等价于「单次结果就是全部」。 */
     public RemoteUiObjectCollection(List<RemoteUiObject> nodes) {
+        this(nodes, true, true, null, 0, null, nodes == null ? 0 : nodes.size());
+    }
+
+    public RemoteUiObjectCollection(List<RemoteUiObject> nodes, boolean complete,
+                                    boolean snapshotComplete, String firstMissingPath,
+                                    int generation, String nextCursor, int seen) {
         mNodes = nodes == null ? Collections.<RemoteUiObject>emptyList() : nodes;
+        mComplete = complete;
+        mSnapshotComplete = snapshotComplete;
+        mFirstMissingPath = firstMissingPath;
+        mGeneration = generation;
+        mNextCursor = nextCursor;
+        mSeen = seen;
     }
 
     public int size() {
@@ -43,6 +76,43 @@ public final class RemoteUiObjectCollection implements Iterable<RemoteUiObject> 
 
     public RemoteUiObject[] toArray() {
         return mNodes.toArray(new RemoteUiObject[0]);
+    }
+
+    // ---- R05：完整性/截断/游标/预算（只追加，不改变旧行为） ----------------
+
+    /** 结果是否覆盖快照里的全部匹配项，且快照未被宿主预算截断。 */
+    public boolean complete() {
+        return mComplete;
+    }
+
+    /** 结果或快照被截断：存在没取到的节点，不能当成完整结果使用。 */
+    public boolean truncated() {
+        return !mComplete;
+    }
+
+    /** 宿主快照本身是否完整（childCount 与 path 结构自洽、没有缺子节点）。 */
+    public boolean snapshotComplete() {
+        return mSnapshotComplete;
+    }
+
+    /** 快照截断时第一个缺失子节点的 path（JSON 数组字符串）；完整时为 null。 */
+    public String firstMissingPath() {
+        return mFirstMissingPath;
+    }
+
+    /** 本次查询使用的宿主快照代次；节点身份/游标过期判断用它。 */
+    public int generation() {
+        return mGeneration;
+    }
+
+    /** 稳定分页游标：把该值交回 query(limit, cursor) 可继续下一页；完整时为 null。 */
+    public String nextCursor() {
+        return mNextCursor;
+    }
+
+    /** 本次查询检查过的快照节点数（预算可观察）。 */
+    public int seen() {
+        return mSeen;
     }
 
     private boolean act(String action, Object... arguments) {
@@ -104,6 +174,8 @@ public final class RemoteUiObjectCollection implements Iterable<RemoteUiObject> 
 
     @Override
     public String toString() {
-        return "RemoteUiObjectCollection" + mNodes;
+        return "RemoteUiObjectCollection" + mNodes
+                + (mComplete ? "" : " truncated(gen=" + mGeneration
+                        + (mNextCursor == null ? "" : ", cursor=" + mNextCursor) + ")");
     }
 }

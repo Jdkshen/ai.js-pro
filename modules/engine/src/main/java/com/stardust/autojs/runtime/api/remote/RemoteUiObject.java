@@ -21,14 +21,25 @@ public final class RemoteUiObject {
     private final JSONObject mNode;
     /** true=选择器可直接下发给主进程（动作按 selector+index）；false=含本地过滤（动作走坐标）。 */
     private final boolean mProxyableSelector;
+    /** R07：快照代次（每次向宿主取树自增）；不同代次的身份/游标不能混用。 */
+    private final int mGeneration;
+    /** R07：由宿主快照字段派生的可比较身份 token（path+id/class/pkg/text/desc/bounds/深度…）。 */
+    private final String mToken;
 
     RemoteUiObject(RemoteAutomationBridge.Backend backend, String selectorJson, int index,
                    JSONObject node, boolean proxyableSelector) {
+        this(backend, selectorJson, index, node, proxyableSelector, 0);
+    }
+
+    RemoteUiObject(RemoteAutomationBridge.Backend backend, String selectorJson, int index,
+                   JSONObject node, boolean proxyableSelector, int generation) {
         mBackend = backend;
         mSelectorJson = selectorJson == null ? "{}" : selectorJson;
         mIndex = index;
         mNode = node == null ? new JSONObject() : node;
         mProxyableSelector = proxyableSelector;
+        mGeneration = generation;
+        mToken = tokenOf(mNode);
     }
 
     // ---- 节点属性（与 UiObject 同名，脚本直接调用） --------------------------
@@ -86,6 +97,56 @@ public final class RemoteUiObject {
     public String path() {
         JSONArray array = mNode.optJSONArray("path");
         return array == null ? "[]" : array.toString();
+    }
+
+    // ---- R07：可判过期的宿主快照 token / 代次 --------------------------------
+
+    /**
+     * 由宿主快照字段派生的身份 token（同一个节点在两次快照里 token 相同）。
+     *
+     * <p>解析协议没有宿主侧稳定的节点句柄，这里用宿主真正下发的字段组合出最严格的可用身份：
+     * path + id + className + packageName + text/desc（密码节点不含明文）+ bounds + depth +
+     * indexInParent + childCount。列表复用/插入删除后复用了同一个 path 时，只要内容或几何
+     * 有变化 token 就会不同，{@link #isStale()} 因而能判过期。
+     */
+    public String token() {
+        return mToken;
+    }
+
+    /** 该节点来自哪一次宿主快照；配合 {@link #token()} 判断是否过期。 */
+    public int generation() {
+        return mGeneration;
+    }
+
+    /**
+     * 重新向宿主确认这个节点现在是否仍然存在且身份未变。
+     *
+     * <p>返回 true 表示「快照已过期」：节点消失、被别的节点复用（token 不同）或查询失败。
+     * 动作入口本来就会用 path+属性保护选择器重新匹配，不会因为过期而误点别的节点；
+     * 这个方法让脚本可以显式判断过期，而不必依赖动作返回 false 去猜。
+     */
+    public boolean isStale() {
+        try {
+            JSONObject current = live(true);
+            return current == null || !tokenOf(current).equals(mToken);
+        } catch (Throwable error) {
+            return true;
+        }
+    }
+
+    private static String tokenOf(JSONObject node) {
+        if (node == null) { return ""; }
+        boolean password = node.optBoolean("password", false);
+        return "path=" + (node.optJSONArray("path") == null ? "[]" : node.optJSONArray("path"))
+                + ";id=" + node.optString("id", "")
+                + ";class=" + node.optString("className", "")
+                + ";pkg=" + node.optString("packageName", "")
+                + ";text=" + (password ? "" : node.optString("text", ""))
+                + ";desc=" + node.optString("desc", "")
+                + ";bounds=" + (node.optJSONArray("bounds") == null ? "[]" : node.optJSONArray("bounds"))
+                + ";depth=" + node.optInt("depth", -1)
+                + ";index=" + node.optInt("indexInParent", -1)
+                + ";childCount=" + node.optInt("childCount", -1);
     }
 
     /** Revalidate the node against the live window instead of treating a snapshot as live. */
@@ -251,7 +312,7 @@ public final class RemoteUiObject {
                 if (direct && other.length() != length || !direct && other.length() <= path.length()) continue;
                 int common = Math.min(path.length(), other.length()); boolean match = true;
                 for (int j = 0; j < common; j++) if (path.getInt(j) != other.getInt(j)) { match = false; break; }
-                if (match) result.add(new RemoteUiObject(mBackend, "{}", 0, raw, false));
+                if (match) result.add(new RemoteUiObject(mBackend, "{}", 0, raw, false, mGeneration));
             }
             return result;
         } catch (Throwable error) { throw wrap("遍历", error); }

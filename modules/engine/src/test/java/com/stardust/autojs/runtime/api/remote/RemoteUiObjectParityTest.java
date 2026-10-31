@@ -249,14 +249,17 @@ public class RemoteUiObjectParityTest {
         assertTrue(calls.isEmpty());
     }
 
-    @Test public void bfsWithLocalPredicatesFailsClearlyInsteadOfFakeSorting() throws Exception {
+    @Test public void bfsWithLocalPredicatesRefusesTruncatedSnapshotInsteadOfFakeSorting() throws Exception {
         setup();calls.clear();
+        // 这棵 fake 树没有 childCount，无法证明快照完整；R06 要求截断时明确拒绝，
+        // 而不是对 DFS 结果排序后冒充完整 BFS。
         try { new RemoteUiSelector().checked().algorithm("BFS").find(); fail(); }
         catch (ScriptException expected) {
             assertTrue(expected.getMessage().contains("BFS"));
-            assertTrue(expected.getMessage().contains("本地过滤条件"));
+            assertTrue(expected.getMessage().contains("截断"));
         }
-        assertTrue(calls.isEmpty());
+        assertTrue(calls.contains("getLatestNodeDump"));
+        assertFalse(calls.contains("findNodes"));
     }
 
     @Test public void dfsWithLocalPredicatesStillUsesFullDump() throws Exception {
