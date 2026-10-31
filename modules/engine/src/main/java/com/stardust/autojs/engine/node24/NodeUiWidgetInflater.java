@@ -1,6 +1,8 @@
 package com.stardust.autojs.engine.node24;
 
 import android.content.Context;
+import android.util.Log;
+import android.view.ContextThemeWrapper;
 import android.view.InflateException;
 import android.view.View;
 import android.view.ViewGroup;
@@ -13,9 +15,11 @@ import com.stardust.autojs.core.ui.inflater.ShouldCallOnFinishInflate;
 import com.stardust.autojs.core.ui.inflater.ViewInflater;
 import com.stardust.autojs.core.ui.inflater.inflaters.ViewGroupInflater;
 import com.stardust.autojs.core.ui.inflater.util.Ids;
+import com.stardust.autojs.core.ui.inflater.util.Res;
 import com.stardust.autojs.core.ui.xml.XmlConverter;
 
 import org.json.JSONObject;
+import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.xml.sax.InputSource;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -32,7 +36,89 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Per-inflation Widget stages. All calls happen inside the protected main-thread inflate. */
 public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
+    private static final String TAG = "NodeUiWidgetInflater";
     private static final ThreadLocal<Context> CURRENT_CONTEXT = new ThreadLocal<>();
+
+    /**
+     * task-246 R03：Widget 标签上的构造期属性。
+     *
+     * <p>{@code style} / {@code theme} 和普通属性不同，必须在根 View <b>构造时</b> 生效：
+     * style 交给 {@code (Context, AttributeSet, int, int)} 的 defStyleRes，theme 交给
+     * {@link ContextThemeWrapper}。后置 {@code setAttr} 对它们没有意义（{@code BaseViewInflater}
+     * 对 style 返回 false、对 theme 是显式 no-op），旧实现等于把这两个外部声明丢掉了。
+     */
+    static final class Construction {
+        final String style;
+        final String theme;
+
+        private Construction(String style, String theme) {
+            this.style = style;
+            this.theme = theme;
+        }
+
+        /** 取 Widget 标签上的 style/theme 引用；两个名字都接受带命名空间的写法（android:/app:）。 */
+        static Construction of(Map<String, String> attributes) {
+            return new Construction(reference(attributes, "style"), reference(attributes, "theme"));
+        }
+
+        private static String reference(Map<String, String> attributes, String name) {
+            if (attributes == null) {
+                return null;
+            }
+            String direct = useful(attributes.get(name));
+            if (direct != null) {
+                return direct;
+            }
+            for (Map.Entry<String, String> entry : attributes.entrySet()) {
+                String key = entry.getKey();
+                int colon = key == null ? -1 : key.indexOf(':');
+                if (colon < 0 || !key.substring(colon + 1).equals(name)) {
+                    continue;
+                }
+                String value = useful(entry.getValue());
+                if (value != null) {
+                    return value;
+                }
+            }
+            return null;
+        }
+
+        private static String useful(String value) {
+            if (value == null) {
+                return null;
+            }
+            String text = value.trim();
+            return text.isEmpty() || "@null".equals(text) ? null : text;
+        }
+    }
+
+    /** 把一个构造期属性从「后置应用」的属性表里移除（含带命名空间的写法）。 */
+    static void removeAttribute(Map<String, String> attributes, String name) {
+        if (attributes == null) {
+            return;
+        }
+        attributes.remove(name);
+        java.util.Iterator<String> keys = attributes.keySet().iterator();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            int colon = key.indexOf(':');
+            if (colon >= 0 && key.substring(colon + 1).equals(name)) {
+                keys.remove();
+            }
+        }
+    }
+
+    /**
+     * 把构造期 style 注入本轮渲染的根节点：{@code DynamicLayoutInflater.createViewForName} 会读
+     * {@code style} 作为 defStyleRes，因此必须在根 View 创建前写进 DOM。外部（Widget 标签）的
+     * 声明覆盖 render XML 根节点自己的 style，与「外部属性覆盖内部默认值」一致。
+     */
+    static void applyConstructionStyle(Node node, String style) {
+        if (style == null || !(node instanceof Element)) {
+            return;
+        }
+        ((Element) node).setAttribute("style", style);
+    }
     static Context currentContext() { return CURRENT_CONTEXT.get(); }
     public interface Callbacks {
         Object render(long token, String name, Context context, ViewGroup parent);
@@ -73,6 +159,8 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
         View root;
         HashMap<String, String> internal = new HashMap<>();
         boolean waitingRoot = true;
+        /** task-246 R03：Widget 标签上的 style，等真正创建根 View 时作为 defStyleRes 注入。 */
+        String constructionStyle;
     }
     private final Registration registration;
     private final NodeUiXmlSource source = new NodeUiXmlSource();
@@ -108,7 +196,27 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
             return view;
         }
         if (input != null && input.conversionError != null) throw new InflateException(input.conversionError);
+        // 根 View 创建前：本轮等待根的 Widget 别名（可能多层）把构造期 style 交给它。
+        applyPendingConstructionStyle(node);
         return super.inflate(context, node, parent, attach);
+    }
+
+    /**
+     * 汇总所有等待根的 Widget 别名的构造期 style 并注入根节点。别名链里越靠外层的声明越优先
+     * （内层 → 外层的迭代顺序，后面的覆盖前面的），同一根只注入一次。
+     */
+    private void applyPendingConstructionStyle(Node node) {
+        // <include> 自己不是根：真正创建 View 的是展开后的布局根节点，style 留到那时再注入。
+        if ("include".equals(node.getNodeName())) return;
+        String style = null;
+        for (Frame frame : frames) {
+            if (!frame.waitingRoot) continue;
+            if (frame.constructionStyle != null) style = frame.constructionStyle;
+            frame.constructionStyle = null;
+        }
+        if (style == null) return;
+        applyConstructionStyle(node, style);
+        Log.i(TAG, "C-WIDGET: 构造期 style=" + style + " → " + node.getNodeName());
     }
 
     private HashMap<String, String> originalAttributes(Node node) {
@@ -185,8 +293,24 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
         frame.token = registration.next.incrementAndGet();
         frames.push(frame);
         boolean success = false;
+        Context previousContext = null;
         try {
             HashMap<String, String> original = originalAttributes(node);
+            // task-246 R03：style/theme 必须在根 View 构造时生效。Widget 自己声明了同名 setter
+            //（hasAttribute）时以 Widget 为准，不下沉为构造期属性。
+            Construction construction = Construction.of(original);
+            boolean styleForConstruction = construction.style != null
+                    && !registration.callbacks.hasAttribute(frame.token, "style");
+            boolean themeForConstruction = construction.theme != null
+                    && !registration.callbacks.hasAttribute(frame.token, "theme");
+            if (styleForConstruction) frame.constructionStyle = construction.style;
+            if (themeForConstruction) {
+                Context themed = themedContextForWidget(construction.theme);
+                if (themed != null) {
+                    previousContext = getContext();
+                    setContext(themed);
+                }
+            }
             Object rendered = registration.callbacks.render(frame.token, tag, getContext(),
                     parent == syntheticParent ? null : parent);
             registration.checkOpen();
@@ -198,8 +322,11 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
             } else if (rendered instanceof View) {
                 root = (View) rendered;
                 if (root.getParent() != null) throw new InflateException("Widget.render View already has a parent");
+                // 原生 View 由 Widget 自己构造，宿主无法再补 defStyleRes。
+                warnUnappliedConstructionStyle(frame, "原生 View render");
                 bindPendingRoots(root);
             } else throw new InflateException("Widget.render must return XML or an Android View");
+            warnUnappliedConstructionStyle(frame, "render 未产生可注入 style 的原生根 View");
             registration.checkOpen();
             if (frame.waitingRoot || frame.root != root) throw new InflateException("Widget render has no single root");
             String slot = registration.callbacks.contentSlot(frame.token);
@@ -219,7 +346,13 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
             registration.callbacks.inflated(frame.token, new JSONObject(frame.internal).toString());
             registration.checkOpen();
             Map<String, String> custom = new HashMap<>();
-            HashMap<String, String> external = nativeAttributes(node, original, frame, custom);
+            HashMap<String, String> applicable = original;
+            if (styleForConstruction || themeForConstruction) {
+                applicable = new HashMap<>(original);
+                if (styleForConstruction) removeAttribute(applicable, "style");
+                if (themeForConstruction) removeAttribute(applicable, "theme");
+            }
+            HashMap<String, String> external = nativeAttributes(node, applicable, frame, custom);
             // LayoutParams are generated for the actual parent before it can attach.
             prepareLayoutParamsForAttach(context, root, external, parent);
             Frame previous = roots.put(root, frame);
@@ -235,6 +368,8 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
             success = true;
             return root;
         } finally {
+            if (previousContext != null) setContext(previousContext);
+            frame.constructionStyle = null;
             frames.pop();
             if (frame.root != null && roots.get(frame.root) == frame) {
                 roots.remove(frame.root);
@@ -245,6 +380,51 @@ public final class NodeUiWidgetInflater extends DynamicLayoutInflater {
             try { registration.callbacks.release(frame.token); }
             catch (Throwable error) { if (success) throw new InflateException(error); }
         }
+    }
+
+    /**
+     * Widget 标签 {@code theme="…"} 的构造期上下文：与 framework 的 {@code android:theme} 一致，
+     * render()、渲染 XML 的子 View 构造和属性应用都在该主题下进行（{@code ?attr/…} 才解析得到）。
+     * 解析不出来时保持原上下文，不额外创建主题。
+     */
+    private Context themedContextForWidget(String reference) {
+        try {
+            int themeId = resolveThemeId(reference);
+            if (themeId == 0) {
+                Log.w(TAG, "C-WIDGET: theme 未解析，保持原主题：" + reference);
+                return null;
+            }
+            Context themed = new ContextThemeWrapper(getContext(), themeId);
+            Log.i(TAG, "C-WIDGET: 构造期 theme=" + reference + " id=" + themeId);
+            return themed;
+        } catch (Throwable error) {
+            Log.w(TAG, "C-WIDGET: 构造期 theme 失败，保持原主题：" + reference, error);
+            return null;
+        }
+    }
+
+    private int resolveThemeId(String reference) {
+        String text = reference.trim();
+        if (text.startsWith("?")) {
+            return com.stardust.autojs.core.ui.inflater.util.Dimensions.resolveAttr(getContext(), text);
+        }
+        if (text.startsWith("0x") || text.startsWith("0X")) {
+            try {
+                int themeId = (int) Long.parseLong(text.substring(2), 16);
+                return themeId != 0 && "style".equals(
+                        getContext().getResources().getResourceTypeName(themeId)) ? themeId : 0;
+            } catch (Exception ignored) {
+                return 0;
+            }
+        }
+        return Res.parseStyle(getContext(), text);
+    }
+
+    /** 原生 View render（或渲染 XML 没有原生根节点）时 style 无法在构造期应用，只记录不报错。 */
+    private static void warnUnappliedConstructionStyle(Frame frame, String reason) {
+        if (frame.constructionStyle == null) return;
+        Log.w(TAG, "C-WIDGET: 构造期 style=" + frame.constructionStyle + " 无法应用（" + reason + "）");
+        frame.constructionStyle = null;
     }
 
     private ViewGroup contentParent(View root, String slot) {

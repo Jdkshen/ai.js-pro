@@ -76,11 +76,16 @@
         const realBindings = new WeakMap();
         const realBindingCaches = new WeakMap();
         let realViewExtras = new WeakMap();
+        // task-246：共享根 View 时每个 Widget 各有自己的接收句柄；句柄必须始终归约回真实
+        // View，否则同一个 View 会有两份 events/binding/widget 状态。
+        let receiverRawByHandle = new WeakMap();
+        let widgetReceiverHandles = new WeakMap();
         function viewExtras(view) {
+            if (view && receiverRawByHandle.has(view)) view = receiverRawByHandle.get(view);
             let extras = realViewExtras.get(view);
             if (!extras) {
                 extras = {events: new (require('events').EventEmitter)(), bound: Object.create(null), widget: null,
-                    data: Object.create(null)};
+                    widgets: [], data: Object.create(null)};
                 realViewExtras.set(view, extras);
             }
             return extras;
@@ -247,6 +252,93 @@
             extras.bound[group] = true;
         }
 
+        /**
+         * task-246：三层（或多层）Widget 别名共享同一个根 View 时，内层和外层必须各有自己的
+         * 属性接收者。Widget 自己的 view 由 {@link widgetReceiverView} 给出绑定到该 Widget 的
+         * 句柄；绑定只有一个 Widget（普通情况）时仍是真实 View 本身，身份不变。
+         */
+        function widgetReceiverView(widget, raw) {
+            if (!widget || !raw) return raw;
+            const extras = realViewExtras.get(raw);
+            const owners = extras && extras.widgets;
+            if (!owners || owners.length < 2) return raw;
+            const cached = widgetReceiverHandles.get(widget);
+            if (cached && cached.raw === raw) return cached.handle;
+            const handle = new Proxy(raw, {
+                get: function (target, name) {
+                    // attr 固定按持有者解析 attr$xxx；其余成员（binding/findView/事件/Java 方法）
+                    // 仍然转发到同一个真实 View，保证身份与 Java 转换不变。
+                    if (name === 'attr') return viewAttrFunction(target, widget);
+                    return Reflect.get(target, name, target);
+                },
+                set: function (target, name, value) { return Reflect.set(target, name, value, target); },
+                has: function (target, name) { return Reflect.has(target, name); }
+            });
+            widgetReceiverHandles.set(widget, {raw: raw, handle: handle});
+            receiverRawByHandle.set(handle, raw);
+            return handle;
+        }
+
+        /**
+         * view.attr 的实现。preferredOwner 非空时固定路由到该 Widget（内层/外层各自的接收者）；
+         * 为空时退回该 View 记录的最外层 Widget（Widget.of 的归属，兼容旧行为）。
+         */
+        function viewAttrFunction(view, preferredOwner) {
+            function ownerOf() { return preferredOwner || viewExtras(view).widget; }
+            return function (attribute, value) {
+                if (attribute && typeof attribute === 'object') {
+                    // Preserve custom Widget setters and insertion order while batching adjacent
+                    // ordinary attributes. A missing old-host method is the only fallback case.
+                    let pending = Object.create(null);
+                    function flush() {
+                        const keys = Object.keys(pending);
+                        if (!keys.length) return;
+                        try {
+                            javaSession().viewAttributes(view, JSON.stringify(pending));
+                        } catch (error) {
+                            const text = String(error && error.message || error);
+                            const missing = text.indexOf('viewAttributes') >= 0 &&
+                                (text.indexOf('找不到方法') >= 0 || text.indexOf('NoSuchMethod') >= 0 ||
+                                 /viewAttributes\s+is not a function/.test(text));
+                            if (!missing) throw error;
+                            keys.forEach(function (key) { view.attr(key, pending[key]); });
+                        }
+                        pending = Object.create(null);
+                    }
+                    Object.keys(attribute).forEach(function (key) {
+                        const widget = ownerOf();
+                        const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
+                        if (descriptor && (descriptor.set || descriptor.writable)) {
+                            flush();
+                            if (descriptor.set) descriptor.set.call(widget, attribute[key]);
+                            else Reflect.set(widget, 'attr$' + key, attribute[key]);
+                            widget.attrs[key] = attribute[key];
+                        } else pending[key] = attribute[key];
+                    });
+                    flush();
+                    return view;
+                }
+                const key = String(attribute);
+                const widget = ownerOf();
+                const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
+                if (arguments.length < 2) {
+                    if (descriptor && (descriptor.get || Object.prototype.hasOwnProperty.call(descriptor, 'value'))) {
+                        return Reflect.get(widget, 'attr$' + key);
+                    }
+                    if (descriptor && descriptor.set) return widget.attrs[key];
+                    return javaSession().viewAttribute(view, key, '', false);
+                }
+                if (descriptor && (descriptor.set || descriptor.writable)) {
+                    if (descriptor.set) descriptor.set.call(widget, value);
+                    else Reflect.set(widget, 'attr$' + key, value);
+                    widget.attrs[key] = value;
+                } else {
+                    javaSession().viewAttribute(view, key, String(value), true);
+                }
+                return view;
+            };
+        }
+
         // Extend the existing Java proxy, so binding/findViewById/native callbacks all
         // keep the same View identity and Java method/argument conversion.
         function realViewMember(view, name) {
@@ -269,58 +361,7 @@
                 extras.events.setMaxListeners(count);
                 return view;
             };
-            if (name === 'attr') return function (attribute, value) {
-                if (attribute && typeof attribute === 'object') {
-                    // Preserve custom Widget setters and insertion order while batching adjacent
-                    // ordinary attributes. A missing old-host method is the only fallback case.
-                    let pending = Object.create(null);
-                    function flush() {
-                        const keys = Object.keys(pending);
-                        if (!keys.length) return;
-                        try {
-                            javaSession().viewAttributes(view, JSON.stringify(pending));
-                        } catch (error) {
-                            const text = String(error && error.message || error);
-                            const missing = text.indexOf('viewAttributes') >= 0 &&
-                                (text.indexOf('找不到方法') >= 0 || text.indexOf('NoSuchMethod') >= 0 ||
-                                 /viewAttributes\s+is not a function/.test(text));
-                            if (!missing) throw error;
-                            keys.forEach(function (key) { view.attr(key, pending[key]); });
-                        }
-                        pending = Object.create(null);
-                    }
-                    Object.keys(attribute).forEach(function (key) {
-                        const widget = extras.widget;
-                        const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
-                        if (descriptor && (descriptor.set || descriptor.writable)) {
-                            flush();
-                            if (descriptor.set) descriptor.set.call(widget, attribute[key]);
-                            else Reflect.set(widget, 'attr$' + key, attribute[key]);
-                            widget.attrs[key] = attribute[key];
-                        } else pending[key] = attribute[key];
-                    });
-                    flush();
-                    return view;
-                }
-                const key = String(attribute);
-                const widget = extras.widget;
-                const descriptor = widget && findPropertyDescriptor(widget, 'attr$' + key);
-                if (arguments.length < 2) {
-                    if (descriptor && (descriptor.get || Object.prototype.hasOwnProperty.call(descriptor, 'value'))) {
-                        return Reflect.get(widget, 'attr$' + key);
-                    }
-                    if (descriptor && descriptor.set) return widget.attrs[key];
-                    return javaSession().viewAttribute(view, key, '', false);
-                }
-                if (descriptor && (descriptor.set || descriptor.writable)) {
-                    if (descriptor.set) descriptor.set.call(widget, value);
-                    else Reflect.set(widget, 'attr$' + key, value);
-                    widget.attrs[key] = value;
-                } else {
-                    javaSession().viewAttribute(view, key, String(value), true);
-                }
-                return view;
-            };
+            if (name === 'attr') return viewAttrFunction(view, null);
             if (name === 'removeAllListeners') return function (event) {
                 if (arguments.length) extras.events.removeAllListeners(String(event));
                 else extras.events.removeAllListeners();
@@ -1111,7 +1152,7 @@
             }
             get view() {
                 if (!this._view) throw new Error('widget is not mounted');
-                return this._view;
+                return widgetReceiverView(this, this._view);
             }
             created() {}
             rootViewCreated() {}
@@ -1159,6 +1200,9 @@
         Widget.of = function (view) {
             if (view == null) return undefined;
             try {
+                // 共享根的每 Widget 接收句柄与真实 View 指向同一个 Widget 归属。
+                const raw = view && receiverRawByHandle.get(view);
+                if (raw) view = raw;
                 const extras = realViewExtras.get(view);
                 if (extras) return extras.data['autojs.widget'];
                 const widget = view.__ajsWidget;
@@ -1175,12 +1219,27 @@
         function activateWidget(token) {
             const record = nativeWidgetRecords.get(Number(token));
             if (!record) throw new Error('Widget inflation is no longer active: ' + token);
-            if (record.view) {
-                const extras = viewExtras(record.view);
-                extras.widget = record.widget;
-                extras.data['autojs.widget'] = record.widget;
-            }
             return record;
+        }
+        /**
+         * task-246：把 Widget 绑到它的根 View 上。多层别名共享同一个根时按「绑定顺序 = 内层 → 外层」
+         * 记录所有持有者，并把 view 的公开归属（extras.widget / extras.data['autojs.widget']）固定为
+         * 最外层（Widget.of 的语义）；每个 Widget 自己的属性接收者由 widgetReceiverView() 给出。
+         */
+        function bindWidgetToView(widget, view) {
+            const extras = viewExtras(view);
+            if (!extras.widgets) extras.widgets = [];
+            if (extras.widgets.indexOf(widget) < 0) extras.widgets.push(widget);
+            const outer = extras.widgets[extras.widgets.length - 1];
+            extras.widget = outer;
+            extras.data['autojs.widget'] = outer;
+            widgetReceiverHandles.delete(widget);
+            if (widget.__ajsNodeUiWidget) widget._view = view; else widget.view = view;
+            return view;
+        }
+        /** 该 Widget 自己的属性接收者（共享根时为按 Widget 绑定的句柄）。 */
+        function receiverOf(record) {
+            return widgetReceiverView(record.widget, record.view);
         }
         function canonicalWidgetAttribute(name) {
             name = String(name).replace(/^android:/, '');
@@ -1211,9 +1270,7 @@
             rootViewCreated: function (token, view) {
                 const record = activateWidget(token);
                 record.view = view;
-                if (record.widget.__ajsNodeUiWidget) record.widget._view = view;
-                else record.widget.view = view;
-                activateWidget(token);
+                bindWidgetToView(record.widget, view);
                 if (typeof record.widget.rootViewCreated === 'function') record.widget.rootViewCreated(view);
             },
             contentSlot: function (token) { return String(activateWidget(token).widget.contentSlot || ''); },
@@ -1232,7 +1289,7 @@
                     if (!descriptor && initial[name] == null) return;
                     if (descriptor || (typeof widget.hasAttribute === 'function' && widget.hasAttribute(name))) {
                         nativeWidgetCallbacks.setAttribute(token, name, initial[name]);
-                    } else record.view.attr(name, initial[name]);
+                    } else receiverOf(record).attr(name, initial[name]);
                 });
                 if (typeof widget.inflated === 'function') widget.inflated();
             },
@@ -1243,13 +1300,14 @@
             },
             setAttribute: function (token, name, value) {
                 const record = activateWidget(token);
+                const receiver = receiverOf(record);
                 if (typeof record.widget.setAttribute === 'function') {
-                    record.widget.setAttribute(name, value, v => record.view.attr(name, v));
+                    record.widget.setAttribute(name, value, v => receiver.attr(name, v));
                 } else {
                     const descriptor = findPropertyDescriptor(record.widget, 'attr$' + name);
                     if (descriptor && (descriptor.set || descriptor.writable)) {
                         Reflect.set(record.widget, 'attr$' + name, value);
-                    } else record.view.attr(name, value);
+                    } else receiver.attr(name, value);
                 }
             },
             mounted: function (token) {
@@ -1429,13 +1487,12 @@
                     viewBindings[key] = binding;
                 }
                 if (realUiMode || root) {
-                    const extras = viewExtras(binding);
-                    extras.widget = widget;
-                    extras.data['autojs.widget'] = widget;
+                    bindWidgetToView(widget, binding);
+                } else {
+                    binding.__ajsWidget = widget;
+                    if (widget.__ajsNodeUiWidget) widget._view = binding;
+                    else widget.view = binding;
                 }
-                else binding.__ajsWidget = widget;
-                if (widget.__ajsNodeUiWidget) widget._view = binding;
-                else widget.view = binding;
                 Object.keys(widget.attrs || {}).forEach(function (name) {
                     if (name === 'id') return;
                     const setterName = 'attr$' + name;
@@ -1591,6 +1648,10 @@
             if (globalThis.__ajsBindJavaView === realViewBinding) delete globalThis.__ajsBindJavaView;
             if (globalThis.__ajsJavaViewMember === realViewMember) delete globalThis.__ajsJavaViewMember;
             realViewExtras = new WeakMap();
+            // task-246：停止/重建后不能留下上一轮的 Widget 接收者或进行中的 inflation 记录。
+            receiverRawByHandle = new WeakMap();
+            widgetReceiverHandles = new WeakMap();
+            nativeWidgetRecords.clear();
             mainViews = {};
             viewIdCache = Object.create(null);
             Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
